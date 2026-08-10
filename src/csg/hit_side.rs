@@ -1,4 +1,6 @@
-use crate::math::{Matrix4, Ray, Triangle, Vector3};
+use crate::math::{Matrix4, Ray, Vector3};
+#[cfg(test)]
+use crate::math::Triangle;
 use crate::mesh_bvh::MeshBvh;
 
 use super::constants::*;
@@ -7,6 +9,7 @@ use super::js_topology::JsTriangle;
 const JITTER_EPSILON: f32 = 1e-8;
 const OFFSET_EPSILON: f32 = 1e-15;
 
+#[cfg(test)]
 pub fn get_hit_side(tri: &Triangle, bvh: &MeshBvh) -> i8 {
     get_hit_side_ray(tri.midpoint(), tri.normal(), bvh)
 }

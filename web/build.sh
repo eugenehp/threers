@@ -31,6 +31,10 @@ if [ "${NATIVE_CODEC:-}" = "1" ]; then
     FEATURE_LIST+=("native-codec")
     echo "    (native-codec feature enabled — GIF/APNG/WebM browser export)"
 fi
+if [ "${OPENSCAD:-}" = "1" ]; then
+    FEATURE_LIST+=("openscad")
+    echo "    (openscad feature enabled — scad_geometry/scadExport, pulls bvh-csg)"
+fi
 if [ "${#FEATURE_LIST[@]}" -gt 0 ]; then
     FEATURES="--features $(IFS=,; echo "${FEATURE_LIST[*]}")"
 fi

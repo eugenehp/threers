@@ -308,6 +308,18 @@ pub struct Renderer {
     pipeline_line: wgpu::RenderPipeline,
     pipeline_point: wgpu::RenderPipeline,
     pipeline_sprite: wgpu::RenderPipeline,
+    // Hardware-MSAA variants of the opaque forward pipelines (surface path).
+    pipeline_tri_msaa: wgpu::RenderPipeline,
+    pipeline_tri_alpha_msaa: wgpu::RenderPipeline,
+    pipeline_tri_nocull_msaa: wgpu::RenderPipeline,
+    pipeline_tri_sky_msaa: wgpu::RenderPipeline,
+    pipeline_tri_wire_msaa: wgpu::RenderPipeline,
+    pipeline_line_msaa: wgpu::RenderPipeline,
+    pipeline_point_msaa: wgpu::RenderPipeline,
+    /// MSAA sample count for the surface pass: 1 = off, else `MSAA_SAMPLES`.
+    msaa: u32,
+    /// Lazily-created multisampled color + depth targets, keyed by size.
+    msaa_targets: Option<(u32, u32, wgpu::TextureView, wgpu::TextureView)>,
     /// Half-float color-target variants for EffectComposer / postfx RTs.
     pipeline_tri_f16: wgpu::RenderPipeline,
     pipeline_tri_alpha_f16: wgpu::RenderPipeline,
@@ -494,6 +506,10 @@ struct SsColor {
 }
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+
+/// Hardware MSAA sample count used when antialiasing is enabled for the
+/// direct-to-surface opaque forward pass. 4× is universally supported.
+const MSAA_SAMPLES: u32 = 4;
 
 // ---- ShaderMaterial (custom-shader) support ----------------------------------
 
@@ -1666,6 +1682,79 @@ impl Renderer {
             None,
             "threers point pipeline",
         );
+
+        // --- Hardware-MSAA variants of the opaque forward pipelines (surface
+        // path only). Identical to the ones above but with `count = MSAA_SAMPLES`;
+        // used when antialiasing is enabled and the scene has no glass/OIT/refract
+        // /instanced/skinned/custom draws (those fall back to the 1× path). ---
+        let make_pipeline_ms = |fmt: wgpu::TextureFormat,
+                                topology: wgpu::PrimitiveTopology,
+                                cull: Option<wgpu::Face>,
+                                label: &str| {
+            let alpha = label.contains("alpha");
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: "vs_main",
+                    buffers: &vertex_buffers,
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: "fs_main",
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: fmt,
+                        blend: Some(if alpha {
+                            wgpu::BlendState::ALPHA_BLENDING
+                        } else {
+                            wgpu::BlendState::REPLACE
+                        }),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: primitive(topology, cull),
+                depth_stencil: Some(depth_stencil(!alpha, wgpu::CompareFunction::Less)),
+                multisample: wgpu::MultisampleState { count: MSAA_SAMPLES, ..Default::default() },
+                multiview: None,
+            })
+        };
+        let make_sky_pipeline_ms = |fmt: wgpu::TextureFormat, label: &str| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: "vs_main",
+                    buffers: &vertex_buffers,
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: "fs_main",
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: fmt,
+                        blend: Some(wgpu::BlendState::REPLACE),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: primitive(wgpu::PrimitiveTopology::TriangleList, None),
+                depth_stencil: Some(depth_stencil(false, wgpu::CompareFunction::LessEqual)),
+                multisample: wgpu::MultisampleState { count: MSAA_SAMPLES, ..Default::default() },
+                multiview: None,
+            })
+        };
+        let pipeline_tri_msaa = make_pipeline_ms(color_format, wgpu::PrimitiveTopology::TriangleList, Some(wgpu::Face::Back), "threers tri msaa");
+        let pipeline_tri_alpha_msaa = make_pipeline_ms(color_format, wgpu::PrimitiveTopology::TriangleList, Some(wgpu::Face::Back), "threers tri alpha msaa");
+        let pipeline_tri_nocull_msaa = make_pipeline_ms(color_format, wgpu::PrimitiveTopology::TriangleList, None, "threers tri nocull msaa");
+        let pipeline_tri_wire_msaa = make_pipeline_ms(color_format, wgpu::PrimitiveTopology::LineList, None, "threers tri wire msaa");
+        let pipeline_line_msaa = make_pipeline_ms(color_format, wgpu::PrimitiveTopology::LineList, None, "threers line msaa");
+        let pipeline_point_msaa = make_pipeline_ms(color_format, wgpu::PrimitiveTopology::PointList, None, "threers point msaa");
+        let pipeline_tri_sky_msaa = make_sky_pipeline_ms(color_format, "threers tri sky msaa");
+
         let pipeline_tri_f16 = make_pipeline(
             f16_format,
             wgpu::PrimitiveTopology::TriangleList,
@@ -2787,6 +2876,15 @@ impl Renderer {
             pipeline_line,
             pipeline_point,
             pipeline_sprite,
+            pipeline_tri_msaa,
+            pipeline_tri_alpha_msaa,
+            pipeline_tri_nocull_msaa,
+            pipeline_tri_sky_msaa,
+            pipeline_tri_wire_msaa,
+            pipeline_line_msaa,
+            pipeline_point_msaa,
+            msaa: 1,
+            msaa_targets: None,
             pipeline_tri_f16,
             pipeline_tri_alpha_f16,
             pipeline_tri_nocull_f16,
@@ -2882,7 +2980,47 @@ impl Renderer {
             self.depth_texture = tex;
             self.depth_view = view;
             self.depth_size = (width, height);
+            self.msaa_targets = None; // recreated on next MSAA pass at the new size
         }
+    }
+
+    /// Enable/disable hardware MSAA on the **direct-to-surface** forward pass.
+    /// `samples <= 1` turns it off; anything else selects `MSAA_SAMPLES` (4×).
+    /// Render-to-texture, shadows, and scenes using glass/OIT/refraction stay
+    /// single-sampled (they transparently fall back).
+    pub fn set_msaa(&mut self, samples: u32) {
+        let s = if samples > 1 { MSAA_SAMPLES } else { 1 };
+        if s != self.msaa {
+            self.msaa = s;
+            self.msaa_targets = None;
+        }
+    }
+    pub fn msaa(&self) -> u32 {
+        self.msaa
+    }
+
+    /// Ensure the multisampled color+depth targets exist at `w×h` for the MSAA pass.
+    fn ensure_msaa_targets(&mut self, w: u32, h: u32) {
+        if matches!(self.msaa_targets, Some((cw, ch, ..)) if cw == w && ch == h) {
+            return;
+        }
+        let mk = |label, format| {
+            self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: self.msaa,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            })
+        };
+        // wgpu keeps a texture alive as long as one of its views exists, so we can
+        // store only the views.
+        let cv = mk("threers msaa color", self.color_format).create_view(&Default::default());
+        let dv = mk("threers msaa depth", DEPTH_FORMAT).create_view(&Default::default());
+        self.msaa_targets = Some((w, h, cv, dv));
     }
 
     /// Apply a post-fx pass from a registered render-target id (wasm path).
@@ -3553,7 +3691,7 @@ impl Renderer {
         self.depth_size = (orig_w, orig_h);
     }
 
-    /// Render `scene` from `camera` into an offscreen [`RenderTarget`]. Uses
+    /// Render `scene` from `camera` into an offscreen [`RenderTarget`](crate::RenderTarget). Uses
     /// the target's own depth buffer (required even when RT size matches the canvas).
     pub fn render_to(
         &mut self,
@@ -4699,12 +4837,42 @@ impl Renderer {
                     a: bg_alpha,
                 }
             };
-            // Screen-space glass redirects the opaque pass into the ss-color
-            // capture (mip 0); otherwise it targets the frame view directly.
-            let main_color_view: &wgpu::TextureView = if refract_present {
-                &self.ss_color.as_ref().unwrap().mip_render_views[0]
+            // Hardware MSAA on the direct-to-surface opaque pass. Falls back to
+            // single-sample for render-to-texture, linear/postfx targets, and any
+            // scene using glass/OIT/refraction/instanced/skinned/custom draws.
+            let use_msaa = self.msaa > 1
+                && depth_src.is_none()
+                && !linear_framebuffer
+                && !refract_present
+                && draws.iter().all(|d| {
+                    matches!(
+                        d.topology,
+                        Topology::Triangle
+                            | Topology::TriangleAlpha
+                            | Topology::TriangleNoCull
+                            | Topology::Sky
+                            | Topology::TriangleWire
+                            | Topology::Line
+                            | Topology::Point
+                    )
+                });
+            if use_msaa {
+                self.ensure_msaa_targets(self.depth_size.0, self.depth_size.1);
+            }
+            // Screen-space glass redirects the opaque pass into the ss-color capture
+            // (mip 0); MSAA renders into the multisampled color and resolves into the
+            // frame view; otherwise it targets the frame view directly.
+            let (main_color_view, msaa_resolve, depth_pass_view): (
+                &wgpu::TextureView,
+                Option<&wgpu::TextureView>,
+                &wgpu::TextureView,
+            ) = if use_msaa {
+                let (_, _, cv, dv) = self.msaa_targets.as_ref().unwrap();
+                (cv, Some(target_view), dv)
+            } else if refract_present {
+                (&self.ss_color.as_ref().unwrap().mip_render_views[0], None, &self.depth_view)
             } else {
-                target_view
+                (target_view, None, &self.depth_view)
             };
             // Compile any not-yet-seen custom-shader pipelines and build their
             // @group(4) user bind groups (buffers kept alive until submit).
@@ -4746,14 +4914,14 @@ impl Renderer {
                 label: Some("threers main pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: main_color_view,
-                    resolve_target: None,
+                    resolve_target: msaa_resolve,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(clear),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.depth_view,
+                    view: depth_pass_view,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(1.0),
                         store: wgpu::StoreOp::Store,
@@ -4779,7 +4947,19 @@ impl Renderer {
                     continue;
                 }
                 if last_topology != Some(d.topology) {
-                    let pipe = if linear_framebuffer {
+                    let pipe = if use_msaa {
+                        match d.topology {
+                            Topology::Triangle => &self.pipeline_tri_msaa,
+                            Topology::TriangleAlpha => &self.pipeline_tri_alpha_msaa,
+                            Topology::TriangleNoCull => &self.pipeline_tri_nocull_msaa,
+                            Topology::Sky => &self.pipeline_tri_sky_msaa,
+                            Topology::TriangleWire => &self.pipeline_tri_wire_msaa,
+                            Topology::Line => &self.pipeline_line_msaa,
+                            Topology::Point => &self.pipeline_point_msaa,
+                            // gated by `use_msaa`; other topologies never occur here
+                            _ => &self.pipeline_tri_msaa,
+                        }
+                    } else if linear_framebuffer {
                         match d.topology {
                             Topology::Triangle => &self.pipeline_tri_f16,
                             Topology::TriangleAlpha => &self.pipeline_tri_alpha_f16,

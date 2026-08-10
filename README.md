@@ -2,7 +2,7 @@
 
 A **drop-in three.js replacement** for Rust and the browser, backed by [wgpu](https://github.com/gfx-rs/wgpu). The same Rust core runs natively (winit) and as WebAssembly, with a JavaScript shim that exposes the familiar `THREE.*` API so existing three.js code can run with minimal changes.
 
-**Current version:** [0.0.2](CHANGELOG.md) · [Changelog](CHANGELOG.md)
+**Current version:** [0.0.3](CHANGELOG.md) · [Changelog](CHANGELOG.md)
 
 ## Table of contents
 
@@ -10,6 +10,7 @@ A **drop-in three.js replacement** for Rust and the browser, backed by [wgpu](ht
 - [Quick start](#quick-start)
   - [Native (desktop)](#native-desktop)
   - [Optional: mesh-bvh / CSG](#optional-mesh-bvh--csg)
+  - [OpenSCAD solid modeling](#openscad-solid-modeling)
   - [Headless render & video export](#headless-render--video-export)
   - [Native codecs (GIF, APNG, VP9, HEVC)](#native-codecs-gif-apng-vp9-hevc)
   - [Web (browser)](#web-browser)
@@ -32,6 +33,7 @@ A **drop-in three.js replacement** for Rust and the browser, backed by [wgpu](ht
 - **Native codecs** (`native-codec`) — pure-Rust GIF (encode/decode), APNG, VP9/WebM, HEVC/MP4; wasm-safe browser download
 - **Opt-in mesh BVH** (`mesh-bvh`) — accelerated raycast / shapecast (three-mesh-bvh–compatible)
 - **Opt-in CSG** (`bvh-csg`) — boolean ops on `BufferGeometry` (three-bvh-csg–compatible); Rust native + JS addon
+- **Opt-in OpenSCAD** (`openscad`) — a `.scad` interpreter **and** a `Solid`/`scad!` Rust DSL, evaluated by a pure-Rust **watertight exact-CSG kernel** (resolves curved∧curved booleans, float fallback where unverifiable). Mesh import/export (STL/OBJ/OFF/3MF/AMF/glTF-GLB, DXF/SVG, `.dat`/`.png` heightmaps) and a live browser playground.
 - **Web**: `web/threejs-shim.js` + wasm — drop-in `THREE.*` replacement targeting three.js r165
 - **Native**: winit examples for desktop development and debugging
 
@@ -60,7 +62,7 @@ cargo run --example bvh_csg_steps --features bvh-csg -- 2 --live
 ```
 
 ```rust
-// Cargo.toml: threers = { version = "0.0.2", features = ["bvh-csg"] }
+// Cargo.toml: threers = { version = "0.0.3", features = ["bvh-csg"] }
 use threers::{CsgBrush, CsgEvaluator, BoxGeometry, SUBTRACTION};
 
 let mut ev = CsgEvaluator::new();
@@ -68,6 +70,43 @@ let mut a = CsgBrush::new(BoxGeometry::new(2.0, 2.0, 2.0));
 let mut b = CsgBrush::new(BoxGeometry::new(1.0, 1.0, 1.0));
 let _geom = ev.evaluate(&mut a, &mut b, SUBTRACTION);
 ```
+
+### OpenSCAD solid modeling
+
+The `openscad` feature adds two front ends onto one `Solid` CSG tree — an OpenSCAD
+`.scad` interpreter and a Rust DSL — evaluated by a pure-Rust **watertight
+exact-CSG kernel** (`to_geometry_exact`), with mesh import/export.
+
+```bash
+cargo run --example openscad_gallery --features openscad   # 37-demo language tour → STL
+cargo run --example dsl_showcase     --features openscad   # the Rust DSL → STL
+# convert a .scad to any mesh format (format = output extension):
+cargo run --example scad2stl --features openscad -- model.scad out.glb
+```
+
+```rust
+// Cargo.toml: threers = { version = "0.0.3", features = ["openscad"] }
+use threers::{cube, cylinder, sphere, scad, parse_scad};
+
+// (a) Rust DSL — fluent builder + the `scad!` macro:
+let part = scad! {
+    difference() {
+        cube([30.0, 30.0, 30.0]);
+        translate([0.0, 0.0, -1.0]) { cylinder(40.0, 8.0); }
+    }
+};
+let _stl = part.to_stl();          // also .to_obj/.to_off/.to_3mf/.to_glb
+
+// (b) or parse an OpenSCAD program:
+let solid = parse_scad("difference(){ cube(20,center=true); sphere(12,$fn=48); }").unwrap();
+let _glb = solid.to_glb();
+let _ = (sphere(1.0),);            // primitives are also free functions
+```
+
+Curved∧curved booleans (e.g. `sphere ∪ sphere`, `cylinder ∩ cylinder`) resolve to
+watertight meshes; the kernel falls back to the float evaluator only where its
+manifold gate can't verify a result, so it is never wrong — only sometimes
+deferential. Try it live in the browser: **`web/openscad-playground.html`**.
 
 ### Headless render & video export
 
@@ -96,7 +135,7 @@ cargo run --release --example export_vp9 --features video -- --out /tmp/cube.web
 ```
 
 ```rust
-// Cargo.toml: threers = { version = "0.0.2", features = ["video"] }
+// Cargo.toml: threers = { version = "0.0.3", features = ["video"] }
 use threers::{export_video, HeadlessRenderer, VideoCodec, VideoOptions};
 
 let mut hr = HeadlessRenderer::builder().size(1280, 720).build().unwrap();
@@ -136,7 +175,7 @@ let bytes = encode_animation_rgba(
 Enable `native-codec` for dependency-free encoders (and a GIF decoder) that also build on `wasm32`:
 
 ```rust
-// Cargo.toml: threers = { version = "0.0.2", features = ["native-codec"] }
+// Cargo.toml: threers = { version = "0.0.3", features = ["native-codec"] }
 use threers::{encode_gif, decode_gif, GifEncoder, GifOptions, PaletteMode};
 
 let mut enc = GifEncoder::new(64, 64, 0)
@@ -163,7 +202,14 @@ wasm-pack build --target web --out-dir web/pkg && bash web/post-build.sh
 MESH_BVH=1 web/build.sh          # mesh-bvh addon
 BVH_CSG=1 web/build.sh           # CSG addon (implies mesh-bvh)
 NATIVE_CODEC=1 web/build.sh      # GIF/APNG/WebM browser export bindings
+OPENSCAD=1 web/build.sh          # OpenSCAD front end (scad_geometry/scadExport)
 ```
+
+**OpenSCAD in the browser** (after `OPENSCAD=1` build): the live playground
+[`web/openscad-playground.html`](web/openscad-playground.html) parses `.scad` code
+to a watertight mesh and renders it with WebGPU, with STL/OBJ/OFF/3MF/GLB download.
+See also the demo gallery and the parametric 3D-printer / NEMA-17 assemblies
+(`web/openscad-gallery.html`, `web/openscad-printer.html`, `web/nema17.html`).
 
 **Export video in the browser** (after `NATIVE_CODEC=1` build): open
 [`web/examples/export-video.html`](web/examples/export-video.html) — render frames, encode GIF/APNG/WebM in-process, download the file. No ffmpeg.
@@ -281,9 +327,12 @@ src/                 Rust library (scene graph, renderer, loaders, …)
   materials/         PBR + ShaderMaterial
   csg/               Rust CSG (`bvh-csg`) — Evaluator, Brush, hierarchy
   mesh_bvh/          Rust BVH (`mesh-bvh`)
+  openscad/          OpenSCAD front end (`openscad`) — scad interpreter, Solid/scad! DSL
+  exact_csg/         Watertight mesh-arrangement CSG kernel (curved∧curved)
   wasm.rs            #[wasm_bindgen] exports (web only)
 web/
   threejs-shim.js    THREE-compatible JS API over wasm
+  openscad-*.html    OpenSCAD playground / gallery / assemblies
   csg/               JS three-bvh-csg port (loaded when BVH_CSG=1)
   mesh-bvh-*.js      mesh-bvh addon / stub
   pkg/               wasm-pack output (threers.js, threers_bg.wasm)
@@ -337,6 +386,8 @@ CHANGELOG.md         Release history
 ## Status
 
 Active development toward **pixel parity** with three.js r165 on the core parity scene set. Opt-in **mesh-bvh** and **bvh-csg** suites report 0% pixel diff on their dedicated manifests; hierarchy CSG also has **exact ordered TriKey** topology parity in Rust vs JS.
+
+The **`openscad`** front end is functional end to end: the exact-CSG kernel produces watertight meshes for planar and curved∧curved booleans (verified by cross-op volume consistency + a 2-manifold gate), deferring to the float kernel only on measure-zero degeneracies. Remaining edges: `minkowski`/`color` in the DSL, some 3MF component metadata, and per-boolean cost on very large sequential folds.
 
 Some core scenes are approximate (PMREM, SSR, etc.) — the compare UI marks these and stores diff percentages in `compare-results.json`. See [PLAN.md](PLAN.md) for feature roadmap notes and [CHANGELOG.md](CHANGELOG.md) for release history.
 

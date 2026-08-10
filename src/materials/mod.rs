@@ -83,7 +83,7 @@ pub enum Material {
 /// which projectively samples a render-target texture using a per-frame
 /// texture matrix supplied from JS. The texture matrix encodes
 /// `scaleBias * virtualCamProj * virtualCamView` so that fragment-side
-/// `texture_matrix * world_pos` lands in [0,1] UV space.
+/// `texture_matrix * world_pos` lands in `[0,1]` UV space.
 #[derive(Debug, Clone)]
 pub struct MirrorMaterial {
     pub color: Color,

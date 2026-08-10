@@ -53,6 +53,7 @@ pub fn topology_overlap(native: &BufferGeometry, reference: &BufferGeometry) -> 
     }
 }
 
+#[cfg(test)]
 pub fn assert_topology_partial_overlap(
     native: &HashSet<TriKey>,
     reference: &HashSet<TriKey>,
@@ -104,11 +105,13 @@ pub fn assert_topology_overlap(
     );
 }
 
+#[cfg(test)]
 fn tri_key_verts(k: TriKey) -> [[i32; 3]; 3] {
     let t = k.0;
     [[t.0, t.1, t.2], [t.3, t.4, t.5], [t.6, t.7, t.8]]
 }
 
+#[cfg(test)]
 fn shared_vert_count(a: TriKey, b: TriKey) -> usize {
     let av = tri_key_verts(a);
     let bv = tri_key_verts(b);
@@ -116,12 +119,14 @@ fn shared_vert_count(a: TriKey, b: TriKey) -> usize {
 }
 
 #[derive(Debug)]
+#[cfg(test)]
 pub struct TriKeyOverlap {
     pub exact_shared: usize,
     /// Native keys with >=2 vertex hashes matching some reference key.
     pub partial_shared: usize,
 }
 
+#[cfg(test)]
 pub fn tri_key_overlap(native: &HashSet<TriKey>, reference: &HashSet<TriKey>) -> TriKeyOverlap {
     let exact_shared = native.intersection(reference).count();
     let mut partial_shared = exact_shared;

@@ -192,6 +192,11 @@ impl HeadlessRenderer {
     pub fn set_taa(&mut self, enabled: bool) {
         self.renderer.set_taa(enabled);
     }
+    /// Enable hardware MSAA (`samples <= 1` = off, else 4×) for the opaque forward
+    /// pass. Composes with (and is usually preferable to) `supersample`.
+    pub fn set_msaa(&mut self, samples: u32) {
+        self.renderer.set_msaa(samples);
+    }
     /// The render resolution (output size × supersample).
     pub fn render_size(&self) -> (u32, u32) {
         (self.render_width, self.render_height)
@@ -203,7 +208,14 @@ impl HeadlessRenderer {
 
     /// Render `scene` from `camera` into the offscreen target.
     pub fn render(&mut self, scene: &mut Scene, camera: &dyn Camera) {
-        self.renderer.render_to(scene, camera, &self.target);
+        if self.renderer.msaa() > 1 {
+            // Surface-style path so the MSAA opaque pass engages and resolves into
+            // the offscreen target's color view.
+            let linear = self.config.color_format == wgpu::TextureFormat::Rgba16Float;
+            self.renderer.render(scene, camera, &self.target.color_view, linear);
+        } else {
+            self.renderer.render_to(scene, camera, &self.target);
+        }
     }
 
     /// Render, then read the target back as tightly-packed RGBA8 (row-major,

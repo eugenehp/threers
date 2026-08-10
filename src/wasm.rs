@@ -340,6 +340,14 @@ impl WebRenderer {
         self.copy_scratch = None;
     }
 
+    /// Enable hardware MSAA on the direct-to-canvas pass. `samples <= 1` = off,
+    /// else 4×. Only the opaque forward pass is multisampled — render targets,
+    /// shadows, and glass/OIT/refraction scenes stay single-sampled.
+    #[wasm_bindgen(js_name = setMsaa)]
+    pub fn set_msaa(&mut self, samples: u32) {
+        self.renderer.set_msaa(samples);
+    }
+
     fn ensure_copy_scratch(&mut self) -> (u32, Arc<crate::renderer::RenderTarget>) {
         let needs_alloc = match &self.copy_scratch {
             None => true,
@@ -4503,4 +4511,199 @@ pub fn encode_webm_rgba(
         256,
         &frames,
     )
+}
+
+// ---------------------------------------------------------------------------
+// OpenSCAD front end → geometry, for the in-browser gallery. Gated on the
+// `openscad` feature (which pulls in the exact CSG kernel + bvh-csg fallback).
+// ---------------------------------------------------------------------------
+
+/// A parsed OpenSCAD model as a flat, flat-shaded triangle soup: `positions` and
+/// per-face `normals` (9 floats per triangle each), ready to drop straight into a
+/// `BufferGeometry`. `error` is set (and the arrays empty) when parsing fails.
+#[cfg(feature = "openscad")]
+#[wasm_bindgen]
+pub struct ScadGeometry {
+    positions: Vec<f32>,
+    normals: Vec<f32>,
+    triangles: u32,
+    error: Option<String>,
+}
+
+#[cfg(feature = "openscad")]
+#[wasm_bindgen]
+impl ScadGeometry {
+    #[wasm_bindgen(getter)]
+    pub fn positions(&self) -> Vec<f32> {
+        self.positions.clone()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn normals(&self) -> Vec<f32> {
+        self.normals.clone()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn triangles(&self) -> u32 {
+        self.triangles
+    }
+    #[wasm_bindgen(getter)]
+    pub fn error(&self) -> Option<String> {
+        self.error.clone()
+    }
+}
+
+/// Register an in-memory file (text) so `surface`/`import`/`include`/`use` can
+/// read it — the browser has no filesystem, so height-fields, meshes, etc. must
+/// be supplied this way before calling `scad_geometry`.
+#[cfg(feature = "openscad")]
+#[wasm_bindgen]
+pub fn scad_register_file(name: &str, contents: &str) {
+    crate::register_file(name, contents.as_bytes().to_vec());
+}
+
+/// Register an in-memory file from raw bytes (e.g. a binary STL to `import`).
+#[cfg(feature = "openscad")]
+#[wasm_bindgen]
+pub fn scad_register_file_bytes(name: &str, bytes: &[u8]) {
+    crate::register_file(name, bytes.to_vec());
+}
+
+/// Drop every registered in-memory file.
+#[cfg(feature = "openscad")]
+#[wasm_bindgen]
+pub fn scad_clear_files() {
+    crate::clear_files();
+}
+
+/// Parse OpenSCAD source and build its solid with the exact CSG kernel (float
+/// fallback behind the never-wrong gate), returning a flat-shaded triangle soup.
+#[cfg(feature = "openscad")]
+#[wasm_bindgen]
+pub fn scad_geometry(src: &str) -> ScadGeometry {
+    let solid = match crate::parse_scad(src) {
+        Ok(s) => s,
+        Err(e) => {
+            return ScadGeometry { positions: vec![], normals: vec![], triangles: 0, error: Some(e) }
+        }
+    };
+    let (positions, normals) = flat_soup(&solid.to_geometry_exact());
+    let tris = (positions.len() / 9) as u32;
+    ScadGeometry { positions, normals, triangles: tris, error: None }
+}
+
+/// Parse OpenSCAD source and encode its solid in a mesh format for download.
+/// `format` is one of `stl` / `obj` / `off` / `3mf` / `glb`; returns the encoded
+/// bytes (empty on parse error or unknown format).
+#[cfg(feature = "openscad")]
+#[wasm_bindgen(js_name = scadExport)]
+pub fn scad_export(src: &str, format: &str) -> Vec<u8> {
+    let solid = match crate::parse_scad(src) {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    let g = solid.to_geometry_exact();
+    match format {
+        "stl" => crate::geometry_to_stl(&g),
+        "obj" => crate::geometry_to_obj(&g).into_bytes(),
+        "off" => crate::geometry_to_off(&g).into_bytes(),
+        "3mf" => crate::geometry_to_3mf(&g),
+        "glb" => crate::geometry_to_glb(&g),
+        _ => Vec::new(),
+    }
+}
+
+/// A geometry as a flat-shaded triangle soup: `(positions, per-face normals)`,
+/// 9 floats per triangle each. Expands the index buffer when present.
+#[cfg(feature = "openscad")]
+fn flat_soup(g: &crate::BufferGeometry) -> (Vec<f32>, Vec<f32>) {
+    let verts: Vec<[f32; 3]> = match g.positions() {
+        Some(it) => it.map(|v| [v.x, v.y, v.z]).collect(),
+        None => Vec::new(),
+    };
+    let soup: Vec<[f32; 3]> = match &g.index {
+        Some(idx) => idx.iter().map(|&i| verts[i as usize]).collect(),
+        None => verts,
+    };
+    let (mut positions, mut normals) = (Vec::with_capacity(soup.len() * 3), Vec::with_capacity(soup.len() * 3));
+    for t in soup.chunks_exact(3) {
+        let (a, b, c) = (t[0], t[1], t[2]);
+        let (u, v) = ([b[0] - a[0], b[1] - a[1], b[2] - a[2]], [c[0] - a[0], c[1] - a[1], c[2] - a[2]]);
+        let mut n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+        let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+        if len > 1e-20 {
+            n = [n[0] / len, n[1] / len, n[2] / len];
+        }
+        for vtx in t {
+            positions.extend_from_slice(vtx);
+            normals.extend_from_slice(&n);
+        }
+    }
+    (positions, normals)
+}
+
+// ---------------------------------------------------------------------------
+// Parametric 3D-printer assembly (see examples/printer_assembly.rs). Returned to
+// JS as a list of flat-shaded, coloured parts — one mesh each, no cross-part CSG.
+// ---------------------------------------------------------------------------
+
+/// A parametric printer as a list of coloured parts. `positions(i)`/`normals(i)`
+/// are flat-shaded soups; `color(i)` is an `[r,g,b]`.
+#[cfg(feature = "openscad")]
+#[wasm_bindgen]
+pub struct PrinterScene {
+    parts: Vec<(Vec<f32>, Vec<f32>, [f32; 3])>,
+}
+
+#[cfg(feature = "openscad")]
+#[wasm_bindgen]
+impl PrinterScene {
+    #[wasm_bindgen(getter)]
+    pub fn count(&self) -> usize {
+        self.parts.len()
+    }
+    pub fn positions(&self, i: usize) -> Vec<f32> {
+        self.parts.get(i).map(|p| p.0.clone()).unwrap_or_default()
+    }
+    pub fn normals(&self, i: usize) -> Vec<f32> {
+        self.parts.get(i).map(|p| p.1.clone()).unwrap_or_default()
+    }
+    pub fn color(&self, i: usize) -> Vec<f32> {
+        self.parts.get(i).map(|p| p.2.to_vec()).unwrap_or_default()
+    }
+}
+
+/// Build the parametric printer (all lengths in mm). Mirrors the native
+/// `examples/printer_assembly.rs`.
+#[cfg(feature = "openscad")]
+#[wasm_bindgen]
+pub fn printer_scene(
+    bed_x: f32,
+    bed_y: f32,
+    z_travel: f32,
+    ext: f32,
+    gantry_z: f32,
+    carriage: f32,
+    bed_pos: f32,
+) -> PrinterScene {
+    let parts = crate::build_printer(bed_x, bed_y, z_travel, ext, gantry_z, carriage, bed_pos)
+        .into_iter()
+        .map(|(g, c)| {
+            let (p, n) = flat_soup(&g);
+            (p, n, c)
+        })
+        .collect();
+    PrinterScene { parts }
+}
+
+/// Build the detailed NEMA 17 motor (see `examples/nema17.rs`) as coloured parts.
+#[cfg(feature = "openscad")]
+#[wasm_bindgen]
+pub fn nema17_scene() -> PrinterScene {
+    let parts = crate::build_nema17()
+        .into_iter()
+        .map(|(g, c)| {
+            let (p, n) = flat_soup(&g);
+            (p, n, c)
+        })
+        .collect();
+    PrinterScene { parts }
 }

@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="stylesheet" href="/web/viewer-theme.css" />
+<title>threers · OpenSCAD playground (wasm + WebGPU)</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
+    font: 13px/1.45 ui-sans-serif, system-ui, -apple-system, sans-serif; }
+  #app { display: grid; grid-template-columns: 420px 1fr; height: 100%; }
+  #side { border-right: 1px solid var(--border); display: flex; flex-direction: column;
+    min-height: 0; padding: 10px 10px 12px; gap: 8px; }
+  #side h1 { font-size: 13px; margin: 4px 2px 0; color: var(--title); letter-spacing: .3px; }
+  #side .sub { font-size: 11px; color: var(--muted); margin: 0 2px 4px; }
+  #editor { flex: 1 1 auto; min-height: 160px; resize: none; width: 100%;
+    background: var(--panel); color: var(--fg); border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px; font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+    tab-size: 2; outline: none; }
+  #editor:focus { border-color: var(--active); }
+  .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .lbl { font-size: 10px; text-transform: uppercase; letter-spacing: .7px; color: var(--muted);
+    width: 100%; margin: 2px 0 -2px; }
+  button.pill { border: 1px solid var(--border); cursor: pointer; background: var(--panel);
+    color: var(--fg); padding: 5px 9px; border-radius: 7px; font: inherit; font-size: 12px; }
+  button.pill:hover { background: var(--hover); color: var(--title); }
+  #main { position: relative; min-width: 0; }
+  #canvas { display: block; width: 100%; height: 100%; }
+  #hud { position: absolute; left: 14px; top: 12px; right: 14px; display: flex;
+    justify-content: space-between; align-items: flex-start; gap: 12px; pointer-events: none; }
+  #title { font-size: 15px; font-weight: 600; color: var(--title); }
+  #stats { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  #err { position: absolute; inset: 0; display: none; place-items: center; padding: 24px;
+    text-align: center; color: #ff8a8a; font-size: 14px; }
+  .badge { display: inline-block; font-size: 10px; padding: 1px 6px; border-radius: 999px;
+    background: #1c3a24; color: #7fe0a0; margin-left: 6px; }
+  .badge.warn { background: #3a331c; color: #e0c97f; }
+  .badge.err { background: #3a1c1c; color: #ff9a9a; }
+</style>
+</head>
+<body>
+<div id="app">
+  <aside id="side">
+    <h1>OpenSCAD playground</h1>
+    <div class="sub">pure-Rust front end → exact CSG → wasm + WebGPU. Edit code, see it live.</div>
+    <textarea id="editor" spellcheck="false"></textarea>
+    <div class="row"><span class="lbl">examples</span><span id="examples"></span></div>
+    <div class="row"><span class="lbl">download</span>
+      <button class="pill" data-fmt="stl">STL</button>
+      <button class="pill" data-fmt="obj">OBJ</button>
+      <button class="pill" data-fmt="off">OFF</button>
+      <button class="pill" data-fmt="3mf">3MF</button>
+      <button class="pill" data-fmt="glb">GLB</button>
+    </div>
+    <div class="row">
+      <label style="display:flex; align-items:center; gap:6px; font-size:12px; color:var(--muted);">
+        <input type="checkbox" id="spin" /> slow rotation</label>
+      <button class="pill" id="fit">fit view</button>
+    </div>
+  </aside>
+  <main id="main">
+    <canvas id="canvas"></canvas>
+    <div id="hud"><div><div id="title">model</div><div id="stats"></div></div></div>
+    <div id="err"></div>
+    <button id="theme-btn"></button>
+  </main>
+</div>
+
+<script type="module">
+import THREE, { initThreers } from '/web/threejs-shim.js';
+import { scad_geometry, scadExport } from '/web/pkg/threers.js';
+import { initTheme } from '/web/viewer-theme.js';
+
+const $ = (s) => document.querySelector(s);
+const canvas = $('#canvas'), errEl = $('#err'), editor = $('#editor');
+
+// --- example programs (loadable into the editor) ---
+const EXAMPLES = {
+  'box − sphere': `difference() {\n  cube(20, center=true);\n  sphere(12, $fn=48);\n}`,
+  'twisted': `linear_extrude(height=26, twist=200, scale=0.4, slices=48)\n  square([16,16], center=true);`,
+  'hull': `hull() {\n  translate([-10,0,0]) sphere(4, $fn=32);\n  translate([10,0,6]) cube(6, center=true);\n}`,
+  'bolt ring': `difference() {\n  cylinder(h=5, r=22, $fn=64);\n  for (a = [0:60:359])\n    rotate([0,0,a]) translate([15,0,-1]) cylinder(h=7, r=2.5, $fn=24);\n}`,
+  'rands': `h = rands(3, 14, 36, 5);\nfor (i = [0:35])\n  translate([(i%6)*5-13, floor(i/6)*5-13, 0])\n    cube([3.4, 3.4, h[i]]);`,
+  'gear-ish': `linear_extrude(6)\n  for (a = [0:30:359])\n    rotate([0,0,a]) translate([0,10]) circle(3, $fn=20);`,
+};
+
+try {
+  await initThreers({ module_or_path: '/web/pkg/threers_bg.wasm' });
+
+  function resize() {
+    const cw = canvas.parentElement.clientWidth, ch = canvas.parentElement.clientHeight;
+    const base = Math.min(devicePixelRatio || 1, 2), cap = 3400;
+    let w = cw * base, h = ch * base;
+    const k = Math.min(1, cap / Math.max(w, h));
+    w = Math.max(1, Math.round(w * k)); h = Math.max(1, Math.round(h * k));
+    canvas.width = w; canvas.height = h; return { w, h };
+  }
+  let { w, h } = resize();
+
+  const renderer = await THREE.WebGLRenderer.create(canvas);
+  renderer._w?.setMsaa?.(4);
+  renderer.setSize(w, h);
+  const camera = new THREE.PerspectiveCamera(45, w / h, 0.05, 5000);
+  const controls = new THREE.OrbitControls(camera, renderer.domElement);
+  const material = new THREE.MeshStandardMaterial({ color: 0x43a0f4, roughness: 0.45, metalness: 0.15 });
+
+  let sceneBg = 0x14161c;
+  function makeScene() {
+    const s = new THREE.Scene();
+    s.background = new THREE.Color(sceneBg);
+    s.add(new THREE.AmbientLight(0xffffff, 0.55));
+    const d1 = new THREE.DirectionalLight(0xffffff, 2.6); d1.position.set(-6, -9, 7); s.add(d1);
+    const d2 = new THREE.DirectionalLight(0xffffff, 0.7); d2.position.set(8, 6, -4); s.add(d2);
+    return s;
+  }
+  let scene = makeScene();
+  initTheme((_, bg) => { sceneBg = bg; if (scene) scene.background = new THREE.Color(bg); });
+  let currentMesh = null, currentCenter = [0, 0, 0], spinAngle = 0, framed = false;
+
+  function frameCamera(pos) {
+    let mn = [Infinity, Infinity, Infinity], mx = [-Infinity, -Infinity, -Infinity];
+    for (let i = 0; i < pos.length; i += 3)
+      for (let k = 0; k < 3; k++) { mn[k] = Math.min(mn[k], pos[i+k]); mx[k] = Math.max(mx[k], pos[i+k]); }
+    const c = [(mn[0]+mx[0])/2, (mn[1]+mx[1])/2, (mn[2]+mx[2])/2]; currentCenter = c;
+    let r = 1e-3;
+    for (let i = 0; i < pos.length; i += 3)
+      r = Math.max(r, Math.hypot(pos[i]-c[0], pos[i+1]-c[1], pos[i+2]-c[2]));
+    const dist = Math.max(r / Math.tan((45 * Math.PI/180) / 2), r * 2.2);
+    camera.position.set(c[0] + dist*0.6, c[1] - dist*0.6, c[2] + dist*0.5);
+    camera.lookAt(c[0], c[1], c[2]);
+    camera.near = Math.max(0.01, dist * 0.01); camera.far = dist * 20 + 100;
+    camera.updateProjectionMatrix?.();
+    controls?.resetFromCamera?.();
+  }
+
+  function watertight(pos) {
+    const edges = new Map();
+    const key = (i) => Math.round(pos[i]*1e4)+','+Math.round(pos[i+1]*1e4)+','+Math.round(pos[i+2]*1e4);
+    for (let t = 0; t < pos.length; t += 9) {
+      const v = [key(t), key(t+3), key(t+6)];
+      for (let k = 0; k < 3; k++) { const e = [v[k], v[(k+1)%3]].sort().join('|'); edges.set(e, (edges.get(e)||0)+1); }
+    }
+    return edges.size > 0 && [...edges.values()].every((c) => c === 2);
+  }
+
+  function render(reframe) {
+    const src = editor.value;
+    const sg = scad_geometry(src);
+    if (sg.error) {
+      $('#stats').innerHTML = `<span class="badge err">error</span> ${sg.error}`;
+      return;
+    }
+    const pos = sg.positions;
+    scene = makeScene();
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    g.setAttribute('normal', new THREE.BufferAttribute(sg.normals, 3));
+    currentMesh = new THREE.Mesh(g, material);
+    scene.add(currentMesh);
+    spinAngle = 0;
+    if (reframe || !framed) { frameCamera(pos); framed = true; }
+    const wt = watertight(pos);
+    $('#stats').innerHTML = `${sg.triangles.toLocaleString()} triangles` +
+      (wt ? `<span class="badge">watertight</span>` : `<span class="badge warn">float fallback</span>`);
+  }
+
+  // Debounced live re-render while typing (camera stays put).
+  let timer = 0;
+  editor.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(() => render(false), 250); });
+  $('#fit').onclick = () => render(true);
+
+  // Example buttons.
+  const ex = $('#examples');
+  for (const [name, code] of Object.entries(EXAMPLES)) {
+    const b = document.createElement('button'); b.className = 'pill'; b.textContent = name;
+    b.onclick = () => { editor.value = code; framed = false; render(true); };
+    ex.appendChild(b);
+  }
+
+  // Download buttons — encode via the Rust exporters in wasm.
+  document.querySelectorAll('button[data-fmt]').forEach((b) => {
+    b.onclick = () => {
+      const fmt = b.dataset.fmt;
+      const bytes = scadExport(editor.value, fmt);
+      if (!bytes || !bytes.length) { $('#stats').innerHTML = `<span class="badge err">export failed</span> (fix errors first)`; return; }
+      const blob = new Blob([bytes], { type: 'application/octet-stream' });
+      const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+      a.download = 'model.' + fmt; a.click(); URL.revokeObjectURL(a.href);
+    };
+  });
+
+  addEventListener('resize', () => { ({ w, h } = resize()); renderer.setSize(w, h);
+    camera.aspect = w / h; camera.updateProjectionMatrix?.(); });
+
+  const spin = $('#spin');
+  function loop() {
+    requestAnimationFrame(loop);
+    if (spin.checked && currentMesh) {
+      spinAngle = (spinAngle + 0.006) % (Math.PI * 2);
+      const c = currentCenter, ca = Math.cos(spinAngle), sa = Math.sin(spinAngle);
+      currentMesh.position.set(c[0] - (ca*c[0] - sa*c[1]), c[1] - (sa*c[0] + ca*c[1]), 0);
+      currentMesh.rotation.set(0, 0, spinAngle);
+    }
+    renderer.render(scene, camera);
+  }
+  loop();
+  void controls;
+
+  editor.value = EXAMPLES['box − sphere'];
+  render(true);
+} catch (e) {
+  errEl.style.display = 'grid';
+  errEl.innerHTML = 'Failed to start: ' + (e?.message || e) +
+    '<br><br>Needs a WebGPU browser (Chrome 113+ / Edge). Serve with a static server, not file://.';
+  console.error(e);
+}
+</script>
+</body>
+</html>

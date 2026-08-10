@@ -1,6 +1,38 @@
 use crate::math::{Box3, Matrix4};
+use std::cell::Cell;
 
 use super::mesh_bvh::MeshBvh;
+
+// A correct dual-BVH descent visits each (node_a, node_b) pair at most once and
+// only ever descends, so any single recursion path is bounded by the total node
+// count. On some degenerate curved-CSG inputs the upstream algorithm can recurse
+// without progress: two branches keep passing an unshrinking box back and forth,
+// so the *tree* of recursive calls explodes exponentially even though each single
+// path stays under the depth cap (so it neither overflows the stack nor returns —
+// it just spins for hours). We guard both failure modes:
+//   * DEPTH / MAX_DEPTH bounds any one recursion path (stack-overflow guard);
+//   * VISITS / VISIT_CAP bounds the *total* number of `traverse` calls. A correct
+//     descent makes at most ~2·na·nb node-pair visits, so a generous multiple of
+//     that can only be exceeded by the pathological re-traversal — when it is, we
+//     bail the whole cast with the pairs found so far. bvhcast only feeds the
+//     float CSG fallback (the exact kernel handles the well-formed cases), so an
+//     early, slightly-incomplete result is strictly better than never returning,
+//     and it holds identically on wasm (no thread to time out).
+thread_local! {
+    static DEPTH: Cell<u32> = const { Cell::new(0) };
+    static MAX_DEPTH: Cell<u32> = const { Cell::new(0) };
+    static VISITS: Cell<u64> = const { Cell::new(0) };
+    static VISIT_CAP: Cell<u64> = const { Cell::new(0) };
+}
+
+/// Decrements the recursion counter when a `traverse` frame unwinds (including
+/// the early return at the depth cap).
+struct DepthGuard;
+impl Drop for DepthGuard {
+    fn drop(&mut self) {
+        DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
+    }
+}
 
 /// Dual-BVH traversal matching upstream three-mesh-bvh `cast/bvhcast.js`.
 /// Returns BVH-layout triangle index pairs `(ia, ib)` for geometry A and B.
@@ -8,6 +40,17 @@ pub fn bvhcast(a: &MeshBvh, b: &MeshBvh, matrix_to_local: &Matrix4) -> Vec<(usiz
     if a.node_count() == 0 || b.node_count() == 0 {
         return Vec::new();
     }
+    // A monotone descent path can't be longer than the sum of node counts.
+    MAX_DEPTH.with(|m| m.set((a.node_count() + b.node_count()) as u32 + 1024));
+    DEPTH.with(|d| d.set(0));
+    // Total-work budget: ~2·na·nb is the correct-traversal ceiling; the extra ×4
+    // and the 1M floor give ample headroom for small meshes and the reversed
+    // double-descent, while still capping the exponential runaway far short of a
+    // hang.
+    let (na, nb) = (a.node_count() as u64, b.node_count() as u64);
+    let cap = na.saturating_mul(nb).saturating_mul(4).saturating_add(1 << 20);
+    VISIT_CAP.with(|c| c.set(cap));
+    VISITS.with(|v| v.set(0));
     let mat_b_to_a = *matrix_to_local;
     let mat_a_to_b = matrix_to_local.invert();
     let curr_box = a.node_bounds(0).apply_matrix4(&mat_a_to_b);
@@ -29,6 +72,22 @@ fn traverse(
     curr_box: Box3,
     reversed: bool,
 ) {
+    DEPTH.with(|d| d.set(d.get() + 1));
+    let _guard = DepthGuard;
+    if DEPTH.with(|d| d.get()) > MAX_DEPTH.with(|m| m.get()) {
+        return; // degenerate non-terminating descent — bail out of this branch
+    }
+    // Total-work budget: once tripped, every subsequent frame returns in O(1), so
+    // the whole traversal unwinds promptly instead of exploring exponentially.
+    let visits = VISITS.with(|v| {
+        let n = v.get() + 1;
+        v.set(n);
+        n
+    });
+    if visits > VISIT_CAP.with(|c| c.get()) {
+        return;
+    }
+
     let (s1, s2, n1, n2) = if reversed {
         (b, a, node_b, node_a)
     } else {

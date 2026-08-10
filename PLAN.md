@@ -29,6 +29,7 @@ Optional compatibility with popular three.js add-ons, compiled only when enabled
 |------|---------|---------|--------|
 | `mesh-bvh` | [three-mesh-bvh](https://github.com/gkjohnson/three-mesh-bvh) | BVH-accelerated raycasting, shapecast, GPU picking helpers | **v2 shipped** (core + extended queries) |
 | `bvh-csg` | [three-bvh-csg](https://github.com/gkjohnson/three-bvh-csg) | Boolean CSG on `BufferGeometry` (depends on `mesh-bvh`) | **Shipped** — Rust `src/csg/` + JS `web/csg/` (`BVH_CSG=1`) |
+| `openscad` | — (native, no JS upstream) | OpenSCAD-style `Solid` builder → `BufferGeometry` (depends on `bvh-csg`) | **M0 shipped** — `src/openscad/`; exact kernel roadmap in [docs/openscad-plan.md](docs/openscad-plan.md) |
 
 **Approach**
 

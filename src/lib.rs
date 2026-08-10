@@ -69,6 +69,14 @@ pub mod mesh_bvh;
 #[cfg(feature = "bvh-csg")]
 pub mod csg;
 
+#[cfg(feature = "openscad")]
+pub mod openscad;
+
+/// Robust boolean kernel (M1 scaffold) — winding-number classification +
+/// straddle detection. See `docs/openscad-plan.md`.
+#[cfg(feature = "openscad")]
+pub mod exact_csg;
+
 #[cfg(target_arch = "wasm32")]
 #[macro_export]
 macro_rules! log {
@@ -228,3 +236,16 @@ pub use csg::{
     ADDITION, SUBTRACTION, REVERSE_SUBTRACTION, INTERSECTION, DIFFERENCE,
     HOLLOW_SUBTRACTION, HOLLOW_INTERSECTION,
 };
+
+#[cfg(feature = "openscad")]
+pub use openscad::export::{geometry_to_3mf, geometry_to_glb, geometry_to_obj, geometry_to_off};
+#[cfg(feature = "openscad")]
+pub use openscad::{
+    cone, cube, cylinder, difference_all, frustum, geometry_to_stl, hull, intersection_all,
+    linear_extrude, linear_extrude_holes, polyhedron, rotate_extrude, rotate_extrude_fn, solid,
+    sphere, sphere_fn, union_all, Solid,
+};
+#[cfg(feature = "openscad")]
+pub use openscad::{build_nema17, build_printer};
+#[cfg(feature = "openscad")]
+pub use openscad::scad::{clear_files, parse_scad, parse_scad_file, register_file};

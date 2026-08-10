@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="stylesheet" href="/web/viewer-theme.css" />
+<title>threers · parametric 3D printer (wasm + WebGPU)</title>
+<style>
+    * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
+    font: 13px/1.45 ui-sans-serif, system-ui, -apple-system, sans-serif; }
+  #app { display: grid; grid-template-columns: 250px 1fr; height: 100%; }
+  #side { border-right: 1px solid var(--border); overflow-y: auto; padding: 12px 14px 40px; }
+  #side h1 { font-size: 14px; margin: 4px 0 2px; color: var(--title); }
+  #side .sub { font-size: 11px; color: var(--muted); margin: 0 0 14px; }
+  .ctl { margin: 12px 0; }
+  .ctl label { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .ctl label b { color: var(--fg); font-weight: 600; }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  .row { display: flex; align-items: center; gap: 8px; margin-top: 14px; font-size: 12px; color: var(--muted); }
+  button { background: var(--panel); color: var(--fg); border: 1px solid var(--border); border-radius: 7px;
+    padding: 6px 10px; font: inherit; cursor: pointer; }
+  button:hover { background: var(--hover); }
+  #main { position: relative; min-width: 0; }
+  #canvas { display: block; width: 100%; height: 100%; }
+  #stats { position: absolute; left: 16px; top: 14px; font-size: 12px; color: var(--muted); pointer-events: none; }
+  #err { position: absolute; inset: 0; display: none; place-items: center; padding: 24px;
+    text-align: center; color: #ff8a8a; font-size: 14px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <aside id="side">
+    <h1>Parametric 3D printer</h1>
+    <div class="sub">pure-Rust geometry · wasm + WebGPU · drag to orbit</div>
+
+    <div class="ctl"><label>Bed size <b id="v-bed"></b></label>
+      <input id="bed" type="range" min="120" max="320" step="10" value="220"></div>
+    <div class="ctl"><label>Z height <b id="v-z"></b></label>
+      <input id="z" type="range" min="160" max="400" step="10" value="240"></div>
+
+    <div class="sub" style="margin-top:18px">Axis poses</div>
+    <div class="ctl"><label>Z gantry <b id="v-gantry"></b></label>
+      <input id="gantry" type="range" min="40" max="380" step="2" value="130"></div>
+    <div class="ctl"><label>X carriage <b id="v-carriage"></b></label>
+      <input id="carriage" type="range" min="0" max="320" step="2" value="90"></div>
+    <div class="ctl"><label>Y bed <b id="v-bedpos"></b></label>
+      <input id="bedpos" type="range" min="-60" max="60" step="2" value="0"></div>
+
+    <div class="sub" style="margin-top:18px">Decompose</div>
+    <div class="ctl"><label>explode <b id="v-explode">0%</b></label>
+      <input id="explode" type="range" min="0" max="100" step="1" value="0"></div>
+
+    <div class="row"><input type="checkbox" id="spin"> <label for="spin" style="cursor:pointer">slow rotation</label></div>
+    <div class="row"><button id="reset">reset view</button></div>
+  </aside>
+  <main id="main">
+    <canvas id="canvas"></canvas>
+    <div id="stats"></div>
+    <div id="err"></div>
+    <button id="theme-btn"></button>
+  </main>
+</div>
+
+<script type="module">
+import THREE, { initThreers, Vector3, Euler } from '/web/threejs-shim.js';
+import { printer_scene } from '/web/pkg/threers.js';
+import { initTheme } from '/web/viewer-theme.js';
+
+const $ = (s) => document.querySelector(s);
+const canvas = $('#canvas'), errEl = $('#err');
+
+try {
+  await initThreers({ module_or_path: '/web/pkg/threers_bg.wasm' });
+
+  // Supersample the canvas (the browser WebGPU renderer has no MSAA): render at a
+  // higher backing resolution and let the element downscale it -> smooth edges.
+  function resize() {
+    const cw = canvas.parentElement.clientWidth, ch = canvas.parentElement.clientHeight;
+    const base = Math.min(devicePixelRatio || 1, 2), ss = 1, cap = 3400;
+    let w = cw * base * ss, h = ch * base * ss;
+    const k = Math.min(1, cap / Math.max(w, h));
+    w = Math.max(1, Math.round(w * k)); h = Math.max(1, Math.round(h * k));
+    canvas.width = w; canvas.height = h; return { w, h };
+  }
+  let { w, h } = resize();
+
+  const renderer = await THREE.WebGLRenderer.create(canvas);
+  renderer._w?.setMsaa?.(4); // hardware 4× MSAA on the opaque pass
+  renderer.setSize(w, h);
+  const camera = new THREE.PerspectiveCamera(42, w / h, 1, 6000);
+  const controls = new THREE.OrbitControls(camera, renderer.domElement);
+
+  const matCache = new Map();
+  function material(c) {
+    const key = c.map((x) => Math.round(x * 255)).join(',');
+    if (!matCache.has(key)) {
+      const hex = (Math.round(c[0]*255) << 16) | (Math.round(c[1]*255) << 8) | Math.round(c[2]*255);
+      matCache.set(key, new THREE.MeshStandardMaterial({ color: hex, roughness: 0.45, metalness: 0.25 }));
+    }
+    return matCache.get(key);
+  }
+
+  let scene, meshes = [], cents = [], center = [0, 0, 0], spinAngle = 0;
+  let sceneBg = 0x0e1016;
+  initTheme((_, bg) => { sceneBg = bg; if (scene) scene.background = new THREE.Color(bg); });
+
+  function makeScene() {
+    const s = new THREE.Scene();
+    s.background = new THREE.Color(sceneBg);
+    s.add(new THREE.AmbientLight(0xffffff, 0.5));
+    const d1 = new THREE.DirectionalLight(0xffffff, 2.6); d1.position.set(-6, -9, 8); s.add(d1);
+    const d2 = new THREE.DirectionalLight(0xffffff, 0.8); d2.position.set(7, 5, -4); s.add(d2);
+    return s;
+  }
+
+  function params() {
+    const z = +$('#z').value;
+    const gantry = Math.min(+$('#gantry').value, z - 20);
+    const bed = +$('#bed').value;
+    return { bed, z, gantry, carriage: Math.min(+$('#carriage').value, bed), bedpos: +$('#bedpos').value };
+  }
+
+  function rebuild(reframe) {
+    const p = params();
+    $('#v-bed').textContent = `${p.bed} mm`;
+    $('#v-z').textContent = `${p.z} mm`;
+    $('#v-gantry').textContent = `${p.gantry} mm`;
+    $('#v-carriage').textContent = `${p.carriage} mm`;
+    $('#v-bedpos').textContent = `${p.bedpos} mm`;
+
+    const ps = printer_scene(p.bed, p.bed, p.z, 20, p.gantry, p.carriage, p.bedpos);
+    scene = makeScene();
+    meshes = []; cents = [];
+    let tris = 0, mn = [1e9, 1e9, 1e9], mx = [-1e9, -1e9, -1e9];
+    for (let i = 0; i < ps.count; i++) {
+      const pos = ps.positions(i), nrm = ps.normals(i), col = ps.color(i);
+      tris += pos.length / 9;
+      let sx = 0, sy = 0, sz = 0;
+      for (let k = 0; k < pos.length; k += 3) {
+        sx += pos[k]; sy += pos[k+1]; sz += pos[k+2];
+        for (let a = 0; a < 3; a++) { mn[a] = Math.min(mn[a], pos[k+a]); mx[a] = Math.max(mx[a], pos[k+a]); }
+      }
+      const nv = pos.length / 3;
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      g.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));
+      const mesh = new THREE.Mesh(g, material(Array.from(col)));
+      scene.add(mesh);
+      if (mesh._handle) { meshes.push(mesh); cents.push([sx/nv, sy/nv, sz/nv]); }
+    }
+    center = [(mn[0]+mx[0])/2, (mn[1]+mx[1])/2, (mn[2]+mx[2])/2];
+    const radius = Math.hypot(mx[0]-mn[0], mx[1]-mn[1], mx[2]-mn[2]) / 2;
+    $('#stats').textContent = `${ps.count} parts · ${tris.toLocaleString()} triangles`;
+    if (reframe) frame(radius);
+    applyTransforms();
+  }
+
+  function frame(radius) {
+    camera.up = new Vector3(0, 0, 1);
+    const dist = radius * 2.1;
+    camera.position.set(center[0] + dist*0.85, center[1] - dist*0.95, center[2] + dist*0.5);
+    camera.lookAt(center[0], center[1], center[2]);
+    controls?.resetFromCamera?.();
+  }
+
+  // Wire the controls.
+  for (const id of ['bed', 'z', 'gantry', 'carriage', 'bedpos'])
+    $('#' + id).addEventListener('input', () => rebuild(false));
+  $('#reset').addEventListener('click', () => {
+    // recompute a fresh bbox radius and re-frame
+    rebuild(false);
+    const p = params();
+    frame(Math.hypot(p.bed + 60, p.bed + 90, p.z) / 2 * 1.1);
+  });
+  addEventListener('resize', () => { ({ w, h } = resize()); renderer.setSize(w, h);
+    camera.aspect = w / h; camera.updateProjectionMatrix?.(); });
+
+  const spin = $('#spin'), explode = $('#explode');
+  // Compose spin (rotate about the assembly centre) with an exploded view
+  // (translate each part outward from the centre by `factor`). Per-part pos =
+  // Rz·(E − c) + c, where E is the explode offset and the geometry is baked at p.
+  function applyTransforms() {
+    if (!meshes.length) return;
+    const f = (+explode.value) / 100 * 1.6;
+    const ca = Math.cos(spinAngle), sa = Math.sin(spinAngle);
+    for (let i = 0; i < meshes.length; i++) {
+      const ct = cents[i];
+      const ex = (ct[0] - center[0]) * f, ey = (ct[1] - center[1]) * f, ez = (ct[2] - center[2]) * f;
+      const vx = ex - center[0], vy = ey - center[1], vz = ez - center[2];
+      const px = ca * vx - sa * vy + center[0], py = sa * vx + ca * vy + center[1], pz = vz + center[2];
+      meshes[i].position.set(px, py, pz);
+      meshes[i].rotation.set(0, 0, spinAngle);
+    }
+  }
+  explode.addEventListener('input', () => { $('#v-explode').textContent = explode.value + '%'; applyTransforms(); });
+  function loop() {
+    requestAnimationFrame(loop);
+    if (spin.checked) { spinAngle = (spinAngle + 0.005) % (Math.PI * 2); applyTransforms(); }
+    renderer.render(scene, camera);
+  }
+
+  rebuild(true);
+  loop();
+  void controls;
+} catch (e) {
+  errEl.style.display = 'grid';
+  errEl.innerHTML = 'Failed to start: ' + (e?.message || e) +
+    '<br><br>Needs a WebGPU browser (Chrome/Edge 113+). Serve over http, not file://.';
+  console.error(e);
+}
+</script>
+</body>
+</html>

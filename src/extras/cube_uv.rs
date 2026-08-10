@@ -95,7 +95,7 @@ pub fn extract_cube_faces_from_atlas_lod(
     faces
 }
 
-/// Direction for PMREM face `face` at UV in [0,1]² — matches three.js `getDirection()`.
+/// Direction for PMREM face `face` at UV in `[0,1]`² — matches three.js `getDirection()`.
 pub fn pmrem_get_direction(face: u32, u: f32, v: f32) -> [f32; 3] {
     let su = u * 2.0 - 1.0;
     let sv = v * 2.0 - 1.0;

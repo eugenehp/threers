@@ -1,0 +1,9 @@
+DejaVuSans.ttf — the default font for the OpenSCAD `text()` primitive.
+
+DejaVu Fonts are based on the Bitstream Vera Fonts (© 2003 Bitstream, Inc.)
+and Arev Fonts (© 2006 Tavmjong Bah), and are released under a permissive,
+redistributable license (the Bitstream Vera / Arev license). The fonts may be
+freely used, embedded, and redistributed; the copyright notices above must be
+retained and the fonts may not be sold on their own.
+
+Full license: https://dejavu-fonts.github.io/License.html

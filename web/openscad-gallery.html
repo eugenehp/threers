@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="stylesheet" href="/web/viewer-theme.css" />
+<title>threers · OpenSCAD gallery (wasm + WebGPU)</title>
+<style>
+    * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
+    font: 13px/1.45 ui-sans-serif, system-ui, -apple-system, sans-serif; }
+  #app { display: grid; grid-template-columns: 260px 1fr; height: 100%; }
+  #side { border-right: 1px solid var(--border); overflow-y: auto; padding: 10px 8px 40px; }
+  #side h1 { font-size: 13px; margin: 6px 8px 2px; color: var(--title); letter-spacing: .3px; }
+  #side .sub { font-size: 11px; color: var(--muted); margin: 0 8px 12px; }
+  .cat { font-size: 10px; text-transform: uppercase; letter-spacing: .8px;
+    color: var(--muted); margin: 12px 8px 4px; }
+  button.demo { display: block; width: 100%; text-align: left; border: 0; cursor: pointer;
+    background: transparent; color: var(--fg); padding: 5px 8px; border-radius: 6px; font: inherit; }
+  button.demo:hover { background: var(--hover); color: var(--title); }
+  button.demo.active { background: var(--active); color: var(--title); }
+  #main { position: relative; min-width: 0; }
+  #canvas { display: block; width: 100%; height: 100%; }
+  #hud { position: absolute; left: 14px; top: 12px; right: 14px; display: flex;
+    justify-content: space-between; align-items: flex-start; gap: 12px; pointer-events: none; }
+  #title { font-size: 15px; font-weight: 600; color: var(--title); }
+  #stats { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  #src { position: absolute; left: 14px; bottom: 12px; right: 14px; max-width: 720px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px;
+    white-space: pre-wrap; font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--muted); backdrop-filter: blur(4px); }
+  #err { position: absolute; inset: 0; display: none; place-items: center; padding: 24px;
+    text-align: center; color: #ff8a8a; font-size: 14px; }
+  .badge { display: inline-block; font-size: 10px; padding: 1px 6px; border-radius: 999px;
+    background: #1c3a24; color: #7fe0a0; margin-left: 6px; }
+  .badge.warn { background: #3a331c; color: #e0c97f; }
+</style>
+</head>
+<body>
+<div id="app">
+  <aside id="side">
+    <h1>OpenSCAD gallery</h1>
+    <div class="sub">pure-Rust front end → exact CSG → wasm + WebGPU. Drag to orbit.</div>
+    <div id="list"></div>
+  </aside>
+  <main id="main">
+    <canvas id="canvas"></canvas>
+    <div id="hud">
+      <div><div id="title">—</div><div id="stats"></div></div>
+      <label id="spinbox" style="pointer-events:auto; cursor:pointer; font-size:12px; color:var(--muted);
+        background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:5px 9px;
+        display:flex; align-items:center; gap:6px; backdrop-filter:blur(4px);">
+        <input type="checkbox" id="spin" /> slow rotation
+      </label>
+    </div>
+    <div id="src"></div>
+    <div id="err"></div>
+    <button id="theme-btn"></button>
+  </main>
+</div>
+
+<script type="module">
+import THREE, { initThreers, Vector3, Euler } from '/web/threejs-shim.js';
+import { scad_geometry, scad_register_file } from '/web/pkg/threers.js';
+import { initTheme } from '/web/viewer-theme.js';
+
+// --- Demo catalogue (same sources as examples/openscad_gallery.rs, minus the
+//     file-backed surface() demo — wasm has no filesystem). ---
+const DEMOS = [
+  ['3D primitives', 'cube', 'cube([24, 16, 8], center=true);'],
+  ['3D primitives', 'sphere', 'sphere(r=10, $fn=48);'],
+  ['3D primitives', 'cone', 'cylinder(h=18, r1=10, r2=2, $fn=48);'],
+  ['3D primitives', 'polyhedron',
+    'polyhedron(points=[[0,0,10],[8,8,-4],[8,-8,-4],[-8,-8,-4],[-8,8,-4]],\n  faces=[[0,1,2],[0,2,3],[0,3,4],[0,4,1],[1,4,3],[1,3,2]]);'],
+  ['2D primitives', 'circle', 'linear_extrude(3) circle(r=10, $fn=64);'],
+  ['2D primitives', 'square', 'linear_extrude(3) square([18, 11], center=true);'],
+  ['2D primitives', 'polygon', 'linear_extrude(4) polygon([[0,0],[22,0],[16,14],[4,14]]);'],
+  ['2D primitives', 'text', 'linear_extrude(4) text("SCAD", size=11, halign="center", valign="center");'],
+  ['Booleans', 'difference', 'difference(){ cube(18,center=true); sphere(r=11,$fn=44); }'],
+  ['Booleans', 'union', 'union(){ cube(15,center=true); sphere(r=9.5,$fn=44); }'],
+  ['Booleans', 'intersection', 'intersection(){ cube(18,center=true); sphere(r=11,$fn=44); }'],
+  ['Booleans', 'through-hole',
+    'difference(){ cube(20,center=true); translate([3,2,0]) cylinder(h=30,r=6,$fn=48,center=true); }'],
+  ['Transforms', 'translate·rotate·scale', 'translate([0,0,4]) rotate([0,30,0]) scale([1,1,2]) cube(8, center=true);'],
+  ['Transforms', 'mirror', 'mirror([1,0,0]) translate([6,0,0]) cylinder(h=12,r1=6,r2=0,$fn=40);'],
+  ['Transforms', 'multmatrix·shear',
+    'multmatrix([[1,0,0.6,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]) cube([10,10,14], center=true);'],
+  ['Transforms', 'resize', 'resize([34,10,10]) sphere(r=10, $fn=40);'],
+  ['Transforms', 'color', 'color("orange") cube([16,16,4], center=true);'],
+  ['Extrusion', 'linear_extrude', 'linear_extrude(height=14) polygon([[0,0],[16,0],[8,12]]);'],
+  ['Extrusion', 'linear_extrude · twist', 'linear_extrude(height=26, twist=200, scale=0.4, slices=48) square([16,16], center=true);'],
+  ['Extrusion', 'rotate_extrude · torus', 'rotate_extrude($fn=64) translate([10,0]) circle(r=3, $fn=32);'],
+  ['Extrusion', 'rotate_extrude · partial', 'rotate_extrude(angle=270, $fn=64) translate([9,0]) square([4,10]);'],
+  ['Projection', 'projection · cut', 'linear_extrude(3) projection(cut=true) translate([0,0,4]) sphere(r=9, $fn=44);'],
+  ['Hull/Mink/Offset', 'hull · 2D',
+    'linear_extrude(4) hull(){ translate([-11,0]) circle(4,$fn=40); translate([11,0]) circle(6,$fn=40); }'],
+  ['Hull/Mink/Offset', 'hull · 3D',
+    'hull(){ translate([-9,0,0]) sphere(4,$fn=28); translate([9,0,6]) cube(5, center=true); }'],
+  ['Hull/Mink/Offset', 'minkowski · rounded',
+    'minkowski(){ cube([18,12,6], center=true); sphere(r=2.5, $fn=20); }'],
+  ['Hull/Mink/Offset', 'offset · round',
+    'linear_extrude(4) offset(r=4, $fn=40) square([18,10], center=true);'],
+  ['Control flow', 'for · array', 'for(i=[0:6]) translate([i*6-18, 0, 0]) cube([4, 4, 2 + i*2]);'],
+  ['Control flow', 'for · radial',
+    'for(a=[0:30:330]) rotate([0,0,a]) translate([13,0,0]) cylinder(h=10, r=1.6, $fn=20);'],
+  ['Control flow', 'intersection_for',
+    'intersection_for(a=[0:45:135]) rotate([0,0,a]) cube([26,7,7], center=true);'],
+  ['Modules', 'children · ring',
+    'module ring(n){ for(i=[0:n-1]) rotate([0,0,i*360/n]) translate([12,0,0]) children(); }\nring(9) sphere(r=2.4, $fn=20);'],
+  ['Modules', 'recursion · tree',
+    'module tree(n, len){\n  if (n > 0){\n    translate([-len/12, -len/12, 0]) cube([len/6, len/6, len]);\n    translate([0,0,len]) for(a=[32,-32]) rotate([a,0,0]) tree(n-1, len*0.7);\n  }\n}\ntree(4, 20);'],
+  ['Functions', 'function + comprehension',
+    'function star(n, ro, ri) =\n  [ for(i=[0:2*n-1]) let(a=i*180/n, r=(i%2==0)?ro:ri) [r*cos(a), r*sin(a)] ];\nlinear_extrude(4) polygon(star(6, 15, 6));'],
+  ['Special vars', '$fn vs $fa/$fs',
+    'translate([-12,0,0]) sphere(r=9, $fn=10);\ntranslate([ 12,0,0]) sphere(r=9, $fa=6, $fs=1);'],
+  ['Special vars', 'sin field',
+    'for(x=[0:1:22]) translate([x-11, 0, 4*sin(x*22)]) cube([0.9,6,0.9], center=true);'],
+  ['Surface', 'height field', 'surface(file="heightmap.dat", center=true);'],
+];
+
+// A height field for the surface() demo, registered as an in-memory file (wasm
+// has no filesystem) — a 9×9 Gaussian bump.
+function makeHeightmap() {
+  let hf = '';
+  for (let j = 0; j < 9; j++) {
+    const row = [];
+    for (let i = 0; i < 9; i++) { const x = i - 4, y = j - 4; row.push((8 * Math.exp(-(x*x + y*y) / 8)).toFixed(4)); }
+    hf += row.join(' ') + '\n';
+  }
+  return hf;
+}
+
+const $ = (s) => document.querySelector(s);
+const canvas = $('#canvas');
+const errEl = $('#err');
+
+try {
+  await initThreers({ module_or_path: '/web/pkg/threers_bg.wasm' });
+  scad_register_file('heightmap.dat', makeHeightmap()); // for the surface() demo
+
+  // Supersample the canvas (the browser WebGPU renderer has no MSAA): render at a
+  // higher backing resolution and let the element downscale it -> smooth edges.
+  function resize() {
+    const cw = canvas.parentElement.clientWidth, ch = canvas.parentElement.clientHeight;
+    const base = Math.min(devicePixelRatio || 1, 2), ss = 1, cap = 3400;
+    let w = cw * base * ss, h = ch * base * ss;
+    const k = Math.min(1, cap / Math.max(w, h));
+    w = Math.max(1, Math.round(w * k)); h = Math.max(1, Math.round(h * k));
+    canvas.width = w; canvas.height = h; return { w, h };
+  }
+  let { w, h } = resize();
+
+  const renderer = await THREE.WebGLRenderer.create(canvas);
+  renderer._w?.setMsaa?.(4); // hardware 4× MSAA on the opaque pass
+  renderer.setSize(w, h);
+
+  const camera = new THREE.PerspectiveCamera(45, w / h, 0.05, 5000);
+  // Orbital mouse controls: left-drag = rotate, right-drag = pan, wheel = zoom.
+  const controls = new THREE.OrbitControls(camera, renderer.domElement);
+
+  const material = new THREE.MeshStandardMaterial({ color: 0x43a0f4, roughness: 0.45, metalness: 0.15 });
+
+  // Fresh scene per demo (keeps lights, drops the previous mesh cleanly).
+  let sceneBg = 0x14161c;
+  function makeScene() {
+    const s = new THREE.Scene();
+    s.background = new THREE.Color(sceneBg);
+    s.add(new THREE.AmbientLight(0xffffff, 0.55));
+    const d1 = new THREE.DirectionalLight(0xffffff, 2.6); d1.position.set(-6, -9, 7); s.add(d1);
+    const d2 = new THREE.DirectionalLight(0xffffff, 0.7); d2.position.set(8, 6, -4); s.add(d2);
+    return s;
+  }
+  let scene = makeScene();
+  initTheme((_, bg) => { sceneBg = bg; if (scene) scene.background = new THREE.Color(bg); });
+  let currentMesh = null, currentCenter = [0, 0, 0], spinAngle = 0;
+
+  function frameCamera(pos) {
+    let mn = [Infinity, Infinity, Infinity], mx = [-Infinity, -Infinity, -Infinity];
+    for (let i = 0; i < pos.length; i += 3)
+      for (let k = 0; k < 3; k++) { mn[k] = Math.min(mn[k], pos[i+k]); mx[k] = Math.max(mx[k], pos[i+k]); }
+    const c = [ (mn[0]+mx[0])/2, (mn[1]+mx[1])/2, (mn[2]+mx[2])/2 ];
+    currentCenter = c;
+    let r = 1e-3;
+    for (let i = 0; i < pos.length; i += 3) {
+      const dx = pos[i]-c[0], dy = pos[i+1]-c[1], dz = pos[i+2]-c[2];
+      r = Math.max(r, Math.hypot(dx, dy, dz));
+    }
+    const dist = Math.max(r / Math.tan((45 * Math.PI/180) / 2), r * 2.2);
+    camera.position.set(c[0] + dist*0.6, c[1] - dist*0.6, c[2] + dist*0.5);
+    camera.lookAt(c[0], c[1], c[2]);
+    camera.near = Math.max(0.01, dist * 0.01); camera.far = dist * 20 + 100;
+    camera.updateProjectionMatrix?.();
+    // Re-seed the orbit target/radius from the freshly-framed camera pose so
+    // rotate + zoom pivot around this model's centre.
+    controls?.resetFromCamera?.();
+  }
+
+  function watertight(pos) {
+    const edges = new Map(); const key = (i) =>
+      Math.round(pos[i]*1e4)+','+Math.round(pos[i+1]*1e4)+','+Math.round(pos[i+2]*1e4);
+    for (let t = 0; t < pos.length; t += 9) {
+      const v = [key(t), key(t+3), key(t+6)];
+      for (let k = 0; k < 3; k++) {
+        const e = [v[k], v[(k+1)%3]].sort().join('|');
+        edges.set(e, (edges.get(e) || 0) + 1);
+      }
+    }
+    return [...edges.values()].every((c) => c === 2) && edges.size > 0;
+  }
+
+  function show(demo, btn) {
+    document.querySelectorAll('button.demo').forEach((b) => b.classList.remove('active'));
+    btn?.classList.add('active');
+    const [, name, src] = demo;
+    const sg = scad_geometry(src);
+    if (sg.error) { $('#stats').textContent = 'error: ' + sg.error; return; }
+    const pos = sg.positions, nrm = sg.normals;
+
+    scene = makeScene();
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    g.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));
+    currentMesh = new THREE.Mesh(g, material);
+    scene.add(currentMesh);
+    spinAngle = 0;
+    frameCamera(pos);
+
+    const wt = watertight(pos);
+    $('#title').textContent = name;
+    $('#stats').innerHTML = `${sg.triangles.toLocaleString()} triangles` +
+      (wt ? `<span class="badge">watertight</span>` : `<span class="badge warn">float fallback</span>`);
+    $('#src').textContent = src;
+  }
+
+  // Build the sidebar.
+  const list = $('#list'); let lastCat = '';
+  DEMOS.forEach((demo) => {
+    if (demo[0] !== lastCat) { lastCat = demo[0];
+      const h = document.createElement('div'); h.className = 'cat'; h.textContent = lastCat; list.appendChild(h); }
+    const b = document.createElement('button'); b.className = 'demo'; b.textContent = demo[1];
+    b.onclick = () => show(demo, b); list.appendChild(b);
+  });
+
+  addEventListener('resize', () => { ({ w, h } = resize()); renderer.setSize(w, h);
+    camera.aspect = w / h; camera.updateProjectionMatrix?.(); });
+
+  const spin = $('#spin');
+  function loop() {
+    requestAnimationFrame(loop);
+    // Slow turntable: rotate the model about its bounding-box centre (vertical Z
+    // axis). set_transform composes T(pos)·R(quat), so a pivot about c means
+    // pos = c − R·c. Camera orbit (drag) stays independent.
+    if (spin.checked && currentMesh) {
+      spinAngle = (spinAngle + 0.006) % (Math.PI * 2);
+      const c = currentCenter, ca = Math.cos(spinAngle), sa = Math.sin(spinAngle);
+      // Set the JS mesh transform (the renderer's _syncTransforms pushes it to
+      // wasm; a direct scene._w.setTransform would be overwritten each frame).
+      currentMesh.position.set(c[0] - (ca*c[0] - sa*c[1]), c[1] - (sa*c[0] + ca*c[1]), 0);
+      currentMesh.rotation.set(0, 0, spinAngle);
+    }
+    renderer.render(scene, camera);
+  }
+  loop();
+  void controls; // self-updates via pointer/wheel events on the canvas
+
+  // Default: show the box−sphere difference (shows off the exact curved kernel).
+  const first = document.querySelectorAll('button.demo')[8];
+  show(DEMOS[8], first);
+} catch (e) {
+  errEl.style.display = 'grid';
+  errEl.innerHTML = 'Failed to start: ' + (e?.message || e) +
+    '<br><br>Needs a WebGPU browser (Chrome 113+ / Edge). Serve with a static server, not file://.';
+  console.error(e);
+}
+</script>
+</body>
+</html>

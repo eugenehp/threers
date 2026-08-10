@@ -283,6 +283,7 @@ fn perform_whole_triangle_operations(
     }
 }
 
+#[cfg(test)]
 fn tri_key_from_split_bary(
     geometry: &BufferGeometry,
     tri_index: usize,
@@ -315,6 +316,7 @@ fn tri_key_from_split_bary(
 }
 
 /// All clipped shell triangles (before hit-side), as world-space tri keys.
+#[cfg(test)]
 pub(crate) fn shell_split_clipped_tri_keys(
     a: &mut CsgBrush,
     b: &mut CsgBrush,
@@ -357,6 +359,7 @@ pub(crate) fn shell_split_clipped_tri_keys(
 }
 
 /// Shell-side split clipped triangle count (before hit-side culling).
+#[cfg(test)]
 pub(crate) fn shell_split_clipped_count(a: &mut CsgBrush, b: &mut CsgBrush) -> usize {
     a.prepare_geometry();
     b.prepare_geometry();
@@ -388,6 +391,7 @@ pub(crate) fn shell_split_clipped_count(a: &mut CsgBrush, b: &mut CsgBrush) -> u
 }
 
 /// Shell-side kept keys after hit-side filter (same keying as JS `export-shell-split-tris.mjs`).
+#[cfg(test)]
 pub(crate) fn shell_split_tri_keys(
     a: &mut CsgBrush,
     b: &mut CsgBrush,

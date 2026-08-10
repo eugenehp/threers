@@ -1,9 +1,9 @@
 [package]
 name = "threers"
-version = "0.0.2"
+version = "0.0.3"
 edition = "2021"
 authors = ["Eugene Hauptmann"]
-description = "Drop-in three.js replacement for Rust and WebAssembly (wgpu) — THREE.* API, scene graph, PBR, post-fx, mesh BVH, CSG, headless render, and native media codecs"
+description = "Drop-in three.js replacement for Rust and WebAssembly (wgpu) — THREE.* API, scene graph, PBR, post-fx, mesh BVH, CSG, an OpenSCAD front end with a watertight exact-CSG kernel, headless render, and native media codecs"
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/eugenehp/threers"
@@ -55,6 +55,10 @@ required-features = ["native-codec"]
 default = []
 mesh-bvh = []
 bvh-csg = ["mesh-bvh"]
+# OpenSCAD-style solid modeling: `.scad` front end + `Solid`/`scad!` Rust DSL,
+# a watertight exact-CSG kernel (float fallback), mesh import/export, and
+# `surface()` heightmaps. Pulls bvh-csg for the float fallback path.
+openscad = ["bvh-csg"]
 # Native video export: renders a frame sequence and encodes it with the system
 # `ffmpeg` (no extra crate deps — the feature just gates the module).
 video = []
@@ -148,3 +152,43 @@ required-features = ["bvh-csg"]
 name = "bvh_csg_steps"
 path = "examples/bvh_csg_steps.rs"
 required-features = ["bvh-csg"]
+
+[[example]]
+name = "openscad_bracket"
+path = "examples/openscad_bracket.rs"
+required-features = ["openscad"]
+
+[[example]]
+name = "dsl_showcase"
+path = "examples/dsl_showcase.rs"
+required-features = ["openscad"]
+
+[[example]]
+name = "openscad_render"
+path = "examples/openscad_render.rs"
+required-features = ["openscad"]
+
+[[example]]
+name = "openscad_compare"
+path = "examples/openscad_compare.rs"
+required-features = ["openscad"]
+
+[[example]]
+name = "openscad_corpus"
+path = "examples/openscad_corpus.rs"
+required-features = ["openscad"]
+
+[[example]]
+name = "openscad_gallery"
+path = "examples/openscad_gallery.rs"
+required-features = ["openscad"]
+
+[[example]]
+name = "printer_assembly"
+path = "examples/printer_assembly.rs"
+required-features = ["openscad"]
+
+[[example]]
+name = "nema17"
+path = "examples/nema17.rs"
+required-features = ["openscad"]

@@ -67,6 +67,7 @@ impl TypedAttributeData {
         &mut self.group_attributes[index]
     }
 
+    #[cfg(test)]
     pub fn get_count(&self, index: usize) -> usize {
         if self.group_count <= index {
             return 0;

@@ -28,6 +28,8 @@
 
 mod attribute_data;
 mod brush;
+/// BVH/bvhcast split-order parity helpers — used only by the parity tests.
+#[cfg(test)]
 mod bvhcast_parity;
 mod constants;
 mod evaluator;

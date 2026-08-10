@@ -1,8 +1,5 @@
 //! Mirrors `web/csg/core/TriangleSplitter.js` precisely.
 
-#[cfg(test)]
-use crate::math::Triangle;
-
 use super::js_topology::{
     is_tri_degenerate, JsLine3, JsPlane, JsTriangle, JsVec3, SplitBary, TOPO_EPSILON,
 };
@@ -40,6 +37,17 @@ impl TrianglePool {
 }
 
 const DEGENERATE_EPSILON: f64 = 1e-14;
+
+/// Ceiling on how many fragments one source triangle may be cut into. Each
+/// `split_by_triangle` can multiply the pool, so a triangle overlapping many
+/// near-degenerate neighbours (the pathological coarse-union case that pushes the
+/// exact kernel into this float fallback) grows roughly as 2^N and never returns.
+/// Past this bound `split_by_triangle` becomes a no-op, so the boolean still
+/// terminates with a slightly-approximate result for that one triangle instead of
+/// hanging — a deterministic guard that holds identically on wasm (where a live
+/// loop can't be wall-clock-timed-out) and native. Legitimate dense intersections
+/// stay far below this; it only ever trips on runaway degenerate splits.
+const MAX_SPLIT_FRAGMENTS: usize = 50_000;
 
 /// Mirrors `web/csg/core/TriangleSplitter.js`.
 #[derive(Debug)]
@@ -84,6 +92,11 @@ impl TriangleSplitter {
 
     /// Mirrors `splitByTriangle(triangle)`.
     pub fn split_by_triangle(&mut self, triangle: JsTriangle) {
+        // Runaway-split guard: stop cutting once the pool blows past the ceiling so
+        // a degenerate self-overlap can't spin forever (see MAX_SPLIT_FRAGMENTS).
+        if self.triangles.len() > MAX_SPLIT_FRAGMENTS {
+            return;
+        }
         let clip = triangle;
         let tri_normal = clip.get_normal().normalize();
 
@@ -294,6 +307,7 @@ impl TriangleSplitter {
     }
 
     /// Active clipped triangles (f64 pool, mirrors JS `splitter.triangles`).
+    #[cfg(test)]
     pub fn clipped_js_triangles(&self) -> Vec<JsTriangle> {
         self.triangles
             .iter()
@@ -301,6 +315,7 @@ impl TriangleSplitter {
             .collect()
     }
 
+    #[cfg(test)]
     pub fn clipped_with_bary(
         &self,
         tri_a: JsTriangle,
@@ -324,7 +339,7 @@ impl TriangleSplitter {
 mod tests {
     use super::*;
     use crate::csg::js_topology::JsTriangle;
-    use crate::math::Vector3;
+    use crate::math::{Triangle, Vector3};
 
     #[test]
     fn clip_intersects_unit_triangle() {

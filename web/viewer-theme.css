@@ -1,0 +1,53 @@
+/* Shared light/dark theming for the threers viewer pages.
+   `:root` defaults are dark; an explicit [data-theme] wins; with no attribute
+   (theme = "system") the @media rule follows the OS preference. */
+:root, :root[data-theme="dark"] {
+  --bg: #0d0f14;
+  --fg: #cdd3df;
+  --panel: #0d0f14cc;
+  --border: #222634;
+  --muted: #8b93a6;
+  --accent: #3a86e0;
+  --title: #ffffff;
+  --hover: #161a24;
+  --active: #23406b;
+  --scene: #14161c;
+  color-scheme: dark;
+}
+:root[data-theme="light"] {
+  --bg: #eef1f6;
+  --fg: #2b313c;
+  --panel: #ffffffd0;
+  --border: #d2d8e2;
+  --muted: #5c6675;
+  --accent: #2f6fd0;
+  --title: #10141c;
+  --hover: #e3e8f0;
+  --active: #d1e0f8;
+  --scene: #e7eaef;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]):not([data-theme="light"]) {
+    --bg: #eef1f6;
+    --fg: #2b313c;
+    --panel: #ffffffd0;
+    --border: #d2d8e2;
+    --muted: #5c6675;
+    --accent: #2f6fd0;
+    --title: #10141c;
+    --hover: #e3e8f0;
+    --active: #d1e0f8;
+    --scene: #e7eaef;
+    color-scheme: light;
+  }
+}
+
+/* Theme toggle button — used on every viewer page. */
+#theme-btn {
+  position: absolute; right: 16px; bottom: 14px; z-index: 5;
+  background: var(--panel); color: var(--muted); border: 1px solid var(--border);
+  border-radius: 8px; padding: 5px 10px; font: inherit; font-size: 12px; cursor: pointer;
+  backdrop-filter: blur(4px);
+}
+#theme-btn:hover { color: var(--fg); }
