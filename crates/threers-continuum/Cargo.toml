@@ -1,0 +1,26 @@
+[package]
+name = "threers-continuum"
+version = "0.0.1"
+edition = "2021"
+authors = ["Eugene Hauptmann"]
+description = "Tendon-driven continuum robots for threers-physics: a flexible rod as a chain of elastic hinges, cable routing, Clark coordinates and task-space tip control"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/eugenehp/threers"
+homepage = "https://github.com/eugenehp/threers"
+documentation = "https://docs.rs/threers-continuum"
+keywords = ["robotics", "continuum", "soft-robotics", "tendon", "physics"]
+categories = ["science::robotics", "simulation", "wasm"]
+
+[lib]
+bench = false
+
+[features]
+default = []
+# Build a rod straight out of a `.scad` model's `continuum()` / `tendon()`
+# declarations.
+openscad = ["threers/openscad", "threers-physics/openscad"]
+
+[dependencies]
+threers = { path = "../.." }
+threers-physics = { path = "../threers-physics", features = ["mechanism"] }

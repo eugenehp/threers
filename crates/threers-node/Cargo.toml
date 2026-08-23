@@ -1,0 +1,36 @@
+[package]
+name = "threers-node"
+version = "0.0.4"
+edition = "2021"
+authors = ["Eugene Hauptmann"]
+description = "Native Node.js bindings for threers via napi-rs (headless render, math, animation, physics)"
+license = "MIT"
+repository = "https://github.com/eugenehp/threers"
+homepage = "https://github.com/eugenehp/threers"
+documentation = "https://github.com/eugenehp/threers/tree/main/crates/threers-node"
+readme = "README.md"
+keywords = ["three-js", "nodejs", "napi", "wgpu", "graphics"]
+categories = ["graphics", "api-bindings"]
+# Distributed on npm, not crates.io.
+publish = false
+
+[lib]
+name = "threers_node"
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[features]
+default = ["headless"]
+headless = []
+physics = ["dep:threers-physics"]
+animation = ["dep:threers-animation"]
+
+[dependencies]
+threers = { path = "../..", version = "0.0.4" }
+threers-physics = { path = "../threers-physics", version = "0.0.1", optional = true }
+threers-animation = { path = "../threers-animation", version = "0.0.1", optional = true, default-features = false }
+napi = { version = "2", default-features = false, features = ["napi4"] }
+napi-derive = "2"
+
+[build-dependencies]
+napi-build = "2"

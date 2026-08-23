@@ -43,7 +43,7 @@ pub struct Reconstruction {
 /// `frame.width` / `height` must be ≥ 8 and multiples of 8.
 pub fn encode_intra_frame(frame: &Yuv420Frame) -> (Vec<u8>, Reconstruction) {
     assert!(
-        frame.width >= 8 && frame.height >= 8 && frame.width % 8 == 0 && frame.height % 8 == 0,
+        frame.width >= 8 && frame.height >= 8 && frame.width.is_multiple_of(8) && frame.height.is_multiple_of(8),
         "VP9 encoder needs dims that are multiples of 8 (got {}×{})",
         frame.width,
         frame.height
@@ -146,7 +146,7 @@ impl<'a> FrameEnc<'a> {
             }
             mi_row += 8;
         }
-        std::mem::replace(&mut self.bool, BoolEncoder::new()).finish()
+        std::mem::take(&mut self.bool).finish()
     }
 
     fn encode_partition(&mut self, mi_row: usize, mi_col: usize, bsize_px: u32) {
@@ -705,7 +705,7 @@ fn write_tile_info(w: &mut BitWriter, width: u32) {
     // libvpx `vp9_get_tile_n_bits` / `write_tile_info`.
     const MIN_TILE_WIDTH_SB: u32 = 4;
     let mi_cols = width / 8;
-    let sb_cols = (mi_cols + 7) / 8;
+    let sb_cols = mi_cols.div_ceil(8);
     let mut min_log2 = 0u32;
     while (MAX_TILE_WIDTH_SB << min_log2) < sb_cols {
         min_log2 += 1;

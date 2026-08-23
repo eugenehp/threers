@@ -39,9 +39,9 @@ pub fn triangulate_with_points(tri: &[V3; 3], pts: &[V3]) -> Vec<[V3; 3]> {
     let mut tris = vec![*tri];
     const EPS: f64 = 1e-9;
     for &p in pts {
-        let idx = tris.iter().position(|t| {
-            matches!(bary(t, p), Some([u, v, w]) if u >= -EPS && v >= -EPS && w >= -EPS)
-        });
+        let idx = tris.iter().position(
+            |t| matches!(bary(t, p), Some([u, v, w]) if u >= -EPS && v >= -EPS && w >= -EPS),
+        );
         let Some(i) = idx else { continue };
         let t = tris.swap_remove(i);
         tris.push([t[0], t[1], p]);
@@ -90,7 +90,11 @@ mod tests {
     fn points_appear_as_vertices() {
         let p = [1.0, 1.0, 0.0];
         let out = triangulate_with_points(&T, &[p]);
-        let has = |q: V3| out.iter().flatten().any(|v| dot(sub(*v, q), sub(*v, q)) < 1e-18);
+        let has = |q: V3| {
+            out.iter()
+                .flatten()
+                .any(|v| dot(sub(*v, q), sub(*v, q)) < 1e-18)
+        };
         assert!(has(p) && has(T[0]) && has(T[1]) && has(T[2]));
     }
 

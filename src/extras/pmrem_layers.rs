@@ -216,7 +216,7 @@ mod tests {
             solid(size, 255, 0, 255),
             solid(size, 0, 255, 255),
         ];
-        let atlas = pack_cube_uv_atlas(&[faces.clone()], &[size], cube_size, lod_max);
+        let atlas = pack_cube_uv_atlas(std::slice::from_ref(&faces), &[size], cube_size, lod_max);
         let back = extract_cube_faces_from_atlas_lod(
             &atlas.pixels,
             atlas.width,
@@ -594,12 +594,8 @@ mod tests {
         let pm = PmremGenerator::generate_pmrem(&parity_cube(32), 32);
         let atlas = pm.cube_uv_atlas.as_ref().unwrap();
         let roughness = 0.45f32;
-        let reflect = [
-            -0.190915793669969f32,
-            0.6924259382358577,
-            0.6957711403799082,
-        ];
-        let normal = [-0.09560317121482893, 0.3467398597791558, 0.9330763651995477];
+        let reflect = [-0.190_915_8_f32, 0.692_425_97, 0.695_771_16];
+        let normal = [-0.095_603_17, 0.346_739_86, 0.933_076_4];
         let reflect_env = sample_cube_uv_env(atlas, reflect, roughness.max(0.0525));
         let normal_env = sample_cube_uv_env(atlas, normal, 1.0);
         eprintln!(
@@ -636,7 +632,7 @@ mod tests {
         );
 
         // Full IBL at grazing pixel (camera at 0,0,3 looking at origin).
-        let hit = [-0.2856030468244868, 1.0352198173357866, 1.0406567105698623];
+        let hit = [-0.285_603_05, 1.035_219_8, 1.040_656_7];
         let cam = [0.0f32, 0.0, 3.0];
         let v = {
             let dx = cam[0] - hit[0];
@@ -655,11 +651,7 @@ mod tests {
     fn pmrem_layer_13_grazing_plus_z_not_wrong_face() {
         let pm = PmremGenerator::generate_pmrem(&parity_cube(32), 32);
         let atlas = pm.cube_uv_atlas.as_ref().unwrap();
-        let reflect = [
-            -0.190915793669969f32,
-            0.6924259382358577,
-            0.6957711403799082,
-        ];
+        let reflect = [-0.190_915_8_f32, 0.692_425_97, 0.695_771_16];
         let c = sample_atlas_bilinear(atlas, reflect, 4.0);
         eprintln!("L13 grazing +Z mip4 sample {c:?} (inverted atlas had G≈0.47)");
         assert!(

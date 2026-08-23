@@ -1,0 +1,26 @@
+[package]
+name = "threers-js"
+version = "0.0.4"
+edition = "2021"
+authors = ["Eugene Hauptmann"]
+description = "Published npm / Deno / Node ESM package for threers (THREE.* shim + wasm)"
+license = "MIT"
+repository = "https://github.com/eugenehp/threers"
+homepage = "https://github.com/eugenehp/threers"
+documentation = "https://github.com/eugenehp/threers/tree/main/crates/threers-js"
+readme = "README.md"
+keywords = ["three-js", "wasm", "webgpu", "npm", "esm"]
+categories = ["graphics", "wasm", "web-programming"]
+# This crate is the *source* of the npm package; crates.io is not the
+# distribution channel. Publish with `npm publish` after `./build.sh`.
+publish = false
+
+[lib]
+path = "src/lib.rs"
+# No rustc consumers — the crate exists so the workspace owns the package
+# tree and `cargo metadata` can find it.
+crate-type = ["lib"]
+
+[package.metadata.threers-js]
+npm_name = "threers"
+# Built into `dist/` by build.sh from ../../web.

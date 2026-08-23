@@ -1,9 +1,10 @@
 //! Native video export (behind the `video` feature). Renders a frame sequence
 //! and encodes it — by default with the system `ffmpeg`. When both `video` and
-//! `native-codec` are enabled, [`VideoCodec::Gif`] and [`VideoCodec::Apng`] are
-//! encoded in-process (no ffmpeg); other codecs still require ffmpeg.
+//! `native-codec` are enabled, [`VideoCodec::Gif`], [`VideoCodec::Apng`], and
+//! [`VideoCodec::H264`] are encoded in-process (no ffmpeg); other codecs still
+//! require ffmpeg.
 //!
-//! For browser / wasm downloads (GIF, APNG, WebM) use
+//! For browser / wasm downloads (GIF, APNG, WebM, MP4) use
 //! [`crate::encode_animation_rgba`] with [`crate::BrowserCodec`] instead — that
 //! API returns bytes and never shells out.
 //!
@@ -29,8 +30,39 @@
 //!     .unwrap();
 //! ```
 //!
-//! See examples `export_h264`, `export_hevc`, `export_vp9`, `export_gif`, …
-//! and the web demo `web/examples/export-video.html`.
+//! # Subtitles and captions
+//!
+//! Attach a [`crate::captions::CaptionTrack`] and pick how it ships:
+//!
+//! ```no_run
+//! use threers::{CaptionMode, CaptionTrack, VideoCodec, VideoExporter};
+//! # fn render(_i: usize) -> Vec<u8> { vec![0; 1280 * 720 * 4] }
+//! let track = CaptionTrack::parse_srt(&std::fs::read_to_string("dialogue.srt").unwrap()).unwrap();
+//! VideoExporter::new("out.mp4")
+//!     .size(1280, 720)
+//!     .frames(300)
+//!     .fps(30)
+//!     .codec(VideoCodec::H264)
+//!     .captions(track)
+//!     // Burn the text into the pixels *and* drop `out.srt` next to the video.
+//!     .caption_mode(CaptionMode::BurnAndSidecar)
+//!     .export(render)
+//!     .unwrap();
+//! ```
+//!
+//! | [`CaptionMode`] | Result |
+//! |------|--------|
+//! | [`Burn`](CaptionMode::Burn) (default) | text composited into the frames; works with every codec |
+//! | [`Sidecar`](CaptionMode::Sidecar) | a separate `out.srt` / `out.vtt` |
+//! | [`Embed`](CaptionMode::Embed) | a soft subtitle track in the container (MP4 `mov_text`, WebM `webvtt`) |
+//! | [`BurnAndSidecar`](CaptionMode::BurnAndSidecar) | both of the first two |
+//!
+//! Burned-in text uses the built-in bitmap face unless you supply a TrueType
+//! font with [`VideoOptions::caption_font`], and scales itself to the export
+//! height unless you pin a [`crate::captions::CaptionStyle`].
+//!
+//! See examples `export_h264`, `export_hevc`, `export_vp9`, `export_gif`,
+//! `captions_video`, … and the web demo `web/examples/export-video.html`.
 //!
 //! ```no_run
 //! use threers::{HeadlessRenderer, VideoOptions, VideoCodec, export_video, Scene, PerspectiveCamera};
@@ -45,8 +77,110 @@
 //! }).unwrap();
 //! ```
 
+/// Called with export progress as frames are written.
+type ProgressCallback = Box<dyn FnMut(&VideoExportProgress) + Send>;
+/// Called for each notable event during an export.
+type EventCallback = Box<dyn FnMut(&VideoExportEvent) + Send>;
+
 use std::io::Write;
 use std::process::{Command, Stdio};
+
+use crate::captions::{CaptionFont, CaptionFormat, CaptionPainter, CaptionStyle, CaptionTrack};
+
+/// How a caption track reaches the exported video.
+///
+/// Burned-in captions are pixels — they survive any player, any codec, and any
+/// re-encode, but the viewer cannot switch them off. Soft captions (sidecar or
+/// embedded) stay selectable and searchable, which is what accessibility
+/// guidelines ask for, but need a player that reads them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum CaptionMode {
+    /// Composite the text into the frames ("open captions"). Works with every
+    /// codec, including GIF and APNG.
+    #[default]
+    Burn,
+    /// Write a separate `.srt` / `.vtt` file next to the video.
+    Sidecar,
+    /// Mux a soft subtitle track into the container — MP4 gets `mov_text`
+    /// (`tx3g`), WebM gets `webvtt`. Not available for GIF or APNG, which have
+    /// no subtitle track.
+    Embed,
+    /// Burn the text in *and* write a sidecar, so the captions are both always
+    /// visible and machine-readable.
+    BurnAndSidecar,
+}
+
+impl CaptionMode {
+    /// Whether this mode paints the text into the frames.
+    pub fn burns(self) -> bool {
+        matches!(self, CaptionMode::Burn | CaptionMode::BurnAndSidecar)
+    }
+
+    /// Whether this mode writes a separate subtitle file.
+    pub fn writes_sidecar(self) -> bool {
+        matches!(self, CaptionMode::Sidecar | CaptionMode::BurnAndSidecar)
+    }
+
+    /// Whether this mode muxes a subtitle track into the container.
+    pub fn embeds(self) -> bool {
+        matches!(self, CaptionMode::Embed)
+    }
+}
+
+/// A caption track plus how to render and deliver it.
+///
+/// Build one with [`VideoOptions::captions`] and refine it with the
+/// `caption_*` builders.
+#[derive(Clone, Debug)]
+pub struct CaptionExport {
+    /// The cues to show.
+    pub track: CaptionTrack,
+    /// How the cues reach the output.
+    pub mode: CaptionMode,
+    /// Look of burned-in text. `None` uses [`CaptionStyle::default`] rescaled
+    /// to the export height, which keeps captions proportionate at any
+    /// resolution.
+    pub style: Option<CaptionStyle>,
+    /// TrueType font bytes for burned-in text. `None` uses the built-in
+    /// bitmap face (see [`CaptionFont::builtin`]).
+    pub font: Option<Vec<u8>>,
+    /// Sidecar file format.
+    pub format: CaptionFormat,
+    /// Sidecar path. `None` derives it from the video path — `out.mp4` becomes
+    /// `out.srt`.
+    pub sidecar_path: Option<String>,
+}
+
+impl CaptionExport {
+    /// Burn `track` into the frames using the default style.
+    pub fn new(track: CaptionTrack) -> Self {
+        Self {
+            track,
+            mode: CaptionMode::default(),
+            style: None,
+            font: None,
+            format: CaptionFormat::Srt,
+            sidecar_path: None,
+        }
+    }
+
+    /// Where the sidecar goes for a given video `output` path.
+    pub fn sidecar_for(&self, output: &str) -> String {
+        self.sidecar_path
+            .clone()
+            .unwrap_or_else(|| replace_extension(output, self.format.extension()))
+    }
+}
+
+/// `"a/b.mp4"` + `"srt"` → `"a/b.srt"`. Paths with no extension gain one.
+fn replace_extension(path: &str, extension: &str) -> String {
+    // Only treat a dot in the last path segment as an extension separator.
+    let start = path.rfind(['/', '\\']).map(|i| i + 1).unwrap_or(0);
+    match path[start..].rfind('.') {
+        Some(dot) if dot > 0 => format!("{}.{extension}", &path[..start + dot]),
+        _ => format!("{path}.{extension}"),
+    }
+}
 
 /// Output video codec / container.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -81,6 +215,24 @@ impl VideoCodec {
             VideoCodec::Apng => "apng",
         }
     }
+
+    /// The ffmpeg subtitle encoder this container takes, or `None` when it has
+    /// no subtitle track at all (GIF, APNG).
+    ///
+    /// ```
+    /// use threers::VideoCodec;
+    /// assert_eq!(VideoCodec::H264.subtitle_encoder(), Some("mov_text"));
+    /// assert_eq!(VideoCodec::Vp9.subtitle_encoder(), Some("webvtt"));
+    /// assert_eq!(VideoCodec::Gif.subtitle_encoder(), None);
+    /// ```
+    pub fn subtitle_encoder(self) -> Option<&'static str> {
+        match self {
+            // MP4 carries 3GPP timed text; ffmpeg calls that `mov_text`.
+            VideoCodec::H264 | VideoCodec::Hevc | VideoCodec::HevcVideoToolbox => Some("mov_text"),
+            VideoCodec::Vp9 => Some("webvtt"),
+            VideoCodec::Gif | VideoCodec::Apng => None,
+        }
+    }
 }
 
 /// Encoding quality — a target bitrate or a constant-rate-factor.
@@ -113,6 +265,9 @@ pub struct VideoOptions {
     pub extra_args: Vec<String>,
     /// GIF palette size when using the native encoder (`2..=256`, default 256).
     pub gif_colors: u16,
+    /// Subtitles / captions to deliver with the video. See
+    /// [`VideoOptions::captions`].
+    pub captions: Option<CaptionExport>,
 }
 
 impl VideoOptions {
@@ -126,6 +281,7 @@ impl VideoOptions {
             transparent: false,
             extra_args: Vec::new(),
             gif_colors: 256,
+            captions: None,
         }
     }
     /// Frames per second (minimum 1).
@@ -161,6 +317,66 @@ impl VideoOptions {
     /// Native GIF palette size (`2..=256`).
     pub fn gif_colors(mut self, n: u16) -> Self {
         self.gif_colors = n.clamp(2, 256);
+        self
+    }
+
+    /// Attach a subtitle / caption track, burned into the frames by default.
+    ///
+    /// ```
+    /// use threers::{CaptionTrack, VideoOptions};
+    /// let track = CaptionTrack::parse_srt(
+    ///     "1\n00:00:00,000 --> 00:00:02,000\nHello\n",
+    /// ).unwrap();
+    /// let opts = VideoOptions::new("out.mp4").captions(track);
+    /// assert!(opts.captions.is_some());
+    /// ```
+    ///
+    /// Follow with [`caption_mode`](Self::caption_mode) to ship the cues as a
+    /// sidecar or an embedded soft-subtitle track instead.
+    pub fn captions(mut self, track: CaptionTrack) -> Self {
+        self.captions = Some(CaptionExport::new(track));
+        self
+    }
+
+    /// How the captions reach the output. No-op without a caption track.
+    pub fn caption_mode(mut self, mode: CaptionMode) -> Self {
+        if let Some(c) = self.captions.as_mut() {
+            c.mode = mode;
+        }
+        self
+    }
+
+    /// Look of burned-in captions. Set explicitly, the style is used verbatim —
+    /// use [`CaptionStyle::for_height`] if you want it to track the export size.
+    pub fn caption_style(mut self, style: CaptionStyle) -> Self {
+        if let Some(c) = self.captions.as_mut() {
+            c.style = Some(style);
+        }
+        self
+    }
+
+    /// TrueType font for burned-in captions. Without this the built-in bitmap
+    /// face is used.
+    pub fn caption_font(mut self, ttf: impl Into<Vec<u8>>) -> Self {
+        if let Some(c) = self.captions.as_mut() {
+            c.font = Some(ttf.into());
+        }
+        self
+    }
+
+    /// Sidecar / embedded subtitle format (default [`CaptionFormat::Srt`]).
+    pub fn caption_format(mut self, format: CaptionFormat) -> Self {
+        if let Some(c) = self.captions.as_mut() {
+            c.format = format;
+        }
+        self
+    }
+
+    /// Explicit sidecar path, instead of deriving it from the video path.
+    pub fn caption_sidecar_path(mut self, path: impl Into<String>) -> Self {
+        if let Some(c) = self.captions.as_mut() {
+            c.sidecar_path = Some(path.into());
+        }
         self
     }
 }
@@ -257,8 +473,8 @@ fn make_progress(
 /// Collects progress / lifecycle listeners for [`VideoExporter`].
 #[derive(Default)]
 struct VideoExportTracer {
-    on_progress: Option<Box<dyn FnMut(&VideoExportProgress) + Send>>,
-    on_event: Option<Box<dyn FnMut(&VideoExportEvent) + Send>>,
+    on_progress: Option<ProgressCallback>,
+    on_event: Option<EventCallback>,
 }
 
 impl VideoExportTracer {
@@ -375,6 +591,42 @@ impl VideoExporter {
         self
     }
 
+    /// Attach a subtitle / caption track. See [`VideoOptions::captions`].
+    pub fn captions(mut self, track: CaptionTrack) -> Self {
+        self.options = self.options.captions(track);
+        self
+    }
+
+    /// How the captions reach the output.
+    pub fn caption_mode(mut self, mode: CaptionMode) -> Self {
+        self.options = self.options.caption_mode(mode);
+        self
+    }
+
+    /// Look of burned-in captions.
+    pub fn caption_style(mut self, style: CaptionStyle) -> Self {
+        self.options = self.options.caption_style(style);
+        self
+    }
+
+    /// TrueType font for burned-in captions.
+    pub fn caption_font(mut self, ttf: impl Into<Vec<u8>>) -> Self {
+        self.options = self.options.caption_font(ttf);
+        self
+    }
+
+    /// Sidecar / embedded subtitle format.
+    pub fn caption_format(mut self, format: CaptionFormat) -> Self {
+        self.options = self.options.caption_format(format);
+        self
+    }
+
+    /// Explicit sidecar path.
+    pub fn caption_sidecar_path(mut self, path: impl Into<String>) -> Self {
+        self.options = self.options.caption_sidecar_path(path);
+        self
+    }
+
     /// Replace options wholesale (keeps size / frame count / listeners).
     pub fn options(mut self, options: VideoOptions) -> Self {
         self.options = options;
@@ -382,10 +634,7 @@ impl VideoExporter {
     }
 
     /// Progress callback (JS `onProgress` / `progress` event).
-    pub fn on_progress(
-        mut self,
-        cb: impl FnMut(&VideoExportProgress) + Send + 'static,
-    ) -> Self {
+    pub fn on_progress(mut self, cb: impl FnMut(&VideoExportProgress) + Send + 'static) -> Self {
         self.tracer.on_progress = Some(Box::new(cb));
         self
     }
@@ -437,6 +686,9 @@ pub enum VideoError {
     Ffmpeg(Option<i32>),
     /// `frames` was zero.
     NoFrames,
+    /// The caption track could not be applied — an unreadable font, or an
+    /// [`CaptionMode::Embed`] request for a container with no subtitle track.
+    Captions(String),
 }
 
 impl std::fmt::Display for VideoError {
@@ -457,6 +709,7 @@ impl std::fmt::Display for VideoError {
             ),
             VideoError::Ffmpeg(code) => write!(f, "ffmpeg exited with status {code:?}"),
             VideoError::NoFrames => write!(f, "frame count was zero"),
+            VideoError::Captions(m) => write!(f, "captions could not be applied: {m}"),
         }
     }
 }
@@ -508,7 +761,7 @@ fn export_video_traced<F>(
     height: u32,
     frames: usize,
     options: &VideoOptions,
-    mut frame: F,
+    frame: F,
     tracer: &mut VideoExportTracer,
 ) -> Result<(), VideoError>
 where
@@ -525,10 +778,42 @@ where
     let frames_u = frames as u32;
     let codec = options.codec;
 
+    // Set up captions before anything is captured, so a bad font or an
+    // impossible embed request fails immediately instead of after encoding.
+    let mut burner = match CaptionBurner::prepare(options, width, height) {
+        Ok(b) => b,
+        Err(e) => {
+            tracer.emit_event(VideoExportEvent::Error {
+                message: e.to_string(),
+            });
+            return Err(e);
+        }
+    };
+    // Every path below sees frames that already have the captions painted in.
+    let mut source = frame;
+    let mut frame = |i: usize| {
+        let mut buf = source(i);
+        if let Some(b) = burner.as_mut() {
+            b.apply(&mut buf, i);
+        }
+        buf
+    };
+
     let result = (|| {
+        // The soft-subtitle track needs a real file for ffmpeg to read; it is
+        // removed once the child exits.
+        let embedded = EmbeddedSubtitles::prepare(options)?;
+
         #[cfg(feature = "native-codec")]
         if matches!(options.codec, VideoCodec::Gif | VideoCodec::Apng) {
-            return export_native_animation(width, height, frames, options, &mut frame, tracer);
+            export_native_animation(width, height, frames, options, &mut frame, tracer)?;
+            return write_sidecar(options);
+        }
+
+        #[cfg(feature = "native-codec")]
+        if matches!(options.codec, VideoCodec::H264) {
+            export_native_h264(width, height, frames, options, &mut frame, tracer)?;
+            return write_sidecar(options);
         }
 
         tracer.emit_event(VideoExportEvent::Start {
@@ -544,7 +829,13 @@ where
             .args(["-video_size", &format!("{width}x{height}")])
             .args(["-framerate", &options.fps.to_string()])
             .args(["-i", "-"]);
+        if let Some(sub) = &embedded {
+            sub.append_input(&mut cmd);
+        }
         append_codec_args(&mut cmd, options);
+        if let Some(sub) = &embedded {
+            sub.append_output_args(&mut cmd);
+        }
         for a in &options.extra_args {
             cmd.arg(a);
         }
@@ -581,6 +872,7 @@ where
         if !status.success() {
             return Err(VideoError::Ffmpeg(status.code()));
         }
+        write_sidecar(options)?;
         tracer.emit_progress(make_progress(
             VideoExportPhase::Done,
             frames_u,
@@ -602,6 +894,98 @@ where
         }),
     }
     result
+}
+
+#[cfg(feature = "native-codec")]
+fn export_native_h264<F>(
+    width: u32,
+    height: u32,
+    frames: usize,
+    options: &VideoOptions,
+    frame: &mut F,
+    tracer: &mut VideoExportTracer,
+) -> Result<(), VideoError>
+where
+    F: FnMut(usize) -> Vec<u8>,
+{
+    use crate::codec::h264::encode_mp4_with_captions;
+    use crate::codec::hevc::Yuv420Frame;
+
+    if !width.is_multiple_of(2) || !height.is_multiple_of(2) {
+        return Err(VideoError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "native H.264 export requires even width and height (4:2:0)",
+        )));
+    }
+    if options.transparent {
+        return Err(VideoError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "native H.264 export does not support transparency yet",
+        )));
+    }
+
+    let expected = (width as usize) * (height as usize) * 4;
+    let frames_u = frames as u32;
+    let codec = options.codec;
+    let captions = options.captions.as_ref().and_then(|c| {
+        if c.mode.embeds() && !c.track.is_empty() {
+            Some(&c.track)
+        } else {
+            None
+        }
+    });
+
+    tracer.emit_event(VideoExportEvent::Start {
+        phase: VideoExportPhase::Capture,
+        frames: frames_u,
+        codec,
+    });
+
+    let mut yuv_frames = Vec::with_capacity(frames);
+    for i in 0..frames {
+        let buf = frame(i);
+        if buf.len() != expected {
+            return Err(VideoError::FrameSize {
+                frame: i,
+                expected,
+                got: buf.len(),
+            });
+        }
+        yuv_frames.push(Yuv420Frame::from_rgba(width, height, &buf));
+        let done = (i + 1) as u32;
+        tracer.emit_progress(make_progress(
+            VideoExportPhase::Capture,
+            done,
+            frames_u,
+            done as f32 / (frames_u as f32 + 1.0),
+            codec,
+        ));
+    }
+
+    tracer.emit_event(VideoExportEvent::Start {
+        phase: VideoExportPhase::Encode,
+        frames: frames_u,
+        codec,
+    });
+    tracer.emit_progress(make_progress(
+        VideoExportPhase::Encode,
+        0,
+        frames_u,
+        frames_u as f32 / (frames_u as f32 + 1.0),
+        codec,
+    ));
+
+    let bytes = encode_mp4_with_captions(width, height, options.fps, &yuv_frames, captions);
+    std::fs::write(&options.output, bytes).map_err(VideoError::Io)?;
+
+    tracer.emit_progress(make_progress(
+        VideoExportPhase::Done,
+        frames_u,
+        frames_u,
+        1.0,
+        codec,
+    ));
+    Ok(())
 }
 
 #[cfg(feature = "native-codec")]
@@ -677,9 +1061,7 @@ where
             AnimationExportPhase::Done => VideoExportPhase::Done,
             AnimationExportPhase::Capture => VideoExportPhase::Capture,
         };
-        tracer.emit_progress(make_progress(
-            phase, p.frame, p.frames, p.ratio, vcodec,
-        ));
+        tracer.emit_progress(make_progress(phase, p.frame, p.frames, p.ratio, vcodec));
     })
     .map_err(|error| match error {
         AnimationEncodeError::Empty => VideoError::NoFrames,
@@ -707,6 +1089,142 @@ where
         vcodec,
     ));
     Ok(())
+}
+
+/// Paints the active cues into each captured frame.
+struct CaptionBurner<'a> {
+    painter: CaptionPainter,
+    track: &'a CaptionTrack,
+    fps: u32,
+    width: u32,
+    height: u32,
+}
+
+impl<'a> CaptionBurner<'a> {
+    /// Build a burner if `options` asks for burned-in captions.
+    fn prepare(
+        options: &'a VideoOptions,
+        width: u32,
+        height: u32,
+    ) -> Result<Option<Self>, VideoError> {
+        let Some(captions) = options.captions.as_ref() else {
+            return Ok(None);
+        };
+        if captions.mode.embeds() && options.codec.subtitle_encoder().is_none() {
+            return Err(VideoError::Captions(format!(
+                "{} has no subtitle track — use CaptionMode::Burn or ::Sidecar",
+                options.codec.label().to_ascii_uppercase()
+            )));
+        }
+        if !captions.mode.burns() || captions.track.is_empty() {
+            return Ok(None);
+        }
+
+        let font = match &captions.font {
+            Some(bytes) => CaptionFont::from_ttf_bytes(bytes).map_err(|e| {
+                VideoError::Captions(format!("caption font could not be parsed: {e:?}"))
+            })?,
+            None => CaptionFont::builtin(),
+        };
+        // An unset style tracks the export height so captions stay
+        // proportionate whether you render 480p or 4K.
+        let style = captions
+            .style
+            .clone()
+            .unwrap_or_else(|| CaptionStyle::default().for_height(height));
+
+        Ok(Some(Self {
+            painter: CaptionPainter::with_font(font).style(style),
+            track: &captions.track,
+            fps: options.fps.max(1),
+            width,
+            height,
+        }))
+    }
+
+    /// Paint frame `index`, whose display time is `index / fps`.
+    fn apply(&mut self, frame: &mut [u8], index: usize) {
+        let time = index as f64 / self.fps as f64;
+        self.painter
+            .burn_in(frame, self.width, self.height, self.track, time);
+    }
+}
+
+/// Write the sidecar subtitle file when the mode asks for one.
+fn write_sidecar(options: &VideoOptions) -> Result<(), VideoError> {
+    let Some(captions) = options.captions.as_ref() else {
+        return Ok(());
+    };
+    if !captions.mode.writes_sidecar() || captions.track.is_empty() {
+        return Ok(());
+    }
+    let path = captions.sidecar_for(&options.output);
+    std::fs::write(path, captions.track.to_format(captions.format)).map_err(VideoError::Io)
+}
+
+/// A temporary subtitle file handed to ffmpeg as a second input, deleted when
+/// the export finishes.
+struct EmbeddedSubtitles {
+    path: std::path::PathBuf,
+    encoder: &'static str,
+    language: String,
+    label: String,
+}
+
+impl EmbeddedSubtitles {
+    fn prepare(options: &VideoOptions) -> Result<Option<Self>, VideoError> {
+        let Some(captions) = options.captions.as_ref() else {
+            return Ok(None);
+        };
+        if !captions.mode.embeds() || captions.track.is_empty() {
+            return Ok(None);
+        }
+        let encoder = options.codec.subtitle_encoder().ok_or_else(|| {
+            VideoError::Captions(format!(
+                "{} has no subtitle track — use CaptionMode::Burn or ::Sidecar",
+                options.codec.label().to_ascii_uppercase()
+            ))
+        })?;
+        // WebM only takes WebVTT; MP4 timed text is fed from SubRip.
+        let format = match encoder {
+            "webvtt" => CaptionFormat::Vtt,
+            _ => CaptionFormat::Srt,
+        };
+        let path = std::env::temp_dir().join(format!(
+            "threers-captions-{}.{}",
+            std::process::id(),
+            format.extension()
+        ));
+        std::fs::write(&path, captions.track.to_format(format)).map_err(VideoError::Io)?;
+        Ok(Some(Self {
+            path,
+            encoder,
+            language: String::from_utf8_lossy(&crate::captions::iso639_2(&captions.track.language))
+                .into_owned(),
+            label: captions.track.label.clone(),
+        }))
+    }
+
+    /// The subtitle file as ffmpeg input #1.
+    fn append_input(&self, cmd: &mut Command) {
+        cmd.arg("-i").arg(&self.path);
+    }
+
+    /// Map both streams and tag the subtitle track.
+    fn append_output_args(&self, cmd: &mut Command) {
+        cmd.args(["-map", "0:v:0", "-map", "1:s:0"]);
+        cmd.args(["-c:s", self.encoder]);
+        cmd.args(["-metadata:s:s:0", &format!("language={}", self.language)]);
+        if !self.label.is_empty() {
+            cmd.args(["-metadata:s:s:0", &format!("title={}", self.label)]);
+        }
+    }
+}
+
+impl Drop for EmbeddedSubtitles {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
 }
 
 fn append_codec_args(cmd: &mut Command, opts: &VideoOptions) {
@@ -755,6 +1273,73 @@ fn append_codec_args(cmd: &mut Command, opts: &VideoOptions) {
                 cmd.args(["-crf", &crf.to_string()]);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod caption_tests {
+    use super::*;
+
+    #[test]
+    fn sidecar_paths_swap_the_extension() {
+        assert_eq!(replace_extension("out.mp4", "srt"), "out.srt");
+        assert_eq!(replace_extension("a/b/clip.webm", "vtt"), "a/b/clip.vtt");
+        // No extension → gain one rather than clobbering the name.
+        assert_eq!(replace_extension("out/movie", "srt"), "out/movie.srt");
+        // A dot in a directory name is not an extension.
+        assert_eq!(replace_extension("v1.2/clip", "srt"), "v1.2/clip.srt");
+        // A dotfile keeps its leading dot.
+        assert_eq!(replace_extension(".hidden", "srt"), ".hidden.srt");
+        assert_eq!(
+            replace_extension("C:\\vids\\a.mov", "vtt"),
+            "C:\\vids\\a.vtt"
+        );
+    }
+
+    #[test]
+    fn sidecar_for_honors_format_and_explicit_path() {
+        let mut export = CaptionExport::new(CaptionTrack::new());
+        assert_eq!(export.sidecar_for("out.mp4"), "out.srt");
+        export.format = CaptionFormat::Vtt;
+        assert_eq!(export.sidecar_for("out.mp4"), "out.vtt");
+        export.sidecar_path = Some("elsewhere/subs.vtt".into());
+        assert_eq!(export.sidecar_for("out.mp4"), "elsewhere/subs.vtt");
+    }
+
+    #[test]
+    fn caption_modes_describe_what_they_do() {
+        assert!(CaptionMode::Burn.burns());
+        assert!(!CaptionMode::Burn.writes_sidecar());
+        assert!(!CaptionMode::Burn.embeds());
+        assert!(CaptionMode::Sidecar.writes_sidecar());
+        assert!(!CaptionMode::Sidecar.burns());
+        assert!(CaptionMode::Embed.embeds());
+        assert!(CaptionMode::BurnAndSidecar.burns());
+        assert!(CaptionMode::BurnAndSidecar.writes_sidecar());
+        // Burn is the default: captions are visible without player support.
+        assert_eq!(CaptionMode::default(), CaptionMode::Burn);
+    }
+
+    #[test]
+    fn caption_builders_are_no_ops_without_a_track() {
+        // Setting caption options before `captions()` must not panic.
+        let opts = VideoOptions::new("out.mp4")
+            .caption_mode(CaptionMode::Embed)
+            .caption_format(CaptionFormat::Vtt);
+        assert!(opts.captions.is_none());
+    }
+
+    #[test]
+    fn unset_caption_style_scales_itself_to_the_export_height() {
+        let opts = VideoOptions::new("out.mp4").captions(CaptionTrack::new().cue(0.0, 1.0, "x"));
+        let burner = CaptionBurner::prepare(&opts, 1280, 540).unwrap().unwrap();
+        // Default style is authored for 1080p; 540 is half that.
+        assert!((burner.painter.style.font_size - 17.0).abs() < 1e-4);
+
+        // An explicit style is used verbatim.
+        let opts = opts.caption_style(CaptionStyle::default().font_size(40.0));
+        let burner = CaptionBurner::prepare(&opts, 1280, 540).unwrap().unwrap();
+        assert_eq!(burner.painter.style.font_size, 40.0);
     }
 }
 

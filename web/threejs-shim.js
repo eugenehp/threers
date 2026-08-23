@@ -41,7 +41,7 @@ import init, {
     // raycaster + clock
     WebRaycaster, WebClock,
 } from './pkg/threers.js';
-import { Earcut } from './node_modules/three/src/extras/Earcut.js';
+import { Earcut } from './deps/Earcut.js';
 import {
     BrowserVideoFormat,
     VideoEncodeWorker,
@@ -1001,7 +1001,18 @@ export class Line3 {
 
 // ---- Geometries ----
 export class BoxGeometry { constructor(w = 1, h = 1, d = 1) { this._w = WebGeometry.box(w, h, d); this.parameters = { width: w, height: h, depth: d }; } }
-export class SphereGeometry { constructor(r = 1, ws = 32, hs = 16) { this._w = WebGeometry.sphere(r, ws, hs); } }
+export class SphereGeometry {
+    constructor(r = 1, ws = 32, hs = 16, phiStart = 0, phiLength = Math.PI * 2, thetaStart = 0, thetaLength = Math.PI) {
+        // Earth/Moon demos pass phi/theta ranges for 90°×90° patches. Without
+        // sphereRange every "tile" is a full sphere and textures fight/stack.
+        const full =
+            phiStart === 0 && phiLength === Math.PI * 2 &&
+            thetaStart === 0 && thetaLength === Math.PI;
+        this._w = full
+            ? WebGeometry.sphere(r, ws, hs)
+            : WebGeometry.sphereRange(r, ws, hs, phiStart, phiLength, thetaStart, thetaLength);
+    }
+}
 export class PlaneGeometry { constructor(w = 1, h = 1) { this._w = WebGeometry.plane(w, h); } }
 export class CylinderGeometry { constructor(rt = 1, rb = 1, h = 1, rs = 32) { this._w = WebGeometry.cylinder(rt, rb, h, rs); } }
 export class TorusGeometry { constructor(r = 1, t = 0.4, rs = 12, ts = 48) { this._w = WebGeometry.torus(r, t, rs, ts); } }
@@ -1041,9 +1052,13 @@ function _applyMap(w, opts) {
     const t = opts.map;
     // Sync the texture's filter/wrap to the wasm Texture before binding it.
     _syncTextureFilters(t);
+    if (t.offset && t.repeat && t._w?.setUvTransform) {
+        const ox = t.offset.x ?? 0, oy = t.offset.y ?? 0;
+        const rx = t.repeat.x ?? 1, ry = t.repeat.y ?? 1;
+        t._w.setUvTransform(ox, oy, rx, ry);
+    }
     // CanvasTexture also wraps a WebDataTexture; route either via setMapData.
-    if (t?._w?.constructor?.name === 'WebDataTexture') w.setMapData(t._w);
-    else if (t instanceof DataTexture) w.setMapData(t._w);
+    if (t?._w?.constructor?.name === 'WebDataTexture' || t instanceof DataTexture || t instanceof CanvasTexture) w.setMapData(t._w);
     else if (t instanceof Texture) w.setMap(t._w);
 }
 // Translate three.js's numeric filter/wrap constants to our compact
@@ -1136,9 +1151,173 @@ export class MeshBasicMaterial {
     constructor(opts = {}) {
         this._w = WebMaterial.basic(_matColor(opts));
         _applyMap(this._w, opts); _applyCommon(this._w, opts); _initMaterialBase(this, opts);
+        Object.defineProperty(this, 'map', {
+            get() { return this._map; },
+            set(tex) {
+                this._map = tex ?? null;
+                if (tex) {
+                    _syncTextureFilters(tex);
+                    tex._syncUv?.();
+                    _applyMap(this._w, { map: tex });
+                }
+            },
+            configurable: true,
+            enumerable: true,
+        });
+        this.map = opts.map ?? null;
+        // Same deferred rebind as MeshStandardMaterial — earth/moon DataTextures
+        // often get wrap/UV tweaks right after construction.
+        if (opts?.map) {
+            const tex = opts.map;
+            queueMicrotask(() => {
+                try {
+                    _syncTextureFilters(tex);
+                    tex._syncUv?.();
+                    _applyMap(this._w, { map: tex });
+                } catch (_) { /* ignore */ }
+            });
+        }
     }
 }
 export class MeshLambertMaterial { constructor(opts = {}) { this._w = WebMaterial.lambert(_matColor(opts)); _applyMap(this._w, opts); _applyCommon(this._w, opts); _initMaterialBase(this, opts); } }
+function _bindDataTex(w, tex, setMap, setMapData) {
+    if (!tex) return;
+    _syncTextureFilters(tex);
+    // Plain `{x,y}` assignment from earth-demo after construction.
+    if (tex.offset && !(tex.offset instanceof Vector2)) {
+        const o = tex.offset; tex.offset = new Vector2(o.x ?? 0, o.y ?? 0);
+    }
+    if (tex.repeat && !(tex.repeat instanceof Vector2)) {
+        const r = tex.repeat; tex.repeat = new Vector2(r.x ?? 1, r.y ?? 1);
+    }
+    if (tex._w?.setUvTransform && tex.offset && tex.repeat) {
+        tex._w.setUvTransform(tex.offset.x, tex.offset.y, tex.repeat.x, tex.repeat.y);
+    }
+    if (tex?._w?.constructor?.name === 'WebDataTexture' || tex instanceof DataTexture || tex instanceof CanvasTexture) {
+        if (setMapData) w[setMapData](tex._w);
+    } else if (tex instanceof Texture) {
+        if (setMap) w[setMap](tex._w);
+    } else if (tex?._w && setMapData) {
+        w[setMapData](tex._w);
+    }
+}
+
+/** Planet / PBR map options used by the earth demo. */
+function _applyStandardExtras(mat, opts) {
+    if (!opts || typeof opts !== 'object') return;
+    const w = mat._w;
+    _bindDataTex(w, opts.normalMap, 'setNormalMap', 'setNormalMapData');
+    _bindDataTex(w, opts.roughnessMap, 'setRoughnessMap', 'setRoughnessMapData');
+    _bindDataTex(w, opts.emissiveMap, 'setEmissiveMap', 'setEmissiveMapData');
+    _bindDataTex(w, opts.displacementMap, 'setDisplacementMap', 'setDisplacementMapData');
+    if (typeof opts.displacementScale === 'number' || typeof opts.displacementBias === 'number') {
+        w.setDisplacement?.(opts.displacementScale ?? 1, opts.displacementBias ?? 0);
+    }
+    if (opts.cloudShadowMap) {
+        _bindDataTex(w, opts.cloudShadowMap, null, 'setCloudShadowMapData');
+    }
+    const cloudH = typeof opts.cloudHeight === 'number' ? opts.cloudHeight : 0.012;
+    const cloudS = typeof opts.cloudShadow === 'number' ? opts.cloudShadow : 0.55;
+    const twilight = typeof opts.twilight === 'number' ? opts.twilight : 0.1;
+    if (opts.cloudShadowMap || 'twilight' in opts || 'cloudHeight' in opts) {
+        w.setAtmosphereShading?.(cloudH, cloudS, 0, twilight);
+    }
+    if ('twilightColor' in opts && w.setTwilightColor) {
+        w.setTwilightColor(_color(opts.twilightColor));
+    }
+
+    mat._cloudHeight = cloudH;
+    mat._cloudShadow = cloudS;
+    mat._cloudRotation = 0;
+    mat._twilight = twilight;
+    mat._dispScale = opts.displacementScale ?? 0;
+    mat._dispBias = opts.displacementBias ?? 0;
+    mat._eclipse = null;
+
+    // Live setters so LOD / progressive upgrades (`mat.map = next`) rebind GPU.
+    const bindSlot = (key, setMap, setMapData, value) => {
+        Object.defineProperty(mat, key, {
+            get() { return mat[`_${key}`]; },
+            set(tex) {
+                mat[`_${key}`] = tex ?? null;
+                if (!tex) return;
+                if (key === 'map') {
+                    _syncTextureFilters(tex);
+                    tex._syncUv?.();
+                    _applyMap(mat._w, { map: tex });
+                } else {
+                    _bindDataTex(mat._w, tex, setMap, setMapData);
+                }
+            },
+            configurable: true,
+            enumerable: true,
+        });
+        mat[key] = value ?? null;
+    };
+    bindSlot('map', 'setMap', 'setMapData', opts.map);
+    bindSlot('normalMap', 'setNormalMap', 'setNormalMapData', opts.normalMap);
+    bindSlot('roughnessMap', 'setRoughnessMap', 'setRoughnessMapData', opts.roughnessMap);
+    bindSlot('emissiveMap', 'setEmissiveMap', 'setEmissiveMapData', opts.emissiveMap);
+    bindSlot('displacementMap', 'setDisplacementMap', 'setDisplacementMapData', opts.displacementMap);
+    bindSlot('cloudShadowMap', null, 'setCloudShadowMapData', opts.cloudShadowMap);
+
+    Object.defineProperty(mat, 'emissiveIntensity', {
+        get() { return mat._emissiveIntensity ?? 1; },
+        set(v) {
+            mat._emissiveIntensity = Number(v);
+            mat._w?.setEmissiveIntensity?.(mat._emissiveIntensity);
+        },
+        configurable: true, enumerable: true,
+    });
+    if (typeof opts.emissiveIntensity === 'number') mat.emissiveIntensity = opts.emissiveIntensity;
+
+    Object.defineProperty(mat, 'emissiveNightSide', {
+        get() { return mat._emissiveNightSide ?? 0; },
+        set(v) {
+            mat._emissiveNightSide = Number(v);
+            mat._w?.setEmissiveNightSide?.(mat._emissiveNightSide);
+        },
+        configurable: true, enumerable: true,
+    });
+    if (typeof opts.emissiveNightSide === 'number') mat.emissiveNightSide = opts.emissiveNightSide;
+
+    Object.defineProperty(mat, 'displacementScale', {
+        get() { return mat._dispScale; },
+        set(v) {
+            mat._dispScale = Number(v);
+            mat._w?.setDisplacement?.(mat._dispScale, mat._dispBias);
+        },
+        configurable: true, enumerable: true,
+    });
+    Object.defineProperty(mat, 'displacementBias', {
+        get() { return mat._dispBias; },
+        set(v) {
+            mat._dispBias = Number(v);
+            mat._w?.setDisplacement?.(mat._dispScale, mat._dispBias);
+        },
+        configurable: true, enumerable: true,
+    });
+    Object.defineProperty(mat, 'cloudRotation', {
+        get() { return mat._cloudRotation; },
+        set(v) {
+            mat._cloudRotation = Number(v);
+            mat._w?.setAtmosphereShading?.(mat._cloudHeight, mat._cloudShadow, mat._cloudRotation, mat._twilight);
+        },
+        configurable: true, enumerable: true,
+    });
+    // Earth demo: `mat.eclipseOccluder = [x,y,z,r]` — sun angular radius ~0.00465 rad.
+    Object.defineProperty(mat, 'eclipseOccluder', {
+        get() { return mat._eclipse; },
+        set(v) {
+            mat._eclipse = v;
+            if (!mat._w?.setEclipse) return;
+            if (!v || !v[3]) mat._w.setEclipse(0, 0, 0, 0, 0.00465);
+            else mat._w.setEclipse(v[0], v[1], v[2], v[3], 0.00465);
+        },
+        configurable: true, enumerable: true,
+    });
+}
+
 export class MeshStandardMaterial {
     constructor(opts = {}) {
         const c = _matColor(opts);
@@ -1146,6 +1325,18 @@ export class MeshStandardMaterial {
         const m = (typeof opts === 'object' && opts && 'metalness' in opts) ? opts.metalness : 0.0;
         this._w = WebMaterial.standard(c, r, m);
         _applyMap(this._w, opts); _applyCommon(this._w, opts); _initMaterialBase(this, opts);
+        _applyStandardExtras(this, opts);
+        // Re-bind after earth-demo mutates wrap/offset/repeat on the texture.
+        if (opts?.map) {
+            const tex = opts.map;
+            queueMicrotask(() => {
+                try {
+                    _syncTextureFilters(tex);
+                    tex._syncUv?.();
+                    _applyMap(this._w, { map: tex });
+                } catch (_) { /* ignore */ }
+            });
+        }
     }
 }
 export class MeshPhongMaterial { constructor(opts = {}) { this._w = WebMaterial.phong(_matColor(opts)); } }
@@ -1171,6 +1362,61 @@ export class PointsMaterial {
     }
 }
 export class SpriteMaterial { constructor(opts = {}) { this._w = WebMaterial.sprite(_matColor(opts)); _applyMap(this._w, opts); _applyCommon(this._w, opts); _initMaterialBase(this, opts); } }
+
+/** Analytic planetary atmosphere shell — see `WebMaterial.atmosphere`. */
+export class AtmosphereMaterial {
+    constructor(opts = {}) {
+        const o = (typeof opts === 'object' && opts) ? opts : {};
+        const planetR = typeof o.planetRadius === 'number' ? o.planetRadius : 1;
+        const atmoR = typeof o.atmosphereRadius === 'number' ? o.atmosphereRadius : planetR * 1.025;
+        this._w = WebMaterial.atmosphere(planetR, atmoR);
+        this.planetRadius = planetR;
+        this.atmosphereRadius = atmoR;
+        this._sunset = new Color(o.sunsetColor ?? 0xff7a33);
+        this._intensity = typeof o.intensity === 'number' ? o.intensity : 1.5;
+        this._falloff = typeof o.falloff === 'number' ? o.falloff : 3.0;
+        this._opacity = typeof o.opacity === 'number' ? o.opacity : 1.0;
+        this._airglow = typeof o.airglow === 'number' ? o.airglow : 0;
+        this._airglowColor = new Color(o.airglowColor ?? 0x4dff8a);
+        this._syncAtmosphere();
+        this._syncAirglow();
+        _initMaterialBase(this, o);
+        // setColor does not yet reach Atmosphere in wasm; keep a local tint anyway.
+        if ('color' in o) this.color = new Color(o.color);
+        const self = this;
+        // After _initMaterialBase (it writes plain `opacity`), bind live setters.
+        Object.defineProperty(this, 'intensity', {
+            get() { return self._intensity; },
+            set(v) { self._intensity = Number(v); self._syncAtmosphere(); },
+            configurable: true,
+            enumerable: true,
+        });
+        Object.defineProperty(this, 'falloff', {
+            get() { return self._falloff; },
+            set(v) { self._falloff = Number(v); self._syncAtmosphere(); },
+            configurable: true,
+            enumerable: true,
+        });
+        Object.defineProperty(this, 'opacity', {
+            get() { return self._opacity; },
+            set(v) { self._opacity = Number(v); self._syncAtmosphere(); },
+            configurable: true,
+            enumerable: true,
+        });
+        Object.defineProperty(this, 'airglow', {
+            get() { return self._airglow; },
+            set(v) { self._airglow = Number(v); self._syncAirglow(); },
+            configurable: true,
+            enumerable: true,
+        });
+    }
+    _syncAtmosphere() {
+        this._w.setAtmosphere(this._sunset._w, this._intensity, this._falloff, this._opacity);
+    }
+    _syncAirglow() {
+        this._w.setAirglow(this._airglow, this._airglowColor._w);
+    }
+}
 
 // Sprite: camera-facing billboard.
 export class Sprite {
@@ -1968,6 +2214,15 @@ function _wrapWebTexture(wtex) {
     t.image = { width: wtex.width(), height: wtex.height() };
     t.magFilter = 1006; t.minFilter = 1008;
     t.wrapS = 1001; t.wrapT = 1001;
+    // EXR / equirect sky → six faces (earth-demo starfield cube).
+    if (typeof wtex.cubeFaces === 'function') {
+        t.cubeFaces = (faceSize = 0) => {
+            const raw = wtex.cubeFaces(faceSize);
+            const out = [];
+            for (let i = 0; i < raw.length; i++) out.push(_wrapWebTexture(raw[i]));
+            return out;
+        };
+    }
     return t;
 }
 
@@ -2141,6 +2396,19 @@ export class AmbientLight {
     constructor(color = 0x404040, intensity = 1) {
         this._w = WebLight.ambient(_color(color), intensity);
         this._isLight = true;
+        this.color = new Color(color);
+        this._intensity = intensity;
+        const light = this;
+        Object.defineProperty(this, 'intensity', {
+            get() { return light._intensity; },
+            set(v) {
+                light._intensity = Number(v);
+                light._w?.setIntensity?.(light._intensity);
+                _pushLightToScene(light);
+            },
+            configurable: true,
+            enumerable: true,
+        });
     }
 }
 function _makeLightShadow(w) {
@@ -2199,8 +2467,19 @@ export class DirectionalLight {
     constructor(color = 0xffffff, intensity = 1) {
         this._w = WebLight.directional(_color(color), intensity);
         this._isLight = true;
+        this._intensity = intensity;
         const w = this._w;
         const light = this;
+        Object.defineProperty(this, 'intensity', {
+            get() { return light._intensity; },
+            set(v) {
+                light._intensity = Number(v);
+                light._w?.setIntensity?.(light._intensity);
+                _pushLightToScene(light);
+            },
+            configurable: true,
+            enumerable: true,
+        });
         const recalc = () => _syncLightDirection(light);
         this.position = {
             x: 0, y: 1, z: 0,
@@ -2229,6 +2508,18 @@ export class PointLight {
     constructor(color = 0xffffff, intensity = 1, distance = 0, decay = 2) {
         this._w = WebLight.point(_color(color), intensity, distance, decay);
         this._isLight = true;
+        this._intensity = intensity;
+        const light = this;
+        Object.defineProperty(this, 'intensity', {
+            get() { return light._intensity; },
+            set(v) {
+                light._intensity = Number(v);
+                light._w?.setIntensity?.(light._intensity);
+                _pushLightToScene(light);
+            },
+            configurable: true,
+            enumerable: true,
+        });
         this.position = _lightPos(this);
         this.shadow = _makeLightShadow(this._w);
     }
@@ -2237,6 +2528,13 @@ function _hookTargetPosition(target, recalc) {
     const pos = target.position;
     const origSet = pos.set.bind(pos);
     pos.set = (x, y, z) => { origSet(x, y, z); recalc(); };
+}
+
+/** Push wrapper light state into the scene copy (addLight clones; setters alone are silent). */
+function _pushLightToScene(light) {
+    if (light?._handle != null && light._scene?._w?.updateLight && light._w) {
+        light._scene._w.updateLight(light._handle, light._w);
+    }
 }
 
 function _syncLightDirection(light) {
@@ -2248,6 +2546,7 @@ function _syncLightDirection(light) {
     if (light.target?.getWorldPosition) light.target.getWorldPosition(tp);
     else tp.set(light.target.position.x, light.target.position.y, light.target.position.z);
     light._w.setDirection(tp.x - lp.x, tp.y - lp.y, tp.z - lp.z);
+    _pushLightToScene(light);
 }
 
 export class SpotLight {
@@ -2318,19 +2617,97 @@ export class CubeTexture {
 export class DataTexture {
     constructor(...args) {
         // three.js: (data, width, height, format?, type?)
+        // threers earth demo: (data, width, height, 'srgb') for colour maps
         // legacy:   (width, height, data)
-        let data, width, height;
+        let data, width, height, colourSpace;
         if (typeof args[0] === 'number') {
             [width, height, data] = args;
         } else {
-            [data, width, height] = args;
+            [data, width, height, colourSpace] = args;
         }
-        const u8 = (data instanceof Uint8Array) ? data : new Uint8Array(data.buffer || data);
-        this._w = new WebDataTexture(width, height, u8);
+        const u8 = (() => {
+            // Always copy into a tight buffer. ImageData / worker views onto
+            // pooled ArrayBuffers scramble uploads if we pass .buffer raw.
+            if (ArrayBuffer.isView(data)) return new Uint8Array(data.buffer, data.byteOffset, data.byteLength).slice();
+            if (data instanceof ArrayBuffer) return new Uint8Array(data).slice();
+            return new Uint8Array(data);
+        })();
+        this._w = colourSpace === 'srgb'
+            ? WebDataTexture.newSrgb(width, height, u8)
+            : new WebDataTexture(width, height, u8);
         this.image = { data: u8, width, height };
         this.needsUpdate = false;
-        // Match three.js DataTexture: NearestFilter, no mipmaps.
-        this.magFilter = 1003; this.minFilter = 1003;
+        this.magFilter = 1006; this.minFilter = 1008;
+        this.wrapS = 1001; this.wrapT = 1001;
+        this.format = 1023; this.type = 1009;
+        this.colorSpace = colourSpace === 'srgb' ? 'srgb' : '';
+        this.center = new Vector2(0, 0);
+        this.rotation = 0;
+        this.offset = new Vector2(0, 0);
+        this.repeat = new Vector2(1, 1);
+        const self = this;
+        const hook = (vec) => {
+            const orig = vec.set.bind(vec);
+            vec.set = (x, y) => { orig(x, y); self._syncUv(); return vec; };
+            return vec;
+        };
+        this.offset = hook(this.offset);
+        this.repeat = hook(this.repeat);
+        // Plain `{x,y}` writes from earth-demo — replace + sync.
+        for (const prop of ['offset', 'repeat']) {
+            let cur = this[prop];
+            Object.defineProperty(this, prop, {
+                get() { return cur; },
+                set(next) {
+                    if (next instanceof Vector2) {
+                        cur = hook(next);
+                    } else if (next && typeof next === 'object') {
+                        const def = prop === 'repeat' ? 1 : 0;
+                        cur.set(next.x ?? def, next.y ?? def);
+                        return;
+                    }
+                    self._syncUv();
+                },
+                configurable: true, enumerable: true,
+            });
+        }
+        this._syncFilters();
+    }
+    _syncFilters() {
+        if (!this._w?.setFilters) return;
+        const NEAREST = 1003, NEAR_NEAR_MIP = 1004, LIN_NEAR_MIP = 1005, NEAR_LIN_MIP = 1007;
+        const isNearest = (v) => v === NEAREST || v === NEAR_NEAR_MIP || v === LIN_NEAR_MIP || v === NEAR_LIN_MIP;
+        const mag = isNearest(this.magFilter ?? 1006) ? 1 : 0;
+        const min = isNearest(this.minFilter ?? 1008) ? 1 : 0;
+        const conv = (w) => w === 1000 ? 1 : w === 1002 ? 2 : 0;
+        this._w.setFilters(mag, min, conv(this.wrapS ?? 1001), conv(this.wrapT ?? 1001));
+    }
+    _syncUv() {
+        if (!this._w?.setUvTransform) return;
+        const ox = this.offset?.x ?? 0, oy = this.offset?.y ?? 0;
+        const rx = this.repeat?.x ?? 1, ry = this.repeat?.y ?? 1;
+        this._w.setUvTransform(ox, oy, rx, ry);
+    }
+    /** Second handle on the same pixels with its own UV sub-rect (atlas view). */
+    view(ox, oy, rx, ry) {
+        if (!this._w || typeof this._w.view !== 'function') {
+            throw new Error('DataTexture.view: underlying WebDataTexture.view is missing');
+        }
+        const t = Object.create(DataTexture.prototype);
+        t._w = this._w.view(ox, oy, rx, ry);
+        t.image = this.image;
+        t.needsUpdate = false;
+        t.magFilter = this.magFilter; t.minFilter = this.minFilter;
+        t.wrapS = this.wrapS; t.wrapT = this.wrapT;
+        t.format = this.format; t.type = this.type;
+        t.colorSpace = this.colorSpace;
+        t.offset = new Vector2(ox, oy);
+        t.repeat = new Vector2(rx, ry);
+        t.center = new Vector2(0, 0);
+        t.rotation = 0;
+        t._syncFilters = DataTexture.prototype._syncFilters;
+        t._syncUv = DataTexture.prototype._syncUv;
+        return t;
     }
 }
 
@@ -2343,23 +2720,57 @@ export class CanvasTexture {
         this.format = 1023; this.type = 1009;
         this.magFilter = 1006; this.minFilter = 1008;
         this.wrapS = 1001; this.wrapT = 1001;
-        this.repeat = new Vector2(1, 1);
-        this.offset = new Vector2(0, 0);
+        // Canvas pixels are top-first; UV space is bottom-first (three.js flipY).
+        this.flipY = true;
+        this.offset = new Vector2(0, 1);
+        this.repeat = new Vector2(1, -1);
         this.center = new Vector2(0, 0);
         this.rotation = 0;
         this._upload();
         this.needsUpdate = false;
     }
+    _syncUv() {
+        if (!this._w?.setUvTransform) return;
+        const ox = this.offset?.x ?? 0;
+        const oy = this.offset?.y ?? 1;
+        const rx = this.repeat?.x ?? 1;
+        const ry = this.flipY ? -Math.abs(this.repeat?.y ?? 1) : (this.repeat?.y ?? 1);
+        this._w.setUvTransform(ox, oy, rx, ry);
+    }
     _upload() {
         const c = this.image;
         if (!c) {
             this._w = new WebDataTexture(1, 1, new Uint8Array([255, 255, 255, 255]));
+            this._syncUv();
             return;
         }
         const ctx = c.getContext('2d');
         const w = c.width, h = c.height;
         const data = ctx.getImageData(0, 0, w, h).data;
-        this._w = new WebDataTexture(w, h, new Uint8Array(data));
+        const byteLen = data.length;
+        if (!this._buf || this._buf.length !== byteLen) {
+            this._buf = new Uint8Array(byteLen);
+        }
+        this._buf.set(data);
+        if (this._w && this._lw === w && this._lh === h && this._w.replaceRgba) {
+            if (this._w.replaceRgba(this._buf)) {
+                return;
+            }
+        }
+        this._w = new WebDataTexture(w, h, this._buf);
+        this._lw = w;
+        this._lh = h;
+        this._syncUv();
+        this._syncFilters();
+    }
+    _syncFilters() {
+        if (!this._w?.setFilters) return;
+        const NEAREST = 1003, NEAR_NEAR_MIP = 1004, LIN_NEAR_MIP = 1005, NEAR_LIN_MIP = 1007;
+        const isNearest = (v) => v === NEAREST || v === NEAR_NEAR_MIP || v === LIN_NEAR_MIP || v === NEAR_LIN_MIP;
+        const mag = isNearest(this.magFilter ?? 1006) ? 1 : 0;
+        const min = isNearest(this.minFilter ?? 1008) ? 1 : 0;
+        const conv = (w) => w === 1000 ? 1 : w === 1002 ? 2 : 0;
+        this._w.setFilters(mag, min, conv(this.wrapS ?? 1001), conv(this.wrapT ?? 1001));
     }
     update() { this._upload(); }
 }
@@ -2596,23 +3007,400 @@ export class Shape {
 }
 
 // ---- Animation ----
-// AnimationClip — name + duration + JS-side tracks (KeyframeTracks). The wasm
-// `WebAnimationClip` is kept for legacy bindings, but real driving uses the
-// JS tracks on the .tracks array (so we can drive any property).
+// AnimationClip — name + duration + JS-side tracks (KeyframeTracks).
 export class AnimationClip {
     constructor(name = 'clip', duration = -1, tracks = []) {
-        this._w = new WebAnimationClip(name, duration < 0 ? 0 : duration);
+        this._w = typeof WebAnimationClip !== 'undefined'
+            ? new WebAnimationClip(name, duration < 0 ? 0 : duration)
+            : null;
         this.name = name;
         this.tracks = tracks;
         this.duration = duration < 0
-            ? tracks.reduce((mx, t) => Math.max(mx, t.times[t.times.length - 1] || 0), 0)
+            ? tracks.reduce((mx, t) => Math.max(mx, t.times?.[t.times.length - 1] || 0), 0)
             : duration;
         this.uuid = MathUtils.generateUUID();
+        this.blendMode = 2500; // NormalAnimationBlendMode
+    }
+    static parse(json) {
+        const tracks = (json.tracks || []).map((t) => {
+            const klass = t.type === 'quaternion' ? QuaternionKeyframeTrack
+                : t.type === 'number' ? NumberKeyframeTrack
+                : t.type === 'color' ? ColorKeyframeTrack
+                : VectorKeyframeTrack;
+            return new klass(t.name, t.times, t.values, t.interpolation);
+        });
+        return new AnimationClip(json.name || 'clip', json.duration ?? -1, tracks);
+    }
+    clone() {
+        return new AnimationClip(this.name, this.duration, this.tracks.map((t) => {
+            const C = t.constructor;
+            return new C(t.name, t.times.slice(), t.values.slice(), t.interpolation);
+        }));
     }
 }
 
-// AnimationAction — bind a clip to its target node tree under a Mixer. The
-// returned action lets you `.play()`, set `.weight`, `.timeScale`, `.loop`.
+const LoopOnce = 2200, LoopRepeat = 2201, LoopPingPong = 2202;
+const NormalAnimationBlendMode = 2500, AdditiveAnimationBlendMode = 2501;
+
+/** Procedural modifiers on keyframe tracks (noise / cycles / stepped), Blender-style. */
+export class TrackModifier {
+    static noise({ amplitude = 0.05, frequency = 1, seed = 0 } = {}) {
+        return { kind: 'noise', amplitude, frequency, seed };
+    }
+    static cycles({ before = Infinity, after = Infinity } = {}) {
+        return { kind: 'cycles', before, after };
+    }
+    static stepped({ stepSize = 0.1 } = {}) {
+        return { kind: 'stepped', stepSize };
+    }
+    static limit({ min = -Infinity, max = Infinity } = {}) {
+        return { kind: 'limit', min, max };
+    }
+    static remapTime(modifiers, t, track) {
+        if (!modifiers?.length) return t;
+        const dur = track?.times?.[track.times.length - 1] || 0;
+        let time = t;
+        for (const m of modifiers) {
+            if (m.kind === 'cycles' && dur > 0) {
+                // Wrap into clip range with optional before/after cycle counts (Infinity = forever).
+                if (time < 0) {
+                    if (m.before === 0) time = 0;
+                    else time = ((time % dur) + dur) % dur;
+                } else if (time > dur) {
+                    if (m.after === 0) time = dur;
+                    else time = time % dur;
+                }
+            } else if (m.kind === 'stepped') {
+                const s = Math.max(1e-6, m.stepSize);
+                time = Math.floor(time / s) * s;
+            }
+        }
+        return time;
+    }
+    static applyValue(modifiers, values, t) {
+        if (!modifiers?.length) return values;
+        for (const m of modifiers) {
+            if (m.kind === 'noise') {
+                for (let i = 0; i < values.length; i++) {
+                    const n = Math.sin((t * m.frequency + m.seed + i * 19.19) * 12.9898) * 43758.5453;
+                    const f = n - Math.floor(n);
+                    values[i] += (f * 2 - 1) * m.amplitude;
+                }
+            } else if (m.kind === 'limit') {
+                for (let i = 0; i < values.length; i++) {
+                    values[i] = Math.min(m.max, Math.max(m.min, values[i]));
+                }
+            }
+        }
+        return values;
+    }
+}
+
+function _findNodeByName(root, nodeName) {
+    if (!root) return null;
+    if (!nodeName || nodeName === '.' || nodeName === root.name) return root;
+    if (root.getObjectByName) {
+        const hit = root.getObjectByName(nodeName);
+        if (hit) return hit;
+    }
+    // Bones on a skeleton bound to a SkinnedMesh under root.
+    const stack = [root];
+    while (stack.length) {
+        const o = stack.pop();
+        if (o?.name === nodeName || o?.uuid === nodeName) return o;
+        if (o?.isBone && (o.name === nodeName)) return o;
+        if (o?.skeleton?.bones) {
+            for (const b of o.skeleton.bones) {
+                if (b.name === nodeName) return b;
+                stack.push(b);
+            }
+        }
+        for (const c of (o.children || o._children || [])) stack.push(c);
+    }
+    return null;
+}
+
+/** three.js-shaped property path binder. */
+export class PropertyMixer {
+    constructor(binding, typeName, valueSize) {
+        this.binding = binding;
+        this.typeName = typeName;
+        this.valueSize = valueSize;
+        this.buffer = new Float32Array(valueSize * 4); // acc / result / original / additive
+        this.cumulativeWeight = 0;
+        this.cumulativeWeightAdditive = 0;
+        this.useCount = 0;
+        this.referenceCount = 0;
+    }
+    accumulate(offset, weight) {
+        if (weight <= 0) return;
+        const size = this.valueSize;
+        const buffer = this.buffer;
+        const stride = size;
+        if (this.cumulativeWeight === 0) {
+            for (let i = 0; i < size; i++) buffer[i] = buffer[offset + i] * weight;
+        } else {
+            const w = weight / (this.cumulativeWeight + weight);
+            for (let i = 0; i < size; i++) {
+                buffer[i] += (buffer[offset + i] - buffer[i]) * w;
+            }
+        }
+        this.cumulativeWeight += weight;
+        void stride;
+    }
+    accumulateAdditive(offset, weight) {
+        if (weight <= 0) return;
+        const size = this.valueSize;
+        const buffer = this.buffer;
+        const base = size * 3; // additive region
+        if (this.cumulativeWeightAdditive === 0) {
+            for (let i = 0; i < size; i++) buffer[base + i] = 0;
+        }
+        for (let i = 0; i < size; i++) buffer[base + i] += buffer[offset + i] * weight;
+        this.cumulativeWeightAdditive += weight;
+    }
+    apply(accuIndex) {
+        const size = this.valueSize;
+        const buffer = this.buffer;
+        const weight = this.cumulativeWeight;
+        const weightAdditive = this.cumulativeWeightAdditive;
+        const original = size;
+        const additive = size * 3;
+        if (weight < 1) {
+            // Mix toward original binding value.
+            this.binding.getValue(buffer, original);
+            const w = weight / (weight || 1);
+            if (this.typeName === 'quaternion') {
+                _slerpFlat(buffer, 0, buffer, original, buffer, 0, w);
+            } else {
+                for (let i = 0; i < size; i++) {
+                    buffer[i] = buffer[original + i] + (buffer[i] - buffer[original + i]) * w;
+                }
+            }
+        }
+        if (weightAdditive > 0) {
+            if (this.typeName === 'quaternion') {
+                // Additive quat ≈ multiply
+                const qx = buffer[additive], qy = buffer[additive + 1], qz = buffer[additive + 2], qw = buffer[additive + 3];
+                const x = buffer[0], y = buffer[1], z = buffer[2], w = buffer[3];
+                buffer[0] = w * qx + x * qw + y * qz - z * qy;
+                buffer[1] = w * qy - x * qz + y * qw + z * qx;
+                buffer[2] = w * qz + x * qy - y * qx + z * qw;
+                buffer[3] = w * qw - x * qx - y * qy - z * qz;
+                const ln = Math.hypot(buffer[0], buffer[1], buffer[2], buffer[3]) || 1;
+                buffer[0] /= ln; buffer[1] /= ln; buffer[2] /= ln; buffer[3] /= ln;
+            } else {
+                for (let i = 0; i < size; i++) buffer[i] += buffer[additive + i];
+            }
+        }
+        this.binding.setValue(buffer, 0);
+        this.cumulativeWeight = 0;
+        this.cumulativeWeightAdditive = 0;
+        void accuIndex;
+    }
+    saveOriginalState() {
+        this.binding.getValue(this.buffer, this.valueSize);
+    }
+    restoreOriginalState() {
+        this.binding.setValue(this.buffer, this.valueSize);
+    }
+}
+
+function _slerpFlat(dst, dstOffset, src0, srcOffset0, src1, srcOffset1, t) {
+    let x0 = src0[srcOffset0], y0 = src0[srcOffset0 + 1], z0 = src0[srcOffset0 + 2], w0 = src0[srcOffset0 + 3];
+    const x1 = src1[srcOffset1], y1 = src1[srcOffset1 + 1], z1 = src1[srcOffset1 + 2], w1 = src1[srcOffset1 + 3];
+    let dot = x0 * x1 + y0 * y1 + z0 * z1 + w0 * w1;
+    if (dot < 0) { x0 = -x0; y0 = -y0; z0 = -z0; w0 = -w0; dot = -dot; }
+    if (dot > 0.9995) {
+        dst[dstOffset] = x0 + t * (x1 - x0);
+        dst[dstOffset + 1] = y0 + t * (y1 - y0);
+        dst[dstOffset + 2] = z0 + t * (z1 - z0);
+        dst[dstOffset + 3] = w0 + t * (w1 - w0);
+    } else {
+        const th0 = Math.acos(Math.min(1, dot));
+        const sin0 = Math.sin(th0);
+        const s0 = Math.sin((1 - t) * th0) / sin0;
+        const s1 = Math.sin(t * th0) / sin0;
+        dst[dstOffset] = x0 * s0 + x1 * s1;
+        dst[dstOffset + 1] = y0 * s0 + y1 * s1;
+        dst[dstOffset + 2] = z0 * s0 + z1 * s1;
+        dst[dstOffset + 3] = w0 * s0 + w1 * s1;
+    }
+    const ln = Math.hypot(dst[dstOffset], dst[dstOffset + 1], dst[dstOffset + 2], dst[dstOffset + 3]) || 1;
+    dst[dstOffset] /= ln; dst[dstOffset + 1] /= ln; dst[dstOffset + 2] /= ln; dst[dstOffset + 3] /= ln;
+}
+
+export class PropertyBinding {
+    constructor(rootNode, path, parsedPath) {
+        this.path = path;
+        this.parsedPath = parsedPath || PropertyBinding.parseTrackName(path);
+        this.node = null;
+        this.rootNode = rootNode;
+        this.targetObject = null;
+        this.propertyName = null;
+        this.resolvedProperty = null;
+        this.propertyIndex = null;
+        this.bindingType = 'direct';
+        this._getValue = null;
+        this._setValue = null;
+    }
+    static parseTrackName(trackName) {
+        // Supports: nodeName.property, nodeName.material.color, .morphTargetInfluences[0]
+        const re = /^((?:[\w\-_:]+|\.))(?:\.|\[)?([\w\-\[\].:]*)$/;
+        // More permissive parse: split on first '.' after optional node
+        let nodeName = '';
+        let objectName = '';
+        let objectIndex = undefined;
+        let propertyName = '';
+        let propertyIndex = undefined;
+        const morphMatch = trackName.match(/^(.*?)\.morphTargetInfluences(?:\[(\d+)\])?$/);
+        if (morphMatch) {
+            return {
+                nodeName: morphMatch[1] || '',
+                objectName: undefined,
+                objectIndex: undefined,
+                propertyName: 'morphTargetInfluences',
+                propertyIndex: morphMatch[2] != null ? Number(morphMatch[2]) : undefined,
+            };
+        }
+        const matMatch = trackName.match(/^(.*?)\.materials?\[(\d+)\]\.(.+)$/);
+        if (matMatch) {
+            return {
+                nodeName: matMatch[1],
+                objectName: 'materials',
+                objectIndex: Number(matMatch[2]),
+                propertyName: matMatch[3],
+                propertyIndex: undefined,
+            };
+        }
+        const parts = trackName.split('.');
+        if (parts.length === 1) {
+            propertyName = parts[0];
+        } else {
+            nodeName = parts[0];
+            propertyName = parts.slice(1).join('.');
+            // material.color / material.opacity
+            if (propertyName.startsWith('material.')) {
+                objectName = 'material';
+                propertyName = propertyName.slice('material.'.length);
+            }
+        }
+        const idxMatch = propertyName.match(/^([^\[]+)\[(\d+)\]$/);
+        if (idxMatch) {
+            propertyName = idxMatch[1];
+            propertyIndex = Number(idxMatch[2]);
+        }
+        void re;
+        return { nodeName, objectName, objectIndex, propertyName, propertyIndex };
+    }
+    static findNode(root, nodeName) {
+        return _findNodeByName(root, nodeName);
+    }
+    bind() {
+        if (this.node) return;
+        const parsed = this.parsedPath;
+        this.node = PropertyBinding.findNode(this.rootNode, parsed.nodeName) || this.rootNode;
+        let object = this.node;
+        if (parsed.objectName === 'material') {
+            object = object?.material;
+        } else if (parsed.objectName === 'materials') {
+            const mats = Array.isArray(object?.material) ? object.material : [object?.material];
+            object = mats[parsed.objectIndex ?? 0];
+        }
+        this.targetObject = object;
+        this.propertyName = parsed.propertyName;
+        this.propertyIndex = parsed.propertyIndex;
+        const prop = this.propertyName;
+        if (prop === 'morphTargetInfluences') {
+            const influences = this.node?.morphTargetInfluences;
+            this.resolvedProperty = influences;
+            this.bindingType = 'array';
+            if (this.propertyIndex != null) {
+                this._getValue = (buf, offset) => { buf[offset] = influences?.[this.propertyIndex] ?? 0; };
+                this._setValue = (buf, offset) => {
+                    if (influences) influences[this.propertyIndex] = buf[offset];
+                    this.node?.updateMorphTargets?.();
+                };
+            } else {
+                this._getValue = (buf, offset) => {
+                    for (let i = 0; i < (influences?.length || 0); i++) buf[offset + i] = influences[i];
+                };
+                this._setValue = (buf, offset) => {
+                    if (!influences) return;
+                    for (let i = 0; i < influences.length; i++) influences[i] = buf[offset + i];
+                    this.node?.updateMorphTargets?.();
+                };
+            }
+            return;
+        }
+        const target = object?.[prop] != null ? object : this.node;
+        const value = target?.[prop];
+        this.targetObject = target;
+        if (value && typeof value === 'object' && 'x' in value) {
+            // Vector3 / Euler / Color / Quaternion
+            const isQuat = 'w' in value;
+            const isColor = 'r' in value && !('x' in value);
+            this.bindingType = 'structured';
+            this._getValue = (buf, offset) => {
+                if (isColor) {
+                    buf[offset] = value.r; buf[offset + 1] = value.g; buf[offset + 2] = value.b;
+                } else {
+                    buf[offset] = value.x; buf[offset + 1] = value.y; buf[offset + 2] = value.z;
+                    if (isQuat) buf[offset + 3] = value.w;
+                }
+            };
+            this._setValue = (buf, offset) => {
+                if (isColor) {
+                    if (value.setRGB) value.setRGB(buf[offset], buf[offset + 1], buf[offset + 2]);
+                    else { value.r = buf[offset]; value.g = buf[offset + 1]; value.b = buf[offset + 2]; }
+                } else if (isQuat) {
+                    value.set?.(buf[offset], buf[offset + 1], buf[offset + 2], buf[offset + 3])
+                        || (value.x = buf[offset], value.y = buf[offset + 1], value.z = buf[offset + 2], value.w = buf[offset + 3]);
+                } else {
+                    value.set?.(buf[offset], buf[offset + 1], buf[offset + 2])
+                        || (value.x = buf[offset], value.y = buf[offset + 1], value.z = buf[offset + 2]);
+                }
+                this._syncNode(target);
+            };
+        } else {
+            this.bindingType = 'direct';
+            this._getValue = (buf, offset) => { buf[offset] = target?.[prop] ?? 0; };
+            this._setValue = (buf, offset) => {
+                if (!target) return;
+                target[prop] = buf[offset];
+                if (prop === 'fov' || prop === 'zoom' || prop === 'opacity') {
+                    target.updateProjectionMatrix?.();
+                    if (target.needsUpdate != null) target.needsUpdate = true;
+                }
+                this._syncNode(target);
+            };
+        }
+    }
+    _syncNode(target) {
+        const node = this.node;
+        if (!node) return;
+        if (typeof node._sync === 'function') node._sync();
+        else if (node.isBone) node.updateMatrix?.();
+        else if (node.skeleton) node.skeleton.update?.();
+        void target;
+    }
+    unbind() {
+        this.node = null;
+        this.targetObject = null;
+        this._getValue = null;
+        this._setValue = null;
+    }
+    getValue(buffer, offset = 0) {
+        this.bind();
+        this._getValue?.(buffer, offset);
+    }
+    setValue(buffer, offset = 0) {
+        this.bind();
+        this._setValue?.(buffer, offset);
+    }
+}
+
+// AnimationAction — play / fade / crossFade / additive blend.
 class _AnimationAction {
     constructor(mixer, clip, root) {
         this.mixer = mixer;
@@ -2621,33 +3409,122 @@ class _AnimationAction {
         this.enabled = true;
         this.paused = false;
         this.weight = 1.0;
+        this._effectiveWeight = 1.0;
         this.timeScale = 1.0;
+        this._effectiveTimeScale = 1.0;
         this.time = 0;
-        this.loop = 2201; // LoopRepeat
+        this.loop = LoopRepeat;
+        this.repetitions = Infinity;
         this.isRunning = false;
+        this.clampWhenFinished = false;
+        this.zeroSlopeAtStart = true;
+        this.zeroSlopeAtEnd = true;
+        this.blendMode = clip.blendMode ?? NormalAnimationBlendMode;
+        this._fade = null; // { from, to, duration, elapsed, scheduleStop }
+        this._bindings = null;
+        this._interpolants = null;
     }
-    play()    { this.isRunning = true; this.paused = false; return this; }
-    stop()    { this.isRunning = false; this.time = 0; return this; }
-    reset()   { this.time = 0; return this; }
-    setLoop(mode) { this.loop = mode; return this; }
-    setEffectiveWeight(w) { this.weight = w; return this; }
-    setEffectiveTimeScale(s) { this.timeScale = s; return this; }
-    fadeIn()  { return this; }
-    fadeOut() { return this; }
-    crossFadeFrom(_a, _dur) { return this; }
-    crossFadeTo(_a, _dur)   { return this; }
+    play() {
+        this.isRunning = true;
+        this.paused = false;
+        this.enabled = true;
+        this.mixer._activateAction(this);
+        return this;
+    }
+    stop() {
+        this.isRunning = false;
+        this.time = 0;
+        this._fade = null;
+        this.mixer._deactivateAction(this);
+        return this;
+    }
+    reset() { this.time = 0; this._fade = null; return this; }
+    setLoop(mode, repetitions) {
+        this.loop = mode;
+        if (repetitions != null) this.repetitions = repetitions;
+        return this;
+    }
+    setEffectiveWeight(w) {
+        this.weight = w;
+        this._effectiveWeight = w;
+        this._fade = null;
+        return this;
+    }
+    getEffectiveWeight() { return this._effectiveWeight; }
+    setEffectiveTimeScale(s) {
+        this.timeScale = s;
+        this._effectiveTimeScale = s;
+        return this;
+    }
+    getEffectiveTimeScale() { return this._effectiveTimeScale; }
+    fadeIn(duration = 0.5) {
+        this._fade = { from: 0, to: this.weight, duration: Math.max(0, duration), elapsed: 0, scheduleStop: false };
+        this._effectiveWeight = 0;
+        this.play();
+        return this;
+    }
+    fadeOut(duration = 0.5) {
+        this._fade = {
+            from: this._effectiveWeight, to: 0,
+            duration: Math.max(0, duration), elapsed: 0, scheduleStop: true,
+        };
+        return this;
+    }
+    crossFadeFrom(fadeOutAction, duration = 0.5, warp = true) {
+        fadeOutAction?.fadeOut?.(duration);
+        this.fadeIn(duration);
+        if (warp && fadeOutAction && this.clip.duration > 0 && fadeOutAction.clip.duration > 0) {
+            const ratio = fadeOutAction.clip.duration / this.clip.duration;
+            this.time = fadeOutAction.time / ratio;
+        }
+        return this;
+    }
+    crossFadeTo(fadeInAction, duration = 0.5, warp = true) {
+        fadeInAction?.crossFadeFrom?.(this, duration, warp);
+        return this;
+    }
+    halt(duration = 0.5) {
+        this._fade = {
+            from: this._effectiveTimeScale, to: 0,
+            duration: Math.max(0, duration), elapsed: 0, scheduleStop: false, kind: 'timeScale',
+        };
+        return this;
+    }
+    stopFading() { this._fade = null; return this; }
+    syncWith(action) {
+        this.time = action.time * (this.clip.duration / Math.max(1e-8, action.clip.duration));
+        return this;
+    }
+    setDuration(duration) {
+        this.timeScale = this.clip.duration / Math.max(1e-8, duration);
+        return this;
+    }
+    _updateFade(dt) {
+        if (!this._fade) return;
+        const f = this._fade;
+        f.elapsed += dt;
+        const u = f.duration <= 0 ? 1 : Math.min(1, f.elapsed / f.duration);
+        const v = f.from + (f.to - f.from) * u;
+        if (f.kind === 'timeScale') this._effectiveTimeScale = v;
+        else this._effectiveWeight = v;
+        if (u >= 1) {
+            if (f.scheduleStop) this.stop();
+            this._fade = null;
+        }
+    }
 }
 
-// AnimationMixer — drives KeyframeTracks against a scene root. `update(dt)`
-// advances every playing action and applies sampled values to matching target
-// properties (.position / .rotation / .scale).
+// AnimationMixer — PropertyBinding + PropertyMixer accumulation, fades, additive.
 export class AnimationMixer {
     constructor(root) {
-        this._w = new WebAnimationMixer();
+        this._w = typeof WebAnimationMixer !== 'undefined' ? new WebAnimationMixer() : null;
         this.root = root;
         this.actions = [];
         this.time = 0;
         this.timeScale = 1.0;
+        this._bindingsByKey = new Map();
+        this._activeActions = new Set();
+        this.stats = { actions: 0, bindings: 0 };
     }
     clipAction(clip, root = this.root) {
         for (const a of this.actions) if (a.clip === clip && a.root === root) return a;
@@ -2656,135 +3533,114 @@ export class AnimationMixer {
         return action;
     }
     existingAction(clip, root = this.root) {
-        return this.actions.find(a => a.clip === clip && a.root === root) || null;
+        return this.actions.find((a) => a.clip === clip && a.root === root) || null;
     }
-    uncacheClip(clip) { this.actions = this.actions.filter(a => a.clip !== clip); }
-    uncacheRoot(root) { this.actions = this.actions.filter(a => a.root !== root); }
-    uncacheAction(clip, root) { this.actions = this.actions.filter(a => !(a.clip === clip && a.root === root)); }
+    uncacheClip(clip) { this.actions = this.actions.filter((a) => a.clip !== clip); }
+    uncacheRoot(root) { this.actions = this.actions.filter((a) => a.root !== root); }
+    uncacheAction(clip, root) {
+        this.actions = this.actions.filter((a) => !(a.clip === clip && a.root === root));
+    }
     getRoot() { return this.root; }
     setTime(t) { this.time = t; return this; }
     stopAllAction() { for (const a of this.actions) a.stop(); return this; }
-    _sampleTrack(track, t) {
+    _activateAction(action) {
+        this._activeActions.add(action);
+        this._ensureBindings(action);
+    }
+    _deactivateAction(action) { this._activeActions.delete(action); }
+    _ensureBindings(action) {
+        if (action._bindings) return;
+        const root = action.root || this.root;
+        const bindings = [];
+        const mixers = [];
+        for (const track of action.clip.tracks || []) {
+            const key = `${root?.uuid || ''}|${track.name}`;
+            let entry = this._bindingsByKey.get(key);
+            if (!entry) {
+                const binding = new PropertyBinding(root, track.name);
+                binding.bind();
+                const size = track.getValueSize?.() ?? Math.max(1, (track.values?.length || 1) / Math.max(1, track.times?.length || 1));
+                const typeName = track instanceof QuaternionKeyframeTrack ? 'quaternion'
+                    : track instanceof NumberKeyframeTrack || track instanceof BooleanKeyframeTrack ? 'number'
+                    : track instanceof ColorKeyframeTrack ? 'color'
+                    : 'vector';
+                const mixer = new PropertyMixer(binding, typeName, size);
+                mixer.saveOriginalState();
+                entry = { binding, mixer, size, typeName };
+                this._bindingsByKey.set(key, entry);
+            }
+            bindings.push(entry);
+            mixers.push(entry.mixer);
+        }
+        action._bindings = bindings;
+        action._interpolants = mixers;
+    }
+    _sampleTrack(track, t, out) {
         const times = track.times, values = track.values;
-        const size = track.getValueSize?.() ?? (values.length / times.length);
-        if (times.length === 0) return new Float32Array(size);
-        if (t <= times[0]) return values.slice(0, size);
+        const size = track.getValueSize?.() ?? (values.length / Math.max(1, times.length));
+        const result = out || new Float32Array(size);
+        if (!times || times.length === 0) {
+            result.fill(0);
+            return result;
+        }
+        // Optional procedural modifiers on the track.
+        if (track.modifiers?.length) {
+            t = TrackModifier.remapTime(track.modifiers, t, track);
+        }
+        if (t <= times[0]) {
+            for (let k = 0; k < size; k++) result[k] = values[k];
+            return TrackModifier.applyValue(track.modifiers, result, t);
+        }
         const last = times.length - 1;
-        if (t >= times[last]) return values.slice(last * size, last * size + size);
-        // Find the bracketing keyframes.
+        if (t >= times[last]) {
+            for (let k = 0; k < size; k++) result[k] = values[last * size + k];
+            return TrackModifier.applyValue(track.modifiers, result, t);
+        }
         let lo = 0, hi = last;
         while (hi - lo > 1) {
             const mid = (lo + hi) >> 1;
             if (times[mid] <= t) lo = mid; else hi = mid;
         }
-        const alpha = (t - times[lo]) / (times[hi] - times[lo]);
-        const out = new Float32Array(size);
-        const isQuat = track instanceof QuaternionKeyframeTrack;
+        const alpha = (t - times[lo]) / (times[hi] - times[lo] || 1);
+        const isQuat = track instanceof QuaternionKeyframeTrack
+            || track.ValueTypeName === 'quaternion';
         if (isQuat) {
-            // Spherical lerp.
-            const a = values.slice(lo * 4, lo * 4 + 4);
-            const b = values.slice(hi * 4, hi * 4 + 4);
-            let dot = a[0]*b[0] + a[1]*b[1] + a[2]*b[2] + a[3]*b[3];
-            if (dot < 0) { for (let k = 0; k < 4; k++) b[k] = -b[k]; dot = -dot; }
-            if (dot > 0.9995) {
-                for (let k = 0; k < 4; k++) out[k] = a[k] + alpha * (b[k] - a[k]);
-            } else {
-                const theta_0 = Math.acos(dot);
-                const sin_0 = Math.sin(theta_0);
-                const w1 = Math.sin((1 - alpha) * theta_0) / sin_0;
-                const w2 = Math.sin(alpha * theta_0) / sin_0;
-                for (let k = 0; k < 4; k++) out[k] = a[k] * w1 + b[k] * w2;
-            }
-            // Re-normalize.
-            const ln = Math.hypot(out[0], out[1], out[2], out[3]) || 1;
-            for (let k = 0; k < 4; k++) out[k] /= ln;
+            const aOff = lo * 4, bOff = hi * 4;
+            _slerpFlat(result, 0, values, aOff, values, bOff, alpha);
         } else {
             for (let k = 0; k < size; k++) {
-                out[k] = values[lo * size + k] + alpha * (values[hi * size + k] - values[lo * size + k]);
+                result[k] = values[lo * size + k] + alpha * (values[hi * size + k] - values[lo * size + k]);
             }
         }
-        return out;
-    }
-    _applyTrack(track, sampled) {
-        const parts = track.name.split('.');
-        if (parts.length < 2) return;
-        const nodeName = parts[0];
-        const target = this.root?.getObjectByName?.(nodeName)
-            ?? (() => {
-                let found = null;
-                const search = (obj) => {
-                    if (!obj || found) return;
-                    if (obj.name === nodeName) { found = obj; return; }
-                    for (const c of (obj.children || obj._children || obj._objects || [])) {
-                        search(c); if (found) return;
-                    }
-                };
-                search(this.root);
-                return found;
-            })();
-        if (!target) return;
-        let obj = target;
-        for (let i = 1; i < parts.length - 1; i++) {
-            obj = obj?.[parts[i]];
-            if (!obj) return;
-        }
-        const prop = parts[parts.length - 1];
-        const sceneW = this.root?._w;
-        if (prop === 'position' && sampled.length >= 3) {
-            target.position.set(sampled[0], sampled[1], sampled[2]);
-            if (target._handle && sceneW) {
-                const rot = _effectiveEuler(target);
-                sceneW.setTransform(target._handle, target.position._w(), rot._w());
-            }
-        } else if (prop === 'scale' && sampled.length >= 3) {
-            target.scale.set(sampled[0], sampled[1], sampled[2]);
-            if (target._handle && sceneW) {
-                sceneW.setScale(target._handle, target.scale.x, target.scale.y, target.scale.z);
-            }
-        } else if (prop === 'quaternion' && sampled.length >= 4) {
-            target.quaternion.set(sampled[0], sampled[1], sampled[2], sampled[3]);
-            if (target._handle && sceneW) {
-                sceneW.setTransform(target._handle, target.position._w(), _effectiveEuler(target)._w());
-            }
-        } else if (prop === 'rotation') {
-            if (target.quaternion && sampled.length >= 4) {
-                target.quaternion.set(sampled[0], sampled[1], sampled[2], sampled[3]);
-                if (target._handle && sceneW) {
-                    sceneW.setTransform(target._handle, target.position._w(), _effectiveEuler(target)._w());
-                }
-            } else if (target.rotation && sampled.length >= 3) {
-                target.rotation.set(sampled[0], sampled[1], sampled[2]);
-                if (target._handle && sceneW) {
-                    sceneW.setTransform(target._handle, target.position._w(), _effectiveEuler(target)._w());
-                }
-            }
-        } else if (prop === 'color' && sampled.length >= 3) {
-            const colorObj = obj?.isColor ? obj : (obj?.color?.setRGB ? obj.color : obj);
-            if (colorObj?.setRGB) {
-                colorObj.setRGB(sampled[0], sampled[1], sampled[2]);
-            } else if (colorObj) {
-                colorObj.r = sampled[0];
-                colorObj.g = sampled[1];
-                colorObj.b = sampled[2];
-            }
-            // setColor uses Arc::make_mut — refresh scene mesh to the live material.
-            const mat = obj?.color && !obj.isColor ? obj : target?.material;
-            if (mat?._w && target?._handle && this.root?._w?.setMeshMaterial) {
-                this.root._w.setMeshMaterial(target._handle, mat._w);
-            }
-        }
+        return TrackModifier.applyValue(track.modifiers, result, t);
     }
     update(delta) {
-        this.time += delta * this.timeScale;
+        const dt = delta * this.timeScale;
+        this.time += dt;
+        // Save originals once per frame for active mixers.
+        const used = new Set();
         for (const action of this.actions) {
-            if (!action.isRunning || action.paused) continue;
-            action.time += delta * action.timeScale;
+            if (!action.isRunning || action.paused || !action.enabled) continue;
+            action._updateFade(Math.abs(dt));
+            const weight = action._effectiveWeight;
+            if (weight <= 0 && action.blendMode !== AdditiveAnimationBlendMode) continue;
+            this._ensureBindings(action);
+            const scale = action._effectiveTimeScale;
+            action.time += dt * scale;
             const dur = action.clip.duration || 0;
             let t = action.time;
             if (dur > 0) {
-                if (action.loop === 2200 /* LoopOnce */ && t > dur) {
-                    t = dur; action.isRunning = false;
-                } else if (action.loop === 2202 /* LoopPingPong */) {
+                if (action.loop === LoopOnce) {
+                    if (t > dur) {
+                        t = dur;
+                        action.time = dur;
+                        if (!action.clampWhenFinished) action.isRunning = false;
+                    } else if (t < 0) {
+                        t = 0;
+                        action.time = 0;
+                        if (!action.clampWhenFinished) action.isRunning = false;
+                    }
+                } else if (action.loop === LoopPingPong) {
                     const period = dur * 2;
                     const mod = ((t % period) + period) % period;
                     t = mod > dur ? period - mod : mod;
@@ -2792,14 +3648,33 @@ export class AnimationMixer {
                     t = ((t % dur) + dur) % dur;
                 }
             }
-            for (const track of action.clip.tracks || []) {
-                const sampled = this._sampleTrack(track, t);
-                this._applyTrack(track, sampled);
+            const additive = action.blendMode === AdditiveAnimationBlendMode;
+            const tracks = action.clip.tracks || [];
+            for (let i = 0; i < tracks.length; i++) {
+                const entry = action._bindings[i];
+                if (!entry) continue;
+                const mixer = entry.mixer;
+                used.add(mixer);
+                const buf = mixer.buffer;
+                const size = mixer.valueSize;
+                const scratch = size * 2; // use region 2 as sample scratch
+                this._sampleTrack(tracks[i], t, buf.subarray(scratch, scratch + size));
+                // Copy scratch into offset region expected by accumulate (region 0 is acc).
+                // PropertyMixer.accumulate reads from `offset` — use scratch as source by
+                // temporarily treating region 2 as the take.
+                if (additive) mixer.accumulateAdditive(scratch, weight);
+                else mixer.accumulate(scratch, weight);
             }
         }
+        for (const mixer of used) mixer.apply(0);
+        this.stats.actions = this._activeActions.size;
+        this.stats.bindings = this._bindingsByKey.size;
         return this;
     }
 }
+
+export const AnimationAction = _AnimationAction;
+
 
 // ---- Controls ----
 function _controlViewport(domElement) {
@@ -2813,15 +3688,36 @@ export class OrbitControls {
         this._camera = camera;
         this.domElement = domElement;
         this.enabled = true;
+        this.enableDamping = false;
+        this.dampingFactor = 0.05;
+        this.autoRotate = false;
+        this.autoRotateSpeed = 2.0;
+        // three.js-compatible public knobs (synced into wasm each update).
+        this.target = camera._lookAt ? camera._lookAt.clone() : new Vector3();
+        this.minDistance = 0.1;
+        this.maxDistance = Infinity;
+        this.minPolarAngle = 0;
+        this.maxPolarAngle = Math.PI;
+        this.minAzimuthAngle = -Infinity;
+        this.maxAzimuthAngle = Infinity;
+        this.enableZoom = true;
+        this.enableRotate = true;
+        this.enablePan = true;
+        this.rotateSpeed = 1.0;
+        this.zoomSpeed = 1.0;
+        this.panSpeed = 1.0;
         this._rotating = false;
         this._panning = false;
         this._lastX = 0;
         this._lastY = 0;
         this._dragPointerId = null;
-        // Push JS camera pose into wasm before seeding orbit spherical state.
+        this._lastT = (typeof performance !== 'undefined' ? performance.now() : 0);
         if (typeof camera._sync === 'function') camera._sync();
         if (camera._lookAt) camera._w.lookAt(camera._lookAt.x, camera._lookAt.y, camera._lookAt.z);
         this._w = new WebOrbitControls(camera._w);
+        if (typeof this._w.setTarget === 'function') {
+            this._w.setTarget(this.target.x, this.target.y, this.target.z);
+        }
         camera._orbitControlled = true;
 
         this._onContextMenu = (e) => e.preventDefault();
@@ -2831,8 +3727,8 @@ export class OrbitControls {
             if (!root) return;
             e.preventDefault();
             this._dragPointerId = e.pointerId;
-            this._rotating = e.button === 0;
-            this._panning = e.button === 2;
+            this._rotating = e.button === 0 && this.enableRotate;
+            this._panning = e.button === 2 && this.enablePan;
             this._lastX = e.clientX;
             this._lastY = e.clientY;
             root.setPointerCapture?.(e.pointerId);
@@ -2857,7 +3753,7 @@ export class OrbitControls {
             this._endDrag();
         };
         this._onWheel = (e) => {
-            if (!this.enabled) return;
+            if (!this.enabled || !this.enableZoom) return;
             e.preventDefault();
             this.update(0, 0, e.deltaY, false, false);
         };
@@ -2894,9 +3790,47 @@ export class OrbitControls {
         }
         if (this._camera) this._camera._orbitControlled = false;
     }
+    _syncLimits() {
+        if (typeof this._w.setLimits === 'function') {
+            const maxD = Number.isFinite(this.maxDistance) ? this.maxDistance : 1e6;
+            this._w.setLimits(
+                Math.max(0, this.minDistance),
+                Math.max(this.minDistance, maxD),
+                this.minPolarAngle,
+                this.maxPolarAngle,
+                this.rotateSpeed,
+                this.zoomSpeed,
+                this.panSpeed,
+                this.enableDamping ? (this.dampingFactor ?? 0.05) : 0,
+            );
+        }
+        if (typeof this._w.setTarget === 'function') {
+            this._w.setTarget(this.target.x, this.target.y, this.target.z);
+        }
+    }
+    _syncMotion() {
+        if (typeof this._w.setMotion === 'function') {
+            const radPerSec = (this.autoRotateSpeed * Math.PI) / 30;
+            this._w.setMotion(
+                !!this.enableDamping,
+                this.dampingFactor ?? 0.05,
+                !!this.autoRotate,
+                radPerSec,
+            );
+        }
+    }
     update(dx = 0, dy = 0, wheel = 0, rotating = false, panning = false) {
+        this._syncLimits();
+        this._syncMotion();
         const [w, h] = _controlViewport(this.domElement);
-        this._w.update(this._camera._w, dx, dy, wheel, rotating, panning, w, h);
+        const now = (typeof performance !== 'undefined' ? performance.now() : this._lastT + 16.6);
+        const dt = Math.min(0.1, Math.max(0.0, (now - this._lastT) / 1000));
+        this._lastT = now;
+        if (typeof this._w.updateDt === 'function') {
+            this._w.updateDt(this._camera._w, dx, dy, wheel, rotating, panning, w, h, dt || 1 / 60);
+        } else {
+            this._w.update(this._camera._w, dx, dy, wheel, rotating, panning, w, h);
+        }
         this._syncFromWasm();
     }
     _syncFromWasm() {
@@ -2904,9 +3838,11 @@ export class OrbitControls {
         const t = this._camera._w.readTarget();
         this._camera.position.set(p.x, p.y, p.z);
         this._camera._lookAt.set(t.x, t.y, t.z);
+        this.target.set(t.x, t.y, t.z);
     }
     resetFromCamera() {
         if (typeof this._camera._sync === 'function') this._camera._sync();
+        if (this._camera._lookAt) this.target.copy(this._camera._lookAt);
         if (typeof this._w?.reseedFromCamera === 'function') {
             this._w.reseedFromCamera(this._camera._w);
         } else {
@@ -2914,6 +3850,829 @@ export class OrbitControls {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Cinematic camera helpers — additive; do NOT replace OrbitControls /
+// AnimationMixer. Mirrors threers-animation SpeedRamp / CameraPath / shots.
+// ---------------------------------------------------------------------------
+const _CAM_EASINGS = {
+    linear: (t) => t,
+    quadIn: (t) => t * t,
+    quadOut: (t) => t * (2 - t),
+    cubicIn: (t) => t * t * t,
+    cubicOut: (t) => 1 - Math.pow(1 - t, 3),
+    cubicInOut: (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2),
+    smooth: (t) => t * t * (3 - 2 * t),
+    smootherstep: (t) => t * t * t * (t * (t * 6 - 15) + 10),
+};
+
+/** Map linear 0..1 → shaped parameter (ease / cruise / smootherstep). */
+export function speedRamp(kind, t, opts = {}) {
+    t = Math.min(1, Math.max(0, t));
+    if (kind == null || kind === 'linear') return t;
+    if (typeof kind === 'function') return kind(t);
+    if (kind === 'smooth') return _CAM_EASINGS.smooth(t);
+    if (kind === 'smoother' || kind === 'smootherstep') return _CAM_EASINGS.smootherstep(t);
+    if (kind === 'inOut' || kind === 'ramp') {
+        const a = Math.min(1, Math.max(0, opts.easeIn ?? 0.25));
+        const b = Math.min(1 - a, Math.max(0, opts.easeOut ?? 0.25));
+        const mid = 1 - a - b;
+        if (t <= a) {
+            if (a <= 1e-8) return 0;
+            const u = t / a;
+            return a * _CAM_EASINGS.smooth(u);
+        }
+        if (t >= 1 - b) {
+            if (b <= 1e-8) return 1;
+            const u = (t - (1 - b)) / b;
+            return a + mid + b * _CAM_EASINGS.smooth(u);
+        }
+        return a + mid * ((t - a) / Math.max(1e-8, mid));
+    }
+    const ease = _CAM_EASINGS[kind] || _CAM_EASINGS.cubicInOut;
+    return ease(t);
+}
+
+function _v3(p) {
+    if (p instanceof Vector3) return p.clone();
+    if (Array.isArray(p)) return new Vector3(p[0], p[1], p[2]);
+    if (p && typeof p === 'object') return new Vector3(p.x ?? 0, p.y ?? 0, p.z ?? 0);
+    return new Vector3();
+}
+
+function _sampleLinear(points, u) {
+    const n = points.length - 1;
+    const f = u * n;
+    const i = Math.min(n - 1, Math.floor(f));
+    const t = f - i;
+    return new Vector3().lerpVectors(points[i], points[i + 1], t);
+}
+
+function _sampleBezier(points, u) {
+    const segments = Math.floor((points.length - 1) / 3);
+    if (segments <= 0) return _sampleLinear(points, u);
+    const f = u * segments;
+    const s = Math.min(segments - 1, Math.floor(f));
+    const t = f - s;
+    const i = s * 3;
+    const p0 = points[i], c0 = points[i + 1], c1 = points[i + 2], p1 = points[i + 3];
+    const omt = 1 - t;
+    return new Vector3(
+        omt * omt * omt * p0.x + 3 * omt * omt * t * c0.x + 3 * omt * t * t * c1.x + t * t * t * p1.x,
+        omt * omt * omt * p0.y + 3 * omt * omt * t * c0.y + 3 * omt * t * t * c1.y + t * t * t * p1.y,
+        omt * omt * omt * p0.z + 3 * omt * omt * t * c0.z + 3 * omt * t * t * c1.z + t * t * t * p1.z,
+    );
+}
+
+function _sampleCatmull(points, u) {
+    const n = points.length - 1;
+    const f = u * n;
+    const i = Math.min(n - 1, Math.floor(f));
+    const t = f - i;
+    const p0 = points[Math.max(0, i - 1)];
+    const p1 = points[i];
+    const p2 = points[Math.min(points.length - 1, i + 1)];
+    const p3 = points[Math.min(points.length - 1, i + 2)];
+    const t2 = t * t, t3 = t2 * t;
+    return new Vector3(
+        (-0.5 * t3 + t2 - 0.5 * t) * p0.x + (1.5 * t3 - 2.5 * t2 + 1) * p1.x + (-1.5 * t3 + 2 * t2 + 0.5 * t) * p2.x + (0.5 * t3 - 0.5 * t2) * p3.x,
+        (-0.5 * t3 + t2 - 0.5 * t) * p0.y + (1.5 * t3 - 2.5 * t2 + 1) * p1.y + (-1.5 * t3 + 2 * t2 + 0.5 * t) * p2.y + (0.5 * t3 - 0.5 * t2) * p3.y,
+        (-0.5 * t3 + t2 - 0.5 * t) * p0.z + (1.5 * t3 - 2.5 * t2 + 1) * p1.z + (-1.5 * t3 + 2 * t2 + 0.5 * t) * p2.z + (0.5 * t3 - 0.5 * t2) * p3.z,
+    );
+}
+
+function _sampleCurve(points, kind, u) {
+    if (!points || points.length === 0) return new Vector3();
+    if (points.length === 1) return points[0].clone();
+    u = Math.min(1, Math.max(0, u));
+    if (kind === 'bezier') return _sampleBezier(points, u);
+    if (kind === 'linear') return _sampleLinear(points, u);
+    return _sampleCatmull(points, u);
+}
+
+/** World-space eye path (+ optional interest) with speed ramp + arc-length. */
+export class CameraPath {
+    constructor({
+        points = [],
+        kind = 'catmull',
+        interest = [],
+        interestKind = 'catmull',
+        lookAhead = 1,
+        fixedTarget = null,
+        ramp = 'smoother',
+        rampOpts = {},
+        fov = null,
+    } = {}) {
+        this.points = points.map(_v3);
+        this.kind = kind;
+        this.interest = interest.map(_v3);
+        this.interestKind = interestKind;
+        this.lookAhead = lookAhead;
+        this.fixedTarget = fixedTarget ? _v3(fixedTarget) : null;
+        this.ramp = ramp;
+        this.rampOpts = rampOpts;
+        this.fov = fov;
+        this._lengths = [];
+        this.totalLength = 0;
+        this.rebuildArcLength();
+    }
+    static catmullRom(points, opts = {}) {
+        return new CameraPath({ ...opts, points, kind: 'catmull' });
+    }
+    static bezier(points, opts = {}) {
+        return new CameraPath({ ...opts, points, kind: 'bezier' });
+    }
+    static linear(points, opts = {}) {
+        return new CameraPath({ ...opts, points, kind: 'linear' });
+    }
+    withInterest(points, kind) {
+        this.interest = points.map(_v3);
+        if (kind) this.interestKind = kind;
+        return this;
+    }
+    withRamp(ramp, rampOpts = {}) {
+        this.ramp = ramp;
+        this.rampOpts = rampOpts;
+        return this;
+    }
+    withFixedTarget(target) {
+        this.fixedTarget = _v3(target);
+        this.lookAhead = 0;
+        return this;
+    }
+    rebuildArcLength() {
+        const SAMPLES = 64;
+        this._lengths = [0];
+        if (this.points.length < 2) {
+            this.totalLength = 0;
+            return this;
+        }
+        let prev = _sampleCurve(this.points, this.kind, 0);
+        let acc = 0;
+        for (let i = 1; i <= SAMPLES; i++) {
+            const p = _sampleCurve(this.points, this.kind, i / SAMPLES);
+            acc += p.distanceTo(prev);
+            this._lengths.push(acc);
+            prev = p;
+        }
+        this.totalLength = acc;
+        return this;
+    }
+    _arcParameter(t) {
+        if (this._lengths.length < 2 || this.totalLength <= 1e-8) return t;
+        const want = t * this.totalLength;
+        let lo = 0, hi = this._lengths.length - 1;
+        while (lo + 1 < hi) {
+            const mid = (lo + hi) >> 1;
+            if (this._lengths[mid] < want) lo = mid;
+            else hi = mid;
+        }
+        const l0 = this._lengths[lo], l1 = this._lengths[hi];
+        const local = (want - l0) / Math.max(1e-8, l1 - l0);
+        const u0 = lo / (this._lengths.length - 1);
+        const u1 = hi / (this._lengths.length - 1);
+        return u0 + (u1 - u0) * local;
+    }
+    sampleEye(t) {
+        const u = this._arcParameter(speedRamp(this.ramp, t, this.rampOpts));
+        return _sampleCurve(this.points, this.kind, u);
+    }
+    sampleTarget(t) {
+        t = Math.min(1, Math.max(0, t));
+        const u = this._arcParameter(speedRamp(this.ramp, t, this.rampOpts));
+        if (this.interest.length >= 2) {
+            return _sampleCurve(this.interest, this.interestKind, u);
+        }
+        if (this.fixedTarget) return this.fixedTarget.clone();
+        if (this.lookAhead > 0 && this.totalLength > 1e-6) {
+            const ahead = Math.min(1, u + this.lookAhead / this.totalLength);
+            return _sampleCurve(this.points, this.kind, ahead);
+        }
+        const eye = _sampleCurve(this.points, this.kind, u);
+        const next = _sampleCurve(this.points, this.kind, Math.min(1, u + 0.01));
+        const dir = next.clone().sub(eye);
+        if (dir.lengthSq() < 1e-10) return eye.clone().add(new Vector3(0, 0, -1));
+        return eye.clone().add(dir.normalize());
+    }
+}
+
+function _applyCamView(cam, pos, look, fov) {
+    cam.position.copy(pos);
+    if (cam._lookAt) cam._lookAt.copy(look);
+    if (cam.isPerspectiveCamera && fov != null) {
+        cam.fov = fov;
+        cam.updateProjectionMatrix?.();
+    }
+    if (typeof cam._w?.setView === 'function') {
+        const f = cam.isPerspectiveCamera ? (cam.fov ?? cam._fov ?? -1) : -1;
+        cam._w.setView(pos.x, pos.y, pos.z, look.x, look.y, look.z, f);
+        if (cam.focus != null && cam._w.setFocusDistance) {
+            cam._w.setFocusDistance(cam.focus);
+        }
+        if (cam.up && cam._w.setUp) cam._w.setUp(cam.up.x, cam.up.y, cam.up.z);
+    } else {
+        cam.lookAt?.(look);
+        cam._sync?.();
+    }
+}
+
+/**
+ * Additive cinematic helper for a three.js-shaped PerspectiveCamera.
+ * @example
+ * const anim = new THREE.CameraAnimator(camera);
+ * anim.flyTo({ position, target, duration: 2, ramp: 'inOut', easeIn: 0.2, easeOut: 0.3 });
+ * anim.followPath({ path, duration: 4 });
+ * anim.update(dt);
+ */
+export class CameraAnimator {
+    constructor(camera) {
+        this.camera = camera;
+        this._mode = 'idle'; // idle | fly | path
+        this._from = { pos: new Vector3(), target: new Vector3(), fov: 50 };
+        this._to = { pos: new Vector3(), target: new Vector3(), fov: 50 };
+        this._path = null;
+        this._elapsed = 0;
+        this._duration = 0;
+        this._ramp = 'cubicInOut';
+        this._rampOpts = {};
+        this._active = false;
+    }
+    stop() {
+        this._active = false;
+        this._mode = 'idle';
+        return this;
+    }
+    flyTo({
+        position, target, fov, duration = 1,
+        easing, ramp, easeIn, easeOut,
+    } = {}) {
+        const cam = this.camera;
+        this._from.pos.copy(cam.position);
+        this._from.target.copy(cam._lookAt || new Vector3());
+        this._from.fov = cam.fov ?? cam._fov ?? 50;
+        this._to.pos.copy(position ? _v3(position) : cam.position);
+        this._to.target.copy(target ? _v3(target) : this._from.target);
+        this._to.fov = fov ?? this._from.fov;
+        this._duration = Math.max(0, duration);
+        this._elapsed = 0;
+        this._ramp = ramp || easing || 'cubicInOut';
+        this._rampOpts = { easeIn, easeOut };
+        this._mode = 'fly';
+        this._active = true;
+        return this;
+    }
+    /** Spherical orbit around the current look-at by azimuth/elevation deltas (radians). */
+    orbitBy({
+        azimuth = 0, elevation = 0, radiusDelta = 0,
+        duration = 1, easing, ramp, easeIn, easeOut, fov,
+    } = {}) {
+        const cam = this.camera;
+        const eye = cam.position.clone();
+        const tgt = (cam._lookAt || new Vector3()).clone();
+        const off = eye.clone().sub(tgt);
+        const r0 = Math.max(1e-4, off.length());
+        const phi0 = Math.acos(Math.min(1, Math.max(-1, off.y / r0)));
+        const theta0 = Math.atan2(off.x, off.z);
+        const r1 = Math.max(1e-4, r0 + radiusDelta);
+        const phi1 = Math.min(Math.PI - 1e-3, Math.max(1e-3, phi0 + elevation));
+        const theta1 = theta0 + azimuth;
+        const toPos = new Vector3(
+            tgt.x + r1 * Math.sin(phi1) * Math.sin(theta1),
+            tgt.y + r1 * Math.cos(phi1),
+            tgt.z + r1 * Math.sin(phi1) * Math.cos(theta1),
+        );
+        return this.flyTo({
+            position: toPos, target: tgt, fov, duration,
+            easing, ramp, easeIn, easeOut,
+        });
+    }
+    /** Retarget look-at; set `holdEye: true` to keep eye and rebuild framing. */
+    lookAt({ target, duration = 1, holdEye = false, easing, ramp, easeIn, easeOut } = {}) {
+        const cam = this.camera;
+        const tgt = _v3(target);
+        if (holdEye) {
+            return this.flyTo({
+                position: cam.position.clone(), target: tgt, duration,
+                easing, ramp, easeIn, easeOut,
+            });
+        }
+        return this.flyTo({
+            position: cam.position.clone(), target: tgt, duration,
+            easing, ramp, easeIn, easeOut,
+        });
+    }
+    /** Animate FOV only (push-in / pull-out). */
+    setFov({ fov, duration = 1, easing, ramp, easeIn, easeOut } = {}) {
+        const cam = this.camera;
+        return this.flyTo({
+            position: cam.position.clone(),
+            target: (cam._lookAt || new Vector3()).clone(),
+            fov, duration, easing, ramp, easeIn, easeOut,
+        });
+    }
+    /**
+     * Dolly-zoom / Vertigo: move along view axis while compensating FOV so
+     * the subject framing stays approximately constant.
+     */
+    vertigo({
+        targetFov, duration = 1, easing, ramp, easeIn, easeOut,
+    } = {}) {
+        const cam = this.camera;
+        const eye = cam.position.clone();
+        const tgt = (cam._lookAt || new Vector3()).clone();
+        const fov0 = cam.fov ?? cam._fov ?? 50;
+        const fov1 = targetFov ?? fov0;
+        const dist0 = Math.max(1e-4, eye.distanceTo(tgt));
+        // similar triangles: dist * tan(fov/2) ≈ constant framing size
+        const half0 = (fov0 * Math.PI) / 360;
+        const half1 = (fov1 * Math.PI) / 360;
+        const dist1 = dist0 * Math.tan(half0) / Math.max(1e-6, Math.tan(half1));
+        const dir = eye.clone().sub(tgt).normalize();
+        const toPos = tgt.clone().add(dir.multiplyScalar(dist1));
+        return this.flyTo({
+            position: toPos, target: tgt, fov: fov1, duration,
+            easing, ramp, easeIn, easeOut,
+        });
+    }
+    /** Follow a {@link CameraPath} (or `{ points, kind, … }` options). */
+    followPath({ path, duration = 1, ramp, easeIn, easeOut } = {}) {
+        this._path = path instanceof CameraPath ? path : new CameraPath(path || {});
+        if (ramp != null) this._path.withRamp(ramp, { easeIn, easeOut });
+        this._duration = Math.max(0, duration);
+        this._elapsed = 0;
+        this._ramp = this._path.ramp;
+        this._rampOpts = this._path.rampOpts || {};
+        this._mode = 'path';
+        this._active = true;
+        return this;
+    }
+    get isActive() { return this._active; }
+    update(dt) {
+        if (!this._active) return false;
+        this._elapsed += Math.max(0, dt);
+        let u = this._duration <= 0 ? 1 : Math.min(1, this._elapsed / this._duration);
+        const cam = this.camera;
+        if (this._mode === 'path' && this._path) {
+            const eye = this._path.sampleEye(u);
+            const look = this._path.sampleTarget(u);
+            const fov = this._path.fov != null ? this._path.fov : (cam.fov ?? cam._fov);
+            _applyCamView(cam, eye, look, fov);
+        } else {
+            const s = speedRamp(this._ramp, u, this._rampOpts);
+            const pos = new Vector3().lerpVectors(this._from.pos, this._to.pos, s);
+            const look = new Vector3().lerpVectors(this._from.target, this._to.target, s);
+            const fov = this._from.fov + (this._to.fov - this._from.fov) * s;
+            _applyCamView(cam, pos, look, fov);
+        }
+        if (u >= 1) {
+            this._active = false;
+            this._mode = 'idle';
+        }
+        return this._active;
+    }
+}
+
+/**
+ * Editorial shot list: hold / fly / path clips with cut or blend transitions.
+ * Apply with `timeline.apply(camera)` each frame after `timeline.update(dt)`.
+ */
+export class ShotTimeline {
+    constructor() {
+        this.shots = [];
+        this.time = 0;
+        this.looping = true;
+    }
+    push(shot) {
+        this.shots.push(shot);
+        return this.shots.length - 1;
+    }
+    hold(name, { position, target, fov = 50, duration = 1, transition } = {}) {
+        return this.push({
+            name, duration, kind: 'hold',
+            position: _v3(position), target: _v3(target), fov,
+            transition: transition || { type: 'cut' },
+        });
+    }
+    fly(name, {
+        from, to, duration = 1, ramp = 'inOut', easeIn = 0.2, easeOut = 0.3, transition,
+    } = {}) {
+        return this.push({
+            name, duration, kind: 'fly',
+            from: {
+                position: _v3(from.position),
+                target: _v3(from.target),
+                fov: from.fov ?? 50,
+            },
+            to: {
+                position: _v3(to.position),
+                target: _v3(to.target),
+                fov: to.fov ?? from.fov ?? 50,
+            },
+            ramp, easeIn, easeOut,
+            transition: transition || { type: 'cut' },
+        });
+    }
+    path(name, { path, duration = 1, transition } = {}) {
+        return this.push({
+            name, duration, kind: 'path',
+            path: path instanceof CameraPath ? path : new CameraPath(path || {}),
+            transition: transition || { type: 'cut' },
+        });
+    }
+    duration() {
+        return this.shots.reduce((s, sh) => s + Math.max(0, sh.duration || 0), 0);
+    }
+    seek(time) {
+        const total = this.duration();
+        if (total <= 0) { this.time = 0; return this; }
+        let t = Math.max(0, time);
+        if (this.looping) t %= total;
+        else t = Math.min(total, t);
+        this.time = t;
+        return this;
+    }
+    update(dt) {
+        if (Number.isFinite(dt)) this.seek(this.time + dt);
+        return this;
+    }
+    _shotAt(time) {
+        let acc = 0;
+        for (let i = 0; i < this.shots.length; i++) {
+            const end = acc + this.shots[i].duration;
+            if (time < end || i + 1 === this.shots.length) {
+                return { index: i, local: Math.max(0, time - acc) };
+            }
+            acc = end;
+        }
+        return { index: 0, local: 0 };
+    }
+    _sampleShot(shot, local) {
+        const u = shot.duration <= 0 ? 1 : Math.min(1, Math.max(0, local / shot.duration));
+        if (shot.kind === 'hold') {
+            return {
+                position: shot.position.clone(),
+                target: shot.target.clone(),
+                fov: shot.fov,
+            };
+        }
+        if (shot.kind === 'path') {
+            return {
+                position: shot.path.sampleEye(u),
+                target: shot.path.sampleTarget(u),
+                fov: shot.path.fov ?? 50,
+            };
+        }
+        // fly
+        const s = speedRamp(shot.ramp, u, { easeIn: shot.easeIn, easeOut: shot.easeOut });
+        return {
+            position: new Vector3().lerpVectors(shot.from.position, shot.to.position, s),
+            target: new Vector3().lerpVectors(shot.from.target, shot.to.target, s),
+            fov: shot.from.fov + (shot.to.fov - shot.from.fov) * s,
+        };
+    }
+    sample() {
+        if (!this.shots.length) {
+            return { position: new Vector3(), target: new Vector3(), fov: 50, shotIndex: -1, shotName: '' };
+        }
+        const { index, local } = this._shotAt(this.time);
+        const cur = this.shots[index];
+        let pose = this._sampleShot(cur, local);
+        if (index > 0 && cur.transition && cur.transition.type === 'blend') {
+            const dur = Math.min(cur.duration, Math.max(0, cur.transition.duration ?? 0.5));
+            if (dur > 0 && local < dur) {
+                const prev = this.shots[index - 1];
+                const prevPose = this._sampleShot(prev, prev.duration);
+                const bu = speedRamp(
+                    cur.transition.ramp || 'cubicInOut',
+                    local / dur,
+                    { easeIn: cur.transition.easeIn, easeOut: cur.transition.easeOut },
+                );
+                pose = {
+                    position: new Vector3().lerpVectors(prevPose.position, pose.position, bu),
+                    target: new Vector3().lerpVectors(prevPose.target, pose.target, bu),
+                    fov: prevPose.fov + (pose.fov - prevPose.fov) * bu,
+                };
+            }
+        }
+        pose.shotIndex = index;
+        pose.shotName = cur.name || '';
+        return pose;
+    }
+    apply(camera) {
+        const pose = this.sample();
+        _applyCamView(camera, pose.position, pose.target, pose.fov);
+        return pose;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// General motion primitives (mirror threers-animation Tween / Spring / Timeline)
+// ---------------------------------------------------------------------------
+const _EASING_FNS = {
+    linear: (t) => t,
+    quadIn: (t) => t * t,
+    quadOut: (t) => t * (2 - t),
+    quadInOut: (t) => (t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t),
+    cubicIn: (t) => t * t * t,
+    cubicOut: (t) => { const u = 1 - t; return 1 - u * u * u; },
+    cubicInOut: (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2),
+    smooth: (t) => t * t * (3 - 2 * t),
+    smoother: (t) => t * t * t * (t * (t * 6 - 15) + 10),
+    backOut: (t) => { const c = 1.70158; const u = t - 1; return 1 + u * u * ((c + 1) * u + c); },
+};
+
+function _ease(name, t) {
+    if (typeof name === 'function') return name(t);
+    return (_EASING_FNS[name] || _EASING_FNS.linear)(Math.min(1, Math.max(0, t)));
+}
+
+function _lerpScalar(a, b, t) { return a + (b - a) * t; }
+function _lerpAny(a, b, t) {
+    if (typeof a === 'number') return _lerpScalar(a, b, t);
+    if (a?.isQuaternion || (a?.w != null && typeof a.slerp === 'function')) {
+        const out = a.clone?.() || new Quaternion(a.x, a.y, a.z, a.w);
+        return out.slerp(b, t);
+    }
+    if (a?.x != null && b?.x != null) {
+        return new Vector3(
+            _lerpScalar(a.x, b.x, t),
+            _lerpScalar(a.y, b.y, t),
+            _lerpScalar(a.z ?? 0, b.z ?? 0, t),
+        );
+    }
+    return b;
+}
+
+/** A→B over a known duration. */
+export class Tween {
+    constructor(from, to, duration = 1) {
+        this.from = from;
+        this.to = to;
+        this.duration = Math.max(0, duration);
+        this.delay = 0;
+        this.easing = 'cubicOut';
+        this.repeat = 0;
+        this.yoyo = false;
+        this.elapsed = 0;
+        this._value = from?.clone?.() ?? from;
+        this.finished = false;
+        this.onUpdate = null;
+        this.onComplete = null;
+    }
+    setEasing(e) { this.easing = e; return this; }
+    setDelay(d) { this.delay = Math.max(0, d); return this; }
+    setRepeat(n, yoyo = false) { this.repeat = n; this.yoyo = yoyo; return this; }
+    value() { return this._value; }
+    isFinished() { return this.finished; }
+    update(dt) {
+        if (this.finished || !Number.isFinite(dt)) return this._value;
+        this.elapsed += Math.max(0, dt);
+        const active = this.elapsed - this.delay;
+        if (active < 0) return this._value;
+        const dur = this.duration || 1e-8;
+        let cycle = Math.floor(active / dur);
+        let u = (active % dur) / dur;
+        const maxCycles = this.repeat === Infinity ? Infinity : (this.repeat + 1);
+        if (cycle >= maxCycles) {
+            u = 1;
+            this.finished = true;
+            cycle = maxCycles - 1;
+        }
+        if (this.yoyo && (cycle % 2 === 1)) u = 1 - u;
+        const e = _ease(this.easing, u);
+        this._value = _lerpAny(this.from, this.to, e);
+        this.onUpdate?.(this._value, e);
+        if (this.finished) this.onComplete?.(this._value);
+        return this._value;
+    }
+}
+
+/** Damped spring chasing a moving target (no fixed duration). */
+export class Spring {
+    constructor(value, angularFrequency = 8, dampingRatio = 1) {
+        this.value = typeof value === 'number' ? value : (value.clone?.() || value);
+        this.velocity = typeof value === 'number' ? 0 : new Vector3();
+        this.target = typeof value === 'number' ? value : (value.clone?.() || value);
+        this.angularFrequency = Math.max(0, angularFrequency);
+        this.dampingRatio = Math.max(0, dampingRatio);
+        this.restThreshold = 1e-3;
+    }
+    static criticallyDamped(value, frequency = 8) {
+        return new Spring(value, frequency, 1);
+    }
+    setTarget(t) {
+        this.target = typeof t === 'number' ? t : (t.clone?.() || t);
+        return this;
+    }
+    isSettled() {
+        if (typeof this.value === 'number') {
+            return Math.abs(this.value - this.target) < this.restThreshold
+                && Math.abs(this.velocity) < this.restThreshold;
+        }
+        const d = this.value.distanceTo?.(this.target) ?? 0;
+        const v = this.velocity.length?.() ?? 0;
+        return d < this.restThreshold && v < this.restThreshold;
+    }
+    update(dt) {
+        if (!Number.isFinite(dt) || dt <= 0) return this.value;
+        const w = this.angularFrequency;
+        const z = this.dampingRatio;
+        if (typeof this.value === 'number') {
+            const x = this.value - this.target;
+            const a = -2 * z * w * this.velocity - w * w * x;
+            this.velocity += a * dt;
+            this.value += this.velocity * dt;
+            if (this.isSettled()) { this.value = this.target; this.velocity = 0; }
+            return this.value;
+        }
+        const x = this.value.clone().sub(this.target);
+        const a = this.velocity.clone().multiplyScalar(-2 * z * w).addScaledVector
+            ? this.velocity.clone().multiplyScalar(-2 * z * w).add(x.multiplyScalar(-w * w))
+            : this.velocity.clone().multiplyScalar(-2 * z * w).add(x.multiplyScalar(-w * w));
+        this.velocity.add(a.multiplyScalar(dt));
+        this.value.add(this.velocity.clone().multiplyScalar(dt));
+        if (this.isSettled()) {
+            this.value.copy(this.target);
+            this.velocity.set(0, 0, 0);
+        }
+        return this.value;
+    }
+}
+
+/** Shared clock with tracks, markers, and optional time remap. */
+export class Timeline {
+    constructor() {
+        this.tracks = [];
+        this.markers = [];
+        this.time = 0;
+        this.elapsed = 0;
+        this.duration = 0;
+        this.speed = 1;
+        this.playing = true;
+        this.repeat = 0;
+        this.timeRemap = null;
+    }
+    add(start, duration, easing = 'linear') {
+        const id = this.tracks.length;
+        this.tracks.push({ start, duration: Math.max(0, duration), easing });
+        this.duration = Math.max(this.duration, start + duration);
+        return id;
+    }
+    then(duration, easing = 'linear') {
+        return this.add(this.duration, duration, easing);
+    }
+    addMarker(time, name, data = null) {
+        this.markers.push({ time, name, data });
+        this.markers.sort((a, b) => a.time - b.time);
+        return this;
+    }
+    setTimeRemap(fnOrSamples) {
+        this.timeRemap = fnOrSamples;
+        return this;
+    }
+    _remap(t) {
+        if (!this.timeRemap) return t;
+        if (typeof this.timeRemap === 'function') return this.timeRemap(t);
+        const s = this.timeRemap;
+        if (!s.length) return t;
+        if (t <= s[0].t) return s[0].v;
+        if (t >= s[s.length - 1].t) return s[s.length - 1].v;
+        for (let i = 0; i < s.length - 1; i++) {
+            if (t >= s[i].t && t <= s[i + 1].t) {
+                const u = (t - s[i].t) / (s[i + 1].t - s[i].t || 1);
+                return s[i].v + (s[i + 1].v - s[i].v) * u;
+            }
+        }
+        return t;
+    }
+    update(dt) {
+        if (!this.playing || !Number.isFinite(dt)) return this;
+        this.seek(this.elapsed + dt * this.speed);
+        return this;
+    }
+    seek(time) {
+        this.elapsed = time;
+        let t = time;
+        if (this.duration > 0) {
+            if (this.repeat === Infinity) t = ((t % this.duration) + this.duration) % this.duration;
+            else t = Math.min(this.duration, Math.max(0, t));
+        }
+        this.time = this._remap(t);
+        return this;
+    }
+    progressOf(id) {
+        const tr = this.tracks[id];
+        if (!tr || tr.duration <= 0) return 0;
+        const u = (this.time - tr.start) / tr.duration;
+        return _ease(tr.easing, Math.min(1, Math.max(0, u)));
+    }
+    valueOf(id, from, to) {
+        return _lerpAny(from, to, this.progressOf(id));
+    }
+    markerAt(time = this.time) {
+        let hit = null;
+        for (const m of this.markers) {
+            if (m.time <= time) hit = m;
+            else break;
+        }
+        return hit;
+    }
+}
+
+/** Spring-lag follow for any Object3D position (secondary motion). */
+export class ObjectSpring {
+    constructor(object, { frequency = 6, damping = 1, property = 'position' } = {}) {
+        this.object = object;
+        this.property = property;
+        const cur = object[property];
+        this.spring = Spring.criticallyDamped(
+            cur?.clone?.() || (typeof cur === 'number' ? cur : new Vector3()),
+            frequency,
+        );
+        this.spring.dampingRatio = damping;
+    }
+    setTarget(target) {
+        if (target?.position) this.spring.setTarget(target.position.clone());
+        else this.spring.setTarget(target?.clone?.() || target);
+        return this;
+    }
+    update(dt) {
+        const v = this.spring.update(dt);
+        const prop = this.object[this.property];
+        if (typeof prop === 'number') this.object[this.property] = v;
+        else prop?.copy?.(v);
+        this.object._sync?.();
+        return v;
+    }
+}
+
+/**
+ * Lightweight animated↔simulated pose blend (JS stand-in for PhysicsBlend).
+ * Freezes the pose at limp/recover so a continuing clip cannot yank the fade.
+ */
+export class PoseBlend {
+    constructor(target, duration = 0.25) {
+        this.target = target;
+        this.duration = Math.max(0, duration);
+        this.state = 'animated';
+        this.elapsed = 0;
+        this._anchorPos = target.position.clone();
+        this._anchorQuat = target.quaternion?.clone?.() || new Quaternion();
+        this._lastAnimPos = target.position.clone();
+        this._lastAnimQuat = target.quaternion?.clone?.() || new Quaternion();
+    }
+    goLimp() {
+        this.state = 'toSimulated';
+        this.elapsed = 0;
+        this._anchorPos.copy(this._lastAnimPos);
+        this._anchorQuat.copy(this._lastAnimQuat);
+        return this;
+    }
+    getUp() {
+        this.state = 'toAnimated';
+        this.elapsed = 0;
+        this._anchorPos.copy(this.target.position);
+        if (this.target.quaternion) this._anchorQuat.copy(this.target.quaternion);
+        return this;
+    }
+    update(dt, animated, simulated) {
+        const aPos = animated?.position || animated;
+        const sPos = simulated?.position || simulated;
+        const aQuat = animated?.quaternion;
+        const sQuat = simulated?.quaternion;
+        if (aPos?.clone) this._lastAnimPos.copy(aPos);
+        else if (aPos) this._lastAnimPos.set(aPos.x, aPos.y, aPos.z);
+        if (aQuat) this._lastAnimQuat.copy(aQuat);
+
+        if (this.state === 'animated') {
+            this.target.position.copy(aPos);
+            if (aQuat && this.target.quaternion) this.target.quaternion.copy(aQuat);
+        } else if (this.state === 'simulated') {
+            this.target.position.copy(sPos);
+            if (sQuat && this.target.quaternion) this.target.quaternion.copy(sQuat);
+        } else {
+            this.elapsed += dt;
+            const u = this.duration <= 0 ? 1 : Math.min(1, this.elapsed / this.duration);
+            const e = _ease('cubicInOut', u);
+            if (this.state === 'toSimulated') {
+                this.target.position.lerpVectors(this._anchorPos, sPos, e);
+                if (sQuat && this.target.quaternion) {
+                    this.target.quaternion.copy(this._anchorQuat).slerp(sQuat, e);
+                }
+                if (u >= 1) this.state = 'simulated';
+            } else {
+                this.target.position.lerpVectors(this._anchorPos, aPos, e);
+                if (aQuat && this.target.quaternion) {
+                    this.target.quaternion.copy(this._anchorQuat).slerp(aQuat, e);
+                }
+                if (u >= 1) this.state = 'animated';
+            }
+        }
+        this.target._sync?.();
+        return this.state;
+    }
+}
+
 export class TrackballControls {
     constructor(camera, domElement) {
         this._w = new WebTrackballControls(camera._w);
@@ -3358,6 +5117,7 @@ export class Scene {
         this._objects = [];
         this.children = [];
         this._background = null;
+        this._backgroundAlpha = 1;
         this._fog = null;
         this._environment = null;
     }
@@ -3402,6 +5162,11 @@ export class Scene {
         }
     }
     get background() { return this._background; }
+    set backgroundAlpha(a) {
+        this._backgroundAlpha = Number(a);
+        if (this._w.setBackgroundAlpha) this._w.setBackgroundAlpha(this._backgroundAlpha);
+    }
+    get backgroundAlpha() { return this._backgroundAlpha != null ? this._backgroundAlpha : 1; }
     getObjectByName(name) {
         if (this.name === name) return this;
         for (const c of this.children) {
@@ -3472,12 +5237,23 @@ export class Scene {
             visit(obj, new Vector3(), new Euler());
             return; // skip the default push below
         } else if (obj._isLineSegments) {
-            obj._handle = this._w.addLineSegments(obj.geometry._w, obj.material._w);
-            obj._scene = this;
-            if (obj.rotation.x || obj.rotation.y || obj.rotation.z || obj.position.x || obj.position.y || obj.position.z) {
-                this._w.setTransform(obj._handle,
-                    new Vector3(obj.position.x, obj.position.y, obj.position.z)._w(),
-                    new Euler(obj.rotation.x, obj.rotation.y, obj.rotation.z)._w());
+            const g = obj.geometry;
+            if (g && obj.material && obj.material._w) {
+                if (g._isUserGeometry && typeof g._syncWasmFromJs === 'function') {
+                    if (g.attributes && g.attributes.position && g.attributes.position.array && g.attributes.position.array.length) {
+                        g._syncWasmFromJs();
+                    }
+                }
+                const geomW = g._w;
+                if (geomW) {
+                    obj._handle = this._w.addLineSegments(geomW, obj.material._w);
+                    obj._scene = this;
+                    if (obj.rotation.x || obj.rotation.y || obj.rotation.z || obj.position.x || obj.position.y || obj.position.z) {
+                        this._w.setTransform(obj._handle,
+                            new Vector3(obj.position.x, obj.position.y, obj.position.z)._w(),
+                            new Euler(obj.rotation.x, obj.rotation.y, obj.rotation.z)._w());
+                    }
+                }
             }
         } else if (obj._isSprite) {
             obj._handle = this._w.addSprite(obj.material._w);
@@ -3510,11 +5286,22 @@ export class Scene {
             if (sj) obj._skinJoints  = new Float32Array(sj);
             if (sw) obj._skinWeights = new Float32Array(sw);
         } else if (obj._isPoints) {
-            obj._handle = this._w.addPoints(obj.geometry._w, obj.material._w);
-            if (obj.rotation.x || obj.rotation.y || obj.rotation.z || obj.position.x || obj.position.y || obj.position.z) {
-                this._w.setTransform(obj._handle,
-                    new Vector3(obj.position.x, obj.position.y, obj.position.z)._w(),
-                    new Euler(obj.rotation.x, obj.rotation.y, obj.rotation.z)._w());
+            const g = obj.geometry;
+            if (g && obj.material && obj.material._w) {
+                if (g._isUserGeometry && typeof g._syncWasmFromJs === 'function') {
+                    if (g.attributes && g.attributes.position && g.attributes.position.array && g.attributes.position.array.length) {
+                        g._syncWasmFromJs();
+                    }
+                }
+                const geomW = g._w;
+                if (geomW) {
+                    obj._handle = this._w.addPoints(geomW, obj.material._w);
+                    if (obj.rotation.x || obj.rotation.y || obj.rotation.z || obj.position.x || obj.position.y || obj.position.z) {
+                        this._w.setTransform(obj._handle,
+                            new Vector3(obj.position.x, obj.position.y, obj.position.z)._w(),
+                            new Euler(obj.rotation.x, obj.rotation.y, obj.rotation.z)._w());
+                    }
+                }
             }
         } else if (obj._isLight) {
             obj._handle = this._w.addLight(obj._w);
@@ -3611,6 +5398,8 @@ export class Scene {
                 const layered = o.visible !== false && onLayer(o);
                 const rot = _effectiveEuler(o);
                 this._w.setTransform(o._handle, o.position._w(), rot._w());
+                const sx = o.scale?.x ?? 1, sy = o.scale?.y ?? 1, sz = o.scale?.z ?? 1;
+                this._w.setScale(o._handle, sx, sy, sz);
                 this._w.setVisible(o._handle, layered);
             } else if (o._isSkinnedMesh && o._handle) {
                 // Combined skin + morph: apply morph blend first (rewrites
@@ -3649,45 +5438,148 @@ export class Scene {
 }
 
 // ---- Cameras ----
+// three.js-compatible PerspectiveCamera surface. Extra cinematic fields
+// (focus, filmOffset/shift) are additive and never required by existing apps.
 export class PerspectiveCamera {
     constructor(fovDeg = 50, aspect = 1, near = 0.1, far = 2000) {
+        this.isCamera = true;
+        this.isPerspectiveCamera = true;
+        this.type = 'PerspectiveCamera';
         this._w = WebCamera.perspective(fovDeg, aspect, near, far);
         this.position = new Vector3(0, 0, 5);
+        this.up = new Vector3(0, 1, 0);
         this._lookAt = new Vector3();
+        this.quaternion = new Quaternion();
+        this.rotation = new Euler();
+        this.scale = new Vector3(1, 1, 1);
+        this.matrix = new Matrix4();
+        this.matrixWorld = new Matrix4();
+        this.projectionMatrix = new Matrix4();
+        this.matrixWorldInverse = new Matrix4();
+        this._fov = fovDeg;
         this.aspect = aspect;
         this.near = near;
         this.far = far;
+        this.zoom = 1;
+        this.focus = 10;
+        this.filmGauge = 35;
+        this.filmOffset = 0; // three.js horizontal shift (mm); maps to shift_x
+        this.view = null;
         this.layers = new Layers();
+        this.name = '';
+        Object.defineProperty(this, 'fov', {
+            get: () => this._fov,
+            set: (v) => {
+                this._fov = Number(v);
+                this._w.setFov?.(this._fov);
+            },
+            configurable: true,
+            enumerable: true,
+        });
     }
     lookAt(x, y, z) {
         if (x instanceof Vector3) { this._lookAt.copy(x); this._w.lookAt(x.x, x.y, x.z); }
         else { this._lookAt.set(x, y, z); this._w.lookAt(x, y, z); }
+        return this;
+    }
+    getWorldDirection(target = new Vector3()) {
+        const e = this.position, t = this._lookAt;
+        return target.set(t.x - e.x, t.y - e.y, t.z - e.z).normalize();
+    }
+    getWorldPosition(target = new Vector3()) {
+        return target.copy(this.position);
     }
     updateMatrixWorld() {
         this._sync();
         return this;
     }
-    updateProjectionMatrix() { this._w.setAspect(this.aspect); }
+    updateProjectionMatrix() {
+        this._w.setAspect(this.aspect);
+        this._w.setFov?.(this._fov);
+        // filmOffset (mm) → normalised shift ≈ offset / filmGauge
+        if (typeof this._w.setShift === 'function') {
+            const sx = this.filmGauge ? (this.filmOffset / this.filmGauge) : 0;
+            this._w.setShift(sx, 0);
+        }
+        return this;
+    }
+    clone() {
+        const c = new PerspectiveCamera(this._fov, this.aspect, this.near, this.far);
+        c.position.copy(this.position);
+        c._lookAt.copy(this._lookAt);
+        c.up.copy(this.up);
+        c.zoom = this.zoom;
+        c.focus = this.focus;
+        c.filmGauge = this.filmGauge;
+        c.filmOffset = this.filmOffset;
+        return c;
+    }
+    copy(source) {
+        this.fov = source.fov ?? source._fov;
+        this.aspect = source.aspect;
+        this.near = source.near;
+        this.far = source.far;
+        this.position.copy(source.position);
+        if (source._lookAt) this._lookAt.copy(source._lookAt);
+        if (source.up) this.up.copy(source.up);
+        this.zoom = source.zoom ?? 1;
+        this.focus = source.focus ?? 10;
+        this.filmGauge = source.filmGauge ?? 35;
+        this.filmOffset = source.filmOffset ?? 0;
+        this._sync();
+        this.updateProjectionMatrix();
+        return this;
+    }
     _sync() {
-        this._w.setPosition(this.position.x, this.position.y, this.position.z);
-        this._w.lookAt(this._lookAt.x, this._lookAt.y, this._lookAt.z);
+        if (typeof this._w.setView === 'function') {
+            const f = this._fov ?? this.fov ?? -1;
+            this._w.setView(
+                this.position.x, this.position.y, this.position.z,
+                this._lookAt.x, this._lookAt.y, this._lookAt.z,
+                f,
+            );
+        } else {
+            this._w.setPosition(this.position.x, this.position.y, this.position.z);
+            this._w.lookAt(this._lookAt.x, this._lookAt.y, this._lookAt.z);
+        }
+        if (this.up && this._w.setUp) this._w.setUp(this.up.x, this.up.y, this.up.z);
+        if (this.focus != null && this._w.setFocusDistance) {
+            this._w.setFocusDistance(this.focus);
+        }
     }
 }
 export class OrthographicCamera {
     constructor(left, right, top, bottom, near = 0.1, far = 2000) {
+        this.isCamera = true;
+        this.isOrthographicCamera = true;
+        this.type = 'OrthographicCamera';
         this._w = WebCamera.orthographic(left, right, top, bottom, near, far);
         this.position = new Vector3();
+        this.up = new Vector3(0, 1, 0);
         this._lookAt = new Vector3();
+        this.quaternion = new Quaternion();
+        this.rotation = new Euler();
+        this.scale = new Vector3(1, 1, 1);
+        this.left = left; this.right = right; this.top = top; this.bottom = bottom;
         this.near = near;
         this.far = far;
+        this.zoom = 1;
         this.layers = new Layers();
+        this.name = '';
     }
     lookAt(x, y, z) {
         if (x instanceof Vector3) { this._lookAt.copy(x); this._w.lookAt(x.x, x.y, x.z); }
         else { this._lookAt.set(x, y, z); this._w.lookAt(x, y, z); }
+        return this;
     }
+    updateMatrixWorld() {
+        this._sync();
+        return this;
+    }
+    updateProjectionMatrix() { return this; }
     _sync() {
         this._w.setPosition(this.position.x, this.position.y, this.position.z);
+        if (this.up && this._w.setUp) this._w.setUp(this.up.x, this.up.y, this.up.z);
         this._w.lookAt(this._lookAt.x, this._lookAt.y, this._lookAt.z);
     }
 }
@@ -3704,6 +5596,28 @@ export class WebGLRenderer {
         r._w = w;
         r._canvas = canvas;
         r.shadowMap = { enabled: true, type: 2 };
+        // Push toneMapping / exposure into wasm — assigning the JS fields alone
+        // left the GPU on NoToneMapping, so sunlit Earth clipped to flat white.
+        r._toneMapping = 0;
+        r._toneMappingExposure = 1;
+        Object.defineProperty(r, 'toneMapping', {
+            get() { return r._toneMapping; },
+            set(v) {
+                r._toneMapping = Number(v) || 0;
+                r._w.setToneMapping?.(r._toneMapping, r._toneMappingExposure);
+            },
+            configurable: true, enumerable: true,
+        });
+        Object.defineProperty(r, 'toneMappingExposure', {
+            get() { return r._toneMappingExposure; },
+            set(v) {
+                r._toneMappingExposure = Number(v);
+                r._w.setToneMapping?.(r._toneMapping, r._toneMappingExposure);
+            },
+            configurable: true, enumerable: true,
+        });
+        // 4× MSAA on the opaque forward pass (wasm clamps anything >1 to 4).
+        r._w.setMsaa?.(4);
         return r;
     }
     get domElement() { return this._canvas; }
@@ -5766,23 +7680,20 @@ export class GLTFLoader extends _Loader {
             }
             return items;
         });
-        const nodeObjs = (json.nodes || []).map(nodeSpec => {
+        const nodeObjs = (json.nodes || []).map((nodeSpec, ni) => {
             const o = new Group();
+            o.name = nodeSpec.name || `node_${ni}`;
             if (nodeSpec.translation) o.position.set(...nodeSpec.translation);
             if (nodeSpec.rotation) {
                 const [x, y, z, w] = nodeSpec.rotation;
-                const sinr_cosp = 2*(w*x + y*z), cosr_cosp = 1 - 2*(x*x + y*y);
-                const roll = Math.atan2(sinr_cosp, cosr_cosp);
-                const sinp = 2*(w*y - z*x);
-                const pitch = Math.abs(sinp) >= 1 ? Math.sign(sinp)*Math.PI/2 : Math.asin(sinp);
-                const siny_cosp = 2*(w*z + x*y), cosy_cosp = 1 - 2*(y*y + z*z);
-                const yaw = Math.atan2(siny_cosp, cosy_cosp);
-                o.rotation.set(roll, pitch, yaw);
+                o.quaternion.set(x, y, z, w);
             }
             if (nodeSpec.scale) o.scale.set(...nodeSpec.scale);
             if (nodeSpec.mesh != null && meshes[nodeSpec.mesh]) {
                 for (const item of meshes[nodeSpec.mesh]) {
-                    o.add(new Mesh(item.geom, item.mat));
+                    const mesh = new Mesh(item.geom, item.mat);
+                    mesh.name = o.name;
+                    o.add(mesh);
                 }
             }
             return o;
@@ -8257,7 +10168,44 @@ export class QuaternionLinearInterpolant extends Interpolant {}
 
 // Cameras.
 export class ArrayCamera extends PerspectiveCamera { constructor(cameras = []) { super(); this.cameras = cameras; this.isArrayCamera = true; } }
-export class StereoCamera { constructor() { this.aspect = 1; this.eyeSep = 0.064; this.cameraL = new PerspectiveCamera(); this.cameraR = new PerspectiveCamera(); } update(_cam) {} }
+export class StereoCamera {
+    constructor() {
+        this.type = 'StereoCamera';
+        this.aspect = 1;
+        this.eyeSep = 0.064;
+        this.cameraL = new PerspectiveCamera();
+        this.cameraR = new PerspectiveCamera();
+    }
+    /** three.js StereoCamera.update(camera) — builds left/right from a master cam. */
+    update(camera) {
+        if (!camera) return;
+        if (typeof camera._sync === 'function') camera._sync();
+        const eye = camera.position;
+        const target = camera._lookAt || new Vector3();
+        const up = camera.up || new Vector3(0, 1, 0);
+        const forward = new Vector3().subVectors(target, eye).normalize();
+        let right = new Vector3().crossVectors(forward, up);
+        if (right.lengthSq() < 1e-10) right.set(1, 0, 0);
+        else right.normalize();
+        const half = this.eyeSep * 0.5;
+        const apply = (cam, sign) => {
+            cam.fov = camera.fov ?? camera._fov ?? 50;
+            cam.aspect = (camera.aspect || 1) * 0.5 * this.aspect;
+            cam.near = camera.near;
+            cam.far = camera.far;
+            cam.position.set(
+                eye.x + right.x * half * sign,
+                eye.y + right.y * half * sign,
+                eye.z + right.z * half * sign,
+            );
+            cam.lookAt(target.x, target.y, target.z);
+            cam.updateProjectionMatrix?.();
+            cam._sync?.();
+        };
+        apply(this.cameraL, -1);
+        apply(this.cameraR, +1);
+    }
+}
 export class CubeCamera extends Object3D {
     constructor(near = 0.1, far = 1000, renderTarget = null) {
         super();
@@ -8352,7 +10300,61 @@ export class RawShaderMaterial extends ShaderMaterial {}
 
 // Textures + variants.
 export class DepthTexture extends Texture { constructor(w, h) { super(w, h, new Uint8Array(w * h * 4)); this.isDepthTexture = true; } }
-export class VideoTexture extends Texture { constructor(video) { super(); this.image = video; this.isVideoTexture = true; } update() { this.needsUpdate = true; } }
+export class VideoTexture extends Texture {
+    constructor(video) {
+        super();
+        this.image = video;
+        this.isVideoTexture = true;
+        this.flipY = true;
+        this.offset = new Vector2(0, 1);
+        this.repeat = new Vector2(1, -1);
+        this._canvas = typeof document !== 'undefined' ? document.createElement('canvas') : null;
+        this._ctx = this._canvas ? this._canvas.getContext('2d') : null;
+        this.needsUpdate = false;
+    }
+    _syncUv() {
+        if (!this._w?.setUvTransform) return;
+        this._w.setUvTransform(
+            this.offset?.x ?? 0,
+            this.offset?.y ?? 1,
+            this.repeat?.x ?? 1,
+            this.flipY ? -Math.abs(this.repeat?.y ?? 1) : (this.repeat?.y ?? 1),
+        );
+    }
+    update() {
+        const video = this.image;
+        const canvas = this._canvas;
+        const ctx = this._ctx;
+        if (!video || !canvas || !ctx) return;
+        const w = video.videoWidth || 1280;
+        const h = video.videoHeight || 720;
+        if (canvas.width !== w) canvas.width = w;
+        if (canvas.height !== h) canvas.height = h;
+        if (video.readyState >= 2) {
+            try { ctx.drawImage(video, 0, 0, w, h); } catch (_err) { /* seek */ }
+        } else {
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, w, h);
+        }
+        const data = ctx.getImageData(0, 0, w, h).data;
+        const byteLen = data.length;
+        if (!this._buf || this._buf.length !== byteLen) {
+            this._buf = new Uint8Array(byteLen);
+        }
+        this._buf.set(data);
+        if (this._w && this._lw === w && this._lh === h && this._w.replaceRgba) {
+            if (this._w.replaceRgba(this._buf)) {
+                this.needsUpdate = true;
+                return;
+            }
+        }
+        this._w = new WebDataTexture(w, h, this._buf);
+        this._lw = w;
+        this._lh = h;
+        this._syncUv();
+        this.needsUpdate = true;
+    }
+}
 export class CompressedTexture extends Texture { constructor(mipmaps = [], w = 1, h = 1) { super(); this.mipmaps = mipmaps; this.image = { width: w, height: h }; this.isCompressedTexture = true; } }
 export class CompressedArrayTexture extends CompressedTexture {}
 export class CompressedCubeTexture extends CompressedTexture {}
@@ -8441,10 +10443,7 @@ export const ShapeUtils = {
     }
 };
 // (MathUtils + ColorManagement already declared above; not re-declared here.)
-export class PropertyBinding { constructor(root, path, parsed) { this.path = path; this.parsedPath = parsed; this.rootNode = root; this.node = root; } bind() {} unbind() {} setValue() {} getValue() {} }
-PropertyBinding.parseTrackName = (name) => ({ nodeName: name.split('.')[0], propertyName: name.split('.')[1] || '' });
-PropertyBinding.findNode = (root, nodeName) => root;
-export class PropertyMixer { constructor(binding, typeName, valueSize) { this.binding = binding; this.typeName = typeName; this.valueSize = valueSize; } accumulate() {} apply() {} }
+// PropertyBinding / PropertyMixer / AnimationAction defined with AnimationMixer above.
 export class AudioContext { static getContext() { if (!this._ctx && typeof window !== 'undefined' && window.AudioContext) this._ctx = new (window.AudioContext || window.webkitAudioContext)(); return this._ctx; } static setContext(c) { this._ctx = c; } }
 export class AudioAnalyser { constructor(audio, fftSize = 2048) { this.analyser = AudioContext.getContext()?.createAnalyser?.(); this.data = new Uint8Array(fftSize / 2); } getFrequencyData() { this.analyser?.getByteFrequencyData?.(this.data); return this.data; } getAverageFrequency() { let s = 0; for (const v of this.data) s += v; return s / this.data.length; } }
 export class PositionalAudio extends Audio { constructor(listener) { super(listener); this.panner = AudioContext.getContext()?.createPanner?.(); } setRefDistance() {} setRolloffFactor() {} setDistanceModel() {} setMaxDistance() {} setDirectionalCone() {} }
@@ -8487,7 +10486,6 @@ export class PMREMGenerator {
     }
     dispose() {}
 }
-export const AnimationAction = _AnimationAction;
 
 // ============================================================================
 //   `examples/jsm` add-ons commonly imported from `three/examples/jsm/...`.
@@ -9587,7 +11585,7 @@ let _meshoptImpl = null;
 export const MeshoptDecoder = {
     ready: (async () => {
         try {
-            const mod = await import('/web/deps/meshopt_decoder.module.js');
+            const mod = await import('./deps/meshopt_decoder.module.js');
             await mod.default.ready;
             _meshoptImpl = mod.default;
             MeshoptDecoder.supported = true;
@@ -9624,6 +11622,7 @@ const THREE = {
     MeshBasicMaterial, MeshLambertMaterial, MeshStandardMaterial,
     MeshPhongMaterial, MeshPhysicalMaterial, MeshNormalMaterial, MeshDepthMaterial,
     MeshToonMaterial, LineBasicMaterial, PointsMaterial, SpriteMaterial,
+    AtmosphereMaterial,
     // Lights
     AmbientLight, DirectionalLight, PointLight, SpotLight, HemisphereLight, RectAreaLight,
     // Textures
@@ -9640,6 +11639,9 @@ const THREE = {
     // Controls
     OrbitControls, TrackballControls, FirstPersonControls, PointerLockControls,
     DragControls, ArcballControls, MapControls, FlyControls, TransformControls,
+    CameraAnimator, CameraPath, ShotTimeline, speedRamp,
+    Tween, Spring, Timeline, ObjectSpring, PoseBlend, TrackModifier,
+    PropertyBinding, PropertyMixer, AnimationAction,
     // Loaders
     OBJLoader, STLLoader, PLYLoader, RGBELoader, FileLoader, ImageLoader, TextureLoader,
     FontLoader, MaterialLoader, BufferGeometryLoader, ObjectLoader, AnimationLoader,

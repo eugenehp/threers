@@ -1,0 +1,47 @@
+[package]
+name = "threers-probe"
+version = "0.0.1"
+edition = "2021"
+# Matches `threers`, which this depends on.
+rust-version = "1.87"
+authors = ["Eugene Hauptmann"]
+description = "Screen-space neural GI from G-buffer + lighting probes — train in RLX, run anywhere RLX runs"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/eugenehp/threers"
+homepage = "https://github.com/eugenehp/threers"
+documentation = "https://docs.rs/threers-probe"
+keywords = ["path-tracing", "denoising", "neural-rendering", "rlx", "three-js"]
+categories = ["graphics", "rendering", "science"]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+# Apple Metal backend for training and inference.
+metal = ["rlx/metal"]
+# wgpu backend (rlx's own, not the renderer's).
+gpu = ["rlx/gpu"]
+# Dataset generation in the `probe` example: path-trace probe/reference pairs.
+generate = ["dep:threers"]
+
+[dependencies]
+anyhow = "1"
+rlx = { version = "0.2.14", default-features = false, features = ["cpu", "tensor"] }
+threers = { path = "../..", version = "0.0.4", default-features = false, features = ["raytrace", "parallel"], optional = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+
+[[example]]
+name = "probe"
+required-features = ["generate"]
+
+[[example]]
+name = "probe_ablation"
+required-features = ["generate"]
+
+[[example]]
+name = "probe_web_export"
+required-features = ["generate"]

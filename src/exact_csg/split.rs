@@ -28,11 +28,7 @@ fn lerp(p: V3, q: V3, t: f64) -> V3 {
 /// plane. A vertex exactly on the plane is a degenerate touch and is not split
 /// (deferred to the M2 exact predicates).
 pub fn split_triangle_by_plane(tri: &[V3; 3], n: V3, d: f64) -> Vec<[V3; 3]> {
-    let dist = [
-        dot(n, tri[0]) - d,
-        dot(n, tri[1]) - d,
-        dot(n, tri[2]) - d,
-    ];
+    let dist = [dot(n, tri[0]) - d, dot(n, tri[1]) - d, dot(n, tri[2]) - d];
     let pos = dist.iter().filter(|&&x| x > EPS).count();
     let neg = dist.iter().filter(|&&x| x < -EPS).count();
     if pos == 0 || neg == 0 || pos + neg != 3 {
@@ -53,9 +49,9 @@ pub fn split_triangle_by_plane(tri: &[V3; 3], n: V3, d: f64) -> Vec<[V3; 3]> {
     let pac = lerp(a, c, da / (da - dc)); // crossing on edge a→c
 
     vec![
-        [a, pab, pac],  // corner triangle at the lone vertex
-        [pab, b, c],    // quad half 1
-        [pab, c, pac],  // quad half 2
+        [a, pab, pac], // corner triangle at the lone vertex
+        [pab, b, c],   // quad half 1
+        [pab, c, pac], // quad half 2
     ]
 }
 

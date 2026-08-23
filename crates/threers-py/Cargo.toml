@@ -1,0 +1,41 @@
+[package]
+name = "threers-py"
+version = "0.0.4"
+edition = "2021"
+authors = ["Eugene Hauptmann"]
+description = "Python bindings for threers — headless render, math, animation, and physics (PyO3 / maturin)"
+license = "MIT"
+repository = "https://github.com/eugenehp/threers"
+homepage = "https://github.com/eugenehp/threers"
+documentation = "https://github.com/eugenehp/threers/tree/main/crates/threers-py"
+readme = "README.md"
+keywords = ["three-js", "python", "pyo3", "wgpu", "graphics"]
+categories = ["graphics", "api-bindings"]
+# Distributed on PyPI via maturin, not crates.io.
+publish = false
+
+[lib]
+# Distinct from the main `threers` crate so cargo does not collide on
+# `libthreers.dylib`. Maturin still installs the Python module as `threers._native`.
+name = "threers_native"
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[features]
+default = ["headless"]
+# wgpu headless renderer (needs a GPU / wgpu backend on the host).
+headless = []
+# Rigid-body physics (threers-physics).
+physics = ["dep:threers-physics"]
+# Tweens / springs / cinematic helpers.
+animation = ["dep:threers-animation"]
+
+[dependencies]
+threers = { path = "../..", version = "0.0.4" }
+threers-physics = { path = "../threers-physics", version = "0.0.1", optional = true }
+threers-animation = { path = "../threers-animation", version = "0.0.1", optional = true, default-features = false }
+pyo3 = { version = "0.23", features = ["extension-module", "abi3-py39"] }
+
+[package.metadata.maturin]
+name = "threers"
+python-source = "python"

@@ -36,6 +36,10 @@ impl ExtrudeGeometry {
         }
         // Earcut caps (handles concave outlines).
         let tris = earcut::earcut(&pts2, &[]);
+        // Read only by the `brep` tagging below; without that feature nothing
+        // consumes it, and it is not worth cfg-ing the arithmetic itself.
+        #[cfg_attr(not(feature = "brep"), allow(unused_variables))]
+        let cap_triangles = tris.len() / 3;
         for tri in tris.chunks_exact(3) {
             indices.extend_from_slice(&[tri[0], tri[2], tri[1]]);
             let off = n as u32;
@@ -73,6 +77,8 @@ impl ExtrudeGeometry {
         g.set_attribute("normal", BufferAttribute::new(normals, 3));
         g.set_attribute("uv", BufferAttribute::new(uvs, 2));
         g.set_index(indices);
+        #[cfg(feature = "brep")]
+        crate::brep::primitives::tag_extrude(&mut g, &pts2, depth, cap_triangles);
         g
     }
 }

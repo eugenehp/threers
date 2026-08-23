@@ -1,0 +1,114 @@
+{
+  "name": "threers",
+  "version": "0.0.4",
+  "description": "Drop-in three.js-shaped renderer (Rust/wgpu) — ESM for browsers, Node, and Deno (mini + full wasm variants)",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/mini/threejs-shim.js",
+  "module": "./dist/mini/threejs-shim.js",
+  "types": "./dist/mini/threejs-shim.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/mini/threejs-shim.d.ts",
+      "import": "./dist/mini/index.js",
+      "default": "./dist/mini/index.js"
+    },
+    "./mini": {
+      "types": "./dist/mini/threejs-shim.d.ts",
+      "import": "./dist/mini/index.js",
+      "default": "./dist/mini/index.js"
+    },
+    "./full": {
+      "types": "./dist/full/threejs-shim.d.ts",
+      "import": "./dist/full/index.js",
+      "default": "./dist/full/index.js"
+    },
+    "./shim": {
+      "types": "./dist/mini/threejs-shim.d.ts",
+      "import": "./dist/mini/threejs-shim.js"
+    },
+    "./video-export": {
+      "types": "./dist/full/video-export.d.ts",
+      "import": "./dist/full/video-export.js"
+    },
+    "./mini/video-export": {
+      "types": "./dist/mini/video-export.d.ts",
+      "import": "./dist/mini/video-export.js"
+    },
+    "./full/video-export": {
+      "types": "./dist/full/video-export.d.ts",
+      "import": "./dist/full/video-export.js"
+    },
+    "./mini/pkg/threers.js": {
+      "types": "./dist/mini/pkg/threers.d.ts",
+      "import": "./dist/mini/pkg/threers.js",
+      "default": "./dist/mini/pkg/threers.js"
+    },
+    "./mini/pkg/threers_bg.wasm": "./dist/mini/pkg/threers_bg.wasm",
+    "./full/pkg/threers.js": {
+      "types": "./dist/full/pkg/threers.d.ts",
+      "import": "./dist/full/pkg/threers.js",
+      "default": "./dist/full/pkg/threers.js"
+    },
+    "./full/pkg/threers_bg.wasm": "./dist/full/pkg/threers_bg.wasm",
+    "./pkg/threers.js": {
+      "types": "./dist/mini/pkg/threers.d.ts",
+      "import": "./dist/mini/pkg/threers.js",
+      "default": "./dist/mini/pkg/threers.js"
+    },
+    "./pkg/threers_bg.wasm": "./dist/mini/pkg/threers_bg.wasm",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "examples",
+    "README.md",
+    "LICENSE*"
+  ],
+  "sideEffects": [
+    "./dist/mini/threejs-shim.js",
+    "./dist/mini/pkg/threers.js",
+    "./dist/full/threejs-shim.js",
+    "./dist/full/pkg/threers.js"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/eugenehp/threers.git",
+    "directory": "crates/threers-js"
+  },
+  "homepage": "https://github.com/eugenehp/threers/tree/main/crates/threers-js",
+  "bugs": {
+    "url": "https://github.com/eugenehp/threers/issues"
+  },
+  "keywords": [
+    "three.js",
+    "webgpu",
+    "wgpu",
+    "wasm",
+    "esm",
+    "deno",
+    "renderer"
+  ],
+  "peerDependencies": {
+    "three": "^0.165.0"
+  },
+  "peerDependenciesMeta": {
+    "three": {
+      "optional": true
+    }
+  },
+  "scripts": {
+    "build": "bash ./build.sh",
+    "build:mini": "PROFILE=release VARIANT=mini bash ../../web/build.sh",
+    "build:full": "PROFILE=release VARIANT=full bash ../../web/build.sh",
+    "pack": "bash ../../scripts/release-all.sh pack",
+    "prepublishOnly": "bash ./build.sh",
+    "test": "node --test test/*.mjs"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

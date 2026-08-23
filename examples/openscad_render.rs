@@ -5,8 +5,8 @@
 
 use std::f32::consts::FRAC_PI_2;
 use threers::{
-    cube, cylinder, linear_extrude, sphere, AmbientLight, Color, DirectionalLight, HeadlessRenderer,
-    Mesh, Object3D, PerspectiveCamera, Scene, StandardMaterial, Vector3,
+    cube, cylinder, linear_extrude, sphere, AmbientLight, Color, DirectionalLight,
+    HeadlessRenderer, Mesh, Object3D, PerspectiveCamera, Scene, StandardMaterial, Vector3,
 };
 
 fn main() {
@@ -30,15 +30,32 @@ fn main() {
         .difference(drill.translate([12.0, 0.0, 0.0]))
         .union(boss)
         .union(gusset);
-    let geometry = if use_float { part.to_geometry() } else { part.to_geometry_exact() };
-    println!("kernel: {}", if use_float { "float CsgEvaluator" } else { "hybrid exact + fallback" });
+    let geometry = if use_float {
+        part.to_geometry()
+    } else {
+        part.to_geometry_exact()
+    };
+    println!(
+        "kernel: {}",
+        if use_float {
+            "float CsgEvaluator"
+        } else {
+            "hybrid exact + fallback"
+        }
+    );
 
     // --- Scene ---
     let (w, h) = (900u32, 600u32);
-    let mut hr = match HeadlessRenderer::builder().size(w, h).supersample(2).build() {
+    let mut hr = match HeadlessRenderer::builder()
+        .size(w, h)
+        .supersample(2)
+        .build()
+    {
         Ok(hr) => hr,
         Err(e) => {
-            eprintln!("headless renderer unavailable ({e}) — needs a GPU adapter (Metal/Vulkan/DX12).");
+            eprintln!(
+                "headless renderer unavailable ({e}) — needs a GPU adapter (Metal/Vulkan/DX12)."
+            );
             std::process::exit(2);
         }
     };
@@ -48,7 +65,8 @@ fn main() {
     scene.background = Color::new(0.07, 0.08, 0.11);
     scene.add_light(AmbientLight::new(Color::WHITE, 0.35));
     scene.add_light(
-        DirectionalLight::new(Color::WHITE, 2.4).with_direction(Vector3::new(-0.4, -0.8, -0.5).normalize()),
+        DirectionalLight::new(Color::WHITE, 2.4)
+            .with_direction(Vector3::new(-0.4, -0.8, -0.5).normalize()),
     );
 
     let mut mat = StandardMaterial::new(Color::new(0.24, 0.62, 0.95));
@@ -114,7 +132,11 @@ fn crc32(data: &[u8]) -> u32 {
     for &b in data {
         crc ^= b as u32;
         for _ in 0..8 {
-            crc = if crc & 1 != 0 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
+            crc = if crc & 1 != 0 {
+                (crc >> 1) ^ 0xEDB8_8320
+            } else {
+                crc >> 1
+            };
         }
     }
     !crc

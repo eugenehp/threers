@@ -29,7 +29,7 @@ use crate::codec::hevc::{intra, quant, residual, Yuv420Frame};
 ///   boundary-smoothing filters). Lossy, tiny, and **conformant** — ffmpeg
 ///   decodes it bit-for-bit (see `tests/hevc_compress.rs`).
 /// - **residual** (`residual(true)`, *experimental*): also codes quantized
-///   transform coefficients ([`residual`](crate::codec::hevc::residual)) for
+///   transform coefficients ([`crate::codec::hevc::residual`]) for
 ///   fidelity. The coefficient coder is roundtrip-verified and its context tables
 ///   match the HM reference; the luma path decodes conformantly, but some chroma
 ///   / smooth-content cases are still being reconciled with the reference

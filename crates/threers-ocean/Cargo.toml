@@ -1,0 +1,44 @@
+[package]
+name = "threers-ocean"
+version = "0.0.1"
+edition = "2021"
+authors = ["Eugene Hauptmann"]
+description = "The threers ocean-water demo, as a browser package"
+license = "MIT"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+# Enables the FFT's rlx oracle test — the table is checked against a graph
+# rather than against another copy of itself.
+rlx = ["dep:rlx", "threers/rlx"]
+
+[dependencies]
+threers = { path = "../.." }
+rlx = { version = "0.2.14", optional = true, default-features = false, features = ["cpu", "tensor"] }
+wgpu = "30"
+bytemuck = { version = "1.16", features = ["derive"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+console_error_panic_hook = "0.1"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies.web-sys]
+version = "0.3"
+features = [
+    "Window",
+    "Document",
+    "Element",
+    "HtmlCanvasElement",
+    "HtmlElement",
+    "Performance",
+    "console",
+    "MouseEvent",
+    "WheelEvent",
+    "EventTarget",
+]

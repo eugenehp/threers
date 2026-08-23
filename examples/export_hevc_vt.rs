@@ -7,5 +7,10 @@
 include!("video_common.inc");
 
 fn main() {
-    run_export(VideoCodec::HevcVideoToolbox, "./out/cube.hevc_vt.mp4", false, None);
+    run_export(
+        VideoCodec::HevcVideoToolbox,
+        "./out/cube.hevc_vt.mp4",
+        false,
+        None,
+    );
 }

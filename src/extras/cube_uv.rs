@@ -71,11 +71,10 @@ pub fn extract_cube_faces_from_atlas_lod(
     let slot_to_face = pmrem_slot_to_face(lod_out as usize);
     let mut faces: [Vec<u8>; 6] = Default::default();
     let face_bytes = (face_size * face_size * 4) as usize;
-    for cube_face in 0..6usize {
-        faces[cube_face] = vec![0u8; face_bytes];
+    for face in &mut faces {
+        *face = vec![0u8; face_bytes];
     }
-    for pmrem_slot in 0..6usize {
-        let cube_face = slot_to_face[pmrem_slot];
+    for (pmrem_slot, &cube_face) in slot_to_face.iter().enumerate() {
         let col = (pmrem_slot % 3) as u32;
         let row = pmrem_slot_row(pmrem_slot);
         let src_x = x_off + col * face_size;
@@ -179,7 +178,7 @@ fn sample_face_bilinear(data: &[u8], size: u32, u: f32, v: f32, linear: bool) ->
     let tx = fx - x0 as f32;
     let ty = fy - y0 as f32;
     let mut out = [0.0f32; 3];
-    for c in 0..3 {
+    for (c, channel) in out.iter_mut().enumerate() {
         let off = |x: usize, y: usize| (y * size as usize + x) * 4 + c;
         let c00 = decode_px(data, off(x0, y0), linear);
         let c10 = decode_px(data, off(x1, y0), linear);
@@ -187,7 +186,7 @@ fn sample_face_bilinear(data: &[u8], size: u32, u: f32, v: f32, linear: bool) ->
         let c11 = decode_px(data, off(x1, y1), linear);
         let v0 = c00 * (1.0 - tx) + c10 * tx;
         let v1 = c01 * (1.0 - tx) + c11 * tx;
-        out[c] = v0 * (1.0 - ty) + v1 * ty;
+        *channel = v0 * (1.0 - ty) + v1 * ty;
     }
     out
 }
@@ -234,13 +233,7 @@ pub fn pack_cube_uv_atlas(
 
     for (lod_out, (faces, face_size)) in levels.iter().zip(size_lods.iter()).enumerate() {
         let output_size = *face_size;
-        let x_off = 3
-            * output_size
-            * if lod_out as u32 > lod_max - LOD_MIN {
-                lod_out as u32 - (lod_max - LOD_MIN)
-            } else {
-                0
-            };
+        let x_off = 3 * output_size * (lod_out as u32).saturating_sub(lod_max - LOD_MIN);
         let y_bottom = 4 * (cube_size - output_size);
         let y_off = height - y_bottom - 2 * output_size;
         blit_cube_faces_to_tile(
@@ -338,14 +331,14 @@ fn sample_atlas_pixel(pixels: &[u8], width: u32, height: u32, u: f32, v: f32) ->
     let tx = x - x0 as f32;
     let ty = y - y0 as f32;
     let mut out = [0.0f32; 3];
-    for c in 0..3usize {
+    for (c, channel) in out.iter_mut().enumerate() {
         let c00 = pixels[(y0 * w + x0) * 4 + c] as f32 / 255.0;
         let c10 = pixels[(y0 * w + x1) * 4 + c] as f32 / 255.0;
         let c01 = pixels[(y1 * w + x0) * 4 + c] as f32 / 255.0;
         let c11 = pixels[(y1 * w + x1) * 4 + c] as f32 / 255.0;
         let v0 = c00 * (1.0 - tx) + c10 * tx;
         let v1 = c01 * (1.0 - tx) + c11 * tx;
-        out[c] = v0 * (1.0 - ty) + v1 * ty;
+        *channel = v0 * (1.0 - ty) + v1 * ty;
     }
     out
 }
@@ -357,13 +350,7 @@ pub fn atlas_lod_origin(
     lod_max: u32,
 ) -> (u32, u32) {
     let height = 4 * cube_size;
-    let x_off = 3
-        * output_size
-        * if lod_out > lod_max - LOD_MIN {
-            lod_out - (lod_max - LOD_MIN)
-        } else {
-            0
-        };
+    let x_off = 3 * output_size * lod_out.saturating_sub(lod_max - LOD_MIN);
     let y_bottom = 4 * (cube_size - output_size);
     let y_off = height - y_bottom - 2 * output_size;
     (x_off, y_off)
@@ -383,7 +370,7 @@ fn sample_atlas_pixel_f32(pixels: &[f32], width: u32, height: u32, u: f32, v: f3
     let tx = x - x0 as f32;
     let ty = y - y0 as f32;
     let mut out = [0.0f32; 3];
-    for c in 0..3usize {
+    for (c, channel) in out.iter_mut().enumerate() {
         let off = |x: usize, y: usize| (y * w + x) * 4 + c;
         let c00 = pixels[off(x0, y0)];
         let c10 = pixels[off(x1, y0)];
@@ -391,7 +378,7 @@ fn sample_atlas_pixel_f32(pixels: &[f32], width: u32, height: u32, u: f32, v: f3
         let c11 = pixels[off(x1, y1)];
         let v0 = c00 * (1.0 - tx) + c10 * tx;
         let v1 = c01 * (1.0 - tx) + c11 * tx;
-        out[c] = v0 * (1.0 - ty) + v1 * ty;
+        *channel = v0 * (1.0 - ty) + v1 * ty;
     }
     out
 }

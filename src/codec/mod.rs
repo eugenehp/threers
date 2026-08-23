@@ -7,10 +7,11 @@
 //! caller owns I/O.
 //!
 //! - [`crate::codec::bitstream`] — MSB-first bit writer, Exp-Golomb, RBSP/emulation-prevention.
+//! - [`crate::codec::h264`] — from-scratch H.264 / AVC encoder (see its module docs).
 //! - [`crate::codec::hevc`] — from-scratch HEVC / H.265 encoder (see its module docs).
 //! - [`crate::codec::vp9`] — from-scratch VP9 encoder (intra + inter; alpha via WebM).
 //! - [`crate::codec::mp4`] / [`crate::codec::webm`] — ISOBMFF and Matroska/WebM container
-//!   muxers (VP9 alpha via `BlockAdditional`).
+//!   muxers (H.264 `avc1`, HEVC `hvc1`, VP9 alpha via `BlockAdditional`).
 //! - [`crate::codec::apng`] / [`crate::codec::gif`] — animated PNG and GIF89a encode
 //!   (GIF also decodes).
 
@@ -18,6 +19,7 @@ pub mod animation;
 pub mod apng;
 pub mod bitstream;
 pub mod gif;
+pub mod h264;
 pub mod hevc;
 pub mod mp4;
 pub mod vp9;

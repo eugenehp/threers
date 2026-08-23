@@ -2,7 +2,7 @@ use super::BufferAttribute;
 use crate::math::{Box3, Sphere, Vector3};
 use std::collections::HashMap;
 
-#[cfg(feature = "mesh-bvh")]
+#[cfg(any(feature = "mesh-bvh", feature = "brep"))]
 use std::sync::Arc;
 
 /// A collection of named vertex attributes plus an optional index buffer.
@@ -16,9 +16,31 @@ pub struct BufferGeometry {
     pub bounding_sphere: Option<Sphere>,
     /// Bumped whenever attributes/index change so the renderer re-uploads GPU buffers.
     pub geometry_version: u32,
+    /// Give this geometry's GPU vertex buffer `STORAGE` usage, so a compute pass
+    /// can write it directly.
+    ///
+    /// The point is vertex animation that never round-trips through the CPU:
+    /// upload the rest pose once, then let a compute shader rewrite positions and
+    /// normals in place each frame. Nothing bumps
+    /// [`geometry_version`](Self::geometry_version), so the renderer never
+    /// re-uploads and the CPU-side attribute arrays simply stop being the truth.
+    ///
+    /// Pair it with [`Renderer::vertex_buffer`](crate::Renderer::vertex_buffer).
+    /// Off by default: `STORAGE` is not free on every backend, and only a
+    /// geometry that is actually driven this way should ask for it.
+    pub gpu_writable: bool,
     /// Optional BVH acceleration structure (three-mesh-bvh `boundsTree`).
     #[cfg(feature = "mesh-bvh")]
     pub bounds_tree: Option<Arc<crate::mesh_bvh::MeshBvh>>,
+    /// Optional analytic surface provenance: which surface each triangle was
+    /// sampled from. See [`crate::brep`].
+    ///
+    /// Always optional and always droppable. It is invalidated by any write to
+    /// the positions or the index, for the same reason `bounds_tree` is: a
+    /// sidecar describing geometry that has since changed is worse than no
+    /// sidecar, because consumers trust it.
+    #[cfg(feature = "brep")]
+    pub surfaces: Option<Arc<crate::brep::SurfaceTable>>,
 }
 
 /// A process-wide monotonic version stamp. The renderer's GPU-buffer cache is
@@ -52,6 +74,10 @@ impl BufferGeometry {
         {
             self.bounds_tree = None;
         }
+        #[cfg(feature = "brep")]
+        {
+            self.surfaces = None;
+        }
         self
     }
 
@@ -66,7 +92,34 @@ impl BufferGeometry {
         {
             self.bounds_tree = None;
         }
+        #[cfg(feature = "brep")]
+        {
+            self.surfaces = None;
+        }
         self
+    }
+
+    /// Attach analytic surface provenance.
+    ///
+    /// Rejected — leaving the geometry untagged — unless the table describes
+    /// exactly this triangle count. Silently accepting a mismatched table would
+    /// hand every consumer an out-of-range index.
+    ///
+    /// Call this *after* the last `set_attribute` / `set_index`, both of which
+    /// clear it.
+    #[cfg(feature = "brep")]
+    pub fn set_surfaces(&mut self, table: crate::brep::SurfaceTable) -> &mut Self {
+        if table.matches(self) {
+            self.surfaces = Some(Arc::new(table));
+        }
+        self
+    }
+
+    /// The provenance table, if one is attached and still describes this
+    /// geometry.
+    #[cfg(feature = "brep")]
+    pub fn surface_table(&self) -> Option<&crate::brep::SurfaceTable> {
+        self.surfaces.as_deref().filter(|t| t.matches(self))
     }
 
     /// Total draw count: index count if indexed, otherwise position count.

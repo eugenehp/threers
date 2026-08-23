@@ -108,7 +108,24 @@ impl Matrix4 {
         Self { elements: r }
     }
 
-    /// Right-handed perspective projection matching three.js's `makePerspective`.
+    /// Right-handed perspective projection into the **WebGPU** clip space —
+    /// depth 0 at the near plane, 1 at the far plane — matching three.js's
+    /// `makePerspective` under `WebGPUCoordinateSystem`.
+    ///
+    /// This used to emit the OpenGL form, `(far + near) * nf` and
+    /// `2 * far * near * nf`, which puts the near plane at z = -1. Nothing else
+    /// in the crate agreed with it: [`orthographic`](Self::orthographic)
+    /// directly below already produces 0..1, wgpu clips at 0..1, and
+    /// `shadow_factor` in the shader rejects `ndc.z < 0.0` outright.
+    ///
+    /// Two things followed, both silent. The real near plane was not `near` but
+    /// the harmonic mean `2 * near * far / (near + far)`, and everything closer
+    /// than that was clipped — invisible at the usual `near = 0.1`, where the
+    /// true plane lands at 0.2, and very visible the moment you fit the depth
+    /// range to a scene to buy back precision: near 324 / far 952 clips at 483
+    /// and takes the front off the subject. And half the depth buffer went
+    /// unused, which is precisely the precision such a fit is trying to win.
+    /// Spot lights lost the near half of their shadows for the same reason.
     pub fn perspective(fov_y_rad: f32, aspect: f32, near: f32, far: f32) -> Self {
         let f = 1.0 / (fov_y_rad / 2.0).tan();
         let nf = 1.0 / (near - far);
@@ -124,14 +141,31 @@ impl Matrix4 {
                 0.0,
                 0.0,
                 0.0,
-                (far + near) * nf,
+                far * nf,
                 -1.0,
                 0.0,
                 0.0,
-                2.0 * far * near * nf,
+                far * near * nf,
                 0.0,
             ],
         }
+    }
+
+    /// Perspective with lens shift (Blender/three.js film offset style).
+    /// `shift_x` / `shift_y` are fractions of the sensor (±0.5 ≈ half-frame).
+    pub fn perspective_with_shift(
+        fov_y_rad: f32,
+        aspect: f32,
+        near: f32,
+        far: f32,
+        shift_x: f32,
+        shift_y: f32,
+    ) -> Self {
+        let mut m = Self::perspective(fov_y_rad, aspect, near, far);
+        // Skew the projection by offsetting the frustum centre.
+        m.elements[8] += shift_x * 2.0;
+        m.elements[9] += shift_y * 2.0;
+        m
     }
 
     pub fn orthographic(left: f32, right: f32, top: f32, bottom: f32, near: f32, far: f32) -> Self {
@@ -150,7 +184,7 @@ impl Matrix4 {
                 0.0,
                 0.0,
                 0.0,
-                -1.0 * p,
+                -p,
                 0.0,
                 -(right + left) * w,
                 -(top + bottom) * h,
@@ -373,9 +407,37 @@ impl Matrix4 {
     }
 
     /// Build a view matrix looking from `eye` at `target`, with `up` as the up axis.
+    /// A view matrix looking from `eye` at `target`.
+    ///
+    /// When `up` is parallel to the view direction there is no unique answer,
+    /// and the cross product that normally gives the right-hand axis is zero.
+    /// `Vector3::normalize` returns zero rather than NaN for that, so the
+    /// result used to be a matrix whose x and y basis vectors were both zero —
+    /// rank one, projecting the entire scene onto a line, which renders as a
+    /// black frame. It is reachable by ordinary means: orbit straight over a
+    /// planet's pole with the default `up` of +Y and the camera passes exactly
+    /// through it.
+    ///
+    /// Any perpendicular will do in that case, so pick the world axis furthest
+    /// from the view direction and build from that. `OrbitControls` separately
+    /// keeps its polar angle off the poles, which is what stops the roll
+    /// flipping as you cross one; this is the backstop for everything else.
     pub fn look_at(eye: Vector3, target: Vector3, up: Vector3) -> Self {
-        let z = (eye - target).normalize();
-        let x = up.cross(z).normalize();
+        let mut z = (eye - target).normalize();
+        if z.length_sq() < 1e-12 {
+            // Degenerate the other way: eye and target coincide.
+            z = Vector3::new(0.0, 0.0, 1.0);
+        }
+        let mut x = up.cross(z);
+        if x.length_sq() < 1e-12 {
+            let alt = if z.x.abs() < 0.9 {
+                Vector3::new(1.0, 0.0, 0.0)
+            } else {
+                Vector3::new(0.0, 1.0, 0.0)
+            };
+            x = alt.cross(z);
+        }
+        let x = x.normalize();
         let y = z.cross(x);
         let mut m = Self::identity();
         m.elements[0] = x.x;
@@ -411,5 +473,75 @@ mod tests {
         assert!((inv.elements[12] + 2.0).abs() < 1e-5);
         assert!((inv.elements[13] + 3.0).abs() < 1e-5);
         assert!((inv.elements[14] + 4.0).abs() < 1e-5);
+    }
+}
+
+#[cfg(test)]
+mod clip_space {
+    use super::Matrix4;
+
+    /// Project a view-space point and return NDC z.
+    fn ndc_z(m: &Matrix4, z_view: f32) -> f32 {
+        let e = &m.elements;
+        // column-major: clip = M * (0, 0, z, 1)
+        let zc = e[8] * 0.0 + e[9] * 0.0 + e[10] * z_view + e[14];
+        let wc = e[11] * z_view + e[15];
+        zc / wc
+    }
+
+    // THE CRATE PROJECTS INTO WEBGPU CLIP SPACE: depth 0 at the near plane, 1 at
+    // the far. `perspective` used to emit the OpenGL form (-1 at near) while
+    // `orthographic` beside it emitted 0..1 and every consumer assumed 0..1 —
+    // wgpu clips there, and the shader's shadow lookup rejects ndc.z < 0. The
+    // visible near plane was therefore the harmonic mean 2nf/(n+f) rather than
+    // n, and half the depth buffer went unaddressed. These pin the convention.
+
+    #[test]
+    fn perspective_puts_the_near_plane_at_zero() {
+        let m = Matrix4::perspective(1.0, 1.0, 0.5, 100.0);
+        assert!(ndc_z(&m, -0.5).abs() < 1e-5, "{}", ndc_z(&m, -0.5));
+    }
+
+    #[test]
+    fn perspective_puts_the_far_plane_at_one() {
+        let m = Matrix4::perspective(1.0, 1.0, 0.5, 100.0);
+        assert!(
+            (ndc_z(&m, -100.0) - 1.0).abs() < 1e-5,
+            "{}",
+            ndc_z(&m, -100.0)
+        );
+    }
+
+    #[test]
+    fn nothing_visible_is_clipped_between_near_and_far() {
+        // The bug in one assertion: at n=324, f=952 the OpenGL form put the real
+        // clip plane at 2nf/(n+f) = 483, so a subject starting at 339 lost its
+        // front half.
+        let m = Matrix4::perspective(0.6, 1.78, 324.0, 952.0);
+        for d in [324.0_f32, 340.0, 483.0, 700.0, 952.0] {
+            let z = ndc_z(&m, -d);
+            assert!((-1e-5..=1.0 + 1e-5).contains(&z), "depth {d} -> ndc {z}");
+        }
+    }
+
+    #[test]
+    fn orthographic_agrees_with_perspective_about_the_convention() {
+        let m = Matrix4::orthographic(-1.0, 1.0, 1.0, -1.0, 0.5, 100.0);
+        let e = &m.elements;
+        let z_at = |zv: f32| e[10] * zv + e[14];
+        assert!(z_at(-0.5).abs() < 1e-5);
+        assert!((z_at(-100.0) - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn depth_is_monotonic_with_distance() {
+        let m = Matrix4::perspective(1.0, 1.0, 1.0, 1000.0);
+        let (mut prev, mut d) = (-1.0, 1.0_f32);
+        while d <= 1000.0 {
+            let z = ndc_z(&m, -d);
+            assert!(z > prev, "not monotonic at {d}");
+            prev = z;
+            d *= 1.5;
+        }
     }
 }

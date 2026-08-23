@@ -1,0 +1,19 @@
+[package]
+name = "threers-robot-arm"
+version = "0.0.1"
+edition = "2021"
+authors = ["Eugene Hauptmann"]
+description = "A four-axis pick-and-place cell run two ways — kinematic and servo-driven — and sized from its own inverse dynamics"
+license = "MIT"
+repository = "https://github.com/eugenehp/threers"
+# A demo, not a library. See docs/releasing.md.
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+threers-physics = { path = "../threers-physics", features = ["mechanism"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"

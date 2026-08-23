@@ -20,7 +20,10 @@ fn ffmpeg() -> bool {
 }
 
 fn tmp(name: &str) -> std::path::PathBuf {
-    let n = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let n = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
     std::env::temp_dir().join(format!("threers_c_{}_{n}_{name}", std::process::id()))
 }
 
@@ -69,7 +72,10 @@ fn check_frame(w: u32, h: u32, frame: Yuv420Frame, residual: bool) {
 
     let raw = (w * h + 2 * (w / 2) * (h / 2)) as usize;
     let ratio = raw as f64 / au.len() as f64;
-    eprintln!("compressed {w}x{h} (residual={residual}): {} bytes vs {raw} raw ({ratio:.1}x smaller)", au.len());
+    eprintln!(
+        "compressed {w}x{h} (residual={residual}): {} bytes vs {raw} raw ({ratio:.1}x smaller)",
+        au.len()
+    );
     assert!(au.len() < raw, "must be smaller than raw at {w}x{h}");
 
     if !ffmpeg() {
@@ -80,7 +86,15 @@ fn check_frame(w: u32, h: u32, frame: Yuv420Frame, residual: bool) {
     let out = tmp("out.yuv");
     std::fs::write(&in265, &au).unwrap();
     let ok = Command::new("ffmpeg")
-        .args(["-y", "-hide_banner", "-loglevel", "error", "-f", "hevc", "-i"])
+        .args([
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "hevc",
+            "-i",
+        ])
         .arg(&in265)
         .args(["-f", "rawvideo", "-pix_fmt", "yuv420p"])
         .arg(&out)
@@ -108,7 +122,10 @@ fn check_frame(w: u32, h: u32, frame: Yuv420Frame, residual: bool) {
     }
     assert_eq!(decoded.len(), expected.len(), "plane size {w}x{h}");
     if let Some(pos) = decoded.iter().zip(&expected).position(|(a, b)| a != b) {
-        panic!("decoder != reconstruction at byte {pos}: {} != {} ({w}x{h})", decoded[pos], expected[pos]);
+        panic!(
+            "decoder != reconstruction at byte {pos}: {} != {} ({w}x{h})",
+            decoded[pos], expected[pos]
+        );
     }
     eprintln!("conformant: {w}x{h} decoder == reconstruction");
 }

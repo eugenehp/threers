@@ -9,12 +9,14 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use threers::codec::hevc::Yuv420Frame;
-use threers::codec::webm::{encode_gray_webm, encode_webm, mux_webm, WebmCodec, WebmFrame, WebmParams};
 use threers::codec::vp9::{
     encode_inter_frame, encode_inter_frame_altref, encode_inter_frame_compound,
     encode_inter_frame_golden, encode_inter_frame_refresh, encode_inter_newmv_residual,
     encode_inter_newmv_skip, encode_inter_residual, encode_inter_zeromv_skip, encode_intra_frame,
     encode_intra_gray,
+};
+use threers::codec::webm::{
+    encode_gray_webm, encode_webm, mux_webm, WebmCodec, WebmFrame, WebmParams,
 };
 
 fn ffmpeg_ok() -> bool {
@@ -38,7 +40,10 @@ fn has_vp9_encoder() -> bool {
 fn tmp(name: &str) -> std::path::PathBuf {
     use std::sync::atomic::{AtomicU64, Ordering};
     static N: AtomicU64 = AtomicU64::new(0);
-    let n = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let n = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
     let seq = N.fetch_add(1, Ordering::Relaxed);
     std::env::temp_dir().join(format!(
         "threers_webm_{}_{n}_{seq}_{name}",
@@ -120,8 +125,20 @@ fn webm_muxes_vp9_that_ffmpeg_decodes() {
     let ivf = tmp("src.ivf");
     let ok = Command::new("ffmpeg")
         .args([
-            "-y", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
-            "testsrc=size=64x48:rate=3:duration=1", "-c:v", "libvpx-vp9", "-g", "1", "-f", "ivf",
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=64x48:rate=3:duration=1",
+            "-c:v",
+            "libvpx-vp9",
+            "-g",
+            "1",
+            "-f",
+            "ivf",
         ])
         .arg(&ivf)
         .status()
@@ -131,7 +148,11 @@ fn webm_muxes_vp9_that_ffmpeg_decodes() {
 
     let ivf_bytes = std::fs::read(&ivf).unwrap();
     let (w, h, frames) = parse_ivf(&ivf_bytes);
-    assert!(frames.len() >= 2, "expected multiple frames, got {}", frames.len());
+    assert!(
+        frames.len() >= 2,
+        "expected multiple frames, got {}",
+        frames.len()
+    );
     eprintln!("re-muxing {} VP9 frames at {w}x{h}", frames.len());
 
     // 2. Re-container the identical VP9 frames with our muxer.
@@ -168,7 +189,10 @@ fn webm_muxes_vp9_that_ffmpeg_decodes() {
         reference.len(),
         "decoded byte count differs (container dropped/duplicated frames?)"
     );
-    assert!(ours == reference, "our .webm decoded to different pixels than the source VP9");
+    assert!(
+        ours == reference,
+        "our .webm decoded to different pixels than the source VP9"
+    );
     eprintln!("conformant: our WebM container decodes identically to the source VP9");
 }
 
@@ -250,9 +274,15 @@ fn native_vp9_keyframe_ivf_ffmpeg_decodes_mid_gray() {
     let frame_bytes = (w * h + 2 * (w / 2) * (h / 2)) as usize;
     assert_eq!(decoded.len(), frame_bytes);
     if let Some(pos) = decoded.iter().position(|&b| b != 128) {
-        panic!("expected solid mid-gray (128), got {} at byte {pos}", decoded[pos]);
+        panic!(
+            "expected solid mid-gray (128), got {} at byte {pos}",
+            decoded[pos]
+        );
     }
-    eprintln!("conformant: native VP9 keyframe IVF decodes to mid-gray ({} bytes)", frame.len());
+    eprintln!(
+        "conformant: native VP9 keyframe IVF decodes to mid-gray ({} bytes)",
+        frame.len()
+    );
 }
 
 /// Intra with 4×4 DCT residual: ffmpeg must decode to exactly our
@@ -329,7 +359,10 @@ fn assert_residual_matches_recon(w: u32, h: u32) {
     let from_webm = decode_to_yuv(&webm_path)
         .unwrap_or_else(|| panic!("ffmpeg could not decode residual .webm {w}x{h}"));
     let _ = std::fs::remove_file(&webm_path);
-    assert_eq!(from_webm, expected, "{w}x{h} WebM-muxed residual differs from IVF");
+    assert_eq!(
+        from_webm, expected,
+        "{w}x{h} WebM-muxed residual differs from IVF"
+    );
 
     eprintln!(
         "conformant: VP9 residual {w}x{h} matches recon ({} bytes bitstream, {} bytes .webm)",
@@ -778,7 +811,10 @@ fn assert_inter_residual_matches_recon(w: u32, h: u32) {
     let from_webm = decode_to_yuv_passthrough(&webm_path)
         .unwrap_or_else(|| panic!("ffmpeg could not decode inter residual .webm {w}x{h}"));
     let _ = std::fs::remove_file(&webm_path);
-    assert_eq!(from_webm, decoded, "{w}x{h} WebM inter residual differs from IVF");
+    assert_eq!(
+        from_webm, decoded,
+        "{w}x{h} WebM inter residual differs from IVF"
+    );
 
     eprintln!(
         "conformant: VP9 inter residual {w}x{h} (key {} + P {} bytes)",
@@ -815,7 +851,8 @@ fn assert_inter_newmv_residual_matches_recon(w: u32, h: u32, mv_row: i16, mv_col
     let mut key_src = Yuv420Frame::new(w, h);
     for j in 0..h {
         for i in 0..w {
-            key_src.y[(j * w + i) as usize] = ((i.wrapping_mul(3) + j.wrapping_mul(5)) & 0xFF) as u8;
+            key_src.y[(j * w + i) as usize] =
+                ((i.wrapping_mul(3) + j.wrapping_mul(5)) & 0xFF) as u8;
         }
     }
     let (cw, ch) = (w / 2, h / 2);
@@ -905,7 +942,10 @@ fn assert_inter_newmv_residual_matches_recon(w: u32, h: u32, mv_row: i16, mv_col
     let from_webm = decode_to_yuv_passthrough(&webm_path)
         .unwrap_or_else(|| panic!("ffmpeg could not decode NEWMV residual .webm {w}x{h}"));
     let _ = std::fs::remove_file(&webm_path);
-    assert_eq!(from_webm, decoded, "{w}x{h} WebM NEWMV residual differs from IVF");
+    assert_eq!(
+        from_webm, decoded,
+        "{w}x{h} WebM NEWMV residual differs from IVF"
+    );
 
     eprintln!(
         "conformant: VP9 inter NEWMV residual {w}x{h} mv=({mv_row},{mv_col}) (key {} + P {} bytes)",
@@ -933,7 +973,8 @@ fn assert_inter_me_matches_recon(w: u32, h: u32) {
     let mut key_src = Yuv420Frame::new(w, h);
     for j in 0..h {
         for i in 0..w {
-            key_src.y[(j * w + i) as usize] = ((i.wrapping_mul(3) + j.wrapping_mul(5)) & 0xFF) as u8;
+            key_src.y[(j * w + i) as usize] =
+                ((i.wrapping_mul(3) + j.wrapping_mul(5)) & 0xFF) as u8;
         }
     }
     let (cw, ch) = (w / 2, h / 2);
@@ -1055,7 +1096,8 @@ fn assert_inter_golden_matches_recon(w: u32, h: u32) {
     let mut key_src = Yuv420Frame::new(w, h);
     for j in 0..h {
         for i in 0..w {
-            key_src.y[(j * w + i) as usize] = ((i.wrapping_mul(3) + j.wrapping_mul(5)) & 0xFF) as u8;
+            key_src.y[(j * w + i) as usize] =
+                ((i.wrapping_mul(3) + j.wrapping_mul(5)) & 0xFF) as u8;
         }
     }
     let (cw, ch) = (w / 2, h / 2);
@@ -1188,7 +1230,8 @@ fn assert_inter_altref_matches_recon(w: u32, h: u32) {
     let mut key_src = Yuv420Frame::new(w, h);
     for j in 0..h {
         for i in 0..w {
-            key_src.y[(j * w + i) as usize] = ((i.wrapping_mul(3) + j.wrapping_mul(5)) & 0xFF) as u8;
+            key_src.y[(j * w + i) as usize] =
+                ((i.wrapping_mul(3) + j.wrapping_mul(5)) & 0xFF) as u8;
         }
     }
     let (cw, ch) = (w / 2, h / 2);
@@ -1409,7 +1452,9 @@ fn assert_inter_compound_matches_recon(w: u32, h: u32) {
 
 #[test]
 fn native_vp9_inter_newmv_neg_col_matches_recon() {
-    if !ffmpeg_ok() { return; }
+    if !ffmpeg_ok() {
+        return;
+    }
     for &(w, h) in &[(64u32, 64), (80, 48)] {
         assert_inter_newmv_matches_recon(w, h, 0, -16);
     }

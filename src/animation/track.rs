@@ -12,6 +12,8 @@ pub enum TrackTarget {
     /// Mesh material color. No-op if the targeted object isn't a Mesh or its
     /// material doesn't carry a base color.
     Color,
+    /// Morph target weight at `index`.
+    MorphWeight { index: usize },
     /// Free scalar — caller decides what to do with it.
     Scalar,
 }

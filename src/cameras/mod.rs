@@ -4,7 +4,7 @@ mod orthographic;
 mod perspective;
 
 pub use orthographic::OrthographicCamera;
-pub use perspective::PerspectiveCamera;
+pub use perspective::{PerspectiveCamera, ProjectionKind, SensorFit};
 
 use crate::core::Layers;
 use crate::math::{Matrix4, Vector3};

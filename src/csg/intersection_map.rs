@@ -12,8 +12,8 @@ impl IntersectionMap {
     }
 
     pub fn add(&mut self, id: usize, intersection_id: usize) {
-        if !self.intersection_set.contains_key(&id) {
-            self.intersection_set.insert(id, Vec::new());
+        if let std::collections::hash_map::Entry::Vacant(e) = self.intersection_set.entry(id) {
+            e.insert(Vec::new());
             self.ids.push(id);
         }
         self.intersection_set

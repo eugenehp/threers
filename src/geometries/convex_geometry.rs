@@ -165,7 +165,7 @@ fn face_normal(points: &[Vector3], face: &[usize; 3]) -> Vector3 {
     (p1 - p0).cross(p2 - p0).normalize()
 }
 
-fn ensure_outward(points: &[Vector3], faces: &mut Vec<[usize; 3]>) {
+fn ensure_outward(points: &[Vector3], faces: &mut [[usize; 3]]) {
     let centroid = {
         let mut sum = Vector3::ZERO;
         let mut count = 0;

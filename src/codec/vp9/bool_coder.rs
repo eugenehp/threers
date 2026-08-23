@@ -72,7 +72,7 @@ impl BoolEncoder {
         if self.bottom & 0x8000_0000 != 0 {
             self.carry();
         }
-        self.bottom = (self.bottom << 1) & 0xFFFF_FFFF;
+        self.bottom <<= 1;
         self.bit_count -= 1;
         if self.bit_count == 0 {
             self.out.push((self.bottom >> 24) as u8);

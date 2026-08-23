@@ -7,7 +7,9 @@
 //! 2D-arrangement helpers directly, while exposing only the format entry points
 //! (`pub(super)`) back to the evaluator.
 
-use super::{arrange_extract, chain_segments, pip_evenodd, polyhedron, ring_edges_into, Shape, Solid};
+use super::{
+    arrange_extract, chain_segments, pip_evenodd, polyhedron, ring_edges_into, Shape, Solid,
+};
 
 /// Parse a Geomview **OFF** mesh (`import("…off")`).
 pub(super) fn parse_off(src: &str) -> Result<Solid, String> {
@@ -17,17 +19,25 @@ pub(super) fn parse_off(src: &str) -> Result<Solid, String> {
         _ => return Err("import: not an OFF file (missing 'OFF' header)".into()),
     }
     let next_usize = |t: &mut std::str::SplitWhitespace| -> Result<usize, String> {
-        t.next().and_then(|s| s.parse().ok()).ok_or_else(|| "OFF: malformed counts".into())
+        t.next()
+            .and_then(|s| s.parse().ok())
+            .ok_or_else(|| "OFF: malformed counts".into())
     };
     let next_f32 = |t: &mut std::str::SplitWhitespace| -> Result<f32, String> {
-        t.next().and_then(|s| s.parse().ok()).ok_or_else(|| "OFF: malformed vertex".into())
+        t.next()
+            .and_then(|s| s.parse().ok())
+            .ok_or_else(|| "OFF: malformed vertex".into())
     };
     let nv = next_usize(&mut toks)?;
     let nf = next_usize(&mut toks)?;
     let _ne = toks.next(); // edge count (unused)
     let mut verts = Vec::with_capacity(nv);
     for _ in 0..nv {
-        verts.push([next_f32(&mut toks)?, next_f32(&mut toks)?, next_f32(&mut toks)?]);
+        verts.push([
+            next_f32(&mut toks)?,
+            next_f32(&mut toks)?,
+            next_f32(&mut toks)?,
+        ]);
     }
     let mut faces: Vec<Vec<u32>> = Vec::with_capacity(nf);
     for _ in 0..nf {
@@ -48,10 +58,16 @@ pub(super) fn parse_off(src: &str) -> Result<Solid, String> {
 /// local header defers them to a data descriptor), supporting the two methods a
 /// 3MF ever uses: store (0) and raw DEFLATE (8). Any malformed field → `None`.
 fn zip_read_entry(z: &[u8], suffix: &str) -> Option<Vec<u8>> {
-    let u16 = |o: usize| -> Option<usize> { Some(u16::from_le_bytes(z.get(o..o + 2)?.try_into().ok()?) as usize) };
-    let u32 = |o: usize| -> Option<usize> { Some(u32::from_le_bytes(z.get(o..o + 4)?.try_into().ok()?) as usize) };
+    let u16 = |o: usize| -> Option<usize> {
+        Some(u16::from_le_bytes(z.get(o..o + 2)?.try_into().ok()?) as usize)
+    };
+    let u32 = |o: usize| -> Option<usize> {
+        Some(u32::from_le_bytes(z.get(o..o + 4)?.try_into().ok()?) as usize)
+    };
     // Locate the End Of Central Directory record (scan back for its signature).
-    let eocd = (0..z.len().saturating_sub(21)).rev().find(|&i| z[i..].starts_with(b"PK\x05\x06"))?;
+    let eocd = (0..z.len().saturating_sub(21))
+        .rev()
+        .find(|&i| z[i..].starts_with(b"PK\x05\x06"))?;
     let count = u16(eocd + 10)?;
     let mut p = u32(eocd + 16)?; // start of central directory
     for _ in 0..count {
@@ -93,7 +109,10 @@ fn xml_tags<'a>(xml: &'a str, elem: &str) -> Vec<&'a str> {
     let mut rest = xml;
     while let Some(i) = rest.find(&open) {
         let after = &rest[i + open.len()..];
-        let delim = after.chars().next().is_some_and(|c| c.is_whitespace() || c == '>' || c == '/');
+        let delim = after
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_whitespace() || c == '>' || c == '/');
         match after.find('>') {
             Some(end) => {
                 if delim {
@@ -145,7 +164,10 @@ fn xml_blocks<'a>(xml: &'a str, elem: &str) -> Vec<&'a str> {
     let mut rest = xml;
     while let Some(i) = rest.find(&open) {
         let after = &rest[i + open.len()..];
-        let delim = after.chars().next().is_some_and(|c| c.is_whitespace() || c == '>' || c == '/');
+        let delim = after
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_whitespace() || c == '>' || c == '/');
         let Some(gt) = after.find('>') else { break };
         let content = &after[gt + 1..];
         match (delim, content.find(&close)) {
@@ -169,11 +191,19 @@ pub(super) fn parse_3mf(bytes: &[u8]) -> Option<Solid> {
     for mesh in xml_blocks(xml, "mesh") {
         let base = verts.len() as u32;
         for t in xml_tags(mesh, "vertex") {
-            verts.push([xml_attr(t, "x")? as f32, xml_attr(t, "y")? as f32, xml_attr(t, "z")? as f32]);
+            verts.push([
+                xml_attr(t, "x")? as f32,
+                xml_attr(t, "y")? as f32,
+                xml_attr(t, "z")? as f32,
+            ]);
         }
         let n = verts.len() as u32 - base;
         for t in xml_tags(mesh, "triangle") {
-            let (a, b, c) = (xml_attr(t, "v1")? as u32, xml_attr(t, "v2")? as u32, xml_attr(t, "v3")? as u32);
+            let (a, b, c) = (
+                xml_attr(t, "v1")? as u32,
+                xml_attr(t, "v2")? as u32,
+                xml_attr(t, "v3")? as u32,
+            );
             if a < n && b < n && c < n {
                 faces.push(vec![base + a, base + b, base + c]);
             }
@@ -194,11 +224,19 @@ pub(super) fn parse_amf(src: &str) -> Option<Solid> {
             // Height/position lives in <coordinates>; a sibling <normal> also has
             // <x>/<y>/<z>, so read from the coordinates sub-block specifically.
             let coords = xml_blocks(v, "coordinates").into_iter().next().unwrap_or(v);
-            verts.push([xml_text(coords, "x")? as f32, xml_text(coords, "y")? as f32, xml_text(coords, "z")? as f32]);
+            verts.push([
+                xml_text(coords, "x")? as f32,
+                xml_text(coords, "y")? as f32,
+                xml_text(coords, "z")? as f32,
+            ]);
         }
         let n = verts.len() as u32 - base;
         for t in xml_blocks(mesh, "triangle") {
-            let (a, b, c) = (xml_text(t, "v1")? as u32, xml_text(t, "v2")? as u32, xml_text(t, "v3")? as u32);
+            let (a, b, c) = (
+                xml_text(t, "v1")? as u32,
+                xml_text(t, "v2")? as u32,
+                xml_text(t, "v3")? as u32,
+            );
             if a < n && b < n && c < n {
                 faces.push(vec![base + a, base + b, base + c]);
             }
@@ -279,9 +317,21 @@ pub(super) fn decode_png_luma(bytes: &[u8]) -> Option<Vec<Vec<f32>>> {
         let filt = raw[y * (stride + 1)];
         let src = &raw[y * (stride + 1) + 1..y * (stride + 1) + 1 + stride];
         for x in 0..stride {
-            let a = if x >= bpp { img[y * stride + x - bpp] as i32 } else { 0 };
-            let b = if y > 0 { img[(y - 1) * stride + x] as i32 } else { 0 };
-            let c = if x >= bpp && y > 0 { img[(y - 1) * stride + x - bpp] as i32 } else { 0 };
+            let a = if x >= bpp {
+                img[y * stride + x - bpp] as i32
+            } else {
+                0
+            };
+            let b = if y > 0 {
+                img[(y - 1) * stride + x] as i32
+            } else {
+                0
+            };
+            let c = if x >= bpp && y > 0 {
+                img[(y - 1) * stride + x - bpp] as i32
+            } else {
+                0
+            };
             let recon = match filt {
                 0 => src[x] as i32,
                 1 => src[x] as i32 + a,
@@ -295,7 +345,11 @@ pub(super) fn decode_png_luma(bytes: &[u8]) -> Option<Vec<Vec<f32>>> {
     }
     // Per-pixel luminance (16-bit samples → high byte).
     let sample = |px: &[u8], ch: usize| -> f32 {
-        if sample_bytes == 1 { px[ch] as f32 } else { px[ch * 2] as f32 }
+        if sample_bytes == 1 {
+            px[ch] as f32
+        } else {
+            px[ch * 2] as f32
+        }
     };
     let grid = (0..h)
         .map(|y| {
@@ -381,13 +435,21 @@ pub(super) fn parse_dxf(src: &str) -> Shape {
                 }
             }
             "LINE" => {
-                let g = |code: i32| body.iter().find(|(c, _)| *c == code).and_then(|(_, v)| f(v));
+                let g = |code: i32| {
+                    body.iter()
+                        .find(|(c, _)| *c == code)
+                        .and_then(|(_, v)| f(v))
+                };
                 if let (Some(x1), Some(y1), Some(x2), Some(y2)) = (g(10), g(20), g(11), g(21)) {
                     segs.push(([x1, y1], [x2, y2]));
                 }
             }
             "CIRCLE" => {
-                let g = |code: i32| body.iter().find(|(c, _)| *c == code).and_then(|(_, v)| f(v));
+                let g = |code: i32| {
+                    body.iter()
+                        .find(|(c, _)| *c == code)
+                        .and_then(|(_, v)| f(v))
+                };
                 if let (Some(cx), Some(cy), Some(r)) = (g(10), g(20), g(40)) {
                     let n = 32;
                     rings.push(
@@ -425,10 +487,15 @@ pub(super) fn parse_svg(src: &str) -> Shape {
         Some(rest[..end].to_string())
     };
     let coords = |s: &str| -> Vec<f32> {
-        s.split(|c: char| c == ',' || c.is_whitespace()).filter_map(num).collect()
+        s.split(|c: char| c == ',' || c.is_whitespace())
+            .filter_map(num)
+            .collect()
     };
     for tag in src.split('<') {
-        let name = tag.split(|c: char| c.is_whitespace() || c == '>').next().unwrap_or("");
+        let name = tag
+            .split(|c: char| c.is_whitespace() || c == '>')
+            .next()
+            .unwrap_or("");
         match name {
             "rect" => {
                 if let (Some(x), Some(y), Some(w), Some(h)) = (
@@ -547,27 +614,59 @@ fn svg_path_rings(d: &str) -> Vec<Vec<[f32; 2]>> {
                 ring.push([px, -py]);
             }
             'C' => {
-                let c = [num(&toks, &mut ti), num(&toks, &mut ti), num(&toks, &mut ti),
-                         num(&toks, &mut ti), num(&toks, &mut ti), num(&toks, &mut ti)];
+                let c = [
+                    num(&toks, &mut ti),
+                    num(&toks, &mut ti),
+                    num(&toks, &mut ti),
+                    num(&toks, &mut ti),
+                    num(&toks, &mut ti),
+                    num(&toks, &mut ti),
+                ];
                 let (x0, y0) = (px, py);
-                let (c1x, c1y) = (if rel { x0 + c[0] } else { c[0] }, if rel { y0 + c[1] } else { c[1] });
-                let (c2x, c2y) = (if rel { x0 + c[2] } else { c[2] }, if rel { y0 + c[3] } else { c[3] });
-                let (ex, ey) = (if rel { x0 + c[4] } else { c[4] }, if rel { y0 + c[5] } else { c[5] });
+                let (c1x, c1y) = (
+                    if rel { x0 + c[0] } else { c[0] },
+                    if rel { y0 + c[1] } else { c[1] },
+                );
+                let (c2x, c2y) = (
+                    if rel { x0 + c[2] } else { c[2] },
+                    if rel { y0 + c[3] } else { c[3] },
+                );
+                let (ex, ey) = (
+                    if rel { x0 + c[4] } else { c[4] },
+                    if rel { y0 + c[5] } else { c[5] },
+                );
                 for s in 1..=12 {
                     let t = s as f32 / 12.0;
                     let mt = 1.0 - t;
-                    let bx = mt * mt * mt * x0 + 3.0 * mt * mt * t * c1x + 3.0 * mt * t * t * c2x + t * t * t * ex;
-                    let by = mt * mt * mt * y0 + 3.0 * mt * mt * t * c1y + 3.0 * mt * t * t * c2y + t * t * t * ey;
+                    let bx = mt * mt * mt * x0
+                        + 3.0 * mt * mt * t * c1x
+                        + 3.0 * mt * t * t * c2x
+                        + t * t * t * ex;
+                    let by = mt * mt * mt * y0
+                        + 3.0 * mt * mt * t * c1y
+                        + 3.0 * mt * t * t * c2y
+                        + t * t * t * ey;
                     ring.push([bx, -by]);
                 }
                 px = ex;
                 py = ey;
             }
             'Q' => {
-                let c = [num(&toks, &mut ti), num(&toks, &mut ti), num(&toks, &mut ti), num(&toks, &mut ti)];
+                let c = [
+                    num(&toks, &mut ti),
+                    num(&toks, &mut ti),
+                    num(&toks, &mut ti),
+                    num(&toks, &mut ti),
+                ];
                 let (x0, y0) = (px, py);
-                let (cx, cy) = (if rel { x0 + c[0] } else { c[0] }, if rel { y0 + c[1] } else { c[1] });
-                let (ex, ey) = (if rel { x0 + c[2] } else { c[2] }, if rel { y0 + c[3] } else { c[3] });
+                let (cx, cy) = (
+                    if rel { x0 + c[0] } else { c[0] },
+                    if rel { y0 + c[1] } else { c[1] },
+                );
+                let (ex, ey) = (
+                    if rel { x0 + c[2] } else { c[2] },
+                    if rel { y0 + c[3] } else { c[3] },
+                );
                 for s in 1..=10 {
                     let t = s as f32 / 10.0;
                     let mt = 1.0 - t;
@@ -602,7 +701,11 @@ pub(super) fn surface_dat(src: &str, center: bool) -> Result<Solid, String> {
         .lines()
         .map(|l| l.trim())
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
-        .map(|l| l.split_whitespace().filter_map(|s| s.parse::<f32>().ok()).collect())
+        .map(|l| {
+            l.split_whitespace()
+                .filter_map(|s| s.parse::<f32>().ok())
+                .collect()
+        })
         .filter(|r: &Vec<f32>| !r.is_empty())
         .collect();
     surface_grid(grid, center)

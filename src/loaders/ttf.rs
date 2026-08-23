@@ -19,6 +19,12 @@ pub struct TtfFont {
     pub units_per_em: u16,
     pub glyphs: Vec<TtfGlyph>,
     pub cmap: std::collections::HashMap<u32, u16>,
+    /// `hhea.ascender` — height above the baseline, in font units.
+    pub ascender: i16,
+    /// `hhea.descender` — depth below the baseline, in font units (negative).
+    pub descender: i16,
+    /// `hhea.lineGap` — extra leading between lines, in font units.
+    pub line_gap: i16,
 }
 
 pub struct TtfGlyph {
@@ -128,6 +134,12 @@ impl TtfFont {
 
         // hmtx advance widths.
         let (hhea_off, _) = *tables.get(b"hhea").ok_or(TtfError::UnsupportedFormat)?;
+        if hhea_off + 36 > bytes.len() {
+            return Err(TtfError::Truncated);
+        }
+        let ascender = i16::from_be_bytes([bytes[hhea_off + 4], bytes[hhea_off + 5]]);
+        let descender = i16::from_be_bytes([bytes[hhea_off + 6], bytes[hhea_off + 7]]);
+        let line_gap = i16::from_be_bytes([bytes[hhea_off + 8], bytes[hhea_off + 9]]);
         let n_h_metrics = u16::from_be_bytes([bytes[hhea_off + 34], bytes[hhea_off + 35]]) as usize;
         let (hmtx_off, _) = *tables.get(b"hmtx").ok_or(TtfError::UnsupportedFormat)?;
         let mut advance_widths = vec![0u16; n_glyphs];
@@ -149,6 +161,8 @@ impl TtfFont {
 
         // Parse glyph outlines.
         let mut glyphs: Vec<TtfGlyph> = Vec::with_capacity(n_glyphs);
+        // `g_idx` is a glyph id, passed to `glyph_offset` as well as indexing.
+        #[allow(clippy::needless_range_loop)]
         for g_idx in 0..n_glyphs {
             let off = glyph_offset(g_idx);
             let next_off = glyph_offset(g_idx + 1);
@@ -159,7 +173,7 @@ impl TtfFont {
                 });
                 continue;
             }
-            let shape = parse_glyph(bytes, off).unwrap_or_else(Shape::new);
+            let shape = parse_glyph(bytes, off).unwrap_or_default();
             glyphs.push(TtfGlyph {
                 shape,
                 advance_width: advance_widths[g_idx],
@@ -169,6 +183,9 @@ impl TtfFont {
             units_per_em,
             glyphs,
             cmap,
+            ascender,
+            descender,
+            line_gap,
         })
     }
 }

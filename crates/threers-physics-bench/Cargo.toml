@@ -1,0 +1,19 @@
+[package]
+name = "threers-physics-bench"
+version = "0.0.1"
+edition = "2021"
+authors = ["Eugene Hauptmann"]
+description = "Browser benchmark for threers-physics: six scenes with live step-time and body counts"
+license = "MIT"
+repository = "https://github.com/eugenehp/threers"
+# A demo, not a library. See docs/releasing.md.
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+threers-physics = { path = "../threers-physics" }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"

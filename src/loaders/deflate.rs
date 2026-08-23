@@ -87,15 +87,11 @@ fn inflate_dynamic(r: &mut BitReader, out: &mut Vec<u8>) -> Result<(), DeflateEr
             }
             17 => {
                 let n = r.read_bits(3)? as usize + 3;
-                for _ in 0..n {
-                    all_lens.push(0);
-                }
+                all_lens.resize(all_lens.len() + n, 0);
             }
             18 => {
                 let n = r.read_bits(7)? as usize + 11;
-                for _ in 0..n {
-                    all_lens.push(0);
-                }
+                all_lens.resize(all_lens.len() + n, 0);
             }
             _ => return Err(DeflateError::BadCode),
         }
@@ -206,77 +202,80 @@ fn inflate_block(
 }
 
 #[derive(Debug)]
+/// A canonical Huffman code, stored as the counts per length and the symbols in
+/// canonical order.
+///
+/// This replaces a table of `(length, code, symbol)` triples that
+/// `decode_symbol` searched linearly — for *every bit* of every symbol, so up to
+/// sixteen scans of nearly three hundred entries to decode one. Decoding an 8k
+/// EXR star map runs to tens of millions of symbols and took 59 seconds.
+///
+/// Canonical codes need no search at all. Within a length the codes are
+/// consecutive integers assigned to symbols in order, so the code's offset from
+/// the first code of its length *is* its offset into that length's block of
+/// symbols. That is a subtraction and an index.
 struct HuffmanTree {
-    /// Lookup table: bits[code_len-1][reversed_code] = symbol. Slow but simple.
-    codes: Vec<(u32, u8, u32)>, // (length, _, symbol) tuples sorted by (length, code)
+    /// How many codes have each length, indexed by length (0 unused).
+    counts: [u16; MAX_BITS + 1],
+    /// Symbols ordered by (length, code).
+    symbols: Vec<u16>,
 }
 
+const MAX_BITS: usize = 15;
+
 fn build_huffman(lengths: &[u8]) -> Result<HuffmanTree, DeflateError> {
-    let max_len = *lengths.iter().max().unwrap_or(&0) as usize;
-    if max_len == 0 {
-        return Ok(HuffmanTree { codes: Vec::new() });
-    }
-    let mut bl_count = vec![0u32; max_len + 1];
+    let mut counts = [0u16; MAX_BITS + 1];
     for &l in lengths {
+        if l as usize > MAX_BITS {
+            return Err(DeflateError::BadCode);
+        }
         if l > 0 {
-            bl_count[l as usize] += 1;
+            counts[l as usize] += 1;
         }
     }
-    let mut next_code = vec![0u32; max_len + 1];
-    let mut code = 0u32;
-    for bits in 1..=max_len {
-        code = (code + bl_count[bits - 1]) << 1;
-        next_code[bits] = code;
+    // Where each length's block of symbols starts.
+    let mut offsets = [0usize; MAX_BITS + 2];
+    for len in 1..=MAX_BITS {
+        offsets[len + 1] = offsets[len] + counts[len] as usize;
     }
-    let mut codes = Vec::new();
+    let mut symbols = vec![0u16; offsets[MAX_BITS + 1]];
+    let mut next = offsets;
     for (sym, &l) in lengths.iter().enumerate() {
         if l > 0 {
-            let l = l as usize;
-            codes.push((l as u32, 0u8, next_code[l]));
-            // Replace with (length, _, code, sym) actually; we'll restructure.
-            *codes.last_mut().unwrap() = (l as u32, 0, next_code[l]);
-            next_code[l] += 1;
-            let last = codes.len() - 1;
-            codes[last] = (l as u32, 0, ((next_code[l] - 1) << 16) | sym as u32);
+            symbols[next[l as usize]] = sym as u16;
+            next[l as usize] += 1;
         }
     }
-    Ok(HuffmanTree { codes })
+    Ok(HuffmanTree { counts, symbols })
 }
 
 fn decode_symbol(r: &mut BitReader, tree: &HuffmanTree) -> Result<u32, DeflateError> {
-    // Build a simple linear scan: read 1 bit at a time, accumulate, find matching code.
-    let mut code = 0u32;
-    let mut len = 0u32;
-    while len < 16 {
-        let bit = r.read_bits(1)?;
-        code = (code << 1) | bit as u32;
-        len += 1;
-        // Linear search through the codes table.
-        for &(l, _, packed) in &tree.codes {
-            if l == len && (packed >> 16) == code {
-                return Ok(packed & 0xffff);
-            }
+    // `code` is the bits read so far, `first` the first code of this length, and
+    // `index` where this length's symbols begin. If the code is inside the
+    // length's range, its distance from `first` indexes straight to the symbol.
+    let (mut code, mut first, mut index) = (0u32, 0u32, 0usize);
+    for len in 1..=MAX_BITS {
+        code |= r.read_bits(1)?;
+        let count = tree.counts[len] as u32;
+        if code < first + count {
+            return Ok(tree.symbols[index + (code - first) as usize] as u32);
         }
+        index += count as usize;
+        first = (first + count) << 1;
+        code <<= 1;
     }
     Err(DeflateError::BadCode)
 }
 
 fn fixed_huffman_tables() -> (HuffmanTree, HuffmanTree) {
+    // The fixed literal/length code lengths from RFC 1951 section 3.2.6.
     let mut lens = vec![0u8; 288];
-    for i in 0..144 {
-        lens[i] = 8;
-    }
-    for i in 144..256 {
-        lens[i] = 9;
-    }
-    for i in 256..280 {
-        lens[i] = 7;
-    }
-    for i in 280..288 {
-        lens[i] = 8;
-    }
+    lens[0..144].fill(8);
+    lens[144..256].fill(9);
+    lens[256..280].fill(7);
+    lens[280..288].fill(8);
     let lit = build_huffman(&lens).unwrap();
-    let dist = build_huffman(&vec![5u8; 30]).unwrap();
+    let dist = build_huffman(&[5u8; 30]).unwrap();
     (lit, dist)
 }
 

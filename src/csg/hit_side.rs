@@ -1,6 +1,6 @@
-use crate::math::{Matrix4, Ray, Vector3};
 #[cfg(test)]
 use crate::math::Triangle;
+use crate::math::{Matrix4, Ray, Vector3};
 use crate::mesh_bvh::MeshBvh;
 
 use super::constants::*;
@@ -49,8 +49,8 @@ fn get_hit_side_with_coplanar_check_ray(origin: Vector3, normal: Vector3, bvh: &
     let total = 3;
     let mut count = 0;
     let mut min_distance = f32::INFINITY;
-    for i in 0..total {
-        let mut direction = normal + jitters[i] * JITTER_EPSILON;
+    for (i, &jitter) in jitters.iter().take(total).enumerate() {
+        let mut direction = normal + jitter * JITTER_EPSILON;
         direction = -direction;
         let ray = Ray::new(origin, direction);
         let hit = bvh.raycast_first_with_side(&ray, 0.0, f32::INFINITY, DOUBLE_SIDE);
@@ -68,9 +68,7 @@ fn get_hit_side_with_coplanar_check_ray(origin: Vector3, normal: Vector3, bvh: &
                 };
             }
         }
-        if count as f32 / total as f32 > 0.5
-            || (i as i32 - count as i32 + 1) as f32 / total as f32 > 0.5
-        {
+        if count as f32 / total as f32 > 0.5 || (i as i32 - count + 1) as f32 / total as f32 > 0.5 {
             break;
         }
     }

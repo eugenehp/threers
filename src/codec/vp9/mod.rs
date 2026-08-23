@@ -50,6 +50,20 @@
 //! interpolation, tile columns, segmentation, and loop filter (ffmpeg-verified
 //! in `tests/webm.rs`).
 
+// These modules transcribe libvpx / libde265 reference code, and the point of
+// doing that is that a reader can lay the two side by side. So the shape of the
+// original survives here: loops that index by hand because the spec numbers its
+// arrays, argument lists as long as the C function's, branches left distinct
+// where the spec distinguishes cases that happen to compute the same thing, and
+// constants grouped the way the bitstream tables print them. Idiomatic Rust
+// would read better and would no longer be checkable against the reference.
+#![allow(
+    clippy::needless_range_loop,
+    clippy::too_many_arguments,
+    clippy::if_same_then_else,
+    clippy::unusual_byte_groupings
+)]
+
 pub mod bool_coder;
 pub mod encoder;
 pub mod inter;

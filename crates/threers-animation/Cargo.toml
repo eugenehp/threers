@@ -1,0 +1,22 @@
+[package]
+name = "threers-animation"
+version = "0.0.1"
+edition = "2021"
+authors = ["Eugene Hauptmann"]
+description = "Easing, tweens, springs, timelines, cinematic camera animation, and blending an animated pose into a simulated one, for threers"
+license = "MIT"
+repository = "https://github.com/eugenehp/threers"
+homepage = "https://github.com/eugenehp/threers"
+documentation = "https://docs.rs/threers-animation"
+# Not part of the 0.0.4 release; see docs/releasing.md.
+publish = false
+
+[features]
+default = []
+# `blend` — driving a simulated ragdoll from an animated pose and back. Optional
+# because easing, tweens, springs and timelines need no simulation at all.
+physics = ["dep:threers-physics"]
+
+[dependencies]
+threers = { path = "../.." }
+threers-physics = { path = "../threers-physics", optional = true }

@@ -62,6 +62,12 @@ pub struct CsgOperationGroup {
     previous_local_matrix: Matrix4,
 }
 
+impl Default for CsgOperationGroup {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CsgOperationGroup {
     pub fn new() -> Self {
         let mut previous_local_matrix = Matrix4::identity();
@@ -100,6 +106,11 @@ impl CsgOperationGroup {
     }
 }
 
+// Boxing the larger variant would save memory per node and cost an indirection
+// on every traversal — and this is a public enum, so it would be a breaking
+// change for callers that match on it. The tree is small; the trade is not
+// worth it.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub enum CsgNode {
     Operation(CsgOperation),

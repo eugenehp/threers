@@ -486,7 +486,7 @@ fn encode_inter_residual_mv(
     assert_eq!(src.width, last.width);
     assert_eq!(src.height, last.height);
     assert!(
-        src.width >= 8 && src.height >= 8 && src.width % 8 == 0 && src.height % 8 == 0,
+        src.width >= 8 && src.height >= 8 && src.width.is_multiple_of(8) && src.height.is_multiple_of(8),
         "VP9 inter residual needs dims that are multiples of 8 (got {}×{})",
         src.width,
         src.height
@@ -555,8 +555,8 @@ fn encode_inter_skip(reference: &Reconstruction, mv: Mv, newmv: bool) -> (Vec<u8
     assert!(
         reference.width >= 8
             && reference.height >= 8
-            && reference.width % 8 == 0
-            && reference.height % 8 == 0,
+            && reference.width.is_multiple_of(8)
+            && reference.height.is_multiple_of(8),
         "VP9 inter needs dims that are multiples of 8 (got {}×{})",
         reference.width,
         reference.height
@@ -734,7 +734,7 @@ impl<'a> InterEnc<'a> {
             }
             mi_row += 8;
         }
-        std::mem::replace(&mut self.bool, BoolEncoder::new()).finish()
+        std::mem::take(&mut self.bool).finish()
     }
 
     fn encode_partition(&mut self, mi_row: usize, mi_col: usize, bsize_px: u32) {
@@ -1166,7 +1166,7 @@ impl<'a> ResidualInterEnc<'a> {
             }
             mi_row += 8;
         }
-        std::mem::replace(&mut self.bool, BoolEncoder::new()).finish()
+        std::mem::take(&mut self.bool).finish()
     }
 
     fn mi_in_tile(&self, r: i32, c: i32) -> bool {
@@ -2514,11 +2514,10 @@ impl<'a> ResidualInterEnc<'a> {
                 if add(&mut list, &mut count, n.mv) {
                     return (list[0], list[1]);
                 }
-            } else if n.is_inter && n.second_ref == ref_frame {
-                if add(&mut list, &mut count, n.mv1) {
+            } else if n.is_inter && n.second_ref == ref_frame
+                && add(&mut list, &mut count, n.mv1) {
                     return (list[0], list[1]);
                 }
-            }
         }
         // `IF_DIFF_REF_FRAME_ADD_MV` — negate when sign biases differ.
         if different_ref_found && count < 2 {
@@ -2532,24 +2531,22 @@ impl<'a> ResidualInterEnc<'a> {
                 if !n.is_inter {
                     continue;
                 }
-                if n.ref_frame != ref_frame {
-                    if add(
+                if n.ref_frame != ref_frame
+                    && add(
                         &mut list,
                         &mut count,
                         scale_mv_for_ref(n.mv, n.ref_frame, ref_frame),
                     ) {
                         return (list[0], list[1]);
                     }
-                }
-                if n.second_ref > INTRA_FRAME && n.second_ref != ref_frame && n.mv1 != n.mv {
-                    if add(
+                if n.second_ref > INTRA_FRAME && n.second_ref != ref_frame && n.mv1 != n.mv
+                    && add(
                         &mut list,
                         &mut count,
                         scale_mv_for_ref(n.mv1, n.second_ref, ref_frame),
                     ) {
                         return (list[0], list[1]);
                     }
-                }
             }
         }
         (list[0], list[1])
@@ -2990,7 +2987,7 @@ fn compressed_header_inter(ref_mode: RefMode) -> Vec<u8> {
     e.put_literal(3, 2); // tx_mode base = ALLOW_32X32
     e.put_bit(true); // TX_MODE_SELECT
                      // tx_probs: p8x8 (2×1) + p16x16 (2×2) + p32x32 (2×3) = 12 no-updates
-    for _ in 0..(2 * 1 + 2 * 2 + 2 * 3) {
+    for _ in 0..(2 + 2 * 2 + 2 * 3) {
         e.put_bool(DIFF_UPDATE_PROB, false);
     }
     e.put_bit(false); // TX_4X4 coef probs: no update
@@ -3065,8 +3062,8 @@ fn apply_loop_filter(recon: &mut Reconstruction, lf_mi: &[LfMi], mi_rows: usize,
     }
     let w = recon.width as usize;
     let h = recon.height as usize;
-    let sb_w = (w + 63) / 64 * 64;
-    let sb_h = (h + 63) / 64 * 64;
+    let sb_w = w.div_ceil(64) * 64;
+    let sb_h = h.div_ceil(64) * 64;
     let (cw, ch) = (w / 2, h / 2);
     let (sb_cw, sb_ch) = (sb_w / 2, sb_h / 2);
 
@@ -3244,7 +3241,7 @@ fn write_uncompressed_inter_header(
 /// libvpx `vp9_get_tile_n_bits` — returns (min_log2, max_log2) for tile columns.
 fn tile_log2_bounds(width: u32) -> (u32, u32) {
     let mi_cols = width / 8;
-    let sb_cols = (mi_cols + 7) / 8;
+    let sb_cols = mi_cols.div_ceil(8);
     let mut min_log2 = 0u32;
     while (MAX_TILE_WIDTH_SB << min_log2) < sb_cols {
         min_log2 += 1;
@@ -3269,7 +3266,7 @@ fn choose_log2_tile_cols(width: u32) -> u32 {
 
 /// libvpx `get_tile_offset` / `vp9_tile_set_col` — MI column range for one tile.
 fn tile_mi_col_range(mi_cols: usize, log2_tile_cols: u32, tile_col: u32) -> (usize, usize) {
-    let sb_cols = (mi_cols + 7) / 8;
+    let sb_cols = mi_cols.div_ceil(8);
     let start_sb = (tile_col as usize * sb_cols) >> log2_tile_cols;
     let end_sb = ((tile_col as usize + 1) * sb_cols) >> log2_tile_cols;
     let start = (start_sb * 8).min(mi_cols);

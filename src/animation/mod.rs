@@ -12,8 +12,8 @@ mod interpolant;
 mod mixer;
 mod track;
 
-pub use action::AnimationAction;
+pub use action::{AnimationAction, LoopMode};
 pub use clip::AnimationClip;
 pub use interpolant::Interpolation;
-pub use mixer::AnimationMixer;
+pub use mixer::{AnimationMixer, BlendMode};
 pub use track::{KeyframeTrack, TrackTarget};

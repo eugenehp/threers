@@ -110,10 +110,8 @@ async function runChromium(url) {
       const result = await page.waitForFunction(
         () => {
           const r = window.__THREERS_VIDEO_TEST__;
-          if (!r) return null;
-          if (r.ok === true) return r;
-          if (r.error || (r.tests && r.tests.some((t) => t.ok === false))) return r;
-          return null;
+          if (!r?.finished) return null;
+          return r;
         },
         { timeout: TIMEOUT_MS },
       ).then((h) => h.jsonValue());
@@ -158,6 +156,10 @@ async function main() {
   const glue = await import('node:fs/promises').then((fs) => fs.readFile(join(WEB_ROOT, 'pkg', 'threers.js'), 'utf8'));
   if (!glue.includes('encodeGifRgba')) {
     console.error('web/pkg/threers.js missing encodeGifRgba — rebuild with NATIVE_CODEC=1');
+    process.exit(2);
+  }
+  if (!glue.includes('encodeMp4Rgba')) {
+    console.error('web/pkg/threers.js missing encodeMp4Rgba — rebuild with NATIVE_CODEC=1');
     process.exit(2);
   }
 

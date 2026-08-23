@@ -86,6 +86,8 @@ impl SphereGeometry {
         geom.set_attribute("normal", BufferAttribute::new(normals, 3));
         geom.set_attribute("uv", BufferAttribute::new(uvs, 2));
         geom.set_index(indices);
+        #[cfg(feature = "brep")]
+        crate::brep::primitives::tag_sphere(&mut geom, radius);
         geom
     }
 }

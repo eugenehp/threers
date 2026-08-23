@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>threers — RLX bridge benchmark</title>
+<style>
+    :root { color-scheme: dark; }
+    body {
+        margin: 0; padding: 2rem;
+        font: 14px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace;
+        background: #0d1017; color: #c9d3e0;
+    }
+    h1 { font-size: 1.1rem; margin: 0 0 .35rem; color: #eaf0f8; }
+    p  { margin: 0 0 1.2rem; color: #8b99ad; max-width: 62ch; }
+    button {
+        font: inherit; color: #0d1017; background: #7fb4ff; border: 0;
+        border-radius: 5px; padding: .45rem 1rem; cursor: pointer;
+    }
+    button:disabled { background: #3a4657; color: #7d889a; cursor: default; }
+    table { border-collapse: collapse; margin-top: 1.4rem; }
+    th, td { padding: .3rem 1.1rem .3rem 0; text-align: left; }
+    th { color: #8b99ad; font-weight: 500; border-bottom: 1px solid #24303f; }
+    td.n { text-align: right; font-variant-numeric: tabular-nums; }
+    .spin {
+        margin-left: 1rem; display: inline-block; width: 12px; height: 12px;
+        border: 2px solid #7fb4ff; border-right-color: transparent;
+        border-radius: 50%; animation: spin .7s linear infinite;
+        vertical-align: -2px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #devices { color: #7fb4ff; }
+    .note { color: #6f7c90; margin-top: 1.4rem; font-size: 13px; max-width: 62ch; }
+</style>
+</head>
+<body>
+
+<h1>RLX bridge — worker benchmark</h1>
+<p>
+    Every measurement below runs inside a Web Worker. The spinner keeps turning
+    while they do, which is the whole argument for the worker: the same calls on
+    the main thread would freeze this page for the duration of the column on the
+    right.
+</p>
+
+<button id="run">Run in worker</button>
+<button id="runMain">Run one op on the main thread</button>
+<span id="status"></span>
+<span class="spin" id="spin" hidden></span>
+
+<p id="devices"></p>
+<p id="frames"></p>
+<table id="results" hidden>
+    <thead>
+        <tr><th>operation</th><th>size</th><th class="n">first (ms)</th><th class="n">best of 5 (ms)</th></tr>
+    </thead>
+    <tbody></tbody>
+</table>
+
+<p class="note" id="note" hidden>
+    First-call timings include the graph compile; the best-of-5 column is what a
+    per-frame cost looks like once it is warm. Pixel buffers are transferred,
+    not copied, in both directions.
+</p>
+
+<script type="module">
+const worker = new Worker('./rlx-worker.js', { type: 'module' });
+const pending = new Map();
+let nextId = 0;
+
+// A frame counter, running the whole time. This is the measurement that
+// matters: the same calls on the main thread cannot be interrupted, so the
+// counter stops dead while they run. In the worker it does not.
+let frames = 0;
+(function tick() { frames++; requestAnimationFrame(tick); })();
+
+/// Frames observed while `body` runs, and how long it took.
+async function withFrameCount(body) {
+    const start = frames;
+    const t0 = performance.now();
+    const value = await body();
+    return { value, ms: performance.now() - t0, frames: frames - start };
+}
+
+// Scraped by puppeteer; see scripts in the repo's bench harness.
+window.__bench = { rows: [], done: false, devices: '', worker: null, main: null };
+
+worker.onmessage = ({ data }) => {
+    const entry = pending.get(data.id);
+    if (!entry) return;
+    pending.delete(data.id);
+    data.ok ? entry.resolve(data) : entry.reject(new Error(data.error));
+};
+
+/// One call, with its buffers transferred rather than cloned.
+function call(op, args, transfer = []) {
+    const id = nextId++;
+    return new Promise((resolve, reject) => {
+        pending.set(id, { resolve, reject });
+        worker.postMessage({ id, op, args }, transfer);
+    });
+}
+
+const W = 512, H = 512;
+
+function testFrame(seed = 1) {
+    const rgba = new Uint8Array(W * H * 4);
+    let s = seed >>> 0;
+    for (let i = 0; i < W * H; i++) {
+        s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
+        const x = i % W, y = (i / W) | 0;
+        rgba[i * 4] = (x ^ y) & 255;
+        rgba[i * 4 + 1] = (s >>> 24) & 255;
+        rgba[i * 4 + 2] = (x + y) & 255;
+        rgba[i * 4 + 3] = 255;
+    }
+    return rgba;
+}
+
+function heightGrid(n) {
+    const field = new Float32Array(n * n);
+    for (let y = 0; y < n; y++)
+        for (let x = 0; x < n; x++)
+            field[y * n + x] = Math.sin(x * 0.11) * Math.cos(y * 0.09) + 0.3 * Math.sin(x * 0.4);
+    return field;
+}
+
+function sphere(segments) {
+    const positions = [], index = [];
+    for (let j = 0; j <= segments; j++) {
+        const v = (j / segments) * Math.PI;
+        for (let i = 0; i <= segments * 2; i++) {
+            const u = (i / (segments * 2)) * Math.PI * 2;
+            positions.push(Math.sin(v) * Math.cos(u), Math.cos(v), Math.sin(v) * Math.sin(u));
+        }
+    }
+    const row = segments * 2 + 1;
+    for (let j = 0; j < segments; j++)
+        for (let i = 0; i < segments * 2; i++) {
+            const a = j * row + i;
+            index.push(a, a + row, a + 1, a + 1, a + row, a + row + 1);
+        }
+    return { positions: new Float32Array(positions), index: new Uint32Array(index) };
+}
+
+/// Run `op` once cold, then five more times, reporting first and best.
+async function bench(label, size, make) {
+    const first = await make();
+    let best = Infinity;
+    for (let i = 0; i < 5; i++) best = Math.min(best, (await make()).ms);
+    const row = document.querySelector('#results tbody').insertRow();
+    row.innerHTML =
+        `<td>${label}</td><td>${size}</td>` +
+        `<td class="n">${first.ms.toFixed(1)}</td><td class="n">${best.toFixed(1)}</td>`;
+    window.__bench.rows.push({ label, size, first: first.ms, best });
+}
+
+document.getElementById('run').onclick = async () => {
+    const button = document.getElementById('run');
+    const status = document.getElementById('status');
+    button.disabled = true;
+    document.getElementById('spin').hidden = false;
+    document.getElementById('results').hidden = false;
+    document.getElementById('note').hidden = false;
+    status.textContent = 'loading wasm…';
+
+    const { result } = await call('ready');
+    window.__bench.devices = result.devices;
+    document.getElementById('devices').textContent =
+        `rlx devices: ${result.devices || '(none — rlx found no backend)'}`;
+    status.textContent = 'running…';
+
+    const grid = 256;
+    const mesh = sphere(48);
+
+    await bench('convolve (gaussian)', `${W}×${H}`, () => {
+        const rgba = testFrame();
+        return call('convolve', { rgba, width: W, height: H, kernel: 'gaussian' }, [rgba.buffer]);
+    });
+    await bench('palette (8 colours)', `${W}×${H}`, () => {
+        const rgba = testFrame();
+        return call('palette', { rgba, count: 8 }, [rgba.buffer]);
+    });
+    await bench('posterize (8 colours)', `${W}×${H}`, () => {
+        const rgba = testFrame();
+        return call('posterize', { rgba, count: 8 }, [rgba.buffer]);
+    });
+    await bench('fitGrade (400 steps)', `${W}×${H}`, () => {
+        const source = testFrame(1), target = testFrame(2);
+        return call('fitGrade', { source, target }, [source.buffer, target.buffer]);
+    });
+    await bench('diffuse (20 passes)', `${grid}×${grid}`, () => {
+        const field = heightGrid(grid);
+        return call('diffuse', { field, width: grid, height: grid, rate: 0.2, iterations: 20 },
+                    [field.buffer]);
+    });
+    await bench('smoothMesh (8 taubin)', `${mesh.positions.length / 3} verts`, () => {
+        const positions = mesh.positions.slice(), index = mesh.index.slice();
+        return call('smoothMesh', { positions, index, iterations: 8 },
+                    [positions.buffer, index.buffer]);
+    });
+    await bench('voronoiLabels (400)', `${W}×${H}`, () => {
+        const sites = new Float32Array(800);
+        for (let i = 0; i < 800; i++) sites[i] = Math.random() * (i % 2 ? H : W);
+        return call('voronoiLabels', { sites, width: W, height: H }, [sites.buffer]);
+    });
+    await bench('delaunay (5 000 pts)', '5 000', () => {
+        const points = new Float32Array(10_000);
+        for (let i = 0; i < 10_000; i++) points[i] = Math.random() * 100;
+        return call('delaunay', { points }, [points.buffer]);
+    });
+
+    status.textContent = 'done';
+    document.getElementById('spin').hidden = true;
+    button.disabled = false;
+    window.__bench.done = true;
+};
+
+// The comparison. Same wasm, same op, on the main thread — which means the
+// page cannot paint until it returns. Loading the module a second time is the
+// honest cost of showing that side by side in one page.
+document.getElementById('runMain').onclick = async () => {
+    const status = document.getElementById('status');
+    status.textContent = 'loading wasm on the main thread…';
+    const threers = await import('./pkg/threers.js');
+    await threers.default();
+
+    const rgba = testFrame();
+    // Warm, so the comparison is work and not compilation.
+    threers.rlxConvolve(rgba, W, H, 'gaussian');
+
+    const main = await withFrameCount(async () => {
+        for (let i = 0; i < 5; i++) threers.rlxConvolve(rgba, W, H, 'gaussian');
+    });
+
+    const inWorker = await withFrameCount(async () => {
+        for (let i = 0; i < 5; i++) {
+            const f = testFrame();
+            await call('convolve', { rgba: f, width: W, height: H, kernel: 'gaussian' },
+                       [f.buffer]);
+        }
+    });
+
+    window.__bench.main = main;
+    window.__bench.worker = inWorker;
+    document.getElementById('frames').textContent =
+        `5× convolve on the main thread: ${main.ms.toFixed(0)} ms, ` +
+        `${main.frames} animation frames. Same work in the worker: ` +
+        `${inWorker.ms.toFixed(0)} ms, ${inWorker.frames} frames.`;
+    status.textContent = 'done';
+};
+</script>
+</body>
+</html>

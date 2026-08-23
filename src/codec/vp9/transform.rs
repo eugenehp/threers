@@ -6,6 +6,12 @@
 //! `vpx_idct16x16_256_add_c` / `vpx_idct32x32_1024_add_c`.
 //! Constants from `vpx_dsp/txfm_common.h` (libvpx v1.14.1).
 
+// The butterflies index a flat buffer as the spec indexes a 2D block, so the
+// row term is written out even when it is `0 * 4` or `1 * 4`. Collapsing those
+// to `input[i]` and `input[4 + i]` would save nothing and would stop the code
+// reading line-for-line against libvpx, which is the only way to check it.
+#![allow(clippy::erasing_op, clippy::identity_op)]
+
 use crate::codec::vp9::tables::{DC_PRED, H_PRED, V_PRED};
 
 const DCT_CONST_BITS: u32 = 14;
@@ -69,6 +75,9 @@ pub fn tx_type_from_mode(mode: i8) -> TxType {
         _ => TxType::AdstAdst,
     }
 }
+
+/// A 4-point transform: reads one row or column, writes the transformed one.
+type Transform4 = fn(&[i32; 4], &mut [i32; 4]);
 
 #[inline]
 fn round_power_of_two(value: i64, n: u32) -> i64 {
@@ -218,7 +227,7 @@ pub fn fht4x4(input: &[i16; 16], output: &mut [i32; 16], tx_type: TxType) {
         return;
     }
 
-    let (cols, rows): (fn(&[i32; 4], &mut [i32; 4]), fn(&[i32; 4], &mut [i32; 4])) = match tx_type {
+    let (cols, rows): (Transform4, Transform4) = match tx_type {
         TxType::AdstDct => (fadst4, fdct4),
         TxType::DctAdst => (fdct4, fadst4),
         TxType::AdstAdst => (fadst4, fadst4),
@@ -330,7 +339,7 @@ pub fn iht4x4_add(input: &[i32; 16], dest: &mut [u8], stride: usize, tx_type: Tx
     assert!(dest.len() >= 3 * stride + 4);
 
     // (cols, rows) — same packing as libvpx `transform_2d`.
-    let (cols, rows): (fn(&[i32; 4], &mut [i32; 4]), fn(&[i32; 4], &mut [i32; 4])) = match tx_type {
+    let (cols, rows): (Transform4, Transform4) = match tx_type {
         TxType::DctDct => (idct4, idct4),
         TxType::AdstDct => (iadst4, idct4),
         TxType::DctAdst => (idct4, iadst4),
@@ -1611,7 +1620,7 @@ pub fn fdct32x32(input: &[i16; 1024], output: &mut [i32; 1024]) {
         fdct32(&temp_in, &mut temp_out, false);
         for j in 0..32 {
             let v = temp_out[j];
-            intermediate[j * 32 + i] = ((v + 1 + i32::from(v > 0)) >> 2) as i32;
+            intermediate[j * 32 + i] = (v + 1 + i32::from(v > 0)) >> 2;
         }
     }
     // Rows
@@ -1624,7 +1633,7 @@ pub fn fdct32x32(input: &[i16; 1024], output: &mut [i32; 1024]) {
         fdct32(&temp_in, &mut temp_out, false);
         for j in 0..32 {
             let v = temp_out[j];
-            output[j + i * 32] = ((v + 1 + i32::from(v < 0)) >> 2) as i32;
+            output[j + i * 32] = (v + 1 + i32::from(v < 0)) >> 2;
         }
     }
 }

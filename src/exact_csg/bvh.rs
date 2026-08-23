@@ -36,7 +36,13 @@ impl Bvh {
         let boxes: Vec<(V3, V3)> = tris.iter().map(tri_box).collect();
         let cent: Vec<V3> = boxes
             .iter()
-            .map(|(lo, hi)| [(lo[0] + hi[0]) * 0.5, (lo[1] + hi[1]) * 0.5, (lo[2] + hi[2]) * 0.5])
+            .map(|(lo, hi)| {
+                [
+                    (lo[0] + hi[0]) * 0.5,
+                    (lo[1] + hi[1]) * 0.5,
+                    (lo[2] + hi[2]) * 0.5,
+                ]
+            })
             .collect();
         let mut order: Vec<usize> = (0..tris.len()).collect();
         let mut nodes: Vec<Node> = Vec::new();
@@ -74,9 +80,21 @@ impl Bvh {
             return;
         }
         let inv = [
-            if dir[0] != 0.0 { 1.0 / dir[0] } else { f64::INFINITY },
-            if dir[1] != 0.0 { 1.0 / dir[1] } else { f64::INFINITY },
-            if dir[2] != 0.0 { 1.0 / dir[2] } else { f64::INFINITY },
+            if dir[0] != 0.0 {
+                1.0 / dir[0]
+            } else {
+                f64::INFINITY
+            },
+            if dir[1] != 0.0 {
+                1.0 / dir[1]
+            } else {
+                f64::INFINITY
+            },
+            if dir[2] != 0.0 {
+                1.0 / dir[2]
+            } else {
+                f64::INFINITY
+            },
         ];
         let mut stack = vec![0u32];
         while let Some(ni) = stack.pop() {
@@ -113,16 +131,30 @@ fn build_node(
     let idx = nodes.len() as u32;
     let count = end - start;
     if count <= 3 {
-        nodes.push(Node { lo, hi, start: start as u32, count: count as u32, right: 0 });
+        nodes.push(Node {
+            lo,
+            hi,
+            start: start as u32,
+            count: count as u32,
+            right: 0,
+        });
         return idx;
     }
     // Split on the widest centroid axis at the median.
-    let axis = (0..3).max_by(|&a, &b| (hi[a] - lo[a]).partial_cmp(&(hi[b] - lo[b])).unwrap()).unwrap();
+    let axis = (0..3)
+        .max_by(|&a, &b| (hi[a] - lo[a]).partial_cmp(&(hi[b] - lo[b])).unwrap())
+        .unwrap();
     let mid = start + count / 2;
     order[start..end].select_nth_unstable_by(count / 2, |&a, &b| {
         cent[a][axis].partial_cmp(&cent[b][axis]).unwrap()
     });
-    nodes.push(Node { lo, hi, start: 0, count: 0, right: 0 });
+    nodes.push(Node {
+        lo,
+        hi,
+        start: 0,
+        count: 0,
+        right: 0,
+    });
     let left = build_node(nodes, order, boxes, cent, start, mid);
     let right = build_node(nodes, order, boxes, cent, mid, end);
     nodes[idx as usize].start = left;
@@ -190,8 +222,8 @@ mod tests {
         let mut got = Vec::new();
         bvh.overlaps(qbox, &mut got);
         let got_set: std::collections::HashSet<usize> = got.into_iter().collect();
-        for i in 0..tris.len() {
-            if box_overlap(&boxes[i], &qbox) {
+        for (i, b) in boxes.iter().enumerate() {
+            if box_overlap(b, &qbox) {
                 assert!(got_set.contains(&i), "overlaps missed triangle {i}");
             }
         }
@@ -201,8 +233,8 @@ mod tests {
         let mut rl = Vec::new();
         bvh.ray_leaves(p, dir, &mut rl);
         let ray_set: std::collections::HashSet<usize> = rl.into_iter().collect();
-        for i in 0..tris.len() {
-            if seg_box(p, dir, inv, boxes[i].0, boxes[i].1) {
+        for (i, b) in boxes.iter().enumerate() {
+            if seg_box(p, dir, inv, b.0, b.1) {
                 assert!(ray_set.contains(&i), "ray_leaves missed triangle {i}");
             }
         }

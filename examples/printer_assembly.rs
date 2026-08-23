@@ -21,9 +21,17 @@ use threers::{
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let out = args.iter().find(|a| !a.starts_with("--")).cloned().unwrap_or_else(|| "out/printer.png".into());
+    let out = args
+        .iter()
+        .find(|a| !a.starts_with("--"))
+        .cloned()
+        .unwrap_or_else(|| "out/printer.png".into());
     let flag = |name: &str, def: f32| -> f32 {
-        args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).and_then(|v| v.parse().ok()).unwrap_or(def)
+        args.iter()
+            .position(|a| a == name)
+            .and_then(|i| args.get(i + 1))
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(def)
     };
     let bed = flag("--bed", 220.0);
     let z_travel = flag("--z", 240.0);
@@ -34,14 +42,23 @@ fn main() {
 
     let parts = build_printer(bed, bed, z_travel, ext, gantry_z, carriage, bed_pos);
     let tris: usize = parts.iter().map(|(g, _)| part_tris(g)).sum();
-    println!("printer: bed {bed:.0}×{bed:.0}, Z {z_travel:.0} mm · {} parts · {tris} triangles", parts.len());
+    println!(
+        "printer: bed {bed:.0}×{bed:.0}, Z {z_travel:.0} mm · {} parts · {tris} triangles",
+        parts.len()
+    );
 
     // --- Scene: one mesh per part, with its own colour ---
     let mut scene = Scene::new();
     scene.background = Color::new(0.06, 0.07, 0.10);
     scene.add_light(AmbientLight::new(Color::WHITE, 0.5));
-    scene.add_light(DirectionalLight::new(Color::WHITE, 2.6).with_direction(Vector3::new(-0.5, -0.7, -0.55).normalize()));
-    scene.add_light(DirectionalLight::new(Color::WHITE, 0.8).with_direction(Vector3::new(0.6, 0.4, -0.3).normalize()));
+    scene.add_light(
+        DirectionalLight::new(Color::WHITE, 2.6)
+            .with_direction(Vector3::new(-0.5, -0.7, -0.55).normalize()),
+    );
+    scene.add_light(
+        DirectionalLight::new(Color::WHITE, 0.8)
+            .with_direction(Vector3::new(0.6, 0.4, -0.3).normalize()),
+    );
 
     let (mut mn, mut mx) = ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]);
     for (geom, color) in &parts {
@@ -51,14 +68,25 @@ fn main() {
         mat.roughness = 0.42;
         scene.add(Object3D::mesh(Mesh::new(geom.clone(), mat.into())));
     }
-    let center = Vector3::new((mn[0] + mx[0]) / 2.0, (mn[1] + mx[1]) / 2.0, (mn[2] + mx[2]) / 2.0);
-    let radius = ((mx[0] - mn[0]).powi(2) + (mx[1] - mn[1]).powi(2) + (mx[2] - mn[2]).powi(2)).sqrt() / 2.0;
+    let center = Vector3::new(
+        (mn[0] + mx[0]) / 2.0,
+        (mn[1] + mx[1]) / 2.0,
+        (mn[2] + mx[2]) / 2.0,
+    );
+    let radius =
+        ((mx[0] - mn[0]).powi(2) + (mx[1] - mn[1]).powi(2) + (mx[2] - mn[2]).powi(2)).sqrt() / 2.0;
 
     let (w, h) = (1100u32, 850u32);
-    let mut hr = match HeadlessRenderer::builder().size(w, h).supersample(1).build() {
+    let mut hr = match HeadlessRenderer::builder()
+        .size(w, h)
+        .supersample(1)
+        .build()
+    {
         Ok(hr) => hr,
         Err(e) => {
-            eprintln!("headless renderer unavailable ({e}) — needs a GPU adapter (Metal/Vulkan/DX12).");
+            eprintln!(
+                "headless renderer unavailable ({e}) — needs a GPU adapter (Metal/Vulkan/DX12)."
+            );
             std::process::exit(2);
         }
     };
@@ -69,7 +97,11 @@ fn main() {
     let dist = radius * 2.1;
     let mut cam = PerspectiveCamera::new(42.0, w as f32 / h as f32, 1.0, dist * 8.0 + 500.0);
     cam.up = Vector3::new(0.0, 0.0, 1.0);
-    cam.position = Vector3::new(center.x + dist * 0.85, center.y - dist * 0.95, center.z + dist * 0.5);
+    cam.position = Vector3::new(
+        center.x + dist * 0.85,
+        center.y - dist * 0.95,
+        center.z + dist * 0.5,
+    );
     cam.look_at(center);
 
     let rgba = hr.render_to_rgba(&mut scene, &cam);
@@ -83,7 +115,10 @@ fn main() {
 fn part_tris(g: &BufferGeometry) -> usize {
     match &g.index {
         Some(i) => i.len() / 3,
-        None => g.get_attribute("position").map(|a| a.count() / 3).unwrap_or(0),
+        None => g
+            .get_attribute("position")
+            .map(|a| a.count() / 3)
+            .unwrap_or(0),
     }
 }
 
@@ -142,7 +177,11 @@ fn crc32(data: &[u8]) -> u32 {
     for &b in data {
         crc ^= b as u32;
         for _ in 0..8 {
-            crc = if crc & 1 != 0 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
+            crc = if crc & 1 != 0 {
+                (crc >> 1) ^ 0xEDB8_8320
+            } else {
+                crc >> 1
+            };
         }
     }
     !crc

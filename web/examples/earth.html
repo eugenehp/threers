@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>earth, sun and lens flare — threers</title>
+    <style>
+        :root { color-scheme: dark; }
+        * { box-sizing: border-box; }
+        html, body { height: 100%; }
+        body {
+            margin: 0; background: #000; color: #e6e8ee; overflow: hidden;
+            font: 14px/1.5 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+        }
+
+        /* Full bleed. The 2D flare canvas sits exactly over the WebGPU one, and
+           the demo's resize handler reads the element's own box, so filling the
+           viewport here is all it takes to render at window resolution. */
+        .stage { position: fixed; inset: 0; }
+        .stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+        #c { background: #01020a; }
+        #flare { pointer-events: none; }
+
+        /* The controls float over the scene rather than sitting under it. */
+        .controls {
+            position: fixed; left: 0; right: 0; bottom: 0; z-index: 2;
+            display: flex; flex-wrap: wrap; gap: 8px 20px; align-items: center;
+            padding: 10px 16px calc(10px + env(safe-area-inset-bottom));
+            max-height: 40vh; overflow-y: auto;
+            background: rgba(9, 11, 16, 0.72);
+            backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+            border-top: 1px solid rgba(255, 255, 255, 0.08);
+        }
+        .controls label { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #b9c1d1; }
+        input[type="range"] { accent-color: #6ea8fe; width: 150px; }
+        input[type="checkbox"] { accent-color: #6ea8fe; }
+        button { font: inherit; font-size: 12px; color: #cfe3ff; background: #1b2536;
+                 border: 1px solid #2c3a52; border-radius: 5px; padding: 2px 10px; cursor: pointer; }
+        button:hover { background: #243149; }
+
+        /* Phones. Twelve controls across a 390 px screen stack into a wall
+           that eats the scene, so they collapse behind a toggle — and the
+           sliders grow, because a 150 px track is not a touch target. The
+           canvas is `touch-action: none` or iOS treats a drag as a page pan and
+           the globe never turns. */
+        .stage canvas { touch-action: none; }
+        #ui-toggle { display: none; }
+        @media (max-width: 700px), (pointer: coarse) {
+            #ui-toggle {
+                display: block; position: fixed; right: 12px; bottom: 12px; z-index: 3;
+                width: 44px; height: 44px; border-radius: 22px; font-size: 18px; padding: 0;
+            }
+            .controls {
+                gap: 12px 16px; padding: 12px 14px 68px; max-height: 62vh;
+                transform: translateY(100%); transition: transform 0.25s ease;
+            }
+            .controls[data-open] { transform: none; }
+            .controls label { font-size: 13px; flex: 1 1 100%; }
+            input[type="range"] { flex: 1; width: auto; min-width: 120px; height: 28px; }
+            nav { top: 8px; right: 10px; }
+        }
+
+        nav { position: fixed; top: 10px; right: 14px; z-index: 2; display: flex; gap: 14px; }
+        nav a { color: #6ea8fe; text-decoration: none; font-size: 12px; opacity: 0.55; }
+        nav a:hover { opacity: 1; text-decoration: underline; }
+
+        /* Visible only while there is something to wait for. The scene speaks
+           for itself once it is up, but building it means decoding tens of
+           megabytes of imagery, and a blank window with no word of explanation
+           is indistinguishable from a broken one. */
+        #status {
+            position: fixed; inset: 0; z-index: 4; margin: 0;
+            display: flex; align-items: center; justify-content: center;
+            color: #8e98ad; font-size: 13px; letter-spacing: 0.02em;
+            pointer-events: none; background: #000;
+            transition: opacity 0.6s ease 0.2s;
+        }
+        #status[data-done] { opacity: 0; }
+        #err {
+            position: fixed; top: 10px; left: 14px; z-index: 3; margin: 0;
+            color: #ff8080; white-space: pre-wrap; font-size: 12px;
+            background: rgba(9, 11, 16, 0.8); border-radius: 6px;
+        }
+        #err:empty { display: none; }
+        #err:not(:empty) { padding: 8px 12px; }
+    </style>
+</head>
+<body>
+    <div class="stage">
+        <canvas id="c" width="1600" height="900"></canvas>
+        <canvas id="flare" width="1600" height="900"></canvas>
+    </div>
+
+    <nav>
+        <a href="/web/examples/">examples</a>
+        <a href="/web/index.html">main demo</a>
+    </nav>
+    <span id="status">loading…</span>
+    <p id="err"></p>
+
+    <button id="ui-toggle" type="button" aria-label="controls">☰</button>
+    <div class="controls">
+        <label><input id="spin" type="checkbox" checked> orbit</label>
+        <label>position <input id="orbit" type="range" min="0" max="1" step="0.001" value="0.62"></label>
+        <label><input id="flare-on" type="checkbox" checked> flare</label>
+        <label><input id="clouds-on" type="checkbox" checked> clouds</label>
+        <label><input id="moon-on" type="checkbox" checked> moon</label>
+        <label>sun lon <input id="sun-lon" type="range" min="-180" max="180" step="1" value="29"></label>
+        <label>sun height <input id="sun-lat" type="range" min="-60" max="60" step="1" value="10"></label>
+        <label>city lights <input id="night" type="range" min="0" max="6" step="0.05" value="2.3"></label>
+        <label>atmosphere <input id="air" type="range" min="0" max="6" step="0.05" value="2.6"></label>
+        <label>cloud cover <input id="cloud-op" type="range" min="0" max="0.999" step="0.01" value="0.96"></label>
+        <label>relief <input id="relief" type="range" min="0" max="0.08" step="0.002" value="0"></label>
+        <label title="Earth turns 27.3 times per lunar month, so one rate cannot suit both">
+            time <input id="rate" type="range" min="0" max="24" step="0.1" value="0.3"> h/s</label>
+        <button id="replay" type="button">replay intro</button>
+    </div>
+
+    <script>
+        // Before the module loads, so a device without WebGPU says why instead
+        // of showing the loading cover for ever. iOS got WebGPU in 18.
+        if (!navigator.gpu) {
+            document.getElementById('status').textContent =
+                'This demo needs WebGPU — Safari 18 / iOS 18, or Chrome 113.';
+        }
+        document.getElementById('ui-toggle').addEventListener('click', () => {
+            document.querySelector('.controls').toggleAttribute('data-open');
+        });
+    </script>
+    <script type="module" src="./earth-demo.js"></script>
+</body>
+</html>

@@ -1,0 +1,28 @@
+NASA Earth imagery — public domain.
+
+NASA material is generally not protected by copyright: see
+https://www.nasa.gov/nasa-brand-center/images-and-media/ . None of the files
+below carry a third-party copyright notice.
+
+  day.jpg        Blue Marble: Next Generation, December 2004, topography and
+                 bathymetry. NASA Earth Observatory (Reto Stöckli).
+                 https://visibleearth.nasa.gov/images/73909
+  tiles/day.*    The same product at 500 m, as the eight 21600x21600 tiles it
+                 is distributed in.
+  night.jpg      Black Marble 2012, VIIRS day/night band. NASA Earth
+                 Observatory. https://visibleearth.nasa.gov/images/79765
+  clouds.jpg     MODIS cloud composite. NASA Earth Observatory.
+                 https://visibleearth.nasa.gov/images/57747
+  elevation.png  GEBCO/SRTM elevation, 21600x10800. NASA Earth Observatory.
+                 https://visibleearth.nasa.gov/images/73934
+  ice_cap.png    Blue Marble 2002: land surface, ocean colour and sea ice,
+                 8192x4096. Supplies the Arctic, which Blue Marble Next
+                 Generation leaves as a near-black fill above about 82.6°N in
+                 every month. NASA Earth Observatory (Reto Stöckli).
+                 https://visibleearth.nasa.gov/images/57730
+  sky/starmap_*  Deep Star Maps 2020 — 1.7 billion stars from Hipparcos-2,
+                 Tycho-2 and Gaia DR2. NASA/Goddard Scientific Visualization
+                 Studio; Gaia DR2: ESA/Gaia/DPAC. https://svs.gsfc.nasa.gov/4851
+  sky/moon_*     CGI Moon Kit — LRO colour (8k) and LOLA elevation (16 px per
+                 degree). NASA/Goddard Scientific Visualization Studio.
+                 https://svs.gsfc.nasa.gov/4720

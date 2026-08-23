@@ -53,7 +53,7 @@ fn inv_angle(angle: i32) -> i32 {
 /// boundary-smoothing post-filters for DC / horizontal / vertical modes
 /// (§8.4.4.2, luma-only, `nTbS < 32`).
 pub fn predict(mode: u8, n: usize, above: &[i32], left: &[i32], luma: bool) -> Vec<i32> {
-    debug_assert!(above.len() >= 2 * n + 1 && left.len() >= 2 * n + 1);
+    debug_assert!(above.len() > 2 * n && left.len() > 2 * n);
     let mut pred = match mode {
         PLANAR => planar(n, above, left),
         DC => dc(n, above, left),

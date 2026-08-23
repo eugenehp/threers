@@ -31,7 +31,7 @@ impl Yuv420Frame {
     /// Allocate an all-black (well, all-zero-plane), fully-opaque frame.
     pub fn new(width: u32, height: u32) -> Self {
         assert!(
-            width % 2 == 0 && height % 2 == 0,
+            width.is_multiple_of(2) && height.is_multiple_of(2),
             "4:2:0 needs even dimensions"
         );
         let (cw, ch) = (width / 2, height / 2);
@@ -56,7 +56,7 @@ impl Yuv420Frame {
     /// [`alpha`](Self::alpha) when any pixel is non-opaque, otherwise dropped.
     pub fn from_rgba(width: u32, height: u32, rgba: &[u8]) -> Self {
         assert!(
-            width % 2 == 0 && height % 2 == 0,
+            width.is_multiple_of(2) && height.is_multiple_of(2),
             "4:2:0 needs even dimensions"
         );
         assert_eq!(

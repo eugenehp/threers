@@ -105,8 +105,8 @@ fn run_export(
     }
 
     println!(
-        "exporting {} → {} ({}×{}, {} frames @ {} fps, transparent={})…",
-        format!("{codec:?}"),
+        "exporting {:?} → {} ({}×{}, {} frames @ {} fps, transparent={})…",
+        codec,
         out.display(),
         rw,
         rh,

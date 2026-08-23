@@ -10,7 +10,11 @@ mod cylinder_geometry;
 mod decal_geometry;
 mod edges_geometry;
 mod extrude_geometry;
+mod kirigami;
 mod lathe_geometry;
+pub mod lattice;
+#[cfg(feature = "nurbs")]
+mod nurbs_geometry;
 mod parametric_geometry;
 mod plane_geometry;
 mod polyhedron_geometry;
@@ -31,7 +35,19 @@ pub use cylinder_geometry::CylinderGeometry;
 pub use decal_geometry::DecalGeometry;
 pub use edges_geometry::{EdgesGeometry, WireframeGeometry};
 pub use extrude_geometry::ExtrudeGeometry;
+pub use kirigami::{
+    KirigamiAssembly, KirigamiCell, KirigamiCoreLattice, KirigamiCrease, KirigamiCreaseKind,
+    KirigamiExpandedMiura, KirigamiFace, KirigamiFaceKind, KirigamiMesh, KirigamiNet,
+    KirigamiNetPanel, KirigamiPreset, KIRIGAMI_NET_VARIANT,
+};
 pub use lathe_geometry::LatheGeometry;
+pub use lattice::{
+    ChiralRule, Cuboct, CuboctAssembly, CuboctAssemblyPlan, CuboctAssemblyStep, CuboctFrame,
+    CuboctJoint, CuboctJointKind, FrameMaterial, FrameResponse, Hand, Infill, Lattice,
+    LatticeGeometry, LatticeKind, LatticeStyle, Region, Segment, Strut, Tpms,
+};
+#[cfg(feature = "nurbs")]
+pub use nurbs_geometry::NurbsGeometry;
 pub use parametric_geometry::ParametricGeometry;
 pub use plane_geometry::PlaneGeometry;
 pub use polyhedron_geometry::{

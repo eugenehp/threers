@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>threers — ocean water</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #04101c; overflow: hidden;
+               font: 12px/1.45 -apple-system, system-ui, sans-serif; color: #dbe6f0; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  #ui { position: fixed; top: 12px; left: 12px; width: 236px;
+        max-height: calc(100vh - 24px); overflow-y: auto;
+        background: rgba(6,18,30,.66); backdrop-filter: blur(10px);
+        padding: 10px 12px 12px; border-radius: 10px; border: 1px solid #1d354b; }
+  #ui[hidden] { display: none; }
+  h2 { font-size: 11px; letter-spacing: .09em; text-transform: uppercase; color: #7fa8c9;
+       margin: 12px 0 6px; font-weight: 600; }
+  h2:first-child { margin-top: 0; }
+  h2 .cost { float: right; text-transform: none; letter-spacing: 0; font-weight: 400;
+             color: #55738c; }
+  label { display: flex; align-items: center; gap: 6px; margin: 4px 0; }
+  label > span:first-child { flex: 0 0 72px; color: #9fb6c9; }
+  select, input[type=range] { flex: 1; min-width: 0; }
+  select { background: #0d2033; color: #dbe6f0; border: 1px solid #24425e;
+           border-radius: 5px; padding: 2px 5px; font: inherit; }
+  input[type=range] { accent-color: #4fb3e8; height: 16px; }
+  output { flex: 0 0 44px; text-align: right; color: #7fd1ff;
+           font-variant-numeric: tabular-nums; }
+  #stats { margin-top: 10px; padding-top: 8px; border-top: 1px solid #1d354b;
+           color: #8aa6bd; font-variant-numeric: tabular-nums; }
+  #stats b { color: #dbe6f0; font-weight: 600; }
+  #hint { margin-top: 8px; color: #55738c; }
+  #msg { position: fixed; inset: 0; display: grid; place-items: center; text-align: center;
+         padding: 2rem; background: #04101c; font-size: 14px; }
+  #msg.hidden { display: none; }
+  code { color: #7fd1ff; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="ui" hidden>
+  <h2>Sea state <span class="cost">rebuilds ~0.5 s</span></h2>
+  <label><span>preset</span><select id="preset"></select></label>
+  <label><span>quality</span><select id="quality"></select></label>
+  <label><span>cascades</span><select id="cascade"></select></label>
+  <label><span>max scale</span><input type="range" id="maxScale" min="256" max="4096" step="256"><output id="maxScaleV"></output></label>
+
+  <h2>Wind <span class="cost">re-seeds</span></h2>
+  <label><span>direction</span><input type="range" id="windDeg" min="0" max="360" step="1"><output id="windDegV"></output></label>
+  <label><span>speed</span><input type="range" id="windSpeed" min="1" max="30" step="0.5"><output id="windSpeedV"></output></label>
+
+  <h2>Sky <span class="cost">free</span></h2>
+  <label><span>elevation</span><input type="range" id="elevation" min="-5" max="89" step="0.5"><output id="elevationV"></output></label>
+  <label><span>azimuth</span><input type="range" id="azimuth" min="0" max="360" step="1"><output id="azimuthV"></output></label>
+  <label><span>turbidity</span><input type="range" id="turbidity" min="1" max="25" step="0.1"><output id="turbidityV"></output></label>
+  <label><span>rayleigh</span><input type="range" id="rayleigh" min="0" max="5" step="0.05"><output id="rayleighV"></output></label>
+  <label><span>clouds</span><input type="range" id="clouds" min="0" max="1" step="0.01"><output id="cloudsV"></output></label>
+
+  <h2>Look <span class="cost">free</span></h2>
+  <label><span>exposure</span><input type="range" id="exposure" min="0.02" max="2" step="0.01"><output id="exposureV"></output></label>
+  <label><span>choppiness</span><input type="range" id="choppiness" min="0" max="2" step="0.01"><output id="choppinessV"></output></label>
+  <label><span>foam</span><input type="range" id="foam" min="0" max="3" step="0.05"><output id="foamV"></output></label>
+
+  <div id="stats">
+    <div><b id="fps">–</b> fps · H<sub>s</sub> <b id="hs">–</b> m · peak <b id="peak">–</b> m</div>
+    <div id="where">above the waterline</div>
+  </div>
+  <div id="hint">drag orbits · right-drag pans · scroll zooms<br>
+    scroll all the way in to put the lens on the waterline</div>
+</div>
+
+<div id="msg">starting…</div>
+
+<script type="module">
+import init, { start } from "./pkg-ocean/threers_ocean.js";
+
+const msg = document.getElementById("msg");
+const canvas = document.getElementById("c");
+const $ = (id) => document.getElementById(id);
+
+function fail(html) { msg.classList.remove("hidden"); msg.innerHTML = html; }
+
+if (!navigator.gpu) {
+  fail(`This page needs <b>WebGPU</b>.<br><br>
+        Safari 18+ (macOS 15+), Chrome 113+, or Edge 113+.<br>
+        In Safari, WebGPU may need enabling under
+        <code>Develop &rsaquo; Feature Flags &rsaquo; WebGPU</code>.`);
+} else {
+  const params = new URLSearchParams(location.search);
+
+  function resize() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = Math.max(1, Math.floor(innerWidth * dpr));
+    canvas.height = Math.max(1, Math.floor(innerHeight * dpr));
+  }
+  resize();
+  addEventListener("resize", resize);
+
+  let ocean;
+  try {
+    await init();
+    ocean = await start(canvas, params.get("preset") ?? "sunset",
+                                params.get("quality") ?? "high");
+  } catch (e) {
+    fail(`Failed to start:<br><br><code>${String(e)}</code>`);
+    throw e;
+  }
+  msg.classList.add("hidden");
+
+  // The Rust side owns every value. The panel is built from `state()` and
+  // re-read after anything that can change more than one field, so the defaults
+  // live in exactly one place — the presets — rather than being copied here and
+  // drifting.
+  let s = JSON.parse(ocean.state());
+
+  const fill = (sel, items, current) => {
+    sel.replaceChildren(...items.map((it) => {
+      const o = document.createElement("option");
+      o.value = it.value;
+      o.textContent = it.label;
+      if (it.title) o.title = it.title;
+      if (String(it.value) === String(current)) o.selected = true;
+      return o;
+    }));
+  };
+
+  const CASCADES = [128, 256, 512];
+  const fmt = {
+    maxScale: (v) => `${v | 0} m`,
+    windDeg: (v) => `${v | 0}°`,
+    windSpeed: (v) => (+v).toFixed(1),
+    elevation: (v) => `${(+v).toFixed(1)}°`,
+    azimuth: (v) => `${v | 0}°`,
+    turbidity: (v) => (+v).toFixed(1),
+    rayleigh: (v) => (+v).toFixed(2),
+    clouds: (v) => (+v).toFixed(2),
+    exposure: (v) => (+v).toFixed(2),
+    choppiness: (v) => (+v).toFixed(2),
+    foam: (v) => (+v).toFixed(2),
+  };
+
+  const seaStats = () => {
+    $("hs").textContent = s.waveHeight.toFixed(2);
+    $("peak").textContent = s.peak.toFixed(0);
+  };
+
+  function syncPanel() {
+    fill($("preset"),
+         s.presets.map((p) => ({ value: p.name, label: p.name, title: p.blurb })), s.preset);
+    fill($("quality"),
+         s.qualities.map((q) => ({ value: q.name, label: `${q.name} · ${q.cascade}²` })), s.quality);
+    fill($("cascade"), CASCADES.map((n) => ({ value: n, label: `${n}²` })), s.cascade);
+    for (const id of Object.keys(fmt)) {
+      $(id).value = s[id];
+      $(id + "V").textContent = fmt[id]($(id).value);
+    }
+    seaStats();
+  }
+  syncPanel();
+  $("ui").hidden = false;
+
+  const reread = () => { s = JSON.parse(ocean.state()); syncPanel(); };
+
+  // Rebuilds. Each of these changes the shape of the simulation — the mesh, the
+  // lattice, or the wavenumber substituted into every shader — so the world is
+  // recreated around it. Hence `change` rather than `input`: one rebuild when
+  // the control is released, not one per pixel of slider travel.
+  $("preset").onchange = (e) => { ocean.load_preset(e.target.value); reread(); };
+  $("quality").onchange = (e) => { ocean.set_quality(e.target.value); reread(); };
+  $("cascade").onchange = (e) => { ocean.set_cascade_resolution(+e.target.value); reread(); };
+  $("maxScale").onchange = (e) => { ocean.set_max_scale(+e.target.value); reread(); };
+
+  // Re-seeds the spectrum: one texture upload, no pipeline touched. Live is fine.
+  const wind = () => {
+    ocean.set_wind(+$("windDeg").value, +$("windSpeed").value);
+    s = JSON.parse(ocean.state());
+    seaStats();
+  };
+  $("windDeg").oninput = wind;
+  $("windSpeed").oninput = wind;
+
+  // Free: uniform slots only.
+  const sky = () => ocean.set_sky(+$("elevation").value, +$("azimuth").value,
+                                 +$("turbidity").value, +$("rayleigh").value,
+                                 s.mie, s.mieG, +$("clouds").value);
+  for (const id of ["elevation", "azimuth", "turbidity", "rayleigh", "clouds"]) {
+    $(id).oninput = sky;
+  }
+  const look = () => ocean.set_look(+$("exposure").value, +$("choppiness").value,
+                                    +$("foam").value);
+  for (const id of ["exposure", "choppiness", "foam"]) $(id).oninput = look;
+
+  // Every slider echoes its own value, whatever else it does.
+  for (const id of Object.keys(fmt)) {
+    $(id).addEventListener("input", () => {
+      $(id + "V").textContent = fmt[id]($(id).value);
+    });
+  }
+
+  setInterval(() => {
+    $("fps").textContent = ocean.fps().toFixed(0);
+    $("where").textContent = ocean.submerged()
+      ? "below the waterline"
+      : `surface ${ocean.sample_height(0, 0).toFixed(2)} m at the origin`;
+  }, 500);
+}
+</script>
+</body>
+</html>

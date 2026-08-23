@@ -299,10 +299,7 @@ fn gif_writer_matches_encode_gif() {
         .diff_rects(false)
         .transparency(false)
         .palette_mode(PaletteMode::Local);
-    let frames = [
-        solid(w, h, 10, 20, 30, 255),
-        solid(w, h, 200, 50, 50, 255),
-    ];
+    let frames = [solid(w, h, 10, 20, 30, 255), solid(w, h, 200, 50, 50, 255)];
     let via_enc = encode_gif(
         w,
         h,
@@ -508,12 +505,6 @@ fn lossy_zero_size_regression() {
         &GifOptions::default().lossy(0).dither(false),
         frames.clone(),
     );
-    let b = encode_gif(
-        w,
-        h,
-        0,
-        &GifOptions::default().dither(false),
-        frames,
-    );
+    let b = encode_gif(w, h, 0, &GifOptions::default().dither(false), frames);
     assert_eq!(a, b, "lossy(0) must match default bitstream");
 }

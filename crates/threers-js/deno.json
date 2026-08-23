@@ -1,0 +1,19 @@
+{
+  "name": "threers",
+  "version": "0.0.4",
+  "exports": {
+    ".": "./dist/mini/threejs-shim.js",
+    "./mini": "./dist/mini/threejs-shim.js",
+    "./full": "./dist/full/threejs-shim.js",
+    "./shim": "./dist/mini/threejs-shim.js",
+    "./video-export": "./dist/full/video-export.js"
+  },
+  "imports": {
+    "#pkg/*": "./dist/mini/pkg/*",
+    "#pkg-full/*": "./dist/full/pkg/*"
+  },
+  "tasks": {
+    "build": "bash ./build.sh"
+  },
+  "nodeModulesDir": "none"
+}

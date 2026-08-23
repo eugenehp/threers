@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>threers — spinning cube (THREE.* drop-in)</title>
+  <style>
+    * { margin: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; background: #101010; overflow: hidden; }
+    canvas { display: block; width: 100%; height: 100%; }
+    #hint {
+      position: fixed; left: 12px; bottom: 12px;
+      font: 13px/1.4 system-ui, sans-serif; color: #8a8f98;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="c"></canvas>
+  <p id="hint">threers npm · <code>import THREE from 'threers'</code> · WebGPU required</p>
+  <script type="module">
+    // Published:  import THREE, { initThreers } from 'threers';
+    // Local dev:  run ../../build.sh first, then serve this folder.
+    import THREE, { initThreers } from '../dist/mini/threejs-shim.js';
+
+    const canvas = document.getElementById('c');
+
+    await initThreers({
+      module_or_path: new URL('../dist/mini/pkg/threers_bg.wasm', import.meta.url),
+    });
+
+    const renderer = await THREE.WebGLRenderer.create(canvas);
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x101010);
+
+    const mesh = new THREE.Mesh(
+      new THREE.BoxGeometry(1, 1, 1),
+      new THREE.MeshStandardMaterial({ color: 0xff6633, roughness: 0.35, metalness: 0.1 }),
+    );
+    scene.add(mesh);
+
+    scene.add(new THREE.AmbientLight(0xffffff, 0.25));
+    const sun = new THREE.DirectionalLight(0xffffff, 2.5);
+    sun.position.set(4, 6, 3);
+    scene.add(sun);
+
+    const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 100);
+    camera.position.set(3, 2, 5);
+    camera.lookAt(0, 0, 0);
+
+    function resize() {
+      const w = canvas.clientWidth;
+      const h = canvas.clientHeight;
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+      renderer.setSize(w, h);
+    }
+    resize();
+    window.addEventListener('resize', resize);
+
+    function animate() {
+      requestAnimationFrame(animate);
+      mesh.rotation.x += 0.008;
+      mesh.rotation.y += 0.012;
+      renderer.render(scene, camera);
+    }
+    animate();
+  </script>
+</body>
+</html>

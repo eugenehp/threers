@@ -1,0 +1,31 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "threers"
+version = "0.0.4"
+description = "Drop-in three.js-shaped 3D toolkit for Python — headless wgpu render, math, animation, physics"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.9"
+authors = [{ name = "Eugene Hauptmann" }]
+keywords = ["three.js", "wgpu", "graphics", "physics", "animation"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: Implementation :: CPython",
+  "Programming Language :: Rust",
+  "Topic :: Multimedia :: Graphics :: 3D Rendering",
+]
+urls = { Homepage = "https://github.com/eugenehp/threers", Repository = "https://github.com/eugenehp/threers" }
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[tool.maturin]
+manifest-path = "Cargo.toml"
+module-name = "threers._native"
+python-source = "python"
+features = ["pyo3/extension-module", "headless", "physics", "animation"]

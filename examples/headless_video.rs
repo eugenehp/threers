@@ -34,14 +34,20 @@ fn main() {
     let mut mat = StandardMaterial::new(Color::new(0.20, 0.62, 0.95));
     mat.metalness = 0.15;
     mat.roughness = 0.35;
-    let cube = scene.add(Object3D::mesh(Mesh::new(BoxGeometry::new(1.6, 1.6, 1.6), mat.into())));
+    let cube = scene.add(Object3D::mesh(Mesh::new(
+        BoxGeometry::new(1.6, 1.6, 1.6),
+        mat.into(),
+    )));
 
     let mut cam = PerspectiveCamera::new(50.0, w as f32 / h as f32, 0.1, 100.0);
     cam.position = Vector3::new(0.0, 1.4, 4.2);
     cam.look_at(Vector3::ZERO);
 
     let frames = 60;
-    let opts = VideoOptions::new("./cube.mp4").fps(30).codec(VideoCodec::H264).crf(20);
+    let opts = VideoOptions::new("./cube.mp4")
+        .fps(30)
+        .codec(VideoCodec::H264)
+        .crf(20);
     export_video(rw, rh, frames, &opts, |f| {
         let angle = f as f32 / frames as f32 * TAU;
         if let Some(o) = scene.get_mut(cube) {

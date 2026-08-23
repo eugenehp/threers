@@ -172,6 +172,10 @@ export class WebGLRenderer implements ThreersHandle {
     setSize(width: number, height?: number, updateStyle?: boolean): void;
     setPixelRatio(value: number): void;
     render(scene: Scene, camera: PerspectiveCamera | OrthographicCamera): void;
+    /** Attach a caption overlay drawn by every \`render()\`; \`null\` detaches. */
+    setCaptions(overlay: CaptionOverlay | null): this;
+    /** Playback clock in seconds that selects which cue \`render()\` draws. */
+    captionTime: number;
     setRenderTarget(target: WebGLRenderTarget | null): void;
     getRenderTarget(): WebGLRenderTarget | null;
     applyPostFx(
@@ -197,6 +201,64 @@ export class WebGLRenderer implements ThreersHandle {
 
 export type WebGPURenderer = WebGLRenderer;
 
+// ---- Subtitles / captions (threers-specific) ----
+
+/** Look of burned-in / on-screen captions. Colors take \`'#rrggbb'\`, \`'#rrggbbaa'\`, \`0xRRGGBB\`, or \`[r,g,b,a]\` bytes. */
+export interface CaptionStyleOptions {
+    fontSize?: number;
+    color?: string | number | [number, number, number, number?];
+    outlineColor?: string | number | [number, number, number, number?];
+    outlineWidth?: number;
+    background?: string | number | [number, number, number, number?];
+    shadowColor?: string | number | [number, number, number, number?];
+    shadowOffset?: [number, number];
+    margin?: number;
+    padding?: number;
+    lineHeight?: number;
+    maxWidth?: number;
+    align?: 'left' | 'center' | 'right';
+    anchor?: 'top' | 'middle' | 'bottom';
+}
+
+/** A subtitle / caption track: cues with start and end times. */
+export class CaptionTrack implements ThreersHandle {
+    _w?: unknown;
+    constructor(wrapped?: unknown);
+    /** Parse SubRip or WebVTT, sniffing the \`WEBVTT\` magic. */
+    static parse(text: string): CaptionTrack;
+    static parseSrt(text: string): CaptionTrack;
+    static parseVtt(text: string): CaptionTrack;
+    addCue(start: number, end: number, text: string): this;
+    setLanguage(language: string): this;
+    setLabel(label: string): this;
+    shift(seconds: number): this;
+    readonly length: number;
+    readonly duration: number;
+    textAt(time: number): string;
+    toSrt(): string;
+    toVtt(): string;
+    /** Object URL of this track as WebVTT, for a \`<track src>\`. Revoke when done. */
+    toTrackUrl(): string;
+}
+
+/** Draws a \`CaptionTrack\` over the rendered frame. */
+export class CaptionOverlay implements ThreersHandle {
+    _w?: unknown;
+    constructor(track: CaptionTrack, style?: CaptionStyleOptions);
+    setTrack(track: CaptionTrack): this;
+    setStyle(style: CaptionStyleOptions): this;
+    /** Use a TrueType face instead of the built-in bitmap one. */
+    setFont(ttf: ArrayBuffer | Uint8Array): this;
+    /** Rescale the style with the frame height, treating it as authored for 1080p. */
+    setAutoScale(enabled?: boolean): this;
+    setSize(width: number, height: number): this;
+    /** Rasterize for \`time\` seconds if the cue changed; returns whether it did. */
+    update(time: number): boolean;
+    readonly visible: boolean;
+    /** RGBA8 overlay pixels, transparent where there is no caption. */
+    rgba(): Uint8Array;
+}
+
 export class WebGLRenderTarget implements ThreersHandle {
     _w?: unknown;
     width: number;
@@ -221,6 +283,16 @@ export interface WebGLRenderTargetOptions {
 
 export class OrbitControls {
     constructor(camera: PerspectiveCamera, domElement?: HTMLElement | null);
+    target: Vector3;
+    enableDamping: boolean;
+    dampingFactor: number;
+    autoRotate: boolean;
+    autoRotateSpeed: number;
+    minDistance: number;
+    maxDistance: number;
+    enableZoom: boolean;
+    enableRotate: boolean;
+    enablePan: boolean;
     update(
         dx?: number,
         dy?: number,
@@ -228,6 +300,191 @@ export class OrbitControls {
         rotating?: boolean,
         panning?: boolean,
     ): void;
+}
+
+/** Speed remapping: \`'linear' | 'smooth' | 'smoother' | 'inOut' | easing name\`. */
+export function speedRamp(
+    kind: string | ((t: number) => number) | null | undefined,
+    t: number,
+    opts?: { easeIn?: number; easeOut?: number },
+): number;
+
+export class CameraPath {
+    points: Vector3[];
+    kind: string;
+    interest: Vector3[];
+    lookAhead: number;
+    fixedTarget: Vector3 | null;
+    ramp: string;
+    fov: number | null;
+    totalLength: number;
+    constructor(opts?: {
+        points?: Array<Vector3 | number[] | { x: number; y: number; z: number }>;
+        kind?: string;
+        interest?: Array<Vector3 | number[] | { x: number; y: number; z: number }>;
+        interestKind?: string;
+        lookAhead?: number;
+        fixedTarget?: Vector3 | number[] | { x: number; y: number; z: number } | null;
+        ramp?: string;
+        rampOpts?: { easeIn?: number; easeOut?: number };
+        fov?: number | null;
+    });
+    static catmullRom(points: any[], opts?: object): CameraPath;
+    static bezier(points: any[], opts?: object): CameraPath;
+    static linear(points: any[], opts?: object): CameraPath;
+    withInterest(points: any[], kind?: string): this;
+    withRamp(ramp: string, rampOpts?: object): this;
+    withFixedTarget(target: any): this;
+    rebuildArcLength(): this;
+    sampleEye(t: number): Vector3;
+    sampleTarget(t: number): Vector3;
+}
+
+/** Additive cinematic helper — does not replace OrbitControls / AnimationMixer. */
+export class CameraAnimator {
+    camera: PerspectiveCamera;
+    readonly isActive: boolean;
+    constructor(camera: PerspectiveCamera);
+    stop(): this;
+    flyTo(opts?: {
+        position?: any; target?: any; fov?: number; duration?: number;
+        easing?: string; ramp?: string; easeIn?: number; easeOut?: number;
+    }): this;
+    orbitBy(opts?: {
+        azimuth?: number; elevation?: number; radiusDelta?: number;
+        duration?: number; easing?: string; ramp?: string; easeIn?: number; easeOut?: number; fov?: number;
+    }): this;
+    lookAt(opts?: {
+        target?: any; duration?: number; holdEye?: boolean;
+        easing?: string; ramp?: string; easeIn?: number; easeOut?: number;
+    }): this;
+    setFov(opts?: {
+        fov?: number; duration?: number;
+        easing?: string; ramp?: string; easeIn?: number; easeOut?: number;
+    }): this;
+    vertigo(opts?: {
+        targetFov?: number; duration?: number;
+        easing?: string; ramp?: string; easeIn?: number; easeOut?: number;
+    }): this;
+    followPath(opts?: {
+        path?: CameraPath | object; duration?: number;
+        ramp?: string; easeIn?: number; easeOut?: number;
+    }): this;
+    update(dt: number): boolean;
+}
+
+export class ShotTimeline {
+    shots: any[];
+    time: number;
+    looping: boolean;
+    constructor();
+    push(shot: object): number;
+    hold(name: string, opts?: object): number;
+    fly(name: string, opts?: object): number;
+    path(name: string, opts?: object): number;
+    duration(): number;
+    seek(time: number): this;
+    update(dt: number): this;
+    sample(): { position: Vector3; target: Vector3; fov: number; shotIndex: number; shotName: string };
+    apply(camera: PerspectiveCamera): { position: Vector3; target: Vector3; fov: number; shotIndex: number; shotName: string };
+}
+
+export class TrackModifier {
+    static noise(opts?: { amplitude?: number; frequency?: number; seed?: number }): object;
+    static cycles(opts?: { before?: number; after?: number }): object;
+    static stepped(opts?: { stepSize?: number }): object;
+    static limit(opts?: { min?: number; max?: number }): object;
+    static remapTime(modifiers: any[] | undefined, t: number, track: any): number;
+    static applyValue(modifiers: any[] | undefined, values: Float32Array, t: number): Float32Array;
+}
+
+export class Tween {
+    constructor(from: any, to: any, duration?: number);
+    setEasing(e: string | ((t: number) => number)): this;
+    setDelay(d: number): this;
+    setRepeat(n: number, yoyo?: boolean): this;
+    value(): any;
+    isFinished(): boolean;
+    update(dt: number): any;
+    onUpdate: ((v: any, e: number) => void) | null;
+    onComplete: ((v: any) => void) | null;
+}
+
+export class Spring {
+    value: any;
+    velocity: any;
+    target: any;
+    angularFrequency: number;
+    dampingRatio: number;
+    restThreshold: number;
+    constructor(value: any, angularFrequency?: number, dampingRatio?: number);
+    static criticallyDamped(value: any, frequency?: number): Spring;
+    setTarget(t: any): this;
+    isSettled(): boolean;
+    update(dt: number): any;
+}
+
+export class Timeline {
+    tracks: any[];
+    markers: Array<{ time: number; name: string; data?: any }>;
+    time: number;
+    duration: number;
+    speed: number;
+    playing: boolean;
+    repeat: number;
+    constructor();
+    add(start: number, duration: number, easing?: string): number;
+    then(duration: number, easing?: string): number;
+    addMarker(time: number, name: string, data?: any): this;
+    setTimeRemap(fnOrSamples: ((t: number) => number) | Array<{ t: number; v: number }> | null): this;
+    update(dt: number): this;
+    seek(time: number): this;
+    progressOf(id: number): number;
+    valueOf(id: number, from: any, to: any): any;
+    markerAt(time?: number): { time: number; name: string; data?: any } | null;
+}
+
+export class ObjectSpring {
+    object: any;
+    spring: Spring;
+    constructor(object: any, opts?: { frequency?: number; damping?: number; property?: string });
+    setTarget(target: any): this;
+    update(dt: number): any;
+}
+
+export class PoseBlend {
+    target: any;
+    duration: number;
+    state: string;
+    constructor(target: any, duration?: number);
+    goLimp(): this;
+    getUp(): this;
+    update(dt: number, animated: any, simulated: any): string;
+}
+
+export class PropertyBinding {
+    path: string;
+    rootNode: any;
+    node: any;
+    constructor(rootNode: any, path: string, parsedPath?: object);
+    static parseTrackName(trackName: string): object;
+    static findNode(root: any, nodeName: string): any;
+    bind(): void;
+    unbind(): void;
+    getValue(buffer: Float32Array | number[], offset?: number): void;
+    setValue(buffer: Float32Array | number[], offset?: number): void;
+}
+
+export class PropertyMixer {
+    binding: PropertyBinding;
+    typeName: string;
+    valueSize: number;
+    constructor(binding: PropertyBinding, typeName: string, valueSize: number);
+    accumulate(offset: number, weight: number): void;
+    accumulateAdditive(offset: number, weight: number): void;
+    apply(accuIndex?: number): void;
+    saveOriginalState(): void;
+    restoreOriginalState(): void;
 }
 
 export class TrackballControls {
@@ -425,28 +682,53 @@ export class AnimationClip {
     name: string;
     duration: number;
     tracks: KeyframeTrack[];
+    blendMode: number;
     constructor(name: string, duration: number, tracks: KeyframeTrack[]);
     static parse(json: unknown): AnimationClip;
+    clone(): AnimationClip;
 }
 
 export class AnimationMixer {
+    root: unknown;
+    time: number;
+    timeScale: number;
     constructor(root: unknown);
     clipAction(clip: AnimationClip, root?: unknown): AnimationAction;
+    existingAction(clip: AnimationClip, root?: unknown): AnimationAction | null;
+    stopAllAction(): this;
     update(delta: number): this;
 }
 
 export interface AnimationAction {
+    clip: AnimationClip;
+    enabled: boolean;
+    paused: boolean;
+    weight: number;
+    timeScale: number;
+    time: number;
+    loop: number;
+    blendMode: number;
+    isRunning: boolean;
     play(): this;
     stop(): this;
     reset(): this;
+    setLoop(mode: number, repetitions?: number): this;
     setEffectiveTimeScale(value: number): this;
     setEffectiveWeight(value: number): this;
+    getEffectiveWeight(): number;
+    getEffectiveTimeScale(): number;
+    fadeIn(duration?: number): this;
+    fadeOut(duration?: number): this;
+    crossFadeFrom(fadeOutAction: AnimationAction, duration?: number, warp?: boolean): this;
+    crossFadeTo(fadeInAction: AnimationAction, duration?: number, warp?: boolean): this;
 }
 
 export interface KeyframeTrack {
     name: string;
     times: Float32Array | number[];
     values: Float32Array | number[];
+    modifiers?: object[];
+    getValueSize?(): number;
 }
 
 export class Texture extends ThreersHandle {
@@ -552,6 +834,7 @@ export {
     emitProgress,
     formatBytes,
     alignVideoSize,
+    alignVideoSizeForMp4,
     videoMimeType,
     videoFilename,
     encodeVideoFrames,
@@ -561,6 +844,9 @@ export {
     encodeGifRgba,
     encodeApngRgba,
     encodeWebmRgba,
+    encodeMp4Rgba,
+    getSharedEncodeWorker,
+    transferFrameBuffer,
 } from './video-export.js';
 
 export type {
@@ -573,6 +859,7 @@ export type {
     VideoExportPhase,
     VideoFormatPresetOptions,
     VideoEncodeWorkerOptions,
+    VideoEncodeStreamOptions,
     VideoExportStartDetail,
     VideoExportCompleteDetail,
     VideoExportErrorDetail,
@@ -593,20 +880,23 @@ export type SceneVideoExportOptions = Omit<VideoEncodeOptions, 'width' | 'height
     renderTarget?: WebGLRenderTarget;
     /** Ring of targets for pipelined capture (length ≥ concurrency). */
     renderTargets?: WebGLRenderTarget[];
-    /** Yield to the event loop between frames (default true). */
+    /** Yield to the event loop between frames (default: true when sequential, false when pipelined). */
     yield?: boolean;
     /**
      * Pipeline GPU readbacks across multiple render targets.
      * \`true\` → 2 in flight; a number sets concurrency (1–8).
+     * Worker encode defaults to 3 when neither \`parallel\` nor \`concurrency\` is set.
      */
     parallel?: boolean | number;
     /** Explicit in-flight readback count (1–8). Overrides \`parallel\`. */
     concurrency?: number;
-    /** Encode captured frames in a Web Worker (wasm off main thread). */
+    /** Encode captured frames in a Web Worker (wasm off main thread; streams frames as they land). */
     encodeInWorker?: boolean;
     worker?: boolean | VideoEncodeWorker;
     wasmUrl?: string;
     workerUrl?: string;
+    /** Frames per worker postMessage while streaming (default 4). */
+    streamBatchSize?: number;
     /**
      * Clear a top-left corner to alpha=0 each frame (boolean or pixel size).
      * Prefer \`mapFrame\` for custom transforms.
@@ -623,7 +913,7 @@ export type SceneVideoExporter = VideoExporter & {
     /** Pipeline readbacks: \`true\` → 2, or pass 1–8. */
     parallel(n?: boolean | number): SceneVideoExporter;
     concurrency(n: number): SceneVideoExporter;
-    /** Encode on a Web Worker after capture. */
+    /** Encode on a Web Worker; frames stream during capture. */
     worker(on?: boolean): SceneVideoExporter;
     on(type: string, listener: EventListenerOrEventListenerObject, options?: boolean | AddEventListenerOptions): SceneVideoExporter;
     off(type: string, listener: EventListenerOrEventListenerObject, options?: boolean | EventListenerOptions): SceneVideoExporter;
@@ -710,6 +1000,7 @@ manualNames.add('parseVideoFormat');
 manualNames.add('formatVideoProgress');
 manualNames.add('formatBytes');
 manualNames.add('alignVideoSize');
+manualNames.add('alignVideoSizeForMp4');
 manualNames.add('videoMimeType');
 manualNames.add('videoFilename');
 manualNames.add('encodeVideoFrames');
@@ -718,6 +1009,12 @@ manualNames.add('encodeAndDownloadVideoFrames');
 manualNames.add('encodeGifRgba');
 manualNames.add('encodeApngRgba');
 manualNames.add('encodeWebmRgba');
+manualNames.add('encodeMp4Rgba');
+manualNames.add('getSharedEncodeWorker');
+manualNames.add('transferFrameBuffer');
+manualNames.add('VideoEncodeStreamOptions');
+manualNames.add('CaptionTrack');
+manualNames.add('CaptionOverlay');
 manualNames.add('captureSceneFrames');
 manualNames.add('exportSceneVideo');
 manualNames.add('exportAndDownloadSceneVideo');

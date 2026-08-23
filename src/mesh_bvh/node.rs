@@ -33,7 +33,7 @@ impl BvhNode {
     /// Export as 8 f32 values for JS shapecast: min(3), max(3), meta0, meta1.
     /// meta0: leaf => -(offset+1), internal => left child index
     /// meta1: leaf => count, internal => right child index
-    pub fn to_buffer(&self, out: &mut [f32], index: usize) {
+    pub fn to_buffer(self, out: &mut [f32], index: usize) {
         let base = index * 8;
         out[base] = self.bounds.min.x;
         out[base + 1] = self.bounds.min.y;

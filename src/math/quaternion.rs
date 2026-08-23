@@ -189,3 +189,63 @@ impl Quaternion {
         }
     }
 }
+/// Composition, so rotations read the way they are spoken about.
+///
+/// `Vector3` has carried `Add`, `Sub`, `Mul<f32>` and `Neg` all along while the
+/// quaternion had only the named method, so composing three rotations came out
+/// as `a.multiply(b).multiply(c)` — the one place in the crate where the maths
+/// has to be written inside out. Same order as [`multiply`](Quaternion::multiply)
+/// and as three.js: `a * b` applies `b` first, then `a`.
+impl std::ops::Mul for Quaternion {
+    type Output = Self;
+    fn mul(self, rhs: Self) -> Self {
+        self.multiply(rhs)
+    }
+}
+
+/// Rotating a vector, the same way round: `q * v`.
+impl std::ops::Mul<Vector3> for Quaternion {
+    type Output = Vector3;
+    fn mul(self, rhs: Vector3) -> Vector3 {
+        rhs.apply_quaternion(self)
+    }
+}
+
+#[cfg(test)]
+mod op_tests {
+    use super::*;
+
+    #[test]
+    fn mul_is_multiply_and_composes_right_to_left() {
+        let a = Quaternion::from_axis_angle(Vector3::new(0.0, 1.0, 0.0), 0.7);
+        let b = Quaternion::from_axis_angle(Vector3::new(1.0, 0.0, 0.0), -0.3);
+        let (m, o) = (a.multiply(b), a * b);
+        for (l, r) in [(m.x, o.x), (m.y, o.y), (m.z, o.z), (m.w, o.w)] {
+            assert!((l - r).abs() < 1e-6, "operator must match multiply");
+        }
+        // Right-to-left: applying the product must equal applying b then a.
+        let v = Vector3::new(0.3, -0.6, 0.8);
+        let stepwise = v.apply_quaternion(b).apply_quaternion(a);
+        let combined = (a * b) * v;
+        for (l, r) in [
+            (stepwise.x, combined.x),
+            (stepwise.y, combined.y),
+            (stepwise.z, combined.z),
+        ] {
+            assert!(
+                (l - r).abs() < 1e-6,
+                "a * b must apply b first: {stepwise:?} vs {combined:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn mul_vector_matches_apply_quaternion() {
+        let q = Quaternion::from_euler_xyz(0.4, -0.9, 0.2);
+        let v = Vector3::new(1.0, 2.0, -3.0);
+        let (a, b) = (v.apply_quaternion(q), q * v);
+        for (l, r) in [(a.x, b.x), (a.y, b.y), (a.z, b.z)] {
+            assert!((l - r).abs() < 1e-6);
+        }
+    }
+}

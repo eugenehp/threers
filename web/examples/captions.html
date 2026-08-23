@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>captions — threers</title>
+    <style>
+        :root { color-scheme: dark; }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            background: #08090d;
+            color: #e6e8ee;
+            font: 14px/1.5 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+        }
+        header {
+            display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap;
+            padding: 18px 24px 12px;
+            border-bottom: 1px solid #1e2129;
+        }
+        h1 { font-size: 17px; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+        h1 .tag { color: #7d879c; font-weight: 400; }
+        #status { color: #7d879c; font-size: 12px; }
+        nav { margin-left: auto; display: flex; gap: 14px; }
+        nav a { color: #6ea8fe; text-decoration: none; font-size: 13px; }
+        nav a:hover { text-decoration: underline; }
+
+        main { padding: 20px 24px 40px; max-width: 1100px; margin: 0 auto; }
+        .intro { color: #97a0b3; max-width: 78ch; margin: 0 0 18px; font-size: 13px; }
+        .intro code { color: #cfd6e6; background: #14161d; padding: 1px 5px; border-radius: 4px; }
+
+        canvas { width: 100%; aspect-ratio: 16 / 9; display: block; border-radius: 10px; background: #05060a; }
+
+        .controls {
+            display: flex; flex-wrap: wrap; gap: 14px 22px; align-items: center;
+            margin: 16px 0 8px; padding: 14px 16px;
+            background: #0e1016; border: 1px solid #1e2129; border-radius: 10px;
+        }
+        .controls label { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #b9c1d1; }
+        .controls select, .controls input[type="range"] { accent-color: #6ea8fe; }
+        button {
+            font: inherit; font-size: 13px; padding: 6px 12px; border-radius: 6px;
+            border: 1px solid #2a2f3c; background: #161a23; color: #e6e8ee; cursor: pointer;
+        }
+        button:hover { background: #1d2230; }
+        #time { font-variant-numeric: tabular-nums; color: #7d879c; min-width: 4.5em; }
+        #cue {
+            margin-top: 10px; padding: 10px 12px; min-height: 2.6em;
+            background: #0e1016; border: 1px solid #1e2129; border-radius: 8px;
+            font-size: 13px; color: #97a0b3; white-space: pre-wrap;
+        }
+        #err { color: #ff8080; white-space: pre-wrap; font-size: 12px; }
+        pre { background: #0e1016; border: 1px solid #1e2129; padding: 12px; border-radius: 8px; font-size: 12px; overflow: auto; }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>captions <span class="tag">· threers</span></h1>
+        <span id="status">loading wasm…</span>
+        <nav>
+            <a href="/web/examples/">examples</a>
+            <a href="/web/index.html">main demo</a>
+        </nav>
+    </header>
+    <main>
+        <p class="intro">
+            A WebVTT track drawn over the 3D scene by the renderer's overlay pass — the same
+            code path <code>cargo run --example captions_render</code> uses natively. The text is
+            rasterized only when the active cue changes, so the per-frame cost is one texture
+            upload. Nothing here needs a font file: the built-in bitmap face ships in the wasm.
+        </p>
+
+        <canvas id="c" width="1280" height="720"></canvas>
+
+        <div class="controls">
+            <button id="play">Pause</button>
+            <span id="time">0.0 s</span>
+            <label>seek
+                <input id="seek" type="range" min="0" max="12" step="0.05" value="0" style="width: 220px">
+            </label>
+            <label>anchor
+                <select id="anchor">
+                    <option value="bottom" selected>bottom</option>
+                    <option value="middle">middle</option>
+                    <option value="top">top</option>
+                </select>
+            </label>
+            <label>align
+                <select id="align">
+                    <option value="center" selected>center</option>
+                    <option value="left">left</option>
+                    <option value="right">right</option>
+                </select>
+            </label>
+            <label>size
+                <input id="size" type="range" min="14" max="72" step="1" value="34" style="width: 140px">
+            </label>
+            <label><input id="box" type="checkbox" checked> background box</label>
+            <button id="srt">Download .srt</button>
+            <button id="vtt">Download .vtt</button>
+        </div>
+
+        <div id="cue">—</div>
+        <p id="err"></p>
+
+        <h2 style="font-size:15px">The whole integration</h2>
+        <pre>import THREE, { CaptionTrack, CaptionOverlay } from '../threejs-shim.js';
+
+const track   = CaptionTrack.parse(vttText);        // or .parseSrt(...)
+const overlay = new CaptionOverlay(track, { fontSize: 34, anchor: 'bottom' });
+overlay.setAutoScale(true);                          // style follows canvas height
+renderer.setCaptions(overlay);
+
+function frame(now) {
+    renderer.captionTime = now / 1000;               // your playback clock
+    renderer.render(scene, camera);                  // caption composited on top
+    requestAnimationFrame(frame);
+}</pre>
+    </main>
+    <script type="module" src="./captions-demo.js"></script>
+</body>
+</html>

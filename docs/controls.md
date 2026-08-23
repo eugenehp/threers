@@ -67,14 +67,19 @@ camera.position.set(2, 2, 4);
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
+controls.autoRotate = true;
 
 function animate() {
     requestAnimationFrame(animate);
-    controls.update(); // reads domElement events internally
+    controls.update(); // required every frame for damping / auto-rotate
     renderer.render(scene, camera);
 }
 animate();
 ```
+
+threers shim parity: `enableDamping`, `dampingFactor`, `autoRotate`, `autoRotateSpeed`. Native Rust: `enable_damping`, `damping`, `auto_rotate`, `update_dt(...)`.
+
+For scripted cinematic cameras (fly-to, paths, shake, shot timelines), see [camera-animation.md](./camera-animation.md).
 
 ### three.js (TypeScript)
 

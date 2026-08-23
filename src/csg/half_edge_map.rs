@@ -19,6 +19,8 @@ impl HalfEdgeMap {
 
         for tri in 0..count {
             let mut hashes = [(0i32, 0i32, 0i32); 3];
+            // `e` is the edge number, passed to `index_at` as well as indexing.
+            #[allow(clippy::needless_range_loop)]
             for e in 0..3 {
                 let vi = index_at(geometry, tri, e);
                 let v = super::geometry_prep::read_position(pos, vi);
@@ -59,7 +61,7 @@ impl HalfEdgeMap {
         if other == -1 {
             -1
         } else {
-            (other / 3) as i32
+            other / 3
         }
     }
 }

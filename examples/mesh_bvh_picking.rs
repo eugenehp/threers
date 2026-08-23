@@ -4,11 +4,11 @@
 //! cargo run --example mesh_bvh_picking --features mesh-bvh
 //! ```
 
-use threers::{
-    BasicMaterial, Color, Mesh, MeshBvh, Object3D, ObjectArena, Ray,
-    Raycaster, SphereGeometry, Vector3,
-};
 use threers::mesh_bvh::BuildOptions;
+use threers::{
+    BasicMaterial, Color, Mesh, MeshBvh, Object3D, ObjectArena, Ray, Raycaster, SphereGeometry,
+    Vector3,
+};
 
 fn main() {
     let mut geom = SphereGeometry::new(1.0, 32, 16);
@@ -38,7 +38,11 @@ fn main() {
     let scene_hits = rc.intersect_objects(&arena, root, true);
 
     assert!(!direct_hits.is_empty(), "BVH raycast should hit sphere");
-    assert_eq!(direct_hits.len(), scene_hits.len(), "BVH and scene raycaster hit counts differ");
+    assert_eq!(
+        direct_hits.len(),
+        scene_hits.len(),
+        "BVH and scene raycaster hit counts differ"
+    );
     println!(
         "mesh_bvh_picking: {} hit(s), closest distance {:.4}",
         direct_hits.len(),

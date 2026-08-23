@@ -262,8 +262,10 @@ mod tests {
         arena.add_child(root, mesh_id);
         arena.update_world_matrices(root, crate::math::Matrix4::identity());
 
-        let mut rc = Raycaster::default();
-        rc.ray = Ray::new(Vector3::new(0.25, 0.25, -1.0), Vector3::new(0.0, 0.0, 1.0));
+        let rc = Raycaster {
+            ray: Ray::new(Vector3::new(0.25, 0.25, -1.0), Vector3::new(0.0, 0.0, 1.0)),
+            ..Raycaster::default()
+        };
         let hits = rc.intersect_objects(&arena, root, true);
         assert_eq!(hits.len(), 1, "expected one hit, got {:?}", hits);
         assert!((hits[0].distance - 1.0).abs() < 1e-4);

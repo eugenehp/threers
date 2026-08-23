@@ -17,8 +17,14 @@ pub struct GpuMesh {
 }
 
 impl GpuMesh {
-    /// Vertex layout (48 bytes): position(3) + normal(3) + uv(2) + color(4).
-    pub const VERTEX_STRIDE: u64 = 12 * 4;
+    /// Vertex layout (64 bytes):
+    /// position(3) + normal(3) + uv(2) + color(4) + tangent(4).
+    ///
+    /// `tangent.xyz` is the surface tangent and `tangent.w` the bitangent
+    /// handedness (glTF's convention). An all-zero tangent means "not
+    /// supplied", and the fragment shader falls back to a derivative-derived
+    /// frame — so geometries without tangents behave exactly as before.
+    pub const VERTEX_STRIDE: u64 = 16 * 4;
 
     pub(crate) fn build_interleaved(geom: &BufferGeometry) -> Vec<f32> {
         let positions = geom
@@ -28,9 +34,10 @@ impl GpuMesh {
         let uvs = geom.get_attribute("uv");
         let line_distances = geom.get_attribute("lineDistance");
         let colors = geom.get_attribute("color");
+        let tangents = geom.get_attribute("tangent");
 
         let vert_count = positions.count();
-        let mut interleaved = Vec::with_capacity(vert_count * 12);
+        let mut interleaved = Vec::with_capacity(vert_count * 16);
         for i in 0..vert_count {
             interleaved.extend_from_slice(&positions.array[i * 3..i * 3 + 3]);
             if let Some(n) = normals {
@@ -58,6 +65,17 @@ impl GpuMesh {
             } else {
                 interleaved.extend_from_slice(&[1.0, 1.0, 1.0, 1.0]);
             }
+            // Tangent (glTF TANGENT / `compute_tangents`). Zero = absent.
+            match tangents {
+                Some(t) if t.item_size == 4 => {
+                    interleaved.extend_from_slice(&t.array[i * 4..i * 4 + 4]);
+                }
+                Some(t) if t.item_size == 3 => {
+                    interleaved.extend_from_slice(&t.array[i * 3..i * 3 + 3]);
+                    interleaved.push(1.0);
+                }
+                _ => interleaved.extend_from_slice(&[0.0, 0.0, 0.0, 0.0]),
+            }
         }
         interleaved
     }
@@ -70,10 +88,16 @@ impl GpuMesh {
             .unwrap_or(0);
         let colors = geom.get_attribute("color").is_some();
 
+        let mut vertex_usage = wgpu::BufferUsages::VERTEX;
+        if geom.gpu_writable {
+            // Opt-in: lets a user compute pass rewrite this mesh in place. See
+            // `BufferGeometry::gpu_writable`.
+            vertex_usage |= wgpu::BufferUsages::STORAGE;
+        }
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("threers vertex buffer"),
             contents: bytemuck::cast_slice(&interleaved),
-            usage: wgpu::BufferUsages::VERTEX,
+            usage: vertex_usage,
         });
 
         let (index_buffer, index_count) = if let Some(idx) = &geom.index {
@@ -142,7 +166,34 @@ mod tests {
 
     fn interleaved_uv_x(geom: &BufferGeometry, vert: usize) -> f32 {
         let interleaved = GpuMesh::build_interleaved(geom);
-        interleaved[vert * 12 + 6]
+        // Derived from the stride rather than hardcoded, so adding a vertex
+        // attribute can't silently invalidate this index.
+        let floats_per_vert = (GpuMesh::VERTEX_STRIDE / 4) as usize;
+        interleaved[vert * floats_per_vert + 6]
+    }
+
+    #[test]
+    fn interleaved_carries_tangent_when_present() {
+        let floats_per_vert = (GpuMesh::VERTEX_STRIDE / 4) as usize;
+        let mut g = BufferGeometry::new();
+        g.set_attribute(
+            "position",
+            BufferAttribute::new(vec![0., 0., 0., 1., 0., 0.], 3),
+        );
+        // Without a tangent attribute the slot must be all zeros — that is the
+        // sentinel the shader reads as "fall back to derivative tangents".
+        let no_tan = GpuMesh::build_interleaved(&g);
+        assert_eq!(&no_tan[12..16], &[0.0, 0.0, 0.0, 0.0]);
+
+        g.set_attribute(
+            "tangent",
+            BufferAttribute::new(vec![1., 0., 0., 1., 0., 1., 0., -1.], 4),
+        );
+        let with_tan = GpuMesh::build_interleaved(&g);
+        assert_eq!(&with_tan[12..16], &[1.0, 0.0, 0.0, 1.0]);
+        // Second vertex, including the negative handedness in w.
+        let o = floats_per_vert + 12;
+        assert_eq!(&with_tan[o..o + 4], &[0.0, 1.0, 0.0, -1.0]);
     }
 
     #[test]

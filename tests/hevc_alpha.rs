@@ -36,7 +36,9 @@ fn write_transparent_mov() {
     let color = Yuv420Frame::from_rgba(w, h, &rgba);
 
     // Alpha ramp: fully transparent at the left edge → opaque at the right.
-    let alpha: Vec<u8> = (0..w * h).map(|k| ((k % w) * 255 / (w - 1)) as u8).collect();
+    let alpha: Vec<u8> = (0..w * h)
+        .map(|k| ((k % w) * 255 / (w - 1)) as u8)
+        .collect();
 
     let mut enc = TransparentEncoder::new(w, h);
     enc.encode_frame(&color, &alpha);
@@ -50,7 +52,11 @@ fn write_transparent_mov() {
 
     let path = out_path();
     std::fs::write(&path, &mov).unwrap();
-    eprintln!("wrote transparent .mov: {} ({} bytes)", path.display(), mov.len());
+    eprintln!(
+        "wrote transparent .mov: {} ({} bytes)",
+        path.display(),
+        mov.len()
+    );
 }
 
 fn find(hay: &[u8], needle: &[u8]) -> bool {
@@ -82,7 +88,10 @@ fn avfoundation_decodes_alpha_losslessly() {
 #[cfg(test)]
 fn check_size(w: u32, h: u32) {
     use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
     let dir = std::env::temp_dir();
     let mov = dir.join(format!("threers_a_{nanos}_{w}x{h}.mov"));
     let swift = dir.join(format!("threers_dec_{nanos}.swift"));
@@ -97,7 +106,9 @@ fn check_size(w: u32, h: u32) {
         })
         .collect();
     let color = Yuv420Frame::from_rgba(w, h, &rgba);
-    let alpha: Vec<u8> = (0..w * h).map(|k| ((k % w) * 255 / (w - 1)) as u8).collect();
+    let alpha: Vec<u8> = (0..w * h)
+        .map(|k| ((k % w) * 255 / (w - 1)) as u8)
+        .collect();
     let mut enc = TransparentEncoder::new(w, h);
     enc.encode_frame(&color, &alpha);
     std::fs::write(&mov, enc.finish_mov(30)).unwrap();
@@ -118,7 +129,10 @@ fn check_size(w: u32, h: u32) {
         .status()
         .expect("run decoder")
         .success();
-    assert!(ok, "AVFoundation failed to decode our transparent {w}x{h} mov");
+    assert!(
+        ok,
+        "AVFoundation failed to decode our transparent {w}x{h} mov"
+    );
 
     let out = std::fs::read(&bgra).unwrap();
     assert_eq!(out.len(), (w * h * 4) as usize, "decoded size {w}x{h}");
@@ -133,7 +147,10 @@ fn check_size(w: u32, h: u32) {
     let _ = std::fs::remove_file(&swift);
     let _ = std::fs::remove_file(&bin);
     let _ = std::fs::remove_file(&bgra);
-    assert!(max_err <= 1, "alpha not lossless at {w}x{h}: max_err={max_err}");
+    assert!(
+        max_err <= 1,
+        "alpha not lossless at {w}x{h}: max_err={max_err}"
+    );
     eprintln!("AVFoundation alpha OK: {w}x{h} lossless (max_err {max_err})");
 }
 

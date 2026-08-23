@@ -173,7 +173,8 @@ impl TriangleSplitter {
                     did_intersect = true;
                 }
 
-                if did_intersect && !(hit_vec.distance_to(edge.start) < TOPO_EPSILON) {
+                let from_start = hit_vec.distance_to(edge.start);
+                if did_intersect && (from_start >= TOPO_EPSILON || from_start.is_nan()) {
                     if hit_vec.distance_to(edge.end) < TOPO_EPSILON {
                         vertex_split_end = t as i32;
                     }

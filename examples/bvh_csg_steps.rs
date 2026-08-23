@@ -68,7 +68,10 @@ fn main() {
 
 async fn run(step: u8, live: bool, ref_wincut: bool) {
     let geom = build_geometry(step, live, ref_wincut);
-    let verts = geom.get_attribute("position").map(|a| a.count()).unwrap_or(0);
+    let verts = geom
+        .get_attribute("position")
+        .map(|a| a.count())
+        .unwrap_or(0);
     let target = js_target_verts(step);
     let mode = if ref_wincut {
         "ref-wincut"
@@ -79,9 +82,7 @@ async fn run(step: u8, live: bool, ref_wincut: bool) {
     };
 
     let event_loop = EventLoop::new().expect("event loop");
-    let title = format!(
-        "threers CSG step {step} ({mode}) — {verts} verts (JS {target})"
-    );
+    let title = format!("threers CSG step {step} ({mode}) — {verts} verts (JS {target})");
     let window = Arc::new(
         WindowBuilder::new()
             .with_title(&title)
@@ -90,10 +91,14 @@ async fn run(step: u8, live: bool, ref_wincut: bool) {
             .expect("window"),
     );
 
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-        backends: wgpu::Backends::PRIMARY,
-        ..Default::default()
-    });
+    let instance = {
+        // wgpu 30 has no `Default` here. The display handle only
+        // matters for GLES/Wayland presentation; Vulkan, Metal and
+        // DX12 ignore it, and those are the backends asked for.
+        let mut d = wgpu::InstanceDescriptor::new_without_display_handle();
+        d.backends = wgpu::Backends::PRIMARY;
+        wgpu::Instance::new(d)
+    };
     let surface = instance.create_surface(window.clone()).expect("surface");
 
     let adapter = instance
@@ -101,6 +106,7 @@ async fn run(step: u8, live: bool, ref_wincut: bool) {
             power_preference: wgpu::PowerPreference::default(),
             compatible_surface: Some(&surface),
             force_fallback_adapter: false,
+            apply_limit_buckets: false,
         })
         .await
         .expect("adapter");
@@ -111,8 +117,8 @@ async fn run(step: u8, live: bool, ref_wincut: bool) {
                 label: Some("threers"),
                 required_features: wgpu::Features::empty(),
                 required_limits: wgpu::Limits::downlevel_defaults(),
+                ..Default::default()
             },
-            None,
         )
         .await
         .expect("device");
@@ -122,7 +128,12 @@ async fn run(step: u8, live: bool, ref_wincut: bool) {
 
     let size = window.inner_size();
     let caps = surface.get_capabilities(&adapter);
-    let format = caps.formats.iter().copied().find(|f| f.is_srgb()).unwrap_or(caps.formats[0]);
+    let format = caps
+        .formats
+        .iter()
+        .copied()
+        .find(|f| f.is_srgb())
+        .unwrap_or(caps.formats[0]);
 
     let mut config = wgpu::SurfaceConfiguration {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -133,10 +144,17 @@ async fn run(step: u8, live: bool, ref_wincut: bool) {
         alpha_mode: caps.alpha_modes[0],
         view_formats: vec![],
         desired_maximum_frame_latency: 2,
+        color_space: wgpu::SurfaceColorSpace::Srgb,
     };
     surface.configure(&device, &config);
 
-    let mut renderer = Renderer::new(device.clone(), queue.clone(), format, config.width, config.height);
+    let mut renderer = Renderer::new(
+        device.clone(),
+        queue.clone(),
+        format,
+        config.width,
+        config.height,
+    );
 
     let mut scene = Scene::new();
     scene.background = Color::from_hex(0x101418);
@@ -158,38 +176,39 @@ async fn run(step: u8, live: bool, ref_wincut: bool) {
     let window_for_loop = window.clone();
 
     event_loop
-        .run(move |event, target| {
-            match event {
-                Event::WindowEvent { event, window_id } if window_id == window_for_loop.id() => {
-                    match event {
-                        WindowEvent::CloseRequested => target.exit(),
-                        WindowEvent::Resized(new_size) => {
-                            config.width = new_size.width.max(1);
-                            config.height = new_size.height.max(1);
-                            surface.configure(&device, &config);
-                            renderer.resize(config.width, config.height);
-                            camera.set_aspect(config.width as f32 / config.height as f32);
-                        }
-                        WindowEvent::RedrawRequested => {
-                            scene.update_world();
-                            match surface.get_current_texture() {
-                                Ok(frame) => {
-                                    let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
-                                    renderer.render(&mut scene, &camera, &view, false);
-                                    frame.present();
-                                }
-                                Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
-                                    surface.configure(&device, &config);
-                                }
-                                Err(e) => log::error!("surface: {e:?}"),
-                            }
-                        }
-                        _ => {}
+        .run(move |event, target| match event {
+            Event::WindowEvent { event, window_id } if window_id == window_for_loop.id() => {
+                match event {
+                    WindowEvent::CloseRequested => target.exit(),
+                    WindowEvent::Resized(new_size) => {
+                        config.width = new_size.width.max(1);
+                        config.height = new_size.height.max(1);
+                        surface.configure(&device, &config);
+                        renderer.resize(config.width, config.height);
+                        camera.set_aspect(config.width as f32 / config.height as f32);
                     }
+                    WindowEvent::RedrawRequested => {
+                        scene.update_world();
+                        match surface.get_current_texture() {
+                            wgpu::CurrentSurfaceTexture::Success(frame)
+                            | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {
+                                let view = frame
+                                    .texture
+                                    .create_view(&wgpu::TextureViewDescriptor::default());
+                                renderer.render(&mut scene, &camera, &view, false);
+                                queue.present(frame);
+                            }
+                            wgpu::CurrentSurfaceTexture::Lost | wgpu::CurrentSurfaceTexture::Outdated => {
+                                surface.configure(&device, &config);
+                            }
+                            e => log::error!("surface: {e:?}"),
+                        }
+                    }
+                    _ => {}
                 }
-                Event::AboutToWait => window_for_loop.request_redraw(),
-                _ => {}
             }
+            Event::AboutToWait => window_for_loop.request_redraw(),
+            _ => {}
         })
         .expect("event loop");
 }

@@ -13,12 +13,19 @@ use std::collections::HashSet;
 // Weld grid at 1e-4: coarse enough to merge vertices after f32 STL round-trip
 // (~2e-6 ulp at model scale ~10s), fine enough to keep distinct features apart.
 fn key(p: V3) -> (i64, i64, i64) {
-    ((p[0] * 1e4).round() as i64, (p[1] * 1e4).round() as i64, (p[2] * 1e4).round() as i64)
+    (
+        (p[0] * 1e4).round() as i64,
+        (p[1] * 1e4).round() as i64,
+        (p[2] * 1e4).round() as i64,
+    )
 }
 
 /// Signed volume (divergence theorem).
 pub fn volume(tris: &[[V3; 3]]) -> f64 {
-    tris.iter().map(|t| dot(t[0], cross(t[1], t[2]))).sum::<f64>() / 6.0
+    tris.iter()
+        .map(|t| dot(t[0], cross(t[1], t[2])))
+        .sum::<f64>()
+        / 6.0
 }
 
 /// Euler characteristic `V − E + F` over the welded mesh (2 for a genus-0
@@ -114,7 +121,11 @@ pub fn hausdorff(a: &[[V3; 3]], b: &[[V3; 3]]) -> f64 {
     let one_way = |verts: &[V3], tris: &[[V3; 3]]| -> f64 {
         verts
             .iter()
-            .map(|p| tris.iter().map(|t| point_tri_dist2(*p, t)).fold(f64::INFINITY, f64::min))
+            .map(|p| {
+                tris.iter()
+                    .map(|t| point_tri_dist2(*p, t))
+                    .fold(f64::INFINITY, f64::min)
+            })
             .fold(0.0, f64::max)
             .sqrt()
     };
@@ -145,7 +156,13 @@ pub fn compare(
     let euler_match = euler_characteristic(&to) == euler_characteristic(&tr);
     let hausdorff = hausdorff(&to, &tr);
     let pass = watertight && vol_rel_err < vol_tol && euler_match && hausdorff < haus_tol;
-    MeshReport { watertight, vol_rel_err, euler_match, hausdorff, pass }
+    MeshReport {
+        watertight,
+        vol_rel_err,
+        euler_match,
+        hausdorff,
+        pass,
+    }
 }
 
 #[cfg(test)]
@@ -156,7 +173,11 @@ mod tests {
     #[test]
     fn euler_of_a_closed_box_is_two() {
         let g = cube([2.0, 2.0, 2.0]).to_geometry();
-        assert_eq!(euler_characteristic(&triangles(&g)), 2, "genus-0 closed surface");
+        assert_eq!(
+            euler_characteristic(&triangles(&g)),
+            2,
+            "genus-0 closed surface"
+        );
     }
 
     #[test]
@@ -169,9 +190,14 @@ mod tests {
     #[test]
     fn hausdorff_measures_offset() {
         let a = cube([2.0, 2.0, 2.0]).to_geometry();
-        let b = cube([2.0, 2.0, 2.0]).translate([0.1, 0.0, 0.0]).to_geometry();
+        let b = cube([2.0, 2.0, 2.0])
+            .translate([0.1, 0.0, 0.0])
+            .to_geometry();
         let h = hausdorff(&triangles(&a), &triangles(&b));
-        assert!((h - 0.1).abs() < 1e-6, "shift of 0.1 → Hausdorff 0.1, got {h}");
+        assert!(
+            (h - 0.1).abs() < 1e-6,
+            "shift of 0.1 → Hausdorff 0.1, got {h}"
+        );
     }
 
     #[test]
@@ -189,21 +215,29 @@ mod tests {
             [c, [1.0, 1.0, 0.0], [0.0, 1.0, 0.0]],
             [c, [0.0, 1.0, 0.0], [0.0, 0.0, 0.0]],
         ];
-        assert!(hausdorff(&plain, &fan) < 1e-9, "retessellation of the same surface → 0");
+        assert!(
+            hausdorff(&plain, &fan) < 1e-9,
+            "retessellation of the same surface → 0"
+        );
     }
 
     #[test]
     fn compare_passes_identical_and_fails_different() {
         let a = cube([2.0, 2.0, 2.0]).to_geometry();
-        assert!(compare(&a, &a, 1e-6, 1e-6).pass, "identical meshes must pass");
+        assert!(
+            compare(&a, &a, 1e-6, 1e-6).pass,
+            "identical meshes must pass"
+        );
 
         let big = cube([2.2, 2.0, 2.0]).to_geometry(); // 10% wider → volume differs
         let r = compare(&a, &big, 1e-3, 1e-6);
-        assert!(!r.pass && r.vol_rel_err > 0.05, "different volume must fail");
+        assert!(
+            !r.pass && r.vol_rel_err > 0.05,
+            "different volume must fail"
+        );
 
         // A sphere vs the box: same watertightness but wrong topology/geometry.
         let s = sphere(1.0).to_geometry();
         assert!(!compare(&a, &s, 1e-3, 1e-6).pass);
     }
 }
-

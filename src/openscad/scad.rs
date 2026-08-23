@@ -42,6 +42,9 @@
 //! result needs exact-arithmetic *construction* (the remaining kernel work).
 //! Everything else returns a clear error rather than silently mis-rendering.
 
+use super::mechanism::{
+    ContinuumSpec, DriveSpec, MateSpec, MateSpecKind, MechanismSpec, PartFit, PartSpec, TendonSpec,
+};
 use super::{cube, polyhedron, Solid};
 use crate::math::Matrix4;
 use std::collections::HashMap;
@@ -59,7 +62,8 @@ use import::{
 // before the real fs; lookups match either the full resolved path or the bare
 // file name, so `surface(file="heightmap.dat")` finds a `"heightmap.dat"` entry
 // regardless of the base directory.
-static VFS: std::sync::OnceLock<std::sync::Mutex<HashMap<String, Vec<u8>>>> = std::sync::OnceLock::new();
+static VFS: std::sync::OnceLock<std::sync::Mutex<HashMap<String, Vec<u8>>>> =
+    std::sync::OnceLock::new();
 fn vfs() -> &'static std::sync::Mutex<HashMap<String, Vec<u8>>> {
     VFS.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
 }
@@ -86,7 +90,8 @@ fn vfs_lookup(path: &std::path::Path) -> Option<Vec<u8>> {
     if let Some(b) = m.get(&path.to_string_lossy().to_string()) {
         return Some(b.clone());
     }
-    m.get(&path.file_name()?.to_string_lossy().to_string()).cloned()
+    m.get(&path.file_name()?.to_string_lossy().to_string())
+        .cloned()
 }
 
 /// Read a file's bytes: the VFS first, then the real filesystem (native only).
@@ -128,7 +133,7 @@ enum Tok {
     Num(f64),
     Str(String),
     Ident(String),
-    Op(String), // + - * / % < > = ! & | ? : and multi-char == <= >= != && ||
+    Op(String),  // + - * / % < > = ! & | ? : and multi-char == <= >= != && ||
     Punct(char), // ( ) [ ] { } , ; .
     Eof,
 }
@@ -165,17 +170,26 @@ fn lex(src: &str) -> Result<Vec<Tok>, String> {
             }
             i += 1;
             out.push(Tok::Str(s));
-        } else if c.is_ascii_digit() || (c == '.' && i + 1 < b.len() && (b[i + 1] as char).is_ascii_digit()) {
+        } else if c.is_ascii_digit()
+            || (c == '.' && i + 1 < b.len() && (b[i + 1] as char).is_ascii_digit())
+        {
             let start = i;
             while i < b.len() && {
                 let ch = b[i] as char;
-                ch.is_ascii_digit() || ch == '.' || ch == 'e' || ch == 'E'
-                    || ((ch == '+' || ch == '-') && i > start && (b[i - 1] == b'e' || b[i - 1] == b'E'))
+                ch.is_ascii_digit()
+                    || ch == '.'
+                    || ch == 'e'
+                    || ch == 'E'
+                    || ((ch == '+' || ch == '-')
+                        && i > start
+                        && (b[i - 1] == b'e' || b[i - 1] == b'E'))
             } {
                 i += 1;
             }
             let ns = &src[start..i];
-            out.push(Tok::Num(ns.parse().map_err(|_| format!("bad number '{ns}'"))?));
+            out.push(Tok::Num(
+                ns.parse().map_err(|_| format!("bad number '{ns}'"))?,
+            ));
         } else if c == '$' || c.is_alphabetic() || c == '_' {
             let start = i;
             i += 1;
@@ -227,7 +241,7 @@ enum Expr {
     /// First-class function literal `function(params) body`.
     FuncLit(Vec<Param>, Box<Expr>),
     /// Call the value of an expression, e.g. `fs[1](3)` or `(function(x)x)(4)`.
-    CallExpr(Box<Expr>, Vec<Arg>),
+    CallValue(Box<Expr>, Vec<Arg>),
 }
 
 /// An element inside `[ … ]` — supports list comprehensions.
@@ -343,7 +357,11 @@ impl Parser {
             self.i += 1;
         }
         let inner = self.stmt_body()?;
-        Ok(if mods.is_empty() { inner } else { Stmt::Modified(mods, Box::new(inner)) })
+        Ok(if mods.is_empty() {
+            inner
+        } else {
+            Stmt::Modified(mods, Box::new(inner))
+        })
     }
 
     fn stmt_body(&mut self) -> Result<Stmt, String> {
@@ -396,7 +414,13 @@ impl Parser {
                 let body = self.block_or_stmt()?;
                 if is_isect {
                     // `intersection_for(...)` → a Call the evaluator folds by ∩.
-                    let args = binds.into_iter().map(|(n, e)| Arg { name: Some(n), value: e }).collect();
+                    let args = binds
+                        .into_iter()
+                        .map(|(n, e)| Arg {
+                            name: Some(n),
+                            value: e,
+                        })
+                        .collect();
                     return Ok(Stmt::Call("intersection_for".into(), args, body));
                 }
                 // Multiple bindings desugar to nested `for` (cartesian product).
@@ -469,11 +493,16 @@ impl Parser {
         let mut out = Vec::new();
         while !self.is_punct(')') {
             // named?  ident = expr
-            if let (Tok::Ident(n), Some(Tok::Op(eq))) = (self.peek().clone(), self.t.get(self.i + 1)) {
+            if let (Tok::Ident(n), Some(Tok::Op(eq))) =
+                (self.peek().clone(), self.t.get(self.i + 1))
+            {
                 if eq == "=" {
                     self.i += 2;
                     let value = self.expr()?;
-                    out.push(Arg { name: Some(n), value });
+                    out.push(Arg {
+                        name: Some(n),
+                        value,
+                    });
                     if self.is_punct(',') {
                         self.i += 1;
                     }
@@ -567,20 +596,16 @@ impl Parser {
     }
     fn binary(&mut self, min_prec: u8) -> Result<Expr, String> {
         let mut lhs = self.unary()?;
-        loop {
-            let (op, prec) = match self.peek() {
-                Tok::Op(o) => {
-                    let p = match o.as_str() {
-                        "||" => 1,
-                        "&&" => 2,
-                        "==" | "!=" => 3,
-                        "<" | ">" | "<=" | ">=" => 4,
-                        "+" | "-" => 5,
-                        "*" | "/" | "%" => 6,
-                        _ => break,
-                    };
-                    (o.clone(), p)
-                }
+        while let Tok::Op(o) = self.peek() {
+            // Cloned straight away so the cursor can advance below.
+            let op = o.clone();
+            let prec = match op.as_str() {
+                "||" => 1,
+                "&&" => 2,
+                "==" | "!=" => 3,
+                "<" | ">" | "<=" | ">=" => 4,
+                "+" | "-" => 5,
+                "*" | "/" | "%" => 6,
                 _ => break,
             };
             if prec < min_prec {
@@ -626,7 +651,7 @@ impl Parser {
             } else if self.is_punct('(') {
                 // Postfix call on an expression result: `fs[1](3)`, `(function(x)x)(4)`.
                 let args = self.args()?;
-                e = Expr::CallExpr(Box::new(e), args);
+                e = Expr::CallValue(Box::new(e), args);
             } else {
                 break;
             }
@@ -704,7 +729,11 @@ impl Parser {
                         self.i += 1;
                         let third = self.expr()?;
                         self.eat_punct(']')?;
-                        Ok(Expr::Range(Box::new(first), Some(Box::new(second)), Box::new(third)))
+                        Ok(Expr::Range(
+                            Box::new(first),
+                            Some(Box::new(second)),
+                            Box::new(third),
+                        ))
                     } else {
                         self.eat_punct(']')?;
                         Ok(Expr::Range(Box::new(first), None, Box::new(second)))
@@ -785,6 +814,258 @@ struct Env {
     functions: HashMap<String, (Vec<Param>, Expr)>,
     /// Directory that `import(…)` paths resolve against.
     base: std::path::PathBuf,
+    /// Non-zero inside an `assembly()` subtree — see [`Env::in_assembly`].
+    ///
+    /// A `Cell` because `Env` is threaded everywhere as `&Env`. Making this a
+    /// MODE rather than a parameter is the whole point: it reaches through
+    /// module calls, and the group that silently unions is usually two or three
+    /// module boundaries below the `assembly()` that was meant to cover it.
+    asm: std::cell::Cell<u32>,
+    /// Whether `part()`, the mate modules and `drive()` are builtins.
+    ///
+    /// Off for every ordinary parse, and that is not caution for its own sake:
+    /// builtins beat user modules here, and `part` is a name real models
+    /// already use. Only [`parse_scad_mechanism`] turns it on, so a model that
+    /// defines its own `module part(…)` keeps it everywhere else — and gets
+    /// threers' meaning exactly where it asked for a mechanism.
+    mechanism: bool,
+    /// Keep `assembly()` as an unevaluated [`Solid`] tree for `color()`/`parts`.
+    preserve_assembly_solids: bool,
+}
+
+impl Env {
+    /// True when implicit grouping should CONCATENATE instead of union.
+    fn in_assembly(&self) -> bool {
+        self.asm.get() > 0
+    }
+
+    /// Evaluate `f` with assembly mode on, or forced off for the children of an
+    /// explicit boolean — those need one solid to operate on, so a group under
+    /// `difference()` must keep unioning even inside an assembly. Restores the
+    /// previous depth either way.
+    fn with_assembly<T>(&self, on: bool, f: impl FnOnce() -> T) -> T {
+        let prev = self.asm.get();
+        self.asm.set(if on { prev + 1 } else { 0 });
+        let out = f();
+        self.asm.set(prev);
+        out
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Mechanism declarations — see `super::mechanism`
+// ---------------------------------------------------------------------------
+
+/// A string argument, by name or position.
+fn str_arg(args: &[Arg], name: &str, pos: usize, sc: &Scope, env: &Env) -> Option<String> {
+    match arg(args, name, pos, sc, env) {
+        Some(Value::Str(s)) => Some(s),
+        _ => None,
+    }
+}
+
+fn num_arg(args: &[Arg], name: &str, pos: usize, sc: &Scope, env: &Env) -> Option<f32> {
+    arg(args, name, pos, sc, env)
+        .and_then(|v| v.num().ok())
+        .map(|n| n as f32)
+}
+
+fn vec3_arg(args: &[Arg], name: &str, pos: usize, sc: &Scope, env: &Env) -> Option<[f32; 3]> {
+    arg(args, name, pos, sc, env).and_then(|v| v.vec3(0.0).ok())
+}
+
+/// A two-element numeric argument — a `range`, a `[min, max]`.
+fn pair_arg(args: &[Arg], name: &str, pos: usize, sc: &Scope, env: &Env) -> Option<[f32; 2]> {
+    match arg(args, name, pos, sc, env) {
+        Some(Value::Vector(v)) if v.len() >= 2 => {
+            Some([v[0].num().ok()? as f32, v[1].num().ok()? as f32])
+        }
+        _ => None,
+    }
+}
+
+/// A two-element list of names — `parts = ["lid", "box"]`.
+fn names_arg(args: &[Arg], name: &str, pos: usize, sc: &Scope, env: &Env) -> Option<[String; 2]> {
+    match arg(args, name, pos, sc, env) {
+        Some(Value::Vector(v)) if v.len() >= 2 => match (&v[0], &v[1]) {
+            (Value::Str(a), Value::Str(b)) => Some([a.clone(), b.clone()]),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn bool_arg(args: &[Arg], name: &str, sc: &Scope, env: &Env) -> Option<bool> {
+    arg(args, name, 9999, sc, env).map(|v| v.truthy())
+}
+
+/// Record one mate declaration. Produces no geometry — a joint is not a shape.
+fn record_mate(module: &str, args: &[Arg], sc: &Scope, env: &Env) -> Result<(), String> {
+    let name = str_arg(args, "name", 0, sc, env)
+        .ok_or_else(|| format!("{module}() needs a name as its first argument"))?;
+    let parts = names_arg(args, "parts", 1, sc, env)
+        .ok_or_else(|| format!("{module}(\"{name}\") needs parts = [\"moving\", \"base\"]"))?;
+    let kind = match module {
+        "hinge" => MateSpecKind::Hinge,
+        "slider" => MateSpecKind::Slider,
+        "cylindrical" => MateSpecKind::Cylindrical,
+        "ball" => MateSpecKind::Ball,
+        "weld" => MateSpecKind::Weld,
+        "planar" => MateSpecKind::Planar,
+        "screw" => MateSpecKind::Screw {
+            pitch: num_arg(args, "pitch", 9999, sc, env)
+                .ok_or_else(|| format!("screw(\"{name}\") needs pitch = …"))?,
+        },
+        "gear" => MateSpecKind::Gear {
+            ratio: num_arg(args, "ratio", 9999, sc, env)
+                .ok_or_else(|| format!("gear(\"{name}\") needs ratio = …"))?,
+        },
+        "rack" => MateSpecKind::Rack {
+            radius: num_arg(args, "radius", 9999, sc, env)
+                .ok_or_else(|| format!("rack(\"{name}\") needs radius = …"))?,
+        },
+        other => return Err(format!("unknown mate module {other}()")),
+    };
+
+    // A ball socket has a point and no axis; everything else needs one.
+    let axis = vec3_arg(args, "axis", 9999, sc, env);
+    if axis.is_none() && kind != MateSpecKind::Ball {
+        return Err(format!("{module}(\"{name}\") needs axis = [x, y, z]"));
+    }
+    let at = vec3_arg(args, "at", 9999, sc, env).ok_or_else(|| {
+        format!("{module}(\"{name}\") needs at = [x, y, z] — where the joint sits")
+    })?;
+
+    MECHANISM.with(|m| {
+        m.borrow_mut().mates.push(MateSpec {
+            name,
+            kind,
+            parts,
+            at,
+            axis: axis.unwrap_or([0.0, 0.0, 1.0]),
+            range: pair_arg(args, "range", 9999, sc, env),
+            // `rack_axis` is the natural word on a rack() and `axis_b` the
+            // general one; both name the second part's own axis.
+            axis_b: vec3_arg(args, "axis_b", 9999, sc, env)
+                .or_else(|| vec3_arg(args, "rack_axis", 9999, sc, env)),
+            bearing: pair_arg(args, "bearing", 9999, sc, env),
+            friction: num_arg(args, "friction", 9999, sc, env),
+            spring: pair_arg(args, "spring", 9999, sc, env),
+            elastic: vec3_arg(args, "elastic", 9999, sc, env),
+            collide: bool_arg(args, "collide", sc, env).unwrap_or(false),
+        })
+    });
+    Ok(())
+}
+
+/// Record one flexible rod. Produces no geometry either — the links it stands
+/// for do not exist until something builds them.
+fn record_continuum(args: &[Arg], sc: &Scope, env: &Env) -> Result<(), String> {
+    let name = str_arg(args, "name", 0, sc, env)
+        .ok_or("continuum() needs a name as its first argument")?;
+    let need = |key: &str| -> Result<f32, String> {
+        num_arg(args, key, 9999, sc, env)
+            .ok_or_else(|| format!("continuum(\"{name}\") needs {key} = …"))
+    };
+    let length = need("length")?;
+    let links = need("links")?;
+    // Written out rather than `<= 0.0`, which would let a NaN length through.
+    if length <= 0.0 || length.is_nan() {
+        return Err(format!("continuum(\"{name}\"): length must be positive"));
+    }
+    if links < 1.0 {
+        return Err(format!("continuum(\"{name}\"): links must be at least 1"));
+    }
+    let radius = need("radius")?;
+    let youngs = need("youngs")?;
+    let density = need("density")?;
+    let at = vec3_arg(args, "at", 9999, sc, env).unwrap_or([0.0; 3]);
+    let axis = vec3_arg(args, "axis", 9999, sc, env).unwrap_or([0.0, 0.0, 1.0]);
+    let segments = num_arg(args, "segments", 9999, sc, env)
+        .map(|s| s.max(1.0) as usize)
+        .unwrap_or(1);
+    if segments > links as usize {
+        return Err(format!(
+            "continuum(\"{name}\"): {segments} segments over {links} links leaves some empty"
+        ));
+    }
+
+    MECHANISM.with(|m| {
+        m.borrow_mut().continua.push(ContinuumSpec {
+            name: name.clone(),
+            base: str_arg(args, "on", 9999, sc, env)
+                .or_else(|| str_arg(args, "base", 9999, sc, env))
+                .unwrap_or_default(),
+            at,
+            axis,
+            length,
+            links: links as usize,
+            radius,
+            backbone_radius: num_arg(args, "backbone_radius", 9999, sc, env)
+                .or_else(|| num_arg(args, "core_radius", 9999, sc, env)),
+            bore: num_arg(args, "bore", 9999, sc, env).unwrap_or(0.0),
+            youngs,
+            poisson: num_arg(args, "poisson", 9999, sc, env).unwrap_or(0.3),
+            density,
+            damping_ratio: num_arg(args, "damping", 9999, sc, env).unwrap_or(0.01),
+            twist: bool_arg(args, "twist", sc, env).unwrap_or(false),
+            range: pair_arg(args, "range", 9999, sc, env),
+            segments,
+        })
+    });
+    Ok(())
+}
+
+/// Record one cable routed along a rod.
+fn record_tendon(args: &[Arg], sc: &Scope, env: &Env) -> Result<(), String> {
+    let name =
+        str_arg(args, "name", 0, sc, env).ok_or("tendon() needs a name as its first argument")?;
+    let along = str_arg(args, "along", 1, sc, env)
+        .ok_or_else(|| format!("tendon(\"{name}\") needs along = \"<continuum>\""))?;
+    let offset = num_arg(args, "offset", 9999, sc, env)
+        .ok_or_else(|| format!("tendon(\"{name}\") needs offset = … from the backbone"))?;
+
+    MECHANISM.with(|m| {
+        m.borrow_mut().tendons.push(TendonSpec {
+            name: name.clone(),
+            along,
+            offset,
+            phase: num_arg(args, "phase", 9999, sc, env).unwrap_or(0.0),
+            segment: num_arg(args, "segment", 9999, sc, env)
+                .map(|s| s.max(0.0) as usize)
+                .unwrap_or(0),
+            pretension: num_arg(args, "pretension", 9999, sc, env).unwrap_or(0.0),
+            stiffness: num_arg(args, "stiffness", 9999, sc, env),
+            damping: num_arg(args, "damping", 9999, sc, env).unwrap_or(0.0),
+            pull: num_arg(args, "pull", 9999, sc, env).unwrap_or(0.0),
+            max_force: num_arg(args, "force", 9999, sc, env),
+        })
+    });
+    Ok(())
+}
+
+/// Record one authored move.
+fn record_drive(args: &[Arg], sc: &Scope, env: &Env) -> Result<(), String> {
+    let mate = str_arg(args, "name", 0, sc, env)
+        .ok_or("drive() needs the mate's name as its first argument")?;
+    let to = num_arg(args, "to", 1, sc, env);
+    let speed = num_arg(args, "speed", 9999, sc, env);
+    if to.is_none() && speed.is_none() {
+        return Err(format!(
+            "drive(\"{mate}\") needs to = … (a position) or speed = … (turns forever)"
+        ));
+    }
+    MECHANISM.with(|m| {
+        m.borrow_mut().drives.push(DriveSpec {
+            mate,
+            to,
+            over: num_arg(args, "over", 9999, sc, env),
+            start: num_arg(args, "at", 9999, sc, env).unwrap_or(0.0),
+            torque: num_arg(args, "torque", 9999, sc, env),
+            max_speed: speed,
+        })
+    });
+    Ok(())
 }
 
 /// Build a [`Matrix4`] from an OpenSCAD (row-major) 4×4 / 4×3 matrix value.
@@ -890,7 +1171,11 @@ fn eval_expr(e: &Expr, sc: &Scope, env: &Env) -> Result<Value, String> {
             let idx = eval_expr(i, sc, env)?.num()? as usize;
             match vv {
                 Value::Vector(items) => items.get(idx).cloned().unwrap_or(Value::Undef),
-                Value::Str(s) => s.chars().nth(idx).map(|c| Value::Str(c.to_string())).unwrap_or(Value::Undef),
+                Value::Str(s) => s
+                    .chars()
+                    .nth(idx)
+                    .map(|c| Value::Str(c.to_string()))
+                    .unwrap_or(Value::Undef),
                 _ => Value::Undef,
             }
         }
@@ -908,7 +1193,7 @@ fn eval_expr(e: &Expr, sc: &Scope, env: &Env) -> Result<Value, String> {
             captured: sc.clone(),
         })),
         Expr::Call(name, args) => eval_call(name, args, sc, env)?,
-        Expr::CallExpr(callee, args) => match eval_expr(callee, sc, env)? {
+        Expr::CallValue(callee, args) => match eval_expr(callee, sc, env)? {
             Value::Func(f) => call_function(&f, args, sc, env)?,
             other => return Err(format!("cannot call a non-function value: {other:?}")),
         },
@@ -944,7 +1229,12 @@ fn call_function(f: &FuncVal, args: &[Arg], sc: &Scope, env: &Env) -> Result<Val
     eval_expr(&f.body, &inner, env)
 }
 
-fn eval_list_elem(el: &ListElem, sc: &Scope, env: &Env, out: &mut Vec<Value>) -> Result<(), String> {
+fn eval_list_elem(
+    el: &ListElem,
+    sc: &Scope,
+    env: &Env,
+    out: &mut Vec<Value>,
+) -> Result<(), String> {
     match el {
         ListElem::Item(e) => out.push(eval_expr(e, sc, env)?),
         ListElem::Each(e) => match eval_expr(e, sc, env)? {
@@ -1036,7 +1326,10 @@ fn eval_call(name: &str, args: &[Arg], sc: &Scope, env: &Env) -> Result<Value, S
         let inner = bind_args(params, args, sc, env)?;
         return eval_expr(body, &inner, env);
     }
-    let a: Vec<Value> = args.iter().map(|x| eval_expr(&x.value, sc, env)).collect::<Result<_, _>>()?;
+    let a: Vec<Value> = args
+        .iter()
+        .map(|x| eval_expr(&x.value, sc, env))
+        .collect::<Result<_, _>>()?;
     let n = |i: usize| a.get(i).and_then(|v| v.num().ok()).unwrap_or(0.0);
     Ok(match name {
         "sin" => Value::Num(n(0).to_radians().sin()),
@@ -1065,7 +1358,11 @@ fn eval_call(name: &str, args: &[Arg], sc: &Scope, env: &Env) -> Result<Value, S
             let mut state = match seeded {
                 Some(s) => {
                     let b = s.to_bits();
-                    if b == 0 { 0x9E37_79B9_7F4A_7C15 } else { b }
+                    if b == 0 {
+                        0x9E37_79B9_7F4A_7C15
+                    } else {
+                        b
+                    }
                 }
                 None => RAND_STATE.with(|c| c.get()),
             };
@@ -1086,7 +1383,12 @@ fn eval_call(name: &str, args: &[Arg], sc: &Scope, env: &Env) -> Result<Value, S
         "min" => Value::Num(flat_nums(&a).into_iter().fold(f64::INFINITY, f64::min)),
         "max" => Value::Num(flat_nums(&a).into_iter().fold(f64::NEG_INFINITY, f64::max)),
         "norm" => Value::Num(match a.first() {
-            Some(Value::Vector(v)) => v.iter().filter_map(|x| x.num().ok()).map(|x| x * x).sum::<f64>().sqrt(),
+            Some(Value::Vector(v)) => v
+                .iter()
+                .filter_map(|x| x.num().ok())
+                .map(|x| x * x)
+                .sum::<f64>()
+                .sqrt(),
             _ => 0.0,
         }),
         "cross" => match (a.first(), a.get(1)) {
@@ -1120,11 +1422,22 @@ fn eval_call(name: &str, args: &[Arg], sc: &Scope, env: &Env) -> Result<Value, S
         "is_num" => Value::Num(matches!(a.first(), Some(Value::Num(_))) as i32 as f64),
         "is_list" => Value::Num(matches!(a.first(), Some(Value::Vector(_))) as i32 as f64),
         "is_string" => Value::Num(matches!(a.first(), Some(Value::Str(_))) as i32 as f64),
-        "is_bool" => Value::Num(matches!(a.first(), Some(Value::Num(n)) if *n == 0.0 || *n == 1.0) as i32 as f64),
+        "is_bool" => Value::Num(
+            matches!(a.first(), Some(Value::Num(n)) if *n == 0.0 || *n == 1.0) as i32 as f64,
+        ),
         "is_function" => Value::Num(matches!(a.first(), Some(Value::Func(_))) as i32 as f64),
-        "chr" => Value::Str(flat_nums(&a).iter().filter_map(|&x| char::from_u32(x as u32)).collect()),
+        "chr" => Value::Str(
+            flat_nums(&a)
+                .iter()
+                .filter_map(|&x| char::from_u32(x as u32))
+                .collect(),
+        ),
         "ord" => match a.first() {
-            Some(Value::Str(s)) => s.chars().next().map(|c| Value::Num(c as u32 as f64)).unwrap_or(Value::Undef),
+            Some(Value::Str(s)) => s
+                .chars()
+                .next()
+                .map(|c| Value::Num(c as u32 as f64))
+                .unwrap_or(Value::Undef),
             _ => Value::Undef,
         },
         "version" => Value::Vector(vec![Value::Num(2021.0), Value::Num(1.0), Value::Num(0.0)]),
@@ -1136,7 +1449,9 @@ fn eval_call(name: &str, args: &[Arg], sc: &Scope, env: &Env) -> Result<Value, S
                     let mut kv: Vec<(f64, f64)> = table
                         .iter()
                         .filter_map(|e| match e {
-                            Value::Vector(p) if p.len() >= 2 => Some((p[0].num().ok()?, p[1].num().ok()?)),
+                            Value::Vector(p) if p.len() >= 2 => {
+                                Some((p[0].num().ok()?, p[1].num().ok()?))
+                            }
                             _ => None,
                         })
                         .collect();
@@ -1230,7 +1545,10 @@ fn fmt_value(v: &Value) -> String {
         }
         Value::Str(s) => s.clone(),
         Value::Vector(items) => {
-            format!("[{}]", items.iter().map(fmt_value).collect::<Vec<_>>().join(", "))
+            format!(
+                "[{}]",
+                items.iter().map(fmt_value).collect::<Vec<_>>().join(", ")
+            )
         }
         Value::Range(a, s, b) => format!("[{a} : {s} : {b}]"),
         Value::Func(_) => "function(…)".into(),
@@ -1268,7 +1586,7 @@ fn bind_args(params: &[Param], args: &[Arg], sc: &Scope, env: &Env) -> Result<Sc
 }
 
 /// Look up a named/positional argument value.
-fn arg<'a>(args: &'a [Arg], name: &str, pos: usize, sc: &Scope, env: &Env) -> Option<Value> {
+fn arg(args: &[Arg], name: &str, pos: usize, sc: &Scope, env: &Env) -> Option<Value> {
     for a in args {
         if a.name.as_deref() == Some(name) {
             return eval_expr(&a.value, sc, env).ok();
@@ -1301,7 +1619,12 @@ enum Geom {
 
 impl Shape {
     fn one(outer: Vec<[f32; 2]>) -> Shape {
-        Shape { polys: vec![Poly { outer, holes: Vec::new() }] }
+        Shape {
+            polys: vec![Poly {
+                outer,
+                holes: Vec::new(),
+            }],
+        }
     }
     fn map(&self, f: impl Fn([f32; 2]) -> [f32; 2] + Copy) -> Shape {
         Shape {
@@ -1310,13 +1633,20 @@ impl Shape {
                 .iter()
                 .map(|p| Poly {
                     outer: p.outer.iter().map(|&q| f(q)).collect(),
-                    holes: p.holes.iter().map(|h| h.iter().map(|&q| f(q)).collect()).collect(),
+                    holes: p
+                        .holes
+                        .iter()
+                        .map(|h| h.iter().map(|&q| f(q)).collect())
+                        .collect(),
                 })
                 .collect(),
         }
     }
     fn points(&self) -> Vec<[f32; 2]> {
-        self.polys.iter().flat_map(|p| p.outer.iter().copied()).collect()
+        self.polys
+            .iter()
+            .flat_map(|p| p.outer.iter().copied())
+            .collect()
     }
 }
 
@@ -1347,7 +1677,11 @@ fn circle(r: f32, fnv: usize) -> Shape {
 /// Built directly so the facet *phase* matches OpenSCAD (not just the count).
 fn cyl_mesh(r1: f32, r2: f32, h: f32, n: usize, center: bool) -> Solid {
     let n = n.max(3);
-    let (z0, z1) = if center { (-h / 2.0, h / 2.0) } else { (0.0, h) };
+    let (z0, z1) = if center {
+        (-h / 2.0, h / 2.0)
+    } else {
+        (0.0, h)
+    };
     let ring = |r: f32, z: f32, verts: &mut Vec<[f32; 3]>| {
         for i in 0..n {
             let a = (i as f32 / n as f32) * std::f32::consts::TAU;
@@ -1401,7 +1735,7 @@ fn cyl_mesh(r1: f32, r2: f32, h: f32, n: usize, center: bool) -> Solid {
 /// pole caps — so both the ring/fragment counts *and* the vertex phase match.
 fn sphere_mesh(r: f32, n: usize) -> Solid {
     let n = n.max(3);
-    let rings = (n + 1) / 2;
+    let rings = n.div_ceil(2);
     let mut verts = Vec::with_capacity(rings * n);
     for i in 0..rings {
         let phi = (180.0 * (i as f32 + 0.5) / rings as f32).to_radians();
@@ -1430,7 +1764,11 @@ fn hull2d(mut pts: Vec<[f32; 2]>) -> Vec<[f32; 2]> {
     if pts.len() < 3 {
         return pts;
     }
-    pts.sort_by(|a, b| a[0].partial_cmp(&b[0]).unwrap().then(a[1].partial_cmp(&b[1]).unwrap()));
+    pts.sort_by(|a, b| {
+        a[0].partial_cmp(&b[0])
+            .unwrap()
+            .then(a[1].partial_cmp(&b[1]).unwrap())
+    });
     pts.dedup();
     let cross = |o: [f32; 2], a: [f32; 2], b: [f32; 2]| {
         (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
@@ -1461,7 +1799,11 @@ pub(super) fn hull3d(pts: &[[f32; 3]]) -> Option<Solid> {
     let mut p: Vec<[f64; 3]> = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for q in pts {
-        let k = ((q[0] * 1e5).round() as i64, (q[1] * 1e5).round() as i64, (q[2] * 1e5).round() as i64);
+        let k = (
+            (q[0] * 1e5).round() as i64,
+            (q[1] * 1e5).round() as i64,
+            (q[2] * 1e5).round() as i64,
+        );
         if seen.insert(k) {
             p.push([q[0] as f64, q[1] as f64, q[2] as f64]);
         }
@@ -1552,8 +1894,14 @@ pub(super) fn hull3d(pts: &[[f32; 3]]) -> Option<Solid> {
     }
 
     // Build a polyhedron Solid from the hull faces (points verbatim, auto-oriented).
-    let uniq: Vec<[f32; 3]> = p.iter().map(|q| [q[0] as f32, q[1] as f32, q[2] as f32]).collect();
-    let faces_u: Vec<Vec<u32>> = faces.iter().map(|f| vec![f[0] as u32, f[1] as u32, f[2] as u32]).collect();
+    let uniq: Vec<[f32; 3]> = p
+        .iter()
+        .map(|q| [q[0] as f32, q[1] as f32, q[2] as f32])
+        .collect();
+    let faces_u: Vec<Vec<u32>> = faces
+        .iter()
+        .map(|f| vec![f[0] as u32, f[1] as u32, f[2] as u32])
+        .collect();
     Some(polyhedron(&uniq, &faces_u))
 }
 
@@ -1592,6 +1940,7 @@ fn orient_ring(ring: &[[f32; 2]], ccw: bool) -> Vec<[f32; 2]> {
 }
 
 /// earcut point-in-triangle (boundary-inclusive).
+#[allow(clippy::too_many_arguments)]
 fn pit(ax: f64, ay: f64, bx: f64, by: f64, cx: f64, cy: f64, px: f64, py: f64) -> bool {
     (cx - px) * (ay - py) - (ax - px) * (cy - py) >= 0.0
         && (ax - px) * (by - py) - (bx - px) * (ay - py) >= 0.0
@@ -1662,13 +2011,16 @@ fn find_hole_bridge(pts: &[[f64; 2]], outer: &[usize], m: usize) -> Option<usize
 
 /// Splice a hole ring into the outer ring via a bridge (earcut `eliminateHole`).
 fn eliminate_hole(pts: &[[f64; 2]], outer: &[usize], hole: &[usize]) -> Option<Vec<usize>> {
-    let hstart = (0..hole.len())
-        .min_by(|&a, &b| pts[hole[a]][0].partial_cmp(&pts[hole[b]][0]).unwrap())?;
+    let hstart =
+        (0..hole.len()).min_by(|&a, &b| pts[hole[a]][0].partial_cmp(&pts[hole[b]][0]).unwrap())?;
     let m = hole[hstart];
     let bpos = find_hole_bridge(pts, outer, m)?;
     let bridge = outer[bpos];
-    let rotated: Vec<usize> =
-        hole[hstart..].iter().chain(hole[..hstart].iter()).copied().collect();
+    let rotated: Vec<usize> = hole[hstart..]
+        .iter()
+        .chain(hole[..hstart].iter())
+        .copied()
+        .collect();
     let mut out = Vec::with_capacity(outer.len() + hole.len() + 2);
     out.extend_from_slice(&outer[..=bpos]);
     out.extend_from_slice(&rotated);
@@ -1699,9 +2051,8 @@ fn earclip(pts: &[[f64; 2]], ring: &[usize]) -> Vec<[usize; 3]> {
             if cross(a, b, c) <= 0.0 {
                 continue; // reflex or degenerate corner
             }
-            let coincide = |u: [f64; 2], v: [f64; 2]| {
-                (u[0] - v[0]).abs() < 1e-9 && (u[1] - v[1]).abs() < 1e-9
-            };
+            let coincide =
+                |u: [f64; 2], v: [f64; 2]| (u[0] - v[0]).abs() < 1e-9 && (u[1] - v[1]).abs() < 1e-9;
             let mut ok = true;
             for j in 0..n {
                 if j == ip || j == i || j == inx {
@@ -1775,8 +2126,11 @@ fn push_prism(
     z1: f32,
 ) {
     let outer = orient_ring(outer, true);
-    let holes: Vec<Vec<[f32; 2]>> =
-        holes.iter().filter(|h| h.len() >= 3).map(|h| orient_ring(h, false)).collect();
+    let holes: Vec<Vec<[f32; 2]>> = holes
+        .iter()
+        .filter(|h| h.len() >= 3)
+        .map(|h| orient_ring(h, false))
+        .collect();
     let tris = triangulate_holes(&outer, &holes);
     let mut flat = outer.clone();
     for h in &holes {
@@ -1814,6 +2168,7 @@ fn push_prism(
 /// Like [`push_prism`], but lofts the profile through `slices` intermediate layers
 /// with a per-layer twist (radians, total over the height) and end scale (`scale`
 /// applied linearly bottom→top) — OpenSCAD `linear_extrude(twist=, scale=, slices=)`.
+#[allow(clippy::too_many_arguments)]
 fn push_loft(
     verts: &mut Vec<[f32; 3]>,
     faces: &mut Vec<Vec<u32>>,
@@ -1826,8 +2181,11 @@ fn push_loft(
     slices: usize,
 ) {
     let outer = orient_ring(outer, true);
-    let holes: Vec<Vec<[f32; 2]>> =
-        holes.iter().filter(|h| h.len() >= 3).map(|h| orient_ring(h, false)).collect();
+    let holes: Vec<Vec<[f32; 2]>> = holes
+        .iter()
+        .filter(|h| h.len() >= 3)
+        .map(|h| orient_ring(h, false))
+        .collect();
     let tris = triangulate_holes(&outer, &holes);
     let mut flat = outer.clone();
     for h in &holes {
@@ -1885,10 +2243,13 @@ fn linear_extrude_shape(
     scale: [f32; 2],
     slices: usize,
 ) -> Option<Solid> {
-    let (z0, z1) = if center { (-height / 2.0, height / 2.0) } else { (0.0, height) };
-    let straight = twist_deg.abs() < 1e-6
-        && (scale[0] - 1.0).abs() < 1e-6
-        && (scale[1] - 1.0).abs() < 1e-6;
+    let (z0, z1) = if center {
+        (-height / 2.0, height / 2.0)
+    } else {
+        (0.0, height)
+    };
+    let straight =
+        twist_deg.abs() < 1e-6 && (scale[0] - 1.0).abs() < 1e-6 && (scale[1] - 1.0).abs() < 1e-6;
     let mut verts = Vec::new();
     let mut faces = Vec::new();
     for poly in &s.polys {
@@ -1896,7 +2257,17 @@ fn linear_extrude_shape(
             if straight {
                 push_prism(&mut verts, &mut faces, &poly.outer, &poly.holes, z0, z1);
             } else {
-                push_loft(&mut verts, &mut faces, &poly.outer, &poly.holes, z0, z1, twist_deg.to_radians(), scale, slices);
+                push_loft(
+                    &mut verts,
+                    &mut faces,
+                    &poly.outer,
+                    &poly.holes,
+                    z0,
+                    z1,
+                    twist_deg.to_radians(),
+                    scale,
+                    slices,
+                );
             }
         }
     }
@@ -1915,8 +2286,11 @@ fn push_revolution(
 ) {
     let nsteps = if full { segs } else { segs + 1 };
     let outer = orient_ring(outer, true);
-    let holes: Vec<Vec<[f32; 2]>> =
-        holes.iter().filter(|h| h.len() >= 3).map(|h| orient_ring(h, false)).collect();
+    let holes: Vec<Vec<[f32; 2]>> = holes
+        .iter()
+        .filter(|h| h.len() >= 3)
+        .map(|h| orient_ring(h, false))
+        .collect();
     let mut rings: Vec<&[[f32; 2]]> = vec![&outer[..]];
     for h in &holes {
         rings.push(&h[..]);
@@ -1982,7 +2356,15 @@ fn rotate_extrude_shape(s: &Shape, angle: f32, fnv: usize) -> Option<Solid> {
     let mut faces = Vec::new();
     for poly in &s.polys {
         if poly.outer.len() >= 3 {
-            push_revolution(&mut verts, &mut faces, &poly.outer, &poly.holes, ang, segs, full);
+            push_revolution(
+                &mut verts,
+                &mut faces,
+                &poly.outer,
+                &poly.holes,
+                ang,
+                segs,
+                full,
+            );
         }
     }
     (!faces.is_empty()).then(|| polyhedron(&verts, &faces))
@@ -2015,7 +2397,9 @@ fn resize_factor(cur: [f32; 3], newsize: [f32; 3], auto: [bool; 3]) -> [f32; 3] 
             f[i] = newsize[i] / cur[i];
         }
     }
-    let reff = (0..3).find(|&i| newsize[i] > 0.0 && cur[i] > 1e-9).map(|i| f[i]);
+    let reff = (0..3)
+        .find(|&i| newsize[i] > 0.0 && cur[i] > 1e-9)
+        .map(|i| f[i]);
     for i in 0..3 {
         if newsize[i] <= 0.0 && auto[i] {
             if let Some(r) = reff {
@@ -2073,8 +2457,12 @@ fn shape_triangles(s: &Shape) -> Vec<[[f32; 2]; 3]> {
             continue;
         }
         let outer = orient_ring(&poly.outer, true);
-        let holes: Vec<Vec<[f32; 2]>> =
-            poly.holes.iter().filter(|h| h.len() >= 3).map(|h| orient_ring(h, false)).collect();
+        let holes: Vec<Vec<[f32; 2]>> = poly
+            .holes
+            .iter()
+            .filter(|h| h.len() >= 3)
+            .map(|h| orient_ring(h, false))
+            .collect();
         let tris = triangulate_holes(&outer, &holes);
         let mut flat = outer.clone();
         for h in &holes {
@@ -2134,6 +2522,8 @@ fn offset_ring(ring: &[[f32; 2]], d: f32, round: bool, fnv: usize) -> Vec<[f32; 
         [sgn * dy / l, -sgn * dx / l]
     };
     let mut out: Vec<[f32; 2]> = Vec::new();
+    // `i` names a vertex, and its neighbours are derived from it.
+    #[allow(clippy::needless_range_loop)]
     for i in 0..n {
         let prev = (i + n - 1) % n;
         let np = edge_normal(prev); // normal of edge into vertex i
@@ -2143,7 +2533,11 @@ fn offset_ring(ring: &[[f32; 2]], d: f32, round: bool, fnv: usize) -> Vec<[f32; 
         let p_out = [v[0] + nn[0] * d, v[1] + nn[1] * d];
         // Convex corner (outward turn) when cross(np, nn)*sgn... use the turn sign.
         let cross = np[0] * nn[1] - np[1] * nn[0];
-        let convex = if d > 0.0 { cross * sgn > 1e-9 } else { cross * sgn < -1e-9 };
+        let convex = if d > 0.0 {
+            cross * sgn > 1e-9
+        } else {
+            cross * sgn < -1e-9
+        };
         if round && convex {
             // Arc from p_in to p_out around v.
             let a0 = (p_in[1] - v[1]).atan2(p_in[0] - v[0]);
@@ -2159,7 +2553,9 @@ fn offset_ring(ring: &[[f32; 2]], d: f32, round: bool, fnv: usize) -> Vec<[f32; 
                     a1 -= std::f32::consts::TAU;
                 }
             }
-            let steps = ((fnv as f32) * (a1 - a0).abs() / std::f32::consts::TAU).ceil().max(1.0) as usize;
+            let steps = ((fnv as f32) * (a1 - a0).abs() / std::f32::consts::TAU)
+                .ceil()
+                .max(1.0) as usize;
             for k in 0..=steps {
                 let t = a0 + (a1 - a0) * (k as f32 / steps as f32);
                 out.push([v[0] + d.abs() * t.cos(), v[1] + d.abs() * t.sin()]);
@@ -2178,7 +2574,12 @@ fn offset_ring(ring: &[[f32; 2]], d: f32, round: bool, fnv: usize) -> Vec<[f32; 
 
 /// Intersection of the two offset lines through `p_in` (⟂ `n_in`) and `p_out`
 /// (⟂ `n_out`) — i.e. lines with directions perpendicular to the given normals.
-fn line_intersize(p_in: [f32; 2], n_in: [f32; 2], p_out: [f32; 2], n_out: [f32; 2]) -> Option<[f32; 2]> {
+fn line_intersize(
+    p_in: [f32; 2],
+    n_in: [f32; 2],
+    p_out: [f32; 2],
+    n_out: [f32; 2],
+) -> Option<[f32; 2]> {
     let d1 = [-n_in[1], n_in[0]]; // direction of the incoming offset edge
     let d2 = [-n_out[1], n_out[0]];
     let denom = d1[0] * d2[1] - d1[1] * d2[0];
@@ -2197,7 +2598,11 @@ fn offset_shape(sh: &Shape, d: f32, round: bool, fnv: usize) -> Shape {
         .iter()
         .map(|p| Poly {
             outer: offset_ring(&p.outer, d, round, fnv),
-            holes: p.holes.iter().map(|h| offset_ring(h, d, round, fnv)).collect(),
+            holes: p
+                .holes
+                .iter()
+                .map(|h| offset_ring(h, d, round, fnv))
+                .collect(),
         })
         .collect();
     Shape { polys }
@@ -2257,11 +2662,7 @@ fn chain_segments(segs: &[([f32; 2], [f32; 2])]) -> Shape {
         used[start] = true;
         let mut loop_pts = vec![segs[start].0, segs[start].1];
         let mut cur = segs[start].1;
-        loop {
-            let cands = match adj.get(&key(cur)) {
-                Some(c) => c,
-                None => break,
-            };
+        while let Some(cands) = adj.get(&key(cur)) {
             let next = cands.iter().copied().find(|&j| !used[j]);
             let j = match next {
                 Some(j) => j,
@@ -2276,7 +2677,10 @@ fn chain_segments(segs: &[([f32; 2], [f32; 2])]) -> Shape {
             loop_pts.push(cur);
         }
         if loop_pts.len() >= 3 {
-            polys.push(Poly { outer: loop_pts, holes: Vec::new() });
+            polys.push(Poly {
+                outer: loop_pts,
+                holes: Vec::new(),
+            });
         }
     }
     Shape { polys }
@@ -2495,7 +2899,10 @@ fn trace_and_assemble(directed: &[Seg], inv: f64) -> Shape {
                 if used[j] {
                     continue;
                 }
-                let od = [directed[j].1[0] - directed[j].0[0], directed[j].1[1] - directed[j].0[1]];
+                let od = [
+                    directed[j].1[0] - directed[j].0[0],
+                    directed[j].1[1] - directed[j].0[1],
+                ];
                 let ang = turn_angle(indir, od);
                 if ang < best_ang {
                     best_ang = ang;
@@ -2530,9 +2937,16 @@ fn trace_and_assemble(directed: &[Seg], inv: f64) -> Shape {
             holes.push(l);
         }
     }
-    let f32ring = |r: &[[f64; 2]]| -> Vec<[f32; 2]> { r.iter().map(|p| [p[0] as f32, p[1] as f32]).collect() };
-    let mut polys: Vec<Poly> =
-        outers.iter().map(|o| Poly { outer: f32ring(o), holes: Vec::new() }).collect();
+    let f32ring = |r: &[[f64; 2]]| -> Vec<[f32; 2]> {
+        r.iter().map(|p| [p[0] as f32, p[1] as f32]).collect()
+    };
+    let mut polys: Vec<Poly> = outers
+        .iter()
+        .map(|o| Poly {
+            outer: f32ring(o),
+            holes: Vec::new(),
+        })
+        .collect();
     for h in &holes {
         let hp = h[0];
         for poly in &mut polys {
@@ -2734,7 +3148,11 @@ fn text_shape(
     halign: &str,
     valign: &str,
 ) -> Shape {
-    let upm = if font.units_per_em > 0 { font.units_per_em as f32 } else { 1000.0 };
+    let upm = if font.units_per_em > 0 {
+        font.units_per_em as f32
+    } else {
+        1000.0
+    };
     let scale = size / upm;
     let mut contours: Vec<Vec<[f32; 2]>> = Vec::new();
     let mut pen = 0.0f32;
@@ -2742,7 +3160,11 @@ fn text_shape(
         let gid = *font.cmap.get(&(ch as u32)).unwrap_or(&0) as usize;
         if let Some(g) = font.glyphs.get(gid) {
             for c in glyph_contours(&g.shape, segments) {
-                contours.push(c.iter().map(|p| [p[0] * scale + pen, p[1] * scale]).collect());
+                contours.push(
+                    c.iter()
+                        .map(|p| [p[0] * scale + pen, p[1] * scale])
+                        .collect(),
+                );
             }
             pen += g.advance_width as f32 * scale * spacing;
         }
@@ -2780,6 +3202,22 @@ fn text_shape(
 
 /// Evaluate statements to their geometry (implicit union of the children).
 fn eval_stmts(stmts: &[Stmt], sc: &Scope, env: &Env, kids: &[Geom]) -> Result<Vec<Geom>, String> {
+    eval_stmts_scope(stmts, sc, env, kids).map(|(g, _)| g)
+}
+
+/// As [`eval_stmts`], and hands back the scope the statements left behind.
+///
+/// Top-level assignments live and die inside `eval_stmts`, so a host driving a
+/// model had no way to ask it what `WING_HINGE_X` is. Callers were reduced to
+/// building a 1 mm cube at the coordinate and reading its bounds back out — this
+/// project did that in three separate binaries, each paying a full exact-CSG
+/// evaluation per constant. `scad_values` is that question asked directly.
+fn eval_stmts_scope(
+    stmts: &[Stmt],
+    sc: &Scope,
+    env: &Env,
+    kids: &[Geom],
+) -> Result<(Vec<Geom>, Scope), String> {
     let mut geom = Vec::new();
     let mut sc = sc.clone();
     for s in stmts {
@@ -2797,7 +3235,11 @@ fn eval_stmts(stmts: &[Stmt], sc: &Scope, env: &Env, kids: &[Geom]) -> Result<Ve
                 }
             }
             Stmt::If(cond, then, els) => {
-                let branch = if eval_expr(cond, &sc, env)?.truthy() { then } else { els };
+                let branch = if eval_expr(cond, &sc, env)?.truthy() {
+                    then
+                } else {
+                    els
+                };
                 geom.extend(eval_stmts(branch, &sc, env, kids)?);
             }
             Stmt::ModuleDef(..) | Stmt::FunctionDef(..) => {} // hoisted below
@@ -2816,19 +3258,64 @@ fn eval_stmts(stmts: &[Stmt], sc: &Scope, env: &Env, kids: &[Geom]) -> Result<Ve
                 // normally but also registers as the render root (see `parse_scad_in`).
                 let g = eval_stmts(std::slice::from_ref(inner.as_ref()), &sc, env, kids)?;
                 if mods.contains('!') {
-                    ROOT_MOD.with(|r| r.borrow_mut().get_or_insert_with(Vec::new).extend(g.iter().cloned()));
+                    ROOT_MOD.with(|r| {
+                        r.borrow_mut()
+                            .get_or_insert_with(Vec::new)
+                            .extend(g.iter().cloned())
+                    });
                 }
                 geom.extend(g);
             }
         }
     }
-    Ok(geom)
+    Ok((geom, sc))
+}
+
+/// What the mechanism modules record as the program runs.
+struct MechanismCollector {
+    parts: Vec<PartSpec>,
+    mates: Vec<MateSpec>,
+    drives: Vec<DriveSpec>,
+    continua: Vec<ContinuumSpec>,
+    tendons: Vec<TendonSpec>,
+}
+
+impl MechanismCollector {
+    const fn new() -> Self {
+        Self {
+            parts: Vec::new(),
+            mates: Vec::new(),
+            drives: Vec::new(),
+            continua: Vec::new(),
+            tendons: Vec::new(),
+        }
+    }
+
+    fn take(&mut self) -> Self {
+        Self {
+            parts: std::mem::take(&mut self.parts),
+            mates: std::mem::take(&mut self.mates),
+            drives: std::mem::take(&mut self.drives),
+            continua: std::mem::take(&mut self.continua),
+            tendons: std::mem::take(&mut self.tendons),
+        }
+    }
 }
 
 thread_local! {
     /// Geometry marked with the `!` (show-only / root) modifier. When any exists,
     /// the top level renders *only* these, ignoring the rest of the program.
     static ROOT_MOD: std::cell::RefCell<Option<Vec<Geom>>> = const { std::cell::RefCell::new(None) };
+
+    /// Parts, mates and drives collected while a mechanism is being evaluated.
+    ///
+    /// A side channel rather than a return value because the declarations come
+    /// from anywhere in the program — inside a `for`, three modules down — and
+    /// threading an accumulator through every evaluation path to carry them
+    /// would touch code that has nothing to do with mechanisms. `ROOT_MOD`
+    /// above solves the same problem the same way.
+    static MECHANISM: std::cell::RefCell<MechanismCollector> =
+        const { std::cell::RefCell::new(MechanismCollector::new()) };
 
     /// Running state for unseeded `rands()` — a self-contained xorshift64 so results
     /// are reproducible within a run and identical on wasm (no OS entropy needed).
@@ -2868,6 +3355,161 @@ fn split_geoms(children: Vec<Geom>) -> (Vec<Solid>, Vec<Shape>) {
     (solids, shapes)
 }
 
+/// Cut each body by the ones before it, dilated by `clr` — the guarantee behind
+/// `assembly(fit = c)`.
+///
+/// Dilation is by translation along the six axis directions rather than a true
+/// offset: `minkowski` here is convex-only, and a general 3D offset needs a
+/// convex decomposition. For the axis-aligned work this is built for, six
+/// translated copies dilate every face by `clr` exactly; a corner keeps up to
+/// `clr` less clearance, which is a gap that is smaller than asked for and never
+/// an overlap. Stated because it is an approximation, and the direction it errs
+/// in is the safe one.
+fn relieve_in_order(children: Vec<Geom>, clr: f32) -> Vec<Geom> {
+    // BROAD PHASE. Relieving every body against every predecessor is O(n^2)
+    // exact CSG, and on a real assembly almost every pair is nowhere near
+    // touching — the frame's four corner posts do not interact with each other
+    // at all. Without this the payload did not finish in ten minutes; with it
+    // only the pairs whose boxes actually overlap reach the kernel.
+    let aabb = |s: &Solid| -> ([f32; 3], [f32; 3]) {
+        let pts = solid_points(s);
+        let mut lo = [f32::INFINITY; 3];
+        let mut hi = [f32::NEG_INFINITY; 3];
+        for p in &pts {
+            for i in 0..3 {
+                lo[i] = lo[i].min(p[i]);
+                hi[i] = hi[i].max(p[i]);
+            }
+        }
+        (lo, hi)
+    };
+    /// A solid already placed, with the axis-aligned box it occupies.
+    type Placed = (Solid, ([f32; 3], [f32; 3]));
+    let mut done: Vec<Placed> = Vec::new();
+    let mut out: Vec<Geom> = Vec::new();
+    for g in children {
+        match g {
+            Geom::Solid(s) => {
+                let mut body = s;
+                let mut bb = aabb(&body);
+                for (earlier, ebb) in &done {
+                    // grown by clr on both sides, so a pair that only meets
+                    // through the dilation is still considered
+                    if (0..3).any(|i| bb.1[i] < ebb.0[i] - clr || bb.0[i] > ebb.1[i] + clr) {
+                        continue;
+                    }
+                    // TWO cuts, along the one axis that matters.
+                    //
+                    // Six sequential differences put each translated copy's face
+                    // exactly on the faces the previous cut had just created —
+                    // the degenerate case for an exact kernel, and it returned
+                    // 1378 boundary edges. Unioning the six copies first fixes
+                    // that and is unaffordable: a child here is a whole
+                    // multi-shell part, so it means unioning six copies of a
+                    // twelve-shell frame before every cut, and the payload did
+                    // not finish in ten minutes.
+                    //
+                    // The clearance is only needed where the two parts actually
+                    // meet, so cut by the body itself and again by the body
+                    // shifted `clr` TOWARDS the part being relieved. That opens
+                    // the gap on the contact side, costs two differences and no
+                    // union, and the second cutter's faces are offset from the
+                    // first's so neither lands on the other.
+                    body = body.difference(earlier.clone());
+                    if clr > 0.0 {
+                        let c0 = [
+                            (ebb.0[0] + ebb.1[0]) * 0.5,
+                            (ebb.0[1] + ebb.1[1]) * 0.5,
+                            (ebb.0[2] + ebb.1[2]) * 0.5,
+                        ];
+                        let c1 = [
+                            (bb.0[0] + bb.1[0]) * 0.5,
+                            (bb.0[1] + bb.1[1]) * 0.5,
+                            (bb.0[2] + bb.1[2]) * 0.5,
+                        ];
+                        let d = [c1[0] - c0[0], c1[1] - c0[1], c1[2] - c0[2]];
+                        let n = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-6);
+                        body = body.difference(earlier.clone().translate([
+                            d[0] / n * clr,
+                            d[1] / n * clr,
+                            d[2] / n * clr,
+                        ]));
+                    }
+                    bb = aabb(&body);
+                }
+                done.push((body.clone(), bb));
+                out.push(Geom::Solid(body));
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// Collapse children into ONE geometry without any boolean: the meshes are
+/// concatenated and each keeps its own shell.
+///
+/// This is what `assembly()` does, factored out so that every implicit group
+/// inside an assembly subtree can do it too. Correct whenever the children are
+/// distinct parts — a lattice of ribs, a field of fasteners, an interface plus
+/// its pads — which is most of what an assembly contains. O(N) in the children,
+/// against the N booleans over a growing accumulator that a union costs.
+///
+/// 2D shapes have no equivalent — there is no "several disjoint polygons" value
+/// here — so they still union.
+fn geom_preserve_concat(children: Vec<Geom>) -> Option<Geom> {
+    let (solids, shapes) = split_geoms(children);
+    if !solids.is_empty() {
+        let s = match solids.len() {
+            1 => solids.into_iter().next().expect("len 1"),
+            _ => Solid::Union(solids),
+        };
+        return Some(Geom::Solid(s));
+    }
+    if !shapes.is_empty() {
+        let u = union_shapes(&shapes);
+        return (!u.polys.is_empty()).then_some(Geom::Shape(u));
+    }
+    None
+}
+
+fn geom_concat(env: &Env, children: Vec<Geom>) -> Option<Geom> {
+    if env.preserve_assembly_solids {
+        return geom_preserve_concat(children);
+    }
+    let (solids, shapes) = split_geoms(children);
+    if !solids.is_empty() {
+        let mut acc: Option<crate::BufferGeometry> = None;
+        for s in solids {
+            let geom = s.to_geometry_exact();
+            acc = Some(match acc {
+                None => geom,
+                Some(a) => super::concat_geometry(&a, &geom),
+            });
+        }
+        return acc.map(|g| Geom::Solid(Solid::Leaf(g)));
+    }
+    if !shapes.is_empty() {
+        let u = union_shapes(&shapes);
+        return (!u.polys.is_empty()).then_some(Geom::Shape(u));
+    }
+    None
+}
+
+/// Collapse a group's children the way the current mode says to.
+///
+/// Every implicit group goes through here — transforms, `let`, `children()`,
+/// and a user module's own body — so `assembly()` reaches all of them. The last
+/// one is the important one: a module whose body has two statements is a group,
+/// and before this it unioned no matter what its caller had asked for.
+fn geom_group(env: &Env, children: Vec<Geom>) -> Option<Geom> {
+    if env.in_assembly() {
+        geom_concat(env, children)
+    } else {
+        geom_union(children)
+    }
+}
+
 fn geom_union(children: Vec<Geom>) -> Option<Geom> {
     let (solids, shapes) = split_geoms(children);
     if !solids.is_empty() {
@@ -2885,12 +3527,55 @@ fn geom_union(children: Vec<Geom>) -> Option<Geom> {
     }
 }
 
+/// Flatten a union tree into its leaves, pushing transforms down through it.
+///
+/// `a − (b ∪ c) ≡ (a − b) − c`, so a compound cutter can always be split into
+/// separate subtractions. The two are identical on paper and very different in
+/// practice: the arrangement kernel resolves a sequence of simple cuts where it
+/// fails on a single cutter that is itself a union. That matters because the
+/// difference is invisible in the source — cutters written inline under
+/// `difference()` arrive as one child each, but moving the identical loop into a
+/// module makes it a single unioned child, and the model quietly stops
+/// evaluating exactly.
+fn flatten_union_into(s: Solid, out: &mut Vec<Solid>) {
+    match s {
+        Solid::Union(xs) => {
+            for x in xs {
+                flatten_union_into(x, out);
+            }
+        }
+        Solid::Transform { matrix, child } => match *child {
+            Solid::Union(xs) => {
+                for x in xs {
+                    flatten_union_into(
+                        Solid::Transform {
+                            matrix,
+                            child: Box::new(x),
+                        },
+                        out,
+                    );
+                }
+            }
+            other => out.push(Solid::Transform {
+                matrix,
+                child: Box::new(other),
+            }),
+        },
+        other => out.push(other),
+    }
+}
+
 fn geom_difference(children: Vec<Geom>) -> Option<Geom> {
     let (solids, shapes) = split_geoms(children);
     if !solids.is_empty() {
         let mut it = solids.into_iter();
         let mut acc = it.next()?;
+        // Subtrahends only; the first operand is the body being cut.
+        let mut cutters: Vec<Solid> = Vec::new();
         for s in it {
+            flatten_union_into(s, &mut cutters);
+        }
+        for s in cutters {
             acc = acc.difference(s);
         }
         Some(Geom::Solid(acc))
@@ -2919,7 +3604,11 @@ fn geom_intersection(children: Vec<Geom>) -> Option<Geom> {
     }
 }
 
-fn geom_map(g: Geom, solid: impl FnOnce(Solid) -> Solid, pt: impl Fn([f32; 2]) -> [f32; 2] + Copy) -> Geom {
+fn geom_map(
+    g: Geom,
+    solid: impl FnOnce(Solid) -> Solid,
+    pt: impl Fn([f32; 2]) -> [f32; 2] + Copy,
+) -> Geom {
     match g {
         Geom::Solid(s) => Geom::Solid(solid(s)),
         Geom::Shape(sh) => Geom::Shape(sh.map(pt)),
@@ -2929,7 +3618,11 @@ fn geom_map(g: Geom, solid: impl FnOnce(Solid) -> Solid, pt: impl Fn([f32; 2]) -
 pub(super) fn solid_points(s: &Solid) -> Vec<[f32; 3]> {
     let g = s.clone().to_geometry();
     match g.attributes.get("position") {
-        Some(a) => a.array.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect(),
+        Some(a) => a
+            .array
+            .chunks_exact(3)
+            .map(|c| [c[0], c[1], c[2]])
+            .collect(),
         None => Vec::new(),
     }
 }
@@ -2940,23 +3633,36 @@ pub(super) fn solid_points(s: &Solid) -> Vec<[f32; 3]> {
 fn solid_is_convex(s: &Solid) -> bool {
     let g = s.clone().to_geometry();
     let pts: Vec<[f32; 3]> = match g.attributes.get("position") {
-        Some(a) => a.array.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect(),
+        Some(a) => a
+            .array
+            .chunks_exact(3)
+            .map(|c| [c[0], c[1], c[2]])
+            .collect(),
         None => return true,
     };
     if pts.len() < 4 {
         return true;
     }
     let key = |p: &[f32; 3]| {
-        ((p[0] * 1e4).round() as i64, (p[1] * 1e4).round() as i64, (p[2] * 1e4).round() as i64)
+        (
+            (p[0] * 1e4).round() as i64,
+            (p[1] * 1e4).round() as i64,
+            (p[2] * 1e4).round() as i64,
+        )
     };
     let hull = match hull3d(&pts) {
         Some(h) => h.to_geometry(),
         None => return true,
     };
-    let hull_verts: std::collections::HashSet<(i64, i64, i64)> = match hull.attributes.get("position") {
-        Some(a) => a.array.chunks_exact(3).map(|c| key(&[c[0], c[1], c[2]])).collect(),
-        None => return true,
-    };
+    let hull_verts: std::collections::HashSet<(i64, i64, i64)> =
+        match hull.attributes.get("position") {
+            Some(a) => a
+                .array
+                .chunks_exact(3)
+                .map(|c| key(&[c[0], c[1], c[2]]))
+                .collect(),
+            None => return true,
+        };
     // Convex ⟺ no input vertex is strictly interior (all are hull vertices).
     pts.iter().all(|p| hull_verts.contains(&key(p)))
 }
@@ -2995,7 +3701,17 @@ fn eval_call_stmt(
     // The call's own block is evaluated in the *current* children context, so a
     // `children()` inside it resolves to the enclosing module's children.
     let kids = || eval_stmts(children, sc, env, mod_kids);
-    let child = || -> Result<Option<Geom>, String> { Ok(geom_union(eval_stmts(children, sc, env, mod_kids)?)) };
+    // How a GROUP collapses its children. Outside an assembly this unions, which
+    // is OpenSCAD's rule. Inside one it concatenates, so `translate(v) { a; b; }`
+    // keeps a and b as separate bodies instead of quietly reintroducing the
+    // boolean the enclosing `assembly()` was there to avoid.
+    let child = || -> Result<Option<Geom>, String> {
+        let gs = eval_stmts(children, sc, env, mod_kids)?;
+        Ok(geom_group(env, gs))
+    };
+    // Children of an explicit boolean, evaluated with assembly mode OFF.
+    let bool_kids = || env.with_assembly(false, || eval_stmts(children, sc, env, mod_kids));
+    let bool_child = || -> Result<Option<Geom>, String> { Ok(geom_union(bool_kids()?)) };
 
     Ok(match name {
         // --- 2D primitives ---
@@ -3008,7 +3724,9 @@ fn eval_call_stmt(
                     [v[0], v[1]]
                 }
             };
-            let center = arg(args, "center", 1, sc, env).map(|v| v.truthy()).unwrap_or(false);
+            let center = arg(args, "center", 1, sc, env)
+                .map(|v| v.truthy())
+                .unwrap_or(false);
             Some(Geom::Shape(square(s, center)))
         }
         "circle" => {
@@ -3023,18 +3741,32 @@ fn eval_call_stmt(
         // --- 3D primitives ---
         "cube" => {
             let size = arg(args, "size", 0, sc, env).unwrap_or(Value::Num(1.0));
-            let s = if let Value::Num(n) = &size { [*n as f32; 3] } else { size.vec3(1.0)? };
-            let center = arg(args, "center", 1, sc, env).map(|v| v.truthy()).unwrap_or(false);
+            let s = if let Value::Num(n) = &size {
+                [*n as f32; 3]
+            } else {
+                size.vec3(1.0)?
+            };
+            let center = arg(args, "center", 1, sc, env)
+                .map(|v| v.truthy())
+                .unwrap_or(false);
             let c = cube([s[0], s[1], s[2]]);
-            Some(Geom::Solid(if center { c } else { c.translate([s[0] / 2.0, s[1] / 2.0, s[2] / 2.0]) }))
+            Some(Geom::Solid(if center {
+                c
+            } else {
+                c.translate([s[0] / 2.0, s[1] / 2.0, s[2] / 2.0])
+            }))
         }
         "sphere" => {
             let r = radius(args, "r", "d", 0, sc, env).unwrap_or(1.0);
             Some(Geom::Solid(sphere_mesh(r, frags(r))))
         }
         "cylinder" => {
-            let h = arg(args, "h", 0, sc, env).and_then(|v| v.num().ok()).unwrap_or(1.0) as f32;
-            let center = arg(args, "center", 999, sc, env).map(|v| v.truthy()).unwrap_or(false);
+            let h = arg(args, "h", 0, sc, env)
+                .and_then(|v| v.num().ok())
+                .unwrap_or(1.0) as f32;
+            let center = arg(args, "center", 999, sc, env)
+                .map(|v| v.truthy())
+                .unwrap_or(false);
             let (r1, r2) = cyl_radii(args, sc, env);
             Some(Geom::Solid(cyl_mesh(r1, r2, h, frags(r1.max(r2)), center)))
         }
@@ -3045,9 +3777,15 @@ fn eval_call_stmt(
         }
         // --- extrusions (2D child → 3D) ---
         "linear_extrude" => {
-            let h = arg(args, "height", 0, sc, env).and_then(|v| v.num().ok()).unwrap_or(1.0) as f32;
-            let center = arg(args, "center", 999, sc, env).map(|v| v.truthy()).unwrap_or(false);
-            let twist = arg(args, "twist", 999, sc, env).and_then(|v| v.num().ok()).unwrap_or(0.0) as f32;
+            let h = arg(args, "height", 0, sc, env)
+                .and_then(|v| v.num().ok())
+                .unwrap_or(1.0) as f32;
+            let center = arg(args, "center", 999, sc, env)
+                .map(|v| v.truthy())
+                .unwrap_or(false);
+            let twist = arg(args, "twist", 999, sc, env)
+                .and_then(|v| v.num().ok())
+                .unwrap_or(0.0) as f32;
             let scale = match arg(args, "scale", 999, sc, env) {
                 Some(Value::Num(n)) => [n as f32, n as f32],
                 Some(v) => {
@@ -3076,7 +3814,9 @@ fn eval_call_stmt(
             }
         }
         "rotate_extrude" => {
-            let deg = arg(args, "angle", 0, sc, env).and_then(|v| v.num().ok()).unwrap_or(360.0) as f32;
+            let deg = arg(args, "angle", 0, sc, env)
+                .and_then(|v| v.num().ok())
+                .unwrap_or(360.0) as f32;
             match child()? {
                 Some(Geom::Shape(s)) => {
                     let rmax = s.points().iter().map(|p| p[0].abs()).fold(0.0f32, f32::max);
@@ -3087,11 +3827,17 @@ fn eval_call_stmt(
         }
         // --- transforms ---
         "translate" => {
-            let v = arg(args, "v", 0, sc, env).unwrap_or(Value::Undef).vec3(0.0).unwrap_or([0.0; 3]);
+            let v = arg(args, "v", 0, sc, env)
+                .unwrap_or(Value::Undef)
+                .vec3(0.0)
+                .unwrap_or([0.0; 3]);
             child()?.map(|g| geom_map(g, |s| s.translate(v), move |p| [p[0] + v[0], p[1] + v[1]]))
         }
         "scale" => {
-            let v = arg(args, "v", 0, sc, env).unwrap_or(Value::Num(1.0)).vec3(1.0).unwrap_or([1.0; 3]);
+            let v = arg(args, "v", 0, sc, env)
+                .unwrap_or(Value::Num(1.0))
+                .vec3(1.0)
+                .unwrap_or([1.0; 3]);
             child()?.map(|g| geom_map(g, |s| s.scale(v), move |p| [p[0] * v[0], p[1] * v[1]]))
         }
         "rotate" => {
@@ -3115,27 +3861,38 @@ fn eval_call_stmt(
             })
         }
         "mirror" => {
-            let v = arg(args, "v", 0, sc, env).unwrap_or(Value::Undef).vec3(0.0).unwrap_or([1.0, 0.0, 0.0]);
+            let v = arg(args, "v", 0, sc, env)
+                .unwrap_or(Value::Undef)
+                .vec3(0.0)
+                .unwrap_or([1.0, 0.0, 0.0]);
             child()?.map(|g| {
-                geom_map(g, |s| s.transform(reflection(v)), move |p| {
-                    let l = (v[0] * v[0] + v[1] * v[1]).sqrt().max(1e-8);
-                    let (nx, ny) = (v[0] / l, v[1] / l);
-                    let d = 2.0 * (p[0] * nx + p[1] * ny);
-                    [p[0] - d * nx, p[1] - d * ny]
-                })
+                geom_map(
+                    g,
+                    |s| s.transform(reflection(v)),
+                    move |p| {
+                        let l = (v[0] * v[0] + v[1] * v[1]).sqrt().max(1e-8);
+                        let (nx, ny) = (v[0] / l, v[1] / l);
+                        let d = 2.0 * (p[0] * nx + p[1] * ny);
+                        [p[0] - d * nx, p[1] - d * ny]
+                    },
+                )
             })
         }
         "multmatrix" => {
             let m = matrix4_from_value(&arg(args, "m", 0, sc, env).unwrap_or(Value::Undef));
             let e = m.elements;
             child()?.map(|g| {
-                geom_map(g, |s| s.transform(m), move |p| {
-                    // apply the affine 2×2 + translation to a 2D point
-                    [
-                        e[0] * p[0] + e[4] * p[1] + e[12],
-                        e[1] * p[0] + e[5] * p[1] + e[13],
-                    ]
-                })
+                geom_map(
+                    g,
+                    |s| s.transform(m),
+                    move |p| {
+                        // apply the affine 2×2 + translation to a 2D point
+                        [
+                            e[0] * p[0] + e[4] * p[1] + e[12],
+                            e[1] * p[0] + e[5] * p[1] + e[13],
+                        ]
+                    },
+                )
             })
         }
         "import" => {
@@ -3145,7 +3902,8 @@ fn eval_call_stmt(
             };
             let path = env.base.join(&file);
             let lower = file.to_ascii_lowercase();
-            let read_err = |e: std::io::Error| format!("import: cannot read {}: {e}", path.display());
+            let read_err =
+                |e: std::io::Error| format!("import: cannot read {}: {e}", path.display());
             if lower.ends_with(".stl") {
                 let bytes = read_file_bytes(&path).map_err(read_err)?;
                 Some(Geom::Solid(Solid::Leaf(crate::StlLoader::parse(&bytes))))
@@ -3165,23 +3923,65 @@ fn eval_call_stmt(
                 (!sh.polys.is_empty()).then_some(Geom::Shape(sh))
             } else if lower.ends_with(".3mf") {
                 let bytes = read_file_bytes(&path).map_err(read_err)?;
-                let solid = parse_3mf(&bytes).ok_or_else(|| format!("import: malformed 3MF '{file}'"))?;
+                let solid =
+                    parse_3mf(&bytes).ok_or_else(|| format!("import: malformed 3MF '{file}'"))?;
                 Some(Geom::Solid(solid))
             } else if lower.ends_with(".amf") {
                 let text = read_file_string(&path).map_err(read_err)?;
-                let solid = parse_amf(&text).ok_or_else(|| format!("import: malformed AMF '{file}'"))?;
+                let solid =
+                    parse_amf(&text).ok_or_else(|| format!("import: malformed AMF '{file}'"))?;
                 Some(Geom::Solid(solid))
             } else {
-                return Err(format!("import: unsupported format '{file}' (STL/OBJ/OFF/3MF/AMF/DXF/SVG)"));
+                return Err(format!(
+                    "import: unsupported format '{file}' (STL/OBJ/OFF/3MF/AMF/DXF/SVG)"
+                ));
             }
         }
-        "color" => child()?,
+        // `color()` is a display attribute: geometry passes through untouched
+        // and the tag is read later by `Solid::parts`. 2D shapes carry no color
+        // (they have to be extruded before anything can render them).
+        "color" => {
+            let c = arg(args, "c", 0, sc, env);
+            let explicit_alpha = arg(args, "alpha", 1, sc, env).and_then(|v| v.num().ok());
+            let rgba = match &c {
+                Some(Value::Str(name)) => crate::openscad::css_color(name),
+                Some(Value::Vector(v)) => {
+                    let n: Vec<f32> = v
+                        .iter()
+                        .filter_map(|x| x.num().ok())
+                        .map(|x| x as f32)
+                        .collect();
+                    (n.len() >= 3).then(|| [n[0], n[1], n[2], n.get(3).copied().unwrap_or(1.0)])
+                }
+                _ => None,
+            };
+            let rgba = rgba.map(|mut c| {
+                if let Some(a) = explicit_alpha {
+                    c[3] = a as f32;
+                }
+                [
+                    c[0].clamp(0.0, 1.0),
+                    c[1].clamp(0.0, 1.0),
+                    c[2].clamp(0.0, 1.0),
+                    c[3].clamp(0.0, 1.0),
+                ]
+            });
+            match (child()?, rgba) {
+                // An unusable color argument renders the child untagged, which
+                // is what OpenSCAD does (it warns and uses the default color).
+                (Some(Geom::Solid(s)), Some(rgba)) => Some(Geom::Solid(s.color_rgba(rgba))),
+                (other, _) => other,
+            }
+        }
         // --- booleans ---
-        "union" => child()?,
-        "difference" => geom_difference(kids()?),
-        "intersection" => geom_intersection(kids()?),
+        // Each of these uses `bool_*`, which turns assembly mode OFF for its
+        // children. Inside an `assembly()`, `union()` is how you ask for the
+        // boolean back for one subtree, so it has to keep meaning what it says.
+        "union" => bool_child()?,
+        "difference" => geom_difference(bool_kids()?),
+        "intersection" => geom_intersection(bool_kids()?),
         "hull" => {
-            let cg = kids()?;
+            let cg = bool_kids()?;
             if cg.iter().any(|g| matches!(g, Geom::Solid(_))) {
                 let mut pts = Vec::new();
                 for g in &cg {
@@ -3216,7 +4016,9 @@ fn eval_call_stmt(
             child()?
         }
         "assert" => {
-            let ok = arg(args, "condition", 0, sc, env).map(|v| v.truthy()).unwrap_or(true);
+            let ok = arg(args, "condition", 0, sc, env)
+                .map(|v| v.truthy())
+                .unwrap_or(true);
             if !ok {
                 return Err("assertion failed".into());
             }
@@ -3224,6 +4026,130 @@ fn eval_call_stmt(
         }
         // `render` / `let` / grouping wrappers — evaluate the children as-is.
         "render" | "group" => child()?,
+        // Concatenate children as SEPARATE BODIES — no boolean at all — and put
+        // the whole SUBTREE into that mode.
+        //
+        // Most of what this front end gets used for is assemblies: a lattice of
+        // ribs, a field of fasteners, an interface plus its pads and pins. Those
+        // are separate solids that merely need to end up in one mesh, and
+        // unioning them is pure waste — N booleans over a growing accumulator,
+        // which for ~200 crossing ribs takes minutes and for disjoint parts
+        // changes nothing. `assembly()` is the honest operation for that case:
+        // O(N), exact, and it keeps each body's own shell.
+        //
+        // It PROPAGATES because the boolean it is meant to avoid does not come
+        // from the statement you wrapped — it comes from a `translate(v) { a; b; }`
+        // or a two-statement module body somewhere below, both of which are
+        // implicit groups, and a group unions. Writing `assembly()` at only the
+        // top used to leave every one of those in place, and the failure is
+        // silent: the result is still watertight, just wrong or extremely slow.
+        // A deck isogrid whose two panel sets met at the tub corners went from
+        // 0.6 s to over six minutes without finishing, and the fix was one more
+        // `assembly()` three lines up.
+        //
+        // Use `union()` when solids overlap and you need one watertight result —
+        // inside an assembly that is also how you turn the boolean back on for
+        // one subtree. Use `assembly()` when they are distinct parts.
+        // `assembly()` — distinct parts, concatenated, no boolean between them.
+        //
+        // `assembly(fit = c)` additionally RELIEVES each body against the ones
+        // before it: body k is cut by every earlier body, dilated by `c`. Two
+        // parts of one assembly then cannot occupy the same volume, because the
+        // later one loses the contested material — it is not detected
+        // afterwards, it is not representable.
+        //
+        // This exists because the alternative did not work. A model built on
+        // "overlap is free to the mesh" accumulated 224 element pairs sharing
+        // volume across four states, every one of them a deliberate 2-5 mm lap
+        // written to avoid the four-triangle edge that two abutting solids
+        // produce. Overlap is free to the mesh and it is not free to the
+        // machinist, and no amount of checking after the fact stops the next one
+        // being written. `fit` makes the lap a REBATE: the frame keeps its
+        // material, the skin is cut to clear it by `c`, which is what a bonded-in
+        // shear panel actually is.
+        //
+        // `c` also buys a gap, so the cut faces are not coplanar either — the
+        // other failure mode of abutting solids, and the one that makes surfaces
+        // flicker and parity tests ambiguous.
+        // --- mechanism declarations (only when a mechanism was asked for) ---
+        //
+        // `part()` groups exactly as an implicit group would, so wrapping a
+        // subtree in one changes no geometry: it only gives that subtree a
+        // name, and records the *unevaluated* subtree alongside it. Collecting
+        // a mechanism therefore costs a parse, not a CSG.
+        "part" if env.mechanism => {
+            let name = str_arg(args, "name", 0, sc, env)
+                .ok_or("part() needs a name as its first argument")?;
+            let g = child()?;
+            if let Some(Geom::Solid(solid)) = &g {
+                let fixed = bool_arg(args, "fixed", sc, env).unwrap_or(false);
+                let density = num_arg(args, "density", 9999, sc, env);
+                let mass = num_arg(args, "mass", 9999, sc, env);
+                // What the part *touches* things with, as distinct from what a
+                // mate joins it by. Named rather than numbered: a model saying
+                // `collider = 2` would mean nothing to the next reader.
+                let fit = match str_arg(args, "collider", 9999, sc, env) {
+                    Some(chosen) => Some(PartFit::from_name(&chosen).ok_or_else(|| {
+                        format!(
+                            "part(\"{name}\"): collider = \"{chosen}\" is not one of {}",
+                            PartFit::NAMES.join(", ")
+                        )
+                    })?),
+                    None => None,
+                };
+                let friction = num_arg(args, "friction", 9999, sc, env);
+                // `bounce` is what a CAD file calls it; `restitution` is what
+                // the solver calls it. Both work.
+                let restitution = num_arg(args, "bounce", 9999, sc, env)
+                    .or_else(|| num_arg(args, "restitution", 9999, sc, env));
+                let damping = pair_arg(args, "damping", 9999, sc, env);
+                MECHANISM.with(|m| {
+                    m.borrow_mut().parts.push(PartSpec {
+                        name,
+                        solid: solid.clone(),
+                        fixed,
+                        density,
+                        mass,
+                        fit,
+                        friction,
+                        damping,
+                        restitution,
+                    })
+                });
+            }
+            g
+        }
+        "hinge" | "slider" | "cylindrical" | "ball" | "weld" | "planar" | "screw" | "gear"
+        | "rack"
+            if env.mechanism =>
+        {
+            record_mate(name, args, sc, env)?;
+            None
+        }
+        "drive" if env.mechanism => {
+            record_drive(args, sc, env)?;
+            None
+        }
+        "continuum" if env.mechanism => {
+            record_continuum(args, sc, env)?;
+            None
+        }
+        "tendon" if env.mechanism => {
+            record_tendon(args, sc, env)?;
+            None
+        }
+        "assembly" => {
+            let fit = args
+                .iter()
+                .find(|a| a.name.as_deref() == Some("fit"))
+                .map(|a| eval_expr(&a.value, sc, env).and_then(|v| v.num()))
+                .transpose()?;
+            let cg = env.with_assembly(true, kids)?;
+            match fit {
+                None => geom_concat(env, cg),
+                Some(c) => geom_concat(env, relieve_in_order(cg, c.max(0.0) as f32)),
+            }
+        }
         // `children()` / `children(i)` / `children([i:j])` / `children([a,b])` —
         // resolve against the enclosing module's children (works anywhere, incl.
         // inside `for`/`if`, because the context is threaded through evaluation).
@@ -3256,7 +4182,7 @@ fn eval_call_stmt(
                     _ => {}
                 }
             }
-            geom_union(sel)
+            geom_group(env, sel)
         }
         // `let(a=…) child` binds in a new scope; `assign(a=…)` is the deprecated
         // synonym — both just introduce bindings for the child geometry.
@@ -3267,7 +4193,7 @@ fn eval_call_stmt(
                     inner.insert(nm.clone(), eval_expr(&a.value, sc, env)?);
                 }
             }
-            geom_union(eval_stmts(children, &inner, env, mod_kids)?)
+            geom_group(env, eval_stmts(children, &inner, env, mod_kids)?)
         }
         "intersection_for" => {
             // Loop like `for`, but intersect the per-iteration geometry.
@@ -3289,7 +4215,10 @@ fn eval_call_stmt(
             acc
         }
         "resize" => {
-            let nv = arg(args, "newsize", 0, sc, env).unwrap_or(Value::Undef).vec3(0.0).unwrap_or([0.0; 3]);
+            let nv = arg(args, "newsize", 0, sc, env)
+                .unwrap_or(Value::Undef)
+                .vec3(0.0)
+                .unwrap_or([0.0; 3]);
             let auto = match arg(args, "auto", 1, sc, env) {
                 Some(Value::Vector(v)) => {
                     let g = |i: usize| v.get(i).map(|x| x.truthy()).unwrap_or(false);
@@ -3303,7 +4232,9 @@ fn eval_call_stmt(
         "offset" => {
             let r = arg(args, "r", 0, sc, env).and_then(|v| v.num().ok());
             let delta = arg(args, "delta", 999, sc, env).and_then(|v| v.num().ok());
-            let chamfer = arg(args, "chamfer", 999, sc, env).map(|v| v.truthy()).unwrap_or(false);
+            let chamfer = arg(args, "chamfer", 999, sc, env)
+                .map(|v| v.truthy())
+                .unwrap_or(false);
             let (d, round) = match (r, delta) {
                 (Some(r), _) => (r as f32, !chamfer),
                 (None, Some(dl)) => (dl as f32, false),
@@ -3314,7 +4245,11 @@ fn eval_call_stmt(
                 Some(Geom::Shape(s)) => {
                     let off = offset_shape(&s, d, round, frags(d));
                     let clean = simplify2d(&off);
-                    Some(Geom::Shape(if clean.polys.is_empty() { off } else { clean }))
+                    Some(Geom::Shape(if clean.polys.is_empty() {
+                        off
+                    } else {
+                        clean
+                    }))
                 }
                 other => other, // offset of a 3D solid is undefined in OpenSCAD
             }
@@ -3328,7 +4263,10 @@ fn eval_call_stmt(
                         polys: s
                             .polys
                             .into_iter()
-                            .map(|p| Poly { outer: p.outer, holes: Vec::new() })
+                            .map(|p| Poly {
+                                outer: p.outer,
+                                holes: Vec::new(),
+                            })
                             .collect(),
                     };
                     Some(Geom::Shape(filled))
@@ -3391,7 +4329,9 @@ fn eval_call_stmt(
             }
         }
         "projection" => {
-            let cut = arg(args, "cut", 0, sc, env).map(|v| v.truthy()).unwrap_or(false);
+            let cut = arg(args, "cut", 0, sc, env)
+                .map(|v| v.truthy())
+                .unwrap_or(false);
             match child()? {
                 Some(Geom::Solid(s)) if cut => {
                     let sh = slice_z0(&s.to_geometry_exact());
@@ -3410,8 +4350,12 @@ fn eval_call_stmt(
                 Some(other) => fmt_value(&other),
                 None => return Err("text() needs a string".into()),
             };
-            let size = arg(args, "size", 999, sc, env).and_then(|v| v.num().ok()).unwrap_or(10.0) as f32;
-            let spacing = arg(args, "spacing", 999, sc, env).and_then(|v| v.num().ok()).unwrap_or(1.0) as f32;
+            let size = arg(args, "size", 999, sc, env)
+                .and_then(|v| v.num().ok())
+                .unwrap_or(10.0) as f32;
+            let spacing = arg(args, "spacing", 999, sc, env)
+                .and_then(|v| v.num().ok())
+                .unwrap_or(1.0) as f32;
             let str_arg = |nm: &str, def: &str| match arg(args, nm, 999, sc, env) {
                 Some(Value::Str(s)) => s,
                 _ => def.to_string(),
@@ -3419,12 +4363,17 @@ fn eval_call_stmt(
             let (halign, valign) = (str_arg("halign", "left"), str_arg("valign", "baseline"));
             // Font: an explicit `font="…ttf"` path, else the bundled default.
             let font = match arg(args, "font", 999, sc, env) {
-                Some(Value::Str(f)) if f.to_ascii_lowercase().ends_with(".ttf") || f.to_ascii_lowercase().ends_with(".otf") => {
+                Some(Value::Str(f))
+                    if f.to_ascii_lowercase().ends_with(".ttf")
+                        || f.to_ascii_lowercase().ends_with(".otf") =>
+                {
                     let bytes = read_file_bytes(&env.base.join(&f))
                         .map_err(|e| format!("text: cannot read font {f}: {e}"))?;
-                    crate::TtfFont::parse(&bytes).map_err(|_| format!("text: cannot parse font {f}"))?
+                    crate::TtfFont::parse(&bytes)
+                        .map_err(|_| format!("text: cannot parse font {f}"))?
                 }
-                _ => crate::TtfFont::parse(DEFAULT_FONT).map_err(|_| "text: bundled font failed".to_string())?,
+                _ => crate::TtfFont::parse(DEFAULT_FONT)
+                    .map_err(|_| "text: bundled font failed".to_string())?,
             };
             let segs = frags(size).clamp(4, 24);
             let sh = text_shape(&txt, size, &font, segs, spacing, &halign, &valign);
@@ -3435,14 +4384,17 @@ fn eval_call_stmt(
                 Some(Value::Str(s)) => s,
                 _ => return Err("surface() needs a file name".into()),
             };
-            let center = arg(args, "center", 999, sc, env).map(|v| v.truthy()).unwrap_or(false);
+            let center = arg(args, "center", 999, sc, env)
+                .map(|v| v.truthy())
+                .unwrap_or(false);
             let path = env.base.join(&file);
             let lower = file.to_ascii_lowercase();
             if lower.ends_with(".png") {
                 let bytes = read_file_bytes(&path)
                     .map_err(|e| format!("surface: cannot read {}: {e}", path.display()))?;
-                let grid = decode_png_luma(&bytes)
-                    .ok_or("surface: unsupported PNG (need 8/16-bit greyscale/RGB, non-interlaced)")?;
+                let grid = decode_png_luma(&bytes).ok_or(
+                    "surface: unsupported PNG (need 8/16-bit greyscale/RGB, non-interlaced)",
+                )?;
                 Some(Geom::Solid(surface_grid(grid, center)?))
             } else if lower.ends_with(".dat") {
                 let text = read_file_string(&path)
@@ -3461,7 +4413,7 @@ fn eval_call_stmt(
                 // evaluated in the *caller's* children context.
                 let child_geom = kids()?;
                 inner.insert("$children".into(), Value::Num(child_geom.len() as f64));
-                geom_union(eval_stmts(body, &inner, env, &child_geom)?)
+                geom_group(env, eval_stmts(body, &inner, env, &child_geom)?)
             } else {
                 return Err(format!("unknown module '{name}'"));
             }
@@ -3496,7 +4448,9 @@ fn polygon_shape(pts: Vec<[f32; 2]>, paths: Option<Value>) -> Shape {
             };
             let outer = ring_of(&rings[0]);
             let holes = rings[1..].iter().map(ring_of).collect();
-            Shape { polys: vec![Poly { outer, holes }] }
+            Shape {
+                polys: vec![Poly { outer, holes }],
+            }
         }
         _ => Shape::one(pts),
     }
@@ -3506,7 +4460,9 @@ fn radius(args: &[Arg], rn: &str, dn: &str, pos: usize, sc: &Scope, env: &Env) -
     if let Some(d) = arg(args, dn, 9999, sc, env).and_then(|v| v.num().ok()) {
         return Some(d as f32 / 2.0);
     }
-    arg(args, rn, pos, sc, env).and_then(|v| v.num().ok()).map(|r| r as f32)
+    arg(args, rn, pos, sc, env)
+        .and_then(|v| v.num().ok())
+        .map(|r| r as f32)
 }
 
 fn cyl_radii(args: &[Arg], sc: &Scope, env: &Env) -> (f32, f32) {
@@ -3520,7 +4476,10 @@ fn cyl_radii(args: &[Arg], sc: &Scope, env: &Env) -> (f32, f32) {
 
 fn as_points(v: &Value) -> Vec<[f32; 3]> {
     match v {
-        Value::Vector(items) => items.iter().map(|p| p.vec3(0.0).unwrap_or([0.0; 3])).collect(),
+        Value::Vector(items) => items
+            .iter()
+            .map(|p| p.vec3(0.0).unwrap_or([0.0; 3]))
+            .collect(),
         _ => Vec::new(),
     }
 }
@@ -3529,7 +4488,11 @@ fn as_faces(v: &Value) -> Vec<Vec<u32>> {
         Value::Vector(items) => items
             .iter()
             .filter_map(|f| match f {
-                Value::Vector(idx) => Some(idx.iter().filter_map(|x| x.num().ok().map(|n| n as u32)).collect()),
+                Value::Vector(idx) => Some(
+                    idx.iter()
+                        .filter_map(|x| x.num().ok().map(|n| n as u32))
+                        .collect(),
+                ),
                 _ => None,
             })
             .collect(),
@@ -3543,10 +4506,22 @@ fn reflection(n: [f32; 3]) -> Matrix4 {
     let (x, y, z) = (n[0] / l, n[1] / l, n[2] / l);
     let mut m = Matrix4::identity();
     m.elements = [
-        1.0 - 2.0 * x * x, -2.0 * x * y, -2.0 * x * z, 0.0,
-        -2.0 * y * x, 1.0 - 2.0 * y * y, -2.0 * y * z, 0.0,
-        -2.0 * z * x, -2.0 * z * y, 1.0 - 2.0 * z * z, 0.0,
-        0.0, 0.0, 0.0, 1.0,
+        1.0 - 2.0 * x * x,
+        -2.0 * x * y,
+        -2.0 * x * z,
+        0.0,
+        -2.0 * y * x,
+        1.0 - 2.0 * y * y,
+        -2.0 * y * z,
+        0.0,
+        -2.0 * z * x,
+        -2.0 * z * y,
+        1.0 - 2.0 * z * z,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
     ];
     m
 }
@@ -3621,10 +4596,12 @@ fn hoist_defs(program: &[Stmt], env: &mut Env) {
     for s in program {
         match s {
             Stmt::ModuleDef(name, params, body) => {
-                env.modules.insert(name.clone(), (params.clone(), body.clone()));
+                env.modules
+                    .insert(name.clone(), (params.clone(), body.clone()));
             }
             Stmt::FunctionDef(name, params, body) => {
-                env.functions.insert(name.clone(), (params.clone(), body.clone()));
+                env.functions
+                    .insert(name.clone(), (params.clone(), body.clone()));
             }
             _ => {}
         }
@@ -3638,12 +4615,46 @@ fn parse_program(src: &str) -> Result<Vec<Stmt>, String> {
 
 /// Parse OpenSCAD source, resolving `include`/`use`/`import` relative to `base`.
 fn parse_scad_in(src: &str, base: &std::path::Path) -> Result<Solid, String> {
+    parse_scad_in_with(src, base, &[])
+}
+
+fn parse_scad_in_for_parts(src: &str, base: &std::path::Path) -> Result<Solid, String> {
+    parse_scad_in_with_flags(src, base, &[], true)
+}
+
+/// Evaluate with the root scope PRE-SEEDED — the hook animation needs.
+///
+/// OpenSCAD animates by re-evaluating the whole program with `$t` stepped from 0
+/// to 1; the geometry is a function of time and every frame is a fresh
+/// evaluation. `$t` already had a default here and the evaluator already reads
+/// special variables out of scope, so the only thing missing was a way to PUT
+/// one there. `vars` is applied to the root scope before the program runs, so a
+/// bare `$t` in the source resolves to the frame's value and an explicit
+/// `$t = ...;` in the file still wins, exactly as OpenSCAD behaves.
+fn parse_scad_in_with(
+    src: &str,
+    base: &std::path::Path,
+    vars: &[(String, f64)],
+) -> Result<Solid, String> {
+    parse_scad_in_with_flags(src, base, vars, false)
+}
+
+fn parse_scad_in_with_flags(
+    src: &str,
+    base: &std::path::Path,
+    vars: &[(String, f64)],
+    preserve_assembly_solids: bool,
+) -> Result<Solid, String> {
     let mut uses = Vec::new();
     let mut seen = std::collections::HashSet::new();
     let combined = inline_includes(src, base, &mut uses, &mut seen)?;
     let program = parse_program(&combined)?;
 
-    let mut env = Env { base: base.to_path_buf(), ..Env::default() };
+    let mut env = Env {
+        base: base.to_path_buf(),
+        preserve_assembly_solids,
+        ..Env::default()
+    };
     // `use` brings in only the definitions of the referenced files (no geometry).
     for up in &uses {
         if let Ok(text) = read_file_string(up) {
@@ -3659,11 +4670,16 @@ fn parse_scad_in(src: &str, base: &std::path::Path) -> Result<Solid, String> {
     }
     hoist_defs(&program, &mut env);
 
+    let seed: Vec<(String, f64)> = vars.to_vec();
     // Evaluate on a large stack so deep (but finite) recursive functions/modules
     // don't overflow — the recursion guard turns runaway recursion into an error.
     run_eval(move || {
         ROOT_MOD.with(|r| *r.borrow_mut() = None);
-        let geom = eval_stmts(&program, &Scope::new(), &env, &[])?;
+        let mut root = Scope::new();
+        for (k, v) in seed {
+            root.insert(k, Value::Num(v));
+        }
+        let geom = eval_stmts(&program, &root, &env, &[])?;
         // A `!` (show-only) modifier anywhere overrides the output with just its subtree.
         let geom = ROOT_MOD
             .with(|r| r.borrow_mut().take())
@@ -3671,18 +4687,143 @@ fn parse_scad_in(src: &str, base: &std::path::Path) -> Result<Solid, String> {
             .unwrap_or(geom);
         match geom_union(geom) {
             Some(Geom::Solid(s)) => Ok(s),
-            Some(Geom::Shape(_)) => {
-                Err("program produced 2D geometry — wrap it in linear_extrude/rotate_extrude".into())
-            }
+            Some(Geom::Shape(_)) => Err(
+                "program produced 2D geometry — wrap it in linear_extrude/rotate_extrude".into(),
+            ),
             None => Err("program produced no geometry".into()),
         }
+    })
+}
+
+/// Evaluate a model *and* the mechanism it declares.
+///
+/// The same evaluation as [`parse_scad_with`], with `part()`, the mate modules
+/// and `drive()` live. See [`super::mechanism`] for what they mean.
+///
+/// The parts come back as unevaluated [`Solid`] subtrees, so this costs a parse
+/// and not a boolean — a caller that only wants to know what the joints are
+/// does not pay for the geometry.
+///
+/// ```
+/// use threers::openscad::parse_scad_mechanism;
+///
+/// let spec = parse_scad_mechanism(r#"
+///     part("base", fixed = true) cube([40, 40, 8]);
+///     part("arm")                translate([0, 0, 8]) cube([40, 8, 8]);
+///     hinge("elbow", parts = ["arm", "base"],
+///           at = [0, 0, 8], axis = [0, 0, 1], range = [0, 90]);
+///     drive("elbow", to = 90, over = 1.0);
+/// "#).unwrap();
+///
+/// assert_eq!(spec.parts.len(), 2);
+/// assert!(spec.part("base").unwrap().fixed);
+/// assert_eq!(spec.mates[0].range, Some([0.0, 90.0]));
+/// assert!(spec.dangling_parts().is_empty());
+/// ```
+pub fn parse_scad_mechanism(src: &str) -> Result<MechanismSpec, String> {
+    parse_scad_mechanism_in(src, std::path::Path::new("."), &[])
+}
+
+/// The same at animation time `t`, for a model whose declarations read `$t`.
+pub fn parse_scad_mechanism_at(src: &str, t: f64) -> Result<MechanismSpec, String> {
+    parse_scad_mechanism_in(src, std::path::Path::new("."), &[("$t".to_string(), t)])
+}
+
+/// Read a mechanism from a file, resolving `include`/`use` beside it.
+pub fn parse_scad_mechanism_file(
+    path: impl AsRef<std::path::Path>,
+) -> Result<MechanismSpec, String> {
+    let path = path.as_ref();
+    let src = read_file_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let base = path.parent().unwrap_or(std::path::Path::new("."));
+    parse_scad_mechanism_in(&src, base, &[])
+}
+
+/// A file, at animation time `t`.
+pub fn parse_scad_mechanism_file_at(
+    path: impl AsRef<std::path::Path>,
+    t: f64,
+) -> Result<MechanismSpec, String> {
+    let path = path.as_ref();
+    let src = read_file_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let base = path.parent().unwrap_or(std::path::Path::new("."));
+    parse_scad_mechanism_in(&src, base, &[("$t".to_string(), t)])
+}
+
+fn parse_scad_mechanism_in(
+    src: &str,
+    base: &std::path::Path,
+    vars: &[(String, f64)],
+) -> Result<MechanismSpec, String> {
+    let mut uses = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let combined = inline_includes(src, base, &mut uses, &mut seen)?;
+    let program = parse_program(&combined)?;
+
+    let mut env = Env {
+        base: base.to_path_buf(),
+        mechanism: true,
+        ..Env::default()
+    };
+    for up in &uses {
+        if let Ok(text) = read_file_string(up) {
+            let ubase = up.parent().unwrap_or(base).to_path_buf();
+            let mut u2 = Vec::new();
+            let mut s2 = std::collections::HashSet::new();
+            if let Ok(uc) = inline_includes(&text, &ubase, &mut u2, &mut s2) {
+                if let Ok(up_prog) = parse_program(&uc) {
+                    hoist_defs(&up_prog, &mut env);
+                }
+            }
+        }
+    }
+    hoist_defs(&program, &mut env);
+
+    let seed: Vec<(String, f64)> = vars.to_vec();
+    run_eval(move || {
+        ROOT_MOD.with(|r| *r.borrow_mut() = None);
+        // Cleared going in, not coming out: a failed evaluation must not leave
+        // half a mechanism behind for the next one on this thread to find.
+        MECHANISM.with(|m| {
+            m.borrow_mut().take();
+        });
+        let mut root = Scope::new();
+        for (k, v) in seed {
+            root.insert(k, Value::Num(v));
+        }
+        let geom = eval_stmts(&program, &root, &env, &[])?;
+        let geom = ROOT_MOD
+            .with(|r| r.borrow_mut().take())
+            .filter(|v| !v.is_empty())
+            .unwrap_or(geom);
+        let collected = MECHANISM.with(|m| m.borrow_mut().take());
+        let model = match geom_union(geom) {
+            Some(Geom::Solid(s)) => s,
+            Some(Geom::Shape(_)) => {
+                return Err(
+                    "program produced 2D geometry — wrap it in linear_extrude/rotate_extrude"
+                        .into(),
+                )
+            }
+            None => return Err("program produced no geometry".into()),
+        };
+        Ok(MechanismSpec {
+            model,
+            parts: collected.parts,
+            mates: collected.mates,
+            drives: collected.drives,
+            continua: collected.continua,
+            tendons: collected.tendons,
+        })
     })
 }
 
 /// Run scad evaluation on a 1 GB-stack worker thread (recursion can be deep).
 /// On wasm (no threads) it runs inline.
 #[cfg(not(target_arch = "wasm32"))]
-fn run_eval(f: impl FnOnce() -> Result<Solid, String> + Send + 'static) -> Result<Solid, String> {
+fn run_eval<T: Send + 'static>(
+    f: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
     std::thread::Builder::new()
         .name("scad-eval".into())
         .stack_size(1024 * 1024 * 1024)
@@ -3692,8 +4833,136 @@ fn run_eval(f: impl FnOnce() -> Result<Solid, String> + Send + 'static) -> Resul
         .unwrap_or_else(|_| Err("evaluation failed (stack overflow or panic)".into()))
 }
 #[cfg(target_arch = "wasm32")]
-fn run_eval(f: impl FnOnce() -> Result<Solid, String>) -> Result<Solid, String> {
+fn run_eval<T>(f: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
     f()
+}
+
+/// OpenSCAD's viewport variables — where the model asks to be looked at from.
+///
+/// A `.scad` file positions the GUI camera by assigning `$vpr` / `$vpt` /
+/// `$vpd` / `$vpf` at top level, and animates it by writing them as functions
+/// of `$t`. [`scad_viewport`] evaluates those assignments so a headless render
+/// can honor the same instruction.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Viewport {
+    /// `$vpr` — camera rotation about x, y, z in degrees.
+    pub rotation: [f32; 3],
+    /// `$vpt` — the point the camera orbits and looks at.
+    pub target: [f32; 3],
+    /// `$vpd` — distance from `target` to the camera.
+    pub distance: f32,
+    /// `$vpf` — vertical field of view in degrees.
+    pub fov: f32,
+    /// Whether the model assigned any of these itself. When `false` every field
+    /// is the OpenSCAD default and a renderer should prefer its own framing.
+    pub explicit: bool,
+}
+
+impl Default for Viewport {
+    /// OpenSCAD's own defaults.
+    fn default() -> Self {
+        Self {
+            rotation: [55.0, 0.0, 25.0],
+            target: [0.0; 3],
+            distance: 140.0,
+            fov: 22.5,
+            explicit: false,
+        }
+    }
+}
+
+/// Read the viewport variables a model sets, at animation time `t`.
+///
+/// Only top-level assignments are considered, which is also the only place
+/// OpenSCAD itself honors them. Returns the defaults (with
+/// [`explicit`](Viewport::explicit) `false`) for a model that sets none.
+///
+/// ```
+/// use threers::openscad::scad::scad_viewport;
+/// let vp = scad_viewport("$vpd = 200; $vpr = [60, 0, 360 * $t]; cube(10);", 0.25);
+/// assert_eq!(vp.distance, 200.0);
+/// assert_eq!(vp.rotation, [60.0, 0.0, 90.0]);
+/// assert!(vp.explicit);
+/// ```
+pub fn scad_viewport(src: &str, t: f64) -> Viewport {
+    viewport_in(src, std::path::Path::new("."), t)
+}
+
+/// [`scad_viewport`] for a file, resolving `include`/`use` against its folder.
+pub fn scad_viewport_file(path: impl AsRef<std::path::Path>, t: f64) -> Viewport {
+    let path = path.as_ref();
+    let Ok(src) = std::fs::read_to_string(path) else {
+        return Viewport::default();
+    };
+    viewport_in(&src, path.parent().unwrap_or(std::path::Path::new(".")), t)
+}
+
+fn viewport_in(src: &str, base: &std::path::Path, t: f64) -> Viewport {
+    let mut out = Viewport::default();
+    let mut uses = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let Ok(combined) = inline_includes(src, base, &mut uses, &mut seen) else {
+        return out;
+    };
+    let Ok(program) = parse_program(&combined) else {
+        return out;
+    };
+    let mut env = Env {
+        base: base.to_path_buf(),
+        ..Env::default()
+    };
+    hoist_defs(&program, &mut env);
+
+    // Walk top-level assignments in order so a later one wins, exactly as the
+    // evaluator would see them.
+    let mut sc = Scope::new();
+    sc.insert("$t".into(), Value::Num(t));
+    for stmt in &program {
+        let Stmt::Assign(name, expr) = stmt else {
+            continue;
+        };
+        let Ok(value) = eval_expr(expr, &sc, &env) else {
+            continue;
+        };
+        sc.insert(name.clone(), value.clone());
+        let vec3 = |v: &Value| -> Option<[f32; 3]> {
+            let Value::Vector(items) = v else { return None };
+            let n: Vec<f32> = items
+                .iter()
+                .filter_map(|x| x.num().ok())
+                .map(|x| x as f32)
+                .collect();
+            (n.len() >= 3).then(|| [n[0], n[1], n[2]])
+        };
+        match name.as_str() {
+            "$vpr" => {
+                if let Some(r) = vec3(&value) {
+                    out.rotation = r;
+                    out.explicit = true;
+                }
+            }
+            "$vpt" => {
+                if let Some(p) = vec3(&value) {
+                    out.target = p;
+                    out.explicit = true;
+                }
+            }
+            "$vpd" => {
+                if let Ok(d) = value.num() {
+                    out.distance = d as f32;
+                    out.explicit = true;
+                }
+            }
+            "$vpf" => {
+                if let Ok(f) = value.num() {
+                    out.fov = f as f32;
+                    out.explicit = true;
+                }
+            }
+            _ => {}
+        }
+    }
+    out
 }
 
 /// Parse OpenSCAD source text. `include`/`use`/`import` paths resolve against the
@@ -3702,14 +4971,403 @@ pub fn parse_scad(src: &str) -> Result<Solid, String> {
     parse_scad_in(src, std::path::Path::new("."))
 }
 
-/// Parse an OpenSCAD `.scad` file, resolving `include`/`use`/`import` references
-/// relative to the file's own directory.
-pub fn parse_scad_file(path: impl AsRef<std::path::Path>) -> Result<Solid, String> {
+/// Evaluate at animation time `t`, the way OpenSCAD's animation does: `$t` is
+/// seeded into the root scope and the whole program re-runs.
+///
+/// `t` is conventionally 0..1 over one loop, but nothing here clamps it — a
+/// model is free to read `$t` as an angle, a stroke or a frame index.
+pub fn parse_scad_at(src: &str, t: f64) -> Result<Solid, String> {
+    parse_scad_with(src, &[("$t", t)])
+}
+
+/// Evaluate with arbitrary variables seeded into the root scope.
+///
+/// Useful beyond `$t`: a model parameterised on `DEPLOY` or `EJECT` can be
+/// driven from the host without editing the file or generating one file per
+/// state, which is what animating an assembly usually actually needs.
+pub fn parse_scad_with(src: &str, vars: &[(&str, f64)]) -> Result<Solid, String> {
+    parse_scad_with_base(src, vars, std::path::Path::new("."))
+}
+
+/// As [`parse_scad_with`], but say where `include <...>` should look.
+///
+/// A string has no file to take a directory from, so this defaulted to the
+/// process's current directory -- which is fine for a program run from beside
+/// its models and wrong for one run from anywhere else. Nested includes already
+/// resolve against the file that included them; this is only the top of that
+/// chain, and it was the one link a caller could not supply.
+pub fn parse_scad_with_base(
+    src: &str,
+    vars: &[(&str, f64)],
+    base: &std::path::Path,
+) -> Result<Solid, String> {
+    let v: Vec<(String, f64)> = vars.iter().map(|(k, x)| ((*k).to_string(), *x)).collect();
+    parse_scad_in_with(src, base, &v)
+}
+
+/// Read CONSTANTS back out of a model, without building any geometry.
+///
+/// A host driving a `.scad` model constantly needs to know what the model thinks
+/// — where a hinge axis is, how long the end effector is, how many panels a wing
+/// has — so that the Rust side and the CAD cannot disagree about it. There was
+/// no way to ask. The workaround that suggests itself, and that this project
+/// independently wrote three times in three different binaries, is to build a
+/// 1 mm cube at the coordinate and read its bounding box back:
+///
+/// ```text
+/// let g = parse_scad("include <arm.scad>\ntranslate([TOOL_LEN,0,0]) cube(1);")?
+///     .to_geometry_exact();
+/// let tool_len = geometry_bounds(&g).0[0];
+/// ```
+///
+/// That is a full parse and an exact-CSG evaluation per constant, and it only
+/// works for values you can smuggle through a translate.
+///
+/// Expressions are evaluated in the root scope after the program has run, so
+/// they see every top-level assignment, and `vars` is seeded first exactly as
+/// [`parse_scad_with`] does — a constant that depends on `$t` or on a
+/// caller-supplied parameter reads correctly.
+///
+/// Batched deliberately: the cost is one parse, and asking for twenty constants
+/// costs the same as asking for one.
+///
+/// ```no_run
+/// # use threers::scad_values;
+/// let v = scad_values("W = 40; H = W * 2 + 5;", &[], &["W", "H", "W / 2"]).unwrap();
+/// assert_eq!(v, vec![40.0, 85.0, 20.0]);
+/// ```
+pub fn scad_values(src: &str, vars: &[(&str, f64)], exprs: &[&str]) -> Result<Vec<f64>, String> {
+    let v: Vec<(String, f64)> = vars.iter().map(|(k, x)| ((*k).to_string(), *x)).collect();
+    scad_values_in(src, std::path::Path::new("."), &v, exprs)
+}
+
+/// One constant, for when that is all you want.
+pub fn scad_value(src: &str, expr: &str) -> Result<f64, String> {
+    Ok(scad_values(src, &[], &[expr])?[0])
+}
+
+/// [`scad_values`] against a file, resolving includes relative to it.
+pub fn scad_file_values(
+    path: impl AsRef<std::path::Path>,
+    vars: &[(&str, f64)],
+    exprs: &[&str],
+) -> Result<Vec<f64>, String> {
     let path = path.as_ref();
     let src = std::fs::read_to_string(path)
         .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
     let base = path.parent().unwrap_or(std::path::Path::new("."));
-    parse_scad_in(&src, base)
+    let v: Vec<(String, f64)> = vars.iter().map(|(k, x)| ((*k).to_string(), *x)).collect();
+    scad_values_in(&src, base, &v, exprs)
+}
+
+/// [`scad_values`] with an explicit base for `include <...>`.
+///
+/// The same gap as [`parse_scad_with_base`]: a string carries no directory, so
+/// this defaulted to the process's, which is only right for a program run from
+/// beside its models.
+pub fn scad_values_in(
+    src: &str,
+    base: &std::path::Path,
+    vars: &[(String, f64)],
+    exprs: &[&str],
+) -> Result<Vec<f64>, String> {
+    // Each expression becomes a top-level assignment appended to the program, so
+    // the existing parser evaluates it in the existing scope. No second
+    // expression parser to keep in step with the first one.
+    let mut probed = String::from(src);
+    probed.push('\n');
+    for (i, e) in exprs.iter().enumerate() {
+        probed.push_str(&format!("__scad_probe_{i} = {e};\n"));
+    }
+
+    let mut uses = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let combined = inline_includes(&probed, base, &mut uses, &mut seen)?;
+    let program = parse_program(&combined)?;
+
+    let mut env = Env {
+        base: base.to_path_buf(),
+        ..Env::default()
+    };
+    for up in &uses {
+        if let Ok(text) = read_file_string(up) {
+            let ubase = up.parent().unwrap_or(base).to_path_buf();
+            let mut u2 = Vec::new();
+            let mut s2 = std::collections::HashSet::new();
+            if let Ok(uc) = inline_includes(&text, &ubase, &mut u2, &mut s2) {
+                if let Ok(up_prog) = parse_program(&uc) {
+                    hoist_defs(&up_prog, &mut env);
+                }
+            }
+        }
+    }
+    hoist_defs(&program, &mut env);
+
+    let seed: Vec<(String, f64)> = vars.to_vec();
+    let want: Vec<String> = (0..exprs.len())
+        .map(|i| format!("__scad_probe_{i}"))
+        .collect();
+    let names: Vec<String> = exprs.iter().map(|e| (*e).to_string()).collect();
+    run_eval_values(move || {
+        ROOT_MOD.with(|r| *r.borrow_mut() = None);
+        let mut root = Scope::new();
+        for (k, v) in seed {
+            root.insert(k, Value::Num(v));
+        }
+        let (_, scope) = eval_stmts_scope(&program, &root, &env, &[])?;
+        want.iter()
+            .zip(&names)
+            .map(|(k, name)| {
+                scope
+                    .get(k)
+                    .ok_or_else(|| format!("`{name}` did not evaluate"))?
+                    .num()
+                    .map_err(|e| format!("`{name}`: {e}"))
+            })
+            .collect()
+    })
+}
+
+/// [`run_eval`] for the value path — same 1 GB stack, different return type.
+#[cfg(not(target_arch = "wasm32"))]
+fn run_eval_values(
+    f: impl FnOnce() -> Result<Vec<f64>, String> + Send + 'static,
+) -> Result<Vec<f64>, String> {
+    std::thread::Builder::new()
+        .name("scad-values".into())
+        .stack_size(1024 * 1024 * 1024)
+        .spawn(f)
+        .expect("spawn scad-values thread")
+        .join()
+        .unwrap_or_else(|_| Err("evaluation failed (stack overflow or panic)".into()))
+}
+#[cfg(target_arch = "wasm32")]
+fn run_eval_values(f: impl FnOnce() -> Result<Vec<f64>, String>) -> Result<Vec<f64>, String> {
+    f()
+}
+
+/// Parse an OpenSCAD `.scad` file, resolving `include`/`use`/`import` references
+/// relative to the file's own directory.
+pub fn parse_scad_file(path: impl AsRef<std::path::Path>) -> Result<Solid, String> {
+    parse_scad_file_with(path, &[])
+}
+
+/// Like [`parse_scad_file`], but keeps `assembly()` children as a [`Solid::Union`]
+/// tree with `color()` tags intact for [`Solid::parts`](crate::Solid::parts).
+pub fn parse_scad_file_for_parts(path: impl AsRef<std::path::Path>) -> Result<Solid, String> {
+    let path = path.as_ref();
+    let src = std::fs::read_to_string(path)
+        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    let base = path.parent().unwrap_or(std::path::Path::new("."));
+    parse_scad_in_for_parts(&src, base)
+}
+
+/// [`parse_scad_file`] at animation time `t`.
+pub fn parse_scad_file_at(path: impl AsRef<std::path::Path>, t: f64) -> Result<Solid, String> {
+    parse_scad_file_with(path, &[("$t", t)])
+}
+
+/// [`parse_scad_file`] with variables seeded into the root scope.
+pub fn parse_scad_file_with(
+    path: impl AsRef<std::path::Path>,
+    vars: &[(&str, f64)],
+) -> Result<Solid, String> {
+    let path = path.as_ref();
+    let src = std::fs::read_to_string(path)
+        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    let base = path.parent().unwrap_or(std::path::Path::new("."));
+    let v: Vec<(String, f64)> = vars.iter().map(|(k, x)| ((*k).to_string(), *x)).collect();
+    parse_scad_in_with(&src, base, &v)
+}
+
+#[cfg(test)]
+mod assembly_fit {
+    use crate::parse_scad;
+
+    /// Volume of the union — if two bodies overlap, the union is LESS than the
+    /// sum of the parts, and by exactly the shared amount.
+    fn union_vol(src: &str) -> f64 {
+        let s = parse_scad(src).unwrap();
+        crate::mesh_report(&s.to_geometry_exact()).volume
+    }
+
+    #[test]
+    fn plain_assembly_lets_two_bodies_share_volume() {
+        // Two 10 mm cubes lapped 2 mm. The solid they jointly occupy is 1800
+        // mm^3, but concatenation keeps both bodies whole, so the model reports
+        // 2000 — the contested 200 mm^3 is counted TWICE because it is occupied
+        // twice. That double count is the defect, stated as a number.
+        let v = union_vol("assembly() { cube(10); translate([8,0,0]) cube(10); }");
+        assert!((v - 2000.0).abs() < 1.0, "sum of bodies {v}");
+        // and with fit, the same model reports the volume it actually fills
+        let f = union_vol("assembly(fit = 0) { cube(10); translate([8,0,0]) cube(10); }");
+        assert!((f - 1800.0).abs() < 1.0, "relieved {f}");
+    }
+
+    #[test]
+    fn fit_zero_removes_the_shared_volume_from_the_later_body() {
+        let v = union_vol("assembly(fit = 0) { cube(10); translate([8,0,0]) cube(10); }");
+        assert!((v - 1800.0).abs() < 1.0, "union {v}");
+    }
+
+    #[test]
+    fn the_first_body_keeps_all_its_material() {
+        // Relief is in order: the frame is listed first and is untouched.
+        let v = union_vol("assembly(fit = 0.5) { cube(10); translate([8,0,0]) cube(10); }");
+        // first cube 1000, second cut back to 10 - (2 + 0.5) = 7.5 deep
+        assert!((v - (1000.0 + 750.0)).abs() < 2.0, "union {v}");
+    }
+
+    #[test]
+    fn a_gap_is_left_so_the_cut_faces_are_not_coplanar() {
+        // With fit, the second body stops 0.5 mm short of the first: total solid
+        // is less than the fit-zero case by exactly the gap's volume.
+        let a = union_vol("assembly(fit = 0)   { cube(10); translate([8,0,0]) cube(10); }");
+        let b = union_vol("assembly(fit = 0.5) { cube(10); translate([8,0,0]) cube(10); }");
+        assert!((a - b - 50.0).abs() < 2.0, "gap volume {}", a - b);
+    }
+
+    #[test]
+    fn bodies_that_do_not_touch_are_untouched() {
+        let v = union_vol("assembly(fit = 1) { cube(10); translate([40,0,0]) cube(10); }");
+        assert!((v - 2000.0).abs() < 1.0, "union {v}");
+    }
+
+    #[test]
+    fn relief_is_transitive_down_a_stack() {
+        // Three lapped bodies: each is cut by BOTH of its predecessors, so no
+        // pair anywhere in the assembly shares volume.
+        let v = union_vol(
+            "assembly(fit = 0) { cube(10); translate([8,0,0]) cube(10); translate([16,0,0]) cube(10); }",
+        );
+        assert!((v - 2600.0).abs() < 1.0, "union {v}");
+    }
+}
+
+#[cfg(test)]
+mod scad_probe {
+    use crate::{scad_value, scad_values};
+
+    #[test]
+    fn reads_a_top_level_constant() {
+        assert_eq!(scad_value("W = 40;", "W").unwrap(), 40.0);
+    }
+
+    #[test]
+    fn evaluates_an_expression_not_just_a_name() {
+        assert_eq!(scad_value("W = 40;", "W * 2 + 5").unwrap(), 85.0);
+    }
+
+    #[test]
+    fn sees_constants_derived_from_other_constants() {
+        let v = scad_values("A = 3; B = A * 4; C = B - A;", &[], &["A", "B", "C"]).unwrap();
+        assert_eq!(v, vec![3.0, 12.0, 9.0]);
+    }
+
+    #[test]
+    fn seeded_vars_reach_derived_constants() {
+        // The point of the whole thing: a model parameterised on a host-supplied
+        // value has to report the constants THAT value implies. Note the file
+        // does NOT assign D — see the next test for why that matters.
+        let src = "STROKE = 100 * D;";
+        assert_eq!(
+            scad_values(src, &[("D", 0.75)], &["STROKE"]).unwrap(),
+            vec![75.0]
+        );
+    }
+
+    #[test]
+    fn an_explicit_assignment_in_the_file_still_wins() {
+        // Matches parse_scad_with, and it is the behaviour that bites: seeding a
+        // variable the file also assigns does nothing, so a model meant to be
+        // driven from outside must leave that variable unassigned or take it as
+        // a parameter. Pinned here because the failure is silent — you get the
+        // file's value and no error.
+        assert_eq!(
+            scad_values("D = 5;", &[("D", 9.0)], &["D"]).unwrap(),
+            vec![5.0]
+        );
+    }
+
+    #[test]
+    fn functions_are_callable_from_a_probe() {
+        let src = "function sq(x) = x * x;";
+        assert_eq!(scad_value(src, "sq(7)").unwrap(), 49.0);
+    }
+
+    #[test]
+    fn indexes_into_a_vector_constant() {
+        assert_eq!(
+            scad_value("POS = [600, -250, 8];", "POS[1]").unwrap(),
+            -250.0
+        );
+    }
+
+    #[test]
+    fn a_program_needs_no_geometry_at_all() {
+        // parse_scad errors with "produced no geometry"; probing must not.
+        assert!(scad_value("X = 1;", "X").is_ok());
+    }
+
+    #[test]
+    fn names_the_expression_that_failed() {
+        let e = scad_value("W = 40;", "NOPE").unwrap_err();
+        assert!(e.contains("NOPE"), "{e}");
+    }
+
+    #[test]
+    fn one_evaluation_answers_many_questions() {
+        let src = "A = 1; B = 2; C = 3; D = 4;";
+        let v = scad_values(src, &[], &["A", "B", "C", "D", "A + D"]).unwrap();
+        assert_eq!(v, vec![1.0, 2.0, 3.0, 4.0, 5.0]);
+    }
+}
+
+#[cfg(test)]
+mod difference_flattening {
+    use crate::exact_csg;
+    use crate::parse_scad;
+
+    fn non_manifold(src: &str) -> usize {
+        let g = parse_scad(src).expect("parse").to_geometry_exact();
+        let tris = exact_csg::triangles(&g);
+        let mut e: std::collections::HashMap<[(i64, i64, i64); 2], u32> = Default::default();
+        let k = |p: [f64; 3]| {
+            (
+                (p[0] * 1e4).round() as i64,
+                (p[1] * 1e4).round() as i64,
+                (p[2] * 1e4).round() as i64,
+            )
+        };
+        for t in &tris {
+            for i in 0..3 {
+                let (a, b) = (k(t[i]), k(t[(i + 1) % 3]));
+                *e.entry(if a <= b { [a, b] } else { [b, a] }).or_insert(0) += 1;
+            }
+        }
+        e.values().filter(|&&c| c != 2).count()
+    }
+
+    /// Cutters written inline under `difference()` arrive as separate children and
+    /// are subtracted one at a time; the identical loop moved into a module
+    /// arrives as ONE unioned child. `a - (b | c)` is `(a - b) - c`, so the two
+    /// must agree — before `flatten_union_into` the module form came back with
+    /// hundreds of non-manifold edges while the inline form was exact.
+    #[test]
+    fn module_wrapped_cutters_match_inline_cutters() {
+        const INLINE: &str = "difference(){ cylinder(h=20,r=40,$fn=48);
+            for (i=[0:11]) rotate([0,0,30*i]) translate([30,0,12])
+                cylinder(h=10, r=3, $fn=12); }";
+        const WRAPPED: &str = "module cut(){ for (i=[0:11]) rotate([0,0,30*i])
+                translate([30,0,12]) cylinder(h=10, r=3, $fn=12); }
+            difference(){ cylinder(h=20,r=40,$fn=48); cut(); }";
+        assert_eq!(non_manifold(INLINE), 0, "inline cutters should be exact");
+        assert_eq!(
+            non_manifold(WRAPPED),
+            0,
+            "module-wrapped cutters should be exact too"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -3721,9 +5379,16 @@ mod tests {
     }
     fn vol_geom(g: &crate::BufferGeometry) -> f64 {
         let pos = &g.attributes.get("position").unwrap().array;
-        let v = |i: usize| [pos[i * 3] as f64, pos[i * 3 + 1] as f64, pos[i * 3 + 2] as f64];
+        let v = |i: usize| {
+            [
+                pos[i * 3] as f64,
+                pos[i * 3 + 1] as f64,
+                pos[i * 3 + 2] as f64,
+            ]
+        };
         let tri = |a: [f64; 3], b: [f64; 3], c: [f64; 3]| {
-            a[0] * (b[1] * c[2] - b[2] * c[1]) + a[1] * (b[2] * c[0] - b[0] * c[2])
+            a[0] * (b[1] * c[2] - b[2] * c[1])
+                + a[1] * (b[2] * c[0] - b[0] * c[2])
                 + a[2] * (b[0] * c[1] - b[1] * c[0])
         };
         let mut s = 0.0;
@@ -3789,7 +5454,9 @@ mod tests {
     #[test]
     fn linear_extrude_square() {
         // 2D square extruded → a box. 4×3×2 = 24.
-        assert!((vol(parse_scad("linear_extrude(2) square([4, 3]);").unwrap()) - 24.0).abs() < 1e-2);
+        assert!(
+            (vol(parse_scad("linear_extrude(2) square([4, 3]);").unwrap()) - 24.0).abs() < 1e-2
+        );
     }
 
     #[test]
@@ -3829,7 +5496,7 @@ mod tests {
     fn named_and_default_args() {
         // sphere via diameter; cube via named size; module default param.
         assert!(vol(parse_scad("sphere(d = 2, $fn = 32);").unwrap()) > 3.0); // ~4/3π ≈ 4.19
-        // default $fn=0 → coarse sphere from $fa/$fs (OpenSCAD gives 5 fragments).
+                                                                             // default $fn=0 → coarse sphere from $fa/$fs (OpenSCAD gives 5 fragments).
         assert!(vol(parse_scad("sphere(d = 2);").unwrap()) < 3.5);
         let src = "module slab(t = 2) cube([5, 5, t], center = true); slab();";
         assert!((vol(parse_scad(src).unwrap()) - 50.0).abs() < 1e-2);
@@ -3866,34 +5533,49 @@ mod tests {
     fn intersection_for_folds_by_intersection() {
         // ∩ of [0,2]³ and [1,3]×[0,2]×[0,2] → x∈[1,2] → volume 4.
         let src = "intersection_for(i = [0:1]) translate([i, 0, 0]) cube(2);";
-        assert!((vol(parse_scad(src).unwrap()) - 4.0).abs() < 1e-2, "isect_for");
+        assert!(
+            (vol(parse_scad(src).unwrap()) - 4.0).abs() < 1e-2,
+            "isect_for"
+        );
     }
 
     #[test]
     fn intersection_2d_via_clip() {
         // Two overlapping squares → [5,10]×[0,10] = 50.
         let src = "linear_extrude(1) intersection() { square([10, 10]); translate([5, 0]) square([10, 10]); }";
-        assert!((vol(parse_scad(src).unwrap()) - 50.0).abs() < 1e-1, "isect2d");
+        assert!(
+            (vol(parse_scad(src).unwrap()) - 50.0).abs() < 1e-1,
+            "isect2d"
+        );
     }
 
     #[test]
     fn multi_binding_for() {
         // for(i, j) is a cartesian product → 4 unit cubes, volume 4.
         let src = "for (i = [0:1], j = [0:1]) translate([i*2, j*2, 0]) cube(1);";
-        assert!((vol(parse_scad(src).unwrap()) - 4.0).abs() < 1e-3, "multi-for");
+        assert!(
+            (vol(parse_scad(src).unwrap()) - 4.0).abs() < 1e-3,
+            "multi-for"
+        );
     }
 
     #[test]
     fn projection_cut_slices_at_z0() {
         // A cube straddling z=0 sliced → 10×10 square, extruded to volume 100.
         let src = "linear_extrude(1) projection(cut = true) translate([0, 0, -5]) cube(10);";
-        assert!((vol(parse_scad(src).unwrap()) - 100.0).abs() < 1.0, "projection");
+        assert!(
+            (vol(parse_scad(src).unwrap()) - 100.0).abs() < 1.0,
+            "projection"
+        );
     }
 
     #[test]
     fn children_index_selects_one() {
         let src = "module pick() { children(1); } pick() { cube(1); cube(2); }";
-        assert!((vol(parse_scad(src).unwrap()) - 8.0).abs() < 1e-2, "children(1)");
+        assert!(
+            (vol(parse_scad(src).unwrap()) - 8.0).abs() < 1e-2,
+            "children(1)"
+        );
     }
 
     #[test]
@@ -3902,14 +5584,24 @@ mod tests {
         // Places cube(1),cube(2),cube(3) → volumes 1+8+27 = 36.
         let src = "module m(){ for(i=[0:$children-1]) translate([i*4,0,0]) children(i); }
                    m(){ cube(1); cube(2); cube(3); }";
-        assert!((vol(parse_scad(src).unwrap()) - 36.0).abs() < 1e-2, "children in for");
+        assert!(
+            (vol(parse_scad(src).unwrap()) - 36.0).abs() < 1e-2,
+            "children in for"
+        );
         // `children([0:1])` → a subset (two disjoint cube(2)s) = 16; the 3rd is dropped.
         let src = "module m(){ children([0:1]); }
                    m(){ cube(2); translate([5,0,0]) cube(2); translate([10,0,0]) cube(2); }";
-        assert!((vol(parse_scad(src).unwrap()) - 16.0).abs() < 1e-2, "children range");
+        assert!(
+            (vol(parse_scad(src).unwrap()) - 16.0).abs() < 1e-2,
+            "children range"
+        );
         // `children()` threaded through two nested modules.
-        let src = "module outer(){ inner() children(); } module inner(){ children(); } outer() cube(2);";
-        assert!((vol(parse_scad(src).unwrap()) - 8.0).abs() < 1e-2, "children nested");
+        let src =
+            "module outer(){ inner() children(); } module inner(){ children(); } outer() cube(2);";
+        assert!(
+            (vol(parse_scad(src).unwrap()) - 8.0).abs() < 1e-2,
+            "children nested"
+        );
     }
 
     #[test]
@@ -3928,8 +5620,12 @@ mod tests {
         assert!((vol(parse_scad("#cube(2);").unwrap()) - 8.0).abs() < 1e-3);
         // `*` (disable) and `%` (background) contribute nothing, so they drop out of
         // a parent boolean's children instead of wrongly subtracting.
-        assert!((vol(parse_scad("difference(){ cube(2); %cube(3); }").unwrap()) - 8.0).abs() < 1e-3);
-        assert!((vol(parse_scad("difference(){ cube(2); *cube(3); }").unwrap()) - 8.0).abs() < 1e-3);
+        assert!(
+            (vol(parse_scad("difference(){ cube(2); %cube(3); }").unwrap()) - 8.0).abs() < 1e-3
+        );
+        assert!(
+            (vol(parse_scad("difference(){ cube(2); *cube(3); }").unwrap()) - 8.0).abs() < 1e-3
+        );
         // A wholly-disabled program yields no geometry.
         assert!(parse_scad("*cube(2);").is_err());
         // `!` (show-only) renders just its subtree, ignoring the rest.
@@ -3957,13 +5653,22 @@ mod tests {
     fn rands_builtin() {
         // Seeded draws are deterministic: the same seed yields the same value.
         let src = "a=rands(0,9,1,7); b=rands(0,9,1,7); cube(a[0]==b[0]?2:1);";
-        assert!((vol(parse_scad(src).unwrap()) - 8.0).abs() < 1e-3, "seeded rands not reproducible");
+        assert!(
+            (vol(parse_scad(src).unwrap()) - 8.0).abs() < 1e-3,
+            "seeded rands not reproducible"
+        );
         // Count is the requested length; min==max pins every element to that value.
         let src = "r=rands(4,4,3); cube(len(r)==3 && r[0]==4 && r[2]==4 ? 2:1);";
-        assert!((vol(parse_scad(src).unwrap()) - 8.0).abs() < 1e-3, "rands count/degenerate-range wrong");
+        assert!(
+            (vol(parse_scad(src).unwrap()) - 8.0).abs() < 1e-3,
+            "rands count/degenerate-range wrong"
+        );
         // Every draw lands in [min, max): sweep 64 of them, none may escape.
         let src = "r=rands(2,3,64); bad=len([for(x=r) if(x<2 || x>=3) 1]); cube(bad==0?2:1);";
-        assert!((vol(parse_scad(src).unwrap()) - 8.0).abs() < 1e-3, "rands out of [min,max)");
+        assert!(
+            (vol(parse_scad(src).unwrap()) - 8.0).abs() < 1e-3,
+            "rands out of [min,max)"
+        );
     }
 
     #[test]
@@ -3992,7 +5697,9 @@ mod tests {
     fn first_class_functions() {
         // literal + call, closure capture, HOF, list-of-functions.
         assert!((vol(parse_scad("f = function(x) x*2; cube(f(4));").unwrap()) - 512.0).abs() < 1.0);
-        assert!((vol(parse_scad("a=1; g=function(x) x+a; cube(g(3));").unwrap()) - 64.0).abs() < 1e-1);
+        assert!(
+            (vol(parse_scad("a=1; g=function(x) x+a; cube(g(3));").unwrap()) - 64.0).abs() < 1e-1
+        );
         let src = "function ap(h,x)=h(x); cube(ap(function(y) y+1, 4));";
         assert!((vol(parse_scad(src).unwrap()) - 125.0).abs() < 1e-1); // cube(5)
         let src = "fs=[function(x) x, function(x) x*2]; cube(fs[1](3));";
@@ -4027,8 +5734,12 @@ mod tests {
         std::fs::write(dir.join("d.scad"), "linear_extrude(3) import(\"s.dxf\");").unwrap();
         let v = vol(parse_scad_file(dir.join("d.scad")).unwrap());
         assert!((v - 300.0).abs() < 1.0, "dxf {v}"); // 10×10×3
-        // SVG: a 20×10 rect.
-        std::fs::write(dir.join("r.svg"), "<svg><rect x=\"0\" y=\"0\" width=\"20\" height=\"10\"/></svg>").unwrap();
+                                                     // SVG: a 20×10 rect.
+        std::fs::write(
+            dir.join("r.svg"),
+            "<svg><rect x=\"0\" y=\"0\" width=\"20\" height=\"10\"/></svg>",
+        )
+        .unwrap();
         std::fs::write(dir.join("v.scad"), "linear_extrude(2) import(\"r.svg\");").unwrap();
         let v = vol(parse_scad_file(dir.join("v.scad")).unwrap());
         assert!((v - 400.0).abs() < 1.0, "svg {v}"); // 20×10×2
@@ -4057,23 +5768,46 @@ mod tests {
             model += "</triangles></mesh></object>";
         }
         model += "</resources></model>";
-        std::fs::write(dir.join("t.3mf"), store_zip("3D/3dmodel.model", model.as_bytes())).unwrap();
+        std::fs::write(
+            dir.join("t.3mf"),
+            store_zip("3D/3dmodel.model", model.as_bytes()),
+        )
+        .unwrap();
         std::fs::write(dir.join("m.scad"), "import(\"t.3mf\");").unwrap();
         let g = parse_scad_file(dir.join("m.scad")).unwrap().to_geometry();
         // The far object reaches x = 110 and both are 4-triangle tetrahedra (8
         // total) only if each mesh's LOCAL indices resolved to its own vertices —
         // i.e. the per-mesh offset is right. (Volume is a poor check here: the
         // outward-orientation heuristic flips one disjoint tetra's winding.)
-        let xs: Vec<f32> = g.attributes.get("position").unwrap().array.chunks_exact(3).map(|c| c[0]).collect();
-        let (xmin, xmax) = (xs.iter().cloned().fold(f32::MAX, f32::min), xs.iter().cloned().fold(f32::MIN, f32::max));
-        assert!((xmin - 0.0).abs() < 1e-3 && (xmax - 110.0).abs() < 1e-3, "3mf multi-object misindexed ({xmin}..{xmax})");
-        let n_tri = g.index.as_ref().map(|i| i.len() / 3).unwrap_or(xs.len() / 3);
+        let xs: Vec<f32> = g
+            .attributes
+            .get("position")
+            .unwrap()
+            .array
+            .chunks_exact(3)
+            .map(|c| c[0])
+            .collect();
+        let (xmin, xmax) = (
+            xs.iter().cloned().fold(f32::MAX, f32::min),
+            xs.iter().cloned().fold(f32::MIN, f32::max),
+        );
+        assert!(
+            (xmin - 0.0).abs() < 1e-3 && (xmax - 110.0).abs() < 1e-3,
+            "3mf multi-object misindexed ({xmin}..{xmax})"
+        );
+        let n_tri = g
+            .index
+            .as_ref()
+            .map(|i| i.len() / 3)
+            .unwrap_or(xs.len() / 3);
         assert_eq!(n_tri, 8, "3mf: expected 2 tetrahedra = 8 triangles");
 
         // --- AMF (uncompressed XML with nested element coordinates) ---
         let mut amf = String::from("<amf unit=\"millimeter\"><object id=\"0\"><mesh><vertices>");
         for [x, y, z] in [[0, 0, 0], [10, 0, 0], [0, 10, 0], [0, 0, 10]] {
-            amf += &format!("<vertex><coordinates><x>{x}</x><y>{y}</y><z>{z}</z></coordinates></vertex>");
+            amf += &format!(
+                "<vertex><coordinates><x>{x}</x><y>{y}</y><z>{z}</z></coordinates></vertex>"
+            );
         }
         amf += "</vertices><volume>";
         for (a, b, c) in tetra_tris {
@@ -4126,7 +5860,11 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         // Hand-build an 8×8 8-bit greyscale PNG, row ramp: row r → grey 40 + r·20.
         let (w, h) = (8usize, 8usize);
-        std::fs::write(dir.join("ramp.png"), gray_png(w, h, |_x, y| 40 + (y * 20) as u8)).unwrap();
+        std::fs::write(
+            dir.join("ramp.png"),
+            gray_png(w, h, |_x, y| 40 + (y * 20) as u8),
+        )
+        .unwrap();
         std::fs::write(dir.join("s.scad"), "surface(file=\"ramp.png\");").unwrap();
 
         let g = parse_scad_file(dir.join("s.scad")).unwrap().to_geometry();
@@ -4180,22 +5918,33 @@ mod tests {
     fn boolean_2d_union_overlapping() {
         // Two axis-aligned squares overlapping in [5,10]×[0,10] (collinear edges!):
         // 100 + 100 − 50 = 150.
-        let src = "linear_extrude(1) union() { square([10,10]); translate([5,0]) square([10,10]); }";
-        assert!((vol(parse_scad(src).unwrap()) - 150.0).abs() < 0.5, "union2d");
+        let src =
+            "linear_extrude(1) union() { square([10,10]); translate([5,0]) square([10,10]); }";
+        assert!(
+            (vol(parse_scad(src).unwrap()) - 150.0).abs() < 0.5,
+            "union2d"
+        );
     }
 
     #[test]
     fn boolean_2d_difference_partial() {
         // [0,10]² − [5,15]×[0,10] = [0,5]×[0,10] = 50 (partial overlap, not a hole).
-        let src = "linear_extrude(1) difference() { square([10,10]); translate([5,0]) square([10,10]); }";
-        assert!((vol(parse_scad(src).unwrap()) - 50.0).abs() < 0.5, "diff2d partial");
+        let src =
+            "linear_extrude(1) difference() { square([10,10]); translate([5,0]) square([10,10]); }";
+        assert!(
+            (vol(parse_scad(src).unwrap()) - 50.0).abs() < 0.5,
+            "diff2d partial"
+        );
     }
 
     #[test]
     fn boolean_2d_difference_makes_hole() {
         // A fully-interior subtraction leaves a hole: 10² − 2² = 96.
         let src = "linear_extrude(1) difference() { square(10); translate([4,4]) square(2); }";
-        assert!((vol(parse_scad(src).unwrap()) - 96.0).abs() < 0.5, "diff2d hole");
+        assert!(
+            (vol(parse_scad(src).unwrap()) - 96.0).abs() < 0.5,
+            "diff2d hole"
+        );
     }
 
     #[test]
@@ -4207,14 +5956,21 @@ mod tests {
             difference() { square(10); translate([5,5]) square(6); }
             square([7,7]);
         }";
-        assert!((vol(parse_scad(src).unwrap()) - 45.0).abs() < 0.5, "isect2d nonconvex");
+        assert!(
+            (vol(parse_scad(src).unwrap()) - 45.0).abs() < 0.5,
+            "isect2d nonconvex"
+        );
     }
 
     #[test]
     fn projection_no_cut_silhouette() {
         // Silhouette of two offset cubes = union of two squares: 100+100−25 = 175.
-        let src = "linear_extrude(1) projection() union() { cube(10); translate([5,5,5]) cube(10); }";
-        assert!((vol(parse_scad(src).unwrap()) - 175.0).abs() < 1.0, "projection nocut");
+        let src =
+            "linear_extrude(1) projection() union() { cube(10); translate([5,5,5]) cube(10); }";
+        assert!(
+            (vol(parse_scad(src).unwrap()) - 175.0).abs() < 1.0,
+            "projection nocut"
+        );
     }
 
     #[test]
@@ -4233,7 +5989,11 @@ mod tests {
         // $fn=6 → hexagonal prism: hexagon area (circumradius 5) × height 10.
         let hex = 1.5 * 3f64.sqrt() * 25.0; // (3√3/2)·r²
         let v = vol(parse_scad("cylinder(h = 10, r = 5, $fn = 6);").unwrap());
-        assert!((v - hex * 10.0).abs() < 0.5, "hex prism {v} vs {}", hex * 10.0);
+        assert!(
+            (v - hex * 10.0).abs() < 0.5,
+            "hex prism {v} vs {}",
+            hex * 10.0
+        );
     }
 
     #[test]
@@ -4248,7 +6008,10 @@ mod tests {
     fn minkowski_2d_convex_square() {
         // square(4) ⊕ square(2) = square(6): area 36 (via triangulate + union).
         let src = "linear_extrude(1) minkowski() { square(4); square(2); }";
-        assert!((vol(parse_scad(src).unwrap()) - 36.0).abs() < 0.1, "mink2d square");
+        assert!(
+            (vol(parse_scad(src).unwrap()) - 36.0).abs() < 0.1,
+            "mink2d square"
+        );
     }
 
     #[test]
@@ -4285,17 +6048,26 @@ mod tests {
         // An L-shaped (concave) polygon → area 64, extruded to volume 64. Exercises
         // ear-clipping across reflex corners (the axis-aligned notch case).
         let src = "linear_extrude(1) polygon([[0,0],[10,0],[10,4],[4,4],[4,10],[0,10]]);";
-        assert!((vol(parse_scad(src).unwrap()) - 64.0).abs() < 1e-2, "concave extrude");
+        assert!(
+            (vol(parse_scad(src).unwrap()) - 64.0).abs() < 1e-2,
+            "concave extrude"
+        );
     }
 
     #[test]
     fn multmatrix_scales_and_shears() {
         // Diagonal matrix scales x by 2 → volume 2.
         let src = "multmatrix([[2,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]) cube(1);";
-        assert!((vol(parse_scad(src).unwrap()) - 2.0).abs() < 1e-3, "multmatrix scale");
+        assert!(
+            (vol(parse_scad(src).unwrap()) - 2.0).abs() < 1e-3,
+            "multmatrix scale"
+        );
         // A shear preserves volume.
         let src = "multmatrix([[1,1,0,0],[0,1,0,0],[0,0,1,0]]) cube(2);";
-        assert!((vol(parse_scad(src).unwrap()) - 8.0).abs() < 1e-2, "multmatrix shear");
+        assert!(
+            (vol(parse_scad(src).unwrap()) - 8.0).abs() < 1e-2,
+            "multmatrix shear"
+        );
     }
 
     #[test]
@@ -4312,14 +6084,305 @@ mod tests {
     fn include_and_use_resolve_files() {
         let dir = std::env::temp_dir().join("threers_scad_incl");
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("lib.scad"), "GAP = 4;\nmodule widget(s = 3) cube(s);\n").unwrap();
+        std::fs::write(
+            dir.join("lib.scad"),
+            "GAP = 4;\nmodule widget(s = 3) cube(s);\n",
+        )
+        .unwrap();
         // include: pulls in the variable GAP *and* the module widget.
-        std::fs::write(dir.join("main_inc.scad"), "include <lib.scad>\ntranslate([GAP,0,0]) widget(2);").unwrap();
+        std::fs::write(
+            dir.join("main_inc.scad"),
+            "include <lib.scad>\ntranslate([GAP,0,0]) widget(2);",
+        )
+        .unwrap();
         let v = vol(parse_scad_file(dir.join("main_inc.scad")).unwrap());
         assert!((v - 8.0).abs() < 1e-2, "include vol {v}");
         // use: pulls in only the definitions (module widget), not GAP.
         std::fs::write(dir.join("main_use.scad"), "use <lib.scad>\nwidget(4);").unwrap();
         let v = vol(parse_scad_file(dir.join("main_use.scad")).unwrap());
         assert!((v - 64.0).abs() < 1e-1, "use vol {v}");
+    }
+}
+
+/// `color()` from source text: a display attribute that never touches geometry.
+#[cfg(test)]
+mod color_source {
+    use crate::openscad::ScadPart;
+    use crate::parse_scad;
+
+    fn parts(src: &str) -> Vec<ScadPart> {
+        parse_scad(src).expect("parse").parts()
+    }
+
+    #[test]
+    fn named_vector_and_hex_colors_all_parse() {
+        let p = parts(
+            r##"color("red") cube(10);
+                translate([20,0,0]) color([0, 0, 1]) cube(10);
+                translate([40,0,0]) color("#00ff00") cube(10);"##,
+        );
+        assert_eq!(p.len(), 3);
+        assert_eq!(p[0].color, Some([1.0, 0.0, 0.0, 1.0]));
+        assert_eq!(p[1].color, Some([0.0, 0.0, 1.0, 1.0]));
+        assert_eq!(p[2].color, Some([0.0, 1.0, 0.0, 1.0]));
+    }
+
+    #[test]
+    fn alpha_comes_from_the_fourth_component_or_the_named_argument() {
+        assert_eq!(
+            parts("color([1,0,0,0.25]) cube(1);")[0].color.unwrap()[3],
+            0.25
+        );
+        assert_eq!(
+            parts("color(\"red\", 0.5) cube(1);")[0].color.unwrap()[3],
+            0.5
+        );
+        assert_eq!(
+            parts("color(c=\"red\", alpha=0.75) cube(1);")[0]
+                .color
+                .unwrap()[3],
+            0.75
+        );
+        // An explicit alpha overrides the vector's own.
+        assert_eq!(
+            parts("color([1,0,0,0.2], 0.9) cube(1);")[0].color.unwrap()[3],
+            0.9
+        );
+    }
+
+    #[test]
+    fn color_nests_innermost_wins() {
+        let p = parts("color(\"red\") { cube(1); color(\"blue\") translate([5,0,0]) cube(1); }");
+        assert_eq!(p.len(), 2);
+        let colors: Vec<_> = p.iter().map(|x| x.color).collect();
+        assert!(colors.contains(&Some([1.0, 0.0, 0.0, 1.0])), "{colors:?}");
+        assert!(colors.contains(&Some([0.0, 0.0, 1.0, 1.0])), "{colors:?}");
+    }
+
+    #[test]
+    fn a_bad_color_argument_still_renders_the_child() {
+        let p = parts("color(\"chartreusey\") cube(10);");
+        assert_eq!(p.len(), 1);
+        assert!(p[0].color.is_none());
+        assert!(!p[0]
+            .geometry
+            .attributes
+            .get("position")
+            .unwrap()
+            .array
+            .is_empty());
+    }
+
+    #[test]
+    fn a_cut_through_a_colored_body_keeps_the_color() {
+        let p = parts("difference() { color(\"green\") cube(20, center=true); cylinder(h=40, r=3, center=true); }");
+        assert_eq!(p.len(), 1);
+        assert_eq!(p[0].color, crate::openscad::css_color("green"));
+    }
+
+    #[test]
+    fn colors_survive_module_boundaries_and_loops() {
+        let p = parts(
+            r#"module pin(c) { color(c) cylinder(h=10, r=2); }
+               for (i = [0:2]) translate([i*10, 0, 0]) pin(i == 1 ? "red" : "blue");"#,
+        );
+        // Two colors → two parts (the two blue pins merge into one).
+        assert_eq!(p.len(), 2);
+        let mut colors: Vec<_> = p.iter().map(|x| x.color).collect();
+        colors.sort_by(|a, b| a.unwrap()[0].partial_cmp(&b.unwrap()[0]).unwrap());
+        assert_eq!(
+            colors,
+            vec![
+                crate::openscad::css_color("blue"),
+                crate::openscad::css_color("red")
+            ]
+        );
+    }
+}
+
+/// `assembly()` is a MODE over its whole subtree, not just its own children.
+///
+/// The bug it exists to prevent is not visible in the source: `translate(v) { a; b; }`
+/// and a two-statement module body are both implicit groups, and a group unions.
+/// Wrapping only the top statement left every one of those unioning, and the
+/// result is still watertight — just merged, and sometimes catastrophically slow.
+#[cfg(test)]
+mod assembly_mode {
+    use crate::exact_csg;
+    use crate::parse_scad;
+
+    fn tris(src: &str) -> usize {
+        exact_csg::triangles(&parse_scad(src).expect("parse").to_geometry_exact()).len()
+    }
+
+    /// Did these children get unioned, or merely concatenated?
+    ///
+    /// Watertightness is the discriminator, not triangle count. Two cubes that
+    /// touch on a face come back as a single closed solid when unioned, and as a
+    /// soup with that face present twice — so every edge on it used four times —
+    /// when concatenated. Both have the same volume, so volume cannot tell them
+    /// apart.
+    ///
+    /// This used to assert an exact count of 20, which is a property of one
+    /// kernel's tessellation rather than of the answer: with the `manifold`
+    /// backend the same union comes back as 12, having merged the coplanar faces
+    /// into the box it actually is. Both are correct; only one satisfies `== 20`.
+    fn unioned(src: &str) -> bool {
+        let g = parse_scad(src).expect("parse").to_geometry_exact();
+        exact_csg::is_closed_manifold(&exact_csg::triangles(&g))
+    }
+
+    const PAIR: &str = "cube([20,20,20]); translate([20,0,0]) cube([20,20,20]);";
+
+    #[test]
+    fn a_group_unions_outside_an_assembly() {
+        let src = format!("translate([0,0,0]) {{ {PAIR} }}");
+        assert!(
+            unioned(&src),
+            "a group outside an assembly should union its children"
+        );
+        assert!(
+            tris(&src) < tris(&format!("assembly() {{ translate([0,0,0]) {{ {PAIR} }} }}")),
+            "a union should not be larger than the concatenation it replaces"
+        );
+    }
+
+    #[test]
+    fn a_group_concatenates_inside_an_assembly() {
+        assert_eq!(
+            tris(&format!("assembly() {{ translate([0,0,0]) {{ {PAIR} }} }}")),
+            24
+        );
+    }
+
+    #[test]
+    fn the_mode_reaches_through_a_module_call() {
+        // The case that matters most: the offending group is usually several
+        // module boundaries below the assembly() that was meant to cover it.
+        assert_eq!(
+            tris(&format!("module p() {{ {PAIR} }} assembly() {{ p(); }}")),
+            24
+        );
+    }
+
+    #[test]
+    fn union_still_unions_inside_an_assembly() {
+        // Inside an assembly this is how you ask for the boolean back.
+        let src = format!("assembly() {{ union() {{ {PAIR} }} }}");
+        assert!(
+            unioned(&src),
+            "explicit union() inside an assembly should still union"
+        );
+        assert!(
+            tris(&src) < tris(&format!("assembly() {{ translate([0,0,0]) {{ {PAIR} }} }}")),
+            "the union should be smaller than the concatenation"
+        );
+    }
+
+    #[test]
+    fn a_group_under_a_boolean_still_unions_inside_an_assembly() {
+        // difference() needs ONE solid to cut, so its children must not be
+        // concatenated even when an assembly encloses them.
+        let src = format!(
+            "assembly() {{ difference() {{ translate([0,0,0]) {{ {PAIR} }} \
+             translate([18,5,-1]) cube([4,10,22]); }} }}"
+        );
+        // One body with a notch through it: more triangles than either the
+        // 20-triangle union or the 24-triangle concatenation, and it only
+        // happens if the cutter met a single merged solid.
+        assert!(
+            tris(&src) > 24,
+            "difference lost its operand: {} tris",
+            tris(&src)
+        );
+    }
+
+    #[test]
+    fn difference_still_cuts_inside_an_assembly() {
+        let g = parse_scad(
+            "assembly() { difference() { cube([20,20,20]); \
+             translate([5,5,-1]) cube([10,10,22]); } }",
+        )
+        .expect("parse")
+        .to_geometry_exact();
+        // 20^3 - 10^2*20 = 6000 mm^3, so the cut actually happened.
+        let v: f64 = exact_csg::triangles(&g)
+            .iter()
+            .map(|t| {
+                let [a, b, c] = t;
+                (a[0] * (b[1] * c[2] - c[1] * b[2]) - b[0] * (a[1] * c[2] - c[1] * a[2])
+                    + c[0] * (a[1] * b[2] - b[1] * a[2]))
+                    / 6.0
+            })
+            .sum();
+        assert!((v.abs() - 6000.0).abs() < 1.0, "volume {v}");
+    }
+}
+
+/// `$t` animation: the whole program re-evaluates per frame, so geometry is a
+/// function of time rather than a set of pre-baked states.
+#[cfg(test)]
+mod animation {
+    use crate::exact_csg;
+    use crate::{parse_scad, parse_scad_at, parse_scad_with};
+
+    fn volume(src: &str, t: f64) -> f64 {
+        let g = parse_scad_at(src, t).expect("parse").to_geometry_exact();
+        exact_csg::triangles(&g)
+            .iter()
+            .map(|[a, b, c]| {
+                (a[0] * (b[1] * c[2] - c[1] * b[2]) - b[0] * (a[1] * c[2] - c[1] * a[2])
+                    + c[0] * (a[1] * b[2] - b[1] * a[2]))
+                    / 6.0
+            })
+            .sum::<f64>()
+            .abs()
+    }
+
+    #[test]
+    fn t_defaults_to_zero_and_is_readable() {
+        // 10 + 100*$t on a side: 1000 at t=0, 8000 at t=0.1.
+        let src = "cube(10 + 100 * $t);";
+        assert!((volume(src, 0.0) - 1000.0).abs() < 1.0);
+        assert!((volume(src, 0.1) - 8000.0).abs() < 1.0);
+        // the plain entry point still behaves as t = 0
+        let g = parse_scad(src).expect("parse").to_geometry_exact();
+        assert_eq!(exact_csg::triangles(&g).len(), 12);
+    }
+
+    #[test]
+    fn t_drives_a_transform() {
+        // A cube translated by $t: the bounding box moves, the volume does not.
+        let src = "translate([100 * $t, 0, 0]) cube(10);";
+        for t in [0.0, 0.25, 1.0] {
+            assert!(
+                (volume(src, t) - 1000.0).abs() < 1.0,
+                "volume changed at t={t}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_explicit_assignment_in_the_file_wins() {
+        // Seeding is a DEFAULT, not an override: a file that pins $t keeps its
+        // own value, which is how OpenSCAD behaves and what makes it safe to
+        // seed unconditionally.
+        assert!((volume("$t = 0.1; cube(10 + 100 * $t);", 0.9) - 8000.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn arbitrary_variables_seed_too() {
+        // The general case: an assembly parameterised on its own names, driven
+        // from the host without generating a file per state.
+        let src = "cube([10, 10, 10 + STROKE]);";
+        let g = parse_scad_with(src, &[("STROKE", 30.0)])
+            .expect("parse")
+            .to_geometry_exact();
+        let (lo, hi) = crate::mesh_report(&g).bounds;
+        assert!(
+            (hi[2] - lo[2] - 40.0).abs() < 1e-3,
+            "height {}",
+            hi[2] - lo[2]
+        );
     }
 }

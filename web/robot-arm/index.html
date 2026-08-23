@@ -1,0 +1,1195 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>threers-physics — robot arm</title>
+<link rel="stylesheet" href="../viewer-theme.css">
+<style>
+  /* Colours for the things in the scene. They live here rather than in the
+     shared sheet because only this page draws a robot, but they follow exactly
+     the same three-way rule: dark by default, an explicit [data-theme] wins,
+     and with no attribute the OS preference decides. */
+  :root, :root[data-theme="dark"] {
+    --role-arm: #6fb3ff;
+    --role-part: #ffb454;
+    --role-bin: #4a5568;
+    --role-base: #8a93a6;
+    --role-floor: #222835;
+    --role-joint: #cbd5e1;
+    --role-gripper: #f0f4fa;
+    --role-actuator: #94a3b8;
+    --role-motor: #b9c4d4;
+    --ok: #7ddc9a;
+    --warn: #ffb454;
+    --edge: rgba(0, 0, 0, .35);
+  }
+  :root[data-theme="light"] {
+    --role-arm: #2f6fd0;
+    --role-part: #d97706;
+    --role-bin: #94a3b8;
+    --role-base: #64748b;
+    --role-floor: #cbd5e1;
+    --role-joint: #475569;
+    --role-gripper: #1e293b;
+    --role-actuator: #64748b;
+    --role-motor: #3d4757;
+    --ok: #16794a;
+    --warn: #b45309;
+    --edge: rgba(255, 255, 255, .45);
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]):not([data-theme="light"]) {
+      --role-arm: #2f6fd0;
+      --role-part: #d97706;
+      --role-bin: #94a3b8;
+      --role-base: #64748b;
+      --role-floor: #cbd5e1;
+      --role-joint: #475569;
+      --role-gripper: #1e293b;
+      --role-actuator: #64748b;
+      --role-motor: #3d4757;
+      --ok: #16794a;
+      --warn: #b45309;
+      --edge: rgba(255, 255, 255, .45);
+    }
+  }
+
+  * { box-sizing: border-box; }
+
+  /* The `hidden` attribute is implemented by the UA stylesheet as
+     `[hidden] { display: none }`, which any author `display` beats — so
+     `#banner { display: grid }` silently made `banner.hidden = true` do
+     nothing, and the "Simulating…" overlay stayed on top of the canvas
+     swallowing every pointer event. Restate it with enough weight to win. */
+  [hidden] { display: none !important; }
+
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--fg);
+    font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+    display: grid; grid-template-columns: 304px 1fr; grid-template-rows: 1fr auto;
+    grid-template-areas: "side view" "side transport";
+  }
+  aside {
+    grid-area: side; background: var(--bg); border-right: 1px solid var(--border);
+    padding: 16px; overflow-y: auto;
+  }
+  h1 { font-size: 15px; margin: 0 0 2px; color: var(--title); letter-spacing: .02em; }
+  h1 + p { margin: 0 0 18px; color: var(--muted); font-size: 12px; }
+  h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
+       color: var(--muted); margin: 18px 0 8px; font-weight: 600; }
+  main { grid-area: view; position: relative; min-width: 0; }
+  canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: grab; }
+  canvas.dragging { cursor: grabbing; }
+
+  .control { margin-bottom: 12px; }
+  label { display: block; color: var(--muted); margin-bottom: 4px; font-size: 12px; }
+  label b { color: var(--fg); }
+  select, input[type=range] { width: 100%; }
+  select {
+    background: var(--hover); color: var(--fg); border: 1px solid var(--border);
+    border-radius: 5px; padding: 5px 7px; font: inherit;
+  }
+  input[type=range] { accent-color: var(--accent); }
+  .segmented { display: flex; gap: 4px; }
+  .segmented button { flex: 1; }
+  button {
+    background: var(--hover); color: var(--fg); border: 1px solid var(--border);
+    border-radius: 5px; padding: 6px 9px; font: inherit; cursor: pointer;
+  }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button[aria-pressed=true] { background: var(--active); border-color: var(--accent); }
+  button:disabled { opacity: .4; cursor: default; }
+
+  table { width: 100%; border-collapse: collapse; }
+  td { padding: 2px 0; }
+  td:last-child { text-align: right; }
+  td:first-child { color: var(--muted); }
+  .good { color: var(--ok); } .bad { color: var(--warn); }
+
+  footer {
+    grid-area: transport; background: var(--bg); border-top: 1px solid var(--border);
+    padding: 10px 16px; display: flex; align-items: center; gap: 12px;
+  }
+  .scrub { flex: 1; }
+  .scrub input { width: 100%; margin: 0; display: block; }
+  .chapters { position: relative; height: 14px; margin-top: 2px; }
+  .chapters span {
+    position: absolute; top: 0; transform: translateX(-50%);
+    font-size: 10px; color: var(--muted); white-space: nowrap;
+  }
+  .chapters span.on { color: var(--accent); }
+  .tick { position: absolute; top: -6px; width: 1px; height: 5px; background: var(--border); }
+  #clock { color: var(--muted); min-width: 120px; text-align: right; }
+  #banner {
+    position: absolute; inset: 0; display: grid; place-items: center;
+    background: var(--bg); opacity: .93; text-align: center; padding: 24px;
+  }
+  #banner p { max-width: 46ch; color: var(--muted); }
+  code { color: var(--accent); }
+  .hint { color: var(--muted); font-size: 11px; margin-top: 6px; }
+  .part {
+    display: flex; align-items: center; gap: 8px; padding: 3px 0;
+  }
+  .part input[type=checkbox] { accent-color: var(--accent); margin: 0; }
+  .part input[type=color] {
+    width: 24px; height: 20px; padding: 0; border: 1px solid var(--border);
+    border-radius: 4px; background: none; cursor: pointer; flex: none;
+  }
+  .part span { flex: 1; color: var(--fg); }
+  .part small { color: var(--muted); font-size: 11px; }
+  .part.off span, .part.off small { opacity: .45; }
+  kbd {
+    background: var(--hover); border: 1px solid var(--border); border-radius: 3px;
+    padding: 0 4px; font-size: 10px; color: var(--fg);
+  }
+  /* The shared sheet positions #theme-btn against the page; this page's canvas
+     is the thing it belongs to, so anchor it there instead. */
+  #theme-btn { right: 14px; bottom: 12px; }
+</style>
+</head>
+<body>
+
+<aside>
+  <h1>Robot arm</h1>
+  <p>threers-physics · pick and place</p>
+
+  <div class="control">
+    <label for="mode">Drive</label>
+    <select id="mode">
+      <option value="0">Kinematic — exact</option>
+      <option value="1">Servo — physics-grounded</option>
+    </select>
+    <div class="hint" id="modeHint"></div>
+  </div>
+
+  <div class="control" id="stiffnessRow" hidden>
+    <label for="stiffness">Servo stiffness — <b id="stiffnessValue">40</b> Hz</label>
+    <input id="stiffness" type="range" min="10" max="90" step="5" value="40">
+    <div class="hint">Above about 60 it gets worse, not better: the world steps at
+      240&nbsp;Hz counting substeps, so a stiffer spring has too few samples a
+      cycle and aliases into noise.</div>
+  </div>
+
+  <div class="control">
+    <label for="arms">Arms in the cell</label>
+    <select id="arms">
+      <option>1</option><option>2</option><option>3</option>
+      <option>4</option><option>6</option>
+    </select>
+  </div>
+
+  <h2>This run</h2>
+  <table>
+    <tr><td>frames</td><td id="statFrames">—</td></tr>
+    <tr><td>bodies</td><td id="statBodies">—</td></tr>
+    <tr><td>worst tool error</td><td id="statError">—</td></tr>
+    <tr><td>parts placed</td><td id="statPlaced">—</td></tr>
+    <tr><td>simulated in</td><td id="statBuild">—</td></tr>
+  </table>
+
+  <h2>At this frame</h2>
+  <table>
+    <tr><td>move</td><td id="nowMove">—</td></tr>
+    <tr><td>tool error</td><td id="nowError">—</td></tr>
+    <tr><td>gripper</td><td id="nowGrip">—</td></tr>
+  </table>
+
+  <h2>Assembly</h2>
+  <div id="parts"></div>
+  <div class="control">
+    <label for="explode">Exploded — <b id="explodeValue">0</b>%</label>
+    <input id="explode" type="range" min="0" max="100" step="1" value="0">
+    <div class="hint">Pushes every part away from the joint its own assembly
+      hangs off, so a cell of six comes apart six times rather than once.</div>
+  </div>
+  <div class="control">
+    <button id="dimensions" aria-pressed="false" style="width:100%">Show dimensions</button>
+  </div>
+  <div class="control">
+    <button id="resetLook" style="width:100%">Reset colours &amp; visibility</button>
+  </div>
+
+  <h2>View</h2>
+  <div class="control segmented">
+    <button data-cam="0" aria-pressed="true">Side</button>
+    <button data-cam="1" aria-pressed="false">Front</button>
+    <button data-cam="2" aria-pressed="false">Top</button>
+    <button id="frame" title="Frame the whole cell">Fit</button>
+  </div>
+  <div class="hint">
+    <kbd>drag</kbd> orbit · <kbd>right</kbd>/<kbd>middle</kbd>/<kbd>shift</kbd>+drag pan ·
+    <kbd>wheel</kbd> zoom · <kbd>double-click</kbd> fit ·
+    <kbd>d</kbd> dimensions · <kbd>x</kbd> explode.
+    Touch: one finger orbits, two pinch and pan.
+  </div>
+</aside>
+
+<main>
+  <canvas id="view"></canvas>
+  <button id="theme-btn" type="button" title="Theme">◑ system</button>
+  <div id="banner"><div><p id="bannerText">Building the cell…</p></div></div>
+</main>
+
+<footer>
+  <button id="skipBack" title="Previous move — [">⏮</button>
+  <button id="play" title="Play / pause — space" style="min-width:44px">▶</button>
+  <button id="skipFwd" title="Next move — ]">⏭</button>
+  <div class="scrub">
+    <input id="scrub" type="range" min="0" max="1" step="1" value="0">
+    <div class="chapters" id="chapters"></div>
+  </div>
+  <select id="speed" style="width:88px" title="Playback speed">
+    <option value="0.1">0.1×</option>
+    <option value="0.25">0.25×</option>
+    <option value="0.5">0.5×</option>
+    <option value="1" selected>1×</option>
+    <option value="2">2×</option>
+    <option value="4">4×</option>
+    <option value="8">8×</option>
+  </select>
+  <button id="loop" aria-pressed="true" title="Loop">↻</button>
+  <span id="clock">0.00 / 0.00 s</span>
+</footer>
+
+<script type="module">
+import init, { Run } from "../pkg-robot-arm/threers_robot_arm.js";
+import { initTheme } from "../viewer-theme.js";
+
+const canvas = document.getElementById("view");
+const ctx = canvas.getContext("2d");
+const el = (id) => document.getElementById(id);
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+
+const FPS = 60;                       // the rate the recording was made at
+
+// ---- state ---------------------------------------------------------------
+
+let run = null;          // the wasm recording
+let poses = null;        // Float32Array, all frames back to back
+let shapes = [];         // per body: {kind, size, role}
+let telemetry = null;    // Float32Array, 3 per frame
+let moveStarts = [];
+let moveNames = [];
+let stride = 0;
+let frameCount = 0;
+
+let frame = 0;
+let playing = false;
+let speed = 1;
+let looping = true;
+let lastTick = 0;
+let dirty = true;        // something changed and the canvas needs repainting
+let explode = 0;         // 0..1, how far apart the assemblies are pulled
+let showDims = false;
+
+// Per role: is it drawn, and in what colour. `null` means "whatever the theme
+// says", so a part left alone still follows a light/dark switch — only one the
+// user has actually picked stops tracking.
+const ROLES = [
+  { key: "arm",      label: "Arm links" },
+  { key: "part",     label: "Payload" },
+  { key: "bin",      label: "Bin walls" },
+  { key: "base",     label: "Base & column" },
+  { key: "floor",    label: "Floor" },
+  { key: "joint",    label: "Joint housings" },
+  { key: "gripper",  label: "Gripper jaws" },
+  // Index 7 was a linear ram, which is the wrong part for a stepper-driven
+  // arm. Kept as a hole rather than renumbered so a recording and a page from
+  // different builds cannot silently disagree about what role 8 means.
+  { key: "reserved", label: "" },
+  { key: "motor",    label: "Stepper motors" },
+];
+const look = ROLES.map(() => ({ visible: true, colour: null }));
+
+// Colours are read from CSS so the theme owns them, and re-read whenever it
+// changes. Reading them per draw would mean a style recalculation per frame.
+//
+// Seeded with the dark defaults rather than left empty: `initTheme` fires its
+// callback on the next frame, and anything that paints or builds a swatch
+// before then would otherwise be reading from nothing.
+let palette = {
+  themeRoles: ["#6fb3ff", "#ffb454", "#4a5568", "#8a93a6", "#222835",
+               "#cbd5e1", "#f0f4fa", "#94a3b8", "#b9c4d4"],
+  roles: [], rolesRgb: [], sceneRgb: [20, 22, 28],
+  scene: "#14161c", edge: "rgba(0,0,0,.35)",
+  text: "#cdd3df", dim: "#8b93a6", accent: "#3a86e0",
+};
+
+function readPalette() {
+  const css = getComputedStyle(document.documentElement);
+  const get = (name, fallback) => css.getPropertyValue(name).trim() || fallback;
+  palette = {
+    themeRoles: [
+      get("--role-arm", "#6fb3ff"),
+      get("--role-part", "#ffb454"),
+      get("--role-bin", "#4a5568"),
+      get("--role-base", "#8a93a6"),
+      get("--role-floor", "#222835"),
+      get("--role-joint", "#cbd5e1"),
+      get("--role-gripper", "#f0f4fa"),
+      get("--role-actuator", "#94a3b8"),
+      get("--role-motor", "#b9c4d4"),
+    ],
+    scene: get("--scene", "#14161c"),
+    edge: get("--edge", "rgba(0,0,0,.35)"),
+    text: get("--fg", "#cdd3df"),
+    dim: get("--muted", "#8b93a6"),
+    accent: get("--accent", "#3a86e0"),
+  };
+  applyLook();
+}
+
+/// Fold the user's colour choices over the theme's, and cache the parsed form.
+function applyLook() {
+  palette.roles = palette.themeRoles.map((c, i) => look[i].colour ?? c);
+  palette.rolesRgb = palette.roles.map(parse);
+  palette.sceneRgb = parse(palette.scene);
+  for (const [i, row] of [...el("parts").children].entries()) {
+    const swatch = row.querySelector("input[type=color]");
+    if (swatch && !look[i].colour) swatch.value = toHex(palette.themeRoles[i]);
+  }
+  dirty = true;
+}
+
+// ---- camera --------------------------------------------------------------
+//
+// Two copies of every value: `goal` is what the input drives, `cam` is what
+// gets drawn, and the second eases toward the first. That is the whole of the
+// smoothing — no velocities to leak, no springs to tune, and a drag that stops
+// dead stops the camera a few frames later instead of instantly.
+
+const cam = { yaw: -0.6, pitch: 0.30, dist: 6.5, target: [0.4, 0.5, 0] };
+const goal = { ...cam, target: [...cam.target] };
+const HOME = { ...cam, target: [...cam.target] };
+
+const PITCH_LIMIT = [-0.35, 1.45];    // stop short of straight down, which flips
+const DIST_LIMIT = [1.2, 40];
+const EASE = 0.25;                    // fraction of the gap closed per frame
+
+function easeCamera() {
+  let moved = false;
+  for (const key of ["yaw", "pitch", "dist"]) {
+    const delta = goal[key] - cam[key];
+    if (Math.abs(delta) > 1e-4) { cam[key] += delta * EASE; moved = true; }
+    else cam[key] = goal[key];
+  }
+  for (let i = 0; i < 3; i++) {
+    const delta = goal.target[i] - cam.target[i];
+    if (Math.abs(delta) > 1e-4) { cam.target[i] += delta * EASE; moved = true; }
+    else cam.target[i] = goal.target[i];
+  }
+  if (moved) dirty = true;
+  return moved;
+}
+
+function camBasis() {
+  const cy = Math.cos(cam.yaw), sy = Math.sin(cam.yaw);
+  const cp = Math.cos(cam.pitch), sp = Math.sin(cam.pitch);
+  const forward = [cp * cy, -sp, cp * sy];
+  const eye = [
+    cam.target[0] - forward[0] * cam.dist,
+    cam.target[1] - forward[1] * cam.dist,
+    cam.target[2] - forward[2] * cam.dist,
+  ];
+  const right = [-sy, 0, cy];
+  const up = [
+    right[1] * forward[2] - right[2] * forward[1],
+    right[2] * forward[0] - right[0] * forward[2],
+    right[0] * forward[1] - right[1] * forward[0],
+  ];
+  return { eye, forward, right, up };
+}
+
+let basis = camBasis();
+
+/// Move the look-at point across the screen plane. Scaled by distance so a
+/// given drag covers the same fraction of the view however far out you are.
+function pan(dx, dy) {
+  const b = camBasis();
+  const scale = (cam.dist * 1.1) / canvas.clientHeight;
+  for (let i = 0; i < 3; i++) {
+    goal.target[i] += (-dx * b.right[i] + dy * b.up[i]) * scale;
+  }
+}
+
+function setView(view) {
+  Object.assign(goal, { yaw: view.yaw, pitch: view.pitch });
+  if (view.dist !== undefined) goal.dist = view.dist;
+  if (view.target) goal.target = [...view.target];
+}
+
+// ---- projection ----------------------------------------------------------
+//
+// A plain perspective camera and a painter's-algorithm sort. Enough to read a
+// robot arm, and it keeps the page free of a renderer dependency.
+
+const NEAR = 0.06;              // view-space z below which nothing is drawable
+
+/// World point into camera space: x right, y up, z forward.
+function toView(p) {
+  const d = [p[0] - basis.eye[0], p[1] - basis.eye[1], p[2] - basis.eye[2]];
+  return [
+    d[0] * basis.right[0] + d[1] * basis.right[1] + d[2] * basis.right[2],
+    d[0] * basis.up[0] + d[1] * basis.up[1] + d[2] * basis.up[2],
+    d[0] * basis.forward[0] + d[1] * basis.forward[1] + d[2] * basis.forward[2],
+  ];
+}
+
+/// Camera space to pixels. Only valid once `z >= NEAR`, which is what clipping
+/// is for.
+function toScreen(v) {
+  const f = canvas.clientHeight * 0.9;
+  return [canvas.clientWidth / 2 + (v[0] / v[2]) * f, canvas.clientHeight / 2 - (v[1] / v[2]) * f];
+}
+
+function project(p) {
+  const v = toView(p);
+  if (v[2] < NEAR) return null;
+  const [x, y] = toScreen(v);
+  return [x, y, v[2]];
+}
+
+/// Trim a convex polygon to the part in front of the camera.
+///
+/// Discarding a shape because *one* of its corners is behind the near plane is
+/// the obvious shortcut and it is why the floor used to vanish: it is a single
+/// huge box, so the moment the camera dips near it or moves inside its bounds a
+/// corner goes behind and the whole ground disappears. Cutting the polygon at
+/// the plane keeps the part that is still visible, which is all of it that ever
+/// mattered.
+function clipNear(poly) {
+  const out = [];
+  for (let i = 0; i < poly.length; i++) {
+    const a = poly[i];
+    const b = poly[(i + 1) % poly.length];
+    const aIn = a[2] >= NEAR;
+    const bIn = b[2] >= NEAR;
+    if (aIn) out.push(a);
+    if (aIn !== bIn) {
+      const t = (NEAR - a[2]) / (b[2] - a[2]);
+      out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, NEAR]);
+    }
+  }
+  return out;
+}
+
+/// Trim a segment the same way, for capsules. `null` if none of it is in front.
+function clipSegment(a, b) {
+  const aIn = a[2] >= NEAR;
+  const bIn = b[2] >= NEAR;
+  if (!aIn && !bIn) return null;
+  if (aIn && bIn) return [a, b];
+  const t = (NEAR - a[2]) / (b[2] - a[2]);
+  const cut = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, NEAR];
+  return aIn ? [a, cut] : [cut, b];
+}
+
+/// Turn a vector by a quaternion: v + 2q.w(q.xyz × v) + 2 q.xyz × (q.xyz × v).
+function rotate(q, v) {
+  const [x, y, z, w] = q;
+  const tx = 2 * (y * v[2] - z * v[1]);
+  const ty = 2 * (z * v[0] - x * v[2]);
+  const tz = 2 * (x * v[1] - y * v[0]);
+  return [
+    v[0] + w * tx + (y * tz - z * ty),
+    v[1] + w * ty + (z * tx - x * tz),
+    v[2] + w * tz + (x * ty - y * tx),
+  ];
+}
+
+/// The eight corners of a unit box, indexed by bit: 1 is +x, 2 is +y, 4 is +z.
+const BOX_CORNERS = [];
+for (let i = 0; i < 8; i++)
+  BOX_CORNERS.push([(i & 1) ? 1 : -1, (i & 2) ? 1 : -1, (i & 4) ? 1 : -1]);
+
+// Each face with the outward normal of the box it belongs to. Carrying the
+// normal rather than deriving it from winding means culling and shading cannot
+// disagree about which way a face points.
+const BOX_FACES = [
+  { at: [0, 1, 3, 2], n: [0, 0, -1] },
+  { at: [4, 6, 7, 5], n: [0, 0, 1] },
+  { at: [0, 4, 5, 1], n: [0, -1, 0] },
+  { at: [2, 3, 7, 6], n: [0, 1, 0] },
+  { at: [0, 2, 6, 4], n: [-1, 0, 0] },
+  { at: [1, 5, 7, 3], n: [1, 0, 0] },
+];
+
+/// A cylinder as an N-gon prism: N side quads and two caps, each with its
+/// outward normal.
+///
+/// Drawing a joint housing as a box is what makes an arm look like a stack of
+/// crates rather than a machine — the round axle is the single strongest cue
+/// that something rotates there. Twelve sides is enough to read as round at any
+/// size these appear at.
+const CYLINDER_SIDES = 12;
+const CYLINDER = (() => {
+  const ring = [];
+  for (let i = 0; i < CYLINDER_SIDES; i++) {
+    const a = (i / CYLINDER_SIDES) * Math.PI * 2;
+    ring.push([Math.cos(a), Math.sin(a)]);
+  }
+  const faces = [];
+  for (let i = 0; i < CYLINDER_SIDES; i++) {
+    const j = (i + 1) % CYLINDER_SIDES;
+    faces.push({
+      corners: [
+        [ring[i][0], -1, ring[i][1]],
+        [ring[j][0], -1, ring[j][1]],
+        [ring[j][0], 1, ring[j][1]],
+        [ring[i][0], 1, ring[i][1]],
+      ],
+      // Halfway round the segment, so the shading steps evenly.
+      n: [(ring[i][0] + ring[j][0]) / 2, 0, (ring[i][1] + ring[j][1]) / 2],
+    });
+  }
+  for (const [end, n] of [[1, [0, 1, 0]], [-1, [0, -1, 0]]]) {
+    const corners = ring.map(([x, z]) => [x, end, z]);
+    faces.push({ corners: end > 0 ? corners : corners.reverse(), n });
+  }
+  return faces;
+})();
+
+/// Direction the scene is lit from, in world space. Over the viewer's shoulder
+/// and to one side, which is what makes a box read as a box.
+const LIGHT = (() => {
+  const v = [0.4, 0.85, 0.35];
+  const len = Math.hypot(...v);
+  return v.map((c) => c / len);
+})();
+
+/// Any CSS colour to `#rrggbb`, which is all `<input type=color>` accepts.
+function toHex(colour) {
+  const [r, g, b] = parse(colour);
+  return "#" + [r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("");
+}
+
+function parse(colour) {
+  const hex = colour.replace("#", "");
+  const n = parseInt(hex.length === 3 ? hex.replace(/./g, "$&$&") : hex, 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+/// Shade toward the background rather than toward black.
+///
+/// Multiplying darkens, which reads as "further away" on a dark page and as
+/// "dirty" on a light one. Blending toward whatever the scene colour is works
+/// in both, because receding into the background is what distance looks like
+/// either way.
+function shade(rgb, lit) {
+  const bg = palette.sceneRgb;
+  const mix = clamp(1 - lit, 0, 0.75);
+  const c = rgb.map((v, i) => Math.round(v * (1 - mix) + bg[i] * mix));
+  return `rgb(${c[0]},${c[1]},${c[2]})`;
+}
+
+/// How far to push a part away from its own assembly's origin.
+///
+/// Radial, and scaled by the distance from that origin, so parts that are
+/// already far out travel further and the assembly opens like a flower rather
+/// than shearing sideways. The floor never moves — an exploded view with a
+/// floating floor is just confusing.
+function explodeOffset(s, p) {
+  // The floor's group is `u32::MAX`, which does not survive the trip through an
+  // `f32` exactly — so test for "implausibly large" rather than for the value.
+  if (explode <= 0 || s.group > 1e6) return [0, 0, 0];
+  const d = [p[0] - s.origin[0], p[1] - s.origin[1], p[2] - s.origin[2]];
+  const len = Math.hypot(d[0], d[1], d[2]);
+  if (len < 1e-4) return [0, 0, 0];
+  const push = explode * 0.9;
+  return [d[0] * push, d[1] * push, d[2] * push];
+}
+
+const METRE = (v) => (v >= 1 ? v.toFixed(2) + " m" : Math.round(v * 1000) + " mm");
+
+/// A dimension line: two ticked ends, a rule between them, and the measurement.
+///
+/// Drawn last and in screen space, so it stays legible whatever the part is
+/// doing — a label that rotates with the thing it measures is a label nobody
+/// can read at three quarters of the angles.
+function dimension(a, b, text) {
+  const dx = b[0] - a[0], dy = b[1] - a[1];
+  const len = Math.hypot(dx, dy);
+  if (len < 26) return;                      // too small on screen to label
+  const nx = -dy / len, ny = dx / len;       // across the line, for the end ticks
+  ctx.strokeStyle = palette.accent;
+  ctx.fillStyle = palette.accent;
+  ctx.lineWidth = 1;
+  ctx.setLineDash([]);
+  ctx.beginPath();
+  ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]);
+  for (const [x, y] of [a, b]) {
+    ctx.moveTo(x - nx * 4, y - ny * 4);
+    ctx.lineTo(x + nx * 4, y + ny * 4);
+  }
+  ctx.stroke();
+
+  const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2;
+  ctx.font = "11px ui-monospace, Menlo, monospace";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  const w = ctx.measureText(text).width;
+  ctx.fillStyle = palette.scene;
+  ctx.globalAlpha = 0.85;
+  ctx.fillRect(mx - w / 2 - 3, my - 8, w + 6, 15);
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = palette.accent;
+  ctx.fillText(text, mx, my);
+}
+
+/// Every visible part at `base`, posed and exploded. Shared so the drawing and
+/// the dimensioning cannot disagree about where anything is.
+function visibleParts(base) {
+  const out = [];
+  for (let b = 0; b < shapes.length; b++) {
+    const s = shapes[b];
+    if (!look[s.role]?.visible) continue;
+    const o = base + b * 7;
+    const raw = [poses[o], poses[o + 1], poses[o + 2]];
+    const off = explodeOffset(s, raw);
+    out.push({
+      s,
+      p: [raw[0] + off[0], raw[1] + off[1], raw[2] + off[2]],
+      q: [poses[o + 3], poses[o + 4], poses[o + 5], poses[o + 6]],
+    });
+  }
+  return out;
+}
+
+function draw() {
+  dirty = false;
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+  ctx.fillStyle = palette.scene;
+  ctx.fillRect(0, 0, w, h);
+  if (!run) return;
+
+  basis = camBasis();
+  const base = frame * stride;
+
+  // One list of faces for the whole scene, sorted together.
+  //
+  // Sorting bodies and then their faces separately is the tempting shortcut,
+  // and it gets the ordering *between* two objects wrong whenever one is large
+  // — the floor's centre is far away even where it passes right under the
+  // camera, so it would sort behind things it should cover, or in front of
+  // things standing on it.
+  const faces = [];
+  const capsules = [];
+
+  for (const { s, p, q } of visibleParts(base)) {
+    const rgb = palette.rolesRgb[s.role] ?? [136, 136, 136];
+
+    if (s.kind === 1 || s.kind === 3) {
+      // A box and a cylinder differ only in which set of faces they use, so
+      // both go down one path: local corners, rotated, culled, clipped, shaded.
+      const half = s.kind === 3
+        ? [s.size[0], s.size[1], s.size[0]]
+        : [s.size[0], s.size[1], s.size[2]];
+      const model = s.kind === 3
+        ? CYLINDER
+        : BOX_FACES.map((f) => ({ corners: f.at.map((i) => BOX_CORNERS[i]), n: f.n }));
+
+      for (const face of model) {
+        const normal = rotate(q, face.n);
+        const corners = face.corners.map((c) => {
+          const r = rotate(q, [c[0] * half[0], c[1] * half[1], c[2] * half[2]]);
+          return toView([p[0] + r[0], p[1] + r[1], p[2] + r[2]]);
+        });
+        // Cull anything pointing away. For a closed convex solid the hidden
+        // faces are exactly the ones facing away, so this is not an
+        // approximation — it is half the work for the same picture.
+        const centre = corners.reduce(
+          (acc, v) => [acc[0] + v[0] / corners.length, acc[1] + v[1] / corners.length,
+                       acc[2] + v[2] / corners.length],
+          [0, 0, 0]
+        );
+        const viewNormal = [
+          normal[0] * basis.right[0] + normal[1] * basis.right[1] + normal[2] * basis.right[2],
+          normal[0] * basis.up[0] + normal[1] * basis.up[1] + normal[2] * basis.up[2],
+          normal[0] * basis.forward[0] + normal[1] * basis.forward[1] + normal[2] * basis.forward[2],
+        ];
+        if (centre[0] * viewNormal[0] + centre[1] * viewNormal[1] + centre[2] * viewNormal[2] >= 0)
+          continue;
+
+        const clipped = clipNear(corners);
+        if (clipped.length < 3) continue;
+        let depth = 0;
+        for (const v of clipped) depth += v[2];
+        depth /= clipped.length;
+        const lambert = Math.max(0, normal[0] * LIGHT[0] + normal[1] * LIGHT[1] + normal[2] * LIGHT[2]);
+        faces.push({
+          depth,
+          points: clipped.map(toScreen),
+          fill: shade(rgb, (0.52 + 0.48 * lambert) * fade(depth)),
+        });
+      }
+    } else {
+      // Capsule or sphere: a thick line between the two cap centres.
+      const halfLength = s.kind === 0 ? s.size[1] : 0;
+      const axis = rotate(q, [0, halfLength, 0]);
+      const seg = clipSegment(
+        toView([p[0] - axis[0], p[1] - axis[1], p[2] - axis[2]]),
+        toView([p[0] + axis[0], p[1] + axis[1], p[2] + axis[2]])
+      );
+      if (!seg) continue;
+      const depth = (seg[0][2] + seg[1][2]) / 2;
+      capsules.push({
+        depth,
+        a: toScreen(seg[0]),
+        b: toScreen(seg[1]),
+        width: Math.max(1, (s.size[0] * 2 * canvas.clientHeight * 0.9) / depth),
+        fill: shade(rgb, 0.95 * fade(depth)),
+        rim: shade(rgb, 0.5 * fade(depth)),
+      });
+    }
+  }
+
+  // Far to near. Capsules join the same ordering rather than being painted as a
+  // separate layer on top, or an arm would draw over the bin it is reaching
+  // into.
+  const all = faces.concat(capsules).sort((x, y) => y.depth - x.depth);
+  ctx.lineJoin = "round";
+  for (const item of all) {
+    if (item.points) {
+      ctx.beginPath();
+      ctx.moveTo(item.points[0][0], item.points[0][1]);
+      for (let i = 1; i < item.points.length; i++) ctx.lineTo(item.points[i][0], item.points[i][1]);
+      ctx.closePath();
+      ctx.fillStyle = item.fill;
+      ctx.fill();
+      ctx.strokeStyle = palette.edge;
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    } else {
+      ctx.lineCap = "round";
+      ctx.strokeStyle = item.rim;
+      ctx.lineWidth = item.width + 3;
+      ctx.beginPath(); ctx.moveTo(item.a[0], item.a[1]); ctx.lineTo(item.b[0], item.b[1]); ctx.stroke();
+      ctx.strokeStyle = item.fill;
+      ctx.lineWidth = item.width;
+      ctx.beginPath(); ctx.moveTo(item.a[0], item.a[1]); ctx.lineTo(item.b[0], item.b[1]); ctx.stroke();
+    }
+  }
+
+  if (showDims) drawDimensions(base);
+}
+
+/// How much distance washes a surface out toward the background.
+function fade(depth) {
+  return clamp(1.2 - depth * 0.035, 0.4, 1);
+}
+
+/// Measure everything on screen, near to far.
+///
+/// Offset outward from each part so the rule does not sit on top of the thing
+/// it is measuring, and skipped when it would be too small to read — a drawing
+/// covered in unreadable numbers is worse than one with none.
+function drawDimensions(base) {
+  ctx.save();
+  const parts = visibleParts(base);
+  parts.sort((a, b) => toView(a.p)[2] - toView(b.p)[2]);
+  for (const { s, p, q } of parts) {
+    if (s.kind === 0 || s.kind === 2) {
+      // Capsule: measure it end to end, including the round caps, since that is
+      // the length of the physical link.
+      const half = s.kind === 0 ? s.size[1] + s.size[0] : s.size[0];
+      const axis = rotate(q, [0, half, 0]);
+      const across = rotate(q, [s.size[0] * 1.9, 0, 0]);
+      const a = project([p[0] - axis[0] + across[0], p[1] - axis[1] + across[1], p[2] - axis[2] + across[2]]);
+      const b = project([p[0] + axis[0] + across[0], p[1] + axis[1] + across[1], p[2] + axis[2] + across[2]]);
+      if (a && b) dimension(a, b, METRE(half * 2));
+    } else {
+      // Box: its three extents, each pushed out past the corner it belongs to.
+      const [hx, hy, hz] = [s.size[0], s.size[1], s.kind === 3 ? s.size[0] : s.size[2]];
+      const axes = [[hx, 0, 0], [0, hy, 0], [0, 0, hz]];
+      const outward = [[0, -hy, -hz], [hx, 0, -hz], [-hx, -hy, 0]];
+      for (let k = 0; k < 3; k++) {
+        const size = [hx, hy, hz][k] * 2;
+        if (size < 0.04) continue;              // fixings, not features
+        const off = rotate(q, outward[k].map((v) => v * 1.25));
+        const arm = rotate(q, axes[k]);
+        const a = project([p[0] - arm[0] + off[0], p[1] - arm[1] + off[1], p[2] - arm[2] + off[2]]);
+        const b = project([p[0] + arm[0] + off[0], p[1] + arm[1] + off[1], p[2] + arm[2] + off[2]]);
+        if (a && b) dimension(a, b, METRE(size));
+      }
+    }
+  }
+  ctx.restore();
+}
+
+// ---- the assembly panel --------------------------------------------------
+
+/// One row per role: a checkbox, a swatch, and how many of it are in the scene.
+///
+/// Rebuilt whenever the cell changes, because the counts do.
+function buildPartList() {
+  const host = el("parts");
+  host.innerHTML = "";
+  ROLES.forEach((role, i) => {
+    const count = shapes.filter((s) => s.role === i).length;
+    if (count === 0) return;
+
+    const row = document.createElement("div");
+    row.className = "part" + (look[i].visible ? "" : " off");
+
+    const shown = document.createElement("input");
+    shown.type = "checkbox";
+    shown.checked = look[i].visible;
+    shown.id = "part-" + role.key;
+    shown.onchange = () => {
+      look[i].visible = shown.checked;
+      row.classList.toggle("off", !shown.checked);
+      dirty = true;
+    };
+
+    const name = document.createElement("span");
+    name.textContent = role.label;
+
+    const detail = document.createElement("small");
+    detail.textContent = "×" + count;
+
+    const swatch = document.createElement("input");
+    swatch.type = "color";
+    swatch.value = toHex(look[i].colour ?? palette.themeRoles[i]);
+    swatch.title = "Colour — " + role.label;
+    swatch.oninput = () => { look[i].colour = swatch.value; applyLook(); };
+
+    row.append(shown, name, detail, swatch);
+    host.appendChild(row);
+  });
+}
+
+// ---- transport -----------------------------------------------------------
+
+function setFrame(n) {
+  frame = clamp(Math.round(n), 0, frameCount - 1);
+  el("scrub").value = frame;
+  const t = telemetry.subarray(frame * 3, frame * 3 + 3);
+  el("nowMove").textContent = moveNames[t[0]] ?? "—";
+  el("nowError").textContent = t[1].toFixed(2) + " mm";
+  el("nowGrip").textContent = t[2] > 0.5 ? "closed" : "open";
+  el("nowGrip").className = t[2] > 0.5 ? "good" : "";
+  el("clock").textContent =
+    (frame / FPS).toFixed(2) + " / " + (frameCount / FPS).toFixed(2) + " s";
+  for (const span of el("chapters").children)
+    if (span.dataset.index !== undefined)
+      span.classList.toggle("on", Number(span.dataset.index) === t[0]);
+  dirty = true;
+}
+
+function tick(now) {
+  requestAnimationFrame(tick);
+  easeCamera();
+  if (run && playing) {
+    const dt = Math.min(0.25, (now - lastTick) / 1000);
+    let next = frame + dt * FPS * speed;
+    if (next >= frameCount - 1) {
+      if (looping) next -= frameCount - 1;
+      else { next = frameCount - 1; setPlaying(false); }
+    }
+    setFrame(next);
+  }
+  lastTick = now;
+  if (dirty) draw();
+}
+
+function setPlaying(on) {
+  playing = on;
+  el("play").textContent = on ? "❚❚" : "▶";
+  lastTick = performance.now();
+}
+
+function jumpMove(delta) {
+  const current = telemetry[frame * 3];
+  let index = current + delta;
+  // Stepping back from just inside a move goes to its start first, which is
+  // what a scrubber is expected to do.
+  if (delta < 0 && frame - moveStarts[current] > FPS * 0.4) index = current;
+  setFrame(moveStarts[clamp(index, 0, moveStarts.length - 1)]);
+}
+
+function buildChapters() {
+  const host = el("chapters");
+  host.innerHTML = "";
+  moveNames.forEach((name, i) => {
+    const at = (moveStarts[i] / (frameCount - 1)) * 100;
+    const mark = document.createElement("div");
+    mark.className = "tick";
+    mark.style.left = at + "%";
+    host.appendChild(mark);
+    // Only label alternate moves when there are many, or they collide.
+    if (moveNames.length <= 7 || i % 2 === 0) {
+      const label = document.createElement("span");
+      label.textContent = name;
+      label.style.left = at + "%";
+      label.dataset.index = i;
+      host.appendChild(label);
+    }
+  });
+}
+
+// ---- orbit controls ------------------------------------------------------
+//
+// Pointer events throughout, so mouse, pen and touch go down one path. The
+// gestures are the ones every 3D viewer has, because a viewer that invents its
+// own is a viewer nobody can drive.
+
+const pointers = new Map();
+let gesture = null;          // "orbit" | "pan"
+let pinch = 0;               // last two-finger separation
+
+function pointerMid() {
+  const all = [...pointers.values()];
+  return [
+    all.reduce((s, p) => s + p.x, 0) / all.length,
+    all.reduce((s, p) => s + p.y, 0) / all.length,
+  ];
+}
+
+function pointerSpread() {
+  const [a, b] = [...pointers.values()];
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+canvas.addEventListener("pointerdown", (e) => {
+  canvas.setPointerCapture(e.pointerId);
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  // Right and middle drag pan, as does shift-drag for anyone on a trackpad
+  // without a second button.
+  gesture = (e.button === 1 || e.button === 2 || e.shiftKey) ? "pan" : "orbit";
+  if (pointers.size === 2) { gesture = "touch2"; pinch = pointerSpread(); }
+  canvas.classList.add("dragging");
+});
+
+canvas.addEventListener("pointermove", (e) => {
+  const previous = pointers.get(e.pointerId);
+  if (!previous) return;
+  const midBefore = pointers.size === 2 ? pointerMid() : null;
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+  if (gesture === "touch2" && pointers.size === 2) {
+    // Two fingers: pinch to zoom, and drag the midpoint to pan.
+    const spread = pointerSpread();
+    if (pinch > 0 && spread > 0) {
+      goal.dist = clamp(goal.dist * (pinch / spread), ...DIST_LIMIT);
+    }
+    pinch = spread;
+    const midAfter = pointerMid();
+    pan(midAfter[0] - midBefore[0], midAfter[1] - midBefore[1]);
+    return;
+  }
+
+  const dx = e.clientX - previous.x;
+  const dy = e.clientY - previous.y;
+  if (gesture === "pan") {
+    pan(dx, dy);
+  } else {
+    goal.yaw += dx * 0.007;
+    goal.pitch = clamp(goal.pitch + dy * 0.006, ...PITCH_LIMIT);
+  }
+});
+
+function endPointer(e) {
+  pointers.delete(e.pointerId);
+  if (pointers.size === 0) { gesture = null; canvas.classList.remove("dragging"); }
+  else if (pointers.size === 1) { gesture = "orbit"; pinch = 0; }
+}
+canvas.addEventListener("pointerup", endPointer);
+canvas.addEventListener("pointercancel", endPointer);
+canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+
+canvas.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  // Exponential, so each notch is the same *proportion* of the distance and
+  // zooming feels the same close up as far out. Trackpads send many small
+  // deltas and mice send few large ones; scaling by the delta rather than its
+  // sign keeps both usable.
+  const step = clamp(e.deltaY * (e.deltaMode === 1 ? 16 : 1), -240, 240);
+  goal.dist = clamp(goal.dist * Math.exp(step * 0.0016), ...DIST_LIMIT);
+}, { passive: false });
+
+canvas.addEventListener("dblclick", () => frameCell());
+
+/// Pull the camera back far enough to see the whole cell, from a sensible angle.
+function frameCell(instant = false) {
+  const arms = Number(el("arms").value);
+  const depth = (arms - 1) * 2.6;
+  setView({
+    yaw: HOME.yaw,
+    pitch: HOME.pitch,
+    dist: 5.5 + depth * 0.55,
+    target: [0.4, 0.5, depth / 2],
+  });
+  if (instant) { Object.assign(cam, goal, { target: [...goal.target] }); dirty = true; }
+}
+
+const PRESETS = [
+  { yaw: -0.6,  pitch: 0.30 },   // side
+  { yaw: -1.55, pitch: 0.22 },   // front
+  { yaw: -0.6,  pitch: 1.35 },   // top
+];
+
+// ---- loading -------------------------------------------------------------
+
+async function build() {
+  const mode = Number(el("mode").value);
+  const arms = Number(el("arms").value);
+  const stiffness = Number(el("stiffness").value);
+  el("banner").hidden = false;
+  el("bannerText").textContent = "Simulating…";
+  setPlaying(false);
+  // Yield so the banner paints before the (blocking) simulation.
+  await new Promise((r) => setTimeout(r, 16));
+
+  // Report failures here rather than leaving it to whoever called. `build` is
+  // wired straight to the mode and arms pickers, which are plain event
+  // handlers with no promise chain behind them — a throw there would be an
+  // unhandled rejection, and all the user would see is the "Simulating…"
+  // banner staying up forever with nothing to say why.
+  try {
+    await rebuild(mode, arms, stiffness);
+  } catch (error) {
+    el("banner").hidden = false;
+    el("bannerText").innerHTML =
+      "Could not build the cell.<br><br><small>" + error + "</small>";
+    throw error;
+  }
+}
+
+async function rebuild(mode, arms, stiffness) {
+  const started = performance.now();
+  if (run) run.free();
+  run = new Run(mode, arms, stiffness);
+  const elapsed = performance.now() - started;
+
+  poses = run.poses();
+  telemetry = run.telemetry();
+  moveStarts = Array.from(run.moveStarts());
+  moveNames = run.moveNames().split("\n");
+  stride = run.poseStride();
+  frameCount = run.frameCount();
+
+  const flat = run.shapes();
+  const step = run.shapeStride();
+  shapes = [];
+  for (let i = 0; i < flat.length; i += step)
+    shapes.push({
+      kind: flat[i],
+      size: [flat[i + 1], flat[i + 2], flat[i + 3]],
+      role: flat[i + 4],
+      group: flat[i + 5],
+      origin: [flat[i + 6], flat[i + 7], flat[i + 8]],
+    });
+  buildPartList();
+
+  el("statFrames").textContent = frameCount;
+  el("statBodies").textContent = run.bodyCount();
+  el("statError").textContent = run.worstErrorMm().toFixed(2) + " mm";
+  el("statPlaced").textContent = run.placed() ? "all" : "not all";
+  el("statPlaced").className = run.placed() ? "good" : "bad";
+  el("statBuild").textContent = elapsed.toFixed(0) + " ms";
+  el("modeHint").textContent = mode === 1
+    ? "Links with mass on springy joints — it sags and lags."
+    : "Links teleported to the solved pose — exact, unmovable.";
+  el("stiffnessRow").hidden = mode !== 1;
+
+  el("scrub").max = frameCount - 1;
+  buildChapters();
+  frameCell(true);
+  setFrame(0);
+  el("banner").hidden = true;
+  setPlaying(true);
+}
+
+function resize() {
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = Math.max(1, rect.width * devicePixelRatio);
+  canvas.height = Math.max(1, rect.height * devicePixelRatio);
+  dirty = true;
+}
+
+// ---- wiring --------------------------------------------------------------
+
+el("play").onclick = () => setPlaying(!playing);
+el("skipBack").onclick = () => jumpMove(-1);
+el("skipFwd").onclick = () => jumpMove(1);
+el("loop").onclick = (e) => {
+  looping = !looping;
+  e.currentTarget.setAttribute("aria-pressed", String(looping));
+};
+el("scrub").oninput = (e) => { setPlaying(false); setFrame(Number(e.target.value)); };
+el("speed").onchange = (e) => { speed = Number(e.target.value); };
+el("mode").onchange = build;
+el("arms").onchange = build;
+el("stiffness").oninput = (e) => { el("stiffnessValue").textContent = e.target.value; };
+el("stiffness").onchange = build;
+el("frame").onclick = () => frameCell();
+el("explode").oninput = (e) => {
+  explode = Number(e.target.value) / 100;
+  el("explodeValue").textContent = e.target.value;
+  dirty = true;
+};
+el("dimensions").onclick = (e) => {
+  showDims = !showDims;
+  e.currentTarget.setAttribute("aria-pressed", String(showDims));
+  e.currentTarget.textContent = showDims ? "Hide dimensions" : "Show dimensions";
+  dirty = true;
+};
+el("resetLook").onclick = () => {
+  for (const entry of look) { entry.visible = true; entry.colour = null; }
+  explode = 0;
+  el("explode").value = 0;
+  el("explodeValue").textContent = "0";
+  applyLook();
+  buildPartList();
+};
+
+for (const button of document.querySelectorAll("[data-cam]")) {
+  button.onclick = () => {
+    setView(PRESETS[Number(button.dataset.cam)]);
+    for (const other of document.querySelectorAll("[data-cam]"))
+      other.setAttribute("aria-pressed", String(other === button));
+  };
+}
+
+addEventListener("keydown", (e) => {
+  if (e.target.tagName === "SELECT" || e.target.tagName === "INPUT") return;
+  const step = e.shiftKey ? 10 : 1;
+  if (e.code === "Space") { e.preventDefault(); setPlaying(!playing); }
+  else if (e.code === "ArrowRight") { setPlaying(false); setFrame(frame + step); }
+  else if (e.code === "ArrowLeft") { setPlaying(false); setFrame(frame - step); }
+  else if (e.code === "BracketRight") jumpMove(1);
+  else if (e.code === "BracketLeft") jumpMove(-1);
+  else if (e.code === "Home") setFrame(0);
+  else if (e.code === "End") setFrame(frameCount - 1);
+  else if (e.code === "KeyF") frameCell();
+  else if (e.code === "KeyD") el("dimensions").click();
+  else if (e.code === "KeyX") {
+    // Snap between assembled and fully apart, which is how an exploded view is
+    // usually looked at — the slider is for stopping somewhere in between.
+    el("explode").value = explode > 0 ? 0 : 100;
+    el("explode").dispatchEvent(new Event("input"));
+  }
+});
+
+addEventListener("resize", resize);
+
+// Read once synchronously so nothing can paint or build a swatch before the
+// palette exists, then let the theme drive it from there.
+readPalette();
+initTheme(() => readPalette());
+
+init()
+  .then(() => { resize(); requestAnimationFrame(tick); return build(); })
+  .catch((error) => {
+    el("bannerText").innerHTML =
+      "Could not load the wasm module.<br><br>Build it with " +
+      "<code>crates/threers-robot-arm/build.sh</code>, then serve this " +
+      "directory:<br><code>python3 -m http.server --directory web 8080</code>" +
+      "<br><br><small>" + error + "</small>";
+  });
+</script>
+</body>
+</html>

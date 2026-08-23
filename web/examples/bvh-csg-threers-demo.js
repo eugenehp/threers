@@ -91,84 +91,90 @@ function runScenario() {
     showResult(scene, mat, payload);
 }
 
-try {
-    if (!isBvhCsgEnabled()) {
-        throw new Error('bvh-csg is disabled. Rebuild with: BVH_CSG=1 web/build.sh');
-    }
-
-    await initThreers({ module_or_path: '/web/pkg/threers_bg.wasm' });
-    installBvhCsg(THREE);
-
-    const canvas = document.getElementById('canvas');
-    const preview = canvas.parentElement;
-
-    function resizeCanvas() {
-        const dpr = Math.min(devicePixelRatio || 1, 2);
-        const w = Math.floor(preview.clientWidth * dpr);
-        const h = Math.floor(preview.clientHeight * dpr);
-        canvas.width = w;
-        canvas.height = h;
-        return { w, h };
-    }
-
-    let { w, h } = resizeCanvas();
-    const renderer = await THREE.WebGLRenderer.create(canvas);
-    renderer.setSize(w, h, false);
-
-    scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x101418);
-    scene.add(new THREE.AmbientLight(0xffffff, 0.45));
-    const dl = new THREE.DirectionalLight(0xffffff, 1);
-    dl.position.set(3, 5, 2);
-    scene.add(dl);
-
-    mat = new THREE.MeshStandardMaterial({ color: 0x4488cc, roughness: 0.45, metalness: 0.1 });
-
-    if (scenariosEl) {
-        for (const sc of SCENARIOS) {
-            const btn = document.createElement('button');
-            btn.type = 'button';
-            btn.textContent = sc.label;
-            btn.dataset.scenario = sc.id;
-            btn.addEventListener('click', () => {
-                currentScenario = sc.id;
-                const ops = getOpsForScenario(currentScenario);
-                currentOp = ops[0]?.value ?? 0;
-                for (const b of scenariosEl.querySelectorAll('button')) {
-                    b.classList.toggle('active', b === btn);
-                }
-                rebuildOpButtons();
-                runScenario();
-            });
-            scenariosEl.appendChild(btn);
+// Wrapped in an async IIFE rather than using top-level `await`, which is
+// ES2022 module syntax and needs Safari 15. A syntax error is not recoverable —
+// the module never loads and the page reports one error a long way from the
+// cause — so the cost of the wrapper is worth the floor it buys.
+(async () => {
+    try {
+        if (!isBvhCsgEnabled()) {
+            throw new Error('bvh-csg is disabled. Rebuild with: BVH_CSG=1 web/build.sh');
         }
-        scenariosEl.querySelector('[data-scenario="simple"]')?.classList.add('active');
-    }
 
-    rebuildOpButtons();
+        await initThreers({ module_or_path: '/web/pkg/threers_bg.wasm' });
+        installBvhCsg(THREE);
 
-    const camera = new THREE.PerspectiveCamera(50, w / h, 0.1, 100);
-    camera.position.set(2.5, 2, 3.5);
-    camera.lookAt(0, 0, 0);
+        const canvas = document.getElementById('canvas');
+        const preview = canvas.parentElement;
 
-    const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        function resizeCanvas() {
+            const dpr = Math.min(devicePixelRatio || 1, 2);
+            const w = Math.floor(preview.clientWidth * dpr);
+            const h = Math.floor(preview.clientHeight * dpr);
+            canvas.width = w;
+            canvas.height = h;
+            return { w, h };
+        }
 
-    addEventListener('resize', () => {
-        ({ w, h } = resizeCanvas());
+        let { w, h } = resizeCanvas();
+        const renderer = await THREE.WebGLRenderer.create(canvas);
         renderer.setSize(w, h, false);
-        camera.aspect = w / h;
-        camera.updateProjectionMatrix();
-    });
 
-    runScenario();
+        scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x101418);
+        scene.add(new THREE.AmbientLight(0xffffff, 0.45));
+        const dl = new THREE.DirectionalLight(0xffffff, 1);
+        dl.position.set(3, 5, 2);
+        scene.add(dl);
 
-    function frame() {
-        requestAnimationFrame(frame);
-        controls.update();
-        renderer.render(scene, camera);
+        mat = new THREE.MeshStandardMaterial({ color: 0x4488cc, roughness: 0.45, metalness: 0.1 });
+
+        if (scenariosEl) {
+            for (const sc of SCENARIOS) {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.textContent = sc.label;
+                btn.dataset.scenario = sc.id;
+                btn.addEventListener('click', () => {
+                    currentScenario = sc.id;
+                    const ops = getOpsForScenario(currentScenario);
+                    currentOp = ops[0]?.value ?? 0;
+                    for (const b of scenariosEl.querySelectorAll('button')) {
+                        b.classList.toggle('active', b === btn);
+                    }
+                    rebuildOpButtons();
+                    runScenario();
+                });
+                scenariosEl.appendChild(btn);
+            }
+            scenariosEl.querySelector('[data-scenario="simple"]')?.classList.add('active');
+        }
+
+        rebuildOpButtons();
+
+        const camera = new THREE.PerspectiveCamera(50, w / h, 0.1, 100);
+        camera.position.set(2.5, 2, 3.5);
+        camera.lookAt(0, 0, 0);
+
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+
+        addEventListener('resize', () => {
+            ({ w, h } = resizeCanvas());
+            renderer.setSize(w, h, false);
+            camera.aspect = w / h;
+            camera.updateProjectionMatrix();
+        });
+
+        runScenario();
+
+        function frame() {
+            requestAnimationFrame(frame);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+        frame();
+    } catch (e) {
+        setStatus('error');
+        showError(e);
     }
-    frame();
-} catch (e) {
-    setStatus('error');
-    showError(e);
-}
+})();

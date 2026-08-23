@@ -106,6 +106,7 @@ pub fn build_bvh(geometry: &BufferGeometry, options: BuildOptions) -> Option<Bui
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_recursive(
     positions: &[f32],
     triangle_indices: &[(u32, u32, u32)],
@@ -185,6 +186,7 @@ fn build_recursive(
     node_index
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_split(
     positions: &[f32],
     triangle_indices: &[(u32, u32, u32)],
@@ -272,6 +274,8 @@ fn partition_bounds(
     let mut right = Box3::empty();
     let mut left_count = 0usize;
     let mut right_count = 0usize;
+    // `i` walks a slice of the shared permutation, which is written back below.
+    #[allow(clippy::needless_range_loop)]
     for i in start..start + count {
         let tri_idx = triangle_order[i];
         let tri = triangle_indices[tri_idx];

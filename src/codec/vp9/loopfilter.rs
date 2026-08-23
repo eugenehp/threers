@@ -183,7 +183,7 @@ const ABOVE_BORDER_UV: u16 = 0x000f;
 /// `first_block_in_16x16[8][8]`: true where both `row` and `col` (mod 8) are even.
 #[inline]
 fn first_block_in_16x16(row_in_sb: usize, col_in_sb: usize) -> bool {
-    row_in_sb % 2 == 0 && col_in_sb % 2 == 0
+    row_in_sb.is_multiple_of(2) && col_in_sb.is_multiple_of(2)
 }
 
 /// Per-superblock loop filter mask state (`LOOP_FILTER_MASK`).
@@ -1107,7 +1107,7 @@ mod tests {
     }
 
     fn sb_align(n: usize) -> usize {
-        (n + 63) / 64 * 64
+        n.div_ceil(64) * 64
     }
 
     #[test]
@@ -1171,9 +1171,9 @@ mod tests {
         // Visible content is 40x24 (not a superblock multiple), exercising the
         // adjust_mask edge-clip paths, but per the buffer contract the actual
         // Y/U/V allocations are padded up to the enclosing 64x64/32x32 superblock.
-        let (w, h) = (40, 24);
-        let mi_rows = (h + 7) / 8;
-        let mi_cols = (w + 7) / 8;
+        let (w, h) = (40usize, 24usize);
+        let mi_rows = h.div_ceil(8);
+        let mi_cols = w.div_ceil(8);
         let mi = flat_mi(mi_rows, mi_cols, 30);
 
         let (pad_w, pad_h) = (sb_align(w), sb_align(h));

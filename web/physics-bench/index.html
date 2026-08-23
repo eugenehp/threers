@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>threers-physics — browser benchmark</title>
+<style>
+  :root {
+    --bg: #0e1116;
+    --panel: #171b22;
+    --line: #262c36;
+    --text: #e6e9ef;
+    --muted: #8b94a5;
+    --accent: #6ea8fe;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: grid; grid-template-columns: 320px 1fr; height: 100vh;
+  }
+  aside {
+    background: var(--panel); border-right: 1px solid var(--line);
+    padding: 20px; overflow-y: auto;
+  }
+  h1 { font-size: 16px; margin: 0 0 4px; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); font-size: 12px; margin-bottom: 20px; }
+  label { display: block; font-size: 12px; color: var(--muted); margin: 14px 0 4px; }
+  select, input[type=range] { width: 100%; }
+  select {
+    background: #0e1116; color: var(--text); border: 1px solid var(--line);
+    border-radius: 6px; padding: 7px 8px; font: inherit; font-size: 13px;
+  }
+  .row { display: flex; justify-content: space-between; align-items: baseline; }
+  .val { color: var(--accent); font-variant-numeric: tabular-nums; font-size: 12px; }
+  button {
+    background: #21262e; color: var(--text); border: 1px solid var(--line);
+    border-radius: 6px; padding: 8px 12px; font: inherit; font-size: 13px;
+    cursor: pointer; margin-top: 14px; width: 100%;
+  }
+  button:hover { background: #2b313b; border-color: #39414e; }
+  .stats {
+    margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--line);
+    display: grid; grid-template-columns: 1fr auto; gap: 6px 12px;
+    font-variant-numeric: tabular-nums; font-size: 12px;
+  }
+  .stats dt { color: var(--muted); }
+  .stats dd { margin: 0; text-align: right; color: var(--text); }
+  .big { font-size: 15px; color: var(--accent); font-weight: 600; }
+  canvas { display: block; width: 100%; height: 100%; }
+  .note {
+    margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line);
+    color: var(--muted); font-size: 11px; line-height: 1.6;
+  }
+  #err {
+    display: none; margin: 14px 0; padding: 10px 12px; border-radius: 6px;
+    background: #3a1d1d; border: 1px solid #5c2b2b; color: #ffb4b4; font-size: 12px;
+  }
+</style>
+</head>
+<body>
+<aside>
+  <h1>threers-physics</h1>
+  <div class="sub">Browser benchmark — every scene stresses a different stage.</div>
+
+  <div id="err"></div>
+
+  <label for="scene">Scene</label>
+  <select id="scene">
+    <option value="0">Pyramid — stacking, friction, sleeping</option>
+    <option value="1">Bouncing balls — restitution, broad phase</option>
+    <option value="2">Chains — joints, substepping</option>
+    <option value="3">Orbits — zero gravity, point gravity</option>
+    <option value="4">Mixed shapes — every narrow-phase pair</option>
+    <option value="5">Bullets — continuous collision detection</option>
+  </select>
+
+  <label for="quality">Quality</label>
+  <select id="quality">
+    <option value="0">Fast — 1 substep, 4 iterations</option>
+    <option value="1" selected>Balanced — 4 substeps, 4 iterations</option>
+    <option value="2">High — 8 substeps, 8 iterations</option>
+  </select>
+
+  <label for="count">
+    <span class="row"><span>Bodies</span><span class="val" id="countVal">120</span></span>
+  </label>
+  <input type="range" id="count" min="10" max="1500" step="10" value="120">
+
+  <button id="restart">Restart scene</button>
+  <button id="disturb">Disturb</button>
+
+  <dl class="stats">
+    <dt>Step time</dt><dd class="big" id="ms">—</dd>
+    <dt>Frames per second</dt><dd id="fps">—</dd>
+    <dt>Steps per second possible</dt><dd id="budget">—</dd>
+    <dt>Total bodies</dt><dd id="bodies">—</dd>
+    <dt>Asleep</dt><dd id="asleep">—</dd>
+    <dt>Contact manifolds</dt><dd id="contacts">—</dd>
+  </dl>
+
+  <div class="note">
+    Step time is the physics alone, measured around <code>step()</code>.
+    Drawing is a plain 2D canvas so the number is not clouded by a renderer.
+    <br><br>
+    Try <b>Chains</b> on <b>Fast</b> and then <b>High</b> — the sag is the
+    substepping difference. Try <b>Bullets</b> at low quality; CCD holds
+    regardless, because it is a sweep rather than a solver setting.
+  </div>
+</aside>
+
+<main><canvas id="view"></canvas></main>
+
+<script type="module">
+import init, { PhysicsBench } from "../pkg-physics-bench/threers_physics_bench.js";
+
+const canvas = document.getElementById("view");
+const ctx = canvas.getContext("2d");
+const err = document.getElementById("err");
+
+const ui = {
+  scene: document.getElementById("scene"),
+  quality: document.getElementById("quality"),
+  count: document.getElementById("count"),
+  countVal: document.getElementById("countVal"),
+  ms: document.getElementById("ms"),
+  fps: document.getElementById("fps"),
+  budget: document.getElementById("budget"),
+  bodies: document.getElementById("bodies"),
+  asleep: document.getElementById("asleep"),
+  contacts: document.getElementById("contacts"),
+};
+
+// Camera framing per scene, since they occupy very different volumes.
+const FRAMING = [
+  { dist: 26, height: 5 },   // pyramid
+  { dist: 34, height: 0 },   // bouncing balls
+  { dist: 30, height: 4 },   // chains
+  { dist: 44, height: 12 },  // orbits
+  { dist: 34, height: 6 },   // mixed
+  { dist: 46, height: 4 },   // bullets
+];
+
+let bench = null;
+let orbit = 0;
+let msAverage = 0;
+let frameAverage = 16.7;
+
+function resize() {
+  const rect = canvas.getBoundingClientRect();
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+window.addEventListener("resize", resize);
+
+function rebuild() {
+  const scene = +ui.scene.value;
+  const count = +ui.count.value;
+  const quality = +ui.quality.value;
+  try {
+    bench = new PhysicsBench(scene, count, quality);
+    msAverage = 0;
+  } catch (e) {
+    err.style.display = "block";
+    err.textContent = "Failed to build the scene: " + e;
+  }
+}
+
+ui.count.addEventListener("input", () => {
+  ui.countVal.textContent = ui.count.value;
+});
+for (const el of [ui.scene, ui.quality, ui.count]) {
+  el.addEventListener("change", rebuild);
+}
+document.getElementById("restart").addEventListener("click", rebuild);
+document.getElementById("disturb").addEventListener("click", () => bench && bench.disturb(4.0));
+
+/** Tint from a 0..1 index, matching the panel's palette. */
+function tint(t, sleeping) {
+  const hue = 200 + t * 140;
+  return sleeping ? `hsl(${hue} 18% 42%)` : `hsl(${hue} 68% 62%)`;
+}
+
+function draw() {
+  const w = canvas.clientWidth;
+  const h = canvas.clientHeight;
+  ctx.fillStyle = "#0e1116";
+  ctx.fillRect(0, 0, w, h);
+  if (!bench) return;
+
+  const framing = FRAMING[+ui.scene.value] || FRAMING[0];
+  const data = bench.renderData();
+  const focal = h * 0.9;
+  const cos = Math.cos(orbit);
+  const sin = Math.sin(orbit);
+
+  // Project to camera space, then sort back-to-front so nearer bodies overlap
+  // the ones behind them — a painter's algorithm is plenty for spheres.
+  const items = [];
+  for (let i = 0; i < data.length; i += 6) {
+    const x = data[i], y = data[i + 1], z = data[i + 2];
+    const cx = x * cos - z * sin;
+    const cz = x * sin + z * cos + framing.dist;
+    if (cz <= 0.6) continue;
+    items.push({
+      sx: w / 2 + (cx * focal) / cz,
+      sy: h / 2 - ((y - framing.height) * focal) / cz,
+      r: Math.max(1, (data[i + 3] * focal) / cz),
+      depth: cz,
+      tint: data[i + 4],
+      sleeping: data[i + 5] > 0.5,
+    });
+  }
+  items.sort((a, b) => b.depth - a.depth);
+
+  for (const it of items) {
+    ctx.beginPath();
+    ctx.arc(it.sx, it.sy, it.r, 0, Math.PI * 2);
+    ctx.fillStyle = tint(it.tint, it.sleeping);
+    ctx.fill();
+  }
+}
+
+let lastFrame = performance.now();
+
+function frame(now) {
+  const frameMs = now - lastFrame;
+  lastFrame = now;
+  frameAverage += (frameMs - frameAverage) * 0.1;
+
+  if (bench) {
+    const t0 = performance.now();
+    bench.step();
+    const stepMs = performance.now() - t0;
+    bench.record(stepMs);
+    // Exponential average: a single slow frame should not dominate the readout.
+    msAverage += (stepMs - msAverage) * 0.1;
+
+    ui.ms.textContent = msAverage.toFixed(2) + " ms";
+    ui.fps.textContent = (1000 / frameAverage).toFixed(0);
+    ui.budget.textContent = msAverage > 0 ? Math.round(1000 / msAverage) : "—";
+    ui.bodies.textContent = bench.bodyCount();
+    ui.asleep.textContent = bench.sleepingCount();
+    ui.contacts.textContent = bench.contactCount();
+  }
+
+  orbit += 0.0025;
+  draw();
+  requestAnimationFrame(frame);
+}
+
+init()
+  .then(() => {
+    resize();
+    rebuild();
+    requestAnimationFrame(frame);
+  })
+  .catch((e) => {
+    err.style.display = "block";
+    err.textContent =
+      "Could not load the wasm module. Run crates/threers-physics-bench/build.sh, " +
+      "then serve the repo root over HTTP. (" + e + ")";
+  });
+</script>
+</body>
+</html>

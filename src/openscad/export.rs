@@ -16,7 +16,9 @@ use crate::core::BufferGeometry;
 /// Normalise a geometry to `(vertices, optional per-vertex normals, triangle
 /// indices)`. A non-indexed soup gets sequential indices; normals are dropped
 /// unless there is exactly one per vertex.
-fn tri_data(g: &BufferGeometry) -> Option<(Vec<[f32; 3]>, Option<Vec<[f32; 3]>>, Vec<u32>)> {
+type TriData = (Vec<[f32; 3]>, Option<Vec<[f32; 3]>>, Vec<u32>);
+
+fn tri_data(g: &BufferGeometry) -> Option<TriData> {
     let pos = &g.get_attribute("position")?.array;
     let verts: Vec<[f32; 3]> = pos.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect();
     if verts.len() < 3 {
@@ -24,9 +26,17 @@ fn tri_data(g: &BufferGeometry) -> Option<(Vec<[f32; 3]>, Option<Vec<[f32; 3]>>,
     }
     let normals = g
         .get_attribute("normal")
-        .map(|a| a.array.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect::<Vec<_>>())
+        .map(|a| {
+            a.array
+                .chunks_exact(3)
+                .map(|c| [c[0], c[1], c[2]])
+                .collect::<Vec<_>>()
+        })
         .filter(|n: &Vec<[f32; 3]>| n.len() == verts.len());
-    let indices = g.index.clone().unwrap_or_else(|| (0..verts.len() as u32).collect());
+    let indices = g
+        .index
+        .clone()
+        .unwrap_or_else(|| (0..verts.len() as u32).collect());
     Some((verts, normals, indices))
 }
 
@@ -78,10 +88,7 @@ pub fn geometry_to_off(g: &BufferGeometry) -> String {
 /// `_rels/.rels`, `3D/3dmodel.model`) zipped with stored (uncompressed) entries
 /// and correct CRC-32s, so real slicers open it.
 pub fn geometry_to_3mf(g: &BufferGeometry) -> Vec<u8> {
-    let (verts, _, indices) = match tri_data(g) {
-        Some(t) => t,
-        None => (Vec::new(), None, Vec::new()),
-    };
+    let (verts, _, indices) = tri_data(g).unwrap_or_default();
     let mut model = String::from(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
          <model unit=\"millimeter\" xml:lang=\"en-US\" \
@@ -89,13 +96,21 @@ pub fn geometry_to_3mf(g: &BufferGeometry) -> Vec<u8> {
          <resources><object id=\"1\" type=\"model\"><mesh><vertices>",
     );
     for v in &verts {
-        model.push_str(&format!("<vertex x=\"{}\" y=\"{}\" z=\"{}\"/>", v[0], v[1], v[2]));
+        model.push_str(&format!(
+            "<vertex x=\"{}\" y=\"{}\" z=\"{}\"/>",
+            v[0], v[1], v[2]
+        ));
     }
     model.push_str("</vertices><triangles>");
     for t in indices.chunks_exact(3) {
-        model.push_str(&format!("<triangle v1=\"{}\" v2=\"{}\" v3=\"{}\"/>", t[0], t[1], t[2]));
+        model.push_str(&format!(
+            "<triangle v1=\"{}\" v2=\"{}\" v3=\"{}\"/>",
+            t[0], t[1], t[2]
+        ));
     }
-    model.push_str("</triangles></mesh></object></resources><build><item objectid=\"1\"/></build></model>");
+    model.push_str(
+        "</triangles></mesh></object></resources><build><item objectid=\"1\"/></build></model>",
+    );
 
     let content_types = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
         <Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">\
@@ -123,7 +138,11 @@ struct Zip {
 }
 impl Zip {
     fn new() -> Self {
-        Self { out: Vec::new(), dir: Vec::new(), count: 0 }
+        Self {
+            out: Vec::new(),
+            dir: Vec::new(),
+            count: 0,
+        }
     }
     fn add(&mut self, name: &str, data: &[u8]) {
         let crc = crc32(data);
@@ -174,7 +193,11 @@ fn crc32(data: &[u8]) -> u32 {
     for &b in data {
         crc ^= b as u32;
         for _ in 0..8 {
-            crc = if crc & 1 != 0 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
+            crc = if crc & 1 != 0 {
+                (crc >> 1) ^ 0xEDB8_8320
+            } else {
+                crc >> 1
+            };
         }
     }
     !crc
@@ -264,16 +287,220 @@ pub fn geometry_to_glb(g: &BufferGeometry) -> Vec<u8> {
 
     // GLB container: 12-byte header + JSON chunk (space-padded) + BIN chunk (0-padded).
     let mut json_bytes = json.into_bytes();
-    while json_bytes.len() % 4 != 0 {
+    while !json_bytes.len().is_multiple_of(4) {
         json_bytes.push(b' ');
     }
-    while bin.len() % 4 != 0 {
+    while !bin.len().is_multiple_of(4) {
         bin.push(0);
     }
     let total = 12 + 8 + json_bytes.len() + 8 + bin.len();
     let mut glb = Vec::with_capacity(total);
     glb.extend_from_slice(b"glTF"); // magic
     glb.extend_from_slice(&2u32.to_le_bytes()); // version
+    glb.extend_from_slice(&(total as u32).to_le_bytes());
+    glb.extend_from_slice(&(json_bytes.len() as u32).to_le_bytes());
+    glb.extend_from_slice(b"JSON");
+    glb.extend_from_slice(&json_bytes);
+    glb.extend_from_slice(&(bin.len() as u32).to_le_bytes());
+    glb.extend_from_slice(b"BIN\0");
+    glb.extend_from_slice(&bin);
+    glb
+}
+
+/// Export colored OpenSCAD [`crate::openscad::ScadPart`]s as a multi-mesh **glTF 2.0** `.glb`.
+pub fn parts_to_glb(parts: &[crate::openscad::ScadPart]) -> Vec<u8> {
+    use crate::openscad::ScadPart;
+
+    let mut bin: Vec<u8> = Vec::new();
+    let mut buffer_views: Vec<String> = Vec::new();
+    let mut accessors: Vec<String> = Vec::new();
+    let mut meshes: Vec<String> = Vec::new();
+    let mut nodes: Vec<String> = Vec::new();
+    let mut materials: Vec<String> = Vec::new();
+    let mut mat_map: Vec<(u32, u32, u32, u32)> = Vec::new();
+
+    let default_rgba = [0.91_f32, 0.93, 0.95, 1.0];
+    let pbr = |rgba: [f32; 4]| -> (f32, f32) {
+        let (r, g, b) = (rgba[0], rgba[1], rgba[2]);
+        // Warm glass tag
+        if r > 0.85 && g > 0.75 && b < 0.55 {
+            return (0.55, 0.06);
+        }
+        // Solar cells — blue-black
+        if r < 0.08 && g < 0.08 && b < 0.12 {
+            return (0.08, 0.32);
+        }
+        // Dark MLI / logos
+        if r < 0.15 && g < 0.16 && b < 0.20 {
+            return (0.12, 0.74);
+        }
+        // Docking marker red
+        if r > 0.65 && g < 0.20 && b < 0.25 {
+            return (0.55, 0.35);
+        }
+        // Docking marker blue
+        if r < 0.15 && g > 0.22 && b > 0.55 {
+            return (0.55, 0.35);
+        }
+        // Gold EVA
+        if r > 0.65 && g > 0.55 && b < 0.45 {
+            return (0.90, 0.24);
+        }
+        // White quilted MLI (warm off-white)
+        if r > 0.85 && g > 0.82 && b < 0.92 && r - b > 0.02 {
+            return (0.04, 0.86);
+        }
+        // Near-neutral white hull
+        if r > 0.92 && g > 0.92 && b > 0.92 {
+            return (0.32, 0.48);
+        }
+        // Silver trim (blue-shifted)
+        if b > r + 0.03 && b > g && r > 0.55 {
+            return (0.82, 0.18);
+        }
+        // Hull fallback
+        (0.32, 0.48)
+    };
+
+    let mut mat_idx = |rgba: [f32; 4]| -> usize {
+        let key = (
+            (rgba[0] * 255.0).round() as u32,
+            (rgba[1] * 255.0).round() as u32,
+            (rgba[2] * 255.0).round() as u32,
+            (rgba[3] * 255.0).round() as u32,
+        );
+        if let Some(i) = mat_map.iter().position(|k| *k == key) {
+            return i;
+        }
+        let i = materials.len();
+        mat_map.push(key);
+        let (metal, rough) = pbr(rgba);
+        materials.push(format!(
+            "{{\"pbrMetallicRoughness\":{{\"baseColorFactor\":[{},{},{},{}],\"metallicFactor\":{},\"roughnessFactor\":{}}}}}",
+            rgba[0], rgba[1], rgba[2], rgba[3], metal, rough
+        ));
+        i
+    };
+
+    let arr3 = |a: [f32; 3]| format!("[{},{},{}]", a[0], a[1], a[2]);
+
+    for part in parts {
+        let ScadPart { geometry, color } = part;
+        let Some((verts, normals, indices)) = tri_data(geometry) else {
+            continue;
+        };
+        if indices.is_empty() {
+            continue;
+        }
+
+        let rgba = color.unwrap_or(default_rgba);
+        let mi = mat_idx(rgba);
+
+        let idx_off = bin.len();
+        for &i in &indices {
+            bin.extend_from_slice(&i.to_le_bytes());
+        }
+        let idx_len = bin.len() - idx_off;
+        let idx_bv = buffer_views.len();
+        buffer_views.push(format!(
+            "{{\"buffer\":0,\"byteOffset\":{idx_off},\"byteLength\":{idx_len},\"target\":34963}}"
+        ));
+        let idx_acc = accessors.len();
+        accessors.push(format!(
+            "{{\"bufferView\":{idx_bv},\"componentType\":5125,\"count\":{},\"type\":\"SCALAR\"}}",
+            indices.len()
+        ));
+
+        let pos_off = bin.len();
+        for v in &verts {
+            for c in v {
+                bin.extend_from_slice(&c.to_le_bytes());
+            }
+        }
+        let pos_len = bin.len() - pos_off;
+        let pos_bv = buffer_views.len();
+        buffer_views.push(format!(
+            "{{\"buffer\":0,\"byteOffset\":{pos_off},\"byteLength\":{pos_len},\"target\":34962}}"
+        ));
+
+        let (mut mn, mut mx) = ([f32::MAX; 3], [f32::MIN; 3]);
+        for v in &verts {
+            for k in 0..3 {
+                mn[k] = mn[k].min(v[k]);
+                mx[k] = mx[k].max(v[k]);
+            }
+        }
+        let pos_acc = accessors.len();
+        accessors.push(format!(
+            "{{\"bufferView\":{pos_bv},\"componentType\":5126,\"count\":{},\"type\":\"VEC3\",\"min\":{},\"max\":{}}}",
+            verts.len(),
+            arr3(mn),
+            arr3(mx)
+        ));
+
+        let nrm_acc = if let Some(n) = &normals {
+            let nrm_off = bin.len();
+            for v in n {
+                for c in v {
+                    bin.extend_from_slice(&c.to_le_bytes());
+                }
+            }
+            let nrm_len = bin.len() - nrm_off;
+            let nrm_bv = buffer_views.len();
+            buffer_views.push(format!(
+                "{{\"buffer\":0,\"byteOffset\":{nrm_off},\"byteLength\":{nrm_len},\"target\":34962}}"
+            ));
+            let acc = accessors.len();
+            accessors.push(format!(
+                "{{\"bufferView\":{nrm_bv},\"componentType\":5126,\"count\":{},\"type\":\"VEC3\"}}",
+                n.len()
+            ));
+            Some(acc)
+        } else {
+            None
+        };
+
+        let attrs = if let Some(na) = nrm_acc {
+            format!("\"POSITION\":{pos_acc},\"NORMAL\":{na}")
+        } else {
+            format!("\"POSITION\":{pos_acc}")
+        };
+        let mesh_idx = meshes.len();
+        meshes.push(format!(
+            "{{\"primitives\":[{{\"attributes\":{{{attrs}}},\"indices\":{idx_acc},\"material\":{mi},\"mode\":4}}]}}"
+        ));
+        nodes.push(format!("{{\"mesh\":{mesh_idx}}}"));
+    }
+
+    if meshes.is_empty() {
+        return Vec::new();
+    }
+
+    let node_list: String = (0..nodes.len()).map(|i| i.to_string()).collect::<Vec<_>>().join(",");
+    let json = format!(
+        "{{\"asset\":{{\"version\":\"2.0\",\"generator\":\"threers\"}},\
+         \"scene\":0,\"scenes\":[{{\"nodes\":[{node_list}]}}],\
+         \"nodes\":[{}],\"meshes\":[{}],\"materials\":[{}],\
+         \"buffers\":[{{\"byteLength\":{}}}],\"bufferViews\":[{}],\"accessors\":[{}]}}",
+        nodes.join(","),
+        meshes.join(","),
+        materials.join(","),
+        bin.len(),
+        buffer_views.join(","),
+        accessors.join(","),
+    );
+
+    let mut json_bytes = json.into_bytes();
+    while !json_bytes.len().is_multiple_of(4) {
+        json_bytes.push(b' ');
+    }
+    while !bin.len().is_multiple_of(4) {
+        bin.push(0);
+    }
+    let total = 12 + 8 + json_bytes.len() + 8 + bin.len();
+    let mut glb = Vec::with_capacity(total);
+    glb.extend_from_slice(b"glTF");
+    glb.extend_from_slice(&2u32.to_le_bytes());
     glb.extend_from_slice(&(total as u32).to_le_bytes());
     glb.extend_from_slice(&(json_bytes.len() as u32).to_le_bytes());
     glb.extend_from_slice(b"JSON");
@@ -306,7 +533,9 @@ mod tests {
         let back = crate::ObjLoader::parse(&obj);
         let n_in = g.index.as_ref().map(|i| i.len() / 3).unwrap_or(vlines / 3);
         let n_out = back.index.as_ref().map(|i| i.len() / 3).unwrap_or_else(|| {
-            back.get_attribute("position").map(|a| a.count() / 3).unwrap_or(0)
+            back.get_attribute("position")
+                .map(|a| a.count() / 3)
+                .unwrap_or(0)
         });
         assert_eq!(n_out, n_in, "obj triangle count changed on round-trip");
     }
@@ -317,9 +546,18 @@ mod tests {
         let off = geometry_to_off(&g);
         let mut lines = off.lines();
         assert_eq!(lines.next(), Some("OFF"));
-        let counts: Vec<usize> = lines.next().unwrap().split_whitespace().map(|s| s.parse().unwrap()).collect();
+        let counts: Vec<usize> = lines
+            .next()
+            .unwrap()
+            .split_whitespace()
+            .map(|s| s.parse().unwrap())
+            .collect();
         let (nv, nf) = (counts[0], counts[1]);
-        assert_eq!(off.lines().filter(|l| l.starts_with("3 ")).count(), nf, "face count");
+        assert_eq!(
+            off.lines().filter(|l| l.starts_with("3 ")).count(),
+            nf,
+            "face count"
+        );
         // vertex lines = total - header(2) - faces
         assert_eq!(off.lines().count() - 2 - nf, nv, "vertex count");
     }
@@ -352,7 +590,10 @@ mod tests {
         assert!(json.contains("\"version\":\"2.0\""));
         assert!(json.contains("\"POSITION\":1"));
         let n_v = g.get_attribute("position").unwrap().count(); // count() = vertices
-        assert!(json.contains(&format!("\"count\":{n_v}")), "position accessor count");
+        assert!(
+            json.contains(&format!("\"count\":{n_v}")),
+            "position accessor count"
+        );
         // Alignment: both chunks 4-byte aligned.
         assert_eq!(jlen % 4, 0);
         // BIN chunk present after the JSON chunk.

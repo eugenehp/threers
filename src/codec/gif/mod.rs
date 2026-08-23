@@ -530,7 +530,7 @@ where
                 if opaque_unique <= opts.max_colors as usize {
                     encode_with_global(width, height, plays, opts, &collected)
                 } else {
-                    encode_streaming(width, height, plays, opts, collected.into_iter(), expected)
+                    encode_streaming(width, height, plays, opts, collected, expected)
                 }
             }
         }
@@ -686,6 +686,7 @@ fn full_rect(w: usize, h: usize) -> Rect {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn choose_disposal(
     w: usize,
     h: usize,
@@ -837,6 +838,7 @@ fn prepare_frame(
     prepare_frame_with_palette(w, h, rgba, prev, opts, &palette, transparent, local)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn prepare_frame_with_palette(
     w: usize,
     h: usize,
@@ -955,6 +957,7 @@ fn pixels_differ(a: &[u8], b: &[u8], opts: &GifOptions) -> bool {
     dist2([a[0], a[1], a[2]], [b[0], b[1], b[2]]) > lossy_dist2(opts.lossy)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn index_region(
     stride_w: usize,
     _stride_h: usize,
@@ -999,12 +1002,11 @@ fn index_region(
                         continue;
                     }
                 }
-                if opts.transparency
-                    && transparent.is_some()
-                    && work[o + 3] < opts.alpha_threshold as f32
-                {
-                    out[pi] = transparent.unwrap();
-                    continue;
+                if let Some(t) = transparent {
+                    if opts.transparency && work[o + 3] < opts.alpha_threshold as f32 {
+                        out[pi] = t;
+                        continue;
+                    }
                 }
 
                 let rgb = [
@@ -1054,9 +1056,10 @@ fn index_region(
                         continue;
                     }
                 }
-                if opts.transparency && transparent.is_some() && rgba[i + 3] < opts.alpha_threshold
+                if let Some(t) =
+                    transparent.filter(|_| opts.transparency && rgba[i + 3] < opts.alpha_threshold)
                 {
-                    out[pi] = transparent.unwrap();
+                    out[pi] = t;
                 } else {
                     let neighbor = if lx > 0 {
                         Some(out[pi - 1])
@@ -1121,6 +1124,7 @@ fn write_header(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn write_image(
     out: &mut impl Write,
     delay_cs: u16,
@@ -1454,10 +1458,8 @@ fn collect_leaves(node: &OctNode, out: &mut Vec<[u8; 3]>) {
         }
         return;
     }
-    for c in &node.children {
-        if let Some(ch) = c {
-            collect_leaves(ch, out);
-        }
+    for ch in node.children.iter().flatten() {
+        collect_leaves(ch, out);
     }
 }
 

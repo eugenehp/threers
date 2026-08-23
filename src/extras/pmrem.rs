@@ -14,8 +14,8 @@ const LOD_MIN: u32 = 4;
 const EXTRA_LOD_SIGMA: [f32; 6] = [0.125, 0.215, 0.35, 0.446, 0.526, 0.582];
 const MAX_BLUR_SAMPLES: u32 = 20;
 
-const PHI: f32 = 1.618_033_988_749_895;
-const INV_PHI: f32 = 0.618_033_988_749_894_9;
+const PHI: f32 = 1.618_034;
+const INV_PHI: f32 = 0.618_034;
 
 /// Dodecahedron axis directions used by three.js PMREM blur passes.
 const BLUR_POLE_AXES: [Vector3; 10] = [
@@ -82,7 +82,7 @@ impl PmremGenerator {
 
     /// Build a PMREM CubeUV atlas from `input` at the requested base face size.
     pub fn generate_pmrem(input: &CubeTexture, size: u32) -> CubeTexture {
-        let cube_size = size.max(16).min(256);
+        let cube_size = size.clamp(16, 256);
         let base = prepare_pmrem_cube(input, cube_size);
 
         let lod_max = (cube_size as f32).log2().floor() as u32;
@@ -114,7 +114,7 @@ impl PmremGenerator {
                 .max(0.0)
                 .sqrt();
             if delta > 0.0 {
-                let pole = BLUR_POLE_AXES[(level_count - i - 1) as usize % BLUR_POLE_AXES.len()];
+                let pole = BLUR_POLE_AXES[(level_count - i - 1) % BLUR_POLE_AXES.len()];
                 // Do not copy the full atlas into ping — three.js only renders the blur viewport
                 // into the ping target; stale mip0 in ping was leaking into long-pass samples.
                 blur_atlas_half(
@@ -202,6 +202,74 @@ impl PmremGenerator {
         blend_cube_mips(&pmrem, idx, idx1, frac)
     }
 
+    /// Convert a **linear f32** equirectangular image (e.g. from
+    /// [`crate::loaders::HdrLoader::parse_f32`]) into an HDR `CubeTexture`.
+    ///
+    /// This is the entry point for real image-based lighting: the returned cube
+    /// keeps values above 1.0, and [`Self::generate_pmrem`] will prefilter them
+    /// into a `Rgba16Float` atlas rather than clamping.
+    pub fn from_equirect_f32(
+        equirect: &[f32],
+        src_w: u32,
+        src_h: u32,
+        cube_size: u32,
+    ) -> CubeTexture {
+        let n = cube_size.max(1) as usize;
+        let face_len = n * n * 4;
+        if equirect.is_empty() || src_w == 0 || src_h == 0 {
+            return CubeTexture::new_f32(cube_size, std::array::from_fn(|_| vec![0.0; face_len]));
+        }
+        let (sw, sh) = (src_w as usize, src_h as usize);
+
+        let faces: [Vec<f32>; 6] = std::array::from_fn(|face| {
+            let mut out = vec![0.0f32; face_len];
+            for y in 0..n {
+                for x in 0..n {
+                    let u = (x as f32 + 0.5) / n as f32 * 2.0 - 1.0;
+                    let v = (y as f32 + 0.5) / n as f32 * 2.0 - 1.0;
+                    // Normalise before the lookup. `cube_face_direction`
+                    // returns a point on the *cube*, not the sphere — its
+                    // longest component is 1 and the others run to ±1 — so
+                    // `asin(d.y)` is not the latitude unless it is normalised
+                    // first. Skipping that returns asin(±1) across the whole
+                    // +Y and -Y faces, painting each of them a single flat
+                    // colour, and skews the latitude on the other four
+                    // everywhere except their vertical centre line. The 8-bit
+                    // `from_equirect` below has always normalised; this is the
+                    // HDR path, and so the one that mattered.
+                    let d = cube_face_direction(face, u, v).normalize();
+
+                    // Equirect lookup: longitude from atan2, latitude from asin.
+                    let lon = d.z.atan2(d.x);
+                    let lat = d.y.clamp(-1.0, 1.0).asin();
+                    let su = (lon / (2.0 * PI) + 0.5).rem_euclid(1.0);
+                    let sv = (0.5 - lat / PI).clamp(0.0, 1.0);
+
+                    let fx = (su * sw as f32 - 0.5).clamp(0.0, (sw - 1) as f32);
+                    let fy = (sv * sh as f32 - 0.5).clamp(0.0, (sh - 1) as f32);
+                    let x0 = fx.floor() as usize;
+                    let y0 = fy.floor() as usize;
+                    let x1 = (x0 + 1) % sw; // wrap in longitude
+                    let y1 = (y0 + 1).min(sh - 1);
+                    let tx = fx - x0 as f32;
+                    let ty = fy - y0 as f32;
+
+                    let o = (y * n + x) * 4;
+                    for c in 0..4 {
+                        let p = |xx: usize, yy: usize| {
+                            equirect.get((yy * sw + xx) * 4 + c).copied().unwrap_or(0.0)
+                        };
+                        let top = p(x0, y0) + (p(x1, y0) - p(x0, y0)) * tx;
+                        let bot = p(x0, y1) + (p(x1, y1) - p(x0, y1)) * tx;
+                        out[o + c] = top + (bot - top) * ty;
+                    }
+                }
+            }
+            out
+        });
+        CubeTexture::new_f32(cube_size, faces)
+    }
+
     /// Convert an equirectangular HDR texture into a CubeTexture.
     pub fn from_equirect(
         equirect_rgba: &[u8],
@@ -238,7 +306,7 @@ impl PmremGenerator {
             ]
         };
         let mut faces: [Vec<u8>; 6] = Default::default();
-        for face in 0..6 {
+        for (face, slot) in faces.iter_mut().enumerate() {
             let mut data = Vec::with_capacity(face_pixels);
             for yi in 0..cube_size {
                 for xi in 0..cube_size {
@@ -262,7 +330,7 @@ impl PmremGenerator {
                     data.extend_from_slice(&p);
                 }
             }
-            faces[face] = data;
+            *slot = data;
         }
         let [f0, f1, f2, f3, f4, f5] = faces;
         CubeTexture::new(
@@ -447,6 +515,7 @@ fn rasterize_mip0_cube_uv_to_atlas_f32(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn blur_atlas_half(
     src: &[f32],
     dst: &mut [f32],
@@ -641,7 +710,7 @@ fn half_blur_resample(
     let pole_axis = pole_axis.normalize();
     let face_pixels = (out_size as usize) * (out_size as usize) * 4;
     let mut faces: [Vec<u8>; 6] = Default::default();
-    for face in 0..6 {
+    for (face, slot) in faces.iter_mut().enumerate() {
         let mut data = Vec::with_capacity(face_pixels);
         for yi in 0..out_size {
             for xi in 0..out_size {
@@ -693,7 +762,7 @@ fn half_blur_resample(
                 ]);
             }
         }
-        faces[face] = data;
+        *slot = data;
     }
     let [f0, f1, f2, f3, f4, f5] = faces;
     CubeTexture::new(
@@ -717,12 +786,14 @@ fn prepare_pmrem_cube(input: &CubeTexture, size: u32) -> CubeTexture {
     } else {
         resize_cube(input, size)
     };
-    if src.format == TextureFormat::Rgba8Unorm {
+    // HDR faces are already linear and are what `sample_cube_linear` reads, so
+    // there is nothing to decode — and rebuilding the CubeTexture below would
+    // drop them.
+    if src.faces_f32.is_some() || src.format == TextureFormat::Rgba8Unorm {
         return src;
     }
     let mut faces: [Vec<u8>; 6] = Default::default();
-    for face in 0..6 {
-        let data = &src.faces[face];
+    for (slot, data) in faces.iter_mut().zip(&src.faces) {
         let mut out = Vec::with_capacity(data.len());
         for px in data.chunks(4) {
             if px.len() < 3 {
@@ -734,7 +805,7 @@ fn prepare_pmrem_cube(input: &CubeTexture, size: u32) -> CubeTexture {
             out.push(linear_to_byte(srgb_to_linear(px[2] as f32 / 255.0)));
             out.push(px.get(3).copied().unwrap_or(255));
         }
-        faces[face] = out;
+        *slot = out;
     }
     let [f0, f1, f2, f3, f4, f5] = faces;
     CubeTexture::new(size, TextureFormat::Rgba8Unorm, [f0, f1, f2, f3, f4, f5])
@@ -743,16 +814,54 @@ fn prepare_pmrem_cube(input: &CubeTexture, size: u32) -> CubeTexture {
 fn resize_cube(input: &CubeTexture, size: u32) -> CubeTexture {
     let face_pixels = (size as usize) * (size as usize) * 4;
     let mut faces: [Vec<u8>; 6] = Default::default();
-    for face in 0..6 {
-        faces[face] = resize_face_bytes(input.faces[face].as_ref(), input.size, size, input.format);
-        debug_assert_eq!(faces[face].len(), face_pixels);
+    for (slot, source) in faces.iter_mut().zip(&input.faces) {
+        *slot = resize_face_bytes(source.as_ref(), input.size, size, input.format);
+        debug_assert_eq!(slot.len(), face_pixels);
     }
     let [f0, f1, f2, f3, f4, f5] = faces;
-    CubeTexture::new(size, input.format, [f0, f1, f2, f3, f4, f5])
+    let mut out = CubeTexture::new(size, input.format, [f0, f1, f2, f3, f4, f5]);
+    // Carry the HDR faces through the resize too, else the f32 data is silently
+    // dropped here and the atlas falls back to the clamped 8-bit copy.
+    if let Some(src_f32) = input.faces_f32.as_ref() {
+        out.faces_f32 = Some(std::array::from_fn(|i| {
+            Arc::new(resize_face_f32(src_f32[i].as_ref(), input.size, size))
+        }));
+    }
+    out
 }
 
-#[cfg(test)]
-fn face_dir(face: usize, u: f32, v: f32) -> Vector3 {
+/// Bilinear resize of one linear f32 RGBA face.
+fn resize_face_f32(src: &[f32], src_size: u32, dst_size: u32) -> Vec<f32> {
+    let (sn, dn) = (src_size.max(1) as usize, dst_size.max(1) as usize);
+    let mut out = vec![0.0f32; dn * dn * 4];
+    if src.len() < sn * sn * 4 {
+        return out;
+    }
+    for y in 0..dn {
+        for x in 0..dn {
+            // Sample at destination texel centres mapped into source space.
+            let fx = ((x as f32 + 0.5) / dn as f32 * sn as f32 - 0.5).clamp(0.0, (sn - 1) as f32);
+            let fy = ((y as f32 + 0.5) / dn as f32 * sn as f32 - 0.5).clamp(0.0, (sn - 1) as f32);
+            let x0 = fx.floor() as usize;
+            let y0 = fy.floor() as usize;
+            let x1 = (x0 + 1).min(sn - 1);
+            let y1 = (y0 + 1).min(sn - 1);
+            let tx = fx - x0 as f32;
+            let ty = fy - y0 as f32;
+            for c in 0..4 {
+                let p = |xx: usize, yy: usize| src[(yy * sn + xx) * 4 + c];
+                let top = p(x0, y0) + (p(x1, y0) - p(x0, y0)) * tx;
+                let bot = p(x0, y1) + (p(x1, y1) - p(x0, y1)) * tx;
+                out[(y * dn + x) * 4 + c] = top + (bot - top) * ty;
+            }
+        }
+    }
+    out
+}
+
+/// Direction through texel (u, v) ∈ [-1, 1]² of cube face `face`, in the
+/// `+X, -X, +Y, -Y, +Z, -Z` order [`CubeTexture`] documents. Not normalised.
+fn cube_face_direction(face: usize, u: f32, v: f32) -> Vector3 {
     match face {
         0 => Vector3::new(1.0, -v, -u),
         1 => Vector3::new(-1.0, -v, u),
@@ -761,6 +870,11 @@ fn face_dir(face: usize, u: f32, v: f32) -> Vector3 {
         4 => Vector3::new(u, -v, 1.0),
         _ => Vector3::new(-u, -v, -1.0),
     }
+}
+
+#[cfg(test)]
+fn face_dir(face: usize, u: f32, v: f32) -> Vector3 {
+    cube_face_direction(face, u, v)
 }
 
 fn srgb_to_linear(c: f32) -> f32 {
@@ -786,6 +900,12 @@ fn linear_to_srgb_byte(c: f32) -> u8 {
 }
 
 fn sample_cube_linear(cube: &CubeTexture, dir: Vector3) -> [f32; 3] {
+    // HDR path: f32 faces are already linear and unbounded, so sample them
+    // directly. This is the single choke point that feeds the atlas — the rest
+    // of the blur chain is f32 already, so values above 1.0 survive from here.
+    if cube.faces_f32.is_some() {
+        return sample_cube_raw_f32(cube, dir);
+    }
     let rgb = sample_cube_raw(cube, dir);
     if matches!(cube.format, TextureFormat::Rgba8Unorm) {
         rgb
@@ -796,6 +916,70 @@ fn sample_cube_linear(cube: &CubeTexture, dir: Vector3) -> [f32; 3] {
             srgb_to_linear(rgb[2]),
         ]
     }
+}
+
+/// Bilinear sample of the linear f32 faces. Mirrors `sample_cube_raw`'s face
+/// selection exactly so the HDR and 8-bit paths agree on orientation.
+fn sample_cube_raw_f32(cube: &CubeTexture, dir: Vector3) -> [f32; 3] {
+    let Some(faces) = cube.faces_f32.as_ref() else {
+        return [0.0; 3];
+    };
+    let abs_x = dir.x.abs();
+    let abs_y = dir.y.abs();
+    let abs_z = dir.z.abs();
+    let (face, sc, tc, ma) = if abs_x >= abs_y && abs_x >= abs_z {
+        if dir.x > 0.0 {
+            (0, -dir.z, -dir.y, abs_x)
+        } else {
+            (1, dir.z, -dir.y, abs_x)
+        }
+    } else if abs_y >= abs_z {
+        if dir.y > 0.0 {
+            (2, dir.x, dir.z, abs_y)
+        } else {
+            (3, dir.x, -dir.z, abs_y)
+        }
+    } else if dir.z > 0.0 {
+        (4, dir.x, -dir.y, abs_z)
+    } else {
+        (5, -dir.x, -dir.y, abs_z)
+    };
+    let ma = ma.max(1e-8);
+    let s = ((sc / ma) * 0.5 + 0.5).clamp(0.0, 1.0);
+    let t = ((tc / ma) * 0.5 + 0.5).clamp(0.0, 1.0);
+
+    let n = cube.size.max(1) as usize;
+    let data = &faces[face];
+    if n <= 1 || data.len() < 4 {
+        return [
+            data.first().copied().unwrap_or(0.0),
+            data.get(1).copied().unwrap_or(0.0),
+            data.get(2).copied().unwrap_or(0.0),
+        ];
+    }
+    // Identical texel mapping to `sample_cube_raw` — the two must agree or the
+    // HDR and 8-bit paths disagree about where a face's edge is, which shows up
+    // as ghosting near face seams once the source has real dynamic range.
+    let max_coord = n as f32 - 1.001;
+    let fx = (s * n as f32).clamp(0.0, max_coord);
+    let fy = (t * n as f32).clamp(0.0, max_coord);
+    let x0 = fx.floor() as usize;
+    let y0 = fy.floor() as usize;
+    let x1 = (x0 + 1).min(n - 1);
+    let y1 = (y0 + 1).min(n - 1);
+    let tx = fx - x0 as f32;
+    let ty = fy - y0 as f32;
+
+    let at = |x: usize, y: usize, c: usize| -> f32 {
+        data.get((y * n + x) * 4 + c).copied().unwrap_or(0.0)
+    };
+    let mut out = [0.0f32; 3];
+    for (c, o) in out.iter_mut().enumerate() {
+        let top = at(x0, y0, c) + (at(x1, y0, c) - at(x0, y0, c)) * tx;
+        let bot = at(x0, y1, c) + (at(x1, y1, c) - at(x0, y1, c)) * tx;
+        *o = top + (bot - top) * ty;
+    }
+    out
 }
 
 fn sample_cube_raw(cube: &CubeTexture, dir: Vector3) -> [f32; 3] {
@@ -867,6 +1051,87 @@ mod tests {
             d[i * 4..i * 4 + 4].copy_from_slice(&[r, g, b, 255]);
         }
         d
+    }
+
+    /// Probe the prefiltered environment around a single bright sun and report
+    /// how many distinct peaks it has. There must be exactly one.
+    #[test]
+    fn pmrem_hdr_sun_does_not_ghost() {
+        let size = 64u32;
+        let n = size as usize;
+        // One tight, very bright sun along +Z; everything else near-black.
+        let sun = [0.0f32, 0.0, 1.0];
+        let faces: [Vec<f32>; 6] = std::array::from_fn(|face| {
+            let mut out = vec![0.0f32; n * n * 4];
+            for y in 0..n {
+                for x in 0..n {
+                    let u = (x as f32 + 0.5) / n as f32 * 2.0 - 1.0;
+                    let v = (y as f32 + 0.5) / n as f32 * 2.0 - 1.0;
+                    let d = cube_face_direction(face, u, v);
+                    let l = (d.x * d.x + d.y * d.y + d.z * d.z).sqrt().max(1e-6);
+                    let cos = (d.x * sun[0] + d.y * sun[1] + d.z * sun[2]) / l;
+                    let val = if cos > 0.995 { 400.0 } else { 0.01 };
+                    let o = (y * n + x) * 4;
+                    out[o] = val;
+                    out[o + 1] = val;
+                    out[o + 2] = val;
+                    out[o + 3] = 1.0;
+                }
+            }
+            out
+        });
+        let cube = CubeTexture::new_f32(size, faces);
+        let pmrem = PmremGenerator::generate_pmrem(&cube, size);
+        let atlas = pmrem.cube_uv_atlas.as_ref().expect("atlas");
+
+        // Sweep a great circle through the sun and count local maxima that are
+        // a meaningful fraction of the global peak.
+        let mut samples = Vec::new();
+        for i in 0..360 {
+            let a = (i as f32).to_radians();
+            let dir = [a.sin(), 0.0, a.cos()];
+            let c = crate::extras::cube_uv::sample_cube_uv_env(atlas, dir, 0.25);
+            samples.push(c[0]);
+        }
+        let peak = samples.iter().cloned().fold(0.0f32, f32::max);
+        let mut peaks = 0;
+        for i in 0..samples.len() {
+            let prev = samples[(i + samples.len() - 1) % samples.len()];
+            let next = samples[(i + 1) % samples.len()];
+            if samples[i] >= prev && samples[i] > next && samples[i] > peak * 0.15 {
+                peaks += 1;
+            }
+        }
+        assert_eq!(
+            peaks, 1,
+            "prefiltered HDR sun shows {peaks} peaks around a great circle \
+             (expected 1); a second peak is a ghost duplicated across a cube face seam"
+        );
+    }
+
+    /// HDR faces must survive prefiltering. The blur chain is f32 internally
+    /// and the atlas uploads as Rgba16Float, so a sun far above 1.0 should
+    /// still be above 1.0 after PMREM — if this regresses to <= 1.0 something
+    /// has quietly routed through the clamped 8-bit faces again.
+    #[test]
+    fn pmrem_preserves_values_above_one_from_f32_faces() {
+        let size = 32u32;
+        let n = (size * size) as usize;
+        // Uniform, very bright environment: every direction reads 50.0.
+        let faces: [Vec<f32>; 6] =
+            std::array::from_fn(|_| (0..n).flat_map(|_| [50.0f32, 50.0, 50.0, 1.0]).collect());
+        let cube = CubeTexture::new_f32(size, faces);
+        assert!(cube.faces_f32.is_some(), "f32 faces should be retained");
+
+        let pmrem = PmremGenerator::generate_pmrem(&cube, size);
+        let atlas = pmrem.cube_uv_atlas.as_ref().expect("atlas");
+        let px = atlas.pixels_f32.as_ref().expect("f32 atlas");
+        let peak = px.chunks(4).map(|c| c[0]).fold(0.0f32, f32::max);
+        assert!(
+            peak > 10.0,
+            "HDR range lost in PMREM: peak {peak} (expected ~50, <=1 means it \
+             went through the 8-bit faces)"
+        );
     }
 
     #[test]
@@ -1338,14 +1603,14 @@ mod tests {
         let fi = ((y * atlas.width + x) * 4) as usize;
         let cpu_texel = [f32_px[fi], f32_px[fi + 1], f32_px[fi + 2]];
 
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::all(),
-            ..Default::default()
-        });
+        let mut instance_desc = wgpu::InstanceDescriptor::new_without_display_handle();
+        instance_desc.backends = wgpu::Backends::all();
+        let instance = wgpu::Instance::new(instance_desc);
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             compatible_surface: None,
             force_fallback_adapter: false,
+            apply_limit_buckets: false,
         }))
         .expect("adapter");
         let (device, queue) = pollster::block_on(adapter.request_device(
@@ -1353,8 +1618,8 @@ mod tests {
                 label: Some("pmrem atlas test"),
                 required_features: wgpu::Features::empty(),
                 required_limits: wgpu::Limits::default(),
+                ..Default::default()
             },
-            None,
         ))
         .expect("device");
 
@@ -1375,15 +1640,15 @@ mod tests {
             label: Some("atlas readback"),
         });
         encoder.copy_texture_to_buffer(
-            wgpu::ImageCopyTexture {
+            wgpu::TexelCopyTextureInfo {
                 texture: tex,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            wgpu::ImageCopyBuffer {
+            wgpu::TexelCopyBufferInfo {
                 buffer: &buffer,
-                layout: wgpu::ImageDataLayout {
+                layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(padded_bpr),
                     rows_per_image: Some(atlas.height),
@@ -1402,9 +1667,9 @@ mod tests {
         slice.map_async(wgpu::MapMode::Read, move |res| {
             let _ = tx.send(res);
         });
-        device.poll(wgpu::Maintain::Wait);
+        let _ = device.poll(wgpu::PollType::wait_indefinitely());
         rx.recv().expect("map channel").expect("map async");
-        let data = slice.get_mapped_range();
+        let data = slice.get_mapped_range().expect("buffer range is mapped");
 
         let off = (y * padded_bpr + x * 8) as usize;
         let gpu_texel = [
@@ -1452,14 +1717,14 @@ mod tests {
         let atlas = pmrem.cube_uv_atlas.as_ref().expect("atlas");
         let cpu = sample_cube_uv_env(atlas, [0.0, 0.0, 1.0], 0.45);
 
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::all(),
-            ..Default::default()
-        });
+        let mut instance_desc = wgpu::InstanceDescriptor::new_without_display_handle();
+        instance_desc.backends = wgpu::Backends::all();
+        let instance = wgpu::Instance::new(instance_desc);
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             compatible_surface: None,
             force_fallback_adapter: false,
+            apply_limit_buckets: false,
         }))
         .expect("adapter");
         let (device, queue) = pollster::block_on(adapter.request_device(
@@ -1467,8 +1732,8 @@ mod tests {
                 label: Some("cube uv sample test"),
                 required_features: wgpu::Features::empty(),
                 required_limits: wgpu::Limits::default(),
+                ..Default::default()
             },
-            None,
         ))
         .expect("device");
 
@@ -1637,8 +1902,8 @@ fn bilinear_cube_uv(direction: vec3<f32>, mip_int: f32) -> vec3<f32> {
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: None,
-            bind_group_layouts: &[&bgl],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&bgl)],
+            immediate_size: 0,
         });
 
         let color_tex = device.create_texture(&wgpu::TextureDescriptor {
@@ -1662,13 +1927,13 @@ fn bilinear_cube_uv(direction: vec3<f32>, mip_int: f32) -> vec3<f32> {
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: "vs",
+                entry_point: Some("vs"),
                 buffers: &[],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: "fs",
+                entry_point: Some("fs"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: wgpu::TextureFormat::Rgba8Unorm,
                     blend: None,
@@ -1679,7 +1944,8 @@ fn bilinear_cube_uv(direction: vec3<f32>, mip_int: f32) -> vec3<f32> {
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
+            cache: None,
         });
 
         let mut encoder = device.create_command_encoder(&Default::default());
@@ -1688,6 +1954,7 @@ fn bilinear_cube_uv(direction: vec3<f32>, mip_int: f32) -> vec3<f32> {
                 label: None,
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &color_view,
+                    depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
@@ -1710,15 +1977,15 @@ fn bilinear_cube_uv(direction: vec3<f32>, mip_int: f32) -> vec3<f32> {
             mapped_at_creation: false,
         });
         encoder.copy_texture_to_buffer(
-            wgpu::ImageCopyTexture {
+            wgpu::TexelCopyTextureInfo {
                 texture: &color_tex,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            wgpu::ImageCopyBuffer {
+            wgpu::TexelCopyBufferInfo {
                 buffer: &read_buf,
-                layout: wgpu::ImageDataLayout {
+                layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(padded_bpr),
                     rows_per_image: Some(1),
@@ -1737,9 +2004,9 @@ fn bilinear_cube_uv(direction: vec3<f32>, mip_int: f32) -> vec3<f32> {
         slice.map_async(wgpu::MapMode::Read, move |r| {
             let _ = tx.send(r);
         });
-        device.poll(wgpu::Maintain::Wait);
+        let _ = device.poll(wgpu::PollType::wait_indefinitely());
         rx.recv().unwrap().unwrap();
-        let data = slice.get_mapped_range();
+        let data = slice.get_mapped_range().expect("buffer range is mapped");
         let gpu = [
             data[0] as f32 / 255.0,
             data[1] as f32 / 255.0,

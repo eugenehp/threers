@@ -10,14 +10,21 @@
 //! - the `frame` uniform (camera, lights, ambient, fog, tone-mapping),
 //! - the `mesh` uniform (model/normal matrices, color, params…),
 //! - every built-in helper (`pbr_brdf`, `apply_fog`, `framebuffer_encode`, …),
-//! - and a **user data group** at `@group(4)`:
+//! - and a **user data group** at `@group(1)`:
 //!
 //! ```wgsl
 //! struct ThreersUserData { data: array<vec4<f32>, 16>, };
-//! @group(4) @binding(0) var<uniform> u_data: ThreersUserData;
-//! @group(4) @binding(1) var<storage, read> u_s0: array<f32>;
-//! @group(4) @binding(2) var<storage, read> u_s1: array<f32>;
-//! @group(4) @binding(3) var<storage, read> u_s2: array<f32>;
+//! @group(1) @binding(1) var<uniform> u_data: ThreersUserData;
+//! @group(1) @binding(2) var<storage, read> u_s0: array<f32>;
+//! @group(1) @binding(3) var<storage, read> u_s1: array<f32>;
+//! @group(1) @binding(4) var<storage, read> u_s2: array<f32>;
+//! // Four optional user textures plus a linear-repeat sampler. Unset slots
+//! // read as opaque white.
+//! @group(1) @binding(5) var u_tex0: texture_2d<f32>;
+//! @group(1) @binding(6) var u_tex1: texture_2d<f32>;
+//! @group(1) @binding(7) var u_tex2: texture_2d<f32>;
+//! @group(1) @binding(8) var u_tex3: texture_2d<f32>;
+//! @group(1) @binding(9) var u_samp: sampler;
 //! ```
 //!
 //! You supply the fragment entry point:
@@ -30,7 +37,7 @@
 //! }
 //! ```
 
-/// A custom-shader material. See the [module docs](self) for the WGSL contract.
+/// A custom-shader material. See the module docs for the WGSL contract.
 #[derive(Debug, Clone)]
 pub struct ShaderMaterial {
     /// WGSL defining `@fragment fn fs_main(in: VsOut) -> @location(0) vec4<f32>`.
@@ -43,6 +50,22 @@ pub struct ShaderMaterial {
     pub storage0: Vec<f32>,
     pub storage1: Vec<f32>,
     pub storage2: Vec<f32>,
+    /// Up to four user-owned texture views, exposed as `u_tex0`..`u_tex3` and
+    /// sampled with `u_samp` (linear, repeat).
+    ///
+    /// These are raw wgpu handles on purpose: the point is to sample something
+    /// your own compute pass wrote this frame — a displacement cascade, an
+    /// accumulated foam field, a wake map — without a CPU round trip. Slots you
+    /// leave empty read as opaque white.
+    pub textures: Vec<std::sync::Arc<wgpu::TextureView>>,
+    /// Draw this material in the screen-space pass, with the opaque scene
+    /// available as `ss_color_tex` / `ss_depth_tex` at `@group(3)`.
+    ///
+    /// That is what makes screen-space reflection and refraction possible from a
+    /// custom shader: without it those bindings are 1x1 placeholders. Implies
+    /// alpha blending against the already-drawn scene, and the surface still
+    /// writes depth so later geometry sorts against it.
+    pub screen_space: bool,
     pub opacity: f32,
     pub transparent: bool,
     /// `0` = FrontSide, `1` = BackSide, `2` = DoubleSide.
@@ -57,6 +80,8 @@ impl Default for ShaderMaterial {
             storage0: Vec::new(),
             storage1: Vec::new(),
             storage2: Vec::new(),
+            textures: Vec::new(),
+            screen_space: false,
             opacity: 1.0,
             transparent: false,
             side: 0,
@@ -92,6 +117,17 @@ impl ShaderMaterial {
     /// Set storage buffer `u_s2`.
     pub fn with_storage2(mut self, s: Vec<f32>) -> Self {
         self.storage2 = s;
+        self
+    }
+    /// Attach user textures (`u_tex0`..`u_tex3`). At most four are used.
+    pub fn with_textures(mut self, t: Vec<std::sync::Arc<wgpu::TextureView>>) -> Self {
+        self.textures = t;
+        self
+    }
+    /// Draw in the screen-space pass so `ss_color_tex` / `ss_depth_tex` carry the
+    /// opaque scene. See [`Self::screen_space`].
+    pub fn with_screen_space(mut self, on: bool) -> Self {
+        self.screen_space = on;
         self
     }
     /// Material opacity (`0.0..=1.0`).

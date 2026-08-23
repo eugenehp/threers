@@ -49,7 +49,7 @@ export async function runExportDemo(
     .format(format)
     .size(W, H)
     .fps(15)
-    .transparent(format !== VideoFormat.Webm)
+    .transparent(format === VideoFormat.Gif || format === VideoFormat.Apng)
     .gifColors(64)
     .parallel(3)
     .frames(30)

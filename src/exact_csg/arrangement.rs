@@ -28,11 +28,7 @@ fn plane(tri: &[V3; 3]) -> (V3, f64) {
 /// or `None` unless exactly two edges strictly change side (degenerate cases,
 /// incl. a vertex exactly on the plane, are skipped).
 fn tri_plane_chord(tri: &[V3; 3], n: V3, d: f64) -> Option<(V3, V3)> {
-    let dist = [
-        dot(n, tri[0]) - d,
-        dot(n, tri[1]) - d,
-        dot(n, tri[2]) - d,
-    ];
+    let dist = [dot(n, tri[0]) - d, dot(n, tri[1]) - d, dot(n, tri[2]) - d];
     let mut pts: Vec<V3> = Vec::new();
     for (i, j) in [(0, 1), (1, 2), (2, 0)] {
         let (di, dj) = (dist[i], dist[j]);
@@ -144,11 +140,17 @@ mod tests {
         let a = cube([2.0, 2.0, 2.0]).to_geometry();
         let b = crate::sphere(1.3).to_geometry();
         let segs = intersection_segments(&a, &b);
-        assert!(!segs.is_empty(), "sphere through box must yield cut segments");
+        assert!(
+            !segs.is_empty(),
+            "sphere through box must yield cut segments"
+        );
         // No coincident-endpoint degenerates. (Genuine near-tangent grazes can be
         // legitimately tiny — geometric sliver cleanup is an M2/exact-arith concern.)
         for s in &segs {
-            assert!(dot(sub(s.1, s.0), sub(s.1, s.0)) > 1e-18, "no coincident-point segs");
+            assert!(
+                dot(sub(s.1, s.0), sub(s.1, s.0)) > 1e-18,
+                "no coincident-point segs"
+            );
         }
     }
 }

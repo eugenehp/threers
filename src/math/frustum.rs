@@ -2,17 +2,9 @@ use super::{Box3, Matrix4, Plane, Sphere, Vector3};
 
 /// View frustum as six planes (right, left, bottom, top, far, near).
 /// Mirrors three.js's `Frustum`.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct Frustum {
     pub planes: [Plane; 6],
-}
-
-impl Default for Frustum {
-    fn default() -> Self {
-        Self {
-            planes: [Plane::default(); 6],
-        }
-    }
 }
 
 impl Frustum {
@@ -20,8 +12,16 @@ impl Frustum {
         Self { planes }
     }
 
-    /// Extract frustum planes from a combined projection * view matrix.
-    /// Matches three.js's `setFromProjectionMatrix`.
+    /// Extract frustum planes from a combined projection * view matrix, for the
+    /// **WebGPU** clip space this crate projects into: x and y in -1..1, but
+    /// depth in 0..1.
+    ///
+    /// The four side planes are the usual `row3 ± rowN`. The NEAR plane is not:
+    /// at depth 0..1 it is `row2` alone, where the OpenGL form would be
+    /// `row3 + row2`. Using the OpenGL form put the extracted near plane at the
+    /// midpoint of the frustum, so culling discarded everything in the closer
+    /// half — which was consistent with `Matrix4::perspective` while that was
+    /// also OpenGL, and wrong for `orthographic`, which has always been 0..1.
     pub fn from_projection_matrix(m: &Matrix4) -> Self {
         let me = &m.elements;
         let p0 = Plane::new(
@@ -49,11 +49,7 @@ impl Frustum {
             me[15] - me[14],
         )
         .normalize();
-        let p5 = Plane::new(
-            Vector3::new(me[3] + me[2], me[7] + me[6], me[11] + me[10]),
-            me[15] + me[14],
-        )
-        .normalize();
+        let p5 = Plane::new(Vector3::new(me[2], me[6], me[10]), me[14]).normalize();
         Self {
             planes: [p0, p1, p2, p3, p4, p5],
         }

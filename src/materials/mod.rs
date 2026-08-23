@@ -1,6 +1,7 @@
 //! Materials. Mirrors three.js's `Material` family, including
 //! [`ShaderMaterial`] for custom WGSL fragments.
 
+mod atmosphere;
 mod basic;
 mod depth;
 mod lambert;
@@ -10,11 +11,13 @@ mod normal_mat;
 mod phong;
 mod physical;
 mod points_mat;
+pub mod presets;
 mod shader_material;
 mod sprite_mat;
 mod standard;
 mod toon;
 
+pub use atmosphere::AtmosphereMaterial;
 pub use basic::BasicMaterial;
 pub use depth::DepthMaterial;
 pub use lambert::LambertMaterial;
@@ -77,6 +80,8 @@ pub enum Material {
     Mirror(MirrorMaterial),
     /// User-defined custom-shader material (extensibility escape hatch).
     Shader(ShaderMaterial),
+    /// Analytic planetary atmosphere — see [`AtmosphereMaterial`].
+    Atmosphere(AtmosphereMaterial),
 }
 
 /// Mirror material — drives the Reflector / Refractor / Water shader path
@@ -145,6 +150,7 @@ pub enum MaterialKind {
     Sky = 13,
     Mirror = 14,
     Shader = 15,
+    Atmosphere = 16,
 }
 
 #[derive(Debug, Clone)]
@@ -181,6 +187,13 @@ pub struct MaterialTextureSlots {
     pub ao_map: Option<Arc<Texture>>,
     pub emissive_map: Option<Arc<Texture>>,
     pub matcap_map: Option<Arc<Texture>>,
+    /// Height map, sampled in the *vertex* stage to move geometry.
+    pub displacement_map: Option<Arc<Texture>>,
+    /// Cloud cover that casts a shadow onto this surface.
+    pub cloud_shadow_map: Option<Arc<Texture>>,
+    /// Thin-film thickness map (three.js `iridescenceThicknessMap`). Sampled
+    /// from the green channel and remapped into the material's thickness range.
+    pub iridescence_thickness_map: Option<Arc<Texture>>,
 }
 
 impl Material {
@@ -201,6 +214,7 @@ impl Material {
             Material::Distance(_) => Color::WHITE,
             Material::Sky(_) => Color::WHITE,
             Material::Mirror(m) => m.color,
+            Material::Atmosphere(m) => m.color,
             Material::Shader(_) => Color::WHITE,
         }
     }
@@ -226,6 +240,9 @@ impl Material {
             // Transmissive glass needs the alpha pipeline even at opacity 1.0.
             Material::Physical(m) => m.opacity < 1.0 || m.transmission > 0.0,
             Material::Shader(m) => m.transparent || m.opacity < 1.0,
+            // An atmosphere is nothing but coverage — it is never opaque, even
+            // at `opacity: 1.0`, where that value only scales the optical depth.
+            Material::Atmosphere(_) => true,
             // Other materials: treat opacity < 1 as transparent by default,
             // matching three.js's behavior when only opacity is set.
             _ => self.opacity() < 1.0,
@@ -259,6 +276,7 @@ impl Material {
             Material::Distance(_) => 1.0,
             Material::Sky(_) => 1.0,
             Material::Mirror(_) => 1.0,
+            Material::Atmosphere(m) => m.opacity,
             Material::Shader(m) => m.opacity,
         }
     }
@@ -322,6 +340,9 @@ impl Material {
             Material::Sprite(_) => 0,
             Material::Sky(_) => 1, // Sky uses BackSide → no-cull pipeline.
             Material::Mirror(m) => m.side,
+            // Front faces only: the shader measures the ray's path through the
+            // shell analytically, so it needs exactly one entry point.
+            Material::Atmosphere(_) => 0,
             Material::Shader(m) => m.side,
         }
     }
@@ -362,6 +383,76 @@ impl Material {
             Material::Standard(m) => m.normal_scale,
             Material::Physical(m) => m.normal_scale,
             _ => Vector2::ONE,
+        }
+    }
+
+    /// `[cloud_height, cloud_shadow, cloud_rotation, twilight]`.
+    pub fn atmosphere_params(&self) -> [f32; 4] {
+        match self {
+            Material::Standard(m) => [m.cloud_height, m.cloud_shadow, m.cloud_rotation, m.twilight],
+            Material::Physical(m) => [m.cloud_height, m.cloud_shadow, m.cloud_rotation, m.twilight],
+            _ => [0.0; 4],
+        }
+    }
+
+    /// A sphere that can eclipse the sun for this surface, and how big the sun
+    /// is: `[x, y, z, radius]` and the sun's angular radius. Radius 0 = none.
+    pub fn eclipse(&self) -> ([f32; 4], f32) {
+        match self {
+            Material::Standard(m) => (m.eclipse_occluder.unwrap_or([0.0; 4]), m.sun_angular_radius),
+            Material::Physical(m) => (m.eclipse_occluder.unwrap_or([0.0; 4]), m.sun_angular_radius),
+            _ => ([0.0; 4], 0.0),
+        }
+    }
+
+    /// Volume scattering: `[strength, anisotropy, ozone, aurora]`.
+    ///
+    /// The first two belong to a cloud deck and the last two to an atmosphere
+    /// shell; no material uses both, so they share a slot.
+    pub fn scatter_params(&self) -> [f32; 4] {
+        match self {
+            Material::Standard(m) => [m.cloud_scatter, m.cloud_anisotropy, 0.0, 0.0],
+            Material::Physical(m) => [m.cloud_scatter, m.cloud_anisotropy, 0.0, 0.0],
+            Material::Atmosphere(m) => [0.0, 0.0, m.ozone, m.aurora],
+            _ => [0.0; 4],
+        }
+    }
+
+    /// Aurora colour, and the geomagnetic colatitude of the oval in degrees.
+    pub fn aurora_params(&self) -> [f32; 4] {
+        match self {
+            Material::Atmosphere(m) => {
+                let c = m.aurora_color;
+                [c.r, c.g, c.b, m.aurora_colatitude]
+            }
+            _ => [0.0; 4],
+        }
+    }
+
+    /// The colour scattered light takes on near the terminator.
+    pub fn twilight_color(&self) -> Color {
+        match self {
+            Material::Standard(m) => m.twilight_color,
+            Material::Physical(m) => m.twilight_color,
+            _ => Color::BLACK,
+        }
+    }
+
+    /// Height-map `(scale, bias)`. Zero scale for materials that have none,
+    /// which is also what disables the vertex-stage sample.
+    /// How strongly the emissive map is confined to the night side, 0..1.
+    pub fn emissive_night_side(&self) -> f32 {
+        match self {
+            Material::Standard(m) => m.emissive_night_side,
+            _ => 0.0,
+        }
+    }
+
+    pub fn displacement(&self) -> (f32, f32) {
+        match self {
+            Material::Standard(m) => (m.displacement_scale, m.displacement_bias),
+            Material::Physical(m) => (m.displacement_scale, m.displacement_bias),
+            _ => (0.0, 0.0),
         }
     }
 
@@ -410,6 +501,7 @@ impl Material {
             Material::Distance(_) => MaterialKind::Distance,
             Material::Sky(_) => MaterialKind::Sky,
             Material::Mirror(_) => MaterialKind::Mirror,
+            Material::Atmosphere(_) => MaterialKind::Atmosphere,
             Material::Shader(_) => MaterialKind::Shader,
         }
     }
@@ -417,21 +509,27 @@ impl Material {
     pub fn texture_slots(&self) -> MaterialTextureSlots {
         match self {
             Material::Standard(m) => MaterialTextureSlots {
+                cloud_shadow_map: m.cloud_shadow_map.clone(),
+                iridescence_thickness_map: None,
                 map: m.map.clone(),
                 normal_map: m.normal_map.clone(),
                 roughness_map: m.roughness_map.clone(),
                 metalness_map: m.metalness_map.clone(),
                 ao_map: m.ao_map.clone(),
                 emissive_map: m.emissive_map.clone(),
+                displacement_map: m.displacement_map.clone(),
                 matcap_map: None,
             },
             Material::Physical(m) => MaterialTextureSlots {
+                cloud_shadow_map: m.cloud_shadow_map.clone(),
+                iridescence_thickness_map: m.iridescence_thickness_map.clone(),
                 map: m.map.clone(),
                 normal_map: m.normal_map.clone(),
                 roughness_map: m.roughness_map.clone(),
                 metalness_map: m.metalness_map.clone(),
                 ao_map: m.ao_map.clone(),
                 emissive_map: m.emissive_map.clone(),
+                displacement_map: m.displacement_map.clone(),
                 matcap_map: None,
             },
             Material::Matcap(m) => MaterialTextureSlots {

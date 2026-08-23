@@ -14,7 +14,13 @@ pub enum HdrError {
 }
 
 impl HdrLoader {
-    pub fn parse(bytes: &[u8]) -> Result<Texture, HdrError> {
+    /// Decode a Radiance `.hdr` to **linear f32 RGBA**, preserving the full
+    /// dynamic range (a sun can legitimately be thousands of times brighter
+    /// than the sky around it). Returns `(pixels, width, height)`.
+    ///
+    /// Use this for environment maps; [`Self::parse`] clips to 8-bit and is
+    /// only appropriate for already-low-range images.
+    pub fn parse_f32(bytes: &[u8]) -> Result<(Vec<f32>, u32, u32), HdrError> {
         // Header is ASCII terminated by an empty line, then a dimension line
         // like "-Y H +X W", then binary RLE-RGBE scanlines.
         let mut pos = 0;
@@ -62,7 +68,7 @@ impl HdrLoader {
         }
 
         // Decode scanlines. Each scanline is `width` pixels of RGBE.
-        let mut rgba = Vec::with_capacity(width * height * 4);
+        let mut rgba: Vec<f32> = Vec::with_capacity(width * height * 4);
         for _ in 0..height {
             if pos + 4 > bytes.len() {
                 return Err(HdrError::BadScanline);
@@ -118,8 +124,11 @@ impl HdrLoader {
                         }
                     }
                 }
+                // Indexes all four channel planes at once; iterating one of
+                // them would leave the other three indexed anyway.
+                #[allow(clippy::needless_range_loop)]
                 for x in 0..width {
-                    let rgb = rgbe_to_rgb(
+                    let rgb = rgbe_to_linear(
                         channels[0][x],
                         channels[1][x],
                         channels[2][x],
@@ -130,37 +139,48 @@ impl HdrLoader {
             } else {
                 // Old-style flat RGBE scanline (no RLE).
                 pos += 4;
-                let rgb = rgbe_to_rgb(r, g, b1, b2);
+                let rgb = rgbe_to_linear(r, g, b1, b2);
                 rgba.extend_from_slice(&rgb);
                 for _ in 1..width {
                     if pos + 4 > bytes.len() {
                         return Err(HdrError::BadScanline);
                     }
                     let rgb =
-                        rgbe_to_rgb(bytes[pos], bytes[pos + 1], bytes[pos + 2], bytes[pos + 3]);
+                        rgbe_to_linear(bytes[pos], bytes[pos + 1], bytes[pos + 2], bytes[pos + 3]);
                     rgba.extend_from_slice(&rgb);
                     pos += 4;
                 }
             }
         }
 
-        Ok(Texture::new(
-            width as u32,
-            height as u32,
-            TextureFormat::Rgba8Unorm,
-            rgba,
-        ))
+        Ok((rgba, width as u32, height as u32))
+    }
+
+    /// Decode to an 8-bit texture, Reinhard-compressed rather than hard-clipped.
+    ///
+    /// Retained for callers that want a plain LDR image. Anything doing
+    /// image-based lighting should use [`Self::parse_f32`] instead — clipping
+    /// an HDR environment to 1.0 is what forces the "tiny sun" workaround,
+    /// because a clipped sun cannot be brighter than the sky beside it.
+    pub fn parse(bytes: &[u8]) -> Result<Texture, HdrError> {
+        let (px, w, h) = Self::parse_f32(bytes)?;
+        let mut out = Vec::with_capacity((w * h * 4) as usize);
+        for c in px.chunks(4) {
+            for i in 0..3 {
+                let v = c.get(i).copied().unwrap_or(0.0).max(0.0);
+                out.push(((v / (1.0 + v)).clamp(0.0, 1.0) * 255.0).round() as u8);
+            }
+            out.push(255);
+        }
+        Ok(Texture::new(w, h, TextureFormat::Rgba8Unorm, out))
     }
 }
 
-fn rgbe_to_rgb(r: u8, g: u8, b: u8, e: u8) -> [u8; 4] {
+/// Shared-exponent RGBE → linear f32 RGBA. No clamping: that is the whole point.
+fn rgbe_to_linear(r: u8, g: u8, b: u8, e: u8) -> [f32; 4] {
     if e == 0 {
-        return [0, 0, 0, 255];
+        return [0.0, 0.0, 0.0, 1.0];
     }
     let f = (2.0_f32).powi(e as i32 - 128 - 8);
-    let rf = r as f32 * f;
-    let gf = g as f32 * f;
-    let bf = b as f32 * f;
-    let clip = |x: f32| (x.clamp(0.0, 1.0) * 255.0).round() as u8;
-    [clip(rf), clip(gf), clip(bf), 255]
+    [r as f32 * f, g as f32 * f, b as f32 * f, 1.0]
 }

@@ -48,7 +48,10 @@ pub fn bvhcast(a: &MeshBvh, b: &MeshBvh, matrix_to_local: &Matrix4) -> Vec<(usiz
     // double-descent, while still capping the exponential runaway far short of a
     // hang.
     let (na, nb) = (a.node_count() as u64, b.node_count() as u64);
-    let cap = na.saturating_mul(nb).saturating_mul(4).saturating_add(1 << 20);
+    let cap = na
+        .saturating_mul(nb)
+        .saturating_mul(4)
+        .saturating_add(1 << 20);
     VISIT_CAP.with(|c| c.set(cap));
     VISITS.with(|v| v.set(0));
     let mat_b_to_a = *matrix_to_local;
@@ -61,6 +64,7 @@ pub fn bvhcast(a: &MeshBvh, b: &MeshBvh, matrix_to_local: &Matrix4) -> Vec<(usiz
     pairs
 }
 
+#[allow(clippy::too_many_arguments)]
 fn traverse(
     a: &MeshBvh,
     b: &MeshBvh,
@@ -152,17 +156,33 @@ fn traverse(
     let left_hit = curr_box.intersects_box(&left_box2);
     let right_hit = curr_box.intersects_box(&right_box2);
 
+    // Descending into `s2` alone has to update whichever of the two node
+    // arguments `s2` actually is. With `reversed` set, `s2` is A — and writing
+    // its child into the `node_b` slot hands a tree-A node index to a tree-B
+    // lookup on the very next frame. That reads out of bounds as soon as the
+    // two trees have different node counts, which is most of the time.
+    let into_s2 = |child: u32| {
+        if reversed {
+            (child, node_b)
+        } else {
+            (node_a, child)
+        }
+    };
+
     if left_hit && right_hit {
+        let (na, nb) = into_s2(cl2);
         traverse(
-            a, b, node_a, cl2, mat_2_to_1, mat_1_to_2, pairs, curr_box, reversed,
+            a, b, na, nb, mat_2_to_1, mat_1_to_2, pairs, curr_box, reversed,
         );
+        let (na, nb) = into_s2(cr2);
         traverse(
-            a, b, node_a, cr2, mat_2_to_1, mat_1_to_2, pairs, curr_box, reversed,
+            a, b, na, nb, mat_2_to_1, mat_1_to_2, pairs, curr_box, reversed,
         );
     } else if left_hit {
         if leaf1 {
+            let (na, nb) = into_s2(cl2);
             traverse(
-                a, b, node_a, cl2, mat_2_to_1, mat_1_to_2, pairs, curr_box, reversed,
+                a, b, na, nb, mat_2_to_1, mat_1_to_2, pairs, curr_box, reversed,
             );
         } else {
             let new_box = left_box2.apply_matrix4(&mat_2_to_1);
@@ -197,8 +217,9 @@ fn traverse(
         }
     } else if right_hit {
         if leaf1 {
+            let (na, nb) = into_s2(cr2);
             traverse(
-                a, b, node_a, cr2, mat_2_to_1, mat_1_to_2, pairs, curr_box, reversed,
+                a, b, na, nb, mat_2_to_1, mat_1_to_2, pairs, curr_box, reversed,
             );
         } else {
             let new_box = right_box2.apply_matrix4(&mat_2_to_1);

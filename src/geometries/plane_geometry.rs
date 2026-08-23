@@ -55,6 +55,8 @@ impl PlaneGeometry {
         geom.set_attribute("normal", BufferAttribute::new(normals, 3));
         geom.set_attribute("uv", BufferAttribute::new(uvs, 2));
         geom.set_index(indices);
+        #[cfg(feature = "brep")]
+        crate::brep::primitives::tag_xy_plane(&mut geom);
         geom
     }
 }

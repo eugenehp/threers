@@ -3,6 +3,9 @@
 mod build;
 mod bvhcast;
 mod hit;
+// The type lives in a file named after the module it defines; the parent is
+// the facade that re-exports it.
+#[allow(clippy::module_inception)]
 mod mesh_bvh;
 mod node;
 mod serialize;

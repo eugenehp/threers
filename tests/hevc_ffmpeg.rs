@@ -29,9 +29,16 @@ fn ffmpeg_available() -> bool {
 }
 
 fn tmp_path(name: &str) -> PathBuf {
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
     let mut p = std::env::temp_dir();
-    p.push(format!("threers_hevc_{}_{}_{name}", std::process::id(), nanos));
+    p.push(format!(
+        "threers_hevc_{}_{}_{name}",
+        std::process::id(),
+        nanos
+    ));
     p
 }
 
@@ -42,7 +49,8 @@ fn checker(width: u32, height: u32) -> Yuv420Frame {
     for j in 0..height {
         for i in 0..width {
             // A busy pattern spanning the full 0..255 range.
-            f.y[(j * width + i) as usize] = ((i.wrapping_mul(37) ^ j.wrapping_mul(101)) & 0xFF) as u8;
+            f.y[(j * width + i) as usize] =
+                ((i.wrapping_mul(37) ^ j.wrapping_mul(101)) & 0xFF) as u8;
         }
     }
     let (cw, ch) = (width / 2, height / 2);
@@ -79,7 +87,10 @@ fn roundtrip_lossless(width: u32, height: u32) {
         .arg(&out_yuv)
         .status()
         .expect("run ffmpeg");
-    assert!(status.success(), "ffmpeg failed to decode our stream ({width}x{height})");
+    assert!(
+        status.success(),
+        "ffmpeg failed to decode our stream ({width}x{height})"
+    );
 
     let decoded = std::fs::read(&out_yuv).unwrap();
     let _ = std::fs::remove_file(&in265);
@@ -104,7 +115,10 @@ fn roundtrip_lossless(width: u32, height: u32) {
             decoded[pos], expected[pos]
         );
     }
-    eprintln!("HEVC ffmpeg roundtrip OK: {width}x{height} lossless ({} bytes .265)", au.len());
+    eprintln!(
+        "HEVC ffmpeg roundtrip OK: {width}x{height} lossless ({} bytes .265)",
+        au.len()
+    );
 }
 
 /// Encode a monochrome frame (the alpha auxiliary layer's format), decode it
@@ -135,16 +149,29 @@ fn roundtrip_gray_lossless(width: u32, height: u32) {
         .arg(&out_gray)
         .status()
         .expect("run ffmpeg");
-    assert!(status.success(), "ffmpeg failed to decode our monochrome stream ({width}x{height})");
+    assert!(
+        status.success(),
+        "ffmpeg failed to decode our monochrome stream ({width}x{height})"
+    );
     let decoded = std::fs::read(&out_gray).unwrap();
     let _ = std::fs::remove_file(&in265);
     let _ = std::fs::remove_file(&out_gray);
 
-    assert_eq!(decoded.len(), gray.len(), "mono plane size mismatch {width}x{height}");
+    assert_eq!(
+        decoded.len(),
+        gray.len(),
+        "mono plane size mismatch {width}x{height}"
+    );
     if let Some(pos) = decoded.iter().zip(&gray).position(|(a, b)| a != b) {
-        panic!("mono mismatch at {width}x{height} byte {pos}: {} != {}", decoded[pos], gray[pos]);
+        panic!(
+            "mono mismatch at {width}x{height} byte {pos}: {} != {}",
+            decoded[pos], gray[pos]
+        );
     }
-    eprintln!("HEVC mono (alpha-layer) roundtrip OK: {width}x{height} lossless ({} bytes)", au.len());
+    eprintln!(
+        "HEVC mono (alpha-layer) roundtrip OK: {width}x{height} lossless ({} bytes)",
+        au.len()
+    );
 }
 
 #[test]

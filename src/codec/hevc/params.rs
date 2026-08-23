@@ -32,7 +32,7 @@ pub struct HevcConfig {
     pub level_idc: u8,
     /// Signal `video_full_range_flag = 1` via a minimal VUI. The alpha auxiliary
     /// layer needs this so its 0..255 luma is read as full-range opacity rather
-    /// than expanded from limited [16,235].
+    /// than expanded from limited `[16,235]`.
     pub full_range: bool,
     /// Enable I_PCM in the SPS. The lossless PCM path needs it; the compressed
     /// (transform-coded) path disables it.

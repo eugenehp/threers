@@ -5,8 +5,8 @@ pub struct SimplexNoise;
 impl SimplexNoise {
     /// 2D simplex noise in [-1, 1].
     pub fn noise2(x: f32, y: f32) -> f32 {
-        const F2: f32 = 0.366025403; // (sqrt(3) - 1) / 2
-        const G2: f32 = 0.211324865; // (3 - sqrt(3)) / 6
+        const F2: f32 = 0.366_025_4; // (sqrt(3) - 1) / 2
+        const G2: f32 = 0.211_324_87; // (3 - sqrt(3)) / 6
         let s = (x + y) * F2;
         let i = (x + s).floor();
         let j = (y + s).floor();

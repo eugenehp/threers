@@ -23,6 +23,18 @@ impl Vector3 {
         y: 1.0,
         z: 0.0,
     };
+    /// `+X`, the other half of three.js's right-handed Y-up frame.
+    pub const RIGHT: Self = Self {
+        x: 1.0,
+        y: 0.0,
+        z: 0.0,
+    };
+    /// `+Z` — toward the viewer in the default camera, as in three.js.
+    pub const FORWARD: Self = Self {
+        x: 0.0,
+        y: 0.0,
+        z: 1.0,
+    };
 
     pub const fn new(x: f32, y: f32, z: f32) -> Self {
         Self { x, y, z }

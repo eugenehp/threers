@@ -128,6 +128,7 @@ pub fn perform_operation(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn perform_split_triangle_operations(
     a: &CsgBrush,
     b: &CsgBrush,
@@ -482,6 +483,7 @@ fn append_attribute_from_triangle(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn append_attributes_from_indices(
     i0: usize,
     i1: usize,

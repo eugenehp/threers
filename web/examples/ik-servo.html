@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>ik + servo plant — threers</title>
+    <style>
+        :root { color-scheme: dark; }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            background: #08090d;
+            color: #e6e8ee;
+            font: 14px/1.5 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+        }
+        header {
+            display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap;
+            padding: 18px 24px 12px;
+            border-bottom: 1px solid #1e2129;
+        }
+        h1 { font-size: 17px; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+        h1 .tag { color: #7d879c; font-weight: 400; }
+        #status { color: #7d879c; font-size: 12px; }
+        nav { margin-left: auto; display: flex; gap: 14px; }
+        nav a { color: #6ea8fe; text-decoration: none; font-size: 13px; }
+        nav a:hover { text-decoration: underline; }
+        main { padding: 20px 24px 40px; max-width: 1280px; margin: 0 auto; }
+        .intro { color: #97a0b3; max-width: 90ch; margin: 0 0 16px; font-size: 13px; }
+        .intro code { color: #cfd6e6; background: #14161d; padding: 1px 5px; border-radius: 4px; }
+        canvas {
+            width: 100%; aspect-ratio: 16 / 9; display: block;
+            border-radius: 10px; background: #05060a; touch-action: none;
+        }
+        .hud {
+            display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px;
+            margin-top: 14px;
+        }
+        @media (max-width: 1100px) {
+            .hud { grid-template-columns: repeat(2, 1fr); }
+        }
+        .card {
+            background: #101218; border: 1px solid #1e2129; border-radius: 8px;
+            padding: 10px 12px; font-size: 12px;
+        }
+        .card strong { display: block; margin-bottom: 4px; font-size: 13px; }
+        .card .muted { color: #7d879c; }
+        .card.direct strong { color: #59c0f2; }
+        .card.qdd strong { color: #73d98a; }
+        .card.high strong { color: #f28b5a; }
+        .card.hydraulic strong { color: #c9a227; }
+        .card.tendon strong { color: #c084fc; }
+        .controls {
+            display: flex; flex-wrap: wrap; gap: 14px 22px; align-items: center;
+            margin: 0 0 14px; padding: 10px 12px;
+            background: #101218; border: 1px solid #1e2129; border-radius: 8px;
+            font-size: 12px; color: #97a0b3;
+        }
+        .controls label { display: inline-flex; align-items: center; gap: 8px; }
+        .controls select, .controls input[type="range"] { accent-color: #6ea8fe; }
+        .controls select {
+            background: #14161d; color: #e6e8ee; border: 1px solid #2a2f3a;
+            border-radius: 4px; padding: 3px 6px;
+        }
+        .controls #tempVal { color: #e6e8ee; min-width: 3.5ch; font-variant-numeric: tabular-nums; }
+        #err { color: #ff8080; white-space: pre-wrap; font-size: 12px; margin-top: 12px; }
+        .hint { color: #7d879c; font-size: 12px; margin-top: 10px; }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>threers <span class="tag">· ik + actuator plant</span></h1>
+        <span id="status">loading wasm…</span>
+        <nav>
+            <a href="./index.html">all examples</a>
+        </nav>
+    </header>
+    <main>
+        <p class="intro">
+            Joint modules resized from real open hardware:
+            <a href="https://github.com/OpenWonderLabs/RobotDoc" style="color:#6ea8fe">onero Φ57×46 / Φ57×56</a>,
+            HEBI-style packs, CSF+NEMA stubs (ALTO).
+            <b>Gear</b> = sealed can + flanges (harmonic ring on 288:1).
+            <b>Hydraulic</b> = short vane cartridge, lines along the link.
+            <b>Tendon</b> = Ø28 pulley, cables along the link, winch at the base.
+        </p>
+        <div class="controls">
+            <label>temp <input id="temp" type="range" min="-10" max="70" value="25" step="1"> <span id="tempVal">25</span> °C</label>
+            <label>hydraulic fluid
+                <select id="fluid">
+                    <option value="iso32">ISO VG 32</option>
+                    <option value="iso46" selected>ISO VG 46</option>
+                    <option value="iso68">ISO VG 68</option>
+                    <option value="water-glycol">water-glycol</option>
+                    <option value="silicone">silicone</option>
+                </select>
+            </label>
+            <label>tendon
+                <select id="tendon">
+                    <option value="steel">steel</option>
+                    <option value="uhmwpe">UHMWPE</option>
+                    <option value="nylon" selected>nylon</option>
+                    <option value="aramid">aramid</option>
+                </select>
+            </label>
+        </div>
+        <canvas id="c" width="1280" height="720"></canvas>
+        <div class="hud" id="hud"></div>
+        <p class="hint">drag to orbit · scroll to zoom · path loops a fast transit then settle</p>
+        <div id="err"></div>
+    </main>
+    <script type="module" src="./ik-servo-demo.js"></script>
+</body>
+</html>

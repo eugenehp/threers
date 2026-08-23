@@ -113,6 +113,7 @@ impl MarchingCubes {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn corner_pos(
     c: usize,
     i: usize,

@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>cuboct metamaterials — threers</title>
+    <style>
+        :root { color-scheme: dark; }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            background: #08090d;
+            color: #e6e8ee;
+            font: 14px/1.5 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+        }
+        header {
+            display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap;
+            padding: 18px 24px 12px;
+            border-bottom: 1px solid #1e2129;
+        }
+        h1 { font-size: 17px; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+        h1 .tag { color: #7d879c; font-weight: 400; }
+        #status { color: #7d879c; font-size: 12px; }
+        nav { margin-left: auto; display: flex; gap: 14px; }
+        nav a { color: #6ea8fe; text-decoration: none; font-size: 13px; }
+        nav a:hover { text-decoration: underline; }
+        main { padding: 20px 24px 40px; max-width: 1200px; margin: 0 auto; }
+        .intro { color: #97a0b3; max-width: 82ch; margin: 0 0 16px; font-size: 13px; }
+        .intro code { color: #cfd6e6; background: #14161d; padding: 1px 5px; border-radius: 4px; }
+        canvas { width: 100%; aspect-ratio: 16 / 9; display: block; border-radius: 10px; background: #05060a; }
+        .controls {
+            display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+            margin: 14px 0 8px;
+        }
+        button, select, label {
+            font: inherit; font-size: 13px; padding: 6px 12px; border-radius: 6px;
+            border: 1px solid #2a2f3c; background: #161a23; color: #e6e8ee; cursor: pointer;
+        }
+        label { cursor: default; display: inline-flex; gap: 6px; align-items: center; }
+        button:hover, select:hover { background: #1d2230; }
+        button.active { border-color: #6ea8fe; background: #1a2740; }
+        #net {
+            margin-top: 18px; background: #101218; border: 1px solid #1e2129;
+            border-radius: 10px; padding: 12px; overflow: auto; max-height: 280px;
+        }
+        #net svg { display: block; max-width: 100%; height: auto; background: #0b0d12; }
+        #err { color: #ff8080; white-space: pre-wrap; font-size: 12px; margin-top: 12px; }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>threers <span class="tag">· cuboct metamaterials</span></h1>
+        <span id="status">loading wasm…</span>
+        <nav>
+            <a href="./index.html">all examples</a>
+            <a href="../index.html">home</a>
+        </nav>
+    </header>
+    <main>
+        <p class="intro">
+            Face-connected cuboctahedra from Jenett et al. (<em>Sci. Adv.</em> 2020) —
+            rigid, compliant, auxetic, and chiral cells. Toggle continuum lattice vs.
+            discrete exploded assembly. Same generators as
+            <code>cargo run --example cuboct</code>.
+        </p>
+        <canvas id="c" width="1280" height="720"></canvas>
+        <div class="controls">
+            <button data-mode="lattice">continuum</button>
+            <button data-mode="assembly" class="active">assembly</button>
+            <select id="variant">
+                <option value="0">rigid</option>
+                <option value="1">compliant</option>
+                <option value="2" selected>auxetic</option>
+                <option value="3">chiral CW</option>
+                <option value="4">chiral CCW</option>
+            </select>
+            <label><input type="checkbox" id="colored"> vertex colors</label>
+        </div>
+        <div id="net"></div>
+        <div id="err"></div>
+    </main>
+    <script type="module" src="./cuboct-demo.js"></script>
+</body>
+</html>

@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>animation — threers</title>
+    <style>
+        :root { color-scheme: dark; }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0; background: #08090d; color: #e6e8ee;
+            font: 14px/1.5 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+        }
+        header {
+            display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap;
+            padding: 18px 24px 12px; border-bottom: 1px solid #1e2129;
+        }
+        h1 { font-size: 17px; margin: 0; font-weight: 650; }
+        h1 .tag { color: #7d879c; font-weight: 400; }
+        #status { color: #7d879c; font-size: 12px; }
+        nav { margin-left: auto; display: flex; gap: 14px; }
+        nav a { color: #6ea8fe; text-decoration: none; font-size: 13px; }
+        main { padding: 20px 24px 40px; max-width: 1100px; margin: 0 auto; }
+        .intro { color: #97a0b3; max-width: 78ch; margin: 0 0 18px; font-size: 13px; }
+        .intro code { color: #cfd6e6; background: #14161d; padding: 1px 5px; border-radius: 4px; }
+        canvas { width: 100%; aspect-ratio: 16 / 9; display: block; border-radius: 10px; background: #05060a; }
+        .controls {
+            display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center;
+            margin: 16px 0 8px; padding: 14px 16px;
+            background: #0e1016; border: 1px solid #1e2129; border-radius: 10px;
+        }
+        button {
+            font: inherit; font-size: 13px; padding: 6px 12px; border-radius: 6px;
+            border: 1px solid #2a2f3c; background: #161a23; color: #e6e8ee; cursor: pointer;
+        }
+        button:hover { background: #1d2230; }
+        #info { color: #7d879c; font-variant-numeric: tabular-nums; }
+        #err { color: #ff8080; white-space: pre-wrap; font-size: 12px; margin-top: 10px; }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>animation <span class="tag">· mixer / tween / spring</span></h1>
+        <span id="status">loading wasm…</span>
+        <nav>
+            <a href="/web/examples/">examples</a>
+            <a href="/web/examples/camera-shots.html">camera shots</a>
+        </nav>
+    </header>
+    <main>
+        <p class="intro">
+            Cross-fading <code>AnimationMixer</code> clips, a <code>Tween</code> on the orange cube,
+            and an <code>ObjectSpring</code> lagging the blue sphere — all on the classic three.js surface.
+        </p>
+        <canvas id="c" width="1280" height="720"></canvas>
+        <div class="controls">
+            <button id="crossfade">Cross-fade clips</button>
+            <button id="limp">PoseBlend → limp</button>
+            <button id="getup">PoseBlend → get up</button>
+            <span id="info">—</span>
+        </div>
+        <div id="err"></div>
+    </main>
+    <script type="module" src="/web/examples/animation-demo.js"></script>
+</body>
+</html>

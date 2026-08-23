@@ -137,21 +137,21 @@ impl EffectComposer {
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some(label),
-            bind_group_layouts: &[pass_bgl],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(pass_bgl)],
+            immediate_size: 0,
         });
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some(label),
             layout: Some(&layout),
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: "vs_main",
+                entry_point: Some("vs_main"),
                 buffers: &[],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: "fs_main",
+                entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
                     blend: Some(wgpu::BlendState::REPLACE),
@@ -170,7 +170,8 @@ impl EffectComposer {
             },
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
+            cache: None,
         })
     }
 
@@ -255,6 +256,7 @@ impl EffectComposer {
                     label: Some(cp.name),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                         view: &dst.color_view,
+                        depth_slice: None,
                         resolve_target: None,
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
@@ -264,6 +266,7 @@ impl EffectComposer {
                     depth_stencil_attachment: None,
                     timestamp_writes: None,
                     occlusion_query_set: None,
+                    multiview_mask: None,
                 });
                 pass.set_pipeline(&cp.pipeline);
                 pass.set_bind_group(0, &bg, &[]);
@@ -287,6 +290,7 @@ impl EffectComposer {
                 label: Some("composer final"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: final_target_view,
+                    depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
@@ -296,6 +300,7 @@ impl EffectComposer {
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
             pass.set_pipeline(copy_pipeline);
             pass.set_bind_group(0, &bg, &[]);

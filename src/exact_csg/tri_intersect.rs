@@ -24,7 +24,7 @@ fn seg_tri(p0: V3, p1: V3, v0: V3, v1: V3, v2: V3) -> bool {
     let inv = 1.0 / det;
     let tvec = sub(p0, v0);
     let u = dot(tvec, pvec) * inv;
-    if u < -EPS || u > 1.0 + EPS {
+    if !(-EPS..=1.0 + EPS).contains(&u) {
         return false;
     }
     let qvec = cross(tvec, e1);

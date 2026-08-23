@@ -24,7 +24,7 @@
 //!    Annex-B).
 //! 2. **Parameter sets** — *done*: VPS / SPS / PPS writers ([`params`]).
 //! 3. **End-to-end playable** — *done & externally verified*: an IDR I-slice
-//!    ([`slice`]) of `I_PCM` CUs, assembled by [`HevcEncoder`]. No compression,
+//!    ([`mod@crate::codec::hevc::slice`]) of `I_PCM` CUs, assembled by [`HevcEncoder`]. No compression,
 //!    but ffmpeg decodes it **losslessly** in the YUV domain (see
 //!    `tests/hevc_ffmpeg.rs`), which validates the whole pipeline (params →
 //!    slice header → CABAC control bins → PCM raw bytes → conformance-window
@@ -63,6 +63,20 @@
 //!    (APNG lossless-alpha; GIF via median-cut + reserved transparent index).
 //!    Native VP9/WebM with residual + `BlockAdditional` alpha is also in place
 //!    ([`crate::codec::vp9`] + [`crate::codec::webm`]); inter (P-frames) remains.
+
+// These modules transcribe libvpx / libde265 reference code, and the point of
+// doing that is that a reader can lay the two side by side. So the shape of the
+// original survives here: loops that index by hand because the spec numbers its
+// arrays, argument lists as long as the C function's, branches left distinct
+// where the spec distinguishes cases that happen to compute the same thing, and
+// constants grouped the way the bitstream tables print them. Idiomatic Rust
+// would read better and would no longer be checkable against the reference.
+#![allow(
+    clippy::needless_range_loop,
+    clippy::too_many_arguments,
+    clippy::if_same_then_else,
+    clippy::unusual_byte_groupings
+)]
 
 pub mod alpha;
 pub mod cabac;

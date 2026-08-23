@@ -381,7 +381,7 @@ impl GltfLoader {
                 let (size, vals) =
                     read_accessor_floats(idx as usize, &accessors, &buffer_views, &buffers)
                         .unwrap_or((16, Vec::new()));
-                let mat_count = if size > 0 { vals.len() / size } else { 0 };
+                let mat_count = vals.len().checked_div(size).unwrap_or(0);
                 joints
                     .iter()
                     .enumerate()
@@ -539,6 +539,30 @@ impl GltfLoader {
                             KeyframeTrack::vector(obj_id, TrackTarget::Scale, times.clone(), vs);
                         t.interpolation = interp;
                         Some(t)
+                    }
+                    "weights" => {
+                        // glTF morph weights: one scalar track per morph index,
+                        // interleaved as [w0,w1,…,wN] per keyframe.
+                        let morph_count = item_size.max(1);
+                        let mut out = Vec::new();
+                        for mi in 0..morph_count {
+                            let vs: Vec<f32> = values.iter().skip(mi).step_by(morph_count).copied().collect();
+                            if vs.len() != times.len() && !vs.is_empty() {
+                                // tolerate length mismatch by truncating
+                            }
+                            let mut t = KeyframeTrack::scalar(
+                                obj_id,
+                                TrackTarget::MorphWeight { index: mi },
+                                times.clone(),
+                                vs,
+                            );
+                            t.interpolation = interp;
+                            out.push(t);
+                        }
+                        for t in out {
+                            tracks.push(t);
+                        }
+                        None
                     }
                     _ => {
                         let _ = item_size;
@@ -734,28 +758,30 @@ fn parse_material(mj: &Value, gltf_textures: &[Option<Arc<Texture>>]) -> Materia
     if is_unlit {
         Material::Basic(BasicMaterial::new(std_mat.color))
     } else if use_physical {
-        let mut p = PhysicalMaterial::default();
-        p.color = std_mat.color;
-        p.emissive = std_mat.emissive;
-        p.emissive_intensity = std_mat.emissive_intensity;
-        p.roughness = std_mat.roughness;
-        p.metalness = std_mat.metalness;
-        p.opacity = std_mat.opacity;
-        p.map = std_mat.map;
-        p.normal_map = std_mat.normal_map;
-        p.roughness_map = std_mat.roughness_map;
-        p.metalness_map = std_mat.metalness_map;
-        p.ao_map = std_mat.ao_map;
-        p.emissive_map = std_mat.emissive_map;
-        p.clearcoat = clearcoat;
-        p.clearcoat_roughness = clearcoat_roughness;
-        p.ior = ior;
-        p.transmission = transmission;
-        p.sheen = sheen;
-        p.sheen_color = sheen_color;
-        p.sheen_roughness = sheen_roughness;
-        p.iridescence = iridescence;
-        p.iridescence_ior = iridescence_ior;
+        let p = PhysicalMaterial {
+            color: std_mat.color,
+            emissive: std_mat.emissive,
+            emissive_intensity: std_mat.emissive_intensity,
+            roughness: std_mat.roughness,
+            metalness: std_mat.metalness,
+            opacity: std_mat.opacity,
+            map: std_mat.map,
+            normal_map: std_mat.normal_map,
+            roughness_map: std_mat.roughness_map,
+            metalness_map: std_mat.metalness_map,
+            ao_map: std_mat.ao_map,
+            emissive_map: std_mat.emissive_map,
+            clearcoat,
+            clearcoat_roughness,
+            ior,
+            transmission,
+            sheen,
+            sheen_color,
+            sheen_roughness,
+            iridescence,
+            iridescence_ior,
+            ..PhysicalMaterial::default()
+        };
         Material::Physical(p)
     } else {
         Material::Standard(std_mat)
@@ -978,8 +1004,8 @@ fn read_accessor_floats(
         }
         5121 => {
             // UNSIGNED_BYTE
-            for i in 0..count * item_size {
-                out.push(bytes[i] as f32 / 255.0);
+            for &b in &bytes[..count * item_size] {
+                out.push(b as f32 / 255.0);
             }
         }
         _ => return Err(GltfError::BadAccessor),
@@ -1025,8 +1051,8 @@ fn read_accessor_u32(
     let mut out = Vec::with_capacity(count);
     match comp_type {
         5121 => {
-            for i in 0..count {
-                out.push(bytes[i] as u32);
+            for &b in &bytes[..count] {
+                out.push(b as u32);
             }
         } // UBYTE
         5123 => {

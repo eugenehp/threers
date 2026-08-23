@@ -8,11 +8,12 @@
     #log { white-space: pre-wrap; }
     .ok { color: #6d6; }
     .fail { color: #f66; }
+    .skip { color: #aa6; }
     canvas { display: none; }
   </style>
 </head>
 <body>
-  <h1>video-export · wasm · parallel · worker</h1>
+  <h1>video-export · H.264 · presets · GPU · workers</h1>
   <div id="log">starting…</div>
   <canvas id="c" width="64" height="48"></canvas>
   <script type="module">
@@ -25,6 +26,25 @@
       captureSceneFrames,
       encodeVideoFramesInWorker,
     } from '/web/threejs-shim.js';
+    import {
+      GOLDEN_MP4,
+      assertApng,
+      assertGif,
+      assertMainWorkerParity,
+      assertMp4,
+      assertWebm,
+      checkerFrame,
+      fnv1a,
+      framesEqual,
+      gradientFrame,
+      grayRampFrame,
+      lowBitnessFrame,
+      rebufferFrames,
+      solidFrame,
+      syntheticSolidFrames,
+      timeAsync,
+      workerUrls,
+    } from '/web/scripts/video-export-test-lib.mjs';
 
     const logEl = document.getElementById('log');
     const lines = [];
@@ -33,39 +53,8 @@
       logEl.innerHTML = lines.join('\n');
     }
 
-    function checksum(buf) {
-      let h = 2166136261 >>> 0;
-      for (let i = 0; i < buf.length; i++) {
-        h ^= buf[i];
-        h = Math.imul(h, 16777619);
-      }
-      return (h >>> 0).toString(16).padStart(8, '0');
-    }
-
     function assert(cond, msg) {
       if (!cond) throw new Error(msg);
-    }
-
-    function solidFrame(w, h, r, g, b, a = 255) {
-      const out = new Uint8Array(w * h * 4);
-      for (let i = 0; i < w * h; i++) {
-        out[i * 4] = r;
-        out[i * 4 + 1] = g;
-        out[i * 4 + 2] = b;
-        out[i * 4 + 3] = a;
-      }
-      return out;
-    }
-
-    function framesEqual(a, b) {
-      if (a.length !== b.length) return false;
-      for (let i = 0; i < a.length; i++) {
-        if (a[i].length !== b[i].length) return false;
-        for (let j = 0; j < a[i].length; j++) {
-          if (a[i][j] !== b[i][j]) return false;
-        }
-      }
-      return true;
     }
 
     const results = {
@@ -73,6 +62,7 @@
       tests: [],
       error: null,
       webgpu: !!navigator.gpu,
+      metrics: {},
     };
     window.__THREERS_VIDEO_TEST__ = results;
 
@@ -84,9 +74,15 @@
       } catch (e) {
         results.tests.push({ name, ok: false, error: String(e?.message || e) });
         log(`FAIL  ${name}: ${e?.message || e}`, 'fail');
-        throw e;
       }
     }
+
+    function skip(name, reason) {
+      results.tests.push({ name, ok: false, skipped: true, error: reason });
+      log(`SKIP  ${name}: ${reason}`, 'skip');
+    }
+
+    const deps = { VideoExporter, VideoEncodeWorker };
 
     async function main() {
       await initThreers('/web/pkg/threers_bg.wasm');
@@ -95,13 +91,9 @@
 
       const W = 64;
       const H = 48;
-      const synthetic = [
-        solidFrame(W, H, 255, 0, 0),
-        solidFrame(W, H, 0, 255, 0),
-        solidFrame(W, H, 0, 0, 255),
-        solidFrame(W, H, 255, 255, 0),
-      ];
+      const synthetic = syntheticSolidFrames(W, H);
 
+      // ---- lifecycle / events ----
       await test('progress events on VideoExporter', async () => {
         const seen = [];
         const exporter = new VideoExporter({
@@ -121,110 +113,279 @@
         results.events = seen;
       });
 
-      await test('main-thread wasm GIF encode', async () => {
-        const result = VideoExporter.encode(synthetic, {
-          width: W, height: H, fps: 10, format: VideoFormat.Gif, gifColors: 32,
+      // ---- format presets: CPU buffer path ----
+      const presetCases = [
+        { format: VideoFormat.Gif, fps: 10, extra: { gifColors: 32 }, check: assertGif },
+        { format: VideoFormat.Apng, fps: 10, extra: { transparent: true }, check: assertApng },
+        { format: VideoFormat.Webm, fps: 10, extra: {}, check: assertWebm },
+        { format: VideoFormat.Mp4, fps: 10, extra: {}, check: assertMp4 },
+      ];
+
+      for (const preset of presetCases) {
+        await test(`preset ${preset.format} main-thread encode`, async () => {
+          const result = VideoExporter.encode(synthetic, {
+            width: W, height: H, fps: preset.fps, format: preset.format, ...preset.extra,
+          });
+          preset.check(result.bytes, preset.format);
+          assert(result.byteLength > 50, `${preset.format} too small`);
         });
-        assert(result.bytes[0] === 0x47 && result.bytes[1] === 0x49 && result.bytes[2] === 0x46, 'GIF magic');
-        assert(result.byteLength > 100, 'gif too small');
-        results.mainGifBytes = result.byteLength;
-        results.mainGifChecksum = checksum(result.bytes);
+      }
+
+      // ---- main vs worker parity per preset ----
+      for (const preset of presetCases) {
+        await test(`preset ${preset.format} main/worker parity`, async () => {
+          const opts = {
+            width: W, height: H, fps: preset.fps, format: preset.format, ...preset.extra,
+          };
+          await assertMainWorkerParity(deps, synthetic, opts, preset.format);
+        });
+      }
+
+      // ---- H.264 golden checksums (native parity) ----
+      await test('H.264 golden checksum 64×48 solid 4f @10fps', async () => {
+        const result = VideoExporter.encode(synthetic, {
+          width: W, height: H, fps: 10, format: VideoFormat.Mp4,
+        });
+        assertMp4(result.bytes);
+        assert(fnv1a(result.bytes) === GOLDEN_MP4.solid64x48_4f_10fps,
+          `checksum ${fnv1a(result.bytes)} != ${GOLDEN_MP4.solid64x48_4f_10fps}`);
+        results.mainMp4Checksum = fnv1a(result.bytes);
       });
 
-      await test('web-worker wasm GIF encode', async () => {
-        const worker = new VideoEncodeWorker({
-          wasmUrl: new URL('/web/pkg/threers_bg.wasm', location.origin).href,
-          workerUrl: new URL('/web/video-export-worker.js', location.origin).href,
+      await test('H.264 golden checksum 128×72 gradient 3f @30fps', async () => {
+        const frames = [gradientFrame(128, 72), checkerFrame(128, 72, 1), grayRampFrame(128, 72)];
+        const result = VideoExporter.encode(frames, {
+          width: 128, height: 72, fps: 30, format: VideoFormat.Mp4,
         });
-        try {
-          const result = await worker.encode(synthetic, {
-            width: W, height: H, fps: 10, format: VideoFormat.Gif, gifColors: 32,
+        assertMp4(result.bytes);
+        assert(fnv1a(result.bytes) === GOLDEN_MP4.gradient128x72_3f_30fps,
+          `checksum ${fnv1a(result.bytes)} != ${GOLDEN_MP4.gradient128x72_3f_30fps}`);
+      });
+
+      await test('H.264 golden checksum 320×240 checker 2f @60fps', async () => {
+        const frames = [checkerFrame(320, 240, 0), checkerFrame(320, 240, 2)];
+        const result = VideoExporter.encode(frames, {
+          width: 320, height: 240, fps: 60, format: VideoFormat.Mp4,
+        });
+        assertMp4(result.bytes);
+        assert(fnv1a(result.bytes) === GOLDEN_MP4.checker320x240_2f_60fps,
+          `checksum ${fnv1a(result.bytes)} != ${GOLDEN_MP4.checker320x240_2f_60fps}`);
+      });
+
+      // ---- color schemes produce distinct MP4 bytes ----
+      await test('H.264 color schemes are distinct', async () => {
+        const schemes = [
+          solidFrame(64, 64, 255, 0, 0),
+          gradientFrame(64, 64),
+          checkerFrame(64, 64, 3),
+          grayRampFrame(64, 64),
+          lowBitnessFrame(64, 64),
+        ];
+        const sums = schemes.map((f) => fnv1a(
+          VideoExporter.encode([f], { width: 64, height: 64, fps: 24, format: VideoFormat.Mp4 }).bytes,
+        ));
+        for (let i = 0; i < sums.length; i++) {
+          for (let j = i + 1; j < sums.length; j++) {
+            assert(sums[i] !== sums[j], `schemes ${i} and ${j} collided`);
+          }
+        }
+      });
+
+      // ---- fps does not change I_PCM payload size ----
+      await test('H.264 fps changes mux timing not sample size', async () => {
+        const frame = solidFrame(64, 64, 128, 64, 32);
+        const at10 = VideoExporter.encode([frame], { width: 64, height: 64, fps: 10, format: VideoFormat.Mp4 });
+        const at60 = VideoExporter.encode([frame], { width: 64, height: 64, fps: 60, format: VideoFormat.Mp4 });
+        assert(at10.byteLength === at60.byteLength, 'payload size should be fps-independent');
+        assert(fnv1a(at10.bytes) !== fnv1a(at60.bytes), 'container metadata should differ');
+      });
+
+      // ---- buffer representations ----
+      for (const mode of ['uint8', 'arraybuffer', 'subarray']) {
+        await test(`buffer mode ${mode} MP4 parity`, async () => {
+          const rebuffed = rebufferFrames(synthetic, mode);
+          const result = VideoExporter.encode(rebuffed, {
+            width: W, height: H, fps: 10, format: VideoFormat.Mp4,
           });
-          assert(result.bytes[0] === 0x47 && result.bytes[1] === 0x49 && result.bytes[2] === 0x46, 'GIF magic');
-          assert(result.byteLength === results.mainGifBytes, `worker size ${result.byteLength} != main ${results.mainGifBytes}`);
-          assert(checksum(result.bytes) === results.mainGifChecksum, 'worker gif bytes differ from main');
+          assert(fnv1a(result.bytes) === results.mainMp4Checksum, `${mode} checksum mismatch`);
+        });
+      }
+
+      // ---- shared worker pool ----
+      await test('encodeVideoFramesInWorker APNG', async () => {
+        const result = await encodeVideoFramesInWorker(synthetic, {
+          width: W, height: H, fps: 10, format: VideoFormat.Apng, transparent: true,
+        }, workerUrls());
+        assertApng(result.bytes);
+      });
+
+      // ---- encode latency (main vs worker) ----
+      await test('encode latency main vs worker (MP4 320×240)', async () => {
+        const frames = [checkerFrame(320, 240, 0), checkerFrame(320, 240, 1)];
+        const opts = { width: 320, height: 240, fps: 30, format: VideoFormat.Mp4 };
+        const mainMs = await timeAsync(() => { VideoExporter.encode(frames, opts); });
+        const worker = new VideoEncodeWorker(workerUrls());
+        let workerMs = 0;
+        try {
+          workerMs = await timeAsync(() => worker.encode(frames, opts));
+        } finally {
+          worker.terminate();
+        }
+        results.metrics.mp4_320x240_main_ms = Math.round(mainMs);
+        results.metrics.mp4_320x240_worker_ms = Math.round(workerMs);
+        assert(mainMs > 0 && workerMs > 0, 'timing');
+      });
+
+      await test('streaming worker encode matches batch encode (MP4)', async () => {
+        const frames = syntheticSolidFrames(W, H);
+        const opts = { width: W, height: H, fps: 10, format: VideoFormat.Mp4 };
+        const batch = VideoExporter.encode(frames, opts);
+        const worker = new VideoEncodeWorker(workerUrls());
+        try {
+          const stream = await worker.beginStream(opts, { batchSize: 2 });
+          for (const f of frames) await stream.push(f);
+          const streamed = await stream.finish();
+          assert(fnv1a(streamed.bytes) === fnv1a(batch.bytes), 'streaming mp4 differs from batch');
         } finally {
           worker.terminate();
         }
       });
 
-      await test('shared encodeVideoFramesInWorker APNG', async () => {
-        const result = await encodeVideoFramesInWorker(synthetic, {
-          width: W, height: H, fps: 10, format: VideoFormat.Apng, transparent: true,
-        }, {
-          wasmUrl: new URL('/web/pkg/threers_bg.wasm', location.origin).href,
-          workerUrl: new URL('/web/video-export-worker.js', location.origin).href,
-        });
-        assert(result.bytes[0] === 0x89 && result.bytes[1] === 0x50, 'PNG magic');
-        assert(result.byteLength > 100, 'apng too small');
+      // ---- validation errors ----
+      await test('MP4 rejects odd dimensions', async () => {
+        let threw = false;
+        try {
+          VideoExporter.encode(synthetic, { width: 65, height: H, fps: 10, format: VideoFormat.Mp4 });
+        } catch (e) {
+          threw = true;
+          assert(String(e.message || e).includes('even'), 'expected even-dimension error');
+        }
+        assert(threw, 'expected throw');
       });
 
+      await test('MP4 rejects transparency', async () => {
+        let threw = false;
+        try {
+          VideoExporter.encode(synthetic, {
+            width: W, height: H, fps: 10, format: VideoFormat.Mp4, transparent: true,
+          });
+        } catch (e) {
+          threw = true;
+          assert(String(e.message || e).toLowerCase().includes('transparen'), 'expected transparency error');
+        }
+        assert(threw, 'expected throw');
+      });
+
+      // ---- GPU capture path ----
       if (!navigator.gpu) {
-        log('SKIP  parallel capture (no WebGPU)', 'fail');
-        results.tests.push({ name: 'parallel capture', ok: false, error: 'no WebGPU' });
-        throw new Error('WebGPU unavailable');
+        skip('GPU sequential capture', 'no WebGPU');
+        skip('GPU parallel capture parity', 'no WebGPU');
+        skip('GPU capture → MP4 main thread', 'no WebGPU');
+        skip('GPU capture → MP4 worker', 'no WebGPU');
+        skip('GPU parallel MP4 end-to-end', 'no WebGPU');
+      } else {
+        const canvas = document.getElementById('c');
+        const renderer = await THREE.WebGLRenderer.create(canvas);
+        renderer.setSize(W, H, false);
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0.1, 0.15, 0.25);
+        const mesh = new THREE.Mesh(
+          new THREE.BoxGeometry(1, 1, 1),
+          new THREE.MeshBasicMaterial({ color: 0x44aaff }),
+        );
+        scene.add(mesh);
+        const camera = new THREE.PerspectiveCamera(50, W / H, 0.1, 100);
+        camera.position.set(0, 0.8, 2.5);
+        camera.lookAt(0, 0, 0);
+
+        const frameCount = 8;
+        const update = (i, n) => { mesh.rotation.y = (i / n) * Math.PI * 2; };
+
+        let sequential;
+        await test('GPU sequential capture (concurrency 1)', async () => {
+          sequential = await captureSceneFrames(renderer, scene, camera, {
+            width: W, height: H, frameCount, fps: 12, concurrency: 1, yield: false, update,
+          });
+          assert(sequential.length === frameCount, 'frame count');
+          assert(sequential[0].length === W * H * 4, 'rgba size');
+          results.seqChecksum = sequential.map(fnv1a).join(',');
+        });
+
+        await test('GPU parallel capture (concurrency 3) matches sequential', async () => {
+          const parallel = await captureSceneFrames(renderer, scene, camera, {
+            width: W, height: H, frameCount, fps: 12, concurrency: 3, yield: false, update,
+          });
+          assert(parallel.length === frameCount, 'frame count');
+          assert(framesEqual(sequential, parallel), 'parallel frames differ from sequential');
+        });
+
+        await test('GPU capture → MP4 main thread', async () => {
+          const frames = await captureSceneFrames(renderer, scene, camera, {
+            width: W, height: H, frameCount: 4, fps: 12, concurrency: 2, yield: false, update,
+          });
+          const result = VideoExporter.encode(frames, {
+            width: W, height: H, fps: 12, format: VideoFormat.Mp4,
+          });
+          assertMp4(result.bytes);
+          results.gpuMp4Checksum = fnv1a(result.bytes);
+        });
+
+        await test('GPU capture → MP4 worker matches main', async () => {
+          const frames = await captureSceneFrames(renderer, scene, camera, {
+            width: W, height: H, frameCount: 4, fps: 12, concurrency: 2, yield: false, update,
+          });
+          const { main, worker } = await assertMainWorkerParity(deps, frames, {
+            width: W, height: H, fps: 12, format: VideoFormat.Mp4,
+          }, 'gpu-mp4');
+          assert(fnv1a(main.bytes) === fnv1a(worker.bytes), 'gpu mp4 parity');
+        });
+
+        await test('GPU parallel MP4 end-to-end (.mp4 preset + worker)', async () => {
+          const t0 = performance.now();
+          const result = await VideoExporter.from(renderer, scene, camera)
+            .mp4()
+            .size(W, H)
+            .fps(12)
+            .parallel(3)
+            .worker(true)
+            .frames(frameCount)
+            .update(update)
+            .export();
+          results.metrics.gpu_mp4_e2e_ms = Math.round(performance.now() - t0);
+          assertMp4(result.bytes);
+          assert(result.frameCount === frameCount, 'frameCount');
+          assert(result.format === 'mp4', 'format');
+          results.e2eSummary = result.summary;
+        });
+
+        await test('GPU parallel GIF end-to-end (regression)', async () => {
+          const result = await VideoExporter.from(renderer, scene, camera)
+            .gif({ colors: 32 })
+            .size(W, H)
+            .fps(12)
+            .parallel(3)
+            .worker(true)
+            .frames(frameCount)
+            .update(update)
+            .export();
+          assertGif(result.bytes);
+        });
       }
 
-      const canvas = document.getElementById('c');
-      const renderer = await THREE.WebGLRenderer.create(canvas);
-      renderer.setSize(W, H, false);
-      const scene = new THREE.Scene();
-      scene.background = new THREE.Color(0.1, 0.15, 0.25);
-      const mesh = new THREE.Mesh(
-        new THREE.BoxGeometry(1, 1, 1),
-        new THREE.MeshBasicMaterial({ color: 0x44aaff }),
-      );
-      scene.add(mesh);
-      const camera = new THREE.PerspectiveCamera(50, W / H, 0.1, 100);
-      camera.position.set(0, 0.8, 2.5);
-      camera.lookAt(0, 0, 0);
-
-      const frameCount = 8;
-      const update = (i, n) => { mesh.rotation.y = (i / n) * Math.PI * 2; };
-
-      let sequential;
-      await test('sequential capture (concurrency 1)', async () => {
-        sequential = await captureSceneFrames(renderer, scene, camera, {
-          width: W, height: H, frameCount, fps: 12, concurrency: 1, yield: false, update,
-        });
-        assert(sequential.length === frameCount, 'frame count');
-        assert(sequential[0].length === W * H * 4, 'rgba size');
-        results.seqChecksum = sequential.map(checksum).join(',');
-      });
-
-      await test('parallel capture (concurrency 3) matches sequential', async () => {
-        const parallel = await captureSceneFrames(renderer, scene, camera, {
-          width: W, height: H, frameCount, fps: 12, concurrency: 3, yield: false, update,
-        });
-        assert(parallel.length === frameCount, 'frame count');
-        assert(framesEqual(sequential, parallel), 'parallel frames differ from sequential');
-        results.parChecksum = parallel.map(checksum).join(',');
-      });
-
-      await test('parallel capture + worker encode end-to-end', async () => {
-        const result = await VideoExporter.from(renderer, scene, camera)
-          .gif({ colors: 32 })
-          .size(W, H)
-          .fps(12)
-          .parallel(3)
-          .worker(true)
-          .frames(frameCount)
-          .update(update)
-          .export();
-        assert(result.bytes[0] === 0x47, 'GIF magic');
-        assert(result.frameCount === frameCount, 'frameCount');
-        results.e2eBytes = result.byteLength;
-        results.e2eSummary = result.summary;
-      });
-
-      results.ok = results.tests.every((t) => t.ok);
+      const failed = results.tests.filter((t) => t.ok === false && !t.skipped);
+      results.ok = failed.length === 0;
+      results.finished = true;
       document.title = results.ok ? 'PASS' : 'FAIL';
-      log(results.ok ? '\nALL PASSED' : '\nFAILED', results.ok ? 'ok' : 'fail');
+      log(results.ok ? '\nALL PASSED' : `\nFAILED (${failed.length})`, results.ok ? 'ok' : 'fail');
+      if (!results.ok) {
+        results.error = failed.map((t) => `${t.name}: ${t.error}`).join('; ');
+      }
     }
 
     main().catch((e) => {
       results.ok = false;
       results.error = String(e?.message || e);
+      results.finished = true;
       document.title = 'FAIL';
       log(`ERROR ${results.error}`, 'fail');
     });

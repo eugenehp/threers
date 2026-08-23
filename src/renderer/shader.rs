@@ -987,6 +987,7 @@ pub const MAX_DIR_LIGHTS: usize = 4;
 pub const MAX_POINT_LIGHTS: usize = 4;
 pub const MAX_SPOT_LIGHTS: usize = 4;
 pub const MAX_HEMI_LIGHTS: usize = 4;
+pub const MAX_RECT_LIGHTS: usize = 2;
 
 pub const SHADER_SOURCE: &str = r#"
 const MAT_BASIC    : u32 = 0u;
@@ -1004,6 +1005,7 @@ const MAT_SPRITE   : u32 = 11u;
 const MAT_DISTANCE : u32 = 12u;
 const MAT_SKY      : u32 = 13u;
 const MAT_MIRROR   : u32 = 14u;
+const MAT_ATMOSPHERE : u32 = 16u;
 
 const FLAG_MAP           : u32 = 1u;
 const FLAG_NORMAL_MAP    : u32 = 2u;
@@ -1012,9 +1014,12 @@ const FLAG_METALNESS_MAP : u32 = 8u;
 const FLAG_AO_MAP        : u32 = 16u;
 const FLAG_EMISSIVE_MAP  : u32 = 32u;
 const FLAG_MATCAP_MAP    : u32 = 64u;
+const FLAG_DISPLACEMENT_MAP : u32 = 2048u;
+const FLAG_CLOUD_SHADOW     : u32 = 4096u;
 const FLAG_DASHED        : u32 = 128u;
 const FLAG_SHADOW_MAT    : u32 = 256u;
 const FLAG_RECEIVE_SHADOW: u32 = 512u;
+const FLAG_IRIDESCENCE_MAP: u32 = 1024u;
 
 const PI : f32 = 3.14159265358979;
 
@@ -1034,6 +1039,15 @@ struct SpotLight {
     direction : vec4<f32>,
     color     : vec4<f32>,
     params    : vec4<f32>,
+};
+
+/// Rectangular area light. `right`/`up` are half-extent vectors, so the corners
+/// are `position ± right ± up`.
+struct RectLight {
+    position : vec4<f32>,
+    color    : vec4<f32>,
+    right    : vec4<f32>,
+    up       : vec4<f32>,
 };
 
 struct HemiLight {
@@ -1071,6 +1085,11 @@ struct FrameUniforms {
     point_lights    : array<PointLight, 4>,
     spot_lights     : array<SpotLight,  4>,
     hemi_lights     : array<HemiLight,  4>,
+    rect_lights     : array<RectLight,  2>,
+    /// x: rect-area light count (yzw reserved).
+    light_counts2   : vec4<u32>,
+    /// One texel of each shadow map: x directional, y spot.
+    shadow_texel    : vec4<f32>,
 };
 
 struct MeshUniforms {
@@ -1087,8 +1106,31 @@ struct MeshUniforms {
     /// Physical material: x: clearcoat, y: clearcoat_roughness, z: ior, w: transmission
     params3       : vec4<f32>,
     /// Physical volume: x: thickness (glass refraction/march depth),
-    /// y: dispersion, z: vertex_emissive. w reserved.
+    /// y: dispersion, z: vertex_emissive, w: anisotropy_rotation (radians).
     params4       : vec4<f32>,
+    /// Physical layers 2: x: iridescence, y: iridescence_ior,
+    /// z: iridescence_thickness (nm), w: sheen strength.
+    params5       : vec4<f32>,
+    /// x/y/z: sheen_color, w: sheen_roughness.
+    params6       : vec4<f32>,
+    /// x/y/z: attenuation_color, w: attenuation_distance (0 = disabled).
+    params7       : vec4<f32>,
+    /// x: displacement_scale, y: displacement_bias.
+    params8       : vec4<f32>,
+    /// UV transform: xy offset, zw repeat (three.js `Texture.offset/repeat`).
+    params9       : vec4<f32>,
+    /// x: cloud shell height, y: cloud shadow strength, z: cloud longitude
+    /// offset (turns), w: twilight wrap width.
+    params10      : vec4<f32>,
+    /// xyz: twilight colour, w: the sun's angular radius in radians.
+    params11      : vec4<f32>,
+    /// Eclipse occluder: world-space xyz centre, w radius (0 = none).
+    params12      : vec4<f32>,
+    /// x: cloud forward-scatter strength, y: scattering anisotropy g,
+    /// z: ozone absorption strength, w: aurora strength.
+    params13      : vec4<f32>,
+    /// xyz: aurora colour, w: colatitude of the auroral oval, in degrees.
+    params14      : vec4<f32>,
     /// x: material kind, y: texture-slot flags
     flags         : vec4<u32>,
 };
@@ -1104,6 +1146,142 @@ struct MeshUniforms {
 @group(2) @binding(5) var emissive_tex   : texture_2d<f32>;
 @group(2) @binding(6) var matcap_tex     : texture_2d<f32>;
 @group(2) @binding(7) var tex_sampler    : sampler;
+@group(2) @binding(8) var iridescence_thickness_tex : texture_2d<f32>;
+@group(2) @binding(9) var displacement_tex : texture_2d<f32>;
+
+/// How much of the sun a sphere leaves visible from this point.
+///
+/// The sun and the occluder are both circles on the sky, of angular radii `a`
+/// and `b`, their centres `d` apart. What is lost is the area the two discs
+/// share, over the sun's area — the standard circle-circle lens. Doing it this
+/// way rather than with a shadow map gives the penumbra for nothing, because
+/// the sun is half a degree wide and not a point; it gives the annular ring
+/// when the occluder is smaller and centred; and it works over a lunar orbit,
+/// where a shadow map fitted to the planet would never reach the moon.
+/// Lambert's cosine, softened by the sun being a disc rather than a point.
+///
+/// `max(dot(n, l), 0)` is the cosine for a *point* source, and it puts a hard
+/// edge on the terminator. The sun is about half a degree across, so near the
+/// terminator part of its disc is below the horizon and part is above, and the
+/// light falls off over that angular width instead of switching. From orbit
+/// that is a band roughly thirty kilometres wide on Earth — narrow, but a hard
+/// edge at this scale reads as a rendering artefact rather than as a sunrise.
+///
+/// The returned value is the first moment of the visible part of the disc: it
+/// meets `dot(n, l)` exactly where the disc clears the horizon either way, so
+/// nothing outside the band changes.
+fn soft_lambert(ndl : f32, sun_radius : f32) -> f32 {
+    if (sun_radius <= 0.0) {
+        return max(ndl, 0.0);
+    }
+    let x = ndl / sun_radius;
+    if (x >= 1.0) { return ndl; }
+    if (x <= -1.0) { return 0.0; }
+    return sun_radius * (x * acos(-x) + sqrt(max(1.0 - x * x, 0.0))) / PI;
+}
+
+/// Henyey-Greenstein phase function: how much light scattering off a droplet
+/// carries on in a given direction.
+///
+/// `g` is the asymmetry — 0 scatters evenly, positive keeps light going the way
+/// it was already headed. Cloud droplets are far larger than visible
+/// wavelengths and sit around 0.8, which is why a deck with the sun behind it
+/// glows and the same deck lit from over your shoulder does not.
+fn henyey_greenstein(cos_theta : f32, g : f32) -> f32 {
+    let g2 = g * g;
+    let d = max(1.0 + g2 - 2.0 * g * cos_theta, 1e-4);
+    return (1.0 - g2) / (4.0 * PI * d * sqrt(d));
+}
+
+fn eclipse_factor(world_p : vec3<f32>, to_sun : vec3<f32>) -> f32 {
+    let radius = mesh.params12.w;
+    let a = mesh.params11.w;
+    if (radius <= 0.0 || a <= 0.0) {
+        return 1.0;
+    }
+    let v = mesh.params12.xyz - world_p;
+    let dist = length(v);
+    if (dist < 1e-5) {
+        return 1.0;
+    }
+    let dir = v / dist;
+    let cos_sep = dot(dir, to_sun);
+    // Behind us relative to the sun: it cannot be in the way.
+    if (cos_sep <= 0.0) {
+        return 1.0;
+    }
+    let b = asin(clamp(radius / max(dist, radius), 0.0, 1.0));
+    let d = acos(clamp(cos_sep, -1.0, 1.0));
+    if (d >= a + b) {
+        return 1.0;                       // discs apart
+    }
+    if (d <= b - a) {
+        return 0.0;                       // total: the sun is behind it
+    }
+    if (d <= a - b) {
+        return 1.0 - (b * b) / (a * a);   // annular: occluder wholly inside
+    }
+    // Partial: the lens where the two discs overlap.
+    let a2 = a * a;
+    let b2 = b * b;
+    let d2 = d * d;
+    let x = (d2 + a2 - b2) / (2.0 * d);
+    let y = (d2 + b2 - a2) / (2.0 * d);
+    let lens = a2 * acos(clamp(x / a, -1.0, 1.0)) - x * sqrt(max(a2 - x * x, 0.0))
+             + b2 * acos(clamp(y / b, -1.0, 1.0)) - y * sqrt(max(b2 - y * y, 0.0));
+    return clamp(1.0 - lens / (PI * a2), 0.0, 1.0);
+}
+
+/// How much sunlight a cloud deck above this point lets through.
+///
+/// Intersects the ray from the shaded point toward the sun with a shell
+/// `params10.x` above the body and samples the cloud map's alpha where it
+/// crosses. That offset is the whole point: directly under the sun a cloud
+/// shadows the ground beneath it, and as the sun drops the shadow slides away
+/// across the surface, which is what stops the deck looking painted on.
+///
+/// Works in the body's own space, where it is a unit sphere. The inverse of the
+/// model's linear part is the transpose of the normal matrix — `normal_matrix`
+/// is `(M⁻¹)ᵀ`, so its transpose is `M⁻¹` — which also makes this correct under
+/// the flattening a spinning planet has.
+fn cloud_shadow(local_p : vec3<f32>, sun_world : vec3<f32>) -> f32 {
+    if ((mesh.flags.y & FLAG_CLOUD_SHADOW) == 0u) {
+        return 1.0;
+    }
+    let inv = transpose(mat3x3<f32>(
+        mesh.normal_matrix[0].xyz, mesh.normal_matrix[1].xyz, mesh.normal_matrix[2].xyz));
+    let s = normalize(inv * sun_world);
+    let n = normalize(local_p);
+    let rc = 1.0 + max(mesh.params10.x, 1e-4);
+    let b = dot(n, s);
+    // The far root: the ray leaves through the top of the shell.
+    let t = -b + sqrt(max(b * b + rc * rc - 1.0, 0.0));
+    let q = normalize(n + s * t);
+    // Equirectangular UV, matching SphereGeometry's mapping:
+    //   position = (-cos(phi)·sin(theta), cos(theta), sin(phi)·sin(theta))
+    let u = atan2(q.z, -q.x) / (2.0 * PI) + mesh.params10.z;
+    let v = 1.0 - acos(clamp(q.y, -1.0, 1.0)) / PI;
+    let cover = textureSample(matcap_tex, tex_sampler, vec2<f32>(u, v)).a;
+    return 1.0 - clamp(cover, 0.0, 1.0) * clamp(mesh.params10.y, 0.0, 1.0);
+}
+
+/// Offset an object-space position along its normal by the height map.
+///
+/// Sampled with `textureSampleLevel`: the vertex stage has no derivatives, so
+/// an implicit-LOD `textureSample` is not available there. Level 0 is also what
+/// you want — a mip-filtered height map would flatten the very relief this is
+/// displacing by.
+fn transform_uv(uv : vec2<f32>) -> vec2<f32> {
+    return uv * mesh.params9.zw + mesh.params9.xy;
+}
+
+fn apply_displacement(position : vec3<f32>, normal : vec3<f32>, uv : vec2<f32>) -> vec3<f32> {
+    if ((mesh.flags.y & FLAG_DISPLACEMENT_MAP) == 0u) {
+        return position;
+    }
+    let h = textureSampleLevel(displacement_tex, tex_sampler, uv, 0.0).r;
+    return position + normalize(normal) * (h * mesh.params8.x + mesh.params8.y);
+}
 
 @group(3) @binding(0) var env_tex              : texture_cube<f32>;
 @group(3) @binding(1) var env_sampler          : sampler;
@@ -1126,6 +1304,13 @@ struct VsIn {
     @location(1) normal   : vec3<f32>,
     @location(2) uv       : vec2<f32>,
     @location(3) color    : vec4<f32>,
+    /// xyz = object-space tangent, w = bitangent handedness (glTF convention).
+    /// All-zero means the geometry carries no tangents.
+    ///
+    /// Location 8, not 4: the skinned and instanced pipelines already consume
+    /// locations 4-7 from their extra vertex buffers, and this lives in the
+    /// shared base buffer that all three read.
+    @location(8) tangent  : vec4<f32>,
 };
 
 struct VsOut {
@@ -1138,6 +1323,11 @@ struct VsOut {
     @location(5) clip_zw        : vec2<f32>,
     /// Homogeneous projective UV for mirror materials (three.js `vUv`).
     @location(6) proj_uv        : vec4<f32>,
+    /// World-space tangent + handedness, zero when the mesh has none.
+    @location(7) world_tangent  : vec4<f32>,
+    /// Object-space position, for shading that needs the body's own frame —
+    /// the cloud-shadow shell intersection reads it.
+    @location(8) local_pos      : vec3<f32>,
 };
 
 fn mirror_proj_uv(local_pos: vec3<f32>) -> vec4<f32> {
@@ -1147,10 +1337,26 @@ fn mirror_proj_uv(local_pos: vec3<f32>) -> vec4<f32> {
     return vec4<f32>(0.0, 0.0, 0.0, 1.0);
 }
 
+/// Object-space tangent → world space.
+///
+/// Tangents transform by the model matrix (they are directions *along* the
+/// surface), not by the inverse-transpose that normals use — under non-uniform
+/// scale the two genuinely differ. An all-zero input is passed through as zero,
+/// which the fragment shader reads as "no tangent supplied".
+fn world_tangent(t : vec4<f32>) -> vec4<f32> {
+    if (dot(t.xyz, t.xyz) < 1e-12) {
+        return vec4<f32>(0.0);
+    }
+    let w = (mesh.model * vec4<f32>(t.xyz, 0.0)).xyz;
+    return vec4<f32>(w, t.w);
+}
+
 @vertex
 fn vs_main(in : VsIn) -> VsOut {
     var out : VsOut;
-    let world_p = mesh.model * vec4<f32>(in.position, 1.0);
+    let uv = transform_uv(in.uv);
+    let local_p = apply_displacement(in.position, in.normal, uv);
+    let world_p = mesh.model * vec4<f32>(local_p, 1.0);
     out.world_pos = world_p.xyz;
     out.clip_pos = frame.view_proj * world_p;
     // Sky: pin near far plane (three.js sets gl_Position.z = gl_Position.w). WebGPU
@@ -1161,17 +1367,22 @@ fn vs_main(in : VsIn) -> VsOut {
     out.clip_zw = out.clip_pos.zw;
     let n4 = mesh.normal_matrix * vec4<f32>(in.normal, 0.0);
     out.world_normal = n4.xyz;
-    out.uv = in.uv;
+    out.uv = uv;
     let view_p = frame.view * world_p;
     out.view_z = -view_p.z;
     out.vertex_color = in.color;
     out.proj_uv = mirror_proj_uv(in.position);
+    out.world_tangent = world_tangent(in.tangent);
+    out.local_pos = local_p;
     return out;
 }
 
 @vertex
 fn vs_shadow(in : VsIn) -> @builtin(position) vec4<f32> {
-    return frame.shadow_vp * mesh.model * vec4<f32>(in.position, 1.0);
+    // Displaced geometry has to cast the shadow its displaced silhouette
+    // implies, or the terrain and its shadow disagree.
+    return frame.shadow_vp * mesh.model
+        * vec4<f32>(apply_displacement(in.position, in.normal, transform_uv(in.uv)), 1.0);
 }
 
 @vertex
@@ -1191,6 +1402,7 @@ struct SkinnedVsIn {
     @location(3) color    : vec4<f32>,
     @location(4) joints   : vec4<f32>,
     @location(5) weights  : vec4<f32>,
+    @location(8) tangent  : vec4<f32>,
 };
 
 @group(1) @binding(1) var<storage, read> bone_matrices : array<mat4x4<f32>>;
@@ -1203,17 +1415,20 @@ fn vs_skinned(in : SkinnedVsIn) -> VsOut {
              + bone_matrices[j.y] * in.weights.y
              + bone_matrices[j.z] * in.weights.z
              + bone_matrices[j.w] * in.weights.w;
-    let world_p = skin * vec4<f32>(in.position, 1.0);
+    let skin_uv = transform_uv(in.uv);
+    let world_p = skin * vec4<f32>(apply_displacement(in.position, in.normal, skin_uv), 1.0);
     out.world_pos = world_p.xyz;
     out.clip_pos = frame.view_proj * world_p;
     out.clip_zw = out.clip_pos.zw;
     let n4 = skin * vec4<f32>(in.normal, 0.0);
     out.world_normal = n4.xyz;
-    out.uv = in.uv;
+    out.uv = skin_uv;
     let view_p = frame.view * world_p;
     out.view_z = -view_p.z;
     out.vertex_color = in.color;
     out.proj_uv = mirror_proj_uv(in.position);
+    out.world_tangent = world_tangent(in.tangent);
+    out.local_pos = in.position;
     return out;
 }
 
@@ -1226,6 +1441,7 @@ struct InstancedVsIn {
     @location(5) imat1    : vec4<f32>,
     @location(6) imat2    : vec4<f32>,
     @location(7) imat3    : vec4<f32>,
+    @location(8) tangent  : vec4<f32>,
 };
 
 @vertex
@@ -1233,17 +1449,20 @@ fn vs_instanced(in : InstancedVsIn) -> VsOut {
     var out : VsOut;
     let instance_mat = mat4x4<f32>(in.imat0, in.imat1, in.imat2, in.imat3);
     let model = mesh.model * instance_mat;
-    let world_p = model * vec4<f32>(in.position, 1.0);
+    let uv = transform_uv(in.uv);
+    let world_p = model * vec4<f32>(apply_displacement(in.position, in.normal, uv), 1.0);
     out.world_pos = world_p.xyz;
     out.clip_pos = frame.view_proj * world_p;
     out.clip_zw = out.clip_pos.zw;
     let n4 = mesh.normal_matrix * vec4<f32>(in.normal, 0.0);
     out.world_normal = n4.xyz;
-    out.uv = in.uv;
+    out.uv = uv;
     let view_p = frame.view * world_p;
     out.view_z = -view_p.z;
     out.vertex_color = in.color;
     out.proj_uv = mirror_proj_uv(in.position);
+    out.world_tangent = world_tangent(in.tangent);
+    out.local_pos = in.position;
     return out;
 }
 
@@ -1268,6 +1487,8 @@ fn vs_sprite(in : VsIn) -> VsOut {
     out.view_z = -view_pos.z;
     out.vertex_color = in.color;
     out.proj_uv = mirror_proj_uv(in.position);
+    out.world_tangent = world_tangent(in.tangent);
+    out.local_pos = in.position;
     return out;
 }
 
@@ -1337,15 +1558,48 @@ fn apply_fog(color : vec3<f32>, view_z : f32) -> vec3<f32> {
     return mix(color, frame.fog_color.rgb, factor);
 }
 
-fn shadow_factor(world_pos : vec3<f32>) -> f32 {
+fn shadow_factor(world_pos : vec3<f32>, world_normal : vec3<f32>) -> f32 {
     if (frame.shadow_params.x < 0.5) { return 1.0; }
-    let p = frame.shadow_vp * vec4<f32>(world_pos, 1.0);
+    // NORMAL BIAS: step off the surface before looking the depth up.
+    //
+    // A constant depth bias has to cover the worst case — a face nearly edge-on
+    // to the light, where one shadow texel spans a long slope and the stored
+    // depth is far from this fragment's. Sized for that, it is far too much
+    // everywhere else and shadows visibly detach from their casters. Moving the
+    // lookup along the surface normal instead scales with the geometry rather
+    // than the angle, so the grazing case is covered without paying for it on
+    // faces that point at the light.
+    let biased = world_pos + world_normal * frame.shadow_texel.y;
+    let p = frame.shadow_vp * vec4<f32>(biased, 1.0);
     let ndc = p.xyz / max(p.w, 0.0001);
     let uv = vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
     if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) { return 1.0; }
     if (ndc.z < 0.0 || ndc.z > 1.0) { return 1.0; }
     let bias = frame.shadow_params.y;
-    return textureSampleCompareLevel(shadow_tex, shadow_sampler, uv, ndc.z - bias);
+
+    // PERCENTAGE-CLOSER FILTERING, 3x3.
+    //
+    // A single compare sample gives a binary answer per pixel, so the shadow
+    // edge is the shadow map's own pixel grid, drawn at whatever size the
+    // camera happens to magnify it to — a staircase that crawls as the light
+    // or the object moves. Comparing nine neighbours and averaging the results
+    // turns that into a one-texel gradient, which reads as an edge rather than
+    // as a grid. The comparison sampler does the depth test per tap, so this is
+    // nine compares, not nine fetches plus arithmetic.
+    //
+    // Nine and not twenty-five: at 2 mm a texel the penumbra this fakes is
+    // already finer than the geometry it falls on, and in vacuum a real shadow
+    // edge IS nearly hard — the sun is half a degree wide and there is no air
+    // to scatter into it. This is anti-aliasing, not softness.
+    var sum = 0.0;
+    for (var dy = -1; dy <= 1; dy = dy + 1) {
+        for (var dx = -1; dx <= 1; dx = dx + 1) {
+            let o = vec2<f32>(f32(dx), f32(dy)) * frame.shadow_texel.x;
+            sum = sum + textureSampleCompareLevel(
+                shadow_tex, shadow_sampler, uv + o, ndc.z - bias);
+        }
+    }
+    return sum / 9.0;
 }
 
 fn shadow_factor_spot(world_pos : vec3<f32>) -> f32 {
@@ -1565,7 +1819,7 @@ fn dfg_approx(normal : vec3<f32>, view_dir : vec3<f32>, roughness : f32) -> vec2
     return vec2<f32>(-1.04, 1.04) * a004 + r.zw;
 }
 
-fn pbr_brdf(n : vec3<f32>, v : vec3<f32>, l : vec3<f32>, albedo : vec3<f32>, roughness : f32, metalness : f32) -> vec3<f32> {
+fn pbr_brdf(n : vec3<f32>, v : vec3<f32>, l : vec3<f32>, albedo : vec3<f32>, roughness : f32, metalness : f32, f0 : vec3<f32>) -> vec3<f32> {
     let h = normalize(v + l);
     let n_dot_v = max(dot(n, v), 0.0);
     let n_dot_l = max(dot(n, l), 0.0);
@@ -1576,7 +1830,6 @@ fn pbr_brdf(n : vec3<f32>, v : vec3<f32>, l : vec3<f32>, albedo : vec3<f32>, rou
     // remapping (so user-facing roughness stays linear-ish). Without this,
     // low-roughness highlights are far too broad (e.g. r=0.15 was ~44× wider).
     let a = max(roughness * roughness, 0.0016);
-    let f0 = mix(vec3<f32>(0.04), albedo, metalness);
     let f = f_schlick(v_dot_h, f0);
     let d = d_ggx(n_dot_h, a);
     let g = g_smith(n_dot_v, n_dot_l, a);
@@ -1584,7 +1837,9 @@ fn pbr_brdf(n : vec3<f32>, v : vec3<f32>, l : vec3<f32>, albedo : vec3<f32>, rou
     let spec = (d * g * f) / max(4.0 * n_dot_v * n_dot_l, 0.0001);
     let kd = (vec3<f32>(1.0) - f) * (1.0 - metalness);
     let diff = kd * albedo / PI;
-    return (diff + spec) * n_dot_l;
+    // Softened by the sun's angular size — see `soft_lambert`. `params11.w` is
+    // zero for anything that has not set a sun, which gives back `max(ndl, 0)`.
+    return (diff + spec) * soft_lambert(dot(n, l), mesh.params11.w);
 }
 
 // Anisotropic GGX specular (Filament / Burley). `an` in [-1, 1] biases the GGX
@@ -1594,7 +1849,7 @@ fn pbr_brdf(n : vec3<f32>, v : vec3<f32>, l : vec3<f32>, albedo : vec3<f32>, rou
 // denominator, so specular = D · V · F with no extra divide.
 fn pbr_brdf_aniso(
     n : vec3<f32>, v : vec3<f32>, l : vec3<f32>, t : vec3<f32>, b : vec3<f32>,
-    albedo : vec3<f32>, roughness : f32, metalness : f32, an : f32,
+    albedo : vec3<f32>, roughness : f32, metalness : f32, an : f32, f0 : vec3<f32>,
 ) -> vec3<f32> {
     let h = normalize(v + l);
     let n_dot_v = max(dot(n, v), 1e-4);
@@ -1625,33 +1880,409 @@ fn pbr_brdf_aniso(
     let lambda_l = n_dot_v * length(vec3<f32>(at * t_dot_l, ab * b_dot_l, n_dot_l));
     let vis = 0.5 / max(lambda_v + lambda_l, 1e-5);
 
-    let f0 = mix(vec3<f32>(0.04), albedo, metalness);
     let f = f_schlick(v_dot_h, f0);
 
     let spec = d * vis * f;
     let kd = (vec3<f32>(1.0) - f) * (1.0 - metalness);
     let diff = kd * albedo / PI;
-    return (diff + spec) * n_dot_l;
+    // Softened by the sun's angular size — see `soft_lambert`. `params11.w` is
+    // zero for anything that has not set a sun, which gives back `max(ndl, 0)`.
+    return (diff + spec) * soft_lambert(dot(n, l), mesh.params11.w);
+}
+
+// ---------------------------------------------------------------------------
+// Sheen — Estevez & Kulla "Charlie" distribution with Neubelt visibility, the
+// same pair three.js uses. Unlike GGX this lobe *peaks at grazing angles*, which
+// is what gives cloth its bright rim and what makes a near-black thermal
+// blanket still show its silhouette against a dark background.
+// ---------------------------------------------------------------------------
+fn d_charlie(n_dot_h : f32, a : f32) -> f32 {
+    let inv_a = 1.0 / max(a, 0.0016);
+    let cos2h = n_dot_h * n_dot_h;
+    let sin2h = max(1.0 - cos2h, 0.0078125); // 2^-7, avoids a fp16 blowup
+    return (2.0 + inv_a) * pow(sin2h, inv_a * 0.5) / (2.0 * PI);
+}
+
+fn v_neubelt(n_dot_v : f32, n_dot_l : f32) -> f32 {
+    return 1.0 / max(4.0 * (n_dot_l + n_dot_v - n_dot_l * n_dot_v), 1e-5);
+}
+
+/// Directional albedo of the Charlie sheen lobe, E(NoV, roughness).
+///
+/// three.js ships this as a 32×32 lookup texture; this is the analytic fit from
+/// Estevez & Kulla's course notes, which stays within a few percent of the LUT
+/// and costs no extra binding. Peaks at grazing angles, which is what gives
+/// sheen its signature bright rim under environment lighting.
+fn sheen_env_albedo(n_dot_v : f32, roughness : f32) -> f32 {
+    let r = clamp(roughness, 0.07, 1.0);
+    // Fitted coefficients interpolating between the smooth and rough regimes.
+    let a = mix(21.5473, 25.3245, r);
+    let b = mix(3.82987, 3.32435, r);
+    let c = mix(0.19823, 0.16801, r);
+    let d = mix(-1.97760, -1.27393, r);
+    let e = mix(-4.32054, -4.85315, r);
+    let x = clamp(n_dot_v, 0.0, 1.0);
+    let v = a / (1.0 + b * pow(x, c)) + d * x + e;
+    return clamp(exp2(v), 0.0, 1.0);
+}
+
+fn brdf_sheen(
+    n : vec3<f32>, v : vec3<f32>, l : vec3<f32>,
+    sheen_color : vec3<f32>, sheen_roughness : f32,
+) -> vec3<f32> {
+    let h = normalize(v + l);
+    let n_dot_l = max(dot(n, l), 0.0);
+    let n_dot_v = max(dot(n, v), 0.0);
+    let n_dot_h = max(dot(n, h), 0.0);
+    let a = max(sheen_roughness * sheen_roughness, 0.0016);
+    return sheen_color * d_charlie(n_dot_h, a) * v_neubelt(n_dot_v, n_dot_l) * n_dot_l;
+}
+
+struct TangentFrame {
+    t : vec3<f32>,
+    b : vec3<f32>,
+};
+
+/// UV-aligned tangent basis solved from screen-space derivatives (Mikkelsen's
+/// "derivative maps" trick), so meshes need no baked tangent attribute.
+///
+/// Falls back progressively: UV Jacobian → position-only tangent → an arbitrary
+/// in-plane axis. The last two only trigger on meshes with no UVs or on
+/// zero-area fragments, where any frame is as good as another.
+/// Pick the best available tangent frame for this fragment.
+///
+/// Prefers a real per-vertex tangent (glTF `TANGENT`, or `compute_tangents`),
+/// Gram-Schmidt-orthogonalised against the shading normal, because it is stable
+/// under camera motion and follows the authored UV/tangent flow — which is what
+/// lets anisotropy trace a brushed *ring* on a turned part rather than a
+/// straight streak. Falls back to the screen-space derivative frame when the
+/// geometry supplies none.
+fn surface_frame(n : vec3<f32>, p : vec3<f32>, uv : vec2<f32>, vt : vec4<f32>) -> TangentFrame {
+    // The derivative fallback is computed unconditionally, *before* any branch
+    // on `vt`. `vt` is interpolated per-fragment, so branching on it first would
+    // put the dpdx/dpdy calls inside non-uniform control flow — which WGSL
+    // forbids. (naga accepts it; Chrome's Tint correctly rejects it, so this
+    // only showed up in the browser.)
+    let deriv = cotangent_frame(n, p, uv);
+
+    if (dot(vt.xyz, vt.xyz) > 1e-12) {
+        let t_raw = vt.xyz - n * dot(n, vt.xyz);
+        if (dot(t_raw, t_raw) > 1e-12) {
+            let t = normalize(t_raw);
+            // w carries handedness, so mirrored UV shells flip the bitangent.
+            let sign = select(-1.0, 1.0, vt.w >= 0.0);
+            return TangentFrame(t, normalize(cross(n, t)) * sign);
+        }
+    }
+    return deriv;
+}
+
+fn cotangent_frame(n : vec3<f32>, p : vec3<f32>, uv : vec2<f32>) -> TangentFrame {
+    let dpx = dpdx(p);
+    let dpy = dpdy(p);
+    let duvx = dpdx(uv);
+    let duvy = dpdy(uv);
+    let det = duvx.x * duvy.y - duvy.x * duvx.y;
+
+    var t = vec3<f32>(0.0);
+    if (abs(det) > 1e-12) {
+        t = (dpx * duvy.y - dpy * duvx.y) / det;
+        t = t - n * dot(n, t);
+    }
+    if (dot(t, t) < 1e-12) {
+        t = dpx - n * dot(n, dpx);
+        if (dot(t, t) < 1e-12) { t = dpy - n * dot(n, dpy); }
+    }
+    if (dot(t, t) < 1e-12) {
+        t = select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), abs(n.x) > 0.9);
+        t = t - n * dot(n, t);
+    }
+    let tn = normalize(t);
+    return TangentFrame(tn, normalize(cross(n, tn)));
+}
+
+/// Beer-Lambert transmittance through `thickness` world units of the material's
+/// interior.
+///
+/// Two regimes, selected by `attenuation_distance` (params7.w):
+///   - 0 → the material never opted in. Falls back to the historical threers
+///     behaviour of absorbing by `1 - albedo`, so existing glass keeps tinting
+///     from its base color and nothing re-renders differently.
+///   - > 0 → the physical formulation: transmitted light decays toward
+///     `attenuation_color` over `attenuation_distance`, i.e.
+///     σ = -ln(color) / distance and T = exp(-σ·d).
+fn volume_transmittance(albedo : vec3<f32>, thickness : f32) -> vec3<f32> {
+    let dist = mesh.params7.w;
+    let d = max(thickness, 0.0);
+    if (dist <= 0.0) {
+        return exp(-(vec3<f32>(1.0) - albedo) * d);
+    }
+    // Clamp away from 0 so a fully-black attenuation channel gives a very large
+    // (but finite) coefficient rather than -log(0) = inf.
+    let att_color = clamp(mesh.params7.rgb, vec3<f32>(1e-4), vec3<f32>(1.0));
+    let sigma = -log(att_color) / dist;
+    return exp(-sigma * d);
+}
+
+// ---------------------------------------------------------------------------
+// Iridescence — thin-film interference after Belcour & Barla 2017, "A Practical
+// Extension to Microfacet Theory for the Modeling of Varying Iridescence"
+// (matching three.js's iridescence_fragment). A film of thickness d over the
+// base sets up optical path differences that reinforce some wavelengths and
+// cancel others; `eval_sensitivity` integrates that against Gaussian fits of
+// the CIE XYZ response to get an RGB reflectance directly.
+// ---------------------------------------------------------------------------
+fn ior_to_fresnel0(transmitted : vec3<f32>, incident : f32) -> vec3<f32> {
+    let t = (transmitted - vec3<f32>(incident)) / (transmitted + vec3<f32>(incident));
+    return t * t;
+}
+
+fn ior_to_fresnel0_f(transmitted : f32, incident : f32) -> f32 {
+    let t = (transmitted - incident) / (transmitted + incident);
+    return t * t;
+}
+
+/// Invert Schlick's F0 back to a relative IOR. Only valid for F0 < 1.
+fn fresnel0_to_ior(f0 : vec3<f32>) -> vec3<f32> {
+    let s = sqrt(clamp(f0, vec3<f32>(0.0), vec3<f32>(0.9999)));
+    return (vec3<f32>(1.0) + s) / (vec3<f32>(1.0) - s);
+}
+
+/// Schlick with a custom F90, used for the film's own interface.
+fn f_schlick_f90(f0 : vec3<f32>, f90 : vec3<f32>, v_dot_h : f32) -> vec3<f32> {
+    let w = pow(clamp(1.0 - v_dot_h, 0.0, 1.0), 5.0);
+    return f0 + (f90 - f0) * w;
+}
+
+fn f_schlick_f90_f(f0 : f32, f90 : f32, v_dot_h : f32) -> f32 {
+    let w = pow(clamp(1.0 - v_dot_h, 0.0, 1.0), 5.0);
+    return f0 + (f90 - f0) * w;
+}
+
+/// Gaussian fit of the CIE XYZ colour-matching functions evaluated at optical
+/// path difference `opd`, converted to linear sRGB.
+fn eval_sensitivity(opd : f32, shift : vec3<f32>) -> vec3<f32> {
+    let phase = 2.0 * PI * opd * 1.0e-9;
+    let val = vec3<f32>(5.4856e-13, 4.4201e-13, 5.2481e-13);
+    let pos = vec3<f32>(1.6810e+06, 1.7953e+06, 2.2084e+06);
+    let vr  = vec3<f32>(4.3278e+09, 9.3046e+09, 6.6121e+09);
+
+    var xyz = val * sqrt(2.0 * PI * vr) * cos(pos * phase + shift) * exp(-(phase * phase) * vr);
+    // The extra x-bar lobe the Gaussian fit needs to stay accurate in the red.
+    let x_extra = 9.7470e-14 * sqrt(2.0 * PI * 4.5282e+09)
+        * cos(2.2399e+06 * phase + shift.x) * exp(-4.5282e+09 * phase * phase);
+    xyz.x = xyz.x + x_extra;
+    xyz = xyz / 1.0685e-7;
+
+    let xyz_to_rgb = mat3x3<f32>(
+        vec3<f32>( 3.2404542, -0.9692660,  0.0556434),
+        vec3<f32>(-1.5371385,  1.8760108, -0.2040259),
+        vec3<f32>(-0.4985314,  0.0415560,  1.0572252),
+    );
+    return xyz_to_rgb * xyz;
+}
+
+/// Reflectance of a `thickness_nm` film of IOR `film_ior` over a base of
+/// reflectance `base_f0`, seen at `cos_theta1`.
+fn iridescence_fresnel(
+    outside_ior : f32, film_ior_in : f32, base_f0 : vec3<f32>,
+    thickness_nm : f32, cos_theta1 : f32,
+) -> vec3<f32> {
+    // Force the film IOR toward the outside IOR as the film vanishes, so
+    // thickness→0 degrades gracefully to the plain base reflectance.
+    let film_ior = mix(outside_ior, film_ior_in, smoothstep(0.0, 0.03, thickness_nm));
+    let sin_theta2_sq = pow(outside_ior / film_ior, 2.0) * (1.0 - cos_theta1 * cos_theta1);
+    let cos_theta2_sq = 1.0 - sin_theta2_sq;
+
+    // Total internal reflection inside the film — no transmitted lobe at all.
+    if (cos_theta2_sq < 0.0) {
+        return vec3<f32>(1.0);
+    }
+    let cos_theta2 = sqrt(cos_theta2_sq);
+
+    // First interface (outside → film).
+    let r0 = ior_to_fresnel0_f(film_ior, outside_ior);
+    let r12 = f_schlick_f90_f(r0, 1.0, cos_theta1);
+    let t121 = 1.0 - r12;
+
+    // Second interface (film → base). Phase shift is π when the film is the
+    // rarer medium, which flips which wavelengths reinforce.
+    var phi12 = 0.0;
+    if (film_ior < outside_ior) { phi12 = PI; }
+    let phi21 = PI - phi12;
+
+    let base_ior = fresnel0_to_ior(clamp(base_f0, vec3<f32>(0.0), vec3<f32>(0.9999)));
+    let r1 = ior_to_fresnel0(base_ior, film_ior);
+    let r23 = f_schlick_f90(r1, vec3<f32>(1.0), cos_theta2);
+
+    var phi23 = vec3<f32>(0.0);
+    if (base_ior.r < film_ior) { phi23.r = PI; }
+    if (base_ior.g < film_ior) { phi23.g = PI; }
+    if (base_ior.b < film_ior) { phi23.b = PI; }
+
+    let opd = 2.0 * film_ior * thickness_nm * cos_theta2;
+    let phi = vec3<f32>(phi21) + phi23;
+
+    // Compound the infinite series of internal bounces analytically: `rs` is
+    // the summed contribution of every round trip inside the film, `c0` the
+    // non-interfering DC term, and the loop adds the first two interference
+    // orders (higher orders are below perceptual threshold).
+    let r123 = clamp(r12 * r23, vec3<f32>(1e-5), vec3<f32>(0.9999));
+    let r123_sqrt = sqrt(r123);
+    let rs = (t121 * t121) * r23 / max(vec3<f32>(1.0) - r123, vec3<f32>(1e-5));
+
+    let c0 = vec3<f32>(r12) + rs;
+    var i_out = c0;
+
+    var cm = rs - vec3<f32>(t121);
+    for (var m : i32 = 1; m <= 2; m = m + 1) {
+        cm = cm * r123_sqrt;
+        let sm = 2.0 * eval_sensitivity(f32(m) * opd, f32(m) * phi);
+        i_out = i_out + cm * sm;
+    }
+
+    return max(i_out, vec3<f32>(0.0));
+}
+
+// Specular-AA tuning. SIGMA is the screen-space filter width, KAPPA the clamp
+// that stops a silhouette (where the normal derivative explodes) from being
+// blurred into a matte band.
+const SPEC_AA_SIGMA : f32 = 0.25;
+const SPEC_AA_KAPPA : f32 = 0.18;
+
+/// Widen the specular lobe to cover the sub-pixel normal distribution.
+///
+/// Works in alpha (= roughness²) space, where variance actually adds; adding in
+/// perceptual-roughness space — as the previous implementation did — is not the
+/// same operation and over-blurs.
+fn specular_aa_roughness(n : vec3<f32>, perceptual_roughness : f32) -> f32 {
+    let du = dpdx(n);
+    let dv = dpdy(n);
+    let variance = SPEC_AA_SIGMA * (dot(du, du) + dot(dv, dv));
+    let alpha = perceptual_roughness * perceptual_roughness;
+    let kernel = min(2.0 * variance, SPEC_AA_KAPPA);
+    return clamp(sqrt(alpha + kernel), 0.0, 1.0);
+}
+
+// ---------------------------------------------------------------------------
+// Rectangular area lights.
+//
+// three.js uses linearly-transformed cosines (LTC), which needs two 64×64
+// lookup textures. This is the LUT-free alternative: an exact analytic form
+// factor for the diffuse lobe, and Karis' representative-point approximation
+// for the specular one. The diffuse term is correct; the specular term is an
+// approximation that gets the size, shape and softness of the highlight right,
+// which is the reason to reach for an area light in the first place.
+// ---------------------------------------------------------------------------
+
+/// Exact Lambertian form factor of a quad, integrated edge by edge.
+///
+/// Sums the signed solid angle of each edge as seen from the shading point.
+/// Unlike a point-light approximation this stays correct when the light is
+/// large and close — the case where a rectangle stops looking like a point.
+fn rect_diffuse_factor(
+    n : vec3<f32>, p : vec3<f32>,
+    c0 : vec3<f32>, c1 : vec3<f32>, c2 : vec3<f32>, c3 : vec3<f32>,
+) -> f32 {
+    let v0 = normalize(c0 - p);
+    let v1 = normalize(c1 - p);
+    let v2 = normalize(c2 - p);
+    let v3 = normalize(c3 - p);
+
+    var sum = 0.0;
+    // Each edge contributes acos(v_i · v_j) weighted by how much its swept
+    // plane faces the shading normal.
+    let e0 = cross(v0, v1);
+    let e1 = cross(v1, v2);
+    let e2 = cross(v2, v3);
+    let e3 = cross(v3, v0);
+    if (dot(e0, e0) > 1e-12) {
+        sum = sum + acos(clamp(dot(v0, v1), -1.0, 1.0)) * dot(normalize(e0), n);
+    }
+    if (dot(e1, e1) > 1e-12) {
+        sum = sum + acos(clamp(dot(v1, v2), -1.0, 1.0)) * dot(normalize(e1), n);
+    }
+    if (dot(e2, e2) > 1e-12) {
+        sum = sum + acos(clamp(dot(v2, v3), -1.0, 1.0)) * dot(normalize(e2), n);
+    }
+    if (dot(e3, e3) > 1e-12) {
+        sum = sum + acos(clamp(dot(v3, v0), -1.0, 1.0)) * dot(normalize(e3), n);
+    }
+    return max(sum * 0.5 / PI, 0.0);
+}
+
+/// Point on the rectangle that best represents its specular contribution:
+/// where the mirror ray hits the light's plane, clamped to the rectangle.
+fn rect_representative_point(
+    p : vec3<f32>, refl : vec3<f32>,
+    center : vec3<f32>, right : vec3<f32>, up : vec3<f32>,
+) -> vec3<f32> {
+    let plane_n = cross(right, up);
+    let denom = dot(refl, plane_n);
+    var hit = center;
+    if (abs(denom) > 1e-6) {
+        let t = dot(center - p, plane_n) / denom;
+        // Behind the surface: fall back to the centre rather than mirroring.
+        if (t > 0.0) {
+            hit = p + refl * t;
+        }
+    }
+    let d = hit - center;
+    let hw = length(right);
+    let hh = length(up);
+    let rx = select(vec3<f32>(0.0), right / hw, hw > 1e-6);
+    let uy = select(vec3<f32>(0.0), up / hh, hh > 1e-6);
+    let x = clamp(dot(d, rx), -hw, hw);
+    let y = clamp(dot(d, uy), -hh, hh);
+    return center + rx * x + uy * y;
+}
+
+/// Widen the GGX lobe to account for the light's angular size, and renormalise
+/// so total energy is preserved (Karis, "Real Shading in Unreal Engine 4").
+fn rect_spec_normalisation(alpha : f32, light_radius : f32, dist : f32) -> f32 {
+    let a_prime = clamp(alpha + light_radius / max(2.0 * dist, 1e-4), 0.0, 1.0);
+    let ratio = alpha / max(a_prime, 1e-4);
+    return ratio * ratio;
+}
+
+/// One light's contribution to the clearcoat lobe: plain isotropic GGX at the
+/// coat's own roughness, over a fixed dielectric F0.
+fn clearcoat_spec(
+    n : vec3<f32>, v : vec3<f32>, l : vec3<f32>, cc_a : f32, fc0 : vec3<f32>,
+) -> vec3<f32> {
+    let h = normalize(v + l);
+    let n_dot_v = max(dot(n, v), 0.0);
+    let n_dot_l = max(dot(n, l), 0.0);
+    let n_dot_h = max(dot(n, h), 0.0);
+    let v_dot_h = max(dot(v, h), 0.0);
+    let d = d_ggx(n_dot_h, cc_a);
+    let g = g_smith(n_dot_v, n_dot_l, cc_a);
+    let f = f_schlick(v_dot_h, fc0);
+    let spec = (d * g * f) / max(4.0 * n_dot_v * n_dot_l, 0.0001);
+    return spec * n_dot_l;
 }
 
 // Direct-light PBR dispatch: isotropic GGX unless the material carries an
-// anisotropy strength, in which case the anisotropic lobe is used.
+// anisotropy strength, in which case the anisotropic lobe is used. `f0` is
+// passed in rather than derived so the iridescence layer can override it.
 fn pbr_direct(
     n : vec3<f32>, v : vec3<f32>, l : vec3<f32>, t : vec3<f32>, b : vec3<f32>,
-    albedo : vec3<f32>, roughness : f32, metalness : f32, an : f32,
+    albedo : vec3<f32>, roughness : f32, metalness : f32, an : f32, f0 : vec3<f32>,
 ) -> vec3<f32> {
     if (abs(an) > 0.001) {
-        return pbr_brdf_aniso(n, v, l, t, b, albedo, roughness, metalness, an);
+        return pbr_brdf_aniso(n, v, l, t, b, albedo, roughness, metalness, an, f0);
     }
-    return pbr_brdf(n, v, l, albedo, roughness, metalness);
+    return pbr_brdf(n, v, l, albedo, roughness, metalness, f0);
 }
 
 @fragment
-fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
+fn fs_main(in : VsOut, @builtin(front_facing) front_facing : bool) -> @location(0) vec4<f32> {
     let kind = mesh.flags.x;
     let tex_flags = mesh.flags.y;
     var base_color = mesh.color.rgb * in.vertex_color.rgb;
-    let opacity = mesh.params.y * in.vertex_color.a;
+    // `var`, because a bound `map` contributes its alpha to the lit paths below
+    // the same way three.js's `diffuseColor *= sampledDiffuseColor` does.
+    var opacity = mesh.params.y * in.vertex_color.a;
 
     // Basic: just return the color × optional map, no lighting. The JS shim
     // sRGB-decoded the input color to linear; we encode it back to sRGB on
@@ -1669,7 +2300,7 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
             if (a < threshold) { discard; }
         }
         if ((mesh.flags.z & FLAG_SHADOW_MAT) != 0u) {
-            let sf = shadow_factor(in.world_pos);
+            let sf = shadow_factor(in.world_pos, normalize(in.world_normal));
             let darkness = 1.0 - sf;
             return vec4<f32>(0.0, 0.0, 0.0, opacity * darkness);
         }
@@ -1843,8 +2474,27 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
         return packed;
     }
 
-    let n_geom = normalize(in.world_normal);
+    var n_geom = normalize(in.world_normal);
+    // DoubleSide / no-cull: back faces keep the authored winding but must
+    // shade with a normal that faces the camera (matches three.js).
+    if (!front_facing) {
+        n_geom = -n_geom;
+    }
     let v_dir = normalize(frame.camera_position.xyz - in.world_pos);
+
+    // Normal mapping. The slot and FLAG_NORMAL_MAP were already plumbed through
+    // from the material; this is where the sampled tangent-space normal finally
+    // perturbs the shading normal. `normal_scale` (params2.yz) scales the
+    // tangent/bitangent components, so 0 flattens the map and >1 exaggerates it.
+    if ((tex_flags & FLAG_NORMAL_MAP) != 0u) {
+        let ts = textureSample(normal_tex, tex_sampler, in.uv).xyz * 2.0 - vec3<f32>(1.0);
+        let tf = surface_frame(n_geom, in.world_pos, in.uv, in.world_tangent);
+        let scaled = vec3<f32>(ts.x * mesh.params2.y, ts.y * mesh.params2.z, ts.z);
+        let perturbed = tf.t * scaled.x + tf.b * scaled.y + n_geom * scaled.z;
+        if (dot(perturbed, perturbed) > 1e-12) {
+            n_geom = normalize(perturbed);
+        }
+    }
 
     // Matcap: sample by view-space normal (xy * 0.5 + 0.5).
     if (kind == MAT_MATCAP) {
@@ -1859,13 +2509,203 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
         return vec4<f32>(framebuffer_encode(mcol), opacity);
     }
 
-    // Sample albedo if a map is bound.
+    // Planetary atmosphere: shade from how much air the view ray crosses.
+    //
+    // The shell is not treated as a surface. The ray is intersected with the
+    // atmosphere sphere and with the planet, and what is shaded is the length
+    // of the segment between them — so the glow thickens toward the limb where
+    // the path is long, and stops dead where the planet blocks it. That is one
+    // analytic pass on the front faces, and it needs neither a back-face trick
+    // nor a stack of nested shells to produce a gradient.
+    if (kind == MAT_ATMOSPHERE) {
+        let centre = (mesh.model * vec4<f32>(0.0, 0.0, 0.0, 1.0)).xyz;
+        let r_planet = mesh.params3.x;
+        let r_air = max(mesh.params3.y, r_planet + 1e-5);
+        let strength = mesh.params3.z;
+        let falloff = max(mesh.params3.w, 0.1);
+
+        let eye = frame.camera_position.xyz;
+        let dir = normalize(in.world_pos - eye);
+        let oc = eye - centre;
+
+        // Ray against the outer shell.
+        let b = dot(oc, dir);
+        let c_air = dot(oc, oc) - r_air * r_air;
+        let disc_air = b * b - c_air;
+        if (disc_air <= 0.0) { discard; }
+        let root = sqrt(disc_air);
+        var t_enter = max(-b - root, 0.0);
+        var t_exit = -b + root;
+        if (t_exit <= t_enter) { discard; }
+
+        // …and against the planet, which ends the ray early when it is hit.
+        let c_planet = dot(oc, oc) - r_planet * r_planet;
+        let disc_planet = b * b - c_planet;
+        if (disc_planet > 0.0) {
+            let t_hit = -b - sqrt(disc_planet);
+            if (t_hit > 0.0) { t_exit = min(t_exit, t_hit); }
+        }
+        if (t_exit <= t_enter) { discard; }
+
+        // March the segment coarsely, weighting by an exponential density that
+        // falls off with altitude. A closed form would need a Chapman function;
+        // eight samples is cheaper and, on a shell this thin, indistinguishable.
+        let steps = 8;
+        let dt = (t_exit - t_enter) / f32(steps);
+        let depth_scale = max(r_air - r_planet, 1e-5);
+        var density = 0.0;
+        var lit = 0.0;
+        var sun_path = 0.0;
+        // Aurora rides along in this march rather than running a second one of
+        // its own. Both walk the same segment and want the same positions, and
+        // at Retina resolution the duplicate was 0.9 ms a frame — a fifth of
+        // the whole thing — for a ring that covers a sliver of the shell.
+        let aurora = mesh.params13.w;
+        let ring = radians(max(mesh.params14.w, 1.0));
+        // Geomagnetic axis, tilted off the model's own up, so the oval sits
+        // off-centre the way it does on Earth.
+        let mag_tilt = 0.19;
+        let mag_axis = normalize(vec3<f32>(sin(mag_tilt) * 0.9, 1.0, sin(mag_tilt) * 0.4));
+        var glow_g = 0.0;
+        var glow_r = 0.0;
+        // Direction *toward* the sun; `direction` is the way the light travels.
+        var to_sun = vec3<f32>(0.0, 1.0, 0.0);
+        if (frame.light_counts.x > 0u) {
+            to_sun = normalize(-frame.dir_lights[0].direction.xyz);
+        }
+        for (var i = 0; i < steps; i = i + 1) {
+            let p = eye + dir * (t_enter + dt * (f32(i) + 0.5));
+            let up = p - centre;
+            let altitude = (length(up) - r_planet) / depth_scale;
+            let d = exp(-max(altitude, 0.0) * falloff) * dt;
+            density = density + d;
+            // How much sunlight reaches this point: the day side is lit, the
+            // night side is not, with a soft terminator.
+            let sun_dot = dot(normalize(up), to_sun);
+            lit = lit + d * smoothstep(-0.25, 0.35, sun_dot);
+            // Reddening is what the *sunbeam* picks up on its way in, so it
+            // needs both a grazing sun and thick air to graze through. Gating
+            // on the angle alone turns the whole limb of a full-phase planet
+            // orange, because from head-on the limb is the terminator; the
+            // altitude term keeps the red where the air is dense and leaves the
+            // upper shell blue, which is how a real limb reads.
+            let low = exp(-max(altitude, 0.0) * falloff * 2.0);
+            sun_path = sun_path + d * low * (1.0 - smoothstep(0.0, 0.55, abs(sun_dot)));
+
+            if (aurora > 0.0) {
+                // `abs`, so both poles get an oval — the southern lights are
+                // the same particles down the other end of the same field
+                // lines, and the two are near mirror images.
+                let colat = acos(clamp(abs(dot(normalize(up), mag_axis)), -1.0, 1.0));
+                let band = exp(-pow((colat - ring) / (ring * 0.34), 2.0));
+                // Curtains: the ring is drapes, not a uniform stripe.
+                let ph = atan2(dot(normalize(up), vec3<f32>(0.0, 0.0, 1.0)),
+                               dot(normalize(up), vec3<f32>(1.0, 0.0, 0.0)));
+                let curtain = 0.55 + 0.45 * sin(ph * 9.0) * sin(ph * 23.0 + 1.7);
+                let wgt = band * curtain * dt;
+                // Green low, red high: both are atomic oxygen, but the 630 nm
+                // red transition takes two minutes to radiate and is quenched
+                // by a collision long before that unless the air is thin, so it
+                // only survives as a crown above the green.
+                glow_g = glow_g + wgt * smoothstep(0.04, 0.16, altitude)
+                                      * (1.0 - smoothstep(0.22, 0.5, altitude));
+                glow_r = glow_r + wgt * smoothstep(0.3, 0.55, altitude)
+                                      * (1.0 - smoothstep(0.75, 1.0, altitude)) * 0.35;
+            }
+        }
+        if (density <= 1e-6) { discard; }
+        let day = lit / density;
+        let grazing = sun_path / density;
+
+        // Rayleigh phase: forward and backward scattering both favoured.
+        let mu = dot(dir, to_sun);
+        let phase = 0.75 * (1.0 + mu * mu);
+
+        // Optical depth → coverage.
+        //
+        // Normalised against the longest path any ray can take — the grazing
+        // chord at the limb — not against the shell's thickness. Dividing by
+        // the thickness makes a ray straight through the middle as opaque as
+        // one along the limb, which buries the planet under flat blue.
+        let max_chord = 2.0 * sqrt(max(r_air * r_air - r_planet * r_planet, 1e-6));
+        let tau = density / max_chord * strength;
+        let alpha = (1.0 - exp(-tau)) * day * mesh.params.y;
+        if (alpha <= 0.002) { discard; }
+
+        let sunset = mesh.params4.xyz;
+        let tint = mix(mesh.color.rgb, sunset, clamp(grazing * 1.15, 0.0, 1.0));
+        var col = tint * phase * (0.35 + 0.65 * day);
+        var out_a = alpha;
+
+        // Ozone. Scattering only ever *adds* light, and the blue saturates
+        // first, so a limb built from Rayleigh alone whitens as it thickens and
+        // ends up reading as haze. What keeps a real twilight blue is
+        // absorption: ozone's Chappuis band eats the middle of the spectrum —
+        // orange and green — and leaves blue alone, and the sunbeam's path near
+        // the terminator is long enough through the layer for that to win.
+        //
+        // Coefficients are the band's shape, normalised to the blue: it takes
+        // out roughly three times as much red as blue and twice as much green.
+        let ozone = mesh.params13.z;
+        if (ozone > 0.0) {
+            let sigma = vec3<f32>(3.1, 2.0, 0.35);
+            // The grazing term already measures how far the beam ran through
+            // dense air on its way in, which is the same path that matters here.
+            col = col * exp(-sigma * ozone * grazing);
+        }
+
+        // Aurora. Solar wind funnelled down the field lines, hitting the
+        // upper atmosphere in a ring around each geomagnetic pole. Accumulated
+        // in the density march above; this is only the shading.
+        if (aurora > 0.0) {
+            let night = 1.0 - day;
+            let gg = glow_g / max_chord * aurora;
+            let gr = glow_r / max_chord * aurora;
+            if (gg + gr > 0.0) {
+                let red = vec3<f32>(1.0, 0.22, 0.30);
+                col = col + (mesh.params14.xyz * gg + red * gr) * night * 6.0;
+                out_a = max(out_a, clamp((gg + gr) * night * 8.0, 0.0, 1.0));
+            }
+        }
+        return vec4<f32>(framebuffer_encode(apply_fog(col, in.view_z)), clamp(out_a, 0.0, 1.0));
+    }
+
+    // Sample albedo if a map is bound. The map's alpha multiplies opacity, as
+    // three.js does — that is what lets a cloud layer or a cut-out decal be a
+    // *lit* material instead of an unlit one. Opaque materials never read the
+    // result, so this only affects draws already on the alpha pipeline.
     if ((tex_flags & FLAG_MAP) != 0u) {
-        base_color = base_color * textureSample(albedo_tex, tex_sampler, in.uv).rgb;
+        let sampled = textureSample(albedo_tex, tex_sampler, in.uv);
+        base_color = base_color * sampled.rgb;
+        opacity = opacity * sampled.a;
     }
     var emissive = mesh.emissive.rgb;
     if ((tex_flags & FLAG_EMISSIVE_MAP) != 0u) {
         emissive = emissive * textureSample(emissive_tex, tex_sampler, in.uv).rgb;
+    }
+    // A night map is not a lamp. `emissive` is added to the shaded colour
+    // unconditionally, which is right for something that glows on its own and
+    // wrong for city lights: the map says WHERE the cities are, not WHETHER it
+    // is night there, so without this every city burns through full daylight.
+    // params8.z (emissive_night_side) gates the term on how far the point is
+    // past the terminator, using the brightest directional light as the sun.
+    // Zero by default, so nothing that does not ask for it changes.
+    if (mesh.params8.z > 0.0 && frame.light_counts.x > 0u) {
+        var sun_dir = vec3<f32>(0.0, 0.0, 0.0);
+        var best = -1.0;
+        for (var i : u32 = 0u; i < frame.light_counts.x; i = i + 1u) {
+            if (i >= 4u) { break; }
+            let l = frame.dir_lights[i];
+            let p = dot(l.color.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+            if (p > best) { best = p; sun_dir = -normalize(l.direction.xyz); }
+        }
+        if (best > 0.0) {
+            // Softened across the terminator rather than switched: a hard edge
+            // would put a line of lit windows against unlit ones.
+            let cosine = dot(normalize(n_geom), sun_dir);
+            let night = 1.0 - smoothstep(-0.10, 0.18, cosine);
+            emissive = emissive * mix(1.0, night, clamp(mesh.params8.z, 0.0, 1.0));
+        }
     }
 
     // Toon: stepped Lambert from directional + ambient. Mirrors three.js's
@@ -1936,12 +2776,19 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
     // because SwiftShader dpdx(viewNormal) is much noisier than three.js WebGL dFdx,
     // inflating geometryRoughness and over-blurring CubeUV samples vs the reference.
     let roughness_env = max(roughness, 0.0525);
-    // three.js adds screen-space geometry roughness from dFdx(nonPerturbedNormal)
-    // where nonPerturbedNormal lives in view space — not world space.
-    let view_n_geom = normalize((frame.view * vec4<f32>(n_geom, 0.0)).xyz);
-    let dxy = max(abs(dpdx(view_n_geom)), abs(dpdy(view_n_geom)));
-    let geometry_roughness = max(max(dxy.x, dxy.y), dxy.z);
-    roughness = min(roughness_env + geometry_roughness, 1.0);
+    // Geometric specular antialiasing (Kaplanyan et al. 2016 / Filament).
+    //
+    // Replaces three.js's `geometryRoughness`, which adds a max-of-derivatives
+    // term directly in *perceptual* roughness space. That both over-blurs
+    // silhouettes and under-corrects the actual problem, which is variance: a
+    // pixel covering many differently-oriented microfacets is physically a
+    // wider specular lobe. Estimating that variance and folding it into alpha
+    // is what stops crinkled foil from sparkling and crawling under motion.
+    //
+    // Note this reads the *shading* normal, so it also absorbs normal-map
+    // variance, not just geometric curvature — which is exactly what a
+    // high-frequency crinkle map needs.
+    roughness = specular_aa_roughness(n_geom, roughness_env);
     var ao = 1.0;
     if ((tex_flags & FLAG_AO_MAP) != 0u) {
         let ao_sample = textureSample(ao_tex, tex_sampler, in.uv).r;
@@ -1964,29 +2811,138 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
     lit = lit + diffuse_color * frame.ambient.rgb * ao * RECIP_PI;
 
     // Anisotropy: strength is packed in emissive.w for physical materials (0 =
-    // isotropic). The cortex mesh carries no UV tangents, so derive a tangent
-    // frame from screen-space world-position derivatives; the direct-light BRDF
-    // then stretches the specular lobe along it into a brushed streak.
+    // isotropic), the in-plane rotation in params4.w. The direct-light BRDF
+    // stretches the specular lobe along this frame into a brushed streak.
+    //
+    // The frame is a UV-aligned cotangent basis (Mikkelsen's derivative trick),
+    // solved from screen-space derivatives of world position against UV. That
+    // makes the streak direction a property of the *surface* rather than of the
+    // viewer, which is what lets anisotropy_rotation mean anything. A mesh with
+    // no UVs has a degenerate UV Jacobian, so fall back to the older
+    // position-only frame — still a plausible streak, just view-dependent.
     let aniso = select(0.0, mesh.emissive.w, kind == MAT_PHYSICAL);
     var tangent = vec3<f32>(1.0, 0.0, 0.0);
     var bitangent = vec3<f32>(0.0, 1.0, 0.0);
     if (abs(aniso) > 0.001) {
-        let dpx = dpdx(in.world_pos);
-        let dpy = dpdy(in.world_pos);
-        var tv = dpx - n_geom * dot(n_geom, dpx);
-        if (dot(tv, tv) < 1e-8) { tv = dpy - n_geom * dot(n_geom, dpy); }
-        tangent = normalize(tv);
-        bitangent = normalize(cross(n_geom, tangent));
+        let tf = surface_frame(n_geom, in.world_pos, in.uv, in.world_tangent);
+        tangent = tf.t;
+        bitangent = tf.b;
+
+        // Rotate the frame within the surface plane (Rodrigues about n_geom,
+        // which reduces to a plain 2D rotation for in-plane vectors).
+        let rot = mesh.params4.w;
+        if (abs(rot) > 1e-6) {
+            let cr = cos(rot);
+            let sr = sin(rot);
+            let t_rot = tangent * cr + bitangent * sr;
+            bitangent = bitangent * cr - tangent * sr;
+            tangent = t_rot;
+        }
     }
 
+    // Specular F0. Dielectrics sit at 0.04; for metals the base color *is* the
+    // reflectance. The iridescence layer, when enabled, replaces this with the
+    // thin-film reflectance so both the direct and IBL lobes pick it up.
+    let base_f0 = mix(vec3<f32>(0.04), albedo_lin, metalness);
+    var spec_f0 = base_f0;
+    if (kind == MAT_PHYSICAL && mesh.params5.x > 0.0) {
+        let irid = clamp(mesh.params5.x, 0.0, 1.0);
+        let film_ior = max(mesh.params5.y, 1.0);
+        var film_nm = max(mesh.params5.z, 0.0);
+        // Thickness map (three.js `iridescenceThicknessMap`): the green channel
+        // scales the material thickness, so a noise or gradient turns one flat
+        // hue into an oil-slick sweep across the surface.
+        if ((tex_flags & FLAG_IRIDESCENCE_MAP) != 0u) {
+            film_nm = film_nm * textureSample(iridescence_thickness_tex, tex_sampler, in.uv).g;
+        }
+        let n_dot_v_i = clamp(dot(n_geom, v_dir), 0.0, 1.0);
+        let irid_f = iridescence_fresnel(1.0, film_ior, base_f0, film_nm, n_dot_v_i);
+        spec_f0 = mix(base_f0, clamp(irid_f, vec3<f32>(0.0), vec3<f32>(1.0)), irid);
+    }
+
+    // Sheen — a grazing-angle lobe layered over the base, accumulated per light
+    // alongside the main BRDF below.
+    let sheen_strength = select(0.0, clamp(mesh.params5.w, 0.0, 1.0), kind == MAT_PHYSICAL);
+    let sheen_tint = mesh.params6.rgb * sheen_strength;
+    let sheen_rough = clamp(mesh.params6.w, 0.07, 1.0);
+    var sheen_lit = vec3<f32>(0.0);
+
     let receive_shadow = (mesh.flags.z & FLAG_RECEIVE_SHADOW) != 0u;
-    let sf = select(1.0, shadow_factor(in.world_pos), receive_shadow);
+    let sf = select(1.0, shadow_factor(in.world_pos, normalize(in.world_normal)), receive_shadow);
+    let twilight_width = mesh.params10.w;
+    // Computed outside the loop: `textureSample` needs uniform control flow,
+    // and a call from inside a conditional branch has undefined derivatives.
+    var cloud_att = 1.0;
+    var eclipse_att = 1.0;
+    if (frame.light_counts.x > 0u) {
+        let sun_dir = -normalize(frame.dir_lights[0].direction.xyz);
+        cloud_att = cloud_shadow(in.local_pos, sun_dir);
+        eclipse_att = eclipse_factor(in.world_pos, sun_dir);
+    }
     for (var i : u32 = 0u; i < frame.light_counts.x; i = i + 1u) {
         if (i >= 4u) { break; }
         let l = frame.dir_lights[i];
         let to_light = -normalize(l.direction.xyz);
-        let attenuation = select(1.0, sf, i == 0u);
-        lit = lit + l.color.rgb * pbr_direct(n_geom, v_dir, to_light, tangent, bitangent, albedo_lin, roughness, metalness, aniso) * attenuation;
+        // The first directional light is the key, and the only one a cloud deck
+        // is modelled as shadowing.
+        let attenuation = select(1.0, sf * cloud_att * eclipse_att, i == 0u);
+        lit = lit + l.color.rgb * pbr_direct(n_geom, v_dir, to_light, tangent, bitangent, albedo_lin, roughness, metalness, aniso, spec_f0) * attenuation;
+
+        // Twilight. A hard Lambert terminator is what an airless body has; on
+        // one with an atmosphere, light scatters round the limb and carries a
+        // good way onto the night side, reddened by the length of the path it
+        // took. Modelled as wrapped diffuse, tinted, and counting only the part
+        // beyond what Lambert already gave — so the day side is untouched and
+        // only the terminator softens.
+        if (twilight_width > 0.0 && i == 0u) {
+            // A narrow band at the terminator, and a faint one.
+            //
+            // The broad orange you see round a planet's night edge from space
+            // is the *atmosphere* glowing along the limb — that is the shell's
+            // job, and it does it. What reaches the *ground* falls away far
+            // faster than the sky does: civil twilight, six degrees past the
+            // terminator, is already about a four-hundredth of daylight. An
+            // earlier version of this was three orders of magnitude too bright
+            // and washed a third of the night side in red.
+            let ndl = dot(n_geom, to_light);
+            let x = ndl / twilight_width;
+            // Tapered off the day side too: there the direct sun lights the
+            // ground and the scattered part is a tint on it, not a source.
+            let band = exp(-x * x * 3.0) * (1.0 - smoothstep(0.0, 1.0, max(x, 0.0)));
+            lit = lit + l.color.rgb * mesh.params11.xyz * albedo_lin * band * 0.15 * attenuation * RECIP_PI;
+        }
+        // Cloud deck: light through the volume, rather than off a surface.
+        //
+        // A Lambert shell is brightest facing the sun and black past the
+        // terminator, which is the opposite of how a cloud behaves at both
+        // ends. Droplets scatter hard forward, so a deck with the sun *behind*
+        // it — near the limb, and just past the terminator — is the brightest
+        // thing in frame, and its edge lights before its middle does. The
+        // phase function carries that, and it does not need `n · l`: the light
+        // is coming through the deck, not bouncing off it.
+        //
+        // Weighted by how much deck the ray crosses, which grows as the view
+        // grazes — the silver lining is geometry, not a separate effect.
+        let cloud_scatter = mesh.params13.x;
+        if (cloud_scatter > 0.0 && i == 0u) {
+            // The scattering angle is between the way the light was already
+            // travelling (`-to_light`) and the way it has to leave to reach the
+            // eye (`v_dir`, surface to camera). Forward scattering is those two
+            // agreeing, so a positive `g` peaks when the sun is beyond the deck.
+            let cos_theta = dot(-to_light, v_dir);
+            let phase = henyey_greenstein(cos_theta, clamp(mesh.params13.y, -0.95, 0.95));
+            // Slant path through a thin shell, capped so the limb does not
+            // divide by zero.
+            let slant = min(1.0 / max(abs(dot(n_geom, v_dir)), 0.08), 8.0);
+            // Still gated on the sun being up *somewhere* along the path, which
+            // the softened cosine already describes — just far more gently than
+            // the surface term, since the deck is lit from the side too.
+            let reach = clamp(dot(n_geom, to_light) * 2.0 + 0.55, 0.0, 1.0);
+            lit = lit + l.color.rgb * albedo_lin * cloud_scatter * phase * slant * reach * attenuation;
+        }
+        if (sheen_strength > 0.0) {
+            sheen_lit = sheen_lit + l.color.rgb * brdf_sheen(n_geom, v_dir, to_light, sheen_tint, sheen_rough) * attenuation;
+        }
     }
     for (var i : u32 = 0u; i < frame.light_counts.y; i = i + 1u) {
         if (i >= 4u) { break; }
@@ -1996,7 +2952,10 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
         let to_light = to_light_vec / max(d, 0.0001);
         let att = punctual_attenuation(d, l.params.x, l.params.y);
         let sf_pt = select(1.0, select(1.0, shadow_factor_point(in.world_pos), receive_shadow), i == 0u);
-        lit = lit + l.color.rgb * att * sf_pt * pbr_direct(n_geom, v_dir, to_light, tangent, bitangent, albedo_lin, roughness, metalness, aniso);
+        lit = lit + l.color.rgb * att * sf_pt * pbr_direct(n_geom, v_dir, to_light, tangent, bitangent, albedo_lin, roughness, metalness, aniso, spec_f0);
+        if (sheen_strength > 0.0) {
+            sheen_lit = sheen_lit + l.color.rgb * att * sf_pt * brdf_sheen(n_geom, v_dir, to_light, sheen_tint, sheen_rough);
+        }
     }
     for (var i : u32 = 0u; i < frame.light_counts.z; i = i + 1u) {
         if (i >= 4u) { break; }
@@ -2012,7 +2971,10 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
         }
         let att = punctual_attenuation(d, l.params.x, l.params.y) * cone;
         let sf_spot = select(1.0, select(1.0, shadow_factor_spot(in.world_pos), receive_shadow), i == 0u);
-        lit = lit + l.color.rgb * att * sf_spot * pbr_direct(n_geom, v_dir, to_light, tangent, bitangent, albedo_lin, roughness, metalness, aniso);
+        lit = lit + l.color.rgb * att * sf_spot * pbr_direct(n_geom, v_dir, to_light, tangent, bitangent, albedo_lin, roughness, metalness, aniso, spec_f0);
+        if (sheen_strength > 0.0) {
+            sheen_lit = sheen_lit + l.color.rgb * att * sf_spot * brdf_sheen(n_geom, v_dir, to_light, sheen_tint, sheen_rough);
+        }
     }
     // HemisphereLight is also indirect-diffuse and metals don't diffuse it.
     for (var i : u32 = 0u; i < frame.light_counts.w; i = i + 1u) {
@@ -2020,41 +2982,154 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
         lit = lit + diffuse_color * shade_hemi(n_geom, frame.hemi_lights[i]) * ao * RECIP_PI;
     }
 
-    // Physical: composite a clearcoat layer over the base.
+    // Physical: gather the clearcoat layer's own specular from every light type.
+    //
+    // The composite is deliberately NOT done here — it happens after the IBL
+    // block below, so the clearcoat Fresnel attenuates the *whole* base
+    // response (direct + environment) the way three.js does. Compositing here
+    // would leave the base's environment reflection un-attenuated, i.e. lacquer
+    // that dims the diffuse but not the reflections underneath it.
+    var cc = 0.0;
+    var cc_roughness = 0.0;
+    var cc_fresnel = vec3<f32>(0.0);
+    var cc_lit = vec3<f32>(0.0);
     if (kind == MAT_PHYSICAL) {
-        let cc = clamp(mesh.params3.x, 0.0, 1.0);
+        cc = clamp(mesh.params3.x, 0.0, 1.0);
+        cc_roughness = clamp(mesh.params3.y, 0.0, 1.0);
         // three.js clearcoat: α = roughness² (same remap as the base GGX).
-        let cc_a = max(mesh.params3.y * mesh.params3.y, 0.0016);
+        let cc_a = max(cc_roughness * cc_roughness, 0.0016);
         let n_dot_v = max(dot(n_geom, v_dir), 0.0);
         let fc0 = vec3<f32>(0.04);
-        let fc = f_schlick(n_dot_v, fc0);
-        var cc_lit = vec3<f32>(0.0);
+        cc_fresnel = f_schlick(n_dot_v, fc0);
+
         for (var i : u32 = 0u; i < frame.light_counts.x; i = i + 1u) {
             if (i >= 4u) { break; }
             let l = frame.dir_lights[i];
             let to_light = -normalize(l.direction.xyz);
-            let h = normalize(v_dir + to_light);
-            let n_dot_l = max(dot(n_geom, to_light), 0.0);
-            let n_dot_h = max(dot(n_geom, h), 0.0);
-            let v_dot_h = max(dot(v_dir, h), 0.0);
-            let d = d_ggx(n_dot_h, cc_a);
-            let g = g_smith(n_dot_v, n_dot_l, cc_a);
-            let f = f_schlick(v_dot_h, fc0);
-            let spec = (d * g * f) / max(4.0 * n_dot_v * n_dot_l, 0.0001);
-            cc_lit = cc_lit + l.color.rgb * spec * n_dot_l;
+            let att = select(1.0, sf, i == 0u);
+            cc_lit = cc_lit + l.color.rgb * att
+                * clearcoat_spec(n_geom, v_dir, to_light, cc_a, fc0);
         }
-        // Final = base * (1 - cc * Fc) + clearcoat spec * cc
-        lit = lit * (vec3<f32>(1.0) - fc * cc) + cc_lit * cc;
+        // Point and spot lights were previously ignored by the clearcoat layer,
+        // so a lacquered surface lit only by a lamp had no coat highlight.
+        for (var i : u32 = 0u; i < frame.light_counts.y; i = i + 1u) {
+            if (i >= 4u) { break; }
+            let l = frame.point_lights[i];
+            let to_light_vec = l.position.xyz - in.world_pos;
+            let d = length(to_light_vec);
+            let to_light = to_light_vec / max(d, 0.0001);
+            let att = punctual_attenuation(d, l.params.x, l.params.y);
+            let sf_pt = select(1.0, select(1.0, shadow_factor_point(in.world_pos), receive_shadow), i == 0u);
+            cc_lit = cc_lit + l.color.rgb * att * sf_pt
+                * clearcoat_spec(n_geom, v_dir, to_light, cc_a, fc0);
+        }
+        for (var i : u32 = 0u; i < frame.light_counts.z; i = i + 1u) {
+            if (i >= 4u) { break; }
+            let l = frame.spot_lights[i];
+            let to_light_vec = l.position.xyz - in.world_pos;
+            let d = length(to_light_vec);
+            let to_light = to_light_vec / max(d, 0.0001);
+            let dir = normalize(l.direction.xyz);
+            let cos_angle = dot(-to_light, dir);
+            var cone = 0.0;
+            if (cos_angle > l.params.z) {
+                cone = smoothstep(l.params.z, l.params.w, cos_angle);
+            }
+            let att = punctual_attenuation(d, l.params.x, l.params.y) * cone;
+            let sf_spot = select(1.0, select(1.0, shadow_factor_spot(in.world_pos), receive_shadow), i == 0u);
+            cc_lit = cc_lit + l.color.rgb * att * sf_spot
+                * clearcoat_spec(n_geom, v_dir, to_light, cc_a, fc0);
+        }
+    }
+
+    // Rectangular area lights. Previously a no-op stub, so a scene lit only by
+    // a RectAreaLight rendered black.
+    for (var i : u32 = 0u; i < frame.light_counts2.x; i = i + 1u) {
+        if (i >= 2u) { break; }
+        let rl = frame.rect_lights[i];
+        let center = rl.position.xyz;
+        let right = rl.right.xyz;
+        let up = rl.up.xyz;
+
+        // Single-sided, like three.js: a RectAreaLight emits along its local
+        // -Z, and cross(right, up) is local +Z — so the emitting direction is
+        // the *negated* cross product.
+        let light_n = -normalize(cross(right, up));
+        let to_surface = in.world_pos - center;
+        if (dot(to_surface, light_n) <= 0.0) { continue; }
+
+        // Winding matters: the edge cross-products below must accumulate a
+        // vector pointing *toward* the lit side, or every contribution comes
+        // out negative and clamps to zero. This order is the one that does.
+        let c0 = center - right - up;
+        let c1 = center + right - up;
+        let c2 = center + right + up;
+        let c3 = center - right + up;
+
+        // Diffuse: exact form factor over the quad.
+        let ff = rect_diffuse_factor(n_geom, in.world_pos, c0, c1, c2, c3);
+        lit = lit + diffuse_color * rl.color.rgb * ff * ao;
+
+        // Specular: representative point, with the lobe widened by the light's
+        // angular size so a big panel gives a big soft highlight.
+        let mrp = rect_representative_point(in.world_pos, reflect(-v_dir, n_geom), center, right, up);
+        let to_mrp = mrp - in.world_pos;
+        let dist = length(to_mrp);
+        if (dist > 1e-4) {
+            let l_dir = to_mrp / dist;
+            let alpha = max(roughness * roughness, 0.0016);
+            let radius = max(length(right), length(up));
+            let norm = rect_spec_normalisation(alpha, radius, dist);
+            // Reuse the main BRDF so anisotropy and iridescence apply here too;
+            // the form factor already carries the light's solid angle, so weight
+            // the specular by it rather than by a 1/d² falloff.
+            let brdf = pbr_direct(
+                n_geom, v_dir, l_dir, tangent, bitangent,
+                albedo_lin, roughness, metalness, aniso, spec_f0,
+            );
+            let n_dot_l = max(dot(n_geom, l_dir), 0.0);
+            // Strip the diffuse half — it is already accounted for by `ff`.
+            let spec_only = max(brdf - diffuse_color * RECIP_PI * n_dot_l, vec3<f32>(0.0));
+            lit = lit + rl.color.rgb * spec_only * ff * norm * PI;
+
+            if (sheen_strength > 0.0) {
+                sheen_lit = sheen_lit + rl.color.rgb
+                    * brdf_sheen(n_geom, v_dir, l_dir, sheen_tint, sheen_rough) * ff * PI;
+            }
+            if (kind == MAT_PHYSICAL && cc > 0.0) {
+                let cc_a = max(cc_roughness * cc_roughness, 0.0016);
+                cc_lit = cc_lit + rl.color.rgb
+                    * clearcoat_spec(n_geom, v_dir, l_dir, cc_a, vec3<f32>(0.04))
+                    * ff * rect_spec_normalisation(cc_a, radius, dist) * PI;
+            }
+        }
     }
 
     // IBL — mirrors three.js MeshStandardMaterial envmap_physical_pars_fragment +
     // RE_IndirectSpecular_Physical (getIBLRadiance + computeMultiscattering).
     // tone_mapping_exposure.z is the env-enabled flag (1 = on, 0 = off).
     if (frame.tone_mapping_exposure.z > 0.5) {
-        let specular_color = mix(vec3<f32>(0.04), albedo_lin, metalness);
+        // spec_f0 rather than a locally-derived F0, so an iridescent film tints
+        // the environment reflection too — otherwise thin-film only showed up
+        // under direct lights and vanished on a purely IBL-lit object.
+        let specular_color = spec_f0;
         let specular_f90 = 1.0;
 
-        var reflect_vec = reflect(-v_dir, n_geom);
+        // Anisotropy bends the reflection toward the low-roughness axis, so a
+        // brushed surface smears the environment along the streak instead of
+        // reflecting it like a mirror (three.js getIBLAnisotropyRadiance).
+        var refl_normal = n_geom;
+        if (abs(aniso) > 0.001) {
+            let aniso_t = cross(bitangent, v_dir);
+            let aniso_n = cross(aniso_t, bitangent);
+            var bend = 1.0 - abs(aniso) * (1.0 - roughness_env);
+            bend = bend * bend;
+            bend = bend * bend;
+            if (dot(aniso_n, aniso_n) > 1e-8) {
+                refl_normal = normalize(mix(normalize(aniso_n), n_geom, bend));
+            }
+        }
+        var reflect_vec = reflect(-v_dir, refl_normal);
         reflect_vec = normalize(mix(reflect_vec, n_geom, roughness_env * roughness_env));
         let radiance = sample_env_cube(reflect_vec, roughness_env);
 
@@ -2072,9 +3147,53 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
         let cosine_weighted_irr = irradiance * RECIP_PI;
 
         lit = lit + radiance * single_scatter + multi_scatter * cosine_weighted_irr;
-        // RE_IndirectSpecular indirectDiffuse + RE_IndirectDiffuse (three.js physical).
+        // The environment's diffuse term, added exactly ONCE.
+        //
+        // In three.js this line lives inside RE_IndirectSpecular_Physical, and
+        // the separate RE_IndirectDiffuse call is fed `irradiance` from ambient
+        // lights and light probes — *not* from the env map. threers already adds
+        // the ambient term further up, so mirroring both three.js call sites
+        // here counted the environment twice: a white Lambertian in a uniform
+        // environment measured exactly 2.0× its surroundings, which is
+        // impossible (it cannot reflect more light than reaches it).
         lit = lit + diffuse_color * (1.0 - scatter_max) * cosine_weighted_irr;
-        lit = lit + diffuse_color * cosine_weighted_irr;
+    }
+
+    // Clearcoat composite, deferred to here so the coat's Fresnel attenuates
+    // the base's environment reflection too — matching three.js's
+    // `outgoingLight * (1 - clearcoat*Fcc) + clearcoatSpecular * clearcoat`.
+    if (kind == MAT_PHYSICAL && cc > 0.0) {
+        // The coat is a smooth dielectric shell, so it reflects the environment
+        // in its own right. Without this a cover glass or car lacquer only
+        // showed a highlight where a light happened to point at it.
+        if (frame.tone_mapping_exposure.z > 0.5) {
+            let cc_refl = reflect(-v_dir, n_geom);
+            let cc_radiance = sample_env_cube(cc_refl, cc_roughness);
+            let cc_fab = dfg_approx(n_geom, v_dir, cc_roughness);
+            cc_lit = cc_lit + cc_radiance * (vec3<f32>(0.04) * cc_fab.x + cc_fab.y);
+        }
+        lit = lit * (vec3<f32>(1.0) - cc_fresnel * cc) + cc_lit * cc;
+    }
+
+    // Sheen composite. three.js darkens the base by an energy-compensation
+    // factor before adding the sheen lobe, so a strong sheen doesn't push the
+    // surface over 1.0. Applied after IBL (rather than before clearcoat, where
+    // three.js puts it) so the compensation covers the *whole* accumulated
+    // result — threers runs IBL after clearcoat, unlike three.js.
+    if (sheen_strength > 0.0) {
+        // Environment term. The Charlie lobe's directional albedo is not the
+        // GGX one, so `dfg_approx` is wrong here; use Estevez & Kulla's fitted
+        // E(NoV, roughness) instead. Without this a sheen surface lit only by
+        // an environment stayed flat — the retroreflective rim, which is the
+        // entire point of sheen, only appeared under punctual lights.
+        if (frame.tone_mapping_exposure.z > 0.5) {
+            let sheen_irr = sample_env_cube(n_geom, sheen_rough);
+            let n_dot_v = max(dot(n_geom, v_dir), 0.0);
+            sheen_lit = sheen_lit + sheen_irr * sheen_tint * sheen_env_albedo(n_dot_v, sheen_rough);
+        }
+        let sheen_max = max(max(sheen_tint.r, sheen_tint.g), sheen_tint.b);
+        let sheen_energy_comp = 1.0 - 0.157 * sheen_max;
+        lit = lit * sheen_energy_comp + sheen_lit;
     }
 
     // Transmission (glass): MeshPhysicalMaterial.transmission makes the surface
@@ -2102,10 +3221,7 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
             var refr_dir = n_geom;
             if (dot(refr, refr) > 1e-6) { refr_dir = normalize(refr); }
             var transmitted = sample_env_cube(refr_dir, roughness_env);
-            // Beer-Lambert attenuation over the traversed thickness, tinted by
-            // the glass albedo (the heatmap color survives as a stain).
-            let absorb = (vec3<f32>(1.0) - albedo_lin) * thickness;
-            transmitted = transmitted * exp(-absorb);
+            transmitted = transmitted * volume_transmittance(albedo_lin, thickness);
             // Mix the surface shading toward the refracted image by the
             // transmission factor; the Fresnel rim keeps its reflective
             // highlight (already added by the IBL block above).
@@ -2319,9 +3435,16 @@ fn fs_ss_glass(in : VsOut) -> @location(0) vec4<f32> {
         textureSampleLevel(ss_color_tex, ss_color_samp, ruv,        refr_lod).g,
         textureSampleLevel(ss_color_tex, ss_color_samp, ruv - disp, refr_lod).b,
     );
-    // Glass color as transmission absorption, now over the real path length
+    // Glass color as transmission absorption over the real path length
     // (Beer–Lambert): thicker glass tints/darkens the transmitted image more.
-    refracted = refracted * exp(-(vec3<f32>(1.0) - tint) * (0.15 + thick * 0.006));
+    // With attenuation_distance set, `thick` is a genuine world-space path
+    // length so the physical coefficient applies directly; without it, keep the
+    // empirically-scaled fallback that existing scenes were authored against.
+    if (mesh.params7.w > 0.0) {
+        refracted = refracted * volume_transmittance(tint, thick);
+    } else {
+        refracted = refracted * exp(-(vec3<f32>(1.0) - tint) * (0.15 + thick * 0.006));
+    }
 
     // --- Reflection: accurate SSR of the scene, black where it misses --------
     // The visible background is black, so a transparent glass reflects black on
@@ -2399,11 +3522,37 @@ fn fs_main(@location(0) uv : vec2<f32>) -> @location(0) vec4<f32> {
 /// neighbourhood-clamps that history to the current 3×3 colour box (kills
 /// ghosting), and blends. Exact for camera motion over static geometry (no motion
 /// vectors); moving geometry falls back to the clamp.
+///
+/// # Geometry pinned to the camera
+///
+/// A skybox or starfield is drawn at a fixed offset from the viewer, so its
+/// world position changes every frame and this reprojection — which assumes the
+/// world holds still — reads history from the wrong pixel. The clamp does not
+/// rescue it: a star is one bright pixel on black, so its 3x3 box runs from
+/// black to star and a mis-fetched star sits inside it. It shows up as stars
+/// arriving as short dashes and doubled dots during fast camera translation.
+///
+/// The obvious repair — treat everything past some distance as pinned and undo
+/// the camera's translation for it — DOES NOT WORK, and it is worth saying why
+/// so it is not tried again. Distance cannot separate the two cases. On the
+/// approach in this project's film the Moon sits at 7.2e6 units and the
+/// starfield just beyond it; the Moon is static and really does shift about 9
+/// pixels a frame, while the starfield is pinned and shifts none. A threshold
+/// that catches the stars also catches the Moon and smears it.
+///
+/// Doing this properly needs the renderer to be TOLD which objects are pinned —
+/// a per-object flag rasterised into a mask this pass can sample. Until then a
+/// caller whose camera translates fast against a pinned sky should turn TAA off
+/// for that stretch and let MSAA carry it.
 pub const TAA_SHADER: &str = r#"
 struct TaaU {
     inv_view_proj  : mat4x4<f32>,  // current, un-jittered
     prev_view_proj : mat4x4<f32>,  // previous, un-jittered
     params         : vec4<f32>,    // x:width y:height z:history-weight w:first-frame
+    /// xyz: camera movement since the last frame. Carried for the benefit of a
+    /// caller that knows which of its objects are pinned to the viewer; this
+    /// pass cannot work that out for itself. See the note on reprojection below.
+    cam_delta      : vec4<f32>,
 };
 @group(0) @binding(0) var cur_tex   : texture_2d<f32>;
 @group(0) @binding(1) var hist_tex  : texture_2d<f32>;

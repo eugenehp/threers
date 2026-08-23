@@ -5,6 +5,7 @@ use std::fmt;
 use crate::codec::{
     apng::ApngEncoder,
     gif::{encode_gif, GifOptions, PaletteMode},
+    h264::encode_mp4_with_captions,
     hevc::Yuv420Frame,
     webm::encode_webm,
 };
@@ -15,6 +16,8 @@ pub enum BrowserCodec {
     Gif,
     Apng,
     Webm,
+    /// H.264 in an MP4 container (`avc1` + `avcC`).
+    Mp4,
 }
 
 impl BrowserCodec {
@@ -23,6 +26,7 @@ impl BrowserCodec {
             Self::Gif => "gif",
             Self::Apng => "apng",
             Self::Webm => "webm",
+            Self::Mp4 => "mp4",
         }
     }
 }
@@ -175,7 +179,14 @@ where
     {
         return Err(AnimationEncodeError::Dimension);
     }
-    if matches!(opts.codec, BrowserCodec::Webm) && (opts.width % 8 != 0 || opts.height % 8 != 0) {
+    if matches!(opts.codec, BrowserCodec::Webm)
+        && (!opts.width.is_multiple_of(8) || !opts.height.is_multiple_of(8))
+    {
+        return Err(AnimationEncodeError::Dimension);
+    }
+    if matches!(opts.codec, BrowserCodec::Mp4)
+        && (!opts.width.is_multiple_of(2) || !opts.height.is_multiple_of(2))
+    {
         return Err(AnimationEncodeError::Dimension);
     }
 
@@ -255,6 +266,25 @@ where
             let refs: Vec<&Yuv420Frame> = yuv.iter().collect();
             encode_webm(&refs, opts.fps)
         }
+        BrowserCodec::Mp4 => {
+            if opts.transparent {
+                return Err(AnimationEncodeError::Dimension);
+            }
+            let n = frames.len();
+            let mut yuv = Vec::with_capacity(n);
+            for rgba in frames.drain(..) {
+                yuv.push(Yuv420Frame::from_rgba(opts.width, opts.height, &rgba));
+                let done = yuv.len() as u32;
+                on_progress(make_anim_progress(
+                    AnimationExportPhase::Encode,
+                    done,
+                    n as u32,
+                    done as f32 / n as f32,
+                    opts.codec,
+                ));
+            }
+            encode_mp4_with_captions(opts.width, opts.height, opts.fps, &yuv, None)
+        }
     };
 
     on_progress(make_anim_progress(
@@ -285,20 +315,26 @@ mod tests {
             (BrowserCodec::Gif, b"GIF8".as_slice()),
             (BrowserCodec::Apng, &[0x89, b'P', b'N', b'G']),
             (BrowserCodec::Webm, &[0x1a, 0x45, 0xdf, 0xa3]),
+            (BrowserCodec::Mp4, b"ftyp".as_slice()),
         ] {
+            let transparent = !matches!(codec, BrowserCodec::Mp4);
             let options = AnimationEncodeOptions {
                 width: 8,
                 height: 8,
                 fps: 10,
                 codec,
-                transparent: true,
+                transparent,
                 gif_colors: 256,
             };
             let bytes =
                 encode_animation_rgba(&options, [solid(255, 0, 0, 255), solid(0, 0, 255, 128)])
                     .unwrap();
             assert!(bytes.len() > header.len());
-            assert_eq!(&bytes[..header.len()], header);
+            if matches!(codec, BrowserCodec::Mp4) {
+                assert_eq!(&bytes[4..8], header);
+            } else {
+                assert_eq!(&bytes[..header.len()], header);
+            }
         }
     }
 }

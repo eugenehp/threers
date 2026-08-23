@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>camera shots — threers</title>
+    <style>
+        :root { color-scheme: dark; }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            background: #08090d;
+            color: #e6e8ee;
+            font: 14px/1.5 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+        }
+        header {
+            display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap;
+            padding: 18px 24px 12px;
+            border-bottom: 1px solid #1e2129;
+        }
+        h1 { font-size: 17px; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+        h1 .tag { color: #7d879c; font-weight: 400; }
+        #status { color: #7d879c; font-size: 12px; }
+        nav { margin-left: auto; display: flex; gap: 14px; }
+        nav a { color: #6ea8fe; text-decoration: none; font-size: 13px; }
+        nav a:hover { text-decoration: underline; }
+
+        main { padding: 20px 24px 40px; max-width: 1100px; margin: 0 auto; }
+        .intro { color: #97a0b3; max-width: 78ch; margin: 0 0 18px; font-size: 13px; }
+        .intro code { color: #cfd6e6; background: #14161d; padding: 1px 5px; border-radius: 4px; }
+
+        canvas { width: 100%; aspect-ratio: 16 / 9; display: block; border-radius: 10px; background: #05060a; }
+
+        .controls {
+            display: flex; flex-wrap: wrap; gap: 14px 22px; align-items: center;
+            margin: 16px 0 8px; padding: 14px 16px;
+            background: #0e1016; border: 1px solid #1e2129; border-radius: 10px;
+        }
+        .controls label { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #b9c1d1; }
+        button {
+            font: inherit; font-size: 13px; padding: 6px 12px; border-radius: 6px;
+            border: 1px solid #2a2f3c; background: #161a23; color: #e6e8ee; cursor: pointer;
+        }
+        button:hover { background: #1d2230; }
+        #time, #shot { font-variant-numeric: tabular-nums; color: #7d879c; }
+        #shot { color: #cfd6e6; min-width: 9em; }
+        #err { color: #ff8080; white-space: pre-wrap; font-size: 12px; margin-top: 10px; }
+        pre {
+            background: #0e1016; border: 1px solid #1e2129; padding: 12px;
+            border-radius: 8px; font-size: 12px; overflow: auto; color: #97a0b3;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>camera shots <span class="tag">· threers</span></h1>
+        <span id="status">loading wasm…</span>
+        <nav>
+            <a href="/web/examples/">examples</a>
+            <a href="/web/index.html">main demo</a>
+        </nav>
+    </header>
+    <main>
+        <p class="intro">
+            Editorial camera timeline on the classic three.js surface:
+            <code>ShotTimeline</code> (hold / fly with speed ramps / Catmull path)
+            driving a <code>PerspectiveCamera</code> through wasm <code>setView</code>.
+            OrbitControls and AnimationMixer stay available — this is additive.
+        </p>
+
+        <canvas id="c" width="1280" height="720"></canvas>
+
+        <div class="controls">
+            <button id="play">Pause</button>
+            <button id="restart">Restart</button>
+            <span id="time">0.0 s</span>
+            <span id="shot">—</span>
+            <label>seek
+                <input id="seek" type="range" min="0" max="12" step="0.05" value="0" style="width: 220px">
+            </label>
+        </div>
+        <div id="err"></div>
+
+        <pre id="snippet"></pre>
+    </main>
+    <script type="module" src="/web/examples/camera-shots-demo.js"></script>
+</body>
+</html>

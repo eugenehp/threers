@@ -31,7 +31,7 @@ pub fn dequant(levels: &[i32], n: usize, qp: i32) -> Vec<i32> {
     levels
         .iter()
         .map(|&l| {
-            let d = ((l as i64 * m * LEVEL_SCALE[rem] << per) + add) >> bd_shift;
+            let d = (((l as i64 * m * LEVEL_SCALE[rem]) << per) + add) >> bd_shift;
             d.clamp(-32768, 32767) as i32
         })
         .collect()
@@ -73,7 +73,7 @@ mod tests {
 
     #[test]
     fn higher_qp_zeros_more() {
-        let coeff: Vec<i32> = (0..16).map(|i| (i as i32 - 8) * 20).collect();
+        let coeff: Vec<i32> = (0..16).map(|i| (i - 8) * 20).collect();
         let low = quant(&coeff, 4, 8, true);
         let high = quant(&coeff, 4, 40, true);
         let nz_low = low.iter().filter(|&&x| x != 0).count();

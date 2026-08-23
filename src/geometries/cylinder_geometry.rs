@@ -7,6 +7,7 @@ impl CylinderGeometry {
     /// Open/closed truncated cone along the Y axis. Matches three.js's
     /// `CylinderGeometry(radiusTop, radiusBottom, height, radialSegments,
     /// heightSegments, openEnded, thetaStart, thetaLength)`.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         radius_top: f32,
         radius_bottom: f32,
@@ -60,6 +61,16 @@ impl CylinderGeometry {
             }
         }
 
+        // Recorded here rather than recomputed later: only this function knows
+        // how many triangles each part emitted, and the cap rules (skipped when
+        // a radius is zero, or when open-ended) would otherwise need a second
+        // copy in the tagging code.
+        let side_triangles = indices.len() / 3;
+        let mut top_cap_triangles = 0usize;
+        // Read only by the `brep` tagging below, same as the two above.
+        #[cfg_attr(not(feature = "brep"), allow(unused_variables, unused_assignments))]
+        let mut bottom_cap_triangles = 0usize;
+
         // -- caps --
         if !open_ended {
             if radius_top > 0.0 {
@@ -76,6 +87,7 @@ impl CylinderGeometry {
                     &mut indices,
                     &mut idx,
                 );
+                top_cap_triangles = indices.len() / 3 - side_triangles;
             }
             if radius_bottom > 0.0 {
                 Self::cap(
@@ -91,6 +103,10 @@ impl CylinderGeometry {
                     &mut indices,
                     &mut idx,
                 );
+                #[cfg_attr(not(feature = "brep"), allow(unused_assignments))]
+                {
+                    bottom_cap_triangles = indices.len() / 3 - side_triangles - top_cap_triangles;
+                }
             }
         }
 
@@ -99,6 +115,16 @@ impl CylinderGeometry {
         geom.set_attribute("normal", BufferAttribute::new(normals, 3));
         geom.set_attribute("uv", BufferAttribute::new(uvs, 2));
         geom.set_index(indices);
+        #[cfg(feature = "brep")]
+        crate::brep::primitives::tag_cylinder(
+            &mut geom,
+            radius_top,
+            radius_bottom,
+            height,
+            side_triangles,
+            top_cap_triangles,
+            bottom_cap_triangles,
+        );
         geom
     }
 

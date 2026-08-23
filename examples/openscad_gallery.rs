@@ -28,7 +28,11 @@ fn main() {
     std::fs::create_dir_all(&out).expect("create out dir");
 
     let demos = demos(&out);
-    println!("OpenSCAD gallery — {} demos → {}\n", demos.len(), out.display());
+    println!(
+        "OpenSCAD gallery — {} demos → {}\n",
+        demos.len(),
+        out.display()
+    );
 
     let mut rows: Vec<Row> = Vec::new();
     for d in &demos {
@@ -74,7 +78,11 @@ struct Demo {
     src: String,
 }
 fn d(cat: &'static str, name: &'static str, src: &str) -> Demo {
-    Demo { cat, name, src: src.to_string() }
+    Demo {
+        cat,
+        name,
+        src: src.to_string(),
+    }
 }
 
 /// The catalogue. Grouped by category; every snippet uses only implemented
@@ -280,8 +288,11 @@ fn build_one(demo: &Demo, out: &Path) -> Row {
             }
             let size = bbox_size(&pts);
             let wt = watertight(&pts);
-            std::fs::write(out.join(format!("{}.stl", demo.name)), threers::geometry_to_stl(&g))
-                .ok();
+            std::fs::write(
+                out.join(format!("{}.stl", demo.name)),
+                threers::geometry_to_stl(&g),
+            )
+            .ok();
             mk(tris, size, wt, None, Some(g))
         }
         Err(e) => mk(0, [0.0; 3], false, Some(e), None),
@@ -323,7 +334,8 @@ fn watertight(pts: &[[f32; 3]]) -> bool {
             (p[2] * 1e4).round() as i64,
         )
     };
-    let mut edges: HashMap<((i64, i64, i64), (i64, i64, i64)), i32> = HashMap::new();
+    type PointKey = (i64, i64, i64);
+    let mut edges: HashMap<(PointKey, PointKey), i32> = HashMap::new();
     for t in pts.chunks_exact(3) {
         for k in 0..3 {
             let (mut a, mut b) = (key(t[k]), key(t[(k + 1) % 3]));
@@ -419,7 +431,11 @@ fn render_pngs(demos: &[Demo], rows: &[Row], out: &Path) -> Result<usize, String
 
         // Frame the object: look at its center from an iso-ish direction.
         let dist = (radius / (22.0f32.to_radians() * 0.5).tan()).max(radius * 2.2);
-        let eye = Vector3::new(center.x + dist * 0.62, center.y - dist * 0.62, center.z + dist * 0.5);
+        let eye = Vector3::new(
+            center.x + dist * 0.62,
+            center.y - dist * 0.62,
+            center.z + dist * 0.5,
+        );
         let mut cam = PerspectiveCamera::new(45.0, w as f32 / h as f32, 0.05, dist * 8.0 + 100.0);
         cam.position = eye;
         cam.look_at(center);
@@ -445,7 +461,11 @@ fn bounds_sphere(pts: &[[f32; 3]]) -> (threers::Vector3, f32) {
             mx[k] = mx[k].max(p[k]);
         }
     }
-    let c = Vector3::new((mn[0] + mx[0]) / 2.0, (mn[1] + mx[1]) / 2.0, (mn[2] + mx[2]) / 2.0);
+    let c = Vector3::new(
+        (mn[0] + mx[0]) / 2.0,
+        (mn[1] + mx[1]) / 2.0,
+        (mn[2] + mx[2]) / 2.0,
+    );
     let mut r2 = 0.0f32;
     for p in pts {
         let d = [p[0] - c.x, p[1] - c.y, p[2] - c.z];
@@ -499,7 +519,11 @@ fn crc32(data: &[u8]) -> u32 {
     for &b in data {
         crc ^= b as u32;
         for _ in 0..8 {
-            crc = if crc & 1 != 0 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
+            crc = if crc & 1 != 0 {
+                (crc >> 1) ^ 0xEDB8_8320
+            } else {
+                crc >> 1
+            };
         }
     }
     !crc

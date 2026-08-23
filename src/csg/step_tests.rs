@@ -1,3 +1,5 @@
+// Same shape as the other test modules in the crate.
+#[allow(clippy::module_inception)]
 #[cfg(test)]
 mod step_tests {
     //! Release parity suite for hierarchy CSG (exact ordered TriKey + vert counts).
@@ -267,7 +269,9 @@ mod step_tests {
                 hit_vec = end;
                 did = true;
             }
-            let use_hit = did && !(hit_vec.distance_to(start) < 1e-10);
+            let d = hit_vec.distance_to(start);
+            // NaN counts as "not near": the negation is what admitted it before.
+            let use_hit = did && (d >= 1e-10 || d.is_nan());
             eprintln!(
                 "manual edge {t}: did={did} use_hit={use_hit} dist_start={:.17e} hit=({:.17},{:.17},{:.17})",
                 hit_vec.distance_to(start),
@@ -452,7 +456,8 @@ mod step_tests {
                     hit = end;
                     did = true;
                 }
-                if did && !(hit.distance_to(start) < 1e-10) {
+                let d = hit.distance_to(start);
+                if did && (d >= 1e-10 || d.is_nan()) {
                     if n == 0 {
                         fs = hit;
                     } else {
@@ -706,7 +711,9 @@ mod step_tests {
                 hit_vec = end;
                 did = true;
             }
-            let use_hit = did && !(hit_vec.distance_to(start) < 1e-10);
+            let d = hit_vec.distance_to(start);
+            // NaN counts as "not near": the negation is what admitted it before.
+            let use_hit = did && (d >= 1e-10 || d.is_nan());
             let vtx_end = use_hit && hit_vec.distance_to(end) < 1e-10;
             eprintln!(
                 "  edge {t}: did={did} use_hit={use_hit} vtx_end={vtx_end} hit=({:.17},{:.17},{:.17})",
@@ -719,12 +726,12 @@ mod step_tests {
         eprintln!("  manual intersects={intersects}");
         let single_vert = 0usize;
         let mut fs = super::super::js_topology::JsVec3::new(
-            -0.53125922098630896,
+            -0.531_259_220_986_309,
             -0.04235038547663728,
             -0.1,
         );
         let mut fe = super::super::js_topology::JsVec3::new(
-            -0.52622909572515220,
+            -0.526_229_095_725_152_2,
             -0.08055789995397628,
             -0.1,
         );
@@ -998,7 +1005,7 @@ mod step_tests {
             }
             vals.push(s[start..i].parse::<f64>().expect("f64"));
         }
-        vals.try_into().ok().expect("9 floats")
+        vals.try_into().expect("9 floats")
     }
 
     fn parse_tri_array(s: &str) -> Vec<Vec<f64>> {

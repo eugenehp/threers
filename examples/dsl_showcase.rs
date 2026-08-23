@@ -37,7 +37,9 @@ fn main() {
     let bolt_holes: Vec<Solid> = (0..BOLTS)
         .map(|i| {
             let angle = i as f32 * 360.0 / BOLTS as f32;
-            drill(BOLT_R, DISK_H + 4.0).translate([BOLT_CIRCLE, 0.0, 0.0]).rotate([0.0, 0.0, angle])
+            drill(BOLT_R, DISK_H + 4.0)
+                .translate([BOLT_CIRCLE, 0.0, 0.0])
+                .rotate([0.0, 0.0, angle])
         })
         .collect();
 
@@ -63,7 +65,11 @@ fn main() {
     // Evaluate with the robust (exact-where-confident) kernel and export STL.
     let mut geometry = flange.to_geometry_exact();
     let tris = geometry.draw_count() / 3;
-    let verts = geometry.attributes.get("position").map(|a| a.count()).unwrap_or(0);
+    let verts = geometry
+        .attributes
+        .get("position")
+        .map(|a| a.count())
+        .unwrap_or(0);
     let bb = geometry.compute_bounding_box();
 
     println!("DSL flange · {BOLTS} bolt holes:");

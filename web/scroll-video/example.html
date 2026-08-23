@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>scroll-video example — threers</title>
+<link rel="stylesheet" href="../viewer-theme.css">
+<style>
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font: 14px/1.5 ui-sans-serif, system-ui, sans-serif;
+  }
+  #stage-wrap {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    padding: 1rem;
+    background: var(--scene);
+    display: grid;
+    place-items: center;
+  }
+  #stage {
+    position: relative;
+    width: min(100%, 960px);
+    aspect-ratio: 16 / 9;
+    border-radius: 10px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    background: #0a0c10;
+  }
+  #stage .stage-video {
+    display: none;
+  }
+  #stage canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+  #hud {
+    position: absolute;
+    left: .65rem;
+    top: .65rem;
+    font: 12px ui-monospace, Menlo, monospace;
+    color: rgba(255,255,255,.8);
+    pointer-events: none;
+  }
+  #copy {
+    max-width: 42rem;
+    margin: 0 auto;
+    padding: 2rem 1.25rem 80vh;
+  }
+  #copy h1 { font-size: 20px; color: var(--title); margin: 0 0 .5rem; }
+  #copy p { color: var(--muted); margin: 0 0 1.5rem; }
+  section { min-height: 60vh; padding: 2rem 0; border-top: 1px dashed var(--border); }
+  section h2 { margin: 0 0 .35rem; font-size: 16px; }
+  section p { color: var(--muted); max-width: 36ch; }
+  #err { color: #ff8080; padding: 1rem; }
+</style>
+</head>
+<body>
+  <div id="stage-wrap">
+    <div id="stage">
+      <video id="v" class="stage-video" playsinline muted preload="metadata" aria-hidden="true"></video>
+      <canvas id="c" width="1280" height="720"></canvas>
+      <div id="hud">0.0 s</div>
+    </div>
+  </div>
+  <main id="copy">
+    <h1>scroll-video example</h1>
+    <p>Minimal production wiring: bundled clip, scroll-sync JSON, canvas-3D compositor. Scroll this page.</p>
+    <section>
+      <h2>Start</h2>
+      <p>Clip at 0 s — mapping from exported JSON or defaults below.</p>
+    </section>
+    <section>
+      <h2>Mid</h2>
+      <p>Scroll maps position to playback time in <code>progress</code> mode.</p>
+    </section>
+    <section>
+      <h2>End</h2>
+      <p>See <code>docs/scroll-video.md</code> and <code>calibration.html</code> for tuning.</p>
+    </section>
+  </main>
+  <pre id="err" hidden></pre>
+  <script type="module" src="./example.js"></script>
+</body>
+</html>

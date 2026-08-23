@@ -2,6 +2,12 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+if [ ! -f threejs-shim.js ]; then
+    echo "ERROR: web/threejs-shim.js is missing."
+    echo "       Restore it from git:  git checkout HEAD -- web/threejs-shim.js"
+    exit 1
+fi
+
 node -e '
 const fs = require("fs");
 const path = "pkg/threers.js";

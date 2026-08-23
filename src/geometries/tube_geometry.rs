@@ -60,6 +60,8 @@ impl TubeGeometry {
         g.set_attribute("normal", BufferAttribute::new(normals, 3));
         g.set_attribute("uv", BufferAttribute::new(uvs, 2));
         g.set_index(indices);
+        #[cfg(feature = "brep")]
+        crate::brep::primitives::tag_tube(&mut g, &centers, &frames, radius);
         g
     }
 }

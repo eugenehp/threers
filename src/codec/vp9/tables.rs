@@ -2,6 +2,11 @@
 //! `vp9_entropymode.c`). Keyframe partition/mode probabilities, default skip
 //! probabilities, and the tree structures used to binarize tree-coded symbols.
 
+// `INTER_OFFSET(mode)` is `mode - NEARESTMV` in libvpx, so the zero offset is
+// spelled `NEARESTMV - NEARESTMV`. Writing the 0 directly would hide which
+// mode the tree leaf belongs to.
+#![allow(clippy::eq_op)]
+
 // ---- intra prediction modes (VP9 `PREDICTION_MODE`) ----
 pub const DC_PRED: i8 = 0;
 pub const V_PRED: i8 = 1;

@@ -1,7 +1,31 @@
+[workspace]
+members = [
+    ".",
+    "crates/threers-probe",
+    "crates/threers-physics",
+    "crates/threers-ocean",
+    "crates/threers-animation",
+    "crates/threers-robot-arm",
+    "crates/threers-physics-bench",
+    "crates/threers-js",
+    "crates/threers-py",
+    "crates/threers-node",
+]
+# `crates/threers-continuum` and `crates/threers-mechanism-tour` build as
+# libraries but their tests and examples still call an older shape of their own
+# API — builder methods that are now fields, argument lists a version behind.
+# They are left out until that is reconciled, so `--all-targets` stays clean.
+exclude = ["crates/threers-continuum", "crates/threers-mechanism-tour"]
+resolver = "2"
+
 [package]
 name = "threers"
-version = "0.0.3"
+version = "0.0.4"
 edition = "2021"
+# wgpu 30 requires 1.87, and this crate uses `is_multiple_of`, stabilised in the
+# same release. Declared so cargo says so up front rather than letting the build
+# fail somewhere inside a dependency.
+rust-version = "1.87"
 authors = ["Eugene Hauptmann"]
 description = "Drop-in three.js replacement for Rust and WebAssembly (wgpu) — THREE.* API, scene graph, PBR, post-fx, mesh BVH, CSG, an OpenSCAD front end with a watertight exact-CSG kernel, headless render, and native media codecs"
 license = "MIT"
@@ -11,9 +35,149 @@ homepage = "https://github.com/eugenehp/threers"
 documentation = "https://docs.rs/threers"
 keywords = ["three-js", "wgpu", "webgpu", "graphics", "wasm"]
 categories = ["graphics", "rendering", "wasm", "game-development"]
+exclude = [
+    # 22 MB of reference scene dumps only the parity harness reads. Note that
+    # `src/csg/step_tests.rs` `include_bytes!`s a handful of these, so the
+    # published crate builds and runs but `cargo test` inside the tarball does
+    # not — the fixtures are not there. Fetch the repo to run that suite.
+    "tests/parity/scenes/**",
+    # The npm package's material, published separately, and megabytes of built
+    # wasm besides.
+    "web/**",
+    # Sibling crates. The ones with a manifest cargo drops on its own; these are
+    # the recovered demos that have none yet, and they are not this crate's.
+    "crates/**",
+    # Development notes and a reference paper — 2.5 MB that no dependent needs.
+    "docs/**",
+    "papers/**",
+    # Example render output and local tooling.
+    "out/**",
+    "scripts/**",
+]
 
 [lib]
 crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["captions"]
+# Subtitles — SRT + WebVTT, on-screen and burned in.
+captions = []
+# Accelerated raycast / shapecast.
+mesh-bvh = []
+# Path tracer: global illumination, area lights, refraction, DoF; CPU + wgpu-compute.
+raytrace = []
+# Constructive solid geometry (implies mesh-bvh).
+bvh-csg = ["mesh-bvh"]
+# `.scad` front end + `Solid` DSL + exact-CSG kernel (implies bvh-csg).
+openscad = ["bvh-csg"]
+# Optional Manifold kernel behind the OpenSCAD booleans.
+manifold = ["dep:manifold-rust", "openscad"]
+# Planets, moons, starfields, map generation.
+planet = []
+# Native frame-sequence export via ffmpeg (implies captions).
+video = ["captions"]
+# Pure-Rust GIF, APNG, VP9/WebM, H.264/MP4, HEVC (wasm-safe).
+# The muxers write caption tracks, so this needs `captions` the same way
+# `video` does. It is a pure-code feature with no dependencies of its own,
+# so this costs compile time and nothing else.
+native-codec = ["captions"]
+# Second renderer on Metal via the Objective-C runtime (macOS/iOS).
+metal = []
+# CompositorServices + ARKit (implies metal).
+visionos = ["metal"]
+# In-process VideoToolbox encode (macOS).
+videotoolbox = []
+# rayon-backed CSG/BVH work (native; a no-op on wasm32).
+parallel = ["dep:rayon"]
+# tokio runtime for callers driving loaders concurrently (native).
+async = ["dep:tokio"]
+# Tensors ↔ geometry and pixels, graph runner, convolution, mesh smoothing.
+rlx = ["dep:rlx"]
+# Exact Delaunay + adaptive refinement + Voronoi cell textures.
+rlx-geo = ["dep:rlx-geo"]
+# NURBS curves/surfaces: derivatives, knots, tessellation.
+nurbs = []
+# Analytic surface provenance on geometry (implies nurbs).
+brep = ["nurbs"]
+# Closed-form SSI fast paths in the CSG kernel (implies brep + openscad).
+brep-csg = ["brep", "openscad"]
+# True B-rep topology, boolean, fillets (implies brep-csg).
+brep-kernel = ["brep-csg"]
+# STEP AP203/214 import + export (implies brep-kernel).
+step = ["brep-kernel"]
+# Assembly motion checks (body correspondence, axis recovery, swept volume).
+assembly-check = []
+# Trained U-Net denoiser beside the À-Trous filter (native inference).
+learned-denoise = ["raytrace"]
+learned-denoise-metal = ["learned-denoise"]
+learned-denoise-gpu = ["learned-denoise"]
+
+# --- Meta bundles (additive; leaf flags above stay independently usable) ---
+# CAD / solid modelling stack.
+cad = ["openscad", "nurbs", "brep", "brep-csg", "parallel"]
+# Video, captions, and pure-Rust codecs.
+media = ["video", "native-codec", "captions"]
+# Path tracing + trained denoise.
+gi = ["raytrace", "learned-denoise"]
+# Apple-platform backends (inert on other OSes).
+apple = ["metal", "videotoolbox"]
+# Everything useful for a full native build (implies the bundles above).
+full = [
+    "cad",
+    "media",
+    "gi",
+    "planet",
+    "rlx",
+    "rlx-geo",
+    "assembly-check",
+    "async",
+    "step",
+    "brep-kernel",
+]
+# Browser / wasm kitchen sink — no native-only flags (video, metal, async, …).
+# Used by `VARIANT=full web/build.sh` and the npm `threers/full` package entry.
+wasm-full = ["captions", "openscad", "native-codec", "nurbs", "planet", "raytrace"]
+
+[dependencies]
+wgpu = "30"
+bytemuck = { version = "1.16", features = ["derive"] }
+log = "0.4"
+slotmap = "1.0"
+web-time = "0.2"
+rayon = { version = "1.10", optional = true }
+tokio = { version = "1", optional = true, default-features = false, features = ["rt-multi-thread", "macros"] }
+# `gpu` on every target, wasm32 included. It used to be native-only: rlx's GPU
+# backend was wgpu 30 while this renderer was wgpu 0.20, and two majors in one
+# wasm binary make wasm-bindgen reject the result over duplicate WebGPU enums.
+# Both are wgpu 30 now, and `wasm-bindgen` accepts the build.
+rlx = { version = "0.2.14", optional = true, default-features = false, features = ["cpu", "tensor", "gpu"] }
+rlx-geo = { version = "0.2.14", optional = true }
+manifold-rust = { version = "0.13", optional = true }
+
+# Native-only deps (winit + env_logger + pollster only make sense outside wasm).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+winit = "0.29"
+pollster = "0.3"
+env_logger = "0.11"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+console_error_panic_hook = "0.1"
+futures-channel = "0.3"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies.web-sys]
+version = "0.3"
+features = [
+    "Window",
+    "Document",
+    "Element",
+    "HtmlCanvasElement",
+    "HtmlElement",
+    "Performance",
+    "console",
+]
 
 [[example]]
 name = "headless_video"
@@ -50,53 +214,6 @@ required-features = ["video", "native-codec"]
 [[example]]
 name = "export_webm_native"
 required-features = ["native-codec"]
-
-[features]
-default = []
-mesh-bvh = []
-bvh-csg = ["mesh-bvh"]
-# OpenSCAD-style solid modeling: `.scad` front end + `Solid`/`scad!` Rust DSL,
-# a watertight exact-CSG kernel (float fallback), mesh import/export, and
-# `surface()` heightmaps. Pulls bvh-csg for the float fallback path.
-openscad = ["bvh-csg"]
-# Native video export: renders a frame sequence and encodes it with the system
-# `ffmpeg` (no extra crate deps — the feature just gates the module).
-video = []
-# From-scratch, pure-Rust media codecs (HEVC, VP9/WebM, APNG, GIF encode/decode,
-# bitstream). No external deps and no OS/process/thread use — native and wasm32.
-native-codec = []
-
-[dependencies]
-wgpu = "0.20"
-bytemuck = { version = "1.16", features = ["derive"] }
-log = "0.4"
-slotmap = "1.0"
-web-time = "0.2"
-
-# Native-only deps (winit + env_logger + pollster only make sense outside wasm).
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-winit = "0.29"
-pollster = "0.3"
-env_logger = "0.11"
-
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-wasm-bindgen = "0.2"
-wasm-bindgen-futures = "0.4"
-js-sys = "0.3"
-console_error_panic_hook = "0.1"
-futures-channel = "0.3"
-
-[target.'cfg(target_arch = "wasm32")'.dependencies.web-sys]
-version = "0.3"
-features = [
-    "Window",
-    "Document",
-    "Element",
-    "HtmlCanvasElement",
-    "HtmlElement",
-    "Performance",
-    "console",
-]
 
 [[example]]
 name = "cube"
@@ -137,6 +254,10 @@ path = "examples/physical.rs"
 [[example]]
 name = "shadow"
 path = "examples/shadow.rs"
+
+[[example]]
+name = "capsule"
+path = "examples/capsule.rs"
 
 [[example]]
 name = "mesh_bvh_picking"
@@ -192,3 +313,155 @@ required-features = ["openscad"]
 name = "nema17"
 path = "examples/nema17.rs"
 required-features = ["openscad"]
+
+[[example]]
+name = "scad2stl"
+required-features = ["openscad"]
+
+[[example]]
+name = "csg_check"
+required-features = ["openscad"]
+
+[[example]]
+name = "kernel_compare"
+required-features = ["openscad"]
+
+[[example]]
+name = "scad_schematic"
+required-features = ["openscad"]
+
+[[example]]
+name = "scad_profile"
+required-features = ["openscad"]
+
+[[example]]
+name = "scad_animate"
+required-features = ["openscad", "video", "native-codec"]
+
+[[example]]
+name = "bottle_window_dataset"
+required-features = ["raytrace"]
+
+[[example]]
+name = "path_trace"
+required-features = ["raytrace"]
+
+[[example]]
+name = "path_trace_gpu"
+required-features = ["raytrace"]
+
+[[example]]
+name = "path_trace_video"
+required-features = ["raytrace", "video"]
+
+[[example]]
+name = "denoise_dataset"
+required-features = ["raytrace"]
+
+[[example]]
+name = "denoise_compare"
+required-features = ["raytrace"]
+
+[[example]]
+name = "denoise_fit"
+required-features = ["raytrace"]
+
+[[example]]
+name = "denoise_parity"
+required-features = ["raytrace", "learned-denoise"]
+
+[[example]]
+name = "progressive_denoise"
+required-features = ["raytrace"]
+
+[[example]]
+name = "hdri_lighting"
+required-features = ["raytrace"]
+
+[[example]]
+name = "metal_headless"
+required-features = ["metal"]
+
+[[example]]
+name = "metal_window"
+required-features = ["metal"]
+
+[[example]]
+name = "metal_stereo"
+required-features = ["metal"]
+
+[[example]]
+name = "vt_encode_bench"
+required-features = ["videotoolbox"]
+
+[[example]]
+name = "bake_planet_maps"
+required-features = ["planet"]
+
+[[example]]
+name = "earth_video"
+required-features = ["planet", "video"]
+
+[[example]]
+name = "starfield_probe"
+required-features = ["planet"]
+
+[[example]]
+name = "realistic_earth"
+required-features = ["planet"]
+
+[[example]]
+name = "pole_probe"
+required-features = ["planet"]
+
+[[example]]
+name = "frame_profile"
+required-features = ["planet"]
+
+[[example]]
+name = "captions_video"
+required-features = ["video", "native-codec"]
+
+[[example]]
+name = "brep_part"
+required-features = ["step"]
+
+[[example]]
+name = "rlx_frame_filter"
+required-features = ["rlx"]
+
+[[example]]
+name = "rlx_conv_postfx"
+required-features = ["rlx"]
+
+[[example]]
+name = "rlx_mesh_smooth"
+required-features = ["rlx"]
+
+[[example]]
+name = "rlx_fit_grade"
+required-features = ["rlx"]
+
+[[example]]
+name = "rlx_video_grade"
+required-features = ["rlx", "video", "native-codec"]
+
+[[example]]
+name = "rlx_palette"
+required-features = ["rlx", "rlx-geo"]
+
+[[example]]
+name = "rlx_geo_refine"
+required-features = ["rlx-geo"]
+
+[[example]]
+name = "rlx_geo_erosion"
+required-features = ["rlx", "rlx-geo"]
+
+[[example]]
+name = "rlx_geo_materials"
+required-features = ["rlx-geo"]
+
+[[example]]
+name = "rlx_geo_terrain"
+required-features = ["rlx-geo"]

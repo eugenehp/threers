@@ -1,0 +1,414 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>scroll-video calibration — threers</title>
+<link rel="stylesheet" href="../viewer-theme.css">
+<style>
+  * { box-sizing: border-box; }
+  html, body {
+    height: 100%;
+    overflow: hidden;
+  }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font: 13px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+
+  #layout {
+    display: grid;
+    grid-template-columns: 22rem minmax(0, 1fr);
+    height: 100vh;
+    min-height: 0;
+    overflow: hidden;
+  }
+  @media (max-width: 960px) {
+    #layout { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); }
+    #cal { max-height: 38vh; overflow: auto; border-bottom: 1px solid var(--border); }
+  }
+
+  #cal {
+    border-right: 1px solid var(--border);
+    padding: 1rem 1rem 2rem;
+    background: var(--bg);
+    height: 100vh;
+    min-height: 0;
+    overflow: auto;
+  }
+  #cal h1 { margin: 0 0 .25rem; font-size: 15px; color: var(--title); }
+  #cal .lede { margin: 0 0 1rem; color: var(--muted); font-size: 12px; line-height: 1.45; }
+  #cal h2 {
+    margin: 1rem 0 .35rem;
+    font-size: 11px;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .field { margin: .45rem 0; display: grid; gap: .2rem; }
+  .field label { display: flex; justify-content: space-between; gap: .75rem; color: var(--fg); font-size: 12px; }
+  .field label span { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .field input[type="range"] { width: 100%; accent-color: var(--accent); }
+  .field select, .field button {
+    font: inherit; font-size: 12px; color: var(--fg);
+    background: var(--hover); border: 1px solid var(--border); border-radius: 6px; padding: .35rem .55rem;
+  }
+  .field button { cursor: pointer; }
+  .field button:hover { border-color: var(--accent); }
+  .row { display: flex; flex-wrap: wrap; gap: .45rem; }
+  #status { color: var(--muted); font-size: 11.5px; min-height: 1.4em; }
+  #export {
+    width: 100%; min-height: 5rem; resize: vertical;
+    font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+    background: var(--hover); color: var(--fg); border: 1px solid var(--border);
+    border-radius: 6px; padding: .5rem;
+  }
+  .chip {
+    display: inline-flex; align-items: center; gap: .35rem;
+    border: 1px solid var(--border); border-radius: 999px;
+    padding: .1rem .55rem; font-size: 11px; color: var(--muted);
+  }
+  .chip b { color: var(--fg); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .chip.ok b { color: #7ddc9a; }
+  .chip.warn b { color: #ffb454; }
+  #err { color: #ff8080; font-size: 12px; white-space: pre-wrap; }
+
+  #clip-preview {
+    margin: .5rem 0 1rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    background: #000;
+  }
+  #clip-preview canvas {
+    display: block;
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    background: #000;
+  }
+  #clip-preview figcaption {
+    padding: .35rem .55rem;
+    font-size: 11px;
+    color: var(--muted);
+    border-top: 1px solid var(--border);
+  }
+
+  #scroll-col {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    min-height: 0;
+    overflow: hidden;
+    border-left: 1px solid var(--border);
+  }
+  #stage-wrap {
+    flex: 0 0 auto;
+    padding: 1rem;
+    display: grid;
+    place-items: center;
+    background: var(--scene);
+    pointer-events: none;
+  }
+  #stage-wrap.html-layer-mode {
+    background: transparent;
+  }
+  #stage-wrap > * { pointer-events: auto; }
+  #copy-scroll {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    position: relative;
+  }
+  #stage {
+    position: relative;
+    width: min(100%, 960px);
+    aspect-ratio: 16 / 9;
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, .35);
+    border: 1px solid var(--border);
+    background: #0a0c10;
+  }
+  #stage.canvas-3d-mode {
+    background: #0a0c10;
+  }
+  #stage.html-layer-mode {
+    background: #000;
+  }
+  #stage.canvas-3d-mode .stage-video,
+  #stage.canvas-3d-mode #video-fallback {
+    display: none !important;
+  }
+  #stage.html-layer-mode #video-fallback {
+    display: none;
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 0;
+  }
+  #stage.html-layer-mode .stage-video {
+    display: block;
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    z-index: 0;
+    image-rendering: auto;
+  }
+  #stage.html-layer-mode.use-fallback .stage-video {
+    display: none;
+  }
+  #stage.html-layer-mode.use-fallback #video-fallback {
+    display: block;
+  }
+  #stage canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 1;
+    display: block;
+    pointer-events: none;
+    background: transparent !important;
+  }
+  #hud, #timeline { z-index: 2; }
+  #time-badge {
+    position: absolute;
+    top: .65rem;
+    right: .65rem;
+    z-index: 3;
+    font: 700 28px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: rgba(255, 255, 255, .92);
+    text-shadow: 0 2px 12px rgba(0, 0, 0, .65);
+    pointer-events: none;
+    font-variant-numeric: tabular-nums;
+  }
+  #hud {
+    position: absolute; inset: .65rem .65rem auto;
+    display: flex; flex-wrap: wrap; gap: .35rem;
+    pointer-events: none;
+  }
+  #timeline {
+    position: absolute; left: 0; right: 0; bottom: 0; height: 4px;
+    background: rgba(255, 255, 255, .08);
+  }
+  #timeline > i {
+    display: block; height: 100%; width: 0;
+    background: linear-gradient(90deg, var(--accent), #7ddc9a);
+  }
+
+  #copy {
+    padding: 0 1.25rem 6rem;
+    max-width: 42rem;
+  }
+  #copy .lead {
+    padding: 1.25rem 0 1rem;
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1.55;
+  }
+  section.marker {
+    min-height: 70vh;
+    padding: 1.5rem 0 2rem;
+    border-top: 1px dashed var(--border);
+  }
+  section.marker:first-of-type { border-top: none; }
+  section.marker h3 { margin: 0 0 .35rem; font-size: 18px; color: var(--title); }
+  section.marker p { margin: 0; color: var(--muted); max-width: 36ch; }
+  section.marker .tag {
+    display: inline-block; margin-bottom: .5rem;
+    font-size: 11px; letter-spacing: .04em; text-transform: uppercase;
+    color: var(--accent);
+  }
+  section.marker.active {
+    background: linear-gradient(90deg, rgba(58, 134, 224, .08), transparent 70%);
+    margin-left: -1.25rem;
+    padding-left: 1.25rem;
+    border-left: 3px solid var(--accent);
+  }
+  section.marker.active .tag { color: var(--title); }
+  #scroll-progress {
+    position: absolute;
+    right: 0;
+    top: 0;
+    width: 4px;
+    height: 0;
+    background: linear-gradient(var(--accent), #7ddc9a);
+    z-index: 30;
+    pointer-events: none;
+    opacity: .85;
+  }
+  .rail {
+    position: absolute;
+    top: 0; bottom: 0;
+    left: calc(22rem + min(100% - 22rem, 960px) * .5);
+    width: 1px;
+    background: linear-gradient(var(--border), transparent 8%, transparent 92%, var(--border));
+    pointer-events: none;
+  }
+  @media (max-width: 960px) { .rail { display: none; } }
+</style>
+</head>
+<body>
+<div id="layout">
+  <aside id="cal">
+    <h1>scroll-video calibration</h1>
+    <p class="lede">
+      Tune how page scroll maps to video time, with threers geometry composited on top.
+      Start here — extract <code>scroll-sync.js</code> into a crate once the mapping feels right.
+    </p>
+    <div id="status">building test clip…</div>
+    <p id="err"></p>
+
+    <figure id="clip-preview">
+      <canvas id="v-preview-canvas" width="320" height="180" aria-hidden="true"></canvas>
+      <figcaption>test clip preview — throttled sidebar mirror (single decode)</figcaption>
+    </figure>
+
+    <h2>Display</h2>
+    <div class="field">
+      <select id="display-mode">
+        <option value="canvas-3d" selected>canvas 3D — video plane in WebGL scene</option>
+        <option value="html-layer">HTML layer — video under transparent canvas</option>
+      </select>
+    </div>
+
+    <h2>Scroll mode</h2>
+    <div class="field">
+      <select id="mode">
+        <option value="progress" selected>progress — scroll position scrubs</option>
+        <option value="velocity">velocity — scroll speed integrates time</option>
+      </select>
+    </div>
+    <div class="field">
+      <label><input id="easing" type="checkbox"> smoothstep easing (progress mode)</label>
+    </div>
+
+    <h2>Media</h2>
+    <div class="field">
+      <label for="video-file">replace test clip</label>
+      <input id="video-file" type="file" accept="video/*">
+    </div>
+
+    <h2>Scroll range</h2>
+    <div class="field">
+      <label>scroll start <span id="v-start">0 px</span></label>
+      <input id="scroll-start" type="range" min="0" max="8000" step="10" value="0">
+    </div>
+    <div class="field">
+      <label>scroll end <span id="v-end">4000 px</span></label>
+      <input id="scroll-end" type="range" min="500" max="12000" step="10" value="4000">
+    </div>
+    <div class="row">
+      <button id="fit-markers" type="button">fit to markers</button>
+      <button id="reset-range" type="button">reset</button>
+    </div>
+
+    <h2>Velocity tuning</h2>
+    <div class="field">
+      <label>px per video second <span id="v-pxps">900</span></label>
+      <input id="px-per-sec" type="range" min="200" max="3000" step="10" value="900">
+    </div>
+    <div class="field">
+      <label>velocity gain <span id="v-gain">1.00×</span></label>
+      <input id="velocity-gain" type="range" min="0.25" max="3" step="0.05" value="1">
+    </div>
+    <div class="field">
+      <label>speed smoothing <span id="v-smooth">0.18</span></label>
+      <input id="smoothing" type="range" min="0" max="0.95" step="0.01" value="0.18">
+    </div>
+
+    <h2>Clip</h2>
+    <div class="field">
+      <label>clip in <span id="v-in">0.0 s</span></label>
+      <input id="clip-in" type="range" min="0" max="10" step="0.05" value="0">
+    </div>
+    <div class="field">
+      <label>clip out <span id="v-out">10.0 s</span></label>
+      <input id="clip-out" type="range" min="0.5" max="12" step="0.05" value="10">
+    </div>
+
+    <h2>Live</h2>
+    <div class="row">
+      <span class="chip">scroll <b id="live-scroll">0</b> px</span>
+      <span class="chip">speed <b id="live-speed">0</b> px/s</span>
+      <span class="chip ok">time <b id="live-time">0.00</b> s</span>
+      <span class="chip warn">rate <b id="live-rate">0.00</b>×</span>
+    </div>
+
+    <h2>Marker error (progress mode)</h2>
+    <div id="marker-errors" style="font: 11px/1.5 ui-monospace, Menlo, monospace; color: var(--muted);"></div>
+
+    <h2>Export</h2>
+    <textarea id="export" readonly spellcheck="false"></textarea>
+    <div class="row" style="margin-top:.45rem">
+      <button id="copy-json" type="button">copy JSON</button>
+      <button id="import-json" type="button">import JSON</button>
+    </div>
+  </aside>
+
+  <div id="scroll-col">
+    <div class="rail" aria-hidden="true"></div>
+    <div id="stage-wrap">
+      <div id="stage" class="canvas-3d-mode">
+        <canvas id="video-fallback" width="640" height="360" aria-hidden="true"></canvas>
+        <video id="v" class="stage-video" playsinline muted preload="metadata" aria-hidden="true"></video>
+        <canvas id="c" width="1280" height="720"></canvas>
+        <div id="time-badge">0.0</div>
+        <div id="hud">
+          <span class="chip" id="mode-chip">progress · canvas 3D</span>
+        </div>
+        <div id="timeline"><i id="timeline-fill"></i></div>
+      </div>
+    </div>
+
+    <div id="copy-scroll">
+    <div id="scroll-progress" aria-hidden="true"></div>
+    <div id="copy">
+      <p class="lead">
+        Scroll this panel below the stage. The viewport stays pinned while playback tracks scroll
+        position in this column. Place markers in the copy, then use <em>fit to markers</em>
+        to align scroll range with known times in the clip.
+      </p>
+
+      <section class="marker" data-scroll-marker data-time="0" data-label="start">
+        <span class="tag">0 s</span>
+        <h3>Opening frame</h3>
+        <p>At scroll start the clip should read 0 s. The overlay ring is thin and cool.</p>
+      </section>
+
+      <section class="marker" data-scroll-marker data-time="3" data-label="mid">
+        <span class="tag">3 s</span>
+        <h3>Mid beat</h3>
+        <p>Marker at 3 s — the torus grows and warms as you pass this section.</p>
+      </section>
+
+      <section class="marker" data-scroll-marker data-time="6" data-label="turn">
+        <span class="tag">6 s</span>
+        <h3>Turn</h3>
+        <p>Camera eases closer; check marker error in the panel stays near zero after fitting.</p>
+      </section>
+
+      <section class="marker" data-scroll-marker data-time="9" data-label="end">
+        <span class="tag">9 s</span>
+        <h3>Outro</h3>
+        <p>Final marker near clip out. Export JSON when calibration looks good.</p>
+      </section>
+
+      <section style="min-height: 40vh"></section>
+    </div>
+    </div>
+  </div>
+</div>
+
+<script type="module" src="./calibration.js"></script>
+</body>
+</html>

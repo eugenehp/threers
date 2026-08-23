@@ -346,7 +346,13 @@ mod tests {
     }
 
     fn exact3d_i128(a: [i64; 3], b: [i64; 3], c: [i64; 3], d: [i64; 3]) -> i32 {
-        let v = |p: [i64; 3]| [p[0] as i128 - d[0] as i128, p[1] as i128 - d[1] as i128, p[2] as i128 - d[2] as i128];
+        let v = |p: [i64; 3]| {
+            [
+                p[0] as i128 - d[0] as i128,
+                p[1] as i128 - d[1] as i128,
+                p[2] as i128 - d[2] as i128,
+            ]
+        };
         let (ad, bd, cd) = (v(a), v(b), v(c));
         let det = ad[0] * (bd[1] * cd[2] - bd[2] * cd[1]) - ad[1] * (bd[0] * cd[2] - bd[2] * cd[0])
             + ad[2] * (bd[0] * cd[1] - bd[1] * cd[0]);
@@ -377,18 +383,26 @@ mod tests {
                 a[1] + s * (b[1] - a[1]) + t * (c[1] - a[1]),
                 a[2] + s * (b[2] - a[2]) + t * (c[2] - a[2]),
             ];
-            assert_eq!(sgn(orient3d(f(a), f(b), f(c), f(d))), 0, "coplanar must be exactly 0");
+            assert_eq!(
+                sgn(orient3d(f(a), f(b), f(c), f(d))),
+                0,
+                "coplanar must be exactly 0"
+            );
             let (af, bf, cf, df) = (f(a), f(b), f(c), f(d));
             let (adx, ady, adz) = (af[0] - df[0], af[1] - df[1], af[2] - df[2]);
             let (bdx, bdy, bdz) = (bf[0] - df[0], bf[1] - df[1], bf[2] - df[2]);
             let (cdx, cdy, cdz) = (cf[0] - df[0], cf[1] - df[1], cf[2] - df[2]);
-            let naive = adz * (bdx * cdy - cdx * bdy) + bdz * (cdx * ady - adx * cdy)
+            let naive = adz * (bdx * cdy - cdx * bdy)
+                + bdz * (cdx * ady - adx * cdy)
                 + cdz * (adx * bdy - bdx * ady);
             if sgn(naive) != 0 {
                 naive_wrong += 1;
             }
         }
-        assert!(naive_wrong > 50, "naive f64 should misjudge coplanar cases; got {naive_wrong}");
+        assert!(
+            naive_wrong > 50,
+            "naive f64 should misjudge coplanar cases; got {naive_wrong}"
+        );
 
         // Random points: exact sign must match the i128 determinant.
         for _ in 0..4000 {
@@ -396,7 +410,10 @@ mod tests {
             let b = [rnd(m), rnd(m), rnd(m)];
             let c = [rnd(m), rnd(m), rnd(m)];
             let d = [rnd(m), rnd(m), rnd(m)];
-            assert_eq!(sgn(orient3d(f(a), f(b), f(c), f(d))), exact3d_i128(a, b, c, d));
+            assert_eq!(
+                sgn(orient3d(f(a), f(b), f(c), f(d))),
+                exact3d_i128(a, b, c, d)
+            );
         }
     }
 
@@ -448,13 +465,21 @@ mod tests {
             let c = [a[0] + k * dx + 1, a[1] + k * dy + 1];
             let want = exact_i128(a, b, c); // = sign(-s)
             let (af, bf, cf) = (f(a), f(b), f(c));
-            assert_eq!(sgn(orient2d(af, bf, cf)), want, "exact must match i128 (det={})", -s);
+            assert_eq!(
+                sgn(orient2d(af, bf, cf)),
+                want,
+                "exact must match i128 (det={})",
+                -s
+            );
             let naive = (af[0] - cf[0]) * (bf[1] - cf[1]) - (af[1] - cf[1]) * (bf[0] - cf[0]);
             if sgn(naive) != want {
                 naive_wrong += 1;
             }
         }
-        assert!(naive_wrong > 100, "naive f64 should misjudge many; got {naive_wrong}");
+        assert!(
+            naive_wrong > 100,
+            "naive f64 should misjudge many; got {naive_wrong}"
+        );
 
         // Random points: exact sign must match the i128 determinant.
         for _ in 0..4000 {

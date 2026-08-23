@@ -1,0 +1,192 @@
+# Build & publish language packages (multi-arch)
+
+# npm ESM (wasm) — arch-independent
+name: release-language-packages
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Publish to registries (needs secrets on tag push anyway)'
+        required: false
+        default: 'false'
+        type: boolean
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  npm-esm:
+    name: npm threers (wasm ESM)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: jetli/wasm-pack-action@v0.4.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+      - name: Build language packages
+        run: ./scripts/release-all.sh build
+      - name: Pack npm ESM
+        working-directory: crates/threers-js
+        run: npm pack
+      - name: Publish
+        if: startsWith(github.ref, 'refs/tags/')
+        working-directory: crates/threers-js
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  napi:
+    name: threers-node (${{ matrix.settings.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - host: macos-14
+            target: aarch64-apple-darwin
+          - host: macos-13
+            target: x86_64-apple-darwin
+          - host: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - host: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - host: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.settings.host }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.settings.target }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+      - name: Install deps
+        working-directory: crates/threers-node
+        run: npm ci || npm install
+      - name: Build native addon
+        working-directory: crates/threers-node
+        run: >
+          npx napi build --platform --release
+          --target ${{ matrix.settings.target }}
+          --cargo-flags="--features headless,physics,animation"
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: napi-${{ matrix.settings.target }}
+          path: |
+            crates/threers-node/*.node
+            crates/threers-node/npm/
+          if-no-files-found: warn
+
+  napi-publish:
+    name: Publish threers-node + platform packages
+    needs: napi
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: napi-*
+          merge-multiple: false
+      - name: Install + collect artifacts
+        working-directory: crates/threers-node
+        run: |
+          npm ci || npm install
+          # Copy built .node files next to platform package stubs.
+          mkdir -p npm/darwin-arm64 npm/darwin-x64 npm/linux-x64-gnu npm/linux-arm64-gnu npm/win32-x64-msvc
+          find ../../artifacts -name '*.node' -print0 | while IFS= read -r -d '' f; do
+            base=$(basename "$f")
+            case "$base" in
+              *darwin-arm64*) cp "$f" npm/darwin-arm64/ ;;
+              *darwin-x64*) cp "$f" npm/darwin-x64/ ;;
+              *linux-x64-gnu*) cp "$f" npm/linux-x64-gnu/ ;;
+              *linux-arm64-gnu*) cp "$f" npm/linux-arm64-gnu/ ;;
+              *win32-x64-msvc*) cp "$f" npm/win32-x64-msvc/ ;;
+            esac
+          done
+          ls -la npm/* || true
+      - name: Publish platform packages
+        working-directory: crates/threers-node
+        run: |
+          for d in npm/*; do
+            (cd "$d" && npm publish --access public) || true
+          done
+          npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  pypi:
+    name: PyPI wheels (${{ matrix.os }} / ${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            target: aarch64-apple-darwin
+          - os: macos-13
+            target: x86_64-apple-darwin
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install maturin
+        run: pip install maturin
+      - name: Build wheel
+        working-directory: crates/threers-py
+        run: >
+          maturin build --release
+          --features headless,physics,animation
+          --target ${{ matrix.target }}
+          -o dist
+      - name: Upload wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.target }}
+          path: crates/threers-py/dist/*.whl
+
+  pypi-publish:
+    name: Publish PyPI wheels
+    needs: pypi
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: wheels
+          pattern: wheels-*
+          merge-multiple: true
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: wheels/
+          skip-existing: true

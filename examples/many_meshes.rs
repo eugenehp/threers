@@ -11,18 +11,8 @@ use std::sync::Arc;
 
 use threers::cameras::Camera;
 use threers::{
-    AmbientLight,
-    BoxGeometry,
-    Color,
-    DirectionalLight,
-    Euler,
-    Mesh,
-    Object3D,
-    PerspectiveCamera,
-    Renderer,
-    Scene,
-    StandardMaterial,
-    Vector3,
+    AmbientLight, BoxGeometry, Color, DirectionalLight, Euler, Mesh, Object3D, PerspectiveCamera,
+    Renderer, Scene, StandardMaterial, Vector3,
 };
 
 use winit::{
@@ -33,21 +23,38 @@ use winit::{
 
 fn parity_hsl(h: f32, s: f32, l: f32) -> Color {
     fn srgb_to_linear(c: f32) -> f32 {
-        if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+        if c <= 0.04045 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
     }
     let h = h - h.floor();
     let (r, g, b) = if s == 0.0 {
         (l, l, l)
     } else {
-        let q = if l <= 0.5 { l * (1.0 + s) } else { l + s - l * s };
+        let q = if l <= 0.5 {
+            l * (1.0 + s)
+        } else {
+            l + s - l * s
+        };
         let p = 2.0 * l - q;
         let hue2rgb = |mut t: f32| {
-            if t < 0.0 { t += 1.0; }
-            if t > 1.0 { t -= 1.0; }
-            if t < 1.0 / 6.0 { p + (q - p) * 6.0 * t }
-            else if t < 0.5 { q }
-            else if t < 2.0 / 3.0 { p + (q - p) * (2.0 / 3.0 - t) * 6.0 }
-            else { p }
+            if t < 0.0 {
+                t += 1.0;
+            }
+            if t > 1.0 {
+                t -= 1.0;
+            }
+            if t < 1.0 / 6.0 {
+                p + (q - p) * 6.0 * t
+            } else if t < 0.5 {
+                q
+            } else if t < 2.0 / 3.0 {
+                p + (q - p) * (2.0 / 3.0 - t) * 6.0
+            } else {
+                p
+            }
         };
         (hue2rgb(h + 1.0 / 3.0), hue2rgb(h), hue2rgb(h - 1.0 / 3.0))
     };
@@ -69,10 +76,13 @@ async fn run() {
             .expect("window"),
     );
 
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-        backends: wgpu::Backends::PRIMARY,
-        ..Default::default()
-    });
+    let instance = {
+        // wgpu 30 dropped `Default` here; the display handle is only
+        // consulted by GLES/Wayland, not Vulkan, Metal or DX12.
+        let mut d = wgpu::InstanceDescriptor::new_without_display_handle();
+        d.backends = wgpu::Backends::PRIMARY;
+        wgpu::Instance::new(d)
+    };
     let surface = instance.create_surface(window.clone()).expect("surface");
 
     let adapter = instance
@@ -80,6 +90,7 @@ async fn run() {
             power_preference: wgpu::PowerPreference::default(),
             compatible_surface: Some(&surface),
             force_fallback_adapter: false,
+            apply_limit_buckets: false,
         })
         .await
         .expect("adapter");
@@ -90,8 +101,8 @@ async fn run() {
                 label: Some("threers"),
                 required_features: wgpu::Features::empty(),
                 required_limits: wgpu::Limits::downlevel_defaults(),
+                ..Default::default()
             },
-            None,
         )
         .await
         .expect("device");
@@ -101,7 +112,12 @@ async fn run() {
 
     let size = window.inner_size();
     let caps = surface.get_capabilities(&adapter);
-    let format = caps.formats.iter().copied().find(|f| f.is_srgb()).unwrap_or(caps.formats[0]);
+    let format = caps
+        .formats
+        .iter()
+        .copied()
+        .find(|f| f.is_srgb())
+        .unwrap_or(caps.formats[0]);
 
     let mut config = wgpu::SurfaceConfiguration {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -112,10 +128,17 @@ async fn run() {
         alpha_mode: caps.alpha_modes[0],
         view_formats: vec![],
         desired_maximum_frame_latency: 2,
+        color_space: wgpu::SurfaceColorSpace::Srgb,
     };
     surface.configure(&device, &config);
 
-    let mut renderer = Renderer::new(device.clone(), queue.clone(), format, config.width, config.height);
+    let mut renderer = Renderer::new(
+        device.clone(),
+        queue.clone(),
+        format,
+        config.width,
+        config.height,
+    );
 
     // --- scene (matches threers parity iframe) ---
     let mut scene = Scene::new();
@@ -146,38 +169,39 @@ async fn run() {
     let window_for_loop = window.clone();
 
     event_loop
-        .run(move |event, target| {
-            match event {
-                Event::WindowEvent { event, window_id } if window_id == window_for_loop.id() => {
-                    match event {
-                        WindowEvent::CloseRequested => target.exit(),
-                        WindowEvent::Resized(new_size) => {
-                            config.width = new_size.width.max(1);
-                            config.height = new_size.height.max(1);
-                            surface.configure(&device, &config);
-                            renderer.resize(config.width, config.height);
-                            camera.set_aspect(config.width as f32 / config.height as f32);
-                        }
-                        WindowEvent::RedrawRequested => {
-                            scene.update_world();
-                            match surface.get_current_texture() {
-                                Ok(frame) => {
-                                    let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
-                                    renderer.render(&mut scene, &camera, &view, false);
-                                    frame.present();
-                                }
-                                Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
-                                    surface.configure(&device, &config);
-                                }
-                                Err(e) => log::error!("surface: {e:?}"),
-                            }
-                        }
-                        _ => {}
+        .run(move |event, target| match event {
+            Event::WindowEvent { event, window_id } if window_id == window_for_loop.id() => {
+                match event {
+                    WindowEvent::CloseRequested => target.exit(),
+                    WindowEvent::Resized(new_size) => {
+                        config.width = new_size.width.max(1);
+                        config.height = new_size.height.max(1);
+                        surface.configure(&device, &config);
+                        renderer.resize(config.width, config.height);
+                        camera.set_aspect(config.width as f32 / config.height as f32);
                     }
+                    WindowEvent::RedrawRequested => {
+                        scene.update_world();
+                        match surface.get_current_texture() {
+                            wgpu::CurrentSurfaceTexture::Success(frame)
+                            | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {
+                                let view = frame
+                                    .texture
+                                    .create_view(&wgpu::TextureViewDescriptor::default());
+                                renderer.render(&mut scene, &camera, &view, false);
+                                queue.present(frame);
+                            }
+                            wgpu::CurrentSurfaceTexture::Lost | wgpu::CurrentSurfaceTexture::Outdated => {
+                                surface.configure(&device, &config);
+                            }
+                            e => log::error!("surface: {e:?}"),
+                        }
+                    }
+                    _ => {}
                 }
-                Event::AboutToWait => window_for_loop.request_redraw(),
-                _ => {}
             }
+            Event::AboutToWait => window_for_loop.request_redraw(),
+            _ => {}
         })
         .expect("event loop");
 }

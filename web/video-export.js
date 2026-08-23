@@ -15,7 +15,7 @@
 
 import * as _wasm from './pkg/threers.js';
 
-/** @typedef {'gif' | 'apng' | 'webm'} VideoFormatName */
+/** @typedef {'gif' | 'apng' | 'webm' | 'mp4'} VideoFormatName */
 
 /**
  * Browser-friendly containers encoded in-process (no ffmpeg).
@@ -26,6 +26,7 @@ export const VideoFormat = Object.freeze({
   Gif: 'gif',
   Apng: 'apng',
   Webm: 'webm',
+  Mp4: 'mp4',
 });
 
 /** @deprecated Use {@link VideoFormat}. */
@@ -184,7 +185,7 @@ export class VideoExportResult {
   }
 
   /**
-   * Build an `<img>` (gif/apng) or `<video>` (webm) for quick preview.
+   * Build an `<img>` (gif/apng) or `<video>` (webm/mp4) for quick preview.
    * @param {ParentNode|null} [parent] append target
    * @returns {HTMLImageElement|HTMLVideoElement}
    */
@@ -192,7 +193,7 @@ export class VideoExportResult {
     const url = this.toObjectURL();
     /** @type {HTMLImageElement|HTMLVideoElement} */
     let el;
-    if (this.format === 'webm') {
+    if (this.format === 'webm' || this.format === 'mp4') {
       el = document.createElement('video');
       el.src = url;
       el.controls = true;
@@ -212,7 +213,7 @@ export class VideoExportResult {
 }
 
 /**
- * Fluent encoder for GIF / APNG / WebM (`EventTarget`).
+ * Fluent encoder for GIF / APNG / WebM / MP4 (`EventTarget`).
  *
  * Buffer path: `VideoExporter.encode(frames, opts)` or `new VideoExporter(opts).encode(frames)`.
  * Scene path (shim): `VideoExporter.from(renderer, scene, camera).gif().frames(30).download('cube')`.
@@ -365,6 +366,13 @@ export class VideoExporter extends EventTarget {
     return this;
   }
 
+  /** H.264 MP4 preset (even width/height; no alpha). */
+  mp4() {
+    this._opts.format = VideoFormat.Mp4;
+    this._opts.transparent = false;
+    return this;
+  }
+
   /** @param {number} width @param {number} height */
   size(width, height) {
     this._opts.width = width;
@@ -405,7 +413,7 @@ export class VideoExporter extends EventTarget {
   }
 
   /**
-   * When true, WebM rejects non-multiple-of-8 sizes instead of snapping (scene path).
+   * When true, WebM/MP4 reject misaligned sizes instead of snapping (scene path).
    * @param {boolean} [on=true]
    */
   strictSize(on = true) {
@@ -584,7 +592,8 @@ export class VideoExporter extends EventTarget {
 export function isVideoExportAvailable() {
   return typeof _wasm.encodeGifRgba === 'function'
     && typeof _wasm.encodeApngRgba === 'function'
-    && typeof _wasm.encodeWebmRgba === 'function';
+    && typeof _wasm.encodeWebmRgba === 'function'
+    && typeof _wasm.encodeMp4Rgba === 'function';
 }
 
 /**
@@ -617,8 +626,11 @@ export function parseVideoFormat(input) {
   if (raw === 'webm-alpha' || raw === 'webm_alpha' || raw === 'webm+alpha' || raw === 'vp9-alpha') {
     return { format: 'webm', transparent: true };
   }
+  if (raw === 'mp4' || raw === 'video/mp4' || raw === 'h264' || raw === 'avc1') {
+    return { format: 'mp4', transparent: false };
+  }
   throw new VideoExportError(
-    `unsupported video format "${input}" (use gif | apng | webm | webm-alpha)`,
+    `unsupported video format "${input}" (use gif | apng | webm | webm-alpha | mp4)`,
     VideoExportErrorCode.InvalidFormat,
   );
 }
@@ -656,6 +668,18 @@ export function alignVideoSize(width, height) {
 }
 
 /**
+ * Snap width/height down to even values (H.264 YUV420). Returns whether values changed.
+ * @param {number} width
+ * @param {number} height
+ * @returns {{ width: number, height: number, snapped: boolean }}
+ */
+export function alignVideoSizeForMp4(width, height) {
+  const w = Math.max(2, Math.floor(Number(width) / 2) * 2);
+  const h = Math.max(2, Math.floor(Number(height) / 2) * 2);
+  return { width: w, height: h, snapped: w !== width || h !== height };
+}
+
+/**
  * @param {VideoFormatName} format
  * @returns {string}
  */
@@ -664,6 +688,7 @@ export function videoMimeType(format) {
     case 'gif': return 'image/gif';
     case 'apng': return 'image/png';
     case 'webm': return 'video/webm';
+    case 'mp4': return 'video/mp4';
     default: throw new VideoExportError(`unknown video format: ${format}`, VideoExportErrorCode.InvalidFormat);
   }
 }
@@ -680,12 +705,13 @@ export function videoFilename(format, basename = 'export', transparent = false) 
     case 'gif': return `${base}.gif`;
     case 'apng': return `${base}.apng.png`;
     case 'webm': return transparent ? `${base}-alpha.webm` : `${base}.webm`;
+    case 'mp4': return `${base}.mp4`;
     default: throw new VideoExportError(`unknown video format: ${format}`, VideoExportErrorCode.InvalidFormat);
   }
 }
 
 /**
- * Encode tightly packed RGBA8 frames into GIF, APNG, or WebM bytes.
+ * Encode tightly packed RGBA8 frames into GIF, APNG, WebM, or MP4 bytes.
  * Prefer {@link VideoExporter.encode} for a structured result.
  *
  * @param {ArrayLike<Uint8Array|ArrayBuffer|ArrayBufferView>} frames
@@ -735,6 +761,35 @@ export function encodeAndDownloadVideoFrames(frames, options) {
 /**
  * Pool / single-shot Web Worker encoder (wasm `native-codec` runs off the main thread).
  */
+
+/**
+ * Transfer an RGBA frame to a worker. When `move` is true, detaches the source
+ * buffer (for streaming capture). Batch `encode()` always copies.
+ * @param {Uint8Array|ArrayBuffer|ArrayBufferView} frame
+ * @param {{ move?: boolean }} [options]
+ * @returns {{ buffer: ArrayBuffer, owned: boolean }}
+ */
+export function transferFrameBuffer(frame, options = {}) {
+  const move = options.move === true;
+  let u8 = frame;
+  if (frame instanceof ArrayBuffer) {
+    if (move) return { buffer: frame, owned: true };
+    return { buffer: frame.slice(0), owned: false };
+  }
+  if (ArrayBuffer.isView(frame)) {
+    u8 = new Uint8Array(frame.buffer, frame.byteOffset, frame.byteLength);
+  } else if (!(frame instanceof Uint8Array)) {
+    u8 = new Uint8Array(frame);
+  }
+  if (move && u8.byteOffset === 0 && u8.byteLength === u8.buffer.byteLength) {
+    return { buffer: u8.buffer, owned: true };
+  }
+  return {
+    buffer: u8.buffer.slice(u8.byteOffset, u8.byteOffset + u8.byteLength),
+    owned: false,
+  };
+}
+
 export class VideoEncodeWorker {
   /**
    * @param {import('./video-export.d.ts').VideoEncodeWorkerOptions} [options]
@@ -747,6 +802,10 @@ export class VideoEncodeWorker {
     this._seq = 0;
     /** @type {Map<number, { resolve: Function, reject: Function }>} */
     this._pending = new Map();
+    /** @type {number|null} */
+    this._activeStreamId = null;
+    /** @type {number} */
+    this._streamSeq = 0;
   }
 
   /** @returns {Worker} */
@@ -811,9 +870,9 @@ export class VideoEncodeWorker {
 
     const transfers = [];
     const buffers = list.map((u8) => {
-      const copy = u8.buffer.slice(u8.byteOffset, u8.byteOffset + u8.byteLength);
-      transfers.push(copy);
-      return copy;
+      const { buffer } = transferFrameBuffer(u8, { move: false });
+      transfers.push(buffer);
+      return buffer;
     });
 
     const msg = await this._call(this._ensureWorker(), {
@@ -847,6 +906,108 @@ export class VideoEncodeWorker {
       transparent: resolved.transparent,
       filename: resolved.filename,
     });
+  }
+
+  /**
+   * Stream RGBA frames to the worker as they are captured (pipelined export).
+   * @param {import('./video-export.d.ts').VideoEncodeOptions} options
+   * @param {import('./video-export.d.ts').VideoEncodeStreamOptions} [streamOptions]
+   * @returns {Promise<{ push: (frame: Uint8Array) => Promise<void>, finish: () => Promise<VideoExportResult>, streamId: number }>}
+   */
+  async beginStream(options, streamOptions = {}) {
+    await this.init();
+    throwIfAborted(streamOptions.signal ?? options?.signal);
+    const resolved = new VideoExporter(options)._resolvedEncodeOptions();
+    const batchSize = Math.max(1, streamOptions.batchSize ?? 4);
+    const streamId = (this._streamSeq = (this._streamSeq || 0) + 1);
+    this._activeStreamId = streamId;
+    const worker = this._ensureWorker();
+
+    await this._call(worker, {
+      type: 'streamBegin',
+      streamId,
+      wasmUrl: this._wasmUrl,
+      format: resolved.format,
+      width: resolved.width,
+      height: resolved.height,
+      fps: resolved.fps,
+      transparent: resolved.transparent,
+      gifColors: resolved.gifColors,
+    });
+
+    /** @type {ArrayBuffer[]} */
+    let batch = [];
+    /** @type {Transferable[]} */
+    let batchTransfers = [];
+    let frameCount = 0;
+    /** @type {Promise<void>} */
+    let pushChain = Promise.resolve();
+
+    const flush = () => {
+      if (batch.length === 0) return pushChain;
+      const frames = batch;
+      const transfers = batchTransfers;
+      batch = [];
+      batchTransfers = [];
+      pushChain = pushChain.then(() => new Promise((resolve, reject) => {
+        try {
+          worker.postMessage({ type: 'streamPush', streamId, frames }, transfers);
+          resolve();
+        } catch (err) {
+          reject(err);
+        }
+      }));
+      return pushChain;
+    };
+
+    const push = async (frame) => {
+      throwIfAborted(streamOptions.signal ?? options?.signal);
+      const { buffer } = transferFrameBuffer(frame, { move: true });
+      batch.push(buffer);
+      batchTransfers.push(buffer);
+      frameCount += 1;
+      if (batch.length >= batchSize) await flush();
+    };
+
+    const finish = async () => {
+      try {
+        await flush();
+        await pushChain;
+        throwIfAborted(streamOptions.signal ?? options?.signal);
+        emitProgress(streamOptions.onProgress ?? options?.onProgress, enrichProgress({
+          phase: 'encode',
+          frame: frameCount,
+          frames: frameCount,
+          ratio: 0.95,
+          format: resolved.format,
+        }), streamOptions.eventTarget ?? options?.eventTarget);
+
+        const msg = await this._call(worker, { type: 'streamFinish', streamId });
+
+        emitProgress(streamOptions.onProgress ?? options?.onProgress, enrichProgress({
+          phase: 'done',
+          frame: frameCount,
+          frames: frameCount,
+          ratio: 1,
+          format: resolved.format,
+        }), streamOptions.eventTarget ?? options?.eventTarget);
+
+        return new VideoExportResult({
+          bytes: new Uint8Array(msg.bytes),
+          format: resolved.format,
+          width: resolved.width,
+          height: resolved.height,
+          fps: resolved.fps,
+          frameCount,
+          transparent: resolved.transparent,
+          filename: resolved.filename,
+        });
+      } finally {
+        if (this._activeStreamId === streamId) this._activeStreamId = null;
+      }
+    };
+
+    return { push, finish, streamId };
   }
 
   terminate() {
@@ -883,6 +1044,18 @@ export class VideoEncodeWorker {
 let sharedEncodeWorker = null;
 
 /**
+ * Shared warm worker instance (wasm stays loaded between exports).
+ * @param {import('./video-export.d.ts').VideoEncodeWorkerOptions} [options]
+ * @returns {VideoEncodeWorker}
+ */
+export function getSharedEncodeWorker(options = {}) {
+  if (!sharedEncodeWorker) {
+    sharedEncodeWorker = new VideoEncodeWorker(options);
+  }
+  return sharedEncodeWorker;
+}
+
+/**
  * Encode RGBA frames in a shared Web Worker.
  * @param {ArrayLike<Uint8Array|ArrayBuffer|ArrayBufferView>} frames
  * @param {import('./video-export.d.ts').VideoEncodeOptions} options
@@ -892,10 +1065,7 @@ let sharedEncodeWorker = null;
 export async function encodeVideoFramesInWorker(frames, options, workerOptions = {}) {
   let worker = workerOptions.worker;
   if (!worker) {
-    if (!sharedEncodeWorker) {
-      sharedEncodeWorker = new VideoEncodeWorker(workerOptions);
-    }
-    worker = sharedEncodeWorker;
+    worker = getSharedEncodeWorker(workerOptions);
   }
   return worker.encode(frames, {
     ...options,
@@ -918,6 +1088,10 @@ export const encodeApngRgba = (...args) => {
 export const encodeWebmRgba = (...args) => {
   assertAvailable();
   return asU8(_wasm.encodeWebmRgba(...args));
+};
+export const encodeMp4Rgba = (...args) => {
+  assertAvailable();
+  return asU8(_wasm.encodeMp4Rgba(...args));
 };
 
 export class VideoExportError extends Error {
@@ -963,6 +1137,32 @@ function encodeWithOptions(frames, opts, onProgress, signal, mapFrame = null, ev
   assertAvailable();
   throwIfAborted(signal);
   const { width, height, fps, format, transparent, gifColors, filename } = opts;
+
+  if (format === 'webm' && (width % 8 !== 0 || height % 8 !== 0)) {
+    const aligned = alignVideoSize(width, height);
+    throw new VideoExportError(
+      `WebM/VP9 requires width and height multiples of 8 (got ${width}×${height})`,
+      VideoExportErrorCode.InvalidDimensions,
+      { hint: `use ${aligned.width}×${aligned.height}, or export via VideoExporter.from() which snaps capture size` },
+    );
+  }
+
+  if (format === 'mp4' && transparent) {
+    throw new VideoExportError(
+      'MP4/H.264 does not support transparency',
+      VideoExportErrorCode.InvalidOption,
+    );
+  }
+
+  if (format === 'mp4' && (width % 2 !== 0 || height % 2 !== 0)) {
+    const aligned = alignVideoSizeForMp4(width, height);
+    throw new VideoExportError(
+      `MP4/H.264 requires even width and height (got ${width}×${height})`,
+      VideoExportErrorCode.InvalidDimensions,
+      { hint: `use ${aligned.width}×${aligned.height}, or export via VideoExporter.from() which snaps capture size` },
+    );
+  }
+
   let list = normalizeFrameList(frames, width * height * 4);
 
   if (typeof mapFrame === 'function') {
@@ -973,15 +1173,6 @@ function encodeWithOptions(frames, opts, onProgress, signal, mapFrame = null, ev
       }
       return next;
     });
-  }
-
-  if (format === 'webm' && (width % 8 !== 0 || height % 8 !== 0)) {
-    const aligned = alignVideoSize(width, height);
-    throw new VideoExportError(
-      `WebM/VP9 requires width and height multiples of 8 (got ${width}×${height})`,
-      VideoExportErrorCode.InvalidDimensions,
-      { hint: `use ${aligned.width}×${aligned.height}, or export via VideoExporter.from() which snaps capture size` },
-    );
   }
 
   const total = list.length;
@@ -1000,8 +1191,10 @@ function encodeWithOptions(frames, opts, onProgress, signal, mapFrame = null, ev
       bytes = _wasm.encodeGifRgba(width, height, fps, gifColors, transparent, list);
     } else if (format === 'apng') {
       bytes = _wasm.encodeApngRgba(width, height, fps, transparent, list);
-    } else {
+    } else if (format === 'webm') {
       bytes = _wasm.encodeWebmRgba(width, height, fps, transparent, list);
+    } else {
+      bytes = _wasm.encodeMp4Rgba(width, height, fps, list);
     }
   } catch (e) {
     if (VideoExportError.is(e)) throw e;
@@ -1089,7 +1282,7 @@ function normalizeFormat(format) {
  */
 function ensureFilename(name, format, transparent) {
   const raw = String(name || 'export').trim() || 'export';
-  if (/\.(gif|png|apng|webm)$/i.test(raw)) return raw;
+  if (/\.(gif|png|apng|webm|mp4)$/i.test(raw)) return raw;
   return videoFilename(format, raw, transparent);
 }
 

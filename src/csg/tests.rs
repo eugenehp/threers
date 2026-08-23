@@ -1,3 +1,6 @@
+// The file is the test module; the inner `mod tests` keeps it consistent
+// with every other test module in the crate.
+#[allow(clippy::module_inception)]
 #[cfg(test)]
 mod tests {
     use crate::core::BufferAttribute;
@@ -163,7 +166,7 @@ mod tests {
             {
                 win += 1;
             }
-            if z >= 1.05 && z <= 1.41 && x >= 0.1 && x <= 1.5 {
+            if (1.05..=1.41).contains(&z) && (0.1..=1.5).contains(&x) {
                 z_ext += 1;
             }
         }
@@ -329,7 +332,10 @@ mod tests {
             let cx = (a.x + b.x + c.x) / 3.0;
             let cy = (a.y + b.y + c.y) / 3.0;
             let cz = (a.z + b.z + c.z) / 3.0;
-            if cx < 0.15 || cx > 1.45 || cy < -0.45 || cy > 0.65 || cz < 1.28 || cz > 1.42 {
+            if !(0.15..=1.45).contains(&cx)
+                || !(-0.45..=0.65).contains(&cy)
+                || !(1.28..=1.42).contains(&cz)
+            {
                 continue;
             }
             let n = (b - a).cross(c - a);
@@ -402,7 +408,10 @@ mod tests {
             let cx = (a.x + b.x + c.x) / 3.0;
             let cy = (a.y + b.y + c.y) / 3.0;
             let cz = (a.z + b.z + c.z) / 3.0;
-            if cx < 0.15 || cx > 1.45 || cy < -0.45 || cy > 0.65 || cz < 1.28 || cz > 1.42 {
+            if !(0.15..=1.45).contains(&cx)
+                || !(-0.45..=0.65).contains(&cy)
+                || !(1.28..=1.42).contains(&cz)
+            {
                 continue;
             }
             let n = (b - a).cross(c - a);

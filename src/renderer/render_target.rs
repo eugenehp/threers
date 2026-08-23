@@ -60,7 +60,12 @@ impl RenderTarget {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            // COPY_SRC as well: a cube target is usually a reflection probe,
+            // and a probe is only usable as image-based lighting once it has
+            // been prefiltered per roughness — which means reading it back.
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
             view_formats: &extra_formats,
         });
         let mut face_views = Vec::with_capacity(6);
@@ -120,12 +125,17 @@ impl RenderTarget {
         // Allow creating both linear and sRGB views of the color texture so
         // that downstream sampling can use the sRGB variant (which gives the
         // automatic sRGB→linear decode on read).
-        let srgb_variant = format.add_srgb_suffix();
-        let extra_formats = if srgb_variant != format {
-            vec![srgb_variant]
-        } else {
-            vec![]
-        };
+        // Both variants, in both directions. Adding only the sRGB one covered
+        // the linear-target case and left the reverse impossible: a target that
+        // IS sRGB could not be viewed as linear, so a pass wanting the stored
+        // bytes untouched — the GPU alpha strip on the way to a video encoder —
+        // was refused at view creation.
+        let mut extra_formats = Vec::new();
+        for v in [format.add_srgb_suffix(), format.remove_srgb_suffix()] {
+            if v != format && !extra_formats.contains(&v) {
+                extra_formats.push(v);
+            }
+        }
         let color_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("threers render target color"),
             size,

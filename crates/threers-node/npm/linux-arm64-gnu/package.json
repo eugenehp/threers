@@ -1,0 +1,30 @@
+{
+  "name": "@threers/node-linux-arm64-gnu",
+  "version": "0.0.4",
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "main": "threers-node.linux-arm64-gnu.node",
+  "files": [
+    "threers-node.linux-arm64-gnu.node"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">= 18"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/eugenehp/threers.git",
+    "directory": "crates/threers-node"
+  },
+  "libc": [
+    "glibc"
+  ]
+}

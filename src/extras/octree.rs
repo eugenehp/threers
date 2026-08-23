@@ -26,8 +26,8 @@ impl Octree {
         if !self.bounds.contains_point(p) {
             return;
         }
-        if self.children.is_some() {
-            for child in self.children.as_mut().unwrap().iter_mut() {
+        if let Some(children) = self.children.as_mut() {
+            for child in children.iter_mut() {
                 child.insert(p);
             }
             return;

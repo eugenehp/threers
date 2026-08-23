@@ -10,10 +10,17 @@
 //! second VP9 bitstream in `BlockAdditional` (`BlockAddID = 1`) inside a
 //! `BlockGroup` (see Matroska codec mapping for `V_VP9`).
 //!
+//! Optional **subtitles** follow the WebM "WebVTT in WebM" mapping:
+//! a `D_WEBVTT/SUBTITLES` track whose every cue is a `BlockGroup` of a `Block`
+//! (payload `identifier\nsettings\ncue text`) plus a `BlockDuration`. See
+//! [`mux_webm_with_captions`].
+//!
 //! Everything is built bottom-up into `Vec<u8>` so each element's size is known
 //! before its parent is written (no streaming "unknown size" VINTs needed). The
 //! codec bitstream itself comes from the caller — pair this with a native VP9
 //! encoder (see [`crate::codec::vp9`]) for a fully dependency-free `.webm`.
+
+use crate::captions::CaptionTrack;
 
 // ---- EBML element IDs (canonical, marker bits included) ----
 const ID_EBML: u32 = 0x1A45_DFA3;
@@ -27,7 +34,7 @@ const ID_DOC_TYPE_READ_VERSION: u32 = 0x4285;
 
 const ID_SEGMENT: u32 = 0x1853_8067;
 const ID_INFO: u32 = 0x1549_A966;
-const ID_TIMECODE_SCALE: u32 = 0x2AD7_B1;
+const ID_TIMECODE_SCALE: u32 = 0x002A_D7B1;
 const ID_DURATION: u32 = 0x4489;
 const ID_MUXING_APP: u32 = 0x4D80;
 const ID_WRITING_APP: u32 = 0x5741;
@@ -44,15 +51,24 @@ const ID_PIXEL_WIDTH: u32 = 0xB0;
 const ID_PIXEL_HEIGHT: u32 = 0xBA;
 const ID_ALPHA_MODE: u32 = 0x53C0;
 
+const ID_CODEC_PRIVATE: u32 = 0x63A2;
+const ID_LANGUAGE: u32 = 0x22B59C;
+const ID_NAME: u32 = 0x536E;
+const ID_FLAG_DEFAULT: u32 = 0x88;
+
 const ID_CLUSTER: u32 = 0x1F43_B675;
 const ID_TIMECODE: u32 = 0xE7;
 const ID_SIMPLE_BLOCK: u32 = 0xA3;
 const ID_BLOCK_GROUP: u32 = 0xA0;
 const ID_BLOCK: u32 = 0xA1;
+const ID_BLOCK_DURATION: u32 = 0x9B;
 const ID_BLOCK_ADDITIONS: u32 = 0x75A1;
 const ID_BLOCK_MORE: u32 = 0xA6;
 const ID_BLOCK_ADD_ID: u32 = 0xEE;
 const ID_BLOCK_ADDITIONAL: u32 = 0xA5;
+
+/// Track number of the optional WebVTT subtitle track (video is track 1).
+const SUBTITLE_TRACK: u64 = 2;
 
 /// The video codec carried by the track (selects the Matroska `CodecID`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -183,7 +199,7 @@ pub fn encode_gray_webm(width: u32, height: u32, frame_count: u32, fps: u32) -> 
 /// Encode VP9 keyframes from planar YUV (optional alpha) and mux into a `.webm`.
 ///
 /// Each frame is coded independently (all keyframes). Dimensions must be
-/// multiples of 8. When any frame carries [`Yuv420Frame::alpha`], the track is
+/// multiples of 8. When any frame carries [`crate::codec::hevc::encoder::Yuv420Frame::alpha`], the track is
 /// marked `AlphaMode = 1` and each cluster uses a `BlockGroup` with the alpha
 /// plane coded as a second VP9 bitstream in `BlockAdditional`.
 pub fn encode_webm(frames_yuv: &[&crate::codec::hevc::Yuv420Frame], fps: u32) -> Vec<u8> {
@@ -237,12 +253,44 @@ pub fn encode_webm(frames_yuv: &[&crate::codec::hevc::Yuv420Frame], fps: u32) ->
 
 /// Mux the frames into a single-track `.webm` byte stream.
 pub fn mux_webm(p: &WebmParams) -> Vec<u8> {
+    mux(p, None)
+}
+
+/// Mux the frames plus a WebVTT soft-subtitle track.
+///
+/// Follows the WebM "WebVTT in WebM" mapping: a second track with
+/// `CodecID = D_WEBVTT/SUBTITLES` and `TrackType = 17`, where each cue is a
+/// `BlockGroup` holding a `Block` whose payload is
+/// `identifier\nsettings\ncue text` and a `BlockDuration`. Browsers and ffmpeg
+/// both surface it as a selectable subtitle stream.
+///
+/// ```
+/// use threers::codec::webm::{mux_webm_with_captions, WebmCodec, WebmParams};
+/// use threers::captions::CaptionTrack;
+/// let captions = CaptionTrack::new().language("en").cue(0.0, 2.0, "Hello");
+/// let bytes = mux_webm_with_captions(
+///     &WebmParams {
+///         width: 64, height: 64, codec: WebmCodec::Vp9,
+///         timecode_scale_ns: 1_000_000, frames: &[],
+///     },
+///     &captions,
+/// );
+/// assert!(bytes.windows(18).any(|w| w == b"D_WEBVTT/SUBTITLES"));
+/// ```
+pub fn mux_webm_with_captions(p: &WebmParams, captions: &CaptionTrack) -> Vec<u8> {
+    mux(p, Some(captions))
+}
+
+fn mux(p: &WebmParams, captions: Option<&CaptionTrack>) -> Vec<u8> {
     let scale = if p.timecode_scale_ns == 0 {
         1_000_000
     } else {
         p.timecode_scale_ns
     };
     let alpha_mode = p.frames.iter().any(|f| f.alpha.is_some());
+    let caption_blocks = captions
+        .map(|t| caption_blocks(t, scale))
+        .unwrap_or_default();
 
     // ---- EBML header (DocType = "webm") ----
     let ebml = elem(
@@ -260,7 +308,12 @@ pub fn mux_webm(p: &WebmParams) -> Vec<u8> {
 
     // ---- Segment > Info ----
     let last = p.frames.last();
-    let duration = last.map(|f| f.timecode + 1).unwrap_or(0) as f64;
+    let video_end = last.map(|f| f.timecode + 1).unwrap_or(0);
+    let caption_end = caption_blocks
+        .last()
+        .map(|c| c.timecode + c.duration)
+        .unwrap_or(0);
+    let duration = video_end.max(caption_end) as f64;
     let info = elem(
         ID_INFO,
         &concat(&[
@@ -291,22 +344,50 @@ pub fn mux_webm(p: &WebmParams) -> Vec<u8> {
             video,
         ]),
     );
-    let tracks = elem(ID_TRACKS, &track_entry);
+    let mut track_entries = vec![track_entry];
+    if !caption_blocks.is_empty() {
+        let track = captions.expect("caption blocks imply a caption track");
+        let mut parts = vec![
+            elem(ID_TRACK_NUMBER, &uint(SUBTITLE_TRACK)),
+            elem(ID_TRACK_UID, &uint(SUBTITLE_TRACK)),
+            elem(ID_TRACK_TYPE, &uint(17)), // 17 = subtitle
+            elem(ID_FLAG_LACING, &uint(0)),
+            elem(ID_FLAG_DEFAULT, &uint(1)),
+            elem(ID_LANGUAGE, &crate::captions::iso639_2(&track.language)),
+            elem(ID_CODEC_ID, b"D_WEBVTT/SUBTITLES"),
+            // The WebVTT file header before the first cue; empty for plain files.
+            elem(ID_CODEC_PRIVATE, b""),
+        ];
+        if !track.label.is_empty() {
+            parts.push(elem(ID_NAME, track.label.as_bytes()));
+        }
+        track_entries.push(elem(ID_TRACK_ENTRY, &concat(&parts)));
+    }
+    let tracks = elem(ID_TRACKS, &concat(&track_entries));
 
     // ---- Segment > Cluster(s) ----
+    // Video frames and caption cues share one timeline; ties put the frame
+    // first so a Cluster still opens on a video block.
+    let mut items: Vec<Item> = p.frames.iter().map(Item::Frame).collect();
+    items.extend(caption_blocks.iter().map(Item::Caption));
+    items.sort_by_key(|it| (it.timecode(), it.order()));
+
     // A Block timecode is a signed 16-bit offset from its Cluster's Timecode,
     // so start a fresh Cluster whenever the offset would overflow.
     let mut clusters: Vec<Vec<u8>> = Vec::new();
     let mut i = 0;
-    while i < p.frames.len() {
-        let base = p.frames[i].timecode;
+    while i < items.len() {
+        let base = items[i].timecode();
         let mut blocks = vec![elem(ID_TIMECODE, &uint(base))];
-        while i < p.frames.len() {
-            let rel = p.frames[i].timecode as i64 - base as i64;
+        while i < items.len() {
+            let rel = items[i].timecode() as i64 - base as i64;
             if rel > i16::MAX as i64 {
                 break;
             }
-            blocks.push(cluster_frame(&p.frames[i], rel as i16));
+            blocks.push(match &items[i] {
+                Item::Frame(f) => cluster_frame(f, rel as i16),
+                Item::Caption(c) => caption_block_group(c, rel as i16),
+            });
             i += 1;
         }
         clusters.push(elem(ID_CLUSTER, &concat(&blocks)));
@@ -317,6 +398,109 @@ pub fn mux_webm(p: &WebmParams) -> Vec<u8> {
     let segment = elem(ID_SEGMENT, &concat(&segment_children));
 
     concat(&[ebml, segment])
+}
+
+/// One WebVTT cue laid out on the segment timeline, in `TimecodeScale` ticks.
+struct CaptionBlock {
+    timecode: u64,
+    duration: u64,
+    /// `identifier\nsettings\ncue text`, the WebM WebVTT block payload.
+    payload: Vec<u8>,
+}
+
+/// Either kind of thing that goes into a Cluster, so both can be merge-sorted.
+enum Item<'a> {
+    Frame(&'a WebmFrame<'a>),
+    Caption(&'a CaptionBlock),
+}
+
+impl Item<'_> {
+    fn timecode(&self) -> u64 {
+        match self {
+            Item::Frame(f) => f.timecode,
+            Item::Caption(c) => c.timecode,
+        }
+    }
+
+    /// Tie-break rank — video frames sort ahead of captions at equal timecodes.
+    fn order(&self) -> u8 {
+        match self {
+            Item::Frame(_) => 0,
+            Item::Caption(_) => 1,
+        }
+    }
+}
+
+/// Convert cues to timeline-ordered blocks in `TimecodeScale` ticks.
+fn caption_blocks(track: &crate::captions::CaptionTrack, scale_ns: u32) -> Vec<CaptionBlock> {
+    let ticks = |seconds: f64| -> u64 {
+        (seconds.max(0.0) * 1_000_000_000.0 / scale_ns.max(1) as f64).round() as u64
+    };
+    let mut blocks: Vec<CaptionBlock> = track
+        .cues
+        .iter()
+        .filter_map(|cue| {
+            let text = cue.text.trim_end();
+            if text.is_empty() {
+                return None;
+            }
+            let start = ticks(cue.start);
+            let end = ticks(cue.end).max(start);
+            let mut payload = Vec::new();
+            payload.extend_from_slice(cue.id.as_deref().unwrap_or("").as_bytes());
+            payload.push(b'\n');
+            payload.extend_from_slice(cue_settings(cue).as_bytes());
+            payload.push(b'\n');
+            payload.extend_from_slice(text.as_bytes());
+            Some(CaptionBlock {
+                timecode: start,
+                // A zero-duration cue would never display; give it one tick.
+                duration: (end - start).max(1),
+                payload,
+            })
+        })
+        .collect();
+    blocks.sort_by_key(|b| b.timecode);
+    blocks
+}
+
+/// The WebVTT cue settings list for a cue (`"align:left position:20%"`).
+fn cue_settings(cue: &crate::captions::Cue) -> String {
+    use crate::captions::CaptionAlign;
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(align) = cue.align {
+        parts.push(
+            match align {
+                CaptionAlign::Left => "align:left",
+                CaptionAlign::Center => "align:center",
+                CaptionAlign::Right => "align:right",
+            }
+            .to_string(),
+        );
+    }
+    if let Some(line) = cue.line {
+        parts.push(format!("line:{:.0}%", line * 100.0));
+    }
+    if let Some(position) = cue.position {
+        parts.push(format!("position:{:.0}%", position * 100.0));
+    }
+    parts.join(" ")
+}
+
+/// A caption cue: `BlockGroup` of a `Block` on the subtitle track plus the
+/// `BlockDuration` it must carry (a `SimpleBlock` has nowhere to put one).
+fn caption_block_group(caption: &CaptionBlock, rel_timecode: i16) -> Vec<u8> {
+    let mut payload = vint(SUBTITLE_TRACK);
+    payload.extend_from_slice(&rel_timecode.to_be_bytes());
+    payload.push(0x00); // no flags — Block has no keyframe bit
+    payload.extend_from_slice(&caption.payload);
+    elem(
+        ID_BLOCK_GROUP,
+        &concat(&[
+            elem(ID_BLOCK, &payload),
+            elem(ID_BLOCK_DURATION, &uint(caption.duration)),
+        ]),
+    )
 }
 
 /// Opaque frame → `SimpleBlock`; alpha frame → `BlockGroup` + `BlockAdditional`.

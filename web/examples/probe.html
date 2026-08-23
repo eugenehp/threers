@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>threers-probe · Cornell live</title>
+    <link rel="stylesheet" href="../viewer-theme.css">
+    <style>
+        main { padding: 20px 24px 32px; max-width: 1100px; margin: 0 auto; }
+        h1 { font-size: 20px; margin: 0 0 6px; }
+        .sub { color: var(--muted); font-size: 13px; line-height: 1.5; margin-bottom: 16px; }
+        #status { font-size: 13px; color: var(--muted); margin-bottom: 12px; min-height: 1.2em; }
+        #err { color: #f87171; font-size: 13px; white-space: pre-wrap; margin-bottom: 12px; }
+        .live-wrap {
+            position: relative;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            overflow: hidden;
+            background: #000;
+            max-width: 640px;
+            aspect-ratio: 1;
+            touch-action: none;
+            user-select: none;
+        }
+        #live {
+            display: block;
+            width: 100%;
+            height: auto;
+            image-rendering: auto;
+            cursor: grab;
+        }
+        #live.dragging { cursor: grabbing; }
+        .hint {
+            position: absolute;
+            left: 10px;
+            bottom: 10px;
+            font-size: 11px;
+            color: rgba(255,255,255,0.65);
+            pointer-events: none;
+            text-shadow: 0 1px 2px #000;
+        }
+        .row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px 20px;
+            align-items: center;
+            margin: 12px 0 16px;
+            font-size: 13px;
+            color: var(--muted);
+        }
+        .row label { display: inline-flex; align-items: center; gap: 6px; }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 12px;
+            margin-top: 20px;
+        }
+        figure {
+            margin: 0;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            overflow: hidden;
+            background: var(--panel);
+        }
+        figcaption {
+            padding: 8px 10px;
+            font-size: 12px;
+            color: var(--muted);
+            border-top: 1px solid var(--border);
+        }
+        .grid canvas { display: block; width: 100%; height: auto; image-rendering: pixelated; }
+        code { font-size: 12px; }
+    </style>
+</head>
+<body>
+    <main>
+        <h1>threers-probe · Cornell live</h1>
+        <p class="sub">
+            Drag to orbit, scroll to zoom. Each view path-traces a lighting probe + G-buffer in WASM,
+            then runs the hops + NRC network — neural GI updates as you move.
+        </p>
+        <div id="status">loading…</div>
+        <div id="err"></div>
+        <div class="row">
+            <label>Resolution
+                <select id="side">
+                    <option value="128">128²</option>
+                    <option value="192" selected>192²</option>
+                    <option value="256">256²</option>
+                </select>
+            </label>
+            <label>Probe spp
+                <select id="spp">
+                    <option value="1" selected>1 (drag)</option>
+                    <option value="2">2</option>
+                    <option value="4">4</option>
+                    <option value="8">8 (idle)</option>
+                </select>
+            </label>
+            <label><input type="checkbox" id="showProbe"> show probe</label>
+        </div>
+        <div class="live-wrap">
+            <canvas id="live" width="192" height="192"></canvas>
+            <div class="hint">drag · scroll · live inference</div>
+        </div>
+        <div class="grid" id="tiles"></div>
+        <p class="sub" style="margin-top:16px">
+            Build: <code>web/build-probe.sh</code> · Weights: <code>out/probe_hops.bin</code> + <code>out/nrc_hops.bin</code>
+        </p>
+    </main>
+    <script type="module" src="./probe-demo.js"></script>
+</body>
+</html>

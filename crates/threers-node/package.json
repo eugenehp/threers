@@ -1,0 +1,71 @@
+{
+  "name": "threers-node",
+  "version": "0.0.4",
+  "description": "Native Node.js bindings for threers (napi-rs) — headless wgpu, math, animation, physics",
+  "license": "MIT",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "napi": {
+    "name": "threers-node",
+    "package": {
+      "name": "@threers/node"
+    },
+    "triples": {
+      "defaults": false,
+      "additional": [
+        "aarch64-apple-darwin",
+        "x86_64-apple-darwin",
+        "x86_64-unknown-linux-gnu",
+        "aarch64-unknown-linux-gnu",
+        "x86_64-pc-windows-msvc"
+      ]
+    }
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "README.md"
+  ],
+  "scripts": {
+    "artifacts": "napi artifacts",
+    "build": "napi build --platform --release --cargo-flags=\"--features headless,physics,animation\"",
+    "build:debug": "napi build --platform --cargo-flags=\"--features headless,physics,animation\"",
+    "pack": "bash ../../scripts/release-all.sh pack",
+    "prepublishOnly": "napi prepublish -t npm",
+    "version": "napi version"
+  },
+  "optionalDependencies": {
+    "@threers/node-darwin-arm64": "0.0.4",
+    "@threers/node-darwin-x64": "0.0.4",
+    "@threers/node-linux-x64-gnu": "0.0.4",
+    "@threers/node-linux-arm64-gnu": "0.0.4",
+    "@threers/node-win32-x64-msvc": "0.0.4"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^2.18.4"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/eugenehp/threers.git",
+    "directory": "crates/threers-node"
+  },
+  "homepage": "https://github.com/eugenehp/threers/tree/main/crates/threers-node",
+  "bugs": {
+    "url": "https://github.com/eugenehp/threers/issues"
+  },
+  "keywords": [
+    "three.js",
+    "napi",
+    "native",
+    "wgpu",
+    "headless",
+    "physics"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  }
+}

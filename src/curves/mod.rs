@@ -12,6 +12,7 @@ mod nurbs;
 mod path;
 mod shape;
 mod spline;
+mod wire;
 
 pub use bezier::{
     CubicBezierCurve, CubicBezierCurve3, QuadraticBezierCurve, QuadraticBezierCurve3,
@@ -25,3 +26,4 @@ pub use nurbs::{NURBSCurve, NURBSSurface};
 pub use path::Path;
 pub use shape::Shape;
 pub use spline::SplineCurve;
+pub use wire::{power_pair, Catenary3, Elastica3, ServiceHelix3, WireCode, WireSpec};

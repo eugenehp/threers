@@ -65,7 +65,7 @@ impl MeshBvh {
         positions: Vec<f32>,
         triangle_indices: Vec<(u32, u32, u32)>,
     ) -> Option<Self> {
-        if node_buffer.len() % 8 != 0 || triangle_indices.is_empty() {
+        if !node_buffer.len().is_multiple_of(8) || triangle_indices.is_empty() {
             return None;
         }
         let node_count = node_buffer.len() / 8;
@@ -673,6 +673,46 @@ mod tests {
         let matrix = crate::math::Matrix4::identity();
         let pairs = bvh_a.bvhcast(&bvh_b, &matrix);
         assert!(!pairs.is_empty(), "expected overlapping triangle pairs");
+    }
+
+    /// Two trees of very different sizes, overlapping.
+    ///
+    /// The dual descent alternates which tree it walks, and the node index it
+    /// produced while walking A used to be written into the slot the next frame
+    /// reads as a B index. With both trees the same shape that is invisible —
+    /// the index is in range in either one, and the pairs come out plausible.
+    /// Give one tree a hundred times the nodes of the other and it reads off the
+    /// end of the small one, which is what a sphere cast against a cube did.
+    #[test]
+    fn bvhcast_between_trees_of_different_sizes() {
+        let small =
+            MeshBvh::build(&unit_triangle_geometry(), BuildOptions::default()).expect("small bvh");
+
+        // A ball of a few thousand triangles whose *shell* cuts through the
+        // triangle above — a ball merely containing it would share no bounding
+        // boxes at all, and the cast would be empty for the honest reason.
+        let mut sphere = crate::geometries::SphereGeometry::new(0.45, 48, 32);
+        if let Some(pos) = sphere.get_attribute("position") {
+            let moved: Vec<f32> = pos
+                .array
+                .chunks_exact(3)
+                .flat_map(|p| [p[0] + 0.3, p[1] + 0.3, p[2]])
+                .collect();
+            sphere.set_attribute("position", BufferAttribute::new(moved, 3));
+        }
+        let big = MeshBvh::build(&sphere, BuildOptions::default()).expect("big bvh");
+        assert!(
+            big.node_count() > small.node_count() * 4,
+            "the point of this test is the size difference: {} vs {}",
+            big.node_count(),
+            small.node_count()
+        );
+
+        let matrix = crate::math::Matrix4::identity();
+        // Both ways round: which tree is `self` decides which one the reversed
+        // half of the descent walks.
+        assert!(!small.bvhcast(&big, &matrix).is_empty());
+        assert!(!big.bvhcast(&small, &matrix).is_empty());
     }
 
     #[test]

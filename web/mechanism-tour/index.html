@@ -1,0 +1,800 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>threers-physics — mechanism tour</title>
+<link rel="stylesheet" href="../viewer-theme.css">
+<style>
+  /* Only this page draws a CAD bench, so its colours live here. Same three-way
+     rule as the shared sheet: dark by default, an explicit [data-theme] wins,
+     and with no attribute the OS preference decides. */
+  :root, :root[data-theme="dark"] {
+    --grid: #2a3040;
+    --grid-axis: #3d4658;
+    --ok: #7ddc9a;
+    --warn: #ffb454;
+    --bad: #ff6b6b;
+    --plot: #6fb3ff;
+    --plot-limit: #ffb45455;
+  }
+  :root[data-theme="light"] {
+    --grid: #c3cad6;
+    --grid-axis: #9aa5b6;
+    --ok: #16794a;
+    --warn: #b45309;
+    --bad: #c0392b;
+    --plot: #2f6fd0;
+    --plot-limit: #b4530933;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]):not([data-theme="light"]) {
+      --grid: #c3cad6;
+      --grid-axis: #9aa5b6;
+      --ok: #16794a;
+      --warn: #b45309;
+      --bad: #c0392b;
+      --plot: #2f6fd0;
+      --plot-limit: #b4530933;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    display: grid;
+    overflow: hidden;
+    grid-template-columns: minmax(0, 1fr) 27rem;
+    font: 13px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: var(--bg); color: var(--fg);
+  }
+  @media (max-width: 900px) {
+    body { grid-template-columns: 1fr; grid-template-rows: 70vh auto; height: auto; overflow: auto; }
+  }
+
+  /* ---- the stage ---------------------------------------------------------- */
+  #stage {
+    position: relative; display: grid; overflow: hidden;
+    grid-template-rows: minmax(0, 1fr) auto auto; min-width: 0; min-height: 0;
+  }
+  #view { display: block; width: 100%; height: 100%; touch-action: none; cursor: grab; }
+  #view.dragging { cursor: grabbing; }
+
+  #hud {
+    position: absolute; top: .75rem; left: .75rem; pointer-events: none;
+    display: flex; flex-wrap: wrap; gap: .35rem; max-width: calc(100% - 8rem);
+  }
+  .chip {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 999px;
+    padding: .12rem .6rem; font-size: 11.5px; color: var(--muted);
+    backdrop-filter: blur(6px);
+  }
+  .chip b { color: var(--fg); font-weight: 600; }
+  .chip.good b { color: var(--ok); }
+  .chip.warn b { color: var(--warn); }
+
+  /* ---- transport ---------------------------------------------------------- */
+  #transport {
+    display: flex; align-items: center; gap: .6rem;
+    padding: .5rem .75rem; border-top: 1px solid var(--border); background: var(--bg);
+  }
+  #transport button {
+    font: inherit; color: var(--fg); background: var(--hover);
+    border: 1px solid var(--border); border-radius: 6px; padding: .2rem .7rem; cursor: pointer;
+  }
+  #transport button:hover { border-color: var(--accent); }
+  #scrub { flex: 1; accent-color: var(--accent); }
+  /* The shared sheet floats #theme-btn against the nearest positioned ancestor,
+     which here is the stage — and that puts it on top of the chart. It belongs
+     in the transport bar with the other controls. */
+  #theme-btn { position: static; }
+  #clock { font-variant-numeric: tabular-nums; color: var(--muted); min-width: 9.5rem; text-align: right; }
+
+  #chart { display: block; width: 100%; border-top: 1px solid var(--border); }
+
+  /* ---- the transcript ----------------------------------------------------- */
+  #side {
+    border-left: 1px solid var(--border); overflow: auto; min-width: 0;
+    display: flex; flex-direction: column;
+  }
+  #side header { padding: .9rem 1rem .6rem; border-bottom: 1px solid var(--border); }
+  #side h1 { margin: 0; font-size: 15px; color: var(--title); }
+  #side h1 small { color: var(--muted); font-weight: 400; }
+  #side p.lede { margin: .4rem 0 0; color: var(--muted); font-size: 12px; }
+
+  details.act { border-bottom: 1px solid var(--border); }
+  details.act > summary {
+    padding: .5rem 1rem; cursor: pointer; color: var(--title);
+    font-weight: 600; font-size: 12px; letter-spacing: .02em; text-transform: lowercase;
+  }
+  details.act > summary:hover { background: var(--hover); }
+  details.act pre {
+    margin: 0; padding: 0 1rem .7rem; font: 11.5px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace;
+    white-space: pre-wrap; color: var(--fg); overflow-x: auto;
+  }
+
+  #legend { padding: .6rem 1rem; border-bottom: 1px solid var(--border); }
+  #legend div {
+    display: flex; align-items: center; gap: .5rem; padding: .1rem 0;
+    cursor: pointer; user-select: none;
+  }
+  #legend div.off { opacity: .35; }
+  #legend i { width: .8rem; height: .8rem; border-radius: 3px; border: 1px solid var(--edge, #0006); }
+  #legend span.n { color: var(--muted); margin-left: auto; font-variant-numeric: tabular-nums; }
+
+  #editor { padding: .6rem 1rem 1rem; }
+  #editor textarea {
+    width: 100%; height: 18rem; resize: vertical;
+    font: 11.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--fg); background: var(--hover);
+    border: 1px solid var(--border); border-radius: 6px; padding: .5rem;
+  }
+  #editor .row { display: flex; gap: .5rem; align-items: center; margin-top: .5rem; flex-wrap: wrap; }
+  /* The picker is the first thing to reach for, so it goes above the transcript
+     rather than under it — buried at the bottom of a scrolling panel it may as
+     well not exist. */
+  #picker { padding: .7rem 1rem .8rem; border-bottom: 1px solid var(--border); }
+  #picker label {
+    display: block; color: var(--muted); font-size: 11px;
+    text-transform: uppercase; letter-spacing: .06em; margin-bottom: .3rem;
+  }
+  #pick {
+    width: 100%; font: inherit; font-size: 13px; color: var(--fg);
+    background: var(--hover); border: 1px solid var(--border);
+    border-radius: 6px; padding: .35rem .5rem; cursor: pointer;
+  }
+  #pick:hover { border-color: var(--accent); }
+  #blurb { margin: .4rem 0 0; color: var(--muted); font-size: 11.5px; }
+  #editor label { color: var(--muted); font-size: 11.5px; }
+  #editor input[type=number] {
+    width: 4.5rem; font: inherit; color: var(--fg); background: var(--hover);
+    border: 1px solid var(--border); border-radius: 6px; padding: .15rem .4rem;
+  }
+  #run {
+    font: inherit; font-weight: 600; color: #fff; background: var(--accent);
+    border: 0; border-radius: 6px; padding: .3rem 1rem; cursor: pointer; margin-left: auto;
+  }
+  #run[disabled] { opacity: .5; cursor: progress; }
+  #error { margin-top: .5rem; color: var(--bad); font: 11.5px/1.5 ui-monospace, monospace; white-space: pre-wrap; }
+
+  #splash {
+    position: absolute; inset: 0; display: grid; place-content: center; text-align: center;
+    background: var(--bg); color: var(--muted); gap: .5rem; padding: 2rem;
+  }
+  #splash code { color: var(--fg); }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+
+<main id="stage">
+  <canvas id="view"></canvas>
+  <div id="hud"></div>
+  <div id="splash">
+    <div>assembling…</div>
+  </div>
+
+  <div id="transport">
+    <button id="play">❚❚</button>
+    <input id="scrub" type="range" min="0" max="0" value="0" step="1">
+    <span id="clock">—</span>
+    <button id="theme-btn" title="theme">◑ system</button>
+  </div>
+
+  <canvas id="chart" height="200"></canvas>
+</main>
+
+<aside id="side">
+  <header>
+    <h1>mechanism tour <small>· threers-physics</small></h1>
+    <p class="lede">
+      A <code>.scad</code> model that declares its own parts, joints and drives.
+      Everything below was read out of it: the assembly, the checks, the run,
+      and the geometry's own answer to whether the declarations were true.
+    </p>
+  </header>
+
+  <div id="picker">
+    <label for="pick">mechanism</label>
+    <select id="pick"></select>
+    <p id="blurb"></p>
+  </div>
+
+  <div id="legend"></div>
+  <div id="acts"></div>
+
+  <div id="editor">
+    <div class="row">
+      <label>frames <input id="frames" type="number" min="1" max="1200" step="1" value="240"></label>
+      <label>fps <input id="fps" type="number" min="1" max="240" step="1" value="60"></label>
+      <label>units/m <input id="units" type="number" min="0.001" step="1" value="1000"></label>
+      <label>substeps <input id="substeps" type="number" min="1" max="32" step="1" value="8"></label>
+      <button id="run">run</button>
+    </div>
+    <div class="row"><label>the model — edit it and run again</label></div>
+    <textarea id="source" spellcheck="false"></textarea>
+    <div id="error" hidden></div>
+  </div>
+</aside>
+
+<script type="module">
+import init, {
+  Run, defaultModel,
+  modelCount, modelId, modelTitle, modelBlurb, modelSource, modelRun,
+} from "../pkg-mechanism-tour/threers_mechanism_tour.js";
+import { initTheme } from "../viewer-theme.js";
+
+const view = document.getElementById("view");
+const chart = document.getElementById("chart");
+const splash = document.getElementById("splash");
+
+// ---------------------------------------------------------------- matrices
+// Enough linear algebra for one camera and one rigid body, column-major to
+// match GLSL. A pose out of the solver is a quaternion and a translation, so
+// there is never a scale to worry about and never an inverse to take.
+
+function mul(a, b) {
+  const o = new Float32Array(16);
+  for (let c = 0; c < 4; c++)
+    for (let r = 0; r < 4; r++)
+      o[c * 4 + r] = a[r] * b[c * 4] + a[4 + r] * b[c * 4 + 1] +
+                     a[8 + r] * b[c * 4 + 2] + a[12 + r] * b[c * 4 + 3];
+  return o;
+}
+
+function fromPose(p, q, out) {
+  const [x, y, z, w] = q;
+  const x2 = x + x, y2 = y + y, z2 = z + z;
+  const xx = x * x2, xy = x * y2, xz = x * z2;
+  const yy = y * y2, yz = y * z2, zz = z * z2;
+  const wx = w * x2, wy = w * y2, wz = w * z2;
+  out[0] = 1 - (yy + zz); out[1] = xy + wz;       out[2] = xz - wy;       out[3] = 0;
+  out[4] = xy - wz;       out[5] = 1 - (xx + zz); out[6] = yz + wx;       out[7] = 0;
+  out[8] = xz + wy;       out[9] = yz - wx;       out[10] = 1 - (xx + yy); out[11] = 0;
+  out[12] = p[0];         out[13] = p[1];         out[14] = p[2];          out[15] = 1;
+  return out;
+}
+
+function perspective(fovy, aspect, near, far) {
+  const f = 1 / Math.tan(fovy / 2);
+  const o = new Float32Array(16);
+  o[0] = f / aspect; o[5] = f; o[11] = -1;
+  o[10] = (far + near) / (near - far);
+  o[14] = (2 * far * near) / (near - far);
+  return o;
+}
+
+function lookAt(eye, at, up) {
+  const z = norm([eye[0] - at[0], eye[1] - at[1], eye[2] - at[2]]);
+  const x = norm(cross(up, z));
+  const y = cross(z, x);
+  return new Float32Array([
+    x[0], y[0], z[0], 0,
+    x[1], y[1], z[1], 0,
+    x[2], y[2], z[2], 0,
+    -dot(x, eye), -dot(y, eye), -dot(z, eye), 1,
+  ]);
+}
+
+const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const norm = (v) => { const l = Math.hypot(...v) || 1; return [v[0] / l, v[1] / l, v[2] / l]; };
+
+// ---------------------------------------------------------------- webgl
+const gl = view.getContext("webgl2", { antialias: true, alpha: false });
+if (!gl) {
+  splash.innerHTML = "<div>This page needs WebGL2.</div>";
+  throw new Error("no webgl2");
+}
+
+function program(vs, fs) {
+  const compile = (kind, src) => {
+    const s = gl.createShader(kind);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+    return s;
+  };
+  const p = gl.createProgram();
+  gl.attachShader(p, compile(gl.VERTEX_SHADER, vs));
+  gl.attachShader(p, compile(gl.FRAGMENT_SHADER, fs));
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+  return p;
+}
+
+// Solids. The model matrix is rigid, so `mat3(uModel)` is already the normal
+// matrix — no transpose-inverse, and nothing to renormalise.
+const solidProg = program(`#version 300 es
+in vec3 aPos;
+in vec3 aNormal;
+uniform mat4 uViewProj;
+uniform mat4 uModel;
+out vec3 vN;
+out vec3 vWorld;
+void main() {
+  vec4 w = uModel * vec4(aPos, 1.0);
+  vWorld = w.xyz;
+  vN = mat3(uModel) * aNormal;
+  gl_Position = uViewProj * w;
+}`, `#version 300 es
+precision highp float;
+in vec3 vN;
+in vec3 vWorld;
+uniform vec3 uColor;
+uniform float uAlpha;
+uniform vec3 uEye;
+uniform float uAmbient;
+out vec4 frag;
+void main() {
+  // Faces come out of the CSG kernel wound outward, but a part cut open by the
+  // near plane shows its inside; flipping there keeps it lit rather than black.
+  vec3 n = normalize(gl_FrontFacing ? vN : -vN);
+  vec3 v = normalize(uEye - vWorld);
+  float key = max(dot(n, normalize(vec3(0.45, -0.6, 0.85))), 0.0);
+  float fill = max(dot(n, normalize(vec3(-0.5, 0.4, 0.25))), 0.0) * 0.28;
+  float rim = pow(1.0 - max(dot(n, v), 0.0), 3.0) * 0.22;
+  vec3 c = uColor * (uAmbient + key * 0.8 + fill) + rim;
+  frag = vec4(pow(clamp(c, 0.0, 1.0), vec3(1.0 / 2.2)), uAlpha);
+}`);
+
+// The ground grid, drawn unlit.
+const lineProg = program(`#version 300 es
+in vec3 aPos;
+uniform mat4 uViewProj;
+void main() { gl_Position = uViewProj * vec4(aPos, 1.0); }`,
+`#version 300 es
+precision highp float;
+uniform vec4 uColor;
+out vec4 frag;
+void main() { frag = uColor; }`);
+
+const uni = (p, names) => Object.fromEntries(names.map((n) => [n, gl.getUniformLocation(p, n)]));
+const solidU = uni(solidProg, ["uViewProj", "uModel", "uColor", "uAlpha", "uEye", "uAmbient"]);
+const lineU = uni(lineProg, ["uViewProj", "uColor"]);
+
+/** A triangle soup, uploaded once and never touched again — a rigid part's
+ *  vertices do not change, only where they are. */
+function upload(positions, normals) {
+  const vao = gl.createVertexArray();
+  gl.bindVertexArray(vao);
+  const put = (data, loc, size) => {
+    const b = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, b);
+    gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(loc);
+    gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 0, 0);
+  };
+  put(positions, gl.getAttribLocation(solidProg, "aPos"), 3);
+  if (normals) put(normals, gl.getAttribLocation(solidProg, "aNormal"), 3);
+  gl.bindVertexArray(null);
+  return { vao, count: positions.length / 3 };
+}
+
+// ---------------------------------------------------------------- state
+const cam = { yaw: -0.9, pitch: 0.55, dist: 1, target: [0, 0, 0] };
+let scene = null;      // { pieces, poses, stride, frames, fps, joints, parts }
+let grid = null;
+let frame = 0, playing = true, lastTick = 0;
+let sceneColorInt = 0x14161c;
+const hidden = new Set();
+
+const theme = initTheme((_, colorInt) => {
+  sceneColorInt = colorInt;
+  draw();
+  drawChart();
+});
+
+// ---------------------------------------------------------------- camera
+function frameOn(bounds) {
+  const c = [(bounds[0] + bounds[3]) / 2, (bounds[1] + bounds[4]) / 2, (bounds[2] + bounds[5]) / 2];
+  const span = Math.max(bounds[3] - bounds[0], bounds[4] - bounds[1], bounds[5] - bounds[2]) || 1;
+  cam.target = c;
+  cam.dist = span * 1.9;
+  return span;
+}
+
+view.addEventListener("pointerdown", (e) => {
+  view.setPointerCapture(e.pointerId);
+  view.classList.add("dragging");
+  let px = e.clientX, py = e.clientY;
+  const move = (m) => {
+    cam.yaw -= (m.clientX - px) * 0.008;
+    cam.pitch = Math.max(-1.5, Math.min(1.5, cam.pitch + (m.clientY - py) * 0.008));
+    px = m.clientX; py = m.clientY;
+    draw();
+  };
+  const up = () => {
+    view.removeEventListener("pointermove", move);
+    view.classList.remove("dragging");
+  };
+  view.addEventListener("pointermove", move);
+  view.addEventListener("pointerup", up, { once: true });
+});
+view.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  cam.dist *= Math.exp(e.deltaY * 0.001);
+  draw();
+}, { passive: false });
+
+// ---------------------------------------------------------------- drawing
+function resize(canvas) {
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  const w = Math.round(canvas.clientWidth * dpr), h = Math.round(canvas.clientHeight * dpr);
+  if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+  return [w, h];
+}
+
+const model = new Float32Array(16);
+
+function draw() {
+  const [w, h] = resize(view);
+  gl.viewport(0, 0, w, h);
+  const bg = sceneColorInt;
+  gl.clearColor(((bg >> 16) & 255) / 255, ((bg >> 8) & 255) / 255, (bg & 255) / 255, 1);
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  gl.enable(gl.DEPTH_TEST);
+  if (!scene) return;
+
+  // Z is up: this is CAD, and the model was drawn standing on the XY plane.
+  const cp = Math.cos(cam.pitch), sp = Math.sin(cam.pitch);
+  const eye = [
+    cam.target[0] + cam.dist * cp * Math.cos(cam.yaw),
+    cam.target[1] + cam.dist * cp * Math.sin(cam.yaw),
+    cam.target[2] + cam.dist * sp,
+  ];
+  const viewProj = mul(
+    perspective(0.85, w / Math.max(h, 1), cam.dist * 0.01, cam.dist * 20),
+    lookAt(eye, cam.target, [0, 0, 1]),
+  );
+
+  if (grid) {
+    gl.useProgram(lineProg);
+    gl.uniformMatrix4fv(lineU.uViewProj, false, viewProj);
+    gl.uniform4f(lineU.uColor, ...cssRgba("--grid"));
+    gl.bindVertexArray(grid.vao);
+    gl.drawArrays(gl.LINES, 0, grid.count);
+  }
+
+  gl.useProgram(solidProg);
+  gl.uniformMatrix4fv(solidU.uViewProj, false, viewProj);
+  gl.uniform3fv(solidU.uEye, eye);
+  gl.uniform1f(solidU.uAmbient, 0.28);
+  gl.enable(gl.CULL_FACE);
+
+  const base = frame * scene.stride;
+  for (const piece of scene.pieces) {
+    if (hidden.has(piece.owner)) continue;
+    const o = base + piece.owner * 7;
+    const p = scene.poses.subarray(o, o + 3);
+    const q = scene.poses.subarray(o + 3, o + 7);
+    gl.uniformMatrix4fv(solidU.uModel, false, fromPose(p, q, model));
+    gl.uniform3f(solidU.uColor, piece.color[0], piece.color[1], piece.color[2]);
+    gl.uniform1f(solidU.uAlpha, piece.color[3]);
+    gl.bindVertexArray(piece.mesh.vao);
+    gl.drawArrays(gl.TRIANGLES, 0, piece.mesh.count);
+  }
+  gl.bindVertexArray(null);
+}
+
+function cssRgba(name) {
+  const c = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  const m = c.match(/#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})?/i);
+  if (!m) return [0.5, 0.5, 0.5, 1];
+  return [parseInt(m[1], 16) / 255, parseInt(m[2], 16) / 255, parseInt(m[3], 16) / 255,
+          m[4] ? parseInt(m[4], 16) / 255 : 1];
+}
+
+/** A grid on the plane the model stands on, sized to it. */
+function makeGrid(bounds) {
+  const step = niceStep(Math.max(bounds[3] - bounds[0], bounds[4] - bounds[1]) / 12);
+  const lo = Math.floor(bounds[0] / step - 2) * step, hi = Math.ceil(bounds[3] / step + 2) * step;
+  const lo2 = Math.floor(bounds[1] / step - 2) * step, hi2 = Math.ceil(bounds[4] / step + 2) * step;
+  const v = [];
+  for (let x = lo; x <= hi + 1e-6; x += step) v.push(x, lo2, 0, x, hi2, 0);
+  for (let y = lo2; y <= hi2 + 1e-6; y += step) v.push(lo, y, 0, hi, y, 0);
+  return upload(new Float32Array(v), null);
+}
+
+/** 1, 2, 5, 10, 20 … — a grid line every round number, whatever the model's scale. */
+function niceStep(x) {
+  const e = Math.pow(10, Math.floor(Math.log10(Math.max(x, 1e-9))));
+  const m = x / e;
+  return (m < 1.5 ? 1 : m < 3.5 ? 2 : m < 7.5 ? 5 : 10) * e;
+}
+
+// ---------------------------------------------------------------- the chart
+// One row per joint, each on its own scale. Overlaying them would mean choosing
+// between degrees and millimetres, and the interesting thing about this run is
+// per-joint anyway: the lid stopping short of what it was asked for.
+function drawChart() {
+  if (!scene || !scene.joints.length) { chart.hidden = true; return; }
+  chart.hidden = false;
+  const rows = scene.joints.length;
+  const rowH = 38, pad = 8;
+  // The row is stated on the grid rather than left to the canvas: a canvas with
+  // a width attribute has an intrinsic size, and a `1fr` sibling will happily
+  // let it push itself off the bottom of the page.
+  const tall = rows * rowH + pad * 2;
+  chart.style.height = `${tall}px`;
+  document.getElementById("stage").style.gridTemplateRows = `minmax(0, 1fr) auto ${tall}px`;
+  const [w, h] = resize(chart);
+  const dpr = w / chart.clientWidth;
+  const ctx = chart.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const W = chart.clientWidth, H = chart.clientHeight;
+  ctx.clearRect(0, 0, W, H);
+
+  const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  const muted = css("--muted"), border = css("--border"), plot = css("--plot"), band = css("--plot-limit");
+  const left = 92, right = 12;
+
+  scene.joints.forEach((j, i) => {
+    const top = pad + i * rowH, bot = top + rowH - 10;
+    let lo = Math.min(...j.values), hi = Math.max(...j.values);
+    if (j.limit) { lo = Math.min(lo, j.limit[0]); hi = Math.max(hi, j.limit[1]); }
+    if (hi - lo < 1e-6) { hi = lo + 1; }
+    const y = (v) => bot - ((v - lo) / (hi - lo)) * (bot - top);
+    const x = (i2) => left + (i2 / Math.max(scene.frames - 1, 1)) * (W - left - right);
+
+    // What the model said it had, behind what it did.
+    if (j.limit) {
+      ctx.fillStyle = band;
+      ctx.fillRect(left, y(j.limit[1]), W - left - right, y(j.limit[0]) - y(j.limit[1]));
+    }
+    ctx.strokeStyle = border;
+    ctx.beginPath(); ctx.moveTo(left, bot + 3); ctx.lineTo(W - right, bot + 3); ctx.stroke();
+
+    ctx.strokeStyle = plot;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    for (let f = 0; f < j.values.length; f++) {
+      const px = x(f), py = y(j.values[f]);
+      f ? ctx.lineTo(px, py) : ctx.moveTo(px, py);
+    }
+    ctx.stroke();
+
+    // The playhead, and the reading under it.
+    const px = x(frame);
+    ctx.strokeStyle = muted;
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(px, top - 2); ctx.lineTo(px, bot + 3); ctx.stroke();
+    ctx.fillStyle = plot;
+    ctx.beginPath(); ctx.arc(px, y(j.values[frame] ?? 0), 2.5, 0, 7); ctx.fill();
+
+    ctx.fillStyle = muted;
+    ctx.font = "11px ui-monospace, Menlo, monospace";
+    ctx.textAlign = "left";
+    ctx.fillText(j.name.slice(0, 12), 4, top + 11);
+    ctx.fillText(`${(j.values[frame] ?? 0).toFixed(1)}${j.unit}`, 4, top + 24);
+  });
+}
+
+// ---------------------------------------------------------------- transport
+const scrub = document.getElementById("scrub");
+const clock = document.getElementById("clock");
+const playBtn = document.getElementById("play");
+
+playBtn.addEventListener("click", () => {
+  playing = !playing;
+  playBtn.textContent = playing ? "❚❚" : "▶";
+  lastTick = performance.now();
+});
+scrub.addEventListener("input", () => {
+  frame = +scrub.value;
+  playing = false;
+  playBtn.textContent = "▶";
+  paint();
+});
+
+function paint() {
+  scrub.value = frame;
+  clock.textContent = scene
+    ? `${(frame / scene.fps).toFixed(2)}s · frame ${frame + 1}/${scene.frames}`
+    : "—";
+  draw();
+  drawChart();
+}
+
+function tick(now) {
+  requestAnimationFrame(tick);
+  if (!scene) return;
+  if (playing) {
+    const step = Math.floor((now - lastTick) / (1000 / scene.fps));
+    if (step > 0) {
+      lastTick += step * (1000 / scene.fps);
+      frame = (frame + step) % scene.frames;
+      paint();
+      return;
+    }
+  }
+  draw();
+}
+requestAnimationFrame(tick);
+addEventListener("resize", paint);
+
+// ---------------------------------------------------------------- one run
+function chip(label, value, tone = "") {
+  return `<span class="chip ${tone}">${label} <b>${value}</b></span>`;
+}
+
+function present(run) {
+  // Geometry crosses once. Poses cross once. Everything after this is a matrix.
+  const pieces = [];
+  for (let i = 0; i < run.pieceCount(); i++) {
+    pieces.push({
+      owner: run.pieceOwner(i),
+      color: run.pieceColor(i),
+      mesh: upload(run.piecePositions(i), run.pieceNormals(i)),
+    });
+  }
+  const joints = [];
+  for (let i = 0; i < run.jointCount(); i++) {
+    const limit = run.jointLimit(i);
+    joints.push({
+      name: run.jointName(i),
+      kind: run.jointKind(i),
+      unit: run.jointUnit(i),
+      values: run.jointValues(i),
+      limit: limit.length === 2 ? limit : null,
+    });
+  }
+
+  scene = {
+    pieces,
+    joints,
+    parts: run.partNames().split("\n"),
+    poses: run.poses(),
+    stride: run.poseStride(),
+    frames: run.frameCount(),
+    fps: run.fps(),
+  };
+
+  const bounds = run.bounds();
+  frameOn(bounds);
+  grid = makeGrid(bounds);
+  frame = 0;
+  scrub.max = scene.frames - 1;
+
+  // ---- the header numbers
+  const mb = (b) => b >= 1e6 ? `${(b / 1e6).toFixed(1)} MB` : `${(b / 1e3).toFixed(1)} kB`;
+  document.getElementById("hud").innerHTML = [
+    chip("parts", run.partCount()),
+    chip("mates", run.mateCount()),
+    chip("drives", run.driveCount()),
+    chip("triangles", run.triangles().toLocaleString()),
+    chip("mobility", run.mobility()),
+    chip("interferences", run.interferences(), run.interferences() ? "warn" : "good"),
+    chip("poses", `${mb(run.poseBytes())} vs ${mb(run.bakedBytes())} baked`),
+    chip("keys", `${run.keys()} → ${run.reducedKeys()}`),
+    chip("verify", run.agrees() ? "agrees" : "disagrees", run.agrees() ? "good" : "warn"),
+    chip("solved in", `${run.simulatedMs().toFixed(0)} ms`),
+  ].join("");
+
+  // ---- the transcript, act by act
+  const acts = document.getElementById("acts");
+  acts.innerHTML = "";
+  for (let i = 0; i < run.actCount(); i++) {
+    const d = document.createElement("details");
+    d.className = "act";
+    d.open = i < 3;
+    const s = document.createElement("summary");
+    s.textContent = run.actTitle(i);
+    const pre = document.createElement("pre");
+    pre.textContent = run.actBody(i).replace(/\n$/, "");
+    d.append(s, pre);
+    acts.append(d);
+  }
+
+  // ---- the parts, and what each one is called
+  const legend = document.getElementById("legend");
+  legend.innerHTML = "";
+  const tris = new Map();
+  for (const p of pieces) tris.set(p.owner, (tris.get(p.owner) || 0) + p.mesh.count / 3);
+  scene.parts.forEach((name, i) => {
+    const swatch = pieces.find((p) => p.owner === i)?.color ?? [0.8, 0.8, 0.85, 1];
+    const row = document.createElement("div");
+    // Linear out of `color()`, so it needs the same gamma the shader applies.
+    // `Array.from` first: mapping a Float32Array coerces every result back to a
+    // number, and a hex string coerces to NaN.
+    const hex = Array.from(swatch).slice(0, 3)
+      .map((c) => Math.round(Math.pow(Math.min(Math.max(c, 0), 1), 1 / 2.2) * 255)
+        .toString(16).padStart(2, "0")).join("");
+    row.innerHTML = `<i style="background:#${hex}"></i>${name}<span class="n">${tris.get(i) || 0}△</span>`;
+    row.addEventListener("click", () => {
+      hidden.has(i) ? hidden.delete(i) : hidden.add(i);
+      row.classList.toggle("off", hidden.has(i));
+      draw();
+    });
+    legend.append(row);
+  });
+
+  splash.hidden = true;
+  playing = true;
+  playBtn.textContent = "❚❚";
+  lastTick = performance.now();
+  paint();
+}
+
+// ---------------------------------------------------------------- driving it
+// The contact prediction and physics rate the picked model asked for. Not
+// controls: both are properties of the machine rather than preferences, and 0
+// means "take the default". The rate is the one that decides how far a part
+// travels between one collision check and the next.
+let runPrediction = 0;
+let runRate = 0;
+
+const sourceBox = document.getElementById("source");
+const runBtn = document.getElementById("run");
+const errBox = document.getElementById("error");
+
+function go() {
+  runBtn.disabled = true;
+  errBox.hidden = true;
+  splash.hidden = false;
+  splash.firstElementChild.textContent = "assembling…";
+  // Let the overlay paint before the solver takes the thread. The whole tour is
+  // a couple of hundred milliseconds, which is not worth a worker and a copy of
+  // every buffer to get off the main thread.
+  setTimeout(() => {
+    try {
+      const run = new Run(
+        sourceBox.value,
+        +document.getElementById("frames").value,
+        +document.getElementById("fps").value,
+        +document.getElementById("units").value,
+        +document.getElementById("substeps").value,
+        runPrediction,
+        runRate,
+      );
+      present(run);
+    } catch (e) {
+      splash.hidden = true;
+      errBox.hidden = false;
+      errBox.textContent = String(e.message ?? e);
+    } finally {
+      runBtn.disabled = false;
+    }
+  }, 30);
+}
+runBtn.addEventListener("click", go);
+
+/// Fill the picker from the bundled mechanisms, and load one.
+function loadModel(index) {
+  sourceBox.value = modelSource(index);
+  const [frames, fps, units, substeps, prediction, rate] = modelRun(index);
+  runRate = rate;
+  runPrediction = prediction;
+  document.getElementById("frames").value = frames;
+  document.getElementById("fps").value = fps;
+  document.getElementById("units").value = units;
+  document.getElementById("substeps").value = substeps;
+  document.getElementById("blurb").textContent = modelBlurb(index);
+  // A different mechanism is a different thing to look at, so let the camera
+  // re-frame rather than keeping the last one's distance.
+  hidden.clear();
+  go();
+}
+
+const pick = document.getElementById("pick");
+pick.addEventListener("change", () => loadModel(+pick.value));
+
+init()
+  .then(() => {
+    for (let i = 0; i < modelCount(); i++) {
+      const opt = document.createElement("option");
+      opt.value = i;
+      opt.textContent = `${modelId(i)} — ${modelTitle(i)}`;
+      pick.append(opt);
+    }
+    if (modelCount() > 0) loadModel(0);
+    else { sourceBox.value = defaultModel(); go(); }
+  })
+  .catch(() => {
+    splash.innerHTML =
+      "<div>Could not load the wasm module.</div>" +
+      "<div><code>crates/threers-mechanism-tour/build.sh</code>, then serve <code>web/</code>.</div>";
+  });
+</script>
+</body>
+</html>

@@ -241,7 +241,10 @@ mod tests {
         let (a, b) = (vol(fluent), vol(declarative));
         assert!((a - b).abs() < 1.0, "scad! {b} != fluent {a}");
         // And it's actually a box with a hole: less than the solid 8000.
-        assert!(b < 8000.0 && b > 5000.0, "unexpected drilled-box volume {b}");
+        assert!(
+            b < 8000.0 && b > 5000.0,
+            "unexpected drilled-box volume {b}"
+        );
     }
 
     #[test]
@@ -298,16 +301,23 @@ mod tests {
     fn hull_of_solids() {
         // Convex hull of two spaced cubes: a solid enclosing both, so its volume
         // exceeds the two 8-unit cubes alone (the connecting "bridge" fills in).
-        let both = vol(cube([2.0, 2.0, 2.0]).union(cube([2.0, 2.0, 2.0]).translate([8.0, 0.0, 0.0])));
+        let both =
+            vol(cube([2.0, 2.0, 2.0]).union(cube([2.0, 2.0, 2.0]).translate([8.0, 0.0, 0.0])));
         let hulled = vol(scad! {
             hull() {
                 cube([2.0, 2.0, 2.0]);
                 translate([8.0, 0.0, 0.0]) { cube([2.0, 2.0, 2.0]); }
             }
         });
-        assert!(hulled > both + 20.0, "hull {hulled} should exceed the two cubes {both}");
+        assert!(
+            hulled > both + 20.0,
+            "hull {hulled} should exceed the two cubes {both}"
+        );
         // The `hull!` macro agrees with the scad! form.
-        let m = vol(hull![cube([2.0, 2.0, 2.0]), cube([2.0, 2.0, 2.0]).translate([8.0, 0.0, 0.0])]);
+        let m = vol(hull![
+            cube([2.0, 2.0, 2.0]),
+            cube([2.0, 2.0, 2.0]).translate([8.0, 0.0, 0.0])
+        ]);
         assert!((m - hulled).abs() < 1.0, "hull! {m} != scad! hull {hulled}");
     }
 

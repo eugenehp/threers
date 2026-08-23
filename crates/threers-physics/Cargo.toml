@@ -1,0 +1,122 @@
+[package]
+name = "threers-physics"
+version = "0.0.1"
+edition = "2021"
+# Matches `threers`, which this depends on.
+rust-version = "1.87"
+authors = ["Eugene Hauptmann"]
+description = "Rigid-body physics for threers — gravity, collisions, joints, scene queries (raycast/shapecast) and inverse kinematics. Pure Rust, no dependencies, wasm-ready"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/eugenehp/threers"
+homepage = "https://github.com/eugenehp/threers"
+documentation = "https://docs.rs/threers-physics"
+keywords = ["physics", "collision", "rigid-body", "kinematics", "three-js"]
+categories = ["game-development", "simulation", "wasm"]
+
+# Without this the unit tests are also built as a benchmark target, and cargo
+# hands them criterion's arguments — which they do not understand.
+[lib]
+bench = false
+
+[features]
+default = []
+# Multi-threaded narrow phase via rayon. Native only — see
+# `threers::utils::parallel` for why wasm32 is a deliberate no-op.
+parallel = ["dep:rayon", "threers/parallel"]
+# A tokio runtime, for callers driving the simulation from async code. Native only.
+async = ["dep:tokio", "threers/async"]
+# GPU-accelerated broad phase via a wgpu compute shader. Works on native *and*
+# wasm32/WebGPU, which is the point: it is the only way to get parallel physics
+# in the browser, where rayon cannot run.
+# `pollster` is only for the native blocking wrapper, and is a target-specific
+# optional dependency, so on wasm32 it is simply absent along with the
+# `find_pairs_blocking` that wanted it.
+gpu = ["dep:wgpu", "dep:bytemuck", "dep:futures-channel", "dep:pollster"]
+# Servos, joint state and the axial-joint vocabulary — the parts of `joint`
+# that a driven mechanism needs and a plain rigid-body scene does not.
+mechanism = []
+# Parts, mates, interference checks and swept volumes.
+assembly = ["mechanism", "threers/assembly-check"]
+# Colliders straight from a `Solid`, with no STL round trip.
+openscad = ["threers/openscad"]
+
+[dependencies]
+# `mesh-bvh` powers triangle-mesh colliders and mesh raycasts. It is a
+# compile-time feature of `threers` with no extra crate dependencies.
+threers = { path = "../..", version = "0.0.4", features = ["mesh-bvh"] }
+wgpu = { version = "30", optional = true }
+bytemuck = { version = "1.16", features = ["derive"], optional = true }
+# Awaiting the buffer mapping in the GPU broad phase — the one place this crate
+# needs a channel, and it has to work on wasm32 too.
+futures-channel = { version = "0.3", optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rayon = { version = "1.10", optional = true }
+pollster = { version = "0.3", optional = true }
+tokio = { version = "1", default-features = false, features = [
+    "rt",
+    "rt-multi-thread",
+    "sync",
+    "time",
+    "macros",
+], optional = true }
+
+[dev-dependencies]
+pollster = "0.3"
+criterion = "0.5"
+
+# The bench brings its own harness; without this cargo hands criterion the
+# libtest arguments and it exits complaining about `--bench`.
+[[bench]]
+name = "physics"
+harness = false
+
+[[example]]
+name = "bouncing_balls"
+
+[[example]]
+name = "stacking"
+
+[[example]]
+name = "raycast_picking"
+
+[[example]]
+name = "ragdoll_joints"
+
+[[example]]
+name = "inverse_kinematics"
+
+[[example]]
+name = "character_controller"
+
+[[example]]
+name = "scene_sync"
+
+[[example]]
+name = "gpu_broadphase"
+required-features = ["gpu"]
+
+[[example]]
+name = "hinged_assembly"
+required-features = ["assembly"]
+
+[[example]]
+name = "scad_mechanism"
+required-features = ["assembly", "openscad"]
+
+# Auto-discovery would otherwise try to build these with no features at all,
+# which fails: `cargo build -p threers-physics` alone cannot compile an example
+# that needs `assembly`, and the error names the example rather than the cause.
+[[example]]
+name = "mechanism_tour"
+required-features = ["assembly", "openscad"]
+
+[[example]]
+name = "robot_arm"
+
+[[example]]
+name = "vehicle"
+
+[[example]]
+name = "zero_gravity_orbits"

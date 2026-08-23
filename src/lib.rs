@@ -1,3 +1,12 @@
+// `Arc` is not decorative on wasm32, it is the same `Arc` the native build
+// needs. The handles inside it — wgpu devices, queues, surfaces — are `Send +
+// Sync` natively and are not on wasm, where the API is single-threaded by
+// construction. One shared type has to satisfy both targets, so on wasm the
+// lint fires on code that has no other form.
+#![cfg_attr(
+    target_arch = "wasm32",
+    allow(clippy::arc_with_non_send_sync)
+)]
 //! threers — a drop-in three.js replacement for Rust and WebAssembly.
 //!
 //! Implements the three.js architecture and API surface: a scene graph of
@@ -17,54 +26,156 @@
 //!
 //! # Feature flags
 //!
-//! | Feature | Role |
-//! |---------|------|
-//! | `mesh-bvh` | Accelerated raycast / shapecast |
-//! | `bvh-csg` | Constructive solid geometry (implies `mesh-bvh`) |
-//! | `video` | Native frame-sequence export via ffmpeg / native GIF |
-//! | `native-codec` | Pure-Rust GIF, APNG, VP9/WebM, HEVC (wasm-safe) |
+//! The three.js API surface — scene graph, geometry, materials, lights,
+//! cameras, controls, loaders, post-processing, renderer — is unconditional.
+//! Everything below is a self-contained subsystem: turning one off removes its
+//! module and its re-exports and touches nothing else.
+//!
+//! ## Leaf features
+//!
+//! | Feature | Default | Role | Extra deps |
+//! |---------|---------|------|------------|
+//! | `captions` | **on** | Subtitles — SRT + WebVTT, on-screen and burned in | — |
+//! | `mesh-bvh` | | Accelerated raycast / shapecast | — |
+//! | `raytrace` | | Path tracer: global illumination, area lights, refraction, DoF; CPU + wgpu-compute backends | — |
+//! | `bvh-csg` | | Constructive solid geometry (implies `mesh-bvh`) | — |
+//! | `openscad` | | `.scad` front end + `Solid` DSL + exact-CSG kernel (implies `bvh-csg`) | — |
+//! | `manifold` | | Optional Manifold kernel behind OpenSCAD booleans (implies `openscad`) | manifold-rust |
+//! | `planet` | | Planets, moons, starfields, map generation | — |
+//! | `video` | | Native frame-sequence export via ffmpeg (implies `captions`) | — |
+//! | `native-codec` | | Pure-Rust GIF, APNG, VP9/WebM, H.264/MP4, HEVC (wasm-safe) | — |
+//! | `metal` | | A second renderer on Metal directly, via the Objective-C runtime (macOS/iOS) | — |
+//! | `visionos` | | CompositorServices frame loop + ARKit world tracking, stereo and reverse-Z (implies `metal`) | — |
+//! | `videotoolbox` | | In-process VideoToolbox encode (macOS) | — |
+//! | `parallel` | | rayon-backed CSG/BVH work (native; a no-op on wasm32) | rayon |
+//! | `async` | | tokio runtime for callers driving loaders concurrently (native) | tokio |
+//! | `rlx` | | Tensors ↔ geometry and pixels, graph runner, convolution, mesh smoothing, fitted colour grades, palettes | rlx |
+//! | `rlx-geo` | | Exact Delaunay + adaptive refinement + Voronoi cell textures | rlx-geo |
+//! | `nurbs` | | NURBS curves/surfaces: derivatives, knots, tessellation | — |
+//! | `brep` | | Analytic surface provenance on geometry (implies `nurbs`) | — |
+//! | `brep-csg` | | Closed-form SSI fast paths in the CSG kernel (implies `brep` + `openscad`) | — |
+//! | `brep-kernel` | | True B-rep topology, boolean, fillets (implies `brep-csg`) | — |
+//! | `step` | | STEP AP203/214 import + export (implies `brep-kernel`) | — |
+//! | `assembly-check` | | Assembly motion checks (body correspondence, axis recovery, swept volume) | — |
+//! | `learned-denoise` | | Trained U-Net denoiser beside À-Trous (implies `raytrace`) | — |
+//!
+//! ## Meta bundles
+//!
+//! | Bundle | Enables |
+//! |--------|---------|
+//! | `cad` | `openscad` + `nurbs` + `brep` + `brep-csg` + `parallel` |
+//! | `media` | `video` + `native-codec` + `captions` |
+//! | `gi` | `raytrace` + `learned-denoise` |
+//! | `apple` | `metal` + `videotoolbox` |
+//! | `full` | `cad` + `media` + `gi` + `planet` + `rlx` + `rlx-geo` + `assembly-check` + `async` + `step` + `brep-kernel` |
+//! | `wasm-full` | Browser kitchen sink: `captions` + `openscad` + `native-codec` + `nurbs` + `planet` + `raytrace` |
+//!
+//! ```toml
+//! # CAD stack in one flag
+//! threers = { version = "0.0.4", features = ["cad"] }
+//! # everything
+//! threers = { version = "0.0.4", features = ["full"] }
+//! # browser wasm kitchen sink
+//! threers = { version = "0.0.4", features = ["wasm-full"] }
+//! # nothing but the renderer
+//! threers = { version = "0.0.4", default-features = false }
+//! ```
+//!
+//! Rigid-body physics lives in the companion crate
+//! [`threers-physics`](https://docs.rs/threers-physics). Language bindings:
+//! see [`docs/bindings.md`](https://github.com/eugenehp/threers/blob/main/docs/bindings.md)
+//! (wasm ESM, napi-rs Node native, PyO3).
 //!
 //! # Modules
 //!
 //! | Module | Role |
 //! |--------|------|
+//! | [`prelude`] | One glob import for the types nearly every scene uses; nested modules for controls / animation / … |
 //! | [`core`] | Scene graph, geometry, raycaster |
+//! | [`origami`] | Rigid origami: crease patterns, degree-4 kinematics, folded meshes |
 //! | [`renderer`] | wgpu draw + post-processing; headless offscreen (native) |
+//! | [`raytrace`] | Path-traced rendering — global illumination, on CPU or GPU |
 //! | [`postprocessing`] | EffectComposer-style pass chain (native) |
 //! | [`loaders`] | glTF, OBJ, HDR, … |
 //! | [`extras`] | PMREM, noise, marching cubes, … |
 //! | [`materials`] | PBR materials and [`ShaderMaterial`] |
+//! | `captions` | subtitles — SRT + WebVTT, on-screen and burned in (`captions`) |
+//! | `planet` | Planets, moons, starfields (`planet` feature) |
 //! | `mesh_bvh` | Opt-in BVH (`mesh-bvh` feature) |
 //! | `csg` | Opt-in CSG (`bvh-csg` feature) |
+//! | `nurbs` / `brep` / `step` | CAD surface stack (feature-gated) |
 //! | `video` | Opt-in video export (`video` feature, native) |
 //! | `codec` | Opt-in media codecs (`native-codec` feature) |
+//! | `rlx` | Opt-in RLX bridge (`rlx`, `rlx-geo` features) |
 
-pub mod math;
-pub mod core;
-pub mod geometries;
-pub mod materials;
-pub mod lights;
-pub mod textures;
-pub mod curves;
-pub mod cameras;
-pub mod controls;
+// `PlaneGeometry::new` returns a `BufferGeometry`, and `AxesHelper::new` an
+// `Object3D`, because `new THREE.PlaneGeometry(...)` does. Mirroring three.js is
+// the point of this crate, so the constructors mirror what three.js constructs
+// rather than what Rust convention would have them construct.
+#![allow(clippy::new_ret_no_self)]
+
 pub mod animation;
-pub mod loaders;
+/// Generic checks for assemblies that move: body correspondence across poses,
+/// axis recovery, and swept free volume. Knows nothing about what it inspects.
+#[cfg(feature = "assembly-check")]
+pub mod assembly;
 pub mod audio;
-pub mod postprocessing;
-pub mod renderers;
-pub mod utils;
-pub mod helpers;
+pub mod cameras;
+#[cfg(feature = "captions")]
+pub mod captions;
+pub mod controls;
+pub mod core;
+pub mod curves;
 pub mod extras;
-pub mod stats;
+pub mod geometries;
+pub mod helpers;
+/// Inverse kinematics: damped least squares joint solving for serial arms,
+/// with position and tool direction as separate residuals rather than a
+/// weighted sum. See [`kinematics`].
+pub mod kinematics;
+/// Rigid origami: degree-4 vertex kinematics, crease-pattern closure, and a
+/// dual walk that folds a consistent assignment off the plane.
+pub mod origami;
+pub mod lights;
+pub mod loaders;
+pub mod materials;
+pub mod math;
+pub mod postprocessing;
+/// One import for the things nearly every scene uses — see [`prelude`].
+pub mod prelude;
+pub mod renderers;
 pub mod scene;
+pub mod stats;
+pub mod textures;
+pub mod utils;
 
+pub mod renderer;
 #[cfg(target_arch = "wasm32")]
 pub mod wasm;
-pub mod renderer;
+/// The trained denoiser in a browser, split so the work can go to web workers.
+#[cfg(all(target_arch = "wasm32", feature = "raytrace"))]
+pub mod wasm_denoise;
+
+/// A second renderer that talks to Metal directly, with no `metal-rs`, no
+/// `objc` crate and no C in the build — see [`metal`](crate::metal) for what it
+/// covers. macOS and iOS only; the `metal` feature is inert elsewhere.
+#[cfg(all(feature = "metal", any(target_os = "macos", target_os = "ios")))]
+pub mod metal;
+
+/// In-process hardware video encoding through VideoToolbox, so frames reach the
+/// encoder without crossing a process boundary. macOS only; see
+/// [`videotoolbox`](crate::videotoolbox).
+#[cfg(all(feature = "videotoolbox", target_os = "macos"))]
+pub mod videotoolbox;
 
 #[cfg(feature = "mesh-bvh")]
 pub mod mesh_bvh;
+
+/// A physically-based path tracer beside the rasteriser — global illumination,
+/// area lights, refraction, depth of field. CPU and wgpu-compute backends over
+/// one scene form. Enable the `raytrace` feature.
+#[cfg(feature = "raytrace")]
+pub mod raytrace;
 
 #[cfg(feature = "bvh-csg")]
 pub mod csg;
@@ -72,10 +183,39 @@ pub mod csg;
 #[cfg(feature = "openscad")]
 pub mod openscad;
 
+#[cfg(feature = "planet")]
+pub mod planet;
+
+/// NURBS curves and surfaces in f64 — derivatives, knot operations, exact conic
+/// and quadric constructors, curvature-adaptive tessellation. Stage 0 of the
+/// B-rep roadmap; see `docs/brep-nurbs-plan.md`.
+///
+/// Distinct from [`curves::NURBSCurve`] / [`curves::NURBSSurface`], which are
+/// the unconditional f32 three.js parity types and convert into these.
+#[cfg(feature = "nurbs")]
+pub mod nurbs;
+
+/// Analytic surface provenance: every triangle knows the surface it was sampled
+/// from, so normals, UVs and re-tessellation derive from the surface rather than
+/// the mesh. Stage 1 of the B-rep roadmap; see `docs/brep-nurbs-plan.md`.
+#[cfg(feature = "brep")]
+pub mod brep;
+
+/// STEP (ISO 10303) AP203/AP214 advanced B-rep import and export. Stage 5 of
+/// the B-rep roadmap; see `docs/brep-nurbs-plan.md`.
+#[cfg(feature = "step")]
+pub mod step;
+
 /// Robust boolean kernel (M1 scaffold) — winding-number classification +
 /// straddle detection. See `docs/openscad-plan.md`.
 #[cfg(feature = "openscad")]
 pub mod exact_csg;
+
+/// The RLX bridge: tensors ↔ geometry and pixels, a compiled-graph runner, and
+/// exact Delaunay/Voronoi. One module, two independent features (`rlx`,
+/// `rlx-geo`) — the renderer itself is unchanged either way.
+#[cfg(any(feature = "rlx", feature = "rlx-geo"))]
+pub mod rlx;
 
 #[cfg(target_arch = "wasm32")]
 #[macro_export]
@@ -92,109 +232,145 @@ macro_rules! log {
     ($($t:tt)*) => {{ eprintln!($($t)*); }};
 }
 
-pub use math::{
-    Vector2, Vector3, Vector4,
-    Matrix3, Matrix4,
-    Quaternion, Euler, Color,
-    Box2, Box3, Sphere, Ray, Plane, Triangle, Frustum,
-    Spherical, Cylindrical, Line3,
+pub use animation::{
+    AnimationAction, AnimationClip, AnimationMixer, Interpolation, KeyframeTrack, TrackTarget,
+};
+pub use audio::{Audio, AudioAnalyser, AudioBackend, AudioListener, NoopBackend, PositionalAudio};
+#[cfg(feature = "brep")]
+pub use brep::{retessellate, Surface, SurfaceTable};
+pub use cameras::{Camera, OrthographicCamera, PerspectiveCamera};
+#[cfg(feature = "captions")]
+pub use captions::{
+    CaptionAlign, CaptionAnchor, CaptionError, CaptionFont, CaptionFormat, CaptionOverlay,
+    CaptionPainter, CaptionStyle, CaptionTrack, Cue,
+};
+pub use controls::{
+    ArcballControls, DragControls, FirstPersonControls, OrbitControls, PointerEvent,
+    PointerLockControls, TrackballControls,
 };
 pub use core::{
-    Object3D, ObjectId, ObjectKind, ObjectArena,
-    BufferGeometry, BufferAttribute, Mesh,
-    Layers, Clock, Raycaster, Intersection,
-    LineSegments, Points, Sprite, InstancedMesh,
-    Bone, Skeleton, SkinnedMesh, MorphTarget, MorphAttributes,
-};
-pub use geometries::{
-    BoxGeometry, PlaneGeometry, SphereGeometry,
-    CircleGeometry, RingGeometry,
-    CylinderGeometry, ConeGeometry,
-    TorusGeometry, TorusKnotGeometry, CapsuleGeometry,
-    PolyhedronGeometry, TetrahedronGeometry, OctahedronGeometry,
-    IcosahedronGeometry, DodecahedronGeometry,
-    EdgesGeometry, WireframeGeometry,
-    LatheGeometry, TubeGeometry, ExtrudeGeometry,
-    ParametricGeometry, ConvexGeometry, DecalGeometry,
-    TextGeometry, Glyph, BoxLineGeometry,
-};
-pub use materials::{
-    Material, MaterialKind, MaterialTextureSlots, TransparencyMode,
-    BasicMaterial, LambertMaterial, PhongMaterial,
-    StandardMaterial, PhysicalMaterial,
-    NormalMaterial, DepthMaterial, ToonMaterial, MatcapMaterial,
-    LineBasicMaterial, PointsMaterial, SpriteMaterial,
-    ShaderMaterial,
-};
-pub use materials::MirrorMaterial;
-pub use lights::{
-    Light, AmbientLight, DirectionalLight, PointLight,
-    SpotLight, HemisphereLight, RectAreaLight, ShadowSettings,
-};
-pub use textures::{
-    Texture, TextureFormat, TextureFilter, TextureWrap,
-    CubeTexture, DataTexture, DepthTexture,
-};
-pub use helpers::{
-    AxesHelper, GridHelper, BoxHelper, CameraHelper, ArrowHelper, PolarGridHelper,
-    DirectionalLightHelper, PointLightHelper, SpotLightHelper,
-    HemisphereLightHelper, SkeletonHelper,
-    VertexNormalsHelper, VertexTangentsHelper,
+    Bone, BufferAttribute, BufferGeometry, Clock, InstancedMesh, Intersection, Layers,
+    LineSegments, Mesh, MorphAttributes, MorphTarget, Object3D, ObjectArena, ObjectId, ObjectKind,
+    Points, Raycaster, Skeleton, SkinnedMesh, Sprite,
 };
 pub use curves::{
-    Curve2, Curve3,
-    LineCurve, LineCurve3,
-    QuadraticBezierCurve, QuadraticBezierCurve3,
-    CubicBezierCurve, CubicBezierCurve3,
-    EllipseCurve,
-    CatmullRomCurve3, SplineCurve,
-    CurvePath, Path, Shape,
-    NURBSCurve, NURBSSurface,
+    CatmullRomCurve3, CubicBezierCurve, CubicBezierCurve3, Curve2, Curve3, CurvePath, EllipseCurve,
+    LineCurve, LineCurve3, NURBSCurve, NURBSSurface, Path, QuadraticBezierCurve,
+    QuadraticBezierCurve3, Shape, SplineCurve,
 };
-pub use cameras::{Camera, PerspectiveCamera, OrthographicCamera};
-pub use controls::{
-    OrbitControls, TrackballControls, FirstPersonControls,
-    DragControls, ArcballControls, PointerLockControls, PointerEvent,
+pub use extras::{
+    CcdIkSolver, IkBone, MarchingCubes, Octree, PmremGenerator, SimplexNoise, PMREM_MIP_LEVELS,
 };
-pub use animation::{
-    Interpolation, KeyframeTrack, TrackTarget,
-    AnimationClip, AnimationMixer, AnimationAction,
+#[cfg(feature = "nurbs")]
+pub use geometries::NurbsGeometry;
+pub use geometries::{
+    BoxGeometry, BoxLineGeometry, CapsuleGeometry, CircleGeometry, ConeGeometry, ConvexGeometry,
+    CylinderGeometry, DecalGeometry, DodecahedronGeometry, EdgesGeometry, ExtrudeGeometry, Glyph,
+    IcosahedronGeometry, Infill, KirigamiAssembly, KirigamiCell, KirigamiCoreLattice,
+    KirigamiCrease, KirigamiCreaseKind,
+    KirigamiExpandedMiura, KirigamiFace, KirigamiFaceKind, KirigamiMesh, KirigamiNet,
+    KirigamiNetPanel, KirigamiPreset, KIRIGAMI_NET_VARIANT, LatheGeometry, Lattice, LatticeGeometry, LatticeKind, LatticeStyle,
+    OctahedronGeometry, ParametricGeometry, PlaneGeometry, PolyhedronGeometry, Region,
+    RingGeometry, SphereGeometry, Strut, TetrahedronGeometry, TextGeometry, TorusGeometry,
+    TorusKnotGeometry, Tpms, TubeGeometry, WireframeGeometry, ChiralRule, Cuboct, CuboctAssembly,
+    CuboctAssemblyPlan, CuboctAssemblyStep, CuboctFrame, CuboctJoint, CuboctJointKind, FrameMaterial,
+    FrameResponse, Hand,
+};
+pub use helpers::{
+    ArrowHelper, AxesHelper, BoxHelper, CameraHelper, DirectionalLightHelper, GridHelper,
+    HemisphereLightHelper, PointLightHelper, PolarGridHelper, SkeletonHelper, SpotLightHelper,
+    VertexNormalsHelper, VertexTangentsHelper,
+};
+pub use origami::{
+    book_cardinal_cp, book_cardinal_stages, classic_bird_cp, classic_bird_stages, eagle_cp,
+    eagle_stages, frog_cp, frog_stages, giang_cardinal_cp, giang_cardinal_stages, AssembledBird,
+    Assignment, BirdKind, BookCardinalStage, ClassicBirdStage, ClosureReport, CreasePattern,
+    Degree4, EagleStage, Edge, EdgeKind, FoldedBirdPart, FoldedState, FrogStage, GiangCardinalStage,
+    PartPose, TWIST_ALPHA, VertexMode,
+};
+pub use lights::{
+    AmbientLight, DirectionalLight, HemisphereLight, Light, PointLight, RectAreaLight,
+    ShadowSettings, SpotLight,
 };
 pub use loaders::{
-    GltfLoader, GltfScene, GltfError, GltfImages,
-    ObjLoader, StlLoader, PlyLoader,
-    HdrLoader, HdrError, ExrLoader, ExrError,
-    FbxLoader, FbxError, ColladaLoader, ColladaError,
-    TtfFont, TtfError, TtfGlyph,
+    ColladaError, ColladaLoader, ExrError, ExrLoader, FbxError, FbxLoader, GltfError, GltfImages,
+    GltfLoader, GltfScene, HdrError, HdrLoader, ObjLoader, PlyLoader, StlLoader, TtfError, TtfFont,
+    TtfGlyph,
 };
-pub use audio::{Audio, AudioListener, PositionalAudio, AudioAnalyser, AudioBackend, NoopBackend};
+pub use materials::MirrorMaterial;
+pub use materials::{
+    AtmosphereMaterial, BasicMaterial, DepthMaterial, LambertMaterial, LineBasicMaterial,
+    MatcapMaterial, Material, MaterialKind, MaterialTextureSlots, NormalMaterial, PhongMaterial,
+    PhysicalMaterial, PointsMaterial, ShaderMaterial, SpriteMaterial, StandardMaterial,
+    ToonMaterial, TransparencyMode,
+};
+pub use math::{
+    Box2, Box3, Color, Cylindrical, Euler, Frustum, Line3, Matrix3, Matrix4, Plane, Quaternion,
+    Ray, Sphere, Spherical, Triangle, Vector2, Vector3, Vector4,
+};
+#[cfg(feature = "nurbs")]
+pub use nurbs::{NurbsCurve, NurbsSurface, TessellationOptions};
 pub use postprocessing::{
-    EffectComposer, Pass,
-    RenderPass, BloomPass, FxaaPass, OutlinePass, ToneMappingPass,
-    FilmPass, GlitchPass, SsaoPass, SsrPass, CopyPass,
+    BloomPass, CopyPass, EffectComposer, FilmPass, FxaaPass, GlitchPass, OutlinePass, Pass,
+    RenderPass, SsaoPass, SsrPass, ToneMappingPass,
 };
-pub use utils::{compute_vertex_normals, compute_tangents, merge_geometries, center as center_geometry, scale as scale_geometry};
-pub use renderers::{Css2dRenderer, Css3dRenderer, SvgRenderer};
-pub use extras::{MarchingCubes, CcdIkSolver, IkBone, Octree, SimplexNoise, PmremGenerator, PMREM_MIP_LEVELS};
-pub use stats::Stats;
-pub use scene::Scene;
-pub use renderer::{Renderer, RenderTarget};
 #[cfg(not(target_arch = "wasm32"))]
-pub use renderer::headless::{HeadlessBuilder, HeadlessConfig, HeadlessRenderer};
+pub use renderer::headless::{HeadlessBuilder, HeadlessConfig, HeadlessRenderer, MappedFrame};
+/// The `wgpu` this crate was built against, re-exported.
+///
+/// [`Renderer::new`] takes a `wgpu::Device`, a `wgpu::Queue` and a
+/// `wgpu::TextureFormat`, so a caller on the native path necessarily has its own
+/// `wgpu` — and a Rust type is scoped to the exact crate version it came from.
+/// `wgpu::Device` from 0.20 and `wgpu::Device` from 30 are two unrelated types
+/// that happen to print the same, and cargo will happily build both into one
+/// graph, so the mismatch surfaces as `expected `wgpu::Device`, found
+/// `wgpu::Device`` and no obvious cause.
+///
+/// Going through `threers::wgpu` makes that impossible to get wrong: it is by
+/// construction the same crate this renderer was compiled against.
+///
+/// ```no_run
+/// use threers::wgpu;
+///
+/// fn take(device: std::sync::Arc<wgpu::Device>, queue: std::sync::Arc<wgpu::Queue>) {
+///     let _ = threers::Renderer::new(device, queue, wgpu::TextureFormat::Bgra8UnormSrgb, 800, 600);
+/// }
+/// ```
+pub use wgpu;
+
+pub use renderer::{RenderTarget, Renderer, ToneMapping};
+pub use renderers::{Css2dRenderer, Css3dRenderer, SvgRenderer};
+pub use scene::Scene;
+pub use stats::Stats;
+pub use textures::{
+    pack_rgba16f, CubeTexture, DataTexture, DepthTexture, Texture, TextureFilter, TextureFormat,
+    TextureWrap,
+};
+pub use utils::png::{decode_png, encode_png, PngImage};
+
+/// Rendering a sequence: stills, a video, or both from one pass.
+pub mod sequence;
+pub use sequence::{
+    render_sequence, video_available, SequenceError, SequenceOptions, SequenceReport,
+};
+pub use utils::{
+    center as center_geometry, compute_tangents, compute_vertex_normals, merge_geometries,
+    scale as scale_geometry,
+};
 
 /// Native video export (frame sequence → ffmpeg). Enable the `video` feature.
 #[cfg(all(feature = "video", not(target_arch = "wasm32")))]
 pub mod video;
 #[cfg(all(feature = "video", not(target_arch = "wasm32")))]
 pub use video::{
-    export_video, export_video_with_progress, format_video_progress, VideoCodec, VideoError,
-    VideoExportEvent, VideoExportPhase, VideoExportProgress, VideoExporter, VideoOptions,
-    VideoQuality,
+    export_video, export_video_with_progress, format_video_progress, CaptionExport, CaptionMode,
+    VideoCodec, VideoError, VideoExportEvent, VideoExportPhase, VideoExportProgress, VideoExporter,
+    VideoOptions, VideoQuality,
 };
 
-/// From-scratch, pure-Rust media codecs (HEVC, VP9/WebM, APNG, GIF, bitstream) —
-/// no ffmpeg, no C bindings, and wasm-compatible. Enable the `native-codec`
-/// feature.
+/// From-scratch, pure-Rust media codecs (H.264/MP4, HEVC, VP9/WebM, APNG, GIF,
+/// bitstream) — no ffmpeg, no C bindings, and wasm-compatible. Enable the
+/// `native-codec` feature.
 #[cfg(feature = "native-codec")]
 pub mod codec;
 #[cfg(feature = "native-codec")]
@@ -212,9 +388,9 @@ pub use codec::gif::{
     QuantizerKind,
 };
 #[cfg(feature = "native-codec")]
-pub use codec::hevc::{HevcEncoder, TransparentEncoder, Yuv420Frame};
+pub use codec::h264::{encode_mp4, encode_mp4_with_captions, H264Encoder};
 #[cfg(feature = "native-codec")]
-pub use codec::webm::{encode_gray_webm, encode_webm, mux_webm, WebmCodec, WebmFrame, WebmParams};
+pub use codec::hevc::{HevcEncoder, TransparentEncoder, Yuv420Frame};
 #[cfg(feature = "native-codec")]
 pub use codec::vp9::{
     encode_inter_frame, encode_inter_frame_altref, encode_inter_frame_compound,
@@ -222,30 +398,64 @@ pub use codec::vp9::{
     encode_inter_newmv_skip, encode_inter_residual, encode_inter_zeromv_skip, encode_intra_frame,
     encode_intra_gray, Reconstruction,
 };
+#[cfg(feature = "native-codec")]
+pub use codec::webm::{encode_gray_webm, encode_webm, mux_webm, WebmCodec, WebmFrame, WebmParams};
 
 #[cfg(feature = "mesh-bvh")]
-pub use mesh_bvh::{MeshBvh, BvhHit, BuildOptions as MeshBvhBuildOptions, SerializedMeshBvh, AVERAGE, CENTER, SAH, NOT_INTERSECTED, INTERSECTED, CONTAINED};
+pub use mesh_bvh::{
+    BuildOptions as MeshBvhBuildOptions, BvhHit, MeshBvh, SerializedMeshBvh, AVERAGE, CENTER,
+    CONTAINED, INTERSECTED, NOT_INTERSECTED, SAH,
+};
+
+#[cfg(feature = "raytrace")]
+pub use raytrace::{
+    Aov, BackgroundMode, CpuBackend, RaytraceBackend, RaytraceError, RaytraceRenderer,
+    RaytraceScene, RaytraceSettings,
+};
 
 #[cfg(feature = "bvh-csg")]
 pub use csg::{
-    CsgBrush, CsgEvaluator, CsgOperation, CsgOperationGroup, CsgNode, evaluate_hierarchy,
-    build_bvh_csg_hierarchy_geometry, load_positions_geometry_bin,
-    assert_step_verts, evaluate_live_through, evaluate_through, js_target_verts,
-    step1_shell_cut, step2_add_sphere, step3_win_cut, step4_win_frame,
-    JS_STEP1_VERTS, JS_STEP2_VERTS, JS_STEP3_VERTS, JS_STEP4_VERTS,
-    ADDITION, SUBTRACTION, REVERSE_SUBTRACTION, INTERSECTION, DIFFERENCE,
-    HOLLOW_SUBTRACTION, HOLLOW_INTERSECTION,
+    assert_step_verts, build_bvh_csg_hierarchy_geometry, evaluate_hierarchy, evaluate_live_through,
+    evaluate_through, js_target_verts, load_positions_geometry_bin, step1_shell_cut,
+    step2_add_sphere, step3_win_cut, step4_win_frame, CsgBrush, CsgEvaluator, CsgNode,
+    CsgOperation, CsgOperationGroup, ADDITION, DIFFERENCE, HOLLOW_INTERSECTION, HOLLOW_SUBTRACTION,
+    INTERSECTION, JS_STEP1_VERTS, JS_STEP2_VERTS, JS_STEP3_VERTS, JS_STEP4_VERTS,
+    REVERSE_SUBTRACTION, SUBTRACTION,
 };
 
 #[cfg(feature = "openscad")]
-pub use openscad::export::{geometry_to_3mf, geometry_to_glb, geometry_to_obj, geometry_to_off};
+pub use exact_csg::report::{mesh_report, DefectCluster, MeshReport};
 #[cfg(feature = "openscad")]
-pub use openscad::{
-    cone, cube, cylinder, difference_all, frustum, geometry_to_stl, hull, intersection_all,
-    linear_extrude, linear_extrude_holes, polyhedron, rotate_extrude, rotate_extrude_fn, solid,
-    sphere, sphere_fn, union_all, Solid,
+pub use openscad::export::{geometry_to_3mf, geometry_to_glb, geometry_to_obj, geometry_to_off, parts_to_glb};
+#[cfg(feature = "openscad")]
+pub use openscad::mechanism::{
+    DriveSpec, MateSpec, MateSpecKind, MechanismSpec, PartFit, PartSpec,
+};
+#[cfg(feature = "openscad")]
+pub use openscad::scad::{
+    clear_files, parse_scad, parse_scad_at, parse_scad_file, parse_scad_file_at,
+    parse_scad_file_for_parts, parse_scad_file_with, parse_scad_mechanism, parse_scad_mechanism_at, parse_scad_mechanism_file,
+    parse_scad_mechanism_file_at, parse_scad_with, parse_scad_with_base, register_file,
+    scad_file_values, scad_value, scad_values, scad_values_in,
+};
+#[cfg(feature = "openscad")]
+pub use openscad::schematic::{
+    schematic_project, schematic_project_view, schematic_to_rgba, schematic_to_svg, Schematic,
+    SchematicOptions, View,
 };
 #[cfg(feature = "openscad")]
 pub use openscad::{build_nema17, build_printer};
 #[cfg(feature = "openscad")]
-pub use openscad::scad::{clear_files, parse_scad, parse_scad_file, register_file};
+pub use openscad::{
+    cone, cube, cylinder, difference_all, frustum, geometry_bounds, geometry_to_stl, hull,
+    intersection_all, linear_extrude, linear_extrude_holes, polyhedron, rotate_extrude,
+    rotate_extrude_fn, set_origin, solid, sphere, sphere_fn, union_all, Origin, Solid,
+};
+
+#[cfg(feature = "planet")]
+pub use planet::{
+    generate_earth_maps, generate_starfield, Atmosphere, HeightField, MapBuffer, Planet,
+    PlanetHandles, PlanetMaps, Starfield,
+};
+#[cfg(all(feature = "planet", not(target_arch = "wasm32")))]
+pub use planet::{EarthTextures, MapSources};

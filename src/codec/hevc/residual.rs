@@ -4,7 +4,7 @@
 //! flags, signs, and Golomb-Rice remainders, each with position/neighbor-derived
 //! contexts.
 //!
-//! Verified two ways: [`tests`] round-trips random coefficient blocks through the
+//! Verified two ways: the `tests` module round-trips random coefficient blocks through the
 //! encoder and a matching decoder (validates the *logic* independent of table
 //! values), and the integration test decodes real frames with ffmpeg (validates
 //! the *context init values* + conformance).
@@ -15,7 +15,7 @@
 //! **chroma** block whose last significant coefficient lands in last-position
 //! group 4 (coordinate 4 or 5 in the fast dimension) desyncs a conformant
 //! decoder: ffmpeg loses the sub-block-(0,0) DC while decoding the AC correctly.
-//! The bug is **symmetric** — the mirrored decoder in [`tests`] round-trips it —
+//! The bug is **symmetric** — the mirrored decoder in the `tests` module round-trips it —
 //! so it lives in shared encode/decode logic, not the arithmetic engine (which
 //! is byte-exact to §9.3.4.3). Isolation done: luma 16×16 group 4 is fine, only
 //! 8×8 chroma fails; the failure is independent of every context init value
