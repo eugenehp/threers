@@ -70,6 +70,11 @@ impl CtxModel {
 /// [`encode_bypass`](Self::encode_bypass), and [`encode_terminate`](Self::encode_terminate).
 /// The final `encode_terminate(1)` (i.e. `end_of_slice_segment_flag = 1`) flushes
 /// the engine; [`finish`](Self::finish) then returns the byte-aligned slice data.
+///
+/// `Clone` is what makes rate estimation possible: an encoder can copy the live
+/// engine and contexts, code a candidate into the copy, read [`bit_len`](Self::bit_len),
+/// and throw it away without disturbing the real bitstream.
+#[derive(Clone)]
 pub struct CabacEncoder {
     /// `ivlLow` — low bound of the current interval.
     low: u32,
@@ -198,6 +203,24 @@ impl CabacEncoder {
         self.renorm();
         self.put_bit((self.low >> 9) & 1);
         self.out.write_bits(((self.low >> 7) & 3) | 1, 2);
+    }
+
+    /// The arithmetic state with an empty output buffer.
+    ///
+    /// Rate-distortion decisions need to know what a candidate *would* cost, so
+    /// they encode it into a copy and read [`bit_len`](Self::bit_len). Cloning
+    /// the whole encoder would copy every byte written so far, once per
+    /// candidate per level — quadratic in picture size. The bit count is a
+    /// difference, so the buffer can start empty as long as `low`, `range` and
+    /// the outstanding-bit count carry over.
+    pub fn probe(&self) -> Self {
+        Self {
+            low: self.low,
+            range: self.range,
+            bits_outstanding: self.bits_outstanding,
+            first_bit: self.first_bit,
+            out: BitWriter::new(),
+        }
     }
 
     /// Number of bits emitted so far (for rate estimation / debugging).

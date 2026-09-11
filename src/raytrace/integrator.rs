@@ -21,7 +21,7 @@ use super::bvh::RtHit;
 use super::lights::{
     emissive_pdf, sample_analytic, sample_emissive, sample_world, world_pdf, Modulate,
 };
-use super::sampler::{power_heuristic, Rng};
+use super::sampler::{power_heuristic, uniform_sphere, Rng};
 use super::scene::RaytraceScene;
 use super::settings::RaytraceSettings;
 
@@ -316,6 +316,20 @@ impl<'a> Integrator<'a> {
                     rng,
                     scratch,
                 );
+                if material.subsurface > 0.0 {
+                    self.subsurface_walk(
+                        material,
+                        &info,
+                        base_color,
+                        &surface,
+                        wo,
+                        throughput,
+                        bounce,
+                        &mut radiance,
+                        rng,
+                        scratch,
+                    );
+                }
             }
 
             let Some(sample) = bsdf.sample(wo, rng) else {
@@ -368,6 +382,12 @@ impl<'a> Integrator<'a> {
                 }
                 throughput = throughput * (1.0 / q);
             }
+        }
+
+        if self.scene.world.fog_mode > 0 {
+            let d = if depth_recorded { depth } else { self.scene.scale() * 4.0 };
+            let (vis, fog) = self.scene.world.fog_at(d);
+            radiance = radiance * vis + fog;
         }
 
         PathResult {
@@ -459,6 +479,96 @@ impl<'a> Integrator<'a> {
         }
     }
 
+    /// A short random walk inside subsurface materials, adding direct lighting
+    /// at each scatter point. Biased but stable; complements the grazing boost
+    /// in the BSDF.
+    #[allow(clippy::too_many_arguments)]
+    fn subsurface_walk(
+        &self,
+        material: &super::scene::RtMaterial,
+        info: &HitInfo,
+        base_color: Vector3,
+        surface: &Surface,
+        wo: Vector3,
+        throughput: Vector3,
+        bounce: u32,
+        radiance: &mut Vector3,
+        rng: &mut Rng,
+        scratch: &mut Scratch,
+    ) {
+        let ss = material.subsurface.clamp(0.0, 1.0);
+        if ss <= 0.0 {
+            return;
+        }
+        let scale = self.scene.scale();
+        let mfp = ((material.subsurface_radius.x
+            + material.subsurface_radius.y
+            + material.subsurface_radius.z)
+            / 3.0)
+            * scale
+            * 0.02;
+        let mfp = mfp.max(self.epsilon * 4.0);
+        let max_steps = 6u32;
+        let mut pos = info.p - info.ng_facing * self.epsilon * 2.0;
+        let mut walk_tp = throughput.mul_componentwise(base_color) * ss;
+        let bsdf = Bsdf::new(*surface, info.ns, info.ng);
+        let shadow_bias = self.epsilon * 2.0;
+
+        for _ in 0..max_steps {
+            let u = rng.next_f32().max(1e-6);
+            let step = -mfp * u.ln();
+            let scatter_dir = uniform_sphere(rng.next_f32(), rng.next_f32());
+            pos = pos + scatter_dir * step;
+
+            // Reconnect to the surface for lighting.
+            let to_surface = -info.ng_facing;
+            if let Some(exit) = self.scene.bvh.intersect(
+                &self.scene.tris,
+                pos,
+                to_surface,
+                self.epsilon,
+                mfp * 8.0,
+            ) {
+                let exit_info = self.hit_info(&exit, to_surface);
+                if exit_info.material == info.material {
+                    let exit_origin = exit_info.p + exit_info.ng_facing * shadow_bias;
+                    self.direct_light(
+                        &bsdf,
+                        &HitInfo {
+                            p: exit_info.p,
+                            ng: exit_info.ng,
+                            ns: info.ns,
+                            ng_facing: exit_info.ng_facing,
+                            ns_facing: info.ns_facing,
+                            face: exit_info.face,
+                            uv: exit_info.uv,
+                            material: info.material,
+                            front: exit_info.front,
+                            triangle: exit_info.triangle,
+                        },
+                        wo,
+                        exit_origin,
+                        walk_tp,
+                        bounce,
+                        radiance,
+                        rng,
+                        scratch,
+                    );
+                }
+            }
+
+            let q = walk_tp
+                .x
+                .max(walk_tp.y)
+                .max(walk_tp.z)
+                .clamp(0.05, 0.95);
+            if rng.next_f32() >= q {
+                break;
+            }
+            walk_tp = walk_tp * (1.0 / q);
+        }
+    }
+
     /// How much of a shadow ray survives: `1` for clear, `0` for blocked, and
     /// something between when it crossed cutouts.
     fn visibility(
@@ -506,6 +616,11 @@ impl<'a> Integrator<'a> {
             // really does get through arrives along BSDF-sampled paths, which
             // is also where the caustic comes from.
             if m.transmission > 0.0 && m.opacity >= 1.0 {
+                if self.settings.caustic_glass_shadows {
+                    transmittance = transmittance.mul_componentwise(Vector3::new(0.12, 0.12, 0.12));
+                    layers += 1;
+                    continue;
+                }
                 return Vector3::ZERO;
             }
             let w = 1.0 - h.u - h.v;
@@ -601,6 +716,11 @@ impl<'a> Integrator<'a> {
             metallic *= map.sample(info.uv)[2];
         }
 
+        let mut iridescence_thickness = material.iridescence_thickness;
+        if let Some(map) = &material.iridescence_thickness_map {
+            iridescence_thickness *= map.sample(info.uv)[1];
+        }
+
         Surface {
             base_color,
             roughness: roughness.clamp(0.0, 1.0),
@@ -612,6 +732,15 @@ impl<'a> Integrator<'a> {
             specular_tint: material.specular_tint,
             anisotropy: material.anisotropy,
             anisotropy_rotation: material.anisotropy_rotation,
+            sheen: material.sheen,
+            sheen_color: material.sheen_color,
+            sheen_roughness: material.sheen_roughness,
+            iridescence: material.iridescence,
+            iridescence_ior: material.iridescence_ior,
+            iridescence_thickness,
+            dispersion: material.dispersion,
+            subsurface: material.subsurface,
+            subsurface_radius: material.subsurface_radius,
         }
     }
 

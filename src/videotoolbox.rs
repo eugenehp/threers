@@ -12,11 +12,9 @@
 //!
 //! # What this is not
 //!
-//! It is not a muxer. VideoToolbox produces encoded frames, not files, and
-//! writing a conformant MP4 is a separate job with its own edge cases. This
-//! writes an Annex-B elementary stream, which any container can adopt without
-//! re-encoding — `ffmpeg -i out.h265 -c copy out.mp4` is a remux, not a second
-//! compression, and costs seconds for a whole film.
+//! It is not a muxer by default — [`VideoToolboxEncoder`] writes Annex-B for
+//! remuxing. [`VideoToolboxMp4Encoder`] collects samples and muxes an MP4 in
+//! process via [`crate::codec::mp4`], with no ffmpeg involved.
 //!
 //! # Why the C API and not AVFoundation
 //!
@@ -203,29 +201,88 @@ fn cfnum(v: i32) -> CFNumberRef {
     }
 }
 
+/// Where encoded output goes.
+enum SinkTarget {
+    Elementary(std::fs::File),
+    Mp4 {
+        vps: Vec<u8>,
+        sps: Vec<u8>,
+        pps: Vec<u8>,
+        samples: Vec<Vec<u8>>,
+    },
+}
+
 /// Encoded frames, collected by the VideoToolbox callback.
-///
-/// Behind a mutex because the callback does NOT run on the thread that called
-/// `push`: VideoToolbox compresses asynchronously and calls back from its own
-/// worker. Reading `err` from the encoding thread while the worker writes it is
-/// a data race, and the kind that shows up as a corrupt file once a fortnight
-/// rather than as a crash.
 struct Sink {
-    out: std::fs::File,
+    target: SinkTarget,
     frames: usize,
     bytes: usize,
     err: Option<String>,
-    /// Whether VPS/SPS/PPS have been written yet.
+    /// Whether VPS/SPS/PPS have been captured yet.
     params_written: bool,
-    /// Ring slots the encoder has not finished reading, one bit each.
-    ///
-    /// `VTCompressionSessionEncodeFrame` is ASYNCHRONOUS. It returns as soon as
-    /// the frame is queued and the encoder reads the pixel buffer afterwards,
-    /// on its own thread. Writing the next frame into the same buffer therefore
-    /// overwrites a frame that is still being compressed -- row by row, so what
-    /// comes out is bands of one frame displaced into the other. That is what
-    /// the horizontal slabs across the Moon were.
     busy: u64,
+}
+
+fn hevc_nal_type(nal: &[u8]) -> u8 {
+    if nal.is_empty() {
+        0
+    } else {
+        (nal[0] >> 1) & 0x3F
+    }
+}
+
+fn store_param_sets(sink: &mut Sink, sets: &[&[u8]]) {
+    match &mut sink.target {
+        SinkTarget::Elementary(out) => {
+            for set in sets {
+                if out.write_all(&[0, 0, 0, 1]).is_err() || out.write_all(set).is_err() {
+                    sink.err = Some("write failed".into());
+                    return;
+                }
+                sink.bytes += set.len() + 4;
+            }
+        }
+        SinkTarget::Mp4 { vps, sps, pps, .. } => {
+            for set in sets {
+                match hevc_nal_type(set) {
+                    32 => *vps = set.to_vec(),
+                    33 => *sps = set.to_vec(),
+                    34 => *pps = set.to_vec(),
+                    _ => {}
+                }
+            }
+        }
+    }
+    sink.params_written = true;
+}
+
+fn store_sample(sink: &mut Sink, buf: &[u8]) {
+    match &mut sink.target {
+        SinkTarget::Elementary(out) => {
+            let len = buf.len();
+            let mut i = 0usize;
+            while i + 4 <= len {
+                let n =
+                    u32::from_be_bytes([buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]) as usize;
+                if n == 0 || i + 4 + n > len {
+                    break;
+                }
+                if out.write_all(&[0, 0, 0, 1]).is_err()
+                    || out.write_all(&buf[i + 4..i + 4 + n]).is_err()
+                {
+                    sink.err = Some("write failed".into());
+                    return;
+                }
+                sink.bytes += n + 4;
+                i += 4 + n;
+            }
+        }
+        SinkTarget::Mp4 { samples, .. } => {
+            samples.push(buf.to_vec());
+            sink.bytes += buf.len();
+        }
+    }
+    sink.frames += 1;
 }
 
 extern "C" fn on_frame(
@@ -271,6 +328,7 @@ extern "C" fn on_frame(
                     desc, 0, &mut ptr0, &mut size0, &mut count, &mut hdr,
                 ) == 0
                 {
+                    let mut sets: Vec<&[u8]> = Vec::with_capacity(count);
                     for i in 0..count {
                         let mut p: *const u8 = ptr::null();
                         let mut n = 0usize;
@@ -286,16 +344,12 @@ extern "C" fn on_frame(
                         {
                             continue;
                         }
-                        let set = std::slice::from_raw_parts(p, n);
-                        if sink.out.write_all(&[0, 0, 0, 1]).is_err()
-                            || sink.out.write_all(set).is_err()
-                        {
-                            sink.err = Some("write failed".into());
-                            return;
-                        }
-                        sink.bytes += n + 4;
+                        sets.push(std::slice::from_raw_parts(p, n));
                     }
-                    sink.params_written = true;
+                    store_param_sets(&mut sink, &sets);
+                    if sink.err.is_some() {
+                        return;
+                    }
                 }
             }
         }
@@ -309,26 +363,67 @@ extern "C" fn on_frame(
             sink.err = Some("CMBlockBufferCopyDataBytes failed".into());
             return;
         }
-        // VideoToolbox emits length-prefixed NAL units (AVCC/HVCC style). An
-        // elementary stream wants start codes, so rewrite the 4-byte lengths as
-        // 00 00 00 01. Done here rather than later because the length prefix is
-        // the only thing standing between this and a file ffmpeg can remux.
-        let mut i = 0usize;
-        while i + 4 <= len {
-            let n = u32::from_be_bytes([buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]) as usize;
-            if n == 0 || i + 4 + n > len {
-                break;
-            }
-            if sink.out.write_all(&[0, 0, 0, 1]).is_err()
-                || sink.out.write_all(&buf[i + 4..i + 4 + n]).is_err()
-            {
-                sink.err = Some("write failed".into());
-                return;
-            }
-            sink.bytes += n + 4;
-            i += 4 + n;
+        store_sample(&mut sink, &buf);
+    }
+}
+
+/// How the compression session is tuned.
+///
+/// The defaults are for **file export**, which is what every constructor here
+/// is for. They are deliberately not the live-capture settings: a real-time
+/// session throttles its own search to keep up with a camera and re-sends a
+/// keyframe every couple of seconds so a late joiner can start decoding. Both
+/// cost a lot of bitrate, and an export has neither problem — nothing is
+/// watching it arrive.
+///
+/// **This does not shrink a bitrate-targeted encode, and measurement says so.**
+/// On a 20s 1280x720 render, against the live-capture settings at the same
+/// `-b:v`, this profile produced a *larger* file at the same VMAF (7.04 → 7.93 MB
+/// at 4 Mb/s, 99.76 → 99.78). That is rate control working as asked: a keyframe
+/// interval only frees up bits, and VideoToolbox spends whatever the target
+/// allows. What you get here is closer adherence to the requested bitrate and
+/// slightly better quality per bit — to get a smaller file, lower
+/// [`average_bitrate`](Self::average_bitrate).
+///
+/// A longer keyframe interval *does* shrink a **quality**-targeted encode, where
+/// nothing is obliged to spend the savings: on the same clip x265 at CRF 23 went
+/// from 1.23 MB to 1.10 MB (−12%) moving keyframes from 1s to 5s apart. See
+/// `docs/codec-benchmark.md`.
+#[derive(Clone, Copy, Debug)]
+pub struct VtTuning {
+    /// Hint that encoding must keep pace with capture. Off for an export.
+    pub realtime: bool,
+    /// Let the encoder trade quality for speed. Off for an export.
+    pub prioritize_speed: bool,
+    /// Seconds between forced keyframes. Each one costs roughly what an intra
+    /// frame costs, so a short interval on a long render is pure overhead;
+    /// players seek fine at 5-10s.
+    pub keyframe_interval_secs: u32,
+    /// Optional average bitrate cap in bits per second. `None` leaves rate
+    /// control to the `quality` value alone.
+    pub average_bitrate: Option<u32>,
+}
+
+impl Default for VtTuning {
+    fn default() -> Self {
+        Self {
+            realtime: false,
+            prioritize_speed: false,
+            keyframe_interval_secs: 5,
+            average_bitrate: None,
         }
-        sink.frames += 1;
+    }
+}
+
+impl VtTuning {
+    /// The live-capture profile: keep up with a camera, re-key every 2s.
+    pub fn realtime() -> Self {
+        Self {
+            realtime: true,
+            prioritize_speed: true,
+            keyframe_interval_secs: 2,
+            average_bitrate: None,
+        }
     }
 }
 
@@ -347,9 +442,6 @@ pub struct VideoToolboxEncoder {
 
 impl VideoToolboxEncoder {
     /// Open a session writing an Annex-B HEVC elementary stream to `path`.
-    ///
-    /// `quality` is 0..1, matching VideoToolbox's own scale rather than a
-    /// bitrate: this is a quality-targeted encode, as the ffmpeg path is.
     pub fn new(
         path: &str,
         width: u32,
@@ -358,8 +450,55 @@ impl VideoToolboxEncoder {
         quality: f32,
     ) -> Result<Self, String> {
         let out = std::fs::File::create(path).map_err(|e| format!("{path}: {e}"))?;
+        Self::open(
+            SinkTarget::Elementary(out),
+            width,
+            height,
+            fps,
+            quality,
+            VtTuning::default(),
+        )
+    }
+
+    /// Hardware HEVC session that muxes to MP4 on [`finish_mp4`](Self::finish_mp4).
+    pub fn new_for_mp4(width: u32, height: u32, fps: i32, quality: f32) -> Result<Self, String> {
+        Self::new_for_mp4_tuned(width, height, fps, quality, VtTuning::default())
+    }
+
+    /// As [`new_for_mp4`](Self::new_for_mp4) with an explicit [`VtTuning`] —
+    /// pass [`VtTuning::realtime`] when the frames are arriving live.
+    pub fn new_for_mp4_tuned(
+        width: u32,
+        height: u32,
+        fps: i32,
+        quality: f32,
+        tuning: VtTuning,
+    ) -> Result<Self, String> {
+        Self::open(
+            SinkTarget::Mp4 {
+                vps: Vec::new(),
+                sps: Vec::new(),
+                pps: Vec::new(),
+                samples: Vec::new(),
+            },
+            width,
+            height,
+            fps,
+            quality,
+            tuning,
+        )
+    }
+
+    fn open(
+        target: SinkTarget,
+        width: u32,
+        height: u32,
+        fps: i32,
+        quality: f32,
+        tuning: VtTuning,
+    ) -> Result<Self, String> {
         let sink = Box::new(std::sync::Mutex::new(Sink {
-            out,
+            target,
             frames: 0,
             bytes: 0,
             err: None,
@@ -424,7 +563,6 @@ impl VideoToolboxEncoder {
                 );
                 CFRelease(k);
             };
-            let set_bool = |name: &str| set_flag(name, true);
             // MAIN10, to match what the film is graded and delivered in. The
             // input stays 8-bit BGRA and VideoToolbox promotes it: the point of
             // 10 bits here is headroom in the ENCODE — the sky gradient bands
@@ -451,7 +589,7 @@ impl VideoToolboxEncoder {
                 CFRelease(k);
                 CFRelease(v);
             }
-            set_bool("RealTime");
+            set_flag("RealTime", tuning.realtime);
             // NO B-FRAMES. The elementary stream this writes carries no
             // timestamps -- it is raw Annex-B -- so the remux reconstructs them
             // from a constant rate in the order the access units appear. With
@@ -462,9 +600,20 @@ impl VideoToolboxEncoder {
             // last two. Reordering costs a little compression efficiency and
             // buys nothing here.
             set_flag("AllowFrameReordering", false);
-            set_bool("PrioritizeEncodingSpeedOverQuality");
-            set_num("MaxKeyFrameInterval", fps * 2);
+            set_flag(
+                "PrioritizeEncodingSpeedOverQuality",
+                tuning.prioritize_speed,
+            );
+            // Keyframes cost roughly an intra frame each. Two seconds apart is a
+            // streaming default that an export has no use for.
+            set_num(
+                "MaxKeyFrameInterval",
+                fps * tuning.keyframe_interval_secs.max(1) as i32,
+            );
             set_num("ExpectedFrameRate", fps);
+            if let Some(bps) = tuning.average_bitrate {
+                set_num("AverageBitRate", bps as i32);
+            }
             let k = cfstr("Quality");
             let q = quality.clamp(0.0, 1.0) as f64;
             // Quality wants a float; CFNumber type 6 is kCFNumberFloat64Type.
@@ -522,12 +671,52 @@ impl VideoToolboxEncoder {
         })
     }
 
+    /// Encode one frame of tightly-packed RGBA8 (4 bytes per pixel).
+    pub fn push_rgba(&mut self, rgba: &[u8]) -> Result<(), String> {
+        let (w, h) = (self.width as usize, self.height as usize);
+        let need = w * h * 4;
+        if rgba.len() < need {
+            return Err(format!("frame is {} bytes, want {need}", rgba.len()));
+        }
+        self.push_bgra(|base, stride, w, h| unsafe {
+            for y in 0..h {
+                let src = &rgba[y * w * 4..y * w * 4 + w * 4];
+                let dst = base.add(y * stride);
+                for x in 0..w {
+                    *dst.add(x * 4) = src[x * 4 + 2];
+                    *dst.add(x * 4 + 1) = src[x * 4 + 1];
+                    *dst.add(x * 4 + 2) = src[x * 4];
+                    *dst.add(x * 4 + 3) = src[x * 4 + 3].max(1);
+                }
+            }
+        })
+    }
+
     /// Encode one frame of tightly-packed RGB (3 bytes per pixel).
     pub fn push_rgb(&mut self, rgb: &[u8]) -> Result<(), String> {
         let (w, h) = (self.width as usize, self.height as usize);
         if rgb.len() < w * h * 3 {
             return Err(format!("frame is {} bytes, want {}", rgb.len(), w * h * 3));
         }
+        self.push_bgra(|base, stride, w, h| unsafe {
+            for y in 0..h {
+                let src = &rgb[y * w * 3..y * w * 3 + w * 3];
+                let dst = base.add(y * stride);
+                for x in 0..w {
+                    *dst.add(x * 4) = src[x * 3 + 2];
+                    *dst.add(x * 4 + 1) = src[x * 3 + 1];
+                    *dst.add(x * 4 + 2) = src[x * 3];
+                    *dst.add(x * 4 + 3) = 255;
+                }
+            }
+        })
+    }
+
+    fn push_bgra(
+        &mut self,
+        fill: impl FnOnce(*mut u8, usize, usize, usize),
+    ) -> Result<(), String> {
+        let (w, h) = (self.width as usize, self.height as usize);
         // Take the next ring slot and WAIT for the encoder to be finished with
         // it. Without this the write below lands in a buffer still being read.
         let slot = self.next % self.pixbufs.len();
@@ -562,17 +751,7 @@ impl VideoToolboxEncoder {
             CVPixelBufferLockBaseAddress(pixbuf, 0);
             let base = CVPixelBufferGetBaseAddress(pixbuf) as *mut u8;
             let stride = CVPixelBufferGetBytesPerRow(pixbuf);
-            for y in 0..h {
-                let src = &rgb[y * w * 3..y * w * 3 + w * 3];
-                let dst = base.add(y * stride);
-                for x in 0..w {
-                    // BGRA from RGB.
-                    *dst.add(x * 4) = src[x * 3 + 2];
-                    *dst.add(x * 4 + 1) = src[x * 3 + 1];
-                    *dst.add(x * 4 + 2) = src[x * 3];
-                    *dst.add(x * 4 + 3) = 255;
-                }
-            }
+            fill(base, stride, w, h);
             CVPixelBufferUnlockBaseAddress(pixbuf, 0);
 
             // The slot travels with the frame as its ref-con, so the callback
@@ -602,26 +781,126 @@ impl VideoToolboxEncoder {
         Ok(())
     }
 
-    /// Flush and close. Returns (frames, bytes written).
+    /// Flush an elementary-stream encoder. Returns (frames, bytes written).
     pub fn finish(mut self) -> Result<(usize, usize), String> {
+        self.drain_session()?;
+        let mut g = self
+            .sink
+            .lock()
+            .map_err(|_| "encoder state poisoned".to_string())?;
+        if let Some(e) = &g.err {
+            return Err(e.clone());
+        }
+        if let SinkTarget::Elementary(out) = &mut g.target {
+            out.flush().ok();
+        } else {
+            return Err("finish() requires an elementary-stream encoder; use finish_mp4()".into());
+        }
+        Ok((g.frames, g.bytes))
+    }
+
+    /// Flush and mux collected samples into an MP4 at `path`.
+    pub fn finish_mp4(mut self, path: &str) -> Result<(usize, usize), String> {
+        use crate::codec::hevc::hvcc::{build_hvcc, HvccArray};
+        use crate::codec::mp4::{mux_hevc, Mp4Params};
+
+        self.drain_session()?;
+        let mut g = self
+            .sink
+            .lock()
+            .map_err(|_| "encoder state poisoned".to_string())?;
+        if let Some(e) = &g.err {
+            return Err(e.clone());
+        }
+        let SinkTarget::Mp4 {
+            vps,
+            sps,
+            pps,
+            samples,
+        } = std::mem::replace(
+            &mut g.target,
+            SinkTarget::Mp4 {
+                vps: Vec::new(),
+                sps: Vec::new(),
+                pps: Vec::new(),
+                samples: Vec::new(),
+            },
+        ) else {
+            return Err("finish_mp4() requires new_for_mp4()".into());
+        };
+        let frames = samples.len();
+        if vps.is_empty() || sps.is_empty() || pps.is_empty() {
+            return Err("VideoToolbox did not emit HEVC parameter sets".into());
+        }
+        let profile = hvcc_profile_from_sps(&sps);
+        let vps_arr = [vps];
+        let sps_arr = [sps];
+        let pps_arr = [pps];
+        let hvcc = build_hvcc(
+            &profile,
+            &[
+                HvccArray {
+                    nal_type: 32,
+                    complete: true,
+                    nals: &vps_arr,
+                },
+                HvccArray {
+                    nal_type: 33,
+                    complete: true,
+                    nals: &sps_arr,
+                },
+                HvccArray {
+                    nal_type: 34,
+                    complete: true,
+                    nals: &pps_arr,
+                },
+            ],
+        );
+        let timescale = 600u32;
+        let frame_duration = timescale / self.fps.max(1) as u32;
+        let mp4 = mux_hevc(&Mp4Params {
+            width: self.width,
+            height: self.height,
+            timescale,
+            frame_duration,
+            hvcc_payload: &hvcc,
+            almo_payload: None,
+            samples: &samples,
+        });
+        std::fs::write(path, &mp4).map_err(|e| format!("{path}: {e}"))?;
+        Ok((frames, mp4.len()))
+    }
+
+    fn drain_session(&mut self) -> Result<(), String> {
         unsafe {
             VTCompressionSessionCompleteFrames(self.session, CMTime::invalid());
             VTCompressionSessionInvalidate(self.session);
         }
-        let r = {
-            let mut g = self
-                .sink
-                .lock()
-                .map_err(|_| "encoder state poisoned".to_string())?;
-            g.out.flush().ok();
-            if let Some(e) = &g.err {
-                return Err(e.clone());
-            }
-            (g.frames, g.bytes)
-        };
         self.session = ptr::null_mut();
-        Ok(r)
+        Ok(())
     }
+}
+
+fn hvcc_profile_from_sps(sps: &[u8]) -> crate::codec::hevc::hvcc::HvccProfile {
+    use crate::codec::hevc::hvcc::HvccProfile;
+    // SPS is a NAL with a 2-byte header; profile/level live in the RBSP.
+    if sps.len() >= 16 {
+        let profile_idc = sps[3];
+        let level_idc = sps[15];
+        let chroma = sps[6] & 3;
+        let luma_depth = (sps[7] & 7) + 8;
+        let chroma_depth = (sps[8] & 7) + 8;
+        return HvccProfile {
+            profile_idc,
+            level_idc,
+            chroma_format_idc: chroma,
+            bit_depth_luma_minus8: luma_depth.saturating_sub(8),
+            bit_depth_chroma_minus8: chroma_depth.saturating_sub(8),
+            constraint_flags: [sps[4], sps[5], 0, 0, 0, 0],
+            compat_flags: [sps[2], 0, 0, 0],
+        };
+    }
+    HvccProfile::main_420(153)
 }
 
 /// Safe to move between threads: everything it owns is a Core Foundation or

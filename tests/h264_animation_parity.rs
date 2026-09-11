@@ -9,7 +9,8 @@
 #![cfg(feature = "native-codec")]
 
 use threers::codec::hevc::Yuv420Frame;
-use threers::{encode_animation_rgba, encode_mp4, AnimationEncodeOptions, BrowserCodec};
+use threers::codec::h264::{encode_compressed_mp4, encode_mp4 as encode_pcm_mp4};
+use threers::{encode_animation_rgba, AnimationEncodeOptions, BrowserCodec};
 
 /// FNV-1a 32-bit — must match `web/scripts/video-export-test-lib.mjs`.
 fn fnv1a(data: &[u8]) -> u32 {
@@ -109,11 +110,14 @@ fn rgba_path_matches_direct_yuv_mp4_bytes() {
         .iter()
         .map(|rgba| Yuv420Frame::from_rgba(width, height, rgba))
         .collect();
-    let from_yuv = encode_mp4(width, height, 10, &yuv);
+    // The browser path uses the compressed encoder at its default QP; this
+    // pins the two to the same bytes so the RGBA wrapper stays a pure
+    // convenience over the direct API.
+    let from_yuv = encode_compressed_mp4(width, height, 10, 26, &yuv);
 
     assert_eq!(
         from_rgba, from_yuv,
-        "RGBA animation path must match direct YUV encode_mp4"
+        "RGBA animation path must match direct YUV encode_compressed_mp4"
     );
     assert!(from_rgba.len() > 100);
     assert_eq!(&from_rgba[4..8], b"ftyp");
@@ -127,8 +131,9 @@ fn golden_checksum_64x48_solid_4f_10fps() {
     let sum = fnv1a(&mp4);
     // Shared with browser `video-export-test.html`.
     assert_eq!(
-        sum, 0x2fc50a1f,
-        "golden mp4 checksum (update browser test if encoder changed)"
+        sum, 0xf5ca7103,
+        "golden mp4 checksum — changed when the MP4 path moved from I_PCM to the \
+         compressed intra encoder; update the browser test to match"
     );
 }
 
@@ -143,7 +148,7 @@ fn golden_checksum_128x72_gradient_3f_30fps() {
     ];
     let mp4 = encode_mp4_rgba(width, height, 30, frames);
     let sum = fnv1a(&mp4);
-    assert_eq!(sum, 0xe64d370a, "golden gradient mp4 checksum");
+    assert_eq!(sum, 0x1c091ef4, "golden gradient mp4 checksum");
 }
 
 #[test]
@@ -156,7 +161,7 @@ fn golden_checksum_320x240_checker_2f_60fps() {
     ];
     let mp4 = encode_mp4_rgba(width, height, 60, frames);
     let sum = fnv1a(&mp4);
-    assert_eq!(sum, 0x2a59cc5b, "golden 320x240 mp4 checksum");
+    assert_eq!(sum, 0x06597030, "golden 320x240 mp4 checksum");
 }
 
 #[test]
@@ -224,4 +229,24 @@ fn resolution_matrix_encodes() {
         assert_eq!(&mp4[4..8], b"ftyp", "{width}x{height}");
         assert!(mp4.len() > 200, "{width}x{height} too small");
     }
+}
+
+/// The `I_PCM` encoder is still reachable and still lossless, even though the
+/// export paths no longer default to it.
+#[test]
+fn pcm_encoder_remains_available_and_is_far_larger() {
+    let (width, height) = (64u32, 48u32);
+    let rgba = synthetic_solid_frames(width, height);
+    let yuv: Vec<Yuv420Frame> = rgba
+        .iter()
+        .map(|f| Yuv420Frame::from_rgba(width, height, f))
+        .collect();
+    let pcm = encode_pcm_mp4(width, height, 10, &yuv);
+    let compressed = encode_compressed_mp4(width, height, 10, 26, &yuv);
+    assert!(
+        compressed.len() * 4 < pcm.len(),
+        "compressed {} vs I_PCM {}",
+        compressed.len(),
+        pcm.len()
+    );
 }

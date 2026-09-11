@@ -116,10 +116,24 @@ fn main() {
     let t = Instant::now();
     let (w, h) = render.size();
     let mut bytes = 0usize;
+    let mut last = Vec::new();
     for f in &rgba {
-        bytes += threers::encode_png(w, h, f).len();
+        last = threers::encode_png(w, h, f);
+        bytes += last.len();
     }
     let png = t.elapsed().as_secs_f64();
+
+    // The frames are encoded to time the encoder; keeping the last one costs
+    // nothing and gives the profile something to look at.
+    if !last.is_empty() {
+        let out = "out/scad_profile.png";
+        if let Some(dir) = std::path::Path::new(out).parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        if std::fs::write(out, &last).is_ok() {
+            println!("  wrote {out} ({w}x{h})");
+        }
+    }
 
     println!(
         "{frames} frames at {w}x{h} {quality:?} ({}x supersample), {tris} evaluated",

@@ -1,0 +1,25 @@
+[package]
+name = "threers-connectome"
+version = "0.0.1"
+edition = "2021"
+# Matches `threers`, whose wasm build the browser side loads.
+rust-version = "1.87"
+authors = ["Eugene Hauptmann"]
+description = "Both Drosophila connectomes as one node per neuron, drawn by threers in the browser — text-tree reader, node-table builder and viewer host"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/eugenehp/threers"
+# A demo, not a library. See docs/releasing.md.
+publish = false
+
+# No dependencies, on purpose. The trees are plain text, the tables are plain
+# little-endian arrays, and the viewer is static files plus two endpoints — none
+# of that needs a parser, a serialiser or an HTTP framework.
+
+[[bin]]
+name = "connectome-build"
+path = "src/bin/build.rs"
+
+[[bin]]
+name = "connectome-serve"
+path = "src/bin/serve.rs"

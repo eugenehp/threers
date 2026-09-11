@@ -512,6 +512,7 @@ fn feather(i: usize, tile: usize, at_start: bool, at_end: bool) -> f32 {
 fn prefilter_atrous(planes: &mut Planes, film: &Film, w: usize, h: usize, scene_scale: f32) {
     let depth = film.resolve_depth();
     let variance = film.resolve_variance();
+    let sample_counts = film.resolve_sample_counts();
     // Fewer, tighter passes than the colour gets: the guides carry a fraction
     // of the colour's error, and over-smoothing them would erase the very edges
     // they exist to mark.
@@ -534,6 +535,7 @@ fn prefilter_atrous(planes: &mut Planes, film: &Film, w: usize, h: usize, scene_
                 normal: &planes.normal,
                 depth: &depth,
                 variance: &variance,
+                sample_counts: Some(&sample_counts),
                 scene_scale,
             },
             &params,

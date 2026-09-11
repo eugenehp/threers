@@ -25,9 +25,10 @@
 //! progressive render show intermediate results, and cost one command
 //! submission each.
 //!
-//! **Accumulate on the device.** The film lives in a storage buffer and is only
-//! read back when the caller asks to resolve. A thousand-sample render is one
-//! transfer, not a thousand.
+//! **Accumulate on the device.** The film lives in a storage buffer. Full-frame
+//! traces read back immediately; tile/region traces defer readback until
+//! [`GpuBackend::sync_film`] (called automatically from
+//! [`RaytraceRenderer::resolve_rgba`] and friends).
 //!
 //! **One pixel per invocation, 8×8 workgroups.** No atomics: the only thread
 //! that writes a pixel's accumulator is the one that owns it. 8×8 keeps
@@ -41,9 +42,9 @@
 //! image; a per-pixel comparison at low sample counts will not match, and the
 //! tests compare converged means instead.
 //!
-//! A texture's `rotation` is not applied (offset and repeat are), and any
-//! texture too large for the atlas falls back to its material's constant. Both
-//! are reported by [`crate::raytrace::gpu::GpuBackend::report`].
+//! A texture's `rotation` is applied in the kernel (offset and repeat are too).
+//! Any texture too large for the atlas falls back to its material's constant.
+//! Both are reported by [`crate::raytrace::gpu::GpuBackend::report`].
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -55,13 +56,13 @@ use crate::textures::TextureWrap;
 use super::backend::{RaytraceBackend, RaytraceError};
 use super::bsdf::ggx_albedo_table;
 use super::camera::RtCamera;
-use super::film::Film;
+use super::film::{Film, Pixel};
 use super::scene::{RaytraceScene, RtLight, RtMaterial};
 use super::settings::{BackgroundMode, RaytraceSettings};
 use super::texture::CpuTexture;
 
 /// Floats per material record in the `data` buffer.
-const MAT_STRIDE: usize = 72;
+const MAT_STRIDE: usize = 88;
 /// Floats per analytic light.
 const LIGHT_STRIDE: usize = 20;
 /// Floats per triangle: 3 positions, 3 normals, 3 UVs.
@@ -70,13 +71,170 @@ const TRI_STRIDE: usize = 24;
 const EMIT_STRIDE: usize = 2;
 /// Floats per pixel in the accumulation buffer.
 const ACCUM_STRIDE: usize = 14;
-/// Side of the texture atlas, in texels. 4096² of rgba16float is 134 MB, which
-/// every discrete GPU has and most integrated ones do; anything that will not
-/// fit falls back to material constants rather than failing the render.
-const ATLAS_SIZE: u32 = 4096;
+/// Side of the texture atlas when the device allows it. Packing and upload
+/// clamp to [`GpuCaps::atlas_side`] on downlevel / WebGL2 / shared devices.
+const ATLAS_SIZE: u32 = 8192;
 /// Gutter between packed textures, so bilinear taps at a rectangle's edge
 /// cannot reach its neighbour.
 const ATLAS_PAD: u32 = 2;
+
+/// Device limits that matter to the path-tracer kernel, derived once from the
+/// [`wgpu::Device`] so packing and uploads fail with a clear message instead of
+/// a validation error halfway through a progressive render.
+#[derive(Debug, Clone, Copy)]
+pub struct GpuCaps {
+    /// `max_storage_buffer_binding_size` from the device.
+    pub max_storage_binding: u64,
+    /// `max_buffer_size` — total alloc including staging copies.
+    pub max_buffer_size: u64,
+    /// `max_texture_dimension_2d`.
+    pub max_texture_2d: u32,
+    /// `max_uniform_buffer_binding_size`.
+    pub max_uniform_binding: u64,
+    /// Shelf atlas side actually used (≤ [`ATLAS_SIZE`] and ≤ `max_texture_2d`).
+    pub atlas_side: u32,
+    /// Maximum film pixels the accum buffer may cover.
+    pub max_accum_pixels: u64,
+}
+
+impl GpuCaps {
+    pub fn from_device(device: &wgpu::Device) -> Self {
+        Self::from_limits(&device.limits())
+    }
+
+    pub fn from_limits(limits: &wgpu::Limits) -> Self {
+        let max_storage_binding = limits.max_storage_buffer_binding_size;
+        let max_buffer_size = limits.max_buffer_size;
+        let max_texture_2d = limits.max_texture_dimension_2d;
+        let max_uniform_binding = limits.max_uniform_buffer_binding_size;
+
+        // rgba16f scratch is 8 bytes/texel. Keep CPU packing under ~128 MiB on
+        // downlevel devices unless storage headroom clearly allows more.
+        let scratch_budget = max_storage_binding.min(512 << 20);
+        let side_from_storage = isqrt_u64(scratch_budget / 8) as u32;
+        let atlas_side = ATLAS_SIZE
+            .min(max_texture_2d)
+            .min(side_from_storage)
+            .max(256);
+
+        let accum_stride = (ACCUM_STRIDE * 4) as u64;
+        let max_accum_pixels = (max_storage_binding / accum_stride)
+            .min(max_buffer_size / accum_stride);
+
+        Self {
+            max_storage_binding,
+            max_buffer_size,
+            max_texture_2d,
+            max_uniform_binding,
+            atlas_side,
+            max_accum_pixels,
+        }
+    }
+
+    fn kernel_uniform_bytes() -> u64 {
+        std::mem::size_of::<Uniforms>() as u64
+    }
+
+    /// Whether this device can run the compiled kernel at all.
+    pub fn validate_kernel(&self) -> Result<(), RaytraceError> {
+        let uniform = Self::kernel_uniform_bytes();
+        if uniform > self.max_uniform_binding {
+            return Err(RaytraceError::TooLarge(format!(
+                "path-tracer uniforms are {} KB but this device allows {} KB per uniform binding",
+                uniform / 1024,
+                self.max_uniform_binding / 1024
+            )));
+        }
+        if self.max_accum_pixels == 0 {
+            return Err(RaytraceError::TooLarge(
+                "device storage-buffer limits are too small for the path-tracer film"
+                    .into(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn check_storage(&self, bytes: u64, label: &str) -> Result<(), RaytraceError> {
+        if bytes > self.max_storage_binding {
+            return Err(RaytraceError::TooLarge(format!(
+                "{label} is {} MB but this device's storage-buffer binding limit is {} MB",
+                bytes / (1 << 20),
+                self.max_storage_binding / (1 << 20)
+            )));
+        }
+        if bytes > self.max_buffer_size {
+            return Err(RaytraceError::TooLarge(format!(
+                "{label} is {} MB but this device's max buffer size is {} MB",
+                bytes / (1 << 20),
+                self.max_buffer_size / (1 << 20)
+            )));
+        }
+        Ok(())
+    }
+
+    pub fn check_film(&self, width: u32, height: u32) -> Result<(), RaytraceError> {
+        let pixels = width as u64 * height as u64;
+        if pixels > self.max_accum_pixels {
+            let side = isqrt_u64(self.max_accum_pixels) as u32;
+            return Err(RaytraceError::TooLarge(format!(
+                "film {width}×{height} ({} Mpx) exceeds this device's {} Mpx accum limit (~{side}×{side} max)",
+                pixels / 1_000_000,
+                self.max_accum_pixels / 1_000_000
+            )));
+        }
+        Ok(())
+    }
+
+    pub fn check_texture_upload(&self, width: u32, height: u32) -> Result<(), RaytraceError> {
+        if width > self.max_texture_2d || height > self.max_texture_2d {
+            return Err(RaytraceError::TooLarge(format!(
+                "atlas upload {width}×{height} exceeds max_texture_dimension_2d ({})",
+                self.max_texture_2d
+            )));
+        }
+        Ok(())
+    }
+
+    /// Largest square film side the accum buffer can cover on this device.
+    pub fn max_film_side(&self) -> u32 {
+        isqrt_u64(self.max_accum_pixels).max(1) as u32
+    }
+
+    /// Shrink a requested film size to fit [`Self::max_accum_pixels`], preserving
+    /// aspect ratio when possible.
+    pub fn clamp_film_size(&self, width: u32, height: u32) -> (u32, u32) {
+        let mut w = width.max(1);
+        let mut h = height.max(1);
+        if self.check_film(w, h).is_ok() {
+            return (w, h);
+        }
+        let max_side = self.max_film_side();
+        let scale = (max_side as f64 / w.max(h) as f64).min(1.0);
+        w = ((w as f64 * scale).floor() as u32).max(1);
+        h = ((h as f64 * scale).floor() as u32).max(1);
+        while w > 1 && h > 1 && self.check_film(w, h).is_err() {
+            if w >= h {
+                w -= 1;
+            } else {
+                h -= 1;
+            }
+        }
+        (w, h)
+    }
+}
+
+fn isqrt_u64(n: u64) -> u64 {
+    if n == 0 {
+        return 0;
+    }
+    let mut x = n;
+    let mut y = x.div_ceil(2);
+    while y < x {
+        x = y;
+        y = (x + n / x) / 2;
+    }
+    x
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -101,6 +259,21 @@ struct Uniforms {
     env_dims: [u32; 4],
     env_rect: [[f32; 4]; 6],
     hemi: [[f32; 4]; 12],
+    /// Previous-frame camera for motion blur. Valid when `params[3] > 0`.
+    motion_inv_view: [f32; 16],
+    motion_inv_proj: [f32; 16],
+    motion_prev: [f32; 4],
+    motion_prev_right: [f32; 4],
+    motion_prev_up: [f32; 4],
+    motion_prev_forward: [f32; 4],
+    /// Pixel clip: x, y, width, height. Width `0` means the full frame.
+    clip: [u32; 4],
+    /// x = scene scale, y = sample redistribution flag, zw unused.
+    render_params: [f32; 4],
+    /// rgb + mode (`0` off, `1` linear, `2` exp2).
+    fog_color: [f32; 4],
+    /// near, far, density, unused.
+    fog_params: [f32; 4],
     albedo_lut: [[f32; 4]; 256],
 }
 
@@ -156,6 +329,11 @@ pub struct GpuBackend {
     offsets: Option<Offsets>,
     /// Samples traced per dispatch.
     samples_per_dispatch: u32,
+    /// Skip readback after region traces; [`Self::sync_film`] pulls once.
+    defer_readback: bool,
+    /// Device accumulator is ahead of the host [`Film`] pixel buffers.
+    readback_pending: bool,
+    caps: GpuCaps,
     notes: Vec<String>,
 }
 
@@ -171,9 +349,22 @@ impl std::fmt::Debug for GpuBackend {
 impl GpuBackend {
     /// Acquire an adapter and build a device of our own. Blocking; native only.
     ///
-    /// Prefer [`Self::with_device`] when the process already has a device — two
-    /// devices means two copies of every resource and no way to share them.
+    /// On `wasm32`, use [`Self::headless_browser`].
     pub fn headless() -> Result<Self, RaytraceError> {
+        #[cfg(target_arch = "wasm32")]
+        {
+            return Err(RaytraceError::NoDevice(
+                "GpuBackend::headless is blocking and native-only; use headless_browser()".into(),
+            ));
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            Self::headless_sync()
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn headless_sync() -> Result<Self, RaytraceError> {
         // No `Default` for `InstanceDescriptor` in wgpu 30: a display handle is
         // either present or deliberately absent, and this path is headless.
         let mut instance_desc = wgpu::InstanceDescriptor::new_without_display_handle();
@@ -197,12 +388,40 @@ impl GpuBackend {
             &wgpu::DeviceDescriptor {
                 label: Some("threers path tracer"),
                 required_features: wgpu::Features::empty(),
-                required_limits: limits,
+                required_limits: Self::request_limits(&limits),
                 ..Default::default()
             },
         ))
         .map_err(|e| RaytraceError::NoDevice(format!("request_device failed: {e:?}")))?;
 
+        Ok(Self::with_device(Arc::new(device), Arc::new(queue)))
+    }
+
+    /// Acquire a WebGPU adapter in the browser. Async; wasm only.
+    #[cfg(target_arch = "wasm32")]
+    pub async fn headless_browser() -> Result<Self, RaytraceError> {
+        let mut instance_desc = wgpu::InstanceDescriptor::new_without_display_handle();
+        instance_desc.backends = wgpu::Backends::BROWSER_WEBGPU;
+        let instance = wgpu::Instance::new(instance_desc);
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                compatible_surface: None,
+                force_fallback_adapter: false,
+                apply_limit_buckets: false,
+            })
+            .await
+            .map_err(|e| RaytraceError::NoDevice(format!("no wgpu adapter: {e}")))?;
+        let limits = adapter.limits();
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor {
+                label: Some("threers path tracer"),
+                required_features: wgpu::Features::empty(),
+                required_limits: Self::request_limits(&limits),
+                ..Default::default()
+            })
+            .await
+            .map_err(|e| RaytraceError::NoDevice(format!("request_device failed: {e:?}")))?;
         Ok(Self::with_device(Arc::new(device), Arc::new(queue)))
     }
 
@@ -278,6 +497,7 @@ impl GpuBackend {
             cache: None,
         });
 
+        let caps = GpuCaps::from_device(&device);
         Self {
             device,
             queue,
@@ -286,8 +506,35 @@ impl GpuBackend {
             resources: None,
             offsets: None,
             samples_per_dispatch: 4,
+            defer_readback: true,
+            readback_pending: false,
+            caps,
             notes: Vec::new(),
         }
+    }
+
+    /// Limits the path tracer will respect on this device.
+    pub fn caps(&self) -> GpuCaps {
+        self.caps
+    }
+
+    /// Merge downlevel portability floors with whatever the adapter can actually
+    /// do. wgpu/WASM/WebGL2 share a conservative baseline; Metal/CUDA stacks
+    /// behind the same wgpu surface usually expose the adapter maximum.
+    fn request_limits(adapter: &wgpu::Limits) -> wgpu::Limits {
+        let mut limits = wgpu::Limits::downlevel_defaults().using_resolution(adapter.clone());
+        limits.max_storage_buffer_binding_size = adapter.max_storage_buffer_binding_size;
+        limits.max_buffer_size = adapter.max_buffer_size;
+        limits.max_uniform_buffer_binding_size = adapter
+            .max_uniform_buffer_binding_size
+            .max(limits.max_uniform_buffer_binding_size);
+        limits.max_compute_workgroup_size_x = adapter
+            .max_compute_workgroup_size_x
+            .max(limits.max_compute_workgroup_size_x);
+        limits.max_compute_workgroup_size_y = adapter
+            .max_compute_workgroup_size_y
+            .max(limits.max_compute_workgroup_size_y);
+        limits
     }
 
     /// Samples traced per dispatch. Larger amortises submission overhead;
@@ -298,8 +545,59 @@ impl GpuBackend {
         self
     }
 
+    /// Samples traced per compute dispatch (GPU watchdog batching).
+    pub fn set_samples_per_dispatch(&mut self, n: u32) {
+        self.samples_per_dispatch = n.max(1);
+    }
+
+    pub fn samples_per_dispatch(&self) -> u32 {
+        self.samples_per_dispatch
+    }
+
+    /// When `true` (default), [`Self::render_regions`] skips readback until
+    /// [`Self::sync_film`]. Full-frame [`RaytraceBackend::render`] always syncs.
+    pub fn set_defer_readback(&mut self, on: bool) {
+        self.defer_readback = on;
+    }
+
+    pub fn defer_readback(&self) -> bool {
+        self.defer_readback
+    }
+
+    /// Whether the device accumulator has samples not yet copied to `film`.
+    pub fn readback_pending(&self) -> bool {
+        self.readback_pending
+    }
+
+    /// Whether scene BVH buffers are already resident on the device.
+    pub fn scene_on_device(&self) -> bool {
+        self.resources.is_some()
+    }
+
+    /// Drop deferred readback and force the next trace to re-seed the device
+    /// accum buffer from the host `film`, without repacking scene geometry.
+    pub fn reset_accum(&mut self) {
+        self.readback_pending = false;
+        if let Some(res) = self.resources.as_mut() {
+            res.accum_samples = None;
+        }
+    }
+
+    /// Copy the full device film into `film` when a deferred region trace ran.
+    pub fn sync_film(&mut self, film: &mut Film) -> Result<(), RaytraceError> {
+        if !self.readback_pending {
+            return Ok(());
+        }
+        let Some(res) = self.resources.as_ref() else {
+            return Err(RaytraceError::NoDevice("scene was not prepared".into()));
+        };
+        readback_full(&self.device, &self.queue, &res.accum, film)?;
+        self.readback_pending = false;
+        Ok(())
+    }
+
     /// What the packing could not carry over — a texture that did not fit the
-    /// atlas, a UV rotation the kernel does not apply.
+    /// atlas.
     pub fn report(&self) -> &[String] {
         &self.notes
     }
@@ -334,18 +632,22 @@ impl GpuBackend {
             }
         }
 
-        let packed = pack_scene(scene);
+        let packed = pack_scene(scene, self.caps);
         self.notes = packed.notes.clone();
 
-        let limits = self.device.limits();
+        self.caps.validate_kernel()?;
+
+        let nodes_bytes = (packed.nodes.len() * 4) as u64;
         let data_bytes = (packed.data.len() * 4) as u64;
-        if data_bytes > limits.max_storage_buffer_binding_size {
-            return Err(RaytraceError::TooLarge(format!(
-                "scene geometry is {} MB, past this device's {} MB storage-buffer limit",
-                data_bytes / (1 << 20),
-                limits.max_storage_buffer_binding_size / (1 << 20)
-            )));
-        }
+        let idx_bytes = (packed.idx.len() * 4) as u64;
+        self.caps.check_storage(nodes_bytes, "BVH nodes")?;
+        self.caps.check_storage(data_bytes, "scene geometry")?;
+        self.caps.check_storage(idx_bytes, "scene indices")?;
+        self.caps.check_film(film.width(), film.height())?;
+
+        let accum_len = film.width() as usize * film.height() as usize * ACCUM_STRIDE;
+        let accum_bytes = (accum_len * 4) as u64;
+        self.caps.check_storage(accum_bytes, "film accum")?;
 
         let mk = |label: &str, contents: &[u8], usage: wgpu::BufferUsages| {
             use wgpu::util::DeviceExt;
@@ -390,7 +692,6 @@ impl GpuBackend {
             wgpu::BufferUsages::STORAGE,
         );
 
-        let accum_len = film.width() as usize * film.height() as usize * ACCUM_STRIDE;
         let accum = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("pathtrace accum"),
             size: (accum_len * 4) as u64,
@@ -409,7 +710,7 @@ impl GpuBackend {
             mapped_at_creation: false,
         });
 
-        let atlas_view = packed.atlas.upload(&self.device, &self.queue);
+        let atlas_view = packed.atlas.upload(&self.device, &self.queue, self.caps);
 
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("pathtrace bind group"),
@@ -504,9 +805,18 @@ impl RaytraceBackend for GpuBackend {
         "gpu"
     }
 
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+
     fn invalidate(&mut self) {
         self.resources = None;
         self.offsets = None;
+        self.readback_pending = false;
+    }
+
+    fn gpu_caps(&self) -> Option<GpuCaps> {
+        Some(self.caps)
     }
 
     fn render(
@@ -518,20 +828,108 @@ impl RaytraceBackend for GpuBackend {
         first_sample: u32,
         samples: u32,
     ) -> Result<(), RaytraceError> {
+        self.render_clipped(scene, camera, settings, film, first_sample, samples, None)
+    }
+}
+
+impl GpuBackend {
+    /// Trace only pixels inside `rect`. Untouched pixels keep their accumulators.
+    pub fn render_rect(
+        &mut self,
+        scene: &RaytraceScene,
+        camera: &RtCamera,
+        settings: &RaytraceSettings,
+        film: &mut Film,
+        first_sample: u32,
+        samples: u32,
+        rect: super::RenderRect,
+    ) -> Result<(), RaytraceError> {
+        self.render_regions(
+            scene,
+            camera,
+            settings,
+            film,
+            first_sample,
+            samples,
+            std::slice::from_ref(&rect),
+        )
+    }
+
+    /// Trace several disjoint regions in one GPU submission.
+    pub fn render_regions(
+        &mut self,
+        scene: &RaytraceScene,
+        camera: &RtCamera,
+        settings: &RaytraceSettings,
+        film: &mut Film,
+        first_sample: u32,
+        samples: u32,
+        regions: &[super::RenderRect],
+    ) -> Result<(), RaytraceError> {
+        if samples == 0 || regions.is_empty() {
+            return Ok(());
+        }
+        self.trace_regions(
+            scene,
+            camera,
+            settings,
+            film,
+            first_sample,
+            samples,
+            ReadbackScope::Regions(regions),
+        )
+    }
+
+    fn render_clipped(
+        &mut self,
+        scene: &RaytraceScene,
+        camera: &RtCamera,
+        settings: &RaytraceSettings,
+        film: &mut Film,
+        first_sample: u32,
+        samples: u32,
+        clip: Option<super::RenderRect>,
+    ) -> Result<(), RaytraceError> {
         if samples == 0 {
             return Ok(());
         }
+        match clip {
+            None => self.trace_regions(
+                scene,
+                camera,
+                settings,
+                film,
+                first_sample,
+                samples,
+                ReadbackScope::Full,
+            ),
+            Some(r) => self.render_regions(
+                scene,
+                camera,
+                settings,
+                film,
+                first_sample,
+                samples,
+                std::slice::from_ref(&r),
+            ),
+        }
+    }
+
+    fn trace_regions(
+        &mut self,
+        scene: &RaytraceScene,
+        camera: &RtCamera,
+        settings: &RaytraceSettings,
+        film: &mut Film,
+        first_sample: u32,
+        samples: u32,
+        scope: ReadbackScope<'_>,
+    ) -> Result<(), RaytraceError> {
         self.ensure_resources(scene, film)?;
         let (Some(res), Some(off)) = (self.resources.as_ref(), self.offsets) else {
             return Err(RaytraceError::NoDevice("scene was not prepared".into()));
         };
 
-        // The film may already hold samples — from an earlier batch, or from
-        // another backend entirely — so the device accumulator has to start
-        // from what it holds. When the previous call is what put those samples
-        // there, the device copy is already correct and the upload is skipped:
-        // a progressive render at 1080p would otherwise push 99 MB per batch to
-        // restore a buffer that never changed.
         if res.accum_samples != Some(film.samples()) {
             let mut seed_accum = vec![0.0f32; res.accum_len];
             for (i, p) in film.pixels().iter().enumerate() {
@@ -548,91 +946,104 @@ impl RaytraceBackend for GpuBackend {
                 seed_accum[b + 9] = p.normal[2];
                 seed_accum[b + 10] = p.depth;
                 seed_accum[b + 11] = p.depth_samples as f32;
+                seed_accum[b + 12] = p.samples as f32;
+                seed_accum[b + 13] = p.lum_sq;
             }
             self.queue
                 .write_buffer(&res.accum, 0, bytemuck::cast_slice(&seed_accum));
         }
 
-        // The same value the CPU integrator computes — the two backends have to
-        // agree on where a secondary ray starts, or they disagree about
-        // self-intersection.
         let epsilon = super::integrator::ray_epsilon(scene, settings);
-        let mut uniforms = build_uniforms(scene, camera, settings, film, &off, epsilon);
-
-        let groups_x = film.width().div_ceil(8);
-        let groups_y = film.height().div_ceil(8);
+        let clip_for_uniforms = match scope {
+            ReadbackScope::Full => None,
+            ReadbackScope::Regions(regions) if regions.len() == 1 => Some(regions[0]),
+            ReadbackScope::Regions(_) => None,
+        };
+        let mut uniforms =
+            build_uniforms(scene, camera, settings, film, &off, epsilon, clip_for_uniforms);
 
         let mut done = 0u32;
         while done < samples {
             let batch = self.samples_per_dispatch.min(samples - done);
             uniforms.dims[2] = first_sample + done;
             uniforms.dims[3] = batch;
-            self.queue
-                .write_buffer(&res.uniform, 0, bytemuck::bytes_of(&uniforms));
 
-            let mut encoder = self
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("pathtrace batch"),
-                });
-            {
-                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some("pathtrace"),
-                    timestamp_writes: None,
-                });
-                pass.set_pipeline(&self.pipeline);
-                pass.set_bind_group(0, &res.bind_group, &[]);
-                pass.dispatch_workgroups(groups_x, groups_y, 1);
+            match scope {
+                ReadbackScope::Full => {
+                    self.queue.write_buffer(
+                        &res.uniform,
+                        0,
+                        bytemuck::bytes_of(&uniforms),
+                    );
+                    let mut encoder = self.device.create_command_encoder(
+                        &wgpu::CommandEncoderDescriptor {
+                            label: Some("pathtrace batch"),
+                        },
+                    );
+                    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("pathtrace"),
+                        timestamp_writes: None,
+                    });
+                    pass.set_pipeline(&self.pipeline);
+                    pass.set_bind_group(0, &res.bind_group, &[]);
+                    pass.dispatch_workgroups(
+                        film.width().div_ceil(8),
+                        film.height().div_ceil(8),
+                        1,
+                    );
+                    drop(pass);
+                    self.queue.submit(Some(encoder.finish()));
+                }
+                ReadbackScope::Regions(regions) => {
+                    for region in regions {
+                        uniforms.clip = [
+                            region.x,
+                            region.y,
+                            region.width,
+                            region.height,
+                        ];
+                        self.queue.write_buffer(
+                            &res.uniform,
+                            0,
+                            bytemuck::bytes_of(&uniforms),
+                        );
+                        let mut encoder = self.device.create_command_encoder(
+                            &wgpu::CommandEncoderDescriptor {
+                                label: Some("pathtrace batch"),
+                            },
+                        );
+                        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                            label: Some("pathtrace region"),
+                            timestamp_writes: None,
+                        });
+                        pass.set_pipeline(&self.pipeline);
+                        pass.set_bind_group(0, &res.bind_group, &[]);
+                        pass.dispatch_workgroups(
+                            region.width.div_ceil(8),
+                            region.height.div_ceil(8),
+                            1,
+                        );
+                        drop(pass);
+                        self.queue.submit(Some(encoder.finish()));
+                    }
+                }
             }
-            self.queue.submit(Some(encoder.finish()));
             done += batch;
         }
 
-        // One readback for the whole call, not one per batch.
-        let bytes = (res.accum_len * 4) as u64;
-        let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("pathtrace readback"),
-            size: bytes,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("pathtrace readback"),
-            });
-        encoder.copy_buffer_to_buffer(&res.accum, 0, &staging, 0, bytes);
-        self.queue.submit(Some(encoder.finish()));
-
-        let slice = staging.slice(..);
-        let (tx, rx) = std::sync::mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |r| {
-            let _ = tx.send(r);
-        });
-        let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
-        match rx.recv() {
-            Ok(Ok(())) => {}
-            other => {
-                return Err(RaytraceError::DeviceLost(format!(
-                    "readback failed: {other:?}"
-                )))
-            }
+        let defer = self.defer_readback && matches!(scope, ReadbackScope::Regions(_));
+        if defer {
+            self.readback_pending = true;
+        } else {
+            readback_film(
+                &self.device,
+                &self.queue,
+                &res.accum,
+                film,
+                scope,
+            )?;
+            self.readback_pending = false;
         }
-        let mapped = slice.get_mapped_range().expect("buffer range is mapped");
-        let values: &[f32] = bytemuck::cast_slice(&mapped);
-        for (i, p) in film.pixels_mut().iter_mut().enumerate() {
-            let b = i * ACCUM_STRIDE;
-            p.color = [values[b], values[b + 1], values[b + 2]];
-            p.alpha = values[b + 3];
-            p.albedo = [values[b + 4], values[b + 5], values[b + 6]];
-            p.normal = [values[b + 7], values[b + 8], values[b + 9]];
-            p.depth = values[b + 10];
-            p.depth_samples = values[b + 11] as u32;
-            p.samples = values[b + 12] as u32;
-            p.lum_sq = values[b + 13];
-        }
-        drop(mapped);
-        staging.unmap();
 
         film.advance(samples);
         if let Some(res) = self.resources.as_mut() {
@@ -642,6 +1053,173 @@ impl RaytraceBackend for GpuBackend {
     }
 }
 
+enum ReadbackScope<'a> {
+    Full,
+    Regions(&'a [super::RenderRect]),
+}
+
+fn apply_accum_pixel(p: &mut Pixel, values: &[f32], b: usize) {
+    p.color = [values[b], values[b + 1], values[b + 2]];
+    p.alpha = values[b + 3];
+    p.albedo = [values[b + 4], values[b + 5], values[b + 6]];
+    p.normal = [values[b + 7], values[b + 8], values[b + 9]];
+    p.depth = values[b + 10];
+    p.depth_samples = values[b + 11] as u32;
+    p.samples = values[b + 12] as u32;
+    p.lum_sq = values[b + 13];
+}
+
+fn readback_film(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    accum: &wgpu::Buffer,
+    film: &mut Film,
+    scope: ReadbackScope<'_>,
+) -> Result<(), RaytraceError> {
+    let fw = film.width();
+    match scope {
+        ReadbackScope::Full => readback_full(device, queue, accum, film),
+        ReadbackScope::Regions(regions) if regions.len() == 1 => {
+            readback_one_region(device, queue, accum, film, fw, regions[0])
+        }
+        ReadbackScope::Regions(regions) => {
+            readback_many_regions(device, queue, accum, film, fw, regions)
+        }
+    }
+}
+
+fn readback_full(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    accum: &wgpu::Buffer,
+    film: &mut Film,
+) -> Result<(), RaytraceError> {
+    let staging_bytes = (film.pixels().len() * ACCUM_STRIDE * 4) as u64;
+    let staging = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("pathtrace readback"),
+        size: staging_bytes.max(4),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("pathtrace readback"),
+    });
+    encoder.copy_buffer_to_buffer(accum, 0, &staging, 0, staging_bytes);
+    queue.submit(Some(encoder.finish()));
+    let values = map_staging_f32(device, &staging)?;
+    for (i, p) in film.pixels_mut().iter_mut().enumerate() {
+        apply_accum_pixel(p, &values, i * ACCUM_STRIDE);
+    }
+    Ok(())
+}
+
+fn readback_one_region(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    accum: &wgpu::Buffer,
+    film: &mut Film,
+    fw: u32,
+    r: super::RenderRect,
+) -> Result<(), RaytraceError> {
+    let row_bytes = r.width as u64 * ACCUM_STRIDE as u64 * 4;
+    let staging_bytes = row_bytes * r.height as u64;
+    let staging = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("pathtrace readback"),
+        size: staging_bytes.max(4),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("pathtrace readback"),
+    });
+    for row in 0..r.height {
+        let src = ((r.y + row) * fw + r.x) as u64 * ACCUM_STRIDE as u64 * 4;
+        let dst = row as u64 * row_bytes;
+        encoder.copy_buffer_to_buffer(accum, src, &staging, dst, row_bytes);
+    }
+    queue.submit(Some(encoder.finish()));
+    let values = map_staging_f32(device, &staging)?;
+    let row_floats = (row_bytes / 4) as usize;
+    for row in 0..r.height {
+        for col in 0..r.width {
+            let staging_base = row as usize * row_floats + col as usize * ACCUM_STRIDE;
+            let idx = (r.y + row) as usize * fw as usize + (r.x + col) as usize;
+            apply_accum_pixel(&mut film.pixels_mut()[idx], &values, staging_base);
+        }
+    }
+    Ok(())
+}
+
+fn readback_many_regions(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    accum: &wgpu::Buffer,
+    film: &mut Film,
+    fw: u32,
+    regions: &[super::RenderRect],
+) -> Result<(), RaytraceError> {
+    let mut layouts = Vec::with_capacity(regions.len());
+    let mut staging_bytes = 0u64;
+    for r in regions {
+        let row_bytes = r.width as u64 * ACCUM_STRIDE as u64 * 4;
+        layouts.push(( *r, staging_bytes, row_bytes));
+        staging_bytes += row_bytes * r.height as u64;
+    }
+    let staging = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("pathtrace readback"),
+        size: staging_bytes.max(4),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("pathtrace readback"),
+    });
+    for (r, base, row_bytes) in &layouts {
+        for row in 0..r.height {
+            let src = ((r.y + row) * fw + r.x) as u64 * ACCUM_STRIDE as u64 * 4;
+            let dst = *base + row as u64 * *row_bytes;
+            encoder.copy_buffer_to_buffer(accum, src, &staging, dst, *row_bytes);
+        }
+    }
+    queue.submit(Some(encoder.finish()));
+    let values = map_staging_f32(device, &staging)?;
+    for (r, base, row_bytes) in layouts {
+        let row_floats = (row_bytes / 4) as usize;
+        let base = base as usize / 4;
+        for row in 0..r.height {
+            for col in 0..r.width {
+                let staging_base =
+                    base + row as usize * row_floats + col as usize * ACCUM_STRIDE;
+                let idx = (r.y + row) as usize * fw as usize + (r.x + col) as usize;
+                apply_accum_pixel(&mut film.pixels_mut()[idx], &values, staging_base);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn map_staging_f32(device: &wgpu::Device, staging: &wgpu::Buffer) -> Result<Vec<f32>, RaytraceError> {
+    let slice = staging.slice(..);
+    let (tx, rx) = std::sync::mpsc::channel();
+    slice.map_async(wgpu::MapMode::Read, move |r| {
+        let _ = tx.send(r);
+    });
+    let _ = device.poll(wgpu::PollType::wait_indefinitely());
+    match rx.recv() {
+        Ok(Ok(())) => {}
+        other => {
+            return Err(RaytraceError::DeviceLost(format!(
+                "readback failed: {other:?}"
+            )))
+        }
+    }
+    let mapped = slice.get_mapped_range().expect("buffer range is mapped");
+    let values: Vec<f32> = bytemuck::cast_slice(&mapped).to_vec();
+    drop(mapped);
+    staging.unmap();
+    Ok(values)
+}
+
 fn build_uniforms(
     scene: &RaytraceScene,
     camera: &RtCamera,
@@ -649,6 +1227,7 @@ fn build_uniforms(
     film: &Film,
     off: &Offsets,
     epsilon: f32,
+    clip: Option<super::RenderRect>,
 ) -> Uniforms {
     let inv_view = camera.inv_view_matrix();
     let inv_proj = camera.inv_proj_matrix();
@@ -671,6 +1250,22 @@ fn build_uniforms(
     if scene.shadows_all_opaque {
         flags |= 2;
     }
+    // Biased glass-shadow caustic hops (matches CPU visibility).
+    if settings.caustic_glass_shadows {
+        flags |= 4;
+    }
+
+    let motion_fields = motion_uniforms(camera);
+    let motion_shutter = if camera.motion_shutter() > 0.0 && camera.motion_previous().is_some() {
+        camera.motion_shutter()
+    } else {
+        0.0
+    };
+    let clip_arr = match clip {
+        Some(r) => [r.x, r.y, r.width, r.height],
+        None => [0, 0, 0, 0],
+    };
+    let redistribute = settings.sample_redistribution && settings.adaptive_threshold > 0.0;
 
     Uniforms {
         cam_pos: [
@@ -719,7 +1314,7 @@ fn build_uniforms(
             settings.clamp_direct,
             settings.clamp_indirect,
             off.env_dist_total,
-            0.0,
+            motion_shutter,
         ],
         adaptive: [
             settings.adaptive_threshold,
@@ -755,8 +1350,60 @@ fn build_uniforms(
         ],
         env_rect: off.env_rect,
         hemi: off.hemi,
+        motion_inv_view: motion_fields.0,
+        motion_inv_proj: motion_fields.1,
+        motion_prev: motion_fields.2,
+        motion_prev_right: motion_fields.3,
+        motion_prev_up: motion_fields.4,
+        motion_prev_forward: motion_fields.5,
+        clip: clip_arr,
+        render_params: [
+            scene.scale(),
+            if redistribute { 1.0 } else { 0.0 },
+            0.0,
+            0.0,
+        ],
+        fog_color: [
+            scene.world.fog_color.x,
+            scene.world.fog_color.y,
+            scene.world.fog_color.z,
+            scene.world.fog_mode as f32,
+        ],
+        fog_params: [
+            scene.world.fog_near,
+            scene.world.fog_far,
+            scene.world.fog_density,
+            0.0,
+        ],
         albedo_lut: lut,
     }
+}
+
+/// Two matrices and four vectors: the previous view-projection, the current
+/// one, and the shutter's origin and direction deltas.
+type MotionUniforms = ([f32; 16], [f32; 16], [f32; 4], [f32; 4], [f32; 4], [f32; 4]);
+
+fn motion_uniforms(camera: &RtCamera) -> MotionUniforms {
+    let Some(prev) = camera.motion_previous() else {
+        return ([0.0; 16], [0.0; 16], [0.0; 4], [0.0; 4], [0.0; 4], [0.0; 4]);
+    };
+    if camera.motion_shutter() <= 0.0 {
+        return ([0.0; 16], [0.0; 16], [0.0; 4], [0.0; 4], [0.0; 4], [0.0; 4]);
+    }
+    let p = prev.position();
+    (
+        prev.inv_view_matrix().elements,
+        prev.inv_proj_matrix().elements,
+        [
+            p.x,
+            p.y,
+            p.z,
+            if prev.is_perspective() { 1.0 } else { 0.0 },
+        ],
+        [prev.right().x, prev.right().y, prev.right().z, 0.0],
+        [prev.up().x, prev.up().y, prev.up().z, 0.0],
+        [prev.forward().x, prev.forward().y, prev.forward().z, 0.0],
+    )
 }
 
 // ------------------------------------------------------------------- packing
@@ -766,6 +1413,7 @@ fn build_uniforms(
 /// texture in each — simple, and within a few percent of optimal for the
 /// power-of-two sizes textures actually are.
 struct Atlas {
+    side: u32,
     pixels: Vec<u16>,
     shelf_x: u32,
     shelf_y: u32,
@@ -778,8 +1426,9 @@ struct Atlas {
 }
 
 impl Atlas {
-    fn new() -> Self {
+    fn new(side: u32) -> Self {
         Self {
+            side: side.max(256),
             pixels: Vec::new(),
             shelf_x: 0,
             shelf_y: 0,
@@ -803,7 +1452,7 @@ impl Atlas {
 
     fn ensure_allocated(&mut self) {
         if self.pixels.is_empty() {
-            self.pixels = vec![0u16; (ATLAS_SIZE * ATLAS_SIZE * 4) as usize];
+            self.pixels = vec![0u16; (self.side * self.side * 4) as usize];
         }
     }
 
@@ -811,15 +1460,15 @@ impl Atlas {
     /// not fit.
     fn insert(&mut self, tex: &CpuTexture) -> Option<[f32; 4]> {
         let (w, h) = (tex.width(), tex.height());
-        if w == 0 || h == 0 || w > ATLAS_SIZE || h > ATLAS_SIZE {
+        if w == 0 || h == 0 || w > self.side || h > self.side {
             return None;
         }
-        if self.shelf_x + w + ATLAS_PAD > ATLAS_SIZE {
+        if self.shelf_x + w + ATLAS_PAD > self.side {
             self.shelf_y += self.shelf_height + ATLAS_PAD;
             self.shelf_x = 0;
             self.shelf_height = 0;
         }
-        if self.shelf_y + h > ATLAS_SIZE {
+        if self.shelf_y + h > self.side {
             return None;
         }
         self.ensure_allocated();
@@ -831,7 +1480,7 @@ impl Atlas {
             let src_y = if flip { h - 1 - y } else { y };
             for x in 0..w {
                 let c = tex.texel_at(x, src_y);
-                let d = (((y0 + y) * ATLAS_SIZE + x0 + x) * 4) as usize;
+                let d = (((y0 + y) * self.side + x0 + x) * 4) as usize;
                 for (dst, v) in self.pixels[d..d + 4].iter_mut().zip(c) {
                     // Clamped to the largest finite half. An HDR environment
                     // can legitimately hold values past this, and letting one
@@ -857,23 +1506,28 @@ impl Atlas {
     /// at full width so the shelf arithmetic stays simple; only the upload is
     /// cropped, and since rectangles are measured from the origin they stay
     /// valid.
-    fn upload(self, device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::TextureView {
+    fn upload(self, device: &wgpu::Device, queue: &wgpu::Queue, caps: GpuCaps) -> wgpu::TextureView {
         let used_w = self.used_width.max(1);
         let used_h = (self.shelf_y + self.shelf_height).max(1);
-        let mut pixels = vec![0u16; (used_w * used_h * 4) as usize];
-        if !self.pixels.is_empty() {
-            for y in 0..used_h {
-                let src = (y * ATLAS_SIZE * 4) as usize;
-                let dst = (y * used_w * 4) as usize;
-                let n = (used_w * 4) as usize;
-                pixels[dst..dst + n].copy_from_slice(&self.pixels[src..src + n]);
+        let (upload_w, upload_h, pixels) = if caps.check_texture_upload(used_w, used_h).is_ok() {
+            let mut pixels = vec![0u16; (used_w * used_h * 4) as usize];
+            if !self.pixels.is_empty() {
+                for y in 0..used_h {
+                    let src = (y * self.side * 4) as usize;
+                    let dst = (y * used_w * 4) as usize;
+                    let n = (used_w * 4) as usize;
+                    pixels[dst..dst + n].copy_from_slice(&self.pixels[src..src + n]);
+                }
             }
-        }
+            (used_w, used_h, pixels)
+        } else {
+            (1u32, 1u32, vec![0u16; 4])
+        };
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("pathtrace atlas"),
             size: wgpu::Extent3d {
-                width: used_w,
-                height: used_h,
+                width: upload_w,
+                height: upload_h,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
@@ -893,12 +1547,12 @@ impl Atlas {
             bytemuck::cast_slice(&pixels),
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(used_w * 8),
-                rows_per_image: Some(used_h),
+                bytes_per_row: Some(upload_w * 8),
+                rows_per_image: Some(upload_h),
             },
             wgpu::Extent3d {
-                width: used_w,
-                height: used_h,
+                width: upload_w,
+                height: upload_h,
                 depth_or_array_layers: 1,
             },
         );
@@ -915,10 +1569,16 @@ fn wrap_code(w: TextureWrap) -> u32 {
 }
 
 /// Flatten the scene into the four device buffers.
-fn pack_scene(scene: &RaytraceScene) -> Packed {
+fn pack_scene(scene: &RaytraceScene, caps: GpuCaps) -> Packed {
     let n_tris = scene.tris.len();
-    let mut atlas = Atlas::new();
+    let mut atlas = Atlas::new(caps.atlas_side);
     let mut notes: Vec<String> = Vec::new();
+    if caps.atlas_side < ATLAS_SIZE {
+        notes.push(format!(
+            "atlas capped at {}² texels (device max texture {}); oversized maps use material constants",
+            caps.atlas_side, caps.max_texture_2d
+        ));
+    }
 
     // --- nodes: two vec4 each, with the child links bitcast into `w`.
     let mut nodes = Vec::with_capacity(scene.bvh.node_count() * 8);
@@ -989,13 +1649,26 @@ fn pack_scene(scene: &RaytraceScene) -> Packed {
         s[21] = m.anisotropy;
         s[22] = m.anisotropy_rotation;
         s[23] = if m.unlit { 1.0 } else { 0.0 };
-        s[64] = m.normal_scale.x;
-        s[65] = m.normal_scale.y;
+        s[24] = m.sheen;
+        s[25] = m.sheen_color.x;
+        s[26] = m.sheen_color.y;
+        s[27] = m.sheen_color.z;
+        s[28] = m.sheen_roughness;
+        s[29] = m.iridescence;
+        s[30] = m.iridescence_ior;
+        s[31] = m.iridescence_thickness;
+        s[32] = m.dispersion;
+        s[33] = m.subsurface;
+        s[34] = m.subsurface_radius.x;
+        s[35] = m.subsurface_radius.y;
+        s[84] = m.subsurface_radius.z;
+        s[81] = m.normal_scale.x;
+        s[82] = m.normal_scale.y;
 
         let mut wrap_bits = 0u32;
         for (slot, tex) in material_maps(m).iter().enumerate() {
             let Some(tex) = tex else { continue };
-            let o = 24 + slot * 8;
+            let o = 36 + slot * 9;
             match atlas.insert_shared(tex) {
                 Some(rect) => {
                     s[o..o + 4].copy_from_slice(&rect);
@@ -1004,17 +1677,10 @@ fn pack_scene(scene: &RaytraceScene) -> Packed {
                     s[o + 5] = offset.y;
                     s[o + 6] = repeat.x;
                     s[o + 7] = repeat.y;
-                    // Two bits an axis, S in the low half and T in the high —
-                    // a texture that repeats across but clamps down is rare and
-                    // would otherwise sample differently on the two backends.
+                    s[o + 8] = rotation;
                     let (wrap_s, wrap_t) = tex.wrap_modes();
                     wrap_bits |= wrap_code(wrap_s) << (slot * 2);
                     wrap_bits |= wrap_code(wrap_t) << (10 + slot * 2);
-                    if rotation != 0.0 {
-                        notes.push(format!(
-                            "material {mi}, map {slot}: UV rotation is not applied by the GPU kernel"
-                        ));
-                    }
                 }
                 None => notes.push(format!(
                     "material {mi}, map {slot}: {}x{} does not fit the atlas; the constant is used instead",
@@ -1023,7 +1689,7 @@ fn pack_scene(scene: &RaytraceScene) -> Packed {
                 )),
             }
         }
-        s[66] = wrap_bits as f32;
+        s[83] = wrap_bits as f32;
     }
 
     let light_base = data.len() as u32;
@@ -1223,6 +1889,10 @@ mod tests {
     use crate::materials::{Material, StandardMaterial};
     use crate::math::Color;
     use crate::raytrace::backend::CpuBackend;
+    use crate::raytrace::camera::RtCamera;
+    use crate::raytrace::film::Film;
+    use crate::raytrace::scene::RaytraceScene;
+    use crate::raytrace::settings::RaytraceSettings;
     use crate::scene::Scene;
 
     /// Machines without a usable adapter (CI containers, mostly) skip rather
@@ -1790,6 +2460,88 @@ mod tests {
         );
     }
 
+    /// Sample redistribution within an 8×8 workgroup must converge at least
+    /// as many pixels as uniform adaptive sampling on the same mixed scene.
+    #[test]
+    fn gpu_sample_redistribution_improves_convergence() {
+        let Some(mut gpu) = backend() else { return };
+        let build = || {
+            let mut scene = Scene::new();
+            scene.background = Color::new(0.05, 0.05, 0.06);
+            scene.add(Object3D::mesh(crate::core::Mesh::new(
+                PlaneGeometry::new(20.0, 20.0),
+                Material::Standard(StandardMaterial::new(Color::new(0.75, 0.75, 0.75))),
+            )));
+            scene.add(Object3D::mesh(crate::core::Mesh::new(
+                BoxGeometry::new(0.4, 0.4, 0.4),
+                Material::Standard(StandardMaterial::new(Color::new(0.9, 0.1, 0.1))),
+            )));
+            scene.add_light(AmbientLight::new(Color::WHITE, 0.4));
+            scene
+        };
+        let mut render = |redistribute: bool| {
+            let settings = RaytraceSettings {
+                samples_per_pixel: 64,
+                max_bounces: 3,
+                adaptive_threshold: 0.05,
+                adaptive_min_samples: 4,
+                sample_redistribution: redistribute,
+                denoise: false,
+                ..Default::default()
+            };
+            let mut scene = build();
+            let rt = RaytraceScene::build(&mut scene, &settings);
+            let cam = RtCamera::new(&camera(), &settings);
+            let mut film = Film::new(32, 32);
+            gpu.render(&rt, &cam, &settings, &mut film, 0, 64).unwrap();
+            let converged = film
+                .pixels()
+                .iter()
+                .filter(|p| {
+                    p.is_converged(settings.adaptive_threshold, settings.adaptive_min_samples)
+                })
+                .count();
+            converged as f32 / film.pixels().len() as f32
+        };
+        let (conv_off, conv_on) = (render(false), render(true));
+        assert!(
+            conv_on >= conv_off,
+            "gpu redistribution: {conv_on} vs {conv_off} converged fraction"
+        );
+    }
+
+    /// Welford M₂ on the GPU must track the CPU or adaptive budgets diverge.
+    #[test]
+    fn gpu_welford_variance_tracks_the_cpu() {
+        let Some(mut gpu) = backend() else { return };
+        let mut scene = lit_box_scene();
+        let settings = RaytraceSettings {
+            samples_per_pixel: 64,
+            max_bounces: 3,
+            adaptive_threshold: 0.02,
+            adaptive_min_samples: 8,
+            denoise: false,
+            ..Default::default()
+        };
+        let rt = RaytraceScene::build(&mut scene, &settings);
+        let cam = RtCamera::new(&camera(), &settings);
+
+        let mut g = Film::new(24, 24);
+        gpu.render(&rt, &cam, &settings, &mut g, 0, 64).unwrap();
+        let mut c = Film::new(24, 24);
+        CpuBackend::new()
+            .render(&rt, &cam, &settings, &mut c, 0, 64)
+            .unwrap();
+
+        let gv: f64 = g.resolve_variance().iter().filter(|v| v.is_finite()).map(|v| *v as f64).sum();
+        let cv: f64 = c.resolve_variance().iter().filter(|v| v.is_finite()).map(|v| *v as f64).sum();
+        assert!(gv > 0.0 && cv > 0.0);
+        assert!(
+            (gv - cv).abs() < 0.35 * cv.max(gv),
+            "variance totals diverged: gpu {gv}, cpu {cv}"
+        );
+    }
+
     /// Both backends have to map a direction to the same cube texel, on every
     /// face.
     ///
@@ -2169,5 +2921,183 @@ mod tests {
         let rgba = r.render_to_rgba(&mut scene, &cam);
         assert_eq!(rgba.len(), 32 * 32 * 4);
         assert!(rgba.chunks_exact(4).any(|p| p[0] > 8), "image is black");
+    }
+
+    /// Reproducibility on the GPU: batching must not change which random
+    /// sequence each pixel sees, or a progressive render flickers.
+    #[test]
+    fn gpu_batching_does_not_change_the_result() {
+        let Some(mut one_gpu) = backend() else { return };
+        let Some(mut split_gpu) = backend() else { return };
+        let mut scene = lit_box_scene();
+        let settings = RaytraceSettings {
+            samples_per_pixel: 8,
+            max_bounces: 3,
+            denoise: false,
+            adaptive_threshold: 0.0,
+            ..Default::default()
+        };
+        let cam = camera();
+        let rt = super::super::RaytraceScene::build(&mut scene, &settings);
+        let rtc = super::super::RtCamera::new(&cam, &settings);
+
+        let mut one = super::super::Film::new(12, 12);
+        one_gpu
+            .render(&rt, &rtc, &settings, &mut one, 0, 8)
+            .unwrap();
+
+        let mut split = super::super::Film::new(12, 12);
+        split_gpu = split_gpu.with_samples_per_dispatch(3);
+        split_gpu
+            .render(&rt, &rtc, &settings, &mut split, 0, 3)
+            .unwrap();
+        split_gpu
+            .render(&rt, &rtc, &settings, &mut split, 3, 5)
+            .unwrap();
+
+        let a = one.resolve_hdr();
+        let b = split.resolve_hdr();
+        for (i, (x, y)) in a.iter().zip(b.iter()).enumerate() {
+            assert!((x - y).abs() < 1e-5, "pixel value {i}: {x} vs {y}");
+        }
+    }
+
+    #[test]
+    fn gpu_render_rect_only_updates_the_requested_region() {
+        let Some(mut gpu) = backend() else { return };
+        let mut scene = Scene::new();
+        scene.background = Color::new(0.2, 0.3, 0.4);
+        let settings = RaytraceSettings {
+            samples_per_pixel: 4,
+            adaptive_threshold: 0.0,
+            sample_redistribution: false,
+            denoise: false,
+            ..Default::default()
+        };
+        let rt = RaytraceScene::build(&mut scene, &settings);
+        let cam = RtCamera::new(&camera(), &settings);
+        let mut film = Film::new(16, 16);
+        gpu.render_rect(
+            &rt,
+            &cam,
+            &settings,
+            &mut film,
+            0,
+            4,
+            super::super::RenderRect {
+                x: 2,
+                y: 3,
+                width: 4,
+                height: 2,
+            },
+        )
+        .unwrap();
+        gpu.sync_film(&mut film).unwrap();
+        let outside = 0;
+        let inside = (3 * 16 + 2) as usize;
+        assert_eq!(film.pixels()[outside].samples, 0);
+        assert_eq!(film.pixels()[inside].samples, 4);
+    }
+
+    #[test]
+    fn gpu_batched_regions_trace_every_requested_pixel() {
+        let Some(mut gpu) = backend() else { return };
+        let mut scene = Scene::new();
+        scene.background = Color::new(0.2, 0.3, 0.4);
+        let settings = RaytraceSettings {
+            samples_per_pixel: 4,
+            adaptive_threshold: 0.0,
+            sample_redistribution: false,
+            denoise: false,
+            ..Default::default()
+        };
+        let rt = RaytraceScene::build(&mut scene, &settings);
+        let cam = RtCamera::new(&camera(), &settings);
+        let rects = [
+            super::super::RenderRect {
+                x: 0,
+                y: 0,
+                width: 8,
+                height: 8,
+            },
+            super::super::RenderRect {
+                x: 8,
+                y: 8,
+                width: 8,
+                height: 8,
+            },
+        ];
+        let mut film = Film::new(16, 16);
+        gpu.render_regions(&rt, &cam, &settings, &mut film, 0, 4, &rects)
+            .unwrap();
+        gpu.sync_film(&mut film).unwrap();
+        assert_eq!(film.samples(), 4);
+        assert_eq!(film.pixels()[0].samples, 4);
+        assert_eq!(film.pixels()[15 * 16 + 15].samples, 4);
+        assert_eq!(film.pixels()[8].samples, 0);
+    }
+
+    #[test]
+    fn caps_respect_downlevel_defaults() {
+        let limits = wgpu::Limits::downlevel_defaults();
+        let caps = GpuCaps::from_limits(&limits);
+        assert!(caps.atlas_side <= limits.max_texture_dimension_2d);
+        assert!(caps.atlas_side <= ATLAS_SIZE);
+        assert!(caps.max_accum_pixels > 0);
+        caps.validate_kernel().expect("downlevel should fit uniforms");
+    }
+
+    #[test]
+    fn caps_check_film_rejects_oversized_accum() {
+        let limits = wgpu::Limits {
+            max_storage_buffer_binding_size: ACCUM_STRIDE as u64 * 4 * 1024,
+            max_buffer_size: ACCUM_STRIDE as u64 * 4 * 1024,
+            ..wgpu::Limits::downlevel_defaults()
+        };
+        let caps = GpuCaps::from_limits(&limits);
+        assert!(caps.check_film(64, 64).is_err());
+        assert!(caps.check_film(32, 32).is_ok());
+    }
+
+    #[test]
+    fn clamp_film_size_fits_accum_and_preserves_aspect() {
+        let limits = wgpu::Limits {
+            max_storage_buffer_binding_size: ACCUM_STRIDE as u64 * 4 * 4096,
+            max_buffer_size: ACCUM_STRIDE as u64 * 4 * 4096,
+            ..wgpu::Limits::downlevel_defaults()
+        };
+        let caps = GpuCaps::from_limits(&limits);
+        let (w, h) = caps.clamp_film_size(8192, 4096);
+        assert!(caps.check_film(w, h).is_ok());
+        assert!((w as f64 / h as f64 - 2.0).abs() < 0.05);
+    }
+
+    #[test]
+    fn reset_accum_keeps_scene_on_device() {
+        let Some(mut gpu) = backend() else {
+            return;
+        };
+        let mut scene = lit_box_scene();
+        let flat = RaytraceScene::build(&mut scene, &RaytraceSettings::default());
+        let cam = RtCamera::new(&camera(), &RaytraceSettings::default());
+        let mut film = Film::new(16, 16);
+        gpu.render(&flat, &cam, &RaytraceSettings::default(), &mut film, 0, 1)
+            .unwrap();
+        assert!(gpu.scene_on_device());
+        gpu.reset_accum();
+        assert!(gpu.scene_on_device());
+        gpu.invalidate();
+        assert!(!gpu.scene_on_device());
+    }
+
+    #[test]
+    fn renderer_clamps_oversized_gpu_film() {
+        let Some(gpu) = backend() else { return };
+        let caps = gpu.caps();
+        let mut r = super::super::RaytraceRenderer::with_backend(1, 1, Box::new(gpu));
+        let huge = caps.max_film_side().saturating_mul(4).max(4096);
+        let (w, h) = r.set_size(huge, huge / 2);
+        assert!(r.check_film_size(w, h).is_ok());
+        assert!(w <= caps.max_film_side());
     }
 }

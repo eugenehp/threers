@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%231a1a19'/%3E%3Cg fill='%233987e5'%3E%3Ccircle cx='4' cy='5' r='1.6'/%3E%3Ccircle cx='11' cy='4' r='1.3'/%3E%3Ccircle cx='8' cy='9' r='1.5'/%3E%3Ccircle cx='12.5' cy='11' r='1.2'/%3E%3Ccircle cx='4.5' cy='12' r='1.2'/%3E%3C/g%3E%3C/svg%3E">
+<title>connectome nodes — threers</title>
+<style>
+  /* Palette: the validated dark categorical steps (slots 1-8) on surface
+     #1a1a19. Series colours live here so the legend swatches and the GPU
+     vertex colours are read from one place -- viewer.js parses these. */
+  :root {
+    color-scheme: dark;
+    --surface-1: #1a1a19;
+    --surface-2: #232321;
+    --surface-3: #2c2c29;
+    --line: #3a3a36;
+    --text-primary: #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted: #8b8a80;
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --series-4: #c98500;
+    --series-5: #d55181;
+    --series-6: #008300;
+    --series-7: #9085e9;
+    --series-8: #e66767;
+    --series-other: #6f6e66;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: var(--surface-1); color: var(--text-primary);
+    font: 13px/1.5 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+    overflow: hidden;
+  }
+  canvas#c { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+
+  .panel {
+    position: fixed; background: color-mix(in srgb, var(--surface-1) 88%, transparent);
+    backdrop-filter: blur(12px); border: 1px solid var(--line); border-radius: 10px;
+  }
+  #side {
+    left: 14px; top: 14px; bottom: 14px; width: 286px;
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  #side header { padding: 13px 14px 11px; border-bottom: 1px solid var(--line); }
+  #side header h1 { margin: 0; font-size: 14px; font-weight: 650; letter-spacing: -0.01em; }
+  #side header p { margin: 3px 0 0; font-size: 11.5px; color: var(--text-muted); }
+  #scroll { overflow-y: auto; padding: 4px 14px 14px; flex: 1; scrollbar-width: thin; }
+
+  section { padding-top: 13px; }
+  section > h2 {
+    margin: 0 0 7px; font-size: 10.5px; font-weight: 600; letter-spacing: 0.07em;
+    text-transform: uppercase; color: var(--text-muted);
+  }
+  label.row {
+    display: flex; align-items: center; gap: 8px; padding: 3px 0;
+    font-size: 12.5px; color: var(--text-secondary); cursor: pointer;
+  }
+  label.row input { accent-color: var(--series-1); margin: 0; }
+  label.row .n { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--text-muted); font-size: 11px; }
+  select, input[type=search], button {
+    font: inherit; color: var(--text-primary); background: var(--surface-3);
+    border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; width: 100%;
+  }
+  button { cursor: pointer; }
+  button:hover { background: #363632; }
+  input[type=range] { width: 100%; accent-color: var(--series-1); }
+  .hint { font-size: 11px; color: var(--text-muted); margin: 5px 0 0; }
+
+  /* Legend: identity is never colour alone -- every swatch carries its name
+     and its count, and clicking one isolates that category (the facet escape
+     hatch for a form where all pairs are on screen at once). */
+  #legend { display: flex; flex-direction: column; gap: 1px; }
+  .lg {
+    display: flex; align-items: center; gap: 8px; padding: 3px 5px; border-radius: 5px;
+    cursor: pointer; font-size: 12px; color: var(--text-secondary); border: 1px solid transparent;
+  }
+  .lg:hover { background: var(--surface-2); }
+  .lg.off { opacity: 0.34; }
+  .lg.solo { border-color: var(--line); background: var(--surface-2); color: var(--text-primary); }
+  .sw { width: 11px; height: 11px; border-radius: 3px; flex: none; }
+  .lg .n { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--text-muted); font-size: 11px; }
+  #ramp { height: 9px; border-radius: 5px; margin: 2px 0 4px; }
+  #rampLabels { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-muted); }
+
+  #hud {
+    right: 14px; top: 14px; padding: 8px 11px; font-size: 11.5px;
+    color: var(--text-secondary); font-variant-numeric: tabular-nums;
+  }
+  #hud b { color: var(--text-primary); font-weight: 600; }
+
+  #info {
+    right: 14px; top: 62px; width: 320px; max-height: calc(100% - 90px);
+    display: none; flex-direction: column; overflow: hidden;
+  }
+  #info.on { display: flex; }
+  #info .head { padding: 11px 13px; border-bottom: 1px solid var(--line); display: flex; gap: 8px; align-items: start; }
+  #info .head b { font-size: 13.5px; }
+  #info .head .sub { font-size: 11.5px; color: var(--text-muted); }
+  #info .head button { width: auto; padding: 2px 8px; }
+  #info .head #iFocus { margin-left: auto; }
+  #info .body { overflow-y: auto; padding: 10px 13px 13px; scrollbar-width: thin; }
+  #info dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 0 0 10px; font-size: 12px; }
+  #info dt { color: var(--text-muted); }
+  #info dd { margin: 0; color: var(--text-secondary); overflow-wrap: anywhere; }
+  #info h3 { margin: 10px 0 5px; font-size: 10.5px; letter-spacing: 0.07em; text-transform: uppercase; color: var(--text-muted); }
+  .pt { display: flex; gap: 8px; font-size: 12px; padding: 2px 4px; border-radius: 4px; cursor: pointer; color: var(--text-secondary); }
+  .pt:hover { background: var(--surface-2); color: var(--text-primary); }
+  .pt .n { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--text-muted); }
+
+  #hover {
+    left: 316px; bottom: 14px; padding: 7px 11px; font-size: 12px;
+    color: var(--text-secondary); display: none; pointer-events: none;
+  }
+  #hover.on { display: block; }
+  #hover b { color: var(--text-primary); }
+
+  #boot {
+    position: fixed; inset: 0; display: grid; place-items: center;
+    background: var(--surface-1); z-index: 20; text-align: center;
+  }
+  #boot .bar { width: 260px; height: 3px; background: var(--surface-3); border-radius: 2px; margin: 12px auto 0; overflow: hidden; }
+  #boot .bar i { display: block; height: 100%; width: 0; background: var(--series-1); transition: width .18s; }
+  #boot p { color: var(--text-muted); font-size: 12px; margin: 8px 0 0; }
+  #err { color: #e66767; font-family: ui-monospace, monospace; font-size: 12px; white-space: pre-wrap;
+         max-width: 620px; text-align: left; margin-top: 14px; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="side" class="panel">
+  <header>
+    <h1>Connectome nodes</h1>
+    <p id="subtitle">every neuron in both trees, one node each</p>
+  </header>
+  <div id="scroll">
+    <section>
+      <h2>Trees</h2>
+      <div id="trees"></div>
+    </section>
+    <section>
+      <h2>Colour by</h2>
+      <select id="colorBy">
+        <option value="role">role</option>
+        <option value="nt">neurotransmitter</option>
+        <option value="class">super class</option>
+        <option value="tree">tree</option>
+        <option value="syn">synapse count</option>
+      </select>
+      <div id="legend" style="margin-top:8px"></div>
+      <div id="rampWrap" style="display:none">
+        <div id="ramp"></div>
+        <div id="rampLabels"><span>1</span><span>max</span></div>
+      </div>
+      <p class="hint" id="legendHint">Click a row to isolate it · click again to release.</p>
+    </section>
+    <section>
+      <h2>Filter</h2>
+      <label class="row" style="display:block">
+        <span style="display:flex"><span>min synapses</span><span class="n" id="minSynVal">0</span></span>
+        <input type="range" id="minSyn" min="0" max="100" value="0">
+      </label>
+      <input type="search" id="search" placeholder="cell type or id contains…" style="margin-top:6px">
+      <p class="hint" id="searchHint"></p>
+    </section>
+    <section>
+      <h2>Nodes</h2>
+      <label class="row" style="display:block">
+        <span style="display:flex"><span>node size</span><span class="n" id="sizeVal">0.9 µm</span></span>
+        <input type="range" id="size" min="2" max="60" value="9">
+      </label>
+      <label class="row"><input type="checkbox" id="spin"> auto-rotate</label>
+    </section>
+    <section>
+      <h2>Skeletons</h2>
+      <p class="hint" style="margin-top:0">Click a node to fetch its <code>skeleton.swc</code> and draw the arbour. <b>f</b> frames it, <b>r</b> resets the view.</p>
+      <div id="skelList" style="margin:6px 0"></div>
+      <button id="clearSkel">Clear all skeletons</button>
+    </section>
+    <section>
+      <h2>Coverage</h2>
+      <p class="hint" style="margin-top:0" id="coverage"></p>
+    </section>
+  </div>
+</div>
+
+<div id="hud" class="panel"><b id="shown">0</b> of <b id="total">0</b> nodes · <span id="fps">–</span> fps</div>
+<div id="hover" class="panel"></div>
+
+<div id="info" class="panel">
+  <div class="head">
+    <div>
+      <b id="iName">–</b>
+      <div class="sub" id="iId"></div>
+    </div>
+    <button id="iFocus" title="Frame this neuron (f)">focus</button>
+      <button id="iClose" title="Close">✕</button>
+  </div>
+  <div class="body" id="iBody"></div>
+</div>
+
+<div id="boot">
+  <div>
+    <div style="font-size:15px;font-weight:600">Loading the connectome…</div>
+    <div class="bar"><i id="bootBar"></i></div>
+    <p id="bootMsg">starting wasm</p>
+    <div id="err"></div>
+  </div>
+</div>
+
+<script type="module" src="/viewer.js"></script>
+</body>
+</html>

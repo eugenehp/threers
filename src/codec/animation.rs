@@ -5,8 +5,10 @@ use std::fmt;
 use crate::codec::{
     apng::ApngEncoder,
     gif::{encode_gif, GifOptions, PaletteMode},
-    h264::encode_mp4_with_captions,
-    hevc::Yuv420Frame,
+    h264::{
+        encode_compressed_mp4_from_iter as encode_h264_mp4_from_iter, encode_mp4_with_captions,
+    },
+    hevc::{encode_compressed_mp4, encode_compressed_mp4_from_iter, Yuv420Frame},
     webm::encode_webm,
 };
 
@@ -16,8 +18,19 @@ pub enum BrowserCodec {
     Gif,
     Apng,
     Webm,
-    /// H.264 in an MP4 container (`avc1` + `avcC`).
+    /// H.264 in an MP4 container (`avc1` + `avcC`). Universally playable.
+    ///
+    /// Transform-coded intra, roughly a hundredth the size of the `I_PCM` path
+    /// this used to take. [`Mp4Hevc`](Self::Mp4Hevc) is smaller again where its
+    /// narrower playback reach is acceptable.
     Mp4,
+    /// HEVC in an MP4 container (`hvc1` + `hvcC`), transform-coded.
+    ///
+    /// Two orders of magnitude smaller than [`Mp4`](Self::Mp4) — 0.16 MB against
+    /// 47 MB on the 17-frame clip in `docs/codec-benchmark.md`. The cost is
+    /// reach: HEVC in MP4 plays in Safari everywhere and in Chrome/Edge on
+    /// hardware that supports it, but not universally the way H.264 does.
+    Mp4Hevc,
 }
 
 impl BrowserCodec {
@@ -26,7 +39,7 @@ impl BrowserCodec {
             Self::Gif => "gif",
             Self::Apng => "apng",
             Self::Webm => "webm",
-            Self::Mp4 => "mp4",
+            Self::Mp4 | Self::Mp4Hevc => "mp4",
         }
     }
 }
@@ -184,13 +197,22 @@ where
     {
         return Err(AnimationEncodeError::Dimension);
     }
-    if matches!(opts.codec, BrowserCodec::Mp4)
+    if matches!(opts.codec, BrowserCodec::Mp4 | BrowserCodec::Mp4Hevc)
         && (!opts.width.is_multiple_of(2) || !opts.height.is_multiple_of(2))
     {
         return Err(AnimationEncodeError::Dimension);
     }
 
     let expected = pixels as usize;
+
+    // The MP4 codecs can consume frames as they arrive. Everything else needs
+    // them all at once (GIF quantizes a palette across the set, WebM and APNG
+    // take slices), so only these two avoid the collect — which matters most
+    // here, since an RGBA frame is 4 bytes per pixel: 133 MB each at 8K.
+    if matches!(opts.codec, BrowserCodec::Mp4 | BrowserCodec::Mp4Hevc) && !opts.transparent {
+        return encode_mp4_streaming(opts, frames, expected, on_progress);
+    }
+
     let mut frames: Vec<Vec<u8>> = frames.into_iter().collect();
     if frames.is_empty() {
         return Err(AnimationEncodeError::Empty);
@@ -266,7 +288,7 @@ where
             let refs: Vec<&Yuv420Frame> = yuv.iter().collect();
             encode_webm(&refs, opts.fps)
         }
-        BrowserCodec::Mp4 => {
+        BrowserCodec::Mp4 | BrowserCodec::Mp4Hevc => {
             if opts.transparent {
                 return Err(AnimationEncodeError::Dimension);
             }
@@ -283,7 +305,12 @@ where
                     opts.codec,
                 ));
             }
-            encode_mp4_with_captions(opts.width, opts.height, opts.fps, &yuv, None)
+            if matches!(opts.codec, BrowserCodec::Mp4Hevc) {
+                // QP 26 is the middle of the usable range; see `encode_mp4`.
+                encode_compressed_mp4(opts.width, opts.height, opts.fps, 26, &yuv)
+            } else {
+                encode_mp4_with_captions(opts.width, opts.height, opts.fps, &yuv, None)
+            }
         }
     };
 
@@ -293,6 +320,82 @@ where
         total,
         1.0,
         opts.codec,
+    ));
+    Ok(bytes)
+}
+
+
+
+
+/// Encode the MP4 codecs without holding every source frame.
+///
+/// Frames are pulled from the iterator, converted, encoded and dropped one at a
+/// time, so peak memory is one RGBA frame plus one YUV frame plus the encoded
+/// samples — rather than every RGBA frame at once. Output is byte-identical to
+/// the collecting path.
+fn encode_mp4_streaming<I, P>(
+    opts: &AnimationEncodeOptions,
+    frames: I,
+    expected: usize,
+    mut on_progress: P,
+) -> Result<Vec<u8>, AnimationEncodeError>
+where
+    I: IntoIterator<Item = Vec<u8>>,
+    P: FnMut(AnimationExportProgress),
+{
+    let mut iter = frames.into_iter().peekable();
+    if iter.peek().is_none() {
+        return Err(AnimationEncodeError::Empty);
+    }
+    // Only used to report a ratio; an unsized iterator just reports against the
+    // count so far, which still moves monotonically.
+    let hint = iter.size_hint().1.unwrap_or(0) as u32;
+
+    let mut err = None;
+    let mut done = 0u32;
+    let (w, h) = (opts.width, opts.height);
+    let codec = opts.codec;
+    let yuv = std::iter::from_fn(|| {
+        if err.is_some() {
+            return None;
+        }
+        let rgba = iter.next()?;
+        if rgba.len() != expected {
+            err = Some(AnimationEncodeError::FrameSize {
+                frame: done as usize,
+                expected,
+                got: rgba.len(),
+            });
+            return None;
+        }
+        done += 1;
+        on_progress(make_anim_progress(
+            AnimationExportPhase::Encode,
+            done,
+            hint.max(done),
+            done as f32 / hint.max(done) as f32,
+            codec,
+        ));
+        Some(Yuv420Frame::from_rgba(w, h, &rgba))
+    });
+
+    let bytes = if matches!(codec, BrowserCodec::Mp4Hevc) {
+        // QP 26 is the middle of the usable range; see `encode_mp4`.
+        encode_compressed_mp4_from_iter(w, h, opts.fps, 26, None, yuv)
+    } else {
+        // QP 26 is the middle of the usable range, matching the HEVC path.
+        encode_h264_mp4_from_iter(w, h, opts.fps, 26, None, yuv)
+    };
+    if let Some(e) = err {
+        return Err(e);
+    }
+
+    on_progress(make_anim_progress(
+        AnimationExportPhase::Done,
+        done,
+        done,
+        1.0,
+        codec,
     ));
     Ok(bytes)
 }

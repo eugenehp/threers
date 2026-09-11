@@ -268,6 +268,15 @@ pub struct VideoOptions {
     /// Subtitles / captions to deliver with the video. See
     /// [`VideoOptions::captions`].
     pub captions: Option<CaptionExport>,
+    /// Distance between keyframes, in frames. `None` leaves the codec default
+    /// (x264/x265 use 250; VideoToolbox is much shorter). See
+    /// [`VideoOptions::keyframe_interval`] — this is the single biggest lever on
+    /// file size for rendered animation.
+    pub keyframe_interval: Option<u32>,
+    /// Software-encoder speed/efficiency preset (`"medium"`, `"slower"`, …).
+    /// `None` uses the encoder default. Ignored by the hardware and native
+    /// codecs.
+    pub preset: Option<String>,
 }
 
 impl VideoOptions {
@@ -282,6 +291,8 @@ impl VideoOptions {
             extra_args: Vec::new(),
             gif_colors: 256,
             captions: None,
+            keyframe_interval: None,
+            preset: None,
         }
     }
     /// Frames per second (minimum 1).
@@ -317,6 +328,31 @@ impl VideoOptions {
     /// Native GIF palette size (`2..=256`).
     pub fn gif_colors(mut self, n: u16) -> Self {
         self.gif_colors = n.clamp(2, 256);
+        self
+    }
+
+    /// Distance between keyframes, in frames (minimum 1; `1` is all-intra).
+    ///
+    /// Rendered animation is highly redundant frame to frame, so the encoder
+    /// only pays for a keyframe when it cannot predict — forcing them often is
+    /// what makes a high-fps export balloon. A keyframe every few seconds
+    /// (`fps * 5` or more) is plenty unless the file is being seeked hard or
+    /// segmented for streaming.
+    ///
+    /// ```
+    /// use threers::VideoOptions;
+    /// let opts = VideoOptions::new("out.mp4").fps(60).keyframe_interval(300);
+    /// assert_eq!(opts.keyframe_interval, Some(300));
+    /// ```
+    pub fn keyframe_interval(mut self, frames: u32) -> Self {
+        self.keyframe_interval = Some(frames.max(1));
+        self
+    }
+
+    /// Software-encoder preset (`"veryfast"` … `"veryslow"`). Slower presets
+    /// spend more CPU searching and produce a smaller file at the same quality.
+    pub fn preset(mut self, preset: impl Into<String>) -> Self {
+        self.preset = Some(preset.into());
         self
     }
 
@@ -897,6 +933,26 @@ where
 }
 
 #[cfg(feature = "native-codec")]
+/// Read a bitrate like `"5M"`, `"800k"` or `"2500000"` into bits per second.
+///
+/// The same spellings ffmpeg takes, because that is what a caller who has used
+/// `-b:v` will reach for. `M` and `k` are decimal here, as they are there.
+fn parse_bitrate(s: &str) -> Option<u64> {
+    let t = s.trim();
+    let (digits, scale) = match t.chars().last()? {
+        'k' | 'K' => (&t[..t.len() - 1], 1_000f64),
+        'm' | 'M' => (&t[..t.len() - 1], 1_000_000f64),
+        'g' | 'G' => (&t[..t.len() - 1], 1_000_000_000f64),
+        _ => (t, 1.0),
+    };
+    let v: f64 = digits.trim().parse().ok()?;
+    (v > 0.0).then_some((v * scale) as u64)
+}
+
+// The only caller is behind this same flag; without it the `crate::codec`
+// imports below refer to a module that was configured out, and `--features
+// video` alone stops compiling.
+#[cfg(feature = "native-codec")]
 fn export_native_h264<F>(
     width: u32,
     height: u32,
@@ -908,7 +964,8 @@ fn export_native_h264<F>(
 where
     F: FnMut(usize) -> Vec<u8>,
 {
-    use crate::codec::h264::encode_mp4_with_captions;
+    use crate::codec::h264::write_compressed_mp4_quality;
+    use crate::codec::rate::Quality;
     use crate::codec::hevc::Yuv420Frame;
 
     if !width.is_multiple_of(2) || !height.is_multiple_of(2) {
@@ -923,6 +980,25 @@ where
             "native H.264 export does not support transparency yet",
         )));
     }
+
+    // Quantization for the in-process encoder. H.264's QP and x264's CRF sit on
+    // comparable scales, so a caller's CRF carries over directly; a bitrate
+    // target has no meaning without rate control, so it falls back to the
+    // default and says so.
+    let quality = match &options.quality {
+        VideoQuality::Crf(crf) => Quality::Qp((*crf as i32).clamp(0, 51)),
+        VideoQuality::Default => Quality::Qp(26),
+        VideoQuality::Bitrate(b) => match parse_bitrate(b) {
+            Some(bps) => Quality::Bitrate(bps),
+            None => {
+                eprintln!(
+                    "threers: could not read {b:?} as a bitrate — expected something like \
+                     \"5M\", \"800k\" or a plain number of bits per second. Encoding at QP 26."
+                );
+                Quality::Qp(26)
+            }
+        },
+    };
 
     let expected = (width as usize) * (height as usize) * 4;
     let frames_u = frames as u32;
@@ -941,17 +1017,30 @@ where
         codec,
     });
 
-    let mut yuv_frames = Vec::with_capacity(frames);
-    for i in 0..frames {
+    tracer.emit_event(VideoExportEvent::Start {
+        phase: VideoExportPhase::Encode,
+        frames: frames_u,
+        codec,
+    });
+
+    // Render, convert and encode one frame at a time. Collecting them first
+    // would hold `width * height * 1.5` bytes each — 7.5 GB for ten seconds of
+    // 4K60, and the encoder only ever looks at one.
+    let mut size_error = None;
+    let file = std::fs::File::create(&options.output).map_err(VideoError::Io)?;
+    let mut sink = std::io::BufWriter::new(file);
+    let source = (0..frames).map(|i| {
         let buf = frame(i);
-        if buf.len() != expected {
-            return Err(VideoError::FrameSize {
+        if buf.len() != expected && size_error.is_none() {
+            size_error = Some(VideoError::FrameSize {
                 frame: i,
                 expected,
                 got: buf.len(),
             });
+            // Keep the shape valid so the encoder can finish; the error is
+            // returned below and the output discarded.
+            return Yuv420Frame::new(width, height);
         }
-        yuv_frames.push(Yuv420Frame::from_rgba(width, height, &buf));
         let done = (i + 1) as u32;
         tracer.emit_progress(make_progress(
             VideoExportPhase::Capture,
@@ -960,23 +1049,30 @@ where
             done as f32 / (frames_u as f32 + 1.0),
             codec,
         ));
-    }
-
-    tracer.emit_event(VideoExportEvent::Start {
-        phase: VideoExportPhase::Encode,
-        frames: frames_u,
-        codec,
+        Yuv420Frame::from_rgba(width, height, &buf)
     });
-    tracer.emit_progress(make_progress(
-        VideoExportPhase::Encode,
-        0,
-        frames_u,
-        frames_u as f32 / (frames_u as f32 + 1.0),
-        codec,
-    ));
-
-    let bytes = encode_mp4_with_captions(width, height, options.fps, &yuv_frames, captions);
-    std::fs::write(&options.output, bytes).map_err(VideoError::Io)?;
+    // Written as it is assembled, so the finished file is never held in memory
+    // alongside the samples it was built from.
+    let wrote = write_compressed_mp4_quality(
+        &mut sink,
+        width,
+        height,
+        options.fps,
+        quality,
+        captions,
+        source,
+        Some(frames_u),
+    )
+    .and_then(|()| sink.flush());
+    // A frame of the wrong size is only discovered mid-stream, by which point
+    // part of the file exists. Do not leave that behind for the caller to
+    // mistake for output.
+    if let Some(e) = size_error {
+        drop(sink);
+        let _ = std::fs::remove_file(&options.output);
+        return Err(e);
+    }
+    wrote.map_err(VideoError::Io)?;
 
     tracer.emit_progress(make_progress(
         VideoExportPhase::Done,
@@ -1228,12 +1324,19 @@ impl Drop for EmbeddedSubtitles {
 }
 
 fn append_codec_args(cmd: &mut Command, opts: &VideoOptions) {
+    // x265 takes keyint through its own parameter string rather than `-g`.
+    let x265_params = opts
+        .keyframe_interval
+        .map(|g| format!("keyint={g}:min-keyint={g}"));
     match opts.codec {
         VideoCodec::H264 => {
             cmd.args(["-c:v", "libx264", "-pix_fmt", "yuv420p"]);
         }
         VideoCodec::Hevc => {
             cmd.args(["-c:v", "libx265", "-pix_fmt", "yuv420p", "-tag:v", "hvc1"]);
+            if let Some(p) = &x265_params {
+                cmd.args(["-x265-params", p]);
+            }
         }
         VideoCodec::HevcVideoToolbox => {
             cmd.args([
@@ -1261,6 +1364,19 @@ fn append_codec_args(cmd: &mut Command, opts: &VideoOptions) {
         }
         VideoCodec::Apng => {
             cmd.args(["-plays", "0", "-f", "apng"]);
+        }
+    }
+    // Keyframe distance. x265 was handled above via `-x265-params`; everything
+    // else takes `-g`. Left unset, x264/x265 use 250 frames while VideoToolbox
+    // picks something far shorter, so an unset value is not a neutral default.
+    if let Some(g) = opts.keyframe_interval {
+        if !matches!(opts.codec, VideoCodec::Hevc | VideoCodec::Gif | VideoCodec::Apng) {
+            cmd.args(["-g", &g.to_string()]);
+        }
+    }
+    if let Some(preset) = &opts.preset {
+        if matches!(opts.codec, VideoCodec::H264 | VideoCodec::Hevc | VideoCodec::Vp9) {
+            cmd.args(["-preset", preset]);
         }
     }
     match &opts.quality {

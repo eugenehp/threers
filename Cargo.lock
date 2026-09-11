@@ -2923,7 +2923,7 @@ dependencies = [
 
 [[package]]
 name = "threers"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "bytemuck",
  "console_error_panic_hook",
@@ -2955,12 +2955,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "threers-connectome"
+version = "0.0.1"
+
+[[package]]
 name = "threers-js"
-version = "0.0.4"
+version = "0.0.5"
 
 [[package]]
 name = "threers-node"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "napi",
  "napi-build",
@@ -3019,7 +3023,7 @@ dependencies = [
 
 [[package]]
 name = "threers-py"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "pyo3",
  "threers",

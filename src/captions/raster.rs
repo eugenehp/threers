@@ -69,12 +69,9 @@ impl Default for CaptionPainter {
 }
 
 impl CaptionPainter {
-    /// A painter with the built-in face and the default style.
+    /// A painter with the UI face ([`CaptionFont::ui`]) and the default style.
     pub fn new() -> Self {
-        Self {
-            font: CaptionFont::builtin(),
-            style: CaptionStyle::default(),
-        }
+        Self::with_font(CaptionFont::ui())
     }
 
     /// A painter drawing with `font`.
@@ -115,6 +112,66 @@ impl CaptionPainter {
     /// Returns `false` if the buffer is the wrong size or the text is blank.
     pub fn draw_text(&mut self, frame: &mut [u8], width: u32, height: u32, text: &str) -> bool {
         self.draw_block(frame, width, height, text, Placement::default())
+    }
+
+    /// Draw a single line with its top-left corner at `(x, y)` in frame pixels.
+    pub fn draw_text_at(
+        &mut self,
+        frame: &mut [u8],
+        width: u32,
+        height: u32,
+        x: f32,
+        y: f32,
+        text: &str,
+    ) -> bool {
+        self.draw_text_at_aligned(frame, width, height, x, y, text, CaptionAlign::Left)
+    }
+
+    /// Draw a single line right-aligned so its right edge sits at `x`.
+    pub fn draw_text_at_right(
+        &mut self,
+        frame: &mut [u8],
+        width: u32,
+        height: u32,
+        x: f32,
+        y: f32,
+        text: &str,
+    ) -> bool {
+        self.draw_text_at_aligned(frame, width, height, x, y, text, CaptionAlign::Right)
+    }
+
+    /// Draw one line at absolute pixel coordinates (no WebVTT-style line clamping).
+    fn draw_text_at_aligned(
+        &mut self,
+        frame: &mut [u8],
+        width: u32,
+        height: u32,
+        x: f32,
+        y: f32,
+        text: &str,
+        align: CaptionAlign,
+    ) -> bool {
+        if text.trim().is_empty() || width == 0 || height == 0 {
+            return false;
+        }
+        let fw = width as f32;
+        let saved = self.style.clone();
+        self.style.background[3] = 0;
+        self.style.outline_width = 0.0;
+        self.style.align = align;
+        // Fit to the remaining horizontal space from the anchor point.
+        let max_width = match align {
+            CaptionAlign::Left => (fw - x - self.style.padding).max(self.style.font_size),
+            CaptionAlign::Right => (x - self.style.padding).max(self.style.font_size),
+            CaptionAlign::Center => (fw - self.style.padding * 2.0).max(self.style.font_size),
+        };
+        self.style.max_width = (max_width / fw).clamp(
+            self.style.font_size / fw,
+            1.0,
+        );
+        let ok = self.draw_block_at(frame, width, height, text, x, y, align);
+        self.style = saved;
+        ok
     }
 
     /// Draw one cue, honoring its `align` / `line` / `position` overrides.
@@ -196,6 +253,57 @@ impl CaptionPainter {
         let style = self.style.clone();
         let align = placement.align.unwrap_or(style.align);
         let (block_left, block_top) = self.place(&laid, &style, align, placement, width, height);
+        self.composite_block(frame, width, height, &laid, &style, align, block_left, block_top)
+    }
+
+    /// Lay out and draw one line at absolute pixel coordinates.
+    fn draw_block_at(
+        &mut self,
+        frame: &mut [u8],
+        width: u32,
+        height: u32,
+        text: &str,
+        x: f32,
+        y: f32,
+        align: CaptionAlign,
+    ) -> bool {
+        if width == 0 || height == 0 || frame.len() < (width as usize) * (height as usize) * 4 {
+            return false;
+        }
+        let laid = {
+            let max_width = self.wrap_width(width);
+            layout(&mut self.font, text, &self.style, max_width)
+        };
+        if laid.is_empty() || laid.width <= 0.0 {
+            return false;
+        }
+
+        let style = self.style.clone();
+        let fw = width as f32;
+        let fh = height as f32;
+        let block_left = match align {
+            CaptionAlign::Left => x,
+            CaptionAlign::Center => x - laid.width * 0.5,
+            CaptionAlign::Right => x - laid.width,
+        };
+        let block_top = y;
+        let pad = style.padding;
+        let block_left = block_left.clamp(pad, (fw - laid.width - pad).max(pad));
+        let block_top = block_top.clamp(pad, (fh - laid.height - pad).max(pad));
+        self.composite_block(frame, width, height, &laid, &style, align, block_left, block_top)
+    }
+
+    fn composite_block(
+        &mut self,
+        frame: &mut [u8],
+        width: u32,
+        height: u32,
+        laid: &LaidOutText,
+        style: &CaptionStyle,
+        align: CaptionAlign,
+        block_left: f32,
+        block_top: f32,
+    ) -> bool {
 
         // The mask needs room for the outline and the shadow to spread into.
         let outline = style.outline_width.max(0.0);

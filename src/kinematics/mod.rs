@@ -90,6 +90,8 @@ pub mod materials;
 pub mod plant;
 pub mod servo;
 pub mod sim;
+/// Three-bearing swivel nozzles: obliquely-cut rotary joints that vector a jet.
+pub mod swivel;
 pub mod transmission;
 pub mod world;
 
@@ -106,6 +108,7 @@ pub use materials::{DriveEnv, HydraulicFluid, TendonMaterial};
 pub use plant::ArmPlant;
 pub use servo::{ServoJoint, ServoMode};
 pub use sim::{ideal_envelope, IkServoSim, SimFrame, SimReport, Waypoint};
+pub use swivel::{Bearing, Schedule, SchedulePoint, SwivelNozzle, ThrustState};
 pub use transmission::{GearTrain, StribeckFriction};
 pub use world::{ArmWorld, Contact, JointState, LinkBody, LinkMaterial, WorldObstacles};
 

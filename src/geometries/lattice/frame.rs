@@ -5,6 +5,8 @@
 //! tests for effective modulus, Poisson ratio, and chiral twist per strain.
 
 use super::cuboct::{cell_segments, ChiralRule, Cuboct};
+use super::Field;
+use crate::math::{Box3, Vector3};
 use std::collections::HashMap;
 
 /// Material and section properties for the reduced-order frame model.
@@ -156,9 +158,76 @@ impl CuboctFrame {
 
     /// Uniaxial compression along +Z with strain `epsilon` (positive = compress).
     pub fn compress_z(&self, epsilon: f64) -> FrameResponse {
+        self.solve_compress_z(epsilon).1
+    }
+
+    /// Axial stress in every beam under the same test, at the beam's midpoint.
+    ///
+    /// Negative in compression. This is the other half of a field-driven
+    /// workflow: solve the frame, and grade the lattice on what it says.
+    ///
+    /// ```no_run
+    /// use threers::{Cuboct, CuboctFrame, Lattice, LatticeKind, Vector3};
+    ///
+    /// let frame = CuboctFrame::new([4, 4, 4], Cuboct::Rigid, 10.0, 0.15);
+    /// let stress = frame.stress_field(0.01, [12, 12, 12]).map(f32::abs);
+    ///
+    /// let geom = Lattice::new(LatticeKind::Cuboct(Cuboct::Rigid))
+    ///     .size(Vector3::new(40.0, 40.0, 40.0))
+    ///     .cells([4, 4, 4])
+    ///     .thickness(0.8)
+    ///     // Thin where the frame says nothing is happening.
+    ///     .grade(stress.into_grade(0.6, 1.6))
+    ///     .build();
+    /// # let _ = geom;
+    /// ```
+    pub fn element_stress(&self, epsilon: f64) -> Vec<(Vector3, f32)> {
+        let (u, _) = self.solve_compress_z(epsilon);
+        if u.is_empty() {
+            return Vec::new();
+        }
+        self.elements
+            .iter()
+            .map(|&(a, b, len)| {
+                let (pa, pb) = (self.nodes[a], self.nodes[b]);
+                let mut strain = 0.0;
+                for d in 0..3 {
+                    strain += (u[b * 3 + d] - u[a * 3 + d]) * (pb[d] - pa[d]) / len;
+                }
+                let mid = Vector3::new(
+                    ((pa[0] + pb[0]) * 0.5) as f32,
+                    ((pa[1] + pb[1]) * 0.5) as f32,
+                    ((pa[2] + pb[2]) * 0.5) as f32,
+                );
+                (mid, (self.mat.e * strain / len) as f32)
+            })
+            .collect()
+    }
+
+    /// [`element_stress`](Self::element_stress) resampled onto a grid, ready
+    /// to hand to [`grade`](super::Lattice::grade).
+    ///
+    /// An empty frame gives a field of zeros rather than an empty one, so a
+    /// grade built from it is a no-op rather than a panic.
+    pub fn stress_field(&self, epsilon: f64, dims: [usize; 3]) -> Field {
+        let samples = self.element_stress(epsilon);
+        if samples.is_empty() {
+            let unit = Box3::from_center_and_size(Vector3::ZERO, Vector3::new(1.0, 1.0, 1.0));
+            return Field::scattered(unit, [2, 2, 2], &[]);
+        }
+        let points: Vec<Vector3> = samples.iter().map(|(p, _)| *p).collect();
+        let mut bounds = Box3::from_points(&points);
+        // Half a cell of margin: the beams' midpoints stop short of the
+        // block's own faces, and a lattice filling that block samples past
+        // them.
+        bounds.expand_by_scalar(self.pitch as f32 * 0.5);
+        Field::scattered(bounds, dims, &samples)
+    }
+
+    fn solve_compress_z(&self, epsilon: f64) -> (Vec<f64>, FrameResponse) {
         let ndof = self.nodes.len() * 3;
         if ndof == 0 {
-            return FrameResponse::default();
+            return (Vec::new(), FrameResponse::default());
         }
         let mut k = vec![0.0f64; ndof * ndof];
         for &(a, b, len) in &self.elements {
@@ -256,12 +325,15 @@ impl CuboctFrame {
             0.0
         };
 
-        FrameResponse {
-            stiffness,
-            effective_modulus,
-            poisson,
-            twist_per_strain,
-        }
+        (
+            u,
+            FrameResponse {
+                stiffness,
+                effective_modulus,
+                poisson,
+                twist_per_strain,
+            },
+        )
     }
 }
 
@@ -425,6 +497,44 @@ mod tests {
             (e1 - e2).abs() / e1.max(1e-9) < 0.5,
             "compliant E* drifted: {e1} vs {e2}"
         );
+    }
+
+    #[test]
+    fn a_compressed_frame_reports_where_the_load_is() {
+        let frame = CuboctFrame::new([2, 2, 3], Cuboct::Rigid, 1.0, 0.0);
+        let stress = frame.element_stress(0.01);
+        assert_eq!(stress.len(), frame.element_count());
+        // Compression, so the beams that carry it are in compression.
+        assert!(stress.iter().any(|&(_, s)| s < 0.0), "nothing was loaded");
+        assert!(stress.iter().all(|&(_, s)| s.is_finite()));
+        // And the load is not the same everywhere — a lattice graded on a
+        // constant field is a lattice that was not graded.
+        let (lo, hi) = stress
+            .iter()
+            .fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), &(_, s)| {
+                (lo.min(s), hi.max(s))
+            });
+        assert!(hi - lo > 1e-9, "uniform stress: {lo} to {hi}");
+    }
+
+    #[test]
+    fn the_stress_field_covers_the_block_it_was_solved_on() {
+        let frame = CuboctFrame::new([2, 2, 2], Cuboct::Rigid, 10.0, 0.0);
+        let field = frame.stress_field(0.01, [8, 8, 8]).map(f32::abs);
+        let (lo, hi) = field.range();
+        assert!(lo >= 0.0 && hi > lo, "{lo} to {hi}");
+        // The block runs from -10 to +10 on each axis; the field has to be
+        // defined out to its corners, where a lattice filling it will sample.
+        let corner = field.value(Vector3::new(-10.0, -10.0, -10.0));
+        assert!(corner.is_finite() && corner >= 0.0, "{corner}");
+    }
+
+    #[test]
+    fn an_empty_frame_gives_a_field_of_nothing() {
+        let frame = CuboctFrame::new([0, 0, 0], Cuboct::Rigid, 1.0, 0.0);
+        assert!(frame.element_stress(0.01).is_empty());
+        let field = frame.stress_field(0.01, [4, 4, 4]);
+        assert_eq!(field.value(Vector3::ZERO), 0.0);
     }
 
     #[test]

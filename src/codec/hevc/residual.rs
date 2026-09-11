@@ -4,26 +4,32 @@
 //! flags, signs, and Golomb-Rice remainders, each with position/neighbor-derived
 //! contexts.
 //!
-//! Verified two ways: the `tests` module round-trips random coefficient blocks through the
-//! encoder and a matching decoder (validates the *logic* independent of table
-//! values), and the integration test decodes real frames with ffmpeg (validates
-//! the *context init values* + conformance).
+//! Verified two ways, and only the second is load-bearing. The `tests` module
+//! round-trips random coefficient blocks through the encoder and a matching
+//! decoder, which checks the *syntax logic* — but both sides share this crate's
+//! constants, so it cannot see a wrong one (below). Conformance comes from
+//! `tests/hevc_residual_conformance.rs`, which decodes with ffmpeg.
 //!
-//! # Known conformance gap (dense 8×8 chroma)
+//! # Resolved: the conformance gap was two bytes in the CABAC tables
 //!
-//! Smooth / low-frequency content is externally conformant, but a dense 8×8
-//! **chroma** block whose last significant coefficient lands in last-position
-//! group 4 (coordinate 4 or 5 in the fast dimension) desyncs a conformant
-//! decoder: ffmpeg loses the sub-block-(0,0) DC while decoding the AC correctly.
-//! The bug is **symmetric** — the mirrored decoder in the `tests` module round-trips it —
-//! so it lives in shared encode/decode logic, not the arithmetic engine (which
-//! is byte-exact to §9.3.4.3). Isolation done: luma 16×16 group 4 is fine, only
-//! 8×8 chroma fails; the failure is independent of every context init value
-//! (brute-forced) and of the last-context `ctxShift`; the last-position
-//! binarization matches the ffmpeg source. Not yet root-caused, so `residual`
-//! stays off by default. Next step: a bit-exact CABAC trace from a reference
-//! decoder (ffmpeg built with tracing, or libde265) to find the first bin the
-//! reference reads differently.
+//! This coder used to produce streams ffmpeg parsed without complaint but
+//! reconstructed differently, on anything but smooth content. The cause was not
+//! in this file at all: `tables.rs` had `transIdxLps[28] = 23` (spec: 22) and
+//! `rangeTabLps[31][0] = 28` (spec: 29).
+//!
+//! Both are worth remembering as a *testing* lesson rather than a transcription
+//! one. The round-trip test in the `tests` module encodes and decodes with the
+//! **same tables**, so a wrong table is invisible to it — the two sides agree
+//! with each other while both disagree with the standard. And a context only
+//! reaches state 28 or 31 after a long run of bins in one direction, so smooth
+//! content (few coefficients, few bins) never got there. That combination is
+//! why the failure looked content-dependent and mysterious: it needed both a
+//! detailed block *and* an external decoder to show up at all.
+//!
+//! The wrong `transIdxLps` entry was findable without any reference: the spec
+//! table is monotonically non-decreasing, and `..., 21, 21, 23, 22, 23, ...`
+//! is not. `tests/hevc_residual_conformance.rs` now pins the behaviour against
+//! ffmpeg on detailed content.
 
 use crate::codec::hevc::cabac::{CabacEncoder, CtxModel};
 
@@ -49,25 +55,30 @@ const INIT_GT1: [u8; 24] = [
 const INIT_GT2: [u8; 6] = [138, 153, 136, 167, 152, 152];
 
 /// The coefficient-coding CABAC contexts for one slice.
+///
+/// Fixed-size arrays, not `Vec`s: rate-distortion decisions clone the whole
+/// context set once per candidate per level, and six heap allocations per clone
+/// dominated the encoder's time once the coding quadtree started making
+/// thousands of them per picture.
+#[derive(Clone, Copy)]
 pub struct ResidualCtx {
-    last_x: Vec<CtxModel>,
-    last_y: Vec<CtxModel>,
-    csbf: Vec<CtxModel>,
-    sig: Vec<CtxModel>,
-    gt1: Vec<CtxModel>,
-    gt2: Vec<CtxModel>,
+    last_x: [CtxModel; 18],
+    last_y: [CtxModel; 18],
+    csbf: [CtxModel; 4],
+    sig: [CtxModel; 42],
+    gt1: [CtxModel; 24],
+    gt2: [CtxModel; 6],
 }
 
 impl ResidualCtx {
     pub fn new(qp: i32) -> Self {
-        let mk = |t: &[u8]| t.iter().map(|&v| CtxModel::init(v, qp)).collect();
         Self {
-            last_x: mk(&INIT_LAST_X),
-            last_y: mk(&INIT_LAST_Y),
-            csbf: mk(&INIT_CSBF),
-            sig: mk(&INIT_SIG),
-            gt1: mk(&INIT_GT1),
-            gt2: mk(&INIT_GT2),
+            last_x: std::array::from_fn(|i| CtxModel::init(INIT_LAST_X[i], qp)),
+            last_y: std::array::from_fn(|i| CtxModel::init(INIT_LAST_Y[i], qp)),
+            csbf: std::array::from_fn(|i| CtxModel::init(INIT_CSBF[i], qp)),
+            sig: std::array::from_fn(|i| CtxModel::init(INIT_SIG[i], qp)),
+            gt1: std::array::from_fn(|i| CtxModel::init(INIT_GT1[i], qp)),
+            gt2: std::array::from_fn(|i| CtxModel::init(INIT_GT2[i], qp)),
         }
     }
 }
@@ -130,8 +141,11 @@ fn log2(n: usize) -> usize {
 }
 
 /// `last_sig_coeff` group index and group base (§9.3.4.2.3 tables).
-const GROUP_IDX: [usize; 16] = [0, 1, 2, 3, 4, 4, 5, 5, 6, 6, 6, 6, 7, 7, 7, 7];
-const MIN_IN_GROUP: [usize; 8] = [0, 1, 2, 3, 4, 6, 8, 12];
+const GROUP_IDX: [usize; 32] = [
+    0, 1, 2, 3, 4, 4, 5, 5, 6, 6, 6, 6, 7, 7, 7, 7, //
+    8, 8, 8, 8, 8, 8, 8, 8, 9, 9, 9, 9, 9, 9, 9, 9,
+];
+const MIN_IN_GROUP: [usize; 10] = [0, 1, 2, 3, 4, 6, 8, 12, 16, 24];
 
 fn last_ctx(bin_idx: usize, log2n: usize, chroma: bool) -> usize {
     if chroma {
@@ -151,6 +165,7 @@ fn sig_ctx(
     chroma: bool,
     sub_nonzero: bool,
     csbf_rb: u8,
+    scan_idx: u8,
 ) -> usize {
     if log2n == 2 {
         const MAP: [usize; 16] = [0, 1, 4, 5, 2, 3, 4, 5, 6, 6, 8, 8, 7, 7, 8, 8];
@@ -191,15 +206,26 @@ fn sig_ctx(
         }
         _ => 2,
     };
+    // Size offset (§9.3.4.2.5). At 8x8 *luma* it keys off the scan —
+    // `sigCtx += (scanIdx == 0) ? 9 : 15` — which is the one place scanIdx
+    // reaches this derivation. Chroma has no such split and always adds 9 at
+    // 8x8; giving chroma the 15 would run its index past the 15 chroma
+    // contexts the table holds.
     if !chroma {
         if sub_nonzero {
             s += 3;
         }
-        s += if log2n == 3 { 9 } else { 21 };
-        s
+        s + if log2n == 3 {
+            if scan_idx == 0 {
+                9
+            } else {
+                15
+            }
+        } else {
+            21
+        }
     } else {
-        s += if log2n == 3 { 9 } else { 12 };
-        27 + s
+        27 + s + if log2n == 3 { 9 } else { 12 }
     }
 }
 
@@ -224,7 +250,13 @@ pub fn encode(
         .rev()
         .find(|&i| coeff[scan[i].1 * n + scan[i].0] != 0)
         .unwrap();
-    let (last_x, last_y) = scan[last_scan];
+    // A vertical scan signals the last position transposed (§7.4.9.11): the
+    // decoder swaps the decoded pair back, so the encoder must swap going in.
+    let (last_x, last_y) = if scan_idx == 2 {
+        (scan[last_scan].1, scan[last_scan].0)
+    } else {
+        scan[last_scan]
+    };
 
     // --- last_sig_coeff: x_prefix, y_prefix, then x_suffix, y_suffix (§7.3.8.11) ---
     let gx = code_last_prefix(cabac, &mut ctx.last_x, last_x, log2n, chroma);
@@ -282,7 +314,7 @@ pub fn encode(
                 num_sig += 1;
                 break;
             }
-            let ci = sig_ctx(xc, yc, log2n, chroma, sub_nonzero, csbf_rb);
+            let ci = sig_ctx(xc, yc, log2n, chroma, sub_nonzero, csbf_rb, scan_idx);
             let bit = coeff[yc * n + xc] != 0;
             cabac.encode_bin(&mut ctx.sig[ci], bit as u32);
             if bit {
@@ -447,6 +479,30 @@ fn block_has_sig(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The two `last_sig_coeff` tables have to agree, and the suffix width has
+    /// to span each group exactly.
+    ///
+    /// `MIN_IN_GROUP[g]` is where group `g` starts and the suffix carries
+    /// `(g >> 1) - 1` bits, so every group above 3 must hold precisely that many
+    /// positions. A transcription slip in either table breaks the identity, and
+    /// nothing else would notice until a decoder read the wrong position.
+    #[test]
+    fn last_significant_coefficient_groups_tile_the_positions() {
+        for (pos, &g) in GROUP_IDX.iter().enumerate() {
+            let first = GROUP_IDX.iter().position(|&x| x == g).unwrap();
+            assert_eq!(MIN_IN_GROUP[g], first, "group {g} starts at {first}");
+            assert!(pos >= MIN_IN_GROUP[g], "position {pos} precedes its group");
+        }
+        for g in 4..MIN_IN_GROUP.len() {
+            let end = MIN_IN_GROUP.get(g + 1).copied().unwrap_or(GROUP_IDX.len());
+            let span = end - MIN_IN_GROUP[g];
+            assert_eq!(span, 1 << ((g >> 1) - 1), "group {g} spans {span}");
+        }
+        // `last_sig_coeff_prefix` is truncated unary with cMax = 2·log2 − 1, so
+        // the largest group a 32-point transform can name is 9.
+        assert_eq!(GROUP_IDX[31], (5 << 1) - 1);
+    }
     use crate::codec::hevc::cabac::CtxModel;
 
     // A CABAC decoder + residual decoder mirror, to round-trip the coefficient

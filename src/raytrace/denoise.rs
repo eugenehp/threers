@@ -43,6 +43,9 @@ pub struct DenoiseParams {
     /// Albedo similarity — this is what preserves texture detail that the
     /// colour channel is too noisy to see.
     pub sigma_albedo: f32,
+    /// Do not trust a per-pixel variance estimate until at least this many
+    /// samples have landed — filter more aggressively below it.
+    pub min_samples: u32,
 }
 
 impl Default for DenoiseParams {
@@ -59,12 +62,17 @@ impl Default for DenoiseParams {
     /// Re-run `cargo run --release --example denoise_fit --features raytrace`
     /// after changing anything the guides depend on.
     fn default() -> Self {
+        // Fitted 2026-08 (`denoise_fit`, REFERENCE=8192) for colour/depth under
+        // log-lum weights + Welford guides. `sigma_albedo` kept at the prior
+        // tight width: blowing it open (~23) scored the same on area lights and
+        // only risks softening textured floors (see `examples/denoise_ab`).
         Self {
             iterations: 5,
-            sigma_color: 0.917,
+            sigma_color: 1.297,
             sigma_normal: 0.566,
-            sigma_depth: 0.003,
+            sigma_depth: 0.0007,
             sigma_albedo: 0.252,
+            min_samples: 4,
         }
     }
 }
@@ -91,6 +99,10 @@ pub struct DenoiseGuides<'a> {
     /// Variance of each pixel's mean — the measured noise level, from
     /// [`Film::resolve_variance`](super::Film::resolve_variance).
     pub variance: &'a [f32],
+    /// Per-pixel sample counts when adaptive sampling stopped pixels early.
+    /// Pixels below [`DenoiseParams::min_samples`] are filtered harder because
+    /// their variance estimate is not yet trustworthy.
+    pub sample_counts: Option<&'a [u32]>,
     /// The scene's diagonal, so the depth threshold means the same thing in a
     /// model measured in millimetres and one measured in kilometres.
     pub scene_scale: f32,
@@ -109,6 +121,7 @@ pub fn denoise(
 ) -> Vec<f32> {
     let (albedo, normal, depth) = (guides.albedo, guides.normal, guides.depth);
     let variance = guides.variance;
+    let sample_counts = guides.sample_counts;
     let scene_scale = guides.scene_scale;
     let (w, h) = (width as usize, height as usize);
     let n = w * h;
@@ -122,138 +135,28 @@ pub fn denoise(
     let mut dst = src.clone();
 
     let depth_scale = (params.sigma_depth * scene_scale.max(1e-3)).max(1e-4);
+    let min_samples = params.min_samples.max(2);
 
     for pass in 0..params.iterations {
         let step = 1usize << pass;
-        // Constant across passes, unlike Dammertz's original schedule.
-        //
-        // That schedule halves an *absolute* threshold each pass, because it
-        // has no idea how noisy the image is and a wide pass that averages very
-        // different pixels rings rather than blurs. Here the threshold is
-        // already relative to the measured noise, so it is asking the right
-        // question at every scale — tightening it as well would silence every
-        // pass but the first, which is the same as not filtering at all.
         let sigma_color = params.sigma_color;
 
-        for y in 0..h {
-            for x in 0..w {
-                let i = y * w + x;
-                let c_i = src[i];
-                let n_i = normal[i];
-                let a_i = albedo[i];
-                let d_i = depth[i];
-                let v_i = variance.get(i).copied().unwrap_or(f32::INFINITY);
-
-                let mut sum = [0.0f32; 3];
-                let mut weight_sum = 0.0f32;
-
-                for (ky, kv) in KERNEL.iter().enumerate() {
-                    let sy = y as isize + (ky as isize - 2) * step as isize;
-                    if sy < 0 || sy >= h as isize {
-                        continue;
-                    }
-                    for (kx, ku) in KERNEL.iter().enumerate() {
-                        let sx = x as isize + (kx as isize - 2) * step as isize;
-                        if sx < 0 || sx >= w as isize {
-                            continue;
-                        }
-                        let j = sy as usize * w + sx as usize;
-                        let c_j = src[j];
-
-                        // Colour: squared distance, measured against how much
-                        // the two pixels are *expected* to differ by chance.
-                        // Two independent estimates of the same value differ by
-                        // about their combined variance, so dividing by it asks
-                        // the right question — "is this difference more than
-                        // noise?" — rather than comparing against a fixed
-                        // threshold that is wrong at every sample count but one.
-                        let v_j = variance.get(j).copied().unwrap_or(f32::INFINITY);
-                        let noise = v_i + v_j;
-                        let w_c = if noise.is_finite() {
-                            // Luminance, to match the units of the variance
-                            // estimate. Comparing an RGB distance against a
-                            // luminance variance is off by roughly the number
-                            // of channels and rejects neighbours that are only
-                            // differing by chance. Chrominance rides along with
-                            // the weight, as it does in SVGF.
-                            let dl = luminance(c_i) - luminance(c_j);
-                            (-(dl * dl) / (sigma_color * sigma_color * noise).max(1e-9)).exp()
-                        } else {
-                            // No variance estimate yet: filter freely.
-                            1.0
-                        };
-
-                        // Normal: 1 - cosine, so a flat surface weighs 1 and a
-                        // perpendicular one ~0.
-                        let dot =
-                            (n_i[0] * normal[j][0] + n_i[1] * normal[j][1] + n_i[2] * normal[j][2])
-                                .clamp(-1.0, 1.0);
-                        let dn = (1.0 - dot).max(0.0);
-                        let w_n =
-                            (-dn / (params.sigma_normal * params.sigma_normal).max(1e-8)).exp();
-
-                        // Depth: separates surfaces that look alike but are not
-                        // adjacent — a distant wall seen past a near edge.
-                        let w_d = if d_i.is_finite() && depth[j].is_finite() {
-                            let dd = (d_i - depth[j]).abs() / depth_scale;
-                            (-dd * dd).exp()
-                        } else if d_i.is_finite() == depth[j].is_finite() {
-                            1.0 // both background
-                        } else {
-                            0.0 // one is background, the other is not
-                        };
-
-                        // Albedo: keeps texture edges that the colour channel
-                        // is too noisy to resolve.
-                        let da = sq_dist(a_i, albedo[j]);
-                        let w_a =
-                            (-da / (params.sigma_albedo * params.sigma_albedo).max(1e-8)).exp();
-
-                        let weight = kv * ku * w_c * w_n * w_d * w_a;
-                        if weight <= 0.0 {
-                            continue;
-                        }
-                        sum[0] += c_j[0] * weight;
-                        sum[1] += c_j[1] * weight;
-                        sum[2] += c_j[2] * weight;
-                        weight_sum += weight;
-                    }
-                }
-
-                let filtered = if weight_sum > 1e-8 {
-                    [
-                        sum[0] / weight_sum,
-                        sum[1] / weight_sum,
-                        sum[2] / weight_sum,
-                    ]
-                } else {
-                    c_i
-                };
-
-                // Blend back toward the unfiltered value by how far the pixel
-                // still is from converged.
-                //
-                // A pixel that has settled has nothing to gain from filtering
-                // and something to lose: on a smooth gradient the real
-                // difference between neighbours is the same size as what is
-                // left of the noise, and no filter can tell those apart. Since
-                // the noise level is measured rather than guessed, the filter
-                // can simply stand down where there is nothing left to remove —
-                // which is what keeps it from making an almost-converged render
-                // slightly worse.
-                let trust = if v_i.is_finite() {
-                    let mean = luminance(c_i).abs().max(1e-3);
-                    (v_i.sqrt() / mean / CONVERGED_ERROR).min(1.0)
-                } else {
-                    1.0
-                };
-                dst[i] = [
-                    c_i[0] + (filtered[0] - c_i[0]) * trust,
-                    c_i[1] + (filtered[1] - c_i[1]) * trust,
-                    c_i[2] + (filtered[2] - c_i[2]) * trust,
-                ];
-            }
-        }
+        filter_pass(
+            w,
+            h,
+            step,
+            sigma_color,
+            params,
+            depth_scale,
+            min_samples,
+            &src,
+            &mut dst,
+            albedo,
+            normal,
+            depth,
+            variance,
+            sample_counts,
+        );
         std::mem::swap(&mut src, &mut dst);
     }
 
@@ -265,6 +168,237 @@ pub fn denoise(
         out.push(color[i * 4 + 3]);
     }
     out
+}
+
+#[allow(clippy::too_many_arguments)]
+fn filter_pass(
+    w: usize,
+    h: usize,
+    step: usize,
+    sigma_color: f32,
+    params: &DenoiseParams,
+    depth_scale: f32,
+    min_samples: u32,
+    src: &[[f32; 3]],
+    dst: &mut [[f32; 3]],
+    albedo: &[[f32; 3]],
+    normal: &[[f32; 3]],
+    depth: &[f32],
+    variance: &[f32],
+    sample_counts: Option<&[u32]>,
+) {
+    #[cfg(all(feature = "parallel", not(target_arch = "wasm32")))]
+    {
+        use rayon::prelude::*;
+        dst.par_chunks_mut(w)
+            .enumerate()
+            .for_each(|(y, row)| {
+                for (x, out) in row.iter_mut().enumerate() {
+                    *out = filter_pixel(
+                        x,
+                        y,
+                        w,
+                        h,
+                        step,
+                        sigma_color,
+                        params,
+                        depth_scale,
+                        min_samples,
+                        src,
+                        albedo,
+                        normal,
+                        depth,
+                        variance,
+                        sample_counts,
+                    );
+                }
+            });
+    }
+    #[cfg(not(all(feature = "parallel", not(target_arch = "wasm32"))))]
+    {
+        for y in 0..h {
+            for x in 0..w {
+                let i = y * w + x;
+                dst[i] = filter_pixel(
+                    x,
+                    y,
+                    w,
+                    h,
+                    step,
+                    sigma_color,
+                    params,
+                    depth_scale,
+                    min_samples,
+                    src,
+                    albedo,
+                    normal,
+                    depth,
+                    variance,
+                    sample_counts,
+                );
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn filter_pixel(
+    x: usize,
+    y: usize,
+    w: usize,
+    h: usize,
+    step: usize,
+    sigma_color: f32,
+    params: &DenoiseParams,
+    depth_scale: f32,
+    min_samples: u32,
+    src: &[[f32; 3]],
+    albedo: &[[f32; 3]],
+    normal: &[[f32; 3]],
+    depth: &[f32],
+    variance: &[f32],
+    sample_counts: Option<&[u32]>,
+) -> [f32; 3] {
+    let i = y * w + x;
+    let c_i = src[i];
+    let n_i = normal[i];
+    let a_i = albedo[i];
+    let d_i = depth[i];
+    let v_i = variance.get(i).copied().unwrap_or(f32::INFINITY);
+
+    let mut sum = [0.0f32; 3];
+    let mut weight_sum = 0.0f32;
+
+    for (ky, kv) in KERNEL.iter().enumerate() {
+        let sy = y as isize + (ky as isize - 2) * step as isize;
+        if sy < 0 || sy >= h as isize {
+            continue;
+        }
+        for (kx, ku) in KERNEL.iter().enumerate() {
+            let sx = x as isize + (kx as isize - 2) * step as isize;
+            if sx < 0 || sx >= w as isize {
+                continue;
+            }
+            let j = sy as usize * w + sx as usize;
+            let c_j = src[j];
+
+            let v_j = variance.get(j).copied().unwrap_or(f32::INFINITY);
+            let mean_l = (luminance(c_i).abs() + luminance(c_j).abs()) * 0.5;
+            let w_c = if v_i.is_finite() && v_j.is_finite() {
+                let scale = (1.0 + mean_l).max(1e-3);
+                let li = (1.0 + luminance(c_i).max(0.0)).ln();
+                let lj = (1.0 + luminance(c_j).max(0.0)).ln();
+                let dl_log = li - lj;
+                let dl_lin = (luminance(c_i) - luminance(c_j)).abs() / scale;
+                // The tighter of log-relative and linear-relative distance: HDR
+                // walls keep log-lum; specular noise can still blur when linear
+                // says neighbours agree.
+                let dl = dl_log.abs().min(dl_lin);
+                let noise_lin =
+                    (v_i + v_j).max((mean_l * 0.01).powi(2).max(1e-12));
+                let noise = noise_lin / (scale * scale);
+                (-(dl * dl) / (sigma_color * sigma_color * noise).max(1e-9)).exp()
+            } else {
+                1.0
+            };
+
+            let dot =
+                (n_i[0] * normal[j][0] + n_i[1] * normal[j][1] + n_i[2] * normal[j][2])
+                    .clamp(-1.0, 1.0);
+            let dn = (1.0 - dot).max(0.0);
+            let w_n = (-dn / (params.sigma_normal * params.sigma_normal).max(1e-8)).exp();
+
+            let w_d = if d_i.is_finite() && depth[j].is_finite() {
+                let dd = (d_i - depth[j]).abs() / depth_scale;
+                (-dd * dd).exp()
+            } else if d_i.is_finite() == depth[j].is_finite() {
+                1.0
+            } else {
+                0.0
+            };
+
+            let da = sq_dist(a_i, albedo[j]);
+            let w_a = (-da / (params.sigma_albedo * params.sigma_albedo).max(1e-8)).exp();
+
+            let weight = kv * ku * w_c * w_n * w_d * w_a;
+            if weight <= 0.0 {
+                continue;
+            }
+            sum[0] += c_j[0] * weight;
+            sum[1] += c_j[1] * weight;
+            sum[2] += c_j[2] * weight;
+            weight_sum += weight;
+        }
+    }
+
+    let filtered = if weight_sum > 1e-8 {
+        [
+            sum[0] / weight_sum,
+            sum[1] / weight_sum,
+            sum[2] / weight_sum,
+        ]
+    } else {
+        c_i
+    };
+
+    let mut trust = if v_i.is_finite() {
+        // Relative SE in linear space, floored — same units as adaptive sampling.
+        let mean = luminance(c_i).abs().max(1e-3);
+        (v_i.sqrt() / mean / CONVERGED_ERROR).min(1.0)
+    } else {
+        1.0
+    };
+
+    if let Some(counts) = sample_counts {
+        let n = counts.get(i).copied().unwrap_or(0);
+        if n < min_samples {
+            let boost = 1.0 - (n as f32 / min_samples as f32);
+            trust = trust.max(boost);
+        }
+    }
+
+    blend_denoised(c_i, filtered, trust)
+}
+
+/// Blend filtered radiance toward the noisy pixel. Luminance is mixed in log
+/// space; chroma linearly — so HDR highlights denoise without hue shifts.
+fn blend_denoised(c_i: [f32; 3], filtered: [f32; 3], trust: f32) -> [f32; 3] {
+    if trust <= 0.0 {
+        return c_i;
+    }
+    if trust >= 1.0 - 1e-6 {
+        return filtered;
+    }
+    let li = luminance(c_i).max(0.0);
+    let lf = luminance(filtered).max(0.0);
+    if li <= 1e-8 && lf <= 1e-8 {
+        return [
+            c_i[0] + (filtered[0] - c_i[0]) * trust,
+            c_i[1] + (filtered[1] - c_i[1]) * trust,
+            c_i[2] + (filtered[2] - c_i[2]) * trust,
+        ];
+    }
+    let log_lo =
+        (1.0 + li).ln() + trust * ((1.0 + lf).ln() - (1.0 + li).ln());
+    let lo = log_lo.exp() - 1.0;
+    let norm_i = chroma_dir(c_i, li);
+    let norm_f = chroma_dir(filtered, lf);
+    let norm = [
+        norm_i[0] + trust * (norm_f[0] - norm_i[0]),
+        norm_i[1] + trust * (norm_f[1] - norm_i[1]),
+        norm_i[2] + trust * (norm_f[2] - norm_i[2]),
+    ];
+    let nl = luminance(norm).max(1e-8);
+    let scale = lo / nl;
+    [norm[0] * scale, norm[1] * scale, norm[2] * scale]
+}
+
+fn chroma_dir(c: [f32; 3], l: f32) -> [f32; 3] {
+    if l > 1e-8 {
+        [c[0] / l, c[1] / l, c[2] / l]
+    } else {
+        [1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0]
+    }
 }
 
 /// One training example: a noisy render, the guides that came with it, and the
@@ -506,6 +640,7 @@ mod tests {
                 normal: &normal,
                 depth: &depth,
                 variance: &variance,
+                sample_counts: None,
                 scene_scale: 10.0,
             },
             &DenoiseParams::default(),
@@ -531,6 +666,7 @@ mod tests {
                 normal: &normal,
                 depth: &depth,
                 variance: &variance,
+                sample_counts: None,
                 scene_scale: 10.0,
             },
             &DenoiseParams::default(),
@@ -564,6 +700,7 @@ mod tests {
                 normal: &normal,
                 depth: &depth,
                 variance: &variance,
+                sample_counts: None,
                 scene_scale: 1.0,
             },
             &DenoiseParams::default(),
@@ -601,6 +738,7 @@ mod tests {
                 normal: &normal,
                 depth: &depth,
                 variance: &variance,
+                sample_counts: None,
                 scene_scale: 10.0,
             },
             &DenoiseParams::default(),
@@ -612,6 +750,22 @@ mod tests {
             "background picked up {} from the object",
             out[i]
         );
+    }
+
+    #[test]
+    fn blend_denoised_preserves_chroma_at_hdr() {
+        let c = [1000.0, 1000.0, 1000.0];
+        let f = [1000.0, 1100.0, 1000.0];
+        // Partial trust: log-lum + linear-chroma beats a straight RGB lerp on hue.
+        let out = blend_denoised(c, f, 0.5);
+        let linear_g = c[1] + 0.5 * (f[1] - c[1]);
+        assert!(
+            (out[0] - out[1]).abs() < (c[0] - linear_g).abs(),
+            "chroma drift {:?} vs linear green {linear_g}",
+            out
+        );
+        let neutral = blend_denoised(c, [1000.0, 1000.0, 1000.0], 1.0);
+        assert!((neutral[0] - neutral[1]).abs() < 1e-3);
     }
 
     #[test]
@@ -631,11 +785,45 @@ mod tests {
                 normal: &normal,
                 depth: &depth,
                 variance: &variance,
+                sample_counts: None,
                 scene_scale: 1.0,
             },
             &params,
         );
         assert_eq!(out, color);
+    }
+
+    #[test]
+    fn low_sample_count_filters_harder() {
+        let (w, h) = (16, 16);
+        let (color, albedo, normal, depth, mut variance) = split_image(w, h, 0.4);
+        variance[w / 2] = 1e-8;
+        let counts = vec![1u32; w * h];
+        let params = DenoiseParams {
+            min_samples: 8,
+            ..Default::default()
+        };
+        let out = denoise(
+            w as u32,
+            h as u32,
+            &color,
+            &DenoiseGuides {
+                albedo: &albedo,
+                normal: &normal,
+                depth: &depth,
+                variance: &variance,
+                sample_counts: Some(&counts),
+                scene_scale: 10.0,
+            },
+            &params,
+        );
+        let idx = (h / 2 * w + w / 2) * 4;
+        let center = out[idx];
+        let noisy = color[idx];
+        assert!(
+            (center - noisy).abs() > 0.05,
+            "low-sample pixel should have been filtered: {noisy} -> {center}"
+        );
     }
 
     #[test]
@@ -649,6 +837,7 @@ mod tests {
                 normal: &[],
                 depth: &[],
                 variance: &[],
+                sample_counts: None,
                 scene_scale: 1.0,
             },
             &DenoiseParams::default(),

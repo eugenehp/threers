@@ -15,6 +15,7 @@
 //!
 //! SPP=64 cargo run --release --example path_trace --features raytrace      # quick look
 //! DENOISE=0 cargo run --release --example path_trace --features raytrace   # raw estimate
+//! SEED=random cargo run --release --example path_trace --features raytrace # new noise
 //! ```
 //!
 //! Writes `out/path_trace.png`, plus the albedo, normal and depth channels.
@@ -53,6 +54,7 @@ fn main() {
         tone_mapping: ToneMapping::AcesFilmic,
         exposure: 1.0,
         denoise: env_u32("DENOISE", 1) != 0,
+        seed: env_seed(RaytraceSettings::default().seed),
         ..Default::default()
     });
 
@@ -118,6 +120,13 @@ fn env_u32(name: &str, default: u32) -> u32 {
     std::env::var(name)
         .ok()
         .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
+}
+
+fn env_seed(default: u64) -> u64 {
+    std::env::var("SEED")
+        .ok()
+        .and_then(|v| RaytraceSettings::parse_seed(&v))
         .unwrap_or(default)
 }
 

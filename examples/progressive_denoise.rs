@@ -66,6 +66,9 @@ fn main() {
         ..Default::default()
     });
 
+    // Only the learned path ever sets this, so without that feature the binding
+    // is written once and never again — and `mut` is dead.
+    #[allow(unused_mut)]
     let mut denoising = false;
     #[cfg(feature = "learned-denoise")]
     if let Some(path) = arg("--weights") {
@@ -95,6 +98,7 @@ fn main() {
                 start_sample: start,
                 min_step: step,
                 denoise: denoising,
+                ..Default::default()
             },
             |frame| {
                 let path = format!("{out}/spp_{:04}.png", frame.samples);

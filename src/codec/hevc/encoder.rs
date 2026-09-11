@@ -69,10 +69,18 @@ impl Yuv420Frame {
         let mut y = vec![0u8; w * h];
         let mut u = vec![0u8; cw * ch];
         let mut v = vec![0u8; cw * ch];
-        let mut a = vec![0u8; w * h];
-        let mut any_transparent = false;
 
-        // Luma + alpha per pixel.
+        // Look before allocating. Fully-opaque input is the common case and its
+        // alpha plane is discarded at the end anyway — at 8K that would be a
+        // 33 MB allocation, filled and freed, for every frame.
+        let any_transparent = rgba.chunks_exact(4).any(|px| px[3] != 255);
+        let mut a = if any_transparent {
+            vec![0u8; w * h]
+        } else {
+            Vec::new()
+        };
+
+        // Luma (and alpha, when there is any).
         for i in 0..(w * h) {
             let (r, g, b) = (
                 rgba[i * 4] as i32,
@@ -80,9 +88,9 @@ impl Yuv420Frame {
                 rgba[i * 4 + 2] as i32,
             );
             y[i] = clamp8(((66 * r + 129 * g + 25 * b + 128) >> 8) + 16);
-            let alpha = rgba[i * 4 + 3];
-            a[i] = alpha;
-            any_transparent |= alpha != 255;
+            if any_transparent {
+                a[i] = rgba[i * 4 + 3];
+            }
         }
         // Chroma from 2×2 RGB averages.
         for cy in 0..ch {

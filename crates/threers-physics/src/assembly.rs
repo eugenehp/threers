@@ -336,6 +336,11 @@ pub struct Mate {
     /// Whether the two parts also collide with each other. Off by default:
     /// mated parts overlap at the joint by design.
     pub collide: bool,
+    /// What a coupling is mounted on, when it is not mounted on the world.
+    ///
+    /// See [`crate::joint::Joint::gear_on_carrier`]. Ignored on every mate that
+    /// is not a coupling, since those relate two parts and nothing else.
+    pub carrier: Option<PartId>,
 }
 
 impl Mate {
@@ -351,6 +356,7 @@ impl Mate {
             softness: Softness::RIGID,
             break_impulse: None,
             collide: false,
+            carrier: None,
         }
     }
 
@@ -439,6 +445,16 @@ impl Mate {
     }
 
     /// Let the two mated parts collide with each other as well.
+    /// Mount a coupling on a part that moves, so the ratio is enforced against
+    /// it rather than against the world.
+    ///
+    /// The carrier has to be jointed to at least one of the pair — in a real
+    /// train it is, because the pinion runs in a bearing in the case.
+    pub fn carried_by(mut self, carrier: PartId) -> Self {
+        self.carrier = Some(carrier);
+        self
+    }
+
     pub fn collide(mut self, collide: bool) -> Self {
         self.collide = collide;
         self
@@ -1191,7 +1207,18 @@ impl Assembly {
                     Mate::screw_from_pitch(axis_on(moving), axis_on(base), pitch)
                 }
                 MateSpecKind::Gear { ratio } => {
-                    Mate::gear(axis_on(moving), axis_on(base), ratio)
+                    let mut gear = Mate::gear(axis_on(moving), axis_on(base), ratio);
+                    // A carrier naming a part that does not exist is caught by
+                    // `dangling_parts` on the spec; here it simply leaves the
+                    // coupling world-referenced rather than failing the build.
+                    if let Some(carrier) = mate
+                        .carrier
+                        .as_deref()
+                        .and_then(|name| asm.part_named(name))
+                    {
+                        gear = gear.carried_by(carrier);
+                    }
+                    gear
                 }
                 MateSpecKind::Rack { radius } => {
                     // The pinion spins about `axis`; the rack travels along
@@ -2030,7 +2057,12 @@ impl Assembly {
             // constrains: `ratio` reads "turns of the first-named part per turn
             // of the second", and reversing the pair silently turns a 2:1
             // reduction into a 1:2 overdrive.
-            MateKind::Gear { ratio } => Joint::gear(body_b, body_a, axis_b, axis_a, ratio),
+            MateKind::Gear { ratio } => match mate.carrier.and_then(|c| self.body_of(c)) {
+                Some(carrier) => {
+                    Joint::gear_on_carrier(body_b, body_a, carrier, axis_b, axis_a, ratio)
+                }
+                None => Joint::gear(body_b, body_a, axis_b, axis_a, ratio),
+            },
             MateKind::Rack { radius } => Joint::rack_pinion(
                 // The pinion is the first-named part and the rack the second,
                 // matching `Joint::rack_pinion`'s own order.

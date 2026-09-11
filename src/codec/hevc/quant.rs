@@ -37,6 +37,19 @@ pub fn dequant(levels: &[i32], n: usize, qp: i32) -> Vec<i32> {
         .collect()
 }
 
+/// [`dequant`] into a caller-owned buffer, which it resizes. Same arithmetic.
+pub fn dequant_into(levels: &[i32], n: usize, qp: i32, out: &mut [i32]) {
+    let bd_shift = 8 + log2(n) - 5;
+    let m = 16i64;
+    let per = (qp / 6) as i64;
+    let rem = (qp % 6) as usize;
+    let add = if bd_shift > 0 { 1i64 << (bd_shift - 1) } else { 0 };
+    for (o, &l) in out.iter_mut().zip(levels) {
+        let d = (((l as i64 * m * LEVEL_SCALE[rem]) << per) + add) >> bd_shift;
+        *o = d.clamp(-32768, 32767) as i32;
+    }
+}
+
 /// Forward-quantize transform coefficients for an `n×n` block at `qp`. `intra`
 /// selects the rounding offset (deadzone). Returns signed levels.
 pub fn quant(coeff: &[i32], n: usize, qp: i32, intra: bool) -> Vec<i32> {
@@ -52,6 +65,19 @@ pub fn quant(coeff: &[i32], n: usize, qp: i32, intra: bool) -> Vec<i32> {
             sign * level as i32
         })
         .collect()
+}
+
+/// [`quant`] into a caller-owned buffer, which it resizes. Same arithmetic.
+pub fn quant_into(coeff: &[i32], n: usize, qp: i32, intra: bool, out: &mut [i32]) {
+    let transform_shift = 15 - 8 - log2(n);
+    let q_bits = 14 + qp / 6 + transform_shift;
+    let rem = (qp % 6) as usize;
+    let offset = (1i64 << q_bits) / if intra { 3 } else { 6 };
+    for (o, &c) in out.iter_mut().zip(coeff) {
+        let sign = if c < 0 { -1 } else { 1 };
+        let level = (c.unsigned_abs() as i64 * QUANT_SCALE[rem] + offset) >> q_bits;
+        *o = sign * level as i32;
+    }
 }
 
 #[cfg(test)]

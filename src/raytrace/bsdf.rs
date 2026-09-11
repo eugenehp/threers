@@ -21,6 +21,7 @@ use crate::math::Vector3;
 use std::f32::consts::PI;
 use std::sync::OnceLock;
 
+use super::lights::Modulate;
 use super::sampler::{cosine_hemisphere, sample_ggx_vndf, Onb, Rng};
 
 /// Roughness below this is treated as a mirror: the lobe collapses to a delta,
@@ -46,6 +47,15 @@ pub struct Surface {
     /// -1..1; stretches the specular lobe along the tangent.
     pub anisotropy: f32,
     pub anisotropy_rotation: f32,
+    pub sheen: f32,
+    pub sheen_color: Vector3,
+    pub sheen_roughness: f32,
+    pub iridescence: f32,
+    pub iridescence_ior: f32,
+    pub iridescence_thickness: f32,
+    pub dispersion: f32,
+    pub subsurface: f32,
+    pub subsurface_radius: Vector3,
 }
 
 impl Default for Surface {
@@ -61,6 +71,15 @@ impl Default for Surface {
             specular_tint: Vector3::new(1.0, 1.0, 1.0),
             anisotropy: 0.0,
             anisotropy_rotation: 0.0,
+            sheen: 0.0,
+            sheen_color: Vector3::ZERO,
+            sheen_roughness: 1.0,
+            iridescence: 0.0,
+            iridescence_ior: 1.3,
+            iridescence_thickness: 400.0,
+            dispersion: 0.0,
+            subsurface: 0.0,
+            subsurface_radius: Vector3::new(1.0, 0.2, 0.1),
         }
     }
 }
@@ -110,6 +129,9 @@ pub struct Bsdf {
     p_specular: f32,
     p_transmission: f32,
     p_coat: f32,
+    p_sheen: f32,
+    /// Charlie α for the sheen lobe.
+    sheen_alpha: f32,
 }
 
 impl Bsdf {
@@ -167,7 +189,9 @@ impl Bsdf {
         let spec_weight = 1.0 - w_transmission;
         let w_specular = luminance(f0).max(0.04) * spec_weight;
         let w_coat = surface.clearcoat.clamp(0.0, 1.0) * 0.25;
-        let total = (w_diffuse + w_specular + w_transmission + w_coat).max(1e-6);
+        let sheen = surface.sheen.clamp(0.0, 1.0);
+        let w_sheen = luminance(surface.sheen_color) * sheen * (1.0 - metallic);
+        let total = (w_diffuse + w_specular + w_transmission + w_coat + w_sheen).max(1e-6);
 
         let mut onb = Onb::new(normal);
         if surface.anisotropy_rotation != 0.0 && aniso.abs() > 1e-4 {
@@ -179,6 +203,7 @@ impl Bsdf {
         }
 
         let coat_rough = surface.clearcoat_roughness.clamp(0.0, 1.0);
+        let sheen_rough = surface.sheen_roughness.clamp(0.07, 1.0);
         Self {
             onb,
             geom_normal,
@@ -192,6 +217,8 @@ impl Bsdf {
             p_specular: w_specular / total,
             p_transmission: w_transmission / total,
             p_coat: w_coat / total,
+            p_sheen: w_sheen / total,
+            sheen_alpha: (sheen_rough * sheen_rough).max(0.0016),
         }
     }
 
@@ -269,7 +296,16 @@ impl Bsdf {
         // --- diffuse
         if self.p_diffuse > 0.0 && reflecting {
             let kd = 1.0 - schlick_scalar(luminance(self.f0), wo.z.abs());
+            let grazing = (1.0 - wo.z.abs()).max(0.0);
+            let ss = self.surface.subsurface.clamp(0.0, 1.0);
+            let grazing2 = grazing * grazing;
+            let ss_boost = Vector3::new(
+                1.0 + ss * self.surface.subsurface_radius.x * grazing2,
+                1.0 + ss * self.surface.subsurface_radius.y * grazing2,
+                1.0 + ss * self.surface.subsurface_radius.z * grazing2,
+            );
             let v = self.surface.base_color
+                .mul_componentwise(ss_boost)
                 * ((1.0 - self.surface.metallic)
                     * (1.0 - self.surface.transmission)
                     * kd
@@ -279,13 +315,27 @@ impl Bsdf {
             pdf += self.p_diffuse * (wi.z.abs() / PI);
         }
 
+        // --- sheen (Charlie lobe, grazing fabric highlight)
+        if self.p_sheen > 0.0 && reflecting && self.surface.sheen > 0.0 {
+            let h = (wo + wi).normalize();
+            let hz = if h.z < 0.0 { -h } else { h };
+            let n_dot_l = wi.z.abs();
+            let n_dot_v = wo.z.abs();
+            let n_dot_h = hz.z.abs();
+            let tint = self.surface.sheen_color * self.surface.sheen;
+            let d = charlie_d(n_dot_h, self.sheen_alpha);
+            let v = tint * (d * neubelt(n_dot_v, n_dot_l) * n_dot_l / PI * under_coat);
+            f = f + v;
+            pdf += self.p_sheen * (n_dot_l / PI);
+        }
+
         // --- specular reflection
         if !spec_smooth && reflecting {
             let h = (wo + wi).normalize();
             let hz = if h.z < 0.0 { -h } else { h };
             let d = ggx_d(hz, self.ax, self.ay);
             let g = smith_g2(wo, wi, self.ax, self.ay);
-            let fr = schlick(self.f0, wo.dot(hz).abs());
+            let fr = specular_fresnel(self, wo, hz);
             let denom = (4.0 * wo.z.abs() * wi.z.abs()).max(1e-9);
             let ms = self.multiscatter_gain(wo.z.abs());
             let spec = fr * (d * g / denom * under_coat * self.spec_weight);
@@ -303,19 +353,49 @@ impl Bsdf {
         (f, pdf.max(0.0))
     }
 
-    /// Rough dielectric, following Walter et al. 2007 in the form PBRT-v4 uses.
-    /// Covers both sides of the interface: the reflected term shares the same
-    /// microfacet distribution as the refracted one, which is what keeps a
-    /// frosted pane's highlight and its blur consistent.
     fn eval_transmission_local(&self, wo: Vector3, wi: Vector3) -> (Vector3, f32) {
-        let eta = self.surface.ior.max(1.0001);
+        let eta_base = self.surface.ior.max(1.0001);
+        let dispersion = self.surface.dispersion.max(0.0);
         let cos_o = wo.z;
         let cos_i = wi.z;
         if cos_i == 0.0 || cos_o == 0.0 {
             return (Vector3::ZERO, 0.0);
         }
         let reflecting = cos_o * cos_i > 0.0;
-        // Relative IOR across the interface, in the direction the ray travels.
+
+        let mut ft = Vector3::ZERO;
+        let mut pt = 0.0f32;
+        for (ch, offset) in [(0, -1.0f32), (1, 0.0), (2, 1.0)] {
+            let eta = eta_base * (1.0 + dispersion * offset);
+            let (f_ch, p_ch) = self.eval_transmission_channel(wo, wi, eta, reflecting, ch);
+            match ch {
+                0 => {
+                    ft.x = f_ch;
+                    pt += p_ch;
+                }
+                1 => {
+                    ft.y = f_ch;
+                    pt += p_ch;
+                }
+                _ => {
+                    ft.z = f_ch;
+                    pt += p_ch;
+                }
+            }
+        }
+        (ft, pt / 3.0)
+    }
+
+    fn eval_transmission_channel(
+        &self,
+        wo: Vector3,
+        wi: Vector3,
+        eta: f32,
+        reflecting: bool,
+        channel: usize,
+    ) -> (f32, f32) {
+        let cos_o = wo.z;
+        let cos_i = wi.z;
         let etap = if reflecting {
             1.0
         } else if cos_o > 0.0 {
@@ -326,16 +406,14 @@ impl Bsdf {
 
         let mut wm = wi * etap + wo;
         if wm.length_sq() < 1e-12 {
-            return (Vector3::ZERO, 0.0);
+            return (0.0, 0.0);
         }
         wm = wm.normalize();
         if wm.z < 0.0 {
             wm = wm * -1.0;
         }
-        // Reject microfacets that face away from either direction — those are
-        // configurations the surface geometry does not admit.
         if wm.dot(wi) * cos_i < 0.0 || wm.dot(wo) * cos_o < 0.0 {
-            return (Vector3::ZERO, 0.0);
+            return (0.0, 0.0);
         }
 
         let fr = fresnel_dielectric(wo.dot(wm), eta);
@@ -348,25 +426,25 @@ impl Bsdf {
         if reflecting {
             let v = d * fr * g / (4.0 * cos_o * cos_i).abs().max(1e-9);
             let pdf = vndf_reflect_pdf(wo, wm, self.ax, self.ay) * pr / (pr + pt).max(1e-9);
-            (Vector3::new(v, v, v) * weight, pdf)
+            (v * weight, pdf)
         } else {
             let denom = {
                 let d = wi.dot(wm) + wo.dot(wm) / etap;
                 d * d
             };
             if denom < 1e-12 {
-                return (Vector3::ZERO, 0.0);
+                return (0.0, 0.0);
             }
             let v = d * (1.0 - fr) * g
                 * ((wi.dot(wm) * wo.dot(wm)) / (cos_i * cos_o * denom)).abs()
-                // Radiance is not conserved across an interface: it scales with
-                // the square of the relative IOR. Camera-side transport divides
-                // it back out, or a ball of glass would brighten the room.
                 / (etap * etap);
-            // Jacobian of the half-vector→direction change of variables.
             let dwm_dwi = wi.dot(wm).abs() / denom;
             let pdf = vndf_pdf(wo, wm, self.ax, self.ay) * dwm_dwi * pt / (pr + pt).max(1e-9);
-            let tint = self.surface.base_color;
+            let tint = match channel {
+                0 => self.surface.base_color.x,
+                1 => self.surface.base_color.y,
+                _ => self.surface.base_color.z,
+            };
             (tint * (v * weight), pdf)
         }
     }
@@ -394,14 +472,18 @@ impl Bsdf {
                 acc += self.p_transmission;
                 if u < acc {
                     self.sample_transmission(wo, u1, u2, spec_smooth, rng)
-                } else if self.p_coat > 0.0 {
-                    self.sample_coat(wo, u1, u2, coat_smooth)
                 } else {
-                    // The probabilities sum to 1 only to within rounding, so a
-                    // `u` a hair under 1 can fall past the last real lobe.
-                    // Shading a lobe of zero weight would kill the path for
-                    // nothing.
-                    None
+                    acc += self.p_coat;
+                    if u < acc {
+                        self.sample_coat(wo, u1, u2, coat_smooth)
+                    } else {
+                        acc += self.p_sheen;
+                        if u < acc {
+                            self.sample_sheen(wo, u1, u2)
+                        } else {
+                            None
+                        }
+                    }
                 }
             }
         }?;
@@ -456,6 +538,15 @@ impl Bsdf {
         Some((d, false, Vector3::ZERO, false))
     }
 
+    fn sample_sheen(
+        &self,
+        wo: Vector3,
+        u1: f32,
+        u2: f32,
+    ) -> Option<(Vector3, bool, Vector3, bool)> {
+        self.sample_diffuse(wo, u1, u2)
+    }
+
     fn sample_specular(
         &self,
         wo: Vector3,
@@ -465,9 +556,8 @@ impl Bsdf {
     ) -> Option<(Vector3, bool, Vector3, bool)> {
         if smooth {
             let wi = Vector3::new(-wo.x, -wo.y, wo.z);
-            let fr = schlick(self.f0, wo.z.abs());
-            // f·cos/pdf must equal the Fresnel term, so with pdf = 1 the value
-            // carries the 1/cos that the caller's cosine will cancel.
+            let h = Vector3::new(0.0, 0.0, 1.0);
+            let fr = specular_fresnel(self, wo, h);
             let value = fr * (self.spec_weight / wi.z.abs().max(1e-6));
             return Some((wi, true, value, false));
         }
@@ -510,7 +600,8 @@ impl Bsdf {
         smooth: bool,
         rng: &mut Rng,
     ) -> Option<(Vector3, bool, Vector3, bool)> {
-        let eta = self.surface.ior.max(1.0001);
+        let eta_base = self.surface.ior.max(1.0001);
+        let dispersion = self.surface.dispersion.max(0.0);
         let weight = (1.0 - self.surface.metallic) * self.surface.transmission;
 
         // The microfacet normal stays on the +Z side, as it does in `eval`, so
@@ -524,15 +615,20 @@ impl Bsdf {
         };
 
         let cos_oh = wo.dot(h);
-        let fr = fresnel_dielectric(cos_oh, eta);
+        let mut fr_avg = 0.0f32;
+        for offset in [-1.0f32, 0.0, 1.0] {
+            let eta = eta_base * (1.0 + dispersion * offset);
+            fr_avg += fresnel_dielectric(cos_oh, eta);
+        }
+        fr_avg /= 3.0;
         // Choose reflection or refraction in proportion to Fresnel, then divide
         // it back out — so a nearly-grazing ray reflects nearly always, and the
         // estimator stays unbiased either way.
-        let reflect_it = rng.next_f32() < fr;
+        let reflect_it = rng.next_f32() < fr_avg;
         let wi = if reflect_it {
             reflect(wo * -1.0, h)
         } else {
-            // n_incident / n_transmitted, and a normal facing the ray.
+            let eta = eta_base;
             let (n, ratio) = if cos_oh > 0.0 {
                 (h, 1.0 / eta)
             } else {
@@ -545,24 +641,33 @@ impl Bsdf {
         }
 
         if smooth {
-            let value = if reflect_it {
-                let v = fr * weight / wi.z.abs().max(1e-6);
-                Vector3::new(v, v, v)
+            let mut value = Vector3::ZERO;
+            for (ch, offset) in [(0usize, -1.0f32), (1, 0.0), (2, 1.0)] {
+                let eta = eta_base * (1.0 + dispersion * offset);
+                let fr = fresnel_dielectric(cos_oh, eta);
+                let v = if reflect_it {
+                    fr * weight / wi.z.abs().max(1e-6)
+                } else {
+                    let etap = if wo.z > 0.0 { eta } else { 1.0 / eta };
+                    let t = (1.0 - fr) * weight / (etap * etap * wi.z.abs().max(1e-6));
+                    match ch {
+                        0 => self.surface.base_color.x * t,
+                        1 => self.surface.base_color.y * t,
+                        _ => self.surface.base_color.z * t,
+                    }
+                };
+                match ch {
+                    0 => value.x = v,
+                    1 => value.y = v,
+                    _ => value.z = v,
+                }
+            }
+            let div = if reflect_it {
+                fr_avg.max(1e-6)
             } else {
-                let etap = if wo.z > 0.0 { eta } else { 1.0 / eta };
-                let v = (1.0 - fr) * weight / (etap * etap * wi.z.abs().max(1e-6));
-                self.surface.base_color * v
+                (1.0 - fr_avg).max(1e-6)
             };
-            // The Fresnel split is already accounted for by the probability the
-            // branch was taken, so it divides out of the returned value.
-            let value = value
-                * (1.0
-                    / if reflect_it {
-                        fr.max(1e-6)
-                    } else {
-                        (1.0 - fr).max(1e-6)
-                    });
-            return Some((wi, true, value, !reflect_it));
+            return Some((wi, true, value * (1.0 / div), !reflect_it));
         }
         Some((wi, false, Vector3::ZERO, wi.z * wo.z < 0.0))
     }
@@ -588,6 +693,190 @@ impl Bsdf {
             1.0 + self.f0.z * gain,
         )
     }
+}
+
+// ---------------------------------------------------------------- sheen / iridescence
+
+/// Charlie normal distribution (Disney/Estevez fabric sheen).
+fn charlie_d(n_dot_h: f32, alpha: f32) -> f32 {
+    let a = alpha.max(0.0016);
+    let inv_a = 1.0 / a;
+    let cos2h = n_dot_h * n_dot_h;
+    let sin2h = (1.0 - cos2h).max(0.0078125);
+    (2.0 + inv_a) * sin2h.powf(inv_a * 0.5) / (2.0 * PI)
+}
+
+fn neubelt(n_dot_v: f32, n_dot_l: f32) -> f32 {
+    1.0 / (4.0 * (n_dot_l + n_dot_v - n_dot_l * n_dot_v)).max(1e-5)
+}
+
+fn specular_fresnel(bsdf: &Bsdf, wo: Vector3, h: Vector3) -> Vector3 {
+    let cos_theta = wo.dot(h).abs();
+    let base = schlick(bsdf.f0, cos_theta);
+    let ir = bsdf.surface.iridescence.clamp(0.0, 1.0);
+    if ir <= 0.0 {
+        return base;
+    }
+    let film = iridescence_fresnel(
+        1.0,
+        bsdf.surface.iridescence_ior,
+        bsdf.f0,
+        bsdf.surface.iridescence_thickness,
+        wo.z.abs(),
+    );
+    Vector3::new(
+        lerp(base.x, film.x, ir),
+        lerp(base.y, film.y, ir),
+        lerp(base.z, film.z, ir),
+    )
+}
+
+fn ior_to_fresnel0(transmitted: f32, incident: f32) -> f32 {
+    let t = (transmitted - incident) / (transmitted + incident);
+    t * t
+}
+
+fn ior_to_fresnel0_v(transmitted: Vector3, incident: f32) -> Vector3 {
+    Vector3::new(
+        ior_to_fresnel0(transmitted.x, incident),
+        ior_to_fresnel0(transmitted.y, incident),
+        ior_to_fresnel0(transmitted.z, incident),
+    )
+}
+
+fn fresnel0_to_ior(f0: Vector3) -> Vector3 {
+    let s = Vector3::new(
+        f0.x.clamp(0.0, 0.9999).sqrt(),
+        f0.y.clamp(0.0, 0.9999).sqrt(),
+        f0.z.clamp(0.0, 0.9999).sqrt(),
+    );
+    Vector3::new(
+        (1.0 + s.x) / (1.0 - s.x),
+        (1.0 + s.y) / (1.0 - s.y),
+        (1.0 + s.z) / (1.0 - s.z),
+    )
+}
+
+fn schlick_f90(f0: Vector3, f90: Vector3, cos_theta: f32) -> Vector3 {
+    let w = (1.0 - cos_theta).clamp(0.0, 1.0).powi(5);
+    Vector3::new(
+        f0.x + (f90.x - f0.x) * w,
+        f0.y + (f90.y - f0.y) * w,
+        f0.z + (f90.z - f0.z) * w,
+    )
+}
+
+fn schlick_f90_scalar(f0: f32, f90: f32, cos_theta: f32) -> f32 {
+    let w = (1.0 - cos_theta).clamp(0.0, 1.0).powi(5);
+    f0 + (f90 - f0) * w
+}
+
+fn eval_sensitivity(opd: f32, shift: Vector3) -> Vector3 {
+    let phase = 2.0 * PI * opd * 1e-9;
+    let val = Vector3::new(5.4856e-13, 4.4201e-13, 5.2481e-13);
+    let pos = Vector3::new(1.6810e6, 1.7953e6, 2.2084e6);
+    let vr = Vector3::new(4.3278e9, 9.3046e9, 6.6121e9);
+
+    let mut xyz = Vector3::new(
+        val.x * (2.0 * PI * vr.x).sqrt() * (pos.x * phase + shift.x).cos()
+            * (-(phase * phase) * vr.x).exp(),
+        val.y * (2.0 * PI * vr.y).sqrt() * (pos.y * phase + shift.y).cos()
+            * (-(phase * phase) * vr.y).exp(),
+        val.z * (2.0 * PI * vr.z).sqrt() * (pos.z * phase + shift.z).cos()
+            * (-(phase * phase) * vr.z).exp(),
+    );
+    let x_extra = 9.7470e-14
+        * (2.0 * PI * 4.5282e9).sqrt()
+        * (2.2399e6 * phase + shift.x).cos()
+        * (-4.5282e9 * phase * phase).exp();
+    xyz.x += x_extra;
+    xyz = xyz * (1.0 / 1.0685e-7);
+
+    Vector3::new(
+        3.2404542 * xyz.x - 0.969_266 * xyz.y + 0.0556434 * xyz.z,
+        -1.5371385 * xyz.x + 1.8760108 * xyz.y - 0.2040259 * xyz.z,
+        -0.4985314 * xyz.x + 0.0415560 * xyz.y + 1.0572252 * xyz.z,
+    )
+}
+
+fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
+    let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// Thin-film interference tint (Belcour & Barla 2017), matching three.js.
+fn iridescence_fresnel(
+    outside_ior: f32,
+    film_ior_in: f32,
+    base_f0: Vector3,
+    thickness_nm: f32,
+    cos_theta1: f32,
+) -> Vector3 {
+    let film_ior = lerp(outside_ior, film_ior_in, smoothstep(0.0, 0.03, thickness_nm));
+    let sin_theta2_sq = (outside_ior / film_ior).powi(2) * (1.0 - cos_theta1 * cos_theta1);
+    let cos_theta2_sq = 1.0 - sin_theta2_sq;
+    if cos_theta2_sq < 0.0 {
+        return Vector3::ONE;
+    }
+    let cos_theta2 = cos_theta2_sq.max(0.0).sqrt();
+
+    let r0 = ior_to_fresnel0(film_ior, outside_ior);
+    let r12 = schlick_f90_scalar(r0, 1.0, cos_theta1);
+    let t121 = 1.0 - r12;
+
+    let mut phi12 = 0.0f32;
+    if film_ior < outside_ior {
+        phi12 = PI;
+    }
+    let phi21 = PI - phi12;
+
+    let base_ior = fresnel0_to_ior(base_f0);
+    let r1 = ior_to_fresnel0_v(base_ior, film_ior);
+    let r23 = schlick_f90(r1, Vector3::ONE, cos_theta2);
+
+    let mut phi23 = Vector3::ZERO;
+    if base_ior.x < film_ior {
+        phi23.x = PI;
+    }
+    if base_ior.y < film_ior {
+        phi23.y = PI;
+    }
+    if base_ior.z < film_ior {
+        phi23.z = PI;
+    }
+
+    let opd = 2.0 * film_ior * thickness_nm * cos_theta2;
+    let phi = Vector3::new(phi21, phi21, phi21) + phi23;
+
+    let r123 = Vector3::new(
+        (r12 * r23.x).clamp(1e-5, 0.9999),
+        (r12 * r23.y).clamp(1e-5, 0.9999),
+        (r12 * r23.z).clamp(1e-5, 0.9999),
+    );
+    let r123_sqrt = Vector3::new(r123.x.sqrt(), r123.y.sqrt(), r123.z.sqrt());
+    let rs = Vector3::new(
+        t121 * t121 * r23.x / (1.0 - r123.x).max(1e-5),
+        t121 * t121 * r23.y / (1.0 - r123.y).max(1e-5),
+        t121 * t121 * r23.z / (1.0 - r123.z).max(1e-5),
+    );
+
+    let c0 = Vector3::new(r12, r12, r12) + rs;
+    let mut i_out = c0;
+    let mut cm = rs - Vector3::new(t121, t121, t121);
+    for m in 1..=2 {
+        cm = Vector3::new(
+            cm.x * r123_sqrt.x,
+            cm.y * r123_sqrt.y,
+            cm.z * r123_sqrt.z,
+        );
+        let sm = eval_sensitivity(
+            m as f32 * opd,
+            Vector3::new(m as f32 * phi.x, m as f32 * phi.y, m as f32 * phi.z),
+        );
+        i_out = i_out + cm.mul_componentwise(sm * 2.0);
+    }
+
+    Vector3::new(i_out.x.max(0.0), i_out.y.max(0.0), i_out.z.max(0.0))
 }
 
 // ---------------------------------------------------------------- microfacets

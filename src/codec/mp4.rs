@@ -11,18 +11,44 @@
 //! (`tx3g`, what ffmpeg calls `mov_text`) — the soft-subtitle format MP4
 //! players understand, so the viewer can toggle captions off.
 //!
-//! Layout is `ftyp, mdat, moov` — `mdat` before `moov` so chunk offsets (`stco`)
-//! are fixed before `moov`'s size is known.
+//! Layout is `ftyp, mdat, moov` — `mdat` before `moov` so chunk offsets (`stco` /
+//! `co64`) are fixed before `moov`'s size is known. Boxes larger than 4 GiB use
+//! the ISOBMFF extended-size header.
 
 use crate::captions::CaptionTrack;
 
 /// Wrap `payload` in a box with `type_` (a 4-byte tag).
+///
+/// Uses the 64-bit ISOBMFF extended size (`size == 1` + `largesize`) when the
+/// box would exceed 4 GiB — required for long HEVC exports whose `mdat` is huge.
 fn bx(type_: &[u8; 4], payload: &[u8]) -> Vec<u8> {
-    let mut v = Vec::with_capacity(8 + payload.len());
-    v.extend_from_slice(&((8 + payload.len()) as u32).to_be_bytes());
-    v.extend_from_slice(type_);
-    v.extend_from_slice(payload);
-    v
+    let total = 8u64 + payload.len() as u64;
+    if total > u32::MAX as u64 {
+        let largesize = 16u64 + payload.len() as u64;
+        let mut v = Vec::with_capacity(largesize as usize);
+        v.extend_from_slice(&1u32.to_be_bytes()); // size == 1 → 64-bit largesize follows
+        v.extend_from_slice(type_);
+        v.extend_from_slice(&largesize.to_be_bytes());
+        v.extend_from_slice(payload);
+        v
+    } else {
+        let mut v = Vec::with_capacity(total as usize);
+        v.extend_from_slice(&(total as u32).to_be_bytes());
+        v.extend_from_slice(type_);
+        v.extend_from_slice(payload);
+        v
+    }
+}
+
+/// Header length of a serialized box: 16 bytes for the 64-bit extended form,
+/// 8 otherwise. Only the tests need this now that `mdat` is written in place.
+#[cfg(test)]
+fn box_header_len(box_bytes: &[u8]) -> usize {
+    if box_bytes.len() >= 8 && u32::from_be_bytes(box_bytes[0..4].try_into().unwrap()) == 1 {
+        16
+    } else {
+        8
+    }
 }
 
 /// A full-box (`version` + 24-bit `flags`) wrapping `payload`.
@@ -142,6 +168,28 @@ pub fn mux_h264(p: &H264Mp4Params) -> Vec<u8> {
 }
 
 /// Mux an H.264 video track plus a `tx3g` soft-subtitle track.
+/// [`mux_h264`] streamed to a sink — see [`mux_common_to`] for why.
+pub fn write_h264<W: std::io::Write>(
+    out: &mut W,
+    p: &H264Mp4Params,
+    captions: Option<&CaptionTrack>,
+) -> std::io::Result<()> {
+    let common = CommonMp4Params::from(p);
+    let stsd = build_h264_stsd(p);
+    mux_common_to(out, &common, &[b"isom", b"iso2", b"avc1", b"mp41"], stsd, captions)
+}
+
+/// [`mux_hevc`] streamed to a sink — see [`mux_common_to`] for why.
+pub fn write_hevc<W: std::io::Write>(
+    out: &mut W,
+    p: &Mp4Params,
+    captions: Option<&CaptionTrack>,
+) -> std::io::Result<()> {
+    let common = CommonMp4Params::from(p);
+    let stsd = build_hevc_stsd(p);
+    mux_common_to(out, &common, &[b"isom", b"iso2", b"mp41", b"hvc1"], stsd, captions)
+}
+
 pub fn mux_h264_with_captions(p: &H264Mp4Params, captions: &CaptionTrack) -> Vec<u8> {
     mux_h264_internal(p, Some(captions))
 }
@@ -223,6 +271,24 @@ fn mux_common(
     stsd: Vec<u8>,
     captions: Option<&CaptionTrack>,
 ) -> Vec<u8> {
+    let mut out = Vec::new();
+    // Writing into a Vec cannot fail, so the shared path's errors are unreachable here.
+    mux_common_to(&mut out, p, brands, stsd, captions).expect("writing to a Vec cannot fail");
+    out
+}
+
+/// [`mux_common`], streamed to a sink instead of returned.
+///
+/// The file is emitted as it is assembled, so nothing holds a complete copy of
+/// it. That matters for long exports: the sample data alone is the bulk of the
+/// file, and building the whole thing in memory first doubles it.
+fn mux_common_to<W: std::io::Write>(
+    out: &mut W,
+    p: &CommonMp4Params,
+    brands: &[&[u8; 4]],
+    stsd: Vec<u8>,
+    captions: Option<&CaptionTrack>,
+) -> std::io::Result<()> {
     let num_samples = p.samples.len().max(1) as u32;
     let total_duration = p.frame_duration * num_samples;
 
@@ -243,14 +309,22 @@ fn mux_common(
         .map(|t| build_text_samples(t, p.timescale, total_duration))
         .unwrap_or_default();
 
-    // ---- mdat (video samples, then text samples) ----
-    let mut mdat_payload = concat(p.samples);
-    let video_bytes = mdat_payload.len() as u32;
-    for s in &text_samples {
-        mdat_payload.extend_from_slice(&s.data);
-    }
-    let mdat = bx(b"mdat", &mdat_payload);
-    let mdat_data_offset = (ftyp.len() + 8) as u32; // sample data starts after mdat header
+    // ---- mdat sizing ----
+    //
+    // Only the *size* is needed here; the payload is streamed straight into the
+    // output at the end. Materialising it would cost three full copies of the
+    // sample data (concat, then the box, then the final assembly), and at 4K the
+    // samples are already hundreds of megabytes.
+    let video_bytes: u64 = p.samples.iter().map(|s| s.len() as u64).sum();
+    let text_bytes: u64 = text_samples.iter().map(|s| s.data.len() as u64).sum();
+    let mdat_payload_len = video_bytes + text_bytes;
+    // Matches `bx`: the 64-bit extended header kicks in past 4 GiB.
+    let mdat_hdr = if 8 + mdat_payload_len > u32::MAX as u64 {
+        16
+    } else {
+        8
+    };
+    let mdat_data_offset = ftyp.len() as u64 + mdat_hdr as u64;
     let text_data_offset = mdat_data_offset + video_bytes;
 
     // ---- sample tables ----
@@ -292,12 +366,24 @@ fn mux_common(
     });
 
     // Single chunk holding all samples, located at the start of mdat's payload.
-    let stco = fullbox(b"stco", 0, 0, &{
-        let mut v = Vec::new();
-        v.extend_from_slice(&1u32.to_be_bytes()); // entry_count
-        v.extend_from_slice(&mdat_data_offset.to_be_bytes());
-        v
-    });
+    // Use `co64` when the file is large enough that the chunk offset needs 64 bits
+    // (always true once `mdat` uses a 16-byte extended header past 4 GiB payloads,
+    // and also if the offset itself exceeds u32::MAX).
+    let stco = if mdat_data_offset > u32::MAX as u64 {
+        fullbox(b"co64", 0, 0, &{
+            let mut v = Vec::new();
+            v.extend_from_slice(&1u32.to_be_bytes()); // entry_count
+            v.extend_from_slice(&mdat_data_offset.to_be_bytes());
+            v
+        })
+    } else {
+        fullbox(b"stco", 0, 0, &{
+            let mut v = Vec::new();
+            v.extend_from_slice(&1u32.to_be_bytes()); // entry_count
+            v.extend_from_slice(&(mdat_data_offset as u32).to_be_bytes());
+            v
+        })
+    };
 
     let stbl = bx(b"stbl", &concat(&[stsd, stts, stss, stsc, stsz, stco]));
 
@@ -394,7 +480,24 @@ fn mux_common(
     moov_children.extend(text_trak);
     let moov = bx(b"moov", &concat(&moov_children));
 
-    concat(&[ftyp, mdat, moov])
+    // Emit in order: ftyp, the mdat header, every sample, then moov.
+    out.write_all(&ftyp)?;
+    if mdat_hdr == 16 {
+        out.write_all(&1u32.to_be_bytes())?; // size == 1 → largesize follows
+        out.write_all(b"mdat")?;
+        out.write_all(&(16 + mdat_payload_len).to_be_bytes())?;
+    } else {
+        out.write_all(&((8 + mdat_payload_len) as u32).to_be_bytes())?;
+        out.write_all(b"mdat")?;
+    }
+    for s in p.samples {
+        out.write_all(s)?;
+    }
+    for s in &text_samples {
+        out.write_all(&s.data)?;
+    }
+    out.write_all(&moov)?;
+    Ok(())
 }
 
 /// One `tx3g` sample: a duration in media ticks and its serialized payload.
@@ -478,7 +581,7 @@ fn text_track(
     samples: &[TextSample],
     timescale: u32,
     total_duration: u32,
-    data_offset: u32,
+    data_offset: u64,
 ) -> Vec<u8> {
     let count = samples.len() as u32;
 
@@ -558,12 +661,21 @@ fn text_track(
         v
     });
 
-    let stco = fullbox(b"stco", 0, 0, &{
-        let mut v = Vec::new();
-        v.extend_from_slice(&1u32.to_be_bytes()); // entry_count
-        v.extend_from_slice(&data_offset.to_be_bytes());
-        v
-    });
+    let stco = if data_offset > u32::MAX as u64 {
+        fullbox(b"co64", 0, 0, &{
+            let mut v = Vec::new();
+            v.extend_from_slice(&1u32.to_be_bytes()); // entry_count
+            v.extend_from_slice(&data_offset.to_be_bytes());
+            v
+        })
+    } else {
+        fullbox(b"stco", 0, 0, &{
+            let mut v = Vec::new();
+            v.extend_from_slice(&1u32.to_be_bytes()); // entry_count
+            v.extend_from_slice(&(data_offset as u32).to_be_bytes());
+            v
+        })
+    };
 
     let stbl = bx(b"stbl", &concat(&[stsd, stts, stsc, stsz, stco]));
 
@@ -640,6 +752,26 @@ const UNITY_MATRIX: [u8; 36] = [
 mod tests {
     use super::*;
 
+    fn walk_top_level(out: &[u8]) -> Vec<String> {
+        let mut o = 0usize;
+        let mut tags = Vec::new();
+        while o + 8 <= out.len() {
+            let size32 = u32::from_be_bytes([out[o], out[o + 1], out[o + 2], out[o + 3]]);
+            let (hdr, size) = if size32 == 1 {
+                assert!(o + 16 <= out.len());
+                let large = u64::from_be_bytes(out[o + 8..o + 16].try_into().unwrap());
+                (16usize, large as usize)
+            } else {
+                (8usize, size32 as usize)
+            };
+            tags.push(String::from_utf8_lossy(&out[o + 4..o + 8]).to_string());
+            assert!(size >= hdr && o + size <= out.len(), "box {size} at {o}");
+            o += size;
+        }
+        assert_eq!(o, out.len(), "top-level boxes tile the file");
+        tags
+    }
+
     #[test]
     fn boxes_are_well_formed() {
         let sample = vec![0u8; 40];
@@ -653,17 +785,7 @@ mod tests {
             samples: &[sample],
         });
         assert_eq!(&out[4..8], b"ftyp");
-        // Top-level boxes must tile exactly.
-        let mut o = 0;
-        let mut tags = Vec::new();
-        while o + 8 <= out.len() {
-            let size = u32::from_be_bytes([out[o], out[o + 1], out[o + 2], out[o + 3]]) as usize;
-            tags.push(String::from_utf8_lossy(&out[o + 4..o + 8]).to_string());
-            assert!(size >= 8 && o + size <= out.len(), "box {size} at {o}");
-            o += size;
-        }
-        assert_eq!(o, out.len(), "top-level boxes tile the file");
-        assert_eq!(tags, vec!["ftyp", "mdat", "moov"]);
+        assert_eq!(walk_top_level(&out), vec!["ftyp", "mdat", "moov"]);
     }
 
     #[test]
@@ -678,16 +800,22 @@ mod tests {
             samples: &[sample],
         });
         assert_eq!(&out[4..8], b"ftyp");
-        let mut o = 0;
-        let mut tags = Vec::new();
-        while o + 8 <= out.len() {
-            let size = u32::from_be_bytes([out[o], out[o + 1], out[o + 2], out[o + 3]]) as usize;
-            tags.push(String::from_utf8_lossy(&out[o + 4..o + 8]).to_string());
-            assert!(size >= 8 && o + size <= out.len(), "box {size} at {o}");
-            o += size;
-        }
-        assert_eq!(o, out.len(), "top-level boxes tile the file");
-        assert_eq!(tags, vec!["ftyp", "mdat", "moov"]);
+        assert_eq!(walk_top_level(&out), vec!["ftyp", "mdat", "moov"]);
         assert!(out.windows(4).any(|w| w == b"avc1"));
+    }
+
+    #[test]
+    fn extended_size_header_layout() {
+        // `bx` switches to largesize when 8+payload > u32::MAX. We don't allocate
+        // a 4 GiB buffer in tests — just assert the header math the muxer uses.
+        let payload_len = (u32::MAX as u64) - 6; // 8 + len > u32::MAX
+        let largesize = 16 + payload_len;
+        assert!(largesize > u32::MAX as u64);
+        let mut hdr = Vec::new();
+        hdr.extend_from_slice(&1u32.to_be_bytes());
+        hdr.extend_from_slice(b"mdat");
+        hdr.extend_from_slice(&largesize.to_be_bytes());
+        assert_eq!(box_header_len(&hdr), 16);
+        assert_eq!(box_header_len(&bx(b"mdat", &[0u8; 64])), 8);
     }
 }

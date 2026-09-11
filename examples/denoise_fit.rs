@@ -136,6 +136,10 @@ fn main() {
     ] {
         println!("  {name:<14} {got:>8.4}   (default {was})");
     }
+    println!(
+        "  min_samples    {:>8}   (default {})",
+        fitted.min_samples, defaults.min_samples
+    );
 }
 
 /// A rendered pair, kept alive so the borrowed views in `DenoiseExample` stay
@@ -149,6 +153,7 @@ struct Rendered {
     normal: Vec<[f32; 3]>,
     depth: Vec<f32>,
     variance: Vec<f32>,
+    sample_counts: Vec<u32>,
     scale: f32,
 }
 
@@ -163,6 +168,7 @@ impl Rendered {
                 normal: &self.normal,
                 depth: &self.depth,
                 variance: &self.variance,
+                sample_counts: Some(&self.sample_counts),
                 scene_scale: self.scale,
             },
             reference: &self.reference,
@@ -197,6 +203,7 @@ fn render_pair(build: &fn() -> (Scene, PerspectiveCamera)) -> Rendered {
     let normal = film.resolve_normal();
     let depth = film.resolve_depth();
     let variance = film.resolve_variance();
+    let sample_counts = film.resolve_sample_counts();
     let scale = r.traced_scene().map(|s| s.scale()).unwrap_or(1.0);
 
     let (mut scene, camera) = build();
@@ -214,6 +221,7 @@ fn render_pair(build: &fn() -> (Scene, PerspectiveCamera)) -> Rendered {
         normal,
         depth,
         variance,
+        sample_counts,
         scale,
     }
 }

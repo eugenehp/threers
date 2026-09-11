@@ -114,14 +114,96 @@ pub fn encode_mp4_with_captions(
     frames: &[Yuv420Frame],
     captions: Option<&CaptionTrack>,
 ) -> Vec<u8> {
+    encode_mp4_from_iter(width, height, fps, captions, frames.iter().cloned())
+}
+
+/// [`encode_mp4`] over an iterator of frames, so the caller can generate them
+/// lazily and never hold more than one.
+pub fn encode_mp4_from_iter<I>(
+    width: u32,
+    height: u32,
+    fps: u32,
+    captions: Option<&CaptionTrack>,
+    frames: I,
+) -> Vec<u8>
+where
+    I: IntoIterator<Item = Yuv420Frame>,
+{
+    encode_mp4_inner(width, height, fps, captions, &mut frames.into_iter())
+}
+
+/// [`encode_mp4`] pulling one frame at a time instead of taking them all up
+/// front.
+///
+/// A 4:2:0 frame is `width * height * 1.5` bytes, so at 4K or 8K the source
+/// frames dwarf everything else the encoder touches — ten seconds of 8K at 24fps
+/// is roughly 12 GB of them. Nothing needs them to coexist: the muxer wants the
+/// *encoded* samples, and those are orders of magnitude smaller. `next` is
+/// called once per frame index, in order.
+pub fn encode_mp4_streaming<F>(
+    width: u32,
+    height: u32,
+    fps: u32,
+    frame_count: usize,
+    captions: Option<&CaptionTrack>,
+    next: F,
+) -> Vec<u8>
+where
+    F: FnMut(usize) -> Yuv420Frame,
+{
+    encode_mp4_inner(width, height, fps, captions, &mut (0..frame_count).map(next))
+}
+
+/// [`encode_mp4_from_iter`] written straight to a sink.
+///
+/// Combined with a lazy `frames`, nothing ever holds the whole clip *or* the
+/// whole file: peak memory is one frame plus the encoded samples.
+pub fn write_mp4_from_iter<W, I>(
+    out: &mut W,
+    width: u32,
+    height: u32,
+    fps: u32,
+    captions: Option<&CaptionTrack>,
+    frames: I,
+) -> std::io::Result<()>
+where
+    W: std::io::Write,
+    I: IntoIterator<Item = Yuv420Frame>,
+{
+    let fps = fps.max(1);
+    let timescale = 600u32;
+    let mut enc = H264Encoder::new(width, height);
+    let avcc = enc.avcc();
+    let mut samples = Vec::new();
+    for f in frames {
+        samples.push(H264Encoder::sample_from_au(&enc.encode_frame(&f)));
+    }
+    let params = H264Mp4Params {
+        width,
+        height,
+        timescale,
+        frame_duration: timescale / fps,
+        avcc_payload: &avcc,
+        samples: &samples,
+    };
+    crate::codec::mp4::write_h264(out, &params, captions.filter(|t| !t.is_empty()))
+}
+
+fn encode_mp4_inner(
+    width: u32,
+    height: u32,
+    fps: u32,
+    captions: Option<&CaptionTrack>,
+    frames: &mut dyn Iterator<Item = Yuv420Frame>,
+) -> Vec<u8> {
     let fps = fps.max(1);
     let timescale = 600u32;
     let frame_duration = timescale / fps;
     let mut enc = H264Encoder::new(width, height);
     let avcc = enc.avcc();
-    let mut samples = Vec::with_capacity(frames.len());
+    let mut samples = Vec::new();
     for f in frames {
-        samples.push(H264Encoder::sample_from_au(&enc.encode_frame(f)));
+        samples.push(H264Encoder::sample_from_au(&enc.encode_frame(&f)));
     }
     let params = H264Mp4Params {
         width,

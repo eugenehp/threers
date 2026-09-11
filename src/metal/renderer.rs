@@ -67,6 +67,28 @@ pub(crate) struct Vertex {
     pub _pad: f32,
 }
 
+/// Set `THREERS_NO_SLIM_LINES=1` to upload lines as full `Vertex`es again.
+///
+/// An escape hatch for a change that alters how every line in a scene reaches
+/// the GPU: the two paths are meant to be pixel-identical, and this is what
+/// lets that be measured rather than asserted.
+fn slim_lines_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("THREERS_NO_SLIM_LINES").is_none())
+}
+
+/// The slim vertex a line draw reads: 24 bytes against `Vertex`'s 48.
+///
+/// Lines are unlit and untextured, so normal, uv and pad are dead weight. At
+/// connectome scale that halves the resident geometry — see `LineVertex` in
+/// `shaders.metal`, whose layout this must match exactly.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub(crate) struct LineVertex {
+    pub position: [f32; 3],
+    pub color: [f32; 3],
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 struct DirLightGpu {
@@ -360,6 +382,10 @@ pub struct MetalRenderStats {
     pub geometry_uploads: u32,
     /// Textures uploaded this frame.
     pub texture_uploads: u32,
+    /// Bytes currently held in cached vertex + index buffers. The figure that
+    /// decides whether a large scene fits in memory or pages, and the one the
+    /// slim line layout exists to halve.
+    pub geometry_bytes: u64,
 }
 
 // -------------------------------------------------------------------- caches
@@ -373,6 +399,11 @@ struct CachedGeometry {
     indices: Option<Owned>,
     index_count: usize,
     vertex_count: usize,
+    /// Size of the GPU buffers this entry holds, for `geometry_bytes`.
+    bytes: u64,
+    /// Which layout `vertices` holds. A geometry drawn as lines and then as a
+    /// mesh (or the reverse) has to be re-uploaded, not reinterpreted.
+    slim: bool,
     last_used: u64,
 }
 
@@ -388,6 +419,7 @@ struct DrawItem {
     geometry: Arc<BufferGeometry>,
     material: Arc<Material>,
     world: Matrix4,
+    layers: Layers,
     primitive: NSUInteger,
     /// Per-instance matrices, until they are uploaded — then the index of the
     /// buffer holding them, so a skipped item cannot shift another item's
@@ -398,6 +430,8 @@ struct DrawItem {
     view_depth: f32,
     render_order: i32,
     transparent: bool,
+    /// When false, draw with depth compare Always (x-ray overlay).
+    depth_test: bool,
 }
 
 // ------------------------------------------------------------------ renderer
@@ -427,12 +461,19 @@ pub struct MetalRenderer {
     geometries: HashMap<usize, CachedGeometry>,
     textures: HashMap<usize, CachedTexture>,
     /// `[forward-write, forward-read, reverse-write, reverse-read]`.
-    depth_states: [Owned; 4],
+    depth_states: [Owned; 5],
     white: Owned,
     identity_instance: Owned,
     transients: Vec<Vec<Owned>>,
     frame: u64,
     cache_retention: u64,
+    /// Keep the depth attachment after the pass, for readers like SSAO.
+    store_depth: bool,
+    /// Line width in pixels; 0 keeps one-pixel hardware lines.
+    line_width: f32,
+    /// Last `geometry_bytes` reported, so the log fires on change not per frame.
+    /// Atomic because the frame build runs behind `&self`.
+    logged_geometry_bytes: std::sync::atomic::AtomicU64,
 }
 
 impl MetalRenderer {
@@ -449,6 +490,8 @@ impl MetalRenderer {
             depth_stencil_state(&device, compare::LESS, false)?,
             depth_stencil_state(&device, compare::GREATER, true)?,
             depth_stencil_state(&device, compare::GREATER, false)?,
+            // Overlay / x-ray strokes — always pass, never write.
+            depth_stencil_state(&device, compare::ALWAYS, false)?,
         ];
         let white = white_texture(&device)?;
         let identity_instance =
@@ -465,6 +508,9 @@ impl MetalRenderer {
             transients: (0..FRAMES_IN_FLIGHT).map(|_| Vec::new()).collect(),
             frame: 0,
             cache_retention: DEFAULT_CACHE_RETENTION,
+            store_depth: false,
+            line_width: 0.0,
+            logged_geometry_bytes: std::sync::atomic::AtomicU64::new(0),
         })
     }
 
@@ -492,6 +538,19 @@ impl MetalRenderer {
     /// ever drawn — in GPU memory *and* in system memory. Raise it if objects
     /// come and go over a longer cycle than the default; `u64::MAX` never
     /// evicts.
+    /// Draw lines as coverage-weighted screen-space quads of this pixel width.
+    /// 0 (the default) keeps hardware lines, which are all-or-nothing at one
+    /// pixel and so flicker for anything thinner.
+    pub fn set_line_width(&mut self, px: f32) {
+        self.line_width = px.max(0.0);
+    }
+
+    /// Keep the depth attachment after each pass so a later pass can sample it.
+    /// Off by default: it costs bandwidth that nothing otherwise reads.
+    pub fn set_store_depth(&mut self, on: bool) {
+        self.store_depth = on;
+    }
+
     pub fn set_cache_retention(&mut self, frames: u64) {
         self.cache_retention = frames;
     }
@@ -541,7 +600,8 @@ impl MetalRenderer {
 
         // Opaque front-to-back (early-z rejects the overdraw), transparent
         // back-to-front (blending is order-dependent). `render_order` wins over
-        // both, as in three.js.
+        // both, as in three.js. Depth-test-disabled overlays sort with
+        // transparent so they composite after occluders.
         items.sort_by(|a, b| {
             a.transparent
                 .cmp(&b.transparent)
@@ -559,7 +619,8 @@ impl MetalRenderer {
         // Upload before encoding: both touch `self`, and the encoder holds a
         // command buffer that a mipmap blit would otherwise interleave with.
         for item in &mut items {
-            if self.ensure_geometry(&item.geometry)? {
+            let slim = item.primitive == primitive::LINE && slim_lines_enabled();
+            if self.ensure_geometry(&item.geometry, slim)? {
                 stats.geometry_uploads += 1;
             }
             let slots = item.material.texture_slots();
@@ -637,13 +698,24 @@ impl MetalRenderer {
         let mut items = Vec::new();
         let mut stats = MetalRenderStats::default();
         let (mut n_dir, mut n_point, mut n_spot, mut n_hemi) = (0usize, 0, 0, 0);
-        let cam_layers = primary.layers;
+        // Union every view's layer mask so split-screen / multi-viewport passes
+        // collect both sides; each pass filters in [`encode_pass`].
+        let cam_layers = views.iter().fold(Layers::with_mask(0), |mut acc, v| {
+            acc.mask |= v.layers.mask;
+            acc
+        });
+        let cam_layers = if cam_layers.mask == 0 {
+            primary.layers
+        } else {
+            cam_layers
+        };
 
         scene.arena.traverse_visible(scene.root, &mut |_id, obj| {
             if !cam_layers.test(&obj.layers) {
                 return;
             }
             let world = obj.matrix_world;
+            let obj_layers = obj.layers;
             let mut push = |geometry: &Arc<BufferGeometry>,
                             material: &Arc<Material>,
                             primitive: NSUInteger,
@@ -654,17 +726,22 @@ impl MetalRenderer {
                 }
                 let center =
                     Vector3::new(world.elements[12], world.elements[13], world.elements[14]);
+                let depth_test = material.depth_test();
+                // Overlays sort after opaque occluders even at opacity 1.0.
+                let transparent = is_transparent(material) || !depth_test;
                 items.push(DrawItem {
                     geometry: geometry.clone(),
                     material: material.clone(),
                     world,
+                    layers: obj_layers,
                     primitive,
                     instance_count: instances.as_ref().map(|v| v.len() / 16).unwrap_or(1),
                     instances,
                     instance_slot: None,
                     view_depth: center.distance_to(eye),
                     render_order: obj.render_order,
-                    transparent: is_transparent(material),
+                    transparent,
+                    depth_test,
                 });
             };
 
@@ -769,26 +846,59 @@ impl MetalRenderer {
         });
 
         frame_u.counts = [n_dir as u32, n_point as u32, n_spot as u32, n_hemi as u32];
+        stats.geometry_bytes = self.geometries.values().map(|g| g.bytes).sum();
+        // Logged on meaningful change rather than per frame: on a scene that
+        // grows as it animates this is the number that predicts a stall, and
+        // it is invisible otherwise.
+        let last = self
+            .logged_geometry_bytes
+            .load(std::sync::atomic::Ordering::Relaxed);
+        if stats.geometry_bytes.abs_diff(last) > (last / 8).max(64 << 20) {
+            self.logged_geometry_bytes
+                .store(stats.geometry_bytes, std::sync::atomic::Ordering::Relaxed);
+            log::info!(
+                "geometry buffers: {:.2} GB across {} cached ({})",
+                stats.geometry_bytes as f64 / (1u64 << 30) as f64,
+                self.geometries.len(),
+                if slim_lines_enabled() { "slim lines" } else { "full vertices" },
+            );
+        }
         (frame_u, items, stats)
     }
 
     // --------------------------------------------------------------- uploads
 
     /// Ensure `geometry` has current GPU buffers. `true` if it uploaded.
-    fn ensure_geometry(&mut self, geometry: &Arc<BufferGeometry>) -> Result<bool, MetalError> {
+    fn ensure_geometry(
+        &mut self,
+        geometry: &Arc<BufferGeometry>,
+        slim: bool,
+    ) -> Result<bool, MetalError> {
         let key = Arc::as_ptr(geometry) as usize;
         let frame = self.frame;
         if let Some(cached) = self.geometries.get_mut(&key) {
-            if cached.version == geometry.geometry_version {
+            if cached.version == geometry.geometry_version && cached.slim == slim {
                 cached.last_used = frame;
                 return Ok(false);
             }
         }
-        let vertices = build_vertices(geometry);
-        if vertices.is_empty() {
-            return Ok(false);
-        }
-        let vbuf = self.device.new_buffer(bytemuck::cast_slice(&vertices))?;
+        // Built as one or the other, never both: the slim path also skips
+        // `derive_normals`, whose scratch vector is the size of the geometry.
+        let (vbuf, vertex_count) = if slim {
+            let vertices = build_line_vertices(geometry);
+            if vertices.is_empty() {
+                return Ok(false);
+            }
+            let n = vertices.len();
+            (self.device.new_buffer(bytemuck::cast_slice(&vertices))?, n)
+        } else {
+            let vertices = build_vertices(geometry);
+            if vertices.is_empty() {
+                return Ok(false);
+            }
+            let n = vertices.len();
+            (self.device.new_buffer(bytemuck::cast_slice(&vertices))?, n)
+        };
         let (ibuf, index_count) = match &geometry.index {
             Some(idx) if !idx.is_empty() => (
                 Some(self.device.new_buffer(bytemuck::cast_slice(idx))?),
@@ -799,12 +909,18 @@ impl MetalRenderer {
         self.geometries.insert(
             key,
             CachedGeometry {
+                bytes: (vertex_count * if slim {
+                    std::mem::size_of::<LineVertex>()
+                } else {
+                    std::mem::size_of::<Vertex>()
+                } + index_count * std::mem::size_of::<u32>()) as u64,
                 _geometry: geometry.clone(),
                 version: geometry.geometry_version,
                 vertices: vbuf,
                 indices: ibuf,
                 index_count,
-                vertex_count: vertices.len(),
+                vertex_count,
+                slim,
                 last_used: frame,
             },
         );
@@ -876,6 +992,7 @@ impl MetalRenderer {
                 pass,
                 frame_u,
                 views[0].viewport,
+                None,
                 items,
                 slot,
                 stats,
@@ -909,6 +1026,7 @@ impl MetalRenderer {
                     pass,
                     &per_view,
                     view.viewport,
+                    Some(view.layers),
                     items,
                     slot,
                     stats,
@@ -937,6 +1055,7 @@ impl MetalRenderer {
         pass: &PassAttachments,
         frame_u: &FrameUniforms,
         viewport: Option<MTLViewport>,
+        view_layers: Option<Layers>,
         items: &[DrawItem],
         slot: usize,
         stats: &mut MetalRenderStats,
@@ -969,6 +1088,11 @@ impl MetalRenderer {
         let mut failure = None;
 
         for item in items {
+            if let Some(layers) = view_layers {
+                if !layers.test(&item.layers) {
+                    continue;
+                }
+            }
             let key = Arc::as_ptr(&item.geometry) as usize;
             // Nothing uploaded for this geometry — an attribute set the vertex
             // builder could make nothing of. Counted, not drawn, not fatal.
@@ -986,8 +1110,18 @@ impl MetalRenderer {
             let material = &item.material;
             let point_sprites = item.primitive == primitive::POINT;
             let layered_draw = views_per_draw > 1;
+            let wide = item.primitive == primitive::LINE
+                && self.line_width > 0.0
+                && !layered_draw
+                && slim_lines_enabled();
             let pipeline = match self.pipeline(PipelineKey {
                 point_sprites,
+                wide_lines: wide,
+                // Must agree with what `ensure_geometry` uploaded, or the
+                // vertex shader reads the wrong stride and the draw is garbage.
+                slim_lines: item.primitive == primitive::LINE
+                    && !layered_draw
+                    && slim_lines_enabled(),
                 blend: item.transparent,
                 layered: layered_draw,
                 // Only the layered path needs this, and naming it there costs a
@@ -1016,9 +1150,13 @@ impl MetalRenderer {
             // blended layers both survive rather than the nearer one erasing
             // the further one's contribution. A pass with no depth attachment
             // gets no depth state at all: Metal rejects one that would write.
+            // Overlays (`depth_test == false`) always pass and never write.
             if !pass.depth.is_null() {
-                let depth_state =
-                    self.depth_states[pass.reverse_z as usize * 2 + item.transparent as usize].id();
+                let depth_state = if !item.depth_test {
+                    self.depth_states[4].id()
+                } else {
+                    self.depth_states[pass.reverse_z as usize * 2 + item.transparent as usize].id()
+                };
                 if depth_state != last_depth {
                     let _: () = msg1(encoder, sel!("setDepthStencilState:"), depth_state);
                     last_depth = depth_state;
@@ -1083,12 +1221,17 @@ impl MetalRenderer {
                 0usize,
             );
 
-            let draw_u = draw_uniforms(
+            let mut draw_u = draw_uniforms(
                 item,
                 texture != self.white.id(),
                 instanced.is_some(),
                 &item.geometry,
             );
+            if wide {
+                // misc.y is the point size, which a line never uses — the quad
+                // path reads its width in pixels from the same slot.
+                draw_u.misc[1] = self.line_width;
+            }
             set_bytes(encoder, true, &draw_u, VB_DRAW);
             set_bytes(encoder, false, &draw_u, FB_DRAW);
 
@@ -1119,12 +1262,19 @@ impl MetalRenderer {
                     );
                 }
                 _ => {
+                    // Six vertices per segment instead of two, as triangles —
+                    // the vertex buffer is unchanged, only how it is read.
+                    let (prim, count) = if wide {
+                        (primitive::TRIANGLE, (vertex_count / 2) * 6)
+                    } else {
+                        (item.primitive, vertex_count)
+                    };
                     let _: () = msg4(
                         encoder,
                         sel!("drawPrimitives:vertexStart:vertexCount:instanceCount:"),
-                        item.primitive,
+                        prim,
                         0usize,
-                        vertex_count as NSUInteger,
+                        count as NSUInteger,
                         instances as NSUInteger,
                     );
                 }
@@ -1258,7 +1408,20 @@ impl MetalRenderer {
                     load_action::LOAD
                 },
             );
-            let _: () = msg1(depth, sel!("setStoreAction:"), store_action::DONT_CARE);
+            // Normally discarded: depth is scratch for the pass that draws it,
+            // and storing it costs bandwidth nothing reads. SSAO does read it
+            // afterwards, and a discarded depth texture samples as the clear
+            // value — which sends every pixel down the far-plane early-out and
+            // produces occlusion that is uniformly, silently absent.
+            let _: () = msg1(
+                depth,
+                sel!("setStoreAction:"),
+                if self.store_depth {
+                    store_action::STORE
+                } else {
+                    store_action::DONT_CARE
+                },
+            );
             // Reverse-Z clears to the far plane, which is 0.
             let _: () = msg1(
                 depth,
@@ -1488,6 +1651,45 @@ pub(crate) fn build_vertices(geometry: &BufferGeometry) -> Vec<Vertex> {
     out
 }
 
+/// Interleave a line geometry's attributes into the slim `LineVertex` layout.
+///
+/// Deliberately does not derive normals: lines are unlit, and `derive_normals`
+/// would allocate a scratch vector the size of the geometry to compute
+/// something nothing reads.
+pub(crate) fn build_line_vertices(geometry: &BufferGeometry) -> Vec<LineVertex> {
+    let Some(positions) = geometry.attributes.get("position") else {
+        return Vec::new();
+    };
+    if positions.item_size < 3 {
+        return Vec::new();
+    }
+    let count = positions.array.len() / positions.item_size;
+    let colors = geometry
+        .attributes
+        .get("color")
+        .filter(|a| a.item_size >= 3);
+
+    let mut out = Vec::with_capacity(count);
+    for i in 0..count {
+        let p = positions.item_size * i;
+        let color = colors
+            .map(|a| {
+                let j = a.item_size * i;
+                [a.array[j], a.array[j + 1], a.array[j + 2]]
+            })
+            .unwrap_or([1.0, 1.0, 1.0]);
+        out.push(LineVertex {
+            position: [
+                positions.array[p],
+                positions.array[p + 1],
+                positions.array[p + 2],
+            ],
+            color,
+        });
+    }
+    out
+}
+
 /// Area-weighted vertex normals, for geometry that arrived without any.
 fn derive_normals(geometry: &BufferGeometry, count: usize) -> Vec<[f32; 3]> {
     let mut normals = vec![[0.0f32; 3]; count];
@@ -1622,6 +1824,33 @@ mod tests {
     #[test]
     fn geometry_without_positions_is_skipped() {
         assert!(build_vertices(&BufferGeometry::new()).is_empty());
+        assert!(build_line_vertices(&BufferGeometry::new()).is_empty());
+    }
+
+    #[test]
+    fn line_vertices_are_half_the_size_and_carry_position_and_colour() {
+        // The whole point of the slim layout. If this ever stops holding, the
+        // connectome renders go back to paging.
+        assert_eq!(std::mem::size_of::<LineVertex>(), 24);
+        assert_eq!(std::mem::size_of::<Vertex>(), 48);
+
+        let mut g = triangle();
+        g.set_attribute(
+            "color",
+            BufferAttribute::new(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0], 3),
+        );
+        let verts = build_line_vertices(&g);
+        assert_eq!(verts.len(), 3);
+        assert_eq!(verts[1].position, [1.0, 0.0, 0.0]);
+        assert_eq!(verts[2].color, [0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn line_vertices_default_to_white_without_a_colour_attribute() {
+        // Matches `build_vertices`, whose shader multiplies by this when the
+        // material does not enable vertex colours.
+        let verts = build_line_vertices(&triangle());
+        assert_eq!(verts[0].color, [1.0, 1.0, 1.0]);
     }
 
     #[test]

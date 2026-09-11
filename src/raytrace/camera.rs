@@ -17,7 +17,7 @@ use super::settings::RaytraceSettings;
 
 /// A camera resolved into the form the tracer needs: world-space ray origins
 /// and directions, plus a lens.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct RtCamera {
     inv_view: Matrix4,
     inv_proj: Matrix4,
@@ -31,6 +31,9 @@ pub struct RtCamera {
     perspective: bool,
     aperture: f32,
     focus_distance: f32,
+    /// Previous-frame camera for motion blur interpolation.
+    motion_prev: Option<Box<RtCamera>>,
+    motion_shutter: f32,
 }
 
 impl RtCamera {
@@ -60,7 +63,19 @@ impl RtCamera {
             perspective,
             aperture: settings.aperture.max(0.0),
             focus_distance: settings.focus_distance.max(0.0),
+            motion_prev: None,
+            motion_shutter: settings.motion_blur_shutter.max(0.0),
         }
+    }
+
+    /// Attach the previous camera pose for motion blur. `shutter` is the fraction
+    /// of the frame over which the lens is open (`0..=1`).
+    pub fn with_motion_previous(mut self, prev: RtCamera, shutter: f32) -> Self {
+        if shutter > 0.0 {
+            self.motion_prev = Some(Box::new(prev));
+            self.motion_shutter = shutter.clamp(0.0, 1.0);
+        }
+        self
     }
 
     /// Set the focal distance — used to apply autofocus once the scene has been
@@ -94,6 +109,15 @@ impl RtCamera {
 
     pub fn up(&self) -> Vector3 {
         self.up
+    }
+
+    pub fn motion_shutter(&self) -> f32 {
+        self.motion_shutter
+    }
+
+    /// Previous pose when motion blur is active.
+    pub fn motion_previous(&self) -> Option<&RtCamera> {
+        self.motion_prev.as_deref()
     }
 
     /// The inverted matrices ray generation unprojects through. Exposed so a
@@ -170,10 +194,27 @@ impl RtCamera {
         height: u32,
         jitter: (f32, f32),
         lens: (f32, f32),
+        shutter_time: f32,
     ) -> (Vector3, Vector3) {
         let u = (x as f32 + jitter.0) / width as f32;
         let v = (y as f32 + jitter.1) / height as f32;
-        self.ray(Vector2::new(u * 2.0 - 1.0, 1.0 - v * 2.0), lens)
+        let ndc = Vector2::new(u * 2.0 - 1.0, 1.0 - v * 2.0);
+        let (o, d) = self.ray(ndc, lens);
+        let Some(prev) = self.motion_prev.as_ref() else {
+            return (o, d);
+        };
+        if self.motion_shutter <= 0.0 {
+            return (o, d);
+        }
+        let (o0, d0) = prev.ray(ndc, lens);
+        let t = shutter_time.clamp(0.0, 1.0) * self.motion_shutter;
+        let origin = o0.lerp(o, t);
+        let direction = d0.lerp(d, 1.0 - t);
+        if direction.length_sq() > 1e-20 {
+            (origin, direction.normalize())
+        } else {
+            (origin, d)
+        }
     }
 }
 
@@ -223,8 +264,8 @@ mod tests {
     fn pixel_row_zero_is_the_top_of_the_image() {
         let cam = perspective();
         let rt = RtCamera::new(&cam, &RaytraceSettings::default());
-        let (_, top) = rt.pixel_ray(50, 0, 100, 100, (0.5, 0.5), (0.5, 0.5));
-        let (_, bottom) = rt.pixel_ray(50, 99, 100, 100, (0.5, 0.5), (0.5, 0.5));
+        let (_, top) = rt.pixel_ray(50, 0, 100, 100, (0.5, 0.5), (0.5, 0.5), 0.5);
+        let (_, bottom) = rt.pixel_ray(50, 99, 100, 100, (0.5, 0.5), (0.5, 0.5), 0.5);
         assert!(
             top.y > bottom.y,
             "row 0 should look higher: {top:?} vs {bottom:?}"

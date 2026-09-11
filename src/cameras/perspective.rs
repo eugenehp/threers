@@ -49,6 +49,8 @@ pub struct PerspectiveCamera {
     pub projection: ProjectionKind,
     /// When set, overrides the computed perspective matrix (Reflector oblique clip).
     pub projection_override: Option<[f32; 16]>,
+    /// Channel mask — meshes are drawn iff this intersects `Object3D::layers`.
+    pub layers: crate::core::Layers,
 }
 
 impl PerspectiveCamera {
@@ -72,6 +74,7 @@ impl PerspectiveCamera {
             sensor_fit: SensorFit::Auto,
             projection: ProjectionKind::Perspective,
             projection_override: None,
+            layers: crate::core::Layers::default(),
         }
     }
 
@@ -112,5 +115,8 @@ impl Camera for PerspectiveCamera {
     }
     fn near_far(&self) -> (f32, f32) {
         (self.near, self.far)
+    }
+    fn layers(&self) -> crate::core::Layers {
+        self.layers
     }
 }

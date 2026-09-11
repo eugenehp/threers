@@ -733,6 +733,10 @@ fn world_positions(
                 height as u32,
                 (0.5, 0.5),
                 (0.5, 0.5),
+                // Mid-shutter: this reprojects a static depth buffer, so the
+                // instant only matters if a motion blur is configured, and the
+                // middle of the exposure is the frame this depth belongs to.
+                0.5,
             );
             let hit = origin + dir * d;
             out[i] = [hit.x, hit.y, hit.z];

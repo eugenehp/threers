@@ -92,16 +92,21 @@ fn main() {
     let raw_hdr = r.film().resolve_hdr();
     let scale = r.traced_scene().map(|s| s.scale()).unwrap_or(1.0);
 
-    // À-Trous, given every guide it wants.
+    let albedo = r.film().resolve_albedo();
+    let normal = r.film().resolve_normal();
+    let depth = r.film().resolve_depth();
+    let variance = r.film().resolve_variance();
+    let sample_counts = r.film().resolve_sample_counts();
     let atrous_hdr = denoise(
         w,
         h,
         &raw_hdr,
         &DenoiseGuides {
-            albedo: &r.film().resolve_albedo(),
-            normal: &r.film().resolve_normal(),
-            depth: &r.film().resolve_depth(),
-            variance: &r.film().resolve_variance(),
+            albedo: &albedo,
+            normal: &normal,
+            depth: &depth,
+            variance: &variance,
+            sample_counts: Some(&sample_counts),
             scene_scale: scale,
         },
         &DenoiseParams::default(),

@@ -217,8 +217,16 @@ impl MeshBvh {
         far: f32,
         backface_culling: bool,
     ) -> Option<BvhHit> {
+        if self.nodes.is_empty() {
+            return None;
+        }
+        let inv = Vector3::new(
+            1.0 / ray.direction.x,
+            1.0 / ray.direction.y,
+            1.0 / ray.direction.z,
+        );
         let mut best: Option<BvhHit> = None;
-        self.raycast_node_first(0, ray, near, far, backface_culling, &mut best);
+        self.raycast_node_first(0, ray, inv, near, far, backface_culling, &mut best);
         best
     }
 
@@ -414,16 +422,13 @@ impl MeshBvh {
         &self,
         node_index: u32,
         ray: &Ray,
+        inv: Vector3,
         near: f32,
         far: f32,
         backface_culling: bool,
         best: &mut Option<BvhHit>,
     ) {
         let node = &self.nodes[node_index as usize];
-        if !ray.intersects_box(&node.bounds) {
-            return;
-        }
-
         if node.is_leaf {
             let start = node.left_or_offset as usize;
             let count = node.right_or_count as usize;
@@ -441,17 +446,24 @@ impl MeshBvh {
                     }
                 }
             }
-        } else {
-            self.raycast_node_first(node.left_or_offset, ray, near, far, backface_culling, best);
-            let far_limit = best.map(|h| h.distance).unwrap_or(far);
-            self.raycast_node_first(
-                node.right_or_count,
-                ray,
-                near,
-                far_limit,
-                backface_culling,
-                best,
-            );
+            return;
+        }
+
+        // Each child is slab-tested exactly once, and the nearer one is opened
+        // first so the hit it finds tightens the bound the far one is measured
+        // against. Testing the node itself on entry as well — the obvious
+        // shape — triples the slab work for nothing, since the parent already
+        // established that this box is worth opening.
+        let (l, r) = (node.left_or_offset, node.right_or_count);
+        let dl = box_entry(ray.origin, inv, &self.nodes[l as usize].bounds);
+        let dr = box_entry(ray.origin, inv, &self.nodes[r as usize].bounds);
+        let (n1, d1, n2, d2) = if dl <= dr { (l, dl, r, dr) } else { (r, dr, l, dl) };
+        let limit = |best: &Option<BvhHit>| best.as_ref().map(|h| h.distance).unwrap_or(far);
+        if d1 <= limit(best) {
+            self.raycast_node_first(n1, ray, inv, near, far, backface_culling, best);
+        }
+        if d2 <= limit(best) {
+            self.raycast_node_first(n2, ray, inv, near, far, backface_culling, best);
         }
     }
 
@@ -552,6 +564,34 @@ fn closest_point_on_triangle(p: Vector3, a: Vector3, b: Vector3, c: Vector3) -> 
     let v = vb * denom;
     let w = vc * denom;
     a + ab * v + ac * w
+}
+
+/// Distance at which a ray enters an axis-aligned box, or `INFINITY` if it
+/// misses. Zero when the origin is already inside.
+///
+/// `Ray::intersect_box` cannot be used for this: it returns the *exit*
+/// distance when the origin is inside the box, which a traversal would read as
+/// a far-away entry and cull — starting with the root, on every ray that
+/// begins inside the scene.
+#[inline(always)]
+fn box_entry(origin: Vector3, inv: Vector3, b: &Box3) -> f32 {
+    let t1 = (b.min.x - origin.x) * inv.x;
+    let t2 = (b.max.x - origin.x) * inv.x;
+    let mut lo = t1.min(t2);
+    let mut hi = t1.max(t2);
+    let t1 = (b.min.y - origin.y) * inv.y;
+    let t2 = (b.max.y - origin.y) * inv.y;
+    lo = lo.max(t1.min(t2));
+    hi = hi.min(t1.max(t2));
+    let t1 = (b.min.z - origin.z) * inv.z;
+    let t2 = (b.max.z - origin.z) * inv.z;
+    lo = lo.max(t1.min(t2));
+    hi = hi.min(t1.max(t2));
+    if hi < lo.max(0.0) {
+        f32::INFINITY
+    } else {
+        lo.max(0.0)
+    }
 }
 
 #[cfg(test)]

@@ -19,6 +19,12 @@ use crate::textures::{Texture, TextureFilter, TextureFormat, TextureWrap};
 pub struct PipelineKey {
     /// `false` = `vs_mesh`/`fs_mesh`, `true` = `vs_point`/`fs_point`.
     pub point_sprites: bool,
+    /// Read vertices as the 24-byte `LineVertex` rather than the 48-byte
+    /// `Vertex`. Set for line draws, whose geometry is uploaded slim.
+    pub slim_lines: bool,
+    /// Expand segments into screen-space quads with coverage falloff, instead
+    /// of drawing one-pixel hardware lines.
+    pub wide_lines: bool,
     /// Source-alpha blending, for transparent materials.
     pub blend: bool,
     /// Draw both eyes in one pass, into two slices of an array attachment.
@@ -40,6 +46,10 @@ pub struct PipelineKey {
 pub fn render_pipeline(device: &MetalDevice, key: PipelineKey) -> Result<Owned, MetalError> {
     let _pool = AutoreleasePool::new();
     let (vs, fs) = match (key.point_sprites, key.layered) {
+        (false, false) if key.wide_lines => ("vs_line_quad", "fs_line_quad"),
+        // Slim lines have no layered variant: the stereo path widens every
+        // vertex anyway, so it keeps the full-fat format.
+        (false, false) if key.slim_lines => ("vs_line", "fs_mesh"),
         (false, false) => ("vs_mesh", "fs_mesh"),
         (false, true) => ("vs_mesh_layered", "fs_mesh"),
         (true, false) => ("vs_point", "fs_point"),
@@ -544,6 +554,8 @@ mod tests {
     fn pipeline_keys_distinguish_blend_and_format() {
         let a = PipelineKey {
             point_sprites: false,
+            slim_lines: false,
+            wide_lines: false,
             blend: false,
             layered: false,
             topology: topology_class::UNSPECIFIED,
@@ -573,6 +585,10 @@ mod tests {
                 ..d
             }
         );
+        // Slim lines read a different vertex struct, so they cannot share a
+        // pipeline with the mesh path.
+        assert_ne!(a, PipelineKey { slim_lines: true, ..a });
+        assert_ne!(a, PipelineKey { wide_lines: true, ..a });
         assert_eq!(topology_class::of(primitive::POINT), topology_class::POINT);
         assert_eq!(topology_class::of(primitive::LINE), topology_class::LINE);
         assert_eq!(

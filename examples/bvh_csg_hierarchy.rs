@@ -65,12 +65,25 @@ async fn run() {
         .await
         .expect("adapter");
 
+    // Downlevel defaults allow 16 sampled textures and 16 samplers per stage,
+    // and the main pass declares 20 of each in the fragment stage — material
+    // maps, the shadow atlases and the environment all bind there. Without
+    // raising these two, `Renderer::new` fails wgpu 30's pipeline-layout
+    // validation outright. `HeadlessRenderer` raises the same pair.
+    let adapter_limits = adapter.limits();
+    // `using_resolution` for the texture size, too: the renderer allocates a
+    // 4096 shadow map and downlevel caps 2D textures at 2048.
+    let mut limits = wgpu::Limits::downlevel_defaults().using_resolution(adapter_limits.clone());
+    limits.max_sampled_textures_per_shader_stage =
+        adapter_limits.max_sampled_textures_per_shader_stage;
+    limits.max_samplers_per_shader_stage = adapter_limits.max_samplers_per_shader_stage;
+
     let (device, queue) = adapter
         .request_device(
             &wgpu::DeviceDescriptor {
                 label: Some("threers"),
                 required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::downlevel_defaults(),
+                required_limits: limits,
                 ..Default::default()
             },
         )

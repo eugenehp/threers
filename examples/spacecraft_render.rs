@@ -37,7 +37,7 @@ fn out_path(default: &str) -> PathBuf {
 }
 
 fn main() {
-    let out = out_path("spacecraft.png");
+    let out = out_path("out/spacecraft.png");
 
     let mut renderer = HeadlessRenderer::builder()
         .size(W, H)
@@ -79,6 +79,9 @@ fn main() {
     println!("rendering {W}×{H} at {SS}×…");
     let rgba = renderer.render_to_rgba_resolved(&mut scene, &camera);
 
+    if let Some(dir) = std::path::Path::new(&out).parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
     std::fs::write(&out, threers::encode_png(W, H, &rgba)).expect("write png");
     println!("wrote {}", out.display());
 }

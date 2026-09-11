@@ -9,9 +9,37 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::gpu_mesh::{geom_cache_key, GpuMesh};
+use super::gpu_timer::GpuTimer;
 use super::gpu_texture::{
     cube_cache_key, tex_cache_key, GpuCubeTexture, GpuTexture, MipGenerator, TexCacheKey,
 };
+/// Identity of the texture set a bind group binds.
+///
+/// `external_rt_id` is folded in because RT-backed textures bypass the texture
+/// cache entirely and resolve through `rt_view_cache`, so two textures with the
+/// same upload key can still bind different views.
+type TexBgKey = [Option<(TexCacheKey, u32)>; 10];
+
+fn tex_slot_key(slot: &Option<std::sync::Arc<crate::Texture>>) -> Option<(TexCacheKey, u32)> {
+    slot.as_ref()
+        .map(|t| (tex_cache_key(t), t.external_rt_id.unwrap_or(u32::MAX)))
+}
+
+fn tex_bg_key(slots: &MaterialTextureSlots) -> TexBgKey {
+    [
+        tex_slot_key(&slots.map),
+        tex_slot_key(&slots.normal_map),
+        tex_slot_key(&slots.roughness_map),
+        tex_slot_key(&slots.metalness_map),
+        tex_slot_key(&slots.ao_map),
+        tex_slot_key(&slots.emissive_map),
+        tex_slot_key(&slots.matcap_map),
+        tex_slot_key(&slots.displacement_map),
+        tex_slot_key(&slots.cloud_shadow_map),
+        tex_slot_key(&slots.iridescence_thickness_map),
+    ]
+}
+
 use super::shader::{
     MAX_DIR_LIGHTS, MAX_HEMI_LIGHTS, MAX_POINT_LIGHTS, MAX_RECT_LIGHTS, MAX_SPOT_LIGHTS,
     SHADER_SOURCE,
@@ -20,7 +48,7 @@ use crate::cameras::Camera;
 use crate::core::{BufferGeometry, ObjectKind};
 use crate::lights::Light;
 use crate::materials::{Material, MaterialKind, MaterialTextureSlots};
-use crate::math::{Matrix3, Matrix4, Vector3};
+use crate::math::{Frustum, Matrix3, Matrix4, Sphere, Vector3};
 use crate::scene::Scene;
 use crate::textures::{CubeTexture, Texture, TextureFormat};
 
@@ -299,6 +327,37 @@ const FLAG_CLOUD_SHADOW: u32 = 4096;
 struct CachedGpuMesh {
     version: u32,
     mesh: GpuMesh,
+    /// Object-space bounds, for frustum culling. `None` when the geometry has
+    /// no position attribute, which is the one case that must never be culled
+    /// — there is nothing to test it against.
+    sphere: Option<Sphere>,
+}
+
+/// A bounding sphere for `geom` without mutating it.
+///
+/// `BufferGeometry::compute_bounding_sphere` caches into the geometry and so
+/// needs `&mut`; geometries reach the renderer behind an `Arc` and are shared,
+/// so this recomputes instead. Same construction: centre of the AABB, radius
+/// the furthest vertex from it.
+fn local_bounding_sphere(geom: &BufferGeometry) -> Option<Sphere> {
+    if let Some(s) = geom.bounding_sphere {
+        return Some(s);
+    }
+    let mut lo = Vector3::new(f32::INFINITY, f32::INFINITY, f32::INFINITY);
+    let mut hi = Vector3::new(f32::NEG_INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
+    for p in geom.positions()? {
+        lo = Vector3::new(lo.x.min(p.x), lo.y.min(p.y), lo.z.min(p.z));
+        hi = Vector3::new(hi.x.max(p.x), hi.y.max(p.y), hi.z.max(p.z));
+    }
+    if !lo.x.is_finite() {
+        return None;
+    }
+    let centre = (lo + hi) * 0.5;
+    let mut r2 = 0.0f32;
+    for p in geom.positions()? {
+        r2 = r2.max((p - centre).length_sq());
+    }
+    Some(Sphere::new(centre, r2.sqrt()))
 }
 
 /// Camera parameters forwarded into SSAO / SSR post-fx uniforms.
@@ -483,6 +542,16 @@ pub struct Renderer {
     depth_size: (u32, u32),
 
     geom_cache: HashMap<*const BufferGeometry, CachedGpuMesh>,
+    /// Whether to skip colour-pass draws the camera cannot see. On by default,
+    /// matching three.js, where `Object3D.frustumCulled` starts true.
+    frustum_culling: bool,
+    /// `(drawn, culled)` for the last frame. Culling is defined to leave the
+    /// image alone, so a pixel comparison cannot tell whether it did anything
+    /// — this is the only way to see that it is working, and the only way a
+    /// test can tell a correct frustum from one that never rejects anything.
+    cull_stats: (usize, usize),
+    /// GPU time for the main pass, when the adapter can measure it.
+    timer: Option<GpuTimer>,
     skin_attr_cache: HashMap<*const BufferGeometry, wgpu::Buffer>,
     /// Uploaded textures, by [`Texture::id`].
     tex_cache: HashMap<TexCacheKey, GpuTexture>,
@@ -535,7 +604,20 @@ pub struct Renderer {
 
     frame_buffer: wgpu::Buffer,
     frame_bind_group: wgpu::BindGroup,
-    per_mesh: Vec<(wgpu::Buffer, wgpu::BindGroup, wgpu::BindGroup)>, // uniform, mesh bg, tex bg
+    per_mesh: Vec<(wgpu::Buffer, wgpu::BindGroup, std::sync::Arc<wgpu::BindGroup>)>, // uniform, mesh bg, tex bg
+    /// Texture bind groups, keyed on the textures they bind.
+    ///
+    /// These used to be rebuilt from scratch once per draw per frame — ten
+    /// texture views and two samplers looked up and a `create_bind_group` for
+    /// every mesh, every frame, whether or not anything about it had changed.
+    /// Measured at 0.3 ms for 73 draws, and it grows with the draw count, so
+    /// a scene with several hundred meshes was paying milliseconds a frame to
+    /// rebuild bind groups that were bit-for-bit what they had been.
+    ///
+    /// A bind group is a pure function of the textures it binds, so this is
+    /// keyed on exactly those and invalidated whenever a texture is uploaded,
+    /// evicted, or re-registered as a render target.
+    tex_bg_cache: HashMap<TexBgKey, std::sync::Arc<wgpu::BindGroup>>,
 
     sampler_linear: wgpu::Sampler,
     sampler_nearest_clamp: wgpu::Sampler,
@@ -627,6 +709,63 @@ struct SsColor {
     mip_sample_views: Vec<wgpu::TextureView>,
     mips: u32,
     format: wgpu::TextureFormat,
+}
+
+/// A hemisphere of sample offsets for SSAO, clustered towards the origin.
+///
+/// Points are drawn on the +Z hemisphere — the shader rotates them into the
+/// fragment's tangent frame — and scaled by a quadratic so that most samples
+/// sit close in, which is where occlusion actually varies.
+fn default_ssao_kernel() -> Vec<f32> {
+    let mut out = Vec::with_capacity(32 * 3);
+    // A fixed integer hash rather than a PRNG crate: the kernel has to be the
+    // same on every run or the same scene renders differently each launch.
+    let hash = |i: u32, salt: u32| -> f32 {
+        let mut h = i.wrapping_mul(747_796_405).wrapping_add(salt.wrapping_mul(2_891_336_453));
+        h ^= h >> 16;
+        h = h.wrapping_mul(2_246_822_519);
+        h ^= h >> 13;
+        (h >> 8) as f32 / 16_777_216.0
+    };
+    for i in 0..32u32 {
+        let mut v = [
+            hash(i, 1) * 2.0 - 1.0,
+            hash(i, 2) * 2.0 - 1.0,
+            // Hemisphere: never below the surface.
+            hash(i, 3),
+        ];
+        let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt().max(1e-4);
+        // Scale in towards the origin, quadratically.
+        let t = i as f32 / 32.0;
+        let scale = (0.1 + 0.9 * t * t) / len;
+        v[0] *= scale;
+        v[1] *= scale;
+        v[2] *= scale;
+        out.extend_from_slice(&v);
+    }
+    out
+}
+
+/// Sixteen rotation values, one per texel of the 4x4 noise texture.
+///
+/// Never zero: the shader builds its tangent from this, and a zero would make
+/// it `normalize(vec3(0))` — a NaN that spreads through the whole kernel.
+fn default_ssao_noise() -> Vec<f32> {
+    (0..16)
+        .map(|i| {
+            let mut h = (i as u32).wrapping_mul(2_654_435_761);
+            h ^= h >> 15;
+            h = h.wrapping_mul(2_246_822_519);
+            h ^= h >> 13;
+            let u = (h >> 8) as f32 / 16_777_216.0;
+            // Away from zero, and signed, so neighbouring texels decorrelate.
+            if u < 0.5 {
+                -0.35 - u
+            } else {
+                0.35 + (u - 0.5)
+            }
+        })
+        .collect()
 }
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
@@ -898,8 +1037,15 @@ impl Renderer {
             .unwrap_or(true);
         if stale {
             let mesh = GpuMesh::upload(&self.device, geom);
-            self.geom_cache
-                .insert(key, CachedGpuMesh { version: ver, mesh });
+            let sphere = local_bounding_sphere(geom);
+            self.geom_cache.insert(
+                key,
+                CachedGpuMesh {
+                    version: ver,
+                    mesh,
+                    sphere,
+                },
+            );
         }
     }
 
@@ -2140,7 +2286,8 @@ impl Renderer {
                 ],
             },
             wgpu::VertexBufferLayout {
-                array_stride: 64,
+                // Sixteen floats of matrix plus four of tint.
+                array_stride: 80,
                 step_mode: wgpu::VertexStepMode::Instance,
                 attributes: &[
                     wgpu::VertexAttribute {
@@ -2161,6 +2308,11 @@ impl Renderer {
                     wgpu::VertexAttribute {
                         offset: 48,
                         shader_location: 7,
+                        format: wgpu::VertexFormat::Float32x4,
+                    },
+                    wgpu::VertexAttribute {
+                        offset: 64,
+                        shader_location: 9,
                         format: wgpu::VertexFormat::Float32x4,
                     },
                 ],
@@ -3224,7 +3376,7 @@ impl Renderer {
             &ss_depth_placeholder_view,
         );
 
-        Self {
+        let mut renderer = Self {
             device,
             queue,
             pipeline_glass_depth,
@@ -3330,6 +3482,9 @@ impl Renderer {
             hw_depth_tex,
             depth_size: (width, height),
             geom_cache: HashMap::new(),
+            frustum_culling: true,
+            cull_stats: (0, 0),
+            timer: None,
             skin_attr_cache: HashMap::new(),
             tex_cache: HashMap::new(),
             mipgen: None,
@@ -3361,6 +3516,7 @@ impl Renderer {
             frame_buffer,
             frame_bind_group,
             per_mesh: Vec::new(),
+            tex_bg_cache: HashMap::new(),
             sampler_linear,
             sampler_nearest_clamp,
             sampler_linear_repeat,
@@ -3371,7 +3527,48 @@ impl Renderer {
             default_black,
             default_transparent,
             color_format,
-        }
+        };
+
+        // Screen-space ambient occlusion needs a sample kernel and a rotation
+        // noise texture, and until now the only code that ever uploaded them
+        // was `wasm.rs`. Every native caller got a zero kernel — so every
+        // sample offset was the zero vector, every sample landed on the
+        // fragment it started from, `delta` never exceeded `min_dist`, and the
+        // effect returned a constant for every pixel whatever radius it was
+        // given. That is why SSAO has been switched off by default: it was not
+        // subtle, it was doing nothing.
+        //
+        // Defaults are installed here so the feature works out of the box; the
+        // setters still override them.
+        renderer.timer = GpuTimer::new(&renderer.device, &renderer.queue);
+        renderer.set_ssao_kernel(&default_ssao_kernel());
+        renderer.set_ssao_noise(&default_ssao_noise());
+        renderer
+    }
+
+    /// Turn frustum culling off, drawing every mesh whether the camera can see
+    /// it or not.
+    ///
+    /// On by default. The only reason to switch it off is a geometry whose
+    /// vertex positions are not where its buffer says they are — the renderer
+    /// already exempts skinned, instanced and custom-shader draws, so this is
+    /// an escape hatch rather than a knob worth turning.
+    pub fn set_frustum_culling(&mut self, on: bool) {
+        self.frustum_culling = on;
+    }
+
+    pub fn frustum_culling(&self) -> bool {
+        self.frustum_culling
+    }
+
+    /// `(drawn, culled)` meshes for the most recent `render` call.
+    ///
+    /// `culled` counts draws the camera frustum rejected. They were still
+    /// submitted to the shadow passes — an off-screen caster shadows the view
+    /// — so this is a count of skipped *colour* draws, not of skipped work
+    /// altogether.
+    pub fn cull_stats(&self) -> (usize, usize) {
+        self.cull_stats
     }
 
     pub fn color_format(&self) -> wgpu::TextureFormat {
@@ -3635,6 +3832,7 @@ impl Renderer {
                     flip_y,
                 );
                 self.rt_view_cache.insert(normal_rt_id, n);
+                self.tex_bg_cache.clear();
             }
             None => {
                 let fallback_normal = self
@@ -3666,8 +3864,10 @@ impl Renderer {
             self.rt_depth_view_cache.insert(normal_rt_id, v);
         }
         self.rt_view_cache.insert(input_rt_id, input_view);
+        self.tex_bg_cache.clear();
         if let Some(d) = depth_owned {
             self.rt_view_cache.insert(depth_rt_id, d);
+            self.tex_bg_cache.clear();
         }
     }
 
@@ -4458,6 +4658,11 @@ impl Renderer {
             /// Z in view space, used to back-to-front sort transparent draws.
             view_z: f32,
             render_order: i32,
+            /// False when the camera frustum cannot see this. It still has to
+            /// be drawn into the shadow maps — a caster behind the camera can
+            /// throw a shadow across the whole view — so culled draws stay in
+            /// this list and only the colour passes skip them.
+            in_frustum: bool,
             cast_shadow: bool,
             refract_capture: bool,
             alpha_test: f32,
@@ -4683,6 +4888,7 @@ impl Renderer {
                 topology,
                 view_z,
                 render_order: obj.render_order,
+                in_frustum: true,
                 cast_shadow: obj.cast_shadow,
                 refract_capture: obj.refract_capture,
                 alpha_test: mat.alpha_test(),
@@ -4988,6 +5194,7 @@ impl Renderer {
                                 topology: Topology::Sprite,
                                 view_z: svz,
                                 render_order: obj.render_order,
+                                in_frustum: true,
                                 cast_shadow: false,
                                 refract_capture: true,
                                 alpha_test: 0.0,
@@ -5042,6 +5249,7 @@ impl Renderer {
                         topology: Topology::Sprite,
                         view_z: svz,
                         render_order: obj.render_order,
+                        in_frustum: true,
                         cast_shadow: false,
                         refract_capture: true,
                         alpha_test: 0.0,
@@ -5083,9 +5291,14 @@ impl Renderer {
                     if im.transforms.is_empty() {
                         return;
                     }
-                    let mut matrices: Vec<f32> = Vec::with_capacity(im.transforms.len() * 16);
-                    for t in &im.transforms {
+                    // Twenty floats an instance: the matrix, then the tint.
+                    // Instances past the end of `colors` are white, so a caller
+                    // that never sets one pays four floats and nothing else.
+                    let mut matrices: Vec<f32> = Vec::with_capacity(im.transforms.len() * 20);
+                    for (i, t) in im.transforms.iter().enumerate() {
                         matrices.extend_from_slice(&t.elements);
+                        let c = im.colors.get(i).copied().unwrap_or(crate::math::Color::WHITE);
+                        matrices.extend_from_slice(&[c.r, c.g, c.b, 1.0]);
                     }
                     let buf = wgpu::util::DeviceExt::create_buffer_init(
                         &*self.device,
@@ -5199,6 +5412,60 @@ impl Renderer {
                     }
                 })
         });
+
+        // --- Frustum culling.
+        //
+        // Nothing here used to test whether a draw was on screen: every mesh in
+        // the scene went through the vertex shader and got rasterised every
+        // frame, however far outside the view it was. `Frustum` has been in
+        // `src/math` the whole time, correct for this crate's 0..1 clip depth
+        // and exposed to wasm, and the renderer simply never called it.
+        //
+        // Culled draws stay in `draws`. The shadow passes walk the same list
+        // and a caster behind the camera can still throw a shadow right across
+        // the view, so only the colour passes read this flag. The indices also
+        // key `per_mesh` and the bind-group caches, and removing entries would
+        // shift all of them.
+        //
+        // The jitter-free view-projection is deliberate: culling off the
+        // jittered matrix would let an object on the boundary flicker in and
+        // out from frame to frame.
+        if self.frustum_culling {
+            let frustum = Frustum::from_projection_matrix(&unjittered);
+            for d in draws.iter_mut() {
+                // Only geometry whose object-space bounds really do bound what
+                // gets rasterised. A skinned mesh moves outside its bind pose,
+                // an instanced draw covers ground the source geometry does not,
+                // a custom vertex shader may put the vertices anywhere, and the
+                // sky is deliberately pinned to the far plane.
+                let plain = matches!(
+                    d.topology,
+                    Topology::Triangle
+                        | Topology::TriangleAlpha
+                        | Topology::TriangleNoCull
+                        | Topology::TriangleWire
+                        | Topology::Line
+                        | Topology::GlassDepth
+                        | Topology::GlassColor
+                        | Topology::Oit
+                        | Topology::Refract
+                ) && d.instance_count == 1
+                    && d.skin_idx == usize::MAX
+                    && d.shader_idx == usize::MAX;
+                if !plain {
+                    continue;
+                }
+                let Some(sphere) = self.geom_cache.get(&d.key).and_then(|g| g.sphere) else {
+                    continue;
+                };
+                let world = sphere.apply_matrix4(&Matrix4 { elements: d.model });
+                d.in_frustum = frustum.intersects_sphere(&world);
+            }
+        }
+        self.cull_stats = (
+            draws.iter().filter(|d| d.in_frustum).count(),
+            draws.iter().filter(|d| !d.in_frustum).count(),
+        );
 
         frame_u.ambient = [ambient[0], ambient[1], ambient[2], 0.0];
         frame_u.light_counts = [n_dir as u32, n_point as u32, n_spot as u32, n_hemi as u32];
@@ -5347,7 +5614,7 @@ impl Renderer {
             // Texture bind group is rebuilt per-frame per-mesh below, but we
             // need a placeholder; we'll overwrite the pool entry in-place each
             // frame. Build a "default everything" tex bg for initialization.
-            let tex_bg = self.make_default_tex_bg();
+            let tex_bg = std::sync::Arc::new(self.make_default_tex_bg());
             self.per_mesh.push((buf, mesh_bg, tex_bg));
         }
 
@@ -5376,7 +5643,6 @@ impl Renderer {
         // -- Upload uniforms + rebuild per-mesh tex bind groups. --
         self.queue
             .write_buffer(&self.frame_buffer, 0, bytemuck::bytes_of(&frame_u));
-        let mut new_tex_bgs: Vec<wgpu::BindGroup> = Vec::with_capacity(draws.len());
         for (i, d) in draws.iter().enumerate() {
             let mut flags: u32 = 0;
             if d.slots.map.is_some() {
@@ -5444,12 +5710,24 @@ impl Renderer {
             };
             self.queue
                 .write_buffer(&self.per_mesh[i].0, 0, bytemuck::bytes_of(&u));
-
-            new_tex_bgs.push(self.build_tex_bg(&d.slots));
         }
-        // Apply new tex bgs (separate loop to keep borrow rules happy).
-        for (i, bg) in new_tex_bgs.into_iter().enumerate() {
-            self.per_mesh[i].2 = bg;
+        // Texture bind groups, from the cache. Keys are computed up front so
+        // the miss path can borrow `self` immutably to build and then mutably
+        // to insert, one draw at a time.
+        let tex_keys: Vec<TexBgKey> = draws.iter().map(|d| tex_bg_key(&d.slots)).collect();
+        // The set of distinct texture combinations in a scene is small and
+        // static; this bound is a runaway guard, not a working limit.
+        if self.tex_bg_cache.len() > 4096 {
+            self.tex_bg_cache.clear();
+        }
+        for (i, d) in draws.iter().enumerate() {
+            if !self.tex_bg_cache.contains_key(&tex_keys[i]) {
+                let bg = std::sync::Arc::new(self.build_tex_bg(&d.slots));
+                self.tex_bg_cache.insert(tex_keys[i], bg);
+            }
+        }
+        for (i, k) in tex_keys.iter().enumerate() {
+            self.per_mesh[i].2 = self.tex_bg_cache[k].clone();
         }
 
         let mut encoder = self
@@ -5486,7 +5764,7 @@ impl Renderer {
                 }
                 let gm = &self.geom_cache[&d.key].mesh;
                 spass.set_bind_group(1, &self.per_mesh[i].1, &[]);
-                spass.set_bind_group(2, &self.per_mesh[i].2, &[]);
+                spass.set_bind_group(2, &*self.per_mesh[i].2, &[]);
                 spass.set_bind_group(3, &self.shadow_env_bind_group, &[]);
                 spass.set_vertex_buffer(0, gm.vertex_buffer.slice(..));
                 if let Some(ib) = &gm.index_buffer {
@@ -5526,7 +5804,7 @@ impl Renderer {
                 }
                 let gm = &self.geom_cache[&d.key].mesh;
                 spass.set_bind_group(1, &self.per_mesh[i].1, &[]);
-                spass.set_bind_group(2, &self.per_mesh[i].2, &[]);
+                spass.set_bind_group(2, &*self.per_mesh[i].2, &[]);
                 spass.set_bind_group(3, &self.shadow_env_bind_group, &[]);
                 spass.set_vertex_buffer(0, gm.vertex_buffer.slice(..));
                 if let Some(ib) = &gm.index_buffer {
@@ -5591,7 +5869,7 @@ impl Renderer {
                     }
                     let gm = &self.geom_cache[&d.key].mesh;
                     spass.set_bind_group(1, &self.per_mesh[i].1, &[]);
-                    spass.set_bind_group(2, &self.per_mesh[i].2, &[]);
+                    spass.set_bind_group(2, &*self.per_mesh[i].2, &[]);
                     spass.set_bind_group(3, &self.shadow_env_bind_group, &[]);
                     spass.set_vertex_buffer(0, gm.vertex_buffer.slice(..));
                     if let Some(ib) = &gm.index_buffer {
@@ -5738,6 +6016,11 @@ impl Renderer {
                 (target_view, None, &self.depth_view)
             };
 
+            // Timestamps go on the main pass alone. It is where the scene's
+            // geometry is actually shaded — shadows, post-fx and the glass
+            // passes are separate costs and averaging them together would hide
+            // exactly the change anyone is trying to measure.
+            let main_timestamps = self.timer.as_ref().map(|t| t.writes());
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("threers main pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -5757,7 +6040,7 @@ impl Renderer {
                     }),
                     stencil_ops: None,
                 }),
-                timestamp_writes: None,
+                timestamp_writes: main_timestamps,
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
@@ -5766,6 +6049,11 @@ impl Renderer {
             pass.set_bind_group(3, &self.env_bind_group, &[]);
             let mut last_topology: Option<Topology> = None;
             for (i, d) in draws.iter().enumerate() {
+                // Off-screen. The shadow passes above deliberately did draw it:
+                // a caster the camera cannot see still casts into the view.
+                if !d.in_frustum {
+                    continue;
+                }
                 // OIT + screen-space-refraction surfaces are drawn in dedicated
                 // later passes, not here.
                 if d.topology == Topology::Oit
@@ -5844,7 +6132,7 @@ impl Renderer {
                     if let Some(bg) = skin_data.get(d.skin_idx).and_then(|s| s.bg.as_ref()) {
                         pass.set_bind_group(1, bg, &[]);
                     }
-                    pass.set_bind_group(2, &self.per_mesh[i].2, &[]);
+                    pass.set_bind_group(2, &*self.per_mesh[i].2, &[]);
                     if let Some(skin_attrs) = self.skin_attr_cache.get(&d.key) {
                         pass.set_vertex_buffer(1, skin_attrs.slice(..));
                     }
@@ -5854,10 +6142,10 @@ impl Renderer {
                     if let Some(bg) = &user_bgs[i] {
                         pass.set_bind_group(1, bg, &[]);
                     }
-                    pass.set_bind_group(2, &self.per_mesh[i].2, &[]);
+                    pass.set_bind_group(2, &*self.per_mesh[i].2, &[]);
                 } else {
                     pass.set_bind_group(1, &self.per_mesh[i].1, &[]);
-                    pass.set_bind_group(2, &self.per_mesh[i].2, &[]);
+                    pass.set_bind_group(2, &*self.per_mesh[i].2, &[]);
                 }
                 pass.set_vertex_buffer(0, gm.vertex_buffer.slice(..));
                 let instance_count = if d.topology == Topology::Instanced {
@@ -5942,12 +6230,15 @@ impl Renderer {
                     opass.set_bind_group(0, &self.frame_bind_group, &[]);
                     opass.set_bind_group(3, &self.env_bind_group, &[]);
                     for (i, d) in draws.iter().enumerate() {
+                        if !d.in_frustum {
+                            continue;
+                        }
                         if d.topology != Topology::Oit {
                             continue;
                         }
                         let gm = &self.geom_cache[&d.key].mesh;
                         opass.set_bind_group(1, &self.per_mesh[i].1, &[]);
-                        opass.set_bind_group(2, &self.per_mesh[i].2, &[]);
+                        opass.set_bind_group(2, &*self.per_mesh[i].2, &[]);
                         opass.set_vertex_buffer(0, gm.vertex_buffer.slice(..));
                         if let Some(ib) = &gm.index_buffer {
                             opass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
@@ -6039,12 +6330,15 @@ impl Renderer {
                 bp.set_pipeline(&self.pipeline_ss_back_depth);
                 bp.set_bind_group(0, &self.frame_bind_group, &[]);
                 for (i, d) in draws.iter().enumerate() {
+                    if !d.in_frustum {
+                        continue;
+                    }
                     if d.topology != Topology::Refract {
                         continue;
                     }
                     let gm = &self.geom_cache[&d.key].mesh;
                     bp.set_bind_group(1, &self.per_mesh[i].1, &[]);
-                    bp.set_bind_group(2, &self.per_mesh[i].2, &[]);
+                    bp.set_bind_group(2, &*self.per_mesh[i].2, &[]);
                     bp.set_vertex_buffer(0, gm.vertex_buffer.slice(..));
                     if let Some(ib) = &gm.index_buffer {
                         bp.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
@@ -6204,12 +6498,15 @@ impl Renderer {
             gp.set_bind_group(0, &self.frame_bind_group, &[]);
             gp.set_bind_group(3, &glass_env_bg, &[]);
             for (i, d) in draws.iter().enumerate() {
+                if !d.in_frustum {
+                    continue;
+                }
                 if d.topology != Topology::Refract {
                     continue;
                 }
                 let gm = &self.geom_cache[&d.key].mesh;
                 gp.set_bind_group(1, &self.per_mesh[i].1, &[]);
-                gp.set_bind_group(2, &self.per_mesh[i].2, &[]);
+                gp.set_bind_group(2, &*self.per_mesh[i].2, &[]);
                 gp.set_vertex_buffer(0, gm.vertex_buffer.slice(..));
                 if let Some(ib) = &gm.index_buffer {
                     gp.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
@@ -6227,7 +6524,7 @@ impl Renderer {
                 let Some(bg) = &user_bgs[i] else { continue };
                 gp.set_pipeline(&self.custom_pipelines[&(h, linear_framebuffer, tr, true, sd)]);
                 gp.set_bind_group(1, bg, &[]);
-                gp.set_bind_group(2, &self.per_mesh[i].2, &[]);
+                gp.set_bind_group(2, &*self.per_mesh[i].2, &[]);
                 let gm = &self.geom_cache[&d.key].mesh;
                 gp.set_vertex_buffer(0, gm.vertex_buffer.slice(..));
                 if let Some(ib) = &gm.index_buffer {
@@ -6270,6 +6567,9 @@ impl Renderer {
                 op.set_bind_group(3, &self.env_bind_group, &[]);
                 let mut last: Option<Topology> = None;
                 for (i, d) in draws.iter().enumerate() {
+                    if !d.in_frustum {
+                        continue;
+                    }
                     if d.refract_capture {
                         continue;
                     }
@@ -6298,7 +6598,7 @@ impl Renderer {
                         &self.geom_cache[&d.key].mesh
                     };
                     op.set_bind_group(1, &self.per_mesh[i].1, &[]);
-                    op.set_bind_group(2, &self.per_mesh[i].2, &[]);
+                    op.set_bind_group(2, &*self.per_mesh[i].2, &[]);
                     op.set_vertex_buffer(0, gm.vertex_buffer.slice(..));
                     let inst = if d.topology == Topology::Instanced {
                         op.set_vertex_buffer(1, instance_buffers[d.instance_buf_idx].slice(..));
@@ -6472,8 +6772,29 @@ impl Renderer {
             self.taa_frame += 1;
         }
 
+        if let Some(t) = &self.timer {
+            t.resolve(&mut encoder);
+        }
         self.queue.submit(Some(encoder.finish()));
+        // After submit, so the map is queued behind this frame's work. Never
+        // blocks — see `gpu_timer`.
+        if let Some(t) = &mut self.timer {
+            let device = self.device.clone();
+            t.poll(&device);
+        }
         let _ = (&self.frame_bgl,);
+    }
+
+    /// GPU milliseconds in the main pass, from the most recently completed
+    /// readback — a few frames old, and 0.0 when the adapter has no timestamp
+    /// support or none has landed yet.
+    ///
+    /// This is the number to trust when comparing renderer changes. Wall-clock
+    /// time round `render` measures CPU submission and whatever else the
+    /// machine is doing; three identical frames timed that way here came back
+    /// at 18, 31 and 35 ms.
+    pub fn gpu_frame_ms(&self) -> f32 {
+        self.timer.as_ref().map(|t| t.last_ms()).unwrap_or(0.0)
     }
 
     fn ensure_slot_uploaded(&mut self, slot: &Option<Arc<Texture>>) {
@@ -6494,6 +6815,7 @@ impl Renderer {
         if !self.tex_cache.contains_key(&key) {
             // Drop stale GPU copies for this logical texture (older upload_seq).
             self.tex_cache.retain(|k, _| k.0 != t.id);
+            self.tex_bg_cache.clear();
             if t.is_handle() {
                 // A handle carries no pixels: it can only ever resolve to an
                 // upload its full twin already made. Reaching here means that
@@ -6522,6 +6844,7 @@ impl Renderer {
                 .get_or_insert_with(|| MipGenerator::new(&self.device));
             let gt = GpuTexture::upload_with_mipgen(&self.device, &self.queue, t, mipgen);
             self.tex_cache.insert(key, gt);
+            self.tex_bg_cache.clear();
         }
     }
 
@@ -6582,6 +6905,7 @@ impl Renderer {
             ..Default::default()
         });
         self.rt_view_cache.insert(rt_id, view);
+        self.tex_bg_cache.clear();
         let linear_view = rt.color_texture.create_view(&wgpu::TextureViewDescriptor {
             label: Some("threers rt linear sample view"),
             format: Some(rt.format),

@@ -19,6 +19,102 @@ use crate::cameras::Camera;
 use crate::renderer::{RenderTarget, Renderer};
 use crate::scene::Scene;
 
+/// Prefer a specific GPU vendor when multiple adapters are present.
+///
+/// On Linux/Windows this selects a Vulkan adapter — NVIDIA (CUDA driver stack)
+/// or AMD (ROCm / RADV). macOS ignores this and uses Metal.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum GpuVendor {
+    #[default]
+    Any,
+    /// NVIDIA (`0x10DE`) — discrete GeForce/RTX via Vulkan.
+    Nvidia,
+    /// AMD (`0x1002`) — Radeon via RADV, AMDVLK, or ROCm-backed drivers.
+    Amd,
+}
+
+impl GpuVendor {
+    const NVIDIA_ID: u32 = 0x10DE;
+    const AMD_ID: u32 = 0x1002;
+
+    fn vendor_id(self) -> Option<u32> {
+        match self {
+            Self::Any => None,
+            Self::Nvidia => Some(Self::NVIDIA_ID),
+            Self::Amd => Some(Self::AMD_ID),
+        }
+    }
+
+    /// Parse `THREERS_GPU` / `FLY_GPU`: `nvidia`, `cuda`, `amd`, or `rocm`.
+    pub fn from_env() -> Self {
+        match std::env::var("THREERS_GPU")
+            .or_else(|_| std::env::var("FLY_GPU"))
+            .ok()
+            .as_deref()
+        {
+            Some("nvidia") | Some("cuda") | Some("NVIDIA") | Some("CUDA") => Self::Nvidia,
+            Some("amd") | Some("rocm") | Some("AMD") | Some("ROCM") => Self::Amd,
+            _ => Self::Any,
+        }
+    }
+}
+
+fn adapter_score(info: &wgpu::AdapterInfo) -> u32 {
+    match info.device_type {
+        wgpu::DeviceType::DiscreteGpu => 100,
+        wgpu::DeviceType::IntegratedGpu => 50,
+        wgpu::DeviceType::VirtualGpu => 25,
+        _ => 0,
+    }
+}
+
+fn request_headless_adapter(
+    instance: &wgpu::Instance,
+    config: &HeadlessConfig,
+) -> Result<wgpu::Adapter, String> {
+    let backends = wgpu::Backends::PRIMARY;
+    if let Some(vendor_id) = config.gpu_vendor.vendor_id() {
+        let adapters =
+            pollster::block_on(instance.enumerate_adapters(backends));
+        let mut best: Option<(u32, wgpu::Adapter)> = None;
+        for adapter in adapters {
+            let info = adapter.get_info();
+            if info.vendor != vendor_id {
+                continue;
+            }
+            let score = adapter_score(&info);
+            if best.as_ref().map(|(s, _)| score > *s).unwrap_or(true) {
+                best = Some((score, adapter));
+            }
+        }
+        if let Some((_, adapter)) = best {
+            let info = adapter.get_info();
+            eprintln!(
+                "   gpu       {} ({:?}, {:?}, vendor 0x{:04x})",
+                info.name, info.backend, info.device_type, info.vendor
+            );
+            return Ok(adapter);
+        }
+        eprintln!(
+            "   gpu       warning: no adapter for vendor 0x{vendor_id:04x}, falling back to default"
+        );
+    }
+
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: config.power_preference,
+        compatible_surface: None,
+        force_fallback_adapter: false,
+        apply_limit_buckets: false,
+    }))
+    .map_err(|e| format!("no suitable wgpu adapter for headless rendering: {e}"))?;
+    let info = adapter.get_info();
+    eprintln!(
+        "   gpu       {} ({:?}, {:?})",
+        info.name, info.backend, info.device_type
+    );
+    Ok(adapter)
+}
+
 /// Configuration for a [`HeadlessRenderer`]. Prefer [`HeadlessRenderer::builder`].
 #[derive(Clone, Debug)]
 pub struct HeadlessConfig {
@@ -38,6 +134,8 @@ pub struct HeadlessConfig {
     pub taa: bool,
     /// Adapter selection preference.
     pub power_preference: wgpu::PowerPreference,
+    /// When set, pick a discrete adapter from this vendor (Vulkan on Linux).
+    pub gpu_vendor: GpuVendor,
 }
 
 impl Default for HeadlessConfig {
@@ -50,6 +148,7 @@ impl Default for HeadlessConfig {
             high_resolution: true,
             taa: false,
             power_preference: wgpu::PowerPreference::HighPerformance,
+            gpu_vendor: GpuVendor::Any,
         }
     }
 }
@@ -91,6 +190,11 @@ impl HeadlessBuilder {
     /// Adapter power preference.
     pub fn power_preference(mut self, preference: wgpu::PowerPreference) -> Self {
         self.config.power_preference = preference;
+        self
+    }
+    /// Prefer NVIDIA or AMD when multiple GPUs are present (Linux/Windows Vulkan).
+    pub fn gpu_vendor(mut self, vendor: GpuVendor) -> Self {
+        self.config.gpu_vendor = vendor;
         self
     }
     /// Acquire the GPU and construct the renderer.
@@ -187,24 +291,7 @@ impl HeadlessRenderer {
         let mut instance_desc = wgpu::InstanceDescriptor::new_without_display_handle();
         instance_desc.backends = wgpu::Backends::PRIMARY;
         let instance = wgpu::Instance::new(instance_desc);
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: config.power_preference,
-            compatible_surface: None,
-            force_fallback_adapter: false,
-            apply_limit_buckets: false,
-        }))
-        .map_err(|e| format!("no suitable wgpu adapter for headless rendering: {e}"))?;
-        // SAY WHICH ONE. Backends::PRIMARY is Metal here, Vulkan on Linux and
-        // DX12 on Windows, but nothing ever printed it -- so a run that had
-        // silently landed on a software adapter looked exactly like one that
-        // had not, and the only symptom was that it was slow.
-        {
-            let i = adapter.get_info();
-            eprintln!(
-                "   gpu       {} ({:?}, {:?})",
-                i.name, i.backend, i.device_type
-            );
-        }
+        let adapter = request_headless_adapter(&instance, &config)?;
 
         let adapter_limits = adapter.limits();
         let mut limits = if config.high_resolution {
@@ -233,7 +320,11 @@ impl HeadlessRenderer {
         // widely creatable as it was.
         let compression = wgpu::Features::TEXTURE_COMPRESSION_BC
             | wgpu::Features::TEXTURE_COMPRESSION_ETC2
-            | wgpu::Features::TEXTURE_COMPRESSION_ASTC;
+            | wgpu::Features::TEXTURE_COMPRESSION_ASTC
+            // Timestamps for `Renderer::gpu_frame_ms`. Masked by what the
+            // adapter reports, like the compression formats above, so asking
+            // still cannot fail device creation.
+            | wgpu::Features::TIMESTAMP_QUERY;
         let (device, queue) = pollster::block_on(adapter.request_device(
             &wgpu::DeviceDescriptor {
                 label: Some("threers headless device"),
@@ -955,13 +1046,20 @@ impl HeadlessRenderer {
                 crate::renderer::bloom::Bloom::new(&self.device, src, threshold, radius)
             });
             let strength = self.bloom_cfg.map(|c| c.0).unwrap_or(0.0);
-            // Depth from the RENDERER, not from the target. With MSAA the
-            // renderer takes a surface-style path and writes its own depth,
-            // leaving the target's untouched — occlusion built on that one
-            // would read an empty buffer and produce a uniformly white factor,
-            // which looks exactly like "SSAO is on and subtle".
+            // Whichever depth buffer this frame was actually drawn into.
+            // `render` branches: with MSAA it takes a surface-style path and
+            // writes the renderer's own depth, without it `render_to` writes
+            // the target's. Occlusion built on the other one reads an empty
+            // buffer and produces a uniformly white factor — which looks
+            // exactly like "SSAO is on and subtle", and is why turning it on
+            // changed nothing at all on the default, non-MSAA path.
+            let depth_src: &wgpu::Texture = if self.renderer.msaa() > 1 {
+                self.renderer.depth_texture()
+            } else {
+                &self.target.depth_texture
+            };
             let ssao = self.ssao_cfg.and_then(|(strength, radius, near, far)| {
-                let depth = self.renderer.depth_texture();
+                let depth = depth_src;
                 crate::renderer::ssao::Ssao::new(
                     &self.device,
                     depth,
@@ -980,7 +1078,7 @@ impl HeadlessRenderer {
                 bloom.as_ref().map(|b| b.view()),
                 strength,
                 ssao.as_ref().map(|s| s.view()),
-                Some(self.renderer.depth_texture()),
+                Some(depth_src),
                 inv_vp,
                 prev_vp,
                 self.shutter,

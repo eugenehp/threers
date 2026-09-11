@@ -948,6 +948,15 @@ impl WebRenderer {
             }
         }
     }
+
+    /// Device and queue for sharing with [`crate::wasm_pathtrace::WebPathTracer`].
+    #[cfg(feature = "raytrace")]
+    pub(crate) fn gpu_device_queue(&self) -> (std::sync::Arc<wgpu::Device>, std::sync::Arc<wgpu::Queue>) {
+        (
+            std::sync::Arc::clone(&self.device),
+            self.renderer.queue_arc(),
+        )
+    }
 }
 
 /// JS-visible scene wrapper. Returns a `Mesh` handle from `add(mesh)` so JS
@@ -1527,6 +1536,32 @@ impl WebCamera {
     pub fn clear_projection_override(&mut self) {
         if let CameraInner::Perspective(c) = &mut self.inner {
             c.projection_override = None;
+        }
+    }
+
+    /// Flatten the scene for [`crate::raytrace::RaytraceRenderer`].
+    #[cfg(feature = "raytrace")]
+    pub(crate) fn prepare_path_tracer(
+        &self,
+        scene: &mut WebScene,
+        renderer: &mut crate::raytrace::RaytraceRenderer,
+    ) {
+        match &self.inner {
+            CameraInner::Perspective(c) => renderer.prepare(&mut scene.inner, c),
+            CameraInner::Orthographic(c) => renderer.prepare(&mut scene.inner, c),
+        }
+    }
+
+    /// As [`Self::prepare_path_tracer`], but skip BVH rebuild when unchanged.
+    #[cfg(feature = "raytrace")]
+    pub(crate) fn prepare_path_tracer_if_changed(
+        &self,
+        scene: &mut WebScene,
+        renderer: &mut crate::raytrace::RaytraceRenderer,
+    ) -> bool {
+        match &self.inner {
+            CameraInner::Perspective(c) => renderer.prepare_if_changed(&mut scene.inner, c),
+            CameraInner::Orthographic(c) => renderer.prepare_if_changed(&mut scene.inner, c),
         }
     }
 }
@@ -5558,8 +5593,8 @@ pub fn scad_geometry(src: &str) -> ScadGeometry {
 }
 
 /// Parse OpenSCAD source and encode its solid in a mesh format for download.
-/// `format` is one of `stl` / `obj` / `off` / `3mf` / `glb`; returns the encoded
-/// bytes (empty on parse error or unknown format).
+/// `format` is one of `stl` / `obj` / `off` / `3mf` / `glb` / `fcstd`; returns
+/// the encoded bytes (empty on parse error or unknown format).
 #[cfg(feature = "openscad")]
 #[wasm_bindgen(js_name = scadExport)]
 pub fn scad_export(src: &str, format: &str) -> Vec<u8> {
@@ -5574,6 +5609,7 @@ pub fn scad_export(src: &str, format: &str) -> Vec<u8> {
         "off" => crate::geometry_to_off(&g).into_bytes(),
         "3mf" => crate::geometry_to_3mf(&g),
         "glb" => crate::geometry_to_glb(&g),
+        "fcstd" => crate::geometry_to_fcstd(&g, "Model"),
         _ => Vec::new(),
     }
 }

@@ -22,6 +22,23 @@ pub struct BuildOptions {
     pub count: u32,
     /// When true, preserve original geometry index order (three-mesh-bvh `indirect`).
     pub indirect: bool,
+    /// Split at the median centroid when the chosen plane separates nothing,
+    /// instead of giving up and making the whole subtree one leaf.
+    ///
+    /// Off by default, because it changes the *shape* of the tree and two
+    /// things downstream read that shape rather than just querying it.
+    /// `bvhcast` enumerates leaf-against-leaf pairs, so coarser leaves hand the
+    /// CSG evaluator a larger candidate set — and `collect_intersecting_triangles`
+    /// marks any *coplanar* pair it is given as intersecting, whether or not the
+    /// two triangles are anywhere near each other. A tighter tree therefore
+    /// produces a different boolean, and the parity fixtures in
+    /// `tests/parity/scenes/` record three-mesh-bvh's enumeration, which is what
+    /// the default reproduces.
+    ///
+    /// Turn it on for queries — raycasts, closest-point — where nothing reads
+    /// the shape and a collapsed subtree is a linear scan. See
+    /// `tests/mesh_bvh_raycast.rs`.
+    pub split_degenerate: bool,
 }
 
 impl Default for BuildOptions {
@@ -33,6 +50,7 @@ impl Default for BuildOptions {
             offset: 0,
             count: 0,
             indirect: false,
+            split_degenerate: false,
         }
     }
 }
@@ -153,12 +171,34 @@ fn build_recursive(
         }
     }
 
-    if i == start || i == start + count {
+    let mut left_count = i - start;
+    if options.split_degenerate && (left_count == 0 || left_count == count) {
+        // The plane put every triangle on one side. Giving up here — which is
+        // what this did — turns the whole subtree into a single leaf, and a
+        // leaf is scanned linearly: one degenerate split at the root costs
+        // every later query the entire scene. It is not a rare case either.
+        // A handful of triangles far larger than the rest (ground planes,
+        // backdrops) drag the bounds out until the SAH bins that hold the
+        // real geometry are a couple of bins wide, and the chosen plane
+        // misses all of them.
+        //
+        // Splitting at the median centroid always separates the set, unless
+        // every centroid is identical — and then splitting by position in the
+        // list is as good as anything.
+        let mid = count / 2;
+        let slice = &mut triangle_order[start..start + count];
+        slice.select_nth_unstable_by(mid, |&a, &b| {
+            let ca = centroid_axis(positions, triangle_indices[a], axis);
+            let cb = centroid_axis(positions, triangle_indices[b], axis);
+            ca.partial_cmp(&cb).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        left_count = mid;
+    }
+    if left_count == 0 || left_count == count {
         nodes[node_index as usize] = BvhNode::leaf(bounds, start as u32, count as u32);
         return node_index;
     }
 
-    let left_count = i - start;
     let right_count = count - left_count;
 
     let left = build_recursive(

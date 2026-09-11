@@ -52,6 +52,9 @@ fn inv_angle(angle: i32) -> i32 {
 /// neighbor references `above` / `left` (each length `2n + 1`). `luma` enables the
 /// boundary-smoothing post-filters for DC / horizontal / vertical modes
 /// (§8.4.4.2, luma-only, `nTbS < 32`).
+/// Largest transform block, and so the largest prediction.
+pub const MAX_N: usize = 32;
+
 pub fn predict(mode: u8, n: usize, above: &[i32], left: &[i32], luma: bool) -> Vec<i32> {
     debug_assert!(above.len() > 2 * n && left.len() > 2 * n);
     let mut pred = match mode {
@@ -63,6 +66,23 @@ pub fn predict(mode: u8, n: usize, above: &[i32], left: &[i32], luma: bool) -> V
         boundary_filter(mode, n, above, left, &mut pred);
     }
     pred
+}
+
+/// [`predict`] reusing the caller's buffer.
+///
+/// Identical output; it exists because the mode search calls this thirty-five
+/// times per block and a fresh allocation each time was showing up in the
+/// profile as plainly as the prediction itself.
+pub fn predict_into(mode: u8, n: usize, above: &[i32], left: &[i32], luma: bool, out: &mut [i32]) {
+    debug_assert!(above.len() > 2 * n && left.len() > 2 * n && out.len() == n * n);
+    match mode {
+        PLANAR => planar_into(n, above, left, out),
+        DC => dc_into(n, above, left, out),
+        _ => angular_into(mode, n, above, left, out),
+    }
+    if luma && n < 32 {
+        boundary_filter(mode, n, above, left, out);
+    }
 }
 
 #[inline]
@@ -99,20 +119,30 @@ fn boundary_filter(mode: u8, n: usize, above: &[i32], left: &[i32], pred: &mut [
 }
 
 fn dc(n: usize, above: &[i32], left: &[i32]) -> Vec<i32> {
+    let mut out = vec![0i32; n * n];
+    dc_into(n, above, left, &mut out);
+    out
+}
+
+fn dc_into(n: usize, above: &[i32], left: &[i32], out: &mut [i32]) {
     let mut sum = 0i32;
     for i in 1..=n {
         sum += above[i] + left[i];
     }
-    let dc_val = (sum + n as i32) >> (log2(n) + 1);
-    vec![dc_val; n * n]
+    out.fill((sum + n as i32) >> (log2(n) + 1));
 }
 
 fn planar(n: usize, above: &[i32], left: &[i32]) -> Vec<i32> {
+    let mut out = vec![0i32; n * n];
+    planar_into(n, above, left, &mut out);
+    out
+}
+
+fn planar_into(n: usize, above: &[i32], left: &[i32], pred: &mut [i32]) {
     let ni = n as i32;
     let shift = log2(n) + 1;
     let top_right = above[n + 1]; // p[n][-1]
     let bottom_left = left[n + 1]; // p[-1][n]
-    let mut pred = vec![0i32; n * n];
     for y in 0..n {
         for x in 0..n {
             let (xi, yi) = (x as i32, y as i32);
@@ -121,10 +151,15 @@ fn planar(n: usize, above: &[i32], left: &[i32]) -> Vec<i32> {
             pred[y * n + x] = (h + v + ni) >> shift;
         }
     }
-    pred
 }
 
 fn angular(mode: u8, n: usize, above: &[i32], left: &[i32]) -> Vec<i32> {
+    let mut out = vec![0i32; n * n];
+    angular_into(mode, n, above, left, &mut out);
+    out
+}
+
+fn angular_into(mode: u8, n: usize, above: &[i32], left: &[i32], pred: &mut [i32]) {
     let angle = ANGLE[mode as usize];
     let vertical = mode >= 18;
     // main = reference projected along the mode; side = the orthogonal edge.
@@ -136,7 +171,10 @@ fn angular(mode: u8, n: usize, above: &[i32], left: &[i32]) -> Vec<i32> {
 
     // Build the extended main reference indexed [-n .. 2n], offset by n.
     let off = n as i32;
-    let mut rm = vec![0i32; 3 * n + 1];
+    // The extended reference is at most 3·32+1 entries, so it lives on the
+    // stack: this runs once per mode per block, thirty-five times over, and a
+    // heap allocation here was as expensive as the prediction it feeds.
+    let mut rm = [0i32; 3 * MAX_N + 1];
     for i in 0..=2 * n {
         rm[(i as i32 + off) as usize] = main_ref[i];
     }
@@ -151,30 +189,47 @@ fn angular(mode: u8, n: usize, above: &[i32], left: &[i32]) -> Vec<i32> {
             k -= 1;
         }
     }
-    let get = |k: i32| rm[(k + off) as usize];
-
-    let mut pred = vec![0i32; n * n];
     for j in 0..n {
         // j is the axis the angle advances along (rows for vertical, cols for horizontal).
         let pos = (j as i32 + 1) * angle;
         let idx = pos >> 5;
         let fract = pos & 31;
-        for i in 0..n {
-            let ii = i as i32;
-            let p = if fract != 0 {
-                ((32 - fract) * get(ii + idx + 1) + fract * get(ii + idx + 2) + 16) >> 5
-            } else {
-                get(ii + idx + 1)
-            };
-            // i indexes across the block; for vertical i=x, j=y; for horizontal i=y, j=x.
-            if vertical {
-                pred[j * n + i] = p;
-            } else {
-                pred[i * n + j] = p;
+
+        // Every sample of this row reads `rm[i + idx + 1]` and its successor, so
+        // the whole row comes from one contiguous window. Taking it as a slice
+        // once lifts a bounds check off each of the two reads and lets the two
+        // inner loops below vectorise; going through a closure per sample did
+        // neither, and this runs thirty-three times per block in the mode search.
+        // Only the interpolating case reads the successor, and at the steepest
+        // angle the successor of the last sample is past the end of the extended
+        // reference — so the window has to be sized by whether it is needed.
+        let base = (idx + 1 + off) as usize;
+        let win = &rm[base..base + n + usize::from(fract != 0)];
+
+        // `vertical` and `fract != 0` are constant across the row. Branching
+        // inside the loop on either cost more than writing out the four cases.
+        match (vertical, fract != 0) {
+            (true, true) => {
+                let row = &mut pred[j * n..j * n + n];
+                for (o, w) in row.iter_mut().zip(win.windows(2)) {
+                    *o = ((32 - fract) * w[0] + fract * w[1] + 16) >> 5;
+                }
+            }
+            (true, false) => {
+                pred[j * n..j * n + n].copy_from_slice(win);
+            }
+            (false, true) => {
+                for i in 0..n {
+                    pred[i * n + j] = ((32 - fract) * win[i] + fract * win[i + 1] + 16) >> 5;
+                }
+            }
+            (false, false) => {
+                for i in 0..n {
+                    pred[i * n + j] = win[i];
+                }
             }
         }
     }
-    pred
 }
 
 #[cfg(test)]

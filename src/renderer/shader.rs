@@ -806,6 +806,12 @@ fn fs_main(in: Out) -> @location(0) vec4<f32> {
         let view_pos = view_pos_from_depth(uv, depth_r, view_z, u.proj, u.inv_proj);
         let view_normal = unpack_view_normal(textureSampleLevel(normal_tex, depth_sampler, uv, 0.0).rgb);
         let noise_r = sample_ssao_noise(uv, res);
+        // Scalar broadcast, matching three.js SSAOShader's
+        // `vec3 random = vec3( getRandom( vUv * noiseScale ) )`. It is a weak
+        // rotation — the same axis up to sign rather than a real turn — and it
+        // degenerates to normalize(vec3(0)) for a normal along (1,1,1). Both
+        // faults are three.js's; this pass is a port and the parity scenes in
+        // tests/parity compare against it, so they stay.
         let random = vec3<f32>(noise_r, noise_r, noise_r);
         let tangent = normalize(random - view_normal * dot(random, view_normal));
         let bitangent = cross(view_normal, tangent);
@@ -1442,6 +1448,7 @@ struct InstancedVsIn {
     @location(6) imat2    : vec4<f32>,
     @location(7) imat3    : vec4<f32>,
     @location(8) tangent  : vec4<f32>,
+    @location(9) itint    : vec4<f32>,
 };
 
 @vertex
@@ -1459,7 +1466,9 @@ fn vs_instanced(in : InstancedVsIn) -> VsOut {
     out.uv = uv;
     let view_p = frame.view * world_p;
     out.view_z = -view_p.z;
-    out.vertex_color = in.color;
+    // Per-instance tint multiplies the mesh's own vertex colour, so one
+    // instanced mesh can carry a whole palette.
+    out.vertex_color = in.color * in.itint;
     out.proj_uv = mirror_proj_uv(in.position);
     out.world_tangent = world_tangent(in.tangent);
     out.local_pos = in.position;

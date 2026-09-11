@@ -72,13 +72,13 @@
 //!
 //! ```toml
 //! # CAD stack in one flag
-//! threers = { version = "0.0.4", features = ["cad"] }
+//! threers = { version = "0.0.5", features = ["cad"] }
 //! # everything
-//! threers = { version = "0.0.4", features = ["full"] }
+//! threers = { version = "0.0.5", features = ["full"] }
 //! # browser wasm kitchen sink
-//! threers = { version = "0.0.4", features = ["wasm-full"] }
+//! threers = { version = "0.0.5", features = ["wasm-full"] }
 //! # nothing but the renderer
-//! threers = { version = "0.0.4", default-features = false }
+//! threers = { version = "0.0.5", default-features = false }
 //! ```
 //!
 //! Rigid-body physics lives in the companion crate
@@ -98,6 +98,7 @@
 //! | [`postprocessing`] | EffectComposer-style pass chain (native) |
 //! | [`loaders`] | glTF, OBJ, HDR, … |
 //! | [`extras`] | PMREM, noise, marching cubes, … |
+//! | [`geometries::lattice`] | 35 lattice generators, and what they are worth: stiffness, conductivity, strength, porosity, pore size |
 //! | [`materials`] | PBR materials and [`ShaderMaterial`] |
 //! | `captions` | subtitles — SRT + WebVTT, on-screen and burned in (`captions`) |
 //! | `planet` | Planets, moons, starfields (`planet` feature) |
@@ -113,6 +114,12 @@
 // the point of this crate, so the constructors mirror what three.js constructs
 // rather than what Rust convention would have them construct.
 #![allow(clippy::new_ret_no_self)]
+// Graphics signatures are wide because the quantities are independent, not
+// because they want grouping: a ray through a pixel takes an x, a y, a width, a
+// height, a sub-pixel jitter, a lens sample and a shutter instant, and no two of
+// those belong in a struct together. Bundling them to get under a threshold of
+// seven would hide which of them a caller is actually varying.
+#![allow(clippy::too_many_arguments)]
 
 pub mod animation;
 /// Generic checks for assemblies that move: body correspondence across poses,
@@ -155,6 +162,9 @@ pub mod wasm;
 /// The trained denoiser in a browser, split so the work can go to web workers.
 #[cfg(all(target_arch = "wasm32", feature = "raytrace"))]
 pub mod wasm_denoise;
+/// Progressive path tracing for the browser.
+#[cfg(all(target_arch = "wasm32", feature = "raytrace"))]
+pub mod wasm_pathtrace;
 
 /// A second renderer that talks to Metal directly, with no `metal-rs`, no
 /// `objc` crate and no C in the build — see [`metal`](crate::metal) for what it
@@ -274,7 +284,8 @@ pub use geometries::{
     RingGeometry, SphereGeometry, Strut, TetrahedronGeometry, TextGeometry, TorusGeometry,
     TorusKnotGeometry, Tpms, TubeGeometry, WireframeGeometry, ChiralRule, Cuboct, CuboctAssembly,
     CuboctAssemblyPlan, CuboctAssemblyStep, CuboctFrame, CuboctJoint, CuboctJointKind, FrameMaterial,
-    FrameResponse, Hand,
+    FrameResponse, Hand, Conductivity, Conform, Field, LatticeMetrics, SolidMaterial, Stiffness,
+    Solver, Stochastic, Strength,
 };
 pub use helpers::{
     ArrowHelper, AxesHelper, BoxHelper, CameraHelper, DirectionalLightHelper, GridHelper,
@@ -315,7 +326,9 @@ pub use postprocessing::{
     RenderPass, SsaoPass, SsrPass, ToneMappingPass,
 };
 #[cfg(not(target_arch = "wasm32"))]
-pub use renderer::headless::{HeadlessBuilder, HeadlessConfig, HeadlessRenderer, MappedFrame};
+pub use renderer::headless::{
+    GpuVendor, HeadlessBuilder, HeadlessConfig, HeadlessRenderer, MappedFrame,
+};
 /// The `wgpu` this crate was built against, re-exported.
 ///
 /// [`Renderer::new`] takes a `wgpu::Device`, a `wgpu::Queue` and a
@@ -409,7 +422,7 @@ pub use mesh_bvh::{
 
 #[cfg(feature = "raytrace")]
 pub use raytrace::{
-    Aov, BackgroundMode, CpuBackend, RaytraceBackend, RaytraceError, RaytraceRenderer,
+    intersect_box, Aov, BackgroundMode, CpuBackend, RaytraceBackend, RaytraceError, RaytraceRenderer,
     RaytraceScene, RaytraceSettings,
 };
 
@@ -427,6 +440,13 @@ pub use csg::{
 pub use exact_csg::report::{mesh_report, DefectCluster, MeshReport};
 #[cfg(feature = "openscad")]
 pub use openscad::export::{geometry_to_3mf, geometry_to_glb, geometry_to_obj, geometry_to_off, parts_to_glb};
+#[cfg(feature = "openscad")]
+pub use openscad::freecad::{
+    fcstd_meshes, fcstd_to_geometry, fcstd_to_solid, geometry_to_fcstd, geometry_to_fcstd_with,
+    parse_mesh_kernel, parse_mesh_kernel_full, parts_to_fcstd, parts_to_fcstd_with, FcstdDocument,
+    FcstdDocumentMeta, FcstdError, FcstdLoader, FcstdMesh, FcstdMeshSpec, FcstdPlacement,
+    FcstdReadOptions, FcstdSkipped, FcstdWriteOptions, FcstdWriteReport, FcstdWriter,
+};
 #[cfg(feature = "openscad")]
 pub use openscad::mechanism::{
     DriveSpec, MateSpec, MateSpecKind, MechanismSpec, PartFit, PartSpec,

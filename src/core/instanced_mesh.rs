@@ -11,6 +11,15 @@ pub struct InstancedMesh {
     pub geometry: Arc<BufferGeometry>,
     pub material: Arc<Material>,
     pub transforms: Vec<Matrix4>,
+    /// Per-instance tint, multiplied into vertex colour. Empty means white.
+    ///
+    /// Without this the only way to draw a hundred cars in six colours is six
+    /// instanced meshes, which is six draw calls — and the same again for
+    /// every pose, every skin tone and every livery. One buffer with a colour
+    /// in it collapses all of that to one draw per mesh.
+    ///
+    /// Shorter than `transforms` is fine: instances past its end are white.
+    pub colors: Vec<crate::math::Color>,
 }
 
 impl InstancedMesh {
@@ -19,6 +28,7 @@ impl InstancedMesh {
             geometry: Arc::new(geometry),
             material: Arc::new(material),
             transforms: vec![Matrix4::identity(); count],
+            colors: Vec::new(),
         }
     }
 

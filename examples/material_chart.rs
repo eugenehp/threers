@@ -44,7 +44,7 @@ fn out_path(default: &str) -> PathBuf {
 }
 
 fn main() {
-    let out = out_path("material_chart.png");
+    let out = out_path("out/material_chart.png");
 
     // Render at SS× and let the GPU average it down: `render_to_rgba_resolved`
     // returns the frame at the configured size, not at `render_size()`.
@@ -145,6 +145,9 @@ fn main() {
     }
 
     let png = threers::encode_png(sheet_w, sheet_h, &sheet);
+    if let Some(dir) = std::path::Path::new(&out).parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
     std::fs::write(&out, png).expect("write png");
     println!("wrote {} ({sheet_w}×{sheet_h})", out.display());
 }

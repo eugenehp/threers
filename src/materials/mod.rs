@@ -249,6 +249,16 @@ impl Material {
         }
     }
 
+    /// Whether the material should test the depth buffer. Overlay strokes
+    /// (`LineBasicMaterial::depth_test == false`) skip the test so they stay
+    /// visible through dense occluders.
+    pub fn depth_test(&self) -> bool {
+        match self {
+            Material::Line(m) => m.depth_test,
+            _ => true,
+        }
+    }
+
     /// Which transparency technique a *transparent* material uses. Only
     /// `PhysicalMaterial` can opt out of plain alpha blending (into single-layer
     /// glass or order-independent transparency); everything else is `Blend`.

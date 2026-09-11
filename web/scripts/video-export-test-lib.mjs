@@ -138,9 +138,9 @@ export function assertWebm(bytes) {
 
 /** Golden MP4 checksums from `tests/h264_animation_parity.rs`. */
 export const GOLDEN_MP4 = Object.freeze({
-  solid64x48_4f_10fps: '2fc50a1f',
-  gradient128x72_3f_30fps: 'e64d370a',
-  checker320x240_2f_60fps: '2a59cc5b',
+  solid64x48_4f_10fps: 'f5ca7103',
+  gradient128x72_3f_30fps: '1c091ef4',
+  checker320x240_2f_60fps: '06597030',
 });
 
 export function workerUrls(origin = location.origin) {

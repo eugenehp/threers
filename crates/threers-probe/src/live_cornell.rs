@@ -416,21 +416,26 @@ pub fn pack_view(
     for y in 0..side {
         for x in 0..side {
             let i = y * side + x;
-            let mut rng = Rng(((x as u32 * 1973) ^ (y as u32 * 9277) ^ 0x00C0_FFEE) | 1);
             let mut sum = V3::new(0.0, 0.0, 0.0);
             for s in 0..spp {
                 let jx = if spp == 1 {
                     0.5
                 } else {
-                    rng.next_f32()
+                    // Per-pixel, per-sample jitter — independent of batch order.
+                    let tag = ((x as u32 * 1973) ^ (y as u32 * 9277) ^ 0x00C0_FFEE) | 1;
+                    let mut j = Rng(tag.wrapping_add(s.wrapping_mul(0x26699)));
+                    j.next_f32()
                 };
                 let jy = if spp == 1 {
                     0.5
                 } else {
-                    rng.next_f32()
+                    let tag = ((x as u32 * 1973) ^ (y as u32 * 9277) ^ 0x00C0_FFEE) | 1;
+                    let mut j = Rng(tag.wrapping_add(s.wrapping_mul(0x26699)).wrapping_add(1));
+                    j.next_f32()
                 };
                 let dir = camera_ray(origin, target, fov_deg, side, x, y, jx, jy);
-                let mut sample_rng = Rng(rng.0.wrapping_add(s.wrapping_mul(0x9E37_79B9)));
+                let mut sample_rng =
+                    Rng(((x as u32 * 1973) ^ (y as u32 * 9277) ^ 0x00C0_FFEE ^ s.wrapping_mul(0x9E37_79B9)) | 1);
                 sum = sum.add(trace_probe(origin, dir, &tris, bounces, &mut sample_rng));
             }
             let inv = 1.0 / spp as f32;

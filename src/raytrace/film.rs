@@ -11,10 +11,87 @@ use crate::renderer::ToneMapping;
 
 use super::settings::{Aov, RaytraceSettings};
 
+const LUM_R: f64 = 0.2126;
+const LUM_G: f64 = 0.7152;
+const LUM_B: f64 = 0.0722;
+
+/// Luminance of a single radiance sample.
+#[inline]
+pub(crate) fn luminance_sample(radiance: Vector3) -> f32 {
+    0.2126 * radiance.x + 0.7152 * radiance.y + 0.0722 * radiance.z
+}
+
+/// Mean luminance of a pixel's accumulated radiance (`f64` for cancellation safety).
+#[inline]
+pub(crate) fn pixel_mean_luminance(p: &Pixel) -> f64 {
+    if p.samples == 0 {
+        return 0.0;
+    }
+    let inv = 1.0 / p.samples as f64;
+    LUM_R * p.color[0] as f64 * inv + LUM_G * p.color[1] as f64 * inv + LUM_B * p.color[2] as f64 * inv
+}
+
+/// Variance of the pixel's mean luminance estimate. `INFINITY` when unknown.
+///
+/// [`Pixel::lum_sq`] stores Welford's `M₂ = Σ(x − μ)²`. The variance of the
+/// mean is then `M₂ / n²`, which stays accurate when `μ` is large and the
+/// spread is tiny — the case where `E[x²] − μ²` cancels in f32.
+#[inline]
+pub(crate) fn pixel_mean_variance(p: &Pixel) -> f32 {
+    if p.samples < 2 {
+        return f32::INFINITY;
+    }
+    let n = p.samples as f64;
+    let m2 = p.lum_sq as f64;
+    if !m2.is_finite() {
+        return f32::INFINITY;
+    }
+    let var = (m2.max(0.0) / (n * n)) as f32;
+    if !var.is_finite() {
+        return f32::INFINITY;
+    }
+    var
+}
+
+/// Convert Welford `M₂` to the legacy `Σx²` used on disk in checkpoints.
+#[inline]
+pub(crate) fn sum_sq_from_m2(p: &Pixel) -> f32 {
+    if p.samples == 0 {
+        return 0.0;
+    }
+    let n = p.samples as f64;
+    let mean = pixel_mean_luminance(p);
+    let sum_sq = p.lum_sq as f64 + n * mean * mean;
+    if !sum_sq.is_finite() {
+        return f32::INFINITY;
+    }
+    sum_sq.max(0.0) as f32
+}
+
+/// Convert a checkpoint/`Σx²` value into Welford `M₂`.
+#[inline]
+pub(crate) fn m2_from_sum_sq(color: [f32; 3], samples: u32, sum_sq: f32) -> f32 {
+    if samples == 0 {
+        return 0.0;
+    }
+    if !sum_sq.is_finite() {
+        return f32::INFINITY;
+    }
+    let n = samples as f64;
+    let mean = LUM_R * color[0] as f64 / n
+        + LUM_G * color[1] as f64 / n
+        + LUM_B * color[2] as f64 / n;
+    let m2 = sum_sq as f64 - n * mean * mean;
+    if !m2.is_finite() {
+        return f32::INFINITY;
+    }
+    m2.max(0.0) as f32
+}
+
 /// One pixel's accumulated state. Kept as an array-of-structs so a row is one
 /// contiguous slice — which is what lets the renderer hand disjoint rows to
 /// different threads without any locking at all.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Pixel {
     /// Summed radiance.
     pub color: [f32; 3],
@@ -34,9 +111,12 @@ pub struct Pixel {
     /// adaptive sampling stops pixels at different times — and resolving with a
     /// single global count would then scale most of the image wrongly.
     pub samples: u32,
-    /// Summed *squared* luminance. Together with the running mean this gives
-    /// the sample variance, which is how a pixel knows whether it has
-    /// converged.
+    /// Welford `M₂ = Σ(x − μ)²` for sample luminances. Used with the running
+    /// colour sum to estimate the variance of the mean without the f32
+    /// cancellation of `E[x²] − μ²` on bright pixels.
+    ///
+    /// Checkpoints still serialise the legacy `Σx²` form; see
+    /// [`sum_sq_from_m2`] / [`m2_from_sum_sq`].
     pub lum_sq: f32,
 }
 
@@ -44,13 +124,76 @@ impl Pixel {
     /// Fold one path's result in.
     #[inline]
     pub fn add(&mut self, radiance: Vector3, alpha: f32) {
+        let lum = luminance_sample(radiance);
+        let n_old = self.samples as f32;
+        let n_new = n_old + 1.0;
+        // Welford one-pass update before the colour sum changes the mean.
+        let mean_old = if self.samples == 0 {
+            0.0
+        } else {
+            pixel_mean_luminance(self) as f32
+        };
+        let mut delta = lum - mean_old;
+        // Firefly paths should not dominate M₂ — cap only when the jump is
+        // absurd relative to the running spread (or vs the mean when spread=0).
+        if self.samples >= 2 {
+            let m2 = self.lum_sq.max(0.0);
+            let std_sample = if m2 > 0.0 {
+                (m2 / (n_old - 1.0).max(1.0)).sqrt()
+            } else {
+                0.0
+            };
+            let cap = if std_sample > 1e-6 {
+                (std_sample * 4.0).max(mean_old.abs() * 0.25 + 1e-4)
+            } else {
+                mean_old.abs().max(1e-3) * 8.0 + 1e-3
+            };
+            if cap.is_finite() && delta.abs() > cap {
+                delta = delta.clamp(-cap, cap);
+            }
+        }
+        let lum_eff = mean_old + delta;
+        let mean_new = mean_old + delta / n_new;
+        self.lum_sq += delta * (lum_eff - mean_new);
+
         self.color[0] += radiance.x;
         self.color[1] += radiance.y;
         self.color[2] += radiance.z;
         self.alpha += alpha;
-        let lum = 0.2126 * radiance.x + 0.7152 * radiance.y + 0.0722 * radiance.z;
-        self.lum_sq += lum * lum;
         self.samples += 1;
+    }
+
+    /// Fold another pixel's samples in (Chan / parallel Welford merge).
+    #[inline]
+    pub fn merge_pixel(&mut self, other: &Pixel) {
+        if other.samples == 0 {
+            return;
+        }
+        if self.samples == 0 {
+            *self = *other;
+            return;
+        }
+        let n_a = self.samples as f64;
+        let n_b = other.samples as f64;
+        let n = n_a + n_b;
+        let mean_a = pixel_mean_luminance(self);
+        let mean_b = pixel_mean_luminance(other);
+        let delta = mean_b - mean_a;
+        let m2 = self.lum_sq as f64 + other.lum_sq as f64 + delta * delta * n_a * n_b / n;
+        for c in 0..3 {
+            self.color[c] += other.color[c];
+            self.albedo[c] += other.albedo[c];
+            self.normal[c] += other.normal[c];
+        }
+        self.alpha += other.alpha;
+        self.depth += other.depth;
+        self.depth_samples += other.depth_samples;
+        self.samples += other.samples;
+        self.lum_sq = if m2.is_finite() {
+            m2.max(0.0) as f32
+        } else {
+            f32::INFINITY
+        };
     }
 
     /// Standard error of this pixel's mean, relative to the mean itself.
@@ -65,16 +208,15 @@ impl Pixel {
     /// sampling forever chasing a relative target it can never meet.
     #[inline]
     pub fn relative_error(&self) -> f32 {
-        if self.samples < 2 {
+        let var = pixel_mean_variance(self);
+        if var.is_infinite() {
             return f32::INFINITY;
         }
-        let n = self.samples as f32;
-        let mean = (0.2126 * self.color[0] + 0.7152 * self.color[1] + 0.0722 * self.color[2]) / n;
-        let variance = (self.lum_sq / n - mean * mean).max(0.0);
-        if variance <= 0.0 {
+        if var <= 0.0 {
             return 0.0;
         }
-        (variance / n).sqrt() / mean.max(1e-3)
+        let mean = pixel_mean_luminance(self).abs().max(1e-3) as f32;
+        var.sqrt() / mean
     }
 
     /// Whether this pixel has reached `threshold` relative error, having taken
@@ -150,6 +292,24 @@ impl Film {
         self.samples += n;
     }
 
+    /// Replace the global sample counter — used when restoring a checkpoint.
+    pub fn set_samples(&mut self, samples: u32) {
+        self.samples = samples;
+    }
+
+    /// Share of pixels that met the adaptive convergence threshold.
+    pub fn converged_fraction(&self, threshold: f32, min_samples: u32) -> f32 {
+        if threshold <= 0.0 || self.pixels.is_empty() {
+            return 0.0;
+        }
+        let converged = self
+            .pixels
+            .iter()
+            .filter(|p| p.is_converged(threshold, min_samples))
+            .count();
+        converged as f32 / self.pixels.len() as f32
+    }
+
     /// Rows as disjoint mutable slices, for handing to worker threads.
     pub fn rows_mut(&mut self) -> impl Iterator<Item = (usize, &mut [Pixel])> {
         let w = self.width as usize;
@@ -172,16 +332,7 @@ impl Film {
             return;
         }
         for (a, b) in self.pixels.iter_mut().zip(other.pixels.iter()) {
-            for c in 0..3 {
-                a.color[c] += b.color[c];
-                a.albedo[c] += b.albedo[c];
-                a.normal[c] += b.normal[c];
-            }
-            a.alpha += b.alpha;
-            a.depth += b.depth;
-            a.depth_samples += b.depth_samples;
-            a.samples += b.samples;
-            a.lum_sq += b.lum_sq;
+            a.merge_pixel(b);
         }
         self.samples += other.samples;
     }
@@ -219,18 +370,7 @@ impl Film {
     /// it rather than divide by it, because `inf / (1 + inf)` is NaN and a
     /// single NaN plane propagates silently through a convolution stack.
     pub fn resolve_variance(&self) -> Vec<f32> {
-        self.pixels
-            .iter()
-            .map(|p| {
-                if p.samples < 2 {
-                    return f32::INFINITY;
-                }
-                let n = p.samples as f32;
-                let mean = (0.2126 * p.color[0] + 0.7152 * p.color[1] + 0.0722 * p.color[2]) / n;
-                let variance = (p.lum_sq / n - mean * mean).max(0.0);
-                variance / n
-            })
-            .collect()
+        self.pixels.iter().map(pixel_mean_variance).collect()
     }
 
     /// Per-pixel relative standard error — the adaptive sampler's own view of
@@ -269,7 +409,16 @@ impl Film {
     pub fn resolve_normal(&self) -> Vec<[f32; 3]> {
         let mut out = Vec::with_capacity(self.pixels.len());
         for p in &self.pixels {
-            let v = Vector3::new(p.normal[0], p.normal[1], p.normal[2]);
+            let inv = if p.samples > 0 {
+                1.0 / p.samples as f32
+            } else {
+                1.0
+            };
+            let v = Vector3::new(
+                p.normal[0] * inv,
+                p.normal[1] * inv,
+                p.normal[2] * inv,
+            );
             let v = if v.length_sq() > 1e-12 {
                 v.normalize()
             } else {
@@ -442,6 +591,122 @@ mod tests {
         for v in film.resolve_variance() {
             assert!(!v.is_nan(), "variance was NaN");
         }
+    }
+
+    /// Large means plus tiny spread must not collapse to zero variance in f32.
+    #[test]
+    fn variance_stays_stable_at_high_dynamic_range() {
+        let mut film = Film::new(1, 1);
+        let p = film.pixels_mut();
+        // Bright mean with a tiny spread — the kind of cancellation f32 variance
+        // arithmetic loses when `(sum/n)²` ≈ `sum(x²)/n`.
+        for _ in 0..99 {
+            p[0].add(Vector3::new(1000.0, 1000.0, 1000.0), 1.0);
+        }
+        p[0].add(Vector3::new(1010.0, 1010.0, 1010.0), 1.0);
+        let v = film.resolve_variance()[0];
+        assert!(v.is_finite() && v > 0.0, "variance collapsed to {v}");
+        assert!(film.pixels()[0].relative_error().is_finite());
+    }
+
+    /// Welford M₂ matches the classical second-moment formula on mild data,
+    /// and checkpoint I/O still speaks Σx².
+    #[test]
+    fn fireflies_do_not_inflate_variance() {
+        let mut film = Film::new(1, 1);
+        for _ in 0..32 {
+            film.pixels_mut()[0].add(Vector3::new(1.0, 1.0, 1.0), 1.0);
+        }
+        // One absurd path — should not dominate M₂.
+        film.pixels_mut()[0].add(Vector3::new(1e4, 1e4, 1e4), 1.0);
+        let v = film.resolve_variance()[0];
+        assert!(
+            v.is_finite() && v < 0.5,
+            "firefly inflated variance to {v}"
+        );
+    }
+
+    /// Adaptive stop must not get stuck open because one capped firefly landed.
+    #[test]
+    fn firefly_does_not_block_adaptive_convergence() {
+        let mut p = Pixel::default();
+        for _ in 0..64 {
+            p.add(Vector3::new(1.0, 1.0, 1.0), 1.0);
+        }
+        assert!(
+            p.is_converged(0.02, 16),
+            "quiet pixel not converged: err={}",
+            p.relative_error()
+        );
+        p.add(Vector3::new(1e5, 1e5, 1e5), 1.0);
+        assert!(
+            p.is_converged(0.05, 16),
+            "firefly kept pixel open: err={}",
+            p.relative_error()
+        );
+    }
+
+    /// Legitimate high-variance samples must still keep a pixel open — the
+    /// firefly cap is not a free pass to stop early on mirrors / caustics.
+    #[test]
+    fn high_variance_still_blocks_convergence() {
+        let mut p = Pixel::default();
+        for i in 0..32u32 {
+            let v = if i % 2 == 0 { 0.2 } else { 2.0 };
+            p.add(Vector3::new(v, v, v), 1.0);
+        }
+        assert!(
+            !p.is_converged(0.02, 8),
+            "bimodal pixel converged early: err={}",
+            p.relative_error()
+        );
+    }
+
+    #[test]
+    fn welford_matches_second_moment_on_mild_data() {
+        let mut film = Film::new(1, 1);
+        for i in 0..16u32 {
+            let v = 0.5 + (i as f32) * 0.01;
+            film.pixels_mut()[0].add(Vector3::new(v, v, v), 1.0);
+        }
+        let p = &film.pixels()[0];
+        let sum_sq = sum_sq_from_m2(p);
+        let n = p.samples as f64;
+        let mean = pixel_mean_luminance(p);
+        let classic = ((sum_sq as f64 / n - mean * mean).max(0.0) / n) as f32;
+        let welford = pixel_mean_variance(p);
+        assert!(
+            (classic - welford).abs() < 1e-5,
+            "classic {classic} vs welford {welford}"
+        );
+        let round = m2_from_sum_sq(p.color, p.samples, sum_sq);
+        assert!((round - p.lum_sq).abs() < 1e-4);
+    }
+
+    #[test]
+    fn merge_combines_welford_m2() {
+        let mut a = Film::new(1, 1);
+        let mut b = Film::new(1, 1);
+        for _ in 0..8 {
+            a.pixels_mut()[0].add(Vector3::new(1.0, 1.0, 1.0), 1.0);
+            b.pixels_mut()[0].add(Vector3::new(2.0, 2.0, 2.0), 1.0);
+        }
+        a.advance(8);
+        b.advance(8);
+        let mut both = Film::new(1, 1);
+        for _ in 0..8 {
+            both.pixels_mut()[0].add(Vector3::new(1.0, 1.0, 1.0), 1.0);
+        }
+        for _ in 0..8 {
+            both.pixels_mut()[0].add(Vector3::new(2.0, 2.0, 2.0), 1.0);
+        }
+        a.merge(&b);
+        let va = a.resolve_variance()[0];
+        let vb = both.resolve_variance()[0];
+        assert!(
+            (va - vb).abs() < 1e-5,
+            "merged {va} vs sequential {vb}"
+        );
     }
 
     #[test]

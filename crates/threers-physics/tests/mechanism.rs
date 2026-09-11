@@ -477,3 +477,244 @@ fn a_screw_that_is_held_cannot_turn() {
     assert!(spin.abs() < 0.5, "the bolt kept turning at {spin} rad/s");
     assert!(world.joint_offset(screw).unwrap().abs() < 0.05);
 }
+
+// ---------------------------------------------------------------------------
+// Couplings on a carrier that is itself turning
+// ---------------------------------------------------------------------------
+
+/// A textbook epicyclic set: a sun on the frame's own axis, a planet carried on
+/// an arm that pivots about the same axis, and a mesh between them.
+///
+/// Everything turns about +Y and gravity is off, so the only thing moving
+/// anything is the constraint under test.
+fn epicyclic_rig(ratio: f32, on_carrier: bool) -> (World, BodyId, JointId, JointId, JointId) {
+    let mut world = World::new();
+    world.gravity = Vector3::ZERO;
+    let axis = Vector3::new(0.0, 1.0, 0.0);
+    let frame = world.add_body(RigidBody::fixed().shape(Shape::cuboid(0.1, 0.1, 0.1)));
+
+    let sun = world.add_body(
+        RigidBody::dynamic()
+            .shape(Shape::cylinder(0.05, 0.4))
+            .can_sleep(false),
+    );
+    let carrier = world.add_body(
+        RigidBody::dynamic()
+            .shape(Shape::cuboid(0.5, 0.03, 0.03))
+            .translation(Vector3::new(0.3, 0.0, 0.0))
+            .can_sleep(false),
+    );
+    let planet = world.add_body(
+        RigidBody::dynamic()
+            .shape(Shape::cylinder(0.05, 0.2))
+            .translation(Vector3::new(0.6, 0.0, 0.0))
+            .can_sleep(false),
+    );
+
+    let sun_hinge = world.add_joint(
+        Joint::revolute_at_point(world.bodies(), frame, sun, Vector3::ZERO, axis).unwrap(),
+    );
+    let arm_hinge = world.add_joint(
+        Joint::revolute_at_point(world.bodies(), frame, carrier, Vector3::ZERO, axis).unwrap(),
+    );
+    // The planet runs in a bearing in the arm, which is what makes the arm its
+    // carrier in the first place.
+    let planet_hinge = world.add_joint(
+        Joint::revolute_at_point(
+            world.bodies(),
+            carrier,
+            planet,
+            Vector3::new(0.6, 0.0, 0.0),
+            axis,
+        )
+        .unwrap(),
+    );
+
+    let mesh = if on_carrier {
+        Joint::gear_on_carrier(planet, sun, carrier, axis, axis, ratio)
+    } else {
+        Joint::gear(planet, sun, axis, axis, ratio)
+    };
+    world.add_joint(mesh);
+    (world, carrier, sun_hinge, arm_hinge, planet_hinge)
+}
+
+#[test]
+fn a_carrier_that_cannot_move_changes_nothing() {
+    // The same train with the arm made immovable. "Relative to the carrier" and
+    // "relative to the world" are then the same statement, and the two
+    // constructors have to agree to the last digit or the general form is not a
+    // generalisation of the special one.
+    //
+    // A carrier merely *motored* to a standstill is a different thing and does
+    // not give this: the mesh pushes back on the arm, the arm gives by a
+    // fraction of a radian a second, and only the carrier form feeds that back
+    // into the ratio. Which is the correct behaviour, and why this test locks
+    // the arm rather than holding it.
+    let mut ends = Vec::new();
+    for on_carrier in [false, true] {
+        let mut world = World::new();
+        world.gravity = Vector3::ZERO;
+        let axis = Vector3::new(0.0, 1.0, 0.0);
+        let frame = world.add_body(RigidBody::fixed().shape(Shape::cuboid(0.1, 0.1, 0.1)));
+        let arm = world.add_body(
+            RigidBody::fixed()
+                .shape(Shape::cuboid(0.5, 0.03, 0.03))
+                .translation(Vector3::new(0.3, 0.0, 0.0)),
+        );
+        let sun = world.add_body(
+            RigidBody::dynamic()
+                .shape(Shape::cylinder(0.05, 0.4))
+                .can_sleep(false),
+        );
+        let planet = world.add_body(
+            RigidBody::dynamic()
+                .shape(Shape::cylinder(0.05, 0.2))
+                .translation(Vector3::new(0.6, 0.0, 0.0))
+                .can_sleep(false),
+        );
+        let sun_hinge = world.add_joint(
+            Joint::revolute_at_point(world.bodies(), frame, sun, Vector3::ZERO, axis).unwrap(),
+        );
+        let planet_hinge = world.add_joint(
+            Joint::revolute_at_point(
+                world.bodies(),
+                arm,
+                planet,
+                Vector3::new(0.6, 0.0, 0.0),
+                axis,
+            )
+            .unwrap(),
+        );
+        world.add_joint(if on_carrier {
+            Joint::gear_on_carrier(planet, sun, arm, axis, axis, -2.0)
+        } else {
+            Joint::gear(planet, sun, axis, axis, -2.0)
+        });
+        world.joint_mut(sun_hinge).unwrap().kind = drive_with_motor(&world, sun_hinge, 3.0);
+        settle(&mut world, 300);
+        ends.push((
+            world.joint_speed(sun_hinge).unwrap(),
+            world.joint_speed(planet_hinge).unwrap(),
+        ));
+    }
+    assert!((ends[0].0 - ends[1].0).abs() < 1e-5, "{ends:?}");
+    assert!((ends[0].1 - ends[1].1).abs() < 1e-5, "{ends:?}");
+    // And it is the ratio that was asked for: the planet runs twice the sun,
+    // the other way.
+    assert!((ends[1].0 - 3.0).abs() < 0.2, "the sun ran at {}", ends[1].0);
+    assert!(
+        (ends[1].1 + 2.0 * ends[1].0).abs() < 0.3,
+        "a -2:1 mesh gave {} against the sun's {}",
+        ends[1].1,
+        ends[1].0
+    );
+}
+
+#[test]
+fn a_turning_carrier_drives_the_planet_even_with_the_sun_held() {
+    // The whole point of the carrier form. Hold the sun still in the world and
+    // turn the arm at w: the mesh sees the sun going backwards at w, so the
+    // planet turns at -ratio*w against the arm, and (1 - ratio)*w in the world.
+    //
+    // Measured against the world instead, the same mesh would say the planet
+    // must not turn at all, because the sun is not turning. That is the error
+    // this constructor exists to remove, and it is not a small one: 3w versus 0.
+    const W: f32 = 2.0;
+    let (mut world, carrier, sun_hinge, arm_hinge, planet_hinge) = epicyclic_rig(-2.0, true);
+    world.joint_mut(sun_hinge).unwrap().kind = drive_with_motor(&world, sun_hinge, 0.0);
+    world.joint_mut(arm_hinge).unwrap().kind = drive_with_motor(&world, arm_hinge, W);
+    settle(&mut world, 400);
+
+    let arm = world.joint_speed(arm_hinge).unwrap();
+    let sun = world.joint_speed(sun_hinge).unwrap();
+    assert!((arm - W).abs() < 0.2, "the arm ran at {arm}");
+    assert!(sun.abs() < 0.2, "the sun was supposed to be held, ran at {sun}");
+
+    // Relative to the arm, which is what the mesh constrains.
+    let relative = world.joint_speed(planet_hinge).unwrap();
+    assert!(
+        (relative - 2.0 * arm).abs() < 0.3,
+        "the planet ran {relative} against the arm, expected {}",
+        2.0 * arm
+    );
+
+    // And in the world, where a world-referenced mesh would have said zero.
+    let planet_world = world
+        .body(world.joint(planet_hinge).unwrap().body_b)
+        .unwrap()
+        .angular_velocity
+        .y;
+    assert!(
+        (planet_world - 3.0 * arm).abs() < 0.4,
+        "the planet turned {planet_world} in the world, expected {}",
+        3.0 * arm
+    );
+    let _ = carrier;
+}
+
+#[test]
+fn a_world_referenced_mesh_gets_the_same_train_wrong() {
+    // Same rig, same ratio, only the constructor differs — and the answer is
+    // not close. Kept as a test rather than a comment because it is the reason
+    // the carrier is worth a field on the joint.
+    const W: f32 = 2.0;
+    let (mut world, _, sun_hinge, arm_hinge, planet_hinge) = epicyclic_rig(-2.0, false);
+    world.joint_mut(sun_hinge).unwrap().kind = drive_with_motor(&world, sun_hinge, 0.0);
+    world.joint_mut(arm_hinge).unwrap().kind = drive_with_motor(&world, arm_hinge, W);
+    settle(&mut world, 400);
+
+    let planet_world = world
+        .body(world.joint(planet_hinge).unwrap().body_b)
+        .unwrap()
+        .angular_velocity
+        .y;
+    // It holds the planet still in the world, which is what it was asked to do
+    // and not what the gear train does.
+    assert!(planet_world.abs() < 0.3, "world-referenced gave {planet_world}");
+}
+
+#[test]
+fn a_fixed_carrier_costs_nothing_and_is_allowed() {
+    // Naming a carrier that never moves is legal and is exactly the world form:
+    // a fixed body contributes no inverse inertia to the row and no rate to it.
+    let mut world = World::new();
+    world.gravity = Vector3::ZERO;
+    let axis = Vector3::new(0.0, 1.0, 0.0);
+    let frame = world.add_body(RigidBody::fixed().shape(Shape::cuboid(0.1, 0.1, 0.1)));
+    let a = world.add_body(
+        RigidBody::dynamic()
+            .shape(Shape::cylinder(0.05, 0.2))
+            .can_sleep(false),
+    );
+    let b = world.add_body(
+        RigidBody::dynamic()
+            .shape(Shape::cylinder(0.05, 0.4))
+            .translation(Vector3::new(0.6, 0.0, 0.0))
+            .can_sleep(false),
+    );
+    let ha = world
+        .add_joint(Joint::revolute_at_point(world.bodies(), frame, a, Vector3::ZERO, axis).unwrap());
+    let hb = world.add_joint(
+        Joint::revolute_at_point(
+            world.bodies(),
+            frame,
+            b,
+            Vector3::new(0.6, 0.0, 0.0),
+            axis,
+        )
+        .unwrap(),
+    );
+    world.add_joint(Joint::gear_on_carrier(a, b, frame, axis, axis, -2.0));
+    world.joint_mut(ha).unwrap().kind = drive_with_motor(&world, ha, 4.0);
+    settle(&mut world, 300);
+
+    let fast = world.joint_speed(ha).unwrap();
+    let slow = world.joint_speed(hb).unwrap();
+    assert!((fast - 4.0).abs() < 0.3, "the driver ran at {fast}");
+    assert!(
+        (slow + fast / 2.0).abs() < 0.3,
+        "expected {}, got {slow}",
+        -fast / 2.0
+    );
+}

@@ -1,4 +1,17 @@
 //! BVH-accelerated raycasting for `BufferGeometry` (three-mesh-bvh compatible).
+//!
+//! # Two kinds of caller, and why the defaults suit the other one
+//!
+//! Most callers *query* a tree — cast a ray, find a closest point — and want it
+//! well shaped, because a subtree that failed to split is a linear scan. Build
+//! those with [`BuildOptions::split_degenerate`] on.
+//!
+//! A second kind reads the tree's *shape*. [`bvhcast`](crate::mesh_bvh) walks
+//! two trees together and reports the pairs of leaves that overlap, and the CSG
+//! evaluator takes those pairs as its candidate set — so how finely the trees
+//! were split decides how many candidates it sees, and with them what a boolean
+//! returns. The defaults here reproduce three-mesh-bvh's tree so that those
+//! callers, and the parity fixtures that pin them, keep their answer.
 
 mod build;
 mod bvhcast;

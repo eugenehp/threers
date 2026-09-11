@@ -123,6 +123,18 @@ impl Downsampler {
             usage: wgpu::BufferUsages::UNIFORM,
         });
 
+        // Both transfer variants, so a later pass can view the same bytes as
+        // linear or as sRGB. Bloom needs the sRGB view to get its decode for
+        // free, and this texture is what it is handed whenever supersampling
+        // is on — which left bloom panicking at view creation on any target
+        // that was not already sRGB, i.e. the default one. `RenderTarget` has
+        // always declared them; this did not.
+        let mut extra_formats = Vec::new();
+        for v in [format.add_srgb_suffix(), format.remove_srgb_suffix()] {
+            if v != format && !extra_formats.contains(&v) {
+                extra_formats.push(v);
+            }
+        }
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("threers downsample target"),
             size: wgpu::Extent3d {
@@ -137,7 +149,7 @@ impl Downsampler {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
+            view_formats: &extra_formats,
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let src_view = src.create_view(&wgpu::TextureViewDescriptor::default());

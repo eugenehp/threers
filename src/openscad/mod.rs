@@ -11,7 +11,8 @@
 //! mesh-arrangement kernel** ([`crate::exact_csg`]) — which resolves genuinely
 //! curved∧curved crossings — and falls back to the float [`CsgEvaluator`] only
 //! where the never-wrong manifold gate can't verify a result. Meshes go in and out
-//! via `scad::import` / [`crate::openscad::export`] (STL/OBJ/OFF/3MF/AMF, glTF-GLB, DXF/SVG).
+//! via `scad::import` / [`crate::openscad::export`] (STL/OBJ/OFF/3MF/AMF, glTF-GLB,
+//! FreeCAD `.FCStd`, DXF/SVG).
 //!
 //! Conventions are threers-flavoured, not OpenSCAD-literal: primitives are
 //! centred on the origin (three.js style) and cylinders run along **Y**. Use the
@@ -42,6 +43,9 @@ pub mod dsl;
 
 /// Mesh exporters — OBJ / OFF / 3MF / glTF-GLB (counterpart to `scad::import`).
 pub mod export;
+
+/// FreeCAD `.FCStd` mesh document import and export (`Mesh::Feature` + `MeshKernel.bms`).
+pub mod freecad;
 
 /// Orthographic technical-drawing projection (silhouette + creases, hidden-line
 /// removal) — the drawing counterpart to [`crate::openscad::export`].
@@ -497,6 +501,25 @@ impl Solid {
     /// Evaluate and encode as binary **glTF 2.0** (`.glb`, bytes).
     pub fn to_glb(self) -> Vec<u8> {
         export::geometry_to_glb(&self.to_geometry_exact())
+    }
+
+    /// Evaluate and encode as a FreeCAD **`.FCStd`** document (ZIP bytes) with
+    /// one `Mesh::Feature`. Opens in FreeCAD without linking OCC.
+    pub fn to_fcstd(self) -> Vec<u8> {
+        freecad::geometry_to_fcstd(&self.to_geometry_exact(), "Model")
+    }
+
+    /// Like [`to_fcstd`](Self::to_fcstd) with explicit write options / report.
+    pub fn to_fcstd_with(
+        self,
+        opts: &freecad::FcstdWriteOptions,
+    ) -> Result<(Vec<u8>, freecad::FcstdWriteReport), freecad::FcstdError> {
+        freecad::geometry_to_fcstd_with(&self.to_geometry_exact(), "Model", opts)
+    }
+
+    /// Evaluate colored parts into a multi-object FreeCAD document.
+    pub fn to_fcstd_parts(self) -> Vec<u8> {
+        freecad::parts_to_fcstd(&self.parts(), "Model")
     }
 
     /// Tag this subtree with a display color — OpenSCAD's `color([r, g, b])`.

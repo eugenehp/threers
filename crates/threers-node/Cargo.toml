@@ -1,6 +1,6 @@
 [package]
 name = "threers-node"
-version = "0.0.4"
+version = "0.0.5"
 edition = "2021"
 authors = ["Eugene Hauptmann"]
 description = "Native Node.js bindings for threers via napi-rs (headless render, math, animation, physics)"
@@ -26,7 +26,7 @@ physics = ["dep:threers-physics"]
 animation = ["dep:threers-animation"]
 
 [dependencies]
-threers = { path = "../..", version = "0.0.4" }
+threers = { path = "../..", version = "0.0.5" }
 threers-physics = { path = "../threers-physics", version = "0.0.1", optional = true }
 threers-animation = { path = "../threers-animation", version = "0.0.1", optional = true, default-features = false }
 napi = { version = "2", default-features = false, features = ["napi4"] }

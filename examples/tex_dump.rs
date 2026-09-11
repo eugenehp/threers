@@ -11,7 +11,7 @@
 #[allow(clippy::manual_checked_ops)]
 fn main() {
     let a: Vec<String> = std::env::args().skip(1).collect();
-    let (src, dst) = (a[0].clone(), a.get(1).cloned().unwrap_or("out.png".into()));
+    let (src, dst) = (a[0].clone(), a.get(1).cloned().unwrap_or("out/tex_dump.png".into()));
     let t = threers::textures::blob::load(&src).unwrap_or_else(|e| panic!("{e}"));
     println!(
         "{src}: {}x{} {:?}, {} mips",
@@ -111,6 +111,9 @@ fn main() {
         lit,
         100.0 * lit as f64 / (w as f64 * h as f64)
     );
+    if let Some(dir) = std::path::Path::new(&dst).parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
     std::fs::write(&dst, threers::encode_png(w, h, &rgba)).unwrap();
     println!("  wrote {dst} at mip {mip} ({w}x{h})");
 }

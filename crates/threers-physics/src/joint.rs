@@ -438,6 +438,20 @@ pub enum JointKind {
         local_axis_b: Vector3,
         /// Turns of A per turn of B. Negative for meshing external gears.
         ratio: f32,
+        /// The body the pair is mounted on, when that body moves too.
+        ///
+        /// `None` measures both rates against the world, which is right for a
+        /// gearbox bolted to something that holds still and wrong the moment the
+        /// case itself turns: an epicyclic train, a slew drive on a rotating
+        /// carrier, a nozzle bearing driven by a pinion that rides on the
+        /// segment upstream of it. Name the carrier and the ratio is enforced on
+        /// the rates *relative to it*, which is the pair of numbers a gear
+        /// actually relates.
+        ///
+        /// The carrier has to be jointed to at least one of the pair, which in
+        /// a real train it always is — the pinion is in a bearing in the case.
+        /// That is what puts all three in one solver island.
+        carrier: Option<BodyId>,
     },
     /// A pinion driving a rack: rotation of A about its axis becomes
     /// translation of B along its own.
@@ -750,6 +764,53 @@ impl Joint {
                 local_axis_a: normalize_or_up(axis_a),
                 local_axis_b: normalize_or_up(axis_b),
                 ratio,
+                carrier: None,
+            },
+        )
+    }
+
+    /// Gear two spinning parts that are both carried by a third — an epicyclic
+    /// train, or any drive whose case is not standing still.
+    ///
+    /// [`Self::gear`] relates the two rates in the world. This relates them to
+    /// the carrier: `(ω_a − ω_c)·â = ratio · (ω_b − ω_c)·b̂`, which is what a
+    /// mesh does. The two agree exactly when the carrier is fixed, so this is
+    /// the general form and `gear` is the shortcut.
+    ///
+    /// ```
+    /// # #[cfg(feature = "mechanism")] {
+    /// use threers_physics::prelude::*;
+    ///
+    /// # let mut world = World::new();
+    /// # let arm = world.add_body(RigidBody::dynamic().shape(Shape::cuboid(0.4, 0.05, 0.05)));
+    /// # let sun = world.add_body(RigidBody::dynamic().shape(Shape::cylinder(0.05, 0.1)));
+    /// # let planet = world.add_body(RigidBody::dynamic().shape(Shape::cylinder(0.05, 0.05)));
+    /// // A planet meshing with a sun, both carried on a rotating arm. Turn the
+    /// // arm with the sun held and the planet still turns 2:1 against it.
+    /// world.add_joint(Joint::gear_on_carrier(
+    ///     planet, sun, arm, Vector3::UP, Vector3::UP, -2.0,
+    /// ));
+    /// # }
+    /// ```
+    #[cfg(feature = "mechanism")]
+    pub fn gear_on_carrier(
+        body_a: BodyId,
+        body_b: BodyId,
+        carrier: BodyId,
+        axis_a: Vector3,
+        axis_b: Vector3,
+        ratio: f32,
+    ) -> Self {
+        Self::base(
+            body_a,
+            body_b,
+            Vector3::ZERO,
+            Vector3::ZERO,
+            JointKind::Gear {
+                local_axis_a: normalize_or_up(axis_a),
+                local_axis_b: normalize_or_up(axis_b),
+                ratio,
+                carrier: Some(carrier),
             },
         )
     }

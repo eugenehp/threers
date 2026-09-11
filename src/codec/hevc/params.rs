@@ -39,10 +39,62 @@ pub struct HevcConfig {
     pub pcm_enabled: bool,
     /// Slice QP: CABAC context init, and (compressed path) the quantization step.
     pub qp: i32,
+    /// `max_transform_hierarchy_depth_intra`: how many times an intra CU's
+    /// transform tree may split. `0` pins one transform block per CU; `1` allows
+    /// 16x16 to split into four 8x8.
+    ///
+    /// This is not just a transform-size knob. HEVC does intra prediction *per
+    /// transform block* from already-reconstructed neighbours, so splitting also
+    /// shortens the prediction distance — an 8x8 block predicts from the 8x8
+    /// next to it rather than from the CTB edge 16 samples away.
+    pub max_transform_hierarchy_depth_intra: u32,
+    /// `log2` of the coding-tree-block edge.
+    pub ctb_log2: u32,
+    /// `log2` of the smallest coding block the quadtree may reach. Equal to
+    /// [`HevcConfig::ctb_log2`] means no quadtree: one coding unit per CTB.
+    pub min_cb_log2: u32,
+    /// `log2` of the largest transform block. A coding block bigger than this
+    /// has its transform tree split without signalling it.
+    pub max_tb_log2: u32,
+    /// Tile columns and rows. `(1, 1)` means the picture is one tile, which is
+    /// to say untiled.
+    ///
+    /// Tiles break intra prediction and reset the entropy coder at their edges,
+    /// so each one can be coded independently — and therefore concurrently.
+    /// That costs bitrate in proportion to how much tile boundary the picture
+    /// gains: measured on photographic content, 2x2 at 8K costs 0.7%, 2x2 at 4K
+    /// costs 1.0%, and 4x4 at 4K costs 5.1%. Prefer few large tiles.
+    pub tile_grid: (u32, u32),
 }
 
-/// Coding-tree-block edge in luma samples. Pinned to the min CB size so the
-/// quadtree never splits and each CTB carries exactly one PCM CU.
+/// A tile grid chosen from the picture size alone.
+///
+/// Tiles cost bitrate in proportion to how much boundary the picture gains, so
+/// what matters is keeping each tile large. Measured on photographic content:
+/// tiles of four megapixels or more cost under a tenth of a percent, a 2x2 split
+/// of 1080p costs 0.43%, and splitting 360p four ways costs 5%.
+///
+/// Halving the longer side until a tile is at most four megapixels keeps every
+/// tile close to that, which makes the grid `1x1` up to 1440p, `2x1` at 4K and
+/// `4x2` at 8K. Deriving it from the resolution rather than from the core count
+/// matters: the same input has to encode to the same bytes on every machine.
+pub fn auto_tile_grid(width: u32, height: u32) -> (u32, u32) {
+    const TARGET: u64 = 4_200_000; // ~4 megapixels per tile
+    let (mut c, mut r) = (1u32, 1u32);
+    while u64::from(width / c) * u64::from(height / r) > TARGET && c <= 8 && r <= 8 {
+        if width / c >= height / r {
+            c *= 2;
+        } else {
+            r *= 2;
+        }
+    }
+    (c, r)
+}
+
+/// Default coding-tree-block edge in luma samples. The `I_PCM` path pins the
+/// CTB to the min CB size so the quadtree never splits and each CTB carries
+/// exactly one PCM CU; the compressed path overrides all three sizes via
+/// [`HevcConfig::with_coding_tree`].
 pub const CTB_SIZE: u32 = 16;
 /// `log2` of [`CTB_SIZE`].
 pub const CTB_LOG2: u32 = 4;
@@ -67,17 +119,28 @@ impl HevcConfig {
             height,
             coded_width,
             coded_height,
+            ctb_log2: CTB_LOG2,
+            min_cb_log2: CTB_LOG2,
+            max_tb_log2: CTB_LOG2,
+            tile_grid: (1, 1),
             chroma_format_idc,
             level_idc: 180,
             full_range: false,
             pcm_enabled: true,
             qp: 26,
+            max_transform_hierarchy_depth_intra: 0,
         }
     }
 
     /// Enable/disable I_PCM in the SPS (disable for the compressed path).
     pub fn with_pcm(mut self, enabled: bool) -> Self {
         self.pcm_enabled = enabled;
+        self
+    }
+
+    /// Set `max_transform_hierarchy_depth_intra` (see the field).
+    pub fn with_transform_depth(mut self, depth: u32) -> Self {
+        self.max_transform_hierarchy_depth_intra = depth;
         self
     }
 
@@ -107,9 +170,43 @@ impl HevcConfig {
         }
     }
 
-    /// Number of CTBs across / down the coded picture.
+    /// Total tile count.
+    pub fn tiles(&self) -> u32 {
+        self.tile_grid.0 * self.tile_grid.1
+    }
+
+    /// Split the picture into `cols` x `rows` tiles.
+    pub fn with_tiles(mut self, cols: u32, rows: u32) -> Self {
+        self.tile_grid = (cols.max(1), rows.max(1));
+        self
+    }
+
+    /// Tile the picture only if it is large enough for the tiles to be free.
+    pub fn with_auto_tiles(self) -> Self {
+        let (c, r) = auto_tile_grid(self.coded_width, self.coded_height);
+        self.with_tiles(c, r)
+    }
+
+    /// Number of CTBs across / down the coded picture. The last row and column
+    /// may hang off the edge; the quadtree splits them down to blocks that fit.
     pub fn ctbs(&self) -> (u32, u32) {
-        (self.coded_width / CTB_SIZE, self.coded_height / CTB_SIZE)
+        let ctb = 1 << self.ctb_log2;
+        (self.coded_width.div_ceil(ctb), self.coded_height.div_ceil(ctb))
+    }
+
+    /// Set the coding-tree sizes and re-pad the coded picture to whole minimum
+    /// coding blocks — which is all HEVC requires, so a bigger CTB costs no
+    /// extra padding.
+    pub fn with_coding_tree(mut self, ctb_log2: u32, min_cb_log2: u32, max_tb_log2: u32) -> Self {
+        assert!(min_cb_log2 >= 3 && min_cb_log2 <= ctb_log2, "MinCb in [8, CTB]");
+        assert!((2..=5).contains(&max_tb_log2), "max TB in [4, 32]");
+        self.ctb_log2 = ctb_log2;
+        self.min_cb_log2 = min_cb_log2;
+        self.max_tb_log2 = max_tb_log2;
+        let mcb = 1 << min_cb_log2;
+        self.coded_width = self.width.div_ceil(mcb) * mcb;
+        self.coded_height = self.height.div_ceil(mcb) * mcb;
+        self
     }
 
     /// Whether a conformance window is needed to crop padding back to display size.
@@ -230,12 +327,12 @@ pub fn write_sps_id(cfg: &HevcConfig, sps_id: u32) -> Vec<u8> {
     w.write_ue(0); // log2_max_pic_order_cnt_lsb_minus4 (POC lsb = 4 bits)
     sub_layer_ordering(&mut w);
 
-    w.write_ue(CTB_LOG2 - 3); // log2_min_luma_coding_block_size_minus3 (MinCb = CTB)
-    w.write_ue(0); // log2_diff_max_min_luma_coding_block_size (CTB = MinCb)
+    w.write_ue(cfg.min_cb_log2 - 3); // log2_min_luma_coding_block_size_minus3
+    w.write_ue(cfg.ctb_log2 - cfg.min_cb_log2); // log2_diff_max_min_luma_coding_block_size
     w.write_ue(0); // log2_min_luma_transform_block_size_minus2 (minTU = 4)
-    w.write_ue(2); // log2_diff_max_min_luma_transform_block_size (maxTU = 16)
+    w.write_ue(cfg.max_tb_log2 - 2); // log2_diff_max_min_luma_transform_block_size
     w.write_ue(0); // max_transform_hierarchy_depth_inter
-    w.write_ue(0); // max_transform_hierarchy_depth_intra
+    w.write_ue(cfg.max_transform_hierarchy_depth_intra); // max_transform_hierarchy_depth_intra
     w.flag(false); // scaling_list_enabled_flag
     w.flag(false); // amp_enabled_flag
     w.flag(false); // sample_adaptive_offset_enabled_flag
@@ -244,7 +341,7 @@ pub fn write_sps_id(cfg: &HevcConfig, sps_id: u32) -> Vec<u8> {
     if cfg.pcm_enabled {
         w.write_bits(7, 4); // pcm_sample_bit_depth_luma_minus1 = 7 (8-bit)
         w.write_bits(7, 4); // pcm_sample_bit_depth_chroma_minus1 = 7
-        w.write_ue(CTB_LOG2 - 3); // log2_min_pcm_luma_coding_block_size_minus3 (IPCM min = CTB)
+        w.write_ue(cfg.min_cb_log2 - 3); // log2_min_pcm_luma_coding_block_size_minus3
         w.write_ue(0); // log2_diff_max_min_pcm_luma_coding_block_size (IPCM max = min)
         w.flag(true); // pcm_loop_filter_disabled_flag
     }
@@ -286,9 +383,44 @@ pub fn write_pps() -> Vec<u8> {
     write_pps_ids(0, 0)
 }
 
+/// PPS 0 with `cu_qp_delta_enabled_flag` set and a quantization group the size
+/// of a whole coding tree block (`diff_cu_qp_delta_depth = 0`).
+///
+/// At that granularity both quantizer-prediction neighbours always fall in the
+/// *previous* CTB, so §8.6.1's `qPY_A`/`qPY_B` both collapse to `qPY_PREV` and
+/// the predictor is simply the last coded QP. It is also the granularity a rate
+/// controller wants, which is the other thing per-block QP is for.
+pub fn write_pps_cu_qp_delta() -> Vec<u8> {
+    write_pps_inner(0, 0, true, true)
+}
+
+/// As [`write_pps_cu_qp_delta`], with the deblocking filter switched off.
+pub fn write_pps_cu_qp_delta_no_deblock() -> Vec<u8> {
+    write_pps_inner(0, 0, true, false)
+}
+
 /// Picture Parameter Set RBSP with explicit ids (H.265 §7.3.2.3). The alpha
 /// auxiliary layer uses `pps_id = 1`, `sps_id = 1`.
 pub fn write_pps_ids(pps_id: u32, sps_id: u32) -> Vec<u8> {
+    write_pps_inner(pps_id, sps_id, false, false)
+}
+
+fn write_pps_inner(pps_id: u32, sps_id: u32, cu_qp_delta: bool, deblock: bool) -> Vec<u8> {
+    write_pps_full(pps_id, sps_id, cu_qp_delta, deblock, (1, 1))
+}
+
+/// PPS 0 with `cu_qp_delta`, deblocking, and a tile grid.
+pub fn write_pps_tiled(tile_grid: (u32, u32)) -> Vec<u8> {
+    write_pps_full(0, 0, true, true, tile_grid)
+}
+
+fn write_pps_full(
+    pps_id: u32,
+    sps_id: u32,
+    cu_qp_delta: bool,
+    deblock: bool,
+    tile_grid: (u32, u32),
+) -> Vec<u8> {
     let mut w = BitWriter::new();
     w.write_ue(pps_id); // pps_pic_parameter_set_id
     w.write_ue(sps_id); // pps_seq_parameter_set_id
@@ -302,19 +434,36 @@ pub fn write_pps_ids(pps_id: u32, sps_id: u32) -> Vec<u8> {
     w.write_se(0); // init_qp_minus26
     w.flag(false); // constrained_intra_pred_flag
     w.flag(false); // transform_skip_enabled_flag
-    w.flag(false); // cu_qp_delta_enabled_flag
+    w.flag(cu_qp_delta); // cu_qp_delta_enabled_flag
+    if cu_qp_delta {
+        w.write_ue(0); // diff_cu_qp_delta_depth — quantization group = CTB
+    }
     w.write_se(0); // pps_cb_qp_offset
     w.write_se(0); // pps_cr_qp_offset
     w.flag(false); // pps_slice_chroma_qp_offsets_present_flag
     w.flag(false); // weighted_pred_flag
     w.flag(false); // weighted_bipred_flag
     w.flag(false); // transquant_bypass_enabled_flag
-    w.flag(false); // tiles_enabled_flag
+    let tiled = tile_grid.0 * tile_grid.1 > 1;
+    w.flag(tiled); // tiles_enabled_flag
     w.flag(false); // entropy_coding_sync_enabled_flag
+    if tiled {
+        w.write_ue(tile_grid.0 - 1); // num_tile_columns_minus1
+        w.write_ue(tile_grid.1 - 1); // num_tile_rows_minus1
+        w.flag(true); // uniform_spacing_flag
+        // Deblocking still runs across tile edges. The filter is a picture-level
+        // pass here — intra prediction reads unfiltered samples — so letting it
+        // cross costs nothing and removes the seams tiling would otherwise leave.
+        w.flag(true); // loop_filter_across_tiles_enabled_flag
+    }
     w.flag(false); // pps_loop_filter_across_slices_enabled_flag
     w.flag(true); // deblocking_filter_control_present_flag
     w.flag(false); // deblocking_filter_override_enabled_flag
-    w.flag(true); // pps_deblocking_filter_disabled_flag
+    w.flag(!deblock); // pps_deblocking_filter_disabled_flag
+    if deblock {
+        w.write_se(0); // pps_beta_offset_div2
+        w.write_se(0); // pps_tc_offset_div2
+    }
     w.flag(false); // pps_scaling_list_data_present_flag
     w.flag(false); // lists_modification_present_flag
     w.write_ue(0); // log2_parallel_merge_level_minus2

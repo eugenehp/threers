@@ -24,6 +24,8 @@ mod render_target;
 pub mod rgb_pack;
 /// Depth-only ambient occlusion as a compute pass. See [`ssao`].
 pub mod ssao;
+/// GPU-side timing for the main pass. See [`gpu_timer`].
+pub mod gpu_timer;
 // The renderer itself, in a file named after it; this module is the facade.
 #[allow(clippy::module_inception)]
 mod renderer;

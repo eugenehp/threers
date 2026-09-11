@@ -133,6 +133,14 @@ fn hash64(mut x: u64) -> u64 {
     x ^ (x >> 31)
 }
 
+/// Owen scramble seed for one pixel — the upper half of `hash64(pixel ^ seed)`.
+/// Kept in sync with `pixel_scramble` in `pathtrace.wgsl`.
+#[allow(dead_code)]
+pub(crate) fn pixel_seed(x: u32, y: u32, seed: u64) -> u32 {
+    let pixel = (y as u64) << 32 | x as u64;
+    (hash64(pixel ^ seed) >> 32) as u32
+}
+
 /// A right-handed orthonormal basis with `n` as its local +Z.
 ///
 /// Built by Duff et al.'s branchless method: it is exact for every unit vector
@@ -395,6 +403,17 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Owen scramble differs per pixel and is stable for a fixed render seed.
+    #[test]
+    fn pixel_seed_is_per_pixel_and_stable() {
+        let seed = 0x5eed_1234_abcd_0001;
+        let a = pixel_seed(10, 20, seed);
+        let b = pixel_seed(11, 20, seed);
+        let c = pixel_seed(10, 20, seed);
+        assert_ne!(a, b, "neighbouring pixels must not share a scramble");
+        assert_eq!(a, c, "the same pixel must always get the same scramble");
     }
 
     /// Different pixels have to walk different permutations, or the sequence's

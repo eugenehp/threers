@@ -1,6 +1,10 @@
 //! Everything the tracer is told before it starts: how many samples, how deep
 //! to follow a path, what the camera's lens does, and what an escaping ray sees.
 
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::SystemTime;
+
+use crate::core::Layers;
 use crate::renderer::ToneMapping;
 
 /// What a camera ray that hits nothing returns.
@@ -8,7 +12,7 @@ use crate::renderer::ToneMapping;
 /// three.js keeps `scene.background` and `scene.environment` separate — one is
 /// what you see behind the subject, the other is what lights it — and so does
 /// this. Changing the mode never changes the lighting.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum BackgroundMode {
     /// `scene.background`, at `scene.background_alpha`.
     #[default]
@@ -35,6 +39,17 @@ pub enum Aov {
     /// Distance from the camera to the first hit, normalised over the scene's
     /// depth range.
     Depth,
+}
+
+impl Aov {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Beauty => "beauty",
+            Self::Albedo => "albedo",
+            Self::Normal => "normal",
+            Self::Depth => "depth",
+        }
+    }
 }
 
 /// Path tracer configuration.
@@ -122,6 +137,17 @@ pub struct RaytraceSettings {
     /// Which channel [`crate::raytrace::RaytraceRenderer::render_to_rgba`]
     /// writes. The AOVs are diagnostics — [`Aov::Beauty`] is the render.
     pub aov: Aov,
+    /// Shutter interval as a fraction of the frame (`0..=1`). Each sample jitters
+    /// the camera within this window for motion blur. `0` disables.
+    pub motion_blur_shutter: f32,
+    /// When adaptive sampling is on, steer leftover budget toward pixels that
+    /// have not converged yet instead of issuing no-ops.
+    pub sample_redistribution: bool,
+    /// Only lights whose layers intersect this mask are collected.
+    pub light_layers: Layers,
+    /// Attempt one refractive/reflection hop on shadow rays through glass, so
+    /// caustic-like paths can reach diffuse surfaces (approximate, biased).
+    pub caustic_glass_shadows: bool,
 }
 
 impl Default for RaytraceSettings {
@@ -147,6 +173,14 @@ impl Default for RaytraceSettings {
             adaptive_min_samples: 16,
             denoise: true,
             aov: Aov::Beauty,
+            motion_blur_shutter: 0.0,
+            sample_redistribution: true,
+            light_layers: {
+                let mut l = Layers::default();
+                l.enable_all();
+                l
+            },
+            caustic_glass_shadows: false,
         }
     }
 }
@@ -199,6 +233,12 @@ impl RaytraceSettings {
         self
     }
 
+    /// Linear exposure multiplier applied before the tone curve.
+    pub fn with_exposure(mut self, exposure: f32) -> Self {
+        self.exposure = exposure.max(0.0);
+        self
+    }
+
     /// Depth of field. `aperture` is the lens radius in world units — larger
     /// blurs more — and `focus_distance` is where the plane of sharp focus
     /// sits.
@@ -225,8 +265,74 @@ impl RaytraceSettings {
         self
     }
 
+    /// Clamp indirect path throughput (`0` disables). Larger values allow more
+    /// fireflies through; smaller values bias the image darker/smoother.
+    pub fn with_clamp_indirect(mut self, clamp: f32) -> Self {
+        self.clamp_indirect = clamp.max(0.0);
+        self
+    }
+
+    pub fn with_clamp_direct(mut self, clamp: f32) -> Self {
+        self.clamp_direct = clamp.max(0.0);
+        self
+    }
+
+    /// Use an unpredictable sample sequence for this render.
+    pub fn with_random_seed(self) -> Self {
+        self.with_seed(Self::random_seed())
+    }
+
+    /// A fresh seed for one render. Quality of the randomness does not matter —
+    /// only that successive calls differ.
+    pub fn random_seed() -> u64 {
+        static SALT: AtomicU64 = AtomicU64::new(0x5eed_0000_0000_0001);
+        let t = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0);
+        let n = SALT.fetch_add(1, Ordering::Relaxed);
+        splitmix64(t ^ n.rotate_left(17))
+    }
+
+    /// Parse a seed from CLI or env: decimal integer, `0x…` hex, or `random`.
+    pub fn parse_seed(s: &str) -> Option<u64> {
+        let s = s.trim();
+        if s.eq_ignore_ascii_case("random") {
+            return Some(Self::random_seed());
+        }
+        if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+            return u64::from_str_radix(hex, 16).ok();
+        }
+        s.parse().ok()
+    }
+
     pub fn with_aov(mut self, aov: Aov) -> Self {
         self.aov = aov;
+        self
+    }
+
+    pub fn with_motion_blur(mut self, shutter: f32) -> Self {
+        self.motion_blur_shutter = shutter.clamp(0.0, 1.0);
+        self
+    }
+
+    pub fn with_light_layers(mut self, layers: Layers) -> Self {
+        self.light_layers = layers;
+        self
+    }
+
+    pub fn with_caustic_glass_shadows(mut self, on: bool) -> Self {
+        self.caustic_glass_shadows = on;
+        self
+    }
+
+    pub fn with_sample_redistribution(mut self, on: bool) -> Self {
+        self.sample_redistribution = on;
+        self
+    }
+
+    pub fn with_adaptive_min_samples(mut self, n: u32) -> Self {
+        self.adaptive_min_samples = n.max(1);
         self
     }
 
@@ -237,6 +343,13 @@ impl RaytraceSettings {
         self.light_radius = light_radius.max(0.0);
         self
     }
+}
+
+fn splitmix64(mut x: u64) -> u64 {
+    x = x.wrapping_add(0x9E3779B97F4A7C15);
+    x = (x ^ (x >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94D049BB133111EB);
+    x ^ (x >> 31)
 }
 
 #[cfg(test)]
@@ -288,5 +401,20 @@ mod tests {
             0.0
         );
         assert!(RaytraceSettings::default().adaptive_threshold > 0.0);
+    }
+
+    #[test]
+    fn parse_seed_accepts_random_and_integers() {
+        assert!(RaytraceSettings::parse_seed("random").is_some());
+        assert!(RaytraceSettings::parse_seed("RANDOM").is_some());
+        assert_eq!(RaytraceSettings::parse_seed("42"), Some(42));
+        assert_eq!(RaytraceSettings::parse_seed("0x2a"), Some(42));
+    }
+
+    #[test]
+    fn random_seed_usually_changes() {
+        let a = RaytraceSettings::random_seed();
+        let b = RaytraceSettings::random_seed();
+        assert_ne!(a, b);
     }
 }

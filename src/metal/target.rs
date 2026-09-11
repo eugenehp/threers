@@ -1,7 +1,5 @@
 //! Offscreen colour + depth attachments, and reading them back.
 
-use std::ffi::c_void;
-
 use super::device::{MetalDevice, MetalError};
 use super::enums::*;
 use super::objc::{msg0, msg9, sel, AutoreleasePool, Id, Owned, NIL};
@@ -86,7 +84,10 @@ impl MetalRenderTarget {
             width,
             height,
             pixel_format::DEPTH32_FLOAT,
-            texture_usage::RENDER_TARGET,
+            // SHADER_READ as well as RENDER_TARGET: SSAO reads this depth back
+            // as a `depth2d` in a fragment pass. Without the usage bit the
+            // texture binds but reads as zero, which is occlusion everywhere.
+            texture_usage::RENDER_TARGET | texture_usage::SHADER_READ,
             storage_mode::PRIVATE,
             samples,
             1,
@@ -201,12 +202,90 @@ impl MetalRenderTarget {
     /// Blocks until the GPU has finished: the copy is committed on the same
     /// queue as the draw, so it cannot observe a half-drawn frame.
     pub fn read_rgba(&self, device: &MetalDevice) -> Result<Vec<u8>, MetalError> {
-        self.read_rgba_slice(device, 0)
+        let mut out = Vec::new();
+        self.read_rgba_into(device, &mut out)?;
+        Ok(out)
+    }
+
+    /// Unpack the colour attachment into `out`, reusing its capacity when the
+    /// size matches. Avoids a fresh allocation every frame in video export.
+    pub fn read_rgba_into(
+        &self,
+        device: &MetalDevice,
+        out: &mut Vec<u8>,
+    ) -> Result<(), MetalError> {
+        self.read_rgba_slice_into(device, 0, out)
     }
 
     /// Read one array slice back — eye `slice` of a
     /// [`layered`](Self::layered) target.
-    pub fn read_rgba_slice(&self, device: &MetalDevice, slice: u32) -> Result<Vec<u8>, MetalError> {
+    pub fn read_rgba_slice(
+        &self,
+        device: &MetalDevice,
+        slice: u32,
+    ) -> Result<Vec<u8>, MetalError> {
+        let mut out = Vec::new();
+        self.read_rgba_slice_into(device, slice, &mut out)?;
+        Ok(out)
+    }
+
+    /// Like [`read_rgba_slice`](Self::read_rgba_slice) but reuses `out`.
+    pub fn read_rgba_slice_into(
+        &self,
+        device: &MetalDevice,
+        slice: u32,
+        out: &mut Vec<u8>,
+    ) -> Result<(), MetalError> {
+        let (width, height, padded, bpp) = self.readback_layout()?;
+        let staging = device.new_buffer(&vec![0u8; padded * height])?;
+        self.blit_color_to_buffer(device, slice, &staging, padded)?;
+        self.unpack_staging(&staging, width, height, padded, bpp, out)
+    }
+
+    /// Queue a texture→buffer copy without blocking. Pair with
+    /// [`finish_readback_into`](Self::finish_readback_into) on the next frame.
+    pub fn queue_readback(
+        &self,
+        device: &MetalDevice,
+        staging: &Owned,
+    ) -> Result<Owned, MetalError> {
+        self.queue_readback_slice(device, staging, 0)
+    }
+
+    /// Queue readback for one array slice; returns the command buffer to wait on later.
+    pub fn queue_readback_slice(
+        &self,
+        device: &MetalDevice,
+        staging: &Owned,
+        slice: u32,
+    ) -> Result<Owned, MetalError> {
+        let (_, height, padded, _) = self.readback_layout()?;
+        self.blit_color_to_buffer_async(device, slice, staging, padded, height)
+    }
+
+    /// Wait for a prior [`queue_readback`](Self::queue_readback) and unpack into `out`.
+    // `Id` is `*mut Object`, so clippy asks for `unsafe fn`. Every `Id` in this
+    // module comes from the Metal runtime and is only ever handed back to it;
+    // making the encoders unsafe would put the keyword on the whole backend
+    // without making any caller check anything it is not already checking.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    pub fn finish_readback_into(
+        &self,
+        cmd: Id,
+        staging: &Owned,
+        out: &mut Vec<u8>,
+    ) -> Result<(), MetalError> {
+        let _pool = AutoreleasePool::new();
+        unsafe {
+            if !cmd.is_null() {
+                let _: () = msg0(cmd, sel!("waitUntilCompleted"));
+            }
+        }
+        let (width, height, padded, bpp) = self.readback_layout()?;
+        self.unpack_staging(staging, width, height, padded, bpp, out)
+    }
+
+    fn readback_layout(&self) -> Result<(usize, usize, usize, usize), MetalError> {
         let bpp = pixel_format::bytes_per_pixel(self.color_format).ok_or_else(|| {
             MetalError::Unsupported(format!(
                 "readback of pixel format {} is not implemented",
@@ -219,12 +298,36 @@ impl MetalRenderTarget {
                 bpp
             )));
         }
-
         let width = self.width as usize;
         let height = self.height as usize;
         let padded = padded_row_bytes(width, bpp);
-        let staging = device.new_buffer(&vec![0u8; padded * height])?;
+        Ok((width, height, padded, bpp))
+    }
 
+    fn blit_color_to_buffer(
+        &self,
+        device: &MetalDevice,
+        slice: u32,
+        staging: &Owned,
+        padded: usize,
+    ) -> Result<(), MetalError> {
+        let cmd =
+            self.blit_color_to_buffer_async(device, slice, staging, padded, self.height as usize)?;
+        let _pool = AutoreleasePool::new();
+        unsafe {
+            let _: () = msg0(cmd.id(), sel!("waitUntilCompleted"));
+        }
+        Ok(())
+    }
+
+    fn blit_color_to_buffer_async(
+        &self,
+        device: &MetalDevice,
+        slice: u32,
+        staging: &Owned,
+        padded: usize,
+        height: usize,
+    ) -> Result<Owned, MetalError> {
         let _pool = AutoreleasePool::new();
         unsafe {
             let cmd = device.command_buffer();
@@ -256,25 +359,129 @@ impl MetalRenderTarget {
             );
             let _: () = msg0(blit, sel!("endEncoding"));
             let _: () = msg0(cmd, sel!("commit"));
-            let _: () = msg0(cmd, sel!("waitUntilCompleted"));
-
-            let contents: *const u8 = msg0::<*mut c_void>(staging.id(), sel!("contents")).cast();
-            if contents.is_null() {
-                return Err(MetalError::Allocation("readback buffer contents".into()));
-            }
-            let mut out = vec![0u8; width * height * bpp];
-            for y in 0..height {
-                let src = std::slice::from_raw_parts(contents.add(y * padded), width * bpp);
-                out[y * width * bpp..(y + 1) * width * bpp].copy_from_slice(src);
-            }
-            if pixel_format::is_bgra(self.color_format) {
-                for px in out.chunks_exact_mut(4) {
-                    px.swap(0, 2);
-                }
-            }
-            Ok(out)
+            // `[queue commandBuffer]` is autoreleased, and the pool above pops
+            // when this returns. Handing the raw pointer back leaves the caller
+            // messaging an object whose only remaining owner is the queue —
+            // retain it here, inside the pool that owns it, so waiting on it
+            // later is defined.
+            Owned::retain(cmd).ok_or(MetalError::NoCommandQueue)
         }
     }
+
+    fn unpack_staging(
+        &self,
+        staging: &Owned,
+        width: usize,
+        height: usize,
+        padded: usize,
+        bpp: usize,
+        out: &mut Vec<u8>,
+    ) -> Result<(), MetalError> {
+        unpack_staging_buffer(staging, width, height, padded, bpp, self.color_format, out)
+    }
+}
+
+fn unpack_staging_buffer(
+    staging: &Owned,
+    width: usize,
+    height: usize,
+    padded: usize,
+    bpp: usize,
+    color_format: NSUInteger,
+    out: &mut Vec<u8>,
+) -> Result<(), MetalError> {
+    let need = width * height * bpp;
+    out.clear();
+    out.resize(need, 0);
+    let _pool = AutoreleasePool::new();
+    unsafe {
+        use std::ffi::c_void;
+        let contents: *const u8 =
+            msg0::<*mut c_void>(staging.id(), sel!("contents")).cast();
+        if contents.is_null() {
+            return Err(MetalError::Allocation("readback buffer contents".into()));
+        }
+        for y in 0..height {
+            let src = std::slice::from_raw_parts(contents.add(y * padded), width * bpp);
+            out[y * width * bpp..(y + 1) * width * bpp].copy_from_slice(src);
+        }
+    }
+    if pixel_format::is_bgra(color_format) {
+        for px in out.chunks_exact_mut(4) {
+            px.swap(0, 2);
+        }
+    }
+    Ok(())
+}
+
+/// Append a texture→staging blit onto an existing (uncommitted) command buffer.
+pub fn blit_texture_to_buffer_on_cmd(
+    cmd: Id,
+    texture: Id,
+    width: u32,
+    height: u32,
+    staging: &Owned,
+    padded: usize,
+) -> Result<(), MetalError> {
+    unsafe {
+        let blit: Id = msg0(cmd, sel!("blitCommandEncoder"));
+        if blit.is_null() {
+            return Err(MetalError::NoCommandQueue);
+        }
+        let _: () = msg9(
+            blit,
+            sel!(
+                "copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toBuffer:destinationOffset:destinationBytesPerRow:destinationBytesPerImage:"
+            ),
+            texture,
+            0usize,
+            0usize,
+            MTLOrigin::default(),
+            MTLSize {
+                width: width as NSUInteger,
+                height: height as NSUInteger,
+                depth: 1,
+            },
+            staging.id(),
+            0usize,
+            padded as NSUInteger,
+            (padded * height as usize) as NSUInteger,
+        );
+        let _: () = msg0(blit, sel!("endEncoding"));
+    }
+    Ok(())
+}
+
+
+/// Unpack a prior async texture readback (after `waitUntilCompleted` on its cmd).
+pub fn finish_texture_readback_into(
+    cmd: Id,
+    staging: &Owned,
+    width: u32,
+    height: u32,
+    color_format: NSUInteger,
+    out: &mut Vec<u8>,
+) -> Result<(), MetalError> {
+    let _pool = AutoreleasePool::new();
+    unsafe {
+        if !cmd.is_null() {
+            let _: () = msg0(cmd, sel!("waitUntilCompleted"));
+        }
+    }
+    let bpp = pixel_format::bytes_per_pixel(color_format).ok_or_else(|| {
+        MetalError::Unsupported(format!(
+            "readback of pixel format {color_format} is not implemented"
+        ))
+    })?;
+    if bpp != 4 {
+        return Err(MetalError::Unsupported(
+            "readback expects an 8-bit 4-channel format".into(),
+        ));
+    }
+    let width = width as usize;
+    let height = height as usize;
+    let padded = padded_row_bytes(width, bpp);
+    unpack_staging_buffer(staging, width, height, padded, bpp, color_format, out)
 }
 
 impl std::fmt::Debug for MetalRenderTarget {

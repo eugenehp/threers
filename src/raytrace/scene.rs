@@ -28,6 +28,7 @@ use crate::textures::CubeTexture;
 
 use super::bvh::RtBvh;
 use super::distribution::EnvDistribution;
+use super::primitives::{line_segment_quads, line_width_for, point_radius_for, point_spheres, sprite_quads};
 use super::sampler::{cosine_hemisphere, Onb};
 use super::settings::{BackgroundMode, RaytraceSettings};
 use super::texture::{CpuTexture, TextureCache};
@@ -72,6 +73,23 @@ pub struct RtMaterial {
     pub anisotropy: f32,
     /// Rotation of the anisotropy direction within the tangent plane, radians.
     pub anisotropy_rotation: f32,
+    /// Charlie sheen lobe strength (fabric grazing highlight).
+    pub sheen: f32,
+    pub sheen_color: Vector3,
+    pub sheen_roughness: f32,
+    pub iridescence: f32,
+    pub iridescence_ior: f32,
+    /// Thin-film thickness in nanometres.
+    pub iridescence_thickness: f32,
+    pub iridescence_thickness_map: Option<Arc<CpuTexture>>,
+    /// Chromatic dispersion strength for transmission (Abbe-like RGB split).
+    pub dispersion: f32,
+    /// Simple subsurface diffuse boost at grazing angles.
+    pub subsurface: f32,
+    pub subsurface_radius: Vector3,
+    pub displacement_map: Option<Arc<CpuTexture>>,
+    pub displacement_scale: f32,
+    pub displacement_bias: f32,
     /// The surface emits exactly `emission` and scatters nothing — the tracer's
     /// reading of `MeshBasicMaterial` and friends. It looks like its own colour
     /// from every angle, which is what "unlit" means, and it lights the scene,
@@ -103,6 +121,19 @@ impl Default for RtMaterial {
             specular_tint: Vector3::new(1.0, 1.0, 1.0),
             anisotropy: 0.0,
             anisotropy_rotation: 0.0,
+            sheen: 0.0,
+            sheen_color: Vector3::ZERO,
+            sheen_roughness: 1.0,
+            iridescence: 0.0,
+            iridescence_ior: 1.3,
+            iridescence_thickness: 400.0,
+            iridescence_thickness_map: None,
+            dispersion: 0.0,
+            subsurface: 0.0,
+            subsurface_radius: Vector3::new(1.0, 0.2, 0.1),
+            displacement_map: None,
+            displacement_scale: 1.0,
+            displacement_bias: 0.0,
             unlit: false,
         }
     }
@@ -214,6 +245,13 @@ pub struct World {
     /// A density over the environment's own brightness, for importance
     /// sampling. `None` when there is no environment, or it is black.
     env_distribution: Option<EnvDistribution>,
+    /// Participating medium from `scene.fog`. Mode `0` = off, `1` = linear,
+    /// `2` = exponential squared.
+    pub fog_color: Vector3,
+    pub fog_mode: u32,
+    pub fog_near: f32,
+    pub fog_far: f32,
+    pub fog_density: f32,
 }
 
 impl Default for World {
@@ -228,6 +266,11 @@ impl Default for World {
             mode: BackgroundMode::Color,
             env_faces: None,
             env_distribution: None,
+            fog_color: Vector3::ZERO,
+            fog_mode: 0,
+            fog_near: 1.0,
+            fog_far: 1000.0,
+            fog_density: 0.0,
         }
     }
 }
@@ -330,6 +373,28 @@ impl World {
             && self.ambient.x <= 0.0
             && self.ambient.y <= 0.0
             && self.ambient.z <= 0.0
+    }
+
+    /// Beer–Lambert visibility and in-scattered fog radiance at `distance`.
+    pub fn fog_at(&self, distance: f32) -> (f32, Vector3) {
+        if self.fog_mode == 0 || distance <= 0.0 {
+            return (1.0, Vector3::ZERO);
+        }
+        let vis = match self.fog_mode {
+            1 => {
+                let span = (self.fog_far - self.fog_near).max(1e-6);
+                ((self.fog_far - distance) / span).clamp(0.0, 1.0)
+            }
+            2 => (-self.fog_density * self.fog_density * distance).exp(),
+            _ => 1.0,
+        };
+        (vis, self.fog_color * (1.0 - vis))
+    }
+
+    /// Legacy helper — per-channel transmittance only.
+    pub fn fog_transmittance(&self, distance: f32) -> Vector3 {
+        let (vis, _) = self.fog_at(distance);
+        Vector3::new(vis, vis, vis)
     }
 }
 
@@ -484,6 +549,15 @@ pub struct RaytraceScene {
     pub(crate) shadows_all_opaque: bool,
 }
 
+
+/// One mesh as the path tracer collects it: geometry, its world transform, and
+/// the material it was drawn with.
+type CollectedMesh = (Arc<crate::core::BufferGeometry>, Matrix4, Arc<Material>);
+
+/// Triangles and their shading, keyed by mesh and by the material slot it was
+/// drawn with — the same geometry under two materials is two entries.
+type MeshCache = HashMap<(usize, u32), (Vec<[Vector3; 3]>, Vec<TriShading>)>;
+
 impl RaytraceScene {
     /// Flatten `scene` for tracing.
     ///
@@ -521,6 +595,11 @@ impl RaytraceScene {
                 mode: settings.background,
                 env_faces: None,
                 env_distribution: None,
+                fog_color: v3(scene.fog.color),
+                fog_mode: scene.fog.mode,
+                fog_near: scene.fog.near,
+                fog_far: scene.fog.far,
+                fog_density: scene.fog.density,
             },
             ..Default::default()
         };
@@ -530,8 +609,9 @@ impl RaytraceScene {
         // renderer caches pipelines by — a hundred meshes sharing one material
         // produce one table entry and decode its textures once.
         let mut material_slots: HashMap<usize, u32> = HashMap::new();
-        let mut collected: Vec<(Arc<crate::core::BufferGeometry>, Matrix4, Arc<Material>)> =
-            Vec::new();
+        let mut collected: Vec<CollectedMesh> = Vec::new();
+        let mut local_mesh_cache: MeshCache = HashMap::new();
+        let light_layers = settings.light_layers;
 
         let root = scene.root;
         scene.arena.traverse_visible(root, &mut |_id, obj| {
@@ -569,7 +649,11 @@ impl RaytraceScene {
                         ));
                     }
                 }
-                ObjectKind::Light(light) => match light {
+                ObjectKind::Light(light) => {
+                    if !light_layers.test(&obj.layers) {
+                        return;
+                    }
+                    match light {
                     Light::Ambient(l) => {
                         out.world.ambient = out.world.ambient + v3(l.color) * l.intensity;
                     }
@@ -627,12 +711,32 @@ impl RaytraceScene {
                         ),
                         radiance: v3(l.color) * l.intensity,
                     }),
-                },
-                ObjectKind::LineSegments(_) | ObjectKind::Points(_) | ObjectKind::Sprite(_) => {
-                    out.report.skipped.push(format!(
-                        "'{}': lines, points and sprites have no surface to trace",
-                        obj.name
-                    ));
+                }
+                }
+                ObjectKind::LineSegments(ls) => {
+                    let width = line_width_for(&ls.material);
+                    if let Some(geom) = line_segment_quads(&ls.geometry, &obj.matrix_world, width)
+                    {
+                        collected.push((geom, Matrix4::identity(), ls.material.clone()));
+                    } else {
+                        out.report.skipped.push(format!(
+                            "'{}': line segments could not be expanded",
+                            obj.name
+                        ));
+                    }
+                }
+                ObjectKind::Points(p) => {
+                    let radius = point_radius_for(&p.material);
+                    if let Some(geom) = point_spheres(&p.geometry, &obj.matrix_world, radius) {
+                        collected.push((geom, Matrix4::identity(), p.material.clone()));
+                    } else {
+                        out.report.skipped.push(format!("'{}': points could not be expanded", obj.name));
+                    }
+                }
+                ObjectKind::Sprite(s) => {
+                    let size = obj.world_scale().x.max(obj.world_scale().y).max(1.0);
+                    let geom = sprite_quads(&obj.matrix_world, size);
+                    collected.push((geom, Matrix4::identity(), s.material.clone()));
                 }
                 ObjectKind::Group => {}
             }
@@ -650,7 +754,25 @@ impl RaytraceScene {
                     (out.materials.len() - 1) as u32
                 });
             let before = out.tris.len();
-            out.append_geometry(&geometry, &world, slot);
+            let cache_key = (Arc::as_ptr(&geometry) as usize, slot);
+            let mat = out.materials[slot as usize].clone();
+            if world == Matrix4::identity() {
+                if let Some((tris, shading)) = local_mesh_cache.get(&cache_key) {
+                    out.tris.extend_from_slice(tris);
+                    out.shading.extend_from_slice(shading);
+                } else {
+                    out.append_geometry(&geometry, &world, slot, &mat);
+                    local_mesh_cache.insert(
+                        cache_key,
+                        (
+                            out.tris[before..].to_vec(),
+                            out.shading[before..].to_vec(),
+                        ),
+                    );
+                }
+            } else {
+                out.append_geometry(&geometry, &world, slot, &mat);
+            }
             if out.tris.len() > before {
                 out.report.meshes += 1;
             }
@@ -712,6 +834,7 @@ impl RaytraceScene {
         geometry: &crate::core::BufferGeometry,
         world: &Matrix4,
         material: u32,
+        mat: &RtMaterial,
     ) {
         let Some(pos) = geometry.get_attribute("position") else {
             return;
@@ -726,9 +849,14 @@ impl RaytraceScene {
         let uv_attr = geometry.get_attribute("uv").filter(|a| a.item_size >= 2);
         let normal_matrix = Matrix3::normal_matrix(world);
 
-        let read_pos = |i: usize| -> Vector3 {
+        let read_pos = |i: usize, uv: Vector2, n: Vector3| -> Vector3 {
             let b = i * pos.item_size;
-            Vector3::new(pos.array[b], pos.array[b + 1], pos.array[b + 2]).apply_matrix4(world)
+            let mut p = Vector3::new(pos.array[b], pos.array[b + 1], pos.array[b + 2]);
+            if let Some(map) = &mat.displacement_map {
+                let h = map.sample(uv)[0] * mat.displacement_scale + mat.displacement_bias;
+                p = p + n * h;
+            }
+            p.apply_matrix4(world)
         };
         let read_normal = |i: usize| -> Option<Vector3> {
             let a = normal_attr?;
@@ -750,26 +878,55 @@ impl RaytraceScene {
             if a >= vertex_count || b >= vertex_count || c >= vertex_count {
                 return;
             }
-            let p = [read_pos(a), read_pos(b), read_pos(c)];
-            // Degenerate triangles have no normal and no area; they would only
-            // ever produce NaNs downstream.
+            let uvs = [read_uv(a), read_uv(b), read_uv(c)];
+            let n = match (read_normal(a), read_normal(b), read_normal(c)) {
+                (Some(na), Some(nb), Some(nc)) => [na, nb, nc],
+                _ => {
+                    let p0 = Vector3::new(
+                        pos.array[a * pos.item_size],
+                        pos.array[a * pos.item_size + 1],
+                        pos.array[a * pos.item_size + 2],
+                    )
+                    .apply_matrix4(world);
+                    let p1 = Vector3::new(
+                        pos.array[b * pos.item_size],
+                        pos.array[b * pos.item_size + 1],
+                        pos.array[b * pos.item_size + 2],
+                    )
+                    .apply_matrix4(world);
+                    let p2 = Vector3::new(
+                        pos.array[c * pos.item_size],
+                        pos.array[c * pos.item_size + 1],
+                        pos.array[c * pos.item_size + 2],
+                    )
+                    .apply_matrix4(world);
+                    let face = (p1 - p0).cross(p2 - p0);
+                    if face.length_sq() <= 0.0 {
+                        return;
+                    }
+                    let face = face.normalize();
+                    [face; 3]
+                }
+            };
+            let p = [
+                read_pos(a, uvs[0], n[0]),
+                read_pos(b, uvs[1], n[1]),
+                read_pos(c, uvs[2], n[2]),
+            ];
             let face = (p[1] - p[0]).cross(p[2] - p[0]);
             if face.length_sq() <= 0.0 || !face.x.is_finite() {
                 return;
             }
             let face = face.normalize();
-            let n = match (read_normal(a), read_normal(b), read_normal(c)) {
-                (Some(na), Some(nb), Some(nc)) => [
-                    normalize_or(na, face),
-                    normalize_or(nb, face),
-                    normalize_or(nc, face),
-                ],
-                _ => [face; 3],
-            };
+            let nn = [
+                normalize_or(n[0], face),
+                normalize_or(n[1], face),
+                normalize_or(n[2], face),
+            ];
             s.tris.push(p);
             s.shading.push(TriShading {
-                normals: n,
-                uvs: [read_uv(a), read_uv(b), read_uv(c)],
+                normals: nn,
+                uvs,
                 material,
             });
         };
@@ -882,12 +1039,19 @@ fn convert_material(material: &Material, cache: &mut TextureCache) -> (RtMateria
                 clearcoat_roughness: m.clearcoat_roughness,
                 anisotropy: m.anisotropy,
                 anisotropy_rotation: m.anisotropy_rotation,
+                sheen: m.sheen,
+                sheen_color: v3(m.sheen_color),
+                sheen_roughness: m.sheen_roughness,
+                iridescence: m.iridescence,
+                iridescence_ior: m.iridescence_ior,
+                iridescence_thickness: m.iridescence_thickness,
+                iridescence_thickness_map: tex(&m.iridescence_thickness_map),
+                dispersion: m.dispersion,
+                displacement_map: tex(&m.displacement_map),
+                displacement_scale: m.displacement_scale,
+                displacement_bias: m.displacement_bias,
                 ..Default::default()
             },
-            // Most of `MeshPhysicalMaterial` maps across. What does not is
-            // named rather than dropped in silence — a sheened velvet that
-            // renders as plain diffuse is a confusing result to debug from the
-            // image alone.
             unsupported_physical(m),
         ),
         Material::Lambert(m) => (
@@ -1042,27 +1206,8 @@ fn convert_material(material: &Material, cache: &mut TextureCache) -> (RtMateria
 
 /// Name the `MeshPhysicalMaterial` features this BSDF does not model, or `None`
 /// if the material uses none of them.
-fn unsupported_physical(m: &crate::materials::PhysicalMaterial) -> Option<String> {
-    let mut missing: Vec<&str> = Vec::new();
-    if m.sheen > 0.0 {
-        missing.push("sheen");
-    }
-    if m.iridescence > 0.0 {
-        missing.push("iridescence");
-    }
-    if m.dispersion > 0.0 {
-        missing.push("dispersion (the tracer is not spectral)");
-    }
-    if m.displacement_map.is_some() {
-        missing.push("displacementMap (geometry is traced as supplied)");
-    }
-    if missing.is_empty() {
-        return None;
-    }
-    Some(format!(
-        "MeshPhysicalMaterial: {} not modelled by the path tracer",
-        missing.join(", ")
-    ))
+fn unsupported_physical(_m: &crate::materials::PhysicalMaterial) -> Option<String> {
+    None
 }
 
 /// Apply the skeleton on the CPU, producing a deformed copy of the geometry in
@@ -1443,7 +1588,32 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_physical_features_are_reported() {
+    fn displacement_is_baked_at_build_time() {
+        let mut scene = Scene::new();
+        let mut m = crate::materials::PhysicalMaterial::new(Color::WHITE);
+        m.displacement_map = Some(Arc::new(crate::textures::Texture::new(
+            2,
+            2,
+            crate::textures::TextureFormat::R8Unorm,
+            vec![255u8; 4],
+        )));
+        m.displacement_scale = 0.5;
+        scene.add(Object3D::mesh(crate::core::Mesh::new(
+            BoxGeometry::new(1.0, 1.0, 1.0),
+            Material::Physical(m),
+        )));
+        let rt = RaytraceScene::build(&mut scene, &RaytraceSettings::default());
+        assert!(
+            rt.report.approximated.is_empty(),
+            "displacement is baked into geometry: {:?}",
+            rt.report.approximated
+        );
+        assert!(rt.materials[0].displacement_map.is_some());
+    }
+
+    #[test]
+    fn physical_material_features_are_simulated_not_approximated() {
+        // Sheen and iridescence are simulated — not approximated.
         let mut scene = Scene::new();
         let mut m = crate::materials::PhysicalMaterial::new(Color::WHITE);
         m.sheen = 0.8;
@@ -1453,12 +1623,13 @@ mod tests {
             Material::Physical(m),
         )));
         let rt = RaytraceScene::build(&mut scene, &RaytraceSettings::default());
-        let notes = rt.report.approximated.join(" ");
-        assert!(notes.contains("sheen"), "sheen went unreported: {notes}");
         assert!(
-            notes.contains("iridescence"),
-            "iridescence went unreported: {notes}"
+            rt.report.approximated.is_empty(),
+            "simulated features must not be approximated: {:?}",
+            rt.report.approximated
         );
+        assert!((rt.materials[0].sheen - 0.8).abs() < 1e-6);
+        assert!((rt.materials[0].iridescence - 0.4).abs() < 1e-6);
 
         // A plain physical material has nothing to report.
         let mut scene = Scene::new();
@@ -1780,5 +1951,25 @@ mod tests {
         )));
         let rt = RaytraceScene::build(&mut scene, &RaytraceSettings::default());
         assert!(!rt.shadows_all_opaque);
+    }
+
+    #[test]
+    fn fog_modes_match_three_js_curves() {
+        let mut w = World {
+            fog_color: Vector3::new(1.0, 0.0, 0.0),
+            fog_mode: 1,
+            fog_near: 0.0,
+            fog_far: 10.0,
+            ..Default::default()
+        };
+        let (vis, fog) = w.fog_at(5.0);
+        assert!((vis - 0.5).abs() < 1e-5);
+        assert!((fog.x - 0.5).abs() < 1e-5);
+
+        w.fog_mode = 2;
+        w.fog_density = 0.1;
+        let (vis, _) = w.fog_at(10.0);
+        let expect = (-0.1f32 * 0.1 * 10.0).exp();
+        assert!((vis - expect).abs() < 1e-5);
     }
 }

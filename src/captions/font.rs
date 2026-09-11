@@ -7,6 +7,9 @@
 //!   native and `wasm32`. Latin-1 accented letters fold to their base letter
 //!   (`é` → `e`) so European text stays readable; anything else draws as a
 //!   hollow box.
+//! - [`CaptionFont::ui`] / [`CaptionFont::try_sf_compact`] — SF Compact on macOS
+//!   when installed; [`CaptionFont::builtin`] elsewhere. [`CaptionPainter::new`](super::CaptionPainter::new)
+//!   uses this by default.
 //! - [`CaptionFont::from_ttf_bytes`] — a real TrueType face, rasterized from
 //!   its outlines with 4× supersampled analytic coverage. Use this when you
 //!   care about typography or need glyphs outside ASCII.
@@ -126,6 +129,36 @@ impl CaptionFont {
     /// a format-4 `cmap`. OpenType/CFF (`.otf`) is not supported.
     pub fn from_ttf_bytes(bytes: &[u8]) -> Result<Self, TtfError> {
         Ok(Self::from_ttf(TtfFont::parse(bytes)?))
+    }
+
+    /// SF Compact when the system ships it (macOS), otherwise
+    /// [`builtin`](Self::builtin).
+    ///
+    /// This is the preferred UI face for burned-in labels and data graphics.
+    pub fn ui() -> Self {
+        Self::try_sf_compact().unwrap_or_else(Self::builtin)
+    }
+
+    /// Load Apple's SF Compact from a well-known install path.
+    pub fn try_sf_compact() -> Option<Self> {
+        #[cfg(target_os = "macos")]
+        {
+            const PATHS: &[&str] = &[
+                "/System/Library/Fonts/SFCompact.ttf",
+                "/System/Library/Fonts/SFCompactRounded.ttf",
+            ];
+            for path in PATHS {
+                let bytes = std::fs::read(path).ok()?;
+                if let Ok(font) = Self::from_ttf_bytes(&bytes) {
+                    return Some(font);
+                }
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = ();
+        }
+        None
     }
 
     /// Whether this face is the built-in bitmap one.

@@ -29,7 +29,7 @@ generate = ["dep:threers"]
 [dependencies]
 anyhow = "1"
 rlx = { version = "0.2.14", default-features = false, features = ["cpu", "tensor"] }
-threers = { path = "../..", version = "0.0.4", default-features = false, features = ["raytrace", "parallel"], optional = true }
+threers = { path = "../..", version = "0.0.5", default-features = false, features = ["raytrace", "parallel"], optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"

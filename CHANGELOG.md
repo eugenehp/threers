@@ -5,6 +5,172 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.5] — 2026-09-10
+
+<!-- Still to write up for this release. The sections below cover the lattice
+     work only; these areas also changed since v0.0.4 and are not described
+     anywhere in this entry (added lines against the tag):
+
+       src/raytrace          5447   motion blur / shutter on RtCamera, denoise,
+                                    film, gpu backend
+       src/codec             3382
+       src/metal              905   post-fx chain (new src/metal/postfx.rs)
+       src/renderer           501
+       crates/threers-physics 412   three-bearing swivel examples
+       src/videotoolbox.rs    360
+       src/mesh_bvh           102   degenerate-split fallback + front-to-back
+                                    traversal — see the note in Known issues
+       crates/threers-connectome    new crate (untracked)
+
+     `git diff --stat v0.0.4` for the full picture. -->
+
+Lattices stopped being a geometry generator and became something you can size a
+part with: foams, cells that follow the part instead of being cut by it, and
+numbers — stiffness, conductivity, strength, pore size — that come out of a
+solve rather than a rule of thumb.
+
+### Added
+- **Stochastic lattices** — six cells with no repeating unit at all:
+  `Voronoi` (open-cell struts on the Voronoi edges), `VoronoiWall`
+  (closed-cell), and four spinodal random-field classes — isotropic, lamellar,
+  columnar and cubic (the spinodoid taxonomy of Kumar et al., *npj Comput.
+  Mater.* 2020). `Lattice::seed` picks the foam and `Lattice::jitter` sweeps
+  from a regular grid to a fully stochastic one. No point set and no RNG is
+  stored: the seeds are a hash of their cell index and the wave directions a
+  hash of their own, so the field is a pure function of the point and the seed
+  at any resolution, on any thread, in any process.
+- **Conformal lattices** — `Lattice::conform` maps the point into cell space
+  before the periodic field is evaluated, so a tiling can close around a nozzle
+  or stack whole layers through a wall that curves, instead of being cut
+  mid-strut where the part ends. `Conform::cylindrical` / `spherical` /
+  `depth(region)` / `new(map)`, plus `Conform::ring_pitch` for the cell size
+  that closes a ring without a seam. Each map reports its stretch and the
+  thickness is divided by it, so a wall is a length and not a coordinate.
+- **`Field`** — the adapter between a solver result and
+  `Lattice::grade`, which takes a closure and is therefore the least useful
+  thing to be handed. Build one from a grid, a function, scattered points
+  (solver output, sensor readings, a point cloud) or a value per mesh vertex;
+  `into_grade(at_min, at_max)` reads its range once and maps it onto two
+  thickness multipliers. `CuboctFrame::element_stress` and `stress_field` close
+  the loop for beam lattices: solve the block, grade the lattice on what it
+  said.
+- **Homogenisation** — `Lattice::homogenize` voxelises one periodic cell, solves
+  six unit macroscopic strains on it with periodic boundaries, and reads the
+  effective 6×6 stiffness off the strain energy. `Stiffness` gives Young's and
+  shear moduli, Poisson ratios, `directional_modulus` off the axes, and
+  `anisotropy`. A fully solid cell returns the base material exactly.
+  `homogenize_window` measures several cells at once, which a foam needs
+  because it has no cell to repeat.
+- **Effective conductivity** — `Lattice::conductivity`, the scalar cousin of the
+  same solve: one unknown a node, three unit gradients, a 3×3 tensor with
+  `principal` (eigenvalues, so orientation does not matter), `anisotropy` and
+  `tortuosity_factor`. Heat, electricity, diffusion and permittivity are the
+  same equation, so it is the same number for all of them.
+- **Collapse strength** — `Lattice::strength` reads the local von Mises stress
+  per unit of macroscopic stress out of the fluctuation fields the stiffness
+  solve already produced, so it is one set of solves and not two. `Strength`
+  gives `yield_strength`, `uniaxial`, `efficiency` (the share of the material at
+  yield when the cell gives) and `collapse_strain`. `resolved()` reports whether
+  the grid was fine enough to believe, because this one converges from *below*
+  and a coarse grid overstates strength.
+- **Metrics** — `Lattice::metrics` returns porosity, internal (`wetted`) versus
+  total surface area, area per unit of part and per unit of material, pore
+  diameter and ligament thickness by Euclidean distance transform, hydraulic
+  diameter, and a Kozeny–Carman permeability estimate. It samples fine enough to
+  see the wall before it measures anything, and `wall_samples` on the result
+  says whether it managed.
+- **Void connectivity** — porous, connected and flowing are three different
+  questions, so the void is flood-filled and asked all three: `open_porosity`
+  and `closed_porosity` (what can be drained), `percolates` per axis (what can
+  flow across), and `largest_void_fraction` — 1 for an open-cell foam, about a
+  half for a sheet TPMS's two labyrinths, near zero for a closed-cell one.
+- **GPU solves** — `Lattice::solver(Solver::Gpu)` runs the homogenisation
+  conjugate gradient as a wgpu compute pipeline: 7–13× faster than the CPU on a
+  cell worth the trouble, and the moduli agree to four or five significant
+  figures despite the device solving in `f32` — 0.00 % apart on three of four
+  measured cells and 0.01 % on the fourth. (The effective tensor is read off an energy, and
+  energy is stationary at the solution, so an error in the displacement field
+  appears squared in the answer.) Opt-in rather than automatic because the two
+  are not bit-identical; falls back to the CPU with no adapter and on wasm, and
+  `solver` on the result says which one ran.
+- **`Region` is `Clone`** — filling a shell and conforming to the same surface
+  is one region rather than two, and cloning is a reference count.
+- **`examples/lattice_engineering`** — foams, conformal cells, a field-driven
+  grade, and the two tables the rest of this is for.
+
+### Changed
+- **`fit_relative_density` is about twelve times faster** — 87 s to 7.3 s across
+  all 35 generators. The density sampler was inheriting the build grid's cull
+  margin, which exists to keep the gradient exact when contouring and is waste
+  for a test that only reads a sign; samples-per-cell was the wrong knob for a
+  part a hundred cells across, so the estimate is now bounded above *and* below
+  by a total sample count; and twenty bisection steps were resolving thickness
+  to a nanometre. Accuracy cost, measured against an independent voxel count:
+  0.3 %.
+- **`resolve_walls` and `wall_samples` see the grade** — they read the nominal
+  thickness before, so a part graded down to two fifths sized its grid for the
+  thick end and came out as gravel at the thin one. The grade is swept on a
+  coarse grid and the minimum is what the sampling is sized for.
+- **`Stiffness` and `Conductivity` report `voxels`** — the grid tops out at 48
+  and a multi-cell window multiplies into that ceiling, so the number actually
+  used comes back rather than the number asked for.
+- **`LatticeKind::all()` is 35** — the six stochastic cells join the gallery,
+  which `examples/lattice` picks up without changes.
+
+### Fixed
+- **Concentric infill homogenised to nothing.** It is the one pattern that reads
+  how deep into the part it is, and "deep inside" was passed as infinity, which
+  put its first ring infinitely far away: the cell voxelised empty and the
+  stiffness came back zero, silently. A sweep over every generator now guards
+  against the whole class.
+- **`--features video` on its own did not compile.** The native H.264 export
+  path used `crate::codec` without the `native-codec` gate its only caller
+  already had, so it only built when something else happened to turn that
+  feature on. Every leaf feature now builds as a library by itself.
+- **Two dead branches** that clippy found and that were doing nothing: an `if`
+  in the raytracer's line primitive whose arms were both `i + 1`, and one in the
+  procedural-city sign code choosing between `o` and `o`.
+- **`BuildOptions::split_degenerate`** — when the chosen plane separates
+  nothing, the builder used to give up and turn the whole subtree into a single
+  leaf, which a query then scans linearly; one degenerate split at the root
+  costs every later query the entire scene, and a handful of triangles far
+  larger than the rest (ground planes, backdrops) is enough to cause it. The
+  fallback splits at the median centroid instead. It is **off by default**: the
+  tree's shape is read, not just queried, by `bvhcast`'s leaf-pair enumeration
+  and through it by the CSG evaluator, and the default reproduces
+  three-mesh-bvh's. Turn it on for raycast and closest-point trees, where
+  nothing reads the shape.
+- **Throughput assertions failed every debug run.** The BVH raycast tests
+  asserted rays per second unconditionally, and the release checklist runs
+  `cargo test` without `--release`, where the same traversal is several times
+  slower. The rate is still printed on every run and still enforced where
+  optimisations are on.
+
+### Housekeeping
+- `cargo clippy --workspace --all-targets --all-features` is clean, as are both
+  wasm targets. Where a lint was a genuine disagreement rather than a defect it
+  is allowed at the narrowest scope that covers it, with the reason written
+  down — graphics signatures are wide because the quantities are independent,
+  and an `Id` in the Metal backend always comes from the Metal runtime.
+
+### Known issues
+- **A boolean's result depends on the shape of the BVH used to find its
+  candidate pairs**, which it should not.
+  `collect_intersecting_triangles` marks any *coplanar* pair `bvhcast` hands it
+  as intersecting, whether or not the two triangles are anywhere near each
+  other — so a coarser tree, whose leaves enumerate more pairs, marks more
+  triangles and produces more geometry. On the CSG parity meshes the tree
+  degenerates to three nodes, `bvhcast` becomes brute force, and every coplanar
+  pair in both meshes gets marked; a properly split tree returns 3816 pairs
+  instead of 6240 and the window frame comes out at 751 vertices instead of
+  4074. Neither enumeration is wrong — the tighter one was verified against
+  brute force to miss no genuinely overlapping pair — but the evaluator should
+  decide coplanarity from the geometry rather than from what the accelerator
+  happened to deliver. Until it does,
+  [`BuildOptions::split_degenerate`] keeps the two apart.
+
+[`BuildOptions::split_degenerate`]: https://docs.rs/threers/latest/threers/mesh_bvh/struct.BuildOptions.html
+
 ## [0.0.4] — 2026-08-22
 
 The renderer grew a second way to make a picture, a second backend to make it
@@ -290,6 +456,7 @@ on, and a second crate to make things move.
 - Opt-in `mesh-bvh` and `bvh-csg` (three-mesh-bvh / three-bvh-csg parity).
 - Web shim (`THREE.*`) and parity tooling.
 
+[0.0.5]: https://github.com/eugenehp/threers/compare/v0.0.4...v0.0.5
 [0.0.4]: https://github.com/eugenehp/threers/compare/v0.0.3...v0.0.4
 [0.0.3]: https://github.com/eugenehp/threers/compare/v0.0.2...v0.0.3
 [0.0.2]: https://github.com/eugenehp/threers/compare/v0.0.1...v0.0.2

@@ -135,6 +135,12 @@ fn decode(dec: &mut Dec, ctx: &mut ResidualCtx, n: usize, chroma: bool, scan_idx
     let gy = decode_last_prefix(dec, &mut ctx.last_y, log2n, chroma);
     let last_x = decode_last_suffix(dec, gx);
     let last_y = decode_last_suffix(dec, gy);
+    // A vertical scan signals the last position transposed (§7.4.9.11).
+    let (last_x, last_y) = if scan_idx == 2 {
+        (last_y, last_x)
+    } else {
+        (last_x, last_y)
+    };
     let last_scan = scan.iter().position(|&p| p == (last_x, last_y)).unwrap();
     let last_sb = last_scan / 16;
     let last_pos = last_scan % 16;
@@ -177,7 +183,7 @@ fn decode(dec: &mut Dec, ctx: &mut ResidualCtx, n: usize, chroma: bool, scan_idx
                 num_sig += 1;
                 break;
             }
-            let ci = sig_ctx(xc, yc, log2n, chroma, sub_nonzero, csbf_rb);
+            let ci = sig_ctx(xc, yc, log2n, chroma, sub_nonzero, csbf_rb, scan_idx);
             if dec.bin(&mut ctx.sig[ci]) == 1 {
                 sig[p as usize] = true;
                 num_sig += 1;

@@ -127,7 +127,11 @@ impl MechanismSpec {
     pub fn dangling_parts(&self) -> Vec<&str> {
         let mut out = Vec::new();
         for mate in &self.mates {
-            for name in &mate.parts {
+            for name in mate
+                .parts
+                .iter()
+                .chain(mate.carrier.iter())
+            {
                 if self.part(name).is_none() && !out.contains(&name.as_str()) {
                     out.push(name.as_str());
                 }
@@ -338,6 +342,18 @@ pub struct MateSpec {
     /// for a slider; `rest` is in the mate's own coordinate; `damping` opposes
     /// speed in it.
     pub elastic: Option<[f32; 3]>,
+    /// `carrier = "part"` — what a `gear()` is mounted on, when that is not the
+    /// world.
+    ///
+    /// A mesh relates the two wheels' rates *to the case they run in*. Bolt the
+    /// case to the airframe and the case is the world, so it need not be said.
+    /// Bolt it to something that itself turns — an epicyclic train, a slew drive
+    /// carried on the segment upstream of it — and it very much does: the ratio
+    /// is between `(a − carrier)` and `(b − carrier)`, and leaving it out states
+    /// a different mechanism rather than an approximate one.
+    ///
+    /// Ignored on the mates that are not couplings.
+    pub carrier: Option<String>,
     /// `collide = true` — the two parts also *touch* each other, on top of
     /// being joined.
     ///
@@ -932,4 +948,45 @@ mod tests {
             Some(45.0)
         );
     }
+    #[test]
+    fn a_gear_can_name_the_part_it_is_carried_on() {
+        let spec = parse_scad_mechanism(
+            r#"
+            part("case", fixed = true) cube([10, 10, 10]);
+            part("arm")                cube([20, 4, 4]);
+            part("sun")                cylinder(4, 6);
+            part("planet")             cylinder(4, 3);
+
+            hinge("arm_pivot", parts = ["arm", "case"], at = [0, 0, 0], axis = [0, 0, 1]);
+            hinge("sun_pivot", parts = ["sun", "case"], at = [0, 0, 0], axis = [0, 0, 1]);
+            hinge("planet_pivot", parts = ["planet", "arm"], at = [9, 0, 0], axis = [0, 0, 1]);
+            gear("mesh", parts = ["planet", "sun"], at = [9, 0, 0], axis = [0, 0, 1],
+                 ratio = -2, carrier = "arm");
+            "#,
+        )
+        .unwrap();
+        let mesh = spec.mate("mesh").unwrap();
+        assert_eq!(mesh.carrier.as_deref(), Some("arm"));
+        assert!(spec.dangling_parts().is_empty(), "{:?}", spec.dangling_parts());
+
+        // A mate with no carrier says so, and is the ordinary world-referenced
+        // coupling it always was.
+        assert!(spec.mate("planet_pivot").unwrap().carrier.is_none());
+    }
+
+    #[test]
+    fn a_carrier_naming_nothing_is_reported_like_any_other_typo() {
+        let spec = parse_scad_mechanism(
+            r#"
+            part("case", fixed = true) cube([10, 10, 10]);
+            part("sun")                cylinder(4, 6);
+            part("planet")             cylinder(4, 3);
+            gear("mesh", parts = ["planet", "sun"], at = [9, 0, 0], axis = [0, 0, 1],
+                 ratio = -2, carrier = "arn");
+            "#,
+        )
+        .unwrap();
+        assert_eq!(spec.dangling_parts(), vec!["arn"]);
+    }
+
 }

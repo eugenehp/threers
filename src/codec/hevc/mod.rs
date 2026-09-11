@@ -81,6 +81,8 @@
 pub mod alpha;
 pub mod cabac;
 pub mod compress;
+pub mod deblock;
+pub mod deblock_tables;
 pub mod encoder;
 pub mod hvcc;
 pub mod intra;
@@ -95,7 +97,13 @@ pub mod transparent;
 
 pub use alpha::{alpha_channel_info_sei, AlphaChannelInfo};
 pub use cabac::{CabacEncoder, CtxModel};
-pub use compress::{CompressedEncoder, Reconstruction};
+pub use compress::{
+    encode_mp4 as encode_compressed_mp4,
+    encode_mp4_from_iter as encode_compressed_mp4_from_iter,
+    encode_mp4_streaming as encode_compressed_mp4_streaming,
+    encode_mp4_with_captions as encode_compressed_mp4_with_captions, CompressedEncoder,
+    Reconstruction,
+};
 pub use encoder::{HevcEncoder, Yuv420Frame};
 pub use hvcc::{build_hvcc, HvccArray, HvccProfile};
 pub use nal::{nal_unit, nal_unit_base, push_annexb, NalUnitType, START_CODE};

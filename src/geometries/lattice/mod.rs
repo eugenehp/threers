@@ -1,6 +1,6 @@
 //! Lattice generators — periodic infill as `BufferGeometry`.
 //!
-//! Four families, one pipeline:
+//! Five families, one pipeline:
 //!
 //! | Family | What it is | Count |
 //! |--------|------------|-------|
@@ -8,6 +8,7 @@
 //! | [`Strut`] | Beam cells — simple cubic, BCC, BCC-Z, FCC, octet truss, diamond, Kelvin | 7 |
 //! | [`Infill`] | What a slicer draws — rectilinear (turning and aligned), grid, triangles, tri-hexagon, honeycomb, cubic, quarter cubic, concentric | 9 |
 //! | [`Cuboct`] | Face-connected cuboctahedra voxels — rigid, compliant, auxetic, chiral (Jenett et al. 2020) | 5 |
+//! | [`Stochastic`] | Foams — Voronoi struts and walls, and four classes of spinodal random field | 6 |
 //!
 //! Each is evaluated as a scalar field that is positive inside the solid,
 //! sampled on a regular grid, and contoured by marching cubes. Because the
@@ -70,13 +71,14 @@
 //! # }
 //! ```
 //!
-//! Three more knobs shape what comes out:
+//! Four more knobs shape what comes out:
 //!
 //! | Call | What it does |
 //! |------|--------------|
 //! | [`skin`](Lattice::skin) | a solid wall on the fill's surface, unioned with the lattice — a printed part's perimeters and its infill in one mesh |
 //! | [`clip`](Lattice::clip) | cuts the finished part, skin and all, so you can see inside a section of it |
 //! | [`grade`](Lattice::grade) | scales thickness per point, so a part is dense where it is loaded and light where it is not |
+//! | [`conform`](Lattice::conform) | lays the cells out in a mapped space, so they follow a curved part instead of being cut by it |
 //!
 //! ```
 //! use threers::{Lattice, LatticeKind, Region, Tpms, Vector3};
@@ -90,6 +92,50 @@
 //!     .skin(0.2)
 //!     .build();
 //! # assert!(geom.index.is_some());
+//! ```
+//!
+//! # Conforming, rather than trimming
+//!
+//! [`fill`](Lattice::fill) cuts the lattice where the part ends. On a flat box
+//! that is right; on a curved shell it leaves severed struts at the surface and
+//! whatever fraction of a cell happened to fit. [`conform`](Lattice::conform)
+//! maps the point into cell space first, so a tiling can close around a nozzle
+//! or stack whole layers through a wall that curves — see [`Conform`].
+//!
+//! # Grading on something real
+//!
+//! [`grade`](Lattice::grade) takes a closure, which is not the form a solver
+//! result, a scan or a sensor sweep arrives in. [`Field`] is the adapter:
+//! build it from a grid, a function or scattered points, and it interpolates,
+//! rescales and hands back the closure. [`CuboctFrame::stress_field`] closes
+//! the loop for beam lattices — solve the block, grade the lattice on what the
+//! solve said.
+//!
+//! # What it comes out as
+//!
+//! Two questions survive the build, and both have answers here rather than
+//! opinions:
+//!
+//! - [`metrics`](Lattice::metrics) — porosity, internal surface area, pore
+//!   size, ligament thickness, hydraulic diameter and a permeability estimate.
+//!   The numbers a heat exchanger, a filter or a scaffold is specified by.
+//! - [`homogenize`](Lattice::homogenize) — the cell's effective stiffness
+//!   tensor, and the moduli, shear moduli, Poisson ratios and anisotropy read
+//!   off it. What to hand a solver that is modelling the lattice as a solid.
+//! - [`conductivity`](Lattice::conductivity) — and with it the electrical,
+//!   diffusive and dielectric answers, which are the same equation.
+//! - [`strength`](Lattice::strength) — where it gives way, from how unevenly
+//!   the load spreads inside the cell.
+//!
+//! ```
+//! # use threers::{Lattice, LatticeKind, Tpms, Vector3};
+//! let lattice = Lattice::new(LatticeKind::Tpms(Tpms::Gyroid))
+//!     .size(Vector3::new(20.0, 20.0, 20.0))
+//!     .cells([4, 4, 4])
+//!     .fit_relative_density(0.25);
+//!
+//! let m = lattice.metrics();
+//! assert!(m.porosity > 0.7 && m.pore_diameter > 0.0);
 //! ```
 //!
 //! # Resolution
@@ -109,25 +155,44 @@
 //! and `wall_samples` will then say so.
 //!
 //! Sampling parallelises with the crate's `parallel` feature (rayon, native
-//! only); the gallery example builds about 1.6× faster with it on. Contouring
-//! is still one thread. Results are identical either way: every sample has a
-//! fixed address in the grid, so a build flag cannot change the geometry.
+//! only); the gallery example builds about 3× faster with it on. Contouring is
+//! still one thread. Results are identical either way: every sample has a fixed
+//! address in the grid, so a build flag cannot change the geometry.
 
 mod automation;
+mod conform;
 mod cuboct;
+mod field;
 mod frame;
+// A `wgpu::Device` is neither `Send` nor `Sync` in the browser — it holds an
+// `Rc` — so the process-wide device this keeps cannot exist there. `Solver::Gpu`
+// falls back to the CPU on wasm, which is what it does anywhere without an
+// adapter.
+#[cfg(not(target_arch = "wasm32"))]
+mod gpu_solve;
+mod homogenize;
 mod infill;
 mod mesher;
+mod metrics;
 mod region;
+mod stochastic;
 mod strut;
 mod tpms;
 mod voxel;
 
 pub use automation::{CuboctAssemblyPlan, CuboctAssemblyStep};
+pub use conform::Conform;
 pub use cuboct::{ChiralRule, Cuboct, Hand};
+pub use field::Field;
 pub use frame::{CuboctFrame, FrameMaterial, FrameResponse};
+pub use homogenize::{
+    homogenize, homogenize_conduction, homogenize_strength, Conductivity, SolidMaterial, Solver,
+    Stiffness, Strength,
+};
 pub use infill::Infill;
+pub use metrics::LatticeMetrics;
 pub use region::Region;
+pub use stochastic::Stochastic;
 pub use strut::{Segment, Strut};
 pub use tpms::Tpms;
 pub use voxel::{CuboctAssembly, CuboctJoint, CuboctJointKind};
@@ -151,6 +216,10 @@ pub enum LatticeKind {
     /// chiral. Beam *shape* is [`Lattice::shape`]; chirality can be programmed
     /// per cell with [`Lattice::program`] and [`Lattice::chiral_rule`].
     Cuboct(Cuboct),
+    /// A foam rather than a tiling: Voronoi struts or walls, or a spinodal
+    /// random field. Randomness is set by [`Lattice::seed`] and, for the
+    /// Voronoi cells, [`Lattice::jitter`].
+    Stochastic(Stochastic),
 }
 
 impl LatticeKind {
@@ -162,6 +231,7 @@ impl LatticeKind {
             .chain(Strut::ALL.into_iter().map(LatticeKind::Strut))
             .chain(Infill::ALL.into_iter().map(LatticeKind::Infill))
             .chain(Cuboct::ALL.into_iter().map(LatticeKind::Cuboct))
+            .chain(Stochastic::ALL.into_iter().map(LatticeKind::Stochastic))
             .collect()
     }
 
@@ -172,6 +242,7 @@ impl LatticeKind {
             LatticeKind::Strut(s) => s.name(),
             LatticeKind::Infill(i) => i.name(),
             LatticeKind::Cuboct(c) => c.name(),
+            LatticeKind::Stochastic(s) => s.name(),
         }
     }
 
@@ -187,14 +258,16 @@ impl LatticeKind {
             .or_else(|| Strut::from_name(name).map(LatticeKind::Strut))
             .or_else(|| Infill::from_name(name).map(LatticeKind::Infill))
             .or_else(|| Cuboct::from_name(name).map(LatticeKind::Cuboct))
+            .or_else(|| Stochastic::from_name(name).map(LatticeKind::Stochastic))
     }
 }
 
 /// What part of a [`Tpms`] level set becomes solid.
 ///
-/// Ignored by [`LatticeKind::Strut`], [`LatticeKind::Infill`] and
-/// [`LatticeKind::Cuboct`], which are always the solid around their beams or
-/// walls.
+/// Ignored by [`LatticeKind::Strut`], [`LatticeKind::Infill`],
+/// [`LatticeKind::Cuboct`] and the two Voronoi cells, which are always the
+/// solid around their beams or walls. The spinodal cells are level sets like a
+/// TPMS, and answer to it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum LatticeStyle {
     /// A wall of the given thickness centred on the surface, with open void on
@@ -244,9 +317,9 @@ pub struct Lattice<'a> {
     /// `Sync + Send` so the sample grid can be filled from several threads —
     /// required whether or not the `parallel` feature is on, so that turning it
     /// on is never a breaking change to calling code.
-    grade: Option<Box<dyn Fn(Vector3) -> f32 + Sync + Send + 'a>>,
-    trim: Option<Box<dyn Fn(Vector3) -> f32 + Sync + Send + 'a>>,
-    clip: Option<Box<dyn Fn(Vector3) -> f32 + Sync + Send + 'a>>,
+    grade: Option<std::sync::Arc<dyn Fn(Vector3) -> f32 + Sync + Send + 'a>>,
+    trim: Option<std::sync::Arc<dyn Fn(Vector3) -> f32 + Sync + Send + 'a>>,
+    clip: Option<std::sync::Arc<dyn Fn(Vector3) -> f32 + Sync + Send + 'a>>,
     /// Cuboct beam shape as a fraction of cell pitch: corrugation amplitude,
     /// reentrant indent, or chiral radius. Ignored by the other families.
     shape: f32,
@@ -254,6 +327,15 @@ pub struct Lattice<'a> {
     /// each integer cell. Ignored by the other families.
     program: Option<crate::geometries::lattice::voxel::CuboctProgram<'a>>,
     chiral_rule: Option<ChiralRule>,
+    /// Where the cells are laid out, when that is not world space.
+    conform: Option<Conform<'a>>,
+    /// Which foam. Ignored by the periodic families, which have nothing to
+    /// randomise.
+    seed: u32,
+    /// How far a Voronoi seed may wander from its cell centre, 0 to 1.
+    jitter: f32,
+    /// Where the homogenisation solves run. Nothing else reads it.
+    solver: Solver,
 }
 
 impl<'a> Lattice<'a> {
@@ -276,6 +358,10 @@ impl<'a> Lattice<'a> {
             shape: 0.15,
             program: None,
             chiral_rule: None,
+            conform: None,
+            seed: 0,
+            jitter: 1.0,
+            solver: Solver::default(),
         }
     }
 
@@ -418,6 +504,66 @@ impl<'a> Lattice<'a> {
         self
     }
 
+    /// Lay the cells out in a mapped space instead of world space, so they
+    /// follow the part rather than being cut by it — see [`Conform`].
+    ///
+    /// The map applies to the lattice alone. The [`fill`](Self::fill),
+    /// [`skin`](Self::skin) and [`clip`](Self::clip) all stay in world space,
+    /// which is where the part is.
+    ///
+    /// [`cell_size`](Self::cell_size) is then a size in *mapped* units, and
+    /// [`cells`](Self::cells) — a count across the world-space bounds — no
+    /// longer means much; set the size.
+    pub fn conform(mut self, conform: Conform<'a>) -> Self {
+        self.conform = Some(conform);
+        self
+    }
+
+    /// Where [`homogenize`](Self::homogenize), [`conductivity`](Self::conductivity)
+    /// and [`strength`](Self::strength) run their linear solves.
+    ///
+    /// Nothing else reads it: the geometry, the mesh and the metrics are
+    /// unaffected, and remain bit-for-bit what they were. See [`Solver`].
+    ///
+    /// ```no_run
+    /// use threers::{Lattice, LatticeKind, Solver, Tpms, Vector3};
+    ///
+    /// let c = Lattice::new(LatticeKind::Tpms(Tpms::Gyroid))
+    ///     .size(Vector3::new(10.0, 10.0, 10.0))
+    ///     .cells([1, 1, 1])
+    ///     .fit_relative_density(0.3)
+    ///     .solver(Solver::Gpu)
+    ///     .homogenize(32);
+    /// // And whether it got one.
+    /// assert_eq!(c.solver, Solver::Gpu);
+    /// ```
+    pub fn solver(mut self, solver: Solver) -> Self {
+        self.solver = solver;
+        self
+    }
+
+    /// Which foam. Any two seeds give two different lattices of the same
+    /// statistics; the same seed always gives the same lattice.
+    ///
+    /// Ignored by the periodic families.
+    pub fn seed(mut self, seed: u32) -> Self {
+        self.seed = seed;
+        self
+    }
+
+    /// How far a Voronoi seed may wander from its cell's centre, as a fraction
+    /// of the cell. Clamped to `0..=1`; the default is 1.
+    ///
+    /// Zero puts every seed on a regular grid, which makes
+    /// [`Stochastic::Voronoi`] the edges of a cube and
+    /// [`Stochastic::VoronoiWall`] a plain box grid — a useful thing to sweep
+    /// towards, because it is the ordered end of the same family. Ignored by
+    /// everything but the Voronoi cells.
+    pub fn jitter(mut self, jitter: f32) -> Self {
+        self.jitter = jitter.clamp(0.0, 1.0);
+        self
+    }
+
     /// Wall thickness ([`LatticeStyle::Sheet`]) or strut diameter
     /// ([`LatticeKind::Strut`] / [`LatticeKind::Cuboct`]), in world units.
     ///
@@ -480,8 +626,11 @@ impl<'a> Lattice<'a> {
     /// the same resolution that render a gyroid cleanly will shatter those.
     /// [`resolve_walls`](Self::resolve_walls) raises the resolution to fix it.
     ///
-    /// Measured against the nominal [`thickness`](Self::thickness), so a
-    /// [`grade`](Self::grade) that thins the wall somewhere thins this with it.
+    /// Measured against the thinnest wall the part actually has: the nominal
+    /// [`thickness`](Self::thickness) times the smallest multiplier
+    /// [`grade`](Self::grade) applies anywhere in the bounds, swept on a coarse
+    /// grid. Grading a part down to two fifths and sizing the grid for the
+    /// nominal wall is how the thin end comes out as gravel.
     pub fn wall_samples(&self) -> f32 {
         match self.wall_width() {
             Some(width) => {
@@ -503,10 +652,71 @@ impl<'a> Lattice<'a> {
     /// samples perfectly well, and a small offset demands a resolution fine
     /// enough for a feature that does not exist.
     fn wall_width(&self) -> Option<f32> {
-        match (self.kind, self.style) {
-            (LatticeKind::Tpms(_), LatticeStyle::Solid) => None,
-            _ => Some(self.thickness.abs()),
+        if self.is_level_set() {
+            None
+        } else {
+            Some(self.thickness.abs() * self.grade_floor())
         }
+    }
+
+    /// The smallest multiplier [`grade`](Self::grade) applies anywhere in the
+    /// bounds, and so the fraction of the nominal thickness that has to be
+    /// resolved.
+    ///
+    /// The whole point of [`wall_samples`](Self::wall_samples) is to catch a
+    /// wall thinner than the sampling, and a grade is the commonest way to get
+    /// one: a part graded from 1.8 down to 0.4 has its thinnest strut at two
+    /// fifths of the thickness the grid was sized for, and the thin end comes
+    /// out as gravel while the thick end looks perfect.
+    ///
+    /// Swept rather than solved, because the grade is an arbitrary closure.
+    /// Eight samples an axis is enough for the smooth fields grades actually
+    /// are, and cheap enough to pay for on every call.
+    ///
+    /// Floored at a twentieth: a grade that reaches zero has no wall left to
+    /// resolve there, and no resolution would help.
+    fn grade_floor(&self) -> f32 {
+        let Some(grade) = self.grade.as_deref() else {
+            return 1.0;
+        };
+        const SWEEP: usize = 8;
+        let size = self.bounds.size();
+        let mut floor = f32::INFINITY;
+        for k in 0..SWEEP {
+            for j in 0..SWEEP {
+                for i in 0..SWEEP {
+                    let at = |index: usize, lo: f32, extent: f32| {
+                        lo + extent * (index as f32 + 0.5) / SWEEP as f32
+                    };
+                    let p = Vector3::new(
+                        at(i, self.bounds.min.x, size.x),
+                        at(j, self.bounds.min.y, size.y),
+                        at(k, self.bounds.min.z, size.z),
+                    );
+                    floor = floor.min(grade(p).max(0.0));
+                }
+            }
+        }
+        if floor.is_finite() {
+            floor.clamp(0.05, 1.0)
+        } else {
+            1.0
+        }
+    }
+
+    /// Whether [`thickness`](Self::thickness) is an offset from a level set
+    /// rather than the width of a wall.
+    ///
+    /// True for a solid TPMS and a solid spinodal — the two generators whose
+    /// zero is a surface with half the volume on each side of it, which is what
+    /// makes their thickness signed and their wall width meaningless.
+    fn is_level_set(&self) -> bool {
+        self.style == LatticeStyle::Solid
+            && match self.kind {
+                LatticeKind::Tpms(_) => true,
+                LatticeKind::Stochastic(s) => s.is_field(),
+                _ => false,
+            }
     }
 
     /// Raise [`resolution`](Self::resolution) until the wall is at least
@@ -561,7 +771,7 @@ impl<'a> Lattice<'a> {
     /// Where a lattice really has to run from nothing to solid across a part,
     /// [`LatticeStyle::Sheet`] grades over the whole range.
     pub fn grade(mut self, grade: impl Fn(Vector3) -> f32 + Sync + Send + 'a) -> Self {
-        self.grade = Some(Box::new(grade));
+        self.grade = Some(std::sync::Arc::new(grade));
         self
     }
 
@@ -572,7 +782,7 @@ impl<'a> Lattice<'a> {
     /// the surface to interpolate. [`fill`](Self::fill) is the same thing given
     /// a [`Region`], and sets the bounds for you.
     pub fn trim(mut self, keep: impl Fn(Vector3) -> f32 + Sync + Send + 'a) -> Self {
-        self.trim = Some(Box::new(keep));
+        self.trim = Some(std::sync::Arc::new(keep));
         self
     }
 
@@ -611,9 +821,33 @@ impl<'a> Lattice<'a> {
     /// Sampling rate for density work. Deliberately coarser than the mesh, and
     /// deliberately the same for measuring and for fitting, so that a fitted
     /// lattice reports back the density it was asked for.
+    ///
+    /// Eight a cell, because this is an estimate of a fraction and the error on
+    /// one is `√(p(1−p)/N)`: at eight a cell a four-cell part is 32 000
+    /// samples, which is a quarter of a percent, and going finer buys a
+    /// third of that for eight times the work. The jitter is what makes that
+    /// arithmetic apply — see [`occupancy`](Self::occupancy).
     fn density_resolution(&self) -> usize {
-        self.resolution.min(12)
+        self.resolution.min(8)
     }
+
+    /// A ceiling on the density estimate's sample count, over and above
+    /// [`max_samples`](Self::max_samples).
+    ///
+    /// Samples per cell is the wrong knob for a part that is a hundred cells
+    /// across: it would ask for a hundred million points to estimate a number
+    /// that a quarter of a million pins down to a tenth of a percent. The
+    /// estimate does not get better with the size of the part, so it does not
+    /// get more expensive with it either.
+    const DENSITY_SAMPLES: usize = 250_000;
+
+    /// And a floor under it, for the same reason from the other side.
+    ///
+    /// Samples per cell is just as wrong for a lattice that is *one* cell
+    /// across — which is what a homogenisation asks for — where eight an axis
+    /// is 512 points and a two per cent error on a fraction. Density is
+    /// estimated from the total, so the total is what is held up.
+    const DENSITY_MIN: usize = 32_768;
 
     /// Solve [`thickness`](Self::thickness) for a target
     /// [`relative_density`](Self::relative_density).
@@ -622,7 +856,8 @@ impl<'a> Lattice<'a> {
     /// the lattice cannot reach — denser than the cell can pack, or thinner
     /// than a single wall — lands on the nearest thickness that can.
     ///
-    /// Costs twenty density measurements, each a coarse pass over the bounds,
+    /// Costs about fifteen density measurements, each a coarse pass over the
+    /// bounds,
     /// so it is worth doing once and reusing the
     /// [`thickness`](Self::current_thickness) rather than calling it per frame.
     /// The region being filled is evaluated once for all twenty, not once each:
@@ -632,13 +867,10 @@ impl<'a> Lattice<'a> {
         let target = target.clamp(0.0, 1.0);
         let cell = self.resolved_cell();
         let span = cell.x.min(cell.y).min(cell.z).max(1e-6);
-        // A solid TPMS is the only one whose thickness goes negative: it is an
-        // offset from the minimal surface, and below zero it thins the
-        // labyrinth rather than emptying the cell.
-        let signed = matches!(
-            (self.kind, self.style),
-            (LatticeKind::Tpms(_), LatticeStyle::Solid)
-        );
+        // A solid level set is the only kind whose thickness goes negative: it
+        // is an offset from the surface, and below zero it thins the labyrinth
+        // rather than emptying the cell.
+        let signed = self.is_level_set();
         let grid = self.density_grid(self.density_resolution());
 
         // Widen the bracket until it really does bracket the target. One cell
@@ -667,7 +899,10 @@ impl<'a> Lattice<'a> {
             }
         }
 
-        for _ in 0..20 {
+        // Fourteen halvings of a bracket one cell wide: a micron on a
+        // millimetre cell, which is finer than the thickness means anything to
+        // and six passes cheaper than twenty.
+        for _ in 0..14 {
             let mid = 0.5 * (lo + hi);
             self.thickness = mid;
             if self.occupancy_on(&grid) < target {
@@ -824,10 +1059,26 @@ impl<'a> Lattice<'a> {
             (LatticeKind::Cuboct(c), false, None) => Some(c.segments(self.shape)),
             _ => None,
         };
+        // Built once here rather than per sample: two dozen directions and
+        // phases, against `WAVES` trigonometric calls for every point of a
+        // grid that is millions of points long.
+        let waves = match self.kind {
+            LatticeKind::Stochastic(s) if s.is_field() => {
+                Some(stochastic::waves(s, cell, self.seed))
+            }
+            _ => None,
+        };
         Sampler {
             kind: self.kind,
             style: self.style,
-            phase: self.bounds.min,
+            // A conformal map hands back coordinates in its own frame, already
+            // anchored at zero; the box's corner is only the phase when the
+            // cells are laid out in world space.
+            phase: if self.conform.is_some() {
+                Vector3::ZERO
+            } else {
+                self.bounds.min
+            },
             cell,
             omega: Vector3::new(TAU / cell.x, TAU / cell.y, TAU / cell.z),
             half: self.thickness * 0.5,
@@ -842,7 +1093,191 @@ impl<'a> Lattice<'a> {
             cuboct_n: self.chiral_n(),
             cuboct_program: self.program.as_deref(),
             cuboct_cached,
+            conform: self.conform.as_ref(),
+            jitter: self.jitter,
+            seed: self.seed,
+            waves,
         }
+    }
+
+    /// The effective stiffness of the cell this lattice is built from, as a
+    /// material — see [`Stiffness`], and [`homogenize`] for what it means.
+    ///
+    /// `resolution` is the voxel grid one cell is solved on, 2 to 48. Twelve
+    /// ranks two cells against each other; twenty is a number to quote.
+    ///
+    /// The *cell* is what is measured, not the part: the trim, the skin, the
+    /// clip and the grade are all left out, because a lattice that has been cut
+    /// or graded is not periodic and a stiffness is only a material property of
+    /// something that is.
+    ///
+    /// # Patterns that are not periodic
+    ///
+    /// Two of the [`Infill`] patterns do not repeat every cell, and what comes
+    /// back describes a window of them rather than the whole:
+    ///
+    /// - [`Infill::Concentric`] has no unit cell at all — its rings are struck
+    ///   from the part's outline. It is measured as what it is locally, which
+    ///   is parallel walls at the line spacing.
+    /// - The [`is_layered`](Infill::is_layered) patterns alternate direction
+    ///   from layer to layer, so one cell holds one layer and misses the
+    ///   cross-ply entirely. Give those a window of two or more.
+    ///
+    /// # A foam has no cell
+    ///
+    /// [`LatticeKind::Stochastic`] does not repeat, so there is nothing for a
+    /// periodic boundary to be periodic with: wrapping one cell of a foam cuts
+    /// whatever crossed the face, and one cell of a random medium is one
+    /// bubble. Use [`homogenize_window`](Self::homogenize_window) for those —
+    /// several cells across, and averaged over a few [`seed`](Self::seed)s if
+    /// the number is going anywhere.
+    pub fn homogenize(&self, resolution: usize) -> Stiffness {
+        self.homogenize_with(resolution, SolidMaterial::default())
+    }
+
+    /// The same, in the units of a real material rather than as a fraction.
+    pub fn homogenize_with(&self, resolution: usize, material: SolidMaterial) -> Stiffness {
+        self.homogenize_window(1, resolution, material)
+    }
+
+    /// Homogenise a window of `cells` cells per axis rather than one, at
+    /// `resolution` voxels per cell.
+    ///
+    /// For a periodic family this buys nothing but cost — a bigger window of a
+    /// repeating cell is the same material, and the answer should come back
+    /// the same. For a foam it is the whole difference between a measurement
+    /// and an anecdote.
+    ///
+    /// The voxel grid is `cells · resolution` per axis and caps at 48, so three
+    /// cells at 16 is the most that will be honoured.
+    pub fn homogenize_window(
+        &self,
+        cells: usize,
+        resolution: usize,
+        material: SolidMaterial,
+    ) -> Stiffness {
+        let (occupancy, origin, window, voxels) = self.periodic_window(cells, resolution);
+        homogenize(occupancy, origin, window, voxels, material, self.solver)
+    }
+
+    /// When the cell this lattice is built from gives way — see [`Strength`].
+    ///
+    /// Solves the stiffness on the way and hands it back inside the result, so
+    /// this is not [`homogenize`](Self::homogenize) plus something: it is
+    /// [`homogenize`](Self::homogenize) plus one pass over the elements.
+    ///
+    /// Yielding only. Elastic buckling is not modelled, and
+    /// [`collapse_strain`](Strength::collapse_strain) is how to tell whether
+    /// that matters for the lattice in hand.
+    pub fn strength(&self, resolution: usize) -> Strength {
+        self.strength_with(resolution, SolidMaterial::default())
+    }
+
+    /// The same, for a named material.
+    pub fn strength_with(&self, resolution: usize, material: SolidMaterial) -> Strength {
+        self.strength_window(1, resolution, material)
+    }
+
+    /// Over a window of `cells` cells per axis — see
+    /// [`homogenize_window`](Self::homogenize_window), which this mirrors.
+    pub fn strength_window(
+        &self,
+        cells: usize,
+        resolution: usize,
+        material: SolidMaterial,
+    ) -> Strength {
+        let (occupancy, origin, window, voxels) = self.periodic_window(cells, resolution);
+        homogenize_strength(occupancy, origin, window, voxels, material, self.solver)
+    }
+
+    /// The effective conductivity of the cell this lattice is built from, as a
+    /// fraction of the solid's — see [`Conductivity`].
+    ///
+    /// Heat, electricity, diffusion and permittivity are the same equation, so
+    /// this is the same number for all of them; only the units of the solid's
+    /// own conductivity differ. The caveats are
+    /// [`homogenize`](Self::homogenize)'s, down to the last one: a foam has no
+    /// cell, and wants [`conductivity_window`](Self::conductivity_window).
+    ///
+    /// ```
+    /// use threers::{Lattice, LatticeKind, Strut, Vector3};
+    ///
+    /// let k = Lattice::new(LatticeKind::Strut(Strut::Cubic))
+    ///     .size(Vector3::new(10.0, 10.0, 10.0))
+    ///     .cells([1, 1, 1])
+    ///     .fit_relative_density(0.3)
+    ///     .conductivity(10);
+    ///
+    /// // Simple cubic is three sets of straight bars that share their nodes,
+    /// // so the columns running along the gradient hold a little over half of
+    /// // the material — not the third the three families would suggest.
+    /// assert!((k.tortuosity_factor(1.0) - 0.53).abs() < 0.08);
+    /// ```
+    pub fn conductivity(&self, resolution: usize) -> Conductivity {
+        self.conductivity_with(resolution, 1.0)
+    }
+
+    /// The same, in the units of a real material rather than as a fraction —
+    /// `solid` being what the material it is printed in conducts at.
+    pub fn conductivity_with(&self, resolution: usize, solid: f64) -> Conductivity {
+        self.conductivity_window(1, resolution, solid)
+    }
+
+    /// Over a window of `cells` cells per axis rather than one — see
+    /// [`homogenize_window`](Self::homogenize_window), which this mirrors.
+    pub fn conductivity_window(
+        &self,
+        cells: usize,
+        resolution: usize,
+        solid: f64,
+    ) -> Conductivity {
+        let (occupancy, origin, window, voxels) = self.periodic_window(cells, resolution);
+        homogenize_conduction(occupancy, origin, window, voxels, solid, self.solver)
+    }
+
+    /// The pieces both homogenisations need: a test for what is solid, and the
+    /// periodic window to run it over.
+    fn periodic_window(
+        &self,
+        cells: usize,
+        resolution: usize,
+    ) -> (
+        impl Fn(Vector3) -> bool + Sync + Send + '_,
+        Vector3,
+        Vector3,
+        usize,
+    ) {
+        let cells = cells.max(1);
+        let cell = self.resolved_cell();
+        // A zero step, because only the *sign* of the field is read here. The
+        // step sets how far past the surface a beam lattice keeps searching
+        // for struts so that the gradient stays exact for the contouring, and
+        // a cell's worth of that is most of the cost of voxelising it — twenty
+        // seven samples an element with nothing culled.
+        let sampler = self.sampler(cell, Vector3::ZERO, false);
+        let half = sampler.half;
+        let origin = if self.conform.is_some() {
+            Vector3::ZERO
+        } else {
+            self.bounds.min
+        };
+        (
+            // Concentric infill is the one pattern that reads how deep into the
+            // part it is, and it has no unit cell at all: its rings are drawn
+            // from the part's outline, which does not repeat. What *does*
+            // repeat is the spacing between them, so it is handed a depth that
+            // ramps along x — the local structure of concentric infill, which
+            // is parallel walls at the line spacing. Every other pattern
+            // ignores the argument.
+            //
+            // A depth of infinity, which reads as "deep inside", is what this
+            // used to pass, and it put the first ring infinitely far away: the
+            // cell came back empty and the stiffness came back zero.
+            move |p| sampler.solid_at(p, half, p.x - origin.x) > 0.0,
+            origin,
+            cell * cells as f32,
+            resolution.max(2).saturating_mul(cells),
+        )
     }
 
     /// Fraction of the bounds that is solid, by counting samples.
@@ -880,19 +1315,26 @@ impl<'a> Lattice<'a> {
             count(size.y, cell.y, res),
             count(size.z, cell.z, res),
         ];
-        for _ in 0..32 {
-            let total = dims[0].saturating_mul(dims[1]).saturating_mul(dims[2]);
-            if total <= self.max_samples {
-                break;
-            }
-            res *= (self.max_samples as f64 / total as f64)
-                .cbrt()
-                .clamp(1e-9, 0.95) as f32;
-            let next = [
+        let budget = self.max_samples.min(Self::DENSITY_SAMPLES);
+        let floor = Self::DENSITY_MIN.min(budget);
+        let resize = |res: f32| {
+            [
                 count(size.x, cell.x, res),
                 count(size.y, cell.y, res),
                 count(size.z, cell.z, res),
-            ];
+            ]
+        };
+        for _ in 0..32 {
+            let total = dims[0].saturating_mul(dims[1]).saturating_mul(dims[2]);
+            let scale = if total > budget {
+                (budget as f64 / total as f64).cbrt().clamp(1e-9, 0.95)
+            } else if total < floor {
+                (floor as f64 / total as f64).cbrt().max(1.05)
+            } else {
+                break;
+            };
+            res *= scale as f32;
+            let next = resize(res);
             if next == dims {
                 break;
             }
@@ -925,7 +1367,6 @@ impl<'a> Lattice<'a> {
             points,
             cuts,
             cell,
-            stride,
         }
     }
 
@@ -940,8 +1381,13 @@ impl<'a> Lattice<'a> {
             return 0.0;
         }
         // Without the clip: sectioning a part for inspection does not change
-        // what it was built at.
-        let sampler = self.sampler(grid.cell, grid.stride, false);
+        // what it was built at. And with a zero step, because only the *sign*
+        // of the field is read here — the step widens a beam lattice's search
+        // radius so that the gradient stays exact a few samples past the
+        // surface, which is worth paying for when contouring and is most of
+        // the cost of counting. A wider radius stops the neighbouring cells
+        // being culled, and a bisection pays for it twenty times over.
+        let sampler = self.sampler(grid.cell, Vector3::ZERO, false);
         // Counted per chunk and summed in order, so the total does not depend
         // on how the threads interleave. `fit_relative_density` bisects on
         // this; a density that wobbled between calls would make it wander.
@@ -978,7 +1424,6 @@ struct DensityGrid {
     /// The trim's value per point, or empty when there is no trim.
     cuts: Vec<f32>,
     cell: Vector3,
-    stride: Vector3,
 }
 
 /// Three offsets in `[0, 1)` from a sample's index — a hash, not a sequence, so
@@ -1018,6 +1463,14 @@ struct Sampler<'a> {
     cuboct_n: i32,
     cuboct_program: Option<&'a (dyn Fn(i32, i32, i32) -> Cuboct + Sync + Send)>,
     cuboct_cached: Option<Vec<Segment>>,
+    /// The map into cell space, when the cells are not laid out in world
+    /// space.
+    conform: Option<&'a Conform<'a>>,
+    jitter: f32,
+    seed: u32,
+    /// The plane waves a spinodal field is summed from. Ignored by everything
+    /// else.
+    waves: Option<Vec<stochastic::Wave>>,
 }
 
 impl Sampler<'_> {
@@ -1044,16 +1497,48 @@ impl Sampler<'_> {
             boundary = boundary.min(cut);
             depth = depth.min(cut);
         }
+        let filled = self.solid_at(p, half, depth).min(boundary);
+        let clip = |v: f32| match self.clip {
+            Some(c) => v.min(c(p)),
+            None => v,
+        };
+        if self.skin <= 0.0 {
+            return clip(filled);
+        }
+        // The skin is the band from the surface inwards, and it is *unioned*
+        // with the lattice rather than intersected — so the two bond wherever
+        // they touch, which is what a printed part does and what keeps this one
+        // shell rather than two.
+        clip(filled.max(boundary.min(self.skin - boundary)))
+    }
+
+    /// The lattice's own field at a point: positive inside a wall or a strut.
+    ///
+    /// No boundary, no trim, no skin and no clip — those are properties of the
+    /// part, and this is the periodic thing filling it. `half` is the local
+    /// half-thickness, already graded, and `depth` how far into the part the
+    /// point lies, which only the concentric infill reads.
+    fn solid_at(&self, p: Vector3, half: f32, depth: f32) -> f32 {
+        // A conformal map takes the point into the space the cells are tiled
+        // in, and says how much it stretched to get there. `half` is a length
+        // in that space, so it is stretched with it and the answer divided back
+        // out — see [`Conform`] for why that cannot be exact.
+        let (p, stretch) = match self.conform {
+            Some(c) => (c.point(p), c.stretch_at(p)),
+            None => (p, 1.0),
+        };
+        let half = half * stretch;
+        let margin = self.margin * stretch;
         let solid = match self.kind {
             LatticeKind::Strut(s) => {
                 // Only struts nearer than the local radius can matter; the
                 // margin keeps the gradient exact for a few samples beyond.
-                let cull = half.max(0.0) + self.margin;
+                let cull = half.max(0.0) + margin;
                 let d = strut::distance(p, self.phase, self.cell, s.segments(), cull);
                 half - d
             }
             LatticeKind::Cuboct(c) => {
-                let cull = half.max(0.0) + self.margin;
+                let cull = half.max(0.0) + margin;
                 let d = if let Some(ref segs) = self.cuboct_cached {
                     strut::distance(p, self.phase, self.cell, segs, cull)
                 } else {
@@ -1081,20 +1566,40 @@ impl Sampler<'_> {
                     LatticeStyle::Solid => sd + half,
                 }
             }
+            // A spinodal field is a level set like a TPMS, and reads its
+            // thickness the same way.
+            LatticeKind::Stochastic(s) if s.is_field() => {
+                let sd = self.spinodal_distance(p);
+                match self.style {
+                    LatticeStyle::Sheet => half - sd.abs(),
+                    LatticeStyle::Solid => sd + half,
+                }
+            }
+            LatticeKind::Stochastic(s) => {
+                let d = stochastic::voronoi_distance(
+                    p,
+                    self.phase,
+                    self.cell,
+                    matches!(s, Stochastic::VoronoiWall),
+                    self.jitter,
+                    self.seed,
+                );
+                half - d
+            }
         };
-        let filled = solid.min(boundary);
-        let clip = |v: f32| match self.clip {
-            Some(c) => v.min(c(p)),
-            None => v,
-        };
-        if self.skin <= 0.0 {
-            return clip(filled);
-        }
-        // The skin is the band from the surface inwards, and it is *unioned*
-        // with the lattice rather than intersected — so the two bond wherever
-        // they touch, which is what a printed part does and what keeps this one
-        // shell rather than two.
-        clip(filled.max(boundary.min(self.skin - boundary)))
+        solid / stretch
+    }
+
+    /// The spinodal field, divided by its own gradient so that the thickness
+    /// asked for is a length.
+    ///
+    /// The same correction a TPMS needs and for the same reason — a sum of
+    /// cosines climbs at different rates in different places, so a wall of
+    /// constant field value is not a wall of constant thickness.
+    fn spinodal_distance(&self, p: Vector3) -> f32 {
+        let waves = self.waves.as_deref().unwrap_or(&[]);
+        let (value, gradient) = stochastic::value_and_gradient(waves, p - self.phase);
+        value / gradient.length().max(1e-6)
     }
 
     /// The nodal function rescaled into world units.
@@ -1253,6 +1758,430 @@ mod tests {
     }
 
     #[test]
+    fn a_ring_of_cells_closes_on_itself() {
+        // A cylindrical map is only seamless if a whole number of cells fits
+        // the circumference — which is a property of the arithmetic, so it can
+        // be checked exactly rather than looked at.
+        let radius = 12.0f32;
+        let count = 16usize;
+        let axis = Vector3::new(0.0, 0.0, 1.0);
+        // The largest disagreement anywhere in the wall between a point and
+        // the same point turned by one cell.
+        let worst_of = |pitch: f32| {
+            let lattice = Lattice::new(LatticeKind::Strut(Strut::Cubic))
+                .size(Vector3::new(30.0, 30.0, 10.0))
+                .conform(Conform::cylindrical(Vector3::ZERO, axis, radius))
+                .cell_size(Vector3::new(pitch, 3.0, 2.0))
+                .thickness(0.6);
+            let cell = lattice.resolved_cell();
+            let sampler = lattice.sampler(cell, Vector3::new(0.05, 0.05, 0.05), false);
+            let half = sampler.half;
+            let angle = TAU / count as f32;
+            let (sin, cos) = angle.sin_cos();
+            let mut worst = 0.0f32;
+            for i in 0..40 {
+                let t = i as f32 / 40.0;
+                let r = radius - 2.0 + 4.0 * t;
+                let a = t * 2.3;
+                let p = Vector3::new(r * a.cos(), r * a.sin(), t * 6.0 - 3.0);
+                let turned = Vector3::new(p.x * cos - p.y * sin, p.x * sin + p.y * cos, p.z);
+                let here = sampler.solid_at(p, half, f32::INFINITY);
+                let there = sampler.solid_at(turned, half, f32::INFINITY);
+                worst = worst.max((here - there).abs());
+            }
+            worst
+        };
+
+        assert!(
+            worst_of(Conform::ring_pitch(radius, count)) < 1e-4,
+            "a turn of one cell moved the lattice: {}",
+            worst_of(Conform::ring_pitch(radius, count))
+        );
+        // And a pitch that does not divide the circumference does not close.
+        assert!(
+            worst_of(Conform::ring_pitch(radius, count) * 1.3) > 1e-3,
+            "an ill-fitting pitch closed anyway"
+        );
+    }
+
+    #[test]
+    fn a_depth_map_stacks_whole_layers_through_a_curved_wall() {
+        // Two points on one vertical line, one cell deeper below a sphere's
+        // surface. Under the map they differ by exactly one cell and the
+        // lattice reads the same; in world space they differ by something else
+        // and it does not.
+        let outer = 10.0f32;
+        let cell_z = 2.0f32;
+        let build = |conform: bool| {
+            let mut lattice = Lattice::new(LatticeKind::Tpms(Tpms::Gyroid))
+                .size(Vector3::new(20.0, 20.0, 20.0))
+                .cell_size(Vector3::new(4.0, 4.0, cell_z))
+                .thickness(0.5);
+            if conform {
+                lattice = lattice.conform(Conform::depth(Region::sphere(Vector3::ZERO, outer)));
+            }
+            let cell = lattice.resolved_cell();
+            let sampler = lattice.sampler(cell, Vector3::new(0.05, 0.05, 0.05), false);
+            let half = sampler.half;
+            // Radius 8 and radius 6: two millimetres deeper, along one line.
+            let (a, b) = (1.0f32, 1.0f32);
+            let at = |r: f32| {
+                let z = (r * r - a * a - b * b).sqrt();
+                sampler.solid_at(Vector3::new(a, b, z), half, f32::INFINITY)
+            };
+            (at(8.0), at(8.0 - cell_z))
+        };
+
+        let (near, deep) = build(true);
+        assert!(
+            (near - deep).abs() < 1e-3,
+            "the layers did not line up: {near} vs {deep}"
+        );
+        let (near, deep) = build(false);
+        assert!(
+            (near - deep).abs() > 1e-3,
+            "world-space cells lined up by accident: {near} vs {deep}"
+        );
+    }
+
+    #[test]
+    fn every_foam_fits_a_density_target() {
+        for cell in Stochastic::ALL {
+            let lattice = Lattice::new(LatticeKind::Stochastic(cell))
+                .size(Vector3::new(12.0, 12.0, 12.0))
+                .cells([4, 4, 4])
+                .seed(7)
+                .fit_relative_density(0.25);
+            assert!(
+                (lattice.relative_density() - 0.25).abs() < 0.02,
+                "{}: {}",
+                cell.name(),
+                lattice.relative_density()
+            );
+            assert_watertight(&lattice.resolution(12).build(), cell.name());
+        }
+    }
+
+    #[test]
+    fn two_seeds_are_two_foams_of_the_same_density() {
+        let build = |seed: u32| {
+            Lattice::new(LatticeKind::Stochastic(Stochastic::Voronoi))
+                .size(Vector3::new(10.0, 10.0, 10.0))
+                .cells([3, 3, 3])
+                .seed(seed)
+                .fit_relative_density(0.2)
+        };
+        let a = build(1);
+        let b = build(2);
+        assert!((a.relative_density() - b.relative_density()).abs() < 0.02);
+        // Same statistics, different foam: somewhere in the block they differ.
+        let cell = a.resolved_cell();
+        let step = Vector3::new(0.05, 0.05, 0.05);
+        let (sa, sb) = (a.sampler(cell, step, false), b.sampler(cell, step, false));
+        let differs = (0..50).any(|i| {
+            let t = i as f32 * 0.17;
+            let p = Vector3::new(t.sin() * 4.0, t.cos() * 4.0, t * 0.1);
+            (sa.value(p) - sb.value(p)).abs() > 1e-3
+        });
+        assert!(differs, "two seeds made the same foam");
+    }
+
+    #[test]
+    fn jitter_zero_is_a_periodic_foam() {
+        // The ordered end of the family: seeds on a regular grid make a
+        // Voronoi diagram that repeats with the cell, which a jittered one
+        // never does. It is the cheapest possible check that the jitter is
+        // wired to the seeds at all.
+        let build = |jitter: f32| {
+            Lattice::new(LatticeKind::Stochastic(Stochastic::VoronoiWall))
+                .size(Vector3::new(9.0, 9.0, 9.0))
+                .cells([3, 3, 3])
+                .jitter(jitter)
+                .seed(4)
+                .thickness(0.4)
+        };
+        let cell = Vector3::new(3.0, 3.0, 3.0);
+        let step = Vector3::new(0.05, 0.05, 0.05);
+        let p = Vector3::new(0.7, -1.1, 0.4);
+        let shifted = p + cell;
+        for (jitter, want_same) in [(0.0f32, true), (1.0, false)] {
+            let lattice = build(jitter);
+            let sampler = lattice.sampler(cell, step, false);
+            let half = sampler.half;
+            let a = sampler.solid_at(p, half, f32::INFINITY);
+            let b = sampler.solid_at(shifted, half, f32::INFINITY);
+            assert_eq!(
+                (a - b).abs() < 1e-4,
+                want_same,
+                "jitter {jitter}: {a} vs {b}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_stretch_dominated_cell_beats_a_bending_dominated_one() {
+        // The oldest result in the field, and the one a homogenisation has to
+        // reproduce to be worth running: an octet truss carries load along its
+        // struts, a BCC cell bends them, and at the same density the octet wins
+        // by a lot.
+        let modulus = |strut: Strut| {
+            Lattice::new(LatticeKind::Strut(strut))
+                .size(Vector3::new(4.0, 4.0, 4.0))
+                .cells([1, 1, 1])
+                .fit_relative_density(0.25)
+                .homogenize(12)
+                .youngs_moduli()[2]
+        };
+        let octet = modulus(Strut::Octet);
+        let bcc = modulus(Strut::Bcc);
+        // The gap is wider than this in reality — a voxel grid this coarse
+        // fattens every node and flatters the cell that depends on its nodes,
+        // which is the bending one.
+        assert!(octet > 1.5 * bcc, "octet {octet} vs bcc {bcc}");
+        // And both are a fraction of the solid they are cut from.
+        assert!(octet < 0.5, "{octet}");
+    }
+
+    #[test]
+    fn density_buys_stiffness() {
+        let modulus = |density: f32| {
+            Lattice::new(LatticeKind::Tpms(Tpms::Gyroid))
+                .size(Vector3::new(4.0, 4.0, 4.0))
+                .cells([1, 1, 1])
+                .fit_relative_density(density)
+                .homogenize(12)
+                .youngs_moduli()[0]
+        };
+        let light = modulus(0.15);
+        let heavy = modulus(0.45);
+        assert!(heavy > 2.0 * light, "{light} then {heavy}");
+    }
+
+    #[test]
+    fn a_lamellar_spinodal_is_anisotropic_and_an_isotropic_one_is_not() {
+        let measure = |cell: Stochastic| {
+            Lattice::new(LatticeKind::Stochastic(cell))
+                .size(Vector3::new(4.0, 4.0, 4.0))
+                .cells([1, 1, 1])
+                .seed(11)
+                .fit_relative_density(0.3)
+                .homogenize(12)
+        };
+        // Plates stacked across z: stiff in their own plane, soft across it.
+        let lamellar = measure(Stochastic::SpinodalLamellar);
+        let e = lamellar.youngs_moduli();
+        assert!(e[0] > 2.0 * e[2], "in plane {} across {}", e[0], e[2]);
+        // The isotropic class is not perfectly isotropic in one cell — it is a
+        // random field, and one cell is one sample of it — but it is nothing
+        // like as directional.
+        let isotropic = measure(Stochastic::Spinodal);
+        assert!(
+            isotropic.anisotropy() < lamellar.anisotropy(),
+            "isotropic {} vs lamellar {}",
+            isotropic.anisotropy(),
+            lamellar.anisotropy()
+        );
+    }
+
+    #[test]
+    fn a_field_grades_a_lattice_thicker_where_it_says() {
+        let size = Vector3::new(20.0, 20.0, 20.0);
+        let bounds = Box3::from_center_and_size(Vector3::ZERO, size);
+        // Hot on the left, cold on the right — a stand-in for a solver.
+        let field = Field::scattered(
+            bounds,
+            [8, 8, 8],
+            &[
+                (Vector3::new(-10.0, 0.0, 0.0), 100.0),
+                (Vector3::new(10.0, 0.0, 0.0), 0.0),
+            ],
+        );
+        let lattice = Lattice::new(LatticeKind::Strut(Strut::Octet))
+            .bounds(bounds)
+            .cells([4, 4, 4])
+            .thickness(0.8)
+            .grade(field.into_grade(2.0, 0.5));
+        let cell = lattice.resolved_cell();
+        let sampler = lattice.sampler(cell, Vector3::new(0.05, 0.05, 0.05), false);
+        // The same point of the same cell, at both ends of the block: the
+        // strut is thicker where the field is hot.
+        let offset = Vector3::new(0.4, 0.4, 0.4);
+        let hot = sampler.value(Vector3::new(-7.5, 0.0, 0.0) + offset);
+        let cold = sampler.value(Vector3::new(7.5, 0.0, 0.0) + offset);
+        assert!(hot > cold, "hot {hot} cold {cold}");
+        assert!(lattice.build().index.is_some());
+    }
+
+    #[test]
+    fn a_continuous_surface_conducts_better_per_gram_than_bars() {
+        let measure = |kind| {
+            Lattice::new(kind)
+                .size(Vector3::new(10.0, 10.0, 10.0))
+                .cells([1, 1, 1])
+                .fit_relative_density(0.3)
+                .conductivity(12)
+        };
+        let gyroid = measure(LatticeKind::Tpms(Tpms::Gyroid));
+        let cubic = measure(LatticeKind::Strut(Strut::Cubic));
+        // A sheet is one connected surface, so a share of it lies along every
+        // direction at once; three sets of bars spend two thirds of themselves
+        // across the gradient rather than along it.
+        assert!(
+            gyroid.tortuosity_factor(1.0) > cubic.tortuosity_factor(1.0),
+            "gyroid {} vs cubic {}",
+            gyroid.tortuosity_factor(1.0),
+            cubic.tortuosity_factor(1.0)
+        );
+        for k in [gyroid, cubic] {
+            // Both cells are cubic, so both conduct the same way on every axis.
+            assert!((k.anisotropy() - 1.0).abs() < 0.05, "{}", k.anisotropy());
+            // And nothing beats the solid it is cut from.
+            assert!(k.axes()[0] < k.relative_density, "{:?}", k.axes());
+            assert!(k.tortuosity_factor(1.0) < 1.0);
+        }
+    }
+
+    #[test]
+    fn plates_conduct_along_themselves_and_not_across() {
+        let k = Lattice::new(LatticeKind::Stochastic(Stochastic::SpinodalLamellar))
+            .size(Vector3::new(10.0, 10.0, 10.0))
+            .cells([1, 1, 1])
+            .seed(7)
+            .fit_relative_density(0.3)
+            .conductivity(12);
+        let along = k.axes();
+        assert!(along[0] > 0.1, "in plane {}", along[0]);
+        assert!(along[2] < 0.01, "across {}", along[2]);
+        assert!(k.anisotropy() > 50.0, "{}", k.anisotropy());
+        // Nearly every gram is in a plate, and every plate runs along the flow.
+        assert!(k.tortuosity_factor(1.0) > 0.9, "{}", k.tortuosity_factor(1.0));
+        // A random field's plates are not laid out on the axes to the last
+        // degree, so the tensor has small off-diagonal terms and the principal
+        // conductivity is a little above the best axis — never below it, which
+        // is what the largest eigenvalue of a symmetric matrix always is.
+        let principal = k.principal();
+        let best_axis = along[0].max(along[1]);
+        assert!(principal[0] >= best_axis - 1e-9, "{principal:?} vs {along:?}");
+        assert!(principal[0] < best_axis * 1.1, "{principal:?} vs {along:?}");
+    }
+
+    #[test]
+    fn every_generator_homogenizes_to_a_real_material() {
+        // Broad rather than deep: at eight voxels a cell none of these numbers
+        // is quotable, but a generator that voxelises to nothing, or comes back
+        // soft in every direction at once, is broken — and that is exactly what
+        // concentric infill did when it was handed a depth of infinity.
+        for kind in LatticeKind::all() {
+            let lattice = Lattice::new(kind)
+                .size(Vector3::new(8.0, 8.0, 8.0))
+                .cells([4, 4, 4])
+                .seed(3)
+                .fit_relative_density(0.3);
+            let c = lattice.homogenize(8);
+            let name = kind.name();
+            assert!(
+                (c.relative_density - 0.3).abs() < 0.1,
+                "{name}: voxelised to {}",
+                c.relative_density
+            );
+            let e = c.youngs_moduli();
+            assert!(e.iter().all(|v| v.is_finite()), "{name}: {e:?}");
+            // Some cells really are soft on an axis — a stack of plates has
+            // nothing across it — but nothing here is soft on all three.
+            assert!(
+                e.iter().any(|&v| v > 0.01),
+                "{name}: soft in every direction, {e:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_grade_is_counted_in_the_wall_it_leaves() {
+        let build = |graded: bool| {
+            let lattice = Lattice::new(LatticeKind::Strut(Strut::Octet))
+                .size(Vector3::new(20.0, 20.0, 20.0))
+                .cells([4, 4, 4])
+                .thickness(1.0)
+                .resolution(10);
+            if graded {
+                // Two fifths at one end, untouched at the other.
+                lattice.grade(|p| if p.x < 0.0 { 0.4 } else { 1.0 })
+            } else {
+                lattice
+            }
+        };
+        let plain = build(false).wall_samples();
+        let graded = build(true).wall_samples();
+        assert!(
+            (graded - 0.4 * plain).abs() < 0.05 * plain,
+            "plain {plain} graded {graded}"
+        );
+
+        // And the resolution it asks for follows the thin end, not the nominal
+        // one: sizing for the nominal wall is how a graded part comes out as
+        // gravel where it is thinnest.
+        let resolved = build(true).resolve_walls(3.0);
+        assert!(resolved.wall_samples() >= 3.0, "{}", resolved.wall_samples());
+        let nominal = build(false).resolve_walls(3.0);
+        assert!(
+            resolved.sample_grid()[0] > nominal.sample_grid()[0],
+            "{:?} vs {:?}",
+            resolved.sample_grid(),
+            nominal.sample_grid()
+        );
+    }
+
+    #[test]
+    fn a_region_can_be_used_twice() {
+        // Cloning is a reference count, so filling a shell and conforming to
+        // the same surface costs one region, not two.
+        let shell = Region::sphere(Vector3::ZERO, 8.0)
+            .difference(Region::sphere(Vector3::ZERO, 5.0));
+        let geom = Lattice::new(LatticeKind::Tpms(Tpms::Gyroid))
+            .conform(Conform::depth(shell.clone()))
+            .fill(shell)
+            .cell_size(Vector3::new(3.0, 3.0, 1.5))
+            .thickness(0.4)
+            .resolution(10)
+            .build();
+        assert_watertight(&geom, "shell used twice");
+    }
+
+    #[test]
+    fn a_stretching_cell_uses_more_of_itself_than_a_bending_one() {
+        // The strength counterpart of the stiffness ordering: an octet loads
+        // its struts along their length, a BCC cell bends them, and a bent
+        // strut has only its outer fibres working.
+        let measure = |strut| {
+            Lattice::new(LatticeKind::Strut(strut))
+                .size(Vector3::new(10.0, 10.0, 10.0))
+                .cells([1, 1, 1])
+                .fit_relative_density(0.3)
+                .strength(16)
+        };
+        let octet = measure(Strut::Octet);
+        let bcc = measure(Strut::Bcc);
+        assert!(octet.resolved(), "octet unresolved: {:?}", octet.efficiency());
+        assert!(bcc.resolved(), "bcc unresolved: {:?}", bcc.efficiency());
+        assert!(
+            octet.efficiency()[2] > bcc.efficiency()[2],
+            "octet {:?} bcc {:?}",
+            octet.efficiency(),
+            bcc.efficiency()
+        );
+
+        // Strength is a fraction of the solid's, and it scales with it.
+        let at_500 = octet.uniaxial(500.0)[2];
+        let at_1000 = octet.uniaxial(1000.0)[2];
+        assert!((at_1000 - 2.0 * at_500).abs() < 1e-6);
+        assert!(at_500 > 0.0 && at_500 < 500.0 * 0.3, "{at_500}");
+        // And the stiffness came back in the same result rather than needing
+        // a second solve.
+        assert!(octet.stiffness.youngs_moduli()[2] > 0.0);
+        assert_eq!(octet.stiffness.voxels, 16);
+    }
+
+    #[test]
     fn every_generator_is_named_once() {
         // The names are what a CLI or a log line selects on, so two generators
         // answering to one name would be a real ambiguity — and `from_name`
@@ -1260,7 +2189,11 @@ mod tests {
         let all = LatticeKind::all();
         assert_eq!(
             all.len(),
-            Tpms::ALL.len() + Strut::ALL.len() + Infill::ALL.len() + Cuboct::ALL.len()
+            Tpms::ALL.len()
+                + Strut::ALL.len()
+                + Infill::ALL.len()
+                + Cuboct::ALL.len()
+                + Stochastic::ALL.len()
         );
         let mut names: Vec<&str> = all.iter().map(|k| k.name()).collect();
         names.sort_unstable();
@@ -1603,10 +2536,14 @@ mod tests {
         // there are too many pairs to have an opinion about each.
         for kind in LatticeKind::all() {
             for style in [LatticeStyle::Sheet, LatticeStyle::Solid] {
-                // Only a TPMS reads the style; for the others a zero thickness
-                // would just mean no lattice.
-                let solid_tpms =
-                    style == LatticeStyle::Solid && matches!(kind, LatticeKind::Tpms(_));
+                // Only a level set reads the style; for the others a zero
+                // thickness would just mean no lattice.
+                let solid_tpms = style == LatticeStyle::Solid
+                    && match kind {
+                        LatticeKind::Tpms(_) => true,
+                        LatticeKind::Stochastic(s) => s.is_field(),
+                        _ => false,
+                    };
                 for skin in [0.0f32, 0.25] {
                     for filled in [false, true] {
                         let lattice = Lattice::new(kind)

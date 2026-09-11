@@ -40,14 +40,36 @@
 
 use crate::curves::Curve3;
 use crate::math::{Box3, Matrix4, Quaternion, Vector3};
+use std::sync::Arc;
 
 use super::strut::segment_distance;
 
 /// A closed region of space, as a field that is positive inside it.
 ///
 /// See the module docs.
+///
+/// Cloning one is a reference count, not a copy of the field — which matters
+/// because a region is routinely wanted twice. Filling a shell and conforming
+/// the cells to the same surface is two uses of one region, and rebuilding it
+/// for the second is a second BVH or a second CSG evaluation.
+///
+/// ```
+/// use threers::{Conform, Lattice, LatticeKind, Region, Tpms, Vector3};
+///
+/// let shell = Region::sphere(Vector3::ZERO, 10.0)
+///     .difference(Region::sphere(Vector3::ZERO, 6.0));
+///
+/// let geom = Lattice::new(LatticeKind::Tpms(Tpms::Gyroid))
+///     .conform(Conform::depth(shell.clone()))
+///     .fill(shell)
+///     .cell_size(Vector3::new(4.0, 4.0, 2.0))
+///     .thickness(0.5)
+///     .build();
+/// # assert!(geom.index.is_some());
+/// ```
+#[derive(Clone)]
 pub struct Region<'a> {
-    inside: Box<dyn Fn(Vector3) -> f32 + Sync + Send + 'a>,
+    inside: Arc<dyn Fn(Vector3) -> f32 + Sync + Send + 'a>,
     bounds: Box3,
 }
 
@@ -61,7 +83,7 @@ impl<'a> Region<'a> {
     /// behave like a distance, or the cut will land in the wrong place.
     pub fn new(bounds: Box3, inside: impl Fn(Vector3) -> f32 + Sync + Send + 'a) -> Self {
         Self {
-            inside: Box::new(inside),
+            inside: Arc::new(inside),
             bounds,
         }
     }
@@ -81,7 +103,7 @@ impl<'a> Region<'a> {
         self.distance(p) > 0.0
     }
 
-    pub(super) fn into_field(self) -> Box<dyn Fn(Vector3) -> f32 + Sync + Send + 'a> {
+    pub(super) fn into_field(self) -> Arc<dyn Fn(Vector3) -> f32 + Sync + Send + 'a> {
         self.inside
     }
 

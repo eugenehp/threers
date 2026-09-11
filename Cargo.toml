@@ -5,6 +5,7 @@ members = [
     "crates/threers-physics",
     "crates/threers-ocean",
     "crates/threers-animation",
+    "crates/threers-connectome",
     "crates/threers-robot-arm",
     "crates/threers-physics-bench",
     "crates/threers-js",
@@ -20,7 +21,7 @@ resolver = "2"
 
 [package]
 name = "threers"
-version = "0.0.4"
+version = "0.0.5"
 edition = "2021"
 # wgpu 30 requires 1.87, and this crate uses `is_multiple_of`, stabilised in the
 # same release. Declared so cargo says so up front rather than letting the build
@@ -85,8 +86,8 @@ native-codec = ["captions"]
 metal = []
 # CompositorServices + ARKit (implies metal).
 visionos = ["metal"]
-# In-process VideoToolbox encode (macOS).
-videotoolbox = []
+# In-process VideoToolbox encode + MP4 mux (macOS).
+videotoolbox = ["native-codec"]
 # rayon-backed CSG/BVH work (native; a no-op on wasm32).
 parallel = ["dep:rayon"]
 # tokio runtime for callers driving loaders concurrently (native).
@@ -280,6 +281,11 @@ path = "examples/openscad_bracket.rs"
 required-features = ["openscad"]
 
 [[example]]
+name = "parametric_gearbox"
+path = "examples/parametric_gearbox.rs"
+required-features = ["openscad"]
+
+[[example]]
 name = "dsl_showcase"
 path = "examples/dsl_showcase.rs"
 required-features = ["openscad"]
@@ -359,6 +365,10 @@ name = "denoise_dataset"
 required-features = ["raytrace"]
 
 [[example]]
+name = "denoise_ab"
+required-features = ["raytrace"]
+
+[[example]]
 name = "denoise_compare"
 required-features = ["raytrace"]
 
@@ -375,11 +385,27 @@ name = "progressive_denoise"
 required-features = ["raytrace"]
 
 [[example]]
+name = "renderer_viewport_bench"
+required-features = ["raytrace"]
+
+[[example]]
+name = "viewport_path_trace"
+required-features = ["raytrace"]
+
+[[example]]
+name = "viewport_path_trace_live"
+required-features = ["raytrace"]
+
+[[example]]
 name = "hdri_lighting"
 required-features = ["raytrace"]
 
 [[example]]
 name = "metal_headless"
+required-features = ["metal"]
+
+[[example]]
+name = "simcity_metal"
 required-features = ["metal"]
 
 [[example]]
@@ -465,3 +491,7 @@ required-features = ["rlx-geo"]
 [[example]]
 name = "rlx_geo_terrain"
 required-features = ["rlx-geo"]
+
+[[example]]
+name = "codec_bench"
+required-features = ["native-codec"]

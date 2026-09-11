@@ -9,7 +9,16 @@ use crate::codec::bitstream::{rbsp_trailing_bits, BitWriter};
 /// Luma macroblock edge in samples (16×16).
 pub const MB_SIZE: u32 = 16;
 
-/// Fixed configuration for the PCM encoder.
+/// Which entropy coder a slice uses (`entropy_coding_mode_flag` in the PPS).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EntropyMode {
+    /// Variable-length codes. Baseline profile; no adaptation between symbols.
+    Cavlc,
+    /// Context-adaptive binary arithmetic coding. Main profile and up.
+    Cabac,
+}
+
+/// Fixed configuration for the encoder.
 #[derive(Clone, Copy, Debug)]
 pub struct H264Config {
     pub width: u32,
@@ -18,6 +27,20 @@ pub struct H264Config {
     pub coded_height: u32,
     pub level_idc: u8,
     pub qp: i32,
+    /// Entropy coder for the compressed path. `I_PCM` always uses CAVLC.
+    pub entropy: EntropyMode,
+    /// Run the in-loop deblocking filter. On by default for the compressed
+    /// path; the `I_PCM` path codes at `qP = 0` where every threshold is zero
+    /// and the filter is a no-op either way.
+    pub deblock: bool,
+    /// Adaptive-quantization strength, in QP steps per octave of macroblock
+    /// variance. `0.0` disables it and pins every macroblock to the slice QP.
+    ///
+    /// Off by default: measured on photographic content it costs 0.15-0.35 VMAF
+    /// at matched size (see `docs/codec-benchmark.md`). Negative values invert
+    /// the assignment — more bits on detail rather than less — which is the
+    /// control that measurement needs.
+    pub aq_strength: f32,
 }
 
 impl H264Config {
@@ -29,6 +52,9 @@ impl H264Config {
             height,
             coded_width,
             coded_height,
+            entropy: EntropyMode::Cavlc,
+            deblock: false,
+            aq_strength: 0.0,
             level_idc: 10, // 1.0 — matches common decoders / x264 defaults
             qp: 26,
         }
@@ -56,7 +82,8 @@ impl H264Config {
 pub fn write_sps(cfg: &H264Config) -> Vec<u8> {
     let (mbs_w, mbs_h) = cfg.mbs();
     let mut w = BitWriter::new();
-    w.write_byte(66); // profile_idc = Baseline
+    // Baseline forbids CABAC, so a CABAC stream has to declare Main.
+    w.write_byte(if cfg.entropy == EntropyMode::Cabac { 77 } else { 66 }); // profile_idc
     w.flag(false); // constraint_set0_flag
     w.flag(false); // constraint_set1_flag
     w.flag(false); // constraint_set2_flag

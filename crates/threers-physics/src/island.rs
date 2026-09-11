@@ -89,6 +89,26 @@ impl IslandSet {
             if couples(a) && couples(b) {
                 self.union(a, b);
             }
+            // A coupling on a moving carrier is one constraint over three
+            // bodies, so the carrier has to solve with the pair rather than
+            // beside it. In a real train it is already in the island — the
+            // pinion runs in a bearing in the case — but a carrier held only by
+            // this coupling would otherwise be left out of it.
+            #[cfg(feature = "mechanism")]
+            if let crate::joint::JointKind::Gear {
+                carrier: Some(c), ..
+            } = &joint.kind
+            {
+                let c = c.index() as u32;
+                if couples(c) {
+                    if couples(a) {
+                        self.union(a, c);
+                    }
+                    if couples(b) {
+                        self.union(b, c);
+                    }
+                }
+            }
         }
 
         // A tendon is one constraint over its whole route, so every movable

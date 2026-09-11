@@ -961,13 +961,23 @@ impl Solver {
                 JointKind::Gear { ratio, .. } => {
                     let ratio = *ratio;
                     let (n_a, n_b) = (frame.axis_a, frame.axis_b);
-                    let k = n_a.dot(self.bodies[ia].inv_inertia.mul_vec(n_a))
+                    // C = (ω_a − ω_c)·n_a − ratio (ω_b − ω_c)·n_b, so the
+                    // carrier's row is whatever the other two leave over. With
+                    // no carrier it drops out and this is the world-referenced
+                    // constraint it has always been.
+                    let j_c = n_b * ratio - n_a;
+                    let ic = frame.body_c;
+                    let mut k = n_a.dot(self.bodies[ia].inv_inertia.mul_vec(n_a))
                         + ratio * ratio * n_b.dot(self.bodies[ib].inv_inertia.mul_vec(n_b));
+                    let mut rate = self.bodies[ia].angular.dot(n_a)
+                        - ratio * self.bodies[ib].angular.dot(n_b);
+                    if let Some(c) = ic.and_then(|i| self.bodies.get(i)) {
+                        k += j_c.dot(c.inv_inertia.mul_vec(j_c));
+                        rate += c.angular.dot(j_c);
+                    }
                     if k <= 0.0 {
                         continue;
                     }
-                    let rate = self.bodies[ia].angular.dot(n_a)
-                        - ratio * self.bodies[ib].angular.dot(n_b);
                     let lambda = -(rate + soft.bias_rate * joint.coupling_phase) / k
                         * soft.mass_scale
                         - joint.coupling_impulse * soft.impulse_scale;
@@ -976,6 +986,9 @@ impl Solver {
                     }
                     if let Some(x) = self.bodies.get_mut(ib) {
                         x.apply_angular_impulse(n_b * (-ratio * lambda));
+                    }
+                    if let Some(x) = ic.and_then(|i| self.bodies.get_mut(i)) {
+                        x.apply_angular_impulse(j_c * lambda);
                     }
                     joint.coupling_impulse += lambda;
                 }
@@ -1927,8 +1940,12 @@ impl Solver {
             }
             let rate = match &joint.kind {
                 JointKind::Gear { ratio, .. } => {
-                    self.bodies[ia].angular.dot(frame.axis_a)
-                        - *ratio * self.bodies[ib].angular.dot(frame.axis_b)
+                    let mut rate = self.bodies[ia].angular.dot(frame.axis_a)
+                        - *ratio * self.bodies[ib].angular.dot(frame.axis_b);
+                    if let Some(c) = frame.body_c.and_then(|i| self.bodies.get(i)) {
+                        rate += c.angular.dot(frame.axis_b * *ratio - frame.axis_a);
+                    }
+                    rate
                 }
                 JointKind::RackPinion { radius, .. } => {
                     (self.bodies[ib].velocity_at(frame.r_b)
@@ -2131,6 +2148,14 @@ struct JointFrame {
     /// The substep length, so motor force limits can be turned into impulses
     /// without threading `dt` through every call.
     dt: f32,
+    /// The body a coupling is carried on, when it is carried on one that moves.
+    /// See [`crate::joint::JointKind::Gear::carrier`].
+    ///
+    /// Gear couplings are the only thing that sets or reads this, and they are
+    /// behind the same flag — so without it the field is a word of padding and
+    /// a dead-code warning.
+    #[cfg(feature = "mechanism")]
+    body_c: Option<usize>,
     valid: bool,
 }
 
@@ -2152,6 +2177,8 @@ impl JointFrame {
             joint_axes: [Vector3::RIGHT, Vector3::UP, Vector3::FORWARD],
             euler: [0.0; 3],
             dt,
+            #[cfg(feature = "mechanism")]
+            body_c: None,
             valid: false,
         };
         let (Some(a), Some(b)) = (bodies.get(joint.body_a), bodies.get(joint.body_b)) else {
@@ -2185,9 +2212,23 @@ impl JointFrame {
             JointKind::Gear {
                 local_axis_a,
                 local_axis_b,
+                carrier,
                 ..
+            } => {
+                frame.axis_a = a.position.transform_vector(*local_axis_a);
+                frame.axis_b = b.position.transform_vector(*local_axis_b);
+                frame.hinge_angle =
+                    crate::joint::axial_angle(frame.rotation_a, frame.rotation_b, *local_axis_a);
+                // A carrier that is not in the set is simply absent, and the
+                // coupling falls back to being measured in the world — which is
+                // also what a *fixed* carrier gives, since it contributes no
+                // inverse inertia and no rate.
+                frame.body_c = carrier
+                    .filter(|c| bodies.get(*c).is_some())
+                    .map(|c| c.index());
             }
-            | JointKind::RackPinion {
+            #[cfg(feature = "mechanism")]
+            JointKind::RackPinion {
                 local_axis_a,
                 local_axis_b,
                 ..

@@ -132,6 +132,7 @@ pub mod visionos;
 
 mod device;
 mod headless;
+mod postfx;
 mod renderer;
 mod surface;
 mod target;
@@ -142,25 +143,36 @@ pub use renderer::{
     MetalRenderStats, MetalRenderer, PassAttachments, RenderView, DEFAULT_CACHE_RETENTION,
     MAX_VIEWS,
 };
+pub use postfx::{MetalBloom, MetalDownsampler, MetalSsao, MetalUpscaler, PostFxChain, SsaoSettings};
 pub use surface::{MetalSurface, SurfaceFrame};
 pub use target::MetalRenderTarget;
 
-/// The Metal Shading Language source compiled by [`MetalDevice::new`].
-///
-/// Exposed so it can be inspected, diffed against the WGSL, or fed to
-/// [`MetalDevice::with_shader_source`] with local edits — the entry points
-/// (`vs_mesh`, `fs_mesh`, `vs_point`, `fs_point`) and the buffer indices are
-/// the contract.
-pub const SHADER_SOURCE: &str = include_str!("shaders.metal");
+/// Mesh + post-processing MSL compiled by [`MetalDevice::new`].
+pub const SHADER_SOURCE: &str = concat!(
+    include_str!("shaders.metal"),
+    "\n",
+    include_str!("postfx.metal"),
+);
 
 #[cfg(test)]
 mod tests {
     #[test]
     fn shader_source_declares_the_entry_points() {
-        for entry in ["vs_mesh", "fs_mesh", "vs_point", "fs_point"] {
+        for entry in [
+            "vs_mesh",
+            "fs_mesh",
+            "vs_line",
+            "vs_point",
+            "fs_point",
+            "fs_bloom_threshold",
+            "fs_bloom_blur",
+            "fs_downsample",
+            "fs_upscale",
+            "fs_bloom_composite",
+        ] {
             assert!(
                 super::SHADER_SOURCE.contains(entry),
-                "shaders.metal is missing `{entry}`"
+                "shader source is missing `{entry}`"
             );
         }
     }

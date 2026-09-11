@@ -412,6 +412,7 @@ fn sweep(scenes: u32, offset: u32, reference_spp: u32) {
                     normal: &guides.normal,
                     depth: &extra.depth,
                     variance: &extra.variance,
+                    sample_counts: Some(&extra.sample_counts),
                     scene_scale: extra.scene_scale,
                 },
                 &DenoiseParams::default(),
@@ -536,6 +537,7 @@ fn baseline(scenes: u32, validation_from: u32, offset: u32, noisy_spp: u32, refe
                 normal: &guides.normal,
                 depth: &extra.depth,
                 variance: &extra.variance,
+                sample_counts: Some(&extra.sample_counts),
                 scene_scale: extra.scene_scale,
             },
             &params,
@@ -701,6 +703,7 @@ struct Guides {
 struct FilterGuides {
     depth: Vec<f32>,
     variance: Vec<f32>,
+    sample_counts: Vec<u32>,
     /// Per-pixel relative error — the standard error over the pixel's own mean.
     error: Vec<f32>,
     scene_scale: f32,
@@ -797,6 +800,7 @@ fn render_pair_with_depth(
     let filter_guides = FilterGuides {
         depth: r.film().resolve_depth(),
         variance: r.film().resolve_variance(),
+        sample_counts: r.film().resolve_sample_counts(),
         error: r.film().resolve_error(),
         scene_scale: r.traced_scene().map(|s| s.scale()).unwrap_or(1.0),
     };

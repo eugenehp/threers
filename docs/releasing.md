@@ -5,18 +5,18 @@ PyPI (not crates.io). See also [`docs/bindings.md`](bindings.md).
 
 | Artifact | Version | Registry | Arch notes |
 |---|---|---|---|
-| `threers` | 0.0.4 | crates.io | source; consumers compile |
+| `threers` | 0.0.5 | crates.io | source; consumers compile |
 | `threers-physics` | 0.0.1 | crates.io | first release |
 | `threers-probe` | 0.0.1 | crates.io | first release |
-| `threers` (npm ESM) | 0.0.4 | npm / Deno | **mini** (default) + **full** wasm entries ([`crates/threers-js`](../crates/threers-js)) |
-| `threers-node` | 0.0.4 | npm | per-arch `.node` via `@threers/node-*` ([`crates/threers-node`](../crates/threers-node)) |
-| `threers` (PyPI) | 0.0.4 | PyPI | per-platform wheels ([`crates/threers-py`](../crates/threers-py)) |
+| `threers` (npm ESM) | 0.0.5 | npm / Deno | **mini** (default) + **full** wasm entries ([`crates/threers-js`](../crates/threers-js)) |
+| `threers-node` | 0.0.5 | npm | per-arch `.node` via `@threers/node-*` ([`crates/threers-node`](../crates/threers-node)) |
+| `threers` (PyPI) | 0.0.5 | PyPI | per-platform wheels ([`crates/threers-py`](../crates/threers-py)) |
 
-`crates/` also holds six demos and benches recovered alongside the physics
-crate. None of them publish (`publish = false`), and they fall into two groups:
+`crates/` also holds seven demos and benches. None of them publish
+(`publish = false`), and they fall into two groups:
 
 - **In the workspace and building**: `threers-ocean`, `threers-animation`,
-  `threers-robot-arm`, `threers-physics-bench`.
+  `threers-robot-arm`, `threers-physics-bench`, `threers-connectome`.
 - **`exclude`d**: `threers-continuum` and `threers-mechanism-tour`. Both build as
   libraries, but their own tests and examples call an older shape of their API —
   builder methods that became fields, argument lists a version behind. They are
@@ -29,7 +29,7 @@ Both companions depend on `threers` by **path and version**:
 
 ```toml
 # crates/threers-physics/Cargo.toml
-threers = { path = "../..", version = "0.0.4", features = ["mesh-bvh"] }
+threers = { path = "../..", version = "0.0.5", features = ["mesh-bvh"] }
 ```
 
 A path dependency is what the workspace builds against; the `version` is what the
@@ -37,8 +37,8 @@ published crate carries. So `threers` has to be on crates.io *before* either
 companion can even be packaged — until it is, you get
 
 ```text
-failed to select a version for the requirement `threers = "^0.0.4"`
-candidate versions found which didn't match: 0.0.3, 0.0.2, 0.0.1
+failed to select a version for the requirement `threers = "^0.0.5"`
+candidate versions found which didn't match: 0.0.4, 0.0.3, 0.0.2, 0.0.1
 ```
 
 which is not a fault, it is the ordering telling you about itself.
@@ -107,7 +107,7 @@ cargo package -p threers                     # size, and it must compile from th
 cargo publish -p threers
 cargo publish -p threers-physics             # only after the first is on the index
 cargo publish -p threers-probe               # likewise
-git tag -a v0.0.4 -m 'threers 0.0.4' && git push --tags
+git tag -a v0.0.5 -m 'threers 0.0.5' && git push --tags
 
 # 7. Language packages — one script locally; CI on tag push.
 ./scripts/release-versions.sh                    # versions aligned?
@@ -115,7 +115,7 @@ git tag -a v0.0.4 -m 'threers 0.0.4' && git push --tags
 PUBLISH=1 ./scripts/release-all.sh publish     # upload (or push tag → CI)
 
 # Multi-arch npm-node + PyPI: push v* tag → .github/workflows/release-language-packages.yml
-git tag -a v0.0.4 -m 'threers 0.0.4' && git push --tags
+git tag -a v0.0.5 -m 'threers 0.0.5' && git push --tags
 ```
 
 ## One command (`scripts/release-all.sh`)
@@ -140,7 +140,7 @@ PyPI trusted publishing).
 
 ```bash
 # After crates.io publish + version bump:
-git tag v0.0.4 && git push origin v0.0.4
+git tag v0.0.5 && git push origin v0.0.5
 ```
 
 ## npm ESM (`crates/threers-js`)
@@ -231,6 +231,6 @@ curl -s -H 'User-Agent: threers-release' https://crates.io/api/v1/crates/threers
   | python3 -c "import json,sys; print(json.load(sys.stdin)['crate']['max_version'])"
 ```
 
-It reads 0.0.3, so 0.0.4 is what ships. `threers-physics` and `threers-probe`
+It reads 0.0.4, so 0.0.5 is what ships. `threers-physics` and `threers-probe`
 have never been published, so their 0.0.1 is a first release for each — check
 the name is not taken before counting on it.

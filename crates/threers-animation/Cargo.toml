@@ -8,7 +8,7 @@ license = "MIT"
 repository = "https://github.com/eugenehp/threers"
 homepage = "https://github.com/eugenehp/threers"
 documentation = "https://docs.rs/threers-animation"
-# Not part of the 0.0.4 release; see docs/releasing.md.
+# Not part of the 0.0.5 release; see docs/releasing.md.
 publish = false
 
 [features]

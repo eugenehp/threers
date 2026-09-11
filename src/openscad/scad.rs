@@ -948,6 +948,7 @@ fn record_mate(module: &str, args: &[Arg], sc: &Scope, env: &Env) -> Result<(), 
             // general one; both name the second part's own axis.
             axis_b: vec3_arg(args, "axis_b", 9999, sc, env)
                 .or_else(|| vec3_arg(args, "rack_axis", 9999, sc, env)),
+            carrier: str_arg(args, "carrier", 9999, sc, env),
             bearing: pair_arg(args, "bearing", 9999, sc, env),
             friction: num_arg(args, "friction", 9999, sc, env),
             spring: pair_arg(args, "spring", 9999, sc, env),
@@ -3931,9 +3932,14 @@ fn eval_call_stmt(
                 let solid =
                     parse_amf(&text).ok_or_else(|| format!("import: malformed AMF '{file}'"))?;
                 Some(Geom::Solid(solid))
+            } else if lower.ends_with(".fcstd") {
+                let bytes = read_file_bytes(&path).map_err(read_err)?;
+                let solid = crate::openscad::freecad::fcstd_to_solid(&bytes)
+                    .ok_or_else(|| format!("import: malformed FCStd '{file}'"))?;
+                Some(Geom::Solid(solid))
             } else {
                 return Err(format!(
-                    "import: unsupported format '{file}' (STL/OBJ/OFF/3MF/AMF/DXF/SVG)"
+                    "import: unsupported format '{file}' (STL/OBJ/OFF/3MF/AMF/FCStd/DXF/SVG)"
                 ));
             }
         }
@@ -5818,6 +5824,25 @@ mod tests {
         std::fs::write(dir.join("a.scad"), "import(\"t.amf\");").unwrap();
         let v = vol(parse_scad_file(dir.join("a.scad")).unwrap());
         assert!((v - 1000.0 / 6.0).abs() < 1.0, "amf vol {v}");
+    }
+
+    #[test]
+    fn import_fcstd_cube() {
+        let dir = std::env::temp_dir().join("threers_fcstd_import");
+        std::fs::create_dir_all(&dir).unwrap();
+        let bytes =
+            crate::geometry_to_fcstd(&crate::cube([10.0, 10.0, 10.0]).to_geometry_exact(), "Cube");
+        std::fs::write(dir.join("c.FCStd"), &bytes).unwrap();
+        std::fs::write(dir.join("c.scad"), "import(\"c.FCStd\");").unwrap();
+        let g = parse_scad_file(dir.join("c.scad")).unwrap().to_geometry();
+        let n_tri = g
+            .index
+            .as_ref()
+            .map(|i| i.len() / 3)
+            .unwrap_or_else(|| g.get_attribute("position").map(|a| a.count() / 3).unwrap_or(0));
+        assert!(n_tri >= 12, "fcstd cube should have at least 12 triangles, got {n_tri}");
+        let v = vol(parse_scad_file(dir.join("c.scad")).unwrap());
+        assert!((v - 1000.0).abs() < 5.0, "fcstd cube vol {v}");
     }
 
     /// Minimal single-entry ZIP (store method, CRC left 0 — the reader doesn't

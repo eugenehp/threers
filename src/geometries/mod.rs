@@ -42,9 +42,11 @@ pub use kirigami::{
 };
 pub use lathe_geometry::LatheGeometry;
 pub use lattice::{
-    ChiralRule, Cuboct, CuboctAssembly, CuboctAssemblyPlan, CuboctAssemblyStep, CuboctFrame,
-    CuboctJoint, CuboctJointKind, FrameMaterial, FrameResponse, Hand, Infill, Lattice,
-    LatticeGeometry, LatticeKind, LatticeStyle, Region, Segment, Strut, Tpms,
+    ChiralRule, Conductivity, Conform, Cuboct, CuboctAssembly, CuboctAssemblyPlan,
+    CuboctAssemblyStep, CuboctFrame, CuboctJoint, CuboctJointKind, Field, FrameMaterial,
+    FrameResponse, Hand, Infill, Lattice, LatticeGeometry, LatticeKind, LatticeMetrics,
+    LatticeStyle, Region, Segment, SolidMaterial, Solver, Stiffness, Stochastic, Strength, Strut,
+    Tpms,
 };
 #[cfg(feature = "nurbs")]
 pub use nurbs_geometry::NurbsGeometry;

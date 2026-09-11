@@ -7,7 +7,7 @@ Pure Rust, no dependencies beyond `threers` itself, and wasm-ready.
 
 ```toml
 [dependencies]
-threers = "0.0.4"
+threers = "0.0.5"
 threers-physics = "0.0.1"
 ```
 
@@ -132,6 +132,15 @@ cargo run -p threers-physics --features assembly,openscad --example scad_mechani
                                                              # a .scad model that describes itself
 cargo run -p threers-physics --features assembly,openscad --example mechanism_tour
                                                              # declare, drive, then check the geometry agrees
+cargo run -p threers-physics --features assembly,openscad --release --example three_bearing_swivel
+                                                             # a STOVL thrust-vectoring nozzle: a roll bearing
+                                                             # and two canted joints, turned by ring gears and
+                                                             # pinions on epicyclic carriers, with the jet and
+                                                             # every clearance measured off the simulated
+                                                             # parts. --internal puts the gears and motors
+                                                             # inside the cooling annulus instead of outside
+                                                             # the duct; --render writes a PNG sequence and
+                                                             # --render --section a cutaway still
 
 cargo run -p threers-robot-arm --example console             # a pick-and-place cell
 cargo run -p threers-robot-arm --example performance         # motor and link sizing

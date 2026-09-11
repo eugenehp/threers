@@ -1,6 +1,6 @@
 {
   "name": "threers",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "three.js-shaped Rust/wgpu renderer — browser shim + wasm",
   "license": "MIT",
   "type": "module",

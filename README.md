@@ -2,17 +2,28 @@
 
 A **drop-in three.js replacement** for Rust and the browser, backed by [wgpu](https://github.com/gfx-rs/wgpu). The same Rust core runs natively (winit) and as WebAssembly, with a JavaScript shim that exposes the familiar `THREE.*` API so existing three.js code can run with minimal changes.
 
-**Current version:** [0.0.4](CHANGELOG.md) · [Changelog](CHANGELOG.md)
+**Current version:** [0.0.5](CHANGELOG.md) · [Changelog](CHANGELOG.md)
 
 ## Table of contents
 
 - [Features](#features)
+- [Examples](#examples)
 - [Prelude](#prelude)
 - [Quick start](#quick-start)
   - [Native (desktop)](#native-desktop)
   - [Optional: mesh-bvh / CSG](#optional-mesh-bvh--csg)
   - [OpenSCAD solid modeling](#openscad-solid-modeling)
   - [Lattice infill](#lattice-infill)
+    - [Sheet or solid](#sheet-or-solid)
+    - [Filling shapes, not just boxes](#filling-shapes-not-just-boxes)
+    - [Resolution, and the one way this fails quietly](#resolution-and-the-one-way-this-fails-quietly)
+    - [Foams](#foams)
+    - [Conforming, not trimming](#conforming-not-trimming)
+    - [Grading on something real](#grading-on-something-real)
+    - [Measuring what came out](#measuring-what-came-out)
+    - [As a material, not a geometry](#as-a-material-not-a-geometry)
+    - [When it gives way](#when-it-gives-way)
+    - [On the GPU](#on-the-gpu)
   - [Kirigami corrugations](#kirigami-corrugations)
   - [Materials: metals, glass, anisotropy, thin film](#materials-metals-glass-anisotropy-thin-film)
   - [Headless render & video export](#headless-render--video-export)
@@ -51,7 +62,7 @@ A **drop-in three.js replacement** for Rust and the browser, backed by [wgpu](ht
 - **Subtitles & captions** — SubRip / WebVTT parse + write, text rasterized on-screen over the 3D frame or burned into exported video, plus sidecar files and soft-subtitle tracks (MP4 `tx3g`, WebM WebVTT). Pure Rust, no font assets required, wasm-safe.
 - **Height maps** — `displacementMap` / `displacementScale` / `displacementBias` on Standard and Physical materials, sampled in the vertex stage (plain, skinned, instanced and shadow paths)
 - **Kirigami plate lattices** — Kirigami Expanded Miura corrugations (Parra Rubio et al., ASME 2023): planar and curved sandwich cores as plates with crease topology, developed SVG nets, and discrete origami cells. `cargo run --release --example kirigami`
-- **Lattice generators** — 29 periodic infills as `BufferGeometry`, in one API: 8 triply periodic minimal surfaces (gyroid, Schwarz P and D, Neovius, I-WP, Fischer–Koch S, Lidinoid, split P), 7 beam cells (simple cubic, BCC, BCC-Z, FCC, octet truss, diamond, Kelvin), the 9 patterns a slicer draws (rectilinear turning and aligned, grid, triangles, tri-hexagon, honeycomb, cubic, quarter cubic, concentric), and 5 face-connected cuboctahedra voxels (rigid, compliant, auxetic, chiral CW/CCW — Jenett et al., Sci. Adv. 2020). Sized the way a slicer sizes them — ask for *25 % density* and the wall thickness is solved for you — and meshed by a marching cubes that derives its own case table, so ambiguous cells cannot crack and the output is indexed, welded and watertight. `grade` varies thickness across the part, `trim` pours the lattice into any shape you can write as a field, and both keep the mesh closed. `wall_samples` catches the failure mode that would otherwise be silent — a wall thinner than the sample step comes out as gravel, not as a wall — and `resolve_walls` fixes it per generator rather than paying the worst case on all of them. No feature flag, no dependencies.
+- **Lattice generators** — 35 lattices as `BufferGeometry`, in one API: 8 triply periodic minimal surfaces (gyroid, Schwarz P and D, Neovius, I-WP, Fischer–Koch S, Lidinoid, split P), 7 beam cells (simple cubic, BCC, BCC-Z, FCC, octet truss, diamond, Kelvin), the 9 patterns a slicer draws (rectilinear turning and aligned, grid, triangles, tri-hexagon, honeycomb, cubic, quarter cubic, concentric), 5 face-connected cuboctahedra voxels (rigid, compliant, auxetic, chiral CW/CCW — Jenett et al., Sci. Adv. 2020), and 6 stochastic foams (Voronoi struts and walls, and four classes of spinodal random field — Kumar et al., npj Comput. Mater. 2020). Sized the way a slicer sizes them — ask for *25 % density* and the wall thickness is solved for you — and meshed by a marching cubes that derives its own case table, so ambiguous cells cannot crack and the output is indexed, welded and watertight. `grade` varies thickness across the part, `trim` pours the lattice into any shape you can write as a field, `conform` lays the cells out along a curved part instead of cutting them off at it, and all of it keeps the mesh closed. `metrics` returns the porosity, internal area, pore size, permeability estimate and void connectivity a heat exchanger or a scaffold is specified by; `homogenize`, `conductivity` and `strength` return the cell's effective stiffness tensor, its conductivity (and with it the electrical, diffusive and dielectric answers) and the stress it gives way at, by periodic-boundary FE — on the CPU or, ten times faster and to the same five figures, on a wgpu compute device. `wall_samples` catches the failure mode that would otherwise be silent — a wall thinner than the sample step comes out as gravel, not as a wall — and `resolve_walls` fixes it per generator rather than paying the worst case on all of them. No feature flag, no dependencies.
 - **Opt-in planets** (`planet`) — `Planet` / `Starfield` builders that stack a textured body, a cloud shell and an analytically shaded atmosphere; procedural equirectangular map generation; elevation → normal + roughness derivation; and a loader for NASA's public-domain Blue Marble, Black Marble, MODIS, GEBCO, CGI Moon Kit and Deep Star Maps imagery
 - **Opt-in path tracer** (`raytrace`) — a physically-based renderer beside the rasteriser, not inside it. Rays leave the camera, scatter off surfaces by their BSDF, and either find a light or die trying; the image is the average of millions of such paths, so global illumination, colour bleeding, soft shadows, glossy interreflection and refraction fall out of the integral rather than being features bolted on. A principled BSDF (Lambert + anisotropic GGX + rough dielectric transmission + clearcoat, with Kulla–Conty energy compensation, so rough gold does not render grey), emissive geometry sampled as area lights, next-event estimation with the power heuristic, **Owen-scrambled Sobol sampling** (every 2D decision a path makes comes from a stratified low-discrepancy pair — 1.5–3× lower RMS error at the same sample count, which is 2–9× the effective samples), **importance-sampled environments** (an HDRI's sun is 6·10⁻⁵ of the sphere — cosine-weighted sampling finds it once in twenty thousand tries and returns speckle), **adaptive sampling** that stops each pixel when its own standard error settles, Russian roulette, Beer–Lambert absorption inside solids, a thin-lens camera with autofocus, and an AOV-guided À-Trous denoiser thresholded on each pixel's *measured* variance, with albedo and normal guides that follow the path through mirrors and glass the way Cycles' do. **Two backends over one scene form**: a portable CPU reference (wasm32 included, rayon-parallel with `parallel`) and a wgpu compute kernel — no new dependency, it reuses the renderer's own wgpu — that runs the same estimator and agrees with the CPU to within Monte-Carlo noise. Takes an ordinary `Scene` with ordinary `Material`s and `Light`s; nothing is authored twice. See [Path tracing](#path-tracing-raytrace).
 - **Opt-in mesh BVH** (`mesh-bvh`) — accelerated raycast / shapecast (three-mesh-bvh–compatible)
@@ -70,12 +81,34 @@ A **drop-in three.js replacement** for Rust and the browser, backed by [wgpu](ht
 - **Published Python package `threers`** — PyPI wheels from [`crates/threers-py`](crates/threers-py) (maturin / PyO3; arm64 + x86_64 matrices).
 - **Companion crate `threers-robot-arm`** — a four-axis pick-and-place cell run two ways (kinematic and servo-driven), sized from its own inverse dynamics, with a scrubbable browser player. See [`crates/threers-robot-arm`](crates/threers-robot-arm).
 - **Companion crate `threers-probe`** — screen-space neural global illumination from a G-buffer and a set of lighting probes: trained in RLX, run anywhere RLX runs. See [`crates/threers-probe`](crates/threers-probe).
+- **Companion crate `threers-connectome`** — both *Drosophila* connectomes as one node per neuron, 350,033 of them at 60 fps in the browser, with each neuron's `skeleton.swc` fetched and drawn as line segments on click. Reads the `connectome-fs` text trees directly; no dependencies, and none on `threers` either — the renderer runs in the browser as wasm and the Rust side is a reader and a file server. See [`crates/threers-connectome`](crates/threers-connectome).
 - **Companion crate `threers-continuum`** — tendon-driven continuum robots: a flexible rod as a chain of elastic hinges, cable routing, Clark coordinates and task-space tip control. See [`crates/threers-continuum`](crates/threers-continuum).
 - **Opt-in RLX bridge** (`rlx`) — [RLX](https://crates.io/crates/rlx), an ML compiler + runtime, as a neighbour of the renderer rather than a layer under it. Vertex attributes and pixels convert to `rlx` tensors of a declared shape and back (NHWC/NCHW, sRGB↔linear, `Rgba16Float` included), and `GraphRunner` compiles a graph once so a per-frame filter does not pay the compiler sixty times a second. On top of that: `ConvFilter` (blur/sharpen/Sobel/emboss as depthwise conv2d), `Diffusion` (iterated `h ← h + κ∇²h` for terrain), `mesh::taubin_smooth` (smoothing as a graph over `[n, 3]` positions), `ColorGrade` (a colour transform **fitted** to a reference by autodiff — not applied, *learned*), and `Palette` (k-means with the assignment step on the device). Built with rlx's `cpu`, `tensor` and `gpu` backends, native **and** wasm32.
 - **Opt-in exact Delaunay / Voronoi** (`rlx-geo`) — [`rlx-geo`](https://crates.io/crates/rlx-geo)'s integer predicates, so scattered samples triangulate to *the* Delaunay mesh rather than one a floating-point predicate rounded into a near-miss (a flipped triangle in a height field is a visible spike). `heightfield_geometry` returns `BufferGeometry` with normals and UVs; `refine_heightfield` samples adaptively, reaching ~9× lower error than a uniform grid of the same vertex count; Voronoi labels, site-distance, wall-distance and edge maps drive cell textures (cracked mud, stained glass) via `normal_map_from_height`.
 - **Parallel CPU work** (`parallel`) — rayon-backed BVH/CSG evaluation; native only, and order-preserving so results are unchanged
 - **Web**: `web/threejs-shim.js` + wasm — drop-in `THREE.*` replacement targeting three.js r165
 - **Native**: winit examples for desktop development and debugging
+
+<!-- examples-gallery:start -->
+## Examples
+
+39 examples render to an image; every one of them is in
+**[docs/examples.md](docs/examples.md)** with its picture and the command that
+produces it. A few of them:
+
+|   |   |   |
+|---|---|---|
+| <a href="docs/examples.md"><img src="https://raw.githubusercontent.com/eugenehp/threers/main/docs/images/realistic_earth.jpg" width="270" alt="realistic_earth"></a> | <a href="docs/examples.md"><img src="https://raw.githubusercontent.com/eugenehp/threers/main/docs/images/lattice_engineering.jpg" width="270" alt="lattice_engineering"></a> | <a href="docs/examples.md"><img src="https://raw.githubusercontent.com/eugenehp/threers/main/docs/images/path_trace_gpu.jpg" width="270" alt="path_trace_gpu"></a> |
+| **`realistic_earth`** | **`lattice_engineering`** | **`path_trace_gpu`** |
+| <a href="docs/examples.md"><img src="https://raw.githubusercontent.com/eugenehp/threers/main/docs/images/openscad_render.jpg" width="270" alt="openscad_render"></a> | <a href="docs/examples.md"><img src="https://raw.githubusercontent.com/eugenehp/threers/main/docs/images/kirigami.jpg" width="270" alt="kirigami"></a> | <a href="docs/examples.md"><img src="https://raw.githubusercontent.com/eugenehp/threers/main/docs/images/rlx_fit_grade.jpg" width="270" alt="rlx_fit_grade"></a> |
+| **`openscad_render`** | **`kirigami`** | **`rlx_fit_grade`** |
+| <a href="docs/examples.md"><img src="https://raw.githubusercontent.com/eugenehp/threers/main/docs/images/origami_miura.jpg" width="270" alt="origami_miura"></a> |  |  |
+| **`origami_miura`** |  |  |
+
+All headless — no window, no display — so they run the same on a laptop and
+in CI. The rest of `examples/` is interactive, exports video, or prints
+numbers rather than drawing.
+<!-- examples-gallery:end -->
 
 ## Prelude
 
@@ -132,8 +165,725 @@ cargo run --example cube          # spinning PBR cube
 cargo run --example scene_graph   # hierarchy + lights
 cargo run --example controls_orbit
 cargo run --example shader_material
+cargo run --release --features mesh-bvh --example simcity   # procedural city, running day/night clock
+#   ^ mesh-bvh turns on the raycast light bake; --no-bake skips it
 cargo run --release --example ocean_water   # spectral ocean: waves, foam, buoyancy
 ```
+
+The generator lives in `examples/simcity/` as a module tree — fifteen files
+rather than the six-thousand-line single include it started as, which had
+become the main obstacle to changing anything in it. `cargo test --test
+simcity` guards it: determinism, every layout building something, every park
+kind building something at every size, no parcel cut into a sliver, nobody
+leaving their stretch of road, corners swept rather than snapped, wildlife
+staying where it was put, and traffic that does not quietly decay. Most of
+those exist because the bug shipped first.
+
+`simcity` generates a whole city from a seed, in one of seven street layouts
+(`--layout manhattan|boulevard|oldtown|waterfront|parkway|gardencity|greenbelt`,
+or `l` in the window). The layout is not a skin: it sets the grid metrics,
+where the height piles up, how finely blocks are platted, where the water goes
+— a river down one column, a bay along one edge, or nothing — and where the
+green goes. On top of that come blocks platted into parcels by recursive
+subdivision, towers that step back asymmetrically, nine kinds of designed park,
+street trees in six species, lamps, traffic signals that actually cycle,
+barges, woodland past the city limits, and cars, buses, lorries and several
+hundred people who all stay on their own side of the water when their street
+has no bridge. It arrives as ~40 merged meshes
+rather than the ~7000 objects it looks like, so the whole thing draws in about
+forty calls at a locked 60 fps; each building carries its own facade UVs, so
+one 128×128 window tile serves towers of every size.
+
+Parks are designed, not scattered. A green block picks a *kind* — formal
+square, garden, pond, sports ground, hard court, playground, plaza, allotment,
+meadow, grove, dog run — and is built to that kind's own rules: a square is symmetrical about a
+fountain or a statue with one species of tree on a regular spacing, a sports
+ground is mown in bands with markings, goals and floodlights and nothing in the
+middle, an allotment is a patchwork of raised beds where no two neighbouring
+plots carry the same crop. The kind follows from the block's size and how built
+up its surroundings are, so downtown gets hard landscape and the outskirts get
+allotments and meadows.
+
+The fittings do as much work as the layouts. A square carries a fountain, a
+statue or a bandstand — an octagon with a point on it is a bandstand and
+nothing else, which makes it legible from the air in a way a lawn is not — and
+is enclosed by cast-iron railings with a gate, because that enclosure is what
+distinguishes a square from a patch of grass. A garden gets a kiosk with tables
+and parasols outside it. Paths are lined with the small stuff: litter bins,
+drinking fountains, fingerposts, bicycle hoops, notice boards. A sports ground
+is a marked pitch or, on a tighter block, a fenced hard court with a net or a
+pair of backboards. A dog run is gravel, agility equipment, dogs off the lead,
+and a double gate — every dog run has an airlock, two gates with a pen between
+them, and nothing else in a park is built that way.
+
+Fences are rails, not panels. Drawn as a solid sheet — which is the obvious
+thing, and what the first pass did — a chain-link fence reads as a compound
+wall at any distance. Three thin rails and a sparse set of uprights cost about
+the same and read correctly, and the gap between them is what says *mesh*.
+
+A pond needs more room than its water. The walk round it and the benches facing
+it reach five metres past the shore, so on a small block the walk lands on the
+pavement and the benches stand in the road; below twenty-five metres a block
+builds a garden instead. `parks_stay_inside_their_block` is what found that,
+and it checks every kind at every size.
+
+Where the green goes is a property of the layout, not of the dice. A park
+pattern is one of scatter, one central square, a continuous belt at a fixed
+radius, or four wedges running out from the middle; `greenbelt` and
+`gardencity` exist to use the last two. Any designated green area is *graded*
+from its middle outwards — water and rough grass at the heart, gardens and
+squares where it meets the street — which is what makes eleven adjacent green
+blocks read as one large park instead of as eleven small ones.
+
+A pond needed a hole cutting in the ground. A block is a solid box from the
+terrain up to the kerb, so anything sunk into it is simply hidden under the top
+face; the surface is emitted as a ring of triangles round the pond instead,
+with the square's four corner angles forced into the sample set so no corner
+gets sliced off.
+
+The horizon is graded rather than a wall of white. Rayleigh drives it, and the
+horizon is where a wide shot spends most of its sky — measured looking along
+the ground at noon, 0.33 clipped *86% of the sky* to flat white, 0.10 clipped
+14%, 0.05 none. The old value was tuned on a steep aerial where the camera
+barely sees the horizon at all, and it was hopeless the moment one did. Raising
+Mie, which had fixed the same complaint at a steep angle, makes it worse here:
+86% to 95%. It is now 27%, and what is left is the bit of sky right above the
+horizon, which is legitimately bright.
+
+The view runs a lot further. Haze used to close at 4.6 half-widths, which cut
+the world off just past the city; it closes at 7.6 now, with the ground plate
+and the camera's far plane grown to match. What fills the extra distance is
+countryside at a coarsening grain: inside three half-widths a parcel is a
+field with tramlines, hedges, woods and lakes, and beyond it a parcel is a
+colour and a hedgerow and nothing else. At that range a tree is a pixel, and a
+thousand pixels are not worth a hundred thousand triangles.
+
+Four kinds of vessel, not one: the flat-decked barge that was already here, a
+tug that is mostly wheelhouse with old tyres down its flanks, a container ship
+with its boxes stacked in bays of uneven height and its island right aft, and a
+yacht whose sail is the entire silhouette.
+
+The city sits in something now. Everything past the last road was a flat green
+plane running to the fog — fine at street level, and the first thing you notice
+from the air, where it is half the frame. The ring around the built area is
+laid out as parcels on a coarse grid: hedged fields in eight crop colours with
+tramlines through them, stands of woodland, lakes with reed-fringed banks, and
+rough pasture, with a barn or a farmhouse on one field in five.
+
+Two things make it read as farmland rather than as a chequerboard. The colours
+differ parcel to parcel, because a uniform green is a lawn however large it is.
+And the parcels are inset independently on each of their four sides, with an
+occasional deep bite out of one — a uniform inset leaves every field the same
+size and the ring becomes a visible lattice, which is the one thing farmland
+never looks like. Anything left too small to hedge is dropped to rough ground,
+so the grid has gaps in it as well as variety.
+
+All of it is drawn at the far level of detail. At that range a tree is a few
+pixels, and paying near-detail prices for a thousand of them would cost more
+than the city does.
+
+Stars are round. They were square quads, and at two pixels across a square is
+exactly what the eye reads as a cube. Each one is a fan now, with a solid core
+and a ring falling off around it — and the falloff is *per-vertex colour*, not
+alpha, because the material is opaque: the rim is set to the sky's own colour
+so it fades into the background instead of painting a dark halo round every
+star. The first attempt at this used a single fan from a bright point straight
+to the sky colour, which is a gradient with no star in the middle of it; at
+that size it averaged out to the background and the sky went empty.
+
+Tall roofs get helipads: the deck, the touchdown circle, the H, green edge
+lights after dark, and a windsock. `tall_roofs_get_helipads` checks the
+geometry rather than a camera, because the placement is a chain of conditions —
+top tier, tall enough, roof wide enough — and the top tier is set back, so
+thresholds that read as reasonable can leave nothing qualifying at all. That
+looks identical to a feature nobody wrote.
+
+There is air traffic. Airliners cross high overhead, helicopters orbit at
+working height, and quadcopters buzz about low over the streets — all of them
+riding the same loop machinery as the pigeons, which is what makes them nearly
+free. A plane's loop is simply two kilometres across and *centred so the city
+sits on it*: over three hundred metres of town, that arc reads as a straight
+line, which is what an airliner does, and it costs nothing extra to say so. A
+helicopter is drawn with a rotor disc rather than blades, because from below
+and from any distance the disc is the entire silhouette; two blades over the
+top of it stop it reading as a propeller stopped for a photograph. Port and
+starboard navigation lights are red and green on all three, as they should be.
+
+Delivery trucks join the road fleets, taking them to fourteen: a box on a cab,
+deliberately taller and squarer than the van's, with a roller shutter and a
+folded tail lift at the back and a band of livery down each flank — a delivery
+truck is a moving billboard and that is most of how it reads.
+
+Both axes drive on the same side now. The lane offset was the same expression
+on each — `center - dir * half * 0.44` — and that cannot be right for both,
+because the sign flips between them: `Quaternion::from_axis_angle(UP, yaw)`
+maps a vehicle's local `+X` to `(cos yaw, 0, -sin yaw)`, so travelling `+X` puts
+its right at `-Z` while travelling `+Z` puts it at `+X`. Roads running along Z
+had been driving on the wrong side. Nothing crashed, because each road is
+internally consistent; it shows the moment a vehicle turns from one onto the
+other and swaps sides doing it. (My first attempt flipped the wrong axis —
+worked out from a cross product rather than from the engine's own rotation, and
+the two disagree.)
+
+Fixing it exposed a second stale count. `traffic_does_not_gridlock` measured
+mean speed over `fleets.iter().take(4)` — a leftover from when there were four
+road fleets. With thirteen it was sampling cars, hatchbacks, sports cars and
+taxis, the four fastest, and ignoring the vans, buses and lorries they queue
+behind: a biased sample and a far more volatile one. Exactly the mistake that
+had been sitting in `follow_pass`.
+
+Some plots are building sites. Every city here was finished and perfect, which
+is most of why it read as a model rather than a place — nothing in progress,
+nothing half-done. One plot in twenty gets a hoarding of painted panels with a
+gate in it, a concrete frame going up with the top slab only part poured and
+rebar standing out of the columns, a portacabin, skips, heaps of aggregate, and
+a lattice tower crane with its jib on a random bearing and the hoist block
+hanging somewhere down the rope. The crane is the point: it is visible from
+anywhere in the city, and it is the one piece of a skyline that says the
+skyline is still changing.
+
+There is a night sky. There was none — after dark the Preetham dome goes to a
+flat grey wash and that was the whole of it, brighter than any star drawn in
+front of it. The dome is an analytic *daylight* model; it has no night in it.
+So below the horizon it is retired, and what shows is the background — dark
+navy with the city's own glow mixed in — with fourteen hundred stars on a shell
+inside the camera's far plane, and a moon with a halo. The stars are
+deliberately uneven: a third of them are pulled toward a band across the sky,
+and magnitudes run mostly faint with a few bright, because a uniform scatter of
+identical points reads as noise rather than as a sky.
+
+The moving population is drawn larger than life, and the default camera has
+come in to meet it. Metres are metres everywhere else here and for the
+buildings that is right; for the things that move it was a mistake. Do the
+arithmetic on the aerial view this example shipped with — camera at 1.6 times
+the city's half-width, 36 degrees — and a person is about *two pixels*. Every
+session spent on crowds, skin tones, seated figures, squirrels, leaf litter and
+street furniture was spent below the resolution of the shot the example takes.
+Every city game oversizes its traffic and its crowds, and not from sloppiness.
+People are drawn at 1.45, wildlife at 1.6, vehicles at 1.22 — less, because
+they queue against each other and share lanes, so `Vehicle::length` is scaled
+with them and the following distances stay honest. The camera came in by about
+a quarter, not by half: closer than that and the frame holds four blocks, which
+trades the shape of the city for the detail in it.
+
+The clock means something now. It was a slider with nothing behind it — the
+same traffic at three in the morning as at nine, the same crowds — while the
+machinery had existed for a while, since the animals already keep hours. The
+population out on the streets follows two peaks, an hour or so after sunrise
+and again before sunset, with a long trough overnight: 100% at rush hour, 75%
+at midday, 20% at three in the morning. Pedestrians empty harder than traffic,
+because there is always some traffic and at four in the morning there is nobody
+walking. Who is absent is keyed on each mover's own seed rather than its index,
+so the *same* vehicles are missing from frame to frame instead of flickering.
+
+Finding that number honest took a second fix: the diagnostic that reports how
+many movers are drawn ran *before* the clock was applied, so it printed the
+same count at every hour of the day.
+
+Nothing stands inside anything else. Every object in this city is placed by
+scatter — a tree at a random point in the setback, a bin at a random point in
+the pavement, a bench at a random point on a path — and each of those is
+reasonable on its own while none of them knows about the others. So a lamp
+column grew through a tree, a bin stood inside a bench, and a parked car
+occupied the same two metres as a fire hydrant. At street level that is the
+difference between a city and a pile of props.
+
+There is now a claim. Before anything is drawn it asks for the ground it
+needs, from a uniform grid of buckets holding rectangles, and it is only drawn
+if that ground is free. Buildings take their plots first, so nothing scatters
+into a wall. On a nine-block Manhattan that is 1074 footprints claimed and
+**343 placements refused** — very nearly a quarter of everything scattered had
+been overlapping something. The grid rides on `Batches` for the same reason the
+bench positions do: every placement function already has those in hand, so
+nothing needed a new parameter threaded through a dozen call sites.
+
+Wheels are round. They had been `add_box` — axis-aligned boxes, and not even
+square ones — which is invisible at a hundred metres and the first thing the
+eye finds at ten, because a car is the one object in this city whose shape
+everybody already knows. `add_limb` builds a cylinder between two points, so
+putting the axis across the car costs nothing, and a hub set proud of the
+tyre's outer face is what stops the result reading as a black disc.
+`wheels_are_round` checks the geometry rather than a photograph: a box puts its
+vertices at two heights, a cylinder puts them all the way round.
+
+Thirteen kinds of road vehicle. Beyond the nine already there: an estate with
+the roof carried back to the tail and bars on it, a squared-off 4x4 that sits a
+head taller than everything else, an ambulance in green-and-yellow battenburg,
+and a fire engine with lockers down its flanks and a ladder on the roof. The
+last two carry beacons like the police car — the lamp is selected by a bitmask
+of fleets now rather than a single index, and the mesh carries lenses at two
+heights so one mesh serves a saloon roof and a box body alike.
+
+A fleet costs draws for its animation, not for its paint. `InstancedMesh` now
+carries a per-instance tint alongside its transforms — twenty floats an
+instance instead of sixteen, multiplied into vertex colour in the shader — and
+that is the difference between a palette being free and a palette being a draw
+call each. It had been the latter: `spawn_fleet` built one mesh per (colour,
+pose), so nine vehicle types with their palettes cost thirty-seven draws of
+bodywork on their own, and the pedestrians' three skin tones across two poses
+cost six more. Collapsing all of it took the city from 147 draws to 96 — and
+this example's whole design premise is that draw calls are the budget, so
+watching that number nearly triple over a session and doing nothing was the
+real mistake. `a_fleets_draws_do_not_depend_on_its_palette` pins the
+relationship rather than the number.
+
+Night is five kinds of light, not one, and getting there meant finding a bug
+that had been hiding in plain sight. `apply_sky` set the window emissive
+intensity on `Material::Standard` — and the facades are `Material::Physical`,
+because a curtain wall is glazing under a clearcoat lobe. The match arm never
+fired, so every lit window in the city had been burning at whatever the
+material default happened to be, identically, for the whole of the example's
+life. With both arms handled the old constant of 1.6 blew the entire skyline
+out, which is how you can tell it had never been applied.
+
+Each facade idiom now has its own colour after dark, its own gain, and its own
+warm bias — how far its windows lean toward incandescent. An office floor is
+fluorescent and slightly green-blue with the odd late desk lamp; a brick
+walk-up is table lamps almost all the way down. Nothing else distinguishes
+those buildings at night, because at night the windows are all you can see.
+
+The shopfronts were the other half of it. Ground-floor glazing was a box
+wrapped round the whole plinth, a metre and a half tall, one cream colour on
+every building in the city — and with bloom over it that ribbon was most of
+what a night render was made of. It is a band of individual units now, one
+every few metres, each its own colour and some of them shuttered: a butcher's
+fluorescent white next to a bar's amber next to a dark one.
+
+Cars are parked at the kerb. Static geometry, not instances: a parked car has
+no simulation to do, so it merges into a batch and costs no draw call and no
+per-frame transform. `MeshBuilder::append_at` stamps a copy of a body at a
+position and turns it, repainting only the vertices that are *white* — the
+convention the vehicle bodies already follow, so a red car does not get red
+windows.
+
+They only park where there is room for them. A side street's carriageway is
+about nine metres, a running lane sits 0.44 of the half-width out from the
+centre, and a parked car is 1.8 wide — the two do not both fit, and the first
+pass had cars standing in the traffic lane. Below six metres of half-width
+nothing parks, which in a real city is what the yellow lines are for. Nor do
+they park across a junction or its crossings.
+
+They draw from a random stream of their own, and that is not fussiness.
+Decoration taking from the city's `rng` shifts every later decision — block
+subdivision, building heights, where the traffic starts — so adding parked cars
+silently rearranged the entire city, and one of the cities that came out of the
+reshuffle gridlocked. The gridlock test caught it. Worth recording that the
+fix removed *that* city rather than the fragility: the traffic model still
+decays on some arrangements, and the test is the only thing watching.
+
+Six building masses, not three. A box, an octagonal prism and a round tower
+were the whole vocabulary, and anything on a plot that was not square-ish was
+forced to a plain box however tall it got. There is now a hexagonal prism, a
+square frustum — the obelisk profile — and a cruciform plan, a square core with
+a bay pushed out on each face, which is what a great many pre-war towers
+actually are and which is the one of the six that *wants* a long plot rather
+than being ruled out by one. `every_building_form_gets_used` guards the trap
+the facade styles fell into: a variant added to the end of an enum with no
+branch selecting it is present, compiled and never once built.
+
+Trees carry fruit and drop leaves. The litter is the cheaper half and does far
+more work: a scatter of flat coloured quads under every broadleaf turns a lawn
+with trees on it into a lawn *under* trees. Roughly one in five is in fruit,
+hung round the outside of the crown where the light is and where it would be
+visible, with windfalls beneath. Both only appear on the near level of detail,
+which is where half these trees are anyway.
+
+Flowers are a container, a band of green and a band of colour standing on it —
+which is all one reads as at any distance — and that one shape does window
+boxes under first-floor sills, hanging baskets on the lamp columns, beds
+against a house wall and borders along a path. Houses have front gardens now as
+well as back ones: a dwarf wall along the pavement with a gap for the gate, a
+planted bed against the house and a clipped shrub or two, because a path to the
+door and nothing else is a verge rather than a garden.
+
+Three more insects. Dragonflies dart over the ponds and the river — a fast rate
+on a very bent path, which is what separates one from a butterfly at the same
+size — and hold their wings out flat at rest, which nothing else here does and
+which is the entire recognition cue at that scale. Flies hang over the refuse
+in knots, going nowhere, which is the point of them rather than any individual.
+Butterflies were already there.
+
+There is a railway, and it is the one piece of infrastructure here that
+ignores the street grid — which is the point of it, since everything else in
+this city is at ground level and parallel to something. A viaduct on arched
+piers runs the full width above a street, with a station on the deck, and
+tunnel portals in embankments at both ends. Where it crosses the river it takes
+one clear span on a Warren truss: a pier in a navigable channel is wrong on its
+own terms and, here, something for a barge to sail through.
+
+The train is an ordinary mover on a lane of its own at deck height, and gets
+that for free — the lane machinery already handles a long vehicle on a bounded
+run, and a train is nothing but a very long vehicle that never turns. Its wrap
+point sits *inside a tunnel*, so the one place the simulation teleports is the
+one place nobody can see. It carries no lane id, which is what keeps it out of
+the road queueing pass; without that it would brake for a bus passing
+underneath it. Down at street level there are entrances to whatever runs below
+— a stair, railings, and a roundel on a post, which is the one part of a metro
+anybody recognises from across a street.
+
+Boats work the reach between two bridges. A barge stands two and a half metres
+out of the water and a bridge deck sits at kerb height a metre above it, so
+nothing on this river can clear anything — and the boats had been sailing
+straight through every crossing in the city. Rather than raise the roads, they
+are now given a stretch of river between two bridges to work, which is what
+craft that cannot pass under a low bridge actually do.
+
+Five facade idioms, not three. Three was enough to tell a tower from a walk-up
+and not enough to tell one tower from another: every building over thirteen
+storeys had the same window in it. The new pair are ribbon glazing — horizontal
+bands of window in deep spandrels, the only idiom here whose windows are wider
+than they are tall — and a dark bronze curtain wall, which is what the eighties
+put up next to the blue-green glass of the sixties.
+
+Traffic is nine kinds, not four: car, hatchback, sports, taxi, pickup, van,
+bus, lorry and a marked police car, weighted the way real traffic is — mostly
+ordinary cars, a fifth commercial, the rarities rare. The paint list is
+weighted too, white and silver and grey and black with a few strong colours in
+it, because spreading evenly across a palette makes a street look like a bag of
+sweets.
+
+Lamps read the simulation rather than being decoration. Brake lights come on
+when the traffic pass has pulled a vehicle below walking pace — queueing at a
+red, or behind a bus — and indicators blink only while a corner is actually in
+progress, both from state that already existed. The police car's light bar
+alternates blue and red rather than blinking one colour, which is its whole
+visual signature and the only thing in the city that does it. Brakes,
+indicators and beacons stay lit in daylight; head and tail lamps and the beam
+on the road do not.
+
+Two things were wrong before that. Lamps were placed by cloning the car fleet
+through `write_instances`, which put every lamp on every car unconditionally
+and on *nothing else at all* — vans, buses and lorries drove around at night
+with no lights on them. And a lamp mesh laid out for a four-metre car cannot
+serve an eleven-metre bus, so the instance transform now stretches it along Z
+by the vehicle's own length: one mesh, lights on the ends of whatever it is
+attached to.
+
+Houses vary. Two storeys was the whole of "house", and a pitched lid went on
+everything; now it is one to three storeys under one of five roofs — hipped,
+mansard with dormers in it, cross-gable, flat with a parapet, or plain gable —
+because the shape of the roof is most of what tells one house from the next at
+any distance. On the front: a porch on posts, sometimes a bay window, and an
+attached garage with a door and a drive out to the kerb. Behind: a garden,
+fenced with boards rather than a panel — a solid box reads as a wall and every
+garden in the city would be a compound — with a patio against the house and one
+of a shed, a washing line, a trampoline, a paddling pool, vegetable beds or a
+tree and a table. Everything behind the houses used to be bare pavement, which
+is the one part of a suburb nobody builds and everybody notices.
+
+Refuse waits for collection against the walls, and there are rats on it after
+dark. Both are small; the rat is the only animal here defined by what it is
+*not* — a squirrel with the tail taken off it, long and bare and dragging, and
+the whole animal dropped closer to the ground.
+
+The lights glow, and fixing that meant fixing the crate. `bloom.rs`, `ssao.rs`
+and a whole `EffectComposer` pass stack have always been there, and *no example
+in the repository used any of it* — which turned out to be because the path did
+not work. Bloom builds an sRGB view of its source to get the decode for free,
+and the resolve target declared no view formats at all, so bloom panicked at
+view creation on any target that was not already sRGB — that is, the default
+one, and the one this example uses. And screen-space occlusion was handed the
+renderer's own depth buffer when the non-MSAA path had written the *target's*,
+so it read an untouched buffer and produced a uniformly white factor, which
+looks exactly like "SSAO is on and subtle". Both are fixed.
+
+Bloom is on by default now and it is what makes neon and a lamp lens read as
+emitting rather than as bright paint. Its threshold follows the clock: a sign
+at midnight should bleed, sunlit glass at noon should not, and one threshold
+low enough for the first puts a haze round every tower in the second. Occlusion
+is still off by default — with both bugs fixed it resolves to a constant
+whatever radius it is given, so something further down is still wrong, and
+shipping a flag that does nothing would be worse than saying so. `--ssao 1.0`
+turns it on for anyone chasing it.
+
+Some people are not going anywhere. Every bench, step and kerb in the city used
+to be empty and every pedestrian was walking somewhere at a constant speed,
+which reads less as a city than as a treadmill. Benches now record where they
+are — `add_bench` already had the batches in hand, so they collect into
+`Batches::seats` rather than being threaded back through a dozen call sites —
+and a seated population is placed on them, with more standing about on the
+plazas. None of it is simulated: placed once, never touched again, one
+instanced mesh per variant. A seated figure is not a walker with the animation
+paused; the weight is on the seat, the arms go somewhere, and a standing one
+rests on one leg, because a figure with both feet square reads as a mannequin.
+
+The city has wildlife, and it keeps hours. Two populations that barely overlap:
+pigeons, squirrels, butterflies and off-lead dogs work daylight; foxes and bats
+work the dark, and `Shift` decides which are awake on the same clock as the
+street lamps. Drawing both at once is the single most obvious way to make a
+night render look wrong, and swapping them is nearly free — the swarms are
+already separate objects. Alongside them: flocks of birds circling, gulls
+following the water, ducks and swans on the ponds, and about one pedestrian in
+eleven walking a dog on a lead.
+
+Each animal is built around whatever identifies it. A squirrel is its tail —
+drawn as a tapered rod it is a rat, and only the plume arcing over the back
+makes it a squirrel. A fox is the ears and the brush, on a dog's frame pulled
+long and low. A bat is two membranes and almost no body, and it flies like
+nothing else here: a bat that cruises is a bird, so it gets a fast rate and a
+path that barely resembles a circle. Animals are not lane-bound the way
+vehicles and pedestrians are — a `Mover` is a scalar on a one-dimensional run,
+which is exactly what makes queueing and give-way tractable and exactly wrong
+for a pigeon. Each animal instead walks a closed loop of its own: a circle bent
+by two harmonics keyed on its seed, so position and heading are a pure function
+of the clock. There is nothing to integrate, no neighbour queries and no state,
+which is why several hundred of them cost one transform write each per frame.
+The dogs are the exception and get it free: each one is a copy of a
+pedestrian's mover pushed to one side of the pavement and set back a stride, so
+it walks its owner's route at its owner's pace.
+
+Light propagates, by raycasting. The rasteriser answers "is this lit by the
+sun?" with a shadow map and "how much ambient reaches it?" with a constant —
+and the second answer is the expensive one to be wrong about, because it means
+the inside of a courtyard, the pavement under an awning and the middle of an
+open plaza all get the same fill. So the real answer is computed once, offline,
+with rays: for every vertex of the static city, integrate incoming radiance
+over the hemisphere about its normal, rays that escape collecting sky and rays
+that hit collecting what that surface re-emits — its own albedo times its own
+sky access. That is one bounce of global illumination, and it is where the
+colour comes from: a wall opposite a brick facade picks up the brick. Build
+with `--features mesh-bvh` to get it; without, the city ships with flat ambient
+as before.
+
+Three things had to be true for that to work. Ground is built as one quad per
+block, and four corners can only carry a bilinear ramp, so receivers are
+subdivided to a three-metre edge first — cheap in a renderer that pays per draw
+rather than per triangle. Rays are seeded from the vertex *position* rather than
+a counter, so the duplicated vertices subdivision creates bake identically and
+shared edges have no seam. And the result is normalised against the same rays
+cast with nothing in the way, per vertex: normalise against a fixed up-facing
+reference instead and an unoccluded vertical wall scores 0.55 for no reason but
+its orientation, which darkens every facade in the city by half and looks
+plausible while doing it.
+
+The result folds into vertex colour, which the shader already multiplies into
+base colour. That is the standard compromise and worth naming: it darkens
+direct sun as well as ambient, so a sunlit courtyard wall comes out slightly
+too dark. Against that, a courtyard that reads as a courtyard.
+
+Baking a city took 97 seconds and now takes 6, which is two bugs in the crate's
+own raycaster rather than anything clever. `MeshBvh` gave up whenever a split
+plane failed to separate anything and collapsed the whole subtree into one leaf
+— and a leaf is scanned linearly. That is not a rare case: a handful of
+triangles far larger than the rest, which is to say a ground plane, drags the
+root bounds out until every candidate that separates the real geometry falls
+into one or two SAH bins. One degenerate split at the root cost every later
+query the entire scene, measured at 6k rays per second per core. It falls back
+to a median split now, behind `BuildOptions::split_degenerate`. Separately,
+first-hit traversal ignored the distance it was given and always opened the left
+child first; it culls by the best hit so far and descends into the nearer child
+now. Together: 6k rays/s/core to 900k.
+`cargo test --features mesh-bvh --test mesh_bvh_raycast` pins both, against
+brute force for correctness and against a throughput floor for the collapse.
+
+The fallback is **off by default**, which is worth explaining because it looks
+like leaving a fix on the table. Two things downstream read the *shape* of the
+tree rather than merely querying it: `bvhcast` enumerates leaf-against-leaf
+pairs, and the CSG evaluator marks any *coplanar* pair it is handed as
+intersecting whether or not the two triangles are anywhere near each other. So
+a tighter tree hands the evaluator a smaller candidate set and the boolean comes
+out different — on the parity meshes, 3816 pairs instead of 6240 and a window
+frame of 751 vertices instead of 4074. Neither enumeration is wrong; the tighter
+one was checked against brute force and misses no genuinely overlapping pair.
+But the result of a boolean should not depend on how its accelerator was built,
+and until the evaluator decides coplanarity from the geometry instead, the
+default reproduces three-mesh-bvh's enumeration and the flag is for query trees —
+raycast, closest-point — where nothing reads the shape.
+
+Sunrise and sunset work now. `day` used to reach 1 at eleven degrees of
+elevation, which this sun clears three percent of the way into the day, so the
+golden hour was over before it began and `--time 0.05` already looked like
+noon. Sun intensity went to zero exactly at the horizon rather than dimming and
+reddening through the airmass. And the shadow camera is a box sized to the
+city, which is right at noon and useless at dawn — a ninety-metre tower at ten
+degrees throws its shadow half a kilometre, and ground that far out was not in
+the map, so the one time of day shadows matter most had none at all. The box
+grows as the sun drops. The dome's Mie coefficient was left at the library
+default and clipped to flat white over a sixth of the sky at noon; raising it
+fixes that, and the direction is worth recording because it is the opposite of
+the intuitive one — more Mie means more extinction along the view ray, so the
+sky gets darker, not brighter. Swept: 0.005 gave 10.0%/16.4% of the sky clipped
+at sunrise/noon, 0.030 gives 3.0%/0.0%.
+
+The ground plate also had to grow. It ran to 4.6 half-widths against a fog that
+reached full strength at 5.2, so the terrain stopped *before* the haze had
+finished swallowing it and left a hard band along the skyline at every hour.
+Everything past the fog is fog-coloured, so a larger plate costs eight quads.
+
+Streets are lit and sold to. Each lamp is a column, a swept arm and a shielded
+luminaire, in sodium or LED chosen per road rather than per lamp — a real city
+is part way through swapping one for the other and the mixture is visible from
+any bridge. Under each is a translucent cone from the lens to the road, which
+is the cheapest thing that makes a night street read as lit rather than as
+tarmac with bright decals painted on it. Above them: fascia signs with neon on
+them, blades projecting over the pavement, backlit panels on blank flanks and
+hoardings on the roofs of low blocks. Each is built twice — structure in the
+lit batch so it is a grey board by day, face in an unlit night-only batch so
+the same artwork is backlit after dark — and about one in four blinks on the
+traffic signals' own clock. The artwork is not text: a legible word needs a
+texture and this is one draw shared by every sign in the city. What reads at
+fifty metres is layout — a field, a bold band, a mark, a line of blocks
+standing in for a strapline — which is all you get from a real poster at that
+distance too.
+
+Traffic turns, and it turns through a corner. A vehicle that reaches a junction
+takes the crossing road about one time in five, adopting that road's lane,
+bounds and signalling, with the choice coming from its own PRNG state so the
+simulation stays deterministic without a shared generator. The *simulation*
+switches lane instantly — that is what keeps the queueing one-dimensional — but
+the drawn pose sweeps a quadratic Bezier through the corner, committed a corner
+radius before the junction so there is road left to sweep through. The two legs
+of that curve are laid out equal, which is the only way its tangents leave
+along the old lane and arrive along the new one; unequal legs put a
+sixty-degree kink back at the entry. A vehicle will not turn into a road it is
+already at the end of, because driving off the end mid-corner aborts the arc
+and snaps the heading by a full ninety degrees — which is what the whole change
+was there to stop. That is also why lane grouping
+is rebuilt every frame rather than precomputed: a vehicle that turns leaves its
+lane, and a stale index would have it queueing behind traffic on a road it is
+no longer on. One sort a frame gives both the grouping and the order within
+each lane.
+
+Traffic obeys the signals and gives way. Each vehicle holds station behind
+whatever is in front of it — lanes span the car, van, bus and lorry fleets, so
+a car queues behind a bus — stops at a red light, and yields at an unsignalled
+crossroads to anything already crossing it. Pedestrians run the same pass with
+their own constants, one lane per pavement per direction, so a crowd bunches
+instead of walking through itself.
+
+Only *moving* vehicles occupy a junction, which is not a detail: marking
+stationary ones deadlocks the network within a minute — a car queued at a red
+with its tail in the junction behind it blocks that cross street permanently,
+that street backs up into its own junction, and it spreads. Measured, it took
+234 vehicles from a mean 8.4 m/s to 2.8 and still falling; with the fix it
+settles at 5.0–5.8 and holds. The whole pass is one sort per lane per frame and
+allocates nothing.
+
+The four street lamps nearest the camera get real spot lights, and the first of
+them casts a shadow — the renderer allows exactly one spot caster. Nearest-first
+rather than a fixed set: the ones that matter are the ones you are standing
+among, and which those are changes as the camera moves. The unlit glow discs
+still fake every other lamp in the city, pulled down to 62% since where both
+apply they were doubling up.
+
+The open water is moved by a WGSL compute shader that rewrites the mesh's
+vertex buffer in place, position and normal, between frames: the surface never
+crosses host memory. That uses the crate's two opt-in hooks for exactly this,
+`BufferGeometry::gpu_writable` and `Renderer::vertex_buffer`, and raw wgpu for
+the pipeline and the dispatch. `simcity_metal` draws the same `Scene` through
+the Metal backend instead (`--features metal`) — no wgpu at all, which makes
+it a standing cross-backend check; the water is flat there, since the pass
+that moves it is WGSL.
+
+Level of detail is done the way a draw-call-bound renderer wants it. Swapping
+a simpler mesh in per level would *add* a draw call per level per colour,
+which is backwards here — so the far level is a single shared impostor mesh
+carrying every distant instance whatever its colour, one draw for the whole
+population. Everything nearer than the fleet's LOD distance gets the full
+model, which can then be far better than it could otherwise afford: cars with
+mirrors and wheels, and people built on a table of adult proportions —
+ankle, knee, hip, waist, shoulder, chin — out of tapered limbs with elliptical
+cross-sections, swinging between two pose meshes once per 0.8 m walked. A
+torso is about twice as wide as it is deep; drawn round it reads as a length
+of pipe, and drawn with end caps its shoulders read as flat wings, so the
+chest is open-ended with a deltoid rounding each joint. `MeshBuilder::add_cylinder` only stands
+things up the Y axis, which is exactly why the first version of the figure was
+nine boxes: a limb that swings cannot be axis-aligned. `add_limb` (a tapered
+cylinder between two arbitrary points) is the primitive that fixed it, and it
+does tree branches too. Skin, hair, hands and shoes are *separate* meshes, because an instanced mesh's
+material colour multiplies every vertex — folding them into the clothes would
+give each wearer a face the colour of their jacket. And one skin mesh for the
+whole city would give everyone the same face, so the population is split across
+three tones: six skin meshes, two poses by three tones, four extra draws. Hair
+sits in the same mesh as a vertex-colour multiple of the tone, so it darkens
+with it. Each mesh's transform list is *rebuilt* every frame with only the instances it
+is actually drawing, packed to the front. A zero-scale matrix rasterises
+nothing but is still uploaded and still runs the vertex shader over the whole
+model — with two walk poses and a separate skin mesh that is four wasted copies
+of every pedestrian in the city. Packing is what turns the LOD cut into a real
+saving: on the twelve-block boulevard the default view draws 63 of 736 movers
+at full detail rather than paying for all of them. The window title reports the
+split live, and the stats line separates static triangles from the mover
+ceiling, since what the movers cost depends on where the camera is standing.
+
+The sky is the crate's Preetham model (`SkyMaterial`) on a dome, which has its
+own pipeline — no cull, no depth write, pinned at the far plane — so it costs
+one draw and needs neither fog nor tone mapping. Its published defaults clip to
+white here, because that shader expects an exposure of about 0.5 and ACES after
+it and this one writes straight to the framebuffer; the turbidity and rayleigh
+used are the values that still read as sky. The haze colour was then *measured*
+off the rendered dome rather than guessed — the Preetham horizon is a
+desaturated grey-teal, much darker and far less blue than you would pick by
+eye, and fading the terrain to the wrong one puts a bright band along the
+skyline. Stars were tried on the same shell and cut: `Points` go through the fog like
+any other geometry, and at a radius that clears the city they fade to exactly
+the sky behind them.
+
+Massing is three forms — rectangular, chamfered and round, the last two as
+prisms inscribed in square-ish plots — with stepped deco crowns on the boxes
+and tapered ones on the prisms, because a flat parapet at 90 m reads as an
+unfinished box. One building a city is a landmark, well above the rest: a
+purely statistical height distribution gives a plateau, not a skyline.
+
+Trees are built around their branches rather than as a blob on a stick. The
+trunk forks into three to five primaries, each with an elbow, and each carries
+its own foliage cluster — so the outline is several lumps at different heights
+with visible structure underneath, which is the difference between a tree and a
+lollipop. Reach and cluster size are tuned against each other: too much reach
+and the crown reads as a bunch of grapes, too little and it merges back into
+one mass. Six species — spreading broadleaf; tiered conifer, whose notches between whorls
+are its whole silhouette; columnar poplar; weeping, with the clusters hung
+*below* the branch tips rather than sitting on them; bare, which is the
+armature with twigs and nothing on it; and palm, a leaning stem with fronds
+made from flattened tapered limbs, admitted only by the waterfront layout,
+because one palm among the conifers of a temperate grid reads as a mistake.
+Leaves are usually green, with a few per cent blossom and a slice turning
+amber through rust — which is what stops an avenue of them reading as one
+repeated asset. Crowns have their radius jittered per vertex. A perfectly smooth
+ovoid never reads as foliage however it is coloured; the silhouette is what
+gives it away. The jitter is hashed on `(ring, sector)` rather than on
+position, so the duplicated seam vertices agree and the poles, where every
+sector collapses to one point, stay closed. It costs no extra vertices, so it
+stays on at the far level of detail, where the outline is the only part still
+legible.
+
+At street level there is a clutter layer — bins, bollards, hydrants, benches,
+post boxes, cabinets, planters and cones on the pavement; skips, pallets and
+crates in the yards behind; litter in the gutters and stains under the skips.
+Without it a pavement is a grey ribbon, and no amount of work on the towers
+fixes that. Standing water sits in the gutters as low-roughness patches, which
+is the cheapest reflection a city has: it picks up the sky by day and the lamps
+at night through the same environment map the glass uses.
+
+Materials that have a second lobe get one. A curtain wall is glazing set in a
+frame and car paint is a coloured base under lacquer — both are clearcoat, and
+a single-lobe BRDF cannot make that sharper specular over the base at all. So
+facades, car paint and water are `PhysicalMaterial` with a clearcoat weight
+(a lot on glass, almost none on brick), and foliage carries sheen, since leaves
+go pale and bright at grazing angles in a way plain diffuse cannot.
+
+Facades carry three maps off one tile at 32 px a window cell: albedo with
+mullions, transoms and course lines, blinds drawn to a different height in
+about half the windows, and weather staining that runs *down* from each sill
+and stops between them, the way it does on a real wall; the lit-window mask,
+where a lit room behind a blind glows dimly rather than showing a bright pane;
+and a roughness map, which is what separates the glass from the wall it is set
+in and from the fabric hanging behind it. The ground batches
+take a world-space UV override so one 128×128 asphalt or paving tile covers six
+metres wherever it lands — per-quad UVs would put a 40 m road cell and a 3 m
+paint stripe at the same scale.
+
+Lighting is a day cycle with a prefiltered sky environment rebuilt as the sun
+moves: shadows swing, glass reflects the sky it is actually standing under,
+and at dusk the windows, the shopfronts, the street lamps and every car's
+headlamps come on — the windows from an emissive mask that shares the facade's
+UVs exactly, the headlamps throwing a pool on the tarmac ahead.
+`simcity_render` is the same city headless —
+`--view aerial|skyline|close|street`, `--strip` for four times of day in one
+sheet, `--sheet` for all five layouts. With `native-codec` on it will also
+write the whole cycle as an animation in one process — `--anim simcity.webm`
+renders 96 orbiting frames and encodes them with the crate's own VP9, one
+frame at a time, no ffmpeg anywhere.
 
 `ocean_water` is a **GPU FFT ocean**: a JONSWAP spectrum on a full lattice,
 inverse-transformed each frame into three tiling cascades (swell / waves /
@@ -188,8 +938,30 @@ cargo run --example bvh_csg_hierarchy --features bvh-csg
 cargo run --example bvh_csg_steps --features bvh-csg -- 2 --live
 ```
 
+A BVH built for *querying* — raycast, closest-point — wants
+`split_degenerate`, which keeps a split plane that separates nothing from
+collapsing the whole subtree into a linear scan. It is off by default because
+`bvhcast` and the CSG evaluator read the tree's shape rather than merely
+querying it; see [Native (desktop)](#native-desktop), where baking the
+procedural city is what turned this up, for why that matters.
+
 ```rust
-// Cargo.toml: threers = { version = "0.0.4", features = ["bvh-csg"] }
+// Cargo.toml: threers = { version = "0.0.5", features = ["mesh-bvh"] }
+use threers::mesh_bvh::{BuildOptions, MeshBvh, SAH};
+
+let bvh = MeshBvh::build(
+    &geometry,
+    BuildOptions {
+        strategy: SAH,
+        split_degenerate: true,   // a query tree: nothing reads its shape
+        ..Default::default()
+    },
+)
+.expect("geometry has positions");
+```
+
+```rust
+// Cargo.toml: threers = { version = "0.0.5", features = ["bvh-csg"] }
 use threers::{CsgBrush, CsgEvaluator, BoxGeometry, SUBTRACTION};
 
 let mut ev = CsgEvaluator::new();
@@ -212,7 +984,7 @@ cargo run --example scad2stl --features openscad -- model.scad out.glb
 ```
 
 ```rust
-// Cargo.toml: threers = { version = "0.0.4", features = ["openscad"] }
+// Cargo.toml: threers = { version = "0.0.5", features = ["openscad"] }
 use threers::{cube, cylinder, sphere, scad, parse_scad};
 
 // (a) Rust DSL — fluent builder + the `scad!` macro:
@@ -266,12 +1038,12 @@ Browser: `web/examples/kirigami.html` (needs a wasm build with `web/build.sh`).
 
 ### Lattice infill
 
-29 periodic lattices, all unconditional — no feature flag and no extra
-dependencies.
+35 lattices, all unconditional — no feature flag and no extra dependencies.
 
 ```bash
 cargo run --release --example lattice   # every generator at 25 % density → out/lattice.png
 cargo run --release --example cuboct    # cuboct voxels (Jenett 2020) → out/cuboct.png
+cargo run --release --example lattice_engineering   # foams, conforming, metrics, stiffness
 ```
 
 ```rust
@@ -451,9 +1223,348 @@ assert!(lattice.wall_samples() >= 2.5);
 ```
 
 Sampling parallelises with the crate's `parallel` feature — the gallery example
-builds 1.6× faster with it on (2.0 s → 1.3 s for all 25 tiles, 10 cores).
+builds 3.0× faster with it on (2.3 s → 0.76 s for all 37 tiles, 10 cores).
 Results are byte-identical either way: every sample has a fixed address in the
 grid, so a build flag cannot change the geometry.
+
+#### Foams
+
+A beam lattice is stiff along its struts and soft between them, and however the
+part is loaded some of those directions are wasted. `Stochastic` is the other
+answer: a seeded random field with no special direction, which is what a real
+foam, a bone and every energy-absorbing pad is.
+
+```rust
+use threers::{Lattice, LatticeKind, Stochastic, Vector3};
+
+// Open-cell foam: struts on the edges of a Voronoi diagram.
+let foam = Lattice::new(LatticeKind::Stochastic(Stochastic::Voronoi))
+    .size(Vector3::new(20.0, 20.0, 20.0))
+    .cells([5, 5, 5])
+    .seed(7)          // any two seeds are two foams of the same statistics
+    .jitter(1.0)      // 0 puts every seed on a grid — the ordered end of the family
+    .fit_relative_density(0.2)
+    .build();
+
+// Spinodal decomposition — what a quenched alloy freezes into. Isotropic,
+// or in one of three anisotropic classes (Kumar et al. 2020).
+let spinodal = Lattice::new(LatticeKind::Stochastic(Stochastic::SpinodalLamellar))
+    .size(Vector3::new(20.0, 20.0, 20.0))
+    .cells([4, 4, 4])
+    .fit_relative_density(0.3)
+    .build();
+```
+
+| Cell | |
+|------|--|
+| `Voronoi` | struts on the Voronoi edges — open cell, every void connects |
+| `VoronoiWall` | the Voronoi faces as walls — closed cell, sealed bubbles |
+| `Spinodal` | isotropic Gaussian random field |
+| `SpinodalLamellar` | plates stacked across z |
+| `SpinodalColumnar` | columns along z |
+| `SpinodalCubic` | cubic symmetry |
+
+Nothing here stores a point set or an RNG: seeds are a hash of their cell index
+and wave directions a hash of their own, so the field is a pure function of the
+point and the seed. The same lattice samples the same at any resolution, on any
+thread, in any process.
+
+#### Conforming, not trimming
+
+`fill` cuts the lattice where the part ends. On a flat box that is right; on a
+curved shell it leaves severed struts at the surface and whatever fraction of a
+cell happened to fit. `conform` maps the point into cell space first.
+
+```rust
+use threers::{Conform, Lattice, LatticeKind, Region, Strut, Vector3};
+
+let radius = 20.0;
+let axis = Vector3::new(0.0, 0.0, 1.0);
+
+// Sixteen cells around a nozzle, three through its wall, and the tiling
+// closes on itself — `ring_pitch` is the cell size that makes it.
+let nozzle = Lattice::new(LatticeKind::Strut(Strut::Cubic))
+    .fill(
+        Region::cylinder(Vector3::new(0.0, 0.0, -15.0), Vector3::new(0.0, 0.0, 15.0), radius)
+            .difference(Region::cylinder(
+                Vector3::new(0.0, 0.0, -16.0), Vector3::new(0.0, 0.0, 16.0), radius - 6.0)),
+    )
+    .conform(Conform::cylindrical(Vector3::ZERO, axis, radius))
+    .cell_size(Vector3::new(Conform::ring_pitch(radius, 16), 5.0, 2.0))
+    .thickness(0.8)
+    .build();
+```
+
+| Map | |
+|-----|--|
+| `cylindrical(origin, axis, radius)` | x is arc length, y axial, z radial — a nozzle, a pipe, an isogrid |
+| `spherical(centre, radius)` | two arc lengths and a radius — a helmet liner, a cup |
+| `depth(region)` | z becomes depth below a surface — whole layers through a wall that curves |
+| `new(map)` / `with_stretch(map, stretch)` | your own |
+
+`thickness` is a length in *cell* space, and a map that is not an isometry does
+not preserve lengths — so every map reports its stretch and the thickness is
+divided by it. That makes the wall exact wherever the map is an isometry (at
+the reference radius) and leaves the error elsewhere as the spread between the
+map's principal stretches rather than their magnitude. `Conform::stretch_at`
+exposes it if you want to cancel the rest with a `grade`.
+
+#### Grading on something real
+
+`grade` takes a closure, which is not the shape a solver result, a CT scan or a
+sensor sweep arrives in. `Field` is the adapter.
+
+```rust
+use threers::{Cuboct, CuboctFrame, Lattice, LatticeKind, Vector3};
+
+// Solve a block of the lattice, then grade the lattice on what it said.
+let frame = CuboctFrame::new([4, 4, 4], Cuboct::Rigid, 10.0, 0.15);
+let stress = frame.stress_field(0.01, [12, 12, 12]).map(f32::abs);
+
+let part = Lattice::new(LatticeKind::Cuboct(Cuboct::Rigid))
+    .size(Vector3::new(40.0, 40.0, 40.0))
+    .cells([4, 4, 4])
+    .thickness(0.8)
+    .grade(stress.into_grade(0.6, 1.6))   // thin where nothing is happening
+    .build();
+```
+
+Build a `Field` from `grid`, `from_fn`, `scattered` (any bag of points with
+values — solver output, sensor readings, a point cloud) or `from_mesh` (a value
+per vertex). `map`, `normalized`, `clamped` and `smoothed` shape it;
+`into_grade(at_min, at_max)` reads its range once and maps it onto two
+thickness multipliers, so the units it happened to be in stop mattering.
+
+#### Measuring what came out
+
+```rust
+use threers::{Lattice, LatticeKind, Tpms, Vector3};
+
+let m = Lattice::new(LatticeKind::Tpms(Tpms::Gyroid))
+    .size(Vector3::new(20.0, 20.0, 20.0))
+    .cells([4, 4, 4])
+    .fit_relative_density(0.2)
+    .metrics();
+
+println!(
+    "{:.0} % open, pores {:.2} mm, {:.2} mm²/mm³ of surface",
+    m.porosity * 100.0, m.pore_diameter, m.surface_area_to_volume,
+);
+```
+
+| Reading | |
+|---------|--|
+| `relative_density`, `porosity` | material and void fractions of the part |
+| `open_porosity`, `closed_porosity` | void that reaches the outside, and void that does not |
+| `percolates` | whether a connected path crosses the part, per axis |
+| `largest_void_fraction` | the biggest connected void as a share of all of it |
+| `surface_area`, `wetted_area` | every triangle; and only the internal ones |
+| `specific_surface_area`, `surface_area_to_volume` | internal area per unit of part, and per unit of material |
+| `pore_diameter` | largest sphere that fits in the void |
+| `ligament_thickness` | largest sphere that fits in the material |
+| `hydraulic_diameter` | 4 · void / wetted area |
+| `permeability` | Kozeny–Carman estimate |
+| `sample_spacing`, `wall_samples` | what it was measured at, and whether that was enough |
+
+**Porous, connected and flowing are three different questions**, and they come
+apart badly. The void is flood-filled and asked all three separately, because a
+closed-cell foam is 80 % porous, mostly sealed and carries no flow at all; a
+part with a `skin` on it is full of connected void that nothing can reach; and
+a sheet TPMS is one wall between *two* separate labyrinths, which is exactly
+why you would put one in a heat exchanger and would look like a defect to
+anything that only counted holes.
+
+```rust
+use threers::{Lattice, LatticeKind, Stochastic, Tpms, Vector3};
+
+let build = |kind| {
+    Lattice::new(kind)
+        .size(Vector3::new(24.0, 24.0, 24.0))
+        .cells([4, 4, 4])
+        .seed(5)
+        .fit_relative_density(0.2)
+        .metrics()
+};
+
+let closed = build(LatticeKind::Stochastic(Stochastic::VoronoiWall));
+assert!(closed.porosity > 0.75);              // four fifths hole
+assert!(closed.largest_void_fraction < 0.1);  // every bubble its own
+assert!(!closed.percolates[0]);               // and nothing crosses it
+
+let sheet = build(LatticeKind::Tpms(Tpms::Gyroid));
+assert!((sheet.largest_void_fraction - 0.5).abs() < 0.1);   // two labyrinths
+assert!(sheet.percolates.iter().all(|&p| p));               // both open
+```
+
+`metrics()` samples fine enough to see the wall before it measures anything —
+a grid coarser than the wall reads a lattice at half its density with pores the
+size of the cell, and `wall_samples` on the result says whether it managed.
+Areas come off the real triangles, so a grade and a skin are in the number;
+`wetted_area` drops the triangles lying in the part's own boundary, which is
+the number a heat exchanger is sized on rather than `surface_area`.
+
+#### As a material, not a geometry
+
+`homogenize` voxelises one periodic cell, solves six unit macroscopic strains
+on it with periodic boundaries, and reads the effective stiffness off the
+strain energy — the standard energy method, and the number to hand a solver
+that is modelling the lattice as a solid.
+
+```rust
+use threers::{Lattice, LatticeKind, SolidMaterial, Strut, Vector3};
+
+// Aluminium, 70 GPa.
+let c = Lattice::new(LatticeKind::Strut(Strut::Octet))
+    .size(Vector3::new(10.0, 10.0, 10.0))
+    .cells([1, 1, 1])
+    .fit_relative_density(0.3)
+    .homogenize_with(20, SolidMaterial { modulus: 70_000.0, poisson: 0.33 });
+
+let e = c.youngs_moduli();                             // E along x, y, z
+let g = c.shear_moduli();                              // G about yz, xz, xy
+let nu = c.poisson_ratios();                           // negative if auxetic
+let diagonal = c.directional_modulus(Vector3::new(1.0, 1.0, 1.0));
+println!("E {:.0} MPa, G {:.0}, ν {:.2}, on the diagonal {:.0}, anisotropy {:.2}",
+    e[2], g[0], nu[2], diagonal, c.anisotropy());
+```
+
+`c.c` is the full 6×6 Voigt stiffness, `c.compliance()` its inverse, if what
+you have to fill in is an orthotropic material card.
+
+Conduction is the same solve with one unknown a node instead of three, so it
+comes out of the same machinery — and because heat, electricity, diffusion and
+permittivity are all the same equation, it is the same number for all of them:
+
+```rust
+use threers::{Lattice, LatticeKind, Tpms, Vector3};
+
+let k = Lattice::new(LatticeKind::Tpms(Tpms::Gyroid))
+    .size(Vector3::new(10.0, 10.0, 10.0))
+    .cells([1, 1, 1])
+    .fit_relative_density(0.3)
+    .conductivity_with(16, 237.0);   // aluminium, W/m·K
+
+k.axes();                  // along x, y, z
+k.principal();             // the eigenvalues, which do not care about orientation
+k.anisotropy();            // best direction over worst
+k.tortuosity_factor(237.0);   // 0.71 — share of the material on the path
+```
+
+That last one is the number worth having. A gyroid sheet gets 0.71 of its
+material onto every path; simple cubic manages 0.55, because two of its three
+bar families sit across the gradient rather than along it. A lamellar spinodoid
+reaches 0.92 in the plane of its plates and conducts essentially nothing across
+them.
+
+The two solves converge very differently, and it matters:
+
+| | 12³ → 44³ | what to do |
+|---|---|---|
+| Stiffness | falls about a fifth, still falling | compare cells at one resolution; quote only from a grid you have watched converge |
+| Conductivity | falls about 2 % | converged by 12³ for most purposes |
+
+Elasticity is the sensitive one because a thin member's bending stiffness
+depends on the exact shape of its surface and a staircase is not it. Conduction
+only asks how much material lies along the path.
+
+#### When it gives way
+
+Stiffness says how far a lattice moves; strength says how much it takes before
+something stops coming back. The mechanism is the same one that makes a lattice
+weaker than its density suggests — the load does not spread evenly, and the
+worst-loaded ligament reaches yield long before the average one. `strength`
+puts a number on that unevenness and solves the stiffness on the way, so it is
+one set of solves and not two.
+
+```rust
+use threers::{Lattice, LatticeKind, SolidMaterial, Strut, Vector3};
+
+let s = Lattice::new(LatticeKind::Strut(Strut::Octet))
+    .size(Vector3::new(10.0, 10.0, 10.0))
+    .cells([1, 1, 1])
+    .fit_relative_density(0.3)
+    .strength_with(24, SolidMaterial { modulus: 200_000.0, poisson: 0.3 });
+
+s.concentration;            // local von Mises per unit macroscopic stress
+s.uniaxial(500.0);          // 316L at 500 MPa → the lattice's yield stress
+s.efficiency();             // share of the material at yield when it gives
+s.stiffness.youngs_moduli() // solved on the way, not separately
+;
+assert!(s.resolved());      // …and whether the grid was fine enough to believe
+```
+
+At 30 % density a gyroid sheet reaches 73 MPa of a 500 MPa solid, an octet
+63 MPa and a BCC cell 39 MPa — the same ordering their stiffnesses come in, and
+for the same reason. `efficiency` is what separates them: 0.49, 0.43 and 0.26 of
+the material at yield when the cell gives.
+
+**This one converges from below.** A coarse grid cannot see the sharpest-loaded
+corner of a ligament at all, so the concentration comes out too low and the
+strength too high — the unsafe direction, and the opposite of the stiffness. An
+octet at 30 % reads 6.2 at 12 voxels a cell, 8.0 at 16, 9.7 at 24, 10.8 at 32
+and 11.3 at 40, still climbing; at 10 % density it is not worth reading below
+about 32. `resolved()` catches the gross cases — efficiency above 1 is
+impossible, and half the material has to be interior — but it is a necessary
+condition, not a sufficient one. Refine until it stops moving.
+
+Yielding only: **elastic buckling is not modelled**, and slender ligaments buckle
+before they yield. `collapse_strain` is the tell — a lattice that only reaches
+yield at several percent of macroscopic strain has bent over long before, and
+its real collapse stress is lower than this.
+
+A fully solid cell returns the base material exactly, which is the test that
+keeps it honest. Voxel homogenisation converges *from above* — a stair-stepped
+strut is over-connected — so the value falls as the resolution rises: about a
+fifth between a 16³ grid and a 40³ one on an octet at 30 %, and still falling.
+Compare two lattices at the same resolution; quote a number only from a grid
+you have watched converge. This is the cell's own
+stiffness and not a specimen's: a real block is stiffer at a bonded platen and
+softer at a free surface, and at three cells across the surface is most of it.
+For a block, solve the block — `CuboctFrame` does exactly that for beam cells.
+
+#### On the GPU
+
+The linear solves run on a wgpu compute device with `.solver(Solver::Gpu)` —
+the same conjugate gradient, ten times faster, and the same answer:
+
+```rust
+use threers::{Lattice, LatticeKind, Solver, Stochastic, Vector3};
+
+let c = Lattice::new(LatticeKind::Stochastic(Stochastic::Voronoi))
+    .size(Vector3::new(20.0, 20.0, 20.0))
+    .cells([1, 1, 1])
+    .fit_relative_density(0.3)
+    .solver(Solver::Gpu)
+    .homogenize(32);
+
+c.solver;   // Solver::Gpu — or Solver::Cpu, if there was no adapter to fall to
+```
+
+| | CPU | GPU | |
+|---|---|---|---|
+| octet, 32³ | 3.7 s | 0.54 s | 6.9× |
+| spinodal, 24³ window | 7.8 s | 0.58 s | 13.4× |
+| voronoi foam, 24³ window | 9.3 s | 0.92 s | 10.1× |
+| octet, 44³ | 16.7 s | 1.5 s | 11.2× |
+
+The device solves in `f32` where the CPU solves in `f64`, and the moduli still
+agree to five figures — 0.00 % apart on three of those four cases, 0.01 % on the
+fourth. That is not luck: the effective tensor is read off a *strain energy*,
+and energy is stationary at the solution, so an error in the displacement field
+appears squared in the answer. A residual a thousand times looser than the
+CPU's is still a tensor to five figures.
+
+It is opt-in rather than automatic, because the two are not bit-identical and
+this crate would rather you chose than be surprised. It falls back to the CPU
+when there is no adapter, and `solver` on the result says which one ran.
+Below about 16 voxels a cell the CPU wins outright — the solve is smaller than
+the cost of talking to a device.
+
+The geometry side is deliberately *not* on the GPU. Measured on a 198³ build,
+sampling the field takes 55 ms for a gyroid and contouring it takes 367 ms, so
+moving the sampling alone would buy about 15 %; for a beam lattice, where
+sampling is the larger half, it would buy 2.5×. Neither is worth a second
+implementation of every generator in WGSL that could drift from the Rust one.
 
 ### Materials: metals, glass, anisotropy, thin film
 
@@ -560,7 +1671,7 @@ cargo run --release --example export_vp9 --features video -- --out /tmp/cube.web
 ```
 
 ```rust
-// Cargo.toml: threers = { version = "0.0.4", features = ["video"] }
+// Cargo.toml: threers = { version = "0.0.5", features = ["video"] }
 use threers::{export_video, HeadlessRenderer, VideoCodec, VideoOptions};
 
 let mut hr = HeadlessRenderer::builder().size(1280, 720).build().unwrap();
@@ -831,7 +1942,7 @@ cargo test --features metal --test metal_backend                       # 24 test
 ```
 
 ```rust
-// Cargo.toml: threers = { version = "0.0.4", features = ["metal"] }
+// Cargo.toml: threers = { version = "0.0.5", features = ["metal"] }
 use threers::metal::MetalHeadlessRenderer;
 
 let mut renderer = MetalHeadlessRenderer::builder().size(1280, 720).msaa(4).build()?;
@@ -881,7 +1992,7 @@ declarations transcribed from the XROS SDK headers — still no new dependency, 
 build script, no `metal-rs`.
 
 ```rust
-// Cargo.toml: threers = { version = "0.0.4", features = ["visionos"] }
+// Cargo.toml: threers = { version = "0.0.5", features = ["visionos"] }
 use threers::metal::visionos::ImmersiveRenderer;
 
 #[no_mangle]
@@ -939,7 +2050,7 @@ cargo run --release --features metal --example metal_stereo   # → out/metal_st
 Enable `native-codec` for dependency-free encoders (and a GIF decoder) that also build on `wasm32`:
 
 ```rust
-// Cargo.toml: threers = { version = "0.0.4", features = ["native-codec"] }
+// Cargo.toml: threers = { version = "0.0.5", features = ["native-codec"] }
 use threers::{encode_gif, decode_gif, GifEncoder, GifOptions, PaletteMode};
 
 let mut enc = GifEncoder::new(64, 64, 0)
@@ -1272,7 +2383,7 @@ machinery as an API, so a believable planet is a builder rather than a thousand
 lines of example:
 
 ```rust
-// Cargo.toml: threers = { version = "0.0.4", features = ["planet"] }
+// Cargo.toml: threers = { version = "0.0.5", features = ["planet"] }
 use threers::planet::{EarthTextures, Planet, Starfield};
 
 let mut scene = threers::Scene::new();
@@ -1333,7 +2444,7 @@ native.
 
 ```toml
 # Cargo.toml
-threers = { version = "0.0.4", features = ["rlx", "rlx-geo"] }
+threers = { version = "0.0.5", features = ["rlx", "rlx-geo"] }
 ```
 
 ```rust
@@ -1480,7 +2591,7 @@ Rigid-body physics lives in the companion crate
 
 ```toml
 [dependencies]
-threers = "0.0.4"
+threers = "0.0.5"
 threers-physics = "0.0.1"
 ```
 
@@ -1660,6 +2771,7 @@ web/
   threejs-shim.js    THREE-compatible JS API over wasm
   openscad-*.html    OpenSCAD playground / gallery / assemblies
   csg/               JS three-bvh-csg port (loaded when BVH_CSG=1)
+  connectome/        Connectome node-cloud viewer (page + viewer.js)
   robot-arm/         Scrubbable player for the robot cell
   physics-bench/     Physics benchmark UI
   mesh-bvh-*.js      mesh-bvh addon / stub
@@ -1677,6 +2789,7 @@ crates/
   threers-ocean/     Ocean-water demo, as a browser package
   threers-physics-bench/  Browser benchmark (six scenes)
   threers-robot-arm/ Pick-and-place cell + inverse-dynamics sizing
+  threers-connectome/  Both fly connectomes as a browser node cloud + tree reader
 tests/               Codec / video integration tests + parity/
 examples/            Native demos (cube, headless_video, shader_material, …)
 scripts/             Feature CI (mesh-bvh, bvh-csg)

@@ -27,6 +27,18 @@ struct Vertex {
     float         _pad;
 };
 
+/// Lines carry only what a line can use: a position and a colour, 24 bytes
+/// against `Vertex`'s 48.
+///
+/// Lines are unlit and untextured, so the normal, the UV and the pad are dead
+/// weight — and at connectome scale that is not a rounding error. A 268M-segment
+/// scene stores 536M vertices, where the difference is 25.8 GB against 12.9 GB,
+/// which is the difference between fitting in memory and paging.
+struct LineVertex {
+    packed_float3 position;
+    packed_float3 color;
+};
+
 // ------------------------------------------------------------------ uniforms
 
 struct DirLight {
@@ -237,6 +249,98 @@ vertex VOut vs_mesh(uint vid [[vertex_id]],
                     device const float4x4 *instances [[buffer(3)]]) {
     float4x4 model = model_matrix(draw, instances, iid);
     return transform(verts[vid], model, normal_basis(draw, model), frame, draw, 0u);
+}
+
+vertex VOut vs_line(uint vid [[vertex_id]],
+                    uint iid [[instance_id]],
+                    device const LineVertex *verts     [[buffer(0)]],
+                    constant Frame          &frame     [[buffer(1)]],
+                    constant Draw           &draw      [[buffer(2)]],
+                    device const float4x4   *instances [[buffer(3)]]) {
+    // Widened into a full Vertex and handed to the same transform, so the line
+    // path cannot drift from the mesh path as that code changes.
+    Vertex v;
+    v.position = verts[vid].position;
+    v.normal   = packed_float3(0.0, 0.0, 1.0);  // never read; unlit
+    v.uv       = float2(0.0);
+    v.color    = verts[vid].color;
+    v._pad     = 0.0;
+    float4x4 model = model_matrix(draw, instances, iid);
+    return transform(v, model, normal_basis(draw, model), frame, draw, 0u);
+}
+
+// Expand each segment into a screen-space quad, so a line thinner than a pixel
+// contributes in proportion to the area it covers.
+//
+// Hardware lines are all-or-nothing at one pixel wide. For filaments that sit
+// below a pixel — most of a connectome at any sane resolution — that means a
+// neurite either lights a whole pixel or vanishes, and which one it does
+// changes frame to frame as the camera turns. That is the flicker supersampling
+// only partly hides, and coverage fixes at the source.
+//
+// Reads the same `LineVertex` buffer, six vertices per segment instead of two,
+// so nothing extra is stored.
+vertex VOut vs_line_quad(uint vid [[vertex_id]],
+                         uint iid [[instance_id]],
+                         device const LineVertex *verts     [[buffer(0)]],
+                         constant Frame          &frame     [[buffer(1)]],
+                         constant Draw           &draw      [[buffer(2)]],
+                         device const float4x4   *instances [[buffer(3)]]) {
+    const uint seg    = vid / 6u;
+    const uint corner = vid % 6u;
+    // Two triangles: (near,-) (far,-) (near,+) / (near,+) (far,-) (far,+)
+    const uint  ends[6]  = {0u, 1u, 0u, 0u, 1u, 1u};
+    const float sides[6] = {-1.0, -1.0, 1.0, 1.0, -1.0, 1.0};
+    const uint  end  = ends[corner];
+    const float side = sides[corner];
+
+    const float4x4 model = model_matrix(draw, instances, iid);
+    const LineVertex me = verts[seg * 2u + end];
+    const LineVertex ot = verts[seg * 2u + (1u - end)];
+
+    float4 pm = frame.view_proj[0] * (model * float4(float3(me.position), 1.0));
+    float4 po = frame.view_proj[0] * (model * float4(float3(ot.position), 1.0));
+
+    // Perpendicular in pixels, then back to clip. Guarded because a segment can
+    // project to a point, and normalize(0) is a NaN that takes the quad with it.
+    const float2 sm = pm.xy / max(abs(pm.w), 1e-6);
+    const float2 so = po.xy / max(abs(po.w), 1e-6);
+    float2 d = (sm - so) * frame.viewport.xy;
+    const float len = length(d);
+    d = len > 1e-6 ? d / len : float2(1.0, 0.0);
+    const float2 nrm = float2(-d.y, d.x) * frame.viewport.zw;
+
+    // draw.misc.y carries the width in pixels, shared with point size.
+    const float half_px = max(draw.misc.y, 1.0) * 0.5;
+    pm.xy += nrm * side * half_px * abs(pm.w);
+
+    VOut out;
+    out.position = pm;
+    out.world_pos = (model * float4(float3(me.position), 1.0)).xyz;
+    out.normal = float3(0.0, 0.0, 1.0);
+    // uv.x carries signed distance across the ribbon, for the coverage falloff.
+    out.uv = float2(side, half_px);
+    out.color = draw.flags.z == 1u ? float3(me.color) : float3(1.0);
+    out.view_dist = length(frame.camera_pos[0].xyz - out.world_pos);
+    out.point_size = 1.0;
+    out.view_index = 0u;
+    return out;
+}
+
+fragment float4 fs_line_quad(VOut in [[stage_in]],
+                             constant Frame &frame [[buffer(0)]],
+                             constant Draw  &draw  [[buffer(1)]]) {
+    // Coverage from the distance across the ribbon. A quad never narrower than
+    // one pixel keeps the line visible; the falloff is what makes a sub-pixel
+    // filament contribute a fraction rather than a whole pixel.
+    const float half_px = in.uv.y;
+    const float dist = abs(in.uv.x) * half_px;
+    const float cov = clamp(half_px + 0.5 - dist, 0.0, 1.0);
+    float4 c = float4(draw.base_color.rgb * in.color, draw.base_color.a * cov);
+    if (c.a <= 0.0) {
+        discard_fragment();
+    }
+    return c;
 }
 
 vertex VOut vs_point(uint vid [[vertex_id]],

@@ -44,7 +44,7 @@ openscad = ["threers/openscad"]
 [dependencies]
 # `mesh-bvh` powers triangle-mesh colliders and mesh raycasts. It is a
 # compile-time feature of `threers` with no extra crate dependencies.
-threers = { path = "../..", version = "0.0.4", features = ["mesh-bvh"] }
+threers = { path = "../..", version = "0.0.5", features = ["mesh-bvh"] }
 wgpu = { version = "30", optional = true }
 bytemuck = { version = "1.16", features = ["derive"], optional = true }
 # Awaiting the buffer mapping in the GPU broad phase — the one place this crate
@@ -110,6 +110,10 @@ required-features = ["assembly", "openscad"]
 # that needs `assembly`, and the error names the example rather than the cause.
 [[example]]
 name = "mechanism_tour"
+required-features = ["assembly", "openscad"]
+
+[[example]]
+name = "three_bearing_swivel"
 required-features = ["assembly", "openscad"]
 
 [[example]]

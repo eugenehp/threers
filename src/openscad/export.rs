@@ -8,8 +8,10 @@
 //! - `geometry_to_3mf` — **3MF** (a proper OPC/ZIP package a slicer can open).
 //! - `geometry_to_glb` — binary **glTF 2.0** (`.glb`; single self-contained file).
 //!
-//! [`Solid`](crate::Solid) grows `to_obj`/`to_off`/`to_3mf`/`to_glb` convenience
-//! methods that evaluate with the exact-where-confident kernel first.
+//! FreeCAD `.FCStd` lives in [`crate::openscad::freecad`].
+//!
+//! [`Solid`](crate::Solid) grows `to_obj`/`to_off`/`to_3mf`/`to_glb`/`to_fcstd`
+//! convenience methods that evaluate with the exact-where-confident kernel first.
 
 use crate::core::BufferGeometry;
 
@@ -130,21 +132,21 @@ pub fn geometry_to_3mf(g: &BufferGeometry) -> Vec<u8> {
 }
 
 /// Minimal single-purpose ZIP writer: stored (method 0) entries with correct
-/// CRC-32s and a central directory. Enough for a valid 3MF package.
-struct Zip {
+/// CRC-32s and a central directory. Enough for a valid 3MF / FCStd package.
+pub(crate) struct Zip {
     out: Vec<u8>,
     dir: Vec<u8>,
     count: u16,
 }
 impl Zip {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             out: Vec::new(),
             dir: Vec::new(),
             count: 0,
         }
     }
-    fn add(&mut self, name: &str, data: &[u8]) {
+    pub(crate) fn add(&mut self, name: &str, data: &[u8]) {
         let crc = crc32(data);
         let (nl, dl) = (name.len() as u16, data.len() as u32);
         let offset = self.out.len() as u32;
@@ -173,7 +175,7 @@ impl Zip {
         self.dir.extend_from_slice(name.as_bytes());
         self.count += 1;
     }
-    fn finish(mut self) -> Vec<u8> {
+    pub(crate) fn finish(mut self) -> Vec<u8> {
         let cd_off = self.out.len() as u32;
         let cd_size = self.dir.len() as u32;
         self.out.extend_from_slice(&self.dir);
@@ -188,7 +190,7 @@ impl Zip {
     }
 }
 
-fn crc32(data: &[u8]) -> u32 {
+pub(crate) fn crc32(data: &[u8]) -> u32 {
     let mut crc = 0xFFFF_FFFFu32;
     for &b in data {
         crc ^= b as u32;

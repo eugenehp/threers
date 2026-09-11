@@ -326,7 +326,13 @@ fn encode_mp4_from_rgba(
     encode_animation_rgba(&opts, frames).expect("rgba mp4 encode")
 }
 
-fn rgba_mp4_roundtrip_lossless(width: u32, height: u32, fps: u32, rgba_frames: &[Vec<u8>]) {
+/// The RGBA animation path is no longer lossless: `BrowserCodec::Mp4` moved from
+/// `I_PCM` to the compressed intra encoder, trading exactness for about a
+/// hundredth the size. So this checks the decode stays *close* to the source
+/// rather than identical to it, and that the file really is much smaller than
+/// the `I_PCM` it replaced. Exactness is still pinned for the `I_PCM` encoder by
+/// `mp4_roundtrip_lossless` above, which calls it directly.
+fn rgba_mp4_roundtrip_close(width: u32, height: u32, fps: u32, rgba_frames: &[Vec<u8>]) {
     if !ffmpeg_available() {
         eprintln!("skipping RGBA MP4 ffmpeg roundtrip ({width}x{height}): ffmpeg not found");
         return;
@@ -347,13 +353,39 @@ fn rgba_mp4_roundtrip_lossless(width: u32, height: u32, fps: u32, rgba_frames: &
         .iter()
         .map(|rgba| Yuv420Frame::from_rgba(width, height, rgba))
         .collect();
-    assert_planes_match(
-        &decoded,
-        &planes_to_vec(&yuv),
-        &format!(
-            "RGBA MP4 {width}x{height} x{} @ {fps}fps",
-            rgba_frames.len()
-        ),
+    let expected = planes_to_vec(&yuv);
+    assert_eq!(
+        decoded.len(),
+        expected.len(),
+        "RGBA MP4 {width}x{height}: decoded {} bytes, expected {}",
+        decoded.len(),
+        expected.len()
+    );
+
+    let worst = decoded
+        .iter()
+        .zip(&expected)
+        .map(|(a, b)| (*a as i32 - *b as i32).abs())
+        .max()
+        .unwrap_or(0);
+    let mean = decoded
+        .iter()
+        .zip(&expected)
+        .map(|(a, b)| (*a as i64 - *b as i64).abs())
+        .sum::<i64>() as f64
+        / expected.len() as f64;
+    assert!(
+        mean < 6.0 && worst < 80,
+        "RGBA MP4 {width}x{height} x{} @ {fps}fps: mean error {mean:.2}, worst {worst}",
+        rgba_frames.len()
+    );
+
+    let pcm = encode_mp4(width, height, fps, &yuv);
+    assert!(
+        mp4.len() * 4 < pcm.len(),
+        "compressed {} should be far under I_PCM {}",
+        mp4.len(),
+        pcm.len()
     );
 }
 
@@ -392,7 +424,7 @@ fn resolution_matrix_is_lossless_via_ffmpeg() {
 }
 
 #[test]
-fn rgba_solid_frames_are_lossless_via_ffmpeg() {
+fn rgba_solid_frames_survive_the_ffmpeg_roundtrip() {
     let width = 64;
     let height = 48;
     let frames = vec![
@@ -401,11 +433,11 @@ fn rgba_solid_frames_are_lossless_via_ffmpeg() {
         solid_rgba(width, height, 0, 0, 255, 255),
         solid_rgba(width, height, 255, 255, 0, 255),
     ];
-    rgba_mp4_roundtrip_lossless(width, height, 10, &frames);
+    rgba_mp4_roundtrip_close(width, height, 10, &frames);
 }
 
 #[test]
-fn rgba_gradient_and_low_bitness_are_lossless_via_ffmpeg() {
+fn rgba_gradient_and_low_bitness_survive_the_ffmpeg_roundtrip() {
     let width = 128;
     let height = 72;
     let mut low = solid_rgba(width, height, 0, 0, 0, 255);
@@ -415,7 +447,7 @@ fn rgba_gradient_and_low_bitness_are_lossless_via_ffmpeg() {
         px[1] = q.wrapping_add(16);
         px[2] = q.wrapping_add(32);
     }
-    rgba_mp4_roundtrip_lossless(width, height, 24, &[gradient_rgba(width, height), low]);
+    rgba_mp4_roundtrip_close(width, height, 24, &[gradient_rgba(width, height), low]);
 }
 
 #[test]
