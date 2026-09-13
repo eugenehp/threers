@@ -1,0 +1,105 @@
+#usda 1.0
+(
+    "A doc comment in the layer header"
+    defaultPrim = "Root"
+    metersPerUnit = 0.01
+    upAxis = "Y"
+    documentation = """
+    A triple-quoted
+    multi-line string.
+    """
+    colorConfiguration = @config.ocio@
+    colorManagementSystem = "ocio"
+    customLayerData = {
+        string author = "someone"
+        int version = 3
+        double[] numbers = [1, 2, 3]
+    }
+    framesPerSecond = 24
+    timeCodesPerSecond = 24
+    startTimeCode = 0
+    endTimeCode = 10
+    subLayers = [
+        @sub.usda@ (offset = 5; scale = 2)
+    ]
+)
+
+over "Sparse"
+{
+}
+
+class "Template"
+{
+    double x = 1
+}
+
+def Scope "Root" (
+    kind = "component"
+    active = true
+    hidden = false
+    instanceable = false
+    "a prim doc comment"
+    customData = {
+        string note = "kept"
+        dictionary nested = {
+            token deep = "yes"
+        }
+    }
+    displayName = "Root Node"
+    prepend apiSchemas = ["MaterialBindingAPI"]
+    prepend inherits = </Template>
+    add references = @other.usda@</Thing>
+    delete references = @gone.usda@
+    prepend variantSets = "style"
+    variants = {
+        string style = "plain"
+    }
+)
+{
+    reorder nameChildren = ["B", "A"]
+
+    custom double customAttr = 5
+    uniform token uniformAttr = "u"
+    double defaulted = 1 (
+        doc = "an attribute doc"
+        displayGroup = "Group"
+        displayName = "Nice Name"
+        hidden = true
+        customData = {
+            string k = "v"
+        }
+    )
+    double noValue
+    custom rel customRel
+    prepend rel listRel = [</Root/A>]
+    append rel listRel2 = [</Root/B>]
+    delete rel listRel3 = [</Root/A>]
+    reorder rel listRel4 = [</Root/B>]
+
+    def "Typeless"
+    {
+    }
+
+    def Scope "A"
+    {
+    }
+
+    def Scope "B"
+    {
+    }
+
+    variantSet "style" = {
+        "plain" (
+            "a variant doc"
+        ) {
+            double inVariant = 1
+
+            def Scope "OnlyInPlain"
+            {
+            }
+        }
+        "fancy" {
+            double inVariant = 2
+        }
+    }
+}

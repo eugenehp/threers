@@ -1,0 +1,132 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    metersPerUnit = 1
+    upAxis = "Y"
+)
+
+def Xform "World" (
+    prepend apiSchemas = ["MaterialBindingAPI"]
+)
+{
+    rel material:binding = </World/Materials/Inherited>
+
+    def Scope "Materials"
+    {
+        def Material "Textured"
+        {
+            token outputs:surface.connect = </World/Materials/Textured/Surface.outputs:surface>
+
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor.connect = </World/Materials/Textured/Diffuse.outputs:rgb>
+                float inputs:roughness.connect = </World/Materials/Textured/Rough.outputs:r>
+                normal3f inputs:normal.connect = </World/Materials/Textured/Norm.outputs:rgb>
+                float inputs:metallic = 0.25
+                color3f inputs:emissiveColor = (0.1, 0, 0)
+                token outputs:surface
+            }
+
+            def Shader "Diffuse"
+            {
+                uniform token info:id = "UsdUVTexture"
+                asset inputs:file = @textures/albedo.png@
+                float2 inputs:st.connect = </World/Materials/Textured/Reader.outputs:result>
+                token inputs:wrapS = "repeat"
+                token inputs:wrapT = "clamp"
+                float4 inputs:scale = (2, 2, 2, 1)
+                float4 inputs:bias = (0.1, 0, 0, 0)
+                float3 outputs:rgb
+            }
+
+            def Shader "Rough"
+            {
+                uniform token info:id = "UsdUVTexture"
+                asset inputs:file = @textures/rough.png@
+                float outputs:r
+            }
+
+            def Shader "Norm"
+            {
+                uniform token info:id = "UsdUVTexture"
+                asset inputs:file = @textures/normal.png@
+                token inputs:sourceColorSpace = "raw"
+                float4 inputs:scale = (2, 2, 2, 1)
+                float4 inputs:bias = (-1, -1, -1, 0)
+                float3 outputs:rgb
+            }
+
+            def Shader "Reader"
+            {
+                uniform token info:id = "UsdPrimvarReader_float2"
+                string inputs:varname = "st"
+                float2 outputs:result
+            }
+        }
+
+        def Material "Inherited"
+        {
+            token outputs:surface.connect = </World/Materials/Inherited/S.outputs:surface>
+
+            def Shader "S"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0, 0.5, 1)
+                float inputs:roughness = 0.9
+                token outputs:surface
+            }
+        }
+
+        def Material "ViaGraph"
+        {
+            token outputs:surface.connect = </World/Materials/ViaGraph/Graph.outputs:surface>
+
+            def NodeGraph "Graph"
+            {
+                token outputs:surface.connect = </World/Materials/ViaGraph/Graph/Inner.outputs:surface>
+
+                def Shader "Inner"
+                {
+                    uniform token info:id = "UsdPreviewSurface"
+                    color3f inputs:diffuseColor = (1, 0.2, 0)
+                    float inputs:metallic = 0.8
+                    token outputs:surface
+                }
+            }
+        }
+    }
+
+    def Mesh "Painted" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
+    {
+        rel material:binding = </World/Materials/Textured>
+        int[] faceVertexCounts = [3]
+        int[] faceVertexIndices = [0, 1, 2]
+        point3f[] points = [(0, 0, 0), (1, 0, 0), (0, 1, 0)]
+        uniform token subdivisionScheme = "none"
+    }
+
+    def Mesh "Graphed" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
+    {
+        rel material:binding = </World/Materials/ViaGraph>
+        int[] faceVertexCounts = [3]
+        int[] faceVertexIndices = [0, 1, 2]
+        point3f[] points = [(0, 0, 0), (1, 0, 0), (0, 1, 0)]
+        uniform token subdivisionScheme = "none"
+    }
+
+    def Xform "Group"
+    {
+        def Mesh "NoBindingOfItsOwn"
+        {
+            int[] faceVertexCounts = [3]
+            int[] faceVertexIndices = [0, 1, 2]
+            point3f[] points = [(0, 0, 0), (1, 0, 0), (0, 1, 0)]
+            uniform token subdivisionScheme = "none"
+        }
+    }
+}

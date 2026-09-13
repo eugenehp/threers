@@ -16,6 +16,10 @@ impl Curve2 for QuadraticBezierCurve {
     fn get_point(&self, t: f32) -> Vector2 {
         quad(self.v0, self.v1, self.v2, t)
     }
+
+    fn svg_segments(&self) -> Option<Vec<super::PathSegment>> {
+        Some(super::svg_path::quadratic_segments(self))
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -50,6 +54,10 @@ impl CubicBezierCurve {
 impl Curve2 for CubicBezierCurve {
     fn get_point(&self, t: f32) -> Vector2 {
         cubic(self.v0, self.v1, self.v2, self.v3, t)
+    }
+
+    fn svg_segments(&self) -> Option<Vec<super::PathSegment>> {
+        Some(super::svg_path::cubic_segments(self))
     }
 }
 

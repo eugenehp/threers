@@ -1,0 +1,58 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    metersPerUnit = 1
+    upAxis = "Y"
+)
+
+def Xform "World"
+{
+    def PointInstancer "Scatter"
+    {
+        point3f[] positions = [(0, 0, 0), (5, 0, 0), (10, 0, 0), (15, 0, 0)]
+        int[] protoIndices = [0, 1, 0, 1]
+        quath[] orientations = [(1, 0, 0, 0), (0.7071, 0, 0.7071, 0), (1, 0, 0, 0), (1, 0, 0, 0)]
+        float3[] scales = [(1, 1, 1), (2, 2, 2), (0.5, 0.5, 0.5), (1, 1, 1)]
+        int64[] invisibleIds = [3]
+        prepend rel prototypes = [
+            </World/Scatter/Prototypes/Tree>,
+            </World/Scatter/Prototypes/Rock>,
+        ]
+
+        def Scope "Prototypes"
+        {
+            def Mesh "Tree"
+            {
+                int[] faceVertexCounts = [3]
+                int[] faceVertexIndices = [0, 1, 2]
+                point3f[] points = [(0, 0, 0), (1, 0, 0), (0, 2, 0)]
+            }
+
+            def Mesh "Rock"
+            {
+                int[] faceVertexCounts = [4]
+                int[] faceVertexIndices = [0, 1, 2, 3]
+                point3f[] points = [(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)]
+            }
+        }
+    }
+
+    def Xform "Copy" (
+        instanceable = true
+        references = </World/Source>
+    )
+    {
+        double3 xformOp:translate = (0, 0, 20)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Xform "Source"
+    {
+        def Mesh "Shape"
+        {
+            int[] faceVertexCounts = [3]
+            int[] faceVertexIndices = [0, 1, 2]
+            point3f[] points = [(0, 0, 0), (3, 0, 0), (0, 3, 0)]
+        }
+    }
+}

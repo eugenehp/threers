@@ -67,6 +67,8 @@ struct HitInfo {
     /// true orientation.
     face: Vector3,
     uv: Vector2,
+    /// Interpolated vertex colour, white when the geometry had none.
+    vcolor: Vector3,
     material: u32,
     /// The ray struck the side the winding calls the front.
     front: bool,
@@ -204,7 +206,10 @@ impl<'a> Integrator<'a> {
 
             // --- coverage: below 1, the surface is partly not there.
             let mut surface_alpha = material.opacity;
-            let mut base_color = material.base_color;
+            // Vertex colour multiplies the material, matching the raster path.
+            // Dropping it turned a line set with a colour per segment into one
+            // flat shade.
+            let mut base_color = material.base_color.mul_componentwise(info.vcolor);
             if let Some(map) = &material.base_color_map {
                 let s = map.sample(info.uv);
                 base_color = base_color.mul_componentwise(Vector3::new(s[0], s[1], s[2]));
@@ -242,7 +247,7 @@ impl<'a> Integrator<'a> {
 
             // --- emission, weighted against the light sample that could have
             // found this same surface.
-            let mut emission = material.emission;
+            let mut emission = material.emission.mul_componentwise(info.vcolor);
             if let Some(map) = &material.emissive_map {
                 emission = emission.mul_componentwise(map.sample_rgb(info.uv));
             }
@@ -542,6 +547,9 @@ impl<'a> Integrator<'a> {
                             ns_facing: info.ns_facing,
                             face: exit_info.face,
                             uv: exit_info.uv,
+                            // The exit point's own colour: this is a different
+                            // surface, even though the material is shared.
+                            vcolor: exit_info.vcolor,
                             material: info.material,
                             front: exit_info.front,
                             triangle: exit_info.triangle,
@@ -653,6 +661,7 @@ impl<'a> Integrator<'a> {
         let w = 1.0 - hit.u - hit.v;
         let p = tri[0] * w + tri[1] * hit.u + tri[2] * hit.v;
         let uv = sh.uvs[0] * w + sh.uvs[1] * hit.u + sh.uvs[2] * hit.v;
+        let vcolor = sh.colors[0] * w + sh.colors[1] * hit.u + sh.colors[2] * hit.v;
 
         let face_raw = (tri[1] - tri[0]).cross(tri[2] - tri[0]);
         let face = if face_raw.length_sq() > 0.0 {
@@ -685,6 +694,7 @@ impl<'a> Integrator<'a> {
             ns_facing: if front { ns } else { -ns },
             face,
             uv,
+            vcolor,
             material: sh.material,
             front,
             triangle: hit.triangle as usize,

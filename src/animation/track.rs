@@ -14,6 +14,13 @@ pub enum TrackTarget {
     Color,
     /// Morph target weight at `index`.
     MorphWeight { index: usize },
+    /// A light's intensity. Lights are the one thing in a scene whose
+    /// brightness is animated as often as its position — a lamp switching on,
+    /// a fire flickering — and a free scalar cannot say what it drives.
+    Intensity,
+    /// Whether the object is drawn. Anything above zero is visible, which is
+    /// how USD's `visibility` reads when it is time-sampled.
+    Visibility,
     /// Free scalar — caller decides what to do with it.
     Scalar,
 }

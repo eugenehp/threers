@@ -9,4 +9,7 @@ pub mod png;
 /// Data-parallel helpers (rayon behind the `parallel` feature, sequential otherwise).
 pub mod parallel;
 
+mod svg_number;
+pub use svg_number::format_svg_number;
+
 pub use buffer_geometry_utils::*;

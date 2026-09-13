@@ -23,12 +23,23 @@
 // milliseconds keeps the device responsive and the render interruptible.
 
 const PI: f32 = 3.14159265358979;
-const INF: f32 = 3.4028235e38;
+// Hex float, not decimal. `3.4028235e38` is the usual spelling of f32::MAX, but
+// it expands to 340282349999999991754788743781432688640.0, which rounds ABOVE
+// f32::MAX — naga accepts it, Tint rejects it outright:
+//
+//   error: value 340282...640.0 cannot be represented as 'f32'
+//
+// The whole module then fails to compile, so on WebGPU there was no compute
+// pipeline at all: every dispatch was a no-op and the film came back black,
+// with no error surfaced unless something installs an uncaptured-error handler.
+// The hex form is exactly f32::MAX with no decimal rounding to argue about.
+const INF: f32 = 0x1.fffffep+127;
 const SMOOTH_ALPHA: f32 = 1e-3;
 const MIN_ALPHA: f32 = 1e-4;
 const MAT_STRIDE: u32 = 88u;
 const LIGHT_STRIDE: u32 = 20u;
-const TRI_STRIDE: u32 = 24u;
+// 9 position + 9 normal + 6 uv + 9 colour. MUST match `TRI_STRIDE` in gpu.rs.
+const TRI_STRIDE: u32 = 33u;
 const EMIT_STRIDE: u32 = 2u;
 const ACCUM_STRIDE: u32 = 14u;
 // The builder caps tree depth at 64, and traversal defers at most one sibling
@@ -677,6 +688,11 @@ fn tri_normal_at(tri: u32, i: u32) -> vec3<f32> {
 fn tri_uv_at(tri: u32, i: u32) -> vec2<f32> {
     let b = uni.data_offsets.x + tri * TRI_STRIDE + 18u + i * 2u;
     return vec2<f32>(data[b], data[b + 1u]);
+}
+
+fn tri_color_at(tri: u32, i: u32) -> vec3<f32> {
+    let b = uni.data_offsets.x + tri * TRI_STRIDE + 24u + i * 3u;
+    return vec3<f32>(data[b], data[b + 1u], data[b + 2u]);
 }
 
 fn tri_material(tri: u32) -> u32 {
@@ -2402,7 +2418,15 @@ fn trace_path(ray_in: Ray, rng: ptr<function, Sampler>) -> PathResult {
 
         let mat = tri_material(h.tri);
         let mat_base = uni.data_offsets.z + mat * MAT_STRIDE;
-        let s = load_surface(mat, uv);
+        var s = load_surface(mat, uv);
+        // Vertex colour multiplies the material, as it does on the CPU path and
+        // in the rasteriser. Interpolated with the same barycentrics as the uv
+        // above.
+        let vcol = tri_color_at(h.tri, 0u) * w0
+                 + tri_color_at(h.tri, 1u) * h.u
+                 + tri_color_at(h.tri, 2u) * h.v;
+        s.base_color = s.base_color * vcol;
+        s.emission = s.emission * vcol;
         if (map_present(mat_base, 4u)) {
             ns = perturb_normal(h.tri, mat_base, ns, uv);
         }
@@ -2705,7 +2729,21 @@ fn redistribute_workgroup(
     }
     workgroupBarrier();
 
-    loop {
+    // A uniform trip count, not a data-dependent break.
+    //
+    // Tint requires every `workgroupBarrier()` to sit in uniform control flow,
+    // and a loop whose exit depends on `wg_pick` — workgroup memory written
+    // under `if (lid == 0u)` — is not provably uniform, so every barrier inside
+    // it is rejected and the module fails to compile on WebGPU. Moving the
+    // break around does not help: the loop's *continuation* is the thing being
+    // judged.
+    //
+    // The budget is `count` samples for each of `WG_PIXELS` pixels and a round
+    // retires at most one, so that product bounds the rounds. `count` comes
+    // from the uniform buffer, which is uniform by construction. Rounds after
+    // the work runs out cost three barriers and nothing else.
+    let max_rounds = WG_PIXELS * count;
+    for (var round = 0u; round < max_rounds; round = round + 1u) {
         workgroupBarrier();
         if (lid == 0u) {
             wg_pick = 255u;
@@ -2718,10 +2756,19 @@ fn redistribute_workgroup(
         }
         workgroupBarrier();
 
+        // The exit is taken at the END of the body, and the work below is
+        // guarded instead. Breaking here put `workgroupBarrier()` after a
+        // conditional exit whose condition comes from workgroup memory, which
+        // Tint rejects outright:
+        //
+        //   error: 'workgroupBarrier' must only be called from uniform control
+        //          flow
+        //
+        // The whole module then failed to compile on WebGPU. naga accepts it,
+        // so this only ever showed up in a browser — as a black image, because
+        // a kernel that will not compile still dispatches happily into nothing.
         let pick = wg_pick;
-        if (pick == 255u) {
-            break;
-        }
+        if (pick != 255u) {
         if (lid == pick) {
             let remaining = wg_per_remaining[lid];
             if (remaining > 0u) {
@@ -2741,8 +2788,11 @@ fn redistribute_workgroup(
                 }
             }
         }
+        }
+        // Reached unconditionally by every invocation in the workgroup.
         workgroupBarrier();
 
+        if (pick != 255u) {
         if (lid == 0u) {
             var write = 0u;
             let n_active = wg_active_count;
@@ -2754,6 +2804,7 @@ fn redistribute_workgroup(
                 }
             }
             wg_active_count = write;
+        }
         }
     }
 }

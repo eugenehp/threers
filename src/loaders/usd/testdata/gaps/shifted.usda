@@ -1,0 +1,7 @@
+#usda 1.0
+(
+    defaultPrim = "Moving"
+    subLayers = [
+        @anim_sub.usda@ (offset = 100; scale = 2)
+    ]
+)

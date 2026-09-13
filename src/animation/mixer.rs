@@ -112,11 +112,29 @@ fn apply_action(arena: &mut ObjectArena, action: &AnimationAction) {
             }
             TrackTarget::Color => {
                 if let Some(c) = tr.sample_color(t) {
-                    if let crate::core::ObjectKind::Mesh(mesh) = &mut obj.kind {
-                        if let Some(mat) = std::sync::Arc::get_mut(&mut mesh.material) {
-                            apply_color(mat, c);
+                    match &mut obj.kind {
+                        crate::core::ObjectKind::Mesh(mesh) => {
+                            if let Some(mat) = std::sync::Arc::get_mut(&mut mesh.material) {
+                                apply_color(mat, c);
+                            }
                         }
+                        // A light has a colour too, and it is animated as
+                        // often as a material's.
+                        crate::core::ObjectKind::Light(light) => light.set_color(c),
+                        _ => {}
                     }
+                }
+            }
+            TrackTarget::Intensity => {
+                if let Some(v) = tr.sample_scalar(t) {
+                    if let crate::core::ObjectKind::Light(light) = &mut obj.kind {
+                        light.set_intensity(v);
+                    }
+                }
+            }
+            TrackTarget::Visibility => {
+                if let Some(v) = tr.sample_scalar(t) {
+                    obj.visible = v > 0.0;
                 }
             }
             TrackTarget::MorphWeight { index } => {

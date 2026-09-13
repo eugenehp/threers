@@ -1,0 +1,10 @@
+#usda 1.0
+(
+    defaultPrim = "Root"
+)
+def Scope "Root"
+{
+    double kept = 1
+    double blocked = 2
+    double3 stamp = (1, 2, 3)
+}

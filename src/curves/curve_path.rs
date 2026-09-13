@@ -9,6 +9,17 @@ pub struct CurvePath {
     pub auto_close: bool,
 }
 
+// `dyn Curve2` is not `Debug`, so this reports the shape of the path rather
+// than its contents — enough to see in a test failure what you are holding.
+impl std::fmt::Debug for CurvePath {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CurvePath")
+            .field("curves", &self.curves.len())
+            .field("auto_close", &self.auto_close)
+            .finish()
+    }
+}
+
 impl Default for CurvePath {
     fn default() -> Self {
         Self::new()

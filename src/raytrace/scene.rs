@@ -407,6 +407,14 @@ pub struct TriShading {
     /// reading of "no normals were supplied".
     pub normals: [Vector3; 3],
     pub uvs: [Vector2; 3],
+    /// Per-vertex colours, white when the geometry carries none.
+    ///
+    /// The raster path multiplies material colour by vertex colour; without
+    /// these the traced image loses that channel entirely and a line set with a
+    /// colour per segment comes out one flat shade. Costs 36 bytes a triangle,
+    /// which is the honest price of not silently dropping an attribute the
+    /// geometry supplied.
+    pub colors: [Vector3; 3],
     pub material: u32,
 }
 
@@ -864,6 +872,21 @@ impl RaytraceScene {
             let n = Vector3::new(a.array[b], a.array[b + 1], a.array[b + 2]);
             Some(apply_matrix3(&normal_matrix, n))
         };
+        // Vertex colours, if the geometry supplied them. White otherwise, so a
+        // geometry without the attribute multiplies through unchanged.
+        let color_attr = geometry
+            .attributes
+            .get("color")
+            .filter(|a| a.item_size >= 3);
+        let read_color = |i: usize| -> Vector3 {
+            match color_attr {
+                Some(a) => {
+                    let b = i * a.item_size;
+                    Vector3::new(a.array[b], a.array[b + 1], a.array[b + 2])
+                }
+                None => Vector3::new(1.0, 1.0, 1.0),
+            }
+        };
         let read_uv = |i: usize| -> Vector2 {
             match uv_attr {
                 Some(a) => {
@@ -879,6 +902,7 @@ impl RaytraceScene {
                 return;
             }
             let uvs = [read_uv(a), read_uv(b), read_uv(c)];
+            let colors = [read_color(a), read_color(b), read_color(c)];
             let n = match (read_normal(a), read_normal(b), read_normal(c)) {
                 (Some(na), Some(nb), Some(nc)) => [na, nb, nc],
                 _ => {
@@ -927,6 +951,7 @@ impl RaytraceScene {
             s.shading.push(TriShading {
                 normals: nn,
                 uvs,
+                colors,
                 material,
             });
         };
@@ -1153,17 +1178,61 @@ fn convert_material(material: &Material, cache: &mut TextureCache) -> (RtMateria
             },
             Some("MeshDepthMaterial: a debug view with no BSDF; traced as 50% grey".into()),
         ),
-        // Line/point/sprite/distance materials only ever reach here through a
-        // mesh that was given one; there is no surface model behind them.
-        Material::Line(_)
-        | Material::Points(_)
-        | Material::Sprite(_)
-        | Material::Distance(_) => (
+        // A line material is unlit by definition — that is what
+        // `LineBasicMaterial` means, and what the raster path does with it. It
+        // was traced as a plain diffuse surface, which in a scene with no
+        // lights resolves to black: the geometry is present, gets hit, and
+        // returns nothing. Emitting its own colour instead matches the raster
+        // result and needs no light to be visible.
+        Material::Line(m) => (
+            RtMaterial {
+                base_color: Vector3::ZERO,
+                emission: Vector3::new(
+                    m.color.r * m.opacity.max(0.0),
+                    m.color.g * m.opacity.max(0.0),
+                    m.color.b * m.opacity.max(0.0),
+                ),
+                unlit: true,
+                ..Default::default()
+            },
+            Some("line material: traced as unlit emission, as the raster path draws it".into()),
+        ),
+        // Points and sprites are unlit too, for the same reason lines are: the
+        // raster path draws them as flat colour, and tracing them as diffuse
+        // makes them black in any scene without lights.
+        Material::Points(m) => (
+            RtMaterial {
+                base_color: Vector3::ZERO,
+                emission: Vector3::new(
+                    m.color.r * m.opacity.max(0.0),
+                    m.color.g * m.opacity.max(0.0),
+                    m.color.b * m.opacity.max(0.0),
+                ),
+                unlit: true,
+                ..Default::default()
+            },
+            Some("points material: traced as unlit emission, as the raster path draws it".into()),
+        ),
+        Material::Sprite(m) => (
+            RtMaterial {
+                base_color: Vector3::ZERO,
+                emission: Vector3::new(
+                    m.color.r * m.opacity.max(0.0),
+                    m.color.g * m.opacity.max(0.0),
+                    m.color.b * m.opacity.max(0.0),
+                ),
+                unlit: true,
+                ..Default::default()
+            },
+            Some("sprite material: traced as unlit emission, as the raster path draws it".into()),
+        ),
+        // A distance material is a depth debug view, not a surface.
+        Material::Distance(_) => (
             RtMaterial {
                 base_color: Vector3::new(0.8, 0.8, 0.8),
                 ..Default::default()
             },
-            Some("line/point/sprite/distance material on a mesh: traced as a plain diffuse surface".into()),
+            Some("distance material on a mesh: traced as a plain diffuse surface".into()),
         ),
         Material::Sky(_) => (
             RtMaterial {

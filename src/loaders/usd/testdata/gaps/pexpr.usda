@@ -1,0 +1,9 @@
+#usda 1.0
+
+def Scope "World" (
+    prepend apiSchemas = ["CollectionAPI:a", "CollectionAPI:b"]
+)
+{
+    pathExpression collection:a:membershipExpression = "/Alpha//*"
+    pathExpression collection:b:membershipExpression = "/Beta//*"
+}

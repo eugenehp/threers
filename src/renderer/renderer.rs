@@ -530,7 +530,9 @@ pub struct Renderer {
     /// in @group(1) to stay within WebGPU's 4-bind-group limit.
     custom_mesh_bgl: wgpu::BindGroupLayout,
     /// Pipeline layout for custom-shader materials ([frame, custom_mesh, tex, env]).
-    custom_pipeline_layout: wgpu::PipelineLayout,
+    /// `None` where the device cannot hold the custom layout; shader materials
+    /// are then skipped rather than failing validation on every draw.
+    custom_pipeline_layout: Option<wgpu::PipelineLayout>,
     /// Lazily-compiled custom-shader pipelines, keyed by (fragment-source hash,
     /// is-half-float-target, is-transparent).
     custom_pipelines: HashMap<(u64, bool, bool, bool, u32), wgpu::RenderPipeline>,
@@ -1555,12 +1557,43 @@ impl Renderer {
                 },
             ],
         });
-        let custom_pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("threers custom (shader material) layout"),
-                bind_group_layouts: &[Some(&frame_bgl), Some(&custom_mesh_bgl), Some(&tex_bgl), Some(&env_bgl)],
-                immediate_size: 0,
-            });
+        // Built only when the device can hold it.
+        //
+        // The four groups together declare 20 sampled textures in the fragment
+        // stage. WebGPU's floor is 16 and Chrome reports exactly that, so this
+        // layout cannot be created there at all — and creating it unconditionally
+        // meant every browser session logged a validation error at startup even
+        // though nothing had asked for a shader material:
+        //
+        //   The number of sampled textures (20) in the Fragment stage exceeds
+        //   the maximum per-stage limit (16).
+        //
+        // The other three groups already account for 16 of those, so this is not
+        // a matter of trimming a slot or two; the split would have to change for
+        // shader materials to work on WebGPU. Until then the feature is absent
+        // there rather than broken, and `None` is what says so.
+        let custom_pipeline_layout = if device.limits().max_sampled_textures_per_shader_stage >= 20
+        {
+            Some(
+                device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("threers custom (shader material) layout"),
+                    bind_group_layouts: &[
+                        Some(&frame_bgl),
+                        Some(&custom_mesh_bgl),
+                        Some(&tex_bgl),
+                        Some(&env_bgl),
+                    ],
+                    immediate_size: 0,
+                }),
+            )
+        } else {
+            log::warn!(
+                "shader materials unavailable: this device allows {} sampled textures per stage \
+                 and the custom layout needs 20",
+                device.limits().max_sampled_textures_per_shader_stage
+            );
+            None
+        };
 
         let vertex_buffers = [wgpu::VertexBufferLayout {
             array_stride: GpuMesh::VERTEX_STRIDE as wgpu::BufferAddress,
@@ -5922,6 +5955,11 @@ impl Renderer {
             if let Topology::Custom(hash, transparent, screen_space, side) = d.topology {
                 let sd = &shader_data[d.shader_idx];
                 let key = (hash, linear_framebuffer, transparent, screen_space, side);
+                let Some(custom_layout) = self.custom_pipeline_layout.as_ref() else {
+                    // No layout on this device — skip the object rather than
+                    // submit a draw that cannot validate.
+                    continue;
+                };
                 if !self.custom_pipelines.contains_key(&key) {
                     let fmt = if linear_framebuffer {
                         wgpu::TextureFormat::Rgba16Float
@@ -5930,7 +5968,7 @@ impl Renderer {
                     };
                     let pipeline = build_custom_pipeline(
                         &self.device,
-                        &self.custom_pipeline_layout,
+                        custom_layout,
                         &sd.fragment,
                         fmt,
                         transparent,

@@ -1,0 +1,12 @@
+#usda 1.0
+def Scope "W"
+{
+    int64[] big = [0, 1, 2, 4294967296, -4294967296, 9007199254740993]
+    uint[] small = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    half[] halves = [0, 0.5, 1, 2]
+    double[] doubles = [0.1, 0.25, 1e10]
+    matrix4d frame = ( (1,0,0,0), (0,1,0,0), (0,0,1,0), (5,6,7,1) )
+    bool flag = true
+    string label = "hello"
+    int2 pair = (3, 4)
+}

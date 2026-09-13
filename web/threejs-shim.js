@@ -4954,10 +4954,137 @@ export class CSS2DRenderer {
     }
     setSize(w, h) { this._w = new WebCss2dRenderer(w, h); }
 }
+// three.js's SVGRenderer draws into an `<svg>` element you append to the page,
+// the same way WebGLRenderer draws into a canvas — so `domElement` and
+// `render()` are the whole of how you turn it on. Without them the renderer can
+// only hand back a string, which is an export path and not a renderer.
 export class SVGRenderer {
-    constructor() { this._w = new WebSvgRenderer(800, 600); }
-    setSize(w, h) { this._w = new WebSvgRenderer(w, h); }
-    renderToString(scene, camera) { return this._w.renderToString(scene._w, camera._w); }
+    constructor() {
+        this._w = new WebSvgRenderer(800, 600);
+        this.domElement = (typeof document !== 'undefined')
+            ? document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+            : null;
+        this.autoClear = true;
+        this.info = { render: { vertices: 0, faces: 0 } };
+        this._applySize(800, 600);
+    }
+
+    setSize(w, h) {
+        // Resize in place. Rebuilding the renderer here would silently throw
+        // away every option set before it, which is the sort of thing that only
+        // shows up as "my SVG lost its background" much later.
+        this._w.setSize(w, h);
+        this._applySize(w, h);
+    }
+
+    _applySize(w, h) {
+        if (!this.domElement) return;
+        this.domElement.setAttribute('width', String(w));
+        this.domElement.setAttribute('height', String(h));
+        this.domElement.setAttribute('viewBox', `0 0 ${w} ${h}`);
+    }
+
+    /// Draw into `domElement`. The markup is a whole `<svg>` document, so its
+    /// children and attributes are transplanted onto the live element rather
+    /// than nesting one document inside another.
+    render(scene, camera) {
+        const markup = this.renderToString(scene, camera);
+        this.info.render.faces = (markup.match(/<path/g) || []).length;
+        this.info.render.vertices = this.info.render.faces * 3;
+        if (!this.domElement) return markup;
+        if (this.autoClear) this.clear();
+        const parsed = new DOMParser().parseFromString(markup, 'image/svg+xml').documentElement;
+        for (const attr of Array.from(parsed.attributes)) {
+            this.domElement.setAttribute(attr.name, attr.value);
+        }
+        while (parsed.firstChild) this.domElement.appendChild(parsed.firstChild);
+        return markup;
+    }
+
+    /// The document as markup, for writing to a file or embedding directly.
+    ///
+    /// Pushes the scene graph and camera into wasm first, exactly as
+    /// `WebGLRenderer.render` does. Without it the renderer draws whatever pose
+    /// was last uploaded, so moving a mesh or the camera from JavaScript would
+    /// change nothing and the picture would simply look stuck.
+    renderToString(scene, camera) {
+        scene._syncTransforms?.(camera);
+        if (!camera?._orbitControlled) camera._sync?.();
+        this._syncBackground(scene);
+        return this._w.renderToString(scene._w, camera._w);
+    }
+
+    /// Take the background from the scene, the way three.js reads it.
+    ///
+    /// `Scene.background` is stored unconverted, because WebGL's clear colour
+    /// is written verbatim and three.js's `Color.r/g/b` are raw bytes over 255.
+    /// This renderer works in linear light and encodes to sRGB on the way out,
+    /// so handing it those same numbers renders `#101820` as a far lighter
+    /// `#475663`. Round-tripping the authored hex through `setClearColor`,
+    /// which decodes it, is what makes the document come out the colour that
+    /// was asked for.
+    _syncBackground(scene) {
+        if (this._clearColorSet) return;
+        const bg = scene?._background;
+        const hex = (bg && typeof bg.getHex === 'function')
+            ? bg.getHex()
+            : (typeof bg === 'number' ? bg : null);
+        if (hex == null || hex === this._sceneBackgroundHex) return;
+        this._sceneBackgroundHex = hex;
+        this._w.setClearColor(hex >>> 0, scene._backgroundAlpha ?? 1);
+    }
+
+    clear() {
+        if (!this.domElement) return;
+        while (this.domElement.firstChild) {
+            this.domElement.removeChild(this.domElement.firstChild);
+        }
+    }
+
+    // ---- three.js SVGRenderer surface ----
+
+    /// `0xRRGGBB` or a `Color`, plus an alpha. Overrides `scene.background`.
+    setClearColor(color, alpha = 1) {
+        const hex = (color && typeof color.getHex === 'function')
+            ? color.getHex()
+            : (typeof color === 'string' ? parseInt(color.replace('#', ''), 16) : Number(color));
+        if (!Number.isFinite(hex)) return;
+        // An explicit colour wins over the scene's from here on.
+        this._clearColorSet = true;
+        this._w.setClearColor(hex >>> 0, alpha);
+    }
+    /// Decimal places kept on coordinates. `null` restores the default.
+    setPrecision(precision) { this._w.setPrecision(precision == null ? 2 : precision); }
+    /// three.js's coarse/fine switch. 'low' drops the curves and the seam
+    /// hairline, which is most of what makes a document big.
+    setQuality(quality) {
+        const low = quality === 'low';
+        this._w.setCurveTolerance(low ? 0 : 0.15);
+        this._w.setSeamStroke(low ? 0 : 0.8);
+        this._w.setPrecision(low ? 1 : 2);
+    }
+    /// No-op: an SVG has no pixels to scale. Present so a three.js render loop
+    /// that sets it does not throw.
+    setPixelRatio(_) {}
+
+    // ---- threers extras ----
+
+    /// 0 lit (default), 1 flat material colour, 2 wireframe.
+    setShading(mode) { this._w.setShading(mode); }
+    /// Match the WebGL renderer's tone mapping so the two agree on colour.
+    /// three.js constants: 0 NoToneMapping, 1 Linear, 4 ACESFilmic.
+    setToneMapping(mode, exposure = 1) { this._w.setToneMapping(mode, exposure); }
+    /// Draw the background rect at all. Off gives a transparent document.
+    setBackground(on) { this._w.setBackground(!!on); }
+    setCullBackfaces(on) { this._w.setCullBackfaces(!!on); }
+    /// Hairline per face, in pixels, that hides SVG's anti-aliasing seams.
+    setSeamStroke(px) { this._w.setSeamStroke(px); }
+    /// Bend edges onto the real surface past this pixel error. 0 keeps every
+    /// edge straight.
+    setCurveTolerance(px) { this._w.setCurveTolerance(px); }
+    /// Split faces too deep for one depth to sort. 0 disables.
+    setDepthSplit(tolerance) { this._w.setDepthSplit(tolerance); }
+    setSort(on) { this._w.setSort(!!on); }
 }
 
 // ---- Stats ----

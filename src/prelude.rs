@@ -92,6 +92,9 @@ pub use crate::textures::{
 pub use crate::renderer::headless::{HeadlessBuilder, HeadlessConfig, HeadlessRenderer};
 pub use crate::utils::png::{decode_png, encode_png, PngImage};
 
+/// Vector SVG export, and the raster-in-SVG passthrough beside it.
+pub use crate::renderers::{svg_from_rgba, SvgOptions, SvgRenderer, SvgShading};
+
 /// The Metal backend's entry points, when the `metal` feature is on.
 #[cfg(all(feature = "metal", any(target_os = "macos", target_os = "ios")))]
 pub use crate::metal::{

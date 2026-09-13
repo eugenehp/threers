@@ -1,0 +1,19 @@
+#usda 1.0
+(
+    defaultPrim = "Room"
+    subLayers = [
+        @base.usda@
+    ]
+)
+
+over "Room"
+{
+    over "Chair1" (
+        variants = {
+            string look = "steel"
+        }
+    )
+    {
+        double3 xformOp:translate = (9, 1, 0)
+    }
+}

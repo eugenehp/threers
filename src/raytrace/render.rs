@@ -416,6 +416,37 @@ impl RaytraceRenderer {
         Ok(())
     }
 
+    /// Awaited twin of [`Self::sync_gpu_film`].
+    #[cfg(target_arch = "wasm32")]
+    async fn sync_gpu_film_async(&mut self) -> Result<(), RaytraceError> {
+        if let Some(gpu) = self
+            .backend
+            .as_any_mut()
+            .downcast_mut::<super::gpu::GpuBackend>()
+        {
+            gpu.sync_film_async(&mut self.film).await?;
+        }
+        Ok(())
+    }
+
+    /// Resolve to RGBA8 without blocking on the film readback.
+    ///
+    /// The wasm counterpart of [`Self::resolve_rgba_denoised`]. Tracing itself
+    /// never blocks — `GpuBackend::render` leaves the accumulator on the device
+    /// and only flags a pending readback — so this is the single call that had
+    /// to become awaited for the compute backend to work in a browser at all.
+    #[cfg(target_arch = "wasm32")]
+    pub async fn resolve_rgba_denoised_async(&mut self, denoise: bool) -> Vec<u8> {
+        let _ = self.sync_gpu_film_async().await;
+        if self.settings.aov != Aov::Beauty {
+            return self.film.resolve_rgba8(&self.settings);
+        }
+        // Past the readback the work is all on the host, so it can reuse the
+        // existing synchronous resolve rather than duplicating the pipeline.
+        let hdr = self.resolve_hdr_denoised(denoise);
+        self.film.beauty_rgba8(&hdr, &self.settings)
+    }
+
     /// Re-seed the device accum buffer on the next trace without repacking BVH
     /// data. Used when only the host film was cleared or replaced.
     fn reset_gpu_accum(&mut self) {
@@ -504,7 +535,12 @@ impl RaytraceRenderer {
         let (width, height) = self.clamp_film_size(width, height);
         if (width, height) != self.size() {
             self.film = Film::new(width, height);
-            self.backend.invalidate();
+            // Deliberately NOT `backend.invalidate()`. That means "the scene
+            // changed" and makes the GPU backend drop its packed geometry and
+            // BVH — the most expensive thing it builds — when all that moved is
+            // the film. `ensure_resources` compares the film size itself and
+            // rebuilds only the accumulator, so the resolution can change
+            // without repacking. `invalidate` is a no-op on the CPU backend.
         } else {
             self.film.clear();
             self.reset_gpu_accum();
@@ -522,6 +558,14 @@ impl RaytraceRenderer {
 
     /// Drop all backend caches, including GPU scene geometry. Camera-only updates
     /// should prefer [`Self::prepare_if_changed`], which keeps the BVH resident.
+    /// How many times the GPU backend has packed a scene, if it is one.
+    pub fn gpu_packs(&mut self) -> Option<usize> {
+        self.backend
+            .as_any_mut()
+            .downcast_mut::<super::gpu::GpuBackend>()
+            .map(|g| g.packs())
+    }
+
     pub fn backend_invalidate(&mut self) {
         self.backend.invalidate();
     }

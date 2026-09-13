@@ -3741,6 +3741,53 @@ impl WebPath {
     pub fn line_to(&mut self, x: f32, y: f32) {
         self.inner.line_to(crate::Vector2::new(x, y));
     }
+
+    #[wasm_bindgen(js_name = quadraticCurveTo)]
+    pub fn quadratic_curve_to(&mut self, cpx: f32, cpy: f32, x: f32, y: f32) {
+        self.inner
+            .quadratic_curve_to(crate::Vector2::new(cpx, cpy), crate::Vector2::new(x, y));
+    }
+
+    #[wasm_bindgen(js_name = bezierCurveTo)]
+    pub fn bezier_curve_to(&mut self, c1x: f32, c1y: f32, c2x: f32, c2y: f32, x: f32, y: f32) {
+        self.inner.bezier_curve_to(
+            crate::Vector2::new(c1x, c1y),
+            crate::Vector2::new(c2x, c2y),
+            crate::Vector2::new(x, y),
+        );
+    }
+
+    pub fn arc(&mut self, cx: f32, cy: f32, radius: f32, start: f32, end: f32, clockwise: bool) {
+        self.inner
+            .arc(crate::Vector2::new(cx, cy), radius, start, end, clockwise);
+    }
+
+    /// Sample the path as a flat polyline — `divisions` points per sub-curve.
+    #[wasm_bindgen(js_name = getPoints)]
+    pub fn get_points(&self, divisions: usize) -> Vec<f32> {
+        self.inner
+            .get_points(divisions.max(1))
+            .into_iter()
+            .flat_map(|p| [p.x, p.y])
+            .collect()
+    }
+
+    /// The path as an SVG `d` string, with its curves intact rather than
+    /// flattened. Note that SVG's y axis points down and these coordinates are
+    /// y-up, so a document usually wants a `scale(1,-1)` around them.
+    #[wasm_bindgen(js_name = toSvgPathData)]
+    pub fn to_svg_path_data(&self, precision: usize) -> String {
+        self.inner.to_svg_path_data(precision)
+    }
+
+    /// Read an SVG `d` string — the inbound half, for turning artwork into
+    /// geometry.
+    #[wasm_bindgen(js_name = fromSvgPathData)]
+    pub fn from_svg_path_data(d: &str) -> Result<WebPath, JsValue> {
+        crate::Path::from_svg_path_data(d)
+            .map(|inner| WebPath { inner })
+            .map_err(|e| JsValue::from_str(&e.to_string()))
+    }
 }
 
 #[wasm_bindgen]
@@ -3754,6 +3801,39 @@ impl WebShape {
         WebShape {
             inner: crate::Shape::new(),
         }
+    }
+
+    #[wasm_bindgen(js_name = fromPath)]
+    pub fn from_path(outline: &WebPath) -> WebShape {
+        WebShape {
+            inner: crate::Shape::from_path(
+                crate::Path::from_svg_path_data(&outline.inner.to_svg_path_data(6))
+                    .unwrap_or_default(),
+            ),
+        }
+    }
+
+    #[wasm_bindgen(js_name = addHole)]
+    pub fn add_hole(&mut self, hole: &WebPath) {
+        if let Ok(p) = crate::Path::from_svg_path_data(&hole.inner.to_svg_path_data(6)) {
+            self.inner.add_hole(p);
+        }
+    }
+
+    /// Outline then holes, as one `d` string. Fill it with
+    /// `fill-rule="evenodd"` — see the Rust-side docs for why.
+    #[wasm_bindgen(js_name = toSvgPathData)]
+    pub fn to_svg_path_data(&self, precision: usize) -> String {
+        self.inner.to_svg_path_data(precision)
+    }
+
+    /// Read SVG path data as an outline plus holes: first subpath is the
+    /// outline, the rest are holes.
+    #[wasm_bindgen(js_name = fromSvgPathData)]
+    pub fn from_svg_path_data(d: &str) -> Result<WebShape, JsValue> {
+        crate::Shape::from_svg_path_data(d)
+            .map(|inner| WebShape { inner })
+            .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 }
 
@@ -4424,6 +4504,110 @@ impl WebSvgRenderer {
             inner: crate::SvgRenderer::new(w, h),
         }
     }
+
+    /// `0` lit (default), `1` flat material colour, `2` wireframe.
+    #[wasm_bindgen(js_name = setShading)]
+    pub fn set_shading(&mut self, mode: u32) {
+        self.inner.options.shading = match mode {
+            1 => crate::SvgShading::Flat,
+            2 => crate::SvgShading::Wireframe,
+            _ => crate::SvgShading::Lit,
+        };
+    }
+
+    /// Same three.js constants as
+    /// [`WebRenderer::setToneMapping`](WebRenderer::set_tone_mapping): `0`
+    /// NoToneMapping, `1` Linear, `4` ACESFilmic.
+    #[wasm_bindgen(js_name = setToneMapping)]
+    pub fn set_tone_mapping(&mut self, mode: u32, exposure: f32) {
+        let mapping = match mode {
+            0 => crate::ToneMapping::None,
+            4 => crate::ToneMapping::AcesFilmic,
+            _ => crate::ToneMapping::Linear,
+        };
+        self.inner.set_tone_mapping(mapping, exposure);
+    }
+
+    /// Emit `scene.background` as a full-canvas rect. Off gives a transparent
+    /// document that sits on whatever is behind it in the page.
+    #[wasm_bindgen(js_name = setBackground)]
+    pub fn set_background(&mut self, on: bool) {
+        self.inner.options.background = on;
+    }
+
+    #[wasm_bindgen(js_name = setCullBackfaces)]
+    pub fn set_cull_backfaces(&mut self, on: bool) {
+        self.inner.options.cull_backfaces = on;
+    }
+
+    /// Hairline stroke per face, in pixels, that hides the light seams SVG
+    /// leaves along shared edges. 0 disables it.
+    #[wasm_bindgen(js_name = setSeamStroke)]
+    pub fn set_seam_stroke(&mut self, px: f32) {
+        self.inner.options.seam_stroke = px.max(0.0);
+    }
+
+    /// Decimal places kept on coordinates. Lower is a smaller document.
+    #[wasm_bindgen(js_name = setPrecision)]
+    pub fn set_precision(&mut self, places: u32) {
+        self.inner.options.precision = places.min(8) as usize;
+    }
+
+    /// Draw a face's edges as Bézier curves when a straight one would miss the
+    /// real surface by more than this many pixels. Pass a value of 0 or less to
+    /// keep every edge straight.
+    #[wasm_bindgen(js_name = setCurveTolerance)]
+    pub fn set_curve_tolerance(&mut self, px: f32) {
+        self.inner.options.curve_tolerance = (px > 0.0).then_some(px);
+    }
+
+    /// Split faces spanning more than this fraction of their own distance from
+    /// the camera, so the depth sort has something meaningful to order. 0 or
+    /// less disables splitting.
+    #[wasm_bindgen(js_name = setDepthSplit)]
+    pub fn set_depth_split(&mut self, tolerance: f32) {
+        self.inner.options.depth_split = (tolerance > 0.0).then_some(tolerance);
+    }
+
+    /// Depth-sort faces back to front. Off only makes sense when the caller has
+    /// already ordered the scene.
+    #[wasm_bindgen(js_name = setSort)]
+    pub fn set_sort(&mut self, on: bool) {
+        self.inner.options.sort = on;
+    }
+
+    /// Resize the canvas, keeping every option set so far.
+    #[wasm_bindgen(js_name = setSize)]
+    pub fn set_size(&mut self, width: u32, height: u32) {
+        self.inner.set_size(width, height);
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn width(&self) -> u32 {
+        self.inner.width
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn height(&self) -> u32 {
+        self.inner.height
+    }
+
+    /// Background colour as `0xRRGGBB`, overriding `scene.background`. Mirrors
+    /// three.js's `setClearColor`.
+    #[wasm_bindgen(js_name = setClearColor)]
+    pub fn set_clear_color(&mut self, hex: u32, alpha: f32) {
+        self.inner.set_clear_color(
+            Some(crate::Color::from_hex(hex)),
+            Some(alpha.clamp(0.0, 1.0)),
+        );
+    }
+
+    /// Go back to taking the background from the scene.
+    #[wasm_bindgen(js_name = clearClearColor)]
+    pub fn clear_clear_color(&mut self) {
+        self.inner.set_clear_color(None, None);
+    }
+
     #[wasm_bindgen(js_name = renderToString)]
     pub fn render_to_string(&self, scene: &mut WebScene, camera: &WebCamera) -> String {
         match &camera.inner {
@@ -4431,6 +4615,22 @@ impl WebSvgRenderer {
             CameraInner::Orthographic(c) => self.inner.render_to_string(&mut scene.inner, c),
         }
     }
+}
+
+/// Wrap an RGBA frame — typically read back off a canvas — in an SVG document
+/// as an embedded PNG. The counterpart to [`WebSvgRenderer`] for when the scene
+/// needs the real renderer's textures, shadows or post-fx and a per-face
+/// painter's algorithm will not do.
+#[wasm_bindgen(js_name = svgFromRgba)]
+pub fn svg_from_rgba(width: u32, height: u32, rgba: &[u8]) -> Result<String, JsValue> {
+    let want = width as usize * height as usize * 4;
+    if rgba.len() != want {
+        return Err(JsValue::from_str(&format!(
+            "svgFromRgba: expected {want} bytes for {width}x{height}, got {}",
+            rgba.len()
+        )));
+    }
+    Ok(crate::svg_from_rgba(width, height, rgba))
 }
 
 // ======================================================================

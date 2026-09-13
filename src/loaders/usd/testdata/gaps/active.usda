@@ -1,0 +1,25 @@
+#usda 1.0
+(
+    defaultPrim = "Root"
+    metersPerUnit = 1
+    upAxis = "Y"
+)
+
+def Scope "Root"
+{
+    def Scope "Kept"
+    {
+        double x = 1
+    }
+
+    def Scope "Dropped" (
+        active = false
+    )
+    {
+        double x = 2
+
+        def Scope "ChildOfDropped"
+        {
+        }
+    }
+}

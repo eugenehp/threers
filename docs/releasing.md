@@ -5,12 +5,12 @@ PyPI (not crates.io). See also [`docs/bindings.md`](bindings.md).
 
 | Artifact | Version | Registry | Arch notes |
 |---|---|---|---|
-| `threers` | 0.0.5 | crates.io | source; consumers compile |
+| `threers` | 0.0.6 | crates.io | source; consumers compile |
 | `threers-physics` | 0.0.1 | crates.io | first release |
 | `threers-probe` | 0.0.1 | crates.io | first release |
-| `threers` (npm ESM) | 0.0.5 | npm / Deno | **mini** (default) + **full** wasm entries ([`crates/threers-js`](../crates/threers-js)) |
-| `threers-node` | 0.0.5 | npm | per-arch `.node` via `@threers/node-*` ([`crates/threers-node`](../crates/threers-node)) |
-| `threers` (PyPI) | 0.0.5 | PyPI | per-platform wheels ([`crates/threers-py`](../crates/threers-py)) |
+| `threers` (npm ESM) | 0.0.6 | npm / Deno | **mini** (default) + **full** wasm entries ([`crates/threers-js`](../crates/threers-js)) |
+| `threers-node` | 0.0.6 | npm | per-arch `.node` via `@threers/node-*` ([`crates/threers-node`](../crates/threers-node)) |
+| `threers` (PyPI) | 0.0.6 | PyPI | per-platform wheels ([`crates/threers-py`](../crates/threers-py)) |
 
 `crates/` also holds seven demos and benches. None of them publish
 (`publish = false`), and they fall into two groups:
@@ -29,7 +29,7 @@ Both companions depend on `threers` by **path and version**:
 
 ```toml
 # crates/threers-physics/Cargo.toml
-threers = { path = "../..", version = "0.0.5", features = ["mesh-bvh"] }
+threers = { path = "../..", version = "0.0.6", features = ["mesh-bvh"] }
 ```
 
 A path dependency is what the workspace builds against; the `version` is what the
@@ -107,7 +107,7 @@ cargo package -p threers                     # size, and it must compile from th
 cargo publish -p threers
 cargo publish -p threers-physics             # only after the first is on the index
 cargo publish -p threers-probe               # likewise
-git tag -a v0.0.5 -m 'threers 0.0.5' && git push --tags
+git tag -a v0.0.6 -m 'threers 0.0.6' && git push --tags
 
 # 7. Language packages — one script locally; CI on tag push.
 ./scripts/release-versions.sh                    # versions aligned?
@@ -115,7 +115,7 @@ git tag -a v0.0.5 -m 'threers 0.0.5' && git push --tags
 PUBLISH=1 ./scripts/release-all.sh publish     # upload (or push tag → CI)
 
 # Multi-arch npm-node + PyPI: push v* tag → .github/workflows/release-language-packages.yml
-git tag -a v0.0.5 -m 'threers 0.0.5' && git push --tags
+git tag -a v0.0.6 -m 'threers 0.0.6' && git push --tags
 ```
 
 ## One command (`scripts/release-all.sh`)

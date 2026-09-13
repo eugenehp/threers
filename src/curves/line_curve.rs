@@ -17,6 +17,10 @@ impl Curve2 for LineCurve {
     fn get_point(&self, t: f32) -> Vector2 {
         self.v1.lerp(self.v2, t)
     }
+
+    fn svg_segments(&self) -> Option<Vec<super::PathSegment>> {
+        Some(super::svg_path::line_segments(self))
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

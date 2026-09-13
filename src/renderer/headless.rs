@@ -269,6 +269,63 @@ struct Pending {
     padded: u32,
     unpadded: u32,
     height: u32,
+    /// What the texture held, so the bytes can be unpacked. The readback used
+    /// to assume four bytes a pixel, which made `Rgba16Float` — the HDR format
+    /// this builder offers — fail validation with "bytes per row is less than
+    /// the number of bytes in a complete row".
+    format: wgpu::TextureFormat,
+}
+
+/// Bytes a pixel, for the formats a headless colour target can hold.
+fn target_bpp(format: wgpu::TextureFormat) -> u32 {
+    match format {
+        wgpu::TextureFormat::Rgba16Float => 8,
+        wgpu::TextureFormat::Rgba32Float => 16,
+        _ => 4,
+    }
+}
+
+/// IEEE-754 binary16 → binary32.
+///
+/// Duplicated rather than shared with `raytrace::texture`: that module only
+/// exists under the `raytrace` feature, and reading back a frame must not
+/// depend on whether a path tracer was compiled in.
+fn half_to_f32(bits: u16) -> f32 {
+    let sign = ((bits >> 15) & 1) as u32;
+    let exp = ((bits >> 10) & 0x1f) as u32;
+    let mant = (bits & 0x3ff) as u32;
+    let out = match exp {
+        0 if mant == 0 => sign << 31,
+        0 => {
+            // Subnormal: shift until the implicit bit appears. After k shifts
+            // the value is (m/1024) * 2^(-14-k), so the binary32 exponent is
+            // 113 - k. Starting the count at -1 instead of 1 put every
+            // subnormal out by a factor of four.
+            let mut e = 1i32;
+            let mut m = mant;
+            while m & 0x400 == 0 {
+                m <<= 1;
+                e -= 1;
+            }
+            let exp32 = (127 - 15 + e) as u32;
+            (sign << 31) | (exp32 << 23) | ((m & 0x3ff) << 13)
+        }
+        0x1f => (sign << 31) | (0xff << 23) | (mant << 13),
+        _ => (sign << 31) | ((exp + 127 - 15) << 23) | (mant << 13),
+    };
+    f32::from_bits(out)
+}
+
+/// Linear light → an sRGB byte, the same curve the raster shader applies when
+/// it writes to an 8-bit target.
+fn encode_srgb_byte(v: f32) -> u8 {
+    let v = v.clamp(0.0, 1.0);
+    let s = if v <= 0.003_130_8 {
+        v * 12.92
+    } else {
+        1.055 * v.powf(1.0 / 2.4) - 0.055
+    };
+    (s * 255.0 + 0.5) as u8
 }
 
 impl HeadlessRenderer {
@@ -1140,6 +1197,8 @@ impl HeadlessRenderer {
         });
         // One linear "row": `take_pixels` hands back exactly `unpadded` bytes.
         let next = Pending {
+            // A packed byte stream, not an image: unpacked verbatim.
+            format: wgpu::TextureFormat::Rgba8Unorm,
             buffer,
             rx,
             padded: copy as u32,
@@ -1191,6 +1250,23 @@ impl HeadlessRenderer {
         drop(data);
         p.buffer.unmap();
         self.spare.push(p.buffer);
+        // These accessors are documented to hand back RGBA8, so an HDR target
+        // is tone-neutrally encoded here rather than leaking half-floats to a
+        // caller that is about to write a PNG.
+        if p.format == wgpu::TextureFormat::Rgba16Float {
+            return pixels
+                .chunks_exact(8)
+                .flat_map(|px| {
+                    let h = |i: usize| half_to_f32(u16::from_le_bytes([px[i], px[i + 1]]));
+                    [
+                        encode_srgb_byte(h(0)),
+                        encode_srgb_byte(h(2)),
+                        encode_srgb_byte(h(4)),
+                        (h(6).clamp(0.0, 1.0) * 255.0 + 0.5) as u8,
+                    ]
+                })
+                .collect();
+        }
         pixels
     }
 
@@ -1206,7 +1282,11 @@ impl HeadlessRenderer {
     /// from `self` at the point of use; the size is passed because the caller
     /// already knows it and the two must agree.
     fn queue_readback_from(&mut self, resolved: bool, w: u32, h: u32) -> Pending {
-        let unpadded = w * 4;
+        let source_format = match (resolved, self.resolve.as_ref()) {
+            (true, Some(ds)) => ds.texture().format(),
+            _ => self.target.color_texture.format(),
+        };
+        let unpadded = w * target_bpp(source_format);
         let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
         let padded = unpadded.div_ceil(align) * align;
         let size = (padded * h) as u64;
@@ -1265,6 +1345,7 @@ impl HeadlessRenderer {
             padded,
             unpadded,
             height: h,
+            format: source_format,
         }
     }
 }
@@ -1275,5 +1356,39 @@ fn srgb_to_linear(c: f32) -> f32 {
         c / 12.92
     } else {
         ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+#[cfg(test)]
+mod readback_format_tests {
+    use super::*;
+
+    #[test]
+    fn an_hdr_target_is_eight_bytes_a_pixel() {
+        // The readback assumed four, and a `Rgba16Float` frame failed
+        // validation rather than coming back wrong, which at least was loud.
+        assert_eq!(target_bpp(wgpu::TextureFormat::Rgba16Float), 8);
+        assert_eq!(target_bpp(wgpu::TextureFormat::Rgba8UnormSrgb), 4);
+        assert_eq!(target_bpp(wgpu::TextureFormat::Bgra8Unorm), 4);
+    }
+
+    #[test]
+    fn halves_decode_at_the_anchors() {
+        assert_eq!(half_to_f32(0x0000), 0.0);
+        assert_eq!(half_to_f32(0x3c00), 1.0);
+        assert_eq!(half_to_f32(0x3800), 0.5);
+        assert_eq!(half_to_f32(0xbc00), -1.0);
+        // Subnormals are the branch worth pinning: 0x0001 is the smallest.
+        assert!((half_to_f32(0x0001) - 5.96e-8).abs() < 1e-9);
+    }
+
+    #[test]
+    fn srgb_encoding_hits_the_known_anchors() {
+        assert_eq!(encode_srgb_byte(0.0), 0);
+        assert_eq!(encode_srgb_byte(1.0), 255);
+        assert_eq!(encode_srgb_byte(0.5), 188);
+        // Out of range on either side is clamped, not wrapped.
+        assert_eq!(encode_srgb_byte(-1.0), 0);
+        assert_eq!(encode_srgb_byte(4.0), 255);
     }
 }

@@ -357,6 +357,26 @@ impl Material {
         }
     }
 
+    /// Set the render side, where the material has one to set.
+    ///
+    /// The kinds that answer a fixed number from [`side`](Self::side) — a sky
+    /// is back faces because of how it is drawn, an atmosphere front faces
+    /// because the shader needs one entry point — keep it, since changing it
+    /// would break the shader rather than change the look.
+    pub fn set_side(&mut self, side: u32) {
+        match self {
+            Material::Basic(m) => m.side = side,
+            Material::Lambert(m) => m.side = side,
+            Material::Phong(m) => m.side = side,
+            Material::Standard(m) => m.side = side,
+            Material::Physical(m) => m.side = side,
+            Material::Toon(m) => m.side = side,
+            Material::Mirror(m) => m.side = side,
+            Material::Shader(m) => m.side = side,
+            _ => {}
+        }
+    }
+
     pub fn shininess(&self) -> f32 {
         match self {
             Material::Phong(m) => m.shininess,

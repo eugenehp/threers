@@ -1,0 +1,142 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    metersPerUnit = 1
+    upAxis = "Y"
+)
+
+def Xform "World"
+{
+    def DistantLight "Sun"
+    {
+        float inputs:intensity = 3
+        color3f inputs:color = (1, 0.95, 0.8)
+        float inputs:angle = 0.53
+        float inputs:exposure = 1
+        double3 xformOp:translate = (0, 10, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def SphereLight "Bulb"
+    {
+        float inputs:intensity = 500
+        color3f inputs:color = (1, 0.9, 0.7)
+        float inputs:radius = 0.25
+    }
+
+    def RectLight "Panel"
+    {
+        float inputs:intensity = 80
+        float inputs:width = 4
+        float inputs:height = 2
+        color3f inputs:color = (0.9, 0.9, 1)
+    }
+
+    def DiskLight "Disk"
+    {
+        float inputs:intensity = 20
+        float inputs:radius = 1.5
+    }
+
+    def DomeLight "Sky"
+    {
+        float inputs:intensity = 1
+        color3f inputs:color = (0.4, 0.6, 1)
+    }
+
+    def SphereLight "Torch" (
+        prepend apiSchemas = ["ShapingAPI"]
+    )
+    {
+        float inputs:intensity = 200
+        float inputs:radius = 0.1
+        float inputs:shaping:cone:angle = 25
+        float inputs:shaping:cone:softness = 0.4
+    }
+
+    def Cube "Box"
+    {
+        double size = 3
+    }
+
+    def Sphere "Ball"
+    {
+        double radius = 2
+    }
+
+    def Cylinder "Tube"
+    {
+        double radius = 0.5
+        double height = 4
+        uniform token axis = "Y"
+    }
+
+    def Cone "Spike"
+    {
+        double radius = 1
+        double height = 2
+    }
+
+    def Capsule "Pill"
+    {
+        double radius = 0.5
+        double height = 3
+    }
+
+    def Plane "Ground"
+    {
+        double width = 20
+        double length = 10
+        uniform token axis = "Y"
+    }
+
+    def Points "Dust"
+    {
+        point3f[] points = [(0, 0, 0), (1, 1, 1), (2, 0, 2)]
+        float[] widths = [0.1, 0.2, 0.3]
+        color3f[] primvars:displayColor = [(1, 0, 0), (0, 1, 0), (0, 0, 1)]
+    }
+
+    def BasisCurves "Hair"
+    {
+        uniform token type = "linear"
+        int[] curveVertexCounts = [3, 2]
+        point3f[] points = [(0, 0, 0), (0, 1, 0), (0, 2, 0), (1, 0, 0), (1, 1, 0)]
+        float[] widths = [0.05]
+    }
+
+    def Camera "Eye"
+    {
+        float focalLength = 35
+        float horizontalAperture = 36
+        float verticalAperture = 24
+        float2 clippingRange = (0.1, 500)
+        uniform token projection = "perspective"
+        double3 xformOp:translate = (0, 1.6, 5)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Camera "Ortho"
+    {
+        uniform token projection = "orthographic"
+        float horizontalAperture = 100
+        float verticalAperture = 50
+        float2 clippingRange = (1, 200)
+    }
+
+    def Mesh "Hidden"
+    {
+        token visibility = "invisible"
+        int[] faceVertexCounts = [3]
+        int[] faceVertexIndices = [0, 1, 2]
+        point3f[] points = [(0, 0, 0), (1, 0, 0), (0, 1, 0)]
+    }
+
+    def Mesh "GuideOnly"
+    {
+        uniform token purpose = "guide"
+        int[] faceVertexCounts = [3]
+        int[] faceVertexIndices = [0, 1, 2]
+        point3f[] points = [(0, 0, 0), (1, 0, 0), (0, 1, 0)]
+    }
+}

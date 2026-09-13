@@ -110,7 +110,13 @@ mod camera;
 mod checkpoint;
 mod denoise;
 mod fingerprint;
-mod primitives;
+/// Turning lines and points into the triangles a tracer can intersect.
+///
+/// Public because a rasteriser needs the same expansion: hardware lines are one
+/// pixel wide and have no width to give, so drawing a line of a stated world
+/// width means building these quads either way, and two copies of the
+/// construction would drift.
+pub mod primitives;
 /// The trained denoiser's forward pass, dependency-free and wasm-capable.
 pub mod denoise_net;
 mod distribution;

@@ -60,10 +60,66 @@ impl Curve2 for EllipseCurve {
         let angle = self.a_start + t * delta_angle;
         let x = self.x_radius * angle.cos();
         let y = self.y_radius * angle.sin();
-        let (cr, sr) = self.rotation.sin_cos();
+        // `sin_cos` returns (sin, cos) — in that order. Binding it the other
+        // way round rotates every ellipse a quarter turn, which is invisible on
+        // a full circle and wrong on every arc.
+        let (sr, cr) = self.rotation.sin_cos();
         Vector2::new(
             self.center.x + cr * x - sr * y,
             self.center.y + sr * x + cr * y,
         )
+    }
+
+    fn svg_segments(&self) -> Option<Vec<super::PathSegment>> {
+        Some(super::svg_path::ellipse_segments(self))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn close(a: Vector2, b: Vector2) -> bool {
+        (a - b).length() < 1e-4
+    }
+
+    #[test]
+    fn unrotated_arc_starts_on_the_positive_x_axis() {
+        let c = EllipseCurve::new(Vector2::ZERO, 5.0, 5.0, 0.0, PI, false, 0.0);
+        assert!(
+            close(c.get_point(0.0), Vector2::new(5.0, 0.0)),
+            "start {:?}",
+            c.get_point(0.0)
+        );
+        assert!(
+            close(c.get_point(0.5), Vector2::new(0.0, 5.0)),
+            "quarter {:?}",
+            c.get_point(0.5)
+        );
+        assert!(
+            close(c.get_point(1.0), Vector2::new(-5.0, 0.0)),
+            "end {:?}",
+            c.get_point(1.0)
+        );
+    }
+
+    /// A quarter-turn `rotation` has to move the start a quarter turn, not
+    /// leave it where an unrotated curve would be.
+    #[test]
+    fn rotation_turns_the_ellipse() {
+        let c = EllipseCurve::new(Vector2::ZERO, 5.0, 5.0, 0.0, PI, false, PI / 2.0);
+        assert!(
+            close(c.get_point(0.0), Vector2::new(0.0, 5.0)),
+            "start {:?}",
+            c.get_point(0.0)
+        );
+    }
+
+    /// An ellipse is not a circle: the radii must stay on their own axes.
+    #[test]
+    fn radii_apply_to_their_own_axis() {
+        let c = EllipseCurve::new(Vector2::new(1.0, 2.0), 4.0, 1.0, 0.0, PI * 2.0, false, 0.0);
+        assert!(close(c.get_point(0.0), Vector2::new(5.0, 2.0)));
+        assert!(close(c.get_point(0.25), Vector2::new(1.0, 3.0)));
     }
 }

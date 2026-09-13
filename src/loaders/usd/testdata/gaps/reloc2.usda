@@ -1,0 +1,13 @@
+#usda 1.0
+(
+    defaultPrim = "Holder"
+    relocates = {
+        </Holder/OldName>: </Holder/NewName>
+    }
+)
+
+def Xform "Holder" (
+    references = @asset_r.usda@
+)
+{
+}

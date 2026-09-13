@@ -264,9 +264,10 @@ pub use core::{
     Points, Raycaster, Skeleton, SkinnedMesh, Sprite,
 };
 pub use curves::{
-    CatmullRomCurve3, CubicBezierCurve, CubicBezierCurve3, Curve2, Curve3, CurvePath, EllipseCurve,
-    LineCurve, LineCurve3, NURBSCurve, NURBSSurface, Path, QuadraticBezierCurve,
-    QuadraticBezierCurve3, Shape, SplineCurve,
+    parse_svg_subpaths, segments_to_path_data, CatmullRomCurve3, CubicBezierCurve,
+    CubicBezierCurve3, Curve2, Curve3, CurvePath, EllipseCurve, LineCurve, LineCurve3, NURBSCurve,
+    NURBSSurface, Path, PathSegment, QuadraticBezierCurve, QuadraticBezierCurve3, Shape,
+    SplineCurve, SvgPathError,
 };
 pub use extras::{
     CcdIkSolver, IkBone, MarchingCubes, Octree, PmremGenerator, SimplexNoise, PMREM_MIP_LEVELS,
@@ -352,7 +353,9 @@ pub use renderer::headless::{
 pub use wgpu;
 
 pub use renderer::{RenderTarget, Renderer, ToneMapping};
-pub use renderers::{Css2dRenderer, Css3dRenderer, SvgRenderer};
+pub use renderers::{
+    svg_from_rgba, Css2dRenderer, Css3dRenderer, SvgOptions, SvgRenderer, SvgShading,
+};
 pub use scene::Scene;
 pub use stats::Stats;
 pub use textures::{

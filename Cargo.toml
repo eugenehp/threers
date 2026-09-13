@@ -21,7 +21,7 @@ resolver = "2"
 
 [package]
 name = "threers"
-version = "0.0.5"
+version = "0.0.6"
 edition = "2021"
 # wgpu 30 requires 1.87, and this crate uses `is_multiple_of`, stabilised in the
 # same release. Declared so cargo says so up front rather than letting the build
@@ -56,6 +56,23 @@ exclude = [
     "scripts/**",
 ]
 
+# docs.rs builds with default features only, which for this crate means most of
+# it — USD, CAD, the codecs, the path tracer — would not appear in the published
+# documentation at all. The Apple-only features are left out because the
+# builders are Linux, and `manifold` and `rlx` because they reach outside Rust.
+[package.metadata.docs.rs]
+features = [
+    "usd",
+    "cad",
+    "media",
+    "planet",
+    "raytrace",
+    "assembly-check",
+    "step",
+    "parallel",
+    "async",
+]
+
 [lib]
 crate-type = ["cdylib", "rlib"]
 
@@ -75,6 +92,10 @@ openscad = ["bvh-csg"]
 manifold = ["dep:manifold-rust", "openscad"]
 # Planets, moons, starfields, map generation.
 planet = []
+# Universal Scene Description — `.usda`, `.usdc` and `.usdz`, read and written.
+# Pure Rust with no dependencies of its own, so this costs compile time and
+# nothing else; it is opt-in because most scenes never touch USD.
+usd = []
 # Native frame-sequence export via ffmpeg (implies captions).
 video = ["captions"]
 # Pure-Rust GIF, APNG, VP9/WebM, H.264/MP4, HEVC (wasm-safe).
@@ -179,6 +200,10 @@ features = [
     "Performance",
     "console",
 ]
+
+[[example]]
+name = "usd_animation"
+required-features = ["usd"]
 
 [[example]]
 name = "headless_video"
@@ -494,4 +519,122 @@ required-features = ["rlx-geo"]
 
 [[example]]
 name = "codec_bench"
+required-features = ["native-codec"]
+
+# Browser tests. `wasm-bindgen-test` is only needed when building for wasm, so
+# it is a dev-dependency of that target alone and costs a native build nothing.
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "0.3"
+
+# Integration tests that reach into an optional module. Without these, a
+# plain `cargo test` tries to build every file under `tests/` against
+# whatever features happen to be on, and fails to compile the ones whose
+# module is not there.
+
+[[test]]
+name = "usd_wasm"
+required-features = ["usd"]
+
+[[test]]
+name = "animation_streaming"
+required-features = ["native-codec"]
+
+[[test]]
+name = "apng"
+required-features = ["native-codec"]
+
+[[test]]
+name = "assembly_real_geometry"
+required-features = ["assembly-check"]
+
+[[test]]
+name = "brep"
+required-features = ["brep"]
+
+[[test]]
+name = "brep_boolean"
+required-features = ["brep"]
+
+[[test]]
+name = "brep_csg"
+required-features = ["brep", "openscad"]
+
+[[test]]
+name = "captions_mux"
+required-features = ["native-codec"]
+
+[[test]]
+name = "frame_parallel"
+required-features = ["native-codec"]
+
+[[test]]
+name = "gif"
+required-features = ["native-codec"]
+
+[[test]]
+name = "h264_animation_parity"
+required-features = ["native-codec"]
+
+[[test]]
+name = "h264_compress"
+required-features = ["native-codec"]
+
+[[test]]
+name = "h264_ffmpeg"
+required-features = ["native-codec"]
+
+[[test]]
+name = "hevc_alpha"
+required-features = ["native-codec"]
+
+[[test]]
+name = "hevc_compress"
+required-features = ["native-codec"]
+
+[[test]]
+name = "hevc_ffmpeg"
+required-features = ["native-codec"]
+
+[[test]]
+name = "hevc_native_mp4"
+required-features = ["native-codec"]
+
+[[test]]
+name = "hevc_residual_conformance"
+required-features = ["native-codec"]
+
+[[test]]
+name = "mesh_bvh_raycast"
+required-features = ["mesh-bvh"]
+
+[[test]]
+name = "nurbs"
+required-features = ["nurbs"]
+
+[[test]]
+name = "planet_render"
+required-features = ["planet"]
+
+[[test]]
+name = "polar_sampling"
+required-features = ["planet"]
+
+[[test]]
+name = "rate_control"
+required-features = ["native-codec"]
+
+[[test]]
+name = "scad_animate"
+required-features = ["openscad"]
+
+[[test]]
+name = "step"
+required-features = ["step"]
+
+[[test]]
+name = "watertight_gate"
+required-features = ["openscad"]
+
+[[test]]
+name = "webm"
 required-features = ["native-codec"]

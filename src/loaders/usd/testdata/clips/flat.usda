@@ -1,0 +1,21 @@
+#usda 1.0
+(
+    defaultPrim = "Shot"
+    endTimeCode = 4
+    startTimeCode = 0
+    timeCodesPerSecond = 24
+)
+
+def Xform "Shot" (
+    apiSchemas = ["ClipsAPI"]
+)
+{
+    double3 xformOp:translate.timeSamples = {
+        0: (0, 0, 0),
+        1: (0, 1, 0),
+        2: (1, 0, 0),
+        3: (1, 1, 0),
+    }
+    uniform token[] xformOpOrder = ["xformOp:translate"]
+}
+

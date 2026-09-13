@@ -1,0 +1,11 @@
+#usda 1.0
+(
+    defaultPrim = "Asset"
+)
+def Xform "Asset"
+{
+    def Scope "OldName"
+    {
+        double marker = 7
+    }
+}

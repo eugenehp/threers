@@ -22,6 +22,20 @@ pub trait Curve2: Send + Sync {
         let pts = self.get_points(divisions);
         pts.windows(2).map(|w| (w[1] - w[0]).length()).sum()
     }
+
+    /// This curve written exactly as SVG path commands, if SVG can express it.
+    ///
+    /// `None` — the default — means it cannot, and the caller flattens the
+    /// curve to line segments instead. So a `Curve2` implemented outside the
+    /// crate still exports, just as a polyline, and only types that opt in pay
+    /// for the conversion.
+    ///
+    /// The starting point is not part of the answer: the caller already knows
+    /// where its pen is, and [`get_point(0.0)`](Self::get_point) is the same
+    /// number for every implementor.
+    fn svg_segments(&self) -> Option<Vec<super::PathSegment>> {
+        None
+    }
 }
 
 /// 3D parametric curve with `t` ∈ [0, 1].

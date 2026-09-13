@@ -66,7 +66,12 @@ const MAT_STRIDE: usize = 88;
 /// Floats per analytic light.
 const LIGHT_STRIDE: usize = 20;
 /// Floats per triangle: 3 positions, 3 normals, 3 UVs.
-const TRI_STRIDE: usize = 24;
+/// Floats per triangle in the packed scene buffer.
+///
+/// 9 position + 9 normal + 6 uv + 9 colour. MUST match `TRI_STRIDE` in
+/// `pathtrace.wgsl`; the two index the same buffer and a mismatch reads
+/// neighbouring triangles' data as geometry.
+const TRI_STRIDE: usize = 33;
 /// Floats per emissive entry: area and cumulative weight.
 const EMIT_STRIDE: usize = 2;
 /// Floats per pixel in the accumulation buffer.
@@ -309,9 +314,25 @@ struct SceneResources {
     bind_group: wgpu::BindGroup,
     accum: wgpu::Buffer,
     uniform: wgpu::Buffer,
-    /// Identity of the scene these were built for, so a repeat `render` with
-    /// the same scene reuses them.
-    signature: (usize, usize, usize),
+    /// The packed scene: BVH nodes, geometry, indices, texture atlas.
+    ///
+    /// Held separately from the bind group so a film resize can rebuild the
+    /// accumulator and rebind without repacking. Before this they were reachable
+    /// only through the bind group, so dropping it to resize threw the BVH away
+    /// with it.
+    node_buf: wgpu::Buffer,
+    data_buf: wgpu::Buffer,
+    idx_buf: wgpu::Buffer,
+    atlas_view: wgpu::TextureView,
+    /// Identity of the SCENE — deliberately not of the film.
+    ///
+    /// The film size used to be folded in here, so changing resolution looked
+    /// like a changed scene and forced a full repack. The resolution ladder
+    /// changes it twice per session, and packing is the most expensive step in
+    /// the whole path (~228 ms at 1280x800 against ~110 ms to trace a sample).
+    signature: (usize, usize),
+    /// Film dimensions these accumulator-sized resources were built for.
+    film_size: (u32, u32),
     accum_len: usize,
     /// Sample count the device accumulator holds, when it is known to match the
     /// host film. `None` forces a re-upload.
@@ -335,6 +356,11 @@ pub struct GpuBackend {
     readback_pending: bool,
     caps: GpuCaps,
     notes: Vec<String>,
+    /// How many times the scene has been packed and its BVH built.
+    ///
+    /// Exposed because "did that resize repack the scene?" is otherwise
+    /// invisible, and it is the single most expensive thing this backend does.
+    packs: usize,
 }
 
 impl std::fmt::Debug for GpuBackend {
@@ -430,6 +456,11 @@ impl GpuBackend {
     /// For building further backends on the same device — batch work that
     /// renders many scenes wants one adapter for the run, not one per scene,
     /// and [`Self::headless`] acquires a new device every time it is called.
+    /// How many times this backend has packed a scene and built its BVH.
+    pub fn packs(&self) -> usize {
+        self.packs
+    }
+
     pub fn device_and_queue(&self) -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
         (Arc::clone(&self.device), Arc::clone(&self.queue))
     }
@@ -510,6 +541,7 @@ impl GpuBackend {
             readback_pending: false,
             caps,
             notes: Vec::new(),
+            packs: 0,
         }
     }
 
@@ -596,6 +628,21 @@ impl GpuBackend {
         Ok(())
     }
 
+    /// Awaited twin of [`Self::sync_film`], for wasm where a blocking map
+    /// deadlocks.
+    #[cfg(target_arch = "wasm32")]
+    pub async fn sync_film_async(&mut self, film: &mut Film) -> Result<(), RaytraceError> {
+        if !self.readback_pending {
+            return Ok(());
+        }
+        let Some(res) = self.resources.as_ref() else {
+            return Err(RaytraceError::NoDevice("scene was not prepared".into()));
+        };
+        readback_full_async(&self.device, &self.queue, &res.accum, film).await?;
+        self.readback_pending = false;
+        Ok(())
+    }
+
     /// What the packing could not carry over — a texture that did not fit the
     /// atlas.
     pub fn report(&self) -> &[String] {
@@ -611,6 +658,53 @@ impl GpuBackend {
     }
 
     /// Build (or reuse) the device-side scene.
+    /// Rebuild only the film-sized resources, reusing the packed scene.
+    ///
+    /// Saves repacking and rebuilding the BVH when only the resolution changed.
+    fn resize_film(&mut self, film: &Film) -> Result<(), RaytraceError> {
+        let Some(old) = self.resources.take() else {
+            return Err(RaytraceError::NoDevice("scene was not prepared".into()));
+        };
+        let accum_len = film.width() as usize * film.height() as usize * ACCUM_STRIDE;
+        self.caps.check_film(film.width(), film.height())?;
+        self.caps.check_storage((accum_len * 4) as u64, "film accum")?;
+
+        let accum = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("pathtrace accum"),
+            size: (accum_len * 4) as u64,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("pathtrace bind group"),
+            layout: &self.layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: old.uniform.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: old.node_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: old.data_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: old.idx_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: accum.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(&old.atlas_view),
+                },
+            ],
+        });
+        self.resources = Some(SceneResources {
+            bind_group,
+            accum,
+            film_size: (film.width(), film.height()),
+            accum_len,
+            // The new accumulator is empty, so the host film must be re-uploaded.
+            accum_samples: None,
+            ..old
+        });
+        self.readback_pending = false;
+        Ok(())
+    }
+
     fn ensure_resources(
         &mut self,
         scene: &RaytraceScene,
@@ -624,15 +718,21 @@ impl GpuBackend {
         let signature = (
             scene.tris.len(),
             scene.materials.len() << 20 | scene.lights.len() << 8 | scene.emissive.len().min(255),
-            (film.width() as usize) << 16 | film.height() as usize,
         );
+        let film_size = (film.width(), film.height());
         if let Some(r) = &self.resources {
-            if r.signature == signature {
+            if r.signature == signature && r.film_size == film_size {
                 return Ok(());
+            }
+            // Same scene, different film: rebuild only what the film sizes and
+            // rebind. The packed geometry and its BVH are reused as they are.
+            if r.signature == signature {
+                return self.resize_film(film);
             }
         }
 
         let packed = pack_scene(scene, self.caps);
+        self.packs += 1;
         self.notes = packed.notes.clone();
 
         self.caps.validate_kernel()?;
@@ -711,6 +811,7 @@ impl GpuBackend {
         });
 
         let atlas_view = packed.atlas.upload(&self.device, &self.queue, self.caps);
+        let (node_buf, data_buf, idx_buf) = (node_buf, data_buf, idx_buf);
 
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("pathtrace bind group"),
@@ -747,7 +848,12 @@ impl GpuBackend {
             bind_group,
             accum,
             uniform,
+            node_buf,
+            data_buf,
+            idx_buf,
+            atlas_view,
             signature,
+            film_size,
             accum_len,
             accum_samples: None,
         });
@@ -1031,7 +1137,18 @@ impl GpuBackend {
             done += batch;
         }
 
-        let defer = self.defer_readback && matches!(scope, ReadbackScope::Regions(_));
+        // Region scope defers; full scope reads back synchronously from inside
+        // `render`, and native callers rely on the film being populated when it
+        // returns — 14 tests assert exactly that.
+        //
+        // On wasm that synchronous readback is fatal rather than merely eager:
+        // a blocking buffer map can never complete in a browser, so a
+        // full-frame trace hangs before it ever reaches the readback code that
+        // was made awaitable. There, full scope defers too and
+        // `sync_film_async` completes it — it reads the whole accumulator, so
+        // it is the right completion for either scope.
+        let defer = self.defer_readback
+            && (cfg!(target_arch = "wasm32") || matches!(scope, ReadbackScope::Regions(_)));
         if defer {
             self.readback_pending = true;
         } else {
@@ -1088,13 +1205,18 @@ fn readback_film(
     }
 }
 
-fn readback_full(
+/// Copy the whole accumulator into a fresh mappable buffer.
+///
+/// Shared by the blocking and awaited readbacks so the two cannot drift in how
+/// they stage the copy — only in how they wait for it.
+fn copy_accum_to_staging(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     accum: &wgpu::Buffer,
-    film: &mut Film,
-) -> Result<(), RaytraceError> {
-    let staging_bytes = (film.pixels().len() * ACCUM_STRIDE * 4) as u64;
+    film: &Film,
+) -> (wgpu::Buffer, usize) {
+    let count = film.pixels().len();
+    let staging_bytes = (count * ACCUM_STRIDE * 4) as u64;
     let staging = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("pathtrace readback"),
         size: staging_bytes.max(4),
@@ -1106,9 +1228,35 @@ fn readback_full(
     });
     encoder.copy_buffer_to_buffer(accum, 0, &staging, 0, staging_bytes);
     queue.submit(Some(encoder.finish()));
+    (staging, count)
+}
+
+fn readback_full(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    accum: &wgpu::Buffer,
+    film: &mut Film,
+) -> Result<(), RaytraceError> {
+    let (staging, _) = copy_accum_to_staging(device, queue, accum, film);
     let values = map_staging_f32(device, &staging)?;
     for (i, p) in film.pixels_mut().iter_mut().enumerate() {
         apply_accum_pixel(p, &values, i * ACCUM_STRIDE);
+    }
+    Ok(())
+}
+
+/// Async twin of [`readback_full`]. Kept beside it so the two cannot drift.
+#[cfg(target_arch = "wasm32")]
+async fn readback_full_async(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    accum: &wgpu::Buffer,
+    film: &mut Film,
+) -> Result<(), RaytraceError> {
+    let (staging, count) = copy_accum_to_staging(device, queue, accum, film);
+    let values = map_staging_f32_async(device, &staging).await?;
+    for i in 0..count {
+        apply_accum_pixel(&mut film.pixels_mut()[i], &values, i * ACCUM_STRIDE);
     }
     Ok(())
 }
@@ -1196,6 +1344,39 @@ fn readback_many_regions(
         }
     }
     Ok(())
+}
+
+/// Await a buffer mapping instead of blocking on it.
+///
+/// The blocking form cannot work in a browser: `poll` returns immediately
+/// there and the map callback is delivered by the JS event loop, which a
+/// blocked thread is holding — so a synchronous readback deadlocks outright.
+/// Awaiting hands control back so the callback can arrive.
+#[cfg(target_arch = "wasm32")]
+async fn map_staging_f32_async(
+    device: &wgpu::Device,
+    staging: &wgpu::Buffer,
+) -> Result<Vec<f32>, RaytraceError> {
+    let slice = staging.slice(..);
+    let (tx, rx) = futures_channel::oneshot::channel();
+    slice.map_async(wgpu::MapMode::Read, move |r| {
+        let _ = tx.send(r);
+    });
+    // Still polled: on wasm this submits the work rather than waiting for it.
+    let _ = device.poll(wgpu::PollType::Poll);
+    match rx.await {
+        Ok(Ok(())) => {}
+        other => {
+            return Err(RaytraceError::DeviceLost(format!(
+                "readback failed: {other:?}"
+            )))
+        }
+    }
+    let mapped = slice.get_mapped_range().expect("buffer range is mapped");
+    let values: Vec<f32> = bytemuck::cast_slice(&mapped).to_vec();
+    drop(mapped);
+    staging.unmap();
+    Ok(values)
 }
 
 fn map_staging_f32(device: &wgpu::Device, staging: &wgpu::Buffer) -> Result<Vec<f32>, RaytraceError> {
@@ -1609,6 +1790,9 @@ fn pack_scene(scene: &RaytraceScene, caps: GpuCaps) -> Packed {
         }
         for uv in &sh.uvs {
             data.extend_from_slice(&[uv.x, uv.y]);
+        }
+        for c in &sh.colors {
+            data.extend_from_slice(&[c.x, c.y, c.z]);
         }
     }
 
@@ -3099,5 +3283,59 @@ mod tests {
         let (w, h) = r.set_size(huge, huge / 2);
         assert!(r.check_film_size(w, h).is_ok());
         assert!(w <= caps.max_film_side());
+    }
+}
+
+#[cfg(test)]
+mod resize_cache_tests {
+    use super::*;
+    use crate::raytrace::{RaytraceRenderer, RaytraceSettings};
+    use crate::{BoxGeometry, Color, Mesh, Object3D, Scene, StandardMaterial};
+
+    fn scene() -> Scene {
+        let mut s = Scene::new();
+        s.add(Object3D::mesh(Mesh::new(
+            BoxGeometry::new(1.0, 1.0, 1.0),
+            StandardMaterial::new(Color::WHITE).into(),
+        )));
+        s
+    }
+
+    #[test]
+    fn resizing_the_film_does_not_repack_the_scene() {
+        // Packing builds the BVH and is the most expensive step in the path —
+        // ~228 ms at 1280x800 against ~110 ms to trace a sample. The film size
+        // used to be part of the cache key, so every resolution change repacked
+        // geometry that had not moved.
+        let Ok(backend) = GpuBackend::headless() else {
+            eprintln!("no GPU; skipping");
+            return;
+        };
+        let mut sc = scene();
+        let cam = crate::PerspectiveCamera::new(45.0, 1.0, 0.1, 100.0);
+        let mut rt = RaytraceRenderer::with_backend(64, 64, Box::new(backend));
+        rt.set_settings(RaytraceSettings { samples_per_pixel: 1, ..Default::default() });
+
+        // `prepare_if_changed`, not `prepare`: the latter rebuilds
+        // unconditionally and calls `invalidate` itself, which is correct for
+        // "the scene changed" and is not what a resize is. This mirrors what
+        // the interactive path does.
+        rt.prepare_if_changed(&mut sc, &cam);
+        let _ = rt.accumulate(1);
+        let after_first = packs_of(&mut rt);
+        assert_eq!(after_first, 1, "first prepare should pack once");
+
+        rt.set_size(32, 32);
+        rt.prepare_if_changed(&mut sc, &cam);
+        let _ = rt.accumulate(1);
+        assert_eq!(
+            packs_of(&mut rt),
+            after_first,
+            "resizing the film repacked the scene"
+        );
+    }
+
+    fn packs_of(rt: &mut RaytraceRenderer) -> usize {
+        rt.gpu_packs().unwrap_or(0)
     }
 }

@@ -1,0 +1,14 @@
+#usda 1.0
+(
+    defaultPrim = "Moving"
+)
+
+def Xform "Moving"
+{
+    double3 xformOp:translate.timeSamples = {
+        100: (0, 0, 0),
+        120: (10, 0, 0),
+    }
+    uniform token[] xformOpOrder = ["xformOp:translate"]
+}
+

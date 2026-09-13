@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>SVG renderer — threers</title>
+    <style>
+        :root { color-scheme: dark; }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            background: #08090d;
+            color: #e6e8ee;
+            font: 14px/1.5 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+        }
+        header {
+            display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap;
+            padding: 18px 24px 12px;
+            border-bottom: 1px solid #1e2129;
+        }
+        h1 { font-size: 17px; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+        h1 .tag { color: #7d879c; font-weight: 400; }
+        #status { color: #7d879c; font-size: 12px; }
+        nav { margin-left: auto; display: flex; gap: 14px; }
+        nav a { color: #6ea8fe; text-decoration: none; font-size: 13px; }
+        nav a:hover { text-decoration: underline; }
+
+        main { padding: 20px 24px 40px; max-width: 1100px; margin: 0 auto; }
+        .intro { color: #97a0b3; max-width: 78ch; margin: 0 0 18px; font-size: 13px; }
+        .intro code { color: #cfd6e6; background: #14161d; padding: 1px 5px; border-radius: 4px; }
+
+        /* The renderer's own <svg> lands in here. Nothing else draws. */
+        #stage {
+            width: 100%; aspect-ratio: 4 / 3; border-radius: 10px; overflow: hidden;
+            background: #05060a; display: block;
+        }
+        #stage svg { width: 100%; height: 100%; display: block; }
+
+        .controls {
+            display: flex; flex-wrap: wrap; gap: 14px 22px; align-items: center;
+            margin: 16px 0 8px; padding: 14px 16px;
+            background: #0e1016; border: 1px solid #1e2129; border-radius: 10px;
+        }
+        .controls label { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #b9c1d1; }
+        .controls select, .controls input[type="range"] { accent-color: #6ea8fe; }
+        button {
+            font: inherit; font-size: 13px; padding: 6px 12px; border-radius: 6px;
+            border: 1px solid #2a2f3c; background: #161a23; color: #e6e8ee; cursor: pointer;
+        }
+        button:hover { background: #1d2230; }
+        #stats {
+            margin-top: 10px; padding: 10px 12px;
+            background: #0e1016; border: 1px solid #1e2129; border-radius: 8px;
+            font-size: 13px; color: #97a0b3; font-variant-numeric: tabular-nums;
+        }
+        #err { color: #ff8080; white-space: pre-wrap; font-size: 12px; }
+        h2 { font-size: 15px; margin: 26px 0 8px; }
+        pre { background: #0e1016; border: 1px solid #1e2129; padding: 12px; border-radius: 8px; font-size: 12px; overflow: auto; }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>SVG renderer <span class="tag">· threers</span></h1>
+        <span id="status">loading wasm…</span>
+        <nav>
+            <a href="/web/examples/">examples</a>
+            <a href="/web/index.html">main demo</a>
+        </nav>
+    </header>
+    <main>
+        <p class="intro">
+            Everything below is <strong>vector</strong> — one <code>&lt;path&gt;</code> per triangle
+            in a live <code>&lt;svg&gt;</code> element, not a canvas. Zoom the page in and the edges
+            stay sharp. There is no WebGL or WebGPU context on this page at all: the renderer runs
+            on the CPU in wasm, so it works where an adapter is unavailable. Curved surfaces are
+            emitted as real Béziers, which is why the sphere's outline is a circle rather than the
+            polygon its geometry actually is — turn <em>curves</em> off to see the difference.
+        </p>
+
+        <div id="stage"></div>
+
+        <div class="controls">
+            <button id="spin">Pause</button>
+            <label>shading
+                <select id="shading">
+                    <option value="0" selected>lit</option>
+                    <option value="1">flat</option>
+                    <option value="2">wireframe</option>
+                </select>
+            </label>
+            <label>quality
+                <select id="quality">
+                    <option value="high" selected>high</option>
+                    <option value="low">low</option>
+                </select>
+            </label>
+            <label><input id="curves" type="checkbox" checked> curves</label>
+            <label><input id="bg" type="checkbox" checked> background</label>
+            <label>clear
+                <input id="clear" type="color" value="#101820">
+            </label>
+            <label>precision
+                <input id="precision" type="range" min="0" max="4" step="1" value="2" style="width: 110px">
+            </label>
+            <button id="download">Download .svg</button>
+        </div>
+
+        <div id="stats">—</div>
+        <p id="err"></p>
+
+        <h2>Turning it on</h2>
+        <pre>import THREE, { initThreers, SVGRenderer } from '../threejs-shim.js';
+await initThreers();
+
+const renderer = new SVGRenderer();
+renderer.setSize(800, 600);
+document.body.appendChild(renderer.domElement);   // this is what enables it
+
+renderer.render(scene, camera);                   // draws into domElement
+
+// or, with no DOM at all — the same markup as a string:
+const markup = renderer.renderToString(scene, camera);</pre>
+    </main>
+    <script type="module" src="/web/examples/svg-renderer-demo.js"></script>
+</body>
+</html>

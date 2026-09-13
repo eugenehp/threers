@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "threers"
-version = "0.0.5"
+version = "0.0.6"
 description = "Drop-in three.js-shaped 3D toolkit for Python — headless wgpu render, math, animation, physics"
 readme = "README.md"
 license = { text = "MIT" }

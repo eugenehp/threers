@@ -6,6 +6,15 @@ pub struct Shape {
     pub holes: Vec<Path>,
 }
 
+impl std::fmt::Debug for Shape {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Shape")
+            .field("outline", &self.outline)
+            .field("holes", &self.holes.len())
+            .finish()
+    }
+}
+
 impl Default for Shape {
     fn default() -> Self {
         Self::new()

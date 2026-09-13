@@ -8,6 +8,15 @@ pub struct Path {
     pub curve_path: CurvePath,
 }
 
+impl std::fmt::Debug for Path {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Path")
+            .field("current", &self.current)
+            .field("curve_path", &self.curve_path)
+            .finish()
+    }
+}
+
 impl Default for Path {
     fn default() -> Self {
         Self::new()

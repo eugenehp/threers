@@ -1,0 +1,75 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    metersPerUnit = 1
+    upAxis = "Y"
+    timeCodesPerSecond = 24
+    startTimeCode = 0
+    endTimeCode = 48
+)
+
+def Xform "World"
+{
+    def SphereLight "Lamp"
+    {
+        float inputs:intensity.timeSamples = {
+            0: 0,
+            48: 100,
+        }
+        color3f inputs:color.timeSamples = {
+            0: (1, 0, 0),
+            48: (0, 0, 1),
+        }
+    }
+
+    def Mesh "Blinker"
+    {
+        token visibility.timeSamples = {
+            0: "inherited",
+            24: "invisible",
+            48: "inherited",
+        }
+        int[] faceVertexCounts = [3]
+        int[] faceVertexIndices = [0, 1, 2]
+        point3f[] points = [(0, 0, 0), (1, 0, 0), (0, 1, 0)]
+        uniform token subdivisionScheme = "none"
+    }
+
+    def Mesh "Wobble"
+    {
+        int[] faceVertexCounts = [3]
+        int[] faceVertexIndices = [0, 1, 2]
+        point3f[] points.timeSamples = {
+            0: [(0, 0, 0), (1, 0, 0), (0, 1, 0)],
+            24: [(0, 0, 0), (2, 0, 0), (0, 1, 0)],
+            48: [(0, 0, 0), (1, 0, 0), (0, 3, 0)],
+        }
+        uniform token subdivisionScheme = "none"
+    }
+
+    def Mesh "Painted" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
+    {
+        rel material:binding = </Mat>
+        int[] faceVertexCounts = [3]
+        int[] faceVertexIndices = [0, 1, 2]
+        point3f[] points = [(0, 0, 0), (1, 0, 0), (0, 1, 0)]
+        uniform token subdivisionScheme = "none"
+    }
+}
+
+def Material "Mat"
+{
+    token outputs:surface.connect = </Mat/S.outputs:surface>
+
+    def Shader "S"
+    {
+        uniform token info:id = "UsdPreviewSurface"
+        color3f inputs:diffuseColor.timeSamples = {
+            0: (1, 1, 0),
+            48: (0, 1, 1),
+        }
+        token outputs:surface
+    }
+}

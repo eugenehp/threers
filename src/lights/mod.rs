@@ -55,6 +55,33 @@ impl Light {
             Light::RectArea(l) => l.intensity,
         }
     }
+
+    /// Set the colour, whichever kind of light this is.
+    ///
+    /// A hemisphere light has two, and this sets the sky: it is the one that
+    /// corresponds to the single colour every other light has, and to what an
+    /// animation driving "the light's colour" means.
+    pub fn set_color(&mut self, color: Color) {
+        match self {
+            Light::Ambient(l) => l.color = color,
+            Light::Directional(l) => l.color = color,
+            Light::Point(l) => l.color = color,
+            Light::Spot(l) => l.color = color,
+            Light::Hemisphere(l) => l.sky_color = color,
+            Light::RectArea(l) => l.color = color,
+        }
+    }
+
+    pub fn set_intensity(&mut self, intensity: f32) {
+        match self {
+            Light::Ambient(l) => l.intensity = intensity,
+            Light::Directional(l) => l.intensity = intensity,
+            Light::Point(l) => l.intensity = intensity,
+            Light::Spot(l) => l.intensity = intensity,
+            Light::Hemisphere(l) => l.intensity = intensity,
+            Light::RectArea(l) => l.intensity = intensity,
+        }
+    }
 }
 
 impl From<AmbientLight> for Light {

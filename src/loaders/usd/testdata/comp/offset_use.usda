@@ -1,0 +1,10 @@
+#usda 1.0
+(
+    defaultPrim = "Shifted"
+)
+
+def Xform "Shifted" (
+    references = @clip.usda@ (offset = 100; scale = 2)
+)
+{
+}

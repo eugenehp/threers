@@ -1,0 +1,38 @@
+#usda 1.0
+(
+    defaultPrim = "Chair"
+)
+
+class "Furniture"
+{
+    token purpose = "render"
+    double weight = 10
+}
+
+def Xform "Chair" (
+    inherits = </Furniture>
+    variants = {
+        string look = "oak"
+    }
+    prepend variantSets = "look"
+)
+{
+    double3 xformOp:translate = (0, 0, 0)
+    uniform token[] xformOpOrder = ["xformOp:translate"]
+
+    def Mesh "Seat"
+    {
+        int[] faceVertexCounts = [3]
+        int[] faceVertexIndices = [0, 1, 2]
+        point3f[] points = [(0, 0, 0), (1, 0, 0), (0, 1, 0)]
+    }
+
+    variantSet "look" = {
+        "oak" {
+            color3f primvars:displayColor = (0.6, 0.4, 0.2)
+        }
+        "steel" {
+            color3f primvars:displayColor = (0.7, 0.7, 0.75)
+        }
+    }
+}

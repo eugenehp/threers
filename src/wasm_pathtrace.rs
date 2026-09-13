@@ -152,7 +152,7 @@ impl WebPathTracer {
 
     /// Resolve a named AOV without changing the default resolve channel.
     #[wasm_bindgen(js_name = resolveRgbaAov)]
-    pub fn resolve_rgba_aov(&self, name: &str) -> Result<Vec<u8>, JsValue> {
+    pub fn resolve_rgba_aov(&mut self, name: &str) -> Result<Vec<u8>, JsValue> {
         let aov = match name.trim().to_ascii_lowercase().as_str() {
             "beauty" | "colour" | "color" => crate::raytrace::Aov::Beauty,
             "albedo" => crate::raytrace::Aov::Albedo,
@@ -169,7 +169,7 @@ impl WebPathTracer {
 
     /// Grayscale sample-density map.
     #[wasm_bindgen(js_name = resolveRgbaSamples)]
-    pub fn resolve_rgba_samples(&self) -> Vec<u8> {
+    pub fn resolve_rgba_samples(&mut self) -> Vec<u8> {
         self.inner.resolve_rgba_samples()
     }
 
@@ -191,7 +191,7 @@ impl WebPathTracer {
 
     /// Beauty with a relative-error heatmap mix-in (`strength` 0..=1).
     #[wasm_bindgen(js_name = resolveRgbaErrorOverlay)]
-    pub fn resolve_rgba_error_overlay(&self, strength: f32) -> Vec<u8> {
+    pub fn resolve_rgba_error_overlay(&mut self, strength: f32) -> Vec<u8> {
         self.inner.resolve_rgba_error_overlay(strength)
     }
 
@@ -242,7 +242,7 @@ impl WebPathTracer {
 
     /// Encode the current film as linear ZIP EXR bytes.
     #[wasm_bindgen(js_name = encodeExr)]
-    pub fn encode_exr(&self) -> Result<Vec<u8>, JsValue> {
+    pub fn encode_exr(&mut self) -> Result<Vec<u8>, JsValue> {
         self.inner
             .encode_exr()
             .map_err(|e| JsValue::from_str(&e))
@@ -454,13 +454,13 @@ impl WebPathTracer {
 
     /// Per-pixel sample counts for debug overlays.
     #[wasm_bindgen(js_name = resolveSampleCounts)]
-    pub fn resolve_sample_counts(&self) -> Vec<u32> {
+    pub fn resolve_sample_counts(&mut self) -> Vec<u32> {
         self.inner.resolve_sample_counts()
     }
 
     /// Per-pixel relative error (debug / adaptive visualization).
     #[wasm_bindgen(js_name = resolveError)]
-    pub fn resolve_error(&self) -> Vec<f32> {
+    pub fn resolve_error(&mut self) -> Vec<f32> {
         self.inner.resolve_error()
     }
 }

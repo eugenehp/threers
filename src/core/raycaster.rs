@@ -62,10 +62,16 @@ impl Raycaster {
 
     /// Orthographic ray: origin lies on the near plane at NDC (x, y); direction
     /// is the camera's forward axis (negative-Z of view matrix's inverse rotation).
+    ///
+    /// The near plane is NDC `z = 0`, not `z = -1`. This crate's projection
+    /// matrices use the wgpu/D3D depth range `[0, 1]`; under OpenGL's `[-1, 1]`
+    /// the near plane is at `-1`, and unprojecting that here lands the ray
+    /// origin most of a frustum *behind* the camera. Every hit then measures
+    /// past `far` and picking returns nothing at all.
     pub fn set_from_camera_ortho(&mut self, ndc: Vector2, camera: &dyn Camera) {
         let view = camera.view_matrix();
         let proj = camera.projection_matrix();
-        let near = Vector3::new(ndc.x, ndc.y, -1.0).unproject(&view, &proj);
+        let near = Vector3::new(ndc.x, ndc.y, 0.0).unproject(&view, &proj);
         let far = Vector3::new(ndc.x, ndc.y, 1.0).unproject(&view, &proj);
         self.ray = Ray::new(near, (far - near).normalize());
         self.layers = camera.layers();
@@ -287,5 +293,51 @@ mod tests {
         rc.ray = Ray::new(Vector3::new(0.25, 0.25, -1.0), Vector3::new(0.0, 0.0, 1.0));
         let hits = rc.intersect_objects(&arena, root, true);
         assert!(hits.is_empty(), "expected no hits, got {:?}", hits);
+    }
+
+    /// Orthographic picking against the crate's `[0, 1]` depth range.
+    ///
+    /// Unprojecting NDC `z = -1` for the near plane — the OpenGL convention —
+    /// puts the ray origin nearly a whole frustum behind the camera, so every
+    /// hit measures past `far` and gets discarded. The symptom is picking that
+    /// silently returns nothing for every orthographic camera.
+    #[test]
+    fn ortho_camera_ray_starts_at_the_near_plane() {
+        use crate::cameras::OrthographicCamera;
+
+        let mut arena = ObjectArena::new();
+        let root = arena.insert(Object3D::group());
+        let mut mesh_obj = Object3D::mesh(unit_triangle_mesh());
+        // Straddle the origin so the camera axis passes through the triangle.
+        mesh_obj.position = Vector3::new(-0.25, -0.25, 0.0);
+        let mesh_id = arena.insert(mesh_obj);
+        arena.add_child(root, mesh_id);
+        arena.update_world_matrices(root, crate::math::Matrix4::identity());
+
+        let mut camera = OrthographicCamera::new(-2.0, 2.0, 2.0, -2.0, 0.1, 100.0);
+        camera.position = Vector3::new(0.0, 0.0, 5.0);
+        camera.target = Vector3::ZERO;
+
+        let mut rc = Raycaster {
+            near: 0.1,
+            far: 100.0,
+            ..Default::default()
+        };
+        rc.set_from_camera_ortho(Vector2::new(0.0, 0.0), &camera);
+
+        // The origin sits on the near plane, 0.1 in front of the camera.
+        assert!(
+            (rc.ray.origin.z - 4.9).abs() < 1e-3,
+            "ray should start on the near plane, got z = {}",
+            rc.ray.origin.z
+        );
+        let hits = rc.intersect_objects(&arena, root, true);
+        assert_eq!(hits.len(), 1, "expected the triangle, got {:?}", hits);
+        assert_eq!(hits[0].object, mesh_id);
+        assert!(
+            (hits[0].distance - 4.9).abs() < 1e-3,
+            "distance from the near plane, got {}",
+            hits[0].distance
+        );
     }
 }

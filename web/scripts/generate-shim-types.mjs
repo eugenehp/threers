@@ -221,6 +221,47 @@ export interface CaptionStyleOptions {
 }
 
 /** A subtitle / caption track: cues with start and end times. */
+export class SVGRenderer implements ThreersHandle {
+    _w?: unknown;
+    /** The live \`<svg>\` element. Append it to the page to turn the renderer on. */
+    domElement: SVGSVGElement | null;
+    /** Replace the previous frame instead of appending to it. Default \`true\`. */
+    autoClear: boolean;
+    /** Counts from the last \`render\`. \`faces\` is the number of \`<path>\` elements. */
+    info: { render: { vertices: number; faces: number } };
+    constructor();
+    /** Draw into \`domElement\`, and return the same markup. */
+    render(scene: Scene, camera: PerspectiveCamera | OrthographicCamera): string;
+    /** The document as markup, without touching the DOM. */
+    renderToString(scene: Scene, camera: PerspectiveCamera | OrthographicCamera): string;
+    /** Resize the canvas. Options set beforehand are kept. */
+    setSize(width: number, height: number): void;
+    /** Empty \`domElement\`. */
+    clear(): void;
+    /** Background colour, overriding \`scene.background\`. */
+    setClearColor(color: ThreersColorInput, alpha?: number): void;
+    /** Decimal places kept on coordinates. \`null\` restores the default. */
+    setPrecision(precision: number | null): void;
+    /** \`'low'\` drops the curves and the seam hairline — most of the file size. */
+    setQuality(quality: 'high' | 'low'): void;
+    /** No-op: an SVG has no pixels to scale. */
+    setPixelRatio(ratio: number): void;
+    /** 0 lit (default), 1 flat material colour, 2 wireframe. */
+    setShading(mode: 0 | 1 | 2): void;
+    /** three.js constants: 0 NoToneMapping, 1 Linear, 4 ACESFilmic. */
+    setToneMapping(mode: number, exposure?: number): void;
+    /** Draw the background rect at all. Off gives a transparent document. */
+    setBackground(on: boolean): void;
+    setCullBackfaces(on: boolean): void;
+    /** Hairline per face, in pixels, hiding SVG's anti-aliasing seams. */
+    setSeamStroke(px: number): void;
+    /** Bend edges onto the real surface past this pixel error. 0 disables. */
+    setCurveTolerance(px: number): void;
+    /** Split faces too deep for one depth to sort. 0 disables. */
+    setDepthSplit(tolerance: number): void;
+    setSort(on: boolean): void;
+}
+
 export class CaptionTrack implements ThreersHandle {
     _w?: unknown;
     constructor(wrapped?: unknown);

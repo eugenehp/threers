@@ -33,6 +33,10 @@ impl Curve2 for SplineCurve {
         let p3 = self.points[idx(2)];
         catmull_rom(p0, p1, p2, p3, weight, 0.5)
     }
+
+    fn svg_segments(&self) -> Option<Vec<super::PathSegment>> {
+        Some(super::svg_path::spline_segments(self))
+    }
 }
 
 fn catmull_rom(

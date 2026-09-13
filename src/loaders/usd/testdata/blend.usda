@@ -1,0 +1,67 @@
+#usda 1.0
+(
+    defaultPrim = "Character"
+    metersPerUnit = 1
+    upAxis = "Y"
+    timeCodesPerSecond = 24
+    startTimeCode = 0
+    endTimeCode = 24
+)
+
+def SkelRoot "Character"
+{
+    def Skeleton "Skel" (
+        prepend apiSchemas = ["SkelBindingAPI"]
+    )
+    {
+        uniform token[] joints = ["Root"]
+        uniform matrix4d[] bindTransforms = [( (1,0,0,0), (0,1,0,0), (0,0,1,0), (0,0,0,1) )]
+        uniform matrix4d[] restTransforms = [( (1,0,0,0), (0,1,0,0), (0,0,1,0), (0,0,0,1) )]
+        rel skel:animationSource = </Character/Anim>
+    }
+
+    def Mesh "Face" (
+        prepend apiSchemas = ["SkelBindingAPI"]
+    )
+    {
+        rel skel:skeleton = </Character/Skel>
+        rel skel:blendShapeTargets = [
+            </Character/Face/Smile>,
+            </Character/Face/Frown>,
+        ]
+        uniform token[] skel:blendShapes = ["smile", "frown"]
+        int[] primvars:skel:jointIndices = [0, 0, 0, 0] (
+            elementSize = 1
+            interpolation = "vertex"
+        )
+        float[] primvars:skel:jointWeights = [1, 1, 1, 1] (
+            elementSize = 1
+            interpolation = "vertex"
+        )
+        int[] faceVertexCounts = [4]
+        int[] faceVertexIndices = [0, 1, 2, 3]
+        point3f[] points = [(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)]
+        uniform token subdivisionScheme = "none"
+
+        def BlendShape "Smile"
+        {
+            uniform vector3f[] offsets = [(0, 0.5, 0), (0, 0.5, 0)]
+            uniform int[] pointIndices = [2, 3]
+        }
+
+        def BlendShape "Frown"
+        {
+            uniform vector3f[] offsets = [(0, -0.5, 0), (0, -0.5, 0), (0, -0.5, 0), (0, -0.5, 0)]
+        }
+    }
+
+    def SkelAnimation "Anim"
+    {
+        uniform token[] joints = ["Root"]
+        uniform token[] blendShapes = ["smile", "frown"]
+        float[] blendShapeWeights.timeSamples = {
+            0: [0, 1],
+            24: [1, 0],
+        }
+    }
+}

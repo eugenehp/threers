@@ -1,6 +1,6 @@
 [package]
 name = "threers-js"
-version = "0.0.5"
+version = "0.0.6"
 edition = "2021"
 authors = ["Eugene Hauptmann"]
 description = "Published npm / Deno / Node ESM package for threers (THREE.* shim + wasm)"

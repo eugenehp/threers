@@ -1,0 +1,35 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+)
+
+def Xform "World"
+{
+    double3 xformOp:translate = (1, 2, 3)
+    uniform token[] xformOpOrder = ["xformOp:translate"]
+
+    def Xform "Keep"
+    {
+        float size = 7
+
+        def Sphere "Inner"
+        {
+            double radius = 2
+        }
+    }
+
+    def Xform "Drop"
+    {
+        def Sphere "Gone"
+        {
+            double radius = 5
+        }
+    }
+}
+
+def Scope "Other"
+{
+    def Sphere "Elsewhere"
+    {
+    }
+}

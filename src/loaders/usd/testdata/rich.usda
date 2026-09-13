@@ -1,0 +1,56 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+
+def Xform "World"
+{
+    double3 xformOp:translate = (1, 2, 3)
+    float3 xformOp:rotateXYZ = (0, 0, 90)
+    float3 xformOp:scale = (2, 2, 2)
+    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+
+    def Mesh "Quad"
+    {
+        float3[] extent = [(-1, -1, 0), (1, 1, 0)]
+        int[] faceVertexCounts = [4]
+        int[] faceVertexIndices = [0, 1, 2, 3]
+        point3f[] points = [(-1, -1, 0), (1, -1, 0), (1, 1, 0), (-1, 1, 0)]
+        normal3f[] normals = [(0, 0, 1), (0, 0, 1), (0, 0, 1), (0, 0, 1)] (
+            interpolation = "vertex"
+        )
+        texCoord2f[] primvars:st = [(0, 0), (1, 0), (1, 1), (0, 1)] (
+            interpolation = "vertex"
+        )
+        color3f[] primvars:displayColor = [(0.8, 0.2, 0.1)]
+        uniform token subdivisionScheme = "none"
+        rel material:binding = </World/Mat>
+    }
+
+    def Scope "Sub"
+    {
+        def Mesh "Deep"
+        {
+            int[] faceVertexCounts = [3]
+            int[] faceVertexIndices = [0, 1, 2]
+            point3f[] points = [(0, 0, 0), (5, 0, 0), (0, 5, 0)]
+        }
+    }
+}
+
+def Material "Mat"
+{
+    token outputs:surface.connect = </Mat/Shader.outputs:surface>
+
+    def Shader "Shader"
+    {
+        uniform token info:id = "UsdPreviewSurface"
+        color3f inputs:diffuseColor = (0.2, 0.5, 0.9)
+        float inputs:metallic = 0.3
+        float inputs:roughness = 0.65
+        float inputs:opacity = 0.8
+        token outputs:surface
+    }
+}

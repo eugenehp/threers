@@ -1,0 +1,11 @@
+#usda 1.0
+
+def Xform "Room"
+{
+    def "Chair1" (
+        references = @asset.usda@
+    )
+    {
+        double3 xformOp:translate = (5, 0, 0)
+    }
+}

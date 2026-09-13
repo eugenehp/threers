@@ -1,0 +1,31 @@
+#usda 1.0
+(
+    defaultPrim = "Spin"
+    timeCodesPerSecond = 24
+    startTimeCode = 0
+    endTimeCode = 48
+)
+
+def Xform "Spin"
+{
+    double3 xformOp:translate.timeSamples = {
+        0: (0, 0, 0),
+        24: (10, 0, 0),
+        48: (10, 10, 0),
+    }
+    float3 xformOp:rotateXYZ.timeSamples = {
+        0: (0, 0, 0),
+        48: (0, 0, 360),
+    }
+    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+
+    def Mesh "Body"
+    {
+        int[] faceVertexCounts = [3]
+        int[] faceVertexIndices = [0, 1, 2]
+        point3f[] points.timeSamples = {
+            0: [(0, 0, 0), (1, 0, 0), (0, 1, 0)],
+            48: [(0, 0, 0), (2, 0, 0), (0, 2, 0)],
+        }
+    }
+}

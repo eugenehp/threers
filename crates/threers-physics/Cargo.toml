@@ -44,7 +44,7 @@ openscad = ["threers/openscad"]
 [dependencies]
 # `mesh-bvh` powers triangle-mesh colliders and mesh raycasts. It is a
 # compile-time feature of `threers` with no extra crate dependencies.
-threers = { path = "../..", version = "0.0.5", features = ["mesh-bvh"] }
+threers = { path = "../..", version = "0.0.6", features = ["mesh-bvh"] }
 wgpu = { version = "30", optional = true }
 bytemuck = { version = "1.16", features = ["derive"], optional = true }
 # Awaiting the buffer mapping in the GPU broad phase — the one place this crate

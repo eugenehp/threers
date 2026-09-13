@@ -1,0 +1,117 @@
+#usda 1.0
+(
+    defaultPrim = "Root"
+    metersPerUnit = 0.01
+    upAxis = "Z"
+    timeCodesPerSecond = 30
+    startTimeCode = -12
+    endTimeCode = 90
+    documentation = "a layer with the awkward bits in it"
+)
+
+class "Base"
+{
+    token purpose = "guide"
+}
+
+over "Patch"
+{
+    double weight = 3
+}
+
+def Scope "Root" (
+    kind = "component"
+)
+{
+    def Mesh "Empty"
+    {
+        int[] faceVertexCounts = []
+        point3f[] points = []
+        float[] widths = [0.5]
+    }
+
+    def Mesh "Types"
+    {
+        bool flag = false
+        uchar tiny = 200
+        int neg = -2147483648
+        uint big = 4294967295
+        int64 huge = -9223372036854775808
+        uint64 huger = 18446744073709551615
+        half h = 0.333
+        float f = -0.0
+        double d = 1.7976931348623157e308
+        string s = "with \"quotes\" and \\ backslash"
+        token t = "a:namespaced:token"
+        asset a = @./textures/map.png@
+        matrix3d m3 = ( (1, 2, 3), (4, 5, 6), (7, 8, 9) )
+        quatf q = (0.5, 0.5, 0.5, 0.5)
+        int2 i2 = (-1, 2)
+        double4 d4 = (1, 2, 3, 4)
+        color4f c4 = (0.1, 0.2, 0.3, 0.4)
+        texCoord2f[] uvs = [(0, 0), (1, 1)] (
+            interpolation = "faceVarying"
+            elementSize = 2
+        )
+        rel many = [</Root/Empty>, </Root/Types>, </Base>]
+    }
+
+    def Xform "Deep"
+    {
+        def Xform "A"
+        {
+            def Xform "B"
+            {
+                def Xform "C"
+                {
+                    def Xform "D"
+                    {
+                        double3 xformOp:translate = (1, 2, 3)
+                        uniform token[] xformOpOrder = ["xformOp:translate"]
+                    }
+                }
+            }
+        }
+    }
+
+    def Xform "Multi" (
+        variants = {
+            string look = "b"
+            string lod = "high"
+        }
+        prepend variantSets = ["look", "lod"]
+    )
+    {
+        variantSet "look" = {
+            "a" {
+                color3f primvars:displayColor = (1, 0, 0)
+            }
+            "b" {
+                color3f primvars:displayColor = (0, 1, 0)
+            }
+        }
+        variantSet "lod" = {
+            "high" {
+                int subdivisions = 4
+            }
+            "low" {
+                int subdivisions = 0
+            }
+        }
+    }
+
+    def Xform "Keyed"
+    {
+        double3 xformOp:translate.timeSamples = {
+            -12: (0, 0, 0),
+            0: (1, 0, 0),
+            0.5: (1.5, 0, 0),
+            90: (2, 0, 0),
+        }
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float visibility.timeSamples = {
+            0: 1,
+            90: 0,
+        }
+    }
+}

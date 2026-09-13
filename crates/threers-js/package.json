@@ -1,6 +1,6 @@
 {
   "name": "threers",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "description": "Drop-in three.js-shaped renderer (Rust/wgpu) — ESM for browsers, Node, and Deno (mini + full wasm variants)",
   "license": "MIT",
   "type": "module",

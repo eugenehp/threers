@@ -1,0 +1,54 @@
+#usda 1.0
+(
+    defaultPrim = "Root"
+    metersPerUnit = 1
+    upAxis = "Y"
+)
+
+def Xform "Root" (
+    prepend apiSchemas = ["Preliminary_AnchoringAPI"]
+)
+{
+    uniform token preliminary:anchoring:type = "plane"
+    uniform token preliminary:planeAnchoring:alignment = "horizontal"
+
+    def Mesh "Body" (
+        prepend apiSchemas = ["Preliminary_PhysicsColliderAPI"]
+    )
+    {
+        rel preliminary:physics:collider:convexShape = </Root/Body>
+        int[] faceVertexCounts = [3]
+        int[] faceVertexIndices = [0, 1, 2]
+        point3f[] points = [(0, 0, 0), (1, 0, 0), (0, 1, 0)]
+        uniform token subdivisionScheme = "none"
+    }
+
+    def Preliminary_PhysicsGravitationalForce "Gravity"
+    {
+        vector3d physics:gravitationalForce:acceleration = (0, -9.8, 0)
+    }
+
+    def Preliminary_Behavior "Tap"
+    {
+        rel preliminary:behavior:triggers = </Root/Tap/Trigger>
+        rel preliminary:behavior:actions = </Root/Tap/Action>
+
+        def Preliminary_Trigger "Trigger"
+        {
+            uniform token info:id = "TapGesture"
+        }
+
+        def Preliminary_Action "Action"
+        {
+            uniform token info:id = "Group"
+            uniform token multiplePerformOperation = "serial"
+        }
+    }
+
+    def Preliminary_Text "Label"
+    {
+        string content = "hello"
+        string[] font = ["Helvetica"]
+        float height = 0.1
+    }
+}

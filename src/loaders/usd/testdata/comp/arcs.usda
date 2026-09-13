@@ -1,0 +1,24 @@
+#usda 1.0
+(
+    defaultPrim = "A"
+)
+
+def Xform "A" (
+    references = [
+        @asset.usda@</Chair>,
+        @other.usda@,
+        </A/Local>
+    ]
+    prepend payload = @heavy.usda@</Deep>
+    specializes = </A/Base>
+)
+{
+    def Xform "Local" { }
+    def Xform "Base" { }
+}
+
+def Xform "B" (
+    references = @asset.usda@</Chair> (offset = 10; scale = 2)
+)
+{
+}

@@ -1,0 +1,13 @@
+#usda 1.0
+(
+    defaultPrim = "Root"
+)
+
+def Scope "Root"
+{
+    double blocked = None
+    double kept = 1
+    double3 stamp = (1, 2, 3)
+    timecode when = 24
+}
+

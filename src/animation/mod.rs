@@ -16,4 +16,4 @@ pub use action::{AnimationAction, LoopMode};
 pub use clip::AnimationClip;
 pub use interpolant::Interpolation;
 pub use mixer::{AnimationMixer, BlendMode};
-pub use track::{KeyframeTrack, TrackTarget};
+pub use track::{KeyframeTrack, TrackTarget, TrackValues};

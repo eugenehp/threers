@@ -1,0 +1,29 @@
+#usda 1.0
+(
+    defaultPrim = "Root"
+)
+
+def Scope "Root"
+{
+    def Scope "Holder"
+    {
+        double fromB = 2
+    }
+
+    def Scope "Ordered"
+    {
+        reorder nameChildren = ["Third", "First", "Second"]
+        def Scope "Third"
+        {
+        }
+
+        def Scope "First"
+        {
+        }
+
+        def Scope "Second"
+        {
+        }
+    }
+}
+

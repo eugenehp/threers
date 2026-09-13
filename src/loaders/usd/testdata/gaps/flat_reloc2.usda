@@ -1,0 +1,13 @@
+#usda 1.0
+(
+    defaultPrim = "Holder"
+)
+
+def Xform "Holder"
+{
+    def Scope "NewName"
+    {
+        double marker = 7
+    }
+}
+
