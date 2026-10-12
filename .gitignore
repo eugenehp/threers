@@ -1,5 +1,10 @@
 # Rust
 /target/
+# Side target directories. Two cargo runs sharing one `target/` corrupt it, so
+# a parallel session uses its own `CARGO_TARGET_DIR` — and an untracked
+# directory that is not *ignored* is one `cargo package` sweeps into the
+# tarball, which is how the scratchpad note below came to be written.
+/target-*/
 **/*.rs.bk
 *.pdb
 
@@ -29,6 +34,14 @@ pnpm-debug.log*
 # Parity test artifacts (screenshots, diffs, logs)
 /tests/parity/out/
 /tests/parity/out-*/
+
+# Reference material and oracles for the binary loaders — fetched C++ sources,
+# a node_modules with Google's Draco decoder in it, and generated fixtures. All
+# of it is reproducible and none of it is ours, but the directory is untracked
+# rather than ignored, which means `cargo package` sweeps it into the tarball:
+# cargo lists untracked-but-unignored files and ships them. That is how 1.5 MB
+# of someone else's source nearly went to crates.io.
+/scratchpad/
 
 # Local diagnostic dumps
 *.bak

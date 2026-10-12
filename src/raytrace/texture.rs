@@ -362,31 +362,7 @@ fn unit_lut() -> &'static [f32; 256] {
 /// IEEE-754 binary16 → binary32. Handles subnormals and infinities; NaN
 /// payloads are not preserved, which nothing here depends on.
 pub fn f16_to_f32(bits: u16) -> f32 {
-    let sign = ((bits >> 15) & 1) as u32;
-    let exp = ((bits >> 10) & 0x1f) as u32;
-    let mant = (bits & 0x3ff) as u32;
-    let out = match exp {
-        0 => {
-            if mant == 0 {
-                sign << 31
-            } else {
-                // Subnormal: renormalise by shifting the mantissa up until the
-                // implicit bit appears, paying for it in the exponent.
-                let mut e = 0i32;
-                let mut m = mant;
-                while m & 0x400 == 0 {
-                    m <<= 1;
-                    e -= 1;
-                }
-                m &= 0x3ff;
-                let exp32 = (127 - 15 + 1 + e) as u32;
-                (sign << 31) | (exp32 << 23) | (m << 13)
-            }
-        }
-        0x1f => (sign << 31) | (0xff << 23) | (mant << 13),
-        _ => (sign << 31) | ((exp + 127 - 15) << 23) | (mant << 13),
-    };
-    f32::from_bits(out)
+    crate::renderer::readback::f16_to_f32(bits)
 }
 
 /// Decodes each distinct [`Texture`] once, keyed by `Arc` identity — the same

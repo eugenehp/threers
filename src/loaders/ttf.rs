@@ -25,6 +25,15 @@ pub struct TtfFont {
     pub descender: i16,
     /// `hhea.lineGap` — extra leading between lines, in font units.
     pub line_gap: i16,
+    /// Kerning adjustments in font units, by `(left glyph, right glyph)`.
+    ///
+    /// A font's advance widths are what each glyph needs on its own; kerning is
+    /// what a *pair* needs. Without it "AV" and "To" sit visibly loose, because
+    /// the diagonal and the overhang leave a gap that the two advances know
+    /// nothing about. Empty when the font has no `kern` table — which for a
+    /// modern font often means its kerning is in `GPOS` instead, and that is not
+    /// read here.
+    pub kerning: std::collections::HashMap<(u16, u16), i16>,
 }
 
 pub struct TtfGlyph {
@@ -72,8 +81,8 @@ impl TtfFont {
         let n_tables = u16::from_be_bytes([bytes[4], bytes[5]]) as usize;
         let mut tables: std::collections::HashMap<&'static [u8; 4], (usize, usize)> =
             std::collections::HashMap::new();
-        let table_tags: [&'static [u8; 4]; 7] = [
-            b"head", b"maxp", b"loca", b"glyf", b"cmap", b"hmtx", b"hhea",
+        let table_tags: [&'static [u8; 4]; 8] = [
+            b"head", b"maxp", b"loca", b"glyf", b"cmap", b"hmtx", b"hhea", b"kern",
         ];
         for i in 0..n_tables {
             let off = 12 + i * 16;
@@ -179,6 +188,10 @@ impl TtfFont {
                 advance_width: advance_widths[g_idx],
             });
         }
+        let kerning = tables
+            .get(b"kern")
+            .and_then(|&(off, len)| parse_kern(bytes, off, len))
+            .unwrap_or_default();
         Ok(TtfFont {
             units_per_em,
             glyphs,
@@ -186,8 +199,72 @@ impl TtfFont {
             ascender,
             descender,
             line_gap,
+            kerning,
         })
     }
+
+    /// The kerning between two glyphs, in font units. Zero when the pair has
+    /// none, which is the overwhelming majority of pairs.
+    pub fn kern(&self, left: u16, right: u16) -> i16 {
+        self.kerning.get(&(left, right)).copied().unwrap_or(0)
+    }
+}
+
+/// The `kern` table, format 0 — a sorted list of glyph pairs and adjustments.
+///
+/// Only horizontal, non-cross-stream format 0 subtables are read, which is what
+/// a TrueType font with kerning actually ships. The header is two `uint16`s;
+/// Apple's variant of this table starts with a `uint32` version instead, and is
+/// left alone rather than guessed at — misreading the header would produce pairs
+/// from whatever the bytes happened to say, and a wrong kern is worse than none.
+fn parse_kern(
+    bytes: &[u8],
+    off: usize,
+    len: usize,
+) -> Option<std::collections::HashMap<(u16, u16), i16>> {
+    let table = bytes.get(off..off + len)?;
+    let be16 = |at: usize| -> Option<u16> {
+        Some(u16::from_be_bytes([
+            *table.get(at)?,
+            *table.get(at + 1)?,
+        ]))
+    };
+    if be16(0)? != 0 {
+        return None;
+    }
+    let subtables = be16(2)? as usize;
+    let mut out = std::collections::HashMap::new();
+    let mut at = 4usize;
+    for _ in 0..subtables {
+        let length = be16(at + 2)? as usize;
+        let coverage = be16(at + 4)?;
+        // The format is the high byte; bit 0 of the low byte means horizontal,
+        // and bit 2 means cross-stream, which adjusts the *other* axis.
+        let format = coverage >> 8;
+        let horizontal = coverage & 0x0001 != 0;
+        let cross_stream = coverage & 0x0004 != 0;
+        if format == 0 && horizontal && !cross_stream {
+            let pairs = be16(at + 6)? as usize;
+            // Four `uint16`s of binary-search hints sit between the count and
+            // the pairs, and skipping them is what reads the first pair as a
+            // search range.
+            let mut pair_at = at + 14;
+            for _ in 0..pairs {
+                let left = be16(pair_at)?;
+                let right = be16(pair_at + 2)?;
+                let value = be16(pair_at + 4)? as i16;
+                if value != 0 {
+                    out.insert((left, right), value);
+                }
+                pair_at += 6;
+            }
+        }
+        if length == 0 {
+            break;
+        }
+        at += length;
+    }
+    Some(out)
 }
 
 fn clone_path(p: &Path) -> Path {
@@ -460,4 +537,139 @@ fn parse_glyph(bytes: &[u8], off: usize) -> Option<Shape> {
         start = end + 1;
     }
     Some(Shape::from_path(path))
+}
+
+#[cfg(test)]
+mod kern_tests {
+    use super::*;
+
+    /// A hand-built `kern` table, to pin the offsets.
+    ///
+    /// Everything here is a fixed offset into a packed header, and getting one
+    /// wrong reads a search hint as a pair — which yields kerning for glyph ids
+    /// that may well exist, so the font renders with adjustments it never asked
+    /// for. The four binary-search fields between the count and the pairs are the
+    /// usual casualty.
+    #[test]
+    fn a_format_zero_table_parses_at_the_right_offsets() {
+        let mut table: Vec<u8> = Vec::new();
+        table.extend_from_slice(&0u16.to_be_bytes()); // version
+        table.extend_from_slice(&1u16.to_be_bytes()); // one subtable
+        let subtable_len = 14 + 3 * 6;
+        table.extend_from_slice(&0u16.to_be_bytes()); // subtable version
+        table.extend_from_slice(&(subtable_len as u16).to_be_bytes());
+        table.extend_from_slice(&0x0001u16.to_be_bytes()); // format 0, horizontal
+        table.extend_from_slice(&3u16.to_be_bytes()); // nPairs
+        // searchRange, entrySelector, rangeShift — three fields that exist only
+        // to be skipped. Poisoned, so reading one as a pair is a visible failure
+        // rather than a plausible kern.
+        for v in [0x0BADu16, 0x0BAD, 0x0BAD] {
+            table.extend_from_slice(&v.to_be_bytes());
+        }
+        for (l, r, v) in [(10u16, 20u16, -40i16), (10, 21, 0), (11, 20, 15)] {
+            table.extend_from_slice(&l.to_be_bytes());
+            table.extend_from_slice(&r.to_be_bytes());
+            table.extend_from_slice(&v.to_be_bytes());
+        }
+
+        let map = parse_kern(&table, 0, table.len()).expect("parses");
+        assert_eq!(map.get(&(10, 20)).copied(), Some(-40));
+        assert_eq!(map.get(&(11, 20)).copied(), Some(15));
+        // A zero adjustment is not worth an entry.
+        assert_eq!(map.get(&(10, 21)), None);
+        // And nothing from the search hints leaked in.
+        assert_eq!(map.len(), 2, "{map:?}");
+    }
+
+    /// A cross-stream or vertical subtable is skipped, not read as horizontal.
+    ///
+    /// Cross-stream kerning moves the *other* axis; applying it to advances would
+    /// shift glyphs sideways by an amount meant for the baseline.
+    #[test]
+    fn only_horizontal_format_zero_subtables_are_read() {
+        let build = |coverage: u16| {
+            let mut t: Vec<u8> = Vec::new();
+            t.extend_from_slice(&0u16.to_be_bytes());
+            t.extend_from_slice(&1u16.to_be_bytes());
+            t.extend_from_slice(&0u16.to_be_bytes());
+            t.extend_from_slice(&((14 + 6) as u16).to_be_bytes());
+            t.extend_from_slice(&coverage.to_be_bytes());
+            t.extend_from_slice(&1u16.to_be_bytes()); // nPairs
+            for _ in 0..3 {
+                t.extend_from_slice(&0u16.to_be_bytes()); // the search hints
+            }
+            t.extend_from_slice(&1u16.to_be_bytes()); // left
+            t.extend_from_slice(&2u16.to_be_bytes());
+            t.extend_from_slice(&(-9i16).to_be_bytes());
+            t
+        };
+        // Horizontal, format 0: read.
+        let t = build(0x0001);
+        assert_eq!(parse_kern(&t, 0, t.len()).unwrap().len(), 1);
+        // Cross-stream: skipped.
+        let t = build(0x0005);
+        assert!(parse_kern(&t, 0, t.len()).unwrap().is_empty());
+        // Vertical (horizontal bit clear): skipped.
+        let t = build(0x0000);
+        assert!(parse_kern(&t, 0, t.len()).unwrap().is_empty());
+        // Format 2: skipped, since only format 0 is understood.
+        let t = build(0x0201);
+        assert!(parse_kern(&t, 0, t.len()).unwrap().is_empty());
+    }
+
+    /// A truncated or nonsense table yields nothing rather than panicking.
+    #[test]
+    fn a_broken_kern_table_is_not_fatal() {
+        assert!(parse_kern(&[], 0, 0).is_none());
+        // A version this does not know.
+        let t = vec![0x00, 0x01, 0x00, 0x01];
+        assert!(parse_kern(&t, 0, t.len()).is_none());
+        // Truncated mid-subtable, at every length.
+        let mut full: Vec<u8> = vec![0, 0, 0, 1, 0, 0, 0, 20, 0, 1, 0, 1];
+        full.extend_from_slice(&[0u8; 20]);
+        for cut in 0..full.len() {
+            let _ = parse_kern(&full[..cut], 0, cut);
+        }
+    }
+
+    /// Real fonts kern the pairs typography says they should.
+    ///
+    /// `AV`, `To` and `LT` all tighten — a diagonal beside a diagonal, and a
+    /// crossbar overhanging a round letter. `oo` does not: two round letters need
+    /// no adjustment, which is the control that says these numbers are the
+    /// font's own and not something the parser invented.
+    ///
+    /// Skipped where the fonts are not installed.
+    #[test]
+    fn real_fonts_kern_the_expected_pairs() {
+        let mut checked = 0;
+        for path in [
+            "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+            "/System/Library/Fonts/Supplemental/Times New Roman Italic.ttf",
+            "/System/Library/Fonts/Supplemental/Trebuchet MS.ttf",
+        ] {
+            let Ok(bytes) = std::fs::read(path) else { continue };
+            let Ok(font) = TtfFont::parse(&bytes) else { continue };
+            if font.kerning.is_empty() {
+                continue;
+            }
+            checked += 1;
+            let gid = |c: char| font.cmap.get(&(c as u32)).copied().unwrap_or(0);
+            for (a, b) in [('A', 'V'), ('T', 'o'), ('L', 'T')] {
+                assert!(
+                    font.kern(gid(a), gid(b)) < 0,
+                    "{path}: {a}{b} should tighten, got {}",
+                    font.kern(gid(a), gid(b))
+                );
+            }
+            assert_eq!(
+                font.kern(gid('o'), gid('o')),
+                0,
+                "{path}: two round letters need no kerning"
+            );
+        }
+        if checked == 0 {
+            eprintln!("skipping: no kerned system font found");
+        }
+    }
 }

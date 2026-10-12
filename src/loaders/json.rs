@@ -4,11 +4,12 @@
 //! production-grade.
 
 use std::collections::HashMap;
+use std::fmt::Write;
 
 #[derive(Debug, Clone)]
 pub enum Value {
     Null,
-    Bool(#[allow(dead_code)] bool),
+    Bool(bool),
     Number(f64),
     String(String),
     Array(Vec<Value>),
@@ -47,9 +48,122 @@ impl Value {
     pub fn as_u64(&self) -> Option<u64> {
         self.as_number().map(|n| n as u64)
     }
+    pub fn as_bool(&self) -> Option<bool> {
+        if let Value::Bool(b) = self {
+            Some(*b)
+        } else {
+            None
+        }
+    }
+
+    /// The named member of an object, for reaching into a nested block.
+    pub fn get(&self, key: &str) -> Option<&Value> {
+        self.as_object()?.get(key)
+    }
+
+    pub fn as_object_mut(&mut self) -> Option<&mut HashMap<String, Value>> {
+        if let Value::Object(o) = self {
+            Some(o)
+        } else {
+            None
+        }
+    }
+
     pub fn as_f32(&self) -> Option<f32> {
         self.as_number().map(|n| n as f32)
     }
+}
+
+impl Value {
+    /// Build an object from pairs, which reads better than inserting one by one.
+    pub fn object<const N: usize>(pairs: [(&str, Value); N]) -> Value {
+        Value::Object(
+            pairs
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v))
+                .collect(),
+        )
+    }
+
+    pub fn number(v: impl Into<f64>) -> Value {
+        Value::Number(v.into())
+    }
+
+    pub fn string(v: impl Into<String>) -> Value {
+        Value::String(v.into())
+    }
+
+    /// Serialise back to JSON.
+    ///
+    /// Object keys are written in sorted order. A `HashMap` has no order of its
+    /// own, so without this the same scene would serialise differently each
+    /// run, and a format whose output changes between runs cannot be diffed or
+    /// checksummed.
+    pub fn to_json(&self) -> String {
+        let mut out = String::new();
+        self.write(&mut out);
+        out
+    }
+
+    fn write(&self, out: &mut String) {
+        match self {
+            Value::Null => out.push_str("null"),
+            Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+            Value::Number(n) => {
+                // An integral float is written without its `.0`: glTF's schema
+                // types many of these as integers, and a validator rejects
+                // `"count": 36.0`.
+                if n.fract() == 0.0 && n.abs() < 9e15 {
+                    let _ = write!(out, "{}", *n as i64);
+                } else {
+                    let _ = write!(out, "{n}");
+                }
+            }
+            Value::String(s) => escape(s, out),
+            Value::Array(items) => {
+                out.push('[');
+                for (i, item) in items.iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    item.write(out);
+                }
+                out.push(']');
+            }
+            Value::Object(map) => {
+                let mut keys: Vec<&String> = map.keys().collect();
+                keys.sort();
+                out.push('{');
+                for (i, key) in keys.iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    escape(key, out);
+                    out.push(':');
+                    map[*key].write(out);
+                }
+                out.push('}');
+            }
+        }
+    }
+}
+
+fn escape(s: &str, out: &mut String) {
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
 }
 
 pub fn parse(src: &str) -> Result<Value, &'static str> {

@@ -224,7 +224,8 @@ impl UsdLoader {
     /// inside it resolve; `resolver` says what a name means.
     ///
     /// ```no_run
-    /// use threers::loaders::{ComposeOptions, FileResolver, UsdLoader};
+    /// use threers::loaders::usd::{ComposeOptions, FileResolver};
+    /// use threers::loaders::UsdLoader;
     ///
     /// let bytes = std::fs::read("shots/010/shot.usda").unwrap();
     /// let scene = UsdLoader::open(

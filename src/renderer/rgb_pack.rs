@@ -183,6 +183,14 @@ impl RgbPack {
         overlay: Option<&wgpu::Texture>,
         film: FilmGrade,
     ) -> Option<Self> {
+        // WebGL2 has no compute stage. wgpu signals that by zeroing the compute
+        // limits rather than by refusing the device, so without this check the
+        // pipeline is never created and the pass quietly does nothing — a frame
+        // that looks almost right, at a full frame rate. Every public
+        // constructor funnels through here, so this one guard covers them all.
+        if !crate::renderer::caps::supports_compute(device) {
+            return None;
+        }
         let (width, height) = (src.width(), src.height());
         // textureLoad on a non-filterable float view is the cheapest way in and
         // needs no sampler. Formats outside this set are not what the video
@@ -318,7 +326,7 @@ impl RgbPack {
         ];
         let ubo = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("threers rgb pack params"),
-            size: 192,
+            size: 208,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: true,
         });
@@ -332,6 +340,10 @@ impl RgbPack {
             m.slice(168..176).copy_from_slice(bytemuck::cast_slice(&[film.vignette, film.grain]));
             m.slice(176..192)
                 .copy_from_slice(bytemuck::cast_slice(&[film.seed, 0.0f32, 0.0f32, 0.0f32]));
+            // Depth of field is set per frame, like the reprojection: focus
+            // moves and the camera's clip range can too.
+            m.slice(192..208)
+                .copy_from_slice(bytemuck::cast_slice(&[0.0f32, 0.0, 0.0, 0.0]));
         }
         ubo.unmap();
 
@@ -480,6 +492,20 @@ impl RgbPack {
         queue.write_buffer(&self.ubo, 96, bytemuck::cast_slice(&prev_vp));
     }
 
+    /// Focus distance, the range either side of it that stays sharp, the blur
+    /// radius in pixels at full defocus, and the camera's clip planes.
+    ///
+    /// `near`/`far` MUST be the ones the frame was drawn with — the depth
+    /// linearisation is wrong otherwise, and wrong silently, in the same way
+    /// [`Ssao`](crate::renderer::ssao) is. A radius of zero turns it off.
+    pub fn set_dof(&self, queue: &wgpu::Queue, focus: f32, range: f32, radius: f32, near: f32, far: f32) {
+        queue.write_buffer(
+            &self.ubo,
+            180,
+            bytemuck::cast_slice(&[focus, range, radius, near, far]),
+        );
+    }
+
     /// Advance the grain seed. Cheap: eight bytes into a buffer that is already
     /// written every frame, and no pipeline rebuild -- which is the whole reason
     /// the seed is a uniform and not baked in at construction.
@@ -533,9 +559,13 @@ struct Params {
     vig      : f32,
     grain    : f32,
     seed     : f32,
+    dof_focus: f32,
+    dof_range: f32,
+    dof_rad  : f32,
+    dof_near : f32,
+    dof_far  : f32,
     fpad1    : f32,
     fpad2    : f32,
-    fpad3    : f32,
 };
 
 @group(0) @binding(0) var src : texture_2d<f32>;
@@ -558,6 +588,79 @@ fn to_linear(c : f32) -> f32 {
 fn to_srgb(c : f32) -> f32 {
     if (c <= 0.0031308) { return c * 12.92; }
     return 1.055 * pow(c, 1.0 / 2.4) - 0.055;
+}
+fn lin3(c : vec3<f32>) -> vec3<f32> {
+    return vec3<f32>(to_linear(c.r), to_linear(c.g), to_linear(c.b));
+}
+fn srgb3(c : vec3<f32>) -> vec3<f32> {
+    return vec3<f32>(to_srgb(c.r), to_srgb(c.g), to_srgb(c.b));
+}
+
+// --- Depth of field --------------------------------------------------------
+//
+// One gather at full resolution rather than the usual half-res chain. That
+// costs more samples for the same quality and is worth it here: the pack is a
+// single compute pass that already holds the frame and the depth, so this adds
+// no targets, no passes and no state, and a headless still is not paying for it
+// sixty times a second.
+const DOF_TAPS : i32 = 96;
+//
+// How far this pixel is from the focus plane, as a fraction of full blur.
+// Anything at the far plane — the background, which has no geometry in it — is
+// taken as fully defocused, which is what a lens does with a distant backdrop
+// and is the whole reason a subject separates from it.
+fn coc_at(xy : vec2<i32>) -> f32 {
+    let d = textureLoad(mb_depth, xy, 0);
+    if (d >= 1.0) { return 1.0; }
+    let z = (p.dof_near * p.dof_far) / (p.dof_far - d * (p.dof_far - p.dof_near));
+    return clamp(abs(z - p.dof_focus) / max(p.dof_range, 1e-4), 0.0, 1.0);
+}
+
+// A golden-angle spiral inside this pixel's circle of confusion, gathered in
+// linear light.
+//
+// The weight is the part that matters. A sample only contributes if *its own*
+// circle is wide enough to reach this pixel, so a sharp foreground does not
+// smear over a blurred background behind it — which is the artefact that makes
+// a naive depth-weighted blur read as a mistake rather than as a lens.
+fn dof(xy : vec2<u32>, dim : vec2<u32>, centre : vec3<f32>) -> vec3<f32> {
+    let coc = coc_at(vec2<i32>(xy));
+    let radius = coc * p.dof_rad;
+    if (radius < 0.75) { return centre; }
+    // Interleaved gradient noise: a per-pixel rotation hides the tap pattern,
+    // which at this few samples is otherwise a visible rosette.
+    let n = fract(52.9829189 * fract(dot(vec2<f32>(xy), vec2<f32>(0.06711056, 0.00583715))));
+    let a0 = n * 6.2831853;
+    var dir = vec2<f32>(cos(a0), sin(a0));
+    let golden = mat2x2<f32>(-0.7373688, 0.6754903, -0.6754903, -0.7373688);
+    var acc = lin3(centre);
+    var wsum = 1.0;
+    let hi = vec2<i32>(dim) - vec2<i32>(1, 1);
+    // The tap count has to grow with the area being gathered or the disc is
+    // undersampled and the "blur" is speckle: at a 14-pixel radius, 24 taps sit
+    // about three pixels apart. `DOF_TAPS` is the ceiling and the spacing rule
+    // picks how many of them are used, so a small blur stays cheap.
+    let want = i32(clamp(3.14159 * radius * radius / 2.2, 8.0, f32(DOF_TAPS)));
+    for (var i = 0; i < DOF_TAPS; i = i + 1) {
+        if (i >= want) { break; }
+        let r = sqrt((f32(i) + 0.5) / f32(want));
+        dir = golden * dir;
+        let off = dir * (r * radius);
+        let sp = vec2<f32>(xy) + off;
+        let cl = clamp(vec2<i32>(floor(sp)), vec2<i32>(0, 0), hi);
+        let sc = coc_at(cl);
+        // Does this sample's own circle actually reach this pixel? Compared in
+        // pixels rather than in the parametric radius, which is the same test
+        // everywhere except near the centre of the kernel — and near the centre
+        // the parametric form says yes to everything, so a sharp foreground
+        // bled a one-pixel halo into the blurred background behind it.
+        let w = smoothstep(length(off) - 0.5, length(off) + 0.5, sc * p.dof_rad);
+        let s = textureLoad(src, cl, 0);
+        let rgb = select(s.rgb, s.bgr, p.bgra != 0u);
+        acc = acc + lin3(rgb) * w;
+        wsum = wsum + w;
+    }
+    return srgb3(acc / wsum);
 }
 
 // Where this pixel was a frame ago, in UV. Reconstruct its world position from
@@ -583,6 +686,9 @@ fn texel(i : u32) -> vec3<u32> {
     let xy = vec2<u32>(j % p.width, j / p.width);
     let c = textureLoad(src, vec2<i32>(xy), 0);
     var rgb = select(c.rgb, c.bgr, p.bgra != 0u);
+    if (p.dof_rad > 0.0) {
+        rgb = dof(xy, textureDimensions(src), rgb);
+    }
     if (p.shutter > 0.0) {
         let dim = textureDimensions(src);
         let v = velocity(xy, dim);

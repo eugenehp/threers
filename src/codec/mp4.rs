@@ -21,7 +21,7 @@ use crate::captions::CaptionTrack;
 ///
 /// Uses the 64-bit ISOBMFF extended size (`size == 1` + `largesize`) when the
 /// box would exceed 4 GiB — required for long HEVC exports whose `mdat` is huge.
-fn bx(type_: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+pub(crate) fn bx(type_: &[u8; 4], payload: &[u8]) -> Vec<u8> {
     let total = 8u64 + payload.len() as u64;
     if total > u32::MAX as u64 {
         let largesize = 16u64 + payload.len() as u64;
@@ -52,7 +52,7 @@ fn box_header_len(box_bytes: &[u8]) -> usize {
 }
 
 /// A full-box (`version` + 24-bit `flags`) wrapping `payload`.
-fn fullbox(type_: &[u8; 4], version: u8, flags: u32, payload: &[u8]) -> Vec<u8> {
+pub(crate) fn fullbox(type_: &[u8; 4], version: u8, flags: u32, payload: &[u8]) -> Vec<u8> {
     let mut p = Vec::with_capacity(4 + payload.len());
     p.push(version);
     p.extend_from_slice(&flags.to_be_bytes()[1..]);
@@ -60,7 +60,7 @@ fn fullbox(type_: &[u8; 4], version: u8, flags: u32, payload: &[u8]) -> Vec<u8> 
     bx(type_, &p)
 }
 
-fn concat(parts: &[Vec<u8>]) -> Vec<u8> {
+pub(crate) fn concat(parts: &[Vec<u8>]) -> Vec<u8> {
     let mut v = Vec::new();
     for p in parts {
         v.extend_from_slice(p);
@@ -168,7 +168,7 @@ pub fn mux_h264(p: &H264Mp4Params) -> Vec<u8> {
 }
 
 /// Mux an H.264 video track plus a `tx3g` soft-subtitle track.
-/// [`mux_h264`] streamed to a sink — see [`mux_common_to`] for why.
+/// [`mux_h264`] streamed to a sink — see `mux_common_to` for why.
 pub fn write_h264<W: std::io::Write>(
     out: &mut W,
     p: &H264Mp4Params,
@@ -179,7 +179,7 @@ pub fn write_h264<W: std::io::Write>(
     mux_common_to(out, &common, &[b"isom", b"iso2", b"avc1", b"mp41"], stsd, captions)
 }
 
-/// [`mux_hevc`] streamed to a sink — see [`mux_common_to`] for why.
+/// [`mux_hevc`] streamed to a sink — see `mux_common_to` for why.
 pub fn write_hevc<W: std::io::Write>(
     out: &mut W,
     p: &Mp4Params,
@@ -216,6 +216,32 @@ fn mux_h264_internal(p: &H264Mp4Params, captions: Option<&CaptionTrack>) -> Vec<
     )
 }
 
+/// `ColourInformationBox` — BT.709, limited range.
+///
+/// The encoder already states this in the bitstream: it sets `ColorPrimaries`,
+/// `TransferFunction` and `YCbCrMatrix` on the VideoToolbox session, so the
+/// values reach the HEVC VUI. That is the durable place for them and it is not
+/// enough on its own, because not every player reads the VUI. The ones that do
+/// not fall back to guessing from the frame size, and the guess for a tall 4K
+/// frame is not reliably BT.709 — so the same file renders with different
+/// contrast in different players, most visibly on high-contrast edges, which
+/// is where a thin bright rail against black lives.
+///
+/// Both, then. The VUI survives a remux that rebuilds the container; this box
+/// is read by players that never look at the VUI.
+///
+/// `full_range_flag` is 0: nothing asks VideoToolbox for full range, and its
+/// default for 8-bit is video range.
+fn colr_box() -> Vec<u8> {
+    let mut v = Vec::with_capacity(19);
+    v.extend_from_slice(b"nclx");
+    v.extend_from_slice(&1u16.to_be_bytes()); // colour_primaries: BT.709
+    v.extend_from_slice(&1u16.to_be_bytes()); // transfer_characteristics: BT.709
+    v.extend_from_slice(&1u16.to_be_bytes()); // matrix_coefficients: BT.709
+    v.push(0); // full_range_flag (1 bit) + reserved
+    bx(b"colr", &v)
+}
+
 fn build_hevc_stsd(p: &Mp4Params) -> Vec<u8> {
     let hvcc = bx(b"hvcC", p.hvcc_payload);
     let mut sample_entry = Vec::new();
@@ -232,6 +258,7 @@ fn build_hevc_stsd(p: &Mp4Params) -> Vec<u8> {
     sample_entry.extend_from_slice(&0x0018u16.to_be_bytes()); // depth
     sample_entry.extend_from_slice(&0xFFFFu16.to_be_bytes()); // pre_defined -1
     sample_entry.extend_from_slice(&hvcc);
+    sample_entry.extend_from_slice(&colr_box());
     if let Some(almo) = p.almo_payload {
         sample_entry.extend_from_slice(&bx(b"almo", almo));
     }
@@ -258,6 +285,7 @@ fn build_h264_stsd(p: &H264Mp4Params) -> Vec<u8> {
     sample_entry.extend_from_slice(&0x0018u16.to_be_bytes()); // depth
     sample_entry.extend_from_slice(&0xFFFFu16.to_be_bytes()); // pre_defined -1
     sample_entry.extend_from_slice(&avcc);
+    sample_entry.extend_from_slice(&colr_box());
     let avc1 = bx(b"avc1", &sample_entry);
     let mut payload = Vec::new();
     payload.extend_from_slice(&1u32.to_be_bytes()); // entry_count
@@ -742,7 +770,7 @@ fn pack_language(language: &str) -> u16 {
 }
 
 /// The identity transformation matrix used in `tkhd`/`mvhd` (16.16 / 2.30 fixed).
-const UNITY_MATRIX: [u8; 36] = [
+pub(crate) const UNITY_MATRIX: [u8; 36] = [
     0x00, 0x01, 0x00, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, //
     0, 0, 0, 0, 0x00, 0x01, 0x00, 0x00, 0, 0, 0, 0, //
     0, 0, 0, 0, 0, 0, 0, 0, 0x40, 0x00, 0x00, 0x00,

@@ -254,6 +254,26 @@ impl MetalHeadlessRenderer {
         }
     }
 
+    /// Vignette and grain, the two things that read as *film* rather than as
+    /// render. Both 0 disables the pass.
+    ///
+    /// Matches [`HeadlessRenderer::set_film_grade`](crate::HeadlessRenderer::set_film_grade)
+    /// line for line — a look that differs by backend is a look nobody can
+    /// rely on.
+    pub fn set_film_grade(&mut self, vignette: f32, grain: f32) {
+        if let Some(p) = self.postfx.as_mut() {
+            p.set_film_grade(vignette, grain);
+        }
+    }
+
+    /// Advance the grain's seed so it moves between frames. Anything that
+    /// changes per frame will do.
+    pub fn set_grain_seed(&mut self, seed: f32) {
+        if let Some(p) = self.postfx.as_mut() {
+            p.set_grain_seed(seed);
+        }
+    }
+
     /// GPU chroma punch in the bloom composite (replaces CPU full-frame grade).
     pub fn set_chroma(&mut self, sat_scale: f32, lift: f32) {
         if let Some(p) = self.postfx.as_mut() {

@@ -15,12 +15,12 @@
 //!
 //! | Need | Use |
 //! |---|---|
-//! | A→B over a known duration | [`Tween`] |
-//! | Chase a target that keeps moving | [`Spring`] |
-//! | Several things on one clock | [`Timeline`] |
-//! | Drive scene nodes directly | [`Animator`] |
+//! | A→B over a known duration | [`Tween`](tween::Tween) |
+//! | Chase a target that keeps moving | [`Spring`](spring::Spring) |
+//! | Several things on one clock | [`Timeline`](timeline::Timeline) |
+//! | Drive scene nodes directly | [`Animator`](scene::Animator) |
 //! | Cinematic camera moves / paths / shots | [`camera`] |
-//! | Hand a character to the physics solver | [`PhysicsBlend`] (`physics` feature) |
+//! | Hand a character to the physics solver | `blend::PhysicsBlend` (`physics` feature) |
 //!
 //! The distinction that matters most is the first two. A tween is told how long
 //! to take, which is right for scripted motion and wrong for anything reacting
@@ -32,11 +32,18 @@
 //!
 //! | Flag | Effect |
 //! |---|---|
-//! | `physics` | [`PhysicsBlend`] and [`RagdollBlend`], which need `threers-physics` |
+//! | `physics` | `blend::PhysicsBlend` and `blend::RagdollBlend`, which need `threers-physics` |
 
 pub mod animatable;
 pub mod camera;
-pub mod easing;
+/// Easing curves.
+///
+/// These live in `threers` itself now rather than here. Tweens and springs are
+/// animation; a curve from 0 to 1 is not, and keeping it in a crate marked
+/// `publish = false` meant `cargo add threers` got you no easing at all —
+/// which d3 and p5 both treat as something you have before you have anything.
+/// Re-exported so `threers_animation::easing::Easing` keeps working.
+pub use threers::easing;
 pub mod scene;
 pub mod spring;
 pub mod timeline;

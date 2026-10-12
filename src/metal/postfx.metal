@@ -15,8 +15,11 @@ struct BloomParams {
 struct DownsampleParams {
     uint factor;
     uint srgb;
+    // 0 = box (the plain block average), 1 = Mitchell-Netravali radius 2.
+    // Mirrors `DownsampleFilter` on the wgpu path; see the module docs there
+    // for why the box is the one that aliases.
+    uint filter;
     uint _pad0;
-    uint _pad1;
 };
 
 struct SsaoParams {
@@ -35,9 +38,21 @@ struct UpscaleParams {
     float2 dst_size;
 };
 
+// Scalars, not a `float2`.
+//
+// Metal aligns `float2` to eight bytes and Rust aligns `[f32; 2]` to four, so
+// with a single `float` in front of it the two languages disagreed about where
+// everything after it lived: the shader read `chroma_sat` out of the bytes Rust
+// had written `chroma_lift` into. A saturation scale of zero turns the chroma
+// step below into `rgb = maxc`, which is a perfectly grey frame from a shader
+// whose arithmetic is a no-op when its parameters are right.
+//
+// Keeping every member four-byte aligned removes the trap rather than papering
+// over it with padding that the next member to be added would have to respect.
 struct CompositeParams {
     float strength;
-    float2 bloom_size;
+    float bloom_w;
+    float bloom_h;
     float chroma_sat;
     float chroma_lift;
 };
@@ -51,11 +66,27 @@ struct FullscreenOut {
     float2 uv;
 };
 
+/// A full-screen triangle, with `uv` in the framebuffer's orientation.
+///
+/// The `1.0 - y` is the point of this comment. Clip space has +y up and the
+/// framebuffer has y down, so the vertex whose clip y is +1 lands on the *top*
+/// row — while a texture coordinate of v = 1 is the *bottom* of the source.
+/// Handing `position * 0.5 + 0.5` out as `uv` therefore samples every pass that
+/// uses it upside down, and passes that sample by `in.position.xy` instead are
+/// unaffected, so a chain mixing the two flips only some of its stages.
+///
+/// That is not hypothetical: bloom's composite samples by `uv` and the resolve
+/// by `position`, and the phone render this crate exists for came out inverted
+/// the moment bloom was switched on — status bar along the bottom edge —
+/// while every orientation test passed, because none of them had enabled it.
+///
+/// Flipping here rather than at the three call sites means the next pass to
+/// sample by `uv` is right without having to know any of this.
 vertex FullscreenOut vs_fullscreen(uint vid [[vertex_id]]) {
     const float2 uv = float2(float((vid << 1u) & 2u), float(vid & 2u));
     FullscreenOut out;
     out.position = float4(uv * 2.0 - 1.0, 0.0, 1.0);
-    out.uv = uv;
+    out.uv = float2(uv.x, 1.0 - uv.y);
     return out;
 }
 
@@ -116,24 +147,73 @@ fragment float4 fs_bloom_blur(
 
 // ----------------------------------------------------------- downsample / upscale
 
+/// Mitchell-Netravali with the B = C = 1/3 the paper recommends, on a radius of
+/// two output pixels.
+inline float mitchell(float x) {
+    x = abs(x);
+    const float B = 1.0 / 3.0;
+    const float C = 1.0 / 3.0;
+    if (x < 1.0) {
+        return ((12.0 - 9.0 * B - 6.0 * C) * x * x * x
+              + (-18.0 + 12.0 * B + 6.0 * C) * x * x
+              + (6.0 - 2.0 * B)) / 6.0;
+    }
+    if (x < 2.0) {
+        return ((-B - 6.0 * C) * x * x * x
+              + (6.0 * B + 30.0 * C) * x * x
+              + (-12.0 * B - 48.0 * C) * x
+              + (8.0 * B + 24.0 * C)) / 6.0;
+    }
+    return 0.0;
+}
+
 fragment float4 fs_downsample(
     FullscreenOut in [[stage_in]],
     texture2d<float, access::sample> src [[texture(0)]],
     constant DownsampleParams &p [[buffer(0)]])
 {
-    constexpr sampler s(coord::pixel, filter::nearest);
+    constexpr sampler s(coord::pixel, filter::nearest, address::clamp_to_edge);
     const int2 base = int2(in.position.xy) * int(p.factor);
+    const float f = float(p.factor);
     float4 acc = float4(0.0);
     // Average in the space the texture samples in. For sRGB attachments Metal
     // already returns linear; writing to an sRGB target re-encodes. Manual
     // encode/decode here would double-convert and crush highlights.
     (void)p.srgb;
-    for (uint y = 0u; y < p.factor; y++) {
-        for (uint x = 0u; x < p.factor; x++) {
-            acc += src.sample(s, float2(base + int2(x, y)) + float2(0.5));
+    if (p.filter == 0u) {
+        for (uint y = 0u; y < p.factor; y++) {
+            for (uint x = 0u; x < p.factor; x++) {
+                acc += src.sample(s, float2(base + int2(x, y)) + float2(0.5));
+            }
+        }
+        return acc / (f * f);
+    }
+    // A box one output pixel wide passes much of what it was meant to remove,
+    // and that folds back as a staircase on any shallow edge — adding samples
+    // inside it does not help, because the support is what is wrong. Reach two
+    // output pixels either side instead, weighting by distance from the output
+    // pixel's centre. Separable, but taken as a product here: one pass, no
+    // intermediate, and this path has no HDR scratch to put one in.
+    const int half_taps = int(ceil(2.0 * f));
+    const int first = -half_taps + int(p.factor) / 2;
+    float wsum = 0.0;
+    for (int dy = 0; dy < 2 * half_taps; dy++) {
+        // Source-sample centre minus output-pixel centre, in output pixels.
+        const float ty = (float(dy + first) + 0.5 - f * 0.5) / f;
+        const float wy = mitchell(ty);
+        if (wy == 0.0) { continue; }
+        for (int dx = 0; dx < 2 * half_taps; dx++) {
+            const float tx = (float(dx + first) + 0.5 - f * 0.5) / f;
+            const float w = wy * mitchell(tx);
+            if (w == 0.0) { continue; }
+            const int2 at = base + int2(dx + first, dy + first);
+            acc += src.sample(s, float2(at) + float2(0.5)) * w;
+            wsum += w;
         }
     }
-    return acc / float(p.factor * p.factor);
+    // The sampler clamps to the edge, so the weights still sum to one there and
+    // the border neither darkens nor brightens.
+    return acc / wsum;
 }
 
 /// Keys cubic weight (Catmull-Rom, B=0, C=0.5).
@@ -319,6 +399,53 @@ struct TonemapParams {
 static inline float3 aces(float3 x) {
     const float a = 2.51, b = 0.03, c = 2.43, d = 0.59, e = 0.14;
     return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+}
+
+struct FilmParams {
+    float vignette;
+    float grain;
+    float seed;      // changes per frame, so the grain moves
+    float _pad0;
+};
+
+/// Vignette and grain, mirroring `rgb_pack.rs` in the wgpu path.
+///
+/// Both belong in a pass and not on the CPU: they are per-pixel work over the
+/// whole frame, and a CPU walk of an 8K image costs more than everything else
+/// the grade does. Kept identical to the wgpu version line for line, because a
+/// film look that differs by backend is a film look nobody can rely on.
+fragment float4 fs_film(
+    FullscreenOut in [[stage_in]],
+    texture2d<float, access::sample> src [[texture(0)]],
+    constant FilmParams &p [[buffer(0)]])
+{
+    constexpr sampler s(coord::pixel, filter::nearest, address::clamp_to_edge);
+    float4 c = src.sample(s, in.position.xy);
+    float3 rgb = c.rgb;
+    const uint2 xy = uint2(in.position.xy);
+
+    if (p.vignette > 0.0) {
+        // cos-fourth falloff — the one a real lens has. Normalised so the
+        // centre is untouched and only the corners lose light. Vignetting is
+        // lost *light*, so it multiplies in linear.
+        const float2 dim = float2(src.get_width(), src.get_height());
+        const float2 q = (float2(xy) + 0.5) / dim * 2.0 - 1.0;
+        const float f = 1.0 / (1.0 + dot(q, q) * 0.5);
+        rgb *= mix(1.0, f * f, p.vignette);
+    }
+    if (p.grain > 0.0) {
+        // Hashed on the pixel *and* the frame, so it moves: static grain is
+        // dirt on the lens, not grain. Weighted to the mid-tones, because film
+        // has almost none in the toe or the shoulder and an even sprinkle over
+        // black reads as sensor noise.
+        uint hsh = xy.x * 374761393u + xy.y * 668265263u + uint(p.seed) * 1274126177u;
+        hsh = hsh ^ (hsh >> 13u);
+        hsh = hsh * 1274126177u;
+        const float n = float((hsh ^ (hsh >> 16u)) & 0xffffu) / 65535.0 - 0.5;
+        const float l = dot(rgb, float3(0.299, 0.587, 0.114));
+        rgb = clamp(rgb + n * p.grain * (4.0 * l * (1.0 - l)), 0.0, 1.0);
+    }
+    return float4(rgb, c.a);
 }
 
 fragment float4 fs_tonemap(

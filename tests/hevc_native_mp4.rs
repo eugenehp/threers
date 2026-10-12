@@ -138,3 +138,74 @@ fn streaming_pulls_frames_in_order() {
     });
     assert_eq!(seen, (0..n).collect::<Vec<_>>());
 }
+
+/// The video sample entry must carry a `colr` box.
+///
+/// The encoder states BT.709 in the bitstream — it sets `ColorPrimaries`,
+/// `TransferFunction` and `YCbCrMatrix` on the VideoToolbox session, so the
+/// values reach the HEVC VUI — and that is not enough on its own, because not
+/// every player reads the VUI. The ones that do not guess from the frame size,
+/// and then the same file renders with different contrast in different
+/// players. It shows first on high-contrast edges, which is where a thin
+/// bright rail against black lives, and it reads as a *rendering* fault rather
+/// than a container one.
+///
+/// Both places, then: the VUI survives a remux that rebuilds the container,
+/// and this box is read by players that never look at the VUI.
+#[test]
+fn the_sample_entry_states_its_colour() {
+    let (w, h) = (64u32, 48u32);
+    let frames: Vec<Yuv420Frame> = (0..3).map(|t| frame(w, h, t)).collect();
+    let mp4 = encode_compressed_mp4(w, h, 24, 27, &frames);
+
+    // Walk to the sample entry: moov > trak > mdia > minf > stbl > stsd.
+    let mut cur = (0usize, mp4.len());
+    for want in ["moov", "trak", "mdia", "minf", "stbl", "stsd"] {
+        let (mut p, end) = cur;
+        let mut found = None;
+        while p + 8 <= end {
+            let size = u32::from_be_bytes(mp4[p..p + 4].try_into().unwrap()) as usize;
+            if size < 8 {
+                break;
+            }
+            if &mp4[p + 4..p + 8] == want.as_bytes() {
+                found = Some((p + 8, p + size));
+                break;
+            }
+            p += size;
+        }
+        cur = found.unwrap_or_else(|| panic!("no {want} box"));
+    }
+    let stsd = &mp4[cur.0..cur.1];
+    // stsd: version/flags + entry_count, then the sample entry.
+    let entry = &stsd[8..];
+    let entry_size = u32::from_be_bytes(entry[0..4].try_into().unwrap()) as usize;
+    assert_eq!(&entry[4..8], b"hvc1", "not an hvc1 entry");
+    // VisualSampleEntry is 8 bytes of box header plus 78 of fields.
+    let mut p = 86;
+    let mut seen: Vec<String> = Vec::new();
+    while p + 8 <= entry_size {
+        let size = u32::from_be_bytes(entry[p..p + 4].try_into().unwrap()) as usize;
+        let kind = String::from_utf8_lossy(&entry[p + 4..p + 8]).to_string();
+        if size < 8 {
+            break;
+        }
+        if kind == "colr" {
+            let v = &entry[p + 8..p + size];
+            assert_eq!(&v[0..4], b"nclx", "colr is not nclx");
+            let primaries = u16::from_be_bytes(v[4..6].try_into().unwrap());
+            let transfer = u16::from_be_bytes(v[6..8].try_into().unwrap());
+            let matrix = u16::from_be_bytes(v[8..10].try_into().unwrap());
+            assert_eq!(
+                (primaries, transfer, matrix),
+                (1, 1, 1),
+                "colr does not say BT.709"
+            );
+            assert_eq!(v[10] & 0x80, 0, "colr claims full range");
+            return;
+        }
+        seen.push(kind);
+        p += size;
+    }
+    panic!("no colr box in the sample entry; found {seen:?}");
+}

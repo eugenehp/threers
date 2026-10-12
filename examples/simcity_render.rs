@@ -85,15 +85,12 @@ fn shoot(
         renderer.set_bloom(fx.bloom, threshold, fx.radius);
     }
     if fx.ssao > 0.0 {
-        let tan_half = (camera.fov.to_radians() * 0.5).tan();
-        renderer.set_ssao(
-            fx.ssao,
-            fx.ssao_radius,
-            camera.near,
-            camera.far,
-            tan_half,
-            camera.aspect,
-        );
+        // The clip planes and the lens come from the frame now. They used to be
+        // passed here, and this call is why that was worth changing: it read
+        // `camera.fov.to_radians()`, and `fov` is already radians — so the
+        // occlusion ran with a field of view 57 times too small and still
+        // produced something that looked like ambient occlusion.
+        renderer.set_ssao(fx.ssao, fx.ssao_radius);
     }
     renderer.render(scene, camera);
     // The RGB path is pipelined for video: the call that queues a frame is not

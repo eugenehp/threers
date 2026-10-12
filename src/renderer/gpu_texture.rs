@@ -63,26 +63,7 @@ pub fn f32_to_f16_bits(v: f32) -> u16 {
 }
 
 pub fn f16_bits_to_f32(h: u16) -> f32 {
-    let s = ((h & 0x8000) as u32) << 16;
-    let e = ((h >> 10) & 0x1f) as u32;
-    let m = (h & 0x3ff) as u32;
-    if e == 0 {
-        if m == 0 {
-            return f32::from_bits(s);
-        }
-        let mut e = 1u32;
-        let mut m = m;
-        while (m & 0x400) == 0 {
-            m <<= 1;
-            e += 1;
-        }
-        m &= 0x3ff;
-        return f32::from_bits(s | ((127 - 15 - e) << 23) | (m << 13));
-    }
-    if e == 31 {
-        return f32::from_bits(s | 0x7f80_0000 | (m << 13));
-    }
-    f32::from_bits(s | ((e + 127 - 15) << 23) | (m << 13))
+    crate::renderer::readback::f16_to_f32(h)
 }
 
 fn pad_rows_rgba16f(f32_pixels: &[f32], width: u32, height: u32) -> (Vec<u8>, u32) {
@@ -119,7 +100,7 @@ pub struct MipGenerator {
     shader: wgpu::ShaderModule,
     layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
-    pipelines: std::collections::HashMap<wgpu::TextureFormat, wgpu::RenderPipeline>,
+    pipelines: crate::renderer::fullscreen::FormatPipelines<wgpu::RenderPipeline>,
 }
 
 impl MipGenerator {
@@ -127,32 +108,21 @@ impl MipGenerator {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("threers mipgen"),
             source: wgpu::ShaderSource::Wgsl(
-                r#"
-struct Vs { @builtin(position) pos : vec4<f32>, @location(0) uv : vec2<f32> };
-
-// One oversized triangle rather than two triangles: no seam down the diagonal
-// and one fewer vertex to think about.
-@vertex
-fn vs(@builtin(vertex_index) i : u32) -> Vs {
-    var out : Vs;
-    let uv = vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u));
-    out.uv = uv;
-    out.pos = vec4<f32>(uv * 2.0 - 1.0, 0.0, 1.0);
-    // Clip space runs +y up and texture space +v down.
-    out.pos.y = -out.pos.y;
-    return out;
-}
-
+                format!(
+                    "{}\n{}",
+                    crate::renderer::fullscreen::VS,
+                    r#"
 @group(0) @binding(0) var src  : texture_2d<f32>;
 @group(0) @binding(1) var samp : sampler;
 
 @fragment
-fn fs(in : Vs) -> @location(0) vec4<f32> {
+fn fs(in : FullscreenVertex) -> @location(0) vec4<f32> {
     // The destination texel centre lands exactly between four source texels,
     // so a single bilinear tap returns their average.
     return textureSampleLevel(src, samp, in.uv, 0.0);
 }
 "#
+                )
                 .into(),
             ),
         });
@@ -191,7 +161,7 @@ fn fs(in : Vs) -> @location(0) vec4<f32> {
             shader,
             layout,
             sampler,
-            pipelines: std::collections::HashMap::new(),
+            pipelines: crate::renderer::fullscreen::FormatPipelines::new(),
         }
     }
 
@@ -209,7 +179,7 @@ fn fs(in : Vs) -> @location(0) vec4<f32> {
     fn ensure_pipeline(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat) {
         let layout = &self.layout;
         let shader = &self.shader;
-        self.pipelines.entry(format).or_insert_with(|| {
+        self.pipelines.get_or_build(format, || {
             let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("threers mipgen pipeline layout"),
                 bind_group_layouts: &[Some(layout)],
@@ -220,7 +190,7 @@ fn fs(in : Vs) -> @location(0) vec4<f32> {
                 layout: Some(&pl),
                 vertex: wgpu::VertexState {
                     module: shader,
-                    entry_point: Some("vs"),
+                    entry_point: Some(crate::renderer::fullscreen::VS_ENTRY),
                     buffers: &[],
                     compilation_options: Default::default(),
                 },
@@ -254,7 +224,10 @@ fn fs(in : Vs) -> @location(0) vec4<f32> {
         // Built first, then everything borrowed immutably together — the
         // `&mut self` for pipeline creation must not overlap the reads below.
         self.ensure_pipeline(device, format);
-        let pipeline = &self.pipelines[&format];
+        let pipeline = self
+            .pipelines
+            .get(format)
+            .expect("ensure_pipeline just built it");
         let layout = &self.layout;
         let sampler = &self.sampler;
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -323,6 +296,95 @@ pub struct GpuCubeTexture {
     pub cube_uv_view: Option<wgpu::TextureView>,
 }
 
+/// The six faces of a cube map, one buffer each, shared rather than copied.
+pub(crate) type CubeFaces = [std::sync::Arc<Vec<u8>>; 6];
+
+/// Box-downsample each face to a full mip chain, in linear light.
+///
+/// Linear light because sRGB is a transfer function and not a quantity you can
+/// take the mean of — averaging encoded bytes darkens every edge, and an
+/// environment is mostly edges. The same argument as
+/// [`downsample`](super::downsample), and the same fix.
+pub(crate) fn mip_chain(
+    format: TextureFormat,
+    size: u32,
+    faces: &CubeFaces,
+) -> (Vec<CubeFaces>, Vec<u32>) {
+    use std::sync::Arc;
+    let four_byte = matches!(
+        format,
+        TextureFormat::Rgba8Unorm | TextureFormat::Rgba8UnormSrgb
+    );
+    let srgb = matches!(format, TextureFormat::Rgba8UnormSrgb);
+    let mut sizes = vec![size];
+    let mut chain: Vec<[Arc<Vec<u8>>; 6]> = vec![faces.clone()];
+    // Half-float and block-compressed formats are left alone: one is rare
+    // enough here not to be worth a second code path, the other cannot be
+    // averaged at all without decoding it first.
+    if !four_byte {
+        return (chain, sizes);
+    }
+    let lin = |b: u8| -> f32 {
+        let s = b as f32 / 255.0;
+        if !srgb {
+            s
+        } else if s <= 0.04045 {
+            s / 12.92
+        } else {
+            ((s + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let enc = |l: f32| -> u8 {
+        let s = if !srgb {
+            l
+        } else if l <= 0.0031308 {
+            l * 12.92
+        } else {
+            1.055 * l.powf(1.0 / 2.4) - 0.055
+        };
+        (s.clamp(0.0, 1.0) * 255.0).round() as u8
+    };
+    let mut cur = faces.clone();
+    let mut w = size;
+    while w > 1 {
+        let half = w / 2;
+        let next: [Arc<Vec<u8>>; 6] = std::array::from_fn(|f| {
+            let src = &cur[f];
+            let mut out = vec![0u8; (half * half) as usize * 4];
+            for y in 0..half {
+                for x in 0..half {
+                    for c in 0..4 {
+                        let mut acc = 0.0f32;
+                        for dy in 0..2 {
+                            for dx in 0..2 {
+                                let i = (((y * 2 + dy) * w + (x * 2 + dx)) * 4) as usize + c;
+                                // Alpha carries no transfer function.
+                                acc += if c == 3 {
+                                    src[i] as f32 / 255.0
+                                } else {
+                                    lin(src[i])
+                                };
+                            }
+                        }
+                        let v = acc * 0.25;
+                        out[((y * half + x) * 4) as usize + c] = if c == 3 {
+                            (v.clamp(0.0, 1.0) * 255.0).round() as u8
+                        } else {
+                            enc(v)
+                        };
+                    }
+                }
+            }
+            Arc::new(out)
+        });
+        chain.push(next.clone());
+        sizes.push(half);
+        cur = next;
+        w = half;
+    }
+    (chain, sizes)
+}
+
 impl GpuCubeTexture {
     pub fn upload(device: &wgpu::Device, queue: &wgpu::Queue, src: &CubeTexture) -> Self {
         if let Some(atlas) = &src.cube_uv_atlas {
@@ -331,7 +393,16 @@ impl GpuCubeTexture {
         if let (Some(mips), Some(sizes)) = (&src.pmrem_mips, &src.pmrem_sizes) {
             return Self::upload_pmrem(device, queue, src.format, mips, sizes);
         }
-        Self::upload_faces(device, queue, src.format, src.size, 1, &src.faces, 0)
+        // A plain cube still needs a mip chain, because roughness selects one.
+        //
+        // This uploaded a single level, so `textureNumLevels` was 1, every
+        // roughness resolved to mip 0, and a rough metal reflected the
+        // environment as sharply as a mirror — the only difference between
+        // them coming from the BRDF. Which is subtle where it should be
+        // obvious, and leaves high-frequency detail in a reflection that is
+        // supposed to have blurred it away.
+        let (mips, sizes) = mip_chain(src.format, src.size.max(1), &src.faces);
+        Self::upload_pmrem(device, queue, src.format, &mips, &sizes)
     }
 
     fn upload_cube_uv(

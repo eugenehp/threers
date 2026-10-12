@@ -116,7 +116,7 @@ pub struct Pixel {
     /// cancellation of `E[x²] − μ²` on bright pixels.
     ///
     /// Checkpoints still serialise the legacy `Σx²` form; see
-    /// [`sum_sq_from_m2`] / [`m2_from_sum_sq`].
+    /// `sum_sq_from_m2` / `m2_from_sum_sq`.
     pub lum_sq: f32,
 }
 
@@ -536,25 +536,17 @@ fn inv_samples(p: &Pixel) -> f32 {
 /// highlight becomes.
 pub fn tone_map(c: Vector3, mode: ToneMapping) -> Vector3 {
     match mode {
-        ToneMapping::None => Vector3::new(
+        // Neither of these two has a curve, so all they can do is clip.
+        ToneMapping::None | ToneMapping::Linear => Vector3::new(
             c.x.clamp(0.0, 1.0),
             c.y.clamp(0.0, 1.0),
             c.z.clamp(0.0, 1.0),
         ),
-        ToneMapping::Linear => Vector3::new(
-            c.x.clamp(0.0, 1.0),
-            c.y.clamp(0.0, 1.0),
-            c.z.clamp(0.0, 1.0),
-        ),
-        ToneMapping::AcesFilmic => {
-            // Narkowicz's fit to the ACES RRT+ODT: a rational curve that keeps
-            // hue as it rolls off, which is why bright metal still reads as
-            // metal instead of turning white.
-            let f = |x: f32| {
-                let (a, b, cc, d, e) = (2.51f32, 0.03f32, 2.43f32, 0.59f32, 0.14f32);
-                ((x * (a * x + b)) / (x * (cc * x + d) + e)).clamp(0.0, 1.0)
-            };
-            Vector3::new(f(c.x), f(c.y), f(c.z))
+        // The rest share one CPU implementation with `SvgRenderer`, and that
+        // implementation is checked against the WGSL it mirrors.
+        _ => {
+            let v = mode.apply([c.x, c.y, c.z]);
+            Vector3::new(v[0], v[1], v[2])
         }
     }
 }

@@ -204,28 +204,7 @@ pub fn half_to_f32_for_test(bits: u16) -> f32 {
 
 /// Half-precision, which USD uses for compact colour and normal data.
 fn half_to_f32(bits: u16) -> f32 {
-    let sign = ((bits >> 15) & 1) as u32;
-    let exponent = ((bits >> 10) & 0x1F) as u32;
-    let mantissa = (bits & 0x3FF) as u32;
-    let out = match exponent {
-        0 if mantissa == 0 => sign << 31,
-        // Subnormal: the value is `mantissa * 2^-24`, so shift the mantissa
-        // up until its leading bit is where f32 keeps an implicit one, and
-        // pay for each shift out of the exponent.
-        0 => {
-            let mut m = mantissa;
-            let mut shifts = 0u32;
-            while m & 0x400 == 0 {
-                m <<= 1;
-                shifts += 1;
-            }
-            let exp = 113 - shifts;
-            (sign << 31) | (exp << 23) | ((m & 0x3FF) << 13)
-        }
-        0x1F => (sign << 31) | (0xFF << 23) | (mantissa << 13),
-        _ => (sign << 31) | ((exponent + 127 - 15) << 23) | (mantissa << 13),
-    };
-    f32::from_bits(out)
+    crate::renderer::readback::f16_to_f32(bits)
 }
 
 struct Crate<'a> {
@@ -287,8 +266,8 @@ pub fn read(file: &[u8]) -> Result<UsdLayer, UsdError> {
         let at = at as usize;
         let count = u64_at(file, at)? as usize;
         let mut cursor = at + 8;
-        let names = read_u32_array(file, &mut cursor, count)
-            .ok_or(UsdError::Corrupt("field names"))?;
+        let names =
+            read_u32_array(file, &mut cursor, count).ok_or(UsdError::Corrupt("field names"))?;
         // The value words are LZ4'd but not integer-packed: eight bytes each.
         let size = u64_at(file, cursor)? as usize;
         cursor += 8;
@@ -321,8 +300,8 @@ pub fn read(file: &[u8]) -> Result<UsdLayer, UsdError> {
         let mut cursor = at + 16;
         let indexes =
             read_u32_array(file, &mut cursor, encoded).ok_or(UsdError::Corrupt("path indexes"))?;
-        let elements = read_u32_array(file, &mut cursor, encoded)
-            .ok_or(UsdError::Corrupt("path elements"))?;
+        let elements =
+            read_u32_array(file, &mut cursor, encoded).ok_or(UsdError::Corrupt("path elements"))?;
         let jumps =
             read_u32_array(file, &mut cursor, encoded).ok_or(UsdError::Corrupt("path jumps"))?;
         // The slots the encoded entries write to are *not* dense: a path table
@@ -396,9 +375,7 @@ fn fold_sublayer_offsets(fields: &mut Vec<(String, UsdValue)>) {
     }
     fields.retain(|(k, _)| k != "subLayerOffsets");
 
-    if let Some((_, UsdValue::Array(items))) =
-        fields.iter_mut().find(|(k, _)| k == "subLayers")
-    {
+    if let Some((_, UsdValue::Array(items))) = fields.iter_mut().find(|(k, _)| k == "subLayers") {
         {
             for (i, item) in items.iter_mut().enumerate() {
                 let Some((offset, scale)) = offsets.get(i).copied() else {
@@ -502,7 +479,10 @@ fn build_paths(
 
 impl Crate<'_> {
     fn token(&self, i: u32) -> &str {
-        self.tokens.get(i as usize).map(String::as_str).unwrap_or("")
+        self.tokens
+            .get(i as usize)
+            .map(String::as_str)
+            .unwrap_or("")
     }
 
     /// A quoted string, which is indexed one level deeper than a token: the
@@ -1126,11 +1106,11 @@ impl Crate<'_> {
         match kind {
             kind::BOOL => UsdValue::Bool(payload != 0),
             kind::UCHAR => UsdValue::Int(payload as u8 as i128),
-                        // Signed and unsigned differ in how the same bits read back, and
+            // Signed and unsigned differ in how the same bits read back, and
             // the type is the only thing that says which this is.
             kind::INT => UsdValue::Int(payload as u32 as i32 as i128),
             kind::UINT => UsdValue::Int(payload as u32 as i128),
-                        kind::INT64 => UsdValue::Int(payload as i64 as i128),
+            kind::INT64 => UsdValue::Int(payload as i64 as i128),
             kind::UINT64 => UsdValue::Int(payload as i128),
             // Inlined floating point is stored as f32 bits — including for
             // doubles, which is why only a double that survives the round trip
@@ -1236,7 +1216,12 @@ impl Crate<'_> {
             let Some(values) = values else {
                 return UsdValue::None;
             };
-            return UsdValue::Array(values.into_iter().map(|v| UsdValue::Int(v as i128)).collect());
+            return UsdValue::Array(
+                values
+                    .into_iter()
+                    .map(|v| UsdValue::Int(v as i128))
+                    .collect(),
+            );
         }
 
         let stride = lanes * width;
@@ -1291,12 +1276,7 @@ impl Crate<'_> {
     /// fields rather than from sorting the path table, because those record the
     /// order the document was authored in and a sort would replace it with
     /// alphabetical order.
-    fn prim(
-        &self,
-        by_path: &Specs,
-        parent: &str,
-        name: &str,
-    ) -> Option<UsdPrim> {
+    fn prim(&self, by_path: &Specs, parent: &str, name: &str) -> Option<UsdPrim> {
         // A name beginning with `/` is already the whole path: that is how a
         // variant body, which does not hang below its prim, is reached.
         let path = if name.starts_with('/') {
@@ -1397,8 +1377,8 @@ impl Crate<'_> {
         // whether targets were authored calls an empty relationship an
         // attribute, and `custom rel foo` with nothing bound is a perfectly
         // ordinary thing to write.
-        let is_relationship = spec_type == spec_type::RELATIONSHIP
-            || (default.is_none() && targets.is_some());
+        let is_relationship =
+            spec_type == spec_type::RELATIONSHIP || (default.is_none() && targets.is_some());
         let value = default
             .or_else(|| targets.cloned())
             .or_else(|| connections.cloned())
@@ -1507,17 +1487,15 @@ fn field<'a>(fields: &'a [(String, UsdValue)], name: &str) -> Option<&'a UsdValu
 
 /// The names listed in a token-vector field.
 fn names_in<'a>(fields: &'a [(String, UsdValue)], key: &str) -> Vec<&'a str> {
-    field(fields, key).map(UsdValue::flat_tokens).unwrap_or_default()
+    field(fields, key)
+        .map(UsdValue::flat_tokens)
+        .unwrap_or_default()
 }
 
 /// A prim's children in authored order, falling back to the path table if the
 /// spec did not list them — a layer assembled by a tool that skipped
 /// `primChildren` is unusual but not malformed.
-fn children_of(
-    fields: &[(String, UsdValue)],
-    by_path: &Specs,
-    path: &str,
-) -> Vec<String> {
+fn children_of(fields: &[(String, UsdValue)], by_path: &Specs, path: &str) -> Vec<String> {
     let listed = names_in(fields, "primChildren");
     if !listed.is_empty() {
         return listed.into_iter().map(str::to_string).collect();
@@ -1585,7 +1563,10 @@ mod tests {
         let layer = read(TRIANGLE).expect("crate reads");
 
         // Layer metadata.
-        assert_eq!(layer.meta("defaultPrim").and_then(|v| v.as_str()), Some("Root"));
+        assert_eq!(
+            layer.meta("defaultPrim").and_then(|v| v.as_str()),
+            Some("Root")
+        );
         assert!((layer.meters_per_unit() - 0.01).abs() < 1e-9);
         assert_eq!(layer.up_axis(), 'Y');
 
@@ -1643,7 +1624,9 @@ mod tests {
             "/Mat",
             "/Mat/Shader",
         ] {
-            let binary = from_crate.prim_at(path).unwrap_or_else(|| panic!("{path} missing"));
+            let binary = from_crate
+                .prim_at(path)
+                .unwrap_or_else(|| panic!("{path} missing"));
             let text = from_text.prim_at(path).unwrap();
             assert_eq!(binary.type_name, text.type_name, "type of {path}");
             assert_eq!(binary.name, text.name, "name of {path}");
@@ -1655,7 +1638,10 @@ mod tests {
                 // The text form spells a connection as a property named
                 // `foo.connect`; the binary keeps it as a `connectionPaths`
                 // field on `foo`. Same edge, two spellings.
-                let name = property.name.strip_suffix(".connect").unwrap_or(&property.name);
+                let name = property
+                    .name
+                    .strip_suffix(".connect")
+                    .unwrap_or(&property.name);
                 let mine = binary
                     .value(name)
                     .unwrap_or_else(|| panic!("{path}.{name} missing in crate"));
@@ -1692,7 +1678,12 @@ mod tests {
 
         assert_eq!(from_crate.up_axis(), 'Z');
         assert_eq!(
-            from_crate.prim_at("/World").unwrap().value("xformOpOrder").unwrap().flat_tokens(),
+            from_crate
+                .prim_at("/World")
+                .unwrap()
+                .value("xformOpOrder")
+                .unwrap()
+                .flat_tokens(),
             vec!["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"],
         );
     }
@@ -1703,11 +1694,16 @@ mod tests {
     fn a_crate_scene_matches_the_text_scene() {
         use super::super::scene::to_scene;
         let binary = to_scene(&read(include_bytes!("testdata/rich.usdc")).unwrap());
-        let text = to_scene(&super::super::parse::parse(include_str!("testdata/rich.usda")).unwrap());
+        let text =
+            to_scene(&super::super::parse::parse(include_str!("testdata/rich.usda")).unwrap());
 
         let names = |s: &super::super::scene::UsdScene| {
             let mut out = Vec::new();
-            fn walk(s: &super::super::scene::UsdScene, id: crate::core::ObjectId, out: &mut Vec<String>) {
+            fn walk(
+                s: &super::super::scene::UsdScene,
+                id: crate::core::ObjectId,
+                out: &mut Vec<String>,
+            ) {
                 let node = s.arena.get(id).unwrap();
                 out.push(node.name.clone());
                 for child in &node.children {
@@ -1736,7 +1732,9 @@ mod tests {
         ] {
             let binary = from_crate.prim_at(path).unwrap().value(property).unwrap();
             let text = from_text.prim_at(path).unwrap().value(property).unwrap();
-            let binary = binary.samples().unwrap_or_else(|| panic!("{property} not animated"));
+            let binary = binary
+                .samples()
+                .unwrap_or_else(|| panic!("{property} not animated"));
             let text = text.samples().unwrap();
             assert_eq!(binary.len(), text.len(), "{property} sample count");
             for (a, b) in binary.iter().zip(text) {
@@ -1771,7 +1769,9 @@ mod tests {
             let mine = ours.prim_at("/Root/Cube").unwrap().value(name).unwrap();
             let theirs = cube.value(name).unwrap_or_else(|| panic!("{name} lost"));
             let mine = mine.samples().unwrap();
-            let theirs = theirs.samples().unwrap_or_else(|| panic!("{name} not animated"));
+            let theirs = theirs
+                .samples()
+                .unwrap_or_else(|| panic!("{name} not animated"));
             assert_eq!(mine.len(), theirs.len(), "{name} sample count");
             for (a, b) in mine.iter().zip(theirs) {
                 assert_eq!(a.0, b.0, "{name} time");
@@ -1784,7 +1784,10 @@ mod tests {
         // The geometry made it too, with the winding and count intact.
         let points = cube.value("points").unwrap().flat_f32();
         assert_eq!(points.len(), 24 * 3);
-        assert_eq!(cube.value("faceVertexIndices").unwrap().flat_u32().len(), 36);
+        assert_eq!(
+            cube.value("faceVertexIndices").unwrap().flat_u32().len(),
+            36
+        );
     }
 
     /// The types a geometry file does not use but a real asset will: 64-bit
@@ -1808,11 +1811,23 @@ mod tests {
                 other => panic!("expected an int, got {other:?}"),
             })
             .collect();
-        assert_eq!(big, vec![0, 1, 2, 4294967296, -4294967296, 9007199254740993]);
+        assert_eq!(
+            big,
+            vec![0, 1, 2, 4294967296, -4294967296, 9007199254740993]
+        );
 
-        assert_eq!(w.value("small").unwrap().flat_u32(), (1..=10).collect::<Vec<_>>());
-        assert_eq!(w.value("halves").unwrap().flat_f32(), vec![0.0, 0.5, 1.0, 2.0]);
-        assert_eq!(w.value("doubles").unwrap().flat_f32(), vec![0.1, 0.25, 1e10]);
+        assert_eq!(
+            w.value("small").unwrap().flat_u32(),
+            (1..=10).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            w.value("halves").unwrap().flat_f32(),
+            vec![0.0, 0.5, 1.0, 2.0]
+        );
+        assert_eq!(
+            w.value("doubles").unwrap().flat_f32(),
+            vec![0.1, 0.25, 1e10]
+        );
         assert_eq!(w.value("flag").unwrap(), &UsdValue::Bool(true));
         assert_eq!(w.value("label").unwrap().as_str(), Some("hello"));
         assert_eq!(w.value("pair").unwrap().flat_u32(), vec![3, 4]);
@@ -1820,7 +1835,11 @@ mod tests {
         // A matrix comes back row by row, in the order it was written.
         assert_eq!(
             w.value("frame").unwrap().flat_f32(),
-            text.prim_at("/W").unwrap().value("frame").unwrap().flat_f32()
+            text.prim_at("/W")
+                .unwrap()
+                .value("frame")
+                .unwrap()
+                .flat_f32()
         );
     }
 

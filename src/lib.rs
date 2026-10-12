@@ -94,7 +94,7 @@
 //! | [`core`] | Scene graph, geometry, raycaster |
 //! | [`origami`] | Rigid origami: crease patterns, degree-4 kinematics, folded meshes |
 //! | [`renderer`] | wgpu draw + post-processing; headless offscreen (native) |
-//! | [`raytrace`] | Path-traced rendering — global illumination, on CPU or GPU |
+//! | `raytrace` | Path-traced rendering — global illumination, on CPU or GPU (`raytrace`) |
 //! | [`postprocessing`] | EffectComposer-style pass chain (native) |
 //! | [`loaders`] | glTF, OBJ, HDR, … |
 //! | [`extras`] | PMREM, noise, marching cubes, … |
@@ -156,7 +156,17 @@ pub mod stats;
 pub mod textures;
 pub mod utils;
 
+/// Easing curves — the shape of a transition in time.
+pub mod easing;
+pub mod overlay;
+/// A window, a scene and a loop in one call. Native only.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod sketch;
 pub mod renderer;
+
+// No outer doc comment: `gpu.rs` carries `//!` docs, and an outer `///` here
+// would make the intra-doc links inside them resolve in this scope.
+pub mod gpu;
 #[cfg(target_arch = "wasm32")]
 pub mod wasm;
 /// The trained denoiser in a browser, split so the work can go to web workers.
@@ -177,6 +187,8 @@ pub mod metal;
 /// [`videotoolbox`](crate::videotoolbox).
 #[cfg(all(feature = "videotoolbox", target_os = "macos"))]
 pub mod videotoolbox;
+#[cfg(all(feature = "videotoolbox", feature = "native-codec", target_os = "macos"))]
+pub mod videotoolbox_decode;
 
 #[cfg(feature = "mesh-bvh")]
 pub mod mesh_bvh;
@@ -195,6 +207,12 @@ pub mod openscad;
 
 #[cfg(feature = "planet")]
 pub mod planet;
+
+// No outer doc comment on purpose: `fluid/mod.rs` carries `//!` docs, and an
+// outer `///` here would make the intra-doc links inside them resolve in this
+// scope instead of the module's.
+#[cfg(feature = "fluid")]
+pub mod fluid;
 
 /// NURBS curves and surfaces in f64 — derivatives, knot operations, exact conic
 /// and quadric constructors, curvature-adaptive tessellation. Stage 0 of the
@@ -248,7 +266,7 @@ pub use animation::{
 pub use audio::{Audio, AudioAnalyser, AudioBackend, AudioListener, NoopBackend, PositionalAudio};
 #[cfg(feature = "brep")]
 pub use brep::{retessellate, Surface, SurfaceTable};
-pub use cameras::{Camera, OrthographicCamera, PerspectiveCamera};
+pub use cameras::{Camera, OrthographicCamera, PerspectiveCamera, ScreenProjector};
 #[cfg(feature = "captions")]
 pub use captions::{
     CaptionAlign, CaptionAnchor, CaptionError, CaptionFont, CaptionFormat, CaptionOverlay,
@@ -305,10 +323,13 @@ pub use lights::{
     ShadowSettings, SpotLight,
 };
 pub use loaders::{
-    ColladaError, ColladaLoader, ExrError, ExrLoader, FbxError, FbxLoader, GltfError, GltfImages,
-    GltfLoader, GltfScene, HdrError, HdrLoader, ObjLoader, PlyLoader, StlLoader, TtfError, TtfFont,
-    TtfGlyph,
+    AlembicArchive, AlembicError, ColladaError, ColladaLoader, DracoError, DracoHeader, ExrError,
+    ExrLoader, FbxError, FbxLoader, FbxScene, GltfError, GltfImages, GltfLoader, GltfScene,
+    HdrError, HdrLoader, Ktx2, Ktx2Error, MeshoptError, ObjLoader, PlyLoader, PolyMesh, StlLoader,
+    TtfError, TtfFont, TtfGlyph,
 };
+// Writing, which the loaders module also provides.
+pub use loaders::{scene_to_glb, scene_to_gltf, GltfExportOptions};
 pub use materials::MirrorMaterial;
 pub use materials::{
     AtmosphereMaterial, BasicMaterial, DepthMaterial, LambertMaterial, LineBasicMaterial,
@@ -352,7 +373,7 @@ pub use renderer::headless::{
 /// ```
 pub use wgpu;
 
-pub use renderer::{RenderTarget, Renderer, ToneMapping};
+pub use renderer::{halton, stratified_jitter, RenderTarget, Renderer, ToneMapping};
 pub use renderers::{
     svg_from_rgba, Css2dRenderer, Css3dRenderer, SvgOptions, SvgRenderer, SvgShading,
 };

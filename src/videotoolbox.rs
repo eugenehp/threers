@@ -12,9 +12,13 @@
 //!
 //! # What this is not
 //!
-//! It is not a muxer by default — [`VideoToolboxEncoder`] writes Annex-B for
-//! remuxing. [`VideoToolboxMp4Encoder`] collects samples and muxes an MP4 in
-//! process via [`crate::codec::mp4`], with no ffmpeg involved.
+//! It is not a muxer by default. Built with
+//! [`VideoToolboxEncoder::new`](crate::videotoolbox::VideoToolboxEncoder::new) it
+//! writes Annex-B for remuxing; built with
+//! [`new_for_mp4`](crate::videotoolbox::VideoToolboxEncoder::new_for_mp4) the same
+//! type collects samples instead, and
+//! [`finish_mp4`](crate::videotoolbox::VideoToolboxEncoder::finish_mp4) muxes them
+//! in process via [`crate::codec::mp4`], with no ffmpeg involved.
 //!
 //! # Why the C API and not AVFoundation
 //!

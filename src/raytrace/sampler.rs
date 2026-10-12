@@ -193,17 +193,7 @@ pub fn cosine_hemisphere_pdf(cos_theta: f32) -> f32 {
 /// than the polar mapping, which matters because a stratified square stays
 /// stratified through it.
 pub fn concentric_disk(u1: f32, u2: f32) -> (f32, f32) {
-    let ox = 2.0 * u1 - 1.0;
-    let oy = 2.0 * u2 - 1.0;
-    if ox == 0.0 && oy == 0.0 {
-        return (0.0, 0.0);
-    }
-    let (r, theta) = if ox.abs() > oy.abs() {
-        (ox, PI / 4.0 * (oy / ox))
-    } else {
-        (oy, PI / 2.0 - PI / 4.0 * (ox / oy))
-    };
-    (r * theta.cos(), r * theta.sin())
+    crate::cameras::concentric_disk(u1, u2)
 }
 
 /// Uniform direction on the whole sphere.

@@ -5,6 +5,7 @@ import init, {
     WebGeometry, WebBufferGeometry, WebBufferAttribute,
     // materials
     WebMaterial,
+    WebShaderMaterial,
     // meshes
     WebMesh,
     // lights
@@ -28,6 +29,7 @@ import init, {
     // loaders
     WebObjLoader, WebStlLoader, WebPlyLoader, WebHdrLoader,
     WebFbxLoader, WebColladaLoader, WebExrLoader,
+    WebAlembicLoader, WebKtx2Loader,
     // audio
     WebAudio, WebAudioListener,
     // post-fx
@@ -41,6 +43,11 @@ import init, {
     // raycaster + clock
     WebRaycaster, WebClock,
 } from './pkg/threers.js';
+// Bindings that exist only when the wasm bundle was built with the matching
+// Cargo feature. A named import of one of these would fail at load time for
+// every build that lacks it, taking the whole shim with it, so they are looked
+// up on the namespace instead.
+import * as _optional from './pkg/threers.js';
 import { Earcut } from './deps/Earcut.js';
 import {
     BrowserVideoFormat,
@@ -1147,6 +1154,97 @@ function _initMaterialBase(self, opts = {}) {
     if (!self.dispose) self.dispose = () => {};
     return self;
 }
+/**
+ * A custom-shader material.
+ *
+ * three.js's `ShaderMaterial` takes GLSL; this takes **WGSL**, compiled against
+ * the renderer's own preamble, so `VsOut`, the `frame` and `mesh` uniforms,
+ * `sample_env_cube`, `apply_tone_mapping` and `framebuffer_encode` are all in
+ * scope. That is not a drop-in for a three.js shader — the language is
+ * different — but it is the same place in the API, and until now there was no
+ * place at all.
+ *
+ *     const m = new THREE.ShaderMaterial({
+ *       fragment: `
+ *         @fragment
+ *         fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
+ *           let tint = u_data.data[0].rgb;
+ *           return vec4<f32>(framebuffer_encode(apply_tone_mapping(tint)), 1.0);
+ *         }`,
+ *       uniforms: [1.0, 0.3, 0.1, 1.0],
+ *     });
+ *     scene.add(new THREE.Mesh(geometry, m));
+ *
+ * `vertex` replaces the vertex stage with `@vertex fn vs_custom`, for anything
+ * whose position has to be computed rather than read. `storage0`..`storage2`
+ * are flat float arrays, read in the shader as `s0(i)`/`s1(i)`/`s2(i)` — use
+ * those rather than `u_s0[i]`, because WebGL2 has no storage buffers and the
+ * accessors fall back to a texture there while a raw index will not compile.
+ */
+export class ShaderMaterial {
+    constructor(opts = {}) {
+        // A bare string is the common case and reads better than `{fragment}`.
+        const o = typeof opts === 'string' ? { fragment: opts } : (opts || {});
+        this._sm = new WebShaderMaterial(o.fragment ?? o.fragmentShader ?? '');
+        if (o.vertex ?? o.vertexShader) this._sm.setVertex(o.vertex ?? o.vertexShader);
+        // `uniforms` as three.js spells it is `{ name: { value } }`, which has
+        // no meaning against a WGSL uniform block — there are no names to bind
+        // to. An array is this renderer's spelling and goes straight in.
+        if (Array.isArray(o.uniforms) || ArrayBuffer.isView(o.uniforms)) {
+            this._sm.setData(Float32Array.from(o.uniforms));
+        }
+        for (let i = 0; i < 3; i++) {
+            const data = o['storage' + i];
+            if (data) this._sm.setStorage(i, Float32Array.from(data));
+        }
+        if (o.transparent) this._sm.setTransparent(true);
+        if (o.opacity !== undefined) this._sm.setOpacity(o.opacity);
+        if (o.side) this._sm.setSide(o.side);
+        if (o.depthWrite !== undefined) this._sm.setDepthWrite(!!o.depthWrite);
+        if (o.screenSpace) this._sm.setScreenSpace(true);
+        this._w = this._sm.material();
+        // The surface three.js code reads off a material, kept so existing code
+        // does not throw on a property access.
+        this.uniforms = o.uniforms ?? {};
+        this.vertexShader = o.vertex ?? o.vertexShader ?? '';
+        this.fragmentShader = o.fragment ?? o.fragmentShader ?? '';
+        this.defines = o.defines ?? {};
+        this.transparent = !!o.transparent;
+        _initMaterialBase(this, o);
+    }
+
+    /**
+     * Compile-check the shader. Returns the error, or `null`.
+     *
+     * Always `null` in a browser — see `ShaderMaterial.validationAvailable()`.
+     * Native builds of the crate do check, so the useful place for this is a
+     * Node test rather than a page.
+     */
+    validate() { return this._sm.validate() ?? null; }
+
+    static validationAvailable() { return WebShaderMaterial.validationAvailable(); }
+
+    /**
+     * Re-read the uniform block. The material has to be rebuilt for the
+     * renderer to see it, which is why this exists rather than a plain setter.
+     */
+    setUniforms(values) {
+        this._sm.setData(Float32Array.from(values));
+        this._w = this._sm.material();
+        return this;
+    }
+
+    setStorage(slot, values) {
+        this._sm.setStorage(slot, Float32Array.from(values));
+        this._w = this._sm.material();
+        return this;
+    }
+}
+
+/** three.js distinguishes these by whether it injects its own preamble; this
+ *  renderer always does, so there is nothing to distinguish. */
+export class RawShaderMaterial extends ShaderMaterial {}
+
 export class MeshBasicMaterial {
     constructor(opts = {}) {
         this._w = WebMaterial.basic(_matColor(opts));
@@ -5072,7 +5170,7 @@ export class SVGRenderer {
     /// 0 lit (default), 1 flat material colour, 2 wireframe.
     setShading(mode) { this._w.setShading(mode); }
     /// Match the WebGL renderer's tone mapping so the two agree on colour.
-    /// three.js constants: 0 NoToneMapping, 1 Linear, 4 ACESFilmic.
+    /// three.js constants: 0 NoToneMapping, 1 Linear, 4 ACESFilmic, 6 AgX, 7 Neutral.
     setToneMapping(mode, exposure = 1) { this._w.setToneMapping(mode, exposure); }
     /// Draw the background rect at all. Off gives a transparent document.
     setBackground(on) { this._w.setBackground(!!on); }
@@ -7853,6 +7951,73 @@ export class GLTFLoader extends _Loader {
         return result;
     }
 }
+/**
+ * Alembic (`.abc`) geometry caches.
+ *
+ * The Rust side reads the Ogawa container and the `PolyMesh` geometry in it.
+ * `parse` gives the first mesh; `meshNames` says what else is in there, because
+ * a cache usually holds a scene rather than a model.
+ */
+export class AlembicLoader extends _Loader {
+    constructor(manager) { super(manager); this._w = new WebAlembicLoader(); }
+    load(url, onLoad, _onProgress, onError) {
+        new FileLoader(this.manager).load(url, (buf) => {
+            try {
+                const u8 = buf instanceof ArrayBuffer ? new Uint8Array(buf) : buf;
+                const group = new Group();
+                group.add(new Mesh(_wrapLoaderGeometry(this._w.parse(u8)), new MeshStandardMaterial()));
+                onLoad?.(group);
+            } catch (e) { onError?.(e); }
+        }, undefined, onError);
+    }
+    parse(buffer) {
+        const u8 = buffer instanceof ArrayBuffer ? new Uint8Array(buffer) : buffer;
+        return _wrapLoaderGeometry(this._w.parse(u8));
+    }
+    /** The names of every PolyMesh in the archive. */
+    meshNames(buffer) {
+        const u8 = buffer instanceof ArrayBuffer ? new Uint8Array(buffer) : buffer;
+        return this._w.mesh_names(u8);
+    }
+}
+
+/**
+ * USD — `.usda`, `.usdc` and `.usdz`.
+ *
+ * Available only when the wasm bundle was built with the `usd` feature, which
+ * is why the binding is looked up rather than imported: a build without it
+ * should fail with a clear message here, not at import time for everyone.
+ */
+export class USDLoader extends _Loader {
+    constructor(manager) {
+        super(manager);
+        const Binding = _optional.WebUsdLoader;
+        if (!Binding) {
+            throw new Error('USDLoader: this build has no USD support (rebuild with --features usd)');
+        }
+        this._w = new Binding();
+    }
+    load(url, onLoad, _onProgress, onError) {
+        new FileLoader(this.manager).load(url, (buf) => {
+            try {
+                const u8 = buf instanceof ArrayBuffer ? new Uint8Array(buf) : buf;
+                const group = new Group();
+                group.add(new Mesh(_wrapLoaderGeometry(this._w.parse(u8)), new MeshStandardMaterial()));
+                onLoad?.(group);
+            } catch (e) { onError?.(e); }
+        }, undefined, onError);
+    }
+    parse(buffer) {
+        const u8 = buffer instanceof ArrayBuffer ? new Uint8Array(buffer) : buffer;
+        return _wrapLoaderGeometry(this._w.parse(u8));
+    }
+    /** Which of the three forms the bytes are — USD has no useful extension. */
+    sniff(buffer) {
+        const u8 = buffer instanceof ArrayBuffer ? new Uint8Array(buffer) : buffer;
+        return this._w.sniff(u8);
+    }
+}
+
 export class FBXLoader extends _Loader {
     constructor(manager) { super(manager); this._w = new WebFbxLoader(); }
     load(url, onLoad, _onProgress, onError) {
@@ -10422,8 +10587,6 @@ export class ShadowMaterial {
         _initMaterialBase(this, { ...opts, color: 0x000000 });
     }
 }
-export class ShaderMaterial { constructor(opts = {}) { this._w = WebMaterial.basic(_matColor(opts)); this.uniforms = opts?.uniforms || {}; this.vertexShader = opts?.vertexShader || ''; this.fragmentShader = opts?.fragmentShader || ''; this.defines = opts?.defines || {}; this.transparent = !!opts?.transparent; } }
-export class RawShaderMaterial extends ShaderMaterial {}
 
 // Textures + variants.
 export class DepthTexture extends Texture { constructor(w, h) { super(w, h, new Uint8Array(w * h * 4)); this.isDepthTexture = true; } }

@@ -9,6 +9,9 @@ pub mod png;
 /// Data-parallel helpers (rayon behind the `parallel` feature, sequential otherwise).
 pub mod parallel;
 
+/// sRGB byte <-> linear light, for anything that adds or averages colour.
+pub mod srgb;
+
 mod svg_number;
 pub use svg_number::format_svg_number;
 

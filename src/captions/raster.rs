@@ -3,7 +3,7 @@
 //! [`CaptionPainter`] owns a face and a style and draws cue text into a
 //! tightly-packed RGBA8 buffer — the same layout
 //! [`HeadlessRenderer::render_to_rgba`](crate::HeadlessRenderer::render_to_rgba)
-//! produces and [`export_video`](crate::video::export_video) consumes. That
+//! produces and `video::export_video` consumes. That
 //! makes burned-in ("open") captions a single call per frame:
 //!
 //! ```
@@ -20,6 +20,9 @@
 //! each composited source-over so the result works on opaque video frames and
 //! on transparent overlay buffers alike.
 
+use crate::utils::srgb::{linear_to_srgb, srgb_to_linear};
+
+use super::font::SUBPIXEL_PHASES;
 use super::layout::{layout, LaidOutText};
 use super::{CaptionAlign, CaptionAnchor, CaptionFont, CaptionStyle, CaptionTrack, Cue};
 
@@ -60,6 +63,8 @@ pub struct CaptionPainter {
     pub font: CaptionFont,
     /// Type size, colors, and placement.
     pub style: CaptionStyle,
+    /// Rows the last draw wrote to. See [`CaptionPainter::last_rows`].
+    last_rows: Option<(u32, u32)>,
 }
 
 impl Default for CaptionPainter {
@@ -79,6 +84,7 @@ impl CaptionPainter {
         Self {
             font,
             style: CaptionStyle::default(),
+            last_rows: None,
         }
     }
 
@@ -138,6 +144,32 @@ impl CaptionPainter {
         text: &str,
     ) -> bool {
         self.draw_text_at_aligned(frame, width, height, x, y, text, CaptionAlign::Right)
+    }
+
+    /// The rows the most recent draw wrote to, as a half-open range, or `None`
+    /// if it drew nothing.
+    ///
+    /// Reported rather than predicted, because the placement is not something a
+    /// caller can work out in advance: the block re-wraps against the space
+    /// left of its anchor, and is nudged back up when it would overhang the
+    /// bottom. For a caller uploading the frame to a texture this is the band
+    /// that changed, which for one line of type is tens of rows out of a
+    /// thousand.
+    pub fn last_rows(&self) -> Option<(u32, u32)> {
+        self.last_rows
+    }
+
+    /// Draw a single line centred horizontally on `x`.
+    pub fn draw_text_at_center(
+        &mut self,
+        frame: &mut [u8],
+        width: u32,
+        height: u32,
+        x: f32,
+        y: f32,
+        text: &str,
+    ) -> bool {
+        self.draw_text_at_aligned(frame, width, height, x, y, text, CaptionAlign::Center)
     }
 
     /// Draw one line at absolute pixel coordinates (no WebVTT-style line clamping).
@@ -239,6 +271,7 @@ impl CaptionPainter {
         text: &str,
         placement: Placement,
     ) -> bool {
+        self.last_rows = None;
         if width == 0 || height == 0 || frame.len() < (width as usize) * (height as usize) * 4 {
             return false;
         }
@@ -267,6 +300,7 @@ impl CaptionPainter {
         y: f32,
         align: CaptionAlign,
     ) -> bool {
+        self.last_rows = None;
         if width == 0 || height == 0 || frame.len() < (width as usize) * (height as usize) * 4 {
             return false;
         }
@@ -417,6 +451,24 @@ impl CaptionPainter {
             mask_y,
             style.color,
         );
+
+        // The band everything above was written into: the mask, the shadow at
+        // its offset, and the background box, whichever reaches furthest.
+        let shadow_dy = if shadow_on {
+            style.shadow_offset[1].round() as i32
+        } else {
+            0
+        };
+        let top = mask_y
+            .min(mask_y + shadow_dy)
+            .min((block_top - style.padding).floor() as i32);
+        let bottom = (mask_y + mask_h as i32)
+            .max(mask_y + shadow_dy + mask_h as i32)
+            .max((block_top + laid.height + style.padding).ceil() as i32);
+        self.last_rows = Some((
+            top.clamp(0, height as i32) as u32,
+            bottom.clamp(0, height as i32) as u32,
+        ));
         true
     }
 
@@ -485,11 +537,32 @@ impl CaptionPainter {
         let size = self.style.font_size;
         let spacing = self.style.letter_spacing;
         let mut pen = pen_x;
+        let mut previous: Option<char> = None;
         for c in text.chars() {
-            let glyph = self.font.glyph(c, size);
+            // The same adjustment `measure` accounted for, applied before the
+            // glyph is placed rather than after.
+            if let Some(p) = previous {
+                pen += self.font.kerning(p, c, size);
+            }
+            previous = Some(c);
+            // The pen is fractional, so the glyph is rasterized for the quarter
+            // pixel it actually falls on rather than being rounded onto a whole
+            // one. Rounding per glyph is what makes letter spacing uneven: a
+            // 13.7-pixel advance lands on 0, 14, 27, 41, 55 — gaps of 14, 13,
+            // 14, 14 — and no amount of care in the compositing fixes it.
+            let cell = pen.floor();
+            let mut phase =
+                ((pen - cell) * SUBPIXEL_PHASES as f32).round() as i32;
+            let mut origin = cell as i32;
+            // A fraction that rounds up to a whole pixel is that pixel.
+            if phase as usize >= SUBPIXEL_PHASES {
+                phase = 0;
+                origin += 1;
+            }
+            let glyph = self.font.glyph_at(c, size, phase as usize);
             let advance = glyph.advance;
             if !glyph.is_blank() {
-                let gx = pen.round() as i32 + glyph.offset_x;
+                let gx = origin + glyph.offset_x;
                 let gy = baseline_y.round() as i32 + glyph.offset_y;
                 for row in 0..glyph.height {
                     let y = gy + row as i32;
@@ -503,9 +576,15 @@ impl CaptionPainter {
                         }
                         let v = glyph.coverage[(row * glyph.width + col) as usize];
                         let dst = &mut mask[(y as u32 * mask_w + x as u32) as usize];
-                        // Glyphs never overlap within a line, but rounding can
-                        // put two masks in one pixel — keep the stronger.
-                        *dst = (*dst).max(v);
+                        // Neighbouring glyphs genuinely share edge pixels once
+                        // they are placed at subpixel positions, each covering
+                        // part of one. Taking the stronger loses the other's
+                        // contribution and thins the gap between letters; the
+                        // union `a + b - ab` is what two partial coverages of
+                        // the same pixel actually come to.
+                        let a = *dst as u32;
+                        let b = v as u32;
+                        *dst = (a + b - (a * b) / 255).min(255) as u8;
                     }
                 }
             }
@@ -514,43 +593,140 @@ impl CaptionPainter {
     }
 }
 
-/// Grow a coverage mask by `radius` pixels, approximating a disc by alternating
-/// diamond (4-neighbour) and square (8-neighbour) max passes.
+/// Grow a coverage mask by `radius` pixels — an outline, or the spread of a
+/// drop shadow.
+///
+/// The shape wanted is the union of discs of `radius` centred on every point of
+/// the glyph, which is the same as "every pixel within `radius` of the glyph".
+/// So the mask is turned into a **distance field** and thresholded: coverage is
+/// full where the distance is under the radius, zero where it is more than half a
+/// pixel beyond, and a ramp across the pixel between — which is what makes the
+/// grown edge as smooth as the one it came from.
+///
+/// This replaced repeated max-filtering with 4- and 8-neighbour kernels. That
+/// approach could only grow by whole pixels, so a 1.5-pixel outline became 2 and
+/// a 0.4-pixel one vanished, and alternating the two kernels approximates a disc
+/// with an octagon — plainly visible at the one to three pixels an outline
+/// actually uses.
 fn dilate(mask: &[u8], width: u32, height: u32, radius: f32) -> Vec<u8> {
-    let steps = radius.round().max(0.0) as u32;
-    let mut current = mask.to_vec();
-    if steps == 0 || width == 0 || height == 0 {
-        return current;
+    if radius <= 0.0 || width == 0 || height == 0 {
+        return mask.to_vec();
     }
-    let mut next = vec![0u8; current.len()];
-    for step in 0..steps.min(16) {
-        let diagonal = step % 2 == 1;
-        for y in 0..height as i32 {
-            for x in 0..width as i32 {
-                let mut best = current[(y as u32 * width + x as u32) as usize];
-                for (dx, dy) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
-                    best = best.max(sample(&current, width, height, x + dx, y + dy));
-                }
-                if diagonal {
-                    for (dx, dy) in [(-1, -1), (1, -1), (-1, 1), (1, 1)] {
-                        best = best.max(sample(&current, width, height, x + dx, y + dy));
-                    }
-                }
-                next[(y as u32 * width + x as u32) as usize] = best;
-            }
-        }
-        std::mem::swap(&mut current, &mut next);
-    }
-    current
+    let distance = distance_field(mask, width, height);
+    distance
+        .iter()
+        .zip(mask)
+        .map(|(d, &original)| {
+            // A half-pixel ramp centred on the radius: full inside, empty
+            // outside, antialiased across the boundary.
+            let grown = (radius + 0.5 - d).clamp(0.0, 1.0);
+            let grown = (grown * 255.0).round() as u8;
+            // Never below what was already there. Growing a shape is a union
+            // with it, and the ramp alone does not say so: a pixel well inside
+            // the glyph has a *negative* distance to its boundary, which the
+            // field does not carry, so for a radius under half a pixel the ramp
+            // came out below full and the dilation dimmed the very pixels it was
+            // supposed to be spreading.
+            grown.max(original)
+        })
+        .collect()
 }
 
-fn sample(mask: &[u8], width: u32, height: u32, x: i32, y: i32) -> u8 {
-    if x < 0 || y < 0 || x >= width as i32 || y >= height as i32 {
-        0
-    } else {
-        mask[(y as u32 * width + x as u32) as usize]
+/// Distance in pixels from each cell to the nearest covered one.
+///
+/// Seeded from the coverage itself rather than from a threshold, so the field is
+/// accurate to a fraction of a pixel: a cell that is fully inside is half a pixel
+/// past the edge, a cell the edge crosses is `0.5 - coverage` from it, and one
+/// that is empty has no seed and takes its distance from its neighbours. Rounding
+/// the mask to inside-or-out first would quantize every grown edge to the pixel
+/// grid, which is the thing being avoided.
+fn distance_field(mask: &[u8], width: u32, height: u32) -> Vec<f32> {
+    const FAR: f32 = 1.0e10;
+    let mut squared: Vec<f32> = mask
+        .iter()
+        .map(|&v| {
+            let coverage = v as f32 / 255.0;
+            if coverage <= 0.0 {
+                FAR
+            } else {
+                // Inside is negative distance, but an outline only grows
+                // outwards, so it clamps to zero here.
+                let d = (0.5 - coverage).max(0.0);
+                d * d
+            }
+        })
+        .collect();
+
+    // Felzenszwalb's transform: exact Euclidean distance in two passes of a
+    // one-dimensional lower envelope, rows then columns. Doing it as two 1-D
+    // passes is what makes it exact *and* linear; a single pass of chamfer
+    // weights is neither.
+    let mut row = vec![0f32; width.max(height) as usize];
+    for y in 0..height as usize {
+        let base = y * width as usize;
+        row[..width as usize].copy_from_slice(&squared[base..base + width as usize]);
+        let out = transform_1d(&row[..width as usize]);
+        squared[base..base + width as usize].copy_from_slice(&out);
     }
+    for x in 0..width as usize {
+        for y in 0..height as usize {
+            row[y] = squared[y * width as usize + x];
+        }
+        let out = transform_1d(&row[..height as usize]);
+        for (y, v) in out.iter().enumerate() {
+            squared[y * width as usize + x] = *v;
+        }
+    }
+    squared.iter().map(|d| d.max(0.0).sqrt()).collect()
 }
+
+/// `D(x) = min_y ((x - y)² + f(y))`, by the lower envelope of parabolas.
+fn transform_1d(f: &[f32]) -> Vec<f32> {
+    let n = f.len();
+    let mut out = vec![0f32; n];
+    if n == 0 {
+        return out;
+    }
+    // `v` holds the parabolas making up the envelope so far, `z` the boundaries
+    // between them.
+    let mut v = vec![0usize; n];
+    let mut z = vec![0f32; n + 1];
+    let mut k = 0usize;
+    z[0] = f32::NEG_INFINITY;
+    z[1] = f32::INFINITY;
+    for q in 1..n {
+        // Where the parabola at `q` overtakes the one currently on top. Walking
+        // back while it overtakes before that parabola's own start is what keeps
+        // the envelope correct.
+        loop {
+            let p = v[k];
+            let intersect = ((f[q] + (q * q) as f32) - (f[p] + (p * p) as f32))
+                / (2.0 * q as f32 - 2.0 * p as f32);
+            if intersect <= z[k] && k > 0 {
+                k -= 1;
+            } else {
+                k += 1;
+                v[k] = q;
+                z[k] = intersect;
+                z[k + 1] = f32::INFINITY;
+                break;
+            }
+        }
+    }
+    // Walk the envelope once, left to right, taking the parabola that owns each
+    // position. `k` only ever moves forward, which is what makes this linear.
+    let mut k = 0usize;
+    for (q, slot) in out.iter_mut().enumerate() {
+        while z[k + 1] < q as f32 {
+            k += 1;
+        }
+        let p = v[k];
+        let d = q as f32 - p as f32;
+        *slot = d * d + f[p];
+    }
+    out
+}
+
 
 /// Composite `color` through `mask` into an RGBA8 frame at `(ox, oy)`.
 #[allow(clippy::too_many_arguments)]
@@ -636,6 +812,7 @@ fn blend_pixel(frame: &mut [u8], width: u32, x: u32, y: u32, color: [u8; 4], alp
     if i + 3 >= frame.len() {
         return;
     }
+    // Alpha is a fraction and is not gamma-encoded, so it needs no conversion.
     let sa = alpha as f32 / 255.0;
     let da = frame[i + 3] as f32 / 255.0;
     let out_a = sa + da * (1.0 - sa);
@@ -643,11 +820,23 @@ fn blend_pixel(frame: &mut [u8], width: u32, x: u32, y: u32, color: [u8; 4], alp
         frame[i..i + 4].copy_from_slice(&[0, 0, 0, 0]);
         return;
     }
+    // Colour is mixed as *light*, not as the bytes that encode it.
+    //
+    // These bytes are sRGB-encoded — the renderer's shader encodes on the way
+    // out, and an sRGB target encodes on write — so 128 is about a fifth of the
+    // light of 255, not half. Mixing the encodings directly puts half coverage of
+    // white on black at 128 where the light says 188, a pixel less than half as
+    // bright as it should be, which is why antialiased text rendered that way
+    // reads thin on a dark background and heavy on a light one.
+    //
+    // The GPU caption pass composites through an sRGB view of the target so its
+    // fixed-function blend is in linear too; `tests/captions_overlay_gpu.rs`
+    // holds the two within a channel or two of each other.
     for c in 0..3 {
-        let src = color[c] as f32 / 255.0;
-        let dst = frame[i + c] as f32 / 255.0;
+        let src = srgb_to_linear(color[c]);
+        let dst = srgb_to_linear(frame[i + c]);
         let out = (src * sa + dst * da * (1.0 - sa)) / out_a;
-        frame[i + c] = (out * 255.0).round().clamp(0.0, 255.0) as u8;
+        frame[i + c] = linear_to_srgb(out);
     }
     frame[i + 3] = (out_a * 255.0).round().clamp(0.0, 255.0) as u8;
 }
@@ -666,6 +855,167 @@ mod tests {
             px.copy_from_slice(&[0, 0, 0, 255]);
         }
         f
+    }
+
+    /// The horizontal centre of mass of each vertical run of ink.
+    ///
+    /// The centroid is what reveals a glyph's *subpixel* position: a stem whose
+    /// edge falls two thirds of the way across a pixel puts two thirds of the
+    /// coverage there, and averaging the coverage recovers that. Ink bounds
+    /// alone are quantized to whole pixels and would hide exactly the effect
+    /// being measured.
+    fn stem_centroids(frame: &[u8]) -> Vec<f32> {
+        // Total ink per column.
+        let mut columns = vec![0f32; W as usize];
+        for y in 0..H {
+            for x in 0..W {
+                let i = ((y * W + x) * 4) as usize;
+                columns[x as usize] += frame[i] as f32;
+            }
+        }
+        // Group non-empty columns into runs and take each run's centroid.
+        let mut out = Vec::new();
+        let mut run: Vec<(usize, f32)> = Vec::new();
+        for (x, &v) in columns.iter().enumerate() {
+            if v > 0.0 {
+                run.push((x, v));
+            } else if !run.is_empty() {
+                let weight: f32 = run.iter().map(|(_, v)| *v).sum();
+                let moment: f32 = run.iter().map(|(x, v)| *x as f32 * *v).sum();
+                out.push(moment / weight);
+                run.clear();
+            }
+        }
+        if !run.is_empty() {
+            let weight: f32 = run.iter().map(|(_, v)| *v).sum();
+            let moment: f32 = run.iter().map(|(x, v)| *x as f32 * *v).sum();
+            out.push(moment / weight);
+        }
+        out
+    }
+
+    /// Repeated glyphs are evenly spaced, to a fraction of a pixel.
+    ///
+    /// This is the thing subpixel positioning is for. Advances are fractional —
+    /// at this size the advance is not a whole number — and rounding the pen per
+    /// glyph made the gaps alternate between two integers. Here the gaps between
+    /// successive stems must all agree to well under a pixel, which is only
+    /// possible if each glyph was rasterized for the position it actually
+    /// occupies.
+    #[test]
+    fn repeated_glyphs_are_evenly_spaced() {
+        let mut painter = CaptionPainter::new();
+        painter.style.font_size = 13.7;
+        painter.style.outline_width = 0.0;
+        painter.style.shadow_offset = [0.0, 0.0];
+        painter.style.background = [0, 0, 0, 0];
+        let track = CaptionTrack::new().cue(0.0, 2.0, "IIIIIIII");
+
+        let mut frame = opaque_frame();
+        assert!(painter.burn_in(&mut frame, W, H, &track, 1.0));
+
+        let centroids = stem_centroids(&frame);
+        assert!(
+            centroids.len() >= 6,
+            "expected a row of separate stems, found {}",
+            centroids.len()
+        );
+        let gaps: Vec<f32> = centroids.windows(2).map(|w| w[1] - w[0]).collect();
+        let smallest = gaps.iter().cloned().fold(f32::MAX, f32::min);
+        let largest = gaps.iter().cloned().fold(f32::MIN, f32::max);
+        // Quarter-pixel phases bound the placement error at an eighth of a pixel
+        // each side, so successive gaps cannot differ by more than a quarter.
+        // Rounding the pen instead allows a whole pixel of swing.
+        assert!(
+            largest - smallest < 0.5,
+            "gaps ranged {smallest}..{largest} — spacing is uneven: {gaps:?}"
+        );
+    }
+
+    /// Vertical centroid of each band of inked rows, top to bottom.
+    ///
+    /// The horizontal twin of this is `stem_centroids`; a band here is a run of
+    /// rows that carry any ink, and its centroid is weighted by how much.
+    fn line_centroids(frame: &[u8]) -> Vec<f32> {
+        let mut out = Vec::new();
+        let mut run: Vec<(u32, f32)> = Vec::new();
+        for y in 0..H {
+            let mut sum = 0.0f32;
+            let mut peak = 0u8;
+            for x in 0..W {
+                let v = frame[((y * W + x) * 4) as usize];
+                sum += v as f32;
+                peak = peak.max(v);
+            }
+            if peak > 8 {
+                run.push((y, sum));
+            } else if !run.is_empty() {
+                let weight: f32 = run.iter().map(|(_, v)| *v).sum();
+                let moment: f32 = run.iter().map(|(y, v)| *y as f32 * *v).sum();
+                out.push(moment / weight);
+                run.clear();
+            }
+        }
+        if !run.is_empty() {
+            let weight: f32 = run.iter().map(|(_, v)| *v).sum();
+            let moment: f32 = run.iter().map(|(y, v)| *y as f32 * *v).sum();
+            out.push(moment / weight);
+        }
+        out
+    }
+
+    /// Lines are evenly spaced, and the spacing does not drift down the block.
+    ///
+    /// The baseline is deliberately rounded to the pixel grid, and there are no
+    /// vertical subpixel phases to match the horizontal ones. That is not an
+    /// oversight: a glyph's horizontal stems sit on the baseline and the x-height
+    /// line, so rounding the baseline is what keeps them crisp, and phasing it
+    /// would soften every horizontal edge to fix half a pixel nobody can see.
+    /// The horizontal case was different — there the error showed up as visibly
+    /// uneven gaps between glyphs inside a word.
+    ///
+    /// What rounding must not do is accumulate. Each baseline is computed from
+    /// the line index rather than by adding an advance to the line above, so the
+    /// error stays bounded at half a pixel however tall the block gets. This test
+    /// is what stops that being rewritten into an accumulation.
+    #[test]
+    fn lines_are_evenly_spaced_and_do_not_drift() {
+        let mut painter = CaptionPainter::new();
+        painter.style.font_size = 8.0;
+        // A fractional advance, so rounding has something to get wrong.
+        painter.style.line_height = 1.31;
+        painter.style.outline_width = 0.0;
+        painter.style.shadow_offset = [0.0, 0.0];
+        painter.style.background = [0, 0, 0, 0];
+        let track = CaptionTrack::new().cue(0.0, 2.0, "I\nI\nI\nI\nI\nI");
+
+        let mut frame = opaque_frame();
+        assert!(painter.burn_in(&mut frame, W, H, &track, 1.0));
+
+        let centroids = line_centroids(&frame);
+        assert_eq!(
+            centroids.len(),
+            6,
+            "expected six separated lines, found {centroids:?}"
+        );
+
+        let advance = 8.0 * 1.31;
+        let gaps: Vec<f32> = centroids.windows(2).map(|w| w[1] - w[0]).collect();
+        for gap in &gaps {
+            assert!(
+                (gap - advance).abs() <= 1.0,
+                "gap {gap} is more than a pixel from the {advance} advance: {gaps:?}"
+            );
+        }
+
+        // Five advances of drift-free rounding land within half a pixel of the
+        // ideal; five accumulated roundings could be off by two or three.
+        let span = centroids[5] - centroids[0];
+        assert!(
+            (span - advance * 5.0).abs() <= 1.0,
+            "six lines spanned {span}, expected {}",
+            advance * 5.0
+        );
     }
 
     /// Bounding box of pixels that differ from pure opaque black.
@@ -835,36 +1185,155 @@ mod tests {
 
     #[test]
     fn dilation_grows_the_mask_by_the_radius() {
-        // A single lit pixel in a 9x9 mask.
         let (w, h) = (9u32, 9u32);
         let mut mask = vec![0u8; (w * h) as usize];
         mask[(4 * w + 4) as usize] = 255;
-        assert_eq!(
-            dilate(&mask, w, h, 0.0).iter().filter(|&&v| v > 0).count(),
-            1
+
+        // Zero radius is the identity.
+        assert_eq!(dilate(&mask, w, h, 0.0), mask);
+
+        // Radius 1 reaches the diagonal neighbours: they are √2 ≈ 1.41 away and
+        // the ramp runs out at 1.5, so they get a little coverage. A disc does
+        // that; the octagon this replaced did not, which is why it counted five
+        // pixels here and this counts nine.
+        let r1 = dilate(&mask, w, h, 1.0);
+        assert_eq!(r1.iter().filter(|&&v| v > 0).count(), 9);
+        let at = |x: u32, y: u32| r1[(y * w + x) as usize];
+        assert_eq!(at(4, 4), 255, "the centre stays full");
+        assert!(at(3, 4) > at(3, 3), "the diagonal is further away than the side");
+    }
+
+    /// The grown shape is round, not a polygon.
+    ///
+    /// Measured as the furthest lit pixel along an axis against the furthest
+    /// along the diagonal, in Euclidean distance: for a disc they agree. The
+    /// octagon this replaced reached its full radius along the axes and fell
+    /// short across the diagonals, and at the one-to-three pixels an outline
+    /// actually uses that is a visibly cornered edge.
+    #[test]
+    fn the_grown_shape_is_a_disc() {
+        let (w, h) = (41u32, 41u32);
+        let mut mask = vec![0u8; (w * h) as usize];
+        mask[(20 * w + 20) as usize] = 255;
+        let radius = 8.0f32;
+        let grown = dilate(&mask, w, h, radius);
+
+        let mut axis = 0.0f32;
+        let mut diagonal = 0.0f32;
+        for y in 0..h {
+            for x in 0..w {
+                if grown[(y * w + x) as usize] == 0 {
+                    continue;
+                }
+                let (dx, dy) = (x as f32 - 20.0, y as f32 - 20.0);
+                let d = (dx * dx + dy * dy).sqrt();
+                // Near an axis versus near the 45° diagonal.
+                if dy.abs() < 0.5 || dx.abs() < 0.5 {
+                    axis = axis.max(d);
+                } else if (dx.abs() - dy.abs()).abs() < 0.5 {
+                    diagonal = diagonal.max(d);
+                }
+            }
+        }
+        assert!(
+            (axis - diagonal).abs() < 1.5,
+            "reach {axis} along the axis but {diagonal} along the diagonal — not round"
         );
-        // Radius 1 → a plus shape (5 px).
-        assert_eq!(
-            dilate(&mask, w, h, 1.0).iter().filter(|&&v| v > 0).count(),
-            5
+        assert!(
+            (axis - (radius + 0.5)).abs() < 1.5,
+            "reach {axis} for a radius of {radius}"
         );
-        // Radius 2 adds the diagonal pass → a 5x5 octagon minus nothing = 21 px.
-        let r2 = dilate(&mask, w, h, 2.0).iter().filter(|&&v| v > 0).count();
-        assert!((13..=25).contains(&r2), "unexpected radius-2 spread: {r2}");
+    }
+
+    /// A fractional radius is a fractional radius.
+    ///
+    /// The previous implementation rounded to whole steps, so 1.5 became 2 and
+    /// anything under 0.5 disappeared. An outline width is a style choice and
+    /// half-pixel values are ordinary.
+    #[test]
+    fn a_fractional_radius_grows_by_a_fraction() {
+        let (w, h) = (21u32, 21u32);
+        let mut mask = vec![0u8; (w * h) as usize];
+        mask[(10 * w + 10) as usize] = 255;
+        let ink = |r: f32| {
+            dilate(&mask, w, h, r)
+                .iter()
+                .map(|v| *v as u32)
+                .sum::<u32>()
+        };
+        let (a, b, c) = (ink(1.0), ink(1.5), ink(2.0));
+        assert!(a < b && b < c, "1.0 -> {a}, 1.5 -> {b}, 2.0 -> {c}");
+
+        // A sub-pixel radius shows at an *edge*, which is where an outline meets
+        // the glyph. Around a lone fully-lit pixel it correctly does nothing —
+        // nothing else is within a third of a pixel — but a half-covered pixel is
+        // already half a pixel from the boundary, so growing the boundary raises
+        // it. Rounding the radius to whole steps lost both cases.
+        let mut edge = vec![0u8; (w * h) as usize];
+        edge[(10 * w + 10) as usize] = 128;
+        let edge_ink = |r: f32| {
+            dilate(&edge, w, h, r)
+                .iter()
+                .map(|v| *v as u32)
+                .sum::<u32>()
+        };
+        assert!(
+            edge_ink(0.3) > edge_ink(0.0),
+            "a third of a pixel did not thicken an edge: {} vs {}",
+            edge_ink(0.3),
+            edge_ink(0.0)
+        );
+        assert!(edge_ink(0.3) < edge_ink(0.6), "and 0.6 should thicken it more");
     }
 
     #[test]
     fn source_over_blending_matches_the_straight_alpha_formula() {
-        // Half-transparent white over opaque black → mid gray, still opaque.
+        // Half coverage of white over opaque black: 188, the byte that encodes
+        // half the light. This asserted 128 before — the result of averaging the
+        // encodings rather than the light, half as bright as it should be.
         let mut frame = vec![0, 0, 0, 255u8];
         blend_pixel(&mut frame, 1, 0, 0, [255, 255, 255, 255], 128);
-        assert!((frame[0] as i32 - 128).abs() <= 1, "{:?}", frame);
+        assert!((frame[0] as i32 - 188).abs() <= 1, "{:?}", frame);
         assert_eq!(frame[3], 255);
 
-        // The same over a transparent buffer keeps the source color.
+        // The same over a transparent buffer keeps the source colour: there is
+        // no destination light to mix with, so the encoding passes through
+        // untouched and the conversions must not perturb it.
         let mut frame = vec![0, 0, 0, 0u8];
         blend_pixel(&mut frame, 1, 0, 0, [255, 0, 0, 255], 128);
         assert_eq!(&frame[..3], &[255, 0, 0]);
         assert_eq!(frame[3], 128);
+    }
+
+    /// A coverage of *c* puts *c* of the light on the pixel.
+    ///
+    /// Which is only true of a blend in linear. Mixing the encodings instead
+    /// compresses the range towards the dark end — a quarter coverage of white
+    /// on black came out at 64 where the light says 137, so thin strokes all but
+    /// vanished.
+    #[test]
+    fn coverage_lands_the_light_it_should() {
+        for (coverage, expected) in [(64u8, 137i32), (128, 188), (192, 225), (255, 255)] {
+            let mut frame = vec![0, 0, 0, 255u8];
+            blend_pixel(&mut frame, 1, 0, 0, [255, 255, 255, 255], coverage);
+            assert!(
+                (frame[0] as i32 - expected).abs() <= 2,
+                "coverage {coverage} gave {}, expected about {expected}",
+                frame[0]
+            );
+        }
+    }
+
+    /// Full coverage is exactly the source colour, at every channel value.
+    ///
+    /// A round trip through linear must not shift a fully opaque pixel; if it
+    /// does, every solid caption background drifts in colour.
+    #[test]
+    fn full_coverage_is_the_source_colour_exactly() {
+        for value in [0u8, 1, 17, 64, 128, 200, 254, 255] {
+            let mut frame = vec![9, 9, 9, 255u8];
+            blend_pixel(&mut frame, 1, 0, 0, [value, value, value, 255], 255);
+            assert_eq!(frame[0], value, "full coverage of {value} became {}", frame[0]);
+        }
     }
 }

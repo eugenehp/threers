@@ -82,7 +82,7 @@ enum Face {
 pub struct CaptionFont {
     face: Face,
     /// Keyed by codepoint and quantized size (¼-pixel steps).
-    cache: HashMap<(u32, u32), GlyphBitmap>,
+    cache: HashMap<(u32, u32, u32), GlyphBitmap>,
 }
 
 impl Default for CaptionFont {
@@ -204,16 +204,56 @@ impl CaptionFont {
 
     /// Rasterize `c` at `size` pixels per em, caching the result.
     pub fn glyph(&mut self, c: char, size: f32) -> &GlyphBitmap {
+        self.glyph_at(c, size, 0)
+    }
+
+    /// The glyph rasterized for one of [`SUBPIXEL_PHASES`] horizontal positions
+    /// within a pixel.
+    ///
+    /// Text advances are fractional — a 13.7-pixel advance is normal — and
+    /// rounding the pen to a whole pixel for each glyph throws that fraction
+    /// away every time. The gaps then alternate: at 13.7 the glyphs land on 0,
+    /// 14, 27, 41, 55, which is 14, 13, 14, 14 apart. That unevenness is what
+    /// makes rendered text look wobbly next to the same text from a real
+    /// renderer, and it is not fixable by compositing — the glyph has to be
+    /// *rasterized* for the position it actually sits at.
+    ///
+    /// So the fraction is quantized to quarters of a pixel and the glyph is
+    /// rasterized once per phase. Quarter-pixel steps are below what anyone can
+    /// see and keep the cache four entries a glyph rather than unbounded.
+    pub fn glyph_at(&mut self, c: char, size: f32, phase: usize) -> &GlyphBitmap {
         let size = size.max(1.0);
-        let key = (c as u32, (size * 4.0).round() as u32);
+        let phase = phase % SUBPIXEL_PHASES;
+        let key = (c as u32, (size * 4.0).round() as u32, phase as u32);
         if !self.cache.contains_key(&key) {
+            let shift = phase as f32 / SUBPIXEL_PHASES as f32;
             let bitmap = match &self.face {
-                Face::Builtin => raster_builtin(c, size),
-                Face::Ttf(font) => raster_ttf(font, c, size),
+                Face::Builtin => raster_builtin(c, size, shift),
+                Face::Ttf(font) => raster_ttf(font, c, size, shift),
             };
             self.cache.insert(key, bitmap);
         }
         &self.cache[&key]
+    }
+
+    /// The kerning between two characters at `size` pixels.
+    ///
+    /// Zero for the built-in face, which is a fixed-width bitmap and has no
+    /// pairs to adjust, and zero for a TrueType face whose kerning lives in
+    /// `GPOS` rather than `kern`.
+    pub fn kerning(&self, left: char, right: char, size: f32) -> f32 {
+        let Face::Ttf(font) = &self.face else {
+            return 0.0;
+        };
+        if font.kerning.is_empty() {
+            return 0.0;
+        }
+        let gid = |c: char| font.cmap.get(&(c as u32)).copied().unwrap_or(0);
+        let units = font.kern(gid(left), gid(right));
+        if units == 0 {
+            return 0.0;
+        }
+        units as f32 * size.max(1.0) / font.units_per_em.max(1) as f32
     }
 
     /// Pen advance for `c` at `size` pixels, without keeping the raster.
@@ -226,8 +266,17 @@ impl CaptionFont {
     pub fn measure(&mut self, text: &str, size: f32, letter_spacing: f32) -> f32 {
         let mut width = 0.0;
         let mut count = 0usize;
+        let mut previous: Option<char> = None;
         for c in text.chars() {
+            // Kerning is part of the width. Measuring without it and drawing
+            // with it puts every centred or right-aligned line off by the sum of
+            // its pairs — the text would sit a little to one side, by an amount
+            // that changes with the words.
+            if let Some(p) = previous {
+                width += self.kerning(p, c, size);
+            }
             width += self.advance(c, size);
+            previous = Some(c);
             count += 1;
         }
         if count > 1 {
@@ -241,13 +290,26 @@ impl CaptionFont {
 // Built-in 8×8 bitmap face
 // ---------------------------------------------------------------------------
 
+/// How many horizontal positions within a pixel a glyph is rasterized for.
+///
+/// Four — quarter-pixel steps. Fewer brings back the uneven spacing this exists
+/// to remove; more costs cache entries for a difference nobody can see.
+pub const SUBPIXEL_PHASES: usize = 4;
+
 /// Rows per glyph cell (also the em size in font units).
 const BUILTIN_CELL: u32 = 8;
 /// Rows of the cell that sit above the baseline; row 7 is the descender.
 const BUILTIN_ASCENT_ROWS: u32 = 7;
 
-/// Rasterize a built-in glyph by area-sampling its 8×8 cell.
-fn raster_builtin(c: char, size: f32) -> GlyphBitmap {
+/// Rasterize a built-in glyph, computing each pixel's coverage exactly.
+///
+/// The source is a bitmap, so every lit cell is an axis-aligned rectangle in
+/// device space and a pixel's coverage is the *exact* sum of its overlaps with
+/// them — no sampling needed. The previous version counted 4×4 sample centres
+/// per pixel, which quantizes coverage to seventeen levels and steps visibly
+/// along a diagonal; this gives all 256 and is cheaper at large sizes, because
+/// the work is per overlapping cell rather than per sample.
+fn raster_builtin(c: char, size: f32, shift: f32) -> GlyphBitmap {
     let scale = size / BUILTIN_CELL as f32;
     let advance = BUILTIN_CELL as f32 * scale;
     let rows = builtin_rows(c);
@@ -283,44 +345,57 @@ fn raster_builtin(c: char, size: f32) -> GlyphBitmap {
         }
     }
 
-    let x0 = min_col as f32 * scale;
+    let x0 = min_col as f32 * scale + shift;
     let y0 = min_row as f32 * scale;
     let px0 = x0.floor() as i32;
     let py0 = y0.floor() as i32;
-    let px1 = ((max_col + 1) as f32 * scale).ceil() as i32;
+    let px1 = ((max_col + 1) as f32 * scale + shift).ceil() as i32;
     let py1 = ((max_row + 1) as f32 * scale).ceil() as i32;
     let width = (px1 - px0).max(1) as u32;
     let height = (py1 - py0).max(1) as u32;
 
-    // 4×4 supersampling: for each destination pixel, count how many subsample
-    // centers land inside a lit cell.
-    const SS: u32 = 4;
+    // Exact area coverage. Lit cell (cx, cy) covers
+    // `[cx*scale + shift, (cx+1)*scale + shift) × [cy*scale, (cy+1)*scale)`, so
+    // a pixel's coverage is the sum over lit cells of the overlap in x times the
+    // overlap in y. Both are one-dimensional interval intersections, which makes
+    // the whole thing exact rather than sampled.
     let mut coverage = vec![0u8; (width * height) as usize];
-    for py in 0..height {
-        for px in 0..width {
-            let mut hits = 0u32;
-            for sy in 0..SS {
-                let fy = (py0 + py as i32) as f32 + (sy as f32 + 0.5) / SS as f32;
-                let cell_y = (fy / scale).floor();
-                if cell_y < 0.0 || cell_y >= BUILTIN_CELL as f32 {
+    let overlap = |a0: f32, a1: f32, b0: f32, b1: f32| (a1.min(b1) - a0.max(b0)).max(0.0);
+    for (cy, &bits) in rows.iter().enumerate() {
+        if bits == 0 {
+            continue;
+        }
+        let cell_top = cy as f32 * scale;
+        let cell_bottom = cell_top + scale;
+        // Only the pixel rows this cell reaches.
+        let first_row = ((cell_top.floor() as i32) - py0).max(0) as u32;
+        let last_row = (((cell_bottom.ceil() as i32) - py0).max(0) as u32).min(height);
+        for cx in 0..BUILTIN_CELL {
+            if bits & (1 << cx) == 0 {
+                continue;
+            }
+            let cell_left = cx as f32 * scale + shift;
+            let cell_right = cell_left + scale;
+            let first_col = ((cell_left.floor() as i32) - px0).max(0) as u32;
+            let last_col = (((cell_right.ceil() as i32) - px0).max(0) as u32).min(width);
+            for py in first_row..last_row {
+                let top = (py0 + py as i32) as f32;
+                let dy = overlap(top, top + 1.0, cell_top, cell_bottom);
+                if dy <= 0.0 {
                     continue;
                 }
-                let bits = rows[cell_y as usize];
-                if bits == 0 {
-                    continue;
-                }
-                for sx in 0..SS {
-                    let fx = (px0 + px as i32) as f32 + (sx as f32 + 0.5) / SS as f32;
-                    let cell_x = (fx / scale).floor();
-                    if cell_x < 0.0 || cell_x >= BUILTIN_CELL as f32 {
+                for px in first_col..last_col {
+                    let left = (px0 + px as i32) as f32;
+                    let dx = overlap(left, left + 1.0, cell_left, cell_right);
+                    if dx <= 0.0 {
                         continue;
                     }
-                    if bits & (1 << cell_x as u32) != 0 {
-                        hits += 1;
-                    }
+                    let slot = &mut coverage[(py * width + px) as usize];
+                    // Cells never overlap each other, so the areas add. Saturate
+                    // rather than wrap: rounding can push a full pixel to 256.
+                    *slot = slot.saturating_add((dx * dy * 255.0).round() as u8);
                 }
             }
-            coverage[(py * width + px) as usize] = ((hits * 255) / (SS * SS)) as u8;
         }
     }
 
@@ -500,10 +575,18 @@ const FONT8X8: [[u8; 8]; 95] = [
 // ---------------------------------------------------------------------------
 
 /// Sub-scanlines per pixel row when filling outlines.
-const SUBSAMPLES: usize = 4;
+/// Vertical samples per pixel row when scan-converting an outline.
+///
+/// Horizontal coverage is exact — [`add_span`] gives the end pixels their
+/// fractional area — so only the vertical axis is sampled, and four samples
+/// quantize it to five levels. That shows as stepping along any nearly
+/// horizontal edge, which in practice means the top and bottom of every round
+/// letter. Sixteen is the usual choice and costs nothing at runtime: glyphs are
+/// rasterized once per size and phase, then cached.
+const SUBSAMPLES: usize = 16;
 
 /// Rasterize `c` from `font` at `size` pixels per em.
-fn raster_ttf(font: &TtfFont, c: char, size: f32) -> GlyphBitmap {
+fn raster_ttf(font: &TtfFont, c: char, size: f32, shift: f32) -> GlyphBitmap {
     let upem = font.units_per_em.max(1) as f32;
     let scale = size / upem;
     let gid = font.cmap.get(&(c as u32)).copied().unwrap_or(0);
@@ -514,7 +597,11 @@ fn raster_ttf(font: &TtfFont, c: char, size: f32) -> GlyphBitmap {
 
     // Flatten the outline into device-space contours (y grows downward, so the
     // font's y axis is negated).
-    let contours = flatten_contours(glyph, scale);
+    // The subpixel phase is applied to the outline itself, so the coverage is
+    // exact for the position the glyph will actually sit at — shifting a
+    // finished mask could only resample it, which is what blurs subpixel-placed
+    // text in a naive implementation.
+    let contours = flatten_contours(glyph, scale, shift);
     let edges: Vec<Edge> = contours
         .iter()
         .flat_map(|c| c.windows(2).map(|w| Edge::new(w[0], w[1])))
@@ -665,13 +752,17 @@ impl Edge {
 /// [`crate::loaders::TtfFont`] stores every contour of a glyph in one `Path`,
 /// starting each with a `move_to`. `move_to` adds no curve, so a contour break
 /// shows up as a gap between one curve's end point and the next one's start.
-fn flatten_contours(glyph: &crate::loaders::TtfGlyph, scale: f32) -> Vec<Vec<(f32, f32)>> {
+fn flatten_contours(
+    glyph: &crate::loaders::TtfGlyph,
+    scale: f32,
+    shift: f32,
+) -> Vec<Vec<(f32, f32)>> {
     let mut contours: Vec<Vec<(f32, f32)>> = Vec::new();
     let mut current: Vec<(f32, f32)> = Vec::new();
     let mut last: Option<(f32, f32)> = None;
 
     // Device space: x scaled, y negated (font y is up, raster y is down).
-    let to_device = |p: crate::math::Vector2| (p.x * scale, -p.y * scale);
+    let to_device = |p: crate::math::Vector2| (p.x * scale + shift, -p.y * scale);
 
     for curve in glyph.shape.outline.curve_path.curves.iter() {
         let start = to_device(curve.get_point(0.0));
@@ -732,6 +823,171 @@ fn close_contour(points: &mut Vec<(f32, f32)>) {
 
 #[cfg(test)]
 mod tests {
+    /// A kerned pair measures narrower than its glyphs do apart.
+    ///
+    /// And the built-in face, which is fixed-width, measures the same either
+    /// way — so this is checking that kerning is applied where a font has it and
+    /// not invented where it does not.
+    ///
+    /// Skipped where the font is not installed.
+    #[test]
+    fn kerning_narrows_a_measured_pair() {
+        let mut builtin = CaptionFont::builtin();
+        let apart = builtin.advance('A', 20.0) + builtin.advance('V', 20.0);
+        assert!(
+            (builtin.measure("AV", 20.0, 0.0) - apart).abs() < 1e-3,
+            "the built-in face has no pairs to kern"
+        );
+
+        let Ok(bytes) = std::fs::read("/System/Library/Fonts/Supplemental/Arial Bold.ttf") else {
+            eprintln!("skipping: Arial Bold not installed");
+            return;
+        };
+        let Ok(mut font) = CaptionFont::from_ttf_bytes(&bytes) else {
+            return;
+        };
+        let size = 32.0;
+        let apart = font.advance('A', size) + font.advance('V', size);
+        let together = font.measure("AV", size, 0.0);
+        assert!(
+            together < apart - 0.5,
+            "AV measured {together}, no tighter than {apart} apart"
+        );
+        // A pair with no kerning measures exactly its advances.
+        let loose = font.advance('o', size) + font.advance('o', size);
+        assert!(
+            (font.measure("oo", size, 0.0) - loose).abs() < 1e-3,
+            "oo should need no adjustment"
+        );
+        // And the adjustment is the font's, in pixels at this size.
+        let expected = font.kerning('A', 'V', size);
+        assert!(expected < 0.0, "AV kerning should be negative, got {expected}");
+        assert!(
+            ((together - apart) - expected).abs() < 1e-3,
+            "measure applied {} where the pair says {expected}",
+            together - apart
+        );
+    }
+
+    /// Coverage is the exact area, so ink is conserved whatever the scale.
+    ///
+    /// A lit cell of a bitmap glyph occupies `scale × scale` pixels of area, so
+    /// the coverage summed over the mask must come to `lit_cells × scale² × 255`
+    /// — a property of computing the area rather than sampling it. The previous
+    /// 4×4 sampler could only ever approximate this, and at awkward scales it
+    /// was out by several percent.
+    #[test]
+    fn builtin_coverage_conserves_ink_at_any_scale() {
+        for size in [7.3f32, 11.0, 13.7, 19.5, 31.25] {
+            let scale = size / BUILTIN_CELL as f32;
+            let rows = builtin_rows('H').expect("H has a glyph");
+            let lit: u32 = rows.iter().map(|r| r.count_ones()).sum();
+            let expected = lit as f32 * scale * scale * 255.0;
+
+            let glyph = raster_builtin('H', size, 0.0);
+            let total: f32 = glyph.coverage.iter().map(|v| *v as f32).sum();
+            // Within the rounding of one byte per pixel.
+            let slack = (glyph.coverage.len() as f32) * 0.5 + 1.0;
+            assert!(
+                (total - expected).abs() <= slack,
+                "size {size}: ink {total} vs exact {expected} (slack {slack})"
+            );
+        }
+    }
+
+    /// At a whole-pixel scale every pixel is fully in or fully out.
+    ///
+    /// Cells land exactly on pixel boundaries, so there is no partial coverage
+    /// to report. Anything between 0 and 255 here would mean the area
+    /// computation had leaked across an edge.
+    #[test]
+    fn builtin_coverage_is_binary_when_cells_align() {
+        let glyph = raster_builtin('H', BUILTIN_CELL as f32 * 3.0, 0.0);
+        for &v in &glyph.coverage {
+            assert!(v == 0 || v == 255, "partial coverage {v} at an integer scale");
+        }
+    }
+
+    /// A subpixel phase moves the ink without changing how much there is.
+    ///
+    /// This is the property that makes phases usable: the same glyph at a
+    /// different quarter-pixel offset is the same shape, so the total coverage must
+    /// match while the distribution differs. If phases changed the amount of
+    /// ink, text would visibly pulse as words moved.
+    #[test]
+    fn a_phase_shifts_the_glyph_without_changing_its_weight() {
+        let size = 13.7f32;
+        let base = raster_builtin('H', size, 0.0);
+        let base_ink: u32 = base.coverage.iter().map(|v| *v as u32).sum();
+        let mut differed = false;
+        for phase in 1..SUBPIXEL_PHASES {
+            let shifted = raster_builtin('H', size, phase as f32 / SUBPIXEL_PHASES as f32);
+            let ink: u32 = shifted.coverage.iter().map(|v| *v as u32).sum();
+            let slack = (base.coverage.len().max(shifted.coverage.len()) as u32) + 255;
+            assert!(
+                base_ink.abs_diff(ink) <= slack,
+                "phase {phase}: ink {ink} vs {base_ink}"
+            );
+            if shifted.coverage != base.coverage {
+                differed = true;
+            }
+        }
+        assert!(differed, "no phase changed the raster, so phases do nothing");
+    }
+
+    /// Each phase moves the glyph by its own fraction of a pixel.
+    ///
+    /// This is the measurement that says subpixel positioning works at all. The
+    /// centroid of a glyph's coverage sits wherever the shape does, to a
+    /// fraction of a pixel — a stem whose edge falls two thirds across a pixel
+    /// puts two thirds of the ink there. So stepping the phase must step the
+    /// centroid by a quarter of a pixel each time, and a renderer that rounded
+    /// the position would show the same centroid four times and then a jump.
+    #[test]
+    fn stepping_the_phase_steps_the_glyph_by_a_quarter_pixel() {
+        let size = 16.0f32;
+        let centroid = |phase: usize| {
+            let g = raster_builtin('H', size, phase as f32 / SUBPIXEL_PHASES as f32);
+            let mut weight = 0.0f32;
+            let mut moment = 0.0f32;
+            for row in 0..g.height {
+                for col in 0..g.width {
+                    let v = g.coverage[(row * g.width + col) as usize] as f32;
+                    // Absolute position, so the mask's own origin cannot hide a
+                    // shift by moving with it.
+                    moment += (g.offset_x + col as i32) as f32 * v;
+                    weight += v;
+                }
+            }
+            moment / weight
+        };
+        let steps: Vec<f32> = (0..SUBPIXEL_PHASES).map(centroid).collect();
+        for (i, pair) in steps.windows(2).enumerate() {
+            let moved = pair[1] - pair[0];
+            let expected = 1.0 / SUBPIXEL_PHASES as f32;
+            assert!(
+                (moved - expected).abs() < 0.06,
+                "phase {i} to {}: centroid moved {moved}, expected {expected}",
+                i + 1
+            );
+        }
+    }
+
+    /// The cache keeps phases apart.
+    ///
+    /// Keyed on the character and size alone, the first phase rasterized would
+    /// be returned for every position — which is the bug this replaced, wearing
+    /// a cache.
+    #[test]
+    fn the_glyph_cache_distinguishes_phases() {
+        let mut font = CaptionFont::builtin();
+        let a = font.glyph_at('H', 13.7, 0).coverage.clone();
+        let b = font.glyph_at('H', 13.7, 2).coverage.clone();
+        let a_again = font.glyph_at('H', 13.7, 0).coverage.clone();
+        assert_ne!(a, b, "two phases gave the same mask");
+        assert_eq!(a, a_again, "the cache returned something else the second time");
+    }
+
     use super::*;
 
     #[test]

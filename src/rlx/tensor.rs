@@ -526,25 +526,7 @@ fn quantize(v: f32) -> u8 {
 
 /// IEEE half → f32. The encode direction is [`pack_rgba16f`]'s.
 fn f16_to_f32(bits: u16) -> f32 {
-    let sign = ((bits >> 15) & 1) as u32;
-    let exp = ((bits >> 10) & 0x1f) as u32;
-    let mant = (bits & 0x3ff) as u32;
-    let out = match exp {
-        // Zero or subnormal: scale the mantissa in as a float rather than
-        // rebuilding the exponent by hand.
-        0 => {
-            if mant == 0 {
-                sign << 31
-            } else {
-                let v = mant as f32 * (1.0 / 16_777_216.0); // 2^-24
-                return if sign == 1 { -v } else { v };
-            }
-        }
-        // Inf / NaN.
-        0x1f => (sign << 31) | 0x7f80_0000 | (mant << 13),
-        _ => (sign << 31) | ((exp + 112) << 23) | (mant << 13),
-    };
-    f32::from_bits(out)
+    crate::renderer::readback::f16_to_f32(bits)
 }
 
 #[cfg(test)]

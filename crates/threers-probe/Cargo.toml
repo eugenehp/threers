@@ -1,6 +1,6 @@
 [package]
 name = "threers-probe"
-version = "0.0.1"
+version = "0.0.2"
 edition = "2021"
 # Matches `threers`, which this depends on.
 rust-version = "1.87"

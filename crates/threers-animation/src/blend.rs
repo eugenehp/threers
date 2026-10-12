@@ -17,7 +17,7 @@
 //! 6. world.sync_to_scene_where(|b| !blending(b)) — skip bodies mid-handover
 //! ```
 //!
-//! Calling [`World::sync_to_scene`](threers_physics::World::sync_to_scene) during
+//! Calling [`World::sync_to_scene`](threers_physics::world::World::sync_to_scene) during
 //! a handover overwrites the blended draw pose with the raw simulation pose and
 //! undoes the crossfade.
 //!

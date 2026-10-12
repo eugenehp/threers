@@ -3,7 +3,7 @@
 //! H.264's transform is not a DCT approximation in the HEVC sense — it is a
 //! deliberately tiny integer butterfly with no multiplies, and the scaling the
 //! DCT would have applied is folded into the quantizer's `LevelScale` tables
-//! instead. That is why [`dequant`] multiplies by a table rather than shifting:
+//! instead. That is why [`dequant4`] multiplies by a table rather than shifting:
 //! it is undoing the transform's norm at the same time.
 //!
 //! The **inverse** path must be bit-exact — the decoder runs it, and the encoder
@@ -155,7 +155,7 @@ fn max_level(qp: i32, i: usize, j: usize) -> i64 {
 /// third of the step for intra, a sixth for inter, which is the usual deadzone.
 ///
 /// Levels are clamped so their dequantized value stays representable; see
-/// [`max_level`].
+/// `max_level`.
 pub fn quant4(coeff: &[i32; 16], qp: i32, intra: bool) -> [i32; 16] {
     let m = (qp % 6) as usize;
     let qbits = 15 + qp / 6;

@@ -37,8 +37,8 @@ published crate carries. So `threers` has to be on crates.io *before* either
 companion can even be packaged — until it is, you get
 
 ```text
-failed to select a version for the requirement `threers = "^0.0.5"`
-candidate versions found which didn't match: 0.0.4, 0.0.3, 0.0.2, 0.0.1
+failed to select a version for the requirement `threers = "^0.0.6"`
+candidate versions found which didn't match: 0.0.5, 0.0.4, 0.0.3, 0.0.2, 0.0.1
 ```
 
 which is not a fault, it is the ordering telling you about itself.
@@ -46,6 +46,12 @@ which is not a fault, it is the ordering telling you about itself.
 ## Checklist
 
 ```bash
+# 0. Versions first, because a publish cannot be taken back: npm and crates.io
+#    both refuse to replace a version that is already up. `CHECK=1` exits
+#    non-zero when any root that tracks the crate version has drifted, and
+#    `release-all.sh publish` runs it before it uploads anything.
+CHECK=1 ./scripts/release-versions.sh
+
 # 1. Everything builds and passes.
 #    `--no-fail-fast` is not optional here. `cargo test` stops at the first
 #    failing *binary*, and each crate has many: a lib target, one binary per
@@ -86,6 +92,11 @@ done
 # 3. wasm still builds — it is half the point of the project.
 cargo clippy --target wasm32-unknown-unknown --lib
 cargo clippy --target wasm32-unknown-unknown --lib --features openscad
+cargo clippy --target wasm32-unknown-unknown --lib --features webgl
+
+# 3b. And the WebGL2 backend actually draws, which only a browser can answer.
+#     Needs a chromedriver on PATH; see docs/webgl.md.
+FEATURES=webgl TEST=webgl ./scripts/wasm-browser-test.sh
 
 # 4. Docs, including the intra-doc links between the crates.
 #    Keep this *after* the tests, and run `cargo clean -p threers` before going
@@ -140,7 +151,7 @@ PyPI trusted publishing).
 
 ```bash
 # After crates.io publish + version bump:
-git tag v0.0.5 && git push origin v0.0.5
+git tag v0.0.6 && git push origin v0.0.6
 ```
 
 ## npm ESM (`crates/threers-js`)
@@ -231,6 +242,22 @@ curl -s -H 'User-Agent: threers-release' https://crates.io/api/v1/crates/threers
   | python3 -c "import json,sys; print(json.load(sys.stdin)['crate']['max_version'])"
 ```
 
-It reads 0.0.4, so 0.0.5 is what ships. `threers-physics` and `threers-probe`
-have never been published, so their 0.0.1 is a first release for each — check
-the name is not taken before counting on it.
+It reads 0.0.5, so 0.0.6 is what ships.
+
+`threers-physics` and `threers-probe` carry their own versions and are **already
+on the index at 0.0.1** (both published 2026-09-11). Both have changed since, so
+this round ships 0.0.2 for each — `cargo publish` cannot replace a version that
+is up, so leaving them at 0.0.1 fails at the upload and not before. Check them
+the same way:
+
+```bash
+for c in threers-physics threers-probe; do
+  printf '%-18s ' "$c"
+  curl -s -H 'User-Agent: threers-release' "https://crates.io/api/v1/crates/$c" \
+    | python3 -c "import json,sys; print(json.load(sys.stdin)['crate']['max_version'])"
+done
+```
+
+The bindings pin `threers-physics` by version as well as by path, so bumping it
+means bumping `crates/threers-py/Cargo.toml` and `crates/threers-node/Cargo.toml`
+with it or nothing resolves. `release-versions.sh` checks that pairing.

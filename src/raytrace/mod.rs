@@ -82,7 +82,7 @@
 //! checkpointing and EXR export; tile/region accumulation for viewports with
 //! noise-priority scheduling, soft time budgets, adaptive early stop, and
 //! deferred GPU readback (one full sync at resolve instead of per-tile copies).
-//! [`gpu::GpuCaps`] validates storage-buffer, uniform, texture, and film
+//! [`gpu::GpuCaps`](crate::raytrace::gpu::GpuCaps) validates storage-buffer, uniform, texture, and film
 //! sizes against wgpu limits (downlevel/WebGL2, shared raster devices, and
 //! native Metal/Vulkan/CUDA stacks all differ).
 //! Per-pixel variance for adaptive sampling and denoising uses Welford `M₂`

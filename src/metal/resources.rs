@@ -5,7 +5,7 @@ use std::ffi::c_void;
 use super::device::{MetalDevice, MetalError};
 use super::enums::*;
 use super::objc::{
-    alloc_init, class, error_message, msg0, msg1, msg2, msg4, sel, AutoreleasePool, Bool, Id,
+    alloc_init, class, error_message, msg0, msg1, msg2, msg4, msg6, sel, AutoreleasePool, Bool, Id,
     Owned, NIL, NO, YES,
 };
 use crate::textures::{Texture, TextureFilter, TextureFormat, TextureWrap};
@@ -29,6 +29,8 @@ pub struct PipelineKey {
     pub blend: bool,
     /// Draw both eyes in one pass, into two slices of an array attachment.
     pub layered: bool,
+    /// Blend the vertex through its bone matrices before the model transform.
+    pub skinned: bool,
     /// `MTLPrimitiveTopologyClass`. Left
     /// [`UNSPECIFIED`](crate::metal::enums::topology_class::UNSPECIFIED) so one
     /// pipeline serves every topology — except on the layered path, where a
@@ -50,6 +52,10 @@ pub fn render_pipeline(device: &MetalDevice, key: PipelineKey) -> Result<Owned, 
         // Slim lines have no layered variant: the stereo path widens every
         // vertex anyway, so it keeps the full-fat format.
         (false, false) if key.slim_lines => ("vs_line", "fs_mesh"),
+        // Skinning is a triangle-mesh, single-view case only: a skinned point
+        // sprite or line is not a thing any loader produces, and a variant for
+        // each would be four more pipelines nobody compiles.
+        (false, false) if key.skinned => ("vs_skinned", "fs_mesh"),
         (false, false) => ("vs_mesh", "fs_mesh"),
         (false, true) => ("vs_mesh_layered", "fs_mesh"),
         (true, false) => ("vs_point", "fs_point"),
@@ -276,8 +282,28 @@ pub fn supports_bc(device: &MetalDevice) -> bool {
 /// backend: three.js UVs have a bottom-left origin and both GPU APIs sample
 /// from the top left, so the rows move once at upload instead of every sample.
 pub fn upload_texture(device: &MetalDevice, src: &Texture) -> Result<Owned, MetalError> {
+    upload_texture_as(device, src, false)
+}
+
+/// Upload `src`, optionally forcing its *linear* pixel format.
+///
+/// A Metal texture's pixel format is fixed at creation, so unlike wgpu — which
+/// can hand out an sRGB and a non-sRGB view of the same bytes — a texture used
+/// both as a colour map and as data has to be uploaded twice. See
+/// `MetalRenderer::ensure_texture_as` for why the distinction matters: normal,
+/// metallic-roughness and occlusion maps are quantities and decoding them
+/// through a transfer curve corrupts them.
+pub fn upload_texture_as(
+    device: &MetalDevice,
+    src: &Texture,
+    linear: bool,
+) -> Result<Owned, MetalError> {
     let bc = src.format.is_block_compressed();
-    let pixel_format = pixel_format_for(src.format, supports_bc(device))?;
+    let format = match (linear, src.format) {
+        (true, TextureFormat::Rgba8UnormSrgb) => TextureFormat::Rgba8Unorm,
+        _ => src.format,
+    };
+    let pixel_format = pixel_format_for(format, supports_bc(device))?;
     if bc && src.flip_y {
         return Err(MetalError::Unsupported(
             "flip_y on a block-compressed texture: rows of 4x4 blocks cannot be reordered \
@@ -457,6 +483,134 @@ fn address_mode(code: u8) -> NSUInteger {
 }
 
 /// Build an `MTLSamplerState` for `key`.
+/// The directional shadow map: a depth texture rendered from the light.
+pub fn new_shadow_map(device: &MetalDevice, size: u32) -> Result<Owned, MetalError> {
+    new_texture_2d(
+        device,
+        size,
+        size,
+        pixel_format::DEPTH32_FLOAT,
+        texture_usage::RENDER_TARGET | texture_usage::SHADER_READ,
+        storage_mode::PRIVATE,
+        1,
+        1,
+    )
+}
+
+/// A depth *cube* for a point light: six faces, one per direction.
+pub fn new_shadow_cube(device: &MetalDevice, size: u32) -> Result<Owned, MetalError> {
+    let _pool = AutoreleasePool::new();
+    unsafe {
+        let desc = Owned::from_retained(alloc_init(class!("MTLTextureDescriptor")))
+            .ok_or_else(|| MetalError::Allocation("MTLTextureDescriptor".into()))?;
+        let _: () = msg1(desc.id(), sel!("setTextureType:"), texture_type::TYPE_CUBE);
+        let _: () = msg1(desc.id(), sel!("setPixelFormat:"), pixel_format::DEPTH32_FLOAT);
+        let _: () = msg1(desc.id(), sel!("setWidth:"), size.max(1) as NSUInteger);
+        let _: () = msg1(desc.id(), sel!("setHeight:"), size.max(1) as NSUInteger);
+        let _: () = msg1(desc.id(), sel!("setDepth:"), 1usize);
+        let _: () = msg1(desc.id(), sel!("setMipmapLevelCount:"), 1usize);
+        let _: () = msg1(
+            desc.id(),
+            sel!("setUsage:"),
+            texture_usage::RENDER_TARGET | texture_usage::SHADER_READ,
+        );
+        let _: () = msg1(desc.id(), sel!("setStorageMode:"), storage_mode::PRIVATE);
+        let tex: Id = msg1(
+            device.device_id(),
+            sel!("newTextureWithDescriptor:"),
+            desc.id(),
+        );
+        Owned::from_retained(tex)
+            .ok_or_else(|| MetalError::Allocation(format!("{size} shadow cube")))
+    }
+}
+
+/// A 1x1 depth cube, bound when no point light casts.
+pub fn empty_shadow_cube(device: &MetalDevice) -> Result<Owned, MetalError> {
+    new_shadow_cube(device, 1)
+}
+
+/// A 1x1 depth texture, bound when nothing casts.
+pub fn empty_shadow_map(device: &MetalDevice) -> Result<Owned, MetalError> {
+    new_shadow_map(device, 1)
+}
+
+/// The comparison sampler the percentage-closer filter uses.
+///
+/// `compare_function = less_equal` is what makes each tap a depth *test* rather
+/// than a fetch: the hardware does nine comparisons and the shader averages
+/// nine zeros and ones, instead of nine fetches plus arithmetic. Linear
+/// filtering on top of that is what turns the average into a gradient.
+pub fn shadow_sampler(device: &MetalDevice) -> Result<Owned, MetalError> {
+    let _pool = AutoreleasePool::new();
+    unsafe {
+        let desc = Owned::from_retained(alloc_init(class!("MTLSamplerDescriptor")))
+            .ok_or_else(|| MetalError::Allocation("MTLSamplerDescriptor".into()))?;
+        let _: () = msg1(desc.id(), sel!("setMagFilter:"), filter::LINEAR);
+        let _: () = msg1(desc.id(), sel!("setMinFilter:"), filter::LINEAR);
+        // Clamp: a lookup outside the light's frustum must read "lit", and
+        // `shadow_factor` returns early for those anyway.
+        let _: () = msg1(desc.id(), sel!("setSAddressMode:"), address_mode::CLAMP_TO_EDGE);
+        let _: () = msg1(desc.id(), sel!("setTAddressMode:"), address_mode::CLAMP_TO_EDGE);
+        let _: () = msg1(desc.id(), sel!("setCompareFunction:"), compare::LESS_EQUAL);
+        let sampler: Id = msg1(
+            device.device_id(),
+            sel!("newSamplerStateWithDescriptor:"),
+            desc.id(),
+        );
+        Owned::from_retained(sampler)
+            .ok_or_else(|| MetalError::Allocation("shadow sampler".into()))
+    }
+}
+
+/// The depth-only pipeline that fills the shadow map.
+///
+/// No fragment function and no colour attachment: the map is a depth buffer,
+/// and a fragment stage returning a colour nobody reads would cost an
+/// attachment and the bandwidth to write it.
+pub fn shadow_pipeline(device: &MetalDevice) -> Result<Owned, MetalError> {
+    shadow_pipeline_named(device, "vs_shadow", None)
+}
+
+/// The point-light variant, which needs a fragment stage to write radial
+/// distance rather than projected depth. See `fs_shadow_point`.
+pub fn point_shadow_pipeline(device: &MetalDevice) -> Result<Owned, MetalError> {
+    shadow_pipeline_named(device, "vs_shadow_point", Some("fs_shadow_point"))
+}
+
+fn shadow_pipeline_named(
+    device: &MetalDevice,
+    vs: &str,
+    fs: Option<&str>,
+) -> Result<Owned, MetalError> {
+    let _pool = AutoreleasePool::new();
+    unsafe {
+        let desc = Owned::from_retained(alloc_init(class!("MTLRenderPipelineDescriptor")))
+            .ok_or_else(|| MetalError::Allocation("MTLRenderPipelineDescriptor".into()))?;
+        let vertex_fn = device.function(vs)?;
+        let _: () = msg1(desc.id(), sel!("setVertexFunction:"), vertex_fn.id());
+        if let Some(fs) = fs {
+            let fragment_fn = device.function(fs)?;
+            let _: () = msg1(desc.id(), sel!("setFragmentFunction:"), fragment_fn.id());
+        }
+        let _: () = msg1(
+            desc.id(),
+            sel!("setDepthAttachmentPixelFormat:"),
+            pixel_format::DEPTH32_FLOAT,
+        );
+        let mut err: Id = NIL;
+        let pipeline: Id = msg2(
+            device.device_id(),
+            sel!("newRenderPipelineStateWithDescriptor:error:"),
+            desc.id(),
+            &mut err as *mut Id,
+        );
+        Owned::from_retained(pipeline).ok_or_else(|| {
+            MetalError::PipelineCreation(error_message(err))
+        })
+    }
+}
+
 pub fn new_sampler(device: &MetalDevice, key: SamplerKey) -> Result<Owned, MetalError> {
     let _pool = AutoreleasePool::new();
     unsafe {
@@ -502,6 +656,111 @@ pub fn new_sampler(device: &MetalDevice, key: SamplerKey) -> Result<Owned, Metal
 
 /// A 1x1 opaque white texture, bound wherever a material has no map so the
 /// fragment shader can sample unconditionally.
+/// Allocate a cube texture with a full mip chain.
+fn new_texture_cube(
+    device: &MetalDevice,
+    size: u32,
+    pixel_format: NSUInteger,
+    mip_levels: u32,
+) -> Result<Owned, MetalError> {
+    let _pool = AutoreleasePool::new();
+    unsafe {
+        let desc = Owned::from_retained(alloc_init(class!("MTLTextureDescriptor")))
+            .ok_or_else(|| MetalError::Allocation("MTLTextureDescriptor".into()))?;
+        let _: () = msg1(desc.id(), sel!("setTextureType:"), texture_type::TYPE_CUBE);
+        let _: () = msg1(desc.id(), sel!("setPixelFormat:"), pixel_format);
+        let _: () = msg1(desc.id(), sel!("setWidth:"), size.max(1) as NSUInteger);
+        let _: () = msg1(desc.id(), sel!("setHeight:"), size.max(1) as NSUInteger);
+        let _: () = msg1(desc.id(), sel!("setDepth:"), 1usize);
+        let _: () = msg1(
+            desc.id(),
+            sel!("setMipmapLevelCount:"),
+            mip_levels.max(1) as NSUInteger,
+        );
+        let _: () = msg1(desc.id(), sel!("setUsage:"), texture_usage::SHADER_READ);
+        let _: () = msg1(desc.id(), sel!("setStorageMode:"), cpu_writable_storage(device));
+        let tex: Id = msg1(
+            device.device_id(),
+            sel!("newTextureWithDescriptor:"),
+            desc.id(),
+        );
+        Owned::from_retained(tex)
+            .ok_or_else(|| MetalError::Allocation(format!("{size}x{size} cube texture")))
+    }
+}
+
+/// Write one mip level of one cube face.
+fn upload_cube_level(
+    tex: &Owned,
+    face: u32,
+    level: u32,
+    size: u32,
+    bytes: &[u8],
+) -> Result<(), MetalError> {
+    let bytes_per_row = size as usize * 4;
+    let needed = bytes_per_row * size as usize;
+    if bytes.len() < needed {
+        return Err(MetalError::Unsupported(format!(
+            "cube face {face} level {level} is {} bytes, needs {needed}",
+            bytes.len()
+        )));
+    }
+    unsafe {
+        let _: () = msg6(
+            tex.id(),
+            sel!("replaceRegion:mipmapLevel:slice:withBytes:bytesPerRow:bytesPerImage:"),
+            MTLRegion::image_2d(size, size),
+            level as NSUInteger,
+            face as NSUInteger,
+            bytes.as_ptr() as *const c_void,
+            bytes_per_row as NSUInteger,
+            0usize,
+        );
+    }
+    Ok(())
+}
+
+/// Upload a [`CubeTexture`](crate::textures::CubeTexture) as a mipmapped Metal cube.
+///
+/// The chain comes from the same `mip_chain` the wgpu path uses, which is the
+/// point: a box downsample in *linear* light, because sRGB is a transfer
+/// function and not a quantity you can take the mean of, and an environment is
+/// mostly edges. Two renderers that filter the environment differently
+/// disagree about what a rough surface reflects, and that is exactly the kind
+/// of difference nobody can see is a bug.
+pub fn upload_cube(
+    device: &MetalDevice,
+    cube: &crate::textures::CubeTexture,
+) -> Result<Owned, MetalError> {
+    let (levels, sizes) = crate::renderer::gpu_texture::mip_chain(cube.format, cube.size, &cube.faces);
+    let format = match cube.format {
+        TextureFormat::Rgba8UnormSrgb => pixel_format::RGBA8_UNORM_SRGB,
+        _ => pixel_format::RGBA8_UNORM,
+    };
+    let tex = new_texture_cube(device, cube.size, format, levels.len() as u32)?;
+    for (level, (faces, size)) in levels.iter().zip(&sizes).enumerate() {
+        for (face, data) in faces.iter().enumerate() {
+            upload_cube_level(&tex, face as u32, level as u32, *size, data)?;
+        }
+    }
+    Ok(tex)
+}
+
+/// A 1×1 black cube, bound when a scene has no environment.
+///
+/// Metal requires every resource a shader declares to be bound, so the choice
+/// is between this and a second pipeline variant for the no-environment case.
+/// Black rather than white because if the "is there an environment" flag were
+/// ever wrong, black adds nothing and white would add a uniform glow that looks
+/// like a plausible lighting decision.
+pub fn black_cube(device: &MetalDevice) -> Result<Owned, MetalError> {
+    let tex = new_texture_cube(device, 1, pixel_format::RGBA8_UNORM, 1)?;
+    for face in 0..6 {
+        upload_cube_level(&tex, face, 0, 1, &[0, 0, 0, 255])?;
+    }
+    Ok(tex)
+}
+
 pub fn white_texture(device: &MetalDevice) -> Result<Owned, MetalError> {
     let tex = new_texture_2d(
         device,
@@ -558,6 +817,7 @@ mod tests {
             wide_lines: false,
             blend: false,
             layered: false,
+            skinned: false,
             topology: topology_class::UNSPECIFIED,
             color_format: pixel_format::RGBA8_UNORM_SRGB,
             depth_format: pixel_format::DEPTH32_FLOAT,

@@ -8,7 +8,11 @@ Part of the [threers](../README.md) documentation.
 src/                 Rust library (scene graph, renderer, loaders, …)
   codec/             Pure-Rust media codecs (`native-codec`)
   video.rs           Frame-sequence export (`video`, native)
+  gpu.rs             Device acquisition + the limits a renderer needs asked for
   renderer/          wgpu pipelines, post-fx, headless offscreen
+    fullscreen.rs    Fullscreen passes: targets, ping-pong pairs, vertex stage
+    readback.rs      Pixels off the device: row padding and half floats
+    colorspace.rs    The sRGB transfer function in WGSL, for shaders
   metal/             Metal backend (`metal`, macOS/iOS) — objc runtime, MSL, headless + CAMetalLayer
   metal/visionos/    visionOS (`visionos`) — CompositorServices frame loop, ARKit world tracking
   prelude.rs         `use threers::prelude::*`
@@ -17,11 +21,13 @@ src/                 Rust library (scene graph, renderer, loaders, …)
   mesh_bvh/          Rust BVH (`mesh-bvh`)
   openscad/          OpenSCAD front end (`openscad`) — scad interpreter, Solid/scad! DSL
   exact_csg/         Watertight mesh-arrangement CSG kernel (curved∧curved)
+  fluid/             2D fluid simulation (`fluid`) — solver passes, WGSL, browser shell
   rlx/               RLX bridge (`rlx`, `rlx-geo`) — tensors, graph runner, Delaunay
   wasm.rs            #[wasm_bindgen] exports (web only)
 web/
   threejs-shim.js    THREE-compatible JS API over wasm
   openscad-*.html    OpenSCAD playground / gallery / assemblies
+  fluid.html         The fluid simulation, with its knobs (`FLUID=1 web/build.sh`)
   csg/               JS three-bvh-csg port (loaded when BVH_CSG=1)
   connectome/        Connectome node-cloud viewer (page + viewer.js)
   robot-arm/         Scrubbable player for the robot cell
@@ -68,7 +74,8 @@ CHANGELOG.md         Release history
 
 - **Native path**: `Renderer::new(device, queue, format)` → `render()` / `render_to()`; or `HeadlessRenderer` for offscreen RGBA.
 - **Web path**: `WebRenderer` owns the wgpu surface for a `<canvas>`; render targets and post-fx are registered by integer id across the JS boundary.
-- **Post-fx**: A single WGSL module (`src/renderer/shader.rs`) switches on `effect_kind` (copy, FXAA, glitch, bloom, …). The JS `EffectComposer` mirrors three.js pass order.
+- **Post-fx**: A single WGSL module (`src/renderer/shader.rs`) switches on `effect_kind` (copy, FXAA, glitch, bloom, …). The JS `EffectComposer` mirrors three.js pass order. A `Pass` is normally a *description* — a name and a fragment shader the composer compiles and runs — and `DrawPass` is the escape hatch for something that owns GPU state and draws itself, which is how a simulation joins the chain rather than wrapping it.
+- **Shared GPU utilities**: `gpu::GpuContext` opens a device with the limits the renderer needs (two binding counts the downlevel defaults set too low); `renderer::fullscreen` is the targets, ping-pong pairs, vertex stage and draw call that every screen-space effect was writing for itself; `renderer::readback` is the one half-float decoder and the one row-padding fix; `renderer::colorspace` is the sRGB curve as a WGSL prelude. New effects should reach for these rather than growing a ninth copy.
 - **CSG**: Rust `CsgEvaluator` for native/tests; browser parity scenes use the JS port under `web/csg/` with wasm BVH for splits.
 - **Codecs**: `native-codec` encodes/decodes in-process (no ffmpeg); `video` shells out to ffmpeg except for GIF/APNG/WebM/H.264 when both features are enabled.
 
@@ -85,6 +92,9 @@ CHANGELOG.md         Release history
 | H.264 wgpu GPU | `cargo test --features native-codec --test h264_gpu` |
 | H.264 Metal GPU | `cargo test --features "metal,native-codec" --test h264_metal` |
 | Planet tests (incl. GPU) | `cargo test --features planet --lib planet --test planet_render` |
+| Fluid tests | `cargo test --features fluid --lib fluid::` |
+| Shared GPU utilities | `cargo test --lib -- gpu:: renderer::fullscreen renderer::readback renderer::colorspace` |
+| Fluid in a browser | `FEATURES=fluid,webgl TEST=fluid_webgl scripts/wasm-browser-test.sh` |
 | RLX bridge tests | `cargo test --features "rlx,rlx-geo" --lib rlx:: --test rlx_bridge` |
 | No default features | `cargo build --no-default-features` (drops `captions`) |
 | Wasm release | `wasm-pack build --target web --out-dir web/pkg && bash web/post-build.sh` |

@@ -46,8 +46,17 @@ struct PostFxUniforms {
 @group(0) @binding(3) var depth_tex: texture_2d<f32>;
 @group(0) @binding(4) var depth_sampler: sampler;
 @group(0) @binding(5) var normal_tex: texture_2d<f32>;
-@group(0) @binding(6) var hw_depth_tex: texture_depth_2d;
-@group(0) @binding(7) var<storage, read> ssao_kernel_buf: array<vec4<f32>, 32>;
+// A float texture, not `texture_depth_2d`: `sample_postfx_depth` reads it with
+// `textureLoad`, and GLSL has no `texelFetch` for a depth sampler. Naga compiles
+// both arms of that branch whether or not either is taken, so declaring this as
+// depth made the whole module unusable on WebGL2. Depth arrives in `.r`.
+@group(0) @binding(6) var hw_depth_tex: texture_2d<f32>;
+// A uniform, not a storage buffer. It is thirty-two fixed vec4s — 512 bytes —
+// so storage bought nothing, and WebGL2 has no storage buffers at all: one
+// declaration of one is enough to stop the whole module compiling on a GL
+// backend, used or not.
+struct SsaoKernel { samples : array<vec4<f32>, 32> }
+@group(0) @binding(7) var<uniform> ssao_kernel_buf : SsaoKernel;
 @group(0) @binding(8) var noise_tex: texture_2d<f32>;
 @group(0) @binding(9) var noise_sampler: sampler;
 
@@ -110,7 +119,7 @@ fn postfx_write(c: vec3<f32>, a: f32) -> vec4<f32> {
 }
 
 fn ssao_kernel_sample(i: u32) -> vec3<f32> {
-    return ssao_kernel_buf[i].xyz;
+    return ssao_kernel_buf.samples[i].xyz;
 }
 
 fn sample_ssao_noise(uv: vec2<f32>, res: vec2<f32>) -> f32 {
@@ -161,7 +170,7 @@ fn sample_postfx_depth(uv: vec2<f32>, use_hw: bool) -> f32 {
     if (use_hw) {
         let dim = textureDimensions(hw_depth_tex, 0);
         let coord = clamp(vec2<i32>(uv * vec2<f32>(dim)), vec2<i32>(0), vec2<i32>(i32(dim.x) - 1, i32(dim.y) - 1));
-        return textureLoad(hw_depth_tex, coord, 0);
+        return textureLoad(hw_depth_tex, coord, 0).r;
     }
     return textureSampleLevel(depth_tex, depth_sampler, uv, 0.0).r;
 }
@@ -993,7 +1002,7 @@ pub const MAX_DIR_LIGHTS: usize = 4;
 pub const MAX_POINT_LIGHTS: usize = 4;
 pub const MAX_SPOT_LIGHTS: usize = 4;
 pub const MAX_HEMI_LIGHTS: usize = 4;
-pub const MAX_RECT_LIGHTS: usize = 2;
+pub const MAX_RECT_LIGHTS: usize = 4;
 
 pub const SHADER_SOURCE: &str = r#"
 const MAT_BASIC    : u32 = 0u;
@@ -1091,7 +1100,7 @@ struct FrameUniforms {
     point_lights    : array<PointLight, 4>,
     spot_lights     : array<SpotLight,  4>,
     hemi_lights     : array<HemiLight,  4>,
-    rect_lights     : array<RectLight,  2>,
+    rect_lights     : array<RectLight,  4>,
     /// x: rect-area light count (yzw reserved).
     light_counts2   : vec4<u32>,
     /// One texel of each shadow map: x directional, y spot.
@@ -1302,8 +1311,14 @@ fn apply_displacement(position : vec3<f32>, normal : vec3<f32>, uv : vec2<f32>) 
 // sampler. Only read by fs_ss_glass; a 1×1 placeholder is bound otherwise.
 @group(3) @binding(9)  var ss_color_tex   : texture_2d<f32>;
 @group(3) @binding(10) var ss_color_samp  : sampler;
-@group(3) @binding(11) var ss_depth_tex   : texture_depth_2d;
-@group(3) @binding(12) var ss_back_depth_tex : texture_depth_2d;
+// Declared as plain float textures rather than `texture_depth_2d`, and bound
+// with an unfilterable-float sample type, which a depth format permits. The
+// reason is `textureLoad`: WGSL allows it on a depth texture but GLSL has no
+// `texelFetch` for a depth sampler, so naga refuses the module for WebGL2. As
+// ordinary float textures the same reads lower to `texelFetch` and the pass
+// compiles everywhere. Depth arrives in `.r`.
+@group(3) @binding(11) var ss_depth_tex   : texture_2d<f32>;
+@group(3) @binding(12) var ss_back_depth_tex : texture_2d<f32>;
 
 struct VsIn {
     @location(0) position : vec3<f32>,
@@ -1357,8 +1372,23 @@ fn world_tangent(t : vec4<f32>) -> vec4<f32> {
     return vec4<f32>(w, t.w);
 }
 
-@vertex
-fn vs_main(in : VsIn) -> VsOut {
+/// The standard vertex transform, as a plain function.
+///
+/// `vs_main` is a thin wrapper over this, and the split is for custom vertex
+/// stages: a WGSL entry point cannot be called, so a `ShaderMaterial` that
+/// wants to *start* from the standard output and move it — a billboard, a
+/// ribbon turned to face the camera, a strand expanded from control points —
+/// had no way to reach it and had to re-derive the whole transform, including
+/// the displacement and sky-depth cases it probably did not know about.
+///
+///     @vertex
+///     fn vs_custom(in: VsIn, @builtin(vertex_index) vi: u32) -> VsOut {
+///         var out = standard_vertex(in);
+///         out.world_pos = out.world_pos + offset;
+///         out.clip_pos = frame.view_proj * vec4<f32>(out.world_pos, 1.0);
+///         return out;
+///     }
+fn standard_vertex(in : VsIn) -> VsOut {
     var out : VsOut;
     let uv = transform_uv(in.uv);
     let local_p = apply_displacement(in.position, in.normal, uv);
@@ -1384,6 +1414,11 @@ fn vs_main(in : VsIn) -> VsOut {
 }
 
 @vertex
+fn vs_main(in : VsIn) -> VsOut {
+    return standard_vertex(in);
+}
+
+@vertex
 fn vs_shadow(in : VsIn) -> @builtin(position) vec4<f32> {
     // Displaced geometry has to cast the shadow its displaced silhouette
     // implies, or the terrain and its shadow disagree.
@@ -1396,10 +1431,20 @@ fn vs_shadow_spot(in : VsIn) -> @builtin(position) vec4<f32> {
     return frame.spot_shadow_vp * mesh.model * vec4<f32>(in.position, 1.0);
 }
 
+struct ShadowPointOut {
+    @builtin(position) position : vec4<f32>,
+    @location(0)       world    : vec3<f32>,
+};
+
 @vertex
-fn vs_shadow_point(in : VsIn) -> @builtin(position) vec4<f32> {
-    return frame.cube_face_vp * mesh.model * vec4<f32>(in.position, 1.0);
+fn vs_shadow_point(in : VsIn) -> ShadowPointOut {
+    let world = mesh.model * vec4<f32>(in.position, 1.0);
+    var o : ShadowPointOut;
+    o.position = frame.cube_face_vp * world;
+    o.world = world.xyz;
+    return o;
 }
+
 
 struct SkinnedVsIn {
     @location(0) position : vec3<f32>,
@@ -1411,16 +1456,27 @@ struct SkinnedVsIn {
     @location(8) tangent  : vec4<f32>,
 };
 
-@group(1) @binding(1) var<storage, read> bone_matrices : array<mat4x4<f32>>;
+// A fixed uniform array, not a runtime-sized storage buffer.
+//
+// WebGL2 has no storage buffers, and one declaration is enough to stop the
+// module compiling on a GL backend whether or not anything skinned is drawn.
+// 128 matrices is 8 KB — inside WebGL2's 16 KB uniform-block floor — and more
+// bones than any rig this renderer has been pointed at.
+const MAX_BONES : u32 = 128u;
+struct Bones { m : array<mat4x4<f32>, 128> }
+@group(1) @binding(1) var<uniform> bone_matrices : Bones;
 
 @vertex
 fn vs_skinned(in : SkinnedVsIn) -> VsOut {
     var out : VsOut;
     let j = vec4<u32>(u32(in.joints.x), u32(in.joints.y), u32(in.joints.z), u32(in.joints.w));
-    let skin = bone_matrices[j.x] * in.weights.x
-             + bone_matrices[j.y] * in.weights.y
-             + bone_matrices[j.z] * in.weights.z
-             + bone_matrices[j.w] * in.weights.w;
+    // Clamped, because a fixed array has no bounds check to fall back on and a
+    // rig with more bones than the limit would read past the end.
+    let last = MAX_BONES - 1u;
+    let skin = bone_matrices.m[min(j.x, last)] * in.weights.x
+             + bone_matrices.m[min(j.y, last)] * in.weights.y
+             + bone_matrices.m[min(j.z, last)] * in.weights.z
+             + bone_matrices.m[min(j.w, last)] * in.weights.w;
     let skin_uv = transform_uv(in.uv);
     let world_p = skin * vec4<f32>(apply_displacement(in.position, in.normal, skin_uv), 1.0);
     out.world_pos = world_p.xyz;
@@ -1526,6 +1582,94 @@ fn aces_tonemap(x : vec3<f32>) -> vec3<f32> {
 fn gamma_to_linear(c : vec3<f32>) -> vec3<f32> { return pow(c, vec3<f32>(2.2)); }
 fn linear_to_gamma(c : vec3<f32>) -> vec3<f32> { return pow(c, vec3<f32>(1.0 / 2.2)); }
 
+// Khronos PBR Neutral. Almost the identity below the shoulder — a small black
+// offset and nothing else — so an authored colour reaches the screen as itself
+// rather than restyled. Only the top is compressed, desaturating as it goes so
+// an over-exposed highlight resolves towards white.
+fn neutral_tonemap(c_in : vec3<f32>) -> vec3<f32> {
+    let start_compression = 0.8 - 0.04;
+    let desaturation = 0.15;
+    var c = c_in;
+    let x = min(c.r, min(c.g, c.b));
+    var offset = 0.04;
+    if (x < 0.08) { offset = x - 6.25 * x * x; }
+    c = c - vec3<f32>(offset);
+    let peak = max(c.r, max(c.g, c.b));
+    if (peak < start_compression) { return c; }
+    let d = 1.0 - start_compression;
+    let new_peak = 1.0 - d * d / (peak + d - start_compression);
+    c = c * (new_peak / max(peak, 1e-6));
+    let g = 1.0 - 1.0 / (desaturation * (peak - new_peak) + 1.0);
+    return mix(c, vec3<f32>(new_peak), g);
+}
+
+const LINEAR_SRGB_TO_REC2020 = mat3x3<f32>(
+    vec3<f32>(0.6274, 0.0691, 0.0164),
+    vec3<f32>(0.3293, 0.9195, 0.0880),
+    vec3<f32>(0.0433, 0.0113, 0.8956),
+);
+const REC2020_TO_LINEAR_SRGB = mat3x3<f32>(
+    vec3<f32>( 1.6605, -0.1246, -0.0182),
+    vec3<f32>(-0.5876,  1.1329, -0.1006),
+    vec3<f32>(-0.0728, -0.0083,  1.1187),
+);
+
+fn agx_contrast(x : vec3<f32>) -> vec3<f32> {
+    let x2 = x * x;
+    let x4 = x2 * x2;
+    return 15.5 * x4 * x2
+        - 40.14 * x4 * x
+        + 31.96 * x4
+        - 6.868 * x2 * x
+        + 0.4298 * x2
+        + 0.1191 * x
+        - 0.00232;
+}
+
+// AgX, as three.js ships it. A long shoulder — 3.0 lands at 0.82 where ACES is
+// already at 0.95 — so a very bright environment keeps detail in its highlights.
+// It desaturates the shadows noticeably in exchange; that is the look.
+fn agx_tonemap(c_in : vec3<f32>) -> vec3<f32> {
+    let inset = mat3x3<f32>(
+        vec3<f32>(0.856627153315983, 0.137318972929847, 0.11189821299995),
+        vec3<f32>(0.0951212405381588, 0.761241990602591, 0.0767994186031903),
+        vec3<f32>(0.0482516061458583, 0.101439036467562, 0.811302368396859),
+    );
+    let outset = mat3x3<f32>(
+        vec3<f32>( 1.1271005818144368, -0.1413297634984383, -0.14132976349843826),
+        vec3<f32>(-0.11060664309660323,  1.157823702216272, -0.11060664309660294),
+        vec3<f32>(-0.016493938717834573, -0.016493938717834257, 1.2519364065950405),
+    );
+    let min_ev = -12.47393;
+    let max_ev = 4.026069;
+    var c = inset * (LINEAR_SRGB_TO_REC2020 * c_in);
+    c = max(c, vec3<f32>(1e-10));
+    c = (log2(c) - vec3<f32>(min_ev)) / (max_ev - min_ev);
+    c = clamp(c, vec3<f32>(0.0), vec3<f32>(1.0));
+    c = agx_contrast(c);
+    c = outset * c;
+    c = pow(max(c, vec3<f32>(0.0)), vec3<f32>(2.2));
+    return clamp(REC2020_TO_LINEAR_SRGB * c, vec3<f32>(0.0), vec3<f32>(1.0));
+}
+
+// Exposure, then whichever curve the renderer is set to.
+//
+// `tone_mapping_exposure.x`: 0 none, 1 linear, 2 ACES filmic, 3 Khronos PBR
+// neutral, 4 AgX. A `ShaderMaterial` should end with
+// `framebuffer_encode(apply_tone_mapping(hdr))`, which is exactly what the
+// built-in fragment does — otherwise a custom surface is the one thing in the
+// frame that does not respond to `Renderer::set_tone_mapping`.
+fn apply_tone_mapping(c : vec3<f32>) -> vec3<f32> {
+    let tm = u32(frame.tone_mapping_exposure.x);
+    let exposure = frame.tone_mapping_exposure.y;
+    if (tm == 0u) { return c; }
+    let e = c * exposure;
+    if (tm == 1u) { return e; }
+    if (tm == 2u) { return aces_tonemap(e); }
+    if (tm == 3u) { return neutral_tonemap(e); }
+    return agx_tonemap(e);
+}
+
 // IEC 61966-2-1 sRGB OETF — matches three.js `sRGBTransferOETF`.
 fn linear_to_srgb(c : vec3<f32>) -> vec3<f32> {
     let cutoff = vec3<f32>(0.0031308);
@@ -1534,13 +1678,20 @@ fn linear_to_srgb(c : vec3<f32>) -> vec3<f32> {
     return mix(hi, lo, step(c, cutoff));
 }
 
-// tone_mapping_exposure.w > 0.5: write linear (HalfFloat / postfx RT), else sRGB-encode for canvas.
+// tone_mapping_exposure.w > 0.5: write linear (HalfFloat / postfx RT), else
+// sRGB-encode for the canvas.
+//
+// The float path deliberately does *not* clamp. It used to, which quietly made
+// a half-float target behave like an 8-bit one: anything above 1.0 was gone
+// before the post chain saw it, so bloom had nothing to threshold and a custom
+// shader had no way to hand HDR onwards. Clamping is right for the 8-bit canvas
+// — the encode is only defined on [0, 1] — and wrong for a format chosen
+// because the values exceed it.
 fn framebuffer_encode(c: vec3<f32>) -> vec3<f32> {
-    let clamped = clamp(c, vec3<f32>(0.0), vec3<f32>(1.0));
     if (frame.tone_mapping_exposure.w > 0.5) {
-        return clamped;
+        return max(c, vec3<f32>(0.0));
     }
-    return linear_to_srgb(clamped);
+    return linear_to_srgb(clamp(c, vec3<f32>(0.0), vec3<f32>(1.0)));
 }
 
 fn view_z_to_depth_tex(view_z_pos: f32, near: f32, far: f32) -> f32 {
@@ -1807,7 +1958,21 @@ fn sample_env_cube(dir : vec3<f32>, roughness : f32) -> vec3<f32> {
     if (frame.env_map_params.w > 0.5) {
         return texture_cube_uv(dir, roughness);
     }
-    let mip = clamp((roughness + 2.0) / 10.0 * 7.0, 0.0, 7.0);
+    // A plain cube, with no PMREM atlas to index by roughness — so walk its own
+    // mip chain instead.
+    //
+    // This used to be `(roughness + 2) / 10 * 7`, which maps the whole of
+    // 0..1 onto mips 1.40..2.10: seven tenths of a single level. A mirror and
+    // a fully rough surface came back the same blur, and neither was the right
+    // one. Squaring is the usual perceptual fit — roughness is authored
+    // perceptually and the filter width goes as alpha — and the chain's real
+    // length is asked for rather than assumed to be eight.
+    // The chain length comes from the CPU rather than from `textureNumLevels`,
+    // which GLSL ES 3.0 has no equivalent for and which therefore cannot be
+    // lowered for WebGL2. It is not recoverable from `textureDimensions`
+    // either: a PMREM chain is shorter than a full one.
+    let levels = frame.env_map_params.z;
+    let mip = clamp(roughness * roughness * levels, 0.0, levels);
     let mip_i = floor(mip);
     let mip_f = mip - mip_i;
     let c0 = textureSampleLevel(env_tex, env_sampler, dir, mip_i).rgb;
@@ -2158,6 +2323,26 @@ fn iridescence_fresnel(
 // blurred into a matte band.
 const SPEC_AA_SIGMA : f32 = 0.25;
 const SPEC_AA_KAPPA : f32 = 0.18;
+
+/// Horizon-based specular occlusion (Lagarde & de Rousiers, "Moving Frostbite
+/// to PBR", §4.10.2).
+///
+/// Ambient occlusion answers "how much of the hemisphere can this point see",
+/// which is the right question for a diffuse lobe and the wrong one for a
+/// specular lobe — that only cares about the cone around the reflection
+/// vector. Applying AO to diffuse alone, as three.js does, leaves a cavity in a
+/// *metal* reflecting the whole environment as though nothing were in the way:
+/// a speaker grille's dimples come out as bright crescents rather than as
+/// holes, and a row of them beats against the pixel grid.
+///
+/// Returns 1.0 for an unoccluded point, so a scene with no AO is unchanged.
+fn specular_occlusion(n_dot_v : f32, ao : f32, roughness : f32) -> f32 {
+    return clamp(
+        pow(n_dot_v + ao, exp2(-16.0 * roughness - 1.0)) - 1.0 + ao,
+        0.0,
+        1.0,
+    );
+}
 
 /// Widen the specular lobe to cover the sub-pixel normal distribution.
 ///
@@ -3054,7 +3239,7 @@ fn fs_main(in : VsOut, @builtin(front_facing) front_facing : bool) -> @location(
     // Rectangular area lights. Previously a no-op stub, so a scene lit only by
     // a RectAreaLight rendered black.
     for (var i : u32 = 0u; i < frame.light_counts2.x; i = i + 1u) {
-        if (i >= 2u) { break; }
+        if (i >= 4u) { break; }
         let rl = frame.rect_lights[i];
         let center = rl.position.xyz;
         let right = rl.right.xyz;
@@ -3114,6 +3299,14 @@ fn fs_main(in : VsOut, @builtin(front_facing) front_facing : bool) -> @location(
         }
     }
 
+    // How much of the light arriving here leaves as a specular reflection.
+    //
+    // Needed below to stop a transparent surface from blending its own
+    // reflection away: alpha says how much of what is BEHIND the surface shows
+    // through, and a reflection happens in front of it. Filled in by whichever
+    // of the two branches below runs.
+    var spec_coverage = 0.0;
+
     // IBL — mirrors three.js MeshStandardMaterial envmap_physical_pars_fragment +
     // RE_IndirectSpecular_Physical (getIBLRadiance + computeMultiscattering).
     // tone_mapping_exposure.z is the env-enabled flag (1 = on, 0 = off).
@@ -3140,6 +3333,15 @@ fn fs_main(in : VsOut, @builtin(front_facing) front_facing : bool) -> @location(
         }
         var reflect_vec = reflect(-v_dir, refl_normal);
         reflect_vec = normalize(mix(reflect_vec, n_geom, roughness_env * roughness_env));
+        // NOTE: prefiltering this by the reflection's screen footprint
+        // (`dpdx(reflect_vec)`) was tried and measures as a no-op here — on a
+        // phone's side rail the reflection direction changes little enough per
+        // pixel that the footprint never opens up, and forcing it with a large
+        // gain only blurs. The banding down such a rail is plain undersampling
+        // of a strongly foreshortened specular surface: it falls off as the
+        // supersample factor (0.99 rms at 1x, 0.62 at 3x, 0.30 at 6x) and
+        // ignores the normal map, the environment's resolution, and
+        // `SPEC_AA_SIGMA` alike.
         let radiance = sample_env_cube(reflect_vec, roughness_env);
 
         let irradiance = PI * sample_env_cube(n_geom, 1.0);
@@ -3155,7 +3357,12 @@ fn fs_main(in : VsOut, @builtin(front_facing) front_facing : bool) -> @location(
         let scatter_max = max(max(total_scatter.r, total_scatter.g), total_scatter.b);
         let cosine_weighted_irr = irradiance * RECIP_PI;
 
-        lit = lit + radiance * single_scatter + multi_scatter * cosine_weighted_irr;
+        // Occlude the environment before it is added. Both terms are indirect
+        // light arriving from the whole room, so both are attenuated by how
+        // much of the room this point can actually see.
+        let ibl_n_dot_v = clamp(dot(n_geom, v_dir), 0.0, 1.0);
+        let spec_occ = specular_occlusion(ibl_n_dot_v, ao, roughness_env);
+        lit = lit + (radiance * single_scatter + multi_scatter * cosine_weighted_irr) * spec_occ;
         // The environment's diffuse term, added exactly ONCE.
         //
         // In three.js this line lives inside RE_IndirectSpecular_Physical, and
@@ -3165,7 +3372,19 @@ fn fs_main(in : VsOut, @builtin(front_facing) front_facing : bool) -> @location(
         // here counted the environment twice: a white Lambertian in a uniform
         // environment measured exactly 2.0× its surroundings, which is
         // impossible (it cannot reflect more light than reaches it).
-        lit = lit + diffuse_color * (1.0 - scatter_max) * cosine_weighted_irr;
+        lit = lit + diffuse_color * (1.0 - scatter_max) * cosine_weighted_irr * ao;
+        // `total_scatter` IS the specular reflectance — single plus multiple
+        // scattering, Fresnel and roughness already in it. Exactly the fraction
+        // wanted, and free.
+        spec_coverage = clamp(scatter_max, 0.0, 1.0);
+    } else {
+        // No environment to reflect, but the surface still has a reflectance.
+        // Same split-sum term the IBL path uses, evaluated for its Fresnel
+        // alone, so a transparent metal is opaque whether or not a cube is
+        // bound instead of flipping appearance when one is.
+        let fab_a = dfg_approx(n_geom, v_dir, roughness_env);
+        let refl = spec_f0 * fab_a.x + vec3<f32>(fab_a.y);
+        spec_coverage = clamp(max(max(refl.r, refl.g), refl.b), 0.0, 1.0);
     }
 
     // Clearcoat composite, deferred to here so the coat's Fresnel attenuates
@@ -3209,6 +3428,33 @@ fn fs_main(in : VsOut, @builtin(front_facing) front_facing : bool) -> @location(
     // see-through, Fresnel-weighted by the material IOR — opaque at the grazing
     // rim, transparent face-on.
     var out_opacity = opacity;
+
+    // A TRANSPARENT SURFACE STILL REFLECTS.
+    //
+    // Alpha says how much of what is *behind* the surface shows through. A
+    // reflection happens in front of it and is not transmitted at all, so
+    // scaling the whole shaded colour by alpha — which is what plain alpha
+    // blending does — fades the reflection out along with everything else. A
+    // polished surface at `alphaMode: BLEND` with alpha 0.2 then loses 80% of
+    // its highlight and reads as grey film rather than glass. Authors without
+    // `KHR_materials_transmission` fake glass exactly this way, so it is the
+    // common case, not the corner one.
+    //
+    // Raising coverage by the specular reflectance is the one-channel version
+    // of the fix: the reflection keeps `opacity + (1 - opacity) * reflectance`
+    // of its strength instead of `opacity`. For a dielectric that is a few
+    // percent — a faint grazing rim, which is correct. For a metal, where the
+    // reflectance is most of the spectrum, it is the difference between a
+    // mirror and a smear; and a transparent metal is not a thing an author
+    // meant in the first place. The transmitted half is over-weighted by the
+    // same factor, which is exactly right for a metal (it transmits nothing)
+    // and negligible for glass, so the approximation errs the right way at
+    // both ends. Premultiplied output would make both exact, at the cost of
+    // splitting the accumulator every light contributes to.
+    if (opacity < 1.0) {
+        out_opacity = clamp(opacity + (1.0 - opacity) * spec_coverage, 0.0, 1.0);
+    }
+
     if (kind == MAT_PHYSICAL && mesh.params3.w > 0.0) {
         let transmission = clamp(mesh.params3.w, 0.0, 1.0);
         let t_ior = max(mesh.params3.z, 1.0);
@@ -3257,10 +3503,7 @@ fn fs_main(in : VsOut, @builtin(front_facing) front_facing : bool) -> @location(
     // vertexColor.rgb + a gate into vertexColor.a, scaled by vertex_emissive
     // (params4.z). Zero by default, so no effect unless the material opts in.
     lit = lit + in.vertex_color.rgb * in.vertex_color.a * mesh.params4.z;
-    let tm = u32(frame.tone_mapping_exposure.x);
-    let exposure = frame.tone_mapping_exposure.y;
-    if (tm == 1u) { lit = lit * exposure; }
-    else if (tm == 2u) { lit = aces_tonemap(lit * exposure); }
+    lit = apply_tone_mapping(lit);
     lit = apply_fog(lit, in.view_z);
     // The canvas surface is bgra8unorm (not sRGB), so we MUST do the
     // linear→sRGB encoding ourselves; otherwise our linearly computed PBR
@@ -3277,6 +3520,27 @@ fn fs_main(in : VsOut, @builtin(front_facing) front_facing : bool) -> @location(
 // The resolve pass turns these into an order-independent composite. Uses simple
 // ambient+hemisphere+directional Lambert lighting on the vertex color (enough
 // for a translucent heatmap surface) so it stays self-contained.
+// The point cube stores *radial* distance, not projected depth.
+//
+// A cube's six faces each have their own frustum, so projected depth is
+// per-face and discontinuous across the seams — but the lookup in
+// `shadow_factor_point` is by direction and has one number to compare against,
+// `length(world - light) / radius`. Storing anything else means the comparison
+// never matches, which is what this pass used to do: it ran with no fragment
+// stage at all, wrote projected depth, and its shadows silently never appeared.
+//
+// It lives down here, below `fs_main`, and it has to: a `ShaderMaterial` is
+// compiled against everything in this file *above the first* `@fragment`, so an
+// entry point placed any earlier silently cuts the preamble off at itself and
+// takes `framebuffer_encode`, `sample_env_cube` and every other documented
+// helper with it. `the_custom_preamble_carries_the_documented_helpers` in
+// `renderer.rs` is what noticed, and what will notice again.
+@fragment
+fn fs_shadow_point(in : ShadowPointOut) -> @builtin(frag_depth) f32 {
+    let radius = max(frame.point_shadow_pos.w, 1e-4);
+    return clamp(length(in.world - frame.point_shadow_pos.xyz) / radius, 0.0, 1.0);
+}
+
 struct OitOut {
     @location(0) accum  : vec4<f32>,
     @location(1) reveal : f32,
@@ -3332,7 +3596,7 @@ fn ss_march(origin : vec3<f32>, dir : vec3<f32>, dist : f32, steps : i32) -> vec
         if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) { break; }
         let ray_d = clip.z / clip.w;
         let coord = vec2<i32>(uv * dims);
-        let scene_d = textureLoad(ss_depth_tex, coord, 0);
+        let scene_d = textureLoad(ss_depth_tex, coord, 0).r;
         if (scene_d < 0.9999 && ray_d > scene_d + 2e-4) {
             // Crossed behind captured geometry — refine once for the hit UV.
             return vec3<f32>(mix(prev_uv, uv, 0.5), 1.0);
@@ -3361,7 +3625,7 @@ fn ss_march_refl(origin : vec3<f32>, dir : vec3<f32>, dist : f32, steps : i32) -
         let uv = clip.xy / clip.w * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5, 0.5);
         if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) { break; }
         let ray_d = clip.z / clip.w;
-        let scene_d = textureLoad(ss_depth_tex, vec2<i32>(uv * dims), 0);
+        let scene_d = textureLoad(ss_depth_tex, vec2<i32>(uv * dims), 0).r;
         // Require a *thin* crossing (ray just behind the surface) to reject rays
         // that plunge far behind geometry — the classic SSR thickness test.
         if (scene_d < 0.9999 && ray_d > scene_d + 2e-5 && ray_d < scene_d + 0.02) {
@@ -3371,7 +3635,7 @@ fn ss_march_refl(origin : vec3<f32>, dir : vec3<f32>, dist : f32, steps : i32) -
                 let mt = (lo + hi) * 0.5;
                 let mc = frame.view_proj * vec4<f32>(origin + dir * (dist * mt), 1.0);
                 let muv = mc.xy / mc.w * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5, 0.5);
-                let msd = textureLoad(ss_depth_tex, vec2<i32>(muv * dims), 0);
+                let msd = textureLoad(ss_depth_tex, vec2<i32>(muv * dims), 0).r;
                 if (mc.z / mc.w > msd + 2e-5) { hi = mt; } else { lo = mt; }
             }
             let hc = frame.view_proj * vec4<f32>(origin + dir * (dist * (lo + hi) * 0.5), 1.0);
@@ -3413,7 +3677,7 @@ fn fs_ss_glass(in : VsOut) -> @location(0) vec4<f32> {
     let near = frame.viewport_size.z;
     let far  = frame.viewport_size.w;
     let bcoord = vec2<i32>(screen_uv * dims);
-    let back_d = textureLoad(ss_back_depth_tex, bcoord, 0);
+    let back_d = textureLoad(ss_back_depth_tex, bcoord, 0).r;
     var thick = 0.0;
     if (back_d < 0.9999) {
         let back_dist = near * far / max(far - back_d * (far - near), 1e-4);
@@ -3494,10 +3758,7 @@ fn fs_ss_glass(in : VsOut) -> @location(0) vec4<f32> {
     color = color + mesh.emissive.rgb + in.vertex_color.rgb * in.vertex_color.a * mesh.params4.z;
 
     color = apply_fog(color, in.view_z);
-    let tm = u32(frame.tone_mapping_exposure.x);
-    let exposure = frame.tone_mapping_exposure.y;
-    if (tm == 1u) { color = color * exposure; }
-    else if (tm == 2u) { color = aces_tonemap(color * exposure); }
+    color = apply_tone_mapping(color);
     return vec4<f32>(framebuffer_encode(color), 1.0);
 }
 "#;
@@ -3561,11 +3822,16 @@ struct TaaU {
     /// xyz: camera movement since the last frame. Carried for the benefit of a
     /// caller that knows which of its objects are pinned to the viewer; this
     /// pass cannot work that out for itself. See the note on reprojection below.
+    /// w: converge mode — 0 for the ordinary feedback blend, 1 when the pose is
+    /// held still and the history is a running mean over sRGB-encoded bytes,
+    /// 2 when it is a running mean over linear light.
     cam_delta      : vec4<f32>,
 };
 @group(0) @binding(0) var cur_tex   : texture_2d<f32>;
 @group(0) @binding(1) var hist_tex  : texture_2d<f32>;
-@group(0) @binding(2) var taa_depth : texture_depth_2d;
+// A float texture, not `texture_depth_2d`, so the `textureLoad` below lowers to
+// `texelFetch` — GLSL has no depth-sampler equivalent. Depth arrives in `.r`.
+@group(0) @binding(2) var taa_depth : texture_2d<f32>;
 @group(0) @binding(3) var taa_samp  : sampler;
 @group(0) @binding(4) var<uniform> taa : TaaU;
 
@@ -3584,9 +3850,56 @@ fn fs_main(@location(0) uv : vec2<f32>) -> @location(0) vec4<f32> {
     let dims = taa.params.xy;
     let coord = vec2<i32>(uv * dims);
     let cur = textureLoad(cur_tex, coord, 0);
+    let converge = taa.cam_delta.w > 0.5;
+
+    // CONVERGE MODE: the pose is not moving, so neither is anything on screen.
+    //
+    // Everything below this point exists to make a *moving* image hold
+    // together: reproject the history through the previous camera, then clamp
+    // it to the current pixel's neighbourhood so anything that moved out from
+    // under it cannot smear. Both steps are wrong when the camera is parked
+    // and the only thing changing is the sub-pixel jitter. Reprojection is a
+    // no-op at best and a resample at worst, and the clamp is actively fatal:
+    // it pins the running mean inside the 3x3 range of a single sample every
+    // frame, so the average can never settle anywhere that one sample would
+    // not already have reached. That is the whole point of accumulating.
+    //
+    // So in this mode: same pixel, no clamp, and a `n/(n+1)` weight, which
+    // makes the history the exact mean of every sample so far rather than a
+    // 0.9 feedback with a floor under it. That is a true progressive
+    // supersample, and unlike rendering at `size x N` it costs one buffer at
+    // output size however many samples are asked for — which is what makes it
+    // usable at 4K and 8K, where the supersampled target would not fit.
+    if (converge) {
+        // The mean has to be taken in linear light. Averaging sRGB-encoded
+        // bytes is averaging over a convex curve, which is not a rounding
+        // difference: on a black-to-white edge Jensen's inequality reads
+        // 21/255 where the light says 0. So decode both sides, mix, and
+        // re-encode — the history stays in the framebuffer's own space, which
+        // is what lets the blit stay a plain copy, and the round trip is exact
+        // because the converging history is float.
+        //
+        // `cam_delta.w` is 2 when the framebuffer is already linear, in which
+        // case there is nothing to convert.
+        let encoded = taa.cam_delta.w < 1.5;
+        var c = cur;
+        if (encoded) { c = vec4<f32>(taa_srgb_to_linear(c.rgb), c.a); }
+        var mean = c;
+        if (taa.params.w <= 0.5) {
+            var h = textureLoad(hist_tex, coord, 0);
+            if (encoded) { h = vec4<f32>(taa_srgb_to_linear(h.rgb), h.a); }
+            mean = mix(c, h, taa.params.z);
+        }
+        if (encoded) {
+            // Negative light is reconstruction ringing, and the encode is
+            // undefined below zero.
+            mean = vec4<f32>(taa_linear_to_srgb(max(mean.rgb, vec3<f32>(0.0))), mean.a);
+        }
+        return mean;
+    }
     if (taa.params.w > 0.5) { return cur; }          // first frame: seed history
 
-    let d = textureLoad(taa_depth, coord, 0);
+    let d = textureLoad(taa_depth, coord, 0).r;
     if (d >= 0.99999) { return cur; }                // background: nothing to reproject
 
     // Reconstruct world position from depth, reproject through the prev camera.
@@ -3611,6 +3924,18 @@ fn fs_main(@location(0) uv : vec2<f32>) -> @location(0) vec4<f32> {
     }
     hist = vec4<f32>(clamp(hist.rgb, mn, mx), hist.a);
     return mix(cur, hist, taa.params.z);
+}
+
+fn taa_srgb_to_linear(c : vec3<f32>) -> vec3<f32> {
+    return select(pow((c + 0.055) / 1.055, vec3<f32>(2.4)),
+                  c / 12.92,
+                  c <= vec3<f32>(0.04045));
+}
+
+fn taa_linear_to_srgb(c : vec3<f32>) -> vec3<f32> {
+    return select(1.055 * pow(c, vec3<f32>(1.0 / 2.4)) - 0.055,
+                  c * 12.92,
+                  c <= vec3<f32>(0.0031308));
 }
 "#;
 

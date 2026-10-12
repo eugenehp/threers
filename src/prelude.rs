@@ -40,10 +40,11 @@
 //! | [`animation`] | Mixer, clips, keyframe tracks |
 //! | [`loaders`] | glTF, OBJ, HDR, … |
 //! | [`helpers`] | Axes, grid, light helpers, … |
-//! | [`csg`] | CSG evaluator / brush (`bvh-csg`) |
-//! | [`openscad`] | Solid DSL + `.scad` parse (`openscad`) |
-//! | [`nurbs`] | NURBS curve/surface + geometry (`nurbs`) |
-//! | [`raytrace`] | Path tracer entry points (`raytrace`) |
+//! | `sketch` | A window, a scene and a loop in one call (native) |
+//! | `csg` | CSG evaluator / brush (`bvh-csg`) |
+//! | `openscad` | Solid DSL + `.scad` parse (`openscad`) |
+//! | `nurbs` | NURBS curve/surface + geometry (`nurbs`) |
+//! | `raytrace` | Path tracer entry points (`raytrace`) |
 //! | [`captions`] | Cue tracks / overlay (`captions`) |
 //!
 //! # What is deliberately not in any prelude module
@@ -81,6 +82,17 @@ pub use crate::materials::{
     SpriteMaterial, StandardMaterial, ToonMaterial,
 };
 pub use crate::math::{Color, Euler, Matrix3, Matrix4, Quaternion, Vector2, Vector3, Vector4};
+// The small things that get reached for constantly and were not here: a
+// mapping from one range to another, a seeded generator, a gradient, an easing
+// curve, noise. Every one of them was being hand-rolled at the call site —
+// twenty-six separate copies of the generator alone.
+pub use crate::easing::Easing;
+pub use crate::extras::SimplexNoise;
+pub use crate::overlay::Overlay;
+pub use crate::math::{
+    convex_hull, delaunay, inverse_lerp, lerp, map_range, map_range_clamped, smootherstep,
+    smoothstep, ticks, voronoi_cells, ColorRamp, RampSpace, Rng, ScaleLinear, ScaleLog, ScalePow,
+};
 pub use crate::renderer::{RenderTarget, Renderer, ToneMapping};
 pub use crate::scene::{FogParams, Scene};
 pub use crate::textures::{
@@ -125,10 +137,13 @@ pub mod animation {
 /// Common asset loaders.
 pub mod loaders {
     pub use crate::loaders::{
-        ColladaError, ColladaLoader, ExrError, ExrLoader, FbxError, FbxLoader, GltfError,
-        GltfImages, GltfLoader, GltfScene, HdrError, HdrLoader, ObjLoader, PlyLoader, StlLoader,
+        AlembicArchive, AlembicError, ColladaError, ColladaLoader, DracoError, ExrError, ExrLoader,
+        FbxError, FbxLoader, FbxScene, GltfError, GltfImages, GltfLoader, GltfScene, HdrError,
+        HdrLoader, Ktx2, Ktx2Error, MeshoptError, ObjLoader, PlyLoader, PolyMesh, StlLoader,
         TtfError, TtfFont, TtfGlyph,
     };
+    // Writing, not only reading.
+    pub use crate::loaders::{scene_to_glb, scene_to_gltf, GltfExportOptions};
 }
 
 /// Debug / authoring helpers.

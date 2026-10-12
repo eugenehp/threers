@@ -14,28 +14,12 @@ use std::borrow::Cow;
 
 /// Full-screen textured quad drawn from three vertices, no vertex buffer.
 const OVERLAY_WGSL: &str = r#"
-struct VsOut {
-    @builtin(position) pos: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-};
-
-// One oversized triangle covers the viewport with no index or vertex buffer.
-@vertex
-fn vs_main(@builtin(vertex_index) i: u32) -> VsOut {
-    var out: VsOut;
-    let x = f32((i << 1u) & 2u) * 2.0 - 1.0;
-    let y = f32(i & 2u) * 2.0 - 1.0;
-    out.pos = vec4<f32>(x, y, 0.0, 1.0);
-    // Overlay rows run top-first, so flip v against clip space.
-    out.uv = vec2<f32>((x + 1.0) * 0.5, 1.0 - (y + 1.0) * 0.5);
-    return out;
-}
 
 @group(0) @binding(0) var overlay_tex: texture_2d<f32>;
 @group(0) @binding(1) var overlay_sampler: sampler;
 
 @fragment
-fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
+fn fs_main(in: FullscreenVertex) -> @location(0) vec4<f32> {
     return textureSample(overlay_tex, overlay_sampler, in.uv);
 }
 "#;
@@ -54,7 +38,10 @@ impl CaptionPass {
     pub(crate) fn new(device: &wgpu::Device) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("threers caption overlay"),
-            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(OVERLAY_WGSL)),
+            source: wgpu::ShaderSource::Wgsl(Cow::Owned(format!(
+                "{}\n{OVERLAY_WGSL}",
+                crate::renderer::fullscreen::VS
+            ))),
         });
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("threers caption overlay bgl"),
@@ -157,6 +144,11 @@ impl CaptionPass {
 
     /// Upload `rgba` (tightly packed, `width * height * 4`) into the overlay
     /// texture, reallocating when the size changes.
+    /// Upload `rgba` into the texture, or only `rows` of it.
+    ///
+    /// A partial upload leans on the texture still holding what was put there
+    /// last time, which is only true once it exists at this size — so a new or
+    /// resized texture is always filled whole regardless of what was asked for.
     fn upload(
         &mut self,
         device: &wgpu::Device,
@@ -164,6 +156,7 @@ impl CaptionPass {
         rgba: &[u8],
         width: u32,
         height: u32,
+        rows: Option<(u32, u32)>,
     ) {
         let stale = !matches!(&self.texture, Some((w, h, _, _)) if *w == width && *h == height);
         if stale {
@@ -177,9 +170,14 @@ impl CaptionPass {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                // Unorm, not Srgb: the caption colors are authored in the same
-                // space the framebuffer encodes, so no extra conversion.
-                format: wgpu::TextureFormat::Rgba8Unorm,
+                // Srgb: the caption colours *are* sRGB-encoded, so the sampler
+                // decodes them and the blend gets light rather than an encoding.
+                // The destination is decoded too — `draw_captions` composites
+                // through an sRGB view of the target for exactly that reason —
+                // so both sides of the mix are in the same space. Alpha is left
+                // alone by the conversion, which is right: it is a fraction, not
+                // a colour.
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             });
@@ -202,19 +200,32 @@ impl CaptionPass {
         }
 
         let (_, _, texture, _) = self.texture.as_ref().expect("texture just ensured");
+        let (y0, y1) = match rows {
+            Some((a, b)) if !stale => (a.min(height), b.clamp(a.min(height), height)),
+            _ => (0, height),
+        };
+        if y0 >= y1 {
+            return;
+        }
+        let band = y1 - y0;
         // `write_texture` wants rows padded to 256 bytes.
         const ALIGN: u32 = 256;
         let unpadded = width * 4;
         let padded = unpadded.div_ceil(ALIGN) * ALIGN;
+        // Rows are contiguous, so a band of them is a subslice and needs no
+        // repacking unless the width needs padding anyway.
+        let start = y0 as usize * unpadded as usize;
+        let end = y1 as usize * unpadded as usize;
+        let source = &rgba[start..end];
         let staging = if padded == unpadded {
-            Cow::Borrowed(rgba)
+            Cow::Borrowed(source)
         } else {
-            let mut buf = vec![0u8; (padded * height) as usize];
-            for row in 0..height as usize {
+            let mut buf = vec![0u8; (padded * band) as usize];
+            for row in 0..band as usize {
                 let src = row * unpadded as usize;
                 let dst = row * padded as usize;
                 buf[dst..dst + unpadded as usize]
-                    .copy_from_slice(&rgba[src..src + unpadded as usize]);
+                    .copy_from_slice(&source[src..src + unpadded as usize]);
             }
             Cow::Owned(buf)
         };
@@ -222,18 +233,18 @@ impl CaptionPass {
             wgpu::TexelCopyTextureInfo {
                 texture,
                 mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
+                origin: wgpu::Origin3d { x: 0, y: y0, z: 0 },
                 aspect: wgpu::TextureAspect::All,
             },
             &staging,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(padded),
-                rows_per_image: Some(height),
+                rows_per_image: Some(band),
             },
             wgpu::Extent3d {
                 width,
-                height,
+                height: band,
                 depth_or_array_layers: 1,
             },
         );
@@ -248,13 +259,14 @@ impl CaptionPass {
         rgba: &[u8],
         width: u32,
         height: u32,
+        rows: Option<(u32, u32)>,
         target: &wgpu::TextureView,
         format: wgpu::TextureFormat,
     ) {
         if width == 0 || height == 0 || rgba.len() < (width as usize) * (height as usize) * 4 {
             return;
         }
-        self.upload(device, queue, rgba, width, height);
+        self.upload(device, queue, rgba, width, height, rows);
         // `pipeline` may push to `self.pipelines`, so resolve it before the
         // bind group borrow.
         let pipeline_index = match self.pipelines.iter().position(|(f, _)| *f == format) {

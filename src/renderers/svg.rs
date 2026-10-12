@@ -1630,13 +1630,6 @@ fn signed_area(ndc: &[[f32; 3]]) -> f32 {
 //                         COLOUR AND FORMATTING
 // ======================================================================
 
-/// ACES filmic approximation — the same curve and constants as the shader's
-/// `aces_tonemap`.
-fn aces(x: f32) -> f32 {
-    let (a, b, c, d, e) = (2.51, 0.03, 2.43, 0.59, 0.14);
-    ((x * (a * x + b)) / (x * (c * x + d) + e)).clamp(0.0, 1.0)
-}
-
 /// IEC 61966-2-1 sRGB OETF — three.js's `sRGBTransferOETF`.
 fn linear_to_srgb(c: f32) -> f32 {
     if c <= 0.0031308 {
@@ -1654,14 +1647,12 @@ fn linear_to_srgb(c: f32) -> f32 {
 /// straight into a `fill` attribute hands the browser linear values labelled
 /// as sRGB and renders mid-tones far too dark.
 fn encode(c: [f32; 3], tm: ToneMapping, exposure: f32) -> [u8; 3] {
+    // `ToneMapping::apply` is the shared CPU form of the same curves the shader
+    // runs, so a new mode arrives here and in the path tracer's film without
+    // either one having to be taught about it separately.
     let mapped = match tm {
         ToneMapping::None => c,
-        ToneMapping::Linear => [c[0] * exposure, c[1] * exposure, c[2] * exposure],
-        ToneMapping::AcesFilmic => [
-            aces(c[0] * exposure),
-            aces(c[1] * exposure),
-            aces(c[2] * exposure),
-        ],
+        _ => tm.apply([c[0] * exposure, c[1] * exposure, c[2] * exposure]),
     };
     mapped.map(|v| (linear_to_srgb(v.clamp(0.0, 1.0)).clamp(0.0, 1.0) * 255.0 + 0.5) as u8)
 }

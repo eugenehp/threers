@@ -10,7 +10,7 @@ use super::objc::{
     class, msg0, msg1, msg2, msg3, msg4, msg6, sel, AutoreleasePool, Id, Owned, NIL,
 };
 use super::resources::{
-    new_sampler, render_pipeline, upload_texture, white_texture, PipelineKey, SamplerKey,
+    new_sampler, render_pipeline, upload_texture_as, white_texture, PipelineKey, SamplerKey,
 };
 use crate::cameras::Camera;
 use crate::core::{BufferGeometry, Layers, ObjectKind};
@@ -35,6 +35,8 @@ const VB_VERTICES: NSUInteger = 0;
 const VB_FRAME: NSUInteger = 1;
 const VB_DRAW: NSUInteger = 2;
 const VB_INSTANCES: NSUInteger = 3;
+const VB_SKIN: NSUInteger = 4;
+const VB_BONES: NSUInteger = 5;
 const FB_FRAME: NSUInteger = 0;
 const FB_DRAW: NSUInteger = 1;
 
@@ -134,6 +136,16 @@ pub(crate) struct FrameUniforms {
     counts: [u32; 4],
     /// `[view_count, 0, 0, 0]`.
     view_info: [u32; 4],
+    /// World → light clip for the one directional shadow caster.
+    shadow_vp: [f32; 16],
+    /// `[on, depth bias, texel size, normal bias]`.
+    shadow_params: [f32; 4],
+    /// World → light clip for the one spot caster.
+    spot_shadow_vp: [f32; 16],
+    /// `[on, depth bias, 0, 0]`.
+    spot_params: [f32; 4],
+    /// `[x, y, z, radius]` of the one point caster; radius 0 means none.
+    point_shadow_pos: [f32; 4],
     dir: [DirLightGpu; MAX_DIR_LIGHTS],
     points: [PointLightGpu; MAX_POINT_LIGHTS],
     spots: [SpotLightGpu; MAX_SPOT_LIGHTS],
@@ -147,6 +159,11 @@ impl Default for FrameUniforms {
             view: [Matrix4::identity().elements; MAX_VIEWS],
             camera_pos: [[0.0; 4]; MAX_VIEWS],
             view_info: [1, 0, 0, 0],
+            shadow_vp: Matrix4::identity().elements,
+            shadow_params: [0.0; 4],
+            spot_shadow_vp: Matrix4::identity().elements,
+            spot_params: [0.0; 4],
+            point_shadow_pos: [0.0; 4],
             ambient: [0.0; 4],
             fog_color: [0.0; 4],
             fog_params: [0.0; 4],
@@ -175,6 +192,14 @@ impl FrameUniforms {
     }
 }
 
+/// What `vs_skinned` reads per vertex, alongside the ordinary `Vertex`.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct SkinVertex {
+    joints: [f32; 4],
+    weights: [f32; 4],
+}
+
 #[repr(C, align(16))]
 #[derive(Clone, Copy)]
 pub(crate) struct DrawUniforms {
@@ -187,6 +212,16 @@ pub(crate) struct DrawUniforms {
     uv_transform: [f32; 4],
     misc: [f32; 4],
     flags: [u32; 4],
+    /// Which of the extra texture slots are bound, as 0/1: emissive, normal,
+    /// metallic-roughness, ambient occlusion. `flags.y` already carries the
+    /// base-colour map and stays where it is so nothing else has to move.
+    maps: [u32; 4],
+    /// Scalars the maps modulate: normal-map scale, AO strength, then the
+    /// environment's intensity and whether one is bound at all.
+    map_params: [f32; 4],
+    /// `[receives_shadow, 0, 0, 0]`. Per-object rather than per-material,
+    /// which is where `Object3D` keeps it.
+    object: [u32; 4],
 }
 
 impl Default for DrawUniforms {
@@ -201,6 +236,9 @@ impl Default for DrawUniforms {
             uv_transform: [0.0, 0.0, 1.0, 1.0],
             misc: [0.0, 1.0, 0.1, 1000.0],
             flags: [0; 4],
+            maps: [0; 4],
+            map_params: [1.0, 1.0, 1.0, 0.0],
+            object: [0; 4],
         }
     }
 }
@@ -396,6 +434,11 @@ struct CachedGeometry {
     _geometry: Arc<BufferGeometry>,
     version: u32,
     vertices: Owned,
+    /// Joint indices and weights, built only when the geometry carries them.
+    /// A parallel buffer rather than a wider `Vertex`: skinned meshes are a
+    /// minority and 32 bytes a vertex on every other mesh is not a trade worth
+    /// making.
+    skin: Option<Owned>,
     indices: Option<Owned>,
     index_count: usize,
     vertex_count: usize,
@@ -415,6 +458,16 @@ struct CachedTexture {
 }
 
 /// One item collected from the scene graph, ready to encode.
+/// The one light of each kind that owns a shadow map this frame.
+#[derive(Default)]
+struct Casters {
+    directional: Option<(Vector3, crate::lights::ShadowSettings)>,
+    /// Position, direction, outer angle, settings.
+    spot: Option<(Vector3, Vector3, f32, crate::lights::ShadowSettings)>,
+    /// Position and radius.
+    point: Option<(Vector3, f32)>,
+}
+
 struct DrawItem {
     geometry: Arc<BufferGeometry>,
     material: Arc<Material>,
@@ -432,6 +485,20 @@ struct DrawItem {
     transparent: bool,
     /// When false, draw with depth compare Always (x-ray overlay).
     depth_test: bool,
+    /// A skinned mesh's bone matrices, until they are uploaded — then the
+    /// index of the transient buffer holding them, for the same reason
+    /// `instances` works that way.
+    bones: Option<Vec<f32>>,
+    bone_slot: Option<usize>,
+    /// Whether this object draws into the shadow map. Off by default, as it is
+    /// on [`Object3D`] — a scene where everything casts is rarely what anyone
+    /// means, and it costs a full depth pass over geometry that never shows.
+    cast_shadow: bool,
+    /// Whether this object is darkened by the shadow map. Also per-object and
+    /// also off by default, and for a sharper reason than casting: a surface
+    /// that receives without anything casting is unchanged, but one that casts
+    /// without receiving shadows itself through acne.
+    receive_shadow: bool,
 }
 
 // ------------------------------------------------------------------ renderer
@@ -450,10 +517,42 @@ struct DrawItem {
 /// spot, hemisphere and ambient lights. Materials outside that set draw unlit in
 /// their base colour rather than failing.
 ///
-/// Not here, and handled by [`crate::renderer::Renderer`] instead: shadow maps,
-/// post-processing, environment/IBL, skinning, morph targets, and the normal /
-/// roughness / metalness / AO / emissive map slots. Instanced meshes with
-/// non-uniform per-instance scale shade with skewed normals.
+/// Environment/IBL and the normal, roughness, metalness, AO and emissive map
+/// slots are implemented here, and `tests/backend_parity.rs` holds them to the
+/// wgpu renderer: emissive maps agree to 0.0024 rms over a luma grid and
+/// environment reflections to 0.0009 at mirror roughness.
+///
+/// Skinning is here too: a `SkinnedMesh` blends through its skeleton's bone
+/// matrices in `vs_skinned`, four influences a vertex, and measures identical
+/// to the wgpu path in the same pose.
+///
+/// Directional shadows are here: one caster, a depth-only pass from the light,
+/// and a 3x3 percentage-closer filter with normal bias. `cast_shadow` and
+/// `receive_shadow` are read per object, as the wgpu path reads them, and the
+/// two agree on where the shadow lands to a correlation of 1.0000.
+///
+/// Spot shadows are here as well, on their own perspective map.
+///
+/// Point shadows too, on a depth cube: six 90° faces, and the only shadow pass
+/// here with a fragment stage, because the cube stores *radial* distance
+/// rather than projected depth. A point light and a spot light in the same
+/// place throw the same shadow, 0.0785 of darkening over eight tiles against
+/// 0.0786 over eight.
+///
+/// Instanced meshes with non-uniform per-instance scale shade with skewed
+/// normals.
+///
+/// **Morph targets are not implemented by either renderer.** This list used to
+/// name them as belonging to [`crate::renderer::Renderer`], which was wrong:
+/// [`MorphAttributes`](crate::core::MorphAttributes) is produced by the USD
+/// loader and read by nothing, and [`BufferGeometry`] has no field to hang the
+/// targets off. Implementing them is a change to the geometry model and both
+/// backends, not a port of one into the other.
+///
+/// The direct-light BRDF matches too, as of the `1/pi` diffuse normalisation
+/// and height-correlated Smith visibility: every map slot measures within
+/// 0.016 rms of the wgpu path. What is still missing there is the roughness
+/// floor and the geometric specular antialiasing it applies.
 pub struct MetalRenderer {
     device: MetalDevice,
     pipelines: HashMap<PipelineKey, Owned>,
@@ -463,6 +562,31 @@ pub struct MetalRenderer {
     /// `[forward-write, forward-read, reverse-write, reverse-read]`.
     depth_states: [Owned; 5],
     white: Owned,
+    /// Bound at the cube slot when a scene has no environment.
+    black_cube: Owned,
+    /// The directional shadow map, and the size it was built at. Allocated on
+    /// the first frame a light asks to cast, because the size comes from the
+    /// light and no light exists when the renderer is built.
+    shadow_map: Option<Owned>,
+    shadow_size: u32,
+    /// The spot caster's map, and the point caster's cube.
+    spot_shadow_map: Option<Owned>,
+    point_shadow_cube: Option<Owned>,
+    /// Depth-only pipeline and comparison sampler for that map.
+    shadow_pipeline: Option<Owned>,
+    /// The point variant, which writes radial distance from a fragment stage.
+    point_shadow_pipeline: Option<Owned>,
+    shadow_sampler: Option<Owned>,
+    /// Bound at the shadow slot when nothing casts. Metal requires every
+    /// resource a function declares to be bound, and a 1x1 depth texture is
+    /// cheaper than a second fragment function.
+    empty_shadow: Owned,
+    empty_shadow_cube: Owned,
+    /// The uploaded environment, keyed by the `CubeTexture` it came from so a
+    /// scene that keeps the same environment across frames uploads it once.
+    /// Environments are large — six faces and a mip chain — and rebuilding one
+    /// per frame would cost more than everything else this backend does.
+    env_cube: Option<(usize, Owned)>,
     identity_instance: Owned,
     transients: Vec<Vec<Owned>>,
     frame: u64,
@@ -494,6 +618,9 @@ impl MetalRenderer {
             depth_stencil_state(&device, compare::ALWAYS, false)?,
         ];
         let white = white_texture(&device)?;
+        let black_cube = crate::metal::resources::black_cube(&device)?;
+        let empty_shadow = crate::metal::resources::empty_shadow_map(&device)?;
+        let empty_shadow_cube = crate::metal::resources::empty_shadow_cube(&device)?;
         let identity_instance =
             device.new_buffer(bytemuck::cast_slice(&[Matrix4::identity().elements]))?;
         Ok(Self {
@@ -504,6 +631,17 @@ impl MetalRenderer {
             textures: HashMap::new(),
             depth_states,
             white,
+            black_cube,
+            env_cube: None,
+            shadow_map: None,
+            shadow_size: 0,
+            spot_shadow_map: None,
+            point_shadow_cube: None,
+            shadow_pipeline: None,
+            point_shadow_pipeline: None,
+            shadow_sampler: None,
+            empty_shadow,
+            empty_shadow_cube,
             identity_instance,
             transients: (0..FRAMES_IN_FLIGHT).map(|_| Vec::new()).collect(),
             frame: 0,
@@ -596,7 +734,45 @@ impl MetalRenderer {
         self.transients[slot].clear();
 
         scene.update_world();
-        let (frame_u, mut items, mut stats) = self.collect(scene, views, pass);
+        self.ensure_environment(scene);
+        let (mut frame_u, mut items, mut stats, casters) = self.collect(scene, views, pass);
+        let shadow_caster = casters.directional;
+        // The light's view-projection has to be in the frame uniform before the
+        // shadow pass records anything, since the depth-only vertex function
+        // reads it from there.
+        if let Some((dir, settings)) = shadow_caster {
+            self.ensure_shadow_map(settings.map_size)?;
+            let s = settings.camera_size;
+            // A fixed cube on the origin, matching the wgpu path. Fitting it to
+            // the visible meshes' bounds would waste fewer texels; it would
+            // also make the map's contents depend on the camera, so a shadow
+            // would swim as the view moved.
+            let eye = dir.normalize() * (-s * 1.5);
+            let view = Matrix4::look_at(eye, Vector3::ZERO, Vector3::UP);
+            let proj =
+                Matrix4::orthographic(-s, s, s, -s, settings.camera_near, settings.camera_far);
+            frame_u.shadow_vp = proj.multiply(&view).elements;
+            frame_u.shadow_params = [
+                1.0,
+                settings.bias.max(0.0),
+                1.0 / self.shadow_size.max(1) as f32,
+                settings.normal_bias.max(0.0),
+            ];
+        }
+        if let Some((pos, dir, angle, settings)) = casters.spot {
+            self.ensure_spot_shadow_map(settings.map_size)?;
+            let view = Matrix4::look_at(pos, pos + dir.normalize(), Vector3::UP);
+            // fov = 2 × the outer angle, so the frustum covers the whole cone.
+            let fov = (angle * 2.0).clamp(0.05, std::f32::consts::PI - 0.05);
+            let proj =
+                Matrix4::perspective(fov, 1.0, settings.camera_near, settings.camera_far);
+            frame_u.spot_shadow_vp = proj.multiply(&view).elements;
+            frame_u.spot_params = [1.0, settings.bias.max(0.0), 0.0, 0.0];
+        }
+        if let Some((pos, radius)) = casters.point {
+            self.ensure_point_shadow_cube()?;
+            frame_u.point_shadow_pos = [pos.x, pos.y, pos.z, radius];
+        }
 
         // Opaque front-to-back (early-z rejects the overdraw), transparent
         // back-to-front (blending is order-dependent). `render_order` wins over
@@ -624,8 +800,23 @@ impl MetalRenderer {
                 stats.geometry_uploads += 1;
             }
             let slots = item.material.texture_slots();
-            for map in [slots.map, slots.matcap_map].into_iter().flatten() {
-                if self.ensure_texture(&map)? {
+            // Every slot the fragment shader can bind. Uploading only the ones
+            // it used to sample is how the extra maps stayed invisible after
+            // the shader learned to read them: the binding asked the cache for
+            // a texture nobody had put there.
+            for (map, linear) in [
+                (slots.map, false),
+                (slots.matcap_map, false),
+                (slots.emissive_map, false),
+                (slots.normal_map, true),
+                (slots.roughness_map, true),
+                (slots.metalness_map, true),
+                (slots.ao_map, true),
+            ]
+            .into_iter()
+            .filter_map(|(m, l)| m.map(|m| (m, l)))
+            {
+                if self.ensure_texture_as(&map, linear)? {
                     stats.texture_uploads += 1;
                 }
             }
@@ -635,8 +826,72 @@ impl MetalRenderer {
                 item.instance_slot = Some(self.transients[slot].len());
                 self.transients[slot].push(buf);
             }
+            if let Some(data) = item.bones.take() {
+                // Transient rather than cached: a pose changes every frame, so
+                // there is nothing to reuse and a cache would only be a thing
+                // to invalidate.
+                if !data.is_empty() {
+                    let buf = self.device.new_buffer(bytemuck::cast_slice(&data))?;
+                    item.bone_slot = Some(self.transients[slot].len());
+                    self.transients[slot].push(buf);
+                }
+            }
         }
 
+        // Shadow maps first: the main pass samples them, so they have to be
+        // filled before anything reads them. Each pass writes its own matrix
+        // into `shadow_vp` and shares one depth-only vertex function, rather
+        // than having three that differ only in which matrix they read.
+        if frame_u.shadow_params[0] > 0.5 {
+            if let Some(map) = self.shadow_map.as_ref().map(|t| t.id()) {
+                unsafe { self.encode_shadow(&frame_u, &items, slot, map, 0, false) }?;
+            }
+        }
+        if frame_u.spot_params[0] > 0.5 {
+            if let Some(map) = self.spot_shadow_map.as_ref().map(|t| t.id()) {
+                let mut u = frame_u;
+                u.shadow_vp = frame_u.spot_shadow_vp;
+                unsafe { self.encode_shadow(&u, &items, slot, map, 0, false) }?;
+            }
+        }
+        if frame_u.point_shadow_pos[3] > 0.0 {
+            if let Some(cube) = self.point_shadow_cube.as_ref().map(|t| t.id()) {
+                // Six faces, +X −X +Y −Y +Z −Z, each a 90° frustum. The up
+                // vectors are the conventional cube-map ones: get them wrong
+                // and each face is individually plausible while the seams do
+                // not line up.
+                let pos = Vector3::new(
+                    frame_u.point_shadow_pos[0],
+                    frame_u.point_shadow_pos[1],
+                    frame_u.point_shadow_pos[2],
+                );
+                let radius = frame_u.point_shadow_pos[3];
+                // Metal's cube convention, which is not the GL one the wgpu
+                // path uses: +Y is up on the side faces rather than -Y. Getting
+                // this wrong leaves each face individually plausible and the
+                // shadow landing in the wrong place.
+                let faces: [(Vector3, Vector3); 6] = [
+                    (Vector3::new(1.0, 0.0, 0.0), Vector3::new(0.0, 1.0, 0.0)),
+                    (Vector3::new(-1.0, 0.0, 0.0), Vector3::new(0.0, 1.0, 0.0)),
+                    (Vector3::new(0.0, 1.0, 0.0), Vector3::new(0.0, 0.0, -1.0)),
+                    (Vector3::new(0.0, -1.0, 0.0), Vector3::new(0.0, 0.0, 1.0)),
+                    (Vector3::new(0.0, 0.0, 1.0), Vector3::new(0.0, 1.0, 0.0)),
+                    (Vector3::new(0.0, 0.0, -1.0), Vector3::new(0.0, 1.0, 0.0)),
+                ];
+                let proj = Matrix4::perspective(
+                    std::f32::consts::FRAC_PI_2,
+                    1.0,
+                    0.1,
+                    radius.max(1.0),
+                );
+                for (face, &(forward, up)) in faces.iter().enumerate() {
+                    let view = Matrix4::look_at(pos, pos + forward, up);
+                    let mut u = frame_u;
+                    u.shadow_vp = mirror_clip_x(proj.multiply(&view)).elements;
+                    unsafe { self.encode_shadow(&u, &items, slot, cube, face, true) }?;
+                }
+            }
+        }
         unsafe { self.encode(pass, views, &frame_u, &items, scene, slot, &mut stats) }?;
         self.evict_unused();
         Ok(stats)
@@ -660,7 +915,7 @@ impl MetalRenderer {
         scene: &Scene,
         views: &[RenderView],
         pass: &PassAttachments,
-    ) -> (FrameUniforms, Vec<DrawItem>, MetalRenderStats) {
+    ) -> (FrameUniforms, Vec<DrawItem>, MetalRenderStats, Casters) {
         // View 0 is the one the traversal uses: its layer mask decides what is
         // drawn and its position orders the transparent items. Two eyes a few
         // centimetres apart do not disagree about either.
@@ -679,6 +934,12 @@ impl MetalRenderer {
             view: view_matrices,
             camera_pos,
             view_info: [views.len() as u32, 0, 0, 0],
+            // Filled in by `shadow_pass` once the caster is known.
+            shadow_vp: Matrix4::identity().elements,
+            shadow_params: [0.0; 4],
+            spot_shadow_vp: Matrix4::identity().elements,
+            spot_params: [0.0; 4],
+            point_shadow_pos: [0.0; 4],
             viewport: [
                 pass.width as f32,
                 pass.height as f32,
@@ -698,6 +959,12 @@ impl MetalRenderer {
         let mut items = Vec::new();
         let mut stats = MetalRenderStats::default();
         let (mut n_dir, mut n_point, mut n_spot, mut n_hemi) = (0usize, 0, 0, 0);
+        // The directional light that will own the shadow map, if any asks.
+        let mut shadow_caster: Option<(Vector3, crate::lights::ShadowSettings)> = None;
+        // Position, direction, outer angle, settings.
+        let mut spot_caster: Option<(Vector3, Vector3, f32, crate::lights::ShadowSettings)> = None;
+        // Position and radius.
+        let mut point_caster: Option<(Vector3, f32)> = None;
         // Union every view's layer mask so split-screen / multi-viewport passes
         // collect both sides; each pass filters in [`encode_pass`].
         let cam_layers = views.iter().fold(Layers::with_mask(0), |mut acc, v| {
@@ -716,10 +983,11 @@ impl MetalRenderer {
             }
             let world = obj.matrix_world;
             let obj_layers = obj.layers;
-            let mut push = |geometry: &Arc<BufferGeometry>,
+            let mut push_skinned = |geometry: &Arc<BufferGeometry>,
                             material: &Arc<Material>,
                             primitive: NSUInteger,
-                            instances: Option<Vec<f32>>| {
+                            instances: Option<Vec<f32>>,
+                            bones: Option<Vec<f32>>| {
                 if !geometry.attributes.contains_key("position") {
                     stats.skipped += 1;
                     return;
@@ -730,6 +998,10 @@ impl MetalRenderer {
                 // Overlays sort after opaque occluders even at opacity 1.0.
                 let transparent = is_transparent(material) || !depth_test;
                 items.push(DrawItem {
+                    bones,
+                    bone_slot: None,
+                    cast_shadow: obj.cast_shadow,
+                    receive_shadow: obj.receive_shadow,
                     geometry: geometry.clone(),
                     material: material.clone(),
                     world,
@@ -744,12 +1016,32 @@ impl MetalRenderer {
                     depth_test,
                 });
             };
+            // Everything that is not a skinned mesh, which is everything
+            // else: same closure, no pose.
+            let mut push = |g: &Arc<BufferGeometry>,
+                            m: &Arc<Material>,
+                            p: NSUInteger,
+                            inst: Option<Vec<f32>>| push_skinned(g, m, p, inst, None);
 
             match &obj.kind {
                 ObjectKind::Mesh(m) => push(&m.geometry, &m.material, primitive::TRIANGLE, None),
                 ObjectKind::SkinnedMesh(sm) => {
-                    // Drawn in its bind pose: skinning is not in this backend.
-                    push(&sm.geometry, &sm.material, primitive::TRIANGLE, None)
+                    // `bone_matrices` is world × inverse-bind per bone, already
+                    // composed by `Skeleton::update`, so the vertex stage only
+                    // has to blend them.
+                    let bones: Vec<f32> = sm
+                        .skeleton
+                        .bone_matrices
+                        .iter()
+                        .flat_map(|m| m.elements)
+                        .collect();
+                    push_skinned(
+                        &sm.geometry,
+                        &sm.material,
+                        primitive::TRIANGLE,
+                        None,
+                        Some(bones),
+                    )
                 }
                 ObjectKind::LineSegments(ls) => {
                     push(&ls.geometry, &ls.material, primitive::LINE, None)
@@ -789,6 +1081,14 @@ impl MetalRenderer {
                         } else {
                             transform_direction(&world, l.direction).normalize()
                         };
+                        // The first casting directional light gets the map.
+                        // A second would need a second map and matrix; it
+                        // simply does not cast rather than borrowing this
+                        // one's shadow, which would put its shadows in the
+                        // wrong place and look deliberate.
+                        if n_dir == 0 && l.cast_shadow && shadow_caster.is_none() {
+                            shadow_caster = Some((dir, l.shadow));
+                        }
                         frame_u.dir[n_dir] = DirLightGpu {
                             direction: [dir.x, dir.y, dir.z, 0.0],
                             color: scaled(l.color, l.intensity),
@@ -800,6 +1100,15 @@ impl MetalRenderer {
                             return;
                         }
                         let p = obj.world_position();
+                        if n_point == 0 && l.cast_shadow && point_caster.is_none() {
+                            // `distance` is the light's own falloff radius, and
+                            // it is what the cube's depth is normalised by. A
+                            // light with no distance set has no radius to
+                            // normalise against, so it does not cast.
+                            if l.distance > 0.0 {
+                                point_caster = Some((p, l.distance));
+                            }
+                        }
                         frame_u.points[n_point] = PointLightGpu {
                             position: [p.x, p.y, p.z, 1.0],
                             color: scaled(l.color, l.intensity),
@@ -813,6 +1122,9 @@ impl MetalRenderer {
                         }
                         let p = obj.world_position();
                         let dir = transform_direction(&world, l.direction).normalize();
+                        if n_spot == 0 && l.cast_shadow && spot_caster.is_none() {
+                            spot_caster = Some((p, dir, l.angle, l.shadow));
+                        }
                         frame_u.spots[n_spot] = SpotLightGpu {
                             position: [p.x, p.y, p.z, 1.0],
                             direction: [dir.x, dir.y, dir.z, 0.0],
@@ -863,7 +1175,7 @@ impl MetalRenderer {
                 if slim_lines_enabled() { "slim lines" } else { "full vertices" },
             );
         }
-        (frame_u, items, stats)
+        (frame_u, items, stats, Casters { directional: shadow_caster, spot: spot_caster, point: point_caster })
     }
 
     // --------------------------------------------------------------- uploads
@@ -899,6 +1211,17 @@ impl MetalRenderer {
             let n = vertices.len();
             (self.device.new_buffer(bytemuck::cast_slice(&vertices))?, n)
         };
+        // Skinning attributes, if this geometry has them. Named as three.js
+        // names them.
+        let skin = if !slim
+            && geometry.attributes.contains_key("joint")
+            && geometry.attributes.contains_key("weight")
+        {
+            let data = build_skin(geometry, vertex_count);
+            Some(self.device.new_buffer(bytemuck::cast_slice(&data))?)
+        } else {
+            None
+        };
         let (ibuf, index_count) = match &geometry.index {
             Some(idx) if !idx.is_empty() => (
                 Some(self.device.new_buffer(bytemuck::cast_slice(idx))?),
@@ -917,6 +1240,7 @@ impl MetalRenderer {
                 _geometry: geometry.clone(),
                 version: geometry.geometry_version,
                 vertices: vbuf,
+                skin,
                 indices: ibuf,
                 index_count,
                 vertex_count,
@@ -927,9 +1251,25 @@ impl MetalRenderer {
         Ok(true)
     }
 
-    /// Ensure `texture` is on the GPU with a matching sampler. `true` if it uploaded.
-    fn ensure_texture(&mut self, texture: &Arc<Texture>) -> Result<bool, MetalError> {
-        let key = Arc::as_ptr(texture) as usize;
+    /// Upload `texture`, as colour or as data.
+    ///
+    /// `linear` asks for the bytes as they are, with no sRGB decode on sample.
+    /// Normal, metallic-roughness and occlusion maps are *quantities*, not
+    /// colours — the glTF spec says so in §3.9.2 — and decoding them through a
+    /// transfer curve corrupts them: the 0.5 that means "flat" in a normal map
+    /// comes out as 0.214, a tangent-space x of −0.57, so every flat texel
+    /// arrives steeply tilted. The wgpu loader learned this the hard way and
+    /// keeps two views of each image; this keeps two uploads, because a Metal
+    /// texture's pixel format is fixed when it is created.
+    ///
+    /// The two are cached separately, so an image used as both a colour map and
+    /// a data map gets one of each rather than whichever role asked first.
+    fn ensure_texture_as(
+        &mut self,
+        texture: &Arc<Texture>,
+        linear: bool,
+    ) -> Result<bool, MetalError> {
+        let key = texture_key(texture, linear);
         let sampler_key = SamplerKey::from_texture(texture);
         if !self.samplers.contains_key(&sampler_key) {
             let sampler = new_sampler(&self.device, sampler_key)?;
@@ -942,7 +1282,7 @@ impl MetalRenderer {
         }
         // An unsupported format is not fatal: the material falls back to its
         // flat colour, which is a great deal more useful than no frame at all.
-        let Ok(gpu) = upload_texture(&self.device, texture) else {
+        let Ok(gpu) = upload_texture_as(&self.device, texture, linear) else {
             return Ok(false);
         };
         self.textures.insert(
@@ -1100,11 +1440,14 @@ impl MetalRenderer {
                 stats.skipped += 1;
                 continue;
             };
-            let (vertices, indices, index_count, vertex_count) = (
+            // Everything needed from the cache entry, read out before anything
+            // borrows `self` mutably again.
+            let (vertices, indices, index_count, vertex_count, skin_buffer) = (
                 geom.vertices.id(),
                 geom.indices.as_ref().map(|b| b.id()),
                 geom.index_count,
                 geom.vertex_count,
+                geom.skin.as_ref().map(|b| b.id()),
             );
 
             let material = &item.material;
@@ -1114,6 +1457,11 @@ impl MetalRenderer {
                 && self.line_width > 0.0
                 && !layered_draw
                 && slim_lines_enabled();
+            // Both halves have to be true: a mesh with a skeleton whose
+            // geometry carries no weights has nothing to blend, and a geometry
+            // with weights and no skeleton has nothing to blend *through*.
+            // Read before `self.pipeline`, which borrows `self` mutably.
+            let is_skinned = item.bone_slot.is_some() && skin_buffer.is_some() && !layered_draw;
             let pipeline = match self.pipeline(PipelineKey {
                 point_sprites,
                 wide_lines: wide,
@@ -1124,6 +1472,11 @@ impl MetalRenderer {
                     && slim_lines_enabled(),
                 blend: item.transparent,
                 layered: layered_draw,
+                // Both halves have to be true: a mesh with a skeleton whose
+                // geometry carries no weights has nothing to blend, and a
+                // geometry with weights and no skeleton has nothing to blend
+                // *through*.
+                skinned: is_skinned,
                 // Only the layered path needs this, and naming it there costs a
                 // pipeline per topology — so leave it unspecified elsewhere.
                 topology: if layered_draw {
@@ -1206,6 +1559,30 @@ impl MetalRenderer {
                 0usize,
                 VB_INSTANCES,
             );
+            // Metal requires every resource a function declares to be bound,
+            // and `vs_skinned` declares both — so bind them whenever they
+            // exist, and fall back to the vertex buffer itself when they do
+            // not. The non-skinned vertex functions never read either index.
+            let skin_buffer = skin_buffer.unwrap_or(vertices);
+            let _: () = msg3(
+                encoder,
+                sel!("setVertexBuffer:offset:atIndex:"),
+                skin_buffer,
+                0usize,
+                VB_SKIN,
+            );
+            let bone_buffer = item
+                .bone_slot
+                .and_then(|i| self.transients[slot].get(i))
+                .map(|b| b.id())
+                .unwrap_or(self.identity_instance.id());
+            let _: () = msg3(
+                encoder,
+                sel!("setVertexBuffer:offset:atIndex:"),
+                bone_buffer,
+                0usize,
+                VB_BONES,
+            );
 
             let (texture, sampler) = self.material_texture(material);
             let _: () = msg2(
@@ -1214,6 +1591,82 @@ impl MetalRenderer {
                 texture,
                 0usize,
             );
+            // The extra slots share slot 0's sampler: they are the same surface
+            // at the same UVs, so a second sampler would only be a second thing
+            // to keep in step.
+            let (extra, present) = self.material_maps(material);
+            for (i, id) in extra.iter().enumerate() {
+                let _: () = msg2(
+                    encoder,
+                    sel!("setFragmentTexture:atIndex:"),
+                    id.unwrap_or(self.white.id()),
+                    i + 1,
+                );
+            }
+            let env = self.env_cube.as_ref().map(|(_, t)| t.id());
+            let _: () = msg2(
+                encoder,
+                sel!("setFragmentTexture:atIndex:"),
+                env.unwrap_or(self.black_cube.id()),
+                5usize,
+            );
+            // A mipmapped sampler for the cube: the environment is sampled by
+            // roughness across its own chain, and a sampler that cannot see
+            // past level 0 makes every surface a mirror.
+            let env_sampler = self
+                .samplers
+                .get(&SamplerKey {
+                    mag_linear: true,
+                    min_linear: true,
+                    mipmapped: true,
+                    wrap_s: 0,
+                    wrap_t: 0,
+                })
+                .map(|s| s.id())
+                .unwrap_or(sampler);
+            let _: () = msg2(
+                encoder,
+                sel!("setFragmentSamplerState:atIndex:"),
+                env_sampler,
+                1usize,
+            );
+            // The shadow map and its comparison sampler. Bound even when
+            // nothing casts, because Metal requires every declared resource to
+            // be bound and `shadow_factor` returns early on the flag anyway.
+            let shadow_tex = self
+                .shadow_map
+                .as_ref()
+                .map(|t| t.id())
+                .unwrap_or(self.empty_shadow.id());
+            let _: () = msg2(
+                encoder,
+                sel!("setFragmentTexture:atIndex:"),
+                shadow_tex,
+                6usize,
+            );
+            let shadow_samp = self
+                .shadow_sampler
+                .as_ref()
+                .map(|s| s.id())
+                .unwrap_or(env_sampler);
+            let _: () = msg2(
+                encoder,
+                sel!("setFragmentSamplerState:atIndex:"),
+                shadow_samp,
+                2usize,
+            );
+            let spot_tex = self
+                .spot_shadow_map
+                .as_ref()
+                .map(|t| t.id())
+                .unwrap_or(self.empty_shadow.id());
+            let _: () = msg2(encoder, sel!("setFragmentTexture:atIndex:"), spot_tex, 7usize);
+            let point_tex = self
+                .point_shadow_cube
+                .as_ref()
+                .map(|t| t.id())
+                .unwrap_or(self.empty_shadow_cube.id());
+            let _: () = msg2(encoder, sel!("setFragmentTexture:atIndex:"), point_tex, 8usize);
             let _: () = msg2(
                 encoder,
                 sel!("setFragmentSamplerState:atIndex:"),
@@ -1227,6 +1680,12 @@ impl MetalRenderer {
                 instanced.is_some(),
                 &item.geometry,
             );
+            draw_u.maps = present;
+            // 1.0: the raster path has no scene-level environment intensity —
+            // the cube carries its own levels — and the slot stays so one can
+            // be added without moving anything.
+            draw_u.map_params[2] = 1.0;
+            draw_u.map_params[3] = if env.is_some() { 1.0 } else { 0.0 };
             if wide {
                 // misc.y is the point size, which a line never uses — the quad
                 // path reads its width in pixels from the same slot.
@@ -1319,6 +1778,269 @@ impl MetalRenderer {
             .map(|s| s.id())
             .unwrap_or(NIL);
         (self.white.id(), sampler)
+    }
+
+    /// One uploaded texture, or `None` if it has not been uploaded yet.
+    ///
+    /// Separate from [`material_texture`](Self::material_texture) because the
+    /// extra slots have no fallback worth binding: a shader that is told the
+    /// slot is empty never samples it, so binding white there would only hide
+    /// an upload that did not happen.
+    fn slot_texture(&self, map: Option<&Arc<Texture>>, linear: bool) -> Option<Id> {
+        let map = map?;
+        let cached = self.textures.get(&texture_key(map, linear))?;
+        Some(cached.texture.id())
+    }
+
+    /// Draw every opaque triangle mesh into the shadow map, from the light.
+    ///
+    /// Transparent items are skipped: a depth buffer cannot represent partial
+    /// occlusion, so a glass panel would cast the shadow of a solid one. That
+    /// is three.js's behaviour too, and the alternative — a second pass with
+    /// alpha testing — is a lot of machinery for a case that usually wants no
+    /// shadow at all.
+    unsafe fn encode_shadow(
+        &mut self,
+        frame_u: &FrameUniforms,
+        items: &[DrawItem],
+        slot: usize,
+        map: Id,
+        slice: usize,
+        radial: bool,
+    ) -> Result<(), MetalError> {
+        let _pool = AutoreleasePool::new();
+        let chosen = if radial {
+            self.point_shadow_pipeline.as_ref()
+        } else {
+            self.shadow_pipeline.as_ref()
+        };
+        let Some(pipeline) = chosen else {
+            return Ok(());
+        };
+        let pipeline = pipeline.id();
+        let cmd = unsafe { self.device.command_buffer() };
+        if cmd.is_null() {
+            return Err(MetalError::NoCommandQueue);
+        }
+        let desc: Id = unsafe { msg0(class!("MTLRenderPassDescriptor"), sel!("renderPassDescriptor")) };
+        unsafe {
+            let depth: Id = msg0(desc, sel!("depthAttachment"));
+            let _: () = msg1(depth, sel!("setTexture:"), map);
+            let _: () = msg1(depth, sel!("setLoadAction:"), load_action::CLEAR);
+            let _: () = msg1(depth, sel!("setStoreAction:"), store_action::STORE);
+            let _: () = msg1(depth, sel!("setClearDepth:"), 1.0f64);
+            // Which cube face, for a point light. Zero for the flat maps.
+            let _: () = msg1(depth, sel!("setSlice:"), slice as NSUInteger);
+        }
+        let encoder: Id = unsafe { msg1(cmd, sel!("renderCommandEncoderWithDescriptor:"), desc) };
+        if encoder.is_null() {
+            return Err(MetalError::NoCommandQueue);
+        }
+        unsafe {
+            let _: () = msg1(encoder, sel!("setRenderPipelineState:"), pipeline);
+            // Forward-Z, write on: the ordinary depth state the opaque pass
+            // uses, which is exactly what a shadow map wants.
+            let _: () = msg1(encoder, sel!("setDepthStencilState:"), self.depth_states[0].id());
+            set_bytes(encoder, true, frame_u, VB_FRAME);
+            if radial {
+                // `fs_shadow_point` reads the light's position and radius from
+                // the same uniform, and the fragment stage has its own binding
+                // table — binding it for the vertex stage alone leaves the
+                // fragment reading zeros, which writes a depth of 0 everywhere
+                // and shadows nothing.
+                set_bytes(encoder, false, frame_u, VB_FRAME);
+            }
+        }
+
+        for item in items {
+            // Per-object, matching the wgpu path: `Object3D::cast_shadow` is
+            // off by default and a caster has to say so. Shadowing everything
+            // opaque instead looks right in a test scene and wrong in a real
+            // one, where the floor casts onto itself.
+            if !item.cast_shadow || item.transparent {
+                continue;
+            }
+            if item.primitive != primitive::TRIANGLE {
+                continue;
+            }
+            let key = Arc::as_ptr(&item.geometry) as usize;
+            let Some(geom) = self.geometries.get(&key) else {
+                continue;
+            };
+            let (vertices, indices, index_count, vertex_count, skin) = (
+                geom.vertices.id(),
+                geom.indices.as_ref().map(|b| b.id()),
+                geom.index_count,
+                geom.vertex_count,
+                geom.skin.as_ref().map(|b| b.id()),
+            );
+            let instances = item
+                .instance_slot
+                .and_then(|i| self.transients[slot].get(i))
+                .map(|b| b.id())
+                .unwrap_or(self.identity_instance.id());
+            let bones = item
+                .bone_slot
+                .and_then(|i| self.transients[slot].get(i))
+                .map(|b| b.id())
+                .unwrap_or(self.identity_instance.id());
+            let mut draw_u =
+                draw_uniforms(item, false, item.instance_slot.is_some(), &item.geometry);
+            // `maps.w == 2` is how `vs_shadow` is told to skin; the fragment
+            // stage never sees this uniform, so the slot is free.
+            if item.bone_slot.is_some() && skin.is_some() {
+                draw_u.maps[3] = 2;
+            }
+            unsafe {
+                let _: () = msg3(encoder, sel!("setVertexBuffer:offset:atIndex:"), vertices, 0usize, 0usize);
+                let _: () = msg3(encoder, sel!("setVertexBuffer:offset:atIndex:"), instances, 0usize, VB_INSTANCES);
+                let _: () = msg3(encoder, sel!("setVertexBuffer:offset:atIndex:"), skin.unwrap_or(vertices), 0usize, VB_SKIN);
+                let _: () = msg3(encoder, sel!("setVertexBuffer:offset:atIndex:"), bones, 0usize, VB_BONES);
+                set_bytes(encoder, true, &draw_u, VB_DRAW);
+                let n = item.instance_count.max(1) as NSUInteger;
+                match indices {
+                    Some(ibuf) if index_count > 0 => {
+                        let _: () = msg6(
+                            encoder,
+                            sel!(
+                                "drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:instanceCount:"
+                            ),
+                            primitive::TRIANGLE,
+                            index_count as NSUInteger,
+                            index_type::UINT32,
+                            ibuf,
+                            0usize,
+                            n,
+                        );
+                    }
+                    _ => {
+                        let _: () = msg4(
+                            encoder,
+                            sel!("drawPrimitives:vertexStart:vertexCount:instanceCount:"),
+                            primitive::TRIANGLE,
+                            0usize,
+                            vertex_count as NSUInteger,
+                            n,
+                        );
+                    }
+                }
+            }
+        }
+        unsafe {
+            let _: () = msg0(encoder, sel!("endEncoding"));
+            let _: () = msg0(cmd, sel!("commit"));
+        }
+        Ok(())
+    }
+
+    /// Allocate the shadow map, its comparison sampler and the depth-only
+    /// pipeline, at `size` — rebuilding only when the size changes.
+    ///
+    /// `map_size` used to be a field the wgpu path read and discarded; the
+    /// failure mode there is worse than not offering it, since the caller sets
+    /// 4096, sees no error and gets whatever was allocated. It is read here.
+    fn ensure_shadow_map(&mut self, size: u32) -> Result<(), MetalError> {
+        let size = size.clamp(256, 8192);
+        if self.shadow_map.is_some() && self.shadow_size == size {
+            return Ok(());
+        }
+        self.shadow_map = Some(crate::metal::resources::new_shadow_map(&self.device, size)?);
+        self.shadow_size = size;
+        if self.shadow_sampler.is_none() {
+            self.shadow_sampler = Some(crate::metal::resources::shadow_sampler(&self.device)?);
+        }
+        if self.shadow_pipeline.is_none() {
+            self.shadow_pipeline = Some(crate::metal::resources::shadow_pipeline(&self.device)?);
+        }
+        Ok(())
+    }
+
+    /// Allocate the spot caster's map, at `size`.
+    fn ensure_spot_shadow_map(&mut self, size: u32) -> Result<(), MetalError> {
+        let size = size.clamp(256, 8192);
+        if self.spot_shadow_map.is_some() {
+            return Ok(());
+        }
+        self.spot_shadow_map = Some(crate::metal::resources::new_shadow_map(&self.device, size)?);
+        self.ensure_shadow_support()
+    }
+
+    /// Allocate the point caster's cube.
+    ///
+    /// Fixed at 512 a face, matching the wgpu path. Six faces make a cube
+    /// expensive to grow — 1024 is four times the memory and four times the
+    /// fill — and a point light's shadow is usually small in frame.
+    fn ensure_point_shadow_cube(&mut self) -> Result<(), MetalError> {
+        if self.point_shadow_cube.is_some() {
+            return Ok(());
+        }
+        self.point_shadow_cube = Some(crate::metal::resources::new_shadow_cube(&self.device, 512)?);
+        if self.point_shadow_pipeline.is_none() {
+            self.point_shadow_pipeline =
+                Some(crate::metal::resources::point_shadow_pipeline(&self.device)?);
+        }
+        self.ensure_shadow_support()
+    }
+
+    /// The pipeline and comparison sampler every shadow pass shares.
+    fn ensure_shadow_support(&mut self) -> Result<(), MetalError> {
+        if self.shadow_sampler.is_none() {
+            self.shadow_sampler = Some(crate::metal::resources::shadow_sampler(&self.device)?);
+        }
+        if self.shadow_pipeline.is_none() {
+            self.shadow_pipeline = Some(crate::metal::resources::shadow_pipeline(&self.device)?);
+        }
+        Ok(())
+    }
+
+    /// Upload `scene.environment` if it is not the one already held.
+    ///
+    /// `scene.environment_cube_rt` — a live cube render target, fed by a
+    /// `CubeCamera` — is not handled: it lives in the wgpu renderer's own
+    /// resource table and this backend has no view of it. A scene using one
+    /// gets no environment here rather than a wrong one.
+    fn ensure_environment(&mut self, scene: &Scene) {
+        let Some(cube) = scene.environment.as_ref() else {
+            self.env_cube = None;
+            return;
+        };
+        let key = Arc::as_ptr(cube) as usize;
+        if matches!(&self.env_cube, Some((k, _)) if *k == key) {
+            return;
+        }
+        match crate::metal::resources::upload_cube(&self.device, cube) {
+            Ok(tex) => self.env_cube = Some((key, tex)),
+            Err(e) => {
+                // A scene that cannot have its environment uploaded is better
+                // rendered without one than not at all, but silently is how
+                // this backend earned a reputation for being broken.
+                eprintln!("threers: metal environment upload failed: {e:?}");
+                self.env_cube = None;
+            }
+        }
+    }
+
+    /// The extra material maps, in the order the shader binds them:
+    /// emissive, normal, metallic-roughness, ambient occlusion.
+    ///
+    /// glTF packs roughness and metalness into one image — roughness in green,
+    /// metalness in blue — and `threers` keeps them as separate slots because
+    /// three.js does. When both point at the same texture, which is what a glTF
+    /// load produces, one binding carries both. When they differ, roughness
+    /// wins the slot and metalness falls back to its scalar, because there is
+    /// no third channel to put it in and the alternative is a sixth binding for
+    /// a case no real asset produces.
+    fn material_maps(&self, material: &Material) -> ([Option<Id>; 4], [u32; 4]) {
+        let slots = material.texture_slots();
+        let mr = slots.roughness_map.as_ref().or(slots.metalness_map.as_ref());
+        let ids = [
+            self.slot_texture(slots.emissive_map.as_ref(), false),
+            self.slot_texture(slots.normal_map.as_ref(), true),
+            self.slot_texture(mr, true),
+            self.slot_texture(slots.ao_map.as_ref(), true),
+        ];
+        let present = std::array::from_fn(|i| ids[i].is_some() as u32);
+        (ids, present)
     }
 
     /// Build the `MTLRenderPassDescriptor` for one view. Autoreleased.
@@ -1520,6 +2242,72 @@ pub(crate) fn normal_matrix(m: &Matrix4) -> [f32; 16] {
 }
 
 /// Per-draw uniforms for one item.
+/// Negate clip-space x.
+///
+/// Cube maps are defined left-handed in every graphics API, and
+/// [`Matrix4::look_at`] is right-handed — so rendering a face with it lays the
+/// texels down mirrored against what the sampler will later expect. Each face
+/// still looks perfectly reasonable on its own, which is what makes this hard
+/// to see: the shadow simply lands on the wrong side.
+///
+/// *Which* axis is not a guess. `tests/shadow_fixtures.rs` measures how far the
+/// shadow lands from where the geometry puts it, in pixels:
+///
+/// ```text
+///            none      x       y      xy
+///   wgpu     79.2   133.1     2.1   107.0
+///   metal   107.0     2.1   133.1    79.2
+/// ```
+///
+/// This path wants x and the wgpu one wants y, and the two tables are each
+/// other's shifted by one flip — their framebuffer-y conventions are opposite,
+/// so the correction is too. Anything but the 2.1 is a shadow of something
+/// that is not there.
+fn mirror_clip_x(m: Matrix4) -> Matrix4 {
+    let mut e = m.elements;
+    // Column-major: row 0 is elements 0, 4, 8, 12.
+    e[0] = -e[0];
+    e[4] = -e[4];
+    e[8] = -e[8];
+    e[12] = -e[12];
+    Matrix4 { elements: e }
+}
+
+/// Cache key for an uploaded texture: the image, and which transfer curve it
+/// was uploaded under. See [`MetalRenderer::ensure_texture_as`].
+/// Per-vertex joint indices and weights, as the shader wants them.
+///
+/// Both attributes are four floats a vertex in `BufferGeometry` — three.js
+/// stores joint *indices* as floats too — so this is a repack rather than a
+/// conversion. Vertices past the end of either attribute are bound rigidly to
+/// bone 0, which is what an unweighted vertex means.
+fn build_skin(geometry: &BufferGeometry, vertex_count: usize) -> Vec<SkinVertex> {
+    use crate::core::BufferAttribute;
+    let joints = geometry.get_attribute("joint");
+    let weights = geometry.get_attribute("weight");
+    (0..vertex_count)
+        .map(|i| {
+            let take = |a: Option<&BufferAttribute>, fallback: [f32; 4]| -> [f32; 4] {
+                match a {
+                    Some(a) if (i + 1) * 4 <= a.array.len() => {
+                        [a.array[i * 4], a.array[i * 4 + 1], a.array[i * 4 + 2], a.array[i * 4 + 3]]
+                    }
+                    _ => fallback,
+                }
+            };
+            SkinVertex {
+                joints: take(joints, [0.0; 4]),
+                weights: take(weights, [1.0, 0.0, 0.0, 0.0]),
+            }
+        })
+        .collect()
+}
+
+fn texture_key(texture: &Arc<Texture>, linear: bool) -> usize {
+    // The pointer is 16-byte aligned, so the low bit is free to carry the role.
+    (Arc::as_ptr(texture) as usize) | linear as usize
+}
+
 fn draw_uniforms(
     item: &DrawItem,
     has_map: bool,
@@ -1553,6 +2341,15 @@ fn draw_uniforms(
             material.toon_steps() as f32,
         ],
         uv_transform: [offset.x, offset.y, repeat.x, repeat.y],
+        // `maps` is filled in at bind time, where the uploaded set is known.
+        maps: [0; 4],
+        object: [item.receive_shadow as u32, 0, 0, 0],
+        map_params: [
+            material.normal_scale().x,
+            material.ao_intensity(),
+            1.0,
+            0.0,
+        ],
         misc: [
             rotation,
             material.point_size(),
@@ -1768,12 +2565,25 @@ mod tests {
         assert_eq!(std::mem::size_of::<PointLightGpu>(), 48);
         assert_eq!(std::mem::size_of::<SpotLightGpu>(), 64);
         assert_eq!(std::mem::size_of::<HemiLightGpu>(), 48);
-        assert_eq!(std::mem::size_of::<DrawUniforms>(), 240);
+        assert_eq!(
+            std::mem::size_of::<DrawUniforms>(),
+            // `model` and `normal_mat`, then ten float4/uint4 rows — the same
+            // twelve members `struct Draw` declares in `shaders.metal`.
+            64 + 64 + 10 * 16
+        );
         assert_eq!(
             std::mem::size_of::<FrameUniforms>(),
             // Per view: view_proj, view, camera_pos. Then 6 float4s of frame
-            // state, then the light arrays.
-            MAX_VIEWS * (64 + 64 + 16) + 16 * 6 + 4 * 32 + 8 * 48 + 4 * 64 + 2 * 48
+            // state, the three shadow casters, then the light arrays.
+            MAX_VIEWS * (64 + 64 + 16)
+                + 16 * 6
+                + (64 + 16) // directional: world→light clip, then its params
+                + (64 + 16) // spot: the same pair
+                + 16 // point: position and radius
+                + 4 * 32
+                + 8 * 48
+                + 4 * 64
+                + 2 * 48
         );
         // Both fit the 4 KB `setVertexBytes` limit.
         assert!(std::mem::size_of::<FrameUniforms>() <= 4096);

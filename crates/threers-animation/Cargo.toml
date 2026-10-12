@@ -2,14 +2,17 @@
 name = "threers-animation"
 version = "0.0.1"
 edition = "2021"
+# Matches `threers`, which this depends on.
+rust-version = "1.87"
 authors = ["Eugene Hauptmann"]
-description = "Easing, tweens, springs, timelines, cinematic camera animation, and blending an animated pose into a simulated one, for threers"
+description = "Tweens, springs, timelines and cinematic camera animation for threers — fly, orbit, paths, shake and shot lists, plus blending an animated pose into a simulated one"
 license = "MIT"
+readme = "README.md"
 repository = "https://github.com/eugenehp/threers"
 homepage = "https://github.com/eugenehp/threers"
 documentation = "https://docs.rs/threers-animation"
-# Not part of the 0.0.5 release; see docs/releasing.md.
-publish = false
+keywords = ["animation", "tween", "easing", "camera", "three-js"]
+categories = ["game-development", "graphics", "multimedia"]
 
 [features]
 default = []
@@ -17,6 +20,12 @@ default = []
 # because easing, tweens, springs and timelines need no simulation at all.
 physics = ["dep:threers-physics"]
 
+# The only example that needs the solver. Without this cargo builds it for a
+# bare `--all-targets` and it fails on the missing `threers_physics`.
+[[example]]
+name = "anim_physics_blend"
+required-features = ["physics"]
+
 [dependencies]
-threers = { path = "../.." }
-threers-physics = { path = "../threers-physics", optional = true }
+threers = { path = "../..", version = "0.0.6" }
+threers-physics = { path = "../threers-physics", version = "0.0.2", optional = true }

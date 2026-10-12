@@ -3,8 +3,8 @@
 //! draw on screen over a live render.
 //!
 //! Pure Rust with no dependencies and no OS/process/filesystem use, so it
-//! builds and runs on `wasm32` as well as native (mirroring
-//! [`crate::codec`]).
+//! builds and runs on `wasm32` as well as native (mirroring the `codec`
+//! module, behind the `native-codec` feature).
 //!
 //! ```
 //! use threers::captions::{CaptionTrack, CaptionPainter};
@@ -30,8 +30,8 @@
 //! | [`CaptionPainter`] | wraps text and composites it into RGBA pixels |
 //! | [`CaptionOverlay`] | caches a frame-sized overlay for on-screen drawing |
 //!
-//! Video export wires these in through
-//! [`VideoOptions::captions`](crate::video::VideoOptions::captions); the wgpu
+//! Video export wires these in through `VideoOptions::captions` (the `video`
+//! feature); the wgpu
 //! renderer draws them through
 //! [`Renderer::draw_caption_overlay`](crate::renderer::Renderer::draw_caption_overlay).
 

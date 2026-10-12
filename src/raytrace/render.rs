@@ -242,7 +242,7 @@ impl RaytraceRenderer {
 
     /// Intersect a world-space AABB along a ray.
     ///
-    /// Same as [`Raycaster::intersect_box`] — exposed on the renderer so path
+    /// Same as [`Raycaster::intersect_box`](crate::core::Raycaster::intersect_box) — exposed on the renderer so path
     /// tracing and raster picking share one intersection implementation.
     pub fn intersect_box(
         origin: Vector3,

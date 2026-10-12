@@ -5,7 +5,12 @@ pub mod deflate;
 #[cfg(feature = "usd")]
 pub mod usd;
 mod exr;
-mod fbx;
+pub mod alembic;
+pub mod draco;
+pub mod fbx;
+pub mod gltf_write;
+pub mod ktx2;
+pub mod meshopt;
 mod gltf;
 mod hdr;
 mod json;
@@ -17,7 +22,14 @@ mod xml;
 
 pub use collada::{ColladaError, ColladaLoader};
 pub use exr::{ExrError, ExrLoader};
-pub use fbx::{FbxError, FbxLoader};
+pub use fbx::{FbxError, FbxLoader, FbxScene};
+pub use alembic::{AlembicError, Archive as AlembicArchive, PolyMesh};
+pub use draco::{DracoError, Header as DracoHeader};
+pub use ktx2::{Ktx2, Ktx2Error};
+pub use meshopt::MeshoptError;
+pub use gltf_write::{
+    geometry_to_glb as gltf_geometry_to_glb, scene_to_glb, scene_to_gltf,    GltfExportOptions,
+};
 pub use gltf::{add_to_scene as gltf_add_to_scene, GltfError, GltfImages, GltfLoader, GltfScene};
 pub use hdr::{HdrError, HdrLoader};
 pub use obj::ObjLoader;

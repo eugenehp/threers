@@ -49,6 +49,43 @@ thread_local! {
 }
 
 /// GPU readback of a render-target region into a tight byte vec.
+/// Hand control back to the browser for one turn of the event loop.
+async fn yield_to_event_loop() {
+    if let Some(window) = web_sys::window() {
+        let promise = js_sys::Promise::new(&mut |resolve, _reject| {
+            let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, 0);
+        });
+        let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+    }
+}
+
+/// Wait for a buffer mapping to complete without blocking the event loop.
+///
+/// `PollType::wait_indefinitely()` blocks the calling thread, and in a browser
+/// that is the same thread which would deliver the mapping callback — so the
+/// wait can never end. It went unnoticed because WebGPU's wgpu backend makes
+/// `poll` a no-op and resolves the mapping through a JS promise; on the WebGL2
+/// backend, which goes through wgpu-core, polling really does wait and a
+/// read-back hung the page.
+///
+/// So: poll without blocking, yield, and let the browser deliver the callback.
+/// The cap is a liveness bound rather than a deadline — it is set well past any
+/// plausible read-back so that a loaded machine cannot turn a slow frame into a
+/// spurious failure, while a mapping that genuinely never completes still ends.
+async fn await_buffer_mapping(
+    device: &wgpu::Device,
+    mut rx: futures_channel::oneshot::Receiver<Result<(), wgpu::BufferAsyncError>>,
+) -> Result<(), String> {
+    for _ in 0..20_000 {
+        let _ = device.poll(wgpu::PollType::Poll);
+        if let Ok(Some(res)) = rx.try_recv() {
+            return res.map_err(|e| format!("buffer map failed: {e:?}"));
+        }
+        yield_to_event_loop().await;
+    }
+    Err("buffer mapping never completed".to_string())
+}
+
 async fn read_texture_region(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -105,10 +142,7 @@ async fn read_texture_region(
     buffer_slice.map_async(wgpu::MapMode::Read, move |res| {
         let _ = tx.send(res);
     });
-    let _ = device.poll(wgpu::PollType::wait_indefinitely());
-    rx.await
-        .map_err(|_| "readback channel dropped".to_string())?
-        .map_err(|e| format!("buffer map failed: {e:?}"))?;
+    await_buffer_mapping(device, rx).await?;
     let mapped = buffer_slice.get_mapped_range().expect("buffer range is mapped");
     let mut out = Vec::with_capacity((w * h * bytes_per_pixel) as usize);
     for row in 0..h {
@@ -198,26 +232,154 @@ static NEXT_RT_ID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::
 thread_local! {
     static SHARED_BROWSER_GPU: std::cell::RefCell<Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>)>> =
         const { std::cell::RefCell::new(None) };
+    /// The instance every renderer in this tab shares.
+    ///
+    /// A `wgpu::Device` belongs to the instance that created it, so pairing a
+    /// cached device with a surface from a *different* instance is invalid — it
+    /// shows up as `Cannot get non-existent resource DeviceId`, which says
+    /// nothing about the cause. The device is cached below and the backend
+    /// discovery makes a fresh instance per attempt, so the instance that won
+    /// has to be kept alongside it.
+    static SHARED_BROWSER_INSTANCE: std::cell::RefCell<Option<wgpu::Instance>> =
+        const { std::cell::RefCell::new(None) };
+    /// Which backend the adapter turned out to be, for [`WebRenderer::backend`].
+    ///
+    /// Worth surfacing rather than inferring: on WebGL2 several effects switch
+    /// themselves off, and without a way to ask, the only symptom is that bloom
+    /// and ambient occlusion quietly do nothing.
+    static SHARED_BROWSER_BACKEND: std::cell::RefCell<Option<wgpu::Backend>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(target_arch = "wasm32")]
+/// Open a GPU context on `canvas`, preferring WebGPU and falling back to WebGL2.
+///
+/// Two things here are forced by the browser rather than chosen.
+///
+/// **One instance per backend.** On wasm, `wgpu::Instance::new` commits to a
+/// single context implementation: ask for `BROWSER_WEBGPU` and you get the
+/// WebGPU one, which contains no GL whatever the Cargo features say. So
+/// `BROWSER_WEBGPU | GL` does not mean "try both" — it means WebGPU, and on a
+/// browser without it the adapter request fails claiming
+/// `gl support not compiled in`, which is not what has gone wrong.
+///
+/// **The canvas is not touched until a backend is settled.** A canvas hands out
+/// exactly one kind of context for its whole life: once `getContext("webgpu")`
+/// has been called, `getContext("webgl2")` on that same canvas returns null
+/// forever. Creating a surface to test WebGPU therefore destroys the fallback it
+/// was testing for — the GL attempt then fails with `canvas already in use`.
+/// WebGPU can enumerate adapters with no surface at all, so it is asked first
+/// and the surface is created only once an adapter has answered.
+pub async fn open_browser_gpu(
+    canvas: &web_sys::HtmlCanvasElement,
+) -> Result<(wgpu::Instance, wgpu::Surface<'static>, wgpu::Adapter), JsValue> {
+    // A second canvas reuses the instance that already won — but only on
+    // WebGPU, where an adapter is not tied to a canvas.
+    //
+    // On WebGL2 it cannot: a WebGL2 context *belongs* to its canvas, so an
+    // instance that has already made a surface for one canvas cannot serve
+    // another. Reusing it gets as far as `Surface::configure` and fails there
+    // with `Surface does not support the adapter's queue family`, which does not
+    // mention canvases at all. So on that backend every canvas gets its own
+    // instance, surface and device, and the sharing below is skipped.
+    let shareable = !matches!(
+        SHARED_BROWSER_BACKEND.with(|b| *b.borrow()),
+        Some(wgpu::Backend::Gl)
+    );
+    if let Some(instance) =
+        SHARED_BROWSER_INSTANCE.with(|i| if shareable { i.borrow().clone() } else { None })
+    {
+        let surface = instance
+            .create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone()))
+            .map_err(|e| JsValue::from_str(&format!("surface: {e:?}")))?;
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::default(),
+                compatible_surface: Some(&surface),
+                force_fallback_adapter: false,
+                apply_limit_buckets: false,
+            })
+            .await
+            .map_err(|e| JsValue::from_str(&format!("no adapter: {e}")))?;
+        return Ok((instance, surface, adapter));
+    }
+
+    let already = SHARED_BROWSER_BACKEND.with(|b| *b.borrow());
+    let mut why = String::new();
+
+    if !matches!(already, Some(wgpu::Backend::Gl)) {
+        // wgpu 30 dropped `Default` here; the display handle is only consulted
+        // by GLES/Wayland, not Vulkan, Metal or DX12.
+        let mut d = wgpu::InstanceDescriptor::new_without_display_handle();
+        d.backends = wgpu::Backends::BROWSER_WEBGPU;
+        let instance = wgpu::Instance::new(d);
+        match instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::default(),
+                compatible_surface: None,
+                force_fallback_adapter: false,
+                apply_limit_buckets: false,
+            })
+            .await
+        {
+            Ok(adapter) => {
+                let surface = instance
+                    .create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone()))
+                    .map_err(|e| JsValue::from_str(&format!("webgpu surface: {e:?}")))?;
+                SHARED_BROWSER_BACKEND
+                    .with(|b| *b.borrow_mut() = Some(adapter.get_info().backend));
+                SHARED_BROWSER_INSTANCE.with(|i| *i.borrow_mut() = Some(instance.clone()));
+                return Ok((instance, surface, adapter));
+            }
+            Err(e) => why = format!("webgpu: {e}"),
+        }
+    }
+
+    if cfg!(feature = "webgl") && !matches!(already, Some(wgpu::Backend::BrowserWebGpu)) {
+        let mut d = wgpu::InstanceDescriptor::new_without_display_handle();
+        d.backends = wgpu::Backends::GL;
+        let instance = wgpu::Instance::new(d);
+        // GL is the other way round: a WebGL2 context *is* the canvas, so the
+        // surface has to exist before there is an adapter to ask about.
+        let surface = instance
+            .create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone()))
+            .map_err(|e| JsValue::from_str(&format!("{why}; webgl2 surface: {e:?}")))?;
+        match instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::default(),
+                compatible_surface: Some(&surface),
+                force_fallback_adapter: false,
+                apply_limit_buckets: false,
+            })
+            .await
+        {
+            Ok(adapter) => {
+                // Deliberately not cached: see the note above about WebGL2
+                // contexts belonging to their canvas.
+                SHARED_BROWSER_BACKEND
+                    .with(|b| *b.borrow_mut() = Some(adapter.get_info().backend));
+                return Ok((instance, surface, adapter));
+            }
+            Err(e) => why = format!("{why}; webgl2: {e}"),
+        }
+    }
+
+    Err(JsValue::from_str(&format!("no adapter: {why}")))
 }
 
 #[cfg(target_arch = "wasm32")]
 async fn acquire_browser_gpu(
-    instance: &wgpu::Instance,
-    surface: &wgpu::Surface<'_>,
+    adapter: &wgpu::Adapter,
 ) -> Result<(Arc<wgpu::Device>, Arc<wgpu::Queue>), JsValue> {
-    if let Some(pair) = SHARED_BROWSER_GPU.with(|g| g.borrow().clone()) {
-        return Ok(pair);
+    // Shared across canvases on WebGPU, where `requestAdapter` + `requestDevice`
+    // dominate cold start. Not on WebGL2: the device belongs to an instance that
+    // belongs to a canvas, so each canvas pays for its own.
+    let shareable = adapter.get_info().backend != wgpu::Backend::Gl;
+    if shareable {
+        if let Some(pair) = SHARED_BROWSER_GPU.with(|g| g.borrow().clone()) {
+            return Ok(pair);
+        }
     }
-
-    let adapter = instance
-        .request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::default(),
-            compatible_surface: Some(surface),
-            force_fallback_adapter: false,
-            apply_limit_buckets: false,
-        })
-        .await
-        .map_err(|e| JsValue::from_str(&format!("no adapter: {e}")))?;
 
     // Request what the adapter actually offers rather than a floor.
     //
@@ -242,7 +404,9 @@ async fn acquire_browser_gpu(
         .map_err(|e| JsValue::from_str(&format!("device: {e:?}")))?;
 
     let pair = (Arc::new(device), Arc::new(queue));
-    SHARED_BROWSER_GPU.with(|g| *g.borrow_mut() = Some(pair.clone()));
+    if shareable {
+        SHARED_BROWSER_GPU.with(|g| *g.borrow_mut() = Some(pair.clone()));
+    }
     Ok(pair)
 }
 
@@ -309,30 +473,12 @@ impl WebRenderer {
         let width = canvas.width().max(1);
         let height = canvas.height().max(1);
 
-        let instance = {
-            // wgpu 30 dropped `Default` here; the display handle is only
-            // consulted by GLES/Wayland, not Vulkan, Metal or DX12.
-            let mut d = wgpu::InstanceDescriptor::new_without_display_handle();
-            d.backends = wgpu::Backends::BROWSER_WEBGPU;
-            wgpu::Instance::new(d)
-        };
-
-        let target = wgpu::SurfaceTarget::Canvas(canvas);
-        let surface = instance
-            .create_surface(target)
-            .map_err(|e| JsValue::from_str(&format!("surface: {e:?}")))?;
-
-        let (device, queue) = acquire_browser_gpu(&instance, &surface).await?;
-
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::default(),
-                compatible_surface: Some(&surface),
-                force_fallback_adapter: false,
-                apply_limit_buckets: false,
-            })
-            .await
-            .map_err(|e| JsValue::from_str(&format!("no adapter: {e}")))?;
+        // The instance is not kept: `Surface` and `Device` hold their own handles
+        // to the context, and the WebGPU instance that wins is cached in
+        // `SHARED_BROWSER_INSTANCE` for the next canvas. Bound rather than
+        // discarded so it outlives the device creation below.
+        let (_instance, surface, adapter) = open_browser_gpu(&canvas).await?;
+        let (device, queue) = acquire_browser_gpu(&adapter).await?;
 
         let surface_caps = surface.get_capabilities(&adapter);
         let surface_format = surface_caps
@@ -391,9 +537,14 @@ impl WebRenderer {
     /// the intent than clipping.
     #[wasm_bindgen(js_name = setToneMapping)]
     pub fn set_tone_mapping(&mut self, mode: u32, exposure: f32) {
+        // three.js's constants: 0 NoToneMapping, 1 Linear, 4 ACESFilmic,
+        // 6 AgX, 7 Neutral. 2 (Reinhard) and 3 (Cineon) have no curve here and
+        // fall through to linear, as they always have.
         let mapping = match mode {
             0 => crate::ToneMapping::None,
             4 => crate::ToneMapping::AcesFilmic,
+            6 => crate::ToneMapping::AgX,
+            7 => crate::ToneMapping::Neutral,
             _ => crate::ToneMapping::Linear,
         };
         self.renderer.set_tone_mapping(mapping, exposure);
@@ -532,12 +683,12 @@ impl WebRenderer {
             buffer_slice.map_async(wgpu::MapMode::Read, move |res| {
                 let _ = tx.send(res);
             });
-            // Pump the device until the map completes. On the web backend this is
-            // a no-op (mapping is satisfied by the browser when the queue drains).
-            let _ = device.poll(wgpu::PollType::wait_indefinitely());
-            rx.await
-                .map_err(|_| JsValue::from_str("readback channel dropped"))?
-                .map_err(|e| JsValue::from_str(&format!("buffer map failed: {e:?}")))?;
+            // Pump the device until the map completes, yielding between polls:
+            // blocking here would starve the callback. See
+            // `await_buffer_mapping`.
+            await_buffer_mapping(&device, rx)
+                .await
+                .map_err(|e| JsValue::from_str(&e))?;
             // Copy the mapped (possibly padded) range into a tight RGBA byte vec.
             let mapped = buffer_slice.get_mapped_range().expect("buffer range is mapped");
             let mut out = Vec::with_capacity((w * h * bytes_per_pixel) as usize);
@@ -901,6 +1052,34 @@ impl WebRenderer {
                 self.surface.configure(&self.device, &self.config);
             }
         }
+    }
+
+    /// Which backend this renderer got: `"webgpu"`, `"gl"`, or the backend's
+    /// own name on other targets.
+    ///
+    /// Worth asking. On `"gl"` — WebGL2 — there is no compute stage, so bloom,
+    /// ambient occlusion and the packed post chain switch themselves off. They
+    /// do it quietly, because the alternative is refusing to draw at all, and
+    /// without this there is no way to tell that from a scene that simply has
+    /// no bloom in it.
+    pub fn backend(&self) -> String {
+        SHARED_BROWSER_BACKEND
+            .with(|b| *b.borrow())
+            .map(|b| match b {
+                wgpu::Backend::BrowserWebGpu => "webgpu".to_string(),
+                wgpu::Backend::Gl => "gl".to_string(),
+                other => format!("{other:?}").to_lowercase(),
+            })
+            .unwrap_or_else(|| "unknown".to_string())
+    }
+
+    /// Whether this device can run compute passes.
+    ///
+    /// False on WebGL2, and the reason the compute-backed effects are
+    /// unavailable there.
+    #[wasm_bindgen(js_name = supportsCompute)]
+    pub fn supports_compute(&self) -> bool {
+        crate::renderer::caps::supports_compute(&self.device)
     }
 
     pub fn render(&mut self, scene: &mut WebScene, camera: &WebCamera) {
@@ -2480,6 +2659,143 @@ impl WebMaterial {
             crate::Material::Toon(m) => m.side = side,
             // Sky always uses BackSide; setting from JS is a no-op (already 1).
             _ => {}
+        }
+    }
+}
+
+/// A custom-shader material, from JavaScript.
+///
+/// three.js's `ShaderMaterial` is one of the most-used classes in the library
+/// and this had no counterpart at all, so every custom shader in the crate was
+/// reachable from Rust and from nowhere else — which for a package that ships
+/// to npm is most of the audience.
+///
+/// The WGSL contract is the one documented on
+/// [`crate::ShaderMaterial`]: a fragment defining
+/// `@fragment fn fs_main(in: VsOut) -> @location(0) vec4<f32>`, optionally a
+/// vertex stage defining `@vertex fn vs_custom`, both compiled against the
+/// renderer's preamble.
+///
+/// ```js
+/// const m = new THREE.ShaderMaterial(`
+///   @fragment
+///   fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
+///     let tint = u_data.data[0].rgb;
+///     return vec4<f32>(framebuffer_encode(apply_tone_mapping(tint)), 1.0);
+///   }
+/// `);
+/// m.setData([1.0, 0.3, 0.1, 1.0]);
+/// scene.add(new THREE.Mesh(geometry, m.material()));
+/// ```
+///
+/// On WebGL2 there are no storage buffers, so read the storage slots through
+/// `s0(i)`/`s1(i)`/`s2(i)` rather than `u_s0[i]` — those are defined on every
+/// backend and fall back to a texture where they have to.
+#[wasm_bindgen]
+pub struct WebShaderMaterial {
+    inner: crate::ShaderMaterial,
+}
+
+#[wasm_bindgen]
+impl WebShaderMaterial {
+    /// `fragment` is WGSL defining `@fragment fn fs_main`.
+    #[wasm_bindgen(constructor)]
+    pub fn new(fragment: &str) -> WebShaderMaterial {
+        WebShaderMaterial {
+            inner: crate::ShaderMaterial::new(fragment),
+        }
+    }
+
+    /// WGSL defining `@vertex fn vs_custom(in: VsIn, ...) -> VsOut`.
+    ///
+    /// For anything whose position has to be computed rather than read — a
+    /// camera-facing ribbon, a strand, a billboard. `standard_vertex(in)` is
+    /// the built-in transform, so the usual shape is to take its output and
+    /// move it.
+    #[wasm_bindgen(js_name = setVertex)]
+    pub fn set_vertex(&mut self, vertex: &str) {
+        self.inner.vertex = Some(vertex.to_string());
+    }
+
+    /// The uniform block, as a flat array of floats read four at a time into
+    /// `u_data.data[0..16]`. Anything past sixty-four floats is ignored.
+    #[wasm_bindgen(js_name = setData)]
+    pub fn set_data(&mut self, data: Vec<f32>) {
+        self.inner.data = data
+            .chunks(4)
+            .map(|c| {
+                let mut v = [0.0f32; 4];
+                v[..c.len()].copy_from_slice(c);
+                v
+            })
+            .collect();
+    }
+
+    /// One of the three storage slots, read as `s0(i)`, `s1(i)` or `s2(i)`.
+    ///
+    /// Use those rather than `u_s0[i]`: on WebGL2 there are no storage buffers
+    /// and the same data arrives as a texture instead, which the accessors
+    /// know about and a raw index does not.
+    #[wasm_bindgen(js_name = setStorage)]
+    pub fn set_storage(&mut self, slot: u32, data: Vec<f32>) {
+        match slot {
+            0 => self.inner.storage0 = data,
+            1 => self.inner.storage1 = data,
+            _ => self.inner.storage2 = data,
+        }
+    }
+
+    #[wasm_bindgen(js_name = setTransparent)]
+    pub fn set_transparent(&mut self, transparent: bool) {
+        self.inner.transparent = transparent;
+    }
+
+    #[wasm_bindgen(js_name = setOpacity)]
+    pub fn set_opacity(&mut self, opacity: f32) {
+        self.inner.opacity = opacity;
+    }
+
+    /// `0` FrontSide, `1` BackSide, `2` DoubleSide — three.js's `side`.
+    #[wasm_bindgen(js_name = setSide)]
+    pub fn set_side(&mut self, side: u32) {
+        self.inner.side = side;
+    }
+
+    /// Override depth writing: by default opaque writes and blended does not.
+    #[wasm_bindgen(js_name = setDepthWrite)]
+    pub fn set_depth_write(&mut self, write: bool) {
+        self.inner.depth_write = Some(write);
+    }
+
+    /// Draw in the screen-space pass, with the opaque scene available to
+    /// sample — what screen-space refraction needs.
+    #[wasm_bindgen(js_name = setScreenSpace)]
+    pub fn set_screen_space(&mut self, on: bool) {
+        self.inner.screen_space = on;
+    }
+
+    /// Compile-check the shader, returning the error or `undefined`.
+    ///
+    /// Always `undefined` in a browser: naga is not in wgpu's wasm build, so
+    /// there is nothing to check against and the browser's own WGSL compiler
+    /// reports to the console instead. `validationAvailable()` says so rather
+    /// than letting an always-passing check look like a passing one.
+    #[wasm_bindgen(js_name = validate)]
+    pub fn validate(&self) -> Option<String> {
+        self.inner.validate(true).err()
+    }
+
+    /// Whether [`validate`](Self::validate) can check anything here.
+    #[wasm_bindgen(js_name = validationAvailable)]
+    pub fn validation_available() -> bool {
+        crate::ShaderMaterial::VALIDATION_AVAILABLE
+    }
+
+    /// The material to hand to a `Mesh`.
+    #[wasm_bindgen(js_name = material)]
+    pub fn material(&self) -> WebMaterial {
+        WebMaterial {
+            inner: Arc::new(crate::Material::Shader(self.inner.clone())),
         }
     }
 }
@@ -4291,6 +4607,198 @@ impl WebFbxLoader {
     }
 }
 
+/// KTX2 textures, which is how a browser gets a GPU-compressed one.
+///
+/// The container is read here; a Basis Universal payload still needs
+/// transcoding and is reported as such rather than returned as noise.
+#[wasm_bindgen]
+pub struct WebKtx2Loader;
+#[wasm_bindgen]
+impl WebKtx2Loader {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> WebKtx2Loader {
+        WebKtx2Loader
+    }
+
+    /// The base mip level as raw bytes, with the format and size reported
+    /// separately — a compressed payload is not pixels and must not be handed
+    /// back as if it were.
+    pub fn parse(&self, bytes: Vec<u8>) -> Result<WebKtx2Texture, JsValue> {
+        let ktx = crate::loaders::ktx2::parse(&bytes)
+            .map_err(|e| JsValue::from_str(&format!("{e}")))?;
+        let format = format!("{:?}", ktx.texture_format().ok());
+        let levels = ktx
+            .level_data()
+            .map_err(|e| JsValue::from_str(&format!("{e}")))?;
+        Ok(WebKtx2Texture {
+            width: ktx.width,
+            height: ktx.height,
+            format,
+            block_compressed: ktx
+                .texture_format()
+                .map(|f| f.is_block_compressed())
+                .unwrap_or(false),
+            levels,
+        })
+    }
+}
+
+#[wasm_bindgen]
+pub struct WebKtx2Texture {
+    #[wasm_bindgen(readonly)]
+    pub width: u32,
+    #[wasm_bindgen(readonly)]
+    pub height: u32,
+    /// Whether the bytes are blocks rather than pixels, which decides whether a
+    /// caller may index them.
+    #[wasm_bindgen(readonly)]
+    pub block_compressed: bool,
+    format: String,
+    levels: Vec<Vec<u8>>,
+}
+
+#[wasm_bindgen]
+impl WebKtx2Texture {
+    #[wasm_bindgen(getter)]
+    pub fn format(&self) -> String {
+        self.format.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn level_count(&self) -> usize {
+        self.levels.len()
+    }
+
+    /// One mip level's bytes, largest first.
+    pub fn level(&self, index: usize) -> Option<Vec<u8>> {
+        self.levels.get(index).cloned()
+    }
+}
+
+/// Alembic geometry caches.
+#[wasm_bindgen]
+pub struct WebAlembicLoader;
+#[wasm_bindgen]
+impl WebAlembicLoader {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> WebAlembicLoader {
+        WebAlembicLoader
+    }
+
+    /// The first `PolyMesh` in the archive, as a geometry.
+    pub fn parse(&self, bytes: Vec<u8>) -> Result<WebGeometry, JsValue> {
+        let archive = crate::loaders::alembic::Archive::open(&bytes)
+            .map_err(|e| JsValue::from_str(&format!("{e}")))?;
+        let mesh = archive
+            .poly_meshes()
+            .into_iter()
+            .next()
+            .ok_or_else(|| JsValue::from_str("no PolyMesh in this archive"))?;
+        Ok(WebGeometry {
+            inner: Arc::new(poly_mesh_geometry(&mesh)),
+        })
+    }
+
+    /// How many meshes the archive holds, for a caller that wants to choose.
+    pub fn mesh_names(&self, bytes: Vec<u8>) -> Result<Vec<JsValue>, JsValue> {
+        let archive = crate::loaders::alembic::Archive::open(&bytes)
+            .map_err(|e| JsValue::from_str(&format!("{e}")))?;
+        Ok(archive
+            .poly_meshes()
+            .iter()
+            .map(|m| JsValue::from_str(&m.name))
+            .collect())
+    }
+}
+
+/// An Alembic `PolyMesh` as a triangulated `BufferGeometry`.
+///
+/// Alembic keeps polygons, so faces are fanned — the same choice the FBX loader
+/// makes, and for the same reason: a `BufferGeometry` has no way to say a
+/// triangle used to be part of a quad.
+fn poly_mesh_geometry(mesh: &crate::loaders::PolyMesh) -> crate::core::BufferGeometry {
+    use crate::core::{BufferAttribute, BufferGeometry};
+    let mut indices: Vec<u32> = Vec::new();
+    let mut at = 0usize;
+    for &count in &mesh.face_counts {
+        let count = count.max(0) as usize;
+        if at + count > mesh.face_indices.len() {
+            break;
+        }
+        for i in 1..count.saturating_sub(1) {
+            for &k in &[at, at + i, at + i + 1] {
+                indices.push(mesh.face_indices[k].max(0) as u32);
+            }
+        }
+        at += count;
+    }
+    let mut geometry = BufferGeometry::new();
+    geometry.set_attribute("position", BufferAttribute::new(mesh.points.clone(), 3));
+    if !indices.is_empty() {
+        geometry.set_index(indices);
+    }
+    crate::compute_vertex_normals(&mut geometry);
+    geometry
+}
+
+/// USD in the browser.
+///
+/// Gated on the `usd` feature like the rest of it, so a wasm build that does
+/// not want ten thousand lines of scene description does not pay for them.
+/// `.usda`, `.usdc` and `.usdz` all arrive as bytes here, and the loader tells
+/// them apart by what is in them rather than by a file name — which a browser
+/// often does not have.
+#[cfg(feature = "usd")]
+#[wasm_bindgen]
+pub struct WebUsdLoader;
+
+#[cfg(feature = "usd")]
+#[wasm_bindgen]
+impl WebUsdLoader {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> WebUsdLoader {
+        WebUsdLoader
+    }
+
+    /// The first mesh in the layer, as a geometry.
+    pub fn parse(&self, bytes: Vec<u8>) -> Result<WebGeometry, JsValue> {
+        let scene = crate::loaders::usd::UsdLoader::parse(&bytes)
+            .map_err(|e| JsValue::from_str(&format!("{e}")))?;
+        let geometry = scene
+            .arena
+            .nodes
+            .iter()
+            .find_map(|(_, o)| match &o.kind {
+                crate::core::ObjectKind::Mesh(m) => Some(m.geometry.clone()),
+                _ => None,
+            })
+            .ok_or_else(|| JsValue::from_str("no mesh in this USD layer"))?;
+        Ok(WebGeometry { inner: geometry })
+    }
+
+    /// Which of the three forms the bytes are, for a caller that wants to know
+    /// before committing to them.
+    pub fn sniff(&self, bytes: Vec<u8>) -> Option<String> {
+        crate::loaders::usd::sniff(&bytes).map(|f| format!("{f:?}"))
+    }
+}
+
+/// Writing glTF from the browser, which is how a scene edited there gets out.
+#[wasm_bindgen]
+pub struct WebGltfExporter;
+#[wasm_bindgen]
+impl WebGltfExporter {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> WebGltfExporter {
+        WebGltfExporter
+    }
+
+    /// One geometry as a self-contained `.glb`.
+    pub fn geometry_to_glb(&self, geometry: &WebGeometry) -> Vec<u8> {
+        crate::loaders::gltf_geometry_to_glb(&geometry.inner)
+    }
+}
+
 #[wasm_bindgen]
 pub struct WebColladaLoader;
 #[wasm_bindgen]
@@ -4520,9 +5028,14 @@ impl WebSvgRenderer {
     /// NoToneMapping, `1` Linear, `4` ACESFilmic.
     #[wasm_bindgen(js_name = setToneMapping)]
     pub fn set_tone_mapping(&mut self, mode: u32, exposure: f32) {
+        // three.js's constants: 0 NoToneMapping, 1 Linear, 4 ACESFilmic,
+        // 6 AgX, 7 Neutral. 2 (Reinhard) and 3 (Cineon) have no curve here and
+        // fall through to linear, as they always have.
         let mapping = match mode {
             0 => crate::ToneMapping::None,
             4 => crate::ToneMapping::AcesFilmic,
+            6 => crate::ToneMapping::AgX,
+            7 => crate::ToneMapping::Neutral,
             _ => crate::ToneMapping::Linear,
         };
         self.inner.set_tone_mapping(mapping, exposure);
@@ -5286,6 +5799,12 @@ impl WebMeshBvh {
         count: u32,
         indirect: bool,
     ) -> Result<WebMeshBvh, JsValue> {
+        // Spread the default rather than listing every field: this broke once
+        // already, when `split_degenerate` was added to the struct and only the
+        // wasm construction was left behind — so the browser build of mesh-BVH
+        // stopped compiling while every native check stayed green. The default
+        // is also what keeps these APIs behaving as the native ones do, which is
+        // the point of mirroring three-mesh-bvh's interface.
         let options = crate::mesh_bvh::BuildOptions {
             strategy,
             max_depth,
@@ -5293,6 +5812,7 @@ impl WebMeshBvh {
             offset,
             count,
             indirect,
+            ..Default::default()
         };
         let bvh = crate::mesh_bvh::MeshBvh::build(&geometry.inner, options)
             .ok_or_else(|| JsValue::from_str("failed to build MeshBVH"))?;
@@ -5535,6 +6055,12 @@ impl WebBufferGeometry {
         count: u32,
         indirect: bool,
     ) -> Result<WebMeshBvh, JsValue> {
+        // Spread the default rather than listing every field: this broke once
+        // already, when `split_degenerate` was added to the struct and only the
+        // wasm construction was left behind — so the browser build of mesh-BVH
+        // stopped compiling while every native check stayed green. The default
+        // is also what keeps these APIs behaving as the native ones do, which is
+        // the point of mirroring three-mesh-bvh's interface.
         let options = crate::mesh_bvh::BuildOptions {
             strategy,
             max_depth,
@@ -5542,6 +6068,7 @@ impl WebBufferGeometry {
             offset,
             count,
             indirect,
+            ..Default::default()
         };
         let bvh = Arc::make_mut(&mut self.inner)
             .compute_bounds_tree(options)

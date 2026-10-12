@@ -10,7 +10,7 @@
 /// A named easing curve.
 ///
 /// ```
-/// use threers_animation::prelude::*;
+/// use threers::easing::Easing;
 ///
 /// // Every curve passes through both ends unchanged.
 /// for easing in Easing::ALL {

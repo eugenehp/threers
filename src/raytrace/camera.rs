@@ -12,7 +12,6 @@
 use crate::cameras::Camera;
 use crate::math::{Matrix4, Vector2, Vector3};
 
-use super::sampler::concentric_disk;
 use super::settings::RaytraceSettings;
 
 /// A camera resolved into the form the tracer needs: world-space ray origins
@@ -31,6 +30,8 @@ pub struct RtCamera {
     perspective: bool,
     aperture: f32,
     focus_distance: f32,
+    /// Bokeh shape, from the camera's own lens.
+    lens: crate::cameras::Lens,
     /// Previous-frame camera for motion blur interpolation.
     motion_prev: Option<Box<RtCamera>>,
     motion_shutter: f32,
@@ -41,6 +42,7 @@ impl RtCamera {
     /// left as 0 here; [`Self::with_focus_distance`] fills it in once the scene
     /// is known.
     pub fn new(camera: &dyn Camera, settings: &RaytraceSettings) -> Self {
+        let lens = camera.lens();
         let view = camera.view_matrix();
         let proj = camera.projection_matrix();
         let inv_view = view.invert();
@@ -61,8 +63,21 @@ impl RtCamera {
             up,
             forward,
             perspective,
-            aperture: settings.aperture.max(0.0),
-            focus_distance: settings.focus_distance.max(0.0),
+            // The settings win where they are set, so existing callers are
+            // unchanged; otherwise the camera's own lens is used, which is
+            // what makes `PerspectiveCamera::f_stop` and a USD camera's
+            // `fStop` do anything at all.
+            aperture: if settings.aperture > 0.0 {
+                settings.aperture
+            } else {
+                lens.aperture
+            },
+            focus_distance: if settings.focus_distance > 0.0 {
+                settings.focus_distance
+            } else {
+                lens.focus_distance
+            },
+            lens,
             motion_prev: None,
             motion_shutter: settings.motion_blur_shutter.max(0.0),
         }
@@ -83,6 +98,22 @@ impl RtCamera {
     pub fn with_focus_distance(mut self, d: f32) -> Self {
         self.focus_distance = d.max(1e-4);
         self
+    }
+
+    /// Aperture radius actually in force, after the settings and the
+    /// camera's own lens have been reconciled.
+    pub fn aperture(&self) -> f32 {
+        self.aperture
+    }
+
+    /// The bokeh shape in force — blades and squeeze, with the resolved
+    /// aperture and focus substituted in.
+    pub fn lens(&self) -> crate::cameras::Lens {
+        crate::cameras::Lens {
+            aperture: self.aperture,
+            focus_distance: self.focus_distance,
+            ..self.lens
+        }
     }
 
     pub fn focus_distance(&self) -> f32 {
@@ -171,7 +202,9 @@ impl RtCamera {
             if cos.abs() > 1e-6 {
                 let t = self.focus_distance / cos;
                 let focal_point = origin + dir * t;
-                let (lx, ly) = concentric_disk(lens.0, lens.1);
+                // Shape comes from the camera's iris: a circle wide open, a
+                // polygon stopped down, squeezed if the lens is anamorphic.
+                let (lx, ly) = self.lens.sample(lens.0, lens.1);
                 origin =
                     origin + self.right * (lx * self.aperture) + self.up * (ly * self.aperture);
                 let d = focal_point - origin;
@@ -320,5 +353,55 @@ mod tests {
         let (o1, _) = rt.ray(ndc, (0.05, 0.5));
         let (o2, _) = rt.ray(ndc, (0.95, 0.5));
         assert!((o1 - o2).length() > 0.1, "the aperture had no effect");
+    }
+
+    /// The camera's own lens reaches the tracer.
+    ///
+    /// Before this, `PerspectiveCamera::aperture`, `focus_distance`,
+    /// `f_stop`, `aperture_blades` and `anamorphic_ratio` were five public
+    /// fields that nothing read — two of them written by the USD loader from
+    /// the file, so a camera authored at f/2.8 rendered as a pinhole and said
+    /// nothing. The settings still win where they are set, so this also checks
+    /// that an explicit `RaytraceSettings::aperture` is not overridden.
+    #[test]
+    fn a_camera_with_an_f_stop_defocuses() {
+        let mut cam = crate::PerspectiveCamera::new(50.0, 1.0, 0.1, 100.0);
+        cam.position = crate::Vector3::new(0.0, 0.0, 5.0);
+        cam.look_at(crate::Vector3::ZERO);
+        cam.f_stop = 1.4;
+        cam.focus_distance = 5.0;
+        cam.aperture_blades = 6;
+        assert!(cam.lens().aperture > 0.0, "the camera has no lens");
+
+        let settings = RaytraceSettings::default();
+        let rt = RtCamera::new(&cam, &settings);
+        assert!(
+            (rt.aperture() - cam.lens().aperture).abs() < 1e-9,
+            "the tracer took {} from a camera at f/1.4 ({})",
+            rt.aperture(),
+            cam.lens().aperture
+        );
+        assert_eq!(rt.lens().blades, 6, "the iris did not come across");
+
+        // Two different lens samples put the ray origin in two places, which
+        // is the whole observable consequence of having an aperture.
+        let ndc = crate::Vector2::new(0.0, 0.0);
+        let (o1, _) = rt.ray(ndc, (0.05, 0.05));
+        let (o2, _) = rt.ray(ndc, (0.95, 0.95));
+        assert!(
+            (o1 - o2).length() > 1e-4,
+            "the camera's aperture had no effect on the ray"
+        );
+
+        // A pinhole camera is still a pinhole.
+        let plain = crate::PerspectiveCamera::new(50.0, 1.0, 0.1, 100.0);
+        assert_eq!(RtCamera::new(&plain, &settings).aperture(), 0.0);
+
+        // And an explicit setting still wins over the camera's own.
+        let overridden = RaytraceSettings {
+            aperture: 0.75,
+            ..RaytraceSettings::default()
+        };
+        assert_eq!(RtCamera::new(&cam, &overridden).aperture(), 0.75);
     }
 }

@@ -19,6 +19,8 @@ Collada, FBX, HDR and EXR, plus animation, controls and helpers.
 | [Extended PBR](docs/materials.md) | Clearcoat, transmission, IOR, dispersion, anisotropy, sheen, iridescence, volume absorption, measured presets |
 | [HDR pipeline](docs/materials.md) | `Rgba16Float`, `.hdr` decoding, environment prefiltering, ACES tone mapping, area lights |
 | [Headless render](docs/headless-render.md) | Offscreen render to packed RGBA — no window, no display |
+| [Creative coding](docs/features.md) | `sketch()` is a window, a scene and a loop in one call; `Overlay` draws 2D over the top; plus a seeded `Rng`, OkLab colour ramps, `map_range` and d3 scales, easing and fbm/curl noise |
+| [Computational geometry](docs/features.md) | `delaunay`, `convex_hull` and `voronoi_cells` on scattered 2D points, in the core crate |
 | [Video export](docs/codecs.md) | `video` via ffmpeg, or pure-Rust `native-codec`: GIF, APNG, VP9/WebM, H.264, HEVC |
 | [Subtitles](docs/captions.md) | SRT and WebVTT — on-screen, burned in, or as soft tracks |
 | [Vector SVG](docs/svg.md) | `SvgRenderer` draws a `Scene` as vectors; `Path`/`Shape` read SVG path data |
@@ -26,6 +28,7 @@ Collada, FBX, HDR and EXR, plus animation, controls and helpers.
 | [Lattices](docs/lattices.md) | 35 generators, foams, conformal cells, and properties from a solve |
 | [Kirigami](docs/kirigami.md) | Plate lattices and corrugations that fold from a flat sheet |
 | [Planets](docs/planets.md) (`planet`) | Atmospheres, starfields, map generation, Earth and lens flare |
+| [Fluid](docs/fluid.md) (`fluid`) | An interactive 2D fluid on the GPU — advection, vorticity, a pressure solve, bloom and sunrays. No compute stage, so it runs on WebGL2 too |
 | [Path tracing](docs/path-tracing.md) (`raytrace`) | Global illumination, area lights, refraction, depth of field — CPU and GPU |
 | [Mesh BVH / CSG](docs/mesh-bvh-csg.md) (`mesh-bvh`, `bvh-csg`) | Accelerated raycast and shapecast; boolean ops with TriKey parity |
 | [OpenSCAD](docs/openscad.md) (`openscad`) | `.scad` front end, `Solid` DSL, a watertight exact-CSG kernel, and animation |
@@ -42,7 +45,7 @@ so results are unchanged.
 
 ## Examples
 
-39 examples render to an image; every one of them is in
+41 examples render to an image; every one of them is in
 **[docs/examples.md](docs/examples.md)** with its picture and the command that
 produces it. A few of them:
 
@@ -70,10 +73,11 @@ The guides live in [`docs/`](docs/). Each is self-contained; start with
 |---|---|
 | [Getting started](docs/getting-started.md) | A window, a scene, and the prelude — natively |
 | [Web](docs/web.md) | The same core as WebAssembly, and the `THREE.*` shim |
-| [Examples](docs/examples.md) | All 39 headless examples, with pictures |
+| [WebGL2](docs/webgl.md) | `webgl` feature — renders in a browser without WebGPU, verified on pixels |
+| [Examples](docs/examples.md) | All 41 headless examples, with pictures |
 | **Geometry** | |
 | [Mesh BVH and CSG](docs/mesh-bvh-csg.md) | Accelerated raycast, shapecast, boolean ops |
-| [OpenSCAD](docs/openscad.md) | `.scad` front end, the `Solid` DSL, and animating both |
+| [OpenSCAD](docs/openscad.md) · [design notes](docs/openscad-plan.md) | `.scad` front end, the `Solid` DSL, and animating both |
 | [Lattices](docs/lattices.md) | Foams, conformal cells, and numbers you can size a part with |
 | [Kirigami](docs/kirigami.md) | Corrugations that fold from a flat sheet |
 | [B-rep and NURBS](docs/brep-nurbs-plan.md) | Curved surfaces, STEP, and the exact kernel |
@@ -81,13 +85,20 @@ The guides live in [`docs/`](docs/). Each is self-contained; start with
 | [Materials](docs/materials.md) | Metals, glass, anisotropy, thin film, HDR environments |
 | [Path tracing](docs/path-tracing.md) | Global illumination on CPU and GPU |
 | [Planets](docs/planets.md) | Earth, atmospheres, starfields, lens flare |
+| [Fluid](docs/fluid.md) | A 2D fluid simulation you can drag your hand through |
 | **Output** | |
 | [Headless render and video](docs/headless-render.md) | Frames without a window |
-| [Native codecs](docs/codecs.md) | GIF, APNG, VP9, H.264, HEVC — pure Rust |
+| [Native codecs](docs/codecs.md) · [measured](docs/codec-benchmark.md) | GIF, APNG, VP9, H.264, HEVC — pure Rust |
 | [Subtitles and captions](docs/captions.md) | SRT and WebVTT, on-screen or burned in |
 | [Vector SVG](docs/svg.md) | The scene graph as vectors, and `Path`/`Shape` |
+| [Scroll video](docs/scroll-video.md) | Page scroll drives playback, with a 3D overlay on top |
+| **Interchange** | |
 | [USD](docs/usd.md) | `.usda`, `.usdc` and `.usdz`, read and written |
-| **Interchange and platforms** | |
+| [glTF](docs/gltf.md) | Read **and written**; meshopt-compressed files decode |
+| [Draco](docs/draco.md) | `KHR_draco_mesh_compression`, both traversals, verified against `draco3d` |
+| [Textures](docs/ktx2.md) | KTX2 containers, block-compressed with mip chains |
+| [Alembic](docs/alembic.md) | `.abc` geometry caches — Ogawa, hierarchy, `PolyMesh` |
+| **Platforms and companions** | |
 | [Animation](docs/animation.md) · [Camera](docs/camera-animation.md) · [Controls](docs/controls.md) | Clips, tracks, and moving the camera |
 | [Metal and visionOS](docs/apple-platforms.md) | The Apple backends |
 | [Bindings](docs/bindings.md) | npm, PyPI and the Node addon |

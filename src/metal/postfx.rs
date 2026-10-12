@@ -28,8 +28,10 @@ struct BloomParams {
 struct DownsampleParams {
     factor: u32,
     srgb: u32,
+    /// 0 = box, 1 = Mitchell. Matches
+    /// [`DownsampleFilter`](crate::renderer::DownsampleFilter) on the wgpu path.
+    filter: u32,
     _pad0: u32,
-    _pad1: u32,
 }
 
 #[repr(C)]
@@ -39,6 +41,24 @@ struct TonemapParams {
     white: f32,
     _pad0: f32,
     _pad1: f32,
+}
+
+/// A Metal texture's width and height.
+fn current_size(tex: Id) -> (u32, u32) {
+    unsafe {
+        let w: NSUInteger = msg0(tex, sel!("width"));
+        let h: NSUInteger = msg0(tex, sel!("height"));
+        (w as u32, h as u32)
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct FilmParams {
+    vignette: f32,
+    grain: f32,
+    seed: f32,
+    _pad0: f32,
 }
 
 #[repr(C)]
@@ -77,13 +97,21 @@ struct UpscaleParams {
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+/// Must stay every-member-four-byte-aligned; see the note on the Metal side.
 struct CompositeParams {
     strength: f32,
-    bloom_size: [f32; 2],
+    bloom_w: f32,
+    bloom_h: f32,
     /// Match fly `ref_look` chroma punch (1 = identity).
     chroma_sat: f32,
     chroma_lift: f32,
 }
+
+// The shader's view of this struct is five consecutive floats. If a member is
+// ever added that Metal would align more strictly — a `float2`, a `float4`, a
+// matrix — this stops matching and the failure is silent, so it is worth the
+// one line to notice.
+const _: () = assert!(std::mem::size_of::<CompositeParams>() == 20);
 
 /// Depth-only ambient occlusion as a fullscreen pass: colour in, colour times
 /// occlusion out, at the source resolution.
@@ -199,6 +227,7 @@ pub struct PostFxPipelines {
     ssao_hdr: Option<Owned>,
     /// Float in, sRGB out. The step that turns an HDR chain into a picture.
     tonemap: Owned,
+    film: Owned,
     /// Optional, unlike its five neighbours: the chain is built with
     /// `PostFxChain::new(..).ok()`, so a pipeline that fails to build takes
     /// every other pass down with it. AO is the one pass here that is a
@@ -276,6 +305,7 @@ impl PostFxPipelines {
             )?,
             ssao_hdr: fullscreen_pipeline(device, "fs_ssao", pixel_format::RGBA16_FLOAT).ok(),
             tonemap: fullscreen_pipeline(device, "fs_tonemap", pixel_format::RGBA8_UNORM_SRGB)?,
+            film: fullscreen_pipeline(device, "fs_film", pixel_format::RGBA8_UNORM_SRGB)?,
         })
     }
 }
@@ -408,7 +438,13 @@ impl MetalBloom {
     }
 }
 
-/// Block-average a render target down by `factor`, in linear light when `srgb`.
+/// Resolve a supersampled render target down by `factor`, in linear light when
+/// `srgb`.
+///
+/// Mirrors [`crate::renderer::downsample`], including its default filter: the
+/// plain block average leaves a staircase on shallow edges that no amount of
+/// extra supersampling removes, so the default reaches wider. See that module
+/// for the measurements.
 pub struct MetalDownsampler {
     texture: Owned,
     factor: u32,
@@ -418,12 +454,35 @@ pub struct MetalDownsampler {
 }
 
 impl MetalDownsampler {
+    /// [`with_filter`](Self::with_filter) with the default filter, which
+    /// matches the wgpu path's [`DownsampleFilter::Mitchell`](crate::renderer::DownsampleFilter::Mitchell).
     pub fn new(
         device: &MetalDevice,
         src_w: u32,
         src_h: u32,
         factor: u32,
         color_format: NSUInteger,
+    ) -> Result<Self, MetalError> {
+        Self::with_filter(
+            device,
+            src_w,
+            src_h,
+            factor,
+            color_format,
+            crate::renderer::DownsampleFilter::default(),
+        )
+    }
+
+    /// As [`new`](Self::new), with the reconstruction filter spelled out. Only
+    /// [`Box`](crate::renderer::DownsampleFilter::Box) and the wider default are
+    /// distinguished here; the intermediate filters fall in with the default.
+    pub fn with_filter(
+        device: &MetalDevice,
+        src_w: u32,
+        src_h: u32,
+        factor: u32,
+        color_format: NSUInteger,
+        filter: crate::renderer::DownsampleFilter,
     ) -> Result<Self, MetalError> {
         if factor < 2 || !src_w.is_multiple_of(factor) || !src_h.is_multiple_of(factor) {
             return Err(MetalError::Unsupported(format!(
@@ -452,8 +511,8 @@ impl MetalDownsampler {
                 DownsampleParams {
                     factor,
                     srgb,
+                    filter: u32::from(filter != crate::renderer::DownsampleFilter::Box),
                     _pad0: 0,
-                    _pad1: 0,
                 },
             )?,
         })
@@ -606,6 +665,15 @@ pub struct PostFxChain {
     bloom_strength: f32,
     chroma_sat: f32,
     chroma_lift: f32,
+    /// Set by [`set_tonemap`](Self::set_tonemap); see there for why the pass
+    /// cannot simply key off the target being float.
+    tonemap_requested: bool,
+    /// Destination for the film grade, and its parameters.
+    filmed: Option<Owned>,
+    film_params: Option<Owned>,
+    vignette: f32,
+    grain: f32,
+    grain_seed: f32,
 }
 
 impl PostFxChain {
@@ -625,6 +693,12 @@ impl PostFxChain {
             bloom_strength: 0.0,
             chroma_sat: 1.0,
             chroma_lift: 0.0,
+            tonemap_requested: false,
+            filmed: None,
+            film_params: None,
+            vignette: 0.0,
+            grain: 0.0,
+            grain_seed: 0.0,
         })
     }
 
@@ -697,12 +771,57 @@ impl PostFxChain {
 
     /// Exposure applied before the filmic curve, and the luminance that maps to
     /// white (0 = use the curve's own shoulder).
+    /// Set the tone curve's exposure and white point.
+    ///
+    /// Calling this at all turns the pass on. It used to run only when the
+    /// render target was a float format — the case it is *required* for, since
+    /// an 8-bit readback of float pixels is garbage without it — and the effect
+    /// was that on an ordinary 8-bit target `set_tonemap` did nothing at all,
+    /// silently: three different exposures produced byte-identical frames. A
+    /// grade that quietly does nothing is worse than one that is wrong, because
+    /// the number the caller passed says otherwise.
+    ///
+    /// On an 8-bit target the pass is still well defined. An sRGB-formatted
+    /// texture decodes on sample and re-encodes on write, so the curve is
+    /// applied in linear light either way. It is lossier than grading in float,
+    /// the input having already been quantised — but that is the caller's
+    /// trade to make, not this function's to make on their behalf and without
+    /// saying so.
     pub fn set_tonemap(&mut self, exposure: f32, white: f32) {
         if (self.exposure, self.white) != (exposure, white) {
             self.exposure = exposure;
             self.white = white;
             self.tonemap_params = None;
         }
+        self.tonemap_requested = true;
+    }
+
+    /// Whether a caller has asked for a tone curve.
+    fn grading(&self) -> bool {
+        self.tonemap_requested
+    }
+
+    /// Vignette and grain, both 0 to disable. Matches
+    /// [`HeadlessRenderer::set_film_grade`](crate::HeadlessRenderer::set_film_grade).
+    pub fn set_film_grade(&mut self, vignette: f32, grain: f32) {
+        if (self.vignette, self.grain) != (vignette, grain) {
+            self.vignette = vignette.max(0.0);
+            self.grain = grain.max(0.0);
+            self.film_params = None;
+        }
+    }
+
+    /// Advance the grain's seed, so it moves between frames. Static grain is
+    /// dirt on the lens.
+    pub fn set_grain_seed(&mut self, seed: f32) {
+        if self.grain_seed != seed {
+            self.grain_seed = seed;
+            self.film_params = None;
+        }
+    }
+
+    fn filming(&self) -> bool {
+        self.vignette > 0.0 || self.grain > 0.0
     }
 
     /// Configure SSAO, or clear it when `settings` is `None`. Rebuilds only
@@ -776,6 +895,8 @@ impl PostFxChain {
         // the readback buffer is 8-bit, so without the tone map the float
         // texture would be blitted into it and read as garbage.
         let needs = is_hdr(format)
+            || self.grading()
+            || self.filming()
             || self.downsample.is_some()
             || self.upscale.is_some()
             || self.ssao.is_some()
@@ -844,7 +965,8 @@ impl PostFxChain {
                     device,
                     CompositeParams {
                         strength: self.bloom_strength,
-                        bloom_size: [bloom_bw as f32, bloom_bh as f32],
+                        bloom_w: bloom_bw as f32,
+                        bloom_h: bloom_bh as f32,
                         chroma_sat: self.chroma_sat,
                         chroma_lift: self.chroma_lift,
                     },
@@ -877,7 +999,7 @@ impl PostFxChain {
 
         // Tone map last in float, before any LDR resampling: compressing after
         // an upscale would resample values the display can never show.
-        if is_hdr(cur_format) {
+        if is_hdr(cur_format) || self.grading() {
             let (w, h) = if let Some(ds) = self.downsample.as_ref() {
                 ds.size()
             } else {
@@ -920,6 +1042,61 @@ impl PostFxChain {
             encode_fullscreen(
                 cmd,
                 self.pipelines.tonemap.id(),
+                dst,
+                pixel_format::RGBA8_UNORM_SRGB,
+                |enc| unsafe {
+                    let _: () = msg2(enc, sel!("setFragmentTexture:atIndex:"), current, 0usize);
+                    let _: () = msg3(
+                        enc,
+                        sel!("setFragmentBuffer:offset:atIndex:"),
+                        params,
+                        0usize,
+                        0usize,
+                    );
+                },
+            )?;
+            current = dst;
+            cur_format = pixel_format::RGBA8_UNORM_SRGB;
+        }
+
+        // The film grade goes after the tone map and before any upscale, for
+        // the reason the tone map goes where it does: grain resampled by an
+        // upscale is no longer grain, it is a soft texture that moves.
+        if self.filming() {
+            let (w, h) = current_size(current);
+            let rebuild = self
+                .filmed
+                .as_ref()
+                .map(|t| current_size(t.id()) != (w, h))
+                .unwrap_or(true);
+            if rebuild {
+                self.filmed = Some(new_texture_2d(
+                    device,
+                    w,
+                    h,
+                    pixel_format::RGBA8_UNORM_SRGB,
+                    texture_usage::RENDER_TARGET | texture_usage::SHADER_READ,
+                    storage_mode::PRIVATE,
+                    1,
+                    1,
+                )?);
+            }
+            if self.film_params.is_none() {
+                self.film_params = Some(param_buffer(
+                    device,
+                    FilmParams {
+                        vignette: self.vignette,
+                        grain: self.grain,
+                        seed: self.grain_seed,
+                        _pad0: 0.0,
+                    },
+                )?);
+            }
+            let dst = self.filmed.as_ref().expect("film target").id();
+            let params = self.film_params.as_ref().expect("film params").id();
+            encode_fullscreen(
+                cmd,
+                self.pipelines.film.id(),
                 dst,
                 pixel_format::RGBA8_UNORM_SRGB,
                 |enc| unsafe {

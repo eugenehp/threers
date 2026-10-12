@@ -48,11 +48,14 @@ impl RenderTarget {
             depth_or_array_layers: 6,
         };
         let srgb_variant = format.add_srgb_suffix();
-        let extra_formats = if srgb_variant != format {
-            vec![srgb_variant]
-        } else {
-            vec![]
-        };
+        // As in `RenderTarget::new`: a backend without `VIEW_FORMATS` refuses
+        // the texture outright if one is declared.
+        let extra_formats =
+            if srgb_variant != format && crate::renderer::caps::supports_view_formats(device) {
+                vec![srgb_variant]
+            } else {
+                vec![]
+            };
         let color_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("threers cube rt color"),
             size,
@@ -131,9 +134,15 @@ impl RenderTarget {
         // bytes untouched — the GPU alpha strip on the way to a video encoder —
         // was refused at view creation.
         let mut extra_formats = Vec::new();
-        for v in [format.add_srgb_suffix(), format.remove_srgb_suffix()] {
-            if v != format && !extra_formats.contains(&v) {
-                extra_formats.push(v);
+        // Not every backend allows a texture to be viewed as another format:
+        // WebGL2 does not, and declaring one there fails texture creation
+        // outright. Where that is the case the target is created without them
+        // and a reinterpreting view cannot be taken later.
+        if crate::renderer::caps::supports_view_formats(device) {
+            for v in [format.add_srgb_suffix(), format.remove_srgb_suffix()] {
+                if v != format && !extra_formats.contains(&v) {
+                    extra_formats.push(v);
+                }
             }
         }
         let color_texture = device.create_texture(&wgpu::TextureDescriptor {

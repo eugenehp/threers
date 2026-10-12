@@ -76,8 +76,23 @@ const BLUR_POLE_AXES: [Vector3; 10] = [
 pub struct PmremGenerator;
 
 impl PmremGenerator {
+    /// Prefilter a cube map into the roughness chain and CubeUV atlas the
+    /// renderer samples, at the input's own face size.
+    ///
+    /// three.js's `PMREMGenerator.fromCubemap`. This used to return its
+    /// argument unchanged, which is a trap rather than a shortcut: the name
+    /// promises the one step that makes `roughness` mean anything, so a caller
+    /// who reached for it got an environment with no mip chain, no CubeUV atlas
+    /// and no prefiltering — which does not look broken, it looks like a
+    /// slightly dull render with no specular highlight anywhere in it.
+    ///
+    /// Pass a size explicitly with [`Self::generate_pmrem`] when the source is
+    /// larger than the environment needs to be; 256 is the ceiling either way.
     pub fn from_cube(input: Arc<CubeTexture>) -> Arc<CubeTexture> {
-        input
+        if input.is_cube_uv() {
+            return input;
+        }
+        Arc::new(Self::generate_pmrem(&input, input.size))
     }
 
     /// Build a PMREM CubeUV atlas from `input` at the requested base face size.
@@ -1053,6 +1068,33 @@ mod tests {
         d
     }
 
+    /// `from_cube` has to prefilter. It used to return its argument, so the
+    /// result had no mip chain and no CubeUV atlas — and the renderer samples
+    /// the atlas, so roughness did nothing and there was no specular highlight
+    /// anywhere in the frame. Nothing about that reads as "the environment was
+    /// never prefiltered".
+    #[test]
+    fn from_cube_returns_a_prefiltered_environment() {
+        let plain = CubeTexture::new(
+            32,
+            TextureFormat::Rgba8Unorm,
+            std::array::from_fn(|i| solid(32, 20 * i as u8, 40, 60)),
+        );
+        assert!(!plain.is_cube_uv(), "the input is a plain cube");
+
+        let out = PmremGenerator::from_cube(Arc::new(plain));
+        assert!(out.is_cube_uv(), "from_cube did not build a CubeUV atlas");
+        assert!(
+            out.mip_level_count() > 1,
+            "from_cube returned a single level: roughness has nothing to sample"
+        );
+
+        // And it is idempotent, so wrapping an already-prefiltered environment
+        // is free rather than a second blur over the first.
+        let again = PmremGenerator::from_cube(out.clone());
+        assert!(Arc::ptr_eq(&out, &again));
+    }
+
     /// Probe the prefiltered environment around a single bright sun and report
     /// how many distinct peaks it has. There must be exactly one.
     #[test]
@@ -1613,14 +1655,12 @@ mod tests {
             apply_limit_buckets: false,
         }))
         .expect("adapter");
-        let (device, queue) = pollster::block_on(adapter.request_device(
-            &wgpu::DeviceDescriptor {
-                label: Some("pmrem atlas test"),
-                required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::default(),
-                ..Default::default()
-            },
-        ))
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("pmrem atlas test"),
+            required_features: wgpu::Features::empty(),
+            required_limits: wgpu::Limits::default(),
+            ..Default::default()
+        }))
         .expect("device");
 
         let gpu = GpuCubeTexture::upload(&device, &queue, &pmrem);
@@ -1727,14 +1767,12 @@ mod tests {
             apply_limit_buckets: false,
         }))
         .expect("adapter");
-        let (device, queue) = pollster::block_on(adapter.request_device(
-            &wgpu::DeviceDescriptor {
-                label: Some("cube uv sample test"),
-                required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::default(),
-                ..Default::default()
-            },
-        ))
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("cube uv sample test"),
+            required_features: wgpu::Features::empty(),
+            required_limits: wgpu::Limits::default(),
+            ..Default::default()
+        }))
         .expect("device");
 
         let gpu = GpuCubeTexture::upload(&device, &queue, &pmrem);
@@ -1750,8 +1788,11 @@ mod tests {
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("cube uv sample"),
-            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(
-                r#"
+            source: wgpu::ShaderSource::Wgsl(
+                format!(
+                    "{}\n{}",
+                    crate::renderer::fullscreen::VS,
+                    r#"
 struct Params { texel_w: f32, texel_h: f32, lod_max: f32, roughness: f32, _pad: vec2<f32> }
 @group(0) @binding(0) var tex: texture_2d<f32>;
 @group(0) @binding(1) var samp: sampler;
@@ -1807,11 +1848,6 @@ fn bilinear_cube_uv(direction: vec3<f32>, mip_int: f32) -> vec3<f32> {
     return textureSampleLevel(tex, samp, uv, 0.0).rgb;
 }
 
-@vertex fn vs(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
-    var pos = array<vec2<f32>, 3>(vec2(-1.0, -3.0), vec2(-1.0, 1.0), vec2(3.0, 1.0));
-    return vec4(pos[vi], 0.0, 1.0);
-}
-
 @fragment fn fs() -> @location(0) vec4<f32> {
     let dir = vec3(0.0, 0.0, 1.0);
     let mip = clamp(roughness_to_mip(p.roughness), -2.0, p.lod_max);
@@ -1822,8 +1858,10 @@ fn bilinear_cube_uv(direction: vec3<f32>, mip_int: f32) -> vec3<f32> {
     let c1 = bilinear_cube_uv(dir, mip_i + 1.0);
     return vec4(mix(c0, c1, mip_f), 1.0);
 }
-"#,
-            )),
+"#
+                )
+                .into(),
+            ),
         });
 
         let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -1927,7 +1965,7 @@ fn bilinear_cube_uv(direction: vec3<f32>, mip_int: f32) -> vec3<f32> {
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: Some("vs"),
+                entry_point: Some(crate::renderer::fullscreen::VS_ENTRY),
                 buffers: &[],
                 compilation_options: Default::default(),
             },

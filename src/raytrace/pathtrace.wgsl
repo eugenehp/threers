@@ -98,7 +98,8 @@ struct Uniforms {
     motion_prev_forward: vec4<f32>,
     // Pixel clip: xy = origin, zw = size. Size zero means the full frame.
     clip: vec4<u32>,
-    // x = scene scale, y = sample redistribution on, zw unused.
+    // x = scene scale, y = sample redistribution on, z = diaphragm blades,
+    // w = anamorphic squeeze.
     render_params: vec4<f32>,
     // fog rgb + mode (0 off, 1 linear, 2 exp2)
     fog_color: vec4<f32>,
@@ -323,6 +324,52 @@ fn onb_to_world(o: Onb, v: vec3<f32>) -> vec3<f32> {
 
 fn onb_to_local(o: Onb, v: vec3<f32>) -> vec3<f32> {
     return vec3<f32>(dot(v, o.t), dot(v, o.b), dot(v, o.n));
+}
+
+// A uniform point in a regular `blades`-gon inscribed in the unit circle.
+//
+// Pick a wedge from the same random as the position inside it — scaling by n
+// and taking the fraction costs no extra dimension of the sample sequence,
+// which matters when it is a stratified one. The fold onto the lower triangle
+// is what makes it uniform by area rather than by parameter; without it the
+// samples bunch at the centre and a stopped-down aperture renders bokeh with
+// a bright core.
+fn polygon_sample(blades : f32, u1 : f32, u2 : f32) -> vec2<f32> {
+    let n = max(blades, 3.0);
+    let wedge = 6.28318530718 / n;
+    let scaled = min(u1 * n, n - 1e-6);
+    let index = floor(scaled);
+    var a = scaled - index;
+    var b = u2;
+    if (a + b > 1.0) {
+        a = 1.0 - a;
+        b = 1.0 - b;
+    }
+    let t0 = index * wedge;
+    let t1 = (index + 1.0) * wedge;
+    return vec2<f32>(a * cos(t0) + b * cos(t1), a * sin(t0) + b * sin(t1));
+}
+
+// A point on the unit aperture: circular below three blades, polygonal at or
+// above, squeezed horizontally by an anamorphic lens either way.
+//
+// The twin of `cameras::Lens::sample`; `the_two_lens_samplers_agree` holds the
+// two to the same numbers.
+fn lens_sample(u : vec2<f32>, blades : f32, anamorphic : f32) -> vec2<f32> {
+    var p : vec2<f32>;
+    if (blades >= 3.0) {
+        p = polygon_sample(blades, u.x, u.y);
+    } else {
+        p = concentric_disk(u);
+    }
+    if (anamorphic > 0.0 && anamorphic != 1.0) {
+        p.x = p.x / anamorphic;
+    }
+    let r = length(p);
+    if (r > 1.0) {
+        p = p / r;
+    }
+    return p;
 }
 
 fn concentric_disk(u: vec2<f32>) -> vec2<f32> {
@@ -2104,7 +2151,8 @@ fn camera_ray_at(
         let c = dot(r.d, cam_forward.xyz);
         if (abs(c) > 1e-6) {
             let focal_point = r.o + r.d * (focus / c);
-            let l = concentric_disk(lens);
+            // Shaped by the iris, matching `cameras::Lens::sample` on the CPU.
+            let l = lens_sample(lens, uni.render_params.z, uni.render_params.w);
             r.o = r.o + cam_right.xyz * (l.x * aperture) + cam_up.xyz * (l.y * aperture);
             let dd = focal_point - r.o;
             if (dot(dd, dd) > 1e-20) {

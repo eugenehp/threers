@@ -6,16 +6,21 @@
 //! darkens every edge, and a supersampled render is mostly edges. So these
 //! compare against [`average_blocks_srgb`], the CPU function that used to do it.
 
-use threers::renderer::downsample::{average_blocks_srgb, Downsampler};
+use threers::renderer::downsample::{average_blocks_srgb, DownsampleFilter, Downsampler};
 use threers::{
     AmbientLight, BoxGeometry, Color, DirectionalLight, HeadlessRenderer, Mesh, Object3D,
-    PerspectiveCamera, Scene, StandardMaterial, Vector3,
+    PerspectiveCamera, Quaternion, Scene, StandardMaterial, Vector3,
 };
 
 fn renderer(w: u32, h: u32, ss: u32) -> Option<HeadlessRenderer> {
+    filtered(w, h, ss, DownsampleFilter::default())
+}
+
+fn filtered(w: u32, h: u32, ss: u32, filter: DownsampleFilter) -> Option<HeadlessRenderer> {
     HeadlessRenderer::builder()
         .size(w, h)
         .supersample(ss)
+        .downsample_filter(filter)
         .color_format(wgpu::TextureFormat::Rgba8Unorm)
         .build()
         .ok()
@@ -50,11 +55,14 @@ fn camera(w: u32, h: u32) -> PerspectiveCamera {
     c
 }
 
+///
+/// Only [`DownsampleFilter::Box`] is expected to match: the wider filters reach
+/// outside the block on purpose, which is the whole point of them.
 #[test]
 fn gpu_resolve_matches_the_cpu_average() {
     for ss in [2u32, 3, 4] {
         let (w, h) = (160u32, 120u32);
-        let Some(mut r) = renderer(w, h, ss) else {
+        let Some(mut r) = filtered(w, h, ss, DownsampleFilter::Box) else {
             eprintln!("skipping: no GPU adapter");
             return;
         };
@@ -225,6 +233,30 @@ fn downsampler_declines_what_it_cannot_do() {
     let ds = Downsampler::new(device, &tex(64, 64), 2).expect("2× of a 64×64 target");
     assert_eq!(ds.size(), (32, 32));
     assert_eq!(ds.factor(), 2);
+    assert_eq!(ds.filter(), DownsampleFilter::Mitchell, "the default filter");
+
+    // Every filter has to produce a working pipeline, which means every
+    // generated shader has to compile — the one thing that can break when the
+    // WGSL is assembled from weights at build time rather than written out.
+    for filter in [
+        DownsampleFilter::Box,
+        DownsampleFilter::Tent,
+        DownsampleFilter::Mitchell,
+        DownsampleFilter::Lanczos2,
+    ] {
+        for factor in [2u32, 3, 4] {
+            let ds = Downsampler::with_filter(device, &tex(96, 96), factor, filter)
+                .unwrap_or_else(|| panic!("{filter:?} at {factor}x"));
+            assert_eq!(ds.size(), (96 / factor, 96 / factor), "{filter:?} {factor}x");
+            assert_eq!(ds.filter(), filter);
+            // Box resolves in place; the separable filters need linear scratch.
+            assert_eq!(
+                ds.scratch_bytes() > 0,
+                filter != DownsampleFilter::Box,
+                "{filter:?} scratch"
+            );
+        }
+    }
 }
 
 /// With no supersampling the resolved read is just the frame, at output size.
@@ -241,4 +273,173 @@ fn resolve_is_a_no_op_without_supersampling() {
     let resolved = r.render_to_rgba_resolved(&mut scene, &cam);
     assert_eq!(plain.len(), (w * h * 4) as usize);
     assert_eq!(plain, resolved);
+}
+
+/// A shallow silhouette edge, and how far it strays from the straight line it
+/// is supposed to be.
+///
+/// Returns the rms residual in pixels after fitting a line through the
+/// sub-pixel edge position of every column — for a synthetic straight edge that
+/// residual *is* the staircase, and nothing else. Near-horizontal is the case
+/// that matters: an edge climbing one row every `1/slope` columns leaves long
+/// runs of identical coverage and then a jump, and the jump is what the eye
+/// sees crawling when the geometry turns.
+fn staircase_rms(frame: &[u8], w: u32, h: u32) -> (f64, f64) {
+    let lum = |x: u32, y: u32| {
+        let i = ((y * w + x) * 4) as usize;
+        0.2126 * frame[i] as f64 + 0.7152 * frame[i + 1] as f64 + 0.0722 * frame[i + 2] as f64
+    };
+    // Where the bright quad gives way to the dark background, per column, to
+    // sub-pixel precision: the centroid of the vertical gradient. Skip the
+    // outermost columns, where the filter's clamped tail is not the geometry.
+    let (mut xs, mut ys) = (Vec::new(), Vec::new());
+    for x in 8..w - 8 {
+        let mut num = 0.0;
+        let mut den = 0.0;
+        for y in 1..h {
+            let g = (lum(x, y) - lum(x, y - 1)).abs();
+            num += y as f64 * g;
+            den += g;
+        }
+        // One clean edge in the column, or nothing worth fitting.
+        if den > 40.0 {
+            xs.push(x as f64);
+            ys.push(num / den);
+        }
+    }
+    assert!(xs.len() > 32, "no edge found to measure ({} columns)", xs.len());
+    let n = xs.len() as f64;
+    let (mx, my) = (xs.iter().sum::<f64>() / n, ys.iter().sum::<f64>() / n);
+    let sxy: f64 = xs.iter().zip(&ys).map(|(x, y)| (x - mx) * (y - my)).sum();
+    let sxx: f64 = xs.iter().map(|x| (x - mx) * (x - mx)).sum();
+    let slope = sxy / sxx;
+    let rms = (xs
+        .iter()
+        .zip(&ys)
+        .map(|(x, y)| {
+            let e = y - (my + slope * (x - mx));
+            e * e
+        })
+        .sum::<f64>()
+        / n)
+        .sqrt();
+    (rms, slope)
+}
+
+/// A bright plate filling the bottom of the frame, its top edge a few degrees
+/// off horizontal. The one shape that shows the difference between filters.
+fn shallow_edge_scene() -> Scene {
+    let mut scene = Scene::new();
+    scene.background = Color::from_hex(0x000000);
+    scene.add_light(AmbientLight::new(Color::WHITE, 1.0));
+    let mut mat = StandardMaterial::new(Color::WHITE);
+    mat.metalness = 0.0;
+    mat.roughness = 1.0;
+    let mut plate = Object3D::mesh(Mesh::new(BoxGeometry::new(40.0, 20.0, 0.2), mat.into()));
+    // ~3.4° — one row of climb every sixteen columns, the worst case for a
+    // filter one pixel wide.
+    plate.quaternion = Quaternion::from_axis_angle(Vector3::new(0.0, 0.0, 1.0), 0.06f32.atan());
+    plate.position = Vector3::new(0.0, -10.2, 0.0);
+    scene.add(plate);
+    scene
+}
+
+fn flat_camera(w: u32, h: u32) -> PerspectiveCamera {
+    let mut c = PerspectiveCamera::new(30.0, w as f32 / h as f32, 0.01, 200.0);
+    c.position = Vector3::new(0.0, 0.0, 22.0);
+    c.look_at(Vector3::ZERO);
+    c
+}
+
+/// The fix: a wider reconstruction filter leaves a straight edge straighter.
+///
+/// The block average is a box one output pixel wide, whose response is `sinc` —
+/// first zero at twice Nyquist, so it passes much of what it was meant to
+/// remove and that folds back as a staircase. More samples inside the box do
+/// not help, because the support is the problem; this is what does.
+#[test]
+fn a_wider_filter_straightens_a_shallow_edge() {
+    let (w, h) = (256u32, 192u32);
+    let mut measured = Vec::new();
+    for filter in [
+        DownsampleFilter::Box,
+        DownsampleFilter::Tent,
+        DownsampleFilter::Mitchell,
+        DownsampleFilter::Lanczos2,
+    ] {
+        let Some(mut r) = filtered(w, h, 3, filter) else {
+            eprintln!("skipping: no GPU adapter");
+            return;
+        };
+        let mut scene = shallow_edge_scene();
+        let cam = flat_camera(w, h);
+        let frame = r.render_to_rgba_resolved(&mut scene, &cam);
+        assert_eq!(frame.len(), (w * h * 4) as usize, "{filter:?}: resolved size");
+        let (rms, slope) = staircase_rms(&frame, w, h);
+        // All four see the same geometry, so a filter that moved the edge
+        // somewhere else would be a bug, not a smoother resolve.
+        assert!(
+            slope.abs() > 0.02 && slope.abs() < 0.12,
+            "{filter:?}: edge slope {slope:.4} is not the shallow one the test set up"
+        );
+        measured.push((filter, rms));
+    }
+    for (filter, rms) in &measured {
+        eprintln!("{filter:?}: staircase {rms:.4} px");
+    }
+    let box_rms = measured[0].1;
+    for (filter, rms) in &measured[1..] {
+        assert!(
+            *rms < box_rms,
+            "{filter:?} left a bigger staircase than the box average \
+             ({rms:.4} px against {box_rms:.4} px) — the wider filter is not reaching \
+             outside the block, or its weights are centred wrong"
+        );
+    }
+}
+
+/// Half a pixel of centring error in the tap offsets is invisible in a still
+/// and wrong the moment it is composited against anything resolved another way,
+/// so pin the edge's absolute position across filters rather than only its
+/// straightness.
+#[test]
+fn every_filter_puts_the_edge_in_the_same_place() {
+    let (w, h) = (256u32, 192u32);
+    let mut positions = Vec::new();
+    for filter in [
+        DownsampleFilter::Box,
+        DownsampleFilter::Tent,
+        DownsampleFilter::Mitchell,
+        DownsampleFilter::Lanczos2,
+    ] {
+        let Some(mut r) = filtered(w, h, 3, filter) else {
+            eprintln!("skipping: no GPU adapter");
+            return;
+        };
+        let mut scene = shallow_edge_scene();
+        let cam = flat_camera(w, h);
+        let frame = r.render_to_rgba_resolved(&mut scene, &cam);
+        let lum = |x: u32, y: u32| {
+            let i = ((y * w + x) * 4) as usize;
+            0.2126 * frame[i] as f64 + 0.7152 * frame[i + 1] as f64 + 0.0722 * frame[i + 2] as f64
+        };
+        // Centre column only, and the gradient centroid over the whole height:
+        // a shifted kernel moves this, a wider one does not.
+        let x = w / 2;
+        let (mut num, mut den) = (0.0, 0.0);
+        for y in 1..h {
+            let g = (lum(x, y) - lum(x, y - 1)).abs();
+            num += y as f64 * g;
+            den += g;
+        }
+        positions.push((filter, num / den));
+    }
+    let (_, first) = positions[0];
+    for (filter, y) in &positions {
+        assert!(
+            (y - first).abs() < 0.35,
+            "{filter:?} put the edge at y={y:.3} against the box average's {first:.3} — \
+             that is a centring error in the tap offsets, not a filter difference"
+        );
+    }
 }

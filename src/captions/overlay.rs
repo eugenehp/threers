@@ -22,6 +22,7 @@
 //! assert!(!overlay.is_visible());
 //! ```
 
+use crate::utils::srgb::{linear_to_srgb, srgb_to_linear};
 use super::{CaptionPainter, CaptionStyle, CaptionTrack};
 
 /// Caches a rasterized caption overlay across frames.
@@ -203,9 +204,21 @@ impl CaptionOverlay {
             }
             let da = dst[3] as u32;
             let out_a = sa + da * (255 - sa) / 255;
+            if out_a == 0 {
+                continue;
+            }
+            // In linear light, for the same reason `raster::blend_pixel` is: an
+            // sRGB byte is an encoding, not an amount of light, and averaging
+            // encodings makes a half-covered pixel less than half as bright.
+            // Alpha stays where it is — a fraction is not gamma-encoded.
+            let sa_f = sa as f32 / 255.0;
+            let da_f = da as f32 / 255.0;
+            let out_a_f = sa_f + da_f * (1.0 - sa_f);
             for c in 0..3 {
-                let numerator = src[c] as u32 * sa + dst[c] as u32 * da * (255 - sa) / 255;
-                dst[c] = numerator.checked_div(out_a).map_or(0, |v| v.min(255) as u8);
+                let s_lin = srgb_to_linear(src[c]);
+                let d_lin = srgb_to_linear(dst[c]);
+                let out = (s_lin * sa_f + d_lin * da_f * (1.0 - sa_f)) / out_a_f;
+                dst[c] = linear_to_srgb(out);
             }
             dst[3] = out_a.min(255) as u8;
         }

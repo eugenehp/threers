@@ -1,8 +1,9 @@
 //! What can be animated.
 //!
 //! [`Animatable`] is the one trait everything here is generic over. Implement it
-//! for your own types and they work with [`crate::Tween`], [`crate::Spring`] and
-//! [`crate::Timeline`] unchanged.
+//! for your own types and they work with [`Tween`](crate::tween::Tween),
+//! [`Spring`](crate::spring::Spring) and [`Timeline`](crate::timeline::Timeline)
+//! unchanged.
 
 use threers::math::{Color, Quaternion, Vector2, Vector3, Vector4};
 

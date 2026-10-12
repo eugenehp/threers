@@ -23,6 +23,8 @@ pub mod h264;
 pub mod rate;
 pub mod hevc;
 pub mod mp4;
+pub mod mp4_demux;
+pub mod mp4_stream;
 pub mod vp9;
 pub mod webm;
 
@@ -139,7 +141,7 @@ pub(crate) fn map_frames<T, R>(frames: &[T], encode: impl Fn(&T) -> R + Sync + S
     frames.iter().map(encode).collect()
 }
 
-/// [`map_frames`], public so benchmarks and callers with their own frame source
+/// `map_frames`, public so benchmarks and callers with their own frame source
 /// can use the same batching the export paths do.
 pub fn map_frames_pub<T, R>(frames: &[T], encode: impl Fn(&T) -> R + Sync + Send) -> Vec<R>
 where

@@ -861,7 +861,7 @@ impl<'a> Lattice<'a> {
     /// so it is worth doing once and reusing the
     /// [`thickness`](Self::current_thickness) rather than calling it per frame.
     /// The region being filled is evaluated once for all twenty, not once each:
-    /// it does not move as the thickness does, and a [`Region::mesh`] costs two
+    /// it does not move as the thickness does, and a `Region::mesh` costs two
     /// BVH queries a sample where the lattice itself costs a few multiplies.
     pub fn fit_relative_density(mut self, target: f32) -> Self {
         let target = target.clamp(0.0, 1.0);

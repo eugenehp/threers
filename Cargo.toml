@@ -54,6 +54,13 @@ exclude = [
     # Example render output and local tooling.
     "out/**",
     "scripts/**",
+    # Two render artifacts that were committed by accident and have been shipping
+    # ever since: a path-trace viewport capture and a test video. Together they
+    # are 16.9 MB — over half of what went into the 0.0.5 tarball — and no
+    # dependent reads either. They are still *tracked*, so this only keeps them
+    # out of the package; removing them from history is a separate decision.
+    "viewport_path_trace.rtfc",
+    "cube.mp4",
 ]
 
 # docs.rs builds with default features only, which for this crate means most of
@@ -71,10 +78,37 @@ features = [
     "step",
     "parallel",
     "async",
+    "fluid",
 ]
 
 [lib]
 crate-type = ["cdylib", "rlib"]
+
+# Size-tuned release for wasm. NOT `[profile.release]`, because that governs the
+# native build too, where this renderer and the path tracer want speed — and
+# `opt-level = "z"` there would be a bad trade.
+#
+# Measured on `mini` + `webgl`, after wasm-bindgen, brotli -q 11 as the browser
+# would receive it:
+#
+#   default release                  5.41 MiB raw   1.089 MiB transferred
+#   this profile                     2.86 MiB raw   0.785 MiB transferred
+#
+# A 28% smaller download, for about a minute of build time instead of twelve
+# seconds. `opt-level = "z"` beats `"s"` here (2.86 against 3.17 MiB raw), which
+# is not a given — `"z"` disables loop vectorisation and sometimes costs more
+# than it saves.
+#
+# `panic = "immediate-abort"` would take another slice off, but it needs
+# `cargo-features` at the top of this manifest, which makes the whole crate
+# nightly-only. Not worth it for a published library.
+[profile.release-wasm]
+inherits = "release"
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
 
 [features]
 default = ["captions"]
@@ -92,6 +126,9 @@ openscad = ["bvh-csg"]
 manifold = ["dep:manifold-rust", "openscad"]
 # Planets, moons, starfields, map generation.
 planet = []
+# Interactive 2D fluid simulation (Stam's stable fluids on the GPU, as render
+# passes only — no compute stage, so it runs on WebGL2 as well as WebGPU).
+fluid = []
 # Universal Scene Description — `.usda`, `.usdc` and `.usdz`, read and written.
 # Pure Rust with no dependencies of its own, so this costs compile time and
 # nothing else; it is opt-in because most scenes never touch USD.
@@ -129,6 +166,12 @@ brep-kernel = ["brep-csg"]
 step = ["brep-kernel"]
 # Assembly motion checks (body correspondence, axis recovery, swept volume).
 assembly-check = []
+# WebGL2 in the browser, through wgpu's GL backend.
+#
+# WebGPU is still preferred wherever the browser has it; this only widens what
+# runs. WebGL2 has no compute shaders and no storage buffers, so the passes that
+# need them fall back to their raster or CPU paths — see `docs/webgl.md`.
+webgl = ["wgpu/webgl"]
 # Trained U-Net denoiser beside the À-Trous filter (native inference).
 learned-denoise = ["raytrace"]
 learned-denoise-metal = ["learned-denoise"]
@@ -149,6 +192,7 @@ full = [
     "media",
     "gi",
     "planet",
+    "fluid",
     "rlx",
     "rlx-geo",
     "assembly-check",
@@ -158,7 +202,7 @@ full = [
 ]
 # Browser / wasm kitchen sink — no native-only flags (video, metal, async, …).
 # Used by `VARIANT=full web/build.sh` and the npm `threers/full` package entry.
-wasm-full = ["captions", "openscad", "native-codec", "nurbs", "planet", "raytrace"]
+wasm-full = ["captions", "openscad", "native-codec", "nurbs", "planet", "raytrace", "fluid"]
 
 [dependencies]
 wgpu = "30"
@@ -199,11 +243,43 @@ features = [
     "HtmlElement",
     "Performance",
     "console",
+    # The fluid's browser shell: pointer events give one id per finger, which
+    # is exactly the shape `FluidSim::pointer_down` wants.
+    "EventTarget",
+    "PointerEvent",
+    "MouseEvent",
+    "KeyboardEvent",
 ]
 
 [[example]]
 name = "usd_animation"
 required-features = ["usd"]
+
+[[example]]
+name = "fluid_render"
+required-features = ["fluid"]
+
+[[example]]
+name = "fluid_bench"
+required-features = ["fluid"]
+
+[[example]]
+name = "fluid"
+required-features = ["fluid"]
+
+# `captions` is on by default, so these only need saying for
+# `--no-default-features` builds — where they are the two examples that break.
+[[example]]
+name = "captions_render"
+required-features = ["captions"]
+
+[[example]]
+name = "fontprobe"
+required-features = ["captions"]
+
+[[example]]
+name = "retrofuturism"
+required-features = ["captions"]
 
 [[example]]
 name = "headless_video"
@@ -523,8 +599,29 @@ required-features = ["native-codec"]
 
 # Browser tests. `wasm-bindgen-test` is only needed when building for wasm, so
 # it is a dev-dependency of that target alone and costs a native build nothing.
+# Native only: criterion pulls in rayon, which refuses to build for wasm32 and
+# takes the whole browser test suite down with it.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+criterion = "0.5"
+
+# What the CPU side of a frame costs. Everything in it runs without an adapter,
+# so it is a number CI can watch rather than one somebody remembers to take.
+[[bench]]
+name = "pipeline"
+harness = false
+
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = "0.3"
+# The WebGL test has to make a canvas: wgpu's GL backend takes its context from
+# one, so without a surface there is no adapter to request.
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+futures-channel = "0.3"
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies.web-sys]
+version = "0.3"
+features = ["Window", "Document", "Element", "HtmlCanvasElement"]
 
 # Integration tests that reach into an optional module. Without these, a
 # plain `cargo test` tries to build every file under `tests/` against
@@ -534,6 +631,56 @@ wasm-bindgen-test = "0.3"
 [[test]]
 name = "usd_wasm"
 required-features = ["usd"]
+
+# Targets whose own `#![cfg]` needs more than the default features. Without
+# these cargo builds each as an empty test binary that reports zero tests.
+[[test]]
+name = "backend_parity"
+required-features = ["metal"]
+
+[[test]]
+name = "metal_backend"
+required-features = ["metal"]
+
+[[test]]
+name = "h264_metal"
+required-features = ["metal", "native-codec"]
+
+[[test]]
+name = "h264_gpu"
+required-features = ["native-codec"]
+
+[[test]]
+name = "mp4_demux"
+required-features = ["native-codec"]
+
+[[test]]
+name = "captions_overlay_gpu"
+required-features = ["captions"]
+
+[[test]]
+name = "captions_video"
+required-features = ["native-codec", "video"]
+
+[[test]]
+name = "video_export_streaming"
+required-features = ["native-codec", "video"]
+
+[[test]]
+name = "rlx_bridge"
+required-features = ["rlx"]
+
+[[test]]
+name = "simcity_bake"
+required-features = ["mesh-bvh"]
+
+[[test]]
+name = "webgl"
+required-features = ["webgl"]
+
+[[test]]
+name = "fluid_webgl"
+required-features = ["fluid", "webgl"]
 
 [[test]]
 name = "animation_streaming"
@@ -545,19 +692,22 @@ required-features = ["native-codec"]
 
 [[test]]
 name = "assembly_real_geometry"
-required-features = ["assembly-check"]
+required-features = ["assembly-check", "openscad"]
 
+# `brep` alone is not enough: the suite reaches into `brep::intersect`
+# (`brep-csg`) and `brep::planar` (`brep-kernel`), and `brep-kernel` implies
+# both. Declared as `brep` it failed to compile under `--features brep`.
 [[test]]
 name = "brep"
-required-features = ["brep"]
+required-features = ["brep-kernel"]
 
 [[test]]
 name = "brep_boolean"
-required-features = ["brep"]
+required-features = ["brep-kernel"]
 
 [[test]]
 name = "brep_csg"
-required-features = ["brep", "openscad"]
+required-features = ["brep-csg"]
 
 [[test]]
 name = "captions_mux"

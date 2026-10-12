@@ -32,7 +32,7 @@ animation = ["dep:threers-animation"]
 
 [dependencies]
 threers = { path = "../..", version = "0.0.6" }
-threers-physics = { path = "../threers-physics", version = "0.0.1", optional = true }
+threers-physics = { path = "../threers-physics", version = "0.0.2", optional = true }
 threers-animation = { path = "../threers-animation", version = "0.0.1", optional = true, default-features = false }
 pyo3 = { version = "0.23", features = ["extension-module", "abi3-py39"] }
 

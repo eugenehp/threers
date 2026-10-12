@@ -28,6 +28,13 @@ impl OrthographicCamera {
             far,
         }
     }
+
+    /// Point the camera at a world-space position. Chainable, mirroring
+    /// [`PerspectiveCamera::look_at`](crate::PerspectiveCamera::look_at).
+    pub fn look_at(&mut self, target: Vector3) -> &mut Self {
+        self.target = target;
+        self
+    }
 }
 
 impl Camera for OrthographicCamera {
@@ -46,6 +53,9 @@ impl Camera for OrthographicCamera {
     }
     fn position(&self) -> Vector3 {
         self.position
+    }
+    fn look_at(&mut self, target: Vector3) {
+        self.target = target;
     }
     fn set_aspect(&mut self, aspect: f32) {
         // Preserve vertical span; rescale horizontal symmetrically.

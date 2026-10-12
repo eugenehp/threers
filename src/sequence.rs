@@ -1,6 +1,6 @@
 //! Rendering a sequence: still frames, a video, or both from one pass.
 //!
-//! [`export_video`](crate::video::export_video) already turns a frame closure
+//! `video::export_video` already turns a frame closure
 //! into an encoded file, and [`encode_png`] already writes a still. What is
 //! missing between them is the part every animation needs anyway — render once,
 //! keep the frames *and* the video, know how long it has left, and do not

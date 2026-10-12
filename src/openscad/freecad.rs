@@ -17,8 +17,10 @@
 //!
 //! # Writer / loader
 //!
-//! [`FcstdWriter`] builds multi-object documents with placements and metadata.
-//! [`FcstdLoader`] returns a typed [`FcstdDocument`] with a skip report — same
+//! [`FcstdWriter`](crate::openscad::freecad::FcstdWriter) builds multi-object
+//! documents with placements and metadata.
+//! [`FcstdLoader`](crate::openscad::freecad::FcstdLoader) returns a typed
+//! [`FcstdDocument`](crate::openscad::freecad::FcstdDocument) with a skip report — same
 //! “decline rather than approximate” rule as STEP: missing sidecars and bad
 //! kernels are named, not silently dropped without a record.
 

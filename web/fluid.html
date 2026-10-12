@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>threers — fluid</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden;
+               font: 12px/1.45 -apple-system, system-ui, sans-serif; color: #dbe6f0;
+               -webkit-user-select: none; user-select: none; }
+  canvas { display: block; width: 100vw; height: 100vh; touch-action: none; }
+  #ui { position: fixed; top: 12px; right: 12px; width: 232px;
+        max-height: calc(100vh - 24px); overflow-y: auto;
+        background: rgba(10,10,18,.66); backdrop-filter: blur(10px);
+        padding: 10px 12px 12px; border-radius: 10px; border: 1px solid #2a2a3c; }
+  #ui[hidden] { display: none; }
+  h2 { font-size: 11px; letter-spacing: .09em; text-transform: uppercase; color: #9a8fd0;
+       margin: 12px 0 6px; font-weight: 600; }
+  h2:first-child { margin-top: 0; }
+  h2 .cost { float: right; text-transform: none; letter-spacing: 0; font-weight: 400;
+             color: #6b6b85; }
+  label { display: flex; align-items: center; gap: 6px; margin: 4px 0; }
+  label > span:first-child { flex: 0 0 76px; color: #b3aec9; }
+  select, input[type=range] { flex: 1; min-width: 0; }
+  select { background: #181828; color: #dbe6f0; border: 1px solid #343450;
+           border-radius: 5px; padding: 2px 5px; font: inherit; }
+  input[type=range] { accent-color: #c45ad0; height: 16px; }
+  input[type=checkbox] { accent-color: #c45ad0; margin: 0; }
+  output { flex: 0 0 40px; text-align: right; color: #e49bff;
+           font-variant-numeric: tabular-nums; }
+  button { width: 100%; margin-top: 6px; padding: 5px; font: inherit; cursor: pointer;
+           background: #241a33; color: #e49bff; border: 1px solid #45305c; border-radius: 6px; }
+  button:hover { background: #2e2140; }
+  #stats { margin-top: 10px; padding-top: 8px; border-top: 1px solid #2a2a3c;
+           color: #8e89a6; font-variant-numeric: tabular-nums; }
+  #stats b { color: #dbe6f0; font-weight: 600; }
+  #hint { margin-top: 8px; color: #6b6b85; }
+  #msg { position: fixed; inset: 0; display: grid; place-items: center; text-align: center;
+         padding: 2rem; background: #000; font-size: 14px; }
+  #msg.hidden { display: none; }
+  code { color: #e49bff; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="ui" hidden>
+  <h2>Quality <span class="cost">rebuilds grids</span></h2>
+  <label><span>level</span><select id="quality"></select></label>
+  <label><span>sweeps</span><input type="range" id="pressure_iterations" min="1" max="60" step="1"><output></output></label>
+  <!-- A multigrid V-cycle solves the smooth part of the pressure problem on a
+       coarse grid, where Jacobi's one-texel reach is the whole domain. One
+       cycle beats sixty-four times the sweeps. -->
+  <!-- Second-order advection: the dye keeps its shape instead of blurring a
+       little every step. One extra pass on the dye grid. -->
+  <label><span>maccormack</span><input type="checkbox" id="maccormack"></label>
+  <label><span>multigrid</span><input type="checkbox" id="multigrid"></label>
+  <label><span>cycles</span><input type="range" id="multigrid_cycles" min="1" max="4" step="1"><output></output></label>
+
+  <h2>Fluid <span class="cost">free</span></h2>
+  <label><span>vorticity</span><input type="range" id="curl" min="0" max="50" step="1"><output></output></label>
+  <label><span>dye fade</span><input type="range" id="density_dissipation" min="0" max="4" step="0.05"><output></output></label>
+  <label><span>motion fade</span><input type="range" id="velocity_dissipation" min="0" max="4" step="0.05"><output></output></label>
+  <label><span>pressure</span><input type="range" id="pressure" min="0" max="1" step="0.01"><output></output></label>
+  <label><span>splat size</span><input type="range" id="splat_radius" min="0.01" max="1" step="0.01"><output></output></label>
+  <!-- The one control here that changes the physics rather than the look:
+       1.0 is the original's overshoot, 0.5 the consistent coefficient. -->
+  <label><span>projection</span><input type="range" id="gradient_scale" min="0.25" max="1.5" step="0.05"><output></output></label>
+
+  <h2>Look <span class="cost">free</span></h2>
+  <label><span>shading</span><input type="checkbox" id="shading"></label>
+  <label><span>colorful</span><input type="checkbox" id="colorful"></label>
+  <label><span>bloom</span><input type="checkbox" id="bloom"></label>
+  <label><span>intensity</span><input type="range" id="bloom_intensity" min="0.1" max="2" step="0.05"><output></output></label>
+  <label><span>threshold</span><input type="range" id="bloom_threshold" min="0" max="1" step="0.01"><output></output></label>
+  <label><span>sunrays</span><input type="checkbox" id="sunrays"></label>
+  <label><span>weight</span><input type="range" id="sunrays_weight" min="0.3" max="1" step="0.01"><output></output></label>
+
+  <button id="splat">random splats</button>
+  <button id="pause">pause</button>
+
+  <div id="stats">
+    <div><b id="fps">–</b> fps · <b id="mem">–</b> MB</div>
+    <div>dye <b id="dye">–</b> · sim <b id="sim">–</b></div>
+  </div>
+  <div id="hint">drag to pour ink · space for splats · <code>p</code> pauses</div>
+</div>
+
+<div id="msg">starting…</div>
+
+<script type="module">
+// The fluid lives in the main threers package, behind the `fluid` Cargo
+// feature: FLUID=1 web/build.sh
+import init, { fluidStart, Fluid } from "./pkg/threers.js";
+
+const msg = document.getElementById("msg");
+const canvas = document.getElementById("c");
+const $ = (id) => document.getElementById(id);
+const fail = (html) => { msg.classList.remove("hidden"); msg.innerHTML = html; };
+
+// Sliders are read straight off the DOM by id, which is the Rust field name —
+// so adding a knob here is one <input> and nothing else.
+const SLIDERS = ["pressure_iterations", "multigrid_cycles", "curl", "density_dissipation",
+                 "velocity_dissipation", "pressure", "splat_radius", "gradient_scale",
+                 "bloom_intensity", "bloom_threshold", "sunrays_weight"];
+const TOGGLES = ["shading", "colorful", "bloom", "sunrays", "multigrid", "maccormack"];
+
+// The defaults are the original's, and are stated once here so the panel opens
+// showing what the simulation is actually running.
+const DEFAULTS = {
+  pressure_iterations: 20, multigrid: false, multigrid_cycles: 1, maccormack: false, curl: 30, density_dissipation: 1, velocity_dissipation: 0.2,
+  pressure: 0.8, splat_radius: 0.25, gradient_scale: 1,
+  bloom_intensity: 0.8, bloom_threshold: 0.6, sunrays_weight: 1,
+  shading: true, colorful: true, bloom: true, sunrays: true,
+};
+
+const params = new URLSearchParams(location.search);
+let fluid;
+try {
+  await init();
+  fluid = await fluidStart(canvas, params.get("quality") ?? undefined);
+} catch (e) {
+  fail(`Could not start the fluid:<br><br><code>${String(e)}</code><br><br>
+        This page needs <b>WebGPU</b> — Safari 18+, Chrome 113+ — or a build with
+        <code>WEBGL=1</code> for the WebGL2 fallback.`);
+  throw e;
+}
+msg.classList.add("hidden");
+
+const levels = Fluid.qualityNames();
+$("quality").replaceChildren(...levels.map((name) => {
+  const o = document.createElement("option");
+  o.value = o.textContent = name;
+  o.selected = name === (params.get("quality") ?? "high");
+  return o;
+}));
+
+for (const id of SLIDERS) {
+  const el = $(id);
+  el.value = DEFAULTS[id];
+  const out = el.nextElementSibling;
+  const echo = () => { out.textContent = (+el.value).toFixed(el.step.includes(".") ? 2 : 0); };
+  echo();
+  el.oninput = () => { echo(); fluid.set(id, +el.value); };
+}
+for (const id of TOGGLES) {
+  const el = $(id);
+  el.checked = DEFAULTS[id];
+  el.onchange = () => fluid.set(id, el.checked ? 1 : 0);
+}
+$("quality").onchange = (e) => { fluid.quality(e.target.value); stats(); };
+$("splat").onclick = () => fluid.splats(15);
+$("pause").onclick = () => {
+  fluid.set("paused", fluid.paused() ? 0 : 1);
+  $("pause").textContent = fluid.paused() ? "resume" : "pause";
+};
+
+// A quality level is a request; the grids that come out of it depend on the
+// canvas's aspect and on what the device will allocate. So the panel reports
+// what happened rather than what was asked for.
+function stats() {
+  const i = JSON.parse(fluid.info());
+  $("mem").textContent = (i.bytes / 1048576).toFixed(0);
+  $("dye").textContent = `${i.dye[0]}×${i.dye[1]}`;
+  $("sim").textContent = `${i.sim[0]}×${i.sim[1]}`;
+}
+stats();
+setInterval(() => { $("fps").textContent = fluid.fps().toFixed(0); stats(); }, 500);
+$("ui").hidden = false;
+</script>
+</body>
+</html>

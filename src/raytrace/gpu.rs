@@ -27,7 +27,7 @@
 //!
 //! **Accumulate on the device.** The film lives in a storage buffer. Full-frame
 //! traces read back immediately; tile/region traces defer readback until
-//! [`GpuBackend::sync_film`] (called automatically from
+//! [`GpuBackend::sync_film`](crate::raytrace::gpu::GpuBackend::sync_film) (called automatically from
 //! [`RaytraceRenderer::resolve_rgba`] and friends).
 //!
 //! **One pixel per invocation, 8×8 workgroups.** No atomics: the only thread
@@ -96,7 +96,7 @@ pub struct GpuCaps {
     pub max_texture_2d: u32,
     /// `max_uniform_buffer_binding_size`.
     pub max_uniform_binding: u64,
-    /// Shelf atlas side actually used (≤ [`ATLAS_SIZE`] and ≤ `max_texture_2d`).
+    /// Shelf atlas side actually used (≤ `ATLAS_SIZE` and ≤ `max_texture_2d`).
     pub atlas_side: u32,
     /// Maximum film pixels the accum buffer may cover.
     pub max_accum_pixels: u64,
@@ -123,8 +123,8 @@ impl GpuCaps {
             .max(256);
 
         let accum_stride = (ACCUM_STRIDE * 4) as u64;
-        let max_accum_pixels = (max_storage_binding / accum_stride)
-            .min(max_buffer_size / accum_stride);
+        let max_accum_pixels =
+            (max_storage_binding / accum_stride).min(max_buffer_size / accum_stride);
 
         Self {
             max_storage_binding,
@@ -152,8 +152,7 @@ impl GpuCaps {
         }
         if self.max_accum_pixels == 0 {
             return Err(RaytraceError::TooLarge(
-                "device storage-buffer limits are too small for the path-tracer film"
-                    .into(),
+                "device storage-buffer limits are too small for the path-tracer film".into(),
             ));
         }
         Ok(())
@@ -273,7 +272,8 @@ struct Uniforms {
     motion_prev_forward: [f32; 4],
     /// Pixel clip: x, y, width, height. Width `0` means the full frame.
     clip: [u32; 4],
-    /// x = scene scale, y = sample redistribution flag, zw unused.
+    /// x = scene scale, y = sample redistribution flag, z = diaphragm blades,
+    /// w = anamorphic squeeze.
     render_params: [f32; 4],
     /// rgb + mode (`0` off, `1` linear, `2` exp2).
     fog_color: [f32; 4],
@@ -375,7 +375,7 @@ impl std::fmt::Debug for GpuBackend {
 impl GpuBackend {
     /// Acquire an adapter and build a device of our own. Blocking; native only.
     ///
-    /// On `wasm32`, use [`Self::headless_browser`].
+    /// On `wasm32`, use `Self::headless_browser` instead.
     pub fn headless() -> Result<Self, RaytraceError> {
         #[cfg(target_arch = "wasm32")]
         {
@@ -410,14 +410,12 @@ impl GpuBackend {
         // default, and there is no portability to protect here: this device is
         // used on this adapter and nowhere else.
         let limits = adapter.limits();
-        let (device, queue) = pollster::block_on(adapter.request_device(
-            &wgpu::DeviceDescriptor {
-                label: Some("threers path tracer"),
-                required_features: wgpu::Features::empty(),
-                required_limits: Self::request_limits(&limits),
-                ..Default::default()
-            },
-        ))
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("threers path tracer"),
+            required_features: wgpu::Features::empty(),
+            required_limits: Self::request_limits(&limits),
+            ..Default::default()
+        }))
         .map_err(|e| RaytraceError::NoDevice(format!("request_device failed: {e:?}")))?;
 
         Ok(Self::with_device(Arc::new(device), Arc::new(queue)))
@@ -667,7 +665,8 @@ impl GpuBackend {
         };
         let accum_len = film.width() as usize * film.height() as usize * ACCUM_STRIDE;
         self.caps.check_film(film.width(), film.height())?;
-        self.caps.check_storage((accum_len * 4) as u64, "film accum")?;
+        self.caps
+            .check_storage((accum_len * 4) as u64, "film accum")?;
 
         let accum = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("pathtrace accum"),
@@ -681,11 +680,26 @@ impl GpuBackend {
             label: Some("pathtrace bind group"),
             layout: &self.layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: old.uniform.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: old.node_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: old.data_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 3, resource: old.idx_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 4, resource: accum.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: old.uniform.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: old.node_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: old.data_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: old.idx_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: accum.as_entire_binding(),
+                },
                 wgpu::BindGroupEntry {
                     binding: 5,
                     resource: wgpu::BindingResource::TextureView(&old.atlas_view),
@@ -1065,8 +1079,15 @@ impl GpuBackend {
             ReadbackScope::Regions(regions) if regions.len() == 1 => Some(regions[0]),
             ReadbackScope::Regions(_) => None,
         };
-        let mut uniforms =
-            build_uniforms(scene, camera, settings, film, &off, epsilon, clip_for_uniforms);
+        let mut uniforms = build_uniforms(
+            scene,
+            camera,
+            settings,
+            film,
+            &off,
+            epsilon,
+            clip_for_uniforms,
+        );
 
         let mut done = 0u32;
         while done < samples {
@@ -1076,16 +1097,13 @@ impl GpuBackend {
 
             match scope {
                 ReadbackScope::Full => {
-                    self.queue.write_buffer(
-                        &res.uniform,
-                        0,
-                        bytemuck::bytes_of(&uniforms),
-                    );
-                    let mut encoder = self.device.create_command_encoder(
-                        &wgpu::CommandEncoderDescriptor {
-                            label: Some("pathtrace batch"),
-                        },
-                    );
+                    self.queue
+                        .write_buffer(&res.uniform, 0, bytemuck::bytes_of(&uniforms));
+                    let mut encoder =
+                        self.device
+                            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                                label: Some("pathtrace batch"),
+                            });
                     let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                         label: Some("pathtrace"),
                         timestamp_writes: None,
@@ -1102,22 +1120,14 @@ impl GpuBackend {
                 }
                 ReadbackScope::Regions(regions) => {
                     for region in regions {
-                        uniforms.clip = [
-                            region.x,
-                            region.y,
-                            region.width,
-                            region.height,
-                        ];
-                        self.queue.write_buffer(
-                            &res.uniform,
-                            0,
-                            bytemuck::bytes_of(&uniforms),
-                        );
-                        let mut encoder = self.device.create_command_encoder(
-                            &wgpu::CommandEncoderDescriptor {
-                                label: Some("pathtrace batch"),
-                            },
-                        );
+                        uniforms.clip = [region.x, region.y, region.width, region.height];
+                        self.queue
+                            .write_buffer(&res.uniform, 0, bytemuck::bytes_of(&uniforms));
+                        let mut encoder =
+                            self.device
+                                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                                    label: Some("pathtrace batch"),
+                                });
                         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                             label: Some("pathtrace region"),
                             timestamp_writes: None,
@@ -1152,13 +1162,7 @@ impl GpuBackend {
         if defer {
             self.readback_pending = true;
         } else {
-            readback_film(
-                &self.device,
-                &self.queue,
-                &res.accum,
-                film,
-                scope,
-            )?;
+            readback_film(&self.device, &self.queue, &res.accum, film, scope)?;
             self.readback_pending = false;
         }
 
@@ -1310,7 +1314,7 @@ fn readback_many_regions(
     let mut staging_bytes = 0u64;
     for r in regions {
         let row_bytes = r.width as u64 * ACCUM_STRIDE as u64 * 4;
-        layouts.push(( *r, staging_bytes, row_bytes));
+        layouts.push((*r, staging_bytes, row_bytes));
         staging_bytes += row_bytes * r.height as u64;
     }
     let staging = device.create_buffer(&wgpu::BufferDescriptor {
@@ -1336,8 +1340,7 @@ fn readback_many_regions(
         let base = base as usize / 4;
         for row in 0..r.height {
             for col in 0..r.width {
-                let staging_base =
-                    base + row as usize * row_floats + col as usize * ACCUM_STRIDE;
+                let staging_base = base + row as usize * row_floats + col as usize * ACCUM_STRIDE;
                 let idx = (r.y + row) as usize * fw as usize + (r.x + col) as usize;
                 apply_accum_pixel(&mut film.pixels_mut()[idx], &values, staging_base);
             }
@@ -1379,7 +1382,10 @@ async fn map_staging_f32_async(
     Ok(values)
 }
 
-fn map_staging_f32(device: &wgpu::Device, staging: &wgpu::Buffer) -> Result<Vec<f32>, RaytraceError> {
+fn map_staging_f32(
+    device: &wgpu::Device,
+    staging: &wgpu::Buffer,
+) -> Result<Vec<f32>, RaytraceError> {
     let slice = staging.slice(..);
     let (tx, rx) = std::sync::mpsc::channel();
     slice.map_async(wgpu::MapMode::Read, move |r| {
@@ -1455,7 +1461,9 @@ fn build_uniforms(
             pos.z,
             if camera.is_perspective() { 1.0 } else { 0.0 },
         ],
-        cam_right: [right.x, right.y, right.z, settings.aperture],
+        // The *resolved* aperture, not the setting: a camera carrying an
+        // f-stop has one even when the settings do not.
+        cam_right: [right.x, right.y, right.z, camera.aperture()],
         cam_up: [up.x, up.y, up.z, camera.focus_distance()],
         cam_forward: [fwd.x, fwd.y, fwd.z, epsilon],
         inv_view: inv_view.elements,
@@ -1541,8 +1549,9 @@ fn build_uniforms(
         render_params: [
             scene.scale(),
             if redistribute { 1.0 } else { 0.0 },
-            0.0,
-            0.0,
+            // The iris, so the GPU shapes its bokeh the way the CPU does.
+            camera.lens().blades as f32,
+            camera.lens().anamorphic,
         ],
         fog_color: [
             scene.world.fog_color.x,
@@ -1575,12 +1584,7 @@ fn motion_uniforms(camera: &RtCamera) -> MotionUniforms {
     (
         prev.inv_view_matrix().elements,
         prev.inv_proj_matrix().elements,
-        [
-            p.x,
-            p.y,
-            p.z,
-            if prev.is_perspective() { 1.0 } else { 0.0 },
-        ],
+        [p.x, p.y, p.z, if prev.is_perspective() { 1.0 } else { 0.0 }],
         [prev.right().x, prev.right().y, prev.right().z, 0.0],
         [prev.up().x, prev.up().y, prev.up().z, 0.0],
         [prev.forward().x, prev.forward().y, prev.forward().z, 0.0],
@@ -1687,7 +1691,12 @@ impl Atlas {
     /// at full width so the shelf arithmetic stays simple; only the upload is
     /// cropped, and since rectangles are measured from the origin they stay
     /// valid.
-    fn upload(self, device: &wgpu::Device, queue: &wgpu::Queue, caps: GpuCaps) -> wgpu::TextureView {
+    fn upload(
+        self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        caps: GpuCaps,
+    ) -> wgpu::TextureView {
         let used_w = self.used_width.max(1);
         let used_h = (self.shelf_y + self.shelf_height).max(1);
         let (upload_w, upload_h, pixels) = if caps.check_texture_upload(used_w, used_h).is_ok() {
@@ -2717,8 +2726,18 @@ mod tests {
             .render(&rt, &cam, &settings, &mut c, 0, 64)
             .unwrap();
 
-        let gv: f64 = g.resolve_variance().iter().filter(|v| v.is_finite()).map(|v| *v as f64).sum();
-        let cv: f64 = c.resolve_variance().iter().filter(|v| v.is_finite()).map(|v| *v as f64).sum();
+        let gv: f64 = g
+            .resolve_variance()
+            .iter()
+            .filter(|v| v.is_finite())
+            .map(|v| *v as f64)
+            .sum();
+        let cv: f64 = c
+            .resolve_variance()
+            .iter()
+            .filter(|v| v.is_finite())
+            .map(|v| *v as f64)
+            .sum();
         assert!(gv > 0.0 && cv > 0.0);
         assert!(
             (gv - cv).abs() < 0.35 * cv.max(gv),
@@ -3112,7 +3131,9 @@ mod tests {
     #[test]
     fn gpu_batching_does_not_change_the_result() {
         let Some(mut one_gpu) = backend() else { return };
-        let Some(mut split_gpu) = backend() else { return };
+        let Some(mut split_gpu) = backend() else {
+            return;
+        };
         let mut scene = lit_box_scene();
         let settings = RaytraceSettings {
             samples_per_pixel: 8,
@@ -3228,7 +3249,8 @@ mod tests {
         assert!(caps.atlas_side <= limits.max_texture_dimension_2d);
         assert!(caps.atlas_side <= ATLAS_SIZE);
         assert!(caps.max_accum_pixels > 0);
-        caps.validate_kernel().expect("downlevel should fit uniforms");
+        caps.validate_kernel()
+            .expect("downlevel should fit uniforms");
     }
 
     #[test]
@@ -3314,7 +3336,10 @@ mod resize_cache_tests {
         let mut sc = scene();
         let cam = crate::PerspectiveCamera::new(45.0, 1.0, 0.1, 100.0);
         let mut rt = RaytraceRenderer::with_backend(64, 64, Box::new(backend));
-        rt.set_settings(RaytraceSettings { samples_per_pixel: 1, ..Default::default() });
+        rt.set_settings(RaytraceSettings {
+            samples_per_pixel: 1,
+            ..Default::default()
+        });
 
         // `prepare_if_changed`, not `prepare`: the latter rebuilds
         // unconditionally and calls `invalidate` itself, which is correct for

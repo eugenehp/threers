@@ -1,7 +1,7 @@
 //! Cinematic camera animation — Blender-parity feature set.
 //!
 //! Interactive orbit damping / auto-rotate live on
-//! [`threers::controls::OrbitControls`](threers::controls::OrbitControls).
+//! [`threers::controls::OrbitControls`].
 
 mod animator;
 mod bake;

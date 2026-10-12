@@ -1,0 +1,56 @@
+; FBX 7.4.0 project file
+FBXHeaderExtension:  {
+    FBXHeaderVersion: 1003
+}
+GlobalSettings:  {
+    Properties70:  {
+        P: "UpAxis", "int", "Integer", "",2
+        P: "UnitScaleFactor", "double", "Number", "",2.54
+    }
+}
+Objects:  {
+    Geometry: 100, "Geometry::Quad", "Mesh" {
+        Vertices: *12 {
+            a: 0,0,0,1,0,0,1,1,0,0,1,0
+        }
+        PolygonVertexIndex: *4 {
+            a: 0,1,2,-4
+        }
+        LayerElementNormal: 0 {
+            MappingInformationType: "ByVertice"
+            ReferenceInformationType: "IndexToDirect"
+            Normals: *6 {
+                a: 0,0,1,0,1,0
+            }
+            NormalsIndex: *4 {
+                a: 1,1,0,0
+            }
+        }
+        LayerElementUV: 0 {
+            MappingInformationType: "AllSame"
+            ReferenceInformationType: "Direct"
+            UV: *2 {
+                a: 0.25,0.75
+            }
+        }
+    }
+    Model: 200, "Model::Quad", "Mesh" {
+        Properties70:  {
+            P: "Lcl Translation", "Lcl Translation", "", "A",1,2,3
+            P: "Lcl Rotation", "Lcl Rotation", "", "A",0,0,90
+            P: "Lcl Scaling", "Lcl Scaling", "", "A",2,2,2
+        }
+    }
+    Material: 300, "Material::Red", "" {
+        Properties70:  {
+            P: "DiffuseColor", "Color", "", "A",0.8,0.1,0.05
+            P: "Shininess", "double", "Number", "",30
+            P: "Opacity", "double", "Number", "",0.5
+        }
+    }
+}
+Connections:  {
+    C: "OO",200,0
+    C: "OO",100,200
+    C: "OO",300,200
+}

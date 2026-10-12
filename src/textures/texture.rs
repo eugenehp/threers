@@ -235,6 +235,58 @@ impl Texture {
     /// all of them run and quietly produce noise. Use
     /// [`TextureFormat::data_len`] for sizes and
     /// [`TextureFormat::is_block_compressed`] to branch.
+    /// The pixels as 8-bit RGBA, the right way up for a file.
+    ///
+    /// `None` when there is nothing to convert: a texture whose bytes live only
+    /// on the GPU, or one held block-compressed, which would have to be decoded
+    /// first. Rows come out top-first, which is what every image format stores
+    /// and what both the glTF and USD writers need — so a texture with
+    /// [`flip_y`](Self::flip_y) off, meaning its rows are already bottom-up, is
+    /// turned over here rather than being written upside down.
+    pub fn to_rgba8(&self) -> Option<Vec<u8>> {
+        let count = (self.width as usize).checked_mul(self.height as usize)?;
+        if count == 0 || self.data.is_empty() {
+            return None;
+        }
+        let pixels: Vec<u8> = match self.format {
+            TextureFormat::Rgba8UnormSrgb | TextureFormat::Rgba8Unorm => {
+                self.data.get(..count * 4)?.to_vec()
+            }
+            // One channel becomes grey, so the file says what the channel said
+            // however a reader samples it.
+            TextureFormat::R8Unorm => self
+                .data
+                .get(..count)?
+                .iter()
+                .flat_map(|v| [*v, *v, *v, 255])
+                .collect(),
+            // Half float down to 8 bits. Anything above 1.0 clamps, which is a
+            // real loss and only reachable for an HDR image.
+            TextureFormat::Rgba16Float => self
+                .data
+                .get(..count * 8)?
+                .chunks_exact(2)
+                .map(|h| {
+                    let v = half_to_f32(u16::from_le_bytes([h[0], h[1]]));
+                    (v.clamp(0.0, 1.0) * 255.0).round() as u8
+                })
+                .collect(),
+            _ => return None,
+        };
+        if self.flip_y {
+            return Some(pixels);
+        }
+        let stride = self.width as usize * 4;
+        Some(
+            pixels
+                .chunks_exact(stride)
+                .rev()
+                .flatten()
+                .copied()
+                .collect(),
+        )
+    }
+
     pub fn bytes_per_pixel(&self) -> usize {
         assert!(
             !self.format.is_block_compressed(),
@@ -243,6 +295,21 @@ impl Texture {
             self.format
         );
         self.format.bytes_per_block()
+    }
+
+    /// The same pixels and sampler settings, read in a different format.
+    ///
+    /// For glTF, where one image can legitimately be both: sRGB when it is
+    /// baseColour, linear when it is a normal or metallic-roughness map. Gets a
+    /// fresh id, because the two are different GPU textures.
+    pub fn with_format(&self, format: TextureFormat) -> Self {
+        Self {
+            format,
+            id: next_texture_id(),
+            upload_seq: 0,
+            mips: Vec::new(),
+            ..self.clone()
+        }
     }
 
     /// A twin of this texture with no CPU bytes, for keeping in a material
@@ -281,4 +348,9 @@ impl Texture {
     pub fn solid(rgba: [u8; 4], format: TextureFormat) -> Self {
         Self::new(1, 1, format, rgba.to_vec())
     }
+}
+
+/// An IEEE half as an `f32`.
+fn half_to_f32(bits: u16) -> f32 {
+    crate::renderer::readback::f16_to_f32(bits)
 }

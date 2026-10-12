@@ -77,6 +77,19 @@ impl Scene {
     }
 
     /// Convenience: build a light Object3D and add it to the scene.
+    /// Geometry plus material into the scene, in one call.
+    ///
+    /// `scene.add(Object3D::mesh(Mesh::new(geometry, material)))` is three
+    /// constructors deep to say one thing, and it is the single most repeated
+    /// line in every example in this crate.
+    pub fn add_mesh(
+        &mut self,
+        geometry: crate::core::BufferGeometry,
+        material: crate::materials::Material,
+    ) -> ObjectId {
+        self.add(Object3D::mesh(crate::core::Mesh::new(geometry, material)))
+    }
+
     pub fn add_light(&mut self, light: impl Into<Light>) -> ObjectId {
         self.add(Object3D::light(light))
     }

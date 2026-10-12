@@ -109,7 +109,7 @@ pub enum TransformKind {
 /// right instead of a thousand and twenty-four.
 const G32: [i32; 16] = [90, 90, 88, 85, 82, 78, 73, 67, 61, 54, 46, 38, 31, 22, 13, 4];
 
-/// The 32-point DCT, constructed rather than transcribed. See [`G32`].
+/// The 32-point DCT, constructed rather than transcribed. See `G32`.
 pub const DCT32: [[i32; 32]; 32] = build_dct32();
 
 const fn build_dct32() -> [[i32; 32]; 32] {
