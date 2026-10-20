@@ -3637,6 +3637,7 @@ pub(crate) fn generate_city(scene: &mut Scene, params: &CityParams) -> City {
                 rayleigh: 2.1,
                 mie_coefficient: 0.005,
                 mie_directional_g: 0.78,
+                ..SkyMaterial::default()
             }),
         ));
         obj.name = "sky".into();
@@ -3836,8 +3837,10 @@ pub(crate) fn generate_city(scene: &mut Scene, params: &CityParams) -> City {
             camera_size: extent * 1.06,
             camera_near: 0.5,
             camera_far: extent * 6.0,
+            radius: 1.0,
             bias: 0.0012,
             normal_bias: 0.05,
+            ..Default::default()
         };
     }
     let sun = scene.add(sun_obj);
@@ -3865,8 +3868,10 @@ pub(crate) fn generate_city(scene: &mut Scene, params: &CityParams) -> City {
             camera_size: 8.0,
             camera_near: 0.4,
             camera_far: 26.0,
+            radius: 1.0,
             bias: 0.0016,
             normal_bias: 0.03,
+            ..Default::default()
         };
         let mut obj = Object3D::light(light);
         obj.name = format!("lamp-{i}");

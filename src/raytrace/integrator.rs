@@ -128,6 +128,8 @@ impl<'a> Integrator<'a> {
         let mut travelled = 0.0f32;
         let mut bounce = 0u32;
         let mut transparent_bounces = 0u32;
+        // Scattering events by kind, against the per-kind limits.
+        let (mut diffuse_bounces, mut glossy_bounces, mut transmission_bounces) = (0u32, 0u32, 0u32);
         // A camera ray sees `scene.background`; every later ray sees the
         // environment. Keeping them apart is what lets a subject be lit by an
         // HDRI while sitting on a flat backdrop.
@@ -349,6 +351,17 @@ impl<'a> Integrator<'a> {
             }
             throughput = throughput.mul_componentwise(sample.value * (cos / sample.pdf));
             if throughput.length_sq() <= 0.0 || !throughput.x.is_finite() {
+                break;
+            }
+            let (count, limit) = if sample.transmitted {
+                (&mut transmission_bounces, self.settings.transmission_max_bounces)
+            } else if sample.diffuse {
+                (&mut diffuse_bounces, self.settings.diffuse_max_bounces)
+            } else {
+                (&mut glossy_bounces, self.settings.glossy_max_bounces)
+            };
+            *count += 1;
+            if *count > limit {
                 break;
             }
 
@@ -624,6 +637,16 @@ impl<'a> Integrator<'a> {
             // really does get through arrives along BSDF-sampled paths, which
             // is also where the caustic comes from.
             if m.transmission > 0.0 && m.opacity >= 1.0 {
+                // A thin wall bends nothing, so straight through is exactly
+                // where its light goes: what both faces do not reflect, of the
+                // share it transmits, tinted by its colour.
+                if m.thin_walled {
+                    let r = ((m.ior - 1.0) / (m.ior + 1.0)).powi(2);
+                    let through = m.transmission * (1.0 - 2.0 * r / (1.0 + r));
+                    transmittance = transmittance.mul_componentwise(m.base_color * through);
+                    layers += 1;
+                    continue;
+                }
                 if self.settings.caustic_glass_shadows {
                     transmittance = transmittance.mul_componentwise(Vector3::new(0.12, 0.12, 0.12));
                     layers += 1;
@@ -749,6 +772,7 @@ impl<'a> Integrator<'a> {
             iridescence_ior: material.iridescence_ior,
             iridescence_thickness,
             dispersion: material.dispersion,
+            thin_walled: material.thin_walled,
             subsurface: material.subsurface,
             subsurface_radius: material.subsurface_radius,
         }

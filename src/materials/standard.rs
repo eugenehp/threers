@@ -18,6 +18,35 @@ pub struct StandardMaterial {
     /// whose midpoint is sea level rather than zero.
     pub displacement_bias: f32,
     pub opacity: f32,
+    /// three.js `alphaTest`: fragments whose alpha (opacity × map alpha) is
+    /// below this are discarded. 0 (the default) keeps every fragment.
+    pub alpha_test: f32,
+    /// three.js `alphaMap`: its green channel multiplies the opacity, before
+    /// `alphaTest` (`alphamap_fragment`). Shows only with `transparent` or
+    /// `alpha_test`, as in three.js.
+    pub alpha_map: Option<Arc<Texture>>,
+    /// three.js `envMap`: this material's own image-based light, in place of
+    /// `scene.environment`.
+    pub env_map: Option<Arc<crate::textures::CubeTexture>>,
+    /// three.js `envMapIntensity` (default 1), with `env_map`.
+    pub env_map_intensity: f32,
+    /// three.js `envMapRotation` (default zero), with `env_map`.
+    pub env_map_rotation: crate::math::Euler,
+    /// three.js `lightMap`: baked irradiance added to the indirect light, times
+    /// [`light_map_intensity`](Self::light_map_intensity).
+    pub light_map: Option<Arc<Texture>>,
+    /// three.js `lightMapIntensity` (default 1).
+    pub light_map_intensity: f32,
+    /// three.js `bumpMap`: a height field (red channel) perturbing the normal
+    /// through its screen-space slope; ignored under a `normal_map`, as in
+    /// three.js.
+    pub bump_map: Option<Arc<Texture>>,
+    /// three.js `bumpScale` (default 1).
+    pub bump_scale: f32,
+    /// three.js `transparent`. `Some` is three.js's flag as given — `false`
+    /// draws opaquely whatever the opacity. `None` (the default) blends when
+    /// `opacity < 1`, the rule this crate used before it had the flag.
+    pub transparent: Option<bool>,
     pub wireframe: bool,
 
     // Textures (all optional). When set, the corresponding GPU texture slot is
@@ -100,6 +129,14 @@ pub struct StandardMaterial {
     pub displacement_map: Option<Arc<Texture>>,
 
     pub side: u32,
+    /// three.js `polygonOffset` / `polygonOffsetFactor` / `polygonOffsetUnits`:
+    /// `Some` enables the depth offset (see [`PolygonOffset`](super::PolygonOffset)).
+    pub polygon_offset: Option<super::PolygonOffset>,
+    /// three.js `toneMapped` (default `true`): whether the renderer's tone
+    /// mapping applies to this material's output.
+    pub tone_mapped: bool,
+    /// three.js `depthTest` / `depthWrite` / `depthFunc` / `colorWrite`.
+    pub render_state: super::RenderState,
 }
 
 impl Default for StandardMaterial {
@@ -115,6 +152,16 @@ impl Default for StandardMaterial {
             displacement_scale: 1.0,
             displacement_bias: 0.0,
             opacity: 1.0,
+            alpha_test: 0.0,
+            alpha_map: None,
+            env_map: None,
+            env_map_intensity: 1.0,
+            env_map_rotation: crate::math::Euler::default(),
+            light_map: None,
+            light_map_intensity: 1.0,
+            bump_map: None,
+            bump_scale: 1.0,
+            transparent: None,
             wireframe: false,
             map: None,
             normal_map: None,
@@ -135,6 +182,9 @@ impl Default for StandardMaterial {
             twilight: 0.0,
             twilight_color: Color::new(1.0, 0.55, 0.32),
             side: 0,
+            polygon_offset: None,
+            tone_mapped: true,
+            render_state: super::RenderState::default(),
         }
     }
 }

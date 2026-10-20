@@ -39,7 +39,10 @@ const errEl = document.getElementById('err');
         const ssr = new THREE.SSRPass({ renderer: r, scene, camera: cam, width: 800, height: 600 });
         ssr.opacity = 0.55;
         ssr.maxDistance = 0.4;
-        ssr.renderAndApply(r, scene, cam);
+        const composer = new THREE.EffectComposer(r);
+        composer.addPass(new THREE.RenderPass(scene, cam));
+        composer.addPass(ssr);
+        composer.render();
 
         await new Promise(rs => requestAnimationFrame(() => rs()));
         document.body.dataset.ready = 'true';

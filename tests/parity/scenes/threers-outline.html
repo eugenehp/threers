@@ -28,12 +28,17 @@ const errEl = document.getElementById('err');
         const r = await THREE.WebGLRenderer.create(document.getElementById('c'));
         r.setSize(800, 600);
 
-        const outlinePass = new THREE.OutlinePass(new THREE.Vector2(800, 600), scene, cam, [cube]);
+        const composer = new THREE.EffectComposer(r);
+        composer.addPass(new THREE.RenderPass(scene, cam));
+        const outlinePass = new THREE.OutlinePass(new THREE.Vector2(800, 600), scene, cam);
+        outlinePass.selectedObjects = [cube];
         outlinePass.edgeStrength = 5;
         outlinePass.edgeThickness = 2;
+        outlinePass.pulsePeriod = 0;
         outlinePass.visibleEdgeColor.setHex(0xffffff);
         outlinePass.hiddenEdgeColor.setHex(0xffffff);
-        outlinePass.renderAndOutline(r, scene, cam, [cube]);
+        composer.addPass(outlinePass);
+        composer.render();
 
         document.body.dataset.ready = 'true';
     } catch (e) {

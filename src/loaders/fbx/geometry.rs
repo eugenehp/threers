@@ -26,6 +26,9 @@
 //! Corners are emitted de-indexed — one vertex per polygon corner — because a
 //! per-corner normal cannot survive being shared between faces, and a cube's
 //! whole point is that its corners have three normals each.
+//!
+//! Polygons are fanned into triangles, and which triangles were one polygon is
+//! kept in [`BufferGeometry::polygons`].
 
 use super::tree::{Node, Property};
 use crate::core::{BufferAttribute, BufferGeometry};
@@ -128,6 +131,37 @@ pub fn material_slots(node: &Node) -> Vec<i32> {
         .unwrap_or_default()
 }
 
+/// Whether the material layer maps one material to the whole mesh
+/// (`AllSame`) — three.js `FBXLoader` makes geometry groups only otherwise.
+pub fn material_mapping_is_all_same(node: &Node) -> bool {
+    node.child("LayerElementMaterial")
+        .and_then(|l| l.value("MappingInformationType"))
+        .and_then(Property::as_str)
+        .is_none_or(|m| m == "AllSame")
+}
+
+/// The control point behind each vertex [`build`] emits, in the same fan
+/// order — what a blend shape, stored per control point, expands through.
+pub fn corner_control_points(node: &Node) -> Vec<usize> {
+    let corners = node
+        .value("PolygonVertexIndex")
+        .and_then(Property::as_i32_array)
+        .unwrap_or_default();
+    let mut out = Vec::new();
+    let mut polygon: Vec<usize> = Vec::with_capacity(4);
+    for &raw in &corners {
+        polygon.push(if raw < 0 { !raw as usize } else { raw as usize });
+        if raw >= 0 {
+            continue;
+        }
+        for i in 1..polygon.len().saturating_sub(1) {
+            out.extend_from_slice(&[polygon[0], polygon[i], polygon[i + 1]]);
+        }
+        polygon.clear();
+    }
+    out
+}
+
 /// Build a `BufferGeometry` from a `Geometry` node.
 ///
 /// Returns the geometry and, for each emitted triangle, which material slot the
@@ -159,6 +193,8 @@ pub fn build(node: &Node) -> Option<(BufferGeometry, Vec<i32>)> {
     let mut uv = Vec::new();
     let mut colour = Vec::new();
     let mut triangle_slots = Vec::new();
+    // Triangles per polygon, in polygon order.
+    let mut polygons: Vec<u32> = Vec::new();
 
     // One polygon at a time. `corners` holds the control-point index of each
     // corner, with the last of each polygon bitwise-negated.
@@ -173,6 +209,9 @@ pub fn build(node: &Node) -> Option<(BufferGeometry, Vec<i32>)> {
         // Fan from the first corner. FBX polygons are planar and convex in
         // practice; a concave one would need a real triangulator, and getting
         // that wrong is visible as a spike rather than as a silent error.
+        if polygon.len() >= 3 {
+            polygons.push(polygon.len() as u32 - 2);
+        }
         for i in 1..polygon.len().saturating_sub(1) {
             for &(corner, point) in &[polygon[0], polygon[i], polygon[i + 1]] {
                 let at = point * 3;
@@ -223,5 +262,7 @@ pub fn build(node: &Node) -> Option<(BufferGeometry, Vec<i32>)> {
     if geometry.get_attribute("normal").is_none() {
         crate::compute_vertex_normals(&mut geometry);
     }
+    // Rejected, harmlessly, for the point-cloud case above.
+    geometry.set_polygons(polygons);
     Some((geometry, triangle_slots))
 }

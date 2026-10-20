@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><style>body{margin:0;background:#101418}canvas{display:block}</style></head>
+<body><canvas id="c" width="800" height="600"></canvas>
+<script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.165.0/build/three.module.js","three/addons/":"https://unpkg.com/three@0.165.0/examples/jsm/"}}</script>
+<script type="module">
+import * as THREE_ from 'three';
+import { VertexNormalsHelper } from 'three/addons/helpers/VertexNormalsHelper.js';
+const THREE = { ...THREE_, VertexNormalsHelper };
+const scene = new THREE.Scene(); scene.background = new THREE.Color(0x101418);
+scene.add(new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.6, 0.6), new THREE.MeshBasicMaterial({ color: 0x335577 })));
+const dl = new THREE.DirectionalLight(0xffaa33, 1); dl.position.set(-2, 2, 1); dl.target.position.set(0, 0, 0);
+scene.add(dl); scene.add(new THREE.DirectionalLightHelper(dl, 0.6));
+const pl = new THREE.PointLight(0x33ddff, 1); pl.position.set(1.8, 1.2, 0.5);
+scene.add(pl); scene.add(new THREE.PointLightHelper(pl, 0.4));
+const sl = new THREE.SpotLight(0xff44aa, 1, 2.5, Math.PI / 7); sl.position.set(1.5, 2.2, -1); sl.target.position.set(0, 0, 0);
+scene.add(sl); scene.add(new THREE.SpotLightHelper(sl));
+const hl = new THREE.HemisphereLight(0x88ccff, 0x996633, 1); hl.position.set(-1.5, 0.5, -1.5);
+scene.add(new THREE.HemisphereLightHelper(hl, 0.5));
+const cam = new THREE.PerspectiveCamera(50, 800/600, 0.1, 100);
+cam.position.set(3, 3, 4); cam.lookAt(0, 0.4, 0);
+const r = new THREE.WebGLRenderer({ canvas: document.getElementById('c'), antialias: false });
+r.setSize(800, 600, false); r.setPixelRatio(1);
+r.render(scene, cam);
+document.body.dataset.ready = 'true';
+</script></body></html>

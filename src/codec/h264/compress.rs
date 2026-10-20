@@ -1543,6 +1543,26 @@ impl CompressedEncoder {
         push_annexb(&mut au, &nal_unit_base(NalUnitType::Idr, &slice));
         au
     }
+
+    /// The `avcC` decoder configuration for this stream, as an MP4 muxer
+    /// (`mp4_stream::VideoConfig::avcc`) wants it.
+    pub fn avcc(&self) -> Vec<u8> {
+        build_avcc(&self.sps, &self.pps)
+    }
+
+    /// One frame as an MP4 sample: the slice NAL, 4-byte length-prefixed,
+    /// ready for `Mp4StreamWriter::write_video_sample` (parameter sets go in
+    /// [`avcc`](Self::avcc), not here). Takes `&self`, like
+    /// [`encode_slice_au`](Self::encode_slice_au), so frames can be encoded
+    /// in parallel.
+    pub fn encode_sample(&self, frame: &Yuv420Frame) -> Vec<u8> {
+        self.encode_sample_at(frame, self.qp)
+    }
+
+    /// [`encode_sample`](Self::encode_sample) at a quantizer chosen per frame.
+    pub fn encode_sample_at(&self, frame: &Yuv420Frame, qp: i32) -> Vec<u8> {
+        H264Encoder::sample_from_au(&self.encode_slice_au_at(frame, qp))
+    }
 }
 
 
@@ -1732,6 +1752,14 @@ pub struct CompressedEncoder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn encode_sample_is_the_length_prefixed_slice() {
+        let frame = Yuv420Frame::from_rgba(32, 16, &vec![90u8; 32 * 16 * 4]);
+        let enc = CompressedEncoder::new(32, 16, 30);
+        assert_eq!(enc.encode_sample(&frame), H264Encoder::sample_from_au(&enc.encode_slice_au(&frame)));
+        assert_eq!(enc.avcc(), build_avcc(enc.sps(), enc.pps()));
+    }
 
     /// Table 9-4 maps code numbers onto CBP values one-to-one; the inverse this
     /// module builds must therefore be a permutation of 0..48.

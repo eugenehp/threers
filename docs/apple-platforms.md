@@ -20,7 +20,7 @@ cargo test --features metal --test metal_backend                       # 24 test
 ```
 
 ```rust
-// Cargo.toml: threers = { version = "0.0.5", features = ["metal"] }
+// Cargo.toml: threers = { version = "0.0.6", features = ["metal"] }
 use threers::metal::MetalHeadlessRenderer;
 
 let mut renderer = MetalHeadlessRenderer::builder().size(1280, 720).msaa(4).build()?;
@@ -44,22 +44,30 @@ if let Some(frame) = surface.next_frame() {
 Or into textures you already own — an AVFoundation pipeline, an `MTKView`, a
 Core Image chain — with `PassAttachments::from_raw`.
 
-**Covers:** meshes, instanced meshes, line segments, points and sprites; `Basic`,
-`Lambert`, `Phong`, `Standard`, `Physical`, `Normal`, `Depth`, `Toon`, `Matcap`,
-`Line`, `Points` and `Sprite` materials; one base-colour map with the sampler,
-wrap modes and UV transform from the `Texture`; ambient, directional, point, spot
-and hemisphere lights; linear and exp² fog; alpha blend, alpha test, vertex
-colours, wireframe, MSAA, and depth-sorted transparency. Geometry, textures,
-samplers and pipeline states are cached across frames.
+**Covers:** meshes, instanced, skinned and morphed meshes, line segments,
+points and sprites; `Basic`, `Lambert`, `Phong`, `Standard`, `Physical`
+(clearcoat, transmission), `Normal`, `Depth`, `Toon`, `Matcap`, `Line`,
+`Points` and `Sprite` materials, with the base-colour, normal, roughness,
+metalness, AO and emissive maps; environment maps and IBL; ambient,
+directional, point, spot and hemisphere lights; shadow maps from every kind of
+light, sixteen at a time, filtered as three.js's `shadowMap.type` (basic, PCF,
+soft PCF, PCSS) with cascades for the sun; linear and exp² fog; alpha blend,
+alpha test, vertex colours, wireframe, MSAA, depth-sorted transparency and
+order-independent transparency (weighted blended, MSAA included); and, on the
+headless renderer, bloom, SSAO (under MSAA too — a multisampled target resolves
+its depth for it), tone mapping and a film grade. Geometry, textures,
+samplers and pipeline states are cached across frames, and draws outside the
+camera's or a light's frustum are skipped.
 
-**Does not cover** — use the wgpu `Renderer` for these: shadow maps,
-post-processing, environment maps and IBL (so a metal-heavy material has only its
-specular highlights), skinning and morph targets, and the normal / roughness /
-metalness / AO / emissive map slots. Materials outside the list draw unlit in
-their base colour rather than failing, so a scene authored for the wgpu path
-still renders. Both backends share the same conventions — 0..1 clip depth, CCW
-front faces, `flip_y` applied at upload, three.js punctual attenuation — so the
-two agree on a scene as far as this one goes.
+**Does not cover** — use the wgpu `Renderer` for these: temporal
+antialiasing, the `postprocessing` composer's passes beyond the headless chain
+above, and screen-space refraction (`TransparencyMode::Refract` draws as
+three.js's transmission instead, without glass seen through glass). Materials
+outside the list draw unlit in their base colour rather than failing, so a
+scene authored for the wgpu path still renders. Both backends share the same
+conventions — 0..1 clip depth, CCW front faces, `flip_y` applied at upload,
+three.js punctual attenuation — so the two agree on a scene as far as this one
+goes.
 
 # visionOS
 
@@ -70,7 +78,7 @@ declarations transcribed from the XROS SDK headers — still no new dependency, 
 build script, no `metal-rs`.
 
 ```rust
-// Cargo.toml: threers = { version = "0.0.5", features = ["visionos"] }
+// Cargo.toml: threers = { version = "0.0.6", features = ["visionos"] }
 use threers::metal::visionos::ImmersiveRenderer;
 
 #[no_mangle]

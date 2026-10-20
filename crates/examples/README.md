@@ -28,7 +28,7 @@ const mesh = new THREE.Mesh(
 scene.add(mesh);
 
 const camera = new THREE.PerspectiveCamera(50, aspect, 0.1, 100);
-const renderer = await THREE.WebGLRenderer.create(canvas);
+const renderer = await THREE.WebGLRenderer.create(canvas, { antialias: true });
 renderer.render(scene, camera);
 ```
 

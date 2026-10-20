@@ -83,9 +83,16 @@
 //! [WebGL Fluid Simulation]: https://github.com/PavelDoGreat/WebGL-Fluid-Simulation
 //! [GPU Gems 38]: https://developer.nvidia.com/gpugems/gpugems/part-vi-beyond-triangles/chapter-38-fast-fluid-dynamics-simulation-gpu
 
-mod passes;
+// `pub(crate)` so the Metal backend can share the uniform block: the two
+// implementations of this solver have to agree on it byte for byte, and the
+// way to make sure of that is for there to be one of it.
+mod cpu;
+pub(crate) mod passes;
+pub(crate) mod read_out;
 mod shader;
-#[cfg(target_arch = "wasm32")]
+mod volume;
+mod volume_shader;
+#[cfg(all(target_arch = "wasm32", not(threers_no_js_bindings)))]
 mod web;
 
 use std::sync::Arc;
@@ -96,7 +103,12 @@ use passes::{
     MAX_BATCH,
 };
 
+pub use cpu::CpuFluid3d;
 pub use passes::FluidFormats;
+pub use volume::{
+    memory_for, quality3d, quality3d_names, within_memory, Atlas, FluidConfig3d, FluidQuality3d,
+    FluidSim3d, QUALITY_LEVELS_3D, STAGE_NAMES,
+};
 
 /// Every knob the simulation has, with the original's defaults.
 ///
@@ -120,6 +132,25 @@ pub struct FluidConfig {
     /// Jacobi sweeps per frame. With [`PressureSolver::Multigrid`] this is the
     /// smoothing budget instead — see there.
     pub pressure_iterations: u32,
+    /// Draw the frame rate over the picture.
+    ///
+    /// Off by default. The number is the fluid's own render cadence,
+    /// measured between calls to [`FluidSim::render_into`] — not the
+    /// application's frame rate, which may be doing other things.
+    pub show_fps: bool,
+    /// How fast the fluid runs, as a multiple of real time.
+    ///
+    /// Applied by [`FluidSim::update`] and *not* by
+    /// [`step`](FluidSim::step) — a caller who passes a timestep means that
+    /// timestep, and a knob that silently rescaled it would make the solver
+    /// impossible to test against a fixed `dt`.
+    ///
+    /// The advection is unconditionally stable at any step, so this has no
+    /// upper limit that will blow up; what it has is an accuracy limit. Past
+    /// about four, a voxel's contents travel several voxels in one step and
+    /// the back-trace reads from somewhere the fluid never flowed through,
+    /// which reads as the fluid tearing rather than moving.
+    pub time_scale: f32,
     /// How the velocity and the dye are carried along.
     pub advection: Advection,
     /// How the pressure equation is solved.
@@ -191,6 +222,8 @@ impl Default for FluidConfig {
             velocity_dissipation: 0.2,
             pressure: 0.8,
             pressure_iterations: 20,
+            show_fps: false,
+            time_scale: 1.0,
             advection: Advection::SemiLagrangian,
             pressure_solver: PressureSolver::Jacobi,
             multigrid_cycles: 1,
@@ -438,6 +471,14 @@ impl Rng {
     }
 }
 
+/// [`hsv_to_rgb`], for the Metal backend — which needs the *same* sequence of
+/// colours from the same seed, or a parity test is comparing two pictures of
+/// different fluids.
+#[cfg(feature = "metal")]
+pub(crate) fn hsv_to_rgb_for_backends(h: f32, s: f32, v: f32) -> [f32; 3] {
+    hsv_to_rgb(h, s, v)
+}
+
 /// A fully saturated colour at the given hue, as the original's `HSVtoRGB`.
 fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [f32; 3] {
     let i = (h * 6.0).floor();
@@ -601,6 +642,7 @@ struct Ubos {
     blur_v: wgpu::Buffer,
     display: wgpu::Buffer,
     background: wgpu::Buffer,
+    read_out: wgpu::Buffer,
 }
 
 impl Ubos {
@@ -633,6 +675,7 @@ impl Ubos {
             blur_v: ubo(device, "fluid blur v"),
             display: ubo(device, "fluid display"),
             background: ubo(device, "fluid background"),
+            read_out: ubo(device, "fluid read-out"),
         }
     }
 }
@@ -682,6 +725,10 @@ pub struct FluidSim {
     ubos: Ubos,
 
     pointers: Vec<Pointer>,
+    /// When the last render was, and the smoothed rate since.
+    rate: read_out::Rate,
+    /// The last sixty-four frame times, for the chart under the number.
+    history: read_out::History,
     rng: Rng,
     color_timer: f32,
     paused: bool,
@@ -766,6 +813,8 @@ impl FluidSim {
             sampler,
             ubos,
             pointers: Vec::new(),
+            rate: Default::default(),
+            history: Default::default(),
             rng: Rng::new(config.seed),
             color_timer: 0.0,
             paused: false,
@@ -798,6 +847,26 @@ impl FluidSim {
         if resized {
             self.reallocate();
         }
+    }
+
+    /// Renders a second, smoothed, measured between calls to
+    /// [`render_into`](Self::render_into). Zero until the second one.
+    pub fn fps(&self) -> f32 {
+        self.rate.fps()
+    }
+
+    /// Force the number the read-out shows, so a test can check the glyphs
+    /// against a value it chose rather than against whatever the clock said.
+    /// Force the chart's history, so a test can check the bars against
+    /// frame times it chose.
+    #[cfg(test)]
+    pub(crate) fn set_frame_times_for_test(&mut self, ms: &[f32]) {
+        self.rate.pin_frame_times(ms);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_fps_for_test(&mut self, fps: f32) {
+        self.rate.pin_fps(fps);
     }
 
     /// Size of the canvas being rendered into.
@@ -1081,9 +1150,10 @@ impl FluidSim {
     /// Input is applied even while paused, so a stroke drawn on a paused fluid
     /// still appears.
     pub fn update(&mut self, dt: f32) {
+        let dt = dt * self.config.time_scale.max(0.0);
         self.update_colors(dt);
         self.apply_inputs();
-        if !self.paused {
+        if !self.paused && dt > 0.0 {
             self.step(dt);
         }
     }
@@ -1834,6 +1904,38 @@ impl FluidSim {
             Some(&self.sunrays),
         );
         let bg_background = self.bind(&self.ubos.background, &self.dye.read, None, None);
+        // `radius` is the frame time the chart is full at and `curl` the
+        // refresh it draws a line for; both come from `Rate`, so all three
+        // backends scale the chart the same way.
+        write(
+            &self.queue,
+            &self.ubos.read_out,
+            Params {
+                value: self.rate.fps(),
+                radius: self.rate.scale_ms(),
+                curl: self.rate.target_ms(),
+                ..Default::default()
+            },
+        );
+        // Bound to the frame times rather than the dye: this pass reads
+        // `tex_a` as one row of milliseconds.
+        let bg_read_out = {
+            let (device, queue) = (self.device.clone(), self.queue.clone());
+            let history = self
+                .history
+                .view(&device, &queue, self.rate.frames())
+                .clone();
+            passes::bind(
+                &self.device,
+                &self.pipes.bgl,
+                &self.sampler,
+                &self.ubos.read_out,
+                &self.ubos.batch_idle,
+                &history,
+                None,
+                None,
+            )
+        };
 
         // One pass, up to two draws: the fluid composites over whatever the
         // first draw left, which is what the original's blend did over its
@@ -1858,8 +1960,16 @@ impl FluidSim {
             pass.set_pipeline(display);
             pass.set_bind_group(0, &bg_display, &[]);
             pass.draw(0..3, 0..1);
+            if c.show_fps {
+                // A third draw in the same pass, so the read-out composites
+                // over what the other two left without another attachment.
+                pass.set_pipeline(&pipes.overlay);
+                pass.set_bind_group(0, &bg_read_out, &[]);
+                pass.draw(0..3, 0..1);
+            }
         }
         self.queue.submit([enc.finish()]);
+        self.rate.tick();
     }
 
     /// Threshold the dye, blur it down a halving chain, add the levels back up,

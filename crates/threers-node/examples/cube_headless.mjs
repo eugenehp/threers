@@ -29,6 +29,8 @@ import {
 // const scene = new THREE.Scene();  →  const scene = new Scene()
 // scene.background = 0x101010       →  scene.setBackground(0x101010)
 // new THREE.BoxGeometry(1,1,1)      →  scene.addBox(1, 1, 1, 0xff6633)
+// new THREE.AmbientLight(0xffffff, 0.4)          →  scene.addAmbientLight(0xffffff, 0.4)
+// new THREE.DirectionalLight(0xffffff, 2.5) at p →  scene.addDirectionalLight(0xffffff, 2.5, p)
 // new THREE.PerspectiveCamera(…)    →  new PerspectiveCamera(…)
 // camera.position.set(3, 2, 5)      →  camera.setPosition(3, 2, 5)
 // camera.lookAt(0, 0, 0)            →  camera.lookAt(0, 0, 0)
@@ -37,8 +39,11 @@ import {
 const scene = new Scene();
 scene.setBackground(0x101010);
 scene.addBox(1, 1, 1, 0xff6633);
+// The box is MeshStandardMaterial: as in three.js it is black until lit.
+scene.addAmbientLight(0xffffff, 0.4);
+scene.addDirectionalLight(0xffffff, 2.5, { x: 3, y: 5, z: 4 });
 
-const camera = new PerspectiveCamera(50, 16 / 9, 0.1, 100);
+const camera = new PerspectiveCamera(50, 800 / 600, 0.1, 100);
 camera.setPosition(3, 2, 5);
 camera.lookAt(0, 0, 0);
 

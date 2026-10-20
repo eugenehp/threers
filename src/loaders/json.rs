@@ -271,32 +271,63 @@ impl<'a> Parser<'a> {
     }
     fn string(&mut self) -> Result<String, &'static str> {
         self.expect(b'"')?;
-        let mut s = String::new();
+        // Raw bytes first: the input is UTF-8, and pushing byte by byte as
+        // `char`s would turn every non-ASCII character into Latin-1 mojibake.
+        let mut s: Vec<u8> = Vec::new();
+        let push = |s: &mut Vec<u8>, c: char| {
+            let mut buf = [0u8; 4];
+            s.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+        };
         loop {
             let Some(b) = self.bump() else {
                 return Err("unterminated string");
             };
             match b {
-                b'"' => return Ok(s),
+                b'"' => return String::from_utf8(s).map_err(|_| "invalid UTF-8 in string"),
                 b'\\' => {
                     let Some(esc) = self.bump() else {
                         return Err("bad escape");
                     };
                     match esc {
-                        b'"' => s.push('"'),
-                        b'\\' => s.push('\\'),
-                        b'/' => s.push('/'),
-                        b'b' => s.push('\u{08}'),
-                        b'f' => s.push('\u{0c}'),
-                        b'n' => s.push('\n'),
-                        b'r' => s.push('\r'),
-                        b't' => s.push('\t'),
-                        _ => return Err("unsupported escape (no \\u)"),
+                        b'"' => s.push(b'"'),
+                        b'\\' => s.push(b'\\'),
+                        b'/' => s.push(b'/'),
+                        b'b' => s.push(0x08),
+                        b'f' => s.push(0x0c),
+                        b'n' => s.push(b'\n'),
+                        b'r' => s.push(b'\r'),
+                        b't' => s.push(b'\t'),
+                        b'u' => {
+                            let hi = self.hex4()?;
+                            let code = if (0xD800..0xDC00).contains(&hi) {
+                                // A surrogate pair: `\uD83D\uDE00`.
+                                if self.bump() != Some(b'\\') || self.bump() != Some(b'u') {
+                                    return Err("lone surrogate");
+                                }
+                                let lo = self.hex4()?;
+                                if !(0xDC00..0xE000).contains(&lo) {
+                                    return Err("lone surrogate");
+                                }
+                                0x10000 + ((hi - 0xD800) << 10) + (lo - 0xDC00)
+                            } else {
+                                hi
+                            };
+                            push(&mut s, char::from_u32(code).unwrap_or('\u{FFFD}'));
+                        }
+                        _ => return Err("bad escape"),
                     }
                 }
-                _ => s.push(b as char),
+                _ => s.push(b),
             }
         }
+    }
+    fn hex4(&mut self) -> Result<u32, &'static str> {
+        let mut v = 0u32;
+        for _ in 0..4 {
+            let d = self.bump().and_then(|b| (b as char).to_digit(16)).ok_or("bad \\u escape")?;
+            v = v * 16 + d;
+        }
+        Ok(v)
     }
     fn boolean(&mut self) -> Result<Value, &'static str> {
         if self.bytes[self.pos..].starts_with(b"true") {

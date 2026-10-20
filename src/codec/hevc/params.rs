@@ -176,9 +176,25 @@ impl HevcConfig {
     }
 
     /// Split the picture into `cols` x `rows` tiles.
+    ///
+    /// The grid is reduced if needed so every tile is at least 256 luma
+    /// samples wide and 64 tall: the Main profiles' minimum tile size
+    /// (Annex A). A narrower tiling decodes in tolerant decoders but the
+    /// reference decoder rejects it.
     pub fn with_tiles(mut self, cols: u32, rows: u32) -> Self {
         self.tile_grid = (cols.max(1), rows.max(1));
+        self.clamp_tiles();
         self
+    }
+
+    /// Fit `tile_grid` to the minimum tile size at the current CTB size.
+    /// Uniform spacing makes the narrowest column `floor(ctbs / cols)` CTBs.
+    fn clamp_tiles(&mut self) {
+        let ctb = 1u32 << self.ctb_log2;
+        let (nx, ny) = self.ctbs();
+        let max_cols = (nx / 256u32.div_ceil(ctb)).max(1);
+        let max_rows = (ny / 64u32.div_ceil(ctb)).max(1);
+        self.tile_grid = (self.tile_grid.0.min(max_cols), self.tile_grid.1.min(max_rows));
     }
 
     /// Tile the picture only if it is large enough for the tiles to be free.
@@ -206,6 +222,7 @@ impl HevcConfig {
         let mcb = 1 << min_cb_log2;
         self.coded_width = self.width.div_ceil(mcb) * mcb;
         self.coded_height = self.height.div_ceil(mcb) * mcb;
+        self.clamp_tiles();
         self
     }
 
@@ -350,25 +367,29 @@ pub fn write_sps_id(cfg: &HevcConfig, sps_id: u32) -> Vec<u8> {
     w.flag(false); // long_term_ref_pics_present_flag
     w.flag(false); // sps_temporal_mvp_enabled_flag
     w.flag(false); // strong_intra_smoothing_enabled_flag
-    if cfg.full_range {
-        w.flag(true); // vui_parameters_present_flag
-                      // Minimal VUI: only signal the full-range flag (§E.2.1).
-        w.flag(false); // aspect_ratio_info_present_flag
-        w.flag(false); // overscan_info_present_flag
-        w.flag(true); // video_signal_type_present_flag
-        w.write_bits(5, 3); // video_format = 5 (unspecified)
-        w.flag(true); // video_full_range_flag
-        w.flag(false); // colour_description_present_flag
-        w.flag(false); // chroma_loc_info_present_flag
-        w.flag(false); // neutral_chroma_indication_flag
-        w.flag(false); // field_seq_flag
-        w.flag(false); // frame_field_info_present_flag
-        w.flag(false); // default_display_window_flag
-        w.flag(false); // vui_timing_info_present_flag
-        w.flag(false); // bitstream_restriction_flag
-    } else {
-        w.flag(false); // vui_parameters_present_flag
+    // Minimal VUI (§E.2.1). A full-range picture is the alpha auxiliary
+    // layer, which carries opacity, not colour: only the range is signalled.
+    // Anything else is colour from `Yuv420Frame::from_rgba`, BT.601 limited
+    // range — said so, or players assume BT.709 for HD and shift the colours.
+    w.flag(true); // vui_parameters_present_flag
+    w.flag(false); // aspect_ratio_info_present_flag
+    w.flag(false); // overscan_info_present_flag
+    w.flag(true); // video_signal_type_present_flag
+    w.write_bits(5, 3); // video_format = 5 (unspecified)
+    w.flag(cfg.full_range); // video_full_range_flag
+    w.flag(!cfg.full_range); // colour_description_present_flag
+    if !cfg.full_range {
+        w.write_byte(2); // colour_primaries: unspecified
+        w.write_byte(2); // transfer_characteristics: unspecified
+        w.write_byte(6); // matrix_coeffs: BT.601 (SMPTE 170M)
     }
+    w.flag(false); // chroma_loc_info_present_flag
+    w.flag(false); // neutral_chroma_indication_flag
+    w.flag(false); // field_seq_flag
+    w.flag(false); // frame_field_info_present_flag
+    w.flag(false); // default_display_window_flag
+    w.flag(false); // vui_timing_info_present_flag
+    w.flag(false); // bitstream_restriction_flag
     w.flag(false); // sps_extension_present_flag
     rbsp_trailing_bits(&mut w);
     w.finish()
@@ -409,9 +430,13 @@ fn write_pps_inner(pps_id: u32, sps_id: u32, cu_qp_delta: bool, deblock: bool) -
     write_pps_full(pps_id, sps_id, cu_qp_delta, deblock, (1, 1))
 }
 
-/// PPS 0 with `cu_qp_delta`, deblocking, and a tile grid.
-pub fn write_pps_tiled(tile_grid: (u32, u32)) -> Vec<u8> {
-    write_pps_full(0, 0, true, true, tile_grid)
+/// PPS 0 with `cu_qp_delta` and a tile grid, deblocking on or off.
+///
+/// The flag has to follow the encoder's: its reconstruction is deblocked or
+/// not by its own setting, and a PPS that disagreed would decode to
+/// something else.
+pub fn write_pps_tiled(tile_grid: (u32, u32), deblock: bool) -> Vec<u8> {
+    write_pps_full(0, 0, true, deblock, tile_grid)
 }
 
 fn write_pps_full(

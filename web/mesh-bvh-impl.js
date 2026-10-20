@@ -10,14 +10,12 @@ import {
     BufferAttribute,
     Vector3,
     Matrix4,
-    Quaternion,
     Box3,
     Triangle,
     Plane,
     Line3,
     Ray,
-    Euler,
-    Raycaster,
+    _meshRaycastInternals,
 } from '/web/threejs-shim.js';
 
 import { WebMeshBvh, WebBufferGeometry, WebBufferAttribute, mergeGeometries } from '/web/pkg/threers.js';
@@ -39,11 +37,6 @@ export const FrontSide = 0;
 export const BackSide = 1;
 export const DoubleSide = 2;
 
-const _invMatrix = new Matrix4();
-const _localOrigin = new Vector3();
-const _localDirection = new Vector3();
-const _worldPoint = new Vector3();
-const _hitNormal = new Vector3();
 
 /** Minimal Box3 for shapecast callbacks (has .min / .max). */
 class BvhBox3 {
@@ -60,24 +53,6 @@ class BvhBox3 {
     }
 }
 
-function _effectiveEuler(obj) {
-    if (obj.rotation instanceof Euler) return obj.rotation;
-    return new Euler(obj.rotation?.x || 0, obj.rotation?.y || 0, obj.rotation?.z || 0);
-}
-
-function _nodeWorldMatrix(obj, out = new Matrix4()) {
-    const local = new Matrix4().compose(
-        obj.position || new Vector3(),
-        new Quaternion().setFromEuler(_effectiveEuler(obj)),
-        obj.scale || new Vector3(1, 1, 1),
-    );
-    if (obj.parent && obj.parent !== obj) {
-        _nodeWorldMatrix(obj.parent, out);
-        return out.multiply(local);
-    }
-    return out.copy(local);
-}
-
 function _unpackHit(packed, offset = 0, bvh = null) {
     const faceIndex = packed[offset + 4] | 0;
     const hit = {
@@ -90,12 +65,6 @@ function _unpackHit(packed, offset = 0, bvh = null) {
         hit.face = { normal: bvh._readFaceNormal(faceIndex) };
     }
     return hit;
-}
-
-function _rayToLocal(ray, matrixWorld, outOrigin, outDirection) {
-    _invMatrix.copy(matrixWorld).invert();
-    outOrigin.copy(ray.origin).applyMatrix4(_invMatrix);
-    outDirection.copy(ray.direction).transformDirection(_invMatrix).normalize();
 }
 
 function _syncGeometryWasm(geometry) {
@@ -221,6 +190,8 @@ export class MeshBVH {
     refit() {
         const pos = this.geometry?.attributes?.position?.array;
         if (pos) this._w.refit(pos);
+        // The geometry's wasm build carries the BVH: re-take it.
+        this.geometry?._bump?.();
     }
 
     intersectsBox(box) {
@@ -465,125 +436,23 @@ export function disposeBoundsTree() {
 }
 
 /**
- * Accelerated Mesh.raycast using geometry.boundsTree when present.
+ * three-mesh-bvh's `acceleratedRaycast`: a mesh whose geometry has a
+ * `boundsTree` is cast through it — in Rust, where the geometry's wasm build
+ * carries the same BVH — with the same per-triangle test, side, groups and
+ * material array, draw range and hit record as the plain `Mesh.raycast`.
+ * With `raycaster.firstHitOnly` the mesh reports only its nearest hit, found
+ * by the BVH's closest-hit traversal. A mesh without a `boundsTree` takes the
+ * original `Mesh.raycast`. Unlike three-mesh-bvh's default (non-`indirect`)
+ * build, the wasm BVH leaves the index alone, so `faceIndex` names the
+ * triangle in the geometry as given.
  */
 export function acceleratedRaycast(raycaster, intersects) {
-    const geometry = this.geometry;
-    const boundsTree = geometry?.boundsTree;
-    if (!boundsTree?._w) {
-        return _bruteRaycastMesh(raycaster, this, intersects);
-    }
-
-    if (this.layers && raycaster.layers && !raycaster.layers.test(this.layers)) return;
-
-    const matrixWorld = this.matrixWorld || _nodeWorldMatrix(this);
-    _rayToLocal(raycaster.ray, matrixWorld, _localOrigin, _localDirection);
-
-    const firstOnly = !!raycaster.firstHitOnly;
-    const near = raycaster.near;
-    const far = raycaster.far;
-
-    const emit = (hit) => {
-        _worldPoint.copy(hit.point).applyMatrix4(matrixWorld);
-        const distance = _worldPoint.distanceTo(raycaster.ray.origin);
-        if (distance < near || distance > far) return;
-
-        const triFlat = boundsTree._w.triangleIndices();
-        const positions = boundsTree._w.positions();
-        const base = hit.faceIndex * 3;
-        const ia = triFlat[base];
-        const ib = triFlat[base + 1];
-        const ic = triFlat[base + 2];
-        const read = (vi) => {
-            const b = vi * 3;
-            return new Vector3(positions[b], positions[b + 1], positions[b + 2]);
-        };
-        const A = read(ia).applyMatrix4(matrixWorld);
-        const B = read(ib).applyMatrix4(matrixWorld);
-        const C = read(ic).applyMatrix4(matrixWorld);
-        _hitNormal.subVectors(B, A).cross(new Vector3().subVectors(C, A)).normalize();
-
-        intersects.push({
-            distance,
-            point: _worldPoint.clone(),
-            object: this,
-            face: { a: ia, b: ib, c: ic, normal: _hitNormal.clone(), materialIndex: 0 },
-            faceIndex: hit.faceIndex,
-            uv: new Vector3(hit.uv.x, hit.uv.y, 0),
-        });
-    };
-
-    if (firstOnly) {
-        const hit = boundsTree.raycastFirst(
-            new Ray(_localOrigin, _localDirection), near, far,
-        );
-        if (hit) emit(hit);
-        return;
-    }
-
-    const hits = boundsTree.raycast(new Ray(_localOrigin, _localDirection), near, far);
-    for (const hit of hits) emit(hit);
+    if (!this.geometry?.boundsTree?._w) return _origMeshRaycast.call(this, raycaster, intersects);
+    _meshRaycastInternals.cast(raycaster, this, intersects, raycaster.firstHitOnly === true);
 }
 
-/** Fallback brute-force raycast (matches threejs-shim _raycastMesh). */
-function _bruteRaycastMesh(raycaster, mesh, intersects) {
-    const pos = mesh.geometry?.attributes?.position?.array;
-    const idx = mesh.geometry?.index?.array || mesh.geometry?._w?.index;
-    if (!pos) return;
-    const origin = raycaster.ray.origin;
-    const dir = raycaster.ray.direction;
-    const wpos = mesh.position || new Vector3();
-    const wrot = _effectiveEuler(mesh);
-    const wscale = mesh.scale || new Vector3(1, 1, 1);
-    const transform = (v) => {
-        let x = v.x * wscale.x, y = v.y * wscale.y, z = v.z * wscale.z;
-        const cx = Math.cos(wrot.x), sx = Math.sin(wrot.x);
-        let yy = y * cx - z * sx; z = y * sx + z * cx; y = yy;
-        const cy = Math.cos(wrot.y), sy = Math.sin(wrot.y);
-        let xx = x * cy + z * sy; z = -x * sy + z * cy; x = xx;
-        const cz = Math.cos(wrot.z), sz = Math.sin(wrot.z);
-        xx = x * cz - y * sz; y = x * sz + y * cz; x = xx;
-        return new Vector3(x + wpos.x, y + wpos.y, z + wpos.z);
-    };
-    const triCount = idx ? (idx.length / 3) | 0 : (pos.length / 9) | 0;
-    for (let t = 0; t < triCount; t++) {
-        const ia = idx ? idx[t * 3]     : t * 3;
-        const ib = idx ? idx[t * 3 + 1] : t * 3 + 1;
-        const ic = idx ? idx[t * 3 + 2] : t * 3 + 2;
-        const A = transform(new Vector3(pos[ia * 3], pos[ia * 3 + 1], pos[ia * 3 + 2]));
-        const B = transform(new Vector3(pos[ib * 3], pos[ib * 3 + 1], pos[ib * 3 + 2]));
-        const C = transform(new Vector3(pos[ic * 3], pos[ic * 3 + 1], pos[ic * 3 + 2]));
-        const hit = _intersectTriangle(origin, dir, A, B, C);
-        if (hit && hit.t >= raycaster.near && hit.t <= raycaster.far) {
-            intersects.push({
-                distance: hit.t,
-                point: new Vector3(origin.x + dir.x * hit.t, origin.y + dir.y * hit.t, origin.z + dir.z * hit.t),
-                object: mesh,
-                face: { a: ia, b: ib, c: ic, normal: new Vector3().subVectors(B, A).cross(new Vector3().subVectors(C, A)).normalize() },
-                faceIndex: t,
-                uv: new Vector3(hit.u, hit.v, 0),
-            });
-        }
-    }
-}
-
-function _intersectTriangle(origin, dir, A, B, C) {
-    const edge1 = new Vector3().subVectors(B, A);
-    const edge2 = new Vector3().subVectors(C, A);
-    const h = new Vector3().crossVectors(dir, edge2);
-    const a = edge1.dot(h);
-    if (a > -1e-8 && a < 1e-8) return null;
-    const f = 1 / a;
-    const s = new Vector3().subVectors(origin, A);
-    const u = f * s.dot(h);
-    if (u < 0 || u > 1) return null;
-    const qvec = new Vector3().crossVectors(s, edge1);
-    const v = f * dir.dot(qvec);
-    if (v < 0 || u + v > 1) return null;
-    const t = f * edge2.dot(qvec);
-    if (t < 0) return null;
-    return { t, u, v };
-}
+/** The shim's own `Mesh.raycast`, captured before `installMeshBvh` patches it. */
+const _origMeshRaycast = Mesh.prototype.raycast;
 
 /**
  * Bake static meshes under `root` into one merged BufferGeometry.
@@ -602,7 +471,8 @@ export class StaticGeometryGenerator {
             if (node.isMesh && !node.isSkinnedMesh) {
                 const clone = _cloneGeometryAsBuffer(node.geometry);
                 if (!clone) return;
-                const matrixWorld = node.matrixWorld || _nodeWorldMatrix(node);
+                // three-mesh-bvh reads `matrixWorld` as it stands (no update).
+                const matrixWorld = node.matrixWorld;
                 clone.applyMatrix4(matrixWorld);
                 geoms.push(clone);
             }
@@ -686,7 +556,6 @@ export function installMeshBvh(THREE = {}) {
     _requireMeshBvh();
     const BG = THREE.BufferGeometry || BufferGeometry;
     const M = THREE.Mesh || Mesh;
-    const RC = THREE.Raycaster || Raycaster;
     if (!BG.prototype.computeBoundsTree) {
         BG.prototype.computeBoundsTree = computeBoundsTree;
     }
@@ -694,29 +563,6 @@ export function installMeshBvh(THREE = {}) {
         BG.prototype.disposeBoundsTree = disposeBoundsTree;
     }
     M.prototype.raycast = acceleratedRaycast;
-
-    function raycastObject(raycaster, object, recursive, intersects) {
-        if (object.visible === false) return;
-        if (typeof object.raycast === 'function') {
-            object.raycast(raycaster, intersects);
-        }
-        if (recursive) {
-            for (const c of object.children || object._children || []) {
-                raycastObject(raycaster, c, true, intersects);
-            }
-        }
-    }
-
-    RC.prototype.intersectObject = function(object, recursive = false, intersects = []) {
-        raycastObject(this, object, recursive, intersects);
-        intersects.sort((a, b) => a.distance - b.distance);
-        return intersects;
-    };
-    RC.prototype.intersectObjects = function(objects, recursive = false, intersects = []) {
-        for (const o of objects) raycastObject(this, o, recursive, intersects);
-        intersects.sort((a, b) => a.distance - b.distance);
-        return intersects;
-    };
 
     return { MeshBVH, StaticGeometryGenerator, acceleratedRaycast, computeBoundsTree, disposeBoundsTree, GenerateMeshBVHWorker };
 }

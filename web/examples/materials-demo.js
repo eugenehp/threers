@@ -289,7 +289,7 @@ function tileSpecs(crinkle, cells) {
         const cells = solarCellMap(256, 6);
         const checker = checkerMap(256, 8);
 
-        const renderer = await THREE.WebGLRenderer.create(canvas);
+        const renderer = await THREE.WebGLRenderer.create(canvas, { antialias: true });
 
         const scene = new THREE.Scene();
         scene.background = new THREE.Color(0x05060a);

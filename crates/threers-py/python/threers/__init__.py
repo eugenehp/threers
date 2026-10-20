@@ -4,8 +4,12 @@ from __future__ import annotations
 
 from threers._native import (
     Color,
+    Geometry,
+    Material,
+    OrthographicCamera,
     PerspectiveCamera,
     Scene,
+    Texture,
     Vector3,
     version,
 )
@@ -29,10 +33,14 @@ __version__ = version()
 
 __all__ = [
     "Color",
+    "Geometry",
     "HeadlessRenderer",
+    "Material",
+    "OrthographicCamera",
     "PerspectiveCamera",
     "PhysicsWorld",
     "Scene",
+    "Texture",
     "Tween",
     "Vector3",
     "__version__",

@@ -68,11 +68,19 @@ fn hash_object(scene: &Scene, id: ObjectId, h: &mut DefaultHasher) {
         ObjectKind::Mesh(m) => {
             hash_geometry(&m.geometry, h);
             hash_material(&m.material, h);
+            hash_materials(&m.materials, h);
+            hash_influences(&m.morph_influences, h);
         }
         ObjectKind::SkinnedMesh(sm) => {
             hash_geometry(&sm.geometry, h);
             hash_material(&sm.material, h);
+            hash_materials(&sm.materials, h);
+            hash_influences(&sm.morph_influences, h);
             sm.skeleton.bones.len().hash(h);
+            // The pose is baked into the flattened triangles.
+            for m in &sm.skeleton.bone_matrices {
+                m.elements.iter().for_each(|v| v.to_bits().hash(h));
+            }
         }
         ObjectKind::InstancedMesh(im) => {
             hash_geometry(&im.geometry, h);
@@ -92,6 +100,8 @@ fn hash_object(scene: &Scene, id: ObjectId, h: &mut DefaultHasher) {
         }
         ObjectKind::Sprite(s) => {
             hash_material(&s.material, h);
+            s.center.x.to_bits().hash(h);
+            s.center.y.to_bits().hash(h);
         }
         ObjectKind::Light(l) => {
             std::mem::discriminant(l).hash(h);
@@ -132,6 +142,15 @@ fn hash_object(scene: &Scene, id: ObjectId, h: &mut DefaultHasher) {
 
 fn hash_geometry(g: &Arc<crate::core::BufferGeometry>, h: &mut DefaultHasher) {
     Arc::as_ptr(g).hash(h);
+    // Version: a bumped geometry (new morph targets, edited attributes) is a
+    // different surface. Groups and draw range decide which triangles exist
+    // and which material each one has.
+    g.geometry_version.hash(h);
+    for grp in &g.groups {
+        (grp.start, grp.count, grp.material_index).hash(h);
+    }
+    (g.draw_range.start, g.draw_range.count).hash(h);
+    g.morph_targets_relative.hash(h);
     if let Some(pos) = g.get_attribute("position") {
         pos.count().hash(h);
         pos.array.len().hash(h);
@@ -143,4 +162,19 @@ fn hash_geometry(g: &Arc<crate::core::BufferGeometry>, h: &mut DefaultHasher) {
 
 fn hash_material(m: &Arc<Material>, h: &mut DefaultHasher) {
     Arc::as_ptr(m).hash(h);
+}
+
+/// three.js's material array (empty for one material).
+fn hash_materials(ms: &[Arc<Material>], h: &mut DefaultHasher) {
+    ms.len().hash(h);
+    for m in ms {
+        hash_material(m, h);
+    }
+}
+
+fn hash_influences(w: &[f32], h: &mut DefaultHasher) {
+    w.len().hash(h);
+    for v in w {
+        v.to_bits().hash(h);
+    }
 }

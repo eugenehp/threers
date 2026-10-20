@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><style>body{margin:0;background:#161618}canvas{display:block}</style></head>
+<body><canvas id="c" width="800" height="600"></canvas>
+<script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.165.0/build/three.module.js"}}</script>
+<script type="module">
+import * as THREE from 'three';
+import { DecalGeometry } from 'https://unpkg.com/three@0.165.0/examples/jsm/geometries/DecalGeometry.js';
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x161618);
+scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+const dl = new THREE.DirectionalLight(0xffffff, 0.7);
+dl.position.set(2, 3, 4);
+scene.add(dl);
+const target = new THREE.Mesh(new THREE.SphereGeometry(1, 32, 16), new THREE.MeshStandardMaterial({ color: 0x445566, roughness: 0.6 }));
+target.position.set(0.1, 0, 0);
+target.rotation.set(0.2, 0.3, 0);
+scene.add(target);
+target.updateMatrixWorld(true);
+const decal = new DecalGeometry(target, new THREE.Vector3(0.3, 0.3, 0.85), new THREE.Euler(0.2, 0.4, 0.3, 'XYZ'), new THREE.Vector3(1.1, 0.8, 1.2));
+const dm = new THREE.Mesh(decal, new THREE.MeshBasicMaterial({ color: 0xff4466, polygonOffset: true, polygonOffsetFactor: -4 }));
+scene.add(dm);
+const cam = new THREE.PerspectiveCamera(45, 800/600, 0.1, 100);
+cam.position.set(0, 0, 4); cam.lookAt(0, 0, 0);
+const r = new THREE.WebGLRenderer({ canvas: document.getElementById('c'), antialias: false });
+r.setSize(800, 600, false); r.setPixelRatio(1);
+r.render(scene, cam);
+document.body.dataset.ready = 'true';
+</script></body></html>

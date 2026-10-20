@@ -17,6 +17,16 @@ NATIVE_CODEC=1 web/build.sh      # GIF/APNG/WebM/MP4 browser export bindings
 OPENSCAD=1 web/build.sh          # OpenSCAD front end (scad_geometry/scadExport)
 ```
 
+**Colour output.** Chrome's WebGPU canvas is `bgra8unorm`, not an sRGB
+format, so the hardware does not encode on write. threers handles it in the
+shader: tone mapping and the sRGB encode happen in the fragment stage whenever
+the target is a plain `Unorm` format. The same rule covers marks and post
+effects, and blending and MSAA resolves happen on the encoded bytes, as
+three.js's do on its 8-bit canvas. An sRGB canvas or render target is encoded
+by the hardware instead, and never twice. Configure the canvas with
+`navigator.gpu.getPreferredCanvasFormat()` and leave colour management to
+threers. `Color` values are linear, as in three.js with colour management on.
+
 **OpenSCAD in the browser** (after `OPENSCAD=1` build): the live playground
 [`web/openscad-playground.html`](../web/openscad-playground.html) parses `.scad` code
 to a watertight mesh and renders it with WebGPU, with STL/OBJ/OFF/3MF/GLB download.
@@ -95,7 +105,7 @@ Then load `web/examples/index.html` or any page that imports `/web/threejs-shim.
 import THREE, { initThreers } from '/web/threejs-shim.js';
 
 await initThreers('/web/pkg/threers_bg.wasm');
-const renderer = await THREE.WebGLRenderer.create(document.querySelector('canvas'));
+const renderer = await THREE.WebGLRenderer.create(document.querySelector('canvas'), { antialias: true });
 // … same patterns as three.js
 ```
 

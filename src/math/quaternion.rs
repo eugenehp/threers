@@ -52,6 +52,53 @@ impl Quaternion {
         }
     }
 
+    /// three.js `Quaternion.setFromEuler`, every axis order.
+    pub fn from_euler(e: super::Euler) -> Self {
+        use super::EulerOrder as O;
+        let (c1, s1) = ((e.x / 2.0).cos(), (e.x / 2.0).sin());
+        let (c2, s2) = ((e.y / 2.0).cos(), (e.y / 2.0).sin());
+        let (c3, s3) = ((e.z / 2.0).cos(), (e.z / 2.0).sin());
+        let (x, y, z, w) = match e.order {
+            O::XYZ => (
+                s1 * c2 * c3 + c1 * s2 * s3,
+                c1 * s2 * c3 - s1 * c2 * s3,
+                c1 * c2 * s3 + s1 * s2 * c3,
+                c1 * c2 * c3 - s1 * s2 * s3,
+            ),
+            O::YXZ => (
+                s1 * c2 * c3 + c1 * s2 * s3,
+                c1 * s2 * c3 - s1 * c2 * s3,
+                c1 * c2 * s3 - s1 * s2 * c3,
+                c1 * c2 * c3 + s1 * s2 * s3,
+            ),
+            O::ZXY => (
+                s1 * c2 * c3 - c1 * s2 * s3,
+                c1 * s2 * c3 + s1 * c2 * s3,
+                c1 * c2 * s3 + s1 * s2 * c3,
+                c1 * c2 * c3 - s1 * s2 * s3,
+            ),
+            O::ZYX => (
+                s1 * c2 * c3 - c1 * s2 * s3,
+                c1 * s2 * c3 + s1 * c2 * s3,
+                c1 * c2 * s3 - s1 * s2 * c3,
+                c1 * c2 * c3 + s1 * s2 * s3,
+            ),
+            O::YZX => (
+                s1 * c2 * c3 + c1 * s2 * s3,
+                c1 * s2 * c3 + s1 * c2 * s3,
+                c1 * c2 * s3 - s1 * s2 * c3,
+                c1 * c2 * c3 - s1 * s2 * s3,
+            ),
+            O::XZY => (
+                s1 * c2 * c3 - c1 * s2 * s3,
+                c1 * s2 * c3 - s1 * c2 * s3,
+                c1 * c2 * s3 + s1 * s2 * c3,
+                c1 * c2 * c3 + s1 * s2 * s3,
+            ),
+        };
+        Self { x, y, z, w }
+    }
+
     pub fn multiply(&self, other: Self) -> Self {
         Self {
             x: self.w * other.x + self.x * other.w + self.y * other.z - self.z * other.y,

@@ -132,6 +132,26 @@ pub fn polygon_sample(blades: u32, u1: f32, u2: f32) -> (f32, f32) {
     (a * c0 + b * c1, a * s0 + b * s1)
 }
 
+/// A view matrix given as is — three.js's `matrixWorldInverse` for a camera
+/// whose world matrix is not rotation + translation (under a scaled parent),
+/// which no `position` / `target` / `up` can express. It holds only while
+/// the camera stays at the pose it was given for: moving the camera any other
+/// way (controls, `look_at`) drops back to the computed view.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ViewOverride {
+    pub view: Matrix4,
+    pub position: Vector3,
+    pub target: Vector3,
+    pub up: Vector3,
+}
+
+impl ViewOverride {
+    /// The view, when the camera is still at this pose.
+    pub fn for_pose(&self, position: Vector3, target: Vector3, up: Vector3) -> Option<Matrix4> {
+        (self.position == position && self.target == target && self.up == up).then_some(self.view)
+    }
+}
+
 /// Unified camera trait used by the Renderer.
 pub trait Camera {
     fn view_matrix(&self) -> Matrix4;

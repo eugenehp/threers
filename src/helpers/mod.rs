@@ -7,6 +7,9 @@ mod camera_helper;
 mod grid;
 mod light_helpers;
 mod polar_grid;
+pub mod three_lines;
+pub mod quad_view;
+pub mod quad_view_controls;
 mod vertex_normals;
 
 pub use arrow::ArrowHelper;
@@ -19,4 +22,8 @@ pub use light_helpers::{
     SpotLightHelper,
 };
 pub use polar_grid::PolarGridHelper;
+pub use quad_view::{Pane, PaneSurface, QuadView, ViewSurface, ViewportControl};
+pub use quad_view_controls::{PointerButton, QuadViewControls};
+#[cfg(all(feature = "metal", any(target_os = "macos", target_os = "ios")))]
+pub use quad_view::MetalViewSurface;
 pub use vertex_normals::{VertexNormalsHelper, VertexTangentsHelper};

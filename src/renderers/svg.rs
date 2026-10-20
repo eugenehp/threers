@@ -453,6 +453,15 @@ struct Draw {
     tint: Option<Color>,
     order: i32,
     topology: Topology,
+    /// The span of the index (vertices, unindexed) this draw covers — a
+    /// group of a multi-material mesh, or the draw range. See
+    /// [`crate::core::mesh_draws`].
+    span: (u32, u32),
+}
+
+/// The draw range of a line or point geometry, `(0, 0)` when empty.
+fn full_span(g: &BufferGeometry) -> (u32, u32) {
+    g.draw_span(None).unwrap_or((0, 0))
 }
 
 /// Flatten the visible scene graph into one draw per primitive batch.
@@ -472,32 +481,57 @@ fn collect_draws(scene: &Scene, cam_layers: crate::core::Layers) -> Vec<Draw> {
         }
         let order = obj.render_order;
         match &obj.kind {
-            ObjectKind::Mesh(m) => draws.push(Draw {
-                geometry: m.geometry.clone(),
-                material: m.material.clone(),
-                model: obj.matrix_world,
-                tint: None,
-                order,
-                topology: Topology::Triangles,
-            }),
-            ObjectKind::SkinnedMesh(m) => draws.push(Draw {
-                geometry: m.geometry.clone(),
-                material: m.material.clone(),
-                model: obj.matrix_world,
-                tint: None,
-                order,
-                topology: Topology::Triangles,
-            }),
-            ObjectKind::InstancedMesh(m) => {
-                for (i, t) in m.transforms.iter().enumerate() {
+            // One draw per three.js render item: per group with its own
+            // material for a material array, else the draw range. Morph
+            // targets are blended on the CPU, where the GPU renderers blend
+            // them in the vertex shader.
+            ObjectKind::Mesh(m) => {
+                let geometry = m.posed_geometry();
+                for d in m.draws() {
                     draws.push(Draw {
-                        geometry: m.geometry.clone(),
-                        material: m.material.clone(),
-                        model: obj.matrix_world.multiply(t),
-                        tint: m.colors.get(i).copied(),
+                        geometry: geometry.clone(),
+                        material: d.material.clone(),
+                        model: obj.matrix_world,
+                        tint: None,
                         order,
                         topology: Topology::Triangles,
+                        span: (d.start, d.end),
                     });
+                }
+            }
+            // Posed on the CPU, where the GPU renderers pose in the vertex
+            // shader: the same three.js morph + skinning (see `SkinnedMesh`).
+            ObjectKind::SkinnedMesh(m) => {
+                let geometry = m.posed_geometry(&obj.matrix_world);
+                for d in m.draws() {
+                    draws.push(Draw {
+                        geometry: geometry.clone(),
+                        material: d.material.clone(),
+                        model: obj.matrix_world,
+                        tint: None,
+                        order,
+                        topology: Topology::Triangles,
+                        span: (d.start, d.end),
+                    });
+                }
+            }
+            ObjectKind::InstancedMesh(m) => {
+                let spans: Vec<(u32, u32)> = crate::core::mesh_draws(&m.geometry, &m.material, &[])
+                    .iter()
+                    .map(|d| (d.start, d.end))
+                    .collect();
+                for (i, t) in m.transforms.iter().enumerate() {
+                    for &span in &spans {
+                        draws.push(Draw {
+                            geometry: m.geometry.clone(),
+                            material: m.material.clone(),
+                            model: obj.matrix_world.multiply(t),
+                            tint: m.colors.get(i).copied(),
+                            order,
+                            topology: Topology::Triangles,
+                            span,
+                        });
+                    }
                 }
             }
             ObjectKind::LineSegments(l) => draws.push(Draw {
@@ -507,6 +541,7 @@ fn collect_draws(scene: &Scene, cam_layers: crate::core::Layers) -> Vec<Draw> {
                 tint: None,
                 order,
                 topology: Topology::Lines,
+                span: full_span(&l.geometry),
             }),
             ObjectKind::Points(p) => draws.push(Draw {
                 geometry: p.geometry.clone(),
@@ -515,6 +550,7 @@ fn collect_draws(scene: &Scene, cam_layers: crate::core::Layers) -> Vec<Draw> {
                 tint: None,
                 order,
                 topology: Topology::Points,
+                span: full_span(&p.geometry),
             }),
             ObjectKind::Group | ObjectKind::Light(_) | ObjectKind::Sprite(_) => {}
         }
@@ -1034,28 +1070,37 @@ impl SvgRenderer {
         };
 
         let mut pieces: Vec<[Vtx; 3]> = Vec::new();
-        for t in triangles(&d.geometry, local.len()) {
+        let mut outlines: Vec<Vec<Vtx>> = Vec::new();
+        for (corners, t) in faces(&d.geometry, local.len(), wireframe, d.span) {
             // Shade from the source triangle, not the piece: subdividing is a
             // sorting fix, and letting it change the shading normal would make
             // the tessellation visible.
             let n_face = face_normal(&verts, &t, normals.as_deref());
 
             pieces.clear();
-            // Splitting exists to make the depth sort work. Wireframe has no
-            // fills to sort, so it would buy nothing and cost plenty: every cut
-            // is another stroked edge, and the tessellation would be drawn on
-            // top of the model as if it were part of it.
-            match opt.depth_split.filter(|_| !wireframe) {
-                Some(tolerance) => subdivide_by_depth(
-                    [verts[t[0]], verts[t[1]], verts[t[2]]],
-                    tolerance.max(1e-3),
-                    MAX_DEPTH_SPLITS,
-                    &mut pieces,
-                ),
-                None => pieces.push([verts[t[0]], verts[t[1]], verts[t[2]]]),
+            outlines.clear();
+            if corners.len() > 3 {
+                // A whole polygon, which only wireframe asks for — and
+                // wireframe never splits, below.
+                outlines.push(corners.iter().map(|&i| verts[i]).collect());
+            } else {
+                // Splitting exists to make the depth sort work. Wireframe has
+                // no fills to sort, so it would buy nothing and cost plenty:
+                // every cut is another stroked edge, and the tessellation
+                // would be drawn on top of the model as if it were part of it.
+                match opt.depth_split.filter(|_| !wireframe) {
+                    Some(tolerance) => subdivide_by_depth(
+                        [verts[t[0]], verts[t[1]], verts[t[2]]],
+                        tolerance.max(1e-3),
+                        MAX_DEPTH_SPLITS,
+                        &mut pieces,
+                    ),
+                    None => pieces.push([verts[t[0]], verts[t[1]], verts[t[2]]]),
+                }
+                outlines.extend(pieces.iter().map(|p| p.to_vec()));
             }
 
-            for piece in &pieces {
+            for piece in &outlines {
                 let clipped = clip_polygon(piece);
                 if clipped.len() < 3 {
                     continue;
@@ -1168,13 +1213,17 @@ impl SvgRenderer {
             _ => (1.0, None),
         };
 
-        let pairs: Vec<[usize; 2]> = match &d.geometry.index {
-            Some(idx) => idx
-                .chunks_exact(2)
-                .map(|c| [c[0] as usize, c[1] as usize])
-                .collect(),
-            None => (0..local.len() / 2).map(|i| [i * 2, i * 2 + 1]).collect(),
+        // Segments `j, j + 1` for `j = start, start + 2, …` inside the span.
+        let (start, end) = (d.span.0 as usize, d.span.1 as usize);
+        let at = |j: usize| match &d.geometry.index {
+            Some(idx) => idx[j] as usize,
+            None => j,
         };
+        let pairs: Vec<[usize; 2]> = (start..end)
+            .step_by(2)
+            .filter(|&j| j + 2 <= end)
+            .map(|j| [at(j), at(j + 1)])
+            .collect();
 
         for s in pairs {
             if s[0] >= verts.len() || s[1] >= verts.len() {
@@ -1215,6 +1264,17 @@ impl SvgRenderer {
         let Some(iter) = d.geometry.positions() else {
             return;
         };
+        let all: Vec<Vector3> = iter.collect();
+        // The vertices the span names: index entries when indexed, as
+        // three.js draws an indexed `Points`.
+        let (start, end) = (d.span.0 as usize, d.span.1 as usize);
+        let iter = (start..end).filter_map(|j| {
+            let v = match &d.geometry.index {
+                Some(idx) => idx[j] as usize,
+                None => j,
+            };
+            all.get(v).copied()
+        });
         let mat = &*d.material;
         let opacity = mat.opacity().clamp(0.0, 1.0);
         let c = mat.color();
@@ -1440,17 +1500,67 @@ fn world_normals(geometry: &BufferGeometry, model: &Matrix4) -> Option<Vec<Vecto
     )
 }
 
-fn triangles(geometry: &BufferGeometry, vertex_count: usize) -> Vec<[usize; 3]> {
-    match &geometry.index {
-        Some(idx) => idx
-            .chunks_exact(3)
-            .map(|c| [c[0] as usize, c[1] as usize, c[2] as usize])
-            .filter(|t| t.iter().all(|&i| i < vertex_count))
-            .collect(),
-        None => (0..vertex_count / 3)
-            .map(|i| [i * 3, i * 3 + 1, i * 3 + 2])
-            .collect(),
+/// What to draw, as corner lists, each with the triangle to shade it from.
+///
+/// Triangles — except in wireframe, where a geometry that knows its polygons
+/// (see [`BufferGeometry::polygons`]) gives their outlines, so a quad is
+/// stroked as a quad and not as two triangles with a diagonal. A polygon whose
+/// outline cannot be recovered is stroked as its triangles.
+///
+/// Only the draw's `span` of the index: the triangles `j = start, start + 3,
+/// …` with `j + 3 <= end`, which is what a GPU rasterises for it; in
+/// wireframe the polygons lying wholly inside them.
+fn faces(
+    geometry: &BufferGeometry,
+    vertex_count: usize,
+    wireframe: bool,
+    span: (u32, u32),
+) -> Vec<(Vec<usize>, [usize; 3])> {
+    if !wireframe || geometry.polygon_counts().is_none() || !span.0.is_multiple_of(3) {
+        return triangles(geometry, vertex_count, span)
+            .into_iter()
+            .map(|t| (t.to_vec(), t))
+            .collect();
     }
+    let (t0, t1) = (span.0 as usize / 3, span.1 as usize / 3);
+    let mut out = Vec::new();
+    for range in geometry
+        .polygon_ranges()
+        .filter(|r| r.start >= t0 && r.end <= t1)
+    {
+        let tris: Vec<[usize; 3]> = range
+            .clone()
+            .map(|t| geometry.triangle(t).map(|i| i as usize))
+            .filter(|t| t.iter().all(|&i| i < vertex_count))
+            .collect();
+        let outline = (tris.len() == range.len())
+            .then(|| geometry.polygon_loop(range))
+            .flatten()
+            .filter(|l| l.iter().all(|&i| (i as usize) < vertex_count));
+        match outline {
+            Some(l) => out.push((l.into_iter().map(|i| i as usize).collect(), tris[0])),
+            None => out.extend(tris.into_iter().map(|t| (t.to_vec(), t))),
+        }
+    }
+    out
+}
+
+fn triangles(geometry: &BufferGeometry, vertex_count: usize, span: (u32, u32)) -> Vec<[usize; 3]> {
+    let count = match &geometry.index {
+        Some(idx) => idx.len(),
+        None => vertex_count,
+    };
+    let (start, end) = (span.0 as usize, (span.1 as usize).min(count));
+    let corner = |j: usize| match &geometry.index {
+        Some(idx) => idx[j] as usize,
+        None => j,
+    };
+    (start..end)
+        .step_by(3)
+        .filter(|&j| j + 3 <= end)
+        .map(|j| [corner(j), corner(j + 1), corner(j + 2)])
+        .filter(|t| t.iter().all(|&i| i < vertex_count))
+        .collect()
 }
 
 // ======================================================================
@@ -2018,7 +2128,32 @@ mod tests {
             })
             .render_to_string(&mut scene, &camera_at(0.0, 0.0, 5.0));
         assert!(svg.contains("fill=\"none\""));
-        assert_eq!(count(&svg, "<path"), 2);
+        // PlaneGeometry records its quad, so one outline rather than one per
+        // triangle.
+        assert_eq!(count(&svg, "<path"), 1);
+    }
+
+    /// A plane that knows it is one quad is stroked as one closed outline,
+    /// with no diagonal across it.
+    #[test]
+    fn wireframe_strokes_polygons_not_their_fan() {
+        let mut geometry = PlaneGeometry::new(2.0, 2.0);
+        geometry.set_polygons(vec![2]);
+        let mut scene = Scene::new();
+        scene.add(Object3D::mesh(Mesh::new(
+            geometry,
+            Material::Basic(BasicMaterial::new(Color::from_hex(0xff8800))),
+        )));
+        let svg = SvgRenderer::new(64, 64)
+            .with_options(SvgOptions {
+                shading: SvgShading::Wireframe,
+                ..SvgOptions::default()
+            })
+            .render_to_string(&mut scene, &camera_at(0.0, 0.0, 5.0));
+        assert_eq!(count(&svg, "<path"), 1);
+        // Four corners: a move, three lines and one back to the start.
+        let d = svg.split("d=\"").nth(1).unwrap().split('"').next().unwrap();
+        assert_eq!(d.matches('L').count(), 4, "{d}");
     }
 
     #[test]
@@ -2315,5 +2450,120 @@ mod tests {
             }
         }
         out
+    }
+
+    /// Four unit quads along +x, two triangles each, facing +z.
+    fn quad_strip() -> BufferGeometry {
+        let mut pos = Vec::new();
+        for i in 0..=4 {
+            pos.extend_from_slice(&[i as f32 - 2.0, -0.5, 0.0, i as f32 - 2.0, 0.5, 0.0]);
+        }
+        let mut idx = Vec::new();
+        for i in 0..4u32 {
+            let (a, b, c, d) = (2 * i, 2 * i + 1, 2 * i + 2, 2 * i + 3);
+            idx.extend_from_slice(&[a, c, b, b, c, d]);
+        }
+        let mut g = BufferGeometry::new();
+        g.set_attribute("position", crate::core::BufferAttribute::new(pos, 3));
+        g.set_index(idx);
+        g
+    }
+
+    fn flat_opts() -> SvgOptions {
+        SvgOptions {
+            depth_split: None,
+            ..SvgOptions::default()
+        }
+    }
+
+    fn basic(hex: u32) -> Arc<Material> {
+        Arc::new(Material::Basic(BasicMaterial::new(Color::from_hex(hex))))
+    }
+
+    /// three.js draws a material array per group, each group with its own
+    /// material, cut to the draw range: quads 0-1 red, quad 2 green, quad 3
+    /// outside `setDrawRange(0, 18)`.
+    #[test]
+    fn groups_draw_with_their_materials_inside_the_draw_range() {
+        let mut g = quad_strip();
+        g.add_group(0, 12, 0).add_group(12, 12, 1);
+        g.set_draw_range(0, 18);
+        let mut scene = Scene::new();
+        scene.add(Object3D::mesh(Mesh::with_materials(
+            Arc::new(g),
+            vec![basic(0xff0000), basic(0x00ff00)],
+        )));
+        let svg = SvgRenderer::new(200, 100)
+            .with_options(flat_opts())
+            .render_to_string(&mut scene, &camera_at(0.0, 0.0, 6.0));
+        assert_eq!(count(&svg, "fill=\"#ff0000\""), 4, "two red quads");
+        assert_eq!(count(&svg, "fill=\"#00ff00\""), 2, "one green quad");
+        assert_eq!(count(&svg, "<path"), 6, "the last quad is outside the range");
+    }
+
+    /// One material: groups ignored, the draw range alone.
+    #[test]
+    fn a_single_material_draws_its_draw_range() {
+        let mut g = quad_strip();
+        g.add_group(0, 12, 0).add_group(12, 12, 1);
+        g.set_draw_range(6, 12);
+        let mut scene = Scene::new();
+        scene.add(Object3D::mesh(Mesh::from_arc(Arc::new(g), basic(0x0000ff))));
+        let svg = SvgRenderer::new(200, 100)
+            .with_options(flat_opts())
+            .render_to_string(&mut scene, &camera_at(0.0, 0.0, 6.0));
+        assert_eq!(count(&svg, "fill=\"#0000ff\""), 4, "quads 1 and 2");
+        assert_eq!(count(&svg, "<path"), 4);
+    }
+
+    /// The widest x any path reaches, in SVG pixels.
+    fn max_path_x(svg: &str) -> f32 {
+        let mut best = f32::MIN;
+        for chunk in svg.split("<path d=\"").skip(1) {
+            let d = chunk.split('"').next().unwrap();
+            let nums: Vec<f32> = d
+                .split(|c: char| c.is_ascii_alphabetic() || c == ' ')
+                .filter_map(|t| t.parse().ok())
+                .collect();
+            for xy in nums.chunks_exact(2) {
+                best = best.max(xy[0]);
+            }
+        }
+        best
+    }
+
+    /// Morph targets are blended as three.js blends them: an absolute target
+    /// that widens the plane 1.5x at influence 1 widens the drawn plane by the
+    /// same factor about the centre.
+    #[test]
+    fn morph_targets_move_the_drawn_vertices() {
+        let build = |influence: f32| {
+            let mut g = PlaneGeometry::new(2.0, 2.0);
+            let base = g.get_attribute("position").unwrap().array.clone();
+            let wide: Vec<f32> = base
+                .chunks_exact(3)
+                .flat_map(|p| [p[0] * 1.5, p[1], p[2]])
+                .collect();
+            g.set_morph_attribute(
+                "position",
+                vec![crate::core::BufferAttribute::new(wide, 3)],
+            );
+            let mut mesh = Mesh::new(g, Material::Basic(BasicMaterial::new(Color::WHITE)));
+            mesh.morph_influences = vec![influence];
+            let mut scene = Scene::new();
+            scene.add(Object3D::mesh(mesh));
+            let mut cam = crate::cameras::OrthographicCamera::new(-4.0, 4.0, 4.0, -4.0, 0.1, 100.0);
+            cam.position = Vector3::new(0.0, 0.0, 5.0);
+            SvgRenderer::new(400, 400)
+                .with_options(flat_opts())
+                .render_to_string(&mut scene, &cam)
+        };
+        // 400 px across 8 units: x = 1 is pixel 250, x = 1.5 pixel 275.
+        let rest = max_path_x(&build(0.0));
+        let morphed = max_path_x(&build(1.0));
+        assert!((rest - 250.0).abs() < 0.6, "rest edge at {rest}");
+        assert!((morphed - 275.0).abs() < 0.6, "morphed edge at {morphed}");
+        let half = max_path_x(&build(0.5));
+        assert!((half - 262.5).abs() < 0.6, "halfway edge at {half}");
     }
 }

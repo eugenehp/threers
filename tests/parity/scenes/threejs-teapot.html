@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><style>body{margin:0;background:#161618}canvas{display:block}</style></head>
+<body><canvas id="c" width="800" height="600"></canvas>
+<script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.165.0/build/three.module.js"}}</script>
+<script type="module">
+import * as THREE from 'three';
+import { TeapotGeometry } from 'https://unpkg.com/three@0.165.0/examples/jsm/geometries/TeapotGeometry.js';
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x161618);
+scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+const dl = new THREE.DirectionalLight(0xffffff, 0.7);
+dl.position.set(2, 3, 4);
+scene.add(dl);
+const mesh = new THREE.Mesh(new TeapotGeometry(0.8, 8), new THREE.MeshStandardMaterial({ color: 0x66ccaa, roughness: 0.35 }));
+mesh.rotation.set(0.35, -0.6, 0);
+scene.add(mesh);
+const cam = new THREE.PerspectiveCamera(45, 800/600, 0.1, 100);
+cam.position.set(0, 0, 4); cam.lookAt(0, 0, 0);
+const r = new THREE.WebGLRenderer({ canvas: document.getElementById('c'), antialias: false });
+r.setSize(800, 600, false); r.setPixelRatio(1);
+r.render(scene, cam);
+document.body.dataset.ready = 'true';
+</script></body></html>

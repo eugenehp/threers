@@ -280,6 +280,8 @@ struct Uniforms {
     /// near, far, density, unused.
     fog_params: [f32; 4],
     albedo_lut: [[f32; 4]; 256],
+    /// Diffuse, glossy, transmission bounce limits (`RaytraceSettings`).
+    bounce_limits: [u32; 4],
 }
 
 /// The packed scene, ready to upload.
@@ -379,9 +381,9 @@ impl GpuBackend {
     pub fn headless() -> Result<Self, RaytraceError> {
         #[cfg(target_arch = "wasm32")]
         {
-            return Err(RaytraceError::NoDevice(
+            Err(RaytraceError::NoDevice(
                 "GpuBackend::headless is blocking and native-only; use headless_browser()".into(),
-            ));
+            ))
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -1566,6 +1568,12 @@ fn build_uniforms(
             0.0,
         ],
         albedo_lut: lut,
+        bounce_limits: [
+            settings.diffuse_max_bounces,
+            settings.glossy_max_bounces,
+            settings.transmission_max_bounces,
+            0,
+        ],
     }
 }
 
@@ -1855,6 +1863,7 @@ fn pack_scene(scene: &RaytraceScene, caps: GpuCaps) -> Packed {
         s[34] = m.subsurface_radius.x;
         s[35] = m.subsurface_radius.y;
         s[84] = m.subsurface_radius.z;
+        s[85] = if m.thin_walled { 1.0 } else { 0.0 };
         s[81] = m.normal_scale.x;
         s[82] = m.normal_scale.y;
 

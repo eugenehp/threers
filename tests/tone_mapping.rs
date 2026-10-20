@@ -167,31 +167,50 @@ fn neutral_leaves_the_midtones_alone_and_aces_does_not() {
             "Neutral moved {x} to {n}; it should be about {}",
             x - 0.04
         );
+        // three.js's ACES (1/0.6 pre-scale, RRT + ODT fit) lifts 0.18 to
+        // 0.213 and 0.5 to 0.558.
         let a = ToneMapping::AcesFilmic.apply([x, x, x])[0];
         assert!(
-            a > x * 1.15,
+            a > x * 1.1,
             "ACES was expected to lift the midtones, {x} came back as {a}"
         );
     }
 }
 
+/// The CPU curves (`ToneMapping::apply`, used by the SVG renderer and the
+/// path tracer's film) are three.js r165's, transcribed independently in
+/// `support/tone_mapping_truth.rs` — not merely the shader's, which the test
+/// above holds them to. ACES used to be Narkowicz's per-channel fit, which
+/// both copies agreed on and three.js does not use: it kept a blown red red,
+/// where three.js's RRT + ODT, with its cross-channel matrices, takes it
+/// towards white.
 #[test]
-fn neutral_desaturates_a_blown_highlight_and_aces_keeps_the_ratio() {
-    let red = [6.0f32, 0.05, 0.05];
-    let aces = on_the_cpu(red, ToneMapping::AcesFilmic, 1.0);
-    let neutral = on_the_cpu(red, ToneMapping::Neutral, 1.0);
-    let ratio = |p: [u8; 3]| p[1] as f32 / p[0].max(1) as f32;
-
-    // Per-channel, so a blown red stays a blown red.
-    assert!(
-        ratio(aces) < 0.35,
-        "ACES is per-channel and should hold the ratio, got {aces:?}"
-    );
-    // Cross-channel, so it resolves towards white the way an over-exposure does.
-    assert!(
-        ratio(neutral) > ratio(aces) * 2.0,
-        "Neutral should desaturate the highlight: {neutral:?} against {aces:?}"
-    );
+fn the_cpu_curves_are_three_js_curves() {
+    let samples: [[f32; 3]; 5] = [
+        [0.02, 0.02, 0.02],
+        [0.18, 0.18, 0.18],
+        [0.75, 0.40, 0.10],
+        [4.00, 0.60, 0.20],
+        [6.00, 0.05, 0.05],
+    ];
+    for (mode, name) in MODES {
+        for exposure in [1.0f32, 0.6] {
+            for c in samples {
+                let exposed = if mode == ToneMapping::None { c } else { c.map(|x| x * exposure) };
+                let got = mode.apply(exposed);
+                let want = truth::three_tone_map(mode, exposure as f64, c.map(|x| x as f64));
+                // `apply` leaves Linear's clamp to the encode.
+                for k in 0..3 {
+                    let g = if mode == ToneMapping::Linear { got[k].clamp(0.0, 1.0) } else { got[k] };
+                    assert!(
+                        (g as f64 - want[k]).abs() < 2e-3,
+                        "{name} x{exposure} on {c:?}: channel {k} is {g}, three.js {}",
+                        want[k]
+                    );
+                }
+            }
+        }
+    }
 }
 
 /// A half-float target must keep values above one, or there is nothing for the
@@ -458,4 +477,27 @@ fn depth_of_field_reads_the_clip_planes_from_the_frame() {
         "moving the focus changed only {across_focus} pixels, so the first \
          comparison proves nothing"
     );
+}
+
+#[path = "support/tone_mapping_truth.rs"]
+mod truth;
+
+/// Every material three.js tone-maps (basic included — `meshbasic_frag` ends
+/// in `tonemapping_fragment`) under every mode, with `tone_mapped` on and off,
+/// and the normal material never — against three.js r165's curves.
+#[test]
+fn every_material_tone_maps_as_three_js_does() {
+    let Ok(mut r) = HeadlessRenderer::builder().size(truth::N, truth::N).build() else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    r.set_msaa(1);
+    let r = std::cell::RefCell::new(r);
+    let failures = truth::check(
+        "wgpu",
+        &mut |mode, exposure| r.borrow_mut().renderer().set_tone_mapping(mode, exposure),
+        &mut |scene, cam| r.borrow_mut().render_to_rgba(scene, cam),
+    );
+    r.borrow_mut().renderer().set_tone_mapping(ToneMapping::None, 1.0);
+    assert!(failures.is_empty(), "{} failures:\n{}", failures.len(), failures.join("\n"));
 }

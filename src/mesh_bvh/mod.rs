@@ -10,8 +10,8 @@
 //! two trees together and reports the pairs of leaves that overlap, and the CSG
 //! evaluator takes those pairs as its candidate set — so how finely the trees
 //! were split decides how many candidates it sees, and with them what a boolean
-//! returns. The defaults here reproduce three-mesh-bvh's tree so that those
-//! callers, and the parity fixtures that pin them, keep their answer.
+//! returns. The defaults build three-mesh-bvh 0.7.6's tree split for split,
+//! so those callers get three-bvh-csg's answer (`tests/csg_upstream.rs`).
 
 mod build;
 mod bvhcast;
@@ -25,7 +25,7 @@ mod serialize;
 
 pub use build::{BuildOptions, AVERAGE, CENTER, SAH};
 pub use hit::BvhHit;
-pub use mesh_bvh::MeshBvh;
+pub use mesh_bvh::{BvhNodeView, JsRayHit, MeshBvh};
 pub use serialize::{SerializedMeshBvh, SERIALIZE_VERSION};
 
 /// Material side constants (mirror three.js).

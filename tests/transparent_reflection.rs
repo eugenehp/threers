@@ -1,4 +1,6 @@
-//! A transparent surface still reflects.
+//! A transparent surface still reflects — with
+//! `Renderer::set_reflective_transparency`, which is off by default, where
+//! a transparent surface blends as three.js blends it.
 //!
 //! Plain alpha blending composites `src * α + dst * (1 - α)`, which scales the
 //! *whole* shaded colour by alpha — reflection included. But alpha says how
@@ -64,11 +66,16 @@ fn mean_disc(rgba: &[u8]) -> f64 {
 /// The environment is the only light, and the background is black, so every
 /// level inside the silhouette arrived as a reflection.
 fn render(opacity: f32, metalness: f32, roughness: f32) -> Option<f64> {
+    render_with(opacity, metalness, roughness, true)
+}
+
+fn render_with(opacity: f32, metalness: f32, roughness: f32, reflective: bool) -> Option<f64> {
     let mut r = HeadlessRenderer::builder()
         .size(W, W)
         .color_format(threers::wgpu::TextureFormat::Rgba8Unorm)
         .build()
         .ok()?;
+    r.renderer().set_reflective_transparency(reflective);
     let mut scene = Scene::new();
     scene.background = Color::from_hex(0x000000);
     scene.environment = Some(uniform_env(1.0));
@@ -139,4 +146,22 @@ fn opaque_materials_are_untouched() {
     // through the `opacity < 1.0` gate and come out of the same branch they
     // always did. The real guard is the energy test in `ibl_energy.rs`, which
     // measures the opaque path against its analytic answer.
+}
+
+/// By default a transparent surface blends as three.js blends it: the whole
+/// shaded colour by `opacity`, reflection included — over black, a quarter
+/// of the opaque metal at `opacity = 0.25`.
+#[test]
+fn by_default_a_transparent_metal_blends_as_three_js_does() {
+    let (Some(opaque), Some(faint)) = (render_with(1.0, 1.0, 0.1, false), render_with(0.25, 1.0, 0.1, false)) else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    let kept = faint / opaque;
+    eprintln!("metal, three.js blending: opaque {opaque:.1}, α=0.25 {faint:.1}, kept {:.0}%", 100.0 * kept);
+    assert!(
+        (kept - 0.25).abs() < 0.04,
+        "three.js blends a 25%-opacity surface's colour by 0.25; kept {:.0}%",
+        100.0 * kept
+    );
 }

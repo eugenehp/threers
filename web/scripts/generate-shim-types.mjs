@@ -18,6 +18,8 @@ const exportRe = /^export (async )?(class|function|const) (\w+)/gm;
 const exports = [];
 let m;
 while ((m = exportRe.exec(src)) !== null) {
+    // `_`-prefixed exports are internal plumbing between web/ modules.
+    if (m[3].startsWith('_')) continue;
     exports.push({ kind: m[2], name: m[3], async: !!m[1] });
 }
 
@@ -168,9 +170,41 @@ export class WebGLRenderer implements ThreersHandle {
     shadowMap: { enabled: boolean; type: number };
     /** @deprecated use WebGLRenderer.create(canvas) */
     constructor(): never;
-    static create(canvas: HTMLCanvasElement): Promise<WebGLRenderer>;
-    setSize(width: number, height?: number, updateStyle?: boolean): void;
+    /** three.js \`new WebGLRenderer(parameters)\`; \`antialias\` (default false) turns on 4× MSAA. */
+    static create(canvas: HTMLCanvasElement, parameters?: { antialias?: boolean }): Promise<WebGLRenderer>;
+    static create(parameters: { canvas: HTMLCanvasElement; antialias?: boolean }): Promise<WebGLRenderer>;
+    /** CSS pixels; the drawing buffer becomes \`floor(size × pixelRatio)\`. Resets the viewport. */
+    setSize(width: number, height: number, updateStyle?: boolean): void;
+    /** Size in CSS pixels. */
+    getSize(target?: Vector2): Vector2;
     setPixelRatio(value: number): void;
+    getPixelRatio(): number;
+    /** Drawing-buffer size in device pixels. */
+    getDrawingBufferSize(target?: Vector2): Vector2;
+    setDrawingBufferSize(width: number, height: number, pixelRatio: number): void;
+    /** Bottom-left origin, CSS pixels (scaled by the pixel ratio). */
+    setViewport(x: number | Vector4, y?: number, width?: number, height?: number): void;
+    getViewport(target?: Vector4): Vector4;
+    setScissor(x: number | Vector4, y?: number, width?: number, height?: number): void;
+    getScissor(target?: Vector4): Vector4;
+    setScissorTest(enabled: boolean): void;
+    getScissorTest(): boolean;
+    /** Default true. Off, \`render\` keeps the colour already there (depth is still cleared). */
+    autoClear: boolean;
+    /** three.js: honour each material's \`clippingPlanes\` (default false). */
+    localClippingEnabled: boolean;
+    /** World-space planes that clip every object. threers clips one plane per object. */
+    clippingPlanes: Plane[];
+    /** What \`clear()\` fills with, and the background when \`scene.background\` is null. */
+    setClearColor(color: ThreersColorInput, alpha?: number): void;
+    getClearColor(target?: Color): Color;
+    setClearAlpha(alpha: number): void;
+    getClearAlpha(): number;
+    /** Fill with the clear colour — inside the scissor while the scissor test is on. */
+    clear(color?: boolean, depth?: boolean, stencil?: boolean): void;
+    clearColor(): void;
+    clearDepth(): void;
+    clearStencil(): void;
     render(scene: Scene, camera: PerspectiveCamera | OrthographicCamera): void;
     /** Attach a caption overlay drawn by every \`render()\`; \`null\` detaches. */
     setCaptions(overlay: CaptionOverlay | null): this;
@@ -334,13 +368,114 @@ export class OrbitControls {
     enableZoom: boolean;
     enableRotate: boolean;
     enablePan: boolean;
+    /** Pan in the screen plane (default) or over the plane orthogonal to \`camera.up\`. */
+    screenSpacePanning: boolean;
+    mouseButtons: { LEFT: number; MIDDLE: number; RIGHT: number };
+    touches: { ONE: number; TWO: number };
+    addEventListener(type: 'start' | 'change' | 'end', listener: (event: { type: string; target: OrbitControls }) => void): void;
+    removeEventListener(type: 'start' | 'change' | 'end', listener: (event: { type: string; target: OrbitControls }) => void): void;
+    dispatchEvent(event: { type: string }): void;
     update(
         dx?: number,
         dy?: number,
         wheel?: number,
         rotating?: boolean,
         panning?: boolean,
-    ): void;
+    ): boolean;
+}
+
+/** three.js r165 \`FlyControls\` (the move state and \`update\` run in Rust). */
+export class FlyControls extends EventDispatcher {
+    constructor(object: Object3D, domElement?: HTMLElement);
+    object: Object3D;
+    domElement: HTMLElement | undefined;
+    enabled: boolean;
+    movementSpeed: number;
+    rollSpeed: number;
+    dragToLook: boolean;
+    autoForward: boolean;
+    readonly movementSpeedMultiplier: number;
+    readonly status: number;
+    moveState: {
+        up: number; down: number; left: number; right: number; forward: number; back: number;
+        pitchUp: number; pitchDown: number; yawLeft: number; yawRight: number; rollLeft: number; rollRight: number;
+    };
+    moveVector: Vector3;
+    rotationVector: Vector3;
+    update(delta: number): void;
+    updateMovementVector(): void;
+    updateRotationVector(): void;
+    getContainerDimensions(): { size: [number, number]; offset: [number, number] };
+    dispose(): void;
+}
+
+/** three.js r165 \`MapControls\`: OrbitControls panning with the left button over the ground. */
+export class MapControls extends OrbitControls {}
+
+/** three.js r165 \`TransformControlsGizmo\`: \`gizmo\` / \`picker\` / \`helper\` groups per mode. */
+export class TransformControlsGizmo extends Object3D {
+    readonly isTransformControlsGizmo: true;
+    gizmo: { translate: Object3D; rotate: Object3D; scale: Object3D };
+    picker: { translate: Object3D; rotate: Object3D; scale: Object3D };
+    helper: { translate: Object3D; rotate: Object3D; scale: Object3D };
+}
+/** three.js r165 \`TransformControlsPlane\`: the invisible drag plane. */
+export class TransformControlsPlane extends Mesh {
+    readonly isTransformControlsPlane: true;
+}
+/**
+ * three.js r165 \`TransformControls\`: an Object3D to add to the scene (the
+ * gizmo is its child); the gizmo and drag math run in Rust.
+ */
+export class TransformControls extends Object3D {
+    constructor(camera: Camera, domElement?: HTMLElement);
+    readonly isTransformControls: true;
+    domElement: HTMLElement | null;
+    camera: Camera;
+    object: Object3D | undefined;
+    enabled: boolean;
+    axis: string | null;
+    mode: 'translate' | 'rotate' | 'scale';
+    translationSnap: number | null;
+    rotationSnap: number | null;
+    scaleSnap: number | null;
+    space: 'world' | 'local';
+    size: number;
+    dragging: boolean;
+    showX: boolean;
+    showY: boolean;
+    showZ: boolean;
+    rotationAngle: number;
+    worldPosition: Vector3;
+    worldPositionStart: Vector3;
+    worldQuaternion: Quaternion;
+    worldQuaternionStart: Quaternion;
+    cameraPosition: Vector3;
+    cameraQuaternion: Quaternion;
+    pointStart: Vector3;
+    pointEnd: Vector3;
+    rotationAxis: Vector3;
+    eye: Vector3;
+    _gizmo: TransformControlsGizmo;
+    _plane: TransformControlsPlane;
+    attach(object: Object3D): this;
+    detach(): this;
+    reset(): void;
+    getRaycaster(): Raycaster;
+    /** r169's spelling; in r165 the control itself is the scene object. */
+    getHelper(): this;
+    getMode(): 'translate' | 'rotate' | 'scale';
+    setMode(mode: 'translate' | 'rotate' | 'scale'): void;
+    setTranslationSnap(snap: number | null): void;
+    setRotationSnap(snap: number | null): void;
+    setScaleSnap(snap: number | null): void;
+    setSize(size: number): void;
+    setSpace(space: 'world' | 'local'): void;
+    pointerHover(pointer: { x: number; y: number; button: number } | null): void;
+    pointerDown(pointer: { x: number; y: number; button: number } | null): void;
+    pointerMove(pointer: { x: number; y: number; button: number } | null): void;
+    pointerUp(pointer: { x: number; y: number; button: number } | null): void;
+    dispose(): void;
 }
 
 /** Speed remapping: \`'linear' | 'smooth' | 'smoother' | 'inOut' | easing name\`. */
@@ -639,16 +774,58 @@ export function seedRandom(seed: number): void;
 
 // ---- Loaders ----
 
+/** What GLTFLoader gives: three.js r165's \`GLTF\`. */
+export interface GLTF {
+    scene: Group;
+    scenes: Group[];
+    animations: AnimationClip[];
+    cameras: (PerspectiveCamera | OrthographicCamera)[];
+    asset: { version: string; generator?: string; copyright?: string; [key: string]: unknown };
+    parser: {
+        json: any;
+        associations: Map<object, { nodes?: number; meshes?: number; primitives?: number; materials?: number; textures?: number } | undefined>;
+        getDependency(type: string, index: number): Promise<any>;
+        getDependencies(type: string): Promise<any[]>;
+    };
+    userData: Record<string, unknown>;
+}
+
+/**
+ * three.js r165 \`GLTFLoader\`. The parser is Rust (\`src/loaders/gltf\`), which
+ * also decodes Draco, meshopt, KTX2 and quantized data; the decoder setters
+ * are accepted for compatibility.
+ */
 export class GLTFLoader {
     constructor(manager?: LoadingManager);
+    path: string;
+    resourcePath: string;
+    crossOrigin: string;
+    withCredentials: boolean;
+    requestHeader: Record<string, string>;
     load(
         url: string,
-        onLoad: (gltf: { scene: Group | Scene; animations: AnimationClip[] }) => void,
+        onLoad: (gltf: GLTF) => void,
         onProgress?: (event: ProgressEvent) => void,
         onError?: (err: unknown) => void,
     ): void;
-    loadAsync(url: string): Promise<{ scene: Group | Scene; animations: AnimationClip[] }>;
-    parse(data: ArrayBuffer | string, path: string): { scene: Group | Scene; animations: AnimationClip[] };
+    loadAsync(url: string, onProgress?: (event: ProgressEvent) => void): Promise<GLTF>;
+    parse(
+        data: ArrayBuffer | string | object,
+        path: string,
+        onLoad: (gltf: GLTF) => void,
+        onError?: (err: unknown) => void,
+    ): void;
+    parseAsync(data: ArrayBuffer | string | object, path: string): Promise<GLTF>;
+    setPath(path: string): this;
+    setResourcePath(path: string): this;
+    setCrossOrigin(crossOrigin: string): this;
+    setWithCredentials(value: boolean): this;
+    setRequestHeader(header: Record<string, string>): this;
+    setDRACOLoader(loader: unknown): this;
+    setKTX2Loader(loader: unknown): this;
+    setMeshoptDecoder(decoder: unknown): this;
+    register(callback: (parser: GLTF['parser']) => { name: string; [hook: string]: unknown }): this;
+    unregister(callback: (parser: GLTF['parser']) => unknown): this;
 }
 
 export class LoadingManager {
@@ -658,16 +835,76 @@ export class LoadingManager {
     onError?: (url: string) => void;
 }
 
+/**
+ * three.js r165 \`Raycaster\`, run in JS over the shim's objects: meshes (material
+ * side, geometry groups + material arrays, morph targets), skinned and instanced
+ * meshes, lines and points (\`params.Line\` / \`params.Points\` thresholds) and
+ * sprites (needs \`camera\`, which \`setFromCamera\` sets).
+ */
 export class Raycaster {
+    ray: Ray;
+    near: number;
+    far: number;
+    camera: PerspectiveCamera | OrthographicCamera | null;
+    layers: Layers;
+    params: {
+        Mesh: Record<string, unknown>;
+        Line: { threshold: number };
+        LOD: Record<string, unknown>;
+        Points: { threshold: number };
+        Sprite: Record<string, unknown>;
+    };
+    /**
+     * three-mesh-bvh: a mesh with a \`geometry.boundsTree\` reports only its nearest
+     * hit. Takes effect once \`acceleratedRaycast\` is installed (\`installMeshBvh\`).
+     */
+    firstHitOnly: boolean;
     constructor(origin?: Vector3, direction?: Vector3, near?: number, far?: number);
-    setFromCamera(coords: Vector2, camera: PerspectiveCamera | OrthographicCamera): void;
-    intersectObjects(objects: unknown[], recursive?: boolean): Intersection[];
+    set(origin: Vector3, direction: Vector3): this;
+    setFromCamera(coords: Vector2, camera: PerspectiveCamera | OrthographicCamera): this;
+    setFromXRController(controller: unknown): this;
+    /** Hits on \`object\` and, when \`recursive\` (default true), its descendants, nearest first. */
+    intersectObject(object: unknown, recursive?: boolean, intersects?: Intersection[]): Intersection[];
+    intersectObjects(objects: unknown[], recursive?: boolean, intersects?: Intersection[]): Intersection[];
 }
 
+/** three.js \`intersection.face\`: the triangle a mesh hit landed on. */
+export interface Face {
+    a: number;
+    b: number;
+    c: number;
+    /** Geometric normal, in the object's local space. */
+    normal: Vector3;
+    materialIndex: number;
+}
+
+/**
+ * A raycast hit, as three.js reports it. Which fields are present depends on what
+ * was hit: meshes give \`face\`, \`faceIndex\` and (with those attributes) \`uv\`,
+ * \`uv1\`, \`normal\`; instanced meshes add \`instanceId\`; lines give \`index\` with
+ * \`face\` / \`faceIndex\` null; points give \`index\` and \`distanceToRay\`; sprites
+ * give \`uv\`.
+ */
 export interface Intersection {
     distance: number;
     point: Vector3;
     object: unknown;
+    face?: Face | null;
+    faceIndex?: number | null;
+    uv?: Vector2 | null;
+    uv1?: Vector2 | null;
+    /** Interpolated \`normal\` attribute, local space, facing the ray. */
+    normal?: Vector3 | null;
+    instanceId?: number;
+    index?: number;
+    distanceToRay?: number;
+    /**
+     * threers extension: the polygon (\`BufferGeometry.polygons\` entry) the hit
+     * triangle belongs to — the quad, not half of it — or null without a grouping.
+     */
+    polygonIndex?: number | null;
+    /** threers extension (three.js r166+): the hit's weights on \`face.a\`, \`.b\`, \`.c\`. */
+    barycoord?: Vector3;
 }
 
 export class Clock {
@@ -710,6 +947,109 @@ export interface BufferGeometry extends ThreersHandle {
     morphAttributes: { position?: BufferAttribute[] };
     setAttribute(name: string, attr: BufferAttribute): this;
     setIndex(index: BufferAttribute | Uint32Array | null): this;
+    /**
+     * threers extension: triangles per source polygon, in index order (\`2\` for a
+     * quad). Wireframes then outline polygons instead of fan diagonals. Call after
+     * \`setIndex\` / the last \`position\` change, which drop it. Throws unless every
+     * count is ≥ 1 and they sum to the triangle count.
+     */
+    setPolygons(counts: Uint32Array | ArrayLike<number> | null): this;
+    /** The polygon grouping, or null. */
+    readonly polygons: Uint32Array | null;
+    /**
+     * threers extension: pair adjacent triangles back into quads (Blender's "Tris to
+     * Quads"). Reorders the index and sets \`polygons\`; vertices are untouched.
+     * Angles in radians, 40° each by default. Returns how many quads were formed.
+     */
+    inferQuads(maxFaceAngle?: number, maxShapeAngle?: number): number;
+    /**
+     * threers extension: Catmull–Clark subdivision, \`levels\` rounds (default 1,
+     * at most 6). Returns a new indexed geometry whose faces are all quads, carried
+     * as \`polygons\`, with \`position\` and smooth \`normal\` only (UVs and other
+     * attributes are dropped). The cage is this geometry's polygons (its triangles
+     * where it has none), welded by position; \`sharpBoundary\` (default true)
+     * holds open borders in place. This geometry is untouched.
+     */
+    subdivide(levels?: number, options?: { sharpBoundary?: boolean }): BufferGeometry;
+}
+
+/** threers extension: a quad from four corners in winding order, meshed as a bilinear patch. */
+export class QuadGeometry implements BufferGeometry {
+    _w?: unknown;
+    attributes: Record<string, BufferAttribute>;
+    index: BufferAttribute | null;
+    morphAttributes: { position?: BufferAttribute[] };
+    type: 'QuadGeometry';
+    parameters: { corners: number[]; widthSegments: number; heightSegments: number };
+    constructor(
+        corners?: Array<Vector3 | [number, number, number]> | ArrayLike<number>,
+        widthSegments?: number,
+        heightSegments?: number,
+    );
+    setAttribute(name: string, attr: BufferAttribute): this;
+    setIndex(index: BufferAttribute | Uint32Array | null): this;
+    setPolygons(counts: Uint32Array | ArrayLike<number> | null): this;
+    readonly polygons: Uint32Array | null;
+    inferQuads(maxFaceAngle?: number, maxShapeAngle?: number): number;
+    subdivide(levels?: number, options?: { sharpBoundary?: boolean }): BufferGeometry;
+    [key: string]: any;
+}
+
+/**
+ * threers extension to the exporters: \`polygons: true\` writes each geometry's
+ * \`polygons\` (from \`inferQuads\`, \`subdivide\`, \`setPolygons\`) as n-gon faces.
+ * Default output is triangles.
+ */
+export interface ThreersPolygonExportOptions {
+    polygons?: boolean;
+}
+
+/** @see three.js \`OBJExporter\` — threers shim implementation */
+export class OBJExporter implements ThreersHandle {
+    _w?: unknown;
+    constructor();
+    parse(object: Object3D, options?: ThreersPolygonExportOptions): string;
+    [key: string]: any;
+}
+
+/** @see three.js \`PLYExporter\` — threers shim implementation (ASCII) */
+export class PLYExporter implements ThreersHandle {
+    _w?: unknown;
+    constructor();
+    parse(object: Object3D, onDone?: unknown, options?: ThreersPolygonExportOptions): string;
+    [key: string]: any;
+}
+
+export type QuadViewPane = 'top' | 'front' | 'side' | 'perspective';
+
+/**
+ * threers extension: CAD quad viewport — top/front/side orthographic panes
+ * (Y-up, third-angle) plus a perspective camera on one canvas. Rectangles are
+ * bottom-left origin, CSS pixels.
+ */
+export class QuadView implements ThreersHandle {
+    _w?: unknown;
+    constructor();
+    /** Grid order: top-left, top-right, bottom-left, bottom-right. */
+    layout: [QuadViewPane, QuadViewPane, QuadViewPane, QuadViewPane];
+    gap: number;
+    border: number;
+    margin: number;
+    /** Gap/border colour; null leaves them untouched. */
+    set gapColor(color: ThreersColorInput | null);
+    setPaneBackground(pane: QuadViewPane, color: ThreersColorInput | null): this;
+    maximized: QuadViewPane | null;
+    toggleMaximize(pane: QuadViewPane): this;
+    frameBox(box: Box3 | { min: Vector3; max: Vector3 }): this;
+    frameScene(scene: Scene): boolean;
+    readonly target: Vector3;
+    paneRect(pane: QuadViewPane, width: number, height: number): Vector4 | null;
+    paneRect(pane: QuadViewPane, renderer: WebGLRenderer): Vector4 | null;
+    paneAt(x: number, y: number, width: number, height: number): QuadViewPane | null;
+    paneAt(x: number, y: number, renderer: WebGLRenderer): QuadViewPane | null;
+    fit(width: number, height: number): this;
+    getOrthoCamera(pane: Exclude<QuadViewPane, 'perspective'>): unknown;
+    render(renderer: WebGLRenderer, scene: Scene, camera: PerspectiveCamera): void;
 }
 
 export class BufferAttribute {
@@ -1008,6 +1348,7 @@ manualNames.add('ThreersColorInput');
 manualNames.add('WebGLRenderTargetOptions');
 manualNames.add('MeshStandardMaterialParameters');
 manualNames.add('Intersection');
+manualNames.add('Face');
 manualNames.add('AnimationAction');
 manualNames.add('Pass');
 manualNames.add('VideoFormat');
@@ -1087,7 +1428,7 @@ const namespaceEntries = [...new Set([...threeKeys, ...exportNames])].sort().map
     if (key.endsWith('ColorSpace') || key.endsWith('Transfer') || key.endsWith('Encoding') || key === 'GLSL1' || key === 'GLSL3' || key.endsWith('BindMode')) {
         return `    readonly ${key}: string;`;
     }
-    if (key === 'DefaultUp' || key === 'MOUSE' || key === 'TOUCH' || key === 'REVISION') {
+    if (key === 'DefaultUp' || key === 'TOUCH' || key === 'REVISION') {
         return `    readonly ${key}: any;`;
     }
     return `    readonly ${key}: any;`;

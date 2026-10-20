@@ -16,8 +16,7 @@ const errEl = document.getElementById('err');
         r.setSize(800, 600);
         const composer = new THREE.EffectComposer(r);
         composer.addPass(new THREE.RenderPass(scene, cam));
-        composer.addPass({ enabled: true, needsSwap: true, renderToScreen: true,
-            render(renderer, wb, rb) { renderer.applyPostFx(rb, 0, 0, [1, 0, 0, 0]); } });
+        composer.addPass(new THREE.ShaderPass(THREE.CopyShader));
         await composer.render();
         await new Promise(rs => requestAnimationFrame(() => rs()));
         document.body.dataset.ready = 'true';

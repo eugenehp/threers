@@ -28,16 +28,23 @@ pub mod downsample;
 mod gpu_mesh;
 pub mod gpu_texture;
 mod render_target;
+// `set_viewport` / `set_scissor` state and the partial clear behind them.
+pub mod viewport;
 /// Pack RGBA to tightly-packed RGB on the GPU, so the alpha never crosses the
 /// readback. See [`rgb_pack`].
 pub mod rgb_pack;
 /// Depth-only ambient occlusion as a compute pass. See [`ssao`].
 pub mod ssao;
+/// [`ssao`] composited onto a live surface. See [`ssao_composite`].
+pub mod ssao_composite;
 /// GPU-side timing for the main pass. See [`gpu_timer`].
 pub mod gpu_timer;
 // The renderer itself, in a file named after it; this module is the facade.
 #[allow(clippy::module_inception)]
 mod renderer;
+// Material depth/colour-write state as pipeline variants.
+pub mod material_maps;
+mod pipeline_state;
 // Shader-material assembly and validation, for `ShaderMaterial::validate`.
 // Not part of the public surface: the module layout is an implementation
 // detail and the only supported entry point is that method.
@@ -80,10 +87,75 @@ mod accumulate;
 pub(crate) fn shader_applies_transfer(format: wgpu::TextureFormat) -> bool {
     format != wgpu::TextureFormat::Rgba16Float && !format.is_srgb()
 }
+
+/// The value to clear a `format` target to so it ends up holding the
+/// *linear* colour `color` — `scene.background`, a `clear()` colour, a
+/// viewport gap — the way everything else drawn into it does.
+///
+/// [`Color`](crate::math::Color) is linear ([`from_hex`](crate::math::Color::from_hex)
+/// decodes, as three.js does with colour management on), so this follows
+/// [`shader_applies_transfer`]: an sRGB or float target takes the linear value
+/// and the hardware (or a later pass) encodes it; a plain `Unorm` target —
+/// a WebGPU canvas is usually `bgra8unorm` — is written verbatim, so the
+/// value is encoded here, exactly as the shader encodes its own output.
+/// A hex background therefore lands on the image as that hex on either kind,
+/// which is three.js's behaviour (`WebGLBackground` converts the clear colour
+/// to the output colour space before `gl.clearColor`).
+///
+/// The opposite rule — `powf(2.2)` on sRGB targets, verbatim on `Unorm` —
+/// treats the colour as if it were still sRGB-encoded: a `from_hex`
+/// background is decoded twice and comes out near black.
+pub(crate) fn clear_value(
+    format: wgpu::TextureFormat,
+    color: crate::math::Color,
+    alpha: f32,
+) -> wgpu::Color {
+    let c = |v: f32| {
+        if shader_applies_transfer(format) {
+            crate::utils::srgb::linear_to_srgb_f32(v) as f64
+        } else {
+            v as f64
+        }
+    };
+    wgpu::Color {
+        r: c(color.r),
+        g: c(color.g),
+        b: c(color.b),
+        a: alpha as f64,
+    }
+}
 pub use downsample::{DownsampleFilter, Downsampler};
 pub use gpu_texture::GpuCubeTexture;
 #[cfg(not(target_arch = "wasm32"))]
 pub use headless::{HeadlessBuilder, HeadlessConfig, HeadlessRenderer};
 pub use render_target::{CubeRenderTarget, RenderTarget};
+pub use viewport::{PixelRect, ShadowMap, ViewportRect};
 pub use renderer::{PostFxCamera, Renderer, ToneMapping};
+pub use renderer::{PostFxBlend, PostFxNoise, PostFxOp, PostFxOutput};
 pub use renderer::{halton, stratified_jitter};
+
+#[cfg(test)]
+mod clear_value_tests {
+    use super::clear_value;
+    use crate::math::Color;
+    use wgpu::TextureFormat as F;
+
+    /// The canvas formats a browser hands out, which the headless tests cannot
+    /// build: plain `bgra8unorm` must get the encoded value, the sRGB variant
+    /// the linear one, and both must come out as the hex.
+    #[test]
+    fn a_hex_clear_lands_as_the_hex_on_canvas_formats() {
+        for hex in [0x20262c_u32, 0x0a0b0c, 0xff8800, 0x808080] {
+            let c = Color::from_hex(hex);
+            let want = [(hex >> 16) & 0xff, (hex >> 8) & 0xff, hex & 0xff];
+            let plain = clear_value(F::Bgra8Unorm, c, 1.0);
+            for (v, w) in [plain.r, plain.g, plain.b].into_iter().zip(want) {
+                assert!((v * 255.0 - w as f64).abs() < 0.01, "#{hex:06x}: {v}");
+            }
+            for f in [F::Bgra8UnormSrgb, F::Rgba16Float] {
+                let lin = clear_value(f, c, 1.0);
+                assert_eq!([lin.r, lin.g, lin.b], [c.r as f64, c.g as f64, c.b as f64]);
+            }
+        }
+    }
+}

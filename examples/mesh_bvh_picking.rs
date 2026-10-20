@@ -24,7 +24,11 @@ fn main() {
 
     let mut arena = ObjectArena::new();
     let root = arena.insert(Object3D::group());
-    let mat = threers::Material::Basic(BasicMaterial::new(Color::from_hex(0x4488cc)));
+    // DoubleSide, so the scene raycaster sees the back face too, like the
+    // unculled BVH cast above: it honours the material's side, as three.js does.
+    let mut basic = BasicMaterial::new(Color::from_hex(0x4488cc));
+    basic.side = threers::mesh_bvh::DOUBLE_SIDE;
+    let mat = threers::Material::Basic(basic);
     let mesh_id = arena.insert(Object3D::mesh(Mesh::new(geom, mat)));
     arena.add_child(root, mesh_id);
     arena.update_world_matrices(root, threers::Matrix4::identity());

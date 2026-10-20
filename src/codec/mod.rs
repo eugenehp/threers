@@ -14,10 +14,14 @@
 //!   muxers (H.264 `avc1`, HEVC `hvc1`, VP9 alpha via `BlockAdditional`).
 //! - [`crate::codec::apng`] / [`crate::codec::gif`] — animated PNG and GIF89a encode
 //!   (GIF also decodes).
+//! - [`crate::codec::decode`] — from-scratch H.264 and HEVC *decoders* (with the
+//!   `video` feature), the software counterpart of `videotoolbox_decode`:
+//!   `NativeDecoder` takes an `mp4_demux` track.
 
 pub mod animation;
 pub mod apng;
 pub mod bitstream;
+pub mod decode;
 pub mod gif;
 pub mod h264;
 pub mod rate;

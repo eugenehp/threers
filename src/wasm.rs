@@ -22,6 +22,32 @@ use wasm_bindgen::prelude::*;
 
 use crate::core::ObjectId;
 
+// Bindings that live in their own files under `src/wasm/`: shapes, paths,
+// extrusion and text; the other geometry generators; the exporters; and
+// helpers, loaders and noise. Child modules, so they see these types' fields.
+// TransformControls, FlyControls, MapControls' screen-space panning.
+mod controls;
+// The shim's Curve classes (three.js r165 curves, arc length, Frenet frames).
+mod curves;
+// AnimationClip, KeyframeTracks, Interpolants, AnimationMixer and its actions,
+// AnimationObjectGroup: three.js r165's animation system, run in Rust.
+mod animation;
+mod exporters;
+mod extras;
+mod generators;
+// GLTFLoader: the three.js r165 parser in `crate::loaders::gltf`, building the
+// scene graph's nodes directly; the shim wraps them.
+mod gltf;
+// Scene data behind the shim's Box3 / Sphere / Frustum: geometry and vertex bounds.
+mod math;
+mod mesh_state;
+// The shim's scene-graph mirror: nodes, structure, raycasting, DragControls.
+mod scene_graph;
+mod shapes;
+// Post-processing: the composer and its passes.
+mod postfx;
+pub use postfx::{WebEffectComposer, WebPass};
+
 /// Top-level WebGPU renderer bound to a canvas element. The constructor is
 /// async because adapter/device acquisition is async on the web.
 #[wasm_bindgen]
@@ -34,8 +60,14 @@ pub struct WebRenderer {
     height: u32,
     // When non-null, render() draws into this render target instead of the surface.
     current_target_id: Option<u32>,
-    /// Scratch RT for kind-0 canvas copies (RT→RT→canvas avoids Dawn swapchain sampling glitch).
-    copy_scratch: Option<(u32, Arc<crate::renderer::RenderTarget>)>,
+    /// True on wgpu's WebGL2 backend. See [`WebRenderer::gl_back_buffer`].
+    is_gl: bool,
+    /// Set once a page uses viewport / scissor / auto-clear off / `clear()` on
+    /// the canvas; from then on canvas draws on WebGL2 go through `gl_back`.
+    multi_view: bool,
+    /// Canvas-sized offscreen colour buffer that WebGL2 canvas draws accumulate
+    /// in, copied to the canvas after each draw.
+    gl_back: Option<(u32, Arc<crate::renderer::RenderTarget>)>,
 }
 
 // Thread-local registry mapping render-target IDs to live Arcs. We use this
@@ -46,6 +78,9 @@ thread_local! {
         = std::cell::RefCell::new(std::collections::HashMap::new());
     static ACTIVE_CUBE_TARGETS: std::cell::RefCell<std::collections::HashMap<u32, std::sync::Arc<crate::renderer::CubeRenderTarget>>>
         = std::cell::RefCell::new(std::collections::HashMap::new());
+    // Targets reallocated by `setSize` since the last render: the renderer's
+    // sample views of them are stale until registered again.
+    static RESIZED_TARGETS: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// GPU readback of a render-target region into a tight byte vec.
@@ -402,6 +437,7 @@ async fn acquire_browser_gpu(
         )
         .await
         .map_err(|e| JsValue::from_str(&format!("device: {e:?}")))?;
+    crate::gpu::report_uncaptured_errors(&device, "threers");
 
     let pair = (Arc::new(device), Arc::new(queue));
     if shareable {
@@ -430,6 +466,10 @@ impl WebRenderTarget {
         format: wgpu::TextureFormat,
     ) -> WebRenderTarget {
         let rt = crate::renderer::RenderTarget::new(&renderer.device, width, height, format);
+        // `readRenderTargetPixels` here returns what the target stores — the
+        // encoded picture — unless told the target is linear: the three.js
+        // layer sets each target's `texture.colorSpace` before reading.
+        rt.set_srgb_color_space(true);
         let arc = std::sync::Arc::new(rt);
         let id = NEXT_RT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         ACTIVE_TARGETS.with(|m| m.borrow_mut().insert(id, arc.clone()));
@@ -441,11 +481,42 @@ impl WebRenderTarget {
         }
     }
 
+    /// three.js `renderTarget.setSize(width, height)`: reallocate at the new
+    /// size, keeping the id — so every texture made from this target, and every
+    /// material sampling it, carries on with the resized one — and its colour
+    /// space. The contents start cleared, as three.js's do.
     #[wasm_bindgen(js_name = setSize)]
-    pub fn set_size(&mut self, _w: u32, _h: u32) {
-        // Resize requires reallocating the wgpu texture. Users typically
-        // create a new render target at the new size; we report the request
-        // but keep the original allocation.
+    pub fn set_size(&mut self, width: u32, height: u32) {
+        let (width, height) = (width.max(1), height.max(1));
+        if (width, height) == (self.width, self.height) {
+            return;
+        }
+        self.inner = std::sync::Arc::new(self.inner.resized(width, height));
+        (self.width, self.height) = (width, height);
+        ACTIVE_TARGETS.with(|m| m.borrow_mut().insert(self.id, self.inner.clone()));
+        RESIZED_TARGETS.with(|r| r.borrow_mut().push(self.id));
+    }
+
+    /// three.js `renderTarget.texture.colorSpace`: `true` for `SRGBColorSpace`,
+    /// whose read-back is sRGB-encoded (this API's default, the stored
+    /// bytes); `false` for three.js's default `NoColorSpace`, which reads back
+    /// linear. See `RenderTarget::srgb_color_space`.
+    #[wasm_bindgen(js_name = setSrgbColorSpace)]
+    pub fn set_srgb_color_space(&self, srgb: bool) {
+        self.inner.set_srgb_color_space(srgb);
+    }
+
+    /// three.js `renderTarget.samples`: above 1, drawn multisampled and
+    /// resolved, colour and depth (see `RenderTarget::samples`). A half-float
+    /// target stays single-sampled.
+    #[wasm_bindgen(js_name = setSamples)]
+    pub fn set_samples(&self, samples: u32) {
+        self.inner.set_samples(samples);
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn samples(&self) -> u32 {
+        self.inner.samples()
     }
 }
 
@@ -464,11 +535,62 @@ fn pick_surface_alpha_mode(modes: &[wgpu::CompositeAlphaMode]) -> wgpu::Composit
     modes[0]
 }
 
+/// Forward `log` records to the browser console.
+///
+/// Without this, wgpu is silent in a browser: it reports a rejected pipeline
+/// or a failed surface configuration through `log::error!`, and with no
+/// logger installed those records go nowhere. The symptom is a canvas that
+/// stays blank while the frame loop runs at sixty — which is indistinguishable
+/// from a slow start until you can see the error.
+///
+/// Hand-rolled rather than `console_log`, which is a dependency for twenty
+/// lines, and `web-sys`'s `console` is already here for the panic hook.
+struct ConsoleLogger;
+
+impl log::Log for ConsoleLogger {
+    fn enabled(&self, metadata: &log::Metadata) -> bool {
+        metadata.level() <= log::Level::Warn
+    }
+
+    fn log(&self, record: &log::Record) {
+        if !self.enabled(record.metadata()) {
+            return;
+        }
+        let line = format!(
+            "[{}] {}: {}",
+            record.level(),
+            record.target(),
+            record.args()
+        );
+        let msg = wasm_bindgen::JsValue::from_str(&line);
+        match record.level() {
+            log::Level::Error => web_sys::console::error_1(&msg),
+            _ => web_sys::console::warn_1(&msg),
+        }
+    }
+
+    fn flush(&self) {}
+}
+
+/// Install [`ConsoleLogger`], once. Safe to call from every entry point.
+pub fn install_console_logger() {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        // `set_logger` only fails if one is already installed, which is a
+        // host that wanted its own — leave theirs alone.
+        if log::set_logger(&ConsoleLogger).is_ok() {
+            log::set_max_level(log::LevelFilter::Warn);
+        }
+    });
+}
+
 #[wasm_bindgen]
 impl WebRenderer {
     /// Async factory. Pass an HTMLCanvasElement and the renderer attaches to it.
     pub async fn new(canvas: web_sys::HtmlCanvasElement) -> Result<WebRenderer, JsValue> {
         console_error_panic_hook::set_once();
+        install_console_logger();
 
         let width = canvas.width().max(1);
         let height = canvas.height().max(1);
@@ -512,7 +634,9 @@ impl WebRenderer {
             width,
             height,
             current_target_id: None,
-            copy_scratch: None,
+            is_gl: adapter.get_info().backend == wgpu::Backend::Gl,
+            multi_view: false,
+            gl_back: None,
         })
     }
 
@@ -524,7 +648,7 @@ impl WebRenderer {
         self.config.height = self.height;
         self.surface.configure(&self.device, &self.config);
         self.renderer.resize(self.width, self.height);
-        self.copy_scratch = None;
+        self.gl_back = None;
     }
 
     /// Enable hardware MSAA on the direct-to-canvas pass. `samples <= 1` = off,
@@ -550,30 +674,244 @@ impl WebRenderer {
         self.renderer.set_tone_mapping(mapping, exposure);
     }
 
+    /// Reversed depth for the view — see
+    /// [`Renderer::set_reversed_z`](crate::Renderer::set_reversed_z). For a
+    /// globe or anything spanning kilometres with a near plane of metres; off
+    /// by default.
+    #[wasm_bindgen(js_name = setReversedZ)]
+    pub fn set_reversed_z(&mut self, on: bool) {
+        self.renderer.set_reversed_z(on);
+    }
+
+    /// Geometric specular antialiasing on Standard and Physical materials, in
+    /// place of three.js's `geometryRoughness` — see
+    /// [`Renderer::set_specular_antialiasing`](crate::Renderer::set_specular_antialiasing).
+    /// Off by default, as three.js renders.
+    #[wasm_bindgen(js_name = setSpecularAntialiasing)]
+    pub fn set_specular_antialiasing(&mut self, on: bool) {
+        self.renderer.set_specular_antialiasing(on);
+    }
+
+    /// threers's reflective transparency on Standard and Physical — see
+    /// [`Renderer::set_reflective_transparency`](crate::Renderer::set_reflective_transparency).
+    /// Off by default, as three.js renders.
+    #[wasm_bindgen(js_name = setReflectiveTransparency)]
+    pub fn set_reflective_transparency(&mut self, on: bool) {
+        self.renderer.set_reflective_transparency(on);
+    }
+
     #[wasm_bindgen(js_name = setMsaa)]
     pub fn set_msaa(&mut self, samples: u32) {
         self.renderer.set_msaa(samples);
     }
 
-    fn ensure_copy_scratch(&mut self) -> (u32, Arc<crate::renderer::RenderTarget>) {
-        let needs_alloc = match &self.copy_scratch {
+    /// three.js `renderer.shadowMap.type`: 0 `BasicShadowMap`, 1
+    /// `PCFShadowMap` (the default), 2 `PCFSoftShadowMap`, 3 `VSMShadowMap` —
+    /// drawn here as percentage-closer soft shadows, whose edge softens with
+    /// distance from the caster as a variance map's does.
+    #[wasm_bindgen(js_name = setShadowType)]
+    pub fn set_shadow_type(&mut self, kind: u32) {
+        self.renderer.set_shadow_type(shadow_type_of(kind));
+    }
+
+    /// The filter `setShadowType` set, as three.js's number.
+    #[wasm_bindgen(getter, js_name = shadowType)]
+    pub fn shadow_type(&self) -> u32 {
+        self.renderer.shadow_type().code()
+    }
+
+    /// How many layers overlapping refraction glass composites in
+    /// (`Renderer::set_refraction_layers`).
+    #[wasm_bindgen(js_name = setRefractionLayers)]
+    pub fn set_refraction_layers(&mut self, layers: u32) {
+        self.renderer.set_refraction_layers(layers as usize);
+    }
+
+    /// Whether the last render was multisampled — MSAA asked for is not
+    /// always delivered (see `Renderer::last_frame_multisampled`).
+    #[wasm_bindgen(getter, js_name = lastFrameMultisampled)]
+    pub fn last_frame_multisampled(&self) -> bool {
+        self.renderer.last_frame_multisampled()
+    }
+
+    /// three.js `renderer.shadowMap.autoUpdate`: on (default), every render
+    /// redraws the shadow maps; off, only a render after
+    /// `shadowMapNeedsUpdate = true` does. See `renderer::ShadowMap`.
+    #[wasm_bindgen(getter, js_name = shadowMapAutoUpdate)]
+    pub fn shadow_map_auto_update(&self) -> bool {
+        self.renderer.shadow_map().auto_update
+    }
+    #[wasm_bindgen(setter, js_name = shadowMapAutoUpdate)]
+    pub fn set_shadow_map_auto_update(&mut self, on: bool) {
+        self.renderer.shadow_map_mut().auto_update = on;
+    }
+
+    /// three.js `renderer.shadowMap.needsUpdate`, consumed by the next render
+    /// that draws the maps.
+    #[wasm_bindgen(getter, js_name = shadowMapNeedsUpdate)]
+    pub fn shadow_map_needs_update(&self) -> bool {
+        self.renderer.shadow_map().needs_update
+    }
+    #[wasm_bindgen(setter, js_name = shadowMapNeedsUpdate)]
+    pub fn set_shadow_map_needs_update(&mut self, on: bool) {
+        self.renderer.shadow_map_mut().needs_update = on;
+    }
+
+    /// three.js `setViewport(x, y, width, height)`: bottom-left origin, in
+    /// pixels scaled by `setPixelRatio`. See `Renderer::set_viewport`.
+    #[wasm_bindgen(js_name = setViewport)]
+    pub fn set_viewport(&mut self, x: f32, y: f32, width: f32, height: f32) {
+        self.multi_view = true;
+        self.renderer.set_viewport(x, y, width, height);
+    }
+
+    /// Back to the whole canvas (or render target).
+    #[wasm_bindgen(js_name = resetViewport)]
+    pub fn reset_viewport(&mut self) {
+        self.renderer.reset_viewport();
+    }
+
+    /// three.js `setScissor(x, y, width, height)`; same coordinates as
+    /// `setViewport`, used while `setScissorTest(true)`.
+    #[wasm_bindgen(js_name = setScissor)]
+    pub fn set_scissor(&mut self, x: f32, y: f32, width: f32, height: f32) {
+        self.renderer.set_scissor(x, y, width, height);
+    }
+
+    /// three.js `setScissorTest`. On, each render clears and draws only inside
+    /// the scissor — several renders per animation frame then share the canvas
+    /// (on WebGPU the canvas texture is the same for the whole frame; on
+    /// WebGL2 the draws accumulate in an offscreen buffer — see
+    /// `gl_back_buffer`).
+    #[wasm_bindgen(js_name = setScissorTest)]
+    pub fn set_scissor_test(&mut self, enabled: bool) {
+        self.multi_view |= enabled;
+        self.renderer.set_scissor_test(enabled);
+    }
+
+    /// Scale for viewport/scissor rectangles only (three.js `setPixelRatio`);
+    /// `setSize` still takes device pixels.
+    #[wasm_bindgen(js_name = setPixelRatio)]
+    pub fn set_pixel_ratio(&mut self, ratio: f32) {
+        self.renderer.set_pixel_ratio(ratio);
+    }
+
+    /// three.js `autoClear`: false keeps the colour already on the canvas.
+    #[wasm_bindgen(js_name = setAutoClear)]
+    pub fn set_auto_clear(&mut self, enabled: bool) {
+        self.multi_view |= !enabled;
+        self.renderer.set_auto_clear(enabled);
+    }
+
+    /// three.js `renderer.clear()` for colour — the same colour handling as
+    /// `scene.setBackground` — only inside the scissor while the scissor test
+    /// is on. Clears the active render target if one is set.
+    pub fn clear(&mut self, color: &WebColor, alpha: f32) {
+        let color = color.inner;
+        let alpha = alpha.clamp(0.0, 1.0);
+        if let Some(id) = self.current_target_id {
+            if let Some(target) = ACTIVE_TARGETS.with(|m| m.borrow().get(&id).cloned()) {
+                self.renderer.clear_render_target(&target, color, alpha);
+                return;
+            }
+        }
+        // A clear on the canvas is a frame being composed by hand.
+        self.multi_view = true;
+        if let Some((id, back)) = self.gl_back_buffer() {
+            self.renderer.clear_render_target(&back, color, alpha);
+            self.present_gl_back_buffer(id);
+            return;
+        }
+        match self.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(frame)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {
+                let view = frame
+                    .texture
+                    .create_view(&wgpu::TextureViewDescriptor::default());
+                self.renderer.clear(&view, false, color, alpha);
+                self.renderer.queue_arc().present(frame);
+            }
+            _ => self.surface.configure(&self.device, &self.config),
+        }
+    }
+
+    /// The offscreen buffer canvas draws go to on WebGL2 once a page composes
+    /// frames from several draws (viewport, scissor test, auto-clear off, or
+    /// `clear()` on the canvas); `None` otherwise, and always on WebGPU.
+    ///
+    /// Why: wgpu's GL backend hands out the canvas as a *new* texture on
+    /// every acquire, tracked as uninitialised, so a render pass that loads
+    /// it — a pane drawn after another pane — gets it zero-filled first and
+    /// the earlier pane is lost. (Browser WebGPU has no such tracking: the
+    /// canvas texture is the same object for the whole frame.) Drawing into
+    /// a persistent target and copying it to the canvas after each draw keeps
+    /// every pane. The copy is a fullscreen pass, sRGB in and out, so it is
+    /// exact. With MSAA on, these draws go through the multisampled path
+    /// (`render_back`), which resolves a pane through its own pane-sized
+    /// target — so the panes keep their anti-aliasing here too.
+    fn gl_back_buffer(&mut self) -> Option<(u32, Arc<crate::renderer::RenderTarget>)> {
+        if !(self.is_gl && self.multi_view) {
+            return None;
+        }
+        let stale = match &self.gl_back {
             None => true,
             Some((_, rt)) => rt.width != self.width || rt.height != self.height,
         };
-        if needs_alloc {
+        if stale {
+            if let Some((old, _)) = self.gl_back.take() {
+                ACTIVE_TARGETS.with(|m| m.borrow_mut().remove(&old));
+            }
             let rt = Arc::new(crate::renderer::RenderTarget::new(
                 &self.device,
                 self.width,
                 self.height,
                 self.config.format,
             ));
+            // It stands in for the canvas, so it is tone-mapped like one.
+            rt.set_presents(true);
             let id = NEXT_RT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             ACTIVE_TARGETS.with(|m| m.borrow_mut().insert(id, rt.clone()));
-            self.renderer.register_render_target(id, &rt);
-            self.copy_scratch = Some((id, rt));
+            self.gl_back = Some((id, rt));
         }
-        let (id, rt) = self.copy_scratch.as_ref().unwrap();
-        (*id, rt.clone())
+        let (id, rt) = self.gl_back.as_ref()?;
+        self.renderer.register_render_target(*id, rt);
+        Some((*id, rt.clone()))
+    }
+
+    /// Copy the WebGL2 back buffer over the whole canvas and present it.
+    fn present_gl_back_buffer(&mut self, back_id: u32) {
+        let frame = match self.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
+            _ => {
+                self.surface.configure(&self.device, &self.config);
+                return;
+            }
+        };
+        let view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let identity = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0];
+        let camera = postfx_camera_from(0.1, 100.0, 0.5, 16, &identity, &identity);
+        // Kind 0, the byte copy: the buffer and the canvas are both sRGB on
+        // WebGL2, and the pass re-encodes what its raw view decodes and
+        // decodes what the canvas encodes (`postfx_flag`), so the bytes
+        // arrive as they were.
+        self.renderer.apply_postfx_by_id(
+            back_id,
+            0,
+            &view,
+            0,
+            0,
+            0,
+            0.0,
+            [0.0; 4],
+            [0.0; 4],
+            self.width,
+            self.height,
+            false,
+            camera,
+        );
+        self.renderer.queue_arc().present(frame);
     }
 
     /// Set the active render target by id. When non-zero, `render()` draws
@@ -675,6 +1013,13 @@ impl WebRenderer {
             );
             queue.submit(std::iter::once(encoder.finish()));
         }
+        // On WebGPU a target takes the canvas's format, `bgra8unorm` in
+        // Chrome; three.js's `readRenderTargetPixels` returns RGBA whatever
+        // the target, so BGRA is swizzled on the way out.
+        let bgra = matches!(
+            target.color_texture.format(),
+            wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
+        );
 
         wasm_bindgen_futures::future_to_promise(async move {
             // Map the buffer for reading. wgpu uses a callback; bridge with a oneshot.
@@ -699,6 +1044,13 @@ impl WebRenderer {
             }
             drop(mapped);
             buffer.unmap();
+            if bgra {
+                for px in out.chunks_exact_mut(4) {
+                    px.swap(0, 2);
+                }
+            }
+            // What three.js returns for the target's colour space.
+            target.bytes_as_color_space(&mut out);
             let u8arr = js_sys::Uint8Array::new_with_length(out.len() as u32);
             u8arr.copy_from(&out);
             Ok(JsValue::from(u8arr))
@@ -757,29 +1109,33 @@ impl WebRenderer {
             &proj,
             &inv_proj,
         );
-        // Dawn/WebGPU: sampling a render target in the same frame it was written,
-        // then writing straight to the swapchain, misaligns at silhouettes. An
-        // intermediate RT→RT copy matches the stable RT→RT→canvas path.
-        let mut input_rt_id = input_rt_id;
-        if kind == 0 && additive == 0 && p2x > 0.5 {
-            let (scratch_id, scratch) = self.ensure_copy_scratch();
-            self.renderer.register_render_target(scratch_id, &scratch);
-            self.renderer.apply_postfx_by_id(
-                input_rt_id,
-                scratch_id,
-                &scratch.color_view,
-                depth_rt_id,
-                normal_rt_id,
-                kind,
-                time,
-                [p2x, p2y, p2z, p2w],
-                [p3x, p3y, p3z, p3w],
-                scratch.width,
-                scratch.height,
-                false,
-                camera.clone(),
-            );
-            input_rt_id = scratch_id;
+        // On WebGL2 every canvas write goes through the persistent buffer
+        // (`gl_back_buffer`): wgpu's GL backend hands the canvas out as a
+        // fresh, uninitialised texture each time, so a second pass onto it —
+        // UnrealBloomPass's bloom added over its copy, OutlinePass's edges
+        // over the scene — would start from a cleared surface and lose the
+        // first. Drawing into the buffer and presenting it keeps both.
+        if self.is_gl {
+            self.multi_view = true;
+            if let Some((back_id, back)) = self.gl_back_buffer() {
+                self.renderer.apply_postfx_by_id(
+                    input_rt_id,
+                    back_id,
+                    &back.color_view,
+                    depth_rt_id,
+                    normal_rt_id,
+                    kind,
+                    time,
+                    [p2x, p2y, p2z, p2w],
+                    [p3x, p3y, p3z, p3w],
+                    self.width,
+                    self.height,
+                    additive != 0,
+                    camera,
+                );
+                self.present_gl_back_buffer(back_id);
+                return;
+            }
         }
         let frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(f)
@@ -884,11 +1240,6 @@ impl WebRenderer {
         );
     }
 
-    #[wasm_bindgen(js_name = setGlitchSnow)]
-    pub fn set_glitch_snow(&mut self, data: Vec<f32>, width: u32, height: u32) {
-        self.renderer.set_glitch_snow(&data, width, height);
-    }
-
     /// Async readback of a half-float render target (raw RGBA16F bytes).
     #[wasm_bindgen(js_name = readRenderTargetF16)]
     pub fn read_render_target_f16(
@@ -943,11 +1294,6 @@ impl WebRenderer {
         self.renderer
             .blit_rgba8(&data, width, height, &output_view, self.config.format);
         self.renderer.queue_arc().present(frame);
-    }
-
-    #[wasm_bindgen(js_name = setDotscreenPattern)]
-    pub fn set_dotscreen_pattern(&mut self, data: Vec<f32>, width: u32, height: u32) {
-        self.renderer.set_dotscreen_pattern(&data, width, height);
     }
 
     #[wasm_bindgen(js_name = setGlitchDisp)]
@@ -1083,6 +1429,12 @@ impl WebRenderer {
     }
 
     pub fn render(&mut self, scene: &mut WebScene, camera: &WebCamera) {
+        // Targets resized since the last frame: their sample views are new.
+        for id in RESIZED_TARGETS.with(|r| std::mem::take(&mut *r.borrow_mut())) {
+            if let Some(t) = ACTIVE_TARGETS.with(|m| m.borrow().get(&id).cloned()) {
+                self.renderer.register_render_target(id, &t);
+            }
+        }
         // If the scene references a cube render target as its environment map,
         // make sure the renderer's view cache has its cube view registered.
         if let Some(env_rt_id) = scene.inner.environment_cube_rt {
@@ -1105,6 +1457,27 @@ impl WebRenderer {
                 }
                 return;
             }
+        }
+        // A WebGL2 canvas is sRGB, so its hardware blend mixes linear light
+        // where three.js's mixes the encoded bytes. The renderer reaches the
+        // bytes through a texture — it draws the blended surfaces into a
+        // `Unorm` copy of one — so on WebGL2 a frame with anything blended
+        // goes through the back buffer, as a multi-pass frame does. The copy
+        // to the canvas is exact; from then on every frame takes that path.
+        if self.is_gl && !self.multi_view && scene_blends(&scene.inner) {
+            self.multi_view = true;
+        }
+        if let Some((id, back)) = self.gl_back_buffer() {
+            match &camera.inner {
+                CameraInner::Perspective(c) => {
+                    render_back(&mut self.renderer, &mut scene.inner, c, &back)
+                }
+                CameraInner::Orthographic(c) => {
+                    render_back(&mut self.renderer, &mut scene.inner, c, &back)
+                }
+            }
+            self.present_gl_back_buffer(id);
+            return;
         }
         match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame)
@@ -1143,6 +1516,9 @@ impl WebRenderer {
 #[wasm_bindgen]
 pub struct WebScene {
     inner: crate::Scene,
+    /// Mirrored three.js `uuid`s, for animation track names that use them
+    /// (`animation::WebScene::find_animation_node`).
+    node_uuids: std::collections::HashMap<ObjectId, String>,
 }
 
 #[wasm_bindgen]
@@ -1151,6 +1527,7 @@ impl WebScene {
     pub fn new() -> WebScene {
         WebScene {
             inner: crate::Scene::new(),
+            node_uuids: std::collections::HashMap::new(),
         }
     }
 
@@ -1444,6 +1821,31 @@ impl WebScene {
         self.inner.environment_cube_rt = if rt_id == 0 { None } else { Some(rt_id) };
     }
 
+    /// three.js `scene.environmentIntensity` (default 1).
+    #[wasm_bindgen(js_name = setEnvironmentIntensity)]
+    pub fn set_environment_intensity(&mut self, v: f32) {
+        self.inner.environment_intensity = v;
+    }
+
+    /// three.js `scene.environmentRotation`, an Euler in `order`.
+    #[wasm_bindgen(js_name = setEnvironmentRotation)]
+    pub fn set_environment_rotation(&mut self, x: f32, y: f32, z: f32, order: &str) {
+        self.inner.environment_rotation = crate::math::Euler {
+            x,
+            y,
+            z,
+            order: crate::math::EulerOrder::parse(order).unwrap_or_default(),
+        };
+    }
+
+    /// three.js `scene.environment = null`: no environment at all, cube map
+    /// or cube render target.
+    #[wasm_bindgen(js_name = clearEnvironment)]
+    pub fn clear_environment(&mut self) {
+        self.inner.environment = None;
+        self.inner.environment_cube_rt = None;
+    }
+
     /// Bind a CPU-side cubemap (optionally PMREM-filtered) as the environment.
     #[wasm_bindgen(js_name = setEnvironmentMap)]
     pub fn set_environment_map(&mut self, cube: &WebCubeTexture) {
@@ -1480,6 +1882,17 @@ impl WebScene {
         }
     }
 
+    /// One world-space clipping plane (`Object3D::clip_plane`): fragments
+    /// where `n·p + constant < 0` are discarded. The shim resolves three.js's
+    /// `material.clippingPlanes` / `renderer.clippingPlanes` to this each
+    /// frame. `on = false` removes it.
+    #[wasm_bindgen(js_name = setObjectClipPlane)]
+    pub fn set_object_clip_plane(&mut self, handle: &WebObjectHandle, nx: f32, ny: f32, nz: f32, constant: f32, on: bool) {
+        if let Some(obj) = self.inner.get_mut(handle.id) {
+            obj.clip_plane = on.then(|| crate::math::Plane::new(crate::math::Vector3::new(nx, ny, nz), constant));
+        }
+    }
+
     /// three.js `Object3D.receiveShadow`.
     #[wasm_bindgen(js_name = setObjectReceiveShadow)]
     pub fn set_object_receive_shadow(&mut self, handle: &WebObjectHandle, receive: bool) {
@@ -1492,6 +1905,31 @@ impl WebScene {
 #[wasm_bindgen]
 pub struct WebObjectHandle {
     id: ObjectId,
+}
+
+#[wasm_bindgen]
+impl WebObjectHandle {
+    /// A number naming this object, stable while it lives — what
+    /// `WebRaycaster.intersectObject(s)` take and report as `objectId`.
+    /// `WebScene.handleOf` turns it back into a handle.
+    #[wasm_bindgen(getter)]
+    pub fn id(&self) -> f64 {
+        object_id_to_f64(self.id)
+    }
+}
+
+/// An `ObjectId` as a JS number: slotmap's `(version << 32) | index`, exact
+/// below 2^53 (a slot reused two million times).
+fn object_id_to_f64(id: ObjectId) -> f64 {
+    use slotmap::Key;
+    id.data().as_ffi() as f64
+}
+
+fn object_id_from_f64(id: f64) -> Option<ObjectId> {
+    if !(id.is_finite() && id >= 0.0 && id.fract() == 0.0 && id < 9_007_199_254_740_992.0) {
+        return None;
+    }
+    Some(ObjectId::from(slotmap::KeyData::from_ffi(id as u64)))
 }
 
 /// JS-visible camera that wraps either a perspective or orthographic camera.
@@ -1802,6 +2240,32 @@ impl WebGeometry {
         }
     }
 
+    /// A quad from four corners in winding order, flattened as
+    /// `[x0, y0, z0, …, x3, y3, z3]`; subdivided as a bilinear patch.
+    #[wasm_bindgen(js_name = quad)]
+    pub fn quad(
+        corners: &[f32],
+        width_segments: usize,
+        height_segments: usize,
+    ) -> Result<WebGeometry, JsValue> {
+        if corners.len() != 12 {
+            return Err(JsValue::from_str(&format!(
+                "quad: expected 12 corner coordinates, got {}",
+                corners.len()
+            )));
+        }
+        let c = |i: usize| {
+            crate::Vector3::new(corners[i * 3], corners[i * 3 + 1], corners[i * 3 + 2])
+        };
+        Ok(WebGeometry {
+            inner: Arc::new(crate::QuadGeometry::with_segments(
+                [c(0), c(1), c(2), c(3)],
+                width_segments,
+                height_segments,
+            )),
+        })
+    }
+
     #[wasm_bindgen(js_name = cylinder)]
     pub fn cylinder(
         radius_top: f32,
@@ -2007,11 +2471,64 @@ impl WebMaterial {
         }
     }
 
+    /// three.js `toneMapped`: whether the renderer's tone mapping applies to
+    /// this material (normal and depth materials never take it).
+    #[wasm_bindgen(js_name = setToneMapped)]
+    pub fn set_tone_mapped(&mut self, on: bool) {
+        Arc::make_mut(&mut self.inner).set_tone_mapped(on);
+    }
+
+    /// three.js `depthTest`, `depthWrite`, `depthFunc` (`THREE.NeverDepth`
+    /// … `THREE.NotEqualDepth`; anything else keeps the current one) and
+    /// `colorWrite`, on any material.
+    #[wasm_bindgen(js_name = setRenderState)]
+    pub fn set_render_state(
+        &mut self,
+        depth_test: bool,
+        depth_write: bool,
+        depth_func: u32,
+        color_write: bool,
+    ) {
+        let s = Arc::make_mut(&mut self.inner).render_state_mut();
+        s.depth_test = depth_test;
+        s.depth_write = Some(depth_write);
+        if let Some(f) = crate::materials::DepthFunc::from_three(depth_func) {
+            s.depth_func = f;
+        }
+        s.color_write = color_write;
+    }
+
+    /// three.js `blending` on any material: `THREE.NormalBlending` (1) or
+    /// `THREE.AdditiveBlending` (2); anything else keeps the current mode.
+    #[wasm_bindgen(js_name = setBlending)]
+    pub fn set_blending(&mut self, mode: u32) {
+        if let Some(b) = crate::materials::Blending::from_three(mode) {
+            Arc::make_mut(&mut self.inner).render_state_mut().blending = b;
+        }
+    }
+
+    /// three.js `polygonOffset` / `polygonOffsetFactor` /
+    /// `polygonOffsetUnits`, on every mesh material that has them.
+    #[wasm_bindgen(js_name = setPolygonOffset)]
+    pub fn set_polygon_offset(&mut self, enabled: bool, factor: f32, units: f32) {
+        let offset = enabled.then_some(crate::materials::PolygonOffset::new(factor, units));
+        match Arc::make_mut(&mut self.inner) {
+            crate::Material::Basic(m) => m.polygon_offset = offset,
+            crate::Material::Lambert(m) => m.polygon_offset = offset,
+            crate::Material::Phong(m) => m.polygon_offset = offset,
+            crate::Material::Standard(m) => m.polygon_offset = offset,
+            crate::Material::Physical(m) => m.polygon_offset = offset,
+            crate::Material::Toon(m) => m.polygon_offset = offset,
+            crate::Material::Normal(m) => m.polygon_offset = offset,
+            crate::Material::Matcap(m) => m.polygon_offset = offset,
+            crate::Material::Depth(m) => m.polygon_offset = offset,
+            _ => {}
+        }
+    }
+
     #[wasm_bindgen(js_name = setAlphaTest)]
     pub fn set_alpha_test(&mut self, value: f32) {
-        if let crate::Material::Basic(m) = Arc::make_mut(&mut self.inner) {
-            m.alpha_test = value.max(0.0);
-        }
+        Arc::make_mut(&mut self.inner).set_alpha_test(value);
     }
 
     #[wasm_bindgen(js_name = lambert)]
@@ -2063,6 +2580,7 @@ impl WebMaterial {
             rayleigh,
             mie_coefficient,
             mie_directional_g,
+            ..Default::default()
         };
         WebMaterial {
             inner: Arc::new(crate::Material::Sky(m)),
@@ -2258,6 +2776,18 @@ impl WebMaterial {
                 m.displacement_scale = scale;
                 m.displacement_bias = bias;
             }
+            crate::Material::Lambert(m) => {
+                m.displacement_scale = scale;
+                m.displacement_bias = bias;
+            }
+            crate::Material::Phong(m) => {
+                m.displacement_scale = scale;
+                m.displacement_bias = bias;
+            }
+            crate::Material::Toon(m) => {
+                m.displacement_scale = scale;
+                m.displacement_bias = bias;
+            }
             _ => {}
         }
     }
@@ -2344,6 +2874,234 @@ impl WebMaterial {
         match inner {
             crate::Material::Standard(m) => m.normal_scale = v,
             crate::Material::Physical(m) => m.normal_scale = v,
+            crate::Material::Lambert(m) => m.normal_scale = v,
+            crate::Material::Phong(m) => m.normal_scale = v,
+            crate::Material::Toon(m) => m.normal_scale = v,
+            _ => {}
+        }
+    }
+
+    /// three.js `material.aoMap`: ambient occlusion from the red channel,
+    /// occluding the indirect light. Standard, Physical, Lambert, Phong, Toon.
+    #[wasm_bindgen(js_name = setAoMap)]
+    pub fn set_ao_map(&mut self, tex: &WebTexture) {
+        self.set_ao_map_arc(tex.inner.clone());
+    }
+
+    /// `setAoMap` for the raw `Uint8Array` / `DataTexture` path.
+    #[wasm_bindgen(js_name = setAoMapData)]
+    pub fn set_ao_map_data(&mut self, tex: &WebDataTexture) {
+        self.set_ao_map_arc(tex.inner.clone());
+    }
+
+    /// three.js `material.alphaMap`: its green channel scales the opacity.
+    /// Basic, Lambert, Phong, Toon, Standard, Physical, Matcap and Sprite.
+    #[wasm_bindgen(js_name = setAlphaMap)]
+    pub fn set_alpha_map(&mut self, tex: &WebTexture) {
+        self.set_slot("alphaMap", Some(tex.inner.clone()));
+    }
+
+    /// `setAlphaMap` for the raw `Uint8Array` / `DataTexture` path.
+    #[wasm_bindgen(js_name = setAlphaMapData)]
+    pub fn set_alpha_map_data(&mut self, tex: &WebDataTexture) {
+        self.set_slot("alphaMap", Some(tex.inner.clone()));
+    }
+
+    /// three.js `material.metalnessMap`: its blue channel scales `metalness`.
+    /// Standard and Physical.
+    #[wasm_bindgen(js_name = setMetalnessMap)]
+    pub fn set_metalness_map(&mut self, tex: &WebTexture) {
+        self.set_slot("metalnessMap", Some(tex.inner.clone()));
+    }
+
+    /// `setMetalnessMap` for the raw `Uint8Array` / `DataTexture` path.
+    #[wasm_bindgen(js_name = setMetalnessMapData)]
+    pub fn set_metalness_map_data(&mut self, tex: &WebDataTexture) {
+        self.set_slot("metalnessMap", Some(tex.inner.clone()));
+    }
+
+    /// three.js `material.lightMap`: baked irradiance added to the indirect
+    /// light. Basic, Lambert, Phong, Toon, Standard and Physical.
+    #[wasm_bindgen(js_name = setLightMap)]
+    pub fn set_light_map(&mut self, tex: &WebTexture) {
+        self.set_slot("lightMap", Some(tex.inner.clone()));
+    }
+
+    /// `setLightMap` for the raw `Uint8Array` / `DataTexture` path.
+    #[wasm_bindgen(js_name = setLightMapData)]
+    pub fn set_light_map_data(&mut self, tex: &WebDataTexture) {
+        self.set_slot("lightMap", Some(tex.inner.clone()));
+    }
+
+    /// three.js `material.lightMapIntensity` (default 1).
+    #[wasm_bindgen(js_name = setLightMapIntensity)]
+    pub fn set_light_map_intensity(&mut self, v: f32) {
+        match Arc::make_mut(&mut self.inner) {
+            crate::Material::Basic(m) => m.light_map_intensity = v,
+            crate::Material::Lambert(m) => m.light_map_intensity = v,
+            crate::Material::Phong(m) => m.light_map_intensity = v,
+            crate::Material::Toon(m) => m.light_map_intensity = v,
+            crate::Material::Standard(m) => m.light_map_intensity = v,
+            crate::Material::Physical(m) => m.light_map_intensity = v,
+            _ => {}
+        }
+    }
+
+    /// three.js `material.bumpMap`: a height field perturbing the normal.
+    /// Lambert, Phong, Toon, Standard and Physical.
+    #[wasm_bindgen(js_name = setBumpMap)]
+    pub fn set_bump_map(&mut self, tex: &WebTexture) {
+        self.set_slot("bumpMap", Some(tex.inner.clone()));
+    }
+
+    /// `setBumpMap` for the raw `Uint8Array` / `DataTexture` path.
+    #[wasm_bindgen(js_name = setBumpMapData)]
+    pub fn set_bump_map_data(&mut self, tex: &WebDataTexture) {
+        self.set_slot("bumpMap", Some(tex.inner.clone()));
+    }
+
+    /// three.js `material.bumpScale` (default 1).
+    #[wasm_bindgen(js_name = setBumpScale)]
+    pub fn set_bump_scale(&mut self, v: f32) {
+        match Arc::make_mut(&mut self.inner) {
+            crate::Material::Lambert(m) => m.bump_scale = v,
+            crate::Material::Phong(m) => m.bump_scale = v,
+            crate::Material::Toon(m) => m.bump_scale = v,
+            crate::Material::Standard(m) => m.bump_scale = v,
+            crate::Material::Physical(m) => m.bump_scale = v,
+            _ => {}
+        }
+    }
+
+    /// three.js `material.specularMap`: its red channel scales the specular
+    /// term. Basic, Lambert and Phong.
+    #[wasm_bindgen(js_name = setSpecularMap)]
+    pub fn set_specular_map(&mut self, tex: &WebTexture) {
+        self.set_slot("specularMap", Some(tex.inner.clone()));
+    }
+
+    /// `setSpecularMap` for the raw `Uint8Array` / `DataTexture` path.
+    #[wasm_bindgen(js_name = setSpecularMapData)]
+    pub fn set_specular_map_data(&mut self, tex: &WebDataTexture) {
+        self.set_slot("specularMap", Some(tex.inner.clone()));
+    }
+
+    /// `material[name] = texture` for any map slot three.js names — the
+    /// Physical material's `specularIntensityMap`, `clearcoatNormalMap`,
+    /// `sheenColorMap` and the rest included (see
+    /// [`Material::map_slot_mut`](crate::Material::map_slot_mut)). Whether
+    /// this material has that slot.
+    #[wasm_bindgen(js_name = setNamedMap)]
+    pub fn set_named_map(&mut self, name: &str, tex: &WebTexture) -> bool {
+        self.set_slot(name, Some(tex.inner.clone()))
+    }
+
+    /// `setNamedMap` for the raw `Uint8Array` / `DataTexture` path.
+    #[wasm_bindgen(js_name = setNamedMapData)]
+    pub fn set_named_map_data(&mut self, name: &str, tex: &WebDataTexture) -> bool {
+        self.set_slot(name, Some(tex.inner.clone()))
+    }
+
+    /// three.js `clearcoatNormalScale`.
+    #[wasm_bindgen(js_name = setClearcoatNormalScale)]
+    pub fn set_clearcoat_normal_scale(&mut self, x: f32, y: f32) {
+        if let crate::Material::Physical(m) = Arc::make_mut(&mut self.inner) {
+            m.clearcoat_normal_scale = crate::math::Vector2::new(x, y);
+        }
+    }
+
+    /// `material[name] = null`: empty the map slot three.js calls `name`
+    /// (`"map"`, `"alphaMap"`, `"aoMap"`, `"envMap"`, …). Whether this
+    /// material had one.
+    #[wasm_bindgen(js_name = clearMap)]
+    pub fn clear_map(&mut self, name: &str) -> bool {
+        if name == "envMap" {
+            if let Some(slot) = self.pbr_env_slot() {
+                *slot = None;
+                return true;
+            }
+            return self.env_mut(|m| *m.env_map = None);
+        }
+        self.set_slot(name, None)
+    }
+
+    /// three.js `material.envMap`. On Basic, Lambert and Phong a cube map
+    /// reflected (or refracted, per the cube's `mapping`) and combined with
+    /// the shaded colour; on Standard and Physical the material's own
+    /// image-based light, in place of `scene.environment`. Whether this
+    /// material takes one.
+    #[wasm_bindgen(js_name = setEnvMap)]
+    pub fn set_env_map(&mut self, cube: &WebCubeTexture) -> bool {
+        let c = cube.inner.clone();
+        if let Some(slot) = self.pbr_env_slot() {
+            *slot = Some(c);
+            return true;
+        }
+        self.env_mut(|m| *m.env_map = Some(c.clone()))
+    }
+
+    /// three.js `material.envMapIntensity` on Standard and Physical
+    /// (default 1).
+    #[wasm_bindgen(js_name = setEnvMapIntensity)]
+    pub fn set_env_map_intensity(&mut self, v: f32) {
+        match Arc::make_mut(&mut self.inner) {
+            crate::Material::Standard(m) => m.env_map_intensity = v,
+            crate::Material::Physical(m) => m.env_map_intensity = v,
+            _ => {}
+        }
+    }
+
+    /// three.js `material.combine`: 0 `MultiplyOperation`, 1 `MixOperation`,
+    /// 2 `AddOperation`.
+    #[wasm_bindgen(js_name = setCombine)]
+    pub fn set_combine(&mut self, combine: u32) {
+        let c = match combine {
+            1 => crate::materials::Combine::Mix,
+            2 => crate::materials::Combine::Add,
+            _ => crate::materials::Combine::Multiply,
+        };
+        self.env_mut(|m| *m.combine = c);
+    }
+
+    /// three.js `material.reflectivity` (default 1).
+    #[wasm_bindgen(js_name = setReflectivity)]
+    pub fn set_reflectivity(&mut self, v: f32) {
+        self.env_mut(|m| *m.reflectivity = v);
+    }
+
+    /// three.js `material.refractionRatio` (default 0.98).
+    #[wasm_bindgen(js_name = setRefractionRatio)]
+    pub fn set_refraction_ratio(&mut self, v: f32) {
+        self.env_mut(|m| *m.refraction_ratio = v);
+    }
+
+    /// three.js `material.envMapRotation`, an Euler in `order` (`"XYZ"`, …).
+    #[wasm_bindgen(js_name = setEnvMapRotation)]
+    pub fn set_env_map_rotation(&mut self, x: f32, y: f32, z: f32, order: &str) {
+        let e = crate::math::Euler {
+            x,
+            y,
+            z,
+            order: crate::math::EulerOrder::parse(order).unwrap_or_default(),
+        };
+        match Arc::make_mut(&mut self.inner) {
+            crate::Material::Standard(m) => m.env_map_rotation = e,
+            crate::Material::Physical(m) => m.env_map_rotation = e,
+            _ => {
+                self.env_mut(|m| *m.env_map_rotation = e);
+            }
+        }
+    }
+
+    /// three.js `material.aoMapIntensity` (default 1).
+    #[wasm_bindgen(js_name = setAoMapIntensity)]
+    pub fn set_ao_map_intensity(&mut self, intensity: f32) {
+        match Arc::make_mut(&mut self.inner) {
+            crate::Material::Standard(m) => m.ao_intensity = intensity,
+            crate::Material::Physical(m) => m.ao_intensity = intensity,
+            crate::Material::Lambert(m) => m.ao_intensity = intensity,
+            crate::Material::Phong(m) => m.ao_intensity = intensity,
+            crate::Material::Toon(m) => m.ao_intensity = intensity,
             _ => {}
         }
     }
@@ -2413,15 +3171,84 @@ impl WebMaterial {
         }
     }
 
-    /// three.js `iridescence` / `iridescenceIOR`, plus the film thickness in
-    /// nanometres (three.js expresses this as `iridescenceThicknessRange`; a
-    /// single thickness is used here since there is no thickness map).
+    /// three.js `iridescence` / `iridescenceIOR`, and the film thickness in
+    /// nanometres — the top of `iridescenceThicknessRange`.
     #[wasm_bindgen(js_name = setIridescence)]
     pub fn set_iridescence(&mut self, strength: f32, ior: f32, thickness_nm: f32) {
         if let crate::Material::Physical(m) = Arc::make_mut(&mut self.inner) {
             m.iridescence = strength;
             m.iridescence_ior = ior;
-            m.iridescence_thickness = thickness_nm;
+            m.iridescence_thickness_range[1] = thickness_nm;
+        }
+    }
+
+    /// Every scalar of three.js's `MeshPhysicalMaterial` at once, as the
+    /// JavaScript layer holds them: `clearcoat`, `clearcoatRoughness`, `ior`,
+    /// `specularIntensity`, `sheen`, `sheenRoughness`, `iridescence`,
+    /// `iridescenceIOR`, `iridescenceThicknessRange` (min, max),
+    /// `anisotropy`, `anisotropyRotation`, `transmission`, `thickness`,
+    /// `attenuationDistance` and `dispersion`.
+    #[allow(clippy::too_many_arguments)]
+    #[wasm_bindgen(js_name = setPhysical)]
+    pub fn set_physical(
+        &mut self,
+        clearcoat: f32,
+        clearcoat_roughness: f32,
+        ior: f32,
+        specular_intensity: f32,
+        sheen: f32,
+        sheen_roughness: f32,
+        iridescence: f32,
+        iridescence_ior: f32,
+        iridescence_thickness_min: f32,
+        iridescence_thickness_max: f32,
+        anisotropy: f32,
+        anisotropy_rotation: f32,
+        transmission: f32,
+        thickness: f32,
+        attenuation_distance: f32,
+        dispersion: f32,
+    ) {
+        if let crate::Material::Physical(m) = Arc::make_mut(&mut self.inner) {
+            m.clearcoat = clearcoat;
+            m.clearcoat_roughness = clearcoat_roughness;
+            m.ior = ior;
+            m.specular_intensity = specular_intensity;
+            m.sheen = sheen;
+            m.sheen_roughness = sheen_roughness;
+            m.iridescence = iridescence;
+            m.iridescence_ior = iridescence_ior;
+            m.iridescence_thickness_range = [iridescence_thickness_min, iridescence_thickness_max];
+            m.anisotropy = anisotropy;
+            m.anisotropy_rotation = anisotropy_rotation;
+            m.transmission = transmission;
+            m.thickness = thickness;
+            m.attenuation_distance = attenuation_distance;
+            m.dispersion = dispersion;
+        }
+    }
+
+    /// three.js `sheenColor`.
+    #[wasm_bindgen(js_name = setSheenColor)]
+    pub fn set_sheen_color(&mut self, color: &WebColor) {
+        if let crate::Material::Physical(m) = Arc::make_mut(&mut self.inner) {
+            m.sheen_color = color.inner;
+        }
+    }
+
+    /// three.js `specularColor`.
+    #[wasm_bindgen(js_name = setSpecularColor)]
+    pub fn set_specular_color(&mut self, color: &WebColor) {
+        if let crate::Material::Physical(m) = Arc::make_mut(&mut self.inner) {
+            m.specular_color = color.inner;
+        }
+    }
+
+    /// three.js `attenuationColor`.
+    #[wasm_bindgen(js_name = setAttenuationColor)]
+    pub fn set_attenuation_color(&mut self, color: &WebColor) {
+        if let crate::Material::Physical(m) = Arc::make_mut(&mut self.inner) {
+            m.attenuation_color = color.inner;
         }
     }
 
@@ -2432,6 +3259,22 @@ impl WebMaterial {
         if let crate::Material::Physical(m) = Arc::make_mut(&mut self.inner) {
             m.attenuation_color = color.inner;
             m.attenuation_distance = distance;
+        }
+    }
+
+    /// The transparency compositing mode, as `setTransparencyMode` numbers
+    /// it (0 for anything but a `PhysicalMaterial`).
+    #[wasm_bindgen(getter, js_name = transparencyMode)]
+    pub fn transparency_mode(&self) -> u32 {
+        use crate::TransparencyMode::*;
+        match &*self.inner {
+            crate::Material::Physical(m) => match m.transparency {
+                Blend => 0,
+                Glass => 1,
+                Oit => 2,
+                Refract => 3,
+            },
+            _ => 0,
         }
     }
 
@@ -2512,17 +3355,17 @@ impl WebMaterial {
 
     /// Set per-material opacity (0..1). Sets the matching field on whichever
     /// concrete material this wraps.
+    /// three.js `material.opacity`, on every material that has one.
     #[wasm_bindgen(js_name = setOpacity)]
     pub fn set_opacity(&mut self, opacity: f32) {
-        let inner = Arc::make_mut(&mut self.inner);
-        match inner {
-            crate::Material::Basic(m) => m.opacity = opacity,
-            crate::Material::Lambert(m) => m.opacity = opacity,
-            crate::Material::Phong(m) => m.opacity = opacity,
-            crate::Material::Standard(m) => m.opacity = opacity,
-            crate::Material::Physical(m) => m.opacity = opacity,
-            crate::Material::Toon(m) => m.opacity = opacity,
-            _ => {}
+        Arc::make_mut(&mut self.inner).set_opacity(opacity);
+    }
+
+    /// three.js `PointsMaterial.size`, in pixels.
+    #[wasm_bindgen(js_name = setPointSize)]
+    pub fn set_point_size(&mut self, size: f32) {
+        if let crate::Material::Points(m) = Arc::make_mut(&mut self.inner) {
+            m.size = size;
         }
     }
 
@@ -2531,10 +3374,7 @@ impl WebMaterial {
     /// can render correctly even at opacity 1.0.
     #[wasm_bindgen(js_name = setTransparent)]
     pub fn set_transparent(&mut self, transparent: bool) {
-        let inner = Arc::make_mut(&mut self.inner);
-        if let crate::Material::Basic(m) = inner {
-            m.transparent = transparent;
-        }
+        Arc::make_mut(&mut self.inner).set_transparent(transparent);
     }
 
     /// Set the emissive color. Standard / Physical / Lambert / Phong / Toon
@@ -2601,6 +3441,58 @@ impl WebMaterial {
             crate::Material::Physical(m) => m.map = Some(tex),
             crate::Material::Sprite(m) => m.map = Some(tex),
             crate::Material::Mirror(m) => m.map = Some(tex),
+            crate::Material::Lambert(m) => m.map = Some(tex),
+            crate::Material::Phong(m) => m.map = Some(tex),
+            crate::Material::Toon(m) => m.map = Some(tex),
+            crate::Material::Matcap(m) => m.map = Some(tex),
+            crate::Material::Points(m) => m.map = Some(tex),
+            _ => {}
+        }
+    }
+
+    /// A Standard or Physical material's own `envMap` slot.
+    fn pbr_env_slot(&mut self) -> Option<&mut Option<Arc<crate::CubeTexture>>> {
+        if !matches!(&*self.inner, crate::Material::Standard(_) | crate::Material::Physical(_)) {
+            return None;
+        }
+        match Arc::make_mut(&mut self.inner) {
+            crate::Material::Standard(m) => Some(&mut m.env_map),
+            crate::Material::Physical(m) => Some(&mut m.env_map),
+            _ => None,
+        }
+    }
+
+    /// Apply `f` to the env-map state of a Basic, Lambert or Phong material;
+    /// whether this is one.
+    fn env_mut(&mut self, f: impl Fn(&mut EnvState<'_>)) -> bool {
+        let inner = Arc::make_mut(&mut self.inner);
+        let mut state = match inner {
+            crate::Material::Basic(m) => EnvState::of(m),
+            crate::Material::Lambert(m) => EnvState::of(m),
+            crate::Material::Phong(m) => EnvState::of(m),
+            _ => return false,
+        };
+        f(&mut state);
+        true
+    }
+
+    fn set_slot(&mut self, name: &str, tex: Option<std::sync::Arc<crate::Texture>>) -> bool {
+        match Arc::make_mut(&mut self.inner).map_slot_mut(name) {
+            Some(slot) => {
+                *slot = tex;
+                true
+            }
+            None => false,
+        }
+    }
+
+    fn set_ao_map_arc(&mut self, tex: std::sync::Arc<crate::Texture>) {
+        match Arc::make_mut(&mut self.inner) {
+            crate::Material::Standard(m) => m.ao_map = Some(tex),
+            crate::Material::Physical(m) => m.ao_map = Some(tex),
+            crate::Material::Lambert(m) => m.ao_map = Some(tex),
+            crate::Material::Phong(m) => m.ao_map = Some(tex),
+            crate::Material::Toon(m) => m.ao_map = Some(tex),
             _ => {}
         }
     }
@@ -2610,6 +3502,9 @@ impl WebMaterial {
         match inner {
             crate::Material::Standard(m) => m.normal_map = Some(tex),
             crate::Material::Physical(m) => m.normal_map = Some(tex),
+            crate::Material::Lambert(m) => m.normal_map = Some(tex),
+            crate::Material::Phong(m) => m.normal_map = Some(tex),
+            crate::Material::Toon(m) => m.normal_map = Some(tex),
             _ => {}
         }
     }
@@ -2628,6 +3523,9 @@ impl WebMaterial {
         match inner {
             crate::Material::Standard(m) => m.displacement_map = Some(tex),
             crate::Material::Physical(m) => m.displacement_map = Some(tex),
+            crate::Material::Lambert(m) => m.displacement_map = Some(tex),
+            crate::Material::Phong(m) => m.displacement_map = Some(tex),
+            crate::Material::Toon(m) => m.displacement_map = Some(tex),
             _ => {}
         }
     }
@@ -2637,6 +3535,9 @@ impl WebMaterial {
         match inner {
             crate::Material::Standard(m) => m.emissive_map = Some(tex),
             crate::Material::Physical(m) => m.emissive_map = Some(tex),
+            crate::Material::Lambert(m) => m.emissive_map = Some(tex),
+            crate::Material::Phong(m) => m.emissive_map = Some(tex),
+            crate::Material::Toon(m) => m.emissive_map = Some(tex),
             _ => {}
         }
     }
@@ -2694,6 +3595,9 @@ impl WebMaterial {
 #[wasm_bindgen]
 pub struct WebShaderMaterial {
     inner: crate::ShaderMaterial,
+    /// `u_vol0` / `u_vol1` as set, kept apart from `inner.volumes` (which is
+    /// positional and has no holes — see `sync_volumes`).
+    volumes: [Option<Arc<wgpu::TextureView>>; 2],
 }
 
 #[wasm_bindgen]
@@ -2703,7 +3607,47 @@ impl WebShaderMaterial {
     pub fn new(fragment: &str) -> WebShaderMaterial {
         WebShaderMaterial {
             inner: crate::ShaderMaterial::new(fragment),
+            volumes: [None, None],
         }
+    }
+
+    /// three.js `Data3DTexture` bound as `u_vol0` (`slot` 0) or `u_vol1` (1),
+    /// sampled with `u_vol_samp` or read with `textureLoad`. 8-bit data, x
+    /// fastest: `channels` 1 is `RedFormat` (`R8Unorm`), 4 is `RGBAFormat`.
+    ///
+    /// Uploaded to the GPU the WebGPU renderer opened, so a renderer must
+    /// exist first; WebGL2 has no shared device and is refused.
+    #[wasm_bindgen(js_name = setVolume)]
+    pub fn set_volume(
+        &mut self, slot: u32, data: &[u8], width: u32, height: u32, depth: u32, channels: u32,
+    ) -> Result<(), JsValue> {
+        use crate::volume::VolumeFormat;
+        let format = if channels == 4 { VolumeFormat::Rgba8Unorm } else { VolumeFormat::R8Unorm };
+        self.put_volume(slot, width, height, depth, format, data.to_vec())
+    }
+
+    /// A `FloatType` `Data3DTexture` (one channel). Stored as `R16Float`, the
+    /// float format that can be filtered everywhere: the volume slots are
+    /// declared filterable, which `R32Float` is not without an extension.
+    #[wasm_bindgen(js_name = setVolumeF32)]
+    pub fn set_volume_f32(
+        &mut self, slot: u32, data: &[f32], width: u32, height: u32, depth: u32,
+    ) -> Result<(), JsValue> {
+        let bytes = data
+            .iter()
+            .flat_map(|v| crate::renderer::readback::f32_to_f16(*v).to_le_bytes())
+            .collect();
+        self.put_volume(slot, width, height, depth, crate::volume::VolumeFormat::R16Float, bytes)
+    }
+
+    /// Unbind a volume slot (it reads as zero again).
+    #[wasm_bindgen(js_name = clearVolume)]
+    pub fn clear_volume(&mut self, slot: u32) {
+        if let Some(v) = self.volumes.get_mut(slot as usize) {
+            *v = None;
+        }
+        let device = SHARED_BROWSER_GPU.with(|g| g.borrow().as_ref().map(|(d, _)| d.clone()));
+        self.sync_volumes(device.as_deref());
     }
 
     /// WGSL defining `@vertex fn vs_custom(in: VsIn, ...) -> VsOut`.
@@ -2764,7 +3708,7 @@ impl WebShaderMaterial {
     /// Override depth writing: by default opaque writes and blended does not.
     #[wasm_bindgen(js_name = setDepthWrite)]
     pub fn set_depth_write(&mut self, write: bool) {
-        self.inner.depth_write = Some(write);
+        self.inner.render_state.depth_write = Some(write);
     }
 
     /// Draw in the screen-space pass, with the opaque scene available to
@@ -2797,6 +3741,51 @@ impl WebShaderMaterial {
         WebMaterial {
             inner: Arc::new(crate::Material::Shader(self.inner.clone())),
         }
+    }
+}
+
+impl WebShaderMaterial {
+    fn put_volume(
+        &mut self, slot: u32, width: u32, height: u32, depth: u32,
+        format: crate::volume::VolumeFormat, bytes: Vec<u8>,
+    ) -> Result<(), JsValue> {
+        use crate::volume::{Data3DTexture, GpuVolume};
+        if slot > 1 {
+            return Err(JsValue::from_str("a ShaderMaterial has two volume slots, 0 and 1"));
+        }
+        let expected = width as usize * height as usize * depth as usize * format.bytes_per_texel() as usize;
+        if bytes.len() != expected {
+            return Err(JsValue::from_str(&format!(
+                "a {width}x{height}x{depth} {format:?} volume needs {expected} bytes, got {}",
+                bytes.len()
+            )));
+        }
+        let Some((device, queue)) = SHARED_BROWSER_GPU.with(|g| g.borrow().clone()) else {
+            return Err(JsValue::from_str(
+                "3D textures need the WebGPU renderer: create a WebGLRenderer before setting a volume",
+            ));
+        };
+        let vol = GpuVolume::from_texture(&device, &queue, &Data3DTexture::new(width, height, depth, format, bytes));
+        self.volumes[slot as usize] = Some(Arc::new(vol.view));
+        self.sync_volumes(Some(&device));
+        Ok(())
+    }
+
+    /// `inner.volumes` from the slots. It is positional, so `u_vol1` alone
+    /// needs something in slot 0: a 1x1x1 zero volume, as an empty slot reads.
+    fn sync_volumes(&mut self, device: Option<&wgpu::Device>) {
+        self.inner.volumes = match &self.volumes {
+            [None, None] => Vec::new(),
+            [Some(a), None] => vec![a.clone()],
+            [a, Some(b)] => {
+                let first = a.clone().or_else(|| {
+                    let device = device?;
+                    let v = crate::volume::GpuVolume::new(device, [1, 1, 1], crate::volume::VolumeFormat::R8Unorm);
+                    Some(Arc::new(v.view))
+                });
+                first.map_or_else(Vec::new, |a| vec![a, b.clone()])
+            }
+        };
     }
 }
 
@@ -2904,6 +3893,135 @@ impl WebColor {
         WebColor {
             inner: crate::Color::from_hex(hex),
         }
+    }
+
+    /// A CSS colour string — hex (`#rgb` to `#rrggbbaa`), the named colours,
+    /// `rgb()`, `hsl()`, `hwb()`, `lab()`, `lch()`, `oklab()`, `oklch()`,
+    /// `color()` — as linear RGB, or `undefined` if it is not one. The alpha
+    /// is dropped; `cssAlpha` reads it.
+    #[wasm_bindgen(js_name = fromCss)]
+    pub fn from_css(css: &str) -> Option<WebColor> {
+        crate::Color::from_css(css).ok().map(|inner| WebColor { inner })
+    }
+
+    /// The alpha of a CSS colour string (1 when it gives none), or
+    /// `undefined` if it is not one.
+    #[wasm_bindgen(js_name = cssAlpha)]
+    pub fn css_alpha(css: &str) -> Option<f32> {
+        crate::Color::parse_css(css).ok().map(|(_, a)| a)
+    }
+}
+
+/// three.js's shadow-map type numbers as this renderer's filters.
+fn shadow_type_of(kind: u32) -> crate::lights::ShadowType {
+    use crate::lights::ShadowType::*;
+    match kind {
+        0 => Basic,
+        2 => PcfSoft,
+        3 => Pcss,
+        _ => Pcf,
+    }
+}
+
+/// Data to colour — `threers::math::ColorScale`, d3's sequential, diverging,
+/// quantize, quantile and threshold scales over any named scheme.
+#[wasm_bindgen]
+pub struct WebColorScale {
+    inner: crate::math::ColorScale,
+}
+
+fn named_ramp(name: &str) -> Result<crate::math::ColorRamp, JsValue> {
+    crate::math::ColorRamp::named(name).ok_or_else(|| JsValue::from_str(&format!("no colour scheme named {name}")))
+}
+
+#[wasm_bindgen]
+impl WebColorScale {
+    /// `lo..hi` along the named scheme (`"viridis"`, `"blues"`, `"RdBu"`,
+    /// `"interpolateSpectral"`, …).
+    pub fn sequential(scheme: &str, lo: f32, hi: f32) -> Result<WebColorScale, JsValue> {
+        Ok(Self { inner: crate::math::ColorScale::sequential(named_ramp(scheme)?, lo, hi) })
+    }
+
+    /// Away from `mid` both ways.
+    pub fn diverging(scheme: &str, lo: f32, mid: f32, hi: f32) -> Result<WebColorScale, JsValue> {
+        Ok(Self { inner: crate::math::ColorScale::diverging(named_ramp(scheme)?, lo, mid, hi) })
+    }
+
+    /// `classes` equal-width bins.
+    pub fn quantize(scheme: &str, lo: f32, hi: f32, classes: usize) -> Result<WebColorScale, JsValue> {
+        Ok(Self { inner: crate::math::ColorScale::quantize(named_ramp(scheme)?, lo, hi, classes) })
+    }
+
+    /// `classes` bins of equal count of `data`.
+    pub fn quantile(scheme: &str, data: &[f32], classes: usize) -> Result<WebColorScale, JsValue> {
+        Ok(Self { inner: crate::math::ColorScale::quantile(named_ramp(scheme)?, data, classes) })
+    }
+
+    /// Explicit class breaks.
+    pub fn threshold(scheme: &str, breaks: Vec<f32>) -> Result<WebColorScale, JsValue> {
+        Ok(Self { inner: crate::math::ColorScale::threshold(named_ramp(scheme)?, breaks) })
+    }
+
+    /// Logarithmic in `base`.
+    pub fn log(self, base: f32) -> WebColorScale {
+        Self { inner: self.inner.log(base) }
+    }
+
+    /// By the square root.
+    pub fn sqrt(self) -> WebColorScale {
+        Self { inner: self.inner.sqrt() }
+    }
+
+    /// By a power.
+    pub fn pow(self, exponent: f32) -> WebColorScale {
+        Self { inner: self.inner.pow(exponent) }
+    }
+
+    /// Symmetric log, linear within `constant` of zero.
+    pub fn symlog(self, constant: f32) -> WebColorScale {
+        Self { inner: self.inner.symlog(constant) }
+    }
+
+    /// The scheme reversed, end to end.
+    pub fn reversed(self) -> WebColorScale {
+        let ramp = self.inner.ramp().clone().reversed();
+        let domain = self.inner.domain().to_vec();
+        let mut inner = if domain.len() == 3 {
+            crate::math::ColorScale::diverging(ramp, domain[0], domain[1], domain[2])
+        } else {
+            crate::math::ColorScale::sequential(ramp, domain[0], domain[1])
+        };
+        inner = match self.inner.kind().clone() {
+            crate::math::ScaleKind::Log { base } => inner.log(base),
+            crate::math::ScaleKind::Pow { exponent } => inner.pow(exponent),
+            crate::math::ScaleKind::Symlog { constant } => inner.symlog(constant),
+            _ => return Self { inner: self.inner },
+        };
+        Self { inner }
+    }
+
+    /// The colour for `value`, linear RGB.
+    pub fn map(&self, value: f32) -> WebColor {
+        WebColor { inner: self.inner.map(value) }
+    }
+
+    /// Colours for `values` as sRGB bytes, four to a value — straight into a
+    /// colour attribute or a data texture.
+    #[wasm_bindgen(js_name = mapRgba8)]
+    pub fn map_rgba8(&self, values: &[f32]) -> Vec<u8> {
+        self.inner.map_rgba8(values).into_iter().flatten().collect()
+    }
+
+    /// A legend's rows, `[from, to, r, g, b]` each (linear RGB), `n` steps
+    /// for a continuous scale.
+    pub fn legend(&self, n: usize) -> Vec<f32> {
+        self.inner.legend(n).into_iter().flat_map(|(a, b, c)| [a, b, c.r, c.g, c.b]).collect()
+    }
+
+    /// Every scheme name the scales know.
+    #[wasm_bindgen(js_name = schemeNames)]
+    pub fn scheme_names() -> Vec<String> {
+        crate::math::ColorRamp::scheme_names().into_iter().map(|(n, _)| n.to_string()).collect()
     }
 }
 
@@ -3410,13 +4528,13 @@ impl WebGeometry {
     }
     #[wasm_bindgen(js_name = capsule)]
     pub fn capsule(
-        radius: f32,
-        length: f32,
+        radius: f64,
+        length: f64,
         cap_segments: usize,
         radial_segments: usize,
     ) -> WebGeometry {
         WebGeometry {
-            inner: Arc::new(crate::CapsuleGeometry::new(
+            inner: Arc::new(crate::CapsuleGeometry::with_f64(
                 radius,
                 length,
                 cap_segments.max(1),
@@ -3581,8 +4699,8 @@ impl WebLight {
     }
 
     /// Toggle whether this light casts shadows. Only Directional / Spot /
-    /// Point variants honor it — the renderer picks the first cast_shadow=true
-    /// light of each kind as that frame's shadow caster.
+    /// Point variants honor it; every one that does gets a shadow map of its
+    /// own.
     #[wasm_bindgen(js_name = setCastShadow)]
     pub fn set_cast_shadow(&mut self, cast: bool) {
         match &mut self.inner {
@@ -3623,6 +4741,81 @@ impl WebLight {
             _ => {}
         }
     }
+    /// The light's shadow settings as this renderer holds them:
+    /// `[bias, normalBias, radius, mapSize]` — bias positive, the depth this
+    /// renderer subtracts (see `setShadowParams`). Empty for a light that
+    /// casts none.
+    #[wasm_bindgen(getter, js_name = shadowSettings)]
+    pub fn shadow_settings(&self) -> Vec<f32> {
+        let shadow = match &self.inner {
+            LightInner::Directional(l) => &l.shadow,
+            LightInner::Spot(l) => &l.shadow,
+            LightInner::Point(l) => &l.shadow,
+            _ => return Vec::new(),
+        };
+        vec![shadow.bias, shadow.normal_bias, shadow.radius, shadow.map_size as f32]
+    }
+
+    /// Cascaded shadow maps for a directional light
+    /// (`ShadowSettings::cascades`): `count` (1 to 4) maps over the camera's
+    /// view out to `distance` (0: its far plane), split between even and
+    /// logarithmic by `split` (0 to 1).
+    #[wasm_bindgen(js_name = setShadowCascades)]
+    pub fn set_shadow_cascades(&mut self, count: u32, distance: f32, split: f32) {
+        if let LightInner::Directional(l) = &mut self.inner {
+            l.shadow.cascades = count.clamp(1, 4);
+            l.shadow.cascade_distance = distance.max(0.0);
+            l.shadow.cascade_split = split.clamp(0.0, 1.0);
+        }
+    }
+
+    /// This light's size for soft shadows (`ShadowSettings::light_size`) and
+    /// its own filter, overriding the renderer's (three.js shadow-map type
+    /// numbers; anything else to follow the renderer).
+    #[wasm_bindgen(js_name = setShadowSoftness)]
+    pub fn set_shadow_softness(&mut self, light_size: f32, filter: i32) {
+        let shadow = match &mut self.inner {
+            LightInner::Directional(l) => &mut l.shadow,
+            LightInner::Spot(l) => &mut l.shadow,
+            LightInner::Point(l) => &mut l.shadow,
+            _ => return,
+        };
+        shadow.light_size = light_size.max(0.0);
+        shadow.filter = (0..=3).contains(&filter).then(|| shadow_type_of(filter as u32));
+    }
+
+    /// three.js `light.shadow.mapSize`: the shadow map's side in texels (the
+    /// larger of width and height; the maps are square), for directional and
+    /// spot lights. A point light's cube faces are fixed at 512.
+    #[wasm_bindgen(js_name = setShadowMapSize)]
+    pub fn set_shadow_map_size(&mut self, width: u32, height: u32) {
+        let size = width.max(height).max(1);
+        match &mut self.inner {
+            LightInner::Directional(l) => l.shadow.map_size = size,
+            LightInner::Spot(l) => l.shadow.map_size = size,
+            LightInner::Point(l) => l.shadow.map_size = size,
+            _ => {}
+        }
+    }
+
+    /// three.js `light.shadow.bias`, `.normalBias` and `.radius`: the depth
+    /// offset, the offset along the surface normal, and how soft the edge is
+    /// (the radius, in shadow-map texels, it is filtered over; 1 by default).
+    #[wasm_bindgen(js_name = setShadowParams)]
+    pub fn set_shadow_params(&mut self, bias: f32, normal_bias: f32, radius: f32) {
+        let shadow = match &mut self.inner {
+            LightInner::Directional(l) => &mut l.shadow,
+            LightInner::Spot(l) => &mut l.shadow,
+            LightInner::Point(l) => &mut l.shadow,
+            _ => return,
+        };
+        // three.js adds its bias to the shadow coordinate, so the usual
+        // value is negative; this renderer subtracts a positive one.
+        shadow.bias = (-bias).max(0.0);
+        shadow.normal_bias = normal_bias.max(0.0);
+        shadow.radius = radius.max(0.0);
+    }
+
     #[wasm_bindgen(js_name = spot)]
     pub fn spot(
         color: &WebColor,
@@ -3667,6 +4860,20 @@ pub struct WebTexture {
 }
 #[wasm_bindgen]
 impl WebTexture {
+
+    /// three.js `texture.colorSpace`: `true` for `SRGBColorSpace` (the bytes
+    /// are sRGB-encoded and the sampler decodes them), `false` for none or
+    /// linear. Applies to the 8-bit RGBA formats; others are left as they are.
+    /// A material bound to the texture before the change keeps the old one
+    /// until it is bound again.
+    #[wasm_bindgen(js_name = setSrgb)]
+    pub fn set_srgb(&mut self, srgb: bool) {
+        use crate::TextureFormat as F;
+        let want = if srgb { F::Rgba8UnormSrgb } else { F::Rgba8Unorm };
+        if matches!(self.inner.format, F::Rgba8Unorm | F::Rgba8UnormSrgb) && self.inner.format != want {
+            Arc::make_mut(&mut self.inner).format = want;
+        }
+    }
     #[wasm_bindgen(constructor)]
     pub fn new(width: u32, height: u32, data: Vec<u8>) -> WebTexture {
         WebTexture {
@@ -3687,24 +4894,10 @@ impl WebTexture {
             )),
         }
     }
-    /// Set sampler filter/wrap. 0 = LinearFilter, 1 = NearestFilter.
-    /// 0 = ClampToEdge, 1 = Repeat, 2 = MirroredRepeat.
+    /// Set sampler filter/wrap — see [`set_texture_filters`].
     #[wasm_bindgen(js_name = setFilters)]
-    pub fn set_filters(&mut self, mag: u32, _min: u32, wrap_s: u32, wrap_t: u32) {
-        let inner = Arc::make_mut(&mut self.inner);
-        inner.mag_filter = if mag == 1 {
-            crate::textures::TextureFilter::Nearest
-        } else {
-            crate::textures::TextureFilter::Linear
-        };
-        inner.min_filter = inner.mag_filter;
-        let conv = |w: u32| match w {
-            1 => crate::textures::TextureWrap::Repeat,
-            2 => crate::textures::TextureWrap::Repeat, // MirroredRepeat → Repeat (no mirror in pre-built samplers yet)
-            _ => crate::textures::TextureWrap::ClampToEdge,
-        };
-        inner.wrap_s = conv(wrap_s);
-        inner.wrap_t = conv(wrap_t);
+    pub fn set_filters(&mut self, mag: u32, min: u32, wrap_s: u32, wrap_t: u32) {
+        set_texture_filters(Arc::make_mut(&mut self.inner), mag, min, wrap_s, wrap_t);
     }
 
     /// Resample this equirectangular map onto the six faces of a cube.
@@ -3763,6 +4956,25 @@ impl WebTexture {
         let inner = Arc::make_mut(&mut self.inner);
         inner.offset = crate::math::Vector2::new(ox, oy);
         inner.repeat = crate::math::Vector2::new(rx, ry);
+        inner.rotation = 0.0;
+        inner.center = crate::math::Vector2::ZERO;
+        inner.matrix_auto_update = true;
+    }
+
+    /// three.js `Texture.channel`: the uv set the texture is read through —
+    /// 0 the geometry's `uv`, 1–3 its `uv1`, `uv2`, `uv3`.
+    #[wasm_bindgen(js_name = setChannel)]
+    pub fn set_channel(&mut self, channel: u32) {
+        Arc::make_mut(&mut self.inner).channel = channel.min(3);
+    }
+
+    /// three.js `Texture.matrix` as its top two rows, `(a, b, c)` and
+    /// `(d, e, f)`: `u' = a·u + b·v + c`, `v' = d·u + e·v + f`. What
+    /// `offset`, `repeat`, `rotation` and `center` compose to
+    /// (`Matrix3.setUvTransform`), or a matrix set by hand.
+    #[wasm_bindgen(js_name = setUvMatrix)]
+    pub fn set_uv_matrix(&mut self, a: f32, b: f32, c: f32, d: f32, e: f32, f: f32) {
+        set_uv_matrix(Arc::make_mut(&mut self.inner), [a, b, c, d, e, f]);
     }
     pub fn width(&self) -> u32 {
         self.inner.width
@@ -3802,6 +5014,38 @@ impl WebCubeTexture {
         self.inner.size
     }
 
+    /// three.js `cubeTexture.magFilter` / `minFilter`, in its constants (see
+    /// `three_filter`).
+    #[wasm_bindgen(js_name = setFilters)]
+    pub fn set_filters(&mut self, mag: u32, min: u32) {
+        let c = Arc::make_mut(&mut self.inner);
+        c.mag_filter = three_filter(mag).0;
+        (c.min_filter, c.mipmap_filter) = three_filter(min);
+    }
+
+    /// three.js `cubeTexture.colorSpace`: `true` (`SRGBColorSpace`, what
+    /// `CubeTextureLoader` sets) decodes the faces on sampling; `false` reads
+    /// them as they are.
+    #[wasm_bindgen(js_name = setSrgb)]
+    pub fn set_srgb(&mut self, srgb: bool) {
+        Arc::make_mut(&mut self.inner).format = if srgb {
+            crate::TextureFormat::Rgba8UnormSrgb
+        } else {
+            crate::TextureFormat::Rgba8Unorm
+        };
+    }
+
+    /// three.js `cubeTexture.mapping`: `true` for `CubeRefractionMapping`,
+    /// `false` for the default `CubeReflectionMapping`.
+    #[wasm_bindgen(js_name = setRefraction)]
+    pub fn set_refraction(&mut self, refraction: bool) {
+        Arc::make_mut(&mut self.inner).mapping = if refraction {
+            crate::textures::CubeMapping::Refraction
+        } else {
+            crate::textures::CubeMapping::Reflection
+        };
+    }
+
     #[wasm_bindgen(js_name = sampleCubeUvEnv)]
     pub fn sample_cube_uv_env(&self, dx: f32, dy: f32, dz: f32, roughness: f32) -> Vec<f32> {
         let Some(atlas) = self.inner.cube_uv_atlas.as_ref() else {
@@ -3829,6 +5073,15 @@ impl WebPmremGenerator {
         }
     }
 
+    /// three.js's `pmrem.fromScene(new RoomEnvironment())`: the room built
+    /// exactly (`extras::RoomEnvironment`, HDR) and prefiltered at `size`.
+    #[wasm_bindgen(js_name = roomEnvironment)]
+    pub fn room_environment(size: u32) -> WebCubeTexture {
+        WebCubeTexture {
+            inner: crate::extras::RoomEnvironment::pmrem(size.clamp(16, 256)),
+        }
+    }
+
     /// Convert an equirectangular RGBA8 texture into a PMREM cubemap.
     #[wasm_bindgen(js_name = fromEquirectangular)]
     pub fn from_equirectangular(
@@ -3851,6 +5104,20 @@ pub struct WebDataTexture {
 }
 #[wasm_bindgen]
 impl WebDataTexture {
+
+    /// three.js `texture.colorSpace`: `true` for `SRGBColorSpace` (the bytes
+    /// are sRGB-encoded and the sampler decodes them), `false` for none or
+    /// linear. Applies to the 8-bit RGBA formats; others are left as they are.
+    /// A material bound to the texture before the change keeps the old one
+    /// until it is bound again.
+    #[wasm_bindgen(js_name = setSrgb)]
+    pub fn set_srgb(&mut self, srgb: bool) {
+        use crate::TextureFormat as F;
+        let want = if srgb { F::Rgba8UnormSrgb } else { F::Rgba8Unorm };
+        if matches!(self.inner.format, F::Rgba8Unorm | F::Rgba8UnormSrgb) && self.inner.format != want {
+            Arc::make_mut(&mut self.inner).format = want;
+        }
+    }
     #[wasm_bindgen(constructor)]
     pub fn new(width: u32, height: u32, data: Vec<u8>) -> WebDataTexture {
         WebDataTexture {
@@ -3889,21 +5156,8 @@ impl WebDataTexture {
     }
 
     #[wasm_bindgen(js_name = setFilters)]
-    pub fn set_filters(&mut self, mag: u32, _min: u32, wrap_s: u32, wrap_t: u32) {
-        let inner = Arc::make_mut(&mut self.inner);
-        inner.mag_filter = if mag == 1 {
-            crate::textures::TextureFilter::Nearest
-        } else {
-            crate::textures::TextureFilter::Linear
-        };
-        inner.min_filter = inner.mag_filter;
-        let conv = |w: u32| match w {
-            1 => crate::textures::TextureWrap::Repeat,
-            2 => crate::textures::TextureWrap::Repeat,
-            _ => crate::textures::TextureWrap::ClampToEdge,
-        };
-        inner.wrap_s = conv(wrap_s);
-        inner.wrap_t = conv(wrap_t);
+    pub fn set_filters(&mut self, mag: u32, min: u32, wrap_s: u32, wrap_t: u32) {
+        set_texture_filters(Arc::make_mut(&mut self.inner), mag, min, wrap_s, wrap_t);
     }
 
     /// Resample this equirectangular map onto the six faces of a cube.
@@ -3950,92 +5204,117 @@ impl WebDataTexture {
         let inner = Arc::make_mut(&mut self.inner);
         inner.offset = crate::math::Vector2::new(ox, oy);
         inner.repeat = crate::math::Vector2::new(rx, ry);
+        inner.rotation = 0.0;
+        inner.center = crate::math::Vector2::ZERO;
+        inner.matrix_auto_update = true;
     }
+
+    /// three.js `Texture.channel`: the uv set the texture is read through —
+    /// 0 the geometry's `uv`, 1–3 its `uv1`, `uv2`, `uv3`.
+    #[wasm_bindgen(js_name = setChannel)]
+    pub fn set_channel(&mut self, channel: u32) {
+        Arc::make_mut(&mut self.inner).channel = channel.min(3);
+    }
+
+    /// three.js `Texture.matrix` as its top two rows, `(a, b, c)` and
+    /// `(d, e, f)`: `u' = a·u + b·v + c`, `v' = d·u + e·v + f`. What
+    /// `offset`, `repeat`, `rotation` and `center` compose to
+    /// (`Matrix3.setUvTransform`), or a matrix set by hand.
+    #[wasm_bindgen(js_name = setUvMatrix)]
+    pub fn set_uv_matrix(&mut self, a: f32, b: f32, c: f32, d: f32, e: f32, f: f32) {
+        set_uv_matrix(Arc::make_mut(&mut self.inner), [a, b, c, d, e, f]);
+    }
+}
+
+/// The env-map fields Basic, Lambert and Phong share, borrowed.
+struct EnvState<'a> {
+    env_map: &'a mut Option<Arc<crate::CubeTexture>>,
+    combine: &'a mut crate::materials::Combine,
+    reflectivity: &'a mut f32,
+    refraction_ratio: &'a mut f32,
+    env_map_rotation: &'a mut crate::math::Euler,
+}
+
+macro_rules! env_state_of {
+    ($($t:ty),*) => {$(
+        impl<'a> EnvStateOf<'a> for $t {
+            fn env_state(&'a mut self) -> EnvState<'a> {
+                EnvState {
+                    env_map: &mut self.env_map,
+                    combine: &mut self.combine,
+                    reflectivity: &mut self.reflectivity,
+                    refraction_ratio: &mut self.refraction_ratio,
+                    env_map_rotation: &mut self.env_map_rotation,
+                }
+            }
+        }
+    )*};
+}
+
+trait EnvStateOf<'a> {
+    fn env_state(&'a mut self) -> EnvState<'a>;
+}
+env_state_of!(crate::BasicMaterial, crate::LambertMaterial, crate::PhongMaterial);
+
+impl<'a> EnvState<'a> {
+    fn of<T: EnvStateOf<'a>>(m: &'a mut T) -> Self {
+        m.env_state()
+    }
+}
+
+/// `setUvMatrix` for both texture handles. Offset and repeat are kept in step
+/// where the matrix is a plain scale and translation, so code reading them
+/// sees the same transform.
+fn set_uv_matrix(t: &mut crate::Texture, [a, b, c, d, e, f]: [f32; 6]) {
+    t.matrix = [a, d, 0.0, b, e, 0.0, c, f, 1.0];
+    t.matrix_auto_update = false;
+    if b == 0.0 && d == 0.0 {
+        t.offset = crate::math::Vector2::new(c, f);
+        t.repeat = crate::math::Vector2::new(a, e);
+        t.rotation = 0.0;
+        t.center = crate::math::Vector2::ZERO;
+    }
+}
+
+/// three.js `magFilter` / `minFilter` constants as `(within a level, between
+/// levels)`: `NearestFilter` 1003, `NearestMipmapNearestFilter` 1004,
+/// `NearestMipmapLinearFilter` 1005, `LinearFilter` 1006,
+/// `LinearMipmapNearestFilter` 1007, `LinearMipmapLinearFilter` 1008 (the
+/// default for anything else). The second is `None` without mipmaps.
+fn three_filter(f: u32) -> (crate::textures::TextureFilter, Option<crate::textures::TextureFilter>) {
+    use crate::textures::TextureFilter::{Linear, Nearest};
+    match f {
+        1003 => (Nearest, None),
+        1004 => (Nearest, Some(Nearest)),
+        1005 => (Nearest, Some(Linear)),
+        1006 => (Linear, None),
+        1007 => (Linear, Some(Nearest)),
+        _ => (Linear, Some(Linear)),
+    }
+}
+
+/// `setFilters(magFilter, minFilter, wrapS, wrapT)` for both texture handles,
+/// in three.js's constants: the filters as [`three_filter`] reads them, the
+/// wraps `RepeatWrapping` 1000, `ClampToEdgeWrapping` 1001 (the default),
+/// `MirroredRepeatWrapping` 1002. Each is the texture's own, as three.js's are.
+fn set_texture_filters(t: &mut crate::Texture, mag: u32, min: u32, wrap_s: u32, wrap_t: u32) {
+    use crate::textures::TextureWrap;
+    let wrap = |w: u32| match w {
+        1000 => TextureWrap::Repeat,
+        1002 => TextureWrap::MirroredRepeat,
+        _ => TextureWrap::ClampToEdge,
+    };
+    t.mag_filter = three_filter(mag).0;
+    (t.min_filter, t.mipmap_filter) = three_filter(min);
+    t.wrap_s = wrap(wrap_s);
+    t.wrap_t = wrap(wrap_t);
 }
 
 // ======================================================================
 //                             CURVES
 // ======================================================================
 
-#[wasm_bindgen]
-pub struct WebLineCurve {
-    inner: crate::LineCurve,
-}
-#[wasm_bindgen]
-impl WebLineCurve {
-    #[wasm_bindgen(constructor)]
-    pub fn new(v1: &WebVector2, v2: &WebVector2) -> WebLineCurve {
-        WebLineCurve {
-            inner: crate::LineCurve::new(
-                crate::Vector2::new(v1.x, v1.y),
-                crate::Vector2::new(v2.x, v2.y),
-            ),
-        }
-    }
-}
-
-#[wasm_bindgen]
-pub struct WebLineCurve3 {
-    inner: crate::LineCurve3,
-}
-#[wasm_bindgen]
-impl WebLineCurve3 {
-    #[wasm_bindgen(constructor)]
-    pub fn new(v1: &WebVector3, v2: &WebVector3) -> WebLineCurve3 {
-        WebLineCurve3 {
-            inner: crate::LineCurve3::new(v1.inner, v2.inner),
-        }
-    }
-}
-
-#[wasm_bindgen]
-pub struct WebEllipseCurve {
-    inner: crate::EllipseCurve,
-}
-#[wasm_bindgen]
-impl WebEllipseCurve {
-    #[wasm_bindgen(constructor)]
-    pub fn new(
-        cx: f32,
-        cy: f32,
-        rx: f32,
-        ry: f32,
-        a0: f32,
-        a1: f32,
-        clockwise: bool,
-        rot: f32,
-    ) -> WebEllipseCurve {
-        WebEllipseCurve {
-            inner: crate::EllipseCurve::new(
-                crate::Vector2::new(cx, cy),
-                rx,
-                ry,
-                a0,
-                a1,
-                clockwise,
-                rot,
-            ),
-        }
-    }
-}
-
-#[wasm_bindgen]
-pub struct WebCatmullRomCurve3 {
-    inner: crate::CatmullRomCurve3,
-}
-#[wasm_bindgen]
-impl WebCatmullRomCurve3 {
-    #[wasm_bindgen(constructor)]
-    pub fn new(points_flat: Vec<f32>) -> WebCatmullRomCurve3 {
-        let points = points_flat
-            .chunks_exact(3)
-            .map(|c| crate::Vector3::new(c[0], c[1], c[2]))
-            .collect();
-        WebCatmullRomCurve3 {
-            inner: crate::CatmullRomCurve3::new(points),
-        }
-    }
-}
+// The three.js curve classes are `WebCurve`, in `src/wasm/curves.rs`.
 
 #[wasm_bindgen]
 pub struct WebPath {
@@ -4157,48 +5436,7 @@ impl WebShape {
 //                            ANIMATION
 // ======================================================================
 
-#[wasm_bindgen]
-pub struct WebAnimationClip {
-    pub(crate) inner: crate::AnimationClip,
-}
-#[wasm_bindgen]
-impl WebAnimationClip {
-    #[wasm_bindgen(constructor)]
-    pub fn new(name: &str, _duration: f32) -> WebAnimationClip {
-        WebAnimationClip {
-            inner: crate::AnimationClip::empty(name),
-        }
-    }
-    #[wasm_bindgen(getter)]
-    pub fn duration(&self) -> f32 {
-        self.inner.duration
-    }
-    #[wasm_bindgen(getter)]
-    pub fn name(&self) -> String {
-        self.inner.name.clone()
-    }
-}
-
-#[wasm_bindgen]
-pub struct WebAnimationMixer {
-    inner: crate::AnimationMixer,
-}
-#[wasm_bindgen]
-impl WebAnimationMixer {
-    #[wasm_bindgen(constructor)]
-    pub fn new() -> WebAnimationMixer {
-        WebAnimationMixer {
-            inner: crate::AnimationMixer::new(),
-        }
-    }
-    #[wasm_bindgen(js_name = clipAction)]
-    pub fn clip_action(&mut self, clip: WebAnimationClip) -> usize {
-        self.inner.clip_action(clip.inner)
-    }
-    pub fn update(&mut self, scene: &mut WebScene, delta: f32) {
-        self.inner.update(&mut scene.inner, delta);
-    }
-}
+// three.js's animation system is in `animation.rs`.
 
 // ======================================================================
 //                            CONTROLS
@@ -4713,32 +5951,11 @@ impl WebAlembicLoader {
 
 /// An Alembic `PolyMesh` as a triangulated `BufferGeometry`.
 ///
-/// Alembic keeps polygons, so faces are fanned — the same choice the FBX loader
-/// makes, and for the same reason: a `BufferGeometry` has no way to say a
-/// triangle used to be part of a quad.
+/// Faces are fanned and remembered as polygons; see [`PolyMesh::geometry`].
+///
+/// [`PolyMesh::geometry`]: crate::loaders::PolyMesh::geometry
 fn poly_mesh_geometry(mesh: &crate::loaders::PolyMesh) -> crate::core::BufferGeometry {
-    use crate::core::{BufferAttribute, BufferGeometry};
-    let mut indices: Vec<u32> = Vec::new();
-    let mut at = 0usize;
-    for &count in &mesh.face_counts {
-        let count = count.max(0) as usize;
-        if at + count > mesh.face_indices.len() {
-            break;
-        }
-        for i in 1..count.saturating_sub(1) {
-            for &k in &[at, at + i, at + i + 1] {
-                indices.push(mesh.face_indices[k].max(0) as u32);
-            }
-        }
-        at += count;
-    }
-    let mut geometry = BufferGeometry::new();
-    geometry.set_attribute("position", BufferAttribute::new(mesh.points.clone(), 3));
-    if !indices.is_empty() {
-        geometry.set_index(indices);
-    }
-    crate::compute_vertex_normals(&mut geometry);
-    geometry
+    mesh.geometry()
 }
 
 /// USD in the browser.
@@ -4895,48 +6112,8 @@ impl WebAudio {
 //                           POST-PROCESSING
 // ======================================================================
 
-#[wasm_bindgen]
-pub struct WebEffectComposer;
-#[wasm_bindgen]
-impl WebEffectComposer {
-    /// EffectComposer construction requires a wgpu device; the wasm path
-    /// builds one internally with the renderer. Use `renderer.composer()`
-    /// to obtain a composer bound to the same surface.
-    #[wasm_bindgen(constructor)]
-    pub fn new() -> WebEffectComposer {
-        WebEffectComposer
-    }
-}
-
-#[wasm_bindgen]
-pub struct WebRenderPass;
-#[wasm_bindgen]
-impl WebRenderPass {
-    #[wasm_bindgen(constructor)]
-    pub fn new() -> WebRenderPass {
-        WebRenderPass
-    }
-}
-
-#[wasm_bindgen]
-pub struct WebBloomPass;
-#[wasm_bindgen]
-impl WebBloomPass {
-    #[wasm_bindgen(constructor)]
-    pub fn new(_strength: f32, _radius: f32, _threshold: f32) -> WebBloomPass {
-        WebBloomPass
-    }
-}
-
-#[wasm_bindgen]
-pub struct WebFxaaPass;
-#[wasm_bindgen]
-impl WebFxaaPass {
-    #[wasm_bindgen(constructor)]
-    pub fn new() -> WebFxaaPass {
-        WebFxaaPass
-    }
-}
+// `WebEffectComposer`, `WebPass` and the shared random stream: see
+// `wasm/postfx.rs`.
 
 // ======================================================================
 //                              EXTRAS
@@ -5194,17 +6371,203 @@ impl WebRaycaster {
             inner: crate::Raycaster::default(),
         }
     }
+    /// three.js `setFromCamera`: the ray through NDC (`x`, `y` in -1..1, +y
+    /// up), perspective or orthographic, and remembers the camera, which
+    /// sprites need.
     #[wasm_bindgen(js_name = setFromCamera)]
     pub fn set_from_camera(&mut self, ndc_x: f32, ndc_y: f32, camera: &WebCamera) {
+        let ndc = crate::Vector2::new(ndc_x, ndc_y);
         match &camera.inner {
-            CameraInner::Perspective(c) => self
-                .inner
-                .set_from_camera_perspective(crate::Vector2::new(ndc_x, ndc_y), c),
-            CameraInner::Orthographic(c) => self
-                .inner
-                .set_from_camera_ortho(crate::Vector2::new(ndc_x, ndc_y), c),
+            CameraInner::Perspective(c) => self.inner.set_from_camera(ndc, c),
+            CameraInner::Orthographic(c) => self.inner.set_from_camera(ndc, c),
         }
     }
+
+    /// three.js `set`: a new origin and direction. The direction is
+    /// normalised here (three.js assumes the caller did).
+    pub fn set(&mut self, origin: &WebVector3, direction: &WebVector3) {
+        self.inner.set(origin.inner, direction.inner.normalize());
+    }
+
+    /// The ray origin.
+    #[wasm_bindgen(getter)]
+    pub fn origin(&self) -> WebVector3 {
+        WebVector3 {
+            inner: self.inner.ray.origin,
+        }
+    }
+
+    /// The (unit) ray direction.
+    #[wasm_bindgen(getter)]
+    pub fn direction(&self) -> WebVector3 {
+        WebVector3 {
+            inner: self.inner.ray.direction,
+        }
+    }
+
+    /// Hits nearer than this are dropped (three.js `near`, default 0).
+    #[wasm_bindgen(getter)]
+    pub fn near(&self) -> f32 {
+        self.inner.near
+    }
+    #[wasm_bindgen(setter)]
+    pub fn set_near(&mut self, near: f32) {
+        self.inner.near = near;
+    }
+
+    /// Hits farther than this are dropped (three.js `far`, default Infinity).
+    #[wasm_bindgen(getter)]
+    pub fn far(&self) -> f32 {
+        self.inner.far
+    }
+    #[wasm_bindgen(setter)]
+    pub fn set_far(&mut self, far: f32) {
+        self.inner.far = far;
+    }
+
+    /// three.js `params.Line.threshold`: how close (world units) the ray must
+    /// pass to a line segment to hit it. Default 1.
+    #[wasm_bindgen(getter, js_name = lineThreshold)]
+    pub fn line_threshold(&self) -> f32 {
+        self.inner.params.line.threshold
+    }
+    #[wasm_bindgen(js_name = setLineThreshold)]
+    pub fn set_line_threshold(&mut self, threshold: f32) {
+        self.inner.params.line.threshold = threshold;
+    }
+
+    /// three.js `params.Points.threshold`. Default 1.
+    #[wasm_bindgen(getter, js_name = pointsThreshold)]
+    pub fn points_threshold(&self) -> f32 {
+        self.inner.params.points.threshold
+    }
+    #[wasm_bindgen(js_name = setPointsThreshold)]
+    pub fn set_points_threshold(&mut self, threshold: f32) {
+        self.inner.params.points.threshold = threshold;
+    }
+
+    /// Return only the nearest hit of the whole cast (three-mesh-bvh's
+    /// `firstHitOnly`, applied across objects rather than per mesh), and
+    /// prune the search by it.
+    #[wasm_bindgen(getter, js_name = firstHitOnly)]
+    pub fn first_hit_only(&self) -> bool {
+        self.inner.first_hit_only
+    }
+    #[wasm_bindgen(setter, js_name = firstHitOnly)]
+    pub fn set_first_hit_only(&mut self, on: bool) {
+        self.inner.first_hit_only = on;
+    }
+
+    /// three.js `intersectObject(object, recursive)`: hits on the object with
+    /// id `object_id` (`WebObjectHandle.id`, or `scene.rootId` for the whole
+    /// scene) and, when `recursive` (default true), its descendants, nearest
+    /// first. Invisible objects and their subtrees are skipped.
+    ///
+    /// Each hit is a plain object with three.js's field names: `distance`,
+    /// `point`, `objectId`, and per kind `faceIndex`, `face {a, b, c, normal,
+    /// materialIndex}`, `normal`, `uv`, `uv1`, `instanceId`, `index`,
+    /// `distanceToRay`, plus the threers extensions `polygonIndex` and
+    /// `barycoord`. A field that does not apply is absent (undefined), as in
+    /// three.js. Vectors are `{x, y, z}` / `{x, y}`.
+    #[wasm_bindgen(js_name = intersectObject)]
+    pub fn intersect_object(
+        &self,
+        scene: &mut WebScene,
+        object_id: f64,
+        recursive: Option<bool>,
+    ) -> Result<js_sys::Array, JsValue> {
+        self.intersect_objects(scene, vec![object_id], recursive)
+    }
+
+    /// three.js `intersectObjects(objects, recursive)`: as `intersectObject`
+    /// over every id in `object_ids`, all hits sorted together.
+    #[wasm_bindgen(js_name = intersectObjects)]
+    pub fn intersect_objects(
+        &self,
+        scene: &mut WebScene,
+        object_ids: Vec<f64>,
+        recursive: Option<bool>,
+    ) -> Result<js_sys::Array, JsValue> {
+        let ids = object_ids
+            .iter()
+            .map(|&id| {
+                object_id_from_f64(id)
+                    .filter(|id| scene.inner.arena.get(*id).is_some())
+                    .ok_or_else(|| JsValue::from_str(&format!("intersectObjects: no object {id}")))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        scene.inner.update_world();
+        let hits =
+            self.inner
+                .intersect_object_list(&scene.inner.arena, &ids, recursive.unwrap_or(true));
+        let out = js_sys::Array::new();
+        for h in &hits {
+            out.push(&intersection_to_js(h));
+        }
+        Ok(out)
+    }
+}
+
+fn js_set(obj: &js_sys::Object, key: &str, value: &JsValue) {
+    let _ = js_sys::Reflect::set(obj, &JsValue::from_str(key), value);
+}
+
+fn js_vec3(v: crate::Vector3) -> JsValue {
+    let o = js_sys::Object::new();
+    js_set(&o, "x", &v.x.into());
+    js_set(&o, "y", &v.y.into());
+    js_set(&o, "z", &v.z.into());
+    o.into()
+}
+
+fn js_vec2(v: crate::Vector2) -> JsValue {
+    let o = js_sys::Object::new();
+    js_set(&o, "x", &v.x.into());
+    js_set(&o, "y", &v.y.into());
+    o.into()
+}
+
+/// A hit as three.js reports it; fields that do not apply are left out.
+fn intersection_to_js(h: &crate::core::Intersection) -> JsValue {
+    let o = js_sys::Object::new();
+    js_set(&o, "distance", &h.distance.into());
+    js_set(&o, "point", &js_vec3(h.point));
+    js_set(&o, "objectId", &object_id_to_f64(h.object).into());
+    if let Some(f) = &h.face {
+        js_set(&o, "faceIndex", &(h.face_index as f64).into());
+        let face = js_sys::Object::new();
+        js_set(&face, "a", &(f.a as f64).into());
+        js_set(&face, "b", &(f.b as f64).into());
+        js_set(&face, "c", &(f.c as f64).into());
+        js_set(&face, "normal", &js_vec3(f.normal));
+        js_set(&face, "materialIndex", &(f.material_index as f64).into());
+        js_set(&o, "face", &face.into());
+    }
+    if let Some(p) = h.polygon_index {
+        js_set(&o, "polygonIndex", &(p as f64).into());
+    }
+    if let Some(n) = h.normal {
+        js_set(&o, "normal", &js_vec3(n));
+    }
+    if let Some(uv) = h.uv {
+        js_set(&o, "uv", &js_vec2(uv));
+    }
+    if let Some(uv) = h.uv1 {
+        js_set(&o, "uv1", &js_vec2(uv));
+    }
+    if let Some(b) = h.barycoord {
+        js_set(&o, "barycoord", &js_vec3(b));
+    }
+    if let Some(i) = h.instance_id {
+        js_set(&o, "instanceId", &(i as f64).into());
+    }
+    if let Some(i) = h.index {
+        js_set(&o, "index", &(i as f64).into());
+    }
+    if let Some(d) = h.distance_to_ray {
+        js_set(&o, "distanceToRay", &d.into());
+    }
+    o.into()
 }
 
 // ======================================================================
@@ -5354,6 +6717,21 @@ impl WebScene {
         }
     }
 
+    /// The scene root's object id: `raycaster.intersectObject(scene,
+    /// scene.rootId, true)` tests everything in the scene.
+    #[wasm_bindgen(getter, js_name = rootId)]
+    pub fn root_id(&self) -> f64 {
+        object_id_to_f64(self.inner.root)
+    }
+
+    /// The handle for an object id (`WebObjectHandle.id`, a hit's
+    /// `objectId`), or undefined when no such object is in the scene.
+    #[wasm_bindgen(js_name = handleOf)]
+    pub fn handle_of(&self, id: f64) -> Option<WebObjectHandle> {
+        let id = object_id_from_f64(id)?;
+        self.inner.arena.get(id).map(|_| WebObjectHandle { id })
+    }
+
     /// Find the first object whose name matches.
     #[wasm_bindgen(js_name = getObjectByName)]
     pub fn get_object_by_name(&self, name: &str) -> Option<WebObjectHandle> {
@@ -5403,12 +6781,11 @@ impl WebScene {
         }
     }
 
-    /// Look-at: orient the object so its -Z axis points at target.
+    /// three.js `lookAt`: a light turns its -Z to the world-space target,
+    /// anything else its +Z, with the parent's rotation divided out.
     #[wasm_bindgen(js_name = lookAt)]
     pub fn look_at(&mut self, handle: &WebObjectHandle, x: f32, y: f32, z: f32) {
-        if let Some(obj) = self.inner.get_mut(handle.id) {
-            obj.look_at(crate::Vector3::new(x, y, z));
-        }
+        self.inner.arena.look_at(handle.id, crate::Vector3::new(x, y, z));
     }
 
     /// Get the world-space position (after parent transforms).
@@ -5724,9 +7101,103 @@ impl WebBufferGeometry {
     pub fn draw_count(&self) -> usize {
         self.inner.draw_count()
     }
+
+    /// Group triangles into polygons: `counts[i]` consecutive triangles, in
+    /// index order, came from source polygon `i` (a quad is `2`). Wireframes
+    /// then outline the polygons instead of drawing the fan diagonals. See
+    /// `BufferGeometry::polygons`.
+    ///
+    /// Call after the last `setIndex` / `position` write — both drop the
+    /// grouping. Throws unless every count is at least one and they sum to the
+    /// geometry's triangle count; the geometry is left ungrouped then.
+    #[wasm_bindgen(js_name = setPolygons)]
+    pub fn set_polygons(&mut self, counts: Vec<u32>) -> Result<(), JsValue> {
+        let triangles = self.inner.triangle_count();
+        let sum: u64 = counts.iter().map(|&n| n as u64).sum();
+        let geometry = Arc::make_mut(&mut self.inner);
+        if let Some(i) = counts.iter().position(|&n| n == 0) {
+            geometry.polygons = None;
+            return Err(JsValue::from_str(&format!(
+                "setPolygons: polygon {i} has zero triangles"
+            )));
+        }
+        if sum != triangles as u64 {
+            geometry.polygons = None;
+            return Err(JsValue::from_str(&format!(
+                "setPolygons: counts sum to {sum} triangles but the geometry draws {triangles}"
+            )));
+        }
+        geometry.set_polygons(counts);
+        Ok(())
+    }
+
+    /// Triangles per polygon, or `undefined` when there is no grouping (or
+    /// the one set no longer covers the triangles).
+    #[wasm_bindgen(js_name = polygonCounts)]
+    pub fn polygon_counts(&self) -> Option<Vec<u32>> {
+        self.inner.polygon_counts().map(|p| p.to_vec())
+    }
+
+    /// threers extension: pair adjacent triangles back into quads (Blender's
+    /// "Tris to Quads") — for glTF/STL imports, which carry triangles only.
+    /// Reorders the index so each quad's triangles are consecutive and sets
+    /// the polygon grouping; no vertex changes. Angles in radians, both
+    /// defaulting to 40°. Returns how many quads were formed. See
+    /// `BufferGeometry::infer_quads`.
+    #[wasm_bindgen(js_name = inferQuads)]
+    pub fn infer_quads(&mut self, max_face_angle: Option<f32>, max_shape_angle: Option<f32>) -> u32 {
+        let d = crate::core::DEFAULT_INFER_QUADS_ANGLE;
+        Arc::make_mut(&mut self.inner)
+            .infer_quads(max_face_angle.unwrap_or(d), max_shape_angle.unwrap_or(d)) as u32
+    }
+
+    /// threers extension: Catmull–Clark subdivision, `levels` rounds (default
+    /// 1, at most 6 — each multiplies the face count by about 4). Returns a
+    /// new geometry: indexed, every face a quad grouped as a polygon, with
+    /// `position` and smooth `normal` only (UVs and other attributes are
+    /// dropped). The cage is this geometry's polygons — its triangles where
+    /// there is no grouping — welded by position. `sharpBoundary` (default
+    /// true) holds open borders in place. See `BufferGeometry::subdivide_with`.
+    #[wasm_bindgen(js_name = subdivide)]
+    pub fn subdivide(
+        &self,
+        levels: Option<u32>,
+        sharp_boundary: Option<bool>,
+    ) -> Result<WebBufferGeometry, JsValue> {
+        const MAX_LEVELS: u32 = 6;
+        let levels = levels.unwrap_or(1);
+        if levels > MAX_LEVELS {
+            return Err(JsValue::from_str(&format!(
+                "subdivide: levels must be 0..={MAX_LEVELS}, got {levels}"
+            )));
+        }
+        let options = crate::geometries::SubdivisionOptions {
+            sharp_boundary: sharp_boundary.unwrap_or(true),
+            ..Default::default()
+        };
+        Ok(WebBufferGeometry {
+            inner: Arc::new(self.inner.subdivide_with(levels as usize, &options)),
+        })
+    }
+
+    /// The faces a polygon-capable writer emits (`BufferGeometry::faces`),
+    /// flattened as `[n, v0 … v(n-1), n, …]`: one corner loop per polygon whose
+    /// outline is recoverable, its triangles one by one otherwise, and every
+    /// triangle on its own without a grouping. Corners are vertex indices.
+    #[wasm_bindgen(js_name = faces)]
+    pub fn faces(&self) -> Vec<u32> {
+        let mut out = Vec::with_capacity(self.inner.triangle_count() * 4);
+        for face in self.inner.faces() {
+            out.push(face.len() as u32);
+            out.extend_from_slice(&face);
+        }
+        out
+    }
 }
 
-#[cfg(all(target_arch = "wasm32", feature = "mesh-bvh"))]
+// Readback accessors. Not feature-gated: the shim's `QuadGeometry` and
+// `computeVertexNormals` read generated buffers back in every build, not only
+// in builds with `mesh-bvh`.
 #[wasm_bindgen]
 impl WebBufferGeometry {
     #[wasm_bindgen(js_name = getAttributeArray)]
@@ -5742,6 +7213,24 @@ impl WebBufferGeometry {
     #[wasm_bindgen(js_name = getIndexArray)]
     pub fn get_index_array(&self) -> Option<Vec<u32>> {
         self.inner.index.clone()
+    }
+
+    /// Every attribute's name, sorted, so a reader can copy all of them.
+    #[wasm_bindgen(js_name = attributeNames)]
+    pub fn attribute_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self.inner.attributes.keys().cloned().collect();
+        names.sort();
+        names
+    }
+
+    /// three.js `groups`, flattened as `[start, count, materialIndex, …]`.
+    #[wasm_bindgen(js_name = groupsArray)]
+    pub fn groups_array(&self) -> Vec<u32> {
+        self.inner
+            .groups
+            .iter()
+            .flat_map(|g| [g.start, g.count, g.material_index])
+            .collect()
     }
 }
 
@@ -7743,4 +9232,494 @@ fn flat_hinges(chain: &crate::kinematics::SerialChain, q: &[f64]) -> Vec<f64> {
         out.extend_from_slice(&p.axis);
     }
     out
+}
+
+// ---------------------------------------------------------------------------
+// QuadView — CAD-style top / front / side / perspective panes on one canvas.
+// ---------------------------------------------------------------------------
+
+fn pane_from_name(name: &str) -> Result<crate::helpers::Pane, JsValue> {
+    crate::helpers::Pane::from_name(name).ok_or_else(|| {
+        JsValue::from_str(&format!(
+            "unknown pane '{name}' (use top|front|side|perspective)"
+        ))
+    })
+}
+
+/// A draw into the WebGL2 back buffer (`WebRenderer::gl_back_buffer`). With
+/// MSAA on it goes through the multisampled path, as a draw to the canvas
+/// would — a pane is resolved through its own pane-sized target there, so the
+/// back buffer's other panes survive. `render_to` would be single-sampled.
+/// Whether anything visible in `scene` blends with what is behind it: a
+/// transparent material on a mesh (of any kind) or a sprite.
+fn scene_blends(scene: &crate::Scene) -> bool {
+    use crate::core::ObjectKind;
+    let mut any = false;
+    scene.arena.traverse_visible(scene.root, &mut |_, obj| {
+        any = any
+            || match &obj.kind {
+                ObjectKind::Mesh(m) => m.draws().iter().any(|d| d.material.transparent()),
+                ObjectKind::InstancedMesh(m) => m.draws().iter().any(|d| d.material.transparent()),
+                ObjectKind::SkinnedMesh(m) => m.draws().iter().any(|d| d.material.transparent()),
+                ObjectKind::Sprite(_) => true,
+                _ => false,
+            };
+    });
+    any
+}
+
+fn render_back(
+    renderer: &mut crate::Renderer,
+    scene: &mut crate::Scene,
+    camera: &dyn crate::cameras::Camera,
+    back: &crate::renderer::RenderTarget,
+) {
+    if renderer.msaa() > 1 {
+        renderer.render_to_multisampled(scene, camera, back, false);
+    } else {
+        renderer.render_to(scene, camera, back);
+    }
+}
+
+/// Where a [`WebQuadView`] draws this frame: the canvas texture, acquired
+/// once for all four panes, the renderer's active render target, or the
+/// WebGL2 back buffer standing in for the canvas.
+enum WebPaneTarget<'a> {
+    View(&'a wgpu::TextureView),
+    Target(&'a crate::renderer::RenderTarget),
+    Back(&'a crate::renderer::RenderTarget),
+}
+
+struct WebPaneSurface<'a> {
+    renderer: &'a mut crate::Renderer,
+    target: WebPaneTarget<'a>,
+}
+
+impl crate::helpers::PaneSurface for WebPaneSurface<'_> {
+    fn renderer(&mut self) -> &mut dyn crate::helpers::ViewportControl {
+        self.renderer
+    }
+    fn draw(&mut self, scene: &mut crate::Scene, camera: &dyn crate::cameras::Camera) {
+        match self.target {
+            WebPaneTarget::View(v) => self.renderer.render(scene, camera, v, false),
+            WebPaneTarget::Target(t) => self.renderer.render_to(scene, camera, t),
+            WebPaneTarget::Back(t) => render_back(self.renderer, scene, camera, t),
+        }
+    }
+    fn clear(&mut self, color: crate::Color, alpha: f32) {
+        match self.target {
+            WebPaneTarget::View(v) => self.renderer.clear(v, false, color, alpha),
+            WebPaneTarget::Target(t) | WebPaneTarget::Back(t) => {
+                self.renderer.clear_render_target(t, color, alpha)
+            }
+        }
+    }
+}
+
+/// [`crate::helpers::QuadView`] for the browser: three orthographic panes
+/// (top, front, side — Y-up, third-angle) and the caller's perspective camera,
+/// laid out on one canvas.
+///
+/// Rectangles are three.js's: bottom-left origin, logical (CSS) pixels — flip
+/// a DOM mouse `y` (`height - y`) before `paneAt`. Pane names are
+/// `"top" | "front" | "side" | "perspective"`.
+#[wasm_bindgen]
+pub struct WebQuadView {
+    inner: crate::helpers::QuadView,
+    /// Pointer handling, built from the perspective camera on first use.
+    controls: Option<crate::helpers::QuadViewControls>,
+}
+
+/// The perspective camera inside a `WebCamera`, or a JS error naming `what`.
+fn quad_persp<'a>(
+    camera: &'a mut WebCamera,
+    what: &str,
+) -> Result<&'a mut crate::cameras::PerspectiveCamera, JsValue> {
+    match &mut camera.inner {
+        CameraInner::Perspective(c) => Ok(c),
+        _ => Err(JsValue::from_str(&format!(
+            "QuadView.{what}: needs the perspective camera"
+        ))),
+    }
+}
+
+#[wasm_bindgen]
+impl WebQuadView {
+    /// Third-angle layout, 2 px gap, framed on the unit cube round the origin.
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> WebQuadView {
+        WebQuadView {
+            inner: crate::helpers::QuadView::new(),
+            controls: None,
+        }
+    }
+
+    /// Magnification of the orthographic panes over the fitted scale (one
+    /// value for all three). `frameBox`/`frameScene`/`frameAll` reset it to 1.
+    #[wasm_bindgen(getter)]
+    pub fn zoom(&self) -> f32 {
+        self.inner.zoom
+    }
+    #[wasm_bindgen(setter)]
+    pub fn set_zoom(&mut self, zoom: f32) {
+        if zoom.is_finite() && zoom > 0.0 {
+            self.inner.zoom = zoom;
+        }
+    }
+
+    /// Move what the orthographic panes are centred on, world units.
+    #[wasm_bindgen(js_name = panBy)]
+    pub fn pan_by(&mut self, x: f32, y: f32, z: f32) {
+        self.inner.pan_by(crate::Vector3::new(x, y, z));
+    }
+
+    /// Draw the shadow maps once per `render` instead of once per pane
+    /// (default on; the pictures are identical).
+    #[wasm_bindgen(getter, js_name = shareShadows)]
+    pub fn share_shadows(&self) -> bool {
+        self.inner.share_shadows
+    }
+    #[wasm_bindgen(setter, js_name = shareShadows)]
+    pub fn set_share_shadows(&mut self, on: bool) {
+        self.inner.share_shadows = on;
+    }
+
+    /// Start a pointer gesture at `(x, y)` — canvas CSS pixels, **top-left**
+    /// origin (DOM `offsetX`/`offsetY`) — on a `width`×`height` canvas.
+    /// `button` is DOM `PointerEvent.button`. Returns the pane, or `undefined`
+    /// over a gap. Primary drag in the perspective pane orbits `camera`; any
+    /// other drag pans.
+    #[wasm_bindgen(js_name = pointerDown)]
+    pub fn pointer_down(
+        &mut self,
+        camera: &mut WebCamera,
+        x: f32,
+        y: f32,
+        button: i32,
+        width: f32,
+        height: f32,
+    ) -> Result<Option<String>, JsValue> {
+        let cam = quad_persp(camera, "pointerDown")?.clone();
+        let Some(button) = crate::helpers::PointerButton::from_dom(button) else {
+            return Ok(None);
+        };
+        let mut ctl = self.controls.take();
+        let c = ctl.get_or_insert_with(|| crate::helpers::QuadViewControls::new(&cam));
+        c.set_size(width, height);
+        let pane = c.pointer_down(&self.inner, &cam, x, y, button);
+        self.controls = ctl;
+        Ok(pane.map(|p| p.name().to_string()))
+    }
+
+    /// Continue the gesture. Returns whether anything moved.
+    #[wasm_bindgen(js_name = pointerMove)]
+    pub fn pointer_move(&mut self, camera: &mut WebCamera, x: f32, y: f32) -> Result<bool, JsValue> {
+        let cam = quad_persp(camera, "pointerMove")?;
+        let Some(c) = self.controls.as_mut() else {
+            return Ok(false);
+        };
+        Ok(c.pointer_move(&mut self.inner, cam, x, y))
+    }
+
+    #[wasm_bindgen(js_name = pointerUp)]
+    pub fn pointer_up(&mut self) {
+        if let Some(c) = self.controls.as_mut() {
+            c.pointer_up();
+        }
+    }
+
+    /// Zoom at `(x, y)` (top-left origin): `delta` is DOM `WheelEvent.deltaY`,
+    /// positive zooms out. One zoom for the three orthographic panes; a dolly
+    /// of `camera` in the perspective pane. Returns whether anything moved.
+    pub fn wheel(
+        &mut self,
+        camera: &mut WebCamera,
+        x: f32,
+        y: f32,
+        delta: f32,
+        width: f32,
+        height: f32,
+    ) -> Result<bool, JsValue> {
+        let cam = quad_persp(camera, "wheel")?;
+        let snapshot = cam.clone();
+        let mut ctl = self.controls.take();
+        let c = ctl.get_or_insert_with(|| crate::helpers::QuadViewControls::new(&snapshot));
+        c.set_size(width, height);
+        let moved = c.wheel(&mut self.inner, cam, x, y, delta);
+        self.controls = ctl;
+        Ok(moved)
+    }
+
+    /// Maximise the pane under `(x, y)` (top-left origin), or restore the
+    /// four. Returns the pane, `undefined` over a gap.
+    pub fn dblclick(&mut self, x: f32, y: f32, width: f32, height: f32) -> Option<String> {
+        let pane = self
+            .inner
+            .pane_at(x, height - y, width, height)?;
+        self.inner.toggle_maximize(pane);
+        if let Some(c) = self.controls.as_mut() {
+            c.pointer_up();
+        }
+        Some(pane.name().to_string())
+    }
+
+    /// Frame every visible mesh in every pane: the orthographic panes at
+    /// zoom 1, and `camera` moved along its line of sight to fit. False when
+    /// there is nothing to frame.
+    #[wasm_bindgen(js_name = frameAll)]
+    pub fn frame_all(&mut self, scene: &mut WebScene, camera: &mut WebCamera) -> Result<bool, JsValue> {
+        let cam = quad_persp(camera, "frameAll")?;
+        let snapshot = cam.clone();
+        let mut ctl = self
+            .controls
+            .take()
+            .unwrap_or_else(|| crate::helpers::QuadViewControls::new(&snapshot));
+        let framed = ctl.frame_all(&mut self.inner, cam, &mut scene.inner).is_some();
+        self.controls = Some(ctl);
+        Ok(framed)
+    }
+
+    /// `frameAll` for a box: frame `bounds` in every pane.
+    #[wasm_bindgen(js_name = frameBoxAll)]
+    pub fn frame_box_all(&mut self, bounds: &WebBox3, camera: &mut WebCamera) -> Result<(), JsValue> {
+        let cam = quad_persp(camera, "frameBoxAll")?;
+        let snapshot = cam.clone();
+        let mut ctl = self
+            .controls
+            .take()
+            .unwrap_or_else(|| crate::helpers::QuadViewControls::new(&snapshot));
+        ctl.frame_box(&mut self.inner, cam, &bounds.inner);
+        self.controls = Some(ctl);
+        Ok(())
+    }
+
+    /// Panes in grid order: top-left, top-right, bottom-left, bottom-right.
+    pub fn layout(&self) -> Vec<String> {
+        self.inner
+            .layout
+            .iter()
+            .map(|p| p.name().to_string())
+            .collect()
+    }
+
+    #[wasm_bindgen(js_name = setLayout)]
+    pub fn set_layout(
+        &mut self,
+        top_left: &str,
+        top_right: &str,
+        bottom_left: &str,
+        bottom_right: &str,
+    ) -> Result<(), JsValue> {
+        self.inner.layout = [
+            pane_from_name(top_left)?,
+            pane_from_name(top_right)?,
+            pane_from_name(bottom_left)?,
+            pane_from_name(bottom_right)?,
+        ];
+        Ok(())
+    }
+
+    /// Space between panes, logical pixels.
+    #[wasm_bindgen(getter)]
+    pub fn gap(&self) -> f32 {
+        self.inner.gap
+    }
+    #[wasm_bindgen(setter)]
+    pub fn set_gap(&mut self, gap: f32) {
+        self.inner.gap = gap.max(0.0);
+    }
+
+    /// Space between the panes and the canvas edge, logical pixels.
+    #[wasm_bindgen(getter)]
+    pub fn border(&self) -> f32 {
+        self.inner.border
+    }
+    #[wasm_bindgen(setter)]
+    pub fn set_border(&mut self, border: f32) {
+        self.inner.border = border.max(0.0);
+    }
+
+    /// Padding round the framed box in the orthographic panes, as a fraction
+    /// of its extent.
+    #[wasm_bindgen(getter)]
+    pub fn margin(&self) -> f32 {
+        self.inner.margin
+    }
+    #[wasm_bindgen(setter)]
+    pub fn set_margin(&mut self, margin: f32) {
+        self.inner.margin = margin.max(0.0);
+    }
+
+    /// What the gap and border are cleared to (linear, like every `WebColor`).
+    #[wasm_bindgen(js_name = setGapColor)]
+    pub fn set_gap_color(&mut self, color: &WebColor) {
+        self.inner.gap_color = Some(color.inner);
+    }
+
+    /// Leave the gap and border untouched.
+    #[wasm_bindgen(js_name = clearGapColor)]
+    pub fn clear_gap_color(&mut self) {
+        self.inner.gap_color = None;
+    }
+
+    /// Per-pane background overriding `scene.background`.
+    #[wasm_bindgen(js_name = setPaneBackground)]
+    pub fn set_pane_background(&mut self, pane: &str, color: &WebColor) -> Result<(), JsValue> {
+        let p = pane_from_name(pane)?;
+        self.inner.backgrounds[p.index()] = Some(color.inner);
+        Ok(())
+    }
+
+    /// Back to the scene's background for `pane`.
+    #[wasm_bindgen(js_name = clearPaneBackground)]
+    pub fn clear_pane_background(&mut self, pane: &str) -> Result<(), JsValue> {
+        let p = pane_from_name(pane)?;
+        self.inner.backgrounds[p.index()] = None;
+        Ok(())
+    }
+
+    /// The pane shown full-size, or `undefined` for all four.
+    pub fn maximized(&self) -> Option<String> {
+        self.inner.maximized.map(|p| p.name().to_string())
+    }
+
+    /// Show `pane` alone; `undefined`/`null` goes back to all four.
+    #[wasm_bindgen(js_name = setMaximized)]
+    pub fn set_maximized(&mut self, pane: Option<String>) -> Result<(), JsValue> {
+        self.inner.maximized = match pane {
+            Some(name) => Some(pane_from_name(&name)?),
+            None => None,
+        };
+        Ok(())
+    }
+
+    /// Show `pane` alone, or — if it already is — go back to all four.
+    #[wasm_bindgen(js_name = toggleMaximize)]
+    pub fn toggle_maximize(&mut self, pane: &str) -> Result<(), JsValue> {
+        self.inner.toggle_maximize(pane_from_name(pane)?);
+        Ok(())
+    }
+
+    /// Aim the orthographic cameras at a box.
+    #[wasm_bindgen(js_name = frameBox)]
+    pub fn frame_box(&mut self, bounds: &WebBox3) {
+        self.inner.frame_box(&bounds.inner);
+    }
+
+    /// Frame every visible mesh in `scene`. Returns false when there is
+    /// nothing to frame (the cameras are left where they were).
+    #[wasm_bindgen(js_name = frameScene)]
+    pub fn frame_scene(&mut self, scene: &mut WebScene) -> bool {
+        self.inner.frame_scene(&mut scene.inner).is_some()
+    }
+
+    /// The framed box's centre, `[x, y, z]` — a natural orbit target.
+    pub fn target(&self) -> Vec<f32> {
+        let t = self.inner.target();
+        vec![t.x, t.y, t.z]
+    }
+
+    /// `[x, y, width, height]` of `pane` on a `width`×`height` canvas (logical
+    /// pixels, bottom-left origin), or `undefined` when it is hidden.
+    #[wasm_bindgen(js_name = paneRect)]
+    pub fn pane_rect(&self, pane: &str, width: f32, height: f32) -> Result<Option<Vec<f32>>, JsValue> {
+        let p = pane_from_name(pane)?;
+        Ok(self
+            .inner
+            .pane_rect(p, width, height)
+            .map(|r| vec![r.x, r.y, r.width, r.height]))
+    }
+
+    /// The pane under `(x, y)` — bottom-left origin, logical pixels — or
+    /// `undefined` over a gap or border.
+    #[wasm_bindgen(js_name = paneAt)]
+    pub fn pane_at(&self, x: f32, y: f32, width: f32, height: f32) -> Option<String> {
+        self.inner
+            .pane_at(x, y, width, height)
+            .map(|p| p.name().to_string())
+    }
+
+    /// Size the orthographic frusta for a `width`×`height` canvas. `render`
+    /// does this itself; call it before reading the cameras out.
+    pub fn fit(&mut self, width: f32, height: f32) {
+        self.inner.fit(width, height);
+    }
+
+    /// A copy of the orthographic camera for `"top"`, `"front"` or `"side"`
+    /// (as last fitted). Throws for `"perspective"`, which is the caller's.
+    #[wasm_bindgen(js_name = orthoCamera)]
+    pub fn ortho_camera(&self, pane: &str) -> Result<WebCamera, JsValue> {
+        let p = pane_from_name(pane)?;
+        let cam = self.inner.ortho_camera(p).ok_or_else(|| {
+            JsValue::from_str("the perspective pane has no orthographic camera")
+        })?;
+        Ok(WebCamera {
+            inner: CameraInner::Orthographic(cam.clone()),
+        })
+    }
+
+    /// Draw every visible pane: the gap colour first, then each pane cleared
+    /// to its background and drawn inside its own viewport and scissor. Goes
+    /// to the canvas — acquired once for all panes, presented once — or to the
+    /// renderer's active render target. `perspective` must be a perspective
+    /// camera; its aspect is set per pane on a copy. The renderer's viewport,
+    /// scissor and auto-clear are left as they were.
+    pub fn render(
+        &mut self,
+        renderer: &mut WebRenderer,
+        scene: &mut WebScene,
+        perspective: &WebCamera,
+    ) -> Result<(), JsValue> {
+        let CameraInner::Perspective(persp) = &perspective.inner else {
+            return Err(JsValue::from_str(
+                "QuadView.render: the fourth pane needs a perspective camera",
+            ));
+        };
+        if let Some(env_rt_id) = scene.inner.environment_cube_rt {
+            if let Some(target) = ACTIVE_CUBE_TARGETS.with(|m| m.borrow().get(&env_rt_id).cloned())
+            {
+                renderer
+                    .renderer
+                    .register_cube_render_target(env_rt_id, &target);
+            }
+        }
+        if let Some(id) = renderer.current_target_id {
+            if let Some(target) = ACTIVE_TARGETS.with(|m| m.borrow().get(&id).cloned()) {
+                let mut surface = WebPaneSurface {
+                    renderer: &mut renderer.renderer,
+                    target: WebPaneTarget::Target(&target),
+                };
+                self.inner.render(&mut surface, &mut scene.inner, persp);
+                return Ok(());
+            }
+        }
+        // WebGL2 page already composing by hand: keep its back buffer current.
+        if let Some((id, back)) = renderer.gl_back_buffer() {
+            let mut surface = WebPaneSurface {
+                renderer: &mut renderer.renderer,
+                target: WebPaneTarget::Back(&back),
+            };
+            self.inner.render(&mut surface, &mut scene.inner, persp);
+            renderer.present_gl_back_buffer(id);
+            return Ok(());
+        }
+        match renderer.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(frame)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {
+                let view = frame
+                    .texture
+                    .create_view(&wgpu::TextureViewDescriptor::default());
+                {
+                    let mut surface = WebPaneSurface {
+                        renderer: &mut renderer.renderer,
+                        target: WebPaneTarget::View(&view),
+                    };
+                    self.inner.render(&mut surface, &mut scene.inner, persp);
+                }
+                renderer.renderer.queue_arc().present(frame);
+            }
+            _ => renderer.surface.configure(&renderer.device, &renderer.config),
+        }
+        Ok(())
+    }
 }

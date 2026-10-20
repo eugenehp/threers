@@ -1,30 +1,11 @@
-//! three.js / `web/csg/` triangle topology primitives (f64, mirrors `threejs-shim.js`).
+//! three.js r165's vector, plane, matrix and triangle math in f64, as
+//! three-bvh-csg and three-mesh-bvh run it in JavaScript — operand order and
+//! all, since the CSG's exact-equality tests see the last bit.
 
 use crate::core::BufferAttribute;
 use crate::math::{Matrix3, Matrix4, Triangle, Vector3};
 
 pub const TOPO_EPSILON: f64 = 1e-10;
-
-/// Match JS `Math.hypot(x, y, z)` (scaled single reduction, not nested 2-arg hypot).
-fn hypot3(x: f64, y: f64, z: f64) -> f64 {
-    let ax = x.abs();
-    let ay = y.abs();
-    let az = z.abs();
-    let mut max = ax;
-    if ay > max {
-        max = ay;
-    }
-    if az > max {
-        max = az;
-    }
-    if max == 0.0 {
-        return 0.0;
-    }
-    let x = x / max;
-    let y = y / max;
-    let z = z / max;
-    max * (x * x + y * y + z * z).sqrt()
-}
 
 /// Mirrors three.js `Vector3` (IEEE f64 components).
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -94,21 +75,25 @@ impl JsVec3 {
         self.x * self.x + self.y * self.y + self.z * self.z
     }
 
+    /// `Vector3.length`: `sqrt(x² + y² + z²)`.
     pub fn length(self) -> f64 {
-        hypot3(self.x, self.y, self.z)
+        self.length_sq().sqrt()
     }
 
+    /// `Vector3.normalize`: `divideScalar(length || 1)`, which three.js does
+    /// as a multiply by the reciprocal — a different rounding from dividing.
     pub fn normalize(mut self) -> Self {
         let l = self.length();
-        let l = if l == 0.0 { 1.0 } else { l };
-        self.x /= l;
-        self.y /= l;
-        self.z /= l;
+        let inv = 1.0 / if l == 0.0 { 1.0 } else { l };
+        self.x *= inv;
+        self.y *= inv;
+        self.z *= inv;
         self
     }
 
+    /// `Vector3.distanceTo`: `sqrt(distanceToSquared)`.
     pub fn distance_to(self, v: Self) -> f64 {
-        hypot3(self.x - v.x, self.y - v.y, self.z - v.z)
+        self.distance_to_squared(v).sqrt()
     }
 
     pub fn distance_to_squared(self, v: Self) -> f64 {
@@ -187,6 +172,32 @@ pub struct JsMatrix4 {
 }
 
 impl JsMatrix4 {
+    /// three.js `Matrix4.determinant`, in f64.
+    pub fn determinant(&self) -> f64 {
+        let te = &self.elements;
+        let (n11, n12, n13, n14) = (te[0], te[4], te[8], te[12]);
+        let (n21, n22, n23, n24) = (te[1], te[5], te[9], te[13]);
+        let (n31, n32, n33, n34) = (te[2], te[6], te[10], te[14]);
+        let (n41, n42, n43, n44) = (te[3], te[7], te[11], te[15]);
+        n41 * (n14 * n23 * n32 - n13 * n24 * n32 - n14 * n22 * n33
+            + n12 * n24 * n33
+            + n13 * n22 * n34
+            - n12 * n23 * n34)
+            + n42
+                * (n11 * n23 * n34 - n11 * n24 * n33 + n14 * n21 * n33 - n13 * n21 * n34
+                    + n13 * n24 * n31
+                    - n14 * n23 * n31)
+            + n43
+                * (n11 * n24 * n32 - n11 * n22 * n34 - n14 * n21 * n32
+                    + n12 * n21 * n34
+                    + n14 * n22 * n31
+                    - n12 * n24 * n31)
+            + n44
+                * (-n13 * n22 * n31 - n11 * n23 * n32 + n11 * n22 * n33 + n13 * n21 * n32
+                    - n12 * n21 * n33
+                    + n12 * n23 * n31)
+    }
+
     pub fn from_matrix4(m: &Matrix4) -> Self {
         Self {
             elements: m.elements.map(|e| e as f64),
@@ -303,6 +314,38 @@ pub struct JsMatrix3 {
 }
 
 impl JsMatrix3 {
+    /// three.js `Matrix3.getNormalMatrix(m)`: the upper 3×3 of `m`, inverted
+    /// and transposed, in f64. A singular matrix gives zero, as three.js's.
+    pub fn normal_matrix(m: &JsMatrix4) -> Self {
+        let me = &m.elements;
+        let (n11, n21, n31) = (me[0], me[1], me[2]);
+        let (n12, n22, n32) = (me[4], me[5], me[6]);
+        let (n13, n23, n33) = (me[8], me[9], me[10]);
+        let t11 = n33 * n22 - n32 * n23;
+        let t12 = n32 * n13 - n33 * n12;
+        let t13 = n23 * n12 - n22 * n13;
+        let det = n11 * t11 + n21 * t12 + n31 * t13;
+        if det == 0.0 {
+            return Self { elements: [0.0; 9] };
+        }
+        let inv = 1.0 / det;
+        // The inverse, column-major, then transposed.
+        let i = [
+            t11 * inv,
+            (n31 * n23 - n33 * n21) * inv,
+            (n32 * n21 - n31 * n22) * inv,
+            t12 * inv,
+            (n33 * n11 - n31 * n13) * inv,
+            (n31 * n12 - n32 * n11) * inv,
+            t13 * inv,
+            (n21 * n13 - n23 * n11) * inv,
+            (n22 * n11 - n21 * n12) * inv,
+        ];
+        Self {
+            elements: [i[0], i[3], i[6], i[1], i[4], i[7], i[2], i[5], i[8]],
+        }
+    }
+
     pub fn from_matrix3(m: &Matrix3) -> Self {
         Self {
             elements: m.elements.map(|e| e as f64),
@@ -383,20 +426,26 @@ impl JsPlane {
         self.normal.dot(p) + self.constant
     }
 
-    /// Mirrors `Plane.intersectLine`.
+    /// three.js `Plane.intersectLine`: the point where the segment crosses
+    /// the plane, by `t = −(start·n + c) / (n·dir)` within `[0, 1]`; a segment
+    /// in the plane gives its start. `target` is left as it was on a miss, as
+    /// three.js leaves it — callers read it afterwards.
     pub fn intersect_line(self, start: JsVec3, end: JsVec3, target: &mut JsVec3) -> Option<JsVec3> {
-        let d1 = self.distance_to_point(start);
-        let d2 = self.distance_to_point(end);
-        if d1 * d2 < 0.0 {
-            let t = d1 / (d1 - d2);
-            *target = target.lerp_vectors(start, end, t);
-            return Some(*target);
+        let direction = JsVec3::default().sub_vectors(end, start);
+        let denominator = self.normal.dot(direction);
+        if denominator == 0.0 {
+            if self.distance_to_point(start) == 0.0 {
+                *target = start;
+                return Some(start);
+            }
+            return None;
         }
-        if d1.abs() < TOPO_EPSILON {
-            *target = start;
-            return Some(*target);
+        let t = -(start.dot(self.normal) + self.constant) / denominator;
+        if !(0.0..=1.0).contains(&t) {
+            return None;
         }
-        None
+        *target = start.add_scaled_vector(direction, t);
+        Some(*target)
     }
 }
 
@@ -441,10 +490,19 @@ impl JsTriangle {
         self
     }
 
+    /// three.js `Triangle.getNormal`: `(c − b) × (a − b)`, scaled by
+    /// `1 / sqrt(lengthSq)`, or zero for a degenerate triangle. The operand
+    /// order sets the rounding, which exact-equality tests downstream see.
     pub fn get_normal(self) -> JsVec3 {
-        let ab = JsVec3::default().sub_vectors(self.b, self.a);
-        let ac = JsVec3::default().sub_vectors(self.c, self.a);
-        JsVec3::default().cross_vectors(ab, ac).normalize()
+        let cb = JsVec3::default().sub_vectors(self.c, self.b);
+        let ab = JsVec3::default().sub_vectors(self.a, self.b);
+        let n = JsVec3::default().cross_vectors(cb, ab);
+        let len_sq = n.length_sq();
+        if len_sq > 0.0 {
+            n.multiply_scalar(1.0 / len_sq.sqrt())
+        } else {
+            JsVec3::default()
+        }
     }
 
     pub fn get_plane(self) -> JsPlane {
@@ -472,54 +530,187 @@ impl JsTriangle {
         [1.0 - u - v, v, u]
     }
 
+    /// three.js `Triangle.getMidpoint`: `(a + b) + c`, times `1/3`.
     pub fn get_midpoint(self) -> JsVec3 {
+        let third = 1.0 / 3.0;
         JsVec3::new(
-            (self.a.x + self.b.x + self.c.x) / 3.0,
-            (self.a.y + self.b.y + self.c.y) / 3.0,
-            (self.a.z + self.b.z + self.c.z) / 3.0,
+            (self.a.x + self.b.x + self.c.x) * third,
+            (self.a.y + self.b.y + self.c.y) * third,
+            (self.a.z + self.b.z + self.c.z) * third,
         )
     }
 
     /// Mirrors `ExtendedTriangle.intersectsTriangle` in `web/mesh-bvh-impl.js`.
-    pub fn intersects_triangle(self, other: Self, coplanar: bool) -> bool {
-        let plane = self.get_plane();
-        let da = plane.distance_to_point(other.a);
-        let db = plane.distance_to_point(other.b);
-        let dc = plane.distance_to_point(other.c);
-        if da > TOPO_EPSILON && db > TOPO_EPSILON && dc > TOPO_EPSILON {
+    /// three.js `Triangle.containsPoint`: inside or on the boundary, by
+    /// barycentric coordinates; a degenerate triangle contains nothing.
+    pub fn contains_point(self, point: JsVec3) -> bool {
+        let v0 = JsVec3::default().sub_vectors(self.c, self.a);
+        let v1 = JsVec3::default().sub_vectors(self.b, self.a);
+        let v2 = JsVec3::default().sub_vectors(point, self.a);
+        let dot00 = v0.dot(v0);
+        let dot01 = v0.dot(v1);
+        let dot02 = v0.dot(v2);
+        let dot11 = v1.dot(v1);
+        let dot12 = v1.dot(v2);
+        let denom = dot00 * dot11 - dot01 * dot01;
+        if denom == 0.0 {
             return false;
         }
-        if da < -TOPO_EPSILON && db < -TOPO_EPSILON && dc < -TOPO_EPSILON {
-            return false;
-        }
+        let inv = 1.0 / denom;
+        let u = (dot11 * dot02 - dot01 * dot12) * inv;
+        let v = (dot00 * dot12 - dot01 * dot02) * inv;
+        let (x, y) = (1.0 - u - v, v);
+        x >= 0.0 && y >= 0.0 && x + y <= 1.0
+    }
 
+    /// three-mesh-bvh 0.7.6 `ExtendedTriangle.intersectsTriangle`, in f64 as
+    /// JavaScript runs it: a separating-axis test for (near-)parallel planes,
+    /// otherwise each triangle's crossing of the other's plane, and whether
+    /// the two crossing segments overlap. Touching counts. three-bvh-csg calls
+    /// it to collect intersecting pairs and again before each plane split.
+    pub fn intersects_triangle_js(self, other: Self) -> bool {
+        const ZERO_EPSILON: f64 = 1e-15;
+        let near_zero = |v: f64| v.abs() < ZERO_EPSILON;
+        let plane1 = self.get_plane();
         let plane2 = other.get_plane();
-        let ea = plane2.distance_to_point(self.a);
-        let eb = plane2.distance_to_point(self.b);
-        let ec = plane2.distance_to_point(self.c);
-        if ea > TOPO_EPSILON && eb > TOPO_EPSILON && ec > TOPO_EPSILON {
-            return false;
-        }
-        if ea < -TOPO_EPSILON && eb < -TOPO_EPSILON && ec < -TOPO_EPSILON {
-            return false;
-        }
 
-        let pts = [other.a, other.b, other.c];
-        let mut hits = 0;
-        for i in 0..3 {
-            let s = pts[i];
-            let e = pts[(i + 1) % 3];
-            if let Some(hit) = plane.intersect_line(s, e, &mut JsVec3::default()) {
-                if hit.distance_to(e) > TOPO_EPSILON {
-                    hits += 1;
+        if plane1.normal.dot(plane2.normal).abs() > 1.0 - 1e-10 {
+            // Separating axes: each normal and edge, then the edges' crosses.
+            let axes = |t: Self| {
+                [
+                    t.get_normal(),
+                    JsVec3::default().sub_vectors(t.a, t.b),
+                    JsVec3::default().sub_vectors(t.b, t.c),
+                    JsVec3::default().sub_vectors(t.c, t.a),
+                ]
+            };
+            let bounds = |axis: JsVec3, t: Self| {
+                let mut min = f64::INFINITY;
+                let mut max = f64::NEG_INFINITY;
+                for p in [t.a, t.b, t.c] {
+                    let v = axis.dot(p);
+                    min = if v < min { v } else { min };
+                    max = if v > max { v } else { max };
+                }
+                (min, max)
+            };
+            let separated = |x: (f64, f64), y: (f64, f64)| x.0 > y.1 || y.0 > x.1;
+            let (axes1, axes2) = (axes(self), axes(other));
+            for axis in axes1 {
+                if separated(bounds(axis, self), bounds(axis, other)) {
+                    return false;
                 }
             }
+            for axis in axes2 {
+                if separated(bounds(axis, other), bounds(axis, self)) {
+                    return false;
+                }
+            }
+            for a1 in axes1 {
+                for a2 in axes2 {
+                    let axis = JsVec3::default().cross_vectors(a1, a2);
+                    if separated(bounds(axis, self), bounds(axis, other)) {
+                        return false;
+                    }
+                }
+            }
+            return true;
         }
-        hits >= 2 || coplanar
+
+        // three.js `Plane.intersectLine`.
+        let intersect_line = |plane: JsPlane, start: JsVec3, end: JsVec3| -> Option<JsVec3> {
+            let dir = JsVec3::default().sub_vectors(end, start);
+            let denominator = plane.normal.dot(dir);
+            if denominator == 0.0 {
+                return (plane.distance_to_point(start) == 0.0).then_some(start);
+            }
+            let t = -(start.dot(plane.normal) + plane.constant) / denominator;
+            if !(0.0..=1.0).contains(&t) {
+                return None;
+            }
+            Some(start.add_scaled_vector(dir, t))
+        };
+        // `triIntersectPlane`: the segment where `tri` crosses `plane`.
+        let tri_intersect_plane = |tri: Self, plane: JsPlane| -> (u32, JsLine3) {
+            let points = [tri.a, tri.b, tri.c];
+            let mut target = JsLine3::default();
+            let mut count = 0u32;
+            let mut start_point_intersection: i32 = -1;
+            for i in 0..3 {
+                let start = points[i];
+                let end = points[(i + 1) % 3];
+                let dir = JsVec3::default().sub_vectors(end, start);
+                let start_intersects = near_zero(plane.distance_to_point(start));
+                if near_zero(plane.normal.dot(dir)) && start_intersects {
+                    target = JsLine3 { start, end };
+                    count = 2;
+                    break;
+                }
+                let hit = intersect_line(plane, start, end);
+                let point = match (hit, start_intersects) {
+                    (Some(p), _) => Some(p),
+                    (None, true) => Some(start),
+                    (None, false) => None,
+                };
+                let Some(point) = point else { continue };
+                if near_zero(point.distance_to(end)) {
+                    continue;
+                }
+                if count <= 1 {
+                    if count == 1 {
+                        target.start = point;
+                    } else {
+                        target.end = point;
+                    }
+                    if start_intersects {
+                        start_point_intersection = count as i32;
+                    }
+                } else {
+                    if start_point_intersection == 1 {
+                        target.start = point;
+                    } else {
+                        target.end = point;
+                    }
+                    count = 2;
+                    break;
+                }
+                count += 1;
+                if count == 2 && start_point_intersection == -1 {
+                    break;
+                }
+            }
+            (count, target)
+        };
+
+        let (count1, edge1) = tri_intersect_plane(self, plane2);
+        if count1 == 1 && other.contains_point(edge1.end) {
+            return true;
+        } else if count1 != 2 {
+            return false;
+        }
+        let (count2, mut edge2) = tri_intersect_plane(other, plane1);
+        if count2 == 1 && self.contains_point(edge2.end) {
+            return true;
+        } else if count2 != 2 {
+            return false;
+        }
+        let dir1 = JsVec3::default().sub_vectors(edge1.end, edge1.start);
+        let dir2 = JsVec3::default().sub_vectors(edge2.end, edge2.start);
+        if dir1.dot(dir2) < 0.0 {
+            std::mem::swap(&mut edge2.start, &mut edge2.end);
+        }
+        let s1 = edge1.start.dot(dir1);
+        let e1 = edge1.end.dot(dir1);
+        let s2 = edge2.start.dot(dir1);
+        let e2 = edge2.end.dot(dir1);
+        let separated1 = e1 < s2;
+        let separated2 = s1 < e2;
+        !(s1 != e2 && s2 != e1 && separated1 == separated2)
     }
 }
 
-/// Mirrors `web/csg/core/utils/triangleUtils.js` `isTriDegenerate`.
+/// three-bvh-csg's `isTriDegenerate`: an angle, or an edge's squared length,
+/// under `eps`.
 pub fn is_tri_degenerate(tri: JsTriangle, eps: f64) -> bool {
     let ab = JsVec3::default().sub_vectors(tri.b, tri.a);
     let ac = JsVec3::default().sub_vectors(tri.c, tri.a);
@@ -529,31 +720,12 @@ pub fn is_tri_degenerate(tri: JsTriangle, eps: f64) -> bool {
     let angle2 = ab.angle_to(cb);
     let angle3 = std::f64::consts::PI - angle1 - angle2;
 
-    if angle1.abs() < eps
+    angle1.abs() < eps
         || angle2.abs() < eps
         || angle3.abs() < eps
         || tri.a.distance_to_squared(tri.b) < eps
         || tri.a.distance_to_squared(tri.c) < eps
         || tri.b.distance_to_squared(tri.c) < eps
-    {
-        return true;
-    }
-
-    // Cascade-drift tips can land at cos = 1 - 0.5ulp (same as the REF105
-    // precursor) but with ~100x smaller area. JS produces exact cos=1 for those
-    // tips and culls them; gate on both near-1 cos and ultra-thin area.
-    let denom = (ab.length_sq() * ac.length_sq()).sqrt();
-    if denom > 0.0 {
-        let cos = ab.dot(ac) / denom;
-        if (1.0 - cos).abs() < 1.12e-16 {
-            let cross = JsVec3::default().cross_vectors(ab, ac);
-            let area = 0.5 * cross.length();
-            if area < 5e-11 {
-                return true;
-            }
-        }
-    }
-    false
 }
 
 /// Barycentric triple in f64 (matches JS `getBarycoord`).

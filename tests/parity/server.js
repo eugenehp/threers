@@ -10,6 +10,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
 
 const port = process.argv[2] ? parseInt(process.argv[2], 10) : 8087;
+// `PKG_DIR=/some/dir`: serve /web/pkg/* from there instead, so a run can test
+// a wasm build without overwriting the shared web/pkg.
+const pkgDir = process.env.PKG_DIR ? path.resolve(process.env.PKG_DIR) : null;
 
 const types = {
     '.html': 'text/html; charset=utf-8',
@@ -44,8 +47,10 @@ http.createServer((req, res) => {
         res.end();
         return;
     }
-    const full = path.normalize(path.join(repoRoot, url));
-    if (!full.startsWith(repoRoot)) {
+    const fromPkg = pkgDir && url.startsWith('/web/pkg/');
+    const root = fromPkg ? pkgDir : repoRoot;
+    const full = path.normalize(fromPkg ? path.join(pkgDir, url.slice('/web/pkg/'.length)) : path.join(repoRoot, url));
+    if (!full.startsWith(root)) {
         res.writeHead(403, corsHeaders({ 'Content-Type': 'text/plain' }));
         res.end('forbidden');
         return;

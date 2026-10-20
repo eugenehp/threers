@@ -18,7 +18,7 @@ rlx = ["dep:rlx", "threers/rlx"]
 
 [dependencies]
 threers = { path = "../.." }
-rlx = { version = "0.2.14", optional = true, default-features = false, features = ["cpu", "tensor"] }
+rlx = { version = "0.2.17", optional = true, default-features = false, features = ["cpu", "tensor"] }
 wgpu = "30"
 bytemuck = { version = "1.16", features = ["derive"] }
 

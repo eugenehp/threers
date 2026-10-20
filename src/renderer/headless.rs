@@ -409,7 +409,12 @@ impl HeadlessRenderer {
             render_height,
         );
         renderer.set_taa(config.taa);
+        // Viewport and scissor rectangles are given in output pixels; the
+        // supersampled target is `ss` device pixels to each of them.
+        renderer.set_pixel_ratio(ss as f32);
         let target = RenderTarget::new(&device, render_width, render_height, config.color_format);
+        // The headless image is the picture: tone-mapped like a canvas.
+        target.set_presents(true);
 
         Ok(Self {
             device,
@@ -641,6 +646,35 @@ impl HeadlessRenderer {
         self.renderer.set_jitter_override(None);
         self.renderer.set_taa(was_taa);
         self.accum_ready = self.resolve.is_some();
+    }
+
+    /// Fill the offscreen target with `color` — the scissor rectangle when the
+    /// renderer's scissor test is on, all of it otherwise. See
+    /// [`Renderer::clear`].
+    pub fn clear(&mut self, color: crate::math::Color, alpha: f32) {
+        self.accum_ready = false;
+        self.renderer.clear_render_target(&self.target, color, alpha);
+    }
+
+    /// Where [`marks`](crate::marks) draw over the frame [`render`](Self::render)
+    /// just produced, depth-testing against it. Read the result back with
+    /// [`read_rgba`](Self::read_rgba) as usual.
+    pub fn mark_target(&self) -> crate::marks::MarkTarget<'_> {
+        match self.renderer.overlay_attachments() {
+            (Some(color), depth, samples) if self.renderer.msaa() > 1 => crate::marks::MarkTarget {
+                color,
+                resolve: Some(&self.target.color_view),
+                depth: Some(depth),
+                format: self.target.format,
+                samples,
+            },
+            _ => crate::marks::MarkTarget::render_target(&self.target),
+        }
+    }
+
+    /// The target frames are drawn into.
+    pub fn target(&self) -> &RenderTarget {
+        &self.target
     }
 
     /// Render, then read the target back as tightly-packed RGBA8 (row-major,
@@ -1472,6 +1506,13 @@ impl HeadlessRenderer {
         let (near, far) = self.renderer.camera_planes();
         if let Some((focus, range, radius)) = self.dof_cfg {
             pack.set_dof(&self.queue, focus, range, radius, near, far);
+        }
+        // Depth of field, motion blur and occlusion all read the frame's
+        // depth, which `set_reversed_z` stores reversed.
+        let reversed = self.renderer.reversed_z();
+        pack.set_reversed_depth(&self.queue, reversed);
+        if let Some(a) = self.ssao.as_ref() {
+            a.set_reversed_depth(&self.queue, reversed);
         }
         // Every frame, from the camera that actually drew it: the clip planes
         // and the lens can both change between frames, and occlusion built on

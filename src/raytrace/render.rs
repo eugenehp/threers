@@ -662,7 +662,10 @@ impl RaytraceRenderer {
     pub fn prepare_if_changed(&mut self, scene: &mut Scene, camera: &dyn Camera) -> bool {
         let fp = SceneFingerprint::of(scene, &self.settings);
         let layers = camera.layers();
-        if self.scene_fingerprint == Some(fp) && self.scene.is_some() {
+        // A scene with sprites was flattened facing the old camera: their
+        // billboards have to turn with it, so it rebuilds.
+        let camera_dependent = self.scene.as_ref().is_some_and(|s| s.camera_dependent);
+        if self.scene_fingerprint == Some(fp) && self.scene.is_some() && !camera_dependent {
             self.update_camera(scene, camera);
             return false;
         }
@@ -672,7 +675,7 @@ impl RaytraceRenderer {
     }
 
     fn rebuild_scene(&mut self, scene: &mut Scene, camera: &dyn Camera, layers: Layers) {
-        let flat = RaytraceScene::build_for_layers(scene, &self.settings, layers);
+        let flat = RaytraceScene::build_for_camera(scene, &self.settings, layers, Some(camera));
         self.camera = Some(self.build_camera(camera, &flat));
         self.scene = Some(flat);
         self.film.clear();

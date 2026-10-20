@@ -38,17 +38,9 @@ export function applyOrbitState(ctx, state) {
     if (!ctx?.cam || !state?.position || !state?.target) return false;
     window.__parityOrbitApplying = true;
     try {
-        if (ctx.side === 'threers') {
-            const { cam, orbit } = ctx;
-            cam.position.set(state.position.x, state.position.y, state.position.z);
-            cam._lookAt.set(state.target.x, state.target.y, state.target.z);
-            cam._w.setPosition(state.position.x, state.position.y, state.position.z);
-            cam._w.lookAt(state.target.x, state.target.y, state.target.z);
-            if (orbit?.resetFromCamera) orbit.resetFromCamera();
-            if (orbit?._syncFromWasm) orbit._syncFromWasm();
-            if (typeof ctx.render === 'function') ctx.render();
-            return true;
-        }
+        // Both sides through three.js's public camera and OrbitControls API:
+        // the shim mirrors the camera's own position and orientation into wasm
+        // at each render, so writing the wasm camera directly is overwritten.
         const cam = ctx.orbit?.object || ctx.cam;
         const orbit = ctx.orbit;
         if (!orbit?.target) return false;

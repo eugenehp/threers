@@ -22,19 +22,27 @@ crate-type = ["cdylib"]
 path = "src/lib.rs"
 
 [features]
-default = ["headless"]
+default = ["headless", "usd"]
 # wgpu headless renderer (needs a GPU / wgpu backend on the host).
 headless = []
 # Rigid-body physics (threers-physics).
 physics = ["dep:threers-physics"]
 # Tweens / springs / cinematic helpers.
 animation = ["dep:threers-animation"]
+# `.usda` / `.usdc` / `.usdz` in `Scene.load` (pure Rust; compile time only).
+usd = ["threers/usd"]
 
 [dependencies]
 threers = { path = "../..", version = "0.0.6" }
 threers-physics = { path = "../threers-physics", version = "0.0.2", optional = true }
 threers-animation = { path = "../threers-animation", version = "0.0.1", optional = true, default-features = false }
 pyo3 = { version = "0.23", features = ["extension-module", "abi3-py39"] }
+
+# `add_extension_module_link_args`: on macOS an extension module leaves the
+# Python symbols for the interpreter to supply at load time, which maturin
+# arranges and a plain `cargo build --workspace` does not.
+[build-dependencies]
+pyo3-build-config = "0.23"
 
 [package.metadata.maturin]
 name = "threers"

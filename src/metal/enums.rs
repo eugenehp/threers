@@ -186,6 +186,8 @@ pub mod blend_factor {
     use super::NSUInteger;
     pub const ZERO: NSUInteger = 0;
     pub const ONE: NSUInteger = 1;
+    pub const SOURCE_COLOR: NSUInteger = 2;
+    pub const ONE_MINUS_SOURCE_COLOR: NSUInteger = 3;
     pub const SOURCE_ALPHA: NSUInteger = 4;
     pub const ONE_MINUS_SOURCE_ALPHA: NSUInteger = 5;
 }
@@ -276,6 +278,17 @@ pub struct MTLViewport {
     pub height: f64,
     pub znear: f64,
     pub zfar: f64,
+}
+
+/// `MTLScissorRect` — top-left origin, in attachment pixels, and it must lie
+/// inside the attachment.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(C)]
+pub struct MTLScissorRect {
+    pub x: NSUInteger,
+    pub y: NSUInteger,
+    pub width: NSUInteger,
+    pub height: NSUInteger,
 }
 
 /// `NSRange`.

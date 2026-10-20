@@ -11,6 +11,7 @@ mod clip;
 mod interpolant;
 mod mixer;
 mod track;
+pub mod three;
 
 pub use action::{AnimationAction, LoopMode};
 pub use clip::AnimationClip;

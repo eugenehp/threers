@@ -14,28 +14,45 @@ impl PlaneGeometry {
         width_segments: usize,
         height_segments: usize,
     ) -> BufferGeometry {
-        let width_half = width * 0.5;
-        let height_half = height * 0.5;
+        Self::from_f64(
+            super::js_number(width),
+            super::js_number(height),
+            width_segments,
+            height_segments,
+        )
+    }
+
+    /// [`with_segments`](Self::with_segments) with JavaScript's numbers, as
+    /// three.js takes them.
+    pub fn from_f64(
+        width: f64,
+        height: f64,
+        width_segments: usize,
+        height_segments: usize,
+    ) -> BufferGeometry {
+        // In f64 from the caller's numbers, rounded once, as three.js does.
+        let width_half = width / 2.0;
+        let height_half = height / 2.0;
         let grid_x = width_segments.max(1);
         let grid_y = height_segments.max(1);
         let grid_x1 = grid_x + 1;
         let grid_y1 = grid_y + 1;
-        let segment_width = width / grid_x as f32;
-        let segment_height = height / grid_y as f32;
+        let segment_width = width / grid_x as f64;
+        let segment_height = height / grid_y as f64;
 
         let mut positions = Vec::with_capacity(grid_x1 * grid_y1 * 3);
         let mut normals = Vec::with_capacity(grid_x1 * grid_y1 * 3);
         let mut uvs = Vec::with_capacity(grid_x1 * grid_y1 * 2);
 
         for iy in 0..grid_y1 {
-            let y = iy as f32 * segment_height - height_half;
+            let y = iy as f64 * segment_height - height_half;
             for ix in 0..grid_x1 {
-                let x = ix as f32 * segment_width - width_half;
+                let x = ix as f64 * segment_width - width_half;
                 // three.js pushes (x, -y, 0) — flips grid Y into world +Y.
-                positions.extend_from_slice(&[x, -y, 0.0]);
+                positions.extend_from_slice(&[x as f32, -y as f32, 0.0]);
                 normals.extend_from_slice(&[0.0, 0.0, 1.0]);
-                uvs.push(ix as f32 / grid_x as f32);
-                uvs.push(1.0 - (iy as f32 / grid_y as f32));
+                uvs.push((ix as f64 / grid_x as f64) as f32);
+                uvs.push((1.0 - iy as f64 / grid_y as f64) as f32);
             }
         }
 
@@ -55,6 +72,8 @@ impl PlaneGeometry {
         geom.set_attribute("normal", BufferAttribute::new(normals, 3));
         geom.set_attribute("uv", BufferAttribute::new(uvs, 2));
         geom.set_index(indices);
+        // Every cell is one quad: its two triangles are consecutive.
+        geom.set_polygons(vec![2; grid_x * grid_y]);
         #[cfg(feature = "brep")]
         crate::brep::primitives::tag_xy_plane(&mut geom);
         geom

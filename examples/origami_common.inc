@@ -33,6 +33,8 @@ fn origami_lights(scene: &mut Scene) {
         camera_size: 28.0,
         camera_near: 0.5,
         camera_far: 80.0,
+        radius: 1.0,
+        ..Default::default()
     };
     let mut key_obj = Object3D::light(key);
     key_obj.position = Vector3::new(6.5, 14.0, 7.0);

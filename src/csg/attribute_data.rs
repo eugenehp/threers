@@ -14,10 +14,6 @@ impl TypedArray {
         }
     }
 
-    pub fn clear(&mut self) {
-        self.data.clear();
-    }
-
     pub fn push_values(&mut self, values: &[f32]) {
         self.data.extend_from_slice(values);
     }
@@ -38,15 +34,6 @@ impl TypedAttributeData {
         s
     }
 
-    pub fn clear(&mut self) {
-        self.group_count = 0;
-        for set in &mut self.group_attributes {
-            for arr in set.values_mut() {
-                arr.clear();
-            }
-        }
-    }
-
     pub fn initialize_array(&mut self, name: &str, item_size: usize) {
         for set in &mut self.group_attributes {
             set.entry(name.to_string())
@@ -65,26 +52,5 @@ impl TypedAttributeData {
         }
         self.group_count = self.group_count.max(index + 1);
         &mut self.group_attributes[index]
-    }
-
-    #[cfg(test)]
-    pub fn get_count(&self, index: usize) -> usize {
-        if self.group_count <= index {
-            return 0;
-        }
-        self.group_attributes[index]
-            .get("position")
-            .map(|p| p.data.len() / p.item_size)
-            .unwrap_or(0)
-    }
-
-    pub fn get_total_length(&self, name: &str) -> usize {
-        let mut len = 0;
-        for i in 0..self.group_count {
-            if let Some(arr) = self.group_attributes[i].get(name) {
-                len += arr.data.len();
-            }
-        }
-        len
     }
 }

@@ -46,6 +46,8 @@ pub struct Ssao {
     tex: wgpu::Texture,
     view: wgpu::TextureView,
     size: (u32, u32),
+    /// 1 when the depth is reversed; kept so `set_range` does not drop it.
+    reversed: std::cell::Cell<f32>,
 }
 
 /// The same pass, recorded either way.
@@ -317,6 +319,7 @@ impl Ssao {
             view: tex.create_view(&Default::default()),
             tex,
             size: (dw, dh),
+            reversed: std::cell::Cell::new(0.0),
         })
     }
 
@@ -335,8 +338,25 @@ impl Ssao {
         tan_half_fov: f32,
         aspect: f32,
     ) {
-        let params = [near, far, radius, strength, tan_half_fov, aspect, 0.0, 0.0];
+        let params = [
+            near,
+            far,
+            radius,
+            strength,
+            tan_half_fov,
+            aspect,
+            self.reversed.get(),
+            0.0,
+        ];
         queue.write_buffer(&self.ubo, 0, bytemuck::cast_slice(&params));
+    }
+
+    /// Read the depth as reversed — what
+    /// [`Renderer::set_reversed_z`](crate::Renderer::set_reversed_z) renders.
+    pub fn set_reversed_depth(&self, queue: &wgpu::Queue, on: bool) {
+        let v = if on { 1.0f32 } else { 0.0 };
+        self.reversed.set(v);
+        queue.write_buffer(&self.ubo, 24, bytemuck::bytes_of(&v));
     }
 
     pub fn record(&self, encoder: &mut wgpu::CommandEncoder) {
@@ -408,7 +428,9 @@ struct P {
 
 // Depth-buffer values are hyperbolic: the same numeric step is millimetres up
 // close and kilometres far away. Everything below works in linear view depth.
-fn linear_depth(d : f32) -> f32 {
+fn linear_depth(raw : f32) -> f32 {
+    // pad0: the depth is reversed (`Renderer::set_reversed_z`).
+    let d = select(raw, 1.0 - raw, p.pad0 > 0.5);
     if (d >= 1.0) { return p.far; }
     return (p.near * p.far) / max(p.far - d * (p.far - p.near), 1e-6);
 }
@@ -497,7 +519,9 @@ struct P {
 
 // Depth-buffer values are hyperbolic: the same numeric step is millimetres up
 // close and kilometres far away. Everything below works in linear view depth.
-fn linear_depth(d : f32) -> f32 {
+fn linear_depth(raw : f32) -> f32 {
+    // pad0: the depth is reversed (`Renderer::set_reversed_z`).
+    let d = select(raw, 1.0 - raw, p.pad0 > 0.5);
     if (d >= 1.0) { return p.far; }
     return (p.near * p.far) / max(p.far - d * (p.far - p.near), 1e-6);
 }

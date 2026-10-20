@@ -16,7 +16,7 @@ cargo run --example scad2stl --features openscad -- model.scad out.glb
 ```
 
 ```rust
-// Cargo.toml: threers = { version = "0.0.5", features = ["openscad"] }
+// Cargo.toml: threers = { version = "0.0.6", features = ["openscad"] }
 use threers::{cube, cylinder, sphere, scad, parse_scad};
 
 // (a) Rust DSL — fluent builder + the `scad!` macro:

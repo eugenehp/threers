@@ -6,8 +6,8 @@ PyPI (not crates.io). See also [`docs/bindings.md`](bindings.md).
 | Artifact | Version | Registry | Arch notes |
 |---|---|---|---|
 | `threers` | 0.0.6 | crates.io | source; consumers compile |
-| `threers-physics` | 0.0.1 | crates.io | first release |
-| `threers-probe` | 0.0.1 | crates.io | first release |
+| `threers-physics` | 0.0.2 | crates.io | 0.0.1 is on the index |
+| `threers-probe` | 0.0.2 | crates.io | 0.0.1 is on the index |
 | `threers` (npm ESM) | 0.0.6 | npm / Deno | **mini** (default) + **full** wasm entries ([`crates/threers-js`](../crates/threers-js)) |
 | `threers-node` | 0.0.6 | npm | per-arch `.node` via `@threers/node-*` ([`crates/threers-node`](../crates/threers-node)) |
 | `threers` (PyPI) | 0.0.6 | PyPI | per-platform wheels ([`crates/threers-py`](../crates/threers-py)) |

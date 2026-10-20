@@ -16,7 +16,7 @@
 //! and nothing else.
 //!
 //! ```toml
-//! threers = { version = "0.0.5", features = ["usd"] }
+//! threers = { version = "0.0.6", features = ["usd"] }
 //! ```
 //!
 //! ```no_run

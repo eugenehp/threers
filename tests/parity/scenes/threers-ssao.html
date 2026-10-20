@@ -37,7 +37,10 @@ const errEl = document.getElementById('err');
 
         const ssao = new THREE.SSAOPass(scene, cam, 800, 600);
         ssao.kernelRadius = 8;
-        ssao.renderAndApply(r, scene, cam);
+        const composer = new THREE.EffectComposer(r);
+        composer.addPass(new THREE.RenderPass(scene, cam));
+        composer.addPass(ssao);
+        composer.render();
 
         await new Promise(rs => requestAnimationFrame(() => rs()));
         document.body.dataset.ready = 'true';

@@ -75,6 +75,16 @@ pub struct RaytraceSettings {
     /// These do not count as bounces — foliage cards would exhaust a path
     /// budget on the first leaf otherwise.
     pub transparent_max_bounces: u32,
+    /// Per-kind limits inside `max_bounces`, as Cycles has them: how many
+    /// times a path may scatter off a diffuse lobe, off a glossy one (mirror,
+    /// rough specular, clear coat), and *through* a surface. A solid pane of
+    /// glass is two transmissions, in and out, so glass seen through glass
+    /// through glass needs six; too few and the far panes go black. All
+    /// unlimited (`u32::MAX`) by default, which leaves `max_bounces` alone in
+    /// charge.
+    pub diffuse_max_bounces: u32,
+    pub glossy_max_bounces: u32,
+    pub transmission_max_bounces: u32,
     /// Ceiling on the radiance a single *indirect* sample may contribute. A
     /// path that finds a bright light through a near-specular chain lands a
     /// value thousands of times the mean, and one such sample is a permanent
@@ -157,6 +167,9 @@ impl Default for RaytraceSettings {
             max_bounces: 6,
             min_bounces: 3,
             transparent_max_bounces: 8,
+            diffuse_max_bounces: u32::MAX,
+            glossy_max_bounces: u32::MAX,
+            transmission_max_bounces: u32::MAX,
             clamp_indirect: 10.0,
             clamp_direct: 0.0,
             ray_epsilon: 1e-4,
@@ -213,6 +226,15 @@ impl RaytraceSettings {
 
     pub fn with_samples(mut self, n: u32) -> Self {
         self.samples_per_pixel = n.max(1);
+        self
+    }
+
+    /// Per-kind bounce limits: diffuse, glossy and transmission (see
+    /// [`transmission_max_bounces`](Self::transmission_max_bounces)).
+    pub fn with_bounce_limits(mut self, diffuse: u32, glossy: u32, transmission: u32) -> Self {
+        self.diffuse_max_bounces = diffuse;
+        self.glossy_max_bounces = glossy;
+        self.transmission_max_bounces = transmission;
         self
     }
 

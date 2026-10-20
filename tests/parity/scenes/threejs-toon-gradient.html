@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><style>body{margin:0;background:#181822}canvas{display:block}</style></head>
+<body><canvas id="c" width="800" height="600"></canvas>
+<script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.165.0/build/three.module.js"}}</script>
+<script type="module">
+import * as THREE from 'three';
+const canvas = document.getElementById('c');
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x181822);
+scene.add(new THREE.AmbientLight(0xffffff, 0.2));
+const dl = new THREE.DirectionalLight(0xffffff, 2.0);
+dl.position.set(2, 3, 4);
+scene.add(dl);
+const fill = new THREE.DirectionalLight(0x88aaff, 0.8);
+fill.position.set(-3, -1, 2);
+scene.add(fill);
+// A four-band colour ramp, read nearest — three.js's toon example style.
+const ramp = new THREE.DataTexture(new Uint8Array([
+    40, 10, 30, 255,  120, 40, 80, 255,  220, 120, 140, 255,  255, 235, 220, 255,
+]), 4, 1);
+ramp.minFilter = THREE.NearestFilter;
+ramp.magFilter = THREE.NearestFilter;
+ramp.needsUpdate = true;
+// A five-step grey ramp, linear-filtered, on the second.
+const grey = new THREE.DataTexture(new Uint8Array([
+    0, 0, 0, 255,  64, 64, 64, 255,  128, 128, 128, 255,  192, 192, 192, 255,  255, 255, 255, 255,
+]), 5, 1);
+grey.minFilter = THREE.LinearFilter;
+grey.magFilter = THREE.LinearFilter;
+grey.needsUpdate = true;
+const a = new THREE.Mesh(new THREE.SphereGeometry(0.8, 48, 24),
+    new THREE.MeshToonMaterial({ color: 0xffffff, gradientMap: ramp }));
+a.position.x = -0.95;
+scene.add(a);
+const b = new THREE.Mesh(new THREE.TorusKnotGeometry(0.45, 0.16, 128, 16),
+    new THREE.MeshToonMaterial({ color: 0x66ccff, gradientMap: grey }));
+b.position.x = 0.95;
+scene.add(b);
+const cam = new THREE.PerspectiveCamera(45, 800/600, 0.1, 100);
+cam.position.set(0, 0, 3.5); cam.lookAt(0, 0, 0);
+const r = new THREE.WebGLRenderer({ canvas, antialias: false });
+r.setSize(800, 600, false); r.setPixelRatio(1);
+r.render(scene, cam);
+document.body.dataset.ready = 'true';
+</script></body></html>

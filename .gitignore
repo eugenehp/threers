@@ -110,3 +110,14 @@ Thumbs.db
 # Probe demo: generated Cornell planes + copied hops/NRC weights
 /web/assets/probe/
 webdriver.json
+
+# Staged static site (`node web/scripts/stage-site.mjs`).
+/site/
+# Example and build output that was committed by accident: the path tracer's
+# autosave (16 MB, `examples/viewport_path_trace.rs`) and the Python extension
+# maturin builds in place (9 MB, rebuilt on every `maturin develop`). Ignoring
+# does not untrack them; `git rm --cached` both.
+/viewport_path_trace.rtfc
+*.rtfc
+/crates/threers-py/python/threers/_native*.so
+/crates/threers-py/python/threers/_native*.pyd

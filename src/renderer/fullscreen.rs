@@ -70,11 +70,28 @@ pub enum Load {
 /// Carries its size, because almost every pass needs `1 / resolution` and
 /// deriving it from the texture at each use is how a pass ends up sampling at
 /// the wrong scale after a resize.
+/// Hands out [`Fbo::id`]. Monotonic and never reused, so a stale cache entry
+/// cannot be matched by a later target that happens to land in the same
+/// place.
+fn next_fbo_id() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
 pub struct Fbo {
     pub texture: wgpu::Texture,
     pub view: wgpu::TextureView,
     pub width: u32,
     pub height: u32,
+    /// Distinct for every target ever made, so a cache can be keyed on which
+    /// textures a bind group was built from.
+    ///
+    /// The address of the `Fbo` will not do: a [`DoubleFbo`] swaps its two by
+    /// moving them, so the same address holds a different texture on
+    /// alternate frames — which is exactly the case a cache has to tell
+    /// apart.
+    pub id: u64,
 }
 
 impl Fbo {
@@ -109,6 +126,7 @@ impl Fbo {
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         Self {
+            id: next_fbo_id(),
             texture,
             view,
             width,
@@ -292,7 +310,42 @@ pub fn draw(
     pipeline: &wgpu::RenderPipeline,
     bind_group: &wgpu::BindGroup,
 ) {
-    let mut pass = begin(encoder, view, load);
+    draw_timed(encoder, view, load, pipeline, bind_group, None);
+}
+
+/// [`draw`], with a timestamp written at one end of the pass.
+///
+/// Hardware without `TIMESTAMP_QUERY_INSIDE_ENCODERS` can only write the
+/// GPU's clock at a pass boundary, so timing a stage made of several passes
+/// means marking the first pass of each — see
+/// [`GpuTimer::mark`](super::gpu_timer::GpuTimer::mark).
+pub fn draw_timed(
+    encoder: &mut wgpu::CommandEncoder,
+    view: &wgpu::TextureView,
+    load: Load,
+    pipeline: &wgpu::RenderPipeline,
+    bind_group: &wgpu::BindGroup,
+    timestamps: Option<wgpu::RenderPassTimestampWrites<'_>>,
+) {
+    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("fullscreen"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view,
+            depth_slice: None,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: match load {
+                    Load::Clear => wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    Load::Keep => wgpu::LoadOp::Load,
+                },
+                store: wgpu::StoreOp::Store,
+            },
+        })],
+        depth_stencil_attachment: None,
+        timestamp_writes: timestamps,
+        occlusion_query_set: None,
+        multiview_mask: None,
+    });
     pass.set_pipeline(pipeline);
     pass.set_bind_group(0, bind_group, &[]);
     pass.draw(0..3, 0..1);

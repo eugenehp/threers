@@ -27,11 +27,10 @@ const errEl = document.getElementById('err');
         const ssao = new THREE.SSAOPass(scene, cam, 800, 600);
         ssao.kernelRadius = 8;
         ssao.output = THREE.SSAOPass.OUTPUT.Blur;
-        const sceneRT = new THREE.WebGLRenderTarget(800, 600);
-        r.setRenderTarget(sceneRT);
-        r.render(scene, cam);
-        r.setRenderTarget(null);
-        ssao.apply(r, sceneRT);
+        const composer = new THREE.EffectComposer(r);
+        composer.addPass(new THREE.RenderPass(scene, cam));
+        composer.addPass(ssao);
+        composer.render();
         await new Promise(rs => requestAnimationFrame(() => rs()));
         document.body.dataset.ready = 'true';
     } catch (e) {

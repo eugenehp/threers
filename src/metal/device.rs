@@ -226,7 +226,7 @@ impl std::fmt::Debug for MetalDevice {
 /// diagnostics preserved on failure — an MSL error message names the line, and
 /// throwing it away in favour of "compilation failed" would make every shader
 /// edit a guessing game.
-unsafe fn compile_library(device: Id, source: &str) -> Result<Owned, MetalError> {
+pub(crate) unsafe fn compile_library(device: Id, source: &str) -> Result<Owned, MetalError> {
     let src = nsstring(source);
     if src.is_null() {
         return Err(MetalError::ShaderCompilation(

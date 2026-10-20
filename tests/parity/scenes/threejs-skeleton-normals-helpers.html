@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><style>body{margin:0;background:#101418}canvas{display:block}</style></head>
+<body><canvas id="c" width="800" height="600"></canvas>
+<script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.165.0/build/three.module.js","three/addons/":"https://unpkg.com/three@0.165.0/examples/jsm/"}}</script>
+<script type="module">
+import * as THREE_ from 'three';
+import { VertexNormalsHelper } from 'three/addons/helpers/VertexNormalsHelper.js';
+const THREE = { ...THREE_, VertexNormalsHelper };
+const scene = new THREE.Scene(); scene.background = new THREE.Color(0x101418);
+const root = new THREE.Group(); root.position.set(-1, -0.8, 0);
+const b0 = new THREE.Bone(); b0.position.set(0, 0.5, 0);
+const b1 = new THREE.Bone(); b1.position.set(0, 0.7, 0); b1.rotation.z = 0.5;
+const b2 = new THREE.Bone(); b2.position.set(0, 0.6, 0); b2.rotation.z = -0.8;
+const b3 = new THREE.Bone(); b3.position.set(0.4, 0.3, 0);
+b0.add(b1); b1.add(b2); b0.add(b3); root.add(b0); scene.add(root);
+scene.add(new THREE.SkeletonHelper(root));
+const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.6, 10, 6), new THREE.MeshBasicMaterial({ color: 0x225588 }));
+mesh.position.set(0.9, 0.2, 0); scene.add(mesh); mesh.updateMatrixWorld(true);
+scene.add(new THREE.VertexNormalsHelper(mesh, 0.25, 0xff3366));
+const cam = new THREE.PerspectiveCamera(50, 800/600, 0.1, 100);
+cam.position.set(0, 0.5, 4); cam.lookAt(0, 0.2, 0);
+const r = new THREE.WebGLRenderer({ canvas: document.getElementById('c'), antialias: false });
+r.setSize(800, 600, false); r.setPixelRatio(1);
+r.render(scene, cam);
+document.body.dataset.ready = 'true';
+</script></body></html>

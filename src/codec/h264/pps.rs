@@ -26,9 +26,20 @@ pub fn write_pps_deblock_control(cabac: bool) -> Vec<u8> {
     write_pps_inner(true, cabac)
 }
 
+/// [`write_pps_deblock_control`] under another `pic_parameter_set_id`, so
+/// a stream can carry two — CABAC for its intra pictures, CAVLC for the
+/// inter ones, as [`crate::codec::h264::InterEncoder`] does.
+pub fn write_pps_with_id(pps_id: u32, cabac: bool) -> Vec<u8> {
+    write_pps_inner_id(pps_id, true, cabac)
+}
+
 fn write_pps_inner(deblock_control: bool, cabac: bool) -> Vec<u8> {
+    write_pps_inner_id(0, deblock_control, cabac)
+}
+
+fn write_pps_inner_id(pps_id: u32, deblock_control: bool, cabac: bool) -> Vec<u8> {
     let mut w = BitWriter::new();
-    w.write_ue(0); // pic_parameter_set_id
+    w.write_ue(pps_id); // pic_parameter_set_id
     w.write_ue(0); // seq_parameter_set_id
     w.flag(cabac); // entropy_coding_mode_flag
     w.flag(false); // bottom_field_pic_order_in_frame_present_flag

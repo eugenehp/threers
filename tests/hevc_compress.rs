@@ -24,7 +24,11 @@ fn tmp(name: &str) -> std::path::PathBuf {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    std::env::temp_dir().join(format!("threers_c_{}_{n}_{name}", std::process::id()))
+    // A counter as well as the clock: on macOS the clock ticks in
+    // microseconds, and parallel tests asking within one would share files.
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let k = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    std::env::temp_dir().join(format!("threers_c_{}_{n}_{k}_{name}", std::process::id()))
 }
 
 /// High-contrast content (sharp edges + gradient) — exercises DC/H/V boundary

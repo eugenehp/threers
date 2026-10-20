@@ -5,8 +5,17 @@
 //! are pure Rust with no dependencies:
 //! - `geometry_to_obj` — Wavefront **OBJ** (text; positions, normals, faces).
 //! - `geometry_to_off` — Geomview **OFF** (text).
+//! - `geometry_to_ply` — Stanford **PLY** (ASCII).
 //! - `geometry_to_3mf` — **3MF** (a proper OPC/ZIP package a slicer can open).
 //! - `geometry_to_glb` — binary **glTF 2.0** (`.glb`; single self-contained file).
+//!
+//! OBJ, OFF and PLY write a face per polygon the geometry remembers (quads as
+//! quads, see [`BufferGeometry::faces`]); 3MF, STL and glTF are triangle-only
+//! formats and write triangles.
+//!
+//! OBJ, PLY and STL are thin wrappers over the general writers in
+//! [`crate::exporters`] — the same code the browser's `OBJExporter`,
+//! `PLYExporter` and `STLExporter` run — with the compact `f32` number format.
 //!
 //! FreeCAD `.FCStd` lives in [`crate::openscad::freecad`].
 //!
@@ -42,46 +51,86 @@ fn tri_data(g: &BufferGeometry) -> Option<TriData> {
     Some((verts, normals, indices))
 }
 
-/// Export as **Wavefront OBJ** (text). Emits `v`, optional `vn`, and 1-indexed
-/// triangle `f` lines (with `v//vn` references when normals are present).
+/// The faces a polygon-capable format writes: [`BufferGeometry::faces`] —
+/// one face per polygon the geometry remembers and whose outline is
+/// recoverable, its triangles otherwise — the same rule the USD exporter
+/// follows.
+fn faces(g: &BufferGeometry) -> Vec<Vec<u32>> {
+    g.faces().collect()
+}
+
+/// Export as **Wavefront OBJ** (text). Emits `v`, optional `vt` and `vn`, and
+/// 1-indexed `f` lines (`v/vt/vn`, `v//vn` or `v` as available).
+///
+/// A face is written per polygon the geometry remembers
+/// ([`BufferGeometry::polygons`]), with as many corners as it had — a quad is
+/// one `f` line of four — and per triangle where there is no grouping or a
+/// polygon's outline cannot be recovered. [`crate::ObjLoader`] reads the
+/// grouping back.
 pub fn geometry_to_obj(g: &BufferGeometry) -> String {
-    let Some((verts, normals, indices)) = tri_data(g) else {
+    if tri_data(g).is_none() {
         return String::new();
+    }
+    let mut s = String::from("# threers OBJ export\n");
+    s.push_str(&crate::exporters::write_obj(
+        &[crate::exporters::ExportObject::mesh("model", g.clone())],
+        &crate::exporters::ObjOptions {
+            polygons: true,
+            numbers: crate::exporters::NumberFormat::Float32,
+        },
+    ));
+    s
+}
+
+/// Export as **Geomview OFF** (text), one face per polygon as
+/// [`geometry_to_obj`] does.
+pub fn geometry_to_off(g: &BufferGeometry) -> String {
+    let Some((verts, _, _)) = tri_data(g) else {
+        return String::from("OFF\n0 0 0\n");
     };
-    let mut s = String::from("# threers OBJ export\no model\n");
+    let faces = faces(g);
+    let mut s = format!("OFF\n{} {} 0\n", verts.len(), faces.len());
     for v in &verts {
-        s.push_str(&format!("v {} {} {}\n", v[0], v[1], v[2]));
+        s.push_str(&format!("{} {} {}\n", v[0], v[1], v[2]));
     }
-    if let Some(n) = &normals {
-        for v in n {
-            s.push_str(&format!("vn {} {} {}\n", v[0], v[1], v[2]));
+    for face in &faces {
+        s.push_str(&face.len().to_string());
+        for i in face {
+            s.push_str(&format!(" {i}"));
         }
-    }
-    for t in indices.chunks_exact(3) {
-        let (a, b, c) = (t[0] + 1, t[1] + 1, t[2] + 1); // OBJ is 1-indexed
-        if normals.is_some() {
-            s.push_str(&format!("f {a}//{a} {b}//{b} {c}//{c}\n"));
-        } else {
-            s.push_str(&format!("f {a} {b} {c}\n"));
-        }
+        s.push('\n');
     }
     s
 }
 
-/// Export as **Geomview OFF** (text).
-pub fn geometry_to_off(g: &BufferGeometry) -> String {
-    let Some((verts, _, indices)) = tri_data(g) else {
-        return String::from("OFF\n0 0 0\n");
-    };
-    let nf = indices.len() / 3;
-    let mut s = format!("OFF\n{} {} 0\n", verts.len(), nf);
-    for v in &verts {
-        s.push_str(&format!("{} {} {}\n", v[0], v[1], v[2]));
-    }
-    for t in indices.chunks_exact(3) {
-        s.push_str(&format!("3 {} {} {}\n", t[0], t[1], t[2]));
-    }
-    s
+/// Export as ASCII **Stanford PLY**: `x y z`, `nx ny nz` and `s t` per vertex
+/// where the geometry has one per vertex, and one `vertex_indices` list per
+/// polygon as [`geometry_to_obj`] does. [`crate::PlyLoader`] reads it back,
+/// grouping included.
+pub fn geometry_to_ply(g: &BufferGeometry) -> String {
+    let bytes = crate::exporters::write_ply(
+        &[crate::exporters::ExportObject::mesh("model", g.clone())],
+        &crate::exporters::PlyOptions {
+            polygons: true,
+            numbers: crate::exporters::NumberFormat::Float32,
+            comment: Some("threers PLY export".into()),
+            ..Default::default()
+        },
+    );
+    // `None` only for an unindexed vertex count that is not a whole number
+    // of triangles: write the vertices alone, which is still a valid PLY.
+    let bytes = bytes.or_else(|| {
+        crate::exporters::write_ply(
+            &[crate::exporters::ExportObject::mesh("model", g.clone())],
+            &crate::exporters::PlyOptions {
+                exclude_attributes: vec!["index".into()],
+                numbers: crate::exporters::NumberFormat::Float32,
+                comment: Some("threers PLY export".into()),
+                ..Default::default()
+            },
+        )
+    });
+    String::from_utf8(bytes.unwrap_or_default()).expect("ASCII PLY is UTF-8")
 }
 
 // --- 3MF (OPC/ZIP package) --------------------------------------------------
@@ -542,6 +591,230 @@ mod tests {
         assert_eq!(n_out, n_in, "obj triangle count changed on round-trip");
     }
 
+    /// A geometry from corner loops, fanned from corner 0 as every loader
+    /// here does, with the grouping set.
+    fn from_faces(points: &[[f32; 3]], faces: &[&[u32]]) -> BufferGeometry {
+        let mut index = Vec::new();
+        let mut counts = Vec::new();
+        for f in faces {
+            for k in 1..f.len() - 1 {
+                index.extend_from_slice(&[f[0], f[k], f[k + 1]]);
+            }
+            counts.push(f.len() as u32 - 2);
+        }
+        let mut g = BufferGeometry::new();
+        g.set_attribute(
+            "position",
+            crate::core::BufferAttribute::new(points.iter().flatten().copied().collect(), 3),
+        );
+        g.set_index(index);
+        g.set_polygons(counts);
+        g
+    }
+
+    fn unit_quad() -> BufferGeometry {
+        from_faces(
+            &[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0]],
+            &[&[0, 1, 2, 3]],
+        )
+    }
+
+    /// A triangle, a quad and a pentagon sharing edges.
+    fn mixed() -> BufferGeometry {
+        from_faces(
+            &[
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [1.0, 1.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [2.0, 0.5, 0.0],
+                [0.5, -1.0, 0.0],
+                [-0.5, -0.8, 0.0],
+                [-0.7, 0.0, 0.0],
+            ],
+            &[&[1, 4, 2], &[0, 1, 2, 3], &[0, 7, 6, 5, 1]],
+        )
+    }
+
+    /// Every polygon as the positions of its corners, in loop order.
+    fn polygon_positions(g: &BufferGeometry) -> Vec<Vec<[u32; 3]>> {
+        let p = &g.get_attribute("position").unwrap().array;
+        g.faces()
+            .map(|f| {
+                f.iter()
+                    .map(|&i| {
+                        let at = i as usize * 3;
+                        [p[at].to_bits(), p[at + 1].to_bits(), p[at + 2].to_bits()]
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    fn assert_same_polygons(back: &BufferGeometry, g: &BufferGeometry, what: &str) {
+        assert_eq!(back.polygon_counts(), g.polygon_counts(), "{what}: grouping");
+        assert_eq!(polygon_positions(back), polygon_positions(g), "{what}: corners");
+    }
+
+    fn face_corner_counts(lines: impl Iterator<Item = usize>) -> Vec<usize> {
+        lines.collect()
+    }
+
+    #[test]
+    fn obj_writes_a_quad_as_one_face_and_reads_back() {
+        let g = unit_quad();
+        let obj = geometry_to_obj(&g);
+        let faces: Vec<&str> = obj.lines().filter(|l| l.starts_with("f ")).collect();
+        assert_eq!(faces, vec!["f 1 2 3 4"]);
+        assert_same_polygons(&crate::ObjLoader::parse(&obj), &g, "obj quad");
+    }
+
+    #[test]
+    fn obj_ply_off_keep_triangles_quads_and_pentagons() {
+        let g = mixed();
+        let obj = geometry_to_obj(&g);
+        let corners = face_corner_counts(
+            obj.lines()
+                .filter(|l| l.starts_with("f "))
+                .map(|l| l.split_whitespace().count() - 1),
+        );
+        assert_eq!(corners, vec![3, 4, 5]);
+        assert_same_polygons(&crate::ObjLoader::parse(&obj), &g, "obj mixed");
+
+        let ply = geometry_to_ply(&g);
+        assert_same_polygons(&crate::PlyLoader::parse(ply.as_bytes()), &g, "ply mixed");
+
+        let off = geometry_to_off(&g);
+        let mut lines = off.lines().skip(1);
+        let header: Vec<usize> = lines
+            .next()
+            .unwrap()
+            .split_whitespace()
+            .map(|s| s.parse().unwrap())
+            .collect();
+        assert_eq!(header, vec![8, 3, 0]);
+        let corners = face_corner_counts(
+            off.lines()
+                .skip(2 + 8)
+                .map(|l| l.split_whitespace().next().unwrap().parse().unwrap()),
+        );
+        assert_eq!(corners, vec![3, 4, 5]);
+    }
+
+    /// A box: 24 split vertices with normals and UVs, six quads. Both text
+    /// formats bring back the same six quads, corner for corner, with the
+    /// per-vertex normals and UVs intact.
+    #[test]
+    fn a_box_round_trips_as_six_quads() {
+        let g = crate::BoxGeometry::new(1.0, 2.0, 3.0);
+        assert_eq!(g.polygon_counts(), Some(&[2u32; 6][..]));
+        let obj = geometry_to_obj(&g);
+        assert_eq!(obj.lines().filter(|l| l.starts_with("f ")).count(), 6);
+        assert!(obj.lines().any(|l| l.starts_with("vt ")), "uvs written");
+        let ply = geometry_to_ply(&g);
+        for (back, what) in [
+            (crate::ObjLoader::parse(&obj), "obj box"),
+            (crate::PlyLoader::parse(ply.as_bytes()), "ply box"),
+        ] {
+            assert_same_polygons(&back, &g, what);
+            // Same vertex attributes per polygon corner.
+            for name in ["normal", "uv"] {
+                let per_corner = |geo: &BufferGeometry| -> Vec<Vec<u32>> {
+                    let a = geo.get_attribute(name).unwrap();
+                    geo.faces()
+                        .map(|f| {
+                            f.iter()
+                                .flat_map(|&i| {
+                                    let at = i as usize * a.item_size;
+                                    a.array[at..at + a.item_size].iter().map(|x| x.to_bits())
+                                })
+                                .collect()
+                        })
+                        .collect()
+                };
+                assert_eq!(per_corner(&back), per_corner(&g), "{what}: {name}");
+            }
+        }
+    }
+
+    /// No grouping, or a polygon whose outline cannot be recovered, writes
+    /// triangles — nothing is dropped.
+    #[test]
+    fn ungrouped_and_unrecoverable_polygons_fall_back_to_triangles() {
+        let mut g = unit_quad();
+        g.polygons = None;
+        let obj = geometry_to_obj(&g);
+        assert_eq!(obj.lines().filter(|l| l.starts_with("f ")).count(), 2);
+        let back = crate::ObjLoader::parse(&obj);
+        assert_eq!(back.polygon_counts(), Some(&[1u32, 1][..]));
+
+        // Two triangles that only touch at a corner: grouped, but not a loop.
+        let mut bow = from_faces(
+            &[
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [-1.0, 0.0, 0.0],
+                [0.0, -1.0, 0.0],
+            ],
+            &[&[0, 1, 2], &[0, 3, 4]],
+        );
+        bow.set_polygons(vec![2]);
+        let obj = geometry_to_obj(&bow);
+        assert_eq!(obj.lines().filter(|l| l.starts_with("f ")).count(), 2);
+    }
+
+    /// The written OBJ and PLY, read by an independent tool: `assimp info`
+    /// counts the faces it read, and a quad mesh must read as quads rather
+    /// than as twice as many triangles. Skipped (with a note) when `assimp`
+    /// is not installed.
+    #[test]
+    fn assimp_reads_the_quads() {
+        let Ok(probe) = std::process::Command::new("assimp").arg("version").output() else {
+            eprintln!("assimp not installed; skipping the reference check");
+            return;
+        };
+        if !probe.status.success() {
+            eprintln!("assimp not runnable; skipping the reference check");
+            return;
+        }
+        let g = mixed();
+        let dir = std::env::temp_dir().join(format!("threers-quad-export-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for (ext, text) in [("obj", geometry_to_obj(&g)), ("ply", geometry_to_ply(&g))] {
+            let path = dir.join(format!("mixed.{ext}"));
+            std::fs::write(&path, text).unwrap();
+            // `--raw`: no post-processing, so assimp's own triangulation step
+            // does not run and polygons stay polygons.
+            let out = std::process::Command::new("assimp")
+                .arg("info")
+                .arg(&path)
+                .arg("--raw")
+                .output()
+                .unwrap();
+            let report = String::from_utf8_lossy(&out.stdout);
+            let faces = report
+                .lines()
+                .find(|l| l.trim_start().starts_with("Faces:"))
+                .and_then(|l| l.split(':').nth(1))
+                .map(|n| n.trim().parse::<usize>().unwrap())
+                .unwrap_or_else(|| panic!("no face count in assimp's report:\n{report}"));
+            assert_eq!(faces, 3, "{ext}: assimp should read 3 faces\n{report}");
+            let vertices = report
+                .lines()
+                .find(|l| l.trim_start().starts_with("Vertices:"))
+                .and_then(|l| l.split(':').nth(1))
+                .map(|n| n.trim().parse::<usize>().unwrap())
+                .unwrap();
+            // OBJ is imported one vertex per face corner (3 + 4 + 5); PLY
+            // keeps the shared vertex list.
+            let expected = if ext == "obj" { 12 } else { 8 };
+            assert_eq!(vertices, expected, "{ext}: vertices\n{report}");
+            assert!(report.contains("n-polygons"), "{ext}: polygons\n{report}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn off_has_matching_counts() {
         let g = tetra();
@@ -555,11 +828,14 @@ mod tests {
             .map(|s| s.parse().unwrap())
             .collect();
         let (nv, nf) = (counts[0], counts[1]);
-        assert_eq!(
-            off.lines().filter(|l| l.starts_with("3 ")).count(),
-            nf,
-            "face count"
-        );
+        // Faces are written as the polygons the geometry remembers (the
+        // exact cube's six quads), so count every face line, not `3 ` ones.
+        let face_lines: Vec<&str> = off.lines().skip(2 + nv).collect();
+        assert_eq!(face_lines.len(), nf, "face count");
+        for f in &face_lines {
+            let n: usize = f.split_whitespace().next().unwrap().parse().unwrap();
+            assert_eq!(f.split_whitespace().count(), n + 1, "{f}");
+        }
         // vertex lines = total - header(2) - faces
         assert_eq!(off.lines().count() - 2 - nf, nv, "vertex count");
     }

@@ -43,6 +43,17 @@ pub fn linear_to_srgb_f32(value: f32) -> f32 {
     }
 }
 
+/// An sRGB-encoded float in `[0, 1]` as linear light — the float form of
+/// [`srgb_to_linear`], for colours authored as `hex / 255`.
+pub fn srgb_to_linear_f32(value: f32) -> f32 {
+    let c = value.clamp(0.0, 1.0);
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

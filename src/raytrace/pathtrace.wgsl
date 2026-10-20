@@ -107,6 +107,8 @@ struct Uniforms {
     fog_params: vec4<f32>,
     // GGX directional albedo, 32x32, cos varying fastest
     albedo_lut: array<vec4<f32>, 256>,
+    // diffuse, glossy, transmission bounce limits; unused
+    bounce_limits: vec4<u32>,
 };
 
 @group(0) @binding(0) var<uniform> uni: Uniforms;
@@ -950,6 +952,8 @@ struct Surface {
     attenuation_color: vec3<f32>,
     attenuation_distance: f32,
     unlit: bool,
+    // Thin-walled glass: transmission goes straight through.
+    thin_walled: bool,
 };
 
 fn load_surface(mat: u32, uv: vec2<f32>) -> Surface {
@@ -980,6 +984,7 @@ fn load_surface(mat: u32, uv: vec2<f32>) -> Surface {
     s.dispersion = data[b + 32u];
     s.subsurface = data[b + 33u];
     s.subsurface_radius = vec3<f32>(data[b + 34u], data[b + 35u], data[b + 84u]);
+    s.thin_walled = data[b + 85u] > 0.5;
 
     if (map_present(b, 0u)) {
         let c = map_sample(b, 0u, uv, map_wrap(b, 0u));
@@ -1320,6 +1325,11 @@ fn specular_fresnel(b: Bsdf, wo: vec3<f32>, h: vec3<f32>) -> vec3<f32> {
     return mix(base, film, ir);
 }
 
+// A thin wall reflects at both faces: R + T²R/(1 − R²) = 2R/(1 + R).
+fn thin_wall_fresnel(fr: f32, thin: bool) -> f32 {
+    return select(fr, 2.0 * fr / (1.0 + fr), thin);
+}
+
 fn eval_transmission_channel(b: Bsdf, wo: vec3<f32>, wi: vec3<f32>, eta: f32, reflecting: bool, channel: u32) -> vec2<f32> {
     let cos_o = wo.z;
     let cos_i = wi.z;
@@ -1442,7 +1452,7 @@ fn eval_transmission(b: Bsdf, wo: vec3<f32>, wi: vec3<f32>) -> Eval {
     var pt = 0.0;
     let offsets = array<f32, 3>(-1.0, 0.0, 1.0);
     for (var ch = 0u; ch < 3u; ch = ch + 1u) {
-        let eta = eta_base * (1.0 + dispersion * offsets[ch]);
+        let eta = eta_base + (eta_base - 1.0) * 0.025 * dispersion * offsets[ch];
         let ch_out = eval_transmission_channel(b, wo, wi, eta, reflecting, ch);
         if (ch == 0u) { out.f.r = ch_out.x; }
         else if (ch == 1u) { out.f.g = ch_out.x; }
@@ -1514,7 +1524,8 @@ fn eval_local(b: Bsdf, wo: vec3<f32>, wi: vec3<f32>) -> Eval {
         out.pdf = out.pdf + b.p_specular * vndf_reflect_pdf(wo, h, b.ax, b.ay);
     }
 
-    if (b.p_transmission > 0.0 && !spec_smooth) {
+    // Thin-walled transmission is a delta lobe, sampled and never evaluated.
+    if (b.p_transmission > 0.0 && !spec_smooth && !b.s.thin_walled) {
         let t = eval_transmission(b, wo, wi);
         out.f = out.f + t.f * under_coat;
         out.pdf = out.pdf + b.p_transmission * t.pdf;
@@ -1546,6 +1557,8 @@ struct Sample {
     pdf: f32,
     specular: bool,
     transmitted: bool,
+    // From the diffuse or sheen lobe, for the per-kind bounce limits.
+    diffuse: bool,
     valid: bool,
 };
 
@@ -1576,6 +1589,7 @@ fn bsdf_sample(b: Bsdf, wo_world: vec3<f32>, rng: ptr<function, Sampler>) -> Sam
     out.pdf = 0.0;
     out.specular = false;
     out.transmitted = false;
+    out.diffuse = false;
 
     let wo = onb_to_local(b.frame, wo_world);
     if (abs(wo.z) < 1e-6) {
@@ -1591,6 +1605,9 @@ fn bsdf_sample(b: Bsdf, wo_world: vec3<f32>, rng: ptr<function, Sampler>) -> Sam
     var delta_value = vec3<f32>(0.0, 0.0, 0.0);
     var transmitted = false;
 
+    // A diffuse draw: the diffuse lobe, or sheen past every other.
+    let diffuse_lobe = pick < b.p_diffuse
+        || pick >= b.p_diffuse + b.p_specular + b.p_transmission + b.p_coat;
     var acc = b.p_diffuse;
     if (pick < acc) {
         var d = cosine_hemisphere(u);
@@ -1618,8 +1635,10 @@ fn bsdf_sample(b: Bsdf, wo_world: vec3<f32>, rng: ptr<function, Sampler>) -> Sam
                 let eta_base = max(b.s.ior, 1.0001);
                 let dispersion = max(b.s.dispersion, 0.0);
                 let weight = (1.0 - b.s.metallic) * b.s.transmission;
+                let thin = b.s.thin_walled;
+                let t_smooth = spec_smooth || thin;
                 var h = vec3<f32>(0.0, 0.0, 1.0);
-                if (!spec_smooth) {
+                if (!t_smooth) {
                     let wo_up = select(wo, -wo, wo.z < 0.0);
                     h = sample_ggx_vndf(wo_up, b.ax, b.ay, u);
                 }
@@ -1627,13 +1646,16 @@ fn bsdf_sample(b: Bsdf, wo_world: vec3<f32>, rng: ptr<function, Sampler>) -> Sam
                 var fr_avg = 0.0;
                 let offsets = array<f32, 3>(-1.0, 0.0, 1.0);
                 for (var ch = 0u; ch < 3u; ch = ch + 1u) {
-                    let eta = eta_base * (1.0 + dispersion * offsets[ch]);
-                    fr_avg = fr_avg + fresnel_dielectric(cos_oh, eta);
+                    let eta = eta_base + (eta_base - 1.0) * 0.025 * dispersion * offsets[ch];
+                    fr_avg = fr_avg + thin_wall_fresnel(fresnel_dielectric(cos_oh, eta), thin);
                 }
                 fr_avg = fr_avg / 3.0;
                 let do_reflect = rand(rng) < fr_avg;
                 if (do_reflect) {
                     wi = reflect_about(-wo, h);
+                } else if (thin) {
+                    // Through the wall and out of its far face: undeflected.
+                    wi = -wo;
                 } else {
                     let eta = eta_base;
                     var n = h;
@@ -1651,18 +1673,19 @@ fn bsdf_sample(b: Bsdf, wo_world: vec3<f32>, rng: ptr<function, Sampler>) -> Sam
                 if (wi.z == 0.0) {
                     return out;
                 }
-                if (spec_smooth) {
+                if (t_smooth) {
                     is_delta = true;
                     transmitted = !do_reflect;
                     var value = vec3<f32>(0.0);
                     for (var ch = 0u; ch < 3u; ch = ch + 1u) {
-                        let eta = eta_base * (1.0 + dispersion * offsets[ch]);
-                        let fr = fresnel_dielectric(cos_oh, eta);
+                        let eta = eta_base + (eta_base - 1.0) * 0.025 * dispersion * offsets[ch];
+                        let fr = thin_wall_fresnel(fresnel_dielectric(cos_oh, eta), thin);
                         var v = 0.0;
                         if (do_reflect) {
                             v = fr * weight / max(abs(wi.z), 1e-6);
                         } else {
-                            let etap = select(1.0 / eta, eta, wo.z > 0.0);
+                            // Out into the medium it came from: no radiance scaling.
+                            let etap = select(select(1.0 / eta, eta, wo.z > 0.0), 1.0, thin);
                             let t = (1.0 - fr) * weight / (etap * etap * max(abs(wi.z), 1e-6));
                             if (ch == 0u) { v = b.s.base_color.r * t; }
                             else if (ch == 1u) { v = b.s.base_color.g * t; }
@@ -1733,6 +1756,7 @@ fn bsdf_sample(b: Bsdf, wo_world: vec3<f32>, rng: ptr<function, Sampler>) -> Sam
     out.pdf = e.pdf;
     out.specular = false;
     out.transmitted = wi.z * wo.z < 0.0;
+    out.diffuse = diffuse_lobe && !out.transmitted;
     out.valid = true;
     return out;
 }
@@ -2063,6 +2087,22 @@ fn visibility(o: vec3<f32>, d: vec3<f32>, t_max_in: f32, eps: f32) -> vec3<f32> 
         // Refractive glass: by default block (caustics arrive via BSDF paths).
         // With bit2 set, attenuate and continue — same bias as the CPU path.
         if (data[base + 10u] > 0.0 && data[base + 3u] >= 1.0) {
+            // A thin wall bends nothing: straight through is where its light
+            // goes, less what both faces reflect, tinted by its colour.
+            if (data[base + 85u] > 0.5) {
+                let ior = data[base + 11u];
+                let r = pow((ior - 1.0) / (ior + 1.0), 2.0);
+                let through = data[base + 10u] * (1.0 - 2.0 * r / (1.0 + r));
+                transmittance = transmittance * vec3<f32>(data[base], data[base + 1u], data[base + 2u]) * through;
+                origin = origin + d * (h.t + eps);
+                remaining = remaining - h.t - eps;
+                if (remaining <= eps
+                    || max(transmittance.r, max(transmittance.g, transmittance.b)) < 1e-4)
+                {
+                    break;
+                }
+                continue;
+            }
             if ((uni.flags.w & 4u) != 0u) {
                 transmittance = transmittance * vec3<f32>(0.12, 0.12, 0.12);
                 origin = origin + d * (h.t + eps);
@@ -2398,6 +2438,9 @@ fn trace_path(ray_in: Ray, rng: ptr<function, Sampler>) -> PathResult {
     // ceiling is a backstop against a runaway, not a policy — a fixed 128 here
     // would quietly render fewer bounces than the CPU on the same settings.
     let max_steps = min(uni.limits.x + uni.limits.z + 8u, 1024u);
+    var diffuse_bounces = 0u;
+    var glossy_bounces = 0u;
+    var transmission_bounces = 0u;
     for (var step = 0u; step < max_steps; step = step + 1u) {
         let h = trace_closest(origin, dir, eps, INF);
 
@@ -2586,6 +2629,18 @@ fn trace_path(ray_in: Ray, rng: ptr<function, Sampler>) -> PathResult {
         let tmax = max(throughput.r, max(throughput.g, throughput.b));
         if (tmax <= 0.0) {
             break;
+        }
+        // The per-kind bounce limits (`bounce_limits`: diffuse, glossy,
+        // transmission), as the CPU integrator keeps them.
+        if (smp.transmitted) {
+            transmission_bounces = transmission_bounces + 1u;
+            if (transmission_bounces > uni.bounce_limits.z) { break; }
+        } else if (smp.diffuse) {
+            diffuse_bounces = diffuse_bounces + 1u;
+            if (diffuse_bounces > uni.bounce_limits.x) { break; }
+        } else {
+            glossy_bounces = glossy_bounces + 1u;
+            if (glossy_bounces > uni.bounce_limits.y) { break; }
         }
 
         if (smp.transmitted) {

@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><style>body{margin:0;background:#101820}canvas{display:block}#err{position:absolute;top:0;left:0;padding:12px;color:#fdd;background:#500;font-family:monospace;white-space:pre-wrap}</style></head>
+<body><canvas id="c" width="800" height="600"></canvas>
+<div id="err" style="display:none"></div>
+<script type="module">
+import THREE, { initThreers } from '/web/threejs-shim.js';
+const errEl = document.getElementById('err');
+(async () => {
+    try {
+        await initThreers('/web/pkg/threers_bg.wasm');
+        const canvas = document.getElementById('c');
+        // A cube whose faces each carry a marker in one corner, so a mirrored or
+        // turned lookup shows; three spheres reflect, refract and rotate it.
+        function face(fill, mark) {
+            const c = document.createElement('canvas'); c.width = c.height = 64;
+            const g = c.getContext('2d');
+            g.fillStyle = fill; g.fillRect(0, 0, 64, 64);
+            g.fillStyle = mark; g.fillRect(4, 4, 24, 24);
+            g.fillStyle = '#000'; g.fillRect(40, 40, 20, 20);
+            return c;
+        }
+        const cube = new THREE.CubeTexture([
+            face('#d33', '#fff'), face('#3d3', '#ff0'), face('#33d', '#0ff'),
+            face('#dd3', '#f0f'), face('#d3d', '#fff'), face('#3dd', '#f80'),
+        ]);
+        cube.colorSpace = THREE.SRGBColorSpace;
+        cube.needsUpdate = true;
+        const refract = cube.clone();
+        refract.mapping = THREE.CubeRefractionMapping;
+        refract.needsUpdate = true;
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x101820);
+        scene.add(new THREE.AmbientLight(0xffffff, 1.0));
+        const geo = new THREE.SphereGeometry(0.75, 48, 32);
+        const basic = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ envMap: cube, combine: THREE.MixOperation }));
+        basic.position.set(-1.7, 0, 0);
+        scene.add(basic);
+        const lambert = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: 0x808080, envMap: refract, combine: THREE.MixOperation, reflectivity: 0.8, refractionRatio: 0.9 }));
+        scene.add(lambert);
+        const phong = new THREE.Mesh(geo, new THREE.MeshPhongMaterial({ color: 0x404040, envMap: cube, reflectivity: 0.7, combine: THREE.AddOperation, envMapRotation: new THREE.Euler(0.4, 0.9, 0) }));
+        phong.position.set(1.7, 0, 0);
+        scene.add(phong);
+        const cam = new THREE.PerspectiveCamera(45, 800/600, 0.1, 100);
+        cam.position.set(0, 0.6, 5); cam.lookAt(0, 0, 0);
+        const r = await THREE.WebGLRenderer.create(canvas);
+        r.setSize(800, 600);
+        r.render(scene, cam);
+        await new Promise(rs => requestAnimationFrame(() => rs()));
+        document.body.dataset.ready = 'true';
+    } catch (e) {
+        console.error(e);
+        errEl.style.display='block'; errEl.textContent = e?.stack || String(e);
+        document.body.dataset.ready = 'error';
+    }
+})();
+</script></body></html>

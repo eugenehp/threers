@@ -20,10 +20,12 @@ crate-type = ["cdylib"]
 path = "src/lib.rs"
 
 [features]
-default = ["headless"]
+default = ["headless", "usd"]
 headless = []
 physics = ["dep:threers-physics"]
 animation = ["dep:threers-animation"]
+# `.usda` / `.usdc` / `.usdz` in `Scene.load` (pure Rust; compile time only).
+usd = ["threers/usd"]
 
 [dependencies]
 threers = { path = "../..", version = "0.0.6" }

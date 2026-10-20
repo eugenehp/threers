@@ -14,9 +14,10 @@ const cam = new THREE.PerspectiveCamera(45, 800/600, 0.1, 100);
 cam.position.set(0, 0, 3); cam.lookAt(0, 0, 0);
         const r = await THREE.WebGLRenderer.create(document.getElementById('c'));
         r.setSize(800, 600);
-        const sceneRT = new THREE.WebGLRenderTarget(800, 600);
-r.setRenderTarget(sceneRT); r.render(scene, cam); r.setRenderTarget(null);
-new THREE.HalftonePass(800, 600, { radius: 6, scatter: 0, shape: 1 }).apply(r, sceneRT);
+        const composer = new THREE.EffectComposer(r);
+        composer.addPass(new THREE.RenderPass(scene, cam));
+        composer.addPass(new THREE.HalftonePass(800, 600, { radius: 6, scatter: 0, shape: 1 }));
+        composer.render();
         await new Promise(rs => requestAnimationFrame(() => rs()));
         document.body.dataset.ready = 'true';
     } catch (e) {

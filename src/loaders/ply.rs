@@ -2,6 +2,8 @@ use crate::core::{BufferAttribute, BufferGeometry};
 
 /// Stanford PLY parser (ASCII + binary little-endian). Reads `vertex` and
 /// `face` elements with common properties: x/y/z/nx/ny/nz/s/t/red/green/blue.
+/// Faces are fanned from their first corner; which triangles were one face is
+/// kept in [`BufferGeometry::polygons`].
 pub struct PlyLoader;
 
 #[derive(Debug, Clone)]
@@ -93,6 +95,8 @@ impl PlyLoader {
         let mut uvs: Vec<f32> = Vec::new();
         let mut colors: Vec<f32> = Vec::new();
         let mut indices: Vec<u32> = Vec::new();
+        // Triangles per face, in face order.
+        let mut polygons: Vec<u32> = Vec::new();
 
         if format == "ascii" {
             let text = std::str::from_utf8(body).unwrap_or("");
@@ -190,6 +194,9 @@ impl PlyLoader {
                                     idx.push(v);
                                     ti += 1;
                                 }
+                                if idx.len() >= 3 {
+                                    polygons.push(idx.len() as u32 - 2);
+                                }
                                 for i in 1..idx.len().saturating_sub(1) {
                                     indices.extend_from_slice(&[idx[0], idx[i], idx[i + 1]]);
                                 }
@@ -216,6 +223,7 @@ impl PlyLoader {
         }
         if !indices.is_empty() {
             g.set_index(indices);
+            g.set_polygons(polygons);
         }
         g
     }
@@ -223,4 +231,35 @@ impl PlyLoader {
 
 fn leak(s: &str) -> &'static str {
     Box::leak(s.to_string().into_boxed_str())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn faces_are_kept_as_polygons() {
+        let src = "\
+ply
+format ascii 1.0
+element vertex 5
+property float x
+property float y
+property float z
+element face 2
+property list uchar int vertex_indices
+end_header
+0 0 0
+1 0 0
+1 1 0
+0 1 0
+2 0 0
+4 0 1 2 3
+3 1 4 2
+";
+        let g = PlyLoader::parse(src.as_bytes());
+        assert_eq!(g.triangle_count(), 3);
+        assert_eq!(g.polygon_counts(), Some(&[2u32, 1][..]));
+        assert_eq!(g.polygon_loop(0..2), Some(vec![0, 1, 2, 3]));
+    }
 }

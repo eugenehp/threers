@@ -27,6 +27,10 @@ pub struct OrbitControls {
     pub auto_rotate: bool,
     /// Radians per second when `auto_rotate` is on. three.js default ≈ 2π / 30.
     pub auto_rotate_speed: f32,
+    /// three.js `screenSpacePanning`: pan in the screen plane (`true`, the
+    /// default) or across the plane orthogonal to the camera's up (`false`,
+    /// `MapControls`' default — dragging moves over the ground).
+    pub screen_space_panning: bool,
     spherical: Spherical,
     /// Residual rotate deltas (theta, phi) for damping.
     spherical_delta: (f32, f32),
@@ -53,6 +57,7 @@ impl OrbitControls {
             enable_damping: false,
             auto_rotate: false,
             auto_rotate_speed: std::f32::consts::TAU / 30.0,
+            screen_space_panning: true,
             spherical,
             spherical_delta: (0.0, 0.0),
             pan_offset: Vector3::ZERO,
@@ -109,7 +114,14 @@ impl OrbitControls {
             let forward = (-offset).normalize();
             let world_up = Vector3::UP;
             let right = forward.cross(world_up).normalize();
-            let up = right.cross(forward).normalize();
+            // three.js `panUp`: the camera's own up, or (map-style) the
+            // world up crossed with the camera's right — forward along the
+            // ground.
+            let up = if self.screen_space_panning {
+                right.cross(forward).normalize()
+            } else {
+                world_up.cross(right)
+            };
             self.pan_offset = self.pan_offset
                 + right * (-ev.dx * world_per_pixel * self.pan_speed)
                 + up * (ev.dy * world_per_pixel * self.pan_speed);

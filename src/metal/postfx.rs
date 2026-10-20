@@ -7,8 +7,8 @@
 use super::device::{MetalDevice, MetalError};
 use super::enums::*;
 use super::objc::{
-    alloc_init, class, error_message, msg0, msg1, msg2, msg3, sel, AutoreleasePool, Id, Owned,
-    NIL,
+    alloc_init, class, error_message, msg0, msg1, msg2, msg3, sel, AutoreleasePool, Id, Owned, NIL,
+    YES,
 };
 use super::resources::new_texture_2d;
 
@@ -1184,8 +1184,40 @@ fn fullscreen_pipeline(
     fragment: &str,
     color_format: NSUInteger,
 ) -> Result<Owned, MetalError> {
+    fullscreen_pipeline_with(device, "vs_fullscreen", fragment, color_format)
+}
+
+/// A fullscreen pipeline with a vertex stage of your own.
+///
+/// `vs_fullscreen` hands out `uv` already flipped, because the passes around
+/// it sample a framebuffer. A pass that is not a post-process — the fluid —
+/// wants the unflipped one, and its own vertex stage is how it gets it.
+pub(crate) fn fullscreen_pipeline_with(
+    device: &MetalDevice,
+    vertex: &str,
+    fragment: &str,
+    color_format: NSUInteger,
+) -> Result<Owned, MetalError> {
+    fullscreen_pipeline_blend(device, vertex, fragment, color_format, false)
+}
+
+/// As [`fullscreen_pipeline_with`], and with `blend` the pass composites over
+/// what is already in the target with premultiplied alpha — `src + dst *
+/// (1 - src.a)`, which is what `BlendState::PREMULTIPLIED_ALPHA_BLENDING` is
+/// on the wgpu side.
+///
+/// A pass that draws a picture with holes in it needs this. Without blending
+/// its zero alpha lands in the target and erases whatever was underneath —
+/// which, for a fluid drawn over its own background, is the whole background.
+pub(crate) fn fullscreen_pipeline_blend(
+    device: &MetalDevice,
+    vertex: &str,
+    fragment: &str,
+    color_format: NSUInteger,
+    blend: bool,
+) -> Result<Owned, MetalError> {
     let _pool = AutoreleasePool::new();
-    let vs = device.function("vs_fullscreen")?;
+    let vs = device.function(vertex)?;
     let fs = device.function(fragment)?;
     unsafe {
         let desc = Owned::from_retained(alloc_init(class!("MTLRenderPipelineDescriptor")))
@@ -1195,6 +1227,23 @@ fn fullscreen_pipeline(
         let attachments: Id = msg0(desc.id(), sel!("colorAttachments"));
         let color: Id = msg1(attachments, sel!("objectAtIndexedSubscript:"), 0usize);
         let _: () = msg1(color, sel!("setPixelFormat:"), color_format);
+        if blend {
+            let _: () = msg1(color, sel!("setBlendingEnabled:"), YES);
+            let _: () = msg1(color, sel!("setRgbBlendOperation:"), blend_op::ADD);
+            let _: () = msg1(color, sel!("setAlphaBlendOperation:"), blend_op::ADD);
+            let _: () = msg1(color, sel!("setSourceRGBBlendFactor:"), blend_factor::ONE);
+            let _: () = msg1(
+                color,
+                sel!("setDestinationRGBBlendFactor:"),
+                blend_factor::ONE_MINUS_SOURCE_ALPHA,
+            );
+            let _: () = msg1(color, sel!("setSourceAlphaBlendFactor:"), blend_factor::ONE);
+            let _: () = msg1(
+                color,
+                sel!("setDestinationAlphaBlendFactor:"),
+                blend_factor::ONE_MINUS_SOURCE_ALPHA,
+            );
+        }
         let mut err: Id = NIL;
         let state: Id = msg2(
             device.device_id(),
@@ -1206,7 +1255,7 @@ fn fullscreen_pipeline(
     }
 }
 
-fn encode_fullscreen(
+pub(crate) fn encode_fullscreen(
     cmd: Id,
     pipeline: Id,
     dst: Id,
@@ -1236,7 +1285,7 @@ fn encode_fullscreen(
     Ok(())
 }
 
-fn render_pass_descriptor(dst: Id) -> Id {
+pub(crate) fn render_pass_descriptor(dst: Id) -> Id {
     unsafe {
         let desc: Id = msg0(
             class!("MTLRenderPassDescriptor"),

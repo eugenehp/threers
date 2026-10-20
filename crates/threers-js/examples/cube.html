@@ -29,7 +29,7 @@
       module_or_path: new URL('../dist/mini/pkg/threers_bg.wasm', import.meta.url),
     });
 
-    const renderer = await THREE.WebGLRenderer.create(canvas);
+    const renderer = await THREE.WebGLRenderer.create(canvas, { antialias: true });
     renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 
     const scene = new THREE.Scene();

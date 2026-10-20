@@ -1,8 +1,8 @@
-use super::track::TrackTarget;
-use super::{AnimationAction, AnimationClip};
-use crate::core::ObjectArena;
-use crate::materials::Material;
-use crate::math::Quaternion;
+use std::sync::Arc;
+
+use super::action::Request;
+use super::three::{self, ActionId, MixerRoot, SceneHost, SceneKind};
+use super::{AnimationAction, AnimationClip, LoopMode};
 use crate::scene::Scene;
 
 /// How an action combines with others (three.js blend modes).
@@ -13,10 +13,20 @@ pub enum BlendMode {
     Additive,
 }
 
-/// Plays animation clips against a scene. Holds zero or more `AnimationAction`s.
+/// Plays node-id-targeted clips against a scene. Holds zero or more
+/// `AnimationAction`s.
+///
+/// This is the older, index-based front of the animation system: each
+/// action is played by a [`three::AnimationMixer`] — three.js r165's mixer,
+/// with its blending, fades, loop modes and bindings — over the scene passed
+/// to [`update`](Self::update). Weights below one blend toward the value a
+/// property had when its first action started, as three.js does; `LoopMode::Once`
+/// holds the last frame (three.js's `clampWhenFinished`).
 pub struct AnimationMixer {
     pub actions: Vec<AnimationAction>,
     pub time: f32,
+    engine: Option<three::AnimationMixer<SceneKind>>,
+    ids: Vec<Option<ActionId>>,
 }
 
 impl Default for AnimationMixer {
@@ -25,11 +35,22 @@ impl Default for AnimationMixer {
     }
 }
 
+impl std::fmt::Debug for AnimationMixer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AnimationMixer")
+            .field("actions", &self.actions.len())
+            .field("time", &self.time)
+            .finish()
+    }
+}
+
 impl AnimationMixer {
     pub fn new() -> Self {
         Self {
             actions: Vec::new(),
             time: 0.0,
+            engine: None,
+            ids: Vec::new(),
         }
     }
 
@@ -50,141 +71,122 @@ impl AnimationMixer {
         }
     }
 
+    /// The three.js mixer playing the actions (created at the first update).
+    pub fn engine(&self) -> Option<&three::AnimationMixer<SceneKind>> {
+        self.engine.as_ref()
+    }
+
     /// Advance time and apply every active action's tracks to the scene.
     pub fn update(&mut self, scene: &mut Scene, delta: f32) {
         self.time += delta;
-        // Two-pass: sample into scratch, then weighted-write. For simplicity we
-        // apply sequentially with weight lerp (good enough for layered clips).
-        for action in &mut self.actions {
-            action.tick_fade(delta);
-            if !action.enabled || action.effective_weight() <= 1e-6 {
-                continue;
-            }
-            action.advance(delta);
-            apply_action(&mut scene.arena, action);
-        }
-    }
-}
-
-fn apply_action(arena: &mut ObjectArena, action: &AnimationAction) {
-    let t = action.current_time();
-    let w = action.effective_weight().clamp(0.0, 1.0);
-    let additive = matches!(action.blend_mode, BlendMode::Additive);
-    for tr in &action.clip.tracks {
-        let Some(obj) = arena.nodes.get_mut(tr.object) else {
-            continue;
-        };
-        match tr.target {
-            TrackTarget::Position => {
-                if let Some(v) = tr.sample_vector(t) {
-                    if additive {
-                        obj.position = obj.position + v * w;
-                    } else if w >= 1.0 - 1e-6 {
-                        obj.position = v;
-                    } else {
-                        obj.position = obj.position.lerp(v, w);
-                    }
+        let root = scene.root;
+        let engine = self
+            .engine
+            .get_or_insert_with(|| three::AnimationMixer::new(MixerRoot::Node(root)));
+        let mut host = SceneHost::new(&mut scene.arena);
+        self.ids.resize(self.actions.len(), None);
+        for (i, a) in self.actions.iter_mut().enumerate() {
+            let id = match self.ids[i] {
+                Some(id) => id,
+                None => {
+                    let clip = Arc::new(three::AnimationClip::from_legacy(&a.clip, host.arena));
+                    let blend = match a.blend_mode {
+                        BlendMode::Normal => three::NORMAL_ANIMATION_BLEND_MODE,
+                        BlendMode::Additive => three::ADDITIVE_ANIMATION_BLEND_MODE,
+                    };
+                    let Ok(Some(id)) = engine.clip_action(&mut host, clip, None, Some(blend))
+                    else {
+                        continue;
+                    };
+                    self.ids[i] = Some(id);
+                    id
                 }
+            };
+            if let Some(ea) = engine.action_mut(id) {
+                ea.loop_mode = match a.loop_mode {
+                    LoopMode::Once => three::LOOP_ONCE,
+                    LoopMode::Repeat => three::LOOP_REPEAT,
+                    LoopMode::PingPong => three::LOOP_PING_PONG,
+                };
+                // A one-shot keeps its last frame, as it always has here.
+                ea.clamp_when_finished = a.loop_mode == LoopMode::Once;
+                ea.time_scale = a.time_scale as f64;
+                ea.blend_mode = match a.blend_mode {
+                    BlendMode::Normal => three::NORMAL_ANIMATION_BLEND_MODE,
+                    BlendMode::Additive => three::ADDITIVE_ANIMATION_BLEND_MODE,
+                };
             }
-            TrackTarget::Quaternion => {
-                if let Some(q) = tr.sample_quaternion(t) {
-                    if additive {
-                        // Approximate additive rotation: slerp from identity.
-                        let add = Quaternion::identity().slerp(q, w);
-                        obj.quaternion = (obj.quaternion * add).normalize();
-                    } else if w >= 1.0 - 1e-6 {
-                        obj.quaternion = q;
-                    } else {
-                        obj.quaternion = obj.quaternion.slerp(q, w);
-                    }
-                }
-            }
-            TrackTarget::Scale => {
-                if let Some(v) = tr.sample_vector(t) {
-                    if additive {
-                        obj.scale = obj.scale + v * w;
-                    } else if w >= 1.0 - 1e-6 {
-                        obj.scale = v;
-                    } else {
-                        obj.scale = obj.scale.lerp(v, w);
-                    }
-                }
-            }
-            TrackTarget::Color => {
-                if let Some(c) = tr.sample_color(t) {
-                    match &mut obj.kind {
-                        crate::core::ObjectKind::Mesh(mesh) => {
-                            if let Some(mat) = std::sync::Arc::get_mut(&mut mesh.material) {
-                                apply_color(mat, c);
-                            }
+            let mut faded = false;
+            for req in std::mem::take(&mut a.requests) {
+                match req {
+                    Request::Play => {
+                        engine.play(&mut host, id);
+                        if let Some(ea) = engine.action_mut(id) {
+                            ea.paused = false;
+                            ea.enabled = true;
                         }
-                        // A light has a colour too, and it is animated as
-                        // often as a material's.
-                        crate::core::ObjectKind::Light(light) => light.set_color(c),
-                        _ => {}
+                    }
+                    Request::Stop => engine.stop(&mut host, id),
+                    Request::Pause => {
+                        if let Some(ea) = engine.action_mut(id) {
+                            ea.paused = true;
+                        }
+                    }
+                    Request::FadeIn(d) => {
+                        engine.fade_in(id, d as f64);
+                        engine.play(&mut host, id);
+                        faded = true;
+                    }
+                    Request::FadeOut(d) => {
+                        engine.fade_out(id, d as f64);
+                        faded = true;
+                    }
+                    Request::Weight(w) => engine.set_effective_weight(id, w as f64),
+                }
+            }
+            if !faded {
+                if let Some(ea) = engine.action_mut(id) {
+                    ea.weight = a.weight as f64;
+                }
+            }
+            if a.enabled {
+                if !engine.is_scheduled(id) {
+                    engine.play(&mut host, id);
+                }
+                if let Some(ea) = engine.action_mut(id) {
+                    if ea.paused && a.loop_mode != LoopMode::Once {
+                        ea.paused = false;
+                    }
+                }
+            } else if engine.is_scheduled(id) {
+                if let Some(ea) = engine.action_mut(id) {
+                    if ea.enabled {
+                        ea.paused = true;
                     }
                 }
             }
-            TrackTarget::Intensity => {
-                if let Some(v) = tr.sample_scalar(t) {
-                    if let crate::core::ObjectKind::Light(light) = &mut obj.kind {
-                        light.set_intensity(v);
-                    }
-                }
-            }
-            TrackTarget::Visibility => {
-                if let Some(v) = tr.sample_scalar(t) {
-                    obj.visible = v > 0.0;
-                }
-            }
-            TrackTarget::MorphWeight { index } => {
-                if let Some(s) = tr.sample_scalar(t) {
-                    if let crate::core::ObjectKind::Mesh(mesh) = &mut obj.kind {
-                        ensure_morph_len(&mut mesh.morph_influences, index + 1);
-                        let cur = mesh.morph_influences[index];
-                        mesh.morph_influences[index] = if additive {
-                            cur + s * w
-                        } else {
-                            cur + (s - cur) * w
-                        };
-                    }
-                }
-            }
-            TrackTarget::Scalar => { /* user-driven */ }
         }
-    }
-}
-
-fn ensure_morph_len(weights: &mut Vec<f32>, len: usize) {
-    if weights.len() < len {
-        weights.resize(len, 0.0);
-    }
-}
-
-fn apply_color(mat: &mut Material, c: crate::math::Color) {
-    match mat {
-        Material::Basic(m) => m.color = c,
-        Material::Lambert(m) => m.color = c,
-        Material::Phong(m) => m.color = c,
-        Material::Standard(m) => m.color = c,
-        Material::Physical(m) => m.color = c,
-        Material::Toon(m) => m.color = c,
-        Material::Matcap(m) => m.color = c,
-        Material::Line(m) => m.color = c,
-        Material::Points(m) => m.color = c,
-        Material::Sprite(m) => m.color = c,
-        Material::Mirror(m) => m.color = c,
-        Material::Atmosphere(m) => m.color = c,
-        Material::Normal(_) | Material::Depth(_) | Material::Distance(_) | Material::Sky(_) => {}
-        Material::Shader(_) => {}
+        engine.update(&mut host, delta as f64);
+        for (i, a) in self.actions.iter_mut().enumerate() {
+            if let Some(ea) = self
+                .ids
+                .get(i)
+                .copied()
+                .flatten()
+                .and_then(|id| engine.action(id))
+            {
+                let running = ea.enabled && !(ea.paused && a.loop_mode == LoopMode::Once);
+                a.sync_from(ea.time as f32, ea.effective_weight() as f32, running);
+            }
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::animation::{Interpolation, KeyframeTrack, TrackTarget};
-    use crate::core::{Object3D, ObjectArena};
+    use crate::animation::{KeyframeTrack, TrackTarget};
+    use crate::core::Object3D;
     use crate::math::Vector3;
 
     #[test]
@@ -199,24 +201,53 @@ mod tests {
     }
 
     #[test]
-    fn weighted_position_lerp() {
-        let mut arena = ObjectArena::new();
-        let id = arena.insert(Object3D::group());
-        arena.nodes.get_mut(id).unwrap().position = Vector3::ZERO;
+    fn weighted_position_blends_toward_the_original() {
+        let mut scene = Scene::new();
+        let id = scene.add(Object3D::group());
         let track = KeyframeTrack::vector(
             id,
             TrackTarget::Position,
             vec![0.0, 1.0],
             vec![Vector3::ZERO, Vector3::new(2.0, 0.0, 0.0)],
         );
-        let mut track = track;
-        track.interpolation = Interpolation::Linear;
         let clip = AnimationClip::new("move", 1.0, vec![track]);
-        let mut action = AnimationAction::new(clip);
-        action.set_effective_weight(0.5);
-        action.advance(1.0); // end of clip
-        apply_action(&mut arena, &action);
-        let p = arena.nodes.get(id).unwrap().position;
+        let mut mixer = AnimationMixer::new();
+        let a = mixer.clip_action(clip);
+        mixer.actions[a].loop_mode = LoopMode::Once;
+        mixer.actions[a].set_effective_weight(0.5);
+        mixer.update(&mut scene, 1.0); // end of clip
+        let p = scene.arena.get(id).unwrap().position;
         assert!((p.x - 1.0).abs() < 1e-3, "{p:?}");
+    }
+
+    #[test]
+    fn once_holds_the_last_frame_and_repeat_wraps() {
+        let mut scene = Scene::new();
+        let id = scene.add(Object3D::group());
+        let track = KeyframeTrack::vector(
+            id,
+            TrackTarget::Position,
+            vec![0.0, 1.0],
+            vec![Vector3::ZERO, Vector3::new(4.0, 0.0, 0.0)],
+        );
+        let mut mixer = AnimationMixer::new();
+        let a = mixer.clip_action(AnimationClip::new("once", 1.0, vec![track.clone()]));
+        mixer.actions[a].loop_mode = LoopMode::Once;
+        for _ in 0..30 {
+            mixer.update(&mut scene, 0.1);
+        }
+        assert!((scene.arena.get(id).unwrap().position.x - 4.0).abs() < 1e-5);
+        assert!(!mixer.actions[a].enabled, "finished");
+
+        let mut scene2 = Scene::new();
+        let id2 = scene2.add(Object3D::group());
+        let mut t2 = track;
+        t2.object = id2;
+        let mut mixer = AnimationMixer::new();
+        mixer.clip_action(AnimationClip::new("loop", 1.0, vec![t2]));
+        for _ in 0..5 {
+            mixer.update(&mut scene2, 0.25); // 1.25 → 0.25 into the second loop
+        }
+        assert!((scene2.arena.get(id2).unwrap().position.x - 1.0).abs() < 1e-5);
     }
 }

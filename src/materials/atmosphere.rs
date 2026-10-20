@@ -78,6 +78,8 @@ pub struct AtmosphereMaterial {
     /// About 23 on Earth in quiet conditions — the ring sits near 67 degrees of
     /// magnetic latitude — and it widens toward the equator as a storm builds.
     pub aurora_colatitude: f32,
+    /// three.js `depthTest` / `depthWrite` / `depthFunc` / `colorWrite`.
+    pub render_state: super::RenderState,
 }
 
 impl Default for AtmosphereMaterial {
@@ -103,6 +105,7 @@ impl AtmosphereMaterial {
             aurora: 0.0,
             // 558 nm atomic oxygen: the green everyone pictures.
             aurora_color: Color::new(0.25, 1.0, 0.45),
+            render_state: super::RenderState::DEFAULT,
             aurora_colatitude: 23.0,
         }
     }

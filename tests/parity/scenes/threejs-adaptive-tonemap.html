@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><style>body{margin:0;background:#000}canvas{display:block}</style></head>
+<body><canvas id="c" width="800" height="600"></canvas>
+<script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.165.0/build/three.module.js"}}</script>
+<script type="module">
+// AdaptiveToneMappingPass and ToneMapShader left three.js in r153: the pass
+// comes from r152's examples, running on the r165 core like everything else.
+import * as THREE from 'three';
+import { EffectComposer } from 'https://unpkg.com/three@0.165.0/examples/jsm/postprocessing/EffectComposer.js';
+import { RenderPass } from 'https://unpkg.com/three@0.165.0/examples/jsm/postprocessing/RenderPass.js';
+import { OutputPass } from 'https://unpkg.com/three@0.165.0/examples/jsm/postprocessing/OutputPass.js';
+import { AdaptiveToneMappingPass } from 'https://unpkg.com/three@0.152.0/examples/jsm/postprocessing/AdaptiveToneMappingPass.js';
+const scene = new THREE.Scene(); scene.background = new THREE.Color(0x1a1a22);
+const bright = new THREE.Mesh(new THREE.SphereGeometry(0.8, 32, 16), new THREE.MeshBasicMaterial({ color: 0xffeecc }));
+bright.position.set(-1.2, 0.3, 0); scene.add(bright);
+const mid = new THREE.Mesh(new THREE.BoxGeometry(1.0, 1.0, 1.0), new THREE.MeshBasicMaterial({ color: 0x4477aa }));
+mid.position.set(1.2, -0.2, 0); mid.rotation.set(0.4, 0.6, 0); scene.add(mid);
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(8, 3), new THREE.MeshBasicMaterial({ color: 0x664422 }));
+floor.position.set(0, -1.2, -0.5); floor.rotation.x = -1.2; scene.add(floor);
+const cam = new THREE.PerspectiveCamera(45, 800/600, 0.1, 100);
+cam.position.set(0, 0, 5); cam.lookAt(0, 0, 0);
+const r = new THREE.WebGLRenderer({ canvas: document.getElementById('c'), antialias: false });
+r.setSize(800, 600, false); r.setPixelRatio(1);
+const composer = new EffectComposer(r);
+composer.addPass(new RenderPass(scene, cam));
+const tone = new AdaptiveToneMappingPass(true, 256);
+tone.setAdaptionRate(2.0);
+composer.addPass(tone);
+composer.addPass(new OutputPass());
+// Fixed deltas, so the adapted luminance does not depend on frame timing.
+for (let i = 0; i < 4; i++) composer.render(0.5);
+document.body.dataset.ready = 'true';
+</script></body></html>

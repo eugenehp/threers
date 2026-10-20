@@ -15,6 +15,18 @@ pub struct CubeUvAtlas {
     pub pixels_f32: Option<Arc<Vec<f32>>>,
 }
 
+/// three.js `texture.mapping` for a cube map used as a material's `envMap`:
+/// look it up along the reflected view ray, or the refracted one
+/// (`refractionRatio`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CubeMapping {
+    /// `CubeReflectionMapping`, three.js's default.
+    #[default]
+    Reflection,
+    /// `CubeRefractionMapping`.
+    Refraction,
+}
+
 /// Cubemap with six faces in the order +X, -X, +Y, -Y, +Z, -Z.
 /// Each face must have the same width and height.
 #[derive(Debug, Clone)]
@@ -23,6 +35,12 @@ pub struct CubeTexture {
     pub format: TextureFormat,
     pub mag_filter: TextureFilter,
     pub min_filter: TextureFilter,
+    /// three.js's mipmapped `minFilter`s, the part [`min_filter`](Self::min_filter)
+    /// leaves out: how minification moves between mip levels — `Some(Linear)`
+    /// (`*MipmapLinearFilter`, three.js's default), `Some(Nearest)`
+    /// (`*MipmapNearestFilter`) — or `None`, no mipmaps at all (`LinearFilter`
+    /// / `NearestFilter`), sampling level 0 only.
+    pub mipmap_filter: Option<TextureFilter>,
     pub wrap: TextureWrap,
     /// 6 faces. Each face's length must equal `size * size * bytes_per_pixel`.
     pub faces: [Arc<Vec<u8>>; 6],
@@ -40,6 +58,12 @@ pub struct CubeTexture {
     pub pmrem_sizes: Option<Vec<u32>>,
     /// CubeUV PMREM atlas (three.js `CubeUVReflectionMapping` layout).
     pub cube_uv_atlas: Option<CubeUvAtlas>,
+    /// How a material's `envMap` looks this cube up.
+    pub mapping: CubeMapping,
+    /// Stable identity, assigned at construction and carried by clones, as
+    /// [`Texture::id`](super::Texture::id): what the renderers' upload caches
+    /// key on, rather than an address a later cube may reuse.
+    pub id: u64,
 }
 
 impl CubeTexture {
@@ -50,6 +74,7 @@ impl CubeTexture {
             format,
             mag_filter: TextureFilter::Linear,
             min_filter: TextureFilter::Linear,
+            mipmap_filter: Some(TextureFilter::Linear),
             wrap: TextureWrap::ClampToEdge,
             faces: [
                 Arc::new(f0),
@@ -63,6 +88,8 @@ impl CubeTexture {
             pmrem_mips: None,
             pmrem_sizes: None,
             cube_uv_atlas: None,
+            mapping: CubeMapping::Reflection,
+            id: super::texture::next_texture_id(),
         }
     }
 

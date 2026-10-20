@@ -8,10 +8,18 @@ Part of the [threers](../README.md) documentation.
 # BVH picking demo
 cargo run --example mesh_bvh_picking --features mesh-bvh
 
-# Hierarchy CSG (exact TriKey parity with JS three-bvh-csg@0.0.16)
+# The hierarchy parity scene, evaluated live; `-- 2` stops after two operations
 cargo run --example bvh_csg_hierarchy --features bvh-csg
-cargo run --example bvh_csg_steps --features bvh-csg -- 2 --live
+cargo run --example bvh_csg_hierarchy --features bvh-csg -- 2
 ```
+
+The CSG is three-bvh-csg@0.0.16's, result for result: every evaluation the
+bvh-csg parity scenes make, recorded from the library itself
+(`tests/parity/export-bvh-csg-upstream.mjs`), comes out with the same
+triangles, area and volume (`tests/csg_upstream.rs`). That takes
+three-mesh-bvh's tree and traversal order and three.js's f64 arithmetic down
+to the operand order: a face is cut in the order the BVH meets its cutting
+triangles, and a vertex lying on another face is classified by the last bit.
 
 A BVH built for *querying* — raycast, closest-point — wants
 `split_degenerate`, which keeps a split plane that separates nothing from
@@ -21,7 +29,7 @@ querying it; see [Native (desktop)](#native-desktop), where baking the
 procedural city is what turned this up, for why that matters.
 
 ```rust
-// Cargo.toml: threers = { version = "0.0.5", features = ["mesh-bvh"] }
+// Cargo.toml: threers = { version = "0.0.6", features = ["mesh-bvh"] }
 use threers::mesh_bvh::{BuildOptions, MeshBvh, SAH};
 
 let bvh = MeshBvh::build(
@@ -36,7 +44,7 @@ let bvh = MeshBvh::build(
 ```
 
 ```rust
-// Cargo.toml: threers = { version = "0.0.5", features = ["bvh-csg"] }
+// Cargo.toml: threers = { version = "0.0.6", features = ["bvh-csg"] }
 use threers::{CsgBrush, CsgEvaluator, BoxGeometry, SUBTRACTION};
 
 let mut ev = CsgEvaluator::new();

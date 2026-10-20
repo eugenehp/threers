@@ -9,6 +9,11 @@ pub struct BvhNode {
     /// Internal node: index of right child. Leaf: triangle count.
     pub right_or_count: u32,
     pub is_leaf: bool,
+    /// Internal node: the axis its children were split on (0 x, 1 y, 2 z) —
+    /// three-mesh-bvh's `splitAxis`, which picks the child a first-hit
+    /// raycast tries first. 0 for leaves, and for a tree read back from a
+    /// buffer, which does not carry it.
+    pub split_axis: u8,
 }
 
 impl BvhNode {
@@ -18,15 +23,22 @@ impl BvhNode {
             left_or_offset: offset,
             right_or_count: count,
             is_leaf: true,
+            split_axis: 0,
         }
     }
 
     pub fn internal(bounds: Box3, left: u32, right: u32) -> Self {
+        Self::split(bounds, left, right, 0)
+    }
+
+    /// An internal node split on `axis`.
+    pub fn split(bounds: Box3, left: u32, right: u32, axis: u8) -> Self {
         Self {
             bounds,
             left_or_offset: left,
             right_or_count: right,
             is_leaf: false,
+            split_axis: axis,
         }
     }
 

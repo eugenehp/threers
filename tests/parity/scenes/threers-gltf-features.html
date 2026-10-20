@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><style>body{margin:0;background:#202028}canvas{display:block}#err{position:absolute;top:0;left:0;padding:12px;color:#fdd;background:#500;font-family:monospace;white-space:pre-wrap}</style></head>
+<body><canvas id="c" width="800" height="600"></canvas>
+<div id="err" style="display:none"></div>
+<script type="module">
+import THREE, { initThreers } from '/web/threejs-shim.js';
+const { GLTFLoader } = THREE;
+const errEl = document.getElementById('err');
+(async () => {
+    try {
+        await initThreers('/web/pkg/threers_bg.wasm');
+        // The repo's glTF fixture (every loader feature in one file), and a
+        // JPEG-textured quad made here, which goes through the browser's image
+        // decoder rather than a Rust one.
+        const loader = new GLTFLoader();
+        const gltf = await loader.loadAsync('/src/loaders/testdata/gltf/features.glb');
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x202028);
+        scene.add(gltf.scene);
+        // Keep what the renderers draw alike: no transmission, no punctual
+        // lights of physical strength, and no alpha-tested PBR (the Rust
+        // renderer applies alphaTest to basic materials only) — the node test
+        // (tests/gltf/gltf-parity.mjs) checks those meshes' data.
+        gltf.scene.getObjectByName('Physical')?.removeFromParent();
+        gltf.scene.getObjectByName('Quantized')?.removeFromParent();
+        for (const n of ['Lit', 'light_1', 'SpotA', 'SpotB']) gltf.scene.getObjectByName(n)?.removeFromParent();
+        scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+        const dl = new THREE.DirectionalLight(0xffffff, 2.0);
+        dl.position.set(3, 5, 8);
+        scene.add(dl);
+
+        const c = document.createElement('canvas');
+        c.width = 64; c.height = 64;
+        const g = c.getContext('2d');
+        for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) {
+            g.fillStyle = (x + y) % 2 ? '#e05020' : '#20a0e0';
+            g.fillRect(x * 8, y * 8, 8, 8);
+        }
+        const jpeg = new Uint8Array(await (await new Promise((r) => c.toBlob(r, 'image/jpeg', 0.95))).arrayBuffer());
+        let bin = '';
+        for (const b of jpeg) bin += String.fromCharCode(b);
+        const quad = new Float32Array([0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 1, 1, 1, 1, 0, 0, 0]);
+        const idx = new Uint16Array([0, 1, 2, 0, 2, 3]);
+        const buf = new Uint8Array(quad.byteLength + idx.byteLength);
+        buf.set(new Uint8Array(quad.buffer), 0);
+        buf.set(new Uint8Array(idx.buffer), quad.byteLength);
+        let bbin = '';
+        for (const b of buf) bbin += String.fromCharCode(b);
+        const textured = {
+            asset: { version: '2.0' },
+            scenes: [{ nodes: [0] }],
+            nodes: [{ name: 'JpegQuad', mesh: 0, translation: [-3, 0, 0], scale: [2, 2, 2] }],
+            meshes: [{ primitives: [{ attributes: { POSITION: 0, TEXCOORD_0: 1 }, indices: 2, material: 0 }] }],
+            materials: [{ pbrMetallicRoughness: { baseColorTexture: { index: 0 }, metallicFactor: 0 }, extensions: { KHR_materials_unlit: {} } }],
+            extensionsUsed: ['KHR_materials_unlit'],
+            textures: [{ source: 0, sampler: 0 }],
+            samplers: [{ magFilter: 9728, minFilter: 9728 }],
+            images: [{ uri: 'data:image/jpeg;base64,' + btoa(bin) }],
+            buffers: [{ uri: 'data:application/octet-stream;base64,' + btoa(bbin), byteLength: buf.byteLength }],
+            bufferViews: [{ buffer: 0, byteOffset: 0, byteLength: 48 }, { buffer: 0, byteOffset: 48, byteLength: 32 }, { buffer: 0, byteOffset: 80, byteLength: 12 }],
+            accessors: [
+                { bufferView: 0, componentType: 5126, count: 4, type: 'VEC3', min: [0, 0, 0], max: [1, 1, 0] },
+                { bufferView: 1, componentType: 5126, count: 4, type: 'VEC2' },
+                { bufferView: 2, componentType: 5123, count: 6, type: 'SCALAR' },
+            ],
+        };
+        const q = await loader.parseAsync(JSON.stringify(textured), '');
+        if (!q.scene.getObjectByName('JpegQuad').material.map) throw new Error('JPEG texture did not load');
+        scene.add(q.scene);
+
+        const cam = new THREE.PerspectiveCamera(50, 800 / 600, 0.1, 200);
+        cam.position.set(2, 3, 13);
+        cam.lookAt(1, 1, 0);
+        const r = await THREE.WebGLRenderer.create(document.getElementById('c'));
+        r.setSize(800, 600);
+        r.render(scene, cam);
+        await new Promise(rs => requestAnimationFrame(() => rs()));
+        document.body.dataset.ready = 'true';
+    } catch (e) { console.error(e); errEl.style.display='block'; errEl.textContent = e?.stack || String(e); document.body.dataset.ready = 'error'; }
+})();
+</script></body></html>

@@ -83,11 +83,12 @@ fn gpu_resolve_matches_the_cpu_average() {
             .max()
             .unwrap();
         // The GPU rounds on the way into an 8-bit target and the CPU rounds in
-        // `to_srgb`; both round to nearest, so they agree exactly. Allowing 1
-        // would still catch the failure that matters (averaging encoded bytes
-        // is off by tens), but there is no reason to grant slack that is not
-        // being used.
-        assert_eq!(worst, 0, "ss{ss}: GPU resolve differs from the CPU average");
+        // `to_srgb`. Apple's GPU agrees with the CPU exactly; NVIDIA's Vulkan
+        // driver lands one level off on a value near a rounding boundary,
+        // which graphics APIs permit for float-to-unorm conversion. One level
+        // still catches the failure that matters: averaging encoded bytes is
+        // off by tens.
+        assert!(worst <= 1, "ss{ss}: GPU resolve differs from the CPU average by {worst}");
     }
 }
 

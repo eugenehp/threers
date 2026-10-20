@@ -22,47 +22,9 @@ pub fn index_at(geometry: &BufferGeometry, tri: usize, corner: usize) -> usize {
     }
 }
 
-/// Load triangle-soup positions from a `TCG1` export
-/// (`tests/parity/export-*-geometry.mjs` / `export-csg-hierarchy-steps.mjs`).
-pub fn load_positions_geometry_bin(raw: &[u8]) -> BufferGeometry {
-    assert!(
-        raw.len() >= 8 && &raw[0..4] == b"TCG1",
-        "expected TCG1 geometry bin"
-    );
-    let vert_count = u32::from_le_bytes(raw[4..8].try_into().expect("header")) as usize;
-    let pos_bytes = &raw[8..8 + vert_count * 12];
-    let mut positions = Vec::with_capacity(vert_count * 3);
-    for chunk in pos_bytes.chunks_exact(4) {
-        positions.push(f32::from_le_bytes(chunk.try_into().expect("f32")));
-    }
-    let mut geom = BufferGeometry::new();
-    geom.set_attribute("position", BufferAttribute::new(positions, 3));
-    geom
-}
-
 /// Expand indexed geometry to triangle soup (three.js `toNonIndexed`).
 pub fn ensure_non_indexed(geometry: &mut BufferGeometry) {
-    let Some(indices) = geometry.index.take() else {
-        return;
-    };
-    let tri_len = indices.len();
-    for attr in geometry.attributes.values_mut() {
-        let item_size = attr.item_size;
-        let mut data = vec![0.0f32; tri_len * item_size];
-        for (dst_tri, &vi) in indices.iter().enumerate() {
-            let src = vi as usize * item_size;
-            let dst = dst_tri * item_size;
-            data[dst..dst + item_size].copy_from_slice(&attr.array[src..src + item_size]);
-        }
-        attr.array = data;
-    }
-    geometry.bounding_box = None;
-    geometry.bounding_sphere = None;
-    geometry.geometry_version = geometry.geometry_version.wrapping_add(1);
-    #[cfg(feature = "mesh-bvh")]
-    {
-        geometry.bounds_tree = None;
-    }
+    geometry.expand_index();
 }
 
 pub fn ensure_index(geometry: &mut BufferGeometry) {
@@ -77,8 +39,20 @@ pub fn ensure_index(geometry: &mut BufferGeometry) {
     geometry.set_index(index);
 }
 
+/// Each triangle's group, as three-bvh-csg's `Brush.prepareGeometry` builds
+/// `groupIndices`: group `i` covers triangles `start/3 .. (start + count)/3`,
+/// later groups overwriting earlier ones, and a triangle in none is group 0.
 pub fn build_group_indices(geometry: &BufferGeometry) -> Vec<u16> {
-    vec![0; tri_count(geometry)]
+    let n = tri_count(geometry);
+    let mut out = vec![0u16; n];
+    for (i, g) in geometry.groups.iter().enumerate() {
+        let first = (g.start / 3) as usize;
+        let end = ((g.start as u64 + g.count as u64) / 3).min(n as u64) as usize;
+        for t in out.iter_mut().take(end).skip(first) {
+            *t = i as u16;
+        }
+    }
+    out
 }
 
 pub fn read_position(attr: &BufferAttribute, index: usize) -> crate::math::Vector3 {

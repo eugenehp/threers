@@ -217,12 +217,22 @@ pub fn texture_channel_f32(
     texture: &wgpu::Texture,
     channel: usize,
 ) -> Vec<f32> {
+    let bytes = texture_bytes(device, queue, texture);
+    if texture.format() == wgpu::TextureFormat::Rg11b10Ufloat {
+        assert!(channel < 3, "channel {channel} of a 3-channel format");
+        return bytes
+            .chunks_exact(4)
+            .map(|t| {
+                let word = u32::from_le_bytes([t[0], t[1], t[2], t[3]]);
+                packed_float_to_f32(word, channel)
+            })
+            .collect();
+    }
     let channels = (bytes_per_texel(texture.format()) / 2) as usize;
     assert!(
         channel < channels,
         "channel {channel} of a {channels}-channel format"
     );
-    let bytes = texture_bytes(device, queue, texture);
     bytes
         .chunks_exact(channels * 2)
         .map(|texel| {
@@ -232,9 +242,50 @@ pub fn texture_channel_f32(
         .collect()
 }
 
+/// One channel of an `rg11b10ufloat` word.
+///
+/// Three unsigned floats in thirty-two bits: r and g are 5 bits of exponent
+/// and 6 of mantissa, b is 5 and 5. No sign bit and no infinities worth
+/// honouring, but the *bias is the same 15 as a half*, so each one widens to
+/// a half's bit pattern by shifting the mantissa up — which is why this is a
+/// shift and a reuse rather than a second decoder.
+pub fn packed_float_to_f32(word: u32, channel: usize) -> f32 {
+    let (bits, mantissa_bits) = match channel {
+        0 => (word & 0x7ff, 6),
+        1 => ((word >> 11) & 0x7ff, 6),
+        _ => ((word >> 22) & 0x3ff, 5),
+    };
+    let exponent = bits >> mantissa_bits;
+    let mantissa = bits & ((1 << mantissa_bits) - 1);
+    let half = (exponent << 10) | (mantissa << (10 - mantissa_bits));
+    f16_to_f32(half as u16)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The packed three-channel float, against values it can hold exactly.
+    ///
+    /// Its exponent bias is a half's, so the decode is a shift — and a shift
+    /// in the wrong direction still gives plausible-looking small numbers,
+    /// which is why this checks the two channel widths separately.
+    #[test]
+    fn packed_floats_decode_exactly() {
+        // 1.0 is exponent 15, mantissa 0 in every one of the three.
+        let one = 15u32 << 6 | (15u32 << 6) << 11 | (15u32 << 5) << 22;
+        for c in 0..3 {
+            assert_eq!(packed_float_to_f32(one, c), 1.0, "channel {c}");
+        }
+        // Zero everywhere, and the largest mantissa step at exponent 15:
+        // 1 + 1/64 in the 6-bit channels, 1 + 1/32 in the 5-bit one.
+        assert_eq!(packed_float_to_f32(0, 0), 0.0);
+        let step = (15u32 << 6 | 1) | ((15u32 << 5 | 1) << 22);
+        assert_eq!(packed_float_to_f32(step, 0), 1.0 + 1.0 / 64.0);
+        assert_eq!(packed_float_to_f32(step, 2), 1.0 + 1.0 / 32.0);
+        // And the channels do not bleed into one another.
+        assert_eq!(packed_float_to_f32(step, 1), 0.0);
+    }
 
     /// Spot values, including the ones the copies this module replaced got
     /// wrong.

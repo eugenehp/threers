@@ -82,8 +82,13 @@ pub struct RtMaterial {
     /// Thin-film thickness in nanometres.
     pub iridescence_thickness: f32,
     pub iridescence_thickness_map: Option<Arc<CpuTexture>>,
-    /// Chromatic dispersion strength for transmission (Abbe-like RGB split).
+    /// Chromatic dispersion for transmission, as three.js's `dispersion`: the
+    /// red and blue iors sit `(ior - 1) * 0.025 * dispersion` either side of
+    /// `ior`.
     pub dispersion: f32,
+    /// three.js's thin-walled glass (`transmission` with `thickness` 0): a
+    /// wall with no inside, so transmitted light leaves the way it came.
+    pub thin_walled: bool,
     /// Simple subsurface diffuse boost at grazing angles.
     pub subsurface: f32,
     pub subsurface_radius: Vector3,
@@ -129,6 +134,7 @@ impl Default for RtMaterial {
             iridescence_thickness: 400.0,
             iridescence_thickness_map: None,
             dispersion: 0.0,
+            thin_walled: false,
             subsurface: 0.0,
             subsurface_radius: Vector3::new(1.0, 0.2, 0.1),
             displacement_map: None,
@@ -555,16 +561,28 @@ pub struct RaytraceScene {
     /// True when no material can let a shadow ray through, which lets the
     /// occlusion test stop at the first hit instead of walking every layer.
     pub(crate) shadows_all_opaque: bool,
+    /// True when some triangles were built for the camera the scene was
+    /// flattened for — a sprite's billboard faces it — so a camera move has
+    /// to rebuild rather than just re-aim.
+    pub(crate) camera_dependent: bool,
 }
 
 
-/// One mesh as the path tracer collects it: geometry, its world transform, and
-/// the material it was drawn with.
-type CollectedMesh = (Arc<crate::core::BufferGeometry>, Matrix4, Arc<Material>);
+/// One mesh draw as the path tracer collects it: geometry, its world
+/// transform, the material it was drawn with, and the span of the index
+/// (vertices, unindexed) the draw covers — three.js's render-list item, one
+/// per group for a multi-material mesh. `None` is every triangle.
+type CollectedMesh = (
+    Arc<crate::core::BufferGeometry>,
+    Matrix4,
+    Arc<Material>,
+    Option<(u32, u32)>,
+);
 
-/// Triangles and their shading, keyed by mesh and by the material slot it was
-/// drawn with — the same geometry under two materials is two entries.
-type MeshCache = HashMap<(usize, u32), (Vec<[Vector3; 3]>, Vec<TriShading>)>;
+/// Triangles and their shading, keyed by mesh, by the material slot it was
+/// drawn with and by the span drawn — the same geometry under two materials,
+/// or two groups of one geometry, are separate entries.
+type MeshCache = HashMap<(usize, u32, Option<(u32, u32)>), (Vec<[Vector3; 3]>, Vec<TriShading>)>;
 
 impl RaytraceScene {
     /// Flatten `scene` for tracing.
@@ -588,9 +606,21 @@ impl RaytraceScene {
         settings: &RaytraceSettings,
         layers: Layers,
     ) -> Self {
-        scene
-            .arena
-            .update_world_matrices(scene.root, Matrix4::identity());
+        Self::build_for_camera(scene, settings, layers, None)
+    }
+
+    /// As [`Self::build_for_layers`], for the camera the image will be traced
+    /// from. Sprites need it: three.js draws a sprite as a quad facing the
+    /// camera (`sprite_vert`), and the flattened triangles are that quad.
+    /// Without a camera a sprite is laid in its own xy plane.
+    pub fn build_for_camera(
+        scene: &mut Scene,
+        settings: &RaytraceSettings,
+        layers: Layers,
+        camera: Option<&dyn crate::cameras::Camera>,
+    ) -> Self {
+        let camera = camera.map(crate::core::RaycastCamera::from_camera);
+        scene.update_world();
 
         let mut out = RaytraceScene {
             world: World {
@@ -628,33 +658,45 @@ impl RaytraceScene {
             }
             match &obj.kind {
                 ObjectKind::Mesh(mesh) => {
-                    collected.push((
-                        mesh.geometry.clone(),
-                        obj.matrix_world,
-                        mesh.material.clone(),
-                    ));
+                    // Morph targets are a vertex-shader stage in the raster
+                    // path; here they are blended on the CPU, once — the
+                    // shared pose every consumer draws.
+                    let geom = mesh.posed_geometry();
+                    for d in mesh.draws() {
+                        collected.push((
+                            geom.clone(),
+                            obj.matrix_world,
+                            d.material.clone(),
+                            Some((d.start, d.end)),
+                        ));
+                    }
                 }
                 ObjectKind::SkinnedMesh(sm) => {
-                    // Skinning is a vertex-shader stage in the raster path;
-                    // here it has to happen on the CPU, once, before the BVH is
-                    // built over the deformed positions.
-                    match skin_geometry(&sm.geometry, &sm.skeleton) {
-                        Some(geom) => {
-                            collected.push((Arc::new(geom), obj.matrix_world, sm.material.clone()))
-                        }
-                        None => out.report.skipped.push(format!(
-                            "skinned mesh '{}': missing joint/weight attributes",
-                            obj.name
-                        )),
+                    // Morphing then skinning, on the CPU, once, before the BVH
+                    // is built over the deformed positions. Without
+                    // joint/weight attributes the raster renderers (and the
+                    // raycaster) draw the (morphed) rest pose; so does this.
+                    let geom = sm.posed_geometry(&obj.matrix_world);
+                    for d in sm.draws() {
+                        collected.push((
+                            geom.clone(),
+                            obj.matrix_world,
+                            d.material.clone(),
+                            Some((d.start, d.end)),
+                        ));
                     }
                 }
                 ObjectKind::InstancedMesh(im) => {
+                    let draws = crate::core::mesh_draws(&im.geometry, &im.material, &[]);
                     for t in &im.transforms {
-                        collected.push((
-                            im.geometry.clone(),
-                            obj.matrix_world.multiply(t),
-                            im.material.clone(),
-                        ));
+                        for d in &draws {
+                            collected.push((
+                                im.geometry.clone(),
+                                obj.matrix_world.multiply(t),
+                                im.material.clone(),
+                                Some((d.start, d.end)),
+                            ));
+                        }
                     }
                 }
                 ObjectKind::Light(light) => {
@@ -723,9 +765,10 @@ impl RaytraceScene {
                 }
                 ObjectKind::LineSegments(ls) => {
                     let width = line_width_for(&ls.material);
-                    if let Some(geom) = line_segment_quads(&ls.geometry, &obj.matrix_world, width)
+                    let source = line_span(&ls.geometry);
+                    if let Some(geom) = line_segment_quads(&source, &obj.matrix_world, width)
                     {
-                        collected.push((geom, Matrix4::identity(), ls.material.clone()));
+                        collected.push((geom, Matrix4::identity(), ls.material.clone(), None));
                     } else {
                         out.report.skipped.push(format!(
                             "'{}': line segments could not be expanded",
@@ -735,22 +778,35 @@ impl RaytraceScene {
                 }
                 ObjectKind::Points(p) => {
                     let radius = point_radius_for(&p.material);
-                    if let Some(geom) = point_spheres(&p.geometry, &obj.matrix_world, radius) {
-                        collected.push((geom, Matrix4::identity(), p.material.clone()));
+                    let source = point_span(&p.geometry);
+                    if let Some(geom) = point_spheres(&source, &obj.matrix_world, radius) {
+                        collected.push((geom, Matrix4::identity(), p.material.clone(), None));
                     } else {
                         out.report.skipped.push(format!("'{}': points could not be expanded", obj.name));
                     }
                 }
                 ObjectKind::Sprite(s) => {
-                    let size = obj.world_scale().x.max(obj.world_scale().y).max(1.0);
-                    let geom = sprite_quads(&obj.matrix_world, size);
-                    collected.push((geom, Matrix4::identity(), s.material.clone()));
+                    let (rotation, size_attenuation) = match &*s.material {
+                        Material::Sprite(m) => (m.rotation, m.size_attenuation),
+                        _ => (0.0, true),
+                    };
+                    let geom = sprite_quads(
+                        &obj.matrix_world,
+                        s.center,
+                        rotation,
+                        size_attenuation,
+                        camera.as_ref(),
+                    );
+                    if camera.is_some() {
+                        out.camera_dependent = true;
+                    }
+                    collected.push((geom, Matrix4::identity(), s.material.clone(), None));
                 }
                 ObjectKind::Group => {}
             }
         });
 
-        for (geometry, world, material) in collected {
+        for (geometry, world, material, span) in collected {
             let slot = *material_slots
                 .entry(Arc::as_ptr(&material) as usize)
                 .or_insert_with(|| {
@@ -762,14 +818,14 @@ impl RaytraceScene {
                     (out.materials.len() - 1) as u32
                 });
             let before = out.tris.len();
-            let cache_key = (Arc::as_ptr(&geometry) as usize, slot);
+            let cache_key = (Arc::as_ptr(&geometry) as usize, slot, span);
             let mat = out.materials[slot as usize].clone();
             if world == Matrix4::identity() {
                 if let Some((tris, shading)) = local_mesh_cache.get(&cache_key) {
                     out.tris.extend_from_slice(tris);
                     out.shading.extend_from_slice(shading);
                 } else {
-                    out.append_geometry(&geometry, &world, slot, &mat);
+                    out.append_geometry(&geometry, &world, slot, &mat, span);
                     local_mesh_cache.insert(
                         cache_key,
                         (
@@ -779,7 +835,7 @@ impl RaytraceScene {
                     );
                 }
             } else {
-                out.append_geometry(&geometry, &world, slot, &mat);
+                out.append_geometry(&geometry, &world, slot, &mat, span);
             }
             if out.tris.len() > before {
                 out.report.meshes += 1;
@@ -837,12 +893,17 @@ impl RaytraceScene {
         !self.lights.is_empty() || !self.emissive.is_empty() || !self.world.is_black()
     }
 
+    /// Append the triangles of `geometry` under `world`. `span` is a draw's
+    /// `start..end` of the index (vertices, unindexed): the triangles
+    /// `j = start, start + 3, …` with `j + 3 <= end`, which is what the GPU
+    /// rasterises for that draw. `None` is every triangle.
     fn append_geometry(
         &mut self,
         geometry: &crate::core::BufferGeometry,
         world: &Matrix4,
         material: u32,
         mat: &RtMaterial,
+        span: Option<(u32, u32)>,
     ) {
         let Some(pos) = geometry.get_attribute("position") else {
             return;
@@ -956,17 +1017,21 @@ impl RaytraceScene {
             });
         };
 
-        match &geometry.index {
-            Some(idx) => {
-                for t in idx.chunks_exact(3) {
-                    push(t[0] as usize, t[1] as usize, t[2] as usize, self);
-                }
+        let count = match &geometry.index {
+            Some(idx) => idx.len(),
+            None => vertex_count,
+        };
+        let (start, end) = match span {
+            Some((s, e)) => (s as usize, (e as usize).min(count)),
+            None => (0, count),
+        };
+        let mut j = start;
+        while j + 3 <= end {
+            match &geometry.index {
+                Some(idx) => push(idx[j] as usize, idx[j + 1] as usize, idx[j + 2] as usize, self),
+                None => push(j, j + 1, j + 2, self),
             }
-            None => {
-                for i in 0..vertex_count / 3 {
-                    push(i * 3, i * 3 + 1, i * 3 + 2, self);
-                }
-            }
+            j += 3;
         }
     }
 
@@ -1069,9 +1134,10 @@ fn convert_material(material: &Material, cache: &mut TextureCache) -> (RtMateria
                 sheen_roughness: m.sheen_roughness,
                 iridescence: m.iridescence,
                 iridescence_ior: m.iridescence_ior,
-                iridescence_thickness: m.iridescence_thickness,
+                iridescence_thickness: m.iridescence_thickness_range[1],
                 iridescence_thickness_map: tex(&m.iridescence_thickness_map),
                 dispersion: m.dispersion,
+                thin_walled: m.transmission > 0.0 && m.thickness <= 0.0,
                 displacement_map: tex(&m.displacement_map),
                 displacement_scale: m.displacement_scale,
                 displacement_bias: m.displacement_bias,
@@ -1279,87 +1345,53 @@ fn unsupported_physical(_m: &crate::materials::PhysicalMaterial) -> Option<Strin
     None
 }
 
-/// Apply the skeleton on the CPU, producing a deformed copy of the geometry in
-/// its own local space (the object's world matrix is applied afterwards, as for
-/// any other mesh).
-fn skin_geometry(
-    geometry: &crate::core::BufferGeometry,
-    skeleton: &crate::core::Skeleton,
-) -> Option<crate::core::BufferGeometry> {
-    let pos = geometry.get_attribute("position")?;
-    let joints = geometry.get_attribute("joint")?;
-    let weights = geometry.get_attribute("weight")?;
-    if joints.item_size < 4 || weights.item_size < 4 || pos.item_size < 3 {
-        return None;
+/// A `LineSegments` geometry cut to its draw range (three.js draws lines
+/// over `drawRange` too): the same geometry when the range covers it, else a
+/// copy whose index is the range.
+fn line_span(g: &Arc<crate::core::BufferGeometry>) -> Arc<crate::core::BufferGeometry> {
+    let Some((start, end)) = g.draw_span(None) else {
+        let mut empty = (**g).clone();
+        empty.set_index(Vec::new());
+        return Arc::new(empty);
+    };
+    if start == 0 && end as usize == g.draw_count() {
+        return g.clone();
     }
-    let n = pos.count();
-    let normals = geometry
-        .get_attribute("normal")
-        .filter(|a| a.item_size >= 3);
-    let mut out_pos = vec![0.0f32; n * 3];
-    let mut out_nrm = normals.map(|_| vec![0.0f32; n * 3]);
+    let idx: Vec<u32> = match &g.index {
+        Some(idx) => idx[start as usize..end as usize].to_vec(),
+        None => (start..end).collect(),
+    };
+    let mut cut = (**g).clone();
+    cut.set_index(idx);
+    Arc::new(cut)
+}
 
-    for i in 0..n {
-        let p = Vector3::new(
-            pos.array[i * pos.item_size],
-            pos.array[i * pos.item_size + 1],
-            pos.array[i * pos.item_size + 2],
-        );
-        let nrm = normals.map(|a| {
-            Vector3::new(
-                a.array[i * a.item_size],
-                a.array[i * a.item_size + 1],
-                a.array[i * a.item_size + 2],
-            )
-        });
-        let mut skinned = Vector3::ZERO;
-        let mut skinned_n = Vector3::ZERO;
-        let mut total = 0.0f32;
-        for k in 0..4 {
-            let w = weights.array[i * weights.item_size + k];
-            if w == 0.0 {
-                continue;
-            }
-            let j = joints.array[i * joints.item_size + k] as usize;
-            let Some(m) = skeleton.bone_matrices.get(j) else {
-                continue;
-            };
-            skinned = skinned + p.apply_matrix4(m) * w;
-            if let Some(nrm) = nrm {
-                skinned_n = skinned_n + apply_matrix3(&Matrix3::normal_matrix(m), nrm) * w;
-            }
-            total += w;
-        }
-        // Unweighted vertices stay where they were rather than collapsing to
-        // the origin.
-        let (p_out, n_out) = if total > 0.0 {
-            (skinned * (1.0 / total), skinned_n * (1.0 / total))
-        } else {
-            (p, nrm.unwrap_or(Vector3::UP))
-        };
-        out_pos[i * 3] = p_out.x;
-        out_pos[i * 3 + 1] = p_out.y;
-        out_pos[i * 3 + 2] = p_out.z;
-        if let Some(o) = &mut out_nrm {
-            let n_out = normalize_or(n_out, Vector3::UP);
-            o[i * 3] = n_out.x;
-            o[i * 3 + 1] = n_out.y;
-            o[i * 3 + 2] = n_out.z;
+/// A `Points` geometry cut to its draw range: the vertices the range names,
+/// in order, positions and colours copied out (the point expansion reads
+/// vertices, not an index).
+fn point_span(g: &Arc<crate::core::BufferGeometry>) -> Arc<crate::core::BufferGeometry> {
+    let (start, end) = g.draw_span(None).unwrap_or((0, 0));
+    if start == 0 && end as usize == g.draw_count() && g.index.is_none() {
+        return g.clone();
+    }
+    let vertices: Vec<usize> = match &g.index {
+        Some(idx) => idx[start as usize..end as usize].iter().map(|&v| v as usize).collect(),
+        None => (start as usize..end as usize).collect(),
+    };
+    let mut cut = crate::core::BufferGeometry::new();
+    for name in ["position", "color"] {
+        if let Some(a) = g.get_attribute(name) {
+            let n = a.item_size;
+            let data: Vec<f32> = vertices
+                .iter()
+                .filter_map(|&v| a.array.get(v * n..v * n + n))
+                .flatten()
+                .copied()
+                .collect();
+            cut.set_attribute(name, crate::core::BufferAttribute::new(data, n));
         }
     }
-
-    let mut g = crate::core::BufferGeometry::new();
-    g.set_attribute("position", crate::core::BufferAttribute::new(out_pos, 3));
-    if let Some(o) = out_nrm {
-        g.set_attribute("normal", crate::core::BufferAttribute::new(o, 3));
-    }
-    if let Some(uv) = geometry.get_attribute("uv") {
-        g.set_attribute("uv", uv.clone());
-    }
-    if let Some(idx) = &geometry.index {
-        g.set_index(idx.clone());
-    }
-    Some(g)
+    Arc::new(cut)
 }
 
 /// Decode all six faces of an environment cube.
@@ -1504,6 +1536,89 @@ mod tests {
             BoxGeometry::new(1.0, 1.0, 1.0),
             Material::Standard(StandardMaterial::new(color)),
         )
+    }
+
+    /// The path tracer's skinned triangles are the ones the raster backends
+    /// draw and the raycaster hits — three.js's skinning, with a non-identity
+    /// mesh matrix, posed bones and weights summing to 0.7 — at the vertex.
+    #[test]
+    fn skinned_triangles_are_where_the_rasterisers_draw_them() {
+        use crate::core::{Bone, BufferAttribute, ObjectId, Raycaster, Skeleton, SkinnedMesh};
+        let mut geom = crate::geometries::PlaneGeometry::with_segments(1.0, 1.0, 2, 2);
+        let n = geom.get_attribute("position").unwrap().count();
+        let mut joints = vec![0.0f32; n * 4];
+        let mut weights = vec![0.0f32; n * 4];
+        for v in 0..n {
+            joints[v * 4 + 1] = 1.0;
+            weights[v * 4] = 0.4;
+            weights[v * 4 + 1] = 0.3;
+        }
+        geom.set_attribute("joint", BufferAttribute::new(joints, 4));
+        geom.set_attribute("weight", BufferAttribute::new(weights, 4));
+        let mut skeleton = Skeleton::new(vec![
+            Bone {
+                node: ObjectId::default(),
+                inverse_bind: Matrix4::identity(),
+            },
+            Bone {
+                node: ObjectId::default(),
+                inverse_bind: Matrix4::identity(),
+            },
+        ]);
+        skeleton.bone_matrices = vec![
+            Matrix4::translation(Vector3::new(0.2, 0.0, -1.0)),
+            Matrix4::from_quaternion(crate::math::Euler::new(0.3, 0.0, 0.5).to_quaternion()),
+        ];
+        let mut obj = Object3D::skinned_mesh(SkinnedMesh::new(
+            geom,
+            Material::Standard(StandardMaterial::new(Color::WHITE)),
+            skeleton,
+        ));
+        obj.position = Vector3::new(1.0, 2.0, 3.0);
+        obj.rotate_y(0.8);
+        let mut scene = Scene::new();
+        let id = scene.add(obj);
+        let rt = RaytraceScene::build(&mut scene, &RaytraceSettings::default());
+        let o = scene.arena.get(id).unwrap();
+        let ObjectKind::SkinnedMesh(sm) = &o.kind else {
+            unreachable!()
+        };
+        let t = Vector3::new(
+            o.matrix_world.elements[12],
+            o.matrix_world.elements[13],
+            o.matrix_world.elements[14],
+        );
+        let pos = sm.geometry.get_attribute("position").unwrap();
+        let drawn = |v: u32| {
+            let v = v as usize;
+            let p = Vector3::new(pos.array[v * 3], pos.array[v * 3 + 1], pos.array[v * 3 + 2]);
+            p.apply_matrix4(&sm.skeleton.bone_matrices[0]) * 0.4
+                + p.apply_matrix4(&sm.skeleton.bone_matrices[1]) * 0.3
+                + t * 0.3
+        };
+        assert_eq!(rt.tris.len(), sm.geometry.triangle_count());
+        for (i, tri) in rt.tris.iter().enumerate() {
+            let [a, b, c] = sm.geometry.triangle(i);
+            for (got, v) in tri.iter().zip([a, b, c]) {
+                assert!(
+                    (*got - drawn(v)).length() < 1e-5,
+                    "tri {i}: {got:?} vs {:?}",
+                    drawn(v)
+                );
+            }
+            // And the raycaster hits that triangle there.
+            let centroid = (tri[0] + tri[1] + tri[2]) * (1.0 / 3.0);
+            let normal = (tri[1] - tri[0]).cross(tri[2] - tri[0]).normalize();
+            let from = centroid + normal * 4.0;
+            let rc = Raycaster::new(from, normal * -1.0, 0.0, f32::INFINITY);
+            let hits = rc.intersect_object(&scene.arena, scene.root, true);
+            assert!(!hits.is_empty(), "tri {i}");
+            assert!(
+                (hits[0].point - centroid).length() < 1e-4,
+                "tri {i}: {:?} vs {centroid:?}",
+                hits[0].point
+            );
+        }
     }
 
     #[test]
@@ -2040,5 +2155,245 @@ mod tests {
         let (vis, _) = w.fog_at(10.0);
         let expect = (-0.1f32 * 0.1 * 10.0).exp();
         assert!((vis - expect).abs() < 1e-5);
+    }
+
+    // ---- groups, draw range, morph targets, sprites: traced vs raycast ----
+
+    use crate::cameras::PerspectiveCamera;
+    use crate::core::Raycaster;
+
+    /// Linear radiance per pixel, rgb, of an unlit scene on black.
+    fn trace(scene: &mut Scene, cam: &PerspectiveCamera, w: u32, h: u32) -> Vec<f32> {
+        let mut r = crate::raytrace::RaytraceRenderer::new(w, h);
+        r.set_settings(RaytraceSettings::default().with_samples(4).with_denoise(false));
+        r.render(scene, cam).unwrap();
+        r.film().resolve_hdr()
+    }
+
+    /// What the raycaster says is under pixel `(x, y)`'s centre — the
+    /// ground truth every renderer has to agree with.
+    fn under(
+        scene: &Scene,
+        cam: &PerspectiveCamera,
+        w: u32,
+        h: u32,
+        x: u32,
+        y: u32,
+    ) -> Option<crate::core::Intersection> {
+        let ndc = Vector2::new(
+            (x as f32 + 0.5) / w as f32 * 2.0 - 1.0,
+            1.0 - (y as f32 + 0.5) / h as f32 * 2.0,
+        );
+        let mut rc = Raycaster::default();
+        rc.layers.enable_all();
+        rc.set_from_camera(ndc, cam);
+        rc.intersect_object(&scene.arena, scene.root, true)
+            .into_iter()
+            .next()
+    }
+
+    /// Compare the traced image with `expect(raycast hit)` at every pixel
+    /// whose 3x3 neighbourhood the raycaster sees as one thing (an edge pixel
+    /// is a blend, legitimately). Returns how many pixels of each expected
+    /// colour were checked.
+    fn agree(
+        scene: &mut Scene,
+        cam: &PerspectiveCamera,
+        w: u32,
+        h: u32,
+        expect: impl Fn(Option<&crate::core::Intersection>) -> [f32; 3],
+    ) -> HashMap<[u32; 3], usize> {
+        let hdr = trace(scene, cam, w, h);
+        let truth: Vec<[f32; 3]> = (0..h)
+            .flat_map(|y| (0..w).map(move |x| (x, y)))
+            .map(|(x, y)| expect(under(scene, cam, w, h, x, y).as_ref()))
+            .collect();
+        let mut seen = HashMap::new();
+        for y in 1..h - 1 {
+            for x in 1..w - 1 {
+                let c = truth[(y * w + x) as usize];
+                let uniform = (-1i32..=1).all(|dy| {
+                    (-1i32..=1).all(|dx| {
+                        truth[((y as i32 + dy) as u32 * w + (x as i32 + dx) as u32) as usize] == c
+                    })
+                });
+                if !uniform {
+                    continue;
+                }
+                let i = ((y * w + x) * 4) as usize;
+                let got = [hdr[i], hdr[i + 1], hdr[i + 2]];
+                for k in 0..3 {
+                    assert!(
+                        (got[k] - c[k]).abs() < 0.02,
+                        "pixel ({x}, {y}): traced {got:?}, raycaster says {c:?}"
+                    );
+                }
+                *seen.entry(c.map(|v| v.to_bits())).or_insert(0) += 1;
+            }
+        }
+        seen
+    }
+
+    fn unlit(c: Color) -> Arc<Material> {
+        Arc::new(Material::Basic(crate::materials::BasicMaterial::new(c)))
+    }
+
+    /// Four unit quads along x, centred, facing +z.
+    fn quad_strip() -> crate::core::BufferGeometry {
+        let mut pos = Vec::new();
+        for i in 0..=4 {
+            pos.extend_from_slice(&[i as f32 - 2.0, -0.5, 0.0, i as f32 - 2.0, 0.5, 0.0]);
+        }
+        let mut idx = Vec::new();
+        for i in 0..4u32 {
+            let (a, b, c, d) = (2 * i, 2 * i + 1, 2 * i + 2, 2 * i + 3);
+            idx.extend_from_slice(&[a, c, b, b, c, d]);
+        }
+        let mut g = crate::core::BufferGeometry::new();
+        g.set_attribute("position", crate::core::BufferAttribute::new(pos, 3));
+        g.set_index(idx);
+        g
+    }
+
+    fn black_scene() -> Scene {
+        let mut scene = Scene::new();
+        scene.background = Color::new(0.0, 0.0, 0.0);
+        scene
+    }
+
+    fn cam(pos: Vector3, aspect: f32) -> PerspectiveCamera {
+        let mut c = PerspectiveCamera::new(50.0, aspect, 0.1, 100.0);
+        c.position = pos;
+        c.look_at(Vector3::ZERO);
+        c
+    }
+
+    /// A material array traces per group: each triangle carries its group's
+    /// material, and the triangles the draw range cuts are not there at all —
+    /// pixel for pixel what the raycaster reports.
+    #[test]
+    fn groups_and_draw_range_trace_as_the_raycaster_hits() {
+        let mut g = quad_strip();
+        g.add_group(0, 12, 0).add_group(12, 12, 1);
+        g.set_draw_range(0, 18);
+        let (red, green) = (Color::new(1.0, 0.0, 0.0), Color::new(0.0, 1.0, 0.0));
+        let mut scene = black_scene();
+        scene.add(Object3D::mesh(crate::core::Mesh::with_materials(
+            Arc::new(g),
+            vec![unlit(red), unlit(green)],
+        )));
+        let c = cam(Vector3::new(0.0, 0.0, 5.0), 2.0);
+        let seen = agree(&mut scene, &c, 64, 32, |hit| match hit {
+            Some(h) => match h.face.unwrap().material_index {
+                0 => [1.0, 0.0, 0.0],
+                _ => [0.0, 1.0, 0.0],
+            },
+            None => [0.0, 0.0, 0.0],
+        });
+        let n = |c: [f32; 3]| seen.get(&c.map(|v| v.to_bits())).copied().unwrap_or(0);
+        assert!(n([1.0, 0.0, 0.0]) > 20, "red group checked: {seen:?}");
+        assert!(n([0.0, 1.0, 0.0]) > 10, "green group checked: {seen:?}");
+        assert!(n([0.0, 0.0, 0.0]) > 100, "background checked: {seen:?}");
+        // The cut quad (x in 1..2) is background where it would have been.
+        let rt = RaytraceScene::build(&mut scene, &RaytraceSettings::default());
+        assert_eq!(rt.tris.len(), 6, "three quads of the four");
+        assert_eq!(rt.materials.len(), 2);
+    }
+
+    /// The tracer draws the morphed pose: an absolute target widening the
+    /// plane to 1.5x, at influence 0.6, traces where the raycaster hits —
+    /// including the strip past the rest pose's edge.
+    #[test]
+    fn morph_targets_trace_where_the_raycaster_hits() {
+        let mut g = crate::geometries::PlaneGeometry::new(2.0, 2.0);
+        let base = g.get_attribute("position").unwrap().array.clone();
+        let wide: Vec<f32> = base.chunks_exact(3).flat_map(|p| [p[0] * 1.5, p[1], p[2]]).collect();
+        g.set_morph_attribute("position", vec![crate::core::BufferAttribute::new(wide, 3)]);
+        let mut mesh = crate::core::Mesh::from_arc(Arc::new(g), unlit(Color::new(1.0, 1.0, 1.0)));
+        mesh.morph_influences = vec![0.6];
+        let mut scene = black_scene();
+        scene.add(Object3D::mesh(mesh));
+        let c = cam(Vector3::new(0.0, 0.0, 5.0), 1.0);
+        let (w, h) = (48, 48);
+        let seen = agree(&mut scene, &c, w, h, |hit| match hit {
+            Some(_) => [1.0, 1.0, 1.0],
+            None => [0.0, 0.0, 0.0],
+        });
+        assert!(seen.len() == 2, "{seen:?}");
+        // A ray at x = 1.15 (beyond the rest edge at 1, inside the morphed
+        // edge at 1.3) hits.
+        let mut rc = Raycaster::new(Vector3::new(1.15, 0.0, 5.0), Vector3::new(0.0, 0.0, -1.0), 0.0, f32::INFINITY);
+        rc.layers.enable_all();
+        assert_eq!(rc.intersect_object(&scene.arena, scene.root, true).len(), 1);
+        let rt = RaytraceScene::build(&mut scene, &RaytraceSettings::default());
+        let max_x = rt.tris.iter().flatten().map(|p| p.x).fold(f32::MIN, f32::max);
+        assert!((max_x - 1.3).abs() < 1e-5, "traced edge at {max_x}");
+    }
+
+    /// A sprite traces as the camera-facing quad three.js draws — centre,
+    /// rotation and all — seen here from an oblique camera, where the
+    /// sprite's own xy plane would be a sliver.
+    #[test]
+    fn sprites_trace_as_the_billboard_the_raycaster_hits() {
+        for size_attenuation in [true, false] {
+            let mut m = crate::materials::SpriteMaterial::new(Color::new(0.0, 0.0, 1.0));
+            m.rotation = 0.4;
+            m.size_attenuation = size_attenuation;
+            let mut sprite = crate::core::Sprite::new(Material::Sprite(m));
+            sprite.center = Vector2::new(0.3, 0.6);
+            let mut o = Object3D::sprite(sprite);
+            o.scale = if size_attenuation {
+                Vector3::new(2.0, 1.0, 1.0)
+            } else {
+                Vector3::new(0.2, 0.1, 1.0)
+            };
+            o.position = Vector3::new(0.3, 0.2, 0.0);
+            let mut scene = black_scene();
+            scene.add(o);
+            let c = cam(Vector3::new(5.0, 2.0, 3.0), 1.0);
+            let seen = agree(&mut scene, &c, 48, 48, |hit| match hit {
+                Some(_) => [0.0, 0.0, 1.0],
+                None => [0.0, 0.0, 0.0],
+            });
+            let blue = seen.get(&[0.0f32, 0.0, 1.0].map(|v| v.to_bits())).copied().unwrap_or(0);
+            assert!(blue > 15, "attenuation {size_attenuation}: {seen:?}");
+        }
+    }
+
+    /// The fingerprint that decides re-tracing sees what the tracer now
+    /// draws: influences, groups, draw range and the material array.
+    #[test]
+    fn fingerprint_tracks_morphs_groups_and_draw_range() {
+        use crate::raytrace::SceneFingerprint;
+        let mut g = quad_strip();
+        g.set_morph_attribute(
+            "position",
+            vec![crate::core::BufferAttribute::new(vec![0.0; 30], 3)],
+        );
+        let g = Arc::new(g);
+        let mut scene = black_scene();
+        let id = scene.add(Object3D::mesh(crate::core::Mesh::from_arc(
+            g.clone(),
+            unlit(Color::new(1.0, 0.0, 0.0)),
+        )));
+        let s = RaytraceSettings::default();
+        let fp = |scene: &Scene| SceneFingerprint::of(scene, &s);
+        let edit = |scene: &mut Scene, f: &dyn Fn(&mut crate::core::Mesh)| {
+            if let ObjectKind::Mesh(m) = &mut scene.get_mut(id).unwrap().kind {
+                f(m);
+            }
+        };
+        let base = fp(&scene);
+        edit(&mut scene, &|m| m.morph_influences = vec![0.5]);
+        let a = fp(&scene);
+        assert_ne!(a, base, "influence");
+        let mut g2 = (*g).clone();
+        g2.set_draw_range(0, 6);
+        let g2 = Arc::new(g2);
+        edit(&mut scene, &|m| m.geometry = g2.clone());
+        let b = fp(&scene);
+        assert_ne!(b, a, "draw range");
+        edit(&mut scene, &|m| m.materials = vec![unlit(Color::new(0.0, 1.0, 0.0))]);
+        assert_ne!(fp(&scene), b, "material array");
     }
 }

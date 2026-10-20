@@ -204,6 +204,41 @@ impl PmremGenerator {
         .with_cube_uv_atlas(atlas)
     }
 
+    /// A prefiltered environment back from the linear f32 CubeUV atlas that
+    /// [`generate_pmrem`](Self::generate_pmrem) makes (its
+    /// `cube_uv_atlas.pixels_f32`), at the same `size`.
+    ///
+    /// What lets the prefiltering run somewhere else: a worker, or an earlier
+    /// session through a cache. The atlas is a plain `Vec<f32>` that crosses a
+    /// thread or a `postMessage` as one buffer; this rebuilds the texture the
+    /// renderer samples (the atlas, which it uploads as is, and the face-level
+    /// copy beside it) with no blurring done again. `None` when the length is
+    /// not that of a `size` atlas.
+    pub fn from_atlas_f32(size: u32, pixels: Vec<f32>) -> Option<CubeTexture> {
+        let cube_size = size.clamp(16, 256);
+        let lod_max = (cube_size as f32).log2().floor() as u32;
+        let width = 3 * cube_size.max(16 * 7);
+        let height = 4 * cube_size;
+        if pixels.len() != (width * height * 4) as usize {
+            return None;
+        }
+        let mut bytes = vec![0u8; pixels.len()];
+        quantize_atlas_f32_to_u8(&pixels, &mut bytes);
+        let level0 = extract_cube_faces_from_atlas_lod(&bytes, width, cube_size, lod_max, 0, cube_size);
+        let atlas = CubeUvAtlas {
+            width,
+            height,
+            cube_size,
+            lod_max,
+            texel_width: 1.0 / width as f32,
+            texel_height: 1.0 / height as f32,
+            pixels: Arc::new(bytes),
+            pixels_f32: Some(Arc::new(pixels)),
+        };
+        let [f0, f1, f2, f3, f4, f5] = level0;
+        Some(CubeTexture::new(cube_size, TextureFormat::Rgba8Unorm, [f0, f1, f2, f3, f4, f5]).with_cube_uv_atlas(atlas))
+    }
+
     /// Prefilter `input` into a series of cube faces at a single roughness level.
     pub fn prefilter_cube(input: &CubeTexture, size: u32, roughness: f32) -> CubeTexture {
         let pmrem = Self::generate_pmrem(input, size.max(16));

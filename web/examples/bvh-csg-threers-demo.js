@@ -117,7 +117,7 @@ function runScenario() {
         }
 
         let { w, h } = resizeCanvas();
-        const renderer = await THREE.WebGLRenderer.create(canvas);
+        const renderer = await THREE.WebGLRenderer.create(canvas, { antialias: true });
         renderer.setSize(w, h, false);
 
         scene = new THREE.Scene();

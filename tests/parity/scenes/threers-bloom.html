@@ -18,13 +18,10 @@ const errEl = document.getElementById('err');
         scene.add(cube);
         const cam = new THREE.PerspectiveCamera(45, 800/600, 0.1, 100);
         cam.position.set(0, 0, 3); cam.lookAt(0, 0, 0);
-        // Render scene to an offscreen RT, then apply bloom that composites on canvas.
-        const sceneRT = new THREE.WebGLRenderTarget(800, 600);
-        r.setRenderTarget(sceneRT);
-        r.render(scene, cam);
-        r.setRenderTarget(null);
-        const bloom = new THREE.UnrealBloomPass(new THREE.Vector2(800, 600), 1.0, 0.4, 0.5);
-        bloom.apply(r, sceneRT);
+        const composer = new THREE.EffectComposer(r);
+        composer.addPass(new THREE.RenderPass(scene, cam));
+        composer.addPass(new THREE.UnrealBloomPass(new THREE.Vector2(800, 600), 1.0, 0.4, 0.5));
+        composer.render();
         await new Promise(rs => requestAnimationFrame(() => rs()));
         document.body.dataset.ready = 'true';
     } catch (e) {

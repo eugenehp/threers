@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><style>body{margin:0;background:#101820}canvas{display:block}</style></head>
+<body><canvas id="c" width="800" height="600"></canvas>
+<script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.165.0/build/three.module.js"}}</script>
+<script type="module">
+import * as THREE from 'three';
+// Standard spheres lit only by image-based light: the scene's environment (a
+// marked cube, turned and dimmed by environmentRotation / environmentIntensity),
+// a material's own envMap at its own intensity, and an envMapRotation.
+function face(fill, mark) {
+    const c = document.createElement('canvas'); c.width = c.height = 64;
+    const g = c.getContext('2d');
+    g.fillStyle = fill; g.fillRect(0, 0, 64, 64);
+    g.fillStyle = mark; g.fillRect(4, 4, 24, 24);
+    g.fillStyle = '#000'; g.fillRect(40, 40, 20, 20);
+    return c;
+}
+function cubeOf(fills) {
+    const t = new THREE.CubeTexture(fills.map(([f, m]) => face(f, m)));
+    t.colorSpace = THREE.SRGBColorSpace;
+    t.needsUpdate = true;
+    return t;
+}
+const room = cubeOf([['#d33', '#fff'], ['#3d3', '#ff0'], ['#33d', '#0ff'], ['#dd3', '#f0f'], ['#d3d', '#fff'], ['#3dd', '#f80']]);
+const warm = cubeOf([['#f84', '#fff'], ['#a52', '#ff0'], ['#fc8', '#fff'], ['#420', '#fa0'], ['#c63', '#fff'], ['#931', '#fd8']]);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x101820);
+scene.environment = room;
+scene.environmentIntensity = 0.8;
+scene.environmentRotation = new THREE.Euler(0, 0.6, 0);
+const geo = new THREE.SphereGeometry(0.62, 48, 32);
+const put = (mat, x, y) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, 0); scene.add(m); };
+put(new THREE.MeshStandardMaterial({ color: 0xffffff, metalness: 1, roughness: 0 }), -1.4, 0.7);
+put(new THREE.MeshStandardMaterial({ color: 0xffffff, metalness: 1, roughness: 0.45 }), 0, 0.7);
+put(new THREE.MeshStandardMaterial({ color: 0xcccccc, metalness: 0, roughness: 1 }), 1.4, 0.7);
+put(new THREE.MeshStandardMaterial({ color: 0xffffff, metalness: 1, roughness: 0, envMap: warm, envMapIntensity: 1.5 }), -0.7, -0.7);
+put(new THREE.MeshStandardMaterial({ color: 0xffffff, metalness: 1, roughness: 0, envMap: room, envMapRotation: new THREE.Euler(0.5, -1.0, 0) }), 0.7, -0.7);
+const cam = new THREE.PerspectiveCamera(45, 800/600, 0.1, 100);
+cam.position.set(0, 0, 5); cam.lookAt(0, 0, 0);
+const r = new THREE.WebGLRenderer({ canvas: document.getElementById('c'), antialias: false });
+r.setSize(800, 600, false); r.setPixelRatio(1);
+r.render(scene, cam);
+document.body.dataset.ready = 'true';
+</script></body></html>

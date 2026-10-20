@@ -23,6 +23,10 @@ pub struct MetalRenderTarget {
     /// MSAA is off.
     color: Owned,
     depth: Owned,
+    /// Under MSAA, the single-sampled depth the main pass resolves into when
+    /// it stores depth (`MetalRenderer::set_store_depth`) — what SSAO and
+    /// anything else sampling depth as a `depth2d` reads.
+    depth_resolved: Option<Owned>,
     width: u32,
     height: u32,
     color_format: NSUInteger,
@@ -92,11 +96,26 @@ impl MetalRenderTarget {
             samples,
             1,
         )?;
+        let depth_resolved = if samples > 1 {
+            Some(new_texture_2d(
+                device,
+                width,
+                height,
+                pixel_format::DEPTH32_FLOAT,
+                texture_usage::RENDER_TARGET | texture_usage::SHADER_READ,
+                storage_mode::PRIVATE,
+                1,
+                1,
+            )?)
+        } else {
+            None
+        };
 
         Ok(Self {
             draw_color,
             color,
             depth,
+            depth_resolved,
             width,
             height,
             color_format,
@@ -112,7 +131,7 @@ impl MetalRenderTarget {
         } else {
             NIL
         };
-        unsafe {
+        let pass = unsafe {
             PassAttachments::from_raw(
                 self.draw_color.id(),
                 resolve,
@@ -124,6 +143,10 @@ impl MetalRenderTarget {
                 pixel_format::DEPTH32_FLOAT,
                 self.sample_count,
             )
+        };
+        match &self.depth_resolved {
+            Some(d) => unsafe { pass.with_depth_resolve(d.id()) },
+            None => pass,
         }
     }
 
@@ -142,9 +165,18 @@ impl MetalRenderTarget {
         self.color.id()
     }
 
-    /// The depth texture. Borrowed — do not release.
+    /// The depth attachment — multisampled under MSAA. Borrowed — do not
+    /// release.
     pub fn depth_texture(&self) -> Id {
         self.depth.id()
+    }
+
+    /// Single-sampled depth: under MSAA, what the main pass resolved into
+    /// (written only while the renderer stores depth —
+    /// `MetalRenderer::set_store_depth`); otherwise the attachment itself.
+    /// Borrowed — do not release.
+    pub fn resolved_depth_texture(&self) -> Id {
+        self.depth_resolved.as_ref().map_or(self.depth.id(), |d| d.id())
     }
 
     /// A target whose colour and depth attachments are texture *arrays* of
@@ -182,6 +214,7 @@ impl MetalRenderTarget {
             draw_color: color.clone(),
             color,
             depth,
+            depth_resolved: None,
             width,
             height,
             color_format,

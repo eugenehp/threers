@@ -36,6 +36,20 @@ pub struct GpuContext {
     pub queue: Arc<wgpu::Queue>,
 }
 
+/// Features taken whenever the adapter has them.
+///
+/// `RG11B10UFLOAT_RENDERABLE` makes `rg11b10ufloat` a render target, which is
+/// what lets the fluid's volume carry its dye in half the memory — see
+/// [`crate::fluid::FluidFormats::volume_dye`]. It is in Metal, Vulkan and
+/// D3D12, and in WebGL2 with `EXT_color_buffer_float`.
+///
+/// `TIMESTAMP_QUERY` is what [`GpuTimer`](crate::renderer::gpu_timer::GpuTimer)
+/// needs. Asking for it up front matters: a device opened without it cannot
+/// be told to measure later, and on a machine with anything else running it
+/// is the only way to get a number that means something.
+const OPTIONAL_FEATURES: wgpu::Features =
+    wgpu::Features::RG11B10UFLOAT_RENDERABLE.union(wgpu::Features::TIMESTAMP_QUERY);
+
 impl GpuContext {
     /// A device with no surface — for headless rendering, compute, and tests.
     pub async fn headless() -> Result<Self, String> {
@@ -67,18 +81,60 @@ impl GpuContext {
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("threers device"),
-                required_features: wgpu::Features::empty(),
+                // Nothing here is required — each one is a format or a query
+                // that something can use if it is there and does without if
+                // it is not, so asking for the intersection costs nothing and
+                // refuses no adapter.
+                required_features: OPTIONAL_FEATURES & adapter.features(),
                 required_limits: renderer_limits(&adapter),
                 ..Default::default()
             })
             .await
             .map_err(|e| format!("no device: {e}"))?;
+        #[cfg(target_arch = "wasm32")]
+        report_uncaptured_errors(&device, "threers");
         Ok(Self {
             instance,
             adapter,
             device: Arc::new(device),
             queue: Arc::new(queue),
         })
+    }
+
+    /// Open on a `CAMetalLayer`, which is how iOS and iPadOS hand you a
+    /// drawable surface.
+    ///
+    /// UIKit has no window handle to pass: a view that draws with Metal has a
+    /// `CAMetalLayer`, and that layer *is* the surface. Take the pointer from
+    /// the view's `layer` property — after setting the view's `layerClass` to
+    /// `CAMetalLayer` — and hand it over here.
+    ///
+    /// ```swift
+    /// // In the UIView subclass
+    /// override class var layerClass: AnyClass { CAMetalLayer.self }
+    /// // …then, once, from Swift into the Rust staticlib:
+    /// fluid_create(Unmanaged.passUnretained(self.layer).toOpaque(), …)
+    /// ```
+    ///
+    /// # Safety
+    ///
+    /// `layer` must be a live `CAMetalLayer` that outlives the returned
+    /// surface. Nothing here retains it: the view owns its layer and will
+    /// free it when it goes, and a surface pointing at a freed layer is the
+    /// one mistake this cannot check for.
+    #[cfg(any(target_os = "ios", target_os = "macos"))]
+    pub async unsafe fn from_metal_layer(
+        layer: *mut std::ffi::c_void,
+    ) -> Result<(Self, wgpu::Surface<'static>), String> {
+        let instance = instance(backends());
+        let surface = unsafe {
+            instance
+                .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::CoreAnimationLayer(layer))
+                .map_err(|e| format!("no surface from the layer: {e}"))?
+        };
+        let adapter = request_adapter(&instance, Some(&surface)).await?;
+        let gpu = Self::open(instance, adapter).await?;
+        Ok((gpu, surface))
     }
 
     /// [`GpuContext::headless`], run to completion. **Native only** — a
@@ -149,9 +205,53 @@ impl GpuContext {
 /// This is [`crate::HeadlessRenderer`]'s rule, factored out — with `.max()`
 /// rather than a plain assignment, so an adapter that somehow reports *less*
 /// than the downlevel floor cannot drag the request below it.
+///
+/// The floor is WebGL2's on a GL adapter. The general downlevel floor asks for
+/// compute (65535 workgroups per dimension, among others) and WebGL2 has none,
+/// so starting from it makes `request_device` refuse every WebGL2 adapter —
+/// which is what [`GpuContext::open`] on one from `open_browser_gpu`'s
+/// fallback used to do.
+/// Print a device's uncaptured errors to the browser console.
+///
+/// WebGPU validates pipelines, bind groups and passes *asynchronously*: a
+/// rejected one throws nothing and fails no call, it just never draws. Unless
+/// something listens, the result is a black canvas at a full frame rate — and
+/// inside a worker the browser does not print these either. Every web device
+/// this crate opens installs this, and an embedder that opens its own device
+/// should too.
+///
+/// At most 16 messages, then one line saying the rest are dropped: a broken
+/// pipeline fails on every frame, and a console of identical lines hides the
+/// first one, which is usually the cause.
+///
+/// wasm only. Natively wgpu's default is to panic on an uncaptured error,
+/// which is louder than a log line and is kept.
+#[cfg(target_arch = "wasm32")]
+pub fn report_uncaptured_errors(device: &wgpu::Device, label: &'static str) {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    const MAX: u32 = 16;
+    let seen = AtomicU32::new(0);
+    device.on_uncaptured_error(Arc::new(move |e: wgpu::Error| {
+        let n = seen.fetch_add(1, Ordering::Relaxed);
+        let msg = if n < MAX {
+            format!("[{label}] GPU error: {e}")
+        } else if n == MAX {
+            format!("[{label}] further GPU errors are not printed")
+        } else {
+            return;
+        };
+        web_sys::console::error_1(&msg.into());
+    }));
+}
+
 pub fn renderer_limits(adapter: &wgpu::Adapter) -> wgpu::Limits {
     let adapter_limits = adapter.limits();
-    let mut limits = wgpu::Limits::downlevel_defaults().using_resolution(adapter_limits.clone());
+    let floor = if adapter.get_info().backend == wgpu::Backend::Gl {
+        wgpu::Limits::downlevel_webgl2_defaults()
+    } else {
+        wgpu::Limits::downlevel_defaults()
+    };
+    let mut limits = floor.using_resolution(adapter_limits.clone());
     limits.max_sampled_textures_per_shader_stage = adapter_limits
         .max_sampled_textures_per_shader_stage
         .max(limits.max_sampled_textures_per_shader_stage);

@@ -59,6 +59,10 @@ pub struct PerspectiveCamera {
     pub projection_override: Option<[f32; 16]>,
     /// Channel mask — meshes are drawn iff this intersects `Object3D::layers`.
     pub layers: crate::core::Layers,
+    /// When set, the view matrix as given — three.js's `matrixWorldInverse` of
+    /// a camera whose world matrix is not a pure rotation and translation (a
+    /// scaled parent). `position`, `target` and `up` still describe its pose.
+    pub view_override: Option<super::ViewOverride>,
 }
 
 impl PerspectiveCamera {
@@ -112,6 +116,7 @@ impl PerspectiveCamera {
             projection: ProjectionKind::Perspective,
             projection_override: None,
             layers: crate::core::Layers::default(),
+            view_override: None,
         }
     }
 
@@ -166,7 +171,9 @@ impl PerspectiveCamera {
 
 impl Camera for PerspectiveCamera {
     fn view_matrix(&self) -> Matrix4 {
-        Matrix4::look_at(self.position, self.target, self.up)
+        self.view_override
+            .and_then(|o| o.for_pose(self.position, self.target, self.up))
+            .unwrap_or_else(|| Matrix4::look_at(self.position, self.target, self.up))
     }
     fn look_at(&mut self, target: Vector3) {
         self.target = target;

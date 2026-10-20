@@ -63,6 +63,18 @@ pub(crate) const BATCH_SIZE: u64 = (MAX_BATCH as u64) * 2 * 16;
 pub struct FluidFormats {
     /// Dye — three colour channels and nothing in alpha.
     pub dye: wgpu::TextureFormat,
+    /// The *volume's* dye, which can be packed tighter than the plane's.
+    ///
+    /// Three channels of 11-bit float in one word: half the memory and half
+    /// the bandwidth of four channels of 16, and the dye grid is both the
+    /// largest field in a volume and the one the heaviest pass reads and
+    /// writes. It is unsigned, which the plane's dye could not be — a
+    /// MacCormack correction is an extrapolation and can undershoot — but
+    /// nothing in the volume subtracts from the dye.
+    ///
+    /// `rg11b10ufloat` is only a render target where the device has that
+    /// feature, so this falls back to [`dye`](Self::dye).
+    pub volume_dye: wgpu::TextureFormat,
     /// Velocity — two channels.
     pub velocity: wgpu::TextureFormat,
     /// Pressure, divergence, curl, sunrays — one channel.
@@ -74,6 +86,10 @@ impl Default for FluidFormats {
     fn default() -> Self {
         Self {
             dye: wgpu::TextureFormat::Rgba16Float,
+            // Not the packed one: it is a render target only where the
+            // device asked for the feature, and this is the baseline.
+            // `FluidSim3d` upgrades it when the device it is handed can.
+            volume_dye: wgpu::TextureFormat::Rgba16Float,
             velocity: wgpu::TextureFormat::Rg16Float,
             scalar: wgpu::TextureFormat::R16Float,
         }
@@ -81,6 +97,25 @@ impl Default for FluidFormats {
 }
 
 impl FluidFormats {
+    /// The formats a volume will *actually* allocate, given its
+    /// `compact_dye`.
+    ///
+    /// [`volume_dye`](Self::volume_dye) is what the device would allow, not
+    /// what the simulation asked for, and those are different things: the
+    /// packed format is off by default. Sizing a volume against the first
+    /// while it allocates with the second underestimates the dye — which is
+    /// most of the memory — by a factor of two. Resolve before predicting.
+    pub fn resolve(self, compact_dye: bool) -> Self {
+        Self {
+            volume_dye: if compact_dye {
+                self.volume_dye
+            } else {
+                self.dye
+            },
+            ..self
+        }
+    }
+
     /// The narrowest formats this adapter will render to and filter, widening
     /// one channel count at a time: `r16float` → `rg16float` → `rgba16float`.
     /// Returns `None` if even `rgba16float` is unusable, which means the
@@ -101,6 +136,11 @@ impl FluidFormats {
         }
         Some(Self {
             dye: F::Rgba16Float,
+            volume_dye: if usable(F::Rg11b10Ufloat) {
+                F::Rg11b10Ufloat
+            } else {
+                F::Rgba16Float
+            },
             velocity: if usable(F::Rg16Float) {
                 F::Rg16Float
             } else {
@@ -180,6 +220,8 @@ pub(crate) struct OutputPipes {
     pub display_replace: wgpu::RenderPipeline,
     pub color: wgpu::RenderPipeline,
     pub checkerboard: wgpu::RenderPipeline,
+    /// The frame-rate read-out, composited over the finished picture.
+    pub overlay: wgpu::RenderPipeline,
 }
 
 impl Pipelines {
@@ -227,13 +269,18 @@ impl Pipelines {
         });
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("threers fluid"),
-            source: wgpu::ShaderSource::Wgsl(super::shader::SHADER.into()),
+            source: wgpu::ShaderSource::Wgsl(
+                format!("{}\n{}", super::read_out::glyphs(), super::shader::SHADER).into(),
+            ),
         });
 
+        // The plane does not use `volume_dye`; see its docs for why the
+        // volume can pack its dye and this cannot.
         let FluidFormats {
             dye,
             velocity,
             scalar,
+            volume_dye: _,
         } = formats;
         let p =
             |fs: &str, format, blend| build(device, &layout, &module, "vs", fs, format, blend, fs);
@@ -294,6 +341,7 @@ impl Pipelines {
                 display_replace: p("fs_display", None),
                 color: p("fs_color", None),
                 checkerboard: p("fs_checkerboard", None),
+                overlay: p("fs_overlay", Some(wgpu::BlendState::ALPHA_BLENDING)),
             }
         })
     }

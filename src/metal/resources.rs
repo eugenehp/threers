@@ -42,10 +42,36 @@ pub struct PipelineKey {
     pub depth_format: NSUInteger,
     /// MSAA sample count (1 = off).
     pub sample_count: u32,
+    /// three.js `colorWrite`: `false` masks every colour channel, leaving
+    /// only the depth write (an invisible occluder).
+    pub color_write: bool,
+    /// The order-independent transparency accumulation: `fs_oit_accum`
+    /// into two half-float attachments (weighted light, coverage; and the
+    /// layers' transmittance), blended additively and multiplicatively.
+    pub oit_accum: bool,
 }
 
 /// Build the pipeline state for `key`.
+///
+/// A blended mesh draw into an 8-bit sRGB attachment blends the *encoded*
+/// values, as three.js's default `WebGLRenderer` does on its canvas: the
+/// fragment function reads the destination (`fs_mesh_encoded_blend`) and
+/// fixed-function blending is off. Where the device cannot read the
+/// framebuffer the pipeline falls back to the hardware blend, in linear light.
 pub fn render_pipeline(device: &MetalDevice, key: PipelineKey) -> Result<Owned, MetalError> {
+    if key.blend && pixel_format::is_srgb(key.color_format) {
+        if let Ok(p) = build_render_pipeline(device, key, true) {
+            return Ok(p);
+        }
+    }
+    build_render_pipeline(device, key, false)
+}
+
+fn build_render_pipeline(
+    device: &MetalDevice,
+    key: PipelineKey,
+    encoded_blend: bool,
+) -> Result<Owned, MetalError> {
     let _pool = AutoreleasePool::new();
     let (vs, fs) = match (key.point_sprites, key.layered) {
         (false, false) if key.wide_lines => ("vs_line_quad", "fs_line_quad"),
@@ -61,6 +87,16 @@ pub fn render_pipeline(device: &MetalDevice, key: PipelineKey) -> Result<Owned, 
         (true, false) => ("vs_point", "fs_point"),
         (true, true) => ("vs_point_layered", "fs_point"),
     };
+    let encoded_blend = encoded_blend && (fs == "fs_mesh" || fs == "fs_point");
+    if encoded_blend && !key.blend {
+        return Err(MetalError::PipelineCreation("no encoded blend without blending".into()));
+    }
+    let fs = match (encoded_blend, fs) {
+        (true, "fs_point") => "fs_point_encoded_blend",
+        (true, _) => "fs_mesh_encoded_blend",
+        (false, fs) => fs,
+    };
+    let fs = if key.oit_accum { "fs_oit_accum" } else { fs };
     let vertex_fn = device.function(vs)?;
     let fragment_fn = device.function(fs)?;
 
@@ -89,7 +125,28 @@ pub fn render_pipeline(device: &MetalDevice, key: PipelineKey) -> Result<Owned, 
         let attachments: Id = msg0(desc.id(), sel!("colorAttachments"));
         let color: Id = msg1(attachments, sel!("objectAtIndexedSubscript:"), 0usize);
         let _: () = msg1(color, sel!("setPixelFormat:"), key.color_format);
-        if key.blend {
+        if key.oit_accum {
+            // Accumulation: weighted light added up; transmittance multiplied
+            // down (`dst · (1 − src)`), per channel and in alpha alike.
+            for (index, (src, dst)) in [
+                (blend_factor::ONE, blend_factor::ONE),
+                (blend_factor::ZERO, blend_factor::ONE_MINUS_SOURCE_COLOR),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let a: Id = msg1(attachments, sel!("objectAtIndexedSubscript:"), index);
+                let _: () = msg1(a, sel!("setPixelFormat:"), pixel_format::RGBA16_FLOAT);
+                let _: () = msg1(a, sel!("setBlendingEnabled:"), YES);
+                let _: () = msg1(a, sel!("setRgbBlendOperation:"), blend_op::ADD);
+                let _: () = msg1(a, sel!("setAlphaBlendOperation:"), blend_op::ADD);
+                let _: () = msg1(a, sel!("setSourceRGBBlendFactor:"), src);
+                let _: () = msg1(a, sel!("setDestinationRGBBlendFactor:"), dst);
+                let alpha_dst = if index == 0 { blend_factor::ONE } else { blend_factor::ONE_MINUS_SOURCE_ALPHA };
+                let _: () = msg1(a, sel!("setSourceAlphaBlendFactor:"), src);
+                let _: () = msg1(a, sel!("setDestinationAlphaBlendFactor:"), alpha_dst);
+            }
+        } else if key.blend && !encoded_blend {
             let _: () = msg1(color, sel!("setBlendingEnabled:"), YES);
             let _: () = msg1(color, sel!("setRgbBlendOperation:"), blend_op::ADD);
             let _: () = msg1(color, sel!("setAlphaBlendOperation:"), blend_op::ADD);
@@ -111,6 +168,10 @@ pub fn render_pipeline(device: &MetalDevice, key: PipelineKey) -> Result<Owned, 
             );
         } else {
             let _: () = msg1(color, sel!("setBlendingEnabled:"), NO);
+        }
+        if !key.color_write {
+            // `MTLColorWriteMaskNone`.
+            let _: () = msg1(color, sel!("setWriteMask:"), 0 as NSUInteger);
         }
 
         let mut err: Id = NIL;
@@ -186,6 +247,19 @@ pub fn new_texture_array(
     usage: NSUInteger,
     slices: u32,
 ) -> Result<Owned, MetalError> {
+    new_texture_array_levels(device, width, height, pixel_format, usage, slices, 1)
+}
+
+/// [`new_texture_array`] with `levels` mip levels.
+pub fn new_texture_array_levels(
+    device: &MetalDevice,
+    width: u32,
+    height: u32,
+    pixel_format: NSUInteger,
+    usage: NSUInteger,
+    slices: u32,
+    levels: u32,
+) -> Result<Owned, MetalError> {
     let _pool = AutoreleasePool::new();
     unsafe {
         let desc = Owned::from_retained(alloc_init(class!("MTLTextureDescriptor")))
@@ -204,7 +278,7 @@ pub fn new_texture_array(
             sel!("setArrayLength:"),
             slices.max(1) as NSUInteger,
         );
-        let _: () = msg1(desc.id(), sel!("setMipmapLevelCount:"), 1usize);
+        let _: () = msg1(desc.id(), sel!("setMipmapLevelCount:"), levels.max(1) as NSUInteger);
         let _: () = msg1(desc.id(), sel!("setSampleCount:"), 1usize);
         let _: () = msg1(desc.id(), sel!("setUsage:"), usage);
         let _: () = msg1(desc.id(), sel!("setStorageMode:"), storage_mode::PRIVATE);
@@ -392,6 +466,22 @@ fn upload_level(
     Ok(())
 }
 
+/// Overwrite level 0 of an uncompressed 2D texture from CPU memory.
+///
+/// The texture has to be `SHARED` or `MANAGED` — `replaceRegion` is a memcpy
+/// into the resource, and a `PRIVATE` one has no CPU-visible storage to copy
+/// into.
+#[cfg(feature = "fluid")]
+pub(crate) fn upload_texture_2d(
+    tex: &Owned,
+    width: u32,
+    height: u32,
+    bytes_per_pixel: usize,
+    bytes: &[u8],
+) -> Result<(), MetalError> {
+    upload_level(tex, 0, width, height, (1, 1), bytes_per_pixel, bytes)
+}
+
 /// Fill levels 1..N on the GPU. Best effort: a device that declines the blit
 /// leaves the texture with only level 0, which samples fine, just without
 /// minification filtering.
@@ -439,6 +529,9 @@ pub struct SamplerKey {
     pub mag_linear: bool,
     pub min_linear: bool,
     pub mipmapped: bool,
+    /// Between mip levels: linear (three.js's `*MipmapLinearFilter`) or
+    /// nearest (`*MipmapNearestFilter`). Only read when `mipmapped`.
+    pub mip_linear: bool,
     pub wrap_s: u8,
     pub wrap_t: u8,
 }
@@ -448,9 +541,40 @@ impl SamplerKey {
         Self {
             mag_linear: t.mag_filter == TextureFilter::Linear,
             min_linear: t.min_filter == TextureFilter::Linear,
-            mipmapped: !t.format.is_block_compressed() && t.width > 1 && t.height > 1,
+            // No mipmaps where the texture asks for none (`LinearFilter` /
+            // `NearestFilter` as its `minFilter`).
+            mipmapped: t.mipmap_filter.is_some()
+                && !t.format.is_block_compressed()
+                && t.width > 1
+                && t.height > 1,
+            mip_linear: t.mipmap_filter != Some(TextureFilter::Nearest),
             wrap_s: wrap_code(t.wrap_s),
             wrap_t: wrap_code(t.wrap_t),
+        }
+    }
+
+    /// A cube texture's: its filters and mipmap mode, clamped.
+    pub fn from_cube(c: &crate::textures::CubeTexture) -> Self {
+        Self {
+            mag_linear: c.mag_filter == TextureFilter::Linear,
+            min_linear: c.min_filter == TextureFilter::Linear,
+            mipmapped: c.mipmap_filter.is_some(),
+            mip_linear: c.mipmap_filter != Some(TextureFilter::Nearest),
+            wrap_s: 0,
+            wrap_t: 0,
+        }
+    }
+
+    /// The scene environment's: trilinear across its mip chain, clamped. A
+    /// rough surface reads the environment by roughness down that chain.
+    pub fn environment() -> Self {
+        Self {
+            mag_linear: true,
+            min_linear: true,
+            mipmapped: true,
+            mip_linear: true,
+            wrap_s: 0,
+            wrap_t: 0,
         }
     }
 
@@ -460,6 +584,7 @@ impl SamplerKey {
             mag_linear: true,
             min_linear: true,
             mipmapped: false,
+            mip_linear: true,
             wrap_s: 0,
             wrap_t: 0,
         }
@@ -482,57 +607,19 @@ fn address_mode(code: u8) -> NSUInteger {
     }
 }
 
-/// Build an `MTLSamplerState` for `key`.
-/// The directional shadow map: a depth texture rendered from the light.
-pub fn new_shadow_map(device: &MetalDevice, size: u32) -> Result<Owned, MetalError> {
-    new_texture_2d(
+/// A 1x1, one-layer depth array, bound at the shadow slots when nothing
+/// casts: Metal requires every resource a function declares to be bound, and
+/// the shader declares the maps as `depth2d_array`.
+pub fn empty_shadow_map(device: &MetalDevice) -> Result<Owned, MetalError> {
+    new_texture_array_levels(
         device,
-        size,
-        size,
+        1,
+        1,
         pixel_format::DEPTH32_FLOAT,
         texture_usage::RENDER_TARGET | texture_usage::SHADER_READ,
-        storage_mode::PRIVATE,
         1,
         1,
     )
-}
-
-/// A depth *cube* for a point light: six faces, one per direction.
-pub fn new_shadow_cube(device: &MetalDevice, size: u32) -> Result<Owned, MetalError> {
-    let _pool = AutoreleasePool::new();
-    unsafe {
-        let desc = Owned::from_retained(alloc_init(class!("MTLTextureDescriptor")))
-            .ok_or_else(|| MetalError::Allocation("MTLTextureDescriptor".into()))?;
-        let _: () = msg1(desc.id(), sel!("setTextureType:"), texture_type::TYPE_CUBE);
-        let _: () = msg1(desc.id(), sel!("setPixelFormat:"), pixel_format::DEPTH32_FLOAT);
-        let _: () = msg1(desc.id(), sel!("setWidth:"), size.max(1) as NSUInteger);
-        let _: () = msg1(desc.id(), sel!("setHeight:"), size.max(1) as NSUInteger);
-        let _: () = msg1(desc.id(), sel!("setDepth:"), 1usize);
-        let _: () = msg1(desc.id(), sel!("setMipmapLevelCount:"), 1usize);
-        let _: () = msg1(
-            desc.id(),
-            sel!("setUsage:"),
-            texture_usage::RENDER_TARGET | texture_usage::SHADER_READ,
-        );
-        let _: () = msg1(desc.id(), sel!("setStorageMode:"), storage_mode::PRIVATE);
-        let tex: Id = msg1(
-            device.device_id(),
-            sel!("newTextureWithDescriptor:"),
-            desc.id(),
-        );
-        Owned::from_retained(tex)
-            .ok_or_else(|| MetalError::Allocation(format!("{size} shadow cube")))
-    }
-}
-
-/// A 1x1 depth cube, bound when no point light casts.
-pub fn empty_shadow_cube(device: &MetalDevice) -> Result<Owned, MetalError> {
-    new_shadow_cube(device, 1)
-}
-
-/// A 1x1 depth texture, bound when nothing casts.
-pub fn empty_shadow_map(device: &MetalDevice) -> Result<Owned, MetalError> {
-    new_shadow_map(device, 1)
 }
 
 /// The comparison sampler the percentage-closer filter uses.
@@ -578,6 +665,12 @@ pub fn point_shadow_pipeline(device: &MetalDevice) -> Result<Owned, MetalError> 
     shadow_pipeline_named(device, "vs_shadow_point", Some("fs_shadow_point"))
 }
 
+/// The directional/spot pass for a cut-out caster: `fs_shadow_cut` discards
+/// where the caster's map is under its `alphaTest`.
+pub fn cut_shadow_pipeline(device: &MetalDevice) -> Result<Owned, MetalError> {
+    shadow_pipeline_named(device, "vs_shadow_cut", Some("fs_shadow_cut"))
+}
+
 fn shadow_pipeline_named(
     device: &MetalDevice,
     vs: &str,
@@ -611,6 +704,7 @@ fn shadow_pipeline_named(
     }
 }
 
+/// Build an `MTLSamplerState` for `key`.
 pub fn new_sampler(device: &MetalDevice, key: SamplerKey) -> Result<Owned, MetalError> {
     let _pool = AutoreleasePool::new();
     unsafe {
@@ -628,8 +722,10 @@ pub fn new_sampler(device: &MetalDevice, key: SamplerKey) -> Result<Owned, Metal
         let _: () = msg1(
             desc.id(),
             sel!("setMipFilter:"),
-            if key.mipmapped {
+            if key.mipmapped && key.mip_linear {
                 filter::MIP_LINEAR
+            } else if key.mipmapped {
+                filter::MIP_NEAREST
             } else {
                 filter::MIP_NOT_MIPMAPPED
             },
@@ -657,6 +753,84 @@ pub fn new_sampler(device: &MetalDevice, key: SamplerKey) -> Result<Owned, Metal
 /// A 1x1 opaque white texture, bound wherever a material has no map so the
 /// fragment shader can sample unconditionally.
 /// Allocate a cube texture with a full mip chain.
+/// A 1×1 single-slice RGBA16F array of transparent black: the transmission
+/// capture's stand-in, bound when nothing in the frame is transmissive.
+pub fn black_texture_array(device: &MetalDevice) -> Result<Owned, MetalError> {
+    let _pool = AutoreleasePool::new();
+    let tex = unsafe {
+        let desc = Owned::from_retained(alloc_init(class!("MTLTextureDescriptor")))
+            .ok_or_else(|| MetalError::Allocation("MTLTextureDescriptor".into()))?;
+        let _: () = msg1(desc.id(), sel!("setTextureType:"), texture_type::TYPE_2D_ARRAY);
+        let _: () = msg1(desc.id(), sel!("setPixelFormat:"), pixel_format::RGBA16_FLOAT);
+        let _: () = msg1(desc.id(), sel!("setWidth:"), 1usize);
+        let _: () = msg1(desc.id(), sel!("setHeight:"), 1usize);
+        let _: () = msg1(desc.id(), sel!("setDepth:"), 1usize);
+        let _: () = msg1(desc.id(), sel!("setArrayLength:"), 1usize);
+        let _: () = msg1(desc.id(), sel!("setMipmapLevelCount:"), 1usize);
+        let _: () = msg1(desc.id(), sel!("setUsage:"), texture_usage::SHADER_READ);
+        let _: () = msg1(desc.id(), sel!("setStorageMode:"), cpu_writable_storage(device));
+        let tex: Id = msg1(device.device_id(), sel!("newTextureWithDescriptor:"), desc.id());
+        Owned::from_retained(tex).ok_or_else(|| MetalError::Allocation("capture stand-in".into()))?
+    };
+    let zero = [0u16; 4];
+    unsafe {
+        let _: () = msg6(
+            tex.id(),
+            sel!("replaceRegion:mipmapLevel:slice:withBytes:bytesPerRow:bytesPerImage:"),
+            MTLRegion::image_2d(1, 1),
+            0usize,
+            0usize,
+            zero.as_ptr() as *const c_void,
+            8 as NSUInteger,
+            0usize,
+        );
+    }
+    Ok(tex)
+}
+
+/// three.js's `RectAreaLight` tables (`ltc_1`, `ltc_2`, extracted from
+/// three.js r165 — see `upload_ltc` in the wgpu renderer) as a two-slice
+/// 64×64 half-float array, which every Apple GPU filters.
+pub fn upload_ltc(device: &MetalDevice) -> Result<Owned, MetalError> {
+    const LTC_1: &[u8] = include_bytes!("../renderer/ltc/ltc_float_1.bin");
+    const LTC_2: &[u8] = include_bytes!("../renderer/ltc/ltc_float_2.bin");
+    let _pool = AutoreleasePool::new();
+    let tex = unsafe {
+        let desc = Owned::from_retained(alloc_init(class!("MTLTextureDescriptor")))
+            .ok_or_else(|| MetalError::Allocation("MTLTextureDescriptor".into()))?;
+        let _: () = msg1(desc.id(), sel!("setTextureType:"), texture_type::TYPE_2D_ARRAY);
+        let _: () = msg1(desc.id(), sel!("setPixelFormat:"), pixel_format::RGBA16_FLOAT);
+        let _: () = msg1(desc.id(), sel!("setWidth:"), 64usize);
+        let _: () = msg1(desc.id(), sel!("setHeight:"), 64usize);
+        let _: () = msg1(desc.id(), sel!("setDepth:"), 1usize);
+        let _: () = msg1(desc.id(), sel!("setArrayLength:"), 2usize);
+        let _: () = msg1(desc.id(), sel!("setMipmapLevelCount:"), 1usize);
+        let _: () = msg1(desc.id(), sel!("setUsage:"), texture_usage::SHADER_READ);
+        let _: () = msg1(desc.id(), sel!("setStorageMode:"), cpu_writable_storage(device));
+        let tex: Id = msg1(device.device_id(), sel!("newTextureWithDescriptor:"), desc.id());
+        Owned::from_retained(tex).ok_or_else(|| MetalError::Allocation("LTC table texture".into()))?
+    };
+    for (slice, table) in [LTC_1, LTC_2].into_iter().enumerate() {
+        let half: Vec<u16> = table
+            .chunks_exact(4)
+            .map(|c| crate::renderer::gpu_texture::f32_to_f16_bits(f32::from_le_bytes([c[0], c[1], c[2], c[3]])))
+            .collect();
+        unsafe {
+            let _: () = msg6(
+                tex.id(),
+                sel!("replaceRegion:mipmapLevel:slice:withBytes:bytesPerRow:bytesPerImage:"),
+                MTLRegion::image_2d(64, 64),
+                0usize,
+                slice as NSUInteger,
+                half.as_ptr() as *const c_void,
+                (64 * 8) as NSUInteger,
+                0usize,
+            );
+        }
+    }
+    Ok(tex)
+}
+
 fn new_texture_cube(
     device: &MetalDevice,
     size: u32,
@@ -720,6 +894,36 @@ fn upload_cube_level(
     Ok(())
 }
 
+/// Upload a PMREM's CubeUV atlas as the 2D texture `textureCubeUV` reads:
+/// half floats from its linear pixels where it has them (values above 1
+/// survive), else its 8-bit pixels in the cube's own format. Rows top first,
+/// as the wgpu path uploads it — the lookup flips v to match.
+pub fn upload_cube_uv_atlas(
+    device: &MetalDevice,
+    atlas: &crate::textures::CubeUvAtlas,
+    srgb: bool,
+) -> Result<Owned, MetalError> {
+    let usage = texture_usage::SHADER_READ;
+    let storage = cpu_writable_storage(device);
+    match &atlas.pixels_f32 {
+        Some(f) => {
+            let tex = new_texture_2d(device, atlas.width, atlas.height, pixel_format::RGBA16_FLOAT, usage, storage, 1, 1)?;
+            let halves: Vec<u8> = f
+                .iter()
+                .flat_map(|v| crate::renderer::gpu_texture::f32_to_f16_bits(*v).to_le_bytes())
+                .collect();
+            upload_level(&tex, 0, atlas.width, atlas.height, (1, 1), 8, &halves)?;
+            Ok(tex)
+        }
+        None => {
+            let format = if srgb { pixel_format::RGBA8_UNORM_SRGB } else { pixel_format::RGBA8_UNORM };
+            let tex = new_texture_2d(device, atlas.width, atlas.height, format, usage, storage, 1, 1)?;
+            upload_level(&tex, 0, atlas.width, atlas.height, (1, 1), 4, &atlas.pixels)?;
+            Ok(tex)
+        }
+    }
+}
+
 /// Upload a [`CubeTexture`](crate::textures::CubeTexture) as a mipmapped Metal cube.
 ///
 /// The chain comes from the same `mip_chain` the wgpu path uses, which is the
@@ -776,6 +980,50 @@ pub fn white_texture(device: &MetalDevice) -> Result<Owned, MetalError> {
     Ok(tex)
 }
 
+/// The order-independent transparency composite, in two halves over what is
+/// behind (`fs_oit_tint`: times the layers' transmittance; `fs_oit_light`:
+/// plus their light), into `color_format` at `sample_count`.
+pub fn oit_composite_pipeline(
+    device: &MetalDevice,
+    color_format: NSUInteger,
+    sample_count: u32,
+    light: bool,
+) -> Result<Owned, MetalError> {
+    let _pool = AutoreleasePool::new();
+    let vertex_fn = device.function("vs_oit_fullscreen")?;
+    let fragment_fn = device.function(if light { "fs_oit_light" } else { "fs_oit_tint" })?;
+    unsafe {
+        let desc = Owned::from_retained(alloc_init(class!("MTLRenderPipelineDescriptor")))
+            .ok_or_else(|| MetalError::Allocation("MTLRenderPipelineDescriptor".into()))?;
+        let _: () = msg1(desc.id(), sel!("setVertexFunction:"), vertex_fn.id());
+        let _: () = msg1(desc.id(), sel!("setFragmentFunction:"), fragment_fn.id());
+        let _: () = msg1(desc.id(), sel!("setRasterSampleCount:"), sample_count.max(1) as NSUInteger);
+        let attachments: Id = msg0(desc.id(), sel!("colorAttachments"));
+        let color: Id = msg1(attachments, sel!("objectAtIndexedSubscript:"), 0usize);
+        let _: () = msg1(color, sel!("setPixelFormat:"), color_format);
+        let _: () = msg1(color, sel!("setBlendingEnabled:"), YES);
+        let _: () = msg1(color, sel!("setRgbBlendOperation:"), blend_op::ADD);
+        let _: () = msg1(color, sel!("setAlphaBlendOperation:"), blend_op::ADD);
+        let (rgb_src, rgb_dst, a_src, a_dst) = if light {
+            (blend_factor::ONE, blend_factor::ONE, blend_factor::ONE, blend_factor::ONE_MINUS_SOURCE_ALPHA)
+        } else {
+            (blend_factor::ZERO, blend_factor::SOURCE_COLOR, blend_factor::ZERO, blend_factor::ONE)
+        };
+        let _: () = msg1(color, sel!("setSourceRGBBlendFactor:"), rgb_src);
+        let _: () = msg1(color, sel!("setDestinationRGBBlendFactor:"), rgb_dst);
+        let _: () = msg1(color, sel!("setSourceAlphaBlendFactor:"), a_src);
+        let _: () = msg1(color, sel!("setDestinationAlphaBlendFactor:"), a_dst);
+        let mut err: Id = NIL;
+        let state: Id = msg2(
+            device.device_id(),
+            sel!("newRenderPipelineStateWithDescriptor:error:"),
+            desc.id(),
+            &mut err as *mut Id,
+        );
+        Owned::from_retained(state).ok_or_else(|| MetalError::PipelineCreation(error_message(err)))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -812,6 +1060,7 @@ mod tests {
     #[test]
     fn pipeline_keys_distinguish_blend_and_format() {
         let a = PipelineKey {
+            oit_accum: false,
             point_sprites: false,
             slim_lines: false,
             wide_lines: false,
@@ -822,9 +1071,11 @@ mod tests {
             color_format: pixel_format::RGBA8_UNORM_SRGB,
             depth_format: pixel_format::DEPTH32_FLOAT,
             sample_count: 1,
+            color_write: true,
         };
         let b = PipelineKey { blend: true, ..a };
         assert_ne!(a, b);
+        assert_ne!(a, PipelineKey { color_write: false, ..a });
         let c = PipelineKey {
             sample_count: 4,
             ..a
@@ -869,3 +1120,4 @@ mod tests {
         assert!(k.mipmapped);
     }
 }
+

@@ -29,7 +29,8 @@ impl GridHelper {
         let mut g = BufferGeometry::new();
         g.set_attribute("position", BufferAttribute::new(positions, 3));
         g.set_attribute("color", BufferAttribute::new(colors, 3));
-        let mat = LineBasicMaterial::new(Color::WHITE);
+        // three.js helpers are `toneMapped: false`.
+        let mat = LineBasicMaterial { tone_mapped: false, ..LineBasicMaterial::new(Color::WHITE) };
         Object3D::line_segments(LineSegments::new(g, mat.into()))
     }
 

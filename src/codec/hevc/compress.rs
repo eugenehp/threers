@@ -180,7 +180,7 @@ impl CompressedEncoder {
 
     fn pps_payload(&self) -> Vec<u8> {
         if self.cfg.tiles() > 1 {
-            write_pps_tiled(self.cfg.tile_grid)
+            write_pps_tiled(self.cfg.tile_grid, self.deblock)
         } else if self.deblock {
             write_pps_cu_qp_delta()
         } else {

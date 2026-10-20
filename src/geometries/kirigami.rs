@@ -1376,6 +1376,12 @@ fn faces_to_geometry_tinted(
     if positions.is_empty() {
         return geom;
     }
+    // Every face (and prism side) went through `emit_quad`: one quad, as two
+    // consecutive triangles over base..base+4.
+    let mut polygons = super::polygons::CellPolygons::new();
+    for quad in indices.chunks_exact(6) {
+        polygons.quad(&positions, [quad[0], quad[1], quad[2], quad[5]]);
+    }
     geom.set_attribute("position", BufferAttribute::new(positions, 3));
     geom.set_attribute("normal", BufferAttribute::new(normals, 3));
     geom.set_attribute("uv", BufferAttribute::new(uvs, 2));
@@ -1383,6 +1389,7 @@ fn faces_to_geometry_tinted(
         geom.set_attribute("color", BufferAttribute::new(colors, 3));
     }
     geom.set_index(indices);
+    polygons.apply(&mut geom);
     geom
 }
 

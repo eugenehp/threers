@@ -7,15 +7,17 @@ import { PNG } from 'pngjs';
 import fs from 'fs';
 import path from 'path';
 import { spawn } from 'child_process';
+import os from 'os';
 import { fileURLToPath } from 'url';
 import { ALL_SCENES, coverageReport, APPROXIMATE_SCENES, APPROXIMATE_THRESHOLD } from './coverage-manifest.js';
-import { apiCoverageReport } from './api-inventory.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const outDir = path.join(__dirname, 'out');
 fs.mkdirSync(outDir, { recursive: true });
 
-const port = 8087;
+// `PORT`: another port, when 8087 is someone else's server (which would be
+// used instead of the one spawned here, PKG_DIR and all).
+const port = process.env.PORT ? parseInt(process.env.PORT, 10) : 8087;
 let server = null;
 let spawnedServer = false;
 try {
@@ -25,9 +27,21 @@ try {
 } catch (_) { /* use existing server on port */ }
 await new Promise(r => setTimeout(r, 300));
 
-const SCENES = ALL_SCENES;
+// `SCENES=a,b,c node run.js` runs just those (any scene with a pair in
+// scenes/, listed in the manifest or not).
+const SCENES = process.env.SCENES
+    ? process.env.SCENES.split(',').map(s => s.trim()).filter(Boolean)
+    : ALL_SCENES;
 const cov = coverageReport();
-const apiCov = apiCoverageReport();
+// The API inventory imports the shim into node, which fails while
+// web/deps/package.json says "commonjs" (Earcut.js is an ES module); the
+// report is a nicety, the pixel comparison is not.
+let apiCov = { totalExports: '?', exportCoveragePct: '?', sceneTestedApis: '?' };
+try {
+    apiCov = (await import('./api-inventory.js')).apiCoverageReport();
+} catch (e) {
+    console.log(`(API inventory unavailable: ${e.message.split('\n')[0]})`);
+}
 console.log(`Parity suite: ${cov.totalScenes} scenes (${cov.coreScenes} core + ${cov.generatedScenes} generated; ${cov.approximateScenes} approximate postfx/animation)`);
 console.log(`API surface: ${apiCov.totalExports} exports, ~${apiCov.exportCoveragePct}% with parity scenes (${apiCov.sceneTestedApis} APIs mapped)`);
 
@@ -69,9 +83,46 @@ async function shoot(browser, url) {
     return { status, errText, consoleMsgs, png };
 }
 
-console.log('Launching headless Chromium (WebGPU enabled)...');
+/// The browser to drive: `CHROME` if set; else the newest Chrome for Testing
+/// that scripts/wasm-browser-test.sh fetched into its cache
+/// (`${BROWSER_CACHE:-$TMPDIR/threers-browsers}`); else Homebrew's chromium.
+function findChrome() {
+    if (process.env.CHROME) return process.env.CHROME;
+    const cache = process.env.BROWSER_CACHE || path.join(process.env.TMPDIR || os.tmpdir(), 'threers-browsers');
+    const builds = path.join(cache, 'chrome');
+    const found = [];
+    if (fs.existsSync(builds)) {
+        for (const build of fs.readdirSync(builds)) {
+            for (const app of [
+                'chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
+                'chrome-mac-x64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
+                'chrome-linux64/chrome',
+            ]) {
+                const exe = path.join(builds, build, app);
+                if (fs.existsSync(exe)) found.push({ build, exe });
+            }
+        }
+    }
+    const version = (b) => (b.split('-')[1] || '').split('.').map(Number);
+    found.sort((a, b) => {
+        const [x, y] = [version(a.build), version(b.build)];
+        for (let i = 0; i < Math.max(x.length, y.length); i++) {
+            if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) - (y[i] || 0);
+        }
+        return 0;
+    });
+    if (found.length) return found[found.length - 1].exe;
+    return '/opt/homebrew/bin/chromium';
+}
+
+const chrome = findChrome();
+if (!fs.existsSync(chrome)) {
+    console.error(`no browser at ${chrome}: set CHROME, or run scripts/wasm-browser-test.sh once to fetch Chrome for Testing`);
+    process.exit(2);
+}
+console.log(`Launching headless ${chrome} (WebGPU enabled)...`);
 const browser = await puppeteer.launch({
-    executablePath: '/opt/homebrew/bin/chromium',
+    executablePath: chrome,
     headless: 'new',
     args: [
         '--enable-unsafe-webgpu',

@@ -13,11 +13,12 @@ pub mod ktx2;
 pub mod meshopt;
 mod gltf;
 mod hdr;
-mod json;
+pub(crate) mod json;
 mod obj;
 mod ply;
 mod stl;
 mod ttf;
+pub mod typeface;
 mod xml;
 
 pub use collada::{ColladaError, ColladaLoader};
@@ -28,9 +29,20 @@ pub use draco::{DracoError, Header as DracoHeader};
 pub use ktx2::{Ktx2, Ktx2Error};
 pub use meshopt::MeshoptError;
 pub use gltf_write::{
-    geometry_to_glb as gltf_geometry_to_glb, scene_to_glb, scene_to_gltf,    GltfExportOptions,
+    geometry_to_glb as gltf_geometry_to_glb, scene_to_glb, scene_to_glb_with, scene_to_gltf,
+    scene_to_gltf_with, GltfExportOptions, GltfMaterialInfo, GltfMaterialKind,
 };
 pub use gltf::{add_to_scene as gltf_add_to_scene, GltfError, GltfImages, GltfLoader, GltfScene};
+/// The three.js r165 `GLTFLoader` port the one-call API above is built on.
+pub mod gltf_parser {
+    pub use super::gltf::{
+        decode_data_uri, sanitize_node_name, supply_images, texture_constants,
+        three_attribute_name, world_matrix, Accessor, Assoc, CameraParams, Document, GltfClip,
+        GltfGeometry, GltfMaterial, GltfObject, GltfOptions, GltfParser, GltfSkeleton,
+        GltfTexture, GltfTrack, ImageData, ImageRequest, ImageSource, Instances, LightParams,
+        MaterialType, ObjectType, Param, Record, TrackInterpolation, TrackKind,
+    };
+}
 pub use hdr::{HdrError, HdrLoader};
 pub use obj::ObjLoader;
 pub use ply::PlyLoader;

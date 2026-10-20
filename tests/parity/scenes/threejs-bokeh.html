@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><style>body{margin:0;background:#000}canvas{display:block}</style></head>
+<body><canvas id="c" width="800" height="600"></canvas>
+<script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.165.0/build/three.module.js"}}</script>
+<script type="module">
+import * as THREE from 'three';
+import { EffectComposer } from 'https://unpkg.com/three@0.165.0/examples/jsm/postprocessing/EffectComposer.js';
+import { RenderPass } from 'https://unpkg.com/three@0.165.0/examples/jsm/postprocessing/RenderPass.js';
+import { BokehPass } from 'https://unpkg.com/three@0.165.0/examples/jsm/postprocessing/BokehPass.js';
+const scene = new THREE.Scene(); scene.background = new THREE.Color(0x203040);
+// Near (z = 2), in focus (z = 0, five units out) and far (z = -6).
+const near = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.6, 0.6), new THREE.MeshBasicMaterial({ color: 0xff4422 }));
+near.position.set(-1.0, -0.3, 2); scene.add(near);
+const focus = new THREE.Mesh(new THREE.SphereGeometry(0.7, 32, 16), new THREE.MeshBasicMaterial({ color: 0xeeeeee }));
+scene.add(focus);
+const far = new THREE.Mesh(new THREE.TorusGeometry(1.2, 0.3, 16, 48), new THREE.MeshBasicMaterial({ color: 0x22cc66 }));
+far.position.set(2.5, 1.0, -6); scene.add(far);
+const cam = new THREE.PerspectiveCamera(45, 800/600, 0.1, 100);
+cam.position.set(0, 0, 5); cam.lookAt(0, 0, 0);
+const r = new THREE.WebGLRenderer({ canvas: document.getElementById('c'), antialias: false });
+r.setSize(800, 600, false); r.setPixelRatio(1);
+const composer = new EffectComposer(r);
+composer.addPass(new RenderPass(scene, cam));
+composer.addPass(new BokehPass(scene, cam, { focus: 5.0, aperture: 0.01, maxblur: 0.03 }));
+composer.render(0);
+document.body.dataset.ready = 'true';
+</script></body></html>

@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><style>body{margin:0;background:#101418}canvas{display:block}#err{position:absolute;top:0;left:0;padding:12px;color:#fdd;background:#500;font-family:monospace;white-space:pre-wrap}</style></head>
+<body><canvas id="c" width="800" height="600"></canvas>
+<div id="err" style="display:none"></div>
+<script type="module">
+import THREE, { initThreers } from '/web/threejs-shim.js';
+const errEl = document.getElementById('err');
+(async () => {
+    try {
+        await initThreers('/web/pkg/threers_bg.wasm');
+        // The same lit, vertex-coloured sphere twice: on the left from one
+        // InterleavedBuffer (position/normal/uv as floats, stride 8) plus a
+        // normalized Uint8 colour buffer; on the right from plain attributes holding
+        // the same numbers. After a first frame both are edited in place and flagged
+        // `needsUpdate` — the interleaved one through its shared buffer — and drawn
+        // again: the two must still match each other and three.js.
+        const scene = new THREE.Scene(); scene.background = new THREE.Color(0x202428);
+        scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+        const sun = new THREE.DirectionalLight(0xffffff, 2.0); sun.position.set(2, 3, 4); scene.add(sun);
+        function sphereData(seg = 24, rings = 16) {
+            const pos = [], nrm = [], uv = [], col = [];
+            const vert = (i, j) => {
+                const u = i / seg, v = j / rings, th = u * Math.PI * 2, ph = v * Math.PI;
+                const x = Math.sin(ph) * Math.cos(th), y = Math.cos(ph), z = Math.sin(ph) * Math.sin(th);
+                pos.push(0.8 * x, 0.8 * y, 0.8 * z); nrm.push(x, y, z); uv.push(u, v);
+                col.push(Math.round(127.5 + 127 * x), Math.round(127.5 + 127 * y), Math.round(127.5 + 127 * z));
+            };
+            for (let j = 0; j < rings; j++) for (let i = 0; i < seg; i++) {
+                vert(i, j); vert(i, j + 1); vert(i + 1, j);
+                vert(i + 1, j); vert(i, j + 1); vert(i + 1, j + 1);
+            }
+            return { pos, nrm, uv, col, n: pos.length / 3 };
+        }
+        const d = sphereData();
+        const f32 = new Float32Array(d.n * 8);
+        for (let k = 0; k < d.n; k++) f32.set([...d.pos.slice(k * 3, k * 3 + 3), ...d.nrm.slice(k * 3, k * 3 + 3), ...d.uv.slice(k * 2, k * 2 + 2)], k * 8);
+        const ib = new THREE.InterleavedBuffer(f32, 8);
+        const cb = new THREE.InterleavedBuffer(new Uint8Array(d.col), 3);
+        const gi = new THREE.BufferGeometry();
+        gi.setAttribute('position', new THREE.InterleavedBufferAttribute(ib, 3, 0));
+        gi.setAttribute('normal', new THREE.InterleavedBufferAttribute(ib, 3, 3));
+        gi.setAttribute('uv', new THREE.InterleavedBufferAttribute(ib, 2, 6));
+        gi.setAttribute('color', new THREE.InterleavedBufferAttribute(cb, 3, 0, true));
+        const gp = new THREE.BufferGeometry();
+        gp.setAttribute('position', new THREE.BufferAttribute(new Float32Array(d.pos), 3));
+        gp.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(d.nrm), 3));
+        gp.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(d.uv), 2));
+        gp.setAttribute('color', new THREE.BufferAttribute(new Float32Array(d.col.map((c) => c / 255)), 3));
+        const mat = () => new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.5, metalness: 0.1 });
+        const mi = new THREE.Mesh(gi, mat()); mi.position.x = -1.0; scene.add(mi);
+        const mp = new THREE.Mesh(gp, mat()); mp.position.x = 1.0; scene.add(mp);
+        const cam = new THREE.PerspectiveCamera(45, 800/600, 0.1, 100);
+        cam.position.set(0, 0.4, 4); cam.lookAt(0, 0, 0);
+        const r = await THREE.WebGLRenderer.create(document.getElementById('c'));
+        r.setSize(800, 600);
+        r.render(scene, cam);
+        await new Promise(rs => requestAnimationFrame(() => rs()));
+        // Squash both spheres vertically, in place, and flag the edit.
+        const pi = gi.getAttribute('position'), pp = gp.getAttribute('position');
+        for (let k = 0; k < pi.count; k++) {
+            pi.setY(k, pi.getY(k) * 0.6);
+            pp.array[k * 3 + 1] *= 0.6;
+        }
+        ib.needsUpdate = true;
+        pp.needsUpdate = true;
+        r.render(scene, cam);
+        await new Promise(rs => requestAnimationFrame(() => rs()));
+        document.body.dataset.ready = 'true';
+    } catch (e) {
+        console.error(e);
+        errEl.style.display = 'block';
+        errEl.textContent = e?.stack || String(e);
+        document.body.dataset.ready = 'error';
+    }
+})();
+</script></body></html>

@@ -624,8 +624,13 @@ impl GpuCubeTexture {
     }
 }
 
-pub fn cube_cache_key(t: &Arc<CubeTexture>) -> *const CubeTexture {
-    Arc::as_ptr(t)
+/// A cube's upload, identified by what decides it: the cube (its stable id),
+/// its format and its size. An address would be reused by a later cube once
+/// this one is dropped, and that cube would be drawn with this one's faces.
+pub type CubeCacheKey = (u64, u8, u32);
+
+pub fn cube_cache_key(t: &Arc<CubeTexture>) -> CubeCacheKey {
+    (t.id, t.format as u8, t.size)
 }
 
 /// Apply `Texture::flip_y` to the pixel data, borrowing when there is nothing

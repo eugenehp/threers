@@ -16,11 +16,15 @@
 //! intra prediction modes, `coded_block_pattern`, and `residual_block_cabac`
 //! for all five `ctxBlockCat` values a 4:2:0 intra macroblock can produce.
 
-use crate::codec::h264::cabac_tables::{init_state, INIT_MN};
+use crate::codec::h264::cabac_tables::{init_state, INIT_MN, INIT_MN_P0};
 use crate::codec::hevc::cabac::{CabacEncoder, CtxModel};
 
 /// `ctxIdx` bases (§9.3.3.1, Table 9-11).
 const MB_TYPE_I: usize = 3;
+const MB_SKIP_P: usize = 11;
+const MB_TYPE_P: usize = 14;
+const MVD_X: usize = 40;
+const MVD_Y: usize = 47;
 const MB_QP_DELTA: usize = 60;
 const CHROMA_PRED: usize = 64;
 const PREV_INTRA_FLAG: usize = 68;
@@ -49,6 +53,8 @@ pub const CAT_CHROMA_AC: usize = 4;
 pub struct Cabac {
     enc: CabacEncoder,
     ctx: [CtxModel; 276],
+    /// Initialised for a P slice: the P-only contexts (11..=59) are live.
+    p_slice: bool,
 }
 
 impl Cabac {
@@ -60,6 +66,20 @@ impl Cabac {
                 let (state, mps) = init_state(m, n, slice_qp);
                 CtxModel::from_state(state, mps)
             }),
+            p_slice: false,
+        }
+    }
+
+    /// For a P slice with `cabac_init_idc = 0` (Table 9-12, P/B column 0).
+    pub fn new_p(slice_qp: i32) -> Self {
+        Self {
+            enc: CabacEncoder::new(),
+            ctx: std::array::from_fn(|i| {
+                let (m, n) = INIT_MN_P0[i];
+                let (state, mps) = init_state(m, n, slice_qp);
+                CtxModel::from_state(state, mps)
+            }),
+            p_slice: true,
         }
     }
 
@@ -69,6 +89,7 @@ impl Cabac {
         Self {
             enc: self.enc.probe(),
             ctx: self.ctx,
+            p_slice: self.p_slice,
         }
     }
 
@@ -79,8 +100,8 @@ impl Cabac {
     /// Emit a context-coded bin.
     fn bin(&mut self, ctx_idx: usize, b: u32) {
         debug_assert!(
-            ctx_idx <= 10 || (60..276).contains(&ctx_idx),
-            "ctxIdx {ctx_idx} is not initialised for an I slice"
+            ctx_idx <= 10 || (60..276).contains(&ctx_idx) || (self.p_slice && ctx_idx <= 59),
+            "ctxIdx {ctx_idx} is not initialised for this slice type"
         );
         self.enc.encode_bin(&mut self.ctx[ctx_idx], b);
     }
@@ -102,6 +123,59 @@ impl Cabac {
     }
 
     // ---- macroblock-level syntax ----
+
+    /// `mb_skip_flag` in a P slice (§9.3.3.1.1.1): the context counts the
+    /// neighbours (left, above) that exist and are not skipped.
+    pub fn mb_skip_flag(&mut self, skip: bool, coded_neighbours: usize) {
+        self.bin(MB_SKIP_P + coded_neighbours, u32::from(skip));
+    }
+
+    /// `mb_type` `P_L0_16x16` in a P slice: bins `0 0 0` (Table 9-37), at
+    /// `ctxIdx` 14, 15, 16 (bin 2's context follows bin 1's value, 0).
+    pub fn mb_type_p_16x16(&mut self) {
+        self.bin(MB_TYPE_P, 0);
+        self.bin(MB_TYPE_P + 1, 0);
+        self.bin(MB_TYPE_P + 2, 0);
+    }
+
+    /// One `mvd_l0` component (§9.3.2.3, UEG3 with `uCoff = 9`, signed).
+    /// `neighbour_abs` is `absMvdComp` of the left and above partitions,
+    /// summed — it picks the first bin's context.
+    pub fn mvd(&mut self, component: usize, value: i32, neighbour_abs: u32) {
+        let base = if component == 0 { MVD_X } else { MVD_Y };
+        let first = match neighbour_abs {
+            0..=2 => 0,
+            3..=32 => 1,
+            _ => 2,
+        };
+        let abs = value.unsigned_abs();
+        let prefix = abs.min(9);
+        // Truncated unary over cMax = 9; bins after the first use 3, 4, 5, 6, 6…
+        for k in 0..prefix {
+            let inc = if k == 0 { first } else { (k as usize + 2).min(6) };
+            self.bin(base + inc, 1);
+        }
+        if prefix < 9 {
+            let inc = if prefix == 0 { first } else { (prefix as usize + 2).min(6) };
+            self.bin(base + inc, 0);
+        } else {
+            // Exp-Golomb, k = 3, bypass (§9.3.2.3).
+            let mut rest = abs - 9;
+            let mut k = 3;
+            while rest >= (1 << k) {
+                self.bypass(1);
+                rest -= 1 << k;
+                k += 1;
+            }
+            self.bypass(0);
+            for b in (0..k).rev() {
+                self.bypass((rest >> b) & 1);
+            }
+        }
+        if abs != 0 {
+            self.bypass(u32::from(value < 0));
+        }
+    }
 
     /// `mb_type` for an `I_NxN` macroblock: a single zero bin.
     pub fn mb_type_nxn(&mut self, left_not_nxn: bool, above_not_nxn: bool) {

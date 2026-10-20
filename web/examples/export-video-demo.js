@@ -34,7 +34,7 @@ async function main() {
   await initThreers('/web/pkg/threers_bg.wasm');
   assertVideoExportAvailable();
 
-  const renderer = await THREE.WebGLRenderer.create(canvas);
+  const renderer = await THREE.WebGLRenderer.create(canvas, { antialias: true });
   renderer.setSize(W, H, false);
 
   const scene = new THREE.Scene();

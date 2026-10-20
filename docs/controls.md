@@ -212,6 +212,33 @@ Full winit example: `examples/controls_orbit.rs` (`cargo run --example controls_
 
 ---
 
+## MapControls (native Rust)
+
+A map-style camera: drag to pan (the point you grabbed stays under the
+cursor), scroll to zoom toward the cursor, and use the rotate button to turn
+and tilt. Its state is a look-at point, a distance, a bearing and a pitch, so
+you can position the map by setting those four values. Because two of its
+three gestures are about the point under the pointer, `update` takes the
+cursor position.
+
+```rust
+use threers::{MapControls, PerspectiveCamera, PointerEvent, Vector3};
+
+let mut camera = PerspectiveCamera::new(50.0, 16.0 / 9.0, 0.1, 10_000.0);
+let mut map = MapControls::new(Vector3::ZERO, 500.0);
+map.pitch = 0.7;
+map.apply(&mut camera);
+
+// Each frame: the event plus where the pointer is now.
+let ev = PointerEvent { dx: 12.0, dy: -4.0, panning: true, ..Default::default() };
+map.update(ev, (400.0, 300.0), &mut camera, (800.0, 600.0));
+```
+
+Y is up, bearing 0 looks toward −Z, and pitch 0 looks straight down. See
+[marks](marks.md) for drawing data under it.
+
+---
+
 ## TrackballControls (recommended drop-in for threers)
 
 ### three.js (JavaScript)

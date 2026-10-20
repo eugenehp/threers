@@ -131,9 +131,10 @@ fn golden_checksum_64x48_solid_4f_10fps() {
     let sum = fnv1a(&mp4);
     // Shared with browser `video-export-test.html`.
     assert_eq!(
-        sum, 0xf5ca7103,
+        sum, 0xa4d11d89,
         "golden mp4 checksum — changed when the MP4 path moved from I_PCM to the \
-         compressed intra encoder; update the browser test to match"
+         compressed intra encoder, and when the SPS and `colr` box started stating \
+         BT.601; update the browser test to match"
     );
 }
 
@@ -148,7 +149,7 @@ fn golden_checksum_128x72_gradient_3f_30fps() {
     ];
     let mp4 = encode_mp4_rgba(width, height, 30, frames);
     let sum = fnv1a(&mp4);
-    assert_eq!(sum, 0x1c091ef4, "golden gradient mp4 checksum");
+    assert_eq!(sum, 0xb967f071, "golden gradient mp4 checksum");
 }
 
 #[test]
@@ -161,7 +162,7 @@ fn golden_checksum_320x240_checker_2f_60fps() {
     ];
     let mp4 = encode_mp4_rgba(width, height, 60, frames);
     let sum = fnv1a(&mp4);
-    assert_eq!(sum, 0x06597030, "golden 320x240 mp4 checksum");
+    assert_eq!(sum, 0xf71142ea, "golden 320x240 mp4 checksum");
 }
 
 #[test]

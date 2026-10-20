@@ -57,6 +57,61 @@ pub fn tag_xy_plane(g: &mut BufferGeometry) {
     tag_uniform(g, s);
 }
 
+/// `QuadGeometry` — the quad's own surface: a [`Surface::Plane`] when the four
+/// corners are coplanar, otherwise the bilinear patch itself, as the
+/// degree-1×1 NURBS whose control points are the corners (`u` along `p0→p1`,
+/// `v` along `p0→p3` — the generator's parameterization, so a vertex at grid
+/// `(u, v)` inverts to that `(u, v)`).
+///
+/// "Coplanar" is to `1e-6` of the quad's size, which is f32 noise; a quad any
+/// more twisted than that is meshed as a saddle and is tagged as one. A quad
+/// whose corners are collinear or coincident has no surface and is left
+/// untagged.
+pub fn tag_quad(g: &mut BufferGeometry, corners: &[crate::math::Vector3; 4]) {
+    use crate::geometries::QuadGeometry;
+    let c: Vec<[f64; 3]> = corners
+        .iter()
+        .map(|p| [p.x as f64, p.y as f64, p.z as f64])
+        .collect();
+    let sub = |a: [f64; 3], b: [f64; 3]| [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+    let size = (0..4)
+        .map(|i| {
+            let d = sub(c[(i + 1) % 4], c[i]);
+            (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt()
+        })
+        .fold(0.0f64, f64::max);
+    // Twice the vector area, `(p2 - p0) × (p3 - p1)` (Newell).
+    let (d0, d1) = (sub(c[2], c[0]), sub(c[3], c[1]));
+    let area = [
+        d0[1] * d1[2] - d0[2] * d1[1],
+        d0[2] * d1[0] - d0[0] * d1[2],
+        d0[0] * d1[1] - d0[1] * d1[0],
+    ];
+    let area_len = (area[0] * area[0] + area[1] * area[1] + area[2] * area[2]).sqrt();
+    if !(size > 0.0) || !(area_len > 1e-12 * size * size) {
+        return;
+    }
+    let surface = if QuadGeometry::is_planar(corners, 1e-6 * size as f32) {
+        Surface::plane(c[0], area).with_x_dir(sub(c[1], c[0]))
+    } else {
+        // u-major control grid: (u, v) = (0,0) p0, (0,1) p3, (1,0) p1, (1,1) p2.
+        match crate::nurbs::NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            2,
+            2,
+            &[c[0], c[3], c[1], c[2]],
+            None,
+        ) {
+            Ok(patch) => Surface::nurbs(patch),
+            Err(_) => return,
+        }
+    };
+    tag_uniform(g, surface);
+}
+
 /// `BoxGeometry` — six planes, in the generator's face order (+X, −X, +Y, −Y,
 /// +Z, −Z), two triangles each.
 pub fn tag_box(g: &mut BufferGeometry, width: f32, height: f32, depth: f32) {
@@ -331,6 +386,37 @@ mod tests {
             dev < 1e-5 * scale.max(1.0),
             "{what}: a tagged vertex is {dev} from the surface it claims"
         );
+    }
+
+    #[test]
+    fn quad_is_tagged_plane_or_bilinear_patch() {
+        use crate::geometries::QuadGeometry;
+        use crate::math::Vector3;
+        let v = Vector3::new;
+        // A tilted, non-rectangular planar quad: a plane, through every vertex.
+        let flat = [v(0.0, 0.0, 0.0), v(2.0, 0.0, 1.0), v(2.5, 1.5, 1.25), v(0.0, 1.0, 0.0)];
+        assert!(QuadGeometry::is_planar(&flat, 1e-6));
+        let g = QuadGeometry::with_segments(flat, 3, 2);
+        assert_tagged(&g, "planar quad", 3.0);
+        let s = &g.surface_table().unwrap().surfaces()[0];
+        assert_eq!(s.kind(), "plane");
+
+        // A saddle: the bilinear patch, through every sampled vertex, and
+        // its parameterization is the generator's.
+        let saddle = [v(0.0, 0.0, 0.0), v(1.0, 0.0, 1.0), v(1.0, 1.0, 0.0), v(0.0, 1.0, 1.0)];
+        let g = QuadGeometry::with_segments(saddle, 4, 4);
+        assert_tagged(&g, "saddle", 1.0);
+        let s = &g.surface_table().unwrap().surfaces()[0];
+        assert_eq!(s.kind(), "nurbs");
+        for (u, w) in [(0.25f32, 0.5f32), (0.8, 0.1)] {
+            let p = QuadGeometry::point_at(&saddle, u, w);
+            let q = s.point(u as f64, w as f64);
+            assert!(((p.x as f64 - q[0]).powi(2) + (p.y as f64 - q[1]).powi(2) + (p.z as f64 - q[2]).powi(2)).sqrt() < 1e-6);
+        }
+
+        // Collinear corners: no surface, no tag.
+        let line = [v(0.0, 0.0, 0.0), v(1.0, 0.0, 0.0), v(2.0, 0.0, 0.0), v(3.0, 0.0, 0.0)];
+        assert!(QuadGeometry::new(line).surface_table().is_none());
     }
 
     #[test]

@@ -1015,7 +1015,7 @@ async function main() {
     const capEdge = Number(params.get('tile')) || 4096;
     const maxLevel = capEdge >= 4096 ? 3 : capEdge >= 2048 ? 2 : 1;
 
-    const renderer = await THREE.WebGLRenderer.create(canvas);
+    const renderer = await THREE.WebGLRenderer.create(canvas, { antialias: true });
     // The sun is hundreds of times brighter than the Earth it lights; without a
     // filmic curve everything facing it clips to flat white.
     renderer.toneMapping = THREE.ACESFilmicToneMapping;

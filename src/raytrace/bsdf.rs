@@ -54,6 +54,9 @@ pub struct Surface {
     pub iridescence_ior: f32,
     pub iridescence_thickness: f32,
     pub dispersion: f32,
+    /// Thin-walled glass: transmission goes straight through, crossing two
+    /// faces of a wall with no inside.
+    pub thin_walled: bool,
     pub subsurface: f32,
     pub subsurface_radius: Vector3,
 }
@@ -78,6 +81,7 @@ impl Default for Surface {
             iridescence_ior: 1.3,
             iridescence_thickness: 400.0,
             dispersion: 0.0,
+            thin_walled: false,
             subsurface: 0.0,
             subsurface_radius: Vector3::new(1.0, 0.2, 0.1),
         }
@@ -99,6 +103,9 @@ pub struct BsdfSample {
     /// The direction crossed the surface — the caller must switch which medium
     /// it is tracking.
     pub transmitted: bool,
+    /// Drawn from a diffuse lobe (diffuse or sheen) rather than a glossy or
+    /// transmissive one: what per-kind bounce limits count it as.
+    pub diffuse: bool,
 }
 
 /// A [`Surface`] bound to a shading frame, ready to evaluate.
@@ -344,7 +351,8 @@ impl Bsdf {
         }
 
         // --- dielectric transmission
-        if self.p_transmission > 0.0 && !spec_smooth {
+        // Thin-walled transmission is a delta lobe, sampled and never evaluated.
+        if self.p_transmission > 0.0 && !spec_smooth && !self.surface.thin_walled {
             let (ft, pt) = self.eval_transmission_local(wo, wi);
             f = f + ft * under_coat;
             pdf += self.p_transmission * pt;
@@ -366,7 +374,7 @@ impl Bsdf {
         let mut ft = Vector3::ZERO;
         let mut pt = 0.0f32;
         for (ch, offset) in [(0, -1.0f32), (1, 0.0), (2, 1.0)] {
-            let eta = eta_base * (1.0 + dispersion * offset);
+            let eta = eta_base + (eta_base - 1.0) * 0.025 * dispersion * offset;
             let (f_ch, p_ch) = self.eval_transmission_channel(wo, wi, eta, reflecting, ch);
             match ch {
                 0 => {
@@ -461,6 +469,9 @@ impl Bsdf {
         let spec_smooth = self.ax.max(self.ay) < SMOOTH_ALPHA;
         let coat_smooth = self.coat_alpha < SMOOTH_ALPHA;
 
+        // A diffuse draw: the diffuse lobe, or sheen past every other.
+        let diffuse_lobe = u < self.p_diffuse
+            || u >= self.p_diffuse + self.p_specular + self.p_transmission + self.p_coat;
         let mut acc = self.p_diffuse;
         let sample = if u < acc {
             self.sample_diffuse(wo, u1, u2)
@@ -471,7 +482,7 @@ impl Bsdf {
             } else {
                 acc += self.p_transmission;
                 if u < acc {
-                    self.sample_transmission(wo, u1, u2, spec_smooth, rng)
+                    self.sample_transmission(wo, u1, u2, spec_smooth || self.surface.thin_walled, rng)
                 } else {
                     acc += self.p_coat;
                     if u < acc {
@@ -504,6 +515,7 @@ impl Bsdf {
                 pdf: 1.0,
                 specular: true,
                 transmitted,
+                diffuse: false,
             });
         }
 
@@ -521,6 +533,7 @@ impl Bsdf {
             pdf,
             specular: false,
             transmitted: sample.0.z * wo.z < 0.0,
+            diffuse: diffuse_lobe && sample.0.z * wo.z >= 0.0,
         })
     }
 
@@ -615,10 +628,13 @@ impl Bsdf {
         };
 
         let cos_oh = wo.dot(h);
+        let thin = self.surface.thin_walled;
+        // A thin wall reflects at both faces: R + T²R/(1 − R²) = 2R/(1 + R).
+        let wall = |fr: f32| if thin { 2.0 * fr / (1.0 + fr) } else { fr };
         let mut fr_avg = 0.0f32;
         for offset in [-1.0f32, 0.0, 1.0] {
-            let eta = eta_base * (1.0 + dispersion * offset);
-            fr_avg += fresnel_dielectric(cos_oh, eta);
+            let eta = eta_base + (eta_base - 1.0) * 0.025 * dispersion * offset;
+            fr_avg += wall(fresnel_dielectric(cos_oh, eta));
         }
         fr_avg /= 3.0;
         // Choose reflection or refraction in proportion to Fresnel, then divide
@@ -627,6 +643,9 @@ impl Bsdf {
         let reflect_it = rng.next_f32() < fr_avg;
         let wi = if reflect_it {
             reflect(wo * -1.0, h)
+        } else if thin {
+            // Through the wall and out of its far face: undeflected.
+            wo * -1.0
         } else {
             let eta = eta_base;
             let (n, ratio) = if cos_oh > 0.0 {
@@ -643,12 +662,13 @@ impl Bsdf {
         if smooth {
             let mut value = Vector3::ZERO;
             for (ch, offset) in [(0usize, -1.0f32), (1, 0.0), (2, 1.0)] {
-                let eta = eta_base * (1.0 + dispersion * offset);
-                let fr = fresnel_dielectric(cos_oh, eta);
+                let eta = eta_base + (eta_base - 1.0) * 0.025 * dispersion * offset;
+                let fr = wall(fresnel_dielectric(cos_oh, eta));
                 let v = if reflect_it {
                     fr * weight / wi.z.abs().max(1e-6)
                 } else {
-                    let etap = if wo.z > 0.0 { eta } else { 1.0 / eta };
+                    // Out into the medium it came from: no radiance scaling.
+                    let etap = if thin { 1.0 } else if wo.z > 0.0 { eta } else { 1.0 / eta };
                     let t = (1.0 - fr) * weight / (etap * etap * wi.z.abs().max(1e-6));
                     match ch {
                         0 => self.surface.base_color.x * t,

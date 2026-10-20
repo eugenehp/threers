@@ -83,9 +83,13 @@ fn roughness_blurs_a_plain_cube_environment() {
         eprintln!("skipping: no GPU adapter");
         return;
     };
-    let mid = reflected_contrast(0.35).unwrap();
+    // Partly blurred: the 4-pixel checker on a 64-pixel face is grey by
+    // roughness 0.25 (contrast 0.75), so a middle sample above that compares
+    // two flat greys and measures noise — 0.28 against 0.34 on NVIDIA, 0.31
+    // against 0.23 on Apple, for 0.35 and 0.9.
+    let mid = reflected_contrast(0.15).unwrap();
     let rough = reflected_contrast(0.9).unwrap();
-    eprintln!("reflected contrast: r=0.02 {sharp:.2}, r=0.35 {mid:.2}, r=0.9 {rough:.2}");
+    eprintln!("reflected contrast: r=0.02 {sharp:.2}, r=0.15 {mid:.2}, r=0.9 {rough:.2}");
 
     assert!(
         sharp > 8.0,

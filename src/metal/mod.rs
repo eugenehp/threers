@@ -75,7 +75,7 @@
 //! [`crate::metal::PassAttachments::with_reverse_z`] flips the depth convention to near-at-1,
 //! which is the only one visionOS accepts.
 //!
-//! The `visionos` feature builds on both: see [`crate::metal::visionos`] for the
+//! The `visionos` feature builds on both: see the `visionos` module for the
 //! CompositorServices frame loop and ARKit world tracking.
 //!
 //! # What it draws
@@ -136,6 +136,7 @@ mod postfx;
 mod renderer;
 mod surface;
 mod target;
+pub mod viewport;
 
 pub use device::{MetalDevice, MetalError};
 pub use headless::{MetalHeadlessBuilder, MetalHeadlessConfig, MetalHeadlessRenderer};
@@ -154,6 +155,36 @@ pub const SHADER_SOURCE: &str = concat!(
     include_str!("postfx.metal"),
 );
 
+/// The fluid solver's MSL, which [`MetalDevice::new`] does **not** compile.
+///
+/// Kept out of the default library because most Metal work is a scene and a
+/// post chain, and a library is compiled once per device: a caller who will
+/// never run a fluid should not pay for its ten fragment functions. Build a
+/// device for both with
+/// [`fluid_shader_source`].
+#[cfg(feature = "fluid")]
+pub const FLUID_SHADER_SOURCE: &str = include_str!("fluid.metal");
+
+/// The default library plus the fluid's, for a device that wants both.
+///
+/// ```no_run
+/// # #[cfg(all(feature = "metal", feature = "fluid"))]
+/// # fn demo() -> Result<(), threers::metal::MetalError> {
+/// use threers::metal::{fluid_shader_source, MetalDevice};
+/// let device = MetalDevice::with_shader_source(&fluid_shader_source())?;
+/// # Ok(()) }
+/// ```
+#[cfg(feature = "fluid")]
+pub fn fluid_shader_source() -> String {
+    format!("{SHADER_SOURCE}\n{FLUID_SHADER_SOURCE}")
+}
+
+/// The fluid, on the Metal backend. See [`fluid`].
+#[cfg(feature = "fluid")]
+pub mod fluid;
+#[cfg(feature = "fluid")]
+pub use fluid::MetalFluid;
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -164,6 +195,7 @@ mod tests {
             "vs_line",
             "vs_point",
             "fs_point",
+            "fs_point_encoded_blend",
             "fs_bloom_threshold",
             "fs_bloom_blur",
             "fs_downsample",

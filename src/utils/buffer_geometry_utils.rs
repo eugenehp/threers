@@ -135,7 +135,8 @@ pub fn compute_tangents(geom: &mut BufferGeometry) {
 /// Merge multiple geometries into one. All sources must share the same set of
 /// attribute names and item sizes. Index buffers are concatenated and offset.
 /// Geometries with no index get a synthetic one. Mirrors three.js's
-/// `BufferGeometryUtils.mergeGeometries`.
+/// `BufferGeometryUtils.mergeGeometries`. Polygon groupings are carried
+/// across; see [`BufferGeometry::polygons`].
 pub fn merge_geometries(geoms: &[BufferGeometry]) -> Option<BufferGeometry> {
     if geoms.is_empty() {
         return None;
@@ -171,6 +172,16 @@ pub fn merge_geometries(geoms: &[BufferGeometry]) -> Option<BufferGeometry> {
         out.set_attribute(name, BufferAttribute::new(data, item_size));
     }
     out.set_index(indices);
+    // Concatenation keeps every source's triangles in order, so polygon
+    // groupings concatenate too. A source without one contributes a polygon
+    // per triangle, which is what it already was.
+    if geoms.iter().any(|g| g.polygon_counts().is_some()) {
+        let polygons = geoms
+            .iter()
+            .flat_map(|g| g.polygon_ranges().map(|r| r.len() as u32))
+            .collect();
+        out.set_polygons(polygons);
+    }
     Some(out)
 }
 

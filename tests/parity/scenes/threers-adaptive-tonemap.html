@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><style>body{margin:0;background:#000}canvas{display:block}#err{position:absolute;top:0;left:0;padding:12px;color:#fdd;background:#500;font-family:monospace;white-space:pre-wrap}</style></head>
+<body><canvas id="c" width="800" height="600"></canvas>
+<div id="err" style="display:none"></div>
+<script type="module">
+import THREE, { initThreers } from '/web/threejs-shim.js';
+const errEl = document.getElementById('err');
+(async () => {
+    try {
+        await initThreers('/web/pkg/threers_bg.wasm');
+        const scene = new THREE.Scene(); scene.background = new THREE.Color(0x1a1a22);
+        const bright = new THREE.Mesh(new THREE.SphereGeometry(0.8, 32, 16), new THREE.MeshBasicMaterial({ color: 0xffeecc }));
+        bright.position.set(-1.2, 0.3, 0); scene.add(bright);
+        const mid = new THREE.Mesh(new THREE.BoxGeometry(1.0, 1.0, 1.0), new THREE.MeshBasicMaterial({ color: 0x4477aa }));
+        mid.position.set(1.2, -0.2, 0); mid.rotation.set(0.4, 0.6, 0); scene.add(mid);
+        const floor = new THREE.Mesh(new THREE.PlaneGeometry(8, 3), new THREE.MeshBasicMaterial({ color: 0x664422 }));
+        floor.position.set(0, -1.2, -0.5); floor.rotation.x = -1.2; scene.add(floor);
+        const cam = new THREE.PerspectiveCamera(45, 800/600, 0.1, 100);
+        cam.position.set(0, 0, 5); cam.lookAt(0, 0, 0);
+        const r = await THREE.WebGLRenderer.create(document.getElementById('c'));
+        r.setSize(800, 600);
+        const composer = new THREE.EffectComposer(r);
+        composer.addPass(new THREE.RenderPass(scene, cam));
+        const tone = new THREE.AdaptiveToneMappingPass(true, 256);
+        tone.setAdaptionRate(2.0);
+        composer.addPass(tone);
+        composer.addPass(new THREE.OutputPass());
+        for (let i = 0; i < 4; i++) await composer.render(0.5);
+        await new Promise(rs => requestAnimationFrame(() => rs()));
+        document.body.dataset.ready = 'true';
+    } catch (e) {
+        console.error(e);
+        errEl.style.display = 'block';
+        errEl.textContent = e?.stack || String(e);
+        document.body.dataset.ready = 'error';
+    }
+})();
+</script></body></html>

@@ -1,4 +1,4 @@
-/// CSG boolean operation (mirrors `web/csg/core/constants.js`).
+/// A CSG boolean operation (three-bvh-csg's constants).
 pub type Operation = u8;
 
 pub const ADDITION: Operation = 0;

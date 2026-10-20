@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><style>body{margin:0;background:#101418}canvas{display:block}</style></head>
+<body><canvas id="c" width="800" height="600"></canvas>
+<script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.165.0/build/three.module.js","three/addons/":"https://unpkg.com/three@0.165.0/examples/jsm/"}}</script>
+<script type="module">
+import * as THREE from 'three';
+import { FontLoader } from 'three/addons/loaders/FontLoader.js';
+import { TextGeometry } from 'three/addons/geometries/TextGeometry.js';
+const scene = new THREE.Scene(); scene.background = new THREE.Color(0x101418);
+scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+const dl = new THREE.DirectionalLight(0xffffff, 1.1); dl.position.set(1, 2, 3); scene.add(dl);
+const font = await new FontLoader().loadAsync('/web/node_modules/three/examples/fonts/helvetiker_regular.typeface.json');
+const geo = new TextGeometry('Ag&8?', { font, size: 0.5, depth: 0.12, curveSegments: 6,
+    bevelEnabled: true, bevelThickness: 0.02, bevelSize: 0.015, bevelSegments: 3 });
+const text = new THREE.Mesh(geo, [new THREE.MeshStandardMaterial({ color: 0xffcc66, roughness: 0.4 }),
+    new THREE.MeshStandardMaterial({ color: 0x5588ff, roughness: 0.6 })]);
+text.position.set(-0.95, -0.15, 0);
+text.rotation.y = -0.35;
+scene.add(text);
+const cam = new THREE.PerspectiveCamera(45, 800/600, 0.1, 100);
+cam.position.set(0, 0.4, 2.4); cam.lookAt(0, 0, 0);
+const r = new THREE.WebGLRenderer({ canvas: document.getElementById('c'), antialias: false });
+r.setSize(800, 600, false); r.setPixelRatio(1);
+r.render(scene, cam);
+document.body.dataset.ready = 'true';
+</script></body></html>

@@ -273,3 +273,67 @@ fn giant_triangles_do_not_collapse_the_tree() {
         "a handful of large triangles collapsed the tree",
     );
 }
+
+/// A ray exactly along a sphere's equator, through the vertex where its first
+/// and last segments meet: three.js and three-mesh-bvh report it once per
+/// surface crossing (front faces only), not once per triangle sharing the
+/// vertex. Both raycast paths agree with that — the BVH's and the plain
+/// `Raycaster`'s — because both evaluate three.js's `Ray.intersectTriangle` at
+/// JavaScript's precision.
+#[test]
+fn a_ray_through_a_shared_vertex_hits_once() {
+    use threers::core::{Mesh, Object3D, Raycaster};
+    use threers::geometries::SphereGeometry;
+    use threers::materials::BasicMaterial;
+    use threers::scene::Scene;
+    use threers::Color;
+
+    // three.js r165 + three-mesh-bvh 0.7.6, front side, ray from (-2, 0, 0)
+    // along +x through spheres at x = -0.6 (r 0.4) and 0.6 (r 0.35).
+    const UPSTREAM: [f32; 2] = [1.0, 2.25];
+    let mut scene = Scene::new();
+    let mut ids = Vec::new();
+    for (x, r) in [(-0.6f32, 0.4f32), (0.6, 0.35)] {
+        let mut o = Object3D::mesh(Mesh::new(SphereGeometry::new(r, 32, 16), BasicMaterial::new(Color::WHITE).into()));
+        o.position = Vector3::new(x, 0.0, 0.0);
+        ids.push(scene.add(o));
+    }
+    scene.update_world();
+    let rc = Raycaster::new(Vector3::new(-2.0, 0.0, 0.0), Vector3::new(1.0, 0.0, 0.0), 0.0, f32::INFINITY);
+    let hits = rc.intersect_object_list(&scene.arena, &ids, false);
+    let d: Vec<f32> = hits.iter().map(|h| h.distance).collect();
+    assert_eq!(d.len(), 2, "Raycaster hits at {d:?}, three.js at {UPSTREAM:?}");
+    for (got, want) in d.iter().zip(UPSTREAM) {
+        assert!((got - want).abs() < 1e-5, "Raycaster hits at {d:?}, three.js at {UPSTREAM:?}");
+    }
+
+    // The BVH alone, in sphere a's local frame.
+    let geometry = SphereGeometry::new(0.4, 32, 16);
+    let bvh = MeshBvh::build(&geometry, BuildOptions::default()).expect("bvh");
+    let ray = Ray::new(Vector3::new(-1.4, 0.0, 0.0), Vector3::new(1.0, 0.0, 0.0));
+    let front: Vec<f32> = bvh.raycast(&ray, 0.0, f32::INFINITY, true).iter().map(|h| h.distance).collect();
+    assert_eq!(front.len(), 1, "BVH front-face hits at {front:?}");
+    assert!((front[0] - 1.0).abs() < 1e-5, "BVH front-face hits at {front:?}");
+}
+
+/// The tree is three-mesh-bvh 0.7.6's: the same triangle order after the
+/// build (`_indirectBuffer` with `indirect: true`), which is what decides the
+/// order `bvhcast` meets triangle pairs and so how three-bvh-csg cuts a face.
+/// Hashes from three r165 + three-mesh-bvh 0.7.6, `maxLeafTris: 3`.
+#[test]
+fn the_tree_is_three_mesh_bvhs() {
+    use threers::geometries::{BoxGeometry, SphereGeometry};
+    for (name, geometry, tris, hash, first) in [
+        ("sphere", SphereGeometry::new(1.0, 32, 16).to_non_indexed(), 960usize, -197465220i32,
+         [667usize, 666, 664, 726, 663, 662, 729, 728, 665, 599, 598, 536, 537, 535, 534, 600]),
+        ("box", BoxGeometry::new(1.2, 1.2, 1.2).to_non_indexed(), 12, -723910,
+         [3, 2, 7, 6, 11, 10, 9, 8, 5, 4, 1, 0, 0, 0, 0, 0]),
+    ] {
+        let bvh = MeshBvh::build(&geometry, BuildOptions { max_leaf_tris: 3, indirect: true, ..Default::default() }).expect("bvh");
+        let order: Vec<usize> = (0..tris).map(|i| bvh.resolve_triangle_index(i).unwrap()).collect();
+        let h = order.iter().fold(0i32, |h, &v| h.wrapping_mul(31).wrapping_add(v as i32));
+        let n = tris.min(16);
+        assert_eq!(&order[..n], &first[..n], "{name}: first triangles");
+        assert_eq!(h, hash, "{name}: order hash");
+    }
+}

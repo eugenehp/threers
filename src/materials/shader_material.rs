@@ -25,6 +25,11 @@
 //! @group(1) @binding(7) var u_tex2: texture_2d<f32>;
 //! @group(1) @binding(8) var u_tex3: texture_2d<f32>;
 //! @group(1) @binding(9) var u_samp: sampler;
+//! // Two optional 3D textures (three.js `Data3DTexture` / `sampler3D`) and a
+//! // linear clamp-to-edge sampler. Unset slots are a 1x1x1 black R8Unorm.
+//! @group(1) @binding(13) var u_vol0: texture_3d<f32>;
+//! @group(1) @binding(14) var u_vol1: texture_3d<f32>;
+//! @group(1) @binding(15) var u_vol_samp: sampler;
 //! ```
 //!
 //! You supply the fragment entry point:
@@ -69,6 +74,13 @@ pub struct ShaderMaterial {
     /// }
     /// ```
     ///
+    /// Morph targets apply as three.js's `#include <morphtarget_vertex>`
+    /// does: the built-in `vs_main` morphs (it is `standard_vertex_morphed(in,
+    /// vertex_index)`), and a custom stage calls the preamble's
+    /// `morph_position(p, vi)`, `morph_normal(n, vi)` and `morph_color(c, vi)`
+    /// — `vi` the `@builtin(vertex_index)` — or `standard_vertex_morphed`
+    /// itself. (`standard_vertex` alone does not morph.)
+    ///
     /// The user bindings are visible to the vertex stage as well as the
     /// fragment stage, so per-vertex data can come from `u_data`, `s0`/`s1`/`s2`
     /// or the user textures, indexed by `@builtin(vertex_index)` or
@@ -88,6 +100,19 @@ pub struct ShaderMaterial {
     /// accumulated foam field, a wake map — without a CPU round trip. Slots you
     /// leave empty read as opaque white.
     pub textures: Vec<std::sync::Arc<wgpu::TextureView>>,
+    /// Up to two 3D texture views — a [`GpuVolume`](crate::volume::GpuVolume)'s
+    /// `view` — exposed as `u_vol0`/`u_vol1` and sampled with `u_vol_samp`
+    /// (linear, clamp-to-edge), or read exactly with `textureLoad`. three.js's
+    /// `Data3DTexture` in a `ShaderMaterial`: a slice plane through a scan,
+    /// a volume ray-march, a 3D colour lookup. Filtering needs a filterable
+    /// format (`R8Unorm`, `Rgba8Unorm`, `R16Float`); the others are for
+    /// `textureLoad` only.
+    ///
+    /// Not on WebGL2: its sixteen texture units are all taken by the rest of
+    /// the layout, so the slots are left out there and a shader that reads
+    /// `u_vol0` does not compile. See
+    /// [`supports_shader_material_volumes`](crate::renderer::caps::supports_shader_material_volumes).
+    pub volumes: Vec<std::sync::Arc<wgpu::TextureView>>,
     /// Draw this material in the screen-space pass, with the opaque scene
     /// available as `ss_color_tex` / `ss_depth_tex` at `@group(3)`.
     ///
@@ -108,20 +133,24 @@ pub struct ShaderMaterial {
     /// For something thin and faint (hair, fuzz, a thread) that is invisible
     /// and is the right trade. For something denser, either split it into
     /// meshes that can be sorted, or set
-    /// [`depth_write`](Self::depth_write) and accept hard edges instead of
+    /// `render_state.depth_write` and accept hard edges instead of
     /// wrong ones. The renderer's weighted-blended order-independent path is
     /// not reachable from here; it needs a second fragment entry point writing
     /// two targets, which this contract has no way to express.
     pub transparent: bool,
-    /// Override whether this material writes depth.
-    ///
-    /// `None` follows [`transparent`](Self::transparent): opaque writes, blended
-    /// does not. `Some(true)` on a transparent material makes it self-occlude —
-    /// its own nearer triangles reject its farther ones — which is usually what
-    /// a dense translucent shell wants and never what hair wants.
-    pub depth_write: Option<bool>,
     /// `0` = FrontSide, `1` = BackSide, `2` = DoubleSide.
     pub side: u32,
+    /// three.js `toneMapped` (default `true`): whether the renderer's tone
+    /// mapping applies to this material's output.
+    pub tone_mapped: bool,
+    /// three.js `depthTest` / `depthWrite` / `depthFunc` / `colorWrite`.
+    ///
+    /// `depth_write: None` follows [`transparent`](Self::transparent): opaque
+    /// writes, blended does not. `Some(true)` on a transparent material makes
+    /// it self-occlude — its own nearer triangles reject its farther ones —
+    /// which is usually what a dense translucent shell wants and never what
+    /// hair wants.
+    pub render_state: super::RenderState,
 }
 
 impl Default for ShaderMaterial {
@@ -134,11 +163,13 @@ impl Default for ShaderMaterial {
             storage1: Vec::new(),
             storage2: Vec::new(),
             textures: Vec::new(),
+            volumes: Vec::new(),
             screen_space: false,
             opacity: 1.0,
             transparent: false,
-            depth_write: None,
             side: 0,
+            tone_mapped: true,
+            render_state: super::RenderState::DEFAULT,
         }
     }
 }
@@ -159,9 +190,9 @@ impl ShaderMaterial {
         self
     }
 
-    /// Override depth writing. See [`depth_write`](Self::depth_write).
+    /// Override depth writing. See [`render_state`](Self::render_state).
     pub fn with_depth_write(mut self, write: bool) -> Self {
-        self.depth_write = Some(write);
+        self.render_state.depth_write = Some(write);
         self
     }
 

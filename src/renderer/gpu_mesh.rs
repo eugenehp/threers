@@ -9,7 +9,10 @@ pub struct GpuMesh {
     pub vertex_count: u32,
     pub index_count: u32,
     /// Line-list index buffer for `wireframe: true` materials. Matches three.js
-    /// WebGLGeometries: each triangle emits (a,b,b,c,c,a) without deduping.
+    /// WebGLGeometries: each triangle emits (a,b,b,c,c,a) without deduping —
+    /// unless the geometry carries polygons; see
+    /// [`BufferGeometry::wireframe_indices`]. Built on first wireframe use by
+    /// [`ensure_wire_indices`](Self::ensure_wire_indices), not by `upload`.
     pub wire_index_buffer: Option<wgpu::Buffer>,
     pub wire_index_count: u32,
     #[allow(dead_code)]
@@ -111,47 +114,40 @@ impl GpuMesh {
             (None, 0)
         };
 
-        // Build a wireframe index buffer matching three.js WebGLGeometries:
-        // each triangle contributes (a,b,b,c,c,a) line segments without deduping.
-        let (wire_index_buffer, wire_index_count) = {
-            let mut flat: Vec<u32> = Vec::new();
-            if let Some(idx) = &geom.index {
-                let mut t = 0;
-                while t + 2 < idx.len() {
-                    let a = idx[t];
-                    let b = idx[t + 1];
-                    let c = idx[t + 2];
-                    flat.extend_from_slice(&[a, b, b, c, c, a]);
-                    t += 3;
-                }
-            } else {
-                let mut t = 0u32;
-                while (t as usize) + 2 < vert_count {
-                    flat.extend_from_slice(&[t, t + 1, t + 1, t + 2, t + 2, t]);
-                    t += 3;
-                }
-            }
-            if flat.is_empty() {
-                (None, 0)
-            } else {
-                let buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("threers wireframe index buffer"),
-                    contents: bytemuck::cast_slice(&flat),
-                    usage: wgpu::BufferUsages::INDEX,
-                });
-                (Some(buf), flat.len() as u32)
-            }
-        };
-
         Self {
             vertex_buffer,
             index_buffer,
             vertex_count: vert_count as u32,
             index_count,
-            wire_index_buffer,
-            wire_index_count,
+            wire_index_buffer: None,
+            wire_index_count: 0,
             has_vertex_colors: colors,
         }
+    }
+
+    /// Build the wireframe index buffer from `geom` — the geometry this mesh
+    /// was uploaded from — if it is not built yet.
+    ///
+    /// Lazy, as on the Metal backend, because most meshes are never drawn as
+    /// wireframes, and with a polygon table the line list costs a hash lookup
+    /// per triangle edge. A deforming mesh re-uploads on every position write,
+    /// so building it in `upload` would pay that every frame for nothing.
+    pub fn ensure_wire_indices(&mut self, device: &wgpu::Device, geom: &BufferGeometry) {
+        if self.wire_index_buffer.is_some() {
+            return;
+        }
+        let flat = geom.wireframe_indices();
+        if flat.is_empty() {
+            return;
+        }
+        self.wire_index_buffer = Some(device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("threers wireframe index buffer"),
+                contents: bytemuck::cast_slice(&flat),
+                usage: wgpu::BufferUsages::INDEX,
+            },
+        ));
+        self.wire_index_count = flat.len() as u32;
     }
 }
 

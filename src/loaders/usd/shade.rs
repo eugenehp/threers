@@ -513,58 +513,45 @@ mod tests {
         assert!(scene.textures.iter().all(|(name, _)| name != "Graphed"));
     }
 
-    /// A mesh with two materials is two meshes here, because this crate's
-    /// `Mesh` carries one. Ignoring the subsets would draw the whole thing in
-    /// one colour with nothing to say anything was lost.
+    /// A mesh with two materials is one mesh with a material array: the
+    /// subset's faces first, then the faces it left to the mesh's own binding,
+    /// one geometry group each — three.js's `groups` + `material[]`.
     #[test]
-    fn a_mesh_with_subsets_splits_by_material() {
+    fn a_mesh_with_subsets_is_one_mesh_over_a_material_array() {
         use crate::core::ObjectKind;
         let layer = parse(include_str!("testdata/subset.usda")).unwrap();
         let scene = to_scene(&layer);
-
-        fn find<'a>(
-            scene: &'a super::super::scene::UsdScene,
-            name: &str,
-        ) -> Option<&'a crate::core::Object3D> {
-            fn walk<'a>(
-                scene: &'a super::super::scene::UsdScene,
-                id: crate::core::ObjectId,
-                name: &str,
-            ) -> Option<&'a crate::core::Object3D> {
-                let node = scene.arena.get(id)?;
-                if node.name == name {
-                    return Some(node);
-                }
-                node.children.iter().find_map(|c| walk(scene, *c, name))
-            }
-            scene.roots.iter().find_map(|r| walk(scene, *r, name))
-        }
-
-        let two_tone = find(&scene, "TwoTone").expect("the mesh");
-        assert_eq!(two_tone.children.len(), 2, "one subset plus the remainder");
-
-        let colours: Vec<(String, [f32; 3])> = two_tone
-            .children
+        let two_tone = scene
+            .arena
+            .nodes
+            .values()
+            .find(|n| n.name == "TwoTone")
+            .expect("the mesh");
+        let ObjectKind::Mesh(mesh) = &two_tone.kind else {
+            panic!("TwoTone should be a mesh");
+        };
+        assert!(two_tone.children.is_empty());
+        // Faces [1, 3] (blue) then [0, 2] (the mesh's red): two quads each.
+        let groups: Vec<(u32, u32, u32)> = mesh
+            .geometry
+            .groups
             .iter()
-            .map(|c| {
-                let node = scene.arena.get(*c).unwrap();
-                let ObjectKind::Mesh(mesh) = &node.kind else {
-                    panic!("{} should be a mesh", node.name);
-                };
-                let Material::Standard(standard) = &*mesh.material else {
-                    panic!("standard");
-                };
-                (
-                    node.name.clone(),
-                    [standard.color.r, standard.color.g, standard.color.b],
-                )
-            })
+            .map(|g| (g.start, g.count, g.material_index))
             .collect();
-
-        let blue = colours.iter().find(|(n, _)| n == "BluePart").expect("BluePart");
-        assert_eq!(blue.1, [0.0, 0.0, 1.0], "the subset's own material");
-        let rest = colours.iter().find(|(n, _)| n == "TwoTone").expect("the remainder");
-        assert_eq!(rest.1, [1.0, 0.0, 0.0], "the mesh's own material");
+        assert_eq!(groups, [(0, 12, 0), (12, 12, 1)]);
+        let colour = |m: &Material| {
+            let Material::Standard(s) = m else { panic!("standard") };
+            [s.color.r, s.color.g, s.color.b]
+        };
+        assert_eq!(colour(&mesh.materials[0]), [0.0, 0.0, 1.0], "the subset's own material");
+        assert_eq!(colour(&mesh.materials[1]), [1.0, 0.0, 0.0], "the mesh's own material");
+        // The blue run is the subset's faces: x in [2, 3] and [6, 7].
+        let p = &mesh.geometry.get_attribute("position").unwrap().array;
+        let index = mesh.geometry.index.as_ref().unwrap();
+        for &v in &index[..12] {
+            let x = p[v as usize * 3];
+            assert!((2.0..=3.0).contains(&x) || (6.0..=7.0).contains(&x), "{x}");
+        }
     }
 
     /// Two of four faces belong to the subset, so each half has two.

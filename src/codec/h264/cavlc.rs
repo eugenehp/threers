@@ -39,12 +39,12 @@ pub const ZIGZAG4: [usize; 16] = [0, 1, 4, 8, 5, 2, 3, 6, 9, 12, 13, 10, 7, 11, 
 
 /// `coeff_token`, indexed `[trailing_ones][total_coeff]` (Table 9-5).
 /// Entries where `trailing_ones > total_coeff` are unused.
-type CoeffTokenTable = [[Vlc; 17]; 4];
+pub(crate) type CoeffTokenTable = [[Vlc; 17]; 4];
 
 const NA: Vlc = v(0, 0);
 
 /// `0 <= nC < 2`.
-const CT0: CoeffTokenTable = [
+pub(crate) const CT0: CoeffTokenTable = [
     [
         v(1, 0b1), v(6, 0b000101), v(8, 0b00000111), v(9, 0b000000111),
         v(10, 0b0000000111), v(11, 0b00000000111), v(13, 0b0000000001111),
@@ -77,7 +77,7 @@ const CT0: CoeffTokenTable = [
 ];
 
 /// `2 <= nC < 4`.
-const CT1: CoeffTokenTable = [
+pub(crate) const CT1: CoeffTokenTable = [
     [
         v(2, 0b11), v(6, 0b001011), v(6, 0b000111), v(7, 0b0000111), v(8, 0b00000111),
         v(8, 0b00000100), v(9, 0b000000111), v(11, 0b00000001111), v(11, 0b00000001011),
@@ -108,7 +108,7 @@ const CT1: CoeffTokenTable = [
 ];
 
 /// `4 <= nC < 8`.
-const CT2: CoeffTokenTable = [
+pub(crate) const CT2: CoeffTokenTable = [
     [
         v(4, 0b1111), v(6, 0b001111), v(6, 0b001011), v(6, 0b001000), v(7, 0b0001111),
         v(7, 0b0001011), v(7, 0b0001001), v(7, 0b0001000), v(8, 0b00001111),
@@ -137,7 +137,7 @@ const CT2: CoeffTokenTable = [
 ];
 
 /// `nC == -1` — the 2×2 chroma DC block, which has at most four coefficients.
-const CT_CHROMA_DC: [[Vlc; 5]; 4] = [
+pub(crate) const CT_CHROMA_DC: [[Vlc; 5]; 4] = [
     [v(2, 0b01), v(6, 0b000111), v(6, 0b000100), v(6, 0b000011), v(6, 0b000010)],
     [NA, v(1, 0b1), v(6, 0b000110), v(7, 0b0000011), v(8, 0b00000011)],
     [NA, NA, v(3, 0b001), v(7, 0b0000010), v(8, 0b00000010)],
@@ -146,7 +146,7 @@ const CT_CHROMA_DC: [[Vlc; 5]; 4] = [
 
 /// `total_zeros` for 4×4 blocks, indexed `[tz_vlc_index - 1][total_zeros]`
 /// (Tables 9-7 and 9-8).
-const TOTAL_ZEROS_4X4: [&[Vlc]; 15] = [
+pub(crate) const TOTAL_ZEROS_4X4: [&[Vlc]; 15] = [
     &[
         v(1, 0b1), v(3, 0b011), v(3, 0b010), v(4, 0b0011), v(4, 0b0010), v(5, 0b00011),
         v(5, 0b00010), v(6, 0b000011), v(6, 0b000010), v(7, 0b0000011), v(7, 0b0000010),
@@ -201,7 +201,7 @@ const TOTAL_ZEROS_4X4: [&[Vlc]; 15] = [
 ];
 
 /// `total_zeros` for the 2×2 chroma DC block (Table 9-9a).
-const TOTAL_ZEROS_CHROMA_DC: [&[Vlc]; 3] = [
+pub(crate) const TOTAL_ZEROS_CHROMA_DC: [&[Vlc]; 3] = [
     &[v(1, 0b1), v(2, 0b01), v(3, 0b001), v(3, 0b000)],
     &[v(1, 0b1), v(2, 0b01), v(2, 0b00)],
     &[v(1, 0b1), v(1, 0b0)],
@@ -209,7 +209,7 @@ const TOTAL_ZEROS_CHROMA_DC: [&[Vlc]; 3] = [
 
 /// `run_before`, indexed `[min(zeros_left, 7) - 1][run_before]` (Table 9-10).
 /// The last row covers every `zeros_left > 6`.
-const RUN_BEFORE: [&[Vlc]; 7] = [
+pub(crate) const RUN_BEFORE: [&[Vlc]; 7] = [
     &[v(1, 0b1), v(1, 0b0)],
     &[v(1, 0b1), v(2, 0b01), v(2, 0b00)],
     &[v(2, 0b11), v(2, 0b10), v(2, 0b01), v(2, 0b00)],

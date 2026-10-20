@@ -6,23 +6,67 @@ use crate::core::{BufferAttribute, BufferGeometry};
 use crate::materials::Material;
 use crate::math::{Matrix4, Vector3};
 
-/// A camera-facing quad in world space, as two triangles.
-pub fn sprite_quads(world: &Matrix4, size: f32) -> Arc<BufferGeometry> {
-    let hs = size.max(1e-4) * 0.5;
-    let mut positions = vec![
-        -hs, -hs, 0.0, //
-        hs, -hs, 0.0, //
-        hs, hs, 0.0, //
-        -hs, hs, 0.0,
-    ];
-    for chunk in positions.chunks_exact_mut(3) {
-        let p = Vector3::new(chunk[0], chunk[1], chunk[2]).apply_matrix4(world);
-        chunk[0] = p.x;
-        chunk[1] = p.y;
-        chunk[2] = p.z;
-    }
+/// A sprite's quad in world space, as two triangles with three.js's sprite
+/// UVs — the quad three.js's `sprite_vert` draws and `Sprite.raycast` hits
+/// (the crate's [`Raycaster`](crate::Raycaster) builds the same one):
+///
+/// - the unit quad, offset by `center` (three.js's default is (0.5, 0.5)),
+/// - scaled by the lengths of `world`'s x and y basis vectors — times the
+///   view depth when `size_attenuation` is off under a perspective camera,
+/// - turned by `rotation` in the view plane,
+/// - laid in the camera's view plane at the sprite's view-space position.
+///
+/// It faces `camera`, so the triangles are only right for that camera; a
+/// [`RaytraceScene`](super::RaytraceScene) holding sprites is rebuilt when
+/// the camera moves. Without a camera there is nothing to face: the quad is
+/// laid in the sprite's own xy plane under `world`.
+pub fn sprite_quads(
+    world: &Matrix4,
+    center: crate::math::Vector2,
+    rotation: f32,
+    size_attenuation: bool,
+    camera: Option<&crate::core::RaycastCamera>,
+) -> Arc<BufferGeometry> {
+    let corners = [(-0.5f32, -0.5f32), (0.5, -0.5), (0.5, 0.5), (-0.5, 0.5)];
+    let positions: Vec<f32> = match camera {
+        Some(camera) => {
+            let e = &world.elements;
+            let mut sx = Vector3::new(e[0], e[1], e[2]).length();
+            let mut sy = Vector3::new(e[4], e[5], e[6]).length();
+            let mv = camera.matrix_world_inverse.multiply(world);
+            let mvp = Vector3::new(mv.elements[12], mv.elements[13], mv.elements[14]);
+            if camera.perspective && !size_attenuation {
+                sx *= -mvp.z;
+                sy *= -mvp.z;
+            }
+            let (sin, cos) = rotation.sin_cos();
+            corners
+                .iter()
+                .flat_map(|&(x, y)| {
+                    let ax = (x - center.x + 0.5) * sx;
+                    let ay = (y - center.y + 0.5) * sy;
+                    let (rx, ry) = (cos * ax - sin * ay, sin * ax + cos * ay);
+                    let p = Vector3::new(mvp.x + rx, mvp.y + ry, mvp.z)
+                        .apply_matrix4(&camera.matrix_world);
+                    [p.x, p.y, p.z]
+                })
+                .collect()
+        }
+        None => corners
+            .iter()
+            .flat_map(|&(x, y)| {
+                let p = Vector3::new(x - center.x + 0.5, y - center.y + 0.5, 0.0)
+                    .apply_matrix4(world);
+                [p.x, p.y, p.z]
+            })
+            .collect(),
+    };
     let mut geom = BufferGeometry::new();
     geom.set_attribute("position", BufferAttribute::new(positions, 3));
+    geom.set_attribute(
+        "uv",
+        BufferAttribute::new(vec![0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0], 2),
+    );
     geom.set_index(vec![0, 1, 2, 0, 2, 3]);
     Arc::new(geom)
 }

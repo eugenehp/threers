@@ -317,25 +317,39 @@ fn copy_edge_gutter(atlas: &mut [u8], atlas_w: u32, x0: u32, y0: u32, s: u32) {
     }
 }
 
-fn sample_atlas_pixel(pixels: &[u8], width: u32, height: u32, u: f32, v: f32) -> [f32; 3] {
-    let u = u.clamp(0.0, 1.0);
-    let v = v.clamp(0.0, 1.0);
+/// The four texels and weights a GPU's bilinear filter reads at `(u, v)`.
+///
+/// GL's convention, which three.js's atlas layout assumes and the GPU path
+/// samples with: texel `k` covers `[k, k+1) / size` and is centred on
+/// `(k + 0.5) / size`, so the continuous coordinate is `u·size − 0.5`,
+/// clamped to the edge.
+///
+/// This used to be `u·(size − 1)`, which puts texel centres on the corners
+/// instead: off by `0.5 − u` texels, half a texel at either edge of the atlas.
+/// The GPU never noticed — it filters in hardware — but the CPU PMREM blur
+/// reads every level back through here: 18 half-blur passes, each shifting by
+/// up to half a texel of a 16-pixel face, turned a point light into a ring 20°
+/// off its own axis and lost a third of its energy by roughness 1.
+fn bilinear_taps(width: u32, height: u32, u: f32, v: f32) -> ([usize; 4], f32, f32) {
     let w = width as usize;
     let h = height as usize;
-    let x = u * (width - 1) as f32;
-    let y = v * (height - 1) as f32;
+    let x = (u * width as f32 - 0.5).clamp(0.0, (width - 1) as f32);
+    let y = (v * height as f32 - 0.5).clamp(0.0, (height - 1) as f32);
     let x0 = x.floor() as usize;
     let y0 = y.floor() as usize;
     let x1 = (x0 + 1).min(w - 1);
     let y1 = (y0 + 1).min(h - 1);
-    let tx = x - x0 as f32;
-    let ty = y - y0 as f32;
+    ([y0 * w + x0, y0 * w + x1, y1 * w + x0, y1 * w + x1], x - x0 as f32, y - y0 as f32)
+}
+
+fn sample_atlas_pixel(pixels: &[u8], width: u32, height: u32, u: f32, v: f32) -> [f32; 3] {
+    let ([i00, i10, i01, i11], tx, ty) = bilinear_taps(width, height, u, v);
     let mut out = [0.0f32; 3];
     for (c, channel) in out.iter_mut().enumerate() {
-        let c00 = pixels[(y0 * w + x0) * 4 + c] as f32 / 255.0;
-        let c10 = pixels[(y0 * w + x1) * 4 + c] as f32 / 255.0;
-        let c01 = pixels[(y1 * w + x0) * 4 + c] as f32 / 255.0;
-        let c11 = pixels[(y1 * w + x1) * 4 + c] as f32 / 255.0;
+        let c00 = pixels[i00 * 4 + c] as f32 / 255.0;
+        let c10 = pixels[i10 * 4 + c] as f32 / 255.0;
+        let c01 = pixels[i01 * 4 + c] as f32 / 255.0;
+        let c11 = pixels[i11 * 4 + c] as f32 / 255.0;
         let v0 = c00 * (1.0 - tx) + c10 * tx;
         let v1 = c01 * (1.0 - tx) + c11 * tx;
         *channel = v0 * (1.0 - ty) + v1 * ty;
@@ -357,25 +371,13 @@ pub fn atlas_lod_origin(
 }
 
 fn sample_atlas_pixel_f32(pixels: &[f32], width: u32, height: u32, u: f32, v: f32) -> [f32; 3] {
-    let u = u.clamp(0.0, 1.0);
-    let v = v.clamp(0.0, 1.0);
-    let w = width as usize;
-    let h = height as usize;
-    let x = u * (width - 1) as f32;
-    let y = v * (height - 1) as f32;
-    let x0 = x.floor() as usize;
-    let y0 = y.floor() as usize;
-    let x1 = (x0 + 1).min(w - 1);
-    let y1 = (y0 + 1).min(h - 1);
-    let tx = x - x0 as f32;
-    let ty = y - y0 as f32;
+    let ([i00, i10, i01, i11], tx, ty) = bilinear_taps(width, height, u, v);
     let mut out = [0.0f32; 3];
     for (c, channel) in out.iter_mut().enumerate() {
-        let off = |x: usize, y: usize| (y * w + x) * 4 + c;
-        let c00 = pixels[off(x0, y0)];
-        let c10 = pixels[off(x1, y0)];
-        let c01 = pixels[off(x0, y1)];
-        let c11 = pixels[off(x1, y1)];
+        let c00 = pixels[i00 * 4 + c];
+        let c10 = pixels[i10 * 4 + c];
+        let c01 = pixels[i01 * 4 + c];
+        let c11 = pixels[i11 * 4 + c];
         let v0 = c00 * (1.0 - tx) + c10 * tx;
         let v1 = c01 * (1.0 - tx) + c11 * tx;
         *channel = v0 * (1.0 - ty) + v1 * ty;
@@ -643,4 +645,27 @@ fn cube_uv_get_uv_cpu(direction: [f32; 3], face: f32) -> [f32; 2] {
         ]
     };
     [0.5 * (uv[0] + 1.0), 0.5 * (uv[1] + 1.0)]
+}
+
+#[cfg(test)]
+mod texel_convention_tests {
+    use super::*;
+
+    /// A texel centre reads that texel alone, as a GPU's filter reads it:
+    /// `(k + 0.5) / size` is texel `k`, and the edges clamp.
+    #[test]
+    fn bilinear_taps_use_gl_texel_centres() {
+        let (w, h) = (8u32, 4u32);
+        let px: Vec<f32> = (0..w * h).flat_map(|i| [i as f32, 0.0, 0.0, 1.0]).collect();
+        for k in 0..w {
+            let u = (k as f32 + 0.5) / w as f32;
+            let v = 2.5 / h as f32;
+            assert_eq!(sample_atlas_pixel_f32(&px, w, h, u, v)[0], (2 * w + k) as f32, "texel {k}");
+        }
+        // halfway between texel centres 3 and 4
+        assert_eq!(sample_atlas_pixel_f32(&px, w, h, 4.0 / w as f32, 0.5 / h as f32)[0], 3.5);
+        // the edges clamp rather than reading a neighbour row
+        assert_eq!(sample_atlas_pixel_f32(&px, w, h, 0.0, 0.5 / h as f32)[0], 0.0);
+        assert_eq!(sample_atlas_pixel_f32(&px, w, h, 1.0, 0.5 / h as f32)[0], (w - 1) as f32);
+    }
 }

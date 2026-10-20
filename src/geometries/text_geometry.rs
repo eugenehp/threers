@@ -62,3 +62,73 @@ impl TextGeometry {
         out
     }
 }
+
+/// Options of three.js r165's `TextGeometry`: its own defaults on top of
+/// [`ExtrudeOptions`](super::ExtrudeOptions)'s.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextOptions {
+    /// Em size. Default 100 (`Font.generateShapes`'s default).
+    pub size: f64,
+    /// Extrusion depth. Default 50.
+    pub depth: Option<f64>,
+    /// The pre-r163 name of `depth`, used when `depth` is not given.
+    pub height: Option<f64>,
+    pub curve_segments: usize,
+    pub steps: usize,
+    /// Default false (unlike `ExtrudeGeometry`).
+    pub bevel_enabled: bool,
+    /// Default 10.
+    pub bevel_thickness: f64,
+    /// Default 8.
+    pub bevel_size: f64,
+    pub bevel_offset: f64,
+    pub bevel_segments: usize,
+}
+
+impl Default for TextOptions {
+    fn default() -> Self {
+        Self {
+            size: 100.0,
+            depth: None,
+            height: None,
+            curve_segments: 12,
+            steps: 1,
+            bevel_enabled: false,
+            bevel_thickness: 10.0,
+            bevel_size: 8.0,
+            bevel_offset: 0.0,
+            bevel_segments: 3,
+        }
+    }
+}
+
+impl TextOptions {
+    /// The [`ExtrudeOptions`](super::ExtrudeOptions) three.js hands
+    /// `ExtrudeGeometry`.
+    pub fn extrude_options(&self) -> super::ExtrudeOptions {
+        super::ExtrudeOptions {
+            curve_segments: self.curve_segments,
+            steps: self.steps,
+            depth: self.depth.or(self.height).unwrap_or(50.0),
+            bevel_enabled: self.bevel_enabled,
+            bevel_thickness: self.bevel_thickness,
+            bevel_size: Some(self.bevel_size),
+            bevel_offset: self.bevel_offset,
+            bevel_segments: self.bevel_segments,
+            extrude_path: None,
+        }
+    }
+}
+
+impl TextGeometry {
+    /// three.js r165 `new TextGeometry(text, { font, … })`: the font's shapes
+    /// for `text` extruded — buffer for buffer what three.js builds.
+    pub fn from_font(
+        font: &crate::loaders::typeface::Font,
+        text: &str,
+        options: &TextOptions,
+    ) -> BufferGeometry {
+        let shapes = font.generate_shapes(text, options.size);
+        super::ExtrudeGeometry::from_shapes(&shapes, &options.extrude_options())
+    }
+}

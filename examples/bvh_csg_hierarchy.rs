@@ -1,17 +1,23 @@
-//! Native wgpu render of the bvh-csg-hierarchy parity scene.
+//! The bvh-csg hierarchy parity scene, evaluated live and drawn with wgpu: a
+//! shell (box minus a smaller box), a sphere added on, and a window cut and
+//! framed through an operation group — three-bvh-csg's `evaluateHierarchy`.
 //!
-//! Pipeline: JS-exported winCut soup → live Rust winFrame (see `build_bvh_csg_hierarchy_geometry`).
+//! An optional step, 1 to 4, applies only that many of the root's
+//! operations, to watch the hierarchy build up. Each prints its triangle
+//! count beside three-bvh-csg 0.0.16's (`tests/csg_upstream.rs` holds them
+//! equal).
 //!
 //! ```text
-//! cargo run --example bvh_csg_hierarchy --features bvh-csg
+//! cargo run --example bvh_csg_hierarchy --features bvh-csg [-- 1|2|3|4]
 //! ```
 
 use std::sync::Arc;
 
 use threers::cameras::Camera;
 use threers::{
-    build_bvh_csg_hierarchy_geometry, AmbientLight, Color, CsgEvaluator, DirectionalLight, Mesh,
-    Object3D, PerspectiveCamera, Renderer, Scene, StandardMaterial, Vector3,
+    evaluate_hierarchy, AmbientLight, BoxGeometry, BufferGeometry, Color, CsgEvaluator, CsgNode,
+    CsgOperation, CsgOperationGroup, DirectionalLight, Mesh, Object3D, PerspectiveCamera, Renderer,
+    Scene, SphereGeometry, StandardMaterial, Vector3, ADDITION, SUBTRACTION,
 };
 
 use winit::{
@@ -20,27 +26,57 @@ use winit::{
     window::WindowBuilder,
 };
 
-const AFTER_SPHERE_BIN: &[u8] =
-    include_bytes!("../tests/parity/scenes/rust/bvh-csg-after-sphere.geom.bin");
-const AFTER_WINCUT_BIN: &[u8] =
-    include_bytes!("../tests/parity/scenes/rust/bvh-csg-step3-wincut.geom.bin");
+/// three-bvh-csg's triangle count after each step.
+const UPSTREAM_TRIANGLES: [usize; 4] = [24, 774, 804, 816];
 
-fn build_hierarchy_geometry() -> threers::BufferGeometry {
+/// The root with its first `steps` operations: the cut, the sphere, and the
+/// window group's cut and frame.
+fn build_hierarchy_geometry(steps: usize) -> BufferGeometry {
+    let soup = |g: BufferGeometry| g.to_non_indexed();
+    let mut root = CsgOperation::new(soup(BoxGeometry::new(4.0, 2.5, 2.5)), ADDITION);
+    root.add_child(CsgNode::Operation(CsgOperation::new(soup(BoxGeometry::new(3.6, 2.1, 2.1)), SUBTRACTION)));
+    if steps >= 2 {
+        let mut sphere = CsgOperation::new(soup(SphereGeometry::new(0.55, 24, 12)), ADDITION);
+        sphere.set_position(-1.1, 0.2, 1.35);
+        root.add_child(CsgNode::Operation(sphere));
+    }
+    if steps >= 3 {
+        let mut window = CsgOperationGroup::new();
+        window.add_child(CsgNode::Operation(CsgOperation::new(soup(BoxGeometry::new(1.2, 1.0, 0.5)), SUBTRACTION)));
+        if steps >= 4 {
+            window.add_child(CsgNode::Operation(CsgOperation::new(soup(BoxGeometry::new(1.2, 1.0, 0.12)), ADDITION)));
+        }
+        window.set_position(0.8, 0.15, 1.35);
+        root.add_child(CsgNode::Group(window));
+    }
     let mut evaluator = CsgEvaluator::new();
     evaluator.use_groups = false;
-    build_bvh_csg_hierarchy_geometry(&mut evaluator, AFTER_SPHERE_BIN, AFTER_WINCUT_BIN)
+    let mut geometry = evaluate_hierarchy(&mut root, &mut evaluator);
+    threers::utils::compute_vertex_normals(&mut geometry);
+    geometry
 }
 
 fn main() {
     env_logger::init();
-    pollster::block_on(run());
+    let steps = std::env::args()
+        .nth(1)
+        .and_then(|s| s.parse().ok())
+        .filter(|n| (1..=4).contains(n))
+        .unwrap_or(4);
+    pollster::block_on(run(steps));
 }
 
-async fn run() {
+async fn run(steps: usize) {
+    let geometry = build_hierarchy_geometry(steps);
+    let triangles = geometry.get_attribute("position").map_or(0, |a| a.count() / 3);
+    println!(
+        "step {steps}: {triangles} triangles (three-bvh-csg {})",
+        UPSTREAM_TRIANGLES[steps - 1]
+    );
     let event_loop = EventLoop::new().expect("event loop");
     let window = Arc::new(
         WindowBuilder::new()
-            .with_title("threers — bvh-csg-hierarchy (native CSG)")
+            .with_title(format!("threers — bvh-csg hierarchy, step {steps}: {triangles} triangles"))
             .with_inner_size(winit::dpi::LogicalSize::new(800, 600))
             .build(&event_loop)
             .expect("window"),
@@ -133,7 +169,7 @@ async fn run() {
     let mat = StandardMaterial::new(Color::from_hex(0x4488cc))
         .with_roughness(0.45)
         .with_metalness(0.1);
-    let mesh = Object3D::mesh(Mesh::new(build_hierarchy_geometry(), mat.into()));
+    let mesh = Object3D::mesh(Mesh::new(geometry, mat.into()));
     scene.add(mesh);
 
     let mut camera = PerspectiveCamera::new(50.0, 800.0 / 600.0, 0.1, 100.0);

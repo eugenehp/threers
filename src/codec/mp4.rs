@@ -216,7 +216,8 @@ fn mux_h264_internal(p: &H264Mp4Params, captions: Option<&CaptionTrack>) -> Vec<
     )
 }
 
-/// `ColourInformationBox` — BT.709, limited range.
+/// `ColourInformationBox` — the stream's colour, for players that read only
+/// the container.
 ///
 /// The encoder already states this in the bitstream: it sets `ColorPrimaries`,
 /// `TransferFunction` and `YCbCrMatrix` on the VideoToolbox session, so the
@@ -230,16 +231,76 @@ fn mux_h264_internal(p: &H264Mp4Params, captions: Option<&CaptionTrack>) -> Vec<
 /// Both, then. The VUI survives a remux that rebuilds the container; this box
 /// is read by players that never look at the VUI.
 ///
-/// `full_range_flag` is 0: nothing asks VideoToolbox for full range, and its
-/// default for 8-bit is video range.
-fn colr_box() -> Vec<u8> {
+/// The box says what the stream's own SPS says, so the two cannot disagree:
+/// threers' software encoders convert with BT.601 and state that in their
+/// VUI, VideoToolbox states BT.709. A stream whose SPS has no colour
+/// description gets BT.709, limited range — nothing asks VideoToolbox for
+/// full range, and its default for 8-bit is video range.
+fn colr_box(stream: Option<StreamColour>) -> Vec<u8> {
+    let c = stream.unwrap_or(StreamColour { primaries: 1, transfer: 1, matrix: 1, full_range: false });
     let mut v = Vec::with_capacity(19);
     v.extend_from_slice(b"nclx");
-    v.extend_from_slice(&1u16.to_be_bytes()); // colour_primaries: BT.709
-    v.extend_from_slice(&1u16.to_be_bytes()); // transfer_characteristics: BT.709
-    v.extend_from_slice(&1u16.to_be_bytes()); // matrix_coefficients: BT.709
-    v.push(0); // full_range_flag (1 bit) + reserved
+    v.extend_from_slice(&c.primaries.to_be_bytes()); // colour_primaries
+    v.extend_from_slice(&c.transfer.to_be_bytes()); // transfer_characteristics
+    v.extend_from_slice(&c.matrix.to_be_bytes()); // matrix_coefficients
+    v.push((c.full_range as u8) << 7); // full_range_flag (1 bit) + reserved
     bx(b"colr", &v)
+}
+
+/// A VUI colour description, as `colr` carries it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct StreamColour {
+    primaries: u16,
+    transfer: u16,
+    matrix: u16,
+    full_range: bool,
+}
+
+impl StreamColour {
+    /// From a parsed SPS's VUI; `None` when it describes no matrix.
+    fn from_vui(primaries: Option<u32>, transfer: Option<u32>, matrix: Option<u32>, full_range: bool) -> Option<Self> {
+        Some(StreamColour {
+            matrix: matrix? as u16,
+            primaries: primaries.unwrap_or(2) as u16,
+            transfer: transfer.unwrap_or(2) as u16,
+            full_range,
+        })
+    }
+
+    /// The first SPS in an `avcC` payload.
+    fn of_avcc(avcc: &[u8]) -> Option<Self> {
+        let count = *avcc.get(5)? & 31;
+        if count == 0 {
+            return None;
+        }
+        let len = u16::from_be_bytes([*avcc.get(6)?, *avcc.get(7)?]) as usize;
+        let nal = avcc.get(8..8 + len)?;
+        let sps = crate::codec::decode::h264::params::Sps::parse(&crate::codec::decode::bits::unescape(nal.get(1..)?)).ok()?;
+        Self::from_vui(sps.colour_primaries, sps.transfer_characteristics, sps.matrix_coefficients, sps.full_range)
+    }
+
+    /// The base layer's SPS in an `hvcC` payload.
+    fn of_hvcc(hvcc: &[u8]) -> Option<Self> {
+        let arrays = *hvcc.get(22)? as usize;
+        let mut at = 23;
+        for _ in 0..arrays {
+            let kind = *hvcc.get(at)? & 0x3f;
+            let count = u16::from_be_bytes([*hvcc.get(at + 1)?, *hvcc.get(at + 2)?]) as usize;
+            at += 3;
+            for _ in 0..count {
+                let len = u16::from_be_bytes([*hvcc.get(at)?, *hvcc.get(at + 1)?]) as usize;
+                let nal = hvcc.get(at + 2..at + 2 + len)?;
+                at += 2 + len;
+                let layer = ((nal.first()? & 1) << 5) | (nal.get(1)? >> 3);
+                if kind == 33 && layer == 0 {
+                    let rbsp = crate::codec::decode::bits::unescape(nal.get(2..)?);
+                    let sps = crate::codec::decode::hevc::params::Sps::parse(&rbsp).ok()?;
+                    return Self::from_vui(sps.colour_primaries, sps.transfer_characteristics, sps.matrix_coefficients, sps.full_range);
+                }
+            }
+        }
+        None
+    }
 }
 
 fn build_hevc_stsd(p: &Mp4Params) -> Vec<u8> {
@@ -258,7 +319,7 @@ fn build_hevc_stsd(p: &Mp4Params) -> Vec<u8> {
     sample_entry.extend_from_slice(&0x0018u16.to_be_bytes()); // depth
     sample_entry.extend_from_slice(&0xFFFFu16.to_be_bytes()); // pre_defined -1
     sample_entry.extend_from_slice(&hvcc);
-    sample_entry.extend_from_slice(&colr_box());
+    sample_entry.extend_from_slice(&colr_box(StreamColour::of_hvcc(p.hvcc_payload)));
     if let Some(almo) = p.almo_payload {
         sample_entry.extend_from_slice(&bx(b"almo", almo));
     }
@@ -285,7 +346,7 @@ fn build_h264_stsd(p: &H264Mp4Params) -> Vec<u8> {
     sample_entry.extend_from_slice(&0x0018u16.to_be_bytes()); // depth
     sample_entry.extend_from_slice(&0xFFFFu16.to_be_bytes()); // pre_defined -1
     sample_entry.extend_from_slice(&avcc);
-    sample_entry.extend_from_slice(&colr_box());
+    sample_entry.extend_from_slice(&colr_box(StreamColour::of_avcc(p.avcc_payload)));
     let avc1 = bx(b"avc1", &sample_entry);
     let mut payload = Vec::new();
     payload.extend_from_slice(&1u32.to_be_bytes()); // entry_count
@@ -779,6 +840,41 @@ pub(crate) const UNITY_MATRIX: [u8; 36] = [
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn colr_follows_the_stream_and_survives_garbage() {
+        // threers' encoder tags BT.601 (matrix 6), limited range.
+        let enc = crate::codec::h264::CompressedEncoder::new(32, 16, 30);
+        let c = StreamColour::of_avcc(&enc.avcc()).expect("the encoder writes a colour description");
+        assert_eq!((c.matrix, c.full_range), (6, false));
+        // Parameter sets the parser cannot make sense of fall back, never panic.
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        for i in 0..3000usize {
+            let len = i % 400;
+            let bytes: Vec<u8> = (0..len)
+                .map(|_| {
+                    seed ^= seed << 13;
+                    seed ^= seed >> 7;
+                    seed ^= seed << 17;
+                    seed as u8
+                })
+                .collect();
+            for header in [&[1u8, 100, 0, 40, 0xff, 0xe1][..], &[]] {
+                let mut avcc = header.to_vec();
+                if !header.is_empty() {
+                    avcc.extend_from_slice(&(len as u16).to_be_bytes());
+                }
+                avcc.extend_from_slice(&bytes);
+                let _ = StreamColour::of_avcc(&avcc);
+            }
+            let mut hvcc = vec![0u8; 22];
+            hvcc.extend_from_slice(&[1, 33, 0, 1]);
+            hvcc.extend_from_slice(&((len + 2) as u16).to_be_bytes());
+            hvcc.extend_from_slice(&[0x42, 0x01]);
+            hvcc.extend_from_slice(&bytes);
+            let _ = StreamColour::of_hvcc(&hvcc);
+        }
+    }
 
     fn walk_top_level(out: &[u8]) -> Vec<String> {
         let mut o = 0usize;

@@ -709,7 +709,7 @@ fn the_fluid_can_be_a_pass_in_the_composer() {
 
     let mut renderer = crate::Renderer::new(gpu.device.clone(), gpu.queue.clone(), format, w, h);
     let mut composer = EffectComposer::new(gpu.device.clone(), gpu.queue.clone(), w, h, format);
-    composer.add_pass(RenderPass);
+    composer.add_pass(RenderPass::new());
     composer.add_pass(DrawPass::new("fluid", move |ctx| {
         // The composer hands over the view the next pass will read, its format
         // and its size — everything `render_to_view` needs and nothing it has
@@ -953,5 +953,303 @@ fn maccormack_advection_diffuses_less() {
         mc_mass < sl_mass * 1.1,
         "MacCormack carries {mc_mass:.1} against {sl_mass:.1} — the limiter \
          is not holding"
+    );
+}
+
+/// The plane draws its read-out too, and only where it says.
+///
+/// The same two claims as the volume's `the_read_out_draws_only_where_it_says`,
+/// against the other solver — the glyphs are shared but the entry points and
+/// the uniform are not, and a read-out wired to the wrong field draws a
+/// confident wrong number.
+#[test]
+fn the_plane_draws_its_read_out_too() {
+    let (w, h) = (128u32, 128u32);
+    let render = |show: bool| -> Option<Vec<u8>> {
+        let mut sim = sim(
+            w,
+            h,
+            FluidConfig {
+                show_fps: show,
+                bloom: false,
+                sunrays: false,
+                ..FluidConfig::default()
+            },
+        )?;
+        sim.multiple_splats(4);
+        for _ in 0..4 {
+            sim.update(1.0 / 60.0);
+            // Twice, so there is a rate to report rather than a zero.
+            sim.capture_rgba(w, h);
+        }
+        Some(sim.capture_rgba(w, h))
+    };
+    let Some(plain) = render(false) else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    let with = render(true).expect("a second simulation");
+
+    // The read-out's two parts: three digits at 3x5 scaled by three, ten in
+    // from each edge, and the chart under them — 64 samples two pixels wide,
+    // 18 tall, starting at y = 29. Anything else must be untouched.
+    let in_read_out = |x: u32, y: u32| {
+        let digits = x < 10 + 12 * 3 && y < 10 + 5 * 3;
+        let chart = (10..10 + 64 * 2).contains(&x) && (29..29 + 18).contains(&y);
+        digits || chart
+    };
+    let (mut inside, mut outside) = (0usize, 0usize);
+    for y in 0..h {
+        for x in 0..w {
+            let i = ((y * w + x) * 4) as usize;
+            if plain[i..i + 4] == with[i..i + 4] {
+                continue;
+            }
+            if in_read_out(x, y) {
+                inside += 1;
+            } else {
+                outside += 1;
+            }
+        }
+    }
+    eprintln!("  the plane's read-out changed {inside} pixels inside its box, {outside} outside");
+    assert!(inside > 20, "the read-out drew {inside} pixels");
+    assert_eq!(outside, 0, "it changed {outside} pixels outside its box");
+}
+
+/// The read-out shows the number it was given.
+///
+/// Checked against values chosen here rather than against the clock,
+/// because the interesting cases are the boundaries — one digit, two, three
+/// — and a clock will not visit them on request. The first version of this
+/// read-out was only ever seen at 133 fps, and the leading-zero suppression
+/// was wrong below a hundred without anyone noticing.
+#[test]
+fn the_read_out_shows_the_number_it_was_given() {
+    let (w, h) = (96u32, 48u32);
+    let Some(mut sim) = sim(
+        w,
+        h,
+        FluidConfig {
+            show_fps: true,
+            bloom: false,
+            sunrays: false,
+            transparent: false,
+            back_color: [0.0; 3],
+            ..FluidConfig::default()
+        },
+    ) else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+
+    // Read the glyph grid back: 3x5 cells at scale 3, 10 in from the edge.
+    let read = |px: &[u8]| -> String {
+        let lit = |cx: usize, cy: usize| -> bool {
+            let (x, y) = (10 + cx * 3 + 1, 10 + cy * 3 + 1);
+            px[(y * w as usize + x) * 4] > 120
+        };
+        let shapes: [(&str, [[bool; 3]; 5]); 11] = [
+            (" ", [[false; 3]; 5]),
+            (
+                "0",
+                [
+                    [true, true, true],
+                    [true, false, true],
+                    [true, false, true],
+                    [true, false, true],
+                    [true, true, true],
+                ],
+            ),
+            (
+                "1",
+                [
+                    [false, true, false],
+                    [true, true, false],
+                    [false, true, false],
+                    [false, true, false],
+                    [true, true, true],
+                ],
+            ),
+            (
+                "2",
+                [
+                    [true, true, true],
+                    [false, false, true],
+                    [true, true, true],
+                    [true, false, false],
+                    [true, true, true],
+                ],
+            ),
+            (
+                "3",
+                [
+                    [true, true, true],
+                    [false, false, true],
+                    [true, true, true],
+                    [false, false, true],
+                    [true, true, true],
+                ],
+            ),
+            (
+                "4",
+                [
+                    [true, false, true],
+                    [true, false, true],
+                    [true, true, true],
+                    [false, false, true],
+                    [false, false, true],
+                ],
+            ),
+            (
+                "5",
+                [
+                    [true, true, true],
+                    [true, false, false],
+                    [true, true, true],
+                    [false, false, true],
+                    [true, true, true],
+                ],
+            ),
+            (
+                "6",
+                [
+                    [true, true, true],
+                    [true, false, false],
+                    [true, true, true],
+                    [true, false, true],
+                    [true, true, true],
+                ],
+            ),
+            (
+                "7",
+                [
+                    [true, true, true],
+                    [false, false, true],
+                    [false, false, true],
+                    [false, false, true],
+                    [false, false, true],
+                ],
+            ),
+            (
+                "8",
+                [
+                    [true, true, true],
+                    [true, false, true],
+                    [true, true, true],
+                    [true, false, true],
+                    [true, true, true],
+                ],
+            ),
+            (
+                "9",
+                [
+                    [true, true, true],
+                    [true, false, true],
+                    [true, true, true],
+                    [false, false, true],
+                    [true, true, true],
+                ],
+            ),
+        ];
+        (0..3)
+            .map(|col| {
+                let seen: [[bool; 3]; 5] =
+                    std::array::from_fn(|y| std::array::from_fn(|x| lit(col * 4 + x, y)));
+                shapes
+                    .iter()
+                    .find(|(_, want)| *want == seen)
+                    .map(|(name, _)| *name)
+                    .unwrap_or("?")
+            })
+            .collect()
+    };
+
+    for (value, want) in [
+        (7.0f32, "  7"),
+        (42.0, " 42"),
+        (99.0, " 99"),
+        (100.0, "100"),
+        (999.0, "999"),
+    ] {
+        sim.set_fps_for_test(value);
+        let px = sim.capture_rgba(w, h);
+        let got = read(&px);
+        eprintln!("  {value:>5} shows {got:?}");
+        assert_eq!(got, want, "the read-out showed {got:?} for {value}");
+    }
+}
+
+/// The chart under the number shows the frame times it was given.
+///
+/// A read-out that draws something is not the same as a read-out that draws
+/// the right thing — the first version of this one sampled the *dye* as its
+/// history, because the overlay pass inherited the dye binding from the
+/// pass beside it, and drew a confident chart of nothing at all.
+#[test]
+fn the_chart_shows_the_frame_times_it_was_given() {
+    let (w, h) = (160u32, 64u32);
+    let Some(mut sim) = sim(
+        w,
+        h,
+        FluidConfig {
+            show_fps: true,
+            bloom: false,
+            sunrays: false,
+            transparent: false,
+            back_color: [0.0; 3],
+            ..FluidConfig::default()
+        },
+    ) else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+
+    // How tall the bar is in a given column, in pixels, 0 if there is none.
+    let bar = |px: &[u8], column: usize| -> usize {
+        let x = 10 + column * 2;
+        (0..18)
+            .filter(|row| {
+                let y = 29 + row;
+                let i = (y * w as usize + x) * 4;
+                // The target line is faint; a bar is not.
+                px[i] > 60 || px[i + 2] > 60
+            })
+            .count()
+    };
+
+    // A flat history at the target, then one with a spike in it.
+    sim.set_frame_times_for_test(&[1000.0 / 60.0; 64]);
+    let flat = sim.capture_rgba(w, h);
+    let mut spiky = [1000.0f32 / 60.0; 64];
+    spiky[40] = 1000.0 / 10.0; // a tenth of a second: a visible hitch
+    sim.set_frame_times_for_test(&spiky);
+    let hitched = sim.capture_rgba(w, h);
+
+    let steady: Vec<usize> = (0..64).map(|c| bar(&flat, c)).collect();
+    let spiked: Vec<usize> = (0..64).map(|c| bar(&hitched, c)).collect();
+    eprintln!(
+        "  flat: bars {}..{} tall; with a hitch at 40: column 40 is {} and its neighbour {}",
+        steady.iter().min().unwrap(),
+        steady.iter().max().unwrap(),
+        spiked[40],
+        spiked[39]
+    );
+    // At the target, every bar reaches half height and no further.
+    assert!(
+        steady.iter().all(|t| (7..=10).contains(t)),
+        "a steady {:.1} ms should sit at half of eighteen: {steady:?}",
+        1000.0 / 60.0
+    );
+    // The hitch is taller, and only where it happened.
+    assert!(
+        spiked[40] > spiked[39] + 4,
+        "the hitch did not show: {} against {}",
+        spiked[40],
+        spiked[39]
+    );
+    assert_eq!(
+        spiked[39], steady[39],
+        "a hitch in one frame changed another column"
     );
 }

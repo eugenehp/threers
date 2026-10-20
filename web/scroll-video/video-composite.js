@@ -97,7 +97,7 @@ export class VideoSceneComposite {
         this.scene = new THREE.Scene();
         this.scene.background = new THREE.Color(0x000000);
 
-        this.renderer = await THREE.WebGLRenderer.create(this.canvas);
+        this.renderer = await THREE.WebGLRenderer.create(this.canvas, { antialias: true });
         const dpr = this._pixelRatio();
         const w = Math.floor(this.canvas.clientWidth * dpr) || 640;
         const h = Math.floor(this.canvas.clientHeight * dpr) || 360;

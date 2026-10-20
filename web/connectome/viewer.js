@@ -688,7 +688,7 @@ async function main() {
         return [canvas.width, canvas.height];
     };
     let [w, h] = size();
-    renderer = await THREE.WebGLRenderer.create(canvas);
+    renderer = await THREE.WebGLRenderer.create(canvas, { antialias: true });
     renderer.setSize(w, h, false);
 
     scene = new THREE.Scene();

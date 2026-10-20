@@ -80,6 +80,12 @@ impl H264Config {
 
 /// Write an SPS RBSP for Baseline profile 4:2:0 8-bit with I_PCM enabled.
 pub fn write_sps(cfg: &H264Config) -> Vec<u8> {
+    write_sps_with_refs(cfg, 0)
+}
+
+/// [`write_sps`] for a stream with P-frames: `max_num_ref_frames` of them
+/// kept for reference (the intra-only encoders keep none).
+pub fn write_sps_with_refs(cfg: &H264Config, max_num_ref_frames: u32) -> Vec<u8> {
     let (mbs_w, mbs_h) = cfg.mbs();
     let mut w = BitWriter::new();
     // Baseline forbids CABAC, so a CABAC stream has to declare Main.
@@ -95,7 +101,7 @@ pub fn write_sps(cfg: &H264Config) -> Vec<u8> {
     w.write_ue(0); // seq_parameter_set_id
     w.write_ue(0); // log2_max_frame_num_minus4 → 4-bit frame_num
     w.write_ue(2); // pic_order_cnt_type (type 2 → no POC lsb in SPS)
-    w.write_ue(0); // max_num_ref_frames
+    w.write_ue(max_num_ref_frames); // max_num_ref_frames
     w.flag(false); // gaps_in_frame_num_value_allowed_flag
     w.write_ue(mbs_w - 1); // pic_width_in_mbs_minus1
     w.write_ue(mbs_h - 1); // pic_height_in_map_units_minus1
@@ -109,7 +115,29 @@ pub fn write_sps(cfg: &H264Config) -> Vec<u8> {
         w.write_ue(t);
         w.write_ue(b);
     }
-    w.flag(false); // vui_parameters_present_flag
+    w.flag(true); // vui_parameters_present_flag
+    write_vui(&mut w);
     rbsp_trailing_bits(&mut w);
     w.finish()
+}
+
+/// VUI saying which matrix the samples use — BT.601 limited range, as
+/// `Yuv420Frame::from_rgba` converts. Without it, players guess BT.709 for
+/// HD and decode reds and greens a little off.
+fn write_vui(w: &mut BitWriter) {
+    w.flag(false); // aspect_ratio_info_present_flag
+    w.flag(false); // overscan_info_present_flag
+    w.flag(true); // video_signal_type_present_flag
+    w.write_bits(5, 3); // video_format: unspecified
+    w.flag(false); // video_full_range_flag
+    w.flag(true); // colour_description_present_flag
+    w.write_byte(2); // colour_primaries: unspecified
+    w.write_byte(2); // transfer_characteristics: unspecified
+    w.write_byte(6); // matrix_coefficients: BT.601 (SMPTE 170M)
+    w.flag(false); // chroma_loc_info_present_flag
+    w.flag(false); // timing_info_present_flag
+    w.flag(false); // nal_hrd_parameters_present_flag
+    w.flag(false); // vcl_hrd_parameters_present_flag
+    w.flag(false); // pic_struct_present_flag
+    w.flag(false); // bitstream_restriction_flag
 }

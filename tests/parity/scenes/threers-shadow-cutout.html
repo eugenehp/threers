@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><style>body{margin:0;background:#101820}canvas{display:block}#err{position:absolute;top:0;left:0;padding:12px;color:#fdd;background:#500;font-family:monospace;white-space:pre-wrap}</style></head>
+<body><canvas id="c" width="800" height="600"></canvas>
+<div id="err" style="display:none"></div>
+<script type="module">
+import THREE, { initThreers } from '/web/threejs-shim.js';
+const errEl = document.getElementById('err');
+(async () => {
+    try {
+        await initThreers('/web/pkg/threers_bg.wasm');
+        const canvas = document.getElementById('c');
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x101820);
+        scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+        const dl = new THREE.DirectionalLight(0xffffff, 1.0);
+        dl.position.set(3, 5, 2);
+        dl.castShadow = true;
+        dl.shadow.camera.left = -3; dl.shadow.camera.right = 3;
+        dl.shadow.camera.top = 3; dl.shadow.camera.bottom = -3;
+        dl.shadow.camera.near = 0.1; dl.shadow.camera.far = 20;
+        dl.shadow.mapSize.set(1024, 1024);
+        scene.add(dl);
+        // A 4x4 checker whose alpha alternates 0 / 255: with alphaTest the plane is
+        // a lattice, and three.js's shadow depth material casts only its opaque cells.
+        const texel = new Uint8Array(4 * 4 * 4);
+        for (let y = 0; y < 4; y++) for (let x = 0; x < 4; x++) {
+            const i = (y * 4 + x) * 4;
+            texel[i] = 230; texel[i + 1] = 200; texel[i + 2] = 60;
+            texel[i + 3] = (x + y) % 2 ? 255 : 0;
+        }
+        const tex = new THREE.DataTexture(texel, 4, 4, THREE.RGBAFormat);
+        tex.magFilter = THREE.NearestFilter; tex.minFilter = THREE.NearestFilter;
+        tex.needsUpdate = true;
+        const lattice = new THREE.Mesh(
+            new THREE.PlaneGeometry(1.6, 1.6),
+            new THREE.MeshStandardMaterial({ map: tex, alphaTest: 0.5, side: THREE.DoubleSide, roughness: 0.6 })
+        );
+        lattice.rotation.set(-Math.PI / 2, 0, 0);
+        lattice.position.set(-0.7, 1.2, 0);
+        lattice.castShadow = true;
+        scene.add(lattice);
+        // A transparent caster still casts its whole shadow in three.js.
+        const glass = new THREE.Mesh(
+            new THREE.BoxGeometry(0.6, 0.6, 0.6),
+            new THREE.MeshStandardMaterial({ color: 0x44aaff, transparent: true, opacity: 0.35 })
+        );
+        glass.position.set(1.0, 0.6, -0.6);
+        glass.castShadow = true;
+        scene.add(glass);
+        const ground = new THREE.Mesh(
+            new THREE.PlaneGeometry(6, 6),
+            new THREE.MeshStandardMaterial({ color: 0xaaaaaa, roughness: 0.7, metalness: 0 })
+        );
+        ground.rotation.set(-Math.PI / 2, 0, 0);
+        ground.receiveShadow = true;
+        scene.add(ground);
+        const cam = new THREE.PerspectiveCamera(45, 800/600, 0.1, 100);
+        cam.position.set(2.5, 3.5, 4); cam.lookAt(0, 0, 0);
+        const r = await THREE.WebGLRenderer.create(canvas);
+        r.setSize(800, 600);
+        r.render(scene, cam);
+        await new Promise(rs => requestAnimationFrame(() => rs()));
+        document.body.dataset.ready = 'true';
+    } catch (e) {
+        console.error(e);
+        errEl.style.display='block'; errEl.textContent = e?.stack || String(e);
+        document.body.dataset.ready = 'error';
+    }
+})();
+</script></body></html>

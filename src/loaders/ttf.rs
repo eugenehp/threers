@@ -1,8 +1,9 @@
 //! Minimal TrueType / OpenType font reader. Extracts glyph outlines as
 //! curve-based `Shape`s suitable for `TextGeometry`. Supports the `cmap`
-//! format 4 (Unicode BMP), uncompressed `glyf` simple glyphs, and `hmtx`
-//! advances. Composite glyphs, hinting, OpenType `CFF` (PostScript) outlines,
-//! and OpenType variations are out of scope.
+//! format 4 (Unicode BMP), uncompressed `glyf` glyphs — simple ones, and
+//! composite ones (accented letters, mostly) assembled from their components —
+//! and `hmtx` advances. Hinting, OpenType `CFF` (PostScript) outlines, and
+//! OpenType variations are out of scope.
 
 use crate::curves::{Path, Shape};
 use crate::geometries::Glyph;
@@ -141,6 +142,16 @@ impl TtfFont {
             }
         };
 
+        // For components named by id: an id past the table reads as empty
+        // rather than past the end of `loca`.
+        let bounded_offset = |idx: usize| -> usize {
+            if idx <= n_glyphs {
+                glyph_offset(idx)
+            } else {
+                0
+            }
+        };
+
         // hmtx advance widths.
         let (hhea_off, _) = *tables.get(b"hhea").ok_or(TtfError::UnsupportedFormat)?;
         if hhea_off + 36 > bytes.len() {
@@ -182,7 +193,9 @@ impl TtfFont {
                 });
                 continue;
             }
-            let shape = parse_glyph(bytes, off).unwrap_or_default();
+            let shape = glyph_contours(bytes, &bounded_offset, g_idx, 0)
+                .map(|c| shape_from_contours(&c))
+                .unwrap_or_default();
             glyphs.push(TtfGlyph {
                 shape,
                 advance_width: advance_widths[g_idx],
@@ -224,10 +237,7 @@ fn parse_kern(
 ) -> Option<std::collections::HashMap<(u16, u16), i16>> {
     let table = bytes.get(off..off + len)?;
     let be16 = |at: usize| -> Option<u16> {
-        Some(u16::from_be_bytes([
-            *table.get(at)?,
-            *table.get(at + 1)?,
-        ]))
+        Some(u16::from_be_bytes([*table.get(at)?, *table.get(at + 1)?]))
     };
     if be16(0)? != 0 {
         return None;
@@ -281,52 +291,98 @@ fn clone_path(p: &Path) -> Path {
     np
 }
 
-/// Walk a composite glyph header, follow each referenced sub-glyph by its
-/// index, translate its contours by (arg1, arg2), and merge into a single
-/// `Shape`. Only translation is supported — full 2×2 transforms are flagged
-/// in the spec but rarely used in real fonts.
-fn parse_composite_glyph(bytes: &[u8], off: usize) -> Option<Shape> {
-    let mut p = off + 10; // skip numContours + bbox
-    let mut shape = Shape::new();
-    // We need glyph offsets to recurse. Since we don't have them here, we
-    // can only translate the referenced component's bytes if we already
-    // have access. As a single-pass approximation, store the composite as
-    // an empty shape — caller can re-resolve via `TtfFont::resolve_composite`.
-    // Loop the components to advance past their headers so the file walker
-    // doesn't get confused.
-    loop {
-        if p + 4 > bytes.len() {
-            break;
-        }
-        let flags = u16::from_be_bytes([bytes[p], bytes[p + 1]]);
-        p += 2;
-        let _glyph_index = u16::from_be_bytes([bytes[p], bytes[p + 1]]);
-        p += 2;
-        // arg1, arg2: ARG_1_AND_2_ARE_WORDS (0x0001) decides byte vs short.
-        if (flags & 0x0001) != 0 {
-            p += 4;
-        } else {
-            p += 2;
-        }
-        // Optional transforms.
-        if (flags & 0x0008) != 0 {
-            p += 2;
-        } else if (flags & 0x0040) != 0 {
-            p += 4;
-        } else if (flags & 0x0080) != 0 {
-            p += 8;
-        }
-        if (flags & 0x0020) == 0 {
-            break;
-        } // MORE_COMPONENTS bit
+/// One contour's points in font units, each with whether it is on the curve.
+type Contour = Vec<(Vector2, bool)>;
+
+/// Glyph `gid`'s contours: its own for a simple glyph; for a composite one,
+/// each component's, placed by its offset and scaled or transformed as its
+/// flags say. `depth` guards against a font whose components refer back to
+/// themselves.
+fn glyph_contours(
+    bytes: &[u8],
+    glyph_offset: &dyn Fn(usize) -> usize,
+    gid: usize,
+    depth: u32,
+) -> Option<Vec<Contour>> {
+    let off = glyph_offset(gid);
+    if glyph_offset(gid + 1) <= off || off + 10 > bytes.len() || depth > 8 {
+        return None;
     }
-    // We can't follow the referenced glyph indices without the offset table,
-    // so for now the composite is represented as an empty outline. Callers
-    // that need composite resolution should walk the glyph index list at the
-    // `TtfFont` level (see `TtfFont::resolve_composite`).
-    let _ = p;
-    shape.outline.move_to(crate::math::Vector2::new(0.0, 0.0));
-    Some(shape)
+    let n_contours = i16::from_be_bytes([bytes[off], bytes[off + 1]]);
+    if n_contours >= 0 {
+        return parse_simple_contours(bytes, off);
+    }
+    let rd16 = |p: usize| -> Option<i16> {
+        Some(i16::from_be_bytes([*bytes.get(p)?, *bytes.get(p + 1)?]))
+    };
+    let f2dot14 = |p: usize| rd16(p).map(|v| v as f32 / 16384.0);
+    let mut out = Vec::new();
+    let mut p = off + 10; // numberOfContours and the bounding box
+    loop {
+        let flags = rd16(p)? as u16;
+        let component = rd16(p + 2)? as u16 as usize;
+        p += 4;
+        // ARG_1_AND_2_ARE_WORDS, else bytes; signed when they are offsets.
+        let (a1, a2) = if flags & 0x0001 != 0 {
+            let v = (rd16(p)? as f32, rd16(p + 2)? as f32);
+            p += 4;
+            v
+        } else {
+            let v = (*bytes.get(p)? as i8 as f32, *bytes.get(p + 1)? as i8 as f32);
+            p += 2;
+            v
+        };
+        // ARGS_ARE_XY_VALUES: an offset. Otherwise they name points to
+        // align, which fonts almost never use; placed unmoved.
+        let (dx, dy) = if flags & 0x0002 != 0 {
+            (a1, a2)
+        } else {
+            (0.0, 0.0)
+        };
+        // (xx, xy, yx, yy)
+        let m = if flags & 0x0008 != 0 {
+            let k = f2dot14(p)?;
+            p += 2;
+            (k, 0.0, 0.0, k)
+        } else if flags & 0x0040 != 0 {
+            let v = (f2dot14(p)?, 0.0, 0.0, f2dot14(p + 2)?);
+            p += 4;
+            v
+        } else if flags & 0x0080 != 0 {
+            let v = (
+                f2dot14(p)?,
+                f2dot14(p + 2)?,
+                f2dot14(p + 4)?,
+                f2dot14(p + 6)?,
+            );
+            p += 8;
+            v
+        } else {
+            (1.0, 0.0, 0.0, 1.0)
+        };
+        if let Some(contours) = glyph_contours(bytes, glyph_offset, component, depth + 1) {
+            for c in contours {
+                out.push(
+                    c.into_iter()
+                        .map(|(v, on)| {
+                            (
+                                Vector2::new(
+                                    m.0 * v.x + m.2 * v.y + dx,
+                                    m.1 * v.x + m.3 * v.y + dy,
+                                ),
+                                on,
+                            )
+                        })
+                        .collect(),
+                );
+            }
+        }
+        // MORE_COMPONENTS
+        if flags & 0x0020 == 0 {
+            break;
+        }
+    }
+    Some(out)
 }
 
 fn parse_cmap(bytes: &[u8], cmap_off: usize) -> Option<std::collections::HashMap<u32, u16>> {
@@ -398,15 +454,13 @@ fn parse_cmap(bytes: &[u8], cmap_off: usize) -> Option<std::collections::HashMap
     Some(map)
 }
 
-fn parse_glyph(bytes: &[u8], off: usize) -> Option<Shape> {
+/// A simple glyph's contours.
+fn parse_simple_contours(bytes: &[u8], off: usize) -> Option<Vec<Contour>> {
     if off + 10 > bytes.len() {
         return None;
     }
     let n_contours = i16::from_be_bytes([bytes[off], bytes[off + 1]]);
-    if n_contours < 0 {
-        return parse_composite_glyph(bytes, off);
-    }
-    if n_contours == 0 {
+    if n_contours <= 0 {
         return None;
     }
     let n_contours = n_contours as usize;
@@ -486,21 +540,33 @@ fn parse_glyph(bytes: &[u8], off: usize) -> Option<Shape> {
         ys.push(y);
     }
 
-    // Build a Path from each contour. Off-curve points become quadratic
-    // bezier control points; consecutive off-curves get an implied on-curve.
-    let mut path = Path::new();
+    let mut contours = Vec::with_capacity(end_pts.len());
     let mut start = 0;
     for &end in &end_pts {
-        let pts: Vec<(Vector2, bool)> = (start..=end)
-            .map(|i| {
-                (
-                    Vector2::new(xs[i] as f32, ys[i] as f32),
-                    (flags[i] & 1) != 0,
-                )
-            })
-            .collect();
+        if end >= n_points || start > end {
+            return None;
+        }
+        contours.push(
+            (start..=end)
+                .map(|i| {
+                    (
+                        Vector2::new(xs[i] as f32, ys[i] as f32),
+                        (flags[i] & 1) != 0,
+                    )
+                })
+                .collect(),
+        );
+        start = end + 1;
+    }
+    Some(contours)
+}
+
+/// A path from contours. Off-curve points become quadratic bezier control
+/// points; consecutive off-curves get an implied on-curve between them.
+fn shape_from_contours(contours: &[Contour]) -> Shape {
+    let mut path = Path::new();
+    for pts in contours {
         if pts.is_empty() {
-            start = end + 1;
             continue;
         }
         // Start at the first on-curve point.
@@ -534,9 +600,48 @@ fn parse_glyph(bytes: &[u8], off: usize) -> Option<Shape> {
             }
             i += 1;
         }
-        start = end + 1;
     }
-    Some(Shape::from_path(path))
+    Shape::from_path(path)
+}
+
+#[cfg(test)]
+mod composite_tests {
+    use super::*;
+
+    /// DejaVu builds ü from u and a diaeresis: two more contours than u,
+    /// above it, and the u's own contours where they are in the u.
+    #[test]
+    fn an_accented_letter_has_its_base_and_its_accent() {
+        let font = TtfFont::parse(include_bytes!("../openscad/DejaVuSans.ttf")).unwrap();
+        let points = |c: char| -> Vec<Vector2> {
+            let g = &font.glyphs[font.cmap[&(c as u32)] as usize];
+            g.shape
+                .outline
+                .curve_path
+                .curves
+                .iter()
+                .map(|c| c.get_point(0.0))
+                .collect()
+        };
+        let (u, uu) = (points('u'), points('ü'));
+        assert!(!u.is_empty());
+        assert!(
+            uu.len() > u.len(),
+            "ü {} curves against u {}",
+            uu.len(),
+            u.len()
+        );
+        let top = |p: &[Vector2]| p.iter().map(|v| v.y).fold(f32::MIN, f32::max);
+        assert!(top(&uu) > top(&u) + 100.0, "the dots sit above the u");
+        // Every point of the u is in the ü.
+        for p in &u {
+            assert!(
+                uu.iter()
+                    .any(|q| (q.x - p.x).abs() < 0.5 && (q.y - p.y).abs() < 0.5),
+                "{p:?} missing"
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -560,9 +665,9 @@ mod kern_tests {
         table.extend_from_slice(&(subtable_len as u16).to_be_bytes());
         table.extend_from_slice(&0x0001u16.to_be_bytes()); // format 0, horizontal
         table.extend_from_slice(&3u16.to_be_bytes()); // nPairs
-        // searchRange, entrySelector, rangeShift — three fields that exist only
-        // to be skipped. Poisoned, so reading one as a pair is a visible failure
-        // rather than a plausible kern.
+                                                      // searchRange, entrySelector, rangeShift — three fields that exist only
+                                                      // to be skipped. Poisoned, so reading one as a pair is a visible failure
+                                                      // rather than a plausible kern.
         for v in [0x0BADu16, 0x0BAD, 0x0BAD] {
             table.extend_from_slice(&v.to_be_bytes());
         }
@@ -648,8 +753,12 @@ mod kern_tests {
             "/System/Library/Fonts/Supplemental/Times New Roman Italic.ttf",
             "/System/Library/Fonts/Supplemental/Trebuchet MS.ttf",
         ] {
-            let Ok(bytes) = std::fs::read(path) else { continue };
-            let Ok(font) = TtfFont::parse(&bytes) else { continue };
+            let Ok(bytes) = std::fs::read(path) else {
+                continue;
+            };
+            let Ok(font) = TtfFont::parse(&bytes) else {
+                continue;
+            };
             if font.kerning.is_empty() {
                 continue;
             }

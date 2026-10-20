@@ -125,7 +125,7 @@ impl Body {
 
     /// Mutable face access, for tests that need to build a deliberately
     /// malformed body.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "brep-kernel"))]
     pub(crate) fn faces_mut(&mut self) -> &mut Vec<Face> {
         &mut self.faces
     }

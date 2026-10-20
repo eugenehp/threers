@@ -12,6 +12,12 @@ pub struct OrthographicCamera {
     pub bottom: f32,
     pub near: f32,
     pub far: f32,
+    /// Channel mask — meshes are drawn iff this intersects `Object3D::layers`
+    /// (three.js `camera.layers`).
+    pub layers: crate::core::Layers,
+    /// When set, the view matrix as given (see
+    /// [`PerspectiveCamera::view_override`](crate::PerspectiveCamera::view_override)).
+    pub view_override: Option<super::ViewOverride>,
 }
 
 impl OrthographicCamera {
@@ -26,6 +32,8 @@ impl OrthographicCamera {
             bottom,
             near,
             far,
+            layers: crate::core::Layers::default(),
+            view_override: None,
         }
     }
 
@@ -39,7 +47,9 @@ impl OrthographicCamera {
 
 impl Camera for OrthographicCamera {
     fn view_matrix(&self) -> Matrix4 {
-        Matrix4::look_at(self.position, self.target, self.up)
+        self.view_override
+            .and_then(|o| o.for_pose(self.position, self.target, self.up))
+            .unwrap_or_else(|| Matrix4::look_at(self.position, self.target, self.up))
     }
     fn projection_matrix(&self) -> Matrix4 {
         Matrix4::orthographic(
@@ -67,5 +77,8 @@ impl Camera for OrthographicCamera {
     }
     fn near_far(&self) -> (f32, f32) {
         (self.near, self.far)
+    }
+    fn layers(&self) -> crate::core::Layers {
+        self.layers
     }
 }

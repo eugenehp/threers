@@ -35,7 +35,8 @@ pub mod tree;
 
 use std::collections::HashMap;
 
-use crate::core::{BufferGeometry, Mesh, Object3D, ObjectArena, ObjectId};
+use crate::core::{BufferAttribute, BufferGeometry, Mesh, Object3D, ObjectArena, ObjectId};
+use std::sync::Arc;
 use crate::materials::{Material, StandardMaterial};
 use crate::math::{Color, Quaternion, Vector3};
 use tree::{Node, Property};
@@ -208,30 +209,47 @@ fn build_model(
 ) -> Option<ObjectId> {
     let connected: Vec<i64> = children_of.get(&id).cloned().unwrap_or_default();
 
-    // The geometry and material this model wears.
+    // The geometry and the materials this model wears — every connected
+    // material, in connection order, as three.js `FBXLoader.createMesh`
+    // collects them.
     let mut mesh_geometry = None;
-    let mut material = None;
+    let mut model_materials: Vec<Arc<Material>> = Vec::new();
     for &child in &connected {
         let Some(child_node) = by_id.get(&child) else {
             continue;
         };
         match child_node.name.as_str() {
             "Geometry" if mesh_geometry.is_none() => {
-                mesh_geometry = geometry::build(child_node).map(|(g, _)| g);
+                mesh_geometry = geometry::build(child_node).map(|(mut g, slots)| {
+                    if !geometry::material_mapping_is_all_same(child_node) {
+                        add_material_groups(&mut g, &slots);
+                    }
+                    add_blend_shapes(&mut g, child_node, child, by_id, children_of);
+                    g
+                });
             }
-            "Material" if material.is_none() => {
+            "Material" => {
                 let name = node_name(child_node);
                 if !materials.contains(&name) {
                     materials.push(name.clone());
                 }
-                material = Some(read_material(child_node));
+                model_materials.push(Arc::new(read_material(child_node)));
             }
             _ => {}
         }
     }
 
     let mut object = match mesh_geometry {
-        Some(g) => Object3D::mesh(Mesh::new(g, material.unwrap_or_else(default_material))),
+        // More than one material: three.js's material array over the groups.
+        Some(g) if model_materials.len() > 1 => {
+            Object3D::mesh(Mesh::with_materials(Arc::new(g), model_materials))
+        }
+        Some(g) => Object3D::mesh(Mesh::from_arc(
+            Arc::new(g),
+            model_materials
+                .pop()
+                .unwrap_or_else(|| Arc::new(default_material())),
+        )),
         None => Object3D::group(),
     };
     object.name = node_name(node);
@@ -251,6 +269,88 @@ fn build_model(
         }
     }
     Some(object_id)
+}
+
+/// three.js `FBXLoader.genGeometry`'s groups: one per run of equal material
+/// slots, in vertices of this unindexed geometry (three per triangle); a
+/// negative slot reads as 0, and a mesh whose triangles all use one slot gets
+/// one group covering it.
+fn add_material_groups(g: &mut BufferGeometry, triangle_slots: &[i32]) {
+    let slots: Vec<u32> = triangle_slots.iter().map(|&s| s.max(0) as u32).collect();
+    let Some(&first) = slots.first() else {
+        return;
+    };
+    let (mut prev, mut start) = (first, 0usize);
+    for (t, &s) in slots.iter().enumerate() {
+        if s != prev {
+            g.add_group(start as u32 * 3, (t - start) as u32 * 3, prev);
+            prev = s;
+            start = t;
+        }
+    }
+    g.add_group(start as u32 * 3, (slots.len() - start) as u32 * 3, prev);
+}
+
+/// three.js `FBXLoader`'s blend shapes: each `BlendShapeChannel` under a
+/// `BlendShape` deformer of this geometry contributes its `Shape` geometry's
+/// sparse per-control-point offsets, expanded through the mesh's corners,
+/// as a relative position morph target named after the channel. Influences
+/// start at zero, as three.js leaves them (`DeformPercent` reaches them only
+/// through animation there). Normals are not morphed — three.js's TODO too.
+fn add_blend_shapes(
+    g: &mut BufferGeometry,
+    geometry_node: &Node,
+    geometry_id: i64,
+    by_id: &HashMap<i64, &Node>,
+    children_of: &HashMap<i64, Vec<i64>>,
+) {
+    let kind = |n: &Node| n.properties.get(2).and_then(Property::as_str).map(str::to_string);
+    let corners = geometry::corner_control_points(geometry_node);
+    if corners.is_empty() || g.get_attribute("position").map(|p| p.count()) != Some(corners.len()) {
+        return;
+    }
+    let mut targets = Vec::new();
+    let mut names = Vec::new();
+    for deformer in children_of.get(&geometry_id).into_iter().flatten() {
+        let Some(d) = by_id.get(deformer).filter(|d| d.name == "Deformer") else {
+            continue;
+        };
+        if kind(d).as_deref() != Some("BlendShape") {
+            continue;
+        }
+        for channel in children_of.get(deformer).into_iter().flatten() {
+            let Some(c) = by_id.get(channel).filter(|c| c.name == "Deformer") else {
+                continue;
+            };
+            if kind(c).as_deref() != Some("BlendShapeChannel") {
+                continue;
+            }
+            for shape in children_of.get(channel).into_iter().flatten() {
+                let Some(sh) = by_id.get(shape).filter(|s| s.name == "Geometry") else {
+                    continue;
+                };
+                let indexes = sh.value("Indexes").and_then(Property::as_i32_array).unwrap_or_default();
+                let offsets = sh.value("Vertices").and_then(Property::as_f32_array).unwrap_or_default();
+                let mut per_point: HashMap<usize, [f32; 3]> = HashMap::new();
+                for (i, &cp) in indexes.iter().enumerate() {
+                    if let Some(v) = offsets.get(i * 3..i * 3 + 3) {
+                        per_point.insert(cp.max(0) as usize, [v[0], v[1], v[2]]);
+                    }
+                }
+                let delta: Vec<f32> = corners
+                    .iter()
+                    .flat_map(|cp| per_point.get(cp).copied().unwrap_or([0.0; 3]))
+                    .collect();
+                targets.push(BufferAttribute::new(delta, 3));
+                names.push(node_name(c));
+            }
+        }
+    }
+    if !targets.is_empty() {
+        g.morph_targets_relative = true;
+        g.morph_target_names = names;
+        g.set_morph_attribute("position", targets);
+    }
 }
 
 /// An object's name. FBX writes `"Model::Cube"` or, from 7.x, `"Cube\0\x01Model"`,
@@ -324,6 +424,46 @@ mod tests {
     const BLENDER: &[u8] = include_bytes!("testdata/blender.fbx");
     const ASCII: &[u8] = include_bytes!("testdata/assimp_ascii.fbx");
     const MODES: &str = include_str!("testdata/modes.fbx");
+    const MULTI: &str = include_str!("testdata/multimat_blend.fbx");
+
+    /// three.js r165 `FBXLoader` on `multimat_blend.fbx` (a triangle, a quad
+    /// and a triangle with polygon materials `[1, 1, 0]`, two materials, and a
+    /// `BlendShape` whose channel `Lift` moves control point 1 by (0, 0, 1) and
+    /// point 5 by (0, 0.5, 0)): groups `[{0,9,1},{9,3,0}]`, materials
+    /// `["Red","Blue"]`, one relative position target named `Lift` that moves
+    /// every corner on point 1 by (0,0,1) and on point 5 by (0,0.5,0),
+    /// influences `[0]`, dictionary `{Lift: 0}`. (three.js triangulates the
+    /// quad along the other diagonal; the triangles' materials and the
+    /// per-corner offsets agree.)
+    #[test]
+    fn materials_and_blend_shapes_load_as_three() {
+        let scene = FbxLoader::parse_scene(MULTI.as_bytes()).expect("parses");
+        let mesh = mesh_of(&scene, scene.roots[0]);
+        let groups: Vec<(u32, u32, u32)> = mesh
+            .geometry
+            .groups
+            .iter()
+            .map(|g| (g.start, g.count, g.material_index))
+            .collect();
+        assert_eq!(groups, [(0, 9, 1), (9, 3, 0)]);
+        assert_eq!(mesh.materials.len(), 2);
+        assert!(mesh.materials[0].color().r > 0.9, "Red first");
+        assert!(mesh.materials[1].color().b > 0.9);
+        let g = &mesh.geometry;
+        assert!(g.morph_targets_relative);
+        let pos = &g.get_attribute("position").unwrap().array;
+        let delta = &g.morph_attributes["position"][0].array;
+        for (p, d) in pos.chunks_exact(3).zip(delta.chunks_exact(3)) {
+            let want: [f32; 3] = match (p[0], p[1]) {
+                (1.0, 0.0) => [0.0, 0.0, 1.0],
+                (2.0, 1.0) => [0.0, 0.5, 0.0],
+                _ => [0.0; 3],
+            };
+            assert_eq!(d, &want, "corner at {p:?}");
+        }
+        assert_eq!(mesh.morph_influences, vec![0.0]);
+        assert_eq!(mesh.morph_target_dictionary.get("Lift"), Some(&0));
+    }
 
     fn mesh_of(scene: &FbxScene, id: ObjectId) -> &Mesh {
         match &scene.arena.get(id).expect("an object").kind {
@@ -465,6 +605,34 @@ mod tests {
         assert_eq!(uv.len(), 12, "6 corners, 2 numbers each");
         for pair in uv.chunks_exact(2) {
             assert_eq!(pair, [0.25, 0.75]);
+        }
+    }
+
+    /// The quad's two triangles are remembered as one polygon, and its four
+    /// corners come back in the order `PolygonVertexIndex` gave them.
+    #[test]
+    fn a_quad_is_one_polygon() {
+        let scene = FbxLoader::parse_scene(MODES.as_bytes()).expect("parses");
+        let g = &mesh_of(&scene, named(&scene, "Quad")).geometry;
+        assert_eq!(g.polygon_counts(), Some(&[2u32][..]));
+        // Unindexed, one vertex per corner: triangle 0 is corners 0,1,2 and
+        // triangle 1 is corners 0,2,3 at vertices 3,4,5.
+        let corners = g.polygon_loop(0..2).expect("a simple loop");
+        assert_eq!(corners, [0, 1, 4, 5]);
+        assert_eq!(g.polygon_edges().len(), 4, "no diagonal");
+        assert_eq!(g.wireframe_indices().len(), 8);
+    }
+
+    /// Blender's cube is six quads: twelve edges, not the eighteen its
+    /// triangles have.
+    #[test]
+    fn a_blender_cube_has_twelve_edges() {
+        let scene = FbxLoader::parse_scene(BLENDER).expect("parses");
+        let g = &mesh_of(&scene, named(&scene, "Parent")).geometry;
+        assert_eq!(g.polygon_counts(), Some(&[2u32; 6][..]));
+        assert_eq!(g.polygon_edges().len(), 12);
+        for range in g.polygon_ranges() {
+            assert_eq!(g.polygon_loop(range).map(|l| l.len()), Some(4));
         }
     }
 

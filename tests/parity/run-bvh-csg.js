@@ -28,8 +28,11 @@ const port = 8089;
 spawn('node', [path.join(__dirname, 'server.js'), String(port)], { stdio: 'ignore' });
 await new Promise(r => setTimeout(r, 300));
 
+/// The same triangles as three-bvh-csg: the Rust port cuts every face in the
+/// order three-mesh-bvh's tree meets its cutting triangles, so the count is
+/// exact, not just close.
 function checkMeta(scene, three, threers) {
-    return Number(three.triCount) > 0 && Number(threers.triCount) > 0;
+    return Number(three.triCount) > 0 && Number(threers.triCount) === Number(three.triCount);
 }
 
 function toOrbitState(view) {
@@ -90,7 +93,7 @@ function diffPct(imgA, imgB) {
 }
 
 const browser = await puppeteer.launch({
-    executablePath: '/opt/homebrew/bin/chromium',
+    executablePath: process.env.CHROME || '/opt/homebrew/bin/chromium',
     headless: 'new',
     args: ['--enable-unsafe-webgpu', '--enable-features=Vulkan,WebGPU', '--use-vulkan=swiftshader', '--no-sandbox'],
 });

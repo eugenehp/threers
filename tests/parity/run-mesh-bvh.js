@@ -55,7 +55,7 @@ async function shoot(browser, url) {
 }
 
 const browser = await puppeteer.launch({
-    executablePath: '/opt/homebrew/bin/chromium',
+    executablePath: process.env.CHROME || '/opt/homebrew/bin/chromium',
     headless: 'new',
     args: ['--enable-unsafe-webgpu', '--enable-features=Vulkan,WebGPU', '--use-vulkan=swiftshader', '--no-sandbox'],
 });

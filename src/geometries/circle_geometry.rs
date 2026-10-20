@@ -12,6 +12,21 @@ impl CircleGeometry {
         theta_start: f32,
         theta_length: f32,
     ) -> BufferGeometry {
+        Self::from_f64(
+            super::js_number(radius),
+            segments,
+            super::js_angle(theta_start),
+            super::js_angle(theta_length),
+        )
+    }
+
+    /// [`new`](Self::new) with JavaScript's numbers, as three.js takes them.
+    pub fn from_f64(
+        radius: f64,
+        segments: usize,
+        theta_start: f64,
+        theta_length: f64,
+    ) -> BufferGeometry {
         let n = segments.max(3);
 
         let mut positions = Vec::with_capacity((n + 2) * 3);
@@ -24,14 +39,16 @@ impl CircleGeometry {
         normals.extend_from_slice(&[0.0, 0.0, 1.0]);
         uvs.extend_from_slice(&[0.5, 0.5]);
 
+        // In f64 from the caller's numbers, rounded once, as three.js does;
+        // the uv divides the unrounded vertex by the radius.
+        let (r, ts, tl) = (radius, theta_start, theta_length);
         for i in 0..=n {
-            let t = theta_start + (i as f32 / n as f32) * theta_length;
-            let (s, c) = t.sin_cos();
-            let x = radius * c;
-            let y = radius * s;
-            positions.extend_from_slice(&[x, y, 0.0]);
+            let t = ts + i as f64 / n as f64 * tl;
+            let x = r * t.cos();
+            let y = r * t.sin();
+            positions.extend_from_slice(&[x as f32, y as f32, 0.0]);
             normals.extend_from_slice(&[0.0, 0.0, 1.0]);
-            uvs.extend_from_slice(&[(x / radius + 1.0) * 0.5, (y / radius + 1.0) * 0.5]);
+            uvs.extend_from_slice(&[((x / r + 1.0) / 2.0) as f32, ((y / r + 1.0) / 2.0) as f32]);
         }
 
         for i in 1..=n as u32 {

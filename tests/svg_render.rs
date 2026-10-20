@@ -164,6 +164,8 @@ fn truth_at(
     } else {
         rc.set_from_camera_ortho(ndc, camera);
     }
+    // What the camera draws: `set_from_camera*` no longer copies its layers.
+    rc.layers = camera.layers();
     let hits = rc.intersect_objects(&scene.arena, scene.root, true);
     hits.first().and_then(|h| keys.get(&h.object).cloned())
 }

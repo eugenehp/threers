@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><style>body{margin:0;background:#0c0c10}canvas{display:block}#err{position:absolute;top:0;left:0;padding:12px;color:#fdd;background:#500;font-family:monospace;white-space:pre-wrap}</style></head>
+<body><canvas id="c" width="800" height="600"></canvas>
+<div id="err" style="display:none"></div>
+<script type="module">
+import THREE, { initThreers } from '/web/threejs-shim.js';
+const errEl = document.getElementById('err');
+(async () => {
+    try {
+        await initThreers('/web/pkg/threers_bg.wasm');
+        const canvas = document.getElementById('c');
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x0c0c10);
+        scene.add(new THREE.AmbientLight(0xffffff, 0.25));
+        const key = new THREE.DirectionalLight(0xffffff, 2.5);
+        key.position.set(3, 4, 5);
+        scene.add(key);
+        const rim = new THREE.DirectionalLight(0xffffff, 1.5);
+        rim.position.set(-4, 1, -2);
+        scene.add(rim);
+        const mats = [
+            { color: 0x4060a0, roughness: 0.3, ior: 2.33 },
+            { color: 0x4060a0, roughness: 0.3, specularIntensity: 0.25, specularColor: 0xff6020 },
+            { color: 0x808080, roughness: 0.45, metalness: 0.5, specularIntensity: 0.4, ior: 1.8 },];
+        mats.forEach((m, i) => {
+            const s = new THREE.Mesh(new THREE.SphereGeometry(0.95, 64, 32), new THREE.MeshPhysicalMaterial(m));
+            s.position.x = (i - 1) * 2.2;
+            scene.add(s);
+        });
+        const cam = new THREE.PerspectiveCamera(40, 800/600, 0.1, 100);
+        cam.position.set(0, 0.4, 7.5); cam.lookAt(0, 0, 0);
+        const r = await THREE.WebGLRenderer.create(canvas);
+        r.setSize(800, 600);
+        r.render(scene, cam);
+        await new Promise(rs => requestAnimationFrame(() => rs()));
+        document.body.dataset.ready = 'true';
+    } catch (e) {
+        console.error(e);
+        errEl.style.display='block'; errEl.textContent = e?.stack || String(e);
+        document.body.dataset.ready = 'error';
+    }
+})();
+</script></body></html>

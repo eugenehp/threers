@@ -926,7 +926,7 @@ pub fn build_scene(
     env: Arc<CubeTexture>,
 ) -> Scene {
     let mut scene = Scene::new();
-    scene.background = Color::new(0.008, 0.007, 0.009);
+    scene.background = Color::BLACK;
     scene.environment = Some(env);
 
     // The backdrop first, so everything else sorts in front of it.

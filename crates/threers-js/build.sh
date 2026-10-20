@@ -46,6 +46,11 @@ stage_variant() {
   [[ -f "$WEB/video-export-worker.js" ]] && cp "$WEB/video-export-worker.js" "$dest/video-export-worker.js"
 
   cp -R "$WEB/pkg/." "$dest/pkg/"
+  # The pre-compressed copies are for a static host serving web/pkg itself.
+  # A package CDN (jsDelivr, unpkg, esm.sh) compresses on its own and ignores
+  # them, and a bundler copies the .wasm — so in the package they only tripled
+  # the wasm's share of the download (mini: 1.16 MB + 0.38 + 0.47).
+  rm -f "$dest/pkg/"*.wasm.br "$dest/pkg/"*.wasm.gz "$dest/pkg/build-id.txt"
 
   if [[ -d "$WEB/deps" ]]; then
     mkdir -p "$dest/deps"

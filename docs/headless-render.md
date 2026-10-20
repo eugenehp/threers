@@ -29,7 +29,7 @@ cargo run --release --example export_vp9 --features video -- --out /tmp/cube.web
 ```
 
 ```rust
-// Cargo.toml: threers = { version = "0.0.5", features = ["video"] }
+// Cargo.toml: threers = { version = "0.0.6", features = ["video"] }
 use threers::{export_video, HeadlessRenderer, VideoCodec, VideoOptions};
 
 let mut hr = HeadlessRenderer::builder().size(1280, 720).build().unwrap();
@@ -63,3 +63,30 @@ let bytes = encode_animation_rgba(
     frames, // Vec<Vec<u8>> of RGBA
 ).unwrap();
 ```
+
+## Choosing the GPU, and NVIDIA on Linux
+
+On a machine with several adapters, `THREERS_GPU=nvidia` (or `cuda`), `amd`
+(or `rocm`) picks that vendor's; the renderer logs the one it got
+(`gpu  NVIDIA GeForce RTX 3080 Ti Laptop GPU (Vulkan, DiscreteGpu)`). NVIDIA
+cards are driven through Vulkan; there is no CUDA code path.
+
+The native suite passes on an RTX 3080 Ti (Linux, driver 595.99.02) with one
+condition: run GPU tests one at a time.
+
+```bash
+THREERS_GPU=nvidia RUST_TEST_THREADS=1 cargo test --release --features raytrace
+```
+
+Run in parallel, a test binary whose tests each create a renderer hangs now
+and then — 7 runs in 30 for the 13-test `quad_view`, none in 30 serially, both
+with the GPU otherwise fully loaded. A finished test thread spins in the
+driver's thread-exit cleanup while the others wait on a lock inside it.
+Sharing one `wgpu::Instance` across the renderers did not help. It takes
+several devices on several threads at once, which an application rarely has.
+
+Tests that compare exact bytes or depth ties with Apple's GPU allow for what
+NVIDIA does differently and legitimately: a value exactly halfway between two
+8-bit levels rounds the other way (alpha 0.5 is 127 rather than 128), and
+which of two surfaces a depth tie keeps changes once the driver has
+recompiled the shaders in the background.

@@ -5,14 +5,25 @@ use crate::math::Color;
 pub struct LineBasicMaterial {
     pub color: Color,
     pub opacity: f32,
+    /// three.js `alphaTest`: fragments whose alpha (opacity × map alpha) is
+    /// below this are discarded. 0 (the default) keeps every fragment.
+    pub alpha_test: f32,
+    /// three.js `transparent`. `Some` is three.js's flag as given — `false`
+    /// draws opaquely whatever the opacity. `None` (the default) blends when
+    /// `opacity < 1`, the rule this crate used before it had the flag.
+    pub transparent: Option<bool>,
     pub line_width: f32,
     pub dashed: bool,
     pub dash_scale: f32,
     pub dash_size: f32,
     pub gap_size: f32,
-    /// When false, lines draw on top of the depth buffer (x-ray / overlay).
-    /// Default true — matches three.js `depthTest`.
-    pub depth_test: bool,
+    /// three.js `toneMapped` (default `true`): whether the renderer's tone
+    /// mapping applies to this material's output.
+    pub tone_mapped: bool,
+    /// three.js `depthTest` / `depthWrite` / `depthFunc` / `colorWrite`.
+    /// `depth_test: false` draws the line over the depth buffer (an x-ray
+    /// or overlay stroke).
+    pub render_state: super::RenderState,
 }
 
 impl Default for LineBasicMaterial {
@@ -20,12 +31,15 @@ impl Default for LineBasicMaterial {
         Self {
             color: Color::WHITE,
             opacity: 1.0,
+            alpha_test: 0.0,
+            transparent: None,
             line_width: 1.0,
             dashed: false,
             dash_scale: 1.0,
             dash_size: 0.0,
             gap_size: 0.0,
-            depth_test: true,
+            tone_mapped: true,
+            render_state: super::RenderState::default(),
         }
     }
 }
@@ -38,9 +52,11 @@ impl LineBasicMaterial {
         }
     }
 
-    /// Draw through occluders (active highlights, HUD strokes).
+    /// Draw through occluders (active highlights, HUD strokes): three.js
+    /// `depthTest`. Draws in order like any other, so an overlay wants a
+    /// later `render_order` than what it overlays.
     pub fn with_depth_test(mut self, enabled: bool) -> Self {
-        self.depth_test = enabled;
+        self.render_state.depth_test = enabled;
         self
     }
 }

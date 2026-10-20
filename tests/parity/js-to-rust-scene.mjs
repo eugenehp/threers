@@ -384,7 +384,7 @@ fn sample_height_linear(data: &[f32], size: u32, u: f32, v: f32) -> f32 {
     c0 * (1.0 - fy) + c1 * fy
 }
 
-/// Full-screen disp bake — same as \`_glslGlitchDispBake\` / wasm kind 26.
+/// Full-screen disp bake — same as \`_glslGlitchDispBake\` / wasm kind 32.
 fn bake_glitch_disp(w: u32, h: u32, seed: f32, height: &[f32], dt: u32) -> Vec<f32> {
     let mut out = vec![0f32; (w * h) as usize];
     for y in 0..h {
@@ -406,7 +406,7 @@ export const RUST_DRAW_OVERRIDES = {
                                     renderer.apply_postfx(
                                         &scene_rt.color_view,
                                         &view,
-                                        26,
+                                        32,
                                         glitch_seed,
                                         [
                                             glitch_amount,

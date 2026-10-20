@@ -33,6 +33,7 @@
     "spot-shadow",
     "multi-shadow",
     "toon",
+    "toon-gradient",
     "physical",
     "many-meshes",
     "camera-tilt",
@@ -47,6 +48,7 @@
     "sprite",
     "lathe",
     "gltf-parse",
+    "gltf-features",
     "anim-mixer",
     "edges-geom",
     "shape-geom",
@@ -108,6 +110,17 @@
     "quat-track",
     "color-track",
     "shadow-mat",
+    "shadow-cutout",
+    "lit-maps",
+    "envmap",
+    "pbr-env",
+    "physical-specular",
+    "physical-sheen",
+    "physical-iridescence",
+    "physical-anisotropy",
+    "physical-env",
+    "rect-area",
+    "transmission",
     "fxaa",
     "film",
     "dotscreen",
@@ -188,6 +201,67 @@
     ],
     "glitch": [
       "GlitchPass"
+    ],
+    "shadow-cutout": [
+      "alphaTest",
+      "castShadow",
+      "DataTexture",
+      "transparent"
+    ],
+    "lit-maps": [
+      "MeshLambertMaterial.map",
+      "MeshPhongMaterial.aoMap",
+      "MeshToonMaterial.emissiveMap",
+      "Texture.colorSpace"
+    ],
+    "envmap": [
+      "CubeTexture",
+      "MeshBasicMaterial.envMap",
+      "CubeRefractionMapping",
+      "envMapRotation"
+    ],
+    "physical-specular": [
+      "MeshPhysicalMaterial.ior",
+      "MeshPhysicalMaterial.specularIntensity",
+      "MeshPhysicalMaterial.specularColor"
+    ],
+    "physical-sheen": [
+      "MeshPhysicalMaterial.sheen",
+      "MeshPhysicalMaterial.sheenColor",
+      "MeshPhysicalMaterial.sheenRoughness"
+    ],
+    "physical-iridescence": [
+      "MeshPhysicalMaterial.iridescence",
+      "MeshPhysicalMaterial.iridescenceIOR",
+      "MeshPhysicalMaterial.iridescenceThicknessRange"
+    ],
+    "physical-anisotropy": [
+      "MeshPhysicalMaterial.anisotropy",
+      "MeshPhysicalMaterial.anisotropyRotation"
+    ],
+    "physical-env": [
+      "MeshPhysicalMaterial.sheen",
+      "MeshPhysicalMaterial.iridescence",
+      "MeshPhysicalMaterial.anisotropy",
+      "MeshPhysicalMaterial.clearcoat",
+      "Scene.environment"
+    ],
+    "rect-area": [
+      "RectAreaLight",
+      "RectAreaLightUniformsLib"
+    ],
+    "transmission": [
+      "MeshPhysicalMaterial.transmission",
+      "MeshPhysicalMaterial.thickness",
+      "MeshPhysicalMaterial.attenuationColor",
+      "MeshPhysicalMaterial.dispersion"
+    ],
+    "pbr-env": [
+      "Scene.environment",
+      "Scene.environmentIntensity",
+      "Scene.environmentRotation",
+      "MeshStandardMaterial.envMap",
+      "envMapIntensity"
     ]
   },
   "approximate": []

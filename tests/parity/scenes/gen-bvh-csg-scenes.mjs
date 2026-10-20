@@ -343,7 +343,8 @@ const errEl = document.getElementById('err');
         cam.position.set(${camPos});
         cam.lookAt(${camTarget});
         cam.updateMatrixWorld(true);
-        const renderer = await THREE.WebGLRenderer.create(canvas);
+        // As the three.js twin asks.
+        const renderer = await THREE.WebGLRenderer.create(canvas, { antialias: true });
         renderer.setSize(800, 600);
         renderer.render(scene, cam);
         await new Promise(r => requestAnimationFrame(r));

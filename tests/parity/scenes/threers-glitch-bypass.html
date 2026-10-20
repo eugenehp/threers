@@ -18,7 +18,11 @@ const errEl = document.getElementById('err');
         const composer = new THREE.EffectComposer(r);
         composer.addPass(new THREE.RenderPass(scene, cam));
         const glitchPass = new THREE.GlitchPass();
-        glitchPass._computeUniforms = () => ({ seed: 0, byp: 1, amount: 0, angle: 0, seed_x: 0, seed_y: 0, distortion_x: 0, distortion_y: 0, col_s: 0 });
+        // three.js's scene overrides render() to set byp = 1. The same frame
+        // with three.js's own logic: past the trigger and its first fifth,
+        // GlitchPass bypasses.
+        glitchPass.randX = 1000;
+        glitchPass.curF = 500;
         composer.addPass(glitchPass);
         await composer.render();
         await new Promise(rs => requestAnimationFrame(() => rs()));

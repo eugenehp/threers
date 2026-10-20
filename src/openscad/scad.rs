@@ -1612,6 +1612,10 @@ struct Poly {
 struct Shape {
     polys: Vec<Poly>,
 }
+// The geometry variant is large and the rest are small by nature; boxing it
+// would put a `Box` in every pattern a caller writes, to save a few hundred
+// bytes on values that are built a handful of times per evaluation.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone)]
 enum Geom {
     Solid(Solid),

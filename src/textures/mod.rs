@@ -11,7 +11,7 @@ mod data_texture;
 mod depth_texture;
 mod texture;
 
-pub use cube_texture::{CubeTexture, CubeUvAtlas};
+pub use cube_texture::{CubeMapping, CubeTexture, CubeUvAtlas};
 pub use data_texture::DataTexture;
 pub use depth_texture::DepthTexture;
 pub use texture::{pack_rgba16f, Texture, TextureFilter, TextureFormat, TextureWrap};

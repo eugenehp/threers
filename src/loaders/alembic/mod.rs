@@ -150,6 +150,43 @@ pub struct PolyMesh {
     pub face_indices: Vec<i32>,
 }
 
+impl PolyMesh {
+    /// The mesh as a triangulated `BufferGeometry`.
+    ///
+    /// Alembic keeps polygons, so faces are fanned from their first corner —
+    /// the same choice the FBX loader makes — and which triangles were one
+    /// face is kept in [`polygons`](crate::core::BufferGeometry::polygons).
+    pub fn geometry(&self) -> crate::core::BufferGeometry {
+        use crate::core::{BufferAttribute, BufferGeometry};
+        let mut indices: Vec<u32> = Vec::new();
+        let mut polygons: Vec<u32> = Vec::new();
+        let mut at = 0usize;
+        for &count in &self.face_counts {
+            let count = count.max(0) as usize;
+            if at + count > self.face_indices.len() {
+                break;
+            }
+            if count >= 3 {
+                polygons.push(count as u32 - 2);
+            }
+            for i in 1..count.saturating_sub(1) {
+                for &k in &[at, at + i, at + i + 1] {
+                    indices.push(self.face_indices[k].max(0) as u32);
+                }
+            }
+            at += count;
+        }
+        let mut geometry = BufferGeometry::new();
+        geometry.set_attribute("position", BufferAttribute::new(self.points.clone(), 3));
+        if !indices.is_empty() {
+            geometry.set_index(indices);
+            geometry.set_polygons(polygons);
+        }
+        crate::compute_vertex_normals(&mut geometry);
+        geometry
+    }
+}
+
 /// An opened archive.
 pub struct Archive<'a> {
     file: Ogawa<'a>,
@@ -547,6 +584,34 @@ mod tests {
         for p in sphere.points.chunks_exact(3) {
             let r = (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt();
             assert!((r - 1.0).abs() < 1e-4, "{p:?} is at radius {r}");
+        }
+    }
+
+    /// Fanned into triangles, the faces are still faces: a cube's wireframe is
+    /// its 12 edges, and the sphere's is the 42 + 48 − 2 = 88 Euler says a
+    /// closed mesh of 42 points and 48 faces has.
+    #[test]
+    fn faces_survive_triangulation() {
+        let archive = Archive::open(SCENE).expect("opens");
+        let meshes = archive.poly_meshes();
+        let cube = meshes.iter().find(|m| m.name == "Cube").unwrap().geometry();
+        assert_eq!(cube.triangle_count(), 12);
+        assert_eq!(cube.polygon_counts(), Some(&[2u32; 6][..]));
+        assert_eq!(cube.polygon_edges().len(), 12);
+
+        let mesh = meshes.iter().find(|m| m.name == "Sphere").unwrap();
+        let sphere = mesh.geometry();
+        assert_eq!(sphere.polygon_ranges().count(), 48);
+        assert_eq!(sphere.polygon_edges().len(), 88);
+        // Every face comes back with its corners in the file's order.
+        let mut at = 0usize;
+        for (range, &count) in sphere.polygon_ranges().zip(&mesh.face_counts) {
+            let corners: Vec<u32> = mesh.face_indices[at..at + count as usize]
+                .iter()
+                .map(|&i| i as u32)
+                .collect();
+            assert_eq!(sphere.polygon_loop(range), Some(corners));
+            at += count as usize;
         }
     }
 

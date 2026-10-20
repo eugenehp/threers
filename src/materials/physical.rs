@@ -30,6 +30,35 @@ pub struct PhysicalMaterial {
     /// whose midpoint is sea level rather than zero.
     pub displacement_bias: f32,
     pub opacity: f32,
+    /// three.js `alphaTest`: fragments whose alpha (opacity × map alpha) is
+    /// below this are discarded. 0 (the default) keeps every fragment.
+    pub alpha_test: f32,
+    /// three.js `alphaMap`: its green channel multiplies the opacity, before
+    /// `alphaTest` (`alphamap_fragment`). Shows only with `transparent` or
+    /// `alpha_test`, as in three.js.
+    pub alpha_map: Option<Arc<Texture>>,
+    /// three.js `envMap`: this material's own image-based light, in place of
+    /// `scene.environment`.
+    pub env_map: Option<Arc<crate::textures::CubeTexture>>,
+    /// three.js `envMapIntensity` (default 1), with `env_map`.
+    pub env_map_intensity: f32,
+    /// three.js `envMapRotation` (default zero), with `env_map`.
+    pub env_map_rotation: crate::math::Euler,
+    /// three.js `lightMap`: baked irradiance added to the indirect light, times
+    /// [`light_map_intensity`](Self::light_map_intensity).
+    pub light_map: Option<Arc<Texture>>,
+    /// three.js `lightMapIntensity` (default 1).
+    pub light_map_intensity: f32,
+    /// three.js `bumpMap`: a height field (red channel) perturbing the normal
+    /// through its screen-space slope; ignored under a `normal_map`, as in
+    /// three.js.
+    pub bump_map: Option<Arc<Texture>>,
+    /// three.js `bumpScale` (default 1).
+    pub bump_scale: f32,
+    /// three.js `transparent`. `Some` is three.js's flag as given — `false`
+    /// draws opaquely whatever the opacity. `None` (the default) blends when
+    /// `opacity < 1`, the rule this crate used before it had the flag.
+    pub transparent: Option<bool>,
     pub wireframe: bool,
 
     pub clearcoat: f32,
@@ -50,10 +79,19 @@ pub struct PhysicalMaterial {
     pub sheen_roughness: f32,
     pub iridescence: f32,
     pub iridescence_ior: f32,
-    /// Thin-film thickness in **nanometres**. This is what sets the hue of the
-    /// interference: ~100nm reads gold/magenta, ~400nm cyan/blue, and sweeping
-    /// it walks the whole rainbow. Only used when `iridescence > 0`.
-    pub iridescence_thickness: f32,
+    /// three.js `iridescenceThicknessRange`: the thin film's thickness in
+    /// **nanometres**, `[min, max]` (default `[100, 400]`). Without an
+    /// `iridescence_thickness_map` the film is `max` thick; with one, its
+    /// green channel runs from `min` to `max`. The thickness sets the hue of
+    /// the interference — ~100nm reads gold/magenta, ~400nm cyan/blue — and a
+    /// film of 0 is no film. Only used when `iridescence > 0`.
+    pub iridescence_thickness_range: [f32; 2],
+    /// three.js `specularIntensity` (default 1): scales the dielectric
+    /// specular reflectance and its grazing (F90) reflectance.
+    pub specular_intensity: f32,
+    /// three.js `specularColor` (default white): tints the dielectric specular
+    /// reflectance at normal incidence.
+    pub specular_color: Color,
     /// Anisotropy strength (0 = isotropic). Stretches the specular highlight
     /// along the surface tangent for a brushed/streaked look.
     pub anisotropy: f32,
@@ -138,14 +176,51 @@ pub struct PhysicalMaterial {
     /// a mesh dense enough to have vertices where the detail is.
     pub displacement_map: Option<Arc<Texture>>,
     /// Per-texel thin-film thickness (three.js `iridescenceThicknessMap`).
-    /// The green channel scales between 0 and `iridescence_thickness` nm, so a
-    /// noise or gradient map turns a single hue into an oil-slick sweep.
+    /// The green channel runs between the two ends of
+    /// `iridescence_thickness_range`, so a noise or gradient map turns a single
+    /// hue into an oil-slick sweep.
     pub iridescence_thickness_map: Option<Arc<Texture>>,
+    /// three.js `specularIntensityMap`: its alpha scales `specular_intensity`.
+    pub specular_intensity_map: Option<Arc<Texture>>,
+    /// three.js `specularColorMap`: its colour scales `specular_color`.
+    pub specular_color_map: Option<Arc<Texture>>,
+    /// three.js `clearcoatMap`: its red scales `clearcoat`.
+    pub clearcoat_map: Option<Arc<Texture>>,
+    /// three.js `clearcoatRoughnessMap`: its green scales `clearcoat_roughness`.
+    pub clearcoat_roughness_map: Option<Arc<Texture>>,
+    /// three.js `clearcoatNormalMap`: a tangent-space normal for the coat
+    /// alone, scaled by [`clearcoat_normal_scale`](Self::clearcoat_normal_scale).
+    pub clearcoat_normal_map: Option<Arc<Texture>>,
+    /// three.js `clearcoatNormalScale` (default (1, 1)).
+    pub clearcoat_normal_scale: Vector2,
+    /// three.js `iridescenceMap`: its red scales `iridescence`.
+    pub iridescence_map: Option<Arc<Texture>>,
+    /// three.js `sheenColorMap`: its colour scales `sheen_color`.
+    pub sheen_color_map: Option<Arc<Texture>>,
+    /// three.js `sheenRoughnessMap`: its alpha scales `sheen_roughness`.
+    pub sheen_roughness_map: Option<Arc<Texture>>,
+    /// three.js `transmissionMap`: its red scales `transmission`.
+    pub transmission_map: Option<Arc<Texture>>,
+    /// three.js `thicknessMap`: its green scales `thickness`.
+    pub thickness_map: Option<Arc<Texture>>,
+    /// three.js `anisotropyMap`: red and green turn the anisotropy direction
+    /// (encoded as `2·rg − 1`), blue scales its strength.
+    pub anisotropy_map: Option<Arc<Texture>>,
 
     pub side: u32,
 
     /// Transparency compositing technique (blend / single-layer glass / OIT).
     pub transparency: super::TransparencyMode,
+    /// three.js `polygonOffset` / `polygonOffsetFactor` / `polygonOffsetUnits`:
+    /// `Some` enables the depth offset (see [`PolygonOffset`](super::PolygonOffset)).
+    pub polygon_offset: Option<super::PolygonOffset>,
+    /// three.js `toneMapped` (default `true`): whether the renderer's tone
+    /// mapping applies to this material's output.
+    pub tone_mapped: bool,
+    /// three.js `depthTest` / `depthWrite` / `depthFunc` / `colorWrite`.
+    /// Ignored by the glass, order-independent and refraction
+    /// [`transparency`](Self::transparency) modes, which own their depth state.
+    pub render_state: super::RenderState,
 }
 
 impl Default for PhysicalMaterial {
@@ -162,6 +237,16 @@ impl Default for PhysicalMaterial {
             displacement_scale: 1.0,
             displacement_bias: 0.0,
             opacity: 1.0,
+            alpha_test: 0.0,
+            alpha_map: None,
+            env_map: None,
+            env_map_intensity: 1.0,
+            env_map_rotation: crate::math::Euler::default(),
+            light_map: None,
+            light_map_intensity: 1.0,
+            bump_map: None,
+            bump_scale: 1.0,
+            transparent: None,
             wireframe: false,
             clearcoat: 0.0,
             clearcoat_roughness: 0.0,
@@ -175,7 +260,21 @@ impl Default for PhysicalMaterial {
             sheen_roughness: 1.0,
             iridescence: 0.0,
             iridescence_ior: 1.3,
-            iridescence_thickness: 400.0,
+            iridescence_thickness_range: [100.0, 400.0],
+            specular_intensity_map: None,
+            specular_color_map: None,
+            clearcoat_map: None,
+            clearcoat_roughness_map: None,
+            clearcoat_normal_map: None,
+            iridescence_map: None,
+            sheen_color_map: None,
+            sheen_roughness_map: None,
+            transmission_map: None,
+            thickness_map: None,
+            anisotropy_map: None,
+            clearcoat_normal_scale: Vector2::new(1.0, 1.0),
+            specular_intensity: 1.0,
+            specular_color: Color::WHITE,
             anisotropy: 0.0,
             anisotropy_rotation: 0.0,
             attenuation_distance: f32::INFINITY,
@@ -199,6 +298,9 @@ impl Default for PhysicalMaterial {
             twilight_color: Color::new(1.0, 0.55, 0.32),
             iridescence_thickness_map: None,
             side: 0,
+            polygon_offset: None,
+            tone_mapped: true,
+            render_state: super::RenderState::default(),
         }
     }
 }
@@ -250,11 +352,20 @@ impl PhysicalMaterial {
         self
     }
 
-    /// Thin-film interference. `thickness_nm` sets the hue (see the field docs).
+    /// Thin-film interference, `thickness_nm` thick — the top of
+    /// [`iridescence_thickness_range`](Self::iridescence_thickness_range),
+    /// which is the film's thickness without a thickness map.
     pub fn with_iridescence(mut self, strength: f32, ior: f32, thickness_nm: f32) -> Self {
         self.iridescence = strength;
         self.iridescence_ior = ior;
-        self.iridescence_thickness = thickness_nm;
+        self.iridescence_thickness_range[1] = thickness_nm;
+        self
+    }
+
+    /// three.js `specularIntensity` and `specularColor`.
+    pub fn with_specular(mut self, intensity: f32, color: Color) -> Self {
+        self.specular_intensity = intensity;
+        self.specular_color = color;
         self
     }
 

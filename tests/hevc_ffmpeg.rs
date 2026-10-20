@@ -33,9 +33,14 @@ fn tmp_path(name: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
+    // The clock alone is not enough: on macOS it ticks in microseconds,
+    // and tests running in parallel ask within the same one — then two of
+    // them write and read each other's files.
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut p = std::env::temp_dir();
     p.push(format!(
-        "threers_hevc_{}_{}_{name}",
+        "threers_hevc_{}_{}_{n}_{name}",
         std::process::id(),
         nanos
     ));

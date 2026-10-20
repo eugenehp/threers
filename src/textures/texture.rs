@@ -123,6 +123,12 @@ pub struct Texture {
     pub format: TextureFormat,
     pub mag_filter: TextureFilter,
     pub min_filter: TextureFilter,
+    /// three.js's mipmapped `minFilter`s, the part [`min_filter`](Self::min_filter)
+    /// leaves out: how minification moves between mip levels — `Some(Linear)`
+    /// (`*MipmapLinearFilter`, three.js's default), `Some(Nearest)`
+    /// (`*MipmapNearestFilter`) — or `None`, no mipmaps at all (`LinearFilter`
+    /// / `NearestFilter`), sampling level 0 only.
+    pub mipmap_filter: Option<TextureFilter>,
     pub wrap_s: TextureWrap,
     pub wrap_t: TextureWrap,
     /// Pixel data. Length must equal `width * height * bytes_per_pixel`.
@@ -133,6 +139,20 @@ pub struct Texture {
     pub offset: Vector2,
     pub repeat: Vector2,
     pub rotation: f32,
+    /// three.js `Texture.center`: the point `rotation` turns about, in UV
+    /// space (default `(0, 0)`, the lower-left corner).
+    pub center: Vector2,
+    /// three.js `Texture.channel` (r151+): which UV set the map reads — 0 is
+    /// the geometry's `uv`, 1 its `uv1`. Channels the geometry does not carry
+    /// read zero, as an unbound attribute does in WebGL.
+    pub channel: u32,
+    /// three.js `Texture.matrixAutoUpdate` (default `true`): the UV transform
+    /// is rebuilt from `offset`/`repeat`/`rotation`/`center` each frame.
+    /// `false` uses [`matrix`](Self::matrix) as given.
+    pub matrix_auto_update: bool,
+    /// three.js `Texture.matrix` — column-major `Matrix3` elements, read only
+    /// when `matrix_auto_update` is off.
+    pub matrix: [f32; 9],
     /// If set, this texture is backed by a RenderTarget's color attachment
     /// instead of the CPU `data` bytes. The renderer skips upload and uses
     /// the RenderTarget's view directly for sampling.
@@ -164,11 +184,36 @@ pub struct Texture {
 /// allocating a texture every nanosecond.
 static NEXT_TEXTURE_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
-fn next_texture_id() -> u64 {
+pub(crate) fn next_texture_id() -> u64 {
     NEXT_TEXTURE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
+const IDENTITY3: [f32; 9] = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
+
 impl Texture {
+    /// three.js `Texture.matrix` as the two rows a shader multiplies the UV
+    /// by: `uv' = (r0 · (u, v, 1), r1 · (u, v, 1))`.
+    ///
+    /// With `matrix_auto_update` (the default) this is `Matrix3.setUvTransform(
+    /// offset.x, offset.y, repeat.x, repeat.y, rotation, center.x, center.y)`,
+    /// which three.js recomputes in `refreshTransformUniform`; otherwise the
+    /// user's [`matrix`](Self::matrix).
+    pub fn uv_transform_rows(&self) -> [[f32; 3]; 2] {
+        if !self.matrix_auto_update {
+            let e = &self.matrix;
+            // Column-major: element (row r, column c) is e[c * 3 + r].
+            return [[e[0], e[3], e[6]], [e[1], e[4], e[7]]];
+        }
+        let (tx, ty) = (self.offset.x, self.offset.y);
+        let (sx, sy) = (self.repeat.x, self.repeat.y);
+        let (cx, cy) = (self.center.x, self.center.y);
+        let (s, c) = self.rotation.sin_cos();
+        [
+            [sx * c, sx * s, -sx * (c * cx + s * cy) + cx + tx],
+            [-sy * s, sy * c, -sy * (-s * cx + c * cy) + cy + ty],
+        ]
+    }
+
     pub fn new(width: u32, height: u32, format: TextureFormat, data: Vec<u8>) -> Self {
         Self {
             width,
@@ -176,6 +221,7 @@ impl Texture {
             format,
             mag_filter: TextureFilter::Linear,
             min_filter: TextureFilter::Linear,
+            mipmap_filter: Some(TextureFilter::Linear),
             wrap_s: TextureWrap::ClampToEdge,
             wrap_t: TextureWrap::ClampToEdge,
             data: Arc::new(data),
@@ -183,6 +229,10 @@ impl Texture {
             offset: Vector2::ZERO,
             repeat: Vector2::ONE,
             rotation: 0.0,
+            center: Vector2::ZERO,
+            channel: 0,
+            matrix_auto_update: true,
+            matrix: IDENTITY3,
             external_rt_id: None,
             mips: Vec::new(),
             id: next_texture_id(),
@@ -199,6 +249,9 @@ impl Texture {
             format,
             mag_filter: TextureFilter::Linear,
             min_filter: TextureFilter::Linear,
+            // three.js gives a render target's texture `LinearFilter`: it has
+            // no mip chain.
+            mipmap_filter: None,
             wrap_s: TextureWrap::ClampToEdge,
             wrap_t: TextureWrap::ClampToEdge,
             data: Arc::new(Vec::new()),
@@ -206,6 +259,10 @@ impl Texture {
             offset: Vector2::ZERO,
             repeat: Vector2::ONE,
             rotation: 0.0,
+            center: Vector2::ZERO,
+            channel: 0,
+            matrix_auto_update: true,
+            matrix: IDENTITY3,
             external_rt_id: Some(rt_id),
             mips: Vec::new(),
             id: next_texture_id(),

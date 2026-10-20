@@ -746,8 +746,13 @@ pub fn decode_png(bytes: &[u8]) -> Result<PngImage, String> {
     if interlace != 0 {
         return Err("PNG: interlaced images are not supported".into());
     }
-    if depth != 8 && depth != 16 {
-        return Err(format!("PNG: unsupported bit depth {depth}"));
+    // 1, 2 and 4 bits only for grey and palette images, as the spec has it:
+    // what map tiles of open sea and other near-empty images come as.
+    let sub_byte = matches!(depth, 1 | 2 | 4);
+    if !(depth == 8 || depth == 16 || (sub_byte && (colour == 0 || colour == 3))) {
+        return Err(format!(
+            "PNG: unsupported bit depth {depth} for colour type {colour}"
+        ));
     }
     if idat.len() < 2 {
         return Err("PNG: no image data".into());
@@ -762,8 +767,10 @@ pub fn decode_png(bytes: &[u8]) -> Result<PngImage, String> {
         6 => 4, // rgba
         _ => return Err(format!("PNG: unsupported colour type {colour}")),
     };
-    let bytes_per_px = channels * (depth as usize / 8);
-    let stride = w as usize * bytes_per_px;
+    let bits_per_px = channels * depth as usize;
+    // The filters look one whole pixel back, or one byte for packed pixels.
+    let bytes_per_px = (bits_per_px / 8).max(1);
+    let stride = (w as usize * bits_per_px).div_ceil(8);
     if raw.len() < (stride + 1) * h as usize {
         return Err("PNG: short image data".into());
     }
@@ -814,14 +821,26 @@ pub fn decode_png(bytes: &[u8]) -> Result<PngImage, String> {
     }
 
     // Expand to RGBA.
-    let step = depth as usize / 8; // 1 for 8-bit, 2 for 16-bit (take high byte)
+    let step = (depth as usize / 8).max(1); // 2 for 16-bit: take the high byte
+                                            // A packed sample, most significant bits first within each byte.
+    let packed = |i: usize| -> u8 {
+        let (y, x) = (i / w as usize, i % w as usize);
+        let bit = x * depth as usize;
+        let byte = lines[y * stride + bit / 8];
+        (byte >> (8 - depth as usize - bit % 8)) & ((1u16 << depth) - 1) as u8
+    };
     let mut rgba = vec![255u8; (w as usize) * (h as usize) * 4];
     for i in 0..(w as usize) * (h as usize) {
         let s = i * bytes_per_px;
         let o = i * 4;
         match colour {
             0 => {
-                let g = lines[s];
+                let g = if sub_byte {
+                    // Scaled so the largest sample is white.
+                    (packed(i) as u32 * 255 / ((1u32 << depth) - 1)) as u8
+                } else {
+                    lines[s]
+                };
                 rgba[o] = g;
                 rgba[o + 1] = g;
                 rgba[o + 2] = g;
@@ -832,7 +851,7 @@ pub fn decode_png(bytes: &[u8]) -> Result<PngImage, String> {
                 rgba[o + 2] = lines[s + 2 * step];
             }
             3 => {
-                let idx = lines[s] as usize;
+                let idx = if sub_byte { packed(i) } else { lines[s] } as usize;
                 let c = palette.get(idx).copied().unwrap_or([0, 0, 0]);
                 rgba[o] = c[0];
                 rgba[o + 1] = c[1];
@@ -865,6 +884,58 @@ pub fn decode_png(bytes: &[u8]) -> Result<PngImage, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A palette image packed `depth` bits a pixel, as OpenStreetMap serves
+    /// its sea tiles: each row a filter byte and the packed indices.
+    fn packed_palette_png(depth: u8, w: u32, indices: &[u8], palette: &[[u8; 3]]) -> Vec<u8> {
+        let h = indices.len() as u32 / w;
+        let stride = (w as usize * depth as usize).div_ceil(8);
+        let mut raw = Vec::new();
+        for row in indices.chunks(w as usize) {
+            raw.push(0); // no filter
+            let mut bytes = vec![0u8; stride];
+            for (x, &v) in row.iter().enumerate() {
+                let bit = x * depth as usize;
+                bytes[bit / 8] |= v << (8 - depth as usize - bit % 8);
+            }
+            raw.extend(bytes);
+        }
+        let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
+        let mut ihdr = Vec::new();
+        ihdr.extend_from_slice(&w.to_be_bytes());
+        ihdr.extend_from_slice(&h.to_be_bytes());
+        ihdr.extend_from_slice(&[depth, 3, 0, 0, 0]);
+        chunk(&mut out, b"IHDR", &ihdr);
+        chunk(&mut out, b"PLTE", &palette.concat());
+        chunk(&mut out, b"IDAT", &zlib(&raw));
+        chunk(&mut out, b"IEND", &[]);
+        out
+    }
+
+    #[test]
+    fn packed_palette_images_decode() {
+        let pal = [[10, 20, 30], [200, 100, 50], [0, 255, 0], [9, 9, 9]];
+        for (depth, colours) in [(1u8, 2u8), (2, 4), (4, 4)] {
+            // Five pixels a row: the last byte of each row is part padding.
+            let idx: Vec<u8> = (0..15).map(|i| (i % colours as u32) as u8).collect();
+            let img = decode_png(&packed_palette_png(
+                depth,
+                5,
+                &idx,
+                &pal[..colours as usize],
+            ))
+            .unwrap_or_else(|e| panic!("{depth}-bit: {e}"));
+            assert_eq!((img.width, img.height), (5, 3));
+            for (i, &k) in idx.iter().enumerate() {
+                let c = pal[k as usize];
+                assert_eq!(
+                    &img.rgba[i * 4..i * 4 + 4],
+                    &[c[0], c[1], c[2], 255],
+                    "{depth}-bit pixel {i}"
+                );
+            }
+        }
+    }
 
     fn sample(w: u32, h: u32) -> Vec<u8> {
         let mut v = Vec::with_capacity((w * h * 4) as usize);

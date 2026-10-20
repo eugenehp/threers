@@ -205,6 +205,16 @@ time; on the GPU a workgroup runs until its slowest pixel, so the saving only
 lands where whole tiles converge. `RaytraceSettings::final_quality()` turns it
 off.
 
+**Bounce limits.** `max_bounces` caps a path's length; inside it, as in
+Cycles, `diffuse_max_bounces`, `glossy_max_bounces` and
+`transmission_max_bounces` cap each kind of scattering (all unlimited by
+default — `with_bounce_limits(diffuse, glossy, transmission)` sets them), and
+`transparent_max_bounces` the alpha cut-outs a ray may pass, which are not
+bounces at all. Transmission is the one glass needs: a solid pane is two, in
+and out, so three panes in a row need six before the light behind them
+arrives — five, and the pixel stays dark. `tests/glass_bounces.rs` holds both
+backends to that, and checks a ray cast reports all six surfaces in order.
+
 **What is simulated:** multi-bounce diffuse and glossy GI; the principled BSDF
 (Lambert + anisotropic GGX + rough dielectric transmission + clearcoat) with
 Kulla–Conty energy compensation; emissive geometry as area lights;

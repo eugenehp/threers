@@ -3,8 +3,11 @@
   "version": "1.0.0",
   "type": "module",
   "dependencies": {
-    "puppeteer": "*",
     "pixelmatch": "*",
-    "pngjs": "*"
+    "pngjs": "*",
+    "puppeteer": "*",
+    "three": "0.165.0",
+    "three-bvh-csg": "0.0.16",
+    "three-mesh-bvh": "0.7.6"
   }
 }

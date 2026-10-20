@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><style>body{margin:0;background:#181818}canvas{display:block}#err{position:absolute;top:0;left:0;padding:12px;color:#fdd;background:#500;font-family:monospace;white-space:pre-wrap}</style></head>
+<body><canvas id="c" width="800" height="600"></canvas>
+<div id="err" style="display:none"></div>
+<script type="module">
+import THREE, { initThreers } from '/web/threejs-shim.js';
+const errEl = document.getElementById('err');
+// `?plain=1` builds the same sheet from plain BufferAttributes (colours
+// denormalized to floats) — the frame must come out identical.
+const plain = new URLSearchParams(location.search).has('plain');
+(async () => {
+    try {
+        await initThreers('/web/pkg/threers_bg.wasm');
+        const W = 24, H = 16;
+        const verts = (W + 1) * (H + 1);
+        const f32 = new Float32Array(verts * 8), u8 = new Uint8Array(verts * 4);
+        for (let j = 0; j <= H; j++) for (let i = 0; i <= W; i++) {
+            const k = j * (W + 1) + i, u = i / W, v = j / H;
+            const x = (u - 0.5) * 3, y = (v - 0.5) * 2, z = 0.25 * Math.sin(u * 6.283) * Math.cos(v * 3.1416);
+            const dzdx = 0.25 * Math.cos(u * 6.283) * 6.283 / 3 * Math.cos(v * 3.1416);
+            const dzdy = -0.25 * Math.sin(u * 6.283) * Math.sin(v * 3.1416) * 3.1416 / 2;
+            const n = Math.hypot(dzdx, dzdy, 1);
+            f32.set([x, y, z, -dzdx / n, -dzdy / n, 1 / n, u, v], k * 8);
+            u8.set([Math.round(255 * u), Math.round(255 * v), Math.round(255 * (1 - u)), 0], k * 4);
+        }
+        const index = [];
+        for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) {
+            const a = j * (W + 1) + i, b = a + 1, c = a + W + 1, d = c + 1;
+            index.push(a, b, d, a, d, c);
+        }
+        const built = new THREE.BufferGeometry();
+        const ib = new THREE.InterleavedBuffer(f32, 8), cb = new THREE.InterleavedBuffer(u8, 4);
+        built.setAttribute('position', new THREE.InterleavedBufferAttribute(ib, 3, 0));
+        built.setAttribute('normal', new THREE.InterleavedBufferAttribute(ib, 3, 3));
+        built.setAttribute('uv', new THREE.InterleavedBufferAttribute(ib, 2, 6));
+        built.setAttribute('color', new THREE.InterleavedBufferAttribute(cb, 3, 0, true));
+        built.setIndex(index);
+        built.rotateX(-0.5);
+        const pos = built.getAttribute('position');
+        for (let k = 0; k < pos.count; k++) pos.setY(k, pos.getY(k) * 1.1);
+        ib.needsUpdate = true;
+        let geom = built;
+        if (plain) {
+            // The same numbers, copied out of the interleaved buffers by hand.
+            const pick = (src, stride, off, size, scale = 1) => {
+                const out = new Float32Array(verts * size);
+                for (let k = 0; k < verts; k++) for (let c = 0; c < size; c++) out[k * size + c] = src[k * stride + off + c] / scale;
+                return out;
+            };
+            geom = new THREE.BufferGeometry();
+            geom.setAttribute('position', new THREE.BufferAttribute(pick(ib.array, 8, 0, 3), 3));
+            geom.setAttribute('normal', new THREE.BufferAttribute(pick(ib.array, 8, 3, 3), 3));
+            geom.setAttribute('uv', new THREE.BufferAttribute(pick(ib.array, 8, 6, 2), 2));
+            geom.setAttribute('color', new THREE.BufferAttribute(pick(cb.array, 4, 0, 3, 255), 3));
+            geom.setIndex(index);
+        }
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x181818);
+        const mesh = new THREE.Mesh(geom, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.5, side: THREE.DoubleSide }));
+        scene.add(mesh);
+        scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+        const dl = new THREE.DirectionalLight(0xffffff, 2.0); dl.position.set(1, 2, 3); scene.add(dl);
+        const cam = new THREE.PerspectiveCamera(45, 800/600, 0.1, 100);
+        cam.position.set(0, 0, 4.5); cam.lookAt(0, 0, 0);
+        const r = await THREE.WebGLRenderer.create(document.getElementById('c'));
+        r.setSize(800, 600);
+        r.render(scene, cam);
+        await new Promise(rs => requestAnimationFrame(() => rs()));
+        document.body.dataset.ready = 'true';
+    } catch (e) {
+        console.error(e);
+        errEl.style.display='block'; errEl.textContent = e?.stack || String(e);
+        document.body.dataset.ready = 'error';
+    }
+})();
+</script></body></html>

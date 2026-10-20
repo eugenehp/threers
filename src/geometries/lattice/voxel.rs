@@ -901,15 +901,13 @@ fn geometry_to_obj_text(g: &BufferGeometry) -> String {
     for c in pos.chunks_exact(3) {
         s.push_str(&format!("v {} {} {}\n", c[0], c[1], c[2]));
     }
-    if let Some(idx) = &g.index {
-        for t in idx.chunks_exact(3) {
-            s.push_str(&format!("f {} {} {}\n", t[0] + 1, t[1] + 1, t[2] + 1));
+    // A face per polygon the geometry remembers, triangles otherwise.
+    for face in g.faces() {
+        s.push('f');
+        for i in face {
+            s.push_str(&format!(" {}", i + 1));
         }
-    } else {
-        for k in 0..pos.len() / 9 {
-            let b = (k * 3 + 1) as u32;
-            s.push_str(&format!("f {} {} {}\n", b, b + 1, b + 2));
-        }
+        s.push('\n');
     }
     s
 }

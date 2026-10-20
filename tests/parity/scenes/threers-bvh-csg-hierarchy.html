@@ -50,7 +50,7 @@ const errEl = document.getElementById('err');
         cam.position.set(-3.8, 2.9, 1.25);
         cam.lookAt(0, 0, 0);
         cam.updateMatrixWorld(true);
-        const renderer = await THREE.WebGLRenderer.create(canvas);
+        const renderer = await THREE.WebGLRenderer.create(canvas, { antialias: true });
         renderer.setSize(800, 600);
         renderer.render(scene, cam);
         await new Promise(r => requestAnimationFrame(r));

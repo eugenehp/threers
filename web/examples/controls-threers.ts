@@ -22,7 +22,7 @@ function resizeCanvas(): { w: number; h: number } {
 await initThreers({ module_or_path: '/web/pkg/threers_bg.wasm' });
 
 let { w, h } = resizeCanvas();
-const renderer: WebGLRenderer = await THREE.WebGLRenderer.create(canvas);
+const renderer: WebGLRenderer = await THREE.WebGLRenderer.create(canvas, { antialias: true });
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x202030);

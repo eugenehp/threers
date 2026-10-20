@@ -1,0 +1,25 @@
+# How GitHub counts and diffs this repository.
+#
+# The language bar: 315 HTML pages and 45 JSON scene dumps under tests/parity
+# are the parity harness's reference fixtures, and web/deps holds third-party
+# decoders. Left in, they make a Rust project read as HTML.
+tests/parity/**             linguist-generated
+tests/openscad-corpus/**    linguist-generated
+web/deps/**                 linguist-vendored
+src/loaders/**/testdata/**  linguist-generated
+src/geometries/testdata/**  linguist-generated
+tests/animation/*.json      linguist-generated
+src/openscad/*.ttf          linguist-vendored
+papers/**                   linguist-documentation
+
+# Binary fixtures: never diffed or merged as text.
+*.usdc   binary
+*.usdz   binary
+*.glb    binary
+*.wasm   binary
+*.ttf    binary
+*.mp4    binary
+*.bin    binary
+
+# The shell scripts run on Linux CI and macOS; keep them LF on every checkout.
+*.sh     text eol=lf

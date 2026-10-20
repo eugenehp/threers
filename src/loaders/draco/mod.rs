@@ -18,6 +18,7 @@ mod buffer;
 pub mod corner_table;
 pub mod octahedron;
 mod rans;
+pub mod three;
 pub mod traversal;
 
 use buffer::Buffer;

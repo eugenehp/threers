@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><style>body{margin:0;background:#0c0c10}canvas{display:block}#err{position:absolute;top:0;left:0;padding:12px;color:#fdd;background:#500;font-family:monospace;white-space:pre-wrap}</style></head>
+<body><canvas id="c" width="800" height="600"></canvas>
+<div id="err" style="display:none"></div>
+<script type="module">
+import THREE, { initThreers } from '/web/threejs-shim.js';
+const errEl = document.getElementById('err');
+(async () => {
+    try {
+        await initThreers('/web/pkg/threers_bg.wasm');
+        const canvas = document.getElementById('c');
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x202028);
+        scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+        const key = new THREE.DirectionalLight(0xffffff, 2.0);
+        key.position.set(3, 4, 5);
+        scene.add(key);
+        // What the glass refracts: coloured boxes and a striped floor behind it.
+        const colours = [0xe04040, 0x40c040, 0x4060e0, 0xe0c040, 0xc040c0];
+        colours.forEach((c, i) => {
+            const b = new THREE.Mesh(new THREE.BoxGeometry(0.8, 2.2, 0.8), new THREE.MeshStandardMaterial({ color: c, roughness: 0.6 }));
+            b.position.set((i - 2) * 1.3, 0.3, -2.5);
+            scene.add(b);
+        });
+        for (let i = 0; i < 8; i++) {
+            const strip = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 8), new THREE.MeshStandardMaterial({ color: i % 2 ? 0xffffff : 0x303030, roughness: 0.8 }));
+            strip.rotation.x = -Math.PI / 2;
+            strip.position.set((i - 3.5) * 0.5 * 2, -1, -0.5);
+            strip.scale.x = 2;
+            scene.add(strip);
+        }
+        const glass = [
+            { color: 0xffffff, roughness: 0.0, transmission: 1, ior: 1.5, thickness: 1.0 },
+            { color: 0xffffff, roughness: 0.35, transmission: 1, ior: 1.5, thickness: 1.5, attenuationColor: 0xff8040, attenuationDistance: 1.2 },
+            { color: 0xd0e8ff, roughness: 0.1, transmission: 0.9, ior: 1.7, thickness: 0.8, dispersion: 3, side: THREE.DoubleSide },
+        ];
+        glass.forEach((m, i) => {
+            const s = new THREE.Mesh(new THREE.SphereGeometry(0.85, 64, 32), new THREE.MeshPhysicalMaterial(m));
+            s.position.x = (i - 1) * 2.1;
+            scene.add(s);
+        });
+        const cam = new THREE.PerspectiveCamera(45, 800/600, 0.1, 100);
+        cam.position.set(0, 0.6, 6); cam.lookAt(0, 0, 0);
+        const r = await THREE.WebGLRenderer.create(canvas);
+        r.setSize(800, 600);
+        r.render(scene, cam);
+        await new Promise(rs => requestAnimationFrame(() => rs()));
+        document.body.dataset.ready = 'true';
+    } catch (e) {
+        console.error(e);
+        errEl.style.display='block'; errEl.textContent = e?.stack || String(e);
+        document.body.dataset.ready = 'error';
+    }
+})();
+</script></body></html>

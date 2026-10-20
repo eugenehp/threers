@@ -85,7 +85,7 @@ try {
   }
   let { w, h } = resize();
 
-  const renderer = await THREE.WebGLRenderer.create(canvas);
+  const renderer = await THREE.WebGLRenderer.create(canvas, { antialias: true });
   renderer._w?.setMsaa?.(4); // hardware 4× MSAA on the opaque pass
   renderer.setSize(w, h);
   const camera = new THREE.PerspectiveCamera(42, w / h, 1, 6000);

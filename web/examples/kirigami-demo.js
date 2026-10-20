@@ -53,7 +53,7 @@ async function main() {
     statusEl.textContent = 'wasm ready';
 
     const canvas = document.getElementById('c');
-    const renderer = await THREE.WebGLRenderer.create(canvas);
+    const renderer = await THREE.WebGLRenderer.create(canvas, { antialias: true });
     renderer.setSize(canvas.width, canvas.height, false);
 
     const scene = new THREE.Scene();

@@ -1,4 +1,4 @@
-//! Mirrors `web/csg/core/TriangleSplitter.js` precisely.
+//! three-bvh-csg 0.0.16's `TriangleSplitter`.
 
 use super::js_topology::{
     is_tri_degenerate, JsLine3, JsPlane, JsTriangle, JsVec3, SplitBary, TOPO_EPSILON,
@@ -49,7 +49,8 @@ const DEGENERATE_EPSILON: f64 = 1e-14;
 /// stay far below this; it only ever trips on runaway degenerate splits.
 const MAX_SPLIT_FRAGMENTS: usize = 50_000;
 
-/// Mirrors `web/csg/core/TriangleSplitter.js`.
+/// three-bvh-csg's `TriangleSplitter`: one triangle cut by the planes of the
+/// triangles crossing it.
 #[derive(Debug)]
 pub struct TriangleSplitter {
     triangle_pool: TrianglePool,
@@ -131,7 +132,7 @@ impl TriangleSplitter {
             let tri_idx = self.triangles[i];
             let tri = self.triangle_pool.pool[tri_idx];
 
-            if !clipping_triangle.intersects_triangle(tri, true) {
+            if !clipping_triangle.intersects_triangle_js(tri) {
                 i += 1;
                 continue;
             }
@@ -307,26 +308,6 @@ impl TriangleSplitter {
         self.triangle_pool.pool[self.triangles[i]]
     }
 
-    /// Active clipped triangles (f64 pool, mirrors JS `splitter.triangles`).
-    #[cfg(test)]
-    pub fn clipped_js_triangles(&self) -> Vec<JsTriangle> {
-        self.triangles
-            .iter()
-            .map(|&i| self.triangle_pool.pool[i])
-            .collect()
-    }
-
-    #[cfg(test)]
-    pub fn clipped_with_bary(
-        &self,
-        tri_a: JsTriangle,
-    ) -> impl Iterator<Item = (JsTriangle, SplitBary)> + '_ {
-        self.triangles.iter().map(move |&i| {
-            let clipped = self.triangle_pool.pool[i];
-            (clipped, Self::barycoords_in_tri(tri_a, clipped))
-        })
-    }
-
     pub(crate) fn barycoords_in_tri(tri_a: JsTriangle, clipped: JsTriangle) -> SplitBary {
         (
             tri_a.get_barycoord(clipped.a),
@@ -354,7 +335,7 @@ mod tests {
             Vector3::new(0.5, 2.0, 0.0),
             Vector3::new(0.5, 0.0, 1.0),
         ));
-        assert!(clip.intersects_triangle(tri, true));
+        assert!(clip.intersects_triangle_js(tri));
     }
 
     #[test]

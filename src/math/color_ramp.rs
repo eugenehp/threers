@@ -20,18 +20,35 @@
 //! let mid = two.at(0.5);
 //! ```
 
-use crate::math::Color;
+use super::color_schemes::{CATEGORICAL, CYCLIC, DIVERGING, EXTRA_SEQUENTIAL, SEQUENTIAL};
+use crate::math::{Color, ColorSpace};
 
-/// How a ramp blends between its stops.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum RampSpace {
-    /// Through OkLab: perceptually even, and the midpoint of two colours is the
-    /// one a person would name. The default, and what a gradient wants.
-    #[default]
-    Oklab,
-    /// Through linear light: physically right for adding up light, and wrong
-    /// for a gradient, because the midpoint of two saturated colours is grey.
-    LinearRgb,
+/// How a ramp blends between its stops: any [`ColorSpace`]. OkLab by
+/// default — perceptually even, the midpoint of two colours the one a person
+/// would name; linear light is right for a ramp standing in for light; sRGB
+/// is what CSS gradients and d3's default do; OkLCh and LCh keep a ramp
+/// between saturated colours saturated.
+pub type RampSpace = ColorSpace;
+
+/// What a named scheme is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SchemeKind {
+    /// Low to high: one direction of more.
+    Sequential,
+    /// Two directions away from a meaningful middle.
+    Diverging,
+    /// Wraps round: its ends are the same colour, for angles and phases.
+    Cyclic,
+    /// Distinct colours for categories — a [`Palette`], not a ramp.
+    Categorical,
+}
+
+/// The lookup form of a scheme's name: lower case, letters and digits only,
+/// and without d3's `interpolate` or `scheme` prefix — so `"RdYlBu"`,
+/// `"rd_yl_bu"` and `"interpolateRdYlBu"` are the same scheme.
+fn scheme_key(name: &str) -> String {
+    let k: String = name.chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>().to_ascii_lowercase();
+    k.strip_prefix("interpolate").or_else(|| k.strip_prefix("scheme")).unwrap_or(&k).to_string()
 }
 
 /// A gradient: colours at positions, blended between.
@@ -75,12 +92,96 @@ impl ColorRamp {
         self
     }
 
+    /// Blend in `space` (see [`RampSpace`]).
+    pub fn in_space(mut self, space: ColorSpace) -> Self {
+        self.space = space;
+        self
+    }
+
+    /// The space it blends in.
+    pub fn space(&self) -> ColorSpace {
+        self.space
+    }
+
+    /// The same ramp end to end: `at(t)` becomes `at(1 − t)`.
+    pub fn reversed(mut self) -> Self {
+        for s in &mut self.stops {
+            s.0 = 1.0 - s.0;
+        }
+        self.stops.reverse();
+        self
+    }
+
+    /// The part between `a` and `b`, stretched over `0..1` — a sequential
+    /// scheme without its palest end on a white page, say.
+    pub fn slice(&self, a: f32, b: f32) -> Self {
+        let n = self.stops.len().max(2) * 2;
+        Self {
+            stops: (0..=n)
+                .map(|i| {
+                    let t = i as f32 / n as f32;
+                    (t, self.at(a + (b - a) * t))
+                })
+                .collect(),
+            space: self.space,
+        }
+    }
+
+    /// A named scheme: one of the named constructors here, or any of
+    /// d3-scale-chromatic's sequential, diverging and cyclic schemes —
+    /// `"blues"`, `"yl_gn_bu"`, `"RdBu"`, `"interpolateSpectral"`,
+    /// `"cividis"`, `"twilight"` (see [`scheme_names`](Self::scheme_names)).
+    /// Case, separators and d3's `interpolate` prefix do not matter.
+    pub fn named(name: &str) -> Option<Self> {
+        let key = scheme_key(name);
+        match key.as_str() {
+            "viridis" => return Some(Self::viridis()),
+            "magma" => return Some(Self::magma()),
+            "inferno" => return Some(Self::inferno()),
+            "plasma" => return Some(Self::plasma()),
+            "turbo" => return Some(Self::turbo()),
+            "coolwarm" => return Some(Self::cool_warm()),
+            _ => {}
+        }
+        SEQUENTIAL
+            .iter()
+            .chain(EXTRA_SEQUENTIAL)
+            .chain(DIVERGING)
+            .chain(CYCLIC)
+            .find(|(n, _)| scheme_key(n) == key)
+            .map(|(_, colors)| Self::from_hex(colors))
+    }
+
+    /// Every scheme [`named`](Self::named) knows, with its kind.
+    pub fn scheme_names() -> Vec<(&'static str, SchemeKind)> {
+        let mut v: Vec<(&'static str, SchemeKind)> =
+            ["viridis", "magma", "inferno", "plasma", "turbo"].iter().map(|n| (*n, SchemeKind::Sequential)).collect();
+        v.push(("cool_warm", SchemeKind::Diverging));
+        v.extend(SEQUENTIAL.iter().chain(EXTRA_SEQUENTIAL).map(|(n, _)| (*n, SchemeKind::Sequential)));
+        v.extend(DIVERGING.iter().map(|(n, _)| (*n, SchemeKind::Diverging)));
+        v.extend(CYCLIC.iter().map(|(n, _)| (*n, SchemeKind::Cyclic)));
+        v.extend(CATEGORICAL.iter().map(|(n, _)| (*n, SchemeKind::Categorical)));
+        v
+    }
+
+    /// Cividis: viridis reworked so it reads the same to the commonest
+    /// colour-vision deficiency, blue to yellow.
+    pub fn cividis() -> Self {
+        Self::named("cividis").expect("built in")
+    }
+
+    /// Twilight: cyclic, for angles, phases and times of day — its ends meet.
+    pub fn twilight() -> Self {
+        Self::named("twilight").expect("built in")
+    }
+
     /// The colour at `t`, clamped to the ends outside `0..1`.
     pub fn at(&self, t: f32) -> Color {
         match self.stops.len() {
             0 => Color::BLACK,
             1 => self.stops[0].1,
             _ => {
+                let t = if t.is_nan() { self.stops[0].0 } else { t };
                 let t = t.clamp(self.stops[0].0, self.stops[self.stops.len() - 1].0);
                 // Linear scan: a palette has a handful of stops, and a binary
                 // search over nine entries is slower than reading them.
@@ -96,10 +197,7 @@ impl ColorRamp {
                 } else {
                     (t - p0) / span
                 };
-                match self.space {
-                    RampSpace::Oklab => c0.lerp_oklab(c1, local),
-                    RampSpace::LinearRgb => c0.lerp(c1, local),
-                }
+                c0.mix(c1, local, self.space)
             }
         }
     }
@@ -181,6 +279,65 @@ impl ColorRamp {
         Self::from_hex(&[
             0x3b4cc0, 0x6889ee, 0x9abbff, 0xc9d7f0, 0xedd1c2, 0xf7a889, 0xe26952, 0xb40426,
         ])
+    }
+}
+
+/// Distinct colours for categories: d3's `scaleOrdinal` with a scheme.
+/// Not interpolated — category 3 is the fourth colour, and past the end the
+/// colours repeat.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Palette {
+    colors: Vec<Color>,
+}
+
+impl Palette {
+    pub fn new(colors: Vec<Color>) -> Self {
+        Self { colors }
+    }
+
+    pub fn from_hex(colors: &[u32]) -> Self {
+        Self::new(colors.iter().map(|&c| Color::from_hex(c)).collect())
+    }
+
+    /// A named qualitative scheme: `"category10"` (also `"tableau10"`),
+    /// `"tableau20"`, `"set1"`, `"set2"`, `"set3"`, `"pastel1"`, `"pastel2"`,
+    /// `"paired"`, `"dark2"`, `"accent"`. Or `n` evenly spaced colours of a
+    /// named ramp, with [`from_ramp`](Self::from_ramp).
+    pub fn named(name: &str) -> Option<Self> {
+        let key = scheme_key(name);
+        CATEGORICAL.iter().find(|(n, _)| scheme_key(n) == key).map(|(_, c)| Self::from_hex(c))
+    }
+
+    /// d3's `schemeCategory10` (Tableau 10): the default for categories.
+    pub fn category10() -> Self {
+        Self::named("category10").expect("built in")
+    }
+
+    /// `n` colours evenly spaced along a ramp — a discrete sequential or
+    /// diverging scheme, as ColorBrewer's `n`-class ones are.
+    pub fn from_ramp(ramp: &ColorRamp, n: usize) -> Self {
+        Self::new(ramp.sample(n))
+    }
+
+    /// Category `i`'s colour, repeating past the end.
+    pub fn at(&self, i: usize) -> Color {
+        if self.colors.is_empty() {
+            Color::BLACK
+        } else {
+            self.colors[i % self.colors.len()]
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.colors.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.colors.is_empty()
+    }
+
+    pub fn colors(&self) -> &[Color] {
+        &self.colors
     }
 }
 
@@ -327,5 +484,38 @@ mod tests {
         let one = ColorRamp::new(vec![(0.3, Color::RED)]);
         assert_eq!(one.at(0.0), Color::RED);
         assert_eq!(one.at(1.0), Color::RED);
+    }
+
+    #[test]
+    fn named_schemes_are_found_however_they_are_spelled() {
+        for name in ["blues", "Blues", "interpolateBlues", "yl_gn_bu", "YlGnBu", "RdBu", "spectral", "cividis", "twilight", "viridis"] {
+            assert!(ColorRamp::named(name).is_some(), "{name}");
+        }
+        assert!(ColorRamp::named("nope").is_none());
+        // ColorBrewer's own swatches at the ends.
+        let blues = ColorRamp::named("blues").unwrap();
+        assert_eq!(blues.at(0.0).to_hex(), 0xf7fbff);
+        assert_eq!(blues.at(1.0).to_hex(), 0x08306b);
+        let rdbu = ColorRamp::named("RdBu").unwrap();
+        assert_eq!(rdbu.at(0.5).to_hex(), 0xf7f7f7, "a diverging scheme is neutral in the middle");
+        // Twilight is cyclic: its ends nearly meet.
+        let tw = ColorRamp::twilight();
+        let (a, b) = (tw.at(0.0).to_oklab(), tw.at(1.0).to_oklab());
+        assert!((a[0] - b[0]).abs() < 0.03, "{a:?} {b:?}");
+        assert!(ColorRamp::scheme_names().len() > 40);
+    }
+
+    #[test]
+    fn palettes_cycle_and_ramps_reverse_and_slice() {
+        let p = Palette::category10();
+        assert_eq!(p.len(), 10);
+        assert_eq!(p.at(0).to_hex(), 0x1f77b4);
+        assert_eq!(p.at(10), p.at(0));
+        assert_eq!(Palette::named("Set1").unwrap().at(0).to_hex(), 0xe41a1c);
+        let v = ColorRamp::viridis();
+        assert_eq!(v.clone().reversed().at(0.0).to_hex(), v.at(1.0).to_hex());
+        let s = v.slice(0.25, 0.75);
+        assert_eq!(s.at(0.0).to_hex(), v.at(0.25).to_hex());
+        assert_eq!(s.at(1.0).to_hex(), v.at(0.75).to_hex());
     }
 }

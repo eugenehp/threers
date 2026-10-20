@@ -14,7 +14,7 @@ import THREE, { initThreers } from 'threers';
 export async function runCubeDemo(canvas) {
   await initThreers();
 
-  const renderer = await THREE.WebGLRenderer.create(canvas);
+  const renderer = await THREE.WebGLRenderer.create(canvas, { antialias: true });
   renderer.setPixelRatio(Math.min(globalThis.devicePixelRatio ?? 1, 2));
 
   const scene = new THREE.Scene();

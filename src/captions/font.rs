@@ -256,6 +256,30 @@ impl CaptionFont {
         units as f32 * size.max(1.0) / font.units_per_em.max(1) as f32
     }
 
+    /// Whether this face has its own glyph for `c` rather than a stand-in —
+    /// what a chain of fallback faces asks of each in turn.
+    pub fn has_glyph(&self, c: char) -> bool {
+        match &self.face {
+            // Anything it cannot draw comes back as the missing-glyph box.
+            Face::Builtin => builtin_rows(c).is_some_and(|rows| rows != TOFU),
+            Face::Ttf(font) => font.cmap.contains_key(&(c as u32)),
+        }
+    }
+
+    /// `c`'s outline at `size` pixels per em, flattened, in pixels with y
+    /// down and the pen at the origin: per contour, per curve, the points from
+    /// its start to its end. What a multi-channel distance field needs to find
+    /// corners. `None` for the bitmap face, which has no outline.
+    pub fn outline(&self, c: char, size: f32) -> Option<Vec<Vec<Vec<[f32; 2]>>>> {
+        let Face::Ttf(font) = &self.face else {
+            return None;
+        };
+        let gid = font.cmap.get(&(c as u32)).copied().unwrap_or(0);
+        let glyph = font.glyphs.get(gid as usize)?;
+        let scale = size.max(1.0) / font.units_per_em.max(1) as f32;
+        Some(flatten_curves(glyph, scale))
+    }
+
     /// Pen advance for `c` at `size` pixels, without keeping the raster.
     pub fn advance(&mut self, c: char, size: f32) -> f32 {
         self.glyph(c, size).advance
@@ -800,6 +824,43 @@ fn flatten_contours(
     contours
 }
 
+/// [`flatten_contours`] keeping each curve's points apart, so the joints
+/// between curves — where a glyph's corners are — stay visible.
+fn flatten_curves(glyph: &crate::loaders::TtfGlyph, scale: f32) -> Vec<Vec<Vec<[f32; 2]>>> {
+    let mut contours: Vec<Vec<Vec<[f32; 2]>>> = Vec::new();
+    let mut current: Vec<Vec<[f32; 2]>> = Vec::new();
+    let mut last: Option<[f32; 2]> = None;
+    let to_device = |p: crate::math::Vector2| [p.x * scale, -p.y * scale];
+    for curve in glyph.shape.outline.curve_path.curves.iter() {
+        let start = to_device(curve.get_point(0.0));
+        let end = to_device(curve.get_point(1.0));
+        let breaks = match last {
+            Some(prev) => (prev[0] - start[0]).abs() > 1e-4 || (prev[1] - start[1]).abs() > 1e-4,
+            None => true,
+        };
+        if breaks && !current.is_empty() {
+            contours.push(std::mem::take(&mut current));
+        }
+        let steps = if is_straight(curve.as_ref()) {
+            1
+        } else {
+            let span = (end[0] - start[0]).abs().max((end[1] - start[1]).abs());
+            (span.sqrt() * 2.0).ceil().clamp(3.0, 24.0) as usize
+        };
+        let points: Vec<[f32; 2]> = (0..=steps)
+            .map(|i| to_device(curve.get_point(i as f32 / steps as f32)))
+            .collect();
+        if (end[0] - start[0]).abs() + (end[1] - start[1]).abs() > 1e-6 || steps > 1 {
+            current.push(points);
+        }
+        last = Some(end);
+    }
+    if !current.is_empty() {
+        contours.push(current);
+    }
+    contours
+}
+
 /// Whether the curve's midpoint lies on the chord between its endpoints — true
 /// for line segments, false for the quadratics TrueType uses. Compared in font
 /// units, where a 1e-3 tolerance is far below one pixel.
@@ -861,7 +922,10 @@ mod tests {
         );
         // And the adjustment is the font's, in pixels at this size.
         let expected = font.kerning('A', 'V', size);
-        assert!(expected < 0.0, "AV kerning should be negative, got {expected}");
+        assert!(
+            expected < 0.0,
+            "AV kerning should be negative, got {expected}"
+        );
         assert!(
             ((together - apart) - expected).abs() < 1e-3,
             "measure applied {} where the pair says {expected}",
@@ -904,7 +968,10 @@ mod tests {
     fn builtin_coverage_is_binary_when_cells_align() {
         let glyph = raster_builtin('H', BUILTIN_CELL as f32 * 3.0, 0.0);
         for &v in &glyph.coverage {
-            assert!(v == 0 || v == 255, "partial coverage {v} at an integer scale");
+            assert!(
+                v == 0 || v == 255,
+                "partial coverage {v} at an integer scale"
+            );
         }
     }
 
@@ -932,7 +999,10 @@ mod tests {
                 differed = true;
             }
         }
-        assert!(differed, "no phase changed the raster, so phases do nothing");
+        assert!(
+            differed,
+            "no phase changed the raster, so phases do nothing"
+        );
     }
 
     /// Each phase moves the glyph by its own fraction of a pixel.
@@ -985,7 +1055,10 @@ mod tests {
         let b = font.glyph_at('H', 13.7, 2).coverage.clone();
         let a_again = font.glyph_at('H', 13.7, 0).coverage.clone();
         assert_ne!(a, b, "two phases gave the same mask");
-        assert_eq!(a, a_again, "the cache returned something else the second time");
+        assert_eq!(
+            a, a_again,
+            "the cache returned something else the second time"
+        );
     }
 
     use super::*;

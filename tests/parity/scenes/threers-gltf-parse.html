@@ -33,10 +33,11 @@ const errEl = document.getElementById('err');
             buffers: [{ uri: dataURI, byteLength: 48 }],
         };
         const loader = new THREE.GLTFLoader();
-        // Replicate the GLTF buffer resolution that .load() does, but pass the buffers directly.
-        const buffers = [bin.buffer];
-        const data = loader.parse(gltf, buffers);
+        const data = await new Promise((res, rej) => loader.parse(JSON.stringify(gltf), '', res, rej));
         if (!data.scene) throw new Error('No scene returned');
+        const meshes = [];
+        data.scene.traverse(o => { if (o.isMesh) meshes.push(o); });
+        if (meshes.length === 0) throw new Error('No meshes in parsed scene');
 
         const scene = data.scene;
         scene.background = new THREE.Color(0x202028);

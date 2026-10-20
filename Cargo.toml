@@ -11,6 +11,7 @@ members = [
     "crates/threers-js",
     "crates/threers-py",
     "crates/threers-node",
+    "crates/threers-fluid-ios",
 ]
 # `crates/threers-continuum` and `crates/threers-mechanism-tour` build as
 # libraries but their tests and examples still call an older shape of their own
@@ -114,6 +115,9 @@ strip = true
 default = ["captions"]
 # Subtitles — SRT + WebVTT, on-screen and burned in.
 captions = []
+# A retained UI: CSS-subset styles, flexbox layout, painting and hit-testing
+# (implies captions, for text).
+ui = ["captions"]
 # Accelerated raycast / shapecast.
 mesh-bvh = []
 # Path tracer: global illumination, area lights, refraction, DoF; CPU + wgpu-compute.
@@ -193,6 +197,7 @@ full = [
     "gi",
     "planet",
     "fluid",
+    "usd",
     "rlx",
     "rlx-geo",
     "assembly-check",
@@ -202,7 +207,7 @@ full = [
 ]
 # Browser / wasm kitchen sink — no native-only flags (video, metal, async, …).
 # Used by `VARIANT=full web/build.sh` and the npm `threers/full` package entry.
-wasm-full = ["captions", "openscad", "native-codec", "nurbs", "planet", "raytrace", "fluid"]
+wasm-full = ["captions", "openscad", "native-codec", "nurbs", "planet", "raytrace", "fluid", "usd"]
 
 [dependencies]
 wgpu = "30"
@@ -216,8 +221,12 @@ tokio = { version = "1", optional = true, default-features = false, features = [
 # backend was wgpu 30 while this renderer was wgpu 0.20, and two majors in one
 # wasm binary make wasm-bindgen reject the result over duplicate WebGPU enums.
 # Both are wgpu 30 now, and `wasm-bindgen` accepts the build.
-rlx = { version = "0.2.14", optional = true, default-features = false, features = ["cpu", "tensor", "gpu"] }
-rlx-geo = { version = "0.2.14", optional = true }
+# 0.2.17, the newest rlx on crates.io that builds: the published 0.2.18
+# `rlx-runtime` imports `rlx_ir::NumberFormat`, which the published 0.2.18
+# `rlx-ir` does not have. Cargo.lock pins the whole rlx family at 0.2.17
+# (`^0.2.17` alone would float `rlx-runtime` up to the broken 0.2.18).
+rlx = { version = "0.2.17", optional = true, default-features = false, features = ["cpu", "tensor", "gpu"] }
+rlx-geo = { version = "0.2.17", optional = true }
 manifold-rust = { version = "0.13", optional = true }
 
 # Native-only deps (winit + env_logger + pollster only make sense outside wasm).
@@ -249,6 +258,7 @@ features = [
     "PointerEvent",
     "MouseEvent",
     "KeyboardEvent",
+    "WheelEvent",
 ]
 
 [[example]]
@@ -262,6 +272,20 @@ required-features = ["fluid"]
 [[example]]
 name = "fluid_bench"
 required-features = ["fluid"]
+
+[[example]]
+name = "fluid3d"
+required-features = ["fluid"]
+
+[[example]]
+name = "fluid3d_bench"
+required-features = ["fluid"]
+# `parallel` is not required — the CPU solver falls back to one core without
+# it, and the bench reports both columns either way.
+
+[[example]]
+name = "metal_fluid"
+required-features = ["metal", "fluid"]
 
 [[example]]
 name = "fluid"
@@ -279,6 +303,14 @@ required-features = ["captions"]
 
 [[example]]
 name = "retrofuturism"
+required-features = ["captions"]
+
+[[example]]
+name = "marks_map"
+required-features = ["captions"]
+
+[[example]]
+name = "map_demo"
 required-features = ["captions"]
 
 [[example]]
@@ -372,11 +404,6 @@ path = "examples/bvh_csg_hierarchy.rs"
 required-features = ["bvh-csg"]
 
 [[example]]
-name = "bvh_csg_steps"
-path = "examples/bvh_csg_steps.rs"
-required-features = ["bvh-csg"]
-
-[[example]]
 name = "openscad_bracket"
 path = "examples/openscad_bracket.rs"
 required-features = ["openscad"]
@@ -451,6 +478,10 @@ required-features = ["raytrace"]
 
 [[example]]
 name = "path_trace"
+required-features = ["raytrace"]
+
+[[example]]
+name = "glass_modes"
 required-features = ["raytrace"]
 
 [[example]]
@@ -603,6 +634,10 @@ required-features = ["native-codec"]
 # takes the whole browser test suite down with it.
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 criterion = "0.5"
+# wgpu's own naga, with the GLSL writer WebGL2 goes through, so
+# `tests/shader_validation.rs` can translate every shader variant as the
+# browser will — ANGLE rejects what naga's WGSL validator accepts.
+naga = { version = "30.0.0", features = ["wgsl-in", "glsl-out"] }
 
 # What the CPU side of a frame costs. Everything in it runs without an adapter,
 # so it is a number CI can watch rather than one somebody remembers to take.
@@ -632,6 +667,10 @@ features = ["Window", "Document", "Element", "HtmlCanvasElement"]
 name = "usd_wasm"
 required-features = ["usd"]
 
+[[test]]
+name = "csg_upstream"
+required-features = ["bvh-csg"]
+
 # Targets whose own `#![cfg]` needs more than the default features. Without
 # these cargo builds each as an empty test binary that reports zero tests.
 [[test]]
@@ -640,6 +679,10 @@ required-features = ["metal"]
 
 [[test]]
 name = "metal_backend"
+required-features = ["metal"]
+
+[[test]]
+name = "metal_quad_view"
 required-features = ["metal"]
 
 [[test]]
@@ -734,6 +777,10 @@ name = "h264_ffmpeg"
 required-features = ["native-codec"]
 
 [[test]]
+name = "h264_inter"
+required-features = ["native-codec", "video"]
+
+[[test]]
 name = "hevc_alpha"
 required-features = ["native-codec"]
 
@@ -752,6 +799,10 @@ required-features = ["native-codec"]
 [[test]]
 name = "hevc_residual_conformance"
 required-features = ["native-codec"]
+
+[[test]]
+name = "native_decode"
+required-features = ["native-codec", "video"]
 
 [[test]]
 name = "mesh_bvh_raycast"
@@ -788,3 +839,21 @@ required-features = ["openscad"]
 [[test]]
 name = "webm"
 required-features = ["native-codec"]
+
+# Opt-out cfgs for consumers that embed the renderer in their own wasm crate
+# (set through RUSTFLAGS, e.g. `--cfg threers_no_js_bindings`); declared here so
+# rustc's check-cfg knows them. See src/lib.rs and renderer::upload_ltc.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(threers_no_js_bindings)', 'cfg(threers_no_rect_area_light)'] }
+
+[[test]]
+name = "glass_bounces"
+required-features = ["raytrace"]
+
+[[test]]
+name = "oit_parity"
+required-features = ["metal"]
+
+[[test]]
+name = "metal_ssao_msaa"
+required-features = ["metal"]

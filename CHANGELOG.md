@@ -5,7 +5,9 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.0.6] — 2026-10-03
+## [Unreleased]
+
+## [0.0.6] — 2026-10-19
 
 Universal Scene Description, read and written in all three of its forms and
 checked against Apple's own tools rather than against itself; **Draco** and the
@@ -13,9 +15,1419 @@ rest of the glTF compression and interchange formats, each verified against the
 reference decoder that produced the files; a **WebGL2 backend** so the browser
 build runs where WebGPU is not available; an SVG renderer that draws the scene
 graph as vectors; sharper text; a converging accumulation mode for offline
-frames; and the fixes that writing all of it turned up.
+frames; **marks**, the data layers a kepler.gl- or Mapbox-style application is
+built from (points, paths, polygons, labels, heatmaps and map tiles, with
+`f64` positions, GPU filtering and picking); reversed depth for planet-scale
+views; native **H.264 and HEVC decoding** in pure Rust, behind one `Decoder`
+that uses VideoToolbox where the build has it and the software decoder
+everywhere else; a **retained UI** laid out by CSS rules, with form controls
+and a code editor; and the fixes that writing all of it turned up.
 
 ### Added
+
+- **More of the crate reachable from downstream code.**
+  - The prelude has `ShadowType` and `TransparencyMode` beside the lights and
+    materials that take them, and `ColorSpace`, `ColorScale`, `ScaleKind` and
+    `Palette` beside `ColorRamp`; a new `prelude::video` gathers the encoders,
+    MP4 and (with `video`) the decoders. The crate root exports `ShadowType`
+    and the colour types too, as the prelude's docs promise for everything.
+  - `MeshBvh::node(i)` returns a `BvhNodeView` (internal with two children,
+    or a leaf with its triangle range), so a BVH can be walked by hand for
+    queries `shapecast` does not cover.
+  - `curves::interpolations::{catmull_rom, quadratic_bezier, cubic_bezier}`:
+    three.js's `Interpolations`, in `f64`.
+  - `exact_csg::is_watertight(&geometry)`: whether a mesh is a closed,
+    consistently wound solid.
+  - On docs.rs every feature-gated item is badged with the features it needs.
+  `tests/public_api.rs` uses each through the crate's public paths.
+- **A static site for any CDN** (`node web/scripts/stage-site.mjs`, see
+  `docs/deploying.md`): stages `web/` for Vercel, GitHub Pages, Netlify or
+  Cloudflare Pages with content-hashed wasm (cacheable for a year, every
+  reference rewritten), `modulepreload`/`preload` hints so the wasm download
+  starts with the HTML (one request in Chrome, started by the preload),
+  minified JavaScript with source maps (the shim 0.70 → 0.37 MB, 0.09 MB
+  brotli), `vercel.json` and `_headers` with `application/wasm` and the
+  caching rules, and a 25 MB per-file check.
+- **Native H.264 and HEVC decoding** (`threers::codec::decode`, features
+  `native-codec` and `video`): from-scratch, pure-Rust decoders that also
+  build for `wasm32`. An app that only encodes leaves `video` off and does not
+  compile them; the parameter-set parsers the MP4 muxer needs stay available. `NativeDecoder` has the same interface as
+  `videotoolbox_decode::VideoToolboxDecoder` (open from an `mp4_demux`
+  track, `push` samples in decode order, `take` BGRA by presentation time),
+  plus `take_frame` for the decoded planes and `decode_annexb` for raw
+  elementary streams. H.264 covers progressive Baseline/Main/High (CAVLC,
+  CABAC, B-frames with spatial/temporal direct, weighted prediction, 8×8
+  transform, scaling matrices, long-term references, monochrome, high bit
+  depth). HEVC covers Main/Main 10/Main Still Picture and 4:2:0 Main 12,
+  including tiles, WPP, dependent slices, PCM, AMP, TMVP, SAO and scaling
+  lists. Output is bit-exact against ffmpeg (H.264), x265's reconstruction
+  (HEVC), the crate's own encoders, and VideoToolbox-encoded streams;
+  unsupported tools (interlacing, 4:2:2/4:4:4, FMO) are refused with an
+  error naming them.
+- `codec::decode::Decoder`, the best decoder this build has: VideoToolbox
+  on macOS with the `videotoolbox` feature, falling back to `NativeDecoder`
+  when VideoToolbox refuses a stream, and native everywhere else. It has the
+  same `push`/`take` interface. `Decoder::with_backend` picks one backend
+  explicitly, and `Backend::preferred()` / `Backend::available()` report what
+  the build offers. `NativeDecoder::from_config` and `Decoder::from_config`
+  open a decoder from a raw `avcC`/`hvcC` without building a `VideoTrack`.
+- `h264::CompressedEncoder::avcc()`, `encode_sample()` and
+  `encode_sample_at()`, which return the length-prefixed MP4 sample directly.
+- `Yuv420Frame::from_bgra` for BGRA input, which is what decoders return.
+  `Yuv420Frame` is also re-exported as `codec::h264::Yuv420Frame`.
+- **A retained UI** (`threers::ui`, feature `ui`), for interfaces specified
+  in CSS terms and drawn the same way natively and in the browser. A `Ui` is
+  a tree of boxes, text runs and SVG paths, styled with a subset of CSS
+  (`display: block | flex | none`, flex direction/grow/shrink/basis, align
+  and justify, gap, width/height with min and max, margin, padding and
+  border in content-box or border-box sizing, static/relative/absolute
+  positioning, colour, font, opacity, clipping). `Ui::layout` follows the
+  CSS flexbox algorithm in its common path, including freezing of items that
+  reach their limits and an `auto` minimum size of the content. `Ui::paint`
+  draws through a `Painter`. `OverlayPainter` targets `Overlay`, and a
+  browser app can implement the trait on its 2D canvas so that text
+  rasterizes exactly as the page's own would. `Ui::hit_test` maps a pointer
+  position to a node, counting the pointer's pixel as Chrome does (a box
+  starting at 60.95 is under a pointer at 60). A box with a uniform border, a
+  `border-radius` and a background paints its border rounded too (the border
+  colour over the rounded box, the background inset by the border).
+- **Form controls** (`threers::ui::controls`, feature `ui`), built as
+  ordinary subtrees with Chrome's default look and sizes: `checkbox`,
+  `radio`, `button`, `select` and its `select_popup`, `range` (with
+  `range_fraction` for input), `color_well`, a text input's `text_contents`
+  (selection, caret, placeholder) and `focus_ring`, `code_view`, a full
+  `code_editor` (gutters, fold markers, selection, caret, scrolling;
+  `code_column` maps a pointer to a column), and `overlay` / `overlay_top`
+  (a dimmed page and a box centred on it, or near its top).
+- **Multi-line editing** (`threers::ui::TextArea`): lines, a selection, and
+  CodeMirror's default keys (Enter keeps the indentation, Up/Down keep a
+  goal column, Home/End per line, Ctrl/⌘ for the document).
+- **Code folding** (`threers::ui::code`): `brace_folds` as CodeMirror's
+  `brace-fold` finds ranges, `Folds` (`fold_all`, `unfold`, `toggle`) and
+  `shown_lines`.
+- **`Style::subpixel`**: a subtree painted at fractional positions (as a
+  CSS `transform` places it); painters may implement
+  `Painter::set_subpixel`.
+- **`controls::color_picker`**: a colour picker popup (saturation and value
+  over the hue, a hue strip, a swatch and the hex value) for where the
+  system has none, with `color_picker_field`/`color_picker_hue` for input
+  and `hsv_to_rgb`/`rgb_to_hsv`. `controls::range` now places its thumb at
+  whole pixels and insets its track 1px, as Chrome does.
+- **`border-top`, `border-right`, `border-bottom`, `border-left`** in
+  `style!` and `css::apply`: one edge's width (and the box's border colour).
+- **`Ui::reparent`**: moves a node, with what is inside it, to the end of
+  another parent's children (the DOM's `appendChild` of an attached node).
+- **`style!` and `ui!` macros** (feature `ui`). `style! { display: flex;
+  margin: 0 0 3px; border: 1px solid #ccc; font-family: sans-serif; }` builds
+  a `Style` from CSS declarations, including shorthands (`flex`, `border`,
+  one to four `margin`/`padding` values), colours (`#rgb`, `#rrggbb`,
+  `rgba(…)`, named), `%` and `auto`. `{expr}` passes a computed Rust value,
+  and `..base;` starts from another style. `ui!(tree, parent, div(…) { "text"
+  div(…) {} })` builds nested boxes and text. CSS mistakes panic with the
+  declaration. `ui::css` exposes the parser.
+- More of CSS in the UI:
+  - `border-radius` (elliptical for percentages);
+  - `text-decoration: line-through`;
+  - a stepped or smooth `linear-gradient` background, optionally with
+    `filter: blur()`.
+- `Painter` gains hooks for rounded rectangles and gradients, each with a
+  plain fallback.
+- `OverlayPainter::with_scale` paints a UI laid out in logical pixels onto a
+  HiDPI overlay.
+- `circle_path`/`parse_circle` carry SVG `<circle>`s through path data, so
+  that painters can stroke them as ovals, as browsers do (a circle drawn as
+  arcs rasterizes differently).
+
+- More of the UI toolkit:
+  - scrolling boxes (`overflow: auto`, `scroll_top`; `Ui::scroll_extent`,
+    `Ui::scroll_container`);
+  - `background-clip: content-box`;
+  - clipping to rounded boxes (`Painter::push_clip_rounded`);
+  - `Ui::move_child` (CSS `order`) and `Ui::offset`;
+  - more named colours in `style!`.
+- `ui::TextField`: a single-line field's editing (selection, Shift-extended
+  caret moves, Home/End, select-all, filtered typing, delete), reporting
+  Enter, Escape and Tab.
+- **Lighting options.**
+  - `ShadowSettings::radius` (three.js's `LightShadow.radius`) sets how soft
+    shadows are, for directional, spot and point lights. A
+    `ShadowSettings { .. }` literal that lists every field needs `radius: 1.0`
+    (or `..Default::default()`).
+  - A frame carries eight lights of each kind, up from four. The fifth and
+    later lights used to be dropped silently; `tests/many_lights.rs` lights
+    six.
+  - **Every** directional, point and spot light with `cast_shadow` casts
+    shadows, on both renderers. Only the first of each kind used to: each
+    kind's maps are now layers of one depth array (six a point light, looked
+    up by direction with the cube face chosen by hand, since WebGL2 has no
+    cube arrays), and several lights of a kind share a budget of two 4096²
+    maps. `tests/multi_light_shadows.rs` takes where each of three lights'
+    shadows falls from ray casts, on wgpu and Metal.
+  - `WebLight.setShadowParams(bias, normalBias, radius)` sets them from
+    JavaScript, in three.js's conventions, and the three.js shim forwards
+    `light.shadow.bias`, `.normalBias` and `.radius` to it.
+  - `Renderer::last_frame_multisampled` (`WebRenderer.lastFrameMultisampled`
+    in JavaScript) says whether the last frame got the MSAA asked for.
+  - **Multisampled render targets**, three.js's `renderTarget.samples`:
+    `RenderTarget::set_samples(4)` (`WebRenderTarget.setSamples`, and the
+    shim's `new WebGLRenderTarget(w, h, { samples: 4 })`) draws the target
+    multisampled whatever the renderer's own MSAA, which covers the canvas
+    only, as `antialias` does in three.js. Colour is resolved into the
+    target, and so is depth (resolved by a shader, or on WebGL2 redrawn),
+    so post-processing and refraction glass read it as they would a
+    single-sampled target's. Half-float targets stay single-sampled. Before,
+    a render target never got MSAA at all. A canvas and a target of another
+    size alternating each frame keep both sets of multisampled buffers
+    rather than reallocating them. `tests/render_target_msaa.rs`.
+  - **Metal**: a multisampled `MetalRenderTarget` now resolves its depth
+    as well — into a single-sampled `resolved_depth_texture()`, by the main
+    pass's own depth attachment, whenever depth is stored
+    (`set_store_depth`; `PassAttachments::with_depth_resolve` for textures
+    of your own). Headless SSAO used to be skipped with a warning whenever
+    MSAA was on; it now runs, and darkens the same pixels at 4x as at 1x,
+    with OIT glass in the frame too. `tests/metal_ssao_msaa.rs`.
+  - **Shadow filters**, three.js's `shadowMap.type`:
+    `Renderer::set_shadow_type(ShadowType::{Basic, Pcf, PcfSoft, Pcss})`, or
+    per light with `ShadowSettings::filter`. PCSS softens a shadow with the
+    distance from its caster (`ShadowSettings::light_size`), its blocker
+    search done with comparisons alone so it runs on WebGL2; three.js's
+    `VSMShadowMap` maps to it.
+  - **Cascaded shadow maps** for directional lights
+    (`ShadowSettings::cascades`, `cascade_distance`, `cascade_split`): up to
+    four maps over the camera's view, sphere-fitted and snapped to their
+    texel grid so they do not shimmer. `tests/shadow_types.rs` checks a small
+    shadow near the camera lands where a tightly fitted map puts it, where
+    one map over the whole reach loses it — on both renderers.
+  - Shadows are stored per light: a record for each casting light, named
+    from the light, one lookup for every kind, every record's shadow worked
+    out once per fragment (which also halved the WebGL2 lit shader's compile
+    time).
+  - Shadow passes are reused one by one — a camera-following cascade no
+    longer redraws a still point light's six faces — and draw only the
+    casters inside their light's frustum: the nine-shadow benchmark went
+    from 25 passes and about 5,000 caster draws a frame to 4 and 700.
+    `Renderer::shadow_stats` counts both. The Metal renderer culls each
+    view's draws to its frustum too, which it did not before.
+  - **Overlapping refraction glass**: `Renderer::set_refraction_layers`
+    (2 by default) draws `Refract` objects back to front in that many
+    groups, each refracting a capture of what was drawn before it, so glass
+    shows through glass. OIT surfaces sit among the groups by depth.
+  - **The Metal renderer's OIT** is weighted-blended OIT, as wgpu's, in
+    passes of its own, multisampled when the frame is — the same colour to
+    the byte (`tests/oit_parity.rs`), where it used to sort and blend.
+  - **The path tracer's bounce limits**, as Cycles has them:
+    `diffuse_max_bounces`, `glossy_max_bounces` and
+    `transmission_max_bounces` (`with_bounce_limits`), on CPU and GPU alike.
+  - **Colour**: every CSS Color 4 string (`Color::from_css`: `lab()`,
+    `oklch()`, `hwb()`, `color(display-p3 …)`, `#rrggbbaa`, …, also behind
+    the shim's `Color.setStyle`), conversions to HSV, HWB, XYZ, CIELAB/LCh
+    and OkLCh, `Color::mix` in any of them, WCAG contrast; d3's named
+    schemes (ColorBrewer, Tableau, cividis, twilight) for `ColorRamp` and
+    `Palette`; and `ColorScale`, d3's sequential, diverging, log, pow,
+    symlog, quantize, quantile and threshold scales over any ramp
+    (`WebColorScale` from JavaScript). See `docs/colors.md`.
+  - The three.js shim takes threers's glass modes as
+    `MeshPhysicalMaterial.transparencyMode` (`'blend'`, `'refract'`,
+    `'glass'`, `'oit'`), in the constructor or set later, and forwards
+    `light.shadow.mapSize` (`WebLight.setShadowMapSize`).
+    `WebMaterial.transparencyMode` and `WebLight.shadowSettings` read back
+    what the renderer holds; `crates/threers-js/test/glass-and-shadow-settings.test.mjs`
+    checks the shim through them.
+- **Speed.** Every draw's uniforms now live in one buffer, written once a
+  frame, instead of one buffer and one `write_buffer` call per draw. 2,000
+  lit, shadowed meshes went from 11.9 ms to 4.0 ms of CPU a frame (17.8 to
+  5.3 ms with the GPU).
+- **Shadow maps are redrawn only when they would change.** With
+  `shadowMap.autoUpdate` on, every caster used to be redrawn into every
+  shadow map on every render. Now each render fingerprints what the maps
+  depend on (casters' geometry, transforms, sides and cut-outs, skinned
+  poses, instance data, custom shaders' uniforms and sources, and the lights'
+  projections) and keeps the maps when nothing changed. A still scene under a
+  moving camera stops paying for its shadows each frame. Only custom-shader
+  casters that sample textures still redraw every render.
+  `tests/shadow_reuse.rs` checks both directions for plain, instanced, skinned
+  and custom-shader casters, and that reused maps draw the same pixels. The
+  Metal renderer reuses its maps by the same rule.
+
+- `examples/glass_modes.rs`: each way of drawing glass beside the path
+  tracer, for clear, tinted, frosted, dispersive and thin-walled glass.
+
+- **Marks** (`threers::marks`), the primitives a data-on-a-map application
+  like kepler.gl is built from. Each layer is one instanced draw, with every
+  property read from its own column, and runs on WebGL2 as well as WebGPU.
+  `PointMarks` draws antialiased circles with strokes. `SegmentMarks` draws
+  lines of any width, polylines with mitred joints (so translucent ones do not
+  darken where segments meet) and arcs (wgpu has no line width; these are
+  quads expanded in screen space). `ShapeMarks` instances any geometry, and
+  `TextLabels` draws signed-distance-field text with collision culling.
+  `DensityMarks` is a heatmap rendered through an offscreen half-float field.
+  Sizes are in pixels or world units.
+  - **Columns** take partial updates (`update_*(start, …)`); only the changed
+    rows are uploaded.
+  - **`f64` positions** are drawn relative to a movable `Origin` as split
+    high/low `f32`s, so geometry ten million units out keeps quarter-unit
+    spacing.
+  - **`PolygonMarks`** fills and extrudes GeoJSON-style polygons with holes,
+    every feature in one draw, with per-feature colour, elevation, custom
+    values and picking; changing one feature re-uploads only its vertices.
+    Fills are depth-biased so they do not fight a coincident ground mesh.
+  - `DensityMarks` sums its field at reduced resolution (twelve texels a
+    kernel radius, within 2.5 % of full resolution), which cut 200,000 kernels
+    from 10.6 ms to about 4 ms. `examples/marks_bench.rs` times every layer at
+    kepler.gl sizes.
+  - **For tile and globe renderers.** Custom mark kinds (`CustomShader`,
+    `MarkKind::Custom`, with their own bind groups). `TextureAtlas`,
+    `SpriteMarks` and `ImageMarks`. Positions local to a per-layer origin
+    (`set_local_positions`, half the memory), on by default for polygons and
+    paths. `PolygonMesh` and `PathMesh`, built off-thread and converted to
+    bytes for Web Workers. `release_gpu` and `gpu_bytes`. Tile math
+    (`geo::TileId`, `covering_tiles`, `MarkView::units_per_pixel`). Per-layer
+    `clip` rectangles and `depth_order`. Dashes, caps and casings on
+    `SegmentMarks`. A `CollisionIndex` shared by labels and sprites, with
+    label `stickiness`. `pick_rect`, feature ids and `highlight`.
+    `ShaderHooks::transition` and `combine`. Globe support: sphere
+    conversions and great circles, `GlobeGround` meshes extruded radially,
+    great-circle segments, `ImageMarks::sphere`, horizon culling,
+    `GlobeControls`, and `fit_clip_planes` on both controls. Opt-in
+    `tone_mapped` marks through `MarkView::from_renderer`.
+  - **Reversed depth** (`Renderer::set_reversed_z`, JS `setReversedZ`) for
+    planet-scale views. Off by default. Shadow maps stay standard, and
+    everything that reads the view's depth back converts it: post effects,
+    glass and screen-space reflection, TAA, the headless depth of field and
+    motion blur, and `Ssao::set_reversed_depth`. Marks follow through
+    `MarkView::from_renderer`. `tests/reversed_z.rs` renders each feature
+    both ways and requires the same frame. Each conversion is checked by a
+    test that fails without it.
+  - Labels set along a line (`TextLabel::along`), and mitred joints on
+    arched and great-circle paths.
+  - Fixed: a pipeline variant for a material's depth state did not record
+    its recipe, so `cull_variant` silently kept the stock culling for
+    materials with non-default depth state and a non-default side.
+  - Fixed: the composer's post effects (`OutlinePass`, `SaoPass`, `SsrPass`,
+    `BokehPass`, through `Renderer::run_postfx`) read reversed depth as
+    standard, so outlines vanished under `set_reversed_z`. Tested for the
+    composer passes, cube-face capture, `QuadView` panes with and without
+    MSAA, and TAA under a moving camera.
+  - All of a `MarkRenderer`'s layer uniforms share one buffer, written once
+    a frame, and each layer binds it at a dynamic offset. A map of hundreds
+    of tile layers no longer makes hundreds of buffer writes.
+    `MarkRenderer::gpu_bytes` reports the buffer.
+  - `CollisionIndex::begin_frame(&view)` keeps last frame's boxes while the
+    view and the layers hold still, and label and sprite layers then skip
+    placement entirely. A layer that changes takes back its own boxes and
+    places again. Call `invalidate()` after removing or reordering layers.
+  - Fixed: `SpriteMarks` collision ignored moved, resized, re-imaged or
+    turned icons until the view changed. Changing `TextLabels::font_size`
+    after the first frame never laid the text out again.
+  - Point quads reach half a pixel past the edge rather than a whole one
+    when single-sampled. Up to a third fewer fragments for small points,
+    with the same pixels. Multisampled targets keep the full pixel their
+    off-centre samples need.
+  - `DensityMarks::auto_max` scales the heatmap to the densest pixel in
+    view. A chain of render passes finds the maximum on the GPU, so nothing
+    is read back and it runs on WebGL2.
+  - **`MapView`** keeps a map's camera, `MapControls`, `Origin` and shared
+    `CollisionIndex` in step. Each frame it rebases the origin as the view
+    travels, fits the clip planes, builds the `MarkView` and begins the
+    collision frame. It also offers `covering_tiles`, `zoom`, `ground_point`
+    and `look_at` in absolute coordinates.
+  - `GlobeControls` works in `f64`. `apply_relative` places the camera
+    against an `Origin` at the look-at point (`origin()`), so a globe view
+    stays exact down to a metre off a real planet.
+    *(Breaking within this release: `centre`, `radius` and `distance` are
+    now `f64`, and `update` no longer moves the camera.)*
+  - `PolygonMarks::to_buffer_geometry` and `ShapeMarks::to_instanced_mesh`
+    hand a layer to the scene renderer to be lit, cast and receive shadows,
+    and go through post effects. Positions are relative to an `Origin`, and
+    colours become vertex or instance colours.
+  - Text:
+    - multi-channel distance fields (`GlyphField::Msdf`) keep corners sharp
+      at any size;
+    - `raster_size` sets the atlas resolution;
+    - `add_fallback` adds faces for missing characters;
+    - `add_icon` and `TextLabel::with_icon` make icon-and-text symbols that
+      collide as one.
+  - Fixed: TrueType composite glyphs, which include most accented letters,
+    loaded as empty outlines. They are now assembled from their components.
+  - Fixed: `decode_png` refused 1, 2 and 4-bit greyscale and palette images,
+    which is how OpenStreetMap serves open sea.
+  - `examples/map_demo.rs`: a small map on `MapView`. It has OpenStreetMap
+    raster tiles fetched in the background and cached on disk (or any
+    `--tiles` template, or procedural tiles offline), European cities as
+    icon-and-name symbols, and an auto-scaled heatmap.
+  - `TextureAtlas` repeats each image's edge into its gutter. Images laid
+    edge to edge, such as map tiles and opaque sprites, no longer show dark
+    seams.
+  - `TextureAtlas::write` replaces an image in place. Uploads send only the
+    regions that changed, each on its own, without copying the whole atlas
+    first. Panning the map demo used to repack and re-upload every tile
+    whenever the view crossed one: p95 109 ms and worst 1.2 s per frame. Its
+    tiles now live in a fixed pool of slots: p95 12 ms, worst 33 ms.
+  - **Geographic data.** `marks::geo` projects longitude and latitude to Web
+    Mercator and back, with the per-latitude height scale.
+    `marks::geojson::FeatureCollection` parses GeoJSON, and `shapes()` turns
+    it into points, paths, polygons and outlines for the marks, with each
+    row mapped back to its feature.
+  - **`ShaderHooks`** splice WGSL into every mark's vertex and colour stages,
+    with per-frame `params`. `ShaderHooks::range_filter` filters rows on the
+    GPU without rebuilding a pipeline, and `ShaderHooks::trail` animates trips:
+    segments cut to a time window with the head exactly at the clock.
+  - **GPU picking** (`MarkRenderer::pick`) reads `(layer, row)` back from an id
+    pass, asynchronously, optionally occluded by the frame's depth.
+  - Marks draw over a rendered frame and depth-test against it
+    (`MarkTarget::over_frame`, `HeadlessRenderer::mark_target`), backed by the
+    new `Renderer::overlay_attachments`.
+  - Camera-facing marks are depth-tested `style.depth_lift` of their own
+    sizes nearer the camera (2 by default), so a point or line resting on the
+    ground draws whole instead of half-sunk into it.
+  - `examples/marks_map.rs`: a kepler.gl-style map using all of the above.
+- **`ShaderMaterial` on `InstancedMesh`.** It used to draw with the built-in
+  instanced pipeline whatever its shader. Now it gets its own pipeline on the
+  instanced layout. Without a vertex stage it draws every instance at its
+  matrix and tint. A custom stage takes `InstancedCustomIn` and starts from
+  `standard_vertex_instanced(instanced_in(in), vid, iid)`.
+  **`InstancedMesh::set_custom`** adds two per-instance columns of one to
+  four floats, read as `in.icustom0`/`in.icustom1`. They are vertex
+  attributes, so they work on WebGL2.
+- **`MapControls`**: drag the ground (the grabbed point stays under the
+  cursor), zoom toward the cursor, tilt and turn, from a look-at point,
+  distance, bearing and pitch.
+- **`triangulate_polygon`** and **`polygon_points`** in `threers::math`: ear
+  clipping of a polygon with holes, from GeoJSON-style rings.
+  **`PolygonGeometry`** fills such a polygon, or extrudes it into a closed,
+  correctly wound solid.
+- **Volumes** (`threers::volume`): **`Data3DTexture`** (three.js's, also at
+  the crate root) and **`GpuVolume`**, a 3D texture written whole or one
+  region at a time with `write_region`, so a volume can stream in as its
+  chunks arrive. Integer formats come back exactly, up to 64-bit labels
+  (`Rg32Uint`). **`SliceRenderer`** draws an arbitrary plane through a volume
+  into a rectangle of the target, over a frame the `Renderer` already drew,
+  so one target can hold a 3D pane and cross-sections. The colour is a WGSL
+  `slice_color` hook: window/level grey (`WINDOW_LEVEL`) and a colour per
+  label (`LABELS`) are built in. `plane_to_voxel` builds the slice camera,
+  with image rows running down or up. Both built-in shaders translate for
+  WebGL2 in the tests; window/level has also been checked on WebGL2 in a
+  browser. `SliceRenderer::shader_source` returns the module for checking a
+  colour function without a device.
+  `SliceRenderer::with_target` takes a **`SliceTarget`**: the blend state
+  (or none, replacing colour and alpha) and an optional depth attachment,
+  where every fragment sits at depth 0 so the first draw to reach a pixel
+  keeps it (fine data first, coarse data fills gaps). `draw_in_pass` draws
+  within a pass you began, so many draws share one pass.
+  `SliceRenderer::with_lookup` adds a lookup table the colour function reads
+  (`slice_lookup`, a `texture_2d<u32>`: a palette, or a sorted set of labels
+  to search), bound with `create_binding_with_lookup`.
+  `ShaderMaterial::volumes` binds two volumes to a custom shader as `u_vol0`
+  and `u_vol1`. This works everywhere except WebGL2, where the rest of the
+  layout already uses all sixteen texture units
+  (`caps::supports_shader_material_volumes`).
+
+- **MeshPhysicalMaterial follows three.js r165's `lights_physical_fragment`,
+  on wgpu (WebGPU and WebGL2 included) and Metal.** The reflectance at normal
+  incidence comes from `ior`, `specularIntensity` and `specularColor` (new),
+  and at grazing from `specularIntensity` (`specularF90`), where it was a flat
+  0.04 and 1. The thin film's Fresnel mixes into the specular after
+  `F_Schlick` and into the environment's multiscattering, as three.js does,
+  with three.js's `iridescenceThicknessRange` (`[min, max]`, the film at
+  `max` without a thickness map). Sheen takes three.js's saturated Neubelt
+  visibility and its environment term `iblIrradiance · sheenColor ·
+  IBLSheenBRDF`. Anisotropy uses three.js's `alphaT = mix(α², 1,
+  anisotropy²)` against `α` along the bitangent, its anisotropy vector, and
+  `getTangentFrame`'s unnormalised frame, and bends the environment's normal
+  as `getIBLAnisotropyRadiance` does. The clearcoat reads the unperturbed
+  normal (the base's normal and bump maps are under it) and reflects the
+  environment pulled toward that normal by roughness². Emissive now sits
+  under the sheen and clearcoat, which compose over it in that order. Metal
+  had none of this — it shaded Physical as Standard, with no clearcoat,
+  sheen, iridescence or anisotropy — and now matches wgpu on each to within
+  three levels inside the surface, with and without an environment (the
+  anisotropic highlight to a mean of 0.3, its screen-space frame jumping on
+  triangle edges). Five parity scenes — `physical-specular`, `-sheen`,
+  `-iridescence`, `-anisotropy`, and `physical-env` under an environment —
+  match three.js, and a flat dielectric's reflectance is checked against
+  r165's formulas on both backends.
+- **MeshPhysicalMaterial's maps**: `specularIntensityMap`, `specularColorMap`,
+  `clearcoatMap`, `clearcoatRoughnessMap`, `clearcoatNormalMap` (with
+  `clearcoatNormalScale`), `iridescenceMap`, `sheenColorMap`,
+  `sheenRoughnessMap`, `transmissionMap`, `thicknessMap` and `anisotropyMap`,
+  each read on three.js's channel, with its own sampler and uv transform, on
+  wgpu and Metal; `iridescenceThicknessMap` now runs between the range's two
+  ends and reaches Metal. Each is checked to draw exactly what its scalar
+  does with the texel folded in, on both backends. The glTF loader fills them
+  from `KHR_materials_*` as three.js's does. Metal's material samplers are a
+  pool of ten bound once per distinct filter-and-wrap, which is what lets
+  every map keep its own within Metal's sixteen sampler slots.
+- **MeshPhysicalMaterial's properties from JavaScript**: `ior`,
+  `reflectivity`, `specularIntensity`, `specularColor`, `sheen`, `sheenColor`,
+  `sheenRoughness`, `iridescence`, `iridescenceIOR`,
+  `iridescenceThicknessRange`, `anisotropy`, `anisotropyRotation`,
+  `transmission`, `thickness`, `attenuationDistance`, `attenuationColor`,
+  `dispersion` and every map above are live properties with three.js's
+  defaults; the shim's Physical material forwarded `clearcoat` and
+  `clearcoatRoughness` and dropped the rest. wasm gains `setPhysical`,
+  `setSheenColor`, `setSpecularColor`, `setAttenuationColor`,
+  `setClearcoatNormalScale` and `setNamedMap` / `setNamedMapData` for any
+  map slot by its three.js name.
+- **`Renderer::set_specular_antialiasing`** (and on `MetalRenderer`;
+  `setSpecularAntialiasing` from JavaScript, `renderer.specularAntialiasing`
+  in the shim): geometric specular antialiasing on Standard and Physical
+  highlights, off by default — see *Changed*.
+- **three.js's transmission pass, on wgpu (WebGPU and WebGL2 included) and
+  Metal.** A visible transmissive material (`transmission > 0`) makes the
+  renderer draw the opaque scene first, linear and untone-mapped, into a
+  half-float target with a full mip chain, then draw the back faces of
+  double-sided transmissive materials over it, as r165's
+  `renderTransmissionPass` does; `getIBLVolumeRefraction` then reads it along
+  the ray refracted through `thickness` — bicubic, at the mip three.js picks
+  from roughness and `ior`, three samples apart under `dispersion` — and
+  attenuates it by `attenuationColor` over `attenuationDistance`. Transmission
+  replaces the diffuse light, the specular stays on top, and
+  `transmissionMap`/`thicknessMap` scale the two. Transmissive materials sort
+  between opaque and transparent, drawn opaque, as three.js's transmissive
+  list is. The previous approximation — the environment refracted plus a rim
+  term — is gone. Plain, instanced and skinned meshes all take the capture.
+  On Metal every view captures its own: stereo (layered, or side by side in
+  viewports) gets a slice per eye, sized to the eye's viewport, so each eye
+  refracts what it sees — each matches the mono render from its camera
+  exactly.
+  A `transmission` parity scene of clear, rough tinted and dispersive glass
+  over coloured boxes matches three.js to six pixels of 480,000, and Metal
+  matches wgpu.
+- **`RectAreaLight` through three.js's LTC tables**, on wgpu and Metal: r165's
+  `LTC_Evaluate` over `ltc_1`/`ltc_2` (bundled, uploaded once as a half-float
+  2-layer array), for the specular and the diffuse alike, where both backends
+  used a representative-point approximation. A `rect-area` parity scene
+  matches three.js to six pixels, and Metal matches wgpu on smooth, rough and
+  metal spheres under two scaled, rotated lights. The shim exports
+  `RectAreaLightUniformsLib` and `RectAreaLightTexturesLib` (their `init()`
+  has nothing left to do).
+- **Second to fourth uv sets and `Texture.channel`**, on wgpu and Metal:
+  `uv1`, `uv2` and `uv3` reach the shader, and each map reads the set its
+  texture's `channel` names, as three.js r165 does. From JavaScript
+  `texture.channel` is a live property.
+- **Metal reads the `tangent` attribute** for normal maps, the clearcoat
+  normal map and anisotropy, as wgpu does, where it always derived the frame
+  from screen-space derivatives.
+- **`Renderer::set_reflective_transparency`** (and on `MetalRenderer`;
+  `setReflectiveTransparency` from JavaScript, `renderer.reflectiveTransparency`
+  in the shim) — see *Changed*.
+- **three-bvh-csg in the browser again.** `web/bvh-csg-addon.js` re-exported
+  `bvh-csg-impl.js`, which 0.0.4 deleted with the JavaScript CSG port it
+  wrapped, so every bvh-csg page failed to load. The boolean now runs in wasm
+  (`csgEvaluate`, the Rust port), and `bvh-csg-impl.js` keeps three-bvh-csg's
+  `Brush`, `Operation`, `OperationGroup` and `Evaluator` as the library has
+  them — `useGroups` and `consolidateGroups` with its material list,
+  `attributes`, operation arrays, `evaluateHierarchy` and its dirty tracking —
+  plus `computeMeshVolume`. The nine bvh-csg parity scenes match three-bvh-csg
+  from nine viewpoints each (0.01% at worst), where all nine failed.
+- **A `BatchedMesh` draw is cast at `matrixWorld · instanceMatrix`** from the
+  mesh's matrix as it stands, as three.js's is.
+- **`BufferGeometry::to_non_indexed`**, three.js's `toNonIndexed`
+  (attributes and morph attributes expanded, groups kept).
+- **`CsgEvaluator` carries three-bvh-csg's `attributes`** (`position`, `uv`,
+  `normal` by default) and, with `use_groups` (now on by default, as in
+  three-bvh-csg), a group per source group; `evaluate_ops` returns one result
+  per operation.
+- **`WebGLRenderer.create` takes three.js's parameters**: `create(canvas,
+  { antialias })` or `create({ canvas, antialias })`. See *Changed*.
+- **MeshToonMaterial's `gradientMap`**, on wgpu (WebGPU and WebGL2
+  included) and Metal: each light's irradiance times the map's rgb at
+  `(n·l/2 + ½, 0)`, as r165's `getGradientIrradiance` reads it — any ramp,
+  coloured or uneven, filtered as the texture asks and decoded by its colour
+  space. `ToonMaterial::steps`, which stood in for an evenly spaced grey ramp
+  by its texel count, is replaced by `gradient_map` (see *Changed*). The shim
+  binds `gradientMap` (it was ignored, so every toon material drew two-tone),
+  Python and Node gain `Material.toon`, and a `toon-gradient` parity scene of
+  a nearest colour ramp and a linear grey one matches three.js to four pixels
+  of 480,000; both backends are checked against the formula texel by texel.
+- **Textures from Python and Node.** `Texture` takes RGBA8 pixels or a PNG
+  (`Texture.from_file` / `Texture.fromFile`), in sRGB or linear, with
+  three.js's wrap, mag/min/mipmap filters, `offset`, `repeat`, `rotation`,
+  `center`, `channel` and `flip_y`; `material.set_map(slot, texture)` (and
+  `get_map`) fills any map slot three.js names, `None`/`null` empties it.
+  `Material.physical` takes the rest of MeshPhysicalMaterial's options:
+  `specular_intensity`, `specular_color`, `sheen`, `sheen_color`,
+  `sheen_roughness`, `iridescence`, `iridescence_ior`,
+  `iridescence_thickness_range`, `anisotropy`, `anisotropy_rotation`,
+  `attenuation_color`, `attenuation_distance` and `dispersion` (camelCase from
+  Node, `iridescenceIOR` as three.js spells it).
+
+- **`alphaMap`** on Basic, Lambert, Phong, Toon, Standard, Physical, Matcap and
+  Sprite materials, on wgpu (WebGPU and WebGL2 included) and Metal: its green
+  channel scales the opacity after the colour map and before `alphaTest`, as
+  three.js's `alphamap_fragment` does, and a shadow caster's `alphaMap` cuts its
+  shadow too, as three.js's depth material takes it. Checked against three.js on
+  every kind and light type, both native backends and both browser backends.
+  `Material::map_slot_mut` names a material's map slots as three.js does, and
+  from JavaScript `material.alphaMap = null` (or any map slot) empties the slot,
+  where it used to leave the old texture bound. `metalnessMap` reaches Standard
+  and Physical from JavaScript; it had no binding.
+
+- **`lightMap`, `bumpMap` and `specularMap`**, on wgpu (WebGPU and WebGL2
+  included) and Metal, as three.js r165 shades them. `lightMap` ×
+  `lightMapIntensity` adds to the indirect irradiance on Lambert, Phong, Toon,
+  Standard and Physical (`lights_fragment_maps`), under the `aoMap` like the
+  rest of the indirect light, and on Basic replaces its indirect 1 with texel ×
+  intensity ÷ π. `bumpMap` × `bumpScale` perturbs the normal through
+  `perturbNormalArb` on Lambert, Phong, Toon, Standard and Physical, and is
+  ignored under a `normalMap`, as three.js does. `specularMap`'s red channel
+  scales Phong's specular (stored on Basic and Lambert too, where three.js uses
+  it only for an environment map). Each is checked against three.js's formulas
+  on both native backends and in both browsers, and all are live properties
+  from JavaScript.
+
+- **`envMap` on Basic, Lambert and Phong**, with `combine` (`Multiply`, `Mix`,
+  `Add`), `reflectivity`, `refractionRatio`, `envMapRotation` and the cube's
+  `mapping` (`CubeReflectionMapping` / `CubeRefractionMapping`), on wgpu
+  (WebGPU and WebGL2 included) and Metal, as three.js r165's `envmap_fragment`
+  computes them: the view ray (the camera's forward axis for an orthographic
+  camera) reflected or refracted about the normal, looked up mirrored in x
+  (`flipEnvMap`) through `envMapRotation` in three.js's sign convention, and
+  weighted by `specularStrength × reflectivity` — so a `specularMap` now masks
+  reflections too. Checked case by case against three.js on both native
+  backends and both browsers, and an `envmap` parity scene of reflecting,
+  refracting and rotated spheres over a marked cube matches three.js to 70
+  pixels of 480,000. Basic reflects per fragment where three.js reflects per
+  vertex; the two agree on any flat face. `Material::map_slot_mut`'s
+  `clearMap("envMap")` empties it.
+- **`CubeTexture` and `CubeTextureLoader` from JavaScript.** The shim's
+  `CubeTexture` was a stub — `CubeTextureLoader` stored the six images and
+  nothing ever uploaded them, and `new CubeTexture()` built a cube from
+  `undefined`. It now takes three.js's constructor, uploads its images when all
+  six are present and again on `needsUpdate`, re-binds wherever it is held (a
+  material's `envMap`, `scene.environment`), and has live `mapping` and
+  `colorSpace` (the loader marks its result sRGB, as three.js's does) and
+  `clone()`. `scene.environment = null` now removes a cube environment; it was
+  left bound.
+
+- **three.js's mipmapped filter modes.** `minFilter` has six values and was
+  folded into two: every texture was sampled through its mip chain, and how
+  levels blended followed the in-level filter. `Texture` and `CubeTexture` now
+  carry `mipmap_filter` — `Some(Linear)` (`*MipmapLinearFilter`, three.js's
+  default), `Some(Nearest)` (`*MipmapNearestFilter`) or `None` (`LinearFilter` /
+  `NearestFilter`, level 0 only) — on wgpu and Metal alike, and a render
+  target's texture has none, as three.js's has `LinearFilter`. From JavaScript
+  `setFilters` takes three.js's own constants, so every `magFilter`,
+  `minFilter`, `wrapS` and `wrapT` arrives as set, cube textures' filters too.
+  Metal's environment sampler was looked up but never created, so the scene
+  environment and a material's `envMap` were read through whatever sampler the
+  material map had; both now have their own, trilinear by default.
+
+- **`Points` on wgpu are drawn as three.js draws them.** Every point was its
+  own draw — a quad built on the CPU, sized against a hard-coded 800-pixel
+  canvas, shaded as a Basic material — so vertex colours were dropped,
+  `sizeAttenuation` was not three.js's formula, and a cloud of a hundred
+  thousand points was a hundred thousand draws. A `Points` object is now one
+  instanced draw over its own vertex buffer (morph targets included), each
+  point expanded to a quad in the vertex stage: `size × pixelRatio` pixels of
+  the real viewport, attenuated by `(height / 2) / −z` under a perspective
+  camera, as `points_vert` does. Opaque points write depth; transparent ones
+  blend, sorted with the other transparent draws, in the encoded colours on an
+  sRGB target. `PointsMaterial` gains `map` and `alphaMap`, sampled at three.js's
+  `(gl_PointCoord.x, 1 − gl_PointCoord.y)` through the map's transform, on wgpu
+  and Metal; Metal's point map was upside down and ignored the transform, it
+  blended transparent points in linear light, and it discarded alpha-0
+  fragments that three.js keeps at `alphaTest` 0. From JavaScript, `size`,
+  `sizeAttenuation`, `map` and `alphaMap` are live.
+- **`MeshMatcapMaterial.map`**: the colour map multiplies the diffuse colour
+  before the matcap, as `meshmatcap.glsl` does, on wgpu and Metal. Metal's
+  matcap texture had shared the colour map's slot, and its alpha was read as
+  the material's.
+- `setOpacity` from JavaScript reaches every material with an opacity; Points,
+  Sprite, Matcap, Normal, Line and Depth materials ignored it.
+
+- **Image-based light follows three.js r165 on Standard and Physical.** A
+  material's own `envMap` now replaces `scene.environment` for it, with its own
+  `envMapIntensity` and `envMapRotation`; without one it reads the scene's at
+  `scene.environmentIntensity` and `scene.environmentRotation` (all new).
+  Every cube texture lighting a Standard/Physical material is prefiltered
+  through PMREM, once and cached, as three.js's `WebGLCubeUVMaps` does — the
+  renderers used to read a raw environment cube through its box-filtered mips,
+  so a rough metal showed sharp edges through its blur, and mirrored in x
+  against three.js's PMREM. Metal now reads the same CubeUV atlas with a port
+  of three.js's `textureCubeUV`, and agrees with wgpu to 0.0001 rms where it
+  was allowed 0.08. On wgpu the environment's parameters, intensity and
+  rotation moved from the frame uniform into the environment's own group, so a
+  draw switches environment by switching that group. Checked by case against
+  three.js on both backends, and a `pbr-env` parity scene — mirrors, a rough
+  metal, a diffuse sphere, a material's own map and rotations — matches three.js
+  to 0.08%.
+- **Cube textures were cached by address**, on both backends: a cube made after
+  another was dropped could land at its address and be drawn with its faces.
+  `CubeTexture` now has a stable `id`, as `Texture` does, and the caches key on
+  it, its format and its size.
+
+- **Quad and n-gon faces survive loading** — `BufferGeometry::polygons`
+  records how many consecutive triangles each source polygon became. The OBJ,
+  PLY, Collada, FBX, USD and Alembic loaders fill it in, `merge_geometries`
+  keeps it, and wireframes (wgpu, `WireframeGeometry`, SVG) and `EdgesGeometry`
+  draw polygon outlines instead of every fan diagonal. USD export writes the
+  polygons back, so a quad leaves as `faceVertexCounts = [4]`; checked in both
+  directions against `usdcat`. The built-in generators record their own quads
+  too — plane, box, cylinder and cone sides, sphere, torus, torus knot, lathe,
+  ring, capsule, parametric, tube, extrude walls, kirigami and NURBS grids — so
+  their wireframes draw cells rather than diagonals; cells that collapse at a
+  pole or tip stay triangles. Instanced and skinned meshes now draw wireframe
+  outlines on wgpu (they were drawn filled), and `set_polygons` bumps
+  `geometry_version`, so a table changed after upload reaches the GPU. `sketch`
+  follows the window's scale factor and takes a `QuadView`. Counting triangles rather than corners means the
+  table can be checked against the index however the polygon was triangulated,
+  and `polygon_loop` recovers the corners by chaining the edges only one of the
+  polygon's triangles uses. New `PolyMesh::geometry()` for Alembic.
+
+- **Quads through the rest of the mesh tooling.** `BufferGeometry::faces()`
+  yields one corner loop per recoverable polygon and triangles otherwise, and
+  every writer that can hold a polygon uses it: OBJ and OFF export write one
+  face per quad or n-gon, a new `geometry_to_ply` / `Solid::to_ply` does the
+  same, and each round-trips through its loader polygon for polygon; assimp
+  reads the files as n-gons too. Raycast hits carry `polygon_index`
+  (`polygonIndex` in JS). `infer_quads` recovers quads from triangle-only
+  meshes — glTF, STL — pairing triangles by Blender's join error under fold,
+  convexity and corner-angle limits, changing only the index: a shuffled grid
+  comes back cell for cell, a glTF sphere gives 336 quads and leaves its 48 pole
+  triangles alone, and a UV seam blocks a pair while a flat-shading normal split
+  does not. `subdivide(levels)` is Catmull–Clark on any geometry without the
+  `usd` feature, its cage code moved out of the USD loader, which now numbers
+  edge points deterministically; in JS as `geometry.subdivide(levels)`. The
+  shim's `OBJExporter` and `PLYExporter` take `{ polygons: true }` to write
+  n-gon faces, and write triangles by default, as three.js does. `QuadGeometry` carries brep provenance: a
+  plane, or the bilinear patch as a degree-1×1 NURBS.
+
+- **`QuadGeometry`** — a quad from four arbitrary corners. Subdivided, a
+  non-planar quad meshes as a bilinear patch with analytic normals
+  (`∂P/∂u × ∂P/∂v`); UVs, vertex order and indices match `PlaneGeometry`
+  exactly when given its corners. Each cell splits along the diagonal whose two
+  triangles fold least, not the shorter one: on a concave dart the shorter
+  diagonal lies outside the quad. Degenerate corners never produce NaN.
+  `is_planar` / `is_convex` helpers, and `WebGeometry.quad` in JS.
+
+- **Viewports, scissor and a CAD-style quad view** — `Renderer::set_viewport`,
+  `set_scissor`, `set_scissor_test`, `set_pixel_ratio`, `set_auto_clear` and
+  `clear`, following three.js: bottom-left origin in logical pixels, and the
+  clear limited to the scissor while the test is on, so several renders share
+  one target. WebGPU has no partial clear, so a scissored fullscreen triangle
+  writes exactly the value a clear would. With nothing set, the old path runs
+  and the output is byte-identical. MSAA works in a sub-rectangle: the pane is
+  drawn into a pane-sized multisampled target and composited into its rectangle
+  with a scissored `textureLoad` draw — a draw rather than a copy because surface
+  textures usually refuse copies — and comes out identical to a full-target
+  render of the same view. TAA and screen-space refraction are off in a
+  sub-rectangle, and post-processing applies to the finished image.
+  `Renderer::shadow_map()` takes three.js's `auto_update` / `needs_update`; no
+  shadow map here depends on the camera, so the quad view draws them once a
+  frame and shares them — 2.66 ms of shadow GPU time a frame down to 0.66 ms,
+  byte-identical panes. `QuadViewControls` orbits the perspective pane and pans
+  and zooms the flat ones about the cursor with one shared scale and centre,
+  each ortho camera following only the part of a pan across its own view;
+  double-click maximises a pane. `helpers::QuadView` lays
+  out top, front and side orthographic panes at one shared scale beside a
+  perspective pane — third-angle, Y-up — with gaps, per-pane backgrounds, a
+  maximise toggle and `pane_at` hit-testing. Metal has the same API and
+  semantics, sharing one planner with wgpu, and the two backends' quad views
+  are byte-identical in a cross-backend test; `MetalViewSurface` draws the
+  panes into a window and presents once. `QuadView::metal_views` stays as the
+  cheaper single-pass option, which keeps MSAA but has no gap colour or
+  per-pane backgrounds (`MAX_VIEWS` is now 4). Also on wasm and the three.js
+  shim. `cargo run --release --example quad_view`.
+
+- **three.js sizing and multi-view on the web** — the shim's `WebGLRenderer`
+  takes `setSize` in CSS pixels times `setPixelRatio`, and gains `getSize`,
+  `getPixelRatio`, `getDrawingBufferSize`, `getViewport`, `getScissor`,
+  `getScissorTest`, `setClearColor` / `getClearColor` / `setClearAlpha` /
+  `getClearAlpha` and a `clear()` that honours the scissor test, so three.js's
+  multi-view idiom works unchanged. Also `QuadGeometry`, `QuadView` (and
+  `WebQuadView`), and `BufferGeometry.setPolygons` with polygon-aware
+  `WireframeGeometry` and `EdgesGeometry`. Browser tests run
+  on WebGL2 and, new, on WebGPU under Chrome's own shader compiler:
+  `WEBGPU=1 FEATURES=captions TEST=webgpu scripts/wasm-browser-test.sh`.
+
+- **Node and Python packages, quads first** — the two bindings grow from a
+  box-and-sphere demo into a usable API, matched name for name. Quads: geometry
+  objects with polygon counts, loops and edges, `setPolygons`, `inferQuads`,
+  Catmull–Clark `subdivide`, `QuadGeometry`, quad-aware edges and wireframe as
+  line segments, raycasts that report the polygon hit, loaders that keep quads,
+  and `renderQuadView` with every `QuadView` option plus viewport, scissor,
+  auto-clear and `clear`. Around them: the built-in geometry set, six material
+  kinds and line material, ambient, directional, point, spot and hemisphere
+  lights with shadows, object handles (transform, visibility, parenting,
+  removal), `OrthographicCamera`, glTF/GLB, OBJ, STL, PLY, FBX and USD loading,
+  `setSize` and tone mapping. Python ships type stubs.
+
+- **Raycasting at three.js r165 parity, and fast.** Hits respect the
+  material's side — a `FrontSide` mesh no longer reports its back faces — and
+  `near` / `far` are exact under non-uniform scale, where the old approximation
+  could drop a valid hit. Lines, points, sprites, instanced meshes (with
+  `instance_id`) and skinned meshes are hit-tested; they used to return nothing.
+  An `Intersection` carries `face`, `normal`, `uv`, `uv1`, `instance_id`,
+  `index` and `distance_to_ray` as three.js's does, plus `barycoord` and
+  `polygon_index`. `set_from_camera` takes either camera kind,
+  `intersect_object` / `intersect_object_list` match three.js's, and
+  `first_hit_only` keeps the nearest hit through the BVH's closest-hit query.
+  Bounds and the polygon lookup are cached on the geometry the first time a ray
+  needs them, so a ray no longer copies every position or walks the polygon
+  table: BVH picking on a 1M-quad mesh went from 2.7 ms to 3.4 µs a ray. Fixes a
+  BVH first-hit traversal that opened every missed box under an unbounded `far`.
+  `DragControls` picks the nearest object and works with orthographic cameras.
+  Struct literals of `Intersection` and `Raycaster` need `..Default::default()`
+  or `Intersection::new`.
+
+  The same in every binding. wasm's `WebRaycaster` gains `set`, `near` / `far`,
+  line and points thresholds, `firstHitOnly` and `intersectObject(s)` returning
+  three.js-shaped hits; Node and Python `raycast` / `raycastFromCamera` take the
+  same options and return the same fields. The shim's `Raycaster` stays in
+  JavaScript — the wasm scene mirror cannot answer for objects outside a
+  `Scene`, nested groups or multi-material meshes — rewritten as a port of
+  r165 covering material sides, groups and material arrays, draw range, morph
+  targets, skinned, instanced, lines, points and sprites, and checked hit for
+  hit against three@0.165 to 10⁻⁹. As in three.js, the shim's `recursive` now
+  defaults to true, invisible objects are hit, and `uv` is present only when the
+  geometry has one. `Ray` gained r165's methods, which also fixes `DragControls`
+  calling a missing `ray.intersectPlane`.
+
+- **Geometry groups, material arrays, `drawRange` and morph targets** in the
+  core, at three.js r165 semantics, drawn natively by every renderer instead of
+  being faked in the JavaScript layer. A mesh with `materials` draws each
+  geometry group with its own material — sorted and blended per group, as
+  three.js does — on wgpu, Metal, the path tracer and SVG, and the raycaster
+  reports the group's `material_index`. Morph targets blend on the GPU before
+  skinning, normals and colours included, from a morph texture so WebGL2 runs
+  them too (a one-layer texture array reads zeros there, so morph textures
+  always have two); the CPU consumers share one morph-then-skin pose. wgpu and
+  Metal agree to the pixel on groups, absolute and relative morphs, and skinned
+  morphs. OBJ `usemtl` runs, FBX multi-material meshes and USD GeomSubsets load
+  as groups over a material array; glTF (sparse targets included), FBX and USD
+  morph targets load onto the geometry, and the animation mixer drives them on
+  skinned meshes too. `Object3D` gains three.js's `matrix_auto_update`,
+  arbitrary (sheared) matrices, all six Euler orders and three.js `look_at` —
+  lights turn −Z to the target and everything else +Z, where before everything
+  turned −Z. `Raycaster` defaults to layer 0, as in three.js. Skinned meshes cast
+  posed shadows on wgpu, where before they cast none, and path-traced sprites
+  face the camera.
+
+- **Shapes, paths and text run in Rust**, bit for bit against three.js r165:
+  `Path`, `Shape` with holes, `ShapePath.toShapes`, `ShapeUtils` with an exact
+  port of three.js's Earcut, `ShapeGeometry`, and `ExtrudeGeometry` with bevels,
+  steps, `extrudePath`, cap and side groups and a custom `UVGenerator`.
+  `FontLoader`, `Font` and `TextGeometry` extrude real typeface.js glyphs, where
+  the JavaScript layer used to return a plane; the JavaScript Earcut dependency
+  is gone. The JSON reader garbled every non-ASCII string — each UTF-8 byte
+  became its own character — and rejected `\u` escapes; both are fixed.
+
+- **Geometry generators run in Rust**, buffer for buffer against three.js r165:
+  `CapsuleGeometry`, `LatheGeometry` (r165 leaves its last meridian's normal
+  unnormalised, and so does this), `TubeGeometry` with three.js's Frenet frames
+  from any curve, `ConvexGeometry` / `ConvexHull` as a QuickHull port with
+  three.js's face order, a real projecting and clipping `DecalGeometry`, and new
+  `RoundedBoxGeometry` and `TeapotGeometry`. The last four used to return a box,
+  a box, a box and a sphere. `EdgesGeometry` and `WireframeGeometry` are
+  generated in Rust for any geometry and follow its groups.
+
+- **Exporters run in Rust.** OBJ, STL (ASCII and binary) and PLY (ASCII and
+  both binary byte orders) write output byte-identical to three.js r165's
+  exporters, world and normal matrices included, and keep `{ polygons: true }`.
+  `GLTFExporter` exports the whole scene graph — binary GLB, materials,
+  `onlyVisible`, `parseAsync` — where it used to return JSON with no buffers.
+  Exporting a `Scene`, `Group` or `Mesh` from JavaScript produced nothing,
+  because only `Object3D` had `traverse`; every scene-graph class now has
+  `traverse`, `traverseVisible`, `traverseAncestors` and `getObjectBy*`. The
+  OpenSCAD exports share these writers, so their PLY declares `vertex_index`
+  and their STL normals use three.js's formula.
+
+- **Helpers, KTX2, Draco and noise run in Rust.** Light, camera, arrow, box,
+  vertex-normal, plane, skeleton and rect-area-light helpers draw three.js
+  r165's exact geometry; the last three, and `VertexNormalsHelper`, were empty
+  stubs. `KTX2Loader` reads zlib supercompression, mip chains and BC1/BC7
+  blocks through the crate's decoder instead of accepting RGBA8 only, and
+  `DRACOLoader` uses the crate's Draco decoder, which matches Google's on every
+  fixture, so Google's decoder no longer ships. `SimplexNoise` is three.js's
+  seeded implementation, bit for bit.
+
+- **Post-processing runs in Rust.** `EffectComposer` and every three.js r165
+  pass — UnrealBloom with its five-mip chain, SSAO with all five outputs, SAO,
+  SSR, Outline with hidden edges, glow and pulse, real SMAA, TAA and SSAA, LUT,
+  Bokeh, Afterimage, Glitch, DotScreen, Halftone, Film, Output, Mask and
+  ClearMask, Texture and CubeTexture, RenderPixelated, RenderTransition and
+  AdaptiveToneMapping — are `threers::postprocessing` passes shared by native
+  code and the browser, and the JavaScript classes are thin wrappers whose
+  `uniforms.X.value` and properties forward to Rust. The CPU and GLSL fallbacks
+  are gone, about 1,950 lines of them with the JavaScript pass sequencing. FXAA
+  had been a CPU copy with no anti-aliasing at all and is now an exact port, as
+  is DigitalGlitch; a stricter byte check than the parity threshold shows FXAA,
+  the glitch copy and SSR going from far off three.js to matching it, and every
+  post-fx parity scene is pixel-perfect or within one pixel. `seedRandom` seeds
+  one random stream shared by JavaScript and the passes, drawn in three.js's
+  order. Native: `RenderPass::new()`, and `OutputPass` replaces
+  `ToneMappingPass`. Passes written in JavaScript are no longer accepted.
+
+- **`GLTFLoader` is three.js r165's, in Rust** (`src/loaders/gltf`), and builds
+  the scene graph directly: the JavaScript loader wraps the nodes Rust made
+  rather than parsing JSON and rebuilding everything. Multi-primitive meshes,
+  every attribute, sparse, normalised and quantised accessors, morph targets,
+  skins, cameras, punctual lights, every `KHR_materials_*` extension r165
+  supports, texture transforms and samplers, Draco, meshopt, GPU instancing,
+  KTX2 where it can be decoded, animations, `userData`, `parser.associations`
+  and `getDependency` — checked field for field against three.js's own loader
+  on the repo's fixtures and 39 Khronos sample models. Objects moved between
+  scenes keep their nodes, and `renderer.render` accepts a root that is not a
+  `Scene`, as three.js does. The native `add_to_scene` used to leave a skin's
+  bones pointing into the arena it was loaded into.
+
+- **Animation is three.js r165's animation system, in Rust**
+  (`threers::animation::three`): clips and every keyframe track type, discrete,
+  linear, quaternion and cubic interpolants with each ending, glTF cubic
+  splines, `PropertyBinding` paths (materials, morph targets by name, bones,
+  uuids, and any JavaScript property), additive blending, fades, cross-fades,
+  warps, loop and finish events dispatched mid-update as three.js does, and
+  object groups. It is replayed against three.js run in node over 16 mixer
+  scenarios and 377 frames, to 10⁻⁶. The browser `AnimationMixer` runs in wasm
+  and writes animated values back into the JavaScript objects once per update;
+  the 711-line JavaScript mixer is gone. The `color-track` parity scene went from
+  13.44% different to identical: the old binding overwrote a material's `Color`
+  with a number. The existing native `AnimationMixer` plays on the new engine,
+  and weights below one now blend toward the property's original value, as in
+  three.js.
+
+- **Curves are three.js r165's, in Rust**, f64: every 2D and 3D curve,
+  `CurvePath`, and the base class's arc-length machinery — `getLengths` with
+  three.js's caching, `getUtoTmapping`, `getPointAt`, `getTangent(At)`,
+  `computeFrenetFrames` — plus `toJSON` / `fromJSON` / `clone`, agreeing with
+  three.js to 10⁻¹². The base `Curve` used to return (1, 0, 0) as every tangent.
+  A JavaScript `Curve` subclass works wherever a built-in one does, Rust calling
+  back into its `getPoint`, including as a `TubeGeometry` path or an
+  `ExtrudeGeometry` `extrudePath`, which now take the curve itself. `Path` and
+  `Shape` are `CurvePath`s.
+
+- **`TransformControls` is three.js r165's, in Rust.** It was a stand-in that
+  moved objects by the average of the pointer's two coordinates and never drew
+  its gizmo. The gizmo, picker and helper are built as three.js builds them,
+  with translate, rotate and scale, world and local space, axis, plane and XYZE
+  handles, snapping and three.js's events, and a drag lands exactly where
+  three.js's does. `FlyControls` is three.js's, in Rust; `MapControls` is
+  `OrbitControls` with three.js's map defaults; `OrbitControls` gains
+  `mouseButtons`, `touches`, `screenSpacePanning` and its events.
+
+- **Math value types are complete.** `Box3` had no `min` or `max`, `Frustum`,
+  `Spherical` and `Cylindrical` were stubs and `OBB` ignored its rotation; they
+  and the other value types are now three.js r165's own code, checked against
+  three.js to 10⁻¹². `Box3.setFromObject` (precise mode too),
+  `Frustum.intersectsObject` and `computeBoundingBox` / `computeBoundingSphere`
+  on skinned and instanced meshes read posed bounds from Rust.
+
+- **The JavaScript layer drives one exact Rust scene graph.** Every
+  `Object3D` — groups, bones, meshes of every kind, lines, points, sprites,
+  lights, cameras and helpers — has one Rust node with the same parent and the
+  same child order, synced by dirty flags so a frame with nothing changed makes
+  no calls, and objects not yet in a `Scene` are mirrored on demand into a
+  hidden graph. The old mirror flattened nested groups by *adding* their Euler
+  angles and dropped their scale, froze the transform of a mesh inside a group
+  at the moment it was added, did not mirror children of meshes at all, split
+  multi-material meshes into copies that lost their second UV set, colours,
+  skin and morphs, blended morph targets on the CPU in JavaScript every frame,
+  and ignored manual matrices, Euler order, `drawRange`, instance updates, light
+  positions set per component and a skinned mesh's bind matrix. Now groups and
+  material arrays, GPU morph targets, `drawRange`, `instanceMatrix.needsUpdate`
+  and `count`, bind matrix and bind mode, `matrixAutoUpdate = false` with shear,
+  and all six Euler orders reach the renderer as they are. Raycasting,
+  three-mesh-bvh's `acceleratedRaycast` and `DragControls` run in Rust against
+  that graph — the 760-line JavaScript raycaster is gone — and still match
+  three.js r165 hit for hit, within an f32 bound, with user `raycast` overrides
+  called as three.js calls them. `BoxGeometry` is three.js's exact layout, with
+  six groups. Camera, spot-light and directional-light defaults follow three.js.
+  The `spot-light` and `parametric` parity scenes, which failed to load, now
+  match exactly.
+
+- **A three-dimensional fluid** — `FluidSim3d`, as a separate type beside the
+  2D one, which is unchanged. `cargo run --features fluid --example fluid3d`
+  renders a rising plume of coloured smoke.
+
+  Less changes than you would expect: advection, divergence, the Jacobi sweep
+  and the projection are the same equations with a third term, and the stencil
+  grows from five points to seven so the pressure divisor is six. Three things
+  genuinely differ. **Vorticity becomes a vector** — in the plane the curl is a
+  scalar and the confinement force is a quarter turn of its gradient; in space
+  the curl is an axis and the quarter turn becomes the cross product it was
+  standing in for, `f = ε (N × ω)`. **Buoyancy becomes worth having**, because
+  there is an up. And **you cannot simply look at a volume**, so `render`
+  marches rays through it, front to back, accumulating emission against
+  absorption.
+
+  The volume lives in a 2D texture with its z-slices tiled across it. A render
+  pass writes one attachment and a 3D attachment is one slice, so a 64³ volume
+  would be sixty-four passes a stage and about eighteen hundred a frame — the
+  setup alone would cost more than the arithmetic. Tiled, every stage is a
+  single fullscreen pass, which also keeps what the rest of the module is built
+  around: no compute stage, so it runs on WebGL2, which has no 3D storage
+  textures at all. The price is doing trilinear filtering by hand, with the
+  in-tile coordinate clamped half a texel from the edge — without which a fetch
+  near a boundary averages in the neighbouring slice's opposite face.
+
+  Two bugs found while building it, both of the kind that still produce a
+  plausible plume. The dye advection sampled the **velocity** atlas through the
+  **dye's** tile layout, because one uniform described both; each texture now
+  carries its own grid. And buoyancy was a uniform upward push rather than one
+  proportional to the dye, so it accelerated the empty fluid too and piled the
+  whole volume against the ceiling as a rectangular slab.
+  `a_splat_appears_where_it_was_put` is the guard: it projects a splat's known
+  position onto the screen and checks the brightest pixel is there, which can
+  only pass if the voxel addressing, the trilinear fetch and the ray march all
+  agree.
+
+  The cube law sets the defaults: a 64³ solver carrying a 128³ dye is 40 MB,
+  where the 2D module carries eight times its solver's resolution in dye
+  because in a volume that would be five hundred and twelve times the memory.
+  An oversized volume halves until it fits the device's texture limit rather
+  than failing to allocate.
+
+- **The volume solves with a V-cycle, and picks its own resolution.** A Jacobi
+  sweep moves information one voxel, which is a much worse deal in a volume
+  than in the plane: the pressure from a puff falls off as 1/r rather than
+  log r, and six neighbours share the correction instead of four. Twenty
+  sweeps left 82% of a splat's divergence in place; three hundred left 37%.
+  One multigrid V-cycle leaves 31%, and two leave 11% — so a cycle beats three
+  hundred sweeps for about the cost of twenty, and `FluidConfig3d` now
+  defaults to `PressureSolver::Multigrid` where the 2D default stays Jacobi
+  (that one is the original's, and there is no original here).
+
+  **Every whole-voxel tap is a `textureLoad`.** The solver reads its
+  neighbours at integer offsets, and a voxel of the atlas is one texel — but
+  those reads were going through the hand-rolled trilinear path, two filtered
+  fetches and a lerp to reach a value whose interpolation weights are always
+  1 and 0. The arithmetic is identical and the step is **2.4× faster at 64³
+  and 5× at 96³**, which is what makes the bigger grids usable.
+  `the_taps_hit_the_voxels_they_name` recomputes a divergence pass on the CPU
+  from the field read back, walls included, so the indexing cannot drift.
+
+  **`FluidSim3d::set_resolution`** rebuilds the grids while it runs, and
+  `QUALITY_LEVELS_3D` names five sizes — `low` through `extreme`, 24³ to 128³
+  — under the same names the 2D fluid uses. A resize empties the volume:
+  interpolating one would be eight textures of resampling to preserve a second
+  of simulation. The browser demo has the dropdown and two sliders for it, and
+  `examples/fluid3d_bench.rs` is where the numbers above come from — it splits
+  a volume frame into the solve, the march and the memory at each resolution.
+
+- **The volume steps over the parts of itself that are empty.** Four fifths
+  of a settled plume is nothing — 80% of its 8³ bricks, 85% of its 4³ — so a
+  ray was spending four fifths of its samples fetching zero. The dye is now
+  reduced twice, keeping the largest value of each eight, into a volume at a
+  quarter of its side; the march steps over a whole brick wherever that
+  largest value is below what it already treats as nothing. **1.9× on the
+  march, about 1.3× on a whole frame** at 2560×1440, and the picture is the
+  same to three channels in sixty-five thousand.
+
+  The reduction is rebuilt when the dye moves rather than when a frame is
+  drawn — it costs the same whatever the render is, so tying it to the render
+  would have made a small one mostly reduction. And the skip stops one dye
+  voxel short of a brick's far face, because the dye is read with a filter
+  and a sample within half a voxel of that face reads part of the next brick;
+  that detail is worth the quarter of the skip it costs, taking the worst
+  pixel from 38 levels out to 11.
+
+- **The ray march can average itself across frames.** `temporal_samples`
+  jitters each frame's samples differently and blends into what came before,
+  so 24 samples a frame converge on what 288 give in one: measured against a
+  288-sample reference, a single short march is 0.088/255 away and 24
+  accumulated frames are 0.019. It resets when the camera moves — nothing
+  reprojects, because a volume has no single depth to reproject by — so it
+  costs nothing while you drag and sharpens the moment you stop. In the
+  browser panel and as a `THREERS_FLUID_ACCUMULATE` key on iOS.
+
+  **It reprojects, so a moving camera keeps its history.** The original
+  version threw the accumulation away on any camera movement, on the grounds
+  that a volume has no single depth to reproject by. It has no *surface*,
+  which is not the same thing: weighting each sample by what it contributed
+  — its opacity times the transmittance that reached it — gives an expected
+  depth, which for a plume is a few voxels inside the smoke. The march
+  reports it on a second attachment, in the same loop, and the resolve
+  projects that point through the previous frame's camera. Accumulating
+  through a slow orbit lands 0.045/255 from a twelve-times-longer march,
+  against 0.104 for a single one — which is what a moving camera used to get.
+
+  **It needed history rejection to be usable at all.** As a plain average it
+  was not a feature with a caveat — against a long march of the same moment,
+  eight accumulated frames of a rising plume came out *thirty times further
+  from the truth* than one short march with no history in it. The resolve now
+  clamps the history to within `temporal_clip` standard deviations of its own
+  3×3 neighbourhood before mixing, which is the colour clamp a temporal
+  anti-aliasing resolve does. Min and max of that neighbourhood is the
+  obvious box and is too wide — the march is jittered, so nine samples carry
+  nine samples' worth of noise — and clipping to the spread instead, at half
+  a sigma, gives **5.2× less ghosting** while keeping nearly all of the
+  convergence. The default came off the measured curve rather than a guess;
+  both columns are in the `temporal_clip` docs.
+
+  It also turned up an artefact it could not remove, which turned out not to
+  be the march's fault. Averaging took the stipple out of a 272³ plume
+  (local roughness 36.2 to 20.3) and left a cross-hatch at the scale of the
+  empty-space skip's bricks — averaging cannot touch that, because the
+  bricks are in the same place every frame. A ray that stepped over a brick
+  was landing wherever the skip put it rather than where its next sample was
+  due, so it carried on offset from every ray that had not skipped, and
+  neighbouring pixels that skipped different amounts sampled at different
+  phases. Snapping back to the lattice took the roughness to 16.6 and made
+  skipping **exactly** invisible in that regime: 0.000/255 against marching
+  every step, where before it was 0.225 over 532 channels.
+  `skipping_keeps_rays_on_the_sample_lattice` guards it, and was verified by
+  putting the bug back — the first version of that test, which measured
+  local roughness, passed with the bug in place and had to be rewritten.
+
+- **Measured and not built: limiting the solve to where the fluid is doing
+  something.** The solve is 95% of the step and the pressure from a
+  disturbance falls off by a factor of four hundred across the box, so
+  smoothing only the active part is the obvious next cut. On a settled plume
+  11.8% of voxels carry divergence above a hundredth of the peak — but their
+  bounding box is 85.9% of the volume, because a plume is a thin convoluted
+  thing threading through it, so no scissor helps. And the field being
+  *solved for* is not sparse at all: 45.9% of voxels hold pressure above a
+  hundredth of peak and 98.9% above a thousandth, so a mask drawn round the
+  divergence would clamp the pressure's tail and change the answer inside
+  the mask as well as outside. Best case about 2× on the sweeps for a
+  truncation error and a stencil; recorded here so it is not rediscovered.
+
+- **Two silent divergences between the implementations, found and guarded.**
+  There are three of this solver now, and what they share is a failure mode:
+  a setting one of them does not implement, ignored without complaint,
+  producing a picture that still looks like a fluid.
+
+  `CpuFluid3d` had kept `vel.y +=` and a hardcoded two smoothing sweeps
+  after `buoyancy_axis` and `multigrid_smooth` were added to the shader. The
+  existing parity test runs with buoyancy off — the right way to isolate the
+  projection, the wrong way to notice — so nothing failed.
+  `the_two_solvers_agree_about_which_way_is_up` points buoyancy along
+  `[0.6, 0, -0.8]` and now holds the two to the same answer, which they give
+  to within two hundredths of a voxel.
+
+  `MetalFluid::unsupported` names what that backend ignores for a given
+  configuration, and `metal_fluid_matches_wgpu` asserts the list is empty
+  for the one it compares — otherwise it reports how far apart two different
+  algorithms are and calls it agreement. It found `colorful` set on its
+  first run. The example prints the list rather than ignoring it quietly.
+
+- **Nothing in the volume is pinned to +Y any more.** Two places were, for
+  different reasons. Buoyancy was written `vel.y = vel.y + …`, which is what
+  buoyancy usually is but not what the solver has to assume — `buoyancy_axis`
+  points it anywhere, and along x, y and −z the dye drifts 4.2 voxels on the
+  axis it was given and a ten-thousandth of that on the others. And
+  `multiple_splats` drew its vertical component from `rand` rather than
+  `rand - 0.5`, so it was never negative and every random push went up; the
+  direction is now uniform over the sphere, which is not the same as three
+  independent components (that is uniform over a cube, and denser towards
+  its corners). 210 voxels up against 213 down, where it used to be all up.
+
+- **Click and drag push the volume.** `FluidSim3d::impulse_at_screen` turns a
+  pointer position and a drag into a puff of dye and a shove, landing on the
+  plane through the volume's centre facing the camera — a screen point is a
+  ray, and picking the depth any other way needs a readback. In the browser a
+  drag pushes and shift-drag or right-drag orbits.
+  `a_click_lands_where_it_was_aimed` works backwards from the render, because
+  a projection and an unprojection that are not each other's inverse put dye
+  somewhere plausible and wrong.
+
+- **`show_fps` draws the frame rate over the picture, in both dimensions.** A
+  3×5 bitmap font packed into fifteen bits a glyph, drawn in the shader
+  rather than through the renderer's overlay canvas — which would want a
+  texture upload a frame and a path to get it here. Both solvers share the
+  glyphs and declare their own entry point. Each test checks it draws *and*
+  that it changes nothing outside its own box, which is what a `discard` gets
+  wrong quietly.
+
+  Under the number is a **sparkline of the last sixty-four frames**, because
+  a number tells you the rate now and a chart tells you whether it is
+  steady — the question anyone watching a frame counter is actually asking.
+  A hitch that lasts two frames never moves a smoothed figure and is a spike
+  here. Bars over the refresh target are warm, under it cool.
+
+  It is scaled to **twice the current frame time**, not to the target.
+  Scaling to the target reads well until the fluid is slower than it, and
+  then every bar clips and the chart is a solid block saying only "slow",
+  which the number already said; against the current frame time a steady run
+  sits at half height whatever the rate, so the variation stays visible. The
+  target keeps a line where it falls, and leaves the top of the chart when
+  the fluid is below half of it.
+
+  The history travels as a 64×1 `rgba8unorm` texture, one `write_texture` a
+  frame, rather than as more uniform — the plane's uniform block is shared
+  with the Metal backend byte for byte, and sixty-four floats is not a thing
+  to add to it for a read-out. The shader gets the row width and the
+  millisecond range substituted in from Rust, so the draw cannot disagree
+  with the upload about how wide the row is or what a byte means.
+
+  `the_chart_shows_the_frame_times_it_was_given` feeds it a flat history and
+  then one with a spike, and checks the bars: it exists because the first
+  version drew a confident chart of nothing at all, having inherited the
+  dye binding from the pass beside it.
+
+  **On the Metal backend too**, which is the first thing the two backends
+  share Rust for rather than only a shape: one `Rate` owns the ring of frame
+  times, the smoothing and the rule for what counts as a frame, and all
+  three solvers call it. Only the glyphs and the chart are transcribed into
+  MSL, with the row width and the millisecond range as literals because
+  `FLUID_SHADER_SOURCE` is public and has to compile as it stands —
+  `the_msl_read_out_agrees_about_the_row` holds those to the Rust, and
+  `the_two_read_outs_agree` renders the same pinned history through both and
+  compares the pictures. They came back **identical to the byte**, which
+  also settles that the premultiplied blend Metal uses lands where the wgpu
+  pipeline's straight alpha does. `FLUID_FPS=1` turns it on in
+  `examples/metal_fluid`.
+
+  And it shipped with one line of WGSL that only wgpu's own parser accepts:
+  `column == 0 && shown < 100 || column == 1 && shown < 10`, which the
+  specification forbids without parentheses. **naga takes it; Tint does
+  not** — so every native test passed, every browser test passed because
+  they ran under WebGL2 where naga compiles the module itself, and in any
+  real WebGPU browser the whole module was rejected and with it every
+  pipeline in the fluid. The canvas was black while the frame loop ran at
+  sixty, the panel worked and wgpu's log was empty, because the error is the
+  browser's rather than wgpu's. Fixed, and guarded: `tests/wgsl_portability.rs`
+  walks every WGSL literal in the tree for a parenthesised group holding both
+  operators, and headless Chrome needs `--enable-unsafe-webgpu` before it has
+  a WebGPU adapter to test against at all.
+
+  Testing on the WebGPU path then found a second one of the same kind: the
+  **volume** sampled its atlas with `textureSample`, which needs implicit
+  derivatives and is therefore legal only in uniform control flow — and the
+  volume samples inside the ray march's loop. naga allows it, Tint does not,
+  so the 3D fluid had never rendered in a WebGPU browser either.
+  `textureSampleLevel(…, 0.0)` is legal anywhere and identical on a
+  one-level atlas. The plane's seventy-odd `textureSample` calls stay as
+  they are: they sit at the top level of a fragment function, which is
+  uniform control flow.
+
+  Two things that made it invisible are also fixed. **wgpu had no logger in
+  the browser**, so a rejected pipeline or a failed surface configuration
+  went nowhere; `install_console_logger` forwards `log` records to the
+  console and `?log=info` raises the level. And **the demo failed silently**:
+  the start-up guard covered `init` only, `#msg` is hidden as soon as the
+  fluid is running and the panel is unhidden at the very end, so anything
+  that threw in between left a black page and no message.
+
+- **The demo works on a phone.** The device pixel ratio is capped at two — a
+  phone reports three, and the fluid is a per-pixel cost from the splat to
+  the march, so nine device pixels per CSS pixel is most of a frame for
+  sharpness nobody resolves at arm's length; a Retina Mac reports exactly
+  two, so the cap costs desktop nothing. Default quality drops to `medium`
+  on a narrow screen.
+
+  The panel becomes a bottom sheet under 720 pixels — full width, half the
+  height at most, scrolling, inset clear of the notch and the home bar, and
+  closed on load behind a 44-pixel toggle. Controls grow to a finger's worth
+  of target. The two gestures that assume a desktop get touch equivalents:
+  the volume's `ctrl`-drag push becomes a **drag pushes** switch, shown only
+  where the pointer cannot hover, and the space bar's splats become a
+  double-tap. The hints say whichever is true.
+
+  Writing it found the rate counter's threshold to be wrong. It rejected any
+  gap under a millisecond, to stop a capture beside a present reading as a
+  thousand frames a second; that is right at sixty and wrong at eight
+  hundred, which is what this backend reaches at 720p on an M4 — a frame
+  there is 1.2 ms, so half of them fell under the floor and the chart had
+  bars for 38 of 90 renders. The threshold is a fifth of the frame time
+  already measured now, capped at 4 ms so one slow first frame cannot latch
+  it shut and leave the rate stuck at the value that set it.
+  `the_rate_counts_frames_and_not_duplicate_renders` pins all three cases;
+  nothing pinned the old one.
+
+- **Work with no reader, removed.** The occupancy reduction is built for the
+  ray march, and it was being built at the end of every step — so a
+  simulation stepped a hundred times and drawn once reduced the dye a
+  hundred times to use the answer once. It happens at render now, two passes
+  of forty-four.
+
+  The inventory that came out of looking: the solve is ~95% of the step and
+  the advections are 1–5%, so masking the dye advection to the bricks that
+  hold dye — the obvious idea, with the occupancy pyramid already there —
+  would have bought under 2% of a frame. Inside the solve, the smoothing
+  sweeps and the coarse levels both pay for themselves (one sweep a level
+  instead of two leaves 0.536 of the divergence against 0.324, for eight
+  fewer passes). What was free was the carry-over.
+
+- **The volume carries all of last frame's pressure**, where the plane keeps
+  0.8 after the original. More converges better — 0.269 of a splat's
+  divergence after eight frames against 0.281 — and the drift the damping
+  exists to prevent does not happen here: the pressure equation's null space
+  should let a constant offset accumulate in a half-float field, and nine
+  hundred frames of forcing leave the peak at 22 to 26 either way, including
+  under Jacobi, which has no coarse grid to anchor the constant and is the
+  configuration the damping is really for.
+  `the_pressure_carry_over_is_damped_against_drift` is what would catch that
+  being wrong.
+
+- **Two solver passes folded into the sweep that follows them.** Starting a
+  solve from a fraction of last frame's answer was a pass over the whole grid
+  to multiply a field by a constant; the stencil is linear, so scaling what
+  the first sweep reads is the same thing. A coarse level starting from zero
+  was a clear-only pass and then a sweep that read the zeros back; the same
+  scale set to zero collapses it to `-rhs / 6`, no loads at all. **49 render
+  passes to 44** at 64³, with every residual in the suite unchanged to three
+  figures. `FluidSim3d::passes_per_step` counts them, because five passes in
+  forty-nine is inside a GPU timer's noise and not inside counting's.
+
+  That change exposed a latent bug in the bind-group cache: it was keyed on
+  the most recently handed-out uniform slot, which is correct only while
+  every block is bound before the next is filled. A pass wanting two blocks
+  before binding either got one bind group for both — a solver where the
+  sweep count stopped mattering, twenty and three hundred sweeps both leaving
+  0.944. The slot now travels with the buffer.
+
+- **The iOS C ABI is five functions, not ten.** `create`, `set`, `frame`,
+  `info`, `destroy`. Resize, touch, pinch, splat and speed were five calling
+  conventions to get wrong across a language boundary; they are now one key
+  and three floats, which is the shape the browser build has always had.
+  An unknown key does nothing, so an app built against an older header keeps
+  working, and `the_header_matches_the_library` now checks the count as well
+  as the names. A budget of 0 takes the default, which retired the sixth.
+
+- **iOS and iPadOS.** The crate already built for `aarch64-apple-ios`; what
+  was missing was the way in and the budget. `GpuContext::from_metal_layer`
+  takes a `CAMetalLayer`, which is what UIKit has instead of a window handle.
+  `within_memory` answers the resolution question the way a phone needs it
+  asked — the largest volume that fits a number of megabytes, rather than a
+  quality name that may get the app killed — and
+  `the_memory_estimate_is_the_memory` holds the estimate to what actually
+  gets allocated, atlas padding included.
+
+  `crates/threers-fluid-ios` is that as a C ABI static library: nine
+  functions, a hand-written header checked against the exports by
+  `the_header_matches_the_library`, and a Swift `CADisplayLink` loop in the
+  README. `a_layer_comes_up_and_draws` runs the entry points against a real
+  `CAMetalLayer` on macOS, where the class, the wgpu surface and the Metal
+  drawables are the same ones iOS uses.
+
+  One bug, found by that test rather than by reading: `FluidFormats::volume_dye`
+  is what the device *allows*, not what the simulation will use — the packed
+  dye is off by default — so sizing against it while allocating with the
+  other underestimated the largest field by half. Asking for 48 MB got 58.
+  `FluidFormats::resolve` makes the distinction explicit.
+
+- **A speed control**, as `time_scale` on both configurations, in the browser
+  panel and as `threers_fluid_set_speed`. Applied by `update` and not by
+  `step`, which is the part that matters: every parity, determinism and
+  CPU-against-GPU test passes a fixed timestep to `step` and means it, so a
+  knob that rescaled it there would pass every test about speed and quietly
+  break every test about agreement. `speed_scales_update_and_not_step` pins
+  both halves — 2.5× lifts the dye 11.2 slices against 1×'s 2.9, and driving
+  `step` directly matches 1× exactly.
+
+- **`CpuFluid3d`** — the volume solver again in plain Rust. Same stages, same
+  V-cycle, same `FluidConfig3d`; flat `Vec`s in voxel order rather than an
+  atlas, because nothing on the CPU has to write a 2D attachment. Rayon over
+  z-slices where the `parallel` feature is on, and `threading_changes_nothing`
+  holds it to a bit-identical result either way.
+
+  It is a reference, not a fallback. Two transcriptions of one algorithm
+  should remove the same fraction of a puff's divergence, and
+  `the_cpu_and_gpu_solvers_agree` holds them to it: 0.358 on the GPU against
+  0.337 on the CPU, from half floats through a texture unit on one side and
+  `f32` with hand-rolled trilinear on the other.
+
+  And it answers what the GPU is worth. At thirty frames a second, stepping
+  only: **one core manages 48³, twelve manage 80³, the GPU manages 288³** —
+  a factor of two hundred in voxels. Two things in the table are worth more
+  than the ratio: threading buys about 3.5× rather than twelve, because the
+  stages are memory-bound and at 16³ it is a net loss; and the GPU is nearly
+  flat from 16³ to 96³, 0.92 ms to 2.13, because at those sizes it is paying
+  for fifty render passes rather than doing arithmetic.
+
+- **The volume will tell you where its GPU time goes.** `FluidSim3d::profile`
+  turns on timestamp queries and `stage_ms` reports the curl, divergence,
+  solve, projection and advection separately, off the GPU's own clock rather
+  than the wall's — which on a machine with anything else running is the
+  difference between a measurement and a number. `GpuTimer` grew from two
+  marks to N for it, and `GpuContext` now asks for `TIMESTAMP_QUERY` when the
+  adapter has it, because a device opened without it cannot be told to
+  measure later.
+
+  It settles a question the wall clock could not. **The solve is about 95% of
+  the step** — 1.75 ms against 0.014 to 0.053 for everything else at 64³ — so
+  the optimisations above, none of which touch it, are dividing up the
+  remainder. That is why they do not stack.
+
+  Two things worth recording from building it. Writing a timestamp at both
+  ends of a single pass is the obvious way to time one, and on this GPU it
+  returns a pair in the wrong order on most frames and a plausible number on
+  some; marks across passes are reliable, so every stage opens on a pass and
+  the last is closed by whatever comes next. And the first version took each
+  frame's five numbers together, from whichever frame had the cheapest total
+  — which reported the solve, identical work in all eight configurations,
+  varying by two and a half times. Each stage now keeps its own minimum.
+
+- **`multigrid_coarsest`**, after the measurement it was added to disprove. A
+  V-cycle at 64³ is about forty passes and most are on grids from 32³ down to
+  4³, where the arithmetic is free and the pass is not, so stopping earlier
+  looked like free speed. It is not: two levels instead of four costs 23% of
+  the residual to save 10% of the solve. The default coarsens all the way and
+  the knob stays, because that balance is a property of a machine's per-pass
+  cost rather than of the fluid.
+
+- **The occupancy reduction moved into the step**, where the dye has just been
+  finalised, rather than running at render time. The march no longer waits on
+  a reduction of the thing it is about to read, and a render that follows a
+  splat still rebuilds it so a fresh blob cannot fall into a brick marked
+  empty.
+
+- **The volume's resolution ceiling, measured.** Marching into 1280×720 on an
+  M4 Pro: 128³ solver with a 256³ dye runs at 188 fps in 328 MB, 192³ at 83
+  fps in 1.1 GB, and **272³ carrying a 544³ dye is thirty frames a second**,
+  in 3.2 GB. Memory is what most machines run into first — the cube law makes
+  each step roughly twice the last.
+
+- **The volume's optimisations are runtime switches, and the bind groups are
+  kept between frames.** A step records about fifty passes whose descriptions
+  are identical frame to frame — same uniform blocks in the same order, same
+  textures until the grids are rebuilt — and rebuilding them was most of what
+  the CPU did in a frame. Keyed on the slot and on which textures, they are
+  now built once: **1.12–1.34× on the CPU encode**. It does not show in the
+  frame on an M4 Pro, where 0.6–0.8 ms of recording already hides behind 2.3
+  ms of GPU work; it is there for where the CPU is the binding constraint.
+
+  `empty_space_skip`, `cache_bindings`, `compact_dye`, `pressure_solver` and
+  the resolution are all changeable on a running simulation, and all are live
+  controls in the browser demo, because which of them pays is a property of
+  the machine rather than of the fluid.
+
+  The bench grew a `spread` column with them. These are effects of tens of
+  percent and a whole frame on a shared machine varies by more than that
+  round to round; a column that shows it is the difference between a
+  measurement and a number.
+
+- **The dye can be packed into `rg11b10ufloat`, and mostly should not be.**
+  It is the largest field in a volume and never negative, so it does not need
+  the sign bit `rgba16float` spends: three 11-bit floats hold it in half the
+  memory, 41 MB down to 24 at the default, and the picture is the same to a
+  tenth of a level. On an M4 Pro it is also **twice as slow** — sampling the
+  packed format costs more than the bandwidth it saves, with the march alone
+  40% slower at an identical sample count. So `compact_dye` is off by
+  default, documented with the measurement, and a runtime switch rather than
+  a build-time one — the trade is a property of the texture unit, and a
+  software rasteriser with no filtering hardware to be slow at unpacking may
+  well go the other way. `FLUID_COMPACT=1 examples/fluid3d_bench.rs` is how
+  to find out which a machine is.
+
+- **The fluid on the Metal backend** — `threers::metal::MetalFluid`, the same
+  solver through the Objective-C runtime with no wgpu underneath it at all,
+  for an app that already owns an `MTLDevice` and does not want a second
+  graphics abstraction inside it. `src/metal/fluid.metal` is a transcription
+  of the WGSL function for function, and the two share the uniform block so
+  they cannot drift apart.
+
+  `cargo run --features "metal,fluid" --example metal_fluid -- --compare`
+  renders the same simulation both ways and reports the difference.
+  `metal_fluid_matches_wgpu` keeps it honest at five frames, where the two
+  are still the same picture: a fluid is chaotic, so the mean difference goes
+  0.00/255 at zero steps, 0.04 at five and 4.79 at ninety from half-float
+  rounding alone.
+
+  Two bugs that the comparison found, both invisible from the Metal side
+  alone. A fresh `MTLTexture` holds whatever was in that memory — wgpu clears
+  one before anything can read it — so a NaN in the velocity reached the first
+  advection and the dye it fetched came back as nothing: a picture that stayed
+  empty however many splats went in. And the display pass replaced the target
+  instead of compositing over it, so the fluid's zero alpha where there is no
+  dye erased the background that had just been drawn.
+
+- **The browser demo does both fluids.** `web/fluid.html` has a dimension
+  dropdown: the plane, or smoke in a volume with the orbit camera. The panel
+  shows the knobs that mode has and reports the grids it actually got.
+
 - **Splats are batched.** Each was two full-screen passes and a submit of its
   own, so a burst of twenty-five was fifty passes over the dye grid — **18 ms
   at `extreme`, about four frames, for twenty-five Gaussians**. One pass per
@@ -1482,6 +2894,65 @@ frames; and the fixes that writing all of it turned up.
 
 ### Changed
 
+- **rlx comes from crates.io, at 0.2.17** (`rlx`, `rlx-geo`, and in
+  `threers-probe` and `threers-ocean`), with `Cargo.lock` resolving the whole
+  family from the registry. The committed lockfile had recorded local path
+  checkouts and 268 unused patch entries from a machine-local override. 0.2.17
+  rather than the newest, 0.2.18: the published `rlx-runtime` 0.2.18 imports
+  `rlx_ir::NumberFormat`, which the published `rlx-ir` 0.2.18 lacks, so it
+  does not compile from crates.io.
+- **The JavaScript API has no `MOUSE`.** `THREE.MOUSE` and the `MOUSE`
+  export are gone; the controls keep three.js's button numbers internally, so
+  `mouseButtons = { LEFT: 0, MIDDLE: 1, RIGHT: 2 }` still works.
+- The npm package no longer ships the `.wasm.br` / `.wasm.gz` copies (package
+  CDNs and bundlers ignore them), which had tripled the wasm's share of it.
+- **Standard and Physical roughness gains three.js's `geometryRoughness`.**
+  Highlights widened by geometric specular antialiasing (the shading
+  normal's variance across a pixel, Kaplanyan et al. 2016) in place of
+  three.js r165's term, the largest screen-space change of the view-space
+  normal; that was the whole remaining difference from three.js on Physical
+  highlights (up to 27 levels, 79 on an anisotropic one, against 1–4 now).
+  The antialiasing is kept as an option, `set_specular_antialiasing(true)`,
+  for crinkled foil or fine normal maps that sparkle under motion. Metal had
+  neither term and now follows the same rule.
+- **`PhysicalMaterial::iridescence_thickness` is
+  `iridescence_thickness_range: [f32; 2]`**, three.js's
+  `iridescenceThicknessRange` (default `[100, 400]`); `with_iridescence`
+  still takes one thickness, the top of the range.
+- The legacy material layout no longer binds `iridescenceThicknessMap` or
+  `displacementMap`; a material with either draws through a shader variant.
+  That frees two texture units on WebGL2, where the legacy layout had reached
+  seventeen against a limit of sixteen and every draw panicked in wgpu's GL
+  backend.
+- **The shim's renderer antialiases only when asked**, as three.js's does: it
+  forced 4× MSAA, so every edge differed from three.js's default
+  `antialias: false` — 515 pixels on the `cube` parity scene, a wireframe 0.81%
+  of the frame. Pass `{ antialias: true }` for MSAA; the demos and examples
+  now do. 120 of 132 parity scenes are pixel-identical to three.js (107
+  before), the rest within 0.21%.
+- **Removed the CSG's stand-ins for evaluating it**:
+  `build_bvh_csg_hierarchy_geometry` (it returned geometry exported from the
+  deleted JavaScript port with one live step on top), the step helpers
+  (`step1_shell_cut` … `step4_win_frame`, `evaluate_through`,
+  `evaluate_live_through`, `js_target_verts`, `JS_STEP*_VERTS`),
+  `load_positions_geometry_bin` and the `TriKey` topology helpers, with the
+  tests, investigation scripts and 45 fixtures that pinned the CSG to that
+  port. `evaluate_hierarchy` matches three-bvh-csg directly now; the
+  `bvh_csg_hierarchy` example evaluates live and takes an optional step
+  (it absorbs `bvh_csg_steps`).
+- **`CsgBrush`'s transforms are `matrix` / `matrix_world: [f64; 16]`** (were
+  `local_matrix` / `matrix_world: Matrix4`); `set_matrix_world` replaces
+  `set_matrix_world_js`.
+- **`ToonMaterial::steps` is `gradient_map: Option<Arc<Texture>>`**, three.js's
+  `gradientMap`. `ToonMaterial::gradient_steps(n)` builds the evenly spaced
+  `n`-texel ramp `steps: n` used to mean.
+- **Reflective transparency is off by default.** A transparent Standard or
+  Physical surface's alpha was raised by its specular reflectance
+  (`opacity + (1 − opacity) · reflectance`); three.js blends the whole colour
+  by `opacity`, so threers now does too, and the boost is
+  `set_reflective_transparency(true)`. Metal had no such term and gains it,
+  matching wgpu with and without an environment.
+
 - **The supersample resolve reconstructs with a real filter.** It averaged the
   `factor × factor` block, which is the pixel's area coverage and sounds like
   the right answer. It is not: a box one output pixel wide is a poor low-pass —
@@ -1529,6 +3000,525 @@ frames; and the fixes that writing all of it turned up.
   a dark halo you can see, so Mitchell is the default and Lanczos-2 is opt-in.
 
 ### Fixed
+
+- **OpenSCAD booleans with a cylinder came out empty.** `difference() {
+  cube(…); cylinder(…); }` evaluated to no geometry: the float CSG kernel now
+  reads three-bvh-csg's `position`, `uv` and `normal` from both operands, an
+  OpenSCAD cylinder has no `uv`, and the panic that followed was caught and
+  turned into an empty mesh. OpenSCAD now evaluates each boolean over the
+  attributes both operands carry (a caller's `CsgEvaluator::attributes` is
+  restored after).
+- **Coaxial cylinders resolved exactly again.** `CylinderGeometry` now
+  computes in `f64` to match three.js bit for bit, and on those positions the
+  exact kernel deferred `intersection` and `difference` of two cylinders offset
+  along their axis. OpenSCAD's `cylinder`, `cone` and `frustum` use the new
+  `CylinderGeometry::single_precision`, the same mesh with `f32` positions;
+  `CylinderGeometry::new` keeps three.js's numbers.
+- The shim's `BufferGeometry.dispose()` did nothing: an empty second
+  `dispose()` later in the class replaced the one that drops the BVH and the
+  half-edge structure. The `THREE` namespace object also listed twelve names
+  twice; esbuild now reports nothing over `web/`.
+- `cargo build --workspace` failed to link the Python extension on macOS
+  (`Undefined symbols … _PyBaseObject_Type`): an extension module leaves the
+  interpreter's symbols to be found at load time, which maturin arranged and
+  a plain cargo build did not. `crates/threers-py/build.rs` now asks for it.
+- `hevc::CompressedEncoder::tiles(..).deblock(false)` wrote a PPS with
+  deblocking on, so its stream no longer matched its own reconstruction.
+  Tile grids are also reduced to HEVC's minimum tile size (256 × 64 luma);
+  narrower tiles were rejected by the reference decoder.
+- The H.264 encoder's SPS now carries a VUI saying BT.601, limited range.
+  `Yuv420Frame::from_rgba` converts with BT.601, but players assumed BT.709
+  for HD without a VUI, which shifted colours (a red of (220,30,40) came back
+  as (235,49,37)).
+- The software HEVC encoder's SPS says BT.601, limited range, the same way
+  (the alpha layer still states only its full range). The MP4 `colr` box now
+  repeats what the stream's SPS says, so the two never disagree: it was
+  hard-coded to BT.709, which mislabelled every file from threers' own
+  encoders. VideoToolbox streams still say BT.709 in both places. The golden
+  MP4 checksums in `tests/h264_animation_parity.rs` and
+  `web/scripts/video-export-test-lib.mjs` change with it.
+- A malformed SPS, PPS or slice header could panic the native decoders
+  (arithmetic overflow on all-ones Exp-Golomb codes, crops past the picture,
+  unbounded tile counts). Each is now range-checked and refused with an
+  error. Fuzzed with 50,000 random parameter sets.
+- `DecodedFrame::to_bgra` / `to_rgba` (and `NativeDecoder::take`) upsample
+  chroma bilinearly from where H.264 and HEVC site it by default, rather
+  than nearest-neighbour. Colour edges no longer step, and the output is
+  within 39 dB of VideoToolbox's (31 dB before). The conversion is integer
+  fixed-point and runs over rows on several threads for large pictures
+  (one on `wasm32`): about 1 ms rather than 6 ms for a 1080p frame.
+- UI layout follows the browser more closely:
+  - A flex item's automatic minimum size is the smaller of its content and
+    its specified size, and zero for a box that clips.
+  - Centred and end-aligned flex items overflow both ends when they do not
+    fit.
+  - Text widths are rounded up to 1/64 px, as Blink's `LayoutUnit` does.
+  - Positioned boxes paint, and hit-test, after in-flow siblings.
+- Spot and point shadows took a single depth comparison, so their edges
+  were a staircase. All shadow kinds now filter over a disc (twelve
+  comparisons, up from the directional's nine). `ShadowSettings::map_size`
+  was documented as ignored long after it took effect.
+
+- **Glass.**
+  - `TransparencyMode::Refract` was tuned to one scene. It forced a blur of
+    at least mip 2, clamped refraction to 2.5% of the screen, added a fake
+    caustic and density tint, and reflected black where screen-space tracing
+    missed. It now follows three.js r165's volume model: the refracted ray
+    runs through the measured back-face distance, blur follows roughness,
+    dispersion splits the channels, tint and attenuation absorb, Fresnel uses
+    the environment BRDF, and misses fall back to the environment. Lights now
+    give highlights. The capture is decoded and composited in display space,
+    so glass no longer washes out under tone mapping.
+  - `TransparencyMode::Glass` and `Oit` with `transmission` drew nothing:
+    they read the transmission capture, which those modes never make. They
+    now pass what is behind through by channel — green glass tints green,
+    where one blend alpha could only darken evenly — and keep reflections
+    and highlights at full strength. (`Glass` draws in two halves, a tint
+    multiplied over what is behind and then the light added; dividing the
+    light by a small alpha to survive one blend had clamped a highlight to
+    a twentieth of itself.) `tests/glass_tint.rs` holds both to `Refract`.
+  - `Oit` shaded with a Lambert of its own — no transmission, no point or
+    spot lights, no shadows — so a glass ball in that mode came out an
+    opaque white sphere. It now shades as every other mode does, with a
+    coloured revealage. On WebGL2, where OIT cannot run, its draws vanished;
+    they now draw as `Glass`.
+  - The Metal renderer drew `Glass`, `Oit` and `Refract` glass from a black
+    stand-in capture. `Glass` and `Oit` now blend there as one layer tinted
+    by channel — composited in the shader on the encoded values, in one draw
+    — and `Refract` draws as three.js's transmission over the capture.
+    `tests/glass_tint.rs` and `tests/glass_shadows.rs` hold Metal to the same
+    numbers as wgpu.
+  - Glass highlights ignored shadows in `Refract`, whose pass has no room
+    for the shadow maps under WebGL2's sixteen texture units. A pass just
+    before it looks every light's shadow up on the glass and packs them into
+    one texture. `tests/glass_shadows.rs` checks every mode.
+  - Thin-walled glass (`thickness` 0) bent light in `Refract` and in the
+    path tracer. Now it goes straight through everywhere.
+  - Thin glass casts a light shadow (dithered into the shadow map). Solid
+    glass keeps a full one.
+  - The path tracer read `dispersion` as a fraction of the IOR, so
+    `dispersion: 1` gave red an IOR of 0 and drew a magenta ball. It now
+    uses three.js's spread, `(ior − 1) × 0.025 × dispersion`. Shadow rays
+    pass thin-walled glass, picking up its transmittance.
+- **Antialiasing.** One `Glass`, `Oit` or `Refract` material in view turned
+  MSAA off for the whole frame, on screen as well as off. All three
+  multisample now, on every backend: `Glass` with multisampled pipelines,
+  `Oit` into multisampled accumulation targets, `Refract` over a
+  multisampled opaque pass whose depth is resolved for the glass's march —
+  or, on WebGL2, which cannot read a multisampled depth, drawn again
+  single-sampled. `tests/glass_occlusion.rs` checks both depth paths keep
+  glass behind an opaque object hidden.
+- In a frame with refraction glass, OIT surfaces were composited and then
+  overwritten by the capture laid back down; they now composite into the
+  capture behind the glass, or over it in front. `Refract` also
+  smooths its silhouettes analytically. `tests/glass_antialiasing.rs` checks
+  that every mode keeps its edges smooth and its MSAA.
+- The Metal renderer's layout test held `Draw` and `Frame` to formulas that
+  had fallen behind the structs, and failed.
+- The Metal renderer bound nil in most sampler slots for a draw when no
+  texture had been uploaded yet, which Metal's validation layer
+  (`MTL_DEBUG_LAYER=1`) rejects; its default and environment samplers are
+  now made with the renderer. Every Metal suite passes under validation.
+
+- **`GpuContext::open` on a WebGL2 adapter** (e.g. from `open_browser_gpu`'s
+  fallback) failed in `request_device`: `renderer_limits` started from the
+  general downlevel floor, which asks for compute limits WebGL2 does not
+  have. It now starts from WebGL2's floor on a GL adapter.
+
+- **CSG over-split and kept the wrong pieces.** The port's triangle–triangle
+  test was not three-mesh-bvh's `ExtendedTriangle.intersectsTriangle`: it
+  read the `suppressLog` flag every caller passes as "coplanar" and so
+  counted any two triangles whose planes straddle each other as
+  intersecting. Faces were split by triangles that never touched them — a
+  sphere ∪ box came out as 4,239 triangles where three-bvh-csg gives 1,081 —
+  and `Triangle::intersects_triangle_ext` gave the same wrong answer. It is a
+  faithful f64 port now, and three-bvh-csg@0.0.16 itself is the oracle:
+  `tests/csg_upstream.rs` replays every evaluation the parity scenes make,
+  recorded from the library in Node, and each comes out with the same
+  triangles, area and volume — exactly, which took the rest of this list.
+  Groups were never assigned (`groupIndices` were all 0) and `b`'s offset was
+  fixed at 1; both follow three-bvh-csg now.
+- **The CSG cuts every face as three-bvh-csg does.** A face is cut in the
+  order the BVH meets its cutting triangles, and a vertex lying on another
+  face is classified by the last bit, so matching three-bvh-csg triangle for
+  triangle took:
+  - **three-mesh-bvh 0.7.6's tree**: per-triangle bounds as its f32 centre and
+    padded half-extent, CENTER on the centroid bounds (it split at the node
+    bounds' centre), AVERAGE and SAH as three-mesh-bvh computes them, and
+    Hoare partitioning. `tests/mesh_bvh_raycast.rs` checks the triangle order
+    against three-mesh-bvh's own.
+  - **three.js's f64 arithmetic, operand order and all**: `Triangle.getNormal`
+    is `(c − b) × (a − b)`, `Vector3.normalize` multiplies by the reciprocal,
+    `distanceTo` is `sqrt(distanceToSquared)` (not a hypot), `getMidpoint`
+    multiplies by `1/3`, and `Plane.intersectLine` solves for `t` — each was
+    a near miss.
+  - **`raycastFirst` as three-mesh-bvh walks it**, in f64, for the
+    inside/outside test: children in split-axis order, the far child skipped
+    when the near one's hit is outside it, and the root box not tested. Nodes
+    record their split axis for it.
+  - **f64 transforms**: `CsgBrush`, `CsgOperation` and `CsgOperationGroup`
+    hold `matrix` and `matrix_world` as `[f64; 16]`, compose them as three.js
+    does, and take the determinant and normal matrix in f64. A brush's
+    position no longer bypasses its parent's transform.
+- **Every primitive is three.js's to the bit**: `BoxGeometry`,
+  `SphereGeometry`, `PlaneGeometry`, `CylinderGeometry`, `ConeGeometry`,
+  `CircleGeometry`, `RingGeometry`, `TorusGeometry`, `TorusKnotGeometry`,
+  `Tetrahedron`/`Octahedron`/`Icosahedron`/`DodecahedronGeometry`,
+  `CapsuleGeometry` and `LatheGeometry` — index, positions, normals, uvs and
+  groups — against three r165's own classes over a spread of parameters
+  (`tests/primitives_upstream.rs`, recorded by
+  `tests/parity/export-primitives-upstream.mjs`). They computed in f32, which
+  put a sphere's equator vertices on the wrong side of an axis — enough to
+  double a ray's hits there — and several had their own layout: the
+  cylinder's caps shared one centre vertex where three.js gives each segment
+  one (and swapped the cap uvs' sine and cosine) and had no groups; the
+  polyhedra's flat normals and seam uvs, the torus knot's frame (an extra
+  normalisation), the lathe's normals (divided rather than scaled by the
+  reciprocal) and the capsule's poles (forced onto the axis) each differed.
+  Each generator now has an f64 core (`from_f64` / `with_f64`) taking
+  JavaScript's numbers; the `f32` constructors recover the literal the caller
+  wrote.
+- **The shim's `OrbitControls` ignored a pose set from JavaScript**: `update()`
+  drove the camera from its own state, so `camera.position` and
+  `controls.target` set from outside (a saved view, a tween) snapped back. It
+  re-reads them as three.js's does. It also wrote the camera's tilted y axis
+  into `camera.up`, rolling every later `lookAt`; `up` stays the world up.
+- **A ray through a shared vertex or edge hits as three.js's does.** The
+  raycaster, the BVH and the CSG each had their own ray–triangle test, the
+  BVH's a Möller–Trumbore in f32; all three are now three.js's
+  `Ray.intersectTriangle` in f64 (`Ray::intersect_triangle_weights`).
+- **The shim's primitives are `BufferGeometry`s**, as three.js's are: each
+  takes three.js's full constructor (the plane's, ring's, cylinder's and
+  cone's segment counts, open ends and angle ranges were dropped), has its
+  `type`, `parameters`, index, attributes and groups, and works with
+  `translate`, `computeBoundingBox` and the rest. They are built in Rust from
+  JavaScript's numbers (`WebGeometry.threePrimitive`), bit for bit as three.js
+  builds them.
+- **The shim's `BufferGeometry.toNonIndexed` dropped the groups**, the morph
+  attributes and `morphTargetsRelative`; it keeps them, as three.js's does. A
+  multi-material CSG built from unindexed primitives came out differently for
+  it.
+- **The shim's raycaster casts against `matrixWorld` as it stands**, as
+  three.js's does: it brought every object's world matrix up to date first,
+  so an object moved since its last `updateMatrixWorld` or render was hit
+  where it now is, where three.js hits it where it was.
+- **`side: BackSide` drew front faces** on wgpu's main, encoded and overlay
+  passes: the cull mode only knew front and double. Back-sided materials now
+  cull front faces, as three.js's do.
+- **`RectAreaLight` took its scale into its direction.** The light's frame is
+  its world rotation alone, its half-extents `width/2` and `height/2`, as
+  three.js's `RectAreaLight` uniforms are; a scaled light leaned and grew.
+- **`iridescenceThicknessMap` could not be set by name**: `map_slot_mut` (and
+  so `setNamedMap` from JavaScript) did not know it, and the shim's
+  assignment was silently dropped. A test now holds every map the shader
+  samples to a slot three.js names.
+- The shim's per-render material sync skipped a material with vector
+  properties but no colour properties.
+
+- **Background and clear colours were decoded to linear twice** on sRGB and
+  float targets, and left unencoded on plain `Unorm` ones such as a
+  `bgra8unorm` canvas, so `Color::from_hex(0x20262c)` came out as `(0, 1, 1)`.
+  A regression from earlier in this release: before it, the clear was only
+  decoded on the linear framebuffer, which is why the example images in the docs
+  were unaffected. One rule now picks the encoding by target format, and a hex
+  background lands as that hex on every format and on Metal alike, checked
+  across twelve colours, three formats, MSAA, supersampling and scissored
+  clears. The three.js shim's `Scene.background` had been compensating and now
+  passes the linear colour, as three.js does.
+
+- **Several renders a frame to a WebGL2 canvas lost the earlier ones.** Each
+  render gets the canvas as a fresh texture that wgpu marks uninitialised, so a
+  pass that loads it is zero-filled first; browser WebGPU never showed it. Once
+  a page sets a viewport, scissor, `autoClear = false` or calls `clear()`,
+  canvas draws on WebGL2 go through a persistent buffer copied to the canvas
+  after each draw, without MSAA.
+
+- **`CapsuleGeometry` left its bottom open.** The bottom hemisphere's rings
+  started one step late, so the band ended below the equator and the last ring
+  passed the pole at a negative radius. It is now a `LatheGeometry` of three.js
+  r165's own path, which also doubles the cap segments as r165's
+  `CurvePath.getPoints` does, and matches an r165 dump buffer for buffer.
+
+- **`TubeGeometry` dropped its last segment when open**, ending half a segment
+  short of the curve, and a closed tube's seam cracked because its last ring was
+  the transported end frame rather than a copy of the first. Every segment is
+  emitted now, and a closed tube repeats its first ring and spreads the frame
+  twist along its length, as three.js does.
+
+- **Post-processing flipped the picture vertically.** The post-fx vertex stage
+  put uv (0,0) at the bottom-left while wgpu textures start at the top row, and
+  a flag flipped it back only for the canvas — so a pass into a render target,
+  an odd-length chain, UnrealBloom's bloom and SSAO's debug outputs came out
+  upside down, and SSAO reconstructed positions from flipped depth against
+  unflipped normals, smearing occlusion over open floor (0.70 where it should
+  read 1.00). The native `EffectComposer` had the same bug in its own vertex
+  stage. Every pass now preserves orientation; effects that need three.js's
+  bottom-left `vUv` get it explicitly. The flag and the shim's compensating
+  double flips are gone (`Renderer::apply_postfx_ex` lost its `flip_y`
+  parameter), and AfterimagePass, TAARenderPass and SSRPass's blur no longer
+  draw into the target they sample. Checked per effect kind, natively and in
+  WebGL2 and WebGPU, including where SSAO darkens and which side SSR reflects
+  on; most parity scenes are vertically symmetric, which is why they never
+  caught it.
+
+- **SSAO read no depth on WebGL2.** The hardware depth was fetched with
+  `textureLoad` and no sampler, so GL fell back to the texture's own default
+  filter; GLES treats a depth texture without `NEAREST` filtering as incomplete,
+  and an incomplete texture reads 0. Reading it through a nearest sampler makes
+  WebGL2 agree with WebGPU to 4·10⁻⁶ in depth and 10⁻⁴ in mean occlusion.
+
+- **`AdaptiveToneMappingPass` and `BokehPass` ran the glitch effect** — the
+  glitch branch claimed kinds 25 and 26 before their own branches were reached.
+  Each now runs its own shader; the glitch variants moved to 31 and 32.
+  `SSAOPass`'s default output multiplies the blurred occlusion into the beauty
+  pass instead of only copying the scene, and `GlitchPass`'s snow hashes pixel
+  centres from the bottom-left, as `gl_FragCoord` does, instead of mirrored.
+  The parity runner finds Chrome for Testing and takes `CHROME`, `SCENES`,
+  `PORT` and `PKG_DIR`.
+
+- **Post-processing on WebGL2 stored different bytes from WebGPU.** Every
+  target and the canvas are sRGB there, with no view formats, so a computed pass
+  was encoded once more than on WebGPU, and normal and depth prepasses were
+  stored encoded. Each pass now knows its output and input formats and decodes
+  or re-encodes so the stored byte matches WebGPU's — checked across copy, film,
+  tone mapping, luminosity, resampling and SSAO blur — and normal and depth
+  materials write unencoded values on sRGB targets. A second post-fx write to a
+  WebGL2 canvas no longer starts from a cleared surface, so `UnrealBloomPass`
+  and `OutlinePass` keep their base image.
+
+- **Shim post-processing checked against three.js's own source.**
+  `AdaptiveToneMappingPass` (last shipped in r152) starts from zeroed,
+  full-resolution luminance targets and adapts per pixel; `BokehPass` follows
+  `setSize`; `EffectComposer` uses its clock when `render()` gets no delta and
+  sizes passes on `addPass`; `GlitchPass` and `SSAOPass` draw into the write
+  buffer unless last; the SSAO normal prepass clears to the linear scene
+  background (the `ssao-normal` parity scene went from 57.76% different to
+  0.00%); SSAO counts off-screen samples and tests the background with
+  `depth == 1`; and `OutputPass` uses the exact sRGB curve. New bokeh and
+  adaptive tone-mapping parity scenes match three.js.
+
+- **Skinned meshes were drawn in three different places.** wgpu skinned without
+  the mesh's own transform, Metal applied it after normalising the weights, and
+  the path tracer normalised and then transformed; the SVG renderer drew the rest
+  pose. All of them, and the raycaster, now skin as three.js does — attached
+  bind mode, identity bind matrix, weights used as given — and a moved, rotated,
+  scaled mesh with posed bones and weights summing to 0.85 lights the same 798
+  pixels on Metal and wgpu, with rays agreeing on all 3538 pixels inside and
+  outside it. Metal's skinned normals had ignored the skin entirely.
+
+- **Sprites ignored `center` and `rotation`** on wgpu, and Metal drew them
+  unbillboarded. Both now follow three.js's sprite vertex stage, with a new
+  `SpriteMaterial::size_attenuation`, so a sprite is picked where it is drawn.
+
+- **Raycasting edge cases.** A ray grazing a bounding-box face — a click on a
+  plane's edge — missed, because the slab test let `0 · ∞ = NaN` through; the
+  BVH's first-hit traversal had the same flaw, and a vertex lying exactly on the
+  bounding sphere was culled. Orthographic rays start in the camera plane, as in
+  three.js, rather than at the near plane, which made every distance short by
+  `near`. `set_from_camera` no longer overwrites the raycaster's layers. After
+  writing a geometry's public fields directly, `bump_version()` tells the
+  renderers and the cached bounds.
+
+- **Material models matched neither three.js nor each other.** Each is now
+  checked per pixel against three.js r165's formulas evaluated analytically on a
+  ray-cast sphere — not against the other backend — and lands within one byte
+  on both. Metal had no 1/π on any non-PBR material and was about π× too
+  bright; wgpu left ambient and hemisphere light undivided by π for Lambert and
+  Phong, used a non-three.js Phong specular, skipped tone mapping and encoding
+  for both on plain canvases, and was off by 31 (Lambert), 95 (Phong), 154
+  (Toon) and 116 (Matcap) levels. Both PBR paths weighted diffuse by (1−F),
+  which three.js does not; Toon now follows `getGradientIrradiance`
+  (`ToonMaterial.steps` defaults to three.js's two-tone ramp); Matcap uses
+  three.js's view frame; Metal's normal material writes view-space normals; and
+  Phong's default specular is `0x111111`. Lit scenes look different from before,
+  and correct.
+
+- **Lambert, Phong and Toon received no shadows on wgpu**, `ShadowMaterial`
+  ignored spot and point shadows there and was missing on Metal, and a point
+  light without `distance` cast no shadow on Metal and a made-up one on wgpu.
+  All of them now receive directional, spot and point shadows as three.js does.
+
+- **Transparent surfaces blended in linear light** on sRGB targets — the
+  headless default — where three.js's default renderer blends the encoded
+  bytes: 50% red over blue gave (188, 0, 188). Metal now blends encoded values
+  through programmable blending and wgpu through a Unorm view of the same
+  target, with the MSAA resolve still linear. WebGL2 still blends linearly: its
+  canvas is sRGB and it cannot reinterpret a view.
+
+- **Instanced meshes** take material arrays (one instanced draw per group, and
+  `material_index` on raycast hits), shared or per-instance morph targets
+  (`set_morph_at`, as in r159+), and three.js's instance normals — wgpu ignored
+  the instance rotation for normals entirely. Metal vertex colours carry alpha
+  and morph all four channels; custom shader materials get `morph_position`,
+  `morph_normal` and `morph_color` in the preamble. `polygon_offset` (three.js
+  `polygonOffset`) works on both backends, which takes the decal parity scene
+  from 8% different to identical. USD export writes morph targets as blend
+  shapes and the importer reads them on unskinned meshes, checked with
+  `usdcat` and `usdchecker`.
+
+- **Tone mapping.** `ACESFilmicToneMapping` on wgpu was a different curve fit
+  (Narkowicz) from three.js's, putting mid grey at 0.267 instead of 0.213; it is
+  three.js r165's formula now. Basic, line, points, sprite, sky and reflector
+  materials are tone mapped as three.js does, every material honours
+  `tone_mapped: false`, and Metal — which had no three.js tone mapping at all —
+  gains `set_tone_mapping` with the same curves.
+
+- **Encoded blending everywhere.** Sprites, instanced, skinned and custom
+  shader draws, viewport panes drawn through MSAA, refraction frames, and
+  WebGL2 canvases now blend transparent surfaces on encoded bytes as three.js's
+  canvas does; WebGL2 does it through an 8-bit scratch copy, since it cannot
+  reinterpret a texture's format. Transparent instanced and skinned meshes used
+  to draw opaque on wgpu. Instanced meshes cast shadows on wgpu, per-instance
+  morphs included; Metal applies instance colours; and point-light shadows only
+  draw objects that cast shadows, where before they drew everything.
+
+- **Material `depthTest`, `depthWrite`, `depthFunc` and `colorWrite`** were
+  ignored by both backends: every draw tested and wrote depth. They are honoured
+  now on wgpu and Metal for every kind of draw, including custom shader
+  materials, and forwarded from the JavaScript materials, so a gizmo drawn with
+  `depthTest: false` shows through what is in front of it, as in three.js.
+
+- **`Color` is three.js r165's own code** in the JavaScript layer, with
+  `ColorManagement`, instead of allocating a wasm object on every setter call.
+  `InterleavedBuffer`, `InterleavedBufferAttribute` and
+  `InstancedInterleavedBuffer` have three.js's full API, and interleaved
+  geometry renders — it is de-interleaved where it crosses into Rust, and
+  `needsUpdate` on a shared buffer refreshes every geometry drawing from it.
+
+- **`alphaTest` only worked on `MeshBasicMaterial`, and `transparent` only on
+  Basic and shader materials.** Every material that has them in three.js now
+  takes both, on wgpu and Metal: a fragment whose opacity times map alpha falls
+  below `alphaTest` is discarded before lighting, as `alphatest_fragment` does —
+  `MeshNormalMaterial` excepted, whose three.js shader has no alpha test — and a
+  material that is not `transparent` draws opaquely whatever its opacity, where
+  before any opacity below 1 blended. The JavaScript materials always send
+  three.js's flag; native materials that never set `transparent` keep blending
+  below opacity 1, the rule they had. A sprite's map alpha now multiplies its
+  opacity, as three.js's sprite shader does, and sprites default to
+  `transparent: true` as three.js's do.
+
+- **Shadows follow three.js's shadow map.** A caster with `alphaTest` and a
+  map casts the shadow of what the test leaves — three.js's shadow depth
+  material takes both — where before a cut-out leaf or fence cast a solid
+  square; on wgpu and Metal, for directional, spot and point lights, and for
+  plain, skinned and instanced meshes. A caster's `side` picks the faces its
+  shadow records, as three.js's `shadowSide` does: every caster used to record
+  its back faces whatever its side, so a double-sided plane facing the light
+  cast nothing on wgpu, and Metal culled nothing at all. Point-light shadows
+  swap the culled face, because the cube faces mirror one axis. Transparent
+  meshes cast their whole shadow, as in three.js — both backends skipped them.
+  On Metal, a Basic material at opacity below 1 without `transparent` now draws
+  opaquely, as it always did on wgpu. A `shadow-cutout` parity scene matches
+  three.js pixel for pixel.
+
+- **Lambert, Phong and Toon had no maps.** They now take three.js's `map`,
+  `emissiveMap`, `normalMap` (with `normalScale`), `aoMap` (with
+  `aoMapIntensity`) and `displacementMap` (with scale and bias), on wgpu and
+  Metal, from Rust and from the JavaScript materials, which until now dropped
+  every map but Lambert's colour map. Ambient occlusion darkens the indirect
+  light only, as three.js's `aomap_fragment` does, and `aoMap` reaches
+  Standard and Physical from JavaScript too; it had no binding at all. Each
+  case is checked against three.js's shading to within a level on both
+  backends, and a `lit-maps` parity scene matches three.js pixel for pixel.
+
+- **A texture changed after binding never reached its material.** The
+  JavaScript layer bound a texture's wasm object once, so an image arriving
+  later — every `TextureLoader` texture assigned before it loaded —
+  `texture.colorSpace = SRGBColorSpace` set after binding, `needsUpdate`, and a
+  `CanvasTexture` redrawn all kept the first upload; `colorSpace` was not
+  passed to wasm at all, so sRGB colour maps were read as linear and came out
+  washed out. A texture now re-binds into every material slot holding it on
+  any of these, its `colorSpace` decides whether the sampler decodes it, and a
+  `CanvasTexture`'s `needsUpdate` re-reads its canvas. A material without a
+  colour map samples its other maps with the first one's filtering (an
+  `aoMap` alone, a nearest-filtered `emissiveMap`), where it used to fall back
+  to linear filtering.
+
+- **Every texture now keeps its own sampler and uv transform, as in
+  three.js.** A material's maps all shared the colour map's sampler and its
+  offset and repeat, so an `emissiveMap` tiled differently from the `map`, a
+  lone `normalMap` with `repeat`, or a nearest-filtered map next to a linear
+  one all read wrongly. On wgpu (and so WebGPU and WebGL2) a material whose
+  maps disagree is drawn with a shader variant that declares each map with its
+  own sampler and transform; on Metal each map slot has its own sampler and
+  transform. Texture `rotation` and `center` (and a hand-set `matrix` with
+  `matrixAutoUpdate` off) now apply as `Matrix3.setUvTransform` composes them —
+  wgpu ignored rotation, Metal turned it about (½, ½) rather than `center`.
+  `MirroredRepeatWrapping` mirrors, where it repeated; `wrapS` and `wrapT` are
+  separate, where either one repeating made both repeat; and `minFilter` is
+  honoured on its own rather than following `magFilter`. Two materials over
+  one image with different wrap or filter no longer share a bind group.
+  Checked against three.js's sampling on both backends and in both browser
+  backends.
+
+- **The JavaScript layer's texture state now follows three.js.** Its
+  `LinearMipmapNearestFilter` and `NearestMipmapLinearFilter` constants were
+  swapped (1005 and 1007), and its classifier treated `LinearMipmapNearest` as
+  nearest; a texture's `offset`, `repeat`, `rotation`, `center` and `matrix`
+  are now read before every render, as three.js reads the texture matrix each
+  frame, so `map.offset.x += 0.01` scrolls a map — edits in place after binding
+  never reached the material. Filter and wrap changes apply at the first
+  render or on `needsUpdate`, as three.js sets them on upload, replacing a
+  one-microtask re-sync that only `MeshStandardMaterial` had. `CanvasTexture`
+  and `VideoTexture` keep three.js's default `offset` (0, 0) and `repeat`
+  (1, 1) and read their top-first pixels through `flipY`, where they folded a
+  flip into `offset` and `repeat` that user values overwrote.
+  `SpriteMaterial.map` is live like every other material's.
+  `MeshPhysicalMaterial`'s maps beyond `map` (`normalMap`, `roughnessMap`,
+  `aoMap`, `emissiveMap`, …) were not passed to wasm at all; they now are, live,
+  as on `MeshStandardMaterial`.
+
+- **`readRenderTargetPixels` returned BGRA on WebGPU.** A render target there
+  takes the canvas's `bgra8unorm` format and its bytes were returned as they
+  were, red and blue swapped; three.js returns RGBA whatever the target, and so
+  does this now. The browser tests had chosen colours that read the same either
+  way round, which is how it went unnoticed; the WebGL2 and WebGPU suites now
+  share their scene tests (lit, skinned, refracting, shadowed, post-processed,
+  `ShaderMaterial`, morph targets and groups) and both check read-back colour
+  exactly. The WebGL2 suite hides `navigator.gpu` before starting a renderer,
+  since Chrome for Testing 155 offers headless pages a WebGPU adapter even with
+  WebGPU disabled, and the whole suite had quietly run on WebGPU.
+
+- **Render targets follow three.js's configuration.** Rendering into a target
+  applied the renderer's tone mapping, which three.js r165 applies only to the
+  final output — so a composer's render pass was tone-mapped and its
+  `OutputPass` tone-mapped it again. A target now stores untone-mapped light
+  unless it stands in for the picture (`RenderTarget::set_presents`: a headless
+  renderer's own target, the WebGL2 canvas buffer), and cube faces never take
+  it. Read-back follows `renderTarget.texture.colorSpace`, also settable from
+  the `WebGLRenderTarget` options: the default `NoColorSpace` reads back linear
+  and `SRGBColorSpace` encoded, as three.js returns them
+  (`RenderTarget::bytes_as_color_space`; storage stays encoded, which keeps one
+  pipeline per format on every backend). A `HalfFloatType` target reads back
+  into a `Uint16Array` of half floats; it returned garbage at four bytes a
+  pixel. `setSize` reallocates the target in place under the same id, so its
+  `texture` and every material sampling it follow — it was a no-op in wasm,
+  and the shim's replacement allocation left `texture` on the old target.
+  `MeshPhysicalMaterial` bound only its colour map: its `normalMap`,
+  `roughnessMap`, `emissiveMap`, `aoMap` and `displacementMap` were never
+  passed on, and are now, live, as Standard's are.
+
+- **An `iridescenceThicknessMap` was never uploaded**, so the first frame that
+  drew one panicked looking it up. Every map a material binds is now uploaded
+  from the same list the bindings are built from.
+
+- **`EdgesGeometry` matched corners by index**, so an unindexed mesh — FBX,
+  face-varying USD — drew every triangle edge, and a `BoxGeometry`, split at its
+  seams, drew each edge twice. Corners now match by position rounded to four
+  places, as three.js does: indexed and unindexed copies give the same edges, and
+  a box gives 12, not 24.
+
+- **Metal wireframes showed the triangulation diagonal.** They now draw the
+  polygon outline line list as 1px hardware lines, the same as wgpu; the two
+  backends light the same pixels on a test quad.
+
+- **Collada `<polylist>` read every face as a triangle**, ignoring `<vcount>`,
+  so any quad scrambled the faces after it. Faces are now fanned by their
+  corner count.
+
+- **Metal views after the first in a shared target** lost their MSAA content
+  and loaded depth that had never been stored. Both showed up once four views
+  shared one target; every view now keeps its colour and clears its own depth.
 
 - **Spot shadows on the Metal backend**, on their own perspective map — a
   frustum of twice the outer cone angle, one compare tap, matching the wgpu
@@ -2677,6 +4667,7 @@ on, and a second crate to make things move.
 - Opt-in `mesh-bvh` and `bvh-csg` (three-mesh-bvh / three-bvh-csg parity).
 - Web shim (`THREE.*`) and parity tooling.
 
+[Unreleased]: https://github.com/eugenehp/threers/compare/v0.0.6...HEAD
 [0.0.6]: https://github.com/eugenehp/threers/compare/v0.0.5...v0.0.6
 [0.0.5]: https://github.com/eugenehp/threers/compare/v0.0.4...v0.0.5
 [0.0.4]: https://github.com/eugenehp/threers/compare/v0.0.3...v0.0.4

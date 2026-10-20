@@ -164,11 +164,21 @@ pub fn skin_attributes(prim: &UsdPrim, vertices: usize, geometry: &mut BufferGeo
         pairs.sort_by(|a, b| b.0.total_cmp(&a.0));
         pairs.truncate(INFLUENCES);
 
-        // Renormalise, since dropping influences loses their share.
+        // Renormalise, since dropping influences loses their share — three.js's
+        // `normalizeSkinWeights`, which its loaders run because the shader
+        // does not normalise. That includes its answer for a vertex with no
+        // weight at all, (1, 0, 0, 0): skinned by nothing, it would collapse
+        // onto the mesh's origin.
         let total: f32 = pairs.iter().map(|(w, _)| *w).sum();
         for (k, (w, index)) in pairs.iter().enumerate() {
             joint[v * INFLUENCES + k] = *index;
-            weight[v * INFLUENCES + k] = if total > 0.0 { w / total } else { 0.0 };
+            weight[v * INFLUENCES + k] = if total > 0.0 {
+                w / total
+            } else if k == 0 {
+                1.0
+            } else {
+                0.0
+            };
         }
     }
 
@@ -333,6 +343,39 @@ pub fn blend_shape_tracks(
             times,
             values,
         ));
+    }
+    out
+}
+
+/// The `SkelAnimation` a mesh's blend-shape weights come from: the
+/// `skel:animationSource` of the skeleton its `skel:skeleton` binds. This is
+/// how a mesh with blend shapes and no joints is bound (and how this crate's
+/// exporter writes one).
+pub fn bound_animation<'a>(mesh: &UsdPrim, layer: &'a UsdLayer) -> Option<&'a UsdPrim> {
+    let skeleton = layer.prim_at(mesh.value("skel:skeleton")?.as_str()?)?;
+    animation_source(skeleton, layer)
+}
+
+/// The blend-shape weights an animation holds at rest — its default value, or
+/// its first sample — in the order of `order` (the mesh's targets), matched by
+/// name; zero for a target the animation does not name.
+pub fn blend_shape_weights(anim: &UsdPrim, order: &[String]) -> Vec<f32> {
+    let mut out = vec![0.0; order.len()];
+    let names: Vec<String> = anim
+        .value("blendShapes")
+        .map(|v| v.flat_tokens().into_iter().map(str::to_string).collect())
+        .unwrap_or_default();
+    let Some(value) = anim.value("blendShapeWeights") else {
+        return out;
+    };
+    let weights = match value.samples() {
+        Some(samples) => samples.first().map(|(_, v)| v.flat_f32()).unwrap_or_default(),
+        None => value.flat_f32(),
+    };
+    for (slot, name) in names.iter().enumerate() {
+        if let (Some(index), Some(w)) = (order.iter().position(|n| n == name), weights.get(slot)) {
+            out[index] = *w;
+        }
     }
     out
 }
@@ -663,6 +706,30 @@ mod blend_tests {
         assert_eq!(frown.position_delta.len(), 4 * 3);
         assert_eq!(frown.position_delta[1], -0.5);
         assert_eq!(frown.position_delta[10], -0.5);
+
+        // And they are on the geometry the renderers draw, as three.js morph
+        // attributes: relative, named, influences sized to them.
+        let face = scene
+            .arena
+            .nodes
+            .values()
+            .find(|n| n.name == "Face")
+            .expect("the face");
+        let (geometry, influences, dictionary) = match &face.kind {
+            crate::core::ObjectKind::SkinnedMesh(m) => {
+                (&m.geometry, &m.morph_influences, &m.morph_target_dictionary)
+            }
+            crate::core::ObjectKind::Mesh(m) => {
+                (&m.geometry, &m.morph_influences, &m.morph_target_dictionary)
+            }
+            _ => panic!("a mesh"),
+        };
+        assert!(geometry.morph_targets_relative);
+        let targets = &geometry.morph_attributes["position"];
+        assert_eq!(targets.len(), 2);
+        let s = dictionary["smile"];
+        assert_eq!(targets[s].array[7], 0.5);
+        assert_eq!(influences.len(), 2);
     }
 
     /// The weights are animated, and the animation keys all of them at once —

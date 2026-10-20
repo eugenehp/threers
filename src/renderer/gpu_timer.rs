@@ -30,7 +30,7 @@
 /// readback rather than a separate error.
 pub struct GpuTimer {
     set: wgpu::QuerySet,
-    /// Where `resolve_query_set` writes: two u64 ticks.
+    /// Where `resolve_query_set` writes: one u64 tick per mark.
     resolved: wgpu::Buffer,
     /// MAP_READ copy of the above, mapped between frames.
     staging: wgpu::Buffer,
@@ -38,6 +38,9 @@ pub struct GpuTimer {
     period: f32,
     /// Set while `staging` is mapped or a map is in flight.
     mapping: std::sync::Arc<std::sync::atomic::AtomicU8>,
+    /// Ticks from the last completed readback, one per mark.
+    ticks: Vec<u64>,
+    marks: u32,
     last_ms: f32,
 }
 
@@ -49,32 +52,99 @@ const READY: u8 = 2;
 
 impl GpuTimer {
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Option<Self> {
+        Self::with_marks(device, queue, 2)
+    }
+
+    /// A timer with `marks` points on the GPU's clock rather than two.
+    ///
+    /// One pass is one `beginning`/`end` pair, so timing a *stage* made of
+    /// several passes is not a matter of bracketing it — on hardware without
+    /// `TIMESTAMP_QUERY_INSIDE_ENCODERS` there is nowhere to write a
+    /// timestamp between two passes. But the ticks all come off one clock, so
+    /// marking the first pass of each stage and the last pass of the frame
+    /// gives the boundaries, and consecutive differences give the stages —
+    /// gaps between passes included, which is the honest accounting.
+    ///
+    /// See [`mark`](Self::mark), [`mark_end`](Self::mark_end) and
+    /// [`span_ms`](Self::span_ms).
+    pub fn with_marks(device: &wgpu::Device, queue: &wgpu::Queue, marks: u32) -> Option<Self> {
         if !device.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
             return None;
         }
+        let marks = marks.max(2);
+        let bytes = (marks as u64) * 8;
         let set = device.create_query_set(&wgpu::QuerySetDescriptor {
             label: Some("threers frame timer"),
             ty: wgpu::QueryType::Timestamp,
-            count: 2,
+            count: marks,
         });
         Some(Self {
             set,
             resolved: device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("threers frame timer resolve"),
-                size: 16,
+                size: bytes,
                 usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
                 mapped_at_creation: false,
             }),
             staging: device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("threers frame timer readback"),
-                size: 16,
+                size: bytes,
                 usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
                 mapped_at_creation: false,
             }),
             period: queue.get_timestamp_period(),
             mapping: std::sync::Arc::new(std::sync::atomic::AtomicU8::new(IDLE)),
+            ticks: vec![0; marks as usize],
+            marks,
             last_ms: 0.0,
         })
+    }
+
+    /// Write the GPU's clock at the *start* of a pass, into slot `i`.
+    ///
+    /// Put it on the first pass of a stage; the next mark closes it.
+    pub fn mark(&self, i: u32) -> wgpu::RenderPassTimestampWrites<'_> {
+        wgpu::RenderPassTimestampWrites {
+            query_set: &self.set,
+            beginning_of_pass_write_index: Some(i.min(self.marks - 1)),
+            end_of_pass_write_index: None,
+        }
+    }
+
+    /// Write the GPU's clock at the *end* of a pass, into slot `i`. For the
+    /// last stage, which has no following mark to close it.
+    pub fn mark_end(&self, i: u32) -> wgpu::RenderPassTimestampWrites<'_> {
+        wgpu::RenderPassTimestampWrites {
+            query_set: &self.set,
+            beginning_of_pass_write_index: None,
+            end_of_pass_write_index: Some(i.min(self.marks - 1)),
+        }
+    }
+
+    /// Write the clock at both ends of one pass, into slots `begin` and
+    /// `end`. For the pass that closes the last stage: it opens its own and
+    /// has nothing after it to close it.
+    pub fn mark_both(&self, begin: u32, end: u32) -> wgpu::RenderPassTimestampWrites<'_> {
+        wgpu::RenderPassTimestampWrites {
+            query_set: &self.set,
+            beginning_of_pass_write_index: Some(begin.min(self.marks - 1)),
+            end_of_pass_write_index: Some(end.min(self.marks - 1)),
+        }
+    }
+
+    /// Milliseconds between marks `i` and `i + 1`, from the last completed
+    /// readback. Zero if either is missing or the pair came back out of
+    /// order.
+    pub fn span_ms(&self, i: usize) -> f32 {
+        match (self.ticks.get(i), self.ticks.get(i + 1)) {
+            (Some(&a), Some(&b)) if b > a => (b - a) as f32 * self.period / 1.0e6,
+            _ => 0.0,
+        }
+    }
+
+    /// How many marks this timer has.
+    pub fn marks(&self) -> u32 {
+        self.marks
     }
 
     /// Pass to `RenderPassDescriptor::timestamp_writes` to bracket a pass.
@@ -97,8 +167,9 @@ impl GpuTimer {
         if self.mapping.load(Ordering::Acquire) != IDLE {
             return;
         }
-        encoder.resolve_query_set(&self.set, 0..2, &self.resolved, 0);
-        encoder.copy_buffer_to_buffer(&self.resolved, 0, &self.staging, 0, 16);
+        let bytes = (self.marks as u64) * 8;
+        encoder.resolve_query_set(&self.set, 0..self.marks, &self.resolved, 0);
+        encoder.copy_buffer_to_buffer(&self.resolved, 0, &self.staging, 0, bytes);
     }
 
     /// Start the map, or collect one that has finished. Call once per frame,
@@ -124,8 +195,7 @@ impl GpuTimer {
             }
             READY => {
                 if let Ok(view) = self.staging.slice(..).get_mapped_range() {
-                    let mut t = [0u64; 2];
-                    for (i, slot) in t.iter_mut().enumerate() {
+                    for (i, slot) in self.ticks.iter_mut().enumerate() {
                         *slot = u64::from_le_bytes(
                             view[i * 8..i * 8 + 8].try_into().unwrap_or([0; 8]),
                         );
@@ -133,8 +203,10 @@ impl GpuTimer {
                     // Timestamps can come back equal or out of order on a pass
                     // the driver reordered; report nothing rather than a
                     // negative or absurd figure.
-                    if t[1] > t[0] {
-                        self.last_ms = (t[1] - t[0]) as f32 * self.period / 1.0e6;
+                    if self.ticks[self.marks as usize - 1] > self.ticks[0] {
+                        self.last_ms = (self.ticks[self.marks as usize - 1] - self.ticks[0]) as f32
+                            * self.period
+                            / 1.0e6;
                     }
                 }
                 self.staging.unmap();
@@ -146,8 +218,8 @@ impl GpuTimer {
         }
     }
 
-    /// Milliseconds the GPU spent in the bracketed pass, from the most recent
-    /// completed readback. Zero until the first one lands.
+    /// Milliseconds the GPU spent between the first and last mark, from the
+    /// most recent completed readback. Zero until the first one lands.
     pub fn last_ms(&self) -> f32 {
         self.last_ms
     }

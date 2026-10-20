@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><style>body{margin:0;background:#181818}canvas{display:block}</style></head>
+<body><canvas id="c" width="800" height="600"></canvas>
+<script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.165.0/build/three.module.js"}}</script>
+<script type="module">
+import * as THREE from 'three';
+// A lit, vertex-coloured sheet whose position/normal/uv share one
+// InterleavedBuffer (stride 8) and whose colours are normalized Uint8 in a
+// second one (stride 4), transformed with rotateX and then edited in place
+// through the interleaved API before the frame.
+const W = 24, H = 16;
+const verts = (W + 1) * (H + 1);
+const f32 = new Float32Array(verts * 8), u8 = new Uint8Array(verts * 4);
+for (let j = 0; j <= H; j++) for (let i = 0; i <= W; i++) {
+    const k = j * (W + 1) + i, u = i / W, v = j / H;
+    const x = (u - 0.5) * 3, y = (v - 0.5) * 2, z = 0.25 * Math.sin(u * 6.283) * Math.cos(v * 3.1416);
+    const dzdx = 0.25 * Math.cos(u * 6.283) * 6.283 / 3 * Math.cos(v * 3.1416);
+    const dzdy = -0.25 * Math.sin(u * 6.283) * Math.sin(v * 3.1416) * 3.1416 / 2;
+    const n = Math.hypot(dzdx, dzdy, 1);
+    f32.set([x, y, z, -dzdx / n, -dzdy / n, 1 / n, u, v], k * 8);
+    u8.set([Math.round(255 * u), Math.round(255 * v), Math.round(255 * (1 - u)), 0], k * 4);
+}
+const index = [];
+for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) {
+    const a = j * (W + 1) + i, b = a + 1, c = a + W + 1, d = c + 1;
+    index.push(a, b, d, a, d, c);
+}
+const geom = new THREE.BufferGeometry();
+const ib = new THREE.InterleavedBuffer(f32, 8), cb = new THREE.InterleavedBuffer(u8, 4);
+geom.setAttribute('position', new THREE.InterleavedBufferAttribute(ib, 3, 0));
+geom.setAttribute('normal', new THREE.InterleavedBufferAttribute(ib, 3, 3));
+geom.setAttribute('uv', new THREE.InterleavedBufferAttribute(ib, 2, 6));
+geom.setAttribute('color', new THREE.InterleavedBufferAttribute(cb, 3, 0, true));
+geom.setIndex(index);
+geom.rotateX(-0.5);
+const pos = geom.getAttribute('position');
+for (let k = 0; k < pos.count; k++) pos.setY(k, pos.getY(k) * 1.1);
+ib.needsUpdate = true;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x181818);
+scene.add(new THREE.Mesh(geom, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.5, side: THREE.DoubleSide })));
+scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+const dl = new THREE.DirectionalLight(0xffffff, 2.0); dl.position.set(1, 2, 3); scene.add(dl);
+const cam = new THREE.PerspectiveCamera(45, 800/600, 0.1, 100);
+cam.position.set(0, 0, 4.5); cam.lookAt(0, 0, 0);
+const r = new THREE.WebGLRenderer({ canvas: document.getElementById('c'), antialias: false });
+r.setSize(800, 600, false); r.setPixelRatio(1);
+r.render(scene, cam);
+document.body.dataset.ready = 'true';
+</script></body></html>

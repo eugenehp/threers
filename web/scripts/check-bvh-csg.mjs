@@ -7,13 +7,11 @@ import { fileURLToPath } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const webDir = path.resolve(__dirname, '..');
 
+// The boolean runs in wasm (`csgEvaluate`, src/wasm_csg.rs); bvh-csg-impl.js
+// keeps three-bvh-csg's classes and bookkeeping around it.
 const required = [
     'bvh-csg-addon.js',
     'bvh-csg-impl.js',
-    'csg/index.js',
-    'csg/core/Brush.js',
-    'csg/core/Evaluator.js',
-    'csg/core/constants.js',
 ];
 
 let ok = true;
@@ -36,6 +34,10 @@ if (!feat.includes('meshBvh: true')) {
 const pkg = fs.readFileSync(path.join(webDir, 'pkg', 'threers.js'), 'utf8');
 if (!pkg.includes('WebMeshBvh')) {
     console.error('wasm missing WebMeshBvh — rebuild with BVH_CSG=1 web/build.sh');
+    ok = false;
+}
+if (!pkg.includes('csgEvaluate')) {
+    console.error('wasm missing csgEvaluate — rebuild with BVH_CSG=1 web/build.sh');
     ok = false;
 }
 

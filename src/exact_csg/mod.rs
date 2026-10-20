@@ -145,6 +145,10 @@ pub enum Op {
 }
 
 /// Result of `boolean`.
+// The geometry variant is large and the rest are small by nature; boxing it
+// would put a `Box` in every pattern a caller writes, to save a few hundred
+// bytes on values that are built a handful of times per evaluation.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub enum BooleanOutcome {
     /// Surfaces don't cross — this mesh is the exact boolean for that class.
@@ -1303,6 +1307,15 @@ fn arrangement_soup(a: &BufferGeometry, b: &BufferGeometry, op: Op) -> Option<Ve
         );
     }
     Some(out)
+}
+
+/// Whether `geometry` is a closed 2-manifold: every edge shared by exactly two
+/// triangles, in opposite directions — watertight and consistently wound, the
+/// condition for a mesh to be a solid (a CSG operand, a 3D print, a volume).
+/// Positions are compared exactly, so a mesh whose seams were split into
+/// separate vertices still counts as closed if those vertices coincide.
+pub fn is_watertight(geometry: &BufferGeometry) -> bool {
+    is_closed_manifold(&triangles(geometry))
 }
 
 /// Try to make a mesh watertight by welding coincident vertices and healing

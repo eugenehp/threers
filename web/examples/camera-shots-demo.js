@@ -32,7 +32,7 @@ async function main() {
     statusEl.textContent = 'wasm ready';
 
     const canvas = document.getElementById('c');
-    const renderer = await THREE.WebGLRenderer.create(canvas);
+    const renderer = await THREE.WebGLRenderer.create(canvas, { antialias: true });
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x101018);
 

@@ -55,15 +55,25 @@ impl Yuv420Frame {
     /// subsampling. The alpha channel is preserved full-resolution in
     /// [`alpha`](Self::alpha) when any pixel is non-opaque, otherwise dropped.
     pub fn from_rgba(width: u32, height: u32, rgba: &[u8]) -> Self {
+        Self::from_packed(width, height, rgba, [0, 1, 2, 3], "rgba size mismatch")
+    }
+
+    /// [`from_rgba`](Self::from_rgba) for BGRA8 — what VideoToolbox and
+    /// `codec::decode::NativeDecoder::take` (feature `video`) hand back — without
+    /// swizzling to RGBA first.
+    pub fn from_bgra(width: u32, height: u32, bgra: &[u8]) -> Self {
+        Self::from_packed(width, height, bgra, [2, 1, 0, 3], "bgra size mismatch")
+    }
+
+    /// Packed 8-bit pixels with R, G, B and A at byte offsets `at` within
+    /// each 4-byte pixel.
+    fn from_packed(width: u32, height: u32, rgba: &[u8], at: [usize; 4], what: &str) -> Self {
         assert!(
             width.is_multiple_of(2) && height.is_multiple_of(2),
             "4:2:0 needs even dimensions"
         );
-        assert_eq!(
-            rgba.len(),
-            (width * height * 4) as usize,
-            "rgba size mismatch"
-        );
+        assert_eq!(rgba.len(), (width * height * 4) as usize, "{what}");
+        let [ri, gi, bi, ai] = at;
         let (w, h) = (width as usize, height as usize);
         let (cw, ch) = (w / 2, h / 2);
         let mut y = vec![0u8; w * h];
@@ -73,7 +83,7 @@ impl Yuv420Frame {
         // Look before allocating. Fully-opaque input is the common case and its
         // alpha plane is discarded at the end anyway — at 8K that would be a
         // 33 MB allocation, filled and freed, for every frame.
-        let any_transparent = rgba.chunks_exact(4).any(|px| px[3] != 255);
+        let any_transparent = rgba.chunks_exact(4).any(|px| px[ai] != 255);
         let mut a = if any_transparent {
             vec![0u8; w * h]
         } else {
@@ -83,13 +93,13 @@ impl Yuv420Frame {
         // Luma (and alpha, when there is any).
         for i in 0..(w * h) {
             let (r, g, b) = (
-                rgba[i * 4] as i32,
-                rgba[i * 4 + 1] as i32,
-                rgba[i * 4 + 2] as i32,
+                rgba[i * 4 + ri] as i32,
+                rgba[i * 4 + gi] as i32,
+                rgba[i * 4 + bi] as i32,
             );
             y[i] = clamp8(((66 * r + 129 * g + 25 * b + 128) >> 8) + 16);
             if any_transparent {
-                a[i] = rgba[i * 4 + 3];
+                a[i] = rgba[i * 4 + ai];
             }
         }
         // Chroma from 2×2 RGB averages.
@@ -101,9 +111,9 @@ impl Yuv420Frame {
                 for dy in 0..2 {
                     for dx in 0..2 {
                         let p = ((cy * 2 + dy) * w + (cx * 2 + dx)) * 4;
-                        r += rgba[p] as i32;
-                        g += rgba[p + 1] as i32;
-                        b += rgba[p + 2] as i32;
+                        r += rgba[p + ri] as i32;
+                        g += rgba[p + gi] as i32;
+                        b += rgba[p + bi] as i32;
                     }
                 }
                 let (r, g, b) = (r / 4, g / 4, b / 4);
@@ -255,6 +265,15 @@ const _: () = assert!(CTB_SIZE == 16);
 mod tests {
     use super::*;
     use crate::codec::hevc::nal::START_CODE;
+
+    #[test]
+    fn from_bgra_matches_from_rgba() {
+        let (w, h) = (6u32, 4u32);
+        let rgba: Vec<u8> = (0..w * h * 4).map(|i| (i * 37 % 251) as u8).collect();
+        let bgra: Vec<u8> = rgba.chunks_exact(4).flat_map(|p| [p[2], p[1], p[0], p[3]]).collect();
+        let (a, b) = (Yuv420Frame::from_rgba(w, h, &rgba), Yuv420Frame::from_bgra(w, h, &bgra));
+        assert_eq!((a.y, a.u, a.v, a.alpha), (b.y, b.u, b.v, b.alpha));
+    }
 
     fn find(hay: &[u8], needle: &[u8]) -> bool {
         hay.windows(needle.len()).any(|w| w == needle)

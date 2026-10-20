@@ -75,6 +75,10 @@ pub const DEFAULT_FN: usize = 32;
 /// [`polyhedron`]; combine with [`Solid::union`] / [`Solid::difference`] /
 /// [`Solid::intersection`]; place with the transform builders. Evaluate with
 /// [`Solid::to_geometry`].
+// The geometry variant is large and the rest are small by nature; boxing it
+// would put a `Box` in every pattern a caller writes, to save a few hundred
+// bytes on values that are built a handful of times per evaluation.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum Solid {
     /// A primitive, already baked to its identity pose.
@@ -131,7 +135,9 @@ pub fn cone(h: f32, r1: f32, r2: f32) -> Solid {
 /// [`cone`] with an explicit facet count (`$fn`).
 pub fn frustum(h: f32, r1: f32, r2: f32, fn_: usize) -> Solid {
     // CylinderGeometry takes (radius_top, radius_bottom, ...); r1 is the bottom.
-    Solid::Leaf(CylinderGeometry::new(
+    // Single precision rather than `new`'s three.js-exact f64: see
+    // `CylinderGeometry::single_precision`.
+    Solid::Leaf(CylinderGeometry::single_precision(
         r2,
         r1,
         h,
@@ -493,6 +499,10 @@ impl Solid {
     /// Evaluate and encode as **Geomview OFF** (text).
     pub fn to_off(self) -> String {
         export::geometry_to_off(&self.to_geometry_exact())
+    }
+    /// Evaluate and encode as ASCII **Stanford PLY** (text).
+    pub fn to_ply(self) -> String {
+        export::geometry_to_ply(&self.to_geometry_exact())
     }
     /// Evaluate and encode as a **3MF** package (bytes) a slicer can open.
     pub fn to_3mf(self) -> Vec<u8> {
@@ -990,54 +1000,13 @@ pub fn set_origin(g: &mut BufferGeometry, o: Origin) {
     }
 }
 
+/// Binary STL — the shared [`crate::exporters::write_stl_binary`] (three.js's
+/// `STLExporter` layout and face normals), empty when there is no `position`.
 pub fn geometry_to_stl(g: &BufferGeometry) -> Vec<u8> {
-    let pos = match g.get_attribute("position") {
-        Some(a) => &a.array,
-        None => return Vec::new(),
-    };
-    let vert = |i: usize| [pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]];
-    let mut tris: Vec<[[f32; 3]; 3]> = Vec::new();
-    if let Some(idx) = &g.index {
-        for t in idx.chunks_exact(3) {
-            tris.push([
-                vert(t[0] as usize),
-                vert(t[1] as usize),
-                vert(t[2] as usize),
-            ]);
-        }
-    } else {
-        for k in 0..pos.len() / 9 {
-            tris.push([vert(k * 3), vert(k * 3 + 1), vert(k * 3 + 2)]);
-        }
+    if g.get_attribute("position").is_none() {
+        return Vec::new();
     }
-
-    let mut out = Vec::with_capacity(84 + tris.len() * 50);
-    out.extend_from_slice(&[0u8; 80]); // header (must not start with "solid")
-    out.extend_from_slice(&(tris.len() as u32).to_le_bytes());
-    for t in &tris {
-        let (a, b, c) = (t[0], t[1], t[2]);
-        let u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
-        let v = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
-        let mut n = [
-            u[1] * v[2] - u[2] * v[1],
-            u[2] * v[0] - u[0] * v[2],
-            u[0] * v[1] - u[1] * v[0],
-        ];
-        let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
-        if len > 0.0 {
-            n = [n[0] / len, n[1] / len, n[2] / len];
-        }
-        for x in n {
-            out.extend_from_slice(&x.to_le_bytes());
-        }
-        for vtx in t {
-            for x in vtx {
-                out.extend_from_slice(&x.to_le_bytes());
-            }
-        }
-        out.extend_from_slice(&0u16.to_le_bytes());
-    }
-    out
+    crate::exporters::write_stl_binary(&[crate::exporters::ExportObject::mesh("", g.clone())])
 }
 
 /// Identity pass-through — the [`scad!`](crate::scad) escape hatch for splicing a
@@ -1130,9 +1099,29 @@ fn float_boolean(acc: BufferGeometry, cg: BufferGeometry, op: u8) -> BufferGeome
         a.prepare_geometry();
         let mut b = CsgBrush::new(cg);
         b.prepare_geometry();
-        CsgEvaluator::new().evaluate(&mut a, &mut b, op)
+        evaluate_shared(&mut CsgEvaluator::new(), &mut a, &mut b, op)
     }))
     .unwrap_or(fallback)
+}
+
+/// `ev.evaluate` over only the attributes both operands carry. The evaluator
+/// asks for three-bvh-csg's `position`, `uv` and `normal`, and, as there, reads
+/// each from both operands — but OpenSCAD's own primitives differ (a box has
+/// `uv`, a cylinder does not), and a missing attribute is a panic inside the
+/// evaluator, which the crash guard above turns into an empty result. The
+/// caller's list is restored afterwards.
+fn evaluate_shared(
+    ev: &mut CsgEvaluator,
+    a: &mut CsgBrush,
+    b: &mut CsgBrush,
+    op: u8,
+) -> BufferGeometry {
+    let requested = ev.attributes.clone();
+    ev.attributes
+        .retain(|k| a.geometry.get_attribute(k).is_some() && b.geometry.get_attribute(k).is_some());
+    let out = ev.evaluate(a, b, op);
+    ev.attributes = requested;
+    out
 }
 
 fn eval_solid(s: Solid, ev: &mut CsgEvaluator) -> BufferGeometry {
@@ -1164,7 +1153,7 @@ fn fold(children: Vec<Solid>, ev: &mut CsgEvaluator, op: u8) -> BufferGeometry {
     for child in it {
         let mut b = CsgBrush::new(eval_solid(child, ev));
         b.prepare_geometry();
-        let out = ev.evaluate(&mut acc, &mut b, op);
+        let out = evaluate_shared(ev, &mut acc, &mut b, op);
         acc = CsgBrush::new(out);
         acc.prepare_geometry();
     }

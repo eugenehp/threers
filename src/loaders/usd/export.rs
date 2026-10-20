@@ -2,9 +2,11 @@
 //!
 //! The output is what `UsdGeomMesh` asks for and nothing more: points, face
 //! counts, face indices, and whichever of normals and `primvars:st` the
-//! geometry actually carries. Faces are written as triangles rather than being
-//! re-joined into polygons — a `BufferGeometry` has already thrown away which
-//! triangles used to be one face, and inventing that back would be a guess.
+//! geometry actually carries. Faces are written as the polygons the geometry
+//! remembers ([`BufferGeometry::polygons`]) — a quad read from USD, OBJ or FBX
+//! goes back out as a quad — and as triangles where it remembers none.
+//! Triangles are never re-joined by guessing: two coplanar triangles that were
+//! not one face stay two faces.
 
 use crate::animation::{AnimationClip, KeyframeTrack, TrackTarget, TrackValues};
 use crate::core::{BufferGeometry, ObjectArena, ObjectId, ObjectKind};
@@ -92,18 +94,26 @@ pub fn mesh_prim(g: &BufferGeometry, name: &str) -> UsdPrim {
     };
     let triangles = indices.len() / 3;
 
+    // A face per polygon where the geometry remembers them and the outline can
+    // be recovered, a face per triangle everywhere else; see the module note.
+    let mut face_counts: Vec<u32> = Vec::with_capacity(triangles);
+    let mut face_indices: Vec<u32> = Vec::with_capacity(triangles * 3);
+    for corners in g.faces() {
+        face_counts.push(corners.len() as u32);
+        face_indices.extend_from_slice(&corners);
+    }
+
     let mut properties = vec![
         attribute("point3f[]", "points", float_array(&positions, 3)),
-        // Every face is a triangle; see the module note on why.
         attribute(
             "int[]",
             "faceVertexCounts",
-            int_array(std::iter::repeat_n(3u32, triangles)),
+            int_array(face_counts.into_iter()),
         ),
         attribute(
             "int[]",
             "faceVertexIndices",
-            int_array(indices.iter().copied().take(triangles * 3)),
+            int_array(face_indices.into_iter()),
         ),
     ];
 
@@ -750,6 +760,22 @@ fn tuple3(v: [f32; 3]) -> UsdValue {
 /// USD prim names are C identifiers. A mesh called `wheel.001` — which is what
 /// every DCC tool produces — is not one, and a reader rejects the whole layer
 /// rather than the one prim, so this is not a detail worth leaving to chance.
+/// The first triangle of each face [`mesh_prim`] writes, in face order — the
+/// faces [`BufferGeometry::faces`] yields: a recovered polygon is one face,
+/// anything else a face per triangle.
+fn face_first_triangles(g: &BufferGeometry) -> Vec<usize> {
+    let grouped = g.polygon_counts().is_some();
+    let mut out = Vec::new();
+    for range in g.polygon_ranges() {
+        if grouped && range.len() > 1 && g.polygon_loop(range.clone()).is_some() {
+            out.push(range.start);
+        } else {
+            out.extend(range);
+        }
+    }
+    out
+}
+
 pub fn sanitize(name: &str) -> String {
     let mut out = String::new();
     for (i, c) in name.chars().enumerate() {
@@ -823,6 +849,10 @@ pub fn scene_to_layer_with_textures(
 struct Materials {
     prims: Vec<UsdPrim>,
     textures: Vec<ExportedTexture>,
+    /// The `Skeleton` and `SkelAnimation` prims morphed meshes bind their
+    /// blend shapes through (see [`add_blend_shapes`]); placed under the
+    /// root, which they make a `SkelRoot`.
+    skel: Vec<UsdPrim>,
 }
 
 fn scene_to_layer_placed(
@@ -841,9 +871,12 @@ fn scene_to_layer_placed(
     }
     let textures = std::mem::take(&mut materials.textures);
     children.extend(materials.prims);
+    // UsdSkel only applies a binding under a `SkelRoot`.
+    let root_type = if materials.skel.is_empty() { "Xform" } else { "SkelRoot" };
+    children.extend(materials.skel);
     let root = UsdPrim {
         specifier: Specifier::Def,
-        type_name: "Xform".into(),
+        type_name: root_type.into(),
         name: sanitize(&options.default_prim),
         metadata: Vec::new(),
         properties: Vec::new(),
@@ -874,6 +907,210 @@ pub fn scene_to_usda(arena: &ObjectArena, roots: &[ObjectId]) -> String {
 
 /// The same, recording where each object ended up so that a later pass can
 /// attach animation to it by path.
+fn relationship(name: &str, value: UsdValue) -> UsdProperty {
+    UsdProperty {
+        qualifier: String::new(),
+        name: name.into(),
+        type_name: String::new(),
+        uniform: false,
+        relationship: true,
+        value,
+        metadata: Vec::new(),
+    }
+}
+
+/// A mesh's morph targets as UsdSkel blend shapes.
+///
+/// A `BlendShape` holds *offsets* from the base mesh — three.js's relative
+/// targets — so absolute targets (`morph_targets_relative == false`) are
+/// written as `target − base`. A target that moves only some vertices is
+/// written sparse, with `pointIndices`. The exporter writes the geometry's
+/// vertices as the mesh's `points` one for one, so offsets index the same
+/// vertices the targets do.
+///
+/// UsdSkel applies blend shapes only through a skeleton binding under a
+/// `SkelRoot`: the mesh takes `SkelBindingAPI`, `skel:blendShapes` (the
+/// target names, which the weights are keyed by) and `skel:blendShapeTargets`
+/// (the `BlendShape` prims, children of the mesh), and binds a joint-less
+/// `Skeleton` whose `skel:animationSource` is a `SkelAnimation` carrying the
+/// mesh's current influences as `blendShapeWeights`. The skeleton and the
+/// animation are pushed onto `skel`, for the caller to place under the root,
+/// which it then makes a `SkelRoot`. Positions only: a target set with no
+/// position targets has nothing USD can hold.
+fn add_blend_shapes(
+    mesh: &crate::core::Mesh,
+    prim: &mut UsdPrim,
+    mesh_path: &str,
+    root: &str,
+    skel: &mut Vec<UsdPrim>,
+) {
+    use crate::core::BufferAttribute;
+    let g = &mesh.geometry;
+    let Some(base) = g.get_attribute("position") else {
+        return;
+    };
+    let Some(targets) = g.morph_attributes.get("position").filter(|t| !t.is_empty()) else {
+        return;
+    };
+    let vertices = base.count();
+    let normal_targets = g.morph_attributes.get("normal").filter(|t| !t.is_empty());
+    let base_normal = g.get_attribute("normal");
+    // Component `k` of vertex `v`, zero past the item size or the array.
+    let read = |a: &BufferAttribute, v: usize, k: usize| -> f32 {
+        if k >= a.item_size {
+            return 0.0;
+        }
+        a.array.get(v * a.item_size + k).copied().unwrap_or(0.0)
+    };
+    // Per-vertex offsets of a target from the base, three a vertex.
+    let offsets = |target: &BufferAttribute, base: Option<&BufferAttribute>| -> Vec<f32> {
+        let mut out = Vec::with_capacity(vertices * 3);
+        for v in 0..vertices {
+            for k in 0..3 {
+                let from = match (g.morph_targets_relative, base) {
+                    (false, Some(b)) => read(b, v, k),
+                    _ => 0.0,
+                };
+                out.push(read(target, v, k) - from);
+            }
+        }
+        out
+    };
+
+    let mut names: Vec<String> = Vec::new();
+    let mut paths: Vec<UsdValue> = Vec::new();
+    let mut prim_names: Vec<String> = Vec::new();
+    for (t, target) in targets.iter().enumerate() {
+        let mut name = g
+            .morph_target_names
+            .get(t)
+            .filter(|n| !n.is_empty())
+            .cloned()
+            .unwrap_or_else(|| format!("target_{t}"));
+        // Weights are matched to shapes by name, so two alike would share one.
+        if names.contains(&name) {
+            name = format!("{name}_{t}");
+        }
+        let mut shape_name = sanitize(&name);
+        if prim_names.contains(&shape_name) || prim.children.iter().any(|c| c.name == shape_name) {
+            shape_name = format!("{shape_name}_{t}");
+        }
+        let position = offsets(target, Some(base));
+        let normal = normal_targets
+            .and_then(|n| n.get(t))
+            .map(|n| offsets(n, base_normal));
+        // Sparse when the target leaves some vertices alone; dense when it
+        // moves nothing at all, since a reader may drop an empty shape.
+        let touched: Vec<u32> = (0..vertices)
+            .filter(|&v| {
+                let moved = |d: &[f32]| d[v * 3..v * 3 + 3].iter().any(|x| *x != 0.0);
+                moved(&position) || normal.as_deref().is_some_and(moved)
+            })
+            .map(|v| v as u32)
+            .collect();
+        let sparse = !touched.is_empty() && touched.len() < vertices;
+        let pick = |d: &[f32]| -> Vec<f32> {
+            if sparse {
+                touched
+                    .iter()
+                    .flat_map(|&v| d[v as usize * 3..v as usize * 3 + 3].to_vec())
+                    .collect()
+            } else {
+                d.to_vec()
+            }
+        };
+        let mut properties = vec![uniform(attribute(
+            "vector3f[]",
+            "offsets",
+            float_array(&pick(&position), 3),
+        ))];
+        if let Some(n) = &normal {
+            properties.push(uniform(attribute(
+                "vector3f[]",
+                "normalOffsets",
+                float_array(&pick(n), 3),
+            )));
+        }
+        if sparse {
+            properties.push(uniform(attribute(
+                "int[]",
+                "pointIndices",
+                int_array(touched.into_iter()),
+            )));
+        }
+        prim.children.push(UsdPrim {
+            specifier: Specifier::Def,
+            type_name: "BlendShape".into(),
+            name: shape_name.clone(),
+            metadata: Vec::new(),
+            properties,
+            children: Vec::new(),
+            variant_sets: Vec::new(),
+        });
+        paths.push(UsdValue::Path(format!("{mesh_path}/{shape_name}")));
+        prim_names.push(shape_name);
+        names.push(name);
+    }
+
+    let tokens = || UsdValue::Array(names.iter().map(|n| UsdValue::Token(n.clone())).collect());
+    let k = skel.len() / 2;
+    let skeleton_path = format!("{root}/MorphSkel_{k}");
+    let animation_path = format!("{root}/MorphAnim_{k}");
+    prim.properties
+        .push(uniform(attribute("token[]", "skel:blendShapes", tokens())));
+    prim.properties
+        .push(relationship("skel:blendShapeTargets", UsdValue::Array(paths)));
+    prim.properties
+        .push(relationship("skel:skeleton", UsdValue::Path(skeleton_path)));
+    match prim
+        .metadata
+        .iter_mut()
+        .find(|(key, _)| key == "prepend apiSchemas")
+    {
+        Some((_, UsdValue::Array(schemas))) => {
+            schemas.push(UsdValue::Token("SkelBindingAPI".into()))
+        }
+        _ => prim.metadata.push((
+            "prepend apiSchemas".into(),
+            UsdValue::Array(vec![UsdValue::Token("SkelBindingAPI".into())]),
+        )),
+    }
+
+    let mut weights = mesh.morph_influences.clone();
+    weights.resize(names.len(), 0.0);
+    skel.push(UsdPrim {
+        specifier: Specifier::Def,
+        type_name: "Skeleton".into(),
+        name: format!("MorphSkel_{k}"),
+        metadata: vec![(
+            "prepend apiSchemas".into(),
+            UsdValue::Array(vec![UsdValue::Token("SkelBindingAPI".into())]),
+        )],
+        properties: vec![relationship(
+            "skel:animationSource",
+            UsdValue::Path(animation_path),
+        )],
+        children: Vec::new(),
+        variant_sets: Vec::new(),
+    });
+    skel.push(UsdPrim {
+        specifier: Specifier::Def,
+        type_name: "SkelAnimation".into(),
+        name: format!("MorphAnim_{k}"),
+        metadata: Vec::new(),
+        properties: vec![
+            uniform(attribute("token[]", "blendShapes", tokens())),
+            attribute(
+                "float[]",
+                "blendShapeWeights",
+                UsdValue::Array(weights.iter().map(|w| UsdValue::Float(*w as f64)).collect()),
+            ),
+        ],
+        children: Vec::new(),
+        variant_sets: Vec::new(),
+    });
+}
+
 fn object_prim_at(
     arena: &ObjectArena,
     id: ObjectId,
@@ -949,6 +1186,74 @@ fn object_prim_at(
                 "prepend apiSchemas".into(),
                 UsdValue::Array(vec![UsdValue::Token("MaterialBindingAPI".into())]),
             ));
+            // A material array: a `GeomSubset` per group, in the
+            // `materialBind` family, binding that group's material to the
+            // faces its triangles make — what the reader turns back into
+            // groups. The mesh's own binding (the first material) covers
+            // whatever no group claims.
+            if mesh.is_multi_material() {
+                let face_of = face_first_triangles(&mesh.geometry);
+                let mut subsets = Vec::new();
+                for (k, g) in mesh.geometry.groups.iter().enumerate() {
+                    let Some(m) = mesh.materials.get(g.material_index as usize) else {
+                        continue;
+                    };
+                    let (lo, hi) = (g.start as usize, g.start as usize + g.count as usize);
+                    let faces: Vec<u32> = face_of
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, &t)| (lo..hi).contains(&(t * 3)))
+                        .map(|(f, _)| f as u32)
+                        .collect();
+                    if faces.is_empty() {
+                        continue;
+                    }
+                    let material_name = format!("Material_{}", materials.prims.len());
+                    let (material, images) =
+                        material_prim_with_textures(m, &material_name, &root);
+                    materials.prims.push(material);
+                    materials.textures.extend(images);
+                    subsets.push(UsdPrim {
+                        specifier: Specifier::Def,
+                        type_name: "GeomSubset".into(),
+                        name: format!("Group_{k}"),
+                        metadata: vec![(
+                            "prepend apiSchemas".into(),
+                            UsdValue::Array(vec![UsdValue::Token("MaterialBindingAPI".into())]),
+                        )],
+                        properties: vec![
+                            uniform(attribute("token", "elementType", UsdValue::Token("face".into()))),
+                            uniform(attribute(
+                                "token",
+                                "familyName",
+                                UsdValue::Token("materialBind".into()),
+                            )),
+                            attribute("int[]", "indices", int_array(faces.into_iter())),
+                            UsdProperty {
+                                qualifier: String::new(),
+                                name: "material:binding".into(),
+                                type_name: String::new(),
+                                uniform: false,
+                                relationship: true,
+                                value: UsdValue::Path(format!("/Root/{}", sanitize(&material_name))),
+                                metadata: Vec::new(),
+                            },
+                        ],
+                        children: Vec::new(),
+                        variant_sets: Vec::new(),
+                    });
+                }
+                if !subsets.is_empty() {
+                    prim.properties.push(uniform(attribute(
+                        "token",
+                        "subsetFamily:materialBind:familyType",
+                        UsdValue::Token("nonOverlapping".into()),
+                    )));
+                    prim.children.extend(subsets);
+                }
+            }
+            let mesh_path = format!("{parent}/{}", prim.name);
+            add_blend_shapes(mesh, &mut prim, &mesh_path, &root, &mut materials.skel);
             prim
         }
         _ => UsdPrim {
@@ -1032,6 +1337,194 @@ fn object_prim_at(
 
 #[cfg(test)]
 mod tests {
+
+    /// A material array leaves as `GeomSubset`s, one per group, and comes
+    /// back through the reader as the same groups over the same materials.
+    #[test]
+    fn material_groups_round_trip_as_geom_subsets() {
+        use crate::core::{BufferAttribute, Mesh, Object3D, ObjectArena, ObjectKind};
+        use crate::materials::{Material, StandardMaterial};
+        use crate::math::Color;
+        use std::sync::Arc;
+        let mut g = BufferGeometry::new();
+        g.set_attribute(
+            "position",
+            BufferAttribute::new(
+                vec![0., 0., 0., 1., 0., 0., 1., 1., 0., 0., 1., 0., 2., 0., 0., 2., 1., 0.],
+                3,
+            ),
+        );
+        g.set_index(vec![0, 1, 2, 0, 2, 3, 1, 4, 5, 1, 5, 2]);
+        g.add_group(0, 6, 1).add_group(6, 6, 0);
+        let red = Arc::new(Material::from(StandardMaterial::new(Color::new(1.0, 0.0, 0.0))));
+        let blue = Arc::new(Material::from(StandardMaterial::new(Color::new(0.0, 0.0, 1.0))));
+        let mut arena = ObjectArena::new();
+        let mut o = Object3D::mesh(Mesh::with_materials(Arc::new(g), vec![red, blue]));
+        o.name = "Strip".into();
+        let id = arena.insert(o);
+        let text = scene_to_usda(&arena, &[id]);
+        assert_eq!(text.matches("def GeomSubset").count(), 2, "{text}");
+        let scene = super::super::scene::to_scene(&super::super::parse::parse(&text).unwrap());
+        let strip = scene.arena.nodes.values().find(|n| n.name == "Strip").expect("the mesh");
+        let ObjectKind::Mesh(mesh) = &strip.kind else {
+            panic!("a mesh")
+        };
+        let groups: Vec<(u32, u32)> =
+            mesh.geometry.groups.iter().map(|g| (g.start, g.count)).collect();
+        assert_eq!(groups, [(0, 6), (6, 6)]);
+        let colours: Vec<[f32; 3]> = mesh
+            .materials
+            .iter()
+            .map(|m| {
+                let c = m.color();
+                [c.r, c.g, c.b]
+            })
+            .collect();
+        // The first group (triangles 0-1) wore blue, the second red.
+        assert_eq!(colours, [[0.0, 0.0, 1.0], [1.0, 0.0, 0.0]]);
+    }
+
+    /// A morphed mesh: an indexed quad with two *absolute* position targets
+    /// and their normal targets, posed at `[0.25, 0.5]`. Absolute so the
+    /// export has to convert to USD's offsets rather than copy them.
+    fn morphed_quad() -> (crate::core::ObjectArena, crate::core::ObjectId) {
+        use crate::core::{BufferAttribute, Mesh, Object3D, ObjectArena};
+        use crate::materials::{Material, StandardMaterial};
+        let base = vec![0., 0., 0., 1., 0., 0., 1., 1., 0., 0., 1., 0.];
+        let up = [0., 0., 1.0f32].repeat(4);
+        let mut g = BufferGeometry::new();
+        g.set_attribute("position", BufferAttribute::new(base.clone(), 3));
+        g.set_attribute("normal", BufferAttribute::new(up.clone(), 3));
+        g.set_index(vec![0, 1, 2, 0, 2, 3]);
+        // Smile lifts the top edge only (a sparse target); Bulge pushes
+        // every vertex out along z and tilts the normals.
+        let mut smile = base.clone();
+        smile[7] += 0.5;
+        smile[10] += 0.5;
+        let bulge: Vec<f32> = base
+            .chunks(3)
+            .flat_map(|p| [p[0], p[1], p[2] + 0.75])
+            .collect();
+        let tilted: Vec<f32> = [0.0, 0.6, 0.8f32].repeat(4);
+        g.morph_targets_relative = false;
+        g.morph_target_names = vec!["smile".into(), "bulge".into()];
+        g.set_morph_attribute(
+            "position",
+            vec![BufferAttribute::new(smile, 3), BufferAttribute::new(bulge, 3)],
+        );
+        g.morph_attributes.insert(
+            "normal".into(),
+            vec![BufferAttribute::new(up, 3), BufferAttribute::new(tilted, 3)],
+        );
+        let mut mesh = Mesh::new(g, Material::Standard(StandardMaterial::default()));
+        mesh.morph_influences = vec![0.25, 0.5];
+        let mut arena = ObjectArena::new();
+        let mut o = Object3D::mesh(mesh);
+        o.name = "Face".into();
+        let id = arena.insert(o);
+        (arena, id)
+    }
+
+    /// The posed triangle corners of a mesh, position and normal, sorted —
+    /// the surface it draws, whatever indexing the reader chose.
+    fn posed_corners(mesh: &crate::core::Mesh) -> Vec<[i64; 6]> {
+        let g = mesh.posed_geometry();
+        let p = &g.get_attribute("position").unwrap().array;
+        let n = &g.get_attribute("normal").unwrap().array;
+        let count = p.len() / 3;
+        let order: Vec<usize> = match &g.index {
+            Some(i) => i.iter().map(|&v| v as usize).collect(),
+            None => (0..count).collect(),
+        };
+        let mut out: Vec<[i64; 6]> = order
+            .iter()
+            .map(|&v| {
+                let q = |x: f32| (x * 1e4).round() as i64;
+                [q(p[v * 3]), q(p[v * 3 + 1]), q(p[v * 3 + 2]), q(n[v * 3]), q(n[v * 3 + 1]), q(n[v * 3 + 2])]
+            })
+            .collect();
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    fn the_face(scene: &super::super::scene::UsdScene) -> &crate::core::Mesh {
+        use crate::core::ObjectKind;
+        let face = scene.arena.nodes.values().find(|n| n.name == "Face").expect("the mesh");
+        let ObjectKind::Mesh(mesh) = &face.kind else {
+            panic!("a plain mesh, not {:?}", std::mem::discriminant(&face.kind))
+        };
+        mesh
+    }
+
+    /// Morph targets leave as UsdSkel blend shapes — offsets from the base,
+    /// bound through `skel:blendShapes` / `skel:blendShapeTargets` under a
+    /// `SkelRoot`, with the current influences as the weights of the
+    /// `SkelAnimation` the binding names — and come back as the same targets
+    /// posed the same way, through both the text and the crate form.
+    #[test]
+    fn morph_targets_round_trip_as_blend_shapes() {
+        use crate::core::ObjectKind;
+        let (arena, id) = morphed_quad();
+        let ObjectKind::Mesh(original) = &arena.get(id).unwrap().kind else {
+            unreachable!()
+        };
+        let want = posed_corners(original);
+
+        let text = scene_to_usda(&arena, &[id]);
+        assert_eq!(text.matches("def BlendShape").count(), 2, "{text}");
+        assert!(text.contains("def SkelRoot \"Root\""), "{text}");
+        assert!(text.contains("skel:blendShapeTargets"), "{text}");
+        assert!(text.contains("blendShapeWeights"), "{text}");
+        // Smile touches two vertices, so it is written sparse.
+        assert!(text.contains("pointIndices"), "{text}");
+
+        let usdc = super::super::scene_to_usdc(&arena, &[id]);
+        for (form, layer) in [
+            ("usda", super::super::parse::parse(&text).expect("usda parses")),
+            ("usdc", super::super::UsdLoader::parse_layer(&usdc).expect("usdc parses")),
+            // The same document, re-authored as a crate by OpenUSD's own
+            // `usdcat morph.usda -o morph_blend_shapes.usdc` — so the reader
+            // is held to what USD writes, not only to this crate's writer.
+            (
+                "usdcat usdc",
+                super::super::UsdLoader::parse_layer(include_bytes!(
+                    "testdata/morph_blend_shapes.usdc"
+                ))
+                .expect("usdcat's crate parses"),
+            ),
+        ] {
+            let scene = super::super::scene::to_scene(&layer);
+            let mesh = the_face(&scene);
+            assert_eq!(
+                mesh.geometry.morph_target_names,
+                ["smile", "bulge"],
+                "{form}: target names"
+            );
+            assert_eq!(mesh.morph_influences, [0.25, 0.5], "{form}: influences");
+            assert_eq!(
+                mesh.morph_target_dictionary.get("bulge"),
+                Some(&1),
+                "{form}: dictionary"
+            );
+            assert_eq!(posed_corners(mesh), want, "{form}: posed surface");
+            // Unposed too: the targets themselves, not just this one pose.
+            let mut rest = mesh.clone();
+            rest.morph_influences = vec![0.0, 1.0];
+            let mut orig = original.clone();
+            orig.morph_influences = vec![0.0, 1.0];
+            assert_eq!(posed_corners(&rest), posed_corners(&orig), "{form}: bulge alone");
+            // No stray nodes for the shapes, the skeleton or the animation.
+            for n in scene.arena.nodes.values() {
+                assert!(
+                    !["smile", "bulge", "Smile", "Bulge"].contains(&n.name.as_str())
+                        && !n.name.starts_with("Morph"),
+                    "{form}: a node {:?} for a skel prim",
+                    n.name
+                );
+            }
+        }
+    }
 
     /// A connection is written once, not twice.
     ///
@@ -2096,7 +2589,7 @@ def Material "Mat"
             ..Default::default()
         };
 
-        let prim = material_prim(&phong.into(), "M");
+        let prim = material_prim(&phong.clone().into(), "M");
         let surface = &prim.children[0];
         assert_eq!(
             surface.value("inputs:useSpecularWorkflow").unwrap().flat_u32(),
@@ -2110,7 +2603,7 @@ def Material "Mat"
         let rough = surface.value("inputs:roughness").unwrap().flat_f32()[0];
         assert!((rough - 0.25).abs() < 1e-6, "{rough}");
 
-        let smoother = material_prim(&PhongMaterial { shininess: 200.0, ..phong }.into(), "M")
+        let smoother = material_prim(&PhongMaterial { shininess: 200.0, ..phong.clone() }.into(), "M")
             .children[0]
             .value("inputs:roughness")
             .unwrap()
@@ -2164,6 +2657,88 @@ def Material "Mat"
         assert_eq!(
             prim.value("faceVertexIndices").unwrap().flat_u32(),
             vec![0, 1, 2, 3, 4, 5]
+        );
+    }
+
+    /// Polygons survive a round trip, checked against OpenUSD both ways.
+    ///
+    /// `testdata/polygons.usdc` is `usdcat`'s binary form of
+    /// `testdata/polygons.usda`: a quad, a triangle and a pentagon. Read here,
+    /// it comes back as one polygon per face; written out again — text and
+    /// crate — the faces are the authored ones, corner for corner. Where
+    /// `usdcat` is installed it reads both of those files too, so the check
+    /// is not just this crate's writer agreeing with its own reader.
+    #[test]
+    fn polygons_round_trip_against_usdcat() {
+        const AUTHORED: &[u8] = include_bytes!("testdata/polygons.usdc");
+        const COUNTS: [u32; 3] = [4, 3, 5];
+        const INDICES: [u32; 12] = [0, 1, 2, 3, 1, 4, 2, 4, 5, 6, 7, 2];
+
+        let layer = super::super::crate_read::read(AUTHORED).unwrap();
+        let g = mesh_geometry(layer.prim_at("/Root/Faces").unwrap()).unwrap();
+        assert_eq!(g.polygon_counts(), Some(&[2u32, 1, 3][..]));
+
+        let text = geometry_to_usda(&g, "Faces");
+        let crate_bytes = super::super::geometry_to_usdc(&g, "Faces");
+        for layer in [
+            parse(&text).unwrap(),
+            super::super::crate_read::read(&crate_bytes).unwrap(),
+        ] {
+            let prim = layer.prim_at("/Root/Faces").unwrap();
+            assert_eq!(prim.value("faceVertexCounts").unwrap().flat_u32(), COUNTS);
+            assert_eq!(prim.value("faceVertexIndices").unwrap().flat_u32(), INDICES);
+        }
+
+        let usdcat = std::path::Path::new("/usr/bin/usdcat");
+        if !usdcat.exists() {
+            eprintln!("no usdcat; checked against this crate's reader only");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("threers-polygons-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let usda = dir.join("faces.usda");
+        let usdc = dir.join("faces.usdc");
+        std::fs::write(&usda, &text).unwrap();
+        std::fs::write(&usdc, &crate_bytes).unwrap();
+        for file in [&usda, &usdc] {
+            let out = std::process::Command::new(usdcat)
+                .arg(file)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            let flat = String::from_utf8_lossy(&out.stdout);
+            assert!(
+                flat.contains("int[] faceVertexCounts = [4, 3, 5]"),
+                "{flat}"
+            );
+            assert!(
+                flat.contains("int[] faceVertexIndices = [0, 1, 2, 3, 1, 4, 2, 4, 5, 6, 7, 2]"),
+                "{flat}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A polygon whose triangles do not form one outline is written as its
+    /// triangles, not as a guess.
+    #[test]
+    fn an_unrecoverable_polygon_is_written_as_triangles() {
+        let mut g = BufferGeometry::new();
+        let mut points = vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+        points.extend_from_slice(&[5.0, 0.0, 0.0, 6.0, 0.0, 0.0, 5.0, 1.0, 0.0]);
+        g.set_attribute("position", BufferAttribute::new(points, 3));
+        g.set_index(vec![0, 1, 2, 3, 4, 5]);
+        g.set_polygons(vec![2]);
+        assert_eq!(g.polygon_counts(), Some(&[2u32][..]));
+        let layer = parse(&geometry_to_usda(&g, "M")).unwrap();
+        let prim = layer.prim_at("/Root/M").unwrap();
+        assert_eq!(
+            prim.value("faceVertexCounts").unwrap().flat_u32(),
+            vec![3, 3]
         );
     }
 }

@@ -17,6 +17,25 @@ struct Fade {
     stop_when_done: bool,
 }
 
+/// What a caller asked of an action since the mixer last ran it; the mixer
+/// replays these on its three.js action, in order.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum Request {
+    Play,
+    Stop,
+    Pause,
+    FadeIn(f32),
+    FadeOut(f32),
+    Weight(f32),
+}
+
+/// One clip on an [`AnimationMixer`](super::AnimationMixer). The mixer
+/// plays it as a three.js `AnimationAction`
+/// ([`three::AnimationMixer`](super::three::AnimationMixer)): the fields
+/// here are read each update, and `play` / `stop` / `pause` / fades are
+/// passed on in the order they were called. Used on its own,
+/// [`tick_fade`](Self::tick_fade) and [`advance`](Self::advance) still step
+/// it by hand.
 #[derive(Debug, Clone)]
 pub struct AnimationAction {
     pub clip: AnimationClip,
@@ -29,6 +48,7 @@ pub struct AnimationAction {
     direction: f32,
     effective_weight: f32,
     fade: Option<Fade>,
+    pub(crate) requests: Vec<Request>,
 }
 
 impl AnimationAction {
@@ -44,24 +64,37 @@ impl AnimationAction {
             direction: 1.0,
             effective_weight: 1.0,
             fade: None,
+            requests: Vec::new(),
         }
     }
 
     pub fn play(&mut self) {
         self.enabled = true;
+        self.requests.push(Request::Play);
     }
     pub fn stop(&mut self) {
         self.enabled = false;
         self.time = 0.0;
         self.fade = None;
         self.effective_weight = 0.0;
+        self.requests.push(Request::Stop);
     }
     pub fn pause(&mut self) {
         self.enabled = false;
+        self.requests.push(Request::Pause);
     }
 
     pub fn current_time(&self) -> f32 {
         self.time
+    }
+
+    /// What the mixer's three.js action reported after an update.
+    pub(crate) fn sync_from(&mut self, time: f32, effective_weight: f32, enabled: bool) {
+        self.time = time;
+        self.effective_weight = effective_weight;
+        if !enabled {
+            self.enabled = false;
+        }
     }
 
     pub fn effective_weight(&self) -> f32 {
@@ -72,6 +105,7 @@ impl AnimationAction {
         self.weight = w;
         self.effective_weight = w;
         self.fade = None;
+        self.requests.push(Request::Weight(w));
     }
 
     pub fn fade_in(&mut self, duration: f32) {
@@ -84,6 +118,7 @@ impl AnimationAction {
         });
         self.effective_weight = 0.0;
         self.enabled = true;
+        self.requests.push(Request::FadeIn(duration));
     }
 
     pub fn fade_out(&mut self, duration: f32) {
@@ -94,6 +129,7 @@ impl AnimationAction {
             elapsed: 0.0,
             stop_when_done: true,
         });
+        self.requests.push(Request::FadeOut(duration));
     }
 
     pub fn tick_fade(&mut self, dt: f32) {

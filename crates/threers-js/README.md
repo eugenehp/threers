@@ -31,7 +31,7 @@ import THREE, { initThreers } from 'threers';
 
 await initThreers(); // loads dist/mini/pkg/threers_bg.wasm
 
-const renderer = await THREE.WebGLRenderer.create(canvas);
+const renderer = await THREE.WebGLRenderer.create(canvas, { antialias: true });
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(60, w / h, 0.1, 100);
 ```

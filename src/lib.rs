@@ -7,6 +7,9 @@
     target_arch = "wasm32",
     allow(clippy::arc_with_non_send_sync)
 )]
+// On docs.rs (nightly, `--cfg docsrs`), every feature-gated item is badged
+// with the features it needs.
+#![cfg_attr(docsrs, feature(doc_cfg))]
 //! threers — a drop-in three.js replacement for Rust and WebAssembly.
 //!
 //! Implements the three.js architecture and API surface: a scene graph of
@@ -42,6 +45,8 @@
 //! | `openscad` | | `.scad` front end + `Solid` DSL + exact-CSG kernel (implies `bvh-csg`) | — |
 //! | `manifold` | | Optional Manifold kernel behind OpenSCAD booleans (implies `openscad`) | manifold-rust |
 //! | `planet` | | Planets, moons, starfields, map generation | — |
+//! | `fluid` | | Interactive 2D and 3D fluids on the GPU, as render passes (runs on WebGL2) | — |
+//! | `usd` | | Universal Scene Description — `.usda`, `.usdc`, `.usdz`, read and written | — |
 //! | `video` | | Native frame-sequence export via ffmpeg (implies `captions`) | — |
 //! | `native-codec` | | Pure-Rust GIF, APNG, VP9/WebM, H.264/MP4, HEVC (wasm-safe) | — |
 //! | `metal` | | A second renderer on Metal directly, via the Objective-C runtime (macOS/iOS) | — |
@@ -58,6 +63,8 @@
 //! | `step` | | STEP AP203/214 import + export (implies `brep-kernel`) | — |
 //! | `assembly-check` | | Assembly motion checks (body correspondence, axis recovery, swept volume) | — |
 //! | `learned-denoise` | | Trained U-Net denoiser beside À-Trous (implies `raytrace`) | — |
+//! | `learned-denoise-metal`, `learned-denoise-gpu` | | The same network on Metal or wgpu (imply `learned-denoise`) | — |
+//! | `webgl` | | WebGL2 in the browser through wgpu's GL backend, where WebGPU is missing | — |
 //!
 //! ## Meta bundles
 //!
@@ -67,18 +74,18 @@
 //! | `media` | `video` + `native-codec` + `captions` |
 //! | `gi` | `raytrace` + `learned-denoise` |
 //! | `apple` | `metal` + `videotoolbox` |
-//! | `full` | `cad` + `media` + `gi` + `planet` + `rlx` + `rlx-geo` + `assembly-check` + `async` + `step` + `brep-kernel` |
-//! | `wasm-full` | Browser kitchen sink: `captions` + `openscad` + `native-codec` + `nurbs` + `planet` + `raytrace` |
+//! | `full` | `cad` + `media` + `gi` + `planet` + `fluid` + `usd` + `rlx` + `rlx-geo` + `assembly-check` + `async` + `step` + `brep-kernel` |
+//! | `wasm-full` | Browser kitchen sink: `captions` + `openscad` + `native-codec` + `nurbs` + `planet` + `raytrace` + `fluid` + `usd` |
 //!
 //! ```toml
 //! # CAD stack in one flag
-//! threers = { version = "0.0.5", features = ["cad"] }
+//! threers = { version = "0.0.6", features = ["cad"] }
 //! # everything
-//! threers = { version = "0.0.5", features = ["full"] }
+//! threers = { version = "0.0.6", features = ["full"] }
 //! # browser wasm kitchen sink
-//! threers = { version = "0.0.5", features = ["wasm-full"] }
+//! threers = { version = "0.0.6", features = ["wasm-full"] }
 //! # nothing but the renderer
-//! threers = { version = "0.0.5", default-features = false }
+//! threers = { version = "0.0.6", default-features = false }
 //! ```
 //!
 //! Rigid-body physics lives in the companion crate
@@ -95,7 +102,7 @@
 //! | [`origami`] | Rigid origami: crease patterns, degree-4 kinematics, folded meshes |
 //! | [`renderer`] | wgpu draw + post-processing; headless offscreen (native) |
 //! | `raytrace` | Path-traced rendering — global illumination, on CPU or GPU (`raytrace`) |
-//! | [`postprocessing`] | EffectComposer-style pass chain (native) |
+//! | [`postprocessing`] | three.js EffectComposer and passes (native and browser) |
 //! | [`loaders`] | glTF, OBJ, HDR, … |
 //! | [`extras`] | PMREM, noise, marching cubes, … |
 //! | [`geometries::lattice`] | 35 lattice generators, and what they are worth: stiffness, conductivity, strength, porosity, pore size |
@@ -133,6 +140,7 @@ pub mod captions;
 pub mod controls;
 pub mod core;
 pub mod curves;
+pub mod exporters;
 pub mod extras;
 pub mod geometries;
 pub mod helpers;
@@ -145,6 +153,7 @@ pub mod kinematics;
 pub mod origami;
 pub mod lights;
 pub mod loaders;
+pub mod marks;
 pub mod materials;
 pub mod math;
 pub mod postprocessing;
@@ -155,10 +164,16 @@ pub mod scene;
 pub mod stats;
 pub mod textures;
 pub mod utils;
+pub mod volume;
 
 /// Easing curves — the shape of a transition in time.
 pub mod easing;
 pub mod overlay;
+// A retained UI: CSS-subset styles, flexbox layout, painting, hit-testing.
+// (Its docs are the module's own `//!`; an outer `///` here would make their
+// intra-doc links resolve in this scope, where `Ui` is not.)
+#[cfg(feature = "ui")]
+pub mod ui;
 /// A window, a scene and a loop in one call. Native only.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod sketch;
@@ -167,14 +182,21 @@ pub mod renderer;
 // No outer doc comment: `gpu.rs` carries `//!` docs, and an outer `///` here
 // would make the intra-doc links inside them resolve in this scope.
 pub mod gpu;
-#[cfg(target_arch = "wasm32")]
+/// The `THREE.*` JS shim's bindings (WebRenderer, WebMesh, loaders, ...).
+/// Built with `--cfg threers_no_js_bindings` they are left out: a consumer
+/// driving the Rust API from its own wasm-bindgen crate otherwise ships
+/// ~1,200 exports it never calls (exports are roots, so nothing prunes them).
+#[cfg(all(target_arch = "wasm32", not(threers_no_js_bindings)))]
 pub mod wasm;
 /// The trained denoiser in a browser, split so the work can go to web workers.
 #[cfg(all(target_arch = "wasm32", feature = "raytrace"))]
 pub mod wasm_denoise;
 /// Progressive path tracing for the browser.
-#[cfg(all(target_arch = "wasm32", feature = "raytrace"))]
+#[cfg(all(target_arch = "wasm32", feature = "raytrace", not(threers_no_js_bindings)))]
 pub mod wasm_pathtrace;
+/// three-bvh-csg's boolean evaluation for the browser.
+#[cfg(all(target_arch = "wasm32", feature = "bvh-csg"))]
+pub mod wasm_csg;
 
 /// A second renderer that talks to Metal directly, with no `metal-rs`, no
 /// `objc` crate and no C in the build — see [`metal`](crate::metal) for what it
@@ -273,11 +295,13 @@ pub use captions::{
     CaptionPainter, CaptionStyle, CaptionTrack, Cue,
 };
 pub use controls::{
-    ArcballControls, DragControls, FirstPersonControls, OrbitControls, PointerEvent,
+    ArcballControls, DragControls, FirstPersonControls, GlobeControls, MapControls, OrbitControls,
+    PointerEvent,
     PointerLockControls, TrackballControls,
 };
 pub use core::{
     Bone, BufferAttribute, BufferGeometry, Clock, InstancedMesh, Intersection, Layers,
+    DEFAULT_INFER_QUADS_ANGLE,
     LineSegments, Mesh, MorphAttributes, MorphTarget, Object3D, ObjectArena, ObjectId, ObjectKind,
     Points, Raycaster, Skeleton, SkinnedMesh, Sprite,
 };
@@ -299,7 +323,7 @@ pub use geometries::{
     KirigamiCrease, KirigamiCreaseKind,
     KirigamiExpandedMiura, KirigamiFace, KirigamiFaceKind, KirigamiMesh, KirigamiNet,
     KirigamiNetPanel, KirigamiPreset, KIRIGAMI_NET_VARIANT, LatheGeometry, Lattice, LatticeGeometry, LatticeKind, LatticeStyle,
-    OctahedronGeometry, ParametricGeometry, PlaneGeometry, PolyhedronGeometry, Region,
+    OctahedronGeometry, ParametricGeometry, PlaneGeometry, PolygonGeometry, PolyhedronGeometry, QuadGeometry, Region,
     RingGeometry, SphereGeometry, Strut, TetrahedronGeometry, TextGeometry, TorusGeometry,
     TorusKnotGeometry, Tpms, TubeGeometry, WireframeGeometry, ChiralRule, Cuboct, CuboctAssembly,
     CuboctAssemblyPlan, CuboctAssemblyStep, CuboctFrame, CuboctJoint, CuboctJointKind, FrameMaterial,
@@ -320,7 +344,7 @@ pub use origami::{
 };
 pub use lights::{
     AmbientLight, DirectionalLight, HemisphereLight, Light, PointLight, RectAreaLight,
-    ShadowSettings, SpotLight,
+    ShadowSettings, ShadowType, SpotLight,
 };
 pub use loaders::{
     AlembicArchive, AlembicError, ColladaError, ColladaLoader, DracoError, DracoHeader, ExrError,
@@ -331,6 +355,7 @@ pub use loaders::{
 // Writing, which the loaders module also provides.
 pub use loaders::{scene_to_glb, scene_to_gltf, GltfExportOptions};
 pub use materials::MirrorMaterial;
+pub use materials::{Blending, DepthFunc, RenderState};
 pub use materials::{
     AtmosphereMaterial, BasicMaterial, DepthMaterial, LambertMaterial, LineBasicMaterial,
     MatcapMaterial, Material, MaterialKind, MaterialTextureSlots, NormalMaterial, PhongMaterial,
@@ -338,14 +363,18 @@ pub use materials::{
     ToonMaterial, TransparencyMode,
 };
 pub use math::{
-    Box2, Box3, Color, Cylindrical, Euler, Frustum, Line3, Matrix3, Matrix4, Plane, Quaternion,
+    Box2, Box3, Color, Cylindrical, Euler, EulerOrder, Frustum, Line3, Matrix3, Matrix4, Plane, Quaternion,
     Ray, Sphere, Spherical, Triangle, Vector2, Vector3, Vector4,
+};
+// Colour beyond `Color`: spaces and CSS parsing, ramps and schemes, scales.
+pub use math::{
+    ColorParseError, ColorRamp, ColorScale, ColorSpace, Palette, RampSpace, ScaleKind, SchemeKind,
 };
 #[cfg(feature = "nurbs")]
 pub use nurbs::{NurbsCurve, NurbsSurface, TessellationOptions};
 pub use postprocessing::{
-    BloomPass, CopyPass, EffectComposer, FilmPass, FxaaPass, GlitchPass, OutlinePass, Pass,
-    RenderPass, SsaoPass, SsrPass, ToneMappingPass,
+    BloomPass, CopyPass, EffectComposer, FilmPass, FxaaPass, GlitchPass, OutlinePass,
+    OutputPass, Pass, RenderPass, ShaderPass, SsaoPass, SsrPass, UnrealBloomPass,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use renderer::headless::{
@@ -383,6 +412,7 @@ pub use textures::{
     pack_rgba16f, CubeTexture, DataTexture, DepthTexture, Texture, TextureFilter, TextureFormat,
     TextureWrap,
 };
+pub use volume::Data3DTexture;
 pub use utils::png::{decode_png, encode_png, PngImage};
 
 /// Rendering a sequence: stills, a video, or both from one pass.
@@ -440,7 +470,7 @@ pub use codec::webm::{encode_gray_webm, encode_webm, mux_webm, WebmCodec, WebmFr
 
 #[cfg(feature = "mesh-bvh")]
 pub use mesh_bvh::{
-    BuildOptions as MeshBvhBuildOptions, BvhHit, MeshBvh, SerializedMeshBvh, AVERAGE, CENTER,
+    BuildOptions as MeshBvhBuildOptions, BvhHit, BvhNodeView, MeshBvh, SerializedMeshBvh, AVERAGE, CENTER,
     CONTAINED, INTERSECTED, NOT_INTERSECTED, SAH,
 };
 
@@ -452,18 +482,17 @@ pub use raytrace::{
 
 #[cfg(feature = "bvh-csg")]
 pub use csg::{
-    assert_step_verts, build_bvh_csg_hierarchy_geometry, evaluate_hierarchy, evaluate_live_through,
-    evaluate_through, js_target_verts, load_positions_geometry_bin, step1_shell_cut,
-    step2_add_sphere, step3_win_cut, step4_win_frame, CsgBrush, CsgEvaluator, CsgNode,
-    CsgOperation, CsgOperationGroup, ADDITION, DIFFERENCE, HOLLOW_INTERSECTION, HOLLOW_SUBTRACTION,
-    INTERSECTION, JS_STEP1_VERTS, JS_STEP2_VERTS, JS_STEP3_VERTS, JS_STEP4_VERTS,
-    REVERSE_SUBTRACTION, SUBTRACTION,
+    evaluate_hierarchy, CsgBrush, CsgEvaluator, CsgNode, CsgOperation, CsgOperationGroup, ADDITION,
+    DIFFERENCE, HOLLOW_INTERSECTION, HOLLOW_SUBTRACTION, INTERSECTION, REVERSE_SUBTRACTION,
+    SUBTRACTION,
 };
 
 #[cfg(feature = "openscad")]
 pub use exact_csg::report::{mesh_report, DefectCluster, MeshReport};
 #[cfg(feature = "openscad")]
-pub use openscad::export::{geometry_to_3mf, geometry_to_glb, geometry_to_obj, geometry_to_off, parts_to_glb};
+pub use openscad::export::{
+    geometry_to_3mf, geometry_to_glb, geometry_to_obj, geometry_to_off, geometry_to_ply, parts_to_glb,
+};
 #[cfg(feature = "openscad")]
 pub use openscad::freecad::{
     fcstd_meshes, fcstd_to_geometry, fcstd_to_solid, geometry_to_fcstd, geometry_to_fcstd_with,

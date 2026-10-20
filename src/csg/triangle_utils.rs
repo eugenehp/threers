@@ -4,7 +4,7 @@ use crate::math::{Triangle, Vector3};
 
 use super::js_topology::{is_tri_degenerate as js_is_tri_degenerate, JsTriangle};
 
-/// Degeneracy check matching `web/csg/core/utils/triangleUtils.js`.
+/// three-bvh-csg's `isTriDegenerate`, for an f32 triangle.
 pub fn is_tri_degenerate(tri: &Triangle, eps: f32) -> bool {
     js_is_tri_degenerate(JsTriangle::from_triangle(*tri), eps as f64)
 }

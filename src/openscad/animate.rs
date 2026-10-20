@@ -1655,7 +1655,8 @@ impl ScadRender {
         self
     }
 
-    /// Background color behind the model.
+    /// Background color behind the model, sRGB-encoded (`hex / 255`) — it lands
+    /// on the image as these values.
     pub fn background(mut self, rgba: [f32; 4]) -> Self {
         self.background = rgba;
         self
@@ -1783,7 +1784,15 @@ impl ScadRender {
     /// to the view; see [`ScadLighting`].
     pub fn build_scene(&self, frame: &ScadFrame, camera: &PerspectiveCamera) -> Scene {
         let mut scene = Scene::new();
-        scene.background = Color::new(self.background[0], self.background[1], self.background[2]);
+        // The background is authored sRGB (`hex / 255`, as the palettes build
+        // it) and `scene.background` is linear, so decode: it then lands on the
+        // image as the authored colour.
+        let lin = crate::utils::srgb::srgb_to_linear_f32;
+        scene.background = Color::new(
+            lin(self.background[0]),
+            lin(self.background[1]),
+            lin(self.background[2]),
+        );
         scene.background_alpha = self.background[3];
 
         let shadows = self.add_lights(&mut scene, frame, camera);
@@ -1871,35 +1880,42 @@ impl ScadRender {
             key
         };
 
+        // The direct-light strengths below were 1.25x these (key 1.9, fill
+        // 0.55, rim 0.85; sun 2.1 and 0.40) while the GGX lobe used a
+        // Schlick-Smith visibility and weighted diffuse by (1 - F). three.js
+        // r165's correlated Smith and unweighted Lambert put about a quarter
+        // more light on a white part, which clipped the studio rig's diffuse;
+        // scaling the direct lights by 0.8 gives back the exposure the rigs
+        // were composed at (`every_rig_lights_a_white_model_without_blowing_it_out`).
         match light.rig {
             ScadRig::Studio => {
                 scene.add(hemi);
                 let [az, el] = light.key_angles;
                 // Key first: it is the shadow caster.
-                scene.add_light(key_light(toward_view_light(az, el), key_tint, 1.9 * gain));
+                scene.add_light(key_light(toward_view_light(az, el), key_tint, 1.52 * gain));
                 // Fill: opposite side, near eye level, soft.
                 scene.add_light(directional(
                     fill_tint,
-                    0.55 * gain,
+                    0.44 * gain,
                     toward_view_light(-(az + 25.0), el * 0.2),
                 ));
                 // Rim: behind and above, to lift the silhouette off the
                 // background — the light that stops a dark part disappearing.
                 scene.add_light(directional(
                     [0.90, 0.94, 1.0],
-                    0.85 * gain,
+                    0.68 * gain,
                     toward_view_light(180.0 - az * 0.5, el + 20.0),
                 ));
             }
             ScadRig::Sun => {
                 scene.add(hemi);
                 let [az, el] = light.key_angles;
-                scene.add_light(key_light(orbit_direction(az, el), key_tint, 2.1 * gain));
+                scene.add_light(key_light(orbit_direction(az, el), key_tint, 1.68 * gain));
                 // A weak bounce from the opposite side so the shaded faces are
                 // not pure hemisphere.
                 scene.add_light(directional(
                     fill_tint,
-                    0.40 * gain,
+                    0.32 * gain,
                     orbit_direction(az + 150.0, 12.0),
                 ));
             }
@@ -2195,6 +2211,7 @@ fn shadow_settings_for(bounds: ([f32; 3], [f32; 3])) -> crate::lights::ShadowSet
         .max(1e-3);
     crate::lights::ShadowSettings {
         map_size: 2048,
+        radius: 1.0,
         // Scaled to the model, so a 5 mm part and a 5 m one both avoid acne
         // without their shadows detaching.
         bias: (reach * 3.0e-4).max(1e-5),
@@ -2216,6 +2233,7 @@ fn shadow_settings_for(bounds: ([f32; 3], [f32; 3])) -> crate::lights::ShadowSet
         // eye at 1.725·reach, so the model occupies 0.725·reach..2.725·reach.
         camera_near: (reach * 0.7).max(1e-3),
         camera_far: reach * 2.8,
+        ..Default::default()
     }
 }
 

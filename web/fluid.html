@@ -14,6 +14,14 @@
         background: rgba(10,10,18,.66); backdrop-filter: blur(10px);
         padding: 10px 12px 12px; border-radius: 10px; border: 1px solid #2a2a3c; }
   #ui[hidden] { display: none; }
+  /* The panel's own toggle. Off-screen on a desktop, where the panel is a
+     corner of a large window and always welcome; on a phone it is most of
+     the screen, so it has to be possible to put away. */
+  #panel-toggle { position: fixed; display: none; z-index: 3;
+                  top: max(12px, env(safe-area-inset-top));
+                  right: max(12px, env(safe-area-inset-right));
+                  width: 44px; height: 44px; padding: 0; margin: 0;
+                  font-size: 18px; line-height: 44px; border-radius: 12px; }
   h2 { font-size: 11px; letter-spacing: .09em; text-transform: uppercase; color: #9a8fd0;
        margin: 12px 0 6px; font-weight: 600; }
   h2:first-child { margin-top: 0; }
@@ -34,20 +42,70 @@
   #stats { margin-top: 10px; padding-top: 8px; border-top: 1px solid #2a2a3c;
            color: #8e89a6; font-variant-numeric: tabular-nums; }
   #stats b { color: #dbe6f0; font-weight: 600; }
+  .hide { display: none; }
   #hint { margin-top: 8px; color: #6b6b85; }
   #msg { position: fixed; inset: 0; display: grid; place-items: center; text-align: center;
          padding: 2rem; background: #000; font-size: 14px; }
   #msg.hidden { display: none; }
   code { color: #e49bff; }
+
+  /* --- narrow screens ---------------------------------------------------
+     A 232px panel is a quarter of a laptop window and two thirds of a
+     phone, so on a phone it becomes a sheet along the bottom instead: full
+     width, half the height, and out of the way of the hand that is drawing
+     in the fluid. Controls grow to a finger's worth of target, and the
+     insets keep both clear of a notch and a home bar. */
+  @media (max-width: 720px) {
+    #panel-toggle { display: block; }
+    #ui { top: auto; right: max(8px, env(safe-area-inset-right));
+          left: max(8px, env(safe-area-inset-left));
+          bottom: max(8px, env(safe-area-inset-bottom));
+          width: auto; max-height: 52vh; border-radius: 14px;
+          padding: 12px 14px calc(12px + env(safe-area-inset-bottom));
+          -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
+    body { font-size: 13px; }
+    label { margin: 7px 0; gap: 10px; min-height: 30px; }
+    label > span:first-child { flex: 0 0 92px; }
+    input[type=range] { height: 30px; }
+    input[type=checkbox] { width: 22px; height: 22px; }
+    output { flex: 0 0 46px; }
+    select { padding: 5px 6px; }
+    button { padding: 9px; }
+    #msg { font-size: 13px; padding: 1.5rem; }
+    /* Two columns of toggles, so the list of them is not a scroll of its
+       own on a screen this narrow. */
+    #ui { columns: auto; }
+  }
+  /* A pointer that cannot hover has no ctrl key either: the volume's push
+     gesture gets a switch instead. */
+  @media (hover: hover) { .touch-only { display: none; } }
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
+<button id="panel-toggle" type="button" aria-label="controls" aria-expanded="true">≡</button>
 
 <div id="ui" hidden>
+  <h2>Fluid</h2>
+  <label><span>dimensions</span><select id="mode">
+    <option value="2d">2D — ink on a plane</option>
+    <option value="3d">3D — smoke in a volume</option>
+  </select></label>
+
   <h2>Quality <span class="cost">rebuilds grids</span></h2>
   <label><span>level</span><select id="quality"></select></label>
   <label><span>sweeps</span><input type="range" id="pressure_iterations" min="1" max="60" step="1"><output></output></label>
+
+  <!-- Voxels a side, so the memory and the solve both go as the cube. The
+       panel reports what was actually allocated under `sim` and `dye`: a
+       volume too big for the device's texture limit is halved until it
+       fits. -->
+  <div class="only3d">
+  <label><span>solver</span><input type="range" id="resolution" min="16" max="160" step="8"><output></output></label>
+  <label><span>dye</span><input type="range" id="dye_resolution" min="32" max="320" step="16"><output></output></label>
+  </div>
+
+  <div class="only2d">
   <!-- A multigrid V-cycle solves the smooth part of the pressure problem on a
        coarse grid, where Jacobi's one-texel reach is the whole domain. One
        cycle beats sixty-four times the sweeps. -->
@@ -57,7 +115,18 @@
   <label><span>multigrid</span><input type="checkbox" id="multigrid"></label>
   <label><span>cycles</span><input type="range" id="multigrid_cycles" min="1" max="4" step="1"><output></output></label>
 
+  </div>
+
   <h2>Fluid <span class="cost">free</span></h2>
+  <!-- A multiple of real time, applied to the timestep. The advection is
+       unconditionally stable at any step, so this cannot blow the fluid up;
+       past about four the back-trace reads from somewhere the fluid never
+       flowed through and it starts to tear rather than move. -->
+  <label><span>speed</span><input type="range" id="speed" min="0" max="4" step="0.05"><output></output></label>
+  <!-- Drawn in the shader, over the picture, in both dimensions — so it
+       survives the panel being hidden, which is when you most want it. -->
+  <label><span>fps overlay</span><input type="checkbox" id="show_fps"></label>
+  <label class="touch-only only3d"><span>drag pushes</span><input type="checkbox" id="push"></label>
   <label><span>vorticity</span><input type="range" id="curl" min="0" max="50" step="1"><output></output></label>
   <label><span>dye fade</span><input type="range" id="density_dissipation" min="0" max="4" step="0.05"><output></output></label>
   <label><span>motion fade</span><input type="range" id="velocity_dissipation" min="0" max="4" step="0.05"><output></output></label>
@@ -67,6 +136,47 @@
        1.0 is the original's overshoot, 0.5 the consistent coefficient. -->
   <label><span>projection</span><input type="range" id="gradient_scale" min="0.25" max="1.5" step="0.05"><output></output></label>
 
+  <!-- Each of these is an optimisation with a measured cost and a measured
+       effect, switchable while it runs so both can be seen. `skip empty`
+       and `cached binds` change nothing about the picture; `packed dye`
+       halves the memory and, on the machine this was written on, doubles the
+       frame. -->
+  <div class="only3d">
+  <h2>Optimisations <span class="cost">live</span></h2>
+  <label><span>skip empty</span><input type="checkbox" id="empty_space_skip"></label>
+  <label><span>cached binds</span><input type="checkbox" id="cache_bindings"></label>
+  <label><span>packed dye</span><input type="checkbox" id="compact_dye"></label>
+  <label><span>multigrid</span><input type="checkbox" id="multigrid3"></label>
+  <label><span>cycles</span><input type="range" id="multigrid_cycles3" min="1" max="4" step="1"><output></output></label>
+
+  <h2>Volume <span class="cost">free</span></h2>
+  <!-- How hard a drag pushes. The plane has a `splat_force` too and its
+       scale is a thousand times this one, so it is not the same slider. -->
+  <label><span>push</span><input type="range" id="splat_force" min="0" max="20" step="0.5"><output></output></label>
+  <label><span>buoyancy</span><input type="range" id="buoyancy" min="0" max="160" step="2"><output></output></label>
+  <!-- Which way buoyancy pushes. Up by default, because that is what
+       buoyancy is — but nothing in the solver requires it, and a plume
+       along a tilted chimney is one slider away. -->
+  <label><span>up · x</span><input type="range" id="buoyancy_x" min="-1" max="1" step="0.05"><output></output></label>
+  <label><span>up · y</span><input type="range" id="buoyancy_y" min="-1" max="1" step="0.05"><output></output></label>
+  <label><span>up · z</span><input type="range" id="buoyancy_z" min="-1" max="1" step="0.05"><output></output></label>
+  <label><span>march steps</span><input type="range" id="march_steps" min="24" max="256" step="8"><output></output></label>
+  <!-- Average the march over this many frames. One is off. It resets the
+       moment the camera moves, so it costs nothing while you drag and
+       sharpens the picture as soon as you stop — and the fluid itself keeps
+       moving, so a high count trades noise for motion blur. -->
+  <label><span>accumulate</span><input type="range" id="accumulate" min="1" max="16" step="1"><output></output></label>
+  <!-- How far the history may stray from this frame before it is thrown
+       away, in standard deviations of its own neighbourhood. Smaller rejects
+       more: it is what stops a rising plume ghosting, and below about a
+       quarter it rejects so much that accumulating stops helping. -->
+  <label><span>reject</span><input type="range" id="reject" min="0.1" max="4" step="0.05"><output></output></label>
+  <label><span>absorption</span><input type="range" id="absorption" min="4" max="90" step="1"><output></output></label>
+  <label><span>emission</span><input type="range" id="emission" min="0.1" max="4" step="0.05"><output></output></label>
+  <label><span>exposure</span><input type="range" id="exposure" min="0.2" max="3" step="0.05"><output></output></label>
+  </div>
+
+  <div class="only2d">
   <h2>Look <span class="cost">free</span></h2>
   <label><span>shading</span><input type="checkbox" id="shading"></label>
   <label><span>colorful</span><input type="checkbox" id="colorful"></label>
@@ -76,6 +186,8 @@
   <label><span>sunrays</span><input type="checkbox" id="sunrays"></label>
   <label><span>weight</span><input type="range" id="sunrays_weight" min="0.3" max="1" step="0.01"><output></output></label>
 
+  </div>
+
   <button id="splat">random splats</button>
   <button id="pause">pause</button>
 
@@ -83,7 +195,10 @@
     <div><b id="fps">–</b> fps · <b id="mem">–</b> MB</div>
     <div>dye <b id="dye">–</b> · sim <b id="sim">–</b></div>
   </div>
-  <div id="hint">drag to pour ink · space for splats · <code>p</code> pauses</div>
+  <div id="hint" class="only2d">drag to pour ink · space for splats · <code>p</code> pauses</div>
+  <div id="hint3" class="only3d"><span id="hint3-push"><b>ctrl</b>-click or ctrl-drag to push the smoke</span><br>
+    <span id="hint3-orbit">drag to orbit · scroll to zoom · space for splats · <code>p</code> pauses</span><br>
+    a volume costs the cube of its size — raise <em>march steps</em> if your machine can take it</div>
 </div>
 
 <div id="msg">starting…</div>
@@ -98,27 +213,98 @@ const canvas = document.getElementById("c");
 const $ = (id) => document.getElementById(id);
 const fail = (html) => { msg.classList.remove("hidden"); msg.innerHTML = html; };
 
+// Anything that throws after the start-up guard below used to leave a black
+// page and no message: `#msg` is hidden as soon as the fluid is running, and
+// the panel is only shown at the very end, so a failure in between showed
+// nothing at all. These catch the whole file, module evaluation included.
+const report = (what) =>
+  fail(`Something went wrong after start-up:<br><br><code>${String(what)}</code><br><br>
+        Load with <code>?log=info</code> for what wgpu has to say about it.`);
+addEventListener("error", (e) => {
+  // Safari raises a contentless `error` event — no `error` object, no
+  // filename, the message sanitised to "Script error." — on a page that then
+  // runs perfectly well. There is nothing in it to act on and nothing to
+  // show, so it goes to the console and not over the picture.
+  const detail = (e.error && (e.error.stack || e.error.message)) || e.filename;
+  if (!detail) {
+    console.warn("ignoring a contentless error event:", e.message);
+    return;
+  }
+  report(detail);
+});
+addEventListener("unhandledrejection", (e) => report(e.reason));
+
 // Sliders are read straight off the DOM by id, which is the Rust field name —
 // so adding a knob here is one <input> and nothing else.
-const SLIDERS = ["pressure_iterations", "multigrid_cycles", "curl", "density_dissipation",
+const SLIDERS = ["pressure_iterations", "multigrid_cycles", "multigrid_cycles3",
+                 "speed", "splat_force", "curl", "density_dissipation",
                  "velocity_dissipation", "pressure", "splat_radius", "gradient_scale",
-                 "bloom_intensity", "bloom_threshold", "sunrays_weight"];
-const TOGGLES = ["shading", "colorful", "bloom", "sunrays", "multigrid", "maccormack"];
+                 "bloom_intensity", "bloom_threshold", "sunrays_weight",
+                 "resolution", "dye_resolution",
+                 "buoyancy", "buoyancy_x", "buoyancy_y", "buoyancy_z",
+                 "march_steps", "accumulate", "reject", "absorption", "emission",
+                 "exposure"];
+const TOGGLES = ["shading", "colorful", "bloom", "sunrays", "multigrid", "maccormack",
+                 "empty_space_skip", "cache_bindings", "compact_dye", "multigrid3",
+                 "show_fps", "push"];
+
+// `multigrid` and `cycles` exist in both modes with different defaults, so
+// the volume's carry a suffix in the DOM. The simulation only ever knows the
+// bare name.
+const knob = (id) => id.replace(/3$/, "");
 
 // The defaults are the original's, and are stated once here so the panel opens
 // showing what the simulation is actually running.
 const DEFAULTS = {
-  pressure_iterations: 20, multigrid: false, multigrid_cycles: 1, maccormack: false, curl: 30, density_dissipation: 1, velocity_dissipation: 0.2,
+  speed: 1, pressure_iterations: 20, multigrid: false, multigrid_cycles: 1, maccormack: false, curl: 30, density_dissipation: 1, velocity_dissipation: 0.2,
   pressure: 0.8, splat_radius: 0.25, gradient_scale: 1,
   bloom_intensity: 0.8, bloom_threshold: 0.6, sunrays_weight: 1,
   shading: true, colorful: true, bloom: true, sunrays: true,
+  maccormack: false, show_fps: true,
+};
+
+// The volume's own defaults, which differ wherever the dimension changes what
+// a sensible value is: a 3D splat is larger relative to its grid, and the
+// vorticity that reads as smoke is lower than the one that reads as ink.
+const DEFAULTS_3D = {
+  speed: 1, curl: 26, density_dissipation: 0.2, velocity_dissipation: 0.2,
+  pressure: 0.8, pressure_iterations: 20, splat_radius: 0.6, gradient_scale: 1,
+  resolution: 40, dye_resolution: 80, splat_force: 6,
+  buoyancy: 46, buoyancy_x: 0, buoyancy_y: 1, buoyancy_z: 0,
+  march_steps: 64, accumulate: 1, reject: 0.5, absorption: 34, emission: 1.3,
+  exposure: 1, push: false,
+  // The optimisations, as `FluidConfig3d` has them.
+  empty_space_skip: true, cache_bindings: true, compact_dye: false, show_fps: true,
+  multigrid3: true, multigrid_cycles3: 1,
 };
 
 const params = new URLSearchParams(location.search);
+
+// A phone is narrow, has no hover and no keyboard. All three change the
+// shell rather than the simulation, so they are decided once here.
+const narrow = matchMedia("(max-width: 720px)").matches;
+const touch = matchMedia("(hover: none)").matches;
+const toggle = $("panel-toggle");
+
+// `high` on a phone is a ray march over two million device pixels. The
+// level is still a dropdown away, and `?quality=` still wins.
+const quality = params.get("quality") ?? (narrow ? "medium" : "high");
+
+const showPanel = (show) => {
+  $("ui").hidden = !show;
+  toggle.setAttribute("aria-expanded", String(show));
+  toggle.textContent = show ? "×" : "≡";
+};
+toggle.onclick = () => showPanel($("ui").hidden);
+
 let fluid;
 try {
   await init();
-  fluid = await fluidStart(canvas, params.get("quality") ?? undefined);
+  fluid = await fluidStart(canvas, quality);
+  if ((params.get("mode") ?? "2d") === "3d") {
+    fluid.setMode("3d");
+    $("mode").value = "3d";
+  }
 } catch (e) {
   fail(`Could not start the fluid:<br><br><code>${String(e)}</code><br><br>
         This page needs <b>WebGPU</b> — Safari 18+, Chrome 113+ — or a build with
@@ -131,24 +317,76 @@ const levels = Fluid.qualityNames();
 $("quality").replaceChildren(...levels.map((name) => {
   const o = document.createElement("option");
   o.value = o.textContent = name;
-  o.selected = name === (params.get("quality") ?? "high");
+  o.selected = name === quality;
   return o;
 }));
 
+const fmt = (el) => (+el.value).toFixed(el.step.includes(".") ? 2 : 0);
 for (const id of SLIDERS) {
   const el = $(id);
-  el.value = DEFAULTS[id];
+  el.value = id in DEFAULTS ? DEFAULTS[id] : DEFAULTS_3D[id];
   const out = el.nextElementSibling;
-  const echo = () => { out.textContent = (+el.value).toFixed(el.step.includes(".") ? 2 : 0); };
-  echo();
-  el.oninput = () => { echo(); fluid.set(id, +el.value); };
+  out.textContent = fmt(el);
+  el.oninput = () => { out.textContent = fmt(el); fluid.set(knob(id), +el.value); };
 }
 for (const id of TOGGLES) {
   const el = $(id);
   el.checked = DEFAULTS[id];
-  el.onchange = () => fluid.set(id, el.checked ? 1 : 0);
+  el.onchange = () => fluid.set(knob(id), el.checked ? 1 : 0);
 }
-$("quality").onchange = (e) => { fluid.quality(e.target.value); stats(); };
+$("quality").onchange = (e) => { fluid.quality(e.target.value); syncPanel(); stats(); };
+
+// A quality level moves the knobs it owns. Read them back off the simulation
+// rather than from a table here, so the panel shows what is running — which
+// after the device's texture limit has had its say is not always what was
+// asked for.
+function syncPanel() {
+  const i = JSON.parse(fluid.info());
+  const show = (id, value) => {
+    const el = $(id);
+    if (!el || value === undefined) return;
+    el.value = value;
+    el.nextElementSibling.textContent = fmt(el);
+  };
+  show("pressure_iterations", i.sweeps);
+  if (i.mode === "3d") {
+    show("resolution", i.sim[0]);
+    show("dye_resolution", i.dye[0]);
+    show("march_steps", i.steps);
+  }
+}
+
+// Switching dimension builds the other simulation on the same device and
+// drops this one, so the panel has to re-push whatever that mode's knobs are.
+$("mode").onchange = (e) => {
+  fluid.setMode(e.target.value);
+  applyMode();
+  syncPanel();
+  stats();
+};
+
+function applyMode() {
+  const three = fluid.mode() === "3d";
+  for (const el of document.querySelectorAll(".only2d")) el.classList.toggle("hide", three);
+  for (const el of document.querySelectorAll(".only3d")) el.classList.toggle("hide", !three);
+  // Push this mode's defaults into the sliders and into the simulation, so
+  // the panel and the fluid agree from the first frame rather than from the
+  // first time something is dragged.
+  const want = three ? DEFAULTS_3D : DEFAULTS;
+  for (const id of SLIDERS) {
+    if (!(id in want)) continue;
+    const el = $(id);
+    el.value = want[id];
+    el.nextElementSibling.textContent = fmt(el);
+    fluid.set(knob(id), +el.value);
+  }
+  for (const id of TOGGLES) {
+    if (!(id in want)) continue;
+    const el = $(id);
+    el.checked = !!want[id];
+    fluid.set(knob(id), el.checked ? 1 : 0);
+  }
+}
 $("splat").onclick = () => fluid.splats(15);
 $("pause").onclick = () => {
   fluid.set("paused", fluid.paused() ? 0 : 1);
@@ -161,12 +399,29 @@ $("pause").onclick = () => {
 function stats() {
   const i = JSON.parse(fluid.info());
   $("mem").textContent = (i.bytes / 1048576).toFixed(0);
-  $("dye").textContent = `${i.dye[0]}×${i.dye[1]}`;
-  $("sim").textContent = `${i.sim[0]}×${i.sim[1]}`;
+  const join = (a) => a.join("×");
+  $("dye").textContent = join(i.dye);
+  $("sim").textContent = join(i.sim);
 }
+// A touch device has no ctrl to hold, no wheel to scroll and no space bar.
+if (touch) {
+  $("hint3-push").innerHTML = "turn on <b>drag pushes</b> to push the smoke";
+  $("hint3-orbit").textContent = "drag to orbit · pinch to zoom";
+  $("hint").textContent = "drag to pour ink · double-tap the canvas for splats";
+  // The keyboard shortcuts' stand-in: the gesture nobody needs for anything
+  // else on a canvas that already uses one- and two-finger drags.
+  canvas.addEventListener("dblclick", (e) => { e.preventDefault(); fluid.splats(15); });
+}
+
+applyMode();
+syncPanel();
 stats();
 setInterval(() => { $("fps").textContent = fluid.fps().toFixed(0); stats(); }, 500);
-$("ui").hidden = false;
+// Open on a desktop, closed on a phone: there the panel is a sheet over the
+// picture, and the picture is the point.
+showPanel(!narrow);
+
+
 </script>
 </body>
 </html>

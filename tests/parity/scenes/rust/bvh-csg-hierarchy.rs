@@ -8,8 +8,9 @@ use std::sync::Arc;
 
 use threers::cameras::Camera;
 use threers::{
-    build_bvh_csg_hierarchy_geometry, AmbientLight, Color, CsgEvaluator, DirectionalLight, Mesh,
-    Object3D, PerspectiveCamera, Renderer, Scene, StandardMaterial, Vector3,
+    evaluate_hierarchy, AmbientLight, BoxGeometry, BufferGeometry, Color, CsgEvaluator, CsgNode,
+    CsgOperation, CsgOperationGroup, DirectionalLight, Mesh, Object3D, PerspectiveCamera, Renderer,
+    Scene, SphereGeometry, StandardMaterial, Vector3, ADDITION, SUBTRACTION,
 };
 
 use winit::{
@@ -18,13 +19,26 @@ use winit::{
     window::WindowBuilder,
 };
 
-const AFTER_SPHERE_BIN: &[u8] = include_bytes!("bvh-csg-after-sphere.geom.bin");
-const AFTER_WINCUT_BIN: &[u8] = include_bytes!("bvh-csg-step3-wincut.geom.bin");
-
-fn build_hierarchy_geometry() -> threers::BufferGeometry {
+/// The scene's hierarchy, as `threers-bvh-csg-hierarchy.html` builds it:
+/// shell − cut + sphere, and a window cut and framed through a group.
+fn build_hierarchy_geometry() -> BufferGeometry {
+    let soup = |g: BufferGeometry| g.to_non_indexed();
+    let mut root = CsgOperation::new(soup(BoxGeometry::new(4.0, 2.5, 2.5)), ADDITION);
+    let cut = CsgOperation::new(soup(BoxGeometry::new(3.6, 2.1, 2.1)), SUBTRACTION);
+    let mut sphere = CsgOperation::new(soup(SphereGeometry::new(0.55, 24, 12)), ADDITION);
+    sphere.set_position(-1.1, 0.2, 1.35);
+    let mut window = CsgOperationGroup::new();
+    window.add_child(CsgNode::Operation(CsgOperation::new(soup(BoxGeometry::new(1.2, 1.0, 0.5)), SUBTRACTION)));
+    window.add_child(CsgNode::Operation(CsgOperation::new(soup(BoxGeometry::new(1.2, 1.0, 0.12)), ADDITION)));
+    window.set_position(0.8, 0.15, 1.35);
+    root.add_child(CsgNode::Operation(cut));
+    root.add_child(CsgNode::Operation(sphere));
+    root.add_child(CsgNode::Group(window));
     let mut evaluator = CsgEvaluator::new();
     evaluator.use_groups = false;
-    build_bvh_csg_hierarchy_geometry(&mut evaluator, AFTER_SPHERE_BIN, AFTER_WINCUT_BIN)
+    let mut geometry = evaluate_hierarchy(&mut root, &mut evaluator);
+    threers::utils::compute_vertex_normals(&mut geometry);
+    geometry
 }
 
 fn main() {

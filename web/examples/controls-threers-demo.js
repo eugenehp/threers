@@ -25,7 +25,7 @@ const modeEl = document.getElementById('mode');
 
         let { w, h } = resizeCanvas();
 
-        const renderer = await THREE.WebGLRenderer.create(canvas);
+        const renderer = await THREE.WebGLRenderer.create(canvas, { antialias: true });
 
         const scene = new THREE.Scene();
         scene.background = new THREE.Color(0x202030);

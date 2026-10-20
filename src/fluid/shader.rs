@@ -419,6 +419,22 @@ fn fs_prolong(i : VsOut) -> @location(0) vec4<f32> {
     return vec4<f32>(fine + coarse, 0.0, 0.0, 1.0);
 }
 
+// The frame-rate read-out, over the finished picture. `value` is the number;
+// the glyphs are in `super::read_out`, shared with the volume's shader.
+@fragment
+fn fs_overlay(i : VsOut) -> @location(0) vec4<f32> {
+    let a = read_out(i.pos.xy, u.value);
+    if (a > 0.0) {
+        return vec4<f32>(1.0, 1.0, 1.0, a);
+    }
+    // `tex_a` is the frame-time history for this pass, not the dye.
+    let bar = chart(i.pos.xy, tex_a, u.radius, u.curl);
+    if (bar.a <= 0.0) {
+        discard;
+    }
+    return bar;
+}
+
 // The projection step: subtracting the pressure gradient removes exactly the
 // part of the velocity that was compressing the fluid and leaves the rest.
 //

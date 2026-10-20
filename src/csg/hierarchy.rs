@@ -1,19 +1,24 @@
-use crate::core::BufferGeometry;
-use crate::math::{Matrix4, Vector3};
+//! three-bvh-csg 0.0.16's `Operation`, `OperationGroup` and
+//! `Evaluator.evaluateHierarchy`: a tree of brushes, each applied to its
+//! parent with its operation, re-evaluated only where something changed.
 
-use super::brush::CsgBrush;
+use crate::core::BufferGeometry;
+
+use super::brush::{CsgBrush, IDENTITY};
 use super::constants::Operation;
 use super::evaluator::CsgEvaluator;
-use super::geometry_prep::load_positions_geometry_bin;
-use super::hierarchy_steps::step4_win_frame;
+use super::js_topology::JsMatrix4;
 
-/// A CSG operation node (mirrors `web/csg/core/operations/Operation.js`).
+/// three-bvh-csg `Operation`: a brush applied to its parent with
+/// `operation`, whose own children apply to it in turn.
 #[derive(Debug)]
 pub struct CsgOperation {
     pub brush: CsgBrush,
     pub operation: Operation,
     pub children: Vec<CsgNode>,
-    cached_geometry: Option<BufferGeometry>,
+    /// This operation with its children applied, from the last evaluation
+    /// that changed it (three-bvh-csg's `_cachedGeometry`).
+    cached_geometry: BufferGeometry,
     previous_operation: Option<Operation>,
 }
 
@@ -23,7 +28,7 @@ impl CsgOperation {
             brush: CsgBrush::new(geometry),
             operation,
             children: Vec::new(),
-            cached_geometry: None,
+            cached_geometry: BufferGeometry::new(),
             previous_operation: None,
         }
     }
@@ -32,14 +37,16 @@ impl CsgOperation {
         self.children.push(child);
     }
 
+    /// three.js `position.set(x, y, z)`.
     pub fn set_position(&mut self, x: f64, y: f64, z: f64) {
         self.brush.set_position(x, y, z);
     }
 
-    pub fn update_matrix_world(&mut self, parent: Option<&Matrix4>) {
+    pub fn update_matrix_world(&mut self, parent: Option<&[f64; 16]>) {
         self.brush.update_matrix_world(parent);
+        let world = self.brush.matrix_world;
         for child in &mut self.children {
-            child.update_matrix_world(Some(&self.brush.matrix_world));
+            child.update_matrix_world(Some(&world));
         }
     }
 
@@ -53,13 +60,16 @@ impl CsgOperation {
     }
 }
 
-/// Groups child operations without participating in CSG (mirrors `OperationGroup.js`).
+/// three-bvh-csg `OperationGroup`: a transform its children inherit, taking
+/// no part in the boolean itself.
 #[derive(Debug)]
 pub struct CsgOperationGroup {
-    pub local_matrix: Matrix4,
-    pub matrix_world: Matrix4,
+    /// three.js `matrix`.
+    pub matrix: [f64; 16],
+    /// three.js `matrixWorld`.
+    pub matrix_world: [f64; 16],
     pub children: Vec<CsgNode>,
-    previous_local_matrix: Matrix4,
+    previous_matrix: [f64; 16],
 }
 
 impl Default for CsgOperationGroup {
@@ -70,13 +80,11 @@ impl Default for CsgOperationGroup {
 
 impl CsgOperationGroup {
     pub fn new() -> Self {
-        let mut previous_local_matrix = Matrix4::identity();
-        previous_local_matrix.elements.fill(0.0);
         Self {
-            local_matrix: Matrix4::identity(),
-            matrix_world: Matrix4::identity(),
+            matrix: IDENTITY,
+            matrix_world: IDENTITY,
             children: Vec::new(),
-            previous_local_matrix,
+            previous_matrix: [0.0; 16],
         }
     }
 
@@ -84,25 +92,37 @@ impl CsgOperationGroup {
         self.children.push(child);
     }
 
+    /// three.js `position.set(x, y, z)`.
     pub fn set_position(&mut self, x: f64, y: f64, z: f64) {
-        self.local_matrix = Matrix4::translation(Vector3::new(x as f32, y as f32, z as f32));
+        self.matrix = IDENTITY;
+        self.matrix[12] = x;
+        self.matrix[13] = y;
+        self.matrix[14] = z;
     }
 
-    pub fn update_matrix_world(&mut self, parent: Option<&Matrix4>) {
-        self.matrix_world = parent
-            .map(|p| p.multiply(&self.local_matrix))
-            .unwrap_or(self.local_matrix);
+    pub fn update_matrix_world(&mut self, parent: Option<&[f64; 16]>) {
+        self.matrix_world = match parent {
+            Some(p) => {
+                JsMatrix4 { elements: *p }
+                    .multiply(JsMatrix4 {
+                        elements: self.matrix,
+                    })
+                    .elements
+            }
+            None => self.matrix,
+        };
+        let world = self.matrix_world;
         for child in &mut self.children {
-            child.update_matrix_world(Some(&self.matrix_world));
+            child.update_matrix_world(Some(&world));
         }
     }
 
     fn is_dirty(&self) -> bool {
-        self.local_matrix.elements != self.previous_local_matrix.elements
+        self.matrix != self.previous_matrix
     }
 
     fn mark_updated(&mut self) {
-        self.previous_local_matrix = self.local_matrix;
+        self.previous_matrix = self.matrix;
     }
 }
 
@@ -118,7 +138,7 @@ pub enum CsgNode {
 }
 
 impl CsgNode {
-    pub fn update_matrix_world(&mut self, parent: Option<&Matrix4>) {
+    pub fn update_matrix_world(&mut self, parent: Option<&[f64; 16]>) {
         match self {
             CsgNode::Operation(op) => op.update_matrix_world(parent),
             CsgNode::Group(g) => g.update_matrix_world(parent),
@@ -126,6 +146,7 @@ impl CsgNode {
     }
 }
 
+/// The operations under `node`, groups flattened away (`flatTraverse`).
 fn flat_traverse<'a>(node: &'a CsgNode, out: &mut Vec<&'a CsgOperation>) {
     match node {
         CsgNode::Group(g) => {
@@ -137,48 +158,44 @@ fn flat_traverse<'a>(node: &'a CsgNode, out: &mut Vec<&'a CsgOperation>) {
     }
 }
 
+/// `traverse` for an operation: re-evaluate it against its children when any
+/// of them changed. Whether this subtree changed.
 fn traverse_operation(op: &mut CsgOperation, evaluator: &mut CsgEvaluator) -> bool {
     let mut did_change = false;
     for child in &mut op.children {
         did_change = traverse_node(child, evaluator) || did_change;
     }
-
     let is_dirty = op.is_dirty();
     if is_dirty {
         op.mark_updated();
     }
-
-    if did_change {
-        let mut child_ops: Vec<&CsgOperation> = Vec::new();
-        for child in &op.children {
-            flat_traverse(child, &mut child_ops);
-        }
-
-        if !child_ops.is_empty() {
-            let mut result: Option<CsgBrush> = None;
-            for child in child_ops {
-                if result.is_none() {
-                    let mut a = CsgBrush::new(op.brush.geometry.clone());
-                    a.matrix_world = op.brush.matrix_world;
-                    let mut b = CsgBrush::new(child.brush.geometry.clone());
-                    b.matrix_world = child.brush.matrix_world;
-                    let geom = evaluator.evaluate(&mut a, &mut b, child.operation);
-                    result = Some(CsgBrush::new(geom));
-                } else {
-                    let mut a = result.take().unwrap();
-                    a.matrix_world = Matrix4::identity();
-                    let mut b = CsgBrush::new(child.brush.geometry.clone());
-                    b.matrix_world = child.brush.matrix_world;
-                    let geom = evaluator.evaluate(&mut a, &mut b, child.operation);
-                    result = Some(CsgBrush::new(geom));
-                }
-            }
-            op.cached_geometry = result.map(|b| b.geometry);
-        }
-        true
-    } else {
-        did_change || is_dirty
+    if !did_change {
+        return is_dirty;
     }
+    let mut child_ops: Vec<&CsgOperation> = Vec::new();
+    for child in &op.children {
+        flat_traverse(child, &mut child_ops);
+    }
+    // The first child against this operation's own brush; each later one
+    // against the running result, a new brush at the origin.
+    let mut result: Option<BufferGeometry> = None;
+    for child in child_ops {
+        let mut a = match result.take() {
+            None => {
+                let mut a = CsgBrush::new(op.brush.geometry.clone());
+                a.set_matrix_world(op.brush.matrix_world);
+                a
+            }
+            Some(geometry) => CsgBrush::new(geometry),
+        };
+        let mut b = CsgBrush::new(child.brush.geometry.clone());
+        b.set_matrix_world(child.brush.matrix_world);
+        result = Some(evaluator.evaluate(&mut a, &mut b, child.operation));
+    }
+    if let Some(geometry) = result {
+        op.cached_geometry = geometry;
+    }
+    true
 }
 
 fn traverse_node(node: &mut CsgNode, evaluator: &mut CsgEvaluator) -> bool {
@@ -189,34 +206,21 @@ fn traverse_node(node: &mut CsgNode, evaluator: &mut CsgEvaluator) -> bool {
             for child in &mut g.children {
                 did_change = traverse_node(child, evaluator) || did_change;
             }
-            if g.is_dirty() {
+            let is_dirty = g.is_dirty();
+            if is_dirty {
                 g.mark_updated();
             }
-            did_change
+            did_change || is_dirty
         }
     }
 }
 
-/// Evaluate an operation hierarchy (mirrors `Evaluator.evaluateHierarchy`).
+/// three-bvh-csg `Evaluator.evaluateHierarchy`: update the tree's world
+/// matrices, re-evaluate what changed since the last call, and return the
+/// root with its children applied. Like three-bvh-csg, a root that has never
+/// had a changed child to apply returns an empty geometry.
 pub fn evaluate_hierarchy(root: &mut CsgOperation, evaluator: &mut CsgEvaluator) -> BufferGeometry {
     root.update_matrix_world(None);
     traverse_operation(root, evaluator);
-    root.cached_geometry
-        .clone()
-        .unwrap_or_else(|| root.brush.geometry.clone())
-}
-
-/// Full hierarchy for native render: ref after-sphere → live winCut → ref winCut soup → live winFrame.
-///
-/// winCut on ref sphere is exact (55914). winFrame on that soup still diverges (~+1.2k);
-/// feeding the JS winCut bin for step 4 input cuts that gap to ~+333.
-pub fn build_bvh_csg_hierarchy_geometry(
-    evaluator: &mut CsgEvaluator,
-    reference_after_sphere: &[u8],
-    reference_after_wincut: &[u8],
-) -> BufferGeometry {
-    let _ = reference_after_sphere;
-    let mut after_cut = load_positions_geometry_bin(reference_after_wincut);
-    crate::utils::compute_vertex_normals(&mut after_cut);
-    step4_win_frame(evaluator, after_cut)
+    root.cached_geometry.clone()
 }

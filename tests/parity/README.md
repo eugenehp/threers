@@ -16,4 +16,4 @@ node generate-rust-scenes.js
 
 Scene pairs live in `scenes/threejs-*.html` and `scenes/threers-*.html`. The compare UI loads threers scenes through `threers-runner.html` (persistent wasm) instead of reloading each iframe.
 
-**CSG topology (Rust):** `cargo test --features bvh-csg --lib csg::step_tests` — exact ordered TriKey for hierarchy steps vs `scenes/rust/*.geom.bin`.
+**CSG against three-bvh-csg (Rust):** `cargo test --features bvh-csg --test csg_upstream` — every evaluation the bvh-csg scenes make, replayed through the Rust port and held to three-bvh-csg@0.0.16's own result: the same triangles, area and volume. The record is `scenes/rust/bvh-csg-upstream.txt`, from `node export-bvh-csg-upstream.mjs` (three, three-mesh-bvh and three-bvh-csg are pinned in `package.json`). The scenes' pixels from several viewpoints: `node run-bvh-csg.js`.

@@ -310,13 +310,17 @@ if (!nativeBinding) {
   throw new Error(`Failed to load native binding`)
 }
 
-const { version, Vector3, Color, PerspectiveCamera, Scene, HeadlessRenderer, Tween, PhysicsWorld } = nativeBinding
+const { version, Vector3, Color, PerspectiveCamera, OrthographicCamera, Scene, Geometry, Material, Texture, HeadlessRenderer, Tween, PhysicsWorld } = nativeBinding
 
 module.exports.version = version
 module.exports.Vector3 = Vector3
 module.exports.Color = Color
 module.exports.PerspectiveCamera = PerspectiveCamera
+module.exports.OrthographicCamera = OrthographicCamera
 module.exports.Scene = Scene
+module.exports.Geometry = Geometry
+module.exports.Material = Material
+module.exports.Texture = Texture
 module.exports.HeadlessRenderer = HeadlessRenderer
 module.exports.Tween = Tween
 module.exports.PhysicsWorld = PhysicsWorld

@@ -130,13 +130,42 @@ impl ColladaLoader {
             .find(|i| i.semantic == "TEXCOORD")
             .map(|i| i.offset);
 
+        // A `<polylist>` says how many corners each face has in `<vcount>`;
+        // `<triangles>` has none and every face is three. Faces are fanned from
+        // their first corner, and the grouping kept as polygons.
+        let corner_count = indices.len() / stride;
+        let vcount: Vec<usize> = prim
+            .find_child("vcount")
+            .filter(|_| tri.is_none())
+            .map(|v| {
+                v.text
+                    .split_whitespace()
+                    .filter_map(|s| s.parse().ok())
+                    .collect()
+            })
+            .unwrap_or_else(|| vec![3; corner_count / 3]);
+        let mut fanned: Vec<usize> = Vec::new();
+        let mut polygons: Vec<u32> = Vec::new();
+        let mut at = 0usize;
+        for &n in &vcount {
+            if at + n > corner_count {
+                break;
+            }
+            if n >= 3 {
+                for k in 1..n - 1 {
+                    fanned.extend_from_slice(&[at, at + k, at + k + 1]);
+                }
+                polygons.push(n as u32 - 2);
+            }
+            at += n;
+        }
+
         let mut positions: Vec<f32> = Vec::new();
         let mut normals: Vec<f32> = Vec::new();
         let mut uvs: Vec<f32> = Vec::new();
-        let tri_count = indices.len() / (stride * 3);
-        for t in 0..tri_count {
+        for t in 0..fanned.len() / 3 {
             for v in 0..3 {
-                let base = (t * 3 + v) * stride;
+                let base = fanned[t * 3 + v] * stride;
                 let pi = indices[base + pos_off] as usize;
                 positions.extend_from_slice(&pos_arr[pi * 3..pi * 3 + 3]);
                 if let (Some(off), Some(arr)) = (nrm_off, nrm_arr) {
@@ -158,6 +187,40 @@ impl ColladaLoader {
         if !uvs.is_empty() {
             g.set_attribute("uv", BufferAttribute::new(uvs, 2));
         }
+        g.set_polygons(polygons);
         Ok(g)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A `<polylist>` is read through its `<vcount>`, not as triangles.
+    #[test]
+    fn a_polylist_is_read_by_its_vertex_counts() {
+        let src = r##"<?xml version="1.0"?>
+<COLLADA xmlns="http://www.collada.org/2005/11/COLLADASchema" version="1.4.1">
+  <library_geometries>
+    <geometry id="g">
+      <mesh>
+        <source id="p">
+          <float_array id="pa" count="15">0 0 0 1 0 0 1 1 0 0 1 0 2 0 0</float_array>
+        </source>
+        <vertices id="v"><input semantic="POSITION" source="#p"/></vertices>
+        <polylist count="2">
+          <input semantic="VERTEX" source="#v" offset="0"/>
+          <vcount>4 3</vcount>
+          <p>0 1 2 3 1 4 2</p>
+        </polylist>
+      </mesh>
+    </geometry>
+  </library_geometries>
+</COLLADA>"##;
+        let g = ColladaLoader::parse(src).unwrap();
+        assert_eq!(g.triangle_count(), 3);
+        assert_eq!(g.polygon_counts(), Some(&[2u32, 1][..]));
+        assert_eq!(g.polygon_loop(0..2).map(|l| l.len()), Some(4));
+        assert_eq!(g.polygon_edges().len(), 6);
     }
 }

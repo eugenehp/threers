@@ -380,16 +380,17 @@ impl Matrix4 {
         if z.length_sq() == 0.0 {
             z = Vector3::new(0.0, 0.0, 1.0);
         }
-        let z = z.normalize();
+        let mut z = z.normalize();
         let mut x = up.cross(z);
         if x.length_sq() == 0.0 {
-            // up is parallel to z — perturb up slightly.
-            let perturb = if up.z.abs() == 1.0 {
-                Vector3::new(0.0001, 0.0, 1.0)
+            // `up` is parallel to z: nudge z, as three.js does.
+            if up.z.abs() == 1.0 {
+                z.x += 0.0001;
             } else {
-                Vector3::new(0.0, 0.0, 0.0001)
-            };
-            x = (up + perturb).cross(z);
+                z.z += 0.0001;
+            }
+            z = z.normalize();
+            x = up.cross(z);
         }
         let x = x.normalize();
         let y = z.cross(x);

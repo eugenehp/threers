@@ -32,6 +32,26 @@ pub struct GltfExportOptions {
     /// Embed each material's maps as PNG. Off keeps the file small and the
     /// materials flat.
     pub textures: bool,
+    /// Node transforms as `translation` / `rotation` / `scale` (the default),
+    /// or as one column-major `matrix` when off — three.js `GLTFExporter`'s
+    /// `trs: false`, its default.
+    pub trs: bool,
+    /// Follow three.js r165 `GLTFExporter`'s material and mesh conventions:
+    /// `baseColorFactor` left out when white and opaque, `MeshBasicMaterial`
+    /// as `KHR_materials_unlit`, `alphaMode: BLEND` from `transparent` rather
+    /// than from the opacity, one material per distinct material (by `Arc`)
+    /// and one mesh per distinct geometry *and* material.
+    pub three_js: bool,
+    /// `scenes[0].name`, when set.
+    pub scene_name: Option<String>,
+    /// three.js mode: what to write for a material, keyed by its `Arc`
+    /// pointer (`Arc::as_ptr(&material) as usize`), for a caller whose
+    /// materials carry more than [`Material`] does — a name, `transparent`,
+    /// `alphaTest` on any kind. Missing entries are read off the material.
+    pub material_info: HashMap<usize, GltfMaterialInfo>,
+    /// `.gltf` only: carry the buffer inline as a base64 `data:` URI, as
+    /// three.js does, instead of naming a `scene.bin` beside it.
+    pub embed_buffer: bool,
 }
 
 impl Default for GltfExportOptions {
@@ -42,6 +62,66 @@ impl Default for GltfExportOptions {
             uvs: true,
             vertex_colours: true,
             textures: true,
+            trs: true,
+            three_js: false,
+            scene_name: None,
+            material_info: HashMap::new(),
+            embed_buffer: false,
+        }
+    }
+}
+
+/// Which three.js material family a material belongs to, for the three.js
+/// mode's metal/rough defaults.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GltfMaterialKind {
+    /// `MeshStandardMaterial` / `MeshPhysicalMaterial`: its own factors.
+    #[default]
+    Standard,
+    /// `MeshBasicMaterial`: `KHR_materials_unlit`, metal 0, rough 0.9.
+    Basic,
+    /// Anything else: metal 0.5, rough 0.5, as three.js writes it.
+    Other,
+}
+
+/// The material values three.js r165's `GLTFExporter` reads.
+#[derive(Debug, Clone, Default)]
+pub struct GltfMaterialInfo {
+    pub name: String,
+    pub kind: GltfMaterialKind,
+    /// Linear RGB, as `material.color` holds it.
+    pub color: [f32; 3],
+    pub opacity: f32,
+    pub transparent: bool,
+    pub metalness: f32,
+    pub roughness: f32,
+    pub emissive: [f32; 3],
+    pub alpha_test: f32,
+    pub double_sided: bool,
+}
+
+impl GltfMaterialInfo {
+    /// Read off a [`Material`].
+    pub fn from_material(material: &Material) -> Self {
+        let c = material.color();
+        let e = material.emissive();
+        let (kind, metalness, roughness) = match material {
+            Material::Standard(m) => (GltfMaterialKind::Standard, m.metalness, m.roughness),
+            Material::Physical(m) => (GltfMaterialKind::Standard, m.metalness, m.roughness),
+            Material::Basic(_) => (GltfMaterialKind::Basic, 0.0, 0.9),
+            _ => (GltfMaterialKind::Other, 0.5, 0.5),
+        };
+        Self {
+            name: String::new(),
+            kind,
+            color: [c.r, c.g, c.b],
+            opacity: material.opacity(),
+            transparent: material.transparent(),
+            metalness,
+            roughness,
+            emissive: [e.r, e.g, e.b],
+            alpha_test: material.alpha_test(),
+            double_sided: material.side() == 2,
         }
     }
 }
@@ -75,13 +155,22 @@ pub fn scene_to_gltf_with(
 ) -> (String, Vec<u8>) {
     let (mut json, bin) = build(arena, roots, options);
     if let Some(object) = json.as_object_mut() {
-        object.insert(
-            "buffers".into(),
-            Value::Array(vec![Value::object([
-                ("byteLength", Value::number(bin.len() as f64)),
-                ("uri", Value::string("scene.bin")),
-            ])]),
-        );
+        let uri = if options.embed_buffer {
+            format!("data:application/octet-stream;base64,{}", base64(&bin))
+        } else {
+            "scene.bin".to_string()
+        };
+        if bin.is_empty() {
+            object.remove("buffers");
+        } else {
+            object.insert(
+                "buffers".into(),
+                Value::Array(vec![Value::object([
+                    ("byteLength", Value::number(bin.len() as f64)),
+                    ("uri", Value::string(uri)),
+                ])]),
+            );
+        }
     }
     (json.to_json(), bin)
 }
@@ -109,9 +198,12 @@ struct Writer {
     samplers: Vec<Value>,
     nodes: Vec<Value>,
     /// Geometries already written, so a mesh used twice costs one copy.
-    interned: HashMap<usize, usize>,
+    interned: HashMap<(usize, Option<usize>), usize>,
     /// The same for images: a texture shared by ten materials is one PNG.
     interned_textures: HashMap<usize, usize>,
+    /// Materials already written, by `Arc` pointer (three.js mode only).
+    interned_materials: HashMap<usize, usize>,
+    extensions_used: std::collections::BTreeSet<String>,
 }
 
 impl Writer {
@@ -196,11 +288,7 @@ impl Writer {
     }
 }
 
-fn build(
-    arena: &ObjectArena,
-    roots: &[ObjectId],
-    options: &GltfExportOptions,
-) -> (Value, Vec<u8>) {
+fn build(arena: &ObjectArena, roots: &[ObjectId], options: &GltfExportOptions) -> (Value, Vec<u8>) {
     let mut w = Writer::default();
     let mut scene_roots = Vec::new();
     for root in roots {
@@ -209,6 +297,10 @@ fn build(
         }
     }
 
+    let mut scene = vec![("nodes".to_string(), Value::Array(scene_roots))];
+    if let Some(name) = &options.scene_name {
+        scene.push(("name".to_string(), Value::string(name.clone())));
+    }
     let mut json = vec![
         (
             "asset".to_string(),
@@ -220,10 +312,7 @@ fn build(
         ("scene".to_string(), Value::number(0.0)),
         (
             "scenes".to_string(),
-            Value::Array(vec![Value::object([(
-                "nodes",
-                Value::Array(scene_roots),
-            )])]),
+            Value::Array(vec![Value::Object(scene.into_iter().collect())]),
         ),
         ("nodes".to_string(), Value::Array(w.nodes)),
         (
@@ -234,6 +323,17 @@ fn build(
             )])]),
         ),
     ];
+    if !w.extensions_used.is_empty() {
+        json.push((
+            "extensionsUsed".to_string(),
+            Value::Array(
+                w.extensions_used
+                    .iter()
+                    .map(|e| Value::string(e.clone()))
+                    .collect(),
+            ),
+        ));
+    }
     // Empty arrays are invalid in glTF, so each is written only if used.
     for (key, list) in [
         ("bufferViews", w.views),
@@ -262,10 +362,24 @@ fn write_node(
     if !object.name.is_empty() {
         pairs.push(("name".to_string(), Value::string(object.name.clone())));
     }
-    // TRS rather than a matrix: it survives round trips through tools that
-    // decompose, and a uniform scale stays uniform.
+    // TRS rather than a matrix by default: it survives round trips through
+    // tools that decompose, and a uniform scale stays uniform.
     let p = object.position;
-    if p.x != 0.0 || p.y != 0.0 || p.z != 0.0 {
+    if !options.trs {
+        let q = object.quaternion;
+        let s = object.scale;
+        let m = crate::exporters::compose(
+            [p.x as f64, p.y as f64, p.z as f64],
+            [q.x as f64, q.y as f64, q.z as f64, q.w as f64],
+            [s.x as f64, s.y as f64, s.z as f64],
+        );
+        if m != crate::exporters::IDENTITY {
+            pairs.push((
+                "matrix".to_string(),
+                Value::Array(m.iter().map(|v| Value::number(*v)).collect()),
+            ));
+        }
+    } else if p.x != 0.0 || p.y != 0.0 || p.z != 0.0 {
         pairs.push((
             "translation".to_string(),
             Value::Array(vec![
@@ -276,7 +390,7 @@ fn write_node(
         ));
     }
     let q = object.quaternion;
-    if q.x != 0.0 || q.y != 0.0 || q.z != 0.0 || q.w != 1.0 {
+    if options.trs && (q.x != 0.0 || q.y != 0.0 || q.z != 0.0 || q.w != 1.0) {
         pairs.push((
             "rotation".to_string(),
             Value::Array(vec![
@@ -288,7 +402,7 @@ fn write_node(
         ));
     }
     let s = object.scale;
-    if s.x != 1.0 || s.y != 1.0 || s.z != 1.0 {
+    if options.trs && (s.x != 1.0 || s.y != 1.0 || s.z != 1.0) {
         pairs.push((
             "scale".to_string(),
             Value::Array(vec![
@@ -300,19 +414,63 @@ fn write_node(
     }
 
     if let ObjectKind::Mesh(mesh) = &object.kind {
-        let material = write_material(w, &mesh.material, options);
-        let key = std::sync::Arc::as_ptr(&mesh.geometry) as usize;
-        // The same geometry on two nodes is written once, which is what a
-        // forest of identical parts costs if you let it.
-        let index = match w.interned.get(&key) {
-            Some(found) => *found,
-            None => {
-                let built = write_mesh(w, &mesh.geometry, material, options);
-                w.interned.insert(key, built);
-                built
+        let material_of = |w: &mut Writer, m: &std::sync::Arc<Material>| {
+            if options.three_js {
+                let key = std::sync::Arc::as_ptr(m) as usize;
+                match w.interned_materials.get(&key) {
+                    Some(found) => Some(*found),
+                    None => {
+                        let built = write_material_three_js(w, m, options);
+                        w.interned_materials.insert(key, built);
+                        Some(built)
+                    }
+                }
+            } else {
+                write_material(w, m, options)
             }
         };
-        pairs.push(("mesh".to_string(), Value::number(index as f64)));
+        // A material array: one primitive per group, sharing the attributes,
+        // as three.js's `GLTFExporter.processMesh` writes it.
+        if mesh.is_multi_material() {
+            let mut prims = Vec::new();
+            for g in &mesh.geometry.groups {
+                let Some(m) = mesh.materials.get(g.material_index as usize) else {
+                    continue;
+                };
+                let material = material_of(w, m);
+                prims.push((material, Some((g.start, g.count))));
+            }
+            // No groups: no primitives, and three.js writes no mesh.
+            if !prims.is_empty() {
+                let index = write_mesh(w, &mesh.geometry, &prims, Some(mesh), options);
+                pairs.push(("mesh".to_string(), Value::number(index as f64)));
+            }
+        }
+        let material = if mesh.is_multi_material() {
+            None
+        } else {
+            material_of(w, &mesh.material)
+        };
+        // three.js keys its mesh cache on geometry and material together; a
+        // material per node (the native default) keys on geometry alone.
+        let key = (
+            std::sync::Arc::as_ptr(&mesh.geometry) as usize,
+            if options.three_js { material } else { None },
+        );
+        // The same geometry on two nodes is written once, which is what a
+        // forest of identical parts costs if you let it.
+        if !mesh.is_multi_material() {
+            let index = match w.interned.get(&key) {
+                Some(found) => *found,
+                None => {
+                    let built =
+                        write_mesh(w, &mesh.geometry, &[(material, None)], Some(mesh), options);
+                    w.interned.insert(key, built);
+                    built
+                }
+            };
+            pairs.push(("mesh".to_string(), Value::number(index as f64)));
+        }
     }
 
     let mut children = Vec::new();
@@ -329,10 +487,21 @@ fn write_node(
     Some(w.nodes.len() - 1)
 }
 
+/// One glTF mesh: the geometry's attributes once, and a primitive per
+/// `(material, group span)` — the span `(start, count)` of the index, `None`
+/// for the whole geometry. Morph targets (POSITION and NORMAL, as three.js's
+/// exporter writes; absolute targets are converted to the displacements glTF
+/// stores) go on every primitive, with the mesh's influences as `weights` and
+/// its dictionary as `extras.targetNames`.
+/// One glTF primitive: its material, and the index range it draws (`None`
+/// for the whole geometry).
+type Primitive = (Option<usize>, Option<(u32, u32)>);
+
 fn write_mesh(
     w: &mut Writer,
     geometry: &BufferGeometry,
-    material: Option<usize>,
+    prims: &[Primitive],
+    mesh: Option<&crate::core::Mesh>,
     options: &GltfExportOptions,
 ) -> usize {
     let mut attributes: Vec<(String, Value)> = Vec::new();
@@ -342,41 +511,138 @@ fn write_mesh(
     }
     if options.normals {
         if let Some(normal) = geometry.get_attribute("normal") {
-            let a = w.floats(&normal.array, 3, false);
+            let a = w.floats(&normal.array, 3, options.three_js);
             attributes.push(("NORMAL".to_string(), Value::number(a as f64)));
         }
     }
     if options.uvs {
         if let Some(uv) = geometry.get_attribute("uv") {
-            let a = w.floats(&uv.array, 2, false);
+            let a = w.floats(&uv.array, 2, options.three_js);
             attributes.push(("TEXCOORD_0".to_string(), Value::number(a as f64)));
         }
     }
     if options.vertex_colours {
         if let Some(colour) = geometry.get_attribute("color") {
-            let a = w.floats(&colour.array, 3, false);
+            let a = w.floats(&colour.array, 3, options.three_js);
             attributes.push(("COLOR_0".to_string(), Value::number(a as f64)));
         }
     }
 
-    let mut primitive: Vec<(String, Value)> = vec![
-        (
-            "attributes".to_string(),
-            Value::Object(attributes.into_iter().collect()),
-        ),
-        ("mode".to_string(), Value::number(4.0)),
-    ];
-    if let Some(index) = &geometry.index {
-        let a = w.indices(index);
-        primitive.push(("indices".to_string(), Value::number(a as f64)));
+    // Morph targets, as displacements.
+    let mut targets: Vec<Vec<(String, Value)>> = Vec::new();
+    for (ours, theirs) in [("position", "POSITION"), ("normal", "NORMAL")] {
+        if ours == "normal" && !options.normals {
+            continue;
+        }
+        let (Some(list), Some(base)) = (
+            geometry.morph_attributes.get(ours),
+            geometry.get_attribute(ours),
+        ) else {
+            continue;
+        };
+        for (t, attr) in list.iter().enumerate() {
+            let count = base.count();
+            let mut delta = Vec::with_capacity(count * 3);
+            for v in 0..count {
+                for k in 0..3 {
+                    let tv = attr
+                        .array
+                        .get(v * attr.item_size + k)
+                        .copied()
+                        .unwrap_or(0.0);
+                    let bv = base
+                        .array
+                        .get(v * base.item_size + k)
+                        .copied()
+                        .unwrap_or(0.0);
+                    delta.push(if geometry.morph_targets_relative {
+                        tv
+                    } else {
+                        tv - bv
+                    });
+                }
+            }
+            let a = w.floats(&delta, 3, ours == "position");
+            if targets.len() <= t {
+                targets.resize_with(t + 1, Vec::new);
+            }
+            targets[t].push((theirs.to_string(), Value::number(a as f64)));
+        }
     }
-    if let Some(material) = material {
-        primitive.push(("material".to_string(), Value::number(material as f64)));
+
+    // A material array over unindexed geometry gets an index, so each group
+    // can be a primitive — three.js does the same.
+    let index: Option<Vec<u32>> = match &geometry.index {
+        Some(i) => Some(i.clone()),
+        None if prims.iter().any(|p| p.1.is_some()) => {
+            Some((0..geometry.draw_count() as u32).collect())
+        }
+        None => None,
+    };
+    let whole = index.as_ref().map(|i| w.indices(i));
+    let attributes = Value::Object(attributes.into_iter().collect());
+    let mut primitives = Vec::new();
+    for &(material, span) in prims {
+        let mut primitive: Vec<(String, Value)> = vec![
+            ("attributes".to_string(), attributes.clone()),
+            ("mode".to_string(), Value::number(4.0)),
+        ];
+        let indices = match (span, &index) {
+            (Some((start, count)), Some(index)) => {
+                let end = (start as usize + count as usize).min(index.len());
+                let start = (start as usize).min(end);
+                Some(w.indices(&index[start..end]))
+            }
+            _ => whole,
+        };
+        if let Some(a) = indices {
+            primitive.push(("indices".to_string(), Value::number(a as f64)));
+        }
+        if let Some(material) = material {
+            primitive.push(("material".to_string(), Value::number(material as f64)));
+        }
+        if !targets.is_empty() {
+            primitive.push((
+                "targets".to_string(),
+                Value::Array(
+                    targets
+                        .iter()
+                        .map(|t| Value::Object(t.iter().cloned().collect()))
+                        .collect(),
+                ),
+            ));
+        }
+        primitives.push(Value::Object(primitive.into_iter().collect()));
     }
-    w.meshes.push(Value::object([(
-        "primitives",
-        Value::Array(vec![Value::Object(primitive.into_iter().collect())]),
-    )]));
+    let mut mesh_pairs: Vec<(String, Value)> =
+        vec![("primitives".to_string(), Value::Array(primitives))];
+    if let (Some(mesh), false) = (mesh, targets.is_empty()) {
+        let n = targets.len();
+        let weights = (0..n)
+            .map(|i| Value::number(mesh.morph_influences.get(i).copied().unwrap_or(0.0) as f64))
+            .collect();
+        mesh_pairs.push(("weights".to_string(), Value::Array(weights)));
+        // three.js writes `extras.targetNames` from the reversed dictionary.
+        let mut names = vec![String::new(); n];
+        let mut named = false;
+        for (name, &i) in &mesh.morph_target_dictionary {
+            if i < n {
+                names[i] = name.clone();
+                named = true;
+            }
+        }
+        if named {
+            mesh_pairs.push((
+                "extras".to_string(),
+                Value::object([(
+                    "targetNames",
+                    Value::Array(names.iter().map(Value::string).collect()),
+                )]),
+            ));
+        }
+    }
+    w.meshes
+        .push(Value::Object(mesh_pairs.into_iter().collect()));
     w.meshes.len() - 1
 }
 
@@ -454,6 +720,117 @@ fn write_material(
     }
     w.materials.push(Value::Object(pairs.into_iter().collect()));
     Some(w.materials.len() - 1)
+}
+
+/// A material the way three.js r165's `GLTFExporter.processMaterial` writes
+/// it (with its `KHR_materials_unlit` extension for basic materials).
+fn write_material_three_js(
+    w: &mut Writer,
+    material: &std::sync::Arc<Material>,
+    options: &GltfExportOptions,
+) -> usize {
+    let info = options
+        .material_info
+        .get(&(std::sync::Arc::as_ptr(material) as usize))
+        .cloned()
+        .unwrap_or_else(|| GltfMaterialInfo::from_material(material));
+    let mut pbr: Vec<(String, Value)> = Vec::new();
+    let factor = [info.color[0], info.color[1], info.color[2], info.opacity];
+    if factor != [1.0, 1.0, 1.0, 1.0] {
+        pbr.push((
+            "baseColorFactor".to_string(),
+            Value::Array(factor.iter().map(|v| Value::number(*v as f64)).collect()),
+        ));
+    }
+    let mut extensions: Vec<(String, Value)> = Vec::new();
+    let (metallic, roughness) = match info.kind {
+        GltfMaterialKind::Standard => (info.metalness, info.roughness),
+        GltfMaterialKind::Basic => {
+            extensions.push((
+                "KHR_materials_unlit".to_string(),
+                Value::Object(Default::default()),
+            ));
+            w.extensions_used.insert("KHR_materials_unlit".to_string());
+            (0.0, 0.9)
+        }
+        GltfMaterialKind::Other => (0.5, 0.5),
+    };
+    pbr.push(("metallicFactor".to_string(), Value::number(metallic as f64)));
+    pbr.push((
+        "roughnessFactor".to_string(),
+        Value::number(roughness as f64),
+    ));
+    if options.textures {
+        if let Some(texture) = base_colour_map(material) {
+            if let Some(index) = write_texture(w, &texture) {
+                pbr.push((
+                    "baseColorTexture".to_string(),
+                    Value::object([("index", Value::number(index as f64))]),
+                ));
+            }
+        }
+    }
+    let mut pairs: Vec<(String, Value)> = vec![(
+        "pbrMetallicRoughness".to_string(),
+        Value::Object(pbr.into_iter().collect()),
+    )];
+    let e = info.emissive;
+    if e[0].max(e[1]).max(e[2]) > 0.0 {
+        pairs.push((
+            "emissiveFactor".to_string(),
+            Value::Array(e.iter().map(|v| Value::number(*v as f64)).collect()),
+        ));
+    }
+    if info.transparent {
+        pairs.push(("alphaMode".to_string(), Value::string("BLEND")));
+    } else if info.alpha_test > 0.0 {
+        pairs.push(("alphaMode".to_string(), Value::string("MASK")));
+        pairs.push((
+            "alphaCutoff".to_string(),
+            Value::number(info.alpha_test as f64),
+        ));
+    }
+    if info.double_sided {
+        pairs.push(("doubleSided".to_string(), Value::Bool(true)));
+    }
+    if !info.name.is_empty() {
+        pairs.push(("name".to_string(), Value::string(info.name)));
+    }
+    if !extensions.is_empty() {
+        pairs.push((
+            "extensions".to_string(),
+            Value::Object(extensions.into_iter().collect()),
+        ));
+    }
+    w.materials.push(Value::Object(pairs.into_iter().collect()));
+    w.materials.len() - 1
+}
+
+/// Standard base64 with padding, for `data:` URIs.
+fn base64(bytes: &[u8]) -> String {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
+        let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
+        out.push(T[(n >> 18) as usize & 63] as char);
+        out.push(T[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 {
+            T[(n >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            T[n as usize & 63] as char
+        } else {
+            '='
+        });
+    }
+    out
 }
 
 fn base_colour_map(material: &Material) -> Option<std::sync::Arc<crate::textures::Texture>> {
@@ -544,7 +921,9 @@ mod tests {
         g.set_attribute(
             "position",
             BufferAttribute::new(
-                vec![-1.0, -1.0, 0.0, 1.0, -1.0, 0.0, 1.0, 1.0, 0.0, -1.0, 1.0, 0.0],
+                vec![
+                    -1.0, -1.0, 0.0, 1.0, -1.0, 0.0, 1.0, 1.0, 0.0, -1.0, 1.0, 0.0,
+                ],
                 3,
             ),
         );
@@ -600,7 +979,11 @@ mod tests {
             .iter()
             .find(|(_, o)| o.name == "Child")
             .expect("the child");
-        assert!((child.position.x - 2.5).abs() < 1e-5, "{:?}", child.position);
+        assert!(
+            (child.position.x - 2.5).abs() < 1e-5,
+            "{:?}",
+            child.position
+        );
         assert!((child.scale.x - 0.5).abs() < 1e-5, "{:?}", child.scale);
     }
 
@@ -678,11 +1061,7 @@ mod tests {
         let mut arena = ObjectArena::new();
         let mut roots = Vec::new();
         for i in 0..4 {
-            let mesh = Mesh {
-                geometry: geometry.clone(),
-                material: Arc::new(material.clone()),
-                morph_influences: Vec::new(),
-            };
+            let mesh = Mesh::from_arc(geometry.clone(), Arc::new(material.clone()));
             let mut object = Object3D::mesh(mesh);
             object.name = format!("Copy{i}");
             roots.push(arena.insert(object));
@@ -718,7 +1097,11 @@ mod tests {
         let bytes = scene_to_glb(&arena, &[root]);
         let total = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
         assert_eq!(total, bytes.len(), "declared length is the real one");
-        assert_eq!(u32::from_le_bytes(bytes[4..8].try_into().unwrap()), 2, "version");
+        assert_eq!(
+            u32::from_le_bytes(bytes[4..8].try_into().unwrap()),
+            2,
+            "version"
+        );
 
         let mut at = 12;
         let mut kinds = Vec::new();
@@ -742,8 +1125,100 @@ mod tests {
     fn integers_are_not_written_as_floats() {
         let (arena, root) = scene();
         let (json, _) = scene_to_gltf(&arena, &[root]);
-        assert!(!json.contains(".0,"), "a float slipped into an integer field");
+        assert!(
+            !json.contains(".0,"),
+            "a float slipped into an integer field"
+        );
         assert!(json.contains("\"count\":4"), "{json}");
+    }
+}
+
+#[cfg(test)]
+mod groups_and_morphs {
+    use super::*;
+    use crate::core::{BufferAttribute, Mesh, Object3D};
+    use crate::loaders::GltfLoader;
+    use crate::materials::BasicMaterial;
+    use crate::math::Color;
+    use std::sync::Arc;
+
+    fn quad() -> BufferGeometry {
+        let mut g = BufferGeometry::new();
+        g.set_attribute(
+            "position",
+            BufferAttribute::new(vec![0., 0., 0., 1., 0., 0., 1., 1., 0., 0., 1., 0.], 3),
+        );
+        g.set_index(vec![0, 1, 2, 0, 2, 3]);
+        g
+    }
+
+    fn reload(arena: &ObjectArena, id: ObjectId) -> crate::loaders::GltfScene {
+        GltfLoader::parse_glb(&scene_to_glb(arena, &[id])).expect("re-reads")
+    }
+
+    /// Absolute morph targets leave as displacements, with the influences as
+    /// `weights` and the dictionary as `extras.targetNames`, and come back as
+    /// three.js's loader would read them: relative, same shape.
+    #[test]
+    fn morph_targets_round_trip() {
+        let mut g = quad();
+        let raised: Vec<f32> = g
+            .get_attribute("position")
+            .unwrap()
+            .array
+            .iter()
+            .enumerate()
+            .map(|(i, v)| if i % 3 == 2 { v + 2.0 } else { *v })
+            .collect();
+        g.set_morph_attribute("position", vec![BufferAttribute::new(raised, 3)]);
+        g.morph_target_names = vec!["lift".into()];
+        let mut mesh = Mesh::new(g, BasicMaterial::new(Color::WHITE).into());
+        mesh.morph_influences = vec![0.75];
+        let mut arena = ObjectArena::new();
+        let id = arena.insert(Object3D::mesh(mesh));
+        let back = reload(&arena, id);
+        let crate::core::ObjectKind::Mesh(m) = &back.arena.get(back.roots[0]).unwrap().kind else {
+            panic!("a mesh");
+        };
+        assert!(m.geometry.morph_targets_relative);
+        let t = &m.geometry.morph_attributes["position"][0].array;
+        assert_eq!(t, &vec![0., 0., 2., 0., 0., 2., 0., 0., 2., 0., 0., 2.]);
+        assert_eq!(m.morph_influences, vec![0.75]);
+        assert_eq!(m.morph_target_dictionary.get("lift"), Some(&0));
+    }
+
+    /// A material array exports as one primitive per group over shared
+    /// attributes — three.js `GLTFExporter` — and so re-reads (three.js's
+    /// loader makes a mesh per primitive) as one child mesh per group, each
+    /// with its group's triangles and material.
+    #[test]
+    fn groups_export_as_primitives() {
+        let mut g = quad();
+        g.add_group(0, 3, 1).add_group(3, 3, 0);
+        let red = Arc::new(Material::from(BasicMaterial::new(Color::new(
+            1.0, 0.0, 0.0,
+        ))));
+        let blue = Arc::new(Material::from(BasicMaterial::new(Color::new(
+            0.0, 0.0, 1.0,
+        ))));
+        let mesh = Mesh::with_materials(Arc::new(g), vec![red, blue]);
+        let mut arena = ObjectArena::new();
+        let id = arena.insert(Object3D::mesh(mesh));
+        let glb = scene_to_glb(&arena, &[id]);
+        let back = GltfLoader::parse_glb(&glb).expect("re-reads");
+        let node = back.arena.get(back.roots[0]).unwrap();
+        assert_eq!(node.children.len(), 2, "one mesh per primitive");
+        let mut seen = Vec::new();
+        for c in &node.children {
+            let crate::core::ObjectKind::Mesh(m) = &back.arena.get(*c).unwrap().kind else {
+                panic!("a mesh");
+            };
+            seen.push((
+                m.geometry.index.clone().unwrap(),
+                m.material.color().b > 0.5,
+            ));
+        }
+        assert_eq!(seen, vec![(vec![0, 1, 2], true), (vec![0, 2, 3], false)]);
     }
 }
 
@@ -773,10 +1248,7 @@ mod external {
                 3,
             ),
         );
-        geometry.set_attribute(
-            "normal",
-            BufferAttribute::new([0.0, 0.0, 1.0].repeat(4), 3),
-        );
+        geometry.set_attribute("normal", BufferAttribute::new([0.0, 0.0, 1.0].repeat(4), 3));
         geometry.set_attribute(
             "uv",
             BufferAttribute::new(vec![0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0], 2),

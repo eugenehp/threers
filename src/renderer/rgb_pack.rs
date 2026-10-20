@@ -506,6 +506,12 @@ impl RgbPack {
         );
     }
 
+    /// Read the depth as reversed — what
+    /// [`Renderer::set_reversed_z`](crate::Renderer::set_reversed_z) draws.
+    pub fn set_reversed_depth(&self, queue: &wgpu::Queue, on: bool) {
+        queue.write_buffer(&self.ubo, 200, bytemuck::bytes_of(&if on { 1.0f32 } else { 0.0 }));
+    }
+
     /// Advance the grain seed. Cheap: eight bytes into a buffer that is already
     /// written every frame, and no pipeline rebuild -- which is the whole reason
     /// the seed is a uniform and not baked in at construction.
@@ -564,7 +570,8 @@ struct Params {
     dof_rad  : f32,
     dof_near : f32,
     dof_far  : f32,
-    fpad1    : f32,
+    // 1 when the depth is reversed.
+    reversed : f32,
     fpad2    : f32,
 };
 
@@ -609,8 +616,14 @@ const DOF_TAPS : i32 = 96;
 // Anything at the far plane — the background, which has no geometry in it — is
 // taken as fully defocused, which is what a lens does with a distant backdrop
 // and is the whole reason a subject separates from it.
-fn coc_at(xy : vec2<i32>) -> f32 {
+// The depth as standard depth: `1 - d` when the renderer reversed it.
+fn pack_depth(xy : vec2<i32>) -> f32 {
     let d = textureLoad(mb_depth, xy, 0);
+    return select(d, 1.0 - d, p.reversed > 0.5);
+}
+
+fn coc_at(xy : vec2<i32>) -> f32 {
+    let d = pack_depth(xy);
     if (d >= 1.0) { return 1.0; }
     let z = (p.dof_near * p.dof_far) / (p.dof_far - d * (p.dof_far - p.dof_near));
     return clamp(abs(z - p.dof_focus) / max(p.dof_range, 1e-4), 0.0, 1.0);
@@ -667,7 +680,7 @@ fn dof(xy : vec2<u32>, dim : vec2<u32>, centre : vec3<f32>) -> vec3<f32> {
 // depth and look it up through the previous camera; the gap between the two is
 // the distance it swept while the shutter was open.
 fn velocity(xy : vec2<u32>, dim : vec2<u32>) -> vec2<f32> {
-    let d = textureLoad(mb_depth, vec2<i32>(xy), 0);
+    let d = pack_depth(vec2<i32>(xy));
     if (d >= 1.0) { return vec2<f32>(0.0); }
     let uv = (vec2<f32>(xy) + 0.5) / vec2<f32>(dim);
     let ndc = vec4<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, d, 1.0);

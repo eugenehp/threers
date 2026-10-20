@@ -141,10 +141,10 @@ fn streaming_pulls_frames_in_order() {
 
 /// The video sample entry must carry a `colr` box.
 ///
-/// The encoder states BT.709 in the bitstream — it sets `ColorPrimaries`,
-/// `TransferFunction` and `YCbCrMatrix` on the VideoToolbox session, so the
-/// values reach the HEVC VUI — and that is not enough on its own, because not
-/// every player reads the VUI. The ones that do not guess from the frame size,
+/// The encoder states its colour in the bitstream — BT.601 limited range,
+/// how `Yuv420Frame::from_rgba` converts, in the HEVC VUI (VideoToolbox's
+/// encoder states BT.709 the same way) — and that is not enough on its own,
+/// because not every player reads the VUI. The ones that do not guess from the frame size,
 /// and then the same file renders with different contrast in different
 /// players. It shows first on high-contrast edges, which is where a thin
 /// bright rail against black lives, and it reads as a *rendering* fault rather
@@ -196,10 +196,12 @@ fn the_sample_entry_states_its_colour() {
             let primaries = u16::from_be_bytes(v[4..6].try_into().unwrap());
             let transfer = u16::from_be_bytes(v[6..8].try_into().unwrap());
             let matrix = u16::from_be_bytes(v[8..10].try_into().unwrap());
+            // The box repeats the VUI: matrix 6 (BT.601), primaries and
+            // transfer unspecified — the two must never disagree.
             assert_eq!(
                 (primaries, transfer, matrix),
-                (1, 1, 1),
-                "colr does not say BT.709"
+                (2, 2, 6),
+                "colr does not say what the stream says (BT.601)"
             );
             assert_eq!(v[10] & 0x80, 0, "colr claims full range");
             return;

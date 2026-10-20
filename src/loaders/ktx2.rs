@@ -256,6 +256,9 @@ impl Ktx2 {
         Ok(match self.vk_format {
             37 => TextureFormat::Rgba8Unorm,       // R8G8B8A8_UNORM
             43 => TextureFormat::Rgba8UnormSrgb,   // R8G8B8A8_SRGB
+            // B8G8R8A8_UNORM / _SRGB: swizzled to RGBA by `to_texture`.
+            44 => TextureFormat::Rgba8Unorm,
+            50 => TextureFormat::Rgba8UnormSrgb,
             9 => TextureFormat::R8Unorm,           // R8_UNORM
             97 => TextureFormat::Rgba16Float,      // R16G16B16A16_SFLOAT
             134 => TextureFormat::Bc1RgbaUnormSrgb, // BC1_RGBA_SRGB_BLOCK
@@ -311,6 +314,14 @@ impl Ktx2 {
         let mut data = self.level_data()?;
         if data.is_empty() {
             return Err(Ktx2Error::Corrupt);
+        }
+        if matches!(self.vk_format, 44 | 50) {
+            // BGRA in the file, RGBA in the texture.
+            for level in &mut data {
+                for px in level.chunks_exact_mut(4) {
+                    px.swap(0, 2);
+                }
+            }
         }
         let base = data.remove(0);
         let height = self.height.max(1);
@@ -465,6 +476,21 @@ mod tests {
         }
         for cut in 0..MIPS.len() {
             let _ = parse(&MIPS[..cut]).map(|k| k.to_texture());
+        }
+    }
+
+    /// `B8G8R8A8` files load as RGBA, every mip swizzled.
+    #[test]
+    fn bgra_is_swizzled_to_rgba() {
+        let mut k = parse(RGBA8).unwrap();
+        let original = k.to_texture().unwrap();
+        k.vk_format = 44;
+        let swizzled = k.to_texture().unwrap();
+        assert_eq!(swizzled.format, TextureFormat::Rgba8Unorm);
+        let (a, b) = (&original.data[..], &swizzled.data[..]);
+        assert_eq!(a.len(), b.len());
+        for (p, q) in a.chunks_exact(4).zip(b.chunks_exact(4)) {
+            assert_eq!([p[2], p[1], p[0], p[3]], [q[0], q[1], q[2], q[3]]);
         }
     }
 }

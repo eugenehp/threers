@@ -1,22 +1,24 @@
 //! WGSL sources for the main mesh pass and the post-processing fullscreen pass.
 //!
 //! - [`SHADER_SOURCE`]: lit/unlit materials, shadows, fog, PBR, skinning
-//! - [`POSTFX_SHADER`]: effect kinds 0–30 (copy, FXAA, glitch, bloom, SSAO, …)
+//! - [`POSTFX_SHADER`]: effect kinds 0–34 here (copy, FXAA, glitch, bloom,
+//!   SSAO, …) and 40 up in `postfx_kinds.wgsl`, the three.js passes behind
+//!   [`crate::postprocessing`]
 //!
-//! Post-fx kinds used from JS `EffectComposer` / Rust [`crate::postprocessing`]:
+//! Post-fx kinds used from the composer in [`crate::postprocessing`]:
 //! | Kind | Effect |
 //! |------|--------|
-//! | 5, 25, 26 | Digital glitch (snow / no-snow / GLSL-baked disp) |
+//! | 5, 31 | Digital glitch (with / without snow) |
 //! | 1 | FXAA |
 //! | 3–4 | Dot screen, halftone |
-//! | 6–9 | Bloom chain |
-//! | 11–15 | SSAO |
+//! | 11, 13, 14 | SSAO |
+//! | 40– | see `postfx_kinds.wgsl` |
 
 /// Post-fx shader. A single WGSL module with a fullscreen-triangle vertex
 /// shader and a switch-driven fragment shader keyed by an `effect_kind`
 /// uniform. Each effect path is implemented in this same module so the
 /// pipeline can be reused across post-fx classes.
-pub const POSTFX_SHADER: &str = r#"
+pub const POSTFX_SHADER: &str = concat!(r#"
 struct Out {
     @builtin(position) pos: vec4<f32>,
     @location(0) uv: vec2<f32>,
@@ -25,14 +27,16 @@ struct PostFxUniforms {
     // x: effect kind (0=copy, 1=fxaa, 2=film, 3=dotscreen, 4=halftone, 5=glitch,
     // 6=bloom-threshold, 7=blur-h, 8=blur-v, 9=bloom-composite, 10=sobel,
     // 11=ssao, 12=ssr, 13=ssao-blur, 14=ssao-composite, 16=outline-edge,
-    // 17=outline-overlay)
+    // 17=outline-overlay, 25=adaptive tone map, 26=bokeh, 31/32=glitch
+    // variants, 33=luminosity, 34=adapt luminance; the rest at `fs_main`).
+    // Every kind has one branch: a number two branches test runs the first.
     // y: time (seconds), z/w: reserved
     params: vec4<f32>,
     // Effect-specific parameters: x/y/z/w meaning varies per effect.
     params2: vec4<f32>,
     params3: vec4<f32>,
-    /// Resolution (x: width, y: height) in pixels; w=1 flips V when
-    /// sampling RTs for swapchain presentation (WebGPU top-first storage).
+    /// Resolution (x: width, y: height) in pixels; z=1 writes linear (f16
+    /// target); w: sRGB-view bits, see `postfx_flag`.
     resolution: vec4<f32>,
     /// SSAO: x=near, y=far, z=kernelRadius, w=kernelSize
     ssao0: vec4<f32>,
@@ -46,8 +50,10 @@ struct PostFxUniforms {
 @group(0) @binding(3) var depth_tex: texture_2d<f32>;
 @group(0) @binding(4) var depth_sampler: sampler;
 @group(0) @binding(5) var normal_tex: texture_2d<f32>;
-// A float texture, not `texture_depth_2d`: `sample_postfx_depth` reads it with
-// `textureLoad`, and GLSL has no `texelFetch` for a depth sampler. Naga compiles
+// A float texture, not `texture_depth_2d`: `sample_postfx_depth` reads it
+// through a plain (non-comparison) sampler, which GLSL cannot do with a depth
+// sampler type — it once used `textureLoad`, which has no GLSL form for one
+// either. Naga compiles
 // both arms of that branch whether or not either is taken, so declaring this as
 // depth made the whole module unusable on WebGL2. Depth arrives in `.r`.
 @group(0) @binding(6) var hw_depth_tex: texture_2d<f32>;
@@ -58,6 +64,8 @@ struct PostFxUniforms {
 struct SsaoKernel { samples : array<vec4<f32>, 32> }
 @group(0) @binding(7) var<uniform> ssao_kernel_buf : SsaoKernel;
 @group(0) @binding(8) var noise_tex: texture_2d<f32>;
+// Nearest, repeating. Also the sampler `sample_postfx_depth` reads
+// `hw_depth_tex` through, which is what makes that read work on WebGL2.
 @group(0) @binding(9) var noise_sampler: sampler;
 
 @vertex
@@ -69,10 +77,16 @@ fn vs_main(@builtin(vertex_index) vid: u32) -> Out {
         vec2<f32>( 3.0, -1.0),
         vec2<f32>(-1.0,  3.0),
     );
+    // uv in texture space — (0, 0) at the top-left, the same origin as every
+    // wgpu texture and as `renderer::fullscreen::VS` — so sampling the input
+    // at `uv` writes it back the right way up, into a target or onto the
+    // canvas alike. Effects that are ports of three.js shaders and do maths in
+    // GL's bottom-left `vUv` (glitch bands, halftone grid, SSAO's NDC
+    // reconstruction) take `gl_uv(uv)` for that and sample with `uv`.
     var uv = array<vec2<f32>, 3>(
-        vec2<f32>(0.0, 0.0),
-        vec2<f32>(2.0, 0.0),
-        vec2<f32>(0.0, 2.0),
+        vec2<f32>(0.0, 1.0),
+        vec2<f32>(2.0, 1.0),
+        vec2<f32>(0.0, -1.0),
     );
     var out: Out;
     out.pos = vec4<f32>(p[vid], 0.0, 1.0);
@@ -82,6 +96,12 @@ fn vs_main(@builtin(vertex_index) vid: u32) -> Out {
 
 fn luma(c: vec3<f32>) -> f32 {
     return dot(c, vec3<f32>(0.299, 0.587, 0.114));
+}
+
+// Texture-space uv (v = 0 at the top row) <-> GL `vUv` (v = 0 at the bottom).
+// The map is its own inverse, so the one function goes either way.
+fn gl_uv(uv: vec2<f32>) -> vec2<f32> {
+    return vec2<f32>(uv.x, 1.0 - uv.y);
 }
 
 // Encode linear → sRGB. The main shader does this for non-sRGB framebuffer
@@ -118,6 +138,64 @@ fn postfx_write(c: vec3<f32>, a: f32) -> vec4<f32> {
     return vec4<f32>(postfx_write_rgb(c), a);
 }
 
+// `resolution.w` bits: how the views bound to this pass treat stored bytes.
+// Every branch is written for a plain `Unorm` 8-bit target (the WebGPU canvas
+// and its render targets): what it returns is the byte stored, and a "raw" read
+// returns the stored byte. On an sRGB-format target (every 8-bit target and
+// the canvas on WebGL2, which has neither a linear canvas format nor view
+// formats) the hardware encodes on write and its "raw" views decode on read,
+// so these bits undo exactly that and both backends store the same bytes.
+//   1: the output is sRGB — decode the result, the hardware encodes it back;
+//   2: the input's raw view decodes — re-encode what it returns;
+//   4: likewise `depth_tex`; 8: likewise `normal_tex`.
+fn postfx_flag(bit: u32) -> bool {
+    return (u32(u.resolution.w) & bit) != 0u;
+}
+
+// The exact sRGB curves the hardware applies (not `postfx_encode`'s 2.2).
+fn postfx_srgb_encode(c: vec3<f32>) -> vec3<f32> {
+    let x = clamp(c, vec3<f32>(0.0), vec3<f32>(1.0));
+    return select(1.055 * pow(x, vec3<f32>(1.0 / 2.4)) - 0.055, x * 12.92, x <= vec3<f32>(0.0031308));
+}
+
+fn postfx_srgb_decode(c: vec3<f32>) -> vec3<f32> {
+    let x = max(c, vec3<f32>(0.0));
+    return select(pow((x + 0.055) / 1.055, vec3<f32>(2.4)), x / 12.92, x <= vec3<f32>(0.04045));
+}
+
+fn postfx_raw(c: vec4<f32>, bit: u32) -> vec4<f32> {
+    if (postfx_flag(bit)) {
+        return vec4<f32>(postfx_srgb_encode(c.rgb), c.a);
+    }
+    return c;
+}
+
+// A read of `input_tex` through the raw view kinds 0, 13, 15, 16, 18 and 19
+// bind (bit 2 is only ever set for those).
+fn input_raw(uv: vec2<f32>) -> vec4<f32> {
+    return postfx_raw(textureSampleLevel(input_tex, input_sampler, uv, 0.0), 2u);
+}
+
+// three.js `luminance()` (common.glsl): Rec. 709 weights.
+fn postfx_luminance(c: vec3<f32>) -> f32 {
+    return dot(c, vec3<f32>(0.2126729, 0.7151522, 0.0721750));
+}
+
+// three.js BokehShader's taps after the centre one: (x, y) in GL `vUv` units
+// before the circle of confusion, z the ring's scale (1, 0.9, 0.7, 0.4).
+const BOKEH_TAPS = array<vec3<f32>, 40>(
+    vec3<f32>( 0.0,   0.4,  1.0), vec3<f32>( 0.15,  0.37, 1.0), vec3<f32>( 0.29,  0.29, 1.0), vec3<f32>(-0.37,  0.15, 1.0),
+    vec3<f32>( 0.4,   0.0,  1.0), vec3<f32>( 0.37, -0.15, 1.0), vec3<f32>( 0.29, -0.29, 1.0), vec3<f32>(-0.15, -0.37, 1.0),
+    vec3<f32>( 0.0,  -0.4,  1.0), vec3<f32>(-0.15,  0.37, 1.0), vec3<f32>(-0.29,  0.29, 1.0), vec3<f32>( 0.37,  0.15, 1.0),
+    vec3<f32>(-0.4,   0.0,  1.0), vec3<f32>(-0.37, -0.15, 1.0), vec3<f32>(-0.29, -0.29, 1.0), vec3<f32>( 0.15, -0.37, 1.0),
+    vec3<f32>( 0.15,  0.37, 0.9), vec3<f32>(-0.37,  0.15, 0.9), vec3<f32>( 0.37, -0.15, 0.9), vec3<f32>(-0.15, -0.37, 0.9),
+    vec3<f32>(-0.15,  0.37, 0.9), vec3<f32>( 0.37,  0.15, 0.9), vec3<f32>(-0.37, -0.15, 0.9), vec3<f32>( 0.15, -0.37, 0.9),
+    vec3<f32>( 0.29,  0.29, 0.7), vec3<f32>( 0.4,   0.0,  0.7), vec3<f32>( 0.29, -0.29, 0.7), vec3<f32>( 0.0,  -0.4,  0.7),
+    vec3<f32>(-0.29,  0.29, 0.7), vec3<f32>(-0.4,   0.0,  0.7), vec3<f32>(-0.29, -0.29, 0.7), vec3<f32>( 0.0,   0.4,  0.7),
+    vec3<f32>( 0.29,  0.29, 0.4), vec3<f32>( 0.4,   0.0,  0.4), vec3<f32>( 0.29, -0.29, 0.4), vec3<f32>( 0.0,  -0.4,  0.4),
+    vec3<f32>(-0.29,  0.29, 0.4), vec3<f32>(-0.4,   0.0,  0.4), vec3<f32>(-0.29, -0.29, 0.4), vec3<f32>( 0.0,   0.4,  0.4),
+);
+
 fn ssao_kernel_sample(i: u32) -> vec3<f32> {
     return ssao_kernel_buf.samples[i].xyz;
 }
@@ -145,6 +223,7 @@ fn linear_depth_from_depth_tex(depth: f32, near: f32, far: f32) -> f32 {
     return view_z_to_ortho_depth(view_z, near, far);
 }
 
+// `uv` is GL `vUv` (bottom-left origin): NDC = uv * 2 - 1.
 fn view_pos_from_depth(uv: vec2<f32>, depth: f32, view_z: f32, proj: mat4x4<f32>, inv_proj: mat4x4<f32>) -> vec3<f32> {
     let clip_w = proj[2].w * view_z + proj[3].w;
     var clip_pos = vec4<f32>((vec3<f32>(uv, depth) - 0.5) * 2.0, 1.0);
@@ -152,6 +231,7 @@ fn view_pos_from_depth(uv: vec2<f32>, depth: f32, view_z: f32, proj: mat4x4<f32>
     return (inv_proj * clip_pos).xyz;
 }
 
+// NDC -> GL `vUv` (bottom-left origin); `gl_uv` turns it into a texture fetch.
 fn ndc_to_uv(ndc_xy: vec2<f32>) -> vec2<f32> {
     return ndc_xy * 0.5 + 0.5;
 }
@@ -170,9 +250,25 @@ fn sample_postfx_depth(uv: vec2<f32>, use_hw: bool) -> f32 {
     if (use_hw) {
         let dim = textureDimensions(hw_depth_tex, 0);
         let coord = clamp(vec2<i32>(uv * vec2<f32>(dim)), vec2<i32>(0), vec2<i32>(i32(dim.x) - 1, i32(dim.y) - 1));
-        return textureLoad(hw_depth_tex, coord, 0).r;
+        // Bit 16: the renderer drew with reversed depth; every effect below
+        // is written for standard depth.
+        let flip = postfx_flag(16u);
+        // A nearest sample at the texel's centre — the same texel a
+        // `textureLoad` would fetch — rather than the fetch itself. On WebGL2
+        // a texture read without a sampler takes its filtering from the
+        // texture object, whose default minification filter is
+        // NEAREST_MIPMAP_LINEAR; GLES 3.0 calls a depth texture with a
+        // non-NEAREST filter incomplete, and an incomplete texture fetches 0.
+        // wgpu-hal resets the filter only for formats that are unfilterable
+        // as colour, not for depth, so `texelFetch` read 0 everywhere and
+        // SSAO occluded whatever it pleased. Pairing the texture with the
+        // nearest `noise_sampler` makes wgpu bind that sampler object to the
+        // unit, and its NEAREST filters make the texture complete.
+        let centre = (vec2<f32>(coord) + vec2<f32>(0.5)) / vec2<f32>(dim);
+        let d = textureSampleLevel(hw_depth_tex, noise_sampler, centre, 0.0).r;
+        return select(d, 1.0 - d, flip);
     }
-    return textureSampleLevel(depth_tex, depth_sampler, uv, 0.0).r;
+    return postfx_raw(textureSampleLevel(depth_tex, depth_sampler, uv, 0.0), 4u).r;
 }
 
 fn outline_gaussian_pdf(x: f32, sigma: f32) -> f32 {
@@ -237,8 +333,10 @@ fn ht_distance_to_dot_radius(
     return rad - dist;
 }
 
+// `point` is in GL pixels (bottom-left origin), as in three.js; the input is
+// sampled at the texture-space position of the same spot.
 fn ht_get_sample_channel(point: vec2<f32>, res: vec2<f32>, channel: i32) -> f32 {
-    let uv_s = point / res;
+    let uv_s = gl_uv(point / res);
     var tex = textureSampleLevel(input_tex, input_sampler, uv_s, 0.0);
     let base = ht_rand(vec2<f32>(floor(point.x), floor(point.y))) * HT_PI2;
     let step_a = HT_PI2 / f32(HT_SAMPLES);
@@ -246,7 +344,7 @@ fn ht_get_sample_channel(point: vec2<f32>, res: vec2<f32>, channel: i32) -> f32 
     for (var i: i32 = 0; i < HT_SAMPLES; i = i + 1) {
         let r = base + step_a * f32(i);
         let coord = point + vec2<f32>(cos(r) * dist, sin(r) * dist);
-        tex = tex + textureSampleLevel(input_tex, input_sampler, coord / res, 0.0);
+        tex = tex + textureSampleLevel(input_tex, input_sampler, gl_uv(coord / res), 0.0);
     }
     tex = tex / f32(HT_SAMPLES + 1);
     if (channel == 0) { return tex.r; }
@@ -316,6 +414,8 @@ fn ht_blend_colour(a: f32, b: f32, t: f32, mode: i32) -> f32 {
     return ht_blend(a, b, 1.0 - t);
 }
 
+// `uv` is GL `vUv` (bottom-left origin): the dot grid is laid out from there,
+// as three.js's HalftoneShader does.
 fn postfx_halftone(uv: vec2<f32>, res: vec2<f32>, base: vec4<f32>) -> vec4<f32> {
     if (u.params.w > 0.5) { return base; }
     let radius = u.params2.x;
@@ -377,19 +477,13 @@ fn sample_input_linear_f16(uv: vec2<f32>) -> vec4<f32> {
     return f16_round_rgba(mix(c0, c1, f.y));
 }
 
+// three.js's `DataTexture` defaults to nearest filtering, and GlitchPass's
+// heightmap keeps it: the texel under `uv`, clamped to the edge.
 fn sample_glitch_disp(uv: vec2<f32>) -> f32 {
     let dim = textureDimensions(noise_tex, 0);
-    let st = uv * vec2<f32>(dim) - vec2<f32>(0.5);
-    let i0 = floor(st);
-    let f = st - i0;
     let max_c = vec2<i32>(i32(dim.x) - 1, i32(dim.y) - 1);
-    let c00 = textureLoad(noise_tex, clamp(vec2<i32>(i0), vec2<i32>(0), max_c), 0).r;
-    let c10 = textureLoad(noise_tex, clamp(vec2<i32>(i0 + vec2<f32>(1.0, 0.0)), vec2<i32>(0), max_c), 0).r;
-    let c01 = textureLoad(noise_tex, clamp(vec2<i32>(i0 + vec2<f32>(0.0, 1.0)), vec2<i32>(0), max_c), 0).r;
-    let c11 = textureLoad(noise_tex, clamp(vec2<i32>(i0 + vec2<f32>(1.0, 1.0)), vec2<i32>(0), max_c), 0).r;
-    let c0 = mix(c00, c10, f.x);
-    let c1 = mix(c01, c11, f.x);
-    return mix(c0, c1, f.y);
+    let c = clamp(vec2<i32>(floor(uv * vec2<f32>(dim))), vec2<i32>(0), max_c);
+    return textureLoad(noise_tex, c, 0).r;
 }
 
 fn postfx_encode_unclamped(c: vec3<f32>) -> vec3<f32> {
@@ -403,6 +497,9 @@ fn glitch_write(c: vec3<f32>) -> vec3<f32> {
     return postfx_encode_unclamped(c);
 }
 
+// `uv` is GL `vUv` (bottom-left origin), so the bands, the displacement map
+// and the snow sit where three.js's DigitalGlitch puts them; the input is
+// sampled at the texture-space position of each displaced point.
 fn postfx_glitch(uv: vec2<f32>, res: vec2<f32>, base: vec4<f32>, fc: vec2<f32>) -> vec4<f32> {
     if (u.params.z >= 1.0) {
         return postfx_glitch_out(base);
@@ -416,16 +513,7 @@ fn postfx_glitch(uv: vec2<f32>, res: vec2<f32>, base: vec4<f32>, fc: vec2<f32>) 
     let seed_x = u.params3.x;
     let seed_y = u.params3.y;
     let col_s = u.params3.z;
-    var disp = sample_glitch_disp(p * seed * seed);
-    if (u32(u.params.x) == 26u) {
-        let dim = textureDimensions(noise_tex, 0);
-        let fc_disp = clamp(
-            vec2<i32>(uv * vec2<f32>(dim)),
-            vec2<i32>(0),
-            vec2<i32>(i32(dim.x) - 1, i32(dim.y) - 1),
-        );
-        disp = textureLoad(noise_tex, fc_disp, 0).r;
-    }
+    let disp = sample_glitch_disp(p * seed * seed);
     if (p.y < distortion_x + col_s && p.y > distortion_x - col_s * seed) {
         if (seed_x > 0.0) { p.y = 1.0 - (p.y + distortion_y); }
         else { p.y = distortion_y; }
@@ -437,15 +525,21 @@ fn postfx_glitch(uv: vec2<f32>, res: vec2<f32>, base: vec4<f32>, fc: vec2<f32>) 
     p.x = p.x + disp * seed_x * (seed / 5.0);
     p.y = p.y + disp * seed_y * (seed / 5.0);
     let offset = amount * vec2<f32>(cos(angle), sin(angle));
-    let cr = sample_input_linear_f16(p + offset).r;
-    let cga = sample_input_linear_f16(p);
-    let cb = sample_input_linear_f16(p - offset).b;
+    let cr = sample_input_linear_f16(gl_uv(p + offset)).r;
+    let cga = sample_input_linear_f16(gl_uv(p));
+    let cb = sample_input_linear_f16(gl_uv(p - offset)).b;
     var col = vec4<f32>(cr, cga.g, cb, cga.a);
     if (col_s >= 0.0 && u32(u.params.x) == 5u) {
-        let gl_x = uv.x * (res.x - 1.0) + 0.5;
-        let gl_y = (1.0 - uv.y) * (res.y - 1.0) + 0.5;
-        let xs = floor(gl_x / 0.5);
-        let ys = floor(gl_y / 0.5);
+        // three.js hashes `gl_FragCoord`: pixel centres, GL's bottom-left
+        // origin, so xs = 2i + 1 and ys = 2j + 1 with j counted up from the
+        // bottom row. `fc` is the WGSL frag coord — the same centres, counted
+        // down from the top — so y is flipped against the target's height.
+        // Taken from `fc` rather than from the interpolated uv because the
+        // floor of a centre computed as `uv * res` can land on 2i instead of
+        // 2i + 1. It was `(1 - v) * (res - 1) + 0.5`: mirrored, and off the
+        // centres by up to half a pixel.
+        let xs = floor(fc.x / 0.5);
+        let ys = floor((res.y - fc.y) / 0.5);
         let snow = 200.0 * amount * glitch_rand(vec2<f32>(xs * seed, ys * seed * 50.0)) * 0.2;
         col = col + vec4<f32>(snow, snow, snow, snow);
     }
@@ -474,130 +568,115 @@ fn fxaa_contrast(a: vec4<f32>, b: vec4<f32>) -> f32 {
     return max(max(max(diff.r, diff.g), diff.b), diff.a);
 }
 
-fn fxaa_tex_center(uv: vec2<f32>) -> vec4<f32> {
-    let dim = textureDimensions(input_tex, 0);
-    let fc = clamp(
-        vec2<i32>(uv * vec2<f32>(dim)),
-        vec2<i32>(0),
-        vec2<i32>(i32(dim.x) - 1, i32(dim.y) - 1),
-    );
-    return textureLoad(input_tex, fc, 0);
+// three.js FXAAShader's `FxaaTexTop`: a sample at `p`, which is GL `vUv`
+// (+y up) as the whole port is — its neighbour offsets, the edge walk and the
+// tie-breaks all assume that orientation, so the image is not mirrored
+// relative to three.js's.
+// The stored bytes (bit 2: the input view decodes, so re-encode).
+fn fxaa_top(p: vec2<f32>) -> vec4<f32> {
+    return postfx_raw(textureSampleLevel(input_tex, input_sampler, gl_uv(p), 0.0), 2u);
 }
 
-fn fxaa_tex(uv: vec2<f32>) -> vec4<f32> {
-    return fxaa_tex_center(uv);
-}
-
-fn fxaa_tex_off(uv: vec2<f32>, off: vec2<f32>, rcp: vec2<f32>) -> vec4<f32> {
-    return textureSampleLevel(input_tex, input_sampler, uv + off * rcp, 0.0);
-}
-
-fn fxaa_pixel_shader(uv: vec2<f32>, rcp_frame: vec2<f32>) -> vec4<f32> {
+// FXAA 3.11 as three.js r165's FXAAShader has it, line for line. `pos_m` is
+// GL `vUv`; `rcp` is the `resolution` uniform (texel size).
+fn fxaa_pixel_shader(pos_m: vec2<f32>, rcp: vec2<f32>) -> vec4<f32> {
     let edge_threshold: f32 = 0.2;
     let inv_edge_threshold: f32 = 1.0 / edge_threshold;
-    let rgbaM = fxaa_tex(uv);
-    let rgbaS = fxaa_tex_off(uv, vec2<f32>(0.0, 1.0), rcp_frame);
-    let rgbaE = fxaa_tex_off(uv, vec2<f32>(1.0, 0.0), rcp_frame);
-    let rgbaN = fxaa_tex_off(uv, vec2<f32>(0.0, -1.0), rcp_frame);
-    let rgbaW = fxaa_tex_off(uv, vec2<f32>(-1.0, 0.0), rcp_frame);
+    let rgba_m = fxaa_top(pos_m);
+    let rgba_s = fxaa_top(pos_m + vec2<f32>(0.0, 1.0) * rcp);
+    let rgba_e = fxaa_top(pos_m + vec2<f32>(1.0, 0.0) * rcp);
+    let rgba_n0 = fxaa_top(pos_m + vec2<f32>(0.0, -1.0) * rcp);
+    let rgba_w = fxaa_top(pos_m + vec2<f32>(-1.0, 0.0) * rcp);
 
-    let cN = fxaa_contrast(rgbaM, rgbaN);
-    let cS = fxaa_contrast(rgbaM, rgbaS);
-    let cE = fxaa_contrast(rgbaM, rgbaE);
-    let cW = fxaa_contrast(rgbaM, rgbaW);
-    if (max(max(cN, cS), max(cE, cW)) < edge_threshold) {
-        return rgbaM;
+    let contrast_n = fxaa_contrast(rgba_m, rgba_n0);
+    let contrast_s = fxaa_contrast(rgba_m, rgba_s);
+    let contrast_e = fxaa_contrast(rgba_m, rgba_e);
+    let contrast_w = fxaa_contrast(rgba_m, rgba_w);
+    if (max(max(max(contrast_n, contrast_s), contrast_e), contrast_w) < edge_threshold) {
+        return rgba_m;
     }
 
-    var rgbaNy = rgbaN;
-    var rgbaSy = rgbaS;
-    var contrastN = cN;
-    var contrastS = cS;
-    var contrastE = cE;
-    var contrastW = cW;
+    var relative_v = ((contrast_n + contrast_s) - (contrast_e + contrast_w)) * inv_edge_threshold;
+    var horz_span = relative_v > 0.0;
 
-    var relativeVContrast = (contrastN + contrastS) - (contrastE + contrastW);
-    relativeVContrast = relativeVContrast * inv_edge_threshold;
-    var horzSpan = relativeVContrast > 0.0;
-
-    if (abs(relativeVContrast) < 0.3) {
-        let dirToEdge = vec2<f32>(
-            select(-1.0, 1.0, contrastE > contrastW),
-            select(-1.0, 1.0, contrastS > contrastN),
-        );
-        let rgbaAlongH = fxaa_tex_off(uv, dirToEdge, rcp_frame);
-        let matchAlongH = fxaa_contrast(rgbaM, rgbaAlongH);
-        let rgbaAlongV = fxaa_tex_off(uv, vec2<f32>(-dirToEdge.x, dirToEdge.y), rcp_frame);
-        let matchAlongV = fxaa_contrast(rgbaM, rgbaAlongV);
-        relativeVContrast = (matchAlongV - matchAlongH) * inv_edge_threshold;
-        if (abs(relativeVContrast) < 0.3) {
-            return mix(rgbaM, (rgbaN + rgbaS + rgbaE + rgbaW) * 0.25, 0.4);
+    // 45 degree edges and corners: V and H contrast too alike to choose.
+    if (abs(relative_v) < 0.3) {
+        let dir_x = select(-1.0, 1.0, contrast_e > contrast_w);
+        let dir_y = select(-1.0, 1.0, contrast_s > contrast_n);
+        let rgba_along_h = fxaa_top(pos_m + vec2<f32>(dir_x, -dir_y) * rcp);
+        let match_along_h = fxaa_contrast(rgba_m, rgba_along_h);
+        let rgba_along_v = fxaa_top(pos_m + vec2<f32>(-dir_x, dir_y) * rcp);
+        let match_along_v = fxaa_contrast(rgba_m, rgba_along_v);
+        relative_v = (match_along_v - match_along_h) * inv_edge_threshold;
+        if (abs(relative_v) < 0.3) {
+            return mix(rgba_m, (rgba_n0 + rgba_s + rgba_e + rgba_w) * 0.25, 0.4);
         }
-        horzSpan = relativeVContrast > 0.0;
+        horz_span = relative_v > 0.0;
     }
 
-    var rgbaRefN = rgbaNy;
-    var rgbaRefS = rgbaSy;
-    if (!horzSpan) {
-        rgbaRefN = rgbaW;
-        rgbaRefS = rgbaE;
+    var rgba_n = rgba_n0;
+    var rgba_s2 = rgba_s;
+    if (!horz_span) {
+        rgba_n = rgba_w;
+        rgba_s2 = rgba_e;
     }
-    var rgbaEdge = rgbaRefN;
-    if (fxaa_contrast(rgbaM, rgbaRefN) <= fxaa_contrast(rgbaM, rgbaRefS)) {
-        rgbaEdge = rgbaRefS;
+    if (!(fxaa_contrast(rgba_m, rgba_n) > fxaa_contrast(rgba_m, rgba_s2))) {
+        rgba_n = rgba_s2;
     }
+    let off_np = vec2<f32>(select(0.0, rcp.x, horz_span), select(rcp.y, 0.0, horz_span));
 
-    var doneN = false;
-    var doneP = false;
-    var nDist: f32 = 0.0;
-    var pDist: f32 = 0.0;
-    var iterationsUsedN: i32 = 0;
-    var iterationsUsedP: i32 = 0;
-
+    var done_n = false;
+    var done_p = false;
+    var n_dist = 0.0;
+    var p_dist = 0.0;
+    var iterations_n = 0;
+    var iterations_p = 0;
     for (var i: i32 = 0; i < 5; i = i + 1) {
         let increment = f32(i + 1);
-        if (!doneN) {
-            nDist = nDist + increment;
-            let offN = select(vec2<f32>(nDist, 0.0), vec2<f32>(0.0, nDist), horzSpan);
-            let sampleN = fxaa_tex_off(uv, offN, rcp_frame);
-            doneN = fxaa_contrast(sampleN, rgbaM) > fxaa_contrast(sampleN, rgbaEdge);
-            iterationsUsedN = i;
+        if (!done_n) {
+            n_dist = n_dist + increment;
+            let end_n = fxaa_top(pos_m + off_np * n_dist);
+            done_n = fxaa_contrast(end_n, rgba_m) > fxaa_contrast(end_n, rgba_n);
+            iterations_n = i;
         }
-        if (!doneP) {
-            pDist = pDist + increment;
-            let offP = select(vec2<f32>(-pDist, 0.0), vec2<f32>(0.0, -pDist), horzSpan);
-            let sampleP = fxaa_tex_off(uv, offP, rcp_frame);
-            doneP = fxaa_contrast(sampleP, rgbaM) > fxaa_contrast(sampleP, rgbaEdge);
-            iterationsUsedP = i;
+        if (!done_p) {
+            p_dist = p_dist + increment;
+            let end_p = fxaa_top(pos_m - off_np * p_dist);
+            done_p = fxaa_contrast(end_p, rgba_m) > fxaa_contrast(end_p, rgba_n);
+            iterations_p = i;
         }
-        if (doneN || doneP) {
+        if (done_n || done_p) {
             break;
         }
     }
-
-    if (!doneP && !doneN) {
-        return rgbaM;
+    if (!done_p && !done_n) {
+        return rgba_m;
     }
-
     var dist = min(
-        select(1.0, f32(iterationsUsedN) / 4.0, doneN),
-        select(1.0, f32(iterationsUsedP) / 4.0, doneP),
+        select(1.0, f32(iterations_n) / 4.0, done_n),
+        select(1.0, f32(iterations_p) / 4.0, done_p),
     );
-    dist = pow(dist, 0.5);
-    dist = 1.0 - dist;
-    return mix(rgbaM, rgbaEdge, dist * 0.5);
+    dist = 1.0 - pow(dist, 0.5);
+    return mix(rgba_m, rgba_n, dist * 0.5);
 }
 
+// The entry point: every branch below, then the output decode `postfx_flag`
+// describes, so an sRGB target stores the bytes a `Unorm` one would.
 @fragment
 fn fs_main(in: Out) -> @location(0) vec4<f32> {
+    let c = postfx_fragment(in);
+    if (postfx_flag(1u)) {
+        return vec4<f32>(postfx_srgb_decode(c.rgb), c.a);
+    }
+    return c;
+}
+
+fn postfx_fragment(in: Out) -> vec4<f32> {
     let kind = u32(u.params.x);
     let res = u.resolution.xy;
     let texel = 1.0 / max(res, vec2<f32>(1.0));
-    var uv = in.uv;
-    if (u.resolution.w > 0.5) {
-        uv.y = 1.0 - uv.y;
-    }
-    let base = textureSampleLevel(input_tex, input_sampler, uv, 0.0);
+    let uv = in.uv;
+    let base = postfx_raw(textureSampleLevel(input_tex, input_sampler, uv, 0.0), 2u);
 
     // 0: copy / pass-through — point sample so RT pixels map 1:1 to canvas
     // (linear filtering bleeds foreground into background at silhouettes).
@@ -608,7 +687,7 @@ fn fs_main(in: Out) -> @location(0) vec4<f32> {
             vec2<i32>(0),
             vec2<i32>(i32(dim.x) - 1, i32(dim.y) - 1),
         );
-        let px = textureLoad(input_tex, fc, 0);
+        let px = postfx_raw(textureLoad(input_tex, fc, 0), 2u);
         if (postfx_linear_out()) {
             return vec4<f32>(px.rgb, px.a);
         }
@@ -633,14 +712,15 @@ fn fs_main(in: Out) -> @location(0) vec4<f32> {
         if (rcp.x <= 0.0 || rcp.y <= 0.0) {
             rcp = vec2<f32>(1.0 / 1024.0, 1.0 / 512.0);
         }
-        let col = fxaa_pixel_shader(uv, rcp);
+        let col = fxaa_pixel_shader(gl_uv(uv), rcp);
         return postfx_passthrough(col.rgb, col.a);
     }
     if (kind == 2u) {
         let t = u.params.y;
         let intensity = u.params2.x;
         let grayscale = u.params2.y > 0.5;
-        let noise = fract(sin(dot(fract(uv + vec2<f32>(t)), vec2<f32>(12.9898, 78.233))) * 43758.5453);
+        // three.js FilmShader hashes `vUv`: GL's bottom-left origin.
+        let noise = fract(sin(dot(fract(gl_uv(uv) + vec2<f32>(t)), vec2<f32>(12.9898, 78.233))) * 43758.5453);
         var col = base.rgb + base.rgb * clamp(0.1 + noise, 0.0, 1.0);
         col = mix(base.rgb, col, intensity);
         if (grayscale) {
@@ -649,38 +729,37 @@ fn fs_main(in: Out) -> @location(0) vec4<f32> {
         }
         return postfx_passthrough(col, base.a);
     }
-    // 3: Dot screen (three.js DotScreenShader).
+    // 3: Dot screen (three.js DotScreenShader). The pattern is laid out in GL
+    // `vUv`; the input is read at the pixel's own texture-space position.
+    // params2: angle, scale, center; params3.xy: `tSize`, the input's size
+    // (the output's when zero).
     if (kind == 3u) {
         let col = sample_input_linear_f16(uv);
+        let guv = gl_uv(uv);
         let angle = u.params2.x;
-        let scale = max(u.params2.y, 0.0001);
+        let scale = u.params2.y;
         let center = vec2<f32>(u.params2.z, u.params2.w);
-        var pattern = 0.0;
-        if (u.params3.w > 0.5) {
-            let pdim = textureDimensions(noise_tex, 0);
-            let pfc = clamp(
-                vec2<i32>(uv * vec2<f32>(pdim)),
-                vec2<i32>(0),
-                vec2<i32>(i32(pdim.x) - 1, i32(pdim.y) - 1),
-            );
-            pattern = textureLoad(noise_tex, pfc, 0).r;
-        } else {
-            let s = sin(angle); let c = cos(angle);
-            let tex = uv * res - center;
-            let point = vec2<f32>(c * tex.x - s * tex.y, s * tex.x + c * tex.y) * scale;
-            pattern = sin(point.x) * sin(point.y) * 4.0;
-        }
+        let t_size = select(res, u.params3.xy, u.params3.x > 0.0);
+        let s = sin(angle);
+        let c = cos(angle);
+        let tex = guv * t_size - center;
+        let point = vec2<f32>(c * tex.x - s * tex.y, s * tex.x + c * tex.y) * scale;
+        let pattern = sin(point.x) * sin(point.y) * 4.0;
         let average = (col.r + col.g + col.b) / 3.0;
         let dot_val = average * 10.0 - 5.0 + pattern;
         return postfx_passthrough(vec3<f32>(dot_val), col.a);
     }
-    // 4: RGB Halftone (three.js HalftoneShader).
+    // 4: RGB Halftone (three.js HalftoneShader). Its `width` / `height`
+    // uniforms ride in params.yz when set; the output's size otherwise.
     if (kind == 4u) {
-        return postfx_halftone(uv, res, base);
+        let ht_res = select(res, vec2<f32>(u.params.y, u.params.z), u.params.y > 0.0);
+        return postfx_halftone(gl_uv(uv), ht_res, base);
     }
-    // 5: DigitalGlitch with snow; 25: same without snow; 26: snow-free + GLSL-baked disp.
-    if (kind == 5u || kind == 25u || kind == 26u) {
-        return postfx_glitch(uv, res, base, in.pos.xy);
+    // 5: DigitalGlitch with snow; 31: the same without it. (31 was 25, which
+    // was already Reinhard tone mapping: this branch came first, so that kind
+    // ran glitch.)
+    if (kind == 5u || kind == 31u) {
+        return postfx_glitch(gl_uv(uv), res, base, in.pos.xy);
     }
     // 6: Bloom brightness threshold. Pass-only pixels brighter than params2.x.
     // params2.y: smooth-knee width (0 = hard cutoff).
@@ -757,12 +836,12 @@ fn fs_main(in: Out) -> @location(0) vec4<f32> {
         let hx = vec2<f32>(texel.x, 0.0);
         let hy = vec2<f32>(0.0, texel.y);
         let diff1 = (
-            textureSampleLevel(input_tex, input_sampler, uv + hx, 0.0).r
-            - textureSampleLevel(input_tex, input_sampler, uv - hx, 0.0).r
+            input_raw(uv + hx).r
+            - input_raw(uv - hx).r
         ) * 0.5;
         let diff2 = (
-            textureSampleLevel(input_tex, input_sampler, uv + hy, 0.0).r
-            - textureSampleLevel(input_tex, input_sampler, uv - hy, 0.0).r
+            input_raw(uv + hy).r
+            - input_raw(uv - hy).r
         ) * 0.5;
         let d = length(vec2<f32>(diff1, diff2));
         return postfx_write(edge_color * d, d);
@@ -788,8 +867,8 @@ fn fs_main(in: Out) -> @location(0) vec4<f32> {
         for (var i: i32 = 1; i <= 4; i = i + 1) {
             let x = kernel_radius * f32(i) / 4.0;
             let w = outline_gaussian_pdf(x, sigma);
-            acc = acc + (textureSampleLevel(input_tex, input_sampler, uv + uv_offset, 0.0)
-                + textureSampleLevel(input_tex, input_sampler, uv - uv_offset, 0.0)) * w;
+            acc = acc + (input_raw(uv + uv_offset)
+                + input_raw(uv - uv_offset)) * w;
             weight_sum = weight_sum + 2.0 * w;
             uv_offset = uv_offset + delta;
         }
@@ -808,13 +887,17 @@ fn fs_main(in: Out) -> @location(0) vec4<f32> {
         let max_dist = u.params2.y;
         let use_hw = u.params.w > 0.5;
         let depth_r = sample_postfx_depth(uv, use_hw);
-        if (depth_r >= 0.9999) {
+        // three.js r165 SSAOShader: `depth == 1.0`, the cleared background.
+        if (depth_r >= 1.0) {
             return vec4<f32>(1.0, 1.0, 1.0, 1.0);
         }
         let view_z = perspective_depth_to_view_z(depth_r, near, far);
-        let view_pos = view_pos_from_depth(uv, depth_r, view_z, u.proj, u.inv_proj);
-        let view_normal = unpack_view_normal(textureSampleLevel(normal_tex, depth_sampler, uv, 0.0).rgb);
-        let noise_r = sample_ssao_noise(uv, res);
+        // Reconstruction and projection work in GL `vUv` (NDC y up), as
+        // three.js's SSAOShader does; every fetch is at the texture-space
+        // position of the same point.
+        let view_pos = view_pos_from_depth(gl_uv(uv), depth_r, view_z, u.proj, u.inv_proj);
+        let view_normal = unpack_view_normal(postfx_raw(textureSampleLevel(normal_tex, depth_sampler, uv, 0.0), 8u).rgb);
+        let noise_r = sample_ssao_noise(gl_uv(uv), res);
         // Scalar broadcast, matching three.js SSAOShader's
         // `vec3 random = vec3( getRandom( vUv * noiseScale ) )`. It is a weak
         // rotation — the same axis up to sign rather than a real turn — and it
@@ -833,10 +916,10 @@ fn fs_main(in: Out) -> @location(0) vec4<f32> {
             let sample_point = view_pos + sample_vec * kernel_radius;
             let sample_ndc = u.proj * vec4<f32>(sample_point, 1.0);
             let sample_uv = ndc_to_uv(sample_ndc.xy / max(sample_ndc.w, 0.0001));
-            if (sample_uv.x < 0.0 || sample_uv.x > 1.0 || sample_uv.y < 0.0 || sample_uv.y > 1.0) {
-                continue;
-            }
-            let sample_depth_r = sample_postfx_depth(sample_uv, use_hw);
+            // Off-screen samples are not skipped: three.js reads its depth
+            // texture there, clamped to the edge, and counts them like any
+            // other. Clamped here too, the same texel either way.
+            let sample_depth_r = sample_postfx_depth(gl_uv(sample_uv), use_hw);
             let real_depth = linear_depth_from_depth_tex(sample_depth_r, near, far);
             let sample_depth = view_z_to_ortho_depth(sample_point.z, near, far);
             let delta = sample_depth - real_depth;
@@ -852,7 +935,7 @@ fn fs_main(in: Out) -> @location(0) vec4<f32> {
     // .y = thickness, .z = max opacity, .w = stride scale.
     if (kind == 12u) {
         let color = base.rgb;
-        let center = textureSampleLevel(depth_tex, depth_sampler, uv, 0.0).r;
+        let center = postfx_raw(textureSampleLevel(depth_tex, depth_sampler, uv, 0.0), 4u).r;
         var reflect_color = color;
         var strength = 0.0;
         let step_px = max(u.params2.x, 0.5);
@@ -865,7 +948,7 @@ fn fs_main(in: Out) -> @location(0) vec4<f32> {
             let sample_uv = uv + vec2<f32>(0.0, t * step_px * stride * texel.y * 24.0);
             if (sample_uv.y < 0.0 || sample_uv.y > 1.0) { break; }
             let mirror_uv = vec2<f32>(sample_uv.x, 1.0 - sample_uv.y);
-            let sample_d = textureSampleLevel(depth_tex, depth_sampler, mirror_uv, 0.0).r;
+            let sample_d = postfx_raw(textureSampleLevel(depth_tex, depth_sampler, mirror_uv, 0.0), 4u).r;
             if (sample_d > center + thickness) {
                 reflect_color = textureSampleLevel(input_tex, input_sampler, mirror_uv, 0.0).rgb;
                 strength = (1.0 - t) * max_opacity;
@@ -881,15 +964,23 @@ fn fs_main(in: Out) -> @location(0) vec4<f32> {
         for (var i: i32 = -2; i <= 2; i = i + 1) {
             for (var j: i32 = -2; j <= 2; j = j + 1) {
                 let off = vec2<f32>(f32(i), f32(j)) * texel;
-                result = result + textureSampleLevel(input_tex, input_sampler, uv + off, 0.0).r;
+                result = result + input_raw(uv + off).r;
             }
         }
         let blurred = result / 25.0;
         return vec4<f32>(blurred, blurred, blurred, 1.0);
     }
-    // 14: SSAO composite (single-pass scene * AO).
+    // 14: SSAO composite (single-pass scene * AO, the AO bound as depth).
+    // params2.y: three.js SSAOPass's OUTPUT.Default — its beauty copy (kind
+    // 0's legacy decode-and-pass-through) times the blurred AO, which three.js
+    // draws as a second copy with DstColor × SrcColor blending. One pass here
+    // because a second draw onto a WebGL2 canvas does not see the first: the
+    // surface texture comes back uninitialised and its load is a clear.
     if (kind == 14u) {
-        let ao = textureSampleLevel(depth_tex, depth_sampler, uv, 0.0).r;
+        let ao = postfx_raw(textureSampleLevel(depth_tex, depth_sampler, uv, 0.0), 4u).r;
+        if (u.params2.y > 0.5) {
+            return vec4<f32>(base.rgb * ao, base.a);
+        }
         return postfx_write(base.rgb * ao, base.a);
     }
     // 15: SSAO multiply onto loaded canvas (three.js CustomBlending DstColor*SrcColor).
@@ -933,27 +1024,51 @@ fn fs_main(in: Out) -> @location(0) vec4<f32> {
         let samp = textureLoad(input_tex, fc, 0);
         return vec4<f32>(samp.rgb, samp.a);
     }
-    // 25: Reinhard tone mapping. params2.x = exposure multiplier.
+    // 25: Adaptive tone mapping — ToneMapShader, the operator
+    // AdaptiveToneMappingPass ends on (Reinhard's modified operator, Eq. 4).
+    // Both were removed from three.js in r153; this follows r152's source.
+    // params2: x = middleGrey, y = minLuminance, z = maxLuminance,
+    // w = averageLuminance (used when not adaptive). params3.x > 0.5: adaptive,
+    // the average luminance read at (0.5, 0.5) of the target bound as
+    // `normal_tex` (kinds 33, 20 and 34 build it). As in three.js it scales the colour by
+    // the compressed luminance rather than by its ratio to the pixel's own.
     if (kind == 25u) {
-        let exposure = max(u.params2.x, 0.0001);
-        let mapped = vec3<f32>(1.0) - exp(-base.rgb * exposure);
-        return postfx_write(mapped, base.a);
-    }
-    // 26: Bokeh disc blur. params2.y = max blur radius in pixels.
-    if (kind == 26u) {
-        let max_blur = u.params2.y;
-        let coc = clamp((1.0 - base.a) * max_blur, 0.0, max_blur);
-        var acc = base.rgb;
-        var wsum = 1.0;
-        for (var i: i32 = 0; i < 8; i = i + 1) {
-            let angle = f32(i) * 0.785398;
-            let r = coc * texel * f32(i + 1);
-            let off = vec2<f32>(cos(angle), sin(angle)) * r;
-            let s = textureSampleLevel(input_tex, input_sampler, uv + off, 0.0).rgb;
-            acc = acc + s;
-            wsum = wsum + 1.0;
+        let middle_grey = u.params2.x;
+        let min_lum = u.params2.y;
+        let max_lum = u.params2.z;
+        var lum_avg = u.params2.w;
+        if (u.params3.x > 0.5) {
+            lum_avg = textureSampleLevel(normal_tex, depth_sampler, vec2<f32>(0.5, 0.5), 0.0).r;
         }
-        return postfx_write(acc / wsum, base.a);
+        let lum_pixel = postfx_luminance(base.rgb);
+        let lum_scaled = (lum_pixel * middle_grey) / max(min_lum, lum_avg);
+        let lum_compressed = (lum_scaled * (1.0 + (lum_scaled / (max_lum * max_lum)))) / (1.0 + lum_scaled);
+        return postfx_passthrough(lum_compressed * base.rgb, base.a);
+    }
+    // 26: Bokeh — three.js r165 BokehShader, BokehPass's: 41 taps on rings
+    // scaled by the circle of confusion `(focus + viewZ) * aperture`, clamped
+    // to ±maxblur (uv units). params2: x = focus, y = aperture, z = maxblur,
+    // w = camera aspect; near/far in `ssao0.xy`. Depth is the hardware depth of
+    // the target bound as both depth and normal (as SSAO's): the same
+    // `gl_FragCoord.z` three.js packs with MeshDepthMaterial. Offsets are in GL
+    // `vUv` (y up), so they are mirrored in v for the texture-space fetch.
+    if (kind == 26u) {
+        let focus = u.params2.x;
+        let aperture = u.params2.y;
+        let max_blur = u.params2.z;
+        let aspect_correct = vec2<f32>(1.0, u.params2.w);
+        let depth = sample_postfx_depth(uv, u.params.w > 0.5);
+        let view_z = perspective_depth_to_view_z(depth, u.ssao0.x, u.ssao0.y);
+        let factor = focus + view_z;
+        let dofblur = vec2<f32>(clamp(factor * aperture, -max_blur, max_blur));
+        var taps = BOKEH_TAPS;
+        var col = textureSampleLevel(input_tex, input_sampler, uv, 0.0);
+        for (var i: i32 = 0; i < 40; i = i + 1) {
+            let t = taps[i];
+            let off = t.xy * aspect_correct * dofblur * t.z;
+            col = col + textureSampleLevel(input_tex, input_sampler, uv + vec2<f32>(off.x, -off.y), 0.0);
+        }
+        return postfx_passthrough(col.rgb / 41.0, 1.0);
     }
     // 27: SAO — depth-difference ambient occlusion. params2.x = intensity.
     if (kind == 27u) {
@@ -987,22 +1102,47 @@ fn fs_main(in: Out) -> @location(0) vec4<f32> {
     if (kind == 29u) {
         return vec4<f32>(u.params2.x, u.params2.y, u.params2.z, u.params2.w);
     }
-    // 30: Output / display encode. params2.x > 0.5 applies sRGB encode.
+    // 33: Luminosity — three.js LuminosityShader: the luminance in rgb.
+    // AdaptiveToneMappingPass's first step, into a half-float target.
+    if (kind == 33u) {
+        return postfx_passthrough(vec3<f32>(postfx_luminance(base.rgb)), base.a);
+    }
+    // 34: Adapt luminance — AdaptiveToneMappingPass's adaptive luminance
+    // shader (Pattanaik; three.js r152, the last release with the pass).
+    // Input: this frame's average luminance (1×1, what three.js reads from the
+    // mip chain's 1×1 level); `normal_tex`: last frame's adapted luminance,
+    // read per pixel at `vUv` as three.js does (its targets are resolution²).
+    // params2: x = minLuminance, y = delta (seconds), z = tau (the adaption
+    // rate). The current luminance is squared, as three.js does.
+    if (kind == 34u) {
+        let min_lum = u.params2.x;
+        let last = max(min_lum, textureSampleLevel(normal_tex, depth_sampler, uv, 0.0).r);
+        var current = max(min_lum, base.r);
+        current = current * current;
+        let adapted = last + (current - last) * (1.0 - exp(-u.params2.y * u.params2.z));
+        return vec4<f32>(adapted, adapted, adapted, 1.0);
+    }
+    // 30: Output / display encode. params2.x > 0.5 applies sRGB encode —
+    // three.js r165 OutputShader's `sRGBTransferOETF`, the exact curve, not
+    // `postfx_encode`'s 2.2 power.
     if (kind == 30u) {
         if (u.params2.x > 0.5) {
-            return vec4<f32>(postfx_encode(base.rgb), base.a);
+            return vec4<f32>(postfx_srgb_encode(base.rgb), base.a);
         }
         return vec4<f32>(base.rgb, base.a);
     }
+    if (kind >= 40u) {
+        return postfx_fragment_ext(in, kind, uv, res, texel, base);
+    }
     return vec4<f32>(postfx_encode(base.rgb), base.a);
 }
-"#;
+"#, include_str!("postfx_kinds.wgsl"));
 
-pub const MAX_DIR_LIGHTS: usize = 4;
-pub const MAX_POINT_LIGHTS: usize = 4;
-pub const MAX_SPOT_LIGHTS: usize = 4;
-pub const MAX_HEMI_LIGHTS: usize = 4;
-pub const MAX_RECT_LIGHTS: usize = 4;
+pub const MAX_DIR_LIGHTS: usize = 8;
+pub const MAX_POINT_LIGHTS: usize = 8;
+pub const MAX_SPOT_LIGHTS: usize = 8;
+pub const MAX_HEMI_LIGHTS: usize = 8;
+pub const MAX_RECT_LIGHTS: usize = 8;
 
 pub const SHADER_SOURCE: &str = r#"
 const MAT_BASIC    : u32 = 0u;
@@ -1022,6 +1162,91 @@ const MAT_SKY      : u32 = 13u;
 const MAT_MIRROR   : u32 = 14u;
 const MAT_ATMOSPHERE : u32 = 16u;
 
+// three.js `alphaTest`, carried bit-cast in `mesh.flags.w`; 0 (the default)
+// never discards, since no alpha is below it.
+fn alpha_test_of() -> f32 {
+    return bitcast<f32>(mesh.flags.w);
+}
+
+// three.js `alphamap_fragment`: the alpha map's green channel scales the
+// opacity, after the colour map and before `alphaTest`.
+fn alpha_map_of(uv : vec2<f32>) -> f32 {
+    if (HAS_ALPHA_MAP) {
+        return sample_alpha_map(uv).g;
+    }
+    return 1.0;
+}
+
+// three.js `lights_fragment_maps`: the light map's texel times
+// `lightMapIntensity`, added to the indirect irradiance.
+fn light_map_irradiance(uv : vec2<f32>) -> vec3<f32> {
+    if (HAS_LIGHT_MAP) {
+        return sample_light_map(uv).rgb * map_params().x;
+    }
+    return vec3<f32>(0.0);
+}
+
+// three.js `specularmap_fragment`: the specular map's red channel.
+fn specular_strength_of(uv : vec2<f32>) -> f32 {
+    if (HAS_SPECULAR_MAP) {
+        return sample_specular_map(uv).r;
+    }
+    return 1.0;
+}
+
+// three.js `envmap_fragment` (Basic, Lambert, Phong): the reflected — or, for
+// a refraction-mapped cube, refracted — view ray looks the `envMap` up, and
+// the result meets `outgoing` per `combine`, weighted by `specularStrength ×
+// reflectivity`. The ray runs from the camera to the fragment, or along the
+// camera's forward axis for an orthographic one (`isOrthographic`).
+fn apply_env_map(outgoing : vec3<f32>, n : vec3<f32>, world_pos : vec3<f32>, specular_strength : f32) -> vec3<f32> {
+    if (!HAS_ENV_MAP) {
+        return outgoing;
+    }
+    var to_frag = normalize(world_pos - frame.camera_position.xyz);
+    if (frame.projection[2][3] == 0.0) {
+        to_frag = normalize(-vec3<f32>(frame.view[0][2], frame.view[1][2], frame.view[2][2]));
+    }
+    let p = env_params();
+    var r = reflect(to_frag, n);
+    if (p.w > 0.5) {
+        r = refract(to_frag, n, p.z);
+    }
+    let env = sample_env_map(r).rgb;
+    let k = specular_strength * p.y;
+    let combine = u32(p.x);
+    if (combine == 1u) {
+        return mix(outgoing, env, k);
+    }
+    if (combine == 2u) {
+        return outgoing + env * k;
+    }
+    return mix(outgoing, outgoing * env, k);
+}
+
+// three.js `bumpmap_pars_fragment`: `dHdxy_fwd` and `perturbNormalArb`
+// (Mikkelsen, "Bump Mapping Unparametrized Surfaces on the GPU"). The height is
+// the map's red channel times `bumpScale`, differenced forward along the
+// pixel's uv derivatives; `face` is three.js's `faceDirection`. Taken in world
+// space rather than view space, which changes nothing: the construction uses
+// only crosses and dots, and the view transform is a rotation. Neither is the
+// framebuffer's y direction: flipping it negates `dy` terms in pairs.
+fn bump_normal(n : vec3<f32>, pos : vec3<f32>, uv : vec2<f32>, face : f32) -> vec3<f32> {
+    let scale = map_params().y;
+    let dstdx = dpdx(uv);
+    let dstdy = dpdy(uv);
+    let hll = scale * sample_bump_map(uv).x;
+    let dbx = scale * sample_bump_map(uv + dstdx).x - hll;
+    let dby = scale * sample_bump_map(uv + dstdy).x - hll;
+    let sigma_x = normalize(dpdx(pos));
+    let sigma_y = normalize(dpdy(pos));
+    let r1 = cross(sigma_y, n);
+    let r2 = cross(n, sigma_x);
+    let det = dot(sigma_x, r1) * face;
+    let grad = sign(det) * (dbx * r1 + dby * r2);
+    return normalize(abs(det) * n - grad);
+}
+
 const FLAG_MAP           : u32 = 1u;
 const FLAG_NORMAL_MAP    : u32 = 2u;
 const FLAG_ROUGHNESS_MAP : u32 = 4u;
@@ -1029,12 +1254,32 @@ const FLAG_METALNESS_MAP : u32 = 8u;
 const FLAG_AO_MAP        : u32 = 16u;
 const FLAG_EMISSIVE_MAP  : u32 = 32u;
 const FLAG_MATCAP_MAP    : u32 = 64u;
-const FLAG_DISPLACEMENT_MAP : u32 = 2048u;
 const FLAG_CLOUD_SHADOW     : u32 = 4096u;
 const FLAG_DASHED        : u32 = 128u;
 const FLAG_SHADOW_MAT    : u32 = 256u;
 const FLAG_RECEIVE_SHADOW: u32 = 512u;
-const FLAG_IRIDESCENCE_MAP: u32 = 1024u;
+// How many lights of each kind a frame carries (renderer.rs `MAX_*_LIGHTS`).
+const MAX_LIGHTS_PER_KIND: u32 = 8u;
+// The draw is in the encoded-blend pass: a `Unorm` view of an sRGB target, so
+// the output is encoded here and the hardware blends encoded values, as
+// three.js's canvas does (renderer.rs `encoded_pass`).
+const FLAG_ENCODED_OUT: u32 = 8192u;
+// three.js `toneMapped: false`: `apply_tone_mapping` passes the colour through.
+const FLAG_NO_TONE_MAP: u32 = 16384u;
+const FLAG_OPAQUE_OUT: u32 = 32768u;
+// A transmissive physical material in a blended glass mode (`Glass`, `Oit`):
+// what is behind arrives through blending, not from the transmission capture
+// (renderer.rs `FLAG_BLENDED_GLASS`).
+const FLAG_BLENDED_GLASS: u32 = 65536u;
+// A transmissive physical caster (renderer.rs `FLAG_SHADOW_TRANSMITS`).
+const FLAG_SHADOW_TRANSMITS: u32 = 131072u;
+// Which half of a `Glass`-mode blend this pipeline draws (renderer.rs
+// `make_glass_pipeline`). The glass is `behind · T + L`, and one alpha cannot
+// say that: it tints by its mean, and a highlight divided by a small alpha to
+// survive the blend clamps first. So it is two draws — 1: the tint, `T` per
+// channel, multiplied over what is behind; 2: the light, `L`, added. 0 is
+// every other pipeline.
+override GLASS_OUTPUT : u32 = 0u;
 
 const PI : f32 = 3.14159265358979;
 
@@ -1075,16 +1320,9 @@ struct FrameUniforms {
     view            : mat4x4<f32>,
     projection      : mat4x4<f32>,
     view_proj       : mat4x4<f32>,
-    shadow_vp       : mat4x4<f32>,
-    spot_shadow_vp  : mat4x4<f32>,
-    /// View-projection matrix for the cube face currently being rendered to.
-    cube_face_vp    : mat4x4<f32>,
     camera_position : vec4<f32>,
     ambient         : vec4<f32>,
     light_counts    : vec4<u32>,
-    /// x: dir-shadow on, y: dir bias, z: spot-shadow on, w: spot bias
-    shadow_params   : vec4<f32>,
-    point_shadow_pos: vec4<f32>,
     /// x: tone-mapping mode (0 none, 1 linear, 2 ACES), y: exposure, z: IBL on,
     /// w: linear framebuffer (1 = HalfFloat RT)
     tone_mapping_exposure : vec4<f32>,
@@ -1096,15 +1334,51 @@ struct FrameUniforms {
     viewport_size   : vec4<f32>,
     /// CubeUV PMREM: x/y = texel size, z = max mip, w = 1 when CubeUV env is active.
     env_map_params  : vec4<f32>,
-    dir_lights      : array<DirLight,   4>,
-    point_lights    : array<PointLight, 4>,
-    spot_lights     : array<SpotLight,  4>,
-    hemi_lights     : array<HemiLight,  4>,
-    rect_lights     : array<RectLight,  4>,
-    /// x: rect-area light count (yzw reserved).
+    dir_lights      : array<DirLight,   8>,
+    point_lights    : array<PointLight, 8>,
+    spot_lights     : array<SpotLight,  8>,
+    hemi_lights     : array<HemiLight,  8>,
+    rect_lights     : array<RectLight,  8>,
+    /// x: rect-area light count, y: 1 for geometric specular antialiasing
+    /// (`Renderer::set_specular_antialiasing`), z: 1 for reflective
+    /// transparency (`Renderer::set_reflective_transparency`), w: the
+    /// transmission capture's mip count (0 = none).
     light_counts2   : vec4<u32>,
-    /// One texel of each shadow map: x directional, y spot.
-    shadow_texel    : vec4<f32>,
+    /// x: shadow records in use.
+    shadow_info     : vec4<u32>,
+    /// One record per shadow-casting light, which names it in its own
+    /// `color.w` (record + 1; 0 for a light that casts none).
+    shadows         : array<ShadowRecord, 16>,
+};
+
+/// A shadow-casting light's shadow (renderer.rs `ShadowRecordGpu`).
+struct ShadowRecord {
+    /// x: kind (0 directional, 1 spot, 2 point); y: its first layer in the
+    /// kind's map array; z: cascades (directional; 1 otherwise); w: filter
+    /// (`ShadowType`: 0 basic, 1 PCF, 2 soft PCF, 3 PCSS).
+    info   : vec4<u32>,
+    /// x: depth bias; y: normal bias, world units; z: the filter disc's
+    /// radius in map uv (or direction units for a point light); w: one
+    /// texel in the same units.
+    params : vec4<f32>,
+    /// Directional: each cascade's far edge as a view depth. Point: xyz the
+    /// light's position, w its radius.
+    extra  : vec4<f32>,
+    /// PCSS (`shadow_pcss`): x the blocker search's radius in the filter's
+    /// units; y, z a spot's shadow camera near and far; w the light's size
+    /// as the penumbra's scale.
+    pcss   : vec4<f32>,
+    /// World → light clip, a cascade each (directional), or the light's.
+    vp     : array<mat4x4<f32>, 4>,
+};
+
+/// What a shadow pass draws with (renderer.rs `ShadowPassGpu`), at a
+/// dynamic offset per pass: its light's matrix — one cascade, the spot's
+/// frustum, or one face of a point light's cube — and for a point light its
+/// position and radius.
+struct ShadowPass {
+    vp    : mat4x4<f32>,
+    light : vec4<f32>,
 };
 
 struct MeshUniforms {
@@ -1116,7 +1390,7 @@ struct MeshUniforms {
     /// x: shininess (phong) / depth_near, y: opacity / depth_far,
     /// z: roughness, w: metalness
     params        : vec4<f32>,
-    /// x: ao_intensity, y: normal_scale.x, z: normal_scale.y, w: toon_steps
+    /// x: ao_intensity, y: normal_scale.x, z: normal_scale.y, w: unused
     params2       : vec4<f32>,
     /// Physical material: x: clearcoat, y: clearcoat_roughness, z: ior, w: transmission
     params3       : vec4<f32>,
@@ -1148,21 +1422,216 @@ struct MeshUniforms {
     params14      : vec4<f32>,
     /// x: material kind, y: texture-slot flags
     flags         : vec4<u32>,
+    /// three.js morph targets: x target count (0 = none), y
+    /// `morphTargetBaseInfluence`, z texels per vertex in `morph_tex`, w flags
+    /// (1 normals blend, 2 colours blend, 4 colour has alpha, 8 positions
+    /// blend).
+    morph         : vec4<f32>,
+    /// `morphTargetInfluences`, four to a vector (`MAX_MORPH_TARGETS` = 64).
+    morph_weights : array<vec4<f32>, 16>,
+    /// `Object3D::clip_plane`: xyz normal, w constant; all zero = no plane.
+    clip_plane    : vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> frame : FrameUniforms;
+// The shadow passes' own group 0 (renderer.rs `shadow_pass_bgl`).
+@group(0) @binding(3) var<uniform> shadow_pass : ShadowPass;
+
+/// three.js's `clipping_planes_fragment`, for one world-space plane: drop the
+/// fragment on the plane's negative side. Every colour entry point calls this
+/// first, so lines, points and transparent passes clip exactly as meshes do.
+fn clip_fragment(world_pos : vec3<f32>) {
+    let pl = mesh.clip_plane;
+    if (any(pl.xyz != vec3<f32>(0.0)) && dot(pl.xyz, world_pos) + pl.w < 0.0) {
+        discard;
+    }
+}
+// three.js's transmission render target (`transmissionSamplerMap`): the
+// opaque scene drawn linear and untone-mapped, mipmapped — a 1×1 stand-in
+// while the capture itself is drawn. Sampled trilinearly, clamped.
+@group(0) @binding(1) var transmission_tex : texture_2d<f32>;
+@group(0) @binding(2) var transmission_sampler : sampler;
 @group(1) @binding(0) var<uniform> mesh  : MeshUniforms;
 
-@group(2) @binding(0) var albedo_tex     : texture_2d<f32>;
-@group(2) @binding(1) var normal_tex     : texture_2d<f32>;
-@group(2) @binding(2) var roughness_tex  : texture_2d<f32>;
-@group(2) @binding(3) var metalness_tex  : texture_2d<f32>;
-@group(2) @binding(4) var ao_tex         : texture_2d<f32>;
-@group(2) @binding(5) var emissive_tex   : texture_2d<f32>;
-@group(2) @binding(6) var matcap_tex     : texture_2d<f32>;
-@group(2) @binding(7) var tex_sampler    : sampler;
-@group(2) @binding(8) var iridescence_thickness_tex : texture_2d<f32>;
-@group(2) @binding(9) var displacement_tex : texture_2d<f32>;
+// The material's maps: declarations and `sample_*` accessors, generated per
+// material feature set — see `shader_source_with_maps` below.
+//@@MATERIAL_MAPS@@
+// three.js's morph-target texture (`WebGLMorphtargets`): one layer per target,
+// `morph.z` texels per vertex — position, then normal, then colour — laid out
+// row-major over the layer's width. Read with `textureLoad` only, so it is an
+// unfilterable float texture and lowers to `texelFetch` on WebGL2, which has
+// no storage buffers to hold it any other way.
+@group(2) @binding(10) var morph_tex : texture_2d_array<f32>;
+
+// The geometry's extra uv sets — three.js's `uv1`, `uv2`, `uv3` — two texels
+// a vertex, `(uv1, uv2)` and `(uv3, 0, 0)`, read by vertex index: a texture,
+// so the interleaved vertex layout stays as `Renderer::vertex_buffer`
+// publishes it. `mesh.morph.w` bit 32 says the geometry has them; without,
+// they read zero, as an attribute a geometry lacks does in three.js.
+@group(2) @binding(8) var uv_sets_tex : texture_2d<f32>;
+
+struct UvSets {
+    uv12 : vec4<f32>,
+    uv3  : vec2<f32>,
+};
+
+fn vertex_uv_sets(vid : u32) -> UvSets {
+    var out : UvSets;
+    if ((u32(mesh.morph.w) & 32u) == 0u) {
+        return out;
+    }
+    let width = textureDimensions(uv_sets_tex).x;
+    let t0 = vid * 2u;
+    let t1 = t0 + 1u;
+    out.uv12 = textureLoad(uv_sets_tex, vec2<i32>(i32(t0 % width), i32(t0 / width)), 0);
+    out.uv3 = textureLoad(uv_sets_tex, vec2<i32>(i32(t1 % width), i32(t1 / width)), 0).xy;
+    return out;
+}
+
+// The uv sets at this vertex or fragment, for a map whose `channel` names
+// one (`map_xform` in a material variant's prelude).
+var<private> map_uv12 : vec4<f32>;
+var<private> map_uv3 : vec2<f32>;
+
+/// three.js `Texture.channel`: `uv` (0), `uv1`, `uv2` or `uv3`.
+fn map_uv_set(channel : f32, uv : vec2<f32>) -> vec2<f32> {
+    if (channel < 0.5) {
+        return uv;
+    }
+    if (channel < 1.5) {
+        return map_uv12.xy;
+    }
+    if (channel < 2.5) {
+        return map_uv12.zw;
+    }
+    return map_uv3;
+}
+
+/// Read vertex `vid`'s uv sets for the maps of this vertex stage and hand
+/// them on to the fragment stage.
+fn pass_uv_sets(vid : u32, out : ptr<function, VsOut>) {
+    let sets = vertex_uv_sets(vid);
+    map_uv12 = sets.uv12;
+    map_uv3 = sets.uv3;
+    (*out).uv12 = sets.uv12;
+    (*out).uv3 = sets.uv3;
+}
+
+/// three.js `getMorph(vertexIndex, morphTargetIndex, offset)`.
+fn morph_fetch(vid : u32, t : u32, slot : u32) -> vec4<f32> {
+    let texel = vid * u32(mesh.morph.z) + slot;
+    let width = textureDimensions(morph_tex).x;
+    return textureLoad(morph_tex, vec2<i32>(i32(texel % width), i32(texel / width)), i32(t), 0);
+}
+
+/// Whether this draw's morph influences are per instance (three.js's
+/// `USE_INSTANCING_MORPH`, an `InstancedMesh` with a `morphTexture`): then
+/// the layer after the last target holds one row per instance —
+/// `morphTargetBaseInfluence`, then the influences — one float a texel.
+fn morph_per_instance() -> bool {
+    return (u32(mesh.morph.w) & 16u) != 0u;
+}
+
+/// One float of the per-instance rows (`morphinstance_vertex.glsl`'s
+/// `texelFetch(morphTexture, ivec2(k, gl_InstanceID))`).
+fn morph_instance_texel(iid : u32, k : u32) -> f32 {
+    let count = u32(mesh.morph.x);
+    let texel = iid * (count + 1u) + k;
+    let width = textureDimensions(morph_tex).x;
+    return textureLoad(morph_tex, vec2<i32>(i32(texel % width), i32(texel / width)), i32(count), 0).x;
+}
+
+/// `morphTargetBaseInfluence` for instance `iid`.
+fn morph_base(iid : u32) -> f32 {
+    if (morph_per_instance()) {
+        return morph_instance_texel(iid, 0u);
+    }
+    return mesh.morph.y;
+}
+
+/// `morphTargetInfluences[i]` for instance `iid`.
+fn morph_weight(i : u32, iid : u32) -> f32 {
+    if (morph_per_instance()) {
+        return morph_instance_texel(iid, i + 1u);
+    }
+    return mesh.morph_weights[i / 4u][i % 4u];
+}
+
+/// `base · v + Σ wᵢ · targetᵢ[slot]` — `morphtarget_vertex.glsl` (slot 0) and
+/// `morphnormal_vertex.glsl` (slot 1) — with instance `iid`'s influences.
+fn morph_blend3_instance(v : vec3<f32>, vid : u32, iid : u32, slot : u32) -> vec3<f32> {
+    let count = u32(mesh.morph.x);
+    if (count == 0u) {
+        return v;
+    }
+    var out = v * morph_base(iid);
+    for (var i = 0u; i < count; i = i + 1u) {
+        let w = morph_weight(i, iid);
+        if (w != 0.0) {
+            out = out + morph_fetch(vid, i, slot).xyz * w;
+        }
+    }
+    return out;
+}
+
+fn morph_blend3(v : vec3<f32>, vid : u32, slot : u32) -> vec3<f32> {
+    return morph_blend3_instance(v, vid, 0u, slot);
+}
+
+/// three.js `#include <morphtarget_vertex>` for vertex `vid` (the
+/// geometry's own index, `gl_VertexID`) of instance `iid`. A custom vertex
+/// stage calls this (or [`morph_position`] outside instancing, or
+/// `standard_vertex_morphed`) to morph a `ShaderMaterial`'s geometry.
+fn morph_position_instance(p : vec3<f32>, vid : u32, iid : u32) -> vec3<f32> {
+    if ((u32(mesh.morph.w) & 8u) == 0u) {
+        return p;
+    }
+    return morph_blend3_instance(p, vid, iid, 0u);
+}
+
+/// three.js `#include <morphnormal_vertex>`, per instance.
+fn morph_normal_instance(n : vec3<f32>, vid : u32, iid : u32) -> vec3<f32> {
+    if ((u32(mesh.morph.w) & 1u) == 0u) {
+        return n;
+    }
+    return morph_blend3_instance(n, vid, iid, 1u);
+}
+
+/// `morphcolor_vertex.glsl`, per instance: rgb for a 3-component colour, all
+/// four channels for a 4-component one.
+fn morph_color_instance(c : vec4<f32>, vid : u32, iid : u32) -> vec4<f32> {
+    let count = u32(mesh.morph.x);
+    let flags = u32(mesh.morph.w);
+    if (count == 0u || (flags & 2u) == 0u) {
+        return c;
+    }
+    var out = c * morph_base(iid);
+    for (var i = 0u; i < count; i = i + 1u) {
+        let w = morph_weight(i, iid);
+        if (w != 0.0) {
+            out = out + morph_fetch(vid, i, 2u) * w;
+        }
+    }
+    if ((flags & 4u) == 0u) {
+        return vec4<f32>(out.rgb, c.a);
+    }
+    return out;
+}
+
+/// three.js `#include <morphtarget_vertex>`: vertex `vid`'s position, morphed.
+fn morph_position(p : vec3<f32>, vid : u32) -> vec3<f32> {
+    return morph_position_instance(p, vid, 0u);
+}
+
+/// three.js `#include <morphnormal_vertex>`.
+fn morph_normal(n : vec3<f32>, vid : u32) -> vec3<f32> {
+    return morph_normal_instance(n, vid, 0u);
+}
+
+/// three.js `#include <morphcolor_vertex>`.
+fn morph_color(c : vec4<f32>, vid : u32) -> vec4<f32> {
+    return morph_color_instance(c, vid, 0u);
+}
 
 /// How much of the sun a sphere leaves visible from this point.
 ///
@@ -1276,7 +1745,7 @@ fn cloud_shadow(local_p : vec3<f32>, sun_world : vec3<f32>) -> f32 {
     //   position = (-cos(phi)·sin(theta), cos(theta), sin(phi)·sin(theta))
     let u = atan2(q.z, -q.x) / (2.0 * PI) + mesh.params10.z;
     let v = 1.0 - acos(clamp(q.y, -1.0, 1.0)) / PI;
-    let cover = textureSample(matcap_tex, tex_sampler, vec2<f32>(u, v)).a;
+    let cover = sample_cloud(vec2<f32>(u, v)).a;
     return 1.0 - clamp(cover, 0.0, 1.0) * clamp(mesh.params10.y, 0.0, 1.0);
 }
 
@@ -1291,21 +1760,36 @@ fn transform_uv(uv : vec2<f32>) -> vec2<f32> {
 }
 
 fn apply_displacement(position : vec3<f32>, normal : vec3<f32>, uv : vec2<f32>) -> vec3<f32> {
-    if ((mesh.flags.y & FLAG_DISPLACEMENT_MAP) == 0u) {
+    if (!HAS_DISPLACEMENT_MAP) {
         return position;
     }
-    let h = textureSampleLevel(displacement_tex, tex_sampler, uv, 0.0).r;
+    let h = sample_displacement_map(uv).r;
     return position + normalize(normal) * (h * mesh.params8.x + mesh.params8.y);
 }
 
+// The environment a draw's image-based light reads — the scene's, or a
+// Standard/Physical material's own `envMap` — and how: `params` the PMREM
+// atlas's texel width and height, its top mip (or the plain cube's mip count)
+// and whether it is an atlas; `info.x` whether there is one at all,
+// `info.y` three.js's `envMapIntensity` (the material's with its own map,
+// `scene.environmentIntensity` with the scene's); `rot` the rows of
+// `envMapRotation` (or `scene.environmentRotation`).
+struct EnvUniforms {
+    params : vec4<f32>,
+    info   : vec4<f32>,
+    rot    : array<vec4<f32>, 3>,
+};
+@group(3) @binding(13) var<uniform> env_u : EnvUniforms;
 @group(3) @binding(0) var env_tex              : texture_cube<f32>;
 @group(3) @binding(1) var env_sampler          : sampler;
 @group(3) @binding(8) var env_cube_uv_tex      : texture_2d<f32>;
-@group(3) @binding(2) var shadow_tex           : texture_depth_2d;
+// One layer per shadow-casting light of the kind; six per point light, its
+// cube faces, looked up by `point_shadow_face` (WebGL2 has no cube arrays).
+@group(3) @binding(2) var shadow_tex           : texture_depth_2d_array;
 @group(3) @binding(3) var shadow_sampler       : sampler_comparison;
-@group(3) @binding(4) var spot_shadow_tex      : texture_depth_2d;
+@group(3) @binding(4) var spot_shadow_tex      : texture_depth_2d_array;
 @group(3) @binding(5) var spot_shadow_sampler  : sampler_comparison;
-@group(3) @binding(6) var point_shadow_tex     : texture_depth_cube;
+@group(3) @binding(6) var point_shadow_tex     : texture_depth_2d_array;
 @group(3) @binding(7) var point_shadow_sampler : sampler_comparison;
 // Screen-space glass: mipmapped capture of the opaque scene + its trilinear
 // sampler. Only read by fs_ss_glass; a 1×1 placeholder is bound otherwise.
@@ -1319,6 +1803,9 @@ fn apply_displacement(position : vec3<f32>, normal : vec3<f32>, uv : vec2<f32>) 
 // compiles everywhere. Depth arrives in `.r`.
 @group(3) @binding(11) var ss_depth_tex   : texture_2d<f32>;
 @group(3) @binding(12) var ss_back_depth_tex : texture_2d<f32>;
+// Each light's shadow on the refracting surface at this pixel, drawn by
+// `fs_glass_shadow` just before the refraction pass (see there).
+@group(3) @binding(15) var glass_shadow_tex : texture_2d<u32>;
 
 struct VsIn {
     @location(0) position : vec3<f32>,
@@ -1349,6 +1836,9 @@ struct VsOut {
     /// Object-space position, for shading that needs the body's own frame —
     /// the cloud-shadow shell intersection reads it.
     @location(8) local_pos      : vec3<f32>,
+    /// three.js `uv1` (xy) and `uv2` (zw), and `uv3`.
+    @location(9) uv12           : vec4<f32>,
+    @location(10) uv3           : vec2<f32>,
 };
 
 fn mirror_proj_uv(local_pos: vec3<f32>) -> vec4<f32> {
@@ -1389,59 +1879,128 @@ fn world_tangent(t : vec4<f32>) -> vec4<f32> {
 ///         return out;
 ///     }
 fn standard_vertex(in : VsIn) -> VsOut {
+    // A shader material binds no morph texture (its morph count is 0), so
+    // the vertex index is never read.
+    return standard_vertex_morphed(in, 0u);
+}
+
+/// `standard_vertex` with three.js's morph targets applied to vertex `vid`
+/// (the geometry's own index — `gl_VertexID` — which is what the morph
+/// texture is laid out by). Kept out of `VsIn` so a custom vertex stage can
+/// still declare `@builtin(vertex_index)` itself.
+fn standard_vertex_morphed(in : VsIn, vid : u32) -> VsOut {
     var out : VsOut;
+    pass_uv_sets(vid, &out);
     let uv = transform_uv(in.uv);
-    let local_p = apply_displacement(in.position, in.normal, uv);
+    // three.js order: `begin_vertex`, `morphtarget_vertex` (and the normal's
+    // `morphnormal_vertex`), then displacement along the morphed normal.
+    let morphed_p = morph_position(in.position, vid);
+    let morphed_n = morph_normal(in.normal, vid);
+    let local_p = apply_displacement(morphed_p, morphed_n, uv);
     let world_p = mesh.model * vec4<f32>(local_p, 1.0);
     out.world_pos = world_p.xyz;
     out.clip_pos = frame.view_proj * world_p;
     // Sky: pin near far plane (three.js sets gl_Position.z = gl_Position.w). WebGPU
     // depth is [0, 1] with Less compare vs a 1.0 clear — z must stay strictly below w.
     if (mesh.flags.x == MAT_SKY) {
-        out.clip_pos.z = out.clip_pos.w * 0.999;
+        // Reversed depth (camera_position.w) puts the far plane at 0.
+        out.clip_pos.z = out.clip_pos.w * select(0.999, 0.001, frame.camera_position.w > 0.5);
     }
     out.clip_zw = out.clip_pos.zw;
-    let n4 = mesh.normal_matrix * vec4<f32>(in.normal, 0.0);
+    let n4 = mesh.normal_matrix * vec4<f32>(morphed_n, 0.0);
     out.world_normal = n4.xyz;
     out.uv = uv;
     let view_p = frame.view * world_p;
     out.view_z = -view_p.z;
-    out.vertex_color = in.color;
-    out.proj_uv = mirror_proj_uv(in.position);
+    out.vertex_color = morph_color(in.color, vid);
+    out.proj_uv = mirror_proj_uv(morphed_p);
     out.world_tangent = world_tangent(in.tangent);
     out.local_pos = local_p;
     return out;
 }
 
 @vertex
-fn vs_main(in : VsIn) -> VsOut {
-    return standard_vertex(in);
+fn vs_main(in : VsIn, @builtin(vertex_index) vid : u32) -> VsOut {
+    return standard_vertex_morphed(in, vid);
+}
+
+// three.js `points_vert`: a `PointsMaterial` point, one instance per vertex,
+// expanded here to a quad — WebGPU has no point size. `mesh.params.x` is the
+// size in device pixels; with `params.w` set and a perspective camera it
+// attenuates as three.js's does, `size × (height / 2) / −z`. The quad's uv is
+// three.js's `(gl_PointCoord.x, 1 − gl_PointCoord.y)`, through the map's
+// transform (`uvTransform`).
+@vertex
+fn vs_points(in : VsIn, @builtin(vertex_index) corner : u32, @builtin(instance_index) point : u32) -> VsOut {
+    var out = standard_vertex_morphed(in, point);
+    var corners = array<vec2<f32>, 6>(
+        vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, -1.0), vec2<f32>(1.0, 1.0),
+        vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, 1.0), vec2<f32>(-1.0, 1.0),
+    );
+    let c = corners[corner];
+    var size = mesh.params.x;
+    let perspective = frame.projection[2][3] != 0.0;
+    if (mesh.params.w > 0.5 && perspective) {
+        size = size * (frame.viewport_size.y * 0.5) / max(out.view_z, 1e-4);
+    }
+    // Half the size in pixels, as NDC (2 / viewport per pixel), times w.
+    out.clip_pos = vec4<f32>(
+        out.clip_pos.xy + c * size / frame.viewport_size.xy * out.clip_pos.w,
+        out.clip_pos.zw,
+    );
+    out.clip_zw = out.clip_pos.zw;
+    out.uv = transform_uv(c * 0.5 + vec2<f32>(0.5));
+    return out;
+}
+
+// A shadow caster's clip position and map uv. The depth-only pipelines ignore
+// the uv; the cut-out ones (`fs_shadow_cut`) test the map's alpha with it.
+struct ShadowOut {
+    @builtin(position) position : vec4<f32>,
+    @location(0)       uv       : vec2<f32>,
+};
+
+fn shadow_out(position : vec4<f32>, uv : vec2<f32>) -> ShadowOut {
+    var o : ShadowOut;
+    o.position = position;
+    o.uv = transform_uv(uv);
+    return o;
 }
 
 @vertex
-fn vs_shadow(in : VsIn) -> @builtin(position) vec4<f32> {
+fn vs_shadow(in : VsIn, @builtin(vertex_index) vid : u32) -> ShadowOut {
     // Displaced geometry has to cast the shadow its displaced silhouette
-    // implies, or the terrain and its shadow disagree.
-    return frame.shadow_vp * mesh.model
-        * vec4<f32>(apply_displacement(in.position, in.normal, transform_uv(in.uv)), 1.0);
+    // implies, or the terrain and its shadow disagree — and a morphed one
+    // the shadow of its current shape.
+    let p = morph_position(in.position, vid);
+    let n = morph_normal(in.normal, vid);
+    return shadow_out(
+        shadow_pass.vp * mesh.model * vec4<f32>(apply_displacement(p, n, transform_uv(in.uv)), 1.0),
+        in.uv,
+    );
 }
 
 @vertex
-fn vs_shadow_spot(in : VsIn) -> @builtin(position) vec4<f32> {
-    return frame.spot_shadow_vp * mesh.model * vec4<f32>(in.position, 1.0);
+fn vs_shadow_spot(in : VsIn, @builtin(vertex_index) vid : u32) -> ShadowOut {
+    return shadow_out(
+        shadow_pass.vp * mesh.model * vec4<f32>(morph_position(in.position, vid), 1.0),
+        in.uv,
+    );
 }
 
 struct ShadowPointOut {
     @builtin(position) position : vec4<f32>,
     @location(0)       world    : vec3<f32>,
+    @location(1)       uv       : vec2<f32>,
 };
 
 @vertex
-fn vs_shadow_point(in : VsIn) -> ShadowPointOut {
-    let world = mesh.model * vec4<f32>(in.position, 1.0);
+fn vs_shadow_point(in : VsIn, @builtin(vertex_index) vid : u32) -> ShadowPointOut {
+    let world = mesh.model * vec4<f32>(morph_position(in.position, vid), 1.0);
     var o : ShadowPointOut;
-    o.position = frame.cube_face_vp * world;
+    o.position = shadow_pass.vp * world;
     o.world = world.xyz;
+    o.uv = transform_uv(in.uv);
     return o;
 }
 
@@ -1454,6 +2013,7 @@ struct SkinnedVsIn {
     @location(4) joints   : vec4<f32>,
     @location(5) weights  : vec4<f32>,
     @location(8) tangent  : vec4<f32>,
+    @builtin(vertex_index) vertex_index : u32,
 };
 
 // A fixed uniform array, not a runtime-sized storage buffer.
@@ -1466,31 +2026,87 @@ const MAX_BONES : u32 = 128u;
 struct Bones { m : array<mat4x4<f32>, 128> }
 @group(1) @binding(1) var<uniform> bone_matrices : Bones;
 
-@vertex
-fn vs_skinned(in : SkinnedVsIn) -> VsOut {
-    var out : VsOut;
-    let j = vec4<u32>(u32(in.joints.x), u32(in.joints.y), u32(in.joints.z), u32(in.joints.w));
+/// `Σ wᵢ · boneMatrixᵢ` for one vertex.
+fn skin_matrix(joints : vec4<f32>, weights : vec4<f32>) -> mat4x4<f32> {
+    let j = vec4<u32>(u32(joints.x), u32(joints.y), u32(joints.z), u32(joints.w));
     // Clamped, because a fixed array has no bounds check to fall back on and a
     // rig with more bones than the limit would read past the end.
     let last = MAX_BONES - 1u;
-    let skin = bone_matrices.m[min(j.x, last)] * in.weights.x
-             + bone_matrices.m[min(j.y, last)] * in.weights.y
-             + bone_matrices.m[min(j.z, last)] * in.weights.z
-             + bone_matrices.m[min(j.w, last)] * in.weights.w;
+    return bone_matrices.m[min(j.x, last)] * weights.x
+         + bone_matrices.m[min(j.y, last)] * weights.y
+         + bone_matrices.m[min(j.z, last)] * weights.z
+         + bone_matrices.m[min(j.w, last)] * weights.w;
+}
+
+/// A skinned vertex in world space; see `vs_skinned`.
+fn skinned_world(in : SkinnedVsIn) -> vec4<f32> {
+    let p = morph_position(in.position, in.vertex_index);
+    let n = morph_normal(in.normal, in.vertex_index);
+    let skinned = skin_matrix(in.joints, in.weights)
+        * vec4<f32>(apply_displacement(p, n, transform_uv(in.uv)), 1.0);
+    return vec4<f32>(skinned.xyz + (1.0 - skinned.w) * mesh.model[3].xyz, 1.0);
+}
+
+// The shadow passes for a skinned caster: the posed (and morphed) mesh, as
+// the colour pass draws it — not the bind pose.
+@vertex
+fn vs_shadow_skinned(in : SkinnedVsIn) -> ShadowOut {
+    return shadow_out(shadow_pass.vp * skinned_world(in), in.uv);
+}
+
+@vertex
+fn vs_shadow_spot_skinned(in : SkinnedVsIn) -> ShadowOut {
+    return shadow_out(shadow_pass.vp * skinned_world(in), in.uv);
+}
+
+@vertex
+fn vs_shadow_point_skinned(in : SkinnedVsIn) -> ShadowPointOut {
+    let world = skinned_world(in);
+    var o : ShadowPointOut;
+    o.position = shadow_pass.vp * world;
+    o.world = world.xyz;
+    o.uv = transform_uv(in.uv);
+    return o;
+}
+
+@vertex
+fn vs_skinned(in : SkinnedVsIn) -> VsOut {
+    var out : VsOut;
+    pass_uv_sets(in.vertex_index, &out);
+    let skin = skin_matrix(in.joints, in.weights);
     let skin_uv = transform_uv(in.uv);
-    let world_p = skin * vec4<f32>(apply_displacement(in.position, in.normal, skin_uv), 1.0);
+    // Morph targets first, as three.js runs `morphtarget_vertex` before
+    // `skinning_vertex`.
+    let morphed_p = morph_position(in.position, in.vertex_index);
+    let morphed_n = morph_normal(in.normal, in.vertex_index);
+    // three.js `skinning_vertex.glsl` with an identity `bindMatrix` and
+    // `bindMatrixInverse` = inverse(model) (attached bind mode):
+    //   skinned     = skin * vec4(position, 1)        (w = the weight sum)
+    //   transformed = (inverse(model) * skinned).xyz
+    //   world       = model * vec4(transformed, 1)
+    // which is `skinned.xyz + (1 - skinned.w) * translation(model)` — the
+    // model cancels when the weights sum to one, and the leftover is what
+    // three.js draws when they do not. See `SkinnedMesh`; the raycaster, the
+    // Metal backend and the path tracer compute the same.
+    let skinned = skin * vec4<f32>(apply_displacement(morphed_p, morphed_n, skin_uv), 1.0);
+    let world_p = vec4<f32>(skinned.xyz + (1.0 - skinned.w) * mesh.model[3].xyz, 1.0);
     out.world_pos = world_p.xyz;
     out.clip_pos = frame.view_proj * world_p;
     out.clip_zw = out.clip_pos.zw;
-    let n4 = skin * vec4<f32>(in.normal, 0.0);
-    out.world_normal = n4.xyz;
+    // `skinnormal_vertex.glsl`: objectNormal = inverse(model) * skin * n,
+    // then the normal matrix. inverse(model)'s linear part is the transpose
+    // of the normal matrix (the inverse transpose), so for a rigid model the
+    // two cancel and this is `skin * n`.
+    let skin_n = (skin * vec4<f32>(morphed_n, 0.0)).xyz;
+    let object_n = (transpose(mesh.normal_matrix) * vec4<f32>(skin_n, 0.0)).xyz;
+    out.world_normal = (mesh.normal_matrix * vec4<f32>(object_n, 0.0)).xyz;
     out.uv = skin_uv;
     let view_p = frame.view * world_p;
     out.view_z = -view_p.z;
-    out.vertex_color = in.color;
-    out.proj_uv = mirror_proj_uv(in.position);
+    out.vertex_color = morph_color(in.color, in.vertex_index);
+    out.proj_uv = mirror_proj_uv(morphed_p);
     out.world_tangent = world_tangent(in.tangent);
-    out.local_pos = in.position;
+    out.local_pos = morphed_p;
     return out;
 }
 
@@ -1507,28 +2123,148 @@ struct InstancedVsIn {
     @location(9) itint    : vec4<f32>,
 };
 
+// The shadow passes for an `InstancedMesh` caster: each instance, morphed
+// by its own row of the morph texture where it has one, as `vs_instanced`
+// draws it — three.js renders an instanced mesh into the shadow map with the
+// instanced depth material.
+fn instanced_shadow_world(in : InstancedVsIn, vid : u32, iid : u32, displace : bool) -> vec4<f32> {
+    let model = mesh.model * mat4x4<f32>(in.imat0, in.imat1, in.imat2, in.imat3);
+    var p = morph_position_instance(in.position, vid, iid);
+    if (displace) {
+        let n = morph_normal_instance(in.normal, vid, iid);
+        p = apply_displacement(p, n, transform_uv(in.uv));
+    }
+    return model * vec4<f32>(p, 1.0);
+}
+
 @vertex
-fn vs_instanced(in : InstancedVsIn) -> VsOut {
+fn vs_shadow_instanced(
+    in : InstancedVsIn,
+    @builtin(vertex_index) vid : u32,
+    @builtin(instance_index) iid : u32,
+) -> ShadowOut {
+    return shadow_out(shadow_pass.vp * instanced_shadow_world(in, vid, iid, true), in.uv);
+}
+
+@vertex
+fn vs_shadow_spot_instanced(
+    in : InstancedVsIn,
+    @builtin(vertex_index) vid : u32,
+    @builtin(instance_index) iid : u32,
+) -> ShadowOut {
+    return shadow_out(shadow_pass.vp * instanced_shadow_world(in, vid, iid, false), in.uv);
+}
+
+@vertex
+fn vs_shadow_point_instanced(
+    in : InstancedVsIn,
+    @builtin(vertex_index) vid : u32,
+    @builtin(instance_index) iid : u32,
+) -> ShadowPointOut {
+    let world = instanced_shadow_world(in, vid, iid, false);
+    var o : ShadowPointOut;
+    o.position = shadow_pass.vp * world;
+    o.world = world.xyz;
+    o.uv = transform_uv(in.uv);
+    return o;
+}
+
+/// `vs_instanced` as a plain function, as `standard_vertex` is `vs_main`'s:
+/// a custom vertex stage on an `InstancedMesh` starts from it.
+fn standard_vertex_instanced(in : InstancedVsIn, vid : u32, iid : u32) -> VsOut {
     var out : VsOut;
+    pass_uv_sets(vid, &out);
     let instance_mat = mat4x4<f32>(in.imat0, in.imat1, in.imat2, in.imat3);
     let model = mesh.model * instance_mat;
     let uv = transform_uv(in.uv);
-    let world_p = model * vec4<f32>(apply_displacement(in.position, in.normal, uv), 1.0);
+    // three.js order: morph targets (shared influences, or this instance's
+    // row of the morph texture), then displacement, then the instance matrix.
+    let morphed_p = morph_position_instance(in.position, vid, iid);
+    let morphed_n = morph_normal_instance(in.normal, vid, iid);
+    let world_p = model * vec4<f32>(apply_displacement(morphed_p, morphed_n, uv), 1.0);
     out.world_pos = world_p.xyz;
     out.clip_pos = frame.view_proj * world_p;
     out.clip_zw = out.clip_pos.zw;
-    let n4 = mesh.normal_matrix * vec4<f32>(in.normal, 0.0);
+    // `defaultnormal_vertex.glsl` under USE_INSTANCING: the instance's linear
+    // part, divided by each column's squared length (so a scaled instance
+    // keeps its normals perpendicular), then the mesh's normal matrix.
+    let im = mat3x3<f32>(in.imat0.xyz, in.imat1.xyz, in.imat2.xyz);
+    let inst_n = im * (morphed_n / vec3<f32>(dot(im[0], im[0]), dot(im[1], im[1]), dot(im[2], im[2])));
+    let n4 = mesh.normal_matrix * vec4<f32>(inst_n, 0.0);
     out.world_normal = n4.xyz;
     out.uv = uv;
     let view_p = frame.view * world_p;
     out.view_z = -view_p.z;
     // Per-instance tint multiplies the mesh's own vertex colour, so one
     // instanced mesh can carry a whole palette.
-    out.vertex_color = in.color * in.itint;
-    out.proj_uv = mirror_proj_uv(in.position);
+    out.vertex_color = morph_color_instance(in.color, vid, iid) * in.itint;
+    out.proj_uv = mirror_proj_uv(morphed_p);
     out.world_tangent = world_tangent(in.tangent);
-    out.local_pos = in.position;
+    out.local_pos = morphed_p;
     return out;
+}
+
+@vertex
+fn vs_instanced(
+    in : InstancedVsIn,
+    @builtin(vertex_index) vid : u32,
+    @builtin(instance_index) iid : u32,
+) -> VsOut {
+    return standard_vertex_instanced(in, vid, iid);
+}
+
+/// What a `ShaderMaterial` on an `InstancedMesh` reads: the instanced
+/// inputs, plus the mesh's two per-instance custom columns
+/// (`InstancedMesh::set_custom`), each zero-padded to a `vec4`. A custom
+/// vertex stage there is
+///
+///     @vertex
+///     fn vs_custom(in: InstancedCustomIn, @builtin(vertex_index) vid: u32,
+///                  @builtin(instance_index) iid: u32) -> VsOut {
+///         var out = standard_vertex_instanced(instanced_in(in), vid, iid);
+///         out.vertex_color = vec4<f32>(in.icustom0.rgb, 1.0);
+///         return out;
+///     }
+struct InstancedCustomIn {
+    @location(0) position : vec3<f32>,
+    @location(1) normal   : vec3<f32>,
+    @location(2) uv       : vec2<f32>,
+    @location(3) color    : vec4<f32>,
+    @location(4) imat0    : vec4<f32>,
+    @location(5) imat1    : vec4<f32>,
+    @location(6) imat2    : vec4<f32>,
+    @location(7) imat3    : vec4<f32>,
+    @location(8) tangent  : vec4<f32>,
+    @location(9) itint    : vec4<f32>,
+    @location(10) icustom0 : vec4<f32>,
+    @location(11) icustom1 : vec4<f32>,
+};
+
+/// The standard instanced inputs out of `InstancedCustomIn`.
+fn instanced_in(in : InstancedCustomIn) -> InstancedVsIn {
+    var o : InstancedVsIn;
+    o.position = in.position;
+    o.normal = in.normal;
+    o.uv = in.uv;
+    o.color = in.color;
+    o.imat0 = in.imat0;
+    o.imat1 = in.imat1;
+    o.imat2 = in.imat2;
+    o.imat3 = in.imat3;
+    o.tangent = in.tangent;
+    o.itint = in.itint;
+    return o;
+}
+
+/// The vertex entry of a `ShaderMaterial` on an `InstancedMesh` that brings
+/// no vertex stage of its own.
+@vertex
+fn vs_instanced_custom(
+    in : InstancedCustomIn,
+    @builtin(vertex_index) vid : u32,
+    @builtin(instance_index) iid : u32,
+) -> VsOut {
+    return standard_vertex_instanced(instanced_in(in), vid, iid);
 }
 
 @vertex
@@ -1536,14 +2272,21 @@ fn vs_sprite(in : VsIn) -> VsOut {
     var out : VsOut;
     let center_world = vec4<f32>(mesh.model[3].xyz, 1.0);
     let center_view = frame.view * center_world;
-    let sx = length(mesh.model[0].xyz);
-    let sy = length(mesh.model[1].xyz);
-    let view_pos = vec4<f32>(
-        center_view.x + in.position.x * sx,
-        center_view.y + in.position.y * sy,
-        center_view.z,
-        1.0,
-    );
+    // three.js `sprite_vert`. `params8` holds (center - 0.5, _, rotation)
+    // and `params13.x` is 1 with size attenuation off. The raycaster builds
+    // the same quad (`Raycaster::raycast_sprite`).
+    var scale = vec2<f32>(length(mesh.model[0].xyz), length(mesh.model[1].xyz));
+    // A perspective projection's last column is (0, 0, -1, 0); the
+    // raycaster tells the two apart the same way.
+    if (mesh.params13.x > 0.5 && frame.projection[3][3] == 0.0) {
+        scale = scale * -center_view.z;
+    }
+    let aligned = (in.position.xy - mesh.params8.xy) * scale;
+    let rotation = mesh.params8.w;
+    let c = cos(rotation);
+    let s = sin(rotation);
+    let rotated = vec2<f32>(c * aligned.x - s * aligned.y, s * aligned.x + c * aligned.y);
+    let view_pos = vec4<f32>(center_view.xy + rotated, center_view.z, 1.0);
     out.clip_pos = frame.projection * view_pos;
     out.clip_zw = out.clip_pos.zw;
     out.world_pos = center_world.xyz;
@@ -1570,13 +2313,25 @@ fn punctual_attenuation(d : f32, max_d : f32, decay : f32) -> f32 {
     return att;
 }
 
+// three.js r165 `ACESFilmicToneMapping` (Stephen Hill's RRT + ODT fit, with
+// three.js's 1/0.6 pre-scale) on an already exposed colour. It used to be
+// Narkowicz's single-curve fit, which reads 0.267 for mid grey where three.js
+// reads 0.213 — a visibly brighter, more saturated picture than the reference.
 fn aces_tonemap(x : vec3<f32>) -> vec3<f32> {
-    let a = 2.51;
-    let b = 0.03;
-    let c = 2.43;
-    let d = 0.59;
-    let e = 0.14;
-    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), vec3<f32>(0.0), vec3<f32>(1.0));
+    let aces_input = mat3x3<f32>(
+        vec3<f32>(0.59719, 0.07600, 0.02840),
+        vec3<f32>(0.35458, 0.90834, 0.13383),
+        vec3<f32>(0.04823, 0.01566, 0.83777),
+    );
+    let aces_output = mat3x3<f32>(
+        vec3<f32>(1.60475, -0.10208, -0.00327),
+        vec3<f32>(-0.53108, 1.10813, -0.07276),
+        vec3<f32>(-0.07367, -0.00605, 1.07602),
+    );
+    let v = aces_input * (x / 0.6);
+    let a = v * (v + 0.0245786) - 0.000090537;
+    let b = v * (0.983729 * v + 0.4329510) + 0.238081;
+    return clamp(aces_output * (a / b), vec3<f32>(0.0), vec3<f32>(1.0));
 }
 
 fn gamma_to_linear(c : vec3<f32>) -> vec3<f32> { return pow(c, vec3<f32>(2.2)); }
@@ -1659,7 +2414,11 @@ fn agx_tonemap(c_in : vec3<f32>) -> vec3<f32> {
 // `framebuffer_encode(apply_tone_mapping(hdr))`, which is exactly what the
 // built-in fragment does — otherwise a custom surface is the one thing in the
 // frame that does not respond to `Renderer::set_tone_mapping`.
+//
+// A material with `toneMapped: false` (FLAG_NO_TONE_MAP) is left alone, as
+// three.js compiles its program without TONE_MAPPING.
 fn apply_tone_mapping(c : vec3<f32>) -> vec3<f32> {
+    if ((mesh.flags.z & FLAG_NO_TONE_MAP) != 0u) { return c; }
     let tm = u32(frame.tone_mapping_exposure.x);
     let exposure = frame.tone_mapping_exposure.y;
     if (tm == 0u) { return c; }
@@ -1679,7 +2438,8 @@ fn linear_to_srgb(c : vec3<f32>) -> vec3<f32> {
 }
 
 // tone_mapping_exposure.w > 0.5: write linear (HalfFloat / postfx RT), else
-// sRGB-encode for the canvas.
+// sRGB-encode for the canvas; 2 rather than 1 when the target is an sRGB
+// format, which encodes on write (see `framebuffer_data`).
 //
 // The float path deliberately does *not* clamp. It used to, which quietly made
 // a half-float target behave like an 8-bit one: anything above 1.0 was gone
@@ -1688,10 +2448,41 @@ fn linear_to_srgb(c : vec3<f32>) -> vec3<f32> {
 // — the encode is only defined on [0, 1] — and wrong for a format chosen
 // because the values exceed it.
 fn framebuffer_encode(c: vec3<f32>) -> vec3<f32> {
+    if ((mesh.flags.z & FLAG_ENCODED_OUT) != 0u) {
+        return linear_to_srgb(clamp(c, vec3<f32>(0.0), vec3<f32>(1.0)));
+    }
     if (frame.tone_mapping_exposure.w > 0.5) {
         return max(c, vec3<f32>(0.0));
     }
     return linear_to_srgb(clamp(c, vec3<f32>(0.0), vec3<f32>(1.0)));
+}
+
+// `framebuffer_encode` backwards: a texel of a target drawn like this one
+// (the screen-space glass capture) as the tone-mapped linear value it holds.
+// A hardware sRGB target decodes on sample, so it comes back as it is.
+fn framebuffer_decode(c: vec3<f32>) -> vec3<f32> {
+    if ((mesh.flags.z & FLAG_ENCODED_OUT) == 0u && frame.tone_mapping_exposure.w > 0.5) {
+        return c;
+    }
+    let lo = c / 12.92;
+    let hi = pow((max(c, vec3<f32>(0.0)) + vec3<f32>(0.055)) / 1.055, vec3<f32>(2.4));
+    return mix(hi, lo, step(c, vec3<f32>(0.04045)));
+}
+
+// Data rather than colour — MeshDepthMaterial's depth, MeshNormalMaterial's
+// packed normal — which three.js writes unconverted, so the target stores the
+// value itself. `tone_mapping_exposure.w > 1.5` says the target is an sRGB
+// format (every 8-bit target on WebGL2), which would encode it on write: it is
+// decoded first so the stored byte is the value, as on a `Unorm` target.
+fn framebuffer_data(v: vec3<f32>) -> vec3<f32> {
+    if ((mesh.flags.z & FLAG_ENCODED_OUT) != 0u) {
+        return v;
+    }
+    if (frame.tone_mapping_exposure.w > 1.5) {
+        let x = clamp(v, vec3<f32>(0.0), vec3<f32>(1.0));
+        return select(pow((x + 0.055) / 1.055, vec3<f32>(2.4)), x / 12.92, x <= vec3<f32>(0.04045));
+    }
+    return v;
 }
 
 fn view_z_to_depth_tex(view_z_pos: f32, near: f32, far: f32) -> f32 {
@@ -1702,137 +2493,354 @@ fn view_z_to_depth_tex(view_z_pos: f32, near: f32, far: f32) -> f32 {
 // Apply fog (linear or exp2) to a linear-space color based on view-space depth.
 // Mirrors three.js's fog: linear factor = smoothstep(near, far, dist),
 // exp2 factor = 1 - exp(-density^2 * dist^2).
-fn apply_fog(color : vec3<f32>, view_z : f32) -> vec3<f32> {
+// How much fog covers a point `view_z` away: 0 for none, 1 for all fog.
+fn fog_factor(view_z : f32) -> f32 {
     let mode = frame.fog_params.w;
-    if (mode < 0.5) { return color; }
+    if (mode < 0.5) { return 0.0; }
     let dist = max(view_z, 0.0);
-    var factor : f32 = 0.0;
     if (mode < 1.5) {
         let near = frame.fog_params.x;
         let far  = frame.fog_params.y;
-        factor = clamp((dist - near) / (far - near), 0.0, 1.0);
-    } else {
-        let d = frame.fog_params.z;
-        factor = 1.0 - exp(-d * d * dist * dist);
+        return clamp((dist - near) / (far - near), 0.0, 1.0);
     }
-    return mix(color, frame.fog_color.rgb, factor);
+    let d = frame.fog_params.z;
+    return 1.0 - exp(-d * d * dist * dist);
 }
 
-fn shadow_factor(world_pos : vec3<f32>, world_normal : vec3<f32>) -> f32 {
-    if (frame.shadow_params.x < 0.5) { return 1.0; }
-    // NORMAL BIAS: step off the surface before looking the depth up.
-    //
-    // A constant depth bias has to cover the worst case — a face nearly edge-on
-    // to the light, where one shadow texel spans a long slope and the stored
-    // depth is far from this fragment's. Sized for that, it is far too much
-    // everywhere else and shadows visibly detach from their casters. Moving the
-    // lookup along the surface normal instead scales with the geometry rather
-    // than the angle, so the grazing case is covered without paying for it on
-    // faces that point at the light.
-    let biased = world_pos + world_normal * frame.shadow_texel.y;
-    let p = frame.shadow_vp * vec4<f32>(biased, 1.0);
-    let ndc = p.xyz / max(p.w, 0.0001);
-    let uv = vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
-    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) { return 1.0; }
-    if (ndc.z < 0.0 || ndc.z > 1.0) { return 1.0; }
-    let bias = frame.shadow_params.y;
+fn apply_fog(color : vec3<f32>, view_z : f32) -> vec3<f32> {
+    return mix(color, frame.fog_color.rgb, fog_factor(view_z));
+}
 
-    // PERCENTAGE-CLOSER FILTERING, 3x3.
-    //
-    // A single compare sample gives a binary answer per pixel, so the shadow
-    // edge is the shadow map's own pixel grid, drawn at whatever size the
-    // camera happens to magnify it to — a staircase that crawls as the light
-    // or the object moves. Comparing nine neighbours and averaging the results
-    // turns that into a one-texel gradient, which reads as an edge rather than
-    // as a grid. The comparison sampler does the depth test per tap, so this is
-    // nine compares, not nine fetches plus arithmetic.
-    //
-    // Nine and not twenty-five: at 2 mm a texel the penumbra this fakes is
-    // already finer than the geometry it falls on, and in vacuum a real shadow
-    // edge IS nearly hard — the sun is half a degree wide and there is no air
-    // to scatter into it. This is anti-aliasing, not softness.
+// ---- Shadows --------------------------------------------------------------
+//
+// Every shadow-casting light owns a `ShadowRecord` and names it in its own
+// `color.w`, so a light loop asks `shadow_at` for any kind of light the same
+// way. Each kind's maps are one depth array — a layer per light, a cascade
+// each for a directional light with several, six (its cube faces) for a
+// point light — read through comparison samplers only: WebGL2 cannot read a
+// depth texture any other way, so even the PCSS blocker search compares.
+
+// The record a light names in `color.w` (−1: it casts none).
+fn light_shadow_record(color_w : f32) -> i32 {
+    return i32(color_w + 0.5) - 1;
+}
+
+// Every record's shadow at this fragment, worked out once by
+// `compute_shadows` and then read by each light that names it. One call site
+// for the whole filter machinery rather than one per light loop: a shading
+// language inlines every call, and on WebGL2's software rasteriser eight
+// inlined copies of the PCSS search made the lit shaders take tens of
+// seconds to compile.
+var<private> shadow_cache : array<f32, 16>;
+
+fn compute_shadows(world_pos : vec3<f32>, world_normal : vec3<f32>) {
+    for (var r = 0u; r < 16u; r = r + 1u) {
+        shadow_cache[r] = 1.0;
+    }
+    let count = min(frame.shadow_info.x, 16u);
+    for (var r = 0u; r < count; r = r + 1u) {
+        shadow_cache[r] = shadow_at(i32(r), world_pos, world_normal);
+    }
+}
+
+// The shadow of the light whose `color.w` is `color_w`, from the cache.
+fn light_shadow(color_w : f32) -> f32 {
+    let r = light_shadow_record(color_w);
+    if (r < 0 || r >= 16) {
+        return 1.0;
+    }
+    return shadow_cache[r];
+}
+
+// Light `i` of each kind: 1 lit, 0 shadowed (after `compute_shadows`).
+fn shadow_factor_dir(i : u32) -> f32 {
+    return light_shadow(frame.dir_lights[i].color.w);
+}
+fn shadow_factor_spot(i : u32) -> f32 {
+    return light_shadow(frame.spot_lights[i].color.w);
+}
+fn shadow_factor_point(i : u32) -> f32 {
+    return light_shadow(frame.point_lights[i].color.w);
+}
+
+// One compare in layer `layer` of kind `kind`'s map array.
+fn shadow_compare(kind : u32, uv : vec2<f32>, layer : i32, depth : f32) -> f32 {
+    if (kind == 0u) {
+        return textureSampleCompareLevel(shadow_tex, shadow_sampler, uv, layer, depth);
+    }
+    if (kind == 1u) {
+        return textureSampleCompareLevel(spot_shadow_tex, spot_shadow_sampler, uv, layer, depth);
+    }
+    return textureSampleCompareLevel(point_shadow_tex, point_shadow_sampler, uv, layer, depth);
+}
+
+// One filter tap, offset `o` from the lookup's centre. A 2D map moves the uv
+// (`centre.xy`); a point light's cube turns the direction (`centre`) across
+// `t` and `b` and picks the face the tap lands on, so a filter crosses cube
+// edges without a seam.
+fn shadow_tap(kind : u32, layer : i32, centre : vec3<f32>, t : vec3<f32>, b : vec3<f32>, o : vec2<f32>, depth : f32) -> f32 {
+    if (kind == 2u) {
+        let f = point_shadow_face(centre + t * o.x + b * o.y);
+        return shadow_compare(2u, f.xy, layer + i32(f.z), depth);
+    }
+    return shadow_compare(kind, centre.xy + o, layer, depth);
+}
+
+// Percentage-closer filtering over a disc `r` wide: `taps` compares on a
+// Vogel spiral, turned per point in the world so a wide penumbra shows no
+// banding and does not crawl as the camera moves. A single compare gives a
+// binary answer per pixel — the map's own texel grid, magnified — and the
+// average turns it into a gradient: anti-aliasing at a texel's radius, a
+// penumbra wider.
+fn shadow_pcf(kind : u32, layer : i32, centre : vec3<f32>, t : vec3<f32>, b : vec3<f32>, depth : f32, r : f32, taps : u32, world_pos : vec3<f32>) -> f32 {
+    if (r <= 0.0 || taps <= 1u) {
+        return shadow_tap(kind, layer, centre, t, b, vec2<f32>(0.0), depth);
+    }
+    let phi = shadow_disc_rotation(world_pos);
     var sum = 0.0;
-    for (var dy = -1; dy <= 1; dy = dy + 1) {
-        for (var dx = -1; dx <= 1; dx = dx + 1) {
-            let o = vec2<f32>(f32(dx), f32(dy)) * frame.shadow_texel.x;
-            sum = sum + textureSampleCompareLevel(
-                shadow_tex, shadow_sampler, uv + o, ndc.z - bias);
+    for (var k = 0u; k < taps; k = k + 1u) {
+        let o = shadow_disc_tap(k, taps, phi) * r * 1.5;
+        sum = sum + shadow_tap(kind, layer, centre, t, b, o, depth);
+    }
+    return sum / f32(taps);
+}
+
+// Percentage-closer soft shadows (Fernando 2005): the penumbra widens with
+// the gap between the receiver and what blocks it, so a shadow is sharp
+// where an object touches the ground and soft further off.
+//
+// The blocker search usually reads depths. Here it compares, because a
+// depth texture is only readable through a comparison sampler on WebGL2:
+// compares against four depths between the light and the receiver give the
+// fraction of the search disc blocked nearer than each, a cumulative
+// distribution of blocker depth, and its mean comes out of integrating it.
+// Then a PCF as wide as that mean blocker says.
+fn shadow_pcss(rec : ShadowRecord, layer : i32, centre : vec3<f32>, t : vec3<f32>, b : vec3<f32>, depth : f32, world_pos : vec3<f32>) -> f32 {
+    let kind = rec.info.x;
+    let texel = rec.params.w;
+    let search = max(rec.pcss.x, 2.0 * texel);
+    let phi = shadow_disc_rotation(world_pos);
+    var blocked = vec4<f32>(0.0);
+    for (var k = 0u; k < 12u; k = k + 1u) {
+        let o = shadow_disc_tap(k, 12u, phi) * search;
+        for (var l = 0u; l < 4u; l = l + 1u) {
+            let z = depth * f32(l + 1u) * 0.25;
+            blocked[l] = blocked[l] + 1.0 - shadow_tap(kind, layer, centre, t, b, o, z);
         }
     }
-    return sum / 9.0;
+    blocked = blocked / 12.0;
+    if (blocked.w <= 0.0) {
+        return 1.0;
+    }
+    // E[d | d < depth] = depth − ∫₀^depth F(z)/F(depth) dz, trapezoids.
+    let integral = depth * 0.25 * (blocked.x + blocked.y + blocked.z + 0.5 * blocked.w) / blocked.w;
+    let blocker = max(depth - integral, 1e-4);
+    // To linear distance from the light, for the similar triangles: an
+    // orthographic map is linear already, a spot's is perspective depth, a
+    // point light's is distance over radius.
+    var gap = 0.0;
+    if (kind == 0u) {
+        gap = (depth - blocker) * rec.pcss.w;
+    } else if (kind == 1u) {
+        let n = rec.pcss.y;
+        let f = rec.pcss.z;
+        let dr = n * f / max(f - depth * (f - n), 1e-6);
+        let db = n * f / max(f - blocker * (f - n), 1e-6);
+        gap = (dr - db) / max(db * dr, 1e-6) * rec.pcss.w;
+    } else {
+        let radius = rec.extra.w;
+        let dr = depth * radius;
+        let db = blocker * radius;
+        gap = (dr - db) / max(db * dr, 1e-6) * rec.pcss.w;
+    }
+    let r = clamp(gap, texel, 64.0 * texel);
+    return shadow_pcf(kind, layer, centre, t, b, depth, r, 16u, world_pos);
 }
 
-fn shadow_factor_spot(world_pos : vec3<f32>) -> f32 {
-    if (frame.shadow_params.z < 0.5) { return 1.0; }
-    let p = frame.spot_shadow_vp * vec4<f32>(world_pos, 1.0);
+// The record's filter at one lookup.
+fn shadow_filter(rec : ShadowRecord, layer : i32, centre : vec3<f32>, t : vec3<f32>, b : vec3<f32>, depth : f32, world_pos : vec3<f32>) -> f32 {
+    let kind = rec.info.x;
+    let r = rec.params.z;
+    switch (rec.info.w) {
+        case 0u: {
+            return shadow_tap(kind, layer, centre, t, b, vec2<f32>(0.0), depth);
+        }
+        case 2u: {
+            return shadow_pcf(kind, layer, centre, t, b, depth, max(r * 2.0, 2.0 * rec.params.w), 24u, world_pos);
+        }
+        case 3u: {
+            return shadow_pcss(rec, layer, centre, t, b, depth, world_pos);
+        }
+        default: {
+            return shadow_pcf(kind, layer, centre, t, b, depth, r, SHADOW_TAPS, world_pos);
+        }
+    }
+}
+
+// Record `r`'s shadow at a point: 1 lit, 0 shadowed, 1 for no record.
+//
+// NORMAL BIAS: the lookup steps off the surface along the normal first. A
+// constant depth bias has to cover the worst case — a face nearly edge-on
+// to the light, where one shadow texel spans a long slope — and sized for
+// that it is far too much everywhere else, so shadows visibly detach from
+// their casters. Moving along the normal scales with the geometry instead.
+fn shadow_at(r : i32, world_pos : vec3<f32>, world_normal : vec3<f32>) -> f32 {
+    if (r < 0 || u32(r) >= frame.shadow_info.x) {
+        return 1.0;
+    }
+    let rec = frame.shadows[r];
+    let kind = rec.info.x;
+    let biased = world_pos + world_normal * rec.params.y;
+    let layer = i32(rec.info.y);
+    if (kind == 2u) {
+        let radius = rec.extra.w;
+        let to_frag = biased - rec.extra.xyz;
+        let dist = length(to_frag);
+        if (dist > radius) { return 1.0; }
+        // Half a percent of the radius, at most a quarter of a unit: a light
+        // with no `distance` normalises by its shadow camera's far plane,
+        // 500 by default.
+        let depth = dist / radius - min(0.005, 0.25 / radius) - rec.params.x;
+        let dir = to_frag / max(dist, 1e-6);
+        let helper = select(vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(1.0, 0.0, 0.0), abs(dir.y) > 0.9);
+        let t = normalize(cross(dir, helper));
+        return shadow_filter(rec, layer, dir, t, cross(dir, t), depth, world_pos);
+    }
+    // A directional light's cascade: the first whose far edge lies beyond
+    // this point's view depth. Past the last, unshadowed.
+    var cascade = 0u;
+    if (kind == 0u && rec.info.z > 1u) {
+        let view_depth = -(frame.view * vec4<f32>(world_pos, 1.0)).z;
+        cascade = rec.info.z;
+        for (var c = 0u; c < rec.info.z; c = c + 1u) {
+            if (view_depth <= rec.extra[c]) {
+                cascade = c;
+                break;
+            }
+        }
+        if (cascade >= rec.info.z) { return 1.0; }
+    }
+    let p = rec.vp[cascade] * vec4<f32>(biased, 1.0);
     let ndc = p.xyz / max(p.w, 0.0001);
     let uv = vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
     if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) { return 1.0; }
     if (ndc.z < 0.0 || ndc.z > 1.0) { return 1.0; }
-    let bias = frame.shadow_params.w;
-    return textureSampleCompareLevel(spot_shadow_tex, spot_shadow_sampler, uv, ndc.z - bias);
+    let zero = vec3<f32>(0.0);
+    return shadow_filter(rec, layer + i32(cascade), vec3<f32>(uv, 0.0), zero, zero, ndc.z - rec.params.x, world_pos);
 }
 
-fn shadow_factor_point(world_pos : vec3<f32>) -> f32 {
-    let radius = frame.point_shadow_pos.w;
-    if (radius <= 0.0) { return 1.0; }
-    let to_frag = world_pos - frame.point_shadow_pos.xyz;
-    let dist = length(to_frag);
-    if (dist > radius) { return 1.0; }
-    let depth = dist / radius;
-    return textureSampleCompareLevel(point_shadow_tex, point_shadow_sampler, normalize(to_frag), depth - 0.005);
+// How many compares a PCF lookup takes: three more than the 3×3 grid it
+// replaced, spread over a disc instead of a square.
+const SHADOW_TAPS : u32 = 12u;
+
+// Tap `k` of `n` on a Vogel disc — a golden-angle spiral, evenly spread at
+// any tap count — turned by `phi`, inside the unit circle.
+fn shadow_disc_tap(k : u32, n : u32, phi : f32) -> vec2<f32> {
+    let r = sqrt((f32(k) + 0.5) / f32(n));
+    let t = f32(k) * 2.39996323 + phi;
+    return vec2<f32>(cos(t), sin(t)) * r;
 }
 
-// ---- Lambert/Phong (kept for backward compatibility) ----
+// The disc's turn at a point: varied so the taps' pattern does not show as
+// banding in a wide penumbra, and fixed to the world so it does not crawl as
+// the camera moves.
+fn shadow_disc_rotation(p : vec3<f32>) -> f32 {
+    return fract(sin(dot(p, vec3<f32>(12.9898, 78.233, 37.719))) * 43758.5453) * 6.28318530718;
+}
 
-fn shade_dir_lp(n : vec3<f32>, view_dir : vec3<f32>, kind : u32, specular : vec3<f32>, shininess : f32, l : DirLight) -> vec3<f32> {
-    let to_light = -normalize(l.direction.xyz);
-    let lambert = max(dot(n, to_light), 0.0);
-    var col = l.color.rgb * lambert;
-    if (kind == MAT_PHONG && lambert > 0.0) {
-        let half_v = normalize(to_light + view_dir);
-        let spec = pow(max(dot(n, half_v), 0.0), max(shininess, 1.0));
-        col = col + l.color.rgb * specular * spec;
+// The cube face a direction lands on and its uv there: the selection every
+// API's cube sampler makes (major axis, then the face's `sc`/`tc` table),
+// done by hand because the faces live in a 2D array — WebGL2 has no cube
+// arrays. Faces are +X −X +Y −Y +Z −Z, as the point passes draw them.
+fn point_shadow_face(d : vec3<f32>) -> vec3<f32> {
+    let a = abs(d);
+    var face = 0.0;
+    var sc = 0.0;
+    var tc = 0.0;
+    var ma = 1.0;
+    if (a.x >= a.y && a.x >= a.z) {
+        ma = a.x;
+        if (d.x > 0.0) { face = 0.0; sc = -d.z; } else { face = 1.0; sc = d.z; }
+        tc = -d.y;
+    } else if (a.y >= a.z) {
+        ma = a.y;
+        sc = d.x;
+        if (d.y > 0.0) { face = 2.0; tc = d.z; } else { face = 3.0; tc = -d.z; }
+    } else {
+        ma = a.z;
+        if (d.z > 0.0) { face = 4.0; sc = d.x; } else { face = 5.0; sc = -d.x; }
+        tc = -d.y;
     }
-    return col;
+    return vec3<f32>(0.5 * (sc / ma + 1.0), 0.5 * (tc / ma + 1.0), face);
 }
 
-fn shade_point_lp(world_pos : vec3<f32>, n : vec3<f32>, view_dir : vec3<f32>, kind : u32, specular : vec3<f32>, shininess : f32, l : PointLight) -> vec3<f32> {
+// three.js `getShadowMask()`: every shadow-casting light's shadow, multiplied.
+fn shadow_mask(world_pos : vec3<f32>, world_normal : vec3<f32>) -> f32 {
+    compute_shadows(world_pos, world_normal);
+    var m = 1.0;
+    for (var r = 0u; r < 16u; r = r + 1u) {
+        m = m * shadow_cache[r];
+    }
+    return m;
+}
+
+// ---- Lambert / Phong / Toon: three.js r165's non-physical lit models ----
+//
+// All three share three.js's light loop (`lights_fragment_begin`): each direct
+// light gives an `IncidentLight` — a direction and a colour already
+// attenuated by distance, cone and shadow — and the model turns it into
+// diffuse (`irradiance · BRDF_Lambert`, i.e. ÷π) and, for Phong, specular.
+// Ambient and hemisphere irradiance go through the same `BRDF_Lambert`
+// (`RE_IndirectDiffuse_*`), so the indirect terms are ÷π as well.
+
+/// One direct light as three.js's `IncidentLight`: the direction to it and
+/// its colour after attenuation (distance, spot cone — the caller applies
+/// shadows).
+struct Incident {
+    dir   : vec3<f32>,
+    color : vec3<f32>,
+};
+
+fn incident_point(world_pos : vec3<f32>, l : PointLight) -> Incident {
+    let to_light_vec = l.position.xyz - world_pos;
+    let d = length(to_light_vec);
+    return Incident(to_light_vec / max(d, 0.0001), l.color.rgb * punctual_attenuation(d, l.params.x, l.params.y));
+}
+
+fn incident_spot(world_pos : vec3<f32>, l : SpotLight) -> Incident {
     let to_light_vec = l.position.xyz - world_pos;
     let d = length(to_light_vec);
     let to_light = to_light_vec / max(d, 0.0001);
-    let lambert = max(dot(n, to_light), 0.0);
-    let att = punctual_attenuation(d, l.params.x, l.params.y);
-    var col = l.color.rgb * lambert * att;
-    if (kind == MAT_PHONG && lambert > 0.0) {
-        let half_v = normalize(to_light + view_dir);
-        let spec = pow(max(dot(n, half_v), 0.0), max(shininess, 1.0));
-        col = col + l.color.rgb * specular * spec * att;
-    }
-    return col;
-}
-
-fn shade_spot_lp(world_pos : vec3<f32>, n : vec3<f32>, view_dir : vec3<f32>, kind : u32, specular : vec3<f32>, shininess : f32, l : SpotLight) -> vec3<f32> {
-    let to_light_vec = l.position.xyz - world_pos;
-    let d = length(to_light_vec);
-    let to_light = to_light_vec / max(d, 0.0001);
-    let dir = normalize(l.direction.xyz);
-    let cos_angle = dot(-to_light, dir);
-    let cos_outer = l.params.z;
-    let cos_inner = l.params.w;
+    let cos_angle = dot(-to_light, normalize(l.direction.xyz));
     var cone = 0.0;
-    if (cos_angle > cos_outer) {
-        cone = smoothstep(cos_outer, cos_inner, cos_angle);
+    if (cos_angle > l.params.z) {
+        cone = smoothstep(l.params.z, l.params.w, cos_angle);
     }
-    let lambert = max(dot(n, to_light), 0.0);
-    let att = punctual_attenuation(d, l.params.x, l.params.y) * cone;
-    var col = l.color.rgb * lambert * att;
-    if (kind == MAT_PHONG && lambert > 0.0) {
-        let half_v = normalize(to_light + view_dir);
-        let spec = pow(max(dot(n, half_v), 0.0), max(shininess, 1.0));
-        col = col + l.color.rgb * specular * spec * att;
+    return Incident(to_light, l.color.rgb * punctual_attenuation(d, l.params.x, l.params.y) * cone);
+}
+
+/// three.js `BRDF_BlinnPhong`: `F_Schlick(specular, 1, v·h) · ¼ ·
+/// D_BlinnPhong`, with `D_BlinnPhong = (s/2 + 1)/π · (n·h)^s`.
+fn brdf_blinn_phong(l : vec3<f32>, v : vec3<f32>, n : vec3<f32>, specular : vec3<f32>, shininess : f32) -> vec3<f32> {
+    let h = normalize(l + v);
+    let n_dot_h = clamp(dot(n, h), 0.0, 1.0);
+    let v_dot_h = clamp(dot(v, h), 0.0, 1.0);
+    let d = (1.0 / PI) * (shininess * 0.5 + 1.0) * pow(n_dot_h, shininess);
+    return f_schlick(v_dot_h, specular) * (0.25 * d);
+}
+
+/// three.js `getGradientIrradiance`, at `coord = n·l/2 + ½`. With a
+/// `gradientMap`, its rgb there (`dx`, `dy`: `coord`'s screen derivatives,
+/// passed in because the call sits in the light loop). Without one, 0.7 below
+/// `coord = 0.7` and 1.0 above, the step antialiased over `fw`
+/// (`fwidth(coord)/2`). Not clamped to the lit side: a toon surface facing
+/// away from a light still gets the ramp's lowest tone of it, as in three.js.
+fn toon_gradient(n_dot_l : f32, fw : f32, dx : f32, dy : f32) -> vec3<f32> {
+    let coord = n_dot_l * 0.5 + 0.5;
+    if (HAS_GRADIENT_MAP) {
+        return sample_gradient_map_grad(coord, dx, dy).rgb;
     }
-    return col;
+    return vec3<f32>(mix(0.7, 1.0, smoothstep(0.7 - fw, 0.7 + fw, coord)));
 }
 
 fn shade_hemi(n : vec3<f32>, l : HemiLight) -> vec3<f32> {
@@ -1849,15 +2857,22 @@ fn d_ggx(n_dot_h : f32, a : f32) -> f32 {
     return a2 / (PI * f * f);
 }
 
-fn g_smith(n_dot_v : f32, n_dot_l : f32, a : f32) -> f32 {
-    let k = (a + 1.0) * (a + 1.0) / 8.0;
-    let gv = n_dot_v / (n_dot_v * (1.0 - k) + k);
-    let gl = n_dot_l / (n_dot_l * (1.0 - k) + k);
-    return gv * gl;
+// three.js `V_GGX_SmithCorrelated`: height-correlated Smith visibility, which
+// already carries the 1/(4·NoV·NoL) of the microfacet denominator — so a
+// specular lobe is `D · V · F` with no further divide.
+fn v_ggx_smith_correlated(a : f32, n_dot_l : f32, n_dot_v : f32) -> f32 {
+    let a2 = a * a;
+    let gv = n_dot_l * sqrt(a2 + (1.0 - a2) * n_dot_v * n_dot_v);
+    let gl = n_dot_v * sqrt(a2 + (1.0 - a2) * n_dot_l * n_dot_l);
+    return 0.5 / max(gv + gl, 1e-6);
 }
 
+// three.js `F_Schlick(f0, 1.0, dotVH)`, in its spherical-Gaussian form
+// (`exp2((-5.55473·x − 6.98316)·x)` for `(1 − x)^5`), which is what r165 runs.
 fn f_schlick(v_dot_h : f32, f0 : vec3<f32>) -> vec3<f32> {
-    return f0 + (vec3<f32>(1.0) - f0) * pow(clamp(1.0 - v_dot_h, 0.0, 1.0), 5.0);
+    let x = clamp(v_dot_h, 0.0, 1.0);
+    let fresnel = exp2((-5.55473 * x - 6.98316) * x);
+    return f0 * (1.0 - fresnel) + vec3<f32>(fresnel);
 }
 
 // PMREM CubeUV sampling — ports three.js cube_uv_reflection_fragment.
@@ -1902,9 +2917,9 @@ fn cube_uv_get_uv(direction : vec3<f32>, face : f32) -> vec2<f32> {
 }
 
 fn bilinear_cube_uv(direction : vec3<f32>, mip_int : f32) -> vec3<f32> {
-    let cube_uv_max_mip = frame.env_map_params.z;
-    let texel_w = frame.env_map_params.x;
-    let texel_h = frame.env_map_params.y;
+    let cube_uv_max_mip = env_u.params.z;
+    let texel_w = env_u.params.x;
+    let texel_h = env_u.params.y;
     var face = cube_uv_get_face(direction);
     let filter_int = max(CUBEUV_MIN_MIP_LEVEL - mip_int, 0.0);
     var mip_i = max(mip_int, CUBEUV_MIN_MIP_LEVEL);
@@ -1942,7 +2957,7 @@ fn roughness_to_mip(roughness : f32) -> f32 {
 
 fn texture_cube_uv(sample_dir : vec3<f32>, roughness : f32) -> vec3<f32> {
     let cube_uv_m0 = -2.0;
-    let cube_uv_max_mip = frame.env_map_params.z;
+    let cube_uv_max_mip = env_u.params.z;
     let mip = clamp(roughness_to_mip(roughness), cube_uv_m0, cube_uv_max_mip);
     let mip_f = fract(mip);
     let mip_i = floor(mip);
@@ -1954,8 +2969,15 @@ fn texture_cube_uv(sample_dir : vec3<f32>, roughness : f32) -> vec3<f32> {
     return mix(color0, color1, mip_f);
 }
 
+// three.js `getIBLRadiance` / `getIBLIrradiance`'s lookup: the direction
+// through `envMapRotation`, the result times `envMapIntensity`.
 fn sample_env_cube(dir : vec3<f32>, roughness : f32) -> vec3<f32> {
-    if (frame.env_map_params.w > 0.5) {
+    let d = vec3<f32>(dot(env_u.rot[0].xyz, dir), dot(env_u.rot[1].xyz, dir), dot(env_u.rot[2].xyz, dir));
+    return sample_env_cube_unrotated(d, roughness) * env_u.info.y;
+}
+
+fn sample_env_cube_unrotated(dir : vec3<f32>, roughness : f32) -> vec3<f32> {
+    if (env_u.params.w > 0.5) {
         return texture_cube_uv(dir, roughness);
     }
     // A plain cube, with no PMREM atlas to index by roughness — so walk its own
@@ -1971,7 +2993,7 @@ fn sample_env_cube(dir : vec3<f32>, roughness : f32) -> vec3<f32> {
     // which GLSL ES 3.0 has no equivalent for and which therefore cannot be
     // lowered for WebGL2. It is not recoverable from `textureDimensions`
     // either: a PMREM chain is shorter than a full one.
-    let levels = frame.env_map_params.z;
+    let levels = env_u.params.z;
     let mip = clamp(roughness * roughness * levels, 0.0, levels);
     let mip_i = floor(mip);
     let mip_f = mip - mip_i;
@@ -2006,59 +3028,11 @@ fn pbr_brdf(n : vec3<f32>, v : vec3<f32>, l : vec3<f32>, albedo : vec3<f32>, rou
     let a = max(roughness * roughness, 0.0016);
     let f = f_schlick(v_dot_h, f0);
     let d = d_ggx(n_dot_h, a);
-    let g = g_smith(n_dot_v, n_dot_l, a);
-
-    let spec = (d * g * f) / max(4.0 * n_dot_v * n_dot_l, 0.0001);
-    let kd = (vec3<f32>(1.0) - f) * (1.0 - metalness);
-    let diff = kd * albedo / PI;
-    // Softened by the sun's angular size — see `soft_lambert`. `params11.w` is
-    // zero for anything that has not set a sun, which gives back `max(ndl, 0)`.
-    return (diff + spec) * soft_lambert(dot(n, l), mesh.params11.w);
-}
-
-// Anisotropic GGX specular (Filament / Burley). `an` in [-1, 1] biases the GGX
-// alpha along the tangent (`at`) vs. bitangent (`ab`), stretching the highlight
-// into a streak. T and B span the surface tangent plane (n = T × B). The Smith
-// visibility term is height-correlated and already carries the 1/(4·NoV·NoL)
-// denominator, so specular = D · V · F with no extra divide.
-fn pbr_brdf_aniso(
-    n : vec3<f32>, v : vec3<f32>, l : vec3<f32>, t : vec3<f32>, b : vec3<f32>,
-    albedo : vec3<f32>, roughness : f32, metalness : f32, an : f32, f0 : vec3<f32>,
-) -> vec3<f32> {
-    let h = normalize(v + l);
-    let n_dot_v = max(dot(n, v), 1e-4);
-    let n_dot_l = max(dot(n, l), 0.0);
-    let n_dot_h = max(dot(n, h), 0.0);
-    let v_dot_h = max(dot(v, h), 0.0);
-
-    let a = max(roughness * roughness, 0.0016);
-    let at = max(a * (1.0 + an), 0.0016);
-    let ab = max(a * (1.0 - an), 0.0016);
-
-    let t_dot_h = dot(t, h);
-    let b_dot_h = dot(b, h);
-    let t_dot_v = dot(t, v);
-    let b_dot_v = dot(b, v);
-    let t_dot_l = dot(t, l);
-    let b_dot_l = dot(b, l);
-
-    // D — anisotropic GGX normal distribution.
-    let a2 = at * ab;
-    let dv = vec3<f32>(ab * t_dot_h, at * b_dot_h, a2 * n_dot_h);
-    let d2 = dot(dv, dv);
-    let w2 = a2 / max(d2, 1e-8);
-    let d = a2 * w2 * w2 * (1.0 / PI);
-
-    // V — height-correlated Smith visibility (anisotropic).
-    let lambda_v = n_dot_l * length(vec3<f32>(at * t_dot_v, ab * b_dot_v, n_dot_v));
-    let lambda_l = n_dot_v * length(vec3<f32>(at * t_dot_l, ab * b_dot_l, n_dot_l));
-    let vis = 0.5 / max(lambda_v + lambda_l, 1e-5);
-
-    let f = f_schlick(v_dot_h, f0);
-
-    let spec = d * vis * f;
-    let kd = (vec3<f32>(1.0) - f) * (1.0 - metalness);
-    let diff = kd * albedo / PI;
+    // three.js r165 `RE_Direct_Physical`: `irradiance · (BRDF_GGX +
+    // BRDF_Lambert(diffuseColor))` with `diffuseColor = color · (1 − metalness)`
+    // — the diffuse lobe is not weighted by (1 − F).
+    let spec = d * v_ggx_smith_correlated(a, n_dot_l, n_dot_v) * f;
+    let diff = albedo * (1.0 - metalness) / PI;
     // Softened by the sun's angular size — see `soft_lambert`. `params11.w` is
     // zero for anything that has not set a sun, which gives back `max(ndl, 0)`.
     return (diff + spec) * soft_lambert(dot(n, l), mesh.params11.w);
@@ -2077,27 +3051,9 @@ fn d_charlie(n_dot_h : f32, a : f32) -> f32 {
     return (2.0 + inv_a) * pow(sin2h, inv_a * 0.5) / (2.0 * PI);
 }
 
+// three.js `V_Neubelt`, saturated as three.js saturates it.
 fn v_neubelt(n_dot_v : f32, n_dot_l : f32) -> f32 {
-    return 1.0 / max(4.0 * (n_dot_l + n_dot_v - n_dot_l * n_dot_v), 1e-5);
-}
-
-/// Directional albedo of the Charlie sheen lobe, E(NoV, roughness).
-///
-/// three.js ships this as a 32×32 lookup texture; this is the analytic fit from
-/// Estevez & Kulla's course notes, which stays within a few percent of the LUT
-/// and costs no extra binding. Peaks at grazing angles, which is what gives
-/// sheen its signature bright rim under environment lighting.
-fn sheen_env_albedo(n_dot_v : f32, roughness : f32) -> f32 {
-    let r = clamp(roughness, 0.07, 1.0);
-    // Fitted coefficients interpolating between the smooth and rough regimes.
-    let a = mix(21.5473, 25.3245, r);
-    let b = mix(3.82987, 3.32435, r);
-    let c = mix(0.19823, 0.16801, r);
-    let d = mix(-1.97760, -1.27393, r);
-    let e = mix(-4.32054, -4.85315, r);
-    let x = clamp(n_dot_v, 0.0, 1.0);
-    let v = a / (1.0 + b * pow(x, c)) + d * x + e;
-    return clamp(exp2(v), 0.0, 1.0);
+    return clamp(1.0 / (4.0 * (n_dot_l + n_dot_v - n_dot_l * n_dot_v)), 0.0, 1.0);
 }
 
 fn brdf_sheen(
@@ -2223,14 +3179,16 @@ fn fresnel0_to_ior(f0 : vec3<f32>) -> vec3<f32> {
 }
 
 /// Schlick with a custom F90, used for the film's own interface.
+// three.js `F_Schlick(f0, f90, dotVH)` (`bsdfs`), in its spherical-Gaussian
+// form — the one `BRDF_GGX`, the clearcoat and `evalIridescence` all use.
 fn f_schlick_f90(f0 : vec3<f32>, f90 : vec3<f32>, v_dot_h : f32) -> vec3<f32> {
-    let w = pow(clamp(1.0 - v_dot_h, 0.0, 1.0), 5.0);
-    return f0 + (f90 - f0) * w;
+    let fresnel = exp2((-5.55473 * v_dot_h - 6.98316) * v_dot_h);
+    return f0 * (1.0 - fresnel) + f90 * fresnel;
 }
 
 fn f_schlick_f90_f(f0 : f32, f90 : f32, v_dot_h : f32) -> f32 {
-    let w = pow(clamp(1.0 - v_dot_h, 0.0, 1.0), 5.0);
-    return f0 + (f90 - f0) * w;
+    let fresnel = exp2((-5.55473 * v_dot_h - 6.98316) * v_dot_h);
+    return f0 * (1.0 - fresnel) + f90 * fresnel;
 }
 
 /// Gaussian fit of the CIE XYZ colour-matching functions evaluated at optical
@@ -2358,86 +3316,6 @@ fn specular_aa_roughness(n : vec3<f32>, perceptual_roughness : f32) -> f32 {
     return clamp(sqrt(alpha + kernel), 0.0, 1.0);
 }
 
-// ---------------------------------------------------------------------------
-// Rectangular area lights.
-//
-// three.js uses linearly-transformed cosines (LTC), which needs two 64×64
-// lookup textures. This is the LUT-free alternative: an exact analytic form
-// factor for the diffuse lobe, and Karis' representative-point approximation
-// for the specular one. The diffuse term is correct; the specular term is an
-// approximation that gets the size, shape and softness of the highlight right,
-// which is the reason to reach for an area light in the first place.
-// ---------------------------------------------------------------------------
-
-/// Exact Lambertian form factor of a quad, integrated edge by edge.
-///
-/// Sums the signed solid angle of each edge as seen from the shading point.
-/// Unlike a point-light approximation this stays correct when the light is
-/// large and close — the case where a rectangle stops looking like a point.
-fn rect_diffuse_factor(
-    n : vec3<f32>, p : vec3<f32>,
-    c0 : vec3<f32>, c1 : vec3<f32>, c2 : vec3<f32>, c3 : vec3<f32>,
-) -> f32 {
-    let v0 = normalize(c0 - p);
-    let v1 = normalize(c1 - p);
-    let v2 = normalize(c2 - p);
-    let v3 = normalize(c3 - p);
-
-    var sum = 0.0;
-    // Each edge contributes acos(v_i · v_j) weighted by how much its swept
-    // plane faces the shading normal.
-    let e0 = cross(v0, v1);
-    let e1 = cross(v1, v2);
-    let e2 = cross(v2, v3);
-    let e3 = cross(v3, v0);
-    if (dot(e0, e0) > 1e-12) {
-        sum = sum + acos(clamp(dot(v0, v1), -1.0, 1.0)) * dot(normalize(e0), n);
-    }
-    if (dot(e1, e1) > 1e-12) {
-        sum = sum + acos(clamp(dot(v1, v2), -1.0, 1.0)) * dot(normalize(e1), n);
-    }
-    if (dot(e2, e2) > 1e-12) {
-        sum = sum + acos(clamp(dot(v2, v3), -1.0, 1.0)) * dot(normalize(e2), n);
-    }
-    if (dot(e3, e3) > 1e-12) {
-        sum = sum + acos(clamp(dot(v3, v0), -1.0, 1.0)) * dot(normalize(e3), n);
-    }
-    return max(sum * 0.5 / PI, 0.0);
-}
-
-/// Point on the rectangle that best represents its specular contribution:
-/// where the mirror ray hits the light's plane, clamped to the rectangle.
-fn rect_representative_point(
-    p : vec3<f32>, refl : vec3<f32>,
-    center : vec3<f32>, right : vec3<f32>, up : vec3<f32>,
-) -> vec3<f32> {
-    let plane_n = cross(right, up);
-    let denom = dot(refl, plane_n);
-    var hit = center;
-    if (abs(denom) > 1e-6) {
-        let t = dot(center - p, plane_n) / denom;
-        // Behind the surface: fall back to the centre rather than mirroring.
-        if (t > 0.0) {
-            hit = p + refl * t;
-        }
-    }
-    let d = hit - center;
-    let hw = length(right);
-    let hh = length(up);
-    let rx = select(vec3<f32>(0.0), right / hw, hw > 1e-6);
-    let uy = select(vec3<f32>(0.0), up / hh, hh > 1e-6);
-    let x = clamp(dot(d, rx), -hw, hw);
-    let y = clamp(dot(d, uy), -hh, hh);
-    return center + rx * x + uy * y;
-}
-
-/// Widen the GGX lobe to account for the light's angular size, and renormalise
-/// so total energy is preserved (Karis, "Real Shading in Unreal Engine 4").
-fn rect_spec_normalisation(alpha : f32, light_radius : f32, dist : f32) -> f32 {
-    let a_prime = clamp(alpha + light_radius / max(2.0 * dist, 1e-4), 0.0, 1.0);
-    let ratio = alpha / max(a_prime, 1e-4);
-    return ratio * ratio;
-}
 
 /// One light's contribution to the clearcoat lobe: plain isotropic GGX at the
 /// coat's own roughness, over a fixed dielectric F0.
@@ -2450,27 +3328,316 @@ fn clearcoat_spec(
     let n_dot_h = max(dot(n, h), 0.0);
     let v_dot_h = max(dot(v, h), 0.0);
     let d = d_ggx(n_dot_h, cc_a);
-    let g = g_smith(n_dot_v, n_dot_l, cc_a);
     let f = f_schlick(v_dot_h, fc0);
-    let spec = (d * g * f) / max(4.0 * n_dot_v * n_dot_l, 0.0001);
+    // three.js `BRDF_GGX_Clearcoat`: D · V_GGX_SmithCorrelated · F.
+    let spec = d * v_ggx_smith_correlated(cc_a, n_dot_l, n_dot_v) * f;
     return spec * n_dot_l;
 }
 
 // Direct-light PBR dispatch: isotropic GGX unless the material carries an
 // anisotropy strength, in which case the anisotropic lobe is used. `f0` is
 // passed in rather than derived so the iridescence layer can override it.
-fn pbr_direct(
-    n : vec3<f32>, v : vec3<f32>, l : vec3<f32>, t : vec3<f32>, b : vec3<f32>,
-    albedo : vec3<f32>, roughness : f32, metalness : f32, an : f32, f0 : vec3<f32>,
-) -> vec3<f32> {
-    if (abs(an) > 0.001) {
-        return pbr_brdf_aniso(n, v, l, t, b, albedo, roughness, metalness, an, f0);
+// three.js `transmission_pars_fragment` (from the glTF Sample Viewer): N8's
+// mipped bicubic filter, the refracted ray through the volume, Beer–Lambert
+// attenuation and `getIBLVolumeRefraction`.
+fn bicubic_w0(a : f32) -> f32 { return (1.0 / 6.0) * (a * (a * (-a + 3.0) - 3.0) + 1.0); }
+fn bicubic_w1(a : f32) -> f32 { return (1.0 / 6.0) * (a * a * (3.0 * a - 6.0) + 4.0); }
+fn bicubic_w2(a : f32) -> f32 { return (1.0 / 6.0) * (a * (a * (-3.0 * a + 3.0) + 3.0) + 1.0); }
+fn bicubic_w3(a : f32) -> f32 { return (1.0 / 6.0) * (a * a * a); }
+fn bicubic_g0(a : f32) -> f32 { return bicubic_w0(a) + bicubic_w1(a); }
+fn bicubic_g1(a : f32) -> f32 { return bicubic_w2(a) + bicubic_w3(a); }
+fn bicubic_h0(a : f32) -> f32 { return -1.0 + bicubic_w1(a) / (bicubic_w0(a) + bicubic_w1(a)); }
+fn bicubic_h1(a : f32) -> f32 { return 1.0 + bicubic_w3(a) / (bicubic_w2(a) + bicubic_w3(a)); }
+
+fn transmission_bicubic(uv_in : vec2<f32>, texel : vec4<f32>, lod : f32) -> vec4<f32> {
+    let uv = uv_in * texel.zw + 0.5;
+    let iuv = floor(uv);
+    let fuv = fract(uv);
+    let g0x = bicubic_g0(fuv.x);
+    let g1x = bicubic_g1(fuv.x);
+    let h0x = bicubic_h0(fuv.x);
+    let h1x = bicubic_h1(fuv.x);
+    let h0y = bicubic_h0(fuv.y);
+    let h1y = bicubic_h1(fuv.y);
+    let p0 = (vec2<f32>(iuv.x + h0x, iuv.y + h0y) - 0.5) * texel.xy;
+    let p1 = (vec2<f32>(iuv.x + h1x, iuv.y + h0y) - 0.5) * texel.xy;
+    let p2 = (vec2<f32>(iuv.x + h0x, iuv.y + h1y) - 0.5) * texel.xy;
+    let p3 = (vec2<f32>(iuv.x + h1x, iuv.y + h1y) - 0.5) * texel.xy;
+    return bicubic_g0(fuv.y) * (g0x * textureSampleLevel(transmission_tex, transmission_sampler, p0, lod)
+            + g1x * textureSampleLevel(transmission_tex, transmission_sampler, p1, lod))
+        + bicubic_g1(fuv.y) * (g0x * textureSampleLevel(transmission_tex, transmission_sampler, p2, lod)
+            + g1x * textureSampleLevel(transmission_tex, transmission_sampler, p3, lod));
+}
+
+// three.js `textureBicubic`: the two levels around `lod`, mixed. Levels
+// past the chain's end read its last, as GL clamps them.
+fn transmission_texture_bicubic(uv : vec2<f32>, lod : f32) -> vec4<f32> {
+    let last = max(i32(frame.light_counts2.w) - 1, 0);
+    let fl = min(i32(floor(lod)), last);
+    let cl = min(i32(ceil(lod)), last);
+    let f_size = vec2<f32>(textureDimensions(transmission_tex, fl));
+    let c_size = vec2<f32>(textureDimensions(transmission_tex, cl));
+    let f_sample = transmission_bicubic(uv, vec4<f32>(1.0 / f_size, f_size), f32(fl));
+    let c_sample = transmission_bicubic(uv, vec4<f32>(1.0 / c_size, c_size), f32(cl));
+    return mix(f_sample, c_sample, fract(lod));
+}
+
+// three.js `getTransmissionSample` at the projected exit point `p` (world).
+// `applyIorToRoughness`: an ior of 1 blurs nothing, 1.5 and up fully.
+fn transmission_sample(p : vec3<f32>, roughness : f32, ior : f32) -> vec4<f32> {
+    let ndc = frame.view_proj * vec4<f32>(p, 1.0);
+    let xy = ndc.xy / ndc.w;
+    // The capture's rows run top first, where GL's run bottom first.
+    let uv = vec2<f32>(xy.x * 0.5 + 0.5, 0.5 - xy.y * 0.5);
+    let width = f32(textureDimensions(transmission_tex, 0).x);
+    let lod = log2(width) * roughness * clamp(ior * 2.0 - 2.0, 0.0, 1.0);
+    return transmission_texture_bicubic(uv, lod);
+}
+
+// three.js `getVolumeTransmissionRay`: the refracted view ray, `thickness`
+// long in the model's own scale.
+fn volume_transmission_ray(n : vec3<f32>, v : vec3<f32>, thickness : f32, ior : f32) -> vec3<f32> {
+    let refraction = refract(-v, normalize(n), 1.0 / ior);
+    let scale = vec3<f32>(length(mesh.model[0].xyz), length(mesh.model[1].xyz), length(mesh.model[2].xyz));
+    return normalize(refraction) * thickness * scale;
+}
+
+// three.js `volumeAttenuation` (Beer's law); an infinite distance — here 0,
+// as the material uploads it — attenuates nothing.
+fn volume_attenuation(distance : f32, color : vec3<f32>, attenuation_distance : f32) -> vec3<f32> {
+    if (attenuation_distance <= 0.0) {
+        return vec3<f32>(1.0);
     }
-    return pbr_brdf(n, v, l, albedo, roughness, metalness, f0);
+    return exp(log(color) / attenuation_distance * distance);
+}
+
+fn ibl_volume_refraction(
+    n : vec3<f32>, v : vec3<f32>, roughness : f32, diffuse_color : vec3<f32>,
+    specular_color : vec3<f32>, specular_f90 : f32, position : vec3<f32>,
+    dispersion : f32, ior : f32, thickness : f32,
+    attenuation_color : vec3<f32>, attenuation_distance : f32,
+) -> vec4<f32> {
+    var transmitted = vec4<f32>(0.0);
+    var transmittance = vec3<f32>(0.0);
+    if (dispersion > 0.0) {
+        // `USE_DISPERSION`: each channel along its own ior.
+        let half_spread = (ior - 1.0) * 0.025 * dispersion;
+        let iors = vec3<f32>(ior - half_spread, ior, ior + half_spread);
+        for (var i = 0u; i < 3u; i = i + 1u) {
+            let ray = volume_transmission_ray(n, v, thickness, iors[i]);
+            let t = transmission_sample(position + ray, roughness, iors[i]);
+            transmitted[i] = t[i];
+            transmitted.a = transmitted.a + t.a;
+            transmittance[i] = diffuse_color[i] * volume_attenuation(length(ray), attenuation_color, attenuation_distance)[i];
+        }
+        transmitted.a = transmitted.a / 3.0;
+    } else {
+        let ray = volume_transmission_ray(n, v, thickness, ior);
+        transmitted = transmission_sample(position + ray, roughness, ior);
+        transmittance = diffuse_color * volume_attenuation(length(ray), attenuation_color, attenuation_distance);
+    }
+    let attenuated = transmittance * transmitted.rgb;
+    // `EnvironmentBRDF`: what is reflected is not transmitted.
+    let fab = dfg_approx(n, v, roughness);
+    let f = specular_color * fab.x + specular_f90 * fab.y;
+    let factor = (transmittance.r + transmittance.g + transmittance.b) / 3.0;
+    return vec4<f32>((vec3<f32>(1.0) - f) * attenuated, 1.0 - (1.0 - transmitted.a) * factor);
+}
+
+// three.js `RectAreaLightUniformsLib`'s tables, `ltc_1` (layer 0) and
+// `ltc_2` (layer 1), 64×64, sampled linearly.
+@group(3) @binding(14) var ltc_tex : texture_2d_array<f32>;
+
+// three.js `LTC_Uv`: the table coordinate for roughness and the view angle.
+fn ltc_uv(n : vec3<f32>, v : vec3<f32>, roughness : f32) -> vec2<f32> {
+    let lut_size = 64.0;
+    let lut_scale = (lut_size - 1.0) / lut_size;
+    let lut_bias = 0.5 / lut_size;
+    let n_dot_v = clamp(dot(n, v), 0.0, 1.0);
+    return vec2<f32>(roughness, sqrt(1.0 - n_dot_v)) * lut_scale + lut_bias;
+}
+
+// three.js `LTC_ClippedSphereFormFactor`.
+fn ltc_clipped_sphere_form_factor(f : vec3<f32>) -> f32 {
+    let l = length(f);
+    return max((l * l + f.z) / (l + 1.0), 0.0);
+}
+
+// three.js `LTC_EdgeVectorFormFactor`.
+fn ltc_edge_vector_form_factor(v1 : vec3<f32>, v2 : vec3<f32>) -> vec3<f32> {
+    let x = dot(v1, v2);
+    let y = abs(x);
+    let a = 0.8543985 + (0.4965155 + 0.0145206 * y) * y;
+    let b = 3.4175940 + (4.1616724 + y) * y;
+    let v = a / b;
+    let theta_sintheta = select(0.5 * inverseSqrt(max(1.0 - x * x, 1e-7)) - v, v, x > 0.0);
+    return cross(v1, v2) * theta_sintheta;
+}
+
+// three.js `LTC_Evaluate`: the polygon's form factor under the cosine
+// `m_inv` maps to, horizon-clipped; zero behind the light's emitting face.
+fn ltc_evaluate(n : vec3<f32>, v : vec3<f32>, p : vec3<f32>, m_inv : mat3x3<f32>, r0 : vec3<f32>, r1 : vec3<f32>, r2 : vec3<f32>, r3 : vec3<f32>) -> f32 {
+    let e1 = r1 - r0;
+    let e2 = r3 - r0;
+    let light_normal = cross(e1, e2);
+    if (dot(light_normal, p - r0) < 0.0) {
+        return 0.0;
+    }
+    let t1 = normalize(v - n * dot(v, n));
+    let t2 = -cross(n, t1);
+    let m = m_inv * transpose(mat3x3<f32>(t1, t2, n));
+    let c0 = normalize(m * (r0 - p));
+    let c1 = normalize(m * (r1 - p));
+    let c2 = normalize(m * (r2 - p));
+    let c3 = normalize(m * (r3 - p));
+    var f = ltc_edge_vector_form_factor(c0, c1);
+    f = f + ltc_edge_vector_form_factor(c1, c2);
+    f = f + ltc_edge_vector_form_factor(c2, c3);
+    f = f + ltc_edge_vector_form_factor(c3, c0);
+    return ltc_clipped_sphere_form_factor(f);
+}
+
+// three.js `RE_Direct_RectArea_Physical` for one light: `right` and `up`
+// are its half width and half height (three.js's `halfWidth`,
+// `halfHeight`), `color` its colour × intensity.
+fn rect_area_light(rl : RectLight, p : vec3<f32>, n : vec3<f32>, v : vec3<f32>, roughness : f32, specular_color : vec3<f32>, diffuse_color : vec3<f32>) -> LightTerms {
+    let c = rl.position.xyz;
+    let hw = rl.right.xyz;
+    let hh = rl.up.xyz;
+    let r0 = c + hw - hh;
+    let r1 = c - hw - hh;
+    let r2 = c - hw + hh;
+    let r3 = c + hw + hh;
+    let uv = ltc_uv(n, v, roughness);
+    let t1 = textureSampleLevel(ltc_tex, env_sampler, uv, 0, 0.0);
+    let t2 = textureSampleLevel(ltc_tex, env_sampler, uv, 1, 0.0);
+    let m_inv = mat3x3<f32>(
+        vec3<f32>(t1.x, 0.0, t1.y),
+        vec3<f32>(0.0, 1.0, 0.0),
+        vec3<f32>(t1.z, 0.0, t1.w),
+    );
+    let fresnel = specular_color * t2.x + (vec3<f32>(1.0) - specular_color) * t2.y;
+    let identity = mat3x3<f32>(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(0.0, 0.0, 1.0));
+    let spec = rl.color.rgb * fresnel * ltc_evaluate(n, v, p, m_inv, r0, r1, r2, r3);
+    let diff = rl.color.rgb * diffuse_color * ltc_evaluate(n, v, p, identity, r0, r1, r2, r3);
+    return LightTerms(diff, spec);
+}
+
+fn pbr_direct(n : vec3<f32>, v : vec3<f32>, l : vec3<f32>, diffuse_color : vec3<f32>, lobe : SpecLobe) -> vec3<f32> {
+    let t = pbr_direct_split(n, v, l, diffuse_color, lobe);
+    return t.diffuse + t.specular;
+}
+
+// three.js keeps `reflectedLight.directDiffuse` and `directSpecular` apart:
+// transmission replaces the diffuse alone.
+struct LightTerms {
+    diffuse : vec3<f32>,
+    specular : vec3<f32>,
+};
+
+fn pbr_direct_split(n : vec3<f32>, v : vec3<f32>, l : vec3<f32>, diffuse_color : vec3<f32>, lobe : SpecLobe) -> LightTerms {
+    // Softened by the sun's angular size — see `soft_lambert`. `params11.w` is
+    // zero for anything that has not set a sun, which gives back `max(ndl, 0)`.
+    let irradiance = soft_lambert(dot(n, l), mesh.params11.w);
+    return LightTerms(diffuse_color / PI * irradiance, brdf_ggx(l, v, n, lobe) * irradiance);
+}
+
+// three.js r165 `PhysicalMaterial`'s specular lobe, as `lights_physical_fragment`
+// fills it: reflectance at normal incidence (`specularColor`) and at grazing
+// (`specularF90`), GGX alpha, the iridescence weight and thin-film Fresnel, and
+// for anisotropy its strength, the tangent alpha and the anisotropy direction
+// and its perpendicular — not unit vectors, as three.js's `tbn` is not.
+struct SpecLobe {
+    f0 : vec3<f32>,
+    f90 : f32,
+    alpha : f32,
+    irid : f32,
+    irid_fresnel : vec3<f32>,
+    aniso : f32,
+    alpha_t : f32,
+    at : vec3<f32>,
+    ab : vec3<f32>,
+};
+
+// three.js `BRDF_GGX`: `F · V · D`, the Fresnel mixed toward the thin film's,
+// and the anisotropic V and D (Filament's) when there is anisotropy.
+fn brdf_ggx(l : vec3<f32>, v : vec3<f32>, n : vec3<f32>, s : SpecLobe) -> vec3<f32> {
+    let h = normalize(l + v);
+    let n_dot_l = clamp(dot(n, l), 0.0, 1.0);
+    let n_dot_v = clamp(dot(n, v), 0.0, 1.0);
+    let n_dot_h = clamp(dot(n, h), 0.0, 1.0);
+    let v_dot_h = clamp(dot(v, h), 0.0, 1.0);
+    var f = f_schlick_f90(s.f0, vec3<f32>(s.f90), v_dot_h);
+    f = mix(f, s.irid_fresnel, s.irid);
+    if (s.aniso >= 0.0) {
+        let t_l = dot(s.at, l);
+        let t_v = dot(s.at, v);
+        let t_h = dot(s.at, h);
+        let b_l = dot(s.ab, l);
+        let b_v = dot(s.ab, v);
+        let b_h = dot(s.ab, h);
+        // `V_GGX_SmithCorrelated_Anisotropic`. (Not `gv` / `gl`: GLSL
+        // reserves `gl_`, and naga would name a second `gl` that.)
+        let vis_v = n_dot_l * length(vec3<f32>(s.alpha_t * t_v, s.alpha * b_v, n_dot_v));
+        let vis_l = n_dot_v * length(vec3<f32>(s.alpha_t * t_l, s.alpha * b_l, n_dot_l));
+        let vis = clamp(0.5 / (vis_v + vis_l), 0.0, 1.0);
+        // `D_GGX_Anisotropic`
+        let a2 = s.alpha_t * s.alpha;
+        let dv = vec3<f32>(s.alpha * t_h, s.alpha_t * b_h, a2 * n_dot_h);
+        let w2 = a2 / dot(dv, dv);
+        let d = a2 * w2 * w2 / PI;
+        return f * (vis * d);
+    }
+    return f * (v_ggx_smith_correlated(s.alpha, n_dot_l, n_dot_v) * d_ggx(n_dot_h, s.alpha));
+}
+
+// three.js `getTangentFrame(eyePos, surfNorm, uv)`: the tangent and bitangent
+// from screen-space derivatives of position and uv, scaled together (so not
+// each of unit length) — the frame three.js's anisotropy and normal maps use
+// on geometry without a `tangent` attribute. In world space here; the frame
+// rotates with the space it is built in.
+fn three_tangent_frame(p : vec3<f32>, n : vec3<f32>, uv : vec2<f32>) -> TangentFrame {
+    let q0 = dpdx(p);
+    let q1 = dpdy(p);
+    let st0 = dpdx(uv);
+    let st1 = dpdy(uv);
+    let q1perp = cross(q1, n);
+    let q0perp = cross(n, q0);
+    let t = q1perp * st0.x + q0perp * st1.x;
+    let b = q1perp * st0.y + q0perp * st1.y;
+    let det = max(dot(t, t), dot(b, b));
+    let scale = select(inverseSqrt(det), 0.0, det == 0.0);
+    return TangentFrame(t * scale, b * scale);
+}
+
+// three.js `IBLSheenBRDF`: Estevez and Kulla's Charlie sheen integrated over
+// the hemisphere, as a curve fit.
+fn ibl_sheen_brdf(n : vec3<f32>, v : vec3<f32>, roughness : f32) -> f32 {
+    let n_dot_v = clamp(dot(n, v), 0.0, 1.0);
+    let r2 = roughness * roughness;
+    let a = select(-8.48 * r2 + 14.3 * roughness - 9.95, -339.2 * r2 + 161.4 * roughness - 25.9, roughness < 0.25);
+    let b = select(1.97 * r2 - 3.27 * roughness + 0.72, 44.0 * r2 - 23.7 * roughness + 3.26, roughness < 0.25);
+    let dg = exp(a * n_dot_v + b) + select(0.1 * (roughness - 0.25), 0.0, roughness < 0.25);
+    return clamp(dg / PI, 0.0, 1.0);
 }
 
 @fragment
 fn fs_main(in : VsOut, @builtin(front_facing) front_facing : bool) -> @location(0) vec4<f32> {
+    return shade_main(in, front_facing);
+}
+
+// What `shade_main` found passes through a blended surface, per channel, as
+// the factor the blend multiplies what is behind by (encoded, as the blend
+// works); negative when it returned before working it out, its colour then
+// not premultiplied. `fs_oit` reads it.
+var<private> glass_t_out : vec3<f32>;
+
+// The lit materials' shading, for `fs_main` and the OIT accumulation.
+fn shade_main(in : VsOut, front_facing : bool) -> vec4<f32> {
+    glass_t_out = vec3<f32>(-1.0);
+    clip_fragment(in.world_pos);
+    map_uv12 = in.uv12;
+    map_uv3 = in.uv3;
     let kind = mesh.flags.x;
     let tex_flags = mesh.flags.y;
     var base_color = mesh.color.rgb * in.vertex_color.rgb;
@@ -2485,20 +3652,38 @@ fn fs_main(in : VsOut, @builtin(front_facing) front_facing : bool) -> @location(
         var col = base_color;
         var a = opacity;
         if ((tex_flags & FLAG_MAP) != 0u) {
-            let s = textureSample(albedo_tex, tex_sampler, in.uv);
+            let s = sample_map(in.uv);
             col = col * s.rgb;
             a = a * s.a;
         }
-        if (mesh.flags.w != 0u) {
-            let threshold = bitcast<f32>(mesh.flags.w);
-            if (a < threshold) { discard; }
+        a = a * alpha_map_of(in.uv);
+        if (a < alpha_test_of()) { discard; }
+        // three.js `meshbasic_frag`: with a light map the indirect diffuse is
+        // its texel × `lightMapIntensity` / π instead of 1.
+        if (HAS_LIGHT_MAP) {
+            col = col * light_map_irradiance(in.uv) * 0.3183098861837907;
+        }
+        // three.js Basic reflects per vertex (`vReflect`); here per fragment
+        // from the interpolated normal, the same on any flat face.
+        if (HAS_ENV_MAP) {
+            let nb = normalize(in.world_normal) * select(-1.0, 1.0, front_facing);
+            col = apply_env_map(col, nb, in.world_pos, specular_strength_of(in.uv));
         }
         if ((mesh.flags.z & FLAG_SHADOW_MAT) != 0u) {
-            let sf = shadow_factor(in.world_pos, normalize(in.world_normal));
-            let darkness = 1.0 - sf;
-            return vec4<f32>(0.0, 0.0, 0.0, opacity * darkness);
+            // three.js ShadowMaterial: `vec4(color, opacity · (1 −
+            // getShadowMask()))`, the mask being the product of every
+            // shadow-casting light's shadow — and only on a mesh that
+            // receives shadows (`shadowmask_pars_fragment`).
+            var mask = 1.0;
+            if ((mesh.flags.z & FLAG_RECEIVE_SHADOW) != 0u) {
+                mask = shadow_mask(in.world_pos, normalize(in.world_normal));
+            }
+            let shadow_col = apply_fog(apply_tone_mapping(mesh.color.rgb), in.view_z);
+            return vec4<f32>(framebuffer_encode(shadow_col), opacity * (1.0 - mask));
         }
-        col = apply_fog(col, in.view_z);
+        // three.js `meshbasic_frag` ends with `tonemapping_fragment` too.
+        col = apply_fog(apply_tone_mapping(col), in.view_z);
+        if ((mesh.flags.z & FLAG_OPAQUE_OUT) != 0u) { a = 1.0; }
         return vec4<f32>(framebuffer_encode(col), a);
     }
     // Reflector / Refractor / Water — projectively samples the RT texture
@@ -2513,7 +3698,7 @@ fn fs_main(in : VsOut, @builtin(front_facing) front_facing : bool) -> @location(
         var col = vec3<f32>(0.0);
         let base_rgb = mesh.color.rgb;
         if ((tex_flags & FLAG_MAP) != 0u) {
-            let s = textureSampleLevel(albedo_tex, tex_sampler, uv, 0.0).rgb;
+            let s = sample_mirror(uv).rgb;
             // three.js's Reflector blendOverlay(sample, color): tint that
             // leaves mid-gray (0.5,0.5,0.5) unchanged.
             let one = vec3<f32>(1.0);
@@ -2525,7 +3710,8 @@ fn fs_main(in : VsOut, @builtin(front_facing) front_facing : bool) -> @location(
         } else {
             col = base_rgb;
         }
-        return vec4<f32>(framebuffer_encode(col), 1.0);
+        // three.js's Reflector shader ends in `tonemapping_fragment`.
+        return vec4<f32>(framebuffer_encode(apply_tone_mapping(col)), 1.0);
     }
     // Line / Points: unlit color, just the material's color × per-vertex color.
     // Lines have no normals so we can't fall through to PBR — without this branch
@@ -2543,28 +3729,48 @@ fn fs_main(in : VsOut, @builtin(front_facing) front_facing : bool) -> @location(
                 }
             }
         }
-        let col = apply_fog(line_col, in.view_z);
+        // three.js `map_particle_fragment`: the point's map and alpha map at its
+        // point coordinate.
+        if (kind == MAT_POINTS) {
+            if ((tex_flags & FLAG_MAP) != 0u) {
+                let s = sample_map(in.uv);
+                line_col = line_col * s.rgb;
+                opacity = opacity * s.a;
+            }
+            opacity = opacity * alpha_map_of(in.uv);
+        }
+        if (opacity < alpha_test_of()) { discard; }
+        // LineBasicMaterial draws with three.js's `basic` program, and
+        // PointsMaterial's `points` one tone-maps the same way.
+        let col = apply_fog(apply_tone_mapping(line_col), in.view_z);
         return vec4<f32>(framebuffer_encode(col), opacity);
     }
     if (kind == MAT_SPRITE) {
         var col = base_color;
         if ((tex_flags & FLAG_MAP) != 0u) {
-            let s = textureSample(albedo_tex, tex_sampler, in.uv);
+            // three.js `sprite_frag`: `diffuseColor *= sampledDiffuseColor`,
+            // alpha included — a sprite's map is usually its cut-out.
+            let s = sample_map(in.uv);
             col = col * s.rgb;
+            opacity = opacity * s.a;
         }
-        col = apply_fog(col, in.view_z);
+        opacity = opacity * alpha_map_of(in.uv);
+        if (opacity < alpha_test_of()) { discard; }
+        // three.js `sprite_frag` includes `tonemapping_fragment`.
+        col = apply_fog(apply_tone_mapping(col), in.view_z);
+        if ((mesh.flags.z & FLAG_OPAQUE_OUT) != 0u) { opacity = 1.0; }
         return vec4<f32>(framebuffer_encode(col), opacity);
     }
     // Window-space depth [0,1] from @builtin(position) (matches GPU depth buffer).
     if (kind == MAT_DEPTH) {
         let depth = 0.5 * in.clip_zw.x / in.clip_zw.y + 0.5;
         let vis = 1.0 - depth;
-        return vec4<f32>(vis, vis, vis, 1.0);
+        return vec4<f32>(framebuffer_data(vec3<f32>(vis)), 1.0);
     }
     if (kind == MAT_NORMAL) {
         // View-space normals (matches three.js MeshNormalMaterial for SSAO prepass).
         let view_n = normalize((frame.view * vec4<f32>(normalize(in.world_normal), 0.0)).xyz);
-        return vec4<f32>(view_n * 0.5 + 0.5, 1.0);
+        return vec4<f32>(framebuffer_data(view_n * 0.5 + 0.5), 1.0);
     }
     // Sky shader. Preetham atmospheric scattering model — same algorithm
     // three.js's Sky uses. Reads sun position from mesh.specular.xyz and
@@ -2642,10 +3848,11 @@ fn fs_main(in : VsOut, @builtin(front_facing) front_facing : bool) -> @location(
         let texColor = (Lin + L0) * 0.04 + vec3<f32>(0.0, 0.0003, 0.00075);
         let retColor = pow(max(texColor, vec3<f32>(0.0)), vec3<f32>(1.0 / (1.2 + 1.2 * vSunfade)));
 
-        // three.js Sky uses default NoToneMapping + sRGB output color space, so
-        // the equivalent of #include <colorspace_fragment> is the linear→gamma
-        // encode here. Clamp the input to [0,1] to match GL's framebuffer write.
-        return vec4<f32>(framebuffer_encode(retColor), 1.0);
+        // three.js's Sky ends in `tonemapping_fragment` then
+        // `colorspace_fragment`: the renderer's tone mapping (its examples set
+        // ACES with a low exposure, which this sky is tuned for), then the
+        // encode. Clamped to [0,1] as GL's framebuffer write is.
+        return vec4<f32>(framebuffer_encode(apply_tone_mapping(retColor)), 1.0);
     }
     // MeshDistanceMaterial: linear distance from `mesh.specular.xyz` (the
     // reference position, typically a point light) packed into RGBA. Mirrors
@@ -2674,32 +3881,56 @@ fn fs_main(in : VsOut, @builtin(front_facing) front_facing : bool) -> @location(
     if (!front_facing) {
         n_geom = -n_geom;
     }
+    // three.js `nonPerturbedNormal`: before any normal or bump map — the
+    // clearcoat's normal, and the one the anisotropy frame is built about.
+    let n_flat = n_geom;
     let v_dir = normalize(frame.camera_position.xyz - in.world_pos);
+    // three.js `getTangentFrame` about it, for anisotropy and the clearcoat
+    // normal map: taken here, before any branch, so every material and
+    // shader variant reads its screen-space derivatives at the same point.
+    let deriv_frame = three_tangent_frame(in.world_pos, n_flat, in.uv);
 
     // Normal mapping. The slot and FLAG_NORMAL_MAP were already plumbed through
     // from the material; this is where the sampled tangent-space normal finally
     // perturbs the shading normal. `normal_scale` (params2.yz) scales the
     // tangent/bitangent components, so 0 flattens the map and >1 exaggerates it.
     if ((tex_flags & FLAG_NORMAL_MAP) != 0u) {
-        let ts = textureSample(normal_tex, tex_sampler, in.uv).xyz * 2.0 - vec3<f32>(1.0);
+        let ts = sample_normal_map(in.uv).xyz * 2.0 - vec3<f32>(1.0);
         let tf = surface_frame(n_geom, in.world_pos, in.uv, in.world_tangent);
         let scaled = vec3<f32>(ts.x * mesh.params2.y, ts.y * mesh.params2.z, ts.z);
         let perturbed = tf.t * scaled.x + tf.b * scaled.y + n_geom * scaled.z;
         if (dot(perturbed, perturbed) > 1e-12) {
             n_geom = normalize(perturbed);
         }
+    } else if (HAS_BUMP_MAP) {
+        n_geom = bump_normal(n_geom, in.world_pos, in.uv, select(-1.0, 1.0, front_facing));
     }
 
     // Matcap: sample by view-space normal (xy * 0.5 + 0.5).
     if (kind == MAT_MATCAP) {
-        // View-space normal.
+        // three.js `meshmatcap.glsl`: the view-space normal projected onto a
+        // frame built around the view direction (so a sphere off the axis
+        // still shows the whole matcap), scaled by 0.495 to stay inside the
+        // disc; without a matcap texture, `mix(0.2, 0.8, uv.y)`.
         let view_n = normalize((frame.view * vec4<f32>(n_geom, 0.0)).xyz);
-        let uv = view_n.xy * 0.5 + 0.5;
-        var mc = vec3<f32>(1.0);
+        let view_dir = normalize(-(frame.view * vec4<f32>(in.world_pos, 1.0)).xyz);
+        let mx = normalize(vec3<f32>(view_dir.z, 0.0, -view_dir.x));
+        let my = cross(view_dir, mx);
+        let uv = vec2<f32>(dot(mx, view_n), dot(my, view_n)) * 0.495 + 0.5;
+        let sampled = sample_matcap(uv).rgb;
+        var mc = vec3<f32>(mix(0.2, 0.8, uv.y));
         if ((tex_flags & FLAG_MATCAP_MAP) != 0u) {
-            mc = textureSample(matcap_tex, tex_sampler, uv).rgb;
+            mc = sampled;
         }
-        let mcol = apply_fog(base_color * mc, in.view_z);
+        // three.js `meshmatcap.glsl`: `map_fragment` before the matcap.
+        if ((tex_flags & FLAG_MAP) != 0u) {
+            let s = sample_map(in.uv);
+            base_color = base_color * s.rgb;
+            opacity = opacity * s.a;
+        }
+        opacity = opacity * alpha_map_of(in.uv);
+        if (opacity < alpha_test_of()) { discard; }
+        let mcol = apply_fog(apply_tone_mapping(base_color * mc), in.view_z);
         return vec4<f32>(framebuffer_encode(mcol), opacity);
     }
 
@@ -2869,13 +4100,16 @@ fn fs_main(in : VsOut, @builtin(front_facing) front_facing : bool) -> @location(
     // *lit* material instead of an unlit one. Opaque materials never read the
     // result, so this only affects draws already on the alpha pipeline.
     if ((tex_flags & FLAG_MAP) != 0u) {
-        let sampled = textureSample(albedo_tex, tex_sampler, in.uv);
+        let sampled = sample_map(in.uv);
         base_color = base_color * sampled.rgb;
         opacity = opacity * sampled.a;
     }
+    opacity = opacity * alpha_map_of(in.uv);
+    // three.js `alphatest_fragment`: after the maps, before any lighting.
+    if (opacity < alpha_test_of()) { discard; }
     var emissive = mesh.emissive.rgb;
     if ((tex_flags & FLAG_EMISSIVE_MAP) != 0u) {
-        emissive = emissive * textureSample(emissive_tex, tex_sampler, in.uv).rgb;
+        emissive = emissive * sample_emissive_map(in.uv).rgb;
     }
     // A night map is not a lamp. `emissive` is added to the shaded colour
     // unconditionally, which is right for something that glows on its own and
@@ -2888,7 +4122,7 @@ fn fs_main(in : VsOut, @builtin(front_facing) front_facing : bool) -> @location(
         var sun_dir = vec3<f32>(0.0, 0.0, 0.0);
         var best = -1.0;
         for (var i : u32 = 0u; i < frame.light_counts.x; i = i + 1u) {
-            if (i >= 4u) { break; }
+            if (i >= MAX_LIGHTS_PER_KIND) { break; }
             let l = frame.dir_lights[i];
             let p = dot(l.color.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
             if (p > best) { best = p; sun_dir = -normalize(l.direction.xyz); }
@@ -2902,58 +4136,76 @@ fn fs_main(in : VsOut, @builtin(front_facing) front_facing : bool) -> @location(
         }
     }
 
-    // Toon: stepped Lambert from directional + ambient. Mirrors three.js's
-    // MeshToonMaterial where the diffuse term goes through BRDF_Lambert
-    // (= albedo / π) — without /π the lit side over-saturates.
-    if (kind == MAT_TOON) {
-        let RECIP_PI : f32 = 0.3183098861837907;
-        let steps = max(f32(bitcast<u32>(mesh.params2.w)), 1.0);
-        var sum = frame.ambient.rgb;
-        for (var i : u32 = 0u; i < frame.light_counts.x; i = i + 1u) {
-            if (i >= 4u) { break; }
-            let l = frame.dir_lights[i];
-            let to_light = -normalize(l.direction.xyz);
-            let lambert = max(dot(n_geom, to_light), 0.0);
-            let stepped = floor(lambert * steps) / max(steps - 1.0, 1.0);
-            sum = sum + l.color.rgb * stepped;
-        }
-        let lit = base_color * sum * RECIP_PI + emissive;
-        let fogged = apply_fog(lit, in.view_z);
-        return vec4<f32>(framebuffer_encode(fogged), opacity);
-    }
-
-    // Lambert / Phong path. three.js's MeshLambertMaterial applies BRDF_Lambert
-    // (= diffuseColor / PI) to the direct-light irradiance (dotNL * lightColor),
-    // so direct contributions need a 1/PI factor. Ambient and hemi are sent in
-    // pre-multiplied by PI on the JS side (because they're indirect irradiance),
-    // so they pass through without the divide and the result is just
-    // ambient * diffuseColor. We pre-multiply our ambient/hemi inputs by PI
-    // on the JS side too so the math here mirrors three.js exactly.
-    if (kind == MAT_LAMBERT || kind == MAT_PHONG) {
-        let LAMBERT_RECIP_PI : f32 = 0.3183098861837907;
-        var direct_sum = vec3<f32>(0.0);
-        var indirect_sum = frame.ambient.rgb;
+    // Lambert, Phong and Toon: three.js r165's `RE_Direct_Lambert`,
+    // `RE_Direct_BlinnPhong` and `RE_Direct_Toon` over every light, each
+    // receiving the shadows three.js gives it (`directLight.color *=
+    // getShadow(...)` when the mesh receives shadows), then the same tone
+    // mapping and output encode as every other lit material.
+    if (kind == MAT_LAMBERT || kind == MAT_PHONG || kind == MAT_TOON) {
+        let RECIP_PI_LP : f32 = 0.3183098861837907;
         let specular = mesh.specular.rgb;
         let shininess = mesh.params.x;
-        for (var i : u32 = 0u; i < frame.light_counts.x; i = i + 1u) {
-            if (i >= 4u) { break; }
-            direct_sum = direct_sum + shade_dir_lp(n_geom, v_dir, kind, specular, shininess, frame.dir_lights[i]);
+        // `fwidth(coord)/2` for the toon ramp, from the normal's derivatives
+        // (taken here, in uniform control flow).
+        let dndx = dpdx(n_geom);
+        let dndy = dpdy(n_geom);
+        let receive = (mesh.flags.z & FLAG_RECEIVE_SHADOW) != 0u;
+        if (receive) {
+            compute_shadows(in.world_pos, normalize(in.world_normal));
         }
-        for (var i : u32 = 0u; i < frame.light_counts.y; i = i + 1u) {
-            if (i >= 4u) { break; }
-            direct_sum = direct_sum + shade_point_lp(in.world_pos, n_geom, v_dir, kind, specular, shininess, frame.point_lights[i]);
-        }
-        for (var i : u32 = 0u; i < frame.light_counts.z; i = i + 1u) {
-            if (i >= 4u) { break; }
-            direct_sum = direct_sum + shade_spot_lp(in.world_pos, n_geom, v_dir, kind, specular, shininess, frame.spot_lights[i]);
-        }
+        // Indirect (ambient + hemisphere) and direct irradiance apart: three.js's
+        // `aomap_fragment` occludes `reflectedLight.indirectDiffuse` only.
+        var indirect = frame.ambient.rgb;
+        var irr = vec3<f32>(0.0);
+        var spec = vec3<f32>(0.0);
         for (var i : u32 = 0u; i < frame.light_counts.w; i = i + 1u) {
-            if (i >= 4u) { break; }
-            indirect_sum = indirect_sum + shade_hemi(n_geom, frame.hemi_lights[i]);
+            if (i >= MAX_LIGHTS_PER_KIND) { break; }
+            indirect = indirect + shade_hemi(n_geom, frame.hemi_lights[i]);
         }
-        let light_sum = indirect_sum + direct_sum * LAMBERT_RECIP_PI;
-        let lit = base_color * light_sum + emissive;
-        return vec4<f32>(apply_fog(lit, in.view_z), opacity);
+        indirect = indirect + light_map_irradiance(in.uv);
+        if ((tex_flags & FLAG_AO_MAP) != 0u) {
+            let ao_texel = sample_ao_map(in.uv).r;
+            indirect = indirect * ((ao_texel - 1.0) * mesh.params2.x + 1.0);
+        }
+        let n_lights = min(frame.light_counts.x, MAX_LIGHTS_PER_KIND) + min(frame.light_counts.y, MAX_LIGHTS_PER_KIND) + min(frame.light_counts.z, MAX_LIGHTS_PER_KIND);
+        for (var j : u32 = 0u; j < n_lights; j = j + 1u) {
+            var inc : Incident;
+            var shadow = 1.0;
+            let nd = min(frame.light_counts.x, MAX_LIGHTS_PER_KIND);
+            let np = min(frame.light_counts.y, MAX_LIGHTS_PER_KIND);
+            if (j < nd) {
+                let l = frame.dir_lights[j];
+                inc = Incident(-normalize(l.direction.xyz), l.color.rgb);
+                if (receive) { shadow = shadow_factor_dir(j); }
+            } else if (j < nd + np) {
+                inc = incident_point(in.world_pos, frame.point_lights[j - nd]);
+                if (receive) { shadow = shadow_factor_point(j - nd); }
+            } else {
+                inc = incident_spot(in.world_pos, frame.spot_lights[j - nd - np]);
+                if (receive) { shadow = shadow_factor_spot(j - nd - np); }
+            }
+            let color = inc.color * shadow;
+            let n_dot_l = dot(n_geom, inc.dir);
+            if (kind == MAT_TOON) {
+                let dx = 0.5 * dot(dndx, inc.dir);
+                let dy = 0.5 * dot(dndy, inc.dir);
+                let fw = 0.5 * (abs(dx) + abs(dy));
+                irr = irr + color * toon_gradient(n_dot_l, fw, dx, dy);
+            } else {
+                let e = color * clamp(n_dot_l, 0.0, 1.0);
+                irr = irr + e;
+                if (kind == MAT_PHONG) {
+                    spec = spec + e * brdf_blinn_phong(inc.dir, v_dir, n_geom, specular, shininess);
+                }
+            }
+        }
+        // three.js `RE_Direct_BlinnPhong`: `material.specularStrength`.
+        spec = spec * specular_strength_of(in.uv);
+        var lit = base_color * (indirect + irr) * RECIP_PI_LP + spec + emissive;
+        lit = apply_env_map(lit, n_geom, in.world_pos, specular_strength_of(in.uv));
+        lit = apply_tone_mapping(lit);
+        lit = apply_fog(lit, in.view_z);
+        return vec4<f32>(framebuffer_encode(lit), opacity);
     }
 
     // PBR (Standard / Physical) — common path.
@@ -2961,31 +4213,37 @@ fn fs_main(in : VsOut, @builtin(front_facing) front_facing : bool) -> @location(
     var roughness = mesh.params.z;
     var metalness = mesh.params.w;
     if ((tex_flags & FLAG_ROUGHNESS_MAP) != 0u) {
-        roughness = roughness * textureSample(roughness_tex, tex_sampler, in.uv).g;
+        roughness = roughness * sample_roughness_map(in.uv).g;
     }
     if ((tex_flags & FLAG_METALNESS_MAP) != 0u) {
-        metalness = metalness * textureSample(metalness_tex, tex_sampler, in.uv).b;
+        metalness = metalness * sample_metalness_map(in.uv).b;
     }
     // Material roughness before screen-space geometry term — env uses this on WebGPU
     // because SwiftShader dpdx(viewNormal) is much noisier than three.js WebGL dFdx,
     // inflating geometryRoughness and over-blurring CubeUV samples vs the reference.
     let roughness_env = max(roughness, 0.0525);
-    // Geometric specular antialiasing (Kaplanyan et al. 2016 / Filament).
+    // three.js `lights_physical_fragment`: `max(roughness, 0.0525)` plus
+    // `geometryRoughness` — the largest screen-space change of any component
+    // of the view-space, unperturbed normal — capped at 1.
     //
-    // Replaces three.js's `geometryRoughness`, which adds a max-of-derivatives
-    // term directly in *perceptual* roughness space. That both over-blurs
-    // silhouettes and under-corrects the actual problem, which is variance: a
-    // pixel covering many differently-oriented microfacets is physically a
-    // wider specular lobe. Estimating that variance and folding it into alpha
-    // is what stops crinkled foil from sparkling and crawling under motion.
-    //
-    // Note this reads the *shading* normal, so it also absorbs normal-map
-    // variance, not just geometric curvature — which is exactly what a
-    // high-frequency crinkle map needs.
-    roughness = specular_aa_roughness(n_geom, roughness_env);
+    // `Renderer::set_specular_antialiasing` swaps that geometry term for
+    // geometric specular antialiasing (Kaplanyan et al. 2016 / Filament):
+    // the variance of the *shading* normal across the pixel folded into
+    // alpha. It absorbs normal-map variance as well as curvature, which is
+    // what stops crinkled foil or a fine normal map from sparkling and
+    // crawling under motion, at the cost of no longer matching three.js.
+    let n_view_flat = (frame.view * vec4<f32>(n_flat, 0.0)).xyz;
+    let n_dxy = max(abs(dpdx(n_view_flat)), abs(dpdy(n_view_flat)));
+    let geometry_roughness = max(max(n_dxy.x, n_dxy.y), n_dxy.z);
+    let specular_aa = frame.light_counts2.y == 1u;
+    if (specular_aa) {
+        roughness = specular_aa_roughness(n_geom, roughness_env);
+    } else {
+        roughness = min(roughness_env + geometry_roughness, 1.0);
+    }
     var ao = 1.0;
     if ((tex_flags & FLAG_AO_MAP) != 0u) {
-        let ao_sample = textureSample(ao_tex, tex_sampler, in.uv).r;
+        let ao_sample = sample_ao_map(in.uv).r;
         let ao_int = mesh.params2.x;
         ao = 1.0 + (ao_sample - 1.0) * ao_int;
     }
@@ -2995,74 +4253,136 @@ fn fs_main(in : VsOut, @builtin(front_facing) front_facing : bool) -> @location(
     // decode at upload time by texture format; we mirror that via Rgba8UnormSrgb.
     let albedo_lin = base_color;
 
+    // `lit` gathers the diffuse light and `spec_lit` the specular, as three.js's
+    // `reflectedLight` keeps them, until transmission has replaced the diffuse.
     var lit = vec3<f32>(0.0);
+    var spec_lit = vec3<f32>(0.0);
     // AmbientLight is treated as indirect-diffuse irradiance and passed through
     // BRDF_Lambert (= diffuseColor * RECIPROCAL_PI), where in three.js's PBR
     // diffuseColor = (1 - metalness) * baseColor. Without the metalness factor
     // metals show an unphysical ambient diffuse glow.
     let RECIP_PI : f32 = 0.3183098861837907;
     let diffuse_color = albedo_lin * (1.0 - metalness);
-    lit = lit + diffuse_color * frame.ambient.rgb * ao * RECIP_PI;
+    lit = lit + diffuse_color * (frame.ambient.rgb + light_map_irradiance(in.uv)) * ao * RECIP_PI;
 
-    // Anisotropy: strength is packed in emissive.w for physical materials (0 =
-    // isotropic), the in-plane rotation in params4.w. The direct-light BRDF
-    // stretches the specular lobe along this frame into a brushed streak.
-    //
-    // The frame is a UV-aligned cotangent basis (Mikkelsen's derivative trick),
-    // solved from screen-space derivatives of world position against UV. That
-    // makes the streak direction a property of the *surface* rather than of the
-    // viewer, which is what lets anisotropy_rotation mean anything. A mesh with
-    // no UVs has a degenerate UV Jacobian, so fall back to the older
-    // position-only frame — still a plausible streak, just view-dependent.
-    let aniso = select(0.0, mesh.emissive.w, kind == MAT_PHYSICAL);
-    var tangent = vec3<f32>(1.0, 0.0, 0.0);
-    var bitangent = vec3<f32>(0.0, 1.0, 0.0);
-    if (abs(aniso) > 0.001) {
-        let tf = surface_frame(n_geom, in.world_pos, in.uv, in.world_tangent);
-        tangent = tf.t;
-        bitangent = tf.b;
-
-        // Rotate the frame within the surface plane (Rodrigues about n_geom,
-        // which reduces to a plain 2D rotation for in-plane vectors).
-        let rot = mesh.params4.w;
-        if (abs(rot) > 1e-6) {
-            let cr = cos(rot);
-            let sr = sin(rot);
-            let t_rot = tangent * cr + bitangent * sr;
-            bitangent = bitangent * cr - tangent * sr;
-            tangent = t_rot;
+    // three.js r165 `lights_physical_fragment`: the specular lobe's inputs.
+    // Standard has no `ior`: 0.04 at normal incidence and 1 at grazing.
+    // Physical derives both from `ior`, `specularIntensity` (`specular.w`) and
+    // `specularColor` (`specular.rgb`), and their maps.
+    var lobe : SpecLobe;
+    lobe.alpha = max(roughness * roughness, 0.0016);
+    lobe.f0 = mix(vec3<f32>(0.04), albedo_lin, metalness);
+    lobe.f90 = 1.0;
+    lobe.irid = 0.0;
+    lobe.irid_fresnel = vec3<f32>(0.0);
+    // Negative: no anisotropy. three.js keeps the anisotropic lobe once
+    // `anisotropy` is set, even where its map brings the strength to 0.
+    lobe.aniso = -1.0;
+    lobe.alpha_t = lobe.alpha;
+    lobe.at = vec3<f32>(0.0);
+    lobe.ab = vec3<f32>(0.0);
+    if (kind == MAT_PHYSICAL) {
+        var spec_intensity = mesh.specular.w;
+        var spec_tint = mesh.specular.rgb;
+        if (HAS_SPECULAR_COLOR_MAP) {
+            spec_tint = spec_tint * sample_specular_color_map(in.uv).rgb;
         }
+        if (HAS_SPECULAR_INTENSITY_MAP) {
+            spec_intensity = spec_intensity * sample_specular_intensity_map(in.uv).a;
+        }
+        let ior = mesh.params3.z;
+        let r0 = (ior - 1.0) / (ior + 1.0);
+        lobe.f0 = mix(min(vec3<f32>(r0 * r0) * spec_tint, vec3<f32>(1.0)) * spec_intensity, albedo_lin, metalness);
+        lobe.f90 = mix(spec_intensity, 1.0, metalness);
     }
 
-    // Specular F0. Dielectrics sit at 0.04; for metals the base color *is* the
-    // reflectance. The iridescence layer, when enabled, replaces this with the
-    // thin-film reflectance so both the direct and IBL lobes pick it up.
-    let base_f0 = mix(vec3<f32>(0.04), albedo_lin, metalness);
-    var spec_f0 = base_f0;
+    // Iridescence (`lights_fragment_begin`): the thin film's Fresnel at the
+    // view angle, over the base's `specularColor`. A film of 0 nm is none.
     if (kind == MAT_PHYSICAL && mesh.params5.x > 0.0) {
-        let irid = clamp(mesh.params5.x, 0.0, 1.0);
-        let film_ior = max(mesh.params5.y, 1.0);
-        var film_nm = max(mesh.params5.z, 0.0);
-        // Thickness map (three.js `iridescenceThicknessMap`): the green channel
-        // scales the material thickness, so a noise or gradient turns one flat
-        // hue into an oil-slick sweep across the surface.
-        if ((tex_flags & FLAG_IRIDESCENCE_MAP) != 0u) {
-            film_nm = film_nm * textureSample(iridescence_thickness_tex, tex_sampler, in.uv).g;
+        var irid = mesh.params5.x;
+        if (HAS_IRIDESCENCE_MAP) {
+            irid = irid * sample_iridescence_map(in.uv).r;
+        }
+        // `iridescenceThicknessRange`: the maximum (`params5.z`), or between the
+        // minimum (`map_params().z`) and it by the thickness map's green.
+        var film_nm = mesh.params5.z;
+        if (HAS_IRIDESCENCE_THICKNESS_MAP) {
+            let lo = map_params().z;
+            film_nm = (film_nm - lo) * sample_iridescence_thickness_map(in.uv).g + lo;
         }
         let n_dot_v_i = clamp(dot(n_geom, v_dir), 0.0, 1.0);
-        let irid_f = iridescence_fresnel(1.0, film_ior, base_f0, film_nm, n_dot_v_i);
-        spec_f0 = mix(base_f0, clamp(irid_f, vec3<f32>(0.0), vec3<f32>(1.0)), irid);
+        irid = select(clamp(irid, 0.0, 1.0), 0.0, film_nm == 0.0);
+        if (irid > 0.0) {
+            lobe.irid = irid;
+            lobe.irid_fresnel = iridescence_fresnel(1.0, mesh.params5.y, lobe.f0, film_nm, n_dot_v_i);
+        }
     }
 
-    // Sheen — a grazing-angle lobe layered over the base, accumulated per light
-    // alongside the main BRDF below.
-    let sheen_strength = select(0.0, clamp(mesh.params5.w, 0.0, 1.0), kind == MAT_PHYSICAL);
-    let sheen_tint = mesh.params6.rgb * sheen_strength;
-    let sheen_rough = clamp(mesh.params6.w, 0.07, 1.0);
+    // Anisotropy: three.js's `anisotropyVector`, `anisotropy · (cos, sin)` of
+    // `anisotropyRotation` (`emissive.w`, `params4.w`), turned by the map's
+    // direction and scaled by its strength, in the tangent frame of
+    // `normal_fragment_begin` — the `tangent` attribute's, else
+    // `getTangentFrame`'s, flipped with a back face.
+    let aniso_strength = select(0.0, mesh.emissive.w, kind == MAT_PHYSICAL);
+    if (aniso_strength > 0.0) {
+        var t = deriv_frame.t;
+        var b = deriv_frame.b;
+        if (dot(in.world_tangent.xyz, in.world_tangent.xyz) > 1e-12) {
+            t = normalize(in.world_tangent.xyz);
+            b = normalize(cross(normalize(in.world_normal), t) * select(-1.0, 1.0, in.world_tangent.w >= 0.0));
+        }
+        if (!front_facing) {
+            t = -t;
+            b = -b;
+        }
+        let rot = mesh.params4.w;
+        var av = aniso_strength * vec2<f32>(cos(rot), sin(rot));
+        if (HAS_ANISOTROPY_MAP) {
+            let polar = sample_anisotropy_map(in.uv).rgb;
+            av = mat2x2<f32>(av.x, av.y, -av.y, av.x) * normalize(2.0 * polar.rg - vec2<f32>(1.0)) * polar.b;
+        }
+        var a = length(av);
+        if (a == 0.0) {
+            av = vec2<f32>(1.0, 0.0);
+        } else {
+            av = av / a;
+            a = clamp(a, 0.0, 1.0);
+        }
+        lobe.aniso = a;
+        lobe.alpha_t = mix(lobe.alpha, 1.0, a * a);
+        lobe.at = t * av.x + b * av.y;
+        lobe.ab = b * av.x - t * av.y;
+    }
+
+    // Sheen (`lights_physical_fragment`): `sheenColor` (× `sheen`, as three.js
+    // uploads it) and its map, and `sheenRoughness` clamped to [0.07, 1]
+    // before its map scales it.
+    let sheen_strength = select(0.0, mesh.params5.w, kind == MAT_PHYSICAL);
+    var sheen_tint = mesh.params6.rgb * sheen_strength;
+    var sheen_rough = clamp(mesh.params6.w, 0.07, 1.0);
+    if (sheen_strength > 0.0) {
+        if (HAS_SHEEN_COLOR_MAP) {
+            sheen_tint = sheen_tint * sample_sheen_color_map(in.uv).rgb;
+        }
+        if (HAS_SHEEN_ROUGHNESS_MAP) {
+            sheen_rough = sheen_rough * sample_sheen_roughness_map(in.uv).a;
+        }
+    }
     var sheen_lit = vec3<f32>(0.0);
 
     let receive_shadow = (mesh.flags.z & FLAG_RECEIVE_SHADOW) != 0u;
-    let sf = select(1.0, shadow_factor(in.world_pos, normalize(in.world_normal)), receive_shadow);
+    // Each light's shadow once, for the direct loops and the clearcoat ones.
+    var sf_dir : array<f32, 8>;
+    var sf_point : array<f32, 8>;
+    var sf_spot : array<f32, 8>;
+    if (receive_shadow) {
+        compute_shadows(in.world_pos, normalize(in.world_normal));
+    }
+    for (var i = 0u; i < MAX_LIGHTS_PER_KIND; i = i + 1u) {
+        sf_dir[i] = select(1.0, shadow_factor_dir(i), receive_shadow && i < frame.light_counts.x);
+        sf_point[i] = select(1.0, shadow_factor_point(i), receive_shadow && i < frame.light_counts.y);
+        sf_spot[i] = select(1.0, shadow_factor_spot(i), receive_shadow && i < frame.light_counts.z);
+    }
     let twilight_width = mesh.params10.w;
     // Computed outside the loop: `textureSample` needs uniform control flow,
     // and a call from inside a conditional branch has undefined derivatives.
@@ -3074,13 +4394,15 @@ fn fs_main(in : VsOut, @builtin(front_facing) front_facing : bool) -> @location(
         eclipse_att = eclipse_factor(in.world_pos, sun_dir);
     }
     for (var i : u32 = 0u; i < frame.light_counts.x; i = i + 1u) {
-        if (i >= 4u) { break; }
+        if (i >= MAX_LIGHTS_PER_KIND) { break; }
         let l = frame.dir_lights[i];
         let to_light = -normalize(l.direction.xyz);
         // The first directional light is the key, and the only one a cloud deck
         // is modelled as shadowing.
-        let attenuation = select(1.0, sf * cloud_att * eclipse_att, i == 0u);
-        lit = lit + l.color.rgb * pbr_direct(n_geom, v_dir, to_light, tangent, bitangent, albedo_lin, roughness, metalness, aniso, spec_f0) * attenuation;
+        let attenuation = sf_dir[i] * select(1.0, cloud_att * eclipse_att, i == 0u);
+        let dt = pbr_direct_split(n_geom, v_dir, to_light, diffuse_color, lobe);
+        lit = lit + l.color.rgb * dt.diffuse * attenuation;
+        spec_lit = spec_lit + l.color.rgb * dt.specular * attenuation;
 
         // Twilight. A hard Lambert terminator is what an airless body has; on
         // one with an atmosphere, light scatters round the limb and carries a
@@ -3139,20 +4461,22 @@ fn fs_main(in : VsOut, @builtin(front_facing) front_facing : bool) -> @location(
         }
     }
     for (var i : u32 = 0u; i < frame.light_counts.y; i = i + 1u) {
-        if (i >= 4u) { break; }
+        if (i >= MAX_LIGHTS_PER_KIND) { break; }
         let l = frame.point_lights[i];
         let to_light_vec = l.position.xyz - in.world_pos;
         let d = length(to_light_vec);
         let to_light = to_light_vec / max(d, 0.0001);
         let att = punctual_attenuation(d, l.params.x, l.params.y);
-        let sf_pt = select(1.0, select(1.0, shadow_factor_point(in.world_pos), receive_shadow), i == 0u);
-        lit = lit + l.color.rgb * att * sf_pt * pbr_direct(n_geom, v_dir, to_light, tangent, bitangent, albedo_lin, roughness, metalness, aniso, spec_f0);
+        let sf_pt = sf_point[i];
+        let pt = pbr_direct_split(n_geom, v_dir, to_light, diffuse_color, lobe);
+        lit = lit + l.color.rgb * att * sf_pt * pt.diffuse;
+        spec_lit = spec_lit + l.color.rgb * att * sf_pt * pt.specular;
         if (sheen_strength > 0.0) {
             sheen_lit = sheen_lit + l.color.rgb * att * sf_pt * brdf_sheen(n_geom, v_dir, to_light, sheen_tint, sheen_rough);
         }
     }
     for (var i : u32 = 0u; i < frame.light_counts.z; i = i + 1u) {
-        if (i >= 4u) { break; }
+        if (i >= MAX_LIGHTS_PER_KIND) { break; }
         let l = frame.spot_lights[i];
         let to_light_vec = l.position.xyz - in.world_pos;
         let d = length(to_light_vec);
@@ -3164,15 +4488,17 @@ fn fs_main(in : VsOut, @builtin(front_facing) front_facing : bool) -> @location(
             cone = smoothstep(l.params.z, l.params.w, cos_angle);
         }
         let att = punctual_attenuation(d, l.params.x, l.params.y) * cone;
-        let sf_spot = select(1.0, select(1.0, shadow_factor_spot(in.world_pos), receive_shadow), i == 0u);
-        lit = lit + l.color.rgb * att * sf_spot * pbr_direct(n_geom, v_dir, to_light, tangent, bitangent, albedo_lin, roughness, metalness, aniso, spec_f0);
+        let sf_sp = sf_spot[i];
+        let st = pbr_direct_split(n_geom, v_dir, to_light, diffuse_color, lobe);
+        lit = lit + l.color.rgb * att * sf_sp * st.diffuse;
+        spec_lit = spec_lit + l.color.rgb * att * sf_sp * st.specular;
         if (sheen_strength > 0.0) {
-            sheen_lit = sheen_lit + l.color.rgb * att * sf_spot * brdf_sheen(n_geom, v_dir, to_light, sheen_tint, sheen_rough);
+            sheen_lit = sheen_lit + l.color.rgb * att * sf_sp * brdf_sheen(n_geom, v_dir, to_light, sheen_tint, sheen_rough);
         }
     }
     // HemisphereLight is also indirect-diffuse and metals don't diffuse it.
     for (var i : u32 = 0u; i < frame.light_counts.w; i = i + 1u) {
-        if (i >= 4u) { break; }
+        if (i >= MAX_LIGHTS_PER_KIND) { break; }
         lit = lit + diffuse_color * shade_hemi(n_geom, frame.hemi_lights[i]) * ao * RECIP_PI;
     }
 
@@ -3187,38 +4513,69 @@ fn fs_main(in : VsOut, @builtin(front_facing) front_facing : bool) -> @location(
     var cc_roughness = 0.0;
     var cc_fresnel = vec3<f32>(0.0);
     var cc_lit = vec3<f32>(0.0);
-    if (kind == MAT_PHYSICAL) {
-        cc = clamp(mesh.params3.x, 0.0, 1.0);
-        cc_roughness = clamp(mesh.params3.y, 0.0, 1.0);
-        // three.js clearcoat: α = roughness² (same remap as the base GGX).
+    // three.js `geometryClearcoatNormal`: the unperturbed normal — the base's
+    // normal and bump maps are under the coat — or the coat's own normal map.
+    var cc_n = n_flat;
+    if (kind == MAT_PHYSICAL && mesh.params3.x > 0.0) {
+        cc = mesh.params3.x;
+        cc_roughness = mesh.params3.y;
+        if (HAS_CLEARCOAT_MAP) {
+            cc = cc * sample_clearcoat_map(in.uv).x;
+        }
+        if (HAS_CLEARCOAT_ROUGHNESS_MAP) {
+            cc_roughness = cc_roughness * sample_clearcoat_roughness_map(in.uv).y;
+        }
+        if (HAS_CLEARCOAT_NORMAL_MAP) {
+            // `clearcoat_normal_fragment_maps`, scaled by `clearcoatNormalScale`
+            // (`map_params2().xy`), in `tbn2` — the `tangent` attribute's
+            // frame, else `getTangentFrame`'s, flipped with a back face.
+            var t = deriv_frame.t;
+            var b = deriv_frame.b;
+            if (dot(in.world_tangent.xyz, in.world_tangent.xyz) > 1e-12) {
+                t = normalize(in.world_tangent.xyz);
+                b = normalize(cross(normalize(in.world_normal), t) * select(-1.0, 1.0, in.world_tangent.w >= 0.0));
+            }
+            if (!front_facing) {
+                t = -t;
+                b = -b;
+            }
+            var m = sample_clearcoat_normal_map(in.uv).xyz * 2.0 - vec3<f32>(1.0);
+            m = vec3<f32>(m.xy * map_params2().xy, m.z);
+            cc_n = normalize(t * m.x + b * m.y + n_flat * m.z);
+        }
+        cc = clamp(cc, 0.0, 1.0);
+        // `max(clearcoatRoughness, 0.0525)` plus the geometry term, as the
+        // base's roughness has it.
+        if (specular_aa) {
+            cc_roughness = specular_aa_roughness(cc_n, max(cc_roughness, 0.0525));
+        } else {
+            cc_roughness = min(max(cc_roughness, 0.0525) + geometry_roughness, 1.0);
+        }
         let cc_a = max(cc_roughness * cc_roughness, 0.0016);
-        let n_dot_v = max(dot(n_geom, v_dir), 0.0);
         let fc0 = vec3<f32>(0.04);
-        cc_fresnel = f_schlick(n_dot_v, fc0);
+        cc_fresnel = f_schlick(clamp(dot(cc_n, v_dir), 0.0, 1.0), fc0);
 
         for (var i : u32 = 0u; i < frame.light_counts.x; i = i + 1u) {
-            if (i >= 4u) { break; }
+            if (i >= MAX_LIGHTS_PER_KIND) { break; }
             let l = frame.dir_lights[i];
             let to_light = -normalize(l.direction.xyz);
-            let att = select(1.0, sf, i == 0u);
+            let att = sf_dir[i];
             cc_lit = cc_lit + l.color.rgb * att
-                * clearcoat_spec(n_geom, v_dir, to_light, cc_a, fc0);
+                * clearcoat_spec(cc_n, v_dir, to_light, cc_a, fc0);
         }
-        // Point and spot lights were previously ignored by the clearcoat layer,
-        // so a lacquered surface lit only by a lamp had no coat highlight.
         for (var i : u32 = 0u; i < frame.light_counts.y; i = i + 1u) {
-            if (i >= 4u) { break; }
+            if (i >= MAX_LIGHTS_PER_KIND) { break; }
             let l = frame.point_lights[i];
             let to_light_vec = l.position.xyz - in.world_pos;
             let d = length(to_light_vec);
             let to_light = to_light_vec / max(d, 0.0001);
             let att = punctual_attenuation(d, l.params.x, l.params.y);
-            let sf_pt = select(1.0, select(1.0, shadow_factor_point(in.world_pos), receive_shadow), i == 0u);
+            let sf_pt = sf_point[i];
             cc_lit = cc_lit + l.color.rgb * att * sf_pt
-                * clearcoat_spec(n_geom, v_dir, to_light, cc_a, fc0);
+                * clearcoat_spec(cc_n, v_dir, to_light, cc_a, fc0);
         }
         for (var i : u32 = 0u; i < frame.light_counts.z; i = i + 1u) {
-            if (i >= 4u) { break; }
+            if (i >= MAX_LIGHTS_PER_KIND) { break; }
             let l = frame.spot_lights[i];
             let to_light_vec = l.position.xyz - in.world_pos;
             let d = length(to_light_vec);
@@ -3230,73 +4587,23 @@ fn fs_main(in : VsOut, @builtin(front_facing) front_facing : bool) -> @location(
                 cone = smoothstep(l.params.z, l.params.w, cos_angle);
             }
             let att = punctual_attenuation(d, l.params.x, l.params.y) * cone;
-            let sf_spot = select(1.0, select(1.0, shadow_factor_spot(in.world_pos), receive_shadow), i == 0u);
-            cc_lit = cc_lit + l.color.rgb * att * sf_spot
-                * clearcoat_spec(n_geom, v_dir, to_light, cc_a, fc0);
+            let sf_sp = sf_spot[i];
+            cc_lit = cc_lit + l.color.rgb * att * sf_sp
+                * clearcoat_spec(cc_n, v_dir, to_light, cc_a, fc0);
         }
     }
 
-    // Rectangular area lights. Previously a no-op stub, so a scene lit only by
-    // a RectAreaLight rendered black.
+    // three.js r165 `RE_Direct_RectArea_Physical`: the specular through the
+    // linearly transformed cosine fitted to this view and roughness (the
+    // `ltc_1` matrix, Hill's `ltc_2` Fresnel), the diffuse through the
+    // unit one. No sheen, clearcoat or ambient occlusion: three.js gives a
+    // rect light none of them.
     for (var i : u32 = 0u; i < frame.light_counts2.x; i = i + 1u) {
-        if (i >= 4u) { break; }
+        if (i >= MAX_LIGHTS_PER_KIND) { break; }
         let rl = frame.rect_lights[i];
-        let center = rl.position.xyz;
-        let right = rl.right.xyz;
-        let up = rl.up.xyz;
-
-        // Single-sided, like three.js: a RectAreaLight emits along its local
-        // -Z, and cross(right, up) is local +Z — so the emitting direction is
-        // the *negated* cross product.
-        let light_n = -normalize(cross(right, up));
-        let to_surface = in.world_pos - center;
-        if (dot(to_surface, light_n) <= 0.0) { continue; }
-
-        // Winding matters: the edge cross-products below must accumulate a
-        // vector pointing *toward* the lit side, or every contribution comes
-        // out negative and clamps to zero. This order is the one that does.
-        let c0 = center - right - up;
-        let c1 = center + right - up;
-        let c2 = center + right + up;
-        let c3 = center - right + up;
-
-        // Diffuse: exact form factor over the quad.
-        let ff = rect_diffuse_factor(n_geom, in.world_pos, c0, c1, c2, c3);
-        lit = lit + diffuse_color * rl.color.rgb * ff * ao;
-
-        // Specular: representative point, with the lobe widened by the light's
-        // angular size so a big panel gives a big soft highlight.
-        let mrp = rect_representative_point(in.world_pos, reflect(-v_dir, n_geom), center, right, up);
-        let to_mrp = mrp - in.world_pos;
-        let dist = length(to_mrp);
-        if (dist > 1e-4) {
-            let l_dir = to_mrp / dist;
-            let alpha = max(roughness * roughness, 0.0016);
-            let radius = max(length(right), length(up));
-            let norm = rect_spec_normalisation(alpha, radius, dist);
-            // Reuse the main BRDF so anisotropy and iridescence apply here too;
-            // the form factor already carries the light's solid angle, so weight
-            // the specular by it rather than by a 1/d² falloff.
-            let brdf = pbr_direct(
-                n_geom, v_dir, l_dir, tangent, bitangent,
-                albedo_lin, roughness, metalness, aniso, spec_f0,
-            );
-            let n_dot_l = max(dot(n_geom, l_dir), 0.0);
-            // Strip the diffuse half — it is already accounted for by `ff`.
-            let spec_only = max(brdf - diffuse_color * RECIP_PI * n_dot_l, vec3<f32>(0.0));
-            lit = lit + rl.color.rgb * spec_only * ff * norm * PI;
-
-            if (sheen_strength > 0.0) {
-                sheen_lit = sheen_lit + rl.color.rgb
-                    * brdf_sheen(n_geom, v_dir, l_dir, sheen_tint, sheen_rough) * ff * PI;
-            }
-            if (kind == MAT_PHYSICAL && cc > 0.0) {
-                let cc_a = max(cc_roughness * cc_roughness, 0.0016);
-                cc_lit = cc_lit + rl.color.rgb
-                    * clearcoat_spec(n_geom, v_dir, l_dir, cc_a, vec3<f32>(0.04))
-                    * ff * rect_spec_normalisation(cc_a, radius, dist) * PI;
-            }
-        }
+        let rt = rect_area_light(rl, in.world_pos, n_geom, v_dir, roughness, lobe.f0, diffuse_color);
+        lit = lit + rt.diffuse;
+        spec_lit = spec_lit + rt.specular;
     }
 
     // How much of the light arriving here leaves as a specular reflection.
@@ -3309,30 +4616,28 @@ fn fs_main(in : VsOut, @builtin(front_facing) front_facing : bool) -> @location(
 
     // IBL — mirrors three.js MeshStandardMaterial envmap_physical_pars_fragment +
     // RE_IndirectSpecular_Physical (getIBLRadiance + computeMultiscattering).
-    // tone_mapping_exposure.z is the env-enabled flag (1 = on, 0 = off).
-    if (frame.tone_mapping_exposure.z > 0.5) {
-        // spec_f0 rather than a locally-derived F0, so an iridescent film tints
-        // the environment reflection too — otherwise thin-film only showed up
-        // under direct lights and vanished on a purely IBL-lit object.
-        let specular_color = spec_f0;
-        let specular_f90 = 1.0;
+    // `env_u.info.x`: whether this draw has an environment (1 = on).
+    if (env_u.info.x > 0.5) {
+        // three.js `computeMultiscatteringIridescence`: the thin film's
+        // Fresnel mixed into the reflectance, so an iridescent film tints the
+        // environment's reflection too.
+        let specular_color = mix(lobe.f0, lobe.irid_fresnel, lobe.irid);
+        let specular_f90 = lobe.f90;
 
-        // Anisotropy bends the reflection toward the low-roughness axis, so a
-        // brushed surface smears the environment along the streak instead of
-        // reflecting it like a mirror (three.js getIBLAnisotropyRadiance).
+        // `getIBLAnisotropyRadiance`: anisotropy bends the normal the
+        // environment is reflected about toward the anisotropy bitangent's
+        // plane, so a brushed surface smears it along the streak; and
+        // `getIBLRadiance` pulls the reflection toward that normal by
+        // roughness².
         var refl_normal = n_geom;
-        if (abs(aniso) > 0.001) {
-            let aniso_t = cross(bitangent, v_dir);
-            let aniso_n = cross(aniso_t, bitangent);
-            var bend = 1.0 - abs(aniso) * (1.0 - roughness_env);
+        if (lobe.aniso >= 0.0) {
+            let bent = normalize(cross(cross(lobe.ab, v_dir), lobe.ab));
+            var bend = 1.0 - lobe.aniso * (1.0 - roughness_env);
             bend = bend * bend;
-            bend = bend * bend;
-            if (dot(aniso_n, aniso_n) > 1e-8) {
-                refl_normal = normalize(mix(normalize(aniso_n), n_geom, bend));
-            }
+            refl_normal = normalize(mix(bent, n_geom, bend * bend));
         }
         var reflect_vec = reflect(-v_dir, refl_normal);
-        reflect_vec = normalize(mix(reflect_vec, n_geom, roughness_env * roughness_env));
+        reflect_vec = normalize(mix(reflect_vec, refl_normal, roughness_env * roughness_env));
         // NOTE: prefiltering this by the reflection's screen footprint
         // (`dpdx(reflect_vec)`) was tried and measures as a no-op here — on a
         // phone's side rail the reflection direction changes little enough per
@@ -3362,7 +4667,7 @@ fn fs_main(in : VsOut, @builtin(front_facing) front_facing : bool) -> @location(
         // much of the room this point can actually see.
         let ibl_n_dot_v = clamp(dot(n_geom, v_dir), 0.0, 1.0);
         let spec_occ = specular_occlusion(ibl_n_dot_v, ao, roughness_env);
-        lit = lit + (radiance * single_scatter + multi_scatter * cosine_weighted_irr) * spec_occ;
+        spec_lit = spec_lit + (radiance * single_scatter + multi_scatter * cosine_weighted_irr) * spec_occ;
         // The environment's diffuse term, added exactly ONCE.
         //
         // In three.js this line lives inside RE_IndirectSpecular_Physical, and
@@ -3383,128 +4688,125 @@ fn fs_main(in : VsOut, @builtin(front_facing) front_facing : bool) -> @location(
         // alone, so a transparent metal is opaque whether or not a cube is
         // bound instead of flipping appearance when one is.
         let fab_a = dfg_approx(n_geom, v_dir, roughness_env);
-        let refl = spec_f0 * fab_a.x + vec3<f32>(fab_a.y);
+        let refl = lobe.f0 * fab_a.x + vec3<f32>(lobe.f90 * fab_a.y);
         spec_coverage = clamp(max(max(refl.r, refl.g), refl.b), 0.0, 1.0);
     }
 
-    // Clearcoat composite, deferred to here so the coat's Fresnel attenuates
-    // the base's environment reflection too — matching three.js's
-    // `outgoingLight * (1 - clearcoat*Fcc) + clearcoatSpecular * clearcoat`.
-    if (kind == MAT_PHYSICAL && cc > 0.0) {
-        // The coat is a smooth dielectric shell, so it reflects the environment
-        // in its own right. Without this a cover glass or car lacquer only
-        // showed a highlight where a light happened to point at it.
-        if (frame.tone_mapping_exposure.z > 0.5) {
-            let cc_refl = reflect(-v_dir, n_geom);
-            let cc_radiance = sample_env_cube(cc_refl, cc_roughness);
-            let cc_fab = dfg_approx(n_geom, v_dir, cc_roughness);
-            cc_lit = cc_lit + cc_radiance * (vec3<f32>(0.04) * cc_fab.x + cc_fab.y);
-        }
-        lit = lit * (vec3<f32>(1.0) - cc_fresnel * cc) + cc_lit * cc;
-    }
-
-    // Sheen composite. three.js darkens the base by an energy-compensation
-    // factor before adding the sheen lobe, so a strong sheen doesn't push the
-    // surface over 1.0. Applied after IBL (rather than before clearcoat, where
-    // three.js puts it) so the compensation covers the *whole* accumulated
-    // result — threers runs IBL after clearcoat, unlike three.js.
-    if (sheen_strength > 0.0) {
-        // Environment term. The Charlie lobe's directional albedo is not the
-        // GGX one, so `dfg_approx` is wrong here; use Estevez & Kulla's fitted
-        // E(NoV, roughness) instead. Without this a sheen surface lit only by
-        // an environment stayed flat — the retroreflective rim, which is the
-        // entire point of sheen, only appeared under punctual lights.
-        if (frame.tone_mapping_exposure.z > 0.5) {
-            let sheen_irr = sample_env_cube(n_geom, sheen_rough);
-            let n_dot_v = max(dot(n_geom, v_dir), 0.0);
-            sheen_lit = sheen_lit + sheen_irr * sheen_tint * sheen_env_albedo(n_dot_v, sheen_rough);
-        }
-        let sheen_max = max(max(sheen_tint.r, sheen_tint.g), sheen_tint.b);
-        let sheen_energy_comp = 1.0 - 0.157 * sheen_max;
-        lit = lit * sheen_energy_comp + sheen_lit;
-    }
-
-    // Transmission (glass): MeshPhysicalMaterial.transmission makes the surface
-    // see-through, Fresnel-weighted by the material IOR — opaque at the grazing
-    // rim, transparent face-on.
     var out_opacity = opacity;
 
-    // A TRANSPARENT SURFACE STILL REFLECTS.
-    //
-    // Alpha says how much of what is *behind* the surface shows through. A
-    // reflection happens in front of it and is not transmitted at all, so
-    // scaling the whole shaded colour by alpha — which is what plain alpha
-    // blending does — fades the reflection out along with everything else. A
-    // polished surface at `alphaMode: BLEND` with alpha 0.2 then loses 80% of
-    // its highlight and reads as grey film rather than glass. Authors without
-    // `KHR_materials_transmission` fake glass exactly this way, so it is the
-    // common case, not the corner one.
-    //
-    // Raising coverage by the specular reflectance is the one-channel version
-    // of the fix: the reflection keeps `opacity + (1 - opacity) * reflectance`
-    // of its strength instead of `opacity`. For a dielectric that is a few
-    // percent — a faint grazing rim, which is correct. For a metal, where the
-    // reflectance is most of the spectrum, it is the difference between a
-    // mirror and a smear; and a transparent metal is not a thing an author
-    // meant in the first place. The transmitted half is over-weighted by the
-    // same factor, which is exactly right for a metal (it transmits nothing)
-    // and negligible for glass, so the approximation errs the right way at
-    // both ends. Premultiplied output would make both exact, at the cost of
-    // splitting the accumulator every light contributes to.
-    if (opacity < 1.0) {
+    // threers's reflective transparency (`Renderer::set_reflective_transparency`,
+    // off by default): a transparent surface's alpha raised by its specular
+    // reflectance — `opacity + (1 − opacity) · reflectance` — so a reflection,
+    // which happens in front of the surface and is not transmitted, does not
+    // fade with the alpha that lets the background through. three.js blends
+    // the whole colour by `opacity`; this keeps polished glass faked with
+    // `alphaMode: BLEND` reading as glass rather than grey film.
+    if (opacity < 1.0 && frame.light_counts2.z == 1u) {
         out_opacity = clamp(opacity + (1.0 - opacity) * spec_coverage, 0.0, 1.0);
     }
 
-    if (kind == MAT_PHYSICAL && mesh.params3.w > 0.0) {
-        let transmission = clamp(mesh.params3.w, 0.0, 1.0);
-        let t_ior = max(mesh.params3.z, 1.0);
-        let thickness = max(mesh.params4.x, 0.0);
-        let f0s = pow((t_ior - 1.0) / (t_ior + 1.0), 2.0);
-        let ndv = max(dot(n_geom, v_dir), 0.0);
-        let fresnel = f0s + (1.0 - f0s) * pow(1.0 - ndv, 5.0);
-
-        if (frame.tone_mapping_exposure.z > 0.5) {
-            // Volumetric refraction (three.js getIBLVolumeRefraction fallback):
-            // with an environment but no transmission framebuffer, bend the view
-            // ray through the surface by the IOR and read the environment along
-            // it, so the glass shows a refracted, thickness-attenuated image of
-            // the surroundings rather than just fading out. This is real IOR
-            // refraction of the IBL environment, composited opaquely in-shader
-            // (no back-to-front sorting → flicker-free).
-            let refr = refract(-v_dir, n_geom, 1.0 / t_ior);
-            // refract() returns 0 on total internal reflection; guard it.
-            var refr_dir = n_geom;
-            if (dot(refr, refr) > 1e-6) { refr_dir = normalize(refr); }
-            var transmitted = sample_env_cube(refr_dir, roughness_env);
-            transmitted = transmitted * volume_transmittance(albedo_lin, thickness);
-            // Mix the surface shading toward the refracted image by the
-            // transmission factor; the Fresnel rim keeps its reflective
-            // highlight (already added by the IBL block above).
-            lit = mix(lit, transmitted, transmission * (1.0 - fresnel));
-            // Glassy edge: the signature "curved shell" read comes from the
-            // grazing rim lighting up with reflected environment. Brighten the
-            // silhouette with the mirror-reflected env plus a thin white sheen,
-            // scaled by a steep Fresnel so only the very edge glows.
-            let rim = pow(1.0 - ndv, 4.0);
-            let rim_env = sample_env_cube(reflect(-v_dir, n_geom), roughness_env);
-            lit = lit + rim * (rim_env * 0.7 + vec3<f32>(0.06)) * transmission;
-            // Keep a faint body so the silhouette and heatmap stay legible even
-            // face-on; only the grazing Fresnel rim is fully opaque.
-            out_opacity = opacity * clamp(fresnel + rim * 0.6 + (1.0 - transmission) + 0.15, 0.0, 1.0);
-        } else {
-            // No environment: screen-composite approximation (Fresnel opacity),
-            // drawn over the already-rendered scene via alpha blending.
-            out_opacity = opacity * (1.0 - transmission * (1.0 - fresnel));
-        }
+    // three.js r165 `transmission_fragment`: the opaque scene behind, read
+    // from the transmission capture along the ray refracted through
+    // `thickness` (`getIBLVolumeRefraction`), replaces the diffuse light by
+    // `transmission`; and `transmissionAlpha` scales the alpha a transparent
+    // material blends with. `transmissionMap`'s red and `thicknessMap`'s green
+    // scale the two — sampled here, in uniform control flow.
+    var transmission_tex = 1.0;
+    var thickness_tex = 1.0;
+    if (HAS_TRANSMISSION_MAP) {
+        transmission_tex = sample_transmission_map(in.uv).r;
     }
+    if (HAS_THICKNESS_MAP) {
+        thickness_tex = sample_thickness_map(in.uv).g;
+    }
+    let blended_glass = (mesh.flags.z & FLAG_BLENDED_GLASS) != 0u;
+    // What of the background passes, per channel (blended glass only).
+    var glass_through = vec3<f32>(0.0);
+    if (kind == MAT_PHYSICAL && mesh.params3.w > 0.0 && blended_glass) {
+        // The blended glass modes: the background comes through the blend,
+        // so transmission is a share of it — what Fresnel does not reflect,
+        // absorbed over `thickness` — and the alpha is what does not pass.
+        // The two-draw `Glass` pipelines pass it by channel; one alpha (the
+        // OIT accumulation) can only pass the mean.
+        let transmission = mesh.params3.w * transmission_tex;
+        let thickness = mesh.params4.x * thickness_tex;
+        let fab_t = dfg_approx(n_geom, v_dir, roughness);
+        let f_t = lobe.f0 * fab_t.x + vec3<f32>(lobe.f90 * fab_t.y);
+        let through = (vec3<f32>(1.0) - f_t) * diffuse_color
+            * volume_attenuation(thickness, mesh.params7.rgb, mesh.params7.w);
+        glass_through = vec3<f32>(1.0) - out_opacity * (vec3<f32>(1.0) - transmission * through);
+        out_opacity = out_opacity * (1.0 - transmission * (through.r + through.g + through.b) / 3.0);
+        lit = lit * (1.0 - transmission);
+    } else if (kind == MAT_PHYSICAL && mesh.params3.w > 0.0) {
+        let transmission = mesh.params3.w * transmission_tex;
+        let thickness = mesh.params4.x * thickness_tex;
+        let transmitted = ibl_volume_refraction(
+            n_geom, v_dir, roughness, diffuse_color, lobe.f0, lobe.f90, in.world_pos,
+            mesh.params4.y, mesh.params3.z, thickness, mesh.params7.rgb, mesh.params7.w,
+        );
+        out_opacity = out_opacity * mix(1.0, transmitted.a, transmission);
+        lit = mix(lit, transmitted.rgb, transmission);
+    }
+    lit = lit + spec_lit;
 
+    // three.js `meshphysical` composes `outgoingLight = diffuse + specular +
+    // emissive`, then the sheen and then the clearcoat over all of it.
     lit = lit + emissive;
     // General per-vertex emission (Standard/Physical): app bakes color into
     // vertexColor.rgb + a gate into vertexColor.a, scaled by vertex_emissive
     // (params4.z). Zero by default, so no effect unless the material opts in.
     lit = lit + in.vertex_color.rgb * in.vertex_color.a * mesh.params4.z;
+
+    // Sheen: the base darkened by three.js's energy compensation,
+    // `1 − 0.157 · max3(sheenColor)`, plus the sheen lobe — direct, and from
+    // the environment `iblIrradiance · sheenColor · IBLSheenBRDF`
+    // (`RE_IndirectSpecular_Physical`).
+    if (sheen_strength > 0.0) {
+        if (env_u.info.x > 0.5) {
+            let ibl_irradiance = PI * sample_env_cube(n_geom, 1.0);
+            sheen_lit = sheen_lit + ibl_irradiance * sheen_tint * ibl_sheen_brdf(n_geom, v_dir, sheen_rough);
+        }
+        let sheen_max = max(max(sheen_tint.r, sheen_tint.g), sheen_tint.b);
+        lit = lit * (1.0 - 0.157 * sheen_max) + sheen_lit;
+    }
+
+    // Clearcoat: `outgoingLight · (1 − clearcoat · Fcc) + clearcoatSpecular ·
+    // clearcoat`. The coat reflects the environment in its own right
+    // (`getIBLRadiance` about its normal, weighted by `EnvironmentBRDF`).
+    if (kind == MAT_PHYSICAL && cc > 0.0) {
+        if (env_u.info.x > 0.5) {
+            var cc_refl = reflect(-v_dir, cc_n);
+            cc_refl = normalize(mix(cc_refl, cc_n, cc_roughness * cc_roughness));
+            let cc_radiance = sample_env_cube(cc_refl, cc_roughness);
+            let cc_fab = dfg_approx(cc_n, v_dir, cc_roughness);
+            cc_lit = cc_lit + cc_radiance * (vec3<f32>(0.04) * cc_fab.x + cc_fab.y);
+        }
+        lit = lit * (vec3<f32>(1.0) - cc_fresnel * cc) + cc_lit * cc;
+    }
     lit = apply_tone_mapping(lit);
     lit = apply_fog(lit, in.view_z);
+    // The two `Glass` draws (see `GLASS_OUTPUT`): what is behind times `T`,
+    // then plus `L`.
+    if (GLASS_OUTPUT != 0u) {
+        if (blended_glass) {
+            // Glass passes the background by channel, and fog in front of it
+            // veils that too. `T` is a linear factor; the blend works on
+            // encoded values, where it is the encoded factor (the encoding is
+            // a power law to within sRGB's toe).
+            let t = glass_through * (1.0 - fog_factor(in.view_z));
+            glass_t_out = framebuffer_encode(t);
+            if (GLASS_OUTPUT == 1u) {
+                return vec4<f32>(glass_t_out, 1.0);
+            }
+            return vec4<f32>(framebuffer_encode(lit), clamp(1.0 - (t.r + t.g + t.b) / 3.0, 0.0, 1.0));
+        }
+        // Anything else in the mode is an ordinary alpha blend, in halves.
+        glass_t_out = vec3<f32>(1.0 - out_opacity);
+        if (GLASS_OUTPUT == 1u) {
+            return vec4<f32>(glass_t_out, 1.0);
+        }
+        return vec4<f32>(framebuffer_encode(lit) * out_opacity, out_opacity);
+    }
     // The canvas surface is bgra8unorm (not sRGB), so we MUST do the
     // linear→sRGB encoding ourselves; otherwise our linearly computed PBR
     // output writes raw linear bytes and the browser misinterprets them as
@@ -3513,13 +4815,16 @@ fn fs_main(in : VsOut, @builtin(front_facing) front_facing : bool) -> @location(
     return vec4<f32>(lit_srgb, out_opacity);
 }
 
-// Weighted-blended order-independent transparency output. Instead of a single
-// blended color, each fragment contributes to two accumulation buffers:
-//   accum   (Rgba16F, additive)      = sum(premultiplied_color * weight)
-//   reveal  (R16F, multiplicative)   = product(1 - alpha)
-// The resolve pass turns these into an order-independent composite. Uses simple
-// ambient+hemisphere+directional Lambert lighting on the vertex color (enough
-// for a translucent heatmap surface) so it stays self-contained.
+// Weighted-blended order-independent transparency output (McGuire and
+// Bavoil, with McGuire and Mara's coloured transmission). Instead of a single
+// blended colour, each fragment contributes to two accumulation buffers:
+//   accum   (Rgba16F, additive)        = sum(premultiplied light * weight),
+//                                        sum(alpha * weight)
+//   reveal  (Rgba16F, multiplicative)  = product(transmittance) per channel,
+//                                        product(1 - alpha)
+// The resolve pass turns these into an order-independent composite. Shaded
+// as `fs_main` shades — the pipeline asks `shade_main` for the light half of
+// a blend (`GLASS_OUTPUT` 2) and reads the transmittance it found.
 // The point cube stores *radial* distance, not projected depth.
 //
 // A cube's six faces each have their own frustum, so projected depth is
@@ -3535,45 +4840,100 @@ fn fs_main(in : VsOut, @builtin(front_facing) front_facing : bool) -> @location(
 // takes `framebuffer_encode`, `sample_env_cube` and every other documented
 // helper with it. `the_custom_preamble_carries_the_documented_helpers` in
 // `renderer.rs` is what noticed, and what will notice again.
+// Whether a shadow caster's fragment at `uv` is cut away. three.js's shadow
+// depth material takes the caster's `map` and `alphaTest`
+// (`WebGLShadowMap.getDepthMaterial`), not its opacity, so a cut-out casts the
+// shadow of what is left of it.
+// Its `alphaMap` too.
+// Interleaved gradient noise (Jimenez): a per-texel threshold that tiles
+// without visible structure under a shadow filter.
+fn interleaved_gradient_noise(p : vec2<f32>) -> f32 {
+    return fract(52.9829189 * fract(dot(p, vec2<f32>(0.06711056, 0.00583715))));
+}
+
+// The share of light thin glass lets through: what Fresnel does not reflect
+// at either face at normal incidence, filtered by its colour. Zero for every
+// other caster, solid glass included.
+fn shadow_pass_through() -> f32 {
+    if ((mesh.flags.z & FLAG_SHADOW_TRANSMITS) == 0u) { return 0.0; }
+    let f0 = ior_to_fresnel0_f(max(mesh.params3.z, 1.0), 1.0);
+    let through = mesh.color.rgb * (1.0 - f0) * (1.0 - f0);
+    return clamp(mesh.params3.w * (through.r + through.g + through.b) / 3.0, 0.0, 1.0);
+}
+
+// Whether a caster's shadow-map texel is dropped: cut out by `alphaTest`, or
+// one of the share a transmissive caster lets through — dithered, so the
+// shadow filter averages it into a partial shadow (Unity's dithered shadows).
+fn shadow_cut(uv : vec2<f32>, frag : vec2<f32>) -> bool {
+    if (shadow_pass_through() > interleaved_gradient_noise(floor(frag))) {
+        return true;
+    }
+    let test = alpha_test_of();
+    let has_map = (mesh.flags.y & FLAG_MAP) != 0u;
+    if (test <= 0.0 || !(has_map || HAS_ALPHA_MAP)) {
+        return false;
+    }
+    var a = 1.0;
+    if (has_map) {
+        a = sample_map_level(uv).a;
+    }
+    if (HAS_ALPHA_MAP) {
+        a = a * sample_alpha_map_level(uv).g;
+    }
+    return a < test;
+}
+
+@fragment
+fn fs_shadow_cut(in : ShadowOut) {
+    if (shadow_cut(in.uv, in.position.xy)) { discard; }
+}
+
 @fragment
 fn fs_shadow_point(in : ShadowPointOut) -> @builtin(frag_depth) f32 {
-    let radius = max(frame.point_shadow_pos.w, 1e-4);
-    return clamp(length(in.world - frame.point_shadow_pos.xyz) / radius, 0.0, 1.0);
+    if (shadow_cut(in.uv, in.position.xy)) { discard; }
+    let radius = max(shadow_pass.light.w, 1e-4);
+    return clamp(length(in.world - shadow_pass.light.xyz) / radius, 0.0, 1.0);
 }
 
 struct OitOut {
     @location(0) accum  : vec4<f32>,
-    @location(1) reveal : f32,
-}
+    @location(1) reveal : vec4<f32>,
+};
+
 @fragment
-fn fs_oit(in : VsOut) -> OitOut {
-    let base = mesh.color.rgb * in.vertex_color.rgb;
-    let alpha = clamp(mesh.params.y * in.vertex_color.a, 0.0, 1.0);
-    let n = normalize(in.world_normal);
-    var light = frame.ambient.rgb;
-    for (var i : u32 = 0u; i < frame.light_counts.x; i = i + 1u) {
-        if (i >= 4u) { break; }
-        let l = frame.dir_lights[i];
-        light = light + l.color.rgb * max(dot(n, -normalize(l.direction.xyz)), 0.0);
+fn fs_oit(in : VsOut, @builtin(front_facing) front_facing : bool) -> OitOut {
+    let c = shade_main(in, front_facing);
+    var light = c.rgb;
+    var through = glass_t_out;
+    if (through.x < 0.0) {
+        // Returned before the blend halves: straight colour and alpha.
+        light = c.rgb * c.a;
+        through = vec3<f32>(1.0 - c.a);
     }
-    for (var i : u32 = 0u; i < frame.light_counts.w; i = i + 1u) {
-        if (i >= 4u) { break; }
-        light = light + shade_hemi(n, frame.hemi_lights[i]);
-    }
-    let col = framebuffer_encode(base * light);
+    let alpha = clamp(c.a, 0.0, 1.0);
 
     // McGuire depth weight: nearer fragments weigh more. `view_z` is positive.
+    // Floored above zero so clear glass, which blocks almost nothing, still
+    // carries its highlight.
+    let a = max(alpha, 1e-3);
     let z = max(in.view_z, 1e-3);
-    let w = alpha * clamp(10.0 / (1e-5 + pow(z / 60.0, 3.0) + pow(z / 300.0, 6.0)), 1e-2, 3e3);
+    let w = a * clamp(10.0 / (1e-5 + pow(z / 60.0, 3.0) + pow(z / 300.0, 6.0)), 1e-2, 3e3);
 
     var o : OitOut;
-    o.accum  = vec4<f32>(col * alpha * w, alpha * w);
-    o.reveal = alpha;
+    o.accum  = vec4<f32>(light * w, a * w);
+    o.reveal = vec4<f32>(vec3<f32>(1.0) - through, alpha);
     return o;
 }
 
 // --- Screen-space refraction glass (TransparencyMode::Refract) --------------
 // Project a world point to screen UV (framebuffer top-left origin).
+/// A depth read from (or computed for) the view's depth buffer, as standard
+/// depth: with reversed depth on (`camera_position.w`) that is `1 - d`. The
+/// screen-space marches compare in standard depth.
+fn std_depth(d : f32) -> f32 {
+    return select(d, 1.0 - d, frame.camera_position.w > 0.5);
+}
+
 fn ss_project(p : vec3<f32>) -> vec2<f32> {
     let clip = frame.view_proj * vec4<f32>(p, 1.0);
     let ndc = clip.xy / max(abs(clip.w), 1e-5);
@@ -3594,9 +4954,9 @@ fn ss_march(origin : vec3<f32>, dir : vec3<f32>, dist : f32, steps : i32) -> vec
         if (clip.w <= 0.0) { break; }
         let uv = clip.xy / clip.w * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5, 0.5);
         if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) { break; }
-        let ray_d = clip.z / clip.w;
+        let ray_d = std_depth(clip.z / clip.w);
         let coord = vec2<i32>(uv * dims);
-        let scene_d = textureLoad(ss_depth_tex, coord, 0).r;
+        let scene_d = std_depth(textureLoad(ss_depth_tex, coord, 0).r);
         if (scene_d < 0.9999 && ray_d > scene_d + 2e-4) {
             // Crossed behind captured geometry — refine once for the hit UV.
             return vec3<f32>(mix(prev_uv, uv, 0.5), 1.0);
@@ -3624,8 +4984,8 @@ fn ss_march_refl(origin : vec3<f32>, dir : vec3<f32>, dist : f32, steps : i32) -
         if (clip.w <= 0.0) { break; }
         let uv = clip.xy / clip.w * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5, 0.5);
         if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) { break; }
-        let ray_d = clip.z / clip.w;
-        let scene_d = textureLoad(ss_depth_tex, vec2<i32>(uv * dims), 0).r;
+        let ray_d = std_depth(clip.z / clip.w);
+        let scene_d = std_depth(textureLoad(ss_depth_tex, vec2<i32>(uv * dims), 0).r);
         // Require a *thin* crossing (ray just behind the surface) to reject rays
         // that plunge far behind geometry — the classic SSR thickness test.
         if (scene_d < 0.9999 && ray_d > scene_d + 2e-5 && ray_d < scene_d + 0.02) {
@@ -3635,8 +4995,8 @@ fn ss_march_refl(origin : vec3<f32>, dir : vec3<f32>, dist : f32, steps : i32) -
                 let mt = (lo + hi) * 0.5;
                 let mc = frame.view_proj * vec4<f32>(origin + dir * (dist * mt), 1.0);
                 let muv = mc.xy / mc.w * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5, 0.5);
-                let msd = textureLoad(ss_depth_tex, vec2<i32>(muv * dims), 0).r;
-                if (mc.z / mc.w > msd + 2e-5) { hi = mt; } else { lo = mt; }
+                let msd = std_depth(textureLoad(ss_depth_tex, vec2<i32>(muv * dims), 0).r);
+                if (std_depth(mc.z / mc.w) > msd + 2e-5) { hi = mt; } else { lo = mt; }
             }
             let hc = frame.view_proj * vec4<f32>(origin + dir * (dist * (lo + hi) * 0.5), 1.0);
             return vec3<f32>(hc.xy / hc.w * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5, 0.5), 1.0);
@@ -3647,6 +5007,42 @@ fn ss_march_refl(origin : vec3<f32>, dir : vec3<f32>, dist : f32, steps : i32) -
     return vec3<f32>(0.0, 0.0, 0.0);
 }
 
+// Each light's shadow on a refracting surface, for `fs_ss_glass`.
+//
+// The refraction pass's group 3 holds the scene capture where the lit pass
+// holds the shadow maps — WebGL2's sixteen texture units do not stretch to
+// both — so the shadows are looked up here, by a pass over the same surfaces
+// with the lit layout, and handed over in one integer texture: five bits of
+// shadow per shadow record (0 lit, 31 fully shadowed), six to a word, all
+// sixteen. The pass
+// writes depth and the refraction pass tests `LessEqual`, so both shade the
+// same front-most surface at each pixel.
+@fragment
+fn fs_glass_shadow(in : VsOut) -> @location(0) vec4<u32> {
+    clip_fragment(in.world_pos);
+    var w = array<u32, 4>(0u, 0u, 0u, 0u);
+    if ((mesh.flags.z & FLAG_RECEIVE_SHADOW) != 0u) {
+        compute_shadows(in.world_pos, normalize(in.world_normal));
+        for (var r = 0u; r < 16u; r = r + 1u) {
+            let q = u32(round((1.0 - clamp(shadow_cache[r], 0.0, 1.0)) * 31.0));
+            w[r / 6u] = w[r / 6u] | (q << ((r % 6u) * 5u));
+        }
+    }
+    return vec4<u32>(w[0], w[1], w[2], w[3]);
+}
+
+// The shadow of the light whose `color.w` is `color_w`, in what
+// `fs_glass_shadow` packed: 1 lit, 0 shadowed.
+fn glass_shadow(packed : vec4<u32>, color_w : f32) -> f32 {
+    let r = light_shadow_record(color_w);
+    if (r < 0 || r >= 16) {
+        return 1.0;
+    }
+    let k = u32(r);
+    let q = (packed[k / 6u] >> ((k % 6u) * 5u)) & 31u;
+    return 1.0 - f32(q) / 31.0;
+}
+
 // Dielectric glass, closer to a Cycles/Principled Glass BSDF: at the surface the
 // view ray either refracts or reflects, weighted by Fresnel; both terms trace
 // the captured scene in screen space (roughness → mip blur), with the
@@ -3655,113 +5051,183 @@ fn ss_march_refl(origin : vec3<f32>, dir : vec3<f32>, dist : f32, steps : i32) -
 // (params4.x) is the world-space march distance.
 @fragment
 fn fs_ss_glass(in : VsOut) -> @location(0) vec4<f32> {
+    clip_fragment(in.world_pos);
     let dims = frame.viewport_size.xy;
     let screen_uv = in.clip_pos.xy / dims;
 
     var n = normalize(in.world_normal);
     let v = normalize(frame.camera_position.xyz - in.world_pos);
+    // Analytic silhouette coverage: `n·v` falls to zero at a curved
+    // silhouette, so `n·v` over its screen-space derivative is how much of
+    // the pixel the surface covers. This pass replaces what is behind rather
+    // than blending, and the frame cannot multisample under it (its depth
+    // march needs a single-sampled copy), so this is its antialiasing.
+    let facing = abs(dot(n, v));
+    let coverage = clamp(facing / max(fwidth(facing), 1e-4), 0.0, 1.0);
     if (dot(n, v) < 0.0) { n = -n; }              // orient toward the camera
     let ndv = clamp(dot(n, v), 1e-3, 1.0);
 
-    let tint       = mesh.color.rgb * in.vertex_color.rgb;   // glass color
+    let tint       = mesh.color.rgb * in.vertex_color.rgb;   // what the glass filters by
     let roughness  = clamp(mesh.params.z, 0.02, 1.0);
     let ior        = max(mesh.params3.z, 1.0);
-    let march_dist = max(mesh.params4.x, 1.0);               // thickness → march
     let dispersion = mesh.params4.y;
-    let lod        = roughness * 6.0;                        // roughness → mip blur
+    let width      = f32(textureDimensions(ss_color_tex, 0).x);
+    // three.js `applyIorToRoughness`: an ior of 1 blurs nothing, 1.5 and up
+    // fully; the capture's mips stand in for the transmission target's.
+    let lod = log2(width) * roughness * clamp(ior * 2.0 - 2.0, 0.0, 1.0);
 
-    // --- Two-surface thickness: eye-space distance from this front glass surface
-    // to its back face (from the captured back-face depth), i.e. the path length
-    // through the glass volume. Drives path-length absorption + a volumetric
-    // density tint so thick regions read denser than thin edges. ---
+    // --- How far the light travels inside: the measured distance to the
+    // back face behind this pixel, else the material's `thickness` in the
+    // model's scale (three.js's only option) ---
     let near = frame.viewport_size.z;
     let far  = frame.viewport_size.w;
-    let bcoord = vec2<i32>(screen_uv * dims);
-    let back_d = textureLoad(ss_back_depth_tex, bcoord, 0).r;
-    var thick = 0.0;
-    if (back_d < 0.9999) {
+    let back_d = std_depth(textureLoad(ss_back_depth_tex, vec2<i32>(screen_uv * dims), 0).r);
+    let scale = vec3<f32>(length(mesh.model[0].xyz), length(mesh.model[1].xyz), length(mesh.model[2].xyz));
+    var path = mesh.params4.x * (scale.x + scale.y + scale.z) / 3.0;
+    // `thickness` 0 is three.js's thin-walled glass: no volume to cross, so
+    // the light leaves where it entered and nothing bends.
+    if (back_d < 0.9999 && mesh.params4.x > 0.0) {
         let back_dist = near * far / max(far - back_d * (far - near), 1e-4);
-        thick = max(back_dist - in.view_z, 0.0);
+        path = max(back_dist - in.view_z, 0.0) / ndv;
     }
 
-    // --- Refraction: march the depth buffer for the real exit point --------
-    // The cortex normal is extremely high-frequency, so a sharp screen-space
-    // refraction speckles (neighbouring fragments hit scattered pixels). Blur
-    // the refracted tap (mip floor) so it averages into smooth frosted glass.
-    let refr_lod = max(lod, 2.0);
-    let refr_dir = refract(-v, n, 1.0 / ior);
-    let tir = dot(refr_dir, refr_dir) < 1e-6;   // total internal reflection
-    // Sample the captured scene along the refracted ray. On a "miss" the march
-    // endpoint projects the ray to the background, so this reads the actual
-    // background (black) through the glass — transparent, not an env-filled body.
-    // The cortex normal is very high-frequency, so clamp the screen displacement
-    // (EEVEE-style bounded trace) to keep the refraction coherent, not speckled.
-    let m = ss_march(in.world_pos, normalize(select(refr_dir, reflect(-v, n), tir)), march_dist, 48);
-    let max_off = 0.025;
-    var roff = m.xy - screen_uv;
-    let rlen = length(roff);
-    if (rlen > max_off) { roff = roff * (max_off / rlen); }
-    let ruv = screen_uv + roff;
-    let disp = roff * dispersion;                 // dispersion: fan RGB taps
-    var refracted = vec3<f32>(
-        textureSampleLevel(ss_color_tex, ss_color_samp, ruv + disp, refr_lod).r,
-        textureSampleLevel(ss_color_tex, ss_color_samp, ruv,        refr_lod).g,
-        textureSampleLevel(ss_color_tex, ss_color_samp, ruv - disp, refr_lod).b,
-    );
-    // Glass color as transmission absorption over the real path length
-    // (Beer–Lambert): thicker glass tints/darkens the transmitted image more.
-    // With attenuation_distance set, `thick` is a genuine world-space path
-    // length so the physical coefficient applies directly; without it, keep the
-    // empirically-scaled fallback that existing scenes were authored against.
-    if (mesh.params7.w > 0.0) {
-        refracted = refracted * volume_transmittance(tint, thick);
-    } else {
-        refracted = refracted * exp(-(vec3<f32>(1.0) - tint) * (0.15 + thick * 0.006));
-    }
+    // Composited in display space. The capture holds the opaque scene as it
+    // was drawn — tone-mapped, and encoded on a plain Unorm target — so what
+    // is read from it is decoded and not tone-mapped again; light computed
+    // here (environment, highlights, emission) is tone-mapped once and added.
 
-    // --- Reflection: accurate SSR of the scene, black where it misses --------
-    // The visible background is black, so a transparent glass reflects black on
-    // its faces (not the studio env — that would gray the whole bumpy surface).
-    // A binary-refined march resolves the reflected geometry at its true screen
-    // position (roughness selects the mip blur); env is only a grazing-rim sheen.
+    // --- Transmission: three.js r165's volume model. Each channel follows
+    // the refracted ray (its own ior with dispersion) for the path length and
+    // reads the opaque scene where it leaves; off screen, the environment ---
+    let half_spread = (ior - 1.0) * 0.025 * dispersion;
+    let iors = vec3<f32>(ior - half_spread, ior, ior + half_spread);
+    var transmitted = vec3<f32>(0.0);
+    var transmittance = vec3<f32>(0.0);
     let refl_dir = reflect(-v, n);
-    var reflection = vec3<f32>(0.0);
-    let rm = ss_march_refl(in.world_pos, refl_dir, march_dist, 40);
-    if (rm.z > 0.5) {
-        reflection = textureSampleLevel(ss_color_tex, ss_color_samp, rm.xy, max(lod, 1.0)).rgb;
+    let tir = dot(refract(-v, n, 1.0 / ior), refract(-v, n, 1.0 / ior)) < 1e-6;
+    for (var c = 0u; c < 3u; c = c + 1u) {
+        let r = refract(-v, n, 1.0 / iors[c]);
+        let dir = select(normalize(r), refl_dir, dot(r, r) < 1e-6);
+        let exit = in.world_pos + dir * path;
+        let clip = frame.view_proj * vec4<f32>(exit, 1.0);
+        let ndc = clip.xy / max(clip.w, 1e-6);
+        let uv = vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+        let on_screen = clip.w > 0.0 && all(uv >= vec2<f32>(0.0)) && all(uv <= vec2<f32>(1.0));
+        let scene_c = framebuffer_decode(textureSampleLevel(ss_color_tex, ss_color_samp, clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0)), lod).rgb);
+        let env_c = apply_tone_mapping(sample_env_cube(dir, roughness));
+        transmitted[c] = select(env_c, scene_c, on_screen)[c];
+        transmittance[c] = tint[c] * volume_attenuation(path, mesh.params7.rgb, mesh.params7.w)[c];
     }
 
-    // --- Pure dielectric Fresnel reflect/refract mix -----------------------
-    let f0 = pow((ior - 1.0) / (ior + 1.0), 2.0);
-    var fresnel = f0 + (1.0 - f0) * pow(1.0 - ndv, 5.0);
-    if (tir) { fresnel = 1.0; }
-    var color = mix(refracted, reflection, fresnel);
-    // Two-surface volumetric density: thicker glass reads as a denser body,
-    // picking up a faint tint of the glass color toward the middle (a real
-    // depth cue on a black background where absorption alone is invisible).
-    let density = 1.0 - exp(-thick * 0.010);
-    color = color + tint * density * 0.30;
-    // Environment sheen only at the grazing silhouette — keeps the body black
-    // (transparent) while the rim still catches a glassy studio highlight.
-    let env_refl = sample_env_cube(refl_dir, roughness);
-    let rim = pow(1.0 - ndv, 5.0);
-    color = color + rim * env_refl * 0.9;
+    // --- Reflection: the scene where a screen-space march finds it, the
+    // environment where it does not ---
+    var reflection = apply_tone_mapping(sample_env_cube(refl_dir, roughness));
+    let rm = ss_march_refl(in.world_pos, refl_dir, max(path, 1.0) * 4.0, 40);
+    if (rm.z > 0.5) {
+        reflection = framebuffer_decode(textureSampleLevel(ss_color_tex, ss_color_samp, rm.xy, lod).rgb);
+    }
 
-    // --- Caustics (approximation) -----------------------------------------
-    let caustic = pow(max(dot(refracted, vec3<f32>(0.333)) - 0.55, 0.0), 2.0) * (1.0 - fresnel);
-    color = color + caustic * vec3<f32>(1.0, 0.97, 0.9) * 1.2;
+    // --- Dielectric Fresnel, as three.js's `EnvironmentBRDF`: what is
+    // reflected is not transmitted. Total internal reflection reflects all ---
+    let f0 = ior_to_fresnel0_f(ior, 1.0);
+    let fab = dfg_approx(n, v, roughness);
+    var f = f0 * fab.x + fab.y;
+    if (tir) { f = 1.0; }
+    let display = (1.0 - f) * transmittance * transmitted + f * reflection;
+    var lit = vec3<f32>(0.0);
+
+    // --- The scene's lights: a GGX highlight from each, shadowed. Glass has
+    // no diffuse term to light. The shadows come packed from
+    // `fs_glass_shadow`: this pass's group 3 has no room for the maps ---
+    let a = roughness * roughness;
+    let shadows = textureLoad(glass_shadow_tex, vec2<i32>(in.clip_pos.xy), 0);
+    let nd = min(frame.light_counts.x, MAX_LIGHTS_PER_KIND);
+    let np = min(frame.light_counts.y, MAX_LIGHTS_PER_KIND);
+    let n_lights = nd + np + min(frame.light_counts.z, MAX_LIGHTS_PER_KIND);
+    for (var j : u32 = 0u; j < n_lights; j = j + 1u) {
+        var inc : Incident;
+        var shadow = 1.0;
+        if (j < nd) {
+            let l = frame.dir_lights[j];
+            inc = Incident(-normalize(l.direction.xyz), l.color.rgb);
+            shadow = glass_shadow(shadows, l.color.w);
+        } else if (j < nd + np) {
+            inc = incident_point(in.world_pos, frame.point_lights[j - nd]);
+            shadow = glass_shadow(shadows, frame.point_lights[j - nd].color.w);
+        } else {
+            inc = incident_spot(in.world_pos, frame.spot_lights[j - nd - np]);
+            shadow = glass_shadow(shadows, frame.spot_lights[j - nd - np].color.w);
+        }
+        let n_dot_l = clamp(dot(n, inc.dir), 0.0, 1.0);
+        if (n_dot_l <= 0.0 || shadow <= 0.0) { continue; }
+        let h = normalize(inc.dir + v);
+        let n_dot_h = clamp(dot(n, h), 0.0, 1.0);
+        let v_dot_h = clamp(dot(v, h), 0.0, 1.0);
+        let fl = f0 + (1.0 - f0) * pow(1.0 - v_dot_h, 5.0);
+        let spec = d_ggx(n_dot_h, a) * v_ggx_smith_correlated(a, n_dot_l, ndv) * fl;
+        lit = lit + inc.color * shadow * n_dot_l * spec;
+    }
 
     // --- Emission ---------------------------------------------------------
     // Material emissive plus the general per-vertex emission term: the app bakes
     // a color into vertexColor.rgb and a gate into vertexColor.a, scaled by the
     // material's vertex_emissive (params4.z). Zero by default (no effect).
-    color = color + mesh.emissive.rgb + in.vertex_color.rgb * in.vertex_color.a * mesh.params4.z;
+    lit = lit + mesh.emissive.rgb + in.vertex_color.rgb * in.vertex_color.a * mesh.params4.z;
 
-    color = apply_fog(color, in.view_z);
-    color = apply_tone_mapping(color);
+    var color = display + apply_tone_mapping(lit);
+    color = mix(color, apply_tone_mapping(frame.fog_color.rgb), fog_factor(in.view_z));
+    // Partly covered silhouette pixels show the scene behind in proportion.
+    let behind = framebuffer_decode(textureSampleLevel(ss_color_tex, ss_color_samp, screen_uv, 0.0).rgb);
+    color = mix(behind, color, coverage);
     return vec4<f32>(framebuffer_encode(color), 1.0);
 }
 "#;
+
+/// Where [`SHADER_SOURCE`] takes its material-map declarations and accessors.
+pub const MATERIAL_MAPS_MARKER: &str = "//@@MATERIAL_MAPS@@";
+
+/// The legacy material-map layout: every map at a fixed binding in group 2,
+/// one sampler shared by all of them, the uv already transformed by the vertex
+/// stage. Custom shader materials compile against it — their documented
+/// preamble names `albedo_tex`, `tex_sampler` and the rest.
+pub const LEGACY_MATERIAL_MAPS: &str = r#"@group(2) @binding(0) var albedo_tex     : texture_2d<f32>;
+@group(2) @binding(1) var normal_tex     : texture_2d<f32>;
+@group(2) @binding(2) var roughness_tex  : texture_2d<f32>;
+@group(2) @binding(3) var metalness_tex  : texture_2d<f32>;
+@group(2) @binding(4) var ao_tex         : texture_2d<f32>;
+@group(2) @binding(5) var emissive_tex   : texture_2d<f32>;
+@group(2) @binding(6) var matcap_tex     : texture_2d<f32>;
+@group(2) @binding(7) var tex_sampler    : sampler;
+
+fn sample_map(uv : vec2<f32>) -> vec4<f32> { return textureSample(albedo_tex, tex_sampler, uv); }
+fn sample_map_level(uv : vec2<f32>) -> vec4<f32> { return textureSampleLevel(albedo_tex, tex_sampler, uv, 0.0); }
+// A Reflector's mirror view rides the map slot, sampled at a projected uv.
+fn sample_mirror(uv : vec2<f32>) -> vec4<f32> { return textureSampleLevel(albedo_tex, tex_sampler, uv, 0.0); }
+fn sample_normal_map(uv : vec2<f32>) -> vec4<f32> { return textureSample(normal_tex, tex_sampler, uv); }
+fn sample_roughness_map(uv : vec2<f32>) -> vec4<f32> { return textureSample(roughness_tex, tex_sampler, uv); }
+fn sample_metalness_map(uv : vec2<f32>) -> vec4<f32> { return textureSample(metalness_tex, tex_sampler, uv); }
+fn sample_ao_map(uv : vec2<f32>) -> vec4<f32> { return textureSample(ao_tex, tex_sampler, uv); }
+fn sample_emissive_map(uv : vec2<f32>) -> vec4<f32> { return textureSample(emissive_tex, tex_sampler, uv); }
+fn sample_matcap(uv : vec2<f32>) -> vec4<f32> { return textureSample(matcap_tex, tex_sampler, uv); }
+// Cloud cover shares the matcap binding: the two never meet on one material.
+fn sample_cloud(uv : vec2<f32>) -> vec4<f32> { return textureSample(matcap_tex, tex_sampler, uv); }
+"#;
+
+/// [`SHADER_SOURCE`] with a material-map prelude in place.
+pub fn shader_source_with_maps(prelude: &str) -> String {
+    SHADER_SOURCE.replacen(MATERIAL_MAPS_MARKER, prelude, 1)
+}
+
+/// The main shader with the legacy material-map layout — what every built-in
+/// pipeline and every custom shader material compiles against.
+pub fn legacy_shader_source() -> &'static str {
+    static SOURCE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    SOURCE.get_or_init(|| {
+        let prelude = format!("{LEGACY_MATERIAL_MAPS}{}", super::material_maps::legacy_extras());
+        shader_source_with_maps(&prelude)
+    })
+}
+
 
 /// Fullscreen "sample one texture → write" — used for the screen-space glass
 /// mip downsample chain and the blit of the opaque capture to the frame target.
@@ -3826,6 +5292,8 @@ struct TaaU {
     /// held still and the history is a running mean over sRGB-encoded bytes,
     /// 2 when it is a running mean over linear light.
     cam_delta      : vec4<f32>,
+    // x: 1 when the depth is reversed; reconstruction wants standard depth.
+    flags          : vec4<f32>,
 };
 @group(0) @binding(0) var cur_tex   : texture_2d<f32>;
 @group(0) @binding(1) var hist_tex  : texture_2d<f32>;
@@ -3899,7 +5367,8 @@ fn fs_main(@location(0) uv : vec2<f32>) -> @location(0) vec4<f32> {
     }
     if (taa.params.w > 0.5) { return cur; }          // first frame: seed history
 
-    let d = textureLoad(taa_depth, coord, 0).r;
+    let raw_d = textureLoad(taa_depth, coord, 0).r;
+    let d = select(raw_d, 1.0 - raw_d, taa.flags.x > 0.5);
     if (d >= 0.99999) { return cur; }                // background: nothing to reproject
 
     // Reconstruct world position from depth, reproject through the prev camera.
@@ -3939,6 +5408,24 @@ fn taa_linear_to_srgb(c : vec3<f32>) -> vec3<f32> {
 }
 "#;
 
+/// A multisampled depth buffer to a single-sampled one, sample 0 of each
+/// pixel: what the screen-space refraction pass marches and tests against
+/// when the opaque scene under it was multisampled.
+pub const DEPTH_RESOLVE_SHADER: &str = r#"
+@group(0) @binding(0) var src : texture_depth_multisampled_2d;
+
+@vertex
+fn vs_main(@builtin(vertex_index) vi : u32) -> @builtin(position) vec4<f32> {
+    var p = array<vec2<f32>, 3>(vec2<f32>(-1.0, -1.0), vec2<f32>(3.0, -1.0), vec2<f32>(-1.0, 3.0));
+    return vec4<f32>(p[vi], 0.0, 1.0);
+}
+
+@fragment
+fn fs_main(@builtin(position) pos : vec4<f32>) -> @builtin(frag_depth) f32 {
+    return textureLoad(src, vec2<i32>(pos.xy), 0);
+}
+"#;
+
 /// Resolve pass for weighted-blended OIT: reads the accum + revealage buffers and
 /// produces the order-independent composite, alpha-blended over the opaque image.
 pub const OIT_RESOLVE_SHADER: &str = r#"
@@ -3951,13 +5438,22 @@ fn vs_main(@builtin(vertex_index) vi : u32) -> @builtin(position) vec4<f32> {
     return vec4<f32>(p[vi], 0.0, 1.0);
 }
 
+// Which half of the composite this pipeline draws: 0 multiplies what is
+// behind by the product of the layers' transmittance, per channel; 1 adds
+// their weighted mean light, scaled by how much of the pixel they cover.
+override RESOLVE_PASS : u32 = 0u;
+
 @fragment
 fn fs_main(@builtin(position) pos : vec4<f32>) -> @location(0) vec4<f32> {
     let p = vec2<i32>(i32(pos.x), i32(pos.y));
-    let reveal = textureLoad(reveal_tex, p, 0).r;
-    if (reveal > 0.9999) { discard; }
+    let reveal = textureLoad(reveal_tex, p, 0);
     let accum = textureLoad(accum_tex, p, 0);
+    if (accum.a <= 0.0) { discard; }
+    if (RESOLVE_PASS == 0u) {
+        return vec4<f32>(reveal.rgb, 1.0);
+    }
+    let cover = 1.0 - reveal.a;
     let avg = accum.rgb / max(accum.a, 1e-5);
-    return vec4<f32>(avg, 1.0 - reveal);
+    return vec4<f32>(avg * cover, cover);
 }
 "#;

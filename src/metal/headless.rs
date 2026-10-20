@@ -139,7 +139,7 @@ impl MetalHeadlessRenderer {
     pub fn new(config: MetalHeadlessConfig) -> Result<Self, MetalError> {
         let device = MetalDevice::new()?;
         let postfx = PostFxChain::new(&device).ok();
-        let renderer = MetalRenderer::with_device(device.clone())?;
+        let mut renderer = MetalRenderer::with_device(device.clone())?;
         let (export_w, export_h) = (config.width.max(1), config.height.max(1));
         let (render_w, render_h) = render_dimensions(
             export_w,
@@ -154,6 +154,11 @@ impl MetalHeadlessRenderer {
             config.color_format,
             config.sample_count,
         )?;
+        // Viewport and scissor rectangles are given in output pixels; the
+        // target is `supersample / render_scale` attachment pixels to each.
+        let pixel_ratio = config.supersample.max(1) as f32 / config.render_scale.max(1) as f32;
+        renderer.set_pixel_ratio(pixel_ratio);
+        renderer.set_drawing_buffer_size(render_w, render_h);
         log::info!(
             "metal headless: export {export_w}×{export_h}, render target {render_w}×{render_h} \
              (ss {}, scale {}), postfx {}",
@@ -319,17 +324,9 @@ impl MetalHeadlessRenderer {
         // MSAA depth is a `texture2d_ms` and will not bind to the pass's
         // `depth2d`, so AO is skipped rather than wrong when MSAA is on.
         // Supersampling is the sharper choice here anyway (+8.4 dB measured).
-        let ssao_ok = self.target.sample_count() == 1;
-        if self.ssao_cfg.is_some_and(|s| s.strength > 0.0) && !ssao_ok {
-            log::warn!("SSAO skipped: needs a single-sampled depth target (MSAA is on)");
-        }
-        postfx.ensure_ssao(
-            &self.device,
-            rw,
-            rh,
-            format,
-            self.ssao_cfg.filter(|_| ssao_ok),
-        )?;
+        // Under MSAA the main pass resolves its depth into the target's
+        // single-sampled one while depth is stored, which SSAO turns on.
+        postfx.ensure_ssao(&self.device, rw, rh, format, self.ssao_cfg)?;
         if let Some((strength, threshold, radius)) = self.bloom_cfg {
             if strength > 0.0 {
                 let (bw, bh) = if self.config.supersample > 1 {
@@ -352,11 +349,7 @@ impl MetalHeadlessRenderer {
             if cmd.is_null() {
                 return Err(MetalError::NoCommandQueue);
             }
-            let depth = if ssao_ok {
-                self.target.depth_texture()
-            } else {
-                std::ptr::null_mut()
-            };
+            let depth = self.target.resolved_depth_texture();
             match postfx.encode_on(&self.device, cmd, src, depth, rw, rh, format)? {
                 None => {
                     let cmd = self.target.queue_readback(&self.device, &staging)?;
@@ -566,10 +559,32 @@ impl MetalHeadlessRenderer {
             self.config.color_format,
             self.config.sample_count,
         )?;
+        self.renderer.set_drawing_buffer_size(render_w, render_h);
         if let Some(p) = self.postfx.as_mut() {
             p.invalidate();
         }
         Ok(())
+    }
+
+    /// Fill the offscreen target with `color` — the scissor rectangle when the
+    /// renderer's scissor test is on, all of it otherwise. See
+    /// [`MetalRenderer::clear`]; the counterpart of
+    /// [`HeadlessRenderer::clear`](crate::HeadlessRenderer::clear).
+    pub fn clear(&mut self, color: crate::math::Color, alpha: f32) -> Result<(), MetalError> {
+        self.renderer.clear(&self.target.attachments(), color, alpha)
+    }
+
+    /// Read the target back as it stands — no render, no post-processing —
+    /// as tightly-packed RGBA8, top row first, sized
+    /// [`render_size`](Self::render_size). Blocks until the GPU is done.
+    pub fn read_rgba(&self) -> Result<Vec<u8>, MetalError> {
+        self.target.read_rgba(&self.device)
+    }
+
+    /// The underlying renderer — its viewport, scissor and auto-clear state
+    /// as well as cache control. Same as [`renderer_mut`](Self::renderer_mut).
+    pub fn renderer(&mut self) -> &mut MetalRenderer {
+        &mut self.renderer
     }
 
     /// Export/readback size in pixels (after GPU upscale/downsample).

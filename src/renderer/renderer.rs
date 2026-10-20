@@ -5,6 +5,7 @@
 //! share WGSL in [`super::shader`] (`POSTFX_SHADER`, effect kinds 0–30).
 
 use bytemuck::{Pod, Zeroable};
+use crate::lights::shadow::{cascade_frusta, shadow_layer_size, Caster, MAX_SHADOW_RECORDS};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -18,7 +19,47 @@ use super::gpu_texture::{
 /// `external_rt_id` is folded in because RT-backed textures bypass the texture
 /// cache entirely and resolve through `rt_view_cache`, so two textures with the
 /// same upload key can still bind different views.
-type TexBgKey = [Option<(TexCacheKey, u32)>; 10];
+/// The second half is the morph texture bound at binding 10 — the geometry's
+/// cache key and version, `(0, 0)` for the empty default.
+/// The last part is the shared sampler's [`sampler_index`].
+/// Then the geometry's uv-set texture ([`Renderer::uv_key`]).
+type TexBgKey = ([Option<(TexCacheKey, u32)>; 8], (usize, u32), usize, (usize, u32));
+
+/// A material variant's group 2: the variant, then each of its maps' upload
+/// key, render-target id, sampler state and uv transform (bit patterns), then
+/// the morph texture, then `Material::map_uniforms` and the `envMap`'s identity.
+type VariantBgKey = (
+    super::material_maps::MapVariant,
+    Vec<(TexCacheKey, u32, u32, [u32; 6])>,
+    (usize, u32),
+    [[u32; 4]; 6],
+    usize,
+);
+
+/// One draw of a mesh: its material, and the index range it covers (`None`
+/// for all of it), as three.js's render list holds a mesh with groups.
+type DrawItem<M> = (M, Option<(u32, u32)>);
+
+fn variant_bg_key(
+    slots: &MaterialTextureSlots,
+    v: super::material_maps::MapVariant,
+    morph: (usize, u32),
+    uniforms: [[f32; 4]; 6],
+) -> VariantBgKey {
+    let maps = super::material_maps::role_textures(slots)
+        .into_iter()
+        .filter(|(r, _)| v.contains(*r))
+        .filter_map(|(_, t)| t)
+        .map(|t| {
+            let sampler = sampler_index(t) as u32;
+            let [r0, r1] = t.uv_transform_rows();
+            let xform = [r0[0].to_bits(), r0[1].to_bits(), r0[2].to_bits(), r1[0].to_bits(), r1[1].to_bits(), r1[2].to_bits()];
+            (tex_cache_key(t), t.external_rt_id.unwrap_or(u32::MAX), sampler, xform)
+        })
+        .collect();
+    let env = slots.env_map.as_ref().map_or(0, |c| std::sync::Arc::as_ptr(c) as usize);
+    (v, maps, morph, uniforms.map(|r| r.map(f32::to_bits)), env)
+}
 
 fn tex_slot_key(slot: &Option<std::sync::Arc<crate::Texture>>) -> Option<(TexCacheKey, u32)> {
     slot.as_ref()
@@ -26,7 +67,7 @@ fn tex_slot_key(slot: &Option<std::sync::Arc<crate::Texture>>) -> Option<(TexCac
 }
 
 fn tex_bg_key(slots: &MaterialTextureSlots) -> TexBgKey {
-    [
+    ([
         tex_slot_key(&slots.map),
         tex_slot_key(&slots.normal_map),
         tex_slot_key(&slots.roughness_map),
@@ -34,15 +75,168 @@ fn tex_bg_key(slots: &MaterialTextureSlots) -> TexBgKey {
         tex_slot_key(&slots.ao_map),
         tex_slot_key(&slots.emissive_map),
         tex_slot_key(&slots.matcap_map),
-        tex_slot_key(&slots.displacement_map),
         tex_slot_key(&slots.cloud_shadow_map),
-        tex_slot_key(&slots.iridescence_thickness_map),
-    ]
+    ], (0, 0), slots.sampler_source().map_or(SAMPLER_DEFAULT, |t| sampler_index(t)), (0, 0))
 }
+
+/// Every combination of filter and wrap a texture can ask for: mag × min
+/// filter (2 × 2) × `wrapS` × `wrapT` (3 × 3) × mipmap mode (3: linear,
+/// nearest, none). three.js gives each texture its own sampler state, so a
+/// texture's sampler is looked up, never approximated.
+const SAMPLER_COUNT: usize = 108;
+
+/// A map-less material's sampler: linear, trilinear, clamped — three.js's
+/// defaults for a `DataTexture`.
+const SAMPLER_DEFAULT: usize = 0;
+
+/// `mipmap_filter` as a sampler-table digit: 0 linear (three.js's default),
+/// 1 nearest, 2 none.
+fn mip_code(m: Option<crate::textures::TextureFilter>) -> usize {
+    match m {
+        Some(crate::textures::TextureFilter::Linear) => 0,
+        Some(crate::textures::TextureFilter::Nearest) => 1,
+        None => 2,
+    }
+}
+
+/// Index into `Renderer::samplers` for `t`'s `mag_filter`, `min_filter`,
+/// `mipmap_filter`, `wrap_s` and `wrap_t`.
+fn sampler_index(t: &Texture) -> usize {
+    use crate::textures::{TextureFilter, TextureWrap};
+    let wrap = |w: TextureWrap| match w {
+        TextureWrap::ClampToEdge => 0,
+        TextureWrap::Repeat => 1,
+        TextureWrap::MirroredRepeat => 2,
+    };
+    (t.mag_filter == TextureFilter::Nearest) as usize
+        + ((t.min_filter == TextureFilter::Nearest) as usize) * 2
+        + wrap(t.wrap_s) * 4
+        + wrap(t.wrap_t) * 12
+        + mip_code(t.mipmap_filter) * 36
+}
+
+/// [`sampler_index`] for a cube texture: its filters, clamped — a cube map's
+/// seams are its faces' edges.
+fn cube_sampler_index(c: &crate::textures::CubeTexture) -> usize {
+    use crate::textures::TextureFilter;
+    (c.mag_filter == TextureFilter::Nearest) as usize
+        + ((c.min_filter == TextureFilter::Nearest) as usize) * 2
+        + mip_code(c.mipmap_filter) * 36
+}
+
+/// The sampler [`sampler_index`] `i` names. With no mipmaps the level of detail
+/// is held at 0, so minification samples the full-size image as three.js's
+/// `LinearFilter` / `NearestFilter` do; anisotropic filtering only where every
+/// filter is linear (wgpu allows it nowhere else).
+fn make_sampler(device: &wgpu::Device, i: usize) -> wgpu::Sampler {
+    let filter = |nearest: bool| if nearest { wgpu::FilterMode::Nearest } else { wgpu::FilterMode::Linear };
+    let address = |w: usize| match w {
+        1 => wgpu::AddressMode::Repeat,
+        2 => wgpu::AddressMode::MirrorRepeat,
+        _ => wgpu::AddressMode::ClampToEdge,
+    };
+    let (mag_nearest, min_nearest) = (i & 1 != 0, i & 2 != 0);
+    let mip = i / 36;
+    let all_linear = !mag_nearest && !min_nearest && mip == 0;
+    device.create_sampler(&wgpu::SamplerDescriptor {
+        label: Some("threers map sampler"),
+        address_mode_u: address((i / 4) % 3),
+        address_mode_v: address((i / 12) % 3),
+        address_mode_w: wgpu::AddressMode::ClampToEdge,
+        mag_filter: filter(mag_nearest),
+        min_filter: filter(min_nearest),
+        mipmap_filter: if mip == 0 { wgpu::MipmapFilterMode::Linear } else { wgpu::MipmapFilterMode::Nearest },
+        lod_max_clamp: if mip == 2 { 0.0 } else { 32.0 },
+        anisotropy_clamp: if all_linear { 16 } else { 1 },
+        ..Default::default()
+    })
+}
+
+/// A draw's index (or vertex) range: its span, clamped to `count`, or all of
+/// it.
+/// Make `current` the `w × h` pair if it or `spare` already is (swapping
+/// them), and say whether a new one has to be made. When it does, the old
+/// current one is kept as the spare.
+fn take_sized<T>(current: &mut Option<(u32, u32, T, T)>, spare: &mut Option<(u32, u32, T, T)>, w: u32, h: u32) -> bool {
+    let fits = |t: &Option<(u32, u32, T, T)>| matches!(t, Some((cw, ch, ..)) if *cw == w && *ch == h);
+    if fits(current) {
+        return false;
+    }
+    std::mem::swap(current, spare);
+    !fits(current)
+}
+
+fn draw_span(range: Option<(u32, u32)>, count: u32) -> std::ops::Range<u32> {
+    match range {
+        Some((start, end)) => start.min(count)..end.min(count),
+        None => 0..count,
+    }
+}
+
+/// One geometry's morph targets on the GPU: three.js's morph texture, an
+/// `Rgba32Float` 2D array with a layer per target (see
+/// [`crate::core::MorphTexels`]).
+/// three.js's transmission render target (`transmissionRenderTarget`): the
+/// opaque scene drawn linear and untone-mapped at the main target's size, with
+/// a full mip chain the transmissive materials read blurred by roughness.
+struct TransmissionCapture {
+    texture: wgpu::Texture,
+    /// Every level, for sampling.
+    view: wgpu::TextureView,
+    /// Level 0, for drawing into.
+    target_view: wgpu::TextureView,
+    _depth: wgpu::Texture,
+    depth_view: wgpu::TextureView,
+    /// A copy the back-face pass samples while it draws into `texture`.
+    copy: wgpu::Texture,
+    copy_view: wgpu::TextureView,
+    size: (u32, u32),
+    levels: u32,
+}
+
+/// A geometry's extra uv sets — three.js's `uv1`, `uv2` and `uv3` — as one
+/// texture the vertex stage reads by vertex index (`vertex_uv_sets` in the
+/// shader): two `Rgba32Float` texels a vertex, `(uv1, uv2)` and `(uv3, 0, 0)`,
+/// row-major. A texture rather than vertex attributes so the interleaved
+/// vertex layout [`Renderer::vertex_buffer`] publishes stays as it is, and so
+/// no pipeline grows a vertex buffer that most geometry would leave unbound.
+struct UvSetTexture {
+    version: u32,
+    _texture: wgpu::Texture,
+    view: wgpu::TextureView,
+}
+
+/// The three.js names of the extra uv sets, in channel order from 1.
+const UV_SET_NAMES: [&str; 3] = ["uv1", "uv2", "uv3"];
+
+/// The group-2 layout entry for [`UvSetTexture`] (binding 8), which every
+/// layout the shared vertex stage runs under declares.
+fn uv_sets_entry() -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding: 8,
+        visibility: wgpu::ShaderStages::VERTEX,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    }
+}
+
+struct MorphTexture {
+    version: u32,
+    _texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    /// For an `InstancedMesh` with a morph texture: the layer holding the
+    /// per-instance rows and the texture's width, so the rows can be
+    /// rewritten in place when only the influences change.
+    instance_layer: Option<(u32, u32)>,
+}
+
 
 use super::shader::{
     MAX_DIR_LIGHTS, MAX_HEMI_LIGHTS, MAX_POINT_LIGHTS, MAX_RECT_LIGHTS, MAX_SPOT_LIGHTS,
-    SHADER_SOURCE,
 };
 use crate::cameras::Camera;
 use crate::core::{BufferGeometry, ObjectKind};
@@ -51,6 +245,10 @@ use crate::materials::{Material, MaterialKind, MaterialTextureSlots};
 use crate::math::{Frustum, Matrix3, Matrix4, Sphere, Vector3};
 use crate::scene::Scene;
 use crate::textures::{CubeTexture, Texture, TextureFormat};
+
+// Post-fx draws described as data, for the composer in `crate::postprocessing`.
+mod postfx_op;
+pub use postfx_op::{PostFxBlend, PostFxNoise, PostFxOp, PostFxOutput};
 
 fn rt_sample_format(format: wgpu::TextureFormat) -> wgpu::TextureFormat {
     if format == wgpu::TextureFormat::Rgba16Float {
@@ -106,22 +304,55 @@ struct RectLightGpu {
     up: [f32; 4],
 }
 
+/// Group 3's `EnvUniforms` (binding 13): the environment one draw's
+/// image-based light reads — the scene's or a Standard/Physical material's own
+/// `envMap` — with its sampling parameters, intensity and rotation. See the
+/// WGSL struct of the same name.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct EnvUniforms {
+    /// PMREM atlas texel width and height, its top mip (or the plain cube's
+    /// last mip), and 1 when it is an atlas.
+    params: [f32; 4],
+    /// x: 1 when there is an environment; y: its intensity.
+    info: [f32; 4],
+    /// Rows of the lookup rotation.
+    rot: [[f32; 4]; 3],
+}
+
+impl EnvUniforms {
+    /// No environment: the image-based light is off.
+    const NONE: Self = Self {
+        params: [0.0; 4],
+        info: [0.0, 1.0, 0.0, 0.0],
+        rot: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]],
+    };
+
+    /// `cube`, uploaded as `gpu`, at `intensity` and `rotation`.
+    fn of(cube: &CubeTexture, gpu: &GpuCubeTexture, intensity: f32, rotation: crate::math::Euler) -> Self {
+        let params = match &cube.cube_uv_atlas {
+            Some(a) => [a.texel_width, a.texel_height, a.lod_max as f32, 1.0],
+            None => [0.0, 0.0, gpu.texture.mip_level_count().saturating_sub(1) as f32, 0.0],
+        };
+        Self {
+            params,
+            info: [1.0, intensity, 0.0, 0.0],
+            rot: crate::materials::environment_lookup_rows(rotation, cube.cube_uv_atlas.is_none()),
+        }
+    }
+}
+
+
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
 struct FrameUniforms {
     view: [f32; 16],
     projection: [f32; 16],
     view_proj: [f32; 16],
-    shadow_vp: [f32; 16],
-    spot_shadow_vp: [f32; 16],
-    cube_face_vp: [f32; 16],
     camera_position: [f32; 4],
     ambient: [f32; 4],
     light_counts: [u32; 4],
-    /// x: dir shadow on, y: dir bias, z: spot shadow on, w: spot bias
-    shadow_params: [f32; 4],
-    /// xyz: point shadow caster world position, w: radius (0 = disabled)
-    point_shadow_pos: [f32; 4],
     /// x: tone-mapping mode (0 none, 1 linear, 2 ACES), y: exposure, z: IBL on,
     /// w: linear framebuffer (1 = HalfFloat RT, skip sRGB encode on write)
     tone_mapping_exposure: [f32; 4],
@@ -132,19 +363,23 @@ struct FrameUniforms {
     /// x: viewport width (pixels), y: viewport height (pixels), zw: reserved.
     viewport_size: [f32; 4],
     /// CubeUV PMREM: x/y texel size, z max mip, w = 1 when CubeUV active.
+    /// The shader reads these from `EnvUniforms` now, per environment; kept
+    /// here for the custom-shader preamble's `Frame` layout.
     env_map_params: [f32; 4],
     dir_lights: [DirLightGpu; MAX_DIR_LIGHTS],
     point_lights: [PointLightGpu; MAX_POINT_LIGHTS],
     spot_lights: [SpotLightGpu; MAX_SPOT_LIGHTS],
     hemi_lights: [HemiLightGpu; MAX_HEMI_LIGHTS],
     rect_lights: [RectLightGpu; MAX_RECT_LIGHTS],
-    /// x: rect-area light count. yzw reserved. `light_counts` was already full.
+    /// x: rect-area light count, y: geometric specular antialiasing on,
+    /// z: reflective transparency on, w: the transmission capture's mip count
+    /// (0 = none). `light_counts` was already full.
     light_counts2: [u32; 4],
-    /// One texel of each shadow map, as a fraction of the map: x directional,
-    /// y spot. The PCF kernels size themselves from this rather than from a
-    /// constant compiled into the shader — the map is allocated on the Rust
-    /// side and can change, and a WGSL constant cannot be told.
-    shadow_texel: [f32; 4],
+    /// x: shadow records in use.
+    shadow_info: [u32; 4],
+    /// One per shadow-casting light, which names it in its own `color[3]`
+    /// (record + 1). See `ShadowRecordGpu`.
+    shadows: [ShadowRecordGpu; MAX_SHADOW_RECORDS],
 }
 
 impl Default for FrameUniforms {
@@ -153,14 +388,9 @@ impl Default for FrameUniforms {
             view: [0.0; 16],
             projection: [0.0; 16],
             view_proj: [0.0; 16],
-            shadow_vp: [0.0; 16],
-            spot_shadow_vp: [0.0; 16],
-            cube_face_vp: [0.0; 16],
             camera_position: [0.0; 4],
             ambient: [0.0; 4],
             light_counts: [0; 4],
-            shadow_params: [0.0; 4],
-            point_shadow_pos: [0.0; 4],
             // Default: NoToneMapping, exposure 1.0 — matches three.js default.
             tone_mapping_exposure: [0.0, 1.0, 0.0, 0.0],
             fog_color: [1.0, 1.0, 1.0, 1.0],
@@ -173,7 +403,8 @@ impl Default for FrameUniforms {
             hemi_lights: [HemiLightGpu::default(); MAX_HEMI_LIGHTS],
             rect_lights: [RectLightGpu::default(); MAX_RECT_LIGHTS],
             light_counts2: [0; 4],
-            shadow_texel: [0.0; 4],
+            shadow_info: [0; 4],
+            shadows: [ShadowRecordGpu::zeroed(); MAX_SHADOW_RECORDS],
         }
     }
 }
@@ -194,7 +425,7 @@ impl Default for FrameUniforms {
 macro_rules! env_bind_group {
     ($device:expr, $bgl:expr, $label:expr,
      $t0:expr, $s1:expr, $t2:expr, $s3:expr, $t4:expr, $s5:expr,
-     $t6:expr, $s7:expr, $t8:expr $(,)?) => {{
+     $t6:expr, $s7:expr, $t8:expr, $u13:expr, $ltc14:expr $(,)?) => {{
         let entries = [
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -232,6 +463,14 @@ macro_rules! env_bind_group {
                     binding: 8,
                     resource: wgpu::BindingResource::TextureView($t8),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 13,
+                    resource: $u13.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 14,
+                    resource: wgpu::BindingResource::TextureView($ltc14),
+                },
         ];
         $device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some($label),
@@ -239,6 +478,20 @@ macro_rules! env_bind_group {
             entries: &entries,
         })
     }};
+}
+
+/// A material's own environment: the cube's upload, its intensity and its
+/// rotation (angle bit patterns, then the axis order's index).
+type MaterialEnvKey = (super::gpu_texture::CubeCacheKey, u32, [u32; 4]);
+
+fn material_env_key(env: (&std::sync::Arc<CubeTexture>, f32, crate::math::Euler)) -> MaterialEnvKey {
+    let (cube, intensity, r) = env;
+    let order = crate::math::EulerOrder::ALL.iter().position(|o| *o == r.order).unwrap_or(0) as u32;
+    (
+        cube_cache_key(cube),
+        intensity.to_bits(),
+        [r.x.to_bits(), r.y.to_bits(), r.z.to_bits(), order],
+    )
 }
 
 /// Views and bind groups the temporal pass reuses across an accumulation run.
@@ -253,6 +506,21 @@ struct TaaBindCache {
     blit: [wgpu::BindGroup; 2],
 }
 
+/// One cached instance buffer: see `Renderer::instance_buffer`.
+struct InstanceBuffer {
+    buffer: wgpu::Buffer,
+    /// What it holds, to skip rewriting unchanged data.
+    data: Vec<f32>,
+    /// The `instance_frame` it was last used in.
+    frame: u64,
+    /// The mesh's `instance_version` and instance count when written, for
+    /// a mesh that declares one.
+    version: Option<(u64, usize)>,
+    /// Changes whenever what it holds does: what the shadow fingerprint
+    /// reads to tell a still instanced caster from a moving one.
+    stamp: u64,
+}
+
 /// Uniform for the TAA resolve pass — see `TAA_SHADER`.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Pod, Zeroable, Default)]
@@ -261,9 +529,12 @@ struct TaaUniforms {
     prev_view_proj: [f32; 16],
     /// x: width, y: height, z: history weight, w: first-frame flag.
     params: [f32; 4],
-    /// xyz: how far the camera moved since the previous frame. w: the distance
-    /// past which a pixel is treated as sky and reprojected by rotation alone.
+    /// xyz: how far the camera moved since the previous frame. w: converge
+    /// mode — 0 for the feedback blend, 1 for a running mean over
+    /// sRGB-encoded bytes, 2 for a running mean over linear light.
     cam_delta: [f32; 4],
+    /// x: 1 when the depth it reads is reversed (`set_reversed_z`).
+    flags: [f32; 4],
 }
 
 #[repr(C)]
@@ -276,7 +547,7 @@ struct MeshUniforms {
     specular: [f32; 4],
     /// x: shininess/depth_near, y: opacity/depth_far, z: roughness, w: metalness
     params: [f32; 4],
-    /// x: ao_intensity, y/z: normal_scale, w: toon_steps (bitcast u32 in WGSL)
+    /// x: ao_intensity, y/z: normal_scale, w: unused
     params2: [f32; 4],
     /// Physical layers: x: clearcoat, y: clearcoat_roughness, z: ior, w: transmission
     params3: [f32; 4],
@@ -311,6 +582,21 @@ struct MeshUniforms {
     params14: [f32; 4],
     /// x: material kind, y: texture flags
     flags: [u32; 4],
+    /// Morph targets: (count, base influence, texels per vertex, flags) — see
+    /// `MeshUniforms.morph` in the shader and [`crate::core::morph_uniforms`].
+    morph: [f32; 4],
+    /// `morphTargetInfluences`, zero-padded to `MAX_MORPH_TARGETS`, four to
+    /// a vector.
+    morph_weights: [[f32; 4]; crate::core::MAX_MORPH_TARGETS / 4],
+    /// `Object3D::clip_plane` as (normal, constant); all zero clips nothing.
+    clip_plane: [f32; 4],
+}
+
+/// `Object3D::clip_plane` for `MeshUniforms`: the shader treats an all-zero
+/// plane as none (no real plane has a zero normal).
+fn clip_plane_of(obj: &crate::core::Object3D) -> [f32; 4] {
+    obj.clip_plane
+        .map_or([0.0; 4], |p| [p.normal.x, p.normal.y, p.normal.z, p.constant])
 }
 
 // Texture-flag bits — keep in sync with shader.rs FLAG_*.
@@ -324,9 +610,112 @@ const FLAG_MATCAP_MAP: u32 = 64;
 const FLAG_DASHED: u32 = 128;
 const FLAG_SHADOW_MAT: u32 = 256;
 const FLAG_RECEIVE_SHADOW: u32 = 512;
-const FLAG_IRIDESCENCE_MAP: u32 = 1024;
-const FLAG_DISPLACEMENT_MAP: u32 = 2048;
 const FLAG_CLOUD_SHADOW: u32 = 4096;
+/// The draw writes into a plain (`Unorm`) view of an sRGB target, so the shader
+/// encodes its output itself — the encoded-blend pass, see `encoded_pass`.
+const FLAG_ENCODED_OUT: u32 = 8192;
+/// three.js `toneMapped: false` (see `apply_tone_mapping` in the shader).
+const FLAG_NO_TONE_MAP: u32 = 16384;
+/// `mesh.flags.z`: a sprite or point drawn on the blended pipeline whose
+/// material is not `transparent` — written with alpha 1, which blends to a
+/// plain write, as three.js draws an opaque sprite.
+const FLAG_OPAQUE_OUT: u32 = 32768;
+/// `mesh.flags.z`: a transmissive `PhysicalMaterial` in `TransparencyMode::Glass`
+/// or `Oit`. Those modes blend, so the background arrives through the blend
+/// rather than from the transmission capture, which is only made for
+/// three.js's own transmission.
+const FLAG_BLENDED_GLASS: u32 = 65536;
+/// `mesh.flags.z`: thin transmissive glass — a `PhysicalMaterial` with
+/// `transmission` and either `thickness` 0 (three.js's thin-walled) or
+/// `TransparencyMode::Glass`. Light goes straight through it, so its shadow
+/// casting drops the share of shadow-map texels that gets through and the
+/// shadow filter averages it into a partial shadow (`shadow_cut` in the
+/// shader). Solid glass bends that light into a caustic instead, and keeps a
+/// full shadow.
+const FLAG_SHADOW_TRANSMITS: u32 = 131072;
+
+/// Shadow pipelines for casters cut by `alphaTest` and a map (three.js's
+/// shadow depth material takes both): `fs_shadow_cut` discards where the map's
+/// alpha is under the test.
+/// `base` for a draw on material variant `v` — itself for `None`. A free
+/// function over the renderer's fields, because it is called inside render
+/// passes that hold other borrows of the renderer. The variant must already be
+/// built (`Renderer::ensure_map_variant`, done for every draw before the
+/// passes).
+/// `m` remapped to reversed depth: clip `z' = w - z`, so NDC depth runs from
+/// 1 at the near plane to 0 at the far one, with x, y and w untouched.
+fn reverse_depth(m: &crate::math::Matrix4) -> crate::math::Matrix4 {
+    let mut out = *m;
+    for c in 0..4 {
+        out.elements[c * 4 + 2] = m.elements[c * 4 + 3] - m.elements[c * 4 + 2];
+    }
+    out
+}
+
+fn variant_pipeline(
+    pipes: &mut super::pipeline_state::StatePipelines,
+    variants: &HashMap<super::material_maps::MapVariant, (wgpu::ShaderModule, wgpu::BindGroupLayout)>,
+    device: &wgpu::Device,
+    main: &wgpu::ShaderModule,
+    base: &wgpu::RenderPipeline,
+    v: Option<super::material_maps::MapVariant>,
+) -> wgpu::RenderPipeline {
+    let Some(v) = v else {
+        return base.clone();
+    };
+    let Some((module, bgl)) = variants.get(&v) else {
+        log::error!("threers: a draw names material variant {v:?}, which was not built");
+        return base.clone();
+    };
+    pipes.relayout(device, base, v.key(), 2, bgl, main, module).unwrap_or_else(|| {
+        // Every pipeline that binds a material's group 2 is recorded, so this
+        // is a bug: the bind group will not match the pipeline. Say so.
+        log::error!("threers: a material-variant draw reached an unrecorded pipeline");
+        base.clone()
+    })
+}
+
+/// three.js `WebGLShadowMap`'s `shadowSide` for a material `side`: a
+/// front-sided caster records its back faces, a back-sided one its front
+/// faces, and a double-sided one both.
+/// three.js `side` for a mesh drawn as faces in the colour passes: FrontSide
+/// culls back faces, BackSide front faces, DoubleSide none. `None` for what is
+/// not faces (lines, points, sprites, the sky).
+fn side_cull(faces: bool, side: u32) -> Option<Option<wgpu::Face>> {
+    faces.then_some(match side {
+        1 => Some(wgpu::Face::Front),
+        2 => None,
+        _ => Some(wgpu::Face::Back),
+    })
+}
+
+fn shadow_cull(side: u32) -> Option<wgpu::Face> {
+    match side {
+        1 => Some(wgpu::Face::Back),
+        2 => None,
+        _ => Some(wgpu::Face::Front),
+    }
+}
+
+/// [`shadow_cull`] for the point-light pass, whose cube faces negate clip y
+/// (cube maps are left-handed): that one mirror reverses every triangle's
+/// winding, so the faces to cull swap.
+fn shadow_cull_point(side: u32) -> Option<wgpu::Face> {
+    match shadow_cull(side) {
+        Some(wgpu::Face::Front) => Some(wgpu::Face::Back),
+        Some(wgpu::Face::Back) => Some(wgpu::Face::Front),
+        None => None,
+    }
+}
+
+struct ShadowCutPipelines {
+    dir: wgpu::RenderPipeline,
+    spot: wgpu::RenderPipeline,
+    dir_skinned: wgpu::RenderPipeline,
+    spot_skinned: wgpu::RenderPipeline,
+    dir_instanced: wgpu::RenderPipeline,
+    spot_instanced: wgpu::RenderPipeline,
+}
 
 struct CachedGpuMesh {
     version: u32,
@@ -365,7 +754,7 @@ fn local_bounding_sphere(geom: &BufferGeometry) -> Option<Sphere> {
 }
 
 /// Camera parameters forwarded into SSAO / SSR post-fx uniforms.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PostFxCamera {
     pub near: f32,
     pub far: f32,
@@ -437,7 +826,7 @@ pub enum ToneMapping {
 
 impl ToneMapping {
     /// The mode index the WGSL side switches on.
-    fn shader_mode(self) -> f32 {
+    pub(crate) fn shader_mode(self) -> f32 {
         match self {
             ToneMapping::None => 0.0,
             ToneMapping::Linear => 1.0,
@@ -460,11 +849,31 @@ impl ToneMapping {
     }
 }
 
-/// ACES filmic (Narkowicz fit), matching `aces_tonemap` in the shader — which
-/// applies no pre-exposure of its own, so neither does this.
+/// three.js r165 `ACESFilmicToneMapping` on an exposed colour, matching
+/// `aces_tonemap` in the shader: the 1/0.6 pre-scale, the input matrix, Hill's
+/// RRT + ODT fit, the output matrix, then a clamp. Column-major matrices as in
+/// the GLSL, so the rows below are its columns.
 fn aces_cpu(c: [f32; 3]) -> [f32; 3] {
-    let f = |x: f32| ((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14)).clamp(0.0, 1.0);
-    [f(c[0]), f(c[1]), f(c[2])]
+    const INPUT: [[f32; 3]; 3] = [
+        [0.59719, 0.07600, 0.02840],
+        [0.35458, 0.90834, 0.13383],
+        [0.04823, 0.01566, 0.83777],
+    ];
+    const OUTPUT: [[f32; 3]; 3] = [
+        [1.60475, -0.10208, -0.00327],
+        [-0.53108, 1.10813, -0.07276],
+        [-0.07367, -0.00605, 1.07602],
+    ];
+    let mul = |m: [[f32; 3]; 3], v: [f32; 3]| -> [f32; 3] {
+        [
+            m[0][0] * v[0] + m[1][0] * v[1] + m[2][0] * v[2],
+            m[0][1] * v[0] + m[1][1] * v[1] + m[2][1] * v[2],
+            m[0][2] * v[0] + m[1][2] * v[1] + m[2][2] * v[2],
+        ]
+    };
+    let v = mul(INPUT, [c[0] / 0.6, c[1] / 0.6, c[2] / 0.6]);
+    let fit = v.map(|x| (x * (x + 0.0245786) - 0.000090537) / (x * (0.983729 * x + 0.432951) + 0.238081));
+    mul(OUTPUT, fit).map(|x| x.clamp(0.0, 1.0))
 }
 
 /// Khronos PBR Neutral, matching `neutral_tonemap` in the shader.
@@ -547,7 +956,9 @@ fn agx_cpu(c: [f32; 3]) -> [f32; 3] {
 
 /// Everything the custom pipeline descriptor branches on. Anything left out of
 /// this is a material silently drawing with another material's pipeline.
-type CustomPipelineKey = (u64, bool, bool, bool, u32, Option<bool>);
+/// The material's `RenderState` is not in it: that is applied over the stock
+/// pipeline as a state variant (see `pipeline_state`).
+type CustomPipelineKey = (u64, bool, bool, bool, u32);
 
 /// GPU renderer: scene draws, shadow maps, environment sampling, post-fx.
 pub struct Renderer {
@@ -560,13 +971,36 @@ pub struct Renderer {
     pipeline_glass_color: wgpu::RenderPipeline,
     pipeline_glass_depth_f16: wgpu::RenderPipeline,
     pipeline_glass_color_f16: wgpu::RenderPipeline,
+    pipeline_glass_depth_msaa: wgpu::RenderPipeline,
+    pipeline_glass_color_msaa: wgpu::RenderPipeline,
+    /// The tint half of the glass colour pass (`GLASS_OUTPUT` 1), drawn just
+    /// before the colour half: what is behind times the glass's per-channel
+    /// transmittance.
+    pipeline_glass_tint: wgpu::RenderPipeline,
+    pipeline_glass_tint_f16: wgpu::RenderPipeline,
+    pipeline_glass_tint_msaa: wgpu::RenderPipeline,
+    /// `[depth, color, tint]` glass for the encoded-blend pass under MSAA
+    /// (sRGB targets only, as `encoded_blend_pipelines`).
+    encoded_glass_msaa: Option<[wgpu::RenderPipeline; 3]>,
     // Weighted-blended OIT: accumulation pipeline (MRT) + resolve (sRGB + f16).
     /// Order-independent transparency accumulation. `None` where attachments
     /// cannot blend independently — see
     /// [`caps::supports_independent_blend`](crate::renderer::caps::supports_independent_blend).
     pipeline_oit: Option<wgpu::RenderPipeline>,
-    pipeline_oit_resolve: wgpu::RenderPipeline,
-    pipeline_oit_resolve_f16: wgpu::RenderPipeline,
+    /// `[tint, light]`: the OIT composite's two halves.
+    pipeline_oit_resolve: [wgpu::RenderPipeline; 2],
+    pipeline_oit_resolve_f16: [wgpu::RenderPipeline; 2],
+    pipeline_oit_resolve_msaa: [wgpu::RenderPipeline; 2],
+    /// OIT accumulation under MSAA, and its multisampled `(width, height,
+    /// accum, reveal)`, resolved into `oit_targets` at the end of the pass.
+    pipeline_oit_msaa: Option<wgpu::RenderPipeline>,
+    oit_msaa_targets: Option<(u32, u32, wgpu::TextureView, wgpu::TextureView)>,
+    /// As `msaa_targets_spare`, for these.
+    oit_msaa_targets_spare: Option<(u32, u32, wgpu::TextureView, wgpu::TextureView)>,
+    /// The multisampled opaque depth to the single-sampled one, for the
+    /// refraction pass under MSAA (`DEPTH_RESOLVE_SHADER`). `None` where a
+    /// shader cannot read a multisampled texture.
+    depth_resolve: Option<(wgpu::BindGroupLayout, wgpu::RenderPipeline)>,
     oit_resolve_bgl: wgpu::BindGroupLayout,
     // accum(Rgba16F) + revealage(R16F) targets + the resolve bind group, keyed by size.
     oit_targets: Option<(
@@ -587,6 +1021,7 @@ pub struct Renderer {
     pipeline_tri_wire: wgpu::RenderPipeline,
     pipeline_line: wgpu::RenderPipeline,
     pipeline_point: wgpu::RenderPipeline,
+    pipeline_point_alpha: wgpu::RenderPipeline,
     pipeline_sprite: wgpu::RenderPipeline,
     // Hardware-MSAA variants of the opaque forward pipelines (surface path).
     pipeline_tri_msaa: wgpu::RenderPipeline,
@@ -598,10 +1033,31 @@ pub struct Renderer {
     pipeline_point_msaa: wgpu::RenderPipeline,
     /// MSAA sample count for the surface pass: 1 = off, else `MSAA_SAMPLES`.
     msaa: u32,
+    /// See [`set_specular_antialiasing`](Self::set_specular_antialiasing).
+    specular_antialiasing: bool,
     tone_mapping: ToneMapping,
+    /// Whether this pass's destination is the picture itself, and so gets
+    /// [`tone_mapping`](Self::tone_mapping). three.js applies tone mapping to
+    /// the final output only: a pass into a [`RenderTarget`](super::RenderTarget)
+    /// that does not [present](super::RenderTarget::presents) — and into a
+    /// cube face — stores untone-mapped light.
+    tone_map_pass: bool,
     exposure: f32,
     /// Lazily-created multisampled color + depth targets, keyed by size.
     msaa_targets: Option<(u32, u32, wgpu::TextureView, wgpu::TextureView)>,
+    /// The previous size's, kept for a frame that alternates two sizes — a
+    /// multisampled canvas and a multisampled render target — rather than
+    /// reallocating both every frame.
+    msaa_targets_spare: Option<(u32, u32, wgpu::TextureView, wgpu::TextureView)>,
+    /// Whether the last frame's main pass drew into `msaa_targets` — which
+    /// attachments [`overlay_attachments`](Self::overlay_attachments) hands out.
+    overlay_msaa: bool,
+    /// Whether the last frame drawn multisampled. A frame with `Oit` or
+    /// `Refract` glass cannot, whatever `msaa` asks; `render_to_multisampled`
+    /// then antialiases it with FXAA instead (`fxaa_fallback`).
+    last_frame_msaa: bool,
+    /// What FXAA reads from in that fallback: a copy of the target.
+    fxaa_scratch: Option<(wgpu::Texture, wgpu::TextureView)>,
     /// Half-float color-target variants for EffectComposer / postfx RTs.
     pipeline_tri_f16: wgpu::RenderPipeline,
     pipeline_tri_alpha_f16: wgpu::RenderPipeline,
@@ -610,14 +1066,43 @@ pub struct Renderer {
     pipeline_tri_wire_f16: wgpu::RenderPipeline,
     pipeline_line_f16: wgpu::RenderPipeline,
     pipeline_point_f16: wgpu::RenderPipeline,
+    pipeline_point_alpha_f16: wgpu::RenderPipeline,
     pipeline_sprite_f16: wgpu::RenderPipeline,
     pipeline_instanced_f16: wgpu::RenderPipeline,
     pipeline_skinned_f16: wgpu::RenderPipeline,
     pipeline_shadow: wgpu::RenderPipeline,
     pipeline_shadow_spot: wgpu::RenderPipeline,
     pipeline_shadow_point: wgpu::RenderPipeline,
+    /// The three shadow passes for skinned casters: the posed mesh, on the
+    /// skinned layout.
+    pipeline_shadow_skinned: wgpu::RenderPipeline,
+    pipeline_shadow_spot_skinned: wgpu::RenderPipeline,
+    pipeline_shadow_point_skinned: wgpu::RenderPipeline,
+    /// The three shadow passes for an `InstancedMesh` caster: the instance
+    /// matrices (and per-instance morphs) from vertex slot 1.
+    pipeline_shadow_instanced: wgpu::RenderPipeline,
+    pipeline_shadow_spot_instanced: wgpu::RenderPipeline,
+    /// The directional and spot shadow pipelines for cut-out casters.
+    shadow_cut: ShadowCutPipelines,
+    pipeline_shadow_point_instanced: wgpu::RenderPipeline,
     pipeline_instanced: wgpu::RenderPipeline,
     pipeline_skinned: wgpu::RenderPipeline,
+    /// `wireframe: true` variants of the instanced and skinned pipelines:
+    /// LineList over the mesh's wire index buffer, like `pipeline_tri_wire`.
+    pipeline_instanced_wire: wgpu::RenderPipeline,
+    pipeline_instanced_wire_f16: wgpu::RenderPipeline,
+    /// Transparent instanced and skinned draws: alpha-blended, no depth
+    /// write, as `pipeline_tri_alpha` is for plain meshes.
+    pipeline_instanced_alpha: wgpu::RenderPipeline,
+    pipeline_instanced_alpha_f16: wgpu::RenderPipeline,
+    pipeline_skinned_alpha: wgpu::RenderPipeline,
+    pipeline_skinned_alpha_f16: wgpu::RenderPipeline,
+    /// The blended draws' pipelines into the `Unorm` view of an sRGB target,
+    /// for the encoded-blend pass (see `encoded_pass`): sprite, transparent
+    /// instanced, transparent skinned. `None` on a target that is not sRGB.
+    encoded_blend_pipelines: Option<[wgpu::RenderPipeline; 7]>,
+    pipeline_skinned_wire: wgpu::RenderPipeline,
+    pipeline_skinned_wire_f16: wgpu::RenderPipeline,
     /// Post-fx fullscreen-quad pipeline. Reads one input texture, writes to
     /// one output attachment, applies the effect selected by the postfx
     /// uniform's effect-kind field.
@@ -637,17 +1122,17 @@ pub struct Renderer {
     postfx_nearest_sampler: wgpu::Sampler,
     /// Repeat + nearest sampler for SSAO noise (matches three.js RepeatWrapping).
     postfx_noise_sampler: wgpu::Sampler,
+    /// Pipelines for [`Renderer::run_postfx`], built on first use.
+    postfx_ext: postfx_op::PostFxExt,
     /// Uploaded by SSAOPass — 32 hemisphere samples (vec4 stride).
     ssao_kernel_buffer: wgpu::Buffer,
     ssao_noise_tex: wgpu::Texture,
     ssao_noise_view: wgpu::TextureView,
-    /// 64×64 R8 displacement map for GlitchPass (DigitalGlitch tDisp).
+    /// GlitchPass's displacement map (DigitalGlitch `tDisp`): R32Float,
+    /// `dt_size` square, read nearest as three.js's `DataTexture` is.
     glitch_disp_tex: wgpu::Texture,
     glitch_disp_view: wgpu::TextureView,
-    /// Full-screen R8 snow map for GlitchPass (precomputed in JS for GLSL parity).
-    glitch_snow_tex: wgpu::Texture,
-    glitch_snow_view: wgpu::TextureView,
-    /// CPU-uploaded RGBA8 for WebGL postfx fallback blit to canvas/RT.
+    /// RGBA8 staging for [`Renderer::blit_rgba8`].
     rgba_upload_tex: wgpu::Texture,
     rgba_upload_view: wgpu::TextureView,
     /// Alpha-blended 2D overlay pass, built on the first caption draw so
@@ -667,6 +1152,9 @@ pub struct Renderer {
     mesh_bgl: wgpu::BindGroupLayout,
     tex_bgl: wgpu::BindGroupLayout,
     env_bgl: wgpu::BindGroupLayout,
+    /// three.js's `RectAreaLight` lookup tables (`RectAreaLightUniformsLib`'s
+    /// `ltc_1`, `ltc_2`) as the two layers of one texture — see [`upload_ltc`].
+    ltc: (wgpu::Texture, wgpu::TextureView),
     /// Group 3 for the refraction pass: the screen-space capture in place of the
     /// shadow maps `fs_ss_glass` never samples, so the pass fits in WebGL2's
     /// sixteen texture units.
@@ -675,6 +1163,31 @@ pub struct Renderer {
     /// shared by every custom draw because neither is per-material for a
     /// `ShaderMaterial`.
     custom_tex_bind_group: wgpu::BindGroup,
+    /// Its layout, for the per-draw variant a morphed `ShaderMaterial` binds
+    /// (the geometry's morph texture at binding 10).
+    custom_tex_bgl: wgpu::BindGroupLayout,
+    /// The mesh shader and pipeline layout, kept to build the depth-biased
+    /// triangle pipelines three.js's `polygonOffset` asks for, on demand.
+    mesh_shader: wgpu::ShaderModule,
+    mesh_pipeline_layout: wgpu::PipelineLayout,
+    /// Those pipelines, by (topology code — see `build_biased_pipeline` —, target
+    /// variant: 0 colour format, 1 half float, 2 multisampled; factor bits,
+    /// units).
+    biased_pipelines: HashMap<(u8, u8, u32, i32), wgpu::RenderPipeline>,
+    /// The descriptors of every material pipeline, and the variants built
+    /// from them for materials with a non-default `depthTest` / `depthWrite`
+    /// / `depthFunc` / `colorWrite`. See `pipeline_state`.
+    state_pipelines: super::pipeline_state::StatePipelines,
+    /// A `Unorm` view of the multisampled colour, when that is sRGB — the
+    /// encoded-blend pass draws through it.
+    msaa_color_unorm: Option<wgpu::TextureView>,
+    /// Where the encoded-blend pass draws on a device that cannot view an
+    /// sRGB texture as `Unorm` (WebGL2): a `Unorm` copy of the target, made
+    /// and copied back by `encoded_copy`'s two passes. `(width, height, view)`.
+    encoded_scratch: Option<(u32, u32, wgpu::TextureView)>,
+    /// The scratch copy's pipelines: in (sRGB target → `Unorm` scratch, bytes
+    /// kept) and out (back again), with their bind group layout.
+    encoded_copy: Option<(wgpu::BindGroupLayout, wgpu::RenderPipeline, wgpu::RenderPipeline)>,
     /// Bind group layout for custom-shader draws: mesh uniform (binding 0) plus
     /// `ShaderMaterial` user data (binding 1 uniform + bindings 2-4 storage), all
     /// in @group(1) to stay within WebGPU's 4-bind-group limit.
@@ -685,6 +1198,10 @@ pub struct Renderer {
     custom_pipeline_layout: Option<wgpu::PipelineLayout>,
     /// Lazily-compiled custom-shader pipelines. See [`CustomPipelineKey`].
     custom_pipelines: HashMap<CustomPipelineKey, wgpu::RenderPipeline>,
+    /// Transparent custom-shader pipelines into the `Unorm` view of an sRGB
+    /// target, for the encoded-blend pass; keyed as `custom_pipelines` is,
+    /// less the framebuffer flag.
+    custom_encoded_pipelines: HashMap<(u64, bool, bool, u32), wgpu::RenderPipeline>,
     /// Shaders that would not compile. Remembered so the error is logged once
     /// rather than every frame, and so the draw is skipped rather than retried.
     custom_failed: std::collections::HashSet<CustomPipelineKey>,
@@ -706,7 +1223,46 @@ pub struct Renderer {
     cull_stats: (usize, usize),
     /// GPU time for the main pass, when the adapter can measure it.
     timer: Option<GpuTimer>,
+    /// GPU time from the first shadow pass to the last, when one ran.
+    shadow_timer: Option<GpuTimer>,
+    /// three.js `shadowMap.autoUpdate` / `needsUpdate`.
+    shadow_map: super::viewport::ShadowMap,
+    /// What the shadow maps were last drawn for — which caster kinds, at
+    /// which directional map size. A render needing anything else redraws
+    /// them whatever [`shadow_map`](Self::shadow_map) says.
+    shadow_sig: Option<ShadowSig>,
+    /// What the shadow maps were last drawn from (`shadow_fingerprint`), or
+    /// `None` when it could not be told — skinned, instanced or custom-shader
+    /// casters, which change without anything here changing.
+    /// Each shadow pass's content hash when last drawn (see the update
+    /// below), so an unchanged pass is skipped.
+    shadow_pass_hashes: Vec<Option<u64>>,
+    /// Shadow passes drawn and caster draws issued into them, ever.
+    shadow_stats: (u64, u64),
+    /// Renders that drew the shadow maps.
+    shadow_updates: u64,
     skin_attr_cache: HashMap<*const BufferGeometry, wgpu::Buffer>,
+    /// Morph-target textures, by geometry (rebuilt on a version change).
+    morph_cache: HashMap<*const BufferGeometry, MorphTexture>,
+    /// Each `InstancedMesh`'s instance buffers (matrices and tints in slot
+    /// 0, custom columns in slot 1), kept across frames and rewritten only
+    /// when the data changes — they used to be allocated anew every frame.
+    instance_cache: HashMap<(crate::core::ObjectId, u8), InstanceBuffer>,
+    /// Counts `render_inner` calls; an instance buffer unused for a few of
+    /// them belonged to a mesh no longer drawn and is dropped.
+    instance_frame: u64,
+    /// Source of `InstanceBuffer::stamp`.
+    instance_stamps: u64,
+    /// Each geometry's [`UvSetTexture`], for those with `uv1`/`uv2`/`uv3`.
+    uv_cache: HashMap<*const BufferGeometry, UvSetTexture>,
+    /// Bound for geometry without extra uv sets (they read zero, as an
+    /// attribute a geometry lacks does in three.js).
+    default_uv_sets: (wgpu::Texture, wgpu::TextureView),
+    /// Bound at the morph slot for every draw without morph targets.
+    default_morph: (wgpu::Texture, wgpu::TextureView),
+    /// Wireframe line lists for partial spans (a group or a draw range of a
+    /// `wireframe: true` mesh), by (geometry, version, start, end).
+    wire_span_cache: HashMap<(*const BufferGeometry, u32, u32, u32), (wgpu::Buffer, u32)>,
     /// Uploaded textures, by [`Texture::id`].
     tex_cache: HashMap<TexCacheKey, GpuTexture>,
     /// Builds mip chains with the GPU rather than the CPU. See [`MipGenerator`].
@@ -728,15 +1284,38 @@ pub struct Renderer {
     /// from the CPU. Recomputed when the environment bind group is rebuilt and
     /// applied every frame, since `FrameUniforms` starts from `Default`.
     env_max_mip: f32,
-    cube_cache: HashMap<*const CubeTexture, GpuCubeTexture>,
+    cube_cache: HashMap<super::gpu_texture::CubeCacheKey, GpuCubeTexture>,
     env_bind_group: wgpu::BindGroup,
     shadow_env_bind_group: wgpu::BindGroup,
+    /// The scene environment's `EnvUniforms`, written each frame.
+    env_uniform: wgpu::Buffer,
+    /// Group 3 for Standard/Physical materials with an `envMap` of their own,
+    /// keyed by the cube, its intensity and its rotation. Rebuilt with the
+    /// scene's group, whose shadow-map views they share.
+    material_env_groups: HashMap<MaterialEnvKey, (wgpu::Buffer, wgpu::BindGroup)>,
     env_sampler: wgpu::Sampler,
     default_env_cube: GpuCubeTexture,
     default_cube_uv_view: wgpu::TextureView,
-    cube_face_buffers: [wgpu::Buffer; 6],
-    cube_face_bind_groups: [wgpu::BindGroup; 6],
-    env_cached_key: Option<*const CubeTexture>,
+    /// The shadow passes' uniforms and group 0 — see
+    /// `ensure_shadow_pass_buffer` — and the layout and slot stride.
+    shadow_pass_buffer: Option<(wgpu::Buffer, wgpu::BindGroup)>,
+    /// The opaque depth redrawn single-sampled (see `depth_replay` where it
+    /// is built), and its pass uniform: the camera's view-projection.
+    depth_replay: Vec<wgpu::RenderPipeline>,
+    depth_replay_pass: Option<(wgpu::Buffer, wgpu::BindGroup)>,
+    /// Redraw the depth even where it could be resolved: so a test on a
+    /// native device runs the path WebGL2 takes.
+    force_depth_replay: bool,
+    /// This render is a multisampled render target's (`render_to` with
+    /// `RenderTarget::samples`): the target's depth, which the multisampled
+    /// depth is resolved into and the glass march copies.
+    msaa_depth_out: Option<wgpu::Texture>,
+    shadow_pass_bgl: wgpu::BindGroupLayout,
+    shadow_pass_stride: u64,
+    /// three.js `renderer.shadowMap.type`; a light's
+    /// `ShadowSettings::filter` overrides it.
+    shadow_type: crate::lights::ShadowType,
+    env_cached_key: Option<super::gpu_texture::CubeCacheKey>,
     /// Rebuild the environment bind group on the next frame regardless of the
     /// cache keys.
     ///
@@ -748,24 +1327,45 @@ pub struct Renderer {
     /// When the env source is a CubeRenderTarget, this is its id. Used to
     /// invalidate the env bind group when the RT changes.
     env_cached_rt_id: Option<u32>,
-    shadow_view: wgpu::TextureView,
-    /// Side of the directional shadow map currently allocated.
-    shadow_size: u32,
+    /// The shadow maps: a layer per shadow-casting light of each kind, six
+    /// per point light. See [`ShadowArray`].
+    dir_shadows: ShadowArray,
+    spot_shadows: ShadowArray,
+    point_shadows: ShadowArray,
     /// True while rendering one face of an environment cube. Screen-space
     /// passes that assume the frame's dimensions are skipped.
     cube_pass: bool,
+    /// `set_viewport` / `set_scissor` / `set_scissor_test` / pixel ratio /
+    /// auto-clear. See [`super::viewport`].
+    viewport_state: super::viewport::ViewportState,
     shadow_sampler: wgpu::Sampler,
-    spot_shadow_view: wgpu::TextureView,
     spot_shadow_sampler: wgpu::Sampler,
-    #[allow(dead_code)]
-    point_shadow_cube_view: wgpu::TextureView,
-    point_shadow_face_views: [wgpu::TextureView; 6],
-    #[allow(dead_code)]
     point_shadow_sampler: wgpu::Sampler,
 
     frame_buffer: wgpu::Buffer,
     frame_bind_group: wgpu::BindGroup,
-    per_mesh: Vec<(wgpu::Buffer, wgpu::BindGroup, std::sync::Arc<wgpu::BindGroup>)>, // uniform, mesh bg, tex bg
+    /// The frame group with the stand-in capture, for the capture passes.
+    frame_bind_group_dummy: wgpu::BindGroup,
+    frame_buffer_for_bg: wgpu::Buffer,
+    transmission_sampler: wgpu::Sampler,
+    transmission: Option<TransmissionCapture>,
+    /// Which capture pass is running: `None` outside them, `Some(false)` the
+    /// opaque scene, `Some(true)` double-sided transmissive back faces.
+    capturing_transmission: Option<bool>,
+    /// See [`set_reflective_transparency`](Self::set_reflective_transparency).
+    reflective_transparency: bool,
+    /// Per draw: its uniforms' offset in `mesh_arena`, its mesh bind group
+    /// (over that slice) and its texture bind group.
+    per_mesh: Vec<(u64, wgpu::BindGroup, std::sync::Arc<wgpu::BindGroup>)>,
+    /// Every draw's `MeshUniforms`, one after another at `mesh_stride`, written
+    /// with one call a frame. One small buffer per draw meant one
+    /// `write_buffer` per draw — two thousand meshes, two thousand staging
+    /// copies, and the largest single cost of a frame on the CPU.
+    mesh_arena: Option<wgpu::Buffer>,
+    /// `MeshUniforms` rounded up to the device's uniform offset alignment.
+    mesh_stride: u64,
+    /// The frame's uniforms on their way to `mesh_arena`.
+    mesh_bytes: Vec<u8>,
     /// Texture bind groups, keyed on the textures they bind.
     ///
     /// These used to be rebuilt from scratch once per draw per frame — ten
@@ -779,11 +1379,22 @@ pub struct Renderer {
     /// keyed on exactly those and invalidated whenever a texture is uploaded,
     /// evicted, or re-registered as a render target.
     tex_bg_cache: HashMap<TexBgKey, std::sync::Arc<wgpu::BindGroup>>,
+    /// The main shader module, on the legacy material-map layout — the module
+    /// a material shader variant replaces.
+    main_shader: wgpu::ShaderModule,
+    /// Material shader variants built so far: each one's module and group-2
+    /// layout (see `material_maps`).
+    map_variants: HashMap<super::material_maps::MapVariant, (wgpu::ShaderModule, wgpu::BindGroupLayout)>,
+    /// three.js `WebGLCubeUVMaps`: each cube texture lighting a
+    /// Standard/Physical material, prefiltered through PMREM once, by its
+    /// source's upload key.
+    pmrem_cache: HashMap<super::gpu_texture::CubeCacheKey, std::sync::Arc<CubeTexture>>,
+    /// Group-2 bind groups of variant draws.
+    variant_bg_cache: HashMap<(VariantBgKey, (usize, u32)), std::sync::Arc<wgpu::BindGroup>>,
 
-    sampler_linear: wgpu::Sampler,
-    sampler_nearest_clamp: wgpu::Sampler,
     sampler_linear_repeat: wgpu::Sampler,
-    sampler_nearest_repeat: wgpu::Sampler,
+    /// Material map samplers, by [`sampler_index`].
+    samplers: Vec<wgpu::Sampler>,
 
     // Default fallbacks (1x1 textures used when a material slot is empty).
     default_white_srgb: GpuTexture,
@@ -792,15 +1403,17 @@ pub struct Renderer {
     /// storage buffers and therefore never read them. The layout declares the
     /// slots either way, so every backend gets the same bind group shape.
     default_data_tex_view: wgpu::TextureView,
+    /// 1x1x1 `R8Unorm` 3D texture for a `ShaderMaterial`'s empty volume slots.
+    default_volume_view: wgpu::TextureView,
+    /// Linear, clamp-to-edge: a volume's `u_vol_samp`. Repeat would wrap the
+    /// far face of a scan onto the near one at the boundary.
+    sampler_volume: wgpu::Sampler,
     /// `(near, far)` of the camera the last frame was drawn with.
     last_camera_planes: (f32, f32),
     /// `(tan(fov/2), aspect)` of the same camera, read back off its projection.
     last_camera_lens: (f32, f32),
     default_normal: GpuTexture, // (0.5, 0.5, 1.0, 1.0) — straight up tangent normal
-    /// Also the empty displacement slot: sampling black moves nothing, so the
-    /// vertex stage needs no branch.
-    default_black: GpuTexture,
-    /// The empty cloud-shadow slot. `default_black` is opaque, and a cover map
+    /// The empty cloud-shadow slot. An opaque black default would not do: a cover map
     /// is read from *alpha* — so an unset slot there would read as total
     /// overcast and black out the planet.
     default_transparent: GpuTexture,
@@ -818,6 +1431,12 @@ pub struct Renderer {
     /// Nearest glass **back-face** depth (RENDER_ATTACHMENT | TEXTURE_BINDING),
     /// used to derive the per-pixel glass thickness for two-surface refraction.
     ss_back_depth: Option<(u32, u32, wgpu::Texture, wgpu::TextureView)>,
+    /// Scratch the size and format of the capture, which a layer of
+    /// overlapping glass draws into before it becomes the next layer's
+    /// capture (see `set_refraction_layers`).
+    ss_layer: Option<(u32, u32, wgpu::Texture, wgpu::TextureView)>,
+    /// How many layers overlapping refraction glass composites in.
+    refraction_layers: usize,
     /// Depth-only pipeline rendering glass back faces (cull front) into ss_back_depth.
     pipeline_ss_back_depth: wgpu::RenderPipeline,
     /// Fullscreen "sample one texture → write" pipeline (mip downsample + blit),
@@ -827,6 +1446,10 @@ pub struct Renderer {
     /// Glass surface pipelines (screen-space refraction/reflection).
     pipeline_ss_glass: wgpu::RenderPipeline,
     pipeline_ss_glass_f16: wgpu::RenderPipeline,
+    /// `fs_glass_shadow`: each light's shadow on the refracting surfaces,
+    /// into `ss_glass_shadow`.
+    pipeline_glass_shadow: wgpu::RenderPipeline,
+    ss_glass_shadow: Option<(wgpu::Texture, wgpu::TextureView)>,
     /// BGL for the blit/downsample pipeline (texture + sampler).
     ss_blit_bgl: wgpu::BindGroupLayout,
 
@@ -888,7 +1511,6 @@ pub struct Renderer {
 struct SsColor {
     width: u32,
     height: u32,
-    #[allow(dead_code)]
     texture: wgpu::Texture,
     /// View over all mips — bound to the glass shader for LOD sampling.
     all_mips_view: wgpu::TextureView,
@@ -896,6 +1518,9 @@ struct SsColor {
     mip_render_views: Vec<wgpu::TextureView>,
     /// One single-mip sample view per level — sources for the downsample chain.
     mip_sample_views: Vec<wgpu::TextureView>,
+    /// Mip 0 as its `Unorm` twin when the capture is sRGB: the encoded-blend
+    /// pass draws a refraction frame's blended surfaces into it.
+    mip0_unorm: Option<wgpu::TextureView>,
     mips: u32,
     format: wgpu::TextureFormat,
 }
@@ -963,12 +1588,189 @@ const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 /// direct-to-surface opaque forward pass. 4× is universally supported.
 const MSAA_SAMPLES: u32 = 4;
 
+/// One step of a cheap word mix (FxHash's): for fingerprints over trusted
+/// data, run every frame, where SipHash's resistance to chosen input buys
+/// nothing.
+fn mix_word(h: u64, x: u64) -> u64 {
+    (h.rotate_left(5) ^ x).wrapping_mul(0x517c_c1b7_2722_0a95)
+}
+
+/// A sequence of words, mixed.
+fn hash_words(words: impl Iterator<Item = u64>) -> u64 {
+    words.fold(0xcbf2_9ce4_8422_2325, mix_word)
+}
+/// The spot shadow map's size (and the directional map's until a light asks
+/// for another), texels.
+const SPOT_SHADOW_SIZE: u32 = 4096;
+/// Each face of the point shadow cube, texels.
+const POINT_SHADOW_SIZE: u32 = 512;
+/// The OIT revealage: the layers' transmittance multiplied up per channel,
+/// and their coverage's complement in alpha.
+const OIT_REVEAL_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+/// `make_glass_pipeline`'s passes: the depth prepass, and the tint and light
+/// halves of the colour (`GLASS_OUTPUT` 1 and 2 in the shader).
+const GLASS_DEPTH: u8 = 0;
+const GLASS_TINT: u8 = 1;
+const GLASS_LIGHT: u8 = 2;
+/// What `fs_glass_shadow` packs each light's shadow on the glass into.
+const GLASS_SHADOW_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Uint;
+
+/// What the shadow maps were last drawn for: the casters of each kind and
+/// the directional and spot map sizes.
+type ShadowSig = (usize, usize, usize, u32, u32);
+
+/// One kind's shadow maps: a 2D depth array, a layer per light (six per
+/// point light, its cube faces), sampled through one view.
+struct ShadowArray {
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    size: u32,
+    layers: u32,
+}
+
+impl ShadowArray {
+    fn new(device: &wgpu::Device, label: &str, size: u32, layers_needed: u32) -> Self {
+        // Never one layer, nor a multiple of six on a square texture: the GL
+        // backend makes those a plain 2D texture or a cube map, and neither
+        // can be bound as the 2D array the shader declares.
+        let mut layers = layers_needed.max(2);
+        if layers.is_multiple_of(6) {
+            layers += 1;
+        }
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(label),
+            size: wgpu::Extent3d { width: size, height: size, depth_or_array_layers: layers },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: DEPTH_FORMAT,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor {
+            label: Some(label),
+            dimension: Some(wgpu::TextureViewDimension::D2Array),
+            ..Default::default()
+        });
+        Self { texture, view, size, layers }
+    }
+
+    /// Layer `layer`, as a pass's depth attachment.
+    fn layer_view(&self, layer: u32) -> wgpu::TextureView {
+        self.texture.create_view(&wgpu::TextureViewDescriptor {
+            label: Some("threers shadow layer"),
+            dimension: Some(wgpu::TextureViewDimension::D2),
+            base_array_layer: layer,
+            array_layer_count: Some(1),
+            ..Default::default()
+        })
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ShadowKind {
+    Dir,
+    Spot,
+    Point,
+}
+
+/// A shadow-casting light's shadow, as the shader's `ShadowRecord`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+struct ShadowRecordGpu {
+    /// `[kind (0 directional, 1 spot, 2 point), first layer, cascades, filter]`.
+    info: [u32; 4],
+    /// `[depth bias, normal bias, filter radius, one texel]`, the last two in
+    /// map uv (direction units for a point light).
+    params: [f32; 4],
+    /// Directional: each cascade's far edge, view depth. Point: position and
+    /// radius.
+    extra: [f32; 4],
+    /// PCSS: `[search radius, spot near, spot far, penumbra scale]`.
+    pcss: [f32; 4],
+    /// World → light clip: a cascade each, or the light's.
+    vp: [[f32; 16]; 4],
+}
+
+/// What one shadow pass draws with, at its own offset in one buffer — the
+/// shader's `ShadowPass`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+struct ShadowPassGpu {
+    vp: [f32; 16],
+    light: [f32; 4],
+}
+
+/// One shadow pass: a light's layer and the matrix it is drawn with (for a
+/// point light, one cube face, with the light's position and radius).
+struct ShadowPass {
+    kind: ShadowKind,
+    layer: u32,
+    vp: [f32; 16],
+    pos: [f32; 4],
+}
+
+/// Cube face `face` of a point light's shadow: world → clip.
+fn point_face_vp(pos: Vector3, radius: f32, face: usize) -> [f32; 16] {
+    let face_lookat: [(Vector3, Vector3); 6] = [
+        (Vector3::new(1.0, 0.0, 0.0), Vector3::new(0.0, -1.0, 0.0)),
+        (Vector3::new(-1.0, 0.0, 0.0), Vector3::new(0.0, -1.0, 0.0)),
+        (Vector3::new(0.0, 1.0, 0.0), Vector3::new(0.0, 0.0, 1.0)),
+        (Vector3::new(0.0, -1.0, 0.0), Vector3::new(0.0, 0.0, -1.0)),
+        (Vector3::new(0.0, 0.0, 1.0), Vector3::new(0.0, -1.0, 0.0)),
+        (Vector3::new(0.0, 0.0, -1.0), Vector3::new(0.0, -1.0, 0.0)),
+    ];
+    let fov = std::f32::consts::FRAC_PI_2;
+    let proj = Matrix4::perspective(fov, 1.0, 0.1, radius.max(1.0));
+    let (forward, up) = face_lookat[face];
+    let view = Matrix4::look_at(pos, pos + forward, up);
+    // NOTE: the Metal backend negates clip-space x here and this
+    // path must not — the two disagree about the cube's handedness
+    // somewhere further down, and mirroring this one takes its
+    // shadow from weak to absent (0.0021 of darkening to 0.0000).
+    // That asymmetry is unexplained and is the thread to pull on
+    // next; see `metal_casts_a_point_shadow`.
+    // Negate clip-space y.
+    //
+    // Cube maps are left-handed in every graphics API and
+    // `Matrix4::look_at` is right-handed, so a face rendered with
+    // it is laid down flipped against what the sampler will later
+    // expect. Each face looks perfectly reasonable alone, which is
+    // what makes this invisible: the shadow simply lands somewhere
+    // else.
+    //
+    // *Which* axis differs by backend, and that is not a guess —
+    // `tests/shadow_fixtures.rs` measures the shadow's distance
+    // from where the geometry puts it, in pixels:
+    //
+    // ```text
+    //            none      x       y      xy
+    //   wgpu     79.2   133.1     2.1   107.0
+    //   metal   107.0     2.1   133.1    79.2
+    // ```
+    //
+    // The two tables are each other's, shifted by one flip: the
+    // backends' framebuffer-y conventions are opposite, so the
+    // correction is too. Anything but the 2.1 here is a shadow of
+    // something that is not there.
+    let mut vp = proj.multiply(&view).elements;
+    vp[1] = -vp[1];
+    vp[5] = -vp[5];
+    vp[9] = -vp[9];
+    vp[13] = -vp[13];
+    vp
+}
+
 // ---- ShaderMaterial (custom-shader) support ----------------------------------
 
 /// Cache key for a custom shader = a hash of *both* stages. Keying on the
 /// fragment alone would hand two materials that differ only in their vertex
 /// source the same compiled pipeline, and the second one would silently draw
 /// with the first one's geometry.
+/// Mixed into a custom shader's hash when it draws an `InstancedMesh`, whose
+/// pipeline has the instanced vertex layout.
+const INSTANCED_CUSTOM_SALT: u64 = 0x9e37_79b9_7f4a_7c15;
+
 fn custom_shader_hash(fragment: &str, vertex: Option<&str>) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -986,10 +1788,8 @@ pub(crate) fn custom_shader_module_source(
     vertex: Option<&str>,
     storage_buffers: bool,
 ) -> String {
-    let preamble = SHADER_SOURCE
-        .split("@fragment")
-        .next()
-        .unwrap_or(SHADER_SOURCE);
+    let source = super::shader::legacy_shader_source();
+    let preamble = source.split("@fragment").next().unwrap_or(source);
     // User data lives in @group(1) alongside the mesh uniform (binding 0), to
     // stay within WebGPU's 4-bind-group limit.
     let user_bindings = "\n\
@@ -1003,6 +1803,16 @@ struct ThreersUserData { data: array<vec4<f32>, 16>, };\n\
 @group(1) @binding(10) var u_s0_tex: texture_2d<f32>;\n\
 @group(1) @binding(11) var u_s1_tex: texture_2d<f32>;\n\
 @group(1) @binding(12) var u_s2_tex: texture_2d<f32>;\n";
+    // The volume slots, where they fit: see
+    // `caps::supports_shader_material_volumes`, which comes to the same test
+    // as `storage_buffers`. Module, layout and bind group agree on it.
+    let volume_bindings = if storage_buffers {
+        "@group(1) @binding(13) var u_vol0: texture_3d<f32>;\n\
+@group(1) @binding(14) var u_vol1: texture_3d<f32>;\n\
+@group(1) @binding(15) var u_vol_samp: sampler;\n"
+    } else {
+        ""
+    };
     // WebGL2 has no storage buffers at all, so on that backend these three are
     // left out of the module *and* out of the layout and bind group that go with
     // it — all three have to agree or the pipeline is rejected. A shader that
@@ -1052,7 +1862,7 @@ fn s_len(slot: u32) -> u32 {\n\
 }\n"
     };
     let vertex = vertex.map(|v| format!("\n{v}\n")).unwrap_or_default();
-    format!("{preamble}{user_bindings}{storage_bindings}{accessors}{vertex}\n{fragment}\n")
+    format!("{preamble}{user_bindings}{volume_bindings}{storage_bindings}{accessors}{vertex}\n{fragment}\n")
 }
 
 /// Parse and validate an assembled custom-shader module, before wgpu sees it.
@@ -1129,7 +1939,8 @@ fn build_custom_pipeline(
     transparent: bool,
     screen_space: bool,
     side: u32,
-    depth_write: Option<bool>,
+    instanced: bool,
+    pipes: &mut super::pipeline_state::StatePipelines,
 ) -> Result<wgpu::RenderPipeline, String> {
     let source = custom_shader_module_source(
         fragment,
@@ -1173,8 +1984,45 @@ fn build_custom_pipeline(
         ],
     }];
     // `buffers` takes a slice of `Option` in wgpu 30.
-    let vertex_buffers = vertex_buffers.map(Some);
-    Ok(device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+    let [base] = vertex_buffers;
+    // On an `InstancedMesh`: the instance matrix and tint in slot 1, as the
+    // built-in instanced pipeline has them, and the two custom columns in
+    // slot 2 (`InstancedCustomIn`).
+    let instance_attrs = [
+        (0, 4),
+        (16, 5),
+        (32, 6),
+        (48, 7),
+        (64, 9),
+    ]
+    .map(|(offset, shader_location)| wgpu::VertexAttribute {
+        offset,
+        shader_location,
+        format: wgpu::VertexFormat::Float32x4,
+    });
+    let custom_attrs = [(0, 10), (16, 11)].map(|(offset, shader_location)| wgpu::VertexAttribute {
+        offset,
+        shader_location,
+        format: wgpu::VertexFormat::Float32x4,
+    });
+    let vertex_buffers: Vec<Option<wgpu::VertexBufferLayout>> = if instanced {
+        vec![
+            Some(base),
+            Some(wgpu::VertexBufferLayout {
+                array_stride: 80,
+                step_mode: wgpu::VertexStepMode::Instance,
+                attributes: &instance_attrs,
+            }),
+            Some(wgpu::VertexBufferLayout {
+                array_stride: 32,
+                step_mode: wgpu::VertexStepMode::Instance,
+                attributes: &custom_attrs,
+            }),
+        ]
+    } else {
+        vec![Some(base)]
+    };
+    Ok(pipes.create(device, &wgpu::RenderPipelineDescriptor {
         label: Some("threers custom pipeline"),
         layout: Some(layout),
         vertex: wgpu::VertexState {
@@ -1184,6 +2032,8 @@ fn build_custom_pipeline(
             // custom one can start from `standard_vertex`.
             entry_point: Some(if vertex.is_some() {
                 "vs_custom"
+            } else if instanced {
+                "vs_instanced_custom"
             } else {
                 "vs_main"
             }),
@@ -1220,9 +2070,11 @@ fn build_custom_pipeline(
                 _ => Some(wgpu::Face::Back),
             },
         ),
+        // The material's `depthWrite` (and the rest of its `RenderState`) is
+        // applied over this as a state variant at draw time.
         depth_stencil: Some(depth_stencil(
-            depth_write.unwrap_or(screen_space || !transparent),
-            wgpu::CompareFunction::Less,
+            screen_space || !transparent,
+            wgpu::CompareFunction::LessEqual,
         )),
         multisample: wgpu::MultisampleState::default(),
         multiview_mask: None,
@@ -1302,13 +2154,16 @@ fn build_user_bind_group(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     bgl: &wgpu::BindGroupLayout,
-    mesh_uniform: &wgpu::Buffer,
+    mesh_uniform: wgpu::BufferBinding<'_>,
     data: &[[f32; 4]; 16],
     storage: &[Vec<f32>; 3],
     textures: &[std::sync::Arc<wgpu::TextureView>],
     placeholder: &wgpu::TextureView,
     data_placeholder: &wgpu::TextureView,
     sampler: &wgpu::Sampler,
+    volumes: &[std::sync::Arc<wgpu::TextureView>],
+    volume_placeholder: &wgpu::TextureView,
+    volume_sampler: &wgpu::Sampler,
 ) -> (wgpu::BindGroup, Vec<wgpu::Buffer>, Vec<wgpu::Texture>) {
     use wgpu::util::DeviceExt;
     let flat: Vec<f32> = data.iter().flat_map(|v| v.iter().copied()).collect();
@@ -1336,7 +2191,7 @@ fn build_user_bind_group(
     let mut entries = vec![
         wgpu::BindGroupEntry {
             binding: 0,
-            resource: mesh_uniform.as_entire_binding(),
+            resource: wgpu::BindingResource::Buffer(mesh_uniform),
         },
         wgpu::BindGroupEntry {
             binding: 1,
@@ -1391,6 +2246,20 @@ fn build_user_bind_group(
             resource: wgpu::BindingResource::TextureView(
                 data_views.get(i).unwrap_or(data_placeholder),
             ),
+        });
+    }
+    if crate::renderer::caps::supports_shader_material_volumes(device) {
+        for i in 0..2 {
+            entries.push(wgpu::BindGroupEntry {
+                binding: 13 + i as u32,
+                resource: wgpu::BindingResource::TextureView(
+                    volumes.get(i).map(|v| &**v).unwrap_or(volume_placeholder),
+                ),
+            });
+        }
+        entries.push(wgpu::BindGroupEntry {
+            binding: 15,
+            resource: wgpu::BindingResource::Sampler(volume_sampler),
         });
     }
     let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1454,6 +2323,170 @@ impl Renderer {
             .map(|e| &e.mesh.vertex_buffer)
     }
 
+    /// three.js r165's `renderTransmissionPass`, when the scene has a visible
+    /// transmissive material: the opaque scene drawn linear and untone-mapped
+    /// into a half-float target the size of this one, its mips filled; then,
+    /// for double-sided transmissive materials, their back faces drawn over it
+    /// (reading a copy of it) and the mips filled again. The frame group then
+    /// binds it for the colour pass that follows.
+    fn capture_transmission(&mut self, scene: &mut Scene, camera: &dyn Camera) {
+        let (mut any, mut double) = (false, false);
+        let mut see = |m: &Material| {
+            if m.transmissive() {
+                any = true;
+                double |= m.side() == 2;
+            }
+        };
+        scene.arena.traverse_visible(scene.root, &mut |_, obj| match &obj.kind {
+            ObjectKind::Mesh(mesh) => mesh.draws().into_iter().for_each(|i| see(i.material)),
+            ObjectKind::InstancedMesh(im) if !im.transforms.is_empty() => {
+                im.draws().into_iter().for_each(|i| see(i.material))
+            }
+            ObjectKind::SkinnedMesh(sm) => sm.draws().into_iter().for_each(|i| see(i.material)),
+            _ => {}
+        });
+        if !any {
+            if self.transmission.take().is_some() {
+                self.frame_bind_group = self.frame_bind_group_dummy.clone();
+            }
+            return;
+        }
+        let (w, h) = self.depth_size;
+        if self.transmission.as_ref().map(|c| c.size) != Some((w, h)) {
+            let levels = 32 - w.max(h).max(1).leading_zeros();
+            let make = |label: &str, usage: wgpu::TextureUsages| {
+                self.device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some(label),
+                    size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                    mip_level_count: levels,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba16Float,
+                    usage,
+                    view_formats: &[],
+                })
+            };
+            let texture = make(
+                "threers transmission capture",
+                wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_SRC,
+            );
+            let copy = make(
+                "threers transmission capture copy",
+                wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            );
+            let depth = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("threers transmission depth"),
+                size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: DEPTH_FORMAT,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            });
+            self.transmission = Some(TransmissionCapture {
+                view: texture.create_view(&wgpu::TextureViewDescriptor::default()),
+                target_view: texture.create_view(&wgpu::TextureViewDescriptor {
+                    base_mip_level: 0,
+                    mip_level_count: Some(1),
+                    ..Default::default()
+                }),
+                copy_view: copy.create_view(&wgpu::TextureViewDescriptor::default()),
+                depth_view: depth.create_view(&wgpu::TextureViewDescriptor::default()),
+                texture,
+                copy,
+                _depth: depth,
+                size: (w, h),
+                levels,
+            });
+        }
+        let cap = self.transmission.as_ref().expect("just made");
+        let (target, depth_view) = (cap.target_view.clone(), cap.depth_view.clone());
+        let orig_depth = std::mem::replace(&mut self.depth_view, depth_view);
+        let tone = std::mem::replace(&mut self.tone_map_pass, false);
+        self.frame_bind_group = self.frame_bind_group_dummy.clone();
+
+        self.capturing_transmission = Some(false);
+        self.render_inner(scene, camera, &target, true, None, None);
+        self.fill_capture_mips();
+        if double {
+            let cap = self.transmission.as_ref().expect("made above");
+            let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("threers transmission copy"),
+            });
+            for level in 0..cap.levels {
+                let size = wgpu::Extent3d {
+                    width: (w >> level).max(1),
+                    height: (h >> level).max(1),
+                    depth_or_array_layers: 1,
+                };
+                encoder.copy_texture_to_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &cap.texture,
+                        mip_level: level,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &cap.copy,
+                        mip_level: level,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    size,
+                );
+            }
+            self.queue.submit([encoder.finish()]);
+            self.frame_bind_group = frame_bg(
+                &self.device,
+                &self.frame_bgl,
+                &self.frame_buffer_for_bg,
+                &cap.copy_view,
+                &self.transmission_sampler,
+                "threers frame bg (back faces)",
+            );
+            let clear = std::mem::replace(&mut self.viewport_state.settings.auto_clear, false);
+            self.capturing_transmission = Some(true);
+            self.render_inner(scene, camera, &target, true, None, None);
+            self.viewport_state.settings.auto_clear = clear;
+            self.fill_capture_mips();
+        }
+        self.capturing_transmission = None;
+        self.tone_map_pass = tone;
+        self.depth_view = orig_depth;
+        let cap = self.transmission.as_ref().expect("made above");
+        self.frame_bind_group = frame_bg(
+            &self.device,
+            &self.frame_bgl,
+            &self.frame_buffer_for_bg,
+            &cap.view,
+            &self.transmission_sampler,
+            "threers frame bg",
+        );
+    }
+
+    fn fill_capture_mips(&mut self) {
+        let Some(cap) = &self.transmission else { return };
+        let mipgen = self.mipgen.get_or_insert_with(|| MipGenerator::new(&self.device));
+        mipgen.generate(&self.device, &self.queue, &cap.texture, wgpu::TextureFormat::Rgba16Float, cap.levels);
+    }
+
+    /// threers's reflective transparency on Standard and Physical (off by
+    /// default): a transparent surface's alpha raised by its specular
+    /// reflectance, `opacity + (1 − opacity) · reflectance`, so its reflection
+    /// — which is in front of it and not transmitted — keeps its strength.
+    /// three.js blends the whole colour by `opacity`, which fades a highlight
+    /// on glass faked with `alphaMode: BLEND` into grey film.
+    pub fn set_reflective_transparency(&mut self, on: bool) {
+        self.reflective_transparency = on;
+    }
+
+    pub fn reflective_transparency(&self) -> bool {
+        self.reflective_transparency
+    }
+
     fn ensure_geometry(&mut self, geom: &std::sync::Arc<BufferGeometry>) {
         let key = geom_cache_key(geom);
         let ver = geom.geometry_version;
@@ -1474,6 +2507,384 @@ impl Renderer {
                 },
             );
         }
+        self.ensure_uv_sets(geom);
+    }
+
+    /// Upload `geom`'s `uv1`/`uv2`/`uv3` as its [`UvSetTexture`], once per
+    /// geometry version; drop it when the geometry no longer has any.
+    fn ensure_uv_sets(&mut self, geom: &std::sync::Arc<BufferGeometry>) {
+        let key = geom_cache_key(geom);
+        let ver = geom.geometry_version;
+        if self.uv_cache.get(&key).is_some_and(|u| u.version == ver) {
+            return;
+        }
+        let sets = UV_SET_NAMES.map(|n| geom.get_attribute(n).filter(|a| a.item_size >= 2));
+        let count = geom.get_attribute("position").map_or(0, |p| p.count());
+        if sets.iter().all(Option::is_none) || count == 0 {
+            self.uv_cache.remove(&key);
+            return;
+        }
+        let texels = (count * 2) as u32;
+        let max = self.device.limits().max_texture_dimension_2d.max(1);
+        let width = texels.min(max);
+        let height = texels.div_ceil(width);
+        let mut data = vec![0.0f32; (width * height * 4) as usize];
+        for (set, attr) in sets.iter().enumerate() {
+            let Some(a) = attr else { continue };
+            for v in 0..count.min(a.count()) {
+                let at = (v * 2 + set / 2) * 4 + (set % 2) * 2;
+                data[at] = a.array[v * a.item_size];
+                data[at + 1] = a.array[v * a.item_size + 1];
+            }
+        }
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("threers uv sets"),
+            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba32Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            bytemuck::cast_slice(&data),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(width * 16),
+                rows_per_image: Some(height),
+            },
+            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        );
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        self.uv_cache.insert(key, UvSetTexture { version: ver, _texture: texture, view });
+        self.tex_bg_cache.retain(|k, _| k.3 .0 != key as usize);
+        self.variant_bg_cache.retain(|k, _| k.1 .0 != key as usize);
+    }
+
+    /// The identity of the uv-set texture a draw of geometry `key` binds —
+    /// part of its bind group's cache key; `(0, 0)` for none.
+    fn uv_key(&self, key: *const BufferGeometry) -> (usize, u32) {
+        self.uv_cache.get(&key).map_or((0, 0), |u| (key as usize, u.version))
+    }
+
+    /// Upload `geom`'s morph targets as three.js's morph texture, once per
+    /// geometry version. Returns the cache key and version to bind, or `None`
+    /// when the geometry has no morph targets.
+    fn ensure_morph(&mut self, geom: &std::sync::Arc<BufferGeometry>) -> Option<(usize, u32)> {
+        let key = geom_cache_key(geom);
+        let ver = geom.geometry_version;
+        if self.morph_cache.get(&key).is_some_and(|m| m.version == ver) {
+            return Some((key as usize, ver));
+        }
+        let texels = crate::core::MorphTexels::build(geom)?;
+        if texels.targets == 0 || texels.vertex_count == 0 {
+            return None;
+        }
+        // three.js: one row of `vertexCount · stride` texels, wrapped onto
+        // more rows when that passes the maximum texture width.
+        let per_layer = texels.vertex_count * texels.stride;
+        let max = self.device.limits().max_texture_dimension_2d.max(1);
+        let width = per_layer.min(max);
+        let height = per_layer.div_ceil(width);
+        // At least two layers: WebGL2 (wgpu's GL backend) makes a
+        // one-layer texture a plain `TEXTURE_2D`, and the shader's
+        // `sampler2DArray` then reads zeros from it — a single morph target
+        // collapsed every vertex to the origin there. The spare layer is
+        // never read.
+        let layers = texels.targets.max(2);
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("threers morph texture"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: layers,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba32Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        // Each layer padded out to whole rows.
+        let row = (width * 4) as usize;
+        let mut padded = vec![0.0f32; row * height as usize * layers as usize];
+        let layer_len = (per_layer * 4) as usize;
+        for t in 0..texels.targets as usize {
+            let src = &texels.data[t * layer_len..(t + 1) * layer_len];
+            let dst = t * row * height as usize;
+            padded[dst..dst + layer_len].copy_from_slice(src);
+        }
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            bytemuck::cast_slice(&padded),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(width * 16),
+                rows_per_image: Some(height),
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: layers,
+            },
+        );
+        let view = texture.create_view(&wgpu::TextureViewDescriptor {
+            dimension: Some(wgpu::TextureViewDimension::D2Array),
+            ..Default::default()
+        });
+        self.morph_cache.insert(
+            key,
+            MorphTexture {
+                version: ver,
+                _texture: texture,
+                view,
+                instance_layer: None,
+            },
+        );
+        Some((key as usize, ver))
+    }
+
+    /// An `InstancedMesh`'s morph texture: `geom`'s targets as in
+    /// [`ensure_morph`](Self::ensure_morph), plus one more layer holding
+    /// three.js's `InstancedMesh.morphTexture` — `instances` rows of
+    /// `row_len` floats (base influence, then the influences), one float a
+    /// texel in `.x`, row-major over the layer's width. Cached under `owner`
+    /// (the object), rebuilt when the geometry or the row layout changes and
+    /// otherwise only the rows are rewritten.
+    ///
+    /// One texture rather than a second binding because the mesh layout is
+    /// already at WebGL2's sixteen texture units.
+/// The GPU buffer for `obj`'s instance data `slot`, holding `data`: last
+    /// frame's buffer when it is big enough, rewritten only if `data`
+    /// changed, else a new one with room to grow.
+    fn instance_buffer(
+        &mut self,
+        obj: crate::core::ObjectId,
+        slot: u8,
+        data: Vec<f32>,
+        version: Option<(u64, usize)>,
+    ) -> wgpu::Buffer {
+        let frame = self.instance_frame;
+        let bytes = (data.len() * 4) as u64;
+        if let Some(c) = self.instance_cache.get_mut(&(obj, slot)) {
+            if c.buffer.size() >= bytes.max(4) {
+                // A versioned mesh got here because its version moved: write.
+                if version.is_some() || c.data != data {
+                    self.queue.write_buffer(&c.buffer, 0, bytemuck::cast_slice(&data));
+                    c.data = if version.is_some() { Vec::new() } else { data };
+                    self.instance_stamps += 1;
+                    c.stamp = self.instance_stamps;
+                }
+                c.frame = frame;
+                c.version = version;
+                return c.buffer.clone();
+            }
+        }
+        // Half again, so a mesh that grows a little each frame is not
+        // reallocated every frame.
+        let size = ((bytes + bytes / 2).max(16)).div_ceil(4) * 4;
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("threers instance buffer"),
+            size,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.queue.write_buffer(&buffer, 0, bytemuck::cast_slice(&data));
+        self.instance_stamps += 1;
+        self.instance_cache.insert(
+            (obj, slot),
+            InstanceBuffer {
+                buffer: buffer.clone(),
+                // A versioned mesh is never compared, so keep no copy.
+                data: if version.is_some() { Vec::new() } else { data },
+                frame,
+                version,
+                stamp: self.instance_stamps,
+            },
+        );
+        buffer
+    }
+
+    /// The content stamp of `obj`'s instance slot, 0 when it has none.
+    fn instance_stamp(&self, obj: crate::core::ObjectId, slot: u8) -> u64 {
+        self.instance_cache.get(&(obj, slot)).map_or(0, |c| c.stamp)
+    }
+
+    /// Last frame's buffer for `obj`'s slot when its `instance_version` (and
+    /// count) say nothing changed — without reading the instance data.
+    fn cached_instances(
+        &mut self,
+        obj: crate::core::ObjectId,
+        slot: u8,
+        version: Option<(u64, usize)>,
+    ) -> Option<wgpu::Buffer> {
+        let v = version?;
+        let c = self.instance_cache.get_mut(&(obj, slot))?;
+        if c.version != Some(v) {
+            return None;
+        }
+        c.frame = self.instance_frame;
+        Some(c.buffer.clone())
+    }
+
+    fn ensure_instance_morph(
+        &mut self,
+        owner: usize,
+        geom: &std::sync::Arc<BufferGeometry>,
+        rows: &[f32],
+        instances: u32,
+        row_len: u32,
+    ) -> Option<(usize, u32)> {
+        let key = owner as *const BufferGeometry;
+        // High bit set, so it can never equal a plain geometry version.
+        let ver = {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            (geom_cache_key(geom), geom.geometry_version, instances, row_len).hash(&mut h);
+            (h.finish() as u32) | 0x8000_0000
+        };
+        let texel_rows = |width: u32| -> Vec<f32> {
+            let n = (instances * row_len) as usize;
+            let rows_needed = (n as u32).div_ceil(width).max(1);
+            let mut out = vec![0.0f32; (width * rows_needed * 4) as usize];
+            for (i, v) in rows.iter().take(n).enumerate() {
+                out[i * 4] = *v;
+            }
+            out
+        };
+        if let Some(m) = self.morph_cache.get(&key).filter(|m| m.version == ver) {
+            let (layer, width) = m.instance_layer?;
+            let data = texel_rows(width);
+            let rows_needed = (data.len() / 4) as u32 / width;
+            self.queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &m._texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d { x: 0, y: 0, z: layer },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                bytemuck::cast_slice(&data),
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(width * 16),
+                    rows_per_image: Some(rows_needed),
+                },
+                wgpu::Extent3d { width, height: rows_needed, depth_or_array_layers: 1 },
+            );
+            return Some((owner, ver));
+        }
+        let texels = crate::core::MorphTexels::build(geom)?;
+        if texels.targets == 0 || texels.vertex_count == 0 || instances == 0 {
+            return None;
+        }
+        let per_layer = texels.vertex_count * texels.stride;
+        let max = self.device.limits().max_texture_dimension_2d.max(1);
+        let width = per_layer.min(max);
+        let height = per_layer
+            .div_ceil(width)
+            .max((instances * row_len).div_ceil(width));
+        if height > max {
+            return None;
+        }
+        let layers = (texels.targets + 1).max(2);
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("threers instanced morph texture"),
+            size: wgpu::Extent3d { width, height, depth_or_array_layers: layers },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba32Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let row = (width * 4) as usize;
+        let layer_size = row * height as usize;
+        let mut padded = vec![0.0f32; layer_size * layers as usize];
+        let layer_len = (per_layer * 4) as usize;
+        for t in 0..texels.targets as usize {
+            let src = &texels.data[t * layer_len..(t + 1) * layer_len];
+            padded[t * layer_size..t * layer_size + layer_len].copy_from_slice(src);
+        }
+        let inst = texel_rows(width);
+        let at = texels.targets as usize * layer_size;
+        padded[at..at + inst.len()].copy_from_slice(&inst);
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            bytemuck::cast_slice(&padded),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(width * 16),
+                rows_per_image: Some(height),
+            },
+            wgpu::Extent3d { width, height, depth_or_array_layers: layers },
+        );
+        let view = texture.create_view(&wgpu::TextureViewDescriptor {
+            dimension: Some(wgpu::TextureViewDimension::D2Array),
+            ..Default::default()
+        });
+        self.morph_cache.insert(
+            key,
+            MorphTexture {
+                version: ver,
+                _texture: texture,
+                view,
+                instance_layer: Some((texels.targets, width)),
+            },
+        );
+        Some((owner, ver))
+    }
+
+    /// The wireframe line list of one partial span of `geom` — a group or a
+    /// draw range — cached by geometry version and span.
+    fn ensure_wire_span(&mut self, geom: &std::sync::Arc<BufferGeometry>, start: u32, end: u32) {
+        let k = (geom_cache_key(geom), geom.geometry_version, start, end);
+        if self.wire_span_cache.contains_key(&k) {
+            return;
+        }
+        // A runaway guard: spans are few and stable per geometry, and a
+        // stale version's entries are simply never asked for again.
+        if self.wire_span_cache.len() > 1024 {
+            self.wire_span_cache.clear();
+        }
+        let flat = geom.wireframe_indices_in(start, end);
+        let buf = wgpu::util::DeviceExt::create_buffer_init(
+            &*self.device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("threers wireframe span index buffer"),
+                // An empty buffer cannot be bound; one dummy index, drawn zero
+                // times, stands in.
+                contents: bytemuck::cast_slice(if flat.is_empty() { &[0u32] } else { &flat }),
+                usage: wgpu::BufferUsages::INDEX,
+            },
+        );
+        self.wire_span_cache.insert(k, (buf, flat.len() as u32));
+    }
+
+    /// Give `geom`'s cached upload its wireframe line list. Call after
+    /// [`ensure_geometry`](Self::ensure_geometry) for a `wireframe: true`
+    /// material; a re-upload drops the list, so it follows `geometry_version`.
+    fn ensure_wire_indices(&mut self, geom: &std::sync::Arc<BufferGeometry>) {
+        if let Some(e) = self.geom_cache.get_mut(&geom_cache_key(geom)) {
+            e.mesh.ensure_wire_indices(&self.device, geom);
+        }
     }
 
     /// (Re)create the OIT accumulation + revealage targets at `w×h` and their
@@ -1482,6 +2893,42 @@ impl Renderer {
     /// glass pass. Sized `w×h` in `format` (must match the framebuffer format so
     /// the opaque pipelines can render into mip 0). The mip chain feeds the
     /// roughness→LOD blur of the refracted/reflected image.
+    /// The scratch a layer of overlapping glass draws into (`ss_layer`), the
+    /// capture's size and format.
+    fn ensure_ss_layer(&mut self) {
+        let Some(c) = self.ss_color.as_ref() else { return };
+        if matches!(&self.ss_layer, Some((w, h, t, _)) if *w == c.width && *h == c.height && t.format() == c.format) {
+            return;
+        }
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("threers ss glass layer"),
+            size: wgpu::Extent3d { width: c.width, height: c.height, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: c.format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        self.ss_layer = Some((c.width, c.height, texture, view));
+    }
+
+    /// How many layers overlapping refraction glass (`TransparencyMode::Refract`)
+    /// is composited in. The refracting objects are drawn back to front in
+    /// up to this many groups, each refracting a capture of everything drawn
+    /// before it — so glass seen through glass shows; within a group, a
+    /// pixel shows only the front-most surface. Each layer past the first
+    /// costs a capture (a copy and a mip chain) and a back-face pass. 2 by
+    /// default; 1 is three.js's single capture.
+    pub fn set_refraction_layers(&mut self, layers: usize) {
+        self.refraction_layers = layers.max(1);
+    }
+
+    pub fn refraction_layers(&self) -> usize {
+        self.refraction_layers
+    }
+
     fn ensure_ss_targets(&mut self, w: u32, h: u32, format: wgpu::TextureFormat) {
         let (w, h) = (w.max(1), h.max(1));
         if let Some(c) = &self.ss_color {
@@ -1492,6 +2939,9 @@ impl Renderer {
         // ~8 mips is plenty for a roughness blur; cap so the smallest is ≥1px.
         let max_mips = 32 - (w.max(h)).leading_zeros();
         let mips = max_mips.clamp(1, 8);
+        let unorm = format.remove_srgb_suffix();
+        let reinterpret = unorm != format && super::caps::supports_view_formats(&self.device);
+        let unorm_formats = [unorm];
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("threers ss color capture"),
             size: wgpu::Extent3d {
@@ -1503,10 +2953,20 @@ impl Renderer {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
+            // COPY_DST: a layer of overlapping glass is copied in (`ss_layer`).
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: if reinterpret { &unorm_formats } else { &[] },
         });
         let all_mips_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let mip0_unorm = reinterpret.then(|| {
+            texture.create_view(&wgpu::TextureViewDescriptor {
+                label: Some("threers ss mip 0 unorm"),
+                format: Some(unorm),
+                base_mip_level: 0,
+                mip_level_count: Some(1),
+                ..Default::default()
+            })
+        });
         let mut mip_render_views = Vec::with_capacity(mips as usize);
         let mut mip_sample_views = Vec::with_capacity(mips as usize);
         for m in 0..mips {
@@ -1530,6 +2990,7 @@ impl Renderer {
             all_mips_view,
             mip_render_views,
             mip_sample_views,
+            mip0_unorm,
             mips,
             format,
         });
@@ -1574,6 +3035,18 @@ impl Renderer {
             });
             let bview = btex.create_view(&wgpu::TextureViewDescriptor::default());
             self.ss_back_depth = Some((w, h, btex, bview));
+            let stex = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("threers glass shadows"),
+                size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: GLASS_SHADOW_FORMAT,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
+            let sview = stex.create_view(&wgpu::TextureViewDescriptor::default());
+            self.ss_glass_shadow = Some((stex, sview));
         }
     }
 
@@ -1595,6 +3068,22 @@ impl Renderer {
 
     pub fn depth_texture(&self) -> &wgpu::Texture {
         &self.depth_texture
+    }
+
+    /// What the last [`render`](Self::render) drew into, for a pass drawn over
+    /// the frame that depth-tests against it — [`marks`](crate::marks) use
+    /// this. `(multisampled colour, depth, samples)`: the colour is `Some` only
+    /// when that frame went through MSAA, and must then be drawn into and
+    /// resolved to the frame; otherwise the frame view itself is the colour
+    /// and the depth is the renderer's own, single-sampled.
+    ///
+    /// After [`render_to`](Self::render_to) the frame's depth is the target's
+    /// own `depth_view`, not this.
+    pub fn overlay_attachments(&self) -> (Option<&wgpu::TextureView>, &wgpu::TextureView, u32) {
+        match (&self.msaa_targets, self.overlay_msaa) {
+            (Some((_, _, color, depth)), true) => (Some(color), depth, self.msaa),
+            _ => (None, &self.depth_view, 1),
+        }
     }
 
     /// Whether the temporal pass is enabled.
@@ -1735,7 +3224,7 @@ impl Renderer {
             (tex, view)
         };
         let (accum, accum_view) = mk(wgpu::TextureFormat::Rgba16Float, "threers oit accum");
-        let (reveal, reveal_view) = mk(wgpu::TextureFormat::R16Float, "threers oit reveal");
+        let (reveal, reveal_view) = mk(OIT_REVEAL_FORMAT, "threers oit reveal");
         let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("threers oit resolve bg"),
             layout: &self.oit_resolve_bgl,
@@ -1753,6 +3242,32 @@ impl Renderer {
         self.oit_targets = Some((w, h, accum, accum_view, reveal, reveal_view, bg));
     }
 
+    /// The OIT accumulation's multisampled targets, resolved into
+    /// `oit_targets`.
+    fn ensure_oit_msaa_targets(&mut self, w: u32, h: u32) {
+        let (w, h) = (w.max(1), h.max(1));
+        if !take_sized(&mut self.oit_msaa_targets, &mut self.oit_msaa_targets_spare, w, h) {
+            return;
+        }
+        let mk = |format: wgpu::TextureFormat, label: &str| {
+            self.device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some(label),
+                    size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                    mip_level_count: 1,
+                    sample_count: MSAA_SAMPLES,
+                    dimension: wgpu::TextureDimension::D2,
+                    format,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                    view_formats: &[],
+                })
+                .create_view(&wgpu::TextureViewDescriptor::default())
+        };
+        let accum = mk(wgpu::TextureFormat::Rgba16Float, "threers oit accum msaa");
+        let reveal = mk(OIT_REVEAL_FORMAT, "threers oit reveal msaa");
+        self.oit_msaa_targets = Some((w, h, accum, reveal));
+    }
+
     /// Create pipelines and default 1×1 fallback textures.
     ///
     /// `color_format` is the swapchain or render-target format (typically
@@ -1766,7 +3281,7 @@ impl Renderer {
     ) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("threers shader"),
-            source: wgpu::ShaderSource::Wgsl(SHADER_SOURCE.into()),
+            source: wgpu::ShaderSource::Wgsl(super::shader::legacy_shader_source().into()),
         });
 
         let uniform_entry = |binding| wgpu::BindGroupLayoutEntry {
@@ -1780,9 +3295,28 @@ impl Renderer {
             count: None,
         };
 
+        // 1–2: the transmission capture and its trilinear sampler.
         let frame_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("threers frame bgl"),
-            entries: &[uniform_entry(0)],
+            entries: &[
+                uniform_entry(0),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
         });
 
         let mesh_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -1810,15 +3344,33 @@ impl Renderer {
             ],
         });
 
-        // 8 fragment textures (albedo, normal, roughness, metalness, ao,
-        // emissive, matcap, iridescence) + 1 sampler + a displacement map that
-        // is sampled in the *vertex* stage.
+        // 7 fragment textures (albedo, normal, roughness, metalness, ao,
+        // emissive, matcap) + 1 sampler, and for the vertex stage the morph
+        // texture and the uv sets. Every other map — displacement included —
+        // is a shader variant's (`material_maps`): with the frame group's
+        // transmission capture and the environment group, this layout is at
+        // WebGL2's sixteen texture units.
         let tex_entry = |binding| wgpu::BindGroupLayoutEntry {
             binding,
             visibility: wgpu::ShaderStages::FRAGMENT,
             ty: wgpu::BindingType::Texture {
                 sample_type: wgpu::TextureSampleType::Float { filterable: true },
                 view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        };
+        // Binding 10: three.js's morph-target texture, read in the vertex
+        // stage with `textureLoad` — unfilterable float, so `Rgba32Float`
+        // works everywhere and it lowers to `texelFetch` on WebGL2. Eleven
+        // textures here plus the environment group's five stays inside
+        // WebGL2's sixteen units.
+        let morph_entry = wgpu::BindGroupLayoutEntry {
+            binding: 10,
+            visibility: wgpu::ShaderStages::VERTEX,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                view_dimension: wgpu::TextureViewDimension::D2Array,
                 multisampled: false,
             },
             count: None,
@@ -1833,17 +3385,7 @@ impl Renderer {
                 tex_entry(4),
                 tex_entry(5),
                 tex_entry(6),
-                tex_entry(8),
-                wgpu::BindGroupLayoutEntry {
-                    binding: 9,
-                    visibility: wgpu::ShaderStages::VERTEX,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
+                uv_sets_entry(),
                 wgpu::BindGroupLayoutEntry {
                     binding: 7,
                     // The displacement sample needs the same sampler, from the
@@ -1852,6 +3394,7 @@ impl Renderer {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
+                morph_entry,
             ],
         });
 
@@ -1860,7 +3403,20 @@ impl Renderer {
         // the texture budget rather than tidiness: WebGL2 allots sixteen units,
         // and this group together with the nine material maps asks for
         // seventeen.
+        let ltc = upload_ltc(&device, &queue);
         let env_entries: Vec<wgpu::BindGroupLayoutEntry> = vec![
+                // 14: the `RectAreaLight` tables, filtered as three.js reads
+                // them (`LinearFilter`).
+                wgpu::BindGroupLayoutEntry {
+                    binding: 14,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2Array,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::FRAGMENT,
@@ -1882,7 +3438,7 @@ impl Renderer {
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Depth,
-                        view_dimension: wgpu::TextureViewDimension::D2,
+                        view_dimension: wgpu::TextureViewDimension::D2Array,
                         multisampled: false,
                     },
                     count: None,
@@ -1898,7 +3454,7 @@ impl Renderer {
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Depth,
-                        view_dimension: wgpu::TextureViewDimension::D2,
+                        view_dimension: wgpu::TextureViewDimension::D2Array,
                         multisampled: false,
                     },
                     count: None,
@@ -1914,7 +3470,7 @@ impl Renderer {
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Depth,
-                        view_dimension: wgpu::TextureViewDimension::Cube,
+                        view_dimension: wgpu::TextureViewDimension::D2Array,
                         multisampled: false,
                     },
                     count: None,
@@ -1932,6 +3488,17 @@ impl Renderer {
                         sample_type: wgpu::TextureSampleType::Float { filterable: true },
                         view_dimension: wgpu::TextureViewDimension::D2,
                         multisampled: false,
+                    },
+                    count: None,
+                },
+                // 13: `EnvUniforms`, this group's environment's parameters.
+                wgpu::BindGroupLayoutEntry {
+                    binding: 13,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
                     },
                     count: None,
                 },
@@ -1954,7 +3521,7 @@ impl Renderer {
         // sixteen.
         let mut env_glass_entries: Vec<wgpu::BindGroupLayoutEntry> = env_entries
             .iter()
-            .filter(|e| matches!(e.binding, 0 | 1 | 8))
+            .filter(|e| matches!(e.binding, 0 | 1 | 8 | 13))
             .cloned()
             .collect();
         env_glass_entries.extend([
@@ -2005,6 +3572,19 @@ impl Renderer {
                     },
                     count: None,
                 },
+                // 15: each light's shadow on the glass, packed by
+                // `fs_glass_shadow` — the one unit left, standing in for the
+                // three shadow maps.
+                wgpu::BindGroupLayoutEntry {
+                    binding: 15,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Uint,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
         ]);
         let env_bgl_glass = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("threers env bgl (refraction)"),
@@ -2038,6 +3618,46 @@ impl Renderer {
                 immediate_size: 0,
             });
 
+        // The shadow passes' group 0: the frame uniforms and, at a dynamic
+        // offset, the pass's own matrix (`ShadowPassGpu`). Their pipelines
+        // get layouts of their own with it in place of the frame group.
+        let shadow_pass_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("threers shadow pass bgl"),
+            entries: &[
+                uniform_entry(0),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: true,
+                        min_binding_size: wgpu::BufferSize::new(std::mem::size_of::<ShadowPassGpu>() as u64),
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let shadow_pass_stride = {
+            let align = device.limits().min_uniform_buffer_offset_alignment as u64;
+            (std::mem::size_of::<ShadowPassGpu>() as u64).div_ceil(align) * align
+        };
+        let shadow_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("threers shadow layout"),
+            bind_group_layouts: &[Some(&shadow_pass_bgl), Some(&mesh_bgl), Some(&tex_bgl), Some(&env_bgl)],
+            immediate_size: 0,
+        });
+        let shadow_layout_skinned = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("threers skinned shadow layout"),
+            bind_group_layouts: &[Some(&shadow_pass_bgl), Some(&mesh_skinned_bgl), Some(&tex_bgl), Some(&env_bgl)],
+            immediate_size: 0,
+        });
+        // Point passes: no environment group.
+        let shadow_layout_point = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("threers point shadow layout"),
+            bind_group_layouts: &[Some(&shadow_pass_bgl), Some(&mesh_bgl), Some(&tex_bgl)],
+            immediate_size: 0,
+        });
+
         // ShaderMaterial data rides in @group(1) alongside the mesh uniform
         // (WebGPU's default maxBindGroups is 4, so we can't add a 5th group):
         //   binding 0 = mesh uniform (as usual), binding 1 = user uniform block,
@@ -2059,6 +3679,16 @@ impl Renderer {
                 ty: wgpu::BufferBindingType::Uniform,
                 has_dynamic_offset: false,
                 min_binding_size: None,
+            },
+            count: None,
+        };
+        let volume_entry = |binding: u32| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                view_dimension: wgpu::TextureViewDimension::D3,
+                multisampled: false,
             },
             count: None,
         };
@@ -2115,12 +3745,26 @@ impl Renderer {
                 data_tex_entry(11),
                 data_tex_entry(12),
         ]);
+        // `ShaderMaterial::volumes`: two 3D textures and their clamp-to-edge
+        // sampler, where they fit (not on WebGL2).
+        if crate::renderer::caps::supports_shader_material_volumes(&device) {
+            custom_entries.extend([
+                volume_entry(13),
+                volume_entry(14),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 15,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ]);
+        }
         let custom_mesh_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("threers custom mesh+user bgl"),
             entries: &custom_entries,
         });
-        // Group 2 for shader materials: the sampler and the displacement slot,
-        // and nothing else.
+        // Group 2 for shader materials: the sampler and the per-geometry
+        // vertex data, and nothing else.
         //
         // `ShaderMaterial` has no standard maps — it carries a fragment source,
         // a uniform block and its own textures — so the eight material textures
@@ -2129,11 +3773,9 @@ impl Renderer {
         // custom layout over the per-stage limit of sixteen and made shader
         // materials unavailable on baseline WebGPU altogether.
         //
-        // Bindings 7 and 9 have to stay: the vertex entry is the shared
-        // `vs_main`, and it samples the displacement map whether or not the flag
-        // that selects it is set — naga counts the use, not the branch. Neither
-        // is per-material here, since a `ShaderMaterial` has no displacement
-        // either, so one bind group serves every custom draw.
+        // Binding 7 stays for the shared `vs_main`'s sampler; the morph
+        // texture and uv sets are the geometry's. A `ShaderMaterial` has no
+        // displacement map, so one bind group serves every custom draw.
         let custom_tex_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("threers custom tex bgl"),
             entries: &[
@@ -2143,16 +3785,11 @@ impl Renderer {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 9,
-                    visibility: wgpu::ShaderStages::VERTEX,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
+                // The shared vertex stage reads the morph texture and the uv
+                // sets too; a shader material binds the geometry's or the
+                // empty defaults.
+                morph_entry,
+                uv_sets_entry(),
             ],
         });
 
@@ -2171,10 +3808,13 @@ impl Renderer {
         // a matter of trimming a slot or two; the split would have to change for
         // shader materials to work on WebGPU. Until then the feature is absent
         // there rather than broken, and `None` is what says so.
-        // Nine before the data-texture slots, twelve with them. WebGPU's floor
-        // and WebGL2's are both sixteen, so this is a check for the genuinely
-        // old rather than a limit anything current runs into.
-        const CUSTOM_LAYOUT_TEXTURES: u32 = 12;
+        // Nine before the data-texture slots, twelve with them, fourteen with
+        // the two volume slots. WebGPU's floor and WebGL2's are both sixteen,
+        // so this is a check for the genuinely old rather than a limit anything
+        // current runs into. WebGL2 counts differently — every texture in the
+        // layout, sixteen without the volumes — which is why it has none (see
+        // `caps::supports_shader_material_volumes`).
+        const CUSTOM_LAYOUT_TEXTURES: u32 = 14;
         let custom_pipeline_layout = if device.limits().max_sampled_textures_per_shader_stage
             >= CUSTOM_LAYOUT_TEXTURES
         {
@@ -2232,6 +3872,54 @@ impl Renderer {
         }];
         // `buffers` takes a slice of `Option` in wgpu 30.
         let vertex_buffers = vertex_buffers.map(Some);
+        // `Points`: the same vertex buffer, one vertex per *instance* — each
+        // point is expanded to a quad by `vs_points`.
+        let vertex_buffers_points = vertex_buffers.clone().map(|b| {
+            b.map(|mut b| {
+                b.step_mode = wgpu::VertexStepMode::Instance;
+                b
+            })
+        });
+
+        // Every pipeline a material draws with is created through this, which
+        // keeps its descriptor so a material's `depthTest` / `depthWrite` /
+        // `depthFunc` / `colorWrite` can be applied to it later — see
+        // `pipeline_state`.
+        let state_pipes =
+            std::cell::RefCell::new(super::pipeline_state::StatePipelines::default());
+        let record = |desc: &wgpu::RenderPipelineDescriptor| {
+            state_pipes.borrow_mut().create(&device, desc)
+        };
+        // The layouts whose group 2 is the material's maps, registered so a
+        // pipeline on them can be rebuilt for a material shader variant
+        // (`material_maps`, `StatePipelines::relayout`).
+        {
+            let mut sp = state_pipes.borrow_mut();
+            sp.register_layout(
+                &pipeline_layout,
+                vec![Some(frame_bgl.clone()), Some(mesh_bgl.clone()), Some(tex_bgl.clone()), Some(env_bgl.clone())],
+            );
+            sp.register_layout(
+                &pipeline_layout_skinned,
+                vec![Some(frame_bgl.clone()), Some(mesh_skinned_bgl.clone()), Some(tex_bgl.clone()), Some(env_bgl.clone())],
+            );
+            sp.register_layout(
+                &shadow_layout,
+                vec![Some(shadow_pass_bgl.clone()), Some(mesh_bgl.clone()), Some(tex_bgl.clone()), Some(env_bgl.clone())],
+            );
+            sp.register_layout(
+                &shadow_layout_skinned,
+                vec![Some(shadow_pass_bgl.clone()), Some(mesh_skinned_bgl.clone()), Some(tex_bgl.clone()), Some(env_bgl.clone())],
+            );
+            sp.register_layout(
+                &shadow_layout_point,
+                vec![Some(shadow_pass_bgl.clone()), Some(mesh_bgl.clone()), Some(tex_bgl.clone())],
+            );
+            sp.register_layout(
+                &ss_glass_pipeline_layout,
+                vec![Some(frame_bgl.clone()), Some(mesh_bgl.clone()), Some(tex_bgl.clone()), Some(env_bgl_glass.clone())],
+            );
+        }
 
         let make_pipeline = |fmt: wgpu::TextureFormat,
                              topology: wgpu::PrimitiveTopology,
@@ -2242,7 +3930,7 @@ impl Renderer {
             // is generally unavailable in browser WebGPU. The wireframe pipeline
             // instead uses LineList primitives over the triangle indices (fed as
             // edge indices at draw time), so every pipeline stays Fill.
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            record(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(&pipeline_layout),
                 vertex: wgpu::VertexState {
@@ -2267,18 +3955,55 @@ impl Renderer {
                 }),
                 primitive: primitive(topology, cull),
                 // Transparent: don't write depth, so back fragments behind a
-                // transparent surface still composite correctly.
-                depth_stencil: Some(depth_stencil(!alpha, wgpu::CompareFunction::Less)),
+                // transparent surface still composite correctly. LessEqual is
+                // three.js's default `depthFunc`.
+                depth_stencil: Some(depth_stencil(!alpha, wgpu::CompareFunction::LessEqual)),
                 multisample: wgpu::MultisampleState::default(),
                 multiview_mask: None,
                 cache: None,
             })
         };
-        // Single-layer "glass" pipelines. `depth_only` (the prepass) writes the
-        // nearest glass depth with no color; the color pass alpha-blends only the
-        // fragments at that nearest depth (LessEqual) and doesn't write depth.
-        let make_glass_pipeline = |fmt: wgpu::TextureFormat, depth_only: bool, label: &str| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        // Single-layer "glass" pipelines. `GLASS_DEPTH` (the prepass) writes
+        // the nearest glass depth with no color; the tint and light halves of
+        // the colour pass (`GLASS_OUTPUT` in the shader) blend only the
+        // fragments at that nearest depth (LessEqual) and don't write depth:
+        // the tint multiplies what is behind by the glass's transmittance, the
+        // light adds its reflection, highlights and emission.
+        let make_glass_pipeline = |fmt: wgpu::TextureFormat, pass: u8, count: u32, label: &str| {
+            let depth_only = pass == GLASS_DEPTH;
+            let blend = match pass {
+                GLASS_TINT => wgpu::BlendState {
+                    color: wgpu::BlendComponent {
+                        src_factor: wgpu::BlendFactor::Zero,
+                        dst_factor: wgpu::BlendFactor::Src,
+                        operation: wgpu::BlendOperation::Add,
+                    },
+                    alpha: wgpu::BlendComponent {
+                        src_factor: wgpu::BlendFactor::Zero,
+                        dst_factor: wgpu::BlendFactor::One,
+                        operation: wgpu::BlendOperation::Add,
+                    },
+                },
+                GLASS_LIGHT => wgpu::BlendState {
+                    color: wgpu::BlendComponent {
+                        src_factor: wgpu::BlendFactor::One,
+                        dst_factor: wgpu::BlendFactor::One,
+                        operation: wgpu::BlendOperation::Add,
+                    },
+                    alpha: wgpu::BlendComponent {
+                        src_factor: wgpu::BlendFactor::One,
+                        dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                        operation: wgpu::BlendOperation::Add,
+                    },
+                },
+                _ => wgpu::BlendState::ALPHA_BLENDING,
+            };
+            let constants: &[(&str, f64)] = match pass {
+                GLASS_TINT => &[("GLASS_OUTPUT", 1.0)],
+                GLASS_LIGHT => &[("GLASS_OUTPUT", 2.0)],
+                _ => &[],
+            };
+            record(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(&pipeline_layout),
                 vertex: wgpu::VertexState {
@@ -2292,14 +4017,17 @@ impl Renderer {
                     entry_point: Some("fs_main"),
                     targets: &[Some(wgpu::ColorTargetState {
                         format: fmt,
-                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        blend: Some(blend),
                         write_mask: if depth_only {
                             wgpu::ColorWrites::empty()
                         } else {
                             wgpu::ColorWrites::ALL
                         },
                     })],
-                    compilation_options: Default::default(),
+                    compilation_options: wgpu::PipelineCompilationOptions {
+                        constants,
+                        ..Default::default()
+                    },
                 }),
                 primitive: primitive(
                     wgpu::PrimitiveTopology::TriangleList,
@@ -2313,26 +4041,49 @@ impl Renderer {
                         wgpu::CompareFunction::LessEqual
                     },
                 )),
-                multisample: wgpu::MultisampleState::default(),
+                multisample: wgpu::MultisampleState {
+                    count,
+                    ..Default::default()
+                },
                 multiview_mask: None,
                 cache: None,
             })
         };
         let f16_format = wgpu::TextureFormat::Rgba16Float;
         let pipeline_glass_depth =
-            make_glass_pipeline(color_format, true, "threers glass depth pipeline");
+            make_glass_pipeline(color_format, GLASS_DEPTH, 1, "threers glass depth pipeline");
         let pipeline_glass_color =
-            make_glass_pipeline(color_format, false, "threers glass color pipeline");
+            make_glass_pipeline(color_format, GLASS_LIGHT, 1, "threers glass color pipeline");
+        let pipeline_glass_tint =
+            make_glass_pipeline(color_format, GLASS_TINT, 1, "threers glass tint pipeline");
         let pipeline_glass_depth_f16 =
-            make_glass_pipeline(f16_format, true, "threers glass depth f16 pipeline");
+            make_glass_pipeline(f16_format, GLASS_DEPTH, 1, "threers glass depth f16 pipeline");
         let pipeline_glass_color_f16 =
-            make_glass_pipeline(f16_format, false, "threers glass color f16 pipeline");
+            make_glass_pipeline(f16_format, GLASS_LIGHT, 1, "threers glass color f16 pipeline");
+        let pipeline_glass_tint_f16 =
+            make_glass_pipeline(f16_format, GLASS_TINT, 1, "threers glass tint f16 pipeline");
+        // Single-layer glass multisampled, so a scene with glass keeps MSAA.
+        let pipeline_glass_depth_msaa =
+            make_glass_pipeline(color_format, GLASS_DEPTH, MSAA_SAMPLES, "threers glass depth msaa pipeline");
+        let pipeline_glass_color_msaa =
+            make_glass_pipeline(color_format, GLASS_LIGHT, MSAA_SAMPLES, "threers glass color msaa pipeline");
+        let pipeline_glass_tint_msaa =
+            make_glass_pipeline(color_format, GLASS_TINT, MSAA_SAMPLES, "threers glass tint msaa pipeline");
+        // And for the encoded-blend pass into the multisampled `Unorm` view.
+        let encoded_glass_msaa = color_format.is_srgb().then(|| {
+            let unorm = color_format.remove_srgb_suffix();
+            [
+                make_glass_pipeline(unorm, GLASS_DEPTH, MSAA_SAMPLES, "threers glass depth encoded msaa pipeline"),
+                make_glass_pipeline(unorm, GLASS_LIGHT, MSAA_SAMPLES, "threers glass color encoded msaa pipeline"),
+                make_glass_pipeline(unorm, GLASS_TINT, MSAA_SAMPLES, "threers glass tint encoded msaa pipeline"),
+            ]
+        });
 
         // Screen-space refraction glass: opaque single-surface pass (writes depth,
         // Less test, no blend — it composites the refracted/reflected background
         // itself), sampling the captured ss-color from env-group binding 9.
         let make_ss_glass_pipeline = |fmt: wgpu::TextureFormat, label: &str| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            record(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(&ss_glass_pipeline_layout),
                 vertex: wgpu::VertexState {
@@ -2355,7 +4106,9 @@ impl Renderer {
                     wgpu::PrimitiveTopology::TriangleList,
                     Some(wgpu::Face::Back),
                 ),
-                depth_stencil: Some(depth_stencil(true, wgpu::CompareFunction::Less)),
+                // `LessEqual`: `fs_glass_shadow` has just written the front-most
+                // glass depth, and this shades exactly that surface.
+                depth_stencil: Some(depth_stencil(true, wgpu::CompareFunction::LessEqual)),
                 multisample: wgpu::MultisampleState::default(),
                 multiview_mask: None,
                 cache: None,
@@ -2365,6 +4118,33 @@ impl Renderer {
         // place of the shadow maps it never samples — so it comes to the same
         // fourteen texture units the main layout does, inside WebGL2's sixteen.
         let pipeline_ss_glass = make_ss_glass_pipeline(color_format, "threers ss glass pipeline");
+        // Each light's shadow on the refracting surfaces, for the pass above
+        // (`fs_glass_shadow`): the lit layout, which has the shadow maps.
+        let pipeline_glass_shadow = record(&wgpu::RenderPipelineDescriptor {
+            label: Some("threers glass shadow pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: &vertex_buffers,
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_glass_shadow"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: GLASS_SHADOW_FORMAT,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: primitive(wgpu::PrimitiveTopology::TriangleList, Some(wgpu::Face::Back)),
+            depth_stencil: Some(depth_stencil(true, wgpu::CompareFunction::Less)),
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
         let pipeline_ss_glass_f16 =
             make_ss_glass_pipeline(f16_format, "threers ss glass f16 pipeline");
 
@@ -2442,8 +4222,12 @@ impl Renderer {
             bind_group_layouts: &[Some(&frame_bgl), Some(&mesh_bgl), Some(&tex_bgl)],
             immediate_size: 0,
         });
+        state_pipes.borrow_mut().register_layout(
+            &ss_back_depth_layout,
+            vec![Some(frame_bgl.clone()), Some(mesh_bgl.clone()), Some(tex_bgl.clone())],
+        );
         let pipeline_ss_back_depth =
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            record(&wgpu::RenderPipelineDescriptor {
                 label: Some("threers ss back depth pipeline"),
                 layout: Some(&ss_back_depth_layout),
                 vertex: wgpu::VertexState {
@@ -2567,7 +4351,7 @@ impl Renderer {
         // Accumulation pass: fs_oit writes to accum (additive) + revealage
         // (multiplicative), depth-tested against opaque but not writing depth.
         let oit_accum_format = wgpu::TextureFormat::Rgba16Float;
-        let oit_reveal_format = wgpu::TextureFormat::R16Float;
+        let oit_reveal_format = OIT_REVEAL_FORMAT;
         let add_blend = wgpu::BlendComponent {
             src_factor: wgpu::BlendFactor::One,
             dst_factor: wgpu::BlendFactor::One,
@@ -2583,9 +4367,9 @@ impl Renderer {
         // it blends every attachment alike. Where that is the case the pipeline
         // is not built and the pass does not run; transparency falls back to the
         // sorted path.
-        let pipeline_oit = crate::renderer::caps::supports_independent_blend(&device).then(|| {
-        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("threers oit accum pipeline"),
+        let make_oit = |count: u32, label: &str| {
+        record(&wgpu::RenderPipelineDescriptor {
+            label: Some(label),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
@@ -2614,18 +4398,29 @@ impl Renderer {
                         write_mask: wgpu::ColorWrites::ALL,
                     }),
                 ],
-                compilation_options: Default::default(),
+                // The light half of a blend, premultiplied, and the transmittance
+                // beside it (`shade_main`'s `GLASS_OUTPUT`).
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants: &[("GLASS_OUTPUT", 2.0)],
+                    ..Default::default()
+                },
             }),
             primitive: primitive(
                 wgpu::PrimitiveTopology::TriangleList,
                 Some(wgpu::Face::Back),
             ),
             depth_stencil: Some(depth_stencil(false, wgpu::CompareFunction::Less)),
-            multisample: wgpu::MultisampleState::default(),
+            multisample: wgpu::MultisampleState { count, ..Default::default() },
             multiview_mask: None,
             cache: None,
         })
-        });
+        };
+        let independent_blend = crate::renderer::caps::supports_independent_blend(&device);
+        let pipeline_oit = independent_blend.then(|| make_oit(1, "threers oit accum pipeline"));
+        // Multisampled, against the multisampled opaque depth, resolved
+        // before the composite: a frame with OIT glass keeps its MSAA.
+        let pipeline_oit_msaa =
+            independent_blend.then(|| make_oit(MSAA_SAMPLES, "threers oit accum msaa pipeline"));
         // Resolve pass: composite accum/revealage over the opaque image.
         let oit_resolve_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("threers oit resolve bgl"),
@@ -2661,7 +4456,36 @@ impl Renderer {
             bind_group_layouts: &[Some(&oit_resolve_bgl)],
             immediate_size: 0,
         });
-        let make_resolve = |fmt: wgpu::TextureFormat, label: &str| {
+        // Two halves, as the glass colour pass is: the transmittance
+        // multiplied over what is behind, then the light added.
+        let make_resolve = |fmt: wgpu::TextureFormat, pass: u32, count: u32, label: &str| {
+            let blend = if pass == 0 {
+                wgpu::BlendState {
+                    color: wgpu::BlendComponent {
+                        src_factor: wgpu::BlendFactor::Zero,
+                        dst_factor: wgpu::BlendFactor::Src,
+                        operation: wgpu::BlendOperation::Add,
+                    },
+                    alpha: wgpu::BlendComponent {
+                        src_factor: wgpu::BlendFactor::Zero,
+                        dst_factor: wgpu::BlendFactor::One,
+                        operation: wgpu::BlendOperation::Add,
+                    },
+                }
+            } else {
+                wgpu::BlendState {
+                    color: wgpu::BlendComponent {
+                        src_factor: wgpu::BlendFactor::One,
+                        dst_factor: wgpu::BlendFactor::One,
+                        operation: wgpu::BlendOperation::Add,
+                    },
+                    alpha: wgpu::BlendComponent {
+                        src_factor: wgpu::BlendFactor::One,
+                        dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                        operation: wgpu::BlendOperation::Add,
+                    },
+                }
+            };
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(&resolve_layout),
@@ -2676,20 +4500,85 @@ impl Renderer {
                     entry_point: Some("fs_main"),
                     targets: &[Some(wgpu::ColorTargetState {
                         format: fmt,
-                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        blend: Some(blend),
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
-                    compilation_options: Default::default(),
+                    compilation_options: wgpu::PipelineCompilationOptions {
+                        constants: &[("RESOLVE_PASS", pass as f64)],
+                        ..Default::default()
+                    },
                 }),
                 primitive: primitive(wgpu::PrimitiveTopology::TriangleList, None),
                 depth_stencil: None,
-                multisample: wgpu::MultisampleState::default(),
+                multisample: wgpu::MultisampleState { count, ..Default::default() },
                 multiview_mask: None,
                 cache: None,
             })
         };
-        let pipeline_oit_resolve = make_resolve(color_format, "threers oit resolve pipeline");
-        let pipeline_oit_resolve_f16 = make_resolve(f16_format, "threers oit resolve f16 pipeline");
+        let pipeline_oit_resolve = [
+            make_resolve(color_format, 0, 1, "threers oit resolve tint pipeline"),
+            make_resolve(color_format, 1, 1, "threers oit resolve light pipeline"),
+        ];
+        let pipeline_oit_resolve_f16 = [
+            make_resolve(f16_format, 0, 1, "threers oit resolve tint f16 pipeline"),
+            make_resolve(f16_format, 1, 1, "threers oit resolve light f16 pipeline"),
+        ];
+        // Into the multisampled colour, resolved to the frame: a pass drawn
+        // over the frame afterwards (`overlay_attachments`) resolves the
+        // multisampled colour again, and has to find the composite in it.
+        let pipeline_oit_resolve_msaa = [
+            make_resolve(color_format, 0, MSAA_SAMPLES, "threers oit resolve tint msaa pipeline"),
+            make_resolve(color_format, 1, MSAA_SAMPLES, "threers oit resolve light msaa pipeline"),
+        ];
+        // A multisampled depth to a single-sampled one, for the refraction
+        // pass under MSAA. Not where shaders cannot read multisampled
+        // textures (WebGL2); there a refraction frame stays single-sampled.
+        let depth_resolve = crate::renderer::caps::supports_multisampled_textures(&device).then(|| {
+            let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("threers depth resolve bgl"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: true,
+                    },
+                    count: None,
+                }],
+            });
+            let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("threers depth resolve shader"),
+                source: wgpu::ShaderSource::Wgsl(super::shader::DEPTH_RESOLVE_SHADER.into()),
+            });
+            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("threers depth resolve layout"),
+                bind_group_layouts: &[Some(&bgl)],
+                immediate_size: 0,
+            });
+            let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("threers depth resolve pipeline"),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &module,
+                    entry_point: Some("vs_main"),
+                    buffers: &[],
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &module,
+                    entry_point: Some("fs_main"),
+                    targets: &[],
+                    compilation_options: Default::default(),
+                }),
+                primitive: primitive(wgpu::PrimitiveTopology::TriangleList, None),
+                depth_stencil: Some(depth_stencil(true, wgpu::CompareFunction::Always)),
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            });
+            (bgl, pipeline)
+        });
         let pipeline_tri = make_pipeline(
             color_format,
             wgpu::PrimitiveTopology::TriangleList,
@@ -2709,7 +4598,7 @@ impl Renderer {
             "threers tri nocull pipeline",
         );
         let make_sky_pipeline = |fmt: wgpu::TextureFormat, label: &str| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            record(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(&pipeline_layout),
                 vertex: wgpu::VertexState {
@@ -2736,10 +4625,11 @@ impl Renderer {
             })
         };
         let pipeline_tri_sky = make_sky_pipeline(color_format, "threers tri sky pipeline");
-        // PolygonMode::Line draws the triangle outline — used for `wireframe:true` materials.
-        // wgpu requires the NON_FILL_POLYGON_MODE feature for Line/Point polygon modes on
-        // some backends. If unsupported, this falls back to a no-op (renders nothing extra),
-        // but Chromium's WebGPU/SwiftShader path tends to allow it.
+        // `wireframe: true` materials: a LineList pipeline (Fill polygon mode, so no
+        // NON_FILL_POLYGON_MODE feature needed and it works in browser WebGPU) drawn
+        // over the mesh's separate wire index buffer — `BufferGeometry::wireframe_indices`,
+        // i.e. polygon outlines when the geometry carries a polygon table, else every
+        // triangle edge as three.js draws them. See `GpuMesh::wire_index_buffer`.
         let pipeline_tri_wire = make_pipeline(
             color_format,
             wgpu::PrimitiveTopology::LineList,
@@ -2752,12 +4642,38 @@ impl Renderer {
             None,
             "threers line pipeline",
         );
-        let pipeline_point = make_pipeline(
-            color_format,
-            wgpu::PrimitiveTopology::PointList,
-            None,
-            "threers point pipeline",
-        );
+        // three.js `Points`: a quad per point (`vs_points`), opaque — replace,
+        // depth written — or blended, in either target format, single- or
+        // multisampled.
+        let make_point_pipeline = |fmt: wgpu::TextureFormat, blend: bool, samples: u32, label: &str| {
+            record(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_points"),
+                    buffers: &vertex_buffers_points,
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: fmt,
+                        blend: Some(if blend { wgpu::BlendState::ALPHA_BLENDING } else { wgpu::BlendState::REPLACE }),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: primitive(wgpu::PrimitiveTopology::TriangleList, None),
+                depth_stencil: Some(depth_stencil(!blend, wgpu::CompareFunction::LessEqual)),
+                multisample: wgpu::MultisampleState { count: samples, ..Default::default() },
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let pipeline_point = make_point_pipeline(color_format, false, 1, "threers point pipeline");
+        let pipeline_point_alpha = make_point_pipeline(color_format, true, 1, "threers point alpha pipeline");
 
         // --- Hardware-MSAA variants of the opaque forward pipelines (surface
         // path only). Identical to the ones above but with `count = MSAA_SAMPLES`;
@@ -2768,7 +4684,7 @@ impl Renderer {
                                 cull: Option<wgpu::Face>,
                                 label: &str| {
             let alpha = label.contains("alpha");
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            record(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(&pipeline_layout),
                 vertex: wgpu::VertexState {
@@ -2792,7 +4708,7 @@ impl Renderer {
                     compilation_options: Default::default(),
                 }),
                 primitive: primitive(topology, cull),
-                depth_stencil: Some(depth_stencil(!alpha, wgpu::CompareFunction::Less)),
+                depth_stencil: Some(depth_stencil(!alpha, wgpu::CompareFunction::LessEqual)),
                 multisample: wgpu::MultisampleState {
                     count: MSAA_SAMPLES,
                     ..Default::default()
@@ -2802,7 +4718,7 @@ impl Renderer {
             })
         };
         let make_sky_pipeline_ms = |fmt: wgpu::TextureFormat, label: &str| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            record(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(&pipeline_layout),
                 vertex: wgpu::VertexState {
@@ -2861,12 +4777,7 @@ impl Renderer {
             None,
             "threers line msaa",
         );
-        let pipeline_point_msaa = make_pipeline_ms(
-            color_format,
-            wgpu::PrimitiveTopology::PointList,
-            None,
-            "threers point msaa",
-        );
+        let pipeline_point_msaa = make_point_pipeline(color_format, false, MSAA_SAMPLES, "threers point msaa");
         let pipeline_tri_sky_msaa = make_sky_pipeline_ms(color_format, "threers tri sky msaa");
 
         let pipeline_tri_f16 = make_pipeline(
@@ -2900,12 +4811,9 @@ impl Renderer {
             None,
             "threers line f16 pipeline",
         );
-        let pipeline_point_f16 = make_pipeline(
-            f16_format,
-            wgpu::PrimitiveTopology::PointList,
-            None,
-            "threers point f16 pipeline",
-        );
+        let pipeline_point_f16 = make_point_pipeline(f16_format, false, 1, "threers point f16 pipeline");
+        let pipeline_point_alpha_f16 =
+            make_point_pipeline(f16_format, true, 1, "threers point alpha f16 pipeline");
 
         // Instanced pipeline: vertex layout slot 0 (per-vertex), slot 1 per-instance mat4.
         let vertex_buffers_instanced = [
@@ -3027,122 +4935,84 @@ impl Renderer {
         ];
         // `buffers` takes a slice of `Option` in wgpu 30.
         let vertex_buffers_skinned = vertex_buffers_skinned.map(Some);
-        let pipeline_skinned = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("threers skinned pipeline"),
-            layout: Some(&pipeline_layout_skinned),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_skinned"),
-                buffers: &vertex_buffers_skinned,
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: color_format,
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: primitive(
-                wgpu::PrimitiveTopology::TriangleList,
-                Some(wgpu::Face::Back),
-            ),
-            depth_stencil: Some(depth_stencil(true, wgpu::CompareFunction::Less)),
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
-        let pipeline_skinned_f16 = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("threers skinned f16 pipeline"),
-            layout: Some(&pipeline_layout_skinned),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_skinned"),
-                buffers: &vertex_buffers_skinned,
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: f16_format,
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: primitive(
-                wgpu::PrimitiveTopology::TriangleList,
-                Some(wgpu::Face::Back),
-            ),
-            depth_stencil: Some(depth_stencil(true, wgpu::CompareFunction::Less)),
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
-
-        let pipeline_instanced = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("threers instanced pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_instanced"),
-                buffers: &vertex_buffers_instanced,
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: color_format,
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: primitive(
-                wgpu::PrimitiveTopology::TriangleList,
-                Some(wgpu::Face::Back),
-            ),
-            depth_stencil: Some(depth_stencil(true, wgpu::CompareFunction::Less)),
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
-        let pipeline_instanced_f16 =
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("threers instanced f16 pipeline"),
-                layout: Some(&pipeline_layout),
+        // Skinned and instanced pipelines, each in a filled (back-face culled)
+        // and a `wireframe: true` LineList variant, for the surface format and
+        // the half-float postfx format. The two kinds differ only in layout,
+        // vertex entry point and vertex buffers.
+        type MeshKind<'a> = (
+            &'a wgpu::PipelineLayout,
+            &'a str,
+            &'a [Option<wgpu::VertexBufferLayout<'a>>],
+        );
+        let skinned: MeshKind = (&pipeline_layout_skinned, "vs_skinned", &vertex_buffers_skinned);
+        let instanced: MeshKind = (&pipeline_layout, "vs_instanced", &vertex_buffers_instanced);
+        let make_mesh_pipeline = |(layout, entry, buffers): MeshKind,
+                                  fmt: wgpu::TextureFormat,
+                                  topology: wgpu::PrimitiveTopology,
+                                  cull: Option<wgpu::Face>,
+                                  label: &str| {
+            record(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(layout),
                 vertex: wgpu::VertexState {
                     module: &shader,
-                    entry_point: Some("vs_instanced"),
-                    buffers: &vertex_buffers_instanced,
+                    entry_point: Some(entry),
+                    buffers,
                     compilation_options: Default::default(),
                 },
                 fragment: Some(wgpu::FragmentState {
                     module: &shader,
                     entry_point: Some("fs_main"),
                     targets: &[Some(wgpu::ColorTargetState {
-                        format: f16_format,
+                        format: fmt,
                         blend: Some(wgpu::BlendState::REPLACE),
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
                     compilation_options: Default::default(),
                 }),
-                primitive: primitive(
-                    wgpu::PrimitiveTopology::TriangleList,
-                    Some(wgpu::Face::Back),
-                ),
-                depth_stencil: Some(depth_stencil(true, wgpu::CompareFunction::Less)),
+                primitive: primitive(topology, cull),
+                depth_stencil: Some(depth_stencil(true, wgpu::CompareFunction::LessEqual)),
                 multisample: wgpu::MultisampleState::default(),
                 multiview_mask: None,
                 cache: None,
-            });
+            })
+        };
+        let tris = wgpu::PrimitiveTopology::TriangleList;
+        let lines = wgpu::PrimitiveTopology::LineList;
+        let back = Some(wgpu::Face::Back);
+        let pipeline_skinned =
+            make_mesh_pipeline(skinned, color_format, tris, back, "threers skinned pipeline");
+        let pipeline_skinned_f16 =
+            make_mesh_pipeline(skinned, f16_format, tris, back, "threers skinned f16 pipeline");
+        let pipeline_skinned_wire =
+            make_mesh_pipeline(skinned, color_format, lines, None, "threers skinned wire pipeline");
+        let pipeline_skinned_wire_f16 = make_mesh_pipeline(
+            skinned,
+            f16_format,
+            lines,
+            None,
+            "threers skinned wire f16 pipeline",
+        );
+        let pipeline_instanced =
+            make_mesh_pipeline(instanced, color_format, tris, back, "threers instanced pipeline");
+        let pipeline_instanced_f16 =
+            make_mesh_pipeline(instanced, f16_format, tris, back, "threers instanced f16 pipeline");
+        let pipeline_instanced_wire = make_mesh_pipeline(
+            instanced,
+            color_format,
+            lines,
+            None,
+            "threers instanced wire pipeline",
+        );
+        let pipeline_instanced_wire_f16 = make_mesh_pipeline(
+            instanced,
+            f16_format,
+            lines,
+            None,
+            "threers instanced wire f16 pipeline",
+        );
 
-        let pipeline_sprite = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let pipeline_sprite = record(&wgpu::RenderPipelineDescriptor {
             label: Some("threers sprite pipeline"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
@@ -3167,7 +5037,7 @@ impl Renderer {
             multiview_mask: None,
             cache: None,
         });
-        let pipeline_sprite_f16 = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let pipeline_sprite_f16 = record(&wgpu::RenderPipelineDescriptor {
             label: Some("threers sprite f16 pipeline"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
@@ -3193,19 +5063,91 @@ impl Renderer {
             cache: None,
         });
 
+        // Alpha-blended draws on the skinned, instanced and sprite layouts:
+        // the transparent instanced and skinned pipelines in both target
+        // formats, and — on an sRGB target — all three into its `Unorm` view
+        // for the encoded-blend pass. No depth write, as `pipeline_tri_alpha`.
+        let make_blend_pipeline = |(layout, entry, buffers): MeshKind,
+                                   fmt: wgpu::TextureFormat,
+                                   cull: Option<wgpu::Face>,
+                                   compare: wgpu::CompareFunction,
+                                   label: &str| {
+            record(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some(entry),
+                    buffers,
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: fmt,
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: primitive(wgpu::PrimitiveTopology::TriangleList, cull),
+                depth_stencil: Some(depth_stencil(false, compare)),
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        // three.js's default `depthFunc`.
+        let less = wgpu::CompareFunction::LessEqual;
+        let pipeline_instanced_alpha =
+            make_blend_pipeline(instanced, color_format, back, less, "threers instanced alpha pipeline");
+        let pipeline_instanced_alpha_f16 =
+            make_blend_pipeline(instanced, f16_format, back, less, "threers instanced alpha f16 pipeline");
+        let pipeline_skinned_alpha =
+            make_blend_pipeline(skinned, color_format, back, less, "threers skinned alpha pipeline");
+        let pipeline_skinned_alpha_f16 =
+            make_blend_pipeline(skinned, f16_format, back, less, "threers skinned alpha f16 pipeline");
+        let sprite_kind: MeshKind = (&pipeline_layout, "vs_sprite", &vertex_buffers);
+        let encoded_blend_pipelines = color_format.is_srgb().then(|| {
+            let unorm = color_format.remove_srgb_suffix();
+            [
+                make_blend_pipeline(
+                    sprite_kind,
+                    unorm,
+                    None,
+                    wgpu::CompareFunction::LessEqual,
+                    "threers sprite encoded pipeline",
+                ),
+                make_blend_pipeline(instanced, unorm, back, less, "threers instanced encoded pipeline"),
+                make_blend_pipeline(skinned, unorm, back, less, "threers skinned encoded pipeline"),
+                make_point_pipeline(unorm, true, 1, "threers point encoded pipeline"),
+                make_glass_pipeline(unorm, GLASS_DEPTH, 1, "threers glass depth encoded pipeline"),
+                make_glass_pipeline(unorm, GLASS_LIGHT, 1, "threers glass color encoded pipeline"),
+                make_glass_pipeline(unorm, GLASS_TINT, 1, "threers glass tint encoded pipeline"),
+            ]
+        });
+
         // Depth-only pipeline used to render the scene from each shadow-casting
         // light's POV. Reuses the per-vertex layout + per-mesh uniforms.
-        let make_shadow_pipeline = |entry: &str, label: &str| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let make_shadow_pipeline = |entry: &str, label: &str, cut: bool| {
+            record(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
-                layout: Some(&pipeline_layout),
+                layout: Some(&shadow_layout),
                 vertex: wgpu::VertexState {
                     module: &shader,
                     entry_point: Some(entry),
                     buffers: &vertex_buffers,
                     compilation_options: Default::default(),
                 },
-                fragment: None,
+                // A cut-out caster (`alphaTest` with a map) tests the map's
+                // alpha per fragment; every other caster is depth-only.
+                fragment: cut.then(|| wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_shadow_cut"),
+                    targets: &[],
+                    compilation_options: Default::default(),
+                }),
                 primitive: primitive(
                     wgpu::PrimitiveTopology::TriangleList,
                     Some(wgpu::Face::Front),
@@ -3227,19 +5169,14 @@ impl Renderer {
                 cache: None,
             })
         };
-        let pipeline_shadow = make_shadow_pipeline("vs_shadow", "threers shadow pipeline");
+        let pipeline_shadow = make_shadow_pipeline("vs_shadow", "threers shadow pipeline", false);
         let pipeline_shadow_spot =
-            make_shadow_pipeline("vs_shadow_spot", "threers spot shadow pipeline");
+            make_shadow_pipeline("vs_shadow_spot", "threers spot shadow pipeline", false);
         // The only shadow pipeline with a fragment stage: see `fs_shadow_point`.
         let pipeline_shadow_point = {
-            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("threers point shadow layout"),
-                bind_group_layouts: &[Some(&frame_bgl), Some(&mesh_bgl)],
-                immediate_size: 0,
-            });
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            record(&wgpu::RenderPipelineDescriptor {
                 label: Some("threers point shadow pipeline"),
-                layout: Some(&layout),
+                layout: Some(&shadow_layout_point),
                 vertex: wgpu::VertexState {
                     module: &shader,
                     entry_point: Some("vs_shadow_point"),
@@ -3269,6 +5206,213 @@ impl Renderer {
                 cache: None,
             })
         };
+
+        // Shadow casters that are skinned: the same three passes on the
+        // skinned layout and vertex buffers, so the map holds the pose the
+        // colour pass draws rather than the bind pose (or nothing).
+        let make_skinned_shadow_pipeline = |entry: &str, label: &str, point: bool, cut: bool| {
+            record(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&shadow_layout_skinned),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some(entry),
+                    buffers: &vertex_buffers_skinned,
+                    compilation_options: Default::default(),
+                },
+                fragment: (point || cut).then(|| wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some(if point { "fs_shadow_point" } else { "fs_shadow_cut" }),
+                    targets: &[],
+                    compilation_options: Default::default(),
+                }),
+                primitive: if point {
+                    wgpu::PrimitiveState {
+                        topology: wgpu::PrimitiveTopology::TriangleList,
+                        cull_mode: None,
+                        ..Default::default()
+                    }
+                } else {
+                    primitive(wgpu::PrimitiveTopology::TriangleList, Some(wgpu::Face::Front))
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                    stencil: Default::default(),
+                    bias: if point {
+                        Default::default()
+                    } else {
+                        wgpu::DepthBiasState {
+                            constant: 2,
+                            slope_scale: 2.0,
+                            clamp: 0.0,
+                        }
+                    },
+                }),
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let pipeline_shadow_skinned = make_skinned_shadow_pipeline(
+            "vs_shadow_skinned",
+            "threers skinned shadow pipeline",
+            false,
+            false,
+        );
+        let pipeline_shadow_spot_skinned = make_skinned_shadow_pipeline(
+            "vs_shadow_spot_skinned",
+            "threers skinned spot shadow pipeline",
+            false,
+            false,
+        );
+        let pipeline_shadow_point_skinned = make_skinned_shadow_pipeline(
+            "vs_shadow_point_skinned",
+            "threers skinned point shadow pipeline",
+            true,
+            false,
+        );
+
+        // Instanced casters: the same three passes on the instanced vertex
+        // layout. The point pass's layout is the point pipeline's — frame,
+        // mesh and the morph texture's group — and the other two share the
+        // mesh pipelines' layout, as their non-instanced twins do.
+        let make_instanced_shadow_pipeline = |entry: &str, label: &str, point: bool, cut: bool| {
+            record(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(if point { &shadow_layout_point } else { &shadow_layout }),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some(entry),
+                    buffers: &vertex_buffers_instanced,
+                    compilation_options: Default::default(),
+                },
+                fragment: (point || cut).then(|| wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some(if point { "fs_shadow_point" } else { "fs_shadow_cut" }),
+                    targets: &[],
+                    compilation_options: Default::default(),
+                }),
+                primitive: if point {
+                    wgpu::PrimitiveState {
+                        topology: wgpu::PrimitiveTopology::TriangleList,
+                        cull_mode: None,
+                        ..Default::default()
+                    }
+                } else {
+                    primitive(wgpu::PrimitiveTopology::TriangleList, Some(wgpu::Face::Front))
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                    stencil: Default::default(),
+                    bias: if point {
+                        Default::default()
+                    } else {
+                        wgpu::DepthBiasState {
+                            constant: 2,
+                            slope_scale: 2.0,
+                            clamp: 0.0,
+                        }
+                    },
+                }),
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let pipeline_shadow_instanced = make_instanced_shadow_pipeline(
+            "vs_shadow_instanced",
+            "threers instanced shadow pipeline",
+            false,
+            false,
+        );
+        let pipeline_shadow_spot_instanced = make_instanced_shadow_pipeline(
+            "vs_shadow_spot_instanced",
+            "threers instanced spot shadow pipeline",
+            false,
+            false,
+        );
+        let pipeline_shadow_point_instanced = make_instanced_shadow_pipeline(
+            "vs_shadow_point_instanced",
+            "threers instanced point shadow pipeline",
+            true,
+            false,
+        );
+
+        // Cut-out casters: the directional and spot passes again, with
+        // `fs_shadow_cut` testing the map's alpha against `alphaTest`.
+        let shadow_cut = ShadowCutPipelines {
+            dir: make_shadow_pipeline("vs_shadow", "threers cut-out shadow pipeline", true),
+            spot: make_shadow_pipeline("vs_shadow_spot", "threers cut-out spot shadow pipeline", true),
+            dir_skinned: make_skinned_shadow_pipeline(
+                "vs_shadow_skinned",
+                "threers skinned cut-out shadow pipeline",
+                false,
+                true,
+            ),
+            spot_skinned: make_skinned_shadow_pipeline(
+                "vs_shadow_spot_skinned",
+                "threers skinned cut-out spot shadow pipeline",
+                false,
+                true,
+            ),
+            dir_instanced: make_instanced_shadow_pipeline(
+                "vs_shadow_instanced",
+                "threers instanced cut-out shadow pipeline",
+                false,
+                true,
+            ),
+            spot_instanced: make_instanced_shadow_pipeline(
+                "vs_shadow_spot_instanced",
+                "threers instanced cut-out spot shadow pipeline",
+                false,
+                true,
+            ),
+        };
+
+        // The opaque scene's depth again, single-sampled: for screen-space
+        // refraction under MSAA where a shader cannot read the multisampled
+        // depth to resolve it (WebGL2). The caster vertex stages, given the
+        // camera's view-projection for their matrix; no colour, no bias.
+        // `[plain, skinned, instanced]`, then the same with the cut-out
+        // fragment stage for `alphaTest` with a map.
+        let make_replay = |which: usize, cut: bool| {
+            let (entry, layout, buffers): (&str, &wgpu::PipelineLayout, &[Option<wgpu::VertexBufferLayout>]) =
+                match which {
+                    0 => ("vs_shadow", &shadow_layout, &vertex_buffers[..]),
+                    1 => ("vs_shadow_skinned", &shadow_layout_skinned, &vertex_buffers_skinned[..]),
+                    _ => ("vs_shadow_instanced", &shadow_layout, &vertex_buffers_instanced[..]),
+                };
+            record(&wgpu::RenderPipelineDescriptor {
+                label: Some("threers depth replay pipeline"),
+                layout: Some(layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some(entry),
+                    buffers,
+                    compilation_options: Default::default(),
+                },
+                fragment: cut.then(|| wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_shadow_cut"),
+                    targets: &[],
+                    compilation_options: Default::default(),
+                }),
+                primitive: primitive(wgpu::PrimitiveTopology::TriangleList, Some(wgpu::Face::Back)),
+                depth_stencil: Some(depth_stencil(true, wgpu::CompareFunction::LessEqual)),
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let depth_replay: Vec<wgpu::RenderPipeline> =
+            [(0, false), (1, false), (2, false), (0, true), (1, true), (2, true)]
+                .iter()
+                .map(|&(w, c)| make_replay(w, c))
+                .collect();
 
         // Post-fx fullscreen-quad pipeline. Reads one input texture, writes
         // to a render attachment matching the surface format.
@@ -3469,21 +5613,6 @@ impl Renderer {
             view_formats: &[],
         });
         let glitch_disp_view = glitch_disp_tex.create_view(&wgpu::TextureViewDescriptor::default());
-        let glitch_snow_tex = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("threers glitch snow"),
-            size: wgpu::Extent3d {
-                width: 800,
-                height: 600,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::R32Float,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        let glitch_snow_view = glitch_snow_tex.create_view(&wgpu::TextureViewDescriptor::default());
         let rgba_upload_tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("threers rgba upload"),
             size: wgpu::Extent3d {
@@ -3699,66 +5828,36 @@ impl Renderer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let frame_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("threers frame bg"),
-            layout: &frame_bgl,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: frame_buffer.as_entire_binding(),
-            }],
-        });
-
-        // One uniform buffer per cube face, because a point light's six shadow
-        // passes each need a different view-projection and they are all encoded
-        // before anything runs. Writing one buffer six times inside an encoder
-        // does not do that: `queue.write_buffer` calls are applied before *any*
-        // submitted command, so all six faces would render with the last one.
-        let cube_face_buffers: [wgpu::Buffer; 6] = std::array::from_fn(|i| {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(&format!("threers cube face uniform {i}")),
-                size: std::mem::size_of::<FrameUniforms>() as u64,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            })
-        });
-        let cube_face_bind_groups: [wgpu::BindGroup; 6] = std::array::from_fn(|i| {
-            device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("threers cube face bg"),
-                layout: &frame_bgl,
-                entries: &[wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: cube_face_buffers[i].as_entire_binding(),
-                }],
-            })
-        });
-
-        let sampler_linear = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("threers linear sampler"),
-            // three.js's DataTexture default is ClampToEdge — matching here
-            // prevents UV-1.0-corner samples from wrapping back to UV 0.
+        let transmission_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("threers transmission sampler"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
             address_mode_v: wgpu::AddressMode::ClampToEdge,
             address_mode_w: wgpu::AddressMode::ClampToEdge,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
             mipmap_filter: wgpu::MipmapFilterMode::Linear,
-            // Anisotropic filtering. Mip-mapping alone still blurs a texture seen
-            // at a grazing angle — the whole surface of a sphere near its limb —
-            // because the sampler has to pick one level for a footprint that is
-            // long in one direction and short in the other.
-            anisotropy_clamp: 16,
             ..Default::default()
         });
-        let sampler_nearest_clamp = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("threers nearest-clamp sampler"),
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Nearest,
-            min_filter: wgpu::FilterMode::Nearest,
-            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
-            ..Default::default()
-        });
+        let transmission_dummy = {
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("threers transmission stand-in"),
+                size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba16Float,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            (texture, view)
+        };
+        let frame_buffer_for_bg = frame_buffer.clone();
+        let frame_bind_group =
+            frame_bg(&device, &frame_bgl, &frame_buffer, &transmission_dummy.1, &transmission_sampler, "threers frame bg");
+        let frame_bind_group_dummy =
+            frame_bg(&device, &frame_bgl, &frame_buffer, &transmission_dummy.1, &transmission_sampler, "threers frame bg (capture)");
+
         let sampler_linear_repeat = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("threers linear-repeat sampler"),
             address_mode_u: wgpu::AddressMode::Repeat,
@@ -3774,16 +5873,7 @@ impl Renderer {
             anisotropy_clamp: 16,
             ..Default::default()
         });
-        let sampler_nearest_repeat = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("threers nearest-repeat sampler"),
-            address_mode_u: wgpu::AddressMode::Repeat,
-            address_mode_v: wgpu::AddressMode::Repeat,
-            address_mode_w: wgpu::AddressMode::Repeat,
-            mag_filter: wgpu::FilterMode::Nearest,
-            min_filter: wgpu::FilterMode::Nearest,
-            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
-            ..Default::default()
-        });
+        let samplers = (0..SAMPLER_COUNT).map(|i| make_sampler(&device, i)).collect();
 
         let default_white_srgb = GpuTexture::upload(
             &device,
@@ -3806,23 +5896,87 @@ impl Renderer {
         });
         let default_data_tex_view =
             default_data_tex.create_view(&wgpu::TextureViewDescriptor::default());
+        let default_volume_view = device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("threers user volume placeholder"),
+                size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D3,
+                format: wgpu::TextureFormat::R8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let sampler_volume = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("threers volume sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
         let default_white_linear = GpuTexture::upload(
             &device,
             &queue,
             &Texture::solid([255, 255, 255, 255], TextureFormat::Rgba8Unorm),
         );
 
+        // The morph slot's placeholder: one texel, one layer, never read
+        // (a draw without morph targets uploads a zero count).
+        let default_morph = {
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("threers default morph texture"),
+                // Two layers so the GL backend makes it an array texture,
+                // matching the shader's declaration (see `ensure_morph`).
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 2,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba32Float,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&wgpu::TextureViewDescriptor {
+                dimension: Some(wgpu::TextureViewDimension::D2Array),
+                ..Default::default()
+            });
+            (texture, view)
+        };
+        let default_uv_sets = {
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("threers default uv sets"),
+                size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba32Float,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            (texture, view)
+        };
         let custom_tex_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("threers custom tex bg"),
             layout: &custom_tex_bgl,
             entries: &[
                 wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: wgpu::BindingResource::TextureView(&default_uv_sets.1),
+                },
+                wgpu::BindGroupEntry {
                     binding: 7,
                     resource: wgpu::BindingResource::Sampler(&sampler_linear_repeat),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 9,
-                    resource: wgpu::BindingResource::TextureView(&default_white_linear.view),
+                    binding: 10,
+                    resource: wgpu::BindingResource::TextureView(&default_morph.1),
                 },
             ],
         });
@@ -3830,11 +5984,6 @@ impl Renderer {
             &device,
             &queue,
             &Texture::solid([128, 128, 255, 255], TextureFormat::Rgba8Unorm),
-        );
-        let default_black = GpuTexture::upload(
-            &device,
-            &queue,
-            &Texture::solid([0, 0, 0, 255], TextureFormat::Rgba8Unorm),
         );
         let default_transparent = GpuTexture::upload(
             &device,
@@ -3885,22 +6034,7 @@ impl Renderer {
         //
         // KEEP IN STEP with SHADOW_TEXEL in shader.rs, which sizes the PCF
         // kernel and cannot read this constant.
-        const SHADOW_SIZE: u32 = 4096;
-        let shadow_tex = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("threers shadow depth"),
-            size: wgpu::Extent3d {
-                width: SHADOW_SIZE,
-                height: SHADOW_SIZE,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: DEPTH_FORMAT,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
-        });
-        let shadow_view = shadow_tex.create_view(&wgpu::TextureViewDescriptor::default());
+        let dir_shadows = ShadowArray::new(&device, "threers shadow depth", SPOT_SHADOW_SIZE, 1);
         let shadow_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("threers shadow sampler"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -3911,21 +6045,7 @@ impl Renderer {
             ..Default::default()
         });
 
-        let spot_shadow_tex = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("threers spot shadow depth"),
-            size: wgpu::Extent3d {
-                width: SHADOW_SIZE,
-                height: SHADOW_SIZE,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: DEPTH_FORMAT,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
-        });
-        let spot_shadow_view = spot_shadow_tex.create_view(&wgpu::TextureViewDescriptor::default());
+        let spot_shadows = ShadowArray::new(&device, "threers spot shadow depth", SPOT_SHADOW_SIZE, 1);
         let spot_shadow_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("threers spot shadow sampler"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -3936,44 +6056,8 @@ impl Renderer {
             ..Default::default()
         });
 
-        // Point shadow cubemap depth (6 layers × 512×512 Depth32Float).
-        const POINT_SHADOW_SIZE: u32 = 512;
-        let point_shadow_tex = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("threers point shadow depth cube"),
-            size: wgpu::Extent3d {
-                width: POINT_SHADOW_SIZE,
-                height: POINT_SHADOW_SIZE,
-                depth_or_array_layers: 6,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: DEPTH_FORMAT,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
-        });
-        let point_shadow_cube_view = point_shadow_tex.create_view(&wgpu::TextureViewDescriptor {
-            label: Some("threers point shadow cube view"),
-            dimension: Some(wgpu::TextureViewDimension::Cube),
-            ..Default::default()
-        });
-        let mk_face = |i: u32| {
-            point_shadow_tex.create_view(&wgpu::TextureViewDescriptor {
-                label: Some("threers point shadow face"),
-                dimension: Some(wgpu::TextureViewDimension::D2),
-                base_array_layer: i,
-                array_layer_count: Some(1),
-                ..Default::default()
-            })
-        };
-        let point_shadow_face_views: [wgpu::TextureView; 6] = [
-            mk_face(0),
-            mk_face(1),
-            mk_face(2),
-            mk_face(3),
-            mk_face(4),
-            mk_face(5),
-        ];
+        // Point shadows: six faces per light, in a 2D array.
+        let point_shadows = ShadowArray::new(&device, "threers point shadow depth", POINT_SHADOW_SIZE, 6);
         let point_shadow_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("threers point shadow sampler"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -4021,74 +6105,63 @@ impl Renderer {
         let default_cube_uv_view =
             default_cube_uv_tex.create_view(&wgpu::TextureViewDescriptor::default());
 
+        let make_env_uniform = |u: EnvUniforms, label: &str| {
+            wgpu::util::DeviceExt::create_buffer_init(
+                &*device,
+                &wgpu::util::BufferInitDescriptor {
+                    label: Some(label),
+                    contents: bytemuck::bytes_of(&u),
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                },
+            )
+        };
+        // The scene's, rewritten every frame; and one with no environment,
+        // for the shadow passes, which read none.
+        let env_uniform = make_env_uniform(EnvUniforms::NONE, "threers scene env uniforms");
+        let no_env_uniform = make_env_uniform(EnvUniforms::NONE, "threers no env uniforms");
         let env_bind_group = env_bind_group!(
             device,
             &env_bgl,
             "threers env bg",
             &default_env_cube.view,
             &env_sampler,
-            &shadow_view,
+            &dir_shadows.view,
             &shadow_sampler,
-            &spot_shadow_view,
+            &spot_shadows.view,
             &spot_shadow_sampler,
-            &point_shadow_cube_view,
+            &point_shadows.view,
             &point_shadow_sampler,
             &default_cube_uv_view,
+            &env_uniform,
+            &ltc.1,
         );
 
         // Dummy 1x1 depth textures used by `shadow_env_bind_group` so the
         // shadow passes can satisfy the pipeline layout without binding the
         // textures they're currently writing to (WebGPU forbids simultaneous
         // RenderAttachment + TextureBinding usage of the same resource).
-        let dummy_depth_2d = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("threers dummy depth 2d"),
-            size: wgpu::Extent3d {
-                width: 1,
-                height: 1,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: DEPTH_FORMAT,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
-        });
-        let dummy_depth_2d_view =
-            dummy_depth_2d.create_view(&wgpu::TextureViewDescriptor::default());
-        let dummy_depth_cube = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("threers dummy depth cube"),
-            size: wgpu::Extent3d {
-                width: 1,
-                height: 1,
-                depth_or_array_layers: 6,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: DEPTH_FORMAT,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
-        });
-        let dummy_depth_cube_view = dummy_depth_cube.create_view(&wgpu::TextureViewDescriptor {
-            label: Some("threers dummy depth cube view"),
-            dimension: Some(wgpu::TextureViewDimension::Cube),
-            ..Default::default()
-        });
+        let dummy_depth = ShadowArray::new(&device, "threers dummy depth", 1, 1);
         let shadow_env_bind_group = env_bind_group!(
             device,
             &env_bgl,
             "threers shadow env bg (dummies)",
             &default_env_cube.view,
             &env_sampler,
-            &dummy_depth_2d_view,
+            &dummy_depth.view,
             &shadow_sampler,
-            &dummy_depth_2d_view,
+            &dummy_depth.view,
             &spot_shadow_sampler,
-            &dummy_depth_cube_view,
+            &dummy_depth.view,
             &point_shadow_sampler,
             &default_cube_uv_view,
+            &no_env_uniform,
+            &ltc.1,
         );
+        // Each draw's uniforms at an offset the device accepts for a binding.
+        let mesh_stride = {
+            let align = device.limits().min_uniform_buffer_offset_alignment as u64;
+            (std::mem::size_of::<MeshUniforms>() as u64).div_ceil(align) * align
+        };
 
         let mut renderer = Self {
             device,
@@ -4097,20 +6170,35 @@ impl Renderer {
             pipeline_glass_color,
             pipeline_glass_depth_f16,
             pipeline_glass_color_f16,
+            pipeline_glass_depth_msaa,
+            pipeline_glass_color_msaa,
+            pipeline_glass_tint,
+            pipeline_glass_tint_f16,
+            pipeline_glass_tint_msaa,
+            encoded_glass_msaa,
             pipeline_oit,
             pipeline_oit_resolve,
             pipeline_oit_resolve_f16,
+            pipeline_oit_resolve_msaa,
+            pipeline_oit_msaa,
+            oit_msaa_targets: None,
+            oit_msaa_targets_spare: None,
+            depth_resolve,
             oit_resolve_bgl,
             oit_targets: None,
             ss_color: None,
             ss_glass_sampler,
             ss_depth: None,
             ss_back_depth: None,
+            ss_layer: None,
+            refraction_layers: 2,
             pipeline_ss_back_depth,
             pipeline_ss_blit,
             pipeline_ss_blit_f16,
             pipeline_ss_glass,
             pipeline_ss_glass_f16,
+            pipeline_glass_shadow,
+            ss_glass_shadow: None,
             ss_blit_bgl,
             taa_enabled: false,
             taa_frame: 0,
@@ -4137,6 +6225,7 @@ impl Renderer {
             pipeline_tri_wire,
             pipeline_line,
             pipeline_point,
+            pipeline_point_alpha,
             pipeline_sprite,
             pipeline_tri_msaa,
             pipeline_tri_alpha_msaa,
@@ -4149,8 +6238,14 @@ impl Renderer {
             // Off by default: enabling tone mapping would silently re-grade
             // every existing scene and the parity renders along with them.
             tone_mapping: ToneMapping::None,
+            specular_antialiasing: false,
+            tone_map_pass: true,
             exposure: 1.0,
             msaa_targets: None,
+            msaa_targets_spare: None,
+            overlay_msaa: false,
+            last_frame_msaa: false,
+            fxaa_scratch: None,
             pipeline_tri_f16,
             pipeline_tri_alpha_f16,
             pipeline_tri_nocull_f16,
@@ -4158,14 +6253,31 @@ impl Renderer {
             pipeline_tri_wire_f16,
             pipeline_line_f16,
             pipeline_point_f16,
+            pipeline_point_alpha_f16,
             pipeline_sprite_f16,
             pipeline_instanced_f16,
             pipeline_skinned_f16,
             pipeline_shadow,
             pipeline_shadow_spot,
             pipeline_shadow_point,
+            pipeline_shadow_skinned,
+            pipeline_shadow_spot_skinned,
+            pipeline_shadow_point_skinned,
+            pipeline_shadow_instanced,
+            pipeline_shadow_spot_instanced,
+            shadow_cut,
+            pipeline_shadow_point_instanced,
             pipeline_instanced,
             pipeline_skinned,
+            pipeline_instanced_wire,
+            pipeline_instanced_wire_f16,
+            pipeline_instanced_alpha,
+            pipeline_instanced_alpha_f16,
+            pipeline_skinned_alpha,
+            pipeline_skinned_alpha_f16,
+            encoded_blend_pipelines,
+            pipeline_skinned_wire,
+            pipeline_skinned_wire_f16,
             pipeline_postfx,
             pipeline_postfx_add,
             pipeline_postfx_outline_add,
@@ -4176,13 +6288,12 @@ impl Renderer {
             postfx_sampler,
             postfx_nearest_sampler,
             postfx_noise_sampler,
+            postfx_ext: Default::default(),
             ssao_kernel_buffer,
             ssao_noise_tex,
             ssao_noise_view,
             glitch_disp_tex,
             glitch_disp_view,
-            glitch_snow_tex,
-            glitch_snow_view,
             rgba_upload_tex,
             rgba_upload_view,
             #[cfg(feature = "captions")]
@@ -4195,10 +6306,20 @@ impl Renderer {
             tex_bgl,
             env_bgl,
             env_bgl_glass,
+            ltc,
             custom_tex_bind_group,
+            custom_tex_bgl,
+            mesh_shader: shader.clone(),
+            mesh_pipeline_layout: pipeline_layout.clone(),
+            biased_pipelines: HashMap::new(),
+            state_pipelines: state_pipes.into_inner(),
+            msaa_color_unorm: None,
+            encoded_scratch: None,
+            encoded_copy: None,
             custom_mesh_bgl,
             custom_pipeline_layout,
             custom_pipelines: HashMap::new(),
+            custom_encoded_pipelines: HashMap::new(),
             custom_failed: std::collections::HashSet::new(),
             depth_view,
             depth_texture,
@@ -4208,7 +6329,21 @@ impl Renderer {
             frustum_culling: true,
             cull_stats: (0, 0),
             timer: None,
+            shadow_timer: None,
+            shadow_map: Default::default(),
+            shadow_sig: None,
+            shadow_pass_hashes: Vec::new(),
+            shadow_stats: (0, 0),
+            shadow_updates: 0,
             skin_attr_cache: HashMap::new(),
+            morph_cache: HashMap::new(),
+            instance_cache: HashMap::new(),
+            instance_frame: 0,
+            instance_stamps: 0,
+            uv_cache: HashMap::new(),
+            default_uv_sets,
+            default_morph,
+            wire_span_cache: HashMap::new(),
             tex_cache: HashMap::new(),
             mipgen: None,
             rt_view_cache: HashMap::new(),
@@ -4220,38 +6355,57 @@ impl Renderer {
             cube_cache: HashMap::new(),
             env_bind_group,
             shadow_env_bind_group,
+            env_uniform,
+            material_env_groups: HashMap::new(),
+            pmrem_cache: HashMap::new(),
             env_sampler,
             default_env_cube,
             default_cube_uv_view,
-            cube_face_buffers,
-            cube_face_bind_groups,
+            shadow_pass_buffer: None,
+            depth_replay,
+            depth_replay_pass: None,
+            force_depth_replay: false,
+            msaa_depth_out: None,
+            shadow_pass_bgl,
+            shadow_pass_stride,
+            shadow_type: crate::lights::ShadowType::default(),
             env_cached_key: None,
             env_dirty: true,
             env_cached_rt_id: None,
-            shadow_view,
-            shadow_size: SHADOW_SIZE,
+            dir_shadows,
+            spot_shadows,
+            point_shadows,
             cube_pass: false,
+            viewport_state: Default::default(),
             shadow_sampler,
-            spot_shadow_view,
             spot_shadow_sampler,
-            point_shadow_cube_view,
-            point_shadow_face_views,
             point_shadow_sampler,
             frame_buffer,
             frame_bind_group,
+            frame_bind_group_dummy,
+            frame_buffer_for_bg,
+            transmission_sampler,
+            transmission: None,
+            capturing_transmission: None,
+            reflective_transparency: false,
             per_mesh: Vec::new(),
+            mesh_arena: None,
+            mesh_stride,
+            mesh_bytes: Vec::new(),
             tex_bg_cache: HashMap::new(),
-            sampler_linear,
-            sampler_nearest_clamp,
+            main_shader: shader.clone(),
+            map_variants: HashMap::new(),
+            variant_bg_cache: HashMap::new(),
             sampler_linear_repeat,
-            sampler_nearest_repeat,
+            samplers,
             default_white_srgb,
             default_white_linear,
             default_data_tex_view,
+            default_volume_view,
+            sampler_volume,
             last_camera_planes: (0.1, 1000.0),
             last_camera_lens: (0.414, 1.0),
             default_normal,
-            default_black,
             default_transparent,
             color_format,
         };
@@ -4268,6 +6422,7 @@ impl Renderer {
         // Defaults are installed here so the feature works out of the box; the
         // setters still override them.
         renderer.timer = GpuTimer::new(&renderer.device, &renderer.queue);
+        renderer.shadow_timer = GpuTimer::new(&renderer.device, &renderer.queue);
         renderer.set_ssao_kernel(&default_ssao_kernel());
         renderer.set_ssao_noise(&default_ssao_noise());
         renderer
@@ -4308,8 +6463,187 @@ impl Renderer {
             self.depth_texture = tex;
             self.depth_view = view;
             self.depth_size = (width, height);
-            self.msaa_targets = None; // recreated on next MSAA pass at the new size
+            // Recreated on the next MSAA pass at the new size.
+            self.msaa_targets = None;
+            self.msaa_targets_spare = None;
         }
+    }
+
+    /// three.js `setViewport`: draw the next renders into this rectangle of
+    /// the target. **Bottom-left origin, logical pixels** (multiplied by
+    /// [`pixel_ratio`](Self::set_pixel_ratio)), as in three.js. The rectangle
+    /// may hang off the target; the visible part is drawn with the projection
+    /// adjusted so the picture does not squash. The default is the whole
+    /// target; [`reset_viewport`](Self::reset_viewport) goes back to it.
+    ///
+    /// Applies to [`render`](Self::render), [`render_to`](Self::render_to) and
+    /// [`render_to_multisampled`](Self::render_to_multisampled) alike — to
+    /// whatever target the next render draws into — but never to cube-camera
+    /// faces. See [`super::viewport`] for what a sub-rectangle turns off.
+    pub fn set_viewport(&mut self, x: f32, y: f32, width: f32, height: f32) {
+        self.viewport_state.settings.viewport = Some(super::ViewportRect::new(x, y, width, height));
+    }
+
+    /// The viewport set by [`set_viewport`](Self::set_viewport), `None` for the
+    /// whole target.
+    pub fn viewport(&self) -> Option<super::ViewportRect> {
+        self.viewport_state.settings.viewport
+    }
+
+    /// Back to drawing over the whole target.
+    pub fn reset_viewport(&mut self) {
+        self.viewport_state.settings.viewport = None;
+    }
+
+    /// three.js `setScissor`. Same coordinates as
+    /// [`set_viewport`](Self::set_viewport); only takes effect while
+    /// [`set_scissor_test`](Self::set_scissor_test) is on. With the test on and
+    /// no rectangle set, the scissor is the whole target.
+    pub fn set_scissor(&mut self, x: f32, y: f32, width: f32, height: f32) {
+        self.viewport_state.settings.scissor = Some(super::ViewportRect::new(x, y, width, height));
+    }
+
+    pub fn scissor(&self) -> Option<super::ViewportRect> {
+        self.viewport_state.settings.scissor
+    }
+
+    /// Forget the scissor rectangle: with the test on, scissor the whole target.
+    pub fn reset_scissor(&mut self) {
+        self.viewport_state.settings.scissor = None;
+    }
+
+    /// three.js `setScissorTest`. While on, the colour clear and every draw are
+    /// confined to the scissor rectangle — which is what lets several renders
+    /// share one target without each clearing the others away.
+    pub fn set_scissor_test(&mut self, enabled: bool) {
+        self.viewport_state.settings.scissor_test = enabled;
+    }
+
+    pub fn scissor_test(&self) -> bool {
+        self.viewport_state.settings.scissor_test
+    }
+
+    /// three.js `setPixelRatio`, for the viewport and scissor only: their
+    /// rectangles are multiplied by this to get device pixels. It does not
+    /// resize anything — [`resize`](Self::resize) still takes device pixels.
+    /// [`HeadlessRenderer`](super::HeadlessRenderer) sets it to its supersample
+    /// factor, so rectangles stay in output pixels.
+    pub fn set_pixel_ratio(&mut self, ratio: f32) {
+        self.viewport_state.settings.set_pixel_ratio(ratio);
+    }
+
+    pub fn pixel_ratio(&self) -> f32 {
+        self.viewport_state.settings.pixel_ratio()
+    }
+
+    /// The drawing buffer in logical pixels — device size over
+    /// [`pixel_ratio`](Self::pixel_ratio). three.js `getSize`.
+    pub fn size(&self) -> (f32, f32) {
+        let pr = self.viewport_state.settings.pixel_ratio();
+        (self.depth_size.0 as f32 / pr, self.depth_size.1 as f32 / pr)
+    }
+
+    /// The drawing buffer in device pixels. three.js `getDrawingBufferSize`.
+    pub fn drawing_buffer_size(&self) -> (u32, u32) {
+        self.depth_size
+    }
+
+    /// three.js `autoClear`. On (the default), each render clears colour to the
+    /// scene background — the scissor rectangle when the scissor test is on,
+    /// the whole target otherwise. Off, colour is kept and the scene draws over
+    /// it. Depth is cleared either way.
+    pub fn set_auto_clear(&mut self, enabled: bool) {
+        self.viewport_state.settings.auto_clear = enabled;
+    }
+
+    pub fn auto_clear(&self) -> bool {
+        self.viewport_state.settings.auto_clear
+    }
+
+    /// three.js `renderer.clear()` for colour: fill `target_view` with `color`
+    /// — the scissor rectangle when the scissor test is on, the whole target
+    /// otherwise. `target_view` is taken to be drawing-buffer sized, as for
+    /// [`render`](Self::render); `linear_framebuffer` means the same as there.
+    pub fn clear(
+        &mut self,
+        target_view: &wgpu::TextureView,
+        linear_framebuffer: bool,
+        color: crate::math::Color,
+        alpha: f32,
+    ) {
+        let size = self.depth_size;
+        let format = if linear_framebuffer {
+            wgpu::TextureFormat::Rgba16Float
+        } else {
+            self.color_format
+        };
+        self.clear_inner(target_view, size, format, color, alpha);
+    }
+
+    /// [`clear`](Self::clear) into an offscreen [`RenderTarget`](super::RenderTarget).
+    pub fn clear_render_target(
+        &mut self,
+        target: &super::RenderTarget,
+        color: crate::math::Color,
+        alpha: f32,
+    ) {
+        self.clear_inner(
+            &target.color_view,
+            (target.width, target.height),
+            target.format,
+            color,
+            alpha,
+        );
+    }
+
+    fn clear_inner(
+        &mut self,
+        view: &wgpu::TextureView,
+        (w, h): (u32, u32),
+        format: wgpu::TextureFormat,
+        color: crate::math::Color,
+        alpha: f32,
+    ) {
+        use super::viewport::ClearMode;
+        let Some(mode) = self.viewport_state.settings.clear_mode(w, h) else {
+            return;
+        };
+        let value = super::clear_value(format, color, alpha);
+        if let ClearMode::Rect(_) = mode {
+            self.viewport_state
+                .ensure_clear_pipeline(&self.device, format, None);
+        }
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("threers clear"),
+            });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("threers clear"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: if mode == ClearMode::Full {
+                            wgpu::LoadOp::Clear(value)
+                        } else {
+                            wgpu::LoadOp::Load
+                        },
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            if let ClearMode::Rect(r) = mode {
+                self.viewport_state.fill_rect(&mut pass, format, false, r, value);
+            }
+        }
+        self.queue.submit(Some(encoder.finish()));
     }
 
     /// Enable/disable hardware MSAA on the **direct-to-surface** forward pass.
@@ -4321,10 +6655,49 @@ impl Renderer {
         if s != self.msaa {
             self.msaa = s;
             self.msaa_targets = None;
+            self.msaa_targets_spare = None;
         }
     }
     pub fn msaa(&self) -> u32 {
         self.msaa
+    }
+
+    /// `(passes, caster draws)`: how many shadow-map passes have been drawn
+    /// and how many casters drawn into them, since the renderer was made. A
+    /// pass whose light and casters have not changed is skipped, and a caster
+    /// outside a pass's light frustum is not drawn into it — this says how
+    /// much that saved.
+    pub fn shadow_stats(&self) -> (u64, u64) {
+        self.shadow_stats
+    }
+
+    /// How shadow maps are filtered — three.js's `renderer.shadowMap.type`.
+    /// A light's `ShadowSettings::filter` overrides it for that light.
+    pub fn set_shadow_type(&mut self, kind: crate::lights::ShadowType) {
+        self.shadow_type = kind;
+    }
+
+    pub fn shadow_type(&self) -> crate::lights::ShadowType {
+        self.shadow_type
+    }
+
+    /// Take WebGL2's path to a single-sampled depth under MSAA — the opaque
+    /// scene's depth redrawn, rather than the multisampled one resolved —
+    /// on any device. For testing that path where it is not the default.
+    #[doc(hidden)]
+    pub fn force_depth_replay(&mut self, on: bool) {
+        self.force_depth_replay = on;
+    }
+
+    /// Whether the last render was multisampled. MSAA asked for
+    /// ([`set_msaa`](Self::set_msaa)) is not always MSAA delivered: a frame
+    /// drawn into a float target, or with a live depth to read back
+    /// ([`render_to`](Self::render_to) draws a render target that way), or
+    /// holding draws that have no multisampled pipeline (custom shaders,
+    /// instanced and skinned meshes) is single-sampled. Refraction glass is
+    /// multisampled on every backend, WebGL2 included.
+    pub fn last_frame_multisampled(&self) -> bool {
+        self.last_frame_msaa
     }
 
     /// Set the tone-mapping curve and exposure multiplier.
@@ -4348,12 +6721,218 @@ impl Renderer {
         (self.tone_mapping, self.exposure)
     }
 
+    /// What the view's depth buffer is cleared to: the far plane.
+    fn depth_clear(&self) -> f32 {
+        if self.state_pipelines.reversed() {
+            0.0
+        } else {
+            1.0
+        }
+    }
+
+    /// Reversed depth: the view's depth runs 1 at the near plane to 0 at
+    /// the far one, cleared to 0, nearer passing `Greater`.
+    ///
+    /// Standard `f32` depth crowds its precision against the near plane, so
+    /// with a near plane of a metre the depth buffer cannot tell apart
+    /// surfaces tens of metres apart a hundred kilometres away — a planet
+    /// seen at an angle z-fights across whole mountains. Reversed, the
+    /// float's own spacing cancels the projection's and precision is nearly
+    /// even with distance.
+    ///
+    /// Off by default. Shadow maps stay standard. Everything that reads the
+    /// view's depth back — post effects through `apply_postfx`, glass and
+    /// screen-space reflection, TAA — converts it, so they see what they did
+    /// before; [`Ssao`](super::ssao::Ssao), which takes the depth texture
+    /// itself, needs [`Ssao::set_reversed_depth`](super::ssao::Ssao::set_reversed_depth).
+    /// [`depth_texture`](Self::depth_texture) holds reversed values: `1 - d`
+    /// is the standard depth.
+    pub fn set_reversed_z(&mut self, on: bool) {
+        self.state_pipelines.set_reversed(on);
+    }
+
+    pub fn reversed_z(&self) -> bool {
+        self.state_pipelines.reversed()
+    }
+
+    /// Geometric specular antialiasing on Standard and Physical materials
+    /// (off by default).
+    ///
+    /// Off, roughness gains three.js r165's `geometryRoughness` — the largest
+    /// screen-space change in the surface normal — as three.js renders it. On,
+    /// it gains the variance of the *shading* normal across the pixel instead
+    /// (Kaplanyan et al. 2016, as Filament does it), which also absorbs a
+    /// normal map's variance: crinkled foil or a fine normal map stops
+    /// sparkling and crawling under motion, and highlights no longer match
+    /// three.js's.
+    pub fn set_specular_antialiasing(&mut self, on: bool) {
+        self.specular_antialiasing = on;
+    }
+
+    pub fn specular_antialiasing(&self) -> bool {
+        self.specular_antialiasing
+    }
+
     /// Ensure the multisampled color+depth targets exist at `w×h` for the MSAA pass.
-    fn ensure_msaa_targets(&mut self, w: u32, h: u32) {
-        if matches!(self.msaa_targets, Some((cw, ch, ..)) if cw == w && ch == h) {
+    /// The `Unorm` scratch target and the copy pipelines for the encoded-blend
+    /// pass on a device without view-format reinterpretation (WebGL2).
+    fn ensure_encoded_scratch(&mut self, w: u32, h: u32) {
+        let unorm = self.color_format.remove_srgb_suffix();
+        if !matches!(self.encoded_scratch, Some((cw, ch, _)) if cw == w && ch == h) {
+            let tex = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("threers encoded blend scratch"),
+                size: wgpu::Extent3d {
+                    width: w.max(1),
+                    height: h.max(1),
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: unorm,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
+            self.encoded_scratch = Some((w, h, tex.create_view(&Default::default())));
+        }
+        if self.encoded_copy.is_some() {
             return;
         }
-        let mk = |label, format| {
+        // `textureLoad` of the sRGB target decodes; `fs_in` encodes again, so
+        // the `Unorm` scratch holds the target's bytes. `fs_out` reads the
+        // scratch's bytes raw and decodes them, and the sRGB target encodes
+        // on write: the bytes come back as they are. Both directions are
+        // exact for 8-bit values.
+        const COPY: &str = r#"
+@group(0) @binding(0) var src : texture_2d<f32>;
+@vertex
+fn vs(@builtin(vertex_index) i : u32) -> @builtin(position) vec4<f32> {
+    let uv = vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u));
+    return vec4<f32>(uv * 2.0 - 1.0, 0.0, 1.0);
+}
+@fragment
+fn fs_in(@builtin(position) p : vec4<f32>) -> @location(0) vec4<f32> {
+    let v = textureLoad(src, vec2<i32>(p.xy), 0);
+    let c = clamp(v.rgb, vec3<f32>(0.0), vec3<f32>(1.0));
+    let e = select(pow(c, vec3<f32>(1.0 / 2.4)) * 1.055 - vec3<f32>(0.055), c * 12.92, c <= vec3<f32>(0.0031308));
+    return vec4<f32>(e, v.a);
+}
+@fragment
+fn fs_out(@builtin(position) p : vec4<f32>) -> @location(0) vec4<f32> {
+    let v = textureLoad(src, vec2<i32>(p.xy), 0);
+    let d = select(pow((v.rgb + 0.055) / 1.055, vec3<f32>(2.4)), v.rgb / 12.92, v.rgb <= vec3<f32>(0.04045));
+    return vec4<f32>(d, v.a);
+}
+"#;
+        let module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("threers encoded blend copy"),
+            source: wgpu::ShaderSource::Wgsl(COPY.into()),
+        });
+        let bgl = self.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("threers encoded blend copy bgl"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            }],
+        });
+        let layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("threers encoded blend copy layout"),
+            bind_group_layouts: &[Some(&bgl)],
+            immediate_size: 0,
+        });
+        let pipe = |entry: &str, format: wgpu::TextureFormat| {
+            self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("threers encoded blend copy"),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &module,
+                    entry_point: Some("vs"),
+                    buffers: &[],
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &module,
+                    entry_point: Some(entry),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let copy_in = pipe("fs_in", unorm);
+        let copy_out = pipe("fs_out", self.color_format);
+        self.encoded_copy = Some((bgl, copy_in, copy_out));
+    }
+
+    /// One fullscreen copy for the encoded-blend scratch (see
+    /// [`ensure_encoded_scratch`](Self::ensure_encoded_scratch)).
+    fn encoded_copy_pass(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        out: bool,
+        src: &wgpu::TextureView,
+        dst: &wgpu::TextureView,
+    ) {
+        let Some((bgl, copy_in, copy_out)) = &self.encoded_copy else {
+            return;
+        };
+        let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("threers encoded blend copy bg"),
+            layout: bgl,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(src),
+            }],
+        });
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("threers encoded blend copy pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: dst,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_pipeline(if out { copy_out } else { copy_in });
+        pass.set_bind_group(0, &bg, &[]);
+        pass.draw(0..3, 0..1);
+    }
+
+    fn ensure_msaa_targets(&mut self, w: u32, h: u32) {
+        if !take_sized(&mut self.msaa_targets, &mut self.msaa_targets_spare, w, h) {
+            return;
+        }
+        // The colour also viewable as its `Unorm` twin when it is sRGB, for
+        // the encoded-blend pass.
+        let unorm = self.color_format.remove_srgb_suffix();
+        let reinterpret = unorm != self.color_format
+            && super::caps::supports_view_formats(&self.device);
+        let extra = [unorm];
+        // The depth also sampled where the refraction pass resolves it.
+        let sampled_depth = self.depth_resolve.is_some();
+        let mk = |label, format, view_formats: &[wgpu::TextureFormat]| {
+            let sampled = sampled_depth && format == DEPTH_FORMAT;
             self.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(label),
                 size: wgpu::Extent3d {
@@ -4365,14 +6944,29 @@ impl Renderer {
                 sample_count: self.msaa,
                 dimension: wgpu::TextureDimension::D2,
                 format,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-                view_formats: &[],
+                usage: if sampled {
+                    wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING
+                } else {
+                    wgpu::TextureUsages::RENDER_ATTACHMENT
+                },
+                view_formats,
             })
         };
         // wgpu keeps a texture alive as long as one of its views exists, so we can
         // store only the views.
-        let cv = mk("threers msaa color", self.color_format).create_view(&Default::default());
-        let dv = mk("threers msaa depth", DEPTH_FORMAT).create_view(&Default::default());
+        let color = mk(
+            "threers msaa color",
+            self.color_format,
+            if reinterpret { &extra } else { &[] },
+        );
+        let cv = color.create_view(&Default::default());
+        self.msaa_color_unorm = reinterpret.then(|| {
+            color.create_view(&wgpu::TextureViewDescriptor {
+                format: Some(unorm),
+                ..Default::default()
+            })
+        });
+        let dv = mk("threers msaa depth", DEPTH_FORMAT, &[]).create_view(&Default::default());
         self.msaa_targets = Some((w, h, cv, dv));
     }
 
@@ -4385,6 +6979,10 @@ impl Renderer {
     /// `kind` selects the WGSL branch in [`super::shader::POSTFX_SHADER`].
     /// `time` carries effect-specific data (e.g. glitch RNG seed). `params2` /
     /// `params3` are four-vectors whose meaning depends on `kind`.
+    ///
+    /// Every kind keeps the picture the right way up, into a render target
+    /// (`output_rt_id != 0`) and onto the canvas (`0`) alike, so passes chain
+    /// in any number without compensating flips.
     #[allow(clippy::too_many_arguments)]
     pub fn apply_postfx_by_id(
         &mut self,
@@ -4513,7 +7111,10 @@ impl Renderer {
         if kind0_byte_copy {
             params2[2] = 1.0;
         }
-        let use_hw_depth = kind == 11 && depth_rt_id != 0 && depth_rt_id == normal_rt_id;
+        // SSAO (11) and bokeh (26) read the hardware depth of the prepass
+        // target, which the caller names as both depth and normal.
+        let use_hw_depth =
+            matches!(kind, 11 | 26) && depth_rt_id != 0 && depth_rt_id == normal_rt_id;
         let hw_depth_local = if use_hw_depth {
             self.rt_depth_view_cache.remove(&normal_rt_id)
         } else {
@@ -4525,22 +7126,28 @@ impl Renderer {
             ..Default::default()
         });
         let hw_depth_bind = hw_depth_local.as_ref().unwrap_or(&hw_depth_fallback);
-        let flip_y = if output_rt_id == 0 {
-            if kind == 0 {
-                !kind0_byte_copy && params2[1] > 0.5
-            } else if matches!(kind, 4 | 5 | 25 | 26) {
-                // Halftone/glitch: pixel-space sampling on same-orientation RT.
-                false
-            } else {
-                true
-            }
-        } else {
-            false
+        // A "raw" view above is the target's own format: without view formats
+        // (WebGL2) an sRGB target cannot be viewed as anything else, so the
+        // view decodes and the shader has to re-encode what it reads.
+        let srgb_rt = |id: u32| {
+            self.rt_registry
+                .get(&id)
+                .is_some_and(|rt| rt.format.is_srgb())
         };
+        let mut raw_srgb = 0u32;
+        if (input_raw.is_some() || input_linear.is_some()) && srgb_rt(input_rt_id) {
+            raw_srgb |= 2;
+        }
+        if depth_linear.is_some() && srgb_rt(depth_rt_id) {
+            raw_srgb |= 4;
+        }
+        if normal_linear.is_some() && srgb_rt(normal_rt_id) {
+            raw_srgb |= 8;
+        }
         match normal_owned {
             Some(n) => {
                 let normal_bind = normal_linear.as_ref().unwrap_or(&n);
-                self.apply_postfx_ex(
+                self.apply_postfx_views(
                     input_bind,
                     output_view,
                     depth_bind,
@@ -4556,10 +7163,11 @@ impl Renderer {
                     camera,
                     use_hw_depth,
                     output_format,
-                    flip_y,
+                    raw_srgb,
                 );
                 self.rt_view_cache.insert(normal_rt_id, n);
                 self.tex_bg_cache.clear();
+                self.variant_bg_cache.clear();
             }
             None => {
                 let fallback_normal = self
@@ -4567,7 +7175,7 @@ impl Renderer {
                     .texture
                     .create_view(&wgpu::TextureViewDescriptor::default());
                 let normal_bind = normal_linear.as_ref().unwrap_or(&fallback_normal);
-                self.apply_postfx_ex(
+                self.apply_postfx_views(
                     input_bind,
                     output_view,
                     depth_bind,
@@ -4583,7 +7191,7 @@ impl Renderer {
                     camera,
                     use_hw_depth,
                     output_format,
-                    flip_y,
+                    raw_srgb,
                 );
             }
         }
@@ -4592,9 +7200,11 @@ impl Renderer {
         }
         self.rt_view_cache.insert(input_rt_id, input_view);
         self.tex_bg_cache.clear();
+        self.variant_bg_cache.clear();
         if let Some(d) = depth_owned {
             self.rt_view_cache.insert(depth_rt_id, d);
             self.tex_bg_cache.clear();
+            self.variant_bg_cache.clear();
         }
     }
 
@@ -4637,7 +7247,6 @@ impl Renderer {
             PostFxCamera::default(),
             false,
             self.color_format,
-            !matches!(kind, 4 | 5 | 25 | 26),
         );
     }
 
@@ -4660,9 +7269,62 @@ impl Renderer {
         camera: PostFxCamera,
         use_hw_depth: bool,
         output_format: wgpu::TextureFormat,
-        flip_y: bool,
+    ) {
+        self.apply_postfx_views(
+            input_view,
+            output_view,
+            depth_view,
+            normal_view,
+            hw_depth_view,
+            kind,
+            time,
+            params2,
+            params3,
+            width,
+            height,
+            additive,
+            camera,
+            use_hw_depth,
+            output_format,
+            0,
+        );
+    }
+
+    /// [`Self::apply_postfx_ex`], told which bound views were meant to show
+    /// the stored bytes but decode them: `raw_srgb` holds `POSTFX_SHADER`'s
+    /// `postfx_flag` bits 2 (input), 4 (depth) and 8 (normal). Bit 1 — the
+    /// output is an sRGB format — is worked out here from `output_format`.
+    ///
+    /// Each branch of the shader is written for a plain `Unorm` target: what
+    /// it returns is the byte stored. An sRGB target encodes on write, so
+    /// without bit 1 every computed pass was encoded once more on WebGL2 —
+    /// where every 8-bit target and the canvas are sRGB — than on WebGPU.
+    #[allow(clippy::too_many_arguments)]
+    fn apply_postfx_views(
+        &mut self,
+        input_view: &wgpu::TextureView,
+        output_view: &wgpu::TextureView,
+        depth_view: &wgpu::TextureView,
+        normal_view: &wgpu::TextureView,
+        hw_depth_view: &wgpu::TextureView,
+        kind: u32,
+        time: f32,
+        params2: [f32; 4],
+        params3: [f32; 4],
+        width: u32,
+        height: u32,
+        additive: bool,
+        camera: PostFxCamera,
+        use_hw_depth: bool,
+        output_format: wgpu::TextureFormat,
+        raw_srgb: u32,
     ) {
         let linear_output = output_format == wgpu::TextureFormat::Rgba16Float;
+        // Bit 16: the hardware depth is reversed (`set_reversed_z`), and
+        // `sample_postfx_depth` hands back `1 - d`.
+        let srgb_bits = raw_srgb
+            | u32::from(output_format.is_srgb())
+            | if self.state_pipelines.reversed() { 16 } else { 0 };
         #[repr(C)]
         #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
         struct PostFxUniforms {
@@ -4678,7 +7340,7 @@ impl Renderer {
             params: [
                 kind as f32,
                 time,
-                if kind == 5 || kind == 25 || kind == 26 {
+                if matches!(kind, 5 | 31) {
                     params3[3]
                 } else {
                     0.0
@@ -4691,7 +7353,7 @@ impl Renderer {
                 width as f32,
                 height as f32,
                 if linear_output { 1.0 } else { 0.0 },
-                if flip_y { 1.0 } else { 0.0 },
+                srgb_bits as f32,
             ],
             ssao0: [
                 camera.near,
@@ -4733,7 +7395,7 @@ impl Renderer {
                 wgpu::BindGroupEntry {
                     binding: 4,
                     resource: wgpu::BindingResource::Sampler(
-                        if kind == 5 || kind == 25 || kind == 26 {
+                        if matches!(kind, 5 | 31) {
                             &self.postfx_sampler
                         } else {
                             &self.postfx_nearest_sampler
@@ -4754,12 +7416,8 @@ impl Renderer {
                 },
                 wgpu::BindGroupEntry {
                     binding: 8,
-                    resource: wgpu::BindingResource::TextureView(if kind == 26 {
-                        &self.glitch_snow_view
-                    } else if kind == 5 || kind == 25 {
+                    resource: wgpu::BindingResource::TextureView(if kind == 5 || kind == 31 {
                         &self.glitch_disp_view
-                    } else if kind == 3 && params3[3] > 0.5 {
-                        &self.glitch_snow_view
                     } else {
                         &self.ssao_noise_view
                     }),
@@ -4836,11 +7494,6 @@ impl Renderer {
             .write_buffer(&self.ssao_kernel_buffer, 0, bytemuck::cast_slice(&data));
     }
 
-    /// Upload GLSL-baked dotscreen pattern (R32Float; binding 8 when kind=3 params3.w>0.5).
-    pub fn set_dotscreen_pattern(&mut self, data: &[f32], width: u32, height: u32) {
-        self.set_glitch_snow(data, width, height);
-    }
-
     /// Blit tightly-packed RGBA8 bytes (row-major, top-first) to an output view.
     pub fn blit_rgba8(
         &mut self,
@@ -4856,7 +7509,16 @@ impl Renderer {
         if data.len() < need {
             return;
         }
-        if self.rgba_upload_tex.width() != w || self.rgba_upload_tex.height() != h {
+        // RGBA8 bytes from a canvas or an image are sRGB-encoded and are to
+        // reach the screen as they came. They are uploaded as plain `Unorm`,
+        // so the copy reads the bytes themselves; onto an sRGB target the
+        // post-fx pass decodes its output (`postfx_flag` bit 1) and the
+        // target's encode gives the same bytes back.
+        let upload_format = wgpu::TextureFormat::Rgba8Unorm;
+        if self.rgba_upload_tex.width() != w
+            || self.rgba_upload_tex.height() != h
+            || self.rgba_upload_tex.format() != upload_format
+        {
             self.rgba_upload_tex = self.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("threers rgba upload"),
                 size: wgpu::Extent3d {
@@ -4867,7 +7529,7 @@ impl Renderer {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8Unorm,
+                format: upload_format,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             });
@@ -4922,7 +7584,9 @@ impl Renderer {
             &hw_fallback,
             0,
             0.0,
-            [1.0, 0.0, 0.0, 0.0],
+            // A raw texel copy (`params2.z`): the bytes are already what the
+            // screen should show, so no gamma is applied on the way out.
+            [1.0, 0.0, 1.0, 0.0],
             [0.0; 4],
             w,
             h,
@@ -4930,7 +7594,6 @@ impl Renderer {
             PostFxCamera::default(),
             false,
             output_format,
-            true,
         );
     }
 
@@ -4947,6 +7610,8 @@ impl Renderer {
     pub fn clear_geometry_cache(&mut self) {
         self.geom_cache.clear();
         self.skin_attr_cache.clear();
+        self.morph_cache.clear();
+        self.wire_span_cache.clear();
     }
 
     /// How many GPU meshes are currently cached.
@@ -5120,16 +7785,19 @@ impl Renderer {
         );
     }
 
-    /// Upload full-screen glitch snow map (R32Float, point-sampled).
-    pub fn set_glitch_snow(&mut self, data: &[f32], width: u32, height: u32) {
-        let w = width.max(1);
-        let h = height.max(1);
-        if self.glitch_snow_tex.width() != w || self.glitch_snow_tex.height() != h {
-            self.glitch_snow_tex = self.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("threers glitch snow"),
+    /// Upload GlitchPass's `size × size` displacement heightmap (R32Float, read
+    /// nearest, as three.js's `DataTexture` defaults to).
+    pub fn set_glitch_disp(&mut self, data: &[f32], size: u32) {
+        let sz = size.max(1);
+        if data.len() < (sz * sz) as usize {
+            return;
+        }
+        if self.glitch_disp_tex.width() != sz {
+            self.glitch_disp_tex = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("threers glitch disp"),
                 size: wgpu::Extent3d {
-                    width: w,
-                    height: h,
+                    width: sz,
+                    height: sz,
                     depth_or_array_layers: 1,
                 },
                 mip_level_count: 1,
@@ -5139,34 +7807,11 @@ impl Renderer {
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             });
-            self.glitch_snow_view = self
-                .glitch_snow_tex
+            self.glitch_disp_view = self
+                .glitch_disp_tex
                 .create_view(&wgpu::TextureViewDescriptor::default());
         }
-        self.queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &self.glitch_snow_tex,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            bytemuck::cast_slice(data),
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(w * 4),
-                rows_per_image: Some(h),
-            },
-            wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
-            },
-        );
-    }
-
-    /// Upload 64×64 glitch displacement heightmap (R32Float; manual bilinear in WGSL).
-    pub fn set_glitch_disp(&mut self, data: &[f32], size: u32) {
-        let sz = size.max(1);
+        let data = &data[..(sz * sz) as usize];
         self.queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &self.glitch_disp_tex,
@@ -5221,33 +7866,76 @@ impl Renderer {
     /// size. Powers of two only, and bounded: this is a render target, and a
     /// caller who types 65536 should get the largest sane map rather than an
     /// allocation failure three frames later.
-    fn ensure_shadow_size(&mut self, requested: u32) {
-        let size = requested.clamp(256, 8192).next_power_of_two();
-        if size == self.shadow_size {
+    /// Size the shadow arrays for this frame's casters: a layer per
+    /// directional and spot light, six per point light, at the size the
+    /// directional lights ask for (`ShadowSettings::map_size`, the largest)
+    /// and [`SPOT_SHADOW_SIZE`] for spots, shrunk when several share a kind
+    /// ([`shadow_layer_size`]). Reallocated only to grow or resize.
+    fn ensure_shadow_arrays(&mut self, dir_size: u32, n_dir: usize, n_spot: usize, n_point: usize) {
+        let mut changed = false;
+        let mut fit = |array: &mut ShadowArray, label: &str, size: u32, layers: u32| {
+            if array.size != size || array.layers < layers {
+                *array = ShadowArray::new(&self.device, label, size, layers);
+                changed = true;
+            }
+        };
+        if n_dir > 0 {
+            fit(&mut self.dir_shadows, "threers shadow depth", shadow_layer_size(dir_size, n_dir), n_dir as u32);
+        }
+        if n_spot > 0 {
+            fit(&mut self.spot_shadows, "threers spot shadow depth", shadow_layer_size(SPOT_SHADOW_SIZE, n_spot), n_spot as u32);
+        }
+        if n_point > 0 {
+            fit(&mut self.point_shadows, "threers point shadow depth", POINT_SHADOW_SIZE, 6 * n_point as u32);
+        }
+        if changed {
+            // The environment bind group holds the old views. Invalidating the
+            // cache key is what makes the next frame rebuild it; without this
+            // the shader would keep sampling a texture nothing renders into
+            // any more.
+            self.env_cached_key = None;
+            self.env_cached_rt_id = None;
+            self.env_dirty = true;
+        }
+    }
+
+    /// Room for `n` shadow passes' uniforms (`ShadowPassGpu`), one aligned
+    /// slot each, and the group 0 the shadow pipelines read them through at
+    /// a dynamic offset — beside the frame uniforms, which the passes' vertex
+    /// stages may read too.
+    ///
+    /// One buffer for every pass, written once a frame, rather than a copy
+    /// of the whole frame uniforms per pass: the passes are all encoded
+    /// before anything runs and `queue.write_buffer` lands before any
+    /// submitted command, so each pass needs its own slot either way.
+    fn ensure_shadow_pass_buffer(&mut self, n: usize) {
+        let need = self.shadow_pass_stride * n.max(1) as u64;
+        if self.shadow_pass_buffer.as_ref().is_some_and(|(b, _)| b.size() >= need) {
             return;
         }
-        let tex = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("threers shadow depth"),
-            size: wgpu::Extent3d {
-                width: size,
-                height: size,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: DEPTH_FORMAT,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
+        let size = need.max(self.shadow_pass_stride * 8);
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("threers shadow pass uniforms"),
+            size,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
-        self.shadow_view = tex.create_view(&wgpu::TextureViewDescriptor::default());
-        self.shadow_size = size;
-        // The environment bind group holds the old view. Invalidating the cache
-        // key is what makes the next frame rebuild it; without this the shader
-        // would keep sampling a texture nothing renders into any more.
-        self.env_cached_key = None;
-        self.env_cached_rt_id = None;
-        self.env_dirty = true;
+        let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("threers shadow pass bg"),
+            layout: &self.shadow_pass_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: self.frame_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &buffer,
+                        offset: 0,
+                        size: wgpu::BufferSize::new(std::mem::size_of::<ShadowPassGpu>() as u64),
+                    }),
+                },
+            ],
+        });
+        self.shadow_pass_buffer = Some((buffer, bg));
     }
 
     pub fn render_to_cube_face(
@@ -5286,16 +7974,40 @@ impl Renderer {
         let orig_depth = std::mem::replace(&mut self.depth_view, target.depth_view_clone());
         self.depth_size = (target.width, target.height);
         let linear_fb = target.format == wgpu::TextureFormat::Rgba16Float;
-        // The target owns the live depth this pass — pass it as the copy source
-        // for the screen-space glass ray march.
-        self.render_inner(
-            scene,
-            camera,
-            &target.color_view,
-            linear_fb,
-            Some(&target.depth_texture),
-            Some((&target.depth_texture, &target.color_texture)),
-        );
+        let tone_map = std::mem::replace(&mut self.tone_map_pass, target.presents());
+        // Resolving needs the multisampled colour in the target's format, and
+        // the renderer's multisampled targets are in its own.
+        if target.samples() > 1 && target.format == self.color_format {
+            // three.js `samples`: drawn multisampled at the target's size,
+            // colour resolved into it and depth resolved (or, on WebGL2,
+            // redrawn) into its depth, which the glass and post-processing
+            // read as they would a single-sampled target's. The renderer's own
+            // MSAA setting is the canvas's and is left as it was.
+            let msaa = std::mem::replace(&mut self.msaa, MSAA_SAMPLES);
+            self.msaa_depth_out = Some(target.depth_texture.clone());
+            self.render_inner(
+                scene,
+                camera,
+                &target.color_view,
+                linear_fb,
+                None,
+                Some((&target.depth_texture, &target.color_texture)),
+            );
+            self.msaa_depth_out = None;
+            self.msaa = msaa;
+        } else {
+            // The target owns the live depth this pass — pass it as the copy
+            // source for the screen-space glass ray march.
+            self.render_inner(
+                scene,
+                camera,
+                &target.color_view,
+                linear_fb,
+                Some(&target.depth_texture),
+                Some((&target.depth_texture, &target.color_texture)),
+            );
+        }
+        self.tone_map_pass = tone_map;
         self.depth_view = orig_depth;
         self.depth_size = (orig_w, orig_h);
     }
@@ -5325,6 +8037,8 @@ impl Renderer {
         target: &super::RenderTarget,
         linear_framebuffer: bool,
     ) {
+        let tone_map = std::mem::replace(&mut self.tone_map_pass, target.presents());
+        self.last_frame_msaa = false;
         self.render_inner(
             scene,
             camera,
@@ -5332,6 +8046,93 @@ impl Renderer {
             linear_framebuffer,
             None,
             Some((&target.depth_texture, &target.color_texture)),
+        );
+        self.tone_map_pass = tone_map;
+        // Antialiasing was asked for and the frame could not multisample
+        // (`Oit` or `Refract` glass in view): FXAA it rather than hand back
+        // hard edges. Temporal AA, when on, has already done the job.
+        if self.msaa > 1 && !self.last_frame_msaa && !self.taa_enabled {
+            self.fxaa_fallback(target);
+        }
+    }
+
+    /// FXAA over `target`, read from a copy of it.
+    ///
+    /// On the stored bytes, as three.js runs FXAA over its 8-bit canvas: an
+    /// sRGB copy decodes as it is read, so the pass is told (`raw_srgb` bit 2)
+    /// and re-encodes, and the sRGB target encodes the result back to the
+    /// same bytes. A flat area comes back byte for byte.
+    fn fxaa_fallback(&mut self, target: &super::RenderTarget) {
+        let tex = &target.color_texture;
+        let (w, h, format) = (tex.width(), tex.height(), tex.format());
+        if format == wgpu::TextureFormat::Rgba16Float {
+            // A linear target is a stage on the way somewhere else; whatever
+            // presents it can antialias the result.
+            return;
+        }
+        let stale = self
+            .fxaa_scratch
+            .as_ref()
+            .is_none_or(|(t, _)| t.width() != w || t.height() != h || t.format() != format);
+        if stale {
+            let t = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("threers fxaa fallback source"),
+                size: wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            let v = t.create_view(&wgpu::TextureViewDescriptor::default());
+            self.fxaa_scratch = Some((t, v));
+        }
+        let (scratch, view) = self.fxaa_scratch.as_ref().unwrap();
+        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("threers fxaa fallback copy"),
+        });
+        encoder.copy_texture_to_texture(
+            tex.as_image_copy(),
+            scratch.as_image_copy(),
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.queue.submit(Some(encoder.finish()));
+        let view = view.clone();
+        let normal = self
+            .default_normal
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let hw_depth = self.hw_depth_tex.create_view(&wgpu::TextureViewDescriptor {
+            aspect: wgpu::TextureAspect::DepthOnly,
+            ..Default::default()
+        });
+        let raw_input = if format.is_srgb() { 2 } else { 0 };
+        self.apply_postfx_views(
+            &view,
+            &target.color_view,
+            &view,
+            &normal,
+            &hw_depth,
+            1,
+            0.0,
+            [1.0 / w as f32, 1.0 / h as f32, 0.0, 0.0],
+            [0.0; 4],
+            w,
+            h,
+            false,
+            PostFxCamera::default(),
+            false,
+            format,
+            raw_input,
         );
     }
 
@@ -5364,6 +8165,21 @@ impl Renderer {
         taa_src: Option<(&wgpu::Texture, &wgpu::Texture)>,
     ) {
         scene.update_world();
+        if self.capturing_transmission.is_none() && !self.cube_pass {
+            self.capture_transmission(scene, camera);
+        }
+
+        // Viewport / scissor for this render. A cube face is always the whole
+        // face. `None` means the viewport or scissor misses the target and
+        // there is nothing to draw.
+        let vp_plan = if self.cube_pass {
+            super::viewport::ViewportPlan::full(self.depth_size.0, self.depth_size.1)
+        } else {
+            match self.viewport_state.settings.plan(self.depth_size.0, self.depth_size.1) {
+                Some(p) => p,
+                None => return,
+            }
+        };
 
         // Whether the shader writes linear light and lets something else encode
         // it. Two different reasons to: the target stores linear (a float
@@ -5387,10 +8203,13 @@ impl Renderer {
         // the whole vehicle going half transparent — which is what it looked
         // like, and why the cause was not obvious from the symptom.
         let taa_active =
-            self.taa_enabled && !self.cube_pass && taa_src.is_some();
+            self.taa_enabled && !self.cube_pass && taa_src.is_some() && vp_plan.legacy;
 
         let view_m = camera.view_matrix();
         let mut proj_m = camera.projection_matrix();
+        if let Some(fix) = &vp_plan.projection_fix {
+            proj_m = fix.multiply(&proj_m);
+        }
         // Un-jittered view-projection is kept for TAA reprojection.
         let unjittered = proj_m.multiply(&view_m);
         if taa_active || self.jitter_override.is_some() {
@@ -5406,8 +8225,9 @@ impl Renderer {
                 halton(self.taa_frame + 1, 2) - 0.5,
                 halton(self.taa_frame + 1, 3) - 0.5,
             ));
-            let jx = ox * 2.0 / self.depth_size.0 as f32;
-            let jy = oy * 2.0 / self.depth_size.1 as f32;
+            // Per viewport pixel — the whole target unless a viewport is set.
+            let jx = ox * 2.0 / vp_plan.viewport.width as f32;
+            let jy = oy * 2.0 / vp_plan.viewport.height as f32;
             // Which element carries the offset depends on the projection, and
             // getting it wrong is not subtle. A perspective matrix divides by
             // `-z`, so a shift in the *z* column arrives in NDC as a constant:
@@ -5429,6 +8249,13 @@ impl Renderer {
                 proj_m.elements[12] -= jx;
                 proj_m.elements[13] -= jy;
             }
+        }
+        // Reversed depth flips only what rasterises: TAA, motion blur and
+        // culling keep the standard matrices, and every reader of the depth
+        // buffer converts it back (`1 - d`) before using them.
+        let reversed = self.state_pipelines.reversed();
+        if reversed {
+            proj_m = reverse_depth(&proj_m);
         }
         let view_proj = proj_m.multiply(&view_m).elements;
         let taa_inv_vp = unjittered.invert().elements;
@@ -5456,11 +8283,13 @@ impl Renderer {
             view: view_m.elements,
             projection: proj_m.elements,
             view_proj,
+            // w: 1 with reversed depth — the sky pin and the screen-space
+            // marches read it.
             camera_position: [
                 camera.position().x,
                 camera.position().y,
                 camera.position().z,
-                0.0,
+                if reversed { 1.0 } else { 0.0 },
             ],
             fog_color: [scene.fog.color.r, scene.fog.color.g, scene.fog.color.b, 1.0],
             fog_params: [
@@ -5470,10 +8299,22 @@ impl Renderer {
                 scene.fog.mode as f32,
             ],
             tone_mapping_exposure: [
-                self.tone_mapping.shader_mode(),
+                if self.tone_map_pass && !self.cube_pass {
+                    self.tone_mapping.shader_mode()
+                } else {
+                    0.0
+                },
                 self.exposure,
                 if has_env { 1.0 } else { 0.0 },
-                if shader_outputs_linear { 1.0 } else { 0.0 },
+                // 2: linear because the target is sRGB and encodes on write,
+                // which the shader's data outputs (`framebuffer_data`) undo.
+                if !shader_outputs_linear {
+                    0.0
+                } else if !linear_framebuffer && self.color_format.is_srgb() {
+                    2.0
+                } else {
+                    1.0
+                },
             ],
             viewport_size: [
                 self.depth_size.0 as f32,
@@ -5490,9 +8331,12 @@ impl Renderer {
         let mut n_spot = 0usize;
         let mut n_hemi = 0usize;
         let mut n_rect = 0usize;
-        let mut shadow_caster: Option<(Vector3, crate::lights::ShadowSettings)> = None;
-        let mut spot_caster: Option<(Vector3, Vector3, f32, crate::lights::ShadowSettings)> = None;
-        let mut point_caster: Option<(Vector3, f32, crate::lights::ShadowSettings)> = None;
+        let oit_available = self.pipeline_oit.is_some();
+        // Every shadow-casting light, by kind: its index in the kind's light
+        // array, and what its shadow pass needs.
+        // Every shadow-casting light, in the order its record takes. A light
+        // names its record in its own `color[3]`.
+        let mut casters: Vec<Caster> = Vec::new();
 
         #[derive(Clone, Copy, PartialEq, Eq)]
         enum Topology {
@@ -5502,14 +8346,32 @@ impl Renderer {
             TriangleNoCull,
             Sky,
             Line,
-            #[allow(dead_code)]
+            /// three.js `Points`: one instance per point, each a quad
+            /// (`vs_points`).
             Point,
+            /// `Point` with a transparent material: blended and sorted with
+            /// the other transparent draws.
+            PointAlpha,
             Sprite,
             Instanced,
+            /// `Instanced` with a `wireframe: true` material: line list.
+            InstancedWire,
+            /// `Instanced` with a transparent material: alpha-blended, sorted
+            /// with the other transparent draws, as three.js renders a
+            /// transparent `InstancedMesh`.
+            InstancedAlpha,
             Skinned,
+            /// `Skinned` with a `wireframe: true` material: line list.
+            SkinnedWire,
+            /// `Skinned` with a transparent material.
+            SkinnedAlpha,
             /// Single-layer glass depth prepass (writes depth, no color).
             GlassDepth,
-            /// Single-layer glass color pass (LessEqual, alpha blend, no depth write).
+            /// The tint half of the glass colour pass, drawn just before
+            /// `GlassColor`: what is behind times the glass's transmittance.
+            GlassTint,
+            /// Single-layer glass color pass (LessEqual, no depth write): the
+            /// light half, added over the tint.
             GlassColor,
             /// Weighted-blended OIT surface (drawn into accum+revealage MRT).
             Oit,
@@ -5520,12 +8382,69 @@ impl Renderer {
             /// (fragment-source hash, is-transparent, wants-screen-space).
             /// The last flag moves the draw into the screen-space pass, where the
             /// captured opaque colour and depth are bound at `@group(3)`.
-            /// (shader hash, transparent, screen-space, side, depth-write
-            /// override) — exactly the custom pipeline cache key minus the
-            /// framebuffer format, so every lookup site can build the key
-            /// from the topology alone.
-            Custom(u64, bool, bool, u32, Option<bool>),
+            /// (shader hash, transparent, screen-space, side) — exactly the
+            /// custom pipeline cache key minus the framebuffer format, so
+            /// every lookup site can build the key from the topology alone.
+            Custom(u64, bool, bool, u32),
         }
+        impl Topology {
+            /// Drawn from the mesh's wire (line-list) index buffer.
+            fn is_wire(self) -> bool {
+                matches!(
+                    self,
+                    Topology::TriangleWire | Topology::InstancedWire | Topology::SkinnedWire
+                )
+            }
+            /// Reads per-instance matrices from vertex slot 1.
+            fn is_instanced(self) -> bool {
+                matches!(
+                    self,
+                    Topology::Instanced | Topology::InstancedWire | Topology::InstancedAlpha
+                )
+            }
+            /// Binds the combined mesh+skin group and joint attributes.
+            fn is_skinned(self) -> bool {
+                matches!(self, Topology::Skinned | Topology::SkinnedWire | Topology::SkinnedAlpha)
+            }
+            /// Drawn as faces, so three.js's `side` culls them (`side_cull`).
+            fn is_faces(self) -> bool {
+                matches!(
+                    self,
+                    Topology::Triangle
+                        | Topology::TriangleNoCull
+                        | Topology::TriangleAlpha
+                        | Topology::Instanced
+                        | Topology::InstancedAlpha
+                        | Topology::Skinned
+                        | Topology::SkinnedAlpha
+                )
+            }
+            /// One instance per point, a quad each, read from the geometry's
+            /// own vertex buffer.
+            fn is_points(self) -> bool {
+                matches!(self, Topology::Point | Topology::PointAlpha)
+            }
+            /// Blends with what is behind it — and so, on an sRGB target,
+            /// draws in the encoded-blend pass (see `encoded_pass`). Glass
+            /// included, prepass and all: it sorts with the transparent draws
+            /// by `renderOrder`, so it has to be drawn in the same pass as
+            /// them or a glass shell ordered after them still went first.
+            fn encodes(self) -> bool {
+                matches!(
+                    self,
+                    Topology::GlassDepth
+                        | Topology::GlassTint
+                        | Topology::GlassColor
+                        | Topology::TriangleAlpha
+                        | Topology::PointAlpha
+                        | Topology::Sprite
+                        | Topology::InstancedAlpha
+                        | Topology::SkinnedAlpha
+                        | Topology::Custom(_, true, false, ..)
+                )
+            }
+        }
+        #[derive(Clone)]
         struct DrawMesh {
             key: *const BufferGeometry,
             topology: Topology,
@@ -5537,9 +8456,21 @@ impl Renderer {
             /// throw a shadow across the whole view — so culled draws stay in
             /// this list and only the colour passes skip them.
             in_frustum: bool,
+            /// three.js's transmissive material (`Material::transmissive`).
+            transmissive: bool,
+            /// Any transmissive physical material: cast with the cut-out shadow
+            /// pipelines, which drop texels for the light it lets through.
+            shadow_transmits: bool,
             cast_shadow: bool,
             refract_capture: bool,
             alpha_test: f32,
+            /// The material's three.js `side` (0 front, 1 back, 2 double): the
+            /// shadow passes cull by it, as three.js's `shadowSide` does.
+            side: u32,
+            /// The `side` the shadow passes use: the material's, even when the
+            /// colour passes draw a blended DoubleSide mesh as its back and
+            /// front halves (see the two-pass split before the sort).
+            shadow_side: u32,
             model: [f32; 16],
             normal_matrix: [f32; 16],
             color: [f32; 4],
@@ -5551,7 +8482,6 @@ impl Renderer {
             metalness: f32,
             ao_intensity: f32,
             normal_scale: [f32; 2],
-            toon_steps: u32,
             physical: [f32; 4],
             physical2: [f32; 4],
             physical3: [f32; 4],
@@ -5567,29 +8497,76 @@ impl Renderer {
             shader_flags: u32,
             kind: MaterialKind,
             slots: MaterialTextureSlots,
+            /// The material shader variant this draw needs, if its maps do not
+            /// fit the legacy layout (see `material_maps`).
+            map_variant: Option<super::material_maps::MapVariant>,
+            /// `Material::map_uniforms`, a variant's uniform block.
+            map_uniforms: [[f32; 4]; 6],
+            /// A Standard/Physical material's own environment
+            /// (`material_env_groups`), in place of the scene's.
+            env_group: Option<MaterialEnvKey>,
             /// Index into `instance_buffers` for Topology::Instanced.
             instance_buf_idx: usize,
+            /// The instance data's content stamp (`InstanceBuffer::stamp`),
+            /// for the shadow fingerprint; 0 for a plain mesh.
+            instance_stamp: u64,
             instance_count: u32,
             /// Index into `skin_data` for Topology::Skinned.
             skin_idx: usize,
             /// Index into `shader_data` for Topology::Custom.
             shader_idx: usize,
+            /// The part of the index (vertices, unindexed) this draw covers —
+            /// a group and/or the draw range, three.js's `renderBufferDirect`
+            /// clipping. `None` is the whole geometry.
+            range: Option<(u32, u32)>,
+            /// Morph uniforms (count 0: no morphing) and the texture to bind.
+            morph: [f32; 4],
+            morph_weights: [f32; crate::core::MAX_MORPH_TARGETS],
+            morph_tex: (usize, u32),
+            /// three.js `polygonOffset`: (factor bits, units), drawn with a
+            /// depth-biased pipeline (see `Renderer::biased_pipelines`).
+            polygon_offset: Option<(u32, i32)>,
+            /// three.js `depthTest` / `depthWrite` / `depthFunc` /
+            /// `colorWrite`, applied over whichever pipeline the draw picks
+            /// (see `pipeline_state`). Always the default for the glass,
+            /// order-independent and refraction modes, which own theirs.
+            state: crate::materials::RenderState,
+            /// `Object3D::clip_plane`, packed for `MeshUniforms`.
+            clip_plane: [f32; 4],
         }
         let mut draws: Vec<DrawMesh> = Vec::new();
+        // The triangle topologies a three.js `polygonOffset` applies to, as
+        // the code `build_biased_pipeline` builds them from: plain (back-face
+        // culled), alpha-blended, double-sided.
+        let biased_topology = |t: Topology| -> Option<u8> {
+            match t {
+                Topology::Triangle => Some(0),
+                Topology::TriangleAlpha => Some(1),
+                Topology::TriangleNoCull => Some(2),
+                _ => None,
+            }
+        };
         // Per-custom-shader-material draw data (parallel to Topology::Custom).
         struct ShaderDrawData {
             fragment: String,
             vertex: Option<String>,
-            depth_write: Option<bool>,
             data: [[f32; 4]; 16],
             storage: [Vec<f32>; 3],
             textures: Vec<std::sync::Arc<wgpu::TextureView>>,
+            volumes: Vec<std::sync::Arc<wgpu::TextureView>>,
+            /// Drawn from an `InstancedMesh`: the instanced pipeline layout,
+            /// with the instance buffer at `instance_buf_idx` in slot 1 and
+            /// the custom columns at `custom_buf` in slot 2.
+            instanced: bool,
+            custom_buf: usize,
         }
         let mut shader_data: Vec<ShaderDrawData> = Vec::new();
         let mut instance_buffers: Vec<wgpu::Buffer> = Vec::new();
         struct SkinData {
             bone_buf: wgpu::Buffer,
             bg: Option<wgpu::BindGroup>,
+            /// The bone matrices, hashed, for the shadow fingerprint.
+            bone_hash: u64,
         }
         let mut skin_data: Vec<SkinData> = Vec::new();
 
@@ -5614,7 +8591,15 @@ impl Renderer {
                 + view_m.elements[6] * world_pos.y
                 + view_m.elements[10] * world_pos.z
                 + view_m.elements[14];
-            let topology = if topology == Topology::Triangle {
+            let topology = if topology == Topology::Instanced && mat.wireframe() {
+                Topology::InstancedWire
+            } else if topology == Topology::Instanced && mat.transparent() {
+                Topology::InstancedAlpha
+            } else if topology == Topology::Skinned && mat.wireframe() {
+                Topology::SkinnedWire
+            } else if topology == Topology::Skinned && mat.transparent() {
+                Topology::SkinnedAlpha
+            } else if topology == Topology::Triangle {
                 if matches!(mat, Material::Sky(_)) {
                     Topology::Sky
                 } else if mat.wireframe() {
@@ -5685,7 +8670,7 @@ impl Renderer {
                 Material::Physical(m) => [
                     m.iridescence,
                     m.iridescence_ior,
-                    m.iridescence_thickness,
+                    m.iridescence_thickness_range[1],
                     m.sheen,
                 ],
                 Material::Atmosphere(m) => {
@@ -5730,19 +8715,11 @@ impl Renderer {
                 let night = mat.emissive_night_side();
                 [scale, bias, night, 0.0]
             };
-            // three.js drives every slot from one texture matrix, taken from
-            // the primary map. Ours is the offset/repeat pair, which is the
-            // part that matters for atlasing and tiling. It is applied once, in
-            // the vertex stage, so it covers every slot — a material cannot
-            // window its normal map and leave its albedo alone.
-            let uv_transform = {
-                let slots = mat.texture_slots();
-                let t = slots.map.as_ref().or(slots.matcap_map.as_ref());
-                match t {
-                    Some(t) => [t.offset.x, t.offset.y, t.repeat.x, t.repeat.y],
-                    None => [0.0, 0.0, 1.0, 1.0],
-                }
-            };
+            // three.js gives every map its own matrix. The legacy layout
+            // holds one scale and translation, applied in the vertex stage to
+            // every map; a material whose maps need more gets a shader variant
+            // that transforms each map itself (`material_maps::needs_variant`).
+            let uv_transform = super::material_maps::legacy_uv_transform(&mat.texture_slots());
             let atmos = mat.atmosphere_params();
             let (eclipse, sun_angle) = mat.eclipse();
             let twilight = {
@@ -5759,15 +8736,39 @@ impl Renderer {
             if obj.receive_shadow {
                 shader_flags |= FLAG_RECEIVE_SHADOW;
             }
+            if !mat.tone_mapped() {
+                shader_flags |= FLAG_NO_TONE_MAP;
+            }
+            let shadow_transmits = matches!(mat, Material::Physical(m)
+                if m.transmission > 0.0
+                    && (m.thickness <= 0.0 || m.transparency == crate::materials::TransparencyMode::Glass));
+            if shadow_transmits {
+                shader_flags |= FLAG_SHADOW_TRANSMITS;
+            }
+            if let Material::Physical(m) = mat {
+                if m.transmission > 0.0
+                    && matches!(
+                        m.transparency,
+                        crate::materials::TransparencyMode::Glass | crate::materials::TransparencyMode::Oit
+                    )
+                {
+                    shader_flags |= FLAG_BLENDED_GLASS;
+                }
+            }
             DrawMesh {
                 key,
                 topology,
                 view_z,
                 render_order: obj.render_order,
+                clip_plane: clip_plane_of(obj),
                 in_frustum: true,
+                transmissive: mat.transmissive(),
+                shadow_transmits,
                 cast_shadow: obj.cast_shadow,
                 refract_capture: obj.refract_capture,
                 alpha_test: mat.alpha_test(),
+                side: mat.side(),
+                shadow_side: mat.side(),
                 model: obj.matrix_world.elements,
                 normal_matrix,
                 color: [c.r, c.g, c.b, mat.opacity()],
@@ -5783,7 +8784,15 @@ impl Renderer {
                         _ => 0.0,
                     },
                 ],
-                specular: [s.r, s.g, s.b, 0.0],
+                // Phong's specular colour; Physical's `specularColor` and, in
+                // w, `specularIntensity`.
+                specular: match mat {
+                    Material::Physical(m) => {
+                        let c = m.specular_color;
+                        [c.r, c.g, c.b, m.specular_intensity]
+                    }
+                    _ => [s.r, s.g, s.b, 0.0],
+                },
                 shininess_or_near: shin_or_near,
                 opacity_or_far,
                 // For SkyMaterial, repurpose roughness/metalness as
@@ -5798,7 +8807,6 @@ impl Renderer {
                 },
                 ao_intensity: mat.ao_intensity(),
                 normal_scale: [mat.normal_scale().x, mat.normal_scale().y],
-                toon_steps: mat.toon_steps(),
                 physical,
                 physical2,
                 physical3,
@@ -5814,16 +8822,32 @@ impl Renderer {
                 shader_flags,
                 kind: mat.kind(),
                 slots: mat.texture_slots(),
+                map_variant: None,
+                map_uniforms: mat.map_uniforms(),
+                env_group: mat.pbr_env().map(material_env_key),
                 instance_buf_idx: usize::MAX,
+                instance_stamp: 0,
                 instance_count: 1,
                 skin_idx: usize::MAX,
                 shader_idx: usize::MAX,
+                range: None,
+                morph: [0.0; 4],
+                morph_weights: [0.0; crate::core::MAX_MORPH_TARGETS],
+                morph_tex: (0, 0),
+                polygon_offset: mat.polygon_offset().map(|o| (o.factor.to_bits(), o.units.round() as i32)),
+                state: mat.render_state(),
             }
         };
 
         let cam_layers = camera.layers();
         let root = scene.root;
-        scene.arena.traverse_visible(root, &mut |_id, obj| {
+        self.instance_frame += 1;
+        // Meshes not drawn for a while (removed, hidden, culled away) give
+        // their buffers back. Generous, as a frame of several panes renders
+        // more than once.
+        let now = self.instance_frame;
+        self.instance_cache.retain(|_, c| now - c.frame < 64);
+        scene.arena.traverse_visible(root, &mut |obj_id, obj| {
             if !cam_layers.test(&obj.layers) {
                 return;
             }
@@ -5853,9 +8877,9 @@ impl Renderer {
                             direction: [dir.x, dir.y, dir.z, 0.0],
                             color: [c.r * l.intensity, c.g * l.intensity, c.b * l.intensity, 0.0],
                         };
-                        // First cast_shadow dir light becomes the shadow caster.
-                        if l.cast_shadow && n_dir == 0 && shadow_caster.is_none() {
-                            shadow_caster = Some((dir, l.shadow));
+                        if l.cast_shadow && casters.len() < MAX_SHADOW_RECORDS {
+                            casters.push(Caster::Dir { dir, settings: l.shadow });
+                            frame_u.dir_lights[n_dir].color[3] = casters.len() as f32;
                         }
                         n_dir += 1;
                     }
@@ -5870,9 +8894,14 @@ impl Renderer {
                             color: [c.r * l.intensity, c.g * l.intensity, c.b * l.intensity, 0.0],
                             params: [l.distance, l.decay, 0.0, 0.0],
                         };
-                        if l.cast_shadow && n_point == 0 && point_caster.is_none() {
-                            let radius = if l.distance > 0.0 { l.distance } else { 50.0 };
-                            point_caster = Some((p, radius, l.shadow));
+                        if l.cast_shadow {
+                            // three.js `PointLightShadow`: `light.distance ||
+                            // camera.far`.
+                            let radius = if l.distance > 0.0 { l.distance } else { l.shadow.camera_far };
+                            if casters.len() < MAX_SHADOW_RECORDS {
+                                casters.push(Caster::Point { pos: p, radius, settings: l.shadow });
+                                frame_u.point_lights[n_point].color[3] = casters.len() as f32;
+                            }
                         }
                         n_point += 1;
                     }
@@ -5891,8 +8920,9 @@ impl Renderer {
                             color: [c.r * l.intensity, c.g * l.intensity, c.b * l.intensity, 0.0],
                             params: [l.distance, l.decay, cos_outer, cos_inner],
                         };
-                        if l.cast_shadow && n_spot == 0 && spot_caster.is_none() {
-                            spot_caster = Some((p, dir, l.angle, l.shadow));
+                        if l.cast_shadow && casters.len() < MAX_SHADOW_RECORDS {
+                            casters.push(Caster::Spot { pos: p, dir, angle: l.angle, settings: l.shadow });
+                            frame_u.spot_lights[n_spot].color[3] = casters.len() as f32;
                         }
                         n_spot += 1;
                     }
@@ -5926,15 +8956,18 @@ impl Renderer {
                         // width runs along local +X, height along local +Y, and
                         // the emitting face looks down local -Z. Store half
                         // extents so the shader can form corners by ± directly.
+                        // Through the world matrix's rotation alone, as
+                        // three.js's `extractRotation`: a scaled light keeps
+                        // its `width` and `height`.
                         let pos = obj.world_position();
-                        let right = transform_direction(
-                            &obj.matrix_world,
-                            Vector3::new(l.width * 0.5, 0.0, 0.0),
-                        );
-                        let up = transform_direction(
-                            &obj.matrix_world,
-                            Vector3::new(0.0, l.height * 0.5, 0.0),
-                        );
+                        let unit = |v: Vector3| {
+                            let d = transform_direction(&obj.matrix_world, v);
+                            let len = (d.x * d.x + d.y * d.y + d.z * d.z).sqrt().max(1e-12);
+                            Vector3::new(d.x / len, d.y / len, d.z / len)
+                        };
+                        let (ax, ay) = (unit(Vector3::new(1.0, 0.0, 0.0)), unit(Vector3::new(0.0, 1.0, 0.0)));
+                        let right = Vector3::new(ax.x * l.width * 0.5, ax.y * l.width * 0.5, ax.z * l.width * 0.5);
+                        let up = Vector3::new(ay.x * l.height * 0.5, ay.y * l.height * 0.5, ay.z * l.height * 0.5);
                         let c = l.color;
                         frame_u.rect_lights[n_rect] = RectLightGpu {
                             position: [pos.x, pos.y, pos.z, 0.0],
@@ -5947,10 +8980,43 @@ impl Renderer {
                 },
                 ObjectKind::Mesh(mesh) => {
                     self.ensure_geometry(&mesh.geometry);
-                    let mut d = make_draw(&mesh.geometry, &mesh.material, obj, Topology::Triangle);
+                    // Morph targets: the per-draw uniforms and the geometry's
+                    // morph texture, shared by every group of the mesh.
+                    let morph = crate::core::morph_uniforms(&mesh.geometry, &mesh.morph_influences)
+                        .and_then(|u| Some((u, self.ensure_morph(&mesh.geometry)?)));
+                    let full = mesh.geometry.draw_count() as u32;
+                    // One draw per three.js render item: the whole draw range
+                    // with one material, or each group with its own — opaque
+                    // and transparent sorted per group, as three.js's render
+                    // lists are.
+                    for item in mesh.draws() {
+                    let material = item.material;
+                    let range = (item.start != 0 || item.end != full).then_some((item.start, item.end));
+                    if material.wireframe() {
+                        match range {
+                            None => self.ensure_wire_indices(&mesh.geometry),
+                            Some((a, b)) => self.ensure_wire_span(&mesh.geometry, a, b),
+                        }
+                    }
+                    let with_span = |mut d: DrawMesh| -> DrawMesh {
+                        d.range = range;
+                        if let Some(((header, weights), tex)) = morph {
+                            d.morph = header;
+                            d.morph_weights = weights;
+                            d.morph_tex = tex;
+                        }
+                        d
+                    };
+                    let mut d = with_span(make_draw(&mesh.geometry, material, obj, Topology::Triangle));
                     // Custom-shader material: route to a per-source pipeline and
                     // stash its user data for the @group(4) bind group.
-                    if let Material::Shader(sm) = &*mesh.material {
+                    if let Material::Shader(sm) = &**material {
+                        // Morph targets reach a shader material as three.js's
+                        // `#include <morphtarget_vertex>` does: the default
+                        // vertex stage (`standard_vertex_morphed`) applies
+                        // them, and a custom one calls `morph_position` /
+                        // `morph_normal` / `morph_color` itself. Its group 2
+                        // then carries the geometry's morph texture.
                         let hash = custom_shader_hash(&sm.fragment, sm.vertex.as_deref());
                         let transparent = sm.transparent || sm.opacity < 1.0;
                         d.topology = Topology::Custom(
@@ -5958,7 +9024,6 @@ impl Renderer {
                             transparent,
                             sm.screen_space,
                             sm.side,
-                            sm.depth_write,
                         );
                         d.shader_idx = shader_data.len();
                         let pad = |s: &Vec<f32>| {
@@ -5971,23 +9036,43 @@ impl Renderer {
                         shader_data.push(ShaderDrawData {
                             fragment: sm.fragment.clone(),
                             vertex: sm.vertex.clone(),
-                            depth_write: sm.depth_write,
                             data: sm.data_slots(),
                             storage: [pad(&sm.storage0), pad(&sm.storage1), pad(&sm.storage2)],
                             textures: sm.textures.clone(),
+                            volumes: sm.volumes.clone(),
+                            instanced: false,
+                            custom_buf: 0,
                         });
                     }
                     // Route transparent PhysicalMaterials to single-layer glass
                     // (depth prepass + color) or weighted-blended OIT.
                     if d.topology == Topology::TriangleAlpha {
-                        match mesh.material.transparency_mode() {
+                        // Where OIT cannot run (WebGL2 blends every attachment
+                        // alike), its glass draws as `Glass` does — tinted,
+                        // lit and shadowed, one layer deep — rather than not
+                        // at all.
+                        let mode = match material.transparency_mode() {
+                            crate::materials::TransparencyMode::Oit if !oit_available => {
+                                crate::materials::TransparencyMode::Glass
+                            }
+                            m => m,
+                        };
+                        match mode {
                             crate::materials::TransparencyMode::Glass => {
-                                draws.push(make_draw(
+                                let mut prepass = with_span(make_draw(
                                     &mesh.geometry,
-                                    &mesh.material,
+                                    material,
                                     obj,
                                     Topology::GlassDepth,
                                 ));
+                                prepass.state = crate::materials::RenderState::DEFAULT;
+                                draws.push(prepass);
+                                // The tint half, then (as `d`) the light half.
+                                let mut tint = d.clone();
+                                tint.topology = Topology::GlassTint;
+                                tint.state = crate::materials::RenderState::DEFAULT;
+                                tint.cast_shadow = false;
+                                draws.push(tint);
                                 d.topology = Topology::GlassColor;
                             }
                             crate::materials::TransparencyMode::Oit => d.topology = Topology::Oit,
@@ -5996,131 +9081,65 @@ impl Renderer {
                             }
                             crate::materials::TransparencyMode::Blend => {}
                         }
+                        // These modes own their depth state (a prepass, an
+                        // accumulation target); the material's does not apply.
+                        if d.topology != Topology::TriangleAlpha {
+                            d.state = crate::materials::RenderState::DEFAULT;
+                        }
                     }
                     draws.push(d);
+                    }
                 }
                 ObjectKind::LineSegments(ls) => {
                     self.ensure_geometry(&ls.geometry);
-                    draws.push(make_draw(&ls.geometry, &ls.material, obj, Topology::Line));
+                    // three.js applies the draw range to lines too.
+                    let full = ls.geometry.draw_count() as u32;
+                    let Some((start, end)) = ls.geometry.draw_span(None) else {
+                        return;
+                    };
+                    let mut d = make_draw(&ls.geometry, &ls.material, obj, Topology::Line);
+                    d.range = (start != 0 || end != full).then_some((start, end));
+                    draws.push(d);
                 }
                 ObjectKind::Points(p) => {
-                    // three.js's PointsMaterial.size is a screen-space pixel
-                    // size. WebGPU's PointList topology can't honor that —
-                    // it always renders 1 fragment per point. We instead emit
-                    // one camera-facing sprite-style draw per point, sized to
-                    // match three.js's pixel-space convention.
-                    let positions = p.geometry.get_attribute("position");
-                    let size = match &*p.material {
-                        crate::Material::Points(pm) => pm.size,
-                        _ => 1.0,
+                    // three.js `Points`: one draw, one instance per point,
+                    // each expanded to a `size`-pixel quad by `vs_points`
+                    // (WebGPU has no point size). `params.x` carries the size
+                    // in device pixels (× the pixel ratio, as three.js's
+                    // `size` uniform), `params.w` whether it attenuates.
+                    self.ensure_geometry(&p.geometry);
+                    let full = p.geometry.draw_count() as u32;
+                    let Some((start, end)) = p.geometry.draw_span(None) else {
+                        return;
                     };
-                    let mat = &*p.material;
-                    let nm3 = Matrix3::normal_matrix(&obj.matrix_world);
-                    let c = mat.color();
-                    if let Some(positions) = positions {
-                        // three.js renders points as `size`-pixel squares via
-                        // `gl_PointSize`. WebGPU has no per-vertex point size, so
-                        // we emit a sprite quad. The sprite vertex shader scales
-                        // by the model matrix's basis lengths and applies the
-                        // perspective projection — so for the right at-distance
-                        // size we work backwards from the desired NDC width.
-                        //
-                        // For a perspective camera, an object at view-z `vz` has
-                        // a world-space width of `2 * vz / proj[0][0]` per unit
-                        // of NDC. We want a sprite of `size` pixels wide on
-                        // an 800-wide canvas (= size/400 NDC), so the model
-                        // matrix's X basis length should be:
-                        //   sx = (size / 400) * vz / proj[0][0]
-                        let viewport_h = 600.0_f32;
-                        let proj00 = proj_m.elements[0];
-                        let canvas_w = 800.0_f32;
-                        let _ = viewport_h;
-                        let cnt = positions.count();
-                        for vi in 0..cnt {
-                            let px = positions.array[vi * 3];
-                            let py = positions.array[vi * 3 + 1];
-                            let pz = positions.array[vi * 3 + 2];
-                            let m_local = crate::math::Matrix4::translation(
-                                crate::math::Vector3::new(px, py, pz),
-                            );
-                            let mut model = obj.matrix_world.multiply(&m_local);
-                            // Project the point centre to view space to get its z, then
-                            // size the quad to match the requested pixel size at that depth.
-                            let wp = crate::math::Vector3::new(
-                                model.elements[12],
-                                model.elements[13],
-                                model.elements[14],
-                            );
-                            let vz = (view_m.elements[2] * wp.x
-                                + view_m.elements[6] * wp.y
-                                + view_m.elements[10] * wp.z
-                                + view_m.elements[14])
-                                .abs()
-                                .max(0.0001);
-                            let half_ndc = (size / canvas_w) * vz / proj00;
-                            // Sprite vs uses `in.position * sx`; the unit quad has corners
-                            // at ±0.5, so we want sx == size_in_world. Multiply by 2 because
-                            // pixel size means total quad width, not half.
-                            let sx = half_ndc * 2.0;
-                            let mut e = model.elements;
-                            for k in 0..3 {
-                                e[k] *= sx;
-                                e[4 + k] *= sx;
-                            }
-                            model.elements = e;
-                            let world_pos = crate::math::Vector3::new(e[12], e[13], e[14]);
-                            let svz = view_m.elements[2] * world_pos.x
-                                + view_m.elements[6] * world_pos.y
-                                + view_m.elements[10] * world_pos.z
-                                + view_m.elements[14];
-                            draws.push(DrawMesh {
-                                key: std::ptr::null::<BufferGeometry>(),
-                                topology: Topology::Sprite,
-                                view_z: svz,
-                                render_order: obj.render_order,
-                                in_frustum: true,
-                                cast_shadow: false,
-                                refract_capture: true,
-                                alpha_test: 0.0,
-                                model: model.elements,
-                                normal_matrix: mat3_to_mat4_array(&nm3),
-                                color: [c.r, c.g, c.b, mat.opacity()],
-                                emissive: [0.0; 4],
-                                specular: [0.0; 4],
-                                shininess_or_near: 0.0,
-                                opacity_or_far: mat.opacity(),
-                                roughness: 1.0,
-                                metalness: 0.0,
-                                ao_intensity: 1.0,
-                                normal_scale: [1.0, 1.0],
-                                toon_steps: 0,
-                                physical: [0.0; 4],
-                                physical2: [0.0; 4],
-                                physical3: [0.0; 4],
-                                physical4: [0.0; 4],
-                                physical5: [0.0; 4],
-                                displacement: [0.0; 4],
-                                uv_transform: [0.0, 0.0, 1.0, 1.0],
-                                atmos: [0.0; 4],
-                                twilight: [0.0; 4],
-                                eclipse: [0.0; 4],
-                                scatter: [0.0; 4],
-                                aurora: [0.0; 4],
-                                shader_flags: 0,
-                                kind: crate::materials::MaterialKind::Basic,
-                                slots: mat.texture_slots(),
-                                instance_buf_idx: usize::MAX,
-                                instance_count: 1,
-                                skin_idx: usize::MAX,
-                                shader_idx: usize::MAX,
-                            });
-                        }
-                    }
+                    let topology = if p.material.transparent() {
+                        Topology::PointAlpha
+                    } else {
+                        Topology::Point
+                    };
+                    let mut d = make_draw(&p.geometry, &p.material, obj, topology);
+                    d.range = (start != 0 || end != full).then_some((start, end));
+                    d.shininess_or_near = p.material.point_size() * self.pixel_ratio();
+                    d.metalness = p.material.point_size_attenuation() as u32 as f32;
+                    d.cast_shadow = false;
+                    draws.push(d);
                 }
                 ObjectKind::Sprite(sprite) => {
                     // Inline construction — the sprite quad is built-in, so we
                     // can't reuse make_draw (which keys off an Arc<BufferGeometry>).
                     let mat = &*sprite.material;
+                    // three.js `sprite_vert` uniforms, in slots the sprite
+                    // shader has to itself (see `vs_sprite`): the centre as
+                    // an offset from the middle, so that zero — what point
+                    // draws leave there — is three.js's default (0.5, 0.5),
+                    // and the rotation; `params13.x` set means size
+                    // attenuation off.
+                    let (rotation, size_attenuation) = match mat {
+                        Material::Sprite(m) => (m.rotation, m.size_attenuation),
+                        _ => (0.0, true),
+                    };
+                    let sprite_params =
+                        [sprite.center.x - 0.5, sprite.center.y - 0.5, 0.0, rotation];
                     let nm3 = Matrix3::normal_matrix(&obj.matrix_world);
                     let c = mat.color();
                     let sp = obj.world_position();
@@ -6133,10 +9152,15 @@ impl Renderer {
                         topology: Topology::Sprite,
                         view_z: svz,
                         render_order: obj.render_order,
+                        clip_plane: clip_plane_of(obj),
                         in_frustum: true,
+                        transmissive: false,
+                        shadow_transmits: false,
                         cast_shadow: false,
                         refract_capture: true,
-                        alpha_test: 0.0,
+                        alpha_test: mat.alpha_test(),
+                        side: mat.side(),
+                        shadow_side: mat.side(),
                         model: obj.matrix_world.elements,
                         normal_matrix: mat3_to_mat4_array(&nm3),
                         color: [c.r, c.g, c.b, mat.opacity()],
@@ -6148,26 +9172,36 @@ impl Renderer {
                         metalness: 0.0,
                         ao_intensity: 1.0,
                         normal_scale: [1.0, 1.0],
-                        toon_steps: 0,
                         physical: [0.0; 4],
                         physical2: [0.0; 4],
                         physical3: [0.0; 4],
                         physical4: [0.0; 4],
                         physical5: [0.0; 4],
-                        displacement: [0.0; 4],
+                        displacement: sprite_params,
                         uv_transform: [0.0, 0.0, 1.0, 1.0],
                         atmos: [0.0; 4],
                         twilight: [0.0; 4],
                         eclipse: [0.0; 4],
-                        scatter: [0.0; 4],
+                        scatter: [if size_attenuation { 0.0 } else { 1.0 }, 0.0, 0.0, 0.0],
                         aurora: [0.0; 4],
-                        shader_flags: 0,
+                        shader_flags: (if mat.tone_mapped() { 0 } else { FLAG_NO_TONE_MAP })
+                            | if mat.transparent() { 0 } else { FLAG_OPAQUE_OUT },
                         kind: mat.kind(),
                         slots: mat.texture_slots(),
+                        map_variant: None,
+                        map_uniforms: mat.map_uniforms(),
+                env_group: mat.pbr_env().map(material_env_key),
                         instance_buf_idx: usize::MAX,
+                instance_stamp: 0,
                         instance_count: 1,
                         skin_idx: usize::MAX,
                         shader_idx: usize::MAX,
+                        range: None,
+                        morph: [0.0; 4],
+                        morph_weights: [0.0; crate::core::MAX_MORPH_TARGETS],
+                        morph_tex: (0, 0),
+                        polygon_offset: None,
+                        state: mat.render_state(),
                     });
                 }
                 ObjectKind::InstancedMesh(im) => {
@@ -6175,45 +9209,172 @@ impl Renderer {
                     if im.transforms.is_empty() {
                         return;
                     }
+                    // Its draws: the draw range with one material, or every
+                    // group with its own from the material array — each one
+                    // instanced, as three.js's render list holds an
+                    // InstancedMesh with a material array.
+                    let items: Vec<DrawItem<std::sync::Arc<Material>>> = {
+                        let full = im.geometry.draw_count() as u32;
+                        im.draws()
+                            .into_iter()
+                            .map(|i| {
+                                (
+                                    i.material.clone(),
+                                    (i.start != 0 || i.end != full).then_some((i.start, i.end)),
+                                )
+                            })
+                            .collect()
+                    };
+                    if items.is_empty() {
+                        return;
+                    }
+                    for (material, range) in &items {
+                        if material.wireframe() {
+                            match range {
+                                None => self.ensure_wire_indices(&im.geometry),
+                                Some((a, b)) => self.ensure_wire_span(&im.geometry, *a, *b),
+                            }
+                        }
+                    }
+                    // Morph targets: one row per instance when the mesh has a
+                    // morph texture (`set_morph_at`), else the shared
+                    // influences as for a mesh.
+                    let row_len = im.morph_row_len();
+                    let per_instance = !im.morph_texture.is_empty()
+                        && im.morph_texture.len() == row_len * im.transforms.len();
+                    let morph = if per_instance {
+                        crate::core::morph_header(&im.geometry).and_then(|mut h| {
+                            h[3] = (h[3] as u32 | 16) as f32;
+                            let tex = self.ensure_instance_morph(
+                                im as *const crate::core::InstancedMesh as usize,
+                                &im.geometry,
+                                &im.morph_texture,
+                                im.transforms.len() as u32,
+                                row_len as u32,
+                            )?;
+                            Some(((h, [0.0; crate::core::MAX_MORPH_TARGETS]), tex))
+                        })
+                    } else {
+                        crate::core::morph_uniforms(&im.geometry, &im.morph_influences)
+                            .and_then(|u| Some((u, self.ensure_morph(&im.geometry)?)))
+                    };
                     // Twenty floats an instance: the matrix, then the tint.
                     // Instances past the end of `colors` are white, so a caller
                     // that never sets one pays four floats and nothing else.
-                    let mut matrices: Vec<f32> = Vec::with_capacity(im.transforms.len() * 20);
-                    for (i, t) in im.transforms.iter().enumerate() {
-                        matrices.extend_from_slice(&t.elements);
-                        let c = im.colors.get(i).copied().unwrap_or(crate::math::Color::WHITE);
-                        matrices.extend_from_slice(&[c.r, c.g, c.b, 1.0]);
-                    }
-                    let buf = wgpu::util::DeviceExt::create_buffer_init(
-                        &*self.device,
-                        &wgpu::util::BufferInitDescriptor {
-                            label: Some("threers instance buffer"),
-                            contents: bytemuck::cast_slice(&matrices),
-                            usage: wgpu::BufferUsages::VERTEX,
-                        },
-                    );
+                    // A mesh with an `instance_version` that has not moved
+                    // keeps last frame's buffer without being read at all.
+                    let version = im.instance_version.map(|v| (v, im.transforms.len()));
+                    let buf = match self.cached_instances(obj_id, 0, version) {
+                        Some(b) => b,
+                        None => {
+                            let mut matrices: Vec<f32> = Vec::with_capacity(im.transforms.len() * 20);
+                            for (i, t) in im.transforms.iter().enumerate() {
+                                matrices.extend_from_slice(&t.elements);
+                                let c = im.colors.get(i).copied().unwrap_or(crate::math::Color::WHITE);
+                                matrices.extend_from_slice(&[c.r, c.g, c.b, 1.0]);
+                            }
+                            self.instance_buffer(obj_id, 0, matrices, version)
+                        }
+                    };
                     let idx = instance_buffers.len();
                     instance_buffers.push(buf);
-                    let mut d = make_draw(&im.geometry, &im.material, obj, Topology::Instanced);
-                    d.instance_buf_idx = idx;
-                    d.instance_count = im.transforms.len() as u32;
-                    draws.push(d);
+                    // A `ShaderMaterial` reads the two custom columns too:
+                    // eight floats an instance, zero-padded, in slot 2.
+                    let custom_idx = items
+                        .iter()
+                        .any(|(m, _)| matches!(&**m, Material::Shader(_)))
+                        .then(|| {
+                            let b = match self.cached_instances(obj_id, 1, version) {
+                                Some(b) => b,
+                                None => {
+                                    let mut data: Vec<f32> = Vec::with_capacity(im.transforms.len() * 8);
+                                    for i in 0..im.transforms.len() {
+                                        data.extend_from_slice(&im.custom_row(0, i));
+                                        data.extend_from_slice(&im.custom_row(1, i));
+                                    }
+                                    self.instance_buffer(obj_id, 1, data, version)
+                                }
+                            };
+                            instance_buffers.push(b);
+                            instance_buffers.len() - 1
+                        });
+                    for (material, range) in &items {
+                        let mut d = make_draw(&im.geometry, material, obj, Topology::Instanced);
+                        d.range = *range;
+                        d.instance_buf_idx = idx;
+                        d.instance_stamp =
+                            self.instance_stamp(obj_id, 0) ^ self.instance_stamp(obj_id, 1).rotate_left(32);
+                        d.instance_count = im.transforms.len() as u32;
+                        if let Some(((header, weights), tex)) = morph {
+                            d.morph = header;
+                            d.morph_weights = weights;
+                            d.morph_tex = tex;
+                        }
+                        // Custom-shader material: its own pipeline, on the
+                        // instanced layout — salted so it never shares a cache
+                        // entry with the same material on a plain mesh.
+                        if let (Material::Shader(sm), Some(custom_buf)) = (&**material, custom_idx) {
+                            let hash = custom_shader_hash(&sm.fragment, sm.vertex.as_deref())
+                                ^ INSTANCED_CUSTOM_SALT;
+                            let transparent = sm.transparent || sm.opacity < 1.0;
+                            d.topology = Topology::Custom(hash, transparent, sm.screen_space, sm.side);
+                            d.shader_idx = shader_data.len();
+                            let pad = |s: &Vec<f32>| if s.is_empty() { vec![0.0f32] } else { s.clone() };
+                            shader_data.push(ShaderDrawData {
+                                fragment: sm.fragment.clone(),
+                                vertex: sm.vertex.clone(),
+                                data: sm.data_slots(),
+                                storage: [pad(&sm.storage0), pad(&sm.storage1), pad(&sm.storage2)],
+                                textures: sm.textures.clone(),
+                            volumes: sm.volumes.clone(),
+                                instanced: true,
+                                custom_buf,
+                            });
+                        }
+                        draws.push(d);
+                    }
                 }
                 ObjectKind::SkinnedMesh(sm) => {
                     self.ensure_geometry(&sm.geometry);
+                    let morph = crate::core::morph_uniforms(&sm.geometry, &sm.morph_influences)
+                        .and_then(|u| Some((u, self.ensure_morph(&sm.geometry)?)));
+                    let full = sm.geometry.draw_count() as u32;
+                    let items: Vec<DrawItem<&std::sync::Arc<Material>>> = sm
+                        .draws()
+                        .into_iter()
+                        .map(|i| (i.material, (i.start != 0 || i.end != full).then_some((i.start, i.end))))
+                        .collect();
+                    for &(material, range) in &items {
+                        if material.wireframe() {
+                            match range {
+                                None => self.ensure_wire_indices(&sm.geometry),
+                                Some((a, b)) => self.ensure_wire_span(&sm.geometry, a, b),
+                            }
+                        }
+                    }
+                    let with_span = |mut d: DrawMesh, range: Option<(u32, u32)>| -> DrawMesh {
+                        d.range = range;
+                        if let Some(((header, weights), tex)) = morph {
+                            d.morph = header;
+                            d.morph_weights = weights;
+                            d.morph_tex = tex;
+                        }
+                        d
+                    };
                     let key = geom_cache_key(&sm.geometry);
                     // Upload joints+weights to slot-1 vertex buffer (cached per-geometry).
                     if !self.skin_attr_cache.contains_key(&key) {
                         let joints = sm.geometry.get_attribute("joint");
                         let weights = sm.geometry.get_attribute("weight");
                         let (Some(j), Some(w)) = (joints, weights) else {
-                            // Geometry isn't skin-equipped; draw at rest.
-                            draws.push(make_draw(
-                                &sm.geometry,
-                                &sm.material,
-                                obj,
-                                Topology::Triangle,
-                            ));
+                            // Geometry isn't skin-equipped; draw at rest
+                            // (morphed).
+                            for &(material, range) in &items {
+                                draws.push(with_span(
+                                    make_draw(&sm.geometry, material, obj, Topology::Triangle),
+                                    range,
+                                ));
+                            }
                             return;
                         };
                         let count = j.count();
@@ -6257,12 +9418,23 @@ impl Renderer {
                     );
                     // Defer creating the combined mesh+skin bind group until
                     // after per_mesh is populated below — we need the per-mesh
-                    // uniform buffer at binding 0.
-                    let idx = skin_data.len();
-                    skin_data.push(SkinData { bone_buf, bg: None });
-                    let mut d = make_draw(&sm.geometry, &sm.material, obj, Topology::Skinned);
-                    d.skin_idx = idx;
-                    draws.push(d);
+                    // uniform buffer at binding 0. One per draw: each group
+                    // has its own mesh uniform, and the bones are shared.
+                    let bone_hash = hash_words(bone_data.iter().map(|v| v.to_bits() as u64));
+                    for &(material, range) in &items {
+                        let idx = skin_data.len();
+                        skin_data.push(SkinData {
+                            bone_buf: bone_buf.clone(),
+                            bg: None,
+                            bone_hash,
+                        });
+                        let mut d = with_span(
+                            make_draw(&sm.geometry, material, obj, Topology::Skinned),
+                            range,
+                        );
+                        d.skin_idx = idx;
+                        draws.push(d);
+                    }
                 }
                 ObjectKind::Group => {}
             }
@@ -6277,20 +9449,75 @@ impl Renderer {
         fn ord_class(t: Topology) -> u8 {
             match t {
                 Topology::GlassDepth => 1,
-                Topology::GlassColor => 2,
-                Topology::TriangleAlpha | Topology::Sprite | Topology::Oit | Topology::Refract => 3,
+                Topology::GlassTint | Topology::GlassColor => 2,
+                Topology::TriangleAlpha
+                | Topology::PointAlpha
+                | Topology::Sprite
+                | Topology::Oit
+                | Topology::Refract
+                | Topology::InstancedAlpha
+                | Topology::SkinnedAlpha => 3,
                 Topology::Custom(_, transparent, ..) if transparent => 3,
                 _ => 0,
             }
         }
+        // three.js renders the transmissive list between the opaque and the
+        // transparent ones, so it can read the opaque scene behind it.
+        let class = |d: &DrawMesh| -> u8 {
+            match ord_class(d.topology) {
+                0 if d.transmissive => 1,
+                0 => 0,
+                c => c + 1,
+            }
+        };
+        // three.js draws a blended DoubleSide mesh twice — its back faces,
+        // then its front faces (`WebGLRenderer.renderObject`, with the default
+        // `forceSinglePass: false`) — so a translucent surface's far side always
+        // lies under its near side. In one unculled pass the triangles blend
+        // in index order instead, and a closed translucent shell shows its own
+        // back faces over its front ones as triangle-shaped shards. The sort
+        // below is stable and the pair shares every key, so it stays adjacent
+        // and in this order. The back half casts no shadow: the front half's
+        // record already covers a double-sided caster. Meshes, instanced and
+        // skinned alike; a custom shader's pipeline is built apart from the cull
+        // variants and still draws in one pass.
+        let mut two_pass = Vec::with_capacity(draws.len());
+        for d in draws.drain(..) {
+            let blended_faces = matches!(
+                d.topology,
+                Topology::TriangleAlpha | Topology::InstancedAlpha | Topology::SkinnedAlpha
+            );
+            if blended_faces && d.side == 2 && !d.transmissive {
+                let mut back = d.clone();
+                back.side = 1;
+                back.cast_shadow = false;
+                let mut front = d;
+                front.side = 0;
+                two_pass.push(back);
+                two_pass.push(front);
+            } else {
+                two_pass.push(d);
+            }
+        }
+        draws = two_pass;
+        // Opaque, then transmissive, then the translucent family (glass
+        // prepass, glass colour, ordinary alpha). Within the family
+        // `renderOrder` comes first, as it does in three.js's transparent list,
+        // and only then the family's own order — so with equal render orders
+        // every glass prepass still precedes every glass colour pass and both
+        // precede ordinary alpha, while a glass shell given a higher order is
+        // drawn after the translucent things inside it, whose colour it then
+        // blends over instead of hiding them behind its prepass depth.
+        let tier = |d: &DrawMesh| -> u8 { class(d).min(2) };
         draws.sort_by(|a, b| {
-            ord_class(a.topology)
-                .cmp(&ord_class(b.topology))
+            tier(a)
+                .cmp(&tier(b))
                 .then(a.render_order.cmp(&b.render_order))
+                .then(class(a).cmp(&class(b)))
                 .then_with(|| {
                     // For ordinary transparents we want farther-from-camera first.
                     // view_z is negative in front of the camera; smaller = farther.
-                    if ord_class(a.topology) == 3 {
+                    if ord_class(a.topology) == 3 && ord_class(b.topology) == 3 {
                         a.view_z
                             .partial_cmp(&b.view_z)
                             .unwrap_or(std::cmp::Ordering::Equal)
@@ -6333,12 +9560,15 @@ impl Renderer {
                         | Topology::TriangleWire
                         | Topology::Line
                         | Topology::GlassDepth
+                        | Topology::GlassTint
                         | Topology::GlassColor
                         | Topology::Oit
                         | Topology::Refract
                 ) && d.instance_count == 1
                     && d.skin_idx == usize::MAX
-                    && d.shader_idx == usize::MAX;
+                    && d.shader_idx == usize::MAX
+                    // A morphed mesh can leave its rest-pose bounds.
+                    && d.morph[0] == 0.0;
                 if !plain {
                     continue;
                 }
@@ -6349,6 +9579,21 @@ impl Renderer {
                 d.in_frustum = frustum.intersects_sphere(&world);
             }
         }
+        // The transmission capture passes (`capture_transmission`): the first
+        // draws everything but the transmissive objects, the second only the
+        // back faces of the double-sided ones, as three.js's
+        // `renderTransmissionPass` does. Through `in_frustum`, so the shadow
+        // passes still see every caster.
+        if let Some(back) = self.capturing_transmission {
+            for d in draws.iter_mut() {
+                let keep = if back { d.transmissive && d.side == 2 } else { !d.transmissive };
+                if !keep {
+                    d.in_frustum = false;
+                } else if back {
+                    d.side = 1;
+                }
+            }
+        }
         self.cull_stats = (
             draws.iter().filter(|d| d.in_frustum).count(),
             draws.iter().filter(|d| !d.in_frustum).count(),
@@ -6356,54 +9601,156 @@ impl Renderer {
 
         frame_u.ambient = [ambient[0], ambient[1], ambient[2], 0.0];
         frame_u.light_counts = [n_dir as u32, n_point as u32, n_spot as u32, n_hemi as u32];
-        frame_u.light_counts2 = [n_rect as u32, 0, 0, 0];
+        // w: the bound capture's mip count — the stand-in's one while a capture
+        // pass draws, the capture's after it.
+        let capture_levels = match (self.capturing_transmission, &self.transmission) {
+            (Some(false), _) | (None, None) => 1,
+            (Some(true), Some(c)) | (None, Some(c)) => c.levels,
+            (Some(true), None) => 1,
+        };
+        frame_u.light_counts2 = [
+            n_rect as u32,
+            self.specular_antialiasing as u32,
+            self.reflective_transparency as u32,
+            capture_levels,
+        ];
 
-        // Shadow VP: orthographic from the caster light's direction. Camera fits
-        // a fixed cube centered on the world origin (matches the default
-        // ShadowSettings.camera_size). For a richer integration the box would
-        // track the visible meshes' AABB.
-        if let Some((dir, settings)) = shadow_caster {
-            // The map is allocated before any light exists to ask for a size,
-            // so the first frame that names one reallocates. `map_size` used to
-            // be read and discarded, which is a worse failure than not offering
-            // it: the caller sets 4096, sees no error, and gets 1024.
-            self.ensure_shadow_size(settings.map_size);
-            frame_u.shadow_texel[0] = 1.0 / self.shadow_size as f32;
-            let s = settings.camera_size;
-            let light_eye = -dir.normalize() * (s * 1.5);
-            let light_view = Matrix4::look_at(light_eye, Vector3::ZERO, Vector3::UP);
-            let light_proj =
-                Matrix4::orthographic(-s, s, s, -s, settings.camera_near, settings.camera_far);
-            let light_vp = light_proj.multiply(&light_view);
-            frame_u.shadow_vp = light_vp.elements;
-            frame_u.shadow_params[0] = 1.0;
-            frame_u.shadow_params[1] = settings.bias.max(0.0);
-            // `normal_bias` was declared, documented and then never read — the
-            // same failure the `map_size` note above describes. It is read now.
-            frame_u.shadow_texel[1] = settings.normal_bias.max(0.0);
+        // Each shadow-casting light's record — layers, matrices, biases and
+        // filter — and the passes that draw its maps. A directional light's
+        // single map fits a fixed cube on the world origin
+        // (`ShadowSettings::camera_size`), so it depends on lights and
+        // casters, never on the camera; cascades follow the camera.
+        //
+        // The maps are allocated before any light exists to ask for a size,
+        // so the first frame that names one reallocates. `map_size` used to be
+        // read and discarded, which is a worse failure than not offering it:
+        // the caller sets 4096, sees no error, and gets 1024.
+        let layers_of = |kind: u8| -> usize {
+            casters
+                .iter()
+                .filter(|c| matches!((kind, c), (0, Caster::Dir { .. }) | (1, Caster::Spot { .. }) | (2, Caster::Point { .. })))
+                .map(Caster::layers)
+                .sum()
+        };
+        let (dir_layers, spot_layers, point_layers) = (layers_of(0), layers_of(1), layers_of(2));
+        self.ensure_shadow_arrays(
+            casters
+                .iter()
+                .filter_map(|c| match c {
+                    Caster::Dir { settings, .. } => Some(settings.map_size),
+                    _ => None,
+                })
+                .max()
+                .unwrap_or(0),
+            dir_layers,
+            spot_layers,
+            point_layers / 6,
+        );
+        let mut shadow_passes: Vec<ShadowPass> = Vec::new();
+        let mut next_layer = [0usize; 3];
+        for (r, caster) in casters.iter().enumerate() {
+            let settings = caster.settings();
+            let filter = settings.filter.unwrap_or(self.shadow_type).code();
+            let bias = settings.bias.max(0.0);
+            let normal_bias = settings.normal_bias.max(0.0);
+            let mut rec = ShadowRecordGpu::zeroed();
+            match *caster {
+                Caster::Dir { dir, settings } => {
+                    let size = self.dir_shadows.size;
+                    let texel = 1.0 / size as f32;
+                    let layer = next_layer[0];
+                    let cascades = caster.layers();
+                    next_layer[0] += cascades;
+                    // The light's size as a penumbra per unit of normalised
+                    // depth, in map uv: an angle times the depth range over
+                    // the map's width. Cascades keep that ratio fixed (see
+                    // `cascade_frusta`), so one number serves them all.
+                    let angle = if settings.light_size > 0.0 { settings.light_size } else { 0.02 };
+                    let (depth_range, width) = if cascades > 1 {
+                        (12.0, 2.0)
+                    } else {
+                        (settings.camera_far - settings.camera_near, 2.0 * settings.camera_size)
+                    };
+                    let scale = angle * depth_range / width.max(1e-6);
+                    rec.info = [0, layer as u32, cascades as u32, filter];
+                    rec.params = [bias, normal_bias, settings.radius.max(0.0) * texel, texel];
+                    rec.pcss = [(scale * 0.25).clamp(2.0 * texel, 0.1), 0.0, 0.0, scale];
+                    if cascades > 1 {
+                        for (c, (vp, far)) in cascade_frusta(&view_m, &camera.projection_matrix(), dir, &settings, size).into_iter().enumerate() {
+                            rec.vp[c] = vp;
+                            rec.extra[c] = far;
+                            shadow_passes.push(ShadowPass { kind: ShadowKind::Dir, layer: (layer + c) as u32, vp, pos: [0.0; 4] });
+                        }
+                    } else {
+                        let s = settings.camera_size;
+                        let light_eye = -dir.normalize() * (s * 1.5);
+                        let light_view = Matrix4::look_at(light_eye, Vector3::ZERO, Vector3::UP);
+                        let light_proj =
+                            Matrix4::orthographic(-s, s, s, -s, settings.camera_near, settings.camera_far);
+                        let vp = light_proj.multiply(&light_view).elements;
+                        rec.vp[0] = vp;
+                        rec.extra = [f32::MAX; 4];
+                        shadow_passes.push(ShadowPass { kind: ShadowKind::Dir, layer: layer as u32, vp, pos: [0.0; 4] });
+                    }
+                }
+                Caster::Spot { pos, dir, angle, settings } => {
+                    let texel = 1.0 / self.spot_shadows.size as f32;
+                    let layer = next_layer[1];
+                    next_layer[1] += 1;
+                    let target = pos + dir.normalize();
+                    let light_view = Matrix4::look_at(pos, target, Vector3::UP);
+                    // Perspective frustum: fov = 2 * outer_angle to cover the cone.
+                    let fov = (angle * 2.0).clamp(0.05, std::f32::consts::PI - 0.05);
+                    let light_proj =
+                        Matrix4::perspective(fov, 1.0, settings.camera_near, settings.camera_far);
+                    let vp = light_proj.multiply(&light_view).elements;
+                    // The light's width over the frustum's width at unit
+                    // distance: the penumbra in uv per unit of (receiver −
+                    // blocker) / (blocker · receiver).
+                    let size = if settings.light_size > 0.0 { settings.light_size } else { 0.5 };
+                    let scale = size / (2.0 * (fov * 0.5).tan());
+                    rec.info = [1, layer as u32, 1, filter];
+                    rec.params = [bias, normal_bias, settings.radius.max(0.0) * texel, texel];
+                    rec.pcss = [(scale * 0.05).clamp(2.0 * texel, 0.1), settings.camera_near, settings.camera_far, scale];
+                    rec.vp[0] = vp;
+                    shadow_passes.push(ShadowPass { kind: ShadowKind::Spot, layer: layer as u32, vp, pos: [0.0; 4] });
+                }
+                Caster::Point { pos, radius, settings } => {
+                    // The filter disc lies across the direction to the light,
+                    // a face texel (`2 / size` of a unit cube face) per unit
+                    // of radius.
+                    let texel = 2.0 / POINT_SHADOW_SIZE as f32;
+                    let layer = next_layer[2];
+                    next_layer[2] += 6;
+                    let at = [pos.x, pos.y, pos.z, radius];
+                    let size = if settings.light_size > 0.0 { settings.light_size } else { 0.5 };
+                    rec.info = [2, layer as u32, 1, filter];
+                    rec.params = [bias, normal_bias, settings.radius.max(0.0) * texel, texel];
+                    rec.extra = at;
+                    rec.pcss = [(size * 0.05).clamp(2.0 * texel, 0.2), 0.0, 0.0, size];
+                    for face in 0..6 {
+                        shadow_passes.push(ShadowPass {
+                            kind: ShadowKind::Point,
+                            layer: (layer + face) as u32,
+                            vp: point_face_vp(pos, radius, face),
+                            pos: at,
+                        });
+                    }
+                }
+            }
+            frame_u.shadows[r] = rec;
         }
-        if let Some((pos, radius, _settings)) = point_caster {
-            frame_u.point_shadow_pos = [pos.x, pos.y, pos.z, radius];
-        }
-        if let Some((pos, dir, angle, settings)) = spot_caster {
-            let target = pos + dir.normalize();
-            let light_view = Matrix4::look_at(pos, target, Vector3::UP);
-            // Perspective frustum: fov = 2 * outer_angle to cover the cone.
-            let fov = (angle * 2.0).clamp(0.05, std::f32::consts::PI - 0.05);
-            let light_proj =
-                Matrix4::perspective(fov, 1.0, settings.camera_near, settings.camera_far);
-            let light_vp = light_proj.multiply(&light_view);
-            frame_u.spot_shadow_vp = light_vp.elements;
-            frame_u.shadow_params[2] = 1.0;
-            frame_u.shadow_params[3] = settings.bias.max(0.0);
-        }
+        frame_u.shadow_info = [casters.len() as u32, 0, 0, 0];
 
         // Sync environment cubemap. Upload on first sight, rebuild bind group on change.
-        let env_key = scene.environment.as_ref().map(cube_cache_key);
+        // A cube texture is prefiltered first, as three.js's `WebGLCubeUVMaps`
+        // does for every Standard/Physical environment.
+        let scene_env_cube = scene.environment.as_ref().map(|e| self.prefiltered(e));
+        let env_key = scene_env_cube.as_ref().map(cube_cache_key);
         let env_rt_id = scene.environment_cube_rt;
         if self.env_dirty || env_key != self.env_cached_key || env_rt_id != self.env_cached_rt_id {
             let mut env_map_params = [0.0_f32; 4];
-            if let Some(env) = &scene.environment {
+            if let Some(env) = &scene_env_cube {
                 let k = cube_cache_key(env);
                 if !self.cube_cache.contains_key(&k) {
                     let gc = GpuCubeTexture::upload(&self.device, &self.queue, env);
@@ -6419,7 +9766,7 @@ impl Renderer {
                 }
             }
             frame_u.env_map_params = env_map_params;
-            let cube_uv_view: &wgpu::TextureView = if let Some(env) = &scene.environment {
+            let cube_uv_view: &wgpu::TextureView = if let Some(env) = &scene_env_cube {
                 self.cube_cache
                     .get(&cube_cache_key(env))
                     .and_then(|gc| gc.cube_uv_view.as_ref())
@@ -6431,7 +9778,7 @@ impl Renderer {
                 self.cube_rt_view_cache
                     .get(&rt_id)
                     .unwrap_or(&self.default_env_cube.view)
-            } else if let Some(env) = &scene.environment {
+            } else if let Some(env) = &scene_env_cube {
                 &self.cube_cache[&cube_cache_key(env)].view
             } else {
                 &self.default_env_cube.view
@@ -6443,7 +9790,7 @@ impl Renderer {
             // chain worth walking.
             self.env_max_mip = if scene.environment_cube_rt.is_some() {
                 0.0
-            } else if let Some(env) = &scene.environment {
+            } else if let Some(env) = &scene_env_cube {
                 let levels = self.cube_cache[&cube_cache_key(env)]
                     .texture
                     .mip_level_count();
@@ -6457,15 +9804,19 @@ impl Renderer {
                 "threers env bg",
                 view,
                 &self.env_sampler,
-                &self.shadow_view,
+                &self.dir_shadows.view,
                 &self.shadow_sampler,
-                &self.spot_shadow_view,
+                &self.spot_shadows.view,
                 &self.spot_shadow_sampler,
-                &self.point_shadow_cube_view,
+                &self.point_shadows.view,
                 &self.point_shadow_sampler,
                 cube_uv_view,
+                &self.env_uniform,
+                &self.ltc.1,
             );
             self.env_dirty = false;
+            // Theirs share the shadow-map views just rebound.
+            self.material_env_groups.clear();
             self.env_cached_key = env_key;
             self.env_cached_rt_id = env_rt_id;
         }
@@ -6473,7 +9824,7 @@ impl Renderer {
         // has to be set on every frame: the bind-group block above only runs
         // when the environment changes, and `frame_u` starts from `Default`.
         frame_u.env_map_params[2] = self.env_max_mip;
-        if let Some(env) = &scene.environment {
+        if let Some(env) = &scene_env_cube {
             if let Some(atlas) = &env.cube_uv_atlas {
                 frame_u.env_map_params = [
                     atlas.texel_width,
@@ -6483,55 +9834,142 @@ impl Renderer {
                 ];
             }
         }
+        // The scene's environment as group 3 reads it: three.js's
+        // `scene.environmentIntensity` and `environmentRotation`.
+        let scene_env = EnvUniforms {
+            params: frame_u.env_map_params,
+            info: [has_env as u32 as f32, scene.environment_intensity, 0.0, 0.0],
+            rot: crate::materials::environment_lookup_rows(
+                scene.environment_rotation,
+                scene.environment_cube_rt.is_none()
+                    && scene_env_cube.as_ref().is_some_and(|e| e.cube_uv_atlas.is_none()),
+            ),
+        };
+        self.queue.write_buffer(&self.env_uniform, 0, bytemuck::bytes_of(&scene_env));
 
         // -- Ensure every texture referenced in this frame is uploaded. --
+        // Every role's map — the list `material_maps` binds from, so a new
+        // role cannot be bound without being uploaded.
         for d in &draws {
-            self.ensure_slot_uploaded(&d.slots.map);
-            self.ensure_slot_uploaded(&d.slots.normal_map);
-            self.ensure_slot_uploaded(&d.slots.roughness_map);
-            self.ensure_slot_uploaded(&d.slots.metalness_map);
-            self.ensure_slot_uploaded(&d.slots.ao_map);
-            self.ensure_slot_uploaded(&d.slots.emissive_map);
-            self.ensure_slot_uploaded(&d.slots.matcap_map);
-            self.ensure_slot_uploaded(&d.slots.displacement_map);
-            self.ensure_slot_uploaded(&d.slots.cloud_shadow_map);
+            for (_, t) in super::material_maps::role_textures(&d.slots) {
+                self.ensure_slot_uploaded(&t.cloned());
+            }
+            // A Standard/Physical material's own `envMap` prefiltered, as the
+            // scene's is; a Basic/Lambert/Phong one sampled as it is.
+            let pbr = d.slots.pbr_env_map.as_ref().map(|c| self.prefiltered(c));
+            for cube in [d.slots.env_map.as_ref(), pbr.as_ref()].into_iter().flatten() {
+                let k = cube_cache_key(cube);
+                if !self.cube_cache.contains_key(&k) {
+                    let gc = GpuCubeTexture::upload(&self.device, &self.queue, cube);
+                    self.cube_cache.insert(k, gc);
+                }
+            }
+        }
+        // Group 3 for each Standard/Physical material's own `envMap`.
+        for d in &draws {
+            let (Some(key), Some(source)) = (d.env_group, d.slots.pbr_env_map.as_ref()) else {
+                continue;
+            };
+            if self.material_env_groups.contains_key(&key) {
+                continue;
+            }
+            let cube = &self.prefiltered(source);
+            let gc = &self.cube_cache[&cube_cache_key(cube)];
+            let u = EnvUniforms::of(cube, gc, f32::from_bits(key.1), crate::math::Euler {
+                x: f32::from_bits(key.2[0]),
+                y: f32::from_bits(key.2[1]),
+                z: f32::from_bits(key.2[2]),
+                order: crate::math::EulerOrder::ALL[key.2[3] as usize],
+            });
+            let buf = wgpu::util::DeviceExt::create_buffer_init(
+                &*self.device,
+                &wgpu::util::BufferInitDescriptor {
+                    label: Some("threers material env uniforms"),
+                    contents: bytemuck::bytes_of(&u),
+                    usage: wgpu::BufferUsages::UNIFORM,
+                },
+            );
+            let bg = env_bind_group!(
+                self.device,
+                &self.env_bgl,
+                "threers material env bg",
+                &gc.view,
+                &self.env_sampler,
+                &self.dir_shadows.view,
+                &self.shadow_sampler,
+                &self.spot_shadows.view,
+                &self.spot_shadow_sampler,
+                &self.point_shadows.view,
+                &self.point_shadow_sampler,
+                gc.cube_uv_view.as_ref().unwrap_or(&self.default_cube_uv_view),
+                &buf,
+                &self.ltc.1,
+            );
+            self.material_env_groups.insert(key, (buf, bg));
         }
 
-        // -- Ensure pool capacity. --
-        while self.per_mesh.len() < draws.len() {
-            let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("threers mesh uniform"),
-                size: std::mem::size_of::<MeshUniforms>() as u64,
+        // -- Ensure pool capacity: the uniform arena, and a mesh bind group
+        // over each draw's slice of it. Grown by half again, so a scene
+        // gaining meshes one at a time does not rebuild it every frame. --
+        let stride = self.mesh_stride;
+        let mesh_size = wgpu::BufferSize::new(std::mem::size_of::<MeshUniforms>() as u64);
+        let capacity = self.mesh_arena.as_ref().map_or(0, |b| (b.size() / stride) as usize);
+        if capacity < draws.len() {
+            let capacity = (draws.len() + draws.len() / 2).max(64);
+            let arena = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("threers mesh uniforms"),
+                size: capacity as u64 * stride,
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
-            let mesh_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("threers mesh bg"),
-                layout: &self.mesh_bgl,
-                entries: &[wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: buf.as_entire_binding(),
-                }],
-            });
-            // Texture bind group is rebuilt per-frame per-mesh below, but we
-            // need a placeholder; we'll overwrite the pool entry in-place each
-            // frame. Build a "default everything" tex bg for initialization.
-            let tex_bg = std::sync::Arc::new(self.make_default_tex_bg());
-            self.per_mesh.push((buf, mesh_bg, tex_bg));
+            let bind = |i: usize| {
+                self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("threers mesh bg"),
+                    layout: &self.mesh_bgl,
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                            buffer: &arena,
+                            offset: i as u64 * stride,
+                            size: mesh_size,
+                        }),
+                    }],
+                })
+            };
+            let rebuilt: Vec<wgpu::BindGroup> = (0..capacity).map(bind).collect();
+            for (i, mesh_bg) in rebuilt.into_iter().enumerate() {
+                if let Some(entry) = self.per_mesh.get_mut(i) {
+                    entry.0 = i as u64 * stride;
+                    entry.1 = mesh_bg;
+                } else {
+                    // Texture bind group is rebuilt per-frame per-mesh below,
+                    // but the pool entry needs a placeholder until then.
+                    let tex_bg = std::sync::Arc::new(self.make_default_tex_bg());
+                    self.per_mesh.push((i as u64 * stride, mesh_bg, tex_bg));
+                }
+            }
+            self.mesh_arena = Some(arena);
         }
+        let mut mesh_bytes = std::mem::take(&mut self.mesh_bytes);
+        mesh_bytes.clear();
+        mesh_bytes.resize(draws.len() * stride as usize, 0);
 
         // -- Build combined mesh+skin bind groups now that per_mesh is grown. --
         for (i, d) in draws.iter().enumerate() {
-            if d.topology == Topology::Skinned && d.skin_idx < skin_data.len() {
+            if d.topology.is_skinned() && d.skin_idx < skin_data.len() {
                 let sd = &mut skin_data[d.skin_idx];
-                let mesh_uniform_buf = &self.per_mesh[i].0;
+                let arena = self.mesh_arena.as_ref().expect("grown above");
                 sd.bg = Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("threers mesh skinned bg"),
                     layout: &self.mesh_skinned_bgl,
                     entries: &[
                         wgpu::BindGroupEntry {
                             binding: 0,
-                            resource: mesh_uniform_buf.as_entire_binding(),
+                            resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                                buffer: arena,
+                                offset: self.per_mesh[i].0,
+                                size: mesh_size,
+                            }),
                         },
                         wgpu::BindGroupEntry {
                             binding: 1,
@@ -6540,6 +9978,109 @@ impl Renderer {
                     ],
                 }));
             }
+        }
+
+        // The topologies the multisampled pipelines exist for.
+        let msaa_drawable = |t: Topology| {
+            matches!(
+                t,
+                Topology::Triangle
+                    | Topology::TriangleAlpha
+                    | Topology::TriangleNoCull
+                    | Topology::Sky
+                    | Topology::TriangleWire
+                    | Topology::Line
+                    | Topology::Point
+                    | Topology::GlassDepth
+                    | Topology::GlassTint
+                    | Topology::GlassColor
+            )
+        };
+        // Multisampling in a pane with a partial clear: the pane is drawn into
+        // a target of its own, the size of the clear rectangle, and
+        // composited into this one — see `viewport::PanePlan`. Its viewport is
+        // relative to that target, so the projection is redone for it here,
+        // before the frame uniforms go up.
+        let pane_msaa = vp_plan.pane.filter(|_| {
+            self.msaa > 1
+                && !self.cube_pass
+                && depth_src.is_none()
+                && !linear_framebuffer
+                && self.jitter_override.is_none()
+                && draws.iter().all(|d| msaa_drawable(d.topology))
+        });
+        if let Some(p) = &pane_msaa {
+            let mut proj = camera.projection_matrix();
+            if let Some(fix) = &p.projection_fix {
+                proj = fix.multiply(&proj);
+            }
+            if self.state_pipelines.reversed() {
+                proj = reverse_depth(&proj);
+            }
+            frame_u.projection = proj.elements;
+            frame_u.view_proj = proj.multiply(&view_m).elements;
+        }
+
+        // Alpha blending as three.js's default renderer does it — on the
+        // sRGB-encoded bytes of its 8-bit canvas, not in linear light. A plain
+        // `Unorm` target already works that way (the shader encodes). An sRGB
+        // one blends in linear in hardware, so its blended mesh draws go in a
+        // pass of their own, after the rest, through a `Unorm` view of the same
+        // texture with the shader encoding — the hardware then mixes encoded
+        // values exactly as WebGL does, while the opaque pass, its multisample
+        // resolve and everything downstream stay in linear light. Needs the
+        // target texture (the `render_to` paths hand it over) and view-format
+        // reinterpretation (not on WebGL2); elsewhere the blend stays linear.
+        //
+        // Every blended kind goes there (`Topology::encodes`): meshes,
+        // sprites, transparent instanced and skinned meshes and transparent
+        // custom shaders. In a pane drawn through its own multisampled target
+        // the pass draws into that target's `Unorm` view; in a frame with
+        // screen-space refraction, into the opaque capture's, which is then
+        // blitted to the target as before.
+        let encoded_target: Option<&wgpu::Texture> = taa_src
+            .map(|(_, c)| c)
+            .filter(|t| t.format().is_srgb() && t.format() == self.color_format)
+            .filter(|t| t.sample_count() == 1 && t.mip_level_count() == 1);
+        //
+        // Without view reinterpretation (WebGL2) the pass draws into a `Unorm`
+        // scratch copy of the target instead, copied back after
+        // (`ensure_encoded_scratch`) — for a single-sampled frame without a
+        // pane target or screen-space refraction, which is what a WebGL2
+        // canvas drawn through its back buffer is.
+        let reinterpret = super::caps::supports_view_formats(&self.device);
+        let scratch_ok = !reinterpret
+            && self.msaa <= 1
+            && pane_msaa.is_none()
+            && !draws.iter().any(|d| {
+                d.topology == Topology::Refract
+                    || matches!(d.topology, Topology::Custom(_, _, true, ..))
+            })
+            && encoded_target.is_some_and(|t| t.usage().contains(wgpu::TextureUsages::TEXTURE_BINDING));
+        let encoded_pass = encoded_target.is_some()
+            && !linear_framebuffer
+            && !self.cube_pass
+            && self.encoded_blend_pipelines.is_some()
+            && (reinterpret || scratch_ok)
+            && draws.iter().any(|d| d.topology.encodes());
+        let encoded_scratch = encoded_pass && !reinterpret;
+        if let (true, Some(t)) = (encoded_scratch, encoded_target) {
+            self.ensure_encoded_scratch(t.width(), t.height());
+        }
+
+        // Material shader variants: a draw whose maps the legacy layout cannot
+        // hold (or whose maps disagree on filtering or transform) gets one,
+        // built here, before any pass needs its pipelines. Custom shader
+        // materials compile against the legacy layout and keep it.
+        for d in draws.iter_mut() {
+            d.map_variant = (!matches!(d.topology, Topology::Custom(..))
+                && super::material_maps::needs_variant(&d.slots))
+            .then(|| super::material_maps::MapVariant::of(&d.slots));
+        }
+        let wanted: std::collections::HashSet<super::material_maps::MapVariant> =
+            draws.iter().filter_map(|d| d.map_variant).collect();
+        for v in wanted {
+            self.ensure_map_variant(v);
         }
 
         // -- Upload uniforms + rebuild per-mesh tex bind groups. --
@@ -6568,12 +10109,6 @@ impl Renderer {
             if d.slots.matcap_map.is_some() {
                 flags |= FLAG_MATCAP_MAP;
             }
-            if d.slots.iridescence_thickness_map.is_some() {
-                flags |= FLAG_IRIDESCENCE_MAP;
-            }
-            if d.slots.displacement_map.is_some() {
-                flags |= FLAG_DISPLACEMENT_MAP;
-            }
             if d.slots.cloud_shadow_map.is_some() && d.atmos[1] > 0.0 {
                 flags |= FLAG_CLOUD_SHADOW;
             }
@@ -6594,7 +10129,7 @@ impl Renderer {
                     d.ao_intensity,
                     d.normal_scale[0],
                     d.normal_scale[1],
-                    f32::from_bits(d.toon_steps),
+                    0.0,
                 ],
                 params3: d.physical,
                 params4: d.physical2,
@@ -6602,35 +10137,123 @@ impl Renderer {
                 params6: d.physical4,
                 params7: d.physical5,
                 params8: d.displacement,
-                params9: d.uv_transform,
+                // A variant transforms each map's uv itself; its vertex stage
+                // passes the raw uv through.
+                params9: if d.map_variant.is_some() { [0.0, 0.0, 1.0, 1.0] } else { d.uv_transform },
                 params10: d.atmos,
                 params11: d.twilight,
                 params12: d.eclipse,
                 params13: d.scatter,
                 params14: d.aurora,
-                flags: [d.kind as u32, flags, d.shader_flags, d.alpha_test.to_bits()],
+                flags: [
+                    d.kind as u32,
+                    flags,
+                    d.shader_flags
+                        | if encoded_pass && d.topology.encodes() {
+                            FLAG_ENCODED_OUT
+                        } else {
+                            0
+                        },
+                    d.alpha_test.to_bits(),
+                ],
+                // `morph.w` bit 32: the geometry has extra uv sets.
+                morph: {
+                    let mut m = d.morph;
+                    if self.uv_cache.contains_key(&d.key) {
+                        m[3] = (m[3] as u32 | 32) as f32;
+                    }
+                    m
+                },
+                morph_weights: bytemuck::cast(d.morph_weights),
+                clip_plane: d.clip_plane,
             };
-            self.queue
-                .write_buffer(&self.per_mesh[i].0, 0, bytemuck::bytes_of(&u));
+            let o = self.per_mesh[i].0 as usize;
+            mesh_bytes[o..o + std::mem::size_of::<MeshUniforms>()].copy_from_slice(bytemuck::bytes_of(&u));
         }
+        if let (Some(arena), false) = (&self.mesh_arena, mesh_bytes.is_empty()) {
+            self.queue.write_buffer(arena, 0, &mesh_bytes);
+        }
+        self.mesh_bytes = mesh_bytes;
         // Texture bind groups, from the cache. Keys are computed up front so
         // the miss path can borrow `self` immutably to build and then mutably
         // to insert, one draw at a time.
-        let tex_keys: Vec<TexBgKey> = draws.iter().map(|d| tex_bg_key(&d.slots)).collect();
+        let tex_keys: Vec<TexBgKey> = draws
+            .iter()
+            .map(|d| {
+                let (maps, _, sampler, _) = tex_bg_key(&d.slots);
+                (maps, d.morph_tex, sampler, self.uv_key(d.key))
+            })
+            .collect();
         // The set of distinct texture combinations in a scene is small and
         // static; this bound is a runaway guard, not a working limit.
         if self.tex_bg_cache.len() > 4096 {
             self.tex_bg_cache.clear();
+            self.variant_bg_cache.clear();
         }
         for (i, d) in draws.iter().enumerate() {
             if !self.tex_bg_cache.contains_key(&tex_keys[i]) {
-                let bg = std::sync::Arc::new(self.build_tex_bg(&d.slots));
+                let morph = self
+                    .morph_cache
+                    .get(&(d.morph_tex.0 as *const BufferGeometry))
+                    .filter(|_| d.morph_tex.0 != 0)
+                    .map(|m| &m.view);
+                let uv = self.uv_cache.get(&d.key).map(|u| &u.view);
+                let bg = std::sync::Arc::new(self.build_tex_bg(&d.slots, morph, uv));
                 self.tex_bg_cache.insert(tex_keys[i], bg);
             }
         }
         for (i, k) in tex_keys.iter().enumerate() {
             self.per_mesh[i].2 = self.tex_bg_cache[k].clone();
         }
+        // Variant draws: their own group 2.
+        if self.variant_bg_cache.len() > 4096 {
+            self.variant_bg_cache.clear();
+        }
+        for (i, d) in draws.iter().enumerate() {
+            let Some(v) = d.map_variant else { continue };
+            let key = (variant_bg_key(&d.slots, v, d.morph_tex, d.map_uniforms), self.uv_key(d.key));
+            if !self.variant_bg_cache.contains_key(&key) {
+                let morph = self
+                    .morph_cache
+                    .get(&(d.morph_tex.0 as *const BufferGeometry))
+                    .filter(|_| d.morph_tex.0 != 0)
+                    .map(|m| &m.view);
+                let uv = self.uv_cache.get(&d.key).map(|u| &u.view);
+                let bg = std::sync::Arc::new(self.build_variant_tex_bg(&d.slots, morph, uv, v, d.map_uniforms));
+                self.variant_bg_cache.insert(key.clone(), bg);
+            }
+            self.per_mesh[i].2 = self.variant_bg_cache[&key].clone();
+        }
+        // A morphed shader material's group 2: the shared custom one with
+        // the geometry's morph texture in place of the empty default.
+        let custom_morph_bgs: Vec<Option<wgpu::BindGroup>> = draws
+            .iter()
+            .map(|d| {
+                if !matches!(d.topology, Topology::Custom(..)) || d.morph_tex.0 == 0 {
+                    return None;
+                }
+                let view = &self.morph_cache.get(&(d.morph_tex.0 as *const BufferGeometry))?.view;
+                let uv = self.uv_cache.get(&d.key).map_or(&self.default_uv_sets.1, |u| &u.view);
+                Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("threers custom morph tex bg"),
+                    layout: &self.custom_tex_bgl,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 8,
+                            resource: wgpu::BindingResource::TextureView(uv),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 7,
+                            resource: wgpu::BindingResource::Sampler(&self.sampler_linear_repeat),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 10,
+                            resource: wgpu::BindingResource::TextureView(view),
+                        },
+                    ],
+                }))
+            })
+            .collect();
 
         let mut encoder = self
             .device
@@ -6638,181 +10261,260 @@ impl Renderer {
                 label: Some("threers encoder"),
             });
 
-        // Shadow depth pre-pass: render scene from the directional light's POV.
-        if shadow_caster.is_some() {
+        // Whether this render redraws the shadow maps: always, unless
+        // `shadow_map.auto_update` is off — then only when asked, or when the
+        // maps were last drawn for other casters or another size. They
+        // depend on lights and casters, never on the camera (the directional
+        // map is a fixed cube on the origin), so a skipped update samples the
+        // same maps a redraw would have produced.
+        //
+        // With `auto_update` on (the default), a render whose casters and
+        // lights are the same as last time keeps the maps it has: a still
+        // scene under a moving camera stops redrawing every caster into every
+        // map each frame.
+        let mut pass_hashes: Vec<Option<u64>> = Vec::new();
+        let mut pass_changed: Vec<bool> = Vec::new();
+        let update_shadows = !shadow_passes.is_empty() && {
+            let sig: ShadowSig = (dir_layers, spot_layers, point_layers, self.dir_shadows.size, self.spot_shadows.size);
+            let valid = self.shadow_sig == Some(sig);
+            let content = {
+                let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+                let mut mix = |x: u64| h = mix_word(h, x);
+                let mut known = true;
+                for d in draws.iter().filter(|d| d.cast_shadow) {
+                    // Skinned: the pose. Instanced: the instance data, through
+                    // its content stamp.
+                    if d.topology.is_skinned() {
+                        mix(skin_data.get(d.skin_idx).map_or(0, |s| s.bone_hash));
+                    }
+                    mix(d.instance_stamp);
+                    mix(d.instance_count as u64);
+                    // A custom shader is a function of its inputs — there is
+                    // no clock in the frame uniforms — so its data, storage and
+                    // source stand for its output. Not its textures: a texture
+                    // can be drawn into without anything here changing.
+                    if let Topology::Custom(..) = d.topology {
+                        match shader_data.get(d.shader_idx) {
+                            Some(sd) if sd.textures.is_empty() && sd.volumes.is_empty() => {
+                                sd.data.iter().flatten().for_each(|v| mix(v.to_bits() as u64));
+                                sd.storage.iter().for_each(|st| {
+                                    mix(st.len() as u64);
+                                    st.iter().for_each(|v| mix(v.to_bits() as u64));
+                                });
+                                mix(hash_words(sd.fragment.bytes().map(u64::from)));
+                                mix(sd.vertex.as_deref().map_or(0, |v| hash_words(v.bytes().map(u64::from))));
+                            }
+                            _ => {
+                                known = false;
+                                break;
+                            }
+                        }
+                    }
+                    mix(d.key as usize as u64);
+                    mix(self.geom_cache.get(&d.key).map_or(0, |e| e.version) as u64);
+                    d.model.iter().for_each(|v| mix(v.to_bits() as u64));
+                    mix(d.shadow_side as u64);
+                    mix(d.alpha_test.to_bits() as u64);
+                    mix(d.slots.map.as_ref().map_or(0, |t| std::sync::Arc::as_ptr(t) as usize as u64));
+                    mix(d.slots.alpha_map.as_ref().map_or(0, |t| std::sync::Arc::as_ptr(t) as usize as u64));
+                    mix(d.shader_flags as u64);
+                    d.color.iter().chain(&d.physical).chain(&d.morph).for_each(|v| mix(v.to_bits() as u64));
+                    d.morph_weights.iter().for_each(|v| mix(v.to_bits() as u64));
+                    mix(d.range.map_or(u64::MAX, |(a, b)| ((a as u64) << 32) | b as u64));
+                }
+                known.then_some(h)
+            };
+            // Each pass's own: the casters and its light's matrix. A pass is
+            // redrawn when its own changed — a cascade following the camera
+            // does not take a still point light's six faces with it.
+            pass_hashes = shadow_passes
+                .iter()
+                .map(|p| {
+                    content.map(|c| {
+                        let mut h = mix_word(c, p.layer as u64 | ((p.kind as u64) << 32));
+                        for v in p.vp.iter().chain(&p.pos) {
+                            h = mix_word(h, v.to_bits() as u64);
+                        }
+                        h
+                    })
+                })
+                .collect();
+            pass_changed = pass_hashes
+                .iter()
+                .enumerate()
+                .map(|(k, h)| !valid || h.is_none() || self.shadow_pass_hashes.get(k) != Some(h))
+                .collect();
+            let unchanged = !pass_changed.iter().any(|&c| c);
+            self.shadow_sig = Some(sig);
+            self.shadow_map.take_update(valid, unchanged)
+        };
+        // A forced update (`needs_update` with `auto_update` off) redraws
+        // every pass; an automatic one, the passes that changed.
+        let draw_pass: Vec<bool> = (0..shadow_passes.len())
+            .map(|k| update_shadows && (!self.shadow_map.auto_update || pass_changed.get(k).copied().unwrap_or(true)))
+            .collect();
+        if update_shadows {
+            self.shadow_pass_hashes = std::mem::take(&mut pass_hashes);
+        }
+        let update_shadows = draw_pass.iter().any(|&d| d);
+        if update_shadows {
+            self.shadow_updates += 1;
+            // Every pass's matrix, at its own aligned offset in one buffer,
+            // written once.
+            self.ensure_shadow_pass_buffer(shadow_passes.len());
+            let stride = self.shadow_pass_stride as usize;
+            let mut bytes = vec![0u8; stride * shadow_passes.len()];
+            for (k, p) in shadow_passes.iter().enumerate() {
+                let g = ShadowPassGpu { vp: p.vp, light: p.pos };
+                bytes[k * stride..k * stride + std::mem::size_of::<ShadowPassGpu>()]
+                    .copy_from_slice(bytemuck::bytes_of(&g));
+            }
+            if let Some((buffer, _)) = &self.shadow_pass_buffer {
+                self.queue.write_buffer(buffer, 0, &bytes);
+            }
+        }
+
+        // The shadow depth passes: every caster from each light, one layer
+        // each (six for a point light). The timer brackets the first pass's
+        // start and the last one's end.
+        // Each caster's world bounding sphere, where its geometry's bounds
+        // really bound what it draws (as the main pass culls): a pass skips
+        // casters outside its light's frustum.
+        let caster_spheres: Vec<Option<crate::math::Sphere>> = draws
+            .iter()
+            .map(|d| {
+                let plain = d.cast_shadow
+                    && matches!(d.topology, Topology::Triangle | Topology::TriangleNoCull | Topology::TriangleAlpha)
+                    && d.instance_count == 1
+                    && d.skin_idx == usize::MAX
+                    && d.shader_idx == usize::MAX
+                    && d.morph[0] == 0.0;
+                if !plain {
+                    return None;
+                }
+                let sphere = self.geom_cache.get(&d.key).and_then(|g| g.sphere)?;
+                Some(sphere.apply_matrix4(&Matrix4 { elements: d.model }))
+            })
+            .collect();
+        let drawn: Vec<usize> = (0..shadow_passes.len()).filter(|&k| draw_pass[k]).collect();
+        self.shadow_stats.0 += drawn.len() as u64;
+        for (n, &k) in drawn.iter().enumerate() {
+            let p = &shadow_passes[k];
+            let pass_frustum = Frustum::from_projection_matrix(&Matrix4 { elements: p.vp });
+            let view = match p.kind {
+                ShadowKind::Dir => self.dir_shadows.layer_view(p.layer),
+                ShadowKind::Spot => self.spot_shadows.layer_view(p.layer),
+                ShadowKind::Point => self.point_shadows.layer_view(p.layer),
+            };
+            let timestamp_writes = self.shadow_timer.as_ref().and_then(|t| match (n == 0, n + 1 == drawn.len()) {
+                (true, true) => Some(t.mark_both(0, 1)),
+                (true, false) => Some(t.mark(0)),
+                (false, true) => Some(t.mark_end(1)),
+                _ => None,
+            });
             let mut spass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("threers shadow pass"),
+                label: Some(match p.kind {
+                    ShadowKind::Dir => "threers shadow pass",
+                    ShadowKind::Spot => "threers spot shadow pass",
+                    ShadowKind::Point => "threers point shadow face pass",
+                }),
                 color_attachments: &[],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.shadow_view,
+                    view: &view,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(1.0),
                         store: wgpu::StoreOp::Store,
                     }),
                     stencil_ops: None,
                 }),
-                timestamp_writes: None,
+                timestamp_writes,
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            spass.set_pipeline(&self.pipeline_shadow);
-            spass.set_bind_group(0, &self.frame_bind_group, &[]);
+            let Some((_, pass_bg)) = &self.shadow_pass_buffer else { break };
+            spass.set_bind_group(0, pass_bg, &[(k as u64 * self.shadow_pass_stride) as u32]);
             for (i, d) in draws.iter().enumerate() {
+                // three.js draws only `castShadow` objects into a shadow map.
                 if !d.cast_shadow {
                     continue;
                 }
-                if d.topology != Topology::Triangle && d.topology != Topology::TriangleNoCull {
+                if caster_spheres[i].as_ref().is_some_and(|s| !pass_frustum.intersects_sphere(s)) {
+                    continue;
+                }
+                self.shadow_stats.1 += 1;
+                let skinned = matches!(d.topology, Topology::Skinned | Topology::SkinnedAlpha);
+                let instanced = matches!(d.topology, Topology::Instanced | Topology::InstancedAlpha);
+                // A transparent caster casts too: three.js's shadow map ignores
+                // blending (only `alphaTest` cuts a shadow).
+                if d.topology != Topology::Triangle
+                    && d.topology != Topology::TriangleNoCull
+                    && d.topology != Topology::TriangleAlpha
+                    && !skinned
+                    && !instanced
+                {
                     continue;
                 }
                 let gm = &self.geom_cache[&d.key].mesh;
-                spass.set_bind_group(1, &self.per_mesh[i].1, &[]);
-                spass.set_bind_group(2, &*self.per_mesh[i].2, &[]);
-                spass.set_bind_group(3, &self.shadow_env_bind_group, &[]);
-                spass.set_vertex_buffer(0, gm.vertex_buffer.slice(..));
-                if let Some(ib) = &gm.index_buffer {
-                    spass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
-                    spass.draw_indexed(0..gm.index_count, 0, 0..1);
+                let mut instances = 0..1;
+                // three.js's shadow depth material takes `map` and `alphaTest`;
+                // the point passes have no cut-out variant.
+                let cut = p.kind != ShadowKind::Point
+                    && (d.shadow_transmits
+                        || (d.alpha_test > 0.0 && (d.slots.map.is_some() || d.slots.alpha_map.is_some())));
+                let c = &self.shadow_cut;
+                let base = match (p.kind, skinned, instanced, cut) {
+                    (ShadowKind::Dir, true, _, false) => &self.pipeline_shadow_skinned,
+                    (ShadowKind::Dir, true, _, true) => &c.dir_skinned,
+                    (ShadowKind::Dir, false, true, false) => &self.pipeline_shadow_instanced,
+                    (ShadowKind::Dir, false, true, true) => &c.dir_instanced,
+                    (ShadowKind::Dir, false, false, false) => &self.pipeline_shadow,
+                    (ShadowKind::Dir, false, false, true) => &c.dir,
+                    (ShadowKind::Spot, true, _, false) => &self.pipeline_shadow_spot_skinned,
+                    (ShadowKind::Spot, true, _, true) => &c.spot_skinned,
+                    (ShadowKind::Spot, false, true, false) => &self.pipeline_shadow_spot_instanced,
+                    (ShadowKind::Spot, false, true, true) => &c.spot_instanced,
+                    (ShadowKind::Spot, false, false, false) => &self.pipeline_shadow_spot,
+                    (ShadowKind::Spot, false, false, true) => &c.spot,
+                    (ShadowKind::Point, true, _, _) => &self.pipeline_shadow_point_skinned,
+                    (ShadowKind::Point, false, true, _) => &self.pipeline_shadow_point_instanced,
+                    (ShadowKind::Point, false, false, _) => &self.pipeline_shadow_point,
+                };
+                let cull = if p.kind == ShadowKind::Point {
+                    shadow_cull_point(d.shadow_side)
                 } else {
-                    spass.draw(0..gm.vertex_count, 0..1);
-                }
-            }
-        }
-
-        // Spot shadow depth pre-pass.
-        if spot_caster.is_some() {
-            let mut spass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("threers spot shadow pass"),
-                color_attachments: &[],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.spot_shadow_view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Store,
-                    }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            spass.set_pipeline(&self.pipeline_shadow_spot);
-            spass.set_bind_group(0, &self.frame_bind_group, &[]);
-            for (i, d) in draws.iter().enumerate() {
-                if !d.cast_shadow {
-                    continue;
-                }
-                if d.topology != Topology::Triangle && d.topology != Topology::TriangleNoCull {
-                    continue;
-                }
-                let gm = &self.geom_cache[&d.key].mesh;
-                spass.set_bind_group(1, &self.per_mesh[i].1, &[]);
-                spass.set_bind_group(2, &*self.per_mesh[i].2, &[]);
-                spass.set_bind_group(3, &self.shadow_env_bind_group, &[]);
-                spass.set_vertex_buffer(0, gm.vertex_buffer.slice(..));
-                if let Some(ib) = &gm.index_buffer {
-                    spass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
-                    spass.draw_indexed(0..gm.index_count, 0, 0..1);
-                } else {
-                    spass.draw(0..gm.vertex_count, 0..1);
-                }
-            }
-        }
-
-        // Point-light cubemap depth: 6 face passes, one per cube face.
-        if let Some((pos, radius, _)) = point_caster {
-            self.queue.submit(Some(encoder.finish()));
-            encoder = self
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("threers point shadow encoder"),
-                });
-            let face_lookat: [(Vector3, Vector3); 6] = [
-                (Vector3::new(1.0, 0.0, 0.0), Vector3::new(0.0, -1.0, 0.0)),
-                (Vector3::new(-1.0, 0.0, 0.0), Vector3::new(0.0, -1.0, 0.0)),
-                (Vector3::new(0.0, 1.0, 0.0), Vector3::new(0.0, 0.0, 1.0)),
-                (Vector3::new(0.0, -1.0, 0.0), Vector3::new(0.0, 0.0, -1.0)),
-                (Vector3::new(0.0, 0.0, 1.0), Vector3::new(0.0, -1.0, 0.0)),
-                (Vector3::new(0.0, 0.0, -1.0), Vector3::new(0.0, -1.0, 0.0)),
-            ];
-            let fov = std::f32::consts::FRAC_PI_2;
-            let proj = Matrix4::perspective(fov, 1.0, 0.1, radius.max(1.0));
-            for (face, &(forward, up)) in face_lookat.iter().enumerate() {
-                let target = pos + forward;
-                let view = Matrix4::look_at(pos, target, up);
-                // NOTE: the Metal backend negates clip-space x here and this
-                // path must not — the two disagree about the cube's handedness
-                // somewhere further down, and mirroring this one takes its
-                // shadow from weak to absent (0.0021 of darkening to 0.0000).
-                // That asymmetry is unexplained and is the thread to pull on
-                // next; see `metal_casts_a_point_shadow`.
-                // Negate clip-space y.
-                //
-                // Cube maps are left-handed in every graphics API and
-                // `Matrix4::look_at` is right-handed, so a face rendered with
-                // it is laid down flipped against what the sampler will later
-                // expect. Each face looks perfectly reasonable alone, which is
-                // what makes this invisible: the shadow simply lands somewhere
-                // else.
-                //
-                // *Which* axis differs by backend, and that is not a guess —
-                // `tests/shadow_fixtures.rs` measures the shadow's distance
-                // from where the geometry puts it, in pixels:
-                //
-                // ```text
-                //            none      x       y      xy
-                //   wgpu     79.2   133.1     2.1   107.0
-                //   metal   107.0     2.1   133.1    79.2
-                // ```
-                //
-                // The two tables are each other's, shifted by one flip: the
-                // backends' framebuffer-y conventions are opposite, so the
-                // correction is too. Anything but the 2.1 here is a shadow of
-                // something that is not there.
-                let mut vp = proj.multiply(&view).elements;
-                vp[1] = -vp[1];
-                vp[5] = -vp[5];
-                vp[9] = -vp[9];
-                vp[13] = -vp[13];
-                frame_u.cube_face_vp = vp;
-                // Each face gets its own buffer — see `cube_face_buffers`.
-                self.queue.write_buffer(
-                    &self.cube_face_buffers[face],
-                    0,
-                    bytemuck::bytes_of(&frame_u),
-                );
-
-                let mut spass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("threers point shadow face pass"),
-                    color_attachments: &[],
-                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                        view: &self.point_shadow_face_views[face],
-                        depth_ops: Some(wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(1.0),
-                            store: wgpu::StoreOp::Store,
-                        }),
-                        stencil_ops: None,
-                    }),
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                    multiview_mask: None,
-                });
-                spass.set_pipeline(&self.pipeline_shadow_point);
-                spass.set_bind_group(0, &self.cube_face_bind_groups[face], &[]);
-                for (i, d) in draws.iter().enumerate() {
-                    if d.topology != Topology::Triangle && d.topology != Topology::TriangleNoCull {
+                    shadow_cull(d.shadow_side)
+                };
+                if skinned {
+                    // The pose, not the bind pose: the skinned pipeline with
+                    // the bones and the joint/weight buffer.
+                    let (Some(bg), Some(attrs)) = (
+                        skin_data.get(d.skin_idx).and_then(|s| s.bg.as_ref()),
+                        self.skin_attr_cache.get(&d.key),
+                    ) else {
                         continue;
-                    }
-                    let gm = &self.geom_cache[&d.key].mesh;
+                    };
+                    let base = variant_pipeline(&mut self.state_pipelines, &self.map_variants, &self.device, &self.main_shader, base, d.map_variant);
+                    spass.set_pipeline(&self.state_pipelines.cull_variant(&self.device, &base, cull));
+                    spass.set_bind_group(1, bg, &[]);
+                    spass.set_vertex_buffer(1, attrs.slice(..));
+                } else {
+                    let base = variant_pipeline(&mut self.state_pipelines, &self.map_variants, &self.device, &self.main_shader, base, d.map_variant);
+                    spass.set_pipeline(&self.state_pipelines.cull_variant(&self.device, &base, cull));
                     spass.set_bind_group(1, &self.per_mesh[i].1, &[]);
-                    spass.set_bind_group(2, &*self.per_mesh[i].2, &[]);
-                    spass.set_bind_group(3, &self.shadow_env_bind_group, &[]);
-                    spass.set_vertex_buffer(0, gm.vertex_buffer.slice(..));
-                    if let Some(ib) = &gm.index_buffer {
-                        spass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
-                        spass.draw_indexed(0..gm.index_count, 0, 0..1);
-                    } else {
-                        spass.draw(0..gm.vertex_count, 0..1);
+                    if instanced {
+                        // Every instance, at its matrix and with its morph row.
+                        spass.set_vertex_buffer(1, instance_buffers[d.instance_buf_idx].slice(..));
+                        instances = 0..d.instance_count;
                     }
+                }
+                spass.set_bind_group(2, &*self.per_mesh[i].2, &[]);
+                spass.set_bind_group(3, &self.shadow_env_bind_group, &[]);
+                spass.set_vertex_buffer(0, gm.vertex_buffer.slice(..));
+                if let Some(ib) = &gm.index_buffer {
+                    spass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
+                    spass.draw_indexed(draw_span(d.range, gm.index_count), 0, instances);
+                } else {
+                    spass.draw(draw_span(d.range, gm.vertex_count), instances);
                 }
             }
         }
@@ -6831,11 +10533,26 @@ impl Renderer {
         // texture") and the whole render dies. A reflection probe has no use
         // for screen-space refraction anyway: it exists to light other
         // surfaces, and what it would refract is not in it.
-        let refract_present = !self.cube_pass
-            && draws.iter().any(|d| {
-                d.topology == Topology::Refract
-                    || matches!(d.topology, Topology::Custom(_, _, true, ..))
-            });
+        let wants_screen_space = draws.iter().any(|d| {
+            d.topology == Topology::Refract
+                || matches!(d.topology, Topology::Custom(_, _, true, ..))
+        });
+        // Screen-space refraction captures and marches the *whole* frame, so
+        // it has no per-pane meaning: with a viewport or a partial clear those
+        // draws are skipped (the main pass already leaves them out) rather
+        // than drawn against the wrong pixels.
+        if wants_screen_space
+            && !vp_plan.legacy
+            && !self.cube_pass
+            && !self.viewport_state.warned_screen_space
+        {
+            self.viewport_state.warned_screen_space = true;
+            log::warn!(
+                "screen-space refraction / screen-space shader materials are not drawn \
+                 with a viewport or scissor set"
+            );
+        }
+        let refract_present = !self.cube_pass && vp_plan.legacy && wants_screen_space;
         let ss_format = if linear_framebuffer {
             wgpu::TextureFormat::Rgba16Float
         } else {
@@ -6855,18 +10572,9 @@ impl Renderer {
         let mut _custom_keep_alive: Vec<wgpu::Buffer> = Vec::new();
         let mut _custom_keep_alive_tex: Vec<wgpu::Texture> = Vec::new();
         for (i, d) in draws.iter().enumerate() {
-            if let Topology::Custom(hash, transparent, screen_space, side, depth_write) =
-                d.topology
-            {
+            if let Topology::Custom(hash, transparent, screen_space, side) = d.topology {
                 let sd = &shader_data[d.shader_idx];
-                let key = (
-                    hash,
-                    linear_framebuffer,
-                    transparent,
-                    screen_space,
-                    side,
-                    depth_write,
-                );
+                let key = (hash, linear_framebuffer, transparent, screen_space, side);
                 let Some(custom_layout) = self.custom_pipeline_layout.as_ref() else {
                     // No layout on this device — skip the object rather than
                     // submit a draw that cannot validate.
@@ -6890,7 +10598,8 @@ impl Renderer {
                         transparent,
                         screen_space,
                         side,
-                        sd.depth_write,
+                        sd.instanced,
+                        &mut self.state_pipelines,
                     );
                     match pipeline {
                         Ok(p) => {
@@ -6906,17 +10615,48 @@ impl Renderer {
                         }
                     }
                 }
+                // The encoded-blend pass's variant, into the `Unorm` view.
+                let ekey = (hash, transparent, screen_space, side);
+                if encoded_pass
+                    && d.topology.encodes()
+                    && !self.custom_encoded_pipelines.contains_key(&ekey)
+                {
+                    match build_custom_pipeline(
+                        &self.device,
+                        custom_layout,
+                        &sd.fragment,
+                        sd.vertex.as_deref(),
+                        self.color_format.remove_srgb_suffix(),
+                        transparent,
+                        screen_space,
+                        side,
+                        sd.instanced,
+                        &mut self.state_pipelines,
+                    ) {
+                        Ok(p) => {
+                            self.custom_encoded_pipelines.insert(ekey, p);
+                        }
+                        Err(e) => log::error!("shader material failed to compile:\n{e}"),
+                    }
+                }
                 let (bg, bufs, texs) = build_user_bind_group(
                     &self.device,
                     &self.queue,
                     &self.custom_mesh_bgl,
-                    &self.per_mesh[i].0,
+                    wgpu::BufferBinding {
+                        buffer: self.mesh_arena.as_ref().expect("grown above"),
+                        offset: self.per_mesh[i].0,
+                        size: wgpu::BufferSize::new(std::mem::size_of::<MeshUniforms>() as u64),
+                    },
                     &sd.data,
                     &sd.storage,
                     &sd.textures,
                     &self.default_white_linear.view,
                     &self.default_data_tex_view,
                     &self.sampler_linear_repeat,
+                    &sd.volumes,
+                    &self.default_volume_view,
+                    &self.sampler_volume,
                 );
                 _custom_keep_alive.extend(bufs);
                 _custom_keep_alive_tex.extend(texs);
@@ -6925,46 +10665,110 @@ impl Renderer {
         }
 
         {
-            let bg_color = scene.background;
-            // HalfFloat postfx RTs store linear light; sRGB canvas clears use raw bytes
-            // (matches three.js gl.clearColor on an sRGB default framebuffer).
-            let bg_alpha = scene.background_alpha as f64;
-            let clear = if shader_outputs_linear {
-                wgpu::Color {
-                    r: bg_color.r.powf(2.2) as f64,
-                    g: bg_color.g.powf(2.2) as f64,
-                    b: bg_color.b.powf(2.2) as f64,
-                    a: bg_alpha,
-                }
+            let main_format = if linear_framebuffer {
+                wgpu::TextureFormat::Rgba16Float
             } else {
-                wgpu::Color {
-                    r: bg_color.r as f64,
-                    g: bg_color.g as f64,
-                    b: bg_color.b as f64,
-                    a: bg_alpha,
-                }
+                self.color_format
             };
+            // `scene.background` is linear; the shared rule encodes it only
+            // where the shader encodes too (a plain `Unorm` target), so a hex
+            // background lands as that hex — see `super::clear_value`.
+            let clear =
+                super::clear_value(main_format, scene.background, scene.background_alpha);
             // Hardware MSAA on the direct-to-surface opaque pass. Falls back to
             // single-sample for render-to-texture, linear/postfx targets, and any
             // scene using glass/OIT/refraction/instanced/skinned/custom draws.
-            let use_msaa = self.msaa > 1
-                && depth_src.is_none()
-                && (!linear_framebuffer || taa_src.is_some())
-                && !refract_present
-                && draws.iter().all(|d| {
-                    matches!(
-                        d.topology,
-                        Topology::Triangle
-                            | Topology::TriangleAlpha
-                            | Topology::TriangleNoCull
-                            | Topology::Sky
-                            | Topology::TriangleWire
-                            | Topology::Line
-                            | Topology::Point
-                    )
-                });
-            if use_msaa {
+            // Not straight into the target when the colour is loaded (a partial
+            // clear, or none): the resolve rewrites the whole target and would
+            // erase the other panes. A partial clear goes through a pane-sized
+            // target instead (`pane_msaa`); with no clear at all there is
+            // nothing to start the pane target from, so that stays
+            // single-sampled.
+            let pane_key = pane_msaa
+                .as_ref()
+                .map(|p| (p.region.width, p.region.height, main_format, self.msaa));
+            // OIT and refraction glass multisample on the whole target (not
+            // in a pane), with a capture the colour can resolve into.
+            let oit_msaa = self.pipeline_oit_msaa.is_some() && !linear_framebuffer;
+            // Under MSAA the glass reads a single-sampled opaque depth: the
+            // multisampled one resolved where a shader can read it, the
+            // opaque scene's depth redrawn where it cannot (WebGL2).
+            let refract_msaa = !linear_framebuffer && ss_format == self.color_format;
+            let use_msaa = pane_msaa.is_some()
+                || (self.msaa > 1
+                    && vp_plan.clear == super::viewport::ClearMode::Full
+                    && depth_src.is_none()
+                    && (!linear_framebuffer || taa_src.is_some())
+                    && (!refract_present || refract_msaa)
+                    && draws.iter().all(|d| {
+                        msaa_drawable(d.topology)
+                            || (d.topology == Topology::Oit && oit_msaa)
+                            || (d.topology == Topology::Refract && refract_msaa)
+                    }));
+            // Not over refraction glass: it is drawn single-sampled into the
+            // frame, and resolving the multisampled colour again would erase it.
+            self.overlay_msaa = use_msaa && pane_msaa.is_none() && !refract_present;
+            self.last_frame_msaa = use_msaa;
+            // three.js `polygonOffset`: the depth-biased pipelines this frame's
+            // draws need, built once per (topology, target, offset).
+            let bias_variant: u8 = if use_msaa {
+                2
+            } else if linear_framebuffer {
+                1
+            } else {
+                0
+            };
+            // The encoded-blend pass's variant: the target's `Unorm` view,
+            // single- or multisampled.
+            let enc_variant: u8 = if use_msaa { 4 } else { 3 };
+            if encoded_pass && use_msaa {
                 self.ensure_msaa_targets(self.depth_size.0, self.depth_size.1);
+            }
+            for d in &draws {
+                let in_encoded_pass = encoded_pass && d.topology == Topology::TriangleAlpha;
+                let (factor, units) = match d.polygon_offset {
+                    Some(o) => o,
+                    None if in_encoded_pass => (0f32.to_bits(), 0),
+                    None => continue,
+                };
+                let Some(code) = biased_topology(d.topology) else {
+                    continue;
+                };
+                let variant = if in_encoded_pass { enc_variant } else { bias_variant };
+                let key = (code, variant, factor, units);
+                if !self.biased_pipelines.contains_key(&key) {
+                    let (format, samples) = match variant {
+                        4 => (self.color_format.remove_srgb_suffix(), MSAA_SAMPLES),
+                        3 => (self.color_format.remove_srgb_suffix(), 1),
+                        2 => (self.color_format, MSAA_SAMPLES),
+                        1 => (wgpu::TextureFormat::Rgba16Float, 1),
+                        _ => (self.color_format, 1),
+                    };
+                    let p = build_biased_pipeline(
+                        &self.device,
+                        &self.mesh_shader,
+                        &self.mesh_pipeline_layout,
+                        format,
+                        samples,
+                        code,
+                        f32::from_bits(factor),
+                        units,
+                        &mut self.state_pipelines,
+                    );
+                    self.biased_pipelines.insert(key, p);
+                }
+            }
+            if let Some(key) = pane_key {
+                self.viewport_state
+                    .ensure_pane_target(&self.device, key, DEPTH_FORMAT);
+            } else if use_msaa {
+                self.ensure_msaa_targets(self.depth_size.0, self.depth_size.1);
+            }
+            // The pane's own plan when drawing into a pane target.
+            let main_plan = pane_msaa.as_ref().map(|p| p.local()).unwrap_or(vp_plan);
+            if let super::viewport::ClearMode::Rect(_) = vp_plan.clear {
+                self.viewport_state
+                    .ensure_clear_pipeline(&self.device, main_format, Some(DEPTH_FORMAT));
             }
             // Screen-space glass redirects the opaque pass into the ss-color capture
             // (mip 0); MSAA renders into the multisampled color and resolves into the
@@ -6973,9 +10777,21 @@ impl Renderer {
                 &wgpu::TextureView,
                 Option<&wgpu::TextureView>,
                 &wgpu::TextureView,
-            ) = if use_msaa {
+            ) = if let Some(pane) = pane_key
+                .as_ref()
+                .and_then(|k| self.viewport_state.pane_target(k))
+            {
+                (&pane.msaa_color, Some(&pane.resolve), &pane.msaa_depth)
+            } else if use_msaa {
                 let (_, _, cv, dv) = self.msaa_targets.as_ref().unwrap();
-                (cv, Some(target_view), dv)
+                // Under refraction glass the opaque scene resolves into the
+                // capture the glass refracts, as it is drawn there unsampled.
+                let resolve = if refract_present {
+                    &self.ss_color.as_ref().unwrap().mip_render_views[0]
+                } else {
+                    target_view
+                };
+                (cv, Some(resolve), dv)
             } else if refract_present {
                 (
                     &self.ss_color.as_ref().unwrap().mip_render_views[0],
@@ -6998,14 +10814,18 @@ impl Renderer {
                     depth_slice: None,
                     resolve_target: msaa_resolve,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(clear),
+                        load: if main_plan.clear == super::viewport::ClearMode::Full {
+                            wgpu::LoadOp::Clear(clear)
+                        } else {
+                            wgpu::LoadOp::Load
+                        },
                         store: wgpu::StoreOp::Store,
                     },
                 })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: depth_pass_view,
                     depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
+                        load: wgpu::LoadOp::Clear(self.depth_clear()),
                         store: wgpu::StoreOp::Store,
                     }),
                     stencil_ops: None,
@@ -7015,10 +10835,32 @@ impl Renderer {
                 multiview_mask: None,
             });
 
+            // The partial clear first: the clear colour over the scissor
+            // rectangle, as `gl.clear` does with the scissor test on.
+            if let super::viewport::ClearMode::Rect(r) = main_plan.clear {
+                self.viewport_state.fill_rect(&mut pass, main_format, true, r, clear);
+            }
+            main_plan.apply(&mut pass);
             pass.set_bind_group(0, &self.frame_bind_group, &[]);
             pass.set_bind_group(3, &self.env_bind_group, &[]);
             let mut last_topology: Option<Topology> = None;
+            let mut last_bias: Option<(u32, i32)> = None;
+            let mut last_state = crate::materials::RenderState::DEFAULT;
+            let mut last_variant: Option<super::material_maps::MapVariant> = None;
+            let mut last_side: u32 = u32::MAX;
+            // Group 3 is the scene's environment unless a material has its own.
+            let mut env_bound: Option<MaterialEnvKey> = None;
             for (i, d) in draws.iter().enumerate() {
+                if d.env_group != env_bound {
+                    pass.set_bind_group(
+                        3,
+                        d.env_group
+                            .and_then(|k| self.material_env_groups.get(&k))
+                            .map_or(&self.env_bind_group, |(_, g)| g),
+                        &[],
+                    );
+                    env_bound = d.env_group;
+                }
                 // Off-screen. The shadow passes above deliberately did draw it:
                 // a caster the camera cannot see still casts into the view.
                 if !d.in_frustum {
@@ -7037,8 +10879,23 @@ impl Renderer {
                 if refract_present && !d.refract_capture {
                     continue;
                 }
-                if last_topology != Some(d.topology) {
-                    let pipe = if use_msaa {
+                // Blended draws on an sRGB target: the encoded-blend pass.
+                if encoded_pass && d.topology.encodes() {
+                    continue;
+                }
+                if last_topology != Some(d.topology)
+                    || last_bias != d.polygon_offset
+                    || last_state != d.state
+                    || last_variant != d.map_variant
+                    || last_side != d.side
+                {
+                    let biased = d.polygon_offset.and_then(|(factor, units)| {
+                        let code = biased_topology(d.topology)?;
+                        self.biased_pipelines.get(&(code, bias_variant, factor, units))
+                    });
+                    let pipe = if let Some(p) = biased {
+                        p
+                    } else if use_msaa {
                         match d.topology {
                             Topology::Triangle => &self.pipeline_tri_msaa,
                             Topology::TriangleAlpha => &self.pipeline_tri_alpha_msaa,
@@ -7047,6 +10904,9 @@ impl Renderer {
                             Topology::TriangleWire => &self.pipeline_tri_wire_msaa,
                             Topology::Line => &self.pipeline_line_msaa,
                             Topology::Point => &self.pipeline_point_msaa,
+                            Topology::GlassDepth => &self.pipeline_glass_depth_msaa,
+                            Topology::GlassColor => &self.pipeline_glass_color_msaa,
+                            Topology::GlassTint => &self.pipeline_glass_tint_msaa,
                             // gated by `use_msaa`; other topologies never occur here
                             _ => &self.pipeline_tri_msaa,
                         }
@@ -7057,19 +10917,25 @@ impl Renderer {
                             Topology::TriangleNoCull => &self.pipeline_tri_nocull_f16,
                             Topology::GlassDepth => &self.pipeline_glass_depth_f16,
                             Topology::GlassColor => &self.pipeline_glass_color_f16,
+                            Topology::GlassTint => &self.pipeline_glass_tint_f16,
                             Topology::Sky => &self.pipeline_tri_sky_f16,
                             Topology::TriangleWire => &self.pipeline_tri_wire_f16,
                             Topology::Line => &self.pipeline_line_f16,
                             Topology::Point => &self.pipeline_point_f16,
+                            Topology::PointAlpha => &self.pipeline_point_alpha_f16,
                             Topology::Sprite => &self.pipeline_sprite_f16,
                             Topology::Instanced => &self.pipeline_instanced_f16,
+                            Topology::InstancedWire => &self.pipeline_instanced_wire_f16,
+                            Topology::InstancedAlpha => &self.pipeline_instanced_alpha_f16,
                             Topology::Skinned => &self.pipeline_skinned_f16,
+                            Topology::SkinnedWire => &self.pipeline_skinned_wire_f16,
+                            Topology::SkinnedAlpha => &self.pipeline_skinned_alpha_f16,
                             Topology::Oit | Topology::Refract => continue,
                             // A shader that would not compile has no
                             // pipeline. Skipping the draw costs one object;
                             // indexing the map costs the process.
-                            Topology::Custom(h, tr, ss, sd, dw) => {
-                                match self.custom_pipelines.get(&(h, true, tr, ss, sd, dw)) {
+                            Topology::Custom(h, tr, ss, sd) => {
+                                match self.custom_pipelines.get(&(h, true, tr, ss, sd)) {
                                     Some(p) => p,
                                     None => continue,
                                 }
@@ -7082,34 +10948,57 @@ impl Renderer {
                             Topology::TriangleNoCull => &self.pipeline_tri_nocull,
                             Topology::GlassDepth => &self.pipeline_glass_depth,
                             Topology::GlassColor => &self.pipeline_glass_color,
+                            Topology::GlassTint => &self.pipeline_glass_tint,
                             Topology::Sky => &self.pipeline_tri_sky,
                             Topology::TriangleWire => &self.pipeline_tri_wire,
                             Topology::Line => &self.pipeline_line,
                             Topology::Point => &self.pipeline_point,
+                            Topology::PointAlpha => &self.pipeline_point_alpha,
                             Topology::Sprite => &self.pipeline_sprite,
                             Topology::Instanced => &self.pipeline_instanced,
+                            Topology::InstancedWire => &self.pipeline_instanced_wire,
+                            Topology::InstancedAlpha => &self.pipeline_instanced_alpha,
                             Topology::Skinned => &self.pipeline_skinned,
+                            Topology::SkinnedWire => &self.pipeline_skinned_wire,
+                            Topology::SkinnedAlpha => &self.pipeline_skinned_alpha,
                             Topology::Oit | Topology::Refract => continue,
                             // A shader that would not compile has no
                             // pipeline. Skipping the draw costs one object;
                             // indexing the map costs the process.
-                            Topology::Custom(h, tr, ss, sd, dw) => {
-                                match self.custom_pipelines.get(&(h, false, tr, ss, sd, dw)) {
+                            Topology::Custom(h, tr, ss, sd) => {
+                                match self.custom_pipelines.get(&(h, false, tr, ss, sd)) {
                                     Some(p) => p,
                                     None => continue,
                                 }
                             }
                         }
                     };
-                    pass.set_pipeline(pipe);
+                    let pipe = variant_pipeline(
+                        &mut self.state_pipelines,
+                        &self.map_variants,
+                        &self.device,
+                        &self.main_shader,
+                        pipe,
+                        d.map_variant,
+                    );
+                    let pipe = self.state_pipelines.variant(&self.device, &pipe, &d.state);
+                    let pipe = match side_cull(d.topology.is_faces(), d.side) {
+                        Some(cull) => self.state_pipelines.cull_variant(&self.device, &pipe, cull),
+                        None => pipe,
+                    };
+                    pass.set_pipeline(&pipe);
+                    last_side = d.side;
                     last_topology = Some(d.topology);
+                    last_bias = d.polygon_offset;
+                    last_state = d.state;
+                    last_variant = d.map_variant;
                 }
                 let gm = if d.topology == Topology::Sprite {
                     &self.sprite_quad
                 } else {
                     &self.geom_cache[&d.key].mesh
                 };
-                if d.topology == Topology::Skinned {
+                if d.topology.is_skinned() {
                     // Skinned pipeline uses the combined mesh+skin BGL at group(1).
                     if let Some(bg) = skin_data.get(d.skin_idx).and_then(|s| s.bg.as_ref()) {
                         pass.set_bind_group(1, bg, &[]);
@@ -7128,34 +11017,317 @@ impl Renderer {
                     if let Some(bg) = &user_bgs[i] {
                         pass.set_bind_group(1, bg, &[]);
                     }
-                    pass.set_bind_group(2, &self.custom_tex_bind_group, &[]);
+                    pass.set_bind_group(
+                        2,
+                        custom_morph_bgs[i].as_ref().unwrap_or(&self.custom_tex_bind_group),
+                        &[],
+                    );
                 } else {
                     pass.set_bind_group(1, &self.per_mesh[i].1, &[]);
                     pass.set_bind_group(2, &*self.per_mesh[i].2, &[]);
                 }
                 pass.set_vertex_buffer(0, gm.vertex_buffer.slice(..));
-                let instance_count = if d.topology == Topology::Instanced {
+                // Points: a quad's six corners for each point in the range.
+                if d.topology.is_points() {
+                    pass.draw(0..6, draw_span(d.range, gm.vertex_count));
+                    continue;
+                }
+                // A `ShaderMaterial` on an `InstancedMesh` reads the instance
+                // buffer too, and its custom columns from slot 2.
+                let custom_instanced = matches!(d.topology, Topology::Custom(..))
+                    && shader_data[d.shader_idx].instanced;
+                let instance_count = if d.topology.is_instanced() || custom_instanced {
                     pass.set_vertex_buffer(1, instance_buffers[d.instance_buf_idx].slice(..));
+                    if custom_instanced {
+                        let custom = &instance_buffers[shader_data[d.shader_idx].custom_buf];
+                        pass.set_vertex_buffer(2, custom.slice(..));
+                    }
                     d.instance_count
                 } else {
                     1
                 };
-                // For TriangleWire we draw the wireframe line-list index buffer
-                // (three.js WebGLGeometries: a,b,b,c,c,a per triangle).
-                let (ib_opt, idx_count) = if d.topology == Topology::TriangleWire {
-                    (gm.wire_index_buffer.as_ref(), gm.wire_index_count)
+                // Wire topologies draw the line-list index buffer: polygon
+                // outlines, or three.js's a,b,b,c,c,a per triangle without a
+                // polygon table (`BufferGeometry::wireframe_indices`).
+                // A partial span (a group, a draw range) has a line list of
+                // its own (`BufferGeometry::wireframe_indices_in`).
+                let (ib_opt, idx_range) = if d.topology.is_wire() {
+                    match d.range {
+                        Some((a, b)) => {
+                            let version = self.geom_cache.get(&d.key).map(|e| e.version);
+                            match version.and_then(|v| self.wire_span_cache.get(&(d.key, v, a, b))) {
+                                Some((buf, n)) => (Some(buf), 0..*n),
+                                None => (None, 0..0),
+                            }
+                        }
+                        None => (gm.wire_index_buffer.as_ref(), 0..gm.wire_index_count),
+                    }
                 } else {
-                    (gm.index_buffer.as_ref(), gm.index_count)
+                    (gm.index_buffer.as_ref(), draw_span(d.range, gm.index_count))
                 };
                 if let Some(ib) = ib_opt {
                     pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
-                    pass.draw_indexed(0..idx_count, 0, 0..instance_count);
+                    pass.draw_indexed(idx_range, 0, 0..instance_count);
+                } else if d.topology.is_wire() && d.range.is_some() {
+                    // Nothing to outline in this span.
                 } else {
-                    pass.draw(0..gm.vertex_count, 0..instance_count);
+                    pass.draw(draw_span(d.range, gm.vertex_count), 0..instance_count);
+                }
+            }
+            drop(pass);
+
+            // The encoded-blend pass (see `encoded_pass`): the blended meshes,
+            // back to front, into a `Unorm` view of the target (or of the
+            // multisampled colour) with the shader encoding, so the hardware
+            // blend mixes sRGB-encoded values as three.js's canvas does.
+            if let (true, Some(tex)) = (encoded_pass, encoded_target) {
+                let unorm = tex.format().remove_srgb_suffix();
+                // (Not on the scratch path: there the device cannot take it.)
+                let target_unorm = (!encoded_scratch).then(|| {
+                    tex.create_view(&wgpu::TextureViewDescriptor {
+                        format: Some(unorm),
+                        ..Default::default()
+                    })
+                });
+                // Where the main pass drew: a pane's own multisampled target,
+                // the shared multisampled colour, the refraction capture, or
+                // the target itself.
+                let pane = pane_key
+                    .as_ref()
+                    .and_then(|k| self.viewport_state.pane_target(k));
+                let color_view = if encoded_scratch {
+                    self.encoded_scratch.as_ref().map(|(_, _, v)| v)
+                } else if let Some(pane) = pane {
+                    pane.msaa_color_unorm.as_ref()
+                } else if use_msaa {
+                    self.msaa_color_unorm.as_ref()
+                } else if refract_present {
+                    self.ss_color.as_ref().and_then(|c| c.mip0_unorm.as_ref())
+                } else {
+                    target_unorm.as_ref()
+                };
+                let target_srgb = encoded_scratch.then(|| tex.create_view(&Default::default()));
+                if let (Some(color_view), Some(enc)) = (color_view, self.encoded_blend_pipelines.as_ref()) {
+                    if let Some(t) = &target_srgb {
+                        self.encoded_copy_pass(&mut encoder, false, t, color_view);
+                    }
+                    let mut ep = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("threers encoded blend pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: color_view,
+                            depth_slice: None,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Load,
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                            view: depth_pass_view,
+                            depth_ops: Some(wgpu::Operations {
+                                load: wgpu::LoadOp::Load,
+                                store: wgpu::StoreOp::Store,
+                            }),
+                            stencil_ops: None,
+                        }),
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    });
+                    main_plan.apply(&mut ep);
+                    ep.set_bind_group(0, &self.frame_bind_group, &[]);
+                    ep.set_bind_group(3, &self.env_bind_group, &[]);
+                    // Group 3 is the scene's environment unless a material has its own.
+                    let mut env_bound: Option<MaterialEnvKey> = None;
+                    for (i, d) in draws.iter().enumerate() {
+                        if d.env_group != env_bound {
+                            ep.set_bind_group(
+                                3,
+                                d.env_group
+                                    .and_then(|k| self.material_env_groups.get(&k))
+                                    .map_or(&self.env_bind_group, |(_, g)| g),
+                                &[],
+                            );
+                            env_bound = d.env_group;
+                        }
+                        if !d.in_frustum || !d.topology.encodes() {
+                            continue;
+                        }
+                        // Opted out of the refraction capture: the overlay
+                        // pass draws it, over the glass.
+                        if refract_present && !d.refract_capture {
+                            continue;
+                        }
+                        let pipe = match d.topology {
+                            Topology::TriangleAlpha => {
+                                let (factor, units) = d.polygon_offset.unwrap_or((0f32.to_bits(), 0));
+                                self.biased_pipelines.get(&(1, enc_variant, factor, units))
+                            }
+                            Topology::Sprite => Some(&enc[0]),
+                            Topology::PointAlpha => Some(&enc[3]),
+                            Topology::InstancedAlpha => Some(&enc[1]),
+                            Topology::SkinnedAlpha => Some(&enc[2]),
+                            Topology::GlassDepth => Some(match (&self.encoded_glass_msaa, use_msaa) {
+                                (Some(m), true) => &m[0],
+                                _ => &enc[4],
+                            }),
+                            Topology::GlassColor => Some(match (&self.encoded_glass_msaa, use_msaa) {
+                                (Some(m), true) => &m[1],
+                                _ => &enc[5],
+                            }),
+                            Topology::GlassTint => Some(match (&self.encoded_glass_msaa, use_msaa) {
+                                (Some(m), true) => &m[2],
+                                _ => &enc[6],
+                            }),
+                            Topology::Custom(h, tr, ss, sd) => {
+                                self.custom_encoded_pipelines.get(&(h, tr, ss, sd))
+                            }
+                            _ => None,
+                        };
+                        let Some(pipe) = pipe else { continue };
+                        let pipe = variant_pipeline(&mut self.state_pipelines, &self.map_variants, &self.device, &self.main_shader, pipe, d.map_variant);
+                        let pipe = self.state_pipelines.variant(&self.device, &pipe, &d.state);
+                        let pipe = match side_cull(d.topology.is_faces(), d.side) {
+                            Some(cull) => self.state_pipelines.cull_variant(&self.device, &pipe, cull),
+                            None => pipe,
+                        };
+                        ep.set_pipeline(&pipe);
+                        let gm = if d.topology == Topology::Sprite {
+                            &self.sprite_quad
+                        } else {
+                            &self.geom_cache[&d.key].mesh
+                        };
+                        if d.topology.is_skinned() {
+                            let Some(bg) = skin_data.get(d.skin_idx).and_then(|s| s.bg.as_ref()) else {
+                                continue;
+                            };
+                            let Some(skin_attrs) = self.skin_attr_cache.get(&d.key) else {
+                                continue;
+                            };
+                            ep.set_bind_group(1, bg, &[]);
+                            ep.set_bind_group(2, &*self.per_mesh[i].2, &[]);
+                            ep.set_vertex_buffer(1, skin_attrs.slice(..));
+                        } else if let Topology::Custom(..) = d.topology {
+                            let Some(bg) = &user_bgs[i] else { continue };
+                            ep.set_bind_group(1, bg, &[]);
+                            ep.set_bind_group(
+                                2,
+                                custom_morph_bgs[i].as_ref().unwrap_or(&self.custom_tex_bind_group),
+                                &[],
+                            );
+                        } else {
+                            ep.set_bind_group(1, &self.per_mesh[i].1, &[]);
+                            ep.set_bind_group(2, &*self.per_mesh[i].2, &[]);
+                        }
+                        ep.set_vertex_buffer(0, gm.vertex_buffer.slice(..));
+                        if d.topology.is_points() {
+                            ep.draw(0..6, draw_span(d.range, gm.vertex_count));
+                            continue;
+                        }
+                        let custom_instanced = matches!(d.topology, Topology::Custom(..))
+                            && shader_data[d.shader_idx].instanced;
+                        let instances = if d.topology.is_instanced() || custom_instanced {
+                            ep.set_vertex_buffer(1, instance_buffers[d.instance_buf_idx].slice(..));
+                            if custom_instanced {
+                                let custom = &instance_buffers[shader_data[d.shader_idx].custom_buf];
+                                ep.set_vertex_buffer(2, custom.slice(..));
+                            }
+                            d.instance_count
+                        } else {
+                            1
+                        };
+                        if let Some(ib) = &gm.index_buffer {
+                            ep.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
+                            ep.draw_indexed(draw_span(d.range, gm.index_count), 0, 0..instances);
+                        } else {
+                            ep.draw(draw_span(d.range, gm.vertex_count), 0..instances);
+                        }
+                    }
+                    drop(ep);
+                    if let Some(t) = &target_srgb {
+                        self.encoded_copy_pass(&mut encoder, true, color_view, t);
+                    }
+                    // Multisampled: resolve again, in linear light, now that
+                    // the samples hold the blended surfaces too.
+                    if use_msaa {
+                        let _ = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("threers encoded blend resolve"),
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view: main_color_view,
+                                depth_slice: None,
+                                resolve_target: msaa_resolve,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Load,
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            })],
+                            depth_stencil_attachment: None,
+                            timestamp_writes: None,
+                            occlusion_query_set: None,
+                            multiview_mask: None,
+                        });
+                    }
                 }
             }
         }
 
+        // A pane drawn into its own multisampled target: copy its resolved
+        // picture into the clear rectangle, and only there.
+        if let Some(p) = &pane_msaa {
+            let key = (p.region.width, p.region.height, self.color_format, self.msaa);
+            self.viewport_state.composite_pane(
+                &mut encoder,
+                target_view,
+                self.color_format,
+                &key,
+                p.region,
+            );
+        }
+
+        // Which OIT draws composite where. Without refraction, all of them
+        // over the frame. With it, each where the refraction glass would see
+        // it: into the capture just before the first group of glass that
+        // lies wholly in front of it (so that glass refracts it), or, nearer
+        // than every group, over the finished glass.
+        let (refract_groups, refract_group) = {
+            let mut order: Vec<usize> = (0..draws.len())
+                .filter(|&i| refract_present && draws[i].in_frustum && draws[i].topology == Topology::Refract)
+                .collect();
+            order.sort_by(|&a, &b| draws[a].view_z.partial_cmp(&draws[b].view_z).unwrap_or(std::cmp::Ordering::Equal));
+            let groups = self.refraction_layers.clamp(1, order.len().max(1));
+            let mut group = vec![usize::MAX; draws.len()];
+            for (k, &i) in order.iter().enumerate() {
+                group[i] = k * groups / order.len();
+            }
+            (groups, group)
+        };
+        let oit_phase: Vec<usize> = {
+            // Each group's farthest object, as a view depth (more negative is
+            // farther).
+            let mut farthest = vec![f32::INFINITY; refract_groups];
+            for (i, &g) in refract_group.iter().enumerate() {
+                if g != usize::MAX {
+                    farthest[g] = farthest[g].min(draws[i].view_z);
+                }
+            }
+            draws
+                .iter()
+                .map(|d| {
+                    if d.topology != Topology::Oit {
+                        usize::MAX
+                    } else if !refract_present {
+                        0
+                    } else {
+                        (0..refract_groups).find(|&g| d.view_z <= farthest[g]).unwrap_or(refract_groups)
+                    }
+                })
+                .collect()
+        };
+        // One OIT phase: accumulate its draws against the depth so far, then
+        // composite them into `$target` — the frame, or the refraction
+        // capture — multisampled when `$allow_msaa` and the frame is.
+        macro_rules! oit_phase {
+            ($phase:expr, $target:expr, $allow_msaa:expr) => {{
         // --- Weighted-blended OIT: accumulate the OIT surfaces, then resolve
         // (composite) over the opaque image already in `target_view`. ---
         // Not during a probe, and this one bites hard. The order-independent
@@ -7167,10 +11339,19 @@ impl Renderer {
         // nothing of the kind.
         if !self.cube_pass
             && self.pipeline_oit.is_some()
-            && draws.iter().any(|d| d.topology == Topology::Oit)
+            && draws.iter().enumerate().any(|(i, d)| d.topology == Topology::Oit && oit_phase[i] == $phase)
         {
             let (tw, th) = self.depth_size;
             self.ensure_oit_targets(tw, th);
+            // Multisampled when the opaque pass was: against its depth, into
+            // samples resolved at the end of the pass.
+            let msaa = $allow_msaa && self.last_frame_msaa && pane_msaa.is_none() && self.pipeline_oit_msaa.is_some();
+            if msaa {
+                self.ensure_oit_msaa_targets(tw, th);
+            }
+            let msaa_views = msaa
+                .then(|| Some((self.oit_msaa_targets.as_ref()?, self.msaa_targets.as_ref()?)))
+                .flatten();
             if let Some((_, _, _, accum_view, _, reveal_view, resolve_bg)) =
                 self.oit_targets.as_ref()
             {
@@ -7180,18 +11361,18 @@ impl Renderer {
                         label: Some("threers oit accum pass"),
                         color_attachments: &[
                             Some(wgpu::RenderPassColorAttachment {
-                                view: accum_view,
+                                view: msaa_views.map_or(accum_view, |((_, _, a, _), _)| a),
                                 depth_slice: None,
-                                resolve_target: None,
+                                resolve_target: msaa_views.map(|_| accum_view),
                                 ops: wgpu::Operations {
                                     load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                                     store: wgpu::StoreOp::Store,
                                 },
                             }),
                             Some(wgpu::RenderPassColorAttachment {
-                                view: reveal_view,
+                                view: msaa_views.map_or(reveal_view, |((_, _, _, r), _)| r),
                                 depth_slice: None,
-                                resolve_target: None,
+                                resolve_target: msaa_views.map(|_| reveal_view),
                                 ops: wgpu::Operations {
                                     load: wgpu::LoadOp::Clear(wgpu::Color {
                                         r: 1.0,
@@ -7204,7 +11385,7 @@ impl Renderer {
                             }),
                         ],
                         depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                            view: &self.depth_view,
+                            view: msaa_views.map_or(&self.depth_view, |(_, (_, _, _, dv))| dv),
                             depth_ops: Some(wgpu::Operations {
                                 load: wgpu::LoadOp::Load,
                                 store: wgpu::StoreOp::Store,
@@ -7215,34 +11396,67 @@ impl Renderer {
                         occlusion_query_set: None,
                         multiview_mask: None,
                     });
-                    let Some(oit_pipe) = self.pipeline_oit.as_ref() else {
+                    let pipe = if msaa_views.is_some() { &self.pipeline_oit_msaa } else { &self.pipeline_oit };
+                    let Some(oit_pipe) = pipe.as_ref() else {
                         unreachable!("oit pass entered without a pipeline")
                     };
+                    vp_plan.apply(&mut opass);
                     opass.set_pipeline(oit_pipe);
                     opass.set_bind_group(0, &self.frame_bind_group, &[]);
                     opass.set_bind_group(3, &self.env_bind_group, &[]);
+                    // Group 3 is the scene's environment unless a material has its own.
+                    let mut env_bound: Option<MaterialEnvKey> = None;
                     for (i, d) in draws.iter().enumerate() {
+                        if d.env_group != env_bound {
+                            opass.set_bind_group(
+                                3,
+                                d.env_group
+                                    .and_then(|k| self.material_env_groups.get(&k))
+                                    .map_or(&self.env_bind_group, |(_, g)| g),
+                                &[],
+                            );
+                            env_bound = d.env_group;
+                        }
                         if !d.in_frustum {
                             continue;
                         }
-                        if d.topology != Topology::Oit {
+                        if d.topology != Topology::Oit || oit_phase[i] != $phase {
                             continue;
                         }
+                        // The draw's group 2 is its material variant's, so
+                        // the pipeline has to be too.
+                        let pipe = variant_pipeline(
+                            &mut self.state_pipelines,
+                            &self.map_variants,
+                            &self.device,
+                            &self.main_shader,
+                            oit_pipe,
+                            d.map_variant,
+                        );
+                        let pipe = self.state_pipelines.variant(
+                            &self.device,
+                            &pipe,
+                            &crate::materials::RenderState::DEFAULT,
+                        );
+                        opass.set_pipeline(&pipe);
                         let gm = &self.geom_cache[&d.key].mesh;
                         opass.set_bind_group(1, &self.per_mesh[i].1, &[]);
                         opass.set_bind_group(2, &*self.per_mesh[i].2, &[]);
                         opass.set_vertex_buffer(0, gm.vertex_buffer.slice(..));
                         if let Some(ib) = &gm.index_buffer {
                             opass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
-                            opass.draw_indexed(0..gm.index_count, 0, 0..1);
+                            opass.draw_indexed(draw_span(d.range, gm.index_count), 0, 0..1);
                         } else {
-                            opass.draw(0..gm.vertex_count, 0..1);
+                            opass.draw(draw_span(d.range, gm.vertex_count), 0..1);
                         }
                     }
                 }
-                // 2) Resolve over the opaque image (alpha-blended fullscreen).
+                // 2) Resolve over the opaque image: what is behind times the
+                //    layers' transmittance, then plus their light.
                 {
-                    let resolve_pipe = if linear_framebuffer {
+                    let resolve_pipe = if msaa_views.is_some() {
+                        &self.pipeline_oit_resolve_msaa
+                    } else if linear_framebuffer {
                         &self.pipeline_oit_resolve_f16
                     } else {
                         &self.pipeline_oit_resolve
@@ -7250,9 +11464,9 @@ impl Renderer {
                     let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("threers oit resolve pass"),
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: target_view,
+                            view: msaa_views.map_or($target, |(_, (_, _, cv, _))| cv),
                             depth_slice: None,
-                            resolve_target: None,
+                            resolve_target: msaa_views.map(|_| $target),
                             ops: wgpu::Operations {
                                 load: wgpu::LoadOp::Load,
                                 store: wgpu::StoreOp::Store,
@@ -7263,23 +11477,189 @@ impl Renderer {
                         occlusion_query_set: None,
                         multiview_mask: None,
                     });
-                    rpass.set_pipeline(resolve_pipe);
+                    if !vp_plan.legacy {
+                        // Full-screen composite: confine it to this pane.
+                        let sc = vp_plan.scissor;
+                        rpass.set_scissor_rect(sc.x, sc.y, sc.width, sc.height);
+                    }
                     rpass.set_bind_group(0, resolve_bg, &[]);
-                    rpass.draw(0..3, 0..1);
+                    for pipe in resolve_pipe {
+                        rpass.set_pipeline(pipe);
+                        rpass.draw(0..3, 0..1);
+                    }
                 }
             }
         }
 
+            }};
+        }
+        if !refract_present {
+            oit_phase!(0, target_view, true);
+        }
+
+        // A multisampled opaque pass left its depth multisampled: resolve it
+        // into the single-sampled one — the renderer's own, which refraction
+        // glass tests against and its march copies, or a multisampled render
+        // target's, which post-processing reads (`RenderTarget::samples`).
+        let depth_out = self.last_frame_msaa && pane_msaa.is_none() && (refract_present || self.msaa_depth_out.is_some());
+        if depth_out && (self.depth_resolve.is_none() || self.force_depth_replay) {
+            // The camera's view-projection as the replay's pass uniform.
+            if self.depth_replay_pass.is_none() {
+                let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("threers depth replay uniform"),
+                    size: std::mem::size_of::<ShadowPassGpu>() as u64,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("threers depth replay bg"),
+                    layout: &self.shadow_pass_bgl,
+                    entries: &[
+                        wgpu::BindGroupEntry { binding: 0, resource: self.frame_buffer.as_entire_binding() },
+                        wgpu::BindGroupEntry { binding: 3, resource: buffer.as_entire_binding() },
+                    ],
+                });
+                self.depth_replay_pass = Some((buffer, bg));
+            }
+            let (replay_buffer, replay_bg) = self.depth_replay_pass.as_ref().unwrap();
+            let replay_u = ShadowPassGpu { vp: frame_u.view_proj, light: [0.0; 4] };
+            self.queue.write_buffer(replay_buffer, 0, bytemuck::bytes_of(&replay_u));
+            let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("threers depth replay pass"),
+                color_attachments: &[],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(self.depth_clear()),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            rp.set_bind_group(0, replay_bg, &[0]);
+            rp.set_bind_group(3, &self.shadow_env_bind_group, &[]);
+            for (i, d) in draws.iter().enumerate() {
+                if !d.in_frustum {
+                    continue;
+                }
+                // What the opaque pass wrote depth for. Lines, points,
+                // sprites and custom shaders are left out: they rarely
+                // stand behind glass, and have no depth-only pipeline.
+                let skinned = d.topology == Topology::Skinned;
+                let instanced = d.topology == Topology::Instanced;
+                if !(matches!(d.topology, Topology::Triangle | Topology::TriangleNoCull) || skinned || instanced) {
+                    continue;
+                }
+                let cut = d.alpha_test > 0.0 && (d.slots.map.is_some() || d.slots.alpha_map.is_some());
+                let base = &self.depth_replay[usize::from(cut) * 3 + if skinned { 1 } else if instanced { 2 } else { 0 }];
+                let gm = &self.geom_cache[&d.key].mesh;
+                let mut instances = 0..1;
+                if skinned {
+                    let (Some(bg), Some(attrs)) = (
+                        skin_data.get(d.skin_idx).and_then(|s| s.bg.as_ref()),
+                        self.skin_attr_cache.get(&d.key),
+                    ) else {
+                        continue;
+                    };
+                    rp.set_bind_group(1, bg, &[]);
+                    rp.set_vertex_buffer(1, attrs.slice(..));
+                } else {
+                    rp.set_bind_group(1, &self.per_mesh[i].1, &[]);
+                    if instanced {
+                        rp.set_vertex_buffer(1, instance_buffers[d.instance_buf_idx].slice(..));
+                        instances = 0..d.instance_count;
+                    }
+                }
+                let pipe = variant_pipeline(&mut self.state_pipelines, &self.map_variants, &self.device, &self.main_shader, base, d.map_variant);
+                // The material's depth state, and with reversed depth the
+                // flipped compare, as the opaque pass drew it.
+                let pipe = self.state_pipelines.variant(&self.device, &pipe, &d.state);
+                let pipe = match side_cull(true, d.side) {
+                    Some(cull) => self.state_pipelines.cull_variant(&self.device, &pipe, cull),
+                    None => pipe,
+                };
+                rp.set_pipeline(&pipe);
+                rp.set_bind_group(2, &*self.per_mesh[i].2, &[]);
+                rp.set_vertex_buffer(0, gm.vertex_buffer.slice(..));
+                if let Some(ib) = &gm.index_buffer {
+                    rp.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
+                    rp.draw_indexed(draw_span(d.range, gm.index_count), 0, instances);
+                } else {
+                    rp.draw(draw_span(d.range, gm.vertex_count), instances);
+                }
+            }
+        } else if depth_out {
+            if let (Some((bgl, pipe)), Some((_, _, _, msaa_depth))) = (&self.depth_resolve, &self.msaa_targets) {
+                let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("threers depth resolve bg"),
+                    layout: bgl,
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(msaa_depth),
+                    }],
+                });
+                let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("threers depth resolve pass"),
+                    color_attachments: &[],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &self.depth_view,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(self.depth_clear()),
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                rp.set_pipeline(pipe);
+                rp.set_bind_group(0, &bg, &[]);
+                rp.draw(0..3, 0..1);
+            }
+        }
         // --- Screen-space refraction glass: build the ss-color mip chain from
         // the opaque capture, blit the sharp capture to the frame target, then
         // draw the glass surface sampling it for refraction + reflection. ---
         //
         if refract_present {
+            // The refracting objects back to front, in `refract_groups` groups
+            // (worked out above, with the OIT phases).
+            if refract_groups > 1 {
+                self.ensure_ss_layer();
+            }
+            // Overlapping glass, in layers (`set_refraction_layers`): the
+            // refracting objects back to front in up to that many groups,
+            // each refracting a capture of everything drawn before it — the
+            // opaque scene for the farthest, that and the farther glass for
+            // the next. Every group but the last draws into a scratch target
+            // copied back into the capture; the last draws into the frame.
+            for group in 0..refract_groups {
+            let last_group = group + 1 == refract_groups;
+            if group > 0 {
+                // What the previous group drew is the next one's capture.
+                let (ssc, (_, _, layer_tex, _)) = (self.ss_color.as_ref().unwrap(), self.ss_layer.as_ref().unwrap());
+                encoder.copy_texture_to_texture(
+                    layer_tex.as_image_copy(),
+                    ssc.texture.as_image_copy(),
+                    wgpu::Extent3d { width: ssc.width, height: ssc.height, depth_or_array_layers: 1 },
+                );
+            }
+            // OIT surfaces behind this group's glass, into its capture.
+            oit_phase!(group, &self.ss_color.as_ref().unwrap().mip_render_views[0], false);
+            let layer_target: &wgpu::TextureView = if last_group {
+                target_view
+            } else {
+                &self.ss_layer.as_ref().unwrap().3
+            };
             let ssc = self.ss_color.as_ref().unwrap();
             // Copy the opaque depth into the sampleable ss_depth so the glass
             // shader can ray-march it for refraction/reflection.
             if let Some((_, _, ss_dtex, _)) = &self.ss_depth {
-                let src = depth_src.unwrap_or(&self.depth_texture);
+                let src = depth_src.or(self.msaa_depth_out.as_ref()).unwrap_or(&self.depth_texture);
                 encoder.copy_texture_to_texture(
                     wgpu::TexelCopyTextureInfo {
                         texture: src,
@@ -7311,7 +11691,7 @@ impl Renderer {
                     depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                         view: ss_back_depth_view,
                         depth_ops: Some(wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(1.0),
+                            load: wgpu::LoadOp::Clear(self.depth_clear()),
                             store: wgpu::StoreOp::Store,
                         }),
                         stencil_ops: None,
@@ -7326,18 +11706,32 @@ impl Renderer {
                     if !d.in_frustum {
                         continue;
                     }
-                    if d.topology != Topology::Refract {
+                    if d.topology != Topology::Refract || refract_group[i] != group {
                         continue;
                     }
+                    let pipe = variant_pipeline(
+                        &mut self.state_pipelines,
+                        &self.map_variants,
+                        &self.device,
+                        &self.main_shader,
+                        &self.pipeline_ss_back_depth,
+                        d.map_variant,
+                    );
+                    let pipe = self.state_pipelines.variant(
+                        &self.device,
+                        &pipe,
+                        &crate::materials::RenderState::DEFAULT,
+                    );
+                    bp.set_pipeline(&pipe);
                     let gm = &self.geom_cache[&d.key].mesh;
                     bp.set_bind_group(1, &self.per_mesh[i].1, &[]);
                     bp.set_bind_group(2, &*self.per_mesh[i].2, &[]);
                     bp.set_vertex_buffer(0, gm.vertex_buffer.slice(..));
                     if let Some(ib) = &gm.index_buffer {
                         bp.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
-                        bp.draw_indexed(0..gm.index_count, 0, 0..1);
+                        bp.draw_indexed(draw_span(d.range, gm.index_count), 0, 0..1);
                     } else {
-                        bp.draw(0..gm.vertex_count, 0..1);
+                        bp.draw(draw_span(d.range, gm.vertex_count), 0..1);
                     }
                 }
             }
@@ -7404,7 +11798,7 @@ impl Renderer {
                 let mut bp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("threers ss blit"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: target_view,
+                        view: layer_target,
                         depth_slice: None,
                         resolve_target: None,
                         ops: wgpu::Operations {
@@ -7423,7 +11817,10 @@ impl Renderer {
             }
             // 3) group(3) bind group with the real ss-color at binding 9 (env cube
             //    + shadows mirror the frame's env bind group).
-            let cube_uv_view: &wgpu::TextureView = if let Some(env) = &scene.environment {
+            // The scene environment as the frame's group reads it: prefiltered
+            // (earlier this frame).
+            let scene_env_cube = scene.environment.as_ref().map(|e| self.prefiltered_cached(e));
+            let cube_uv_view: &wgpu::TextureView = if let Some(env) = &scene_env_cube {
                 self.cube_cache
                     .get(&cube_cache_key(env))
                     .and_then(|gc| gc.cube_uv_view.as_ref())
@@ -7435,11 +11832,71 @@ impl Renderer {
                 self.cube_rt_view_cache
                     .get(&rt_id)
                     .unwrap_or(&self.default_env_cube.view)
-            } else if let Some(env) = &scene.environment {
+            } else if let Some(env) = &scene_env_cube {
                 &self.cube_cache[&cube_cache_key(env)].view
             } else {
                 &self.default_env_cube.view
             };
+            // 4a) Each light's shadow on the glass, for the pass below, which
+            //     has no room for the maps (`fs_glass_shadow`). It also lays
+            //     down the glass depth that pass tests `LessEqual` against.
+            let glass_shadow_view = &self.ss_glass_shadow.as_ref().unwrap().1;
+            {
+                let mut sp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("threers glass shadow pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: glass_shadow_view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &self.depth_view,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                sp.set_bind_group(0, &self.frame_bind_group, &[]);
+                sp.set_bind_group(3, &self.env_bind_group, &[]);
+                for (i, d) in draws.iter().enumerate() {
+                    if !d.in_frustum || d.topology != Topology::Refract || refract_group[i] != group {
+                        continue;
+                    }
+                    let pipe = variant_pipeline(
+                        &mut self.state_pipelines,
+                        &self.map_variants,
+                        &self.device,
+                        &self.main_shader,
+                        &self.pipeline_glass_shadow,
+                        d.map_variant,
+                    );
+                    let pipe = self.state_pipelines.variant(
+                        &self.device,
+                        &pipe,
+                        &crate::materials::RenderState::DEFAULT,
+                    );
+                    sp.set_pipeline(&pipe);
+                    let gm = &self.geom_cache[&d.key].mesh;
+                    sp.set_bind_group(1, &self.per_mesh[i].1, &[]);
+                    sp.set_bind_group(2, &*self.per_mesh[i].2, &[]);
+                    sp.set_vertex_buffer(0, gm.vertex_buffer.slice(..));
+                    if let Some(ib) = &gm.index_buffer {
+                        sp.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
+                        sp.draw_indexed(draw_span(d.range, gm.index_count), 0, 0..1);
+                    } else {
+                        sp.draw(draw_span(d.range, gm.vertex_count), 0..1);
+                    }
+                }
+            }
             // Built by hand rather than through `env_bind_group!`: this group
             // has the capture where the macro puts the shadow maps, and the
             // shadow maps are exactly what was dropped to make room for it.
@@ -7475,6 +11932,14 @@ impl Renderer {
                         binding: 12,
                         resource: wgpu::BindingResource::TextureView(ss_back_depth_view),
                     },
+                    wgpu::BindGroupEntry {
+                        binding: 13,
+                        resource: self.env_uniform.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 15,
+                        resource: wgpu::BindingResource::TextureView(glass_shadow_view),
+                    },
                 ],
             });
             // 4) Glass surface pass (Less + depth-write, opaque composite).
@@ -7486,7 +11951,7 @@ impl Renderer {
             let mut gp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("threers ss glass pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: target_view,
+                    view: layer_target,
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
@@ -7513,47 +11978,81 @@ impl Renderer {
                 if !d.in_frustum {
                     continue;
                 }
-                if d.topology != Topology::Refract {
+                if d.topology != Topology::Refract || refract_group[i] != group {
                     continue;
                 }
+                let pipe = variant_pipeline(
+                    &mut self.state_pipelines,
+                    &self.map_variants,
+                    &self.device,
+                    &self.main_shader,
+                    glass_pipe,
+                    d.map_variant,
+                );
+                let pipe = self.state_pipelines.variant(
+                    &self.device,
+                    &pipe,
+                    &crate::materials::RenderState::DEFAULT,
+                );
+                gp.set_pipeline(&pipe);
                 let gm = &self.geom_cache[&d.key].mesh;
                 gp.set_bind_group(1, &self.per_mesh[i].1, &[]);
                 gp.set_bind_group(2, &*self.per_mesh[i].2, &[]);
                 gp.set_vertex_buffer(0, gm.vertex_buffer.slice(..));
                 if let Some(ib) = &gm.index_buffer {
                     gp.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
-                    gp.draw_indexed(0..gm.index_count, 0, 0..1);
+                    gp.draw_indexed(draw_span(d.range, gm.index_count), 0, 0..1);
                 } else {
-                    gp.draw(0..gm.vertex_count, 0..1);
+                    gp.draw(draw_span(d.range, gm.vertex_count), 0..1);
                 }
             }
             // Custom shaders that asked for the capture draw here too, with the
             // real ss-colour/ss-depth at group(3) — the whole point of the flag.
             for (i, d) in draws.iter().enumerate() {
-                let Topology::Custom(h, tr, true, sd, dw) = d.topology else {
+                let Topology::Custom(h, tr, true, sd) = d.topology else {
                     continue;
                 };
+                if !last_group {
+                    continue;
+                }
                 let Some(bg) = &user_bgs[i] else { continue };
                 let Some(pipe) =
                     self.custom_pipelines
-                        .get(&(h, linear_framebuffer, tr, true, sd, dw))
+                        .get(&(h, linear_framebuffer, tr, true, sd))
                 else {
                     continue;
                 };
-                gp.set_pipeline(pipe);
+                let pipe = variant_pipeline(&mut self.state_pipelines, &self.map_variants, &self.device, &self.main_shader, pipe, d.map_variant);
+                let pipe = self.state_pipelines.variant(&self.device, &pipe, &d.state);
+                gp.set_pipeline(&pipe);
                 gp.set_bind_group(1, bg, &[]);
-                gp.set_bind_group(2, &self.custom_tex_bind_group, &[]);
+                gp.set_bind_group(
+                    2,
+                    custom_morph_bgs[i].as_ref().unwrap_or(&self.custom_tex_bind_group),
+                    &[],
+                );
                 let gm = &self.geom_cache[&d.key].mesh;
                 gp.set_vertex_buffer(0, gm.vertex_buffer.slice(..));
+                let sdd = &shader_data[d.shader_idx];
+                let instances = if sdd.instanced {
+                    gp.set_vertex_buffer(1, instance_buffers[d.instance_buf_idx].slice(..));
+                    gp.set_vertex_buffer(2, instance_buffers[sdd.custom_buf].slice(..));
+                    0..d.instance_count
+                } else {
+                    0..1
+                };
                 if let Some(ib) = &gm.index_buffer {
                     gp.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
-                    gp.draw_indexed(0..gm.index_count, 0, 0..1);
+                    gp.draw_indexed(draw_span(d.range, gm.index_count), 0, instances);
                 } else {
-                    gp.draw(0..gm.vertex_count, 0..1);
+                    gp.draw(draw_span(d.range, gm.vertex_count), instances);
                 }
             }
 
             drop(gp); // end glass pass before the overlay pass reuses the encoder
+            }
+            // OIT surfaces in front of all the glass, over it.
+            oit_phase!(refract_groups, target_view, false);
 
             // Overlay pass: objects opted out of glass capture draw here, over the
             // glass, depth-tested against it (so they stay crisp and un-refracted).
@@ -7583,8 +12082,25 @@ impl Renderer {
                 });
                 op.set_bind_group(0, &self.frame_bind_group, &[]);
                 op.set_bind_group(3, &self.env_bind_group, &[]);
-                let mut last: Option<Topology> = None;
+                let mut last: Option<(
+                    Topology,
+                    crate::materials::RenderState,
+                    Option<super::material_maps::MapVariant>,
+                    u32,
+                )> = None;
+                // Group 3 is the scene's environment unless a material has its own.
+                let mut env_bound: Option<MaterialEnvKey> = None;
                 for (i, d) in draws.iter().enumerate() {
+                    if d.env_group != env_bound {
+                        op.set_bind_group(
+                            3,
+                            d.env_group
+                                .and_then(|k| self.material_env_groups.get(&k))
+                                .map_or(&self.env_bind_group, |(_, g)| g),
+                            &[],
+                        );
+                        env_bound = d.env_group;
+                    }
                     if !d.in_frustum {
                         continue;
                     }
@@ -7597,18 +12113,30 @@ impl Renderer {
                         (false, Topology::TriangleNoCull) => &self.pipeline_tri_nocull,
                         (false, Topology::Line) => &self.pipeline_line,
                         (false, Topology::Sprite) => &self.pipeline_sprite,
+                        (false, Topology::Point) => &self.pipeline_point,
+                        (false, Topology::PointAlpha) => &self.pipeline_point_alpha,
                         (false, Topology::Instanced) => &self.pipeline_instanced,
+                        (false, Topology::InstancedAlpha) => &self.pipeline_instanced_alpha,
                         (true, Topology::Triangle) => &self.pipeline_tri_f16,
                         (true, Topology::TriangleAlpha) => &self.pipeline_tri_alpha_f16,
                         (true, Topology::TriangleNoCull) => &self.pipeline_tri_nocull_f16,
                         (true, Topology::Line) => &self.pipeline_line_f16,
                         (true, Topology::Sprite) => &self.pipeline_sprite_f16,
+                        (true, Topology::Point) => &self.pipeline_point_f16,
+                        (true, Topology::PointAlpha) => &self.pipeline_point_alpha_f16,
                         (true, Topology::Instanced) => &self.pipeline_instanced_f16,
+                        (true, Topology::InstancedAlpha) => &self.pipeline_instanced_alpha_f16,
                         _ => continue, // skinned/custom/etc not supported as overlay
                     };
-                    if last != Some(d.topology) {
-                        op.set_pipeline(pipe);
-                        last = Some(d.topology);
+                    if last != Some((d.topology, d.state, d.map_variant, d.side)) {
+                        let pipe = variant_pipeline(&mut self.state_pipelines, &self.map_variants, &self.device, &self.main_shader, pipe, d.map_variant);
+                        let pipe = self.state_pipelines.variant(&self.device, &pipe, &d.state);
+                        let pipe = match side_cull(d.topology.is_faces(), d.side) {
+                            Some(cull) => self.state_pipelines.cull_variant(&self.device, &pipe, cull),
+                            None => pipe,
+                        };
+                        op.set_pipeline(&pipe);
+                        last = Some((d.topology, d.state, d.map_variant, d.side));
                     }
                     let gm = if d.topology == Topology::Sprite {
                         &self.sprite_quad
@@ -7618,7 +12146,11 @@ impl Renderer {
                     op.set_bind_group(1, &self.per_mesh[i].1, &[]);
                     op.set_bind_group(2, &*self.per_mesh[i].2, &[]);
                     op.set_vertex_buffer(0, gm.vertex_buffer.slice(..));
-                    let inst = if d.topology == Topology::Instanced {
+                    if d.topology.is_points() {
+                        op.draw(0..6, draw_span(d.range, gm.vertex_count));
+                        continue;
+                    }
+                    let inst = if d.topology.is_instanced() {
                         op.set_vertex_buffer(1, instance_buffers[d.instance_buf_idx].slice(..));
                         d.instance_count
                     } else {
@@ -7626,9 +12158,9 @@ impl Renderer {
                     };
                     if let Some(ib) = &gm.index_buffer {
                         op.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
-                        op.draw_indexed(0..gm.index_count, 0, 0..inst);
+                        op.draw_indexed(draw_span(d.range, gm.index_count), 0, 0..inst);
                     } else {
-                        op.draw(0..gm.vertex_count, 0..inst);
+                        op.draw(draw_span(d.range, gm.vertex_count), 0..inst);
                     }
                 }
             }
@@ -7696,6 +12228,7 @@ impl Renderer {
                         (true, true) => 2.0,
                     },
                 ],
+                flags: [if self.state_pipelines.reversed() { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0],
             };
             self.queue
                 .write_buffer(&self.taa_uniform, 0, bytemuck::bytes_of(&taa_u));
@@ -7852,10 +12385,19 @@ impl Renderer {
         if let Some(t) = &self.timer {
             t.resolve(&mut encoder);
         }
+        if update_shadows {
+            if let Some(t) = &self.shadow_timer {
+                t.resolve(&mut encoder);
+            }
+        }
         self.queue.submit(Some(encoder.finish()));
         // After submit, so the map is queued behind this frame's work. Never
         // blocks — see `gpu_timer`.
         if let Some(t) = &mut self.timer {
+            let device = self.device.clone();
+            t.poll(&device);
+        }
+        if let Some(t) = &mut self.shadow_timer {
             let device = self.device.clone();
             t.poll(&device);
         }
@@ -7872,6 +12414,32 @@ impl Renderer {
     /// at 18, 31 and 35 ms.
     pub fn gpu_frame_ms(&self) -> f32 {
         self.timer.as_ref().map(|t| t.last_ms()).unwrap_or(0.0)
+    }
+
+    /// GPU milliseconds from the start of the first shadow pass to the end of
+    /// the last, from the most recent completed readback of a render that drew
+    /// them — like [`gpu_frame_ms`](Self::gpu_frame_ms), a few renders old,
+    /// and 0.0 without timestamp support.
+    pub fn gpu_shadow_ms(&self) -> f32 {
+        self.shadow_timer.as_ref().map(|t| t.last_ms()).unwrap_or(0.0)
+    }
+
+    /// three.js `renderer.shadowMap`: `auto_update` (default on) redraws the
+    /// shadow maps whenever a caster or a light changed since they were last
+    /// drawn — a still scene under a moving camera keeps them; turn it off
+    /// and set `needs_update` to have the next render redraw them once. See
+    /// [`ShadowMap`](super::ShadowMap).
+    pub fn shadow_map(&self) -> &super::viewport::ShadowMap {
+        &self.shadow_map
+    }
+
+    pub fn shadow_map_mut(&mut self) -> &mut super::viewport::ShadowMap {
+        &mut self.shadow_map
+    }
+
+    /// How many renders so far drew the shadow maps.
+    pub fn shadow_map_updates(&self) -> u64 {
+        self.shadow_updates
     }
 
     fn ensure_slot_uploaded(&mut self, slot: &Option<Arc<Texture>>) {
@@ -7893,6 +12461,7 @@ impl Renderer {
             // Drop stale GPU copies for this logical texture (older upload_seq).
             self.tex_cache.retain(|k, _| k.0 != t.id);
             self.tex_bg_cache.clear();
+            self.variant_bg_cache.clear();
             if t.is_handle() {
                 // A handle carries no pixels: it can only ever resolve to an
                 // upload its full twin already made. Reaching here means that
@@ -7922,6 +12491,7 @@ impl Renderer {
             let gt = GpuTexture::upload_with_mipgen(&self.device, &self.queue, t, mipgen);
             self.tex_cache.insert(key, gt);
             self.tex_bg_cache.clear();
+            self.variant_bg_cache.clear();
         }
     }
 
@@ -7983,6 +12553,7 @@ impl Renderer {
         });
         self.rt_view_cache.insert(rt_id, view);
         self.tex_bg_cache.clear();
+        self.variant_bg_cache.clear();
         let linear_view = rt.color_texture.create_view(&wgpu::TextureViewDescriptor {
             label: Some("threers rt linear sample view"),
             format: Some(rt.format),
@@ -7998,7 +12569,14 @@ impl Renderer {
         self.rt_registry.insert(rt_id, Arc::clone(rt));
     }
 
-    fn build_tex_bg(&self, slots: &MaterialTextureSlots) -> wgpu::BindGroup {
+    fn build_tex_bg(
+        &self,
+        slots: &MaterialTextureSlots,
+        morph: Option<&wgpu::TextureView>,
+        uv_sets: Option<&wgpu::TextureView>,
+    ) -> wgpu::BindGroup {
+        let morph = morph.unwrap_or(&self.default_morph.1);
+        let uv_sets = uv_sets.unwrap_or(&self.default_uv_sets.1);
         let albedo = self.view_for(&slots.map, &self.default_white_srgb);
         let normal = self.view_for(&slots.normal_map, &self.default_normal);
         let roughness = self.view_for(&slots.roughness_map, &self.default_white_linear);
@@ -8014,18 +12592,14 @@ impl Renderer {
             Some(_) => self.view_for(&slots.cloud_shadow_map, &self.default_transparent),
             None => self.view_for(&slots.matcap_map, &self.default_white_srgb),
         };
-        let iridescence_thickness =
-            self.view_for(&slots.iridescence_thickness_map, &self.default_white_linear);
-        // Black default: no map means no displacement, so the vertex stage can
-        // sample unconditionally and still move nothing.
-        let displacement = self.view_for(&slots.displacement_map, &self.default_black);
 
-        // Pick sampler based on the primary texture's filter/wrap. We use
-        // `slots.map` as the canonical choice (matcap uses `matcap_map`).
-        let chosen = slots.map.as_ref().or(slots.matcap_map.as_ref());
+        // One sampler for every map of the material, from the colour map's
+        // filter and wrap (or the first map present) — see
+        // `MaterialTextureSlots::sampler_source`.
+        let chosen = slots.sampler_source();
         let sampler = match chosen {
             Some(t) => self.pick_sampler(t),
-            None => &self.sampler_linear,
+            None => &self.samplers[SAMPLER_DEFAULT],
         };
 
         self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -8057,10 +12631,6 @@ impl Renderer {
                     resource: wgpu::BindingResource::TextureView(emissive),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 9,
-                    resource: wgpu::BindingResource::TextureView(displacement),
-                },
-                wgpu::BindGroupEntry {
                     binding: 6,
                     resource: wgpu::BindingResource::TextureView(matcap),
                 },
@@ -8069,8 +12639,12 @@ impl Renderer {
                     resource: wgpu::BindingResource::Sampler(sampler),
                 },
                 wgpu::BindGroupEntry {
+                    binding: 10,
+                    resource: wgpu::BindingResource::TextureView(morph),
+                },
+                wgpu::BindGroupEntry {
                     binding: 8,
-                    resource: wgpu::BindingResource::TextureView(iridescence_thickness),
+                    resource: wgpu::BindingResource::TextureView(uv_sets),
                 },
             ],
         })
@@ -8079,21 +12653,190 @@ impl Renderer {
     /// Select one of the 4 pre-built samplers based on a Texture's filter/wrap
     /// fields. Mirrors three.js: NearestFilter→nearest, LinearFilter→linear;
     /// RepeatWrapping→repeat, ClampToEdgeWrapping→clamp.
-    fn pick_sampler<'a>(&'a self, t: &Texture) -> &'a wgpu::Sampler {
-        use crate::textures::{TextureFilter, TextureWrap};
-        let nearest = matches!(t.mag_filter, TextureFilter::Nearest);
-        let repeat =
-            matches!(t.wrap_s, TextureWrap::Repeat) || matches!(t.wrap_t, TextureWrap::Repeat);
-        match (nearest, repeat) {
-            (false, false) => &self.sampler_linear,
-            (true, false) => &self.sampler_nearest_clamp,
-            (false, true) => &self.sampler_linear_repeat,
-            (true, true) => &self.sampler_nearest_repeat,
+    /// Build material shader variant `v` — its module and group-2 layout — if
+    /// it is not built yet.
+    fn ensure_map_variant(&mut self, v: super::material_maps::MapVariant) {
+        use super::material_maps as mm;
+        if self.map_variants.contains_key(&v) {
+            return;
         }
+        let source = super::shader::shader_source_with_maps(&mm::prelude(v));
+        let module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("threers material variant shader"),
+            source: wgpu::ShaderSource::Wgsl(source.into()),
+        });
+        let b = mm::bindings(v);
+        let mut entries = vec![uv_sets_entry(), wgpu::BindGroupLayoutEntry {
+            binding: 10,
+            visibility: wgpu::ShaderStages::VERTEX,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                view_dimension: wgpu::TextureViewDimension::D2Array,
+                multisampled: false,
+            },
+            count: None,
+        }];
+        for (role, t, smp) in &b.maps {
+            let visibility = if role.vertex() {
+                wgpu::ShaderStages::VERTEX
+            } else {
+                wgpu::ShaderStages::FRAGMENT
+            };
+            entries.push(wgpu::BindGroupLayoutEntry {
+                binding: *t,
+                visibility,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            });
+            entries.push(wgpu::BindGroupLayoutEntry {
+                binding: *smp,
+                visibility,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            });
+        }
+        if let Some((t, smp)) = b.env {
+            entries.push(wgpu::BindGroupLayoutEntry {
+                binding: t,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::Cube,
+                    multisampled: false,
+                },
+                count: None,
+            });
+            entries.push(wgpu::BindGroupLayoutEntry {
+                binding: smp,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            });
+        }
+        entries.push(wgpu::BindGroupLayoutEntry {
+            binding: b.xforms,
+            visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        });
+        let bgl = self.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("threers material variant bgl"),
+            entries: &entries,
+        });
+        self.map_variants.insert(v, (module, bgl));
+    }
+
+    /// Group 2 for a draw on material variant `v`: each map with its own
+    /// sampler, and the block of their uv transforms.
+    fn build_variant_tex_bg(
+        &self,
+        slots: &MaterialTextureSlots,
+        morph: Option<&wgpu::TextureView>,
+        uv_sets: Option<&wgpu::TextureView>,
+        v: super::material_maps::MapVariant,
+        uniforms: [[f32; 4]; 6],
+    ) -> wgpu::BindGroup {
+        use super::material_maps as mm;
+        let b = mm::bindings(v);
+        let textures: Vec<&std::sync::Arc<Texture>> = mm::role_textures(slots)
+            .into_iter()
+            .filter(|(r, _)| v.contains(*r))
+            .filter_map(|(_, t)| t)
+            .collect();
+        let mut rows: Vec<[f32; 4]> = Vec::with_capacity(6 + 2 * textures.len().max(1));
+        rows.extend(uniforms);
+        // Row 0's w: the uv set the map reads (three.js `Texture.channel`).
+        for t in &textures {
+            let [r0, r1] = t.uv_transform_rows();
+            rows.push([r0[0], r0[1], r0[2], t.channel.min(3) as f32]);
+            rows.push([r1[0], r1[1], r1[2], 0.0]);
+        }
+        if textures.is_empty() {
+            rows.extend([[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]]);
+        }
+        let xforms = wgpu::util::DeviceExt::create_buffer_init(
+            &*self.device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("threers material map transforms"),
+                contents: bytemuck::cast_slice(&rows),
+                usage: wgpu::BufferUsages::UNIFORM,
+            },
+        );
+        let morph = morph.unwrap_or(&self.default_morph.1);
+        let mut entries = vec![
+            wgpu::BindGroupEntry {
+                binding: 10,
+                resource: wgpu::BindingResource::TextureView(morph),
+            },
+            wgpu::BindGroupEntry {
+                binding: 8,
+                resource: wgpu::BindingResource::TextureView(uv_sets.unwrap_or(&self.default_uv_sets.1)),
+            },
+        ];
+        for ((_, t, smp), tex) in b.maps.iter().zip(&textures) {
+            let slot = Some((*tex).clone());
+            entries.push(wgpu::BindGroupEntry {
+                binding: *t,
+                resource: wgpu::BindingResource::TextureView(self.view_for(&slot, &self.default_white_linear)),
+            });
+            entries.push(wgpu::BindGroupEntry {
+                binding: *smp,
+                resource: wgpu::BindingResource::Sampler(self.pick_sampler(tex)),
+            });
+        }
+        if let (Some((t, smp)), Some(cube)) = (b.env, slots.env_map.as_ref()) {
+            entries.push(wgpu::BindGroupEntry {
+                binding: t,
+                resource: wgpu::BindingResource::TextureView(&self.cube_cache[&cube_cache_key(cube)].view),
+            });
+            entries.push(wgpu::BindGroupEntry {
+                binding: smp,
+                resource: wgpu::BindingResource::Sampler(&self.samplers[cube_sampler_index(cube)]),
+            });
+        }
+        entries.push(wgpu::BindGroupEntry {
+            binding: b.xforms,
+            resource: xforms.as_entire_binding(),
+        });
+        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("threers material variant bg"),
+            layout: &self.map_variants[&v].1,
+            entries: &entries,
+        })
+    }
+
+    /// three.js `WebGLCubeUVMaps`: a cube texture lighting a Standard or
+    /// Physical material is read through its PMREM — prefiltered here once,
+    /// and kept — unless it already carries one (`PMREMGenerator` output).
+    fn prefiltered(&mut self, cube: &std::sync::Arc<CubeTexture>) -> std::sync::Arc<CubeTexture> {
+        if cube.cube_uv_atlas.is_some() {
+            return cube.clone();
+        }
+        self.pmrem_cache
+            .entry(cube_cache_key(cube))
+            .or_insert_with(|| crate::PmremGenerator::from_cube(cube.clone()))
+            .clone()
+    }
+
+    /// [`prefiltered`](Self::prefiltered) once it has run for `cube`.
+    fn prefiltered_cached(&self, cube: &std::sync::Arc<CubeTexture>) -> std::sync::Arc<CubeTexture> {
+        self.pmrem_cache.get(&cube_cache_key(cube)).cloned().unwrap_or_else(|| cube.clone())
+    }
+
+    fn pick_sampler<'a>(&'a self, t: &Texture) -> &'a wgpu::Sampler {
+        &self.samplers[sampler_index(t)]
     }
 
     fn make_default_tex_bg(&self) -> wgpu::BindGroup {
-        self.build_tex_bg(&MaterialTextureSlots::default())
+        self.build_tex_bg(&MaterialTextureSlots::default(), None, None)
     }
 }
 
@@ -8184,6 +12927,82 @@ fn primitive(topology: wgpu::PrimitiveTopology, cull: Option<wgpu::Face>) -> wgp
     }
 }
 
+/// The mesh triangle pipeline (`code`: 0 culled, 1 alpha-blended, 2 double-sided) with
+/// three.js's `polygonOffset` as a depth bias.
+///
+/// `glPolygonOffset(factor, units)` offsets depth by `factor · m + units · r`
+/// (`m` the largest window-space depth slope, `r` the smallest resolvable
+/// step), and WebGPU's `DepthBiasState` is defined by the same formula with
+/// `slope_scale` and `constant` — so the values carry over unchanged. Depth
+/// here is not reversed (cleared to 1, `LessEqual`), so a negative offset
+/// pulls toward the camera exactly as in WebGL.
+#[allow(clippy::too_many_arguments)]
+fn build_biased_pipeline(
+    device: &wgpu::Device,
+    module: &wgpu::ShaderModule,
+    layout: &wgpu::PipelineLayout,
+    format: wgpu::TextureFormat,
+    samples: u32,
+    code: u8,
+    factor: f32,
+    units: i32,
+    pipes: &mut super::pipeline_state::StatePipelines,
+) -> wgpu::RenderPipeline {
+    let alpha = code == 1;
+    let vertex_buffers = [Some(wgpu::VertexBufferLayout {
+        array_stride: GpuMesh::VERTEX_STRIDE as wgpu::BufferAddress,
+        step_mode: wgpu::VertexStepMode::Vertex,
+        attributes: &[
+            wgpu::VertexAttribute { offset: 0, shader_location: 0, format: wgpu::VertexFormat::Float32x3 },
+            wgpu::VertexAttribute { offset: 12, shader_location: 1, format: wgpu::VertexFormat::Float32x3 },
+            wgpu::VertexAttribute { offset: 24, shader_location: 2, format: wgpu::VertexFormat::Float32x2 },
+            wgpu::VertexAttribute { offset: 32, shader_location: 3, format: wgpu::VertexFormat::Float32x4 },
+            wgpu::VertexAttribute { offset: 48, shader_location: 8, format: wgpu::VertexFormat::Float32x4 },
+        ],
+    })];
+    let mut ds = depth_stencil(!alpha, wgpu::CompareFunction::LessEqual);
+    ds.bias = wgpu::DepthBiasState {
+        constant: units,
+        slope_scale: factor,
+        clamp: 0.0,
+    };
+    pipes.create(device, &wgpu::RenderPipelineDescriptor {
+        label: Some("threers polygon-offset pipeline"),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module,
+            entry_point: Some("vs_main"),
+            buffers: &vertex_buffers,
+            compilation_options: Default::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module,
+            entry_point: Some("fs_main"),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: Some(if alpha {
+                    wgpu::BlendState::ALPHA_BLENDING
+                } else {
+                    wgpu::BlendState::REPLACE
+                }),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: Default::default(),
+        }),
+        primitive: primitive(
+            wgpu::PrimitiveTopology::TriangleList,
+            if code == 2 { None } else { Some(wgpu::Face::Back) },
+        ),
+        depth_stencil: Some(ds),
+        multisample: wgpu::MultisampleState {
+            count: samples,
+            ..Default::default()
+        },
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
 /// `DepthStencilState` at [`DEPTH_FORMAT`] with default stencil/bias — only the
 /// write flag and compare function differ across our pipelines.
 fn depth_stencil(write: bool, compare: wgpu::CompareFunction) -> wgpu::DepthStencilState {
@@ -8225,6 +13044,79 @@ fn create_depth_view(
     });
     let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
     (tex, view)
+}
+
+/// three.js's `RectAreaLight` lookup tables — `RectAreaLightUniformsLib`'s
+/// `LTC_MAT_1` and `LTC_MAT_2` (Heitz et al.'s fitted linearly transformed
+/// cosines), extracted from three.js r165 — as the two layers of one 64×64
+/// half-float texture: half floats filter on every backend (three.js falls
+/// back to the same `LTC_HALF` tables), and two layers keep the bilinear
+/// filter from reading across from one table into the other.
+///
+/// Built with `--cfg threers_no_rect_area_light` the tables are not embedded
+/// (they are 128 KB of floats that barely compress — a fifth of a small wasm)
+/// and the texture is zero-filled instead: same shape, same bindings, and a
+/// RectAreaLight simply contributes nothing. For consumers that never use one.
+fn upload_ltc(device: &wgpu::Device, queue: &wgpu::Queue) -> (wgpu::Texture, wgpu::TextureView) {
+    #[cfg(not(threers_no_rect_area_light))]
+    let half: Vec<u16> = {
+        const LTC_1: &[u8] = include_bytes!("ltc/ltc_float_1.bin");
+        const LTC_2: &[u8] = include_bytes!("ltc/ltc_float_2.bin");
+        [LTC_1, LTC_2]
+            .iter()
+            .flat_map(|b| b.chunks_exact(4))
+            .map(|c| super::gpu_texture::f32_to_f16_bits(f32::from_le_bytes([c[0], c[1], c[2], c[3]])))
+            .collect()
+    };
+    #[cfg(threers_no_rect_area_light)]
+    let half: Vec<u16> = vec![0; 64 * 64 * 4 * 2];
+    let size = wgpu::Extent3d { width: 64, height: 64, depth_or_array_layers: 2 };
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("threers RectAreaLight LTC tables"),
+        size,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba16Float,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        bytemuck::cast_slice(&half),
+        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(64 * 8), rows_per_image: Some(64) },
+        size,
+    );
+    let view = texture.create_view(&wgpu::TextureViewDescriptor {
+        dimension: Some(wgpu::TextureViewDimension::D2Array),
+        ..Default::default()
+    });
+    (texture, view)
+}
+
+/// A frame bind group: the frame uniforms and a transmission capture view.
+fn frame_bg(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    buffer: &wgpu::Buffer,
+    capture: &wgpu::TextureView,
+    sampler: &wgpu::Sampler,
+    label: &str,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some(label),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry { binding: 0, resource: buffer.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(capture) },
+            wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(sampler) },
+        ],
+    })
 }
 
 fn transform_direction(m: &Matrix4, v: Vector3) -> Vector3 {
@@ -8284,10 +13176,11 @@ mod tests {
     /// rather than the symptom.
     #[test]
     fn no_fragment_entry_point_precedes_fs_main() {
-        let first = SHADER_SOURCE
+        let source = crate::renderer::shader::legacy_shader_source();
+        let first = source
             .find("@fragment")
             .expect("SHADER_SOURCE has a fragment entry point");
-        let after = &SHADER_SOURCE[first..];
+        let after = &source[first..];
         let name = after
             .split("fn ")
             .nth(1)

@@ -1,73 +1,100 @@
 //! CSG brush: geometry + world matrix + BVH / half-edges for boolean ops.
 //!
-//! Mirrors `web/csg/core/Brush.js`.
+//! three-bvh-csg 0.0.16 `Brush`.
 
 use crate::core::BufferGeometry;
-use crate::math::{Matrix4, Vector3};
+use crate::math::Matrix4;
 use crate::mesh_bvh::{BuildOptions, MeshBvh};
 
 use super::geometry_prep::{build_group_indices, ensure_index, ensure_non_indexed};
 use super::half_edge_map::HalfEdgeMap;
 use super::js_topology::JsMatrix4;
 
-/// A mesh operand for CSG evaluation.
+/// A mesh operand for CSG evaluation (three-bvh-csg's `Brush`): geometry in
+/// its own frame, and its transforms as three.js holds them — `matrix` (local)
+/// and `matrix_world`, column-major f64. They stay f64 throughout because
+/// three-bvh-csg composes and inverts them in JavaScript's doubles, and the
+/// classification of a vertex lying on another brush's face turns on the
+/// last bit.
 #[derive(Debug)]
 pub struct CsgBrush {
     pub geometry: BufferGeometry,
-    pub local_matrix: Matrix4,
-    pub matrix_world: Matrix4,
-    previous_local_matrix: Matrix4,
-    position_js: Option<[f64; 3]>,
+    /// three.js `matrix`: this brush in its parent's frame.
+    pub matrix: [f64; 16],
+    /// three.js `matrixWorld`: this brush in world space.
+    pub matrix_world: [f64; 16],
+    previous_matrix: [f64; 16],
     pub(crate) half_edges: Option<HalfEdgeMap>,
     pub(crate) group_indices: Vec<u16>,
 }
 
+/// The column-major identity.
+pub const IDENTITY: [f64; 16] = [
+    1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+];
+
 impl CsgBrush {
     pub fn new(geometry: BufferGeometry) -> Self {
-        let mut previous_local_matrix = Matrix4::identity();
-        previous_local_matrix.elements.fill(0.0);
         Self {
             geometry,
-            local_matrix: Matrix4::identity(),
-            matrix_world: Matrix4::identity(),
-            previous_local_matrix,
-            position_js: None,
+            matrix: IDENTITY,
+            matrix_world: IDENTITY,
+            // Never equal to a real matrix, so a new brush is dirty, as in
+            // three-bvh-csg.
+            previous_matrix: [0.0; 16],
             half_edges: None,
             group_indices: Vec::new(),
         }
     }
 
-    /// Set brush position (f64 literals match three.js `position.set`).
+    /// three.js `position.set(x, y, z)` on an unrotated, unscaled brush.
     pub fn set_position(&mut self, x: f64, y: f64, z: f64) {
-        self.local_matrix = Matrix4::translation(Vector3::new(x as f32, y as f32, z as f32));
-        self.position_js = Some([x, y, z]);
+        self.matrix = IDENTITY;
+        self.matrix[12] = x;
+        self.matrix[13] = y;
+        self.matrix[14] = z;
     }
 
-    /// `matrixWorld` as f64 translation for CSG parity (`threejs-shim.js`).
+    /// Set `matrix_world` (and `matrix`) as three.js computed it — for a
+    /// brush whose scene graph lives elsewhere, such as JavaScript.
+    pub fn set_matrix_world(&mut self, elements: [f64; 16]) {
+        self.matrix = elements;
+        self.matrix_world = elements;
+    }
+
+    /// three.js `updateMatrixWorld`: `parent · matrix`, or `matrix` at the root.
+    pub fn update_matrix_world(&mut self, parent: Option<&[f64; 16]>) {
+        self.matrix_world = match parent {
+            Some(p) => {
+                JsMatrix4 { elements: *p }
+                    .multiply(JsMatrix4 {
+                        elements: self.matrix,
+                    })
+                    .elements
+            }
+            None => self.matrix,
+        };
+    }
+
     pub(crate) fn js_matrix_world(&self) -> JsMatrix4 {
-        if let Some([x, y, z]) = self.position_js {
-            let mut m = JsMatrix4::identity();
-            m.elements[12] = x;
-            m.elements[13] = y;
-            m.elements[14] = z;
-            m
-        } else {
-            JsMatrix4::from_matrix4(&self.matrix_world)
+        JsMatrix4 {
+            elements: self.matrix_world,
         }
     }
 
-    pub fn update_matrix_world(&mut self, parent: Option<&Matrix4>) {
-        self.matrix_world = parent
-            .map(|p| p.multiply(&self.local_matrix))
-            .unwrap_or(self.local_matrix);
+    /// `matrix_world` in f32, for the BVH traversal's box tests.
+    pub(crate) fn matrix_world_f32(&self) -> Matrix4 {
+        Matrix4 {
+            elements: self.matrix_world.map(|e| e as f32),
+        }
     }
 
     pub fn is_dirty(&self) -> bool {
-        self.local_matrix.elements != self.previous_local_matrix.elements
+        self.matrix != self.previous_matrix
     }
 
     pub fn mark_updated(&mut self) {
-        self.previous_local_matrix = self.local_matrix;
+        self.previous_matrix = self.matrix;
     }
 
     /// Build index, BVH, and half-edge map (required before evaluate).

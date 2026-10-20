@@ -155,6 +155,6 @@ mod tests {
     fn anodized_titanium_enables_thin_film() {
         let t = anodized_titanium(300.0);
         assert!(t.iridescence > 0.0);
-        assert_eq!(t.iridescence_thickness, 300.0);
+        assert_eq!(t.iridescence_thickness_range[1], 300.0);
     }
 }

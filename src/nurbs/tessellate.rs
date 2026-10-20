@@ -288,6 +288,8 @@ pub fn tessellate_surface_grid(
     };
 
     let mut indices = Vec::with_capacity((nu - 1) * (nv - 1) * 6);
+    // Quad cells, less any half dropped as degenerate.
+    let mut polygons = crate::geometries::polygons::CellPolygons::new();
     for i in 0..nu.saturating_sub(1) {
         for j in 0..nv.saturating_sub(1) {
             let (a, b, c, d) = (idx(i, j), idx(i + 1, j), idx(i + 1, j + 1), idx(i, j + 1));
@@ -297,11 +299,18 @@ pub fn tessellate_surface_grid(
                 pos_at(i + 1, j + 1),
                 pos_at(i, j + 1),
             );
-            if !degenerate(pa, pb, pc) {
+            let first = !degenerate(pa, pb, pc);
+            let second = !degenerate(pa, pc, pd);
+            if first {
                 indices.extend_from_slice(&[a, b, c]);
             }
-            if !degenerate(pa, pc, pd) {
+            if second {
                 indices.extend_from_slice(&[a, c, d]);
+            }
+            if first && second {
+                polygons.quad(&positions, [a, b, c, d]);
+            } else {
+                polygons.triangles(first as usize + second as usize);
             }
         }
     }
@@ -313,6 +322,7 @@ pub fn tessellate_surface_grid(
         g.set_attribute("uv", BufferAttribute::new(uvs, 2));
     }
     g.set_index(indices);
+    polygons.apply(&mut g);
     g
 }
 

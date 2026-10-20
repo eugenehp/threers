@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use crate::core::{BufferAttribute, BufferGeometry};
-use crate::math::{Matrix3, Triangle};
+use crate::math::Triangle;
 
 use super::attribute_data::{AttrSet, TypedAttributeData};
 use super::brush::CsgBrush;
@@ -12,13 +12,13 @@ use super::hit_side::{
 };
 use super::intersection_map::IntersectionMap;
 use super::js_topology::{
-    interp_bary_js, js_tri_from_indices, matrix_a_to_b_brushes, read_position_js, JsMatrix3,
-    JsMatrix4, JsVec3, SplitBary,
+    interp_bary_js, is_tri_degenerate as js_is_tri_degenerate, js_tri_from_indices,
+    matrix_a_to_b_brushes, read_position_js, JsMatrix3, JsMatrix4, JsTriangle, JsVec3, SplitBary,
 };
 use super::triangle_splitter::TriangleSplitter;
 use super::triangle_utils::is_tri_degenerate;
 
-const FLOATING_COPLANAR_EPSILON: f32 = 1e-14;
+const FLOATING_COPLANAR_EPSILON: f64 = 1e-14;
 
 pub fn collect_intersecting_triangles(
     a: &CsgBrush,
@@ -26,7 +26,10 @@ pub fn collect_intersecting_triangles(
 ) -> (IntersectionMap, IntersectionMap) {
     let mut a_map = IntersectionMap::new();
     let mut b_map = IntersectionMap::new();
-    let matrix = matrix_b_into_a(&a.matrix_world, &b.matrix_world);
+    let matrix = matrix_b_into_a(&a.matrix_world_f32(), &b.matrix_world_f32());
+    // The same transform in f64, as three-bvh-csg computes it, for the exact
+    // test; the f32 one only drives the BVH traversal.
+    let matrix_js = a.js_matrix_world().invert().multiply(b.js_matrix_world());
     let a_bvh = a.bounds_tree();
     let b_bvh = b.bounds_tree();
     let pairs = a_bvh.bvhcast(&b_bvh, &matrix);
@@ -36,18 +39,21 @@ pub fn collect_intersecting_triangles(
     for (ia, ib) in pairs {
         let va = resolve_tri(a, ia);
         let vb_local = resolve_tri(b, ib);
-        let vb = Triangle::new(
-            vb_local.a.apply_matrix4(&matrix),
-            vb_local.b.apply_matrix4(&matrix),
-            vb_local.c.apply_matrix4(&matrix),
-        );
-        if is_tri_degenerate(&va, 1e-14) || is_tri_degenerate(&vb, 1e-14) {
+        let ja = JsTriangle::from_triangle(va);
+        let jb = JsTriangle {
+            a: JsVec3::from_v(vb_local.a).apply_matrix4(&matrix_js),
+            b: JsVec3::from_v(vb_local.b).apply_matrix4(&matrix_js),
+            c: JsVec3::from_v(vb_local.c).apply_matrix4(&matrix_js),
+        };
+        if js_is_tri_degenerate(ja, 1e-14) || js_is_tri_degenerate(jb, 1e-14) {
             continue;
         }
-        let mut intersected = va.intersects_triangle_ext(&vb, true);
+        let mut intersected = ja.intersects_triangle_js(jb);
         if !intersected {
-            let pa = va.plane();
-            let pb = vb.plane();
+            // Two overlapping coplanar triangles a hair apart through float
+            // error still intersect.
+            let pa = ja.get_plane();
+            let pb = jb.get_plane();
             if pa.normal.dot(pb.normal) == 1.0
                 && (pa.constant - pb.constant).abs() < FLOATING_COPLANAR_EPSILON
             {
@@ -105,7 +111,12 @@ pub fn perform_operation(
         .iter()
         .any(|&op| op != HOLLOW_INTERSECTION && op != HOLLOW_SUBTRACTION);
     if non_hollow {
-        let group_offset_b = if use_groups { 1 } else { -1 };
+        // three-bvh-csg: b's groups follow a's, `a.geometry.groups.length || 1`.
+        let group_offset_b = if use_groups {
+            a.geometry.groups.len().max(1) as i32
+        } else {
+            -1
+        };
         perform_split_triangle_operations(
             b,
             a,
@@ -139,9 +150,9 @@ fn perform_split_triangle_operations(
     attribute_data: &mut [TypedAttributeData],
     group_offset: i32,
 ) {
-    let inverted_geometry = a.matrix_world.determinant() < 0.0;
+    let inverted_geometry = a.js_matrix_world().determinant() < 0.0;
     let matrix = matrix_a_to_b_brushes(a, b);
-    let mut normal_matrix = JsMatrix3::from_matrix3(&Matrix3::normal_matrix(&a.matrix_world));
+    let mut normal_matrix = JsMatrix3::normal_matrix(&a.js_matrix_world());
     if inverted_geometry {
         normal_matrix = normal_matrix.multiply_scalar(-1.0);
     }
@@ -208,9 +219,9 @@ fn perform_whole_triangle_operations(
     attribute_data: &mut [TypedAttributeData],
     group_offset: i32,
 ) {
-    let inverted_geometry = a.matrix_world.determinant() < 0.0;
+    let inverted_geometry = a.js_matrix_world().determinant() < 0.0;
     let matrix = matrix_a_to_b_brushes(a, b);
-    let mut normal_matrix = JsMatrix3::from_matrix3(&Matrix3::normal_matrix(&a.matrix_world));
+    let mut normal_matrix = JsMatrix3::normal_matrix(&a.js_matrix_world());
     if inverted_geometry {
         normal_matrix = normal_matrix.multiply_scalar(-1.0);
     }
@@ -282,167 +293,6 @@ fn perform_whole_triangle_operations(
             }
         }
     }
-}
-
-#[cfg(test)]
-fn tri_key_from_split_bary(
-    geometry: &BufferGeometry,
-    tri_index: usize,
-    matrix_world: &JsMatrix4,
-    bary: SplitBary,
-) -> super::topology::TriKey {
-    use super::topology::TriKey;
-    use super::triangle_utils::hash_coord;
-    let pos = geometry.get_attribute("position").unwrap();
-    let i0 = index_at(geometry, tri_index, 0);
-    let i1 = index_at(geometry, tri_index, 1);
-    let i2 = index_at(geometry, tri_index, 2);
-    let sa = read_position_js(pos, i0).apply_matrix4(matrix_world);
-    let sb = read_position_js(pos, i1).apply_matrix4(matrix_world);
-    let sc = read_position_js(pos, i2).apply_matrix4(matrix_world);
-    let a = interp_bary_js(sa, sb, sc, bary.0);
-    let b = interp_bary_js(sa, sb, sc, bary.1);
-    let c = interp_bary_js(sa, sb, sc, bary.2);
-    TriKey((
-        hash_coord(a.x),
-        hash_coord(a.y),
-        hash_coord(a.z),
-        hash_coord(b.x),
-        hash_coord(b.y),
-        hash_coord(b.z),
-        hash_coord(c.x),
-        hash_coord(c.y),
-        hash_coord(c.z),
-    ))
-}
-
-/// All clipped shell triangles (before hit-side), as world-space tri keys.
-#[cfg(test)]
-pub(crate) fn shell_split_clipped_tri_keys(
-    a: &mut CsgBrush,
-    b: &mut CsgBrush,
-) -> Vec<super::topology::TriKey> {
-    a.prepare_geometry();
-    b.prepare_geometry();
-    let (a_inter, _) = collect_intersecting_triangles(a, b);
-    let mut splitter = TriangleSplitter::new();
-    let matrix = matrix_a_to_b_brushes(a, b);
-    let world_matrix = a.js_matrix_world();
-    let pos = a.geometry.get_attribute("position").unwrap();
-    let mut keys = Vec::new();
-    for &ia in &a_inter.ids {
-        let i0 = index_at(&a.geometry, ia, 0);
-        let i1 = index_at(&a.geometry, ia, 1);
-        let i2 = index_at(&a.geometry, ia, 2);
-        let tri_a = js_tri_from_indices(pos, i0, i1, i2, Some(&matrix));
-        splitter.reset();
-        splitter.initialize(tri_a);
-        if let Some(neighbors) = a_inter.intersection_set.get(&ia) {
-            let b_pos = b.geometry.get_attribute("position").unwrap();
-            for &ib in neighbors {
-                let j0 = index_at(&b.geometry, ib, 0);
-                let j1 = index_at(&b.geometry, ib, 1);
-                let j2 = index_at(&b.geometry, ib, 2);
-                let tri_b = js_tri_from_indices(b_pos, j0, j1, j2, None);
-                splitter.split_by_triangle(tri_b);
-            }
-        }
-        for (_, bary) in splitter.clipped_with_bary(tri_a) {
-            keys.push(tri_key_from_split_bary(
-                &a.geometry,
-                ia,
-                &world_matrix,
-                bary,
-            ));
-        }
-    }
-    keys
-}
-
-/// Shell-side split clipped triangle count (before hit-side culling).
-#[cfg(test)]
-pub(crate) fn shell_split_clipped_count(a: &mut CsgBrush, b: &mut CsgBrush) -> usize {
-    a.prepare_geometry();
-    b.prepare_geometry();
-    let (a_inter, _) = collect_intersecting_triangles(a, b);
-    let mut splitter = TriangleSplitter::new();
-    let matrix = matrix_a_to_b_brushes(a, b);
-    let pos = a.geometry.get_attribute("position").unwrap();
-    let mut total = 0usize;
-    for &ia in &a_inter.ids {
-        let i0 = index_at(&a.geometry, ia, 0);
-        let i1 = index_at(&a.geometry, ia, 1);
-        let i2 = index_at(&a.geometry, ia, 2);
-        let tri_a = js_tri_from_indices(pos, i0, i1, i2, Some(&matrix));
-        splitter.reset();
-        splitter.initialize(tri_a);
-        if let Some(neighbors) = a_inter.intersection_set.get(&ia) {
-            let b_pos = b.geometry.get_attribute("position").unwrap();
-            for &ib in neighbors {
-                let j0 = index_at(&b.geometry, ib, 0);
-                let j1 = index_at(&b.geometry, ib, 1);
-                let j2 = index_at(&b.geometry, ib, 2);
-                let tri_b = js_tri_from_indices(b_pos, j0, j1, j2, None);
-                splitter.split_by_triangle(tri_b);
-            }
-        }
-        total += splitter.triangle_count();
-    }
-    total
-}
-
-/// Shell-side kept keys after hit-side filter (same keying as JS `export-shell-split-tris.mjs`).
-#[cfg(test)]
-pub(crate) fn shell_split_tri_keys(
-    a: &mut CsgBrush,
-    b: &mut CsgBrush,
-) -> Vec<super::topology::TriKey> {
-    a.prepare_geometry();
-    b.prepare_geometry();
-    let (a_inter, _) = collect_intersecting_triangles(a, b);
-    let mut splitter = TriangleSplitter::new();
-    let matrix = matrix_a_to_b_brushes(a, b);
-    let world_matrix = a.js_matrix_world();
-    let pos = a.geometry.get_attribute("position").unwrap();
-    let b_bvh = b.bounds_tree();
-    let mut keys = Vec::new();
-    for &ia in &a_inter.ids {
-        let i0 = index_at(&a.geometry, ia, 0);
-        let i1 = index_at(&a.geometry, ia, 1);
-        let i2 = index_at(&a.geometry, ia, 2);
-        let tri_a = js_tri_from_indices(pos, i0, i1, i2, Some(&matrix));
-        splitter.reset();
-        splitter.initialize(tri_a);
-        if let Some(neighbors) = a_inter.intersection_set.get(&ia) {
-            let b_pos = b.geometry.get_attribute("position").unwrap();
-            for &ib in neighbors {
-                let j0 = index_at(&b.geometry, ib, 0);
-                let j1 = index_at(&b.geometry, ib, 1);
-                let j2 = index_at(&b.geometry, ib, 2);
-                let tri_b = js_tri_from_indices(b_pos, j0, j1, j2, None);
-                splitter.split_by_triangle(tri_b);
-            }
-        }
-        for ti in 0..splitter.triangle_count() {
-            let clipped = splitter.clipped_triangle(ti);
-            let hit_side = if splitter.coplanar_triangle_used {
-                get_hit_side_with_coplanar_check_js(clipped, &b_bvh)
-            } else {
-                get_hit_side_js(clipped, &b_bvh)
-            };
-            if get_operation_action(ADDITION, hit_side, false) == SKIP_TRI {
-                continue;
-            }
-            let bary = TriangleSplitter::barycoords_in_tri(tri_a, clipped);
-            keys.push(tri_key_from_split_bary(
-                &a.geometry,
-                ia,
-                &world_matrix,
-                bary,
-            ));
-        }
-    }
-    keys
 }
 
 fn append_attribute_from_triangle(
@@ -592,34 +442,4 @@ fn push_bary_vec_f64(
         arr.push_values(&out1);
         arr.push_values(&out2);
     }
-}
-
-pub fn assign_buffer_data(geometry: &mut BufferGeometry, data: &TypedAttributeData) {
-    let vert_count = data.get_total_length("position") / 3;
-    let mut positions = vec![0.0f32; vert_count * 3];
-    let mut offset = 0usize;
-    for gi in 0..data.group_count {
-        if let Some(arr) = data.group_attributes[gi].get("position") {
-            let len = arr.data.len();
-            positions[offset..offset + len].copy_from_slice(&arr.data);
-            offset += len;
-        }
-    }
-    geometry.set_attribute("position", BufferAttribute::new(positions, 3));
-    if let Some(normals_src) = data.group_attributes[0].get("normal") {
-        if !normals_src.data.is_empty() {
-            let mut normals = vec![0.0f32; vert_count * 3];
-            let mut no = 0usize;
-            for gi in 0..data.group_count {
-                if let Some(arr) = data.group_attributes[gi].get("normal") {
-                    let len = arr.data.len();
-                    normals[no..no + len].copy_from_slice(&arr.data);
-                    no += len;
-                }
-            }
-            geometry.set_attribute("normal", BufferAttribute::new(normals, 3));
-        }
-    }
-    geometry.index = None;
-    geometry.dispose_bounds_tree();
 }

@@ -8,7 +8,7 @@ mod directional;
 mod hemisphere;
 mod point;
 mod rect_area;
-mod shadow;
+pub(crate) mod shadow;
 mod spot;
 
 pub use ambient::AmbientLight;
@@ -16,7 +16,7 @@ pub use directional::DirectionalLight;
 pub use hemisphere::HemisphereLight;
 pub use point::PointLight;
 pub use rect_area::RectAreaLight;
-pub use shadow::ShadowSettings;
+pub use shadow::{ShadowSettings, ShadowType};
 pub use spot::SpotLight;
 
 use crate::math::Color;

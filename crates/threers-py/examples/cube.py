@@ -11,6 +11,9 @@ three.js (JavaScript)                    →  threers (Python)
 const scene = new THREE.Scene();         →  scene = Scene()
 scene.background = new THREE.Color(0x…);   →  scene.set_background(0x…)
 new THREE.BoxGeometry(1,1,1)             →  scene.add_box(1, 1, 1, color=0x…)
+new THREE.AmbientLight(0xffffff, 0.4)    →  scene.add_ambient_light(0xFFFFFF, 0.4)
+new THREE.DirectionalLight(0xffffff, 2.5)
+  .position.set(3, 5, 4)                 →  scene.add_directional_light(0xFFFFFF, 2.5, (3, 5, 4))
 new THREE.PerspectiveCamera(50, …)       →  PerspectiveCamera(50, …)
 camera.position.set(3, 2, 5)             →  camera.set_position(3, 2, 5)
 camera.lookAt(0, 0, 0)                   →  camera.look_at(0, 0, 0)
@@ -31,8 +34,11 @@ def main() -> None:
     scene = threers.Scene()
     scene.set_background(0x101010)
     scene.add_box(1.0, 1.0, 1.0, color=0xFF6633, y=0.0)
+    # The box is MeshStandardMaterial: as in three.js it is black until lit.
+    scene.add_ambient_light(0xFFFFFF, 0.4)
+    scene.add_directional_light(0xFFFFFF, 2.5, position=(3.0, 5.0, 4.0))
 
-    camera = threers.PerspectiveCamera(50.0, 16.0 / 9.0, 0.1, 100.0)
+    camera = threers.PerspectiveCamera(50.0, 800.0 / 600.0, 0.1, 100.0)
     camera.set_position(3.0, 2.0, 5.0)
     camera.look_at(0.0, 0.0, 0.0)
 

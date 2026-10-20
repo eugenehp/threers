@@ -7,36 +7,20 @@ use crate::math::Color;
 pub struct VertexNormalsHelper;
 
 impl VertexNormalsHelper {
+    /// three.js's `VertexNormalsHelper` for a geometry at the origin: every
+    /// vertex's normal, normalised, `length` long.
     pub fn new(geom: &BufferGeometry, length: f32, color: Color) -> Object3D {
-        let pos = match geom.get_attribute("position") {
-            Some(p) => &p.array,
-            None => return empty_line(color),
+        let (Some(pos), Some(nrm)) = (geom.get_attribute("position"), geom.get_attribute("normal"))
+        else {
+            return empty_line(color);
         };
-        let nrm = match geom.get_attribute("normal") {
-            Some(n) => &n.array,
-            None => return empty_line(color),
-        };
-        let count = pos.len() / 3;
-        let mut positions = Vec::with_capacity(count * 6);
-        for i in 0..count {
-            let px = pos[i * 3];
-            let py = pos[i * 3 + 1];
-            let pz = pos[i * 3 + 2];
-            let nx = nrm[i * 3];
-            let ny = nrm[i * 3 + 1];
-            let nz = nrm[i * 3 + 2];
-            positions.extend_from_slice(&[
-                px,
-                py,
-                pz,
-                px + nx * length,
-                py + ny * length,
-                pz + nz * length,
-            ]);
-        }
-        let mut g = BufferGeometry::new();
-        g.set_attribute("position", BufferAttribute::new(positions, 3));
-        Object3D::line_segments(LineSegments::new(g, LineBasicMaterial::new(color).into()))
+        let g = super::three_lines::vertex_normals(
+            &super::three_lines::IDENTITY,
+            &pos.array,
+            &nrm.array,
+            length as f64,
+        );
+        super::light_helpers::line_object(&g, color)
     }
 }
 
@@ -74,12 +58,18 @@ impl VertexTangentsHelper {
         }
         let mut g = BufferGeometry::new();
         g.set_attribute("position", BufferAttribute::new(positions, 3));
-        Object3D::line_segments(LineSegments::new(g, LineBasicMaterial::new(color).into()))
+        Object3D::line_segments(LineSegments::new(
+        g,
+        LineBasicMaterial { tone_mapped: false, ..LineBasicMaterial::new(color) }.into(),
+    ))
     }
 }
 
 fn empty_line(color: Color) -> Object3D {
     let mut g = BufferGeometry::new();
     g.set_attribute("position", BufferAttribute::new(Vec::new(), 3));
-    Object3D::line_segments(LineSegments::new(g, LineBasicMaterial::new(color).into()))
+    Object3D::line_segments(LineSegments::new(
+        g,
+        LineBasicMaterial { tone_mapped: false, ..LineBasicMaterial::new(color) }.into(),
+    ))
 }

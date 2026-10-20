@@ -1,4 +1,4 @@
-use crate::core::{BufferAttribute, BufferGeometry};
+use crate::core::BufferGeometry;
 use std::f32::consts::PI;
 
 pub struct CylinderGeometry;
@@ -18,156 +18,219 @@ impl CylinderGeometry {
         theta_start: f32,
         theta_length: f32,
     ) -> BufferGeometry {
-        let rs = radial_segments.max(3);
-        let hs = height_segments.max(1);
-        let half_h = height * 0.5;
+        use super::{js_angle, js_number};
+        Self::from_f64(
+            js_number(radius_top),
+            js_number(radius_bottom),
+            js_number(height),
+            radial_segments,
+            height_segments,
+            open_ended,
+            js_angle(theta_start),
+            js_angle(theta_length),
+        )
+    }
 
-        let mut positions: Vec<f32> = Vec::new();
-        let mut normals: Vec<f32> = Vec::new();
-        let mut uvs: Vec<f32> = Vec::new();
-        let mut indices: Vec<u32> = Vec::new();
-
-        // Slope for side normal in the YZ projection.
-        let slope = (radius_bottom - radius_top) / height;
-
-        // -- side --
-        let mut index_array: Vec<Vec<u32>> = Vec::with_capacity(hs + 1);
-        let mut idx = 0u32;
-        for y in 0..=hs {
-            let mut row = Vec::with_capacity(rs + 1);
-            let v = y as f32 / hs as f32;
-            let radius = v * (radius_bottom - radius_top) + radius_top;
-            for x in 0..=rs {
-                let u = x as f32 / rs as f32;
-                let theta = u * theta_length + theta_start;
-                let (s, c) = theta.sin_cos();
-                positions.extend_from_slice(&[radius * s, -v * height + half_h, radius * c]);
-                let n_len = (s * s + slope * slope + c * c).sqrt();
-                normals.extend_from_slice(&[s / n_len, slope / n_len, c / n_len]);
-                uvs.extend_from_slice(&[u, 1.0 - v]);
-                row.push(idx);
-                idx += 1;
-            }
-            index_array.push(row);
-        }
-        for x in 0..rs {
-            for y in 0..hs {
-                let a = index_array[y][x];
-                let b = index_array[y + 1][x];
-                let c = index_array[y + 1][x + 1];
-                let d = index_array[y][x + 1];
-                indices.extend_from_slice(&[a, b, d]);
-                indices.extend_from_slice(&[b, c, d]);
-            }
-        }
-
-        // Recorded here rather than recomputed later: only this function knows
-        // how many triangles each part emitted, and the cap rules (skipped when
-        // a radius is zero, or when open-ended) would otherwise need a second
-        // copy in the tagging code.
-        let side_triangles = indices.len() / 3;
-        let mut top_cap_triangles = 0usize;
-        // Read only by the `brep` tagging below, same as the two above.
-        #[cfg_attr(not(feature = "brep"), allow(unused_variables, unused_assignments))]
-        let mut bottom_cap_triangles = 0usize;
-
-        // -- caps --
-        if !open_ended {
-            if radius_top > 0.0 {
-                Self::cap(
-                    true,
-                    radius_top,
-                    half_h,
-                    rs,
-                    theta_start,
-                    theta_length,
-                    &mut positions,
-                    &mut normals,
-                    &mut uvs,
-                    &mut indices,
-                    &mut idx,
-                );
-                top_cap_triangles = indices.len() / 3 - side_triangles;
-            }
-            if radius_bottom > 0.0 {
-                Self::cap(
-                    false,
-                    radius_bottom,
-                    -half_h,
-                    rs,
-                    theta_start,
-                    theta_length,
-                    &mut positions,
-                    &mut normals,
-                    &mut uvs,
-                    &mut indices,
-                    &mut idx,
-                );
-                #[cfg_attr(not(feature = "brep"), allow(unused_assignments))]
-                {
-                    bottom_cap_triangles = indices.len() / 3 - side_triangles - top_cap_triangles;
-                }
-            }
-        }
-
-        let mut geom = BufferGeometry::new();
-        geom.set_attribute("position", BufferAttribute::new(positions, 3));
-        geom.set_attribute("normal", BufferAttribute::new(normals, 3));
-        geom.set_attribute("uv", BufferAttribute::new(uvs, 2));
-        geom.set_index(indices);
-        #[cfg(feature = "brep")]
-        crate::brep::primitives::tag_cylinder(
-            &mut geom,
+    /// [`new`](Self::new) with JavaScript's numbers, as three.js takes them.
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_f64(
+        radius_top: f64,
+        radius_bottom: f64,
+        height: f64,
+        radial_segments: usize,
+        height_segments: usize,
+        open_ended: bool,
+        theta_start: f64,
+        theta_length: f64,
+    ) -> BufferGeometry {
+        Self::build(
             radius_top,
             radius_bottom,
             height,
+            radial_segments,
+            height_segments,
+            open_ended,
+            theta_start,
+            theta_length,
+            false,
+        )
+    }
+
+    /// The same mesh with its positions computed in `f32`, as threers did
+    /// before [`new`](Self::new) followed three.js's `f64` arithmetic.
+    ///
+    /// For the exact CSG kernel (OpenSCAD's `cylinder`): which booleans it can
+    /// resolve exactly depends on the operands' last bits, and its suite was
+    /// built on these. Two identical cylinders offset along their axis resolve
+    /// exactly from these positions and defer to the float kernel from the
+    /// `f64`-rounded ones. Normals and uvs are `new`'s.
+    #[allow(clippy::too_many_arguments)]
+    pub fn single_precision(
+        radius_top: f32,
+        radius_bottom: f32,
+        height: f32,
+        radial_segments: usize,
+        height_segments: usize,
+        open_ended: bool,
+        theta_start: f32,
+        theta_length: f32,
+    ) -> BufferGeometry {
+        Self::build(
+            radius_top as f64,
+            radius_bottom as f64,
+            height as f64,
+            radial_segments,
+            height_segments,
+            open_ended,
+            theta_start as f64,
+            theta_length as f64,
+            true,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build(
+        radius_top: f64,
+        radius_bottom: f64,
+        height: f64,
+        radial_segments: usize,
+        height_segments: usize,
+        open_ended: bool,
+        theta_start: f64,
+        theta_length: f64,
+        single: bool,
+    ) -> BufferGeometry {
+        use super::JsBuffers;
+        // A position on the side or a rim, at fraction `u` around and radius
+        // `radius`, height `y` — in f32 for `single_precision`.
+        let at = |u: f64, radius: f64, y: f64| -> [f64; 3] {
+            if single {
+                let (s, c) = ((u as f32) * (theta_length as f32) + (theta_start as f32)).sin_cos();
+                let r = radius as f32;
+                [(r * s) as f64, (y as f32) as f64, (r * c) as f64]
+            } else {
+                let theta = u * theta_length + theta_start;
+                [radius * theta.sin(), y, radius * theta.cos()]
+            }
+        };
+        let rs = radial_segments.max(1);
+        let hs = height_segments.max(1);
+        // In f64 from the caller's numbers, as three.js computes them.
+        let (rt, rb, h) = (radius_top, radius_bottom, height);
+        let (ts, tl) = (theta_start, theta_length);
+        let half_h = h / 2.0;
+        let mut out = JsBuffers::default();
+        let mut polygons = super::polygons::CellPolygons::new();
+
+        // `generateTorso`.
+        let slope = (rb - rt) / h;
+        let mut rows: Vec<Vec<u32>> = Vec::with_capacity(hs + 1);
+        for y in 0..=hs {
+            let v = y as f64 / hs as f64;
+            let radius = v * (rb - rt) + rt;
+            let mut row = Vec::with_capacity(rs + 1);
+            for x in 0..=rs {
+                let u = x as f64 / rs as f64;
+                let theta = u * tl + ts;
+                let (sin, cos) = (theta.sin(), theta.cos());
+                row.push(out.vertex_count());
+                let p = if single {
+                    // As the old generator: the radius and height in f32 too.
+                    let (vf, rtf, rbf, hf) = (v as f32, rt as f32, rb as f32, h as f32);
+                    at(
+                        u,
+                        (vf * (rbf - rtf) + rtf) as f64,
+                        (-vf * hf + hf * 0.5) as f64,
+                    )
+                } else {
+                    [radius * sin, -v * h + half_h, radius * cos]
+                };
+                out.vertex(p[0], p[1], p[2]);
+                out.normal_normalized(sin, slope, cos);
+                out.uv(u, 1.0 - v);
+            }
+            rows.push(row);
+        }
+        for x in 0..rs {
+            for y in 0..hs {
+                let (a, b, c, d) = (
+                    rows[y][x],
+                    rows[y + 1][x],
+                    rows[y + 1][x + 1],
+                    rows[y][x + 1],
+                );
+                out.indices.extend_from_slice(&[a, b, d, b, c, d]);
+                polygons.quad(&out.positions, [a, b, c, d]);
+            }
+        }
+        let side_triangles = out.indices.len() / 3;
+        out.groups.push((0, out.indices.len() as u32, 0));
+
+        // `generateCap`: a centre vertex per segment, then the rim.
+        let cap = |out: &mut JsBuffers, top: bool| {
+            let start = out.indices.len() as u32;
+            let radius = if top { rt } else { rb };
+            let sign = if top { 1.0 } else { -1.0 };
+            let centre_start = out.vertex_count();
+            for _ in 0..rs {
+                out.vertex(0.0, half_h * sign, 0.0);
+                out.normal(0.0, sign, 0.0);
+                out.uv(0.5, 0.5);
+            }
+            let centre_end = out.vertex_count();
+            for x in 0..=rs {
+                let u = x as f64 / rs as f64;
+                let theta = u * tl + ts;
+                let (cos, sin) = (theta.cos(), theta.sin());
+                let p = if single {
+                    at(u, radius, ((h as f32) * 0.5 * sign as f32) as f64)
+                } else {
+                    [radius * sin, half_h * sign, radius * cos]
+                };
+                out.vertex(p[0], p[1], p[2]);
+                out.normal(0.0, sign, 0.0);
+                out.uv(cos * 0.5 + 0.5, sin * 0.5 * sign + 0.5);
+            }
+            for x in 0..rs as u32 {
+                let (c, i) = (centre_start + x, centre_end + x);
+                if top {
+                    out.indices.extend_from_slice(&[i, i + 1, c]);
+                } else {
+                    out.indices.extend_from_slice(&[i + 1, i, c]);
+                }
+            }
+            let count = out.indices.len() as u32 - start;
+            out.groups.push((start, count, if top { 1 } else { 2 }));
+            (count / 3) as usize
+        };
+        let (mut top_cap_triangles, mut bottom_cap_triangles) = (0, 0);
+        if !open_ended {
+            if rt > 0.0 {
+                top_cap_triangles = cap(&mut out, true);
+            }
+            if rb > 0.0 {
+                bottom_cap_triangles = cap(&mut out, false);
+            }
+        }
+        #[cfg(not(feature = "brep"))]
+        let _ = (top_cap_triangles, bottom_cap_triangles);
+
+        let mut geom = out.into_geometry();
+        // Side cells are quads (a cone's tip row collapses to triangles). The
+        // caps are fanned from centre vertices, so stay triangles.
+        polygons.triangles(geom.triangle_count() - side_triangles);
+        polygons.apply(&mut geom);
+        #[cfg(feature = "brep")]
+        crate::brep::primitives::tag_cylinder(
+            &mut geom,
+            radius_top as f32,
+            radius_bottom as f32,
+            height as f32,
             side_triangles,
             top_cap_triangles,
             bottom_cap_triangles,
         );
         geom
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn cap(
-        top: bool,
-        radius: f32,
-        y: f32,
-        radial_segments: usize,
-        theta_start: f32,
-        theta_length: f32,
-        positions: &mut Vec<f32>,
-        normals: &mut Vec<f32>,
-        uvs: &mut Vec<f32>,
-        indices: &mut Vec<u32>,
-        idx: &mut u32,
-    ) {
-        let sign = if top { 1.0 } else { -1.0 };
-        let center = *idx;
-        positions.extend_from_slice(&[0.0, y, 0.0]);
-        normals.extend_from_slice(&[0.0, sign, 0.0]);
-        uvs.extend_from_slice(&[0.5, 0.5]);
-        *idx += 1;
-
-        let first_rim = *idx;
-        for x in 0..=radial_segments {
-            let u = x as f32 / radial_segments as f32;
-            let theta = u * theta_length + theta_start;
-            let (s, c) = theta.sin_cos();
-            positions.extend_from_slice(&[radius * s, y, radius * c]);
-            normals.extend_from_slice(&[0.0, sign, 0.0]);
-            uvs.extend_from_slice(&[s * 0.5 + 0.5, c * 0.5 * sign + 0.5]);
-            *idx += 1;
-        }
-        for x in 0..radial_segments as u32 {
-            let a = first_rim + x;
-            let b = a + 1;
-            if top {
-                indices.extend_from_slice(&[a, b, center]);
-            } else {
-                indices.extend_from_slice(&[b, a, center]);
-            }
-        }
     }
 
     pub fn default_(radius: f32, height: f32) -> BufferGeometry {

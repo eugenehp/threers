@@ -34,6 +34,7 @@ impl ParametricGeometry {
         }
 
         let row = (s + 1) as u32;
+        let mut polygons = super::polygons::CellPolygons::new();
         for j in 0..t as u32 {
             for i in 0..s as u32 {
                 let a = j * row + i;
@@ -41,6 +42,7 @@ impl ParametricGeometry {
                 let c = (j + 1) * row + i + 1;
                 let d = j * row + i + 1;
                 indices.extend_from_slice(&[a, b, d, b, c, d]);
+                polygons.quad(&positions, [a, b, c, d]);
             }
         }
 
@@ -49,6 +51,7 @@ impl ParametricGeometry {
         g.set_attribute("normal", BufferAttribute::new(normals, 3));
         g.set_attribute("uv", BufferAttribute::new(uvs, 2));
         g.set_index(indices);
+        polygons.apply(&mut g);
         g
     }
 }

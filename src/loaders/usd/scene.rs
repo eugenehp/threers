@@ -4,7 +4,8 @@
 //! and both are resolved here rather than being pushed onto the caller:
 //!
 //! - **Faces are arbitrary polygons.** `faceVertexCounts` says how many corners
-//!   each face has; a `BufferGeometry` holds triangles. Faces are fanned.
+//!   each face has; a `BufferGeometry` holds triangles. Faces are fanned, and
+//!   which triangles were one face is kept in [`BufferGeometry::polygons`].
 //! - **Primvars can be per-face-corner.** A `faceVarying` normal or UV gives a
 //!   different value to the same point depending on which face is using it,
 //!   which an indexed buffer cannot express. When any primvar is face-varying
@@ -248,6 +249,7 @@ fn refined_geometry(
     }
     let flip = prim.value("orientation").and_then(|v| v.as_str()) == Some("leftHanded");
     let mut triangles: Vec<u32> = Vec::new();
+    let mut polygons: Vec<u32> = Vec::new();
     let mut at = 0usize;
     for count in &counts {
         let count = *count as usize;
@@ -255,6 +257,7 @@ fn refined_geometry(
             at += count;
             continue;
         }
+        polygons.push(count as u32 - 2);
         for i in 1..count - 1 {
             let (a, b, c) = (indices[at], indices[at + i], indices[at + i + 1]);
             if flip {
@@ -273,7 +276,129 @@ fn refined_geometry(
     geometry.set_attribute("position", BufferAttribute::new(points, 3));
     geometry.set_index(triangles);
     crate::compute_vertex_normals(&mut geometry);
+    geometry.set_polygons(polygons);
     Some(geometry)
+}
+
+/// Morph targets authored per USD point (blend-shape offsets, animated
+/// points) onto `geometry`'s vertices, as relative morph attributes: as they
+/// are when the geometry keeps one vertex per point, through each corner's
+/// point when it went one vertex per corner (face-varying primvars). Returns
+/// the influences, or `None` — leaving the geometry alone — when the vertices
+/// match neither (a refined mesh).
+fn attach_morphs(
+    prim: &UsdPrim,
+    geometry: &mut BufferGeometry,
+    morphs: &crate::core::MorphAttributes,
+) -> Option<Vec<f32>> {
+    let points = prim.value("points")?.flat_f32().len() / 3;
+    let vertices = geometry.get_attribute("position")?.count();
+    let corners: Option<Vec<usize>> = if vertices == points {
+        None
+    } else {
+        // The corner order `mesh_geometry_at` emits, fan by fan.
+        let counts = prim.value("faceVertexCounts")?.flat_u32();
+        let indices = prim.value("faceVertexIndices")?.flat_u32();
+        let flip = prim.value("orientation").and_then(|v| v.as_str()) == Some("leftHanded");
+        let mut out = Vec::new();
+        let mut at = 0usize;
+        for count in &counts {
+            let n = *count as usize;
+            if n >= 3 && at + n <= indices.len() {
+                for k in 1..n - 1 {
+                    let tri = if flip { [at, at + k + 1, at + k] } else { [at, at + k, at + k + 1] };
+                    out.extend(tri.iter().map(|&c| indices[c] as usize));
+                }
+            }
+            at += n;
+        }
+        if out.len() != vertices {
+            return None;
+        }
+        Some(out)
+    };
+    let expand = |delta: &[f32]| -> Vec<f32> {
+        match &corners {
+            None => delta.to_vec(),
+            Some(c) => c
+                .iter()
+                .flat_map(|&p| {
+                    delta.get(p * 3..p * 3 + 3).map(|d| [d[0], d[1], d[2]]).unwrap_or([0.0; 3])
+                })
+                .collect(),
+        }
+    };
+    let mapped = crate::core::MorphAttributes {
+        targets: morphs
+            .targets
+            .iter()
+            .map(|t| crate::core::MorphTarget {
+                name: t.name.clone(),
+                position_delta: expand(&t.position_delta),
+                normal_delta: t.normal_delta.as_deref().map(expand),
+            })
+            .collect(),
+        influences: morphs.influences.clone(),
+    };
+    Some(mapped.apply_to(geometry))
+}
+
+/// A mesh with material subsets as one mesh over a material array: the
+/// faces reordered subset by subset — the unclaimed remainder, bound to the
+/// mesh's own material, last — with a geometry group per run. `None` when
+/// the mesh is refined (the runs would not survive), or the face count does
+/// not come out as expected; the caller then splits instead.
+fn grouped_by_subset(prim: &UsdPrim, path: &str, context: &mut Build) -> Option<Mesh> {
+    let layer = context.layer;
+    let level = context.options.subdivision_level;
+    if level > 0 && subdiv::wanted(prim) {
+        return None;
+    }
+    let subsets = shade::material_subsets(prim);
+    let counts = prim.value("faceVertexCounts")?.flat_u32();
+    let indices_len = prim.value("faceVertexIndices")?.flat_u32().len();
+    let mut starts = Vec::with_capacity(counts.len());
+    let mut at = 0usize;
+    for c in &counts {
+        starts.push(at);
+        at += *c as usize;
+    }
+    // Triangles a face fans into, as `mesh_geometry_at` fans it.
+    let triangles = |f: u32| -> u32 {
+        match (counts.get(f as usize), starts.get(f as usize)) {
+            (Some(&n), Some(&s)) if n >= 3 && s + n as usize <= indices_len => n - 2,
+            _ => 0,
+        }
+    };
+    let remainder = shade::unclaimed_faces(counts.len(), &subsets);
+    let parts: Vec<(String, Vec<u32>, Option<String>)> = subsets
+        .iter()
+        .map(|s| (s.name.clone(), s.faces.clone(), s.material.clone()))
+        .chain((!remainder.is_empty()).then(|| (prim.name.clone(), remainder, None)))
+        .collect();
+    let all: Vec<u32> = parts.iter().flat_map(|p| p.1.iter().copied()).collect();
+    let mut geometry = mesh_geometry_of_faces(prim, 0, &all)?;
+    let mut materials = Vec::new();
+    let mut start = 0u32;
+    for (i, (name, faces, material_path)) in parts.iter().enumerate() {
+        let count = faces.iter().map(|&f| triangles(f)).sum::<u32>() * 3;
+        geometry.add_group(start, count, i as u32);
+        start += count;
+        // A subset's own binding, or the mesh's where it has none.
+        let (material, textures) = match material_path.as_ref().and_then(|p| layer.prim_at(p)) {
+            Some(m) => {
+                let resolved = shade::resolve(m, layer);
+                (resolved.material, resolved.textures)
+            }
+            None => bound_material_at(path, layer),
+        };
+        context.textures.push((name.clone(), textures));
+        materials.push(std::sync::Arc::new(material));
+    }
+    if start as usize != geometry.draw_count() {
+        return None;
+    }
+    Some(Mesh::with_materials(std::sync::Arc::new(geometry), materials))
 }
 
 /// A mesh split into one child per material subset.
@@ -587,11 +712,17 @@ fn build(
     // tracks can index them in the order they came out.
     let mut morph_order: Vec<String> = Vec::new();
     let mut object = match prim.type_name.as_str() {
-        // A mesh with material subsets is several meshes: this crate's `Mesh`
-        // carries one material, so the faces are split rather than the
-        // material list extended.
+        // A mesh with material subsets is one mesh with a material array:
+        // the faces are ordered subset by subset (the unclaimed ones, under
+        // the mesh's own binding, last) and each run is a geometry group —
+        // three.js's `geometry.groups` with `mesh.material` an array. Refined
+        // meshes still split into a mesh per subset, because refinement
+        // rebuilds the faces and the runs would not survive it.
         "Mesh" if !shade::material_subsets(prim).is_empty() => {
-            return Some(split_by_subset(prim, arena, source, &path, context));
+            match grouped_by_subset(prim, &path, context) {
+                Some(mesh) => Object3D::mesh(mesh),
+                None => return Some(split_by_subset(prim, arena, source, &path, context)),
+            }
         }
         "Mesh" => {
             let mut geometry = mesh_geometry_at(prim, context.options.subdivision_level)?;
@@ -614,26 +745,60 @@ fn build(
                     // Blend shapes, whose weights the skeleton's animation
                     // drives. The order here is the order the weight tracks
                     // index by.
-                    let vertices = geometry
-                        .get_attribute("position")
-                        .map(|a| a.count())
+                    // Offsets are per USD point; `attach_morphs` carries
+                    // them onto the geometry's vertices.
+                    let points = prim
+                        .value("points")
+                        .map(|v| v.flat_f32().len() / 3)
                         .unwrap_or(0);
-                    let targets = skel::blend_shapes(prim, layer, vertices);
+                    let targets = skel::blend_shapes(prim, layer, points);
+                    let mut influences = Vec::new();
                     if !targets.is_empty() {
                         morph_order = targets.iter().map(|t| t.name.clone()).collect();
-                        context.morphs.push((
-                            prim.name.clone(),
-                            crate::core::MorphAttributes {
-                                influences: vec![0.0; targets.len()],
-                                targets,
-                            },
-                        ));
+                        let morphs = crate::core::MorphAttributes {
+                            influences: vec![0.0; targets.len()],
+                            targets,
+                        };
+                        influences = attach_morphs(prim, &mut geometry, &morphs).unwrap_or_default();
+                        context.morphs.push((prim.name.clone(), morphs));
                     }
-                    Object3D::skinned_mesh(crate::core::SkinnedMesh::new(
+                    let mut sm = crate::core::SkinnedMesh::new(
                         geometry,
                         material,
                         skeleton.skeleton.clone(),
-                    ))
+                    );
+                    if !influences.is_empty() {
+                        sm.morph_influences = influences;
+                    }
+                    Object3D::skinned_mesh(sm)
+                }
+                // Blend shapes without joints: a mesh bound to a joint-less
+                // skeleton only for its animation's weights.
+                _ if prim.value("skel:blendShapes").is_some() => {
+                    let points = prim
+                        .value("points")
+                        .map(|v| v.flat_f32().len() / 3)
+                        .unwrap_or(0);
+                    let targets = skel::blend_shapes(prim, layer, points);
+                    if targets.is_empty() {
+                        Object3D::mesh(Mesh::new(geometry, material))
+                    } else {
+                        morph_order = targets.iter().map(|t| t.name.clone()).collect();
+                        let weights = skel::bound_animation(prim, layer)
+                            .map(|anim| skel::blend_shape_weights(anim, &morph_order))
+                            .unwrap_or_else(|| vec![0.0; targets.len()]);
+                        let morphs = crate::core::MorphAttributes {
+                            influences: weights,
+                            targets,
+                        };
+                        let influences = attach_morphs(prim, &mut geometry, &morphs);
+                        context.morphs.push((prim.name.clone(), morphs));
+                        let mut mesh = Mesh::new(geometry, material);
+                        if let Some(influences) = influences {
+                            mesh.morph_influences = influences;
+                        }
+                        Object3D::mesh(mesh)
+                    }
                 }
                 _ => Object3D::mesh(Mesh::new(geometry, material)),
             }
@@ -714,6 +879,7 @@ fn build(
                     .as_ref()
                     .and_then(|path| context.source_layer.prim_at(path))
             })
+            .or_else(|| skel::bound_animation(source, context.source_layer))
         {
             let tracks = skel::blend_shape_tracks(anim, &morph_order, id, context.rate);
             if !tracks.is_empty() {
@@ -742,6 +908,14 @@ fn build(
     // be indexing the same weights.
     if morph_order.is_empty() {
         if let Some((morphs, weights)) = vertex_animation(source, id, context.rate) {
+            // Onto the geometry, so the renderers play it.
+            if let Some(ObjectKind::Mesh(mesh)) = arena.get_mut(id).map(|o| &mut o.kind) {
+                let geometry = std::sync::Arc::make_mut(&mut mesh.geometry);
+                if let Some(influences) = attach_morphs(prim, geometry, &morphs) {
+                    mesh.update_morph_targets();
+                    mesh.morph_influences = influences;
+                }
+            }
             context.morphs.push((prim.name.clone(), morphs));
             tracks.extend(weights);
         }
@@ -782,7 +956,12 @@ fn build(
     for (child, child_source) in prim.children.iter().zip(&source.children) {
         // The skeleton's own joints were built above; the prim itself is not
         // part of the scene.
-        if child.type_name == "Skeleton" {
+        if matches!(
+            child.type_name.as_str(),
+            "Skeleton" | "GeomSubset" | "BlendShape" | "SkelAnimation"
+        ) {
+            // A subset is part of its mesh (its groups), not a node; so is a
+            // blend shape (its morph targets), and an animation is tracks.
             continue;
         }
         if let Some(child_id) = build(child, arena, child_source, &path, context) {
@@ -1026,10 +1205,13 @@ pub fn mesh_geometry_at(prim: &UsdPrim, level: usize) -> Option<BufferGeometry> 
 
     // Corner `c` of the mesh, as a position in `indices`, fanned into triangles.
     let mut corners: Vec<usize> = Vec::new();
+    // Triangles per face, kept so the faces survive as polygons.
+    let mut polygons: Vec<u32> = Vec::new();
     let mut at = 0usize;
     for count in &counts {
         let n = *count as usize;
         if n >= 3 && at + n <= indices.len() {
+            polygons.push(n as u32 - 2);
             for k in 1..n - 1 {
                 if flip {
                     corners.extend_from_slice(&[at, at + k + 1, at + k]);
@@ -1116,6 +1298,7 @@ pub fn mesh_geometry_at(prim: &UsdPrim, level: usize) -> Option<BufferGeometry> 
     if geometry.get_attribute("normal").is_none() {
         crate::compute_vertex_normals(&mut geometry);
     }
+    geometry.set_polygons(polygons);
     Some(geometry)
 }
 
@@ -1579,6 +1762,33 @@ def Xform "A"
     }
 
     #[test]
+    fn a_quad_is_remembered_as_one_polygon() {
+        let layer = parse(QUAD).unwrap();
+        let g = mesh_geometry(layer.prim_at("/World/Quad").unwrap()).unwrap();
+        assert_eq!(g.polygon_counts(), Some(&[2u32][..]));
+        assert_eq!(g.polygon_loop(0..2), Some(vec![0, 1, 2, 3]));
+
+        // Face-varying splits the vertices per corner; the polygon survives.
+        let src = QUAD.replace(
+            "interpolation = \"vertex\"",
+            "interpolation = \"faceVarying\"",
+        );
+        let layer = parse(&src).unwrap();
+        let g = mesh_geometry(layer.prim_at("/World/Quad").unwrap()).unwrap();
+        assert_eq!(g.polygon_counts(), Some(&[2u32][..]));
+        assert_eq!(g.polygon_loop(0..2).map(|l| l.len()), Some(4));
+
+        // Left-handed reverses the outline along with the triangles.
+        let src = QUAD.replace(
+            "int[] faceVertexCounts = [4]",
+            "uniform token orientation = \"leftHanded\"\n        int[] faceVertexCounts = [4]",
+        );
+        let layer = parse(&src).unwrap();
+        let g = mesh_geometry(layer.prim_at("/World/Quad").unwrap()).unwrap();
+        assert_eq!(g.polygon_loop(0..2), Some(vec![0, 3, 2, 1]));
+    }
+
+    #[test]
     fn left_handed_orientation_flips_the_winding() {
         let right = parse(QUAD).unwrap();
         let a = mesh_geometry(right.prim_at("/World/Quad").unwrap()).unwrap();
@@ -1792,6 +2002,16 @@ mod animation_kinds {
             panic!("scalars");
         };
         assert_eq!(values, &vec![0.0, 0.0, 1.0]);
+
+        // The targets are on the geometry too, so the renderers play them.
+        let ObjectKind::Mesh(m) = &scene.arena.get(id_of(&scene, "Wobble")).unwrap().kind else {
+            panic!("a mesh");
+        };
+        assert!(m.geometry.morph_targets_relative);
+        assert_eq!(m.geometry.morph_attributes["position"].len(), 2);
+        assert_eq!(m.geometry.morph_attributes["position"][1].array[7], 2.0);
+        assert_eq!(m.morph_influences, vec![0.0, 0.0]);
+        assert_eq!(m.morph_target_dictionary.get("frame2"), Some(&1));
 
         // And the mesh itself is the first frame, so a stage opened at its
         // start looks right before anything is played.

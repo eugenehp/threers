@@ -59,6 +59,17 @@ pub fn supports_independent_blend(device: &wgpu::Device) -> bool {
     supports_compute(device)
 }
 
+/// Whether a shader can read a multisampled texture.
+///
+/// WebGL2 is OpenGL ES 3.0, which has no `sampler2DMS`; every other backend
+/// this crate targets has one. Inferred, as
+/// [`supports_independent_blend`] is, from the absence of compute there. The
+/// screen-space refraction pass needs it to multisample: the glass marches a
+/// single-sampled depth, resolved from the multisampled one.
+pub fn supports_multisampled_textures(device: &wgpu::Device) -> bool {
+    supports_compute(device)
+}
+
 /// Whether this device can run compute passes.
 pub fn supports_compute(device: &wgpu::Device) -> bool {
     limits_support_compute(&device.limits())
@@ -67,6 +78,21 @@ pub fn supports_compute(device: &wgpu::Device) -> bool {
 /// Whether this device can bind storage buffers in a shader.
 pub fn supports_storage_buffers(device: &wgpu::Device) -> bool {
     limits_support_storage_buffers(&device.limits())
+}
+
+/// Whether a `ShaderMaterial`'s two volume slots fit beside everything else
+/// it binds.
+///
+/// WebGPU, Metal and Vulkan count sampled textures per shader stage, and the
+/// custom layout's fourteen are inside the floor of sixteen. wgpu's GL backend
+/// instead gives every texture entry in the whole pipeline layout a unit of
+/// its own, and WebGL2 has sixteen: the custom layout comes to eighteen with
+/// the volumes and exactly sixteen without, and going over panics inside
+/// wgpu-hal rather than failing validation. WebGL2 is also the only backend
+/// here without storage buffers, which is the test used — the same one that
+/// leaves the storage slots out.
+pub fn supports_shader_material_volumes(device: &wgpu::Device) -> bool {
+    supports_storage_buffers(device)
 }
 
 #[cfg(test)]
@@ -187,7 +213,7 @@ mod tests {
     #[test]
     fn the_shader_modules_declare_no_storage_buffers() {
         for (name, source) in [
-            ("SHADER_SOURCE", crate::renderer::shader::SHADER_SOURCE),
+            ("SHADER_SOURCE", crate::renderer::shader::legacy_shader_source()),
             ("POSTFX_SHADER", crate::renderer::shader::POSTFX_SHADER),
         ] {
             assert!(

@@ -80,12 +80,14 @@ impl Triangle {
         self.intersects_triangle_ext(other, true)
     }
 
-    /// Extended triangle intersection used by CSG (mirrors `ExtendedTriangle.intersectsTriangle`).
+    /// three-mesh-bvh's `ExtendedTriangle.intersectsTriangle`, in f64 as the
+    /// CSG port runs it. The flag is three-mesh-bvh's third argument,
+    /// `suppressLog`, which only silences its coplanar warning; it does not
+    /// change the answer.
     #[cfg(feature = "bvh-csg")]
-    pub fn intersects_triangle_ext(&self, other: &Triangle, coplanar: bool) -> bool {
+    pub fn intersects_triangle_ext(&self, other: &Triangle, _suppress_log: bool) -> bool {
         use crate::csg::js_topology::JsTriangle;
-        JsTriangle::from_triangle(*self)
-            .intersects_triangle(JsTriangle::from_triangle(*other), coplanar)
+        JsTriangle::from_triangle(*self).intersects_triangle_js(JsTriangle::from_triangle(*other))
     }
 
     /// True if `direction` points against the triangle's normal.
