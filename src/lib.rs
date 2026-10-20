@@ -448,12 +448,15 @@ pub use codec::animation::{
 };
 #[cfg(feature = "native-codec")]
 pub use codec::apng::ApngEncoder;
-#[cfg(feature = "native-codec")]
+#[cfg(feature = "gif")]
 pub use codec::gif::{
-    decode_gif, encode_gif, DecodedFrame, DisposalMethod, DisposalMode, GifDecoder, GifEncoder,
-    GifError, GifFrameMeta, GifInfo, GifOptions, GifVersion, GifWriter, LzwClearMode, PaletteMode,
+    decode_gif, encode_gif, DisposalMethod, DisposalMode, GifDecoder, GifEncoder, GifError,
+    GifFrame, GifFrameMeta, GifInfo, GifOptions, GifVersion, GifWriter, LzwClearMode, PaletteMode,
     QuantizerKind,
 };
+#[cfg(feature = "gif")]
+#[allow(deprecated)]
+pub use codec::gif::DecodedFrame;
 #[cfg(feature = "native-codec")]
 pub use codec::h264::{encode_mp4, encode_mp4_with_captions, H264Encoder};
 #[cfg(feature = "native-codec")]

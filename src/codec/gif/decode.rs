@@ -108,7 +108,7 @@ pub struct GifFrameMeta {
 
 /// One composited full-canvas frame.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DecodedFrame {
+pub struct GifFrame {
     /// Full logical-screen RGBA canvas after this frame has been composited.
     pub rgba: Vec<u8>,
     /// Delay numerator (centiseconds from the GCE).
@@ -117,6 +117,13 @@ pub struct DecodedFrame {
     pub delay_den: u16,
     pub meta: GifFrameMeta,
 }
+
+/// The old name of [`GifFrame`].
+#[deprecated(
+    since = "0.0.7",
+    note = "renamed `GifFrame`, so it is not mistaken for the video decoder's `codec::decode::DecodedFrame`"
+)]
+pub type DecodedFrame = GifFrame;
 
 #[derive(Clone, Debug)]
 struct IndexedFrame {
@@ -133,7 +140,7 @@ struct IndexedFrame {
 pub struct GifDecoder {
     info: GifInfo,
     frames: Vec<IndexedFrame>,
-    decoded: Vec<DecodedFrame>,
+    decoded: Vec<GifFrame>,
     canvas: Vec<u8>,
     restore_previous: Option<Vec<u8>>,
 }
@@ -314,7 +321,7 @@ impl GifDecoder {
     }
 
     /// Decodes sequentially through `i`; already decoded frames are cached.
-    pub fn decode_frame(&mut self, i: usize) -> Result<DecodedFrame, GifError> {
+    pub fn decode_frame(&mut self, i: usize) -> Result<GifFrame, GifError> {
         if i >= self.frames.len() {
             return Err(GifError::FrameOutOfBounds);
         }
@@ -324,7 +331,7 @@ impl GifDecoder {
         Ok(self.decoded[i].clone())
     }
 
-    pub fn decode_all(mut self) -> Result<Vec<DecodedFrame>, GifError> {
+    pub fn decode_all(mut self) -> Result<Vec<GifFrame>, GifError> {
         while self.decoded.len() < self.frames.len() {
             self.decode_next()?;
         }
@@ -379,7 +386,7 @@ impl GifDecoder {
             palette,
             &indices,
         )?;
-        self.decoded.push(DecodedFrame {
+        self.decoded.push(GifFrame {
             rgba: self.canvas.clone(),
             delay_num: frame.meta.delay_cs,
             delay_den: 100,
@@ -390,7 +397,7 @@ impl GifDecoder {
 }
 
 /// Decode an entire GIF into logical-screen metadata and composited RGBA frames.
-pub fn decode_gif(bytes: &[u8]) -> Result<(GifInfo, Vec<DecodedFrame>), GifError> {
+pub fn decode_gif(bytes: &[u8]) -> Result<(GifInfo, Vec<GifFrame>), GifError> {
     let decoder = GifDecoder::open(bytes)?;
     let info = decoder.info.clone();
     let frames = decoder.decode_all()?;

@@ -87,7 +87,7 @@ CHANGELOG.md         Release history
 | With CSG | `cargo build --features bvh-csg` |
 | Video + codecs | `cargo build --features "video,native-codec"` |
 | CSG unit/parity tests | `cargo test --features bvh-csg --lib csg` |
-| GIF codec tests | `cargo test --features native-codec --lib codec::gif --test gif` |
+| GIF codec tests | `cargo test --features gif --lib codec::gif --test gif` |
 | H.264 codec tests | `cargo test --features native-codec --test h264_ffmpeg --test h264_animation_parity` |
 | H.264 wgpu GPU | `cargo test --features native-codec --test h264_gpu` |
 | H.264 Metal GPU | `cargo test --features "metal,native-codec" --test h264_metal` |

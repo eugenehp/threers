@@ -63,6 +63,7 @@ fn caption_style() -> CaptionStyle {
 }
 
 #[test]
+#[cfg(feature = "gif")]
 fn burn_in_paints_captions_into_the_captured_frames() {
     let dir = tmp_dir();
     let out = dir.join("burn.gif");
@@ -105,6 +106,7 @@ fn burn_in_paints_captions_into_the_captured_frames() {
 }
 
 #[test]
+#[cfg(feature = "gif")]
 fn frames_outside_every_cue_stay_clean() {
     let dir = tmp_dir();
     let out = dir.join("gap.gif");
@@ -134,6 +136,7 @@ fn frames_outside_every_cue_stay_clean() {
 }
 
 #[test]
+#[cfg(feature = "gif")]
 fn sidecar_mode_writes_a_subtitle_file_next_to_the_video() {
     let dir = tmp_dir();
     let out = dir.join("movie.gif");
@@ -165,6 +168,7 @@ fn sidecar_mode_writes_a_subtitle_file_next_to_the_video() {
 }
 
 #[test]
+#[cfg(feature = "gif")]
 fn sidecar_format_and_path_are_configurable() {
     let dir = tmp_dir();
     let out = dir.join("clip.gif");

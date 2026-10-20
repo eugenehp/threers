@@ -4,10 +4,10 @@ Part of the [threers](../README.md) documentation.
 
 # Native codecs (GIF, APNG, VP9, H.264, HEVC)
 
-Enable `native-codec` for dependency-free encoders (and a GIF decoder) that also build on `wasm32`:
+Enable `native-codec` for dependency-free encoders that also build on `wasm32`; GIF (encode and decode) is the `gif` feature, which implies `native-codec`. `media` turns on everything below.
 
 ```rust
-// Cargo.toml: threers = { version = "0.0.6", features = ["native-codec"] }
+// Cargo.toml: threers = { version = "0.0.7", features = ["gif"] }
 use threers::{encode_gif, decode_gif, GifEncoder, GifOptions, PaletteMode};
 
 let mut enc = GifEncoder::new(64, 64, 0)

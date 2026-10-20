@@ -417,7 +417,7 @@ fn png_and_sequence_export_write_readable_files() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[cfg(all(feature = "video", feature = "native-codec"))]
+#[cfg(all(feature = "video", feature = "gif"))]
 #[test]
 fn video_export_picks_the_codec_from_the_extension() {
     if !gpu_available() {
@@ -784,7 +784,7 @@ fn constants_are_seeded_without_making_the_model_animated() {
     assert_eq!(overridden.frame(0).unwrap().bounds().unwrap().1[2], 1.0);
 }
 
-#[cfg(all(feature = "video", feature = "native-codec"))]
+#[cfg(all(feature = "video", feature = "gif"))]
 #[test]
 fn the_encoded_video_uses_the_adjusted_frame_rate() {
     if !gpu_available() {

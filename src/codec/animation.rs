@@ -2,9 +2,10 @@
 
 use std::fmt;
 
+#[cfg(feature = "gif")]
+use crate::codec::gif::{encode_gif, GifOptions, PaletteMode};
 use crate::codec::{
     apng::ApngEncoder,
-    gif::{encode_gif, GifOptions, PaletteMode},
     h264::{
         encode_compressed_mp4_from_iter as encode_h264_mp4_from_iter, encode_mp4_with_captions,
     },
@@ -110,6 +111,8 @@ pub enum AnimationEncodeError {
     },
     Dimension,
     Io(String),
+    /// The codec asked for was not compiled in: its feature (named here) is off.
+    FeatureDisabled(&'static str),
 }
 
 impl fmt::Display for AnimationEncodeError {
@@ -126,6 +129,9 @@ impl fmt::Display for AnimationEncodeError {
             ),
             Self::Dimension => write!(f, "invalid dimensions, frame rate, or codec options"),
             Self::Io(message) => write!(f, "animation encoding I/O failed: {message}"),
+            Self::FeatureDisabled(feature) => {
+                write!(f, "this build has no {feature} encoder (enable the `{feature}` feature)")
+            }
         }
     }
 }
@@ -238,6 +244,9 @@ where
 
     let delay_den = opts.fps as u16;
     let bytes = match opts.codec {
+        #[cfg(not(feature = "gif"))]
+        BrowserCodec::Gif => return Err(AnimationEncodeError::FeatureDisabled("gif")),
+        #[cfg(feature = "gif")]
         BrowserCodec::Gif => {
             let gif_opts = GifOptions::default()
                 .colors(opts.gif_colors)
@@ -429,9 +438,14 @@ mod tests {
                 transparent,
                 gif_colors: 256,
             };
-            let bytes =
-                encode_animation_rgba(&options, [solid(255, 0, 0, 255), solid(0, 0, 255, 128)])
-                    .unwrap();
+            let result =
+                encode_animation_rgba(&options, [solid(255, 0, 0, 255), solid(0, 0, 255, 128)]);
+            // Without the `gif` feature GIF is an error naming it, not a panic.
+            if cfg!(not(feature = "gif")) && matches!(codec, BrowserCodec::Gif) {
+                assert!(matches!(result, Err(AnimationEncodeError::FeatureDisabled("gif"))));
+                continue;
+            }
+            let bytes = result.unwrap();
             assert!(bytes.len() > header.len());
             if matches!(codec, BrowserCodec::Mp4) {
                 assert_eq!(&bytes[4..8], header);

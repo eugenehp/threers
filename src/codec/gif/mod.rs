@@ -35,9 +35,10 @@
 pub mod decode;
 
 pub use decode::{
-    decode_gif, DecodedFrame, DisposalMethod, GifDecoder, GifError, GifFrameMeta, GifInfo,
-    GifVersion,
+    decode_gif, DisposalMethod, GifDecoder, GifError, GifFrame, GifFrameMeta, GifInfo, GifVersion,
 };
+#[allow(deprecated)]
+pub use decode::DecodedFrame;
 
 use std::collections::HashMap;
 use std::io::{self, Write};

@@ -1,5 +1,5 @@
 //! GIF encoder/decoder integration + ffmpeg RGBA conformance.
-#![cfg(feature = "native-codec")]
+#![cfg(feature = "gif")]
 
 use threers::codec::gif::{
     decode_gif, encode_gif, DisposalMode, GifDecoder, GifEncoder, GifOptions, GifWriter,
@@ -507,4 +507,17 @@ fn lossy_zero_size_regression() {
     );
     let b = encode_gif(w, h, 0, &GifOptions::default().dither(false), frames);
     assert_eq!(a, b, "lossy(0) must match default bitstream");
+}
+
+/// `GifFrame` was `DecodedFrame` until 0.0.6. The old name still works,
+/// deprecated, for a release; it is the same type.
+#[test]
+#[allow(deprecated)]
+fn the_old_frame_name_is_a_deprecated_alias() {
+    use threers::codec::gif::{DecodedFrame, GifFrame};
+    fn same(f: GifFrame) -> DecodedFrame {
+        f
+    }
+    let _ = same;
+    let _: Option<threers::DecodedFrame> = None::<threers::GifFrame>;
 }

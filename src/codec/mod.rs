@@ -22,6 +22,7 @@ pub mod animation;
 pub mod apng;
 pub mod bitstream;
 pub mod decode;
+#[cfg(feature = "gif")]
 pub mod gif;
 pub mod h264;
 pub mod rate;
@@ -39,11 +40,15 @@ pub use animation::{
 };
 pub use apng::ApngEncoder;
 pub use bitstream::{emulation_prevention, rbsp_trailing_bits, BitWriter};
+#[cfg(feature = "gif")]
 pub use gif::{
-    decode_gif, encode_gif, DecodedFrame, DisposalMethod, DisposalMode, GifDecoder, GifEncoder,
-    GifError, GifFrameMeta, GifInfo, GifOptions, GifVersion, GifWriter, LzwClearMode, PaletteMode,
+    decode_gif, encode_gif, DisposalMethod, DisposalMode, GifDecoder, GifEncoder, GifError,
+    GifFrame, GifFrameMeta, GifInfo, GifOptions, GifVersion, GifWriter, LzwClearMode, PaletteMode,
     QuantizerKind,
 };
+#[cfg(feature = "gif")]
+#[allow(deprecated)]
+pub use gif::DecodedFrame;
 pub use vp9::{encode_intra_frame, encode_intra_gray, Reconstruction};
 pub use webm::{encode_gray_webm, encode_webm, mux_webm, WebmCodec, WebmFrame, WebmParams};
 

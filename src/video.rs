@@ -1175,6 +1175,9 @@ where
             "invalid native animation dimensions or options",
         )),
         AnimationEncodeError::Io(message) => VideoError::Io(std::io::Error::other(message)),
+        e @ AnimationEncodeError::FeatureDisabled(_) => {
+            VideoError::Io(std::io::Error::new(std::io::ErrorKind::Unsupported, e.to_string()))
+        }
     })?;
     std::fs::write(&options.output, bytes).map_err(VideoError::Io)?;
     tracer.emit_progress(make_progress(

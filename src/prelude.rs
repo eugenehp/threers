@@ -200,8 +200,10 @@ pub mod video {
     pub use crate::codec::hevc::Yuv420Frame;
     pub use crate::codec::{
         encode_animation_rgba, encode_webm, h264, hevc, mp4, mp4_demux, AnimationEncodeOptions,
-        ApngEncoder, BrowserCodec, GifEncoder,
+        ApngEncoder, BrowserCodec,
     };
+    #[cfg(feature = "gif")]
+    pub use crate::codec::GifEncoder;
 }
 
 /// Subtitle cues and on-screen overlay (`captions`).

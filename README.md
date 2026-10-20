@@ -86,7 +86,7 @@ self-contained subsystem, behind a Cargo feature where it says so.
 | [NURBS, B-rep, STEP](docs/brep-nurbs-plan.md) (`nurbs`, `brep`, `step`) | Exact curved surfaces, analytic booleans, ISO 10303-21 |
 | [Lattices](docs/lattices.md) · [Kirigami](docs/kirigami.md) | 35 lattice generators with physical properties; foldable sheets |
 | [USD](docs/usd.md) (`usd`) · [glTF](docs/gltf.md) · [Draco](docs/draco.md) · [KTX2](docs/ktx2.md) · [Alembic](docs/alembic.md) | Interchange, read and written where the format allows |
-| [Video](docs/codecs.md) (`video`, `native-codec`) · [Captions](docs/captions.md) · [SVG](docs/svg.md) | GIF, APNG, WebM, H.264 and HEVC in pure Rust; SRT/WebVTT; vector output |
+| [Video](docs/codecs.md) (`video`, `native-codec`, `gif`) · [Captions](docs/captions.md) · [SVG](docs/svg.md) | GIF, APNG, WebM, H.264 and HEVC in pure Rust; SRT/WebVTT; vector output |
 | [Metal and visionOS](docs/apple-platforms.md) (`metal`, `visionos`) | A second renderer on Metal, and the CompositorServices loop |
 | [RLX](docs/rlx.md) (`rlx`, `rlx-geo`) · [Physics](docs/physics.md) | Tensors and learned grading; rigid bodies in `threers-physics` |
 

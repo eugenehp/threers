@@ -144,6 +144,9 @@ video = ["captions"]
 # `video` does. It is a pure-code feature with no dependencies of its own,
 # so this costs compile time and nothing else.
 native-codec = ["captions"]
+# GIF89a encode and decode (`codec::gif`), and GIF in the animation and video
+# exporters. Off, choosing GIF there is an error rather than a missing variant.
+gif = ["native-codec"]
 # Second renderer on Metal via the Objective-C runtime (macOS/iOS).
 metal = []
 # CompositorServices + ARKit (implies metal).
@@ -185,7 +188,7 @@ learned-denoise-gpu = ["learned-denoise"]
 # CAD / solid modelling stack.
 cad = ["openscad", "nurbs", "brep", "brep-csg", "parallel"]
 # Video, captions, and pure-Rust codecs.
-media = ["video", "native-codec", "captions"]
+media = ["video", "native-codec", "gif", "captions"]
 # Path tracing + trained denoise.
 gi = ["raytrace", "learned-denoise"]
 # Apple-platform backends (inert on other OSes).
@@ -207,7 +210,7 @@ full = [
 ]
 # Browser / wasm kitchen sink — no native-only flags (video, metal, async, …).
 # Used by `VARIANT=full web/build.sh` and the npm `threers/full` package entry.
-wasm-full = ["captions", "openscad", "native-codec", "nurbs", "planet", "raytrace", "fluid", "usd"]
+wasm-full = ["captions", "openscad", "native-codec", "gif", "nurbs", "planet", "raytrace", "fluid", "usd"]
 
 [dependencies]
 wgpu = "30"
@@ -339,7 +342,7 @@ required-features = ["video"]
 
 [[example]]
 name = "export_gif"
-required-features = ["video", "native-codec"]
+required-features = ["video", "gif"]
 
 [[example]]
 name = "export_apng"
@@ -762,7 +765,7 @@ required-features = ["native-codec"]
 
 [[test]]
 name = "gif"
-required-features = ["native-codec"]
+required-features = ["gif"]
 
 [[test]]
 name = "h264_animation_parity"

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **GIF is its own feature, `gif`** (implies `native-codec`; `media`, `full`
+  and `wasm-full` include it). `native-codec` alone no longer compiles
+  `codec::gif`. The animation and video exporters keep `BrowserCodec::Gif` /
+  `VideoCodec::Gif` in every build; choosing it without the feature is the new
+  `AnimationEncodeError::FeatureDisabled("gif")` rather than a missing variant.
+- **`codec::gif::DecodedFrame` is now `GifFrame`**, so it is not mistaken for
+  the video decoder's `codec::decode::DecodedFrame`. The old name remains as a
+  deprecated alias (in `codec::gif`, `codec` and the crate root) for this
+  release.
+
 ## [0.0.6] — 2026-10-19
 
 Universal Scene Description, read and written in all three of its forms and
