@@ -84,16 +84,16 @@ The npm package works straight from jsDelivr, unpkg or esm.sh. Their URLs
 carry the version, so they are immutable already and cached as such:
 
 ```html
-<link rel="modulepreload" href="https://cdn.jsdelivr.net/npm/threers@0.0.6/dist/mini/threejs-shim.js">
-<link rel="preload" href="https://cdn.jsdelivr.net/npm/threers@0.0.6/dist/mini/pkg/threers_bg.wasm"
+<link rel="modulepreload" href="https://cdn.jsdelivr.net/npm/threers@0.0.7/dist/mini/threejs-shim.js">
+<link rel="preload" href="https://cdn.jsdelivr.net/npm/threers@0.0.7/dist/mini/pkg/threers_bg.wasm"
       as="fetch" type="application/wasm" crossorigin>
 <script type="module">
-  import THREE, { initThreers } from 'https://cdn.jsdelivr.net/npm/threers@0.0.6/dist/mini/index.js';
+  import THREE, { initThreers } from 'https://cdn.jsdelivr.net/npm/threers@0.0.7/dist/mini/index.js';
   await initThreers();
 </script>
 ```
 
-Pin the version — `threers@0.0.6`, not `threers` or a range — or the CDN
+Pin the version — `threers@0.0.7`, not `threers` or a range — or the CDN
 cannot cache the files for long and a release changes the page under you. The
 package ships the plain `.wasm` only; the CDN compresses it.
 

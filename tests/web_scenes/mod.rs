@@ -1072,3 +1072,552 @@ async fn glass_layers_msaa_occlusion_and_shadow_types() {
     renderer.set_refraction_layers(2);
     renderer.set_render_target(0);
 }
+
+/// Shell fur through the JS API (`WebScene.addFur`): a shader material on an
+/// instanced mesh with a custom vertex stage — Tint, and on WebGL2 ANGLE,
+/// have to take the shader and draw shells past the skin's silhouette.
+#[wasm_bindgen_test]
+async fn fur_grows_past_the_skin() {
+    use threers::wasm::{WebCamera, WebColor, WebFurMaterial, WebGeometry, WebLight, WebScene};
+    const N: u32 = 96;
+    let (shared, _canvas) = super::views_renderer().await;
+    let mut renderer = shared.borrow_mut();
+    reset(&mut renderer);
+    let target = threers::wasm::WebRenderTarget::new(&renderer, N, N);
+
+    let mut fur = WebFurMaterial::new();
+    fur.set_length(0.4);
+    fur.set_density(40.0);
+    fur.set_gravity(0.0, 0.0, 0.0);
+    fur.set_shells(24);
+    fur.set_colors(&WebColor::new(0.6, 0.5, 0.4), &WebColor::new(1.0, 0.9, 0.7));
+    let mut scene = WebScene::new();
+    scene.set_background(&WebColor::new(0.0, 0.0, 0.0));
+    scene.add_light(&WebLight::ambient(&WebColor::new(1.0, 1.0, 1.0), 2.0));
+    scene.add_fur(&WebGeometry::sphere(1.0, 48, 24), &fur);
+    let mut camera = WebCamera::perspective(40.0, 1.0, 0.1, 50.0);
+    camera.set_position(0.0, 0.0, 5.0);
+    camera.look_at(0.0, 0.0, 0.0);
+
+    renderer.set_render_target(target.id);
+    renderer.render(&mut scene, &camera);
+    renderer.set_render_target(0);
+    let px = read_target(&renderer, target.id, N, N).await;
+
+    // The bare sphere's silhouette is ~26 px across from the centre; the fur
+    // reaches ~35. A band between should be part-covered, and nothing far out.
+    let per_unit = N as f32 / 2.0 / (5.0 * 20f32.to_radians().tan());
+    let (mut band, mut band_lit, mut far_lit) = (0, 0, 0);
+    for y in 0..N {
+        for x in 0..N {
+            let r = ((x as f32 + 0.5 - N as f32 / 2.0).powi(2)
+                + (y as f32 + 0.5 - N as f32 / 2.0).powi(2))
+            .sqrt()
+                / per_unit;
+            let i = ((y * N + x) * 4) as usize;
+            let lit = px[i] as u32 + px[i + 1] as u32 + px[i + 2] as u32 > 30;
+            if r > 1.08 && r < 1.25 {
+                band += 1;
+                band_lit += lit as u32;
+            } else if r > 1.6 {
+                far_lit += lit as u32;
+            }
+        }
+    }
+    assert!(
+        band_lit as f32 > 0.08 * band as f32,
+        "fur covers {band_lit} of {band} pixels past the skin — the shells did not draw"
+    );
+    assert_eq!(far_lit, 0, "{far_lit} pixels lit far beyond the fur");
+}
+
+/// Strand hair through the JS API (`WebScene.addHair`): ribbons expanded in
+/// a custom vertex stage, with the fur fragment's hair path — they have to
+/// draw past the sphere they grow on and hang down under gravity.
+#[wasm_bindgen_test]
+async fn hair_hangs_past_the_scalp() {
+    use threers::wasm::{WebCamera, WebColor, WebFurMaterial, WebGeometry, WebLight, WebScene};
+    const N: u32 = 96;
+    let (shared, _canvas) = super::views_renderer().await;
+    let mut renderer = shared.borrow_mut();
+    reset(&mut renderer);
+    let target = threers::wasm::WebRenderTarget::new(&renderer, N, N);
+
+    let mut hair = WebFurMaterial::new();
+    hair.set_length(0.4);
+    hair.set_gravity(0.0, -2.0, 0.0);
+    hair.set_colors(&WebColor::new(0.6, 0.5, 0.4), &WebColor::new(1.0, 0.9, 0.7));
+    let mut scene = WebScene::new();
+    scene.set_background(&WebColor::new(0.0, 0.0, 0.0));
+    scene.add_light(&WebLight::ambient(&WebColor::new(1.0, 1.0, 1.0), 2.0));
+    scene.add_hair(
+        &WebGeometry::sphere(1.0, 48, 24),
+        &hair,
+        4000,
+        6,
+        0.03,
+        None,
+    );
+    let mut camera = WebCamera::perspective(40.0, 1.0, 0.1, 50.0);
+    camera.set_position(0.0, 0.0, 5.0);
+    camera.look_at(0.0, 0.0, 0.0);
+
+    renderer.set_render_target(target.id);
+    renderer.render(&mut scene, &camera);
+    renderer.set_render_target(0);
+    let px = read_target(&renderer, target.id, N, N).await;
+
+    let per_unit = N as f32 / 2.0 / (5.0 * 20f32.to_radians().tan());
+    let (mut above, mut below, mut far_lit) = (0, 0, 0);
+    for y in 0..N {
+        for x in 0..N {
+            let (dx, dy) = (
+                x as f32 + 0.5 - N as f32 / 2.0,
+                y as f32 + 0.5 - N as f32 / 2.0,
+            );
+            let r = (dx * dx + dy * dy).sqrt() / per_unit;
+            let i = ((y * N + x) * 4) as usize;
+            let lit = px[i] as u32 + px[i + 1] as u32 + px[i + 2] as u32 > 30;
+            if r > 1.06 && r < 1.5 && lit {
+                if dy < 0.0 {
+                    above += 1;
+                } else {
+                    below += 1;
+                }
+            } else if r > 1.6 {
+                far_lit += lit as u32;
+            }
+        }
+    }
+    assert!(
+        below > 60,
+        "only {below} hair pixels below the scalp — the ribbons did not draw"
+    );
+    assert!(
+        below > above * 3 / 2,
+        "gravity did not pull the hair down ({above} above, {below} below)"
+    );
+    assert_eq!(far_lit, 0, "{far_lit} pixels lit far beyond the hair");
+}
+
+/// Hair on a skinned mesh through the JS scene graph, as the three.js shim
+/// builds it (`createSkinnedMesh`, `setSkeleton`, `createSkinnedHair`,
+/// `setChildren`): it draws, and moves with the bone — the posed strands and
+/// their per-strand lag (in uv1/uv2, read by the custom vertex stage) on the
+/// browser's backend.
+#[wasm_bindgen_test]
+async fn skinned_hair_follows_its_bone() {
+    use threers::prelude::*;
+    use threers::wasm::{
+        WebBufferAttribute, WebBufferGeometry, WebCamera, WebColor, WebFurMaterial, WebGeometry,
+        WebLight, WebMaterial, WebScene,
+    };
+    const N: u32 = 96;
+    let (shared, _canvas) = super::views_renderer().await;
+    let mut renderer = shared.borrow_mut();
+    reset(&mut renderer);
+    let target = threers::wasm::WebRenderTarget::new(&renderer, N, N);
+
+    let sphere = SphereGeometry::new(0.5, 32, 16);
+    let mut bg = WebBufferGeometry::new();
+    for (name, size) in [("position", 3), ("normal", 3), ("uv", 2)] {
+        let a = sphere.get_attribute(name).unwrap();
+        bg.set_attribute(name, WebBufferAttribute::new(a.array.clone(), size));
+    }
+    let count = sphere.get_attribute("position").unwrap().count();
+    bg.set_attribute("joint", WebBufferAttribute::new(vec![0.0; count * 4], 4));
+    bg.set_attribute(
+        "weight",
+        WebBufferAttribute::new((0..count).flat_map(|_| [1.0, 0.0, 0.0, 0.0]).collect(), 4),
+    );
+    bg.set_index(sphere.index.clone().unwrap());
+    let geometry = WebGeometry::share_buffer_geometry(&bg);
+
+    let mut scene = WebScene::new();
+    scene.set_background(&WebColor::new(0.0, 0.0, 0.0));
+    let bone = scene.create_group(false);
+    let mesh = scene.create_skinned_mesh(
+        &geometry,
+        &WebMaterial::basic(&WebColor::new(0.0, 0.0, 0.0)),
+    );
+    scene.set_children(&scene.root_handle(), vec![bone.id(), mesh.id()]);
+    // After the root's children are set: they replace whatever was there.
+    scene.add_light(&WebLight::ambient(&WebColor::new(1.0, 1.0, 1.0), 2.0));
+    let identity: Vec<f32> = Matrix4::identity().elements.to_vec();
+    scene.set_skeleton(&mesh, vec![bone.id()], identity.clone());
+    let mut hair = WebFurMaterial::new();
+    hair.set_length(0.35);
+    hair.set_gravity(0.0, 0.0, 0.0);
+    hair.set_colors(&WebColor::new(0.6, 0.5, 0.4), &WebColor::new(1.0, 0.9, 0.7));
+    let strands = scene.create_skinned_hair(&mesh, &hair, 3000, 6, 0.03, None);
+    scene.set_children(&mesh, vec![strands.id()]);
+    let mut camera = WebCamera::perspective(40.0, 1.0, 0.1, 50.0);
+    camera.set_position(0.0, 0.0, 5.0);
+    camera.look_at(0.0, 0.0, 0.0);
+
+    let mut centres = Vec::new();
+    for x in [-0.8f32, 0.8] {
+        let mut m = identity.clone();
+        m[12] = x;
+        scene.set_local_matrix(&bone, m);
+        for f in 0..60 {
+            scene.step_fur(f as f32 / 60.0, 1.0 / 60.0);
+        }
+        renderer.set_render_target(target.id);
+        renderer.render(&mut scene, &camera);
+        renderer.set_render_target(0);
+        let px = read_target(&renderer, target.id, N, N).await;
+        let (mut sx, mut n) = (0.0f32, 0u32);
+        for y in 0..N {
+            for x in 0..N {
+                let i = ((y * N + x) * 4) as usize;
+                if px[i] as u32 + px[i + 1] as u32 + px[i + 2] as u32 > 30 {
+                    sx += x as f32;
+                    n += 1;
+                }
+            }
+        }
+        assert!(
+            n > 300,
+            "only {n} hair pixels: the skinned hair did not draw"
+        );
+        centres.push(sx / n as f32);
+    }
+    let per_unit = N as f32 / 2.0 / (5.0 * 20f32.to_radians().tan());
+    let moved = (centres[1] - centres[0]) / per_unit;
+    assert!(
+        (moved - 1.6).abs() < 0.1,
+        "the hair moved {moved:.2}, the bone 1.6"
+    );
+}
+
+/// Fur's and hair's shadows in the browser: each object's invisible caster
+/// group (the coat's pushed-out skin, the hair's tubes) drawn into the
+/// shadow map, darkening the floor under it — and nothing with the caster
+/// turned off. The floor pixels are picked by ray-casting the camera.
+#[wasm_bindgen_test]
+async fn fur_and_hair_cast_shadows() {
+    use threers::prelude::{Camera, PerspectiveCamera, Vector3};
+    use threers::wasm::{
+        WebCamera, WebColor, WebEuler, WebFurMaterial, WebGeometry, WebLight, WebMaterial, WebMesh,
+        WebScene, WebVector3,
+    };
+    const N: u32 = 128;
+    let (shared, _canvas) = super::views_renderer().await;
+    let mut renderer = shared.borrow_mut();
+    reset(&mut renderer);
+    let target = threers::wasm::WebRenderTarget::new(&renderer, N, N);
+
+    // The camera, in Rust too, for the rays that find the floor.
+    let (eye, at) = (Vector3::new(0.0, 3.0, 5.0), Vector3::ZERO);
+    let mut cam = PerspectiveCamera::new(45.0, 1.0, 0.1, 50.0);
+    cam.position = eye;
+    cam.look_at(at);
+    // Floor pixels (the floor's top is y = −1) within 0.6 of under the
+    // object at y = 1, whose rays pass clear of it.
+    let under: Vec<bool> = (0..N * N)
+        .map(|i| {
+            let (x, y) = (i % N, i / N);
+            let ndc = Vector3::new(
+                (x as f32 + 0.5) / N as f32 * 2.0 - 1.0,
+                1.0 - (y as f32 + 0.5) / N as f32 * 2.0,
+                0.5,
+            );
+            let dir =
+                (ndc.unproject(&cam.view_matrix(), &cam.projection_matrix()) - eye).normalize();
+            let to_obj = Vector3::new(0.0, 1.0, 0.0) - eye;
+            if (to_obj - dir * to_obj.dot(dir)).length() < 1.3 || dir.y >= 0.0 {
+                return false;
+            }
+            let p = eye + dir * ((-1.0 - eye.y) / dir.y);
+            (p.x * p.x + p.z * p.z).sqrt() < 0.6
+        })
+        .collect();
+    let floor_px = under.iter().filter(|&&u| u).count();
+    assert!(
+        floor_px > 100,
+        "only {floor_px} floor pixels in view under the object"
+    );
+
+    let white = WebColor::new(1.0, 1.0, 1.0);
+    let mut camera = WebCamera::perspective(45.0, 1.0, 0.1, 50.0);
+    camera.set_position(eye.x, eye.y, eye.z);
+    camera.look_at(at.x, at.y, at.z);
+    for (what, hair) in [("fur", false), ("hair", true)] {
+        let mut light = [0.0f64; 2];
+        for (k, casts) in [true, false].into_iter().enumerate() {
+            let mut scene = WebScene::new();
+            scene.set_background(&WebColor::new(0.0, 0.0, 0.0));
+            let floor = scene.add(&WebMesh::new(
+                &WebGeometry::box_(8.0, 0.2, 8.0),
+                &WebMaterial::standard(&white, 1.0, 0.0),
+            ));
+            scene.set_transform(
+                &floor,
+                &WebVector3::new(0.0, -1.1, 0.0),
+                &WebEuler::new(0.0, 0.0, 0.0),
+            );
+            scene.set_object_receive_shadow(&floor, true);
+            let mut fur = WebFurMaterial::new();
+            fur.set_length(0.4);
+            fur.set_density(40.0);
+            fur.set_gravity(0.0, 0.0, 0.0);
+            fur.set_colors(&WebColor::new(0.6, 0.5, 0.4), &WebColor::new(1.0, 0.9, 0.7));
+            if !casts {
+                fur.set_shadow_height(0.0);
+            }
+            let obj = if hair {
+                let share = if casts { 0.25 } else { 0.0 };
+                scene.add_hair(
+                    &WebGeometry::sphere(0.4, 32, 16),
+                    &fur,
+                    4000,
+                    6,
+                    0.015,
+                    Some(share),
+                )
+            } else {
+                scene.add_fur(&WebGeometry::sphere(0.5, 48, 24), &fur)
+            };
+            scene.set_transform(
+                &obj,
+                &WebVector3::new(0.0, 1.0, 0.0),
+                &WebEuler::new(0.0, 0.0, 0.0),
+            );
+            let mut sun = WebLight::directional(&white, 2.0);
+            sun.set_direction(0.0, -1.0, 0.0);
+            sun.set_cast_shadow(true);
+            sun.set_shadow_camera(-3.0, 3.0, 3.0, -3.0, 0.1, 30.0);
+            sun.set_shadow_map_size(1024, 1024);
+            scene.add_light(&sun);
+            scene.add_light(&WebLight::ambient(&white, 0.3));
+
+            renderer.set_render_target(target.id);
+            renderer.render(&mut scene, &camera);
+            renderer.set_render_target(0);
+            let px = read_target(&renderer, target.id, N, N).await;
+            let sum: f64 = under
+                .iter()
+                .enumerate()
+                .filter(|(_, &u)| u)
+                .map(|(i, _)| px[i * 4] as f64)
+                .sum();
+            light[k] = sum / floor_px as f64;
+        }
+        let [with, without] = light;
+        assert!(
+            without > 60.0,
+            "{what}: the floor under it is dark even without a caster ({without:.0})"
+        );
+        assert!(
+            with < 0.75 * without,
+            "{what}: no shadow on the floor (red {with:.0} with the caster, {without:.0} without)"
+        );
+    }
+}
+
+/// Fur and hair under MSAA in the browser: the frame stays multisampled, and
+/// the same strands draw the same light as at one sample.
+#[wasm_bindgen_test]
+async fn fur_and_hair_multisample() {
+    use threers::wasm::{WebCamera, WebColor, WebFurMaterial, WebGeometry, WebLight, WebScene};
+    const N: u32 = 96;
+    let (shared, _canvas) = super::views_renderer().await;
+    let mut renderer = shared.borrow_mut();
+    reset(&mut renderer);
+    let mut camera = WebCamera::perspective(40.0, 1.0, 0.1, 50.0);
+    camera.set_position(0.0, 0.0, 5.0);
+    camera.look_at(0.0, 0.0, 0.0);
+    // Summed differences between neighbouring pixels: what aliasing adds.
+    let roughness = |px: &[u8]| -> f64 {
+        let mut tv = 0.0;
+        for y in 0..N - 1 {
+            for x in 0..N - 1 {
+                let i = ((y * N + x) * 4) as usize;
+                for c in 0..3 {
+                    tv += (px[i + c] as f64 - px[i + 4 + c] as f64).abs();
+                    tv += (px[i + c] as f64 - px[i + (N * 4) as usize + c] as f64).abs();
+                }
+            }
+        }
+        tv
+    };
+    // The light drawn: the same strands drawn the same, multisampled or not —
+    // thin ones as more, fainter pixels rather than fewer, solid ones.
+    let light = |px: &[u8]| -> f64 {
+        px.chunks(4)
+            .map(|p| p[0] as f64 + p[1] as f64 + p[2] as f64)
+            .sum()
+    };
+    for (what, hair) in [("fur", false), ("hair", true)] {
+        let mut out = Vec::new();
+        for samples in [1u32, 4] {
+            let mut fur = WebFurMaterial::new();
+            fur.set_length(0.35);
+            fur.set_density(70.0);
+            fur.set_lod(false);
+            fur.set_colors(
+                &WebColor::new(0.2, 0.1, 0.05),
+                &WebColor::new(1.0, 0.9, 0.7),
+            );
+            let mut scene = WebScene::new();
+            scene.set_background(&WebColor::new(0.0, 0.0, 0.0));
+            scene.add_light(&WebLight::ambient(&WebColor::new(1.0, 1.0, 1.0), 2.0));
+            if hair {
+                fur.set_gravity(0.0, -1.0, 0.0);
+                scene.add_hair(
+                    &WebGeometry::sphere(0.9, 32, 16),
+                    &fur,
+                    5000,
+                    6,
+                    0.006,
+                    Some(0.0),
+                );
+            } else {
+                scene.add_fur(&WebGeometry::sphere(1.0, 48, 24), &fur);
+            }
+            let target = threers::wasm::WebRenderTarget::new(&renderer, N, N);
+            target.set_samples(samples);
+            renderer.set_render_target(target.id);
+            renderer.render(&mut scene, &camera);
+            let multisampled = renderer.last_frame_multisampled();
+            renderer.set_render_target(0);
+            let px = read_target(&renderer, target.id, N, N).await;
+            out.push((multisampled, roughness(&px), light(&px)));
+        }
+        let [(m1, tv1, e1), (m4, tv4, e4)] = [out[0], out[1]];
+        assert!(
+            !m1 && m4,
+            "{what}: multisampled {m1} at one sample, {m4} at four"
+        );
+        // In a browser fur and hair cut their strands at the pixel's centre
+        // even under MSAA (per-sample coverage would cost a per-sample
+        // shading there — `sample_mask_is_cheap`): the edges of geometry are
+        // smoothed, the strands drawn as at one sample. So no smoother here;
+        // natively, `tests/fur.rs` measures that.
+        let _ = (tv1, tv4);
+        assert!(
+            (e4 - e1).abs() < 0.2 * e1,
+            "{what}: light drawn {e1:.0} at one sample, {e4:.0} at four"
+        );
+    }
+}
+
+/// Fur and hair drawn straight to the canvas (not a render target), with the
+/// renderer's MSAA on and off: the frame — floor, background and coat —
+/// reaches the canvas, and the coat is where it should be.
+#[wasm_bindgen_test]
+async fn fur_draws_to_the_canvas() {
+    use threers::wasm::{
+        WebCamera, WebColor, WebEuler, WebFurMaterial, WebGeometry, WebLight, WebMaterial, WebMesh,
+        WebScene, WebVector3,
+    };
+    let (shared, canvas) = super::views_renderer().await;
+    let mut renderer = shared.borrow_mut();
+    reset(&mut renderer);
+    let (cw, ch) = (canvas.width(), canvas.height());
+    for (what, hair) in [("fur", false), ("hair", true)] {
+        for samples in [1u32, 4] {
+            let mut scene = WebScene::new();
+            scene.set_background(&WebColor::new(0.0, 0.0, 1.0));
+            scene.add_light(&WebLight::ambient(&WebColor::new(1.0, 1.0, 1.0), 2.0));
+            let floor = scene.add(&WebMesh::new(
+                &WebGeometry::box_(20.0, 0.1, 20.0),
+                &WebMaterial::basic(&WebColor::new(0.0, 1.0, 0.0)),
+            ));
+            scene.set_transform(
+                &floor,
+                &WebVector3::new(0.0, -2.0, 0.0),
+                &WebEuler::new(0.0, 0.0, 0.0),
+            );
+            let mut fur = WebFurMaterial::new();
+            fur.set_length(0.4);
+            fur.set_colors(&WebColor::new(1.0, 0.2, 0.2), &WebColor::new(1.0, 0.3, 0.3));
+            if hair {
+                scene.add_hair(&WebGeometry::sphere(1.0, 24, 12), &fur, 3000, 4, 0.03, None);
+            } else {
+                scene.add_fur(&WebGeometry::sphere(1.0, 32, 16), &fur);
+            }
+            scene.step_fur(0.0, 1.0 / 60.0);
+            let mut camera = WebCamera::perspective(40.0, cw as f32 / ch as f32, 0.1, 50.0);
+            camera.set_position(0.0, 0.0, 5.0);
+            camera.look_at(0.0, 0.0, 0.0);
+            renderer.set_msaa(samples);
+            renderer.render(&mut scene, &camera);
+            let centre = canvas_pixel(&canvas, cw / 2, ch / 2);
+            let sky = canvas_pixel(&canvas, cw / 2, ch / 20);
+            let ground = canvas_pixel(&canvas, cw / 2, ch - ch / 20);
+            renderer.set_msaa(1);
+            assert!(
+                sky[2] > 200 && sky[0] < 40,
+                "{what}, {samples} sample(s): the background reads {sky:?}"
+            );
+            assert!(
+                ground[1] > 150,
+                "{what}, {samples} sample(s): the floor reads {ground:?}"
+            );
+            // Red, the coat's colour (lit brighter or darker, not blue) —
+            // across the middle row for hair, whose strands at the very
+            // centre point at the camera, edge-on.
+            let red = |p: [u8; 3]| p[0] > 120 && p[0] as i32 > p[2] as i32 + 60;
+            let coat = if hair {
+                (0..20)
+                    .map(|k| canvas_pixel(&canvas, cw / 4 + k * cw / 40, ch / 2))
+                    .filter(|p| red(*p))
+                    .count()
+                    >= 3
+            } else {
+                red(centre)
+            };
+            assert!(
+                coat,
+                "{what}, {samples} sample(s): no coat (centre {centre:?})"
+            );
+        }
+    }
+}
+
+/// Fur and hair through the scene graph, as the three.js shim builds them
+/// (`createFur`, `createHair`, `setChildren`), drawn to the canvas: the frame
+/// — background and coat — reaches it. (Their shadow casters write neither
+/// colour nor depth; on WebGL2 drawing one in the colour pass blacked out
+/// the whole frame.)
+#[wasm_bindgen_test]
+async fn graph_fur_draws_to_the_canvas() {
+    use threers::wasm::{WebCamera, WebColor, WebFurMaterial, WebGeometry, WebLight, WebScene};
+    let (shared, canvas) = super::views_renderer().await;
+    let mut renderer = shared.borrow_mut();
+    reset(&mut renderer);
+    let (cw, ch) = (canvas.width(), canvas.height());
+    for hair in [false, true] {
+        let mut scene = WebScene::new();
+        scene.set_background(&WebColor::new(0.0, 0.0, 1.0));
+        let mut fur = WebFurMaterial::new();
+        fur.set_length(0.4);
+        fur.set_colors(&WebColor::new(1.0, 0.2, 0.2), &WebColor::new(1.0, 0.3, 0.3));
+        let coat = if hair {
+            scene.create_hair(&WebGeometry::sphere(1.0, 24, 12), &fur, 4000, 4, 0.04, None)
+        } else {
+            scene.create_fur(&WebGeometry::sphere(1.0, 32, 16), &fur)
+        };
+        scene.set_children(&scene.root_handle(), vec![coat.id()]);
+        scene.add_light(&WebLight::ambient(&WebColor::new(1.0, 1.0, 1.0), 2.0));
+        scene.step_fur(0.0, 1.0 / 60.0);
+        let mut camera = WebCamera::perspective(40.0, cw as f32 / ch as f32, 0.1, 50.0);
+        camera.set_position(0.0, 0.0, 5.0);
+        camera.look_at(0.0, 0.0, 0.0);
+        renderer.render(&mut scene, &camera);
+        let what = if hair { "hair" } else { "fur" };
+        let sky = canvas_pixel(&canvas, cw / 2, ch / 20);
+        assert!(
+            sky[2] > 200 && sky[0] < 40,
+            "{what}: the background reads {sky:?}"
+        );
+        let red = |p: [u8; 3]| p[0] > 120 && p[0] as i32 > p[2] as i32 + 60;
+        let coat_px = (0..20)
+            .map(|k| canvas_pixel(&canvas, cw / 4 + k * cw / 40, ch / 2))
+            .filter(|p| red(*p))
+            .count();
+        assert!(coat_px >= 3, "{what}: no coat across the middle");
+    }
+}

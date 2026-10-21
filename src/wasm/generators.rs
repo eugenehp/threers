@@ -35,35 +35,90 @@ impl WebGeometry {
             RingGeometry, SphereGeometry, TetrahedronGeometry, TorusGeometry, TorusKnotGeometry,
         };
         use std::f64::consts::PI;
-        let a = |i: usize, default: f64| args.get(i).copied().filter(|v| !v.is_nan()).unwrap_or(default);
+        let a = |i: usize, default: f64| {
+            args.get(i)
+                .copied()
+                .filter(|v| !v.is_nan())
+                .unwrap_or(default)
+        };
         // three.js `Math.floor` on every segment count.
         let n = |i: usize, default: f64| a(i, default).floor().max(0.0) as usize;
         let g = match name {
             "BoxGeometry" => BoxGeometry::from_f64(
-                a(0, 1.0), a(1, 1.0), a(2, 1.0), n(3, 1.0) as u32, n(4, 1.0) as u32, n(5, 1.0) as u32,
+                a(0, 1.0),
+                a(1, 1.0),
+                a(2, 1.0),
+                n(3, 1.0) as u32,
+                n(4, 1.0) as u32,
+                n(5, 1.0) as u32,
             ),
             "SphereGeometry" => SphereGeometry::from_f64(
-                a(0, 1.0), n(1, 32.0), n(2, 16.0), a(3, 0.0), a(4, PI * 2.0), a(5, 0.0), a(6, PI),
+                a(0, 1.0),
+                n(1, 32.0),
+                n(2, 16.0),
+                a(3, 0.0),
+                a(4, PI * 2.0),
+                a(5, 0.0),
+                a(6, PI),
             ),
             "CylinderGeometry" => CylinderGeometry::from_f64(
-                a(0, 1.0), a(1, 1.0), a(2, 1.0), n(3, 32.0), n(4, 1.0), a(5, 0.0) != 0.0, a(6, 0.0), a(7, PI * 2.0),
+                a(0, 1.0),
+                a(1, 1.0),
+                a(2, 1.0),
+                n(3, 32.0),
+                n(4, 1.0),
+                a(5, 0.0) != 0.0,
+                a(6, 0.0),
+                a(7, PI * 2.0),
             ),
             "ConeGeometry" => ConeGeometry::from_f64(
-                a(0, 1.0), a(1, 1.0), n(2, 32.0), n(3, 1.0), a(4, 0.0) != 0.0, a(5, 0.0), a(6, PI * 2.0),
+                a(0, 1.0),
+                a(1, 1.0),
+                n(2, 32.0),
+                n(3, 1.0),
+                a(4, 0.0) != 0.0,
+                a(5, 0.0),
+                a(6, PI * 2.0),
             ),
             "PlaneGeometry" => PlaneGeometry::from_f64(a(0, 1.0), a(1, 1.0), n(2, 1.0), n(3, 1.0)),
-            "CircleGeometry" => CircleGeometry::from_f64(a(0, 1.0), n(1, 32.0), a(2, 0.0), a(3, PI * 2.0)),
-            "RingGeometry" => RingGeometry::from_f64(a(0, 0.5), a(1, 1.0), n(2, 32.0), n(3, 1.0), a(4, 0.0), a(5, PI * 2.0)),
-            "TorusGeometry" => TorusGeometry::from_f64(a(0, 1.0), a(1, 0.4), n(2, 12.0), n(3, 48.0), a(4, PI * 2.0)),
+            "CircleGeometry" => {
+                CircleGeometry::from_f64(a(0, 1.0), n(1, 32.0), a(2, 0.0), a(3, PI * 2.0))
+            }
+            "RingGeometry" => RingGeometry::from_f64(
+                a(0, 0.5),
+                a(1, 1.0),
+                n(2, 32.0),
+                n(3, 1.0),
+                a(4, 0.0),
+                a(5, PI * 2.0),
+            ),
+            "TorusGeometry" => TorusGeometry::from_f64(
+                a(0, 1.0),
+                a(1, 0.4),
+                n(2, 12.0),
+                n(3, 48.0),
+                a(4, PI * 2.0),
+            ),
             "TorusKnotGeometry" => TorusKnotGeometry::from_f64(
-                a(0, 1.0), a(1, 0.4), n(2, 64.0), n(3, 8.0), n(4, 2.0) as u32, n(5, 3.0) as u32,
+                a(0, 1.0),
+                a(1, 0.4),
+                n(2, 64.0),
+                n(3, 8.0),
+                n(4, 2.0) as u32,
+                n(5, 3.0) as u32,
             ),
             "TetrahedronGeometry" => TetrahedronGeometry::from_f64(a(0, 1.0), n(1, 0.0)),
             "OctahedronGeometry" => OctahedronGeometry::from_f64(a(0, 1.0), n(1, 0.0)),
             "IcosahedronGeometry" => IcosahedronGeometry::from_f64(a(0, 1.0), n(1, 0.0)),
             "DodecahedronGeometry" => DodecahedronGeometry::from_f64(a(0, 1.0), n(1, 0.0)),
-            "CapsuleGeometry" => CapsuleGeometry::with_f64(a(0, 1.0), a(1, 1.0), n(2, 4.0), n(3, 8.0)),
-            other => return Err(JsValue::from_str(&format!("threePrimitive: no primitive '{other}'"))),
+            "CapsuleGeometry" => {
+                CapsuleGeometry::with_f64(a(0, 1.0), a(1, 1.0), n(2, 4.0), n(3, 8.0))
+            }
+            other => {
+                return Err(JsValue::from_str(&format!(
+                    "threePrimitive: no primitive '{other}'"
+                )))
+            }
         };
         Ok(web(g))
     }
@@ -73,7 +128,9 @@ impl WebGeometry {
     #[wasm_bindgen(js_name = lathe)]
     pub fn lathe(points: &[f64], segments: usize, phi_start: f64, phi_length: f64) -> WebGeometry {
         let pts: Vec<[f64; 2]> = points.chunks_exact(2).map(|p| [p[0], p[1]]).collect();
-        web(LatheGeometry::with_f64(&pts, segments, phi_start, phi_length))
+        web(LatheGeometry::with_f64(
+            &pts, segments, phi_start, phi_length,
+        ))
     }
 
     /// three.js `ConvexGeometry(points)`, `points` flattened xyz.
@@ -107,7 +164,10 @@ impl WebGeometry {
             .get_attribute("position")
             .ok_or_else(|| JsValue::from_str("decal: the mesh has no position attribute"))?;
         let empty = Vec::new();
-        let nrm = g.get_attribute("normal").map(|a| &a.array).unwrap_or(&empty);
+        let nrm = g
+            .get_attribute("normal")
+            .map(|a| &a.array)
+            .unwrap_or(&empty);
         Ok(web(DecalGeometry::project(
             &pos.array,
             nrm,
@@ -122,8 +182,16 @@ impl WebGeometry {
 
     /// three.js addon `RoundedBoxGeometry(width, height, depth, segments, radius)`.
     #[wasm_bindgen(js_name = roundedBox)]
-    pub fn rounded_box(width: f64, height: f64, depth: f64, segments: usize, radius: f64) -> WebGeometry {
-        web(RoundedBoxGeometry::new(width, height, depth, segments, radius))
+    pub fn rounded_box(
+        width: f64,
+        height: f64,
+        depth: f64,
+        segments: usize,
+        radius: f64,
+    ) -> WebGeometry {
+        web(RoundedBoxGeometry::new(
+            width, height, depth, segments, radius,
+        ))
     }
 
     /// three.js addon `TeapotGeometry(size, segments, bottom, lid, body, fitLid, blinn)`.
@@ -171,7 +239,10 @@ impl WebGeometry {
     /// degrees. A geometry carrying polygons never gets an edge inside one.
     #[wasm_bindgen(js_name = edges)]
     pub fn edges(source: &WebBufferGeometry, threshold_angle: f64) -> WebGeometry {
-        web(EdgesGeometry::with_threshold_degrees(&source.inner, threshold_angle))
+        web(EdgesGeometry::with_threshold_degrees(
+            &source.inner,
+            threshold_angle,
+        ))
     }
 
     /// three.js `WireframeGeometry(geometry)`; a geometry carrying polygons
@@ -270,7 +341,15 @@ impl WebConvexHull {
     /// `intersectRay`: the distance along the (unit) direction to the hull,
     /// or `undefined` when the ray misses.
     #[wasm_bindgen(js_name = intersectRay)]
-    pub fn intersect_ray(&self, ox: f64, oy: f64, oz: f64, dx: f64, dy: f64, dz: f64) -> Option<f64> {
+    pub fn intersect_ray(
+        &self,
+        ox: f64,
+        oy: f64,
+        oz: f64,
+        dx: f64,
+        dy: f64,
+        dz: f64,
+    ) -> Option<f64> {
         self.inner.intersect_ray([ox, oy, oz], [dx, dy, dz])
     }
 

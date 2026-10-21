@@ -8,6 +8,12 @@ The `openscad` feature adds two front ends onto one `Solid` CSG tree — an Open
 `.scad` interpreter and a Rust DSL — evaluated by a pure-Rust **watertight
 exact-CSG kernel** (`to_geometry_exact`), with mesh import/export.
 
+![Nine of the gallery's 37 demos](images/openscad_gallery.jpg)
+
+*Nine of `openscad_gallery`'s 37 thumbnails (`-- out/openscad-gallery --png`):
+`hull`, `minkowski`, a twisted `linear_extrude`, `rotate_extrude`, a
+recursive tree, `difference`, `surface`, `text` and a `for` loop.*
+
 ```bash
 cargo run --example openscad_gallery --features openscad   # 37-demo language tour → STL
 cargo run --example dsl_showcase     --features openscad   # the Rust DSL → STL
@@ -16,7 +22,7 @@ cargo run --example scad2stl --features openscad -- model.scad out.glb
 ```
 
 ```rust
-// Cargo.toml: threers = { version = "0.0.6", features = ["openscad"] }
+// Cargo.toml: threers = { version = "0.0.7", features = ["openscad"] }
 use threers::{cube, cylinder, sphere, scad, parse_scad};
 
 // (a) Rust DSL — fluent builder + the `scad!` macro:

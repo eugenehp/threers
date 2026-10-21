@@ -250,6 +250,8 @@ fn with_camera<R>(camera: &Bound<'_, PyAny>, f: impl FnOnce(&dyn Camera) -> R) -
 struct PyScene {
     inner: Scene,
     handles: Vec<ObjectId>,
+    /// Animates the scene's fur and hair (`step_fur`).
+    fur: threers::fur::FurAnimator,
 }
 
 #[pymethods]
@@ -259,7 +261,94 @@ impl PyScene {
         Self {
             inner: Scene::new(),
             handles: Vec::new(),
+            fur: threers::fur::FurAnimator::new(),
         }
+    }
+
+    /// Grow shell fur on ``geometry`` (a ``Geometry``) as ``fur`` (a
+    /// ``FurMaterial``) says. Returns a stable handle index. It casts and
+    /// receives shadows; ``step_fur`` animates it.
+    #[pyo3(signature = (geometry, fur, x=0.0, y=0.0, z=0.0))]
+    fn add_fur(
+        &mut self,
+        geometry: PyRef<'_, PyGeometry>,
+        fur: PyRef<'_, PyFurMaterial>,
+        x: f32,
+        y: f32,
+        z: f32,
+    ) -> PyResult<usize> {
+        let mut obj = threers::fur::fur_object(geometry.inner.clone(), &fur.inner);
+        obj.position = finite_vec(x, y, z, "add_fur")?;
+        let handle = self.push(obj);
+        self.fur.track(self.handles[handle], &fur.inner);
+        Ok(handle)
+    }
+
+    /// Grow strand hair on ``geometry``: ``count`` strands of ``segments``
+    /// pieces, ribbons ``width`` wide at the root, shaded and moved as ``fur``
+    /// (a ``FurMaterial``) says; ``shadow_strands`` of them (a share, 0 for
+    /// none) cast its shadow. Returns a stable handle index.
+    #[pyo3(signature = (geometry, fur, count=4000, segments=8, width=0.006, shadow_strands=0.25, x=0.0, y=0.0, z=0.0))]
+    #[allow(clippy::too_many_arguments)]
+    fn add_hair(
+        &mut self,
+        geometry: PyRef<'_, PyGeometry>,
+        fur: PyRef<'_, PyFurMaterial>,
+        count: usize,
+        segments: usize,
+        width: f32,
+        shadow_strands: f32,
+        x: f32,
+        y: f32,
+        z: f32,
+    ) -> PyResult<usize> {
+        if !(width.is_finite() && width > 0.0) {
+            return Err(PyValueError::new_err("add_hair: width must be positive"));
+        }
+        let options = threers::fur::strands::StrandOptions {
+            count,
+            segments: segments.max(1),
+            width,
+            shadow_strands,
+        };
+        let mut obj = threers::fur::strands::hair_object(&geometry.inner, &fur.inner, &options);
+        obj.position = finite_vec(x, y, z, "add_hair")?;
+        let handle = self.push(obj);
+        self.fur.track(self.handles[handle], &fur.inner);
+        Ok(handle)
+    }
+
+    /// A hand in a fur or hair coat (``handle``): within ``radius`` of
+    /// ``at`` (world), strands are pushed by ``push`` (a pull per unit of their
+    /// length, along the hand's motion) and parted away from it by ``part``.
+    /// Call it as the hand moves; ``step_fur`` fades it, the strands springing
+    /// back.
+    #[pyo3(signature = (handle, at, radius=0.3, push=(0.0, 0.0, 0.0), part=0.5))]
+    fn stroke_fur(
+        &mut self,
+        handle: usize,
+        at: (f32, f32, f32),
+        radius: f32,
+        push: (f32, f32, f32),
+        part: f32,
+    ) -> PyResult<()> {
+        let id = self.live(handle)?;
+        self.fur.stroke(
+            id,
+            Vector3::new(at.0, at.1, at.2),
+            radius,
+            Vector3::new(push.0, push.1, push.2),
+            part,
+        );
+        Ok(())
+    }
+
+    /// Advance the scene's fur and hair — wind, flutter, inertia, their
+    /// shadows — to ``time`` seconds, ``dt`` after the last step. Once a
+    /// frame, after moving things and before rendering.
+    #[pyo3(signature = (time, dt=1.0 / 60.0))]
+    fn step_fur(&mut self, time: f32, dt: f32) {
+        self.fur.update(&mut self.inner, time, dt);
     }
 
     /// Add an axis-aligned box mesh. Returns a stable handle index.
@@ -1028,6 +1117,131 @@ fn parse_corners(obj: &Bound<'_, PyAny>) -> PyResult<[Vector3; 4]> {
 const MAX_SEGMENTS: u32 = 4096;
 /// Each Catmull–Clark round multiplies the face count by about 4.
 const MAX_SUBDIVISION_LEVELS: u32 = 6;
+
+// ---- fur ---------------------------------------------------------------------
+
+/// Shell fur and strand hair's look and motion (``threers::fur::FurMaterial``):
+/// every option a keyword, the rest as the Rust defaults.
+#[pyclass(name = "FurMaterial", unsendable)]
+#[derive(Clone)]
+struct PyFurMaterial {
+    inner: threers::fur::FurMaterial,
+}
+
+#[pymethods]
+impl PyFurMaterial {
+    #[new]
+    #[pyo3(signature = (
+        length=None, density=None, thickness=None, taper=None, gravity=None, curl=None,
+        clumping=None, clump_size=None, length_variation=None, seed=None, shells=None,
+        root_color=None, tip_color=None, occlusion=None, specular=None,
+        specular_exponent=None, specular_shift=None, wind=None, wind_frequency=None,
+        flutter=None, stiffness=None, damping=None, response=None, max_lag=None,
+        placement=None, cell=None, shadow_height=None, lod=None, drag=None, turbulence=None
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        length: Option<f32>,
+        density: Option<f32>,
+        thickness: Option<f32>,
+        taper: Option<f32>,
+        gravity: Option<(f32, f32, f32)>,
+        curl: Option<f32>,
+        clumping: Option<f32>,
+        clump_size: Option<f32>,
+        length_variation: Option<f32>,
+        seed: Option<u32>,
+        shells: Option<u32>,
+        root_color: Option<u32>,
+        tip_color: Option<u32>,
+        occlusion: Option<f32>,
+        specular: Option<f32>,
+        specular_exponent: Option<f32>,
+        specular_shift: Option<f32>,
+        wind: Option<(f32, f32, f32)>,
+        wind_frequency: Option<f32>,
+        flutter: Option<f32>,
+        stiffness: Option<f32>,
+        damping: Option<f32>,
+        response: Option<f32>,
+        max_lag: Option<f32>,
+        placement: Option<&str>,
+        cell: Option<f32>,
+        shadow_height: Option<f32>,
+        lod: Option<bool>,
+        drag: Option<f32>,
+        turbulence: Option<f32>,
+    ) -> PyResult<Self> {
+        let mut m = threers::fur::FurMaterial::default();
+        let g = &mut m.groom;
+        let v3 = |t: (f32, f32, f32)| Vector3::new(t.0, t.1, t.2);
+        macro_rules! set {
+            ($slot:expr, $v:expr) => {
+                if let Some(v) = $v {
+                    $slot = v;
+                }
+            };
+        }
+        set!(g.length, length);
+        set!(g.density, density);
+        set!(g.thickness, thickness);
+        set!(g.taper, taper);
+        set!(g.gravity, gravity.map(v3));
+        set!(g.curl, curl);
+        set!(g.clumping, clumping);
+        set!(g.clump_size, clump_size);
+        set!(g.length_variation, length_variation);
+        set!(g.seed, seed);
+        match placement {
+            None | Some("uv") => {}
+            Some("surface") => {
+                g.placement = threers::fur::FurPlacement::Surface {
+                    cell: cell.unwrap_or(0.02),
+                }
+            }
+            Some(other) => {
+                return Err(PyValueError::new_err(format!(
+                    "FurMaterial: placement is 'uv' or 'surface', not {other:?}"
+                )))
+            }
+        }
+        set!(m.shells, shells);
+        set!(m.root_color, root_color.map(Color::from_hex));
+        set!(m.tip_color, tip_color.map(Color::from_hex));
+        set!(m.occlusion, occlusion);
+        set!(m.specular, specular);
+        set!(m.specular_exponent, specular_exponent);
+        set!(m.specular_shift, specular_shift);
+        set!(m.wind, wind.map(v3));
+        set!(m.wind_frequency, wind_frequency);
+        set!(m.flutter, flutter);
+        set!(m.dynamics.stiffness, stiffness);
+        set!(m.dynamics.damping, damping);
+        set!(m.dynamics.response, response);
+        set!(m.dynamics.max_lag, max_lag);
+        set!(m.shadow_height, shadow_height);
+        set!(m.lod, lod);
+        set!(m.drag, drag);
+        set!(m.turbulence, turbulence);
+        Ok(Self { inner: m })
+    }
+
+    #[getter]
+    fn length(&self) -> f32 {
+        self.inner.groom.length
+    }
+    #[getter]
+    fn shells(&self) -> u32 {
+        self.inner.shells
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "FurMaterial(length={}, density={}, shells={})",
+            self.inner.groom.length, self.inner.groom.density, self.inner.shells
+        )
+    }
+}
 
 /// A triangle mesh's vertex data, built with the static factories (three.js
 /// ``*Geometry`` classes, same parameters and defaults).
@@ -2733,6 +2947,12 @@ impl PyHeadlessRenderer {
         self.inner.render_size()
     }
 
+    /// Multisampling: ``4`` for 4× MSAA, ``1`` for none (the default) —
+    /// smooth edges, and fur and hair strands resolved per sample.
+    fn set_msaa(&mut self, samples: u32) {
+        self.inner.set_msaa(samples);
+    }
+
     /// Restrict drawing to a rectangle, in output pixels with a bottom-left
     /// origin (three.js ``setViewport``).
     fn set_viewport(&mut self, x: f32, y: f32, width: f32, height: f32) {
@@ -3164,6 +3384,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyScene>()?;
     m.add_class::<PyGeometry>()?;
     m.add_class::<PyMaterial>()?;
+    m.add_class::<PyFurMaterial>()?;
     m.add_class::<PyTexture>()?;
 
     #[cfg(feature = "headless")]

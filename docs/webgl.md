@@ -6,7 +6,7 @@ WebGPU is not everywhere yet. The `webgl` feature compiles wgpu's GL backend in
 as well, so a browser without WebGPU gets WebGL2 instead of a blank page.
 
 ```toml
-threers = { version = "0.0.6", features = ["webgl"] }
+threers = { version = "0.0.7", features = ["webgl"] }
 ```
 
 WebGPU is still preferred wherever it exists — turning this on cannot downgrade
@@ -41,6 +41,14 @@ renderer.supportsCompute();  // false on WebGL2
 ```
 
 ## State of it
+
+![One scene on wgpu, Metal, Chrome WebGPU and Chrome WebGL2](images/backend_parity.jpg)
+
+*The same scene four ways: wgpu natively and threers' Metal renderer (top),
+then Chrome on WebGPU and on WebGL2 (bottom), from
+`cargo run --release --features metal --example backend_parity` and
+`web/examples/parity.html` (`?gl=1` for WebGL2). The mean difference from
+the wgpu frame is 0.01 of a level (Metal), 0.09 (WebGPU) and 0.003 (WebGL2).*
 
 **It renders.** `tests/webgl.rs` runs in headless Chrome and checks, against a
 real WebGL2 device, that a GL adapter is offered, that the device reports what

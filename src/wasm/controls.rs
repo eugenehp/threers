@@ -239,7 +239,12 @@ impl WebTransformControls {
     /// `updateMatrixWorld`: the object (see the shim for the layout; omit
     /// for none), the camera, and the control's own `matrixWorld`.
     #[wasm_bindgen(js_name = updateMatrixWorld)]
-    pub fn update_matrix_world(&mut self, object: Option<Vec<f64>>, camera: &[f64], controls_world: &[f64]) {
+    pub fn update_matrix_world(
+        &mut self,
+        object: Option<Vec<f64>>,
+        camera: &[f64],
+        controls_world: &[f64],
+    ) {
         let o = object_of(&object);
         self.inner
             .update_matrix_world(o.as_ref(), &camera_of(camera), &m4(controls_world));
@@ -347,7 +352,11 @@ impl WebTransformControls {
 
     #[wasm_bindgen(js_name = pointerUp)]
     pub fn pointer_up(&mut self, has_pointer: bool, button: i32) -> js_sys::Array {
-        events_to_js(&self.inner.pointer_up(pointer_of(has_pointer, 0.0, 0.0, button)))
+        events_to_js(
+            &self
+                .inner
+                .pointer_up(pointer_of(has_pointer, 0.0, 0.0, button)),
+        )
     }
 
     pub fn reset(&mut self) -> js_sys::Array {
@@ -363,9 +372,17 @@ impl Default for WebTransformControls {
 
 fn geometry_to_js(g: &crate::controls::transform::gizmo::GizmoGeometry) -> JsValue {
     let o = js_sys::Object::new();
-    js_set(&o, "position", &js_sys::Float32Array::from(&g.position[..]).into());
+    js_set(
+        &o,
+        "position",
+        &js_sys::Float32Array::from(&g.position[..]).into(),
+    );
     if !g.normal.is_empty() {
-        js_set(&o, "normal", &js_sys::Float32Array::from(&g.normal[..]).into());
+        js_set(
+            &o,
+            "normal",
+            &js_sys::Float32Array::from(&g.normal[..]).into(),
+        );
     }
     if !g.uv.is_empty() {
         js_set(&o, "uv", &js_sys::Float32Array::from(&g.uv[..]).into());
@@ -446,8 +463,18 @@ impl WebFlyControls {
     pub fn move_state(&self) -> Vec<f64> {
         let s = &self.inner.move_state;
         vec![
-            s.up, s.down, s.left, s.right, s.forward, s.back, s.pitch_up, s.pitch_down,
-            s.yaw_left, s.yaw_right, s.roll_left, s.roll_right,
+            s.up,
+            s.down,
+            s.left,
+            s.right,
+            s.forward,
+            s.back,
+            s.pitch_up,
+            s.pitch_down,
+            s.yaw_left,
+            s.yaw_right,
+            s.roll_left,
+            s.roll_right,
         ]
     }
 
@@ -459,8 +486,18 @@ impl WebFlyControls {
         }
         let s = &mut self.inner.move_state;
         [
-            s.up, s.down, s.left, s.right, s.forward, s.back, s.pitch_up, s.pitch_down,
-            s.yaw_left, s.yaw_right, s.roll_left, s.roll_right,
+            s.up,
+            s.down,
+            s.left,
+            s.right,
+            s.forward,
+            s.back,
+            s.pitch_up,
+            s.pitch_down,
+            s.yaw_left,
+            s.yaw_right,
+            s.roll_left,
+            s.roll_right,
         ] = [
             v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9], v[10], v[11],
         ];

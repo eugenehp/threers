@@ -43,7 +43,11 @@ fn with_mesh<R>(
 }
 
 /// Edit a mesh's geometry copy-on-write (it may be shared).
-fn edit_geometry(scene: &mut WebScene, handle: &WebObjectHandle, f: impl FnOnce(&mut BufferGeometry)) {
+fn edit_geometry(
+    scene: &mut WebScene,
+    handle: &WebObjectHandle,
+    f: impl FnOnce(&mut BufferGeometry),
+) {
     with_mesh(scene, handle, |g, _, _, _, _| f(Arc::make_mut(g)));
 }
 
@@ -102,7 +106,12 @@ impl WebScene {
     /// Replace entry `index` of the mesh's material array (after a setter on
     /// that material).
     #[wasm_bindgen(js_name = setMeshMaterialAt)]
-    pub fn set_mesh_material_at(&mut self, handle: &WebObjectHandle, index: usize, mat: &WebMaterial) {
+    pub fn set_mesh_material_at(
+        &mut self,
+        handle: &WebObjectHandle,
+        index: usize,
+        mat: &WebMaterial,
+    ) {
         with_mesh(self, handle, |_, single, mats, _, _| {
             if let Some(slot) = mats.get_mut(index) {
                 *slot = mat.inner.clone();
@@ -128,7 +137,10 @@ impl WebScene {
         edit_geometry(self, handle, |g| {
             let mut list = g.morph_attributes.remove(name).unwrap_or_default();
             if list.len() <= target {
-                list.resize(target + 1, BufferAttribute::new(Vec::new(), item_size.max(1)));
+                list.resize(
+                    target + 1,
+                    BufferAttribute::new(Vec::new(), item_size.max(1)),
+                );
             }
             list[target] = BufferAttribute::new(array, item_size.max(1));
             g.set_morph_attribute(name.to_string(), list);
@@ -215,7 +227,10 @@ impl WebScene {
     /// affine matrix, column-major, shear included.
     #[wasm_bindgen(js_name = setLocalMatrix)]
     pub fn set_local_matrix(&mut self, handle: &WebObjectHandle, elements: Vec<f32>) {
-        if let (Some(o), Ok(e)) = (self.inner.get_mut(handle.id), <[f32; 16]>::try_from(elements)) {
+        if let (Some(o), Ok(e)) = (
+            self.inner.get_mut(handle.id),
+            <[f32; 16]>::try_from(elements),
+        ) {
             o.set_matrix(crate::math::Matrix4 { elements: e });
         }
     }
@@ -223,7 +238,10 @@ impl WebScene {
     /// three.js `applyMatrix4(m)` (column-major).
     #[wasm_bindgen(js_name = applyMatrix4)]
     pub fn apply_matrix4(&mut self, handle: &WebObjectHandle, elements: Vec<f32>) {
-        if let (Some(o), Ok(e)) = (self.inner.get_mut(handle.id), <[f32; 16]>::try_from(elements)) {
+        if let (Some(o), Ok(e)) = (
+            self.inner.get_mut(handle.id),
+            <[f32; 16]>::try_from(elements),
+        ) {
             o.apply_matrix4(&crate::math::Matrix4 { elements: e });
         }
     }
@@ -231,7 +249,14 @@ impl WebScene {
     /// three.js `rotation.set(x, y, z, order)` — any of the six orders
     /// (`"XYZ"` when `order` is unknown).
     #[wasm_bindgen(js_name = setRotationEuler)]
-    pub fn set_rotation_euler(&mut self, handle: &WebObjectHandle, x: f32, y: f32, z: f32, order: &str) {
+    pub fn set_rotation_euler(
+        &mut self,
+        handle: &WebObjectHandle,
+        x: f32,
+        y: f32,
+        z: f32,
+        order: &str,
+    ) {
         let order = crate::math::EulerOrder::parse(order).unwrap_or_default();
         if let Some(o) = self.inner.get_mut(handle.id) {
             o.set_rotation(crate::math::Euler::with_order(x, y, z, order));
@@ -257,7 +282,14 @@ impl WebScene {
         self.inner.update_world();
         self.inner
             .get(handle.id)
-            .map(|o| o.matrix.elements.iter().chain(&o.matrix_world.elements).copied().collect())
+            .map(|o| {
+                o.matrix
+                    .elements
+                    .iter()
+                    .chain(&o.matrix_world.elements)
+                    .copied()
+                    .collect()
+            })
             .unwrap_or_default()
     }
 }

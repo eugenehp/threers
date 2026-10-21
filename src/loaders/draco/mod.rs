@@ -247,10 +247,25 @@ impl DecodedMesh {
 
 /// Decode a Draco mesh completely.
 pub fn decode_mesh(bytes: &[u8]) -> Result<DecodedMesh, DracoError> {
+    decode_mesh_with(bytes, &DecodeOptions::default())
+}
+
+/// How [`decode_mesh_with`] decodes.
+#[derive(Debug, Clone, Default)]
+pub struct DecodeOptions {
+    /// Attribute types (`attributes::attribute_type`) left as the integers
+    /// stored, without their transform (Draco's
+    /// `Decoder::SetSkipAttributeTransform`): quantized positions come out
+    /// as their quantized values, as [`attributes::AttributeValues::Integer`].
+    pub skip_attribute_transform: Vec<u8>,
+}
+
+/// Decode a Draco mesh completely, as `options` asks.
+pub fn decode_mesh_with(bytes: &[u8], options: &DecodeOptions) -> Result<DecodedMesh, DracoError> {
     let mut buffer = Buffer::new(bytes);
     start_mesh(&mut buffer, bytes)?;
     let connectivity = connectivity_from(&mut buffer)?;
-    let attributes = attributes::decode_attributes(&mut buffer, &connectivity)?;
+    let attributes = attributes::decode_attributes_skipping(&mut buffer, &connectivity, &options.skip_attribute_transform)?;
     Ok(DecodedMesh {
         connectivity,
         attributes,

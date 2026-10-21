@@ -229,9 +229,9 @@ fn for_each_vertex(
         return false;
     };
     let morphs = influences.and_then(|w| Some((w, g.morph_attributes.get("position")?)));
-    let skin = skin.filter(|s| s.len() >= 32).and_then(|s| {
-        Some((s, g.get_attribute("joint")?, g.get_attribute("weight")?))
-    });
+    let skin = skin
+        .filter(|s| s.len() >= 32)
+        .and_then(|s| Some((s, g.get_attribute("joint")?, g.get_attribute("weight")?)));
     for i in 0..position.count() {
         let mut p = read(position, i);
         if let Some((weights, targets)) = morphs {
@@ -347,7 +347,10 @@ impl WebScene {
         let w = influences.as_deref();
         let s = skin.as_deref();
         if mode == 1 {
-            let mut sp = Sp { c: [0.0; 3], r: -1.0 };
+            let mut sp = Sp {
+                c: [0.0; 3],
+                r: -1.0,
+            };
             for_each_vertex(g, w, s, m, |p| sp.expand(p))
                 .then(|| vec![sp.c[0], sp.c[1], sp.c[2], sp.r])
         } else {

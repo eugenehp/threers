@@ -124,6 +124,80 @@ impl WebScene {
         self.insert_node(crate::core::Object3D::instanced_mesh(im))
     }
 
+    /// A new detached shell-fur object (`threers::fur`) grown on `geom`,
+    /// animated by `stepFur`.
+    #[wasm_bindgen(js_name = createFur)]
+    pub fn create_fur(&mut self, geom: &WebGeometry, fur: &WebFurMaterial) -> WebObjectHandle {
+        let h = self.insert_node(crate::fur::fur_object((*geom.inner).clone(), &fur.inner));
+        self.fur_animator.track(h.id, &fur.inner);
+        h
+    }
+
+    /// A new detached strand-hair object (`threers::fur::strands`) grown on
+    /// `geom`, animated by `stepFur`.
+    /// `shadowStrands` as for `addHair`.
+    #[wasm_bindgen(js_name = createHair)]
+    pub fn create_hair(
+        &mut self,
+        geom: &WebGeometry,
+        fur: &WebFurMaterial,
+        count: u32,
+        segments: u32,
+        width: f32,
+        shadow_strands: Option<f32>,
+    ) -> WebObjectHandle {
+        let options = crate::fur::strands::StrandOptions {
+            count: count as usize,
+            segments: segments as usize,
+            width,
+            shadow_strands: shadow_strands
+                .unwrap_or(crate::fur::strands::StrandOptions::default().shadow_strands),
+        };
+        let h = self.insert_node(crate::fur::strands::hair_object(
+            &geom.inner,
+            &fur.inner,
+            &options,
+        ));
+        self.fur_animator.track(h.id, &fur.inner);
+        h
+    }
+
+    /// A new detached strand-hair object grown on the skinned mesh
+    /// `skinned` and carried through its animation by `stepFur` — each strand
+    /// on its triangle, trailing its root on a spring. Link it as the skinned
+    /// mesh's child, with no transform of its own. A group if `skinned` is
+    /// not a skinned mesh.
+    /// `shadowStrands` as for `addHair`.
+    #[wasm_bindgen(js_name = createSkinnedHair)]
+    pub fn create_skinned_hair(
+        &mut self,
+        skinned: &WebObjectHandle,
+        fur: &WebFurMaterial,
+        count: u32,
+        segments: u32,
+        width: f32,
+        shadow_strands: Option<f32>,
+    ) -> WebObjectHandle {
+        let options = crate::fur::strands::StrandOptions {
+            count: count as usize,
+            segments: segments as usize,
+            width,
+            shadow_strands: shadow_strands
+                .unwrap_or(crate::fur::strands::StrandOptions::default().shadow_strands),
+        };
+        let grown = self.fur_animator.hair_on_skinned(
+            &mut self.inner,
+            skinned.id,
+            &fur.inner,
+            &options,
+            |scene, hair| scene.arena.insert(hair),
+        );
+        match grown {
+            Some(id) => handle(id),
+            None => self.create_group(false),
+        }
+    }
+
     /// A new detached line: `mode` 0 `LineSegments`, 1 `Line`, 2 `LineLoop`.
     #[wasm_bindgen(js_name = createLine)]
     pub fn create_line(
@@ -380,7 +454,10 @@ impl WebScene {
         components: u32,
         values: Vec<f32>,
     ) {
-        if slot > 1 || !(1..=4).contains(&components) || !values.len().is_multiple_of(components as usize) {
+        if slot > 1
+            || !(1..=4).contains(&components)
+            || !values.len().is_multiple_of(components as usize)
+        {
             return;
         }
         if let Some(ObjectKind::InstancedMesh(im)) =
@@ -939,7 +1016,9 @@ impl WebRaycaster {
         scene.inner.update_world();
         if world_matrices.len() == object_ids.len() * 16 {
             for (i, &id) in object_ids.iter().enumerate() {
-                if let Some(obj) = object_id_from_f64(id).and_then(|id| scene.inner.arena.get_mut(id)) {
+                if let Some(obj) =
+                    object_id_from_f64(id).and_then(|id| scene.inner.arena.get_mut(id))
+                {
                     obj.matrix_world = crate::math::Matrix4 {
                         elements: std::array::from_fn(|k| world_matrices[i * 16 + k]),
                     };

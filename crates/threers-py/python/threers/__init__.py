@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from threers._native import (
     Color,
+    FurMaterial,
     Geometry,
     Material,
     OrthographicCamera,
@@ -33,6 +34,7 @@ __version__ = version()
 
 __all__ = [
     "Color",
+    "FurMaterial",
     "Geometry",
     "HeadlessRenderer",
     "Material",

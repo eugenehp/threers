@@ -120,6 +120,11 @@ pub struct ShaderMaterial {
     /// custom shader: without it those bindings are 1x1 placeholders. Implies
     /// alpha blending against the already-drawn scene, and the surface still
     /// writes depth so later geometry sorts against it.
+    ///
+    /// `ss_depth_tex` is a `texture_2d<f32>` read with `textureLoad`, the
+    /// depth buffer as it is in `.r`: `1 - d` when the renderer uses reversed
+    /// depth (`frame.camera_position.w > 0.5`). `ss_color_tex` is sampled
+    /// through `ss_color_samp`.
     pub screen_space: bool,
     pub opacity: f32,
     /// Alpha-blend against what is already there, and do not write depth.
@@ -151,6 +156,28 @@ pub struct ShaderMaterial {
     /// which is usually what a dense translucent shell wants and never what
     /// hair wants.
     pub render_state: super::RenderState,
+    /// What a backend that cannot run custom WGSL — the Metal renderer —
+    /// draws instead: the mesh, unlit, in this colour. White by default.
+    pub fallback_color: crate::math::Color,
+    /// three.js `alphaToCoverage`: under MSAA, the fragment's alpha is the
+    /// share of the pixel's samples it covers, and what is stored is opaque —
+    /// so a cut-out edge comes out smooth. Return
+    /// `vec4(colour, coverage_alpha(coverage))`: the preamble's
+    /// `coverage_alpha` gives the coverage under MSAA, and in a frame drawn
+    /// single-sampled cuts at half (discarding below). Opaque materials only.
+    ///
+    /// A shader can do better than one alpha for the pixel: test each sample
+    /// itself and say which it covers. The preamble has what that needs —
+    /// `THREERS_SAMPLES` (1, or 4 under MSAA), `threers_sample_offset(i)`
+    /// (where sample `i` lies from the pixel's centre, in pixels: step the
+    /// shader's coordinates there by their `dpdx`/`dpdy`), and
+    /// `frag_out(colour, mask)` to return, declaring
+    /// `fn fs_main(..) -> ThreersFragOut`. The mask is written as
+    /// `@builtin(sample_mask)` where the backend has it
+    /// (`THREERS_SAMPLE_MASK`); on WebGL2 it is not, and the shader returns
+    /// the share of samples as its alpha for alpha-to-coverage to place. Fur
+    /// and hair draw their strands this way.
+    pub alpha_to_coverage: bool,
 }
 
 impl Default for ShaderMaterial {
@@ -170,6 +197,8 @@ impl Default for ShaderMaterial {
             side: 0,
             tone_mapped: true,
             render_state: super::RenderState::DEFAULT,
+            fallback_color: crate::math::Color::WHITE,
+            alpha_to_coverage: false,
         }
     }
 }
@@ -226,15 +255,22 @@ impl ShaderMaterial {
     /// assert!(m.validate(true).is_ok());
     /// ```
     pub fn validate(&self, storage_buffers: bool) -> Result<(), String> {
-        let source = crate::renderer::custom_shader_module_source(
-            &self.fragment,
-            self.vertex.as_deref(),
-            storage_buffers,
-        );
-        crate::renderer::validate_custom_shader(
-            &source,
-            crate::renderer::custom_preamble_lines(),
-        )
+        // As drawn single-sampled, and multisampled — where the module gains
+        // `@builtin(sample_mask)` on a backend with storage buffers.
+        for (coverage, samples) in [(false, 1), (self.alpha_to_coverage, 4)] {
+            let source = crate::renderer::custom_shader_module_source(
+                &self.fragment,
+                self.vertex.as_deref(),
+                storage_buffers,
+                coverage,
+                samples,
+            );
+            crate::renderer::validate_custom_shader(
+                &source,
+                crate::renderer::custom_preamble_lines(),
+            )?;
+        }
+        Ok(())
     }
 
     /// Set the `@group(4)` uniform `vec4` slots (`u_data.data`).

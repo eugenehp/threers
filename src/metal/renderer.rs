@@ -50,6 +50,10 @@ const VB_MORPH: NSUInteger = 7;
 /// uv2)`, `(uv3, 0, 0)` and its `tangent` (xyz, handedness in w) — present
 /// when it has any of them (`Draw::phys_flags.z`: 1 uv sets, 2 tangents).
 const VB_UV_SETS: NSUInteger = 8;
+/// Shell fur's sixteen `float4` parameter slots (`vs_fur`, and `fs_fur` at
+/// `FB_FUR`).
+const VB_FUR: NSUInteger = 9;
+const FB_FUR: NSUInteger = 2;
 const FB_FRAME: NSUInteger = 0;
 const FB_DRAW: NSUInteger = 1;
 
@@ -721,6 +725,8 @@ struct OitTargets {
 type Casters = Vec<Caster>;
 
 struct DrawItem {
+    /// Shell fur's parameters (`FurMaterial::data`) when the material is fur.
+    fur: Option<[f32; 64]>,
     geometry: Arc<BufferGeometry>,
     material: Arc<Material>,
     world: Matrix4,
@@ -1763,6 +1769,16 @@ impl MetalRenderer {
                     _ => None,
                 };
                 items.push(DrawItem {
+                    fur: match &**material {
+                        Material::Shader(m) if crate::fur::is_fur(m) => {
+                            let mut d = [0.0f32; 64];
+                            for (slot, v) in m.data.iter().take(16).enumerate() {
+                                d[slot * 4..slot * 4 + 4].copy_from_slice(v);
+                            }
+                            Some(d)
+                        }
+                        _ => None,
+                    },
                     range,
                     morph_influences: influences.to_vec(),
                     wire_span: None,
@@ -2772,8 +2788,10 @@ impl MetalRenderer {
             // with weights and no skeleton has nothing to blend *through*.
             // Read before `self.pipeline`, which borrows `self` mutably.
             let is_skinned = item.bone_slot.is_some() && skin_buffer.is_some() && !layered_draw;
+            let fur_draw = item.fur.is_some() && !layered_draw && !point_sprites && item.primitive == primitive::TRIANGLE;
             let pipeline = match self.pipeline(PipelineKey {
                 point_sprites,
+                fur: fur_draw,
                 wide_lines: wide,
                 // Must agree with what `ensure_geometry` uploaded, or the
                 // vertex shader reads the wrong stride and the draw is garbage.
@@ -2942,6 +2960,10 @@ impl MetalRenderer {
                 0usize,
                 VB_UV_SETS,
             );
+            if let (true, Some(fur)) = (fur_draw, &item.fur) {
+                set_bytes(encoder, true, fur, VB_FUR);
+                set_bytes(encoder, false, fur, FB_FUR);
+            }
 
             let (texture, sampler) = self.material_texture(material);
             let _: () = msg2(

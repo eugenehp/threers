@@ -1213,6 +1213,18 @@ pub fn decode_attributes(
     buffer: &mut Buffer<'_>,
     conn: &DecodedConnectivity,
 ) -> Result<Vec<DecodedAttribute>, DracoError> {
+    decode_attributes_skipping(buffer, conn, &[])
+}
+
+/// [`decode_attributes`], leaving attributes of the types in
+/// `skip_transform` as the integers stored (Draco's
+/// `Decoder::SetSkipAttributeTransform`): a quantized attribute's values are
+/// not dequantized.
+pub fn decode_attributes_skipping(
+    buffer: &mut Buffer<'_>,
+    conn: &DecodedConnectivity,
+    skip_transform: &[u8],
+) -> Result<Vec<DecodedAttribute>, DracoError> {
     let num_decoders = buffer.u8()? as usize;
     if num_decoders == 0 {
         return Ok(Vec::new());
@@ -1278,7 +1290,7 @@ pub fn decode_attributes(
     let mut out = Vec::new();
     let mut portables: Vec<PortableAttribute> = Vec::new();
     for spec in &specs {
-        decode_one_decoder(buffer, conn, spec, &mut out, &mut portables)?;
+        decode_one_decoder(buffer, conn, spec, &mut out, &mut portables, skip_transform)?;
     }
     Ok(out)
 }
@@ -1301,6 +1313,7 @@ fn decode_one_decoder(
     spec: &DecoderSpec,
     out: &mut Vec<DecodedAttribute>,
     portables: &mut Vec<PortableAttribute>,
+    skip_transform: &[u8],
 ) -> Result<(), DracoError> {
     let base = &conn.replay.table;
     // A per-vertex attribute is sequenced on the base table; a per-corner one on
@@ -1382,8 +1395,9 @@ fn decode_one_decoder(
         let pc = portable_components(desc, *seq_type);
         let nc = desc.num_components as usize;
         let values = &ints;
+        let skipped = skip_transform.contains(&desc.att_type);
         let final_values = match output {
-            OutputTransform::Quantization(q) => {
+            OutputTransform::Quantization(q) if !skipped => {
                 let mut floats = vec![0f32; point_to_value.len() * nc];
                 for (point, value) in point_to_value.iter().enumerate() {
                     for c in 0..nc {
@@ -1408,7 +1422,7 @@ fn decode_one_decoder(
                 }
                 AttributeValues::Float(floats)
             }
-            OutputTransform::None => {
+            OutputTransform::None | OutputTransform::Quantization(_) => {
                 let mut ints = vec![0i32; point_to_value.len() * nc];
                 for (point, value) in point_to_value.iter().enumerate() {
                     for c in 0..nc {
@@ -1639,6 +1653,40 @@ mod tests {
         let uv = uv.as_f32();
         assert_eq!(uv.len(), 423 * 2);
         assert_eq!(fnv1a_f32(&uv), 14363382847896556601, "texture coordinates");
+    }
+
+    /// Skipping the positions' transform leaves the quantized integers:
+    /// the dequantized floats are those integers on one evenly spaced grid,
+    /// and the other attributes are decoded as before.
+    #[test]
+    fn skipped_positions_stay_quantized() {
+        use super::AttributeValues;
+        use crate::loaders::draco::{decode_mesh_with, DecodeOptions, DecodedMesh};
+        let options = DecodeOptions { skip_attribute_transform: vec![attribute_type::POSITION] };
+        let raw = decode_mesh_with(SPHERE, &options).expect("a decoded mesh");
+        let full = decode_mesh(SPHERE).expect("a decoded mesh");
+        let AttributeValues::Integer(q) = &raw.attribute(attribute_type::POSITION).unwrap().values else {
+            panic!("integer positions");
+        };
+        let f = full.attribute(attribute_type::POSITION).unwrap().as_f32();
+        assert_eq!(q.len(), f.len());
+        // Per component, float = q · delta + min for one delta and min.
+        for c in 0..3 {
+            let (i0, i1) = (0..q.len() / 3).map(|p| p * 3 + c).fold((None, None), |(a, b), i| match (a, b) {
+                (None, _) => (Some(i), None),
+                (Some(a), None) if q[i] != q[a] => (Some(a), Some(i)),
+                other => other,
+            });
+            let (i0, i1) = (i0.unwrap(), i1.unwrap());
+            let delta = (f[i1] - f[i0]) / (q[i1] - q[i0]) as f32;
+            let min = f[i0] - q[i0] as f32 * delta;
+            for p in 0..q.len() / 3 {
+                let i = p * 3 + c;
+                assert!((q[i] as f32 * delta + min - f[i]).abs() < 1e-4 * (1.0 + f[i].abs()));
+            }
+        }
+        let normals = |m: &DecodedMesh| m.attribute(attribute_type::NORMAL).unwrap().as_f32();
+        assert_eq!(normals(&raw), normals(&full));
     }
 
     /// And the bunny's, which is 34834 points of each.

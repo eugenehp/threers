@@ -178,7 +178,9 @@ impl WebSceneExporter {
     #[wasm_bindgen(js_name = setMaterial)]
     pub fn set_material(&mut self, index: u32, material: u32) -> Result<(), JsValue> {
         if material as usize >= self.materials.len() {
-            return Err(JsValue::from_str(&format!("setMaterial: no material {material}")));
+            return Err(JsValue::from_str(&format!(
+                "setMaterial: no material {material}"
+            )));
         }
         self.entry(index)?.material = Some(material as usize);
         Ok(())
@@ -285,7 +287,11 @@ impl WebSceneExporter {
         &self,
         trs: bool,
         scene_name: Option<String>,
-    ) -> (crate::core::ObjectArena, Vec<crate::core::ObjectId>, GltfExportOptions) {
+    ) -> (
+        crate::core::ObjectArena,
+        Vec<crate::core::ObjectId>,
+        GltfExportOptions,
+    ) {
         let mut arena = crate::core::ObjectArena::new();
         let mut ids = Vec::with_capacity(self.entries.len());
         let mut roots = Vec::new();

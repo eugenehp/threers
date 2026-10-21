@@ -4779,6 +4779,9 @@ export class ShaderMaterial {
         if (o.side) this._sm.setSide(o.side);
         if (o.depthWrite !== undefined) this._sm.setDepthWrite(!!o.depthWrite);
         if (o.screenSpace) this._sm.setScreenSpace(true);
+        // three.js `alphaToCoverage` (the WGSL returns `coverage_alpha(c)`,
+        // or its samples through `frag_out`).
+        if (o.alphaToCoverage) this._sm.setAlphaToCoverage(true);
         // three.js Data3DTextures for u_vol0 / u_vol1 (uploaded on the GPU the
         // renderer opened — at once if it exists, else on the first render)
         this._volumes = [null, null];
@@ -6456,6 +6459,121 @@ export class SkinnedMesh extends Mesh {
 /// the node when flagged `needsUpdate` (and when the mesh is first
 /// mirrored), as three.js uploads them; a raycast reads the matrices as they
 /// are, as three.js's does.
+/// threers extension (not in three.js): shell fur grown on `geometry`
+/// (`threers::fur`). Options, all optional: `length`, `density` (strands per
+/// UV unit), `thickness`, `taper`, `gravity` (Vector3 or [x, y, z]), `curl`,
+/// `clumping`, `clumpSize`, `lengthVariation`, `seed`, `shells`, `rootColor`,
+/// `tipColor`, `occlusion`, `specular`, `specularExponent`, `specularShift`,
+/// `wind` (Vector3 or array), `windFrequency`, `flutter`, `stiffness`,
+/// `damping`, `response`, `maxLag`, and `placement: 'surface'` with `cell` to
+/// root strands over the surface rather than the UVs. The renderer animates
+/// its wind, flutter and inertia at every `render`.
+export class Fur extends Object3D {
+    constructor(geometry, options = {}) {
+        super();
+        this.isFur = true;
+        this.type = 'Fur';
+        this.geometry = geometry;
+        this.options = { ...options };
+        // Fur casts and receives shadows by default — the coat shadowing what
+        // is under it and itself; `shadowHeight: 0` casts none.
+        this.castShadow = options.shadowHeight !== 0;
+        this.receiveShadow = true;
+    }
+    _furMaterial() {
+        const F = _optional.WebFurMaterial;
+        if (!F) return null;
+        const o = this.options;
+        const f = new F();
+        const v3 = (v, d) => (v == null ? d : Array.isArray(v) ? v : [v.x, v.y, v.z]);
+        if (o.length != null) f.setLength(o.length);
+        if (o.density != null) f.setDensity(o.density);
+        if (o.thickness != null) f.setThickness(o.thickness);
+        if (o.taper != null) f.setTaper(o.taper);
+        if (o.gravity != null) f.setGravity(...v3(o.gravity));
+        if (o.curl != null) f.setCurl(o.curl);
+        if (o.clumping != null || o.clumpSize != null) f.setClumping(o.clumping ?? 0.3, o.clumpSize ?? 4);
+        if (o.lengthVariation != null) f.setLengthVariation(o.lengthVariation);
+        if (o.seed != null) f.setSeed(o.seed >>> 0);
+        if (o.shells != null) f.setShells(o.shells);
+        if (o.rootColor != null || o.tipColor != null) {
+            f.setColors(_color(o.rootColor ?? 0x2b1d10), _color(o.tipColor ?? 0xb08a5a));
+        }
+        if (o.occlusion != null) f.setOcclusion(o.occlusion);
+        if (o.specular != null || o.specularExponent != null || o.specularShift != null) {
+            f.setSpecular(o.specular ?? 0.25, o.specularExponent ?? 60, o.specularShift ?? 0.1);
+        }
+        if (o.wind != null || o.windFrequency != null) f.setWind(...v3(o.wind, [0, 0, 0]), o.windFrequency ?? 0.6);
+        if (o.flutter != null) f.setFlutter(o.flutter);
+        if (o.stiffness != null || o.damping != null || o.response != null || o.maxLag != null) {
+            f.setDynamics(o.stiffness ?? 80, o.damping ?? 0.35, o.response ?? 1, o.maxLag ?? 1.2);
+        }
+        if (o.placement === 'surface') f.setSurfacePlacement(o.cell ?? 0.02);
+        if (o.shadowHeight != null) f.setShadowHeight(o.shadowHeight);
+        if (o.lod != null) f.setLod(!!o.lod);
+        if (o.drag != null || o.turbulence != null) f.setAir?.(o.drag ?? 0.15, o.turbulence ?? 0.35);
+        return f;
+    }
+    /// A hand in the coat: within `radius` of `point` (world), strands are
+    /// pushed by `push` (a Vector3 or [x, y, z]: a pull per unit of their
+    /// length, along the hand's motion) and parted away from it by `part`.
+    /// Call it as the hand moves; let go and the strands spring back.
+    stroke(point, push = [0, 0, 0], radius = 0.3, part = 0.5) {
+        const m = this._m;
+        if (!m?.graph?.w?.strokeFur) return;
+        const p = Array.isArray(push) ? push : [push.x, push.y, push.z];
+        m.graph.w.strokeFur(m.handle, point.x, point.y, point.z, radius, p[0], p[1], p[2], part);
+    }
+    _mirrorKind() { return _wasmGeometryOf(this.geometry) && _optional.WebFurMaterial ? 'fur' : 'group'; }
+    _mirrorCreate(w) {
+        const g = _wasmGeometryOf(this.geometry);
+        const f = g && w.createFur ? this._furMaterial() : null;
+        return f ? w.createFur(g, f) : w.createGroup(false);
+    }
+}
+
+/// Strand hair (a threers extension): `count` strands grown on `geometry`,
+/// drawn as camera-facing ribbons. Takes `Fur`'s options (shells, density,
+/// thickness and placement aside) plus `count`, `segments`, `width` and
+/// `shadowStrands` (the share of strands that cast shadows, 0.25; 0 for none).
+///
+/// Given a `SkinnedMesh` instead of a geometry, the hair grows on its mesh,
+/// is added as its child, and follows its animation: each strand carried by
+/// its triangle and trailing its root on a spring (`stiffness`, `damping`).
+/// Leave its transform at the identity.
+export class Hair extends Fur {
+    constructor(geometryOrSkinnedMesh, options = {}) {
+        const skinned = geometryOrSkinnedMesh?.isSkinnedMesh ? geometryOrSkinnedMesh : null;
+        super(skinned ? null : geometryOrSkinnedMesh, options);
+        this.isHair = true;
+        this.type = 'Hair';
+        // Hair casts by default (its tubes are made for it); `shadowStrands: 0`
+        // makes none, `castShadow = false` turns them off.
+        this.castShadow = options.shadowStrands !== 0;
+        this.skinnedMesh = skinned;
+        skinned?.add(this);
+    }
+    _mirrorKind() {
+        const grows = this.skinnedMesh || _wasmGeometryOf(this.geometry);
+        return grows && _optional.WebFurMaterial ? 'hair' : 'group';
+    }
+    _mirrorCreate(w) {
+        const o = this.options;
+        const args = [(o.count ?? 4000) >>> 0, (o.segments ?? 8) >>> 0, o.width ?? 0.006, o.shadowStrands];
+        // Skinned: on the mesh's node in this graph (made before its
+        // children are), while this is still its child.
+        const sm = this.skinnedMesh;
+        if (sm) {
+            const m = sm._m;
+            const f = m && m.graph.w === w && this.parent === sm && w.createSkinnedHair ? this._furMaterial() : null;
+            return f ? w.createSkinnedHair(m.handle, f, ...args) : w.createGroup(false);
+        }
+        const g = _wasmGeometryOf(this.geometry);
+        const f = g && w.createHair ? this._furMaterial() : null;
+        return f ? w.createHair(g, f, ...args) : w.createGroup(false);
+    }
+}
+
 export class InstancedMesh extends Mesh {
     constructor(geometry, material, count) {
         super(geometry, material);
@@ -12346,7 +12464,22 @@ export class WebGLRenderer {
             return;
         }
         this._prepareRender(scene, camera);
+        this._stepFur(scene._w);
         this._w.render(scene._w, camera._w);
+    }
+    /// threers: advance a scene's fur (wind, flutter, inertia) on this
+    /// renderer's clock — the frame step clamped so a paused tab does not
+    /// fling it.
+    _stepFur(w) {
+        if (!w?.stepFur) return;
+        const now = (globalThis.performance?.now?.() ?? Date.now()) / 1000;
+        if (this._furStart === undefined) {
+            this._furStart = now;
+            this._furLast = now;
+        }
+        const dt = Math.min(Math.max(now - this._furLast, 1 / 240), 0.1);
+        this._furLast = now;
+        w.stepFur(now - this._furStart, dt);
     }
     /// three.js draws any Object3D as the root (`renderer.render(gltf.scene,
     /// camera)` with the `Group` a GLTFLoader gives). An object outside every
@@ -12357,12 +12490,14 @@ export class WebGLRenderer {
         this._prepareRender(root, camera);
         const top = _mirrorRoot(root);
         if (top.isScene) {
+            this._stepFur(top._w);
             this._w.render(top._w, camera._w);
             return;
         }
         top._syncNow();
         const graph = _hiddenGraph();
         const w = graph.w;
+        this._stepFur(w);
         w.background = _color(this._clearColorSet ? this._clearColor.getHex() : _DEFAULT_SCENE_BACKGROUND);
         w.setBackgroundAlpha?.(this._clearColorSet ? this._clearAlpha : 1);
         const others = Array.from(graph.detachedIds);
@@ -17706,6 +17841,8 @@ const THREE = {
     DirectionalLightHelper, HemisphereLightHelper, PointLightHelper, SpotLightHelper,
     CameraHelper, ArrowHelper, PlaneHelper, SkeletonHelper,
     QuadView, // threers extension
+    Fur, // threers extension
+    Hair, // threers extension
     // Extras
     SimplexNoise, Octree, MarchingCubes,
     CSS2DRenderer, SVGRenderer,

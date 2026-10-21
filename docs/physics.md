@@ -9,7 +9,7 @@ Rigid-body physics lives in the companion crate
 
 ```toml
 [dependencies]
-threers = "0.0.6"
+threers = "0.0.7"
 threers-physics = "0.0.1"
 ```
 
@@ -28,6 +28,12 @@ let ball = world.add_body(
 world.step(1.0 / 60.0);               // per frame
 world.sync_to_scene_interpolated(&mut arena);
 ```
+
+![A ball thrown into a tower of planks, which falls and settles](images/tower_collapse.jpg)
+
+*`cargo run --release -p threers-physics --example tower_collapse`: 36
+planks and a ball with continuous collision detection, `sync_to_scene` each
+step, drawn by the headless renderer.*
 
 Shapes, joints, sleeping, collision filtering, sensors, raycasts, shape casts,
 inverse kinematics (FABRIK and cyclic coordinate descent), a kinematic character

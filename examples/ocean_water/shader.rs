@@ -1,7 +1,7 @@
 //! The water and sky fragments, and the uniform block they share.
 //!
 //! Both are compiled against threers' standard preamble, so `VsOut`, `frame`,
-//! `PI`, `d_ggx`, `g_smith` and `framebuffer_encode` are already in scope, and
+//! `PI`, `d_ggx`, `v_ggx_smith_correlated` and `framebuffer_encode` are already in scope, and
 //! `u_data` / `u_s0` are the [`ShaderMaterial`](threers::ShaderMaterial) user
 //! bindings. Note that the preamble is literally everything in threers' shader
 //! ahead of its first `@fragment`, so the built-in materials' own shading —
@@ -348,6 +348,13 @@ fn screen_dims() -> vec2<f32> { return vec2<f32>(textureDimensions(ss_depth_tex)
 
 // NDC depth back to metres along the view ray. Inverse of the renderer's own
 // `view_z_to_depth_tex`, which is the function that wrote this buffer.
+// `ss_depth_tex` holds the depth buffer as it is, in `.r`: with reversed
+// depth on (`camera_position.w`) that is `1 - d`. The marches here compare in
+// standard depth.
+fn scene_depth(d: f32) -> f32 {
+    return select(d, 1.0 - d, frame.camera_position.w > 0.5);
+}
+
 fn linear_depth(d: f32) -> f32 {
     let n = frame.viewport_size.z;
     let f = frame.viewport_size.w;
@@ -372,7 +379,7 @@ fn ss_march(origin: vec3<f32>, dir: vec3<f32>, max_dist: f32) -> vec3<f32> {
         let uv = clip.xy / clip.w * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5, 0.5);
         if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) { break; }
         let ray_d = clip.z / clip.w;
-        let scene_d = textureLoad(ss_depth_tex, vec2<i32>(uv * dims), 0);
+        let scene_d = scene_depth(textureLoad(ss_depth_tex, vec2<i32>(uv * dims), 0).r);
         // Require a thin crossing, or a ray that dives far behind a silhouette
         // would "hit" whatever happened to be in front of it.
         if (scene_d < 0.9999 && ray_d > scene_d + 2e-5 && ray_d < scene_d + 0.02) {
@@ -439,48 +446,70 @@ fn fbm2(p: vec2<f32>) -> f32 {
 // makes them most obvious. Marching them here means one implementation feeds
 // both.
 //
-// It is deliberately cheap: eight steps through an 800 m slab, two octaves of
-// value noise for density, and two taps toward the sun for self-shadowing.
+// It is deliberately cheap: ten steps through an 800 m slab, three octaves of
+// value noise for density, and a tap toward the sun for self-shadowing.
 // Clouds are low-frequency and read mostly as silhouette; spending more here
 // buys detail that is not visible at two kilometres.
 
 const CLOUD_BASE: f32 = 900.0;
 const CLOUD_TOP: f32 = 1700.0;
 
+/// Value noise with no lattice to see: two lattices turned 37° apart,
+/// averaged, and stretched back to one lattice's spread so a coverage
+/// threshold means what it did.
+///
+/// One lattice peaks on its grid points, and its contours near a peak are
+/// rounded squares. A light cover keeps only the peaks, and the deck is so
+/// dense that a cloud is opaque almost as soon as it has any density — so the
+/// sky became rows of soft-edged squares.
+fn cloud_noise(q: vec2<f32>) -> f32 {
+    let turned = mat2x2<f32>(0.8, 0.6, -0.6, 0.8) * q + vec2<f32>(5.3, -2.9);
+    return 0.5 + (0.5 * (vnoise(q) + vnoise(turned)) - 0.5) * 1.41;
+}
+
 /// Three octaves, and no more.
 ///
 /// The general-purpose `fbm2` runs four, and its fourth has features about 100 m
 /// across — finer than the march can step through the slab, so it does not add
 /// detail, it adds aliasing. This is the same sum stopped where the sampling can
-/// still follow it.
+/// still follow it, each octave turned against the last.
 fn cloud_fbm(p: vec2<f32>) -> f32 {
+    let turn = mat2x2<f32>(0.8, 0.6, -0.6, 0.8);
     var s = 0.0;
     var a = 0.55;
     var q = p;
     for (var i = 0; i < 3; i = i + 1) {
-        s = s + a * vnoise(q);
-        q = q * 2.07 + vec2<f32>(11.0, -7.0);
+        s = s + a * cloud_noise(q);
+        q = turn * q * 2.07 + vec2<f32>(11.0, -7.0);
         a = a * 0.5;
     }
     return s;
 }
 
 fn cloud_density(pos: vec3<f32>, cover: f32) -> f32 {
-    // The deck drifts downwind.
+    // Height through the deck, 0 at its base and 1 at its top.
+    let h = (pos.y - CLOUD_BASE) / (CLOUD_TOP - CLOUD_BASE);
+    if (h <= 0.0 || h >= 1.0) { return 0.0; }
+    // The deck drifts downwind, and leans with it a little as it climbs.
     let wind = vec2<f32>(cos(u_wind_dir()), sin(u_wind_dir()));
     let t = u_time() * 0.004;
-    let q = pos.xz * 0.0012 + wind * t * 3.0;
+    let q = pos.xz * 0.0012 + wind * (t * 3.0 + h * 0.35);
     var d = cloud_fbm(q);
     // Coverage as a threshold on the noise. The bounds are the noise's actual
-    // range, not 0..1: four octaves of value noise land in roughly 0.15..0.85,
+    // range, not 0..1: three octaves of value noise land in roughly 0.15..0.85,
     // so thresholding against 1 - cover leaves a clear sky at every setting
     // below about 0.9 — which is what a cloud knob that does nothing looks like.
     d = d - (0.82 - 0.70 * cover);
     if (d <= 0.0) { return 0.0; }
-    // A vertical profile, so the slab has a shape instead of two hard faces.
-    let h = clamp((pos.y - CLOUD_BASE) / (CLOUD_TOP - CLOUD_BASE), 0.0, 1.0);
+    // A cloud is as tall as it is dense: thin at its edges and towering at
+    // its heart, rounded on top. The noise is two-dimensional, and stood up
+    // through the whole deck at one height everywhere it drew pillars with
+    // flat tops — seen from the side, a city skyline of rectangles.
+    // (A square root, so the top is a dome: linear in the density, it was a cone.)
+    let top = sqrt(clamp(d * 5.0, 0.0, 1.0));
+    let shape = smoothstep(0.0, 0.12, h) * (1.0 - smoothstep(top * 0.55, top, h));
     // Back up to order 1, since the threshold above took most of it away.
-    return d * smoothstep(0.0, 0.25, h) * (1.0 - smoothstep(0.5, 1.0, h)) * 4.5;
+    return d * shape * 4.5;
 }
 
 /// Scattered radiance in `rgb`, coverage along the ray in `w`.
@@ -699,8 +728,8 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let march = min(analytic_depth / max(-refr.y, 0.15), 60.0);
     let hit_clip = frame.view_proj * vec4<f32>(in.world_pos + refr * march, 1.0);
     let ruv_bent = hit_clip.xy / hit_clip.w * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5, 0.5);
-    let bent_d = textureLoad(ss_depth_tex,
-        vec2<i32>(clamp(ruv_bent, vec2<f32>(0.0), vec2<f32>(1.0)) * dims), 0);
+    let bent_d = scene_depth(textureLoad(ss_depth_tex,
+        vec2<i32>(clamp(ruv_bent, vec2<f32>(0.0), vec2<f32>(1.0)) * dims), 0).r);
 
     // A sample that turns out to be in *front* of the water would drag foreground
     // objects down into it — the classic refraction artefact. Blend the offset
@@ -719,7 +748,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
               * smoothstep(0.08, 0.35, n_dot_v);
     let ruv = mix(suv, ruv_bent, valid * u_refraction());
 
-    let floor_d = textureLoad(ss_depth_tex, vec2<i32>(clamp(ruv, vec2<f32>(0.0), vec2<f32>(1.0)) * dims), 0);
+    let floor_d = scene_depth(textureLoad(ss_depth_tex, vec2<i32>(clamp(ruv, vec2<f32>(0.0), vec2<f32>(1.0)) * dims), 0).r);
 
     // Is there actually a floor behind this pixel? The sky dome is opaque and in
     // the capture too, and at 9 km it still lands just inside a naive
@@ -798,14 +827,15 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     fres = fres * mix(1.0, 0.35, 1.0 - smoothstep(0.0, 1.6, thickness));
 
     // ---- sun glint ----
-    // Cook-Torrance: D·G·F / (4·n·v), the n·l of the reflectance equation having
-    // already cancelled the one in the denominator.
+    // Cook-Torrance: D·V·F·(n·l), V the height-correlated Smith visibility
+    // that already carries the 1/(4·n·v·n·l).
     let rough = max(u_roughness(), 0.02);
     let a_r = rough * rough;
     let hv = normalize(v + sun_dir);
+    let n_dot_l_c = max(n_dot_l, 1e-3);
     var spec = sun_col * d_ggx(max(dot(n, hv), 0.0), a_r)
-             * g_smith(n_dot_v, max(n_dot_l, 1e-3), a_r)
-             * fres * 0.25 / n_dot_v
+             * v_ggx_smith_correlated(a_r, n_dot_l_c, n_dot_v)
+             * fres * n_dot_l_c
              * smoothstep(0.0, 0.03, dot(n, sun_dir));
     // Sparkle: real sea glitter is thousands of individual facets winking in and
     // out, which a smooth GGX lobe averages away into a soft wedge. Modulating

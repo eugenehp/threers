@@ -23,6 +23,14 @@
 //! fn slice_color(value : vec4<u32>, params : array<vec4<f32>, 4>) -> vec4<f32>
 //! ```
 //!
+//! A colour function that reads the volume itself (`volume`, a
+//! `texture_3d`) can define this instead, and is handed the voxel position
+//! unchecked (it bounds-checks, and may `discard`):
+//!
+//! ```wgsl
+//! fn slice_color_at(voxel : vec3<f32>, params : array<vec4<f32>, 4>) -> vec4<f32>
+//! ```
+//!
 //! [`WINDOW_LEVEL`] (grey ramp, `params[0].xy` = black and white points) and
 //! [`LABELS`] (a stable colour per label, 0 transparent) cover the common
 //! cases. Return display-referred colour; the pass linearises it when the
@@ -169,6 +177,35 @@ fn fs(in : FullscreenVertex) -> @location(0) vec4<f32> {
         discard;
     }
     var c = slice_color(textureLoad(volume, vec3<i32>(voxel), 0), slice.params);
+    if (slice.srgb_target == 1u) {
+        c = vec4<f32>(slice_srgb_to_linear(c.rgb), c.a);
+    }
+    return c;
+}
+"#;
+
+/// [`FRAGMENT`] for a colour function that reads the volume itself:
+/// `slice_color_at(voxel, params)` gets the voxel position (not yet
+/// bounds-checked: it decides what lies outside, and may `discard`).
+const FRAGMENT_AT: &str = r#"
+struct SliceUniforms {
+    ndc_to_voxel : mat4x4<f32>,
+    params : array<vec4<f32>, 4>,
+    srgb_target : u32,
+};
+@group(0) @binding(0) var<uniform> slice : SliceUniforms;
+@group(0) @binding(1) var volume : texture_3d<SAMPLE>;
+
+fn slice_srgb_to_linear(c : vec3<f32>) -> vec3<f32> {
+    return select(pow((c + 0.055) / 1.055, vec3<f32>(2.4)), c / 12.92, c <= vec3<f32>(0.04045));
+}
+
+@fragment
+fn fs(in : FullscreenVertex) -> @location(0) vec4<f32> {
+    let ndc = vec2<f32>(in.uv.x * 2.0 - 1.0, 1.0 - in.uv.y * 2.0);
+    let p = slice.ndc_to_voxel * vec4<f32>(ndc, 0.0, 1.0);
+    let voxel = floor(p.xyz / p.w);
+    var c = slice_color_at(voxel, slice.params);
     if (slice.srgb_target == 1u) {
         c = vec4<f32>(slice_srgb_to_linear(c.rgb), c.a);
     }
@@ -368,11 +405,14 @@ impl SliceRenderer {
             VolumeSample::Float => "f32",
             VolumeSample::Uint => "u32",
         };
+        // A colour function reading the volume itself (several texels per
+        // pixel, say) defines `slice_color_at` and gets the voxel instead.
+        let fragment = if color_wgsl.contains("fn slice_color_at(") { FRAGMENT_AT } else { FRAGMENT };
         format!(
             "{}\n{}\n{}",
             fullscreen::VS,
             color_wgsl,
-            FRAGMENT.replace("SAMPLE", scalar)
+            fragment.replace("SAMPLE", scalar)
         )
     }
 

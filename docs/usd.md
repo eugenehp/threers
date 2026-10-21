@@ -10,7 +10,7 @@ because most scenes never touch USD; being pure code, it costs compile time and
 nothing else.
 
 ```rust
-// Cargo.toml: threers = { version = "0.0.6", features = ["usd"] }
+// Cargo.toml: threers = { version = "0.0.7", features = ["usd"] }
 use threers::loaders::UsdLoader;
 
 // One entry point for all three: the format is told apart by content, not by
@@ -327,11 +327,21 @@ scene description rather than a mesh container, and `UsdLoader::open` does it;
 `UsdLoader::parse` reads a single layer and stops.
 
 ```rust
-use threers::loaders::{ComposeOptions, FileResolver, UsdLoader};
+use threers::loaders::usd::{ComposeOptions, FileResolver};
+use threers::loaders::UsdLoader;
 
 let bytes = std::fs::read("shots/010/shot.usda")?;
 let scene = UsdLoader::open(&bytes, "shots/010/shot.usda", &FileResolver, &ComposeOptions::default())?;
 ```
+
+![One class referenced three times, with a finish variant set](images/usd_stage.jpg)
+
+*`cargo run --release --features usd --example usd_stage`: a piece defined
+once as a `class` and referenced three times. Left, the class selects
+`brass`; middle, the same layer with that one word changed to `enamel`;
+right, each placement selecting its own finish, after a round trip through
+threers' own `.usdz` writer. A placement with no selection of its own takes
+the one the referenced prim makes.*
 
 An arc may also shift and stretch the animation it pulls in —
 `references = @walk.usda@ (offset = 100; scale = 2)` maps a sample at `t` to

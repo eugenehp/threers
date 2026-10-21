@@ -38,6 +38,23 @@ For the **full THREE.* API** (browser / npm), use the JavaScript package:
 python examples/cube.py cube.png
 ```
 
+### Fur and hair
+
+```python
+from threers import FurMaterial, Geometry, HeadlessRenderer, Scene
+
+coat = FurMaterial(length=0.25, density=120, tip_color=0xD6A86A,
+                   gravity=(0, -0.5, 0), wind=(0.3, 0, 0.1), flutter=0.1)
+scene = Scene()
+scene.add_fur(Geometry.sphere(1, 96, 48), coat)               # shell fur
+scene.add_hair(Geometry.sphere(0.8, 64, 32), coat,            # strand hair
+               count=20000, segments=10, width=0.004, x=2.5)
+scene.step_fur(time=0.0)          # each frame: wind, flutter, inertia, shadows
+
+renderer = HeadlessRenderer(1280, 720)
+renderer.set_msaa(4)              # strands resolved per sample: no aliasing
+```
+
 ### Quads
 
 Grid geometries carry their quads (each two-triangle cell is one polygon), so

@@ -383,3 +383,73 @@ mod tests {
         assert_eq!(bytes_per_texel(F::Rgba32Float), 16);
     }
 }
+
+/// A buffer being read back without blocking, on native and the web alike:
+/// copy into [`AsyncReadback::buffer`] (as a `COPY_DST`), submit, call
+/// [`map`](Self::map), then [`read`](Self::read) on later frames until it
+/// gives the bytes. `wake` lets a redraw-on-demand loop know when to look
+/// (natively the mapping completes as the device is polled, so poll it,
+/// `wgpu::PollType::Poll`, while one is pending).
+///
+/// ```no_run
+/// use threers::renderer::readback::AsyncReadback;
+/// # fn demo(device: &wgpu::Device, queue: &wgpu::Queue, src: &wgpu::Buffer) {
+/// let readback = AsyncReadback::new(device, 256, "my values");
+/// let mut encoder = device.create_command_encoder(&Default::default());
+/// encoder.copy_buffer_to_buffer(src, 0, readback.buffer(), 0, 256);
+/// queue.submit([encoder.finish()]);
+/// readback.map(std::sync::Arc::new(|| { /* request a redraw */ }));
+/// // … each frame:
+/// if let Some(bytes) = readback.read() { let _ = bytes; }
+/// # }
+/// ```
+pub struct AsyncReadback {
+    buffer: wgpu::Buffer,
+    ready: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl AsyncReadback {
+    /// A `MAP_READ | COPY_DST` buffer of `size` bytes.
+    pub fn new(device: &wgpu::Device, size: u64, label: &str) -> Self {
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label),
+            size,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        Self { buffer, ready: Default::default() }
+    }
+
+    /// The buffer to copy into.
+    pub fn buffer(&self) -> &wgpu::Buffer {
+        &self.buffer
+    }
+
+    /// Once the copy is submitted: maps the buffer, `wake` called when it
+    /// can be read (or failed to map).
+    pub fn map(&self, wake: std::sync::Arc<dyn Fn() + Send + Sync>) {
+        let ready = self.ready.clone();
+        self.buffer.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+            if r.is_ok() {
+                ready.store(true, std::sync::atomic::Ordering::Release);
+            }
+            wake();
+        });
+    }
+
+    /// Whether [`read`](Self::read) would give the bytes now.
+    pub fn is_ready(&self) -> bool {
+        self.ready.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// The bytes, once mapped (`None` before); the buffer is unmapped, so
+    /// this gives them once.
+    pub fn read(&self) -> Option<Vec<u8>> {
+        if !self.ready.swap(false, std::sync::atomic::Ordering::AcqRel) {
+            return None;
+        }
+        let bytes = self.buffer.slice(..).get_mapped_range().ok()?.to_vec();
+        self.buffer.unmap();
+        Some(bytes)
+    }
+}

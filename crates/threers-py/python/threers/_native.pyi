@@ -187,6 +187,50 @@ class Geometry:
     def vertex_count(self) -> int: ...
     def triangle_count(self) -> int: ...
 
+class FurMaterial:
+    """Shell fur and strand hair's look and motion. Every option is a keyword;
+    unset ones keep the Rust defaults. Colours are hex (``0x3a2614``),
+    vectors ``(x, y, z)``."""
+
+    def __init__(
+        self,
+        *,
+        length: Optional[float] = None,
+        density: Optional[float] = None,
+        thickness: Optional[float] = None,
+        taper: Optional[float] = None,
+        gravity: Optional[Tuple[float, float, float]] = None,
+        curl: Optional[float] = None,
+        clumping: Optional[float] = None,
+        clump_size: Optional[float] = None,
+        length_variation: Optional[float] = None,
+        seed: Optional[int] = None,
+        shells: Optional[int] = None,
+        root_color: Optional[int] = None,
+        tip_color: Optional[int] = None,
+        occlusion: Optional[float] = None,
+        specular: Optional[float] = None,
+        specular_exponent: Optional[float] = None,
+        specular_shift: Optional[float] = None,
+        wind: Optional[Tuple[float, float, float]] = None,
+        wind_frequency: Optional[float] = None,
+        flutter: Optional[float] = None,
+        stiffness: Optional[float] = None,
+        damping: Optional[float] = None,
+        response: Optional[float] = None,
+        max_lag: Optional[float] = None,
+        placement: Optional[Literal["uv", "surface"]] = None,
+        cell: Optional[float] = None,
+        shadow_height: Optional[float] = None,
+        lod: Optional[bool] = None,
+        drag: Optional[float] = None,
+        turbulence: Optional[float] = None,
+    ) -> None: ...
+    @property
+    def length(self) -> float: ...
+    @property
+    def shells(self) -> int: ...
+
 class Material:
     """Surface material. Keyword arguments a factory does not use raise TypeError."""
 
@@ -341,6 +385,34 @@ class RaycastHit(TypedDict):
 
 class Scene:
     def __init__(self) -> None: ...
+    def add_fur(
+        self, geometry: Geometry, fur: FurMaterial, x: float = 0.0, y: float = 0.0, z: float = 0.0
+    ) -> int:
+        """Shell fur grown on ``geometry``; casts and receives shadows."""
+    def add_hair(
+        self,
+        geometry: Geometry,
+        fur: FurMaterial,
+        count: int = 4000,
+        segments: int = 8,
+        width: float = 0.006,
+        shadow_strands: float = 0.25,
+        x: float = 0.0,
+        y: float = 0.0,
+        z: float = 0.0,
+    ) -> int:
+        """Strand hair: ``count`` camera-facing ribbons grown on ``geometry``."""
+    def stroke_fur(
+        self,
+        handle: int,
+        at: Tuple[float, float, float],
+        radius: float = 0.3,
+        push: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+        part: float = 0.5,
+    ) -> None:
+        """A hand in a coat: push and part its strands near ``at``; they spring back."""
+    def step_fur(self, time: float, dt: float = 1.0 / 60.0) -> None:
+        """Advance fur and hair (wind, flutter, inertia, shadows) to ``time``."""
     def add_box(
         self,
         width: float = 1.0,
@@ -465,6 +537,8 @@ class HeadlessRenderer:
         margin: Optional[float] = None,
     ) -> bytes: ...
     def size(self) -> Tuple[int, int]: ...
+    def set_msaa(self, samples: int) -> None:
+        """4 for 4× MSAA (fur and hair strands resolved per sample), 1 for none."""
     def set_size(self, width: int, height: int) -> None: ...
     def set_viewport(self, x: float, y: float, width: float, height: float) -> None: ...
     def reset_viewport(self) -> None: ...

@@ -58,14 +58,34 @@ fn view6(view: Option<Vec<f64>>) -> Option<[f64; 6]> {
 
 /// `DirectionalLightHelper(light, size)`.
 #[wasm_bindgen(js_name = helperDirectionalLight)]
-pub fn helper_directional_light(light_world: &[f64], tx: f64, ty: f64, tz: f64, size: f64) -> WebHelperGeometry {
-    helper(lines::directional_light(&mat4(light_world), [tx, ty, tz], size))
+pub fn helper_directional_light(
+    light_world: &[f64],
+    tx: f64,
+    ty: f64,
+    tz: f64,
+    size: f64,
+) -> WebHelperGeometry {
+    helper(lines::directional_light(
+        &mat4(light_world),
+        [tx, ty, tz],
+        size,
+    ))
 }
 
 /// `HemisphereLightHelper(light, size)`; pass a fixed colour as both.
 #[wasm_bindgen(js_name = helperHemisphereLight)]
-pub fn helper_hemisphere_light(light_world: &[f64], size: f64, sky: &WebColor, ground: &WebColor) -> WebHelperGeometry {
-    helper(lines::hemisphere_light(&mat4(light_world), size, rgb(sky), rgb(ground)))
+pub fn helper_hemisphere_light(
+    light_world: &[f64],
+    size: f64,
+    sky: &WebColor,
+    ground: &WebColor,
+) -> WebHelperGeometry {
+    helper(lines::hemisphere_light(
+        &mat4(light_world),
+        size,
+        rgb(sky),
+        rgb(ground),
+    ))
 }
 
 /// `PointLightHelper(light, sphereSize)`.
@@ -76,8 +96,20 @@ pub fn helper_point_light(light_world: &[f64], sphere_size: f64) -> WebHelperGeo
 
 /// `SpotLightHelper(light)`.
 #[wasm_bindgen(js_name = helperSpotLight)]
-pub fn helper_spot_light(light_world: &[f64], tx: f64, ty: f64, tz: f64, distance: f64, angle: f64) -> WebHelperGeometry {
-    helper(lines::spot_light(&mat4(light_world), [tx, ty, tz], distance, angle))
+pub fn helper_spot_light(
+    light_world: &[f64],
+    tx: f64,
+    ty: f64,
+    tz: f64,
+    distance: f64,
+    angle: f64,
+) -> WebHelperGeometry {
+    helper(lines::spot_light(
+        &mat4(light_world),
+        [tx, ty, tz],
+        distance,
+        angle,
+    ))
 }
 
 /// `PerspectiveCamera.updateProjectionMatrix` (`view` is `[fullWidth,
@@ -93,7 +125,17 @@ pub fn helper_perspective_projection(
     film_width: f64,
     view: Option<Vec<f64>>,
 ) -> Vec<f64> {
-    lines::perspective_projection(fov, aspect, near, far, zoom, film_offset, film_width, view6(view)).to_vec()
+    lines::perspective_projection(
+        fov,
+        aspect,
+        near,
+        far,
+        zoom,
+        film_offset,
+        film_width,
+        view6(view),
+    )
+    .to_vec()
 }
 
 /// `OrthographicCamera.updateProjectionMatrix`.
@@ -140,8 +182,18 @@ pub fn helper_arrow_quaternion(x: f64, y: f64, z: f64) -> Vec<f64> {
 
 /// `ArrowHelper` under its own world matrix: the shaft line and the cone.
 #[wasm_bindgen(js_name = helperArrow)]
-pub fn helper_arrow(helper_world: &[f64], length: f64, head_length: f64, head_width: f64) -> WebHelperGeometry {
-    helper(lines::arrow(&mat4(helper_world), length, head_length, head_width))
+pub fn helper_arrow(
+    helper_world: &[f64],
+    length: f64,
+    head_length: f64,
+    head_width: f64,
+) -> WebHelperGeometry {
+    helper(lines::arrow(
+        &mat4(helper_world),
+        length,
+        head_length,
+        head_width,
+    ))
 }
 
 /// `PlaneHelper(plane, size)`: outline and translucent fill.
@@ -154,7 +206,11 @@ pub fn helper_plane(nx: f64, ny: f64, nz: f64, constant: f64, size: f64) -> WebH
 /// 16 numbers each, in `getBoneList` order; `parents[i]` the index of bone
 /// `i`'s parent bone, or -1.
 #[wasm_bindgen(js_name = helperSkeleton)]
-pub fn helper_skeleton(root_world: &[f64], bone_worlds: &[f64], parents: &[i32]) -> WebHelperGeometry {
+pub fn helper_skeleton(
+    root_world: &[f64],
+    bone_worlds: &[f64],
+    parents: &[i32],
+) -> WebHelperGeometry {
     let bones: Vec<lines::Mat4> = bone_worlds.chunks_exact(16).map(mat4).collect();
     helper(lines::skeleton(&mat4(root_world), &bones, parents))
 }
@@ -170,7 +226,11 @@ pub fn helper_box(min: &[f64], max: &[f64]) -> WebHelperGeometry {
 /// each mesh's world matrix (16 numbers apiece in `worlds`) and its vertices
 /// (`positions`, `counts[i]` floats for mesh `i`). Empty for no vertices.
 #[wasm_bindgen(js_name = helperBoxOfObjects)]
-pub fn helper_box_of_objects(worlds: &[f64], positions: &[f32], counts: &[u32]) -> WebHelperGeometry {
+pub fn helper_box_of_objects(
+    worlds: &[f64],
+    positions: &[f32],
+    counts: &[u32],
+) -> WebHelperGeometry {
     let mats: Vec<lines::Mat4> = worlds.chunks_exact(16).map(mat4).collect();
     let mut slices = Vec::with_capacity(counts.len());
     let mut at = 0usize;
@@ -194,8 +254,18 @@ pub fn helper_box3(min: &[f64], max: &[f64]) -> WebHelperGeometry {
 
 /// `VertexNormalsHelper(object, size)`.
 #[wasm_bindgen(js_name = helperVertexNormals)]
-pub fn helper_vertex_normals(object_world: &[f64], positions: &[f32], normals: &[f32], size: f64) -> WebHelperGeometry {
-    helper(lines::vertex_normals(&mat4(object_world), positions, normals, size))
+pub fn helper_vertex_normals(
+    object_world: &[f64],
+    positions: &[f32],
+    normals: &[f32],
+    size: f64,
+) -> WebHelperGeometry {
+    helper(lines::vertex_normals(
+        &mat4(object_world),
+        positions,
+        normals,
+        size,
+    ))
 }
 
 /// `RectAreaLightHelper(light)`: outline and back-facing fill.
@@ -224,7 +294,8 @@ impl WebKtx2Loader {
     /// Universal and zstd payloads, cube maps and arrays are refused by name.
     #[wasm_bindgen(js_name = parseTexture)]
     pub fn parse_texture(&self, bytes: &[u8]) -> Result<WebTexture, JsValue> {
-        let ktx = crate::loaders::ktx2::parse(bytes).map_err(|e| JsValue::from_str(&format!("KTX2Loader: {e}")))?;
+        let ktx = crate::loaders::ktx2::parse(bytes)
+            .map_err(|e| JsValue::from_str(&format!("KTX2Loader: {e}")))?;
         let texture = ktx
             .to_texture()
             .map_err(|e| JsValue::from_str(&format!("KTX2Loader: {e}")))?;

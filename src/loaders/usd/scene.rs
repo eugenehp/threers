@@ -1227,9 +1227,7 @@ pub fn mesh_geometry_at(prim: &UsdPrim, level: usize) -> Option<BufferGeometry> 
     }
 
     let normals = primvar(prim, "normals").or_else(|| primvar(prim, "primvars:normals"));
-    let uvs = primvar(prim, "primvars:st")
-        .or_else(|| primvar(prim, "primvars:st0"))
-        .or_else(|| primvar(prim, "primvars:UVMap"));
+    let uvs = pick_uvs(prim);
     // `displayColor` is USD's fallback shading and every tool that does not
     // evaluate a shader graph uses it. Per vertex it is a colour attribute;
     // one value for the whole mesh is the material's colour and is left to the
@@ -1351,6 +1349,60 @@ impl Primvar {
             *self.data.get(at + 1).unwrap_or(&0.0),
         ]
     }
+}
+
+/// The UV set a mesh is actually laid out in.
+///
+/// `primvars:st` is the conventional one and usually the only one, but a mesh
+/// may carry several — and the first is not always the one the textures were
+/// authored against. Apple's AR assets carry two: `st` runs well outside the
+/// unit square, from −3.9 to 9.3 on the iPhone's rails, because it is a
+/// *tiling* parameterisation for a repeating material; `st1` sits inside it,
+/// 0.017 to 0.967, because it is the atlas the textures are actually painted
+/// in. Read `st` and every map repeats about thirteen times across the rail —
+/// anodised metal comes out as a block pattern, which is how this was noticed.
+///
+/// Which to take is a question the geometry can answer on its own, without
+/// reading a single material: an atlas is normalised and a tiling set is not,
+/// so a mesh carrying both has already said which is which. Sets are tried in
+/// order and one that escapes the unit square gives way to one that stays
+/// inside it. If they all escape, or none do, the first still wins — a model
+/// with one tiling set is correctly tiled, and nothing here should second-guess
+/// a mesh that carries only what it needs.
+///
+/// The alternative is to read `inputs:varname` off each texture and bind per
+/// map, which is what USD actually specifies. That needs a UV channel per
+/// texture in the material and a shader to match; this needs neither, and
+/// settles the case that occurs.
+fn pick_uvs(prim: &UsdPrim) -> Option<Primvar> {
+    const SETS: [&str; 5] = [
+        "primvars:st",
+        "primvars:st0",
+        "primvars:UVMap",
+        "primvars:st1",
+        "primvars:st2",
+    ];
+    let mut first: Option<Primvar> = None;
+    for name in SETS {
+        let Some(pv) = primvar(prim, name) else { continue };
+        if !escapes_unit_square(&pv) {
+            return Some(pv);
+        }
+        first.get_or_insert(pv);
+    }
+    first
+}
+
+/// Whether a UV set reaches outside the unit square by more than a rounding.
+///
+/// The margin is there because an atlas is packed up to its edges and a
+/// coordinate may land a hair past one; a tiling set misses by whole turns, so
+/// nothing sits near the boundary between the two.
+fn escapes_unit_square(pv: &Primvar) -> bool {
+    const SLACK: f32 = 0.01;
+    pv.data
+        .iter()
+        .any(|v| *v < -SLACK || *v > 1.0 + SLACK)
 }
 
 fn primvar(prim: &UsdPrim, name: &str) -> Option<Primvar> {
@@ -1583,6 +1635,76 @@ fn put_map(object: &mut Object3D, slot: shade::TextureSlot, texture: &std::sync:
 
 #[cfg(test)]
 mod tests {
+
+    /// A tiling `st` beside an atlas `st1` — Apple's AR assets, and the
+    /// difference between anodised metal and a repeating block pattern.
+    #[test]
+    fn a_tiling_uv_set_gives_way_to_an_atlas() {
+        let src = r#"#usda 1.0
+def Mesh "m"
+{
+    int[] faceVertexCounts = [4]
+    int[] faceVertexIndices = [0, 1, 2, 3]
+    point3f[] points = [(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)]
+    texCoord2f[] primvars:st = [(-3.9, 0), (9.3, 0), (9.3, 8.8), (-3.9, 8.8)] (
+        interpolation = "vertex"
+    )
+    texCoord2f[] primvars:st1 = [(0.017, 0.063), (0.967, 0.063), (0.967, 0.974), (0.017, 0.974)] (
+        interpolation = "vertex"
+    )
+}
+"#;
+        let layer = crate::loaders::usd::parse::parse(src).unwrap();
+        let prim = layer.prim_at("/m").unwrap();
+        let uvs = super::pick_uvs(prim).unwrap();
+        assert!(
+            (uvs.data[0] - 0.017).abs() < 1e-5,
+            "st runs -3.9..9.3 and tiles; st1 is the atlas the textures are painted in"
+        );
+    }
+
+    /// One set and no choice to make: a mesh that tiles is meant to tile.
+    #[test]
+    fn a_lone_tiling_set_is_left_alone() {
+        let src = r#"#usda 1.0
+def Mesh "m"
+{
+    int[] faceVertexCounts = [4]
+    int[] faceVertexIndices = [0, 1, 2, 3]
+    point3f[] points = [(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)]
+    texCoord2f[] primvars:st = [(0, 0), (4, 0), (4, 4), (0, 4)] (
+        interpolation = "vertex"
+    )
+}
+"#;
+        let layer = crate::loaders::usd::parse::parse(src).unwrap();
+        let prim = layer.prim_at("/m").unwrap();
+        let uvs = super::pick_uvs(prim).unwrap();
+        assert_eq!(uvs.data[2], 4.0, "nothing to prefer it to, so it stays");
+    }
+
+    /// Both inside the unit square: the conventional one wins, as before.
+    #[test]
+    fn the_first_set_wins_when_neither_escapes() {
+        let src = r#"#usda 1.0
+def Mesh "m"
+{
+    int[] faceVertexCounts = [4]
+    int[] faceVertexIndices = [0, 1, 2, 3]
+    point3f[] points = [(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)]
+    texCoord2f[] primvars:st = [(0, 1), (1, 1), (0, 0), (1, 0)] (
+        interpolation = "vertex"
+    )
+    texCoord2f[] primvars:st1 = [(0.1, 0.9), (0.4, 0.9), (0.4, 0.2), (0.1, 0.2)] (
+        interpolation = "vertex"
+    )
+}
+"#;
+        let layer = crate::loaders::usd::parse::parse(src).unwrap();
+        let prim = layer.prim_at("/m").unwrap();
+        let uvs = super::pick_uvs(prim).unwrap();
+        assert_eq!(uvs.data[0], 0.0, "st is a real parameterisation here");
+    }
     use super::super::parse::parse;
     use super::*;
     use crate::animation::TrackValues;

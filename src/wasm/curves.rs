@@ -210,8 +210,12 @@ impl WebCurve {
     /// `SplineCurve`, points flattened `[x0, y0, …]`.
     #[wasm_bindgen(js_name = setSpline)]
     pub fn set_spline(&self, points: &[f64]) {
-        let points = points.chunks_exact(2).map(|c| Vec2d::new(c[0], c[1])).collect();
-        self.node.set_def(CurveDef::Planar(ShapeCurve::Spline { points }));
+        let points = points
+            .chunks_exact(2)
+            .map(|c| Vec2d::new(c[0], c[1]))
+            .collect();
+        self.node
+            .set_def(CurveDef::Planar(ShapeCurve::Spline { points }));
     }
 
     /// `EllipseCurve` / `ArcCurve`.
@@ -307,13 +311,17 @@ impl WebCurve {
     /// `getPoint(t)` as `[x, y, z]`, empty for null.
     #[wasm_bindgen(js_name = getPoint)]
     pub fn get_point(&self, t: f64) -> Result<Vec<f64>, JsValue> {
-        checked(&self.node, || self.node.get_point(t).map_or(Vec::new(), |p| p.to_vec()))
+        checked(&self.node, || {
+            self.node.get_point(t).map_or(Vec::new(), |p| p.to_vec())
+        })
     }
 
     /// `getPointAt(u)` as `[x, y, z]`, empty for null.
     #[wasm_bindgen(js_name = getPointAt)]
     pub fn get_point_at(&self, u: f64) -> Result<Vec<f64>, JsValue> {
-        checked(&self.node, || self.node.get_point_at(u).map_or(Vec::new(), |p| p.to_vec()))
+        checked(&self.node, || {
+            self.node.get_point_at(u).map_or(Vec::new(), |p| p.to_vec())
+        })
     }
 
     /// `getPoints(divisions)`, flattened xyz.
@@ -325,7 +333,9 @@ impl WebCurve {
     /// `getSpacedPoints(divisions)`, flattened xyz.
     #[wasm_bindgen(js_name = getSpacedPoints)]
     pub fn get_spaced_points(&self, divisions: usize) -> Result<Vec<f64>, JsValue> {
-        checked(&self.node, || flat_points(self.node.get_spaced_points(divisions)))
+        checked(&self.node, || {
+            flat_points(self.node.get_spaced_points(divisions))
+        })
     }
 
     #[wasm_bindgen(js_name = getLength)]
@@ -371,7 +381,11 @@ impl WebCurve {
     /// `computeFrenetFrames(segments, closed)`: the tangents, then the
     /// normals, then the binormals, each `segments + 1` flattened xyz.
     #[wasm_bindgen(js_name = computeFrenetFrames)]
-    pub fn compute_frenet_frames(&self, segments: usize, closed: bool) -> Result<Vec<f64>, JsValue> {
+    pub fn compute_frenet_frames(
+        &self,
+        segments: usize,
+        closed: bool,
+    ) -> Result<Vec<f64>, JsValue> {
         checked(&self.node, || {
             let f = self.node.compute_frenet_frames(segments, closed);
             f.tangents
@@ -454,6 +468,9 @@ impl WebGeometry {
 }
 
 /// `curve.getPoint` etc. errors a JS callback raised, for bindings elsewhere.
-pub(crate) fn checked_curve<T>(curve: &WebCurve, f: impl FnOnce(&ThreeCurve) -> T) -> Result<T, JsValue> {
+pub(crate) fn checked_curve<T>(
+    curve: &WebCurve,
+    f: impl FnOnce(&ThreeCurve) -> T,
+) -> Result<T, JsValue> {
     checked(&curve.node, || f(&curve.node))
 }

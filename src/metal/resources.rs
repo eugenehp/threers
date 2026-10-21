@@ -19,6 +19,8 @@ use crate::textures::{Texture, TextureFilter, TextureFormat, TextureWrap};
 pub struct PipelineKey {
     /// `false` = `vs_mesh`/`fs_mesh`, `true` = `vs_point`/`fs_point`.
     pub point_sprites: bool,
+    /// Shell fur (`crate::fur`): `vs_fur`/`fs_fur`, the WGSL fur shader's port.
+    pub fur: bool,
     /// Read vertices as the 24-byte `LineVertex` rather than the 48-byte
     /// `Vertex`. Set for line draws, whose geometry is uploaded slim.
     pub slim_lines: bool,
@@ -82,6 +84,7 @@ fn build_render_pipeline(
         // sprite or line is not a thing any loader produces, and a variant for
         // each would be four more pipelines nobody compiles.
         (false, false) if key.skinned => ("vs_skinned", "fs_mesh"),
+        (false, false) if key.fur => ("vs_fur", "fs_fur"),
         (false, false) => ("vs_mesh", "fs_mesh"),
         (false, true) => ("vs_mesh_layered", "fs_mesh"),
         (true, false) => ("vs_point", "fs_point"),
@@ -1061,6 +1064,7 @@ mod tests {
     fn pipeline_keys_distinguish_blend_and_format() {
         let a = PipelineKey {
             oit_accum: false,
+            fur: false,
             point_sprites: false,
             slim_lines: false,
             wide_lines: false,

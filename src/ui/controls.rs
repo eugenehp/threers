@@ -17,7 +17,7 @@
 //! assert_eq!(ui.rect(select).width, 21.0 + 22.0);
 //! ```
 
-use super::{Edges, Length, NodeId, Rect, Rgba, Style, TextField, TextMeasure, Ui};
+use super::{Edges, Length, NodeId, Position, Rect, Rgba, Style, TextField, TextMeasure, Ui};
 use crate::style;
 
 /// The accent: a checked box, a range's fill and thumb (`#0075ff`).
@@ -51,7 +51,18 @@ pub fn checkbox(ui: &mut Ui, parent: NodeId, checked: bool, size: f32, border: R
             flex-shrink: 0;
         },
     );
-    if checked {
+    if checked && size == 13.0 {
+        // As Chrome rasterizes it, which a rounded fill on a canvas does not
+        // (its coverage comes in quarters): opaque but for the corner
+        // pixels, each the accent's border blend at 0.443 (16, 60, 113
+        // premultiplied); the pixels beside them, 0.99 there, opaque here.
+        ui.style_mut(node).position = Position::Relative;
+        let corner = [36.0 / 255.0, 135.0 / 255.0, 1.0, 0.443];
+        for (x, y, w, h, color) in [(1.0, 0.0, 11.0, 13.0, ACCENT), (0.0, 1.0, 13.0, 11.0, ACCENT), (0.0, 0.0, 1.0, 1.0, corner), (12.0, 0.0, 1.0, 1.0, corner), (0.0, 12.0, 1.0, 1.0, corner), (12.0, 12.0, 1.0, 1.0, corner)] {
+            ui.add_box(node, style! { position: absolute; left: {x}; top: {y}; width: {w}; height: {h}; background: {color}; });
+        }
+        ui.add_path(node, style! { position: absolute; left: 0; top: 0; width: {size}; height: {size}; color: white; }, vec![TICK.into()], [0.0, 0.0, 13.0, 13.0], None, true);
+    } else if checked {
         ui.style_mut(node).background = Some(ACCENT);
         ui.add_path(node, style! { width: {size}; height: {size}; color: white; }, vec![TICK.into()], [0.0, 0.0, 13.0, 13.0], None, true);
     } else {

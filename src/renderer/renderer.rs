@@ -1025,6 +1025,8 @@ pub struct Renderer {
     pipeline_sprite: wgpu::RenderPipeline,
     // Hardware-MSAA variants of the opaque forward pipelines (surface path).
     pipeline_tri_msaa: wgpu::RenderPipeline,
+    pipeline_skinned_msaa: wgpu::RenderPipeline,
+    pipeline_instanced_msaa: wgpu::RenderPipeline,
     pipeline_tri_alpha_msaa: wgpu::RenderPipeline,
     pipeline_tri_nocull_msaa: wgpu::RenderPipeline,
     pipeline_tri_sky_msaa: wgpu::RenderPipeline,
@@ -1196,12 +1198,20 @@ pub struct Renderer {
     /// `None` where the device cannot hold the custom layout; shader materials
     /// are then skipped rather than failing validation on every draw.
     custom_pipeline_layout: Option<wgpu::PipelineLayout>,
+    /// The same for a screen-space shader material
+    /// (`ShaderMaterial::screen_space`): its group 3 is the refraction pass's
+    /// (`env_bgl_glass`), which carries the capture at bindings 9–12 that the
+    /// main layout leaves out.
+    custom_ss_pipeline_layout: Option<wgpu::PipelineLayout>,
     /// Lazily-compiled custom-shader pipelines. See [`CustomPipelineKey`].
     custom_pipelines: HashMap<CustomPipelineKey, wgpu::RenderPipeline>,
     /// Transparent custom-shader pipelines into the `Unorm` view of an sRGB
     /// target, for the encoded-blend pass; keyed as `custom_pipelines` is,
     /// less the framebuffer flag.
     custom_encoded_pipelines: HashMap<(u64, bool, bool, u32), wgpu::RenderPipeline>,
+    /// Custom pipelines multisampled, for an opaque shader material in a
+    /// frame drawn under MSAA; keyed as `custom_encoded_pipelines` is.
+    custom_msaa_pipelines: HashMap<(u64, bool, bool, u32), wgpu::RenderPipeline>,
     /// Shaders that would not compile. Remembered so the error is logged once
     /// rather than every frame, and so the draw is skipped rather than retried.
     custom_failed: std::collections::HashSet<CustomPipelineKey>,
@@ -1770,6 +1780,9 @@ fn point_face_vp(pos: Vector3, radius: f32, face: usize) -> [f32; 16] {
 /// Mixed into a custom shader's hash when it draws an `InstancedMesh`, whose
 /// pipeline has the instanced vertex layout.
 const INSTANCED_CUSTOM_SALT: u64 = 0x9e37_79b9_7f4a_7c15;
+/// Salted into a custom pipeline's key when its material takes
+/// alpha-to-coverage: the same source, another pipeline.
+const COVERAGE_CUSTOM_SALT: u64 = 0xc2b2_ae3d_27d4_eb4f;
 
 fn custom_shader_hash(fragment: &str, vertex: Option<&str>) -> u64 {
     use std::hash::{Hash, Hasher};
@@ -1787,6 +1800,8 @@ pub(crate) fn custom_shader_module_source(
     fragment: &str,
     vertex: Option<&str>,
     storage_buffers: bool,
+    coverage: bool,
+    samples: u32,
 ) -> String {
     let source = super::shader::legacy_shader_source();
     let preamble = source.split("@fragment").next().unwrap_or(source);
@@ -1861,8 +1876,47 @@ fn s_len(slot: u32) -> u32 {\n\
     return u32(d.x) * u32(d.y) * 4u;\n\
 }\n"
     };
+    // The pipeline the module is built for, for a shader that draws its own
+    // anti-aliasing:
+    //
+    // - three.js `alphaToCoverage` — a fragment's alpha as the share of the
+    //   pixel's samples it covers. `coverage_alpha` is what a shader returns
+    //   as its alpha for that: the coverage itself in a multisampled pipeline
+    //   with alpha-to-coverage on, a cut at half (discard below, 1 above) in
+    //   any other, so the same shader is right in both.
+    // - `THREERS_SAMPLES` and `threers_sample_offset(i)`: the samples a pixel
+    //   has (1, or 4 under MSAA) and where sample `i` sits from its centre,
+    //   in pixels (the standard 4× pattern), for a shader that works out which
+    //   samples it covers itself — and returns them in `frag_out(colour,
+    //   mask)`, as `@builtin(sample_mask)` where the backend has it
+    //   (`THREERS_SAMPLE_MASK`; not WebGL2, where the alpha is the share of
+    //   samples, for alpha-to-coverage to place).
+    //
+    // The same number of lines in every variant, so error lines stay put.
+    let mask = samples > 1 && storage_buffers && sample_mask_is_cheap();
+    let (mask_field, mask_set) = if mask {
+        ("@builtin(sample_mask) mask : u32, ", "o.mask = mask; ")
+    } else {
+        ("", "")
+    };
+    let coverage = format!(
+        "const THREERS_COVERAGE : bool = {coverage};\n\
+const THREERS_SAMPLES : u32 = {samples}u;\n\
+const THREERS_SAMPLE_MASK : bool = {mask};\n\
+fn coverage_alpha(coverage : f32) -> f32 {{\n\
+    if (THREERS_COVERAGE) {{ return clamp(coverage, 0.0, 1.0); }}\n\
+    if (coverage < 0.5) {{ discard; }}\n\
+    return 1.0;\n\
+}}\n\
+struct ThreersFragOut {{ @location(0) color : vec4<f32>, {mask_field}}};\n\
+fn frag_out(color : vec4<f32>, mask : u32) -> ThreersFragOut {{ var o : ThreersFragOut; o.color = color; {mask_set}return o; }}\n\
+fn threers_sample_offset(i : u32) -> vec2<f32> {{\n\
+    if (THREERS_SAMPLES == 1u) {{ return vec2<f32>(0.0); }}\n\
+    return select(select(select(vec2<f32>(0.125, 0.375), vec2<f32>(-0.375, 0.125), i == 2u), vec2<f32>(0.375, -0.125), i == 1u), vec2<f32>(-0.125, -0.375), i == 0u);\n\
+}}\n"
+    );
     let vertex = vertex.map(|v| format!("\n{v}\n")).unwrap_or_default();
-    format!("{preamble}{user_bindings}{volume_bindings}{storage_bindings}{accessors}{vertex}\n{fragment}\n")
+    format!("{preamble}{user_bindings}{volume_bindings}{storage_bindings}{accessors}{coverage}{vertex}\n{fragment}\n")
 }
 
 /// Parse and validate an assembled custom-shader module, before wgpu sees it.
@@ -1940,12 +1994,25 @@ fn build_custom_pipeline(
     screen_space: bool,
     side: u32,
     instanced: bool,
+    samples: u32,
+    alpha_to_coverage: bool,
     pipes: &mut super::pipeline_state::StatePipelines,
 ) -> Result<wgpu::RenderPipeline, String> {
+    // Alpha-to-coverage needs samples to cover; single-sampled, the shader's
+    // `coverage_alpha` cuts at half instead. And not with a shader that
+    // writes its samples itself (`frag_out`, where `@builtin(sample_mask)`
+    // exists): WebGPU allows one or the other, and it has said already.
+    let writes_mask = samples > 1
+        && crate::renderer::caps::supports_storage_buffers(device)
+        && sample_mask_is_cheap()
+        && fragment.contains("ThreersFragOut");
+    let coverage = alpha_to_coverage && samples > 1 && !writes_mask;
     let source = custom_shader_module_source(
         fragment,
         vertex,
         crate::renderer::caps::supports_storage_buffers(device),
+        coverage,
+        samples,
     );
     validate_custom_shader(&source, custom_preamble_lines())?;
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -2052,6 +2119,18 @@ fn build_custom_pipeline(
                 // drawn later sorts against the surface rather than through it.
                 blend: Some(if transparent || screen_space {
                     wgpu::BlendState::ALPHA_BLENDING
+                } else if coverage {
+                    // The alpha went to coverage; what is stored is opaque —
+                    // the blend constant, set white where these draw. (Only
+                    // then: blending costs a tiled GPU even when it is moot.)
+                    wgpu::BlendState {
+                        color: wgpu::BlendComponent::REPLACE,
+                        alpha: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::Constant,
+                            dst_factor: wgpu::BlendFactor::Zero,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                    }
                 } else {
                     wgpu::BlendState::REPLACE
                 }),
@@ -2076,15 +2155,31 @@ fn build_custom_pipeline(
             screen_space || !transparent,
             wgpu::CompareFunction::LessEqual,
         )),
-        multisample: wgpu::MultisampleState::default(),
+        multisample: wgpu::MultisampleState {
+            count: samples,
+            alpha_to_coverage_enabled: coverage,
+            ..Default::default()
+        },
         multiview_mask: None,
         cache: None,
     }))
 }
 
+/// Whether a fragment shader may write `@builtin(sample_mask)` without being
+/// shaded once per sample. Natively (naga → MSL, SPIR-V, HLSL) it is just an
+/// output: a fur shader under 4× MSAA cost 1.4× its single-sampled self.
+/// Safari's WebGPU shades such a shader per sample — a heavy fragment ran at
+/// 17 fps against 59 without the output — so in the browser a shader's
+/// samples go out as alpha-to-coverage instead (the share of samples
+/// covered, which the hardware places: grainier, still well ahead of one
+/// sample).
+const fn sample_mask_is_cheap() -> bool {
+    !cfg!(target_arch = "wasm32")
+}
+
 /// How many lines of built-in preamble sit above a custom shader's own source.
 pub(crate) fn custom_preamble_lines() -> usize {
-    custom_shader_module_source("", None, true).lines().count()
+    custom_shader_module_source("", None, true, false, 1).lines().count()
 }
 
 /// Pack a flat `f32` array into an `Rgba32Float` texture, four values a texel.
@@ -3838,6 +3933,18 @@ impl Renderer {
             );
             None
         };
+        let custom_ss_pipeline_layout = custom_pipeline_layout.as_ref().map(|_| {
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("threers custom (screen-space shader material) layout"),
+                bind_group_layouts: &[
+                    Some(&frame_bgl),
+                    Some(&custom_mesh_bgl),
+                    Some(&custom_tex_bgl),
+                    Some(&env_bgl_glass),
+                ],
+                immediate_size: 0,
+            })
+        });
 
         let vertex_buffers = [wgpu::VertexBufferLayout {
             array_stride: GpuMesh::VERTEX_STRIDE as wgpu::BufferAddress,
@@ -4946,11 +5053,12 @@ impl Renderer {
         );
         let skinned: MeshKind = (&pipeline_layout_skinned, "vs_skinned", &vertex_buffers_skinned);
         let instanced: MeshKind = (&pipeline_layout, "vs_instanced", &vertex_buffers_instanced);
-        let make_mesh_pipeline = |(layout, entry, buffers): MeshKind,
-                                  fmt: wgpu::TextureFormat,
-                                  topology: wgpu::PrimitiveTopology,
-                                  cull: Option<wgpu::Face>,
-                                  label: &str| {
+        let make_mesh_pipeline_samples = |(layout, entry, buffers): MeshKind,
+                                          fmt: wgpu::TextureFormat,
+                                          topology: wgpu::PrimitiveTopology,
+                                          cull: Option<wgpu::Face>,
+                                          samples: u32,
+                                          label: &str| {
             record(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(layout),
@@ -4972,14 +5080,42 @@ impl Renderer {
                 }),
                 primitive: primitive(topology, cull),
                 depth_stencil: Some(depth_stencil(true, wgpu::CompareFunction::LessEqual)),
-                multisample: wgpu::MultisampleState::default(),
+                multisample: wgpu::MultisampleState {
+                    count: samples,
+                    ..Default::default()
+                },
                 multiview_mask: None,
                 cache: None,
             })
         };
+        let make_mesh_pipeline = |kind: MeshKind,
+                                  fmt: wgpu::TextureFormat,
+                                  topology: wgpu::PrimitiveTopology,
+                                  cull: Option<wgpu::Face>,
+                                  label: &str| {
+            make_mesh_pipeline_samples(kind, fmt, topology, cull, 1, label)
+        };
         let tris = wgpu::PrimitiveTopology::TriangleList;
         let lines = wgpu::PrimitiveTopology::LineList;
         let back = Some(wgpu::Face::Back);
+        // Multisampled, so a frame holding a skinned or instanced mesh keeps
+        // its MSAA.
+        let pipeline_skinned_msaa = make_mesh_pipeline_samples(
+            skinned,
+            color_format,
+            tris,
+            back,
+            MSAA_SAMPLES,
+            "threers skinned msaa pipeline",
+        );
+        let pipeline_instanced_msaa = make_mesh_pipeline_samples(
+            instanced,
+            color_format,
+            tris,
+            back,
+            MSAA_SAMPLES,
+            "threers instanced msaa pipeline",
+        );
         let pipeline_skinned =
             make_mesh_pipeline(skinned, color_format, tris, back, "threers skinned pipeline");
         let pipeline_skinned_f16 =
@@ -6228,6 +6364,8 @@ impl Renderer {
             pipeline_point_alpha,
             pipeline_sprite,
             pipeline_tri_msaa,
+            pipeline_skinned_msaa,
+            pipeline_instanced_msaa,
             pipeline_tri_alpha_msaa,
             pipeline_tri_nocull_msaa,
             pipeline_tri_sky_msaa,
@@ -6318,8 +6456,10 @@ impl Renderer {
             encoded_copy: None,
             custom_mesh_bgl,
             custom_pipeline_layout,
+            custom_ss_pipeline_layout,
             custom_pipelines: HashMap::new(),
             custom_encoded_pipelines: HashMap::new(),
+            custom_msaa_pipelines: HashMap::new(),
             custom_failed: std::collections::HashSet::new(),
             depth_view,
             depth_texture,
@@ -8559,6 +8699,8 @@ fn fs_out(@builtin(position) p : vec4<f32>) -> @location(0) vec4<f32> {
             /// the custom columns at `custom_buf` in slot 2.
             instanced: bool,
             custom_buf: usize,
+            /// three.js `alphaToCoverage`.
+            alpha_to_coverage: bool,
         }
         let mut shader_data: Vec<ShaderDrawData> = Vec::new();
         let mut instance_buffers: Vec<wgpu::Buffer> = Vec::new();
@@ -9017,7 +9159,8 @@ fn fs_out(@builtin(position) p : vec4<f32>) -> @location(0) vec4<f32> {
                         // them, and a custom one calls `morph_position` /
                         // `morph_normal` / `morph_color` itself. Its group 2
                         // then carries the geometry's morph texture.
-                        let hash = custom_shader_hash(&sm.fragment, sm.vertex.as_deref());
+                        let hash = custom_shader_hash(&sm.fragment, sm.vertex.as_deref())
+                            ^ if sm.alpha_to_coverage { COVERAGE_CUSTOM_SALT } else { 0 };
                         let transparent = sm.transparent || sm.opacity < 1.0;
                         d.topology = Topology::Custom(
                             hash,
@@ -9042,6 +9185,7 @@ fn fs_out(@builtin(position) p : vec4<f32>) -> @location(0) vec4<f32> {
                             volumes: sm.volumes.clone(),
                             instanced: false,
                             custom_buf: 0,
+                            alpha_to_coverage: sm.alpha_to_coverage,
                         });
                     }
                     // Route transparent PhysicalMaterials to single-layer glass
@@ -9315,7 +9459,8 @@ fn fs_out(@builtin(position) p : vec4<f32>) -> @location(0) vec4<f32> {
                         // entry with the same material on a plain mesh.
                         if let (Material::Shader(sm), Some(custom_buf)) = (&**material, custom_idx) {
                             let hash = custom_shader_hash(&sm.fragment, sm.vertex.as_deref())
-                                ^ INSTANCED_CUSTOM_SALT;
+                                ^ INSTANCED_CUSTOM_SALT
+                                ^ if sm.alpha_to_coverage { COVERAGE_CUSTOM_SALT } else { 0 };
                             let transparent = sm.transparent || sm.opacity < 1.0;
                             d.topology = Topology::Custom(hash, transparent, sm.screen_space, sm.side);
                             d.shader_idx = shader_data.len();
@@ -9329,6 +9474,7 @@ fn fs_out(@builtin(position) p : vec4<f32>) -> @location(0) vec4<f32> {
                             volumes: sm.volumes.clone(),
                                 instanced: true,
                                 custom_buf,
+                                alpha_to_coverage: sm.alpha_to_coverage,
                             });
                         }
                         draws.push(d);
@@ -9994,6 +10140,10 @@ fn fs_out(@builtin(position) p : vec4<f32>) -> @location(0) vec4<f32> {
                     | Topology::GlassDepth
                     | Topology::GlassTint
                     | Topology::GlassColor
+                    | Topology::Skinned
+                    | Topology::Instanced
+                    // An opaque shader material (see `custom_msaa_pipelines`).
+                    | Topology::Custom(_, false, false, _)
             )
         };
         // Multisampling in a pane with a partial clear: the pane is drawn into
@@ -10224,16 +10374,24 @@ fn fs_out(@builtin(position) p : vec4<f32>) -> @location(0) vec4<f32> {
             }
             self.per_mesh[i].2 = self.variant_bg_cache[&key].clone();
         }
-        // A morphed shader material's group 2: the shared custom one with
-        // the geometry's morph texture in place of the empty default.
+        // A shader material's group 2 when its geometry is morphed or has
+        // extra uv sets: the shared custom one with the geometry's morph
+        // texture and uv sets in place of the empty defaults. (Its `morph.w`
+        // bit 32 is set whenever the uv sets exist, so the shared group's
+        // empty texture would be read as zeros.)
         let custom_morph_bgs: Vec<Option<wgpu::BindGroup>> = draws
             .iter()
             .map(|d| {
-                if !matches!(d.topology, Topology::Custom(..)) || d.morph_tex.0 == 0 {
+                let uv = self.uv_cache.get(&d.key).map(|u| &u.view);
+                if !matches!(d.topology, Topology::Custom(..)) || (d.morph_tex.0 == 0 && uv.is_none()) {
                     return None;
                 }
-                let view = &self.morph_cache.get(&(d.morph_tex.0 as *const BufferGeometry))?.view;
-                let uv = self.uv_cache.get(&d.key).map_or(&self.default_uv_sets.1, |u| &u.view);
+                let view = if d.morph_tex.0 == 0 {
+                    &self.default_morph.1
+                } else {
+                    &self.morph_cache.get(&(d.morph_tex.0 as *const BufferGeometry))?.view
+                };
+                let uv = uv.unwrap_or(&self.default_uv_sets.1);
                 Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("threers custom morph tex bg"),
                     layout: &self.custom_tex_bgl,
@@ -10575,7 +10733,12 @@ fn fs_out(@builtin(position) p : vec4<f32>) -> @location(0) vec4<f32> {
             if let Topology::Custom(hash, transparent, screen_space, side) = d.topology {
                 let sd = &shader_data[d.shader_idx];
                 let key = (hash, linear_framebuffer, transparent, screen_space, side);
-                let Some(custom_layout) = self.custom_pipeline_layout.as_ref() else {
+                let layout = if screen_space {
+                    self.custom_ss_pipeline_layout.as_ref()
+                } else {
+                    self.custom_pipeline_layout.as_ref()
+                };
+                let Some(custom_layout) = layout else {
                     // No layout on this device — skip the object rather than
                     // submit a draw that cannot validate.
                     continue;
@@ -10599,6 +10762,8 @@ fn fs_out(@builtin(position) p : vec4<f32>) -> @location(0) vec4<f32> {
                         screen_space,
                         side,
                         sd.instanced,
+                        1,
+                        sd.alpha_to_coverage,
                         &mut self.state_pipelines,
                     );
                     match pipeline {
@@ -10631,10 +10796,41 @@ fn fs_out(@builtin(position) p : vec4<f32>) -> @location(0) vec4<f32> {
                         screen_space,
                         side,
                         sd.instanced,
+                        1,
+                        sd.alpha_to_coverage,
                         &mut self.state_pipelines,
                     ) {
                         Ok(p) => {
                             self.custom_encoded_pipelines.insert(ekey, p);
+                        }
+                        Err(e) => log::error!("shader material failed to compile:\n{e}"),
+                    }
+                }
+                // The multisampled variant, for a frame drawn under MSAA: an
+                // opaque material only (the blended passes draw single-sampled).
+                let mkey = (hash, transparent, screen_space, side);
+                if self.msaa > 1
+                    && !transparent
+                    && !screen_space
+                    && !linear_framebuffer
+                    && !self.custom_msaa_pipelines.contains_key(&mkey)
+                {
+                    match build_custom_pipeline(
+                        &self.device,
+                        custom_layout,
+                        &sd.fragment,
+                        sd.vertex.as_deref(),
+                        self.color_format,
+                        transparent,
+                        screen_space,
+                        side,
+                        sd.instanced,
+                        MSAA_SAMPLES,
+                        sd.alpha_to_coverage,
+                        &mut self.state_pipelines,
+                    ) {
+                        Ok(p) => {
+                            self.custom_msaa_pipelines.insert(mkey, p);
                         }
                         Err(e) => log::error!("shader material failed to compile:\n{e}"),
                     }
@@ -10841,6 +11037,9 @@ fn fs_out(@builtin(position) p : vec4<f32>) -> @location(0) vec4<f32> {
                 self.viewport_state.fill_rect(&mut pass, main_format, true, r, clear);
             }
             main_plan.apply(&mut pass);
+            // Alpha-to-coverage pipelines store the blend constant as their
+            // alpha: opaque. (The partial clear above sets its own.)
+            pass.set_blend_constant(wgpu::Color::WHITE);
             pass.set_bind_group(0, &self.frame_bind_group, &[]);
             pass.set_bind_group(3, &self.env_bind_group, &[]);
             let mut last_topology: Option<Topology> = None;
@@ -10864,6 +11063,13 @@ fn fs_out(@builtin(position) p : vec4<f32>) -> @location(0) vec4<f32> {
                 // Off-screen. The shadow passes above deliberately did draw it:
                 // a caster the camera cannot see still casts into the view.
                 if !d.in_frustum {
+                    continue;
+                }
+                // Writes neither colour nor depth: nothing to see here (a
+                // shadow-only caster — fur's and hair's). Skipped rather than
+                // drawn for nothing; and on WebGL2 a colour-masked draw left
+                // the whole frame black.
+                if !d.state.color_write && d.state.depth_write == Some(false) {
                     continue;
                 }
                 // OIT + screen-space-refraction surfaces are drawn in dedicated
@@ -10907,6 +11113,14 @@ fn fs_out(@builtin(position) p : vec4<f32>) -> @location(0) vec4<f32> {
                             Topology::GlassDepth => &self.pipeline_glass_depth_msaa,
                             Topology::GlassColor => &self.pipeline_glass_color_msaa,
                             Topology::GlassTint => &self.pipeline_glass_tint_msaa,
+                            Topology::Skinned => &self.pipeline_skinned_msaa,
+                            Topology::Instanced => &self.pipeline_instanced_msaa,
+                            Topology::Custom(h, tr, ss, sd) => {
+                                match self.custom_msaa_pipelines.get(&(h, tr, ss, sd)) {
+                                    Some(p) => p,
+                                    None => continue,
+                                }
+                            }
                             // gated by `use_msaa`; other topologies never occur here
                             _ => &self.pipeline_tri_msaa,
                         }
@@ -13152,7 +13366,7 @@ mod tests {
     /// the user's own shader.
     #[test]
     fn the_custom_preamble_carries_the_documented_helpers() {
-        let module = custom_shader_module_source("@fragment\nfn fs_main() {}\n", None, true);
+        let module = custom_shader_module_source("@fragment\nfn fs_main() {}\n", None, true, false, 1);
         let preamble = module.split("struct ThreersUserData").next().unwrap();
         for name in [
             "fn framebuffer_encode",
