@@ -24,6 +24,8 @@
 //! assert_eq!(ui.rect(rest).height, 780.0);
 //! ```
 
+#[cfg(target_arch = "wasm32")]
+pub mod canvas;
 pub mod code;
 pub mod controls;
 pub mod css;
@@ -34,7 +36,7 @@ mod text_area;
 mod text_field;
 mod tree;
 
-pub use layout::{FixedWidthText, TextMeasure};
+pub use layout::{layout_unit, FixedWidthText, TextMeasure};
 pub use paint::{circle_path, parse_circle, OverlayPainter, Painter, TextStyle};
 pub use style::{
     AlignItems, BoxSizing, Display, Edges, FlexDirection, FontWeight, JustifyContent, Length, Position, Rgba, Style,

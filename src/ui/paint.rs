@@ -219,6 +219,9 @@ impl Ui {
                         let r = Rect { y: content.y + i as f32 * h, height: h, ..content };
                         painter.text(r, line.trim_end_matches([' ', '\u{200b}']), &style);
                     }
+                } else if let [line] = node.lines.as_slice() {
+                    // An ellipsized (or once-wrapped) run.
+                    painter.text(content, line, &style);
                 } else {
                     painter.text(content, t, &style);
                 }

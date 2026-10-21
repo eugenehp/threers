@@ -67,6 +67,9 @@ pub(crate) struct Node {
 #[derive(Debug, Clone)]
 pub struct Ui {
     pub(crate) nodes: Vec<Node>,
+    /// Whether layout puts boxes on Blink's 1/64 px grid (see
+    /// [`Ui::set_layout_units`]).
+    pub(crate) layout_units: bool,
 }
 
 impl Default for Ui {
@@ -89,7 +92,21 @@ impl Ui {
                 scrolled: 0.0,
                 lines: vec![],
             }],
+            layout_units: false,
         }
+    }
+
+    /// Lays boxes out on Blink's `LayoutUnit` grid (1/64 px), as a page's
+    /// are, where float error is all that keeps one off it: a position or
+    /// size within 1/512 px of the grid is put on it. Off by default.
+    ///
+    /// Where text lands decides how it rasterizes: Skia puts glyphs on
+    /// quarter pixels, so a run laid out at 976.6199 px is drawn a quarter
+    /// pixel left of the same run at Blink's 976.625. A UI meant to match a
+    /// page pixel for pixel turns this on (and puts its own geometry on the
+    /// grid with [`super::layout_unit`]).
+    pub fn set_layout_units(&mut self, on: bool) {
+        self.layout_units = on;
     }
 
     pub fn root(&self) -> NodeId {

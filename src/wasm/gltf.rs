@@ -99,9 +99,15 @@ impl WebGltfParser {
     pub fn new(data: &[u8]) -> Result<WebGltfParser, JsError> {
         let doc = crate::loaders::gltf_parser::Document::from_bytes(data).map_err(err)?;
         // three.js warns about an unknown required extension and goes on.
-        let options = GltfOptions { refuse_unknown_required: false, ..Default::default() };
+        let options = GltfOptions {
+            refuse_unknown_required: false,
+            ..Default::default()
+        };
         let parser = GltfParser::new(doc, options).map_err(err)?;
-        Ok(WebGltfParser { parser, delivered: Delivered::default() })
+        Ok(WebGltfParser {
+            parser,
+            delivered: Delivered::default(),
+        })
     }
 
     /// The JSON text (a GLB's JSON chunk), for `parser.json`.
@@ -160,7 +166,11 @@ impl WebGltfParser {
 
     /// As `pendingImages`, for a lazily loaded dependency.
     #[wasm_bindgen(js_name = pendingImagesFor)]
-    pub fn pending_images_for(&mut self, kind: &str, index: usize) -> Result<js_sys::Array, JsError> {
+    pub fn pending_images_for(
+        &mut self,
+        kind: &str,
+        index: usize,
+    ) -> Result<js_sys::Array, JsError> {
         let reqs = self.parser.pending_images_for(kind, index).map_err(err)?;
         Ok(requests_js(&reqs))
     }
@@ -192,13 +202,21 @@ impl WebGltfParser {
         self.parser.parse(&mut scene.inner.arena).map_err(err)?;
         let out = self.delta(scene);
         let idx = |v: &[Option<usize>]| -> JsValue {
-            numbers(&v.iter().map(|x| x.map(|i| i as f64).unwrap_or(-1.0)).collect::<Vec<_>>())
+            numbers(
+                &v.iter()
+                    .map(|x| x.map(|i| i as f64).unwrap_or(-1.0))
+                    .collect::<Vec<_>>(),
+            )
         };
         js_set(&out, "scenes", &idx(&self.parser.scenes));
         js_set(
             &out,
             "scene",
-            &self.parser.default_scene().map(|s| JsValue::from(s as f64)).unwrap_or(JsValue::UNDEFINED),
+            &self
+                .parser
+                .default_scene()
+                .map(|s| JsValue::from(s as f64))
+                .unwrap_or(JsValue::UNDEFINED),
         );
         js_set(&out, "animations", &idx(&self.parser.animations));
         js_set(&out, "cameras", &idx(&self.parser.cameras));
@@ -210,8 +228,16 @@ impl WebGltfParser {
     /// `camera`, `skin`, `animation`, `light`) number `index`: what was made
     /// (as from `parse`) and `result`, the index of the thing in its list
     /// (-1 for a `null` texture or camera).
-    pub fn load(&mut self, scene: &mut WebScene, kind: &str, index: usize) -> Result<JsValue, JsError> {
-        let r = self.parser.load(&mut scene.inner.arena, kind, index).map_err(err)?;
+    pub fn load(
+        &mut self,
+        scene: &mut WebScene,
+        kind: &str,
+        index: usize,
+    ) -> Result<JsValue, JsError> {
+        let r = self
+            .parser
+            .load(&mut scene.inner.arena, kind, index)
+            .map_err(err)?;
         let out = self.delta(scene);
         js_set(&out, "result", &r.map(|i| i as f64).unwrap_or(-1.0).into());
         Ok(out.into())
@@ -271,7 +297,11 @@ fn param_js(p: &Param) -> JsValue {
         Param::Bool(b) => (*b).into(),
         Param::Color(c) => {
             let o = js_sys::Object::new();
-            js_set(&o, "color", &numbers(&[c[0] as f64, c[1] as f64, c[2] as f64]));
+            js_set(
+                &o,
+                "color",
+                &numbers(&[c[0] as f64, c[1] as f64, c[2] as f64]),
+            );
             o.into()
         }
         Param::Vec2(v) => {
@@ -298,7 +328,9 @@ impl WebGltfParser {
         let textures = js_sys::Array::new();
         for i in d.textures..p.textures.len() {
             let srgb = p.textures[i].srgb;
-            let w = WebTexture { inner: p.textures[i].rust(srgb) };
+            let w = WebTexture {
+                inner: p.textures[i].rust(srgb),
+            };
             let t = &p.textures[i];
             let o = js_sys::Object::new();
             let (width, height) = t.image_data.size();
@@ -312,8 +344,16 @@ impl WebGltfParser {
             js_set(&o, "wrapS", &t.wrap_s.into());
             js_set(&o, "wrapT", &t.wrap_t.into());
             js_set(&o, "channel", &t.channel.into());
-            js_set(&o, "offset", &numbers(&[t.offset[0] as f64, t.offset[1] as f64]));
-            js_set(&o, "repeat", &numbers(&[t.repeat[0] as f64, t.repeat[1] as f64]));
+            js_set(
+                &o,
+                "offset",
+                &numbers(&[t.offset[0] as f64, t.offset[1] as f64]),
+            );
+            js_set(
+                &o,
+                "repeat",
+                &numbers(&[t.repeat[0] as f64, t.repeat[1] as f64]),
+            );
             js_set(&o, "rotation", &(t.rotation as f64).into());
             js_set(&o, "srgb", &t.srgb.into());
             js_set(&o, "image", &(t.image as f64).into());
@@ -331,10 +371,16 @@ impl WebGltfParser {
             let o = js_sys::Object::new();
             js_set(&o, "index", &(i as f64).into());
             js_set(&o, "w", &WebGeometry { inner: arc.clone() }.into());
-            js_set(&o, "wBuffer", &WebBufferGeometry { inner: arc.clone() }.into());
+            js_set(
+                &o,
+                "wBuffer",
+                &WebBufferGeometry { inner: arc.clone() }.into(),
+            );
             let attrs = js_sys::Array::new();
             for name in &g.attribute_order {
-                let Some(a) = g.get().get_attribute(name) else { continue };
+                let Some(a) = g.get().get_attribute(name) else {
+                    continue;
+                };
                 let e = js_sys::Object::new();
                 js_set(&e, "name", &JsValue::from_str(name));
                 js_set(&e, "itemSize", &(a.item_size as f64).into());
@@ -348,7 +394,13 @@ impl WebGltfParser {
             let morph = js_sys::Array::new();
             for name in &g.morph_order {
                 let list = js_sys::Array::new();
-                for a in g.get().morph_attributes.get(name).map(|l| l.as_slice()).unwrap_or(&[]) {
+                for a in g
+                    .get()
+                    .morph_attributes
+                    .get(name)
+                    .map(|l| l.as_slice())
+                    .unwrap_or(&[])
+                {
                     let e = js_sys::Object::new();
                     js_set(&e, "itemSize", &(a.item_size as f64).into());
                     js_set(&e, "array", &f32s(&a.array));
@@ -360,7 +412,11 @@ impl WebGltfParser {
                 morph.push(&e);
             }
             js_set(&o, "morphAttributes", &morph);
-            js_set(&o, "morphTargetsRelative", &g.get().morph_targets_relative.into());
+            js_set(
+                &o,
+                "morphTargetsRelative",
+                &g.get().morph_targets_relative.into(),
+            );
             js_set(&o, "userData", &json_js(&g.user_data));
             if let (Some(b), Some(s)) = (g.get().bounding_box, g.get().bounding_sphere) {
                 let v = |x: crate::Vector3| [x.x as f64, x.y as f64, x.z as f64];
@@ -389,7 +445,14 @@ impl WebGltfParser {
             }
             js_set(&o, "params", &params);
             if let Some(rust) = &m.rust {
-                js_set(&o, "w", &WebMaterial { inner: rust.clone() }.into());
+                js_set(
+                    &o,
+                    "w",
+                    &WebMaterial {
+                        inner: rust.clone(),
+                    }
+                    .into(),
+                );
             }
             materials.push(&o);
         }
@@ -401,7 +464,11 @@ impl WebGltfParser {
             let s = &p.skeletons[i];
             let o = js_sys::Object::new();
             js_set(&o, "index", &(i as f64).into());
-            js_set(&o, "bones", &numbers(&s.bones.iter().map(|b| *b as f64).collect::<Vec<_>>()));
+            js_set(
+                &o,
+                "bones",
+                &numbers(&s.bones.iter().map(|b| *b as f64).collect::<Vec<_>>()),
+            );
             let flat: Vec<f32> = s.inverses.iter().flat_map(|m| m.iter().copied()).collect();
             js_set(&o, "inverses", &f32s(&flat));
             skeletons.push(&o);
@@ -421,8 +488,16 @@ impl WebGltfParser {
             js_set(&o, "association", &assoc_js(ob.association));
             if let Some(node) = scene.inner.arena.get(ob.id) {
                 let (pos, q, s) = (node.position, node.quaternion, node.scale);
-                js_set(&o, "position", &numbers(&[pos.x as f64, pos.y as f64, pos.z as f64]));
-                js_set(&o, "quaternion", &numbers(&[q.x as f64, q.y as f64, q.z as f64, q.w as f64]));
+                js_set(
+                    &o,
+                    "position",
+                    &numbers(&[pos.x as f64, pos.y as f64, pos.z as f64]),
+                );
+                js_set(
+                    &o,
+                    "quaternion",
+                    &numbers(&[q.x as f64, q.y as f64, q.z as f64, q.w as f64]),
+                );
                 js_set(&o, "scale", &numbers(&[s.x as f64, s.y as f64, s.z as f64]));
                 if let crate::core::ObjectKind::Light(l) = &node.kind {
                     let inner = match l {
@@ -446,7 +521,11 @@ impl WebGltfParser {
                 js_set(&o, "skeleton", &(s as f64).into());
             }
             if let Some(inf) = &ob.morph_influences {
-                js_set(&o, "morphTargetInfluences", &numbers(&inf.iter().map(|x| *x as f64).collect::<Vec<_>>()));
+                js_set(
+                    &o,
+                    "morphTargetInfluences",
+                    &numbers(&inf.iter().map(|x| *x as f64).collect::<Vec<_>>()),
+                );
                 let dict = js_sys::Object::new();
                 for (k, v) in &ob.morph_dictionary {
                     js_set(&dict, k, &(*v as f64).into());
@@ -463,8 +542,20 @@ impl WebGltfParser {
             }
             if let Some(c) = ob.camera {
                 let v = match c {
-                    CameraParams::Perspective { fov, aspect, near, far } => vec![fov, aspect, near, far],
-                    CameraParams::Orthographic { left, right, top, bottom, near, far } => {
+                    CameraParams::Perspective {
+                        fov,
+                        aspect,
+                        near,
+                        far,
+                    } => vec![fov, aspect, near, far],
+                    CameraParams::Orthographic {
+                        left,
+                        right,
+                        top,
+                        bottom,
+                        near,
+                        far,
+                    } => {
                         vec![left, right, top, bottom, near, far]
                     }
                 };
@@ -472,7 +563,11 @@ impl WebGltfParser {
             }
             if let Some(l) = ob.light {
                 let e = js_sys::Object::new();
-                js_set(&e, "color", &numbers(&[l.color[0] as f64, l.color[1] as f64, l.color[2] as f64]));
+                js_set(
+                    &e,
+                    "color",
+                    &numbers(&[l.color[0] as f64, l.color[1] as f64, l.color[2] as f64]),
+                );
                 js_set(&e, "intensity", &(l.intensity as f64).into());
                 js_set(&e, "distance", &(l.distance as f64).into());
                 js_set(&e, "decay", &(l.decay as f64).into());
@@ -495,7 +590,13 @@ impl WebGltfParser {
                 .inner
                 .arena
                 .get(ob.id)
-                .map(|n| n.children.iter().filter_map(|c| p.object_index(*c)).map(|i| i as f64).collect::<Vec<_>>())
+                .map(|n| {
+                    n.children
+                        .iter()
+                        .filter_map(|c| p.object_index(*c))
+                        .map(|i| i as f64)
+                        .collect::<Vec<_>>()
+                })
                 .unwrap_or_default();
             children.push(&numbers(&kids));
         }
@@ -573,7 +674,11 @@ impl WebScene {
     /// another), so a node the glTF loader built stays the node that object
     /// is drawn by.
     #[wasm_bindgen(js_name = adoptNode)]
-    pub fn adopt_node(&mut self, from: &mut WebScene, node: &WebObjectHandle) -> Option<WebObjectHandle> {
+    pub fn adopt_node(
+        &mut self,
+        from: &mut WebScene,
+        node: &WebObjectHandle,
+    ) -> Option<WebObjectHandle> {
         if node.id == from.inner.root {
             return None;
         }
@@ -588,6 +693,8 @@ impl WebScene {
         }
         obj.parent = None;
         obj.children.clear();
-        Some(WebObjectHandle { id: self.inner.arena.insert(obj) })
+        Some(WebObjectHandle {
+            id: self.inner.arena.insert(obj),
+        })
     }
 }

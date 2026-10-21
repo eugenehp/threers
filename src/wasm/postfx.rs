@@ -11,7 +11,7 @@
 
 use super::*;
 use crate::postprocessing as pp;
-use pp::{Pass, ParamKind, ParamValue};
+use pp::{ParamKind, ParamValue, Pass};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -47,7 +47,9 @@ impl Pass for SharedPass {
         delta: f32,
         mask_active: bool,
     ) {
-        self.0.borrow_mut().render(ctx, write, read, delta, mask_active)
+        self.0
+            .borrow_mut()
+            .render(ctx, write, read, delta, mask_active)
     }
     fn params(&self) -> Vec<pp::ParamInfo> {
         self.0.borrow().params()
@@ -125,7 +127,10 @@ fn from_js(v: &JsValue) -> Option<ParamValue> {
     if let Some(x) = v.as_f64() {
         return Some(ParamValue::Float(x as f32));
     }
-    if js_sys::Array::is_array(v) || v.is_instance_of::<js_sys::Float32Array>() || v.is_instance_of::<js_sys::Float64Array>() {
+    if js_sys::Array::is_array(v)
+        || v.is_instance_of::<js_sys::Float32Array>()
+        || v.is_instance_of::<js_sys::Float64Array>()
+    {
         let a = js_sys::Array::from(v);
         let out: Vec<f32> = a.iter().map(|e| e.as_f64().unwrap_or(0.0) as f32).collect();
         return Some(ParamValue::Floats(out));
@@ -197,7 +202,8 @@ impl WebPass {
 
     #[wasm_bindgen(js_name = clearPass)]
     pub fn clear_pass(r: f32, g: f32, b: f32, has_color: bool, alpha: f32) -> WebPass {
-        let c = (has_color && (r != 0.0 || g != 0.0 || b != 0.0)).then(|| crate::Color::new(r, g, b));
+        let c =
+            (has_color && (r != 0.0 || g != 0.0 || b != 0.0)).then(|| crate::Color::new(r, g, b));
         Self::of(pp::ClearPass::new(c, alpha))
     }
 
@@ -217,8 +223,16 @@ impl WebPass {
     }
 
     #[wasm_bindgen(js_name = unrealBloomPass)]
-    pub fn unreal_bloom_pass(width: u32, height: u32, strength: f32, radius: f32, threshold: f32) -> WebPass {
-        Self::of(pp::UnrealBloomPass::new(width, height, strength, radius, threshold))
+    pub fn unreal_bloom_pass(
+        width: u32,
+        height: u32,
+        strength: f32,
+        radius: f32,
+        threshold: f32,
+    ) -> WebPass {
+        Self::of(pp::UnrealBloomPass::new(
+            width, height, strength, radius, threshold,
+        ))
     }
 
     #[wasm_bindgen(js_name = bloomPass)]
@@ -233,7 +247,11 @@ impl WebPass {
 
     #[wasm_bindgen(js_name = dotScreenPass)]
     pub fn dot_screen_pass(cx: f32, cy: f32, angle: f32, scale: f32) -> WebPass {
-        Self::of(pp::DotScreenPass::new(Some([cx, cy]), Some(angle), Some(scale)))
+        Self::of(pp::DotScreenPass::new(
+            Some([cx, cy]),
+            Some(angle),
+            Some(scale),
+        ))
     }
 
     #[wasm_bindgen(js_name = halftonePass)]
@@ -326,7 +344,12 @@ impl WebPass {
     }
     #[wasm_bindgen(setter)]
     pub fn set_enabled(&self, v: bool) {
-        self.with(|p| p.set_state(pp::PassState { enabled: v, ..p.state() }));
+        self.with(|p| {
+            p.set_state(pp::PassState {
+                enabled: v,
+                ..p.state()
+            })
+        });
     }
     #[wasm_bindgen(getter, js_name = needsSwap)]
     pub fn needs_swap(&self) -> bool {
@@ -334,7 +357,12 @@ impl WebPass {
     }
     #[wasm_bindgen(setter, js_name = needsSwap)]
     pub fn set_needs_swap(&self, v: bool) {
-        self.with(|p| p.set_state(pp::PassState { needs_swap: v, ..p.state() }));
+        self.with(|p| {
+            p.set_state(pp::PassState {
+                needs_swap: v,
+                ..p.state()
+            })
+        });
     }
     #[wasm_bindgen(getter)]
     pub fn clear(&self) -> bool {
@@ -342,7 +370,12 @@ impl WebPass {
     }
     #[wasm_bindgen(setter)]
     pub fn set_clear(&self, v: bool) {
-        self.with(|p| p.set_state(pp::PassState { clear: v, ..p.state() }));
+        self.with(|p| {
+            p.set_state(pp::PassState {
+                clear: v,
+                ..p.state()
+            })
+        });
     }
     #[wasm_bindgen(getter, js_name = renderToScreen)]
     pub fn render_to_screen(&self) -> bool {
@@ -350,7 +383,12 @@ impl WebPass {
     }
     #[wasm_bindgen(setter, js_name = renderToScreen)]
     pub fn set_render_to_screen(&self, v: bool) {
-        self.with(|p| p.set_state(pp::PassState { render_to_screen: v, ..p.state() }));
+        self.with(|p| {
+            p.set_state(pp::PassState {
+                render_to_screen: v,
+                ..p.state()
+            })
+        });
     }
 
     #[wasm_bindgen(js_name = setSize)]
@@ -423,12 +461,14 @@ impl WebPass {
     #[wasm_bindgen(js_name = setOverrideMaterial)]
     pub fn set_override_material(&self, material: &WebMaterial) -> bool {
         let m = Some(material.inner.clone());
-        self.downcast::<pp::RenderPass, _>(|p| p.override_material = m).is_some()
+        self.downcast::<pp::RenderPass, _>(|p| p.override_material = m)
+            .is_some()
     }
 
     #[wasm_bindgen(js_name = clearOverrideMaterial)]
     pub fn clear_override_material(&self) -> bool {
-        self.downcast::<pp::RenderPass, _>(|p| p.override_material = None).is_some()
+        self.downcast::<pp::RenderPass, _>(|p| p.override_material = None)
+            .is_some()
     }
 
     /// The `(scene, camera)` references the pass draws with, in order.
@@ -448,8 +488,13 @@ impl WebPass {
     /// order, or none.
     #[wasm_bindgen(js_name = setLut)]
     pub fn set_lut(&self, size: u32, rgba: Option<Vec<f32>>) -> bool {
-        let texels = rgba.map(|d| d.chunks_exact(4).map(|c| [c[0], c[1], c[2], c[3]]).collect());
-        self.downcast::<pp::LutPass, _>(|p| p.set_lut(size, texels)).is_some()
+        let texels = rgba.map(|d| {
+            d.chunks_exact(4)
+                .map(|c| [c[0], c[1], c[2], c[3]])
+                .collect()
+        });
+        self.downcast::<pp::LutPass, _>(|p| p.set_lut(size, texels))
+            .is_some()
     }
 
     /// GlitchPass's displacement heightmap.
@@ -559,14 +604,16 @@ impl WebEffectComposer {
     #[wasm_bindgen(js_name = addPass)]
     pub fn add_pass(&mut self, pass: &WebPass) {
         self.passes.push(pass.inner.clone());
-        self.inner.add_boxed(Box::new(SharedPass(pass.inner.clone())));
+        self.inner
+            .add_boxed(Box::new(SharedPass(pass.inner.clone())));
     }
 
     #[wasm_bindgen(js_name = insertPass)]
     pub fn insert_pass(&mut self, pass: &WebPass, index: u32) {
         let i = (index as usize).min(self.passes.len());
         self.passes.insert(i, pass.inner.clone());
-        self.inner.insert_boxed(Box::new(SharedPass(pass.inner.clone())), i);
+        self.inner
+            .insert_boxed(Box::new(SharedPass(pass.inner.clone())), i);
     }
 
     #[wasm_bindgen(js_name = removePass)]
@@ -579,7 +626,11 @@ impl WebEffectComposer {
 
     #[wasm_bindgen(js_name = passNames)]
     pub fn pass_names(&self) -> Vec<String> {
-        self.inner.pass_names().into_iter().map(String::from).collect()
+        self.inner
+            .pass_names()
+            .into_iter()
+            .map(String::from)
+            .collect()
     }
 
     #[wasm_bindgen(js_name = setSize)]
@@ -651,7 +702,12 @@ impl WebEffectComposer {
         c3: &WebCamera,
         delta: Option<f64>,
     ) {
-        let cams = [camera_dyn(c0), camera_dyn(c1), camera_dyn(c2), camera_dyn(c3)];
+        let cams = [
+            camera_dyn(c0),
+            camera_dyn(c1),
+            camera_dyn(c2),
+            camera_dyn(c3),
+        ];
         self.run(renderer, &mut [&mut scene.inner], &cams, delta);
     }
 
@@ -669,8 +725,18 @@ impl WebEffectComposer {
         c3: &WebCamera,
         delta: Option<f64>,
     ) {
-        let cams = [camera_dyn(c0), camera_dyn(c1), camera_dyn(c2), camera_dyn(c3)];
-        self.run(renderer, &mut [&mut scene0.inner, &mut scene1.inner], &cams, delta);
+        let cams = [
+            camera_dyn(c0),
+            camera_dyn(c1),
+            camera_dyn(c2),
+            camera_dyn(c3),
+        ];
+        self.run(
+            renderer,
+            &mut [&mut scene0.inner, &mut scene1.inner],
+            &cams,
+            delta,
+        );
     }
 }
 
@@ -709,8 +775,13 @@ impl WebEffectComposer {
         }
         let delta = delta.map(|d| d as f32);
         if !self.inner.render_to_screen {
-            self.inner
-                .render_frame(&mut renderer.renderer, scenes, cameras, &pp::Screen::None, delta);
+            self.inner.render_frame(
+                &mut renderer.renderer,
+                scenes,
+                cameras,
+                &pp::Screen::None,
+                delta,
+            );
             return;
         }
         // On WebGL2 the canvas is drawn through the persistent back buffer —
@@ -727,9 +798,12 @@ impl WebEffectComposer {
             }
         }
         let frame = match renderer.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
+            wgpu::CurrentSurfaceTexture::Success(f)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
             _ => {
-                renderer.surface.configure(&renderer.device, &renderer.config);
+                renderer
+                    .surface
+                    .configure(&renderer.device, &renderer.config);
                 match renderer.surface.get_current_texture() {
                     wgpu::CurrentSurfaceTexture::Success(f)
                     | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,

@@ -317,6 +317,7 @@ pub fn apply(s: &mut Style, name: &str, value: &str) {
                 }
             }
             "font-style" => s.italic = v == "italic" || v == "oblique",
+            "text-overflow" => s.ellipsis = v == "ellipsis",
             "white-space" => s.wrap = v != "nowrap" && v != "pre",
             "word-wrap" | "overflow-wrap" => s.wrap |= v == "break-word" || v == "anywhere",
             "writing-mode" => s.vertical = v.starts_with("vertical"),

@@ -22,7 +22,7 @@ resolver = "2"
 
 [package]
 name = "threers"
-version = "0.0.6"
+version = "0.0.7"
 edition = "2021"
 # wgpu 30 requires 1.87, and this crate uses `is_multiple_of`, stabilised in the
 # same release. Declared so cargo says so up front rather than letting the build
@@ -253,6 +253,13 @@ features = [
     "Element",
     "HtmlCanvasElement",
     "HtmlElement",
+    # `ui::canvas`: the 2D canvas painter and its DOM text.
+    "CanvasRenderingContext2d",
+    "CanvasGradient",
+    "DomRect",
+    "TextMetrics",
+    "Path2d",
+    "Node",
     "Performance",
     "console",
     # The fluid's browser shell: pointer events give one id per finger, which
@@ -267,6 +274,18 @@ features = [
 [[example]]
 name = "usd_animation"
 required-features = ["usd"]
+
+[[example]]
+name = "usd_stage"
+required-features = ["usd"]
+
+[[example]]
+name = "ui_panel"
+required-features = ["ui"]
+
+[[example]]
+name = "data_charts"
+required-features = ["captions"]
 
 [[example]]
 name = "fluid_render"
@@ -859,4 +878,8 @@ required-features = ["metal"]
 
 [[test]]
 name = "metal_ssao_msaa"
+required-features = ["metal"]
+
+[[test]]
+name = "fur_metal"
 required-features = ["metal"]

@@ -525,7 +525,7 @@ impl Material {
             Material::Sky(_) => Color::WHITE,
             Material::Mirror(m) => m.color,
             Material::Atmosphere(m) => m.color,
-            Material::Shader(_) => Color::WHITE,
+            Material::Shader(m) => m.fallback_color,
         }
     }
 

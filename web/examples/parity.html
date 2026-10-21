@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>one scene, every backend — threers</title>
+    <link rel="preload" href="/web/pkg/threers_bg.wasm" as="fetch" type="application/wasm" crossorigin>
+    <link rel="modulepreload" href="/web/threejs-shim.js">
+    <style>
+        :root { color-scheme: dark; }
+        body { margin: 0; background: #08090d; color: #e6e8ee; font: 14px/1.5 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif; }
+        main { padding: 20px 24px; max-width: 760px; margin: 0 auto; }
+        h1 { font-size: 17px; margin: 0 0 6px; }
+        p { color: #97a0b3; font-size: 13px; }
+        code { color: #cfd6e6; }
+        canvas { width: 640px; height: 400px; display: block; }
+        #status { color: #7d879c; font-size: 12px; }
+    </style>
+</head>
+<body>
+<main>
+    <h1>One scene, every backend</h1>
+    <p>
+        The scene of <code>cargo run --example backend_parity</code>, number for number, through
+        the three.js shim. This page draws it on WebGPU where the browser has it;
+        <a href="?gl=1">?gl=1</a> draws it on WebGL2.
+    </p>
+    <canvas id="c" width="640" height="400"></canvas>
+    <p id="status">loading…</p>
+</main>
+<script type="module">
+import THREE, { initThreers } from '../threejs-shim.js';
+
+const params = new URLSearchParams(location.search);
+// `?gl=1`: WebGL2 even where WebGPU exists.
+if (params.get('gl') === '1' && 'gpu' in navigator) {
+    Object.defineProperty(navigator, 'gpu', { value: undefined, configurable: true });
+}
+const statusEl = document.getElementById('status');
+const beacon = (p) => fetch('/__status?' + new URLSearchParams(p)).catch(() => {});
+window.addEventListener('error', (e) => { statusEl.textContent = e.message; beacon({ error: e.message }); });
+
+await initThreers({ module_or_path: '/web/pkg/threers_bg.wasm' });
+const canvas = document.getElementById('c');
+const renderer = await THREE.WebGLRenderer.create(canvas, { antialias: true });
+renderer.shadowMap.enabled = true;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1;
+
+// Keep in step with `examples/backend_parity.rs`.
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x1b1f27);
+scene.add(new THREE.HemisphereLight(0xbfd4ff, 0x3a2e22, 0.8));
+const sun = new THREE.DirectionalLight(0xfff0dc, 2.4);
+sun.position.set(-3, 6, 4);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left: -5, right: 5, top: 5, bottom: -5, near: 0.5, far: 30 });
+sun.shadow.normalBias = 0.02;
+scene.add(sun);
+const lamp = new THREE.PointLight(0xff9a50, 6, 8, 2);
+lamp.position.set(1.6, 1.2, 1.4);
+scene.add(lamp);
+
+const standard = (color, roughness, metalness) =>
+    new THREE.MeshStandardMaterial({ color, roughness, metalness });
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(12, 12), standard(0x9c958a, 0.85, 0));
+floor.rotation.x = -Math.PI / 2;
+floor.receiveShadow = true;
+scene.add(floor);
+const add = (geometry, material, [x, y, z], turn = 0) => {
+    const m = new THREE.Mesh(geometry, material);
+    m.position.set(x, y, z);
+    m.rotation.y = turn;
+    m.castShadow = true;
+    m.receiveShadow = true;
+    scene.add(m);
+};
+add(new THREE.BoxGeometry(1, 1, 1), standard(0xc8553d, 0.55, 0), [-1.4, 0.5, 0.3], 0.5);
+add(new THREE.SphereGeometry(0.6, 64, 32), standard(0xe8e4dc, 0.12, 0), [0.2, 0.6, -0.4]);
+add(new THREE.TorusKnotGeometry(0.42, 0.14, 160, 24, 2, 3), standard(0x3d8fd0, 0.35, 0), [1.5, 0.75, 0.5]);
+add(new THREE.CylinderGeometry(0.3, 0.3, 1.6, 48, 1, false), standard(0xe0b040, 0.4, 0), [-0.3, 0.8, -1.8]);
+
+const camera = new THREE.PerspectiveCamera(45, 640 / 400, 0.1, 50);
+camera.position.set(3.6, 2.8, 5.4);
+camera.lookAt(0, 0.5, 0);
+
+let frames = 0;
+function frame() {
+    renderer.render(scene, camera);
+    frames += 1;
+    if (frames === 30) {
+        const backend = 'gpu' in navigator && navigator.gpu ? 'webgpu' : 'webgl2';
+        statusEl.textContent = `drawn on ${backend}`;
+        document.body.dataset.ready = backend;
+        beacon({ parity: backend });
+        return;
+    }
+    requestAnimationFrame(frame);
+}
+frame();
+</script>
+</body>
+</html>

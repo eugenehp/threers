@@ -1,6 +1,6 @@
 [package]
 name = "threers-fluid-ios"
-version = "0.0.6"
+version = "0.0.7"
 edition = "2021"
 authors = ["Eugene Hauptmann"]
 description = "The threers volumetric fluid as a C ABI static library, for iOS and iPadOS"

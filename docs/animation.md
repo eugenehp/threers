@@ -49,6 +49,12 @@ camera shots: [`web/examples/camera-shots.html`](../web/examples/camera-shots.ht
 
 ## Rust
 
+![Three skinned tentacles swaying, cross-fading and curled](images/skinned_animation.jpg)
+
+*`cargo run --release --example skinned_animation`: a rig built in code
+(bones as scene nodes, every vertex weighted between two of them), a sway
+clip, then `cross_fade` into a curl over 1.2 s.*
+
 - Core mixer: `threers::animation` — weighted apply, fades, `cross_fade`,
   `TrackTarget::MorphWeight`, glTF `weights` channels.
 - Companion crate: [`threers-animation`](../crates/threers-animation) — Tween,

@@ -53,10 +53,43 @@ struct Ctx<'a> {
     text: &'a mut dyn TextMeasure,
 }
 
+/// A length as a Blink `LayoutUnit` (`LayoutUnit(float)`): on the 1/64 px
+/// grid, truncated toward zero.
+pub fn layout_unit(v: f32) -> f32 {
+    (v * 64.0).trunc() / 64.0
+}
+
+/// A length within float error (1/512 px) of the 1/64 px grid, put on it;
+/// any other left as it is. Blink's lengths are exact `LayoutUnit`s, so one
+/// a hair off the grid here is arithmetic noise (976.62463 for 976.625);
+/// one well off it comes of layout this does not do Blink's way, and
+/// moving it would not make it right.
+fn onto_grid(v: f32) -> f32 {
+    let g = (v * 64.0).round() / 64.0;
+    if (v - g).abs() < 1.0 / 512.0 {
+        g
+    } else {
+        v
+    }
+}
+
 pub(crate) fn layout(ui: &mut Ui, width: f32, height: f32, text: &mut dyn TextMeasure) {
     let root = ui.root();
     let mut ctx = Ctx { ui, text };
     ctx.place(root, Rect { x: 0.0, y: 0.0, width, height });
+}
+
+/// A flex item with its resolved main size.
+struct FlexItem {
+    id: NodeId,
+    base: f32,
+    min: f32,
+    max: f32,
+    main: f32,
+    grow: f32,
+    shrink: f32,
+    margin_main: (f32, f32),
+    margin_cross: (f32, f32),
 }
 
 impl Ctx<'_> {
@@ -99,6 +132,19 @@ impl Ctx<'_> {
         let inner_w = width.map(|w| (w - fx).max(0.0));
         let children = self.in_flow(id);
         let (cw, ch) = match style.display {
+            // A row with a definite width: its items' heights at the widths
+            // flexing gives them (wrapping text grows its line), as CSS
+            // sizes the container's cross axis after its main sizes.
+            Display::Flex if style.flex_direction == FlexDirection::Row && inner_w.is_some() => {
+                let inner = inner_w.unwrap();
+                let items = self.flex_items(id, &style, inner, height_base.unwrap_or(0.0));
+                let mut cross = 0.0f32;
+                for item in &items {
+                    let (_, h) = self.outer_size(item.id, Some(item.main), height_base);
+                    cross = cross.max(h + item.margin_cross.0 + item.margin_cross.1);
+                }
+                (inner, cross)
+            }
             Display::Flex => {
                 let row = style.flex_direction == FlexDirection::Row;
                 let mut main = 0.0f32;
@@ -180,28 +226,46 @@ impl Ctx<'_> {
         if !cur.is_empty() {
             pieces.push(cur);
         }
-        let fits = |this: &mut Self, s: &str| this.text.measure(s.trim_end_matches([' ', '\u{200b}']), style).0 <= width + 1e-3;
+        // A line's width: with layout units, as Blink takes it, between its
+        // ends' offsets in the whole text (`before` is the text on earlier
+        // lines), each rounded up to 1/64 px; "segments" after "Select " is
+        // 57.78125 so, alone 57.796875.
+        let units = self.ui.layout_units;
+        let fits = |this: &mut Self, before: &str, s: &str| {
+            let s = s.trim_end_matches([' ', '\u{200b}']);
+            let w = if units && !before.is_empty() {
+                let up = |v: f32| (v * 64.0).ceil() / 64.0;
+                up(this.text.measure(&format!("{before}{s}"), style).0) - up(this.text.measure(before, style).0)
+            } else {
+                this.text.measure(s, style).0
+            };
+            w <= width + 1e-3
+        };
         let mut lines: Vec<String> = vec![];
+        let mut before = String::new();
         let mut line = String::new();
         for piece in pieces {
             let candidate = format!("{line}{piece}");
-            if fits(self, &candidate) {
+            if fits(self, &before, &candidate) {
                 line = candidate;
                 continue;
             }
             if !line.is_empty() {
+                before.push_str(&line);
                 lines.push(std::mem::take(&mut line));
             }
             // `break-word`: a piece too long for a line of its own breaks
             // where it must.
             let mut rest = piece;
-            while !fits(self, &rest) {
+            while !fits(self, &before, &rest) {
                 let chars: Vec<char> = rest.chars().collect();
                 let mut n = chars.len();
-                while n > 1 && !fits(self, &chars[..n].iter().collect::<String>()) {
+                while n > 1 && !fits(self, &before, &chars[..n].iter().collect::<String>()) {
                     n -= 1;
                 }
-                lines.push(chars[..n].iter().collect());
+                let head: String = chars[..n].iter().collect();
+                before.push_str(&head);
+                lines.push(head);
                 rest = chars[n..].iter().collect();
             }
             line = rest;
@@ -212,14 +276,52 @@ impl Ctx<'_> {
         lines
     }
 
+    /// `text-overflow: ellipsis`: `id`'s text children wider than `width`
+    /// keep what fits before `…` (or the `…` alone), as one line.
+    fn ellipsize(&mut self, id: NodeId, width: f32) {
+        for c in self.ui.nodes[id.0].children.clone() {
+            let NodeKind::Text(t) = &self.ui.nodes[c.0].kind else { continue };
+            let t = t.clone();
+            let style = self.style(c).clone();
+            let measure = |ctx: &mut Self, s: &str| ctx.text.measure(s, &style).0;
+            if measure(self, &t) <= width {
+                continue;
+            }
+            let chars: Vec<char> = t.chars().collect();
+            let mut n = chars.len();
+            let mut line = String::from("\u{2026}");
+            while n > 0 {
+                let candidate: String = chars[..n].iter().chain(std::iter::once(&'\u{2026}')).collect();
+                if measure(self, &candidate) <= width {
+                    line = candidate;
+                    break;
+                }
+                n -= 1;
+            }
+            self.ui.nodes[c.0].lines = vec![line];
+            let r = &mut self.ui.nodes[c.0].rect;
+            r.width = r.width.min(width.max(0.0));
+        }
+    }
+
     /// Gives `id` its border box and lays out its children inside it.
     fn place(&mut self, id: NodeId, rect: Rect) {
+        let rect = if self.ui.layout_units {
+            Rect { x: onto_grid(rect.x), y: onto_grid(rect.y), width: onto_grid(rect.width), height: onto_grid(rect.height) }
+        } else {
+            rect
+        };
         self.ui.nodes[id.0].rect = rect;
         let style = self.style(id).clone();
         if let (NodeKind::Text(t), true) = (&self.ui.nodes[id.0].kind, style.wrap) {
             let t = t.clone();
             let lines = self.wrap(&t, &style, (rect.width - frame(&style, true)).max(0.0));
             self.ui.nodes[id.0].lines = lines;
+        }
+        // A run that does not wrap: one line, unless its box ellipsizes it
+        // (after this, from the box).
+        if let (NodeKind::Text(_), false) = (&self.ui.nodes[id.0].kind, style.wrap) {
+            self.ui.nodes[id.0].lines.clear();
         }
         let content = Rect {
             x: rect.x + style.border.left + style.padding.left,
@@ -232,6 +334,9 @@ impl Ctx<'_> {
             _ => self.block(id, content),
         }
         self.absolute(id, rect, &style);
+        if style.ellipsis && !style.wrap {
+            self.ellipsize(id, content.width);
+        }
         if style.scroll {
             // The content's extent below the padding box's top, and the
             // scroll offset clamped to it; then everything inside moves up.
@@ -285,22 +390,13 @@ impl Ctx<'_> {
         }
     }
 
-    fn flex(&mut self, id: NodeId, style: &Style, content: Rect) {
+    /// The in-flow items of flex container `id` with their main sizes
+    /// resolved (`flex-basis`, then growing or shrinking into `main_size`
+    /// with min/max clamping).
+    fn flex_items(&mut self, id: NodeId, style: &Style, main_size: f32, cross_size: f32) -> Vec<FlexItem> {
         let row = style.flex_direction == FlexDirection::Row;
-        let (main_size, cross_size) = if row { (content.width, content.height) } else { (content.height, content.width) };
         let items = self.in_flow(id);
-        struct Item {
-            id: NodeId,
-            base: f32,
-            min: f32,
-            max: f32,
-            main: f32,
-            grow: f32,
-            shrink: f32,
-            margin_main: (f32, f32),
-            margin_cross: (f32, f32),
-        }
-        let mut list: Vec<Item> = vec![];
+        let mut list: Vec<FlexItem> = vec![];
         for &c in &items {
             let cs = self.style(c).clone();
             let main_len = if row { cs.width } else { cs.height };
@@ -326,7 +422,7 @@ impl Ctx<'_> {
             let max = border_box(&cs, max_len, Some(main_size), row).unwrap_or(f32::INFINITY);
             let margin_main = if row { (cs.margin.left, cs.margin.right) } else { (cs.margin.top, cs.margin.bottom) };
             let margin_cross = if row { (cs.margin.top, cs.margin.bottom) } else { (cs.margin.left, cs.margin.right) };
-            list.push(Item {
+            list.push(FlexItem {
                 id: c,
                 base,
                 min,
@@ -391,6 +487,14 @@ impl Ctx<'_> {
                 }
             }
         }
+        list
+    }
+
+    fn flex(&mut self, id: NodeId, style: &Style, content: Rect) {
+        let row = style.flex_direction == FlexDirection::Row;
+        let (main_size, cross_size) = if row { (content.width, content.height) } else { (content.height, content.width) };
+        let list = self.flex_items(id, style, main_size, cross_size);
+        let gaps = style.gap * list.len().saturating_sub(1) as f32;
         // Main-axis placement.
         let used: f32 = list.iter().map(|i| i.main + i.margin_main.0 + i.margin_main.1).sum::<f32>() + gaps;
         // Negative when the items overflow: centred and end-aligned items then
@@ -502,6 +606,40 @@ mod tests {
 
     fn px(v: f32) -> Length {
         Length::Px(v)
+    }
+
+    #[test]
+    fn layout_units_put_boxes_on_the_64th_pixel_grid() {
+        assert_eq!((layout_unit(976.6199), layout_unit(976.63), layout_unit(-0.01)), (976.609375, 976.625, 0.0));
+        assert_eq!((super::onto_grid(976.62463), super::onto_grid(976.6199), super::onto_grid(33.359375)), (976.625, 976.6199, 33.359375));
+        let mut ui = Ui::new();
+        ui.set_layout_units(true);
+        let root = ui.root();
+        ui.set_style(root, Style::flex(FlexDirection::Row));
+        let kids: Vec<_> = (0..3).map(|_| ui.add_box(root, Style { flex_grow: 1.0, ..Style::default() })).collect();
+        ui.layout(96.0, 10.0, &mut FixedWidthText(7.0));
+        for k in kids {
+            let r = ui.rect(k);
+            assert_eq!((r.x * 64.0).fract(), 0.0);
+            assert_eq!(r.width, 32.0);
+        }
+    }
+
+    #[test]
+    fn layout_units_fit_a_wrapped_line_by_its_offsets_in_the_text() {
+        // Glyphs 7.01 wide: "bb" after "a " ends at 4 × 7.01 = 28.04
+        // (28.046875 in 1/64 px) and starts at 14.02 (14.03125), so it is
+        // 14.015625 wide there, and fits 14.02 where alone (14.02) it would not.
+        let mut ui = Ui::new();
+        ui.set_layout_units(true);
+        let root = ui.root();
+        let block = ui.add_box(root, crate::style! { width: 14.016px; white-space: normal; word-wrap: break-word; });
+        let t = ui.add_text(block, "a bb");
+        ui.layout(100.0, 100.0, &mut FixedWidthText(7.01));
+        assert_eq!(ui.nodes[t.0].lines, vec!["a ", "bb"]);
+        ui.set_layout_units(false);
+        ui.layout(100.0, 100.0, &mut FixedWidthText(7.01));
+        assert_eq!(ui.nodes[t.0].lines, vec!["a ", "b", "b"]);
     }
 
     #[test]
@@ -631,6 +769,44 @@ mod tests {
         let vt = ui.add_text(v, "abc");
         ui.layout(200.0, 200.0, &mut FixedWidthText(10.0));
         assert_eq!((ui.rect(vt).width, ui.rect(vt).height), (19.2, 30.0));
+    }
+
+    /// `text-overflow: ellipsis`: a run too wide for its clipping box keeps
+    /// what fits before `…`; one that fits is left whole.
+    #[test]
+    fn text_overflow_ellipsizes() {
+        let mut ui = Ui::new();
+        let root = ui.root();
+        let narrow = ui.add_box(root, crate::style! { width: 50px; overflow: hidden; text-overflow: ellipsis; });
+        let t = ui.add_text(narrow, "abcdefghij");
+        let wide = ui.add_box(root, crate::style! { width: 200px; overflow: hidden; text-overflow: ellipsis; });
+        let u = ui.add_text(wide, "abcdefghij");
+        ui.layout(300.0, 200.0, &mut FixedWidthText(10.0));
+        assert_eq!(ui.nodes[t.0].lines, vec!["abcd\u{2026}"]);
+        assert!(ui.nodes[u.0].lines.is_empty());
+        assert_eq!(ui.rect(t).width, 50.0);
+    }
+
+    /// A row's height comes from its items at the widths flexing gives
+    /// them: a narrow item's wrapped text makes the row two lines tall, and
+    /// what follows the row moves down.
+    #[test]
+    fn rows_are_as_tall_as_their_items_wrap() {
+        let mut ui = Ui::new();
+        let root = ui.root();
+        ui.set_style(root, Style::flex(FlexDirection::Column));
+        let row = ui.add_box(root, crate::style! { display: flex; width: 100px; align-items: flex-start; });
+        let a = ui.add_box(row, crate::style! { flex: 1; min-width: 0; });
+        ui.add_text(a, "Name");
+        let b = ui.add_box(row, crate::style! { flex: 1; min-width: 0; });
+        let tb = ui.add_box(b, crate::style! { white-space: normal; });
+        // 10 px a character: 50 px wide, "Default value" wraps in two.
+        ui.add_text(tb, "Default value");
+        let after = ui.add_box(root, crate::style! { height: 10px; });
+        ui.layout(200.0, 200.0, &mut FixedWidthText(10.0));
+        assert_eq!(ui.rect(b).width, 50.0);
+        assert_eq!(ui.rect(row).height, 2.0 * 19.2);
+        assert_eq!(ui.rect(after).y, 2.0 * 19.2);
     }
 
     #[test]

@@ -79,13 +79,13 @@
 //!
 //! ```toml
 //! # CAD stack in one flag
-//! threers = { version = "0.0.6", features = ["cad"] }
+//! threers = { version = "0.0.7", features = ["cad"] }
 //! # everything
-//! threers = { version = "0.0.6", features = ["full"] }
+//! threers = { version = "0.0.7", features = ["full"] }
 //! # browser wasm kitchen sink
-//! threers = { version = "0.0.6", features = ["wasm-full"] }
+//! threers = { version = "0.0.7", features = ["wasm-full"] }
 //! # nothing but the renderer
-//! threers = { version = "0.0.6", default-features = false }
+//! threers = { version = "0.0.7", default-features = false }
 //! ```
 //!
 //! Rigid-body physics lives in the companion crate
@@ -142,6 +142,9 @@ pub mod core;
 pub mod curves;
 pub mod exporters;
 pub mod extras;
+/// Fur by shells: [`FurMaterial`] on any mesh (`fur::fur_object`).
+pub mod fur;
+pub use fur::{FurGroom, FurMaterial};
 pub mod geometries;
 pub mod helpers;
 /// Inverse kinematics: damped least squares joint solving for serial arms,

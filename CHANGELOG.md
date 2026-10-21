@@ -7,8 +7,226 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.7] — 2026-10-21
+
+### Added
+
+- **Fur** (`threers::fur`): shell fur on any mesh. `fur_object(geometry,
+  &FurMaterial)` draws the skin and `shells` offset copies of it in one
+  instanced draw, cut to procedural strands, each with its own length, taper,
+  curl and clump (Worley clumps, so no grid lines), lit along the strand
+  (Kajiya-Kay) with shadows. Strands are rooted on the UVs (a grid fitted to
+  their stretch) or, with `FurPlacement::Surface`, over the surface in object
+  space with no UVs at all. Vertex colours paint it: RGB tints, alpha scales
+  length.
+  - **Motion**: gravity in world space; wind in gusts that travel across the
+    coat downwind; per-strand `flutter`; and a `FurAnimator` that adds inertia
+    (`FurDynamics`: a spring per object, measured trailing an accelerating
+    ball by 4 px and settling to 0) and grows fur on skinned meshes,
+    re-posed every frame with a spring per vertex.
+  - **Everywhere**: WebGPU, WebGL2 and native wgpu, and Metal through a port
+    of the shader that draws what wgpu draws (same coverage, same mean
+    brightness). JavaScript: `WebFurMaterial`, `WebScene.addFur` /
+    `createFur` / `stepFur`; the three.js shim's `THREE.Fur`, animated at
+    every `render`.
+  - `tests/fur.rs`, `tests/fur_metal.rs` (under the validation layer), a
+    browser test on WebGL2 and WebGPU, `crates/threers-js/test/fur.test.mjs`;
+    `examples/fur.rs` renders it; `fur_motion`, `fur_stroke` and
+    `fur_closeup` show inertia, a hand stroking the coat and the close-up
+    with and without MSAA, all pictured in `docs/examples.md` and
+    `docs/materials.md`.
+  - **Strand hair** (`fur::strands`): `hair_object(geometry, &FurMaterial,
+    &StrandOptions)` grows `count` curves from the same `FurGroom` (by area,
+    seeded; curl, clumps around guide strands, length variation, vertex-colour
+    paint) and draws them as camera-facing tapered ribbons with fur's shading
+    and motion: gravity, wind and inertia bend each strand without stretching
+    it. `grow_strands` returns the curves; `HairStrands::tube_geometry` makes
+    real tubes of them. Metal draws it pixel for pixel as wgpu does.
+    `FurAnimator::grow_hair_on_skinned` carries hair through a skinned
+    mesh's animation, each strand on its triangle and trailing its root on
+    its own spring; from JavaScript, `WebScene.growHairOnSkinned` /
+    `createSkinnedHair` and `new THREE.Hair(skinnedMesh, options)`.
+    Hair casts shadows — on the body, the ground and itself — through
+    invisible tubes around a share of its strands (`shadow_strands`),
+    bent as the ribbons are and kept in step by the animator; the same on
+    Metal.
+  - **Fur shadows**: shell fur casts through an invisible copy of its skin
+    pushed out to `FurMaterial::shadow_height` of the coat (0.6), drooped
+    as the shells are — a shadow as wide as the fur, and the coat shadowing
+    itself. Tested natively, on Metal and in the browser on both backends.
+  - **Anti-aliased under MSAA**: fur and hair test each sample against the
+    strands and write the ones they cover (`@builtin(sample_mask)`; alpha-to-
+    coverage on WebGL2) — half the error of one sample against a 16×-
+    supersampled render. Hair ribbons are at least 1.5 px wide, cut to their
+    true width; the highlight eases with the strand's turn across a pixel.
+    Metal multisamples them pixel for pixel as wgpu does.
+  - **Physical motion**: strands bend without stretching (shells too);
+    wind pulls by drag as the square of the air's speed past them (`wind`
+    in m/s, `FurMaterial::drag`), so a moving coat streams back; gusts are
+    turbulence carried downwind at the wind's speed (`turbulence`); flutter
+    is per-strand noise that needs a wind; the animator's spring now drives
+    the whole pull — gravity, drag and inertia — so changes ease in and
+    overshoot. Shadow casters bend by the same rules on the CPU.
+  - **Stroke it**: `FurAnimator::stroke` puts a hand in a coat — strands
+    pushed along its motion and parted around it, springing back when let
+    go. JavaScript `WebScene.strokeFur` / `fur.stroke`, Python
+    `Scene.stroke_fur`; the demo strokes whatever the pointer is over.
+  - **No dots up close**: each shell sweeps its strands across its slab as
+    the line of sight crosses it, so a strand stays one column.
+  - **Faster**: fur's strand search about twice as fast (hashes once, skips
+    strands out of reach, stops at the first hit, no integer division); shell
+    level of detail by on-screen size (`FurMaterial::lod`); shadow casters
+    moved to child meshes by the animator and rebent only when their inputs
+    change — still hair with no wind costs nothing a frame. `examples/
+    fur_bench.rs` measures it.
+- `ShaderMaterial::alpha_to_coverage` (three.js `alphaToCoverage`;
+  `coverage_alpha(c)` in the shader), and the preamble's `THREERS_SAMPLES`,
+  `threers_sample_offset(i)` and `frag_out(colour, mask)` for a shader that
+  works out its own MSAA coverage. JavaScript: `ShaderMaterial({
+  alphaToCoverage })`.
+- Python: `FurMaterial`, `Scene.add_fur`, `Scene.add_hair`, `Scene.step_fur`,
+  `HeadlessRenderer.set_msaa`.
+- `web/examples/fur.html`: a browser demo of shell fur, strand hair and curly
+  fur — swinging, in the wind, casting shadows — on the three.js shim.
+    JavaScript: `WebScene.addHair` / `createHair`, the shim's `THREE.Hair`.
+    `examples/hair.rs`; tested natively, on Metal, in the browser on both
+    backends, and in Node.
+- `ShaderMaterial::fallback_color`: what the Metal renderer, which cannot run
+  custom WGSL, draws a shader material in (white by default, as before).
+- **`ui::Ui::set_layout_units`** and **`ui::layout_unit`**: boxes on
+  Blink's `LayoutUnit` grid (1/64 px) where float error is all that keeps
+  them off it (within 1/512 px); `layout_unit` is `LayoutUnit(float)`'s
+  truncation, for a caller's own geometry. Skia draws glyphs at
+  quarter-pixel positions, so a run a hair left of where a page would put
+  it (976.62463 px against Blink's 976.625) is drawn a quarter pixel off;
+  a UI matching a page pixel for pixel turns this on. It also wraps text
+  as Blink does: a line's width is taken between its ends' offsets in the
+  whole text, each rounded up to 1/64 px, so a word on a later line fits a
+  box Blink sized for it. Off by default.
+- **`ui::canvas::CanvasPainter`** (wasm32): a `ui::Painter` on the page's 2D
+  canvas — boxes snapped to device pixels as Chrome paints them, rounded
+  boxes, gradients, SVG paths, clips, text with Blink's half-leading and at
+  the `LayoutUnit` (1/64 px) a page would put it, so `fillText` lands on the
+  same quarter pixel as the page's text — and
+  `CanvasPainter::with_dom_text`, which lays the text as positioned DOM over
+  the canvas instead of `fillText` (each run's baseline where `fillText`
+  would put it, measured once per font and text), since Chrome rasterizes
+  some text differently on a canvas (translucent colours, for one); and
+  `with_dom_text_for`, the same for the runs a predicate picks, the rest on
+  the canvas. Painting order is kept with layers (anything painted after
+  DOM text goes on a canvas above it); clips apply to the text too. Call
+  `begin` before painting a frame and `finish` after;
+  `begin_with_backdrop` draws another canvas (a WebGPU one) under the UI.
+  A blurred gradient (`fill_linear_gradient` with `blur`) is blurred on a
+  surface of its own and composited at whole device pixels, as Chrome
+  composites an element with `filter: blur()`.
+- **`renderer::readback::AsyncReadback`**: a buffer read back without
+  blocking, native and web alike — copy into it, `map(wake)`, then `read()`
+  on later frames until the bytes come (the pattern for pick windows,
+  values a compute pass works out, and the like, where `texture_bytes`'s
+  blocking wait is not an option).
+- **`loaders::draco::decode_mesh_with` and `DecodeOptions`**: decode a Draco
+  mesh with the transforms of chosen attribute types skipped (Draco's
+  `Decoder::SetSkipAttributeTransform`), so quantized positions come out as
+  the integers stored. Formats that define their own dequantization (such as
+  neuroglancer's multi-resolution meshes, which read positions as fractions
+  of each octree node) need these rather than Draco's floats.
+  `attributes::decode_attributes_skipping` is the same at the attribute level.
+- **`GpuContext::open_with_optional_features`** (and
+  `with_surface_and_optional_features`, `headless_with_optional_features`):
+  `open`, also asking for extra features where the adapter has them (such as
+  `FLOAT32_BLENDABLE`), for renderers that use them when present and do
+  without otherwise.
+- **`volume::SliceRenderer`: `slice_color_at`.** A colour function may
+  define `slice_color_at(voxel, params)` instead of `slice_color`: it gets
+  the voxel position (bounds-checking it itself) and reads the `volume`
+  texture as it needs, for data laid out across the texture (channels
+  stacked along z, say).
+- **`ui`: `text-overflow: ellipsis`.** A clipping box (`overflow: hidden`)
+  whose text does not wrap cuts a run too wide for it before `…`, as CSS
+  does; `Style::ellipsis`.
+- **Examples with pictures**, each in `docs/examples.md` and the README
+  (66 now): `shadow_types` (the four filters on one scene),
+  `skinned_animation` (a rig built in code, two clips cross-faded),
+  `postfx_chain` (`EffectComposer` natively: SSAO, bloom, depth of field,
+  outline, pixel art), `usd_stage` (a class, references, a variant set,
+  `UsdPreviewSurface`, a `.usdz` round trip), `backend_parity` (wgpu and
+  Metal; `web/examples/parity.html` is the same scene in a browser),
+  `data_charts` (bars, a picked scatter plot and the colour ramps from
+  `marks`), `volume_slices` (a Shepp–Logan phantom through `SliceRenderer`),
+  `ui_panel` (`threers::ui` over a render, hit-tested) and
+  `threers-physics`'s `tower_collapse`. `ocean_water`, `simcity_render`,
+  `svg_gallery` and `openscad_gallery` already drew pictures and are in the
+  gallery too, as are `retrofuturism` (its revealed frame) and `neon_logo`,
+  which takes `NEON_MARK=drop` now to sweep a neutral mark — an egg and a
+  lens — in place of the traced outlines, so a picture of the technique is
+  not a picture of someone's logo.
+
+### Fixed
+
+- A `ShaderMaterial` with `screen_space` set failed to build its pipeline
+  ("binding is missing from the pipeline layout") and drew nothing: the
+  screen-space capture moved out of the main layout's group 3 in 0.0.6, and
+  shader materials kept the main layout. They get the refraction pass's now.
+  `tests/screen_space_shader.rs`.
+
+- The `ocean_water` example drew no water: its shader read `ss_depth_tex`
+  as a depth texture, which it has not been since 0.0.6, and called
+  `g_smith`, which is gone. It reads `.r` (as standard depth) and uses
+  `v_ggx_smith_correlated`.
+  Its clouds drew as a skyline of rectangles in a light deck (`moonlit`):
+  the density was two-dimensional noise stood up through the whole 800 m
+  slab, so every cloud was a flat-topped pillar. A cloud is as tall as it is
+  dense now, domed on top and leaning downwind, and the noise's octaves are
+  turned against each other so a high threshold no longer picks out its
+  lattice. Same ten-step march, same cost.
+
+- `extras::MarchingCubes` was not marching cubes: it fanned each cell's
+  edge crossings in whatever order it found them, so its surfaces were
+  torn, inconsistently wound and unindexed. It is the real algorithm now,
+  on the 256-case tables three.js ships: one vertex per grid edge shared by
+  every triangle on it, normals from the field's gradient, every triangle
+  wound outward. A sphere comes out watertight and within 1% of its volume
+  and area, which its tests check. The field is inside where it is above
+  `iso`, as three.js's is.
+
+- USD: a referenced prim's own variant selection was ignored, so a class
+  selecting `enamel` for itself came back with its first variant instead.
+  It holds now, weaker than any selection the referencing prim makes and
+  stronger than a `variant_fallbacks` entry. The composition guide's
+  import of `ComposeOptions` and `FileResolver` named a path that does not
+  export them (`threers::loaders::usd::…` does).
+
+- WebGL2: a draw with `colorWrite: false` left the whole frame black. The
+  renderer now skips colour-pass draws that write neither colour nor depth
+  (fur's and hair's shadow casters among them), which fixes them; a
+  `colorWrite: false` draw that does write depth (an invisible occluder) is
+  still affected there.
+
+- MSAA fell back to one sample for any frame holding a skinned mesh, an
+  instanced mesh or a shader material. They have multisampled pipelines now
+  (an opaque shader material's built on demand), so such frames stay
+  multisampled.
+
+- Fur received shadows on WebGPU and WebGL2 whatever its `receive_shadow`,
+  and on Metal only with it on. It now honours the flag everywhere, and
+  `fur_object` and the hair constructors turn it on.
+
+- A `ShaderMaterial` on a geometry with `uv1`/`uv2`/`uv3` read them as zeros
+  on wgpu unless the geometry was also morphed: the draw was flagged as having
+  uv sets but bound the shared empty texture. It now binds the geometry's.
+
+- **`ui`: a row's height from its items at their flexed widths.** A flex
+  row with a definite width now sizes its cross axis after resolving its
+  items' main sizes, as CSS does, so text that wraps in a narrowed item
+  (`white-space: normal`) makes the row taller instead of overflowing it.
+  The main-size resolution is shared between sizing and layout.
+
 ### Changed
 
+- **`ui::controls::checkbox`**, checked at 13px: painted as Chrome
+  rasterizes its native checkbox (opaque but for the corner pixels, a 0.443
+  blend), not as a rounded fill, whose canvas coverage comes in quarters.
 - **GIF is its own feature, `gif`** (implies `native-codec`; `media`, `full`
   and `wasm-full` include it). `native-codec` alone no longer compiles
   `codec::gif`. The animation and video exporters keep `BrowserCodec::Gif` /
@@ -4679,7 +4897,8 @@ on, and a second crate to make things move.
 - Opt-in `mesh-bvh` and `bvh-csg` (three-mesh-bvh / three-bvh-csg parity).
 - Web shim (`THREE.*`) and parity tooling.
 
-[Unreleased]: https://github.com/eugenehp/threers/compare/v0.0.6...HEAD
+[Unreleased]: https://github.com/eugenehp/threers/compare/v0.0.7...HEAD
+[0.0.7]: https://github.com/eugenehp/threers/compare/v0.0.6...v0.0.7
 [0.0.6]: https://github.com/eugenehp/threers/compare/v0.0.5...v0.0.6
 [0.0.5]: https://github.com/eugenehp/threers/compare/v0.0.4...v0.0.5
 [0.0.4]: https://github.com/eugenehp/threers/compare/v0.0.3...v0.0.4

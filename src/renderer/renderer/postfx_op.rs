@@ -247,7 +247,9 @@ impl Renderer {
         let mut bytes = Vec::with_capacity(texels.len() * 8);
         for t in &texels[..(rt.width * rt.height) as usize] {
             for c in t {
-                bytes.extend_from_slice(&crate::renderer::gpu_texture::f32_to_f16_bits(*c).to_le_bytes());
+                bytes.extend_from_slice(
+                    &crate::renderer::gpu_texture::f32_to_f16_bits(*c).to_le_bytes(),
+                );
             }
         }
         let row = rt.width * 8;
@@ -284,7 +286,12 @@ impl Renderer {
     /// viewport. `display`: the output holds display values (the screen or a
     /// stand-in for it), so the colour lands as its sRGB encoding, as three.js
     /// clears a canvas; otherwise it is stored so it reads back as `color`.
-    pub fn clear_postfx_output(&mut self, output: PostFxOutput<'_>, color: [f64; 4], display: bool) {
+    pub fn clear_postfx_output(
+        &mut self,
+        output: PostFxOutput<'_>,
+        color: [f64; 4],
+        display: bool,
+    ) {
         let rt;
         let (view, format) = match output {
             PostFxOutput::Target(id) => {
@@ -330,10 +337,15 @@ impl Renderer {
     ) -> &wgpu::RenderPipeline {
         let ext = &mut self.postfx_ext;
         if ext.module.is_none() {
-            ext.module = Some(self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("threers postfx op shader"),
-                source: wgpu::ShaderSource::Wgsl(crate::renderer::shader::POSTFX_SHADER.into()),
-            }));
+            ext.module = Some(
+                self.device
+                    .create_shader_module(wgpu::ShaderModuleDescriptor {
+                        label: Some("threers postfx op shader"),
+                        source: wgpu::ShaderSource::Wgsl(
+                            crate::renderer::shader::POSTFX_SHADER.into(),
+                        ),
+                    }),
+            );
         }
         if ext.layout.is_none() {
             ext.layout = Some(self.device.create_pipeline_layout(
@@ -411,14 +423,15 @@ impl Renderer {
         // reads it back linear — as a half-float target holds it.
         let srgb_view = out_rt.as_ref().and_then(|rt| {
             let srgb = rt.format.add_srgb_suffix();
-            (!display && rt.format != wgpu::TextureFormat::Rgba16Float && srgb != rt.format)
-                .then(|| {
+            (!display && rt.format != wgpu::TextureFormat::Rgba16Float && srgb != rt.format).then(
+                || {
                     rt.color_texture.create_view(&wgpu::TextureViewDescriptor {
                         label: Some("threers postfx op srgb output"),
                         format: Some(srgb),
                         ..Default::default()
                     })
-                })
+                },
+            )
         });
         let (out_view, out_format, width, height) = match (&output, &out_rt) {
             (_, Some(rt)) => match &srgb_view {
@@ -464,11 +477,13 @@ impl Renderer {
                 })
             }),
         };
-        let noise = noise_owned.as_ref().unwrap_or(if op.kind == 5 || op.kind == 31 {
-            &self.glitch_disp_view
-        } else {
-            &self.ssao_noise_view
-        });
+        let noise = noise_owned
+            .as_ref()
+            .unwrap_or(if op.kind == 5 || op.kind == 31 {
+                &self.glitch_disp_view
+            } else {
+                &self.ssao_noise_view
+            });
         let linear_out = !display;
         let uniforms = Uniforms {
             params: [
@@ -488,7 +503,11 @@ impl Renderer {
                 // Bit 16: the depth buffers were drawn reversed
                 // (`set_reversed_z`); the kinds read them back as `1 - d`.
                 (u32::from(display && out_format.is_srgb())
-                    | if self.state_pipelines.reversed() { 16 } else { 0 }) as f32,
+                    | if self.state_pipelines.reversed() {
+                        16
+                    } else {
+                        0
+                    }) as f32,
             ],
             ssao0: [
                 op.camera.near,

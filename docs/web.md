@@ -33,6 +33,19 @@ to a watertight mesh and renders it with WebGPU, with STL/OBJ/OFF/3MF/GLB downlo
 See also the demo gallery and the parametric 3D-printer / NEMA-17 assemblies
 (`web/openscad-gallery.html`, `web/openscad-printer.html`, `web/nema17.html`).
 
+**Fur and hair in the browser**: [`web/examples/fur.html`](../web/examples/fur.html)
+draws a furry ball, a head of hair and a furry torus with `THREE.Fur` and
+`THREE.Hair`, in a wind you set with a slider, casting shadows; drag over a
+coat to stroke it. `?gl=1` forces WebGL2. See [Materials](materials.md#fur).
+
+![The fur demo on WebGPU](images/fur_demo.jpg)
+
+**One scene, every backend**: [`web/examples/parity.html`](../web/examples/parity.html)
+draws the scene of `cargo run --example backend_parity` through the shim,
+number for number, on WebGPU or (`?gl=1`) WebGL2, so a browser frame can be
+held against a native one ([WebGL2](webgl.md#state-of-it) has the four side
+by side).
+
 **Export video in the browser** (after `NATIVE_CODEC=1` build): open
 [`web/examples/export-video.html`](../web/examples/export-video.html) — render frames, encode GIF/APNG/WebM/MP4 in-process, download the file. No ffmpeg.
 

@@ -21,6 +21,9 @@
 //!   timeline to `out/neon_logo_anim/`, plus an `.mp4` with
 //!   `--features native-codec`.
 //! * `NEON_NO_POST=1` — skip bloom and the saturation lift.
+//! * `NEON_MARK=drop` — sweep a neutral mark (an egg and a lens, see
+//!   `neutral_mark`) instead of the traced outlines, for pictures of the
+//!   technique rather than of the mark.
 
 // The figures here are carried at f64 precision and narrowed to f32. Trimming
 // them would move the thin ramp stops, which are only ~0.012 apart, so the lint
@@ -385,6 +388,79 @@ const BODY_OUTLINE: [[f32; 2]; 192] = [
     [22.3425, 25.5102],
     [20.9118, 25.6886],
 ];
+
+/// `NEON_MARK=drop`: a mark of no one's, for pictures of the technique — an
+/// egg for the body and a lens for the leaf, in the same places and at the
+/// same sizes as the outlines above, counter-clockwise like them, and
+/// resampled to the same counts at even spacing (see `BODY_OUTLINE` for why
+/// even matters).
+fn neutral_mark() -> (Vec<[f32; 2]>, Vec<[f32; 2]>) {
+    use std::f32::consts::TAU;
+    // An egg: wider below, centred where the body's bulk is.
+    let body: Vec<[f32; 2]> = (0..2048)
+        .map(|i| {
+            let t = TAU * i as f32 / 2048.0;
+            let (s, c) = t.sin_cos();
+            [40.0 * c * (1.0 - 0.10 * s), -12.0 + 38.0 * s]
+        })
+        .collect();
+    // A lens — two arcs meeting in points — tipped 40° off upright, above
+    // and to the right of the body as the leaf is.
+    let (len, half_w, turn) = (24.0f32, 6.5f32, 40f32.to_radians());
+    let r = (len * len / 4.0 + half_w * half_w) / (2.0 * half_w);
+    let reach = (len / 2.0 / r).asin();
+    let mut leaf = Vec::new();
+    for side in [1.0f32, -1.0] {
+        for i in 0..1024 {
+            let a = -reach + 2.0 * reach * i as f32 / 1024.0;
+            // Each arc's centre sits across the lens from the edge it draws.
+            let (x, y) = (side * (r * a.sin()), side * (r * a.cos() - (r - half_w)));
+            leaf.push([x, y]);
+        }
+    }
+    let (st, ct) = turn.sin_cos();
+    let leaf: Vec<[f32; 2]> = leaf
+        .into_iter()
+        .map(|[x, y]| [9.5 + x * ct - y * st, 38.5 + x * st + y * ct])
+        .collect();
+    (
+        evenly(&body, BODY_OUTLINE.len()),
+        evenly(&leaf, LEAF_OUTLINE.len()),
+    )
+}
+
+/// `n` points evenly spaced along the closed polyline `pts`, wound
+/// counter-clockwise.
+fn evenly(pts: &[[f32; 2]], n: usize) -> Vec<[f32; 2]> {
+    let mut pts = pts.to_vec();
+    let area: f32 = (0..pts.len())
+        .map(|i| {
+            let (a, b) = (pts[i], pts[(i + 1) % pts.len()]);
+            a[0] * b[1] - b[0] * a[1]
+        })
+        .sum();
+    if area < 0.0 {
+        pts.reverse();
+    }
+    let seg = |i: usize| {
+        let (a, b) = (pts[i], pts[(i + 1) % pts.len()]);
+        ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt()
+    };
+    let total: f32 = (0..pts.len()).map(seg).sum();
+    let mut out = Vec::with_capacity(n);
+    let (mut i, mut walked) = (0usize, 0.0f32);
+    for k in 0..n {
+        let target = total * k as f32 / n as f32;
+        while walked + seg(i) < target {
+            walked += seg(i);
+            i += 1;
+        }
+        let t = (target - walked) / seg(i).max(1e-9);
+        let (a, b) = (pts[i], pts[(i + 1) % pts.len()]);
+        out.push([a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])]);
+    }
+    out
+}
 
 /// The leaf's silhouette, on the same terms as `BODY_OUTLINE`.
 const LEAF_OUTLINE: [[f32; 2]; 128] = [
@@ -1467,8 +1543,13 @@ fn build_scene(res: usize) -> (Scene, Animated) {
     group.scale = Vector3::new(LOGO_SCALE, LOGO_SCALE, LOGO_SCALE);
     let group_id = scene.add(group);
 
-    let body_outline = Outline::from_knots(&BODY_OUTLINE, OUTLINE_SUBDIV);
-    let leaf_outline = Outline::from_knots(&LEAF_OUTLINE, OUTLINE_SUBDIV);
+    let (body_knots, leaf_knots) = if std::env::var("NEON_MARK").as_deref() == Ok("drop") {
+        neutral_mark()
+    } else {
+        (BODY_OUTLINE.to_vec(), LEAF_OUTLINE.to_vec())
+    };
+    let body_outline = Outline::from_knots(&body_knots, OUTLINE_SUBDIV);
+    let leaf_outline = Outline::from_knots(&leaf_knots, OUTLINE_SUBDIV);
 
     // Counts triangles for indexed and non-indexed geometry alike: the rebuild
     // emits a triangle soup, an imported OBJ arrives indexed.

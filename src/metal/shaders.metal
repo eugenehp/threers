@@ -2702,3 +2702,564 @@ fragment float4 fs_oit_light(float4 pos [[position]],
     float cover = 1.0 - reveal.read(p).a;
     return float4(a.rgb / max(a.a, 1e-5) * cover, cover);
 }
+
+// ------------------------------------------------------------------- fur
+
+// Shell fur (`crate::fur`): the WGSL shader's port, reading the same
+// sixteen float4 slots (`FurMaterial::data`). Instance `iid` is shell
+// `iid / shells` of the fur's length; see `src/fur/mod.rs` for the slots.
+struct FurData {
+    float4 d[16];
+};
+
+static inline float3 fur_air_hash3(int3 p) {
+    uint3 v = as_type<uint3>(p) * 1664525u + 1013904223u;
+    v.x += v.y * v.z;
+    v.y += v.z * v.x;
+    v.z += v.x * v.y;
+    v = v ^ (v >> 16u);
+    v.x += v.y * v.z;
+    v.y += v.z * v.x;
+    v.z += v.x * v.y;
+    return float3(v >> 8u) * (1.0 / 16777216.0);
+}
+
+// The air, as `crate::fur`'s WGSL has it (`fur_noise3`, `fur_mean_pull`,
+// `fur_turbulence`, `fur_flutter_noise`): pulls per unit of strand length.
+static inline float3 fur_noise3(float3 p) {
+    float3 i = floor(p);
+    float3 f = p - i;
+    float3 u = f * f * (3.0 - 2.0 * f);
+    int3 b = int3(i);
+    float3 x00 = mix(fur_air_hash3(b), fur_air_hash3(b + int3(1, 0, 0)), u.x);
+    float3 x10 = mix(fur_air_hash3(b + int3(0, 1, 0)), fur_air_hash3(b + int3(1, 1, 0)), u.x);
+    float3 x01 = mix(fur_air_hash3(b + int3(0, 0, 1)), fur_air_hash3(b + int3(1, 0, 1)), u.x);
+    float3 x11 = mix(fur_air_hash3(b + int3(0, 1, 1)), fur_air_hash3(b + int3(1, 1, 1)), u.x);
+    float3 v = mix(mix(x00, x10, u.y), mix(x01, x11, u.y), u.z);
+    return v * 2.0 - 1.0;
+}
+
+static inline float3 fur_mean_pull(constant FurData &fur) {
+    if (fur.d[9].w > 0.5) {
+        return fur.d[9].xyz;
+    }
+    float3 w = fur.d[6].xyz;
+    return fur.d[1].xyz + w * (fur.d[12].x * length(w));
+}
+
+static inline float3 fur_turbulence(constant FurData &fur, float3 p) {
+    float3 w = fur.d[6].xyz;
+    float wl = length(w);
+    if (wl <= 0.0 || fur.d[12].y <= 0.0) {
+        return float3(0.0);
+    }
+    float eddy = max(wl / max(fur.d[6].w, 1e-3), 0.05);
+    float3 n = fur_noise3((p - w * fur.d[5].z) / eddy);
+    return n * (2.0 * fur.d[12].x * fur.d[12].y * wl * wl);
+}
+
+static inline float3 fur_brush(constant FurData &fur, float3 p) {
+    float4 b = fur.d[13];
+    if (b.w <= 0.0) {
+        return float3(0.0);
+    }
+    float3 off = p - b.xyz;
+    float d = length(off);
+    if (d >= b.w) {
+        return float3(0.0);
+    }
+    float f = 1.0 - d / b.w;
+    float w = f * f * (3.0 - 2.0 * f);
+    return (fur.d[14].xyz + off / max(d, 1e-4) * fur.d[14].w) * w;
+}
+
+static inline float3 fur_flutter_noise(constant FurData &fur, float r) {
+    float wl = length(fur.d[6].xyz);
+    float amp = fur.d[8].z * min(wl, 1.0);
+    if (amp <= 0.0) {
+        return float3(0.0);
+    }
+    float rate = 2.0 + 4.0 * wl;
+    return fur_noise3(float3(r * 97.0, fur.d[5].z * rate, r * 31.0)) * amp;
+}
+
+/// Strand hair (`crate::fur::strands`, placement 2): the ribbon vertex stage,
+/// `HAIR_VERTEX_WGSL`'s port. `uv` is (side, height), the normal the grown
+/// direction, the colour's alpha the strand's own random, and the tangent
+/// (`uv_sets` slot 2) the root's normal and the strand's length.
+static VOut hair_vertex(VOut out, Vertex v, float4x4 model, float4 root, float3 lag,
+                        constant Frame &frame, constant FurData &fur) {
+    float s = v.uv.y;
+    float side = v.uv.x * 2.0 - 1.0;
+    float3 rn4 = (model * float4(root.xyz, 0.0)).xyz;
+    float scale = max(length(rn4), 1e-6);
+    float3 root_n = rn4 / scale;
+    float len = root.w * scale;
+    float r = v.alpha;
+    float3 across0 = abs(root_n.y) > 0.9 ? normalize(cross(root_n, float3(1.0, 0.0, 0.0)))
+                                         : normalize(cross(root_n, float3(0.0, 1.0, 0.0)));
+    float3 base = out.world_pos - root_n * (len * s);
+    float3 pull = fur_mean_pull(fur) + fur_turbulence(fur, base) + fur_flutter_noise(fur, r) * 0.3
+        + fur_brush(fur, out.world_pos) + (model * float4(lag, 0.0)).xyz;
+    float3 walk = float3(0.0);
+    for (int k = 0; k < 6; ++k) {
+        float3 d = root_n + pull * (2.0 * s * (float(k) + 0.5) / 6.0);
+        walk += d / max(length(d), 1e-6);
+    }
+    float3 p = out.world_pos - root_n * (len * s) + walk * (len * s / 6.0);
+    float3 b = root_n + pull * (2.0 * s);
+    float3 bent = length(b) > 1e-4 ? b / length(b) : normalize(pull + root_n * 1e-3);
+    float3 tt_dir = normalize(out.normal) - root_n + bent;
+    float3 t_dir = length(tt_dir) > 1e-4 ? tt_dir / length(tt_dir) : bent;
+    float3 to_eye = normalize(frame.camera_pos[0].xyz - p);
+    float3 across = cross(t_dir, to_eye);
+    if (length(across) < 1e-5) {
+        across = across0;
+    }
+    across = normalize(across);
+    // At least 1.5 pixels wide, as the WGSL draws it; the share its true
+    // width fills goes to the fragment in `color.a`, the place across it in
+    // `uv12.w`.
+    float width = fur.d[0].w * mix(1.0, fur.d[1].w, s);
+    float4x4 vm = frame.view[0];
+    float3 up = float3(vm[0][1], vm[1][1], vm[2][1]);
+    float4 ca = frame.view_proj[0] * float4(p, 1.0);
+    float4 ce = frame.view_proj[0] * float4(p + up, 1.0);
+    float px_per_unit = (ca.w > 1e-4 && ce.w > 1e-4)
+        ? abs(ce.y / ce.w - ca.y / ca.w) * frame.viewport.y * 0.5 : 1e6;
+    float width_px = width * px_per_unit;
+    float drawn = max(width_px, 1.5) / max(px_per_unit, 1e-6);
+    out.world_pos = p + across * (side * drawn * 0.5);
+    out.normal = root_n;
+    out.position = frame.view_proj[0] * float4(out.world_pos, 1.0);
+    out.view_dist = length(frame.camera_pos[0].xyz - out.world_pos);
+    out.tangent = float4(t_dir, 1.0);
+    out.uv3 = float2(s, 1.0);
+    out.color = float4(out.color.rgb, clamp(width_px / max(width_px, 1.5), 0.0, 1.0));
+    out.uv12 = float4(float3(v.position), side);
+    return out;
+}
+
+// `fur_lod_shells` in `crate::fur`'s WGSL: two shells per pixel of the fur's
+// length on screen, at the near side of its bounding sphere (`d[11]`; a
+// negative radius for none), at least four.
+static float fur_lod_shells(constant FurData &fur, constant Frame &frame, constant Draw &draw,
+                            float shells) {
+    float4 b = fur.d[11];
+    if (b.w < 0.0) {
+        return shells;
+    }
+    float4x4 m = draw.model;
+    float scale = max(length(m[0].xyz), max(length(m[1].xyz), length(m[2].xyz)));
+    float3 c = (m * float4(b.xyz, 1.0)).xyz;
+    float3 to_cam = frame.camera_pos[0].xyz - c;
+    float d = length(to_cam);
+    float3 near = c + to_cam / max(d, 1e-6) * min(b.w * scale, d * 0.9);
+    float4x4 v = frame.view[0];
+    float3 up = float3(v[0][1], v[1][1], v[2][1]);
+    float4 a = frame.view_proj[0] * float4(near, 1.0);
+    float4 e = frame.view_proj[0] * float4(near + up, 1.0);
+    if (a.w <= 1e-4 || e.w <= 1e-4) {
+        return shells;
+    }
+    float px_per_unit = abs(e.y / e.w - a.y / a.w) * frame.viewport.y * 0.5;
+    return clamp(ceil(2.0 * fur.d[0].y * px_per_unit), min(4.0, shells), shells);
+}
+
+vertex VOut vs_fur(uint vid [[vertex_id]],
+                   uint iid [[instance_id]],
+                   device const Vertex   *verts      [[buffer(0)]],
+                   constant Frame        &frame      [[buffer(1)]],
+                   constant Draw         &draw       [[buffer(2)]],
+                   device const float4x4 *instances  [[buffer(3)]],
+                   device const float4   *morph_data [[buffer(6)]],
+                   constant MorphInfo    &morph      [[buffer(7)]],
+                   device const float4   *uv_sets    [[buffer(8)]],
+                   constant FurData      &fur        [[buffer(9)]]) {
+    float4x4 model = model_matrix(draw, instances, iid);
+    Vertex v = apply_morph(verts[vid], vid, iid, morph, morph_data, instances);
+    VOut out = transform(v, model, normal_basis(draw, instances, iid), frame, draw, 0u);
+    if (fur.d[8].x > 1.5) {
+        float4 root = (draw.phys_flags.z & 2u) != 0u ? uv_sets[3u * vid + 2u] : float4(0.0, 1.0, 0.0, 0.0);
+        // On a skinned mesh, each strand's own inertia, from uv1 and uv2.
+        float3 lag = fur.d[8].w > 0.5 && (draw.phys_flags.z & 1u) != 0u ? uv_sets[3u * vid].xyz : float3(0.0);
+        return hair_vertex(out, v, model, root, lag, frame, fur);
+    }
+    float shells = fur_lod_shells(fur, frame, draw, max(fur.d[0].x, 1.0));
+    // A shell beyond what the fur's size on screen needs: nothing to draw.
+    if (float(iid) > shells) {
+        out.position = float4(0.0, 0.0, 2.0, 1.0);
+        return out;
+    }
+    float h = float(iid) / shells;
+    float len = fur.d[0].y * out.color.a;
+    float3 n = normalize(out.normal);
+    float3 pull = fur_mean_pull(fur) + fur_turbulence(fur, out.world_pos) + fur_brush(fur, out.world_pos);
+    if (fur.d[8].w > 0.5 && (draw.phys_flags.z & 2u) != 0u) {
+        pull += (model * float4(uv_sets[3u * vid + 2u].xyz, 0.0)).xyz;
+    }
+    float3 walk = float3(0.0);
+    for (int k = 0; k < 6; ++k) {
+        float3 d = n + pull * (2.0 * h * (float(k) + 0.5) / 6.0);
+        walk += d / max(length(d), 1e-6);
+    }
+    out.world_pos += walk * (len * h / 6.0);
+    out.position = frame.view_proj[0] * float4(out.world_pos, 1.0);
+    out.view_dist = length(frame.camera_pos[0].xyz - out.world_pos);
+    float3 along = n + pull * (2.0 * h);
+    out.tangent = float4(length(along) > 1e-6 ? normalize(along) : n, 1.0);
+    out.uv3 = float2(h, out.color.a);
+    // The skin point in object space, for surface placement.
+    // The skin point in object space, and one shell's slab of height.
+    out.uv12 = float4(float3(v.position), 1.0 / shells);
+    return out;
+}
+
+static inline float2 fur_hash2(int2 p) {
+    uint2 v = as_type<uint2>(p) * 1664525u + 1013904223u;
+    v.x += v.y * 1664525u;
+    v.y += v.x * 1664525u;
+    v = v ^ (v >> 16u);
+    v.x += v.y * 1664525u;
+    v.y += v.x * 1664525u;
+    v = v ^ (v >> 16u);
+    return float2(v >> 8u) * (1.0 / 16777216.0);
+}
+
+static inline float3 fur_hash3(int3 p) {
+    uint3 v = as_type<uint3>(p) * 1664525u + 1013904223u;
+    v.x += v.y * v.z;
+    v.y += v.z * v.x;
+    v.z += v.x * v.y;
+    v = v ^ (v >> 16u);
+    v.x += v.y * v.z;
+    v.y += v.z * v.x;
+    v.z += v.x * v.y;
+    return float3(v >> 8u) * (1.0 / 16777216.0);
+}
+
+// Wrapped in floats, as the WGSL does: exact for whole-number cells, and no
+// integer division.
+static inline int2 fur_cell_key(float2 cell, float2 n, int salt, int seed) {
+    float2 w = cell - n * floor(cell / n);
+    return int2(w) + int2(seed * 7919 + salt, seed * 104729 - salt);
+}
+
+static inline float2 fur_flutter(constant FurData &fur, float r, float h) {
+    return fur_flutter_noise(fur, r).xy * (h * h);
+}
+
+// `fur_capsule`, `fur_slab_world`, `fur_world_to` in the WGSL: each strand
+// swept across its shell's slab as the line of sight crosses it.
+static inline float fur_capsule(float2 o, float2 d) {
+    float dd = dot(d, d);
+    float t = dd > 1e-12 ? clamp(-dot(o, d) / dd, -0.5, 0.5) : 0.0;
+    return length(o + d * t);
+}
+
+static inline float2 fur_world_to(float3 step, float3 wx, float3 wy) {
+    float a = dot(wx, wx);
+    float b = dot(wx, wy);
+    float c = dot(wy, wy);
+    float det = a * c - b * b;
+    if (abs(det) < 1e-20) {
+        return float2(0.0);
+    }
+    float rx = dot(wx, step);
+    float ry = dot(wy, step);
+    return float2(c * rx - b * ry, a * ry - b * rx) / det;
+}
+
+// `fur_reach` and `fur_hit_uv` in `crate::fur`'s WGSL: a strand's furthest
+// stray from its root, and the search — own cell first, first hit wins,
+// out-of-reach roots and short strands passed over before their clump.
+static inline float fur_reach(constant FurData &fur, float h) {
+    float curl = 0.3 * h * min(abs(fur.d[4].x), 1.0);
+    float flutter = fur.d[8].z * h * h * 1.4143;
+    float pull = min(0.95, fur.d[4].y * h * (2.25 * fur.d[5].w + 2.0));
+    return curl + flutter + pull + fur.d[0].w + 0.0001;
+}
+
+// The samples of this pixel, as offsets from its centre in pixels: the
+// pipeline's own pattern (its centre alone when it has one sample).
+static inline float2 fur_sample_offset(uint i) {
+    return get_num_samples() > 1 ? get_sample_position(i) - 0.5 : float2(0.0);
+}
+
+// `fur_mask_uv` in the WGSL: which of the pixel's samples the strands about
+// `uv` cover — `jx`, `jy` its steps in cells.
+static inline uint fur_mask_uv(constant FurData &fur, float2 uv, float2 jx, float2 jy, float h,
+                               float2 slab) {
+    int seed = int(fur.d[4].w);
+    float2 cells = fur.d[7].xy;
+    float2 clumps = fur.d[7].zw;
+    float2 q = uv * cells;
+    float2 base = floor(q);
+    uint n = get_num_samples();
+    uint full = (1u << n) - 1u;
+    float spread = n > 1 ? 0.4 * (length(jx) + length(jy)) : 0.0;
+    float reach = fur_reach(fur, h) + spread + 0.5 * length(slab);
+    uint mask = 0u;
+    for (int k = 0; k < 9; ++k) {
+        float2 cell = base + float2(float((k + 4) % 3 - 1), float((k + 4) / 3 % 3 - 1));
+        float2 r = fur_hash2(fur_cell_key(cell, cells, 0, seed));
+        float2 root = cell + 0.15 + 0.7 * r;
+        if (length(q - root) > reach) {
+            continue;
+        }
+        float2 r2 = fur_hash2(fur_cell_key(cell, cells, 31337, seed));
+        float own_len = 1.0 - fur.d[4].z * r2.x;
+        if (h > own_len) {
+            continue;
+        }
+        float2 c = root;
+        float angle = (fur.d[4].x * h + r2.y) * 6.2831853;
+        c += float2(cos(angle), sin(angle)) * (0.3 * h * min(abs(fur.d[4].x), 1.0));
+        c += fur_flutter(fur, r.x, h);
+        float2 rc = root / cells * clumps;
+        float2 cb = floor(rc - 0.5);
+        float2 best = float2(0.0);
+        float best_d = 1e9;
+        for (int j = 0; j <= 1; ++j) {
+            for (int i = 0; i <= 1; ++i) {
+                float2 kk = cb + float2(float(i), float(j));
+                float2 point = kk + fur_hash2(fur_cell_key(kk, clumps, 7, seed));
+                float d = dot(point - rc, point - rc);
+                if (d < best_d) {
+                    best_d = d;
+                    best = point;
+                }
+            }
+        }
+        float2 pull = (best / clumps * cells - c) * (fur.d[4].y * h);
+        float pl = length(pull);
+        if (pl > 0.95) {
+            pull *= 0.95 / pl;
+        }
+        c += pull;
+        float radius = fur.d[0].w * mix(1.0, fur.d[1].w, h / max(own_len, 1e-3));
+        float d = fur_capsule(q - c, slab);
+        if (d + spread < radius) {
+            mask = full;
+        } else if (d - spread < radius) {
+            for (uint i = 0; i < n; ++i) {
+                float2 o = fur_sample_offset(i);
+                if (fur_capsule(q + jx * o.x + jy * o.y - c, slab) < radius) {
+                    mask |= 1u << i;
+                }
+            }
+        }
+        if (mask == full) {
+            return mask;
+        }
+    }
+    return mask;
+}
+
+static inline uint fur_mask_surface(constant FurData &fur, float3 p, float3 n, float h,
+                                    float3 jx, float3 jy, float3 slab3) {
+    int seed = int(fur.d[4].w);
+    float3 q = p / fur.d[8].y;
+    uint samples = get_num_samples();
+    uint full = (1u << samples) - 1u;
+    uint mask = 0u;
+    float3 base = floor(q);
+    float3 helper = abs(n.x) > 0.8 ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0);
+    float3 t1 = normalize(cross(n, helper));
+    float3 t2 = cross(n, t1);
+    float csize = fur.d[5].w;
+    float curl_r = 0.3 * h * min(abs(fur.d[4].x), 1.0);
+    float pull_r = min(0.95, fur.d[4].y * h * (1.3 * csize + 0.01));
+    float reach = curl_r + fur.d[8].z * h * h * 1.4143 + pull_r + fur.d[0].w + 0.0001
+        + (samples > 1 ? 0.4 * (length(jx) + length(jy)) / fur.d[8].y : 0.0);
+    float2 slab = float2(dot(slab3, t1), dot(slab3, t2));
+    reach += 0.5 * length(slab);
+    for (int z = -1; z <= 1; ++z) {
+        for (int y = -1; y <= 1; ++y) {
+            for (int x = -1; x <= 1; ++x) {
+                float3 cell = base + float3(float(x), float(y), float(z));
+                int3 key = int3(cell) + int3(seed * 7919, seed * 104729, 31);
+                float3 r = fur_hash3(key);
+                float3 root = cell + r;
+                float3 off = root - q;
+                float dn = dot(off, n);
+                if (abs(dn) > 0.5) {
+                    continue;
+                }
+                float3 r2 = fur_hash3(key + int3(977, 31337, 4099));
+                float own_len = 1.0 - fur.d[4].z * r2.x;
+                if (h > own_len) {
+                    continue;
+                }
+                if (length(off - n * dn) > reach) {
+                    continue;
+                }
+                // Where the strand is carried from its root at this height.
+                float3 s = float3(0.0);
+                float angle = (fur.d[4].x * h + r2.y) * 6.2831853;
+                s += (t1 * cos(angle) + t2 * sin(angle)) * (0.3 * h * min(abs(fur.d[4].x), 1.0));
+                float2 fl = fur_flutter(fur, r2.z, h);
+                s += t1 * fl.x + t2 * fl.y;
+                float3 cp = (floor(root / csize) + 0.25 + 0.5 * fur_hash3(int3(floor(root / csize)) + 17)) * csize;
+                float3 pull = cp - root;
+                pull = (pull - n * dot(pull, n)) * (fur.d[4].y * h);
+                float pl = length(pull);
+                if (pl > 0.95) {
+                    pull *= 0.95 / pl;
+                }
+                s += pull;
+                float radius = fur.d[0].w * mix(1.0, fur.d[1].w, h / max(own_len, 1e-3));
+                for (uint i = 0; i < samples; ++i) {
+                    float2 o = fur_sample_offset(i);
+                    float3 at = off - (jx * o.x + jy * o.y) / fur.d[8].y;
+                    float3 o2 = at - n * dot(at, n) + s;
+                    if (fur_capsule(float2(dot(o2, t1), dot(o2, t2)), slab) < radius) {
+                        mask |= 1u << i;
+                    }
+                }
+                if (mask == full) {
+                    return mask;
+                }
+            }
+        }
+    }
+    return mask;
+}
+
+static inline float3 fur_kajiya(constant FurData &fur, float3 t, float3 n, float3 v, float3 l,
+                                float3 albedo, float h, float spec_exp) {
+    float ndl = dot(n, l);
+    if (h <= 0.0) {
+        return albedo * max(ndl, 0.0);
+    }
+    float tl = dot(t, l);
+    float diffuse = sqrt(max(1.0 - tl * tl, 0.0)) * clamp(ndl * 0.75 + 0.25, 0.0, 1.0);
+    float3 ts = normalize(t + n * fur.d[5].y);
+    float th = dot(ts, normalize(l + v));
+    float spec = pow(sqrt(max(1.0 - th * th, 0.0)), spec_exp) * fur.d[3].w
+        * clamp(ndl * 0.5 + 0.5, 0.0, 1.0) * h;
+    return albedo * diffuse + float3(spec);
+}
+
+// The fur's colour, and the samples of the pixel it covers.
+struct FurOut {
+    float4 color [[color(0)]];
+    uint mask [[sample_mask]];
+};
+
+fragment FurOut fs_fur(FIn in [[stage_in]],
+                       constant Frame &frame [[buffer(0)]],
+                       constant Draw &draw [[buffer(1)]],
+                       constant FurData &fur [[buffer(2)]],
+                       depth2d_array<float> shadow_map [[texture(6)]],
+                       depth2d_array<float> spot_map [[texture(7)]],
+                       depth2d_array<float> point_map [[texture(8)]],
+                       sampler shadow_samp [[sampler(11)]]) {
+    float h = in.uv3.x;
+    // As `fs_main` in the WGSL: derivatives first, then which samples the
+    // strands (or the hair's true width, `color.a` of its ribbon, across it
+    // at `uv12.w`) cover.
+    float3 px = dfdx(in.uv12.xyz);
+    float3 py = dfdy(in.uv12.xyz);
+    float3 fn_raw = cross(px, py);
+    float2 jx = dfdx(in.uv * fur.d[7].xy);
+    float2 jy = dfdy(in.uv * fur.d[7].xy);
+    float3 wx = dfdx(in.world_pos);
+    float3 wy = dfdy(in.world_pos);
+    // One shell's slab, swept as the line of sight crosses it relative to
+    // the leaning strand (`fur_slab_world`).
+    float3 slab_w = float3(0.0);
+    {
+        float3 nn = normalize(in.normal);
+        float3 vv = normalize(frame.camera_pos[0].xyz - in.world_pos);
+        float3 st = normalize(in.tangent.xyz);
+        float vn = dot(vv, nn);
+        float sn = max(dot(st, nn), 0.2);
+        float3 ray = (vv - nn * vn) / ((vn < 0.0 ? -1.0 : (vn > 0.0 ? 1.0 : 0.0)) * max(abs(vn), 0.2));
+        float3 strand = (st - nn * dot(st, nn)) / sn;
+        slab_w = (ray - strand) * (fur.d[0].y * in.uv3.y * in.uv12.w);
+    }
+    float2 slab_m = fur_world_to(slab_w, wx, wy);
+    float sx = dfdx(in.uv12.w);
+    float sy = dfdy(in.uv12.w);
+    float3 dt = fwidth(in.tangent.xyz);
+    float spec_exp = fur.d[5].x / (1.0 + fur.d[5].x * dot(dt, dt) * 0.25);
+    uint samples = get_num_samples();
+    uint mask = (1u << samples) - 1u;
+    if (fur.d[8].x > 1.5) {
+        mask = 0u;
+        for (uint i = 0; i < samples; ++i) {
+            float2 o = fur_sample_offset(i);
+            if (abs(in.uv12.w + sx * o.x + sy * o.y) < in.color.a) {
+                mask |= 1u << i;
+            }
+        }
+    } else if (h > 0.0) {
+        if (in.uv3.y <= 0.001) {
+            discard_fragment();
+        }
+        if (fur.d[8].x > 0.5) {
+            float fl = length(fn_raw);
+            float3 sl = px * slab_m.x + py * slab_m.y;
+            float sll = length(sl) / fur.d[8].y;
+            sl = sll > 3.0 ? sl * (3.0 / sll) : sl;
+            mask = fl > 0.0 ? fur_mask_surface(fur, in.uv12.xyz, fn_raw / fl, h, px, py, sl / fur.d[8].y) : 0u;
+        } else {
+            float2 sc = jx * slab_m.x + jy * slab_m.y;
+            float scl = length(sc);
+            sc = scl > 3.0 ? sc * (3.0 / scl) : sc;
+            mask = fur_mask_uv(fur, in.uv, jx, jy, h, sc);
+        }
+    }
+    if (mask == 0u) {
+        discard_fragment();
+    }
+    float3 n = normalize(in.normal);
+    float3 t = normalize(in.tangent.xyz);
+    float3 v = normalize(frame.camera_pos[0].xyz - in.world_pos);
+    ShadowMaps maps = { shadow_map, spot_map, point_map, shadow_samp };
+    float shadow_cache[16];
+    for (uint r = 0u; r < 16u; ++r) {
+        shadow_cache[r] = 1.0;
+    }
+    if (draw.object.x != 0u) {
+        uint count = min(frame.shadow_info.x, 16u);
+        for (uint r = 0u; r < count; ++r) {
+            shadow_cache[r] = shadow_at(frame, int(r), maps, in.world_pos, n);
+        }
+    }
+    float3 tint = mix(fur.d[2].rgb, fur.d[3].rgb, h) * in.color.rgb;
+    float ao = mix(1.0 - fur.d[2].w, 1.0, h);
+    float3 albedo = tint * ao;
+    float3 irr = frame.ambient.rgb;
+    for (uint i = 0u; i < frame.counts.w && i < 2u; ++i) {
+        HemiLight hl = frame.hemis[i];
+        float k = dot(n, normalize(hl.up.xyz)) * 0.5 + 0.5;
+        irr += mix(hl.ground.rgb, hl.sky.rgb, k);
+    }
+    float3 col = albedo * irr * (1.0 / M_PI_F);
+    for (uint i = 0u; i < frame.counts.x && i < 4u; ++i) {
+        DirLight d = frame.dir[i];
+        float3 l = -normalize(d.direction.xyz);
+        col += d.color.rgb * cached_shadow(shadow_cache, d.color.w) * fur_kajiya(fur, t, n, v, l, albedo, h, spec_exp);
+    }
+    for (uint i = 0u; i < frame.counts.y && i < 8u; ++i) {
+        PointLight p = frame.pts[i];
+        float3 to_light = p.position.xyz - in.world_pos;
+        float dist = length(to_light);
+        float att = punctual_attenuation(dist, p.params.x, p.params.y) * cached_shadow(shadow_cache, p.color.w);
+        col += p.color.rgb * att * fur_kajiya(fur, t, n, v, to_light / max(dist, 1e-4), albedo, h, spec_exp);
+    }
+    for (uint i = 0u; i < frame.counts.z && i < 4u; ++i) {
+        SpotLight sp = frame.spots[i];
+        float3 to_light = sp.position.xyz - in.world_pos;
+        float dist = length(to_light);
+        float3 l = to_light / max(dist, 1e-4);
+        float cos_angle = dot(-l, normalize(sp.direction.xyz));
+        float cone = cos_angle > sp.params.z ? smoothstep(sp.params.z, sp.params.w, cos_angle) : 0.0;
+        float att = punctual_attenuation(dist, sp.params.x, sp.params.y) * cone
+            * cached_shadow(shadow_cache, sp.color.w);
+        col += sp.color.rgb * att * fur_kajiya(fur, t, n, v, l, albedo, h, spec_exp);
+    }
+    return {float4(apply_fog(tone_map(col, frame, draw), in.view_dist, frame), 1.0), mask};
+}

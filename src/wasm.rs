@@ -178,7 +178,9 @@ async fn read_texture_region(
         let _ = tx.send(res);
     });
     await_buffer_mapping(device, rx).await?;
-    let mapped = buffer_slice.get_mapped_range().expect("buffer range is mapped");
+    let mapped = buffer_slice
+        .get_mapped_range()
+        .expect("buffer range is mapped");
     let mut out = Vec::with_capacity((w * h * bytes_per_pixel) as usize);
     for row in 0..h {
         let start = (row * padded) as usize;
@@ -361,8 +363,7 @@ pub async fn open_browser_gpu(
                 let surface = instance
                     .create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone()))
                     .map_err(|e| JsValue::from_str(&format!("webgpu surface: {e:?}")))?;
-                SHARED_BROWSER_BACKEND
-                    .with(|b| *b.borrow_mut() = Some(adapter.get_info().backend));
+                SHARED_BROWSER_BACKEND.with(|b| *b.borrow_mut() = Some(adapter.get_info().backend));
                 SHARED_BROWSER_INSTANCE.with(|i| *i.borrow_mut() = Some(instance.clone()));
                 return Ok((instance, surface, adapter));
             }
@@ -391,8 +392,7 @@ pub async fn open_browser_gpu(
             Ok(adapter) => {
                 // Deliberately not cached: see the note above about WebGL2
                 // contexts belonging to their canvas.
-                SHARED_BROWSER_BACKEND
-                    .with(|b| *b.borrow_mut() = Some(adapter.get_info().backend));
+                SHARED_BROWSER_BACKEND.with(|b| *b.borrow_mut() = Some(adapter.get_info().backend));
                 return Ok((instance, surface, adapter));
             }
             Err(e) => why = format!("{why}; webgl2: {e}"),
@@ -427,14 +427,12 @@ async fn acquire_browser_gpu(
     // a black canvas at a full frame rate, which is a great deal harder to
     // diagnose than an error would have been.
     let (device, queue) = adapter
-        .request_device(
-            &wgpu::DeviceDescriptor {
-                label: Some("threers device"),
-                required_features: wgpu::Features::empty(),
-                required_limits: adapter.limits(),
-                ..Default::default()
-            },
-        )
+        .request_device(&wgpu::DeviceDescriptor {
+            label: Some("threers device"),
+            required_features: wgpu::Features::empty(),
+            required_limits: adapter.limits(),
+            ..Default::default()
+        })
         .await
         .map_err(|e| JsValue::from_str(&format!("device: {e:?}")))?;
     crate::gpu::report_uncaptured_errors(&device, "threers");
@@ -881,7 +879,8 @@ impl WebRenderer {
     /// Copy the WebGL2 back buffer over the whole canvas and present it.
     fn present_gl_back_buffer(&mut self, back_id: u32) {
         let frame = match self.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
+            wgpu::CurrentSurfaceTexture::Success(f)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
             _ => {
                 self.surface.configure(&self.device, &self.config);
                 return;
@@ -890,7 +889,9 @@ impl WebRenderer {
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-        let identity = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0];
+        let identity = [
+            1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+        ];
         let camera = postfx_camera_from(0.1, 100.0, 0.5, 16, &identity, &identity);
         // Kind 0, the byte copy: the buffer and the canvas are both sRGB on
         // WebGL2, and the pass re-encodes what its raw view decodes and
@@ -1035,7 +1036,9 @@ impl WebRenderer {
                 .await
                 .map_err(|e| JsValue::from_str(&e))?;
             // Copy the mapped (possibly padded) range into a tight RGBA byte vec.
-            let mapped = buffer_slice.get_mapped_range().expect("buffer range is mapped");
+            let mapped = buffer_slice
+                .get_mapped_range()
+                .expect("buffer range is mapped");
             let mut out = Vec::with_capacity((w * h * bytes_per_pixel) as usize);
             for row in 0..h {
                 let start = (row * padded) as usize;
@@ -1139,12 +1142,12 @@ impl WebRenderer {
         }
         let frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(f)
-                            | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
+            | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
             _ => {
                 self.surface.configure(&self.device, &self.config);
                 match self.surface.get_current_texture() {
                     wgpu::CurrentSurfaceTexture::Success(f)
-                            | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
+                    | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
                     _ => return,
                 }
             }
@@ -1278,12 +1281,12 @@ impl WebRenderer {
     pub fn blit_rgba8_to_canvas(&mut self, data: Vec<u8>, width: u32, height: u32) {
         let frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(f)
-                            | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
+            | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
             _ => {
                 self.surface.configure(&self.device, &self.config);
                 match self.surface.get_current_texture() {
                     wgpu::CurrentSurfaceTexture::Success(f)
-                            | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
+                    | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
                     _ => return,
                 }
             }
@@ -1372,7 +1375,7 @@ impl WebRenderer {
         }
         match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame)
-                            | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {
+            | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {
                 let view = frame
                     .texture
                     .create_view(&wgpu::TextureViewDescriptor::default());
@@ -1481,7 +1484,7 @@ impl WebRenderer {
         }
         match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame)
-                            | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {
+            | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {
                 let view = frame
                     .texture
                     .create_view(&wgpu::TextureViewDescriptor::default());
@@ -1503,7 +1506,9 @@ impl WebRenderer {
 
     /// Device and queue for sharing with [`crate::wasm_pathtrace::WebPathTracer`].
     #[cfg(feature = "raytrace")]
-    pub(crate) fn gpu_device_queue(&self) -> (std::sync::Arc<wgpu::Device>, std::sync::Arc<wgpu::Queue>) {
+    pub(crate) fn gpu_device_queue(
+        &self,
+    ) -> (std::sync::Arc<wgpu::Device>, std::sync::Arc<wgpu::Queue>) {
         (
             std::sync::Arc::clone(&self.device),
             self.renderer.queue_arc(),
@@ -1519,6 +1524,8 @@ pub struct WebScene {
     /// Mirrored three.js `uuid`s, for animation track names that use them
     /// (`animation::WebScene::find_animation_node`).
     node_uuids: std::collections::HashMap<ObjectId, String>,
+    /// Fur in this scene, animated by `stepFur`.
+    fur_animator: crate::fur::FurAnimator,
 }
 
 #[wasm_bindgen]
@@ -1528,6 +1535,7 @@ impl WebScene {
         WebScene {
             inner: crate::Scene::new(),
             node_uuids: std::collections::HashMap::new(),
+            fur_animator: crate::fur::FurAnimator::new(),
         }
     }
 
@@ -1673,6 +1681,116 @@ impl WebScene {
         let obj = crate::core::Object3D::instanced_mesh(im);
         let id = self.inner.add(obj);
         WebObjectHandle { id }
+    }
+
+    /// Grow shell fur (`threers::fur`) on a geometry; returns its handle.
+    /// The strand grid is fitted to the geometry's UVs.
+    #[wasm_bindgen(js_name = addFur)]
+    pub fn add_fur(&mut self, geom: &WebGeometry, fur: &WebFurMaterial) -> WebObjectHandle {
+        let obj = crate::fur::fur_object((*geom.inner).clone(), &fur.inner);
+        let id = self.inner.add(obj);
+        self.fur_animator.track(id, &fur.inner);
+        WebObjectHandle { id }
+    }
+
+    /// Grow strand hair (`threers::fur::strands`) on a geometry: `count`
+    /// strands of `segments` pieces, ribbons `width` wide at the root, shaded
+    /// and animated (by `stepFur`) as `fur` says. Returns its handle.
+    /// `shadowStrands` (default 0.25) is the share of strands that cast
+    /// shadows, 0 for none; the object casts them from shadow-casting lights.
+    #[wasm_bindgen(js_name = addHair)]
+    pub fn add_hair(
+        &mut self,
+        geom: &WebGeometry,
+        fur: &WebFurMaterial,
+        count: u32,
+        segments: u32,
+        width: f32,
+        shadow_strands: Option<f32>,
+    ) -> WebObjectHandle {
+        let options = crate::fur::strands::StrandOptions {
+            count: count as usize,
+            segments: segments as usize,
+            width,
+            shadow_strands: shadow_strands
+                .unwrap_or(crate::fur::strands::StrandOptions::default().shadow_strands),
+        };
+        let obj = crate::fur::strands::hair_object(&geom.inner, &fur.inner, &options);
+        let id = self.inner.add(obj);
+        self.fur_animator.track(id, &fur.inner);
+        WebObjectHandle { id }
+    }
+
+    /// Grow strand hair on the skinned mesh `skinned` (a handle from
+    /// `addSkinnedMesh` or `createSkinnedMesh`), as its child, carried
+    /// through its animation by `stepFur`: each strand on its triangle,
+    /// trailing its root on a spring. `undefined` if `skinned` is not a
+    /// skinned mesh.
+    /// `shadowStrands` as for `addHair`.
+    #[wasm_bindgen(js_name = growHairOnSkinned)]
+    pub fn grow_hair_on_skinned(
+        &mut self,
+        skinned: &WebObjectHandle,
+        fur: &WebFurMaterial,
+        count: u32,
+        segments: u32,
+        width: f32,
+        shadow_strands: Option<f32>,
+    ) -> Option<WebObjectHandle> {
+        let options = crate::fur::strands::StrandOptions {
+            count: count as usize,
+            segments: segments as usize,
+            width,
+            shadow_strands: shadow_strands
+                .unwrap_or(crate::fur::strands::StrandOptions::default().shadow_strands),
+        };
+        self.fur_animator
+            .grow_hair_on_skinned(&mut self.inner, skinned.id, &fur.inner, &options)
+            .map(|id| WebObjectHandle { id })
+    }
+
+    /// Advance every fur object in the scene — wind, flutter and inertia — to
+    /// `time` seconds, `dt` after the last step. Once a frame, before
+    /// rendering. (The three.js shim's renderer calls it for you.)
+    #[wasm_bindgen(js_name = stepFur)]
+    pub fn step_fur(&mut self, time: f32, dt: f32) {
+        self.fur_animator.update(&mut self.inner, time, dt);
+    }
+
+    /// A hand in a fur or hair object's coat (`handle`): within `radius` of
+    /// (`x`, `y`, `z`, world), strands are pushed by (`px`, `py`, `pz`) — a
+    /// pull, per unit of their length, along the hand's motion — and parted
+    /// away from it by `part`. Call it as the hand moves; let go and it
+    /// fades, the strands springing back (`stepFur` runs that).
+    #[wasm_bindgen(js_name = strokeFur)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn stroke_fur(
+        &mut self,
+        handle: &WebObjectHandle,
+        x: f32,
+        y: f32,
+        z: f32,
+        radius: f32,
+        px: f32,
+        py: f32,
+        pz: f32,
+        part: f32,
+    ) {
+        self.fur_animator.stroke(
+            handle.id,
+            crate::Vector3::new(x, y, z),
+            radius,
+            crate::Vector3::new(px, py, pz),
+            part,
+        );
+    }
+
+    /// Advance a fur object's wind to `seconds`.
+    #[wasm_bindgen(js_name = setFurTime)]
+    pub fn set_fur_time(&mut self, handle: &WebObjectHandle, seconds: f32) {
+        if let Some(obj) = self.inner.get_mut(handle.id) {
+            crate::fur::set_fur_time(obj, seconds);
+        }
     }
 
     /// Add a Points primitive (geometry interpreted as point-list).
@@ -1887,9 +2005,18 @@ impl WebScene {
     /// `material.clippingPlanes` / `renderer.clippingPlanes` to this each
     /// frame. `on = false` removes it.
     #[wasm_bindgen(js_name = setObjectClipPlane)]
-    pub fn set_object_clip_plane(&mut self, handle: &WebObjectHandle, nx: f32, ny: f32, nz: f32, constant: f32, on: bool) {
+    pub fn set_object_clip_plane(
+        &mut self,
+        handle: &WebObjectHandle,
+        nx: f32,
+        ny: f32,
+        nz: f32,
+        constant: f32,
+        on: bool,
+    ) {
         if let Some(obj) = self.inner.get_mut(handle.id) {
-            obj.clip_plane = on.then(|| crate::math::Plane::new(crate::math::Vector3::new(nx, ny, nz), constant));
+            obj.clip_plane = on
+                .then(|| crate::math::Plane::new(crate::math::Vector3::new(nx, ny, nz), constant));
         }
     }
 
@@ -2012,16 +2139,7 @@ impl WebCamera {
     /// Pass `fov_deg < 0` to leave FOV unchanged. One wasm call per frame
     /// instead of separate `setPosition` / `lookAt` / `setFov`.
     #[wasm_bindgen(js_name = setView)]
-    pub fn set_view(
-        &mut self,
-        px: f32,
-        py: f32,
-        pz: f32,
-        tx: f32,
-        ty: f32,
-        tz: f32,
-        fov_deg: f32,
-    ) {
+    pub fn set_view(&mut self, px: f32, py: f32, pz: f32, tx: f32, ty: f32, tz: f32, fov_deg: f32) {
         let eye = crate::Vector3::new(px, py, pz);
         let target = crate::Vector3::new(tx, ty, tz);
         match &mut self.inner {
@@ -2254,9 +2372,8 @@ impl WebGeometry {
                 corners.len()
             )));
         }
-        let c = |i: usize| {
-            crate::Vector3::new(corners[i * 3], corners[i * 3 + 1], corners[i * 3 + 2])
-        };
+        let c =
+            |i: usize| crate::Vector3::new(corners[i * 3], corners[i * 3 + 1], corners[i * 3 + 2]);
         Ok(WebGeometry {
             inner: Arc::new(crate::QuadGeometry::with_segments(
                 [c(0), c(1), c(2), c(3)],
@@ -2323,7 +2440,9 @@ impl WebGeometry {
             let mesh = preset.evaluate(nx, ny, t);
             preset.to_geometry(&mesh)
         } else {
-            crate::KirigamiPreset::Planar.evaluate(nx, ny, t).to_geometry()
+            crate::KirigamiPreset::Planar
+                .evaluate(nx, ny, t)
+                .to_geometry()
         };
         WebGeometry {
             inner: Arc::new(geom),
@@ -2335,8 +2454,8 @@ impl WebGeometry {
     pub fn kirigami_net_svg(variant: u32, nx: u32, ny: u32) -> String {
         let nx = (nx as usize).max(1);
         let ny = (ny as usize).max(2);
-        let preset = crate::KirigamiPreset::from_variant(variant)
-            .unwrap_or(crate::KirigamiPreset::Planar);
+        let preset =
+            crate::KirigamiPreset::from_variant(variant).unwrap_or(crate::KirigamiPreset::Planar);
         preset.evaluate(nx, ny, 0.0).develop_joined().to_svg()
     }
 
@@ -3452,7 +3571,10 @@ impl WebMaterial {
 
     /// A Standard or Physical material's own `envMap` slot.
     fn pbr_env_slot(&mut self) -> Option<&mut Option<Arc<crate::CubeTexture>>> {
-        if !matches!(&*self.inner, crate::Material::Standard(_) | crate::Material::Physical(_)) {
+        if !matches!(
+            &*self.inner,
+            crate::Material::Standard(_) | crate::Material::Physical(_)
+        ) {
             return None;
         }
         match Arc::make_mut(&mut self.inner) {
@@ -3619,10 +3741,20 @@ impl WebShaderMaterial {
     /// exist first; WebGL2 has no shared device and is refused.
     #[wasm_bindgen(js_name = setVolume)]
     pub fn set_volume(
-        &mut self, slot: u32, data: &[u8], width: u32, height: u32, depth: u32, channels: u32,
+        &mut self,
+        slot: u32,
+        data: &[u8],
+        width: u32,
+        height: u32,
+        depth: u32,
+        channels: u32,
     ) -> Result<(), JsValue> {
         use crate::volume::VolumeFormat;
-        let format = if channels == 4 { VolumeFormat::Rgba8Unorm } else { VolumeFormat::R8Unorm };
+        let format = if channels == 4 {
+            VolumeFormat::Rgba8Unorm
+        } else {
+            VolumeFormat::R8Unorm
+        };
         self.put_volume(slot, width, height, depth, format, data.to_vec())
     }
 
@@ -3631,13 +3763,25 @@ impl WebShaderMaterial {
     /// declared filterable, which `R32Float` is not without an extension.
     #[wasm_bindgen(js_name = setVolumeF32)]
     pub fn set_volume_f32(
-        &mut self, slot: u32, data: &[f32], width: u32, height: u32, depth: u32,
+        &mut self,
+        slot: u32,
+        data: &[f32],
+        width: u32,
+        height: u32,
+        depth: u32,
     ) -> Result<(), JsValue> {
         let bytes = data
             .iter()
             .flat_map(|v| crate::renderer::readback::f32_to_f16(*v).to_le_bytes())
             .collect();
-        self.put_volume(slot, width, height, depth, crate::volume::VolumeFormat::R16Float, bytes)
+        self.put_volume(
+            slot,
+            width,
+            height,
+            depth,
+            crate::volume::VolumeFormat::R16Float,
+            bytes,
+        )
     }
 
     /// Unbind a volume slot (it reads as zero again).
@@ -3699,6 +3843,14 @@ impl WebShaderMaterial {
         self.inner.opacity = opacity;
     }
 
+    /// three.js `alphaToCoverage`: under MSAA the fragment's alpha is the
+    /// share of the pixel's samples it covers (return
+    /// `coverage_alpha(c)`, or write samples with `frag_out`).
+    #[wasm_bindgen(js_name = setAlphaToCoverage)]
+    pub fn set_alpha_to_coverage(&mut self, on: bool) {
+        self.inner.alpha_to_coverage = on;
+    }
+
     /// `0` FrontSide, `1` BackSide, `2` DoubleSide — three.js's `side`.
     #[wasm_bindgen(js_name = setSide)]
     pub fn set_side(&mut self, side: u32) {
@@ -3746,14 +3898,22 @@ impl WebShaderMaterial {
 
 impl WebShaderMaterial {
     fn put_volume(
-        &mut self, slot: u32, width: u32, height: u32, depth: u32,
-        format: crate::volume::VolumeFormat, bytes: Vec<u8>,
+        &mut self,
+        slot: u32,
+        width: u32,
+        height: u32,
+        depth: u32,
+        format: crate::volume::VolumeFormat,
+        bytes: Vec<u8>,
     ) -> Result<(), JsValue> {
         use crate::volume::{Data3DTexture, GpuVolume};
         if slot > 1 {
-            return Err(JsValue::from_str("a ShaderMaterial has two volume slots, 0 and 1"));
+            return Err(JsValue::from_str(
+                "a ShaderMaterial has two volume slots, 0 and 1",
+            ));
         }
-        let expected = width as usize * height as usize * depth as usize * format.bytes_per_texel() as usize;
+        let expected =
+            width as usize * height as usize * depth as usize * format.bytes_per_texel() as usize;
         if bytes.len() != expected {
             return Err(JsValue::from_str(&format!(
                 "a {width}x{height}x{depth} {format:?} volume needs {expected} bytes, got {}",
@@ -3765,7 +3925,11 @@ impl WebShaderMaterial {
                 "3D textures need the WebGPU renderer: create a WebGLRenderer before setting a volume",
             ));
         };
-        let vol = GpuVolume::from_texture(&device, &queue, &Data3DTexture::new(width, height, depth, format, bytes));
+        let vol = GpuVolume::from_texture(
+            &device,
+            &queue,
+            &Data3DTexture::new(width, height, depth, format, bytes),
+        );
         self.volumes[slot as usize] = Some(Arc::new(vol.view));
         self.sync_volumes(Some(&device));
         Ok(())
@@ -3780,7 +3944,11 @@ impl WebShaderMaterial {
             [a, Some(b)] => {
                 let first = a.clone().or_else(|| {
                     let device = device?;
-                    let v = crate::volume::GpuVolume::new(device, [1, 1, 1], crate::volume::VolumeFormat::R8Unorm);
+                    let v = crate::volume::GpuVolume::new(
+                        device,
+                        [1, 1, 1],
+                        crate::volume::VolumeFormat::R8Unorm,
+                    );
                     Some(Arc::new(v.view))
                 });
                 first.map_or_else(Vec::new, |a| vec![a, b.clone()])
@@ -3901,7 +4069,9 @@ impl WebColor {
     /// is dropped; `cssAlpha` reads it.
     #[wasm_bindgen(js_name = fromCss)]
     pub fn from_css(css: &str) -> Option<WebColor> {
-        crate::Color::from_css(css).ok().map(|inner| WebColor { inner })
+        crate::Color::from_css(css)
+            .ok()
+            .map(|inner| WebColor { inner })
     }
 
     /// The alpha of a CSS colour string (1 when it gives none), or
@@ -3931,7 +4101,8 @@ pub struct WebColorScale {
 }
 
 fn named_ramp(name: &str) -> Result<crate::math::ColorRamp, JsValue> {
-    crate::math::ColorRamp::named(name).ok_or_else(|| JsValue::from_str(&format!("no colour scheme named {name}")))
+    crate::math::ColorRamp::named(name)
+        .ok_or_else(|| JsValue::from_str(&format!("no colour scheme named {name}")))
 }
 
 #[wasm_bindgen]
@@ -3939,47 +4110,70 @@ impl WebColorScale {
     /// `lo..hi` along the named scheme (`"viridis"`, `"blues"`, `"RdBu"`,
     /// `"interpolateSpectral"`, …).
     pub fn sequential(scheme: &str, lo: f32, hi: f32) -> Result<WebColorScale, JsValue> {
-        Ok(Self { inner: crate::math::ColorScale::sequential(named_ramp(scheme)?, lo, hi) })
+        Ok(Self {
+            inner: crate::math::ColorScale::sequential(named_ramp(scheme)?, lo, hi),
+        })
     }
 
     /// Away from `mid` both ways.
     pub fn diverging(scheme: &str, lo: f32, mid: f32, hi: f32) -> Result<WebColorScale, JsValue> {
-        Ok(Self { inner: crate::math::ColorScale::diverging(named_ramp(scheme)?, lo, mid, hi) })
+        Ok(Self {
+            inner: crate::math::ColorScale::diverging(named_ramp(scheme)?, lo, mid, hi),
+        })
     }
 
     /// `classes` equal-width bins.
-    pub fn quantize(scheme: &str, lo: f32, hi: f32, classes: usize) -> Result<WebColorScale, JsValue> {
-        Ok(Self { inner: crate::math::ColorScale::quantize(named_ramp(scheme)?, lo, hi, classes) })
+    pub fn quantize(
+        scheme: &str,
+        lo: f32,
+        hi: f32,
+        classes: usize,
+    ) -> Result<WebColorScale, JsValue> {
+        Ok(Self {
+            inner: crate::math::ColorScale::quantize(named_ramp(scheme)?, lo, hi, classes),
+        })
     }
 
     /// `classes` bins of equal count of `data`.
     pub fn quantile(scheme: &str, data: &[f32], classes: usize) -> Result<WebColorScale, JsValue> {
-        Ok(Self { inner: crate::math::ColorScale::quantile(named_ramp(scheme)?, data, classes) })
+        Ok(Self {
+            inner: crate::math::ColorScale::quantile(named_ramp(scheme)?, data, classes),
+        })
     }
 
     /// Explicit class breaks.
     pub fn threshold(scheme: &str, breaks: Vec<f32>) -> Result<WebColorScale, JsValue> {
-        Ok(Self { inner: crate::math::ColorScale::threshold(named_ramp(scheme)?, breaks) })
+        Ok(Self {
+            inner: crate::math::ColorScale::threshold(named_ramp(scheme)?, breaks),
+        })
     }
 
     /// Logarithmic in `base`.
     pub fn log(self, base: f32) -> WebColorScale {
-        Self { inner: self.inner.log(base) }
+        Self {
+            inner: self.inner.log(base),
+        }
     }
 
     /// By the square root.
     pub fn sqrt(self) -> WebColorScale {
-        Self { inner: self.inner.sqrt() }
+        Self {
+            inner: self.inner.sqrt(),
+        }
     }
 
     /// By a power.
     pub fn pow(self, exponent: f32) -> WebColorScale {
-        Self { inner: self.inner.pow(exponent) }
+        Self {
+            inner: self.inner.pow(exponent),
+        }
     }
 
     /// Symmetric log, linear within `constant` of zero.
     pub fn symlog(self, constant: f32) -> WebColorScale {
-        Self { inner: self.inner.symlog(constant) }
+        Self {
+            inner: self.inner.symlog(constant),
+        }
     }
 
     /// The scheme reversed, end to end.
@@ -4002,7 +4196,9 @@ impl WebColorScale {
 
     /// The colour for `value`, linear RGB.
     pub fn map(&self, value: f32) -> WebColor {
-        WebColor { inner: self.inner.map(value) }
+        WebColor {
+            inner: self.inner.map(value),
+        }
     }
 
     /// Colours for `values` as sRGB bytes, four to a value — straight into a
@@ -4015,13 +4211,20 @@ impl WebColorScale {
     /// A legend's rows, `[from, to, r, g, b]` each (linear RGB), `n` steps
     /// for a continuous scale.
     pub fn legend(&self, n: usize) -> Vec<f32> {
-        self.inner.legend(n).into_iter().flat_map(|(a, b, c)| [a, b, c.r, c.g, c.b]).collect()
+        self.inner
+            .legend(n)
+            .into_iter()
+            .flat_map(|(a, b, c)| [a, b, c.r, c.g, c.b])
+            .collect()
     }
 
     /// Every scheme name the scales know.
     #[wasm_bindgen(js_name = schemeNames)]
     pub fn scheme_names() -> Vec<String> {
-        crate::math::ColorRamp::scheme_names().into_iter().map(|(n, _)| n.to_string()).collect()
+        crate::math::ColorRamp::scheme_names()
+            .into_iter()
+            .map(|(n, _)| n.to_string())
+            .collect()
     }
 }
 
@@ -4753,7 +4956,12 @@ impl WebLight {
             LightInner::Point(l) => &l.shadow,
             _ => return Vec::new(),
         };
-        vec![shadow.bias, shadow.normal_bias, shadow.radius, shadow.map_size as f32]
+        vec![
+            shadow.bias,
+            shadow.normal_bias,
+            shadow.radius,
+            shadow.map_size as f32,
+        ]
     }
 
     /// Cascaded shadow maps for a directional light
@@ -4781,7 +4989,9 @@ impl WebLight {
             _ => return,
         };
         shadow.light_size = light_size.max(0.0);
-        shadow.filter = (0..=3).contains(&filter).then(|| shadow_type_of(filter as u32));
+        shadow.filter = (0..=3)
+            .contains(&filter)
+            .then(|| shadow_type_of(filter as u32));
     }
 
     /// three.js `light.shadow.mapSize`: the shadow map's side in texels (the
@@ -4860,7 +5070,6 @@ pub struct WebTexture {
 }
 #[wasm_bindgen]
 impl WebTexture {
-
     /// three.js `texture.colorSpace`: `true` for `SRGBColorSpace` (the bytes
     /// are sRGB-encoded and the sampler decodes them), `false` for none or
     /// linear. Applies to the 8-bit RGBA formats; others are left as they are.
@@ -4869,8 +5078,14 @@ impl WebTexture {
     #[wasm_bindgen(js_name = setSrgb)]
     pub fn set_srgb(&mut self, srgb: bool) {
         use crate::TextureFormat as F;
-        let want = if srgb { F::Rgba8UnormSrgb } else { F::Rgba8Unorm };
-        if matches!(self.inner.format, F::Rgba8Unorm | F::Rgba8UnormSrgb) && self.inner.format != want {
+        let want = if srgb {
+            F::Rgba8UnormSrgb
+        } else {
+            F::Rgba8Unorm
+        };
+        if matches!(self.inner.format, F::Rgba8Unorm | F::Rgba8UnormSrgb)
+            && self.inner.format != want
+        {
             Arc::make_mut(&mut self.inner).format = want;
         }
     }
@@ -5104,7 +5319,6 @@ pub struct WebDataTexture {
 }
 #[wasm_bindgen]
 impl WebDataTexture {
-
     /// three.js `texture.colorSpace`: `true` for `SRGBColorSpace` (the bytes
     /// are sRGB-encoded and the sampler decodes them), `false` for none or
     /// linear. Applies to the 8-bit RGBA formats; others are left as they are.
@@ -5113,8 +5327,14 @@ impl WebDataTexture {
     #[wasm_bindgen(js_name = setSrgb)]
     pub fn set_srgb(&mut self, srgb: bool) {
         use crate::TextureFormat as F;
-        let want = if srgb { F::Rgba8UnormSrgb } else { F::Rgba8Unorm };
-        if matches!(self.inner.format, F::Rgba8Unorm | F::Rgba8UnormSrgb) && self.inner.format != want {
+        let want = if srgb {
+            F::Rgba8UnormSrgb
+        } else {
+            F::Rgba8Unorm
+        };
+        if matches!(self.inner.format, F::Rgba8Unorm | F::Rgba8UnormSrgb)
+            && self.inner.format != want
+        {
             Arc::make_mut(&mut self.inner).format = want;
         }
     }
@@ -5254,7 +5474,11 @@ macro_rules! env_state_of {
 trait EnvStateOf<'a> {
     fn env_state(&'a mut self) -> EnvState<'a>;
 }
-env_state_of!(crate::BasicMaterial, crate::LambertMaterial, crate::PhongMaterial);
+env_state_of!(
+    crate::BasicMaterial,
+    crate::LambertMaterial,
+    crate::PhongMaterial
+);
 
 impl<'a> EnvState<'a> {
     fn of<T: EnvStateOf<'a>>(m: &'a mut T) -> Self {
@@ -5281,7 +5505,12 @@ fn set_uv_matrix(t: &mut crate::Texture, [a, b, c, d, e, f]: [f32; 6]) {
 /// `NearestMipmapLinearFilter` 1005, `LinearFilter` 1006,
 /// `LinearMipmapNearestFilter` 1007, `LinearMipmapLinearFilter` 1008 (the
 /// default for anything else). The second is `None` without mipmaps.
-fn three_filter(f: u32) -> (crate::textures::TextureFilter, Option<crate::textures::TextureFilter>) {
+fn three_filter(
+    f: u32,
+) -> (
+    crate::textures::TextureFilter,
+    Option<crate::textures::TextureFilter>,
+) {
     use crate::textures::TextureFilter::{Linear, Nearest};
     match f {
         1003 => (Nearest, None),
@@ -5862,8 +6091,8 @@ impl WebKtx2Loader {
     /// separately — a compressed payload is not pixels and must not be handed
     /// back as if it were.
     pub fn parse(&self, bytes: Vec<u8>) -> Result<WebKtx2Texture, JsValue> {
-        let ktx = crate::loaders::ktx2::parse(&bytes)
-            .map_err(|e| JsValue::from_str(&format!("{e}")))?;
+        let ktx =
+            crate::loaders::ktx2::parse(&bytes).map_err(|e| JsValue::from_str(&format!("{e}")))?;
         let format = format!("{:?}", ktx.texture_format().ok());
         let levels = ktx
             .level_data()
@@ -6785,7 +7014,9 @@ impl WebScene {
     /// anything else its +Z, with the parent's rotation divided out.
     #[wasm_bindgen(js_name = lookAt)]
     pub fn look_at(&mut self, handle: &WebObjectHandle, x: f32, y: f32, z: f32) {
-        self.inner.arena.look_at(handle.id, crate::Vector3::new(x, y, z));
+        self.inner
+            .arena
+            .look_at(handle.id, crate::Vector3::new(x, y, z));
     }
 
     /// Get the world-space position (after parent transforms).
@@ -7145,7 +7376,11 @@ impl WebBufferGeometry {
     /// defaulting to 40°. Returns how many quads were formed. See
     /// `BufferGeometry::infer_quads`.
     #[wasm_bindgen(js_name = inferQuads)]
-    pub fn infer_quads(&mut self, max_face_angle: Option<f32>, max_shape_angle: Option<f32>) -> u32 {
+    pub fn infer_quads(
+        &mut self,
+        max_face_angle: Option<f32>,
+        max_shape_angle: Option<f32>,
+    ) -> u32 {
         let d = crate::core::DEFAULT_INFER_QUADS_ANGLE;
         Arc::make_mut(&mut self.inner)
             .infer_quads(max_face_angle.unwrap_or(d), max_shape_angle.unwrap_or(d)) as u32
@@ -8912,7 +9147,9 @@ impl WebIkServoPlant {
             at: [tx, ty, tz],
             along: [ax, ay, az],
         };
-        let sol = self.ik.solve_chain(&self.q_ik, &goal, &self.world.plant.chain);
+        let sol = self
+            .ik
+            .solve_chain(&self.q_ik, &goal, &self.world.plant.chain);
         self.q_ik = sol.joints.clone();
         self.world.last_cmd = sol.joints.clone();
         self.world.plant.step(&sol.joints, dt.max(1e-4));
@@ -9052,9 +9289,8 @@ impl WebIkServoPlant {
     #[wasm_bindgen(js_name = setTendon)]
     pub fn set_tendon(&mut self, name: &str) -> Result<(), JsValue> {
         use crate::kinematics::{Drive, TendonMaterial};
-        let mat = TendonMaterial::from_name(name).ok_or_else(|| {
-            JsValue::from_str("unknown tendon (steel|uhmwpe|nylon|aramid)")
-        })?;
+        let mat = TendonMaterial::from_name(name)
+            .ok_or_else(|| JsValue::from_str("unknown tendon (steel|uhmwpe|nylon|aramid)"))?;
         let temp = self.world.plant.temp_c();
         for s in &mut self.world.plant.servos {
             if matches!(s.drive, Drive::Tendon(_)) {
@@ -9413,7 +9649,12 @@ impl WebQuadView {
 
     /// Continue the gesture. Returns whether anything moved.
     #[wasm_bindgen(js_name = pointerMove)]
-    pub fn pointer_move(&mut self, camera: &mut WebCamera, x: f32, y: f32) -> Result<bool, JsValue> {
+    pub fn pointer_move(
+        &mut self,
+        camera: &mut WebCamera,
+        x: f32,
+        y: f32,
+    ) -> Result<bool, JsValue> {
         let cam = quad_persp(camera, "pointerMove")?;
         let Some(c) = self.controls.as_mut() else {
             return Ok(false);
@@ -9453,9 +9694,7 @@ impl WebQuadView {
     /// Maximise the pane under `(x, y)` (top-left origin), or restore the
     /// four. Returns the pane, `undefined` over a gap.
     pub fn dblclick(&mut self, x: f32, y: f32, width: f32, height: f32) -> Option<String> {
-        let pane = self
-            .inner
-            .pane_at(x, height - y, width, height)?;
+        let pane = self.inner.pane_at(x, height - y, width, height)?;
         self.inner.toggle_maximize(pane);
         if let Some(c) = self.controls.as_mut() {
             c.pointer_up();
@@ -9467,21 +9706,31 @@ impl WebQuadView {
     /// zoom 1, and `camera` moved along its line of sight to fit. False when
     /// there is nothing to frame.
     #[wasm_bindgen(js_name = frameAll)]
-    pub fn frame_all(&mut self, scene: &mut WebScene, camera: &mut WebCamera) -> Result<bool, JsValue> {
+    pub fn frame_all(
+        &mut self,
+        scene: &mut WebScene,
+        camera: &mut WebCamera,
+    ) -> Result<bool, JsValue> {
         let cam = quad_persp(camera, "frameAll")?;
         let snapshot = cam.clone();
         let mut ctl = self
             .controls
             .take()
             .unwrap_or_else(|| crate::helpers::QuadViewControls::new(&snapshot));
-        let framed = ctl.frame_all(&mut self.inner, cam, &mut scene.inner).is_some();
+        let framed = ctl
+            .frame_all(&mut self.inner, cam, &mut scene.inner)
+            .is_some();
         self.controls = Some(ctl);
         Ok(framed)
     }
 
     /// `frameAll` for a box: frame `bounds` in every pane.
     #[wasm_bindgen(js_name = frameBoxAll)]
-    pub fn frame_box_all(&mut self, bounds: &WebBox3, camera: &mut WebCamera) -> Result<(), JsValue> {
+    pub fn frame_box_all(
+        &mut self,
+        bounds: &WebBox3,
+        camera: &mut WebCamera,
+    ) -> Result<(), JsValue> {
         let cam = quad_persp(camera, "frameBoxAll")?;
         let snapshot = cam.clone();
         let mut ctl = self
@@ -9622,7 +9871,12 @@ impl WebQuadView {
     /// `[x, y, width, height]` of `pane` on a `width`×`height` canvas (logical
     /// pixels, bottom-left origin), or `undefined` when it is hidden.
     #[wasm_bindgen(js_name = paneRect)]
-    pub fn pane_rect(&self, pane: &str, width: f32, height: f32) -> Result<Option<Vec<f32>>, JsValue> {
+    pub fn pane_rect(
+        &self,
+        pane: &str,
+        width: f32,
+        height: f32,
+    ) -> Result<Option<Vec<f32>>, JsValue> {
         let p = pane_from_name(pane)?;
         Ok(self
             .inner
@@ -9650,9 +9904,10 @@ impl WebQuadView {
     #[wasm_bindgen(js_name = orthoCamera)]
     pub fn ortho_camera(&self, pane: &str) -> Result<WebCamera, JsValue> {
         let p = pane_from_name(pane)?;
-        let cam = self.inner.ortho_camera(p).ok_or_else(|| {
-            JsValue::from_str("the perspective pane has no orthographic camera")
-        })?;
+        let cam = self
+            .inner
+            .ortho_camera(p)
+            .ok_or_else(|| JsValue::from_str("the perspective pane has no orthographic camera"))?;
         Ok(WebCamera {
             inner: CameraInner::Orthographic(cam.clone()),
         })
@@ -9718,8 +9973,152 @@ impl WebQuadView {
                 }
                 renderer.renderer.queue_arc().present(frame);
             }
-            _ => renderer.surface.configure(&renderer.device, &renderer.config),
+            _ => renderer
+                .surface
+                .configure(&renderer.device, &renderer.config),
         }
         Ok(())
+    }
+}
+
+/// Shell fur's groom and look (`threers::fur::FurMaterial`), for
+/// `WebScene.addFur`. Every setter returns nothing and changes this object;
+/// fur already added keeps what it was built with.
+#[wasm_bindgen]
+pub struct WebFurMaterial {
+    pub(crate) inner: crate::fur::FurMaterial,
+}
+
+#[wasm_bindgen]
+impl WebFurMaterial {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> WebFurMaterial {
+        WebFurMaterial {
+            inner: crate::fur::FurMaterial::default(),
+        }
+    }
+    /// Full strand length, world units.
+    #[wasm_bindgen(js_name = setLength)]
+    pub fn set_length(&mut self, v: f32) {
+        self.inner.groom.length = v;
+    }
+    /// Strands per UV unit along each axis.
+    #[wasm_bindgen(js_name = setDensity)]
+    pub fn set_density(&mut self, v: f32) {
+        self.inner.groom.density = v;
+    }
+    /// Root radius as a fraction of a strand's cell (≤ 0.5).
+    #[wasm_bindgen(js_name = setThickness)]
+    pub fn set_thickness(&mut self, v: f32) {
+        self.inner.groom.thickness = v;
+    }
+    /// Tip radius as a fraction of the root's.
+    #[wasm_bindgen(js_name = setTaper)]
+    pub fn set_taper(&mut self, v: f32) {
+        self.inner.groom.taper = v;
+    }
+    /// Droop at the tips, world units per unit of length.
+    #[wasm_bindgen(js_name = setGravity)]
+    pub fn set_gravity(&mut self, x: f32, y: f32, z: f32) {
+        self.inner.groom.gravity = crate::Vector3::new(x, y, z);
+    }
+    /// Turns each strand makes over its length.
+    #[wasm_bindgen(js_name = setCurl)]
+    pub fn set_curl(&mut self, v: f32) {
+        self.inner.groom.curl = v;
+    }
+    /// 0..1: how far tips gather into clumps; `size` in strands.
+    #[wasm_bindgen(js_name = setClumping)]
+    pub fn set_clumping(&mut self, amount: f32, size: f32) {
+        self.inner.groom.clumping = amount;
+        self.inner.groom.clump_size = size;
+    }
+    /// 0..1: how much shorter than the length a strand may be.
+    #[wasm_bindgen(js_name = setLengthVariation)]
+    pub fn set_length_variation(&mut self, v: f32) {
+        self.inner.groom.length_variation = v;
+    }
+    #[wasm_bindgen(js_name = setSeed)]
+    pub fn set_seed(&mut self, v: u32) {
+        self.inner.groom.seed = v;
+    }
+    /// Shells above the skin (16–48 typical).
+    #[wasm_bindgen(js_name = setShells)]
+    pub fn set_shells(&mut self, v: u32) {
+        self.inner.shells = v;
+    }
+    #[wasm_bindgen(js_name = setColors)]
+    pub fn set_colors(&mut self, root: &WebColor, tip: &WebColor) {
+        self.inner.root_color = root.inner;
+        self.inner.tip_color = tip.inner;
+    }
+    /// 0..1: how much darker the roots are.
+    #[wasm_bindgen(js_name = setOcclusion)]
+    pub fn set_occlusion(&mut self, v: f32) {
+        self.inner.occlusion = v;
+    }
+    /// The Kajiya-Kay highlight: strength, sharpness, and shift along the strand.
+    #[wasm_bindgen(js_name = setSpecular)]
+    pub fn set_specular(&mut self, strength: f32, exponent: f32, shift: f32) {
+        self.inner.specular = strength;
+        self.inner.specular_exponent = exponent;
+        self.inner.specular_shift = shift;
+    }
+    /// The wind's velocity (m/s; it pulls by drag, as its speed squared)
+    /// and gusts a second; animate with `WebScene.stepFur`.
+    #[wasm_bindgen(js_name = setWind)]
+    pub fn set_wind(&mut self, x: f32, y: f32, z: f32, frequency: f32) {
+        self.inner.wind = crate::Vector3::new(x, y, z);
+        self.inner.wind_frequency = frequency;
+    }
+    /// How far each strand flutters on its own, as a fraction of its cell.
+    #[wasm_bindgen(js_name = setFlutter)]
+    pub fn set_flutter(&mut self, v: f32) {
+        self.inner.flutter = v;
+    }
+    /// How far up the coat shell fur's shadow reaches, as a share of its
+    /// length (0.6); 0 casts none. (Hair's shadow is `shadowStrands`.)
+    #[wasm_bindgen(js_name = setShadowHeight)]
+    pub fn set_shadow_height(&mut self, v: f32) {
+        self.inner.shadow_height = v;
+    }
+    /// Air drag (pull of air going by at 1 m/s; 0.15) and the gusts'
+    /// strength (the turbulent share of the wind's speed; 0.35).
+    #[wasm_bindgen(js_name = setAir)]
+    pub fn set_air(&mut self, drag: f32, turbulence: f32) {
+        self.inner.drag = drag;
+        self.inner.turbulence = turbulence;
+    }
+    /// Draw fewer shells where the fur is small on screen (on by default).
+    #[wasm_bindgen(js_name = setLod)]
+    pub fn set_lod(&mut self, on: bool) {
+        self.inner.lod = on;
+    }
+    /// Inertia: spring rate (1/s²), damping (0..1 of critical), response (1 =
+    /// tips as free masses) and the largest swing (fraction of the length).
+    #[wasm_bindgen(js_name = setDynamics)]
+    pub fn set_dynamics(&mut self, stiffness: f32, damping: f32, response: f32, max_lag: f32) {
+        self.inner.dynamics = crate::fur::FurDynamics {
+            stiffness,
+            damping,
+            response,
+            max_lag,
+        };
+    }
+    /// Root strands over the surface in object space, one per `cell × cell`
+    /// (no UVs needed); `0` puts them back on the UVs.
+    #[wasm_bindgen(js_name = setSurfacePlacement)]
+    pub fn set_surface_placement(&mut self, cell: f32) {
+        self.inner.groom.placement = if cell > 0.0 {
+            crate::fur::FurPlacement::Surface { cell }
+        } else {
+            crate::fur::FurPlacement::Uv
+        };
+    }
+}
+
+impl Default for WebFurMaterial {
+    fn default() -> Self {
+        Self::new()
     }
 }

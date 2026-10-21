@@ -53,9 +53,15 @@ const OPTIONAL_FEATURES: wgpu::Features =
 impl GpuContext {
     /// A device with no surface — for headless rendering, compute, and tests.
     pub async fn headless() -> Result<Self, String> {
+        Self::headless_with_optional_features(wgpu::Features::empty()).await
+    }
+
+    /// [`headless`](Self::headless), also asking for `optional` where the
+    /// adapter has it.
+    pub async fn headless_with_optional_features(optional: wgpu::Features) -> Result<Self, String> {
         let instance = instance(backends());
         let adapter = request_adapter(&instance, None).await?;
-        Self::open(instance, adapter).await
+        Self::open_with_optional_features(instance, adapter, optional).await
     }
 
     /// A device and a surface for something that can be drawn into — a window,
@@ -67,17 +73,36 @@ impl GpuContext {
     pub async fn with_surface(
         target: wgpu::SurfaceTarget<'static>,
     ) -> Result<(Self, wgpu::Surface<'static>), String> {
+        Self::with_surface_and_optional_features(target, wgpu::Features::empty()).await
+    }
+
+    /// [`with_surface`](Self::with_surface), also asking for `optional`
+    /// where the adapter has it (see
+    /// [`open_with_optional_features`](Self::open_with_optional_features)).
+    pub async fn with_surface_and_optional_features(
+        target: wgpu::SurfaceTarget<'static>,
+        optional: wgpu::Features,
+    ) -> Result<(Self, wgpu::Surface<'static>), String> {
         let instance = instance(backends());
         let surface = instance
             .create_surface(target)
             .map_err(|e| format!("no surface: {e}"))?;
         let adapter = request_adapter(&instance, Some(&surface)).await?;
-        let gpu = Self::open(instance, adapter).await?;
+        let gpu = Self::open_with_optional_features(instance, adapter, optional).await?;
         Ok((gpu, surface))
     }
 
     /// Open a device on an adapter you already have.
     pub async fn open(instance: wgpu::Instance, adapter: wgpu::Adapter) -> Result<Self, String> {
+        Self::open_with_optional_features(instance, adapter, wgpu::Features::empty()).await
+    }
+
+    /// [`open`](Self::open), also asking for `optional` — each feature only
+    /// where the adapter has it, so none refuses an adapter. For renderers
+    /// that use something when it is there and do without when it is not
+    /// (`FLOAT32_BLENDABLE` for 32-bit float blending, say); check
+    /// `device.features()` for what was granted.
+    pub async fn open_with_optional_features(instance: wgpu::Instance, adapter: wgpu::Adapter, optional: wgpu::Features) -> Result<Self, String> {
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("threers device"),
@@ -85,7 +110,7 @@ impl GpuContext {
                 // that something can use if it is there and does without if
                 // it is not, so asking for the intersection costs nothing and
                 // refuses no adapter.
-                required_features: OPTIONAL_FEATURES & adapter.features(),
+                required_features: (OPTIONAL_FEATURES | optional) & adapter.features(),
                 required_limits: renderer_limits(&adapter),
                 ..Default::default()
             })

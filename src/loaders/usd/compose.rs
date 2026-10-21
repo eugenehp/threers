@@ -839,16 +839,43 @@ impl Engine<'_> {
                 stack: stack.clone(),
                 time,
             };
+            // The target's own variant selections count too, weaker than
+            // every one already made: an asset that selects `oak` for itself
+            // gets oak unless whoever references it says otherwise. (A
+            // `variant_fallbacks` entry is weaker still — USD falls back only
+            // where nothing is authored.)
+            let mut inner_selections = selections.to_vec();
+            for (set, choice) in selections_of(&inner.prim) {
+                let Some(choice) = expr::evaluate(&choice, &self.variables) else {
+                    continue;
+                };
+                match inner_selections.iter().position(|(s, _)| *s == set) {
+                    None => inner_selections.push((set, choice)),
+                    Some(i) if self.is_fallback(&inner_selections[i]) => {
+                        inner_selections[i] = (set, choice);
+                    }
+                    Some(_) => {}
+                }
+            }
             out.push(inner.clone());
             self.expand_arcs(
                 std::slice::from_ref(&inner),
-                selections,
+                &inner_selections,
                 out,
                 visiting,
                 depth + 1,
             );
         }
         visiting.remove(&key);
+    }
+
+    /// Whether a selection is a `variant_fallbacks` entry rather than one a
+    /// layer authored. (An authored selection that happens to name the
+    /// fallback reads as one; it selects the same variant either way, so a
+    /// weaker authored opinion replacing it is the only difference, and that
+    /// is the one USD makes too.)
+    fn is_fallback(&self, selection: &(String, String)) -> bool {
+        self.options.variant_fallbacks.iter().any(|f| f == selection)
     }
 }
 
@@ -1580,6 +1607,37 @@ mod tests {
             .unwrap()
             .flat_f32();
         assert_eq!(colour, vec![0.7, 0.7, 0.75], "steel, not oak");
+    }
+
+    /// A referenced prim's own variant selection holds unless the prim that
+    /// references it selects otherwise.
+    #[test]
+    fn a_referenced_prim_keeps_its_own_variant_selection() {
+        let stage = |placement: &str| {
+            let text = format!(
+                "#usda 1.0\n\
+                 class Xform \"Piece\" (\n\
+                 \x20   prepend variantSets = \"finish\"\n\
+                 \x20   variants = {{\n        string finish = \"enamel\"\n    }}\n\
+                 )\n{{\n\
+                 \x20   variantSet \"finish\" = {{\n\
+                 \x20       \"brass\" {{\n            float weight = 1\n        }}\n\
+                 \x20       \"enamel\" {{\n            float weight = 2\n        }}\n\
+                 \x20   }}\n}}\n\
+                 def Xform \"A\" (\n    prepend references = </Piece>{placement}\n)\n{{\n}}\n"
+            );
+            let root = parse(&text).unwrap();
+            let composed =
+                compose(&root, "root.usda", &MemoryResolver::new(), &ComposeOptions::default())
+                    .unwrap();
+            composed.prim_at("/A").unwrap().value("weight").unwrap().flat_f32()
+        };
+        assert_eq!(stage(""), vec![2.0], "the class's own selection, not the first variant");
+        assert_eq!(
+            stage("\n    variants = {\n        string finish = \"brass\"\n    }"),
+            vec![1.0],
+            "the placement's selection is stronger"
+        );
     }
 
     /// A class contributes its opinions and is not itself part of the scene.

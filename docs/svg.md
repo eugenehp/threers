@@ -15,6 +15,10 @@ cargo run --example svg_export      # four shading modes into out/
 cargo run --example svg_gallery     # the nine cases that are hard to sort correctly
 ```
 
+![The nine hard cases, as SVG](images/svg_gallery.jpg)
+
+*`svg_gallery`'s nine SVGs, rasterized side by side.*
+
 ```rust
 use threers::prelude::*;
 

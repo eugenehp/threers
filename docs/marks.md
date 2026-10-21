@@ -22,6 +22,13 @@ is left to the project using them.
 | `MapControls` | Drag the ground, zoom toward the cursor, tilt and turn |
 | `PolygonGeometry`, `triangulate_polygon` | Filled and extruded polygons with holes, from GeoJSON-style rings |
 
+![A 3D bar chart, a picked scatter plot and the named colour ramps](images/data_charts.jpg)
+
+*`cargo run --release --features captions --example data_charts`: bars are
+`ShapeMarks` on a `ColorScale`, the scatter is `PointMarks` with one row
+found by `MarkRenderer::pick` and ringed, axes are `SegmentMarks`, and every
+word is a `TextLabels` row.*
+
 None of it needs compute or storage buffers. It uses only instanced vertex
 buffers and render passes, so it runs on WebGL2 as well as WebGPU.
 

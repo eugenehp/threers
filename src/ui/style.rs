@@ -189,6 +189,10 @@ pub struct Style {
     pub wrap: bool,
     /// `font-style: italic` (inherited).
     pub italic: bool,
+    /// `text-overflow: ellipsis` (not inherited): text in this box (which
+    /// does not wrap) wider than its content box ends in `…` where it is
+    /// cut.
+    pub ellipsis: bool,
     /// `writing-mode: vertical-lr`: text runs top to bottom, turned a
     /// quarter clockwise (inherited).
     pub vertical: bool,
@@ -240,6 +244,7 @@ impl Default for Style {
             subpixel: false,
             wrap: false,
             italic: false,
+            ellipsis: false,
             vertical: false,
         }
     }

@@ -475,7 +475,8 @@ impl WebGeometry {
         bevel_thickness: f64,
         path: &super::curves::WebCurve,
     ) -> Result<WebExtrudeResult, JsValue> {
-        let extrude_path = super::curves::checked_curve(path, |c| ExtrudePath::from_curve(c, steps))?;
+        let extrude_path =
+            super::curves::checked_curve(path, |c| ExtrudePath::from_curve(c, steps))?;
         Ok(extrude_with(
             shapes,
             ExtrudeOptions {

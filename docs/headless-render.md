@@ -29,7 +29,7 @@ cargo run --release --example export_vp9 --features video -- --out /tmp/cube.web
 ```
 
 ```rust
-// Cargo.toml: threers = { version = "0.0.6", features = ["video"] }
+// Cargo.toml: threers = { version = "0.0.7", features = ["video"] }
 use threers::{export_video, HeadlessRenderer, VideoCodec, VideoOptions};
 
 let mut hr = HeadlessRenderer::builder().size(1280, 720).build().unwrap();
