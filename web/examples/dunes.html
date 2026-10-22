@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>dunes — threers</title>
+    <!-- Fetch the 1.4 MB wasm (brotli) and the shim while the page parses. -->
+    <link rel="preload" href="/web/pkg/threers_bg.wasm" as="fetch" type="application/wasm" crossorigin>
+    <link rel="modulepreload" href="/web/threejs-shim.js">
+    <link rel="modulepreload" href="/web/pkg/threers.js">
+    <style>
+        :root { color-scheme: dark; }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0; background: #08090d; color: #e6e8ee;
+            font: 14px/1.5 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+        }
+        header {
+            display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap;
+            padding: 18px 24px 12px; border-bottom: 1px solid #1e2129;
+        }
+        h1 { font-size: 17px; margin: 0; font-weight: 650; }
+        h1 .tag { color: #7d879c; font-weight: 400; }
+        #status { color: #7d879c; font-size: 12px; }
+        nav { margin-left: auto; display: flex; gap: 14px; }
+        nav a { color: #6ea8fe; text-decoration: none; font-size: 13px; }
+        main { padding: 20px 24px 40px; max-width: 1240px; margin: 0 auto; }
+        .intro { color: #97a0b3; max-width: 86ch; margin: 0 0 18px; font-size: 13px; }
+        .intro code { color: #cfd6e6; background: #14161d; padding: 1px 5px; border-radius: 4px; }
+        canvas { width: 100%; aspect-ratio: 16 / 9; display: block; border-radius: 10px; background: #05060a; touch-action: none; }
+        .controls {
+            display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center;
+            margin: 16px 0 8px; padding: 14px 16px;
+            background: #0e1016; border: 1px solid #1e2129; border-radius: 10px;
+        }
+        label { display: inline-flex; gap: 8px; align-items: center; color: #c3cad8; font-size: 13px; }
+        input[type=range] { width: 140px; }
+        #info { color: #7d879c; font-variant-numeric: tabular-nums; margin-left: auto; }
+        #times button {
+            background: #161922; color: #c3cad8; border: 1px solid #262a35; border-radius: 6px;
+            padding: 4px 10px; font: inherit; font-size: 13px; cursor: pointer; margin-right: 4px;
+        }
+        #times button.on { background: #2a3550; color: #fff; border-color: #3d4d75; }
+        #err { color: #ff8080; white-space: pre-wrap; font-size: 12px; margin-top: 10px; }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>dunes <span class="tag">· a sea of sand, worked by the wind</span></h1>
+        <span id="status">loading wasm…</span>
+        <nav><a href="./particles.html">particles</a><a href="/web/examples/">examples</a></nav>
+    </header>
+    <main>
+        <p class="intro" id="intro"></p>
+        <canvas id="c" width="1280" height="720"></canvas>
+        <div class="controls">
+            <span id="times"></span>
+            <label><input id="fly" type="checkbox" checked> fly</label>
+            <label><input id="drift" type="checkbox" checked> blowing sand</label>
+            <label><input id="shadows" type="checkbox" checked> shadows</label>
+            <span id="info">—</span>
+        </div>
+        <div id="err"></div>
+    </main>
+    <script type="module" src="./dunes-demo.js"></script>
+</body>
+</html>

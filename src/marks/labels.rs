@@ -1064,6 +1064,7 @@ mod tests {
             eye: [0.0, 0.0, 1.0, 0.0],
             tone_mapping: (crate::ToneMapping::None, 1.0),
             reversed_z: false,
+            focal_distance: 0.0,
         }
     }
 

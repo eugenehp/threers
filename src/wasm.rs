@@ -43,6 +43,9 @@ mod math;
 mod mesh_state;
 // The shim's scene-graph mirror: nodes, structure, raycasting, DragControls.
 mod scene_graph;
+// Particles, snow and sand (`threers::particles`).
+mod particles;
+pub use particles::WebParticleSystem;
 mod shapes;
 // Post-processing: the composer and its passes.
 mod postfx;
@@ -1526,6 +1529,8 @@ pub struct WebScene {
     node_uuids: std::collections::HashMap<ObjectId, String>,
     /// Fur in this scene, animated by `stepFur`.
     fur_animator: crate::fur::FurAnimator,
+    /// Particles, snow and sand in this scene, run by `stepParticles`.
+    particle_animator: crate::particles::ParticleAnimator,
 }
 
 #[wasm_bindgen]
@@ -1536,6 +1541,7 @@ impl WebScene {
             inner: crate::Scene::new(),
             node_uuids: std::collections::HashMap::new(),
             fur_animator: crate::fur::FurAnimator::new(),
+            particle_animator: crate::particles::ParticleAnimator::new(),
         }
     }
 

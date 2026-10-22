@@ -283,29 +283,50 @@ fn linear(c: Rgba) -> Color {
 /// A [`Painter`] onto threers' CPU [`Overlay`], with the caption font.
 ///
 /// Text is the overlay's face at the requested size (the family is not
-/// looked up); bold is drawn twice, half a pixel apart. Clipping is not
-/// supported.
+/// looked up); bold is drawn twice, half a pixel apart.
+///
+/// Clipping (`overflow: hidden`, scrolling boxes) is to rectangles:
+/// rectangles are cut exactly, a rounded rectangle keeps its corners only
+/// when wholly inside, paths are drawn whole unless wholly outside, and text
+/// loses the characters that do not fit (whole characters, not pixels).
 pub struct OverlayPainter<'a> {
     pub overlay: &'a mut Overlay,
     /// Overlay pixels per UI pixel (the display's scale factor).
     pub scale: f32,
+    /// The clip stack, in overlay pixels: each entry already intersected
+    /// with the one below.
+    clips: Vec<Rect>,
 }
 
 impl<'a> OverlayPainter<'a> {
     pub fn new(overlay: &'a mut Overlay) -> Self {
-        Self { overlay, scale: 1.0 }
+        Self { overlay, scale: 1.0, clips: Vec::new() }
     }
 
     /// Paints a UI laid out in logical pixels onto an overlay `scale` times
     /// as dense.
     pub fn with_scale(overlay: &'a mut Overlay, scale: f32) -> Self {
-        Self { overlay, scale }
+        Self { overlay, scale, clips: Vec::new() }
     }
 
     fn px(&self, r: Rect) -> Rect {
         let k = self.scale;
         Rect { x: r.x * k, y: r.y * k, width: r.width * k, height: r.height * k }
     }
+
+    /// `r` cut to the current clip; `None` when nothing is left.
+    fn clipped(&self, r: Rect) -> Option<Rect> {
+        let Some(c) = self.clips.last() else { return Some(r) };
+        intersect(r, *c)
+    }
+}
+
+fn intersect(a: Rect, b: Rect) -> Option<Rect> {
+    let x0 = a.x.max(b.x);
+    let y0 = a.y.max(b.y);
+    let x1 = (a.x + a.width).min(b.x + b.width);
+    let y1 = (a.y + a.height).min(b.y + b.height);
+    (x1 > x0 && y1 > y0).then_some(Rect { x: x0, y: y0, width: x1 - x0, height: y1 - y0 })
 }
 
 impl TextMeasure for OverlayPainter<'_> {
@@ -319,7 +340,7 @@ impl TextMeasure for OverlayPainter<'_> {
 
 impl Painter for OverlayPainter<'_> {
     fn fill_rect(&mut self, rect: Rect, color: Rgba) {
-        let r = self.px(rect);
+        let Some(r) = self.clipped(self.px(rect)) else { return };
         let o = &mut *self.overlay;
         o.no_stroke();
         o.fill_alpha(linear(color), color[3]);
@@ -328,18 +349,69 @@ impl Painter for OverlayPainter<'_> {
 
     fn fill_rounded_rect(&mut self, rect: Rect, rx: f32, ry: f32, color: Rgba) {
         let (r, k) = (self.px(rect), self.scale);
+        let Some(c) = self.clipped(r) else { return };
         let o = &mut *self.overlay;
         o.no_stroke();
         o.fill_alpha(linear(color), color[3]);
-        o.rounded_rect(r.x, r.y, r.width, r.height, rx.min(ry) * k);
+        if c == r {
+            o.rounded_rect(r.x, r.y, r.width, r.height, rx.min(ry) * k);
+        } else {
+            o.rect(c.x, c.y, c.width, c.height);
+        }
+    }
+
+    fn push_clip(&mut self, rect: Rect) {
+        let r = self.px(rect);
+        let c = match self.clips.last() {
+            Some(top) => intersect(r, *top).unwrap_or(Rect { x: r.x, y: r.y, width: 0.0, height: 0.0 }),
+            None => r,
+        };
+        self.clips.push(c);
+    }
+
+    fn pop_clip(&mut self) {
+        self.clips.pop();
     }
 
     fn text(&mut self, line: Rect, text: &str, style: &TextStyle) {
         let (line, k) = (self.px(line), self.scale);
+        let clip = self.clips.last().copied();
         let o = &mut *self.overlay;
         o.no_stroke();
         o.fill_alpha(linear(style.color), style.color[3]);
         o.text_size(style.font_size * k);
+        // Clipped: a line whose middle is outside goes; one running past the
+        // right edge loses characters from its end; one starting left of it,
+        // from its start.
+        let mut line = line;
+        let mut owned;
+        let mut text = text;
+        if let Some(c) = clip {
+            let mid = line.y + line.height / 2.0;
+            if mid < c.y || mid > c.y + c.height || line.x >= c.x + c.width {
+                return;
+            }
+            let chars: Vec<char> = text.chars().collect();
+            let mut start = 0;
+            while start < chars.len() && line.x < c.x {
+                let w = o.measure_text(&chars[start].to_string()).0;
+                line.x += w;
+                start += 1;
+            }
+            let mut end = chars.len();
+            while end > start {
+                owned = chars[start..end].iter().collect::<String>();
+                if line.x + o.measure_text(&owned).0 <= c.x + c.width + 0.5 {
+                    break;
+                }
+                end -= 1;
+            }
+            owned = chars[start..end].iter().collect::<String>();
+            if owned.is_empty() {
+                return;
+            }
+            text = &owned;
+        }
         let (w, h) = o.measure_text(text);
         let y = line.y + (line.height - h) / 2.0;
         o.text(line.x, y, text);
@@ -354,6 +426,9 @@ impl Painter for OverlayPainter<'_> {
 
     fn path(&mut self, rect: Rect, d: &[String], view_box: [f32; 4], stroke: Option<f32>, fill: bool, color: Rgba) {
         let rect = self.px(rect);
+        if self.clipped(rect).is_none() {
+            return;
+        }
         let [vx, vy, vw, vh] = view_box;
         let (sx, sy) = (rect.width / vw.max(1e-6), rect.height / vh.max(1e-6));
         let o = &mut *self.overlay;

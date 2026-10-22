@@ -226,11 +226,18 @@ fn mark_out(c : vec4<f32>) -> vec4<f32> {
 /// A size in the layer's units, in pixels at clip depth `w`, clamped to the
 /// layer's pixel range. `style`: (scale, min px, max px, 1 = world units).
 fn mark_size_px(size : f32, w : f32) -> f32 {
+    // With focal pixels (`ids.z` bit 2) and a focal plane (`frame.aa.y`),
+    // the size and its clamps are taken at that plane, then scaled by
+    // perspective — deck.gl's `project_pixel_size_to_clipspace`.
+    let focal = frame.aa.y;
+    let at_focal = (layer.ids.z & 4u) != 0u && focal > 0.0;
+    let measured_w = select(w, focal, at_focal);
     var s = size * layer.style.x;
     if (layer.style.w > 0.5) {
-        s = s * frame.misc.x / max(w, 1e-6);
+        s = s * frame.misc.x / max(measured_w, 1e-6);
     }
-    return clamp(s, layer.style.y, layer.style.z);
+    s = clamp(s, layer.style.y, layer.style.z);
+    return select(s, s * focal / max(w, 1e-6), at_focal);
 }
 
 /// Vertex `vid` of a two-triangle quad, as a corner index 0..4 (CCW from the
@@ -314,6 +321,29 @@ fn mark_culled(p : vec3<f32>) -> bool {
     return mark_clipped(p) || mark_beyond_horizon(p);
 }
 
+/// Edge coverage as drawn: `c` itself, or all-or-nothing for a layer with
+/// antialiasing off (`ids.z` bit 0).
+fn mark_cov(c : f32) -> f32 {
+    return select(c, step(0.5, c), mark_aliased());
+}
+
+/// Antialiasing is off for this layer (`ids.z` bit 0). Its quads then cover
+/// exactly the shape, unpadded, so the rasterizer's own fill rule decides
+/// the edge pixels — as it does for deck.gl's quads.
+fn mark_aliased() -> bool {
+    return (layer.ids.z & 1u) != 0u;
+}
+
+/// `a` to `b` by `t`, on linear values, or on sRGB ones for a layer with
+/// `mix_srgb` (`ids.z` bit 1).
+fn mark_mix(a : vec4<f32>, b : vec4<f32>, t : f32) -> vec4<f32> {
+    if ((layer.ids.z & 2u) != 0u) {
+        let rgb = mix(mark_linear_to_srgb(a.rgb), mark_linear_to_srgb(b.rgb), t);
+        return vec4<f32>(mark_srgb_to_linear(rgb), mix(a.a, b.a, t));
+    }
+    return mix(a, b, t);
+}
+
 /// `c`, mixed towards the highlight colour when `index` is the highlighted
 /// row (`ids.y` is that row plus one, 0 for none).
 fn mark_highlight(c : vec4<f32>, index : u32) -> vec4<f32> {
@@ -376,9 +406,17 @@ fn vs_main(in : PointIn) -> PointOut {
     // past the edge, so single-sampled a quad that far out holds every
     // fragment centre with any — no wider: for the small points of a big
     // layer the extra half pixel was a third of the fragments.
-    let extent = r + layer.style2.x * 0.5 + frame.aa.x;
+    let extent = r + layer.style2.x * 0.5 + select(frame.aa.x, 0.0, mark_aliased());
     let corner = mark_corner_signed(mark_quad_corner(in.vid));
-    out.clip = mark_order(mark_lift_depth(mark_offset_px(clip, corner * extent), i.position, r));
+    // style2.z: lie flat on the ground (y up, north toward -z) rather than
+    // face the camera. The disc keeps the size it has in pixels at its
+    // centre, laid out in world units there, so coverage below is the same
+    // sum in the same units.
+    let world_extent = extent * clip.w / max(frame.misc.x, 1e-6);
+    let on_ground = frame.view_proj
+        * vec4<f32>(i.position + vec3<f32>(corner.x, 0.0, -corner.y) * world_extent, 1.0);
+    let facing = mark_lift_depth(mark_offset_px(clip, corner * extent), i.position, r);
+    out.clip = mark_order(select(facing, on_ground, layer.style2.z > 0.5));
     out.local = corner * extent;
     out.radius = r;
     out.color = i.color;
@@ -392,8 +430,8 @@ fn vs_main(in : PointIn) -> PointOut {
 fn point_coverage(in : PointOut) -> vec2<f32> {
     let d = length(in.local);
     let half_stroke = layer.style2.x * 0.5;
-    let outer = clamp(in.radius + half_stroke - d + 0.5, 0.0, 1.0);
-    var fill = clamp(in.radius - half_stroke - d + 0.5, 0.0, 1.0);
+    let outer = mark_cov(clamp(in.radius + half_stroke - d + 0.5, 0.0, 1.0));
+    var fill = mark_cov(clamp(in.radius - half_stroke - d + 0.5, 0.0, 1.0));
     if (half_stroke <= 0.0) {
         fill = outer;
     }
@@ -472,12 +510,16 @@ struct SegOut {
 };
 
 /// A point on the arc from `a` to `b`, lifted by `style2.x` times the chord
-/// at its peak (a parabola; height 0 is the straight segment). On the flat
+/// at its peak (height 0 is the straight segment). On the flat
 /// ground the lift is along `style3.xyz`; on a globe (`style3.w` set,
 /// `style3.xyz` its centre) the arc follows the great circle and lifts away
 /// from the centre. Chosen with `select`, not a branch.
 fn seg_arc(a : vec3<f32>, b : vec3<f32>, t : f32) -> vec3<f32> {
-    let h = layer.style2.x * 4.0 * t * (1.0 - t) * distance(a, b);
+    // style2.z bit 0 selects the profile: a parabola, or deck.gl's half
+    // ellipse, `2 sqrt(t (1 - t))`; both peak at `style2.x` of the chord.
+    let s = t * (1.0 - t);
+    let profile = select(4.0 * s, 2.0 * sqrt(max(s, 0.0)), (u32(layer.style2.z) & 1u) != 0u);
+    let h = layer.style2.x * profile * distance(a, b);
     let flat = mix(a, b, t) + layer.style3.xyz * h;
     let c = layer.style3.xyz;
     let ca = a - c;
@@ -548,8 +590,13 @@ fn vs_main(in : SegIn) -> SegOut {
     var out : SegOut;
     let n = max(u32(layer.style2.y), 1u);
     let piece = in.vid / 6u;
-    let t0 = f32(piece) / f32(n);
-    let t1 = f32(piece + 1u) / f32(n);
+    // style2.z bit 1: pieces eased toward the ends (smoothstep), where a
+    // steep profile needs them — deck.gl's `getSegmentRatio`.
+    let ease = (u32(layer.style2.z) & 2u) != 0u;
+    let u0 = f32(piece) / f32(n);
+    let u1 = f32(piece + 1u) / f32(n);
+    let t0 = select(u0, smoothstep(0.0, 1.0, u0), ease);
+    let t1 = select(u1, smoothstep(0.0, 1.0, u1), ease);
     let p0 = seg_arc(i.position, i.position2, t0);
     let p1 = seg_arc(i.position, i.position2, t1);
     let c0 = frame.view_proj * vec4<f32>(p0, 1.0);
@@ -599,7 +646,11 @@ fn vs_main(in : SegIn) -> SegOut {
     let m1 = select(vec3<f32>(normal, 0.0), mm1, last);
     cap0 = select(cap0, 2.0, first && mm0.z > 0.5);
     cap1 = select(cap1, 2.0, last && mm1.z > 0.5);
-    let pad = half + 1.0;
+    // A joint too sharp to mitre is rounded, whatever the path's own end
+    // caps are: a butt there would leave a notch on the outside of the turn.
+    cap0 = select(cap0, 1.0, first && has0 && mm0.z <= 0.5);
+    cap1 = select(cap1, 1.0, last && has1 && mm1.z <= 0.5);
+    let pad = half + select(1.0, 0.0, mark_aliased());
     let k = mark_quad_corner(in.vid);
     let far = k == 1u || k == 2u;
     let side = select(-1.0, 1.0, k >= 2u);
@@ -672,7 +723,7 @@ fn seg_dash(in : SegOut) -> f32 {
 }
 
 fn seg_coverage(in : SegOut) -> f32 {
-    return clamp(in.dims.y - seg_dist(in) + 0.5, 0.0, 1.0) * seg_dash(in);
+    return mark_cov(clamp(in.dims.y - seg_dist(in) + 0.5, 0.0, 1.0)) * seg_dash(in);
 }
 
 @fragment
@@ -685,7 +736,7 @@ fn fs_main(in : SegOut) -> @location(0) vec4<f32> {
         discard;
     }
     let t = mix(in.t_span.x, in.t_span.y, clamp(in.uv.x / max(in.dims.x, 1e-6), 0.0, 1.0));
-    var c = hook_color(mix(in.color, in.color2, t), in.custom0, in.custom1);
+    var c = hook_color(mark_mix(in.color, in.color2, t), in.custom0, in.custom1);
     // The casing: `extra.z` pixels of `stroke` colour inside the edge.
     if (layer.extra.z > 0.0) {
         let inner = clamp(in.dims.y - layer.extra.z - seg_dist(in) + 0.5, 0.0, 1.0);

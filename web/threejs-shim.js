@@ -6574,6 +6574,366 @@ export class Hair extends Fur {
     }
 }
 
+/// Particles (a threers extension, `threers::particles`): a system made from
+/// a preset — `'fire'`, `'embers'`, `'heatHaze'`, `'smoke'`, `'sparks'`, `'rain'`, `'snowfall'`,
+/// `'sandStream'`, `'dust'`, `'fountain'` — or `'custom'`, simulated with
+/// gravity, air drag set by each particle's terminal speed, wind and
+/// turbulence, and drawn as one instanced draw. Its emitters sit where this
+/// object is: move it and they follow (particles already out stay where they
+/// are). The renderer steps it at every `render`.
+///
+/// Preset options: `radius` (fire, smoke), `size` ([x, z] metres: rain,
+/// snowfall), `height` (rain, snowfall: how far above the object they start;
+/// fountain: how high it throws), `rate` (per second), `depthPerSecond`
+/// (snowfall: metres of snow a second), `flow` (sandStream: m³ a second),
+/// `count` (dust), `wind` ([x, y, z] m/s). Any system: `gravity`,
+/// `turbulence` ({ strength, scale, churn }), `color` ([r, g, b, a], linear),
+/// `colorOverLife` ([[t, r, g, b, a], …]), `sizeOverLife` ([[t, s], …]),
+/// `particleSize` ([min, max] metres), `lifetime` ([min, max] s), `speed`,
+/// `terminalSpeed`, `look` ({ kind, blend, softness, shutter, intensity,
+/// lit, detail, stretch }), `flutter` (m/s²), `cooling` ({ time,
+/// coldGravity }), `boundaryLayer` ({ ground, roughness, reference }),
+/// `spray` ({ count, speed, angle, lifetime, size }), `shading` ({ scattering,
+/// selfShadow, glint, flake, castsShadow }), `temperatureOverLife`
+/// ([[t, kelvin], …]), `maxParticles`, `seed`,
+/// and `settleOn` — a `SnowCover` or `SandBed` to land in.
+export class Particles extends Object3D {
+    constructor(preset = 'custom', options = {}) {
+        super();
+        this.isParticles = true;
+        this.type = 'Particles';
+        this.preset = preset;
+        this.options = { ...options };
+        this.frustumCulled = false;
+        this.receiveShadow = true;
+        if (options.settleOn) this.settleOn(options.settleOn);
+    }
+    _system() {
+        const P = _optional.WebParticleSystem;
+        if (!P) return null;
+        const o = this.options;
+        const v3 = (v, d) => (v == null ? d : Array.isArray(v) ? v : [v.x, v.y, v.z]);
+        const wind = v3(o.wind, [0, 0, 0]);
+        const size = o.size ?? [8, 8];
+        let s;
+        switch (this.preset) {
+            case 'fire': s = P.fire(0, 0, 0, o.radius ?? 0.3); break;
+            case 'smoke': s = P.smoke(0, 0, 0, o.radius ?? 0.25); break;
+            case 'sparks': s = P.sparks(0, 0, 0); break;
+            case 'embers': s = P.embers(0, 0, 0, o.radius ?? 0.25); break;
+            case 'heatHaze': s = P.heatHaze(0, 0, 0, o.radius ?? 0.25); break;
+            case 'rain': s = P.rain(0, 0, 0, size[0], size[1], o.height ?? 6, o.rate ?? 4000, ...wind); break;
+            case 'snowfall':
+                s = P.snowfall(0, 0, 0, size[0], size[1], o.height ?? 5, o.rate ?? 4000, o.depthPerSecond ?? 0.002, ...wind);
+                break;
+            case 'sandStream': s = P.sandStream(0, 0, 0, o.rate ?? 4000, o.flow ?? 0.001); break;
+            case 'dust': s = P.dust(0, 0, 0, o.count ?? 120); break;
+            case 'fountain': s = P.fountain(0, 0, 0, o.height ?? 1.5); break;
+            default:
+                s = new P();
+                s.setEmitterPoint(0, 0, 0);
+        }
+        if (o.wind != null && this.preset !== 'rain' && this.preset !== 'snowfall') s.setWind(...wind);
+        if (o.gravity != null) s.setGravity(...v3(o.gravity));
+        if (o.turbulence) s.setTurbulence(o.turbulence.strength ?? 0.3, o.turbulence.scale ?? 1, o.turbulence.churn ?? 0.3);
+        if (o.look) {
+            const l = o.look;
+            s.setLook(l.kind ?? 'billboard', l.blend ?? 'alpha', l.softness ?? 1, l.shutter ?? 0.02, l.intensity ?? 1, !!l.lit,
+                l.detail ?? 0, l.stretch ?? 0);
+        }
+        if (o.rate != null && this.preset === 'custom') s.setRate(o.rate);
+        if (o.particleSize) s.setSize(o.particleSize[0], o.particleSize[1] ?? o.particleSize[0]);
+        if (o.lifetime) s.setLifetime(o.lifetime[0], o.lifetime[1] ?? o.lifetime[0]);
+        if (o.speed) s.setSpeed(o.speed[0], o.speed[1] ?? o.speed[0]);
+        if (o.terminalSpeed) s.setTerminalSpeed(o.terminalSpeed[0], o.terminalSpeed[1] ?? o.terminalSpeed[0]);
+        if (o.color) s.setColor(o.color[0], o.color[1], o.color[2], o.color[3] ?? 1);
+        if (o.colorOverLife) s.setColorOverLife(Float32Array.from(o.colorOverLife.flat()));
+        if (o.sizeOverLife) s.setSizeOverLife(Float32Array.from(o.sizeOverLife.flat()));
+        if (o.shading) {
+            const h = o.shading;
+            s.setShading(h.scattering ?? 0, h.selfShadow ?? 0, h.glint ?? 0, !!h.flake, !!h.castsShadow);
+        }
+        if (o.temperatureOverLife) s.setTemperatureOverLife(Float32Array.from(o.temperatureOverLife.flat()));
+        if (o.flutter != null) s.setFlutter(o.flutter);
+        if (o.cooling) s.setCooling(o.cooling.time ?? 1, ...v3(o.cooling.coldGravity, [0, 0, 0]));
+        if (o.boundaryLayer) {
+            const b = o.boundaryLayer;
+            s.setBoundaryLayer(b.ground ?? 0, b.roughness ?? 0.01, b.reference ?? 10);
+        }
+        if (o.spray) {
+            const p = o.spray;
+            s.setSpray(...(p.count ?? [1, 3]), ...(p.speed ?? [0.5, 1.5]), p.angle ?? 1, ...(p.lifetime ?? [0.2, 0.5]), p.size ?? 0.6);
+        }
+        if (o.maxParticles != null) s.setMaxParticles(o.maxParticles >>> 0);
+        if (o.seed != null) s.setSeed(o.seed >>> 0);
+        return s;
+    }
+    /// Drive `light` (a PointLight or SpotLight in the same scene): it sits
+    /// at this system's glowing centre with about `intensity`, flickering as
+    /// the flames come and go.
+    lights(light, intensity = 6) {
+        this._light = [light, intensity];
+        _particleLinks.add(this);
+    }
+    /// Land in `layer` (a `SnowCover` or `SandBed`) and pile up there.
+    settleOn(layer) {
+        this._settleOn = layer;
+        _particleLinks.add(this);
+    }
+    /// Particles alive now.
+    get count() {
+        const m = this._m;
+        return m?.graph?.w?.particleCount ? m.graph.w.particleCount(m.handle) : 0;
+    }
+    /// `count` particles at once.
+    burst(count) {
+        const m = this._m;
+        m?.graph?.w?.burstParticles?.(m.handle, count >>> 0);
+    }
+    /// Particles a second: 0 stops the flow.
+    setRate(rate) {
+        const m = this._m;
+        m?.graph?.w?.setParticleRate?.(m.handle, rate);
+    }
+    setWind(x, y, z) {
+        const m = this._m;
+        m?.graph?.w?.setParticleWind?.(m.handle, x, y, z);
+    }
+    _mirrorKind() { return _optional.WebParticleSystem ? 'particles' : 'group'; }
+    _mirrorCreate(w) {
+        const s = w.createParticles ? this._system() : null;
+        return s ? w.createParticles(s) : w.createGroup(false);
+    }
+}
+
+/// Snow lying in the scene (a threers extension): a grid `size` ([x, z]
+/// metres, centred on `center` [x, z]) of `resolution` cells along its longer
+/// side, resting on whatever is below it — found by rays cast down from
+/// `castFrom` metres the first time the scene is drawn. Snowfall settled on
+/// it (`Particles.settleOn`) piles up, and slumps where steeper than snow
+/// holds. Leave its transform at the identity.
+export class SnowCover extends Object3D {
+    constructor(options = {}) {
+        super();
+        this.isSnowCover = true;
+        this.type = 'SnowCover';
+        this.options = { size: [16, 16], center: [0, 0], resolution: 256, castFrom: 30, ...options };
+        this.castShadow = true;
+        this.receiveShadow = true;
+    }
+    /// A wind drifting the lying snow toward `direction` (`'+x'`, `'-x'`,
+    /// `'+z'`, `'-z'`): `slabsPerSecond` small slabs lifted and carried
+    /// downwind, piling in the lee of whatever stands in it.
+    drift(direction = '+x', slabsPerSecond = 20000) {
+        this._wind = [direction, slabsPerSecond];
+        const m = this._m;
+        if (m?.graph?.w?.setLayerWind) m.graph.w.setLayerWind(m.handle, direction, slabsPerSecond);
+    }
+    /// Snow lying now, m³.
+    get volume() {
+        const m = this._m;
+        return m?.graph?.w?.layerVolume ? m.graph.w.layerVolume(m.handle) : 0;
+    }
+    _mirrorKind() { return _optional.WebParticleSystem ? 'snowcover' : 'group'; }
+    _mirrorCreate(w) {
+        const o = this.options;
+        if (!w.createSnowCover) return w.createGroup(false);
+        const h = w.createSnowCover(o.center[0], o.center[1], o.size[0], o.size[1], o.resolution >>> 0, o.castFrom);
+        if (this._wind) w.setLayerWind(h, ...this._wind);
+        return h;
+    }
+}
+
+/// Sand lying in the scene (a threers extension): as `SnowCover`, piling
+/// poured sand at its angle of repose (34°). `spread(depth, roughness)` lays
+/// a sheet; `blow(direction, slabsPerSecond)` sets a wind (`'+x'`, `'-x'`,
+/// `'+z'`, `'-z'`) that shapes it into dunes.
+export class SandBed extends SnowCover {
+    constructor(options = {}) {
+        super(options);
+        this.isSnowCover = false;
+        this.isSandBed = true;
+        this.type = 'SandBed';
+    }
+    spread(depth, roughness = 0) {
+        this._spread = [depth, roughness];
+        const m = this._m;
+        if (m?.graph?.w?.spreadSand) m.graph.w.spreadSand(m.handle, depth, roughness);
+    }
+    /// Shape the sand now: `slabs` slab moves of wind toward `direction`
+    /// (dunes from a flat sheet take a few million on a 200-cell grid).
+    shape(direction = '+x', slabs = 2000000) {
+        this._shape = [direction, slabs >>> 0];
+        const m = this._m;
+        if (m?.graph?.w?.blowSand) m.graph.w.blowSand(m.handle, direction, slabs >>> 0);
+    }
+    blow(direction = '+x', slabsPerSecond = 20000) {
+        this._wind = [direction, slabsPerSecond];
+        const m = this._m;
+        if (m?.graph?.w?.setLayerWind) m.graph.w.setLayerWind(m.handle, direction, slabsPerSecond);
+    }
+    /// Grow a dune field on it (replacing its sand): `wavelength` and
+    /// `height` in metres, crests drawn out `stretch` times across the wind,
+    /// worked by the wind toward `wind` (`'+x'`, …) for `shaping` slab moves
+    /// a cell.
+    dunes(options = {}) {
+        const o = { wavelength: 110, height: 14, stretch: 2.2, shaping: 24, seed: 7, wind: '+x', ...options };
+        this._dunes = [o.wavelength, o.height, o.stretch, o.shaping, o.seed >>> 0, o.wind];
+        const m = this._m;
+        if (m?.graph?.w?.shapeDunes) m.graph.w.shapeDunes(m.handle, ...this._dunes);
+    }
+    /// Its look: `color` and `shadowColor` ([r, g, b] linear), `ripples`
+    /// (0–1), `rippleWavelength` (m), `streaks` (sand streaking up the
+    /// windward faces, 0 for none), `stylize` (Journey's high-contrast
+    /// shading, 0–1), `fogGlow` (the haze brighter toward the sun).
+    look(options = {}) {
+        const o = {
+            color: [0.72, 0.42, 0.18], shadowColor: [0.34, 0.22, 0.13], ripples: 0.7, rippleWavelength: 0.08,
+            streaks: 0, stylize: 0, fogGlow: 0, ...this._look, ...options,
+        };
+        this._look = o;
+        const m = this._m;
+        if (m?.graph?.w?.setSandLook) m.graph.w.setSandLook(m.handle, ...this._lookArgs());
+    }
+    _lookArgs() {
+        const o = this._look;
+        return [...o.color, ...o.shadowColor, o.ripples, o.rippleWavelength, o.streaks, o.stylize, o.fogGlow];
+    }
+    _mirrorKind() { return _optional.WebParticleSystem ? 'sandbed' : 'group'; }
+    _mirrorCreate(w) {
+        const o = this.options;
+        if (!w.createSandBed) return w.createGroup(false);
+        const h = w.createSandBed(o.center[0], o.center[1], o.size[0], o.size[1], o.resolution >>> 0, o.castFrom);
+        if (o.ripples != null || o.rippleWind) {
+            const rw = o.rippleWind ?? [1, 0, 0];
+            w.setSandRipples(h, o.ripples ?? 0.7, rw[0], rw[2] ?? rw[1] ?? 0);
+        }
+        if (this._spread) w.spreadSand(h, ...this._spread);
+        if (this._dunes && w.shapeDunes) w.shapeDunes(h, ...this._dunes);
+        if (this._shape) w.blowSand(h, ...this._shape);
+        if (this._wind) w.setLayerWind(h, ...this._wind);
+        if (this._look && w.setSandLook) w.setSandLook(h, ...this._lookArgs());
+        return h;
+    }
+}
+
+/// A time of day over the desert (a threers extension): `'dawn'`, `'day'`,
+/// `'sunset'` or `'night'` — the sun, the sky, the haze and the sand, for
+/// lighting a scene. Colours are linear.
+export function desertTime(name = 'day') {
+    const f = _optional.desertTime ? _optional.desertTime(name) : null;
+    if (!f) return null;
+    const c = (i) => [f[i], f[i + 1], f[i + 2]];
+    return {
+        sun: c(0), sunColor: c(3), sunIntensity: f[6], zenith: c(7), horizon: c(10), haze: f[13], glow: f[14],
+        skyLight: c(15), groundLight: c(18), skyIntensity: f[21], sand: c(22), shadow: c(25), stars: f[28],
+    };
+}
+
+/// The desert's sky (a threers extension): a dome `radius` metres across for
+/// a time of day, its horizon the haze the sand fades into. Keep it on the
+/// camera (`sky.position.copy(camera.position)`) and the camera's far plane
+/// beyond it.
+export class DesertSky extends Object3D {
+    constructor(time = 'day', radius = 2200) {
+        super();
+        this.isDesertSky = true;
+        this.type = 'DesertSky';
+        this.time = time;
+        this.radius = radius;
+        this.frustumCulled = false;
+    }
+    setTime(time) {
+        this.time = time;
+        const m = this._m;
+        m?.graph?.w?.setDesertSky?.(m.handle, time);
+    }
+    _mirrorKind() { return _optional.WebParticleSystem ? 'desertsky' : 'group'; }
+    _mirrorCreate(w) {
+        return w.createDesertSky ? w.createDesertSky(this.time, this.radius) : w.createGroup(false);
+    }
+}
+
+/// Sand blown off the crests of the dunes on `bed` (a `SandBed` with
+/// `dunes()`, added to the scene first) into `wind` ([x, y, z] m/s): `rate`
+/// puffs a second, in `color` ([r, g, b] linear).
+export class Spindrift extends Object3D {
+    constructor(bed, options = {}) {
+        super();
+        this.isSpindrift = true;
+        this.type = 'Spindrift';
+        this.bed = bed;
+        this.options = { wind: [9, 0, 1.5], rate: 3000, color: [0.8, 0.5, 0.25], ...options };
+        this.frustumCulled = false;
+        this.receiveShadow = true;
+    }
+    _mirrorKind() { return _optional.WebParticleSystem ? 'particles' : 'group'; }
+    _mirrorCreate(w) {
+        const b = this.bed?._m;
+        const o = this.options;
+        if (!w.createSpindrift || !b) return w.createGroup(false);
+        return w.createSpindrift(b.handle, ...o.wind, o.rate, ...o.color);
+    }
+}
+
+/// Snow or rain filling a box of air round the camera (a threers
+/// extension): `count` flakes or drops placed by the GPU each frame, so a
+/// hundred thousand cost nothing on the CPU. They do not land — for snow
+/// that piles up, add a few thousand `Particles('snowfall')` settling on a
+/// `SnowCover` as well. Options: `halfWidth`, `halfDepth`, `height`,
+/// `floor` (metres) and `wind` ([x, y, z] m/s).
+export class Weather extends Object3D {
+    constructor(kind = 'snow', count = 50000, options = {}) {
+        super();
+        this.isWeather = true;
+        this.type = 'Weather';
+        this.kind = kind;
+        this.options = { count, halfWidth: 15, halfDepth: 15, height: 12, floor: 0, wind: [0.4, 0, 0.1], ...options };
+        this.frustumCulled = false;
+    }
+    setWind(x, y, z) {
+        this.options.wind = [x, y, z];
+        const m = this._m;
+        m?.graph?.w?.setWeatherWind?.(m.handle, x, y, z);
+    }
+    _mirrorKind() { return _optional.WebParticleSystem ? 'weather' : 'group'; }
+    _mirrorCreate(w) {
+        const o = this.options;
+        if (!w.createWeather) return w.createGroup(false);
+        return w.createWeather(this.kind, o.count >>> 0, o.halfWidth, o.halfDepth, o.height, o.floor, ...o.wind);
+    }
+}
+
+/// Particles waiting to be linked to the layer they settle on: both have to
+/// be in the same wasm scene first.
+const _particleLinks = new Set();
+function _linkParticles() {
+    for (const p of _particleLinks) {
+        const a = p._m;
+        if (!a) continue;
+        let done = true;
+        if (p._settleOn) {
+            const b = p._settleOn._m;
+            if (b && a.graph === b.graph && a.graph.w.settleParticles) {
+                a.graph.w.settleParticles(a.handle, b.handle);
+                p._settleOn = null;
+            } else {
+                done = false;
+            }
+        }
+        if (p._light) {
+            const l = p._light[0]._m;
+            if (l && a.graph === l.graph && a.graph.w.lightParticles) {
+                a.graph.w.lightParticles(a.handle, l.handle, p._light[1]);
+                p._light = null;
+            } else {
+                done = false;
+            }
+        }
+        if (done) _particleLinks.delete(p);
+    }
+}
+
 export class InstancedMesh extends Mesh {
     constructor(geometry, material, count) {
         super(geometry, material);
@@ -12464,13 +12824,13 @@ export class WebGLRenderer {
             return;
         }
         this._prepareRender(scene, camera);
-        this._stepFur(scene._w);
+        this._stepFur(scene._w, camera);
         this._w.render(scene._w, camera._w);
     }
     /// threers: advance a scene's fur (wind, flutter, inertia) on this
     /// renderer's clock — the frame step clamped so a paused tab does not
     /// fling it.
-    _stepFur(w) {
+    _stepFur(w, camera) {
         if (!w?.stepFur) return;
         const now = (globalThis.performance?.now?.() ?? Date.now()) / 1000;
         if (this._furStart === undefined) {
@@ -12480,6 +12840,13 @@ export class WebGLRenderer {
         const dt = Math.min(Math.max(now - this._furLast, 1 / 240), 0.1);
         this._furLast = now;
         w.stepFur(now - this._furStart, dt);
+        // Particles, snow and sand, on the same clock; alpha-blended
+        // particles sorted from the camera.
+        if (w.stepParticles) {
+            _linkParticles();
+            const e = camera?.matrixWorld?.elements;
+            w.stepParticles(dt, e ? e[12] : 0, e ? e[13] : 0, e ? e[14] : 0);
+        }
     }
     /// three.js draws any Object3D as the root (`renderer.render(gltf.scene,
     /// camera)` with the `Group` a GLTFLoader gives). An object outside every
@@ -12490,14 +12857,14 @@ export class WebGLRenderer {
         this._prepareRender(root, camera);
         const top = _mirrorRoot(root);
         if (top.isScene) {
-            this._stepFur(top._w);
+            this._stepFur(top._w, camera);
             this._w.render(top._w, camera._w);
             return;
         }
         top._syncNow();
         const graph = _hiddenGraph();
         const w = graph.w;
-        this._stepFur(w);
+        this._stepFur(w, camera);
         w.background = _color(this._clearColorSet ? this._clearColor.getHex() : _DEFAULT_SCENE_BACKGROUND);
         w.setBackgroundAlpha?.(this._clearColorSet ? this._clearAlpha : 1);
         const others = Array.from(graph.detachedIds);
@@ -17843,6 +18210,13 @@ const THREE = {
     QuadView, // threers extension
     Fur, // threers extension
     Hair, // threers extension
+    Particles, // threers extension
+    SnowCover, // threers extension
+    SandBed, // threers extension
+    Weather, // threers extension
+    DesertSky, // threers extension
+    Spindrift, // threers extension
+    desertTime, // threers extension
     // Extras
     SimplexNoise, Octree, MarchingCubes,
     CSS2DRenderer, SVGRenderer,

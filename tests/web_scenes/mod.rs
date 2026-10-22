@@ -1577,6 +1577,140 @@ async fn fur_draws_to_the_canvas() {
     }
 }
 
+/// Particles drawn to the canvas, each kind of particle and each blend:
+/// lit sphere grains, billowing alpha smoke, the same smoke lit by a sun
+/// that casts shadows (its per-particle shadow lookup) and additive flame,
+/// so every path through the particle shader compiles and draws (on WebGL2
+/// through naga's GLSL and ANGLE, on WebGPU through Tint) and each covers
+/// the middle of the view in its colour.
+#[wasm_bindgen_test]
+async fn particles_draw_to_the_canvas() {
+    use threers::wasm::{WebCamera, WebColor, WebLight, WebParticleSystem, WebScene};
+    let (shared, canvas) = super::views_renderer().await;
+    let mut renderer = shared.borrow_mut();
+    reset(&mut renderer);
+    let (cw, ch) = (canvas.width(), canvas.height());
+    for (kind, blend, detail, lit) in [
+        ("sphere", "opaque", 0.0, true),
+        ("billboard", "alpha", 0.8, false),
+        ("billboard", "alpha", 0.8, true),
+        ("billboard", "additive", 1.0, false),
+    ] {
+        let mut scene = WebScene::new();
+        scene.set_background(&WebColor::new(0.0, 0.0, 1.0));
+        scene.add_light(&WebLight::ambient(&WebColor::new(1.0, 1.0, 1.0), 3.0));
+        if lit && kind == "billboard" {
+            let mut sun = WebLight::directional(&WebColor::new(1.0, 1.0, 1.0), 2.0);
+            sun.set_direction(-0.3, -1.0, -0.2);
+            sun.set_cast_shadow(true);
+            scene.add_light(&sun);
+        }
+        let mut s = WebParticleSystem::new();
+        s.set_look(kind, blend, 0.3, 0.02, 1.0, lit, Some(detail), Some(0.0));
+        s.set_emitter_box(0.0, 0.0, 0.0, 0.6, 0.6, 0.05);
+        s.add_burst(0.0, 900);
+        s.set_speed(0.0, 0.0);
+        s.set_lifetime(100.0, 100.0);
+        s.set_size(0.35, 0.35);
+        s.set_gravity(0.0, 0.0, 0.0);
+        s.set_color(1.0, 0.1, 0.1, 1.0);
+        scene.add_particles(&s);
+        scene.step_particles(1.0 / 60.0, 0.0, 0.0, 4.0);
+        let mut camera = WebCamera::perspective(40.0, cw as f32 / ch as f32, 0.1, 50.0);
+        camera.set_position(0.0, 0.0, 4.0);
+        camera.look_at(0.0, 0.0, 0.0);
+        renderer.render(&mut scene, &camera);
+        let red = (0..9)
+            .flat_map(|a| (0..9).map(move |b| (a, b)))
+            .map(|(a, b)| canvas_pixel(&canvas, cw / 2 - cw / 20 + a * cw / 80, ch / 2 - ch / 20 + b * ch / 80))
+            // Red over the blue background — on top of it, for additive
+            // particles, which add their light to it.
+            .filter(|p| p[0] > 100 && (blend == "additive" || p[0] as i32 > p[2] as i32))
+            .count();
+        let sky = canvas_pixel(&canvas, cw / 2, ch / 20);
+        assert!(sky[2] > 200 && sky[0] < 40, "{kind}/{blend}: the background reads {sky:?}");
+        assert!(red > 40, "{kind}/{blend}: {red} of 81 centre pixels red");
+    }
+}
+
+/// Dunes under the desert sky (`createSandBed` with `shapeDunes` and
+/// `setSandLook`, `createDesertSky`), as `THREE.SandBed` and
+/// `THREE.DesertSky` build them: the sand shader and the sky's both compile
+/// and draw — sand in the lower half, the sky blue in the upper.
+#[wasm_bindgen_test]
+async fn dunes_draw_to_the_canvas() {
+    use threers::wasm::{WebCamera, WebColor, WebLight, WebScene};
+    let (shared, canvas) = super::views_renderer().await;
+    let mut renderer = shared.borrow_mut();
+    reset(&mut renderer);
+    let (cw, ch) = (canvas.width(), canvas.height());
+    let mut scene = WebScene::new();
+    scene.set_background(&WebColor::new(0.0, 0.0, 0.0));
+    let bed = scene.create_sand_bed(0.0, 0.0, 120.0, 120.0, 60, 0.0);
+    scene.shape_dunes(&bed, 30.0, 5.0, 2.0, 2.0, 7, "+x");
+    scene.set_sand_look(&bed, 0.72, 0.42, 0.18, 0.3, 0.2, 0.15, 0.6, 0.35, 1.0, 0.25, 0.35);
+    let sky = scene.create_desert_sky("day", 400.0);
+    scene.set_children(&scene.root_handle(), vec![bed.id(), sky.id()]);
+    scene.add_light(&WebLight::ambient(&WebColor::new(1.0, 1.0, 1.0), 1.0));
+    let mut sun = WebLight::directional(&WebColor::new(1.0, 0.95, 0.9), 3.0);
+    sun.set_direction(-0.5, -0.8, 0.3);
+    scene.add_light(&sun);
+    scene.step_particles(1.0 / 60.0, 0.0, 30.0, 70.0);
+    let mut camera = WebCamera::perspective(50.0, cw as f32 / ch as f32, 0.5, 1000.0);
+    camera.set_position(0.0, 30.0, 70.0);
+    camera.look_at(0.0, 0.0, 0.0);
+    renderer.render(&mut scene, &camera);
+    let sky_px = canvas_pixel(&canvas, cw / 2, ch / 20);
+    assert!(sky_px[2] > sky_px[0] && sky_px[2] > 120, "the sky reads {sky_px:?}");
+    let sand = canvas_pixel(&canvas, cw / 2, ch * 3 / 4);
+    assert!(sand[0] > sand[2] && sand[0] > 60, "the sand reads {sand:?}");
+}
+
+/// GPU weather (`createWeather`, as `THREE.Weather` builds it): snow and
+/// rain placed by their own vertex stage draw flakes and streaks across the
+/// view, on WebGL2 and on WebGPU.
+#[wasm_bindgen_test]
+async fn weather_draws_to_the_canvas() {
+    use threers::wasm::{WebCamera, WebColor, WebLight, WebScene};
+    let (shared, canvas) = super::views_renderer().await;
+    let mut renderer = shared.borrow_mut();
+    reset(&mut renderer);
+    let (cw, ch) = (canvas.width(), canvas.height());
+    let lit_pixels = js_sys::Function::new_with_args(
+        "c",
+        "const o = document.createElement('canvas'); o.width = c.width; o.height = c.height;
+         const g = o.getContext('2d'); g.drawImage(c, 0, 0);
+         const d = g.getImageData(0, 0, c.width, c.height).data;
+         let n = 0;
+         for (let i = 0; i < d.length; i += 4) if (d[i] > 60) n++;
+         return n;",
+    );
+    for kind in ["snow", "rain"] {
+        let mut scene = WebScene::new();
+        scene.set_background(&WebColor::new(0.0, 0.0, 1.0));
+        // Its top at 0.4, below the top of the view: sky above it.
+        let w = scene.create_weather(kind, 30_000, 1.2, 0.3, 0.9, -0.5, 0.0, 0.0, 0.0);
+        // (Replacing the root's children: the light goes in after.)
+        scene.set_children(&scene.root_handle(), vec![w.id()]);
+        scene.add_light(&WebLight::ambient(&WebColor::new(1.0, 1.0, 1.0), 3.0));
+        // The box centred on the origin, in front of the camera and near
+        // enough that a flake a couple of centimetres across covers pixels.
+        scene.step_particles(0.5, 0.0, 0.0, 0.0);
+        let mut camera = WebCamera::perspective(40.0, cw as f32 / ch as f32, 0.1, 50.0);
+        camera.set_position(0.0, 0.0, 1.9);
+        camera.look_at(0.0, 0.0, 0.0);
+        renderer.render(&mut scene, &camera);
+        let sky = canvas_pixel(&canvas, cw / 2, ch / 50);
+        assert!(sky[2] > 200 && sky[0] < 40, "{kind}: the background reads {sky:?}");
+        let n = lit_pixels
+            .call1(&wasm_bindgen::JsValue::NULL, &canvas)
+            .expect("canvas read")
+            .as_f64()
+            .unwrap_or(0.0);
+        assert!(n > 200.0, "{kind}: {n} pixels of weather drawn");
+    }
+}
+
 /// Fur and hair through the scene graph, as the three.js shim builds them
 /// (`createFur`, `createHair`, `setChildren`), drawn to the canvas: the frame
 /// — background and coat — reaches it. (Their shadow casters write neither

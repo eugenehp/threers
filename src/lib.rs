@@ -145,6 +145,10 @@ pub mod extras;
 /// Fur by shells: [`FurMaterial`] on any mesh (`fur::fur_object`).
 pub mod fur;
 pub use fur::{FurGroom, FurMaterial};
+/// Particles — emitters, physical forces and collisions — and the snow and
+/// sand built on them (`particles::presets`, `particles::snow`,
+/// `particles::sand`).
+pub mod particles;
 pub mod geometries;
 pub mod helpers;
 /// Inverse kinematics: damped least squares joint solving for serial arms,

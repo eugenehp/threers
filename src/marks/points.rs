@@ -20,6 +20,12 @@ pub struct PointMarks {
     pub stroke_color: [u8; 4],
     /// Draw only the stroke.
     pub hollow: bool,
+    /// Lie flat on the ground (the plane of +Y) instead of facing the
+    /// camera — deck.gl's `ScatterplotLayer` without `billboard`. A disc
+    /// keeps the size it would have facing the camera at its centre, so
+    /// it foreshortens with the view's tilt; it is drawn at the ground's
+    /// own depth, so `depth_lift` does not apply.
+    pub ground: bool,
 }
 
 impl Default for PointMarks {
@@ -40,6 +46,7 @@ impl PointMarks {
             stroke_width: 0.0,
             stroke_color: [0, 0, 0, 255],
             hollow: false,
+            ground: false,
         }
     }
 
@@ -114,7 +121,7 @@ impl Mark for PointMarks {
             [
                 self.stroke_width.max(0.0),
                 if self.hollow { 1.0 } else { 0.0 },
-                0.0,
+                if self.ground { 1.0 } else { 0.0 },
                 0.0,
             ],
             [0.0; 4],

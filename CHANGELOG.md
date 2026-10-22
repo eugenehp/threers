@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Particles, snow and sand** (`threers::particles`): particle systems with
+  physics — emitters (point, ball, box, disc, a mesh's surface), gravity,
+  quadratic drag from each particle's terminal speed (integrated implicitly),
+  wind, divergence-free curl turbulence with a Kolmogorov spectrum, a log-law
+  boundary layer, attractors and vortices, buoyancy that decays as smoke
+  cools, flutter for falling flakes, and collisions that bounce, stick, die,
+  splash into spray, or deposit. Run by a `ParticleAnimator`, emitters
+  following their objects. See [docs/particles.md](docs/particles.md).
+  - **Snow and sand that pile up**: `SnowCover` and `SandBed`, heightfields
+    lying on whatever is in the scene (found by raycasting), slumping to the
+    angle of repose (50° and 34°, held to within 3°), drifted by the wind and
+    shaped into dunes that migrate (Werner's slab model). Drawn by their own
+    shaders: snow's subsurface light, grain and glitter; sand's wind ripples,
+    grain speckle and quartz glints.
+  - **Drawing**: billboards, motion streaks, lit sphere grains and screen-space
+    heat-haze distortion; alpha (depth-sorted), additive and opaque. Billowing
+    noise with its relief lit, Henyey–Greenstein scattering, self-shadowing,
+    six-armed snowflakes, glints, black-body colour over life, shadows cast
+    by smoke and received by every particle as the volume it is, and
+    `light_with` — a point light flickering with a fire's flames. Each look
+    compiles to its own pipeline with its settings as constants.
+  - **`Weather`**: snow or rain filling a box round the camera, every flake
+    placed by the vertex shader — no CPU cost, nothing uploaded per frame.
+  - **Light through smoke**: with `extinction`, a particle is a sphere of
+    medium: Beer–Lambert opacity, the sun and sky dimmed by the optical depth
+    of the rest of the plume (a light-aligned grid each frame), Wrenninge's
+    multiple-scattering octaves and a two-lobe phase function.
+  - **Anisotropy**: raindrops' rainbow at 42° (and the secondary at 51°,
+    reversed), plate-oriented flakes glinting in pillars, surface-layer
+    turbulence (σ_u : σ_v : σ_w ≈ 2.5 : 1.9 : 1.25, still divergence-free),
+    sand's sheen stretched along the wind (anisotropic GGX) and the opposition
+    surge of granular surfaces.
+  - **Embers that burn** (`Thermal`): radiation, Ranz–Marshall convection,
+    diffusion- and Arrhenius-limited char oxidation; they shrink as they burn
+    and are quenched on snow.
+  - **Dunes** (`SandBed::dunes`, `particles::dunes`): procedural crest
+    networks worked by the wind into slip faces at 34°, sand shaded after
+    Journey's (grains, steep and shallow ripples, sheen, rim, glitter, wind
+    streaks), spindrift off the crests, a desert sky at four times of day
+    whose horizon the haze meets. Every surface detail band-limited by its
+    size on screen: no moiré. Example `dunes`; browser demo
+    `web/examples/dunes.html` (`THREE.DesertSky`, `THREE.Spindrift`,
+    `SandBed.dunes()` / `.look()`).
+  - Presets: `fire`, `embers`, `heat_haze`, `smoke`, `sparks`, `rain`,
+    `snowfall`, `sand_stream`, `dust`, `fountain`.
+  - **JavaScript**: `WebParticleSystem`, `WebScene.addParticles` /
+    `createSnowCover` / `createSandBed` / `createWeather` / `stepParticles`;
+    in the three.js shim `THREE.Particles`, `THREE.SnowCover`,
+    `THREE.SandBed` and `THREE.Weather`, stepped by the renderer.
+    `web/examples/particles.html`: a winter camp and a desert.
+  - Examples `particles`, `snow`, `sand`, `campfire`, `dunes` and
+    `particles_bench`.
+
 ## [0.0.7] — 2026-10-21
 
 ### Added

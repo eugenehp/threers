@@ -41,6 +41,12 @@ pub struct SegmentMarks {
     pub arc_segments: u32,
     /// The direction arcs rise in, world space.
     pub arc_up: [f32; 3],
+    /// The arc's shape between its ends.
+    pub arc_profile: ArcProfile,
+    /// Space an arc's pieces closer together toward its ends (by
+    /// smoothstep) instead of evenly — what a profile steep at the ends,
+    /// like [`ArcProfile::Ellipse`], needs. deck.gl's `ArcLayer` does this.
+    pub arc_ease_ends: bool,
     /// The centre of a globe the segments lie on: they then follow great
     /// circles (in [`arc_segments`](Self::arc_segments) pieces, even with no
     /// height) and arcs rise away from the centre instead of along
@@ -60,6 +66,18 @@ pub struct SegmentMarks {
     /// For segments made by [`set_paths`](Self::set_paths): the first segment
     /// of each path, so a segment's row maps back to its path.
     path_starts: Vec<u32>,
+}
+
+/// The shape of an arc between its ends, each peaking at
+/// [`arc_height`](SegmentMarks::arc_height) times the chord.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ArcProfile {
+    /// `4 t (1 - t)`.
+    #[default]
+    Parabola,
+    /// `2 sqrt(t (1 - t))`, a half ellipse, steep at the ends — deck.gl's
+    /// `ArcLayer`.
+    Ellipse,
 }
 
 /// How a line ends.
@@ -246,6 +264,8 @@ impl SegmentMarks {
             arc_height: 0.0,
             arc_segments: 32,
             arc_up: [0.0, 1.0, 0.0],
+            arc_profile: ArcProfile::Parabola,
+            arc_ease_ends: false,
             globe: None,
             globe_rel: [0.0; 3],
             dash: None,
@@ -403,7 +423,16 @@ impl Mark for SegmentMarks {
     }
     fn kind_uniforms(&self) -> KindUniforms {
         (
-            [self.arc_height, self.pieces() as f32, 0.0, 0.0],
+            [
+                self.arc_height,
+                self.pieces() as f32,
+                // Bit 0: the profile; bit 1: eased pieces.
+                (match self.arc_profile {
+                    ArcProfile::Parabola => 0u32,
+                    ArcProfile::Ellipse => 1,
+                } | (u32::from(self.arc_ease_ends) << 1)) as f32,
+                0.0,
+            ],
             match self.globe {
                 Some(_) => [self.globe_rel[0], self.globe_rel[1], self.globe_rel[2], 1.0],
                 None => [self.arc_up[0], self.arc_up[1], self.arc_up[2], 0.0],

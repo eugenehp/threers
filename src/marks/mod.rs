@@ -87,7 +87,7 @@ pub use points::PointMarks;
 pub use polygon_mesh::PolygonMesh;
 pub use polygons::{PolygonFeature, PolygonMarks};
 pub use precision::{split_f64, split_f64x3, Origin};
-pub use segments::{LineCap, PathMesh, SegmentMarks};
+pub use segments::{ArcProfile, LineCap, PathMesh, SegmentMarks};
 pub use shader::{CustomShader, MarkKind, PREAMBLE};
 pub use shapes::ShapeMarks;
 pub use sprites::{SpriteMarks, SpriteMode};
@@ -122,6 +122,9 @@ pub struct MarkView {
     /// `view_proj` maps the near plane to 1, and marks test with `Greater`.
     /// [`from_renderer`](Self::from_renderer) sets both.
     pub reversed_z: bool,
+    /// Clip `w` at the focal plane — the view's look-at distance — for
+    /// layers with [`MarkStyle::focal_pixels`]. 0 when the view has none.
+    pub focal_distance: f32,
 }
 
 impl MarkView {
@@ -148,7 +151,14 @@ impl MarkView {
             eye,
             tone_mapping: (crate::ToneMapping::None, 1.0),
             reversed_z: false,
+            focal_distance: 0.0,
         }
+    }
+
+    /// Set [`focal_distance`](Self::focal_distance).
+    pub fn with_focal_distance(mut self, w: f32) -> Self {
+        self.focal_distance = w.max(0.0);
+        self
     }
 
     /// The view through `camera` at `renderer`'s drawing size and with its
@@ -232,7 +242,7 @@ impl MarkView {
                 if self.reversed_z { 1.0 } else { 0.0 },
             ],
             eye: self.eye,
-            aa: [if samples > 1 { 1.0 } else { 0.5 }, 0.0, 0.0, 0.0],
+            aa: [if samples > 1 { 1.0 } else { 0.5 }, self.focal_distance, 0.0, 0.0],
         }
     }
 }
@@ -369,6 +379,20 @@ pub struct MarkStyle {
     /// screen exactly, and a legend matches them.
     pub tone_mapped: bool,
     pub blend: MarkBlend,
+    /// Smooth edges by analytic coverage (the default). Off, points and
+    /// lines draw hard-edged, every fragment fully in or out — deck.gl's
+    /// look without MSAA, and its `antialiasing: false`.
+    pub antialias: bool,
+    /// Blend between a mark's two colours (a segment's source and target)
+    /// on sRGB values rather than linear ones — deck.gl's gradients, which
+    /// interpolate the colour bytes. Off by default.
+    pub mix_srgb: bool,
+    /// Pixel sizes hold at the view's focal plane
+    /// ([`MarkView::focal_distance`]) and scale with perspective elsewhere,
+    /// clamps included — deck.gl's convention, where a 2-pixel line is
+    /// wider nearer the camera. Off by default: pixels are screen pixels
+    /// everywhere. No effect when the view sets no focal distance.
+    pub focal_pixels: bool,
     pub visible: bool,
     pub pickable: bool,
 }
@@ -392,6 +416,9 @@ impl Default for MarkStyle {
             horizon: None,
             tone_mapped: false,
             blend: MarkBlend::Alpha,
+            antialias: true,
+            mix_srgb: false,
+            focal_pixels: false,
             visible: true,
             pickable: true,
         }
@@ -979,7 +1006,7 @@ impl MarkRenderer {
                 style2,
                 style3,
                 stroke,
-                ids: [common.pick_id, s.highlight.map_or(0, |r| r + 1), 0, 0],
+                ids: [common.pick_id, s.highlight.map_or(0, |r| r + 1), u32::from(!s.antialias) | (u32::from(s.mix_srgb) << 1) | (u32::from(s.focal_pixels) << 2), 0],
                 highlight: points::srgb_u8_to_linear(s.highlight_color),
                 horizon: match s.horizon {
                     Some((c, r)) => {

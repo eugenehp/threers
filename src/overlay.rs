@@ -345,6 +345,14 @@ impl Overlay {
         self.stroke_weight = pixels.max(0.0);
     }
 
+    /// Draw text in `font` from now on, instead of the UI face
+    /// ([`CaptionFont::ui`](crate::captions::CaptionFont::ui): SF Compact on
+    /// macOS, the bitmap face elsewhere).
+    #[cfg(feature = "captions")]
+    pub fn set_font(&mut self, font: crate::captions::CaptionFont) {
+        self.painter = Some(crate::captions::CaptionPainter::with_font(font));
+    }
+
     /// Type size in pixels for [`Overlay::text`].
     pub fn text_size(&mut self, pixels: f32) {
         self.text_size = pixels.max(1.0);
