@@ -104,6 +104,22 @@ impl ShaderHooks {
         }
     }
 
+    /// Fade each instance by its custom value `component` (counted as in
+    /// [`range_filter`](Self::range_filter)): its colour's alpha is
+    /// multiplied by it, and an instance faded below 1e-4 is not drawn.
+    /// deck.gl's `CollisionFilterExtension` fades with this.
+    pub fn fade(component: usize) -> Self {
+        assert!(component < 8, "custom component {component} is not in 0..8");
+        let column = if component < 4 { "custom0" } else { "custom1" };
+        let lane = ["x", "y", "z", "w"][component % 4];
+        Self {
+            instance: Some(format!(
+                "fn hook_instance(i: MarkInstance) -> MarkInstance {{\n    var o = i;\n    let f = i.{column}.{lane};\n    o.color.a *= f;\n    o.color2.a *= f;\n    if (f < 0.0001) {{ o.visible = 0.0; }}\n    return o;\n}}\n"
+            )),
+            color: None,
+        }
+    }
+
     /// Animated trails over [`SegmentMarks`](super::SegmentMarks) — deck.gl's
     /// `TripsLayer`.
     ///
@@ -319,6 +335,8 @@ mod tests {
     fn defaults_and_filters_compile_for_every_mark() {
         ShaderHooks::none().validate().unwrap();
         ShaderHooks::range_filter(0, 0).validate().unwrap();
+        ShaderHooks::fade(4).validate().unwrap();
+        ShaderHooks::range_filter(0, 0).combine(&ShaderHooks::fade(4)).validate().unwrap();
         ShaderHooks::range_filters(&[(1, 0), (6, 3)])
             .validate()
             .unwrap();

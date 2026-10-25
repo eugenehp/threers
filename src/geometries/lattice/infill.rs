@@ -239,10 +239,12 @@ fn honeycomb(v: Vector3, pitch: f32) -> f32 {
     let j0 = y.round() as i64;
     let i0 = (x - j0 as f32 * 0.5).round() as i64;
 
-    let mut sites = [(0.0f32, Vector3::ZERO); 25];
+    // The nearest centre is within one of the rounded guess: one two rows away
+    // is at least 1.3 pitches off, and the guess itself never more than 0.66.
+    let mut sites = [(0.0f32, Vector3::ZERO); 9];
     let mut count = 0;
-    for dj in -2..=2i64 {
-        for di in -2..=2i64 {
+    for dj in -1..=1i64 {
+        for di in -1..=1i64 {
             let (i, j) = (i0 + di, j0 + dj);
             // Offset from the sample to the centre, in world units. The pattern
             // is extruded, so z plays no part.
@@ -263,12 +265,21 @@ fn honeycomb(v: Vector3, pitch: f32) -> f32 {
         }
     }
     let (near_sq, near) = sites[nearest];
+    let (i, j) = (i0 + (nearest % 3) as i64 - 1, j0 + (nearest / 3) as i64 - 1);
 
+    // Only the six adjacent centres bound a hexagon. Every other centre's
+    // bisector lies wholly outside the cell, so it is further from any point
+    // inside and never the nearest wall: measuring the six alone gives the
+    // same minimum, and the same bits, as measuring all of them.
     let mut wall = f32::MAX;
-    for (k, &(far_sq, far)) in sites.iter().enumerate().take(count) {
-        if k == nearest {
-            continue;
-        }
+    for (di, dj) in [(1, 0), (-1, 0), (0, 1), (-1, 1), (0, -1), (1, -1)] {
+        let (i, j) = (i + di, j + dj);
+        let far = Vector3::new(
+            (x - (i as f32 + j as f32 * 0.5)) * pitch,
+            (y - j as f32) * pitch * ROW,
+            0.0,
+        );
+        let far_sq = far.length_sq();
         // Distance from the sample to the bisector of the two centres.
         let span = (near - far).length();
         if span > 1e-9 {

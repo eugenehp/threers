@@ -36,6 +36,11 @@ pub struct PolygonMesh {
     pub normal_top: Vec<[f32; 4]>,
     /// The feature each vertex belongs to.
     pub feature: Vec<u32>,
+    /// Each vertex's point in its feature — outer ring then holes, closing
+    /// points dropped — or `u32::MAX` for one added to follow a curved
+    /// ground: what [`PolygonMarks::set_point_colors`](super::PolygonMarks::set_point_colors)
+    /// reads.
+    pub source: Vec<u32>,
     pub index: Vec<u32>,
     /// Each feature's vertices, `start..end`.
     pub ranges: Vec<(u32, u32)>,
@@ -43,7 +48,7 @@ pub struct PolygonMesh {
     pub radial: Option<[f64; 3]>,
 }
 
-const MAGIC: &[u8; 4] = b"TPM1";
+const MAGIC: &[u8; 4] = b"TPM2";
 
 impl PolygonMesh {
     /// Triangulate `features` on the flat ground, at height `base`.
@@ -73,7 +78,12 @@ impl PolygonMesh {
         let mut pos: Vec<[f64; 3]> = Vec::new();
         let mut nt: Vec<[f32; 4]> = Vec::new();
         let mut feature: Vec<u32> = Vec::new();
+        let mut source: Vec<u32> = Vec::new();
         let mut index: Vec<u32> = Vec::new();
+        // Walls are drawn before roofs, all features' walls first, as
+        // deck.gl draws its side model before its top one: of translucent
+        // buildings, that order decides which faces blend.
+        let mut roof_index: Vec<u32> = Vec::new();
         let mut ranges: Vec<(u32, u32)> = Vec::new();
         for (k, f) in features.iter().enumerate() {
             let start = pos.len();
@@ -96,7 +106,12 @@ impl PolygonMesh {
             };
             let outer = local(&f.outer);
             let holes: Vec<Vec<[f64; 2]>> = f.holes.iter().map(|h| local(h)).collect();
-            let tris = triangulate_polygon(&outer, &holes);
+            // Given triangles index the points as they are, so only stand
+            // where no points were added.
+            let tris = match (&f.triangles, max_edge) {
+                (Some(t), None) => t.clone(),
+                _ => triangulate_polygon(&outer, &holes),
+            };
             let ground = |p: [f64; 2]| [p[0] + anchor[0], p[1] + anchor[1]];
 
             // Roof: on a curved ground, triangles subdivided to the maximum
@@ -110,27 +125,57 @@ impl PolygonMesh {
                     for p in t {
                         let w = projection.world(ground(*p), base);
                         let u = up_at(w);
-                        index.push(pos.len() as u32);
+                        roof_index.push(pos.len() as u32);
+                        source.push(u32::MAX);
                         pos.push(w);
                         nt.push([u[0] as f32, u[1] as f32, u[2] as f32, 1.0]);
                     }
                 }
             } else {
-                for p in &points {
+                for (j, p) in points.iter().enumerate() {
+                    source.push(j as u32);
                     pos.push(projection.world(ground(*p), base));
                     nt.push([0.0, 1.0, 0.0, 1.0]);
                 }
                 for t in &tris {
-                    index.extend(t.iter().map(|&i| start as u32 + i));
+                    roof_index.extend(t.iter().map(|&i| start as u32 + i));
                 }
             }
 
             // Walls: a quad per ring edge, facing out of the solid.
             let rings = std::iter::once((&outer, false)).chain(holes.iter().map(|h| (h, true)));
+            let mut first_point = 0u32;
             for (ring, hole) in rings {
+                let first = first_point;
+                first_point += ring.len() as u32;
                 if ring.len() < 3 {
                     continue;
                 }
+                // Each ring point's index among the feature's points.
+                let mut ids: Vec<u32> = match max_edge {
+                    None => (first..first + ring.len() as u32).collect(),
+                    Some(_) => vec![u32::MAX; ring.len()],
+                };
+                // deck.gl's winding: outer rings clockwise, holes counter-
+                // clockwise (y up), reversed in place when not — which sets
+                // the order walls are drawn in, and so how translucent ones
+                // blend.
+                let signed: f64 = (0..ring.len())
+                    .map(|i| {
+                        let (a, b) = (ring[i], ring[(i + 1) % ring.len()]);
+                        a[0] * b[1] - b[0] * a[1]
+                    })
+                    .sum();
+                let reversed: Vec<[f64; 2]>;
+                let ring = if (signed > 0.0) != hole {
+                    // As deck.gl reverses a closed ring: the first point
+                    // stays first.
+                    reversed = std::iter::once(ring[0]).chain(ring[1..].iter().rev().copied()).collect();
+                    ids[1..].reverse();
+                    &reversed
+                } else {
+                    ring
+                };
                 let area: f64 = (0..ring.len())
                     .map(|i| {
                         let (a, b) = (ring[i], ring[(i + 1) % ring.len()]);
@@ -156,18 +201,34 @@ impl PolygonMesh {
                     // the ground. On the flat ground this is the edge's right
                     // in (x, y), (dv, -du), with world z being -y.
                     let n = normalize(cross(e, up_at(mid)));
-                    let n = [(s * n[0]) as f32, (s * n[1]) as f32, (s * n[2]) as f32];
+                    let d = [b[0] - a[0], b[1] - a[1]];
+                    let n = match projection.wall_normal(a, [s * d[1], -s * d[0]]) {
+                        Some(m) => [m[0] as f32, m[1] as f32, m[2] as f32],
+                        None => [(s * n[0]) as f32, (s * n[1]) as f32, (s * n[2]) as f32],
+                    };
                     let w = pos.len() as u32;
-                    for (p, top) in [(wa, 0.0), (wb, 0.0), (wb, 1.0), (wa, 1.0)] {
+                    let (ia, ib) = (ids[i], ids[(i + 1) % ring.len()]);
+                    for (p, top, id) in [(wa, 0.0, ia), (wb, 0.0, ib), (wb, 1.0, ib), (wa, 1.0, ia)] {
+                        source.push(id);
                         pos.push(p);
                         nt.push([n[0], n[1], n[2], top]);
                     }
-                    index.extend_from_slice(&[w, w + 1, w + 2, w, w + 2, w + 3]);
+                    // Wound to face the normal: (bottom a, bottom b, top b)
+                    // faces e × up, the outside only when `s` is positive —
+                    // a ring run clockwise, as deck.gl's winding leaves an
+                    // outer one, needs its quads turned over, or a scene
+                    // renderer culls the walls (and their shadows) away.
+                    if s > 0.0 {
+                        index.extend_from_slice(&[w, w + 1, w + 2, w, w + 2, w + 3]);
+                    } else {
+                        index.extend_from_slice(&[w, w + 2, w + 1, w, w + 3, w + 2]);
+                    }
                 }
             }
             feature.extend(std::iter::repeat_n(k as u32, pos.len() - start));
             ranges.push((start as u32, pos.len() as u32));
         }
+        index.extend(roof_index);
         // Stored local to the middle of the layer's bounds: half the bytes of
         // absolute f64 positions, and exact enough across any extent one
         // layer spans.
@@ -203,6 +264,7 @@ impl PolygonMesh {
             positions,
             normal_top: nt,
             feature,
+            source,
             index,
             ranges,
             radial: centre,
@@ -239,6 +301,7 @@ impl PolygonMesh {
         f32s(&mut out, bytemuck::cast_slice(&self.positions));
         f32s(&mut out, bytemuck::cast_slice(&self.normal_top));
         u32s(&mut out, &self.feature);
+        u32s(&mut out, &self.source);
         u32s(&mut out, &self.index);
         for &(a, b) in &self.ranges {
             u32s(&mut out, &[a, b]);
@@ -263,6 +326,7 @@ impl PolygonMesh {
             .map(|_| Ok([r.f32()?, r.f32()?, r.f32()?, r.f32()?]))
             .collect::<Result<_, String>>()?;
         let feature = (0..n).map(|_| r.u32()).collect::<Result<_, _>>()?;
+        let source = (0..n).map(|_| r.u32()).collect::<Result<_, _>>()?;
         let index: Vec<u32> = (0..ni).map(|_| r.u32()).collect::<Result<_, _>>()?;
         let ranges = (0..nr)
             .map(|_| Ok((r.u32()?, r.u32()?)))
@@ -278,6 +342,7 @@ impl PolygonMesh {
             positions,
             normal_top,
             feature,
+            source,
             index,
             ranges,
             radial: has_radial.then_some(radial),
@@ -407,6 +472,59 @@ mod tests {
         assert!(PolygonMesh::from_bytes(b"nope").is_err());
         fn send<T: Send>() {}
         send::<PolygonMesh>();
+    }
+
+    /// Every triangle, roof and walls, is wound to face its own normal once
+    /// extruded — what a scene renderer culls by (`to_buffer_geometry`) —
+    /// whichever way the rings were given, holes included, flat and on a
+    /// globe.
+    #[test]
+    fn triangles_face_their_normals_whichever_way_rings_run() {
+        let globe = GlobeGround {
+            radius: 1000.0,
+            centre: [0.0; 3],
+            max_edge_degrees: 2.0,
+        };
+        let ccw = square(0.0, 0.0, 10.0);
+        let cw: Vec<[f64; 2]> = ccw.iter().rev().copied().collect();
+        let hole = square(3.0, 3.0, 2.0);
+        let hole_cw: Vec<[f64; 2]> = hole.iter().rev().copied().collect();
+        for (outer, h) in [(&ccw, &hole), (&cw, &hole), (&ccw, &hole_cw), (&cw, &hole_cw)] {
+            let mut f = PolygonFeature::new(outer.clone());
+            f.holes.push(h.clone());
+            for on_globe in [false, true] {
+                let mesh = if on_globe {
+                    PolygonMesh::build_with(&[f.clone()], 0.0, &globe)
+                } else {
+                    PolygonMesh::build(&[f.clone()], 0.0)
+                };
+                // Extruded 5 up: tops rise along the vertex's up.
+                let at = |i: u32| {
+                    let i = i as usize;
+                    let p = mesh.positions[i];
+                    let w = [p[0] as f64 + mesh.origin[0], p[1] as f64 + mesh.origin[1], p[2] as f64 + mesh.origin[2]];
+                    let up = match mesh.radial {
+                        Some(c) => {
+                            let d = [w[0] - c[0], w[1] - c[1], w[2] - c[2]];
+                            let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+                            [d[0] / l, d[1] / l, d[2] / l]
+                        }
+                        None => [0.0, 1.0, 0.0],
+                    };
+                    let rise = 5.0 * mesh.normal_top[i][3] as f64;
+                    [w[0] + up[0] * rise, w[1] + up[1] * rise, w[2] + up[2] * rise]
+                };
+                for t in mesh.index.chunks(3) {
+                    let (a, b, c) = (at(t[0]), at(t[1]), at(t[2]));
+                    let e1 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+                    let e2 = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+                    let g = cross(e1, e2);
+                    let n = mesh.normal_top[t[0] as usize];
+                    let facing = g[0] * n[0] as f64 + g[1] * n[1] as f64 + g[2] * n[2] as f64;
+                    assert!(facing > 0.0, "globe {on_globe}, outer {outer:?}, hole {h:?}: triangle {t:?} faces away from {n:?}");
+                }
+            }
+        }
     }
 
     #[test]

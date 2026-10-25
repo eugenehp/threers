@@ -27,5 +27,5 @@ name = "anim_physics_blend"
 required-features = ["physics"]
 
 [dependencies]
-threers = { path = "../..", version = "0.0.7" }
-threers-physics = { path = "../threers-physics", version = "0.0.2", optional = true }
+threers = { path = "../..", version = "0.0.8" }
+threers-physics = { path = "../threers-physics", version = "0.0.8", optional = true }

@@ -309,6 +309,165 @@ fn every_kind_takes_both_custom_columns() {
     assert!(!is_bg(px(&img, 128 + 60, 64 - 30)), "second box drawn");
 }
 
+/// A row's rotation turns its mesh: a long box a quarter turn about the
+/// view axis stands upright.
+#[test]
+fn shapes_turn_by_their_rotation() {
+    let Some(mut hr) = host() else { return };
+    let mut mr = MarkRenderer::new(hr.device());
+    let cam = camera(128.0, 64.0);
+    let mut bar = ShapeMarks::new(&BoxGeometry::new(60.0, 6.0, 6.0));
+    bar.set_positions(&[[0.0, 0.0, 0.0]]);
+    bar.set_default_color([255, 255, 255, 255]);
+    bar.ambient = 1.0;
+    let img = frame(&mut hr, &mut mr, &mut scene(), &cam, Origin::ZERO, &mut [&mut bar]);
+    assert!(!is_bg(px(&img, 128 + 25, 64)) && is_bg(px(&img, 128, 64 - 25)), "lying down");
+    let h = std::f32::consts::FRAC_1_SQRT_2;
+    bar.set_rotations(&[[0.0, 0.0, h, h]]);
+    let img = frame(&mut hr, &mut mr, &mut scene(), &cam, Origin::ZERO, &mut [&mut bar]);
+    assert!(is_bg(px(&img, 128 + 25, 64)) && !is_bg(px(&img, 128, 64 - 25)), "standing up");
+}
+
+/// A line flat on the ground, seen from above at a slant, is foreshortened
+/// across its width as the ground is; facing the camera, it keeps its width.
+#[test]
+fn flat_lines_lie_on_the_ground() {
+    let Some(mut hr) = host() else { return };
+    let mut mr = MarkRenderer::new(hr.device());
+    // Looking down at the ground (world y up) from 30° above it.
+    let mut cam = camera(128.0, 64.0);
+    let (s, c) = 30f32.to_radians().sin_cos();
+    cam.position = threers::Vector3::new(0.0, 50.0 * s, 50.0 * c);
+    threers::Camera::look_at(&mut cam, threers::Vector3::new(0.0, 0.0, 0.0));
+    let mut thickness = |flat: bool| {
+        let mut line = SegmentMarks::new();
+        line.set_segments(&[[-80.0, 0.0, 0.0]], &[[80.0, 0.0, 0.0]]);
+        line.set_widths(&[20.0]);
+        line.set_default_color([255, 255, 255, 255]);
+        line.common.style.units = SizeUnits::World;
+        line.flat = flat;
+        let img = frame(&mut hr, &mut mr, &mut scene(), &cam, Origin::ZERO, &mut [&mut line]);
+        (0..H).filter(|&y| px(&img, 128, y)[0] > 128).count() as f32
+    };
+    let (standing, flat) = (thickness(false), thickness(true));
+    assert!((standing - 20.0).abs() <= 1.5, "facing the camera: {standing} px");
+    // sin 30° of the width.
+    assert!((flat - 10.0).abs() <= 1.5, "on the ground: {flat} px");
+}
+
+/// A whole path lights up, not one of its segments.
+#[test]
+fn a_whole_path_highlights() {
+    let Some(mut hr) = host() else { return };
+    let mut mr = MarkRenderer::new(hr.device());
+    let cam = camera(128.0, 64.0);
+    let mut paths = SegmentMarks::new();
+    paths.set_paths(&[
+        vec![[-100.0, 30.0, 0.0], [-50.0, 30.0, 0.0], [0.0, 30.0, 0.0]],
+        vec![[-100.0, -30.0, 0.0], [-50.0, -30.0, 0.0], [0.0, -30.0, 0.0], [50.0, -30.0, 0.0]],
+    ]);
+    paths.set_widths(&[6.0; 5]);
+    paths.set_default_color([0, 0, 255, 255]);
+    paths.common.style.highlight_color = [255, 0, 0, 255];
+    paths.highlight_paths(Some(1..2));
+    let img = frame(&mut hr, &mut mr, &mut scene(), &cam, Origin::ZERO, &mut [&mut paths]);
+    // Every segment of the second path is red; the first stays blue.
+    for x in [-75, -25, 25] {
+        assert!(px(&img, (128 + x) as u32, 64 + 30)[0] > 200, "second path at {x}");
+    }
+    assert!(px(&img, 128 - 75, 64 - 30)[2] > 200 && px(&img, 128 - 75, 64 - 30)[0] < 50, "first path");
+}
+
+/// Each point its own stroke: colour and width per row.
+#[test]
+fn points_take_their_own_strokes() {
+    let Some(mut hr) = host() else { return };
+    let mut mr = MarkRenderer::new(hr.device());
+    let cam = camera(128.0, 64.0);
+    let mut p = PointMarks::new();
+    p.set_positions(&[[-50.0, 0.0, 0.0], [50.0, 0.0, 0.0]]);
+    p.set_radii(&[20.0, 20.0]);
+    p.set_default_color([0, 0, 0, 255]);
+    p.stroke_width = 4.0;
+    p.set_stroke_colors(&[[255, 0, 0, 255], [0, 255, 0, 255]]);
+    p.set_stroke_widths(&[1.0, 3.0]);
+    let img = frame(&mut hr, &mut mr, &mut scene(), &cam, Origin::ZERO, &mut [&mut p]);
+    // The left ring: red, 4 px wide about r = 20; the right: green, 12 px.
+    assert!(px(&img, 128 - 50 + 20, 64)[0] > 200, "red ring");
+    assert!(px(&img, 128 - 50 + 24, 64)[0] < 30, "red ring is thin");
+    assert!(px(&img, 128 + 50 + 20, 64)[1] > 200, "green ring");
+    assert!(px(&img, 128 + 50 + 24, 64)[1] > 200, "green ring is wide");
+}
+
+/// A mesh textured from an atlas by its uvs, and tinted by its vertex
+/// colours.
+#[test]
+fn shapes_take_textures_and_vertex_colours() {
+    use threers::marks::TextureAtlas;
+    let Some(mut hr) = host() else { return };
+    let mut mr = MarkRenderer::new(hr.device());
+    let cam = camera(128.0, 64.0);
+    // Left half red, right half green.
+    let mut img = Vec::new();
+    for _y in 0..4 {
+        for x in 0..4 {
+            img.extend_from_slice(if x < 2 { &[255, 0, 0, 255] } else { &[0, 255, 0, 255] });
+        }
+    }
+    let mut atlas = TextureAtlas::new(64);
+    atlas.insert("halves", 4, 4, &img).unwrap();
+    let atlas = atlas.shared();
+    // A quad in the view plane, uvs across it.
+    let mut quad = threers::BufferGeometry::new();
+    let p = [[-1.0f32, -1.0, 0.0], [1.0, -1.0, 0.0], [1.0, 1.0, 0.0], [-1.0, 1.0, 0.0]];
+    quad.set_attribute("position", threers::BufferAttribute::new(p.iter().flatten().copied().collect(), 3));
+    quad.set_attribute("uv", threers::BufferAttribute::new(vec![0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0], 2));
+    quad.set_index(vec![0, 1, 2, 0, 2, 3]);
+    let mut shapes = ShapeMarks::new(&quad);
+    shapes.set_positions(&[[0.0, 0.0, 0.0]]);
+    shapes.set_default_color([255, 255, 255, 255]);
+    shapes.ambient = 1.0;
+    shapes.common.style.size_scale = 40.0;
+    shapes.set_texture(Some((atlas, "halves".into())));
+    let img = frame(&mut hr, &mut mr, &mut scene(), &cam, Origin::ZERO, &mut [&mut shapes]);
+    let (l, r) = (px(&img, 128 - 20, 64), px(&img, 128 + 20, 64));
+    assert!(l[0] > 200 && l[1] < 60, "left: {l:?}");
+    assert!(r[1] > 200 && r[0] < 60, "right: {r:?}");
+    // Vertex colours: blue everywhere turns the green half dark, the red
+    // half too.
+    let mut tinted = quad.clone();
+    tinted.set_attribute("color", threers::BufferAttribute::new([0.0f32, 0.0, 1.0].repeat(4), 3));
+    shapes.set_geometry(&tinted);
+    let img = frame(&mut hr, &mut mr, &mut scene(), &cam, Origin::ZERO, &mut [&mut shapes]);
+    assert!(px(&img, 128 + 20, 64)[1] < 30, "tinted out");
+}
+
+/// Points binned into screen cells on the GPU, counts and weights, by the
+/// pixel each projects to.
+#[test]
+fn points_bin_into_screen_cells_on_the_gpu() {
+    use threers::marks::ScreenBinner;
+    let Some(hr) = host() else { return };
+    let device = hr.device().clone();
+    let queue = hr.queue().clone();
+    if !ScreenBinner::supported(&device) {
+        return;
+    }
+    let cam = camera(128.0, 64.0);
+    let view = MarkView::new(&cam, Origin::ZERO, (W, H));
+    // 1 unit a pixel, (0, 0) at the middle (128, 64): cells of 32 pixels.
+    let points = [[-100.0, 0.0, 0.0], [-99.0, -1.0, 0.0], [10.0, 10.0, 0.0], [500.0, 0.0, 0.0]];
+    let binner = ScreenBinner::new(&device, &points, Some(&[1.0, 2.5, 4.0, 8.0]));
+    let bins = binner.bin(&device, &queue, view.view_proj, (W, H), 32.0).wait(&device).unwrap();
+    assert_eq!((bins.cols, bins.rows), (8, 4));
+    // (-100, 0) is pixel (28, 64): cell (0, 2); (10, 10) is (138, 54): (4, 1).
+    assert_eq!(bins.counts[2 * 8], 2);
+    assert!((bins.sums[2 * 8] - 3.5).abs() < 1e-3);
+    assert_eq!(bins.counts[8 + 4], 1);
+    // Off screen: in no cell.
+    assert_eq!(bins.counts.iter().sum::<u32>(), 3);
+}
+
 /// Every layer's uniforms share one buffer: each reads its own slot — a pick
 /// reports the layer id from its uniforms, and the size comes from them too —
 /// through the arena growing and shrinking back.
@@ -532,6 +691,75 @@ fn segments_are_as_wide_as_asked_and_arcs_rise() {
     );
     assert_eq!(px(&img, 128, 64 - 50)[0], 255, "the peak");
     assert!(is_bg(px(&img, 128, 64)), "no chord");
+}
+
+/// A line thinner than a pixel takes the share of each pixel it covers: a
+/// 0.4-pixel line puts 0.4 of its ink in each column wherever it falls
+/// between pixel centres, and never more than 0.4 in one pixel — where the
+/// edge ramp drew it at 0.7–0.9 over two pixels, heavier on a centre than
+/// between two. Along a row and on a 45° diagonal, whose columns each cross
+/// √2 of its width.
+#[test]
+fn thin_segments_keep_their_weight_between_pixels() {
+    let Some(mut hr) = host() else { return };
+    let mut mr = MarkRenderer::new(hr.device());
+    let cam = camera(128.0, 64.0);
+    // Coverage of a white line on black, linear.
+    let lin = |b: u8| {
+        let c = b as f32 / 255.0;
+        if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+    };
+    let width = 0.4f32;
+    for diagonal in [false, true] {
+        let mut sums = Vec::new();
+        for k in 0..8 {
+            let phase = k as f64 / 8.0;
+            let mut line = SegmentMarks::new();
+            if diagonal {
+                line.set_segments(&[[-40.0 + phase, -40.0, 0.0]], &[[40.0 + phase, 40.0, 0.0]]);
+            } else {
+                line.set_segments(&[[-100.0, phase, 0.0]], &[[100.0, phase, 0.0]]);
+            }
+            line.set_widths(&[width]);
+            line.set_default_color([255, 255, 255, 255]);
+            let img = frame(&mut hr, &mut mr, &mut scene(), &cam, Origin::ZERO, &mut [&mut line]);
+            for x in [118u32, 128, 137] {
+                let col: Vec<f32> = (0..H).map(|y| lin(px(&img, x, y)[0])).collect();
+                let peak = col.iter().cloned().fold(0.0, f32::max);
+                let expect = if diagonal { width * std::f32::consts::SQRT_2 } else { width };
+                assert!(peak <= expect.min(1.0) + 0.03, "diagonal {diagonal} phase {phase} x {x}: peak {peak}");
+                sums.push(col.iter().sum::<f32>() / expect);
+            }
+        }
+        for s in &sums {
+            assert!((s - 1.0).abs() < 0.06, "diagonal {diagonal}: column ink {s} of the width, all {sums:?}");
+        }
+    }
+}
+
+/// Round joints, translucent: each segment keeps its side of the joint, so
+/// the disc there is no brighter than the legs, and as round.
+#[test]
+fn translucent_round_joints_are_not_doubled() {
+    use threers::marks::LineJoin;
+    let Some(mut hr) = host() else { return };
+    let mut mr = MarkRenderer::new(hr.device());
+    let mut path = SegmentMarks::new();
+    path.set_paths(&[vec![[-60.0, -20.0, 0.0], [0.0, -20.0, 0.0], [0.0, 40.0, 0.0]]]);
+    path.set_widths(&[10.0, 10.0]);
+    path.set_default_color([255, 0, 0, 128]);
+    path.join = LineJoin::Round;
+    let cam = camera(128.0, 64.0);
+    let img = frame(&mut hr, &mut mr, &mut scene(), &cam, Origin::ZERO, &mut [&mut path]);
+    let leg = px(&img, 128 - 30, 64 + 20)[0];
+    // The joint's centre, and the outside of the turn 3.5 px out (pixel
+    // centres are at +0.5): inside the disc.
+    for (x, y) in [(128, 64 + 20), (128 + 2, 64 + 22)] {
+        let r = px(&img, x, y)[0];
+        assert!(r.abs_diff(leg) <= 3, "({x}, {y}): {r} against the leg's {leg}");
+    }
+    // Past the disc on the outside of the turn: nothing.
+    assert!(px(&img, 128 + 6, 64 + 26)[0] < 20, "the disc is round, not a mitre");
 }
 
 #[test]
@@ -1450,6 +1678,7 @@ fn lines_take_dashes_caps_and_a_casing() {
     // the joint at x = 0.
     let mut dashed = path();
     dashed.dash = Some([2.0, 1.0]);
+    dashed.cap = LineCap::Butt;
     let img = frame(
         &mut hr,
         &mut mr,
@@ -1469,6 +1698,23 @@ fn lines_take_dashes_caps_and_a_casing() {
     ] {
         let p = at(&img, along - 100, 0);
         assert_eq!(p[0] > 200, on, "{along} px along: {p:?}");
+    }
+    // Round caps round the dashes' ends: 4 px into a gap is inside the
+    // 5 px cap on the centre line, outside it 4 px off it (pixel centres
+    // at +0.5).
+    dashed.cap = LineCap::Round;
+    let img = frame(&mut hr, &mut mr, &mut scene(), &cam, Origin::ZERO, &mut [&mut dashed]);
+    assert!(at(&img, 24 - 100, 0)[0] > 200, "a dash's round end");
+    assert!(at(&img, 24 - 100, 4)[0] < 100, "round, not square");
+    // Justified: a whole number of periods per segment (100 px: 3 of 33 px,
+    // 20 on), half a dash at each end.
+    dashed.cap = LineCap::Butt;
+    dashed.dash_justified = true;
+    dashed.dash_mode = threers::marks::DashMode::Segment;
+    let img = frame(&mut hr, &mut mr, &mut scene(), &cam, Origin::ZERO, &mut [&mut dashed]);
+    for (along, on) in [(2, true), (20, false), (33, true), (50, false), (98, true)] {
+        let p = at(&img, along - 100, 0);
+        assert_eq!(p[0] > 200, on, "justified, {along} px along: {p:?}");
     }
 
     // Caps: a butt end stops at the point, round and square reach past it,
@@ -2308,18 +2554,23 @@ fn msdf_text_keeps_its_corners_when_enlarged() {
         labels.glyph_field = field;
         labels.set_labels(vec![TextLabel::new([0.0, 0.0, 0.0], "T")]);
         let img = frame(hr, mr, &mut scene(), &cam, Origin::ZERO, &mut [&mut labels]);
+        // Ink at over about 40% coverage: the crossbar's top edge can fall
+        // halfway through a row, which white text puts at an encoded 128
+        // (blended as CoreText does), and a cut at exactly half would take
+        // that row as inked or not by a rounding.
+        let inked = |x: u32, y: u32| px(&img, x, y)[0] > 96;
         // The crossbar's top-left corner: the first inked column and row.
         let (mut x0, mut y0) = (W, H);
         for y in 0..H {
             for x in 0..W {
-                if px(&img, x, y)[0] > 128 {
+                if inked(x, y) {
                     x0 = x0.min(x);
                     y0 = y0.min(y);
                 }
             }
         }
         assert!(x0 < W, "{field:?}: something drawn");
-        ink(&img, x0, y0, x0 + 6, y0 + 6)
+        (y0..y0 + 6).flat_map(|y| (x0..x0 + 6).map(move |x| (x, y))).filter(|&(x, y)| inked(x, y)).count()
     };
     let sdf = corner_ink(&mut hr, &mut mr, GlyphField::Sdf);
     let msdf = corner_ink(&mut hr, &mut mr, GlyphField::Msdf);
@@ -2384,6 +2635,191 @@ fn a_fallback_face_draws_what_the_first_lacks() {
         changed > 100,
         "not the bitmap face's missing-glyph box: {changed} px changed"
     );
+}
+
+/// `\n` starts a line 1.2 em lower; a shorter line is centred under a
+/// centred label's longest.
+#[cfg(feature = "captions")]
+#[test]
+fn a_label_breaks_lines() {
+    use threers::captions::CaptionFont;
+    use threers::marks::{TextLabel, TextLabels};
+    let Some(mut hr) = host() else { return };
+    let mut mr = MarkRenderer::new(hr.device());
+    let cam = camera(128.0, 64.0);
+    let mut bounds = |text: &str| {
+        let mut labels = TextLabels::new(CaptionFont::builtin());
+        labels.font_size = 16.0;
+        labels.set_labels(vec![TextLabel::new([0.0, 0.0, 0.0], text)]);
+        let img = frame(&mut hr, &mut mr, &mut scene(), &cam, Origin::ZERO, &mut [&mut labels]);
+        let (mut x0, mut y0, mut x1, mut y1) = (W, H, 0, 0);
+        for y in 0..H {
+            for x in 0..W {
+                if img[((y * W + x) * 4) as usize] > 128 {
+                    (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+                }
+            }
+        }
+        (x0 as f32, y0 as f32, x1 as f32, y1 as f32)
+    };
+    let one = bounds("HHHH");
+    let two = bounds("HHHH\nH");
+    let under = bounds("    \nH");
+    let taller = (two.3 - two.1) - (one.3 - one.1);
+    assert!((taller - 19.2).abs() <= 1.5, "a line lower: {taller} px");
+    assert!((one.1 - two.1 - 9.6).abs() <= 1.5, "the block centred: {one:?} {two:?}");
+    let (mid_one, mid_under) = ((one.0 + one.2) * 0.5, (under.0 + under.2) * 0.5);
+    assert!((mid_one - mid_under).abs() <= 1.0, "the short line centred: {mid_one} {mid_under}");
+}
+
+/// Labels wrap to a width at spaces, and can sit on a padded, bordered
+/// box.
+#[cfg(feature = "captions")]
+#[test]
+fn labels_wrap_and_take_backgrounds() {
+    use threers::captions::CaptionFont;
+    use threers::marks::{LabelBackground, TextLabel, TextLabels};
+    let Some(mut hr) = host() else { return };
+    let mut mr = MarkRenderer::new(hr.device());
+    let cam = camera(128.0, 64.0);
+    let mut extent = |max_width: Option<f32>| {
+        let mut labels = TextLabels::new(CaptionFont::builtin());
+        labels.font_size = 16.0;
+        labels.max_width = max_width;
+        labels.set_labels(vec![TextLabel::new([0.0, 0.0, 0.0], "HHHH HHHH")]);
+        let img = frame(&mut hr, &mut mr, &mut scene(), &cam, Origin::ZERO, &mut [&mut labels]);
+        let lit: Vec<(u32, u32)> = (0..H).flat_map(|y| (0..W).map(move |x| (x, y))).filter(|&(x, y)| px(&img, x, y)[0] > 128).collect();
+        let (x0, x1) = (lit.iter().map(|p| p.0).min().unwrap(), lit.iter().map(|p| p.0).max().unwrap());
+        let (y0, y1) = (lit.iter().map(|p| p.1).min().unwrap(), lit.iter().map(|p| p.1).max().unwrap());
+        (x1 - x0, y1 - y0)
+    };
+    let (w1, h1) = extent(None);
+    let (w2, h2) = extent(Some(80.0));
+    assert!(w2 < w1 * 6 / 10 && h2 > h1 + 10, "wrapped onto two lines: {w1}x{h1} to {w2}x{h2}");
+
+    let mut labels = TextLabels::new(CaptionFont::builtin());
+    labels.font_size = 16.0;
+    let mut label = TextLabel::new([0.0, 0.0, 0.0], "HI");
+    label.color = [255, 255, 255, 255];
+    label.background = Some(LabelBackground { color: [255, 0, 0, 255], padding: [10.0; 4], border_color: [0, 255, 0, 255], border_width: 3.0 });
+    labels.set_labels(vec![label]);
+    let img = frame(&mut hr, &mut mr, &mut scene(), &cam, Origin::ZERO, &mut [&mut labels]);
+    let reds = img.chunks(4).filter(|p| p[0] > 200 && p[1] < 50).count();
+    let greens = img.chunks(4).filter(|p| p[1] > 200 && p[0] < 50).count();
+    let whites = img.chunks(4).filter(|p| p[0] > 200 && p[1] > 200).count();
+    assert!(reds > 300 && greens > 100 && whites > 20, "box {reds}, border {greens}, text {whites}");
+}
+
+/// Glyphs that overlap (joined scripts do): every halo goes under every
+/// fill, so one glyph's halo does not eat into the ink of the one before.
+#[cfg(feature = "captions")]
+#[test]
+fn halos_go_under_overlapping_glyphs() {
+    use std::collections::HashMap;
+    use threers::captions::{CaptionFont, SdfGlyph, SdfGlyphs};
+    use threers::marks::{TextLabel, TextLabels};
+    let Some(mut hr) = host() else { return };
+    let mut mr = MarkRenderer::new(hr.device());
+    let cam = camera(128.0, 64.0);
+    // A 12-pixel square advancing only 6: each glyph covers half the last.
+    let (w, h, buffer) = (12u32, 12u32, 3u32);
+    let (fw, fh) = (w + 2 * buffer, h + 2 * buffer);
+    let field = (0..fw * fh)
+        .map(|i| {
+            let (x, y) = ((i % fw) as f32 + 0.5, (i / fw) as f32 + 0.5);
+            let inside = (x - buffer as f32).min(y - buffer as f32).min((fw - buffer) as f32 - x).min((fh - buffer) as f32 - y);
+            (192.0 + inside * 32.0).clamp(0.0, 255.0) as u8
+        })
+        .collect();
+    let mut glyphs = HashMap::new();
+    glyphs.insert(0x4e00, SdfGlyph { width: w, height: h, left: 0, top: -10, advance: 6.0, field });
+    let font = std::sync::Arc::new(SdfGlyphs { size: 24.0, buffer, top_origin: 26.0, glyphs });
+    let mut white = |halo: f32| {
+        let mut labels = TextLabels::new(CaptionFont::from_sdf_glyphs(font.clone()));
+        labels.font_size = 48.0;
+        labels.halo_width = halo;
+        labels.halo_color = [255, 0, 0, 255];
+        labels.set_labels(vec![TextLabel::new([0.0, 0.0, 0.0], "\u{4e00}\u{4e00}\u{4e00}")]);
+        let img = frame(&mut hr, &mut mr, &mut scene(), &cam, Origin::ZERO, &mut [&mut labels]);
+        img.chunks(4).filter(|p| p[0] > 200 && p[1] > 200 && p[2] > 200).count()
+    };
+    let (plain, haloed) = (white(0.0), white(4.0));
+    assert!(plain > 500, "{plain} px of ink");
+    assert!(haloed as f32 >= plain as f32 * 0.97, "the ink under the halos: {haloed} px against {plain}");
+}
+
+/// A label layer replaced while the view holds still (a map tile styled
+/// again): the new one takes the spot, not blocked by the old one's boxes.
+#[cfg(feature = "captions")]
+#[test]
+fn a_replaced_label_layer_gives_back_its_spot() {
+    use threers::captions::CaptionFont;
+    use threers::marks::{CollisionIndex, TextLabel, TextLabels};
+    let Some(mut hr) = host() else { return };
+    let mut mr = MarkRenderer::new(hr.device());
+    let index = CollisionIndex::new().shared();
+    let cam = camera(128.0, 64.0);
+    let view = MarkView::new(&cam, Origin::ZERO, (W, H));
+    let make = || {
+        let mut l = TextLabels::new(CaptionFont::builtin());
+        l.font_size = 16.0;
+        l.collision = true;
+        l.set_labels(vec![TextLabel::new([0.0, 0.0, 0.0], "HI")]);
+        l.collision_index = Some(index.clone());
+        l
+    };
+    let mut old = make();
+    for _ in 0..2 {
+        index.lock().unwrap().begin_frame(&view);
+        frame(&mut hr, &mut mr, &mut scene(), &cam, Origin::ZERO, &mut [&mut old]);
+    }
+    assert_eq!(old.visible(), &[true]);
+    drop(old);
+    let mut new = make();
+    index.lock().unwrap().begin_frame(&view);
+    frame(&mut hr, &mut mr, &mut scene(), &cam, Origin::ZERO, &mut [&mut new]);
+    assert_eq!(new.visible(), &[true], "not hidden behind the dropped layer's box");
+}
+
+/// A distance-field face first (MapLibre's glyph PBFs hold only the ranges
+/// fetched) and a TrueType face for the rest: both draw.
+#[cfg(feature = "captions")]
+#[test]
+fn a_distance_field_face_and_a_fallback_both_draw() {
+    use std::collections::HashMap;
+    use threers::captions::{CaptionFont, SdfGlyph, SdfGlyphs};
+    use threers::marks::{TextLabel, TextLabels};
+    let Some(mut hr) = host() else { return };
+    let mut mr = MarkRenderer::new(hr.device());
+    let cam = camera(128.0, 64.0);
+    // A 12-pixel square, a 3-pixel field around it.
+    let (w, h, buffer) = (12u32, 12u32, 3u32);
+    let (fw, fh) = (w + 2 * buffer, h + 2 * buffer);
+    let field = (0..fw * fh)
+        .map(|i| {
+            let (x, y) = ((i % fw) as f32 + 0.5, (i / fw) as f32 + 0.5);
+            let inside = (x - buffer as f32).min(y - buffer as f32).min((fw - buffer) as f32 - x).min((fh - buffer) as f32 - y);
+            (192.0 + inside * 32.0).clamp(0.0, 255.0) as u8
+        })
+        .collect();
+    let mut glyphs = HashMap::new();
+    glyphs.insert(0x4e00, SdfGlyph { width: w, height: h, left: 1, top: -10, advance: 14.0, field });
+    let set = SdfGlyphs { size: 24.0, buffer, top_origin: 26.0, glyphs };
+    let mut draw = |labels: &mut TextLabels, text: &str| {
+        labels.font_size = 32.0;
+        labels.halo_width = 2.0;
+        labels.halo_color = [255, 0, 0, 255];
+        labels.collision = true;
+        labels.set_labels(vec![TextLabel::new([0.0, 0.0, 0.0], text)]);
+        let img = frame(&mut hr, &mut mr, &mut scene(), &cam, Origin::ZERO, &mut [labels]);
+        ink(&img, 0, 0, W, H)
+    };
+    let mut both = TextLabels::new(CaptionFont::from_sdf_glyphs(std::sync::Arc::new(set)));
+    both.add_fallback(dejavu());
+    let with = draw(&mut both, "A\u{4e00}");
+    let alone = draw(&mut TextLabels::new(dejavu()), "A");
+    // The square is 16 px across at 32 px per em.
+    assert!(with > alone + 200, "the square beside DejaVu's A: {with} px against {alone}");
 }
 
 /// An icon beside the text: drawn in its own colour to the left, and part of
@@ -2455,4 +2891,67 @@ fn an_icon_draws_beside_its_text_and_collides_as_one() {
         &mut [&mut labels],
     );
     assert_eq!(labels.visible(), &[true, true]);
+}
+
+/// Lit points take their colour from their normals: one facing the light
+/// is brighter than one facing away, and one without lighting is as set.
+#[test]
+fn lit_points_shade_by_their_normals() {
+    let Some(mut hr) = host() else { return };
+    let mut mr = MarkRenderer::new(hr.device());
+    let mut points = PointMarks::new();
+    points.set_positions(&[[-64.0, 0.0, 0.0], [64.0, 0.0, 0.0]]);
+    points.set_radii(&[10.0, 10.0]);
+    points.set_default_color([200, 200, 200, 255]);
+    let unlit = frame(&mut hr, &mut mr, &mut scene(), &camera(128.0, 64.0), Origin::ZERO, &mut [&mut points]);
+    assert_eq!(px(&unlit, 64, 64)[0], 200);
+    points.lighting = Some(threers::marks::Lighting {
+        ambient: 0.2,
+        diffuse: 0.8,
+        specular: 0.0,
+        shininess: 1.0,
+        lights: [([0.0, 0.0, 1.0], 1.0), ([0.0, 0.0, 1.0], 0.0)],
+        srgb: true,
+        pbr: None,
+        scene: false,
+        specular_color: [0.0; 3],
+    });
+    points.set_normals(&[[0.0, 0.0, 1.0], [0.0, 0.0, -1.0]]);
+    let lit = frame(&mut hr, &mut mr, &mut scene(), &camera(128.0, 64.0), Origin::ZERO, &mut [&mut points]);
+    let (toward, away) = (px(&lit, 64, 64)[0], px(&lit, 192, 64)[0]);
+    assert!((toward as i32 - 200).abs() <= 1, "facing the light: ambient + diffuse = 1 ({toward})");
+    assert!((away as i32 - 40).abs() <= 1, "facing away: ambient only ({away})");
+}
+
+/// A target's rectangle: marks drawn within it only, its view the
+/// rectangle's size, and a clear that leaves the rest alone.
+#[test]
+fn marks_draw_and_clear_within_a_rect() {
+    let Some(mut hr) = host() else { return };
+    let mut mr = MarkRenderer::new(hr.device());
+    let mut points = PointMarks::new();
+    points.set_positions(&[[0.0, 0.0, 0.0]]);
+    points.set_radii(&[200.0]);
+    points.set_default_color([255, 0, 0, 255]);
+    let cam = camera(64.0, 64.0);
+    hr.render(&mut scene(), &cam);
+    let device = hr.device().clone();
+    let queue = hr.queue().clone();
+    // The right half: a view 128 wide, cleared green, then a huge red dot
+    // that would cover the whole target.
+    let view = MarkView::new(&cam, Origin::ZERO, (W / 2, H));
+    {
+        let target = hr.mark_target().with_rect([W / 2, 0, W / 2, H]);
+        mr.clear(&device, &queue, &target, Some(threers::wgpu::Color::GREEN), Some(1.0));
+    }
+    let before = hr.read_rgba();
+    assert!(is_bg(px(&before, 10, 10)), "left half untouched by the clear");
+    assert_eq!(px(&before, 200, 10)[1], 255, "right half cleared green");
+    {
+        let target = hr.mark_target().with_rect([W / 2, 0, W / 2, H]);
+        mr.draw(&device, &queue, &target, &view, &mut [&mut points]);
+    }
+    let img = hr.read_rgba();
+    assert!(is_bg(px(&img, 10, 64)), "nothing drawn left of the rect");
+    assert_eq!(px(&img, 192, 64), [255, 0, 0, 255], "the dot fills the rect");
 }

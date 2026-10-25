@@ -79,13 +79,13 @@
 //!
 //! ```toml
 //! # CAD stack in one flag
-//! threers = { version = "0.0.7", features = ["cad"] }
+//! threers = { version = "0.0.8", features = ["cad"] }
 //! # everything
-//! threers = { version = "0.0.7", features = ["full"] }
+//! threers = { version = "0.0.8", features = ["full"] }
 //! # browser wasm kitchen sink
-//! threers = { version = "0.0.7", features = ["wasm-full"] }
+//! threers = { version = "0.0.8", features = ["wasm-full"] }
 //! # nothing but the renderer
-//! threers = { version = "0.0.7", default-features = false }
+//! threers = { version = "0.0.8", default-features = false }
 //! ```
 //!
 //! Rigid-body physics lives in the companion crate
@@ -142,6 +142,7 @@ pub mod core;
 pub mod curves;
 pub mod exporters;
 pub mod extras;
+pub mod fx;
 /// Fur by shells: [`FurMaterial`] on any mesh (`fur::fur_object`).
 pub mod fur;
 pub use fur::{FurGroom, FurMaterial};
@@ -168,6 +169,7 @@ pub mod postprocessing;
 pub mod prelude;
 pub mod renderers;
 pub mod scene;
+pub mod sdf;
 pub mod stats;
 pub mod textures;
 pub mod utils;
@@ -189,6 +191,7 @@ pub mod renderer;
 // No outer doc comment: `gpu.rs` carries `//!` docs, and an outer `///` here
 // would make the intra-doc links inside them resolve in this scope.
 pub mod gpu;
+pub mod strict_float;
 /// The `THREE.*` JS shim's bindings (WebRenderer, WebMesh, loaders, ...).
 /// Built with `--cfg threers_no_js_bindings` they are left out: a consumer
 /// driving the Rust API from its own wasm-bindgen crate otherwise ships
@@ -335,7 +338,7 @@ pub use geometries::{
     TorusKnotGeometry, Tpms, TubeGeometry, WireframeGeometry, ChiralRule, Cuboct, CuboctAssembly,
     CuboctAssemblyPlan, CuboctAssemblyStep, CuboctFrame, CuboctJoint, CuboctJointKind, FrameMaterial,
     FrameResponse, Hand, Conductivity, Conform, Field, LatticeMetrics, SolidMaterial, Stiffness,
-    Solver, Stochastic, Strength,
+    SeedLayout, Solver, Stochastic, Strength,
 };
 pub use helpers::{
     ArrowHelper, AxesHelper, BoxHelper, CameraHelper, DirectionalLightHelper, GridHelper,

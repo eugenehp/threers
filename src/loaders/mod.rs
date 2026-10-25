@@ -17,7 +17,32 @@ pub(crate) mod json;
 mod obj;
 mod ply;
 mod stl;
+mod gpos;
+pub mod cff;
+// Font loading only asks whether a face has mark positioning; reading the
+// attachments is for `captions`.
+#[cfg_attr(not(feature = "captions"), allow(dead_code))]
+pub mod mark;
+/// Which composite a run of a face's glyphs gets. See [`overlap`].
+mod overlap;
+
+/// `GDEF`'s item variation store, from the table's own bytes at a normalized location.
+///
+/// A `GPOS` anchor and a kern value both vary through this one store. [`ttf::TtfFont`]
+/// keeps the bytes only when there is mark positioning to read them for, so this is
+/// `None` for most Latin fonts.
+#[cfg(feature = "captions")]
+#[must_use]
+pub(crate) fn gdef_store<'a>(
+    gdef: &'a [u8],
+    coords: &[f32],
+) -> Option<ttf_var::ItemVariationStore<'a>> {
+    let at = gpos::gdef_var_store(gdef, 0)?;
+    ttf_var::ItemVariationStore::new(gdef, at, coords)
+}
+pub mod shape;
 mod ttf;
+mod ttf_var;
 pub mod typeface;
 mod xml;
 
@@ -47,7 +72,9 @@ pub use hdr::{HdrError, HdrLoader};
 pub use obj::ObjLoader;
 pub use ply::PlyLoader;
 pub use stl::StlLoader;
+pub use gpos::GposKerning;
 pub use ttf::{TtfError, TtfFont, TtfGlyph};
+pub use ttf_var::{wght_for_css_weight, NamedInstance, VariationAxis};
 #[cfg(feature = "usd")]
 pub use usd::{
     animated_scene_to_usda, animated_scene_to_usdc, animated_scene_to_usdz, geometry_to_usda,

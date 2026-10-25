@@ -21,6 +21,9 @@ pub struct PipelineKey {
     pub point_sprites: bool,
     /// Shell fur (`crate::fur`): `vs_fur`/`fs_fur`, the WGSL fur shader's port.
     pub fur: bool,
+    /// An `fx` surface (`crate::fx::Surface`): `vs_fx_surface`/`fs_fx_surface`,
+    /// the WGSL surface shader's port.
+    pub fx_surface: bool,
     /// Read vertices as the 24-byte `LineVertex` rather than the 48-byte
     /// `Vertex`. Set for line draws, whose geometry is uploaded slim.
     pub slim_lines: bool,
@@ -85,17 +88,19 @@ fn build_render_pipeline(
         // each would be four more pipelines nobody compiles.
         (false, false) if key.skinned => ("vs_skinned", "fs_mesh"),
         (false, false) if key.fur => ("vs_fur", "fs_fur"),
+        (false, false) if key.fx_surface => ("vs_fx_surface", "fs_fx_surface"),
         (false, false) => ("vs_mesh", "fs_mesh"),
         (false, true) => ("vs_mesh_layered", "fs_mesh"),
         (true, false) => ("vs_point", "fs_point"),
         (true, true) => ("vs_point_layered", "fs_point"),
     };
-    let encoded_blend = encoded_blend && (fs == "fs_mesh" || fs == "fs_point");
+    let encoded_blend = encoded_blend && (fs == "fs_mesh" || fs == "fs_point" || fs == "fs_fx_surface");
     if encoded_blend && !key.blend {
         return Err(MetalError::PipelineCreation("no encoded blend without blending".into()));
     }
     let fs = match (encoded_blend, fs) {
         (true, "fs_point") => "fs_point_encoded_blend",
+        (true, "fs_fx_surface") => "fs_fx_surface_encoded_blend",
         (true, _) => "fs_mesh_encoded_blend",
         (false, fs) => fs,
     };
@@ -1065,6 +1070,7 @@ mod tests {
         let a = PipelineKey {
             oit_accum: false,
             fur: false,
+            fx_surface: false,
             point_sprites: false,
             slim_lines: false,
             wide_lines: false,

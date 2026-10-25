@@ -28,8 +28,22 @@ root=${here:h}
 cache=${BROWSER_CACHE:-${TMPDIR:-/tmp}/threers-browsers}
 
 command -v npx >/dev/null || { echo "npx is needed to fetch the browser" >&2; exit 2 }
-command -v wasm-bindgen-test-runner >/dev/null \
-  || { echo "cargo install wasm-bindgen-cli --version \$(cargo pkgid wasm-bindgen | sed 's/.*#//')" >&2; exit 2 }
+# The runner has to be the version of the `wasm-bindgen` crate in Cargo.lock,
+# or it refuses the wasm. The one on PATH if it is; else one wasm-pack has
+# cached for that version.
+want=$(awk '/^name = "wasm-bindgen"$/ {getline; gsub(/version = |"/, ""); print; exit}' "${0:A:h:h}/Cargo.lock")
+runner=""
+if command -v wasm-bindgen-test-runner >/dev/null \
+   && [[ "$(wasm-bindgen-test-runner --version 2>/dev/null | awk '{print $2}')" == "$want" ]]; then
+  runner=wasm-bindgen-test-runner
+else
+  for dir in "$HOME/Library/Caches/.wasm-pack" "$HOME/.cache/.wasm-pack"; do
+    c="$dir/wasm-bindgen-cargo-install-$want/wasm-bindgen-test-runner"
+    [[ -x "$c" ]] && { runner="$c"; break }
+  done
+fi
+[[ -n "$runner" ]] \
+  || { echo "need wasm-bindgen-test-runner $want: cargo install -f wasm-bindgen-cli --version $want" >&2; exit 2 }
 
 mkdir -p "$cache"
 # The two have to be the same version or chromedriver refuses to drive it.
@@ -121,5 +135,5 @@ echo "suite: --features $features --test $test_name"
 # WASM_BINDGEN_TEST_TIMEOUT if a test really is stuck.
 CHROMEDRIVER="$driver" \
 WASM_BINDGEN_TEST_TIMEOUT="${WASM_BINDGEN_TEST_TIMEOUT:-480}" \
-CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
+CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER="$runner" \
   cargo test --target wasm32-unknown-unknown --features "$features" --test "$test_name" "$@"

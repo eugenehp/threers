@@ -15,6 +15,16 @@ pub struct GpuMesh {
     /// [`ensure_wire_indices`](Self::ensure_wire_indices), not by `upload`.
     pub wire_index_buffer: Option<wgpu::Buffer>,
     pub wire_index_count: u32,
+    /// Line segments' ends, each segment's two as their own vertices in
+    /// order (an index followed), and one spare vertex after, for lines drawn
+    /// wider than a pixel (`LineBasicMaterial::line_width`): `vs_wide_lines`
+    /// reads a segment as two consecutive vertices of an instance, its end
+    /// through a binding a vertex further on — which a fetch of a whole
+    /// stride would take past the last vertex without the spare. Built on
+    /// first use by [`ensure_segments`](Self::ensure_segments).
+    pub segment_buffer: Option<wgpu::Buffer>,
+    /// The segment buffer's vertices, the spare left out.
+    pub segment_vertices: u32,
     #[allow(dead_code)]
     pub has_vertex_colors: bool,
 }
@@ -121,6 +131,8 @@ impl GpuMesh {
             index_count,
             wire_index_buffer: None,
             wire_index_count: 0,
+            segment_buffer: None,
+            segment_vertices: 0,
             has_vertex_colors: colors,
         }
     }
@@ -148,6 +160,42 @@ impl GpuMesh {
             },
         ));
         self.wire_index_count = flat.len() as u32;
+    }
+}
+
+impl GpuMesh {
+    /// Build [`segment_buffer`](Self::segment_buffer) from `geom` (the
+    /// geometry this mesh was uploaded from) if it is not built yet.
+    pub fn ensure_segments(&mut self, device: &wgpu::Device, geom: &BufferGeometry) {
+        if self.segment_buffer.is_some() {
+            return;
+        }
+        let all = Self::build_interleaved(geom);
+        let k = Self::VERTEX_STRIDE as usize / 4;
+        let mut out = match &geom.index {
+            Some(idx) => {
+                let mut out = Vec::with_capacity((idx.len() + 1) * k);
+                for &i in idx {
+                    let i = i as usize;
+                    match all.get(i * k..(i + 1) * k) {
+                        Some(v) => out.extend_from_slice(v),
+                        None => out.extend(std::iter::repeat_n(0.0, k)),
+                    }
+                }
+                out
+            }
+            None => all,
+        };
+        if out.is_empty() {
+            return;
+        }
+        self.segment_vertices = (out.len() / k) as u32;
+        out.extend(std::iter::repeat_n(0.0, k));
+        self.segment_buffer = Some(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("threers wide line segments"),
+            contents: bytemuck::cast_slice(&out),
+            usage: wgpu::BufferUsages::VERTEX,
+        }));
     }
 }
 

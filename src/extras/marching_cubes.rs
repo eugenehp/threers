@@ -100,7 +100,8 @@ impl MarchingCubes {
                             let fa = grid[idx(a[0], a[1], a[2])];
                             let fb = grid[idx(b[0], b[1], b[2])];
                             let t = if (fb - fa).abs() > f32::EPSILON {
-                                ((iso - fa) / (fb - fa)).clamp(0.0, 1.0)
+                                ((iso - fa) / (fb - fa))
+                                    .clamp(CROSSING_CLEARANCE, 1.0 - CROSSING_CLEARANCE)
                             } else {
                                 0.5
                             };
@@ -135,6 +136,17 @@ impl MarchingCubes {
         g
     }
 }
+
+/// How close, as a fraction of an edge, a crossing may come to either end.
+///
+/// A sample that lands exactly on the surface — a face of a box on the grid,
+/// the point where two spheres touch, anything centred on the origin at an even
+/// resolution — would otherwise put the crossing of every edge meeting it at
+/// that one point: separate vertices in the same place, and zero-area
+/// triangles between them whose winding cannot be read. Held a ten-thousandth
+/// of an edge off, every vertex has a position of its own and the topology is
+/// still decided by the signs alone.
+pub(crate) const CROSSING_CLEARANCE: f32 = 1e-4;
 
 /// `tri` wound counter-clockwise seen from outside, its facet normal along
 /// the field's (the table's own winding depends on which side it calls
@@ -574,6 +586,39 @@ mod tests {
             "volume {volume} against {v}"
         );
         assert!((area / s - 1.0).abs() < 0.01, "area {area} against {s}");
+    }
+
+    /// A box whose faces sit exactly on grid samples: every crossing next to
+    /// a face sample used to land on it, as separate vertices in one place
+    /// with zero-area triangles between them.
+    #[test]
+    fn samples_on_the_surface_make_no_coincident_vertices() {
+        let g = MarchingCubes::new(64, Vector3::new(2.0, 2.0, 2.0))
+            .extract(0.0, |x, y, z| 0.5 - x.abs().max(y.abs()).max(z.abs()));
+        let (p, _, t) = parts(&g);
+        let mut seen = std::collections::HashSet::new();
+        for v in &p {
+            assert!(seen.insert(v.map(f32::to_bits)), "two vertices at {v:?}");
+        }
+        for tri in &t {
+            let [a, b, c] = tri.map(|i| p[i as usize]);
+            let u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+            let w = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+            let cross = [
+                u[1] * w[2] - u[2] * w[1],
+                u[2] * w[0] - u[0] * w[2],
+                u[0] * w[1] - u[1] * w[0],
+            ];
+            assert!(
+                cross.iter().any(|&x| x != 0.0),
+                "zero-area triangle {tri:?}"
+            );
+        }
+        // And the box still comes out where it is, to the clearance.
+        for v in &p {
+            let r = v[0].abs().max(v[1].abs()).max(v[2].abs());
+            assert!((r - 0.5).abs() < 2.0 / 64.0 * 2e-4, "vertex at {r}");
+        }
     }
 
     /// Nothing crosses: nothing out.

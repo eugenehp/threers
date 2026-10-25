@@ -293,7 +293,7 @@ impl SkinnedMesh {
     /// The geometry in its current pose — morphed, then skinned — in the
     /// mesh's local space, for a CPU renderer to draw under `matrix_world`.
     /// See [`posed_geometry`].
-    pub(crate) fn posed_geometry(&self, matrix_world: &Matrix4) -> Arc<BufferGeometry> {
+    pub fn posed_geometry(&self, matrix_world: &Matrix4) -> Arc<BufferGeometry> {
         posed_geometry(
             &self.geometry,
             &self.morph_influences,

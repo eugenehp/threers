@@ -131,4 +131,13 @@ impl TextGeometry {
         let shapes = font.generate_shapes(text, options.size);
         super::ExtrudeGeometry::from_shapes(&shapes, &options.extrude_options())
     }
+
+    /// [`from_font`](Self::from_font) for a TrueType face: `text`'s glyphs,
+    /// kerned, as shapes with their holes, extruded. A variable font is
+    /// extruded at the location it was parsed at
+    /// ([`TtfFont::parse_variation`](crate::loaders::TtfFont::parse_variation)).
+    pub fn from_ttf(font: &crate::loaders::TtfFont, text: &str, options: &TextOptions) -> BufferGeometry {
+        let shapes = font.generate_shapes(text, options.size);
+        super::ExtrudeGeometry::from_shapes(&shapes, &options.extrude_options())
+    }
 }

@@ -315,7 +315,7 @@ impl MarkRenderer {
         queue.write_buffer(
             &self.frame_uniform,
             0,
-            bytemuck::bytes_of(&view.uniforms(false, 1)),
+            bytemuck::bytes_of(&view.uniforms(false, 1, [0.0; 2])),
         );
         self.prepare_all(device, queue, view, marks);
         self.pick.ensure(device, (w, h));
@@ -332,11 +332,13 @@ impl MarkRenderer {
                 // The frame's depth is read, never written: a pick must not
                 // change what the next pass sees.
                 DepthKey::Test {
+                    test: true,
                     write: false,
                     reversed: view.reversed_z,
                 }
             } else {
                 DepthKey::Test {
+                    test: true,
                     write: true,
                     reversed: view.reversed_z,
                 }

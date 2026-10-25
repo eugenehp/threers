@@ -667,6 +667,7 @@ impl HeadlessRenderer {
                 depth: Some(depth),
                 format: self.target.format,
                 samples,
+                rect: None,
             },
             _ => crate::marks::MarkTarget::render_target(&self.target),
         }

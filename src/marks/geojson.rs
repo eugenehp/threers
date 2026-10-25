@@ -84,6 +84,9 @@ pub struct Feature {
     pub geometry: Option<Geometry>,
     pub properties: BTreeMap<String, Property>,
     pub id: Option<Property>,
+    /// Each position's fourth value, in coordinate order, when every
+    /// position has one — a time per vertex, as kepler.gl's trips carry.
+    pub measures: Option<Vec<f64>>,
 }
 
 impl Feature {
@@ -165,6 +168,7 @@ impl FeatureCollection {
             "Feature" => vec![feature(&v)?],
             _ => vec![Feature {
                 geometry: Some(geometry(&v)?),
+                measures: v.get("coordinates").and_then(measures),
                 ..Default::default()
             }],
         };
@@ -206,6 +210,7 @@ fn collect(g: &Geometry, k: usize, project: &impl Fn(Position) -> [f64; 3], out:
         out.polygons.push(PolygonFeature {
             outer: ground(outer),
             holes: rings[1..].iter().map(|h| ground(h)).collect(),
+            triangles: None,
         });
         out.polygon_features.push(k);
         for r in rings {
@@ -281,10 +286,12 @@ fn feature(v: &Value) -> Result<Feature, String> {
         .and_then(Value::as_object)
         .map(|o| o.iter().map(|(k, v)| (k.clone(), property(v))).collect())
         .unwrap_or_default();
+    let measures = v.get("geometry").and_then(|g| g.get("coordinates")).and_then(measures);
     Ok(Feature {
         geometry,
         properties,
         id: v.get("id").map(property),
+        measures,
     })
 }
 
@@ -295,6 +302,27 @@ fn position(v: &Value) -> Result<Position, String> {
         (Some(x), Some(y)) => Ok([x, y, n(2).unwrap_or(0.0)]),
         _ => Err("a position needs two numbers".into()),
     }
+}
+
+/// The fourth value of every position in `coords` (nested to any depth),
+/// or `None` unless all have one.
+fn measures(coords: &Value) -> Option<Vec<f64>> {
+    fn walk(v: &Value, out: &mut Vec<f64>) -> bool {
+        let Some(a) = v.as_array() else { return false };
+        if a.first().is_some_and(|x| x.as_number().is_some()) {
+            // A position.
+            return match a.get(3).and_then(Value::as_number) {
+                Some(m) => {
+                    out.push(m);
+                    true
+                }
+                None => false,
+            };
+        }
+        a.iter().all(|c| walk(c, out))
+    }
+    let mut out = Vec::new();
+    (walk(coords, &mut out) && !out.is_empty()).then_some(out)
 }
 
 fn array(v: &Value) -> Result<&Vec<Value>, String> {
@@ -340,6 +368,20 @@ fn geometry(v: &Value) -> Result<Geometry, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fourth_values_are_measures() {
+        let fc = FeatureCollection::parse(
+            r#"{"type": "Feature", "properties": {}, "geometry": {"type": "LineString", "coordinates": [[0, 0, 0, 10], [1, 1, 0, 20]]}}"#,
+        )
+        .unwrap();
+        assert_eq!(fc.features[0].measures, Some(vec![10.0, 20.0]));
+        let fc = FeatureCollection::parse(r#"{"type": "MultiLineString", "coordinates": [[[0, 0, 0, 1]], [[1, 1, 0, 2]]]}"#).unwrap();
+        assert_eq!(fc.features[0].measures, Some(vec![1.0, 2.0]));
+        // Not every position has one.
+        let fc = FeatureCollection::parse(r#"{"type": "LineString", "coordinates": [[0, 0, 0, 10], [1, 1]]}"#).unwrap();
+        assert_eq!(fc.features[0].measures, None);
+    }
 
     const SAMPLE: &str = r#"{
       "type": "FeatureCollection",

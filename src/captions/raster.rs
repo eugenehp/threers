@@ -20,7 +20,7 @@
 //! each composited source-over so the result works on opaque video frames and
 //! on transparent overlay buffers alike.
 
-use crate::utils::srgb::{linear_to_srgb, srgb_to_linear};
+use crate::utils::srgb::{linear_to_srgb, linear_to_srgb_f32, srgb_to_linear, srgb_to_linear_f32};
 
 use super::font::SUBPIXEL_PHASES;
 use super::layout::{layout, LaidOutText};
@@ -120,7 +120,8 @@ impl CaptionPainter {
         self.draw_block(frame, width, height, text, Placement::default())
     }
 
-    /// Draw a single line with its top-left corner at `(x, y)` in frame pixels.
+    /// Draw a single line with its top-left corner at `(x, y)` in frame pixels,
+    /// in the style's colour, outline and shadow but without its background box.
     pub fn draw_text_at(
         &mut self,
         frame: &mut [u8],
@@ -188,8 +189,10 @@ impl CaptionPainter {
         }
         let fw = width as f32;
         let saved = self.style.clone();
+        // No box behind a positioned line; the outline stays, since it is
+        // what [`Overlay::text`](crate::overlay::Overlay::text) turns a stroke
+        // into (zeroing it here left every stroked overlay label bare).
         self.style.background[3] = 0;
-        self.style.outline_width = 0.0;
         self.style.align = align;
         // Fit to the remaining horizontal space from the anchor point.
         let max_width = match align {
@@ -372,27 +375,37 @@ impl CaptionPainter {
         let mask_w = (laid.width + pad_left + pad_right).ceil() as u32 + 2;
         let mask_h = (laid.height + pad_top + pad_bottom).ceil() as u32 + 2;
 
-        // Text coverage, in mask-local coordinates.
-        let mut mask = vec![0u8; (mask_w as usize) * (mask_h as usize)];
-        for (i, line) in laid.lines.iter().enumerate() {
-            if line.text.is_empty() {
-                continue;
+        // Text coverage, in mask-local coordinates: the glyphs, or with
+        // `grow`, the glyphs grown by it — `None` when a face has no
+        // outline to grow from.
+        let fill_mask = |this: &mut Self, grow: Option<f32>| -> Option<Vec<u8>> {
+            let mut mask = vec![0u8; (mask_w as usize) * (mask_h as usize)];
+            for (i, line) in laid.lines.iter().enumerate() {
+                if line.text.is_empty() {
+                    continue;
+                }
+                let line_left = match align {
+                    CaptionAlign::Left => block_left,
+                    CaptionAlign::Center => block_left + (laid.width - line.width) * 0.5,
+                    CaptionAlign::Right => block_left + (laid.width - line.width),
+                };
+                let baseline = block_top + laid.first_baseline + laid.line_advance * i as f32;
+                let drawn = this.draw_line_into_mask(
+                    &mut mask,
+                    mask_w,
+                    mask_h,
+                    line_left - mask_x as f32,
+                    baseline - mask_y as f32,
+                    &line.text,
+                    grow,
+                );
+                if !drawn {
+                    return None;
+                }
             }
-            let line_left = match align {
-                CaptionAlign::Left => block_left,
-                CaptionAlign::Center => block_left + (laid.width - line.width) * 0.5,
-                CaptionAlign::Right => block_left + (laid.width - line.width),
-            };
-            let baseline = block_top + laid.first_baseline + laid.line_advance * i as f32;
-            self.draw_line_into_mask(
-                &mut mask,
-                mask_w,
-                mask_h,
-                line_left - mask_x as f32,
-                baseline - mask_y as f32,
-                &line.text,
-            );
-        }
+            Some(mask)
+        };
+        let mask = fill_mask(self, None).unwrap_or_default();
 
         // 1. Background box behind the whole block.
         if style.background[3] > 0 {
@@ -423,9 +436,11 @@ impl CaptionPainter {
             );
         }
 
-        // 3. Outline — the mask grown by `outline_width`, drawn under the fill.
+        // 3. Outline — the glyphs grown by `outline_width`, drawn under the
+        // fill: from their outlines where the face has them, else the mask
+        // grown.
         if outline > 0.0 && style.outline_color[3] > 0 {
-            let grown = dilate(&mask, mask_w, mask_h, outline);
+            let grown = fill_mask(self, Some(outline)).unwrap_or_else(|| dilate(&mask, mask_w, mask_h, outline));
             blend_mask(
                 frame,
                 width,
@@ -524,7 +539,10 @@ impl CaptionPainter {
         (left, top)
     }
 
-    /// Rasterize one line's glyphs into `mask` at `pen_x` / `baseline_y`.
+    /// Rasterize one line's glyphs into `mask` at `pen_x` / `baseline_y`,
+    /// grown by `grow` pixels if given — and then `false`, with the mask
+    /// part-drawn, if the face has no outlines to grow.
+    #[allow(clippy::too_many_arguments)]
     fn draw_line_into_mask(
         &mut self,
         mask: &mut [u8],
@@ -533,63 +551,115 @@ impl CaptionPainter {
         pen_x: f32,
         baseline_y: f32,
         text: &str,
-    ) {
+        grow: Option<f32>,
+    ) -> bool {
         let size = self.style.font_size;
         let spacing = self.style.letter_spacing;
         let mut pen = pen_x;
-        let mut previous: Option<char> = None;
-        for c in text.chars() {
-            // The same adjustment `measure` accounted for, applied before the
-            // glyph is placed rather than after.
+        let mut previous: Option<super::order::Placed> = None;
+        // The same order `measure` walked, or the drawing and the width disagree.
+        let run = super::order::visual(text, &self.font, size);
+        // Whether this face's glyphs overlap by design, which decides how two of them
+        // share a cell. A property of the file, read once at parse.
+        let joins = self.font.composites_run();
+        // Two passes, because a mark hangs off another glyph's pen and in a right-to-left
+        // run its base comes **after** it on screen. The first walks the advances and
+        // records where each glyph would sit; the second moves the attached ones onto
+        // their base. A mark's own advance is zero in the font, so it does not disturb
+        // the walk, and letter spacing skips it — spacing is between letters, and
+        // charging a dot for it would push the word apart.
+        let mut pens: Vec<f32> = Vec::with_capacity(run.len());
+        for placed in &run {
             if let Some(p) = previous {
-                pen += self.font.kerning(p, c, size);
+                // The same adjustment `measure` accounted for, applied before the
+                // glyph is placed rather than after.
+                let (l, r) = super::order::pair(p, *placed);
+                pen += self.font.kerning_of(l, r, size);
             }
-            previous = Some(c);
+            previous = Some(*placed);
+            pens.push(pen);
+            let phase = phase_of(pen).1;
+            let advance = self.font.glyph_of(placed.gid, size, phase).advance;
+            pen += advance;
+            if placed.attach.is_none() {
+                pen += spacing;
+            }
+        }
+
+        for (k, placed) in run.iter().enumerate() {
+            // `dy` is above the baseline and the mask grows downward.
+            let (x, baseline) = match placed.attach {
+                Some((to, dx, dy)) => match pens.get(to) {
+                    Some(base) => (base + dx, baseline_y - dy),
+                    None => (pens[k], baseline_y),
+                },
+                None => (pens[k], baseline_y),
+            };
             // The pen is fractional, so the glyph is rasterized for the quarter
             // pixel it actually falls on rather than being rounded onto a whole
             // one. Rounding per glyph is what makes letter spacing uneven: a
             // 13.7-pixel advance lands on 0, 14, 27, 41, 55 — gaps of 14, 13,
             // 14, 14 — and no amount of care in the compositing fixes it.
-            let cell = pen.floor();
-            let mut phase =
-                ((pen - cell) * SUBPIXEL_PHASES as f32).round() as i32;
-            let mut origin = cell as i32;
-            // A fraction that rounds up to a whole pixel is that pixel.
-            if phase as usize >= SUBPIXEL_PHASES {
-                phase = 0;
-                origin += 1;
+            let (origin, phase) = phase_of(x);
+            let glyph = match grow {
+                None => self.font.glyph_of(placed.gid, size, phase),
+                Some(r) => match self.font.grown_glyph_of(placed.gid, size, phase, r) {
+                    Some(g) => g,
+                    None => return false,
+                },
+            };
+            if glyph.is_blank() {
+                continue;
             }
-            let glyph = self.font.glyph_at(c, size, phase as usize);
-            let advance = glyph.advance;
-            if !glyph.is_blank() {
-                let gx = origin + glyph.offset_x;
-                let gy = baseline_y.round() as i32 + glyph.offset_y;
-                for row in 0..glyph.height {
-                    let y = gy + row as i32;
-                    if y < 0 || y >= mask_h as i32 {
+            let gx = origin + glyph.offset_x;
+            let gy = baseline.round() as i32 + glyph.offset_y;
+            for row in 0..glyph.height {
+                let y = gy + row as i32;
+                if y < 0 || y >= mask_h as i32 {
+                    continue;
+                }
+                for col in 0..glyph.width {
+                    let x = gx + col as i32;
+                    if x < 0 || x >= mask_w as i32 {
                         continue;
                     }
-                    for col in 0..glyph.width {
-                        let x = gx + col as i32;
-                        if x < 0 || x >= mask_w as i32 {
-                            continue;
-                        }
-                        let v = glyph.coverage[(row * glyph.width + col) as usize];
-                        let dst = &mut mask[(y as u32 * mask_w + x as u32) as usize];
+                    let v = glyph.coverage[(row * glyph.width + col) as usize];
+                    let dst = &mut mask[(y as u32 * mask_w + x as u32) as usize];
+                    let a = *dst as u32;
+                    let b = v as u32;
+                    *dst = if joins {
+                        // A face whose letters **join** draws the same stroke twice: the
+                        // tail of one letter and the head of the next are the same ink,
+                        // so a union darkens every joint. The maximum is what Core
+                        // Graphics does for these faces, measured — see
+                        // [`crate::loaders::overlap`].
+                        a.max(b) as u8
+                    } else {
                         // Neighbouring glyphs genuinely share edge pixels once
                         // they are placed at subpixel positions, each covering
                         // part of one. Taking the stronger loses the other's
                         // contribution and thins the gap between letters; the
                         // union `a + b - ab` is what two partial coverages of
                         // the same pixel actually come to.
-                        let a = *dst as u32;
-                        let b = v as u32;
-                        *dst = (a + b - (a * b) / 255).min(255) as u8;
-                    }
+                        (a + b - (a * b) / 255).min(255) as u8
+                    };
                 }
             }
-            pen += advance + spacing;
         }
+        true
+    }
+}
+
+/// A fractional pen as `(whole pixel, subpixel phase)`.
+///
+/// A fraction that rounds up to a whole pixel is that pixel.
+fn phase_of(pen: f32) -> (i32, usize) {
+    let cell = pen.floor();
+    let phase = ((pen - cell) * SUBPIXEL_PHASES as f32).round() as i32;
+    if phase as usize >= SUBPIXEL_PHASES {
+        (cell as i32 + 1, 0)
+    } else {
+        (cell as i32, phase as usize)
     }
 }
 
@@ -728,7 +798,46 @@ fn transform_1d(f: &[f32]) -> Vec<f32> {
 }
 
 
-/// Composite `color` through `mask` into an RGBA8 frame at `(ox, oy)`.
+/// Glyph coverage corrected for the text's colour, as a table over the 256
+/// coverage values.
+///
+/// Coverage is a fraction of the pixel's area, and blending it in linear
+/// light is physically right — but it is not what text has ever looked like.
+/// CoreText, and Skia on every platform, put coverage down in the display's
+/// encoding, where half coverage of black on white is the encoded midpoint
+/// (a fifth of the light) rather than the linear one (half of it). Measured
+/// against CoreText on the same face, size and string, a linear blend set
+/// black-on-white text 22% light and white-on-black 44% heavy: thin dark
+/// text and fat light text, the commonest complaint about "gamma-correct"
+/// text.
+///
+/// So, as Skia does, the coverage is bent by the text's luminance: the table
+/// gives the coverage whose linear blend lands where an encoded blend would,
+/// against the background that contrasts with the text most (white behind
+/// dark text, black behind light). The blend stays linear, so this is the
+/// same on the CPU and through the GPU caption pass; a mid-grey colour has
+/// no contrasting background and is left alone.
+fn text_coverage_table(color: [u8; 4]) -> [u8; 256] {
+    let mut table = [0u8; 256];
+    let lin = [0, 1, 2].map(|c| srgb_to_linear(color[c]));
+    let src_lin = 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2];
+    let src = linear_to_srgb_f32(src_lin);
+    let dst = 1.0 - src;
+    let dst_lin = srgb_to_linear_f32(dst);
+    for (i, t) in table.iter_mut().enumerate() {
+        let c = i as f32 / 255.0;
+        let v = if (src - dst).abs() < 1.0 / 64.0 {
+            c
+        } else {
+            (srgb_to_linear_f32(src * c + dst * (1.0 - c)) - dst_lin) / (src_lin - dst_lin)
+        };
+        *t = (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    }
+    table
+}
+
+/// Composite `color` through `mask` into an RGBA8 frame at `(ox, oy)`, the
+/// mask's coverage corrected for the colour by [`text_coverage_table`].
 #[allow(clippy::too_many_arguments)]
 fn blend_mask(
     frame: &mut [u8],
@@ -744,6 +853,7 @@ fn blend_mask(
     if color[3] == 0 {
         return;
     }
+    let table = text_coverage_table(color);
     for my in 0..mask_h as i32 {
         let y = oy + my;
         if y < 0 || y >= height as i32 {
@@ -754,7 +864,7 @@ fn blend_mask(
             if x < 0 || x >= width as i32 {
                 continue;
             }
-            let coverage = mask[(my as u32 * mask_w + mx as u32) as usize];
+            let coverage = table[mask[(my as u32 * mask_w + mx as u32) as usize] as usize];
             if coverage == 0 {
                 continue;
             }
@@ -1321,6 +1431,167 @@ mod tests {
                 "coverage {coverage} gave {}, expected about {expected}",
                 frame[0]
             );
+        }
+    }
+
+    /// The coverage table bends coverage by the text's polarity: up for dark
+    /// text, down for light, as an encoded blend against the contrasting
+    /// background would put it — and leaves the ends and mid-grey alone.
+    #[test]
+    fn text_coverage_follows_the_encoded_blend_for_each_polarity() {
+        let white = text_coverage_table([255, 255, 255, 255]);
+        let black = text_coverage_table([0, 0, 0, 255]);
+        let grey = text_coverage_table([128, 128, 128, 255]);
+        // Half coverage, encoded 128 of 255: a fifth of the light for white
+        // on black, four fifths of the dark for black on white.
+        assert!((white[128] as i32 - 55).abs() <= 1, "{}", white[128]);
+        assert!((black[128] as i32 - 200).abs() <= 1, "{}", black[128]);
+        for t in [&white, &black, &grey] {
+            assert_eq!((t[0], t[255]), (0, 255));
+            assert!(t.windows(2).all(|w| w[0] <= w[1]), "not monotonic");
+        }
+        assert!((0..256).all(|i| (grey[i] as i32 - i as i32).abs() <= 1));
+    }
+
+    /// Text weighs the same on either polarity, measured in the encoding.
+    ///
+    /// That is what CoreText draws: with the same face, size and string, its
+    /// encoded ink is identical black-on-white and white-on-black. A plain
+    /// linear blend made the white text 1.5× the black, and against
+    /// CoreText 22% light dark-on-light and 44% heavy light-on-dark.
+    #[test]
+    fn text_weighs_the_same_on_either_polarity() {
+        let ink = |fg: u8, bg: u8| -> f32 {
+            let (w, h) = (200u32, 40u32);
+            let mut frame = vec![0u8; (w * h * 4) as usize];
+            for p in frame.chunks_mut(4) {
+                p.copy_from_slice(&[bg, bg, bg, 255]);
+            }
+            // 13 px: the 8-row bitmap face lands off the pixel grid, so its
+            // edges have partial coverage.
+            let style = CaptionStyle {
+                font_size: 13.0,
+                color: [fg, fg, fg, 255],
+                background: [0; 4],
+                outline_width: 0.0,
+                padding: 0.0,
+                margin: 0.0,
+                max_width: 1.0,
+                ..Default::default()
+            };
+            let mut p = CaptionPainter::with_font(CaptionFont::builtin()).style(style);
+            assert!(p.draw_text_at(&mut frame, w, h, 4.3, 4.0, "Weigh me"));
+            frame.chunks(4).map(|p| (p[0] as f32 - bg as f32).abs() / 255.0).sum()
+        };
+        let (dark, light) = (ink(0, 255), ink(255, 0));
+        assert!((dark / light - 1.0).abs() < 0.01, "black on white {dark}, white on black {light}");
+    }
+
+    /// The coverage an outline of `radius` should have, from the glyph's own
+    /// geometry: per pixel, the share of an 8×8 grid of points inside the
+    /// outline or within `radius` of it.
+    fn true_outline(contours: &[Vec<[f32; 2]>], x0: i32, y0: i32, w: u32, h: u32, radius: f32) -> Vec<f32> {
+        let segs: Vec<([f32; 2], [f32; 2])> = contours
+            .iter()
+            .flat_map(|c| (0..c.len()).map(move |i| (c[i], c[(i + 1) % c.len()])))
+            .collect();
+        let inside = |x: f32, y: f32| {
+            let mut wn = 0i32;
+            for &(a, b) in &segs {
+                if (a[1] <= y) != (b[1] <= y) {
+                    let t = (y - a[1]) / (b[1] - a[1]);
+                    if a[0] + t * (b[0] - a[0]) > x {
+                        wn += if b[1] > a[1] { 1 } else { -1 };
+                    }
+                }
+            }
+            wn != 0
+        };
+        let near = |x: f32, y: f32| {
+            segs.iter().any(|&(a, b)| {
+                let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+                let l = dx * dx + dy * dy;
+                let t = if l > 0.0 { (((x - a[0]) * dx + (y - a[1]) * dy) / l).clamp(0.0, 1.0) } else { 0.0 };
+                let (px, py) = (a[0] + t * dx - x, a[1] + t * dy - y);
+                px * px + py * py <= radius * radius
+            })
+        };
+        let mut out = vec![0.0; (w * h) as usize];
+        for py in 0..h {
+            for px in 0..w {
+                let mut n = 0;
+                for sy in 0..8 {
+                    for sx in 0..8 {
+                        let x = (x0 + px as i32) as f32 + (sx as f32 + 0.5) / 8.0;
+                        let y = (y0 + py as i32) as f32 + (sy as f32 + 0.5) / 8.0;
+                        if inside(x, y) || near(x, y) {
+                            n += 1;
+                        }
+                    }
+                }
+                out[(py * w + px) as usize] = n as f32 / 64.0;
+            }
+        }
+        out
+    }
+
+    /// An outline is the glyph's true offset outline: against the coverage
+    /// of every point inside the glyph or within the radius of it (64 a
+    /// pixel), its edge pixels are 1–2% off on average — against 19–22%
+    /// when it was grown from the antialiased mask, which can only guess
+    /// where in an edge pixel the edge is. The reference itself agrees with
+    /// the glyph rasterizer to within its own 1/64 sampling at radius 0.
+    /// Skipped without SF Compact.
+    #[test]
+    fn outlines_follow_the_glyph_geometry() {
+        let Some(mut font) = CaptionFont::try_sf_compact() else { return };
+        for (size, radius) in [(34.0f32, 2.0f32), (16.0, 1.0), (24.0, 3.0)] {
+            let (mut grown_sum, mut grown_n, mut grown_max) = (0.0f32, 0, 0.0f32);
+            let (mut mask_sum, mut mask_n) = (0.0f32, 0);
+            for c in "aeoRSg&".chars() {
+                let contours: Vec<Vec<[f32; 2]>> = font
+                    .outline(c, size)
+                    .unwrap()
+                    .into_iter()
+                    .map(|curves| curves.into_iter().flatten().collect())
+                    .collect();
+                let edge = |truth: f32, v: u8| truth > 0.0 && truth < 1.0 || v > 0 && v < 255;
+
+                let g = font.grown_glyph_at(c, size, 0, radius).unwrap().clone();
+                let truth = true_outline(&contours, g.offset_x, g.offset_y, g.width, g.height, radius);
+                for (t, &v) in truth.iter().zip(&g.coverage) {
+                    let e = (v as f32 / 255.0 - t).abs();
+                    grown_max = grown_max.max(e);
+                    if edge(*t, v) {
+                        grown_sum += e;
+                        grown_n += 1;
+                    }
+                }
+
+                // The mask grown, as a face without outlines still is.
+                let g = font.glyph(c, size).clone();
+                let pad = radius.ceil() as u32 + 2;
+                let (w, h) = (g.width + 2 * pad, g.height + 2 * pad);
+                let mut mask = vec![0u8; (w * h) as usize];
+                for y in 0..g.height {
+                    for x in 0..g.width {
+                        mask[((y + pad) * w + x + pad) as usize] = g.coverage[(y * g.width + x) as usize];
+                    }
+                }
+                let dilated = dilate(&mask, w, h, radius);
+                let truth = true_outline(&contours, g.offset_x - pad as i32, g.offset_y - pad as i32, w, h, radius);
+                for (t, &v) in truth.iter().zip(&dilated) {
+                    if edge(*t, v) {
+                        mask_sum += (v as f32 / 255.0 - t).abs();
+                        mask_n += 1;
+                    }
+                }
+            }
+            let grown = grown_sum / grown_n as f32;
+            let masked = mask_sum / mask_n as f32;
+            assert!(grown < 0.025, "size {size} radius {radius}: mean edge error {grown}");
+            assert!(grown_max < 0.25, "size {size} radius {radius}: worst pixel {grown_max}");
+            assert!(grown * 5.0 < masked, "from the outline {grown}, from the mask {masked}");
         }
     }
 

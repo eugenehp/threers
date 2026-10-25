@@ -30,13 +30,20 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-      - uses: jetli/wasm-pack-action@v0.4.0
+      # build.sh drives wasm-bindgen directly (not wasm-pack), and the CLI has to
+      # match the wasm-bindgen crate in Cargo.lock exactly.
+      - name: Install wasm-bindgen-cli
+        run: |
+          v=$(awk '/^name = "wasm-bindgen"$/ { getline; gsub(/version = |"/, ""); print; exit }' Cargo.lock)
+          cargo install wasm-bindgen-cli --version "$v" --locked
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
-      - name: Build language packages
-        run: ./scripts/release-all.sh build
+      # Only the wasm package: the default `language` target also builds the host
+      # napi addon and PyPI wheel, which have their own jobs (and no maturin here).
+      - name: Build npm ESM
+        run: TARGETS=npm-esm ./scripts/release-all.sh build
       - name: Pack npm ESM
         working-directory: crates/threers-js
         run: npm pack
@@ -55,7 +62,10 @@ jobs:
         settings:
           - host: macos-14
             target: aarch64-apple-darwin
-          - host: macos-13
+          # Cross-compiled on Apple silicon: no macos-13 runner ever picks the job
+          # up, it sits queued for 24 hours and cancels, and the publish job that
+          # needs the whole matrix is skipped with it.
+          - host: macos-14
             target: x86_64-apple-darwin
           - host: ubuntu-latest
             target: x86_64-unknown-linux-gnu
@@ -142,7 +152,8 @@ jobs:
         include:
           - os: macos-14
             target: aarch64-apple-darwin
-          - os: macos-13
+          # Cross-compiled on Apple silicon (abi3 wheel); see the napi matrix.
+          - os: macos-14
             target: x86_64-apple-darwin
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu

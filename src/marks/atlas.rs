@@ -154,6 +154,11 @@ impl TextureAtlas {
         self
     }
 
+    /// Whether the texture decodes sRGB (else its bytes are read as they are).
+    pub fn is_srgb(&self) -> bool {
+        self.srgb
+    }
+
     /// Wrap for sharing between layers.
     pub fn shared(self) -> SharedAtlas {
         Arc::new(RwLock::new(self))
@@ -212,6 +217,66 @@ impl TextureAtlas {
         self.entries.insert(name.into(), rect);
         self.version += 1;
         Ok(rect)
+    }
+
+    /// Put an image at `(x, y)` exactly as given — no gutter, its edges not
+    /// repeated — for an atlas laid out by someone else's rules: a font
+    /// atlas packed as deck.gl packs it, whose mip levels then match. The
+    /// atlas grows (in powers of two) to hold it; later
+    /// [`insert`](Self::insert)s pack below it.
+    pub fn insert_at(
+        &mut self,
+        name: impl Into<String>,
+        x: u32,
+        y: u32,
+        width: u32,
+        height: u32,
+        rgba: &[u8],
+    ) -> Result<AtlasRect, AtlasError> {
+        let expected = width as usize * height as usize * 4;
+        if rgba.len() != expected {
+            return Err(AtlasError::WrongLength { expected, got: rgba.len() });
+        }
+        if x + width > self.width {
+            return Err(AtlasError::TooWide { width: x + width, atlas: self.width });
+        }
+        let need = y + height;
+        if need > self.max_height {
+            return Err(AtlasError::Full { max_height: self.max_height });
+        }
+        while need > self.height {
+            self.height = (self.height * 2).min(self.max_height);
+            self.pixels.resize(self.width as usize * self.height as usize * 4, 0);
+        }
+        let aw = self.width as usize;
+        for row in 0..height as usize {
+            let src = row * width as usize * 4;
+            let dst = ((y as usize + row) * aw + x as usize) * 4;
+            self.pixels[dst..dst + width as usize * 4].copy_from_slice(&rgba[src..src + width as usize * 4]);
+        }
+        if width > 0 && height > 0 {
+            self.mark_dirty((x, y, x + width, y + height));
+        }
+        // Shelves continue below everything placed.
+        if need > self.shelf_y + self.shelf_h {
+            self.shelf_y = need;
+            self.shelf_x = 0;
+            self.shelf_h = 0;
+        }
+        let rect = AtlasRect { x, y, width, height };
+        self.entries.insert(name.into(), rect);
+        self.version += 1;
+        Ok(rect)
+    }
+
+    /// At least `height` pixels tall (rounded up to a power of two): a
+    /// layout made elsewhere sized for its own rows.
+    pub fn reserve_height(&mut self, height: u32) {
+        while height > self.height && self.height < self.max_height {
+            self.height = (self.height * 2).min(self.max_height);
+            self.pixels.resize(self.width as usize * self.height as usize * 4, 0);
+            self.version += 1;
+        }
     }
 
     /// Replace the pixels of the image packed as `name`, which keeps its
@@ -442,6 +507,10 @@ impl TextureAtlas {
             }
             let (nw, nh) = ((w / 2).max(1), (h / 2).max(1));
             let level: &[u8] = owned.as_deref().unwrap_or(&self.pixels);
+            // A linear atlas holds data, or sRGB bytes to be read as a
+            // WebGL texture is: its levels plain means of the texels, as
+            // `generateMipmap` makes them.
+            let straight = !self.srgb;
             let mut next = vec![0u8; (nw * nh * 4) as usize];
             for y in 0..nh {
                 for x in 0..nw {
@@ -449,17 +518,21 @@ impl TextureAtlas {
                     for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
                         let (sx, sy) = ((2 * x + dx).min(w - 1), (2 * y + dy).min(h - 1));
                         let p = &level[((sy * w + sx) * 4) as usize..][..4];
-                        let a = p[3] as u32;
+                        let a = if straight { 1 } else { p[3] as u32 };
                         acc[0] += p[0] as u32 * a;
                         acc[1] += p[1] as u32 * a;
                         acc[2] += p[2] as u32 * a;
-                        acc[3] += a;
+                        acc[3] += if straight { p[3] as u32 } else { a };
                     }
                     let o = ((y * nw + x) * 4) as usize;
                     for c in 0..3 {
-                        next[o + c] = acc[c].checked_div(acc[3]).unwrap_or(0) as u8;
+                        next[o + c] = if straight {
+                            ((acc[c] + 2) / 4) as u8
+                        } else {
+                            acc[c].checked_div(acc[3]).unwrap_or(0) as u8
+                        };
                     }
-                    next[o + 3] = (acc[3] / 4) as u8;
+                    next[o + 3] = if straight { ((acc[3] + 2) / 4) as u8 } else { (acc[3] / 4) as u8 };
                 }
             }
             owned = Some(next);

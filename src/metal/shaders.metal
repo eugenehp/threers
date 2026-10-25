@@ -129,7 +129,7 @@ struct Draw {
     float4   emissive;     // rgb
     float4   specular;     // rgb, w = shininess
     float4   pbr;          // roughness, metalness, alpha_test, toon gradientMap bound
-    float4   misc;         // unused, point size, depth near, depth far
+    float4   misc;         // wide line blends, point size, depth near, depth far
     uint4    flags;        // kind, has_map, has_vertex_color, instanced
     uint4    maps;         // emissive, normal, metallic-roughness, AO: bound?
     float4   map_params;   // normal scale, AO strength, env intensity, has env
@@ -847,24 +847,32 @@ vertex VOut vs_line_quad(uint vid [[vertex_id]],
     // project to a point, and normalize(0) is a NaN that takes the quad with it.
     const float2 sm = pm.xy / max(abs(pm.w), 1e-6);
     const float2 so = po.xy / max(abs(po.w), 1e-6);
-    float2 d = (sm - so) * frame.viewport.xy;
+    // From the segment's start to its end whichever end this is, so both
+    // ends agree on which side is +: measured from `me`, the far end's
+    // normal flips and the quad twists into a bowtie.
+    float2 d = (end == 0u ? so - sm : sm - so) * frame.viewport.xy;
     const float len = length(d);
     d = len > 1e-6 ? d / len : float2(1.0, 0.0);
-    const float2 nrm = float2(-d.y, d.x) * frame.viewport.zw;
+    // NDC spans 2 across the viewport: a pixel is 2/width of it.
+    const float2 nrm = float2(-d.y, d.x) * 2.0 * frame.viewport.zw;
 
-    // draw.misc.y carries the width in pixels, shared with point size.
-    const float half_px = max(draw.misc.y, 1.0) * 0.5;
-    pm.xy += nrm * side * half_px * abs(pm.w);
+    // draw.misc.y carries the width in pixels, shared with point size. The
+    // quad reaches as far again as a pixel's footprint does — half its
+    // diagonal — so the pixels a thin line only grazes get their share too.
+    const float half_px = max(draw.misc.y, 0.0) * 0.5;
+    const float reach = half_px + 0.75;
+    pm.xy += nrm * side * reach * abs(pm.w);
 
     VOut out;
     out.position = pm;
     out.world_pos = (model * float4(float3(me.position), 1.0)).xyz;
     out.normal = float3(0.0, 0.0, 1.0);
-    // uv.x carries signed distance across the ribbon, for the coverage falloff.
+    // uv.x carries the signed distance across the ribbon in pixels, uv.y the
+    // half width, for the coverage.
     out.uv12 = float4(0.0);
     out.uv3 = float2(0.0);
     out.tangent = float4(0.0);
-    out.uv = float2(side, half_px);
+    out.uv = float2(side * reach, half_px);
     out.color = draw.flags.z == 1u ? float4(float3(me.color), 1.0) : float4(1.0);
     out.view_dist = length(frame.camera_pos[0].xyz - out.world_pos);
     out.point_size = 1.0;
@@ -875,12 +883,21 @@ vertex VOut vs_line_quad(uint vid [[vertex_id]],
 fragment float4 fs_line_quad(VOut in [[stage_in]],
                              constant Frame &frame [[buffer(0)]],
                              constant Draw  &draw  [[buffer(1)]]) {
-    // Coverage from the distance across the ribbon. A quad never narrower than
-    // one pixel keeps the line visible; the falloff is what makes a sub-pixel
-    // filament contribute a fraction rather than a whole pixel.
+    // The share of the pixel the ribbon covers, a box filter over the pixel's
+    // width across it (1 square to a row or column, √2 on the diagonal; uv.x
+    // is affine on screen, so its derivatives are exact). A sub-pixel
+    // filament contributes its width rather than a whole pixel, and the
+    // coverages across it sum to that width wherever it falls, so it keeps
+    // one weight as the camera turns instead of shimmering.
     const float half_px = in.uv.y;
-    const float dist = abs(in.uv.x) * half_px;
-    const float cov = clamp(half_px + 0.5 - dist, 0.0, 1.0);
+    const float dist = abs(in.uv.x);
+    const float w = max(fwidth(in.uv.x), 1e-6);
+    const float lo = max(dist - 0.5 * w, -half_px);
+    const float hi = min(dist + 0.5 * w, half_px);
+    // Opaque (misc.x 0), coverage would be ignored, so cut at half a width
+    // and never under a pixel, as a hardware line keeps it visible.
+    const float cov = draw.misc.x > 0.5 ? clamp((hi - lo) / w, 0.0, 1.0)
+                                        : (dist <= max(half_px, 0.5) ? 1.0 : 0.0);
     // three.js `alphaTest` applies to the material alpha, before coverage.
     if (draw.base_color.a * in.color.a < draw.pbr.z) {
         discard_fragment();

@@ -162,11 +162,40 @@ impl GpuContext {
         Ok((gpu, surface))
     }
 
+    /// A device held to what a WebGL2 canvas allows — wgpu's
+    /// `downlevel_webgl2_defaults` limits (no storage buffers, no compute,
+    /// 2048-pixel textures at the least the adapter gives) and none of the
+    /// optional features — on whatever adapter is here. Draw with it to
+    /// find, without a browser, what would fail on WebGL2: wgpu's
+    /// validation refuses the resources and formats the limits rule out.
+    /// It cannot hold the adapter to WebGL2's downlevel capabilities, which
+    /// a native adapter reports as it has them.
+    pub async fn headless_webgl2() -> Result<Self, String> {
+        let instance = instance(backends());
+        let adapter = request_adapter(&instance, None).await?;
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor {
+                label: Some("threers device (WebGL2 limits)"),
+                required_features: wgpu::Features::empty(),
+                required_limits: wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits()),
+                ..Default::default()
+            })
+            .await
+            .map_err(|e| format!("no device: {e}"))?;
+        Ok(Self { instance, adapter, device: Arc::new(device), queue: Arc::new(queue) })
+    }
+
     /// [`GpuContext::headless`], run to completion. **Native only** — a
     /// browser's main thread cannot be blocked.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn headless_blocking() -> Result<Self, String> {
         pollster::block_on(Self::headless())
+    }
+
+    /// [`GpuContext::headless_webgl2`], run to completion. **Native only.**
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn headless_webgl2_blocking() -> Result<Self, String> {
+        pollster::block_on(Self::headless_webgl2())
     }
 
     /// [`GpuContext::with_surface`], run to completion. **Native only.**

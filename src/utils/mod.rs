@@ -10,9 +10,16 @@ pub mod png;
 pub mod parallel;
 
 /// sRGB byte <-> linear light, for anything that adds or averages colour.
+pub mod contrast;
 pub mod srgb;
 
 mod svg_number;
 pub use svg_number::format_svg_number;
 
 pub use buffer_geometry_utils::*;
+
+/// Closed-ness, triangle quality and connected pieces of a mesh.
+pub mod mesh_check;
+
+/// Quadric edge-collapse simplification that keeps closed meshes closed.
+pub mod simplify;

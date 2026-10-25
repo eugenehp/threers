@@ -3,7 +3,7 @@
 
 mod ccd_ik;
 pub mod cube_uv;
-mod marching_cubes;
+pub(crate) mod marching_cubes;
 mod octree;
 pub mod pmrem;
 mod room_environment;

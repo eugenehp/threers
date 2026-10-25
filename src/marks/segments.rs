@@ -25,19 +25,28 @@ pub struct SegmentMarks {
     pub common: MarkCommon,
     sources: Column,
     targets: Column,
+    /// Per row: the width, and the arc's height as a multiple of
+    /// [`arc_height`](Self::arc_height).
     widths: Column,
+    /// The parts of `widths` as set, empty when not per row: widths, arc
+    /// heights, and dashes (`[dash, gap]` in line widths).
+    width_rows: Vec<f32>,
+    height_rows: Vec<f32>,
+    offset_rows: Vec<f32>,
+    dash_rows: Vec<[f32; 2]>,
     colors: Column,
     target_colors: Column,
     /// Per row: the previous point of its path minus the source and the
     /// distance along the path to the source; the next point minus the
-    /// target and the segment's length. Zero where the path ends. One buffer
+    /// target and the whole path's length. Zero where the path ends. One buffer
     /// for all of it, to stay inside WebGPU's eight vertex buffers with both
     /// custom columns bound.
     neighbours: Column,
     /// Height of the arc's peak as a fraction of the segment's length. 0 is a
     /// straight line; 0.5 is a tall arch.
     pub arc_height: f32,
-    /// Pieces each arc is drawn in. Ignored (one piece) when `arc_height` is 0.
+    /// Pieces each arc is drawn in. Ignored (one piece) when `arc_height` is
+    /// 0, unless [`arc_strip`](Self::arc_strip) is on.
     pub arc_segments: u32,
     /// The direction arcs rise in, world space.
     pub arc_up: [f32; 3],
@@ -47,6 +56,17 @@ pub struct SegmentMarks {
     /// smoothstep) instead of evenly — what a profile steep at the ends,
     /// like [`ArcProfile::Ellipse`], needs. deck.gl's `ArcLayer` does this.
     pub arc_ease_ends: bool,
+    /// Draw a hard-edged arc as deck.gl's `ArcLayer` does: one triangle
+    /// strip, each vertex pushed across the clip-space direction to its
+    /// neighbour (the previous one's, the first's next), without joints.
+    /// Flat arcs too keep their pieces: each vertex's width then follows
+    /// perspective, as deck.gl's do.
+    pub arc_strip: bool,
+    /// Antialiased edges ramped as deck.gl ramps them — a `smoothstep`
+    /// over a pixel of the distance to the edge — rather than by the share
+    /// of the pixel the stroke covers (the default, truer for lines
+    /// thinner than a pixel).
+    pub smoothstep_edges: bool,
     /// The centre of a globe the segments lie on: they then follow great
     /// circles (in [`arc_segments`](Self::arc_segments) pieces, even with no
     /// height) and arcs rise away from the centre instead of along
@@ -54,10 +74,45 @@ pub struct SegmentMarks {
     pub globe: Option<[f64; 3]>,
     globe_rel: [f32; 3],
     /// Dashes along straight segments and paths: `[dash, gap]`, each in
-    /// line widths, continuing across a path's joints.
+    /// line widths (or [`dash_unit_px`](Self::dash_unit_px)). Rows with
+    /// their own ([`set_dashes`](Self::set_dashes)) take theirs. Dash ends
+    /// are antialiased along the line, periods under a pixel fade to their
+    /// duty cycle, and round caps round them — deck.gl's
+    /// `PathStyleExtension`.
     pub dash: Option<[f32; 2]>,
-    /// The ends of lines and paths. Joints are mitred whatever this is.
+    /// Where the pattern is measured from: each segment's start, or the
+    /// path's (continuing across its joints, the default).
+    pub dash_mode: DashMode,
+    /// Fit a whole number of dash periods to each segment (or, in
+    /// [`DashMode::Path`], the whole path), starting and ending half a dash
+    /// in — deck.gl's `dashJustified`.
+    pub dash_justified: bool,
+    /// Dash lengths in this many pixels each rather than line widths
+    /// (deck.gl's `dashUnits` other than `'widths'`, converted to pixels).
+    pub dash_unit_px: Option<f32>,
+    /// Measure dashes along lines that face the camera (not
+    /// [`flat`](Self::flat)) by their world length at this many pixels per
+    /// world unit, rather than as drawn — deck.gl's billboarded paths,
+    /// measured at the view's nominal scale.
+    pub dash_nominal_px_per_unit: Option<f32>,
+    /// Lean every [`ArcProfile::Ellipse`] arc this many degrees about its
+    /// chord, its peak to the left of the way from source to target
+    /// (deck.gl's `getTilt`; 90 lays it on the ground). Not on a globe.
+    pub arc_tilt: f32,
+    /// The ends of lines and paths.
     pub cap: LineCap,
+    /// The joints of paths.
+    pub join: LineJoin,
+    /// Lie flat on the ground (world y up) instead of facing the camera:
+    /// widths are world widths across the ground, foreshortened as the
+    /// ground is (deck.gl's paths without `billboard`); on a
+    /// [`globe`](Self::globe), flat on its surface. Not for arcs.
+    pub flat: bool,
+    /// Mitre joints however sharp, cut flat this many half widths past
+    /// the outside of the joint's centre plus one (deck.gl's `miterLimit`:
+    /// 0 is close to a bevel). `None`: mitres up to a 120° turn, rounded
+    /// beyond.
+    pub miter_limit: Option<f32>,
     /// A casing this many pixels wide inside the line's edge, in
     /// [`outline_color`](Self::outline_color): roads, borders.
     pub outline_width: f32,
@@ -66,6 +121,17 @@ pub struct SegmentMarks {
     /// For segments made by [`set_paths`](Self::set_paths): the first segment
     /// of each path, so a segment's row maps back to its path.
     path_starts: Vec<u32>,
+}
+
+/// Where a dash pattern starts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DashMode {
+    /// Afresh at each segment (deck.gl's `dashMode: 'segment'`).
+    Segment,
+    /// At the path's start, continuing across its joints (deck.gl's
+    /// `dashMode: 'path'`).
+    #[default]
+    Path,
 }
 
 /// The shape of an arc between its ends, each peaking at
@@ -92,6 +158,16 @@ pub enum LineCap {
     Square,
 }
 
+/// How a path turns at its joints.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LineJoin {
+    /// Mitred, or rounded where the turn is too sharp to mitre.
+    #[default]
+    Miter,
+    /// A disc at every joint (deck.gl's `jointRounded`).
+    Round,
+}
+
 /// Polylines flattened to segments, as plain data, built on any thread —
 /// what [`SegmentMarks::set_path_mesh`] uploads.
 ///
@@ -103,7 +179,7 @@ pub struct PathMesh {
     pub sources: Vec<[f32; 3]>,
     pub targets: Vec<[f32; 3]>,
     /// Per segment: previous point minus source, distance along the path to
-    /// the source; next point minus target, the segment's length.
+    /// the source; next point minus target, the whole path's length.
     pub neighbours: Vec<[f32; 8]>,
     /// The first segment of each path.
     pub path_starts: Vec<u32>,
@@ -169,10 +245,12 @@ impl PathMesh {
                 };
                 let b = before.map_or([0.0; 3], |q| rel(q, s));
                 let a = after.map_or([0.0; 3], |q| rel(q, t));
-                let l = len(s, t);
-                m.neighbours
-                    .push([b[0], b[1], b[2], along as f32, a[0], a[1], a[2], l as f32]);
-                along += l;
+                m.neighbours.push([b[0], b[1], b[2], along as f32, a[0], a[1], a[2], 0.0]);
+                along += len(s, t);
+            }
+            let first = m.neighbours.len() - edges;
+            for n in &mut m.neighbours[first..] {
+                n[7] = along as f32;
             }
         }
         m
@@ -251,13 +329,17 @@ impl Default for SegmentMarks {
 
 impl SegmentMarks {
     pub fn new() -> Self {
-        let mut widths = Column::float(1);
-        widths.set_default_f32(&[1.0]);
+        let mut widths = Column::float(4);
+        widths.set_default_f32(&[1.0, 1.0, 0.0, 0.0]);
         Self {
             common: MarkCommon::default(),
             sources: Column::new(ColumnFormat::PositionF64),
             targets: Column::new(ColumnFormat::PositionF64),
             widths,
+            width_rows: Vec::new(),
+            height_rows: Vec::new(),
+            offset_rows: Vec::new(),
+            dash_rows: Vec::new(),
             colors: Column::new(ColumnFormat::Unorm8x4),
             target_colors: Column::new(ColumnFormat::Unorm8x4),
             neighbours: Column::new(ColumnFormat::Float4x2),
@@ -266,10 +348,20 @@ impl SegmentMarks {
             arc_up: [0.0, 1.0, 0.0],
             arc_profile: ArcProfile::Parabola,
             arc_ease_ends: false,
+            arc_strip: false,
+            smoothstep_edges: false,
             globe: None,
             globe_rel: [0.0; 3],
             dash: None,
+            dash_mode: DashMode::Path,
+            dash_justified: false,
+            dash_unit_px: None,
+            dash_nominal_px_per_unit: None,
+            arc_tilt: 0.0,
             cap: LineCap::Round,
+            join: LineJoin::Miter,
+            flat: false,
+            miter_limit: None,
             outline_width: 0.0,
             outline_color: [0, 0, 0, 255],
             path_starts: Vec::new(),
@@ -338,6 +430,22 @@ impl SegmentMarks {
         self.path_starts = mesh.path_starts;
     }
 
+    /// The segment rows of path `path`, when built with
+    /// [`set_paths`](Self::set_paths).
+    pub fn path_rows(&self, path: usize) -> Option<std::ops::Range<u32>> {
+        let start = *self.path_starts.get(path)?;
+        let end = self.path_starts.get(path + 1).copied().unwrap_or(self.sources.len() as u32);
+        Some(start..end)
+    }
+
+    /// Highlight paths `paths` (consecutive) whole, or nothing.
+    pub fn highlight_paths(&mut self, paths: Option<std::ops::Range<usize>>) {
+        let rows = paths.and_then(|p| Some(self.path_rows(p.start)?.start..self.path_rows(p.end.max(p.start + 1) - 1)?.end));
+        let s = &mut self.common.style;
+        s.highlight = rows.as_ref().map(|r| r.start);
+        s.highlight_len = rows.map_or(1, |r| (r.end - r.start).max(1));
+    }
+
     /// The path a segment row belongs to, when built with
     /// [`set_paths`](Self::set_paths).
     pub fn path_of(&self, segment: u32) -> Option<usize> {
@@ -368,12 +476,12 @@ impl SegmentMarks {
     /// One width per path.
     pub fn set_path_widths(&mut self, widths: &[f32]) {
         let w = self.per_path(widths);
-        self.widths.set_f32(&w);
+        self.set_widths(&w);
     }
 
     /// Pieces each segment is drawn in.
     fn pieces(&self) -> u32 {
-        if self.arc_height == 0.0 && self.globe.is_none() {
+        if self.arc_height == 0.0 && self.globe.is_none() && !self.arc_strip {
             1
         } else {
             self.arc_segments.clamp(1, 512)
@@ -381,10 +489,68 @@ impl SegmentMarks {
     }
 
     pub fn set_widths(&mut self, w: &[f32]) {
-        self.widths.set_f32(w);
+        self.width_rows = w.to_vec();
+        self.pack_widths();
     }
     pub fn update_widths(&mut self, start: usize, w: &[f32]) {
-        self.widths.update_f32(start, w);
+        if start + w.len() > self.width_rows.len() || self.widths.len() != self.width_rows.len().max(self.height_rows.len()).max(self.offset_rows.len()).max(self.dash_rows.len()) {
+            // Not a plain update of what is there: pack it all again.
+            let n = self.width_rows.len().max(start + w.len());
+            self.width_rows.resize(n, 1.0);
+            self.width_rows[start..start + w.len()].copy_from_slice(w);
+            self.pack_widths();
+            return;
+        }
+        self.width_rows[start..start + w.len()].copy_from_slice(w);
+        let packed: Vec<f32> = (start..start + w.len()).flat_map(|i| self.packed_row(i)).collect();
+        self.widths.update_f32(start, &packed);
+    }
+    /// Each arc's height as a multiple of [`arc_height`](Self::arc_height)
+    /// (deck.gl's per-row `getHeight`); 1 for rows without one.
+    pub fn set_arc_heights(&mut self, h: &[f32]) {
+        self.height_rows = h.to_vec();
+        self.pack_widths();
+    }
+    /// Each row's own dash, `[dash, gap]` in line widths (`[0, 0]`: the
+    /// layer's [`dash`](Self::dash)); empty for none.
+    pub fn set_dashes(&mut self, d: &[[f32; 2]]) {
+        self.dash_rows = d.to_vec();
+        self.pack_widths();
+    }
+    /// Each row's line moved sideways by this many widths, right of its
+    /// direction of travel (negative: left) — deck.gl's `getOffset`. Not
+    /// with arcs: it takes the place of their heights. Empty for none.
+    pub fn set_offsets(&mut self, o: &[f32]) {
+        self.offset_rows = o.to_vec();
+        self.pack_widths();
+    }
+    /// Per path, for paths from [`set_paths`](Self::set_paths).
+    pub fn set_path_offsets(&mut self, o: &[f32]) {
+        let o = if o.is_empty() { Vec::new() } else { self.per_path(o) };
+        self.set_offsets(&o);
+    }
+    /// Per path, for paths from [`set_paths`](Self::set_paths).
+    pub fn set_path_dashes(&mut self, d: &[[f32; 2]]) {
+        let d = self.per_path(d);
+        self.set_dashes(&d);
+    }
+    fn packed_row(&self, i: usize) -> [f32; 4] {
+        let d = self.dash_rows.get(i).copied().unwrap_or([0.0, 0.0]);
+        let y = if self.offset_rows.is_empty() {
+            self.height_rows.get(i).copied().unwrap_or(1.0)
+        } else {
+            self.offset_rows.get(i).copied().unwrap_or(0.0)
+        };
+        [self.width_rows.get(i).copied().unwrap_or(1.0), y, d[0], d[1]]
+    }
+    fn pack_widths(&mut self) {
+        let n = self.width_rows.len().max(self.height_rows.len()).max(self.offset_rows.len()).max(self.dash_rows.len());
+        if n == 0 {
+            self.widths.set_f32(&[]);
+            return;
+        }
+        let packed: Vec<f32> = (0..n).flat_map(|i| self.packed_row(i)).collect();
+        self.widths.set_f32(&packed);
     }
     /// Colour at each segment's source — and at its target too, unless
     /// [`set_target_colors`](Self::set_target_colors) says otherwise.
@@ -426,11 +592,16 @@ impl Mark for SegmentMarks {
             [
                 self.arc_height,
                 self.pieces() as f32,
-                // Bit 0: the profile; bit 1: eased pieces.
+                // Bit 0: the profile; bit 1: eased pieces; bit 2: flat.
                 (match self.arc_profile {
                     ArcProfile::Parabola => 0u32,
                     ArcProfile::Ellipse => 1,
-                } | (u32::from(self.arc_ease_ends) << 1)) as f32,
+                } | (u32::from(self.arc_ease_ends) << 1)
+                    | (u32::from(self.flat && self.globe.is_none()) << 2)
+                    | (u32::from(!self.offset_rows.is_empty()) << 4)
+                    | (u32::from(self.flat && self.globe.is_some() && self.arc_height == 0.0) << 5)
+                    | (u32::from(self.arc_strip) << 6)
+                    | (u32::from(self.smoothstep_edges) << 7)) as f32,
                 0.0,
             ],
             match self.globe {
@@ -447,12 +618,25 @@ impl Mark for SegmentMarks {
             LineCap::Butt => 0.0,
             LineCap::Round => 1.0,
             LineCap::Square => 3.0,
-        };
+        } + if self.join == LineJoin::Round { 4.0 } else { 0.0 }
+            // Bits 3 and up: the mitre limit in eighths, plus one; 0 for none.
+            + 8.0 * self.miter_limit.map_or(0.0, |l| (l.max(0.0) * 8.0).round() + 1.0);
         [
             dash.max(0.0),
             gap.max(0.0),
             self.outline_width.max(0.0),
             cap,
+        ]
+    }
+    /// x: pixels per dash unit (0: line widths); y: bit 0 the whole path,
+    /// bit 1 justified; z: nominal pixels per world unit (0: as drawn); w:
+    /// the arcs' tilt, radians.
+    fn kind_material(&self) -> [f32; 4] {
+        [
+            self.dash_unit_px.map_or(0.0, |p| p.max(1e-6)),
+            (u32::from(self.dash_mode == DashMode::Path) | (u32::from(self.dash_justified) << 1)) as f32,
+            self.dash_nominal_px_per_unit.map_or(0.0, |k| k.max(0.0)),
+            self.arc_tilt.to_radians(),
         ]
     }
     fn prepare(&mut self, ctx: &PrepareContext) {
@@ -535,5 +719,21 @@ mod tests {
             s.colors.bytes(),
             &[1, 0, 0, 255, 1, 0, 0, 255, 3, 0, 0, 255]
         );
+    }
+}
+
+#[cfg(test)]
+mod offset_tests {
+    use super::*;
+
+    #[test]
+    fn offsets_take_the_height_lane() {
+        let mut s = SegmentMarks::new();
+        s.set_paths(&[vec![[0.0; 3], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0]]]);
+        s.set_widths(&[]);
+        s.set_path_offsets(&[2.0]);
+        let w: Vec<f32> = bytemuck::pod_collect_to_vec(s.widths.bytes());
+        assert_eq!(w, vec![1.0, 2.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0]);
+        assert_eq!(s.kind_uniforms().0[2] as u32 & 16, 16);
     }
 }

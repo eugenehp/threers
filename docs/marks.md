@@ -13,7 +13,7 @@ is left to the project using them.
 
 | | |
 |---|---|
-| `PointMarks` | Antialiased circles in pixels or world units, with strokes |
+| `PointMarks` | Antialiased circles in pixels or world units, with strokes (solid or dashed: `set_dashes`), optionally lit by per-row normals (`lighting`, `set_normals`) |
 | `SegmentMarks` | Lines of any width, polylines with mitred joints, and arcs |
 | `ShapeMarks` | Any `BufferGeometry` instanced per row, lit (bars, hexbins, 3D icons) |
 | `PolygonMarks` | Filled and extruded polygons with holes, thousands to a draw (GeoJSON fills, choropleths, buildings) |
@@ -117,6 +117,10 @@ common case: an instance is drawn only while a custom value lies inside
 bytes. `ShaderHooks::validate()` compile-checks hooks against every mark kind
 without a GPU.
 
+`ShaderHooks::fade(component)` multiplies an instance's alpha by a custom
+value and hides it below 1e-4; deck.gl's `CollisionFilterExtension` fades
+with it. Hooks chain with `combine`, a filter and a fade together, say.
+
 `ShaderHooks::trail(times, param)` animates trips, like deck.gl's
 `TripsLayer`. Each segment carries the times its two ends are reached (custom
 components `times` and `times + 1`). With `params[param] = [now, trail, _, _]`,
@@ -177,6 +181,39 @@ TrueType face for real text.
 
 TrueType composite glyphs (most accented letters) are assembled from their
 components.
+
+### Glyphs as images
+
+`captions::glyphs::BitmapGlyphs` is a face made of images instead of
+outlines. `CaptionFont::from_bitmap_glyphs` makes it usable anywhere a font
+is, including `TextLabels`.
+
+- `BitmapGlyphs::from_atlas(rgba, w, h, frames, size, ascent, descent)` cuts
+  glyphs from a pre-packed font atlas, such as deck.gl's `font-atlas.png`
+  and its JSON frames.
+- `BitmapGlyphs::from_font(font, chars, size)` draws a TrueType face once at
+  a design size, as a browser canvas does for deck.gl.
+- `to_sdf(SdfSettings)` turns each glyph into a signed distance field with
+  `tiny_sdf`, a port of Mapbox's TinySDF.
+
+Each glyph keeps deck.gl's metrics: advance, box width, ascent, descent, and
+where the box sits in its image.
+
+### Text as sprites
+
+`SpriteMarks` can draw text the way deck.gl's `TextLayer` does, one sprite per
+character:
+
+- `set_offsets` places each image relative to its anchor, in size units,
+  turned with the sprite.
+- `set_pixel_offsets` adds a pixel offset after turning.
+- `SpriteMode::DistanceField` takes `SpriteSdf`: the edge value, a fixed
+  ramp, and an outline mixed on sRGB values with `mix_srgb`.
+- `SpriteMode::RoundedBox` draws a label background with no image: corner
+  radius, border, and a dashed border from `set_box_rects`.
+- `TextureAtlas::insert_at` places images exactly where another packer would.
+  Matching deck.gl's layout gives the same mip levels and therefore the same
+  small text.
 
 Collision runs on the CPU only when the view changes. Labels are projected,
 sorted by `priority`, and placed greedily. `visible()` reports which ones
@@ -392,3 +429,12 @@ resolution the same 200,000 kernels took 10.6 ms.
 - Labels along a path place each glyph on the line's screen-space
   direction, interpolating the world anchor linearly within a segment.
   Very long segments under strong perspective drift slightly from the line.
+
+## Several views on one target
+
+`MarkTarget::with_rect([x, y, w, h])` draws within a rectangle of the target
+(device pixels from the top left), with the `MarkView`'s viewport that
+rectangle's size: a split screen, a minimap. `MarkRenderer::clear` clears
+the rectangle's colour and/or depth without touching the rest, as a view's
+own clear on a shared canvas does.
+

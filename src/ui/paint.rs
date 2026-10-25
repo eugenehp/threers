@@ -282,8 +282,10 @@ fn linear(c: Rgba) -> Color {
 
 /// A [`Painter`] onto threers' CPU [`Overlay`], with the caption font.
 ///
-/// Text is the overlay's face at the requested size (the family is not
-/// looked up); bold is drawn twice, half a pixel apart.
+/// Text is the overlay's face at the requested size, weight and italic (the
+/// family is not looked up), synthesized where the font lacks them; only
+/// the bitmap face, which has no outlines to embolden, fakes bold by drawing
+/// twice, half a pixel apart.
 ///
 /// Clipping (`overflow: hidden`, scrolling boxes) is to rectangles:
 /// rectangles are cut exactly, a rounded rectangle keeps its corners only
@@ -332,8 +334,11 @@ fn intersect(a: Rect, b: Rect) -> Option<Rect> {
 impl TextMeasure for OverlayPainter<'_> {
     fn measure(&mut self, text: &str, style: &Style) -> (f32, f32) {
         self.overlay.text_size(style.font_size * self.scale);
+        let weight = TextStyle::of(style).weight();
+        let real = self.overlay.text_weight(weight);
+        self.overlay.text_italic(style.italic);
         let (w, _) = self.overlay.measure_text(text);
-        let bold = if TextStyle::of(style).weight() >= 600 { 0.5 } else { 0.0 };
+        let bold = if weight >= 600 && !real { 0.5 } else { 0.0 };
         (w / self.scale + bold, style.line_height.unwrap_or(style.font_size * 1.2))
     }
 }
@@ -380,6 +385,8 @@ impl Painter for OverlayPainter<'_> {
         o.no_stroke();
         o.fill_alpha(linear(style.color), style.color[3]);
         o.text_size(style.font_size * k);
+        let real_weight = o.text_weight(style.weight());
+        o.text_italic(style.italic);
         // Clipped: a line whose middle is outside goes; one running past the
         // right edge loses characters from its end; one starting left of it,
         // from its start.
@@ -415,7 +422,7 @@ impl Painter for OverlayPainter<'_> {
         let (w, h) = o.measure_text(text);
         let y = line.y + (line.height - h) / 2.0;
         o.text(line.x, y, text);
-        if style.weight() >= 600 {
+        if style.weight() >= 600 && !real_weight {
             o.text(line.x + 0.5 * k, y, text);
         }
         if style.line_through {

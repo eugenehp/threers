@@ -17,9 +17,43 @@ pub enum SpriteMode {
     /// The image's alpha as a mask over the row's colour — one monochrome
     /// icon recoloured per row.
     Mask,
-    /// The image's alpha as a signed distance field (0.5 on the edge), drawn
-    /// sharp at any size in the row's colour.
+    /// The image's alpha as a signed distance field (0.5 on the edge, or
+    /// [`SpriteSdf::edge`]), drawn sharp at any size in the row's colour,
+    /// with an optional outline ([`SpriteMarks::sdf`]).
     DistanceField,
+    /// No image: a rectangle the size of the row's rect (its aspect, at the
+    /// row's size) in the row's colour, with rounded corners and a border
+    /// ([`SpriteMarks::box_style`]) — a label's background.
+    RoundedBox,
+}
+
+/// How a [`SpriteMode::DistanceField`] is drawn: deck.gl's `fontSettings`
+/// (`buffer`, `smoothing`) and `outlineWidth`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SpriteSdf {
+    /// The field value on the edge, 0 to 1.
+    pub edge: f32,
+    /// Half the width of the edge's ramp, in field units; `None` for about
+    /// a pixel at the size drawn.
+    pub smoothing: Option<f32>,
+    /// A border outside the edge, out to this field value, in this colour
+    /// (sRGB, straight alpha).
+    pub outline: Option<(f32, [u8; 4])>,
+}
+
+impl Default for SpriteSdf {
+    fn default() -> Self {
+        Self { edge: 0.5, smoothing: None, outline: None }
+    }
+}
+
+/// How a [`SpriteMode::RoundedBox`] is drawn, in pixels.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct SpriteBox {
+    pub corner_radius: f32,
+    pub border_width: f32,
+    /// sRGB, straight alpha.
+    pub border_color: [u8; 4],
 }
 
 /// Images from a [`TextureAtlas`](super::TextureAtlas), one per row, facing
@@ -39,11 +73,32 @@ pub struct SpriteMarks {
     pub common: MarkCommon,
     atlas: SharedAtlas,
     positions: Column,
+    /// Per row: the size, and the offset of the image's centre from the
+    /// anchored point in the same units, before turning (x right, y down).
     sizes: Column,
     rects: Column,
+    /// Per row: the angle, and a pixel offset after turning (x right, y
+    /// down).
     angles: Column,
     colors: Column,
+    size_rows: Vec<f32>,
+    offset_rows: Vec<[f32; 2]>,
+    angle_rows: Vec<f32>,
+    pixel_offset_rows: Vec<[f32; 2]>,
     pub mode: SpriteMode,
+    /// Lie flat on the ground (the plane of +Y, the image's top toward -Z)
+    /// instead of facing the camera — deck.gl's `IconLayer` without
+    /// `billboard`. Sized as it would be facing the camera at the focal
+    /// plane, so it keeps its size in the world and foreshortens with the
+    /// view's tilt.
+    pub ground: bool,
+    /// Fragments fainter than this (after opacity) are not drawn: deck.gl's
+    /// `alphaCutoff` (0.05 for its icons). 0.002 by default.
+    pub alpha_cutoff: f32,
+    /// For [`SpriteMode::DistanceField`].
+    pub sdf: SpriteSdf,
+    /// For [`SpriteMode::RoundedBox`].
+    pub box_style: SpriteBox,
     /// The image point placed on the position, in `[-1, 1]²` with y up.
     pub anchor: [f32; 2],
     /// Hide icons whose box overlaps one placed before them — in this layer
@@ -54,7 +109,18 @@ pub struct SpriteMarks {
     pub collision_index: Option<super::SharedCollision>,
     /// Extra space kept clear around each icon, in pixels.
     pub padding: f32,
+    /// Show row `i` exactly when label `follow.1[i]` of a label layer
+    /// shows (one that [publishes](super::TextLabels::publish_visibility)
+    /// into `follow.0`), instead of placing on its own: icons that belong
+    /// to labels, placed with them. Such a layer
+    /// [prepares late](Mark::prepare_late), so it follows the same frame's
+    /// placement wherever it draws.
+    pub follow: Option<(super::SharedVisibility, Vec<u32>)>,
+    /// Per row: shown (collision), and the corners' depth offsets.
     shown: Column,
+    /// The last placement's visibility; empty for all shown.
+    shown_rows: Vec<f32>,
+    depth_rows: Vec<[f32; 4]>,
     priorities: Vec<f32>,
     placed: Option<PlacedFor>,
     /// Bumped by every setter that moves, sizes or turns an icon.
@@ -63,12 +129,26 @@ pub struct SpriteMarks {
     owner: u64,
     gpu: Option<(u64, wgpu::BindGroup)>,
     atlas_size: (u32, u32),
+    atlas_srgb: bool,
+}
+
+/// A layer dropped while the view holds still (a tile replaced) would leave
+/// its boxes blocking whatever replaces it: take them out, and have the next
+/// frame place everything again.
+impl Drop for SpriteMarks {
+    fn drop(&mut self) {
+        if let (Some(index), true) = (&self.collision_index, self.placed.is_some()) {
+            let mut index = index.lock().unwrap_or_else(|e| e.into_inner());
+            index.remove_owner(self.owner);
+            index.invalidate();
+        }
+    }
 }
 
 impl SpriteMarks {
     pub fn new(atlas: SharedAtlas) -> Self {
-        let mut sizes = Column::float(1);
-        sizes.set_default_f32(&[1.0]);
+        let mut sizes = Column::float(3);
+        sizes.set_default_f32(&[1.0, 0.0, 0.0]);
         let mut common = MarkCommon::default();
         common.style.size_scale = 24.0;
         Self {
@@ -77,24 +157,36 @@ impl SpriteMarks {
             positions: Column::new(ColumnFormat::PositionF64),
             sizes,
             rects: Column::float(4),
-            angles: Column::float(1),
+            angles: Column::float(3),
             colors: Column::new(ColumnFormat::Unorm8x4),
+            size_rows: Vec::new(),
+            offset_rows: Vec::new(),
+            angle_rows: Vec::new(),
+            pixel_offset_rows: Vec::new(),
             mode: SpriteMode::Color,
+            ground: false,
+            alpha_cutoff: 0.002,
+            sdf: SpriteSdf::default(),
+            box_style: SpriteBox::default(),
             anchor: [0.0, 0.0],
             collision: false,
             collision_index: None,
             padding: 1.0,
+            follow: None,
             shown: {
-                let mut c = Column::float(1);
-                c.set_default_f32(&[1.0]);
+                let mut c = Column::new(ColumnFormat::Float4x2);
+                c.set_default_f32(&[1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
                 c
             },
+            shown_rows: Vec::new(),
+            depth_rows: Vec::new(),
             priorities: Vec::new(),
             placed: None,
             version: 0,
             owner: super::collision::next_owner(),
             gpu: None,
             atlas_size: (1, 1),
+            atlas_srgb: true,
         }
     }
 
@@ -125,11 +217,33 @@ impl SpriteMarks {
     }
     pub fn set_sizes(&mut self, s: &[f32]) {
         self.version += 1;
-        self.sizes.set_f32(s);
+        self.size_rows = s.to_vec();
+        self.pack_sizes();
     }
     pub fn update_sizes(&mut self, start: usize, s: &[f32]) {
         self.version += 1;
-        self.sizes.update_f32(start, s);
+        let n = self.size_rows.len().max(start + s.len());
+        self.size_rows.resize(n, 1.0);
+        self.size_rows[start..start + s.len()].copy_from_slice(s);
+        self.pack_sizes();
+    }
+    /// Each row's image centre relative to its anchored point, in the
+    /// size's units (x right, y down), turned with the image: one glyph of
+    /// a label, all a label's glyphs sharing its position. Empty for none.
+    pub fn set_offsets(&mut self, o: &[[f32; 2]]) {
+        self.version += 1;
+        self.offset_rows = o.to_vec();
+        self.pack_sizes();
+    }
+    fn pack_sizes(&mut self) {
+        let n = self.size_rows.len().max(self.offset_rows.len());
+        let packed: Vec<f32> = (0..n)
+            .flat_map(|i| {
+                let o = self.offset_rows.get(i).copied().unwrap_or([0.0; 2]);
+                [self.size_rows.get(i).copied().unwrap_or(1.0), o[0], o[1]]
+            })
+            .collect();
+        self.sizes.set_f32(&packed);
     }
     /// Each row's image, as rects in the atlas.
     pub fn set_rects(&mut self, r: &[AtlasRect]) {
@@ -137,10 +251,26 @@ impl SpriteMarks {
         let flat: Vec<f32> = r.iter().flat_map(|r| r.to_array()).collect();
         self.rects.set_f32(&flat);
     }
+    /// Each row's image as `[x, y, width, height]` in the atlas's pixels,
+    /// fractions kept: a frame placed between pixels samples there.
+    pub fn set_pixel_rects(&mut self, r: &[[f32; 4]]) {
+        self.version += 1;
+        let flat: Vec<f32> = r.iter().flatten().copied().collect();
+        self.rects.set_f32(&flat);
+    }
     pub fn update_rects(&mut self, start: usize, r: &[AtlasRect]) {
         self.version += 1;
         let flat: Vec<f32> = r.iter().flat_map(|r| r.to_array()).collect();
         self.rects.update_f32(start, &flat);
+    }
+    /// For [`SpriteMode::RoundedBox`]: each row's box as `[dash, gap,
+    /// width, height]` — its border dashed (`dash` and `gap` in border
+    /// widths along the box's edge, from its top-left corner down; 0 and 0
+    /// solid), and its aspect.
+    pub fn set_box_rects(&mut self, r: &[[f32; 4]]) {
+        self.version += 1;
+        let flat: Vec<f32> = r.iter().flatten().copied().collect();
+        self.rects.set_f32(&flat);
     }
     /// Each row's image by name; unknown names draw nothing.
     pub fn set_images(&mut self, names: &[&str]) {
@@ -166,11 +296,32 @@ impl SpriteMarks {
     }
     pub fn set_angles(&mut self, a: &[f32]) {
         self.version += 1;
-        self.angles.set_f32(a);
+        self.angle_rows = a.to_vec();
+        self.pack_angles();
     }
     pub fn update_angles(&mut self, start: usize, a: &[f32]) {
         self.version += 1;
-        self.angles.update_f32(start, a);
+        let n = self.angle_rows.len().max(start + a.len());
+        self.angle_rows.resize(n, 0.0);
+        self.angle_rows[start..start + a.len()].copy_from_slice(a);
+        self.pack_angles();
+    }
+    /// Each row moved by this many pixels after turning (x right, y down):
+    /// deck.gl's `getPixelOffset`. Empty for none.
+    pub fn set_pixel_offsets(&mut self, o: &[[f32; 2]]) {
+        self.version += 1;
+        self.pixel_offset_rows = o.to_vec();
+        self.pack_angles();
+    }
+    fn pack_angles(&mut self) {
+        let n = self.angle_rows.len().max(self.pixel_offset_rows.len());
+        let packed: Vec<f32> = (0..n)
+            .flat_map(|i| {
+                let o = self.pixel_offset_rows.get(i).copied().unwrap_or([0.0; 2]);
+                [self.angle_rows.get(i).copied().unwrap_or(0.0), o[0], o[1]]
+            })
+            .collect();
+        self.angles.set_f32(&packed);
     }
     /// sRGB colours, straight alpha: a tint in [`SpriteMode::Color`], the
     /// colour in the other modes.
@@ -194,6 +345,30 @@ impl SpriteMarks {
         (0..self.positions.len())
             .map(|i| self.shown.row_f32(i)[0] > 0.5)
             .collect()
+    }
+
+    /// Each row's four corners moved this far in depth (the depth buffer's
+    /// units, towards the far plane), in the quad's corner order: bottom
+    /// left, bottom right, top right, top left of the image. What a renderer
+    /// computing in float32 puts between coplanar icons — deck.gl's flat
+    /// icons win their overlaps by it. Empty for none.
+    pub fn set_depth_offsets(&mut self, d: &[[f32; 4]]) {
+        self.version += 1;
+        self.depth_rows = d.to_vec();
+        self.pack_shown();
+    }
+
+    /// The visibility and depth column, from the last placement and the
+    /// depth offsets.
+    fn pack_shown(&mut self) {
+        let n = self.shown_rows.len().max(self.depth_rows.len());
+        let packed: Vec<f32> = (0..n)
+            .flat_map(|i| {
+                let d = self.depth_rows.get(i).copied().unwrap_or([0.0; 4]);
+                [self.shown_rows.get(i).copied().unwrap_or(1.0), 0.0, 0.0, 0.0, d[0], d[1], d[2], d[3]]
+            })
+            .collect();
+        self.shown.set_f32(&packed);
     }
 
     /// Cull overlapping icons for `view`.
@@ -256,20 +431,24 @@ impl SpriteMarks {
             if rect[3] <= 0.0 {
                 continue;
             }
-            let mut h = self.sizes.row_f32(i)[0] * s.size_scale;
+            let size = self.sizes.row_f32(i);
+            let mut h = size[0] * s.size_scale;
             if s.units == super::SizeUnits::World {
                 h /= view.units_per_pixel(pos[i]).unwrap_or(1.0) as f32;
             }
             let h = h.clamp(s.min_pixels, s.max_pixels);
+            let k = if size[0] != 0.0 { h / size[0] } else { 0.0 };
             let half = [h * rect[2] / rect[3] * 0.5, h * 0.5];
-            // The anchor in screen space (y down), then the turned box's
-            // bounds.
-            let c = [
-                p[0] - self.anchor[0] * half[0],
-                p[1] + self.anchor[1] * half[1],
-            ];
-            let a = self.angles.row_f32(i)[0];
+            let turn = self.angles.row_f32(i);
+            let a = turn[0];
             let (sn, cs) = a.sin_cos();
+            // The image's centre in screen space (y down): the anchor, the
+            // row's offset turned with it, then its pixel offset.
+            let local = [size[1] * k - self.anchor[0] * half[0], size[2] * k + self.anchor[1] * half[1]];
+            let c = [
+                p[0] + cs * local[0] + sn * local[1] + turn[1],
+                p[1] - sn * local[0] + cs * local[1] + turn[2],
+            ];
             let ex = (half[0] * cs).abs() + (half[1] * sn).abs() + self.padding;
             let ey = (half[0] * sn).abs() + (half[1] * cs).abs() + self.padding;
             let r = [c[0] - ex, c[1] - ey, c[0] + ex, c[1] + ey];
@@ -281,7 +460,8 @@ impl SpriteMarks {
             }
         }
         drop(guard);
-        self.shown.set_f32(&shown);
+        self.shown_rows = shown;
+        self.pack_shown();
     }
 }
 
@@ -333,9 +513,10 @@ impl Mark for SpriteMarks {
             SpriteMode::Color => 0.0,
             SpriteMode::Mask => 1.0,
             SpriteMode::DistanceField => 2.0,
+            SpriteMode::RoundedBox => 3.0,
         };
         (
-            [mode, 0.0, 0.0, 0.0],
+            [mode, self.alpha_cutoff, if self.ground { 1.0 } else { 0.0 }, 0.0],
             [
                 self.atlas_size.0 as f32,
                 self.atlas_size.1 as f32,
@@ -345,12 +526,45 @@ impl Mark for SpriteMarks {
             [0.0; 4],
         )
     }
+    /// extra: the distance field's edge, ramp (0: a pixel) and outline edge
+    /// (-1: none); or a box's corner radius and border width.
+    fn kind_extra(&self) -> [f32; 4] {
+        match self.mode {
+            SpriteMode::RoundedBox => [self.box_style.corner_radius, self.box_style.border_width, 0.0, 0.0],
+            // w: a colour image in a linear atlas holds sRGB bytes, read
+            // after filtering as WebGL reads them.
+            SpriteMode::Color => [0.0, 0.0, -1.0, if self.atlas_srgb { 0.0 } else { 1.0 }],
+            _ => [
+                self.sdf.edge,
+                self.sdf.smoothing.unwrap_or(0.0),
+                self.sdf.outline.map_or(-1.0, |o| o.0),
+                0.0,
+            ],
+        }
+    }
+    /// material: the outline's or the border's colour, linear.
+    fn kind_material(&self) -> [f32; 4] {
+        let c = match self.mode {
+            SpriteMode::RoundedBox => self.box_style.border_color,
+            _ => self.sdf.outline.map_or([0; 4], |o| o.1),
+        };
+        super::points::srgb_u8_to_linear(c)
+    }
     fn prepare(&mut self, ctx: &PrepareContext) {
         self.atlas_size = atlas_bind_group(ctx, &self.atlas, &mut self.gpu);
-        if self.collision {
+        self.atlas_srgb = self.atlas.read().map_or(true, |a| a.is_srgb());
+        if let Some((vis, rows)) = &self.follow {
+            let vis = vis.lock().unwrap();
+            let shown: Vec<f32> =
+                rows.iter().map(|&r| if vis.get(r as usize).copied().unwrap_or(false) { 1.0 } else { 0.0 }).collect();
+            drop(vis);
+            self.shown_rows = shown;
+            self.pack_shown();
+        } else if self.collision {
             self.place(ctx.view);
-        } else if !self.shown.is_empty() {
-            self.shown.set_f32(&[]);
+        } else if !self.shown_rows.is_empty() {
+            self.shown_rows.clear();
+            self.pack_shown();
             if let (Some(sh), Some(_)) = (&self.collision_index, self.placed) {
                 // Its boxes would keep blocking others until the next clear.
                 let mut index = sh.lock().unwrap();
@@ -359,6 +573,9 @@ impl Mark for SpriteMarks {
             }
             self.placed = None;
         }
+    }
+    fn prepare_late(&self) -> bool {
+        self.follow.is_some()
     }
     fn release_gpu(&mut self) {
         self.gpu = None;
@@ -405,6 +622,10 @@ mod tests {
             tone_mapping: (crate::ToneMapping::None, 1.0),
             reversed_z: false,
             focal_distance: 0.0,
+            clip_epsilon: 0.001,
+            subpixel_snap: None,
+            flip_y: false,
+            scene_lights: None,
         }
     }
 

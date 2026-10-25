@@ -5,12 +5,12 @@ PyPI (not crates.io). See also [`docs/bindings.md`](bindings.md).
 
 | Artifact | Version | Registry | Arch notes |
 |---|---|---|---|
-| `threers` | 0.0.7 | crates.io | source; consumers compile |
-| `threers-physics` | 0.0.2 | crates.io | 0.0.1 is on the index |
+| `threers` | 0.0.8 | crates.io | source; consumers compile |
+| `threers-physics` | 0.0.8 | crates.io | tracks `threers` from 0.0.8; 0.0.1 is on the index |
 | `threers-probe` | 0.0.2 | crates.io | 0.0.1 is on the index |
-| `threers` (npm ESM) | 0.0.7 | npm / Deno | **mini** (default) + **full** wasm entries ([`crates/threers-js`](../crates/threers-js)) |
-| `threers-node` | 0.0.7 | npm | per-arch `.node` via `@threers/node-*` ([`crates/threers-node`](../crates/threers-node)) |
-| `threers` (PyPI) | 0.0.7 | PyPI | per-platform wheels ([`crates/threers-py`](../crates/threers-py)) |
+| `threers` (npm ESM) | 0.0.8 | npm / Deno | **mini** (default) + **full** wasm entries ([`crates/threers-js`](../crates/threers-js)) |
+| `threers-node` | 0.0.8 | npm | per-arch `.node` via `@threers/node-*` ([`crates/threers-node`](../crates/threers-node)) |
+| `threers` (PyPI) | 0.0.8 | PyPI | per-platform wheels ([`crates/threers-py`](../crates/threers-py)) |
 
 `crates/` also holds seven demos and benches. None of them publish
 (`publish = false`), and they fall into two groups:
@@ -29,7 +29,7 @@ Both companions depend on `threers` by **path and version**:
 
 ```toml
 # crates/threers-physics/Cargo.toml
-threers = { path = "../..", version = "0.0.7", features = ["mesh-bvh"] }
+threers = { path = "../..", version = "0.0.8", features = ["mesh-bvh"] }
 ```
 
 A path dependency is what the workspace builds against; the `version` is what the
@@ -37,8 +37,8 @@ published crate carries. So `threers` has to be on crates.io *before* either
 companion can even be packaged — until it is, you get
 
 ```text
-failed to select a version for the requirement `threers = "^0.0.7"`
-candidate versions found which didn't match: 0.0.6, 0.0.5, 0.0.4, 0.0.3, 0.0.2, 0.0.1
+failed to select a version for the requirement `threers = "^0.0.8"`
+candidate versions found which didn't match: 0.0.7, 0.0.6, 0.0.5, 0.0.4, 0.0.3, 0.0.2, 0.0.1
 ```
 
 which is not a fault, it is the ordering telling you about itself.
@@ -118,7 +118,7 @@ cargo package -p threers                     # size, and it must compile from th
 cargo publish -p threers
 cargo publish -p threers-physics             # only after the first is on the index
 cargo publish -p threers-probe               # likewise
-git tag -a v0.0.7 -m 'threers 0.0.7' && git push --tags
+git tag -a v0.0.8 -m 'threers 0.0.8' && git push --tags
 
 # 7. Language packages — one script locally; CI on tag push.
 ./scripts/release-versions.sh                    # versions aligned?
@@ -126,7 +126,7 @@ git tag -a v0.0.7 -m 'threers 0.0.7' && git push --tags
 PUBLISH=1 ./scripts/release-all.sh publish     # upload (or push tag → CI)
 
 # Multi-arch npm-node + PyPI: push v* tag → .github/workflows/release-language-packages.yml
-git tag -a v0.0.7 -m 'threers 0.0.7' && git push --tags
+git tag -a v0.0.8 -m 'threers 0.0.8' && git push --tags
 ```
 
 ## One command (`scripts/release-all.sh`)
@@ -151,7 +151,7 @@ PyPI trusted publishing).
 
 ```bash
 # After crates.io publish + version bump:
-git tag v0.0.7 && git push origin v0.0.7
+git tag v0.0.8 && git push origin v0.0.8
 ```
 
 ## npm ESM (`crates/threers-js`)
@@ -242,13 +242,19 @@ curl -s -H 'User-Agent: threers-release' https://crates.io/api/v1/crates/threers
   | python3 -c "import json,sys; print(json.load(sys.stdin)['crate']['max_version'])"
 ```
 
-It reads 0.0.6, so 0.0.7 is what ships.
+It reads 0.0.7, so 0.0.8 is what ships.
 
-`threers-physics` and `threers-probe` carry their own versions and are **already
-on the index at 0.0.1** (both published 2026-09-11). Both have changed since, so
-this round ships 0.0.2 for each — `cargo publish` cannot replace a version that
-is up, so leaving them at 0.0.1 fails at the upload and not before. Check them
-the same way:
+`threers-physics` tracks the `threers` version from 0.0.8 on, so it is bumped
+with the rest and `release-versions.sh` treats it as one of the aligned roots.
+Only 0.0.1 (2026-09-11) is on the index; the 0.0.2 the workspace carried was
+never published, so it jumps from 0.0.1 straight to 0.0.8. `CHECK=1
+./scripts/release-versions.sh` asks crates.io and fails if `threers` or
+`threers-physics` is not ahead of the published version — `cargo publish`
+cannot replace a version, so a stale one would otherwise fail at the upload and
+not before.
+
+`threers-probe` still carries its own version (0.0.2; 0.0.1 is on the index).
+Check either companion by hand the same way:
 
 ```bash
 for c in threers-physics threers-probe; do
@@ -259,5 +265,5 @@ done
 ```
 
 The bindings pin `threers-physics` by version as well as by path, so bumping it
-means bumping `crates/threers-py/Cargo.toml` and `crates/threers-node/Cargo.toml`
-with it or nothing resolves. `release-versions.sh` checks that pairing.
+means bumping `crates/threers-py/Cargo.toml`, `crates/threers-node/Cargo.toml`
+and `crates/threers-animation/Cargo.toml` with it or nothing resolves. `release-versions.sh` checks that pairing.

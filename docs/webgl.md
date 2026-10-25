@@ -6,7 +6,7 @@ WebGPU is not everywhere yet. The `webgl` feature compiles wgpu's GL backend in
 as well, so a browser without WebGPU gets WebGL2 instead of a blank page.
 
 ```toml
-threers = { version = "0.0.7", features = ["webgl"] }
+threers = { version = "0.0.8", features = ["webgl"] }
 ```
 
 WebGPU is still preferred wherever it exists — turning this on cannot downgrade

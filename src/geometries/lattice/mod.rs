@@ -4,11 +4,11 @@
 //!
 //! | Family | What it is | Count |
 //! |--------|------------|-------|
-//! | [`Tpms`] | Triply periodic minimal surfaces — gyroid, Schwarz P and D, Neovius, I-WP, Fischer–Koch S, Lidinoid, split P | 8 |
-//! | [`Strut`] | Beam cells — simple cubic, BCC, BCC-Z, FCC, octet truss, diamond, Kelvin | 7 |
+//! | [`Tpms`] | Triply periodic minimal surfaces — gyroid, Schwarz P and D, Neovius, I-WP, Fischer–Koch S, Lidinoid, split P — and helicoid screws | 9 |
+//! | [`Strut`] | Beam cells — simple cubic, BCC, BCC-Z, FCC, octet truss, diamond, Kelvin — and textiles: plain weave, three-strand braid, twisted helix bundle | 10 |
 //! | [`Infill`] | What a slicer draws — rectilinear (turning and aligned), grid, triangles, tri-hexagon, honeycomb, cubic, quarter cubic, concentric | 9 |
 //! | [`Cuboct`] | Face-connected cuboctahedra voxels — rigid, compliant, auxetic, chiral (Jenett et al. 2020) | 5 |
-//! | [`Stochastic`] | Foams — Voronoi struts and walls, and four classes of spinodal random field | 6 |
+//! | [`Stochastic`] | Foams — Voronoi struts, walls and wet foams on random, crystal, relaxed or two-size seeds ([`SeedLayout`]), four classes of spinodal random field, a broadband Gaussian field, hyperuniform fibres, a reaction–diffusion maze | 10 |
 //!
 //! Each is evaluated as a scalar field that is positive inside the solid,
 //! sampled on a regular grid, and contoured by marching cubes. Because the
@@ -192,7 +192,7 @@ pub use homogenize::{
 pub use infill::Infill;
 pub use metrics::LatticeMetrics;
 pub use region::Region;
-pub use stochastic::Stochastic;
+pub use stochastic::{SeedLayout, Stochastic};
 pub use strut::{Segment, Strut};
 pub use tpms::Tpms;
 pub use voxel::{CuboctAssembly, CuboctJoint, CuboctJointKind};
@@ -336,6 +336,16 @@ pub struct Lattice<'a> {
     jitter: f32,
     /// Where the homogenisation solves run. Nothing else reads it.
     solver: Solver,
+    /// Whether [`build`](Lattice::build) drops the specks a contour leaves.
+    drop_specks: bool,
+    /// Where the Voronoi cells' seeds sit.
+    seed_layout: SeedLayout,
+    /// [`Stochastic::VoronoiWet`]'s border radius; `None` for 0.15 of a cell.
+    plateau_border: Option<f32>,
+    /// Seeds a cell for the generated [`SeedLayout`]s.
+    seeds_per_cell: usize,
+    /// Large to small cell volume under [`SeedLayout::Bimodal`].
+    size_ratio: f32,
 }
 
 impl<'a> Lattice<'a> {
@@ -358,6 +368,11 @@ impl<'a> Lattice<'a> {
             shape: 0.15,
             program: None,
             chiral_rule: None,
+            drop_specks: false,
+            seed_layout: SeedLayout::Random,
+            plateau_border: None,
+            seeds_per_cell: 8,
+            size_ratio: 2.0,
             conform: None,
             seed: 0,
             jitter: 1.0,
@@ -548,6 +563,58 @@ impl<'a> Lattice<'a> {
     /// Ignored by the periodic families.
     pub fn seed(mut self, seed: u32) -> Self {
         self.seed = seed;
+        self
+    }
+
+    /// Where a Voronoi foam's seeds sit: [`SeedLayout::Random`] (the default,
+    /// one per cell moved by [`jitter`](Self::jitter)) or one of the crystal
+    /// layouts that make Kelvin, Weaire–Phelan and Laves foams. Ignored by
+    /// everything but [`Stochastic::Voronoi`] and [`Stochastic::VoronoiWall`].
+    pub fn seed_layout(mut self, layout: SeedLayout) -> Self {
+        self.seed_layout = layout;
+        self
+    }
+
+    /// How many seeds each cell gets under [`SeedLayout::Poisson`] and
+    /// [`SeedLayout::Relaxed`] — the foam cells per lattice cell. 8 by
+    /// default. The tile repeats with the lattice cell, so more seeds means a
+    /// longer stretch of foam before it does.
+    pub fn seeds_per_cell(mut self, count: usize) -> Self {
+        self.seeds_per_cell = count.clamp(1, 512);
+        self
+    }
+
+    /// How much bigger the large cells of a [`SeedLayout::Bimodal`] foam are
+    /// than the small ones, by volume. 2 by default; at least 1.
+    pub fn size_ratio(mut self, ratio: f32) -> Self {
+        self.size_ratio = ratio.max(1.0);
+        self
+    }
+
+    /// How wet a [`Stochastic::VoronoiWet`] foam is: the radius its bubbles'
+    /// edges and corners are rounded to, in world units, which is what opens
+    /// the liquid channels — Plateau borders — along every cell edge. 0.15 of
+    /// the smallest cell side by default; the films between bubbles are
+    /// [`thickness`](Self::thickness) thick whatever this is. Ignored by every
+    /// other cell.
+    pub fn plateau_border(mut self, radius: f32) -> Self {
+        self.plateau_border = Some(radius.max(0.0));
+        self
+    }
+
+    /// Drop the loose specks a contour leaves floating in the void — solid
+    /// pieces of fewer than ten sample cells, the debris of a random field
+    /// sampled where it barely clears the surface. Off by default.
+    ///
+    /// Only while they are debris: if the pieces that small hold more than 2 %
+    /// of the solid they are part of the design (an under-resolved wall, a
+    /// structure that is many small pieces on purpose) and every one stays.
+    /// Sealed cavities are never dropped for being separate, since a closed-cell
+    /// foam is mostly made of them. See
+    /// [`mesh_check::remove_loose_pieces`](crate::utils::mesh_check::remove_loose_pieces),
+    /// which this calls, for the rest of the rules and the report.
+    pub fn drop_specks(mut self, drop: bool) -> Self {
+        self.drop_specks = drop;
         self
     }
 
@@ -940,23 +1007,89 @@ impl<'a> Lattice<'a> {
         // on how the threads interleave — a build flag must not change the
         // geometry.
         let mut values = vec![0.0f32; total];
+        // A TPMS sample is mostly the sines and cosines of its three
+        // coordinates, and each of those is one of `n` values along its axis:
+        // a table per axis replaces three trigonometric calls a point with
+        // `nx + ny + nz` for the whole grid, to the bit.
+        let trig = match self.kind {
+            LatticeKind::Tpms(_) if self.conform.is_none() => {
+                let axis = |a: usize, n: usize, o: f32, s: f32| -> Vec<(f32, f32)> {
+                    (0..n).map(|i| sampler.tpms_angle(a, o + i as f32 * s).sin_cos()).collect()
+                };
+                Some([
+                    axis(0, nx, origin.x, step.x),
+                    axis(1, ny, origin.y, step.y),
+                    axis(2, nz, origin.z, step.z),
+                ])
+            }
+            _ => None,
+        };
+        // A spinodal wave's phase is `kₓ·x` plus a part that is constant along
+        // a row, so its sine and cosine at a sample are the row's rotated by
+        // the column's: a table per column, one `sin_cos` per row and wave, and
+        // four multiplies a sample in place of a trigonometric call. In `f64`,
+        // so the result is no less accurate than the `f32` call it replaces.
+        let waves = match (self.kind, &self.conform) {
+            (LatticeKind::Stochastic(s), None) if s.is_field() => sampler.waves.as_deref(),
+            _ => None,
+        };
+        let columns: Option<Vec<(f64, f64)>> = waves.map(|waves| {
+            let mut t = Vec::with_capacity(nx * waves.len());
+            for i in 0..nx {
+                let dx = (origin.x + i as f32 * step.x - sampler.phase.x) as f64;
+                for w in waves {
+                    t.push((w.k.x as f64 * dx).sin_cos());
+                }
+            }
+            t
+        });
         crate::utils::parallel::par_fill_chunks(&mut values, nx * ny, |k, slab| {
             let z = origin.z + k as f32 * step.z;
+            let count = waves.map_or(0, <[_]>::len);
+            let mut row = vec![(0.0f64, 0.0f64); count];
+            let mut here = vec![(0.0f32, 0.0f32); count];
             for j in 0..ny {
                 let y = origin.y + j as f32 * step.y;
+                if let Some(waves) = waves {
+                    let (dy, dz) = ((y - sampler.phase.y) as f64, (z - sampler.phase.z) as f64);
+                    for (r, w) in row.iter_mut().zip(waves) {
+                        *r = (w.k.y as f64 * dy + w.k.z as f64 * dz + w.phase as f64).sin_cos();
+                    }
+                }
                 for i in 0..nx {
                     let x = origin.x + i as f32 * step.x;
-                    slab[j * nx + i] = sampler.value(Vector3::new(x, y, z));
+                    let pre = if let Some(columns) = &columns {
+                        let column = &columns[i * count..(i + 1) * count];
+                        for ((h, &(sa, ca)), &(sr, cr)) in here.iter_mut().zip(column).zip(&row) {
+                            *h = ((sa * cr + ca * sr) as f32, (ca * cr - sa * sr) as f32);
+                        }
+                        Some(Pre::Waves(&here))
+                    } else {
+                        trig.as_ref().map(|[tx, ty, tz]| Pre::Tpms([tx[i], ty[j], tz[k]]))
+                    };
+                    slab[j * nx + i] = sampler.value_trig(Vector3::new(x, y, z), pre);
                 }
             }
         });
-        IsoGrid {
+        let geometry = IsoGrid {
             dims: [nx, ny, nz],
             origin,
             step,
             values,
         }
-        .triangulate()
+        .triangulate();
+        if !self.drop_specks {
+            return geometry;
+        }
+        let cell_volume = step.x * step.y * step.z;
+        crate::utils::mesh_check::remove_loose_pieces(
+            &geometry,
+            crate::utils::mesh_check::LoosePieces::Specks {
+                min_volume: 10.0 * cell_volume,
+                max_fraction: 0.02,
+            },
+        )
+        .0
     }
 
     /// Cell count along x, which [`ChiralRule`] treats as the column width.
@@ -1059,11 +1192,128 @@ impl<'a> Lattice<'a> {
             (LatticeKind::Cuboct(c), false, None) => Some(c.segments(self.shape)),
             _ => None,
         };
+        // How far either side of the surface the field has to be exact:
+        // marching cubes reads the values at a crossed edge's ends, within a
+        // step of the surface, and its normals the ends' neighbours, within
+        // two. Further out only the sign is read, and the distance fields stop
+        // working for it — the foam's is most of a build.
+        let margin = 2.0 * step.x.max(step.y).max(step.z);
+        // Which struts can reach which part of a cell, once, when every sample
+        // culls at the same radius — not under a grade or a conformal map,
+        // which move it point by point.
+        let strut_bins = if self.grade.is_none() && self.conform.is_none() {
+            let cull = (self.thickness * 0.5).max(0.0) + margin;
+            match self.kind {
+                LatticeKind::Strut(s) => strut::Bins::new(s.segments(), cell, cull),
+                LatticeKind::Cuboct(_) => cuboct_cached
+                    .as_deref()
+                    .and_then(|segs| strut::Bins::new(segs, cell, cull)),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        // The Voronoi seeds of every cell the grid and its search can reach.
+        // Under a conformal map the cells are in another space; any cell left
+        // out is hashed as before, so the range only has to be right to help.
+        let seed_table = match self.kind {
+            LatticeKind::Stochastic(s)
+                if !s.is_field()
+                    && self.conform.is_none()
+                    && self.seed_layout == SeedLayout::Random =>
+            {
+                let reach = 4.0 * step.x.max(step.y).max(step.z);
+                // Relative to the phase, which is the bounds' corner here.
+                let lo = Vector3::new(-reach, -reach, -reach);
+                let hi = self.bounds.size() + Vector3::new(reach, reach, reach);
+                let ring = 5;
+                let cells = |v: Vector3, by: i32| {
+                    [
+                        (v.x / cell.x).floor() as i32 + by,
+                        (v.y / cell.y).floor() as i32 + by,
+                        (v.z / cell.z).floor() as i32 + by,
+                    ]
+                };
+                let (lo, hi) = (cells(lo, -ring), cells(hi, ring));
+                stochastic::SeedTable::new(lo, hi, self.jitter, self.seed)
+            }
+            _ => None,
+        };
+        // A tiled layout's seeds, and a bimodal one's weights from the same
+        // draw — the positions depend on the sizes. A wet foam takes the
+        // positions and keeps one size.
+        let (seed_sites, seed_weights) = match self.kind {
+            LatticeKind::Stochastic(s) if !s.is_field() => {
+                if self.seed_layout == SeedLayout::Bimodal {
+                    let (sites, weights) = stochastic::bimodal_tile(
+                        self.seeds_per_cell,
+                        self.size_ratio as f64,
+                        cell,
+                        self.seed,
+                    );
+                    (sites, weights)
+                } else {
+                    let (layout, count) = (self.seed_layout, self.seeds_per_cell);
+                    let sites = stochastic::seed_tile(layout, count, cell, self.seed);
+                    (sites, Vec::new())
+                }
+            }
+            _ => (Vec::new(), Vec::new()),
+        };
+        // Every seed the grid can reach, with its exact neighbours: the
+        // search each sample would otherwise make, made once. Not under a
+        // conformal map, whose cells are laid out in another space.
+        let seed_graph = match self.kind {
+            LatticeKind::Stochastic(s) if !s.is_field() && self.conform.is_none() => {
+                let reach = 4.0 * step.x.max(step.y).max(step.z);
+                let (lo, hi) = (
+                    Vector3::new(-reach, -reach, -reach),
+                    self.bounds.size() + Vector3::new(reach, reach, reach),
+                );
+                let cells = |v: Vector3| {
+                    [
+                        (v.x / cell.x).floor() as i32,
+                        (v.y / cell.y).floor() as i32,
+                        (v.z / cell.z).floor() as i32,
+                    ]
+                };
+                stochastic::shared_graph(
+                    cells(lo),
+                    cells(hi),
+                    [cell.x as f64, cell.y as f64, cell.z as f64],
+                    &seed_sites,
+                    &seed_weights,
+                    self.jitter,
+                    self.seed,
+                )
+            }
+            _ => None,
+        };
+        // An open foam is its cells' edges: binned as segments, read like a
+        // strut lattice. Only for one cull everywhere, so not under a grade.
+        let edge_bins = match (&seed_graph, self.kind) {
+            (Some(graph), LatticeKind::Stochastic(Stochastic::Voronoi)) if self.grade.is_none() => {
+                let reach = 4.0 * step.x.max(step.y).max(step.z);
+                let size = self.bounds.size();
+                let cull = (self.thickness * 0.5).max(0.0) + margin;
+                stochastic::EdgeBins::new(
+                    graph,
+                    [-reach as f64; 3],
+                    [(size.x + reach) as f64, (size.y + reach) as f64, (size.z + reach) as f64],
+                    cull as f64,
+                )
+            }
+            _ => None,
+        };
         // Built once here rather than per sample: two dozen directions and
         // phases, against `WAVES` trigonometric calls for every point of a
         // grid that is millions of points long.
         let waves = match self.kind {
-            LatticeKind::Stochastic(s) if s.is_field() => {
+            LatticeKind::Stochastic(s)
+                if s.is_field()
+                    && s != Stochastic::Hyperuniform
+                    && s != Stochastic::ReactionDiffusion =>
+            {
                 Some(stochastic::waves(s, cell, self.seed))
             }
             _ => None,
@@ -1082,7 +1332,7 @@ impl<'a> Lattice<'a> {
             cell,
             omega: Vector3::new(TAU / cell.x, TAU / cell.y, TAU / cell.z),
             half: self.thickness * 0.5,
-            margin: 3.0 * step.x.max(step.y).max(step.z),
+            margin,
             skin: self.skin,
             bounds: self.bounds,
             grade: self.grade.as_deref(),
@@ -1093,9 +1343,24 @@ impl<'a> Lattice<'a> {
             cuboct_n: self.chiral_n(),
             cuboct_program: self.program.as_deref(),
             cuboct_cached,
+            strut_bins,
+            seed_table,
             conform: self.conform.as_ref(),
             jitter: self.jitter,
             seed: self.seed,
+            turing: match self.kind {
+                LatticeKind::Stochastic(Stochastic::ReactionDiffusion) => {
+                    Some(stochastic::turing(self.seed))
+                }
+                _ => None,
+            },
+            seed_sites,
+            seed_weights,
+            seed_graph,
+            edge_bins,
+            plateau_border: self
+                .plateau_border
+                .unwrap_or(0.15 * cell.x.min(cell.y).min(cell.z)),
             waves,
         }
     }
@@ -1443,6 +1708,16 @@ fn jitter(i: usize, j: usize, k: usize) -> [f32; 3] {
 }
 
 /// The resolved field: everything `build` and `occupancy` need per sample.
+/// What a grid sweep can hand a sample ready-made, because it is shared along
+/// a row or a column — see [`Lattice::build`].
+#[derive(Clone, Copy)]
+enum Pre<'a> {
+    /// `(sin, cos)` of the three TPMS angles.
+    Tpms([(f32, f32); 3]),
+    /// `(sin, cos)` of every spinodal wave's phase at the point.
+    Waves(&'a [(f32, f32)]),
+}
+
 struct Sampler<'a> {
     kind: LatticeKind,
     style: LatticeStyle,
@@ -1463,11 +1738,31 @@ struct Sampler<'a> {
     cuboct_n: i32,
     cuboct_program: Option<&'a (dyn Fn(i32, i32, i32) -> Cuboct + Sync + Send)>,
     cuboct_cached: Option<Vec<Segment>>,
+    /// [`strut::Bins`] for the strut or cached cuboct segments, when the cull
+    /// is the same everywhere.
+    strut_bins: Option<strut::Bins>,
+    /// Every Voronoi seed the grid can reach, worked out once.
+    seed_table: Option<stochastic::SeedTable>,
     /// The map into cell space, when the cells are not laid out in world
     /// space.
     conform: Option<&'a Conform<'a>>,
     jitter: f32,
     seed: u32,
+    /// The settled reaction–diffusion pattern, for that cell only.
+    turing: Option<std::sync::Arc<stochastic::Turing>>,
+    /// The Voronoi or power diagram's seeds and neighbours, when the grid can
+    /// be answered from it.
+    seed_graph: Option<std::sync::Arc<stochastic::SeedGraph>>,
+    /// An open foam's edges as binned segments.
+    edge_bins: Option<stochastic::EdgeBins>,
+    /// Seed weights under [`SeedLayout::Bimodal`], one per tile seed; empty
+    /// for an unweighted foam.
+    seed_weights: Vec<f64>,
+    /// The seeds of every cell under a tiled layout; empty for one hashed seed
+    /// per cell.
+    seed_sites: Vec<[f64; 3]>,
+    /// A wet foam's Plateau border radius, in world units.
+    plateau_border: f32,
     /// The plane waves a spinodal field is summed from. Ignored by everything
     /// else.
     waves: Option<Vec<stochastic::Wave>>,
@@ -1475,14 +1770,25 @@ struct Sampler<'a> {
 
 impl Sampler<'_> {
     /// Positive inside the solid, negative outside, zero on the surface.
+    #[cfg(test)]
     fn value(&self, p: Vector3) -> f32 {
-        self.value_at(p, self.trim.map(|t| t(p)))
+        self.value_trig(p, None)
+    }
+
+    /// [`value`](Self::value), with the TPMS sines and cosines for this point
+    /// supplied — see [`Tpms::value_and_gradient_trig`].
+    fn value_trig(&self, p: Vector3, pre: Option<Pre<'_>>) -> f32 {
+        self.value_at_trig(p, self.trim.map(|t| t(p)), pre)
     }
 
     /// The same, with the trim's value supplied rather than evaluated — for
     /// callers that already know it and would rather not pay for it twenty
     /// times over.
     fn value_at(&self, p: Vector3, cut: Option<f32>) -> f32 {
+        self.value_at_trig(p, cut, None)
+    }
+
+    fn value_at_trig(&self, p: Vector3, cut: Option<f32>, pre: Option<Pre<'_>>) -> f32 {
         let half = match self.grade {
             Some(g) => self.half * g(p).max(0.0),
             None => self.half,
@@ -1497,7 +1803,7 @@ impl Sampler<'_> {
             boundary = boundary.min(cut);
             depth = depth.min(cut);
         }
-        let filled = self.solid_at(p, half, depth).min(boundary);
+        let filled = self.solid_at_trig(p, half, depth, pre).min(boundary);
         let clip = |v: f32| match self.clip {
             Some(c) => v.min(c(p)),
             None => v,
@@ -1519,6 +1825,19 @@ impl Sampler<'_> {
     /// half-thickness, already graded, and `depth` how far into the part the
     /// point lies, which only the concentric infill reads.
     fn solid_at(&self, p: Vector3, half: f32, depth: f32) -> f32 {
+        self.solid_at_trig(p, half, depth, None)
+    }
+
+    /// [`solid_at`](Self::solid_at), with the TPMS sines and cosines for `p`
+    /// when the caller has them. Ignored under a conformal map, which moves
+    /// the point before it is evaluated.
+    fn solid_at_trig(
+        &self,
+        p: Vector3,
+        half: f32,
+        depth: f32,
+        pre: Option<Pre<'_>>,
+    ) -> f32 {
         // A conformal map takes the point into the space the cells are tiled
         // in, and says how much it stretched to get there. `half` is a length
         // in that space, so it is stretched with it and the answer divided back
@@ -1532,15 +1851,25 @@ impl Sampler<'_> {
         let solid = match self.kind {
             LatticeKind::Strut(s) => {
                 // Only struts nearer than the local radius can matter; the
-                // margin keeps the gradient exact for a few samples beyond.
+                // margin keeps the field exact for the samples a mesher reads.
                 let cull = half.max(0.0) + margin;
-                let d = strut::distance(p, self.phase, self.cell, s.segments(), cull);
+                let d = match &self.strut_bins {
+                    Some(bins) => {
+                        strut::distance_binned(p, self.phase, self.cell, s.segments(), bins, cull)
+                    }
+                    None => strut::distance(p, self.phase, self.cell, s.segments(), cull),
+                };
                 half - d
             }
             LatticeKind::Cuboct(c) => {
                 let cull = half.max(0.0) + margin;
                 let d = if let Some(ref segs) = self.cuboct_cached {
-                    strut::distance(p, self.phase, self.cell, segs, cull)
+                    match &self.strut_bins {
+                        Some(bins) => {
+                            strut::distance_binned(p, self.phase, self.cell, segs, bins, cull)
+                        }
+                        None => strut::distance(p, self.phase, self.cell, segs, cull),
+                    }
                 } else {
                     cuboct::distance(
                         p,
@@ -1560,34 +1889,201 @@ impl Sampler<'_> {
             }
             LatticeKind::Infill(i) => half - infill::distance(i, p, self.phase, self.cell, depth),
             LatticeKind::Tpms(t) => {
-                let sd = self.tpms_distance(t, p);
-                match self.style {
+                let trig = match pre {
+                    Some(Pre::Tpms(trig)) if self.conform.is_none() => trig,
+                    _ => self.tpms_trig(p),
+                };
+                let sd = self.tpms_distance_trig(t, trig);
+                let solid = match self.style {
                     LatticeStyle::Sheet => half - sd.abs(),
                     LatticeStyle::Solid => sd + half,
+                };
+                match t.clip_radius() {
+                    // Radians to world, with the smaller of the column's two
+                    // radians-per-length so the cut stays inside the cell.
+                    Some(limit) => {
+                        let per = self.omega.x.max(self.omega.y);
+                        solid.min((limit - tpms::axis_radius(trig)) / per)
+                    }
+                    None => solid,
                 }
             }
             // A spinodal field is a level set like a TPMS, and reads its
             // thickness the same way.
-            LatticeKind::Stochastic(s) if s.is_field() => {
-                let sd = self.spinodal_distance(p);
+            // A grown pattern, sampled from its tile and read as a distance the
+            // same way as every other field.
+            LatticeKind::Stochastic(Stochastic::ReactionDiffusion) => {
+                let u = [
+                    ((p.x - self.phase.x) / self.cell.x) as f64,
+                    ((p.y - self.phase.y) / self.cell.y) as f64,
+                    ((p.z - self.phase.z) / self.cell.z) as f64,
+                ];
+                let (value, g) = match &self.turing {
+                    Some(t) => t.sample(u),
+                    None => (0.0, [0.0; 3]),
+                };
+                let gradient =
+                    Vector3::new(g[0] / self.cell.x, g[1] / self.cell.y, g[2] / self.cell.z);
+                let sd = value / gradient.length().max(1e-6);
                 match self.style {
                     LatticeStyle::Sheet => half - sd.abs(),
                     LatticeStyle::Solid => sd + half,
                 }
             }
+            // A field too, read as a distance the same way, from kernels
+            // rather than waves.
+            LatticeKind::Stochastic(Stochastic::Hyperuniform) => {
+                let (value, gradient) =
+                    stochastic::hyperuniform(p, self.phase, self.cell, self.seed);
+                let sd = value / gradient.length().max(1e-6);
+                match self.style {
+                    LatticeStyle::Sheet => half - sd.abs(),
+                    LatticeStyle::Solid => sd + half,
+                }
+            }
+            LatticeKind::Stochastic(s) if s.is_field() => {
+                let sd = match pre {
+                    Some(Pre::Waves(sc)) if self.conform.is_none() => {
+                        let waves = self.waves.as_deref().unwrap_or(&[]);
+                        let (value, gradient) = stochastic::value_and_gradient_sc(waves, sc);
+                        value / gradient.length().max(1e-6)
+                    }
+                    _ => self.spinodal_distance(p),
+                };
+                match self.style {
+                    LatticeStyle::Sheet => half - sd.abs(),
+                    LatticeStyle::Solid => sd + half,
+                }
+            }
+            // A wet foam's liquid is everything outside the rounded bubbles,
+            // grown by half the film thickness — so neighbouring bubbles, which
+            // meet flush on their faces, are parted by a film `thickness` thick.
+            LatticeKind::Stochastic(Stochastic::VoronoiWet) => {
+                let skeleton = stochastic::Skeleton::Wet { border: self.plateau_border * stretch };
+                let cap = half.max(0.0) + margin;
+                // Only the graph knows a two-size foam's weights; for one size
+                // the search is the quicker of the two (measured, against the
+                // graph and against binned bubbles), and the graph's fallback
+                // either way.
+                let graph = if self.seed_weights.is_empty() {
+                    None
+                } else {
+                    self.graph_distance(p, skeleton, cap, f32::NEG_INFINITY)
+                };
+                let w = graph.unwrap_or_else(|| {
+                    stochastic::voronoi_distance(
+                        p,
+                        self.phase,
+                        self.cell,
+                        skeleton,
+                        self.jitter,
+                        self.seed,
+                        &self.seed_sites,
+                        cap,
+                        f32::NEG_INFINITY,
+                        self.seed_table.as_ref(),
+                    )
+                });
+                w + half
+            }
+            // Weighted seeds take the power diagram's own search.
+            LatticeKind::Stochastic(s) if !self.seed_weights.is_empty() => {
+                let wall = s == Stochastic::VoronoiWall;
+                let skeleton =
+                    if wall { stochastic::Skeleton::Walls } else { stochastic::Skeleton::Edges };
+                let cap = half.max(0.0) + margin;
+                let d = self.edge_bin_distance(p, skeleton, cap)
+                    .or_else(|| self.graph_distance(p, skeleton, cap, f32::NEG_INFINITY))
+                    .unwrap_or_else(|| {
+                    stochastic::power_distance(
+                        p,
+                        self.phase,
+                        self.cell,
+                        wall,
+                        &self.seed_sites,
+                        &self.seed_weights,
+                        cap,
+                    )
+                });
+                half - d
+            }
             LatticeKind::Stochastic(s) => {
-                let d = stochastic::voronoi_distance(
-                    p,
-                    self.phase,
-                    self.cell,
-                    matches!(s, Stochastic::VoronoiWall),
-                    self.jitter,
-                    self.seed,
-                );
+                // Exact only where the mesher reads it: within the margin of
+                // the surface, either side. Beyond it outwards the distance is
+                // culled like a strut's; inwards only the sign matters.
+                let skeleton = if s == Stochastic::VoronoiWall {
+                    stochastic::Skeleton::Walls
+                } else {
+                    stochastic::Skeleton::Edges
+                };
+                let (cap, floor) = (half.max(0.0) + margin, half - margin);
+                // Walls are one cell's planes, which the graph has to hand:
+                // quicker than searching (1.4–2.6× over every layout). Edges
+                // reach into the neighbouring cells, and there the search's
+                // ordering by distance prunes better.
+                let graph = if skeleton == stochastic::Skeleton::Walls {
+                    self.graph_distance(p, skeleton, cap, floor)
+                } else {
+                    self.edge_bin_distance(p, skeleton, cap)
+                };
+                let d = graph.unwrap_or_else(|| {
+                    stochastic::voronoi_distance(
+                        p,
+                        self.phase,
+                        self.cell,
+                        skeleton,
+                        self.jitter,
+                        self.seed,
+                        &self.seed_sites,
+                        cap,
+                        floor,
+                        self.seed_table.as_ref(),
+                    )
+                });
                 half - d
             }
         };
         solid / stretch
+    }
+
+    /// An open foam's distance from its binned edges, when it has them and
+    /// they can answer for `p`.
+    fn edge_bin_distance(
+        &self,
+        p: Vector3,
+        skeleton: stochastic::Skeleton,
+        cap: f32,
+    ) -> Option<f32> {
+        if skeleton != stochastic::Skeleton::Edges || self.conform.is_some() {
+            return None;
+        }
+        let rel = [
+            (p.x - self.phase.x) as f64,
+            (p.y - self.phase.y) as f64,
+            (p.z - self.phase.z) as f64,
+        ];
+        self.edge_bins.as_ref()?.distance(rel, cap as f64)
+    }
+
+    /// A Voronoi distance from the [`stochastic::SeedGraph`], when there is
+    /// one and it can answer for `p` (a point already in cell space).
+    fn graph_distance(
+        &self,
+        p: Vector3,
+        skeleton: stochastic::Skeleton,
+        cap: f32,
+        floor: f32,
+    ) -> Option<f32> {
+        if self.conform.is_some() {
+            return None;
+        }
+        let graph = self.seed_graph.as_ref()?;
+        let rel = [
+            (p.x - self.phase.x) as f64,
+            (p.y - self.phase.y) as f64,
+            (p.z - self.phase.z) as f64,
+        ];
+        graph.distance(rel, skeleton, cap as f64, floor as f64)
     }
 
     /// The spinodal field, divided by its own gradient so that the thickness
@@ -1614,12 +2110,25 @@ impl Sampler<'_> {
     /// need a step size small enough to track the surface but large enough to
     /// survive `f32` — a trade with no good answer at either end of the
     /// resolution range.
-    fn tpms_distance(&self, t: Tpms, p: Vector3) -> f32 {
-        let (value, g) = t.value_and_gradient(
-            (p.x - self.phase.x) * self.omega.x,
-            (p.y - self.phase.y) * self.omega.y,
-            (p.z - self.phase.z) * self.omega.z,
-        );
+    /// The argument `tpms_distance` takes the sines and cosines of, per axis.
+    fn tpms_angle(&self, axis: usize, coordinate: f32) -> f32 {
+        match axis {
+            0 => (coordinate - self.phase.x) * self.omega.x,
+            1 => (coordinate - self.phase.y) * self.omega.y,
+            _ => (coordinate - self.phase.z) * self.omega.z,
+        }
+    }
+
+    fn tpms_trig(&self, p: Vector3) -> [(f32, f32); 3] {
+        [
+            self.tpms_angle(0, p.x).sin_cos(),
+            self.tpms_angle(1, p.y).sin_cos(),
+            self.tpms_angle(2, p.z).sin_cos(),
+        ]
+    }
+
+    fn tpms_distance_trig(&self, t: Tpms, trig: [(f32, f32); 3]) -> f32 {
+        let (value, g) = t.value_and_gradient_trig(trig);
         // The gradient comes back per radian; the cell says how many radians a
         // unit of length is worth on each axis.
         let gradient = Vector3::new(
@@ -1709,6 +2218,217 @@ mod tests {
         }
         let open = edges.values().filter(|&&v| v != 0).count();
         assert_eq!(open, 0, "{what}: {open} unpaired edges");
+    }
+
+    /// The grid a build samples, sampled one point at a time through the
+    /// sampler's own field — no tables, no binning.
+    fn build_per_point(lattice: &Lattice) -> BufferGeometry {
+        let (([nx, ny, nz], origin, step), sampler) = lattice.grid();
+        let mut values = Vec::with_capacity(nx * ny * nz);
+        for k in 0..nz {
+            for j in 0..ny {
+                for i in 0..nx {
+                    values.push(sampler.value(Vector3::new(
+                        origin.x + i as f32 * step.x,
+                        origin.y + j as f32 * step.y,
+                        origin.z + k as f32 * step.z,
+                    )));
+                }
+            }
+        }
+        mesher::IsoGrid { dims: [nx, ny, nz], origin, step, values }.triangulate()
+    }
+
+    #[test]
+    fn grid_tables_reproduce_per_point_sampling() {
+        let lattice = |kind| {
+            Lattice::new(kind)
+                .size(Vector3::new(6.0, 5.0, 4.0))
+                .cells([3, 2, 2])
+                .thickness(0.4)
+                .resolution(10)
+        };
+        // TPMS and strut tables are exact: the same bits, so the same mesh.
+        let exact = Tpms::ALL
+            .into_iter()
+            .map(LatticeKind::Tpms)
+            .chain(Strut::ALL.into_iter().map(LatticeKind::Strut))
+            .chain(Cuboct::ALL.into_iter().map(LatticeKind::Cuboct));
+        for kind in exact {
+            let l = lattice(kind);
+            let (fast, slow) = (l.build(), build_per_point(&l));
+            assert_eq!(fast.index, slow.index, "{kind:?}");
+            assert_eq!(
+                fast.get_attribute("position").unwrap().array,
+                slow.get_attribute("position").unwrap().array,
+                "{kind:?}"
+            );
+        }
+        // Spinodal tables round differently — more accurately, in f64 — so
+        // the mesh is the same one, a hair's breadth away.
+        for s in Stochastic::ALL.into_iter().filter(|s| s.is_field()) {
+            let l = lattice(LatticeKind::Stochastic(s));
+            let (fast, slow) = (l.build(), build_per_point(&l));
+            assert_eq!(fast.index, slow.index, "{}", s.name());
+            let step = l.grid().0 .2.x;
+            let moved = fast.get_attribute("position").unwrap().array.iter()
+                .zip(&slow.get_attribute("position").unwrap().array)
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0f32, f32::max);
+            assert!(moved < 1e-3 * step, "{}: moved {moved}", s.name());
+        }
+    }
+
+    #[test]
+    fn drop_specks_takes_debris_and_nothing_else() {
+        // A spinodal at a coarse step leaves a speck or two in the void.
+        let lattice = |drop| {
+            Lattice::new(LatticeKind::Stochastic(Stochastic::Spinodal))
+                .size(Vector3::new(20.0, 20.0, 20.0))
+                .cells([4, 4, 4])
+                .seed(3)
+                .thickness(1.2)
+                .resolution(12)
+                .drop_specks(drop)
+        };
+        let (all, clean) = (lattice(false).build(), lattice(true).build());
+        let (before, after) = (
+            crate::utils::mesh_check::split_pieces(&all),
+            crate::utils::mesh_check::split_pieces(&clean),
+        );
+        assert!(after.len() < before.len(), "{} -> {}", before.len(), after.len());
+        assert!(crate::utils::mesh_check::edge_report(&clean).is_closed());
+        // The structure itself is untouched.
+        assert!((before[0].volume - after[0].volume).abs() < 1e-3 * before[0].volume);
+        // A periodic lattice has none, and is returned as built.
+        let gyroid = |drop| {
+            Lattice::new(LatticeKind::Tpms(Tpms::Gyroid)).resolution(8).drop_specks(drop).build()
+        };
+        assert_eq!(gyroid(true).index, gyroid(false).index);
+    }
+
+    #[test]
+    fn every_seed_layout_builds_watertight_foams() {
+        for layout in SeedLayout::ALL {
+            for kind in [Stochastic::Voronoi, Stochastic::VoronoiWall] {
+                let lattice = Lattice::new(LatticeKind::Stochastic(kind))
+                    .size(Vector3::new(4.0, 4.0, 4.0))
+                    .cells([2, 2, 2])
+                    .seed_layout(layout)
+                    .resolution(14)
+                    .fit_relative_density(0.25);
+                let what = format!("{} {}", layout.name(), kind.name());
+                let density = lattice.relative_density();
+                assert!((density - 0.25).abs() < 0.02, "{what}: {density}");
+                assert_watertight(&lattice.build(), &what);
+            }
+        }
+    }
+
+    #[test]
+    fn grain_fields_build_watertight_at_a_fitted_density() {
+        let grains = [
+            Stochastic::GaussianField,
+            Stochastic::Hyperuniform,
+            Stochastic::ReactionDiffusion,
+        ];
+        for kind in grains {
+            for style in [LatticeStyle::Solid, LatticeStyle::Sheet] {
+                let lattice = Lattice::new(LatticeKind::Stochastic(kind))
+                    .size(Vector3::new(6.0, 6.0, 6.0))
+                    .cells([3, 3, 3])
+                    .style(style)
+                    .seed(2)
+                    .resolution(14)
+                    .fit_relative_density(0.3);
+                let what = format!("{} {style:?}", kind.name());
+                let density = lattice.relative_density();
+                assert!((density - 0.3).abs() < 0.02, "{what}: {density}");
+                assert_watertight(&lattice.build(), &what);
+            }
+        }
+    }
+
+    #[test]
+    fn a_wetter_foam_holds_more_liquid() {
+        let liquid = |border: f32| {
+            Lattice::new(LatticeKind::Stochastic(Stochastic::VoronoiWet))
+                .size(Vector3::new(4.0, 4.0, 4.0))
+                .cells([2, 2, 2])
+                .thickness(0.04)
+                .plateau_border(border)
+                .resolution(20)
+                .relative_density()
+        };
+        let (dry, wet, wetter) = (liquid(0.1), liquid(0.25), liquid(0.45));
+        assert!(dry < wet && wet < wetter, "{dry} {wet} {wetter}");
+        for layout in [SeedLayout::Random, SeedLayout::Kelvin] {
+            let lattice = Lattice::new(LatticeKind::Stochastic(Stochastic::VoronoiWet))
+                .size(Vector3::new(4.0, 4.0, 4.0))
+                .cells([2, 2, 2])
+                .seed_layout(layout)
+                .plateau_border(0.3)
+                .resolution(16)
+                .fit_relative_density(0.15);
+            let what = format!("wet {}", layout.name());
+            let density = lattice.relative_density();
+            assert!((density - 0.15).abs() < 0.02, "{what}: {density}");
+            assert_watertight(&lattice.build(), &what);
+        }
+    }
+
+    #[test]
+    fn the_seed_graph_builds_the_same_foam_as_the_search() {
+        // The graph only changes how a cell is found, never which: with it
+        // and without, the same triangles in the same places.
+        let layouts = [
+            SeedLayout::Random,
+            SeedLayout::Kelvin,
+            SeedLayout::Relaxed,
+            SeedLayout::Bimodal,
+        ];
+        for layout in layouts {
+            for kind in [Stochastic::Voronoi, Stochastic::VoronoiWall, Stochastic::VoronoiWet] {
+                // The search has no weights for a wet foam to compare with.
+                if kind == Stochastic::VoronoiWet && layout == SeedLayout::Bimodal {
+                    continue;
+                }
+                // Films a few samples thick, so there is a surface to compare.
+                let thickness = if kind == Stochastic::VoronoiWet { 0.3 } else { 0.2 };
+                let l = Lattice::new(LatticeKind::Stochastic(kind))
+                    .size(Vector3::new(4.0, 4.0, 4.0))
+                    .cells([2, 2, 2])
+                    .seed_layout(layout)
+                    .plateau_border(0.25)
+                    .thickness(thickness)
+                    .resolution(12);
+                let graph = build_per_point(&l);
+                let (([nx, ny, nz], origin, step), mut sampler) = l.grid();
+                sampler.seed_graph = None;
+                sampler.edge_bins = None;
+                let mut values = Vec::with_capacity(nx * ny * nz);
+                for k in 0..nz {
+                    for j in 0..ny {
+                        for i in 0..nx {
+                            values.push(sampler.value(Vector3::new(
+                                origin.x + i as f32 * step.x,
+                                origin.y + j as f32 * step.y,
+                                origin.z + k as f32 * step.z,
+                            )));
+                        }
+                    }
+                }
+                let grid = mesher::IsoGrid { dims: [nx, ny, nz], origin, step, values };
+                let search = grid.triangulate();
+                let what = format!("{} {}", layout.name(), kind.name());
+                assert_eq!(graph.index, search.index, "{what}");
+                let moved = graph.get_attribute("position").unwrap().array.iter()
+                    .zip(&search.get_attribute("position").unwrap().array)
+                    .map(|(a, b)| (a - b).abs())
+                    .fold(0.0f32, f32::max);
+                assert!(moved < 1e-5 * step.x, "{what}: moved {moved}");
+            }
+        }
     }
 
     #[test]

@@ -71,6 +71,14 @@ pub enum LabelAnchor {
     Above,
     /// Below the point.
     Below,
+    /// Below and to the right: the point at the text's top left.
+    BelowRight,
+    /// Below and to the left: the point at the text's top right.
+    BelowLeft,
+    /// Above and to the right: the point at the text's bottom left.
+    AboveRight,
+    /// Above and to the left: the point at the text's bottom right.
+    AboveLeft,
 }
 
 /// One label.
@@ -85,6 +93,9 @@ pub struct TextLabel {
     pub anchor: LabelAnchor,
     /// Extra offset in pixels, x right and y down.
     pub offset: [f32; 2],
+    /// Extra offset in ems of [`TextLabels::font_size`], x right and y down
+    /// (MapLibre's `text-offset`), added to [`offset`](Self::offset).
+    pub offset_em: [f32; 2],
     /// Set the text along this line instead of at `position` — a road's or
     /// a river's name. Each glyph follows the line's direction on screen,
     /// centred on its length, reading left to right whichever way the line
@@ -93,6 +104,28 @@ pub struct TextLabel {
     pub path: Option<Vec<[f64; 3]>>,
     /// An icon to the left of the text. Ignored along a path.
     pub icon: Option<LabelIcon>,
+    /// A box about the label's point, `[x0, y0, x1, y1]` in pixels (times
+    /// [`TextLabels::reserve_scale`]), y down, kept clear together with the
+    /// text: another layer's icon that belongs to this label, as a MapLibre
+    /// symbol's icon and text place as one. With no text, the box alone
+    /// places. Ignored along a path.
+    pub reserve: Option<[f32; 4]>,
+    /// A box behind the text (deck.gl's `TextLayer` `background`). Ignored
+    /// along a path.
+    pub background: Option<LabelBackground>,
+}
+
+/// A label's background: a box about its text, padded, with an optional
+/// border.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LabelBackground {
+    /// sRGB, straight alpha.
+    pub color: [u8; 4],
+    /// Pixels between the text and the box: left, top, right, bottom.
+    pub padding: [f32; 4],
+    pub border_color: [u8; 4],
+    /// Pixels, inside the box's edge; 0 for none.
+    pub border_width: f32,
 }
 
 impl TextLabel {
@@ -104,8 +137,11 @@ impl TextLabel {
             priority: 0.0,
             anchor: LabelAnchor::Center,
             offset: [0.0, 0.0],
+            offset_em: [0.0, 0.0],
             path: None,
             icon: None,
+            reserve: None,
+            background: None,
         }
     }
 
@@ -138,7 +174,7 @@ type GlyphSlot = (u32, u32, u32, u32, i32, i32);
 /// What collision was last run for: view-projection, viewport, origin, and
 /// the settings that size or choose boxes (padding, collision, stickiness,
 /// max bend), as bits.
-type ViewKey = ([f32; 16], (u32, u32), [f64; 3], [u32; 4]);
+type ViewKey = ([f32; 16], (u32, u32), [f64; 3], [u32; 5]);
 
 /// One glyph or icon of a label's layout: rect, uv, colour, halo scale.
 type Quad = ([f32; 4], [f32; 4], [u8; 4], f32);
@@ -148,6 +184,8 @@ enum GlyphKey {
     /// A character from font `n` of the chain.
     Char(u8, char),
     Icon(String),
+    /// A block of solid field, for labels' backgrounds.
+    Solid,
 }
 
 /// Glyphs packed into one RGBA texture as distance fields: three channels
@@ -216,8 +254,10 @@ impl Atlas {
         }
         let spread = self.spread;
         let field = if self.msdf {
+            // A synthetic bold grows the field, as it grows a raster.
+            let grow = font.synthetic_outset(self.raster);
             font.outline(c, self.raster)
-                .and_then(|o| super::msdf::msdf(&o, spread))
+                .and_then(|o| super::msdf::msdf(&o, spread, grow))
         } else {
             None
         };
@@ -396,6 +436,9 @@ pub struct TextLabels {
     /// Outline around the text, in pixels, for legibility over busy maps.
     /// At most `font_size / 6`.
     pub halo_width: f32,
+    /// Distance between the baselines of a label's lines (`\n` in its
+    /// text), in ems. 1.2 by default, as MapLibre's `text-line-height`.
+    pub line_height: f32,
     pub halo_color: [u8; 4],
     /// Cull overlapping labels.
     pub collision: bool,
@@ -405,6 +448,12 @@ pub struct TextLabels {
     /// icons of every layer that shares it keep clear of each other. Start
     /// each frame with [`CollisionIndex::begin_frame`](super::CollisionIndex::begin_frame).
     pub collision_index: Option<super::SharedCollision>,
+    /// Scales every label's [`reserve`](TextLabel::reserve) box: the
+    /// device pixel ratio, for boxes given in CSS pixels.
+    pub reserve_scale: f32,
+    /// After each placement, which labels showed: for a layer drawing their
+    /// icons to follow.
+    pub publish_visibility: Option<super::SharedVisibility>,
     /// Added to the priority of a label that showed last time it was
     /// placed, so a view that moves a little keeps its labels instead of
     /// swapping near-equals back and forth. 0 places on priority alone.
@@ -412,6 +461,13 @@ pub struct TextLabels {
     /// The sharpest turn, in radians, a path label may take between two
     /// neighbouring glyphs.
     pub max_bend: f32,
+    /// Wrap each line of a label (not along a path) to this many pixels:
+    /// at spaces, or anywhere with [`break_anywhere`](Self::break_anywhere)
+    /// (deck.gl's `maxWidth` and `wordBreak`).
+    pub max_width: Option<f32>,
+    /// Break wrapped lines between any two characters, not only at spaces
+    /// (deck.gl's `wordBreak: 'break-all'`).
+    pub break_anywhere: bool,
     /// Per label: its glyphs' places along the line, for path labels, and
     /// the text's length in pixels.
     path_layout: Vec<Option<(Vec<PathGlyph>, f32)>>,
@@ -423,9 +479,14 @@ pub struct TextLabels {
     /// Per glyph row: its field's texel size relative to a text glyph's, so
     /// the halo is as wide around an icon as around a letter.
     halo_scale: Vec<f32>,
+    /// Whether every glyph row is there twice: halos first, then fills, so
+    /// one glyph's halo never covers another's ink (joined scripts overlap).
+    halo_copies: bool,
     layout_dirty: bool,
     /// The `font_size` the layout was made at.
     laid_out_size: f32,
+    laid_out_line_height: f32,
+    laid_out_wrap: (Option<f32>, bool),
     visible: Vec<bool>,
     last_view: Option<ViewKey>,
     /// The shared index's generation this layer last placed into.
@@ -448,6 +509,19 @@ impl std::fmt::Debug for TextLabels {
     }
 }
 
+/// A layer dropped while the view holds still (a tile replaced) would leave
+/// its boxes blocking whatever replaces it: take them out, and have the next
+/// frame place everything again.
+impl Drop for TextLabels {
+    fn drop(&mut self) {
+        if let (Some(index), true) = (&self.collision_index, self.placed_generation.is_some()) {
+            let mut index = index.lock().unwrap_or_else(|e| e.into_inner());
+            index.remove_owner(self.owner);
+            index.invalidate();
+        }
+    }
+}
+
 impl TextLabels {
     pub fn new(font: CaptionFont) -> Self {
         let mut common = MarkCommon::default();
@@ -460,8 +534,10 @@ impl TextLabels {
             glyph_field: GlyphField::Sdf,
             icons: HashMap::new(),
             halo_scale: Vec::new(),
+            halo_copies: false,
             font_size: 14.0,
             halo_width: 0.0,
+            line_height: 1.2,
             halo_color: [0, 0, 0, 200],
             collision: true,
             padding: 2.0,
@@ -470,13 +546,19 @@ impl TextLabels {
             layout: Vec::new(),
             layout_dirty: true,
             laid_out_size: 0.0,
+            laid_out_line_height: 0.0,
+            laid_out_wrap: (None, false),
             visible: Vec::new(),
             last_view: None,
             placed_generation: None,
             owner: super::collision::next_owner(),
             collision_index: None,
             stickiness: 0.0,
+            reserve_scale: 1.0,
+            publish_visibility: None,
             max_bend: 0.8,
+            max_width: None,
+            break_anywhere: false,
             path_layout: Vec::new(),
             anchors: Column::new(ColumnFormat::PositionF64),
             rects: Column::float(4),
@@ -528,6 +610,50 @@ impl TextLabels {
         self.fonts.iter().position(|f| f.has_glyph(c)).unwrap_or(0) as u8
     }
 
+    /// `text`'s lines wrapped to `max` raster units: at spaces (a word
+    /// longer than a line runs over), or between any two characters.
+    fn wrap(&mut self, text: &str, max: f32, raster: f32) -> String {
+        let size = self.font_size.max(1.0);
+        let mut out: Vec<String> = Vec::new();
+        for line in text.split('\n') {
+            let mut current = String::new();
+            let mut width = 0.0f32;
+            let advance = |this: &mut Self, s: &str| -> f32 {
+                s.chars()
+                    .map(|c| {
+                        let f = this.font_for(c);
+                        // At the size drawn: see `relayout`.
+                        this.fonts[f as usize].advance(c, size) * raster / size
+                    })
+                    .sum()
+            };
+            let units: Vec<String> = if self.break_anywhere {
+                line.chars().map(String::from).collect()
+            } else {
+                // Words with the space before each but the first.
+                let mut u = Vec::new();
+                for (i, w) in line.split(' ').enumerate() {
+                    u.push(if i == 0 { w.to_string() } else { format!(" {w}") });
+                }
+                u
+            };
+            for unit in units {
+                let w = advance(self, &unit);
+                if !current.is_empty() && width + w > max {
+                    out.push(std::mem::take(&mut current));
+                    let unit = unit.trim_start().to_string();
+                    width = advance(self, &unit);
+                    current = unit;
+                } else {
+                    width += w;
+                    current.push_str(&unit);
+                }
+            }
+            out.push(current);
+        }
+        out.join("\n")
+    }
+
     /// Which labels survived collision in the last frame drawn.
     pub fn visible(&self) -> &[bool] {
         &self.visible
@@ -539,6 +665,20 @@ impl TextLabels {
         let metrics = self.fonts[0].metrics(raster);
         let (ascent, descent) = (metrics.ascent * s, metrics.descent * s);
         // Pass 1: make sure every glyph is in the atlas, so uvs are final.
+        if self.labels.iter().any(|l| l.background.is_some()) && !self.atlas.glyphs.contains_key(&GlyphKey::Solid) {
+            let (x, y) = self.atlas.pack(8, 8, &[[255u8; 4]; 64]);
+            self.atlas.glyphs.insert(GlyphKey::Solid, Some((x, y, 8, 8, 0, 0)));
+        }
+        // Each label's lines, wrapped to `max_width`.
+        let wrapped: Vec<String> = (0..self.labels.len())
+            .map(|li| {
+                let text = self.labels[li].text.clone();
+                match self.max_width.filter(|_| self.labels[li].path.is_none()) {
+                    Some(w) => self.wrap(&text, w / s, raster),
+                    None => text,
+                }
+            })
+            .collect();
         for li in 0..self.labels.len() {
             let chars: Vec<char> = self.labels[li].text.chars().collect();
             for c in chars {
@@ -568,10 +708,20 @@ impl TextLabels {
         self.layout.clear();
         self.path_layout.clear();
         self.halo_scale.clear();
-        for l in &self.labels {
+        let lh = self.line_height * self.font_size;
+        let solid = self.atlas.glyphs.get(&GlyphKey::Solid).copied().flatten();
+        for (l, wrapped) in self.labels.iter().zip(&wrapped) {
             let start = anchors.len();
             let mut quads: Vec<Quad> = Vec::new();
             let mut pen = 0.0f32;
+            // Lines one under the other; a label along a path keeps to one.
+            let text: std::borrow::Cow<str> = if l.path.is_some() && wrapped.contains('\n') {
+                wrapped.replace('\n', " ").into()
+            } else {
+                wrapped.as_str().into()
+            };
+            let lines: Vec<&str> = text.split('\n').collect();
+            let extra = (lines.len() - 1) as f32 * lh;
             // The icon first, its middle on the text's.
             let icon = l
                 .icon
@@ -584,7 +734,7 @@ impl TextLabels {
                 });
             if let Some((icon, iw, ih, (x, y, w, h, ox, oy))) = icon {
                 let k = icon.size / ih.max(1) as f32;
-                let mid = (descent - ascent) * 0.5;
+                let mid = (descent - ascent + extra) * 0.5;
                 quads.push((
                     [
                         ox as f32 * k,
@@ -598,48 +748,101 @@ impl TextLabels {
                 ));
                 pen = (iw as f32 * k + icon.gap) / s;
             }
-            let mut prev: Option<(u8, char)> = None;
-            for c in l.text.chars() {
-                let f = self.font_for(c);
-                let font = &mut self.fonts[f as usize];
-                if let Some((pf, p)) = prev {
-                    if pf == f {
-                        pen += font.kerning(p, c, raster);
+            let text_start = pen;
+            // Per line: its first quad and its width in pixels.
+            let mut line_runs: Vec<(usize, f32)> = Vec::with_capacity(lines.len());
+            for (li, line) in lines.iter().enumerate() {
+                pen = text_start;
+                let first = quads.len();
+                let mut prev: Option<(u8, char)> = None;
+                for c in line.chars() {
+                    let f = self.font_for(c);
+                    let font = &mut self.fonts[f as usize];
+                    // Spacing is the size drawn's, not the atlas's: a face's
+                    // tracking and optical size depend on the size, and SF
+                    // set with its 32-pixel spacing at 14 is visibly tight.
+                    // In raster units, as the pen is.
+                    let size = self.font_size.max(1.0);
+                    if let Some((pf, p)) = prev {
+                        if pf == f {
+                            pen += font.kerning(p, c, size) * raster / size;
+                        }
                     }
+                    if let Some(Some((x, y, w, h, ox, oy))) =
+                        self.atlas.glyphs.get(&GlyphKey::Char(f, c)).copied()
+                    {
+                        quads.push((
+                            [
+                                (pen + ox as f32) * s,
+                                oy as f32 * s + li as f32 * lh,
+                                w as f32 * s,
+                                h as f32 * s,
+                            ],
+                            uv_of(x, y, w, h),
+                            l.color,
+                            1.0,
+                        ));
+                    }
+                    pen += font.advance(c, size) * raster / size;
+                    prev = Some((f, c));
                 }
-                if let Some(Some((x, y, w, h, ox, oy))) =
-                    self.atlas.glyphs.get(&GlyphKey::Char(f, c)).copied()
-                {
-                    quads.push((
-                        [
-                            (pen + ox as f32) * s,
-                            oy as f32 * s,
-                            w as f32 * s,
-                            h as f32 * s,
-                        ],
-                        uv_of(x, y, w, h),
-                        l.color,
-                        1.0,
-                    ));
-                }
-                pen += font.advance(c, raster);
-                prev = Some((f, c));
+                line_runs.push((first, (pen - text_start) * s));
             }
-            let width = pen * s;
-            let (dx, dy) = match l.anchor {
-                LabelAnchor::Center => (-width * 0.5, (ascent - descent) * 0.5),
-                LabelAnchor::Right => (0.0, (ascent - descent) * 0.5),
-                LabelAnchor::Left => (-width, (ascent - descent) * 0.5),
-                LabelAnchor::Above => (-width * 0.5, -descent),
-                LabelAnchor::Below => (-width * 0.5, ascent),
+            // Shorter lines lined up with the side the text grows from.
+            let text_width = line_runs.iter().map(|r| r.1).fold(0.0f32, f32::max);
+            let justify = match l.anchor {
+                LabelAnchor::Right | LabelAnchor::BelowRight | LabelAnchor::AboveRight => 0.0,
+                LabelAnchor::Left | LabelAnchor::BelowLeft | LabelAnchor::AboveLeft => 1.0,
+                _ => 0.5,
             };
-            let (dx, dy) = (dx + l.offset[0], dy + l.offset[1]);
+            for (k, &(first, w)) in line_runs.iter().enumerate() {
+                let end = line_runs.get(k + 1).map_or(quads.len(), |r| r.0);
+                let shift = (text_width - w) * justify;
+                for q in &mut quads[first..end] {
+                    q.0[0] += shift;
+                }
+            }
+            let width = text_start * s + text_width;
+            let middle = (ascent - descent - extra) * 0.5;
+            let (dx, dy) = match l.anchor {
+                LabelAnchor::Center => (-width * 0.5, middle),
+                LabelAnchor::Right => (0.0, middle),
+                LabelAnchor::Left => (-width, middle),
+                LabelAnchor::Above => (-width * 0.5, -descent - extra),
+                LabelAnchor::Below => (-width * 0.5, ascent),
+                LabelAnchor::BelowRight => (0.0, ascent),
+                LabelAnchor::BelowLeft => (-width, ascent),
+                LabelAnchor::AboveRight => (0.0, -descent - extra),
+                LabelAnchor::AboveLeft => (-width, -descent - extra),
+            };
+            let em = self.font_size;
+            let (dx, dy) = (dx + l.offset[0] + l.offset_em[0] * em, dy + l.offset[1] + l.offset_em[1] * em);
             // The box: the text's line, and the icon where it is taller.
-            let (mut top, mut bottom) = (dy - ascent, dy + descent);
+            let (mut top, mut bottom) = (dy - ascent, dy + extra + descent);
             if let Some((icon, _, _, _)) = icon {
-                let mid = dy + (descent - ascent) * 0.5;
+                let mid = dy + (descent - ascent + extra) * 0.5;
                 top = top.min(mid - icon.size * 0.5);
                 bottom = bottom.max(mid + icon.size * 0.5);
+            }
+            let (mut left, mut right) = (dx, dx + width);
+            // A background: quads ahead of the text's (so under it), the
+            // border then the box, in the solid block's middle — marked by a
+            // halo scale of 0, so they have no halo. They count in the box.
+            if let (Some(bg), Some((x, y, _, _, _, _)), None) = (l.background, solid, &l.path) {
+                let [pl, pt, pr, pb] = bg.padding;
+                let outer = [dx - pl, top - pt, width + pl + pr, bottom - top + pt + pb];
+                let uv = uv_of(x + 3, y + 3, 2, 2);
+                let mut boxes: Vec<Quad> = Vec::new();
+                let bw = bg.border_width.max(0.0);
+                if bw > 0.0 && bg.border_color[3] > 0 {
+                    boxes.push(([outer[0] - dx, outer[1] - dy, outer[2], outer[3]], uv, bg.border_color, 0.0));
+                }
+                let inner = [outer[0] + bw, outer[1] + bw, (outer[2] - 2.0 * bw).max(0.0), (outer[3] - 2.0 * bw).max(0.0)];
+                boxes.push(([inner[0] - dx, inner[1] - dy, inner[2], inner[3]], uv, bg.color, 0.0));
+                boxes.extend(quads);
+                quads = boxes;
+                (left, right) = (outer[0], outer[0] + outer[2]);
+                (top, bottom) = (outer[1], outer[1] + outer[3]);
             }
             if l.path.is_some() {
                 // Each glyph about its own centre on the baseline, the text
@@ -671,7 +874,14 @@ impl TextLabels {
                 self.path_layout.push(None);
             }
             self.layout
-                .push((start, anchors.len(), [dx, top, dx + width, bottom]));
+                .push((start, anchors.len(), [left, top, right, bottom]));
+        }
+        self.halo_copies = self.halo_width > 0.0;
+        if self.halo_copies {
+            anchors.extend_from_within(..);
+            rects.extend_from_within(..);
+            uvs.extend_from_within(..);
+            colors.extend_from_within(..);
         }
         self.anchors.set_positions(&anchors);
         self.rects.set_f32(&rects);
@@ -685,17 +895,32 @@ impl TextLabels {
         self.last_view = None;
         self.layout_dirty = false;
         self.laid_out_size = self.font_size;
+        self.laid_out_line_height = self.line_height;
+        self.laid_out_wrap = (self.max_width, self.break_anywhere);
     }
 
     /// Decide which labels show in `view`. Public so placement can be tested
     /// and inspected without a GPU.
     pub fn place(&mut self, view: &MarkView) {
-        if self.atlas.raster != self.raster_size.max(4.0)
+        // The atlas holds glyphs at the optical size they are shown at,
+        // rasterized at its own: a face with an `opsz` axis re-rasterizes
+        // when the type size changes.
+        let mut optical = false;
+        for f in &mut self.fonts {
+            optical |= f.set_optical_size(Some(self.font_size.max(1.0)));
+        }
+        if optical
+            || self.atlas.raster != self.raster_size.max(4.0)
             || self.atlas.msdf != (self.glyph_field == GlyphField::Msdf)
         {
             self.reset_atlas();
         }
-        if self.layout_dirty || self.font_size != self.laid_out_size {
+        if self.layout_dirty
+            || self.font_size != self.laid_out_size
+            || self.line_height != self.laid_out_line_height
+            || (self.max_width, self.break_anywhere) != self.laid_out_wrap
+            || (self.halo_width > 0.0) != self.halo_copies
+        {
             self.relayout();
             // New labels: whatever was placed for the old ones is stale.
             self.last_view = None;
@@ -705,6 +930,7 @@ impl TextLabels {
             u32::from(self.collision),
             self.stickiness.to_bits(),
             self.max_bend.to_bits(),
+            self.reserve_scale.to_bits(),
         ];
         let key = (
             view.view_proj,
@@ -804,7 +1030,12 @@ impl TextLabels {
             let Some(p) = view.project(self.labels[i].position) else {
                 continue;
             };
-            let b = self.layout[i].2;
+            let (start, end, mut b) = self.layout[i];
+            if let Some(q) = self.labels[i].reserve {
+                let q = q.map(|v| v * self.reserve_scale);
+                // No text: the reserved box alone.
+                b = if start == end { q } else { [b[0].min(q[0]), b[1].min(q[1]), b[2].max(q[2]), b[3].max(q[3])] };
+            }
             let r = [
                 p[0] + b[0] - pad,
                 p[1] + b[1] - pad,
@@ -820,17 +1051,31 @@ impl TextLabels {
             self.visible[i] = true;
         }
         drop(shared_guard);
+        if let Some(v) = &self.publish_visibility {
+            v.lock().unwrap().clone_from(&self.visible);
+        }
+        // With halo copies, rows `0..n` draw the halos, `n..2n` the fills.
+        let n = self.halo_scale.len();
+        let copies: &[(usize, f32)] = if self.halo_copies { &[(0, -1.0), (n, 1.0)] } else { &[(0, 1.0)] };
         for (row, w) in moved {
-            self.anchors.update_positions(row, &[w]);
+            for &(at, _) in copies {
+                self.anchors.update_positions(at + row, &[w]);
+            }
         }
         let mut states = vec![0.0f32; self.anchors.len() * 4];
         for (i, &(start, end, _)) in self.layout.iter().enumerate() {
             let v = if self.visible[i] { 1.0 } else { 0.0 };
-            for g in start..end {
-                states[g * 4] = v;
-                states[g * 4 + 1] = i as f32;
-                states[g * 4 + 2] = angles[g];
-                states[g * 4 + 3] = self.halo_scale.get(g).copied().unwrap_or(1.0);
+            for (g, &angle) in angles.iter().enumerate().take(end).skip(start) {
+                for &(at, sign) in copies {
+                    let r = (at + g) * 4;
+                    // A background quad (halo scale 0) has no halo copy.
+                    let boxed = self.halo_scale.get(g).is_some_and(|&h| h == 0.0);
+                    states[r] = if sign < 0.0 && boxed { 0.0 } else { v };
+                    states[r + 1] = i as f32;
+                    states[r + 2] = angle;
+                    // Negative: the halo copy.
+                    states[r + 3] = sign * self.halo_scale.get(g).copied().unwrap_or(1.0);
+                }
             }
         }
         self.states.set_f32(&states);
@@ -950,7 +1195,10 @@ impl Mark for TextLabels {
                 if self.atlas.msdf { 1.0 } else { 0.0 },
                 0.0,
             ],
-            [0.0; 4],
+            // x: the atlas texels one field unit spans — the field runs from
+            // 1 to 0 over `spread` texels either side of the outline — which
+            // the shader turns into screen pixels for a one-pixel edge.
+            [2.0 * self.atlas.spread as f32, 0.0, 0.0, 0.0],
             super::points::srgb_u8_to_linear(self.halo_color),
         )
     }
@@ -1065,6 +1313,10 @@ mod tests {
             tone_mapping: (crate::ToneMapping::None, 1.0),
             reversed_z: false,
             focal_distance: 0.0,
+            clip_epsilon: 0.001,
+            subpixel_snap: None,
+            flip_y: false,
+            scene_lights: None,
         }
     }
 

@@ -7,8 +7,219 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.8] — 2026-10-24
+
 ### Added
 
+- **Signed distance fields** (`threers::sdf`): exact 2D primitives (circle,
+  box, rounded box, segment, capsule, tapered capsule, polygon) and 3D ones
+  (sphere, box, rounded box, capsule, tapered capsule, torus, cylinder, plane),
+  the hard and smooth union / intersection / subtraction, `round` and `onion`,
+  and `smooth_union_blend`, which also returns how much of the result is each
+  side so a colour or a thickness can blend through the same fillet as the
+  surface. Any `Fn(Vector2) -> f32` or `Fn(Vector3) -> f32` is a field, with
+  gradients, normals, sphere tracing (`Sdf3::raymarch`) and meshing through
+  marching cubes (`Sdf3::to_geometry`). `sdf::WGSL` is the same library as
+  `sdf2_*` / `sdf3_*` / `sdf_*` WGSL functions to prepend to a
+  `ShaderMaterial` or a compute shader; `tests/sdf_gpu.rs` evaluates both
+  sides on an adapter and holds them to 1e-4.
+  `Overlay::distance_field` rasterises any such field with the current fill
+  and stroke, and the overlay's own shapes now come from `sdf::d2` instead of
+  private copies.
+
+- **Coverage for thin lines and diagonal edges** (`threers::sdf`,
+  `Overlay`): `sdf::coverage_stroke` box-filters a stroke against a pixel
+  from the distance to its centre line, so a line thinner than a pixel draws
+  at its own weight — a 0.4-pixel line peaks at 0.4 alpha and its ink sums
+  to 0.4 across it wherever it falls, where the edge ramp drew it at 0.9
+  over two pixels. `sdf::footprint` widens the ramp to a pixel's real width
+  across an edge (`√2` at 45°), which stops thin diagonals beading. The
+  overlay uses both for every line, polyline and outline, and adds
+  `stroke_field` and `stroke_field_with_width` for any centre line; the `fx`
+  surface (wgpu and Metal) carries each strand's radius through its smooth
+  unions and covers thin strands the same way, so strand tips now taper to
+  0.3 px instead of stopping at 0.55. WGSL as `sdf2_footprint`,
+  `sdf_coverage_edge`, `sdf_coverage_stroke`.
+  `SegmentMarks` take the same coverage across the line and around round
+  ends and disc joints, in place of deck.gl's `smoothstep` edge: thin paths
+  keep one weight as they pan instead of shimmering, and their edges are a
+  linear ramp over the pixel's footprint rather than deck.gl's curve, so
+  antialiased segments no longer match deck.gl pixel for pixel (aliased ones
+  still do). `LineBasicMaterial::line_width` capsules do the same, and a
+  transparent line thinner than a pixel is now drawn as one (opaque, it stays
+  a line primitive).
+
+- **Interactive effects** (`threers::fx`): glossy liquids that react to the
+  pointer, built from three parts that each take additions — a `Component`
+  (what an element is: `Button`, `Figure`), an `Effect` (what it wears:
+  `Venom`, `Gloss`) and a `Stage` that lays elements out, hit-tests the
+  pointer and raises `Enter`/`Leave`/`Press`/`Release`/`Click`, keeps one quad
+  per element in the scene and paints the overlay in layers with one shared
+  `Cursor`. `Venom` reaches for the pointer with strands of goo, grabs the
+  cartoon glove finger by finger and snaps back with spikes and droplets;
+  `Gloss` is the same material held still. Both draw a `Surface` — any
+  `Shape` (pill, rounded box, circle, star, polygon, SVG path) plus strands,
+  spikes, droplets and a mound, joined by smooth unions that carry a
+  thickness for the shading — in a `Look` (`LACQUER`, `CHROME`, `GOLD`,
+  `TOXIC`, or your own). `Outline` walks any shape's edge by arc length.
+  Guide: `docs/fx.md`; examples `venom_button` and `venom_gallery`, both with
+  a headless `--png` mode.
+  **On the Metal renderer** too: it runs no WGSL, so it recognises surface
+  materials and draws them with its own port (`src/metal/fx_surface.metal`),
+  blending on encoded values as the wgpu path does; `tests/fx_metal.rs`
+  renders one stage through both and they agree to 0.06 levels on average.
+
+- **`sketch::Frame::pointer_inside` and `Frame::cursor_visible`**: whether the
+  pointer is over the window (hover effects otherwise keep reacting to its last
+  position after it leaves), and a switch to hide the system cursor for a
+  sketch that draws its own.
+
+- **A joining face composites a run by maximum, not by union**
+  (`threers::loaders::overlap`): where two glyphs of a run put ink in the same
+  cell, the union `a + b - ab/255` is what two partial coverages of one pixel
+  come to — and for any script whose letters **join** it is wrong. The tail of
+  one Arabic letter and the head of the next are the *same* stroke drawn twice,
+  so a union darkens every joint, by 30 to 57 of 255 at the sizes measured. The
+  rasteriser now takes the maximum for a face whose file says its letters join,
+  and keeps the union for every other face: a Latin pair piled on top of itself
+  still unions, because its glyphs really do each cover part of a shared edge
+  pixel.
+  Core Graphics has both composites and picks one **per font**, which is read
+  rather than guessed: `CTFontDrawGlyphs` takes a glyph array and a position
+  array, so the reference can be asked for glyph A alone, glyph B alone and the
+  two together at the same pens, and the rule read off its own operands —
+  `SFNS` gives `255 - floor((255-A)(255-B)/255)` and `SFArabic` gives
+  `max(A, B)`. It is a maximum and not a geometric union: offsetting one copy
+  of a glyph *vertically* puts a sliver of each in one cell side by side, where
+  a union would be their sum, and the maximum still wins 663 of 663 cells.
+  The selector is `CoreText`'s
+  `EnumerateOverlappingGlyphs(CGContext*, TFont const&, …, void (CFRange, bool))`,
+  whose `bool` chooses between `draw_glyph_bitmaps` and
+  `draw_glyph_bitmap_run_with_compositing`, and this computes it from four
+  tables: a `MERG` matrix bit, a `meta`/`dlng` language in a set of 28, three
+  hard-coded PostScript names, an eight-range `cmap` test, and a `GPOS` `curs`
+  feature. Three of those could not have been guessed — the ranges are
+  **derived from the `cmap`** rather than read from `OS/2`, so Rockwell
+  composites because its `cmap` covers one Arabic codepoint (`U+060B`, the
+  Afghani sign) while Menlo *claims* the Arabic bit and has no Arabic at all;
+  the 28 languages are a different set from the 8 ranges; and **`curs` is not
+  unused on macOS** — an earlier note in this repository said cursive
+  attachment was unmeasurable because no font has it, and `Kannada MN` and
+  `Kannada Sangam MN` do, they are the only two fonts whose answer comes from
+  that term, and without it they are the only two the chain gets wrong. So
+  `curs` is implementable and testable here after all.
+  Ported from `rswift`'s `swiftui_font::Font::composites_run`, which is checked
+  against every font file on a macOS machine with the real path read off a
+  breakpoint rather than inferred from pixels — 239 of 239 — and whose pixel
+  guarantee for the identical rule is 0 differing cells of 9,365,885 against
+  Core Text over Arabic, Hebrew and mixed runs at 1x, 2x and 3x. The pixel half
+  cannot live here, for the same reason `tests/arabic_shaping.rs` gives: threers
+  has no Core Text binding and should not grow one. See `tests/glyph_overlap.rs`
+  and the unit tests in `src/loaders/overlap.rs`.
+
+- **PostScript outlines and font collections** (`threers::loaders`): `.otf`
+  files and the `CFF `/`CFF2` tables inside `.ttc` collections now load, where
+  before `TtfFont::parse` returned `UnsupportedFormat` for both. These are not
+  a fringe format — **60 of the 369 font files macOS ships** keep their
+  outlines in `CFF`, and they are the ones Asian and Indic text needs: every
+  Hiragino face, Apple SD Gothic Neo, Hiragino Sans GB and the whole Kohinoor
+  family. All of them ship as collections, so neither piece reaches them
+  alone. Hiragino Kaku Gothic W3 now loads 20,320 glyphs with outlines where
+  it loaded none.
+  A charstring is a little stack program rather than a point list, so the
+  operand count is part of the operator — `hvcurveto` draws as many curves as
+  it has arguments for and its last group may carry a fifth the others do not
+  — and a glyph is not self-contained: fragments live in global and local
+  subroutine arrays, biased by their own size, and on a CID-keyed font the
+  local array depends on which font DICT `FDSelect` assigns the glyph.
+  `CFF2` additionally blends each coordinate through its own variation store,
+  which is **inside the `CFF2` table** rather than in `GDEF`.
+  Ported from `rswift`'s `swiftui-font` and verified against it: reading the
+  wrong one of those details draws a different glyph rather than failing, so
+  `rswift`'s `swiftui-map/examples/cff_oracle` compares every curve of every
+  glyph, sampled at five parameters, against a reader that is pixel-exact
+  against `CTFontCreatePathForGlyph` — **2407 of 2407 glyphs over seven faces**
+  agree to 0.00017 font units, which is `f32` storage rather than a difference
+  in reading. It caught one real porting error: `CFF2`'s variation store wired
+  to `GDEF`'s, which drew nothing at all for every variable glyph and looked
+  like the format being unsupported. See `tests/cff_fonts.rs`.
+- **Arabic marks are positioned** (`threers::loaders::mark`): `GPOS` types 4, 5 and 6,
+  the `mark` and `mkmk` features. This is not only about combining characters, which is
+  the part that surprises: `SFArabic` shapes a letter into a skeleton **plus its dots as
+  separate mark glyphs**, so `كتاب` — four letters, nothing combining in the string at
+  all — has a mark in it, and without this the dot sat at its skeleton's origin instead
+  of 0.3857pt to the right of it. A dot the shaper produced has **no codepoint**, so
+  `GDEF`'s glyph class is the only thing that can identify it.
+  The painter now places in two passes, because a mark hangs off another glyph's pen and
+  in a right-to-left run its base comes *after* it on screen. Letter spacing skips a
+  mark — spacing is between letters, and charging a dot for a gap pushes the word apart —
+  and `measure` skips it the same way, which is what keeps a centred line centred.
+  `GPOS` and `GDEF`'s bytes are kept only when a font has mark lookups at all: `SF Pro`
+  has none and pays nothing, `SF Arabic` pays 75 kB. Resolving the anchors ahead of time
+  instead would mean tabulating every (mark, base) pair, the product of two coverages.
+  Ported from `rswift`'s `swiftui-font`, where the same reader took the pens from 7 of 13
+  right-to-left cases to 12 of 13 against `CTRunGetPositions`. `tests/arabic_shaping.rs`
+  checks the number as well as the property: the dot lands 0.3857pt from its base at
+  24pt, which is Core Text's own answer.
+  `SFArabic` has **no `curs`**, so cursive attachment is absent — its census is `kern` 2
+  pair, `mark` 5 mark-to-base and 2 mark-to-ligature, `mkmk` 2 mark-to-mark.
+- **Captions are shaped** (`threers::loaders::shape`): Arabic letters join. An Arabic
+  letter has up to four shapes and which is drawn depends on its neighbours, so a
+  pipeline that maps one codepoint to one glyph draws every letter in isolation —
+  readable to nobody. `GSUB` lookup types 1–7 including chaining contextual formats
+  1, 2 and 3, per-script feature selection, joining types generated from ICU, and a
+  generated script table that resolves a digit or a space to the script around it.
+  `CaptionFont` grew a glyph-id-keyed layer beside its character-keyed one — `gid`,
+  `advance_of`, `kerning_of`, `glyph_of`, `grown_glyph_of`, `shape_run` — and the
+  character-keyed calls now delegate through it, so behaviour is unchanged where
+  nothing shapes. The index means a glyph id for a TrueType or PostScript face and the
+  codepoint for the three character-keyed faces, which is what lets one layout path
+  serve all four: the built-in bitmap face reports the identity and nothing it can draw
+  joins.
+  Ported from `rswift`'s `swiftui-shape`, and checked against a **third**
+  implementation rather than against either: `scripts/shapecmp.py` runs every
+  non-AAT TrueType font on the machine through both this and `hb-shape`, and **178
+  fonts agree on all four texts, 0 differ**. That found a real `cmap` bug — the
+  `0xF000` symbol aliasing was gated on the subtable being `(3, 0)`, and
+  `Hoefler Text Ornaments` puts the same content in a `(0, 3)` table that the
+  preference order picks first, so every letter in it was unmapped. See
+  `tests/arabic_shaping.rs`, whose assertions need no oracle: they check that a
+  letter's glyph *changes* with its neighbours, which is false for any unshaped
+  pipeline and true for any correct one.
+- **Captions draw text, not codepoints** (`threers::captions::order`): between
+  a caption's string and a row of glyphs there are three transformations the
+  painter used to skip, and each one was visible. `"Noe\u{0308}l"` — an `e`
+  followed by a combining diaeresis — drew a floating accent *after* the
+  letter instead of on it, and measured as five letters rather than four, so
+  every centred line sat half an accent to one side. Hebrew and Arabic read
+  backwards. A bracket inside a right-to-left phrase opened the wrong way.
+  Now: Unicode canonical ordering and composition (`captions::compose`, 403
+  combining-class ranges and 961 composition pairs), the full bidirectional
+  algorithm (`captions::bidi`, UAX #9 — paragraph level, embeddings,
+  overrides, isolates, isolating run sequences, the weak types, paired
+  brackets, implicit levels and reordering) and mirroring (**L4**). Both the
+  width and the drawing walk the same order, which is what keeps a centred
+  line centred.
+  Kerning is looked up in **logical** order, which for a reversed run is the
+  reverse of what is on screen — a pair taken visually finds a different pair
+  or none, and every letter lands a fraction of a pixel out: the words read
+  correctly and the spacing is subtly wrong. Ported from `rswift`'s
+  `swiftui-bidi` and `swiftui-normalize`, where the ordering is measured
+  against ICU over 360,000 strings (9 differ, all on several explicit
+  embedding codes) and the composition against Core Text over 20,000 strings
+  per font in six fonts (0 differ). Tables are **generated** from the
+  platform's own ICU rather than transcribed.
+  Shaping is still absent, so Arabic letters do not join — that needs `GSUB`.
+- **Wide lines**: `LineBasicMaterial::line_width` now draws `LineSegments`
+  that many device pixels wide (× the pixel ratio, as a point's size), where
+  three.js's `linewidth` does nothing under WebGL and WebGPU has no line width.
+  Each segment is an instanced, round-capped quad (`vs_wide_lines`), so a
+  chain of short segments — a traced neuron, a sampled curve — reads as one
+  smooth stroke with closed joints; indexed or not, with draw ranges, vertex
+  colours, dashes, fog and clipping as before. Opaque lines cut at half
+  coverage and draw under MSAA; blended ones fade over their last pixel and
+  sort with the transparent draws. A width of 1 draws line primitives as
+  before. See `tests/wide_lines.rs`.
 - **Particles, snow and sand** (`threers::particles`): particle systems with
   physics — emitters (point, ball, box, disc, a mesh's surface), gravity,
   quadratic drag from each particle's terminal speed (integrated implicitly),
@@ -61,6 +272,90 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `web/examples/particles.html`: a winter camp and a desert.
   - Examples `particles`, `snow`, `sand`, `campfire`, `dunes` and
     `particles_bench`.
+
+
+- **Lattices: new families, print checks and faster builds.**
+  - Foams: `Stochastic::VoronoiWet` (rounded bubbles, liquid in Plateau
+    borders; `Lattice::plateau_border`), `GaussianField` (pore sizes spread
+    ±45 %), `Hyperuniform` (evenly spread fibres) and `ReactionDiffusion` (a
+    Gray–Scott maze grown once per seed and cached). `Lattice::seed_layout`
+    puts Voronoi seeds on `Kelvin`, `Fcc`, `WeairePhelan` or `C15` crystals,
+    or generates a periodic tile of `Poisson`, Lloyd-`Relaxed` or two-size
+    `Bimodal` seeds (`seeds_per_cell`, `size_ratio`; bimodal foams are power
+    diagrams, so walls stay flat). Every crystal cell has its textbook face
+    count; open Kelvin foam equals `Strut::Kelvin`.
+  - `Tpms::Helicoid` (double-screw columns) and the textiles `Strut::Weave`,
+    `Braid` and `HelixBundle` (`Strut::is_textile`).
+  - `utils::mesh_check`: `edge_report` (closed?), `triangle_quality`
+    (needles, worst angles), `split_pieces` (solids and sealed cavities),
+    `remove_loose_pieces` and `print_report` (overhang bands, support area
+    and footprint, plate contact). `Lattice::drop_specks` removes contour
+    debris but never more than 2 % of the solid, and never cavities.
+  - `utils::simplify`: quadric edge collapse that keeps a closed mesh closed
+    (link condition, no flips) — a finely cut box comes back to 12 triangles.
+  - Speed, single thread over all 35 original lattices: 2.7× (strut and
+    cuboct cells 2.5–9× from per-cell strut bins, TPMS 1.2–1.5× from per-axis
+    trig tables, spinodals 3–5× from row-rotated waves, honeycomb 2.8×), with
+    31 meshes bit-identical and the spinodals within 10⁻³ of a step. Voronoi
+    foams precompute their exact cell neighbours once (cached across the
+    samplers a density fit builds): closed foams read their walls from it
+    (1.4–2.6×, bimodal 10×) and open foams their edges as binned segments
+    (3–21×); a 5³ open foam now builds in 0.09 s cold, 0.04 s warm. With
+    `parallel` the contour is drawn in slabs and welded — byte-identical to
+    one sweep, 2.3× on a 200³ grid.
+  - Examples `lattice_foams` (six seed layouts as open, closed and wet
+    foams), `lattice_textiles` (weave, braid, rope, helicoid and the grown
+    grains) and `lattice_print` (overhangs that need support, before and
+    after simplification), with images in `docs/lattices.md` and the README.
+
+### Changed
+
+- **`threers-physics` now shares the `threers` version.** It goes from 0.0.1
+  on crates.io straight to 0.0.8 and is bumped with the main crate from here
+  on; `scripts/release-versions.sh` checks it with the other roots, and under
+  `CHECK=1` it also fails if `threers` or `threers-physics` is not ahead of
+  the version already on crates.io.
+
+### Fixed
+
+- **Extruded polygon walls faced inward when a ring ran clockwise.** Their
+  normals pointed out, but each wall quad was wound the same way whatever
+  the ring's direction, so `PolygonMarks::to_buffer_geometry` handed a scene
+  renderer walls it culled — and so no shadows from them. Outer rings now
+  always run clockwise (deck.gl's winding), which made every building do
+  this; walls are wound to face their normals.
+
+- **Metal line quads were half as wide as asked.** `set_line_width` quads
+  took a pixel as 1/width of clip space, not 2/width, and twisted into a
+  bowtie, each end measuring the segment from itself; with the quad never
+  under a pixel wide, a sub-pixel filament lit a whole pixel. They are now as wide as asked,
+  box-filtered when transparent, and cut at half a width (never under a
+  pixel) when opaque.
+
+- **Overlay polylines beaded at every joint.** `polyline` drew each segment
+  on its own, so the anti-aliased pixels two segments share were blended
+  twice: a dark spot at every vertex of a thin or translucent line. It is
+  one stroke now.
+
+- **SVG paths: the segment after an arc started where the arc began.**
+  `parse_svg_subpaths` advanced its own pen past an `A`/`a` command but not the
+  `Path`'s, which `line_to` and the curve builders start from — so in
+  `M9 14V3.6a2.5 2.5 0 0 1 5 0V12.2` the last line ran diagonally from (9, 3.6)
+  instead of straight down from (14, 3.6). Any outline with an arc followed by
+  another command was distorted, rounded fingertips and rounded-rectangle
+  corners most visibly.
+
+- **Voronoi foam walls were not the thickness asked for.** The field read
+  half the gap between the nearest seed distances, which is zero on the
+  skeleton but not a distance: its gradient ran from 0.3 to 1, so a wall of
+  `thickness` t came out up to three times as thick. It is the exact distance
+  to the walls and edges now, so densities fitted with
+  `fit_relative_density` are unchanged but fixed-thickness foams are thinner.
+
+- **Marching cubes put several vertices at one point** when a sample sat
+  exactly on the surface (a box face on the grid, two spheres touching):
+  `sdf::to_geometry` gave a 0.5 cube 388 coincident vertices and 776
+  zero-area triangles. Crossings are kept 10⁻⁴ of an edge off the samples.
 
 ## [0.0.7] — 2026-10-21
 
@@ -4952,7 +5247,8 @@ on, and a second crate to make things move.
 - Opt-in `mesh-bvh` and `bvh-csg` (three-mesh-bvh / three-bvh-csg parity).
 - Web shim (`THREE.*`) and parity tooling.
 
-[Unreleased]: https://github.com/eugenehp/threers/compare/v0.0.7...HEAD
+[Unreleased]: https://github.com/eugenehp/threers/compare/v0.0.8...HEAD
+[0.0.8]: https://github.com/eugenehp/threers/compare/v0.0.7...v0.0.8
 [0.0.7]: https://github.com/eugenehp/threers/compare/v0.0.6...v0.0.7
 [0.0.6]: https://github.com/eugenehp/threers/compare/v0.0.5...v0.0.6
 [0.0.5]: https://github.com/eugenehp/threers/compare/v0.0.4...v0.0.5

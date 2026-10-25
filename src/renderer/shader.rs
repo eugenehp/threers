@@ -3626,6 +3626,90 @@ fn fs_main(in : VsOut, @builtin(front_facing) front_facing : bool) -> @location(
     return shade_main(in, front_facing);
 }
 
+// three.js `LineBasicMaterial.linewidth`, which WebGL ignores and WebGPU has
+// no way to draw: `LineSegments` wider than a pixel, one instance per
+// segment, each a quad round-capped into a capsule, so a chain of short
+// segments (a traced neuron, a sampled curve) reads as one smooth stroke
+// rather than a row of bars across its own jitter. Slot 0 holds the
+// segment's start (as `VsIn`), slot 1 its end, both stepping two vertices an
+// instance through the same buffer (an indexed geometry's ends copied out in
+// order: `GpuMesh::segment_buffer`).
+//
+// `mesh.params.x` is the width in device pixels; `params.z` set means the
+// draw blends, and each pixel takes the share of it the capsule covers (a
+// box filter, so a line thinner than a pixel draws at its own weight rather
+// than a whole pixel) — else it is cut at half. `local_pos` carries the
+// fragment's place across and along the segment in pixels and its length,
+// for `fs_wide_lines`.
+struct WideLineEnd {
+    @location(9)  position : vec3<f32>,
+    @location(10) uv       : vec2<f32>,
+    @location(11) color    : vec4<f32>,
+};
+
+@vertex
+fn vs_wide_lines(a_in : VsIn, b_in : WideLineEnd, @builtin(vertex_index) corner : u32) -> VsOut {
+    // corners, as (end, side): (a −) (a +) (b +), (a −) (b +) (b −) — round
+    // the quad in order
+    let at_b = corner == 2u || corner == 4u || corner == 5u;
+    let side = select(-1.0, 1.0, corner == 1u || corner == 2u || corner == 4u);
+    var here = a_in;
+    if (at_b) {
+        here.position = b_in.position;
+        here.uv = b_in.uv;
+        here.color = b_in.color;
+    }
+    var out = standard_vertex(here);
+    let near_w = 1e-4;
+    var ca = frame.view_proj * (mesh.model * vec4<f32>(a_in.position, 1.0));
+    var cb = frame.view_proj * (mesh.model * vec4<f32>(b_in.position, 1.0));
+    // an end behind the camera brought forward along the segment, so the
+    // direction is that of the part drawn
+    if (cb.w < near_w && ca.w > near_w) { cb = mix(ca, cb, (ca.w - near_w) / (ca.w - cb.w)); }
+    if (ca.w < near_w && cb.w > near_w) { ca = mix(cb, ca, (cb.w - near_w) / (cb.w - ca.w)); }
+    let vp = frame.viewport_size.xy;
+    let d = (cb.xy / max(cb.w, near_w) - ca.xy / max(ca.w, near_w)) * vp * 0.5;
+    let len = length(d);
+    var dir = vec2<f32>(1.0, 0.0);
+    if (len > 1e-6) { dir = d / len; }
+    // half the width, and as far again as a pixel's footprint reaches — half
+    // its diagonal — for the edge's coverage
+    let r = mesh.params.x * 0.5 + 0.75;
+    let px = vec2<f32>(-dir.y, dir.x) * side * r + dir * select(-r, r, at_b);
+    let c = select(ca, cb, at_b);
+    out.clip_pos = vec4<f32>(c.xy + px * 2.0 / vp * c.w, c.z, c.w);
+    out.clip_zw = out.clip_pos.zw;
+    out.local_pos = vec3<f32>(side * r, select(-r, len + r, at_b), len);
+    return out;
+}
+
+@fragment
+fn fs_wide_lines(in : VsOut, @builtin(front_facing) front_facing : bool) -> @location(0) vec4<f32> {
+    // distance from the segment, in pixels
+    let across = in.local_pos.x;
+    let along = in.local_pos.y;
+    let before = along < 0.0;
+    let past = select(max(along - in.local_pos.z, 0.0), -along, before);
+    let dist = length(vec2<f32>(across, past));
+    // How wide the pixel is towards the segment: 1 square to a row or column,
+    // √2 on the diagonal. Both coordinates are affine on screen, so their
+    // derivatives are exact; at the axis itself, the width across.
+    let g_across = vec2<f32>(dpdx(across), dpdy(across));
+    let g_along = vec2<f32>(dpdx(along), dpdy(along));
+    let toward = (across * g_across + past * select(1.0, -1.0, before) * g_along) / max(dist, 1e-6);
+    let fw = select(abs(g_across.x) + abs(g_across.y), abs(toward.x) + abs(toward.y), dist > 1e-4);
+    let half = mesh.params.x * 0.5;
+    // The share of the pixel the stroke covers (`sdf_coverage_stroke`).
+    let w = max(fw, 1e-6);
+    let lo = max(dist - 0.5 * w, -half);
+    let hi = min(dist + 0.5 * w, half);
+    let blended = mesh.params.z > 0.5;
+    let cover = select(step(dist, half), clamp((hi - lo) / w, 0.0, 1.0), blended);
+    if (cover <= 0.0) { discard; }
+    let c = shade_main(in, front_facing);
+    return vec4<f32>(c.rgb, select(c.a, c.a * cover, blended));
+}
+
 // What `shade_main` found passes through a blended surface, per channel, as
 // the factor the blend multiplies what is behind by (encoded, as the blend
 // works); negative when it returned before working it out, its colour then

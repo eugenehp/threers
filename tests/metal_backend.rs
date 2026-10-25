@@ -418,6 +418,68 @@ fn line_segments_draw() {
     assert_eq!(hr.stats().triangles, 0, "a line list has no triangles");
 }
 
+/// `set_line_width` thinner than a pixel, transparent: each pixel takes the
+/// share of it the line covers, so a 0.4-pixel line puts 0.4 of its colour in
+/// each column wherever it falls between pixel centres — where the quad,
+/// never under a pixel wide, lit a whole one. Along a row and on a 45°
+/// diagonal, whose columns each cross √2 of its width. Opaque, it still
+/// lights whole pixels.
+#[test]
+fn thin_line_quads_keep_their_weight_between_pixels() {
+    let Some(mut hr) = renderer(1) else { return };
+    let width = 0.4f32;
+    hr.set_line_width(width);
+    let px_world = 2.0 / SIZE as f32;
+    let column = |rgba: &[u8], x: u32| -> Vec<f32> {
+        // The target is sRGB: decode to the linear coverage that blended.
+        (0..SIZE)
+            .map(|y| {
+                let c = rgba[((y * SIZE + x) * 4) as usize] as f32 / 255.0;
+                if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+            })
+            .collect()
+    };
+    for diagonal in [false, true] {
+        let mut sums = Vec::new();
+        for k in 0..8 {
+            let d = k as f32 / 8.0 * px_world;
+            let pos = if diagonal { vec![-0.7 + d, -0.7, 0.0, 0.7 + d, 0.7, 0.0] } else { vec![-0.9, d, 0.0, 0.9, d, 0.0] };
+            let mut geometry = BufferGeometry::new();
+            geometry.set_attribute("position", BufferAttribute::new(pos, 3));
+            let mut material = LineBasicMaterial::new(Color::from_hex(0xffffff));
+            material.transparent = Some(true);
+            let mut scene = Scene::new();
+            scene.background = Color::from_hex(0x000000);
+            scene.add(Object3D::line_segments(LineSegments::new(geometry, Material::Line(material))));
+            let rgba = hr.render_to_rgba(&mut scene, &unit_camera()).unwrap();
+            let expect = if diagonal { width * std::f32::consts::SQRT_2 } else { width };
+            for x in [SIZE / 2 - 6, SIZE / 2, SIZE / 2 + 5] {
+                let col = column(&rgba, x);
+                let peak = col.iter().cloned().fold(0.0, f32::max);
+                assert!(peak <= expect + 0.03, "diagonal {diagonal} step {k} column {x}: peak {peak}");
+                sums.push(col.iter().sum::<f32>() / expect);
+            }
+        }
+        for s in &sums {
+            assert!((s - 1.0).abs() < 0.06, "diagonal {diagonal}: column ink {s} of the width, all {sums:?}");
+        }
+    }
+    let mut geometry = BufferGeometry::new();
+    // A quarter pixel off the boundary between two rows, where both centres
+    // would tie at half a pixel.
+    let y = 0.25 * px_world;
+    geometry.set_attribute("position", BufferAttribute::new(vec![-0.9, y, 0.0, 0.9, y, 0.0], 3));
+    let mut scene = Scene::new();
+    scene.background = Color::from_hex(0x000000);
+    scene.add(Object3D::line_segments(LineSegments::new(
+        geometry,
+        Material::Line(LineBasicMaterial::new(Color::from_hex(0xffffff))),
+    )));
+    let rgba = hr.render_to_rgba(&mut scene, &unit_camera()).unwrap();
+    let lit = column(&rgba, SIZE / 2).iter().filter(|&&c| c > 0.99).count();
+    assert!((1..=2).contains(&lit), "opaque: {lit} whole pixels");
+}
+
 #[test]
 fn msaa_produces_partial_coverage_on_a_diagonal_edge() {
     // A diagonal edge is either in or out of a pixel without MSAA, and

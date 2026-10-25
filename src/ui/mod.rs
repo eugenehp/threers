@@ -10,6 +10,14 @@
 //! or, in a browser, the page's 2D canvas (so text and paths rasterize exactly
 //! as the browser's own would).
 //!
+//! Painted pixels mean nothing to a screen reader, so nodes also carry
+//! [`Semantics`] — role, name, value, state — which the built-in
+//! [`controls`] set for themselves. [`Ui::accessibility_tree`] is what
+//! assistive technology reads; in a browser, `a11y_dom::DomAccessibility` (wasm32)
+//! puts it in the page. [`Ui::focus_order`] gives keyboard navigation and
+//! [`Ui::contrast_issues`] checks text against WCAG's contrast minimum. See
+//! [`a11y`].
+//!
 //! ```
 //! use threers::ui::{FlexDirection, Length, Style, Ui};
 //!
@@ -24,6 +32,9 @@
 //! assert_eq!(ui.rect(rest).height, 780.0);
 //! ```
 
+pub mod a11y;
+#[cfg(target_arch = "wasm32")]
+pub mod a11y_dom;
 #[cfg(target_arch = "wasm32")]
 pub mod canvas;
 pub mod code;
@@ -36,6 +47,7 @@ mod text_area;
 mod text_field;
 mod tree;
 
+pub use a11y::{contrast_ratio, AccessNode, ContrastIssue, Role, Semantics};
 pub use layout::{layout_unit, FixedWidthText, TextMeasure};
 pub use paint::{circle_path, parse_circle, OverlayPainter, Painter, TextStyle};
 pub use style::{

@@ -50,6 +50,14 @@ pub struct DensityMarks {
     /// `0.05..=1`. `None` picks it from the kernel size: full resolution for
     /// kernels up to 12 px in radius, down to a quarter from 48 px.
     pub resolution: Option<f32>,
+    /// Fade in linearly, `min(t / threshold, 1)`, as deck.gl's
+    /// `HeatmapLayer` does, rather than along a smoothstep.
+    pub linear_fade: bool,
+    /// Show each place's mean weight rather than its summed weight: the
+    /// weights of the kernels covering it over their coverage (deck.gl's
+    /// `aggregation: 'MEAN'`). Coverage below a floor counts as the floor,
+    /// so a lone kernel's edge fades rather than showing its full weight.
+    pub mean: bool,
     ramp: Vec<[u8; 4]>,
     ramp_dirty: bool,
     gpu: Option<DensityGpu>,
@@ -108,6 +116,8 @@ impl DensityMarks {
             auto_max: None,
             threshold: 0.05,
             resolution: None,
+            linear_fade: false,
+            mean: false,
             ramp: Vec::new(),
             ramp_dirty: true,
             gpu: None,
@@ -157,6 +167,28 @@ impl DensityMarks {
         self.weights.update_f32(start, w);
     }
 
+    /// The ramp as sRGB-encoded bytes from no density to
+    /// [`max_weight`](Self::max_weight), sampled as a texture of that many
+    /// texels with linear filtering samples it: the first colour up to half
+    /// a texel in, the last from half a texel before the end, blended on
+    /// the encoded values between — as deck.gl's `HeatmapLayer` samples its
+    /// colour range.
+    pub fn set_ramp_srgb8(&mut self, ramp: &[[u8; 4]]) {
+        let n = ramp.len();
+        self.ramp = (0..256)
+            .map(|k| {
+                if n == 0 {
+                    return [0, 0, 0, 255];
+                }
+                let x = ((k as f32 + 0.5) / 256.0 * n as f32 - 0.5).clamp(0.0, (n - 1) as f32);
+                let (i, f) = (x.floor() as usize, x.fract());
+                let (a, b) = (ramp[i], ramp[(i + 1).min(n - 1)]);
+                std::array::from_fn(|c| (a[c] as f32 + (b[c] as f32 - a[c] as f32) * f).round() as u8)
+            })
+            .collect();
+        self.ramp_dirty = true;
+    }
+
     /// The colours from no density to [`max_weight`](Self::max_weight).
     pub fn set_ramp(&mut self, ramp: &ColorRamp) {
         self.ramp = ramp
@@ -199,7 +231,7 @@ impl Mark for DensityMarks {
             None => (0.0, 1.0),
         };
         (
-            [0.0; 4],
+            [if self.linear_fade { 1.0 } else { 0.0 }, if self.mean { 1.0 } else { 0.0 }, 0.0, 0.0],
             [self.max_weight, self.threshold, auto, fraction],
             [0.0; 4],
         )

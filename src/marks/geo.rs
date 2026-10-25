@@ -74,6 +74,17 @@ pub fn lon_lat_to_world(p: [f64; 3]) -> [f64; 3] {
     ground_to_world(mercator([p[0], p[1]]), p[2] * units_per_meter(p[1]))
 }
 
+/// [`lon_lat_to_world`] for data rather than maps: latitudes past
+/// [`MAX_LATITUDE`] are projected where Mercator puts them (far off the
+/// map), as deck.gl projects each vertex, only kept short of the poles'
+/// infinity. A shape reaching a pole runs off the top of the map instead of
+/// being cut flat at the map's edge.
+pub fn lon_lat_to_world_extended(p: [f64; 3]) -> [f64; 3] {
+    let lat = p[1].clamp(-89.9999, 89.9999);
+    let xy = [EARTH_RADIUS * p[0].to_radians(), EARTH_RADIUS * lat.to_radians().sin().atanh()];
+    ground_to_world(xy, p[2] / lat.to_radians().cos())
+}
+
 /// A Web Mercator tile: zoom `z`, column `x` from the west, row `y` from
 /// the north — the XYZ scheme slippy maps and vector tiles use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -247,6 +258,13 @@ pub trait GroundProjection: Sync {
     /// The longest edge, in ground units, a mesh may keep before it is split
     /// to follow the curvature. `None` never splits.
     fn max_edge(&self) -> Option<f64> {
+        None
+    }
+    /// The normal of a wall along an edge from ground point `at`, given the
+    /// outward direction across the edge in ground coordinates; `None` (the
+    /// default) for the true one, level with the surface. For renderers that
+    /// light walls their own way.
+    fn wall_normal(&self, _at: [f64; 2], _outward: [f64; 2]) -> Option<[f64; 3]> {
         None
     }
 }

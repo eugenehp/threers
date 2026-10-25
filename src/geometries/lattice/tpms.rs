@@ -39,11 +39,19 @@ pub enum Tpms {
     /// Split P — the gyroid's channels split into pairs; more surface area per
     /// unit volume than any other entry here.
     SplitP,
+    /// Helicoid — a double screw up the middle of every cell column, one turn
+    /// a cell, cut off at 0.45 of a cell from its axis. Not a nodal approximation: the
+    /// helicoid is itself a minimal surface, the only ruled one besides the
+    /// plane, and an array of them is a lattice of Archimedean screws. Under
+    /// [`LatticeStyle::Sheet`](super::LatticeStyle::Sheet) the threads are
+    /// separate blades on a shared spine; under `Solid` they are a threaded
+    /// rod.
+    Helicoid,
 }
 
 impl Tpms {
     /// Every family, in declaration order.
-    pub const ALL: [Tpms; 8] = [
+    pub const ALL: [Tpms; 9] = [
         Tpms::Gyroid,
         Tpms::SchwarzP,
         Tpms::Diamond,
@@ -52,6 +60,7 @@ impl Tpms {
         Tpms::FischerKochS,
         Tpms::Lidinoid,
         Tpms::SplitP,
+        Tpms::Helicoid,
     ];
 
     /// The nodal function at a point given in radians — one cell per `2π`.
@@ -62,6 +71,7 @@ impl Tpms {
         let (sy, cy) = y.sin_cos();
         let (sz, cz) = z.sin_cos();
         match self {
+            Tpms::Helicoid => helicoid([(sx, cx), (sy, cy), (sz, cz)]).0,
             Tpms::Gyroid => sx * cy + sy * cz + sz * cx,
             Tpms::SchwarzP => cx + cy + cz,
             Tpms::Diamond => sx * sy * sz + sx * cy * cz + cx * sy * cz + cx * cy * sz,
@@ -104,10 +114,19 @@ impl Tpms {
     /// The gradient is with respect to the radian coordinates. Multiply each
     /// component by that axis' radians per unit length to get a world gradient.
     pub fn value_and_gradient(self, x: f32, y: f32, z: f32) -> (f32, [f32; 3]) {
-        let (sx, cx) = x.sin_cos();
-        let (sy, cy) = y.sin_cos();
-        let (sz, cz) = z.sin_cos();
+        self.value_and_gradient_trig([x.sin_cos(), y.sin_cos(), z.sin_cos()])
+    }
+
+    /// [`value_and_gradient`](Self::value_and_gradient) from the sines and
+    /// cosines of the three coordinates, `(sin, cos)` per axis.
+    ///
+    /// Each depends on one coordinate alone, so a caller sampling a grid can
+    /// work them out once per row of the grid rather than once per point —
+    /// they are most of the cost of a sample — and get exactly the same bits.
+    pub fn value_and_gradient_trig(self, trig: [(f32, f32); 3]) -> (f32, [f32; 3]) {
+        let [(sx, cx), (sy, cy), (sz, cz)] = trig;
         match self {
+            Tpms::Helicoid => helicoid(trig),
             Tpms::Gyroid => (
                 sx * cy + sy * cz + sz * cx,
                 [cx * cy - sx * sz, cy * cz - sx * sy, cx * cz - sy * sz],
@@ -193,6 +212,16 @@ impl Tpms {
         }
     }
 
+    /// How far from its column's axis the surface is cut off, in radians of
+    /// the cell's `2π`: only the [`Helicoid`](Tpms::Helicoid) is, the others
+    /// fill the cell.
+    pub fn clip_radius(self) -> Option<f32> {
+        match self {
+            Tpms::Helicoid => Some(0.45 * std::f32::consts::TAU),
+            _ => None,
+        }
+    }
+
     /// Lower-case identifier, for logs and CLI arguments.
     pub fn name(self) -> &'static str {
         match self {
@@ -204,6 +233,7 @@ impl Tpms {
             Tpms::FischerKochS => "fischer-koch-s",
             Tpms::Lidinoid => "lidinoid",
             Tpms::SplitP => "split-p",
+            Tpms::Helicoid => "helicoid",
         }
     }
 
@@ -225,9 +255,80 @@ fn sin2(s: f32, c: f32) -> f32 {
     2.0 * s * c
 }
 
+/// Threads a helicoid has: two, so a cross-section is a bar through the axis.
+const HELICOID_STARTS: f32 = 2.0;
+
+/// `r·sin(n(θ − z))` about the column axis through the middle of each cell,
+/// `x ≡ y ≡ π (mod 2π)`, and its gradient. The angles are recovered from their
+/// sines and cosines — `atan2(−sin, −cos)` is the angle less π, exactly — so
+/// the helicoid takes the same per-axis tables as every other surface here.
+/// Through the middle rather than the corners, so a part's box cuts no screw.
+fn helicoid(trig: [(f32, f32); 3]) -> (f32, [f32; 3]) {
+    let [(sx, cx), (sy, cy), (sz, cz)] = trig;
+    let (x, y, z) = ((-sx).atan2(-cx), (-sy).atan2(-cy), sz.atan2(cz));
+    let r = x.hypot(y);
+    let n = HELICOID_STARTS;
+    let phase = n * (y.atan2(x) - z);
+    let (s, c) = phase.sin_cos();
+    if r < 1e-6 {
+        // On the axis every thread meets; the gradient across it is the
+        // thread's direction there, which any one will do for.
+        return (0.0, [s, -c, 0.0]);
+    }
+    let (ux, uy) = (x / r, y / r);
+    (
+        r * s,
+        [ux * s - n * uy * c, uy * s + n * ux * c, -n * r * c],
+    )
+}
+
+/// Distance from the helicoid's column axis, in radians of the cell's `2π`.
+pub(crate) fn axis_radius(trig: [(f32, f32); 3]) -> f32 {
+    (-trig[0].0).atan2(-trig[0].1).hypot((-trig[1].0).atan2(-trig[1].1))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_helicoid_is_a_screw() {
+        use std::f32::consts::PI;
+        // On the screw: the thread angle tracks the height.
+        for i in 0..50 {
+            let z = -PI + i as f32 * 0.12;
+            let r = 0.3 + (i % 7) as f32 * 0.3;
+            for thread in 0..2 {
+                let theta = z + thread as f32 * PI;
+                // About the axis through the middle of the cell, at π.
+                let v = Tpms::Helicoid.value(PI + r * theta.cos(), PI + r * theta.sin(), z);
+                assert!(v.abs() < 1e-4, "off the surface by {v} at r {r}, z {z}");
+            }
+        }
+        // And its gradient is its slope.
+        for i in 0..40 {
+            let p = [
+                PI + 0.3 + i as f32 * 0.05,
+                PI - 0.7 + i as f32 * 0.03,
+                0.2 * i as f32 - 2.0,
+            ];
+            let (_, g) = Tpms::Helicoid.value_and_gradient(p[0], p[1], p[2]);
+            let e = 1e-3;
+            for axis in 0..3 {
+                let (mut up, mut dn) = (p, p);
+                up[axis] += e;
+                dn[axis] -= e;
+                let numeric = (Tpms::Helicoid.value(up[0], up[1], up[2])
+                    - Tpms::Helicoid.value(dn[0], dn[1], dn[2]))
+                    / (2.0 * e);
+                assert!(
+                    (numeric - g[axis]).abs() < 2e-2 * g[axis].abs().max(1.0),
+                    "axis {axis} at {p:?}: {numeric} vs {}",
+                    g[axis]
+                );
+            }
+        }
+    }
     use std::f32::consts::TAU;
 
     #[test]

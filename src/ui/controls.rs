@@ -17,6 +17,7 @@
 //! assert_eq!(ui.rect(select).width, 21.0 + 22.0);
 //! ```
 
+use super::a11y::{Role, Semantics};
 use super::{Edges, Length, NodeId, Position, Rect, Rgba, Style, TextField, TextMeasure, Ui};
 use crate::style;
 
@@ -71,6 +72,9 @@ pub fn checkbox(ui: &mut Ui, parent: NodeId, checked: bool, size: f32, border: R
         s.border_color = border;
         s.background = Some([1.0; 4]);
     }
+    // Named by the app (`ui.semantics_mut(node).label`), or by the text
+    // beside it once the two share a labelled parent.
+    ui.set_semantics(node, Semantics::new(Role::Checkbox).checked(checked));
     node
 }
 
@@ -89,6 +93,7 @@ pub fn radio(ui: &mut Ui, parent: NodeId, checked: bool, margin: Edges) -> NodeI
         s.border_color = BORDER;
         s.background = Some([1.0; 4]);
     }
+    ui.set_semantics(node, Semantics::new(Role::Radio).checked(checked));
     node
 }
 
@@ -100,6 +105,13 @@ pub fn color_well(ui: &mut Ui, parent: NodeId, color: [f32; 3], width: f32) -> N
         style! { display: flex; box-sizing: border-box; width: {width}; height: 27px; padding: 5px 4px; border: 1px solid; border-color: {BORDER}; background: #efefef; flex-shrink: 0; },
     );
     ui.add_box(node, style! { flex: 1; border: 1px solid #777; background: {[color[0], color[1], color[2], 1.0]}; });
+    // As a page's `<input type=color>` reads: a button whose value is the
+    // colour.
+    let hex = color.map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8);
+    ui.set_semantics(
+        node,
+        Semantics::new(Role::Button).label("Colour").value(format!("#{:02x}{:02x}{:02x}", hex[0], hex[1], hex[2])),
+    );
     node
 }
 
@@ -128,6 +140,8 @@ pub fn button(ui: &mut Ui, parent: NodeId, label: &str, font: &Style, text: &mut
     );
     let t = ui.add_box(node, font.clone());
     ui.add_text(t, label);
+    // Named by its label, as a button is.
+    ui.set_semantics(node, Semantics::new(Role::Button));
     node
 }
 
@@ -162,6 +176,9 @@ pub fn select(ui: &mut Ui, parent: NodeId, value: &str, options: &[&str], font: 
         Some(2.0),
         false,
     );
+    ui.set_semantics(node, Semantics::new(Role::ComboBox).value(value).expanded(false));
+    // The choice is its value; the text showing it is not read again.
+    hide_text(ui, node);
     node
 }
 
@@ -196,9 +213,11 @@ pub fn select_popup(ui: &mut Ui, parent: NodeId, anchor: Rect, options: &[&str],
             ui.style_mut(item).background = on.then_some(ACCENT);
             let t = ui.add_box(item, style! { ..font.clone(); color: {if on { [1.0; 4] } else { font.color }}; });
             ui.add_text(t, *option);
+            ui.set_semantics(item, Semantics::new(Role::Option).selected(current == Some(k)));
             item
         })
         .collect();
+    ui.set_semantics(list, Semantics::new(Role::ListBox));
     (list, items)
 }
 
@@ -231,6 +250,8 @@ pub fn range(ui: &mut Ui, parent: NodeId, fraction: f32, hovered: bool) -> NodeI
         style! { position: absolute; left: -7px; right: {RANGE_RUN - offset}; top: 4px; height: 8px; box-sizing: border-box; border: 1px solid; border-color: {edge}; border-radius: 4px; background: {accent}; },
     );
     ui.add_box(run, style! { position: absolute; left: {offset}; margin-left: -8px; top: 0; width: 16px; height: 16px; border-radius: 8px; background: {accent}; });
+    // As a page's range input reads by default: 0 to 100.
+    ui.set_semantics(node, Semantics::new(Role::Slider).range(0.0, 100.0, (f * 100.0).round()));
     node
 }
 
@@ -278,6 +299,17 @@ pub fn text_contents(ui: &mut Ui, node: NodeId, view: TextView, text: &mut dyn T
         let t = ui.add_box(node, style! { ..view.font.clone(); position: relative; color: {color}; white-space: pre; });
         ui.add_text(t, s);
     }
+    // A text box whose value is the text, not the placeholder: that is a
+    // hint, read as the description. An app's own label stays.
+    let sem = ui.semantics_mut(node);
+    if sem.role == Role::Generic {
+        sem.role = Role::TextBox;
+    }
+    sem.value = Some(shown.to_owned());
+    if !view.placeholder.is_empty() && sem.description.is_none() {
+        sem.description = Some(view.placeholder.to_owned());
+    }
+    hide_text(ui, node);
 }
 
 /// Chrome's focus ring on `node` (`:focus-visible`, `outline: auto`): 2px of
@@ -287,6 +319,7 @@ pub fn focus_ring(ui: &mut Ui, node: NodeId) -> NodeId {
     ui.add_box(node, style! { position: absolute; left: -2px; right: -2px; top: -2px; bottom: -2px; border: 1px solid white; });
     let ring = ui.add_box(node, style! { position: absolute; left: -1px; right: -1px; top: -1px; bottom: -1px; border: 2px solid; });
     ui.style_mut(ring).border_color = FOCUS_RING;
+    ui.set_semantics(ring, Semantics::new(Role::None).hidden());
     ring
 }
 
@@ -312,7 +345,24 @@ pub fn code_view(ui: &mut Ui, parent: NodeId, lines: &[Vec<(String, Rgba)>], fon
             ui.add_text(t, s);
         }
     }
+    // Read as a block of text, not run by run; not editable, so not a Tab
+    // stop.
+    let value: Vec<String> = lines.iter().map(|l| l.iter().map(|(s, _)| s.as_str()).collect()).collect();
+    ui.set_semantics(editor, Semantics::new(Role::TextArea).value(value.join("\n")).focusable(false));
+    hide_text(ui, editor);
     editor
+}
+
+/// Hides `node`'s text descendants from assistive technology: a text box
+/// reads its value once, rather than every coloured run of it again.
+fn hide_text(ui: &mut Ui, node: NodeId) {
+    for &c in ui.children(node).to_vec().iter() {
+        if matches!(ui.kind(c), super::NodeKind::Text(_)) {
+            ui.set_semantics(c, Semantics::new(Role::None).hidden());
+        } else {
+            hide_text(ui, c);
+        }
+    }
 }
 
 
@@ -435,6 +485,8 @@ pub fn code_editor(ui: &mut Ui, parent: NodeId, view: &CodeEditorView, text: &mu
         }
         out_lines.push((row, s));
     }
+    ui.set_semantics(editor, Semantics::new(Role::TextArea).value(view.area.text.clone()));
+    hide_text(ui, editor);
     CodeEditorNodes { editor, body, lines: out_lines, markers }
 }
 
@@ -582,6 +634,55 @@ pub fn color_picker_hue(r: Rect, x: f32) -> f32 {
 mod tests {
     use super::super::FixedWidthText;
     use super::*;
+
+    /// The controls say what they are: a button named by its label, a
+    /// checkbox's state, a select's value, a slider's position as 0–100, a
+    /// text box's value read once (not again as its text), and the focus
+    /// ring not at all.
+    #[test]
+    fn controls_describe_themselves() {
+        use super::super::a11y::Role;
+        let mut ui = Ui::new();
+        let root = ui.root();
+        let font = crate::style! { font-family: Arial; font-size: 13px; color: black; };
+        let mut text = FixedWidthText(7.0);
+        let b = button(&mut ui, root, "Apply", &font, &mut text);
+        focus_ring(&mut ui, b);
+        let c = checkbox(&mut ui, root, true, 13.0, BORDER, Edges::ZERO);
+        ui.semantics_mut(c).label = Some("Wireframe".into());
+        select(&mut ui, root, "Linear", &["Linear", "Nearest"], &font, &mut text);
+        range(&mut ui, root, 0.25, false);
+        let field = ui.add_box(root, crate::style! { position: relative; width: 100px; height: 19px; });
+        ui.semantics_mut(field).label = Some("Name".into());
+        let view = TextView {
+            value: "cube",
+            placeholder: "untitled",
+            placeholder_color: [0.5; 4],
+            editing: None,
+            caret_on: false,
+            font: &font,
+            x_offset: 2.0,
+            selection: [0.8; 4],
+        };
+        text_contents(&mut ui, field, view, &mut text);
+        ui.layout(600.0, 200.0, &mut text);
+        let tree = ui.accessibility_tree();
+        let got: Vec<(Role, String, Option<String>, Option<bool>)> =
+            tree[1..].iter().map(|n| (n.role, n.name.clone(), n.value.clone(), n.checked)).collect();
+        assert_eq!(
+            got,
+            vec![
+                (Role::Button, "Apply".into(), None, None),
+                (Role::Checkbox, "Wireframe".into(), None, Some(true)),
+                (Role::ComboBox, String::new(), Some("Linear".into()), None),
+                (Role::Slider, String::new(), None, None),
+                (Role::TextBox, "Name".into(), Some("cube".into()), None),
+            ]
+        );
+        assert_eq!(tree[4].range.map(|r| r.now), Some(25.0));
+        assert_eq!(tree[5].description.as_deref(), Some("untitled"));
+        assert_eq!(ui.focus_order().len(), 5);
+    }
 
     #[test]
     fn controls_take_chromes_sizes() {

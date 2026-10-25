@@ -232,6 +232,12 @@ pub struct Frame<'a> {
     /// wants and saves every sketch the same two lines.
     pub pointer_ndc: Vector2,
     pub pointer_down: bool,
+    /// Whether the pointer is over the window. When it leaves, `pointer` keeps
+    /// the last position it had, which is rarely what hover effects want.
+    pub pointer_inside: bool,
+    /// Show the system cursor over the window. Set it to `false` to draw your
+    /// own; it stays as last set until changed.
+    pub cursor_visible: bool,
     /// Physical pixels per logical pixel — p5's `pixelDensity()`. `1.0` on an
     /// ordinary display and `2.0` on a Retina one.
     ///
@@ -393,6 +399,8 @@ where
     let mut frame_index: u64 = 0;
     let mut pointer = Vector2::new(0.0, 0.0);
     let mut pointer_down = false;
+    let mut pointer_inside = false;
+    let mut cursor_visible = true;
     let win = window.clone();
     // Mouse → quad view, after `setup` has placed the camera.
     let mut quad_controls = (options.quad_controls && quad_view.is_some())
@@ -423,7 +431,12 @@ where
                     // The `Resized` that follows reconfigures the surface.
                     renderer.set_pixel_ratio(scale_factor as f32);
                 }
+                WindowEvent::CursorEntered { .. } => pointer_inside = true,
+                WindowEvent::CursorLeft { .. } => pointer_inside = false,
                 WindowEvent::CursorMoved { position, .. } => {
+                    // Some platforms send no `CursorEntered` for a pointer
+                    // already over the window when it opens; a move proves it.
+                    pointer_inside = true;
                     pointer = Vector2::new(position.x as f32, position.y as f32);
                     if let (Some(ctl), Some(quad)) = (quad_controls.as_mut(), quad_view.as_mut()) {
                         let s = win.scale_factor() as f32;
@@ -504,6 +517,8 @@ where
                             1.0 - pointer.y / config.height.max(1) as f32 * 2.0,
                         ),
                         pointer_down,
+                        pointer_inside,
+                        cursor_visible,
                         // Read rather than cached, so dragging the window to a
                         // display with a different density needs no event: the
                         // `Resized` that follows already reconfigures the
@@ -513,6 +528,10 @@ where
                     };
                     draw(&mut f);
                     let wants_exit = f.exit;
+                    if f.cursor_visible != cursor_visible {
+                        cursor_visible = f.cursor_visible;
+                        win.set_cursor_visible(cursor_visible);
+                    }
                     frame_index += 1;
 
                     // A minimised window has a zero-sized surface and acquiring

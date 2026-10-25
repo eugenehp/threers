@@ -773,7 +773,12 @@ impl<'a> Parser<'a> {
             delta < 0.0,
             rotation,
         );
-        self.ensure_open().curve_path.add(Box::new(curve));
+        let path = self.ensure_open();
+        path.curve_path.add(Box::new(curve));
+        // The path keeps its own pen, which `line_to` and the curve builders
+        // start from; without this the segment after an arc began where the
+        // arc did.
+        path.current = to;
         self.cur = to;
     }
 }
@@ -982,6 +987,19 @@ mod tests {
             let got = p.curve_path.get_point(1.0);
             assert!(close(got, end), "{d}: ended at {got:?}, wanted {end:?}");
         }
+    }
+
+    /// Whatever follows an arc starts where the arc ended. A fingertip is the
+    /// shape that showed it: up one side, an arc over the top, down the other.
+    #[test]
+    fn segments_after_an_arc_start_at_its_end() {
+        let paths = parse_svg_subpaths("M9 14V3.6a2.5 2.5 0 0 1 5 0V12.2").unwrap();
+        let curves = &paths[0].curve_path.curves;
+        assert_eq!(curves.len(), 3);
+        assert!(close(curves[2].get_point(0.0), v(14.0, 3.6)), "{:?}", curves[2].get_point(0.0));
+        assert!(close(curves[2].get_point(1.0), v(14.0, 12.2)));
+        let joined = Path::from_svg_path_data("M0 0 A5 5 0 0 1 10 0 L10 10").unwrap();
+        assert!(close(joined.curve_path.get_point(1.0), v(10.0, 10.0)));
     }
 
     /// Radii too small to span the endpoints are scaled up rather than rejected

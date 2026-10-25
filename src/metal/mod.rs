@@ -152,6 +152,8 @@ pub use target::MetalRenderTarget;
 pub const SHADER_SOURCE: &str = concat!(
     include_str!("shaders.metal"),
     "\n",
+    include_str!("fx_surface.metal"),
+    "\n",
     include_str!("postfx.metal"),
 );
 
@@ -196,6 +198,8 @@ mod tests {
             "vs_point",
             "fs_point",
             "fs_point_encoded_blend",
+            "vs_fx_surface",
+            "fs_fx_surface",
             "fs_bloom_threshold",
             "fs_bloom_blur",
             "fs_downsample",

@@ -24,13 +24,35 @@ pub struct ShapeMarks {
     pub common: MarkCommon,
     /// position + normal, interleaved, and the index.
     mesh: (Vec<f32>, Option<Vec<u32>>),
+    /// Per vertex: the texture coordinate (empty: none), and the colour,
+    /// linear RGBA (empty: white).
+    uvs: Vec<f32>,
+    vertex_colors: Vec<f32>,
+    /// An image from an atlas the mesh is textured with, by its uvs.
+    texture: Option<(super::SharedAtlas, String)>,
+    texture_gpu: Option<(u64, wgpu::BindGroup)>,
+    /// A texture made on the GPU instead of an atlas: its view and a
+    /// generation that changes with it, holding sRGB bytes premultiplied
+    /// by alpha in a linear format (a frame drawn by the marks).
+    gpu_texture: Option<(std::sync::Arc<wgpu::TextureView>, u64)>,
+    /// The atlas version the image's place was taken at, and the place:
+    /// `[x, y, width, height]` of the atlas, 0 to 1.
+    texture_version: Option<u64>,
+    texture_rect: [f32; 4],
+    /// Repeat the texture past uvs of 0 and 1 (glTF's default); otherwise
+    /// clamp to its edge.
+    pub texture_repeat: bool,
     mesh_dirty: bool,
     mesh_gpu: Option<MeshGpu>,
     positions: Column,
     scales: Column,
     colors: Column,
+    /// Per row: a unit quaternion `[x, y, z, w]` turning the scaled mesh.
+    rotations: Column,
     /// How much of the colour is lit regardless of the light: 1 is unlit.
     pub ambient: f32,
+    /// Light as deck.gl does instead (`ambient` is then unused).
+    pub lighting: Option<super::Lighting>,
 }
 
 impl ShapeMarks {
@@ -42,12 +64,26 @@ impl ShapeMarks {
         let mut s = Self {
             common,
             mesh: (Vec::new(), None),
+            uvs: Vec::new(),
+            vertex_colors: Vec::new(),
+            texture: None,
+            texture_gpu: None,
+            gpu_texture: None,
+            texture_version: None,
+            texture_rect: [0.0, 0.0, 1.0, 1.0],
+            texture_repeat: true,
             mesh_dirty: true,
             mesh_gpu: None,
             positions: Column::new(ColumnFormat::PositionF64),
             scales,
+            rotations: {
+                let mut r = Column::float(4);
+                r.set_default_f32(&[0.0, 0.0, 0.0, 1.0]);
+                r
+            },
             colors: Column::new(ColumnFormat::Unorm8x4),
             ambient: 0.35,
+            lighting: None,
         };
         s.set_geometry(geometry);
         s
@@ -89,7 +125,10 @@ impl ShapeMarks {
                 i,
                 Matrix4::compose(
                     origin.to_local(*p),
-                    Quaternion::default(),
+                    {
+                        let q = self.rotations.row_f32(i);
+                        Quaternion::new(q[0], q[1], q[2], q[3])
+                    },
                     Vector3::new(sc[0] * s, sc[1] * s, sc[2] * s),
                 ),
             );
@@ -120,6 +159,39 @@ impl ShapeMarks {
             }
         }
         self.mesh = (v, geometry.index.clone());
+        self.uvs = geometry.get_attribute("uv").filter(|a| a.item_size == 2 && a.count() == n).map_or(Vec::new(), |a| a.array.clone());
+        // three.js's vertex colours: linear, RGB or RGBA.
+        self.vertex_colors = match geometry.get_attribute("color").filter(|a| a.count() == n) {
+            Some(a) if a.item_size == 4 => a.array.clone(),
+            Some(a) if a.item_size == 3 => a.array.chunks_exact(3).flat_map(|c| [c[0], c[1], c[2], 1.0]).collect(),
+            _ => Vec::new(),
+        };
+        self.mesh_dirty = true;
+    }
+
+    /// Texture the mesh with image `name` of `atlas`, by its `uv`s (0 to 1
+    /// across the image, clamped); `None` for no texture.
+    /// Texture the mesh with a texture drawn on the GPU — a frame the marks
+    /// drew into a plain `Rgba8Unorm` target, sRGB bytes premultiplied by
+    /// alpha — over the whole of its uvs (0 to 1, clamped). `generation`
+    /// changes when the view does. Replaces [`set_texture`](Self::set_texture)'s.
+    pub fn set_gpu_texture(&mut self, texture: Option<(std::sync::Arc<wgpu::TextureView>, u64)>) {
+        if texture.as_ref().map(|t| t.1) != self.gpu_texture.as_ref().map(|t| t.1) {
+            self.texture_gpu = None;
+        }
+        self.gpu_texture = texture;
+        if self.gpu_texture.is_some() {
+            self.texture = None;
+            self.texture_rect = [0.0, 0.0, 1.0, 1.0];
+            self.texture_repeat = false;
+        }
+    }
+
+    pub fn set_texture(&mut self, texture: Option<(super::SharedAtlas, String)>) {
+        self.texture = texture;
+        self.gpu_texture = None;
+        self.texture_gpu = None;
+        self.texture_version = None;
         self.mesh_dirty = true;
     }
 
@@ -148,6 +220,12 @@ impl ShapeMarks {
     pub fn update_scales(&mut self, start: usize, s: &[[f32; 3]]) {
         let flat: Vec<f32> = s.iter().flatten().copied().collect();
         self.scales.update_f32(start, &flat);
+    }
+    /// Turn each row's mesh (after its scale) by a unit quaternion
+    /// `[x, y, z, w]`; empty for none.
+    pub fn set_rotations(&mut self, r: &[[f32; 4]]) {
+        let flat: Vec<f32> = r.iter().flatten().copied().collect();
+        self.rotations.set_f32(&flat);
     }
     pub fn set_colors(&mut self, c: &[[u8; 4]]) {
         self.colors.set_rgba(c);
@@ -178,24 +256,83 @@ impl Mark for ShapeMarks {
         }
     }
     fn kind_uniforms(&self) -> KindUniforms {
-        (
-            [self.ambient.clamp(0.0, 1.0), 0.0, 0.0, 0.0],
-            [0.0; 4],
-            [0.0; 4],
-        )
+        let (yz, l0, _) = super::Lighting::uniforms(self.lighting.as_ref());
+        let ambient = self.lighting.map_or(self.ambient.clamp(0.0, 1.0), |l| l.ambient);
+        // style3: the texture's place in its atlas; a negative width clamps
+        // rather than repeats.
+        let mut rect = self.texture_rect;
+        if !self.texture_repeat {
+            rect[2] = -rect[2];
+        }
+        ([ambient, yz[0], yz[1], 0.0], rect, l0)
+    }
+
+    fn kind_extra(&self) -> [f32; 4] {
+        super::Lighting::uniforms(self.lighting.as_ref()).2
+    }
+
+    fn kind_material(&self) -> [f32; 4] {
+        super::Lighting::material(self.lighting.as_ref())
     }
     fn prepare(&mut self, ctx: &PrepareContext) {
+        if let Some((view, generation)) = &self.gpu_texture {
+            if self.texture_gpu.as_ref().is_none_or(|g| g.0 != *generation) {
+                let bg = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("threers shape gpu texture"),
+                    layout: &ctx.resources.texture_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(view) },
+                        wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&ctx.resources.mip_sampler) },
+                    ],
+                });
+                self.texture_gpu = Some((*generation, bg));
+            }
+        }
+        // The texture's place in its atlas, which may have moved.
+        if let Some((atlas, name)) = &self.texture {
+            let size = super::sprites::atlas_bind_group(ctx, atlas, &mut self.texture_gpu);
+            let a = atlas.read().unwrap();
+            let version = a.version();
+            if self.texture_version != Some(version) {
+                self.texture_version = Some(version);
+                if let Some(r) = a.get(name) {
+                    let (w, h) = (size.0.max(1) as f32, size.1.max(1) as f32);
+                    self.texture_rect = [r.x as f32 / w, r.y as f32 / h, r.width as f32 / w, r.height as f32 / h];
+                }
+            }
+        }
         if !self.mesh_dirty || self.mesh.0.is_empty() {
             return;
         }
+        // position, normal, uv (in the atlas), colour.
+        let n = self.mesh.0.len() / 6;
+        let mut data = Vec::with_capacity(n * 12);
+        for i in 0..n {
+            data.extend_from_slice(&self.mesh.0[i * 6..i * 6 + 6]);
+            data.extend_from_slice(self.uvs.get(i * 2..i * 2 + 2).unwrap_or(&[0.0, 0.0]));
+            data.extend_from_slice(self.vertex_colors.get(i * 4..i * 4 + 4).unwrap_or(&[1.0; 4]));
+        }
+        // The same shape moved (a posed model's next frame): write into the
+        // buffers it has.
+        let bytes = (data.len() * 4) as u64;
+        let index_len = self.mesh.1.as_ref().map_or(0, |i| i.len()) as u32;
+        if let Some((vb, _, ib)) = &self.mesh_gpu {
+            if vb.size() == bytes && ib.as_ref().map_or(0, |(_, n)| *n) == index_len {
+                ctx.queue.write_buffer(vb, 0, bytemuck::cast_slice(&data));
+                if let (Some((b, _)), Some(idx)) = (ib, self.mesh.1.as_ref()) {
+                    ctx.queue.write_buffer(b, 0, bytemuck::cast_slice(idx));
+                }
+                self.mesh_dirty = false;
+                return;
+            }
+        }
         let vb = ctx.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("threers shape marks vertices"),
-            size: (self.mesh.0.len() * 4) as u64,
+            size: bytes,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        ctx.queue
-            .write_buffer(&vb, 0, bytemuck::cast_slice(&self.mesh.0));
+        ctx.queue.write_buffer(&vb, 0, bytemuck::cast_slice(&data));
         let ib = self.mesh.1.as_ref().filter(|i| !i.is_empty()).map(|idx| {
             let b = ctx.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("threers shape marks indices"),
@@ -221,7 +358,19 @@ impl Mark for ShapeMarks {
         super::column_bytes(self) + mesh
     }
     fn columns(&mut self) -> Vec<&mut Column> {
-        vec![&mut self.positions, &mut self.scales, &mut self.colors]
+        vec![&mut self.positions, &mut self.scales, &mut self.colors, &mut self.rotations]
+    }
+    fn patterned(&self) -> bool {
+        self.texture.is_some() || self.gpu_texture.is_some()
+    }
+
+    /// Bit 0: the texture holds premultiplied sRGB bytes in a linear
+    /// format ([`set_gpu_texture`](Self::set_gpu_texture)).
+    fn kind_flags(&self) -> u32 {
+        u32::from(self.gpu_texture.is_some())
+    }
+    fn extra_bind_group(&self) -> Option<&wgpu::BindGroup> {
+        self.texture_gpu.as_ref().map(|g| &g.1)
     }
     fn geometry(&self) -> Option<InstancedGeometry<'_>> {
         self.mesh_gpu

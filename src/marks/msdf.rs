@@ -177,7 +177,14 @@ fn median(a: f32, b: f32, c: f32) -> f32 {
 /// The field of `contours` — per contour, per curve, points in pixels, y
 /// down — reaching `spread` pixels either side of the outline. `None` when
 /// there is no outline.
-pub(crate) fn msdf(contours: &[Vec<Vec<P>>], spread: i32) -> Option<Field> {
+///
+/// `grow` moves the outline out by that many pixels — a synthetic bold —
+/// which for a distance field is exact: the field of the grown shape is the
+/// field less the growth, corners rounded as growing rounds them. The box
+/// widens by as much, so the field still reaches `spread` past the new edge.
+pub(crate) fn msdf(contours: &[Vec<Vec<P>>], spread: i32, grow: f32) -> Option<Field> {
+    let grow = grow.max(0.0);
+    let margin = spread + grow.ceil() as i32;
     let edges: Vec<Edge> = contours.iter().flat_map(|c| color_contour(c)).collect();
     let closed: Vec<Vec<P>> = contours
         .iter()
@@ -201,14 +208,14 @@ pub(crate) fn msdf(contours: &[Vec<Vec<P>>], spread: i32) -> Option<Field> {
         x1 = x1.max(p[0]);
         y1 = y1.max(p[1]);
     }
-    let ox = x0.floor() as i32 - spread;
-    let oy = y0.floor() as i32 - spread;
-    let w = (x1.ceil() as i32 - x0.floor() as i32 + 2 * spread).max(1) as u32;
-    let h = (y1.ceil() as i32 - y0.floor() as i32 + 2 * spread).max(1) as u32;
+    let ox = x0.floor() as i32 - margin;
+    let oy = y0.floor() as i32 - margin;
+    let w = (x1.ceil() as i32 - x0.floor() as i32 + 2 * margin).max(1) as u32;
+    let h = (y1.ceil() as i32 - y0.floor() as i32 + 2 * margin).max(1) as u32;
     if w > 4096 || h > 4096 {
         return None;
     }
-    let encode = |d: f32| ((0.5 - d / (2.0 * spread as f32)).clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+    let encode = |d: f32| ((0.5 - (d - grow) / (2.0 * spread as f32)).clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
     let mut texels = Vec::with_capacity((w * h) as usize);
     for j in 0..h {
         for i in 0..w {
@@ -311,7 +318,7 @@ mod tests {
             assert_ne!(a & b, 0, "neighbours {k} share a channel");
         }
         let spread = 4;
-        let f = msdf(&sq, spread).unwrap();
+        let f = msdf(&sq, spread, 0.0).unwrap();
         let at = |x: f32, y: f32| {
             let i = (x - f.offset_x as f32 - 0.5) as usize;
             let j = (y - f.offset_y as f32 - 0.5) as usize;
@@ -336,6 +343,36 @@ mod tests {
         assert!(t[3] > 200 && median(t[0] as f32, t[1] as f32, t[2] as f32) > 200.0);
     }
 
+    /// Grown by `g`, every texel reads its distance less `g`, the median and
+    /// the true distance both, and the box takes the growth on each side.
+    #[test]
+    fn growing_moves_the_field_by_the_growth() {
+        let sq = vec![vec![
+            vec![[0.0, 0.0], [20.0, 0.0]],
+            vec![[20.0, 0.0], [20.0, 20.0]],
+            vec![[20.0, 20.0], [0.0, 20.0]],
+            vec![[0.0, 20.0], [0.0, 0.0]],
+        ]];
+        let spread = 4;
+        let (plain, grown) = (msdf(&sq, spread, 0.0).unwrap(), msdf(&sq, spread, 1.5).unwrap());
+        assert_eq!(grown.width, plain.width + 4);
+        assert_eq!(grown.offset_x, plain.offset_x - 2);
+        let at = |f: &Field, x: f32, y: f32| {
+            let i = (x - f.offset_x as f32 - 0.5) as usize;
+            let j = (y - f.offset_y as f32 - 0.5) as usize;
+            f.texels[j * f.width as usize + i]
+        };
+        let s = spread as f32;
+        for (x, y) in [(21.5, 10.5), (18.5, 10.5), (22.5, 22.5)] {
+            let (p, g) = (at(&plain, x, y), at(&grown, x, y));
+            let m = |t: [u8; 4]| median(decode(t[0], s), decode(t[1], s), decode(t[2], s));
+            assert!((decode(g[3], s) - (decode(p[3], s) - 1.5)).abs() < 0.05, "true at {x},{y}");
+            assert!((m(g) - (m(p) - 1.5)).abs() < 0.05, "median at {x},{y}");
+        }
+        // A pixel past the old edge is inside the grown one.
+        assert!(at(&grown, 20.5, 10.5)[3] > 128 && at(&plain, 20.5, 10.5)[3] < 128);
+    }
+
     /// A ring (an outer contour and a hole wound the other way): inside
     /// the band is inside, the hole outside.
     #[test]
@@ -352,7 +389,7 @@ mod tests {
             }
             vec![pts]
         };
-        let f = msdf(&[ring(16.0, false), ring(8.0, true)], 4).unwrap();
+        let f = msdf(&[ring(16.0, false), ring(8.0, true)], 4, 0.0).unwrap();
         let at = |x: f32, y: f32| {
             let i = (x - f.offset_x as f32 - 0.5) as usize;
             let j = (y - f.offset_y as f32 - 0.5) as usize;

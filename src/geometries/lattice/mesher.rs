@@ -20,6 +20,7 @@
 //! sampled box, closed.
 
 use crate::core::{BufferAttribute, BufferGeometry};
+use crate::extras::marching_cubes::CROSSING_CLEARANCE;
 use crate::math::Vector3;
 use std::sync::OnceLock;
 
@@ -143,6 +144,16 @@ pub(crate) struct IsoGrid {
     pub values: Vec<f32>,
 }
 
+/// One slab's share of a contour, before its seams are welded.
+struct Slab {
+    positions: Vec<f32>,
+    normals: Vec<f32>,
+    indices: Vec<u32>,
+    /// Vertex per x- and y-edge of the slab's bottom plane, and of its top.
+    bottom: Vec<u32>,
+    top: Vec<u32>,
+}
+
 impl IsoGrid {
     fn at(&self, i: usize, j: usize, k: usize) -> f32 {
         self.values[(k * self.dims[1] + j) * self.dims[0] + i]
@@ -165,8 +176,14 @@ impl IsoGrid {
     /// Triangulate the zero level set. UVs are a planar projection onto the
     /// plane the vertex normal faces most directly, normalised over the grid —
     /// enough for tiling detail maps, with a seam wherever that axis flips.
-    pub(crate) fn triangulate(&self) -> BufferGeometry {
-        let [nx, ny, nz] = self.dims;
+    /// Contour the cells of layers `k0..k1`, with a vertex table of their own.
+    ///
+    /// Besides the slab's triangles this hands back, per x- and y-edge of its
+    /// bottom and top planes, the vertex it put there (or `u32::MAX`): the
+    /// seams a neighbouring slab shares, which [`triangulate`](Self::triangulate)
+    /// welds on.
+    fn sweep(&self, k0: usize, k1: usize) -> Slab {
+        let [nx, ny, _] = self.dims;
         let table = case_table();
 
         let mut positions: Vec<f32> = Vec::new();
@@ -184,27 +201,56 @@ impl IsoGrid {
         let plane = nx * ny;
         let mut rows: [Vec<u32>; 2] = [vec![u32::MAX; plane * 3], vec![u32::MAX; plane * 3]];
 
-        let extent = Vector3::new(
-            (nx - 1) as f32 * self.step.x,
-            (ny - 1) as f32 * self.step.y,
-            (nz - 1) as f32 * self.step.z,
-        );
-
         let mut corner = [0.0f32; 8];
         let mut cell_edge = [u32::MAX; 12];
-        for k in 0..nz - 1 {
+        // Which of the four samples at (i, j|j+1, k|k+1) are inside, one
+        // nibble per i: bit 0 is (j, k), 1 is (j+1, k), 2 is (j, k+1) and 3 is
+        // (j+1, k+1). Two neighbouring nibbles are a cell's whole case, so each
+        // sample is read once per row of cells instead of once per cell
+        // touching it — and most cells, empty, are done with at that.
+        let mut quad = vec![0u8; nx];
+        // A nibble's bits spread to the even corners, where `(c >> 1) & 1` is y
+        // and `c >> 2` is z; the odd corners are the same at i + 1.
+        const SPREAD: [u8; 16] = {
+            let mut t = [0u8; 16];
+            let mut q = 0;
+            while q < 16 {
+                t[q] = ((q & 1) | (q & 2) << 1 | (q & 4) << 2 | (q & 8) << 3) as u8;
+                q += 1;
+            }
+            t
+        };
+        let mut bottom = Vec::new();
+        let mut top = Vec::new();
+        for k in k0..k1 {
             for j in 0..ny - 1 {
+                let row = |jj: usize, kk: usize| {
+                    let start = (kk * ny + jj) * nx;
+                    &self.values[start..start + nx]
+                };
+                let (r0, r1, r2, r3) = (row(j, k), row(j + 1, k), row(j, k + 1), row(j + 1, k + 1));
+                let (mut any_in, mut any_out) = (false, false);
+                for i in 0..nx {
+                    let q = (r0[i] > 0.0) as u8
+                        | ((r1[i] > 0.0) as u8) << 1
+                        | ((r2[i] > 0.0) as u8) << 2
+                        | ((r3[i] > 0.0) as u8) << 3;
+                    any_in |= q != 0;
+                    any_out |= q != 15;
+                    quad[i] = q;
+                }
+                // All inside or all outside: no cell of the row is crossed.
+                if !(any_in && any_out) {
+                    continue;
+                }
                 for i in 0..nx - 1 {
-                    let mut case = 0u8;
-                    for (c, slot) in corner.iter_mut().enumerate() {
-                        *slot = self.at(i + (c & 1), j + ((c >> 1) & 1), k + ((c >> 2) & 1));
-                        if *slot > 0.0 {
-                            case |= 1 << c;
-                        }
-                    }
+                    let case = SPREAD[quad[i] as usize] | SPREAD[quad[i + 1] as usize] << 1;
                     let loops = &table[case as usize];
                     if loops.is_empty() {
                         continue;
+                    }
+                    for (c, slot) in corner.iter_mut().enumerate() {
+                        *slot = self.at(i + (c & 1), j + ((c >> 1) & 1), k + ((c >> 2) & 1));
                     }
 
                     cell_edge.fill(u32::MAX);
@@ -231,8 +277,11 @@ impl IsoGrid {
                             }
                             let (va, vb) = (corner[a as usize], corner[b as usize]);
                             let denom = va - vb;
+                            // Off the ends, for the reason given on
+                            // `CROSSING_CLEARANCE`: a clip or a trim can put a
+                            // sample exactly on the surface.
                             let t = if denom.abs() > f32::EPSILON {
-                                (va / denom).clamp(0.0, 1.0)
+                                (va / denom).clamp(CROSSING_CLEARANCE, 1.0 - CROSSING_CLEARANCE)
                             } else {
                                 0.5
                             };
@@ -317,9 +366,98 @@ impl IsoGrid {
             // the lower layer's, which is exactly what the next sweep needs;
             // its z-edges were never written, and the layer being retired is
             // cleared to take the new upper one.
+            // The seams: this slab's first plane, as soon as its first layer
+            // of cells has written it, and its last, before it rolls away.
+            if k == k0 {
+                bottom = rows[0][..2 * plane].to_vec();
+            }
+            if k + 1 == k1 {
+                top = rows[1][..2 * plane].to_vec();
+            }
             rows.swap(0, 1);
             rows[1].fill(u32::MAX);
         }
+        Slab {
+            positions,
+            normals,
+            indices,
+            bottom,
+            top,
+        }
+    }
+
+    /// Triangulate the zero level set. UVs are a planar projection onto the
+    /// plane the vertex normal faces most directly, normalised over the grid —
+    /// enough for tiling detail maps, with a seam wherever that axis flips.
+    ///
+    /// With the `parallel` feature the grid is contoured in slabs of layers at
+    /// once and welded back on their seams. The result is the same, to the
+    /// byte, as one sweep: a seam vertex is made by the slab below before the
+    /// slab above would make it, which is when the single sweep makes it too,
+    /// so concatenating the slabs in order and dropping the upper copies
+    /// reproduces its vertex order exactly.
+    pub(crate) fn triangulate(&self) -> BufferGeometry {
+        let layers = self.dims[2] - 1;
+        let slabs = if cfg!(feature = "parallel") {
+            (layers / 16).clamp(1, 32)
+        } else {
+            1
+        };
+        self.triangulate_with(slabs)
+    }
+
+    /// [`triangulate`](Self::triangulate) in exactly `slabs` slabs.
+    fn triangulate_with(&self, slabs: usize) -> BufferGeometry {
+        let [nx, ny, nz] = self.dims;
+        let layers = nz - 1;
+        let slabs = slabs.clamp(1, layers.max(1));
+        let bounds = |c: usize| c * layers / slabs;
+        let parts = crate::utils::parallel::par_map_range_coarse(slabs, |c| {
+            self.sweep(bounds(c), bounds(c + 1))
+        });
+
+        let total = |f: fn(&Slab) -> usize| parts.iter().map(f).sum::<usize>();
+        let mut positions = Vec::with_capacity(total(|s| s.positions.len()));
+        let mut normals = Vec::with_capacity(total(|s| s.normals.len()));
+        let mut indices = Vec::with_capacity(total(|s| s.indices.len()));
+        let mut seam: Vec<u32> = Vec::new();
+        for (c, part) in parts.iter().enumerate() {
+            // Local vertex → global, the upper copies of the seam folded onto
+            // the lower slab's.
+            let count = part.positions.len() / 3;
+            let mut global = vec![u32::MAX; count];
+            if c > 0 {
+                for (slot, &local) in part.bottom.iter().enumerate() {
+                    if local != u32::MAX {
+                        global[local as usize] = seam[slot];
+                    }
+                }
+            }
+            for (v, slot) in global.iter_mut().enumerate() {
+                if *slot == u32::MAX {
+                    *slot = (positions.len() / 3) as u32;
+                    positions.extend_from_slice(&part.positions[v * 3..v * 3 + 3]);
+                    normals.extend_from_slice(&part.normals[v * 3..v * 3 + 3]);
+                }
+            }
+            indices.extend(part.indices.iter().map(|&i| global[i as usize]));
+            seam = part
+                .top
+                .iter()
+                .map(|&local| {
+                    if local == u32::MAX {
+                        u32::MAX
+                    } else {
+                        global[local as usize]
+                    }
+                })
+                .collect();
+        }
+        let extent = Vector3::new(
+            (nx - 1) as f32 * self.step.x,
+            (ny - 1) as f32 * self.step.y,
+            (nz - 1) as f32 * self.step.z,
+        );
 
         let mut geom = BufferGeometry::new();
         if positions.is_empty() {
@@ -412,6 +550,30 @@ mod tests {
                 .collect();
             cut.sort_unstable();
             assert_eq!(cut, visited, "case {case} misses a cut edge");
+        }
+    }
+
+    #[test]
+    fn slabs_weld_back_to_the_single_sweep() {
+        // Any number of slabs, the same bytes: positions, normals, UVs, index.
+        let g = grid_of(37, 1.0, |p| {
+            let s = 4.0;
+            0.3 - ((p.x * s).sin() * (p.y * s).cos()
+                + (p.y * s).sin() * (p.z * s).cos()
+                + (p.z * s).sin() * (p.x * s).cos())
+            .abs()
+        });
+        let one = g.triangulate_with(1);
+        for slabs in [2, 3, 7, 40] {
+            let many = g.triangulate_with(slabs);
+            assert_eq!(one.index, many.index, "{slabs} slabs");
+            for name in ["position", "normal", "uv"] {
+                assert_eq!(
+                    one.get_attribute(name).unwrap().array,
+                    many.get_attribute(name).unwrap().array,
+                    "{slabs} slabs: {name}"
+                );
+            }
         }
     }
 

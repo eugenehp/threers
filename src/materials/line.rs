@@ -12,6 +12,14 @@ pub struct LineBasicMaterial {
     /// draws opaquely whatever the opacity. `None` (the default) blends when
     /// `opacity < 1`, the rule this crate used before it had the flag.
     pub transparent: Option<bool>,
+    /// three.js `linewidth`, in pixels (× the renderer's pixel ratio, as a
+    /// point's size is). 1 draws line primitives; wider, each segment is a
+    /// round-capped quad (`vs_wide_lines`) — what three.js's `linewidth`
+    /// never did under WebGL. Thinner and transparent, the quad too, each
+    /// pixel taking the share of it the line covers, so a 0.3-pixel line
+    /// draws at 0.3 of its colour instead of lighting whole pixels or none
+    /// (opaque, it stays a line primitive). On the WebGPU/WebGL2 renderer; the Metal
+    /// renderer has its own `set_line_width`.
     pub line_width: f32,
     pub dashed: bool,
     pub dash_scale: f32,

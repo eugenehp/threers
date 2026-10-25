@@ -14,6 +14,10 @@ use super::{
 pub struct PolygonFeature {
     pub outer: Vec<[f64; 2]>,
     pub holes: Vec<Vec<[f64; 2]>>,
+    /// The roof's triangles, given rather than found: indices into the
+    /// outer ring then each hole, closing points dropped (deck.gl's binary
+    /// `indices`). Not used on a curved ground, whose rings gain points.
+    pub triangles: Option<Vec<[u32; 3]>>,
 }
 
 impl PolygonFeature {
@@ -21,6 +25,7 @@ impl PolygonFeature {
         Self {
             outer,
             holes: Vec::new(),
+            triangles: None,
         }
     }
 }
@@ -54,19 +59,114 @@ pub struct PolygonMarks {
     feature: Column,
     elevations: Column,
     colors: Column,
+    /// Per vertex, its feature's pattern background.
+    backgrounds: Column,
     index: Vec<u32>,
     index_dirty: bool,
     index_gpu: Option<(wgpu::Buffer, u32)>,
     /// Each feature's vertices, `start..end`.
     ranges: Vec<(usize, usize)>,
+    /// Each vertex's point in its feature ([`PolygonMesh::source`]).
+    source: Vec<u32>,
     /// How much of a wall facing away from the light is lit: 1 is unlit.
     /// Roofs always show their colour exactly, so a choropleth reads true.
     pub ambient: f32,
+    /// Light as deck.gl does instead (`ambient` is then unused, and roofs
+    /// are lit too).
+    pub lighting: Option<super::Lighting>,
     /// For a mesh built on a sphere: its centre, which extrusion rises away
     /// from. `None` rises along +Y.
     radial: Option<[f64; 3]>,
     /// `radial` relative to the view's origin, refreshed every frame.
     radial_rel: [f32; 4],
+    pattern: Option<PolygonPattern>,
+    /// World units one pattern texel spans (times each frame's scale):
+    /// fixed for patterns sized in metres, set each frame for ones sized
+    /// on screen.
+    pub pattern_unit: f64,
+    /// The ground point, `[x, z]` in world units, where pattern tiles start
+    /// (the atlas image's top left).
+    pub pattern_origin: [f64; 2],
+    /// What the pattern columns were built for: (unit, origin, tile origin,
+    /// atlas version), or none to build them.
+    pattern_built: Option<(u64, [u64; 3], [u64; 2], u64)>,
+    pattern_gpu: Option<(u64, wgpu::BindGroup)>,
+    /// Per feature, a procedural pattern ([`set_procedural`](Self::set_procedural)).
+    procedural: Option<Vec<Option<ProceduralFrame>>>,
+    /// World units one procedural pattern unit spans (before each feature's
+    /// scale): deck.gl's `fillPatternSizeUnits`, set each frame for pixels.
+    pub procedural_unit: f64,
+    /// Pattern y (procedural or image) runs along world +z (south on a
+    /// map, down in a y-down view); otherwise along -z.
+    pub procedural_y_down: bool,
+    /// Where procedural pattern space starts: added to the ground point,
+    /// in world units along the pattern's x and y (deck.gl measures from
+    /// its common space's corner).
+    pub procedural_offset: [f64; 2],
+    procedural_built: Option<(u64, u64)>,
+}
+
+/// A fill pattern for [`PolygonMarks`] — deck.gl's `FillStyleExtension`,
+/// MapLibre's `fill-pattern`: each feature's fill tiled with an image from
+/// `atlas`, on the ground's x and z.
+#[derive(Debug, Clone)]
+pub struct PolygonPattern {
+    pub atlas: super::SharedAtlas,
+    /// The image's alpha masks the fill colour; otherwise the image's own
+    /// colours show.
+    pub mask: bool,
+    /// Per feature: the atlas image, its scale (texels per tile texel), and
+    /// its offset in tiles. `None`, or a name not in the atlas: a plain fill.
+    pub frames: Vec<Option<PatternFrame>>,
+}
+
+/// A pattern drawn by the shader rather than from an image — deck.gl's
+/// `FillStyleExtension({proceduralPattern: true})`. Sizes are in pattern
+/// units ([`PolygonMarks::procedural_unit`] world units each).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ProceduralShape {
+    /// Parallel lines at `angle` (degrees), `stroke_width` wide, `gaps`
+    /// apart edge to edge (two gaps alternate when `alternating`).
+    Hatch { angle: f32, stroke_width: f32, gaps: [f32; 2], alternating: bool },
+    /// Two sets of lines.
+    CrossHatch { angles: [f32; 2], stroke_width: f32, gap: f32 },
+    /// Dots of `radius`, `gap` apart edge to edge, on a grid turned by
+    /// `angle` with its second axis tilted `skew` towards the first.
+    Dots { radius: f32, gap: f32, angle: f32, skew: f32 },
+}
+
+/// One feature's procedural pattern and its scale (pattern units per
+/// pattern unit, deck.gl's `getFillPatternScale`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ProceduralFrame {
+    pub shape: ProceduralShape,
+    pub scale: f32,
+}
+
+impl ProceduralFrame {
+    /// The shader's two columns: (shape, size, gaps) and (angles in
+    /// radians, count, world units per pattern unit, negative when pattern
+    /// y runs along -z).
+    pub(crate) fn params(&self, unit: f64, y_down: bool) -> ([f32; 4], [f32; 4]) {
+        let rad = |d: f32| d.to_radians();
+        let (shape, size, gaps, angles, count) = match self.shape {
+            ProceduralShape::Hatch { angle, stroke_width, gaps, alternating } => {
+                (1.0, stroke_width, gaps, [rad(angle), 0.0], if alternating { 2.0 } else { 1.0 })
+            }
+            ProceduralShape::CrossHatch { angles, stroke_width, gap } => (2.0, stroke_width, [gap, gap], [rad(angles[0]), rad(angles[1])], 2.0),
+            ProceduralShape::Dots { radius, gap, angle, skew } => (3.0, radius, [gap, gap], [rad(angle), rad(skew)], 2.0),
+        };
+        let unit = (unit * self.scale as f64) as f32 * if y_down { 1.0 } else { -1.0 };
+        ([shape, size, gaps[0], gaps[1]], [angles[0], angles[1], count, unit])
+    }
+}
+
+/// One feature's pattern.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PatternFrame {
+    pub name: String,
+    pub scale: f32,
+    pub offset: [f32; 2],
 }
 
 impl Default for PolygonMarks {
@@ -86,14 +186,129 @@ impl PolygonMarks {
             feature: Column::float(1),
             elevations: Column::float(1),
             colors: Column::new(ColumnFormat::Unorm8x4),
+            backgrounds: {
+                let mut c = Column::new(ColumnFormat::Unorm8x4);
+                c.set_default_rgba([0, 0, 0, 0]);
+                c
+            },
             index: Vec::new(),
             index_dirty: true,
             index_gpu: None,
             ranges: Vec::new(),
+            source: Vec::new(),
             ambient: 0.45,
+            lighting: None,
             radial: None,
             radial_rel: [0.0; 4],
+            pattern: None,
+            pattern_unit: 1.0,
+            pattern_origin: [0.0, 0.0],
+            pattern_built: None,
+            pattern_gpu: None,
+            procedural: None,
+            procedural_unit: 1.0,
+            procedural_y_down: true,
+            procedural_offset: [0.0, 0.0],
+            procedural_built: None,
         }
+    }
+
+    /// Tile each feature's fill with an image ([`PolygonPattern`]), or
+    /// stop. Patterns take the two custom slots, so they do not combine
+    /// with hooks that read custom values.
+    pub fn set_pattern(&mut self, pattern: Option<PolygonPattern>) {
+        if pattern.is_none() && self.pattern.is_some() {
+            self.common.clear_custom(0);
+            self.common.clear_custom(1);
+        }
+        self.pattern = pattern;
+        self.pattern_built = None;
+        self.pattern_gpu = None;
+    }
+
+    pub fn pattern(&self) -> Option<&PolygonPattern> {
+        self.pattern.as_ref()
+    }
+
+    /// Draw each feature's fill as a procedural pattern (`None` for a plain
+    /// fill): the fill's colour where the pattern is, clear elsewhere. Uses
+    /// both custom columns, so not with hooks that read them.
+    pub fn set_procedural(&mut self, frames: Option<Vec<Option<ProceduralFrame>>>) {
+        if frames.is_none() && self.procedural.is_some() {
+            for slot in 0..2 {
+                self.common.clear_custom(slot);
+            }
+        }
+        self.procedural = frames;
+        self.procedural_built = None;
+    }
+
+    /// The per-vertex procedural columns: each feature's shape (type, size,
+    /// gaps) and (angles, count, world units per pattern unit, signed by y).
+    fn build_procedural_columns(&mut self) {
+        let Some(frames) = &self.procedural else { return };
+        let key = (self.procedural_unit.to_bits(), u64::from(self.procedural_y_down));
+        // Rebuilt too when something else cleared the custom columns.
+        if self.procedural_built == Some(key) && self.common.has_custom(0) && self.common.has_custom(1) {
+            return;
+        }
+        let n = self.ranges.len();
+        let mut a = vec![0.0f32; n * 4];
+        let mut b = vec![0.0f32; n * 4];
+        for (k, f) in frames.iter().enumerate().take(n) {
+            let Some(f) = f else { continue };
+            let (p0, p1) = f.params(self.procedural_unit, self.procedural_y_down);
+            a[k * 4..k * 4 + 4].copy_from_slice(&p0);
+            b[k * 4..k * 4 + 4].copy_from_slice(&p1);
+        }
+        self.set_feature_custom(0, 4, &a);
+        self.set_feature_custom(1, 4, &b);
+        self.procedural_built = Some(key);
+    }
+
+    /// The per-vertex pattern columns: each feature's atlas frame (uv) and
+    /// its tile size with the layer's origin reduced to within a tile — in
+    /// f64 here, so the shader's f32 never sees large coordinates.
+    fn build_pattern_columns(&mut self) {
+        let Some(p) = &self.pattern else { return };
+        let atlas = p.atlas.read().unwrap();
+        let (aw, ah) = atlas.size();
+        let version = atlas.version();
+        let origin = self.common.local_origin.unwrap_or([0.0; 3]);
+        let key = (self.pattern_unit.to_bits(), origin.map(f64::to_bits), self.pattern_origin.map(f64::to_bits), version ^ (u64::from(self.procedural_y_down) << 63));
+        if self.pattern_built == Some(key) {
+            return;
+        }
+        let n = self.ranges.len();
+        let mut frames = vec![0.0f32; n * 4];
+        let mut tiles = vec![0.0f32; n * 4];
+        for (k, f) in p.frames.iter().enumerate().take(n) {
+            let Some(f) = f else { continue };
+            let Some(r) = atlas.get(&f.name) else { continue };
+            frames[k * 4..k * 4 + 4].copy_from_slice(&[
+                r.x as f32 / aw.max(1) as f32,
+                r.y as f32 / ah.max(1) as f32,
+                r.width as f32 / aw.max(1) as f32,
+                r.height as f32 / ah.max(1) as f32,
+            ]);
+            let (px, pz) = (
+                r.width as f64 * f.scale as f64 * self.pattern_unit,
+                r.height as f64 * f.scale as f64 * self.pattern_unit,
+            );
+            if px <= 0.0 || pz <= 0.0 {
+                continue;
+            }
+            let reduce = |o: f64, period: f64, offset: f32| (o.rem_euclid(period) + offset as f64 * period) as f32;
+            let (tx, tz) = (origin[0] - self.pattern_origin[0], origin[2] - self.pattern_origin[1]);
+            // A tile's y runs along -z when the pattern's y does (a negative
+            // height turns it round in the shader).
+            let pz_signed = if self.procedural_y_down { pz } else { -pz };
+            tiles[k * 4..k * 4 + 4].copy_from_slice(&[px as f32, pz_signed as f32, reduce(tx, px, f.offset[0]), reduce(tz, pz, f.offset[1])]);
+        }
+        drop(atlas);
+        self.set_feature_custom(0, 4, &frames);
+        self.set_feature_custom(1, 4, &tiles);
+        self.pattern_built = Some(key);
     }
 
     /// Replace every feature, with its ground at height `base`. Per-feature
@@ -115,15 +330,20 @@ impl PolygonMarks {
         self.feature.set_f32(&fid);
         self.elevations.set_f32(&[]);
         self.colors.set_rgba(&[]);
+        self.backgrounds.set_rgba(&[]);
         for slot in 0..2 {
             self.common.clear_custom(slot);
         }
+        // A pattern's columns follow the new features.
+        self.pattern_built = None;
+        self.procedural_built = None;
         self.ranges = mesh
             .ranges
             .iter()
             .map(|&(a, b)| (a as usize, b as usize))
             .collect();
         self.index = mesh.index;
+        self.source = mesh.source;
         self.radial = mesh.radial;
         self.index_dirty = true;
     }
@@ -166,6 +386,21 @@ impl PolygonMarks {
         let v = self.expand(0, c, 1);
         self.colors.set_rgba(&v);
     }
+    /// sRGB colour per point of each feature — its outer ring then holes,
+    /// closing points dropped — blended across the triangles between them
+    /// (deck.gl's binary per-vertex `getFillColor`). A vertex with no point
+    /// of its own, or past the colours given, takes its feature's first.
+    pub fn set_point_colors(&mut self, colors: &[Vec<[u8; 4]>]) {
+        let mut v = Vec::with_capacity(self.source.len());
+        for (k, &(a, b)) in self.ranges.iter().enumerate() {
+            let c = colors.get(k).map_or(&[][..], |c| c.as_slice());
+            for i in a..b {
+                let s = self.source.get(i).copied().unwrap_or(u32::MAX) as usize;
+                v.push(c.get(s).or(c.first()).copied().unwrap_or([0, 0, 0, 255]));
+            }
+        }
+        self.colors.set_rgba(&v);
+    }
     pub fn update_colors(&mut self, start: usize, c: &[[u8; 4]]) {
         let v = self.expand(start, c, 1);
         let first = self.first_vertex(start);
@@ -173,6 +408,15 @@ impl PolygonMarks {
     }
     pub fn set_default_color(&mut self, c: [u8; 4]) {
         self.colors.set_default_rgba(c);
+    }
+    /// Per feature, the colour behind its fill pattern (sRGB, straight
+    /// alpha; clear for none): deck.gl's `getFillPatternBackgroundColor`.
+    pub fn set_pattern_backgrounds(&mut self, c: &[[u8; 4]]) {
+        let v = self.expand(0, c, 1);
+        self.backgrounds.set_rgba(&v);
+    }
+    pub fn set_default_pattern_background(&mut self, c: [u8; 4]) {
+        self.backgrounds.set_default_rgba(c);
     }
     /// A custom column, per feature — what
     /// [`MarkCommon::set_custom`](super::MarkCommon::set_custom) is for the
@@ -265,15 +509,50 @@ impl Mark for PolygonMarks {
         true
     }
     fn kind_uniforms(&self) -> KindUniforms {
+        let (yz, l0, _) = super::Lighting::uniforms(self.lighting.as_ref());
+        let ambient = self.lighting.map_or(self.ambient.clamp(0.0, 1.0), |l| l.ambient);
         (
-            [self.ambient.clamp(0.0, 1.0), 0.0, 0.0, 0.0],
-            // style3: the sphere's centre, relative, and 1 to rise from it.
-            self.radial_rel,
-            [0.0; 4],
+            [ambient, yz[0], yz[1], 0.0],
+            // style3: the sphere's centre, relative, and 1 to rise from it;
+            // on flat ground, xy the procedural pattern's offset.
+            if self.radial.is_some() {
+                self.radial_rel
+            } else {
+                [self.procedural_offset[0] as f32, self.procedural_offset[1] as f32, 0.0, 0.0]
+            },
+            l0,
         )
     }
 
+    fn kind_extra(&self) -> [f32; 4] {
+        super::Lighting::uniforms(self.lighting.as_ref()).2
+    }
+
+    fn kind_material(&self) -> [f32; 4] {
+        let mut m = super::Lighting::material(self.lighting.as_ref());
+        m[2] = if self.pattern.as_ref().is_some_and(|p| p.mask) { 1.0 } else { 0.0 };
+        m
+    }
+
+    fn patterned(&self) -> bool {
+        self.pattern.is_some()
+    }
+
+    /// Bit 0: a procedural pattern.
+    fn kind_flags(&self) -> u32 {
+        u32::from(self.procedural.is_some())
+    }
+
+    fn extra_bind_group(&self) -> Option<&wgpu::BindGroup> {
+        self.pattern_gpu.as_ref().map(|g| &g.1)
+    }
+
     fn prepare(&mut self, ctx: &PrepareContext) {
+        self.build_procedural_columns();
+        if let Some(atlas) = self.pattern.as_ref().map(|p| p.atlas.clone()) {
+            super::sprites::atlas_bind_group(ctx, &atlas, &mut self.pattern_gpu);
+            self.build_pattern_columns();
+        }
         self.radial_rel = match self.radial {
             Some(c) => {
                 let o = ctx.view.origin.position;
@@ -302,6 +581,7 @@ impl Mark for PolygonMarks {
     }
     fn release_gpu(&mut self) {
         self.index_gpu = None;
+        self.pattern_gpu = None;
         self.index_dirty = true;
         super::release_columns(self);
     }
@@ -315,6 +595,7 @@ impl Mark for PolygonMarks {
             &mut self.feature,
             &mut self.elevations,
             &mut self.colors,
+            &mut self.backgrounds,
         ]
     }
     fn index_buffer(&self) -> Option<(&wgpu::Buffer, u32)> {

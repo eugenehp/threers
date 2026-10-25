@@ -6,6 +6,16 @@
 //! builds and runs on `wasm32` as well as native (mirroring the `codec`
 //! module, behind the `native-codec` feature).
 //!
+//! # Text is not a sequence of codepoints
+//!
+//! Between a caption's string and a row of glyphs there are three
+//! transformations, all in [`order::visual`], and each omission was visible:
+//! `"Noe\u{0308}l"` drew a floating diaeresis ([`compose`]), Hebrew read
+//! backwards ([`bidi`]), and a bracket inside a right-to-left phrase opened the
+//! wrong way (**L4**), and Arabic letters stood apart instead of joining
+//! ([`crate::loaders::shape`]), and the dots a shaped Arabic letter decomposes into
+//! sat at its origin rather than on it ([`crate::loaders::mark`]).
+//!
 //! ```
 //! use threers::captions::{CaptionTrack, CaptionPainter};
 //!
@@ -35,14 +45,20 @@
 //! renderer draws them through
 //! [`Renderer::draw_caption_overlay`](crate::renderer::Renderer::draw_caption_overlay).
 
+pub mod bidi;
+pub mod compose;
+mod compose_tables;
 pub mod font;
+pub mod glyphs;
 pub mod layout;
+pub mod legibility;
+pub mod order;
 pub mod overlay;
 pub mod raster;
 pub mod srt;
 pub mod vtt;
 
-pub use font::{CaptionFont, GlyphBitmap};
+pub use font::{CaptionFont, GlyphBitmap, Hinting, SdfGlyph, SdfGlyphs};
 pub use layout::{LaidOutText, LineBox};
 pub use overlay::CaptionOverlay;
 pub use raster::CaptionPainter;

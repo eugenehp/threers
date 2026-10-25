@@ -1022,6 +1022,9 @@ pub struct Renderer {
     pipeline_line: wgpu::RenderPipeline,
     pipeline_point: wgpu::RenderPipeline,
     pipeline_point_alpha: wgpu::RenderPipeline,
+    /// `LineSegments` wider than a pixel (`vs_wide_lines`), opaque and blended.
+    pipeline_wide_line: wgpu::RenderPipeline,
+    pipeline_wide_line_alpha: wgpu::RenderPipeline,
     pipeline_sprite: wgpu::RenderPipeline,
     // Hardware-MSAA variants of the opaque forward pipelines (surface path).
     pipeline_tri_msaa: wgpu::RenderPipeline,
@@ -1033,6 +1036,7 @@ pub struct Renderer {
     pipeline_tri_wire_msaa: wgpu::RenderPipeline,
     pipeline_line_msaa: wgpu::RenderPipeline,
     pipeline_point_msaa: wgpu::RenderPipeline,
+    pipeline_wide_line_msaa: wgpu::RenderPipeline,
     /// MSAA sample count for the surface pass: 1 = off, else `MSAA_SAMPLES`.
     msaa: u32,
     /// See [`set_specular_antialiasing`](Self::set_specular_antialiasing).
@@ -1069,6 +1073,8 @@ pub struct Renderer {
     pipeline_line_f16: wgpu::RenderPipeline,
     pipeline_point_f16: wgpu::RenderPipeline,
     pipeline_point_alpha_f16: wgpu::RenderPipeline,
+    pipeline_wide_line_f16: wgpu::RenderPipeline,
+    pipeline_wide_line_alpha_f16: wgpu::RenderPipeline,
     pipeline_sprite_f16: wgpu::RenderPipeline,
     pipeline_instanced_f16: wgpu::RenderPipeline,
     pipeline_skinned_f16: wgpu::RenderPipeline,
@@ -1102,7 +1108,7 @@ pub struct Renderer {
     /// The blended draws' pipelines into the `Unorm` view of an sRGB target,
     /// for the encoded-blend pass (see `encoded_pass`): sprite, transparent
     /// instanced, transparent skinned. `None` on a target that is not sRGB.
-    encoded_blend_pipelines: Option<[wgpu::RenderPipeline; 7]>,
+    encoded_blend_pipelines: Option<[wgpu::RenderPipeline; 8]>,
     pipeline_skinned_wire: wgpu::RenderPipeline,
     pipeline_skinned_wire_f16: wgpu::RenderPipeline,
     /// Post-fx fullscreen-quad pipeline. Reads one input texture, writes to
@@ -3987,6 +3993,26 @@ impl Renderer {
                 b
             })
         });
+        // Wide lines: a segment an instance, its start through slot 0 (as
+        // `VsIn`) and its end through slot 1 — the same buffer bound a vertex
+        // further on — each stepping two vertices (`vs_wide_lines`).
+        let wide_stride = 2 * GpuMesh::VERTEX_STRIDE as wgpu::BufferAddress;
+        let vertex_buffers_wide = [
+            vertex_buffers[0].clone().map(|mut b| {
+                b.step_mode = wgpu::VertexStepMode::Instance;
+                b.array_stride = wide_stride;
+                b
+            }),
+            Some(wgpu::VertexBufferLayout {
+                array_stride: wide_stride,
+                step_mode: wgpu::VertexStepMode::Instance,
+                attributes: &[
+                    wgpu::VertexAttribute { offset: 0, shader_location: 9, format: wgpu::VertexFormat::Float32x3 },
+                    wgpu::VertexAttribute { offset: 24, shader_location: 10, format: wgpu::VertexFormat::Float32x2 },
+                    wgpu::VertexAttribute { offset: 32, shader_location: 11, format: wgpu::VertexFormat::Float32x4 },
+                ],
+            }),
+        ];
 
         // Every pipeline a material draws with is created through this, which
         // keeps its descriptor so a material's `depthTest` / `depthWrite` /
@@ -4781,6 +4807,37 @@ impl Renderer {
         };
         let pipeline_point = make_point_pipeline(color_format, false, 1, "threers point pipeline");
         let pipeline_point_alpha = make_point_pipeline(color_format, true, 1, "threers point alpha pipeline");
+        // `LineSegments` wider than a pixel: a capsule a segment
+        // (`vs_wide_lines` / `fs_wide_lines`), opaque or blended, as points are.
+        let make_wide_line_pipeline = |fmt: wgpu::TextureFormat, blend: bool, samples: u32, label: &str| {
+            record(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_wide_lines"),
+                    buffers: &vertex_buffers_wide,
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_wide_lines"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: fmt,
+                        blend: Some(if blend { wgpu::BlendState::ALPHA_BLENDING } else { wgpu::BlendState::REPLACE }),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: primitive(wgpu::PrimitiveTopology::TriangleList, None),
+                depth_stencil: Some(depth_stencil(!blend, wgpu::CompareFunction::LessEqual)),
+                multisample: wgpu::MultisampleState { count: samples, ..Default::default() },
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let pipeline_wide_line = make_wide_line_pipeline(color_format, false, 1, "threers wide line pipeline");
+        let pipeline_wide_line_alpha = make_wide_line_pipeline(color_format, true, 1, "threers wide line alpha pipeline");
 
         // --- Hardware-MSAA variants of the opaque forward pipelines (surface
         // path only). Identical to the ones above but with `count = MSAA_SAMPLES`;
@@ -4885,6 +4942,7 @@ impl Renderer {
             "threers line msaa",
         );
         let pipeline_point_msaa = make_point_pipeline(color_format, false, MSAA_SAMPLES, "threers point msaa");
+        let pipeline_wide_line_msaa = make_wide_line_pipeline(color_format, false, MSAA_SAMPLES, "threers wide line msaa");
         let pipeline_tri_sky_msaa = make_sky_pipeline_ms(color_format, "threers tri sky msaa");
 
         let pipeline_tri_f16 = make_pipeline(
@@ -4921,6 +4979,9 @@ impl Renderer {
         let pipeline_point_f16 = make_point_pipeline(f16_format, false, 1, "threers point f16 pipeline");
         let pipeline_point_alpha_f16 =
             make_point_pipeline(f16_format, true, 1, "threers point alpha f16 pipeline");
+        let pipeline_wide_line_f16 = make_wide_line_pipeline(f16_format, false, 1, "threers wide line f16 pipeline");
+        let pipeline_wide_line_alpha_f16 =
+            make_wide_line_pipeline(f16_format, true, 1, "threers wide line alpha f16 pipeline");
 
         // Instanced pipeline: vertex layout slot 0 (per-vertex), slot 1 per-instance mat4.
         let vertex_buffers_instanced = [
@@ -5261,6 +5322,7 @@ impl Renderer {
                 make_glass_pipeline(unorm, GLASS_DEPTH, 1, "threers glass depth encoded pipeline"),
                 make_glass_pipeline(unorm, GLASS_LIGHT, 1, "threers glass color encoded pipeline"),
                 make_glass_pipeline(unorm, GLASS_TINT, 1, "threers glass tint encoded pipeline"),
+                make_wide_line_pipeline(unorm, true, 1, "threers wide line encoded pipeline"),
             ]
         });
 
@@ -6362,6 +6424,8 @@ impl Renderer {
             pipeline_line,
             pipeline_point,
             pipeline_point_alpha,
+            pipeline_wide_line,
+            pipeline_wide_line_alpha,
             pipeline_sprite,
             pipeline_tri_msaa,
             pipeline_skinned_msaa,
@@ -6372,6 +6436,7 @@ impl Renderer {
             pipeline_tri_wire_msaa,
             pipeline_line_msaa,
             pipeline_point_msaa,
+            pipeline_wide_line_msaa,
             msaa: 1,
             // Off by default: enabling tone mapping would silently re-grade
             // every existing scene and the parity renders along with them.
@@ -6392,6 +6457,8 @@ impl Renderer {
             pipeline_line_f16,
             pipeline_point_f16,
             pipeline_point_alpha_f16,
+            pipeline_wide_line_f16,
+            pipeline_wide_line_alpha_f16,
             pipeline_sprite_f16,
             pipeline_instanced_f16,
             pipeline_skinned_f16,
@@ -8492,6 +8559,12 @@ fn fs_out(@builtin(position) p : vec4<f32>) -> @location(0) vec4<f32> {
             /// `Point` with a transparent material: blended and sorted with
             /// the other transparent draws.
             PointAlpha,
+            /// `LineSegments` wider than a pixel: one instance per segment,
+            /// each a round-capped quad (`vs_wide_lines`).
+            WideLine,
+            /// `WideLine` blended: sorted with the transparent draws, its
+            /// edges faded by coverage.
+            WideLineAlpha,
             Sprite,
             Instanced,
             /// `Instanced` with a `wireframe: true` material: line list.
@@ -8564,6 +8637,10 @@ fn fs_out(@builtin(position) p : vec4<f32>) -> @location(0) vec4<f32> {
             fn is_points(self) -> bool {
                 matches!(self, Topology::Point | Topology::PointAlpha)
             }
+            /// One instance per line segment, read two vertices at a time.
+            fn is_wide_lines(self) -> bool {
+                matches!(self, Topology::WideLine | Topology::WideLineAlpha)
+            }
             /// Blends with what is behind it — and so, on an sRGB target,
             /// draws in the encoded-blend pass (see `encoded_pass`). Glass
             /// included, prepass and all: it sorts with the transparent draws
@@ -8577,6 +8654,7 @@ fn fs_out(@builtin(position) p : vec4<f32>) -> @location(0) vec4<f32> {
                         | Topology::GlassColor
                         | Topology::TriangleAlpha
                         | Topology::PointAlpha
+                        | Topology::WideLineAlpha
                         | Topology::Sprite
                         | Topology::InstancedAlpha
                         | Topology::SkinnedAlpha
@@ -9241,6 +9319,32 @@ fn fs_out(@builtin(position) p : vec4<f32>) -> @location(0) vec4<f32> {
                     let Some((start, end)) = ls.geometry.draw_span(None) else {
                         return;
                     };
+                    // three.js `linewidth`, which WebGL ignores: wider than
+                    // a pixel, a capsule a segment (`vs_wide_lines`), its
+                    // width in device pixels as a point's size is
+                    let width = match &*ls.material {
+                        Material::Line(m) => m.line_width,
+                        _ => 1.0,
+                    };
+                    // Thinner than a pixel and blended, a capsule too: each
+                    // pixel takes the share of it the line covers, where a
+                    // line primitive lights whole pixels or none. Opaque, a
+                    // capsule could only cut at half, so it stays a line.
+                    let blended = ls.material.transparent();
+                    if width > 1.0 || (blended && width > 0.0 && width < 1.0) {
+                        let key = geom_cache_key(&ls.geometry);
+                        if let Some(e) = self.geom_cache.get_mut(&key) {
+                            e.mesh.ensure_segments(&self.device, &ls.geometry);
+                        }
+                        let topology = if blended { Topology::WideLineAlpha } else { Topology::WideLine };
+                        let mut d = make_draw(&ls.geometry, &ls.material, obj, topology);
+                        d.range = (start != 0 || end != full).then_some((start, end));
+                        d.shininess_or_near = width * self.pixel_ratio();
+                        d.roughness = if blended { 1.0 } else { 0.0 };
+                        d.cast_shadow = false;
+                        draws.push(d);
+                        return;
+                    }
                     let mut d = make_draw(&ls.geometry, &ls.material, obj, Topology::Line);
                     d.range = (start != 0 || end != full).then_some((start, end));
                     draws.push(d);
@@ -9598,6 +9702,7 @@ fn fs_out(@builtin(position) p : vec4<f32>) -> @location(0) vec4<f32> {
                 Topology::GlassTint | Topology::GlassColor => 2,
                 Topology::TriangleAlpha
                 | Topology::PointAlpha
+                | Topology::WideLineAlpha
                 | Topology::Sprite
                 | Topology::Oit
                 | Topology::Refract
@@ -9705,6 +9810,8 @@ fn fs_out(@builtin(position) p : vec4<f32>) -> @location(0) vec4<f32> {
                         | Topology::TriangleNoCull
                         | Topology::TriangleWire
                         | Topology::Line
+                        | Topology::WideLine
+                        | Topology::WideLineAlpha
                         | Topology::GlassDepth
                         | Topology::GlassTint
                         | Topology::GlassColor
@@ -10137,6 +10244,7 @@ fn fs_out(@builtin(position) p : vec4<f32>) -> @location(0) vec4<f32> {
                     | Topology::TriangleWire
                     | Topology::Line
                     | Topology::Point
+                    | Topology::WideLine
                     | Topology::GlassDepth
                     | Topology::GlassTint
                     | Topology::GlassColor
@@ -11110,6 +11218,7 @@ fn fs_out(@builtin(position) p : vec4<f32>) -> @location(0) vec4<f32> {
                             Topology::TriangleWire => &self.pipeline_tri_wire_msaa,
                             Topology::Line => &self.pipeline_line_msaa,
                             Topology::Point => &self.pipeline_point_msaa,
+                            Topology::WideLine => &self.pipeline_wide_line_msaa,
                             Topology::GlassDepth => &self.pipeline_glass_depth_msaa,
                             Topology::GlassColor => &self.pipeline_glass_color_msaa,
                             Topology::GlassTint => &self.pipeline_glass_tint_msaa,
@@ -11137,6 +11246,8 @@ fn fs_out(@builtin(position) p : vec4<f32>) -> @location(0) vec4<f32> {
                             Topology::Line => &self.pipeline_line_f16,
                             Topology::Point => &self.pipeline_point_f16,
                             Topology::PointAlpha => &self.pipeline_point_alpha_f16,
+                            Topology::WideLine => &self.pipeline_wide_line_f16,
+                            Topology::WideLineAlpha => &self.pipeline_wide_line_alpha_f16,
                             Topology::Sprite => &self.pipeline_sprite_f16,
                             Topology::Instanced => &self.pipeline_instanced_f16,
                             Topology::InstancedWire => &self.pipeline_instanced_wire_f16,
@@ -11168,6 +11279,8 @@ fn fs_out(@builtin(position) p : vec4<f32>) -> @location(0) vec4<f32> {
                             Topology::Line => &self.pipeline_line,
                             Topology::Point => &self.pipeline_point,
                             Topology::PointAlpha => &self.pipeline_point_alpha,
+                            Topology::WideLine => &self.pipeline_wide_line,
+                            Topology::WideLineAlpha => &self.pipeline_wide_line_alpha,
                             Topology::Sprite => &self.pipeline_sprite,
                             Topology::Instanced => &self.pipeline_instanced,
                             Topology::InstancedWire => &self.pipeline_instanced_wire,
@@ -11239,6 +11352,21 @@ fn fs_out(@builtin(position) p : vec4<f32>) -> @location(0) vec4<f32> {
                 } else {
                     pass.set_bind_group(1, &self.per_mesh[i].1, &[]);
                     pass.set_bind_group(2, &*self.per_mesh[i].2, &[]);
+                }
+                // Wide lines: a capsule (six corners) per segment in the range —
+                // an index span, or a vertex span, two to a segment — the segment's
+                // start through slot 0 and its end a vertex further through slot 1.
+                if d.topology.is_wide_lines() {
+                    let Some(buf) = &gm.segment_buffer else { continue };
+                    let span = draw_span(d.range, gm.segment_vertices);
+                    let segs = span.start / 2..span.end / 2;
+                    if segs.is_empty() {
+                        continue;
+                    }
+                    pass.set_vertex_buffer(0, buf.slice(..));
+                    pass.set_vertex_buffer(1, buf.slice(GpuMesh::VERTEX_STRIDE..));
+                    pass.draw(0..6, segs);
+                    continue;
                 }
                 pass.set_vertex_buffer(0, gm.vertex_buffer.slice(..));
                 // Points: a quad's six corners for each point in the range.
@@ -11379,6 +11507,7 @@ fn fs_out(@builtin(position) p : vec4<f32>) -> @location(0) vec4<f32> {
                             }
                             Topology::Sprite => Some(&enc[0]),
                             Topology::PointAlpha => Some(&enc[3]),
+                            Topology::WideLineAlpha => Some(&enc[7]),
                             Topology::InstancedAlpha => Some(&enc[1]),
                             Topology::SkinnedAlpha => Some(&enc[2]),
                             Topology::GlassDepth => Some(match (&self.encoded_glass_msaa, use_msaa) {
@@ -11432,6 +11561,21 @@ fn fs_out(@builtin(position) p : vec4<f32>) -> @location(0) vec4<f32> {
                         } else {
                             ep.set_bind_group(1, &self.per_mesh[i].1, &[]);
                             ep.set_bind_group(2, &*self.per_mesh[i].2, &[]);
+                        }
+                        // Wide lines: a capsule (six corners) per segment in the range —
+                        // an index span, or a vertex span, two to a segment — the segment's
+                        // start through slot 0 and its end a vertex further through slot 1.
+                        if d.topology.is_wide_lines() {
+                            let Some(buf) = &gm.segment_buffer else { continue };
+                            let span = draw_span(d.range, gm.segment_vertices);
+                            let segs = span.start / 2..span.end / 2;
+                            if segs.is_empty() {
+                                continue;
+                            }
+                            ep.set_vertex_buffer(0, buf.slice(..));
+                            ep.set_vertex_buffer(1, buf.slice(GpuMesh::VERTEX_STRIDE..));
+                            ep.draw(0..6, segs);
+                            continue;
                         }
                         ep.set_vertex_buffer(0, gm.vertex_buffer.slice(..));
                         if d.topology.is_points() {
@@ -12329,6 +12473,8 @@ fn fs_out(@builtin(position) p : vec4<f32>) -> @location(0) vec4<f32> {
                         (false, Topology::Sprite) => &self.pipeline_sprite,
                         (false, Topology::Point) => &self.pipeline_point,
                         (false, Topology::PointAlpha) => &self.pipeline_point_alpha,
+                        (false, Topology::WideLine) => &self.pipeline_wide_line,
+                        (false, Topology::WideLineAlpha) => &self.pipeline_wide_line_alpha,
                         (false, Topology::Instanced) => &self.pipeline_instanced,
                         (false, Topology::InstancedAlpha) => &self.pipeline_instanced_alpha,
                         (true, Topology::Triangle) => &self.pipeline_tri_f16,
@@ -12338,6 +12484,8 @@ fn fs_out(@builtin(position) p : vec4<f32>) -> @location(0) vec4<f32> {
                         (true, Topology::Sprite) => &self.pipeline_sprite_f16,
                         (true, Topology::Point) => &self.pipeline_point_f16,
                         (true, Topology::PointAlpha) => &self.pipeline_point_alpha_f16,
+                        (true, Topology::WideLine) => &self.pipeline_wide_line_f16,
+                        (true, Topology::WideLineAlpha) => &self.pipeline_wide_line_alpha_f16,
                         (true, Topology::Instanced) => &self.pipeline_instanced_f16,
                         (true, Topology::InstancedAlpha) => &self.pipeline_instanced_alpha_f16,
                         _ => continue, // skinned/custom/etc not supported as overlay
@@ -12359,6 +12507,21 @@ fn fs_out(@builtin(position) p : vec4<f32>) -> @location(0) vec4<f32> {
                     };
                     op.set_bind_group(1, &self.per_mesh[i].1, &[]);
                     op.set_bind_group(2, &*self.per_mesh[i].2, &[]);
+                    // Wide lines: a capsule (six corners) per segment in the range —
+                    // an index span, or a vertex span, two to a segment — the segment's
+                    // start through slot 0 and its end a vertex further through slot 1.
+                    if d.topology.is_wide_lines() {
+                        let Some(buf) = &gm.segment_buffer else { continue };
+                        let span = draw_span(d.range, gm.segment_vertices);
+                        let segs = span.start / 2..span.end / 2;
+                        if segs.is_empty() {
+                            continue;
+                        }
+                        op.set_vertex_buffer(0, buf.slice(..));
+                        op.set_vertex_buffer(1, buf.slice(GpuMesh::VERTEX_STRIDE..));
+                        op.draw(0..6, segs);
+                        continue;
+                    }
                     op.set_vertex_buffer(0, gm.vertex_buffer.slice(..));
                     if d.topology.is_points() {
                         op.draw(0..6, draw_span(d.range, gm.vertex_count));

@@ -86,12 +86,27 @@ pub struct CanvasPainter {
     dom_for: fn(&TextStyle) -> bool,
     /// Where blurred fills are drawn before they go on the page's canvas.
     scratch: Option<(HtmlCanvasElement, CanvasRenderingContext2d)>,
+    /// The page's kerning of pairs with a space, which canvas text leaves
+    /// out — see [`CanvasPainter::space_kerning`] — by font and pair, and the
+    /// hidden span it is measured with.
+    space_kerns: std::collections::HashMap<(String, char, char), f64>,
+    probe: Option<Element>,
 }
 
 impl CanvasPainter {
     /// Painting on `ctx` (text included).
     pub fn new(ctx: CanvasRenderingContext2d, dpr: f64) -> Self {
-        Self { first: ctx, dpr, subpixel: false, clips: vec![], dom: None, dom_for: |_| true, scratch: None }
+        Self {
+            first: ctx,
+            dpr,
+            subpixel: false,
+            clips: vec![],
+            dom: None,
+            dom_for: |_| true,
+            scratch: None,
+            space_kerns: Default::default(),
+            probe: None,
+        }
     }
 
     /// [`with_dom_text`](Self::with_dom_text) for the runs `which` picks;
@@ -265,6 +280,89 @@ impl CanvasPainter {
         (x0, y0, x1 - x0, y1 - y0)
     }
 
+    /// The page's kerning of the pair `a b` in `font`, one of them a space.
+    ///
+    /// A page kerns a space with its neighbours — Arial, Helvetica, Times,
+    /// Trebuchet and Avenir all tighten "␣A", "␣T", "␣V", "␣W", "␣Y" — and
+    /// a canvas does not, whole string or not, `fontKerning` or not (Chrome
+    /// 156). So a line of canvas text ran 0.6–2.6 pixels longer than the
+    /// page's, and every word after such a space sat that much off. Measured
+    /// from the page once per font and pair, with a hidden span, at 64 times
+    /// the size: kerning scales with it, and the page's widths are rounded
+    /// to 1/64-pixel layout units, which at the size itself put a line with
+    /// several such spaces a tenth of a pixel out.
+    fn space_kerning(&mut self, style: &TextStyle, a: char, b: char) -> f64 {
+        const ENLARGE: f32 = 64.0;
+        let font = style.css_font();
+        let key = (font.clone(), a, b);
+        if let Some(&k) = self.space_kerns.get(&key) {
+            return k;
+        }
+        if self.probe.is_none() {
+            self.probe = web_sys::window()
+                .and_then(|w| w.document())
+                .and_then(|doc| {
+                    let e = doc.create_element("span").ok()?;
+                    let _ = e.set_attribute("style", "position:absolute;left:0;top:0;visibility:hidden;white-space:pre;pointer-events:none");
+                    doc.body()?.append_child(&e).ok()?;
+                    Some(e)
+                });
+        }
+        let Some(probe) = &self.probe else { return 0.0 };
+        let big = TextStyle { font_size: style.font_size * ENLARGE, ..style.clone() }.css_font();
+        let _ = probe.set_attribute(
+            "style",
+            &format!("position:absolute;left:0;top:0;visibility:hidden;white-space:pre;pointer-events:none;font:{big}"),
+        );
+        // The pair from the page; each glyph alone from the canvas, whose
+        // widths are not rounded to the page's 1/64-pixel layout units — one
+        // rounding per pair rather than three.
+        probe.set_text_content(Some(&format!("{a}{b}")));
+        let pair = probe.get_bounding_client_rect().width();
+        self.first.set_font(&big);
+        let alone = |c: char| self.first.measure_text(&c.to_string()).map_or(0.0, |m| m.width());
+        let k = (pair - alone(a) - alone(b)) / ENLARGE as f64;
+        // Below what a page could position: no kerning, not a rounding.
+        let k = if k.abs() < 0.01 { 0.0 } else { k };
+        self.space_kerns.insert(key, k);
+        k
+    }
+
+    /// `text` in pieces between its spaces, each with how far right of
+    /// where the canvas would put it the page's space kerning moves it:
+    /// `(start, end, shift)` in bytes and CSS pixels. One piece, unshifted,
+    /// when no pair around a space kerns — the common case, and then the
+    /// run is drawn whole, as it was.
+    fn space_pieces(&mut self, text: &str, style: &TextStyle) -> Vec<(usize, usize, f64)> {
+        let chars: Vec<(usize, char)> = text.char_indices().collect();
+        let mut pieces = Vec::new();
+        let (mut start, mut shift, mut moved) = (0usize, 0.0f64, false);
+        for (k, &(at, c)) in chars.iter().enumerate() {
+            if c != ' ' {
+                continue;
+            }
+            let before = k.checked_sub(1).map(|j| chars[j].1).filter(|&p| p != ' ');
+            let after = chars.get(k + 1).map(|&(_, n)| n).filter(|&n| n != ' ');
+            let end = at + 1;
+            pieces.push((start, at, shift));
+            if let Some(p) = before {
+                shift += self.space_kerning(style, p, ' ');
+            }
+            pieces.push((at, end, shift));
+            if let Some(n) = after {
+                shift += self.space_kerning(style, ' ', n);
+            }
+            moved |= shift != 0.0;
+            start = end;
+        }
+        pieces.push((start, text.len(), shift));
+        if !moved {
+            return vec![(0, text.len(), 0.0)];
+        }
+        pieces.retain(|p| p.1 > p.0);
+        pieces
+    }
+
     /// Advance width, and the font's ascent and descent (`line-height:
     /// normal` spans both).
     fn metrics(&self, text: &str, font: &str) -> (f64, f64, f64) {
@@ -401,8 +499,11 @@ fn apply_clip(c: &CanvasRenderingContext2d, clip: &Clip) {
 impl TextMeasure for CanvasPainter {
     fn measure(&mut self, text: &str, style: &Style) -> (f32, f32) {
         // Blink rounds the font's ascent and descent to whole pixels.
-        let (w, a, d) = self.metrics(text, &TextStyle::of(style).css_font());
-        (w as f32, style.line_height.unwrap_or((a.round() + d.round()) as f32))
+        let ts = TextStyle::of(style);
+        let (w, a, d) = self.metrics(text, &ts.css_font());
+        // As wide as the page sets it, space kerning and all.
+        let shift = self.space_pieces(text, &ts).last().map_or(0.0, |p| p.2);
+        ((w + shift) as f32, style.line_height.unwrap_or((a.round() + d.round()) as f32))
     }
 }
 
@@ -470,6 +571,8 @@ impl Painter for CanvasPainter {
         }
         let f = style.css_font();
         let (w, a, d) = self.metrics(text, &f);
+        let pieces = self.space_pieces(text, style);
+        let w = w + pieces.last().map_or(0.0, |p| p.2);
         // Where a page would put the run: CSS lengths become `LayoutUnit`s
         // (1/64 px, truncated) before glyphs are placed on quarter pixels,
         // so 27.8837 px is drawn at 27.875 there; `fillText` takes the
@@ -484,7 +587,16 @@ impl Painter for CanvasPainter {
         c.set_text_baseline("alphabetic");
         c.set_text_align("left");
         c.set_fill_style_str(&css(style.color));
-        let _ = c.fill_text(text, line.x as f64, baseline);
+        if let [(_, _, shift)] = pieces[..] {
+            let _ = c.fill_text(text, line.x as f64 + shift, baseline);
+        } else {
+            // Each piece where the canvas would put it within the run, moved
+            // by the page's space kerning before it.
+            for &(start, end, shift) in &pieces {
+                let x = line.x as f64 + c.measure_text(&text[..start]).map_or(0.0, |m| m.width()) + shift;
+                let _ = c.fill_text(&text[start..end], x, baseline);
+            }
+        }
         if style.line_through {
             // Through the middle of the x-height, one pixel thick.
             let y = (baseline - style.font_size as f64 * 0.3).round();

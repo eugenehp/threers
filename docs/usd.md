@@ -10,7 +10,7 @@ because most scenes never touch USD; being pure code, it costs compile time and
 nothing else.
 
 ```rust
-// Cargo.toml: threers = { version = "0.0.7", features = ["usd"] }
+// Cargo.toml: threers = { version = "0.0.8", features = ["usd"] }
 use threers::loaders::UsdLoader;
 
 // One entry point for all three: the format is told apart by content, not by

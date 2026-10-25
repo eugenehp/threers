@@ -727,6 +727,9 @@ type Casters = Vec<Caster>;
 struct DrawItem {
     /// Shell fur's parameters (`FurMaterial::data`) when the material is fur.
     fur: Option<[f32; 64]>,
+    /// An `fx` surface's uniforms and arrays (`crate::fx::surface::metal_bytes`)
+    /// when the material is one.
+    fx_surface: Option<Box<[f32; crate::fx::surface::METAL_FLOATS]>>,
     geometry: Arc<BufferGeometry>,
     material: Arc<Material>,
     world: Matrix4,
@@ -1779,6 +1782,12 @@ impl MetalRenderer {
                         }
                         _ => None,
                     },
+                    fx_surface: match &**material {
+                        Material::Shader(m) if crate::fx::surface::is_surface(m) => {
+                            Some(crate::fx::surface::metal_bytes(m))
+                        }
+                        _ => None,
+                    },
                     range,
                     morph_influences: influences.to_vec(),
                     wire_span: None,
@@ -2789,9 +2798,17 @@ impl MetalRenderer {
             // Read before `self.pipeline`, which borrows `self` mutably.
             let is_skinned = item.bone_slot.is_some() && skin_buffer.is_some() && !layered_draw;
             let fur_draw = item.fur.is_some() && !layered_draw && !point_sprites && item.primitive == primitive::TRIANGLE;
+            // An `fx` surface draws in screen space from its own uniforms; a
+            // layered (stereo) pass has no single viewport for it, so it is
+            // skipped there.
+            if item.fx_surface.is_some() && (layered_draw || item.primitive != primitive::TRIANGLE) {
+                continue;
+            }
+            let fx_draw = item.fx_surface.is_some();
             let pipeline = match self.pipeline(PipelineKey {
                 point_sprites,
                 fur: fur_draw,
+                fx_surface: fx_draw,
                 wide_lines: wide,
                 // Must agree with what `ensure_geometry` uploaded, or the
                 // vertex shader reads the wrong stride and the draw is garbage.
@@ -2963,6 +2980,12 @@ impl MetalRenderer {
             if let (true, Some(fur)) = (fur_draw, &item.fur) {
                 set_bytes(encoder, true, fur, VB_FUR);
                 set_bytes(encoder, false, fur, FB_FUR);
+            }
+            // The surface reads its block at the fur's slots: the two never
+            // share a draw.
+            if let Some(fx) = &item.fx_surface {
+                set_bytes(encoder, true, &**fx, VB_FUR);
+                set_bytes(encoder, false, &**fx, FB_FUR);
             }
 
             let (texture, sampler) = self.material_texture(material);
@@ -3175,6 +3198,9 @@ impl MetalRenderer {
                 // misc.y is the point size, which a line never uses — the quad
                 // path reads its width in pixels from the same slot.
                 draw_u.misc[1] = self.line_width;
+                // misc.x, otherwise unused: whether the quad blends, and so
+                // can draw coverage rather than cut at half.
+                draw_u.misc[0] = if item.transparent { 1.0 } else { 0.0 };
             }
             set_bytes(encoder, true, &draw_u, VB_DRAW);
             set_bytes(encoder, false, &draw_u, FB_DRAW);

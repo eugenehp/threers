@@ -3,6 +3,7 @@ set -euo pipefail
 
 # Build the threers wasm package and emit JS glue into web/pkg.
 # Requires: rustup target add wasm32-unknown-unknown && cargo install wasm-bindgen-cli
+# at the exact wasm-bindgen version in Cargo.lock (checked below).
 # (wasm-pack is not used — this drives cargo and wasm-bindgen directly.)
 #
 # Variants (browser download sizes):
@@ -29,6 +30,16 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 WEB="$(cd "$(dirname "$0")" && pwd)"
 
 cd "$ROOT"
+
+# wasm-bindgen's CLI must match the crate in Cargo.lock exactly; a mismatch
+# only shows after the whole cargo build, as a schema-version error. Check first.
+WB_LOCK=$(awk '/^name = "wasm-bindgen"$/ { getline; gsub(/version = |"/, ""); print; exit }' Cargo.lock)
+WB_CLI=$(wasm-bindgen --version 2>/dev/null | awk '{ print $2 }' || true)
+if [ -n "$WB_LOCK" ] && [ "$WB_CLI" != "$WB_LOCK" ]; then
+    echo "error: wasm-bindgen CLI is ${WB_CLI:-missing}, Cargo.lock has $WB_LOCK" >&2
+    echo "       cargo install -f wasm-bindgen-cli --version $WB_LOCK --locked" >&2
+    exit 1
+fi
 
 PROFILE="${PROFILE:-release}"
 PROFILE_FLAG=""

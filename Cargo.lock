@@ -926,7 +926,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1231,7 +1231,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi",
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1660,7 +1660,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2359,9 +2359,9 @@ checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
 
 [[package]]
 name = "rlx"
-version = "0.2.18"
+version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "02b665633c31a1dd150a4cb6982e7bd83ca679bff4894cd437382c22c3b8e09a"
+checksum = "d73543f2997c17b2f24f5d721740b39d1364ca3b967b8b27a9343adeef0bfef3"
 dependencies = [
  "anyhow",
  "rlx-driver",
@@ -2374,9 +2374,9 @@ dependencies = [
 
 [[package]]
 name = "rlx-autodiff"
-version = "0.2.18"
+version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f99f0888f3d93eb98d44cbadfe2ad0cc73814d97daba122b2138bd7defdacf04"
+checksum = "412002f86964f2293b1adb4f094850c64013766434d41b5b8b1c81a7183f8503"
 dependencies = [
  "half",
  "rlx-fusion",
@@ -2386,9 +2386,9 @@ dependencies = [
 
 [[package]]
 name = "rlx-compile"
-version = "0.2.18"
+version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "85c244c56001320dca272459c8f42c8fe4efa6a917da913fd69b60b59edc47ef"
+checksum = "dd270a1e7fcc960434c675a1ed4b63f33f517836aadc0a2f2a951022a52caa1e"
 dependencies = [
  "rlx-autodiff",
  "rlx-fusion",
@@ -2397,9 +2397,9 @@ dependencies = [
 
 [[package]]
 name = "rlx-cpu"
-version = "0.2.18"
+version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "60173a16f40166f958b26984882761bfd7b11db6bec6178d25ff17c17e65bbea"
+checksum = "ca761c6b697b6bf8321bc529b320bf279462baaae4f64137e6a554a7b9a13ba2"
 dependencies = [
  "half",
  "rayon",
@@ -2412,9 +2412,9 @@ dependencies = [
 
 [[package]]
 name = "rlx-dduf"
-version = "0.2.18"
+version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6422aea0724cba6fda6bfe1ce10ff8bf4f95119c08e06d2d494b6a610be45a7a"
+checksum = "deec29df84305efc49c65d6af6b027d60b2273e2b96d1a36f510ac2361f119d1"
 dependencies = [
  "anyhow",
  "half",
@@ -2425,9 +2425,9 @@ dependencies = [
 
 [[package]]
 name = "rlx-driver"
-version = "0.2.18"
+version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dff0a3c2eac5d69775af00a3afbd8d1f3ae7f70c91de2f47966486b05809e7b7"
+checksum = "b7972350202858c22d791c97eda77b224348b0167e571ba0d8432e1cecdf2729"
 dependencies = [
  "half",
  "rlx-ir",
@@ -2435,18 +2435,18 @@ dependencies = [
 
 [[package]]
 name = "rlx-fusion"
-version = "0.2.18"
+version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c614f8afa394c29df26b869609e7a601987f2ec5993a2cbc8cd5f4d9bec8a90d"
+checksum = "c5f2207bbe9208c161fdb136c87cc8620070507c0395923d02a4d3fdb07c28c3"
 dependencies = [
  "rlx-ir",
 ]
 
 [[package]]
 name = "rlx-geo"
-version = "0.2.18"
+version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca8411a83f78e55a74afe72dd09e0f0d7e6d8e5c24fbdfc9eca8a3d56a80c04c"
+checksum = "3ef5a79a6bfdd67ee134bc74666a6d0eb924a8dc88c1ab14a4b98c769fd689a2"
 dependencies = [
  "rlx-cpu",
  "rlx-ir",
@@ -2454,9 +2454,9 @@ dependencies = [
 
 [[package]]
 name = "rlx-gguf"
-version = "0.2.18"
+version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "157fe8e084979cbf4de3cedc03d399f7c0dedcdb4d6bfb769ea538123cf8317a"
+checksum = "87028b1940aa4af65ea1ce843f049f12d0edd3369d2d534f320734eb61a8e42b"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -2464,20 +2464,19 @@ dependencies = [
  "libc",
  "memmap2",
  "rayon",
- "rlx-ir",
 ]
 
 [[package]]
 name = "rlx-gpu-dispatch"
-version = "0.2.18"
+version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "02fd55df45cabeaa637bfe7ef412bda27ebf7c882a2b3ba89f6ffca28ea4e906"
+checksum = "f0fd4eef44210ff8de1c54216309b5a4876ed9b9e40406a3779527676b6405f8"
 
 [[package]]
 name = "rlx-gpu-host"
-version = "0.2.18"
+version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1a03f52025163545234b81780399e3c64e7af5542277b563c7e2081ee42ce6b7"
+checksum = "bb7c83bd2d0728f8e38f07380777a578df3bdd486acc6d1b51e8bc999d643e12"
 dependencies = [
  "bytemuck",
  "half",
@@ -2490,9 +2489,9 @@ dependencies = [
 
 [[package]]
 name = "rlx-ir"
-version = "0.2.18"
+version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f18021f8a2554da13119db9d5cd8e01db5265324675a241ed1a0091f4e6d298f"
+checksum = "fd5f093be32b0d4d27ab14424594a292af7f736ebdf64828f82b8cb7a668db92"
 dependencies = [
  "aes 0.9.3",
  "bincode",
@@ -2503,9 +2502,9 @@ dependencies = [
 
 [[package]]
 name = "rlx-macros"
-version = "0.2.18"
+version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7c1a34c82faed8c660203f553be35b228da622c422a2b58ad24ebe08b1e22307"
+checksum = "ed211011ab6f336488dab31754e34dd4f984a6e158e3b1f67ab1f894fc3ab72b"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2514,9 +2513,9 @@ dependencies = [
 
 [[package]]
 name = "rlx-metal"
-version = "0.2.18"
+version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3d8bdeda1b8b98eae95468714d1efa2ec7fa46fce71759f75db0d1d357c9b17e"
+checksum = "9eec8fc1c2f23fde3a379bd5b5af629e6d26be3b451867422b38813fb45c9c67"
 dependencies = [
  "bytemuck",
  "half",
@@ -2535,9 +2534,9 @@ dependencies = [
 
 [[package]]
 name = "rlx-mlx-io"
-version = "0.2.18"
+version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6cb40134e583111b2b489fa62dd556ebba79efab14c16f847f74afe7494cf762"
+checksum = "e44e8d9b5bb10f12e8b5cd44bbaff04167beaa47005fdfd3c4dcef7903871131"
 dependencies = [
  "anyhow",
  "half",
@@ -2553,9 +2552,9 @@ dependencies = [
 
 [[package]]
 name = "rlx-nemo"
-version = "0.2.18"
+version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23e397d8bedb97d6a59ce702dabd2d20ae04c1bdd59d4c7dec84466fce387f3f"
+checksum = "c070f3247cc3169be04b69fd17547a99fad252ee7bbdd31d501f388a26ee3010"
 dependencies = [
  "anyhow",
  "rlx-ir",
@@ -2565,9 +2564,9 @@ dependencies = [
 
 [[package]]
 name = "rlx-opt"
-version = "0.2.18"
+version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1389c3e379841ade873e7be327c835de44c5d6f108e16257ee3c41587f15e80d"
+checksum = "60a8b8aa42b107091b0e8be48854c4fcaac2bf94a511225759e1bd63e9e93c72"
 dependencies = [
  "rlx-autodiff",
  "rlx-compile",
@@ -2577,9 +2576,9 @@ dependencies = [
 
 [[package]]
 name = "rlx-pkg"
-version = "0.2.18"
+version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e82787605e14c6f6778f037bfd6969df9c2db906e15f074ce844c5aad0b44e53"
+checksum = "2d2a36b3a4a2b44b41a1381639014b2415bf115c6dd39e536ec3c0dc862b0dc6"
 dependencies = [
  "anyhow",
  "bincode",
@@ -2600,9 +2599,9 @@ dependencies = [
 
 [[package]]
 name = "rlx-runtime"
-version = "0.2.18"
+version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7a1e7f6a25dec95b7ee51df27925cc0117ff5cd26d6b9cd4dc0917b816db5051"
+checksum = "d77c2d9d0ab5127d7824846d10d26bf2a613c37231c6bedec17ad02d57faa220"
 dependencies = [
  "anyhow",
  "half",
@@ -2627,9 +2626,9 @@ dependencies = [
 
 [[package]]
 name = "rlx-tensor"
-version = "0.2.18"
+version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c3bb36aeeafe361c0ff77a6d28c587a6f0c9a5e5dbf4a0296ef007516e8534fd"
+checksum = "a0d0255a901ffb278320f48adfb485d513cbc40f18ddc7f424276f657d5f7548"
 dependencies = [
  "rlx-ir",
  "rlx-macros",
@@ -2638,9 +2637,9 @@ dependencies = [
 
 [[package]]
 name = "rlx-torch-ckpt"
-version = "0.2.18"
+version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "535191f135fde3e4bc1ada5fd3360d878652e5a25080672fff8d40b68f11fd84"
+checksum = "66ef2564c4c1eb50b051055b3cb6f8dc06c014b950756afab8db913fb0f75237"
 dependencies = [
  "anyhow",
  "flate2",
@@ -2649,18 +2648,18 @@ dependencies = [
 
 [[package]]
 name = "rlx-unfuse"
-version = "0.2.18"
+version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "895f30687dca98cf5f9d5f51ee04f2b65f2a501b76a62b0f5efd274319eda87f"
+checksum = "14f261e6f0e63b7c5cbf908e4c940180567208d4d317690a78e1c30931c843b8"
 dependencies = [
  "rlx-ir",
 ]
 
 [[package]]
 name = "rlx-wgpu"
-version = "0.2.18"
+version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ee9d4729f7fe3243fff8f5a7603e4a56b06ae4a264558baf3286be3446408eb2"
+checksum = "73f9ecaa75d70da6b616b1a00775c02e23007e09ac1f10ee66d56d7cee96ba99"
 dependencies = [
  "bytemuck",
  "half",
@@ -2681,9 +2680,9 @@ dependencies = [
 
 [[package]]
 name = "rlxsl"
-version = "0.2.18"
+version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3c490bc2b8414e610896eea5bdb43f66bb45e1e4b239a9dfab09c1e6a58fa371"
+checksum = "e6bd987e013f8f5dda3336cea492ec97a5adfad20f289432263126cfa6dcc1c0"
 dependencies = [
  "rlx-ir",
 ]
@@ -2723,7 +2722,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3068,7 +3067,7 @@ dependencies = [
 
 [[package]]
 name = "threers"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "bytemuck",
  "console_error_panic_hook",
@@ -3108,7 +3107,7 @@ version = "0.0.1"
 
 [[package]]
 name = "threers-fluid-ios"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "objc2 0.6.5",
  "objc2-core-foundation",
@@ -3120,11 +3119,11 @@ dependencies = [
 
 [[package]]
 name = "threers-js"
-version = "0.0.7"
+version = "0.0.8"
 
 [[package]]
 name = "threers-node"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "napi",
  "napi-build",
@@ -3151,7 +3150,7 @@ dependencies = [
 
 [[package]]
 name = "threers-physics"
-version = "0.0.2"
+version = "0.0.8"
 dependencies = [
  "bytemuck",
  "criterion",
@@ -3183,7 +3182,7 @@ dependencies = [
 
 [[package]]
 name = "threers-py"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "pyo3",
  "pyo3-build-config",
@@ -3797,7 +3796,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

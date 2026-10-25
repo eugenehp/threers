@@ -60,13 +60,25 @@ let graded = Lattice::new(LatticeKind::Infill(Infill::Honeycomb))
 
 | Family | Generators |
 |--------|-----------|
-| `Tpms` | `Gyroid`, `SchwarzP`, `Diamond`, `Neovius`, `IWP`, `FischerKochS`, `Lidinoid`, `SplitP` |
-| `Strut` | `Cubic`, `Bcc`, `BccZ`, `Fcc`, `Octet`, `Diamond`, `Kelvin` |
+| `Tpms` | `Gyroid`, `SchwarzP`, `Diamond`, `Neovius`, `IWP`, `FischerKochS`, `Lidinoid`, `SplitP`, `Helicoid` |
+| `Strut` | `Cubic`, `Bcc`, `BccZ`, `Fcc`, `Octet`, `Diamond`, `Kelvin`; textiles `Weave`, `Braid`, `HelixBundle` |
 | `Cuboct` | `Rigid`, `Compliant`, `Auxetic`, `ChiralCw`, `ChiralCcw` |
 | `Infill` | `Rectilinear`, `AlignedRectilinear`, `Grid`, `Triangles`, `TriHexagon`, `Honeycomb`, `Cubic`, `QuarterCubic`, `Concentric` |
 
 `LatticeKind::from_name` takes any of those names, so a `--lattice gyroid` flag
 needs no table of its own.
+
+The three textiles are yarns rather than beams: their strands pass one another
+instead of meeting at nodes, so below a certain diameter a textile is several
+interlocked pieces — a cloth, a plait, a rope — and above it they fuse where
+they cross. The diameters are a quarter of a cell for `Weave` and about 0.15
+for `Braid` and `HelixBundle` (`Strut::is_textile` tells them apart).
+
+![A plain weave, a braid, a six-fibre rope and helicoid screws; below, a spinodal, a broadband Gaussian field, hyperuniform fibres and a reaction–diffusion maze](images/lattice_textiles.jpg)
+
+<sub>`cargo run --release --example lattice_textiles` — top row: weave, braid,
+helix bundle, helicoid (`Tpms::Helicoid`, as a sheet); bottom row: spinodal,
+`GaussianField`, `Hyperuniform`, `ReactionDiffusion`.</sub>
 
 ## Sheet or solid
 
@@ -172,6 +184,11 @@ seven.
 
 ## Resolution, and the one way this fails quietly
 
+With the `parallel` feature both halves of a build use every core: the field is
+sampled a slab of the grid at a time, and the contour is drawn in slabs too and
+welded back on their seams — to the same bytes as a single sweep, so a build
+flag never changes a mesh.
+
 A wall thinner than the sample step is missed *between* samples, and the mesh
 comes out as disconnected specks. Nothing errors, because a field never sampled
 inside a wall looks exactly like one with no wall there. It is easy to hit by
@@ -225,15 +242,111 @@ let spinodal = Lattice::new(LatticeKind::Stochastic(Stochastic::SpinodalLamellar
 |------|--|
 | `Voronoi` | struts on the Voronoi edges — open cell, every void connects |
 | `VoronoiWall` | the Voronoi faces as walls — closed cell, sealed bubbles |
+| `VoronoiWet` | rounded bubbles parted by `thickness`-thin films, liquid gathered in Plateau borders along the edges (`plateau_border` sets how wet) |
 | `Spinodal` | isotropic Gaussian random field |
 | `SpinodalLamellar` | plates stacked across z |
 | `SpinodalColumnar` | columns along z |
 | `SpinodalCubic` | cubic symmetry |
+| `GaussianField` | like `Spinodal`, but wavelengths spread ±45 % — a range of pore sizes |
+| `Hyperuniform` | fibres: one elongated kernel per jittered cell, evenly spread with no order |
+| `ReactionDiffusion` | a Gray–Scott Turing pattern grown on a periodic tile — a bicontinuous maze of even walls (about a second to grow, once per seed) |
+
+The Voronoi cells measure the true distance to their walls and edges, so a
+wall of `thickness` t is t thick everywhere. (The usual shortcut, half the gap
+between the nearest seed distances, reads anywhere from t to three times it.)
+
+Their seeds can also sit on a crystal lattice, which makes every cell one of a
+few shapes — the ordered foams, and the ones a test rig can compare against:
+
+```rust
+use threers::{Lattice, LatticeKind, SeedLayout, Stochastic, Vector3};
+
+// Weaire–Phelan: the least-wall equal-volume foam known.
+let wp = Lattice::new(LatticeKind::Stochastic(Stochastic::VoronoiWall))
+    .size(Vector3::new(20.0, 20.0, 20.0))
+    .cells([2, 2, 2])
+    .seed_layout(SeedLayout::WeairePhelan)
+    .fit_relative_density(0.1)
+    .build();
+```
+
+| `SeedLayout` | Seeds a cell | Cells |
+|--------------|--------------|-------|
+| `Random` | 1, moved by `jitter` | the random foam (the default) |
+| `Kelvin` | 2 | truncated octahedra, 14 faces |
+| `Fcc` | 4 | rhombic dodecahedra, 12 faces |
+| `WeairePhelan` | 8 | 2 dodecahedra and 6 tetrakaidecahedra |
+| `C15` | 24 | 16 cells of 12 faces and 8 of 16 |
+| `Poisson` | `seeds_per_cell` (8), well spread | irregular, similar in size |
+| `Relaxed` | the same, Lloyd-relaxed | irregular, nearly equal volumes |
+| `Bimodal` | the same, a quarter large | two sizes (`size_ratio`, 2 by default) as a power diagram, so walls stay flat — open, closed or wet |
+
+![Six seed layouts across, as open, closed and wet foams down](images/lattice_foams.jpg)
+
+<sub>`cargo run --release --example lattice_foams` — columns: random, Kelvin,
+Weaire–Phelan, C15, relaxed, bimodal; rows: `Voronoi`, `VoronoiWall`,
+`VoronoiWet`, each fitted to one density.</sub>
+
+The last three are one periodic tile, generated once per lattice from the seed,
+so they still repeat with the cell and sample the same anywhere.
 
 Nothing here stores a point set or an RNG: seeds are a hash of their cell index
 and wave directions a hash of their own, so the field is a pure function of the
 point and the seed. The same lattice samples the same at any resolution, on any
 thread, in any process.
+
+## Before it goes to the printer
+
+`utils::mesh_check` answers the questions a slicer will ask, for any mesh:
+
+![A Kelvin foam from below, overhangs in red, as built and simplified](images/lattice_print.jpg)
+
+<sub>`cargo run --release --example lattice_print` — a Kelvin foam from below,
+every face a 45° process must hold up in red and those within ten degrees of
+it in amber; as built (102 816 triangles) and simplified (38 982), both closed,
+volume within half a percent.</sub>
+
+```rust
+use threers::utils::mesh_check::{edge_report, print_report, split_pieces, triangle_quality};
+use threers::{Lattice, LatticeKind, Stochastic, Vector3};
+
+let part = Lattice::new(LatticeKind::Stochastic(Stochastic::Spinodal))
+    .size(Vector3::new(20.0, 20.0, 20.0))
+    .cells([4, 4, 4])
+    .fit_relative_density(0.25)
+    .drop_specks(true) // the loose debris a random field leaves in the void
+    .build();
+
+assert!(edge_report(&part).is_closed());
+let quality = triangle_quality(&part); // needles, worst-angle percentile
+let pieces = split_pieces(&part); // solids, and sealed cavities (negative volume)
+// Build along +z, faces flatter than 45° need support, footprint on a 512² raster.
+let print = print_report(&part, Vector3::new(0.0, 0.0, 1.0), 45.0, 512);
+println!(
+    "{} pieces, {:.1} % needles, {:.0} mm² to support over {:.0} mm² of plate",
+    pieces.len(), quality.needle_fraction * 100.0, print.support_area, print.support_footprint,
+);
+```
+
+`utils::simplify` brings the triangle count down without opening the mesh: a
+quadric edge collapse that refuses any collapse which would pinch the surface or
+turn a triangle over, so a closed mesh stays closed. Flat regions go entirely —
+a finely cut box comes back to twelve triangles — and curved ones to the
+tolerance asked for:
+
+```rust
+use threers::utils::simplify::{simplify, SimplifyOptions};
+# use threers::{Lattice, LatticeKind, Tpms};
+# let part = Lattice::new(LatticeKind::Tpms(Tpms::Gyroid)).build();
+// Keep the tolerance well under the wall: these walls are 0.05 thick.
+let (lighter, report) = simplify(&part, SimplifyOptions { target_triangles: 0, max_error: 0.002 });
+```
+
+`drop_specks` removes solid pieces under ten sample cells — but only while they
+are debris: if they hold more than 2 % of the solid they are the design (an
+under-resolved wall, a woven textile) and stay. Sealed cavities always stay.
+`mesh_check::remove_loose_pieces` does the same for any mesh, and can keep the
+largest piece with only its own cavities instead.
 
 ## Conforming, not trimming
 

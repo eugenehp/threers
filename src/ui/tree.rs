@@ -61,6 +61,8 @@ pub(crate) struct Node {
     pub scrolled: f32,
     /// A wrapped text node's lines, as last laid out.
     pub lines: Vec<String>,
+    /// What it means to assistive technology (see [`super::a11y`]).
+    pub semantics: Option<super::a11y::Semantics>,
 }
 
 /// A tree of styled boxes. Node 0 is the root.
@@ -91,6 +93,7 @@ impl Ui {
                 scroll_height: 0.0,
                 scrolled: 0.0,
                 lines: vec![],
+                semantics: None,
             }],
             layout_units: false,
         }
@@ -115,7 +118,7 @@ impl Ui {
 
     fn add(&mut self, parent: NodeId, style: Style, kind: NodeKind) -> NodeId {
         let id = NodeId(self.nodes.len());
-        self.nodes.push(Node { style, kind, parent: Some(parent), children: vec![], rect: Rect::default(), removed: false, scroll_height: 0.0, scrolled: 0.0, lines: vec![] });
+        self.nodes.push(Node { style, kind, parent: Some(parent), children: vec![], rect: Rect::default(), removed: false, scroll_height: 0.0, scrolled: 0.0, lines: vec![], semantics: None });
         self.nodes[parent.0].children.push(id);
         id
     }

@@ -287,6 +287,47 @@ async fn points_segments_and_shapes_draw_in_the_browser() {
     assert_eq!(px(&img, 104, 32), [255, 255, 0, 255], "the box");
 }
 
+/// A segment thinner than a pixel covers its share of each pixel, here as on
+/// a native adapter (`thin_segments_keep_their_weight_between_pixels` in
+/// `marks_gpu.rs`): its footprint comes from screen derivatives, which GLSL
+/// and Tint take on their own terms. A 0.4-pixel line puts 0.4 of its ink in
+/// each column wherever it falls, along a row and on a 45° diagonal (√2 of
+/// its width a column). The Unorm target blends the encoded values, and
+/// white over black encodes to itself, so the bytes are the coverage.
+#[wasm_bindgen_test]
+async fn thin_segments_keep_their_weight_in_the_browser() {
+    let Some((device, queue)) = shared_gl().await else {
+        panic!("no {BACKEND:?} adapter");
+    };
+    let mut mr = MarkRenderer::new(&device);
+    let width = 0.4f32;
+    for diagonal in [false, true] {
+        let mut sums = Vec::new();
+        for k in 0..8 {
+            let phase = k as f64 / 8.0;
+            let mut line = SegmentMarks::new();
+            if diagonal {
+                line.set_segments(&[[-25.0 + phase, -25.0, 0.0]], &[[25.0 + phase, 25.0, 0.0]]);
+            } else {
+                line.set_segments(&[[-50.0, phase, 0.0]], &[[50.0, phase, 0.0]]);
+            }
+            line.set_widths(&[width]);
+            line.set_default_color([255, 255, 255, 255]);
+            let img = draw(&device, &queue, &mut mr, &mut [&mut line]).await;
+            let expect = if diagonal { width * std::f32::consts::SQRT_2 } else { width };
+            for x in [56u32, 64, 71] {
+                let col: Vec<f32> = (0..H).map(|y| px(&img, x, y)[0] as f32 / 255.0).collect();
+                let peak = col.iter().cloned().fold(0.0, f32::max);
+                assert!(peak <= expect + 0.03, "{BACKEND:?} diagonal {diagonal} phase {phase} x {x}: peak {peak}");
+                sums.push(col.iter().sum::<f32>() / expect);
+            }
+        }
+        for s in &sums {
+            assert!((s - 1.0).abs() < 0.06, "{BACKEND:?} diagonal {diagonal}: column ink {s} of the width, all {sums:?}");
+        }
+    }
+}
+
 #[wasm_bindgen_test]
 async fn polygons_draw_per_vertex_in_the_browser() {
     let Some((device, queue)) = shared_gl().await else {

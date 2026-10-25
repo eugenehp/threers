@@ -22,7 +22,7 @@ resolver = "2"
 
 [package]
 name = "threers"
-version = "0.0.7"
+version = "0.0.8"
 edition = "2021"
 # wgpu 30 requires 1.87, and this crate uses `is_multiple_of`, stabilised in the
 # same release. Declared so cargo says so up front rather than letting the build
@@ -269,6 +269,10 @@ features = [
     "MouseEvent",
     "KeyboardEvent",
     "WheelEvent",
+    # `ui::a11y_dom`: the accessibility mirror's focus and activation.
+    "Event",
+    "FocusEvent",
+    "KeyboardEventInit",
 ]
 
 [[example]]
@@ -748,6 +752,14 @@ name = "fluid_webgl"
 required-features = ["fluid", "webgl"]
 
 [[test]]
+name = "ui_canvas_text"
+required-features = ["ui"]
+
+[[test]]
+name = "ui_a11y_dom"
+required-features = ["ui"]
+
+[[test]]
 name = "animation_streaming"
 required-features = ["native-codec"]
 
@@ -882,4 +894,8 @@ required-features = ["metal"]
 
 [[test]]
 name = "fur_metal"
+required-features = ["metal"]
+
+[[test]]
+name = "fx_metal"
 required-features = ["metal"]

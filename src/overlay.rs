@@ -51,6 +51,7 @@
 //! fills.
 
 use crate::math::{Color, Vector2};
+use crate::sdf::{self, d2};
 
 /// sRGB-encoded byte to linear float, for the 256 values a byte can hold.
 fn srgb_decode_table() -> &'static [f32; 256] {
@@ -204,6 +205,15 @@ pub struct Overlay {
     content: Option<(u32, u32)>,
     #[cfg(feature = "captions")]
     painter: Option<crate::captions::CaptionPainter>,
+    /// CSS weight for text (400 regular, 700 bold), and italic.
+    #[cfg(feature = "captions")]
+    text_weight: u16,
+    #[cfg(feature = "captions")]
+    text_italic: bool,
+    /// The painter's face in the other styles used, so switching back and
+    /// forth keeps each one's glyph cache.
+    #[cfg(feature = "captions")]
+    other_weights: std::collections::HashMap<(u16, bool), crate::captions::CaptionFont>,
 }
 
 impl Overlay {
@@ -223,6 +233,12 @@ impl Overlay {
             content: None,
             #[cfg(feature = "captions")]
             painter: None,
+            #[cfg(feature = "captions")]
+            text_weight: 400,
+            #[cfg(feature = "captions")]
+            text_italic: false,
+            #[cfg(feature = "captions")]
+            other_weights: std::collections::HashMap::new(),
         }
     }
 
@@ -351,6 +367,57 @@ impl Overlay {
     #[cfg(feature = "captions")]
     pub fn set_font(&mut self, font: crate::captions::CaptionFont) {
         self.painter = Some(crate::captions::CaptionPainter::with_font(font));
+        self.other_weights.clear();
+    }
+
+    /// CSS weight for text from now on — 400 regular, 700 bold.
+    ///
+    /// Returns whether the face can draw it: a TrueType face always can —
+    /// a variable font (SF Compact, or any
+    /// [`CaptionFont::from_ttf_bytes`](crate::captions::CaptionFont::from_ttf_bytes)
+    /// of one) at that weight, a static one with a synthetic bold (see
+    /// [`CaptionFont::styled`](crate::captions::CaptionFont::styled)). The
+    /// bitmap face returns `false` for anything but 400, leaving the caller
+    /// to fake it if it must.
+    #[cfg(feature = "captions")]
+    pub fn text_weight(&mut self, weight: u16) -> bool {
+        self.text_weight = weight.clamp(1, 1000);
+        self.apply_text_style()
+    }
+
+    /// Italic text from now on, or upright: the family's italic where it
+    /// has one, else slanted. Returns whether the face can (not the bitmap
+    /// face).
+    #[cfg(feature = "captions")]
+    pub fn text_italic(&mut self, italic: bool) -> bool {
+        self.text_italic = italic;
+        self.apply_text_style()
+    }
+
+    /// Put the painter's face in the current weight and italic; whether it
+    /// got there.
+    #[cfg(feature = "captions")]
+    fn apply_text_style(&mut self) -> bool {
+        let want = (self.text_weight, self.text_italic);
+        let painter = self
+            .painter
+            .get_or_insert_with(crate::captions::CaptionPainter::new);
+        let Some(have) = painter.font.style() else {
+            return want == (400, false);
+        };
+        if have == want {
+            return true;
+        }
+        let next = match self.other_weights.remove(&want) {
+            Some(f) => f,
+            None => match painter.font.styled(want.0, want.1) {
+                Some(f) => f,
+                None => return false,
+            },
+        };
+        let previous = std::mem::replace(&mut painter.font, next);
+        self.other_weights.insert(have, previous);
+        true
     }
 
     /// Type size in pixels for [`Overlay::text`].
@@ -368,7 +435,8 @@ impl Overlay {
         let (hx, hy) = (width * 0.5, height * 0.5);
         let (cx, cy) = (x + hx, y + hy);
         let r = radius.clamp(0.0, hx.abs().min(hy.abs()));
-        let sdf = move |px: f32, py: f32| sd_round_box(px, py, cx, cy, hx.abs(), hy.abs(), r);
+        let half = Vector2::new(hx.abs(), hy.abs());
+        let sdf = move |px: f32, py: f32| d2::round_rect(Vector2::new(px - cx, py - cy), half, r);
         self.shape(
             cx - hx.abs(),
             cy - hy.abs(),
@@ -401,30 +469,39 @@ impl Overlay {
     /// A line from `(x0, y0)` to `(x1, y1)`, in the stroke colour and width.
     ///
     /// Unlike the closed shapes this has no inside, so it ignores the fill and
-    /// draws nothing when there is no stroke.
+    /// draws nothing when there is no stroke. A weight under a pixel draws a
+    /// line of that weight — fainter, not wider — that keeps its weight as it
+    /// moves between pixels.
     pub fn line(&mut self, x0: f32, y0: f32, x1: f32, y1: f32) {
-        let Some(paint) = self.stroke else {
-            return;
-        };
+        let (a, b) = (Vector2::new(x0, y0), Vector2::new(x1, y1));
         let half = self.stroke_weight * 0.5;
-        let sdf = move |px: f32, py: f32| sd_segment(px, py, x0, y0, x1, y1) - half;
-        let pad = half + 1.0;
-        self.paint(
-            x0.min(x1) - pad,
-            y0.min(y1) - pad,
-            x0.max(x1) + pad,
-            y0.max(y1) + pad,
-            &paint,
-            sdf,
-        );
+        self.stroke_centre(x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1), half, |px, py| {
+            d2::segment(Vector2::new(px, py), a, b)
+        });
     }
 
     /// A connected run of line segments, open — the last point is not joined
     /// back to the first. The shape for a plot or an axis.
+    ///
+    /// Drawn as one stroke, so the joints are covered once: segments drawn
+    /// one by one blend their shared end pixels twice, which leaves a dark
+    /// bead at every vertex of a thin or translucent line.
     pub fn polyline(&mut self, points: &[Vector2]) {
-        for w in points.windows(2) {
-            self.line(w[0].x, w[0].y, w[1].x, w[1].y);
+        if points.len() < 2 {
+            return;
         }
+        let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+        for p in points {
+            x0 = x0.min(p.x);
+            y0 = y0.min(p.y);
+            x1 = x1.max(p.x);
+            y1 = y1.max(p.y);
+        }
+        let half = self.stroke_weight * 0.5;
+        self.stroke_centre(x0, y0, x1, y1, half, |px, py| {
+            let p = Vector2::new(px, py);
+            points.windows(2).map(|w| d2::segment(p, w[0], w[1])).fold(f32::MAX, f32::min)
+        });
     }
 
     /// A closed polygon, filled and stroked. Winding does not matter.
@@ -450,7 +527,92 @@ impl Overlay {
         }
         // Borrowed, not copied into the closure: `shape` does not outlive this
         // call, and a `move` here was an allocation per polygon per frame.
-        self.shape(x0, y0, x1, y1, |px, py| sd_polygon(px, py, points));
+        self.shape(x0, y0, x1, y1, |px, py| d2::polygon(Vector2::new(px, py), points));
+    }
+
+    /// Any signed distance field, filled and stroked in the current style —
+    /// the rasteriser behind `rect`, `circle` and `polygon`, opened up.
+    ///
+    /// `sdf` takes a pixel position and returns the distance to the edge in
+    /// pixels, negative inside; build it from [`crate::sdf`]. Only the box
+    /// `(x0, y0)`–`(x1, y1)` is evaluated, so it has to contain the shape (the
+    /// stroke's padding is added for you). The field may underestimate the
+    /// distance — smooth unions do — but must never overestimate it: whole
+    /// tiles are skipped on the strength of one sample.
+    ///
+    /// ```
+    /// use threers::math::{Color, Vector2};
+    /// use threers::overlay::Overlay;
+    /// use threers::sdf::{self, d2};
+    ///
+    /// let mut o = Overlay::new(64, 64);
+    /// o.fill(Color::WHITE);
+    /// // Two discs melted into one blob.
+    /// o.distance_field(0.0, 0.0, 64.0, 64.0, |p| {
+    ///     let a = d2::circle(p - Vector2::new(22.0, 32.0), 12.0);
+    ///     let b = d2::circle(p - Vector2::new(42.0, 32.0), 12.0);
+    ///     sdf::smooth_union(a, b, 8.0)
+    /// });
+    /// assert!(o.touched());
+    /// ```
+    pub fn distance_field<F>(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, sdf: F)
+    where
+        F: Fn(Vector2) -> f32,
+    {
+        self.shape(x0, y0, x1, y1, |px, py| sdf(Vector2::new(px, py)));
+    }
+
+    /// A stroke around any centre line, in the stroke colour at the stroke
+    /// weight — what `line` and `polyline` are, opened up.
+    ///
+    /// `centre` takes a pixel position and returns the unsigned distance to
+    /// the line, in pixels: a curve, a spiral, the union of many segments
+    /// (`min` of their [`d2::segment`]s). Only the box is evaluated; the
+    /// stroke's padding is added for you.
+    ///
+    /// Thin strokes are where this differs from drawing the stroke as a
+    /// [`distance_field`](Self::distance_field): the coverage is the share of
+    /// each pixel the stroke really covers, so a 0.3-pixel hairline draws as a
+    /// faint line one pixel wide rather than a dark one two pixels wide, and
+    /// it does not shimmer or bead as it crosses pixels at an angle.
+    ///
+    /// ```
+    /// use threers::math::{Color, Vector2};
+    /// use threers::overlay::Overlay;
+    ///
+    /// let mut o = Overlay::new(64, 64);
+    /// o.stroke(Color::WHITE);
+    /// o.stroke_weight(0.4);
+    /// // a hairline circle
+    /// o.stroke_field(0.0, 0.0, 64.0, 64.0, |p| ((p - Vector2::new(32.0, 32.0)).length() - 20.0).abs());
+    /// assert!(o.touched());
+    /// ```
+    pub fn stroke_field<F>(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, centre: F)
+    where
+        F: Fn(Vector2) -> f32,
+    {
+        let half = self.stroke_weight * 0.5;
+        self.stroke_centre(x0, y0, x1, y1, half, |px, py| centre(Vector2::new(px, py)));
+    }
+
+    /// [`stroke_field`](Self::stroke_field) with a width that varies along the
+    /// line: `field` returns the distance to the centre line and the stroke's
+    /// half-width there — a brush mark, a tapering strand (the radius
+    /// [`d2::tapered_capsule_radius`] reports). The stroke weight is not used.
+    /// The distance minus the half-width must not overestimate the distance
+    /// to the stroke's edge, and the box must hold the whole stroke, its
+    /// widest point included.
+    pub fn stroke_field_with_width<F>(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, field: F)
+    where
+        F: Fn(Vector2) -> (f32, f32),
+    {
+        let Some(paint) = self.stroke else {
+            return;
+        };
+        self.paint(x0 - 1.0, y0 - 1.0, x1 + 1.0, y1 + 1.0, &paint, |px, py| {
+            let (u, half) = field(Vector2::new(px, py));
+            (u - half, half.max(0.0))
+        });
     }
 
     /// A string with its top-left corner at `(x, y)`, in the fill colour at the
@@ -504,6 +666,7 @@ impl Overlay {
         use crate::captions::CaptionAlign;
         let style = self.text_style();
         let (w, h) = (self.width, self.height);
+        self.apply_text_style();
         let painter = self
             .painter
             .get_or_insert_with(crate::captions::CaptionPainter::new);
@@ -531,6 +694,7 @@ impl Overlay {
     pub fn measure_text(&mut self, text: &str) -> (f32, f32) {
         let style = self.text_style();
         let w = self.width;
+        self.apply_text_style();
         let painter = self
             .painter
             .get_or_insert_with(crate::captions::CaptionPainter::new);
@@ -579,22 +743,42 @@ impl Overlay {
         F: Fn(f32, f32) -> f32,
     {
         if let Some(paint) = self.fill {
-            self.paint(x0 - 1.0, y0 - 1.0, x1 + 1.0, y1 + 1.0, &paint, &sdf);
+            self.paint(x0 - 1.0, y0 - 1.0, x1 + 1.0, y1 + 1.0, &paint, |px, py| (sdf(px, py), f32::INFINITY));
         }
         if let Some(paint) = self.stroke {
             let half = self.stroke_weight * 0.5;
-            // The outline is the band within half a weight of the edge, which
-            // is the same field folded about zero.
-            let banded = |px: f32, py: f32| sdf(px, py).abs() - half;
+            // The outline is a stroke whose centre line is the edge: the
+            // distance to it is the field folded about zero.
             let pad = half + 1.0;
-            self.paint(x0 - pad, y0 - pad, x1 + pad, y1 + pad, &paint, banded);
+            self.paint(x0 - pad, y0 - pad, x1 + pad, y1 + pad, &paint, |px, py| (sdf(px, py).abs() - half, half));
         }
     }
 
-    /// Rasterise one distance field over a bounding box.
-    fn paint<F>(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, paint: &Paint, sdf: F)
+    /// A stroke `half` either side of a centre line, in the stroke colour.
+    /// `centre` is the unsigned distance to the line.
+    fn stroke_centre<F>(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, half: f32, centre: F)
     where
         F: Fn(f32, f32) -> f32,
+    {
+        let Some(paint) = self.stroke else {
+            return;
+        };
+        let pad = half + 1.0;
+        self.paint(x0 - pad, y0 - pad, x1 + pad, y1 + pad, &paint, |px, py| (centre(px, py) - half, half));
+    }
+
+    /// Rasterise one field over a bounding box.
+    ///
+    /// `field` gives, at a pixel centre, the distance outside the shape's edge
+    /// (negative inside) and the half-width of the stroke the shape is —
+    /// `f32::INFINITY` for a filled shape, which has an edge and no centre
+    /// line. A stroke's coverage is the box-filtered share of the pixel it
+    /// covers ([`sdf::coverage_stroke`]), which is what keeps a line thinner
+    /// than a pixel at its own weight instead of drawing it dark and two
+    /// pixels wide.
+    fn paint<F>(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, paint: &Paint, field: F)
+    where
+        F: Fn(f32, f32) -> (f32, f32),
     {
         if paint.alpha <= 0.0 {
             return;
@@ -611,12 +795,16 @@ impl Overlay {
         // of the shape, which is a row of upload and not a wrong picture.
         self.mark_rows(lo_y, hi_y);
         let table = srgb_decode_table();
+        // How far either side of an edge a pixel can be partly covered: half
+        // the widest footprint a pixel has across an edge, at 45 degrees.
+        const BAND: f32 = std::f32::consts::FRAC_1_SQRT_2;
+        let outer = |px: f32, py: f32| field(px, py).0;
         // Walked in tiles so whole tiles can be settled from one evaluation.
         // A signed distance field is 1-Lipschitz — moving a pixel changes it by
         // at most a pixel — so if the centre of a tile is further than the
         // tile's own radius from the edge, every sample in it is on the same
         // side and none of them needs evaluating. Coverage ramps over
-        // `d` in `-0.5..0.5`, so that is the margin to clear.
+        // `d` in `-BAND..BAND`, so that is the margin to clear.
         //
         // This is most of the cost of a large shape. `polygon` measures the
         // distance to every edge at every pixel, and a Voronoi cell covering an
@@ -635,26 +823,51 @@ impl Overlay {
                 let rx = (tx1 - tx) as f32 * 0.5 - 0.5;
                 let ry = (ty1 - ty) as f32 * 0.5 - 0.5;
                 let radius = (rx * rx + ry * ry).sqrt();
-                let middle = sdf((tx + tx1) as f32 * 0.5, (ty + ty1) as f32 * 0.5);
-                if middle - radius > 0.5 {
+                let middle = outer((tx + tx1) as f32 * 0.5, (ty + ty1) as f32 * 0.5);
+                if middle - radius >= BAND {
                     continue; // wholly outside
                 }
                 // Wholly inside, so every sample is fully covered and the
-                // distance field never has to be asked again.
-                let solid = middle + radius < -0.5;
+                // field never has to be asked again. A stroke thinner than
+                // the band never gets here: its outer distance is at least
+                // minus its half-width.
+                let solid = middle + radius <= -BAND;
 
                 for py in ty..ty1 {
                     let row = py as usize * self.width as usize;
                     for px in tx..tx1 {
-                        // Sampled at the pixel centre, and coverage is the
-                        // distance to the edge over one pixel — the standard
-                        // analytic approximation, and exact for an edge through
-                        // the centre.
                         let alpha = if solid {
                             paint.alpha
                         } else {
-                            let d = sdf(px as f32 + 0.5, py as f32 + 0.5);
-                            let coverage = (0.5 - d).clamp(0.0, 1.0);
+                            let (cx, cy) = (px as f32 + 0.5, py as f32 + 0.5);
+                            let (d, half) = field(cx, cy);
+                            let coverage = if d >= BAND {
+                                0.0
+                            } else if d <= -BAND {
+                                1.0
+                            } else {
+                                // In the band: how wide the pixel is across the
+                                // edge here sets how wide the ramp is. Forward
+                                // differences for an edge. A stroke's distance is
+                                // folded about its centre line, and a step across
+                                // that crease shortens the difference on its
+                                // axis — so per axis the larger of the forward
+                                // and backward one, which a crease cannot shorten
+                                // both of.
+                                let e = 0.5;
+                                let mut gx = (outer(cx + e, cy) - d) / e;
+                                let mut gy = (outer(cx, cy + e) - d) / e;
+                                if half.is_finite() {
+                                    gx = gx.abs().max(((d - outer(cx - e, cy)) / e).abs());
+                                    gy = gy.abs().max(((d - outer(cx, cy - e)) / e).abs());
+                                }
+                                let w = sdf::footprint(Vector2::new(gx, gy));
+                                if half.is_finite() {
+                                    sdf::coverage_stroke(d + half, half, w)
+                                } else {
+                                    sdf::coverage_edge(d, w)
+                                }
+                            };
                             if coverage <= 0.0 {
                                 continue;
                             }
@@ -700,60 +913,6 @@ fn widen(band: Option<(u32, u32)>, y0: u32, y1: u32) -> Option<(u32, u32)> {
         Some((a, b)) => (a.min(y0), b.max(y1)),
         None => (y0, y1),
     })
-}
-
-/// Signed distance to a box, negative inside.
-fn sd_box(px: f32, py: f32, cx: f32, cy: f32, hx: f32, hy: f32) -> f32 {
-    let qx = (px - cx).abs() - hx;
-    let qy = (py - cy).abs() - hy;
-    let (ox, oy) = (qx.max(0.0), qy.max(0.0));
-    (ox * ox + oy * oy).sqrt() + qx.max(qy).min(0.0)
-}
-
-/// Signed distance to a box with rounded corners, negative inside.
-fn sd_round_box(px: f32, py: f32, cx: f32, cy: f32, hx: f32, hy: f32, r: f32) -> f32 {
-    sd_box(px, py, cx, cy, (hx - r).max(0.0), (hy - r).max(0.0)) - r
-}
-
-/// Unsigned distance to a line segment.
-fn sd_segment(px: f32, py: f32, ax: f32, ay: f32, bx: f32, by: f32) -> f32 {
-    let (vx, vy) = (bx - ax, by - ay);
-    let (wx, wy) = (px - ax, py - ay);
-    let len2 = vx * vx + vy * vy;
-    let t = if len2 > 0.0 {
-        ((wx * vx + wy * vy) / len2).clamp(0.0, 1.0)
-    } else {
-        0.0
-    };
-    let (dx, dy) = (wx - vx * t, wy - vy * t);
-    (dx * dx + dy * dy).sqrt()
-}
-
-/// Signed distance to a closed polygon, negative inside. The sign comes from a
-/// crossing count rather than the winding, so a clockwise polygon and a
-/// counter-clockwise one of the same outline give the same answer.
-fn sd_polygon(px: f32, py: f32, pts: &[Vector2]) -> f32 {
-    let n = pts.len();
-    let mut best = f32::MAX;
-    let mut inside = false;
-    for i in 0..n {
-        let j = (i + n - 1) % n;
-        let (a, b) = (pts[i], pts[j]);
-        best = best.min(sd_segment(px, py, a.x, a.y, b.x, b.y));
-        // Ray crossing to the right: the edge straddles this row, and the
-        // crossing is to the right of the point.
-        if (py >= a.y) != (py >= b.y) {
-            let t = (py - a.y) / (b.y - a.y);
-            if a.x + t * (b.x - a.x) > px {
-                inside = !inside;
-            }
-        }
-    }
-    if inside {
-        -best
-    } else {
-        best
-    }
 }
 
 #[cfg(test)]
@@ -995,6 +1154,62 @@ mod tests {
         assert_eq!(at(&o, 16, 24)[3], 0, "off the line");
     }
 
+    /// Alpha across column `x`, as coverage.
+    fn column(o: &Overlay, x: u32) -> Vec<f32> {
+        (0..o.size().1).map(|y| at(o, x, y)[3] as f32 / 255.0).collect()
+    }
+
+    /// A line thinner than a pixel draws at its own weight: its alpha peaks at
+    /// its width and sums across it to its width, wherever it falls between
+    /// pixel centres. The edge rule it replaced drew a 0.4-pixel line at 0.9
+    /// alpha over two pixels — more than twice its ink.
+    #[test]
+    fn a_hairline_keeps_its_weight_between_pixels() {
+        for k in 0..8 {
+            let y = 16.0 + k as f32 / 8.0;
+            let mut o = Overlay::new(32, 32);
+            o.stroke(Color::WHITE);
+            o.stroke_weight(0.4);
+            o.line(2.0, y, 30.0, y);
+            let col = column(&o, 16);
+            let total: f32 = col.iter().sum();
+            let peak = col.iter().cloned().fold(0.0, f32::max);
+            assert!((total - 0.4).abs() < 0.02, "at y {y}: {total} of ink for a 0.4 line");
+            assert!(peak <= 0.41, "at y {y}: peak {peak}");
+        }
+    }
+
+    /// Along a thin diagonal the ink per column stays even: no beads where the
+    /// line passes close to pixel centres and gaps where it does not.
+    #[test]
+    fn a_thin_diagonal_does_not_bead() {
+        let mut o = Overlay::new(64, 64);
+        o.stroke(Color::WHITE);
+        o.stroke_weight(0.6);
+        o.line(4.0, 4.3, 60.0, 60.3);
+        let sums: Vec<f32> = (10..54).map(|x| column(&o, x).iter().sum()).collect();
+        let mean = sums.iter().sum::<f32>() / sums.len() as f32;
+        let spread = sums.iter().map(|s| (s - mean).abs()).fold(0.0, f32::max);
+        // a 0.6-wide line at 45 degrees crosses each column over 0.6·√2
+        assert!((mean - 0.6 * std::f32::consts::SQRT_2).abs() < 0.03, "mean ink per column {mean}");
+        assert!(spread < 0.03, "ink per column varies by {spread} along the line");
+    }
+
+    /// A translucent polyline covers its joints once: drawn segment by
+    /// segment, the shared end pixels were blended twice and showed as beads.
+    #[test]
+    fn a_polyline_covers_its_joints_once() {
+        let mut o = Overlay::new(48, 48);
+        o.stroke_alpha(Color::WHITE, 0.5);
+        o.stroke_weight(3.0);
+        let pts = [Vector2::new(4.0, 24.0), Vector2::new(24.0, 24.0), Vector2::new(44.0, 24.0)];
+        o.polyline(&pts);
+        let joint = at(&o, 24, 24)[3];
+        let along = at(&o, 14, 24)[3];
+        assert_eq!(joint, along, "the joint is no darker than the run");
+        assert!((along as i32 - 128).abs() <= 1, "{along}");
+    }
+
     #[test]
     fn a_polygon_fills_its_inside_whichever_way_it_is_wound() {
         let square = [
@@ -1113,6 +1328,86 @@ mod tests {
         // dropping it, so skipping a composite cannot lose it.
         o.clear();
         assert!(o.dirty_rows().is_some(), "still outstanding");
+    }
+
+    /// A stroke outlines text, as `text` says it does. The positioned-line
+    /// path used to zero the outline, so a stroked label came out bare.
+    #[cfg(feature = "captions")]
+    #[test]
+    fn a_stroke_outlines_text() {
+        let red = |stroke: bool| {
+            let mut o = Overlay::new(240, 48);
+            o.set_font(crate::captions::CaptionFont::builtin());
+            o.text_size(20.0);
+            o.fill(Color::WHITE);
+            if stroke {
+                o.stroke(Color::new(1.0, 0.0, 0.0));
+                o.stroke_weight(3.0);
+            }
+            assert!(o.text(8.0, 8.0, "Outlined"));
+            o.pixels().chunks(4).filter(|p| p[3] > 128 && p[0] > 200 && p[1] < 60).count()
+        };
+        assert_eq!(red(false), 0);
+        assert!(red(true) > 100, "only {} outline pixels", red(true));
+    }
+
+    /// A variable face draws bold as its bold instance: heavier than the
+    /// regular, and no wider than the font's own bold advances make it —
+    /// not the regular struck twice. Skipped without SF Compact.
+    #[cfg(all(feature = "captions", target_os = "macos"))]
+    #[test]
+    fn bold_is_the_fonts_bold() {
+        let Some(font) = crate::captions::CaptionFont::try_sf_compact() else { return };
+        let ink = |weight: u16| {
+            let mut o = Overlay::new(400, 48);
+            o.set_font(font.with_weight(400).unwrap_or_else(|| {
+                crate::captions::CaptionFont::try_sf_compact().unwrap()
+            }));
+            o.text_size(18.0);
+            o.fill(Color::WHITE);
+            assert!(o.text_weight(weight), "the face has weight {weight}");
+            assert!(o.text(4.0, 8.0, "Hamburgefonstiv"));
+            let alpha: f32 = o.pixels().chunks(4).map(|p| p[3] as f32 / 255.0).sum();
+            (alpha, o.measure_text("Hamburgefonstiv").0)
+        };
+        let (regular, regular_width) = ink(400);
+        let (bold, bold_width) = ink(700);
+        assert!(bold > regular * 1.3, "bold ink {bold} against regular {regular}");
+        assert!(bold_width > regular_width, "bold is set wider by its own advances");
+        // And back: the regular face again, from the overlay's cache.
+        assert_eq!(ink(400).0, regular);
+    }
+
+    /// Italic is a style of its own, and leaning: the ink's top rows sit
+    /// right of where the upright's do, its bottom rows about where they
+    /// did. The bitmap face has none to give.
+    #[cfg(feature = "captions")]
+    #[test]
+    fn italic_text_leans() {
+        let centre = |italic: bool, rows: std::ops::Range<u32>| -> f32 {
+            let mut o = Overlay::new(240, 48);
+            o.set_font(crate::captions::CaptionFont::from_ttf_bytes(include_bytes!("openscad/DejaVuSans.ttf")).unwrap());
+            o.text_size(24.0);
+            o.fill(Color::WHITE);
+            assert!(o.text_italic(italic));
+            assert!(o.text(8.0, 8.0, "llll"));
+            let (mut sum, mut w) = (0.0f32, 0.0f32);
+            for (i, p) in o.pixels().chunks(4).enumerate() {
+                let (x, y) = ((i % 240) as u32, (i / 240) as u32);
+                if rows.contains(&y) {
+                    sum += x as f32 * p[3] as f32;
+                    w += p[3] as f32;
+                }
+            }
+            sum / w
+        };
+        let (top, foot) = (10..16, 26..30);
+        let lean = centre(true, top.clone()) - centre(false, top);
+        assert!(lean > 2.0, "top rows moved {lean}");
+        assert!((centre(true, foot.clone()) - centre(false, foot)).abs() < 1.5);
+        let mut bitmap = Overlay::new(40, 20);
+        bitmap.set_font(crate::captions::CaptionFont::builtin());
+        assert!(!bitmap.text_italic(true));
     }
 
     /// Text is drawn by the caption painter straight into the buffer, so the

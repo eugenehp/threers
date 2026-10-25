@@ -1046,9 +1046,8 @@ fn build_scene(
 
     // ---- type ---------------------------------------------------------
     // Both are TextGeometry in the source, set in Neue Montreal — a CFF/OpenType
-    // face, which this crate's TTF loader does not read (and `TtfFont::glyph_for`
-    // returns outlines in font units while scaling the advance to ems, so its
-    // output is not usable for layout as-is). The type is rasterised with the
+    // face, which this crate's TTF loader does not read (a TrueType face would go
+    // through `TextGeometry::from_ttf`). The type is rasterised with the
     // caption font instead and mapped onto an unlit quad: the text is flat
     // (depth 0), white, unlit and square to an orthographic camera, so a
     // textured quad is pixel-equivalent apart from the letterforms themselves.

@@ -58,7 +58,7 @@ pub use lattice::{
     ChiralRule, Conductivity, Conform, Cuboct, CuboctAssembly, CuboctAssemblyPlan,
     CuboctAssemblyStep, CuboctFrame, CuboctJoint, CuboctJointKind, Field, FrameMaterial,
     FrameResponse, Hand, Infill, Lattice, LatticeGeometry, LatticeKind, LatticeMetrics,
-    LatticeStyle, Region, Segment, SolidMaterial, Solver, Stiffness, Stochastic, Strength, Strut,
+    LatticeStyle, Region, SeedLayout, Segment, SolidMaterial, Solver, Stiffness, Stochastic, Strength, Strut,
     Tpms,
 };
 #[cfg(feature = "nurbs")]

@@ -120,6 +120,30 @@ where
     (0..len).map(f).collect()
 }
 
+/// [`par_map_range`] for a handful of heavy items — slabs of a grid, say —
+/// where the item count says nothing about the work and so cannot gate it.
+/// Always parallel where available; the caller decides whether `len` pieces
+/// are worth a thread each.
+#[cfg(all(feature = "parallel", not(target_arch = "wasm32")))]
+pub fn par_map_range_coarse<R, F>(len: usize, f: F) -> Vec<R>
+where
+    R: Send,
+    F: Fn(usize) -> R + Sync + Send,
+{
+    use rayon::prelude::*;
+    (0..len).into_par_iter().map(f).collect()
+}
+
+/// Sequential fallback. See the parallel version for the contract.
+#[cfg(not(all(feature = "parallel", not(target_arch = "wasm32"))))]
+pub fn par_map_range_coarse<R, F>(len: usize, f: F) -> Vec<R>
+where
+    R: Send,
+    F: Fn(usize) -> R + Sync + Send,
+{
+    (0..len).map(f).collect()
+}
+
 /// Fill a slice a chunk at a time, in parallel where available. `f` is handed
 /// the chunk's index and the chunk itself.
 ///
