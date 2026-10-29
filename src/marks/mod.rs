@@ -98,7 +98,7 @@ pub use polygon_mesh::PolygonMesh;
 pub use polygons::{PatternFrame, PolygonFeature, PolygonMarks, PolygonPattern, ProceduralFrame, ProceduralShape};
 pub use precision::{split_f64, split_f64x3, Origin};
 pub use segments::{ArcProfile, DashMode, LineCap, LineJoin, PathMesh, SegmentMarks};
-pub use shader::{CustomShader, MarkKind, PREAMBLE};
+pub use shader::{CustomShader, MarkKind, PREAMBLE, SWIFTSHADER_SAMPLING};
 pub use shapes::ShapeMarks;
 
 pub use sprites::{SpriteMarks, SpriteBox, SpriteMode, SpriteSdf};
@@ -152,6 +152,17 @@ pub struct MarkView {
     /// bottom-left one on the image — as GL drawn by ANGLE on Vulkan (and so
     /// SwiftShader) breaks them. Whoever reads the target reverses its rows.
     pub flip_y: bool,
+    /// Sample atlases (sprites, glyphs, fill patterns) as Chromium's
+    /// SwiftShader does, bit for bit — its own filtering, mip selection and
+    /// mip blend, from texel loads — instead of the GPU's sampler, whose
+    /// weights are coarser. For comparing images with WebGL's.
+    pub swiftshader_sampling: bool,
+    /// Depth as Chromium's SwiftShader computes it: each triangle's plane
+    /// from its vertices as rasterized, evaluated per fragment in float32
+    /// (written as the fragment's depth), rather than the GPU's own
+    /// interpolation, whose lower precision settles near-ties between
+    /// coplanar shapes differently. Marks that support it: sprites.
+    pub swiftshader_depth: bool,
     /// The scene's lights, for layers lit by them ([`Lighting::scene`]).
     pub scene_lights: Option<SceneLights>,
 }
@@ -217,6 +228,8 @@ impl MarkView {
             clip_epsilon: 0.001,
             subpixel_snap: None,
             flip_y: false,
+            swiftshader_sampling: false,
+            swiftshader_depth: false,
             scene_lights: None,
         }
     }
@@ -236,6 +249,18 @@ impl MarkView {
     /// Set [`flip_y`](Self::flip_y).
     pub fn with_flip_y(mut self, flip: bool) -> Self {
         self.flip_y = flip;
+        self
+    }
+
+    /// Set [`swiftshader_depth`](Self::swiftshader_depth).
+    pub fn with_swiftshader_depth(mut self, on: bool) -> Self {
+        self.swiftshader_depth = on;
+        self
+    }
+
+    /// Set [`swiftshader_sampling`](Self::swiftshader_sampling).
+    pub fn with_swiftshader_sampling(mut self, on: bool) -> Self {
+        self.swiftshader_sampling = on;
         self
     }
 
@@ -377,7 +402,12 @@ impl MarkView {
                 Some((steps, bias)) => [self.clip_epsilon, steps, bias[0], bias[1]],
                 None => [self.clip_epsilon, 0.0, 0.0, 0.0],
             },
-            raster: [if self.flip_y { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0],
+            raster: [
+                if self.flip_y { 1.0 } else { 0.0 },
+                if self.swiftshader_sampling { 1.0 } else { 0.0 },
+                if self.swiftshader_depth { 1.0 } else { 0.0 },
+                0.0,
+            ],
             scene: self.scene_uniforms(),
         }
     }
@@ -499,6 +529,11 @@ pub struct MarkStyle {
     /// than that far in front of a mark no longer hides it. Ignored by
     /// shapes, which are real geometry.
     pub depth_lift: f32,
+    /// A constant depth bias in units of the minimum resolvable depth
+    /// difference (GL's `polygonOffset` units; negative is nearer), for
+    /// marks that emulate SwiftShader's depth (custom kinds reading
+    /// `layer.shadow.y`); deck.gl gives each layer `-100 × its index`.
+    pub depth_bias_units: f32,
     /// Draw order among layers lying in the same plane: a higher order wins
     /// the depth test over a lower one at the same depth, so water, land
     /// use and roads on the ground stack instead of fighting. Each step is
@@ -531,6 +566,11 @@ pub struct MarkStyle {
     /// are not drawn — labels, icons and points that do not depth-test
     /// against the globe would otherwise show through it.
     pub horizon: Option<([f64; 3], f64)>,
+    /// Cull triangles facing away (counter-clockwise on screen is the
+    /// front, as in GL; a [`MarkView::flip_y`] view mirrors it): deck.gl's
+    /// `GlobeView` culls its layers' back faces, so geometry on the globe's
+    /// far side faces away and is not drawn. Lines are never culled.
+    pub cull_back: bool,
     /// Run the layer's colours through the scene's tone mapping
     /// ([`MarkView::tone_mapping`]), so marks sit in a lit, exposed scene
     /// the way its materials do. Off by default: data colours then reach the
@@ -571,6 +611,7 @@ impl Default for MarkStyle {
             depth_test: true,
             depth_write: false,
             depth_lift: 2.0,
+            depth_bias_units: 0.0,
             depth_order: 0,
             ground_bias: true,
             clip: None,
@@ -578,6 +619,7 @@ impl Default for MarkStyle {
             highlight_len: 1,
             highlight_color: [255, 220, 0, 255],
             horizon: None,
+            cull_back: false,
             tone_mapped: false,
             receive_shadows: false,
             blend: MarkBlend::Alpha,
@@ -861,6 +903,11 @@ pub trait Mark {
     fn kind_extra(&self) -> [f32; 4] {
         [0.0; 4]
     }
+    /// A fifth, read as `layer.extra2` (for custom kinds; the built-in
+    /// kinds leave it unused).
+    fn kind_extra2(&self) -> [f32; 4] {
+        [0.0; 4]
+    }
     /// The kind's surface: x the specular reflectance, y the shininess, of
     /// a lit kind's [`Lighting`] (`layer.material`).
     fn kind_material(&self) -> [f32; 4] {
@@ -959,7 +1006,7 @@ struct FrameUniforms {
     aa: [f32; 4],
     /// x: [`MarkView::clip_epsilon`]; yzw: [`MarkView::subpixel_snap`].
     clip: [f32; 4],
-    /// x: 1 when [`MarkView::flip_y`].
+    /// x: 1 when [`MarkView::flip_y`]; y: [`MarkView::swiftshader_sampling`].
     raster: [f32; 4],
     scene: SceneUniforms,
 }
@@ -996,7 +1043,8 @@ struct LayerUniforms {
     ids: [u32; 4],
     /// x: [`MarkStyle::depth_lift`].
     depth: [f32; 4],
-    /// x: 1 when the layer takes the scene's shadows.
+    /// x: 1 when the layer takes the scene's shadows; y:
+    /// [`MarkStyle::depth_bias_units`].
     shadow: [f32; 4],
     /// What positions are measured from, split — see `mark_relative`.
     origin_hi: [f32; 4],
@@ -1011,6 +1059,8 @@ struct LayerUniforms {
     horizon: [f32; 4],
     /// [`Mark::kind_material`].
     material: [f32; 4],
+    /// [`Mark::kind_extra2`].
+    extra2: [f32; 4],
 }
 
 /// Layouts and samplers the mark types build their bind groups against.
@@ -1064,6 +1114,9 @@ struct PipelineKey {
     shadow: bool,
     /// Line primitives ([`Mark::line_list`]).
     lines: bool,
+    /// Back faces culled ([`MarkStyle::cull_back`]): 1 with GL's
+    /// counter-clockwise front, 2 with it mirrored by a flipped view; 0 none.
+    cull: u8,
 }
 
 /// Every layer's uniforms in one buffer, one bind group over it, a layer
@@ -1408,6 +1461,7 @@ impl MarkRenderer {
             }
             let (mut style2, style3, stroke) = m.kind_uniforms();
             let extra = m.kind_extra();
+            let extra2 = m.kind_extra2();
             let material = m.kind_material();
             let kind_flags = m.kind_flags();
             let common = m.common_mut();
@@ -1487,7 +1541,8 @@ impl MarkRenderer {
                 origin_hi: layer_origin.0,
                 origin_lo: layer_origin.1,
                 extra,
-                shadow: [if s.receive_shadows { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0],
+                extra2,
+                shadow: [if s.receive_shadows { 1.0 } else { 0.0 }, s.depth_bias_units, 0.0, 0.0],
             };
             bytes[i * stride..i * stride + LAYER_SIZE as usize]
                 .copy_from_slice(bytemuck::bytes_of(&u));
@@ -1572,19 +1627,23 @@ impl MarkRenderer {
         let mut layouts: Vec<(u64, wgpu::VertexStepMode, Vec<wgpu::VertexAttribute>)> = Vec::new();
         let mut loc = 0;
         if key.kind == MarkKind::Shape {
-            // Shapes: position, normal, uv, colour.
+            // Shapes: position, normal, uv, colour, and the vertex's
+            // triangle's three corners.
             let attr = |format, offset, shader_location| wgpu::VertexAttribute { format, offset, shader_location };
             layouts.push((
-                48,
+                84,
                 wgpu::VertexStepMode::Vertex,
                 vec![
                     attr(wgpu::VertexFormat::Float32x3, 0, 0),
                     attr(wgpu::VertexFormat::Float32x3, 12, 1),
                     attr(wgpu::VertexFormat::Float32x2, 24, 2),
                     attr(wgpu::VertexFormat::Float32x4, 32, 3),
+                    attr(wgpu::VertexFormat::Float32x3, 48, 4),
+                    attr(wgpu::VertexFormat::Float32x3, 60, 5),
+                    attr(wgpu::VertexFormat::Float32x3, 72, 6),
                 ],
             ));
-            loc = 4;
+            loc = 7;
         } else if mark.geometry().is_some() {
             layouts.push((
                 24,
@@ -1723,6 +1782,8 @@ impl MarkRenderer {
             }),
             primitive: wgpu::PrimitiveState {
                 topology: if key.lines { wgpu::PrimitiveTopology::LineList } else { wgpu::PrimitiveTopology::TriangleList },
+                front_face: if key.cull == 2 { wgpu::FrontFace::Cw } else { wgpu::FrontFace::Ccw },
+                cull_mode: (key.cull != 0).then_some(wgpu::Face::Back),
                 ..Default::default()
             },
             depth_stencil: depth_state(key.depth).map(|mut d| {
@@ -1862,6 +1923,7 @@ impl MarkRenderer {
         has_depth: bool,
         pick: bool,
         reversed: bool,
+        flipped: bool,
     ) -> PipelineKey {
         let s = &mark.common().style;
         let depth = if !has_depth {
@@ -1893,6 +1955,11 @@ impl MarkRenderer {
             bias: s.ground_bias && matches!(mark.kind(), MarkKind::Polygon | MarkKind::Image),
             shadow: false,
             lines: mark.line_list(),
+            cull: match (s.cull_back && !mark.line_list(), flipped) {
+                (false, _) => 0,
+                (true, false) => 1,
+                (true, true) => 2,
+            },
         }
     }
 
@@ -1982,6 +2049,7 @@ impl MarkRenderer {
                     false,
                     false,
                     view.reversed_z,
+                    view.flip_y,
                 );
                 self.ensure_pipeline(device, &key, &mut **m);
                 let depth = if has_depth {
@@ -2001,6 +2069,7 @@ impl MarkRenderer {
                     has_depth,
                     false,
                     view.reversed_z,
+                    view.flip_y,
                 );
                 key.shadow = self.shadow_pass;
                 self.ensure_pipeline(device, &key, &mut **m);
@@ -2032,6 +2101,7 @@ impl MarkRenderer {
                         has_depth,
                         false,
                         view.reversed_z,
+                        view.flip_y,
                     );
                     key.shadow = self.shadow_pass;
                     let pipeline = &self.pipelines[&key];
@@ -2051,6 +2121,7 @@ impl MarkRenderer {
                     false,
                     false,
                     view.reversed_z,
+                    view.flip_y,
                 );
                 {
                     let (field, _) = m.density().unwrap();

@@ -1316,6 +1316,8 @@ mod tests {
             clip_epsilon: 0.001,
             subpixel_snap: None,
             flip_y: false,
+            swiftshader_sampling: false,
+            swiftshader_depth: false,
             scene_lights: None,
         }
     }

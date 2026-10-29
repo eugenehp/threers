@@ -62,6 +62,26 @@ pub fn tapered_capsule(p: Vector3, a: Vector3, b: Vector3, ra: f32, rb: f32) -> 
     ((x2 * a2 * il2).sqrt() + y * rr) * il2 - ra
 }
 
+/// An axis-aligned ellipsoid at the origin, `radii` its semi-axes.
+///
+/// Not exact — no ellipsoid distance has a closed form — but a bound that is
+/// exact on the surface, never overestimates, and is within a few percent
+/// nearby for an ellipsoid up to about 4:1 (the ratio of the field to its
+/// gradient, after Quílez). Meshing and ray marching need nothing more; for
+/// an offset of one ([`round`](super::round), [`onion`](super::onion)) keep
+/// the offset small against the shortest radius. With equal radii it is
+/// [`sphere`] everywhere outside the centre.
+pub fn ellipsoid(p: Vector3, radii: Vector3) -> f32 {
+    let r = Vector3::new(radii.x.max(1e-9), radii.y.max(1e-9), radii.z.max(1e-9));
+    let k0 = Vector3::new(p.x / r.x, p.y / r.y, p.z / r.z).length();
+    let k1 = Vector3::new(p.x / (r.x * r.x), p.y / (r.y * r.y), p.z / (r.z * r.z)).length();
+    if k1 <= 0.0 {
+        // The centre: as deep as the shortest semi-axis.
+        return -r.x.min(r.y.min(r.z));
+    }
+    k0 * (k0 - 1.0) / k1
+}
+
 /// A torus at the origin lying in the xz plane: `major` the radius of the
 /// ring, `minor` of the tube.
 #[inline]
@@ -92,6 +112,32 @@ mod tests {
 
     fn v(x: f32, y: f32, z: f32) -> Vector3 {
         Vector3::new(x, y, z)
+    }
+
+    #[test]
+    fn an_ellipsoid_is_a_bound_exact_on_its_surface() {
+        let r = v(1.0, 0.5, 2.0);
+        // On the axes the surface is at the radii, inside and out.
+        assert!(ellipsoid(v(1.0, 0.0, 0.0), r).abs() < 1e-6);
+        assert!(ellipsoid(v(0.0, -0.5, 0.0), r).abs() < 1e-6);
+        assert!((ellipsoid(v(0.0, 0.0, 3.0), r) - 1.0).abs() < 1e-6, "on an axis it is the axial gap");
+        assert!((ellipsoid(v(0.0, 0.0, 0.0), r) + 0.5).abs() < 1e-6);
+        // Equal radii: a sphere.
+        assert!((ellipsoid(v(0.3, -2.0, 0.7), v(0.9, 0.9, 0.9)) - sphere(v(0.3, -2.0, 0.7), 0.9)).abs() < 1e-5);
+        // Never over: no point of the surface is nearer than the field says.
+        // The surface, sampled densely, against points around it.
+        let mut surf = Vec::new();
+        for i in 0..64 {
+            for j in 0..32 {
+                let (th, ph) = (i as f32 / 64.0 * std::f32::consts::TAU, (j as f32 + 0.5) / 32.0 * std::f32::consts::PI);
+                surf.push(v(r.x * ph.sin() * th.cos(), r.y * ph.cos(), r.z * ph.sin() * th.sin()));
+            }
+        }
+        for q in [v(1.5, 0.4, 0.2), v(-0.3, 1.1, 1.7), v(0.2, 0.1, -2.6), v(0.6, -0.9, 0.0)] {
+            let true_d = surf.iter().map(|s| (*s - q).length()).fold(f32::MAX, f32::min);
+            let d = ellipsoid(q, r);
+            assert!(d > 0.0 && d <= true_d + 2e-2, "at {q:?}: {d} against {true_d}");
+        }
     }
 
     #[test]

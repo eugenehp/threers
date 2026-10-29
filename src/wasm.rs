@@ -47,6 +47,9 @@ mod scene_graph;
 mod particles;
 pub use particles::WebParticleSystem;
 mod shapes;
+// TimeSmear: the offline echo filter over a captured clip.
+mod time_smear;
+pub use time_smear::WebTimeSmear;
 // Post-processing: the composer and its passes.
 mod postfx;
 pub use postfx::{WebEffectComposer, WebPass};
@@ -584,6 +587,14 @@ pub fn install_console_logger() {
             log::set_max_level(log::LevelFilter::Warn);
         }
     });
+}
+
+impl WebRenderer {
+    /// The renderer's device and queue, for other bindings that compute on
+    /// the same GPU (`WebSoftBody::useGpu`).
+    pub(crate) fn device_queue(&self) -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
+        (self.renderer.device_arc(), self.renderer.queue_arc())
+    }
 }
 
 #[wasm_bindgen]
@@ -5766,6 +5777,7 @@ impl WebOrbitControls {
             wheel,
             rotating,
             panning,
+            cursor: (0.0, 0.0),
         };
         if let CameraInner::Perspective(c) = &mut camera.inner {
             self.inner.update_dt(ev, c, (w, h), dt);
@@ -5819,6 +5831,7 @@ impl WebTrackballControls {
             wheel,
             rotating,
             panning,
+            cursor: (0.0, 0.0),
         };
         if let CameraInner::Perspective(c) = &mut camera.inner {
             self.inner.update(ev, c, (w, h));
@@ -5860,6 +5873,7 @@ impl WebArcballControls {
             wheel,
             rotating,
             panning: false,
+            cursor: (0.0, 0.0),
         };
         let ndc = crate::Vector2::new(ndc_x, ndc_y);
         if let CameraInner::Perspective(c) = &mut camera.inner {
@@ -5891,6 +5905,7 @@ impl WebFirstPersonControls {
             wheel: 0.0,
             rotating,
             panning: false,
+            cursor: (0.0, 0.0),
         };
         if let CameraInner::Perspective(c) = &mut camera.inner {
             self.inner.update(ev, c, dt);

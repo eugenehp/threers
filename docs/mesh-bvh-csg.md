@@ -29,7 +29,7 @@ querying it; see [Native (desktop)](#native-desktop), where baking the
 procedural city is what turned this up, for why that matters.
 
 ```rust
-// Cargo.toml: threers = { version = "0.0.8", features = ["mesh-bvh"] }
+// Cargo.toml: threers = { version = "0.0.9", features = ["mesh-bvh"] }
 use threers::mesh_bvh::{BuildOptions, MeshBvh, SAH};
 
 let bvh = MeshBvh::build(
@@ -44,7 +44,7 @@ let bvh = MeshBvh::build(
 ```
 
 ```rust
-// Cargo.toml: threers = { version = "0.0.8", features = ["bvh-csg"] }
+// Cargo.toml: threers = { version = "0.0.9", features = ["bvh-csg"] }
 use threers::{CsgBrush, CsgEvaluator, BoxGeometry, SUBTRACTION};
 
 let mut ev = CsgEvaluator::new();

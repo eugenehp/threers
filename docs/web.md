@@ -40,6 +40,30 @@ coat to stroke it. `?gl=1` forces WebGL2. See [Materials](materials.md#fur).
 
 ![The fur demo on WebGPU](images/fur_demo.jpg)
 
+**Time smear**: [`web/examples/time-smear.html`](../web/examples/time-smear.html)
+captures a short clip with `THREE.TimeSmear.capture` and runs
+`threers::time_smear` over it in wasm: moving things echo at other moments in
+time, before they arrive as well as after. Look, strength, reach, rotation and
+work width are live controls; `?gl=1` forces WebGL2. The capture uses an sRGB
+render target — a plain one reads back linear light, as three.js's does. See
+[Time smear](time-smear.md).
+
+**Gummy jelly**: [`web/examples/jelly.html`](../web/examples/jelly.html)
+is a set of gummy creatures you can pull apart — a jellyfish, a gecko, a
+starfish, an octopus, a sea slug, a gummy worm, a gummy bear and a salamander
+(`?creature=`, or keys 1–8; `?` lists the rest). Grab a tentacle, an arm, a tail or an ear
+and pull: it flushes as the glue nears its limit, tears, twitches on the
+table, and a bud grows back from the stump. Each creature is a few
+[`THREE.SDF`](sdf.md#from-javascript) fields (`creatures.js`) on a
+[`THREE.SoftBody`](softbody.md#in-the-browser) — XPBD in wasm, skinning too,
+all of it [in a worker](softbody.md#off-the-main-thread).
+The gel is a `MeshPhysicalMaterial` in `refract` mode, with eyes, gonads and
+bellies as opaque surfaces inside it. The solver is a Rust port of Dream
+Meridian's [Axolotl Jelly](https://github.com/saulfloresjr/axolotl-jelly)
+(MIT), whose sounds the page also uses.
+
+![A gummy jellyfish, octopus, gecko and bear in the browser](images/gummy_jelly.jpg)
+
 **One scene, every backend**: [`web/examples/parity.html`](../web/examples/parity.html)
 draws the scene of `cargo run --example backend_parity` through the shim,
 number for number, on WebGPU or (`?gl=1`) WebGL2, so a browser frame can be

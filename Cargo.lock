@@ -3067,7 +3067,7 @@ dependencies = [
 
 [[package]]
 name = "threers"
-version = "0.0.8"
+version = "0.0.9"
 dependencies = [
  "bytemuck",
  "console_error_panic_hook",
@@ -3083,6 +3083,8 @@ dependencies = [
  "rlx",
  "rlx-geo",
  "slotmap",
+ "threers-codec",
+ "threers-softbody",
  "tokio",
  "wasm-bindgen",
  "wasm-bindgen-futures",
@@ -3102,12 +3104,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "threers-codec"
+version = "0.0.9"
+dependencies = [
+ "rayon",
+]
+
+[[package]]
 name = "threers-connectome"
 version = "0.0.1"
 
 [[package]]
 name = "threers-fluid-ios"
-version = "0.0.8"
+version = "0.0.9"
 dependencies = [
  "objc2 0.6.5",
  "objc2-core-foundation",
@@ -3119,11 +3128,11 @@ dependencies = [
 
 [[package]]
 name = "threers-js"
-version = "0.0.8"
+version = "0.0.9"
 
 [[package]]
 name = "threers-node"
-version = "0.0.8"
+version = "0.0.9"
 dependencies = [
  "napi",
  "napi-build",
@@ -3150,7 +3159,7 @@ dependencies = [
 
 [[package]]
 name = "threers-physics"
-version = "0.0.8"
+version = "0.0.9"
 dependencies = [
  "bytemuck",
  "criterion",
@@ -3182,7 +3191,7 @@ dependencies = [
 
 [[package]]
 name = "threers-py"
-version = "0.0.8"
+version = "0.0.9"
 dependencies = [
  "pyo3",
  "pyo3-build-config",
@@ -3197,6 +3206,15 @@ version = "0.0.1"
 dependencies = [
  "threers-physics",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "threers-softbody"
+version = "0.0.9"
+dependencies = [
+ "bytemuck",
+ "libm",
+ "wgpu",
 ]
 
 [[package]]

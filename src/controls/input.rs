@@ -12,4 +12,7 @@ pub struct PointerEvent {
     pub rotating: bool,
     /// True while the pan button is held (right mouse or shift+left).
     pub panning: bool,
+    /// Pointer position in NDC (−1..1, +y up), for dolly-to-cursor. Read only
+    /// when `wheel != 0` and the controls have `zoom_to_cursor` on.
+    pub cursor: (f32, f32),
 }

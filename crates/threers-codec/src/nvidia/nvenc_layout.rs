@@ -1,0 +1,101 @@
+//! Sizes, offsets, versions and enum values from the Video Codec SDK 12.0
+//! `nvEncodeAPI.h`, printed by the C compiler on x86_64 Linux (`sizeof`,
+//! `offsetof`, the `*_VER` macros) rather than transcribed by hand. The
+//! structs are handled as zeroed blocks of the C size with these fields
+//! written in place: several are kilobytes of unions and bitfields, and only
+//! a handful of fields are needed.
+
+#![allow(dead_code)]
+
+pub(super) const FUNCTION_LIST_SIZE: usize = 2552;
+pub(super) const FUNCTION_LIST_VER: u32 = 0x7002000c;
+pub(super) const FN_OPEN_ENCODE_SESSION_EX: usize = 240;
+pub(super) const FN_GET_ENCODE_PRESET_CONFIG_EX: usize = 320;
+pub(super) const FN_INITIALIZE_ENCODER: usize = 96;
+pub(super) const FN_CREATE_INPUT_BUFFER: usize = 104;
+pub(super) const FN_DESTROY_INPUT_BUFFER: usize = 112;
+pub(super) const FN_CREATE_BITSTREAM_BUFFER: usize = 120;
+pub(super) const FN_DESTROY_BITSTREAM_BUFFER: usize = 128;
+pub(super) const FN_ENCODE_PICTURE: usize = 136;
+pub(super) const FN_LOCK_BITSTREAM: usize = 144;
+pub(super) const FN_UNLOCK_BITSTREAM: usize = 152;
+pub(super) const FN_LOCK_INPUT_BUFFER: usize = 160;
+pub(super) const FN_UNLOCK_INPUT_BUFFER: usize = 168;
+pub(super) const FN_DESTROY_ENCODER: usize = 224;
+pub(super) const FN_GET_LAST_ERROR_STRING: usize = 304;
+pub(super) const API_VERSION: u32 = 0x0000000c;
+pub(super) const OPEN_SIZE: usize = 1552;
+pub(super) const OPEN_VER: u32 = 0x7001000c;
+pub(super) const OPEN_DEVICE_TYPE: usize = 4;
+pub(super) const OPEN_DEVICE: usize = 8;
+pub(super) const OPEN_API_VERSION: usize = 24;
+pub(super) const PRESET_SIZE: usize = 5128;
+pub(super) const PRESET_VER: u32 = 0xf004000c;
+pub(super) const PRESET_CFG: usize = 8;
+pub(super) const CONFIG_SIZE: usize = 3584;
+pub(super) const CONFIG_VER: u32 = 0xf008000c;
+pub(super) const CONFIG_GOP_LENGTH: usize = 20;
+pub(super) const CONFIG_FRAME_INTERVAL_P: usize = 24;
+pub(super) const CONFIG_RC_MODE: usize = 44;
+pub(super) const CONFIG_RC_CONST_QP: usize = 48;
+pub(super) const CONFIG_RC_AVG_BITRATE: usize = 60;
+pub(super) const CONFIG_RC_MAX_BITRATE: usize = 64;
+pub(super) const CONFIG_RC_TARGET_QUALITY: usize = 128;
+pub(super) const CONFIG_HEVC_IDR_PERIOD: usize = 188;
+pub(super) const INIT_SIZE: usize = 1808;
+pub(super) const INIT_VER: u32 = 0xf005000c;
+pub(super) const INIT_ENCODE_GUID: usize = 4;
+pub(super) const INIT_PRESET_GUID: usize = 20;
+pub(super) const INIT_WIDTH: usize = 36;
+pub(super) const INIT_HEIGHT: usize = 40;
+pub(super) const INIT_DAR_WIDTH: usize = 44;
+pub(super) const INIT_DAR_HEIGHT: usize = 48;
+pub(super) const INIT_FRAME_RATE_NUM: usize = 52;
+pub(super) const INIT_FRAME_RATE_DEN: usize = 56;
+pub(super) const INIT_ENABLE_PTD: usize = 64;
+pub(super) const INIT_ENCODE_CONFIG: usize = 88;
+pub(super) const INIT_MAX_WIDTH: usize = 96;
+pub(super) const INIT_MAX_HEIGHT: usize = 100;
+pub(super) const INIT_TUNING_INFO: usize = 136;
+pub(super) const INPUT_SIZE: usize = 776;
+pub(super) const INPUT_VER: u32 = 0x7001000c;
+pub(super) const INPUT_WIDTH: usize = 4;
+pub(super) const INPUT_HEIGHT: usize = 8;
+pub(super) const INPUT_FORMAT: usize = 16;
+pub(super) const INPUT_BUFFER: usize = 24;
+pub(super) const BITSTREAM_SIZE: usize = 776;
+pub(super) const BITSTREAM_VER: u32 = 0x7001000c;
+pub(super) const BITSTREAM_BUFFER: usize = 16;
+pub(super) const LOCK_INPUT_SIZE: usize = 1544;
+pub(super) const LOCK_INPUT_VER: u32 = 0x7001000c;
+pub(super) const LOCK_INPUT_BUFFER: usize = 8;
+pub(super) const LOCK_INPUT_DATA: usize = 16;
+pub(super) const LOCK_INPUT_PITCH: usize = 24;
+pub(super) const PIC_SIZE: usize = 3360;
+pub(super) const PIC_VER: u32 = 0xf006000c;
+pub(super) const PIC_INPUT_WIDTH: usize = 4;
+pub(super) const PIC_INPUT_HEIGHT: usize = 8;
+pub(super) const PIC_INPUT_PITCH: usize = 12;
+pub(super) const PIC_FLAGS: usize = 16;
+pub(super) const PIC_FRAME_IDX: usize = 20;
+pub(super) const PIC_TIMESTAMP: usize = 24;
+pub(super) const PIC_INPUT_BUFFER: usize = 40;
+pub(super) const PIC_OUTPUT: usize = 48;
+pub(super) const PIC_BUFFER_FORMAT: usize = 64;
+pub(super) const PIC_STRUCT: usize = 68;
+pub(super) const LOCK_BS_SIZE: usize = 1544;
+pub(super) const LOCK_BS_VER: u32 = 0x7002000c;
+pub(super) const LOCK_BS_OUTPUT: usize = 8;
+pub(super) const LOCK_BS_SIZE_BYTES: usize = 36;
+pub(super) const LOCK_BS_PTR: usize = 56;
+pub(super) const LOCK_BS_PICTURE_TYPE: usize = 64;
+pub(super) const DEVICE_TYPE_CUDA: u32 = 0x00000001;
+pub(super) const BUFFER_FORMAT_ABGR: u32 = 0x10000000;
+pub(super) const PIC_STRUCT_FRAME: u32 = 0x00000001;
+pub(super) const PIC_FLAG_EOS: u32 = 0x00000008;
+pub(super) const RC_CONSTQP: u32 = 0x00000000;
+pub(super) const RC_VBR: u32 = 0x00000001;
+pub(super) const TUNING_HIGH_QUALITY: u32 = 0x00000001;
+pub(super) const TUNING_LOW_LATENCY: u32 = 0x00000002;
+pub(super) const ERR_NEED_MORE_INPUT: u32 = 0x00000011;
+pub(super) const PIC_TYPE_IDR: u32 = 0x00000003;

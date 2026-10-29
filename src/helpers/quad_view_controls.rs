@@ -188,6 +188,7 @@ impl QuadViewControls {
                         wheel: 0.0,
                         rotating: mode == DragMode::Orbit,
                         panning: mode == DragMode::Pan,
+                        cursor: (0.0, 0.0),
                     },
                     camera,
                     size,

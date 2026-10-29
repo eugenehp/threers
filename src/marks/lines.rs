@@ -68,7 +68,7 @@ fn fs_pick(in : LineOut) -> @location(0) vec2<u32> {
 }
 "#;
 
-/// The same lines as parallelograms ([`LineMarks::parallelogram`]).
+/// The same lines as SwiftShader's parallelograms ([`LineMarks::parallelogram`]).
 const QUAD_SOURCE: &str = r#"
 struct LineIn {
     @builtin(vertex_index) vid : u32,
@@ -88,6 +88,8 @@ struct LineOut {
     @location(2) custom1 : vec4<f32>,
     @location(3) @interpolate(flat) index : u32,
     @location(4) world : vec3<f32>,
+    @location(5) @interpolate(flat) plane : vec4<f32>,
+    @location(6) @interpolate(flat) plane_origin : vec4<f32>,
 };
 
 @vertex
@@ -104,18 +106,29 @@ fn vs_main(in : LineIn) -> LineOut {
     i.index = in.iid;
     i = hook_instance(i);
     var out : LineOut;
-    // A parallelogram: the segment widened half a pixel each way along its
-    // minor axis, between its ends.
+    // SwiftShader's line as ANGLE asks for it (Bresenham): each end moved
+    // half a pixel each way along the minor axis, by its own w — its setup's
+    // arithmetic, in GL's clip space (before any flip). x-major exactly when
+    // its "right" or "left" cases hold: `(dx > -dy) == (dx > dy)`.
     let ca = frame.view_proj * vec4<f32>(i.position, 1.0);
     let cb = frame.view_proj * vec4<f32>(i.position2, 1.0);
-    let d = (cb.xy / cb.w - ca.xy / ca.w) * frame.viewport.xy;
-    let minor = select(vec2<f32>(1.0, 0.0), vec2<f32>(0.0, 1.0), abs(d.x) >= abs(d.y));
+    let half_w = frame.viewport.x * 0.5;
+    let half_h = frame.viewport.y * 0.5;
+    let dx = half_w * (cb.x / cb.w - ca.x / ca.w);
+    let dy = half_h * (cb.y / cb.w - ca.y / ca.w);
+    let x_major = (dx > -dy) == (dx > dy);
     let c = mark_corner_signed(mark_quad_corner(in.vid));
     let far = c.x > 0.0;
     let base = select(ca, cb, far);
-    let off = minor * 0.5 * c.y * 2.0 * frame.viewport.zw * base.w;
-    let hidden = i.visible <= 0.0 || ca.w <= 0.0 || cb.w <= 0.0;
-    out.clip = select(mark_order(base + vec4<f32>(off, 0.0, 0.0)), mark_hidden(), hidden);
+    let across = select(vec2<f32>(0.5 * base.w / half_w, 0.0), vec2<f32>(0.0, 0.5 * base.w / half_h), x_major);
+    let off = across * c.y;
+    let hidden = i.visible <= 0.0 || ca.w <= 0.0 || cb.w <= 0.0 || (dx == 0.0 && dy == 0.0);
+    out.clip = select(mark_order(vec4<f32>(base.xy + off, base.z, base.w)), mark_hidden(), hidden);
+    if (frame.raster.z > 0.5) {
+        let plane = mark_ss_line_plane(mark_order(ca), mark_order(cb));
+        out.plane = plane.abc;
+        out.plane_origin = plane.origin;
+    }
     out.color = i.color;
     out.custom0 = i.custom0;
     out.custom1 = i.custom1;
@@ -124,13 +137,21 @@ fn vs_main(in : LineIn) -> LineOut {
     return out;
 }
 
+struct LineFrag {
+    @location(0) color : vec4<f32>,
+    @builtin(frag_depth) depth : f32,
+}
+
 @fragment
-fn fs_main(in : LineOut) -> @location(0) vec4<f32> {
+fn fs_main(in : LineOut) -> LineFrag {
     if (mark_culled(in.world)) {
         discard;
     }
     let c = hook_color(in.color, in.custom0, in.custom1);
-    return mark_out(mark_highlight(vec4<f32>(c.rgb, c.a * layer.style2.w), in.index));
+    var o : LineFrag;
+    o.color = mark_out(mark_highlight(vec4<f32>(c.rgb, c.a * layer.style2.w), in.index));
+    o.depth = mark_ss_depth(in.plane, in.plane_origin, in.clip);
+    return o;
 }
 
 @fragment
@@ -153,10 +174,12 @@ pub struct LineMarks {
     sources: Column,
     targets: Column,
     colors: Column,
-    /// Each line a parallelogram — the segment widened half a pixel each
-    /// way along its minor axis — rather than the GPU's line primitive: how
-    /// Vulkan's non-strict lines are drawn, SwiftShader's among them (and so
-    /// a WebGL `gl.LINES` there).
+    /// Each line a parallelogram — the segment's ends moved half a pixel
+    /// each way along its minor axis, by SwiftShader's own arithmetic —
+    /// rather than the GPU's line primitive: how SwiftShader draws the
+    /// Bresenham lines ANGLE asks for (and so a WebGL `gl.LINES` there), its
+    /// depth plane too under
+    /// [`MarkView::swiftshader_depth`](super::MarkView::swiftshader_depth).
     pub parallelogram: bool,
     shader: CustomShader,
     quad_shader: CustomShader,

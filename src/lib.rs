@@ -48,11 +48,14 @@
 //! | `fluid` | | Interactive 2D and 3D fluids on the GPU, as render passes (runs on WebGL2) | — |
 //! | `usd` | | Universal Scene Description — `.usda`, `.usdc`, `.usdz`, read and written | — |
 //! | `video` | | Native frame-sequence export via ffmpeg (implies `captions`) | — |
-//! | `native-codec` | | Pure-Rust GIF, APNG, VP9/WebM, H.264/MP4, HEVC (wasm-safe) | — |
+//! | `native-codec` | | Pure-Rust video encoders, audio decoders and containers (wasm-safe; the `threers-codec` crate) | — |
+//! | `native-decode` | | Pure-Rust H.264, HEVC, VP9 and AV1 decoders (implies `native-codec`) | — |
 //! | `metal` | | A second renderer on Metal directly, via the Objective-C runtime (macOS/iOS) | — |
 //! | `visionos` | | CompositorServices frame loop + ARKit world tracking, stereo and reverse-Z (implies `metal`) | — |
-//! | `videotoolbox` | | In-process VideoToolbox encode (macOS) | — |
-//! | `parallel` | | rayon-backed CSG/BVH work (native; a no-op on wasm32) | rayon |
+//! | `videotoolbox` | | In-process VideoToolbox encode and decode (macOS) | — |
+//! | `nvidia` | | NVENC encode and NVDEC decode on NVIDIA GPUs (Linux/Windows, driver loaded at run time) | — |
+//! | `vaapi` | | VAAPI HEVC encode and H.264/HEVC/VP9/AV1 decode on Linux (AMD, Intel; libva loaded at run time) | — |
+//! | `parallel` | | rayon-backed CSG/BVH work and frame-parallel encoding (native; a no-op on wasm32) | rayon |
 //! | `async` | | tokio runtime for callers driving loaders concurrently (native) | tokio |
 //! | `rlx` | | Tensors ↔ geometry and pixels, graph runner, convolution, mesh smoothing, fitted colour grades, palettes | rlx |
 //! | `rlx-geo` | | Exact Delaunay + adaptive refinement + Voronoi cell textures | rlx-geo |
@@ -79,13 +82,13 @@
 //!
 //! ```toml
 //! # CAD stack in one flag
-//! threers = { version = "0.0.8", features = ["cad"] }
+//! threers = { version = "0.0.9", features = ["cad"] }
 //! # everything
-//! threers = { version = "0.0.8", features = ["full"] }
+//! threers = { version = "0.0.9", features = ["full"] }
 //! # browser wasm kitchen sink
-//! threers = { version = "0.0.8", features = ["wasm-full"] }
+//! threers = { version = "0.0.9", features = ["wasm-full"] }
 //! # nothing but the renderer
-//! threers = { version = "0.0.8", default-features = false }
+//! threers = { version = "0.0.9", default-features = false }
 //! ```
 //!
 //! Rigid-body physics lives in the companion crate
@@ -170,6 +173,7 @@ pub mod prelude;
 pub mod renderers;
 pub mod scene;
 pub mod sdf;
+pub mod softbody;
 pub mod stats;
 pub mod textures;
 pub mod utils;
@@ -214,13 +218,18 @@ pub mod wasm_csg;
 #[cfg(all(feature = "metal", any(target_os = "macos", target_os = "ios")))]
 pub mod metal;
 
-/// In-process hardware video encoding through VideoToolbox, so frames reach the
-/// encoder without crossing a process boundary. macOS only; see
-/// [`videotoolbox`](crate::videotoolbox).
+/// In-process hardware video encoding and decoding through VideoToolbox, so
+/// frames reach the codec without crossing a process boundary. macOS only;
+/// they live in `threers-codec`, and [`codec::hw`] puts both behind one
+/// interface with a software fallback.
 #[cfg(all(feature = "videotoolbox", target_os = "macos"))]
-pub mod videotoolbox;
-#[cfg(all(feature = "videotoolbox", feature = "native-codec", target_os = "macos"))]
-pub mod videotoolbox_decode;
+pub use threers_codec::{videotoolbox, videotoolbox_decode};
+/// NVENC and NVDEC on NVIDIA GPUs; see [`codec::nvidia`](threers_codec::nvidia).
+#[cfg(all(feature = "nvidia", any(target_os = "linux", target_os = "windows"), target_pointer_width = "64"))]
+pub use threers_codec::nvidia;
+/// VAAPI decoding on Linux; see [`codec::vaapi`](threers_codec::vaapi).
+#[cfg(all(feature = "vaapi", target_os = "linux"))]
+pub use threers_codec::vaapi;
 
 #[cfg(feature = "mesh-bvh")]
 pub mod mesh_bvh;
@@ -430,6 +439,11 @@ pub mod sequence;
 pub use sequence::{
     render_sequence, video_available, SequenceError, SequenceOptions, SequenceReport,
 };
+
+/// Time smear: echoes of moving things before and after they pass — an
+/// offline filter over a frame sequence.
+pub mod time_smear;
+pub use time_smear::TimeSmear;
 pub use utils::{
     center as center_geometry, compute_tangents, compute_vertex_normals, merge_geometries,
     scale as scale_geometry,
@@ -445,11 +459,13 @@ pub use video::{
     VideoOptions, VideoQuality,
 };
 
-/// From-scratch, pure-Rust media codecs (H.264/MP4, HEVC, VP9/WebM, APNG, GIF,
-/// bitstream) — no ffmpeg, no C bindings, and wasm-compatible. Enable the
-/// `native-codec` feature.
+/// From-scratch, pure-Rust media codecs — the
+/// [`threers-codec`](https://docs.rs/threers-codec) crate: H.264, HEVC and VP9
+/// encoders, H.264/HEVC/VP9/AV1 decoders (`native-decode`), AAC, MP3, Opus,
+/// Vorbis and FLAC, MP4/WebM/Matroska/Ogg, APNG and GIF — no ffmpeg, no C
+/// bindings, and wasm-compatible. Enable the `native-codec` feature.
 #[cfg(feature = "native-codec")]
-pub mod codec;
+pub use threers_codec as codec;
 #[cfg(feature = "native-codec")]
 pub use codec::animation::{
     encode_animation_rgba, encode_animation_rgba_with_progress, format_animation_progress,

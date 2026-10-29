@@ -52,14 +52,17 @@ fn fs_main(in : FullscreenVertex) -> @location(0) vec4<f32> {
     let ad = textureDimensions(ao);
     // R32Float is not filterable: nearest texel of the half-resolution factor
     let au = vec2<i32>(min(xy * ad / max(sd, vec2<u32>(1u)), ad - vec2<u32>(1u)));
+    // A 5x5 box blur over the half-resolution AO (wider than 3x3) smooths the
+    // rotated SSAO kernel's residual noise so it reads clean zoomed deep into a
+    // fold, without a separate denoise pass.
     var occ = 0.0;
-    for (var j = -1; j <= 1; j = j + 1) {
-        for (var i = -1; i <= 1; i = i + 1) {
+    for (var j = -2; j <= 2; j = j + 1) {
+        for (var i = -2; i <= 2; i = i + 1) {
             let q = clamp(au + vec2<i32>(i, j), vec2<i32>(0), vec2<i32>(ad) - 1);
             occ = occ + (1.0 - textureLoad(ao, q, 0).r);
         }
     }
-    let k = 1.0 / (1.0 + p.strength * occ / 9.0);
+    let k = 1.0 / (1.0 + p.strength * occ / 25.0);
     // Occlusion attenuates light, so it multiplies LINEAR values. An sRGB
     // view decodes on load and encodes on store; a plain one holds the
     // encoded bytes, which are decoded and re-encoded here.

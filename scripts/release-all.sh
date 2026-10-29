@@ -8,7 +8,8 @@
 #
 # Targets (env TARGETS, comma-separated, or default "language"):
 #   language  — npm ESM (mini+full), npm native (host), PyPI wheel (host)
-#   crates    — crates.io: threers, threers-physics, threers-animation, threers-probe
+#   crates    — crates.io: threers-codec, threers-softbody, threers, threers-physics,
+#               threers-animation, threers-probe
 #   npm-esm   — threers npm (wasm mini + full)
 #   npm-node  — threers-node + @threers/node-* (host .node only locally)
 #   pypi      — threers PyPI wheel (host triple)
@@ -84,8 +85,9 @@ log "threers release helper — action=$ACTION targets=$TARGETS version=$VERSION
 release_crates() {
   # Order is a dependency order, not a preference: each one has to be on the
   # index before anything naming it by version can even be packaged.
-  log "crates.io (order: threers → threers-physics → threers-animation → threers-probe)"
-  for pkg in threers threers-physics threers-animation threers-probe; do
+  # threers-codec and threers-softbody first: threers depends on both by version.
+  log "crates.io (order: threers-codec → threers-softbody → threers → threers-physics → threers-animation → threers-probe)"
+  for pkg in threers-codec threers-softbody threers threers-physics threers-animation threers-probe; do
     if [[ "$ACTION" == "pack" || "$ACTION" == "publish" ]]; then
       log "packaging $pkg..."
       run cargo package -p "$pkg" --allow-dirty

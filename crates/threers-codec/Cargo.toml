@@ -1,0 +1,100 @@
+[package]
+name = "threers-codec"
+version = "0.0.9"
+edition = "2021"
+rust-version = "1.87"
+license = "MIT"
+authors = ["Eugene Hauptmann"]
+repository = "https://github.com/eugenehp/threers"
+homepage = "https://github.com/eugenehp/threers"
+documentation = "https://docs.rs/threers-codec"
+readme = "README.md"
+description = "Pure-Rust media codecs: H.264/HEVC/VP9 encoders, H.264/HEVC/VP9/AV1 decoders, AAC/MP3/Opus/Vorbis/FLAC/WAV decoders, MP4/WebM/Matroska/Ogg, GIF/APNG, captions, and VideoToolbox acceleration on macOS"
+keywords = ["codec", "video", "audio", "h264", "hevc"]
+categories = ["multimedia::video", "multimedia::audio", "multimedia::encoding", "wasm"]
+exclude = ["tests/support/**"]
+
+[features]
+default = ["decode", "gif"]
+# The video decoders (`decode`): H.264, HEVC, VP9, AV1.
+decode = []
+# GIF89a encode and decode (`gif`).
+gif = []
+# rayon-backed frame parallelism.
+parallel = ["dep:rayon"]
+# In-process VideoToolbox encode and decode (macOS; links Apple frameworks,
+# inert on other targets).
+videotoolbox = []
+# NVIDIA NVENC encode and NVDEC decode (Linux and Windows, 64-bit). The
+# driver's libraries are loaded at run time, so nothing links against NVIDIA
+# and a build with this on still runs without the driver; inert elsewhere.
+nvidia = ["decode"]
+# VAAPI HEVC encode and H.264/HEVC/VP9/AV1 decode on Linux (AMD, Intel and
+# other VA drivers). libva is loaded at run time, so a build with this on
+# still runs without it; inert elsewhere.
+vaapi = ["decode"]
+
+[dependencies]
+rayon = { version = "1.10", optional = true }
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+# Targets that need a feature say so, so that
+# `--no-default-features` skips them rather than failing to build.
+[[test]]
+name = "av1_conformance"
+required-features = ["decode"]
+
+[[test]]
+name = "decode_seek"
+required-features = ["decode"]
+
+[[test]]
+name = "gif"
+required-features = ["gif"]
+
+[[test]]
+name = "hw"
+required-features = ["decode"]
+
+[[test]]
+name = "nvidia"
+required-features = ["nvidia"]
+
+[[test]]
+name = "vaapi"
+required-features = ["vaapi"]
+
+[[test]]
+name = "h264_inter"
+required-features = ["decode"]
+
+[[test]]
+name = "native_decode"
+required-features = ["decode"]
+
+[[example]]
+name = "annexb_yuv_dump"
+required-features = ["decode"]
+
+[[example]]
+name = "av1_yuv_dump"
+required-features = ["decode"]
+
+[[example]]
+name = "media_banner"
+required-features = ["decode"]
+
+[[example]]
+name = "video_rgb_pipe"
+required-features = ["decode"]
+
+[[example]]
+name = "video_yuv_dump"
+required-features = ["decode"]
+
+[[example]]
+name = "vp9_yuv_dump"
+required-features = ["decode"]

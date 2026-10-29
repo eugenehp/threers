@@ -137,7 +137,8 @@ struct MarkFrame {
     aa        : vec4<f32>,
     // x: the clip w a line facing the camera is cut at, behind it.
     clip      : vec4<f32>,
-    // x: 1 when drawn upside down (`MarkView::flip_y`).
+    // x: 1 when drawn upside down (`MarkView::flip_y`); y: 1 when
+    // textures are sampled as SwiftShader samples them; z: 1 for its depth.
     raster    : vec4<f32>,
     // The scene's lights (`MarkView::scene_lights`): counts (points,
     // directionals, 1 when set), ambient colour, then each light.
@@ -182,6 +183,8 @@ struct MarkLayer {
     horizon : vec4<f32>,
     // x: specular reflectance, y: shininess (lit kinds' `Lighting`).
     material : vec4<f32>,
+    // A fifth vec4 of the kind's own (custom kinds' `Mark::kind_extra2`).
+    extra2 : vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> frame : MarkFrame;
@@ -366,6 +369,115 @@ fn mark_snap(clip : vec4<f32>) -> vec2<f32> {
     return ((snapped / frame.viewport.xy - 0.5) * 2.0) * clip.w;
 }
 
+fn mark_ss_sampling() -> bool {
+    return frame.raster.y > 0.5;
+}
+
+/// SwiftShader's depth plane for the triangle `a`, `b`, `c` (clip
+/// positions as rasterized: snapped, and flipped when drawn upside down),
+/// when the view asks (`frame.raster.z`, `MarkView::swiftshader_depth`):
+/// vertices put lowest (GL) clip y first, then largest w first, as its
+/// setup orders them; window positions in sixteenths of a pixel; the plane
+/// relative to the first vertex. `abc` holds A, B, C; `origin` the first
+/// vertex's window position (pixel centres at whole numbers). Each vertex
+/// of a triangle computes the same plane; passed flat.
+struct MarkPlane {
+    abc : vec4<f32>,
+    origin : vec4<f32>,
+}
+
+fn mark_ss_window(p : vec4<f32>) -> vec3<f32> {
+    let rhw = 1.0 / p.w;
+    // Device pixels from the target's corner, y down the target.
+    let x = (p.x * rhw * 0.5 + 0.5) * frame.viewport.x + frame.aa.z;
+    let y = (0.5 - p.y * rhw * 0.5) * frame.viewport.y + frame.aa.w;
+    return vec3<f32>(round(x * 16.0 - 8.0), round(y * 16.0 - 8.0), p.z * rhw);
+}
+
+fn mark_ss_plane(a : vec4<f32>, b : vec4<f32>, c : vec4<f32>) -> MarkPlane {
+    var v0 = a;
+    var v1 = b;
+    var v2 = c;
+    // GL's clip y: the frame drawn upside down has it negated.
+    let flip = select(1.0, -1.0, frame.raster.x > 0.5);
+    let y0 = v0.y * flip;
+    let y1 = v1.y * flip;
+    let y2 = v2.y * flip;
+    let y_min = min(min(y0, y1), y2);
+    if (y_min == y1) {
+        let t = v0; v0 = v1; v1 = v2; v2 = t;
+    }
+    if (y_min == y2) {
+        let t = v2; v2 = v1; v1 = v0; v0 = t;
+    }
+    let w_max = max(max(v0.w, v1.w), v2.w);
+    let w1 = v1.w;
+    let w2 = v2.w;
+    if (w_max == w1) {
+        let t = v0; v0 = v1; v1 = v2; v2 = t;
+    }
+    if (w_max == w2) {
+        let t = v2; v2 = v1; v1 = v0; v0 = t;
+    }
+    let p0 = mark_ss_window(v0);
+    let p1 = mark_ss_window(v1);
+    let p2 = mark_ss_window(v2);
+    let x1 = (p1.x - p0.x) * (1.0 / 16.0);
+    let y1s = (p1.y - p0.y) * (1.0 / 16.0);
+    let x2 = (p2.x - p0.x) * (1.0 / 16.0);
+    let y2s = (p2.y - p0.y) * (1.0 / 16.0);
+    let z1 = p1.z - p0.z;
+    let z2 = p2.z - p0.z;
+    let area = x1 * y2s - x2 * y1s;
+    var out : MarkPlane;
+    if (area != 0.0) {
+        let d = 1.0 / area;
+        out.abc = vec4<f32>((y2s * z1 - y1s * z2) * d, (x1 * z2 - x2 * z1) * d, p0.z, 1.0);
+    } else {
+        out.abc = vec4<f32>(0.0, 0.0, p0.z, 1.0);
+    }
+    out.origin = vec4<f32>(p0.x * (1.0 / 16.0), p0.y * (1.0 / 16.0), 0.0, 0.0);
+    return out;
+}
+
+/// SwiftShader's depth plane for a line from `a` to `b` (clip positions as
+/// rasterized): no reordering; a third point a segment's length across
+/// from `b`, at `b`'s depth, so depth runs along the line only.
+fn mark_ss_line_plane(a : vec4<f32>, b : vec4<f32>) -> MarkPlane {
+    let p0 = mark_ss_window(a);
+    let p1 = mark_ss_window(b);
+    let x1 = (p1.x - p0.x) * (1.0 / 16.0);
+    let y1s = (p1.y - p0.y) * (1.0 / 16.0);
+    let x2 = ((p1.x + p1.y - p0.y) - p0.x) * (1.0 / 16.0);
+    let y2s = ((p1.y + p0.x - p1.x) - p0.y) * (1.0 / 16.0);
+    let z1 = p1.z - p0.z;
+    let z2 = z1;
+    let area = x1 * y2s - x2 * y1s;
+    var out : MarkPlane;
+    if (area != 0.0) {
+        let d = 1.0 / area;
+        out.abc = vec4<f32>((y2s * z1 - y1s * z2) * d, (x1 * z2 - x2 * z1) * d, p0.z, 1.0);
+    } else {
+        out.abc = vec4<f32>(0.0, 0.0, p0.z, 1.0);
+    }
+    out.origin = vec4<f32>(p0.x * (1.0 / 16.0), p0.y * (1.0 / 16.0), 0.0, 0.0);
+    return out;
+}
+
+/// The depth at fragment `frag` (`@builtin(position)`) on `plane`, as
+/// SwiftShader evaluates it; `fallback` (the GPU's own) when the view does
+/// not ask or the plane is unset.
+fn mark_ss_depth(plane : vec4<f32>, origin : vec4<f32>, frag : vec4<f32>) -> f32 {
+    if (frame.raster.z < 0.5 || plane.w < 0.5) {
+        return frag.z;
+    }
+    let xf = (frag.x - 0.5) - origin.x;
+    let yf = (frag.y - 0.5) - origin.y;
+    let row = plane.z + yf * plane.y;
+    let z = xf * plane.x + row;
+    return clamp(z, 0.0, 1.0);
+}
+
 /// Whether relative point `p` is outside the layer's clip rectangle on the
 /// ground (`depth.z` set) — a tile's edge.
 fn mark_clipped(p : vec3<f32>) -> bool {
@@ -380,14 +492,32 @@ fn mark_beyond_horizon(p : vec3<f32>) -> bool {
     let c = layer.horizon.xyz;
     let r = layer.horizon.w;
     let pc = p - c;
-    // A perspective eye sees past the horizon plane, dot(p - c, eye - c) = r²;
-    // an orthographic one sees the hemisphere facing it.
-    let seen = select(
-        dot(pc, frame.eye.xyz) >= 0.0,
-        dot(pc, frame.eye.xyz - c) >= r * r * 0.999,
-        frame.eye.w > 0.5,
-    );
-    return r > 0.0 && !seen;
+    if (frame.eye.w <= 0.5) {
+        // An orthographic eye sees the hemisphere facing it.
+        return r > 0.0 && dot(pc, frame.eye.xyz) < 0.0;
+    }
+    // A perspective eye sees past the horizon plane, dot(p - c, eye - c) =
+    // r², what lies on the ground; a point raised well above it (a tall wall
+    // at the limb) is hidden only where its line of sight meets the sphere
+    // first — in the sphere's radii, so float32 keeps the quadratic's
+    // precision.
+    if (r <= 0.0) {
+        return false;
+    }
+    if (dot(pc, pc) <= r * r * 1.0201) {
+        return dot(pc, frame.eye.xyz - c) < r * r * 0.999;
+    }
+    let oc = (frame.eye.xyz - c) / r;
+    let d = (p - frame.eye.xyz) / r;
+    let a = dot(d, d);
+    let b = dot(oc, d);
+    let k = dot(oc, oc) - 1.0;
+    let disc = b * b - a * k;
+    if (disc <= 0.0 || a <= 0.0) {
+        return false;
+    }
+    let t = (-b - sqrt(disc)) / a;
+    return t > 0.0 && t < 0.999;
 }
 
 /// Inside the globe a layer has (`horizon`), well under its surface: a
@@ -649,6 +779,59 @@ fn fill_pattern_origin(p1 : vec4<f32>, offset : vec2<f32>) -> vec2<f32> {
 }
 "#;
 
+/// SwiftShader's texture sampling as WGSL (`mark_ss_sample`), self-contained,
+/// for [`MarkView::swiftshader_sampling`](super::MarkView::swiftshader_sampling)
+/// and for testing it against SwiftShader itself. Part of every mark shader.
+pub const SWIFTSHADER_SAMPLING: &str = r#"
+/// SwiftShader's filtered sample of an 8-bit texture, bit for bit (as
+/// measured against it), when the view asks (`frame.raster.y`,
+/// `MarkView::swiftshader_sampling`): each texel's byte widened to 16 bits
+/// (`b << 8`), interpolated in float32 as `c0 + f * (c1 - c0)`, x then y,
+/// the mip level from the longer squared footprint by its float bits
+/// (`log2sqrt`), levels blended the same way, and scaled by `1 / 0xFF00`.
+/// Clamped to the edge; `dx`, `dy` the texture coordinate's derivatives.
+fn mark_ss_texel(t : texture_2d<f32>, level : i32, p : vec2<i32>, size : vec2<i32>) -> vec4<f32> {
+    let q = clamp(p, vec2<i32>(0), size - vec2<i32>(1));
+    return round(textureLoad(t, q, level) * 255.0) * 256.0;
+}
+
+fn mark_ss_bilinear(t : texture_2d<f32>, level : i32, uv : vec2<f32>) -> vec4<f32> {
+    let size = vec2<i32>(textureDimensions(t, level));
+    let scaled = uv * vec2<f32>(size);
+    let c = scaled - vec2<f32>(0.5);
+    let c0 = floor(c);
+    let f = c - c0;
+    let i = vec2<i32>(c0);
+    let c00 = mark_ss_texel(t, level, i, size);
+    let c10 = mark_ss_texel(t, level, i + vec2<i32>(1, 0), size);
+    let c01 = mark_ss_texel(t, level, i + vec2<i32>(0, 1), size);
+    let c11 = mark_ss_texel(t, level, i + vec2<i32>(1, 1), size);
+    let a = c00 + f.x * (c10 - c00);
+    let b = c01 + f.x * (c11 - c01);
+    return a + f.y * (b - a);
+}
+
+fn mark_ss_sample(t : texture_2d<f32>, uv : vec2<f32>, dx : vec2<f32>, dy : vec2<f32>) -> vec4<f32> {
+    let size = vec2<f32>(textureDimensions(t, 0));
+    let ddx = dx * size;
+    let ddy = dy * size;
+    let sx = ddx.x * ddx.x + ddx.y * ddx.y;
+    let sy = ddy.x * ddy.x + ddy.y * ddy.y;
+    let m = max(sx, sy);
+    let sq = m * m;
+    let top = f32(textureNumLevels(t)) - 1.0;
+    let lod = min(max((f32(bitcast<i32>(sq)) - 1065353216.0) * bitcast<f32>(0x33000000u), 0.0), top);
+    let l0 = floor(lod);
+    let fr = lod - l0;
+    var c = mark_ss_bilinear(t, i32(l0), uv);
+    if (fr > 0.0) {
+        let c1 = mark_ss_bilinear(t, i32(min(l0 + 1.0, top)), uv);
+        c = c + fr * (c1 - c);
+    }
+    return c * (1.0 / 65280.0);
+}
+"#;
+
 const POINT: &str = r#"
 struct PointIn {
     @builtin(vertex_index) vid : u32,
@@ -712,7 +895,13 @@ fn vs_main(in : PointIn) -> PointOut {
         out.clip = mark_hidden();
         return out;
     }
-    let r = mark_size_px(i.size, clip.w);
+    // With focal pixels the disc is laid out in deck.gl's pixels (sizes
+    // at the focal plane: radius, stroke, the half-pixel smooth edge) and
+    // the whole of it scaled by perspective, `focal / w`
+    // (`project_pixel_size_to_clipspace`); otherwise in screen pixels.
+    let focal = frame.aa.y;
+    let k = select(1.0, focal / max(clip.w, 1e-6), (layer.ids.z & 4u) != 0u && focal > 0.0);
+    let r = mark_size_px(i.size, clip.w) / k;
     // style2.x is the stroke width. Coverage falls to zero half a pixel
     // past the edge, so single-sampled a quad that far out holds every
     // fragment centre with any — no wider: for the small points of a big
@@ -736,10 +925,10 @@ fn vs_main(in : PointIn) -> PointOut {
     // face the camera. The disc keeps the size it has in pixels at its
     // centre, laid out in world units there, so coverage below is the same
     // sum in the same units.
-    let world_extent = extent * clip.w / max(frame.misc.x, 1e-6);
+    let world_extent = extent * k * clip.w / max(frame.misc.x, 1e-6);
     let on_ground = frame.view_proj
         * vec4<f32>(i.position + vec3<f32>(corner.x, 0.0, -corner.y) * world_extent, 1.0);
-    let facing = mark_lift_depth(mark_offset_px(clip, corner * extent), i.position, r);
+    let facing = mark_lift_depth(mark_offset_px(clip, corner * extent * k), i.position, r * k);
     out.clip = mark_order(select(facing, on_ground, layer.style2.z > 0.5));
     out.local = corner * extent;
     out.radius = r;
@@ -1509,12 +1698,16 @@ struct ShapeIn {
     // Where in the texture's atlas, and the vertex's colour (linear).
     @location(2) uv : vec2<f32>,
     @location(3) vertex_color : vec4<f32>,
-    @location(4) pos_hi : vec3<f32>,
-    @location(5) pos_lo : vec3<f32>,
-    @location(6) scale : vec3<f32>,
-    @location(7) color : vec4<f32>,
+    // The vertex's triangle, its corners in order (for its depth plane).
+    @location(4) tri_a : vec3<f32>,
+    @location(5) tri_b : vec3<f32>,
+    @location(6) tri_c : vec3<f32>,
+    @location(7) pos_hi : vec3<f32>,
+    @location(8) pos_lo : vec3<f32>,
+    @location(9) scale : vec3<f32>,
+    @location(10) color : vec4<f32>,
     // A unit quaternion turning the scaled mesh.
-    @location(8) rotation : vec4<f32>,
+    @location(11) rotation : vec4<f32>,
     /*CUSTOM_IN*/
 };
 
@@ -1529,6 +1722,8 @@ struct ShapeOut {
     // (zero for a mesh without normals, shaded flat).
     @location(5) world : vec3<f32>,
     @location(6) normal : vec3<f32>,
+    @location(7) @interpolate(flat) plane : vec4<f32>,
+    @location(8) @interpolate(flat) plane_origin : vec4<f32>,
 };
 
 /// One light by luma.gl's Phong (`lighting_getLightColor`), on sRGB values.
@@ -1621,6 +1816,15 @@ fn vs_main(in : ShapeIn) -> ShapeOut {
     let q = in.rotation;
     let world = i.position + shape_rotate(q, in.vertex * scale);
     out.clip = mark_order(frame.view_proj * vec4<f32>(world, 1.0));
+    if (frame.raster.z > 0.5) {
+        let plane = mark_ss_plane(
+            mark_order(frame.view_proj * vec4<f32>(i.position + shape_rotate(q, in.tri_a * scale), 1.0)),
+            mark_order(frame.view_proj * vec4<f32>(i.position + shape_rotate(q, in.tri_b * scale), 1.0)),
+            mark_order(frame.view_proj * vec4<f32>(i.position + shape_rotate(q, in.tri_c * scale), 1.0)),
+        );
+        out.plane = plane.abc;
+        out.plane_origin = plane.origin;
+    }
     // A normal transforms by the inverse scale; zero scale leaves it as is.
     let safe = select(scale, vec3<f32>(1.0), abs(scale) < vec3<f32>(1e-12));
     let raw = shape_rotate(q, in.normal / safe);
@@ -1642,12 +1846,20 @@ fn vs_main(in : ShapeIn) -> ShapeOut {
     return out;
 }
 
+struct ShapeFrag {
+    @location(0) color : vec4<f32>,
+    @builtin(frag_depth) depth : f32,
+}
+
 @fragment
-fn fs_main(in : ShapeOut) -> @location(0) vec4<f32> {
+fn fs_main(in : ShapeOut) -> ShapeFrag {
     let flat = shape_flat_normal(in.world);
     let c = hook_color(vec4<f32>(shape_shade(in, flat), in.color.a), in.custom0, in.custom1);
     let shaded = mark_shadow(c, in.world);
-    return mark_out(mark_highlight(vec4<f32>(shaded.rgb, shaded.a * layer.style2.w), in.index));
+    var o : ShapeFrag;
+    o.color = mark_out(mark_highlight(vec4<f32>(shaded.rgb, shaded.a * layer.style2.w), in.index));
+    o.depth = mark_ss_depth(in.plane, in.plane_origin, in.clip);
+    return o;
 }
 
 /// The shadow pass: the light's depth, packed.
@@ -1659,7 +1871,9 @@ fn fs_shadow(in : ShapeOut) -> @location(0) vec4<f32> {
 /// A textured shape: the lit colour times the texture (an sRGB atlas,
 /// sampled linear).
 @fragment
-fn fs_pattern(in : ShapeOut) -> @location(0) vec4<f32> {
+fn fs_pattern(in : ShapeOut) -> ShapeFrag {
+    var o : ShapeFrag;
+    o.depth = mark_ss_depth(in.plane, in.plane_origin, in.clip);
     // style3: the image's place in the atlas; repeated past 0 and 1 (or
     // clamped, for a negative width), sampled with the unwrapped uv's
     // derivatives so the wrap leaves no seam.
@@ -1671,13 +1885,25 @@ fn fs_pattern(in : ShapeOut) -> @location(0) vec4<f32> {
     let half = 0.5 / size;
     let at = rect.xy + clamp(inside * rect.zw, half, rect.zw - half);
     var t = textureSampleGrad(shape_texture, shape_sampler, at, dpdx(in.uv) * rect.zw, dpdy(in.uv) * rect.zw);
+    let cdx = dpdxCoarse(in.uv) * rect.zw;
+    let cdy = dpdyCoarse(in.uv) * rect.zw;
     // ids.z bit 3: a frame the marks drew — premultiplied sRGB bytes.
     if (((layer.ids.z >> 3u) & 1u) != 0u) {
-        // Nothing drawn there: no surface (nor depth) at all.
-        if (t.a < 0.5 / 255.0) {
-            discard;
+        // A plain 8-bit target: sampled as SwiftShader samples, when asked.
+        if (mark_ss_sampling()) {
+            t = mark_ss_sample(shape_texture, at, cdx, cdy);
         }
-        t = vec4<f32>(mark_srgb_to_linear(t.rgb / max(t.a, 1e-6)), t.a);
+        // ids.z bit 4: the texels lit as they are, premultiplied; nothing
+        // drawn there is transparent, yet hides what is behind.
+        if (((layer.ids.z >> 4u) & 1u) != 0u) {
+            t = vec4<f32>(mark_srgb_to_linear(t.rgb), t.a);
+        } else {
+            // Nothing drawn there: no surface (nor depth) at all.
+            if (t.a < 0.5 / 255.0) {
+                discard;
+            }
+            t = vec4<f32>(mark_srgb_to_linear(t.rgb / max(t.a, 1e-6)), t.a);
+        }
     }
     let flat = shape_flat_normal(in.world);
     // Lit by the scene, the texture is part of the surface's colour.
@@ -1686,7 +1912,8 @@ fn fs_pattern(in : ShapeOut) -> @location(0) vec4<f32> {
     let c = hook_color(vec4<f32>(shape_shade(surface, flat), in.color.a), in.custom0, in.custom1);
     let rgb = c.rgb * select(t.rgb, vec3<f32>(1.0), layer.material.w > 1.5 && layer.material.w < 2.5);
     let shaded = mark_shadow(vec4<f32>(rgb, c.a * t.a), in.world);
-    return mark_out(mark_highlight(vec4<f32>(shaded.rgb, shaded.a * layer.style2.w), in.index));
+    o.color = mark_out(mark_highlight(vec4<f32>(shaded.rgb, shaded.a * layer.style2.w), in.index));
+    return o;
 }
 
 @fragment
@@ -1822,7 +2049,12 @@ fn fs_pattern(in : PolyOut) -> @location(0) vec4<f32> {
     let uv = vec2<f32>((in.local.x + tile.z) / max(tile.x, 1e-12), (in.local.z + tile.w) / ty);
     let ddx = dpdx(uv) * frame.zw;
     let ddy = dpdy(uv) * frame.zw;
-    let p = textureSampleGrad(pattern_texture, pattern_sampler, frame.xy + frame.zw * fract(uv), ddx, ddy);
+    var p = textureSampleGrad(pattern_texture, pattern_sampler, frame.xy + frame.zw * fract(uv), ddx, ddy);
+    let sdx = dpdxCoarse(uv) * frame.zw;
+    let sdy = dpdyCoarse(uv) * frame.zw;
+    if (mark_ss_sampling()) {
+        p = mark_ss_sample(pattern_texture, frame.xy + frame.zw * fract(uv), sdx, sdy);
+    }
     if (mark_culled(in.world)) {
         discard;
     }
@@ -1864,6 +2096,9 @@ struct SpriteIn {
     // depth offset, in the quad's corner order.
     @location(6) shown : vec4<f32>,
     @location(7) depth : vec4<f32>,
+    // The corners' screen nudges, device pixels: x of the four, then y.
+    @location(8) nudge_x : vec4<f32>,
+    @location(9) nudge_y : vec4<f32>,
     /*CUSTOM_IN*/
 };
 
@@ -1879,7 +2114,35 @@ struct SpriteOut {
     @location(6) @interpolate(flat) half : vec2<f32>,
     // A box's border dash and gap (its rect's x and y).
     @location(7) @interpolate(flat) dash : vec2<f32>,
+    @location(8) @interpolate(flat) plane : vec4<f32>,
+    @location(9) @interpolate(flat) plane_origin : vec4<f32>,
 };
+
+/// Corner `k`'s clip position as rasterized (see `vs_main`).
+fn sprite_corner_clip(k : u32, position : vec3<f32>, clip : vec4<f32>, h : f32, half : vec2<f32>, grow : vec2<f32>, offset : vec2<f32>, angle : vec3<f32>, depth : vec4<f32>, nudge_x : vec4<f32>, nudge_y : vec4<f32>) -> vec4<f32> {
+    let c = mark_corner_signed(k);
+    // style3.zw: the anchor, the image point that sits on the position.
+    let local = (c * grow - layer.style3.zw) * half + offset;
+    let s = sin(angle.x);
+    let kc = cos(angle.x);
+    let turned = vec2<f32>(kc * local.x - s * local.y, s * local.x + kc * local.y)
+        + vec2<f32>(angle.y, -angle.z);
+    // style2.z: flat on the ground, the pixel offsets laid out in the world
+    // at the size they have at the focal plane (y up, north toward -z).
+    let world_per_px = clip.w / max(frame.misc.x, 1e-6);
+    let on_ground = frame.view_proj
+        * vec4<f32>(position + vec3<f32>(turned.x, 0.0, -turned.y) * world_per_px, 1.0);
+    let facing = mark_lift_depth(mark_offset_px(clip, turned), position, h * 0.5);
+    var p = select(facing, on_ground, layer.style2.z > 0.5);
+    // The corner's nudge on screen (y down), before the snap.
+    p = vec4<f32>(p.xy + vec2<f32>(nudge_x[k], -nudge_y[k]) * 2.0 / frame.viewport.xy * p.w, p.z, p.w);
+    var o = mark_order(p);
+    // The corner's depth offset (towards the far plane; reversed depth
+    // runs the other way, `frame.light.w`).
+    let toward_far = select(1.0, -1.0, frame.light.w > 0.5);
+    o.z += toward_far * depth[k] * o.w;
+    return o;
+}
 
 @vertex
 fn vs_main(in : SpriteIn) -> SpriteOut {
@@ -1910,23 +2173,21 @@ fn vs_main(in : SpriteIn) -> SpriteOut {
     let half = vec2<f32>(h * in.rect.z / in.rect.w, h) * 0.5;
     let c = mark_corner_signed(mark_quad_corner(in.vid));
     let grow = (half + vec2<f32>(pad)) / max(half, vec2<f32>(1e-6));
-    // style3.zw: the anchor, the image point that sits on the position.
-    let local = (c * grow - layer.style3.zw) * half + offset;
-    let s = sin(in.angle.x);
-    let k = cos(in.angle.x);
-    let turned = vec2<f32>(k * local.x - s * local.y, s * local.x + k * local.y)
-        + vec2<f32>(in.angle.y, -in.angle.z);
-    // style2.z: flat on the ground, the pixel offsets laid out in the world
-    // at the size they have at the focal plane (y up, north toward -z).
-    let world_per_px = clip.w / max(frame.misc.x, 1e-6);
-    let on_ground = frame.view_proj
-        * vec4<f32>(i.position + vec3<f32>(turned.x, 0.0, -turned.y) * world_per_px, 1.0);
-    let facing = mark_lift_depth(mark_offset_px(clip, turned), i.position, h * 0.5);
-    out.clip = mark_order(select(facing, on_ground, layer.style2.z > 0.5));
-    // The corner's depth offset (towards the far plane; reversed depth
-    // runs the other way, `frame.light.w`).
-    let toward_far = select(1.0, -1.0, frame.light.w > 0.5);
-    out.clip.z += toward_far * in.depth[mark_quad_corner(in.vid)] * out.clip.w;
+    out.clip = sprite_corner_clip(mark_quad_corner(in.vid), i.position, clip, h, half, grow, offset, in.angle, in.depth, in.nudge_x, in.nudge_y);
+    // SwiftShader's depth plane of this vertex's triangle: corners 0, 1, 2
+    // or 0, 2, 3 (`mark_quad_corner`).
+    if (frame.raster.z > 0.5) {
+        let second = in.vid % 6u >= 3u;
+        let k1 = select(1u, 2u, second);
+        let k2 = select(2u, 3u, second);
+        let plane = mark_ss_plane(
+            sprite_corner_clip(0u, i.position, clip, h, half, grow, offset, in.angle, in.depth, in.nudge_x, in.nudge_y),
+            sprite_corner_clip(k1, i.position, clip, h, half, grow, offset, in.angle, in.depth, in.nudge_x, in.nudge_y),
+            sprite_corner_clip(k2, i.position, clip, h, half, grow, offset, in.angle, in.depth, in.nudge_x, in.nudge_y),
+        );
+        out.plane = plane.abc;
+        out.plane_origin = plane.origin;
+    }
     out.local = c * grow * half;
     out.half = half;
     out.dash = in.rect.xy;
@@ -1994,7 +2255,12 @@ fn sprite_color(in : SpriteOut) -> vec4<f32> {
     let dx = dpdx(in.uv) * texels;
     let dy = dpdy(in.uv) * texels;
     let lod = 0.5 * log2(max(max(dot(dx, dx), dot(dy, dy)), 1e-12));
-    let t = textureSampleLevel(atlas_tex, atlas_samp, in.uv, lod);
+    let cdx = dpdxCoarse(in.uv);
+    let cdy = dpdyCoarse(in.uv);
+    var t = textureSampleLevel(atlas_tex, atlas_samp, in.uv, lod);
+    if (mark_ss_sampling()) {
+        t = mark_ss_sample(atlas_tex, in.uv, cdx, cdy);
+    }
     // The ramp's half width, before any branch (derivatives must be taken
     // in uniform control flow).
     let auto_w = max(fwidth(t.a), 1e-4) * 0.7;
@@ -2047,14 +2313,22 @@ fn sprite_color(in : SpriteOut) -> vec4<f32> {
     return vec4<f32>(in.color.rgb, in.color.a * fill);
 }
 
+struct SpriteFrag {
+    @location(0) color : vec4<f32>,
+    @builtin(frag_depth) depth : f32,
+}
+
 @fragment
-fn fs_main(in : SpriteOut) -> @location(0) vec4<f32> {
+fn fs_main(in : SpriteOut) -> SpriteFrag {
     let c = hook_color(sprite_color(in), in.custom0, in.custom1);
     // style2.y: the alpha cutoff, after opacity (style2.w).
     if (c.a <= 0.0 || c.a * layer.style2.w < layer.style2.y) {
         discard;
     }
-    return mark_out(mark_highlight(vec4<f32>(c.rgb, c.a * layer.style2.w), in.index));
+    var o : SpriteFrag;
+    o.color = mark_out(mark_highlight(vec4<f32>(c.rgb, c.a * layer.style2.w), in.index));
+    o.depth = mark_ss_depth(in.plane, in.plane_origin, in.clip);
+    return o;
 }
 
 @fragment
@@ -2261,7 +2535,12 @@ fn glyph_text_coverage(c : f32, rgb : vec3<f32>) -> f32 {
 
 @fragment
 fn fs_main(in : GlyphOut) -> @location(0) vec4<f32> {
-    let t = textureSample(glyph_atlas, glyph_sampler, in.uv);
+    var t = textureSample(glyph_atlas, glyph_sampler, in.uv);
+    let gdx = dpdxCoarse(in.uv);
+    let gdy = dpdyCoarse(in.uv);
+    if (mark_ss_sampling()) {
+        t = mark_ss_sample(glyph_atlas, in.uv, gdx, gdy);
+    }
     // style2.z: 1 when rgb is a multi-channel field; its median is the
     // distance, with corners kept. `a` is always the plain distance.
     let m = max(min(t.r, t.g), min(max(t.r, t.g), t.b));
@@ -2346,6 +2625,15 @@ fn vs_main(in : SplatIn) -> SplatOut {
     let r = mark_size_px(i.size, clip.w);
     let corner = mark_corner_signed(mark_quad_corner(in.vid));
     out.clip = mark_order(mark_offset_px(clip, corner * r));
+    // stroke.z: the kernel lies flat on the ground (y up, north toward -z),
+    // its radius the size in world units.
+    if (layer.stroke.z > 0.5) {
+        let rw = i.size * layer.style.x;
+        out.clip = mark_order(frame.view_proj * vec4<f32>(i.position + vec3<f32>(corner.x, 0.0, -corner.y) * rw, 1.0));
+    }
+    // stroke.xy: the field spans that many viewports about its centre.
+    let extent = max(layer.stroke.xy, vec2<f32>(1.0));
+    out.clip = vec4<f32>(out.clip.xy / extent, out.clip.zw);
     out.local = corner;
     out.weight = i.color.a;
     return out;
@@ -2376,7 +2664,15 @@ fn fs_main(in : FullscreenVertex) -> @location(0) vec4<f32> {
     // The field may be coarser than the target; it is smooth, so filtering
     // it up loses nothing.
     // aa.zw: where the target's rectangle begins.
-    let uv = (in.clip.xy - frame.aa.zw) * frame.viewport.zw;
+    // extra: the rectangle drawn on ([`DensityMarks::cover`]), on the
+    // image as read (rows reversed when drawn upside down, raster.x).
+    let px = in.clip.xy - frame.aa.zw;
+    let py = select(px.y, frame.viewport.y - px.y, frame.raster.x > 0.5);
+    if (px.x < layer.extra.x || py < layer.extra.y || px.x >= layer.extra.z || py >= layer.extra.w) {
+        discard;
+    }
+    let extent = max(layer.stroke.xy, vec2<f32>(1.0));
+    let uv = 0.5 + (px * frame.viewport.zw - 0.5) / extent;
     let v = density_value(textureSampleLevel(density_field, density_sampler, uv, 0.0));
     // style3: (weight that maps to the top of the ramp, fade-in threshold
     // as a fraction of the ramp, 1 to scale to the field's own maximum, the
@@ -2401,11 +2697,11 @@ fn kind_source(kind: MarkKind) -> (&'static str, u32) {
         MarkKind::Custom(_) => unreachable!("a custom kind brings its own source"),
         MarkKind::Point => (POINT, 7),
         MarkKind::Segment => (SEGMENT, 9),
-        MarkKind::Shape => (SHAPE, 9),
+        MarkKind::Shape => (SHAPE, 12),
         MarkKind::Glyph => (GLYPH, 6),
         MarkKind::Splat => (SPLAT, 3),
         MarkKind::Polygon => (POLYGON, 7),
-        MarkKind::Sprite => (SPRITE, 8),
+        MarkKind::Sprite => (SPRITE, 10),
         MarkKind::Image => (IMAGE, 6),
     }
 }
@@ -2521,7 +2817,7 @@ fn assemble(body: &str, first: u32, hooks: &ShaderHooks, custom: [u32; 2], local
         .replace("/*CUSTOM0*/", &exprs[0])
         .replace("/*CUSTOM1*/", &exprs[1]);
     format!(
-        "{PREAMBLE}\n{}\n// ---- hooks ----\n{}\n// ---- mark ----\n{body}",
+        "{PREAMBLE}\n{SWIFTSHADER_SAMPLING}\n{}\n// ---- hooks ----\n{}\n// ---- mark ----\n{body}",
         tone_wgsl(),
         hooks.source()
     )

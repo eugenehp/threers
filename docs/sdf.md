@@ -35,19 +35,77 @@ let hit = field.raymarch(Vector3::new(0.0, 0.6, 5.0), Vector3::new(0.0, 0.0, -1.
 | | |
 |---|---|
 | `sdf::d2` | `circle`, `rect`, `round_rect` (a pill with the radius at half the height), `segment`, `capsule`, `tapered_capsule` (and `tapered_capsule_radius`, which also returns the local thickness), `polygon` |
-| `sdf::d3` | `sphere`, `cuboid`, `round_cuboid`, `capsule`, `tapered_capsule`, `torus`, `cylinder`, `plane` |
+| `sdf::d3` | `sphere`, `ellipsoid`, `cuboid`, `round_cuboid`, `capsule`, `tapered_capsule`, `torus`, `cylinder`, `plane` |
 | operators | `union`, `intersection`, `subtraction`; `smooth_union`, `smooth_intersection`, `smooth_subtraction`; `smooth_union_blend`, which also says how much of the result is each side so a colour or a thickness can blend through the same fillet; `round`, `onion` |
 | coverage | `coverage`; `coverage_edge` with a pixel's `footprint` for edges at an angle; `coverage_stroke` for lines thinner than a pixel — below |
-| `Sdf2`, `Sdf3` | Implemented for every `Fn(Vector2) -> f32` / `Fn(Vector3) -> f32`: `gradient`, `normal`, `raymarch`, `to_geometry` (marching cubes, watertight and indexed) |
+| `Sdf2`, `Sdf3` | Implemented for every `Fn(Vector2) -> f32` / `Fn(Vector3) -> f32`: `gradient`, `normal`, `raymarch`, `to_geometry` (marching cubes, watertight and indexed), `to_surface_nets` (smooth, below) |
+| `sdf::Shape` | a field built as a tree at run time, with `bounds()` — below; `THREE.SDF` in the browser |
 
 Symmetric primitives are centred on the origin — move them by subtracting
 from the point, `d2::circle(p - centre, r)`. Primitives defined by endpoints
 take the endpoints.
 
-Every primitive is exact. Unions of exact fields are exact outside;
+Every primitive is exact but `ellipsoid`, which has no closed form: it is a
+bound, exact on the surface and within a few percent nearby. Unions of exact
+fields are exact outside;
 intersections, subtractions and every smooth operator are *bounds* — they
 never overestimate, so sphere tracing stays safe, but a ray takes more steps
 near them. `Sdf3::raymarch` reports how many.
+
+### Surface nets
+
+`to_geometry` is marching cubes: watertight, but its vertices sit on grid
+edges, so a coarse grid shows as facets and slivers. `to_surface_nets(cell,
+min, max)` puts one vertex in each cell the surface crosses, pulls it onto the
+surface along the gradient, and joins them in quads — an even, round skin at
+the same grid, normals from the field, every triangle wound outward. It returns
+`SurfaceNets` (plain `position`, `normal`, `index`; `.to_geometry()` for a
+`BufferGeometry`), so the vertices can be bound to something first, as the
+gummy creatures demo binds them to a soft body's lattice.
+
+### Fields as data: `Shape`
+
+A closure is the quickest field to write, but it cannot be built at run time,
+handed across to JavaScript, or asked where it ends. `sdf::Shape` can:
+
+```rust
+use threers::math::Vector3;
+use threers::sdf::{Sdf3, Shape};
+
+let v = Vector3::new;
+// A dome with a hollow underneath, its lip rounded.
+let dome = Shape::ellipsoid(v(0.6, 0.45, 0.6))
+    .intersect(Shape::plane(v(0.0, -1.0, 0.0), 0.0), 0.0)
+    .subtract(Shape::ellipsoid(v(0.45, 0.25, 0.45)), 0.04);
+let (lo, hi) = dome.bounds().unwrap();
+let mesh = dome.to_surface_nets(0.02, lo, hi).to_geometry();
+```
+
+Primitives sit at the origin (capsules at their endpoints); `translate`,
+`rotate` and `scale` (uniform, so it stays a distance) move them, and
+`union`, `intersect`, `subtract`, `round` and `onion` join them, each with a
+blend width `k` (0 for the hard operator). Chains of unions stay one flat node.
+`bounds()` is conservative — blends and rotations only grow it — and `None`
+for anything with no end, such as a plane not cut down by something else.
+
+### From JavaScript
+
+`THREE.SDF` in the three.js shim is `Shape` (a threers extension). Evaluation
+and meshing run in wasm, so a field built in JavaScript costs one call per
+mesh, not one per sample:
+
+```js
+const bell = THREE.SDF.ellipsoid(0.62, 0.46, 0.62)
+    .intersect(THREE.SDF.plane(0, -1, 0, 0))
+    .subtract(THREE.SDF.ellipsoid(0.48, 0.25, 0.48), 0.03);
+scene.add(new THREE.Mesh(bell.toGeometry({ cell: 0.016 }), material));
+bell.distance(0, 0.3, 0);          // one point
+bell.distances(points);           // a Float32Array of [x, y, z, …]
+bell.surfaceNets(0.016, box);     // { position, normal, index }
+```
+
+[`web/examples/jelly.html`](../web/examples/jelly.html) builds all its
+creatures this way (`web/examples/creatures.js`).
 
 ### On the GPU
 

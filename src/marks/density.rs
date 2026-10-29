@@ -50,6 +50,22 @@ pub struct DensityMarks {
     /// `0.05..=1`. `None` picks it from the kernel size: full resolution for
     /// kernels up to 12 px in radius, down to a quarter from 48 px.
     pub resolution: Option<f32>,
+    /// The field's extent in viewport widths and heights about the
+    /// viewport's centre (1 by default): past the edges too, so that kernels
+    /// beyond them count towards [`auto_max`](Self::auto_max)'s densest
+    /// place — as deck.gl's `HeatmapLayer` measures it over its 2048-texel
+    /// weights texture, wider than the view.
+    pub extent: [f32; 2],
+    /// Kernels lie flat on the ground, their radius
+    /// [`MarkStyle::size_scale`](super::MarkStyle::size_scale) in world
+    /// units — foreshortened in a tilted view, as deck.gl's `HeatmapLayer`
+    /// sums them on the ground — rather than facing the camera.
+    pub ground: bool,
+    /// Draw only the pixels whose centres lie in this rectangle, in the
+    /// target's pixels from its top left (`[x0, y0, x1, y1]`): the quad a
+    /// deck.gl `HeatmapLayer` draws its field on, which can stop short of
+    /// the view's edges.
+    pub cover: Option<[f32; 4]>,
     /// Fade in linearly, `min(t / threshold, 1)`, as deck.gl's
     /// `HeatmapLayer` does, rather than along a smoothstep.
     pub linear_fade: bool,
@@ -116,6 +132,9 @@ impl DensityMarks {
             auto_max: None,
             threshold: 0.05,
             resolution: None,
+            extent: [1.0; 2],
+            ground: false,
+            cover: None,
             linear_fade: false,
             mean: false,
             ramp: Vec::new(),
@@ -224,6 +243,9 @@ impl Mark for DensityMarks {
     fn instance_count(&self) -> usize {
         self.positions.len()
     }
+    fn kind_extra(&self) -> [f32; 4] {
+        self.cover.unwrap_or([f32::MIN, f32::MIN, f32::MAX, f32::MAX])
+    }
     fn kind_uniforms(&self) -> KindUniforms {
         // style3: what the composite maps to the ramp.
         let (auto, fraction) = match self.auto_max {
@@ -233,15 +255,17 @@ impl Mark for DensityMarks {
         (
             [if self.linear_fade { 1.0 } else { 0.0 }, if self.mean { 1.0 } else { 0.0 }, 0.0, 0.0],
             [self.max_weight, self.threshold, auto, fraction],
-            [0.0; 4],
+            // stroke: the extent, on the ground.
+            [self.extent[0].max(1.0), self.extent[1].max(1.0), if self.ground { 1.0 } else { 0.0 }, 0.0],
         )
     }
     fn prepare(&mut self, ctx: &PrepareContext) {
         let scale = self.field_scale();
         let vp = ctx.view.viewport;
+        let [ex, ey] = self.extent.map(|e| e.max(1.0));
         let size = (
-            ((vp.0 as f32 * scale).ceil() as u32).max(1),
-            ((vp.1 as f32 * scale).ceil() as u32).max(1),
+            ((vp.0 as f32 * scale * ex).ceil() as u32).clamp(1, ctx.device.limits().max_texture_dimension_2d),
+            ((vp.1 as f32 * scale * ey).ceil() as u32).clamp(1, ctx.device.limits().max_texture_dimension_2d),
         );
         let stale = self.gpu.as_ref().is_none_or(|g| g.size != size);
         if stale {

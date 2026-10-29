@@ -116,11 +116,14 @@ pub struct SpriteMarks {
     /// [prepares late](Mark::prepare_late), so it follows the same frame's
     /// placement wherever it draws.
     pub follow: Option<(super::SharedVisibility, Vec<u32>)>,
-    /// Per row: shown (collision), and the corners' depth offsets.
+    /// Per row: shown (collision), the corners' depth offsets, and their
+    /// screen nudges.
     shown: Column,
     /// The last placement's visibility; empty for all shown.
     shown_rows: Vec<f32>,
     depth_rows: Vec<[f32; 4]>,
+    /// The corners' screen nudges: x of the four, then y.
+    nudge_rows: Vec<[f32; 8]>,
     priorities: Vec<f32>,
     placed: Option<PlacedFor>,
     /// Bumped by every setter that moves, sizes or turns an icon.
@@ -174,12 +177,13 @@ impl SpriteMarks {
             padding: 1.0,
             follow: None,
             shown: {
-                let mut c = Column::new(ColumnFormat::Float4x2);
-                c.set_default_f32(&[1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
+                let mut c = Column::new(ColumnFormat::Float4x4);
+                c.set_default_f32(&[1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
                 c
             },
             shown_rows: Vec::new(),
             depth_rows: Vec::new(),
+            nudge_rows: Vec::new(),
             priorities: Vec::new(),
             placed: None,
             version: 0,
@@ -358,14 +362,30 @@ impl SpriteMarks {
         self.pack_shown();
     }
 
-    /// The visibility and depth column, from the last placement and the
-    /// depth offsets.
+    /// Each row's four corners moved this far on screen, in device pixels
+    /// (x right, y down), in the quad's corner order (see
+    /// [`set_depth_offsets`](Self::set_depth_offsets)), before any sub-pixel
+    /// snap: where a renderer computing in float32 puts each corner, which
+    /// the exact projection does not. Empty for none.
+    pub fn set_corner_nudges(&mut self, n: &[[[f32; 2]; 4]]) {
+        self.version += 1;
+        self.nudge_rows = n.iter().map(|c| [c[0][0], c[1][0], c[2][0], c[3][0], c[0][1], c[1][1], c[2][1], c[3][1]]).collect();
+        self.pack_shown();
+    }
+
+    /// The visibility, depth and nudge column, from the last placement,
+    /// the depth offsets and the nudges.
     fn pack_shown(&mut self) {
-        let n = self.shown_rows.len().max(self.depth_rows.len());
+        let n = self.shown_rows.len().max(self.depth_rows.len()).max(self.nudge_rows.len());
         let packed: Vec<f32> = (0..n)
             .flat_map(|i| {
                 let d = self.depth_rows.get(i).copied().unwrap_or([0.0; 4]);
-                [self.shown_rows.get(i).copied().unwrap_or(1.0), 0.0, 0.0, 0.0, d[0], d[1], d[2], d[3]]
+                let m = self.nudge_rows.get(i).copied().unwrap_or([0.0; 8]);
+                let mut row = [0.0f32; 16];
+                row[0] = self.shown_rows.get(i).copied().unwrap_or(1.0);
+                row[4..8].copy_from_slice(&d);
+                row[8..16].copy_from_slice(&m);
+                row
             })
             .collect();
         self.shown.set_f32(&packed);
@@ -625,6 +645,8 @@ mod tests {
             clip_epsilon: 0.001,
             subpixel_snap: None,
             flip_y: false,
+            swiftshader_sampling: false,
+            swiftshader_depth: false,
             scene_lights: None,
         }
     }

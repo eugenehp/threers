@@ -14,10 +14,11 @@
 //! | | |
 //! |---|---|
 //! | [`d2`] | circle, box, rounded box, segment, capsule, tapered capsule, polygon |
-//! | [`d3`] | sphere, box, rounded box, capsule, tapered capsule, torus, cylinder, plane |
+//! | [`d3`] | sphere, ellipsoid, box, rounded box, capsule, tapered capsule, torus, cylinder, plane |
 //! | this module | union / intersection / subtraction, their smooth forms, [`smooth_union_blend`] for carrying attributes through a blend, [`round`], [`onion`] |
 //! | coverage | [`coverage`], [`coverage_edge`] with a pixel's [`footprint`] for edges at an angle, [`coverage_stroke`] for lines thinner than a pixel |
-//! | [`Sdf2`], [`Sdf3`] | any `Fn(p) -> f32` is a field; gradients, normals, [`Sdf3::raymarch`] and [`Sdf3::to_geometry`] come with it |
+//! | [`Sdf2`], [`Sdf3`] | any `Fn(p) -> f32` is a field; gradients, normals, [`Sdf3::raymarch`], [`Sdf3::to_geometry`] (marching cubes) and [`Sdf3::to_surface_nets`] come with it |
+//! | [`Shape`] | a field as a tree built at run time — and from JavaScript, as `THREE.SDF` — with conservative bounds |
 //! | [`WGSL`] | the primitives and operators above, as `sdf2_*`, `sdf3_*` and `sdf_*` functions to splice into a shader |
 //!
 //! Symmetric primitives are centred on the origin, the way every SDF reference
@@ -80,6 +81,13 @@
 
 pub mod d2;
 pub mod d3;
+mod shape;
+#[cfg(all(target_arch = "wasm32", not(threers_no_js_bindings)))]
+mod web;
+
+pub use shape::Shape;
+#[cfg(all(target_arch = "wasm32", not(threers_no_js_bindings)))]
+pub use web::WebSdf;
 
 use crate::core::{BufferAttribute, BufferGeometry};
 use crate::extras::MarchingCubes;
@@ -323,6 +331,154 @@ pub trait Sdf3 {
             }
         }
         geometry
+    }
+
+    /// The zero surface as a smooth indexed mesh by surface nets: one vertex
+    /// per grid cell the surface crosses, joined into a quad across every
+    /// grid edge it crosses. `cell` is the grid spacing, over the box from
+    /// `min` to `max`.
+    ///
+    /// Where [`to_geometry`](Self::to_geometry) puts vertices on grid edges,
+    /// which leaves a mesh that shows its grid as faceting and slivers, here
+    /// each vertex starts at the mean of its cell's edge crossings and is
+    /// then pulled onto the surface along the gradient — so a coarse grid
+    /// still gives an even, round skin, which is what a soft body or a
+    /// refracting surface wants. Normals are the field's gradient at each
+    /// vertex, and every triangle is wound counter-clockwise seen from
+    /// outside. Like `to_geometry`, anything outside the box is cut off.
+    fn to_surface_nets(&self, cell: f32, min: Vector3, max: Vector3) -> SurfaceNets {
+        let g = cell.max(1e-6);
+        let n = |lo: f32, hi: f32| (((hi - lo) / g).ceil() as usize + 1).max(2);
+        let (nx, ny, nz) = (n(min.x, max.x), n(min.y, max.y), n(min.z, max.z));
+        let id = |i: usize, j: usize, k: usize| (k * ny + j) * nx + i;
+        let at = |i: usize, j: usize, k: usize| min + Vector3::new(i as f32, j as f32, k as f32) * g;
+        let mut field = vec![0.0f32; nx * ny * nz];
+        for k in 0..nz {
+            for j in 0..ny {
+                for i in 0..nx {
+                    field[id(i, j, k)] = self.distance(at(i, j, k));
+                }
+            }
+        }
+        const CORNER: [[usize; 3]; 8] =
+            [[0, 0, 0], [1, 0, 0], [0, 1, 0], [1, 1, 0], [0, 0, 1], [1, 0, 1], [0, 1, 1], [1, 1, 1]];
+        const EDGE: [[usize; 2]; 12] =
+            [[0, 1], [2, 3], [4, 5], [6, 7], [0, 2], [1, 3], [4, 6], [5, 7], [0, 4], [1, 5], [2, 6], [3, 7]];
+        let (cx, cy, cz) = (nx - 1, ny - 1, nz - 1);
+        let cid = |i: usize, j: usize, k: usize| (k * cy + j) * cx + i;
+        let mut cell_vertex = vec![u32::MAX; cx * cy * cz];
+        let mut position: Vec<Vector3> = Vec::new();
+        for k in 0..cz {
+            for j in 0..cy {
+                for i in 0..cx {
+                    let mut v = [0.0f32; 8];
+                    let mut inside = 0;
+                    for (c, o) in CORNER.iter().enumerate() {
+                        v[c] = field[id(i + o[0], j + o[1], k + o[2])];
+                        inside += (v[c] < 0.0) as u32;
+                    }
+                    if inside == 0 || inside == 8 {
+                        continue;
+                    }
+                    let (mut sum, mut count) = (Vector3::ZERO, 0.0f32);
+                    for [a, b] in EDGE {
+                        if (v[a] < 0.0) == (v[b] < 0.0) {
+                            continue;
+                        }
+                        let t = v[a] / (v[a] - v[b]);
+                        let (pa, pb) = (CORNER[a], CORNER[b]);
+                        let corner = |q: [usize; 3]| Vector3::new(q[0] as f32, q[1] as f32, q[2] as f32);
+                        sum = sum + corner(pa) + (corner(pb) - corner(pa)) * t;
+                        count += 1.0;
+                    }
+                    cell_vertex[cid(i, j, k)] = position.len() as u32;
+                    position.push(at(i, j, k) + sum * (g / count));
+                }
+            }
+        }
+        // Onto the surface: a few Newton steps along the gradient.
+        let h = g * 0.1;
+        let mut normal = Vec::with_capacity(position.len());
+        for p in position.iter_mut() {
+            for _ in 0..3 {
+                let d = self.distance(*p);
+                let grad = self.normal(*p, h);
+                if !grad.x.is_finite() {
+                    break;
+                }
+                *p = *p - grad * d;
+            }
+            normal.push(self.normal(*p, h));
+        }
+        let mut index: Vec<u32> = Vec::new();
+        let mut quad = |q: [u32; 4]| {
+            if q.iter().all(|&v| v != u32::MAX) {
+                index.extend_from_slice(&[q[0], q[1], q[2], q[0], q[2], q[3]]);
+            }
+        };
+        let cv = |i: usize, j: usize, k: usize| cell_vertex[cid(i, j, k)];
+        for k in 1..cz {
+            for j in 1..cy {
+                for i in 0..cx {
+                    if (field[id(i, j, k)] < 0.0) != (field[id(i + 1, j, k)] < 0.0) {
+                        quad([cv(i, j - 1, k - 1), cv(i, j, k - 1), cv(i, j, k), cv(i, j - 1, k)]);
+                    }
+                }
+            }
+        }
+        for k in 1..cz {
+            for j in 0..cy {
+                for i in 1..cx {
+                    if (field[id(i, j, k)] < 0.0) != (field[id(i, j + 1, k)] < 0.0) {
+                        quad([cv(i - 1, j, k - 1), cv(i - 1, j, k), cv(i, j, k), cv(i, j, k - 1)]);
+                    }
+                }
+            }
+        }
+        for k in 0..cz {
+            for j in 1..cy {
+                for i in 1..cx {
+                    if (field[id(i, j, k)] < 0.0) != (field[id(i, j, k + 1)] < 0.0) {
+                        quad([cv(i - 1, j - 1, k), cv(i, j - 1, k), cv(i, j, k), cv(i - 1, j, k)]);
+                    }
+                }
+            }
+        }
+        // Counter-clockwise from outside: against the mean normal.
+        for t in index.chunks_exact_mut(3) {
+            let (a, b, c) = (t[0] as usize, t[1] as usize, t[2] as usize);
+            let face = (position[b] - position[a]).cross(position[c] - position[a]);
+            if face.dot(normal[a] + normal[b] + normal[c]) < 0.0 {
+                t.swap(1, 2);
+            }
+        }
+        SurfaceNets { position, normal, index }
+    }
+}
+
+/// A mesh from [`Sdf3::to_surface_nets`], kept as plain arrays so a caller
+/// can bind its vertices to something before it becomes a geometry.
+#[derive(Debug, Clone, Default)]
+pub struct SurfaceNets {
+    pub position: Vec<Vector3>,
+    pub normal: Vec<Vector3>,
+    /// Triangles, three indices each.
+    pub index: Vec<u32>,
+}
+
+impl SurfaceNets {
+    /// As an indexed geometry with `position` and `normal`.
+    pub fn to_geometry(&self) -> BufferGeometry {
+        let flat = |v: &[Vector3]| v.iter().flat_map(|p| [p.x, p.y, p.z]).collect::<Vec<f32>>();
+        let mut g = BufferGeometry::new();
+        g.set_attribute("position", BufferAttribute::new(flat(&self.position), 3));
+        g.set_attribute("normal", BufferAttribute::new(flat(&self.normal), 3));
+        g.set_index(self.index.clone());
+        g
+    }
+
+    pub fn triangle_count(&self) -> usize {
+        self.index.len() / 3
     }
 }
 

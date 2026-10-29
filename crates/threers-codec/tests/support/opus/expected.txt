@@ -1,0 +1,11 @@
+# ffmpeg n7.1 (imageio-ffmpeg macos-aarch64) `-f f32le` output: bytes, FNV-1a 64
+antiphase.webm 384000 3e14020dd865687c
+celt_mono.webm 192000 64515608922f8de6
+celt_stereo_60ms.webm 384000 acb5ae62aa900495
+dual_stereo.webm 384000 88cad3249bdb9aca
+hybrid_10ms.webm 192000 9494c619a2981fa5
+hybrid_mixed.webm 384000 aa9b27ac6ad5b8fb
+multichannel_51.webm 576000 10f58270a1b2c30c
+silk_nb.webm 192000 e928cab5205c9525
+silk_stereo.webm 384000 1242b718aaa95135
+silk_wb_fec.webm 192000 e00d2cd65a1b5034

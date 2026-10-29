@@ -1,6 +1,8 @@
 [workspace]
 members = [
     ".",
+    "crates/threers-codec",
+    "crates/threers-softbody",
     "crates/threers-probe",
     "crates/threers-physics",
     "crates/threers-ocean",
@@ -22,7 +24,7 @@ resolver = "2"
 
 [package]
 name = "threers"
-version = "0.0.8"
+version = "0.0.9"
 edition = "2021"
 # wgpu 30 requires 1.87, and this crate uses `is_multiple_of`, stabilised in the
 # same release. Declared so cargo says so up front rather than letting the build
@@ -43,6 +45,9 @@ exclude = [
     # published crate builds and runs but `cargo test` inside the tarball does
     # not — the fixtures are not there. Fetch the repo to run that suite.
     "tests/parity/scenes/**",
+    # 1.2 MB the soft-body parity test compares against (what the JavaScript
+    # original computes); `tests/softbody_parity.rs` likewise runs from the repo.
+    "tests/support/softbody/fixture.txt",
     # The npm package's material, published separately, and megabytes of built
     # wasm besides.
     "web/**",
@@ -111,6 +116,12 @@ codegen-units = 1
 panic = "abort"
 strip = true
 
+# The soft-body solver is hot loops of float arithmetic, which `z` leaves
+# un-inlined: in the browser it ran 50–80 ms a step against 9 ms for the
+# JavaScript it was ported from. It is small, so speed costs little size.
+[profile.release-wasm.package.threers-softbody]
+opt-level = 3
+
 [features]
 default = ["captions"]
 # Subtitles — SRT + WebVTT, on-screen and burned in.
@@ -138,23 +149,32 @@ fluid = []
 # nothing else; it is opt-in because most scenes never touch USD.
 usd = []
 # Native frame-sequence export via ffmpeg (implies captions).
-video = ["captions"]
+video = ["captions", "threers-codec/decode"]
 # Pure-Rust GIF, APNG, VP9/WebM, H.264/MP4, HEVC (wasm-safe).
 # The muxers write caption tracks, so this needs `captions` the same way
 # `video` does. It is a pure-code feature with no dependencies of its own,
 # so this costs compile time and nothing else.
 native-codec = ["captions"]
+# The pure-Rust H.264/HEVC decoders (`codec::decode`) without the ffmpeg-backed
+# `video` export module.
+native-decode = ["native-codec", "threers-codec/decode"]
 # GIF89a encode and decode (`codec::gif`), and GIF in the animation and video
 # exporters. Off, choosing GIF there is an error rather than a missing variant.
-gif = ["native-codec"]
+gif = ["native-codec", "threers-codec/gif"]
 # Second renderer on Metal via the Objective-C runtime (macOS/iOS).
 metal = []
 # CompositorServices + ARKit (implies metal).
 visionos = ["metal"]
 # In-process VideoToolbox encode + MP4 mux (macOS).
-videotoolbox = ["native-codec"]
+videotoolbox = ["native-codec", "threers-codec/videotoolbox"]
+# NVENC encode and NVDEC decode on NVIDIA GPUs (Linux/Windows; the driver is
+# loaded at run time, so builds still run without it).
+nvidia = ["native-decode", "threers-codec/nvidia"]
+# VAAPI HEVC encode and H.264/HEVC/VP9/AV1 decode on Linux (AMD, Intel;
+# libva loaded at run time).
+vaapi = ["native-decode", "threers-codec/vaapi"]
 # rayon-backed CSG/BVH work (native; a no-op on wasm32).
-parallel = ["dep:rayon"]
+parallel = ["dep:rayon", "threers-codec/parallel"]
 # tokio runtime for callers driving loaders concurrently (native).
 async = ["dep:tokio"]
 # Tensors ↔ geometry and pixels, graph runner, convolution, mesh smoothing.
@@ -213,6 +233,11 @@ full = [
 wasm-full = ["captions", "openscad", "native-codec", "gif", "nurbs", "planet", "raytrace", "fluid", "usd"]
 
 [dependencies]
+# The codecs and the caption data model (pure Rust, no wgpu/winit).
+threers-codec = { path = "crates/threers-codec", version = "0.0.9", default-features = false }
+# Soft bodies that tear and regrow (`softbody`): the solver, on its own so the
+# wasm build can optimise it for speed (see `profile.release-wasm` below).
+threers-softbody = { path = "crates/threers-softbody", version = "0.0.9", features = ["gpu"] }
 wgpu = "30"
 bytemuck = { version = "1.16", features = ["derive"] }
 log = "0.4"
@@ -259,6 +284,8 @@ features = [
     "DomRect",
     "TextMetrics",
     "Path2d",
+    # `THREE.TimeSmear.imageData`: frames straight to a 2D canvas.
+    "ImageData",
     "Node",
     "Performance",
     "console",
@@ -650,10 +677,6 @@ required-features = ["rlx-geo"]
 name = "rlx_geo_terrain"
 required-features = ["rlx-geo"]
 
-[[example]]
-name = "codec_bench"
-required-features = ["native-codec"]
-
 # Browser tests. `wasm-bindgen-test` is only needed when building for wasm, so
 # it is a dev-dependency of that target alone and costs a native build nothing.
 # Native only: criterion pulls in rayon, which refuses to build for wasm32 and
@@ -720,10 +743,6 @@ name = "h264_gpu"
 required-features = ["native-codec"]
 
 [[test]]
-name = "mp4_demux"
-required-features = ["native-codec"]
-
-[[test]]
 name = "captions_overlay_gpu"
 required-features = ["captions"]
 
@@ -760,14 +779,6 @@ name = "ui_a11y_dom"
 required-features = ["ui"]
 
 [[test]]
-name = "animation_streaming"
-required-features = ["native-codec"]
-
-[[test]]
-name = "apng"
-required-features = ["native-codec"]
-
-[[test]]
 name = "assembly_real_geometry"
 required-features = ["assembly-check", "openscad"]
 
@@ -787,58 +798,6 @@ name = "brep_csg"
 required-features = ["brep-csg"]
 
 [[test]]
-name = "captions_mux"
-required-features = ["native-codec"]
-
-[[test]]
-name = "frame_parallel"
-required-features = ["native-codec"]
-
-[[test]]
-name = "gif"
-required-features = ["gif"]
-
-[[test]]
-name = "h264_animation_parity"
-required-features = ["native-codec"]
-
-[[test]]
-name = "h264_compress"
-required-features = ["native-codec"]
-
-[[test]]
-name = "h264_ffmpeg"
-required-features = ["native-codec"]
-
-[[test]]
-name = "h264_inter"
-required-features = ["native-codec", "video"]
-
-[[test]]
-name = "hevc_alpha"
-required-features = ["native-codec"]
-
-[[test]]
-name = "hevc_compress"
-required-features = ["native-codec"]
-
-[[test]]
-name = "hevc_ffmpeg"
-required-features = ["native-codec"]
-
-[[test]]
-name = "hevc_native_mp4"
-required-features = ["native-codec"]
-
-[[test]]
-name = "hevc_residual_conformance"
-required-features = ["native-codec"]
-
-[[test]]
-name = "native_decode"
-required-features = ["native-codec", "video"]
-
-[[test]]
 name = "mesh_bvh_raycast"
 required-features = ["mesh-bvh"]
 
@@ -855,10 +814,6 @@ name = "polar_sampling"
 required-features = ["planet"]
 
 [[test]]
-name = "rate_control"
-required-features = ["native-codec"]
-
-[[test]]
 name = "scad_animate"
 required-features = ["openscad"]
 
@@ -869,10 +824,6 @@ required-features = ["step"]
 [[test]]
 name = "watertight_gate"
 required-features = ["openscad"]
-
-[[test]]
-name = "webm"
-required-features = ["native-codec"]
 
 # Opt-out cfgs for consumers that embed the renderer in their own wasm crate
 # (set through RUSTFLAGS, e.g. `--cfg threers_no_js_bindings`); declared here so
@@ -899,3 +850,4 @@ required-features = ["metal"]
 [[test]]
 name = "fx_metal"
 required-features = ["metal"]
+

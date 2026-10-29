@@ -734,6 +734,7 @@ fn install_input(
                     wheel: 0.0,
                     rotating: true,
                     panning: false,
+                    cursor: ndc((x, y), (w, h)),
                 };
                 if let Some(v) = app.volume() {
                     v.controls.update(ev, &mut v.camera, (w, h));
@@ -766,6 +767,8 @@ fn install_input(
                 let mut app = a.borrow_mut();
                 let (w, h) = (app.config.width as f32, app.config.height as f32);
                 if let Some(v) = app.volume() {
+                    let ratio = dpr();
+                    let at = ((e.offset_x() as f64 * ratio) as f32, (e.offset_y() as f64 * ratio) as f32);
                     let ev = OrbitEvent {
                         dx: 0.0,
                         dy: 0.0,
@@ -773,6 +776,7 @@ fn install_input(
                         wheel: -e.delta_y() as f32 * 0.4,
                         rotating: false,
                         panning: false,
+                        cursor: ndc(at, (w, h)),
                     };
                     v.controls.update(ev, &mut v.camera, (w, h));
                     e.prevent_default();
@@ -824,6 +828,11 @@ fn pointer_at(e: &web_sys::PointerEvent) -> (f32, f32) {
         (e.offset_x() as f64 * ratio) as f32,
         (e.offset_y() as f64 * ratio) as f32,
     )
+}
+
+/// Backing-store pixels to NDC (−1..1, +y up), as `PointerEvent::cursor` wants.
+fn ndc((x, y): (f32, f32), (w, h): (f32, f32)) -> (f32, f32) {
+    (x / w.max(1.0) * 2.0 - 1.0, 1.0 - y / h.max(1.0) * 2.0)
 }
 
 /// The rAF callback, held somewhere it can reschedule itself.
