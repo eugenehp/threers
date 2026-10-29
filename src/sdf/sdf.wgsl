@@ -143,6 +143,17 @@ fn sdf3_tapered_capsule(p: vec3<f32>, a: vec3<f32>, b: vec3<f32>, ra: f32, rb: f
     return (sqrt(x2 * a2 * il2) + y * rr) * il2 - ra;
 }
 
+// An axis-aligned ellipsoid: a bound, exact on its surface. See d3::ellipsoid.
+fn sdf3_ellipsoid(p: vec3<f32>, radii: vec3<f32>) -> f32 {
+    let r = max(radii, vec3<f32>(1e-9));
+    let k0 = length(p / r);
+    let k1 = length(p / (r * r));
+    if (k1 <= 0.0) {
+        return -min(r.x, min(r.y, r.z));
+    }
+    return k0 * (k0 - 1.0) / k1;
+}
+
 fn sdf3_torus(p: vec3<f32>, major: f32, minor: f32) -> f32 {
     let q = vec2<f32>(length(p.xz) - major, p.y);
     return length(q) - minor;

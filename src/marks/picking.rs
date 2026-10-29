@@ -326,7 +326,7 @@ impl MarkRenderer {
             s.visible && s.pickable && m.instance_count() > 0 && m.kind() != super::MarkKind::Splat
         };
         let key_of = |m: &dyn Mark| {
-            let mut k = Self::key_for(m, PICK_FORMAT, 1, true, true, view.reversed_z);
+            let mut k = Self::key_for(m, PICK_FORMAT, 1, true, true, view.reversed_z, view.flip_y);
             k.blend = super::MarkBlend::Alpha;
             k.depth = if use_occluder {
                 // The frame's depth is read, never written: a pick must not

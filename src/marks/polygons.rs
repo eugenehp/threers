@@ -74,6 +74,13 @@ pub struct PolygonMarks {
     /// Light as deck.gl does instead (`ambient` is then unused, and roofs
     /// are lit too).
     pub lighting: Option<super::Lighting>,
+    /// Draw every feature's walls before any roof (deck.gl's
+    /// `SolidPolygonLayer`: its side model, then its top model) rather
+    /// than feature by feature — which decides what translucent faces
+    /// show through.
+    pub walls_first: bool,
+    /// The order the index buffer was uploaded in.
+    uploaded_walls_first: bool,
     /// For a mesh built on a sphere: its centre, which extrusion rises away
     /// from. `None` rises along +Y.
     radial: Option<[f64; 3]>,
@@ -198,6 +205,8 @@ impl PolygonMarks {
             source: Vec::new(),
             ambient: 0.45,
             lighting: None,
+            walls_first: false,
+            uploaded_walls_first: false,
             radial: None,
             radial_rel: [0.0; 4],
             pattern: None,
@@ -565,17 +574,33 @@ impl Mark for PolygonMarks {
             }
             None => [0.0; 4],
         };
+        if self.walls_first != self.uploaded_walls_first {
+            self.index_dirty = true;
+        }
         if !self.index_dirty || self.index.is_empty() {
             return;
         }
+        self.uploaded_walls_first = self.walls_first;
+        // Walls (horizontal normals) before roofs, each in its order.
+        let ordered: std::borrow::Cow<[u32]> = if self.walls_first {
+            let nt: &[f32] = bytemuck::cast_slice(self.normal_top.bytes());
+            let roof = |t: &[u32; 3]| t.iter().all(|&v| nt.get(v as usize * 4 + 1).is_some_and(|y| y.abs() > 0.5));
+            let tris = self.index.as_chunks::<3>().0;
+
+            let walls = tris.iter().filter(|t| !roof(t));
+            let roofs = tris.iter().filter(|t| roof(t));
+            std::borrow::Cow::Owned(walls.chain(roofs).flatten().copied().collect())
+        } else {
+            std::borrow::Cow::Borrowed(&self.index)
+        };
         let b = ctx.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("threers polygon marks indices"),
-            size: (self.index.len() * 4) as u64,
+            size: (ordered.len() * 4) as u64,
             usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         ctx.queue
-            .write_buffer(&b, 0, bytemuck::cast_slice(&self.index));
+            .write_buffer(&b, 0, bytemuck::cast_slice(&ordered));
         self.index_gpu = Some((b, self.index.len() as u32));
         self.index_dirty = false;
     }

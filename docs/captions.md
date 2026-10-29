@@ -58,7 +58,7 @@ typography.
 The muxers can also write soft subtitles without ffmpeg:
 `codec::mp4::mux_hevc_with_captions` (a `tx3g` timed-text track) and
 `codec::webm::mux_webm_with_captions` (a `D_WEBVTT/SUBTITLES` track). Both are
-round-trip verified against ffmpeg in `tests/captions_mux.rs`.
+round-trip verified against ffmpeg in `crates/threers-codec/tests/captions_mux.rs`.
 
 In the browser, `renderer.setCaptions(overlay)` makes every `render()` draw the
 current cue — see `web/examples/captions.html`:

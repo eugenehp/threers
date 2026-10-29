@@ -6468,6 +6468,224 @@ export class SkinnedMesh extends Mesh {
 /// `damping`, `response`, `maxLag`, and `placement: 'surface'` with `cell` to
 /// root strands over the surface rather than the UVs. The renderer animates
 /// its wind, flutter and inertia at every `render`.
+/**
+ * A signed distance field built from parts (threers extension, over
+ * `threers::sdf::Shape`): primitives, moves, and the operators that join
+ * them, with `k` a blend width (0 for a hard join). Every method returns a
+ * new field. Evaluating and meshing run in wasm, so a field built here costs
+ * one call per mesh, not one per sample.
+ *
+ *     const dome = THREE.SDF.ellipsoid(0.6, 0.45, 0.6)
+ *         .intersect(THREE.SDF.plane(0, -1, 0, 0))
+ *         .subtract(THREE.SDF.ellipsoid(0.45, 0.25, 0.45), 0.04);
+ *     scene.add(new THREE.Mesh(dome.toGeometry({ cell: 0.015 }), material));
+ *
+ * `distance(x, y, z)`, `distances(Float32Array)` for many points,
+ * `bounds()` (a Box3, or null for a field with no end), `surfaceNets(cell,
+ * box?)` for the arrays, and `toGeometry({ cell, box })` for a
+ * BufferGeometry with normals.
+ */
+export class SDF {
+    constructor(w) { this._w = w; this.isSDF = true; }
+    static _api() {
+        const W = _optional.WebSdf;
+        if (!W) throw new Error('THREE.SDF: this wasm build has no WebSdf; rebuild web/pkg');
+        return W;
+    }
+    static sphere(r) { return new SDF(SDF._api().sphere(r)); }
+    static ellipsoid(rx, ry, rz) { return new SDF(SDF._api().ellipsoid(rx, ry, rz)); }
+    /// half-extents, and how much its edges are rounded
+    static box(hx, hy, hz, round = 0) { return new SDF(SDF._api().box(hx, hy, hz, round)); }
+    /// from a to b (Vector3s or [x, y, z]), radius ra at a and rb at b
+    static capsule(a, b, ra, rb = ra) {
+        const p = (v) => (Array.isArray(v) ? v : [v.x, v.y, v.z]);
+        return new SDF(SDF._api().capsule(...p(a), ...p(b), ra, rb));
+    }
+    static torus(major, minor) { return new SDF(SDF._api().torus(major, minor)); }
+    static cylinder(halfHeight, r) { return new SDF(SDF._api().cylinder(halfHeight, r)); }
+    /// the half-space below dot(p, n) + offset = 0
+    static plane(nx, ny, nz, offset = 0) { return new SDF(SDF._api().plane(nx, ny, nz, offset)); }
+    /// every field given, joined, the seams blended over k
+    static unionAll(parts, k = 0) {
+        if (!parts.length) throw new RangeError('THREE.SDF.unionAll: no parts');
+        return parts.slice(1).reduce((a, b) => a.union(b, k), parts[0]);
+    }
+    union(other, k = 0) { return new SDF(this._w.union(other._w, k)); }
+    intersect(other, k = 0) { return new SDF(this._w.intersect(other._w, k)); }
+    subtract(other, k = 0) { return new SDF(this._w.subtract(other._w, k)); }
+    round(r) { return new SDF(this._w.round(r)); }
+    onion(t) { return new SDF(this._w.onion(t)); }
+    translate(x, y, z) { return x?.isVector3 ? new SDF(this._w.translate(x.x, x.y, x.z)) : new SDF(this._w.translate(x, y, z)); }
+    /// a Quaternion, or an Euler
+    rotate(q) {
+        if (q?.isEuler) q = new Quaternion().setFromEuler(q);
+        return new SDF(this._w.rotate(q.x, q.y, q.z, q.w));
+    }
+    scale(s) { return new SDF(this._w.scale(s)); }
+    distance(x, y, z) { return x?.isVector3 ? this._w.distance(x.x, x.y, x.z) : this._w.distance(x, y, z); }
+    distances(points) { return this._w.distances(points instanceof Float32Array ? points : Float32Array.from(points)); }
+    bounds() {
+        const b = this._w.bounds();
+        return b.length ? new Box3(new Vector3(b[0], b[1], b[2]), new Vector3(b[3], b[4], b[5])) : null;
+    }
+    /// `{ position, normal, index }` as flat arrays; `box` a Box3 or omitted
+    /// for the field's own bounds
+    surfaceNets(cell, box = null) {
+        const b = box ? [box.min.x, box.min.y, box.min.z, box.max.x, box.max.y, box.max.z] : [];
+        const m = this._w.surfaceNets(cell, Float32Array.from(b));
+        const out = { position: m.position, normal: m.normal, index: m.index };
+        m.free?.();
+        return out;
+    }
+    toGeometry({ cell = 0.02, box = null } = {}) {
+        const m = this.surfaceNets(cell, box);
+        const g = new BufferGeometry();
+        g.setAttribute('position', new BufferAttribute(m.position, 3));
+        g.setAttribute('normal', new BufferAttribute(m.normal, 3));
+        g.setIndex(new BufferAttribute(m.index, 1));
+        return g;
+    }
+}
+
+/**
+ * A soft body that tears and grows back (threers extension, over
+ * `threers::softbody`): XPBD on tetrahedral lattices, solved in wasm. A
+ * creature is a body with parts glued on and chains of particles rooted in
+ * it, every shape a `THREE.SDF`:
+ *
+ *     const jelly = THREE.SoftBody.build({
+ *         body: { field: bell, cell: 0.016, h: 0.07 },
+ *         parts: [{ name: 'tentacle', field: tentacle, cell: 0.0095, h: 0.04 }],
+ *         chains: [{ points: [[0, 0.1, 0.6], [0, 0.05, 0.8]], r0: 0.01, r1: 0.004 }],
+ *         head: [[0, 0.4, 0], [0.2, 0.35, 0], [0, 0.35, 0.2]],   // a frame the chains turn with
+ *         span: [[0.6, 0.05, 0], [-0.6, 0.05, 0]],                // the size readout
+ *     });
+ *     jelly.step(1 / 60);
+ *
+ * Drawing: `skin(i)` is part i's surface at rest (0 the body, 1 + n part n),
+ * `bind(i, points, normals)` ties any other points to a lattice, and
+ * `carry(binding, block, positions, normals)` moves them with a block — a
+ * block being the body or one of each part's three slots (attached, and two
+ * for torn-off copies; see `blocks()`).
+ *
+ * Hands: `raycast`, `grab`, `move`, `twist`, `release`, and the same for the
+ * goo it throws (`grabDrop`, `moveDrop`, `releaseDrop`).
+ */
+export class SoftBody {
+    static build({ body, parts = [], chains = [], head, span, seed = 7 }) {
+        const B = _optional.WebSoftBuilder;
+        if (!B) throw new Error('THREE.SoftBody: this wasm build has no WebSoftBuilder; rebuild web/pkg');
+        const b = new B(body.field._w, body.cell ?? 0.016, body.h ?? 0.07);
+        for (const p of parts) b.addPart(p.name, p.field._w, p.cell ?? 0.0095, p.h ?? 0.04);
+        for (const c of chains) b.addChain(Float64Array.from(c.points.flat()), c.r0, c.r1, c.stiff ?? 0.16);
+        b.setMarks(Float64Array.from([...head, ...span].flat()));
+        const sb = new SoftBody(b.build(seed));
+        b.free?.();
+        return sb;
+    }
+    constructor(w) {
+        this._w = w;
+        this.parts = Array.from({ length: w.partCount }, (_, i) => w.partName(i));
+        this._limits = this.parts.map(() => 0.07);
+        this._edges = null;
+    }
+    step(dt) { this._w.step(dt); }
+    reset() { this._w.reset(); }
+    /// solve the lattice on the renderer's GPU (WebGPU compute), or back on
+    /// the CPU; the GPU's positions arrive a frame later
+    useGpu(renderer, on = true) { this._w.useGpu(renderer._w, on); }
+    /// the same on a WebGPU device of its own (`SoftBody.requestComputeDevice()`),
+    /// for a worker, which has no renderer
+    useGpuDevice(device, on = true) { this._w.useGpuDevice(device, on); }
+    static async requestComputeDevice() {
+        const f = _optional.requestComputeDevice;
+        if (!f) throw new Error('THREE.SoftBody: this wasm build has no requestComputeDevice; rebuild web/pkg');
+        return await f();
+    }
+    get onGpu() { return this._w.onGpu; }
+    /// frames the GPU solver's readbacks are behind (0 or 1 keeping up)
+    get gpuLag() { return this._w.gpuLag; }
+    startle() { this._w.flick(); }
+    set walls(planes) { this._w.setWalls(planes ? Float32Array.from(planes) : new Float32Array(0)); }
+    set substeps(n) { this._w.setSubsteps(n); }
+    /// firmness, damping and regrowth, each 0..1
+    setParams({ firmness = 0.5, damping = 0.4, regrow = 0.5 } = {}) { this._w.setParams(firmness, damping, regrow); }
+    /// how far part n's glue stretches before a held part tears (0.07)
+    setTearLimit(part, limit) { this._limits[part] = limit; this._w.setTearLimit(part, limit); }
+    tearLimit(part) { return this._limits[part]; }
+    /// 'sway' (a travelling wave toward -x, the default), 'still', or
+    /// `{ weight(mid, dir), phase?(mid), pulse: { a, calm, omegaA, phaseA,
+    /// powerA, b, omegaB, phaseB, powerB } }`: each body edge shortens by
+    /// weight · (a·(1 − calm·s)·wave(ωa·t − φa·q, pa) + b·s·wave(ωb·t − φb·q, pb)),
+    /// s the startle squared, q the edge's phase, wave sin (p = 0) or a beat
+    /// max(0, sin)^p.
+    set muscles(m) {
+        if (m === 'sway') return this._w.setSway();
+        if (m === 'still' || !m) return this._w.setStill();
+        const E = this._edges ??= this._w.bodyEdges();
+        const n = E.length / 6, w = new Float32Array(n), q = new Float32Array(n);
+        for (let e = 0; e < n; e++) {
+            const mid = [E[6 * e], E[6 * e + 1], E[6 * e + 2]], dir = [E[6 * e + 3], E[6 * e + 4], E[6 * e + 5]];
+            w[e] = m.weight(mid, dir);
+            q[e] = m.phase ? m.phase(mid) : 0;
+        }
+        const p = { a: 0, calm: 0, omegaA: 0, phaseA: 0, powerA: 0, b: 0, omegaB: 0, phaseB: 0, powerB: 0, ...m.pulse };
+        this._w.setPulse(w, q, p.a, p.calm, p.omegaA, p.phaseA, p.powerA, p.b, p.omegaB, p.phaseB, p.powerB);
+    }
+    /// per block: `{ active, part (−1 the body), slot (0 attached), grow,
+    /// scale, strain, twitch }`
+    blocks() {
+        const a = this._w.blocks(), out = [];
+        for (let i = 0; i < a.length; i += 7) out.push({ active: !!a[i], part: a[i + 1], slot: a[i + 2], grow: a[i + 3], scale: a[i + 4], strain: a[i + 5], twitch: a[i + 6] });
+        return out;
+    }
+    skin(i) { return { position: this._w.skinPositions(i), normal: this._w.skinNormals(i), index: this._w.skinIndex(i) }; }
+    /// tie points (and their rest normals) to the body's (0) or part n's
+    /// (1 + n) lattice; the skins are bound already, as binding i
+    bind(i, points, normals = null) {
+        return this._w.bind(i, Float32Array.from(points), normals ? Float32Array.from(normals) : new Float32Array(0));
+    }
+    carry(binding, block, positions, normals = null) { this._w.carry(binding, block, positions, normals ?? new Float32Array(0)); }
+    /// chain segments `[ax, ay, az, ra, bx, by, bz, rb, …]`, now or at rest
+    segments(rest = false) { return this._w.segments(rest); }
+    /// the goo: `[x, y, z, r, …]`
+    drops() { return this._w.drops(); }
+    latticeLines() { return this._w.latticeLines(); }
+    /// `{ kind: 'part', block, point }`, `{ kind: 'drop', index, point }` or null
+    raycast(o, d) {
+        const r = this._w.raycast(o[0], o[1], o[2], d[0], d[1], d[2]);
+        if (r[0] < 0) return null;
+        const point = [r[3], r[4], r[5]];
+        return r[0] === 0 ? { kind: 'part', block: r[1], t: r[2], point } : { kind: 'drop', index: r[1], t: r[2], point };
+    }
+    grab(block, point, axis = [0, 0, 1]) { this._w.grab(block, point[0], point[1], point[2], axis[0], axis[1], axis[2]); }
+    move(point) { this._w.moveGrab(point[0], point[1], point[2]); }
+    twist(angle) { this._w.twistGrab(angle); }
+    /// what is held: `{ block, angle, strain }`, or null
+    get held() { const h = this._w.held(); return h[0] < 0 ? null : { block: h[0], angle: h[1], strain: h[2] }; }
+    release() { this._w.release(); }
+    grabDrop(i, point) { this._w.grabDrop(i, point[0], point[1], point[2]); }
+    moveDrop(point) { this._w.moveDrop(point[0], point[1], point[2]); }
+    /// let go of a drop; returns how fast it was moving
+    releaseDrop() { return this._w.releaseDrop(); }
+    /// `{ volume, length, attached, growing (null or 0..1), loose }`
+    measure() {
+        const m = this._w.measure();
+        return { volume: m[0], length: m[1], attached: m[2], growing: m[3] < 0 ? null : m[3], loose: m[4] };
+    }
+    /// since the last call: `{ type: 'tick'|'plop'|'plip'|'tear'|'regrown', part, r, speed }`
+    events() {
+        const T = ['tick', 'plop', 'plip', 'tear', 'regrown'], a = this._w.events(), out = [];
+        for (let i = 0; i < a.length; i += 4) out.push({ type: T[a[i]], part: a[i + 1], r: a[i + 2], speed: a[i + 3] });
+        return out;
+    }
+    /// for sound: the last landing speed, the startle, the time, the body's bounce
+    feel() { const f = this._w.feel(); return { impact: f[0], startle: f[1], time: f[2], bounce: f[3] }; }
+    get regrown() { return this._w.regrown; }
+    get time() { return this._w.time; }
+    dispose() { this._w.free?.(); }
+}
+
 export class Fur extends Object3D {
     constructor(geometry, options = {}) {
         super();
@@ -13333,6 +13551,70 @@ export async function captureSceneFrames(renderer, scene, camera, options = {}) 
     return frames;
 }
 
+/**
+ * threers extension: time smear (`threers::time_smear`). Every moving thing
+ * gets echoes of itself at other moments — before it arrives as well as after
+ * it has gone; whatever never moves is returned exactly as it was. It needs
+ * frames that have not been shown yet, so it works on a captured clip:
+ *
+ *     const smear = await THREE.TimeSmear.capture(renderer, scene, camera, {
+ *         frames: 160, update: (i) => pose(i),
+ *     });
+ *     smear.set({ strength: 0.35, reach: 0.55 });
+ *     ctx.putImageData(smear.imageData(i, 'ghost'), 0, 0);
+ *
+ * Everything but the capture is Rust (`WebTimeSmear`): `set({ strength,
+ * reach, rotation, workWidth, adaptive, dark })`, `params()`, `push(rgba)`,
+ * `frame(i, look, gain)` and `imageData(i, look, gain)`, with looks
+ * `'faithful'`, `'ghost'`, `'raw'`, `'echo'` and `'source'`.
+ */
+export class TimeSmear {
+    /**
+     * Render `frames` frames (calling `update(i, n)` before each) and wrap
+     * them. Captures into an sRGB target, so the clip is the picture the
+     * screen shows; a plain target would hand back linear light.
+     */
+    static async capture(renderer, scene, camera, options = {}) {
+        const canvas = renderer?.domElement;
+        const width = (options.width | 0) || (canvas?.width | 0);
+        const height = (options.height | 0) || (canvas?.height | 0);
+        const smear = new TimeSmear(width, height);
+        const target = options.renderTarget ?? new WebGLRenderTarget(width, height, {
+            colorSpace: 'srgb',
+            samples: options.samples ?? 4,
+        });
+        try {
+            await captureSceneFrames(renderer, scene, camera, {
+                ...options, width, height, renderTarget: target,
+                // In order, one at a time: frames are pushed as they arrive.
+                concurrency: 1,
+                mapFrame: (rgba) => { smear.push(rgba); return rgba; },
+            });
+        } finally {
+            if (target !== options.renderTarget) target.dispose?.();
+        }
+        return smear;
+    }
+
+    /** `frames`, optional: RGBA8 frames — an array, or one buffer back to back. */
+    constructor(width, height, frames) {
+        const W = _optional.WebTimeSmear;
+        if (!W) throw new Error('THREE.TimeSmear: this wasm build has no WebTimeSmear; rebuild web/pkg');
+        this._w = new W(width, height, ArrayBuffer.isView(frames) ? frames : undefined);
+        if (Array.isArray(frames)) for (const f of frames) this._w.push(f);
+    }
+
+    get width() { return this._w.width; }
+    get height() { return this._w.height; }
+    get frameCount() { return this._w.frameCount; }
+    push(rgba) { this._w.push(rgba); }
+    set(params) { return this._w.set(params ?? {}); }
+    params() { return this._w.params(); }
+    frame(i, look, gain) { return this._w.frame(i, look, gain); }
+    imageData(i, look, gain) { return this._w.imageData(i, look, gain); }
+    dispose() { this._w?.free?.(); this._w = null; }
+}
+
 /** @param {object} options @param {number} frameCount */
 function resolveCaptureConcurrency(options, frameCount) {
     let n = 1;
@@ -16572,7 +16854,12 @@ export class ShadowMaterial {
         this._w = WebMaterial.shadow(opts?.opacity ?? 1);
         this.transparent = true;
         this.opacity = opts?.opacity ?? 1;
-        _initMaterialBase(this, { ...opts, color: 0x000000 });
+        // three.js `ShadowMaterial.color`: what the shadow is drawn in
+        // (black by default)
+        _initMaterialBase(this, { ...opts, color: opts?.color ?? 0x000000 });
+        // the wasm material starts black; the base remembers this colour as sent
+        const c = this.color;
+        if (c.r || c.g || c.b) this._w.setColor?.(new WebColor(c.r, c.g, c.b));
     }
 }
 
@@ -18209,6 +18496,9 @@ const THREE = {
     CameraHelper, ArrowHelper, PlaneHelper, SkeletonHelper,
     QuadView, // threers extension
     Fur, // threers extension
+    SDF, // threers extension
+    SoftBody, // threers extension
+    TimeSmear, // threers extension
     Hair, // threers extension
     Particles, // threers extension
     SnowCover, // threers extension

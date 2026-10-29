@@ -1,0 +1,187 @@
+//! H.264 fractional sample interpolation (§8.4.2.2).
+//!
+//! Each block computes the half-sample planes its fraction needs once —
+//! `b` (horizontal half), `h` (vertical half), `j` (centre) — and averages
+//! from those, rather than re-filtering per output sample.
+
+use crate::decode::picture::Plane;
+
+/// A view of the `ww × wh` window at `(x0, y0)`: straight into the plane
+/// when it lies inside, otherwise an edge-clamped copy in `win`.
+fn view<'a>(p: &'a Plane, x0: isize, y0: isize, ww: usize, wh: usize, win: &'a mut Vec<u16>) -> (&'a [u16], usize, usize) {
+    if x0 >= 0 && y0 >= 0 && x0 as usize + ww <= p.width && y0 as usize + wh <= p.height {
+        return (&p.data, p.width, y0 as usize * p.width + x0 as usize);
+    }
+    win.clear();
+    win.reserve(ww * wh);
+    // Columns left of the picture repeat its first sample, right of it its
+    // last; the run in between is one copy per row.
+    let (pw, x0w) = (p.width as isize, x0 + ww as isize);
+    let left = (-x0).clamp(0, ww as isize) as usize;
+    let right = (x0w - pw).clamp(0, ww as isize - left as isize) as usize;
+    let mid = ww - left - right;
+    let mid_x = x0.max(0).min(pw - 1) as usize;
+    for r in 0..wh {
+        let y = (y0 + r as isize).clamp(0, p.height as isize - 1) as usize;
+        let row = &p.data[y * p.width..(y + 1) * p.width];
+        win.extend(std::iter::repeat_n(row[0], left));
+        win.extend_from_slice(&row[mid_x..mid_x + mid]);
+        win.extend(std::iter::repeat_n(row[p.width - 1], right));
+    }
+    (win, ww, 0)
+}
+
+/// `out[c] = tap(row[c..c + 6])`, tap-major so it vectorises.
+#[inline(always)]
+fn h6(row: &[u16], out: &mut [i32]) {
+    let w = out.len();
+    for (c, o) in out.iter_mut().enumerate() {
+        *o = row[c] as i32 + row[c + 5] as i32;
+    }
+    for (k, f) in [(1, -5), (2, 20), (3, 20), (4, -5)] {
+        for (o, &v) in out.iter_mut().zip(&row[k..k + w]) {
+            *o += f * v as i32;
+        }
+    }
+}
+
+/// `out[c] = tap(rows[0][c], …, rows[5][c])`.
+#[inline(always)]
+fn v6<T: Copy + Into<i32>>(rows: [&[T]; 6], out: &mut [i32]) {
+    const F: [i32; 6] = [1, -5, 20, 20, -5, 1];
+    out.fill(0);
+    for (r, f) in rows.iter().zip(F) {
+        for (o, &v) in out.iter_mut().zip(r.iter()) {
+            *o += f * v.into();
+        }
+    }
+}
+
+/// The half-sample planes [`luma`] builds, kept between calls so they are
+/// not zeroed for every block: each call writes every entry it reads.
+pub struct LumaScratch {
+    b1: [i32; 21 * 16],
+    hh: [i32; 16 * 17],
+    j: [i32; 16 * 16],
+}
+
+impl Default for LumaScratch {
+    fn default() -> Self {
+        LumaScratch { b1: [0; 21 * 16], hh: [0; 16 * 17], j: [0; 16 * 16] }
+    }
+}
+
+/// Predict a `w × h` luma block (`w, h <= 16`) whose top-left full-sample
+/// position is `(x, y)` with quarter-sample fraction `(xf, yf)`. Writes
+/// `out[r * w + c]`.
+#[allow(clippy::too_many_arguments)]
+pub fn luma(p: &Plane, x: isize, y: isize, xf: usize, yf: usize, w: usize, h: usize, out: &mut [i32], bd: u32, win: &mut Vec<u16>, scratch: &mut LumaScratch) {
+    let (src, stride, base) = view(p, x - 2, y - 2, w + 5, h + 5, win);
+    let max = (1 << bd) - 1;
+    // Row `r` of the window, `r` from -2; index `c + 2` is column `c`.
+    let row = |r: isize| &src[(base as isize + (r + 2) * stride as isize) as usize..][..w + 5];
+    let half = |v: i32| ((v + 16) >> 5).clamp(0, max);
+    let avg = |a: i32, b: i32| (a + b + 1) >> 1;
+    let g = |r: usize| &row(r as isize)[2..2 + w + 1];
+
+    if xf == 0 && yf == 0 {
+        for r in 0..h {
+            for (o, &v) in out[r * w..r * w + w].iter_mut().zip(g(r)) {
+                *o = v as i32;
+            }
+        }
+        return;
+    }
+    let need_b = xf != 0 && (yf != 2 || xf == 2);
+    let need_h = yf != 0 && (xf != 2 || yf == 2);
+    let need_j = (xf == 2 && yf != 0) || (yf == 2 && xf != 0);
+    // Unrounded horizontal halves `b1`, rows -2..h+3 (index r + 2).
+    let LumaScratch { b1, hh, j } = scratch;
+    if need_b || need_j {
+        let (lo, hi) = if need_j { (-2isize, h as isize + 3) } else { (0, h as isize + 1) };
+        for r in lo..hi {
+            let i = ((r + 2) as usize) * 16;
+            h6(row(r), &mut b1[i..i + w]);
+        }
+    }
+    let b = |r: usize, c: usize| half(b1[(r + 2) * 16 + c]);
+    // Vertical halves `h`, rows 0..h, columns 0..=w.
+
+    if need_h {
+        for r in 0..h {
+            let ri = r as isize;
+            let rows = [-2, -1, 0, 1, 2, 3].map(|k| &row(ri + k)[2..2 + w + 1]);
+            let o = &mut hh[r * 17..r * 17 + w + 1];
+            v6(rows, o);
+            for v in o.iter_mut() {
+                *v = half(*v);
+            }
+        }
+    }
+    let hv = |r: usize, c: usize| hh[r * 17 + c];
+
+    if need_j {
+        for r in 0..h {
+            let rows = [0, 1, 2, 3, 4, 5].map(|k| &b1[(r + k) * 16..(r + k) * 16 + w]);
+            let o = &mut j[r * 16..r * 16 + w];
+            v6(rows, o);
+            for v in o.iter_mut() {
+                *v = ((*v + 512) >> 10).clamp(0, max);
+            }
+        }
+    }
+    let jv = |r: usize, c: usize| j[r * 16 + c];
+    for r in 0..h {
+        let o = &mut out[r * w..r * w + w];
+        let gr = g(r);
+        match (xf, yf) {
+            (1, 0) => o.iter_mut().enumerate().for_each(|(c, o)| *o = avg(gr[c] as i32, b(r, c))),
+            (2, 0) => o.iter_mut().enumerate().for_each(|(c, o)| *o = b(r, c)),
+            (3, 0) => o.iter_mut().enumerate().for_each(|(c, o)| *o = avg(b(r, c), gr[c + 1] as i32)),
+            (0, 1) => o.iter_mut().enumerate().for_each(|(c, o)| *o = avg(gr[c] as i32, hv(r, c))),
+            (0, 2) => o.iter_mut().enumerate().for_each(|(c, o)| *o = hv(r, c)),
+            (0, 3) => {
+                let gn = g(r + 1);
+                o.iter_mut().enumerate().for_each(|(c, o)| *o = avg(hv(r, c), gn[c] as i32))
+            }
+            (2, 2) => o.iter_mut().enumerate().for_each(|(c, o)| *o = jv(r, c)),
+            (2, 1) => o.iter_mut().enumerate().for_each(|(c, o)| *o = avg(b(r, c), jv(r, c))),
+            (2, 3) => o.iter_mut().enumerate().for_each(|(c, o)| *o = avg(jv(r, c), b(r + 1, c))),
+            (1, 2) => o.iter_mut().enumerate().for_each(|(c, o)| *o = avg(hv(r, c), jv(r, c))),
+            (3, 2) => o.iter_mut().enumerate().for_each(|(c, o)| *o = avg(jv(r, c), hv(r, c + 1))),
+            (xf, yf) => {
+                let (rb, ch) = ((yf == 3) as usize, (xf == 3) as usize);
+                o.iter_mut().enumerate().for_each(|(c, o)| *o = avg(b(r + rb, c), hv(r, c + ch)))
+            }
+        }
+    }
+}
+
+/// Predict a `w × h` chroma block at full-sample `(x, y)` with eighth-sample
+/// fraction `(xf, yf)`.
+#[allow(clippy::too_many_arguments)]
+pub fn chroma(p: &Plane, x: isize, y: isize, xf: i32, yf: i32, w: usize, h: usize, out: &mut [i32], win: &mut Vec<u16>) {
+    if xf == 0 && yf == 0 {
+        // All weight on one sample: (64·a + 32) >> 6 is `a`.
+        let (src, stride, base) = view(p, x, y, w, h, win);
+        for r in 0..h {
+            for (o, &v) in out[r * w..][..w].iter_mut().zip(&src[base + r * stride..][..w]) {
+                *o = v as i32;
+            }
+        }
+        return;
+    }
+    let (src, stride, base) = view(p, x, y, w + 1, h + 1, win);
+    let (wa, wb, wc, wd) = ((8 - xf) * (8 - yf), xf * (8 - yf), (8 - xf) * yf, xf * yf);
+    for r in 0..h {
+        let r0 = &src[base + r * stride..][..w + 1];
+        let r1 = &src[base + (r + 1) * stride..][..w + 1];
+        // Four equal-length slices, so the loop has no bounds checks and
+        // vectorises.
+        let (a, b, c, d) = (&r0[..w], &r0[1..], &r1[..w], &r1[1..]);
+        let o = &mut out[r * w..][..w];
+        for i in 0..w {
+            o[i] = (wa * a[i] as i32 + wb * b[i] as i32 + wc * c[i] as i32 + wd * d[i] as i32 + 32) >> 6;
+        }
+    }
+}

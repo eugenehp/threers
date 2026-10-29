@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en" data-table="paper">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>gummy jelly — threers</title>
+    <link rel="preload" href="/web/pkg/threers_bg.wasm" as="fetch" type="application/wasm" crossorigin>
+    <link rel="modulepreload" href="/web/threejs-shim.js">
+    <link rel="modulepreload" href="/web/pkg/threers.js">
+    <style>
+        :root { color-scheme: dark; --paper: #e4e1dc; }
+        * { box-sizing: border-box; }
+        html, body { height: 100%; }
+        body {
+            margin: 0; background: #08090d; color: #e6e8ee;
+            font: 14px/1.5 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+            display: grid; grid-template-rows: auto 1fr;
+        }
+        header {
+            display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap;
+            padding: 14px 24px 10px; border-bottom: 1px solid #1e2129;
+        }
+        h1 { font-size: 17px; margin: 0; font-weight: 650; }
+        h1 .tag { color: #7d879c; font-weight: 400; }
+        #status { color: #7d879c; font-size: 12px; }
+        nav { margin-left: auto; display: flex; gap: 14px; }
+        nav a { color: #6ea8fe; text-decoration: none; font-size: 13px; }
+        .stage { display: grid; grid-template-columns: 1fr 300px; min-height: 0; }
+        .view { position: relative; min-height: 420px; background: var(--paper); }
+        canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; outline: none; }
+        canvas.dragging { cursor: grabbing !important; }
+        #hint {
+            position: absolute; left: 50%; top: 16px; transform: translateX(-50%);
+            padding: 7px 15px; border-radius: 999px; background: rgba(14, 16, 22, 0.72); color: #e6e8ee;
+            font-size: 13px; pointer-events: none; transition: opacity 0.6s; white-space: nowrap;
+        }
+        #hint.gone { opacity: 0; }
+        .metrics {
+            position: absolute; left: 16px; bottom: 14px; display: flex; gap: 0; pointer-events: none;
+            background: rgba(14, 16, 22, 0.72); border-radius: 8px; font-variant-numeric: tabular-nums;
+        }
+        .metrics div { padding: 8px 14px; display: grid; gap: 2px; }
+        .metrics div + div { border-left: 1px solid #262a34; }
+        .metrics .k { font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: #7d879c; }
+        .metrics .v { font-size: 17px; }
+        .metrics small { color: #7d879c; font-size: 11.5px; margin-left: 3px; }
+        #say { position: absolute; left: 16px; bottom: 78px; margin: 0; font-style: italic; color: #8a3d4c; pointer-events: none; opacity: 0; transition: opacity 0.5s; }
+        #say.shown { opacity: 1; }
+        #overlay {
+            position: absolute; inset: 0; display: grid; place-items: center; background: var(--paper);
+            color: #5d5952; font-size: 15px; transition: opacity 0.4s; z-index: 2;
+        }
+        #overlay.done { opacity: 0; pointer-events: none; }
+        #overlay.failed { color: #b0302a; }
+        #overlay .spin { width: 22px; height: 22px; border-radius: 50%; border: 2px solid #c9c3ba; border-top-color: #5d5952; animation: spin 0.9s linear infinite; margin: 0 auto 10px; }
+        #overlay.failed .spin { display: none; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        #keys summary { cursor: pointer; color: #97a0b3; font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; font-weight: 600; }
+        #keys dl { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; margin: 8px 0 0; font-size: 12.5px; color: #c3cad8; }
+        #keys dt { font-family: ui-monospace, Menlo, monospace; color: #e6e8ee; }
+        #keys dd { margin: 0; color: #97a0b3; }
+        kbd { font-family: ui-monospace, Menlo, monospace; font-size: 11px; padding: 0 4px; border: 1px solid #2a3040; border-radius: 3px; }
+        @media (prefers-reduced-motion: reduce) { #overlay .spin { animation: none; } }
+        :root[data-table="night"] #say, :root[data-table="mat"] #say { color: #ffb7c4; }
+        aside {
+            border-left: 1px solid #1e2129; background: #0e1016; padding: 16px 18px; overflow-y: auto;
+            display: grid; gap: 14px; align-content: start;
+        }
+        .label { font-size: 11px; font-weight: 600; letter-spacing: 0.16em; text-transform: uppercase; color: #97a0b3; }
+        .grid { display: grid; gap: 5px; }
+        .g5 { grid-template-columns: repeat(5, 1fr); }
+        .g4 { grid-template-columns: repeat(4, 1fr); }
+        .g3 { grid-template-columns: repeat(3, 1fr); }
+        .g2 { grid-template-columns: repeat(2, 1fr); }
+        a.pick { text-decoration: none; font-size: 13px; padding: 6px 2px; }
+        .pick {
+            all: unset; cursor: pointer; display: grid; gap: 5px; justify-items: center; padding: 5px 2px 6px;
+            border: 1px solid transparent; border-radius: 6px; font-size: 12px; color: #97a0b3;
+        }
+        .pick[aria-pressed="true"] { border-color: #3a4152; color: #e6e8ee; background: #161a23; }
+        .pick:focus-visible { outline: 2px solid #6ea8fe; }
+        .chip { width: 100%; height: 20px; border-radius: 3px; }
+        .row { display: flex; justify-content: space-between; align-items: baseline; color: #c3cad8; font-size: 13px; }
+        .row .num { font-variant-numeric: tabular-nums; color: #7d879c; }
+        input[type=range] { width: 100%; margin: 0; }
+        .buttons { display: grid; grid-template-columns: 1fr auto auto; gap: 6px; }
+        button.b {
+            font: inherit; font-size: 13px; color: #e6e8ee; background: #161a23; border: 1px solid #2a3040;
+            padding: 8px 10px; border-radius: 6px; cursor: pointer;
+        }
+        button.b:hover { background: #1e2330; }
+        .checks { display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 13px; color: #c3cad8; }
+        .checks label { display: flex; gap: 6px; align-items: center; cursor: pointer; }
+        .note { color: #7d879c; font-size: 12px; margin: 0; }
+        .note a { color: #6ea8fe; }
+        #info, #facts { color: #7d879c; font-size: 11.5px; font-variant-numeric: tabular-nums; margin: 0; }
+        #err { color: #ff8080; white-space: pre-wrap; font-size: 12px; margin: 0; }
+        @media (max-width: 860px) {
+            .stage { grid-template-columns: 1fr; grid-template-rows: 60vh auto; }
+            aside { border-left: 0; border-top: 1px solid #1e2129; }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>gummy jelly <span class="tag">· XPBD soft bodies that tear and regrow, built from THREE.SDF, gel through screen-space refraction</span></h1>
+        <span id="status">loading wasm…</span>
+        <nav><a href="/web/examples/">examples</a></nav>
+    </header>
+    <div class="stage">
+        <div class="view">
+            <canvas id="c" tabindex="0" aria-label="A gummy creature on a table: a jellyfish, gecko, starfish, octopus, sea slug, worm, bear or salamander. Pull a tentacle, arm, tail or ear hard enough and it tears off, twitches, and grows back."></canvas>
+            <div id="hint"></div>
+            <div id="overlay" role="status"><div><div class="spin"></div><span id="overlay-text">loading…</span></div></div>
+            <p id="say" aria-live="polite"></p>
+            <div class="metrics">
+                <div><span class="k">Volume</span><span class="v"><span id="m-vol">100.0</span><small>% of rest</small></span></div>
+                <div><span class="k" id="k-length">Length</span><span class="v"><span id="m-len">–</span><small>cm</small></span></div>
+                <div><span class="k" id="k-parts">Legs</span><span class="v"><span id="m-legs">–</span><small id="m-legs-note">attached</small></span></div>
+            </div>
+        </div>
+        <aside aria-label="Specimen controls">
+            <div class="grid">
+                <span class="label">Creature</span>
+                <div class="grid g4" id="creatures">
+                    <a class="pick creature" data-creature="jellyfish" href="?creature=jellyfish" title="Jellyfish (1)">Jellyfish</a>
+                    <a class="pick creature" data-creature="gecko" href="?creature=gecko" title="Gecko (2)">Gecko</a>
+                    <a class="pick creature" data-creature="starfish" href="?creature=starfish" title="Starfish (3)">Starfish</a>
+                    <a class="pick creature" data-creature="octopus" href="?creature=octopus" title="Octopus (4)">Octopus</a>
+                    <a class="pick creature" data-creature="seaslug" href="?creature=seaslug" title="Sea slug (5)">Sea slug</a>
+                    <a class="pick creature" data-creature="worm" href="?creature=worm" title="Worm (6)">Worm</a>
+                    <a class="pick creature" data-creature="bear" href="?creature=bear" title="Bear (7)">Bear</a>
+                    <a class="pick creature" data-creature="salamander" href="?creature=salamander" title="Salamander (8)">Salamander</a>
+                </div>
+                <span class="label">Morph</span>
+                <div class="grid g5" id="swatches"></div>
+            </div>
+            <div class="grid">
+                <span class="label">Finish</span>
+                <div class="grid g3">
+                    <button class="pick finish" data-finish="glossy"><span class="chip" style="background: radial-gradient(circle at 35% 30%, #fff 0 12%, #f08aa0 30%, #b83a5a 100%)"></span>Glossy</button>
+                    <button class="pick finish" data-finish="sour"><span class="chip" style="background: radial-gradient(circle, #fff 0 1.2px, transparent 1.6px) 0 0 / 4px 4px, #f0a0b0"></span>Sour</button>
+                    <button class="pick finish" data-finish="frosted"><span class="chip" style="background: radial-gradient(circle at 35% 30%, #fbe9ee, #e2a7b5)"></span>Frosted</button>
+                </div>
+            </div>
+            <div class="grid">
+                <span class="label">Table</span>
+                <div class="grid g4">
+                    <button class="pick table" data-table="paper"><span class="chip" style="background: #e4e1dc"></span>Paper</button>
+                    <button class="pick table" data-table="mat"><span class="chip" style="background: repeating-linear-gradient(90deg, transparent 0 7px, rgba(150,200,160,.55) 7px 8px), #2c5a4b"></span>Mat</button>
+                    <button class="pick table" data-table="marble"><span class="chip" style="background: linear-gradient(118deg, transparent 0 42%, rgba(120,118,112,.5) 45%, transparent 49%), #ebeae7"></span>Marble</button>
+                    <button class="pick table" data-table="night"><span class="chip" style="background: radial-gradient(circle at 50% 60%, #3a3d47 0, #101218 70%)"></span>Night</button>
+                </div>
+            </div>
+            <div class="grid">
+                <span class="label">Solver</span>
+                <div class="grid g3" id="solvers">
+                    <button class="pick solver" data-solver="auto" title="Whichever measures faster here, switching as that changes (g)">Auto</button>
+                    <button class="pick solver" data-solver="cpu" title="The CPU solver, bit for bit the original (g)">CPU</button>
+                    <button class="pick solver" data-solver="gpu" title="The substeps as WebGPU compute (g)">GPU</button>
+                </div>
+                <p id="solver-note" class="note"></p>
+            </div>
+            <div class="grid">
+                <div class="row"><label for="firmness">Firmness <i>(trembling → set)</i></label><span class="num" id="firmness-out">0.50</span></div>
+                <input type="range" id="firmness" min="0" max="1" step="0.01" value="0.5">
+                <div class="row"><label for="damping">Damping <i>(lively → syrupy)</i></label><span class="num" id="damping-out">0.40</span></div>
+                <input type="range" id="damping" min="0" max="1" step="0.01" value="0.4">
+                <div class="row"><label for="regrow">Regrowth <i>(patient → eager)</i></label><span class="num" id="regrow-out">0.50</span></div>
+                <input type="range" id="regrow" min="0" max="1" step="0.01" value="0.5">
+            </div>
+            <div class="buttons">
+                <button class="b" id="startle">Startle it</button>
+                <button class="b" id="reset">Reset</button>
+                <button class="b" id="pause">Pause</button>
+            </div>
+            <div class="checks">
+                <label><input type="checkbox" id="slow"> ¼ speed</label>
+                <label><input type="checkbox" id="mesh"> Show lattice</label>
+                <label><input type="checkbox" id="sound" checked> Sound</label>
+            </div>
+            <details id="keys">
+                <summary>Keys <kbd>?</kbd></summary>
+                <dl>
+                    <dt>1–8</dt><dd>creature</dd>
+                    <dt>⇧1–5</dt><dd>morph</dd>
+                    <dt>f · t</dt><dd>next finish · next table</dd>
+                    <dt>space</dt><dd>pause</dd>
+                    <dt>s · r</dt><dd>startle · reset</dd>
+                    <dt>q · l · m</dt><dd>¼ speed · lattice · sound</dd>
+                    <dt>g</dt><dd>solver: auto · CPU · GPU</dd>
+                    <dt>← → ↑ ↓</dt><dd>orbit</dd>
+                    <dt>+ − · h</dt><dd>zoom · home view (or double-click)</dd>
+                    <dt>wheel</dt><dd>zoom; twists while holding</dd>
+                </dl>
+            </details>
+            <p class="note">
+                Grab a tentacle, an arm, a tail or an ear and pull until it gives: it twitches on the table while a bud
+                swells from the stump. Press the body, throw the goo drops, scroll while holding to twist. Drag the table to orbit.
+            </p>
+            <p class="note">
+                Built on <code>THREE.SoftBody</code> (<code>threers::softbody</code>, XPBD in wasm) and <code>THREE.SDF</code>:
+                each creature is a few distance fields, meshed by surface nets. Drawn by threers: the gel is a <code>MeshPhysicalMaterial</code> in <code>refract</code> mode, thickness
+                measured from its back faces, with eyes, gonads and bellies as opaque surfaces inside it.
+            </p>
+            <p id="info"></p>
+            <p id="facts"></p>
+            <p id="err"></p>
+        </aside>
+    </div>
+    <script type="module" src="./jelly-demo.js"></script>
+</body>
+</html>

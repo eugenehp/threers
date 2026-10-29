@@ -7,6 +7,336 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `threers-codec`: `ffcompat::reader::VideoReader::decode_rgb` starts decoding
+  one sync sample before the last sync sample preceding the first wanted
+  frame, instead of at the stream start, so extracting a long video chunk by
+  chunk is no longer quadratic. Byte-identical to a full decode on every
+  multi-GOP fixture (`tests/decode_seek.rs`, 279 videos checked).
+
+## [0.0.9] — 2026-10-29
+
+### Added
+
+- **Time smear** (`threers::time_smear`, `THREE.TimeSmear`): every moving
+  thing in a clip gets echoes of itself at other moments in time, before it
+  arrives as well as after it has gone. Each pixel's luma over 64-frame
+  windows goes through a Gray-coded six-qubit interference transform: light is
+  moved in time, never made, and anything still comes back byte for byte.
+  Looks: faithful, ghost, raw and echo. Strength, reach, four rotations and
+  per-tile adaptive strength. `TimeSmear::wrap` streams any frame closure
+  straight into `export_video`, `VideoExporter` or `render_sequence`, holding
+  at most 64 source frames. In the browser, `THREE.TimeSmear.capture` renders
+  a clip into an sRGB target and everything after that runs in wasm. Demo:
+  `web/examples/time-smear.html` (WebGPU and WebGL2). Example:
+  `examples/time_smear.rs` (wgpu, or Metal with `--metal`). The model is the
+  local one of eps696/mothionblur. Guide: `docs/time-smear.md`.
+- `threers-codec`: the media codecs, the caption data model (tracks, cues,
+  style, SRT / WebVTT, legibility), WCAG contrast and both VideoToolbox modules,
+  as a crate with no dependencies (rayon with `parallel`). Modules sit at the
+  crate root (`threers_codec::h264`, `threers_codec::decode`, ...). `threers`
+  re-exports the crate as `threers::codec` and keeps `threers::videotoolbox`
+  and `threers::videotoolbox_decode`, so nothing changes for its users;
+  programs that only decode or encode media no longer link wgpu, winit or the
+  Objective-C runtime. Features: `decode` and `gif` (default), `parallel`,
+  `videotoolbox`. Every codec's inner stages (entropy coders, transforms,
+  loop filters, parameter-set parsers, the AAC/Opus/MP3/Vorbis internals) are
+  public modules now. `ffcompat`'s Matroska reader no longer needs the VP9
+  decoder (it failed to build with `native-codec` alone):
+  `vp9_packet::{packet_shows, split_superframe}` are always compiled.
+- `threers_codec::prelude`: the encoders, decoders, demuxer track types,
+  frame and audio containers and codec modules in one import.
+- `threers_codec::hw::Mp4Encoder`: HEVC-in-MP4 from RGBA frames on
+  VideoToolbox where the build and machine have it, otherwise on the native
+  all-intra encoder (frame-parallel with `parallel`), with one set of
+  `EncodeOptions` (quality, bitrate, realtime). The counterpart of
+  `decode::Decoder`; `EncodeBackend::preferred()` and `with_backend` choose
+  and pin. `VideoToolboxEncoder::finish_mp4_bytes` returns the file in memory.
+  `crates/threers-codec/tests/hw.rs` encodes on each backend and decodes with
+  each decoder.
+- NVIDIA hardware codecs (`threers_codec::nvidia`, feature `nvidia`; also
+  `threers`' `nvidia`): NVDEC decodes H.264, HEVC (8/10-bit), VP9 and AV1,
+  NVENC encodes HEVC to MP4, and `decode::Decoder` / `hw::Mp4Encoder` pick
+  them up after VideoToolbox and before the native codecs. The driver's
+  libraries are loaded at run time — nothing links against NVIDIA, and a
+  build with the feature still runs without the driver. On an RTX 3080 Ti
+  under Linux, NVDEC's output is identical to the native decoder's on every
+  test stream, B-frames included (`crates/threers-codec/tests/nvidia.rs`).
+  Windows builds; it has not been run there. `decode::Backend` and
+  `hw::EncodeBackend` gain `Nvdec` / `Nvenc` and are now `#[non_exhaustive]`.
+- Faster native decoding, with output byte-identical to before on every
+  stream tried (checksums, the AV1 conformance vectors, the NVDEC
+  comparison): on one core of an i9-12900H at 1080p, H.264 20.1 → 16.2 ms a
+  frame, HEVC 20.5 → 16.3, VP9 17.5 → 12.9, AV1 28.1 → 22.0. Reference
+  windows are copied a row at a time (or not at all when the block lies
+  inside the picture) instead of a clamped sample at a time; the HEVC
+  inverse transform, interpolation filters and SAO, H.264 chroma
+  interpolation and weighted prediction are written so they vectorise; and
+  per-block scratch buffers are reused instead of zeroed.
+- VAAPI decoding (`threers_codec::vaapi`, feature `vaapi`; also `threers`'
+  `vaapi`): H.264 and HEVC (Main, Main 10) on AMD and Intel GPUs under Linux,
+  picked by `decode::Decoder` after VideoToolbox and NVDEC. libva is loaded
+  at run time. The native decoders still parse and manage references and
+  hand each slice to the GPU through new accelerator hooks
+  (`decode::h264::H264Accel`, `decode::hevc::HevcAccel`); on a Radeon 780M,
+  1080p decodes in about 4 ms a frame against 11–12 natively, and every
+  picture is identical to the native decoder's on 16 test streams
+  (`crates/threers-codec/tests/vaapi.rs`). `decode::Backend` gains `Vaapi`.
+  VP9 (profiles 0 and 2) and AV1 (8- and 10-bit 4:2:0) decode the same way,
+  through `decode::vp9::Vp9Accel` and `decode::av1::Av1Accel`; AV1 film grain
+  is applied natively to what the GPU returns. Every frame matches the
+  native decoder on libvpx, SVT-AV1 and libaom streams and the AV1
+  conformance vectors.
+- VAAPI HEVC encoding (`vaapi::VaapiEncoder`, and `hw::Mp4Encoder` with
+  `EncodeBackend::Vaapi`): IDR and P frames, constant QP or variable
+  bitrate, with threers' own VPS/SPS/PPS and slice headers sent as packed
+  headers (the SPS carries the colour description and crops to the picture).
+  It reads the driver's requirements (HEVC features, block sizes,
+  prediction directions) and follows them: on Intel's low-power encoder,
+  AMP and per-CU QP are on, the transform depth is the encoder's, and P
+  frames go as low-delay B. Run on AMD (Mesa) and Intel (`iHD`, Alder Lake);
+  every VAAPI decode test matches the native decoder byte for byte on both,
+  bar AV1 on Intel, whose free driver build does not decode it.
+- `HvccProfile::from_sps`: an `hvcC` profile from an encoder's SPS, read from
+  the coded `profile_tier_level` with emulation prevention removed.
+- `crates/threers-codec/tests/av1_conformance.rs`: the AV1 decoder against
+  dav1d on libaom's test vectors, ffmpeg's FATE samples and SVT-AV1 streams
+  (screen content, 10-bit), every frame byte for byte. The crate had no AV1
+  test before; all 21 streams match.
+
+- **Soft bodies that tear and grow back** (`threers::softbody`, and the
+  `threers-softbody` crate for the lattice and solver on their own): XPBD on
+  tetrahedral lattices — a body, parts glued on that tear away when pulled
+  and regrow from the stump, particle chains, goo — built from `sdf::Shape`s
+  (`Creature::from_shapes`) with skins by surface nets. A port of Axolotl
+  Jelly's solver (Dream Meridian, MIT) held to the JavaScript bit for bit by
+  `tests/softbody_parity.rs`. In the browser, `THREE.SoftBody`: declare a
+  creature as data, drive it, and carry skins and anything else bound to it
+  in Rust. `threers-softbody` is built at `opt-level = 3` inside the
+  size-tuned wasm (`profile.release-wasm.package`): 8 ms a step, against
+  50–80 ms at `z`.
+- **The soft-body solver on the GPU** (`softbody::gpu::GpuSolver`;
+  `THREE.SoftBody.useGpu(renderer)`): the substeps as WebGPU compute on the
+  renderer's device. The lattice's cubes run in eight parity classes, a thread
+  a cube; glue a part node to a thread with its pull on the body summed in
+  fixed point — fifteen dispatches a substep, within WebGPU's downlevel
+  limits. The jellyfish's step goes from 7.8 ms to 1.9 ms on the GPU and
+  0.4 ms on the CPU; `tests/softbody_gpu.rs` holds it to the CPU solver's
+  shapes and tears. `useGpuDevice(await THREE.SoftBody.requestComputeDevice())`
+  runs it on a device of its own, for a worker.
+- **`examples/gummy.rs`**: the gummy jellyfish and octopus natively — pulled
+  until a part tears — drawn by the wgpu renderer and the Metal renderer
+  (`--features metal`; clean under `MTL_DEBUG_LAYER`). `softbody::carry`
+  carries a skin, or any bound points, along with the lattice. `web/pkg` now
+  carries the WebGL2 fallback, so the browser demo runs where WebGPU does not
+  (as over plain `http` from another machine, which is no secure context).
+- **Gummy jelly off the main thread**: the demo's simulation — build, solver,
+  skinning, goo, sugar, picking — runs in a worker and posts each frame as a
+  snapshot of transferred typed arrays; the main thread only draws (4–6 ms a
+  frame, against 36–38 ms with the CPU solver on it). `?thread=main` puts it
+  back; `?solver=cpu|gpu` picks a solver.
+- **An automatic solver choice** in the demo (the default): it runs the CPU
+  solver, tries the GPU solver when that runs over budget, keeps it only if
+  the frame rate improves, and lets it go when its readbacks lag or the frame
+  rate sags, backing off after each failed try. `GpuSolver::suspend` and
+  `resume` make the switch an upload rather than a rebuild;
+  `tests/softbody_gpu.rs` swaps solvers through a pull and the tear still
+  comes at the same frame.
+- **Gummy jelly in the browser** (`web/examples/jelly.html`): gummy creatures
+  you can pull apart — a jellyfish, gecko, starfish, octopus, sea slug, gummy
+  worm, gummy bear and salamander — on `THREE.SoftBody`. Tentacles, arms,
+  tails and ears flush as they near tearing, tear, twitch and grow back; the
+  jellyfish's bell pulses, the worm crawls, the gecko drops its tail at half
+  the pull a leg needs, the salamander regrows its legs. Keyboard (1–8
+  creatures, `?` for the rest), hover highlight, double-click home. The gel is
+  a `MeshPhysicalMaterial` in `refract` mode with eyes, gonads and bellies
+  inside it.
+- **`sdf::Shape`** and **`THREE.SDF`**: a signed distance field built as a
+  tree — primitives, moves (translate, rotate, uniform scale) and the hard
+  and smooth operators — evaluated in Rust however it was built, with
+  conservative `bounds()`. In the browser a field built in JavaScript costs one
+  call into wasm per mesh rather than one per sample.
+- **`Sdf3::to_surface_nets`**: smooth meshing of any field — a vertex per
+  crossed cell, pulled onto the surface along the gradient, normals from the
+  field, wound outward. Rounder than marching cubes at the same grid, with no
+  slivers.
+- **`sdf::d3::ellipsoid`** (and `sdf3_ellipsoid` in WGSL): a bound exact on
+  the surface.
+
+- **Opus decoding** (`threers::codec::opus`): a pure-Rust port of ffmpeg
+  7.1's native Opus decoder — the one the ffmpeg CLI uses — for WebM and
+  Matroska. It covers SILK (NB/MB/WB, 10–60 ms, LBRR, stereo unmixing),
+  hybrid (with the CELT delay FIFO) and CELT (transients, anti-collapse,
+  postfilter, intensity and dual stereo, phase inversion, 2.5–20 ms). It
+  also handles redundancy frames, packet codes 0–3, multistream mapping
+  families 0/1/2/255 and the OpusHead gain. SILK is resampled by its own
+  streaming libswresample context (`swr::SwrStream`, `filter_size 16`).
+  CELT's inverse MDCT is av_tx's `mdct_pfa_15xM_inv` over the NEON
+  4/8/16/32-point codelets, which the NEON FFT emulation now covers.
+  `decode_webm`/`decode_matroska` apply pre-skip and `DiscardPadding`
+  exactly as the CLI does. Output is bit-identical to `ffmpeg -f f32le` on
+  all 39 test streams (`crates/threers-codec/tests/opus_parity.rs` pins 10 of them), and decoding
+  is faster than ffmpeg 7.1. `audio_file::read` now accepts WebM/MKV Opus.
+
+- **AAC-LC decoding** (`threers::codec::aac`, `native-codec`): a pure-Rust
+  port of ffmpeg 7.1's float AAC decoder (long/short/start/stop windows, KBD
+  and sine, M/S, intensity stereo, PNS, TNS, pulses, escape codebooks,
+  DRC/FIL/DSE parsing) with the mov demuxer's edit-list and `iTunSMPB`
+  priming rules. `decode_mp4` returns what `ffmpeg -i f -f f32le` does, bit for
+  bit, as the aarch64 build computes it: av_tx's inverse MDCT around a
+  transcription of the NEON split-radix FFT, libavutil's NEON `float_dsp`
+  kernels, uncontracted C elsewhere. Mono/stereo, 1024-sample frames;
+  HE-AAC/SBR/PS, Main/LTP, PCE layouts and fragmented MP4 are refused with
+  `AacError::Unsupported`.
+- **ffmpeg-compatible video reading** (`threers::codec::ffcompat`): the mov
+  demuxer's timing (`mov_fix_index` with B-frames, discarded frames and
+  edit-list cuts; `r_frame_rate`; banner fps/duration over all tracks), the
+  CLI's frame selection for `[-ss A] -i f [-ss B]` (CFR/VSCFR sync),
+  autorotation (transpose/hflip/vflip from the display matrix), and
+  libswscale's C `yuv2rgb`; `reader::VideoReader` pipes rgb24 frames
+  bit-identical to ffmpeg 7.1 (H.264 incl. B-frames, HEVC 8-bit; 2,192
+  seek sequences over 550 clips).
+- **`native-decode` feature**: the H.264/HEVC decoders without the
+  ffmpeg-backed `video` module. `ColorInfo::vui_matrix` exposes the coded
+  `matrix_coefficients`.
+- **FLAC** (`threers::codec::flac`): native and in Ogg; all subframe types,
+  wasted bits, escaped residuals, stereo decorrelation, CRC-checked.
+- **Ogg + Vorbis** (`threers::codec::ogg`, `threers::codec::vorbis`): libogg
+  packet semantics; a port of libvorbis 1.3.7 bit-identical to `soundfile`
+  (libsndfile 1.2.2, arm64) — that libvorbis is built with `-ffast-math`, so
+  the reassociated butterfly is generated from its machine code. Floor 0 is
+  refused.
+- **4:2:2 video**: the H.264 decoder decodes High 4:2:2 (8/10-bit; 2×4
+  chroma DC, CAVLC/CABAC 4:2:2 contexts, 8×16 chroma intra/MC/deblocking)
+  and the HEVC decoder Main 4:2:2 10 (stacked chroma TUs, the 4:2:2 intra
+  mode table, `QpC = Min(qPi, 51)`, 4:2:2 deblocking and SAO grids), both
+  byte-identical to ffmpeg 7.1 on x264/x265 streams (CAVLC/CABAC, intra-only,
+  B-pyramids, weighted prediction, odd heights). HEVC with 16×16 CTBs still
+  differs from ffmpeg by a few samples (ffmpeg's per-CTB filter schedule).
+- **AV1 decoding** (`threers::codec::decode::av1`, `native-decode`): a
+  port of dav1d 1.5.1's single-threaded C paths — OBU parsing (Section 5 and
+  Annex B), all block syntax incl. palette, intra block copy, CfL, filter
+  intra, compound wedge/segment/distance modes, inter-intra, OBMC, local and
+  global warped motion, reference scaling, temporal MV projection; deblocking,
+  CDEF, superres, Wiener/self-guided loop restoration and film grain; 8/10/12
+  bit, 4:0:0/4:2:0/4:2:2/4:4:4. Default CDFs and static tables are generated
+  from dav1d's source text; the C is never compiled. Output is bit-identical to
+  ffmpeg 7.1 (libaom) on the 19 FATE AV1 vectors, 15 more libaom test vectors
+  and aomenc/SVT-AV1 encodes of every profile (50 streams). One picture per
+  temporal unit (the highest spatial layer), as libaom outputs by default.
+  `NativeDecoder` takes AV1 tracks (`av01`/`av1C` in MP4, `V_AV1` in
+  Matroska/WebM), and `ffcompat::VideoReader` pipes them: banner and rgb24
+  match ffmpeg on 94 MP4/WebM files, except streams whose picture size
+  changes mid-stream (refused: the CLI rescales them with swscale's bicubic
+  filter, which is not ported). Monochrome now pipes as swscale's gray →
+  rgb24 (a copy; 10-bit rounds `(y + 2) >> 2`).
+- **VP9 decoding** (`threers::codec::decode::vp9`, `native-decode`): a port of
+  ffmpeg 7.1's native VP9 decoder, every profile (8/10/12-bit; 4:2:0, 4:2:2,
+  4:4:0, 4:4:4, RGB), lossless, tiles, segmentation, reference scaling,
+  intra-only and show-existing frames, superframes, backward adaptation.
+  Byte-identical to ffmpeg on all 226 FATE `vp9-test-vectors` and on libvpx
+  encodes (lossless, 4:4:4 10-bit, GBR, 4 tile columns, error-resilient,
+  alt-ref superframes, 4:2:2). Tables are generated from `vp9data.c`.
+- **Matroska / WebM and IVF demuxing** (`threers::codec::mkv_demux`): EBML,
+  every lacing mode, unknown-size elements, header-stripping compression,
+  WebM alpha (`BlockAdditional`), codec delay / discard padding.
+- **WebM / VP9 in `ffcompat::reader`**: `VideoReader` opens Matroska/WebM
+  (and MP4 `vp09`) VP9 video with the timing ffmpeg's matroska demuxer and
+  `find_stream_info` give it: `DefaultDuration` or the deprecated `FrameRate`,
+  else `ff_rfps_calculate` over the first 40 timestamp steps, `avg` from
+  `r_frame_rate`, `1 / r` packet durations, hidden-frame-only packets showing
+  nothing. Banner fps/tbr/Duration match ffmpeg on all 234 WebM test files
+  and the moviepy rgb24 pipe is byte-identical on all of them (4:2:0 through
+  4:4:4 and 4:4:0, 8-12 bit, GBR). `ChromaFormat::Yuv440` added.
+- **Interlaced H.264 (PAFF and MBAFF)**: field pictures (pairing and output,
+  per-field POC and MMCO marking, alternating-parity field lists, field
+  scans and CABAC field contexts, field deblocking, chroma MV parity offset)
+  and macroblock-adaptive frame/field frames (pair decoding order and the
+  inferred `mb_field_decoding_flag`, per-macroblock field views, geometric
+  neighbour derivation with frame/field MV and refIdx scaling, field
+  reference lists and weights, constrained intra per-half availability,
+  direct prediction across every frame/field co-located combination, and the
+  MBAFF deblocking rules: mixed left edges with eight strengths, the
+  doubly-filtered top edge, mixed horizontal edges). Byte-identical to ffmpeg
+  7.1 on 131 of the 137 FATE H.264 conformance streams (all but the six
+  Extended-profile FMO/SP ones) and on x264 `--interlaced` 4:2:0/4:2:2
+  output, through the rgb24 pipe too; that includes two ffmpeg quirks (the
+  top-left intra sample with `disable_deblocking_filter_idc` 2 in field
+  pictures, and `tc0_table` past bS 3 on MBAFF left edges).
+- **`codec::ffcompat::sws_generic`**: libswscale's filtered YUV -> rgb24 path
+  (bicubic `initFilter`, NEON filter alignment, `hScale`, `yuv2rgb24_{1,2,X}`
+  and `_full`), used by `ffcompat::reader` for 10-bit (and up to 16-bit)
+  input, odd heights and unsubsampled chroma; plus the 8-bit 4:2:2 `yuv2rgb`
+  converter. Byte-identical to moviepy's ffmpeg pipe on H.264 High10, HEVC
+  Main10 (incl. BT.2020/HLG and full-range BT.709) and 4:2:2 8/10-bit.
+- **HE-AAC v1/v2** in `threers::codec::aac`: SBR (explicit, sync-extension
+  and implicit signalling; coupled stereo; single-rate/downsampled) and
+  parametric stereo (20 and 34 bands, IPD/OPD, mono decoded as stereo as
+  ffmpeg does), bit-identical to ffmpeg 7.1 (aarch64) on Apple-encoded
+  files and the ISO/CT HE-AAC conformance streams. The NEON `sbrdsp` /
+  `psdsp` kernels are followed lane by lane; the PS tables are
+  `ps_tableinit` evaluated as an optimised build does (clang merges
+  `sinf`/`cosf` into `__sincosf_stret`, which rounds differently). Also
+  single-element PCE configurations and the standalone NEON 32-point FFT.
+- **swr fix**: the resampler's scalar tail after the NEON block is unfused,
+  as in the reference; fused, 0.2% of 48 -> 44.1 kHz outputs were 1 ulp off
+  (one s16 value in 5 M).
+- **MP3** (`threers::codec::mp3`): MPEG-1/2/2.5 layer III as `soundfile.read`
+  returns it (libsndfile 1.2.2 driving mpg123 1.32.3, arm64): the bit
+  reservoir, Xing/Info + LAME gapless trimming, libsndfile's frame count
+  (including the no-tag estimate), the `sf_seek(0)` soundfile issues, free
+  format, ID3v2 and leading junk. mpg123's float kernels (`dct12`,
+  `dct36_neon64`, `dct64_real_neon64`, the NEON synths, the vectorised
+  antialias loop) are fast-math builds, so they are generated from its
+  machine code and run on a small AArch64 model (`mp3::cpu`). Bit-identical
+  on the ISO conformance streams and 30 real-world files. Layers I/II are
+  not decoded.
+- **`codec::audio_file::read`**: WAV / AIFF / FLAC / Ogg / AAC-in-MP4 / MP3
+  by content, normalised as libsndfile does.
+- **Arbitrary display rotations**: ffmpeg's `rotate` filter (fixed-point
+  bilinear, black fill) for non-right angles in `ffcompat::reader`.
+- **PCM files** (`threers::codec::pcm`): WAV/RF64 and AIFF/AIFF-C reading
+  (libsndfile normalisation) and 16-bit WAV writing.
+- **ffmpeg CLI audio conversion** (`threers::codec::swr`): libswresample's
+  default `aresample` path for `-f s16le -ar RATE -ac 1|2` — mono upmix,
+  stereo downmix,
+  Kaiser polyphase resampler (exact-rational phases, NEON dot products,
+  start/end reflections) and the NEON/`lrintf` s16 conversion split per call.
+  Bit-identical to ffmpeg 7.1 on 18 test files (8–96 kHz, ffmpeg and Apple
+  encoders, MP4/M4A/MOV).
+
+### Fixed
+
+- `hevc_ffmpeg`'s monochrome check is skipped with ffmpeg 8.0, whose HEVC
+  decoder misdecodes the 4:0:0 stream that 8.1 reproduces exactly.
+- `videotoolbox_decode` did not compile since AV1 joined `TrackCodec`; AV1
+  and VP9 tracks are now refused with an error, so `decode::Decoder` falls
+  back to the native decoder for them.
+- VideoToolbox MP4s carried a garbled `hvcC` profile, read from fixed SPS
+  byte offsets: the compatibility flags held the SPS's VPS-id byte, the
+  constraint flags held the compatibility flags, the level was read a byte
+  late, and emulation prevention was not removed. It now comes from
+  `HvccProfile::from_sps`.
+- WebM AV1 tracks were written with codec ID `V_AV01`; Matroska's is `V_AV1`,
+  which is what demuxers (this crate's included) look for.
+- Refraction glass on WebGL2 marched an empty depth: the opaque depth was
+  copied into the pass's sampleable depth with `copy_texture_to_texture`,
+  which wgpu's GL backend does through `glCopyTexSubImage2D` — colour only — so
+  every frame failed ("Depth stencil texture in color attachment"). Where
+  depth cannot be copied (`caps::supports_depth_copies`), it is now drawn
+  across by a fullscreen pass.
+- `ShadowMaterial` in the three.js shim takes `color`, as three.js's does; it
+  was always black.
+- Glass in the `Refract`, `Oit` and `Glass` transparency modes now casts
+  shadows. Those modes draw through passes of their own, and the shadow
+  passes skipped them, so a refracting object stood over the floor with no
+  shadow under it (only `Blend` cast). Solid glass casts fully, thin glass
+  lightly, as documented; `tests/glass_shadows.rs` checks every mode.
+- `decode::av1` and `decode::vp9` are now gated like the rest of the video
+  decoders (`video` / `native-decode`); builds with only `native-codec`
+  failed to compile.
+
 ## [0.0.8] — 2026-10-24
 
 ### Added
@@ -317,6 +647,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the version already on crates.io.
 
 ### Fixed
+
+- `ffcompat` Matroska timing: `av_reduce` compared the original fraction,
+  not the continued-fraction remainders, when deciding on a semiconvergent
+  (a 33.333333 ms DefaultDuration gave 29971/999 instead of 30).
 
 - **Extruded polygon walls faced inward when a ring ran clockwise.** Their
   normals pointed out, but each wall quad was wound the same way whatever
@@ -5247,7 +5581,8 @@ on, and a second crate to make things move.
 - Opt-in `mesh-bvh` and `bvh-csg` (three-mesh-bvh / three-bvh-csg parity).
 - Web shim (`THREE.*`) and parity tooling.
 
-[Unreleased]: https://github.com/eugenehp/threers/compare/v0.0.8...HEAD
+[Unreleased]: https://github.com/eugenehp/threers/compare/v0.0.9...HEAD
+[0.0.9]: https://github.com/eugenehp/threers/compare/v0.0.8...v0.0.9
 [0.0.8]: https://github.com/eugenehp/threers/compare/v0.0.7...v0.0.8
 [0.0.7]: https://github.com/eugenehp/threers/compare/v0.0.6...v0.0.7
 [0.0.6]: https://github.com/eugenehp/threers/compare/v0.0.5...v0.0.6

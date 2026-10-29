@@ -46,7 +46,7 @@
 //! | `nurbs` | NURBS curve/surface + geometry (`nurbs`) |
 //! | `raytrace` | Path tracer entry points (`raytrace`) |
 //! | [`captions`] | Cue tracks / overlay (`captions`) |
-//! | `video` | GIF/APNG/WebM/H.264/HEVC encoders, MP4, and the decoders (`native-codec`; decoders also `video`) |
+//! | `video` | GIF/APNG/WebM/H.264/HEVC encoders, MP4, the hardware-first `Mp4Encoder`, and the decoders (`native-codec`; decoders also `video` or `native-decode`) |
 //!
 //! # What is deliberately not in any prelude module
 //!
@@ -189,15 +189,18 @@ pub mod raytrace {
     };
 }
 
-/// Video and animation codecs (`native-codec`), and the decoders (`video`).
+/// Video and animation codecs (`native-codec`), and the decoders (`video` or
+/// `native-decode`). The codec crate's own prelude, `threers::codec::prelude`,
+/// goes further: audio, containers and every codec module.
 ///
 /// `h264` and `hevc` are imported as modules because both have a
 /// `CompressedEncoder`: write `h264::CompressedEncoder`.
 #[cfg(feature = "native-codec")]
 pub mod video {
-    #[cfg(feature = "video")]
+    #[cfg(any(feature = "video", feature = "native-decode"))]
     pub use crate::codec::decode::{Backend, DecodedFrame, Decoder, NativeDecoder};
     pub use crate::codec::hevc::Yuv420Frame;
+    pub use crate::codec::hw::{EncodeBackend, EncodeOptions, Mp4Encoder};
     pub use crate::codec::{
         encode_animation_rgba, encode_webm, h264, hevc, mp4, mp4_demux, AnimationEncodeOptions,
         ApngEncoder, BrowserCodec,

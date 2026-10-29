@@ -34,7 +34,7 @@ machinery as an API, so a believable planet is a builder rather than a thousand
 lines of example:
 
 ```rust
-// Cargo.toml: threers = { version = "0.0.8", features = ["planet"] }
+// Cargo.toml: threers = { version = "0.0.9", features = ["planet"] }
 use threers::planet::{EarthTextures, Planet, Starfield};
 
 let mut scene = threers::Scene::new();

@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>time smear — threers</title>
+  <link rel="stylesheet" href="/web/examples/controls-demo.css">
+  <style>
+    .toolbar {
+      display: flex; flex-wrap: wrap; gap: 14px; align-items: center;
+      padding: 12px 16px; border-bottom: 1px solid var(--border);
+      background: var(--panel); font-size: 13px;
+    }
+    .toolbar label { color: var(--muted); display: flex; gap: 6px; align-items: center; }
+    .toolbar select, .toolbar button {
+      font: inherit; padding: 5px 9px; border-radius: 6px;
+      border: 1px solid var(--border); background: var(--bg); color: var(--text);
+    }
+    .toolbar input[type=range] { width: 110px; }
+    .toolbar output { min-width: 2.6em; color: var(--text); font-variant-numeric: tabular-nums; }
+    #status { color: var(--muted); margin-left: auto; }
+    .stage { display: flex; gap: 8px; padding: 12px 16px; flex-wrap: wrap; }
+    .stage figure { margin: 0; flex: 1 1 420px; }
+    .stage canvas { width: 100%; aspect-ratio: 16 / 9; display: block; background: #0b0c10; border-radius: 6px; }
+    .stage figcaption { color: var(--muted); font-size: 12px; padding: 4px 2px; }
+    #source-fig[hidden] { display: none; }
+    .scrub { padding: 0 16px; display: flex; gap: 10px; align-items: center; font-size: 13px; color: var(--muted); }
+    .scrub input { flex: 1; }
+    #gpu { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+    #err { color: #f66; padding: 8px 16px; white-space: pre-wrap; }
+    .note { padding: 8px 16px 16px; color: var(--muted); font-size: 13px; line-height: 1.5; max-width: 820px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>threers <span class="tag">· time smear</span></h1>
+    <span class="status" id="backend">wasm</span>
+    <nav>
+      <a href="/web/examples/">all examples</a>
+      <a href="?gl=1">WebGL2</a>
+      <a href="?">WebGPU</a>
+    </nav>
+  </header>
+  <div class="toolbar">
+    <label>look
+      <select id="look">
+        <option value="faithful">faithful</option>
+        <option value="ghost" selected>ghost</option>
+        <option value="raw">raw</option>
+        <option value="echo">echo</option>
+      </select>
+    </label>
+    <label>strength <input id="strength" type="range" min="0" max="1" step="0.01" value="0.35"><output></output></label>
+    <label>reach <input id="reach" type="range" min="0" max="1" step="0.01" value="0.55"><output></output></label>
+    <label>gain <input id="gain" type="range" min="0" max="8" step="0.1" value="0"><output></output></label>
+    <label>rotation
+      <select id="rotation">
+        <option value="x">X</option><option value="y">Y</option>
+        <option value="xy">XY</option><option value="yx">YX</option>
+      </select>
+    </label>
+    <label>work width
+      <select id="work">
+        <option>80</option><option selected>160</option><option>240</option><option>480</option>
+      </select>
+    </label>
+    <label><input id="adaptive" type="checkbox"> adaptive</label>
+    <label><input id="split" type="checkbox" checked> source</label>
+    <button id="play">pause</button>
+    <span id="status">loading…</span>
+  </div>
+  <div class="stage">
+    <figure id="source-fig"><canvas id="source"></canvas><figcaption>source</figcaption></figure>
+    <figure><canvas id="out"></canvas><figcaption id="out-cap">time smear</figcaption></figure>
+  </div>
+  <div class="scrub">frame <input id="frame" type="range" min="0" max="159" value="0"><output id="frame-out">0</output></div>
+  <div id="err"></div>
+  <p class="note">
+    The scene is rendered once by threers, then every pixel's brightness over
+    64-frame windows is sent through a Gray-coded interference transform
+    (<code>threers::time_smear</code>, the same Rust as native, in wasm). Moving
+    things echo at specific frames on <em>both</em> sides of where they are:
+    the pink box is only there for frames 70–85, yet its ghost arrives early.
+    The backdrop never changes, so it is left exactly alone. Gain 0 means the
+    look's own default.
+  </p>
+  <canvas id="gpu" width="480" height="270"></canvas>
+  <script type="module" src="/web/examples/time-smear-demo.js"></script>
+</body>
+</html>

@@ -71,6 +71,21 @@ pub struct BitmapGlyphs {
     /// glyph's own): a canvas places glyphs at quarter pixels, so a glyph
     /// whose pen lands between pixels is drawn there rather than moved.
     pub phases: HashMap<u32, [BitmapGlyph; 3]>,
+    /// The pre-packed atlas the glyphs came from ([`from_canvas_atlas`](Self::from_canvas_atlas)),
+    /// whole: drawn from as it is, each glyph's box where the atlas's
+    /// mapping put it, fractions and all — as deck.gl samples its own
+    /// canvas — rather than from the glyphs' images cut out of it.
+    pub page: Option<std::sync::Arc<GlyphPage>>,
+}
+
+/// A pre-packed glyph atlas image (straight-alpha RGBA) and each glyph's
+/// box in it, `[x, y, width, height]` in pixels.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GlyphPage {
+    pub rgba: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+    pub boxes: HashMap<u32, [f32; 4]>,
 }
 
 /// A glyph's place in a pre-packed atlas image, as deck.gl's font atlas
@@ -126,7 +141,26 @@ impl BitmapGlyphs {
                 },
             );
         }
-        Self { size, ascent, descent, glyphs, sdf: None, canvas: false, phases: HashMap::new() }
+        Self { size, ascent, descent, glyphs, sdf: None, canvas: false, phases: HashMap::new(), page: None }
+    }
+
+    /// [`from_atlas`](Self::from_atlas) for an atlas that is deck.gl's own
+    /// canvas (its `fillText` atlas, captured from a browser): kept whole as
+    /// the [`page`](Self::page) glyphs are drawn from, each at its box.
+    pub fn from_canvas_atlas(
+        rgba: &[u8],
+        width: u32,
+        height: u32,
+        frames: impl IntoIterator<Item = (char, AtlasFrame)>,
+        size: f32,
+        ascent: f32,
+        descent: f32,
+    ) -> Self {
+        let frames: Vec<(char, AtlasFrame)> = frames.into_iter().collect();
+        let boxes = frames.iter().map(|(c, f)| (*c as u32, [f.x, f.y, f.width, f.height])).collect();
+        let mut set = Self::from_atlas(rgba, width, height, frames, size, ascent, descent);
+        set.page = Some(std::sync::Arc::new(GlyphPage { rgba: rgba.to_vec(), width, height, boxes }));
+        set
     }
 
     /// `chars` of `font` rasterized at `size` pixels per em — what a
@@ -193,7 +227,7 @@ impl BitmapGlyphs {
             phases.insert(c as u32, [phase(font, 1), phase(font, 2), phase(font, 3)]);
             glyphs.insert(c as u32, glyph);
         }
-        Self { size, ascent: m.ascent.ceil(), descent: m.descent.ceil(), glyphs, sdf: None, canvas: true, phases }
+        Self { size, ascent: m.ascent.ceil(), descent: m.descent.ceil(), glyphs, sdf: None, canvas: true, phases, page: None }
     }
 
     /// Every glyph as a signed distance field ([`tiny_sdf`]), `buffer`
@@ -225,7 +259,7 @@ impl BitmapGlyphs {
                 )
             })
             .collect();
-        Self { glyphs, sdf: Some(settings), canvas: false, phases: HashMap::new(), ..self.clone() }
+        Self { glyphs, sdf: Some(settings), canvas: false, phases: HashMap::new(), page: None, ..self.clone() }
     }
 
     /// `c` at `size` pixels per em, resampled to coverage — for

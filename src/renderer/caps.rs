@@ -70,6 +70,15 @@ pub fn supports_multisampled_textures(device: &wgpu::Device) -> bool {
     supports_compute(device)
 }
 
+/// Whether this device can copy a depth texture to another. WebGL2 cannot:
+/// wgpu's GL backend copies through `glCopyTexSubImage2D`, which takes colour
+/// attachments only, and every frame fails with "Depth stencil texture in
+/// color attachment". Like the others here, read off the limits — WebGL2 is
+/// the device without compute.
+pub fn supports_depth_copies(device: &wgpu::Device) -> bool {
+    supports_compute(device)
+}
+
 /// Whether this device can run compute passes.
 pub fn supports_compute(device: &wgpu::Device) -> bool {
     limits_support_compute(&device.limits())
@@ -80,19 +89,29 @@ pub fn supports_storage_buffers(device: &wgpu::Device) -> bool {
     limits_support_storage_buffers(&device.limits())
 }
 
-/// Whether a `ShaderMaterial`'s two volume slots fit beside everything else
-/// it binds.
+/// Sampled textures the custom (`ShaderMaterial`) pipeline layout binds, the
+/// two volume slots included: frame (1) + the mesh/user group with the volumes
+/// (9) + the shared custom tex group (2) + the environment (2).
 ///
-/// WebGPU, Metal and Vulkan count sampled textures per shader stage, and the
-/// custom layout's fourteen are inside the floor of sixteen. wgpu's GL backend
-/// instead gives every texture entry in the whole pipeline layout a unit of
-/// its own, and WebGL2 has sixteen: the custom layout comes to eighteen with
-/// the volumes and exactly sixteen without, and going over panics inside
-/// wgpu-hal rather than failing validation. WebGL2 is also the only backend
-/// here without storage buffers, which is the test used — the same one that
-/// leaves the storage slots out.
+/// It is the same fourteen on every backend. WebGPU, Metal and Vulkan count
+/// sampled textures per shader stage, where the full environment's shadow maps
+/// and area-light table do not push a `ShaderMaterial` — which does its own
+/// lighting and samples none of them — over the floor of sixteen. wgpu's GL
+/// backend instead gives every texture entry in the whole pipeline layout a
+/// unit of its own, and WebGL2 has sixteen; there the custom pipeline takes a
+/// trimmed environment (the IBL cube and its 2D fallback, nothing else) so the
+/// count comes to this same fourteen rather than the eighteen the full group
+/// plus volumes would — and going over panics inside wgpu-hal rather than
+/// failing validation. See the custom env layout in `renderer`.
+pub const CUSTOM_LAYOUT_TEXTURES: u32 = 14;
+
+/// Whether a `ShaderMaterial`'s two volume slots (two 3D textures and a
+/// sampler) fit beside everything else it binds. They are not storage buffers
+/// — WebGL2 has 3D textures — so the test is the custom layout's texture
+/// budget, which the renderer keeps to [`CUSTOM_LAYOUT_TEXTURES`] on every
+/// backend, not whether storage buffers exist.
 pub fn supports_shader_material_volumes(device: &wgpu::Device) -> bool {
-    supports_storage_buffers(device)
+    device.limits().max_sampled_textures_per_shader_stage >= CUSTOM_LAYOUT_TEXTURES
 }
 
 #[cfg(test)]

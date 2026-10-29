@@ -42,6 +42,11 @@ pub struct ShapeMarks {
     /// Repeat the texture past uvs of 0 and 1 (glTF's default); otherwise
     /// clamp to its edge.
     pub texture_repeat: bool,
+    /// With a [GPU texture](Self::set_gpu_texture): the texture is the
+    /// colour as it is — its premultiplied texels lit as they are, empty
+    /// ones transparent but still in the depth buffer (deck.gl's terrain
+    /// `TERRAIN_MODE_USE_COVER_ONLY`). Otherwise empty texels are not drawn.
+    pub cover_only: bool,
     mesh_dirty: bool,
     mesh_gpu: Option<MeshGpu>,
     positions: Column,
@@ -72,6 +77,7 @@ impl ShapeMarks {
             texture_version: None,
             texture_rect: [0.0, 0.0, 1.0, 1.0],
             texture_repeat: true,
+            cover_only: false,
             mesh_dirty: true,
             mesh_gpu: None,
             positions: Column::new(ColumnFormat::PositionF64),
@@ -304,24 +310,34 @@ impl Mark for ShapeMarks {
         if !self.mesh_dirty || self.mesh.0.is_empty() {
             return;
         }
-        // position, normal, uv (in the atlas), colour.
+        // position, normal, uv (in the atlas), colour, and the vertex's
+        // triangle's corners — so the mesh is drawn unindexed, each vertex
+        // knowing its triangle (for `MarkView::swiftshader_depth`).
         let n = self.mesh.0.len() / 6;
-        let mut data = Vec::with_capacity(n * 12);
-        for i in 0..n {
-            data.extend_from_slice(&self.mesh.0[i * 6..i * 6 + 6]);
-            data.extend_from_slice(self.uvs.get(i * 2..i * 2 + 2).unwrap_or(&[0.0, 0.0]));
-            data.extend_from_slice(self.vertex_colors.get(i * 4..i * 4 + 4).unwrap_or(&[1.0; 4]));
+        let order: Vec<u32> = match &self.mesh.1 {
+            Some(idx) if !idx.is_empty() => idx.clone(),
+            _ => (0..n as u32).collect(),
+        };
+        let pos = |v: u32| &self.mesh.0[v as usize * 6..v as usize * 6 + 3];
+        let mut data = Vec::with_capacity(order.len() * 21);
+        for tri in order.chunks(3) {
+            for &v in tri {
+                let i = v as usize;
+                data.extend_from_slice(&self.mesh.0[i * 6..i * 6 + 6]);
+                data.extend_from_slice(self.uvs.get(i * 2..i * 2 + 2).unwrap_or(&[0.0, 0.0]));
+                data.extend_from_slice(self.vertex_colors.get(i * 4..i * 4 + 4).unwrap_or(&[1.0; 4]));
+                for k in 0..3 {
+                    data.extend_from_slice(tri.get(k).map_or(&[0.0f32; 3][..], |&c| pos(c)));
+                }
+            }
         }
+        let vertices = (data.len() / 21) as u32;
         // The same shape moved (a posed model's next frame): write into the
         // buffers it has.
         let bytes = (data.len() * 4) as u64;
-        let index_len = self.mesh.1.as_ref().map_or(0, |i| i.len()) as u32;
-        if let Some((vb, _, ib)) = &self.mesh_gpu {
-            if vb.size() == bytes && ib.as_ref().map_or(0, |(_, n)| *n) == index_len {
+        if let Some((vb, _, _)) = &self.mesh_gpu {
+            if vb.size() == bytes {
                 ctx.queue.write_buffer(vb, 0, bytemuck::cast_slice(&data));
-                if let (Some((b, _)), Some(idx)) = (ib, self.mesh.1.as_ref()) {
-                    ctx.queue.write_buffer(b, 0, bytemuck::cast_slice(idx));
-                }
                 self.mesh_dirty = false;
                 return;
             }
@@ -333,17 +349,7 @@ impl Mark for ShapeMarks {
             mapped_at_creation: false,
         });
         ctx.queue.write_buffer(&vb, 0, bytemuck::cast_slice(&data));
-        let ib = self.mesh.1.as_ref().filter(|i| !i.is_empty()).map(|idx| {
-            let b = ctx.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("threers shape marks indices"),
-                size: (idx.len() * 4) as u64,
-                usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            ctx.queue.write_buffer(&b, 0, bytemuck::cast_slice(idx));
-            (b, idx.len() as u32)
-        });
-        self.mesh_gpu = Some((vb, (self.mesh.0.len() / 6) as u32, ib));
+        self.mesh_gpu = Some((vb, vertices, None));
         self.mesh_dirty = false;
     }
     fn release_gpu(&mut self) {
@@ -365,9 +371,11 @@ impl Mark for ShapeMarks {
     }
 
     /// Bit 0: the texture holds premultiplied sRGB bytes in a linear
-    /// format ([`set_gpu_texture`](Self::set_gpu_texture)).
+    /// format ([`set_gpu_texture`](Self::set_gpu_texture)); bit 1: it is
+    /// drawn [as it is](Self::cover_only).
     fn kind_flags(&self) -> u32 {
-        u32::from(self.gpu_texture.is_some())
+        let gpu = self.gpu_texture.is_some();
+        u32::from(gpu) | (u32::from(gpu && self.cover_only) << 1)
     }
     fn extra_bind_group(&self) -> Option<&wgpu::BindGroup> {
         self.texture_gpu.as_ref().map(|g| &g.1)

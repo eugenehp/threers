@@ -24,6 +24,8 @@ pub enum ColumnFormat {
     Float3x2,
     /// Eight floats a row, read as two `vec4<f32>` attributes.
     Float4x2,
+    /// Sixteen floats a row, read as four `vec4<f32>` attributes.
+    Float4x4,
     /// An absolute `f64` position stored as `(hi, lo)` `f32` triples — see
     /// [`split_f64`](super::split_f64). Two shader attributes.
     PositionF64,
@@ -44,6 +46,7 @@ impl ColumnFormat {
             ColumnFormat::PositionF64 | ColumnFormat::Float3x2 => 24,
             ColumnFormat::PositionLocal => 12,
             ColumnFormat::Float4x2 => 32,
+            ColumnFormat::Float4x4 => 64,
         }
     }
 
@@ -76,6 +79,13 @@ impl ColumnFormat {
                     shader_location: first_location + 1,
                 },
             ],
+            ColumnFormat::Float4x4 => (0..4)
+                .map(|k| wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Float32x4,
+                    offset: 16 * k as u64,
+                    shader_location: first_location + k,
+                })
+                .collect(),
             ColumnFormat::Unorm8x4 => vec![wgpu::VertexAttribute {
                 format: wgpu::VertexFormat::Unorm8x4,
                 offset: 0,
@@ -423,6 +433,14 @@ fn pack_f32(format: ColumnFormat, values: &[f32]) -> Vec<u8> {
             assert!(
                 values.len().is_multiple_of(8),
                 "{} floats is not a whole number of 8-float rows",
+                values.len()
+            );
+            bytemuck::cast_slice(values).to_vec()
+        }
+        ColumnFormat::Float4x4 => {
+            assert!(
+                values.len().is_multiple_of(16),
+                "{} floats is not a whole number of 16-float rows",
                 values.len()
             );
             bytemuck::cast_slice(values).to_vec()

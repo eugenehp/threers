@@ -7,7 +7,7 @@ API, so existing three.js code runs with an import change.
 
 [![crates.io](https://img.shields.io/crates/v/threers.svg)](https://crates.io/crates/threers)
 [![docs.rs](https://docs.rs/threers/badge.svg)](https://docs.rs/threers)
-· **0.0.8** · [Changelog](CHANGELOG.md) · MIT
+· **0.0.9** · [Changelog](CHANGELOG.md) · MIT
 
 ## Quick start
 
@@ -75,6 +75,8 @@ self-contained subsystem, behind a Cargo feature where it says so.
 | [Materials](docs/materials.md) | Clearcoat, transmission, dispersion, anisotropy, sheen, iridescence; HDR pipeline, IBL, area lights |
 | [Fur and hair](docs/materials.md#fur) | Shell fur and strand hair, on static or skinned meshes: wind, drag and inertia, shadows, MSAA per strand, a hand that strokes them; `THREE.Fur` and `THREE.Hair` in the shim, demo in `web/examples/fur.html` |
 | [Particles, snow and sand](docs/particles.md) | Emitters with drag, turbulence and buoyancy; snow and sand that pile up at their angle of repose, drift and form dunes; lit, shadowed, black-body fire and smoke; GPU weather; dune seas shaded after Journey's sand; `THREE.Particles`, `THREE.SandBed` and `THREE.DesertSky` in the shim, demos in `web/examples/particles.html` and `dunes.html` |
+| [Soft bodies](docs/softbody.md) | Gummy creatures that tear and grow back: XPBD on tetrahedral lattices, built from SDF shapes, parts glued on, chains, goo; on the CPU (bit for bit the JavaScript original) or as WebGPU compute; `THREE.SoftBody` in the shim, demo in `web/examples/jelly.html` |
+| [Time smear](docs/time-smear.md) | Echoes in time over a rendered or decoded clip: moving things ghost at Gray-coded frames before and after themselves, still ones come back byte for byte; streams into the video exporters, any renderer (wgpu, Metal); `THREE.TimeSmear` in the shim, demo in `web/examples/time-smear.html` |
 | [Interactive effects](docs/fx.md) · [SDF](docs/sdf.md) | Glossy liquids that react to the pointer on buttons and any shape (`Venom`, `Gloss`), as components, effects and a stage you can add to; exact 2D/3D signed distance fields with smooth operators, ray marching and meshing, the same in WGSL |
 | [Colour](docs/colors.md) | Colour spaces (OkLCh, CIELAB, HSV, …), every CSS Color 4 string, ColorBrewer and Tableau schemes, d3-style log, quantile and threshold scales |
 | [Marks](docs/marks.md) | Data layers for maps, from points, paths and polygons to labels, heatmaps and tiles. `f64` precision, GPU filtering and picking, `MapView` and globe controls |
@@ -89,7 +91,7 @@ self-contained subsystem, behind a Cargo feature where it says so.
 | [NURBS, B-rep, STEP](docs/brep-nurbs-plan.md) (`nurbs`, `brep`, `step`) | Exact curved surfaces, analytic booleans, ISO 10303-21 |
 | [Lattices](docs/lattices.md) · [Kirigami](docs/kirigami.md) | 43 lattice generators — TPMS, struts, textiles, infill, foams on random, crystal, relaxed and two-size seeds, grown grains — with physical properties, print checks and simplification; foldable sheets |
 | [USD](docs/usd.md) (`usd`) · [glTF](docs/gltf.md) · [Draco](docs/draco.md) · [KTX2](docs/ktx2.md) · [Alembic](docs/alembic.md) | Interchange, read and written where the format allows |
-| [Video](docs/codecs.md) (`video`, `native-codec`, `gif`) · [Captions](docs/captions.md) · [SVG](docs/svg.md) | GIF, APNG, WebM, H.264 and HEVC in pure Rust; SRT/WebVTT; vector output |
+| [Video](docs/codecs.md) (`video`, `native-codec`, `native-decode`, `gif`, `nvidia`, `vaapi`) · [Captions](docs/captions.md) · [SVG](docs/svg.md) | GIF, APNG, WebM, H.264 and HEVC encoders, H.264/HEVC/VP9/AV1 and AAC/MP3/Opus/Vorbis/FLAC decoders in pure Rust (also standalone as [`threers-codec`](crates/threers-codec)), hardware through VideoToolbox (macOS), NVENC/NVDEC (NVIDIA) and VAAPI (AMD, Intel); SRT/WebVTT; vector output |
 | [Metal and visionOS](docs/apple-platforms.md) (`metal`, `visionos`) | A second renderer on Metal, and the CompositorServices loop |
 | [RLX](docs/rlx.md) (`rlx`, `rlx-geo`) · [Physics](docs/physics.md) | Tensors and learned grading; rigid bodies in `threers-physics` |
 
@@ -132,12 +134,24 @@ Interactive ones open a window, for example `cargo run --release --example
 map_demo --features captions`, `--example marks_map` or `--example venom_button`. The rest of
 [`examples/`](examples/) export video or print numbers.
 
+In the browser, [`web/examples/jelly.html`](web/examples/jelly.html) is a set of
+gummy creatures you can pull apart: tentacles, arms, tails and ears tear off,
+twitch on the table and grow back. Each is a few `THREE.SDF` fields meshed by
+surface nets in wasm, on an XPBD soft body (`THREE.SoftBody`), drawn as
+refracting gel. See [docs/softbody.md](docs/softbody.md).
+
+| | | | |
+|---|---|---|---|
+| <a href="docs/web.md"><img src="https://raw.githubusercontent.com/eugenehp/threers/main/docs/images/gummy_jellyfish.jpg" width="200" alt="gummy jellyfish"></a><br><sub><code>?creature=jellyfish</code></sub> | <a href="docs/web.md"><img src="https://raw.githubusercontent.com/eugenehp/threers/main/docs/images/gummy_octopus.jpg" width="200" alt="gummy octopus"></a><br><sub><code>?creature=octopus</code></sub> | <a href="docs/web.md"><img src="https://raw.githubusercontent.com/eugenehp/threers/main/docs/images/gummy_gecko.jpg" width="200" alt="gummy gecko"></a><br><sub><code>?creature=gecko</code></sub> | <a href="docs/web.md"><img src="https://raw.githubusercontent.com/eugenehp/threers/main/docs/images/gummy_bear.jpg" width="200" alt="gummy bear"></a><br><sub><code>?creature=bear</code></sub> |
+
 ## Documentation
 
 Start with [getting started](docs/getting-started.md). Every guide is in
 [`docs/`](docs/), and each one stands alone:
 [architecture](docs/architecture.md) · [controls](docs/controls.md) ·
 [interactive effects](docs/fx.md) · [signed distance fields](docs/sdf.md) ·
+[soft bodies](docs/softbody.md) ·
+[time smear](docs/time-smear.md) ·
 [animation](docs/animation.md) · [camera animation](docs/camera-animation.md) ·
 [scroll video](docs/scroll-video.md) · [parity with three.js](docs/parity.md) ·
 [releasing](docs/releasing.md).

@@ -106,6 +106,20 @@ impl Scene {
         id
     }
 
+    /// Give the scene root a fixed transform that every object inherits — the
+    /// single orienting/centring group a host app (e.g. a viewer that rotates
+    /// its whole scene) would otherwise keep on the CPU side. `update_world`
+    /// composes it into each child's world matrix, so cameras, picking and
+    /// rendering all see the objects in that frame. Takes the matrix as given
+    /// (auto-recompose from position/quaternion/scale is turned off on the root).
+    pub fn set_root_transform(&mut self, matrix: Matrix4) {
+        if let Some(root) = self.arena.get_mut(self.root) {
+            root.matrix = matrix;
+            root.matrix_auto_update = false;
+            root.matrix_world_auto_update = true;
+        }
+    }
+
     pub fn get(&self, id: ObjectId) -> Option<&Object3D> {
         self.arena.get(id)
     }

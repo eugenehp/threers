@@ -1,6 +1,6 @@
 [package]
 name = "threers-py"
-version = "0.0.8"
+version = "0.0.9"
 edition = "2021"
 authors = ["Eugene Hauptmann"]
 description = "Python bindings for threers — headless render, math, animation, and physics (PyO3 / maturin)"
@@ -33,8 +33,8 @@ animation = ["dep:threers-animation"]
 usd = ["threers/usd"]
 
 [dependencies]
-threers = { path = "../..", version = "0.0.8" }
-threers-physics = { path = "../threers-physics", version = "0.0.8", optional = true }
+threers = { path = "../..", version = "0.0.9" }
+threers-physics = { path = "../threers-physics", version = "0.0.9", optional = true }
 threers-animation = { path = "../threers-animation", version = "0.0.1", optional = true, default-features = false }
 pyo3 = { version = "0.23", features = ["extension-module", "abi3-py39"] }
 

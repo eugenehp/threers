@@ -11,7 +11,7 @@ use threers::sdf::{self, d2, d3};
 use wgpu::util::DeviceExt;
 
 /// Functions per point; the shader writes them in this order.
-const FUNCS: usize = 25;
+const FUNCS: usize = 26;
 
 const SHADER: &str = r#"
 @group(0) @binding(0) var<storage, read> pts: array<vec4<f32>>;
@@ -26,7 +26,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let p3 = q.xyz;
     let a = q.w;            // a second free value, for the operators
     let b = q.x - q.y;
-    var r: array<f32, 25>;
+    var r: array<f32, 26>;
     r[0] = sdf2_circle(p2, 1.3);
     r[1] = sdf2_rect(p2, vec2<f32>(2.0, 0.7));
     r[2] = sdf2_round_rect(p2, vec2<f32>(2.0, 0.7), 0.5);
@@ -53,8 +53,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     r[22] = sdf2_footprint(p2);
     r[23] = sdf_coverage_edge(a * 0.3, sdf2_footprint(p2));
     r[24] = sdf_coverage_stroke(a * 0.4, abs(b) * 0.15, sdf2_footprint(p2));
-    for (var k = 0u; k < 25u; k = k + 1u) {
-        out[i * 25u + k] = r[k];
+    r[25] = sdf3_ellipsoid(p3, vec3<f32>(1.0, 0.5, 2.0));
+    for (var k = 0u; k < 26u; k = k + 1u) {
+        out[i * 26u + k] = r[k];
     }
 }
 "#;
@@ -96,6 +97,7 @@ fn cpu(q: [f32; 4]) -> [f32; FUNCS] {
         sdf::footprint(p2),
         sdf::coverage_edge(a * 0.3, sdf::footprint(p2)),
         sdf::coverage_stroke(a * 0.4, b.abs() * 0.15, sdf::footprint(p2)),
+        d3::ellipsoid(p3, v3(1.0, 0.5, 2.0)),
     ]
 }
 

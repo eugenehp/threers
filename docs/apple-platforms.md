@@ -20,7 +20,7 @@ cargo test --features metal --test metal_backend                       # 24 test
 ```
 
 ```rust
-// Cargo.toml: threers = { version = "0.0.8", features = ["metal"] }
+// Cargo.toml: threers = { version = "0.0.9", features = ["metal"] }
 use threers::metal::MetalHeadlessRenderer;
 
 let mut renderer = MetalHeadlessRenderer::builder().size(1280, 720).msaa(4).build()?;
@@ -78,7 +78,7 @@ declarations transcribed from the XROS SDK headers — still no new dependency, 
 build script, no `metal-rs`.
 
 ```rust
-// Cargo.toml: threers = { version = "0.0.8", features = ["visionos"] }
+// Cargo.toml: threers = { version = "0.0.9", features = ["visionos"] }
 use threers::metal::visionos::ImmersiveRenderer;
 
 #[no_mangle]

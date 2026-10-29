@@ -1,0 +1,30 @@
+[package]
+name = "threers-softbody"
+version = "0.0.9"
+edition = "2021"
+rust-version = "1.87"
+license = "MIT"
+authors = ["Eugene Hauptmann"]
+repository = "https://github.com/eugenehp/threers"
+homepage = "https://github.com/eugenehp/threers"
+documentation = "https://docs.rs/threers-softbody"
+readme = "README.md"
+description = "Soft bodies that tear and grow back: XPBD on tetrahedral lattices — a bit-for-bit port of Axolotl Jelly's solver — with an optional WebGPU-compute backend; threers' soft-body core, usable on its own"
+keywords = ["xpbd", "soft-body", "physics", "webgpu", "simulation"]
+categories = ["simulation", "game-development", "wasm"]
+include = ["src/**", "Cargo.toml", "README.md", "LICENSE"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[features]
+default = []
+# The solver's substeps as WebGPU compute (`gpu::GpuSolver`), on wgpu.
+gpu = ["dep:wgpu", "dep:bytemuck"]
+
+[dependencies]
+wgpu = { version = "30", optional = true }
+bytemuck = { version = "1.16", optional = true, features = ["derive"] }
+# fdlibm, as V8's Math.sin/exp/pow are: the solver matches its JavaScript
+# original (tests/softbody_parity.rs in threers).
+libm = "0.2"

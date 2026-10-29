@@ -9,7 +9,7 @@ cargo build --release --example codec_bench --features native-codec
 python3 scripts/codec_bench.py --clip all --out out/codec-bench
 ```
 
-`examples/codec_bench.rs` is the native arm — it encodes a raw `yuv420p` clip
+`crates/threers-codec/examples/codec_bench.rs` is the native arm — it encodes a raw `yuv420p` clip
 with each pure-Rust encoder and reports bytes and encode time.
 `scripts/codec_bench.py` prepares the clips, runs the ffmpeg and VideoToolbox
 arms, decodes every result back to `yuv420p`, and scores it.
@@ -86,7 +86,7 @@ it is invisible at the call site.
 
 **2. The native residual coder was non-conformant. Fixed — two wrong bytes in
 the CABAC tables.** `transIdxLps[28]` was 23 (spec: 22) and `rangeTabLps[31][0]`
-was 28 (spec: 29), in `src/codec/hevc/tables.rs`. Before the fix the residual
+was 28 (spec: 29), in `crates/threers-codec/src/hevc/tables.rs`. Before the fix the residual
 path scored PSNR ~5 dB and VMAF ~2 while producing files several times larger
 than the useless prediction-only path; after it, VMAF 94.9 at 0.16 MB.
 
@@ -94,9 +94,9 @@ Two things hid this. The encode↔decode round-trip test in `cabac.rs` uses the
 **same tables on both sides**, so it agrees with itself while disagreeing with
 the standard — a wrong constant is invisible to a symmetric test. And a CABAC
 context only reaches state 28 or 31 after a long one-sided run of bins, so the
-smooth images in `tests/hevc_compress.rs` never drove it there. It took an
+smooth images in `crates/threers-codec/tests/hevc_compress.rs` never drove it there. It took an
 external decoder *and* detailed content, which is what
-`tests/hevc_residual_conformance.rs` now does. `tables.rs` also carries a
+`crates/threers-codec/tests/hevc_residual_conformance.rs` now does. `tables.rs` also carries a
 structural-invariant test: the spec's `transIdxLps` is monotonically
 non-decreasing, and `..., 21, 21, 23, 22, 23, ...` is not — that one was
 findable with no reference at all.
@@ -155,7 +155,7 @@ This one was unambiguous — smaller *and* better on both metrics at every QP
 
 **5. Nothing could reach the compressed encoder.** `CompressedEncoder` was
 exported and used by no export path: both `src/video.rs` and the browser path in
-`src/codec/animation.rs` went through the `I_PCM` H.264 encoder. So the wasm MP4
+`crates/threers-codec/src/animation.rs` went through the `I_PCM` H.264 encoder. So the wasm MP4
 download — where ffmpeg genuinely cannot run and this matters most — was
 uncompressed. There is now `hevc::encode_compressed_mp4` and a
 `BrowserCodec::Mp4Hevc` that uses it.
@@ -288,7 +288,7 @@ gap, and it is smaller than the wall-clock impression suggests.
 
 Wall clock is worse than that, and for a separate reason. x264 and x265 use
 every core; both native encoders use exactly one — there is no `rayon`, no
-thread, nowhere in `src/codec/`. At 8K on an unloaded machine x265 finishes its
+thread, nowhere in `crates/threers-codec/src/`. At 8K on an unloaded machine x265 finishes its
 7.39 s of CPU in about 2.7 s of elapsed time, while the native HEVC encoder
 takes its full 21.5 s.
 
@@ -327,8 +327,8 @@ orders of magnitude smaller than the sources, and the file layout is
 
 The streaming forms are flat in clip length where the old ones grew ~50 MB per
 frame. Output is byte-identical, which the golden-checksum tests in
-`tests/h264_animation_parity.rs` already pinned and
-`tests/hevc_native_mp4.rs` now pins directly.
+`crates/threers-codec/tests/h264_animation_parity.rs` already pinned and
+`crates/threers-codec/tests/hevc_native_mp4.rs` now pins directly.
 
 The remaining 385 MB on the H.264 path is `I_PCM`'s own doing: its samples are
 as large as the raw frames, so they dominate once the sources are gone. The HEVC
@@ -338,7 +338,7 @@ the same conclusion as finding 1, arrived at from the memory side.
 Two smaller ones found along the way: `Yuv420Frame::from_rgba` allocated and
 filled an alpha plane for every frame and then discarded it whenever the input
 was opaque (33 MB per frame at 8K), and the browser path in
-`src/codec/animation.rs` collected every **RGBA** frame — 4 bytes per pixel,
+`crates/threers-codec/src/animation.rs` collected every **RGBA** frame — 4 bytes per pixel,
 133 MB each at 8K — before encoding. The MP4 codecs there now consume frames
 lazily; GIF, APNG and WebM still collect, because they genuinely need the whole
 set.
@@ -346,12 +346,12 @@ set.
 ## H.264: the native path now compresses
 
 Finding 1 above — the native H.264 encoder codes `I_PCM`, i.e. raw samples — was
-the largest single cause of a ballooning export. `src/codec/h264/` now carries a
+the largest single cause of a ballooning export. `crates/threers-codec/src/h264/` now carries a
 real intra encoder: the 4x4 integer transform and quantizer (`transform.rs`),
 nine luma and four chroma prediction modes (`intra.rs`), CAVLC residual coding
 (`cavlc.rs`), and `I_NxN` macroblock assembly (`compress.rs`). It is conformant —
 ffmpeg decodes to the encoder's own reconstruction bit-for-bit — across sizes,
-QPs and content, including a randomised sweep (`tests/h264_compress.rs`).
+QPs and content, including a randomised sweep (`crates/threers-codec/tests/h264_compress.rs`).
 
 Both export paths use it now: `VideoCodec::H264` and `BrowserCodec::Mp4`. Same
 codec, same universal playback reach, about **a hundredth the size**:
@@ -450,7 +450,7 @@ numbers are below; the photographic ones are the honest ones.
 `I_NxN` pays sixteen mode signals and sixteen coefficient tokens per macroblock
 whether or not there is anything to code. `I_16x16` predicts the whole macroblock
 at once and sends the sixteen block DCs through a second 4x4 Hadamard, so a flat
-macroblock costs a couple of dozen bits. `src/codec/h264/compress.rs` now builds
+macroblock costs a couple of dozen bits. `crates/threers-codec/src/h264/compress.rs` now builds
 both candidates per macroblock and picks by exact rate-distortion — CAVLC carries
 no adaptive state between macroblocks, so a trial encode is not an estimate, it
 is the bit count.
@@ -480,7 +480,7 @@ so `split_cu_flag` was never coded and every CTB was exactly one coding unit. It
 is now 64x64 with a quadtree down to 8x8 and transforms up to 32x32
 (`with_coding_tree(6, 3, 5)`), which needed:
 
-* a 32-point DCT (`src/codec/hevc/transform.rs`);
+* a 32-point DCT (`crates/threers-codec/src/hevc/transform.rs`);
 * `last_sig_coeff` group tables extended from 16 positions to 32;
 * `split_cu_flag` with its three contexts, and the `CtDepth` grid they are
   derived from;
@@ -514,7 +514,7 @@ saves 35% of the time — so the smallest coding unit earns its keep.
 The compressed H.264 path now codes Main profile with CABAC instead of Baseline
 with CAVLC. The arithmetic engine did not have to be written — H.264 §9.3.4.3
 and H.265 §9.3.4.3 specify the same coder, down to `rangeTabLPS` and the
-transition tables — so `src/codec/h264/cabac.rs` reuses the HEVC engine and adds
+transition tables — so `crates/threers-codec/src/h264/cabac.rs` reuses the HEVC engine and adds
 what actually differs: the context *initialisation*, and the binarisation and
 context derivation of every I-slice syntax element.
 
@@ -546,7 +546,7 @@ with a wrong probability and simply decodes to something else.
 So they were not transcribed. OpenH264's upstream source is vendored in the
 local cargo registry (`openh264-sys2`, BSD-2-Clause), and its table is indexed by
 the specification's own `ctxIdx` with the I-slice column first — the same
-numbering §9.3.1.1 uses. `src/codec/h264/cabac_tables.rs` is generated from it,
+numbering §9.3.1.1 uses. `crates/threers-codec/src/h264/cabac_tables.rs` is generated from it,
 and every value in it is a constant of the ITU-T H.264 specification rather than
 anything OpenH264 invented.
 
@@ -882,7 +882,7 @@ threads and *falls* at fourteen, where the four efficiency cores and the
 contention start costing more than they add.
 
 **The hash is identical at every thread count.** That is the property that
-matters, and `tests/frame_parallel.rs` pins it by varying the thread count at run
+matters, and `crates/threers-codec/tests/frame_parallel.rs` pins it by varying the thread count at run
 time rather than trusting the argument above.
 
 #### Why it batches instead of encoding everything at once
@@ -1202,7 +1202,7 @@ anything that trades sharpness for smoothness on more than one metric, and say
 which ones disagreed.
 
 `AllowFrameReordering` is deliberately still off: the comment at
-`src/videotoolbox.rs` records that the elementary stream carries no timestamps,
+`crates/threers-codec/src/videotoolbox.rs` records that the elementary stream carries no timestamps,
 so the remux reconstructs them from frame order and B-frames make the last two
 frames collide on DTS. The real fix is carrying PTS/DTS through the muxer; until
 then B-frames stay off and cost ~15% compression.

@@ -53,6 +53,8 @@ report "npm threers-node"            "$(v_json "$ROOT/crates/threers-node/packag
 report "npm threers-node (lock)"     "$(v_json "$ROOT/crates/threers-node/package-lock.json")"
 report "PyPI threers"                "$(v_pyproject "$ROOT/crates/threers-py/pyproject.toml")"
 report "crates.io threers-physics"   "$(v_cargo "$ROOT/crates/threers-physics/Cargo.toml")"
+report "crates.io threers-codec"     "$(v_cargo "$ROOT/crates/threers-codec/Cargo.toml")"
+report "crates.io threers-softbody"  "$(v_cargo "$ROOT/crates/threers-softbody/Cargo.toml")"
 report "web shim (package.json)"     "$(v_json "$ROOT/web/package.json")"
 report "web shim (lock)"             "$(v_json "$ROOT/web/package-lock.json")"
 

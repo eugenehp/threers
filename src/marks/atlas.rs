@@ -509,7 +509,8 @@ impl TextureAtlas {
             let level: &[u8] = owned.as_deref().unwrap_or(&self.pixels);
             // A linear atlas holds data, or sRGB bytes to be read as a
             // WebGL texture is: its levels plain means of the texels, as
-            // `generateMipmap` makes them.
+            // `generateMipmap` makes them (on SwiftShader, measured: halves
+            // rounded to even).
             let straight = !self.srgb;
             let mut next = vec![0u8; (nw * nh * 4) as usize];
             for y in 0..nh {
@@ -527,12 +528,12 @@ impl TextureAtlas {
                     let o = ((y * nw + x) * 4) as usize;
                     for c in 0..3 {
                         next[o + c] = if straight {
-                            ((acc[c] + 2) / 4) as u8
+                            mean4(acc[c])
                         } else {
                             acc[c].checked_div(acc[3]).unwrap_or(0) as u8
                         };
                     }
-                    next[o + 3] = if straight { ((acc[3] + 2) / 4) as u8 } else { (acc[3] / 4) as u8 };
+                    next[o + 3] = if straight { mean4(acc[3]) } else { (acc[3] / 4) as u8 };
                 }
             }
             owned = Some(next);
@@ -543,9 +544,20 @@ impl TextureAtlas {
     }
 }
 
+/// The mean of four bytes summing to `sum`, halves rounded to even.
+fn mean4(sum: u32) -> u8 {
+    let (q, r) = (sum / 4, sum % 4);
+    (q + u32::from(r > 2 || (r == 2 && q % 2 == 1))) as u8
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mean4_rounds_halves_to_even() {
+        assert_eq!([mean4(4), mean4(5), mean4(6), mean4(7), mean4(10), mean4(11)], [1, 1, 2, 2, 2, 3]);
+    }
 
     /// `write` replaces an image where it lies, gutter and all, and refuses
     /// names it does not hold and wrong sizes.

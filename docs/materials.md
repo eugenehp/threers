@@ -84,7 +84,7 @@ to the byte (`tests/oit_parity.rs`).
   evenly spread shadow would be wrong. Thin glass (`thickness` 0, or `Glass`
   mode) bends nothing, so it casts a light shadow, tinted by what it
   transmits. It is dithered into the shadow map, and the shadow filter
-  smooths it.
+  smooths it. This holds in every mode (`tests/glass_shadows.rs`).
 - **Thin-walled glass.** `thickness` 0 means a wall with no inside, as in
   three.js. Light goes straight through, in every mode and in the path
   tracer.

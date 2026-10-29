@@ -31,11 +31,17 @@ pub struct OrbitControls {
     /// default) or across the plane orthogonal to the camera's up (`false`,
     /// `MapControls`' default — dragging moves over the ground).
     pub screen_space_panning: bool,
+    /// three.js `zoomToCursor`: dolly toward the pointer (keeping the world
+    /// point under it fixed) instead of toward `target`. Needs `PointerEvent.cursor`.
+    pub zoom_to_cursor: bool,
     spherical: Spherical,
     /// Residual rotate deltas (theta, phi) for damping.
     spherical_delta: (f32, f32),
     pan_offset: Vector3,
     zoom_scale: f32,
+    /// Pointer NDC captured on the last wheel, for dolly-to-cursor while the
+    /// zoom eases under damping.
+    zoom_cursor: (f32, f32),
 }
 
 impl OrbitControls {
@@ -58,11 +64,31 @@ impl OrbitControls {
             auto_rotate: false,
             auto_rotate_speed: std::f32::consts::TAU / 30.0,
             screen_space_panning: true,
+            zoom_to_cursor: false,
             spherical,
             spherical_delta: (0.0, 0.0),
             pan_offset: Vector3::ZERO,
             zoom_scale: 1.0,
+            zoom_cursor: (0.0, 0.0),
         }
+    }
+
+    /// Shift `target` so the world point under the cursor stays put as the
+    /// radius goes `old → new` (three.js `zoomToCursor`). The cursor point on
+    /// the focus plane is `target + k·radius`; keeping it fixed means
+    /// `target += k·old·(1 − new/old)`.
+    fn dolly_to_cursor(&mut self, camera: &PerspectiveCamera, old_radius: f32, new_radius: f32) {
+        if !self.zoom_to_cursor || old_radius <= 0.0 {
+            return;
+        }
+        let (cx, cy) = self.zoom_cursor;
+        let offset = self.spherical.to_vector3(); // position − target
+        let forward = (-offset).normalize();
+        let right = forward.cross(Vector3::UP).normalize();
+        let up = right.cross(forward).normalize();
+        let tan_half = (camera.fov * 0.5).tan();
+        let k = right * (cx * tan_half * camera.aspect) + up * (cy * tan_half);
+        self.target = self.target + k * (old_radius * (1.0 - new_radius / old_radius));
     }
 
     /// Rebuild spherical state from the camera's current pose (parity orbit sync).
@@ -127,12 +153,15 @@ impl OrbitControls {
                 + up * (ev.dy * world_per_pixel * self.pan_speed);
         }
         if ev.wheel != 0.0 {
+            self.zoom_cursor = ev.cursor;
             let factor = (1.0 - ev.wheel * 0.001 * self.zoom_speed).clamp(0.1, 10.0);
             if self.enable_damping && self.damping > 0.0 {
                 self.zoom_scale *= factor;
             } else {
-                self.spherical.radius =
-                    (self.spherical.radius * factor).clamp(self.min_distance, self.max_distance);
+                let old = self.spherical.radius;
+                let new = (old * factor).clamp(self.min_distance, self.max_distance);
+                self.spherical.radius = new;
+                self.dolly_to_cursor(camera, old, new);
             }
         }
 
@@ -154,18 +183,26 @@ impl OrbitControls {
         }
 
         if self.enable_damping && self.damping > 0.0 {
-            let damp = (1.0 - self.damping.clamp(0.0, 1.0)).clamp(0.0, 1.0);
-            self.spherical.theta += self.spherical_delta.0;
-            self.spherical.phi += self.spherical_delta.1;
+            // three.js: each frame applies `damping` of the residual and keeps
+            // the rest, so a gesture's total motion (Σ d·(1−d)^k = 1) equals the
+            // input — applying the whole residual would multiply it by 1/d.
+            let d = self.damping.clamp(0.0, 1.0);
+            let damp = 1.0 - d;
+            self.spherical.theta += self.spherical_delta.0 * d;
+            self.spherical.phi += self.spherical_delta.1 * d;
             self.spherical_delta.0 *= damp;
             self.spherical_delta.1 *= damp;
-            self.target = self.target + self.pan_offset;
+            self.target = self.target + self.pan_offset * d;
             self.pan_offset = self.pan_offset * damp;
             if (self.zoom_scale - 1.0).abs() > 1e-8 {
-                self.spherical.radius = (self.spherical.radius * self.zoom_scale)
-                    .clamp(self.min_distance, self.max_distance);
-                // Ease zoom_scale back toward 1.
-                self.zoom_scale = 1.0 + (self.zoom_scale - 1.0) * damp;
+                // The same split in log space: this frame takes zoom^d and
+                // zoom^(1−d) remains, so the eased total is the wheel's factor.
+                let step = self.zoom_scale.powf(d);
+                let old = self.spherical.radius;
+                let new = (old * step).clamp(self.min_distance, self.max_distance);
+                self.spherical.radius = new;
+                self.dolly_to_cursor(camera, old, new);
+                self.zoom_scale /= step;
             }
             // Snap residuals to rest so damping does not hiss forever as
             // sub-pixel orbit jitter.
@@ -189,8 +226,10 @@ impl OrbitControls {
             self.target = self.target + self.pan_offset;
             self.pan_offset = Vector3::ZERO;
             if (self.zoom_scale - 1.0).abs() > 1e-8 {
-                self.spherical.radius = (self.spherical.radius * self.zoom_scale)
-                    .clamp(self.min_distance, self.max_distance);
+                let old = self.spherical.radius;
+                let new = (old * self.zoom_scale).clamp(self.min_distance, self.max_distance);
+                self.spherical.radius = new;
+                self.dolly_to_cursor(camera, old, new);
                 self.zoom_scale = 1.0;
             }
         }
@@ -238,6 +277,7 @@ mod tests {
             wheel: 0.0,
             rotating: false,
             panning: false,
+            cursor: (0.0, 0.0),
         };
         orbit.update(idle, &mut cam, (800.0, 600.0));
         assert!((cam.position.x + 3.8).abs() < 1e-4);
@@ -258,6 +298,7 @@ mod tests {
             wheel: 0.0,
             rotating: false,
             panning: false,
+            cursor: (0.0, 0.0),
         };
         orbit.update(idle, &mut cam, (800.0, 600.0));
         assert!((cam.position.x + 3.8).abs() < 1e-4);
@@ -267,6 +308,7 @@ mod tests {
             wheel: 0.0,
             rotating: false,
             panning: false,
+            cursor: (0.0, 0.0),
         };
         orbit.update(moved, &mut cam, (800.0, 600.0));
         assert!((cam.position.x + 3.8).abs() < 1e-4);
@@ -285,6 +327,7 @@ mod tests {
             wheel: 0.0,
             rotating: true,
             panning: false,
+            cursor: (0.0, 0.0),
         };
         orbit.update_dt(flick, &mut cam, (800.0, 600.0), 1.0 / 60.0);
         let after_flick = cam.position;
@@ -294,6 +337,7 @@ mod tests {
             wheel: 0.0,
             rotating: false,
             panning: false,
+            cursor: (0.0, 0.0),
         };
         orbit.update_dt(idle, &mut cam, (800.0, 600.0), 1.0 / 60.0);
         assert!((cam.position - after_flick).length() > 1e-4);
@@ -312,6 +356,7 @@ mod tests {
             wheel: 0.0,
             rotating: true,
             panning: false,
+            cursor: (0.0, 0.0),
         };
         orbit.update_dt(flick, &mut cam, (800.0, 600.0), 1.0 / 60.0);
         let idle = PointerEvent {
@@ -320,6 +365,7 @@ mod tests {
             wheel: 0.0,
             rotating: false,
             panning: false,
+            cursor: (0.0, 0.0),
         };
         for _ in 0..300 {
             orbit.update_dt(idle, &mut cam, (800.0, 600.0), 1.0 / 60.0);
@@ -347,8 +393,75 @@ mod tests {
             wheel: 0.0,
             rotating: false,
             panning: false,
+            cursor: (0.0, 0.0),
         };
         orbit.update_dt(idle, &mut cam, (800.0, 600.0), 0.5);
         assert!((orbit.spherical.theta - start_theta).abs() > 0.1);
+    }
+
+    #[test]
+    fn damping_does_not_amplify_input() {
+        let mut cam = PerspectiveCamera::new(50.0, 1.0, 0.1, 100.0);
+        cam.position = Vector3::new(0.0, 0.0, 5.0);
+        let mut orbit = OrbitControls::new(&cam);
+        orbit.enable_damping = true;
+        orbit.damping = 0.08;
+        let idle = PointerEvent { dx: 0.0, dy: 0.0, wheel: 0.0, rotating: false, panning: false, cursor: (0.0, 0.0) };
+        // a drag's total turn, once settled, is what it would be undamped
+        let start = orbit.spherical.theta;
+        orbit.update_dt(PointerEvent { dx: 60.0, rotating: true, ..idle }, &mut cam, (800.0, 600.0), 1.0 / 60.0);
+        for _ in 0..600 {
+            orbit.update_dt(idle, &mut cam, (800.0, 600.0), 1.0 / 60.0);
+        }
+        let expect = -60.0 / 600.0 * std::f32::consts::TAU;
+        assert!((orbit.spherical.theta - start - expect).abs() < 1e-3, "turned {} not {expect}", orbit.spherical.theta - start);
+        // and a wheel notch zooms by its factor, not that factor ^ (1 / damping)
+        let r0 = orbit.spherical.radius;
+        orbit.update_dt(PointerEvent { wheel: 100.0, ..idle }, &mut cam, (800.0, 600.0), 1.0 / 60.0);
+        for _ in 0..600 {
+            orbit.update_dt(idle, &mut cam, (800.0, 600.0), 1.0 / 60.0);
+        }
+        assert!((orbit.spherical.radius / r0 - 0.9).abs() < 1e-3, "zoomed ×{}", orbit.spherical.radius / r0);
+        // auto-rotate settles at `auto_rotate_speed` rad/s
+        orbit.auto_rotate = true;
+        orbit.auto_rotate_speed = 0.5;
+        for _ in 0..600 {
+            orbit.update_dt(idle, &mut cam, (800.0, 600.0), 1.0 / 60.0);
+        }
+        let t0 = orbit.spherical.theta;
+        for _ in 0..60 {
+            orbit.update_dt(idle, &mut cam, (800.0, 600.0), 1.0 / 60.0);
+        }
+        assert!((orbit.spherical.theta - t0 - 0.5).abs() < 1e-3, "{} rad/s", orbit.spherical.theta - t0);
+    }
+
+    #[test]
+    fn zoom_to_cursor_shifts_target_toward_pointer() {
+        let mut cam = PerspectiveCamera::new(50.0, 1.0, 0.1, 100.0);
+        cam.position = Vector3::new(0.0, 0.0, 10.0);
+        cam.target = Vector3::ZERO;
+        let mut orbit = OrbitControls::new(&cam);
+        orbit.zoom_to_cursor = true;
+        // zoom IN (wheel > 0 shrinks radius) with the cursor to the right (+x NDC)
+        let ev = PointerEvent {
+            dx: 0.0,
+            dy: 0.0,
+            wheel: 200.0,
+            rotating: false,
+            panning: false,
+            cursor: (0.5, 0.0),
+        };
+        orbit.update(ev, &mut cam, (800.0, 600.0));
+        assert!(orbit.spherical.radius < 10.0, "zoom in shrinks radius");
+        assert!(orbit.target.x > 0.01, "target shifts toward the +x cursor, got {}", orbit.target.x);
+        assert!(orbit.target.y.abs() < 1e-4 && orbit.target.z.abs() < 1e-4, "no cross-axis drift");
+
+        // centred cursor must not move the target
+        let mut cam2 = PerspectiveCamera::new(50.0, 1.0, 0.1, 100.0);
+        cam2.position = Vector3::new(0.0, 0.0, 10.0);
+        let mut orbit2 = OrbitControls::new(&cam2);
+        orbit2.zoom_to_cursor = true;
+        orbit2.update(PointerEvent { wheel: 200.0, cursor: (0.0, 0.0), ..Default::default() }, &mut cam2, (800.0, 600.0));
+        assert!(orbit2.target.length() < 1e-4, "centred zoom keeps the target put");
     }
 }

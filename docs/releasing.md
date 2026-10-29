@@ -1,16 +1,18 @@
 # Releasing
 
-Three crates publish to **crates.io**. Language packages publish to npm and
+Five crates publish to **crates.io**. Language packages publish to npm and
 PyPI (not crates.io). See also [`docs/bindings.md`](bindings.md).
 
 | Artifact | Version | Registry | Arch notes |
 |---|---|---|---|
-| `threers` | 0.0.8 | crates.io | source; consumers compile |
-| `threers-physics` | 0.0.8 | crates.io | tracks `threers` from 0.0.8; 0.0.1 is on the index |
+| `threers-codec` | 0.0.9 | crates.io | the codecs on their own; new — not yet on the index |
+| `threers-softbody` | 0.0.9 | crates.io | the soft-body lattice and solver (`gpu` feature: WebGPU compute); new — not yet on the index |
+| `threers` | 0.0.9 | crates.io | source; consumers compile |
+| `threers-physics` | 0.0.9 | crates.io | tracks `threers` from 0.0.8; 0.0.1 is on the index |
 | `threers-probe` | 0.0.2 | crates.io | 0.0.1 is on the index |
-| `threers` (npm ESM) | 0.0.8 | npm / Deno | **mini** (default) + **full** wasm entries ([`crates/threers-js`](../crates/threers-js)) |
-| `threers-node` | 0.0.8 | npm | per-arch `.node` via `@threers/node-*` ([`crates/threers-node`](../crates/threers-node)) |
-| `threers` (PyPI) | 0.0.8 | PyPI | per-platform wheels ([`crates/threers-py`](../crates/threers-py)) |
+| `threers` (npm ESM) | 0.0.9 | npm / Deno | **mini** (default) + **full** wasm entries ([`crates/threers-js`](../crates/threers-js)) |
+| `threers-node` | 0.0.9 | npm | per-arch `.node` via `@threers/node-*` ([`crates/threers-node`](../crates/threers-node)) |
+| `threers` (PyPI) | 0.0.9 | PyPI | per-platform wheels ([`crates/threers-py`](../crates/threers-py)) |
 
 `crates/` also holds seven demos and benches. None of them publish
 (`publish = false`), and they fall into two groups:
@@ -25,11 +27,13 @@ PyPI (not crates.io). See also [`docs/bindings.md`](bindings.md).
 
 ## The order is not optional
 
-Both companions depend on `threers` by **path and version**:
+`threers` depends on `threers-codec` and `threers-softbody` by **path and
+version**, so those two go up first. Both companions depend on `threers` the
+same way:
 
 ```toml
 # crates/threers-physics/Cargo.toml
-threers = { path = "../..", version = "0.0.8", features = ["mesh-bvh"] }
+threers = { path = "../..", version = "0.0.9", features = ["mesh-bvh"] }
 ```
 
 A path dependency is what the workspace builds against; the `version` is what the
@@ -94,9 +98,31 @@ cargo clippy --target wasm32-unknown-unknown --lib
 cargo clippy --target wasm32-unknown-unknown --lib --features openscad
 cargo clippy --target wasm32-unknown-unknown --lib --features webgl
 
+# 2c. The soft-body solver still matches its JavaScript original bit for bit,
+#     and the GPU solver still matches the CPU one (both need a GPU adapter;
+#     they skip without one).
+cargo test --release --test softbody_parity --test softbody_gpu -- --test-threads 1
+
 # 3b. And the WebGL2 backend actually draws, which only a browser can answer.
 #     Needs a chromedriver on PATH; see docs/webgl.md.
 FEATURES=webgl TEST=webgl ./scripts/wasm-browser-test.sh
+
+# 3c. The codec crate on its own: every feature combination, its declared
+#     minimum Rust (1.87), and the targets its hardware backends build for.
+cargo test -p threers-codec --release --all-features
+cargo test -p threers-codec --release --no-default-features
+cargo +1.87 check -p threers-codec --all-targets --all-features
+cargo clippy -p threers-codec --all-targets --features vaapi,nvidia,parallel --target x86_64-unknown-linux-gnu
+cargo clippy -p threers-codec --all-targets --features nvidia --target x86_64-pc-windows-msvc
+
+# 3d. The hardware backends, on machines that have the hardware. Each suite
+#     skips without it, so require it, or a green run can mean nothing ran.
+#     NVIDIA (Linux; RUST_TEST_THREADS=1, see docs/codecs.md):
+THREERS_REQUIRE_NVIDIA=1 RUST_TEST_THREADS=1 cargo test -p threers-codec --release --features nvidia,parallel
+#     A VA driver: AMD (Mesa) and Intel (iHD) both, they read different fields.
+THREERS_REQUIRE_VAAPI=1 RUST_TEST_THREADS=1 cargo test -p threers-codec --release --features vaapi,parallel
+#     VideoToolbox (macOS):
+cargo test -p threers-codec --release --features videotoolbox --test hw
 
 # 4. Docs, including the intra-doc links between the crates.
 #    Keep this *after* the tests, and run `cargo clean -p threers` before going
@@ -109,16 +135,24 @@ FEATURES=webgl TEST=webgl ./scripts/wasm-browser-test.sh
 #    their own. Nothing is wrong with the code; the artifact is just the wrong
 #    one, and it persists until it is cleaned.
 cargo doc --no-deps --all-features -p threers -p threers-physics -p threers-probe
+cargo doc --no-deps --all-features -p threers-codec
+# docs.rs builds the codec crate for Linux, where its NVIDIA and VAAPI modules
+# exist and the VideoToolbox ones do not; links must hold there too.
+cargo doc --no-deps -p threers-codec --features vaapi,nvidia,gif,parallel --target x86_64-unknown-linux-gnu
 
 # 5. What would actually ship.
 cargo package -p threers --list | wc -l
 cargo package -p threers                     # size, and it must compile from the tarball
+cargo package -p threers-softbody --features gpu   # and the new crates, from theirs
+cargo package -p threers-codec
 
-# 6. Then, in this order.
+# 6. Then, in this order — the two threers depends on first.
+cargo publish -p threers-codec
+cargo publish -p threers-softbody
 cargo publish -p threers
 cargo publish -p threers-physics             # only after the first is on the index
 cargo publish -p threers-probe               # likewise
-git tag -a v0.0.8 -m 'threers 0.0.8' && git push --tags
+git tag -a v0.0.9 -m 'threers 0.0.9' && git push --tags
 
 # 7. Language packages — one script locally; CI on tag push.
 ./scripts/release-versions.sh                    # versions aligned?
@@ -126,7 +160,7 @@ git tag -a v0.0.8 -m 'threers 0.0.8' && git push --tags
 PUBLISH=1 ./scripts/release-all.sh publish     # upload (or push tag → CI)
 
 # Multi-arch npm-node + PyPI: push v* tag → .github/workflows/release-language-packages.yml
-git tag -a v0.0.8 -m 'threers 0.0.8' && git push --tags
+git tag -a v0.0.9 -m 'threers 0.0.9' && git push --tags
 ```
 
 ## One command (`scripts/release-all.sh`)
@@ -151,7 +185,7 @@ PyPI trusted publishing).
 
 ```bash
 # After crates.io publish + version bump:
-git tag v0.0.8 && git push origin v0.0.8
+git tag v0.0.9 && git push origin v0.0.9
 ```
 
 ## npm ESM (`crates/threers-js`)
@@ -242,12 +276,12 @@ curl -s -H 'User-Agent: threers-release' https://crates.io/api/v1/crates/threers
   | python3 -c "import json,sys; print(json.load(sys.stdin)['crate']['max_version'])"
 ```
 
-It reads 0.0.7, so 0.0.8 is what ships.
+It reads 0.0.8, so 0.0.9 is what ships.
 
 `threers-physics` tracks the `threers` version from 0.0.8 on, so it is bumped
 with the rest and `release-versions.sh` treats it as one of the aligned roots.
 Only 0.0.1 (2026-09-11) is on the index; the 0.0.2 the workspace carried was
-never published, so it jumps from 0.0.1 straight to 0.0.8. `CHECK=1
+never published, nor was 0.0.8, so it jumps from 0.0.1 straight to 0.0.9. `CHECK=1
 ./scripts/release-versions.sh` asks crates.io and fails if `threers` or
 `threers-physics` is not ahead of the published version — `cargo publish`
 cannot replace a version, so a stale one would otherwise fail at the upload and

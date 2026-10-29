@@ -479,7 +479,7 @@ fn main(@builtin(global_invocation_id) gid : vec3<u32>) {
 
     var occ = 0.0;
     for (var i = 0; i < 12; i = i + 1) {
-        let a = f32(i) * 2.39996;                  // golden angle: even coverage
+        let a = f32(i) * 2.39996 + fract(sin(dot(vec2<f32>(c), vec2<f32>(12.9898, 78.233))) * 43758.5453) * 6.2831853;  // golden angle + per-pixel rotation (break coherent streaks)
         let r = px * sqrt((f32(i) + 0.5) / 12.0);  // uniform over the disc
         let s = c + vec2<i32>(vec2<f32>(cos(a), sin(a)) * r);
         let ps = view_pos(s, in_dim);
@@ -571,7 +571,7 @@ fn fs_main(@builtin(position) pos : vec4<f32>) -> @location(0) vec4<f32> {
 
     var occ = 0.0;
     for (var i = 0; i < 12; i = i + 1) {
-        let a = f32(i) * 2.39996;                  // golden angle: even coverage
+        let a = f32(i) * 2.39996 + fract(sin(dot(vec2<f32>(c), vec2<f32>(12.9898, 78.233))) * 43758.5453) * 6.2831853;  // golden angle + per-pixel rotation (break coherent streaks)
         let r = px * sqrt((f32(i) + 0.5) / 12.0);  // uniform over the disc
         let s = c + vec2<i32>(vec2<f32>(cos(a), sin(a)) * r);
         let ps = view_pos(s, in_dim);

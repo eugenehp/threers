@@ -480,6 +480,40 @@ macro_rules! env_bind_group {
     }};
 }
 
+/// The custom (`ShaderMaterial`) pipeline's trimmed group 3, where the backend
+/// cannot hold the full environment beside the volume slots (WebGL2): the IBL
+/// cube (0), its sampler (1), the 2D cube-UV fallback (8) and the environment
+/// uniform (13) — what the preamble's image-based-light helpers read — and
+/// none of the shadow maps or the area-light table, which a custom fragment
+/// does its own lighting without. Matches `env_bgl` filtered to those bindings.
+macro_rules! custom_env_bind_group {
+    ($device:expr, $bgl:expr, $label:expr, $t0:expr, $s1:expr, $t8:expr, $u13:expr $(,)?) => {{
+        let entries = [
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView($t0),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler($s1),
+            },
+            wgpu::BindGroupEntry {
+                binding: 8,
+                resource: wgpu::BindingResource::TextureView($t8),
+            },
+            wgpu::BindGroupEntry {
+                binding: 13,
+                resource: $u13.as_entire_binding(),
+            },
+        ];
+        $device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some($label),
+            layout: $bgl,
+            entries: &entries,
+        })
+    }};
+}
+
 /// A material's own environment: the cube's upload, its intensity and its
 /// rotation (angle bit patterns, then the axis order's index).
 type MaterialEnvKey = (super::gpu_texture::CubeCacheKey, u32, [u32; 4]);
@@ -1001,6 +1035,10 @@ pub struct Renderer {
     /// refraction pass under MSAA (`DEPTH_RESOLVE_SHADER`). `None` where a
     /// shader cannot read a multisampled texture.
     depth_resolve: Option<(wgpu::BindGroupLayout, wgpu::RenderPipeline)>,
+    /// Where depth textures cannot be copied (WebGL2): a fullscreen pass that
+    /// samples one depth and writes it as another's, with its layout and the
+    /// nearest sampler it reads through.
+    depth_copy: Option<(wgpu::BindGroupLayout, wgpu::RenderPipeline, wgpu::Sampler)>,
     oit_resolve_bgl: wgpu::BindGroupLayout,
     // accum(Rgba16F) + revealage(R16F) targets + the resolve bind group, keyed by size.
     oit_targets: Option<(
@@ -1303,6 +1341,13 @@ pub struct Renderer {
     cube_cache: HashMap<super::gpu_texture::CubeCacheKey, GpuCubeTexture>,
     env_bind_group: wgpu::BindGroup,
     shadow_env_bind_group: wgpu::BindGroup,
+    /// The custom pipeline's trimmed group-3 layout and the bind group that
+    /// fills it, both `Some` only where the environment is trimmed for the
+    /// volume slots (WebGL2). Elsewhere a custom draw binds `env_bind_group`.
+    /// The layout is kept to rebuild the bind group when the scene environment
+    /// changes; the uniform (binding 13) is the shared `env_uniform`.
+    custom_env_bgl: Option<wgpu::BindGroupLayout>,
+    custom_env_bind_group: Option<wgpu::BindGroup>,
     /// The scene environment's `EnvUniforms`, written each frame.
     env_uniform: wgpu::Buffer,
     /// Group 3 for Standard/Physical materials with an `envMap` of their own,
@@ -1600,6 +1645,30 @@ fn default_ssao_noise() -> Vec<f32> {
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
+/// One depth texture's values written as another's, by a fullscreen triangle:
+/// where depth cannot be copied (WebGL2). Sampled, not loaded — `textureLoad`
+/// of a depth texture reads 0 there — and bound as an unfilterable float
+/// texture, not a depth one: naga writes `textureSampleLevel` of a
+/// `texture_depth_2d` as GLSL `textureLod` with an integer level, which
+/// GLSL ES rejects, and the pipeline never compiles.
+const DEPTH_COPY_SHADER: &str = r#"
+@group(0) @binding(0) var src: texture_2d<f32>;
+@group(0) @binding(1) var samp: sampler;
+
+@vertex
+fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
+    let x = f32((i << 1u) & 2u);
+    let y = f32(i & 2u);
+    return vec4<f32>(x * 2.0 - 1.0, 1.0 - y * 2.0, 0.0, 1.0);
+}
+
+@fragment
+fn fs(@builtin(position) p: vec4<f32>) -> @builtin(frag_depth) f32 {
+    let uv = p.xy / vec2<f32>(textureDimensions(src));
+    return textureSampleLevel(src, samp, uv, 0.0).r;
+}
+"#;
+
 /// Hardware MSAA sample count used when antialiasing is enabled for the
 /// direct-to-surface opaque forward pass. 4× is universally supported.
 const MSAA_SAMPLES: u32 = 4;
@@ -1824,16 +1893,17 @@ struct ThreersUserData { data: array<vec4<f32>, 16>, };\n\
 @group(1) @binding(10) var u_s0_tex: texture_2d<f32>;\n\
 @group(1) @binding(11) var u_s1_tex: texture_2d<f32>;\n\
 @group(1) @binding(12) var u_s2_tex: texture_2d<f32>;\n";
-    // The volume slots, where they fit: see
-    // `caps::supports_shader_material_volumes`, which comes to the same test
-    // as `storage_buffers`. Module, layout and bind group agree on it.
-    let volume_bindings = if storage_buffers {
-        "@group(1) @binding(13) var u_vol0: texture_3d<f32>;\n\
+    // The volume slots. Two 3D textures and a sampler — not storage buffers, so
+    // WebGL2 has them too; the custom pipeline frees the texture units to hold
+    // them there by trimming its environment group (see the custom env layout
+    // in `Renderer::new`). They are declared unconditionally because the module
+    // is only ever compiled for a device that has the custom pipeline, and that
+    // is exactly a device whose layout carries these three (both gate on
+    // `caps::supports_shader_material_volumes`). Module, layout and bind group
+    // agree on it.
+    let volume_bindings = "@group(1) @binding(13) var u_vol0: texture_3d<f32>;\n\
 @group(1) @binding(14) var u_vol1: texture_3d<f32>;\n\
-@group(1) @binding(15) var u_vol_samp: sampler;\n"
-    } else {
-        ""
-    };
+@group(1) @binding(15) var u_vol_samp: sampler;\n";
     // WebGL2 has no storage buffers at all, so on that backend these three are
     // left out of the module *and* out of the layout and bind group that go with
     // it — all three have to agree or the pipeline is rejected. A shader that
@@ -3113,7 +3183,8 @@ impl Renderer {
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: DEPTH_FORMAT,
-                usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
+                // a render target too, for where it is filled by drawing (`depth_copy`)
+                usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
                 view_formats: &[],
             });
             let dview = dtex.create_view(&wgpu::TextureViewDescriptor::default());
@@ -3894,28 +3965,46 @@ impl Renderer {
             ],
         });
 
+        // The custom pipeline's group 3. A `ShaderMaterial` does its own
+        // lighting and samples neither the shadow maps nor the area-light table
+        // the full environment carries, so where a backend charges a texture
+        // unit per layout entry rather than per use — wgpu's GL backend, i.e.
+        // WebGL2 — those are dead weight that would crowd out the volume slots:
+        // the full group plus the volumes comes to eighteen there and WebGL2
+        // allows sixteen, and going over panics inside wgpu-hal. On that backend
+        // the pipeline takes a trimmed environment (the IBL cube, its 2D
+        // fallback, the sampler and the uniform — bindings 0, 1, 8, 13), which
+        // brings the layout back to fourteen. Where units are counted per use
+        // (WebGPU, Metal, Vulkan) the full group costs nothing a shader does not
+        // touch, so it stays and custom shaders keep shadows and area lights.
+        // "No storage buffers" is the same backend, and the test used elsewhere.
+        // `Some` only on the trimmed backend; elsewhere the custom pipeline
+        // reuses the full `env_bgl` *object*, so the scene's `env_bind_group`
+        // (built from it) binds to it without a separate compatible layout.
+        let custom_env_trimmed = !crate::renderer::caps::supports_storage_buffers(&device);
+        let custom_env_bgl = custom_env_trimmed.then(|| {
+            let entries: Vec<wgpu::BindGroupLayoutEntry> = env_entries
+                .iter()
+                .filter(|e| matches!(e.binding, 0 | 1 | 8 | 13))
+                .cloned()
+                .collect();
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("threers custom env bgl (trimmed)"),
+                entries: &entries,
+            })
+        });
+
         // Built only when the device can hold it.
         //
-        // The four groups together declare 20 sampled textures in the fragment
-        // stage. WebGPU's floor is 16 and Chrome reports exactly that, so this
-        // layout cannot be created there at all — and creating it unconditionally
-        // meant every browser session logged a validation error at startup even
-        // though nothing had asked for a shader material:
-        //
-        //   The number of sampled textures (20) in the Fragment stage exceeds
-        //   the maximum per-stage limit (16).
-        //
-        // The other three groups already account for 16 of those, so this is not
-        // a matter of trimming a slot or two; the split would have to change for
-        // shader materials to work on WebGPU. Until then the feature is absent
-        // there rather than broken, and `None` is what says so.
-        // Nine before the data-texture slots, twelve with them, fourteen with
-        // the two volume slots. WebGPU's floor and WebGL2's are both sixteen,
-        // so this is a check for the genuinely old rather than a limit anything
-        // current runs into. WebGL2 counts differently — every texture in the
-        // layout, sixteen without the volumes — which is why it has none (see
-        // `caps::supports_shader_material_volumes`).
-        const CUSTOM_LAYOUT_TEXTURES: u32 = 14;
+        // The four groups together once declared 20 sampled textures in the
+        // fragment stage. WebGPU's floor is 16 and Chrome reports exactly that,
+        // so that layout could not be created there at all; trimming the custom
+        // tex group of the eight standard material maps a `ShaderMaterial` never
+        // uses brought it to fourteen (see `custom_tex_bgl`). Below that floor —
+        // genuinely old hardware — the feature is absent rather than broken, and
+        // `None` is what says so. See `caps::CUSTOM_LAYOUT_TEXTURES` for the
+        // count and how WebGL2's per-layout-entry budget is met.
+        use crate::renderer::caps::CUSTOM_LAYOUT_TEXTURES;
         let custom_pipeline_layout = if device.limits().max_sampled_textures_per_shader_stage
             >= CUSTOM_LAYOUT_TEXTURES
         {
@@ -3926,7 +4015,7 @@ impl Renderer {
                         Some(&frame_bgl),
                         Some(&custom_mesh_bgl),
                         Some(&custom_tex_bgl),
-                        Some(&env_bgl),
+                        Some(custom_env_bgl.as_ref().unwrap_or(&env_bgl)),
                     ],
                     immediate_size: 0,
                 }),
@@ -3939,18 +4028,29 @@ impl Renderer {
             );
             None
         };
-        let custom_ss_pipeline_layout = custom_pipeline_layout.as_ref().map(|_| {
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("threers custom (screen-space shader material) layout"),
-                bind_group_layouts: &[
-                    Some(&frame_bgl),
-                    Some(&custom_mesh_bgl),
-                    Some(&custom_tex_bgl),
-                    Some(&env_bgl_glass),
-                ],
-                immediate_size: 0,
-            })
-        });
+        // The screen-space (refraction) custom pipeline keeps the glass group 3,
+        // whose capture textures leave no room for the volume slots on WebGL2
+        // (nine in the mesh group with the volumes, plus the glass group, tips
+        // over sixteen). A trimmed-environment backend therefore has no
+        // screen-space custom pipeline; such a draw is skipped like any whose
+        // shader will not compile. Screen-space refraction in a `ShaderMaterial`
+        // and 3D-volume sampling in one material is a combination nothing here
+        // asks for, and the per-use backends keep it.
+        let custom_ss_pipeline_layout = custom_pipeline_layout
+            .as_ref()
+            .filter(|_| !custom_env_trimmed)
+            .map(|_| {
+                device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("threers custom (screen-space shader material) layout"),
+                    bind_group_layouts: &[
+                        Some(&frame_bgl),
+                        Some(&custom_mesh_bgl),
+                        Some(&custom_tex_bgl),
+                        Some(&env_bgl_glass),
+                    ],
+                    immediate_size: 0,
+                })
+            });
 
         let vertex_buffers = [wgpu::VertexBufferLayout {
             array_stride: GpuMesh::VERTEX_STRIDE as wgpu::BufferAddress,
@@ -4663,6 +4763,66 @@ impl Renderer {
             make_resolve(color_format, 0, MSAA_SAMPLES, "threers oit resolve tint msaa pipeline"),
             make_resolve(color_format, 1, MSAA_SAMPLES, "threers oit resolve light msaa pipeline"),
         ];
+        // A depth texture to another, by drawing, where they cannot be copied
+        // (WebGL2): what the refraction pass's sampleable depth is filled by.
+        // The depth is read through a nearest sampler, as `textureLoad` of a
+        // depth texture reads 0 there.
+        let depth_copy = (!crate::renderer::caps::supports_depth_copies(&device)).then(|| {
+            let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("threers depth copy bgl"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
+                        count: None,
+                    },
+                ],
+            });
+            let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("threers depth copy shader"),
+                source: wgpu::ShaderSource::Wgsl(DEPTH_COPY_SHADER.into()),
+            });
+            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("threers depth copy layout"),
+                bind_group_layouts: &[Some(&bgl)],
+                immediate_size: 0,
+            });
+            let pipe = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("threers depth copy pipeline"),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState { module: &module, entry_point: Some("vs"), buffers: &[], compilation_options: Default::default() },
+                fragment: Some(wgpu::FragmentState { module: &module, entry_point: Some("fs"), targets: &[], compilation_options: Default::default() }),
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(wgpu::CompareFunction::Always),
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            });
+            let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+                label: Some("threers depth copy sampler"),
+                mag_filter: wgpu::FilterMode::Nearest,
+                min_filter: wgpu::FilterMode::Nearest,
+                ..Default::default()
+            });
+            (bgl, pipe, sampler)
+        });
         // A multisampled depth to a single-sampled one, for the refraction
         // pass under MSAA. Not where shaders cannot read multisampled
         // textures (WebGL2); there a refraction frame stays single-sampled.
@@ -6333,6 +6493,19 @@ impl Renderer {
             &env_uniform,
             &ltc.1,
         );
+        // The trimmed custom-pipeline environment, where there is one. Rebuilt
+        // alongside `env_bind_group` whenever the scene environment changes.
+        let custom_env_bind_group = custom_env_bgl.as_ref().map(|bgl| {
+            custom_env_bind_group!(
+                device,
+                bgl,
+                "threers custom env bg",
+                &default_env_cube.view,
+                &env_sampler,
+                &default_cube_uv_view,
+                &env_uniform,
+            )
+        });
 
         // Dummy 1x1 depth textures used by `shadow_env_bind_group` so the
         // shadow passes can satisfy the pipeline layout without binding the
@@ -6562,6 +6735,8 @@ impl Renderer {
             cube_cache: HashMap::new(),
             env_bind_group,
             shadow_env_bind_group,
+            custom_env_bgl,
+            custom_env_bind_group,
             env_uniform,
             material_env_groups: HashMap::new(),
             pmrem_cache: HashMap::new(),
@@ -6573,6 +6748,7 @@ impl Renderer {
             depth_replay_pass: None,
             force_depth_replay: false,
             msaa_depth_out: None,
+            depth_copy,
             shadow_pass_bgl,
             shadow_pass_stride,
             shadow_type: crate::lights::ShadowType::default(),
@@ -8601,6 +8777,11 @@ fn fs_out(@builtin(position) p : vec4<f32>) -> @location(0) vec4<f32> {
             Custom(u64, bool, bool, u32),
         }
         impl Topology {
+            /// A plain triangle mesh that a glass mode draws in passes of its
+            /// own: in the shadow maps it is the triangles it always was.
+            fn is_glass_mesh(self) -> bool {
+                matches!(self, Topology::Refract | Topology::Oit | Topology::GlassColor)
+            }
             /// Drawn from the mesh's wire (line-list) index buffer.
             fn is_wire(self) -> bool {
                 matches!(
@@ -10067,6 +10248,19 @@ fn fs_out(@builtin(position) p : vec4<f32>) -> @location(0) vec4<f32> {
                 &self.env_uniform,
                 &self.ltc.1,
             );
+            if let Some(bgl) = &self.custom_env_bgl {
+                // The trimmed custom environment follows the same cube and 2D
+                // fallback; its uniform is the shared `env_uniform` buffer.
+                self.custom_env_bind_group = Some(custom_env_bind_group!(
+                    self.device,
+                    bgl,
+                    "threers custom env bg",
+                    view,
+                    &self.env_sampler,
+                    cube_uv_view,
+                    &self.env_uniform,
+                ));
+            }
             self.env_dirty = false;
             // Theirs share the shadow-map views just rebound.
             self.material_env_groups.clear();
@@ -10650,7 +10844,8 @@ fn fs_out(@builtin(position) p : vec4<f32>) -> @location(0) vec4<f32> {
             .iter()
             .map(|d| {
                 let plain = d.cast_shadow
-                    && matches!(d.topology, Topology::Triangle | Topology::TriangleNoCull | Topology::TriangleAlpha)
+                    && (matches!(d.topology, Topology::Triangle | Topology::TriangleNoCull | Topology::TriangleAlpha)
+                        || d.topology.is_glass_mesh())
                     && d.instance_count == 1
                     && d.skin_idx == usize::MAX
                     && d.shader_idx == usize::MAX
@@ -10711,10 +10906,13 @@ fn fs_out(@builtin(position) p : vec4<f32>) -> @location(0) vec4<f32> {
                 let skinned = matches!(d.topology, Topology::Skinned | Topology::SkinnedAlpha);
                 let instanced = matches!(d.topology, Topology::Instanced | Topology::InstancedAlpha);
                 // A transparent caster casts too: three.js's shadow map ignores
-                // blending (only `alphaTest` cuts a shadow).
+                // blending (only `alphaTest` cuts a shadow). So does glass in
+                // the modes with passes of their own: solid glass fully, thin
+                // glass through the cut-out pipelines (`shadow_transmits`).
                 if d.topology != Topology::Triangle
                     && d.topology != Topology::TriangleNoCull
                     && d.topology != Topology::TriangleAlpha
+                    && !d.topology.is_glass_mesh()
                     && !skinned
                     && !instanced
                 {
@@ -11156,17 +11354,26 @@ fn fs_out(@builtin(position) p : vec4<f32>) -> @location(0) vec4<f32> {
             let mut last_variant: Option<super::material_maps::MapVariant> = None;
             let mut last_side: u32 = u32::MAX;
             // Group 3 is the scene's environment unless a material has its own.
-            let mut env_bound: Option<MaterialEnvKey> = None;
+            let mut env_bound: (Option<MaterialEnvKey>, bool) = (None, false);
             for (i, d) in draws.iter().enumerate() {
-                if d.env_group != env_bound {
+                // A custom draw on a trimmed-environment backend (WebGL2) binds
+                // the custom pipeline's own group 3; the full environment its
+                // standard counterpart binds does not match that pipeline layout.
+                let custom_env = self.custom_env_bind_group.is_some()
+                    && matches!(d.topology, Topology::Custom(..));
+                if (d.env_group, custom_env) != env_bound {
                     pass.set_bind_group(
                         3,
-                        d.env_group
-                            .and_then(|k| self.material_env_groups.get(&k))
-                            .map_or(&self.env_bind_group, |(_, g)| g),
+                        if custom_env {
+                            self.custom_env_bind_group.as_ref().unwrap()
+                        } else {
+                            d.env_group
+                                .and_then(|k| self.material_env_groups.get(&k))
+                                .map_or(&self.env_bind_group, |(_, g)| g)
+                        },
                         &[],
                     );
-                    env_bound = d.env_group;
+                    env_bound = (d.env_group, custom_env);
                 }
                 // Off-screen. The shadow passes above deliberately did draw it:
                 // a caster the camera cannot see still casts into the view.
@@ -11480,17 +11687,26 @@ fn fs_out(@builtin(position) p : vec4<f32>) -> @location(0) vec4<f32> {
                     ep.set_bind_group(0, &self.frame_bind_group, &[]);
                     ep.set_bind_group(3, &self.env_bind_group, &[]);
                     // Group 3 is the scene's environment unless a material has its own.
-                    let mut env_bound: Option<MaterialEnvKey> = None;
+                    let mut env_bound: (Option<MaterialEnvKey>, bool) = (None, false);
                     for (i, d) in draws.iter().enumerate() {
-                        if d.env_group != env_bound {
+                        // A custom draw on a trimmed-environment backend (WebGL2) binds
+                        // the custom pipeline's own group 3; the full environment its
+                        // standard counterpart binds does not match that pipeline layout.
+                        let custom_env = self.custom_env_bind_group.is_some()
+                            && matches!(d.topology, Topology::Custom(..));
+                        if (d.env_group, custom_env) != env_bound {
                             ep.set_bind_group(
                                 3,
-                                d.env_group
-                                    .and_then(|k| self.material_env_groups.get(&k))
-                                    .map_or(&self.env_bind_group, |(_, g)| g),
+                                if custom_env {
+                                    self.custom_env_bind_group.as_ref().unwrap()
+                                } else {
+                                    d.env_group
+                                        .and_then(|k| self.material_env_groups.get(&k))
+                                        .map_or(&self.env_bind_group, |(_, g)| g)
+                                },
                                 &[],
                             );
-                            env_bound = d.env_group;
+                            env_bound = (d.env_group, custom_env);
                         }
                         if !d.in_frustum || !d.topology.encodes() {
                             continue;
@@ -11763,17 +11979,26 @@ fn fs_out(@builtin(position) p : vec4<f32>) -> @location(0) vec4<f32> {
                     opass.set_bind_group(0, &self.frame_bind_group, &[]);
                     opass.set_bind_group(3, &self.env_bind_group, &[]);
                     // Group 3 is the scene's environment unless a material has its own.
-                    let mut env_bound: Option<MaterialEnvKey> = None;
+                    let mut env_bound: (Option<MaterialEnvKey>, bool) = (None, false);
                     for (i, d) in draws.iter().enumerate() {
-                        if d.env_group != env_bound {
+                        // A custom draw on a trimmed-environment backend (WebGL2) binds
+                        // the custom pipeline's own group 3; the full environment its
+                        // standard counterpart binds does not match that pipeline layout.
+                        let custom_env = self.custom_env_bind_group.is_some()
+                            && matches!(d.topology, Topology::Custom(..));
+                        if (d.env_group, custom_env) != env_bound {
                             opass.set_bind_group(
                                 3,
-                                d.env_group
-                                    .and_then(|k| self.material_env_groups.get(&k))
-                                    .map_or(&self.env_bind_group, |(_, g)| g),
+                                if custom_env {
+                                    self.custom_env_bind_group.as_ref().unwrap()
+                                } else {
+                                    d.env_group
+                                        .and_then(|k| self.material_env_groups.get(&k))
+                                        .map_or(&self.env_bind_group, |(_, g)| g)
+                                },
                                 &[],
                             );
-                            env_bound = d.env_group;
+                            env_bound = (d.env_group, custom_env);
                         }
                         if !d.in_frustum {
                             continue;
@@ -12016,7 +12241,34 @@ fn fs_out(@builtin(position) p : vec4<f32>) -> @location(0) vec4<f32> {
             let ssc = self.ss_color.as_ref().unwrap();
             // Copy the opaque depth into the sampleable ss_depth so the glass
             // shader can ray-march it for refraction/reflection.
-            if let Some((_, _, ss_dtex, _)) = &self.ss_depth {
+            if let (Some((_, _, _, ss_dview)), Some((bgl, pipe, sampler))) = (&self.ss_depth, &self.depth_copy) {
+                // where depth cannot be copied: drawn across instead
+                let src = depth_src.or(self.msaa_depth_out.as_ref()).unwrap_or(&self.depth_texture);
+                let src_view = src.create_view(&wgpu::TextureViewDescriptor { aspect: wgpu::TextureAspect::DepthOnly, ..Default::default() });
+                let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("threers depth copy bg"),
+                    layout: bgl,
+                    entries: &[
+                        wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&src_view) },
+                        wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(sampler) },
+                    ],
+                });
+                let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("threers depth copy pass"),
+                    color_attachments: &[],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: ss_dview,
+                        depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(self.depth_clear()), store: wgpu::StoreOp::Store }),
+                        stencil_ops: None,
+                    }),
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                rp.set_pipeline(pipe);
+                rp.set_bind_group(0, &bg, &[]);
+                rp.draw(0..3, 0..1);
+            } else if let Some((_, _, ss_dtex, _)) = &self.ss_depth {
                 let src = depth_src.or(self.msaa_depth_out.as_ref()).unwrap_or(&self.depth_texture);
                 encoder.copy_texture_to_texture(
                     wgpu::TexelCopyTextureInfo {
@@ -12447,17 +12699,26 @@ fn fs_out(@builtin(position) p : vec4<f32>) -> @location(0) vec4<f32> {
                     u32,
                 )> = None;
                 // Group 3 is the scene's environment unless a material has its own.
-                let mut env_bound: Option<MaterialEnvKey> = None;
+                let mut env_bound: (Option<MaterialEnvKey>, bool) = (None, false);
                 for (i, d) in draws.iter().enumerate() {
-                    if d.env_group != env_bound {
+                    // A custom draw on a trimmed-environment backend (WebGL2) binds
+                    // the custom pipeline's own group 3; the full environment its
+                    // standard counterpart binds does not match that pipeline layout.
+                    let custom_env = self.custom_env_bind_group.is_some()
+                        && matches!(d.topology, Topology::Custom(..));
+                    if (d.env_group, custom_env) != env_bound {
                         op.set_bind_group(
                             3,
-                            d.env_group
-                                .and_then(|k| self.material_env_groups.get(&k))
-                                .map_or(&self.env_bind_group, |(_, g)| g),
+                            if custom_env {
+                                self.custom_env_bind_group.as_ref().unwrap()
+                            } else {
+                                d.env_group
+                                    .and_then(|k| self.material_env_groups.get(&k))
+                                    .map_or(&self.env_bind_group, |(_, g)| g)
+                            },
                             &[],
                         );
-                        env_bound = d.env_group;
+                        env_bound = (d.env_group, custom_env);
                     }
                     if !d.in_frustum {
                         continue;
