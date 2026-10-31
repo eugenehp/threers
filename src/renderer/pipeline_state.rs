@@ -67,7 +67,7 @@ struct OwnedVertexLayout {
     attributes: Vec<wgpu::VertexAttribute>,
 }
 
-/// An owned copy of a `RenderPipelineDescriptor` (less the pipeline cache),
+/// An owned copy of a `RenderPipelineDescriptor`,
 /// so the pipeline can be rebuilt with different fixed-function state.
 #[derive(Clone)]
 pub(crate) struct PipelineRecipe {
@@ -80,6 +80,7 @@ pub(crate) struct PipelineRecipe {
     depth_stencil: Option<wgpu::DepthStencilState>,
     multisample: wgpu::MultisampleState,
     multiview_mask: Option<NonZeroU32>,
+    cache: Option<wgpu::PipelineCache>,
 }
 
 /// What a [`RenderState`] resolves to against one pipeline: the three values
@@ -157,6 +158,7 @@ impl PipelineRecipe {
             depth_stencil: desc.depth_stencil.clone(),
             multisample: desc.multisample,
             multiview_mask: desc.multiview_mask,
+            cache: desc.cache.cloned(),
         }
     }
 
@@ -175,10 +177,9 @@ impl PipelineRecipe {
                     .any(|t| t.write_mask != wgpu::ColorWrites::empty())
             }),
             reversed: false,
-            additive: self
-                .fragment
-                .as_ref()
-                .is_some_and(|(_, targets)| targets.iter().flatten().any(|t| t.blend == Some(ADDITIVE))),
+            additive: self.fragment.as_ref().is_some_and(|(_, targets)| {
+                targets.iter().flatten().any(|t| t.blend == Some(ADDITIVE))
+            }),
         }
     }
 
@@ -233,6 +234,13 @@ impl PipelineRecipe {
     }
 
     pub(crate) fn build(&self, device: &wgpu::Device, s: ResolvedState) -> wgpu::RenderPipeline {
+        self.rebuild(device, Some(s))
+    }
+
+    /// Reconstruct the original descriptor exactly for first use. A material
+    /// state override can intentionally normalize all color targets; initial
+    /// construction must retain each target's own blend and write mask.
+    fn rebuild(&self, device: &wgpu::Device, state: Option<ResolvedState>) -> wgpu::RenderPipeline {
         let buffers: Vec<Option<wgpu::VertexBufferLayout>> = self
             .buffers
             .iter()
@@ -251,7 +259,7 @@ impl PipelineRecipe {
             .map(|(k, v)| (k.as_str(), *v))
             .collect();
         let mut depth_stencil = self.depth_stencil.clone();
-        if let Some(ds) = depth_stencil.as_mut() {
+        if let (Some(ds), Some(s)) = (depth_stencil.as_mut(), state) {
             ds.depth_compare = s.compare;
             ds.depth_write_enabled = s.depth_write;
         }
@@ -260,12 +268,12 @@ impl PipelineRecipe {
             .as_ref()
             .map(|(_, t)| t.clone())
             .unwrap_or_default();
-        if !s.color_write {
+        if state.is_some_and(|s| !s.color_write) {
             for t in targets.iter_mut().flatten() {
                 t.write_mask = wgpu::ColorWrites::empty();
             }
         }
-        if s.additive {
+        if state.is_some_and(|s| s.additive) {
             for t in targets.iter_mut().flatten() {
                 t.blend = Some(ADDITIVE);
             }
@@ -275,12 +283,18 @@ impl PipelineRecipe {
             .as_ref()
             .map(|(f, _)| f.constants.iter().map(|(k, v)| (k.as_str(), *v)).collect())
             .unwrap_or_default();
-        let label = format!(
-            "{} (material state)",
-            self.label.as_deref().unwrap_or("threers")
-        );
+        let label = state.map(|_| {
+            format!(
+                "{} (material state)",
+                self.label.as_deref().unwrap_or("threers")
+            )
+        });
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some(&label),
+            label: if state.is_some() {
+                label.as_deref()
+            } else {
+                self.label.as_deref()
+            },
             layout: self.layout.as_ref(),
             vertex: wgpu::VertexState {
                 module: &self.vertex.module,
@@ -304,21 +318,81 @@ impl PipelineRecipe {
                 targets: &targets,
             }),
             multiview_mask: self.multiview_mask,
-            cache: None,
+            cache: self.cache.as_ref(),
         })
+    }
+}
+
+/// Shared identity is stable before and after first use. Cloning a handle must
+/// neither compile it nor give the state-variant caches a different key.
+#[derive(Clone)]
+pub(crate) struct Pipeline(std::sync::Arc<PipelineInner>);
+
+struct PipelineInner {
+    compiled: std::sync::OnceLock<wgpu::RenderPipeline>,
+    deferred: Option<(wgpu::Device, PipelineRecipe)>,
+}
+
+impl Pipeline {
+    pub(crate) fn create(
+        device: &wgpu::Device,
+        desc: &wgpu::RenderPipelineDescriptor,
+        deferred: bool,
+    ) -> Self {
+        if !deferred {
+            return Self::ready(device.create_render_pipeline(desc));
+        }
+        Self(std::sync::Arc::new(PipelineInner {
+            compiled: std::sync::OnceLock::new(),
+            deferred: Some((device.clone(), PipelineRecipe::capture(desc))),
+        }))
+    }
+
+    fn ready(pipeline: wgpu::RenderPipeline) -> Self {
+        Self(std::sync::Arc::new(PipelineInner {
+            compiled: std::sync::OnceLock::from(pipeline),
+            deferred: None,
+        }))
+    }
+}
+
+impl std::ops::Deref for Pipeline {
+    type Target = wgpu::RenderPipeline;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.compiled.get_or_init(|| {
+            let (device, recipe) = self
+                .0
+                .deferred
+                .as_ref()
+                .expect("uncompiled pipeline must retain its descriptor and device");
+            recipe.rebuild(device, None)
+        })
+    }
+}
+
+impl PartialEq for Pipeline {
+    fn eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+impl Eq for Pipeline {}
+impl std::hash::Hash for Pipeline {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::hash::Hash::hash(&std::sync::Arc::as_ptr(&self.0), state);
     }
 }
 
 /// Every material pipeline's recipe, and the state variants built from them.
 #[derive(Default)]
 pub(crate) struct StatePipelines {
-    recipes: HashMap<wgpu::RenderPipeline, PipelineRecipe>,
-    variants: HashMap<(wgpu::RenderPipeline, ResolvedState), wgpu::RenderPipeline>,
-    culls: HashMap<(wgpu::RenderPipeline, Option<wgpu::Face>), wgpu::RenderPipeline>,
+    recipes: HashMap<Pipeline, PipelineRecipe>,
+    variants: HashMap<(Pipeline, ResolvedState), Pipeline>,
+    culls: HashMap<(Pipeline, Option<wgpu::Face>), Pipeline>,
     /// Each registered pipeline layout's bind group layouts, so a pipeline can
     /// be rebuilt with one group swapped ([`relayout`](Self::relayout)).
     layouts: HashMap<wgpu::PipelineLayout, Vec<Option<wgpu::BindGroupLayout>>>,
-    relayouts: HashMap<(wgpu::RenderPipeline, u64), wgpu::RenderPipeline>,
+    relayouts: HashMap<(Pipeline, u64), Pipeline>,
     swapped_layouts: HashMap<(wgpu::PipelineLayout, u64), wgpu::PipelineLayout>,
     /// Reversed depth: [`variant`](Self::variant) flips every depth compare
     /// and negates the bias, default state included.
@@ -332,8 +406,20 @@ impl StatePipelines {
         &mut self,
         device: &wgpu::Device,
         desc: &wgpu::RenderPipelineDescriptor,
-    ) -> wgpu::RenderPipeline {
-        let pipeline = device.create_render_pipeline(desc);
+    ) -> Pipeline {
+        let pipeline = Pipeline::create(device, desc, false);
+        self.recipes
+            .insert(pipeline.clone(), PipelineRecipe::capture(desc));
+        pipeline
+    }
+
+    pub(crate) fn create_initial(
+        &mut self,
+        device: &wgpu::Device,
+        desc: &wgpu::RenderPipelineDescriptor,
+        deferred: bool,
+    ) -> Pipeline {
+        let pipeline = Pipeline::create(device, desc, deferred);
         self.recipes
             .insert(pipeline.clone(), PipelineRecipe::capture(desc));
         pipeline
@@ -358,9 +444,9 @@ impl StatePipelines {
     pub(crate) fn variant(
         &mut self,
         device: &wgpu::Device,
-        base: &wgpu::RenderPipeline,
+        base: &Pipeline,
         state: &RenderState,
-    ) -> wgpu::RenderPipeline {
+    ) -> Pipeline {
         if state.is_default() && !self.reversed {
             return base.clone();
         }
@@ -383,7 +469,7 @@ impl StatePipelines {
             return p.clone();
         }
         let r = recipe.with_state(resolved);
-        let p = r.build(device, r.stock());
+        let p = Pipeline::ready(r.build(device, r.stock()));
         self.recipes.insert(p.clone(), r);
         self.variants.insert((base.clone(), resolved), p.clone());
         p
@@ -408,13 +494,13 @@ impl StatePipelines {
     pub(crate) fn relayout(
         &mut self,
         device: &wgpu::Device,
-        base: &wgpu::RenderPipeline,
+        base: &Pipeline,
         key: u64,
         group: usize,
         bgl: &wgpu::BindGroupLayout,
         from: &wgpu::ShaderModule,
         module: &wgpu::ShaderModule,
-    ) -> Option<wgpu::RenderPipeline> {
+    ) -> Option<Pipeline> {
         if let Some(p) = self.relayouts.get(&(base.clone(), key)) {
             return Some(p.clone());
         }
@@ -448,7 +534,7 @@ impl StatePipelines {
                 f.module = module.clone();
             }
         }
-        let pipeline = r.build(device, r.stock());
+        let pipeline = Pipeline::ready(r.build(device, r.stock()));
         self.layouts.entry(layout).or_insert_with(|| {
             let mut g = groups;
             if group < g.len() {
@@ -468,9 +554,9 @@ impl StatePipelines {
     pub(crate) fn cull_variant(
         &mut self,
         device: &wgpu::Device,
-        base: &wgpu::RenderPipeline,
+        base: &Pipeline,
         cull: Option<wgpu::Face>,
-    ) -> wgpu::RenderPipeline {
+    ) -> Pipeline {
         let Some(recipe) = self.recipes.get(base) else {
             return base.clone();
         };
@@ -482,7 +568,7 @@ impl StatePipelines {
             .or_insert_with(|| {
                 let mut r = recipe.clone();
                 r.primitive.cull_mode = cull;
-                r.build(device, r.stock())
+                Pipeline::ready(r.build(device, r.stock()))
             })
             .clone()
     }
@@ -520,7 +606,10 @@ mod tests {
         assert_eq!(Blending::from_three(5), None); // MultiplyBlending: not applied
         assert_eq!(RenderState::default().blending, Blending::Normal);
         // a non-default state is what routes a draw to a pipeline variant
-        let s = RenderState { blending: Blending::Additive, ..RenderState::default() };
+        let s = RenderState {
+            blending: Blending::Additive,
+            ..RenderState::default()
+        };
         assert!(!s.is_default());
     }
 
@@ -536,5 +625,150 @@ mod tests {
         let s = RenderState::default();
         assert!(s.effective_write(true));
         assert!(!s.effective_write(false));
+    }
+
+    /// A lazy recipe must preserve each target's blend and write mask. A cache key must
+    /// remain stable after the underlying pipeline has been compiled.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn deferred_pipeline_preserves_descriptor_and_cache_identity() {
+        use std::sync::Arc;
+
+        let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+        desc.backends = wgpu::Backends::PRIMARY;
+        let instance = wgpu::Instance::new(desc);
+        let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
+            eprintln!("skipping: no GPU adapter");
+            return;
+        };
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+        let device = Arc::new(device);
+        let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("mixed blend recipe probe"),
+            source: wgpu::ShaderSource::Wgsl(
+                r#"
+@vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
+    let p = array<vec2f, 3>(vec2f(-1., -1.), vec2f(3., -1.), vec2f(-1., 3.));
+    return vec4f(p[i], 0., 1.);
+}
+struct Outputs { @location(0) a: vec4f, @location(1) b: vec4f }
+@fragment fn fs() -> Outputs {
+    return Outputs(vec4f(0.25, 0.4, 0.6, 0.5), vec4f(0.25, 0.4, 0.6, 0.5));
+}
+"#
+                .into(),
+            ),
+        });
+        let additive = wgpu::BlendState {
+            color: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::SrcAlpha,
+                dst_factor: wgpu::BlendFactor::One,
+                operation: wgpu::BlendOperation::Add,
+            },
+            alpha: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::SrcAlpha,
+                dst_factor: wgpu::BlendFactor::One,
+                operation: wgpu::BlendOperation::Add,
+            },
+        };
+        let targets = [
+            Some(wgpu::ColorTargetState {
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                blend: Some(additive),
+                write_mask: wgpu::ColorWrites::ALL,
+            }),
+            Some(wgpu::ColorTargetState {
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::RED | wgpu::ColorWrites::GREEN,
+            }),
+        ];
+        let desc = wgpu::RenderPipelineDescriptor {
+            label: Some("mixed blend recipe"),
+            layout: None,
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            primitive: Default::default(),
+            depth_stencil: None,
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs"),
+                targets: &targets,
+                compilation_options: Default::default(),
+            }),
+            multiview_mask: None,
+            cache: None,
+        };
+        let mut images = Vec::new();
+        for deferred in [false, true] {
+            let pipe = Pipeline::create(&device, &desc, deferred);
+            assert_eq!(pipe.0.compiled.get().is_none(), deferred);
+            let cloned = pipe.clone();
+            // Cache identity must survive compilation of a previously pending handle.
+            #[expect(
+                clippy::mutable_key_type,
+                reason = "hash and equality use only immutable Arc identity; this test checks that contract"
+            )]
+            let mut keys = std::collections::HashSet::new();
+            keys.insert(cloned);
+            assert_eq!(pipe.0.compiled.get().is_none(), deferred);
+            let a = crate::RenderTarget::new(&device, 4, 4, wgpu::TextureFormat::Rgba8Unorm);
+            let b = crate::RenderTarget::new(&device, 4, 4, wgpu::TextureFormat::Rgba8Unorm);
+            let attachment = |view| {
+                Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.2,
+                            g: 0.3,
+                            b: 0.4,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })
+            };
+            let mut encoder = device.create_command_encoder(&Default::default());
+            {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    color_attachments: &[attachment(&a.color_view), attachment(&b.color_view)],
+                    ..Default::default()
+                });
+                pass.set_pipeline(&pipe);
+                pass.draw(0..3, 0..1);
+            }
+            assert!(pipe.0.compiled.get().is_some());
+            assert!(
+                keys.contains(&pipe),
+                "pipeline identity changed after compilation"
+            );
+            queue.submit([encoder.finish()]);
+            images.push((
+                crate::renderer::readback::texture_bytes(&device, &queue, &a.color_texture),
+                crate::renderer::readback::texture_bytes(&device, &queue, &b.color_texture),
+            ));
+        }
+        assert!(
+            pollster::block_on(validation.pop()).is_none(),
+            "wgpu validation error"
+        );
+        assert_eq!(
+            images[0], images[1],
+            "lazy recipe changed target-specific blend state"
+        );
+        assert_ne!(
+            images[0].0, images[0].1,
+            "fixture must distinguish the two blend states"
+        );
+        eprintln!("[lazy-recipe] PASS exact mixed-target blends and stable cache identity");
     }
 }
