@@ -13,7 +13,7 @@
 //!
 //! Skipped without the `metal` feature or a Metal device.
 
-#![cfg(all(feature = "metal", any(target_os = "macos", target_os = "ios")))]
+#![cfg(metal_backend)]
 
 use threers::cameras::PerspectiveCamera;
 use threers::core::{Mesh, Object3D};

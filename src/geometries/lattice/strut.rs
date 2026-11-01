@@ -607,9 +607,9 @@ mod tests {
         for (n, segments) in kinds.iter().enumerate() {
             for cull in [0.05f32, 0.2, 0.5] {
                 let bins = Bins::new(segments, cell, cull).expect("in range");
-                for i in 0..2000 {
+                for i in 0..2000u32 {
                     let f = |a: u32| {
-                        ((i * 2654435761u32.wrapping_add(a * 40503)) % 100_000) as f32 / 100_000.0
+                        (i.wrapping_mul(2654435761u32.wrapping_add(a * 40503)) % 100_000) as f32 / 100_000.0
                     };
                     let p = Vector3::new(f(1) * 4.0 - 2.0, f(2) * 3.0 - 1.5, f(3) * 4.0 - 2.0);
                     // At the bins' cull and below it, and above it — which

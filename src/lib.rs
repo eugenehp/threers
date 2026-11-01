@@ -82,13 +82,13 @@
 //!
 //! ```toml
 //! # CAD stack in one flag
-//! threers = { version = "0.0.9", features = ["cad"] }
+//! threers = { version = "0.0.10", features = ["cad"] }
 //! # everything
-//! threers = { version = "0.0.9", features = ["full"] }
+//! threers = { version = "0.0.10", features = ["full"] }
 //! # browser wasm kitchen sink
-//! threers = { version = "0.0.9", features = ["wasm-full"] }
+//! threers = { version = "0.0.10", features = ["wasm-full"] }
 //! # nothing but the renderer
-//! threers = { version = "0.0.9", default-features = false }
+//! threers = { version = "0.0.10", default-features = false }
 //! ```
 //!
 //! Rigid-body physics lives in the companion crate
@@ -130,6 +130,59 @@
 // those belong in a struct together. Bundling them to get under a threshold of
 // seven would hide which of them a caller is actually varying.
 #![allow(clippy::too_many_arguments)]
+
+// One gate, written once. Rust has no way to name a `cfg` predicate without a
+// build script, which this crate does not have; a macro that stamps the
+// attribute on what it wraps is the next best thing. Defined before every
+// module so all of them see it.
+
+/// Items for where the native Metal backend is: the `metal` feature on macOS,
+/// iOS, tvOS or visionOS.
+#[allow(unused_macros)] // not every target has a user
+macro_rules! cfg_metal {
+    ($($item:item)*) => {
+        $(
+            #[cfg(metal_backend)]
+            $item
+        )*
+    };
+}
+
+/// Items for Apple's Metal platforms, feature or not — what wgpu reaches
+/// through a `CAMetalLayer`.
+#[allow(unused_macros)] // not every target has a user
+macro_rules! cfg_apple {
+    ($($item:item)*) => {
+        $(
+            #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos", target_os = "visionos"))]
+            $item
+        )*
+    };
+}
+
+/// Items for everywhere else — the same names with nothing behind them, so
+/// code that holds an `Option` of a Metal type needs no gate of its own.
+#[allow(unused_macros)] // not every target has a user
+macro_rules! cfg_no_metal {
+    ($($item:item)*) => {
+        $(
+            #[cfg(not(metal_backend))]
+            $item
+        )*
+    };
+}
+
+/// Statements for where the native Metal backend is (see [`cfg_metal`]): a
+/// block that is there or is not, for code inside a function.
+#[allow(unused_macros)] // not every target has a user
+macro_rules! on_metal {
+    ($($body:tt)*) => {
+        #[cfg(metal_backend)]
+        {
+            $($body)*
+        }
+    };
+}
 
 pub mod animation;
 /// Generic checks for assemblies that move: body correspondence across poses,
@@ -187,8 +240,9 @@ pub mod overlay;
 // intra-doc links resolve in this scope, where `Ui` is not.)
 #[cfg(feature = "ui")]
 pub mod ui;
-/// A window, a scene and a loop in one call. Native only.
-#[cfg(not(target_arch = "wasm32"))]
+/// A window, a scene and a loop in one call. Native only, and not tvOS or
+/// visionOS, whose windows belong to the system.
+#[cfg(not(any(target_arch = "wasm32", target_os = "tvos", target_os = "visionos")))]
 pub mod sketch;
 pub mod renderer;
 
@@ -212,11 +266,13 @@ pub mod wasm_pathtrace;
 #[cfg(all(target_arch = "wasm32", feature = "bvh-csg"))]
 pub mod wasm_csg;
 
-/// A second renderer that talks to Metal directly, with no `metal-rs`, no
-/// `objc` crate and no C in the build — see [`metal`](crate::metal) for what it
-/// covers. macOS and iOS only; the `metal` feature is inert elsewhere.
-#[cfg(all(feature = "metal", any(target_os = "macos", target_os = "ios")))]
-pub mod metal;
+cfg_metal! {
+    /// A second renderer that talks to Metal directly, with no `metal-rs`, no
+    /// `objc` crate and no C in the build — see [`metal`](crate::metal) for what it
+    /// covers. macOS, iOS, tvOS and visionOS only; the `metal` feature is inert
+    /// elsewhere.
+    pub mod metal;
+}
 
 /// In-process hardware video encoding and decoding through VideoToolbox, so
 /// frames reach the codec without crossing a process boundary. macOS only;

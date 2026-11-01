@@ -17,13 +17,14 @@
 //!   something a person clicks and would be absurd per frame, which is why the
 //!   two tiers above exist.
 
+use threers::marks::gpu;
 use std::sync::Arc;
 
 use threers::lights::Light;
 use threers::scene::FogParams;
 use threers::{
     AmbientLight, BufferGeometry, Color, DirectionalLight, HemisphereLight, Material, Mesh,
-    Object3D, ObjectId, ObjectKind, PerspectiveCamera, Quaternion, Renderer, Scene, SphereGeometry,
+    Object3D, ObjectId, ObjectKind, PerspectiveCamera, Quaternion, Scene, SphereGeometry,
     StandardMaterial, Vector3,
 };
 
@@ -334,9 +335,9 @@ impl World {
     /// forces without waiting for a draw.
     pub fn attach_waves(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        renderer: &mut Renderer,
+        device: &gpu::Device,
+        queue: &gpu::Queue,
+        renderer: &mut dyn crate::waves_gpu::MeshHost,
     ) -> WaveCompute {
         renderer.upload_geometry(&self.water_geometry);
         let fft = OceanFft::new(
@@ -457,9 +458,9 @@ impl World {
     /// below and does not come through here.
     pub fn reconfigure(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        renderer: &mut Renderer,
+        device: &gpu::Device,
+        queue: &gpu::Queue,
+        renderer: &mut dyn crate::waves_gpu::MeshHost,
         preset: &Preset,
         quality: &Quality,
         cas: Cascades,
@@ -508,7 +509,7 @@ impl World {
     /// shaders is left alone: it is derived from the peak wavelength, which
     /// moves by a few percent under a wind change and is only used to decide how
     /// a wave feels the bottom.
-    pub fn set_wind(&mut self, queue: &wgpu::Queue, direction: f32, speed: f32) {
+    pub fn set_wind(&mut self, queue: &gpu::Queue, direction: f32, speed: f32) {
         self.preset.wind_dir = direction;
         self.preset.wind_speed = speed.clamp(0.5, 40.0);
         self.sea = SeaState::from_preset(&self.preset);
@@ -629,8 +630,8 @@ impl World {
     pub fn update(
         &mut self,
         t: f32,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        device: &gpu::Device,
+        queue: &gpu::Queue,
         waves: &WaveCompute,
     ) {
         // Follow the camera in the horizontal plane only — the disc is a

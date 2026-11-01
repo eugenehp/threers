@@ -36,7 +36,7 @@ fn main_mesh_shader_is_valid() {
 #[test]
 fn auxiliary_shaders_are_valid() {
     use threers::renderer::shader as s;
-    validate("POSTFX_SHADER", s::POSTFX_SHADER);
+    validate("POSTFX_SHADER", s::postfx_shader());
     validate("SS_BLIT_SHADER", s::SS_BLIT_SHADER);
     validate("TAA_SHADER", s::TAA_SHADER);
     validate("OIT_RESOLVE_SHADER", s::OIT_RESOLVE_SHADER);

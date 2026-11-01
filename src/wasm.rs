@@ -3736,7 +3736,7 @@ pub struct WebShaderMaterial {
     inner: crate::ShaderMaterial,
     /// `u_vol0` / `u_vol1` as set, kept apart from `inner.volumes` (which is
     /// positional and has no holes — see `sync_volumes`).
-    volumes: [Option<Arc<wgpu::TextureView>>; 2],
+    volumes: [Option<crate::marks::gpu::TextureView>; 2],
 }
 
 #[wasm_bindgen]
@@ -3947,7 +3947,7 @@ impl WebShaderMaterial {
             &queue,
             &Data3DTexture::new(width, height, depth, format, bytes),
         );
-        self.volumes[slot as usize] = Some(Arc::new(vol.view));
+        self.volumes[slot as usize] = Some(vol.view);
         self.sync_volumes(Some(&device));
         Ok(())
     }
@@ -3966,7 +3966,7 @@ impl WebShaderMaterial {
                         [1, 1, 1],
                         crate::volume::VolumeFormat::R8Unorm,
                     );
-                    Some(Arc::new(v.view))
+                    Some(v.view)
                 });
                 first.map_or_else(Vec::new, |a| vec![a, b.clone()])
             }

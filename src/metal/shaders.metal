@@ -16,6 +16,11 @@
 #include <metal_stdlib>
 using namespace metal;
 
+// The functions both backends share — the tone curves and the shading
+// helpers (`SHARED_FUNCTIONS` in `renderer/shader.rs`) — put in here by
+// `shader_source()`.
+//@@SHARED_FUNCTIONS@@
+
 // ---------------------------------------------------------------- vertex data
 
 // 48 bytes. `packed_float3` so the layout is exactly the Rust `Vertex`.
@@ -70,10 +75,12 @@ struct RectLight {
     float4 up;
 };
 
+/// Named as wgpu's `HemiLight`, so a translated WGSL shader reads the frame's
+/// own records rather than copies.
 struct HemiLight {
-    float4 sky;
-    float4 ground;
-    float4 up;
+    float4 sky_color;
+    float4 ground_color;
+    float4 direction;
 };
 
 // Per-view state. One view is a plain camera; two are the eyes of a headset,
@@ -107,7 +114,7 @@ struct Frame {
     float4     fog_params;  // near, far, density
     float4     viewport;    // width, height, 1/width, 1/height
     uint4      counts;      // dir, point, spot, hemi
-    uint4      view_info;   // view count; y: 1 when the target is sRGB (encodes on write); rest unused
+    uint4      view_info;   // view count; y: bit 0 the target is sRGB (encodes on write), bit 1 it stands in for a Unorm one; z, w: tone mapping
     DirLight   dir[4];
     PointLight pts[8];
     SpotLight  spots[4];
@@ -159,6 +166,12 @@ struct Draw {
     // Each map's own uv transform, as two rows of three.js's `Texture.matrix`
     // (`setUvTransform`), in `MAP_*` order.
     float4   map_xform[44];
+    // The planet terms of Standard and Physical (`DrawUniforms::planet`):
+    // [0] night-side emissive, sun angular radius, twilight width, cloud
+    // scatter; [1] twilight colour, scatter anisotropy; [2] cloud shell
+    // height, shadow strength, longitude offset, cloud map bound; [3] the
+    // eclipse occluder; [4] x: the normal map's y scale.
+    float4   planet[5];
 };
 
 constant uint MAP_BASE     = 0u;
@@ -234,6 +247,7 @@ constant uint KIND_DEPTH      = 6u;
 constant uint KIND_TOON       = 7u;
 constant uint KIND_MATCAP     = 8u;
 constant uint KIND_DISTANCE   = 12u;
+constant uint KIND_ATMOSPHERE = 16u;
 
 // The interpolants, shared by the single-view and layered outputs. A macro
 // because Metal has no struct inheritance and the fragment stage matches its
@@ -597,6 +611,19 @@ static inline TangentPair attribute_frame(float4 vt, float3 n, TangentPair fallb
     return f;
 }
 
+/// three.js `displacementMap`: the height map's red channel moves the vertex
+/// along its (morphed) normal, scaled and offset — `planet[4]`: y scale, z
+/// bias, w bound — as the wgpu backend's `apply_displacement`, in every pass
+/// a mesh is drawn in, its shadows' included.
+static inline Vertex displace(Vertex v, constant Draw &draw, texture2d<float> disp, sampler samp) {
+    if (draw.planet[4].w > 0.5) {
+        float h = disp.sample(samp, v.uv, level(0.0)).r;
+        float3 n = float3(v.normal);
+        v.position = packed_float3(float3(v.position) + normalize(n) * (h * draw.planet[4].y + draw.planet[4].z));
+    }
+    return v;
+}
+
 vertex VOut vs_mesh(uint vid [[vertex_id]],
                     uint iid [[instance_id]],
                     device const Vertex   *verts     [[buffer(0)]],
@@ -605,12 +632,15 @@ vertex VOut vs_mesh(uint vid [[vertex_id]],
                     device const float4x4 *instances [[buffer(3)]],
                     device const float4   *morph_data [[buffer(6)]],
                     constant MorphInfo    &morph      [[buffer(7)]],
-                    device const float4   *uv_sets    [[buffer(8)]]) {
+                    device const float4   *uv_sets    [[buffer(8)]],
+                    texture2d<float>      disp_map   [[texture(0)]],
+                    sampler               disp_samp  [[sampler(0)]]) {
     if (draw.object.y == 1u) {
         return sprite_vertex(verts[vid], frame, draw, 0u);
     }
     float4x4 model = model_matrix(draw, instances, iid);
     Vertex v = apply_morph(verts[vid], vid, iid, morph, morph_data, instances);
+    v = displace(v, draw, disp_map, disp_samp);
     VOut out = transform(v, model, normal_basis(draw, instances, iid), frame, draw, 0u);
     out.color *= instance_color(draw, instances, iid);
     read_uv_sets(out, vid, draw, uv_sets, model);
@@ -636,11 +666,13 @@ vertex VOut vs_skinned(uint vid [[vertex_id]],
                        device const float4x4   *bones     [[buffer(5)]],
                        device const float4     *morph_data [[buffer(6)]],
                        constant MorphInfo      &morph      [[buffer(7)]],
-                       device const float4     *uv_sets    [[buffer(8)]]) {
+                       device const float4     *uv_sets    [[buffer(8)]],
+                       texture2d<float>        disp_map    [[texture(0)]],
+                       sampler                 disp_samp   [[sampler(0)]]) {
     float4x4 sk = skin_matrix(skin[vid], bones);
     float4x4 model = skinned_model(model_matrix(draw, instances, iid), sk);
     // Morph first, then skin — three.js's chunk order.
-    Vertex v = apply_morph(verts[vid], vid, iid, morph, morph_data, instances);
+    Vertex v = displace(apply_morph(verts[vid], vid, iid, morph, morph_data, instances), draw, disp_map, disp_samp);
     VOut out = transform(v, model, skinned_normal_basis(draw, sk), frame, draw, 0u);
     read_uv_sets(out, vid, draw, uv_sets, model);
     return out;
@@ -662,12 +694,14 @@ vertex float4 vs_shadow(uint vid [[vertex_id]],
                         device const SkinVertex *skin      [[buffer(4)]],
                         device const float4x4   *bones     [[buffer(5)]],
                         device const float4     *morph_data [[buffer(6)]],
-                        constant MorphInfo      &morph      [[buffer(7)]]) {
+                        constant MorphInfo      &morph      [[buffer(7)]],
+                        texture2d<float>        disp_map    [[texture(0)]],
+                        sampler                 disp_samp   [[sampler(0)]]) {
     float4x4 model = model_matrix(draw, instances, iid);
     if (draw.maps.w == 2u) {   // 2 marks a skinned draw; see `DrawUniforms`
         model = skinned_model(model, skin_matrix(skin[vid], bones));
     }
-    Vertex v = apply_morph(verts[vid], vid, iid, morph, morph_data, instances);
+    Vertex v = displace(apply_morph(verts[vid], vid, iid, morph, morph_data, instances), draw, disp_map, disp_samp);
     return frame.shadow_vp * model * float4(float3(v.position), 1.0);
 }
 
@@ -706,12 +740,14 @@ vertex ShadowCutOut vs_shadow_cut(uint vid [[vertex_id]],
                                   device const SkinVertex *skin      [[buffer(4)]],
                                   device const float4x4   *bones     [[buffer(5)]],
                                   device const float4     *morph_data [[buffer(6)]],
-                                  constant MorphInfo      &morph      [[buffer(7)]]) {
+                                  constant MorphInfo      &morph      [[buffer(7)]],
+                                  texture2d<float>        disp_map    [[texture(0)]],
+                                  sampler                 disp_samp   [[sampler(0)]]) {
     float4x4 model = model_matrix(draw, instances, iid);
     if (draw.maps.w == 2u) {
         model = skinned_model(model, skin_matrix(skin[vid], bones));
     }
-    Vertex v = apply_morph(verts[vid], vid, iid, morph, morph_data, instances);
+    Vertex v = displace(apply_morph(verts[vid], vid, iid, morph, morph_data, instances), draw, disp_map, disp_samp);
     ShadowCutOut o;
     o.position = frame.shadow_vp * model * float4(float3(v.position), 1.0);
     o.uv = v.uv;
@@ -759,12 +795,14 @@ vertex ShadowPointOut vs_shadow_point(uint vid [[vertex_id]],
                                       device const SkinVertex *skin      [[buffer(4)]],
                                       device const float4x4   *bones     [[buffer(5)]],
                                       device const float4     *morph_data [[buffer(6)]],
-                                      constant MorphInfo      &morph      [[buffer(7)]]) {
+                                      constant MorphInfo      &morph      [[buffer(7)]],
+                                      texture2d<float>        disp_map    [[texture(0)]],
+                                      sampler                 disp_samp   [[sampler(0)]]) {
     float4x4 model = model_matrix(draw, instances, iid);
     if (draw.maps.w == 2u) {
         model = skinned_model(model, skin_matrix(skin[vid], bones));
     }
-    Vertex v = apply_morph(verts[vid], vid, iid, morph, morph_data, instances);
+    Vertex v = displace(apply_morph(verts[vid], vid, iid, morph, morph_data, instances), draw, disp_map, disp_samp);
     float4 world = model * float4(float3(v.position), 1.0);
     ShadowPointOut o;
     o.position = frame.shadow_vp * world;
@@ -916,9 +954,11 @@ vertex VOut vs_point(uint vid [[vertex_id]],
                      constant Draw         &draw      [[buffer(2)]],
                      device const float4x4 *instances [[buffer(3)]],
                      device const float4   *morph_data [[buffer(6)]],
-                     constant MorphInfo    &morph      [[buffer(7)]]) {
+                     constant MorphInfo    &morph      [[buffer(7)]],
+                     texture2d<float>        disp_map    [[texture(0)]],
+                     sampler                 disp_samp   [[sampler(0)]]) {
     float4x4 model = model_matrix(draw, instances, iid);
-    Vertex v = apply_morph(verts[vid], vid, iid, morph, morph_data, instances);
+    Vertex v = displace(apply_morph(verts[vid], vid, iid, morph, morph_data, instances), draw, disp_map, disp_samp);
     VOut out = transform(v, model, normal_basis(draw, instances, iid), frame, draw, 0u);
     return point_size_for(out, frame, draw);
 }
@@ -946,13 +986,15 @@ vertex VOutLayered vs_mesh_layered(uint vid [[vertex_id]],
                                    device const float4x4 *instances [[buffer(3)]],
                                    device const float4   *morph_data [[buffer(6)]],
                                    constant MorphInfo    &morph      [[buffer(7)]],
-                                   device const float4   *uv_sets    [[buffer(8)]]) {
+                                   device const float4   *uv_sets    [[buffer(8)]],
+                                   texture2d<float>        disp_map    [[texture(0)]],
+                                   sampler                 disp_samp   [[sampler(0)]]) {
     uint view = view_of(iid, frame);
     if (draw.object.y == 1u) {
         return to_layered(sprite_vertex(verts[vid], frame, draw, view));
     }
     float4x4 model = model_matrix(draw, instances, instance_of(iid, frame));
-    Vertex v = apply_morph(verts[vid], vid, instance_of(iid, frame), morph, morph_data, instances);
+    Vertex v = displace(apply_morph(verts[vid], vid, instance_of(iid, frame), morph, morph_data, instances), draw, disp_map, disp_samp);
     VOut out = transform(v, model, normal_basis(draw, instances, instance_of(iid, frame)), frame, draw, view);
     out.color *= instance_color(draw, instances, instance_of(iid, frame));
     read_uv_sets(out, vid, draw, uv_sets, model);
@@ -966,25 +1008,18 @@ vertex VOutLayeredPoint vs_point_layered(uint vid [[vertex_id]],
                                     constant Draw         &draw      [[buffer(2)]],
                                     device const float4x4 *instances [[buffer(3)]],
                                     device const float4   *morph_data [[buffer(6)]],
-                                    constant MorphInfo    &morph      [[buffer(7)]]) {
+                                    constant MorphInfo    &morph      [[buffer(7)]],
+                                    texture2d<float>        disp_map    [[texture(0)]],
+                                    sampler                 disp_samp   [[sampler(0)]]) {
     uint view = view_of(iid, frame);
     float4x4 model = model_matrix(draw, instances, instance_of(iid, frame));
-    Vertex v = apply_morph(verts[vid], vid, instance_of(iid, frame), morph, morph_data, instances);
+    Vertex v = displace(apply_morph(verts[vid], vid, instance_of(iid, frame), morph, morph_data, instances), draw, disp_map, disp_samp);
     VOut out = transform(v, model, normal_basis(draw, instances, instance_of(iid, frame)), frame, draw, view);
     return to_layered_point(point_size_for(out, frame, draw));
 }
 
 // ------------------------------------------------------------------- lighting
 
-static inline float punctual_attenuation(float d, float max_d, float decay) {
-    // three.js `getDistanceAttenuation`, matched to the wgpu backend.
-    float att = 1.0 / max(pow(d, decay), 0.01);
-    if (max_d > 0.0) {
-        float t = clamp(1.0 - pow(d / max_d, 4.0), 0.0, 1.0);
-        att *= t * t;
-    }
-    return att;
-}
 
 struct Surface {
     float3 n;
@@ -1032,12 +1067,6 @@ struct Surface {
     float3 cc_n;
 };
 
-// three.js `F_Schlick(f0, 1.0, dotVH)` in the spherical-Gaussian form r165 runs.
-static inline float3 f_schlick(float3 f0, float dot_vh) {
-    float fresnel = exp2((-5.55473 * dot_vh - 6.98316) * dot_vh);
-    return f0 * (1.0 - fresnel) + float3(fresnel);
-}
-
 /// three.js `getGradientIrradiance`, as `toon_gradient` in
 /// `renderer/shader.rs`: with a `gradientMap`, its rgb at `(n·l/2 + ½, 0)`,
 /// through `coord`'s own derivatives; without one, 0.7 / 1.0 split at
@@ -1060,33 +1089,10 @@ static inline float3 phong_specular(Surface s, float3 l) {
     float ndh = saturate(dot(s.n, h));
     float vdh = saturate(dot(s.v, h));
     float d = (1.0 / M_PI_F) * (s.shininess * 0.5 + 1.0) * pow(ndh, s.shininess);
-    return f_schlick(s.specular, vdh) * (0.25 * d);
+    return f_schlick(vdh, s.specular) * (0.25 * d);
 }
 
-// three.js `F_Schlick(f0, f90, dotVH)`.
-static inline float3 f_schlick_f90(float3 f0, float f90, float dot_vh) {
-    float fresnel = exp2((-5.55473 * dot_vh - 6.98316) * dot_vh);
-    return f0 * (1.0 - fresnel) + float3(f90 * fresnel);
-}
 
-// three.js `evalSensitivity` (`iridescence_fragment`): a Gaussian fit of the
-// CIE colour-matching functions at optical path difference `opd`, in linear
-// Rec. 709.
-static inline float3 eval_sensitivity(float opd, float3 shift) {
-    float phase = 2.0 * M_PI_F * opd * 1.0e-9;
-    float3 val = float3(5.4856e-13, 4.4201e-13, 5.2481e-13);
-    float3 pos = float3(1.6810e+06, 1.7953e+06, 2.2084e+06);
-    float3 var = float3(4.3278e+09, 9.3046e+09, 6.6121e+09);
-    float3 xyz = val * sqrt(2.0 * M_PI_F * var) * cos(pos * phase + shift) * exp(-(phase * phase) * var);
-    xyz.x += 9.7470e-14 * sqrt(2.0 * M_PI_F * 4.5282e+09) * cos(2.2399e+06 * phase + shift.x)
-           * exp(-4.5282e+09 * phase * phase);
-    xyz /= 1.0685e-7;
-    const float3x3 xyz_to_rec709 = float3x3(
-        float3( 3.2404542, -0.9692660,  0.0556434),
-        float3(-1.5371385,  1.8760108, -0.2040259),
-        float3(-0.4985314,  0.0415560,  1.0572252));
-    return xyz_to_rec709 * xyz;
-}
 
 // three.js `evalIridescence`: the reflectance of a `thickness` nm film of
 // `film_ior` over a base of reflectance `base_f0`, seen at `cos1`.
@@ -1100,14 +1106,14 @@ static inline float3 eval_iridescence(float outside_ior, float film_ior_in, floa
     }
     float cos2 = sqrt(cos2_sq);
     float r0 = pow((film_ior - outside_ior) / (film_ior + outside_ior), 2.0);
-    float r12 = f_schlick_f90(float3(r0), 1.0, cos1).x;
+    float r12 = f_schlick_f90(float3(r0), float3(1.0), cos1).x;
     float t121 = 1.0 - r12;
     float phi12 = film_ior < outside_ior ? M_PI_F : 0.0;
     float phi21 = M_PI_F - phi12;
     float3 sqrt_f0 = sqrt(clamp(base_f0, 0.0, 0.9999));
     float3 base_ior = (1.0 + sqrt_f0) / (1.0 - sqrt_f0);
     float3 r1 = pow((base_ior - film_ior) / (base_ior + film_ior), 2.0);
-    float3 r23 = f_schlick_f90(r1, 1.0, cos2);
+    float3 r23 = f_schlick_f90(r1, float3(1.0), cos2);
     float3 phi23 = select(float3(0.0), float3(M_PI_F), base_ior < film_ior);
     float opd = 2.0 * film_ior * thickness * cos2;
     float3 phi = float3(phi21) + phi23;
@@ -1142,16 +1148,6 @@ static inline TangentPair three_tangent_frame(float3 p, float3 n, float2 uv) {
     return f;
 }
 
-// Geometric specular antialiasing (Kaplanyan et al. 2016 / Filament), as
-// `specular_aa_roughness` in `renderer/shader.rs`: the shading normal's
-// variance across the pixel folded into alpha.
-static inline float specular_aa_roughness(float3 n, float perceptual) {
-    float3 du = dfdx(n);
-    float3 dv = dfdy(n);
-    float variance = 0.25 * (dot(du, du) + dot(dv, dv));
-    float widen = min(2.0 * variance, 0.18);
-    return clamp(sqrt(perceptual * perceptual + widen), 0.0, 1.0);
-}
 
 // three.js `BRDF_GGX`: `F · V · D`, the Fresnel mixed toward the thin film's,
 // with Filament's anisotropic V and D when there is anisotropy. As
@@ -1162,7 +1158,7 @@ static inline float3 brdf_ggx(Surface s, float3 l) {
     float ndv = saturate(dot(s.n, s.v));
     float ndh = saturate(dot(s.n, h));
     float vdh = saturate(dot(s.v, h));
-    float3 f = mix(f_schlick_f90(s.f0, s.f90, vdh), s.irid_fresnel, s.irid);
+    float3 f = mix(f_schlick_f90(s.f0, float3(s.f90), vdh), s.irid_fresnel, s.irid);
     if (s.aniso >= 0.0) {
         float t_l = dot(s.at, l), t_v = dot(s.at, s.v), t_h = dot(s.at, h);
         float b_l = dot(s.ab, l), b_v = dot(s.ab, s.v), b_h = dot(s.ab, h);
@@ -1174,13 +1170,7 @@ static inline float3 brdf_ggx(Surface s, float3 l) {
         float w2 = a2 / dot(dv, dv);
         return f * (vis * a2 * w2 * w2 / M_PI_F);
     }
-    float a2 = s.alpha * s.alpha;
-    float denom = ndh * ndh * (a2 - 1.0) + 1.0;
-    float d = a2 / (M_PI_F * denom * denom);
-    // three.js `V_GGX_SmithCorrelated`.
-    float gv = ndl * sqrt(a2 + (1.0 - a2) * ndv * ndv);
-    float gl = ndv * sqrt(a2 + (1.0 - a2) * ndl * ndl);
-    return f * (d * 0.5 / max(gv + gl, 1e-6));
+    return f * (v_ggx_smith_correlated(s.alpha, ndl, ndv) * d_ggx(ndh, s.alpha));
 }
 
 // Standard / Physical: three.js r165 `RE_Direct_Physical`, `irradiance ·
@@ -1197,12 +1187,7 @@ static inline float3 brdf_sheen(Surface s, float3 l) {
     float ndl = saturate(dot(s.n, l));
     float ndv = saturate(dot(s.n, s.v));
     float ndh = saturate(dot(s.n, h));
-    float alpha = s.sheen_roughness * s.sheen_roughness;
-    float inv = 1.0 / alpha;
-    float sin2h = max(1.0 - ndh * ndh, 0.0078125);
-    float d = (2.0 + inv) * pow(sin2h, inv * 0.5) / (2.0 * M_PI_F);
-    float v = saturate(1.0 / (4.0 * (ndl + ndv - ndl * ndv)));
-    return s.sheen_color * (d * v);
+    return s.sheen_color * (d_charlie(ndh, s.sheen_roughness * s.sheen_roughness) * v_neubelt(ndv, ndl));
 }
 
 // three.js `BRDF_GGX_Clearcoat` × the coat's n·l: F0 0.04, F90 1.
@@ -1213,12 +1198,7 @@ static inline float3 clearcoat_direct(Surface s, float3 l) {
     float ndh = saturate(dot(s.cc_n, h));
     float vdh = saturate(dot(s.v, h));
     float a = max(s.cc_roughness * s.cc_roughness, 0.0016);
-    float a2 = a * a;
-    float denom = ndh * ndh * (a2 - 1.0) + 1.0;
-    float d = a2 / (M_PI_F * denom * denom);
-    float gv = ndl * sqrt(a2 + (1.0 - a2) * ndv * ndv);
-    float gl = ndv * sqrt(a2 + (1.0 - a2) * ndl * ndl);
-    return f_schlick_f90(float3(0.04), 1.0, vdh) * (d * 0.5 / max(gv + gl, 1e-6)) * ndl;
+    return f_schlick_f90(float3(0.04), float3(1.0), vdh) * (v_ggx_smith_correlated(a, ndl, ndv) * d_ggx(ndh, a)) * ndl;
 }
 
 // Shadows, as `renderer/shader.rs` reads them: every casting light owns a
@@ -1228,39 +1208,8 @@ static inline float3 clearcoat_direct(Surface s, float3 l) {
 
 constant uint SHADOW_TAPS = 12u;
 
-static inline float2 shadow_disc_tap(uint k, uint n, float phi) {
-    float r = sqrt((float(k) + 0.5) / float(n));
-    float t = float(k) * 2.39996323 + phi;
-    return float2(cos(t), sin(t)) * r;
-}
 
-static inline float shadow_disc_rotation(float3 p) {
-    return fract(sin(dot(p, float3(12.9898, 78.233, 37.719))) * 43758.5453) * 6.28318530718;
-}
 
-/// The cube face a direction lands on and its uv there, chosen by hand
-/// because a point light's faces are six layers of a 2D array.
-static inline float3 point_shadow_face(float3 d) {
-    float3 a = abs(d);
-    float face, sc, tc, ma;
-    if (a.x >= a.y && a.x >= a.z) {
-        ma = a.x;
-        face = d.x > 0.0 ? 0.0 : 1.0;
-        sc = d.x > 0.0 ? -d.z : d.z;
-        tc = -d.y;
-    } else if (a.y >= a.z) {
-        ma = a.y;
-        face = d.y > 0.0 ? 2.0 : 3.0;
-        sc = d.x;
-        tc = d.y > 0.0 ? d.z : -d.z;
-    } else {
-        ma = a.z;
-        face = d.z > 0.0 ? 4.0 : 5.0;
-        sc = d.z > 0.0 ? d.x : -d.x;
-        tc = -d.y;
-    }
-    return float3(0.5 * (sc / ma + 1.0), 0.5 * (tc / ma + 1.0), face);
-}
 
 /// The three kinds' maps and their comparison sampler.
 struct ShadowMaps {
@@ -1297,7 +1246,7 @@ static inline float shadow_pcf(thread const ShadowMaps &maps, uint kind, int lay
 
 /// Percentage-closer soft shadows with a comparison-only blocker search —
 /// see `shadow_pcss` in `renderer/shader.rs`.
-static inline float shadow_pcss(thread const ShadowMaps &maps, ShadowRecord rec, int layer, float3 centre,
+static inline float shadow_pcss(thread const ShadowMaps &maps, constant ShadowRecord &rec, int layer, float3 centre,
                                 float3 t, float3 b, float depth, float3 world_pos) {
     uint kind = rec.info.x;
     float texel = rec.params.w;
@@ -1334,7 +1283,7 @@ static inline float shadow_pcss(thread const ShadowMaps &maps, ShadowRecord rec,
     return shadow_pcf(maps, kind, layer, centre, t, b, depth, r, 16u, world_pos);
 }
 
-static inline float shadow_filter(thread const ShadowMaps &maps, ShadowRecord rec, int layer, float3 centre,
+static inline float shadow_filter(thread const ShadowMaps &maps, constant ShadowRecord &rec, int layer, float3 centre,
                                   float3 t, float3 b, float depth, float3 world_pos) {
     uint kind = rec.info.x;
     float r = rec.params.z;
@@ -1353,7 +1302,7 @@ static inline float shadow_at(constant Frame &frame, int r, thread const ShadowM
     if (r < 0 || uint(r) >= frame.shadow_info.x) {
         return 1.0;
     }
-    ShadowRecord rec = frame.shadows[r];
+    constant ShadowRecord &rec = frame.shadows[r];
     uint kind = rec.info.x;
     float3 biased = world_pos + n * rec.params.y;
     int layer = int(rec.info.y);
@@ -1437,54 +1386,9 @@ static inline float3 pbr_specular_one(Surface s, float3 l, float3 light_color, f
     return brdf_ggx(s, l) * max(dot(s.n, l), 0.0) * light_color * attenuation;
 }
 
-/// `ao` attenuates the *indirect* terms only — ambient and hemisphere — and not
-/// the direct lights.
-///
-/// Ambient occlusion answers "how much of the surrounding room can this point
-/// see", which is a question about light arriving from everywhere. A direct
-/// light is somewhere specific, and whether it reaches the point is what a
-/// shadow map is for. Multiplying the whole shade by `ao` darkens the key light
-/// in a crevice that the key light is shining straight into.
-// three.js r165's `RectAreaLight` (`RE_Direct_RectArea_Physical`, `LTC_*`),
-// as `rect_area_light` in `renderer/shader.rs`.
-static inline float2 ltc_uv(float3 n, float3 v, float roughness) {
-    const float lut_size = 64.0;
-    float ndv = saturate(dot(n, v));
-    return float2(roughness, sqrt(1.0 - ndv)) * ((lut_size - 1.0) / lut_size) + 0.5 / lut_size;
-}
 
-static inline float ltc_clipped_sphere_form_factor(float3 f) {
-    float l = length(f);
-    return max((l * l + f.z) / (l + 1.0), 0.0);
-}
 
-static inline float3 ltc_edge_vector_form_factor(float3 v1, float3 v2) {
-    float x = dot(v1, v2);
-    float y = abs(x);
-    float a = 0.8543985 + (0.4965155 + 0.0145206 * y) * y;
-    float b = 3.4175940 + (4.1616724 + y) * y;
-    float v = a / b;
-    float ts = x > 0.0 ? v : 0.5 * rsqrt(max(1.0 - x * x, 1e-7)) - v;
-    return cross(v1, v2) * ts;
-}
 
-static inline float ltc_evaluate(float3 n, float3 v, float3 p, float3x3 m_inv,
-                                 float3 r0, float3 r1, float3 r2, float3 r3) {
-    float3 light_normal = cross(r1 - r0, r3 - r0);
-    if (dot(light_normal, p - r0) < 0.0) {
-        return 0.0;
-    }
-    float3 t1 = normalize(v - n * dot(v, n));
-    float3 t2 = -cross(n, t1);
-    float3x3 m = m_inv * transpose(float3x3(t1, t2, n));
-    float3 c0 = normalize(m * (r0 - p));
-    float3 c1 = normalize(m * (r1 - p));
-    float3 c2 = normalize(m * (r2 - p));
-    float3 c3 = normalize(m * (r3 - p));
-    float3 f = ltc_edge_vector_form_factor(c0, c1) + ltc_edge_vector_form_factor(c1, c2)
-             + ltc_edge_vector_form_factor(c2, c3) + ltc_edge_vector_form_factor(c3, c0);
-    return ltc_clipped_sphere_form_factor(f);
-}
 
 /// `[diffuse, specular]`.
 static inline float2x3 rect_area_light(RectLight rl, float3 p, Surface s,
@@ -1529,6 +1433,58 @@ static inline void physical_direct(Surface s, float3 l, float3 c, thread Shaded 
     }
 }
 
+// ---- Planets: what the wgpu backend's lit path does for a body lit by a sun.
+
+
+
+/// How much of the sun the occluder (`planet[3]`: centre, radius) leaves
+/// showing from `p`: the overlap of two discs.
+static inline float eclipse_factor(float3 p, float3 to_sun, constant Draw &draw) {
+    float radius = draw.planet[3].w;
+    float a = draw.planet[0].y;
+    if (radius <= 0.0 || a <= 0.0) { return 1.0; }
+    float3 v = draw.planet[3].xyz - p;
+    float dist = length(v);
+    if (dist < 1e-5) { return 1.0; }
+    float cos_sep = dot(v / dist, to_sun);
+    if (cos_sep <= 0.0) { return 1.0; }
+    float b = asin(clamp(radius / max(dist, radius), 0.0, 1.0));
+    float d = acos(clamp(cos_sep, -1.0, 1.0));
+    if (d >= a + b) { return 1.0; }
+    if (d <= b - a) { return 0.0; }
+    if (d <= a - b) { return 1.0 - (b * b) / (a * a); }
+    float a2 = a * a, b2 = b * b, d2 = d * d;
+    float x = (d2 + a2 - b2) / (2.0 * d);
+    float y = (d2 + b2 - a2) / (2.0 * d);
+    float lens = a2 * acos(clamp(x / a, -1.0, 1.0)) - x * sqrt(max(a2 - x * x, 0.0))
+               + b2 * acos(clamp(y / b, -1.0, 1.0)) - y * sqrt(max(b2 - y * y, 0.0));
+    return clamp(1.0 - lens / (M_PI_F * a2), 0.0, 1.0);
+}
+
+/// The shadow of a cloud shell `planet[2].x` above the body, from its cloud
+/// map's alpha where the ray to the sun leaves it (`cloud_shadow` in the
+/// wgpu shader). The map is bound in the matcap slot.
+static inline float cloud_shadow(float3 world_pos, float3 sun_world, constant Draw &draw,
+                                 texture2d<float> clouds, sampler clouds_samp) {
+    if (draw.planet[2].w < 0.5) { return 1.0; }
+    float3x3 inv = transpose(float3x3(draw.normal_mat[0].xyz, draw.normal_mat[1].xyz,
+                                      draw.normal_mat[2].xyz));
+    float3 sv = normalize(inv * sun_world);
+    // The object-space point: the model's linear part undone.
+    float3x3 lin = float3x3(draw.model[0].xyz, draw.model[1].xyz, draw.model[2].xyz);
+    float3 r0 = cross(lin[1], lin[2]), r1 = cross(lin[2], lin[0]), r2 = cross(lin[0], lin[1]);
+    float3x3 lin_inv = transpose(float3x3(r0, r1, r2)) * (1.0 / dot(lin[0], r0));
+    float3 n = normalize(lin_inv * (world_pos - draw.model[3].xyz));
+    float rc = 1.0 + max(draw.planet[2].x, 1e-4);
+    float b = dot(n, sv);
+    float t = -b + sqrt(max(b * b + rc * rc - 1.0, 0.0));
+    float3 q = normalize(n + sv * t);
+    float u = atan2(q.z, -q.x) / (2.0 * M_PI_F) + draw.planet[2].z;
+    float v = 1.0 - acos(clamp(q.y, -1.0, 1.0)) / M_PI_F;
+    float cover = clouds.sample(clouds_samp, float2(u, v)).a;
+    return 1.0 - clamp(cover, 0.0, 1.0) * clamp(draw.planet[2].y, 0.0, 1.0);
+}
+
 static inline Shaded shade(Surface s,
                            float3 world_pos,
                            constant Frame &frame,
@@ -1541,7 +1497,8 @@ static inline Shaded shade(Surface s,
                            texture2d_array<float> ltc,
                            sampler ltc_samp,
                            texture2d<float> ramp,
-                           sampler ramp_samp) {
+                           sampler ramp_samp,
+                           constant Draw &draw) {
     // Ambient and hemisphere light are irradiance, through `BRDF_Lambert` like
     // the direct lights (`RE_IndirectDiffuse_*`): ÷π, and the physical model's
     // diffuse colour is the albedo less the metal.
@@ -1549,9 +1506,9 @@ static inline Shaded shade(Surface s,
     float3 diffuse_color = pbr ? s.albedo * (1.0 - s.metalness) : s.albedo;
     float3 irr = frame.ambient.rgb + s.light_map;
     for (uint i = 0u; i < frame.counts.w && i < 2u; ++i) {
-        HemiLight h = frame.hemis[i];
-        float t = dot(s.n, normalize(h.up.xyz)) * 0.5 + 0.5;
-        irr += mix(h.ground.rgb, h.sky.rgb, t);
+        constant HemiLight &h = frame.hemis[i];
+        float t = dot(s.n, normalize(h.direction.xyz)) * 0.5 + 0.5;
+        irr += mix(h.ground_color.rgb, h.sky_color.rgb, t);
     }
     // Every record's shadow once (`compute_shadows` in `renderer/shader.rs`:
     // one inlined copy of the filters rather than one per light loop).
@@ -1571,16 +1528,54 @@ static inline Shaded shade(Surface s,
     o.spec = float3(0.0);
     o.sheen = float3(0.0);
     o.cc = float3(0.0);
+    // The first directional light is the sun a planet's terms are for: its
+    // cloud shadow and eclipse (`planet`, zero for everything else).
+    float sun_att = 1.0;
+    if (pbr && frame.counts.x > 0u) {
+        float3 to_sun = normalize(-frame.dir[0].direction.xyz);
+        sun_att = cloud_shadow(world_pos, to_sun, draw, ramp, ramp_samp)
+                * eclipse_factor(world_pos, to_sun, draw);
+    }
+    float sun_radius = pbr ? draw.planet[0].y : 0.0;
     // Every casting light its own shadow (a layer of its kind's map array).
     for (uint i = 0u; i < frame.counts.x && i < 4u; ++i) {
         DirLight d = frame.dir[i];
         float att = receives_shadow
             ? cached_shadow(shadow_cache, d.color.w)
             : 1.0;
+        if (i == 0u) { att *= sun_att; }
         float3 l = normalize(-d.direction.xyz);
-        o.lit += shade_one(s, l, d.color.rgb, att, ramp, ramp_samp);
-        if (pbr) { o.spec += pbr_specular_one(s, l, d.color.rgb, att); }
+        if (sun_radius > 0.0) {
+            // A sun of finite size: its light wraps past the terminator, for
+            // the diffuse and specular lobes alike.
+            float soft = soft_lambert(dot(s.n, l), sun_radius);
+            float3 c = d.color.rgb * att;
+            if (att > 0.0) {
+                o.lit += s.albedo * (1.0 - s.metalness) * (1.0 / M_PI_F) * soft * c;
+                o.spec += brdf_ggx(s, l) * soft * c;
+            }
+        } else {
+            o.lit += shade_one(s, l, d.color.rgb, att, ramp, ramp_samp);
+            if (pbr) { o.spec += pbr_specular_one(s, l, d.color.rgb, att); }
+        }
         physical_direct(s, l, d.color.rgb * att, o);
+        if (pbr && i == 0u) {
+            // Twilight: a warm band along the terminator.
+            float width = draw.planet[0].z;
+            if (width > 0.0) {
+                float x = dot(s.n, l) / width;
+                float band = exp(-x * x * 3.0) * (1.0 - smoothstep(0.0, 1.0, max(x, 0.0)));
+                o.lit += d.color.rgb * draw.planet[1].rgb * s.albedo * band * 0.15 * att / M_PI_F;
+            }
+            // Clouds lit from behind: forward scattering toward the eye.
+            float scatter = draw.planet[0].w;
+            if (scatter > 0.0) {
+                float phase = henyey_greenstein(dot(-l, s.v), clamp(draw.planet[1].w, -0.95, 0.95));
+                float slant = min(1.0 / max(abs(dot(s.n, s.v)), 0.08), 8.0);
+                float reach = clamp(dot(s.n, l) * 2.0 + 0.55, 0.0, 1.0);
+                o.lit += d.color.rgb * s.albedo * scatter * phase * slant * reach * att;
+            }
+        }
     }
     for (uint i = 0u; i < frame.counts.y && i < 8u; ++i) {
         PointLight p = frame.pts[i];
@@ -1641,73 +1636,33 @@ static inline float3 apply_fog(float3 color, float view_dist, constant Frame &fr
     return mix(color, frame.fog_color.rgb, fog_amount(view_dist, frame));
 }
 
+/// What fog is measured along: the fragment's depth in view space, three.js's
+/// `fogDepth` (`-mvPosition.z`) and the wgpu backend's `view_z`. Worked out
+/// per fragment from the interpolated world position, which is exact: a
+/// distance interpolated between vertices is not, and across a large
+/// triangle — a ground plane is two — it is the corners' distance everywhere,
+/// fogging what is under the camera as if it were at the horizon.
+static inline float fog_depth(float3 world_pos, uint view_index, constant Frame &frame) {
+    return max(-(frame.view[view_index] * float4(world_pos, 1.0)).z, 0.0);
+}
+
 // -------------------------------------------------------------- tone mapping
 
-// three.js r165 `tonemapping_pars_fragment`, the same curves as the wgpu
-// backend's `apply_tone_mapping`: `frame.view_info.z` is the mode (0 none,
-// 1 linear, 2 ACES filmic, 3 neutral, 4 AgX) and `.w` the exposure's bits. A
-// material with `toneMapped: false` (`draw.object.w == 0`) is left alone, as
-// three.js compiles it without TONE_MAPPING.
+// three.js r165 `tonemapping_pars_fragment`, as the wgpu backend's
+// `apply_tone_mapping`: `frame.view_info.z` is the mode (0 none, 1 linear,
+// 2 ACES filmic, 3 neutral, 4 AgX) and `.w` the exposure's bits. A material
+// with `toneMapped: false` (`draw.object.w == 0`) is left alone, as three.js
+// compiles it without TONE_MAPPING.
 static inline float3 tone_map(float3 c, constant Frame &frame, constant Draw &draw) {
     uint mode = frame.view_info.z;
     if (mode == 0u || draw.object.w == 0u) {
         return c;
     }
-    float exposure = as_type<float>(frame.view_info.w);
-    c *= exposure;
-    if (mode == 1u) {
-        return saturate(c);
-    }
-    if (mode == 2u) {
-        const float3x3 aces_in = float3x3(float3(0.59719, 0.07600, 0.02840),
-                                          float3(0.35458, 0.90834, 0.13383),
-                                          float3(0.04823, 0.01566, 0.83777));
-        const float3x3 aces_out = float3x3(float3(1.60475, -0.10208, -0.00327),
-                                           float3(-0.53108, 1.10813, -0.07276),
-                                           float3(-0.07367, -0.00605, 1.07602));
-        float3 v = aces_in * (c / 0.6);
-        float3 a = v * (v + 0.0245786) - 0.000090537;
-        float3 b = v * (0.983729 * v + 0.4329510) + 0.238081;
-        return saturate(aces_out * (a / b));
-    }
-    if (mode == 3u) {
-        const float start = 0.8 - 0.04;
-        const float desat = 0.15;
-        float x = min(c.r, min(c.g, c.b));
-        float offset = x < 0.08 ? x - 6.25 * x * x : 0.04;
-        c -= offset;
-        float peak = max(c.r, max(c.g, c.b));
-        if (peak < start) {
-            return c;
-        }
-        float d = 1.0 - start;
-        float new_peak = 1.0 - d * d / (peak + d - start);
-        c *= new_peak / peak;
-        float g = 1.0 - 1.0 / (desat * (peak - new_peak) + 1.0);
-        return mix(c, float3(new_peak), g);
-    }
-    const float3x3 to2020 = float3x3(float3(0.6274, 0.0691, 0.0164),
-                                     float3(0.3293, 0.9195, 0.0880),
-                                     float3(0.0433, 0.0113, 0.8956));
-    const float3x3 to709 = float3x3(float3(1.6605, -0.1246, -0.0182),
-                                    float3(-0.5876, 1.1329, -0.1006),
-                                    float3(-0.0728, -0.0083, 1.1187));
-    const float3x3 inset = float3x3(float3(0.856627153315983, 0.137318972929847, 0.11189821299995),
-                                    float3(0.0951212405381588, 0.761241990602591, 0.0767994186031903),
-                                    float3(0.0482516061458583, 0.101439036467562, 0.811302368396859));
-    const float3x3 outset = float3x3(float3(1.1271005818144368, -0.1413297634984383, -0.14132976349843826),
-                                     float3(-0.11060664309660323, 1.157823702216272, -0.11060664309660294),
-                                     float3(-0.016493938717834573, -0.016493938717834257, 1.2519364065950405));
-    const float min_ev = -12.47393;
-    const float max_ev = 4.026069;
-    float3 v = inset * (to2020 * c);
-    v = saturate((log2(max(v, float3(1e-10))) - min_ev) / (max_ev - min_ev));
-    float3 v2 = v * v;
-    float3 v4 = v2 * v2;
-    v = 15.5 * v4 * v2 - 40.14 * v4 * v + 31.96 * v4 - 6.868 * v2 * v + 0.4298 * v2
-        + 0.1191 * v - 0.00232;
-    v = pow(max(float3(0.0), outset * v), float3(2.2));
-    return saturate(to709 * v);
+    const float3 e = c * as_type<float>(frame.view_info.w);
+    if (mode == 1u) { return linear_tonemap(e); }
+    if (mode == 2u) { return aces_tonemap(e); }
+    if (mode == 3u) { return neutral_tonemap(e); }
+    return agx_tonemap(e);
 }
 
 // ----------------------------------------------------------------------- IBL
@@ -1743,31 +1698,7 @@ static inline float3 sample_env(texturecube<float> env,
 constant float CUBEUV_MIN_MIP_LEVEL = 4.0;
 constant float CUBEUV_MIN_TILE_SIZE = 16.0;
 
-static inline float cube_uv_get_face(float3 d) {
-    float3 a = abs(d);
-    if (a.x > a.z) {
-        return a.x > a.y ? (d.x > 0.0 ? 0.0 : 3.0) : (d.y > 0.0 ? 1.0 : 4.0);
-    }
-    return a.z > a.y ? (d.z > 0.0 ? 2.0 : 5.0) : (d.y > 0.0 ? 1.0 : 4.0);
-}
 
-static inline float2 cube_uv_get_uv(float3 d, float face) {
-    float2 uv;
-    if (face == 0.0) {
-        uv = float2(d.z, d.y) / abs(d.x);
-    } else if (face == 1.0) {
-        uv = float2(-d.x, -d.z) / abs(d.y);
-    } else if (face == 2.0) {
-        uv = float2(-d.x, d.y) / abs(d.z);
-    } else if (face == 3.0) {
-        uv = float2(-d.z, d.y) / abs(d.x);
-    } else if (face == 4.0) {
-        uv = float2(-d.x, d.z) / abs(d.y);
-    } else {
-        uv = float2(d.x, d.y) / abs(d.z);
-    }
-    return 0.5 * (uv + 1.0);
-}
 
 static inline float3 bilinear_cube_uv(texture2d<float> atlas, sampler samp, float3 d,
                                       float mip_int, float4 params) {
@@ -1789,13 +1720,6 @@ static inline float3 bilinear_cube_uv(texture2d<float> atlas, sampler samp, floa
     return atlas.sample(samp, uv, level(0.0)).rgb;
 }
 
-static inline float roughness_to_mip(float r) {
-    if (r >= 0.8) { return (1.0 - r) * (-1.0 - (-2.0)) / (1.0 - 0.8) + (-2.0); }
-    if (r >= 0.4) { return (0.8 - r) * (2.0 - (-1.0)) / (0.8 - 0.4) + (-1.0); }
-    if (r >= 0.305) { return (0.4 - r) * (3.0 - 2.0) / (0.4 - 0.305) + 2.0; }
-    if (r >= 0.21) { return (0.305 - r) * (4.0 - 3.0) / (0.305 - 0.21) + 3.0; }
-    return -2.0 * log2(1.16 * max(r, 0.001));
-}
 
 static inline float3 texture_cube_uv(texture2d<float> atlas, sampler samp, float3 d,
                                      float roughness, float4 params) {
@@ -1809,42 +1733,8 @@ static inline float3 texture_cube_uv(texture2d<float> atlas, sampler samp, float
     return mix(c0, bilinear_cube_uv(atlas, samp, d, i + 1.0, params), f);
 }
 
-// three.js `DFGApprox()` — the split-sum approximation, same constants as the
-// wgpu path uses.
-static inline float2 dfg_approx(float3 n, float3 v, float roughness) {
-    float dot_nv = saturate(dot(n, v));
-    const float4 c0 = float4(-1.0, -0.0275, -0.572, 0.022);
-    const float4 c1 = float4(1.0, 0.0425, 1.04, -0.04);
-    float4 r = roughness * c0 + c1;
-    float a004 = min(r.x * r.x, exp2(-9.28 * dot_nv)) * r.x + r.y;
-    return float2(-1.04, 1.04) * a004 + r.zw;
-}
 
-// three.js's specular occlusion: how much of the room a glancing, rough surface
-// can actually see. Without it the environment is added as though every point
-// had an unobstructed view of all of it.
-static inline float specular_occlusion(float dot_nv, float ao, float roughness) {
-    return saturate(pow(dot_nv + ao, exp2(-16.0 * roughness - 1.0)) - 1.0 + ao);
-}
 
-/// The environment's contribution, diffuse and specular, occluded.
-// `draw.env_dir` holds the environment's lookup rows here (three.js's
-// `envMapRotation`, and the PMREM mirror for a raw cube); `map_params.z` its
-// intensity (`envMapIntensity` / `scene.environmentIntensity`).
-// The environment is read through its PMREM atlas where it has one
-// (`draw.env_params`: texel size, top mip, 1), as three.js reads every
-// Standard/Physical environment; through the cube's own mips otherwise.
-// three.js `transmission_pars_fragment`, as `ibl_volume_refraction` in
-// `renderer/shader.rs`: N8's mipped bicubic filter over the transmission
-// capture, the refracted ray through `thickness`, Beer–Lambert attenuation.
-static inline float bicubic_w0(float a) { return (1.0 / 6.0) * (a * (a * (-a + 3.0) - 3.0) + 1.0); }
-static inline float bicubic_w1(float a) { return (1.0 / 6.0) * (a * a * (3.0 * a - 6.0) + 4.0); }
-static inline float bicubic_w2(float a) { return (1.0 / 6.0) * (a * (a * (-3.0 * a + 3.0) + 3.0) + 1.0); }
-static inline float bicubic_w3(float a) { return (1.0 / 6.0) * (a * a * a); }
-static inline float bicubic_g0(float a) { return bicubic_w0(a) + bicubic_w1(a); }
-static inline float bicubic_g1(float a) { return bicubic_w2(a) + bicubic_w3(a); }
-static inline float bicubic_h0(float a) { return -1.0 + bicubic_w1(a) / (bicubic_w0(a) + bicubic_w1(a)); }
-static inline float bicubic_h1(float a) { return 1.0 + bicubic_w3(a) / (bicubic_w2(a) + bicubic_w3(a)); }
 
 static inline float4 transmission_bicubic(texture2d_array<float> tex, sampler smp, float2 uv_in, uint slice, float4 texel, float lod) {
     float2 uv = uv_in * texel.zw + 0.5;
@@ -1887,12 +1777,6 @@ static inline float3 volume_transmission_ray(float3 n, float3 v, float thickness
     return normalize(r) * thickness * scale;
 }
 
-static inline float3 volume_attenuation(float distance, float3 color, float attenuation_distance) {
-    if (attenuation_distance <= 0.0) {
-        return float3(1.0);
-    }
-    return exp(log(color) / attenuation_distance * distance);
-}
 
 /// three.js `getIBLVolumeRefraction`.
 static inline float4 ibl_volume_refraction(Surface s, float3 position, float roughness, float ior,
@@ -1993,16 +1877,6 @@ static inline float2x3 ibl(Surface s,
     return float2x3(diffuse, spec);
 }
 
-// three.js `IBLSheenBRDF`: the Charlie sheen lobe integrated over the
-// hemisphere, as a curve fit.
-static inline float ibl_sheen_brdf(float3 n, float3 v, float roughness) {
-    float ndv = saturate(dot(n, v));
-    float r2 = roughness * roughness;
-    float a = roughness < 0.25 ? -339.2 * r2 + 161.4 * roughness - 25.9 : -8.48 * r2 + 14.3 * roughness - 9.95;
-    float b = roughness < 0.25 ? 44.0 * r2 - 23.7 * roughness + 3.26 : 1.97 * r2 - 3.27 * roughness + 0.72;
-    float dg = exp(a * ndv + b) + (roughness < 0.25 ? 0.0 : 0.1 * (roughness - 0.25));
-    return saturate(dg * (1.0 / M_PI_F));
-}
 
 // ------------------------------------------------------------------- fragment
 
@@ -2081,7 +1955,7 @@ static inline float3 perturb_normal(float3 n,
                                     float3 world_pos,
                                     float2 uv,
                                     float3 map_sample,
-                                    float scale,
+                                    float2 scale,
                                     float4 tangent) {
     // The `tangent` attribute's frame when the geometry has one, as the wgpu
     // backend's `surface_frame`; screen-space derivatives otherwise.
@@ -2097,22 +1971,36 @@ static inline float3 perturb_normal(float3 n,
             return dot(p, p) > 1e-12 ? normalize(p) : n;
         }
     }
-    float3 dp1 = dfdx(world_pos);
-    float3 dp2 = dfdy(world_pos);
-    float2 duv1 = dfdx(uv);
-    float2 duv2 = dfdy(uv);
-    float3 dp2perp = cross(dp2, n);
-    float3 dp1perp = cross(n, dp1);
-    float3 t = dp2perp * duv1.x + dp1perp * duv2.x;
-    float3 b = dp2perp * duv1.y + dp1perp * duv2.y;
-    float det = max(dot(t, t), dot(b, b));
-    if (det < 1e-16) {
-        return n;   // degenerate UVs: no frame to build, so leave the normal be
+    // The wgpu backend's `cotangent_frame`: the tangent from the position and
+    // uv derivatives, made unit length, and the bitangent at right angles to
+    // it. three.js's `perturbNormal2Arb` keeps the two derivatives' lengths
+    // instead, and where a UV sphere pinches to its poles one of them is far
+    // shorter than the other — the relief along it fades to nothing, which
+    // `examples/pole_probe` shows. A unit frame keeps it at full strength.
+    float3 dpx = dfdx(world_pos);
+    float3 dpy = dfdy(world_pos);
+    float2 duvx = dfdx(uv);
+    float2 duvy = dfdy(uv);
+    float det = duvx.x * duvy.y - duvy.x * duvx.y;
+    float3 t = float3(0.0);
+    if (abs(det) > 1e-12) {
+        t = (dpx * duvy.y - dpy * duvx.y) / det;
+        t = t - n * dot(n, t);
     }
-    float inv = rsqrt(det);
+    if (dot(t, t) < 1e-12) {
+        t = dpx - n * dot(n, dpx);
+        if (dot(t, t) < 1e-12) { t = dpy - n * dot(n, dpy); }
+    }
+    if (dot(t, t) < 1e-12) {
+        t = abs(n.x) > 0.9 ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0);
+        t = t - n * dot(n, t);
+    }
+    t = normalize(t);
+    float3 b = normalize(cross(n, t));
     float3 m = map_sample * 2.0 - 1.0;
     m.xy *= scale;
-    return normalize(t * (inv * m.x) + b * (inv * m.y) + n * m.z);
+    float3 p = t * m.x + b * m.y + n * m.z;
+    return dot(p, p) > 1e-12 ? normalize(p) : n;
 }
 
 static inline float4 mesh_fragment(FIn in,
@@ -2169,7 +2057,7 @@ static inline float4 mesh_fragment(FIn in,
         // sRGB-encodes on write, decode first and the stored byte is the value.
         float3 view_n = normalize((frame.view[in.view_index] * float4(n, 0.0)).xyz);
         float3 packed = saturate(view_n * 0.5 + 0.5);
-        if (frame.view_info.y == 1u) {
+        if ((frame.view_info.y & 1u) != 0u) {
             packed = select(pow((packed + 0.055) / 1.055, float3(2.4)), packed / 12.92,
                             packed <= float3(0.04045));
         }
@@ -2180,6 +2068,95 @@ static inline float4 mesh_fragment(FIn in,
         float far = max(draw.misc.w, near + 1e-4);
         float d = clamp((in.view_dist - near) / (far - near), 0.0, 1.0);
         return float4(float3(1.0 - d), draw.base_color.a);
+    }
+
+    if (kind == KIND_ATMOSPHERE) {
+        // Planetary atmosphere, as the wgpu shader's `MAT_ATMOSPHERE`: march
+        // the view ray through the shell between the planet and the top of
+        // the air, and shade from how much air it crosses and how much of
+        // that is in sunlight. `physical[0..3]` carry the material
+        // (`MetalRenderer`'s `atmosphere_uniforms`).
+        float3 centre = (draw.model * float4(0.0, 0.0, 0.0, 1.0)).xyz;
+        float r_planet = draw.physical[0].x;
+        float r_air = max(draw.physical[0].y, r_planet + 1e-5);
+        float strength = draw.physical[0].z;
+        float falloff = max(draw.physical[0].w, 0.1);
+
+        float3 eye = frame.camera_pos[in.view_index].xyz;
+        float3 dir = normalize(in.world_pos - eye);
+        float3 oc = eye - centre;
+        float b = dot(oc, dir);
+        float disc_air = b * b - (dot(oc, oc) - r_air * r_air);
+        if (disc_air <= 0.0) { discard_fragment(); }
+        float root = sqrt(disc_air);
+        float t_enter = max(-b - root, 0.0);
+        float t_exit = -b + root;
+        if (t_exit <= t_enter) { discard_fragment(); }
+        float disc_planet = b * b - (dot(oc, oc) - r_planet * r_planet);
+        if (disc_planet > 0.0) {
+            float t_hit = -b - sqrt(disc_planet);
+            if (t_hit > 0.0) { t_exit = min(t_exit, t_hit); }
+        }
+        if (t_exit <= t_enter) { discard_fragment(); }
+
+        const int steps = 8;
+        float dt = (t_exit - t_enter) / float(steps);
+        float depth_scale = max(r_air - r_planet, 1e-5);
+        float density = 0.0, lit = 0.0, sun_path = 0.0, glow_g = 0.0, glow_r = 0.0;
+        float aurora = draw.physical[2].w;
+        float ring = max(draw.physical[3].w, 1.0) * (M_PI_F / 180.0);
+        float mag_tilt = 0.19;
+        float3 mag_axis = normalize(float3(sin(mag_tilt) * 0.9, 1.0, sin(mag_tilt) * 0.4));
+        float3 to_sun = frame.counts.x > 0u ? normalize(-frame.dir[0].direction.xyz) : float3(0.0, 1.0, 0.0);
+        for (int i = 0; i < steps; i++) {
+            float3 p = eye + dir * (t_enter + dt * (float(i) + 0.5));
+            float3 up = p - centre;
+            float altitude = (length(up) - r_planet) / depth_scale;
+            float d = exp(-max(altitude, 0.0) * falloff) * dt;
+            density += d;
+            float sun_dot = dot(normalize(up), to_sun);
+            lit += d * smoothstep(-0.25, 0.35, sun_dot);
+            float low = exp(-max(altitude, 0.0) * falloff * 2.0);
+            sun_path += d * low * (1.0 - smoothstep(0.0, 0.55, abs(sun_dot)));
+            if (aurora > 0.0) {
+                float3 un = normalize(up);
+                float colat = acos(clamp(abs(dot(un, mag_axis)), -1.0, 1.0));
+                float x = (colat - ring) / (ring * 0.34);
+                float band = exp(-(x * x));
+                float ph = atan2(dot(un, float3(0.0, 0.0, 1.0)), dot(un, float3(1.0, 0.0, 0.0)));
+                float curtain = 0.55 + 0.45 * sin(ph * 9.0) * sin(ph * 23.0 + 1.7);
+                float wgt = band * curtain * dt;
+                glow_g += wgt * smoothstep(0.04, 0.16, altitude) * (1.0 - smoothstep(0.22, 0.5, altitude));
+                glow_r += wgt * smoothstep(0.3, 0.55, altitude) * (1.0 - smoothstep(0.75, 1.0, altitude)) * 0.35;
+            }
+        }
+        if (density <= 1e-6) { discard_fragment(); }
+        float day = lit / density;
+        float grazing = sun_path / density;
+        float mu = dot(dir, to_sun);
+        float phase = 0.75 * (1.0 + mu * mu);
+        float max_chord = 2.0 * sqrt(max(r_air * r_air - r_planet * r_planet, 1e-6));
+        float tau = density / max_chord * strength;
+        float alpha = (1.0 - exp(-tau)) * day * draw.base_color.a;
+        if (alpha <= 0.002) { discard_fragment(); }
+
+        float3 tint = mix(draw.base_color.rgb, draw.physical[1].rgb, clamp(grazing * 1.15, 0.0, 1.0));
+        float3 col = tint * phase * (0.35 + 0.65 * day);
+        float out_a = alpha;
+        float ozone = draw.physical[2].z;
+        if (ozone > 0.0) {
+            col *= exp(-float3(3.1, 2.0, 0.35) * ozone * grazing);
+        }
+        if (aurora > 0.0) {
+            float night = 1.0 - day;
+            float gg = glow_g / max_chord * aurora;
+            float gr = glow_r / max_chord * aurora;
+            if (gg + gr > 0.0) {
+                col += (draw.physical[3].rgb * gg + float3(1.0, 0.22, 0.30) * gr) * night * 6.0;
+                out_a = max(out_a, clamp((gg + gr) * night * 8.0, 0.0, 1.0));
+            }
+        }
+        return float4(apply_fog(col, fog_depth(in.world_pos, in.view_index, frame), frame), clamp(out_a, 0.0, 1.0));
     }
 
     float4 base = sample_base(draw, base_map, samp, in.uv, in.uv12, in.uv3);
@@ -2204,7 +2181,7 @@ static inline float4 mesh_fragment(FIn in,
                                                  : float3(mix(0.2, 0.8, muv.y));
         // `base` is the colour, its `map` and the vertex colour, as three.js's
         // `diffuseColor` is by now.
-        return float4(apply_fog(tone_map(base.rgb * matcap, frame, draw), in.view_dist, frame),
+        return float4(apply_fog(tone_map(base.rgb * matcap, frame, draw), fog_depth(in.world_pos, in.view_index, frame), frame),
                       base.a);
     }
 
@@ -2218,7 +2195,7 @@ static inline float4 mesh_fragment(FIn in,
                 mask *= shadow_at(frame, int(r), maps, in.world_pos, n);
             }
         }
-        return float4(apply_fog(tone_map(draw.base_color.rgb, frame, draw), in.view_dist, frame),
+        return float4(apply_fog(tone_map(draw.base_color.rgb, frame, draw), fog_depth(in.world_pos, in.view_index, frame), frame),
                       draw.base_color.a * (1.0 - mask));
     }
 
@@ -2241,7 +2218,7 @@ static inline float4 mesh_fragment(FIn in,
             float2 nuv = map_uv_sets(draw, MAP_NORMAL, in.uv, in.uv12, in.uv3);
             n = perturb_normal(n, in.world_pos, nuv,
                                normal_map.sample(normal_samp, nuv).rgb,
-                               draw.map_params.x, in.tangent);
+                               float2(draw.map_params.x, draw.planet[4].x), in.tangent);
         } else if (draw.extra.z == 1u) {
             n = bump_normal(n, in.world_pos, in.uv, in.uv12, in.uv3, front_facing ? 1.0 : -1.0,
                             draw, bump_map, bump_samp);
@@ -2385,7 +2362,8 @@ static inline float4 mesh_fragment(FIn in,
         }
 
         Shaded shaded = shade(s, in.world_pos, frame, ao, shadow_map, spot_map, point_map,
-                              shadow_samp, draw.object.x == 1u, ltc, env_atlas_samp, matcap_tex, matcap_samp);
+                              shadow_samp, draw.object.x == 1u, ltc, env_atlas_samp, matcap_tex, matcap_samp,
+                              draw);
         color = shaded.lit;
         float3 specular = shaded.spec;
         bool has_env = draw.map_params.w > 0.5 && pbr;
@@ -2445,6 +2423,20 @@ static inline float4 mesh_fragment(FIn in,
             color = mix(color, transmitted.rgb, t);
         }
         color += specular;
+        // A planet's night lights: the emissive faded out on the side its
+        // brightest directional light reaches (`emissive_night_side`).
+        if (draw.planet[0].x > 0.0 && frame.counts.x > 0u) {
+            float3 sun_dir = float3(0.0);
+            float best = -1.0;
+            for (uint i = 0u; i < frame.counts.x && i < 4u; ++i) {
+                float p = dot(frame.dir[i].color.rgb, float3(0.2126, 0.7152, 0.0722));
+                if (p > best) { best = p; sun_dir = -normalize(frame.dir[i].direction.xyz); }
+            }
+            if (best > 0.0) {
+                float night = 1.0 - smoothstep(-0.10, 0.18, dot(normalize(s.n), sun_dir));
+                emissive *= mix(1.0, night, clamp(draw.planet[0].x, 0.0, 1.0));
+            }
+        }
         // three.js `meshphysical` composes `diffuse + specular + emissive`,
         // then the sheen and then the clearcoat over all of it.
         color += emissive;
@@ -2466,7 +2458,7 @@ static inline float4 mesh_fragment(FIn in,
                 cc += env_radiance(refl, s.cc_roughness, env_map, env_samp, draw, env_atlas, env_atlas_samp)
                     * (float3(0.04) * fab.x + fab.y);
             }
-            float3 fcc = f_schlick_f90(float3(0.04), 1.0, saturate(dot(s.cc_n, s.v)));
+            float3 fcc = f_schlick_f90(float3(0.04), float3(1.0), saturate(dot(s.cc_n, s.v)));
             color = color * (1.0 - s.clearcoat * fcc) + cc * s.clearcoat;
         }
         if (kind == KIND_LAMBERT || kind == KIND_PHONG) {
@@ -2495,9 +2487,9 @@ static inline float4 mesh_fragment(FIn in,
 
     if (glass_t.x >= 0.0) {
         // Fog in front of the glass veils what it lets through too.
-        glass_t *= 1.0 - fog_amount(in.view_dist, frame);
+        glass_t *= 1.0 - fog_amount(fog_depth(in.world_pos, in.view_index, frame), frame);
     }
-    return float4(apply_fog(tone_map(color, frame, draw), in.view_dist, frame), base.a);
+    return float4(apply_fog(tone_map(color, frame, draw), fog_depth(in.world_pos, in.view_index, frame), frame), base.a);
 }
 
 // Material-map samplers are a pool (`map_samps`, slots 0–9) that each map
@@ -2631,7 +2623,7 @@ static inline float4 point_fragment(FIn in, float2 point_coord, constant Frame &
     if (base.a < draw.pbr.z) {
         discard_fragment();
     }
-    return float4(apply_fog(tone_map(base.rgb, frame, draw), in.view_dist, frame), base.a);
+    return float4(apply_fog(tone_map(base.rgb, frame, draw), fog_depth(in.world_pos, in.view_index, frame), frame), base.a);
 }
 
 #define POINT_FRAGMENT_ARGS                                                    \
@@ -2653,6 +2645,25 @@ fragment float4 fs_point_encoded_blend(POINT_FRAGMENT_ARGS, float4 dst [[color(0
     float a = saturate(src.a);
     float3 e = srgb_encode(src.rgb) * a + srgb_encode(dst.rgb) * (1.0 - a);
     return float4(srgb_decode(e), a + dst.a * (1.0 - a));
+}
+
+/// `AdditiveBlending` (`SrcAlpha, One`) on the encoded values, as wgpu
+/// blends an 8-bit sRGB target: the light adds up in what is stored, and
+/// saturates where it would on the canvas.
+fragment float4 fs_point_encoded_add(POINT_FRAGMENT_ARGS, float4 dst [[color(0)]]) {
+    float4 src = point_fragment(in, point_coord, frame, draw, base_map, MS(MAP_BASE), alpha_map, MS(MAP_ALPHA));
+    float a = saturate(src.a);
+    float3 e = srgb_encode(dst.rgb) + srgb_encode(src.rgb) * a;
+    return float4(srgb_decode(e), saturate(dst.a + a));
+}
+
+fragment float4 fs_mesh_encoded_add(MESH_FRAGMENT_ARGS, float4 dst [[color(0)]]) {
+    SAMPLE_PHYSICAL
+    float3 glass_t;
+    float4 src = MESH_FRAGMENT_CALL;
+    float a = saturate(src.a);
+    float3 e = srgb_encode(dst.rgb) + srgb_encode(src.rgb) * a;
+    return float4(srgb_decode(e), saturate(dst.a + a));
 }
 
 // ------------------------------------------------ order-independent glass
@@ -3250,9 +3261,9 @@ fragment FurOut fs_fur(FIn in [[stage_in]],
     float3 albedo = tint * ao;
     float3 irr = frame.ambient.rgb;
     for (uint i = 0u; i < frame.counts.w && i < 2u; ++i) {
-        HemiLight hl = frame.hemis[i];
-        float k = dot(n, normalize(hl.up.xyz)) * 0.5 + 0.5;
-        irr += mix(hl.ground.rgb, hl.sky.rgb, k);
+        constant HemiLight &hl = frame.hemis[i];
+        float k = dot(n, normalize(hl.direction.xyz)) * 0.5 + 0.5;
+        irr += mix(hl.ground_color.rgb, hl.sky_color.rgb, k);
     }
     float3 col = albedo * irr * (1.0 / M_PI_F);
     for (uint i = 0u; i < frame.counts.x && i < 4u; ++i) {
@@ -3278,5 +3289,5 @@ fragment FurOut fs_fur(FIn in [[stage_in]],
             * cached_shadow(shadow_cache, sp.color.w);
         col += sp.color.rgb * att * fur_kajiya(fur, t, n, v, l, albedo, h, spec_exp);
     }
-    return {float4(apply_fog(tone_map(col, frame, draw), in.view_dist, frame), 1.0), mask};
+    return {float4(apply_fog(tone_map(col, frame, draw), fog_depth(in.world_pos, in.view_index, frame), frame), 1.0), mask};
 }

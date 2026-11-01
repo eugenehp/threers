@@ -221,6 +221,65 @@ fn custom_shader_casters_reuse_until_their_inputs_change() {
     assert_eq!(updates(&mut hr), first + 1, "new uniform data redraws them");
 }
 
+/// The darkness a caster adds to the frame: the summed difference between a
+/// render with it casting and one without.
+fn shadow_of(hr: &mut HeadlessRenderer, scene: &mut Scene, caster: threers::core::ObjectId) -> u64 {
+    let mut frame = |casts: bool| {
+        scene.get_mut(caster).unwrap().cast_shadow = casts;
+        hr.render_to_rgba(scene, &camera(0.0))
+    };
+    let (lit, shadowed) = (frame(false), frame(true));
+    lit.iter().zip(&shadowed).map(|(a, b)| a.saturating_sub(*b) as u64).sum()
+}
+
+fn flat_shader() -> ShaderMaterial {
+    ShaderMaterial::new(
+        "@fragment\n\
+         fn fs_main(in: VsOut) -> @location(0) vec4<f32> {\n\
+         return vec4<f32>(0.8, 0.4, 0.2, 1.0);\n\
+         }\n",
+    )
+}
+
+#[test]
+fn custom_shader_meshes_cast_shadows() {
+    let Ok(mut hr) = HeadlessRenderer::builder().size(W, W).build() else {
+        return;
+    };
+    let (mut scene, cube, _) = scene();
+    let standard = shadow_of(&mut hr, &mut scene, cube);
+    if let ObjectKind::Mesh(m) = &mut scene.get_mut(cube).unwrap().kind {
+        m.material = Arc::new(Material::Shader(flat_shader()));
+    }
+    let custom = shadow_of(&mut hr, &mut scene, cube);
+    assert!(standard > 0, "the standard cube casts");
+    // The same box, so the same shadow; it used to be none at all.
+    assert_eq!(custom, standard, "a ShaderMaterial cube casts the standard cube's shadow");
+}
+
+#[test]
+fn custom_shader_instances_cast_shadows() {
+    let Ok(mut hr) = HeadlessRenderer::builder().size(W, W).build() else {
+        return;
+    };
+    let (mut scene, cube, _) = scene();
+    scene.get_mut(cube).unwrap().visible = false;
+    let instances = |material: Material| {
+        let mut im = InstancedMesh::new(BoxGeometry::new(0.5, 0.5, 0.5), material, 3);
+        for i in 0..3 {
+            im.set_matrix_at(i, Matrix4::translation(Vector3::new(i as f32 - 1.0, 0.25, 0.0)));
+        }
+        Object3D::instanced_mesh(im)
+    };
+    let id = scene.add(instances(Material::Standard(StandardMaterial::new(Color::WHITE))));
+    let standard = shadow_of(&mut hr, &mut scene, id);
+    scene.get_mut(id).unwrap().visible = false;
+    let id = scene.add(instances(Material::Shader(flat_shader())));
+    let custom = shadow_of(&mut hr, &mut scene, id);
+    assert!(standard > 0, "the standard instances cast");
+    assert_eq!(custom, standard, "ShaderMaterial instances cast the same shadows");
+}
+
 /// The Metal renderer reuses its maps by the same rule.
 #[cfg(feature = "metal")]
 #[test]

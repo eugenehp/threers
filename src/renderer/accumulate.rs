@@ -343,7 +343,7 @@ fn shader_source(encoded: bool) -> String {
     } else {
         ("c.rgb", "c.rgb")
     };
-    SHADER.replace("DECODE", decode).replace("ENCODE", encode)
+    format!("{}{}", SHADER.replace("DECODE", decode).replace("ENCODE", encode), super::colorspace::WGSL)
 }
 
 const SHADER: &str = r#"
@@ -364,17 +364,5 @@ fn fs_resolve(@builtin(position) pos : vec4<f32>) -> @location(0) vec4<f32> {
     // there.
     c = vec4<f32>(max(c.rgb, vec3<f32>(0.0)), clamp(c.a, 0.0, 1.0));
     return vec4<f32>(ENCODE, c.a);
-}
-
-fn srgb_to_linear(c : vec3<f32>) -> vec3<f32> {
-    return select(pow((c + 0.055) / 1.055, vec3<f32>(2.4)),
-                  c / 12.92,
-                  c <= vec3<f32>(0.04045));
-}
-
-fn linear_to_srgb(c : vec3<f32>) -> vec3<f32> {
-    return select(1.055 * pow(c, vec3<f32>(1.0 / 2.4)) - 0.055,
-                  c * 12.92,
-                  c <= vec3<f32>(0.0031308));
 }
 "#;

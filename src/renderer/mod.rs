@@ -59,6 +59,30 @@ pub mod shader;
 // Batteries-included headless offscreen renderer (native-only: pollster).
 #[cfg(not(target_arch = "wasm32"))]
 pub mod headless;
+// A scene in a window, on wgpu or the native Metal backend: a winit window
+// wherever winit runs, and an app's own view or layer on every Apple
+// platform with the `metal` feature (tvOS and visionOS have no winit).
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    any(not(any(target_os = "tvos", target_os = "visionos")), metal_backend)
+))]
+pub mod window;
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    any(not(any(target_os = "tvos", target_os = "visionos")), metal_backend)
+))]
+pub use window::{MarksFrame, WindowBackend, WindowRenderer};
+
+// `THREERS_BACKEND=metal`: the headless renderer on the native Metal backend.
+cfg_metal! {
+    mod headless_metal;
+}
+
+// Rendering into an app's own CAMetalLayer, from any thread (Apple's Metal
+// platforms: macOS, iOS, tvOS, visionOS).
+cfg_apple! {
+    pub mod layer;
+}
 
 // Multi-sample accumulation for the offline renderer. Only `headless` reads it,
 // and that is native-only, so this follows the same gate — otherwise it is dead
@@ -128,10 +152,15 @@ pub use downsample::{DownsampleFilter, Downsampler};
 pub use gpu_texture::GpuCubeTexture;
 #[cfg(not(target_arch = "wasm32"))]
 pub use headless::{HeadlessBuilder, HeadlessConfig, HeadlessRenderer};
+cfg_apple! {
+    pub use layer::{LayerGpu, LayerRenderer};
+}
 pub use render_target::{CubeRenderTarget, RenderTarget};
 pub use viewport::{PixelRect, ShadowMap, ViewportRect};
 pub use renderer::{PostFxCamera, Renderer, ToneMapping};
 pub use renderer::{PostFxBlend, PostFxNoise, PostFxOp, PostFxOutput};
+#[allow(unused_imports)] // only the Metal backend reads it from outside
+pub(crate) use renderer::stored_clear;
 pub use renderer::{halton, stratified_jitter};
 
 #[cfg(test)]

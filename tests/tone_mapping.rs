@@ -199,9 +199,8 @@ fn the_cpu_curves_are_three_js_curves() {
                 let exposed = if mode == ToneMapping::None { c } else { c.map(|x| x * exposure) };
                 let got = mode.apply(exposed);
                 let want = truth::three_tone_map(mode, exposure as f64, c.map(|x| x as f64));
-                // `apply` leaves Linear's clamp to the encode.
                 for k in 0..3 {
-                    let g = if mode == ToneMapping::Linear { got[k].clamp(0.0, 1.0) } else { got[k] };
+                    let g = got[k];
                     assert!(
                         (g as f64 - want[k]).abs() < 2e-3,
                         "{name} x{exposure} on {c:?}: channel {k} is {g}, three.js {}",

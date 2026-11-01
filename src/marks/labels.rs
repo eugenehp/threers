@@ -1,5 +1,6 @@
 //! Text anchored in the world, drawn facing the camera at a fixed pixel size.
 
+use super::gpu;
 use super::{
     Column, ColumnFormat, KindUniforms, Mark, MarkCommon, MarkKind, MarkView, PrepareContext,
 };
@@ -472,7 +473,7 @@ pub struct TextLabels {
     /// the text's length in pixels.
     path_layout: Vec<Option<(Vec<PathGlyph>, f32)>>,
     atlas: Atlas,
-    atlas_gpu: Option<(u32, wgpu::Texture, wgpu::BindGroup)>,
+    atlas_gpu: Option<(u32, gpu::Texture, gpu::BindGroup)>,
     /// Per label: glyph rows `start..end`, and the box around the text in
     /// pixels relative to the anchor (x0, y0, x1, y1).
     layout: Vec<(usize, usize, [f32; 4])>,
@@ -1224,17 +1225,17 @@ impl Mark for TextLabels {
                 view_formats: &[],
             });
             let view = tex.create_view(&Default::default());
-            let bg = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            let bg = ctx.device.create_bind_group(&gpu::BindGroupDescriptor {
                 label: Some("threers label atlas bind group"),
                 layout: &ctx.resources.texture_layout,
                 entries: &[
-                    wgpu::BindGroupEntry {
+                    gpu::BindGroupEntry {
                         binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&view),
+                        resource: gpu::BindingResource::TextureView(&view),
                     },
-                    wgpu::BindGroupEntry {
+                    gpu::BindGroupEntry {
                         binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&ctx.resources.linear_sampler),
+                        resource: gpu::BindingResource::Sampler(&ctx.resources.linear_sampler),
                     },
                 ],
             });
@@ -1244,7 +1245,7 @@ impl Mark for TextLabels {
         if self.atlas.dirty {
             let (_, tex, _) = self.atlas_gpu.as_ref().unwrap();
             ctx.queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
+                gpu::TexelCopyTextureInfo {
                     texture: tex,
                     mip_level: 0,
                     origin: wgpu::Origin3d::ZERO,
@@ -1285,7 +1286,7 @@ impl Mark for TextLabels {
             &mut self.states,
         ]
     }
-    fn extra_bind_group(&self) -> Option<&wgpu::BindGroup> {
+    fn extra_bind_group(&self) -> Option<&gpu::BindGroup> {
         self.atlas_gpu.as_ref().map(|(_, _, bg)| bg)
     }
 }

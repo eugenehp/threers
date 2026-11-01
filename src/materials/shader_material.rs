@@ -95,14 +95,30 @@ pub struct ShaderMaterial {
     /// Up to four user-owned texture views, exposed as `u_tex0`..`u_tex3` and
     /// sampled with `u_samp` (linear, repeat).
     ///
-    /// These are raw wgpu handles on purpose: the point is to sample something
-    /// your own compute pass wrote this frame — a displacement cascade, an
-    /// accumulated foam field, a wake map — without a CPU round trip. Slots you
-    /// leave empty read as opaque white.
-    pub textures: Vec<std::sync::Arc<wgpu::TextureView>>,
+    /// GPU handles on purpose: the point is to sample something your own
+    /// compute pass wrote this frame — a displacement cascade, an accumulated
+    /// foam field, a wake map — without a CPU round trip. Made on the
+    /// renderer's own GPU (for a `HeadlessRenderer` or `WindowRenderer`, its
+    /// `marks_gpu`), they bind on wgpu and the native Metal backend alike, as
+    /// [`volumes`](Self::volumes) do; a view from the other backend reads as
+    /// an empty slot. Slots you leave empty read as opaque white.
+    pub textures: Vec<crate::marks::gpu::TextureView>,
+    /// The same four slots from [`Texture`](crate::Texture)s the renderer
+    /// uploads and caches itself, as it does a standard material's maps:
+    /// `maps[i]` fills `u_tex{i}` wherever [`textures`](Self::textures) has
+    /// no view at `i`. Unlike a wgpu view these bind on every backend,
+    /// native Metal included. A texture's colour space is its format's —
+    /// `Rgba8UnormSrgb` decodes on sample, `Rgba8Unorm` does not — and the
+    /// mips it carries (or generates, with a `mipmap_filter`) are what
+    /// `textureSampleLevel` reads; `u_samp` stays the one linear-repeat
+    /// sampler either way.
+    pub maps: Vec<std::sync::Arc<crate::textures::Texture>>,
     /// Up to two 3D texture views — a [`GpuVolume`](crate::volume::GpuVolume)'s
-    /// `view` — exposed as `u_vol0`/`u_vol1` and sampled with `u_vol_samp`
-    /// (linear, clamp-to-edge), or read exactly with `textureLoad`. three.js's
+    /// `view`, made on the renderer's own GPU (for a `HeadlessRenderer`,
+    /// [`marks_gpu`](crate::HeadlessRenderer::marks_gpu)), so on wgpu and the
+    /// native Metal backend alike — exposed as `u_vol0`/`u_vol1` and sampled
+    /// with `u_vol_samp` (linear, clamp-to-edge), or read exactly with
+    /// `textureLoad`. three.js's
     /// `Data3DTexture` in a `ShaderMaterial`: a slice plane through a scan,
     /// a volume ray-march, a 3D colour lookup. Filtering needs a filterable
     /// format (`R8Unorm`, `Rgba8Unorm`, `R16Float`); the others are for
@@ -112,7 +128,7 @@ pub struct ShaderMaterial {
     /// the layout, so the slots are left out there and a shader that reads
     /// `u_vol0` does not compile. See
     /// [`supports_shader_material_volumes`](crate::renderer::caps::supports_shader_material_volumes).
-    pub volumes: Vec<std::sync::Arc<wgpu::TextureView>>,
+    pub volumes: Vec<crate::marks::gpu::TextureView>,
     /// Draw this material in the screen-space pass, with the opaque scene
     /// available as `ss_color_tex` / `ss_depth_tex` at `@group(3)`.
     ///
@@ -156,9 +172,23 @@ pub struct ShaderMaterial {
     /// which is usually what a dense translucent shell wants and never what
     /// hair wants.
     pub render_state: super::RenderState,
-    /// What a backend that cannot run custom WGSL — the Metal renderer —
-    /// draws instead: the mesh, unlit, in this colour. White by default.
+    /// What the native Metal renderer draws when this material's shader
+    /// cannot run there: the mesh, unlit, in this colour. White by default.
+    ///
+    /// Metal translates the WGSL — fragment, custom vertex stage, and the
+    /// preamble functions it calls — to MSL itself, its textures, volumes and
+    /// the screen-space capture included; what it cannot run is a shader that
+    /// writes a sample mask, or whose WGSL it cannot translate. It says why on
+    /// stderr, once, and draws this.
     pub fallback_color: crate::math::Color,
+    /// The fragment for the native Metal backend: MSL appended to the
+    /// built-in library, defining `fragment float4 fs_custom(...)` (frame
+    /// and draw at buffers 0 and 1, [`data`](Self::data) at 2, the storage
+    /// arrays at 3–5 and their lengths at 6). [`from_shared`](Self::from_shared)
+    /// fills it with the translation of its WGSL, so it is checked up front.
+    /// `None`, the usual case: Metal translates the WGSL when it first draws
+    /// it (see [`fallback_color`](Self::fallback_color)).
+    pub msl: Option<String>,
     /// three.js `alphaToCoverage`: under MSAA, the fragment's alpha is the
     /// share of the pixel's samples it covers, and what is stored is opaque —
     /// so a cut-out edge comes out smooth. Return
@@ -190,6 +220,7 @@ impl Default for ShaderMaterial {
             storage1: Vec::new(),
             storage2: Vec::new(),
             textures: Vec::new(),
+            maps: Vec::new(),
             volumes: Vec::new(),
             screen_space: false,
             opacity: 1.0,
@@ -198,6 +229,7 @@ impl Default for ShaderMaterial {
             tone_mapped: true,
             render_state: super::RenderState::DEFAULT,
             fallback_color: crate::math::Color::WHITE,
+            msl: None,
             alpha_to_coverage: false,
         }
     }
@@ -211,6 +243,33 @@ impl ShaderMaterial {
             fragment: fragment.into(),
             ..Default::default()
         }
+    }
+
+    /// A material from a shader written once for both backends — see
+    /// [`shader!`](crate::shader). Its WGSL becomes
+    /// [`fragment`](Self::fragment) and its MSL [`msl`](Self::msl).
+    ///
+    /// # Panics
+    /// When the shared source does not translate (no `shade` entry point,
+    /// unbalanced brackets, …); [`try_from_shared`](Self::try_from_shared)
+    /// returns the message instead.
+    pub fn from_shared(shader: &super::SharedShader) -> Self {
+        Self::try_from_shared(shader).unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    /// As [`from_shared`](Self::from_shared), returning a translation error.
+    pub fn try_from_shared(shader: &super::SharedShader) -> Result<Self, String> {
+        Ok(Self {
+            fragment: shader.wgsl()?,
+            msl: Some(shader.msl()?),
+            ..Default::default()
+        })
+    }
+
+    /// Give the Metal backend a fragment of its own. See [`msl`](Self::msl).
+    pub fn with_msl(mut self, msl: impl Into<String>) -> Self {
+        self.msl = Some(msl.into());
+        self
     }
 
     /// Replace the vertex stage too. See [`vertex`](Self::vertex).
@@ -294,8 +353,15 @@ impl ShaderMaterial {
         self
     }
     /// Attach user textures (`u_tex0`..`u_tex3`). At most four are used.
-    pub fn with_textures(mut self, t: Vec<std::sync::Arc<wgpu::TextureView>>) -> Self {
-        self.textures = t;
+    pub fn with_textures<T: Into<crate::marks::gpu::TextureView>>(mut self, t: impl IntoIterator<Item = T>) -> Self {
+        self.textures = t.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Attach CPU-side textures for `u_tex0`..`u_tex3` — see
+    /// [`maps`](Self::maps). At most four are used.
+    pub fn with_maps(mut self, maps: Vec<std::sync::Arc<crate::textures::Texture>>) -> Self {
+        self.maps = maps;
         self
     }
     /// Draw in the screen-space pass so `ss_color_tex` / `ss_depth_tex` carry the

@@ -1740,15 +1740,6 @@ fn signed_area(ndc: &[[f32; 3]]) -> f32 {
 //                         COLOUR AND FORMATTING
 // ======================================================================
 
-/// IEC 61966-2-1 sRGB OETF — three.js's `sRGBTransferOETF`.
-fn linear_to_srgb(c: f32) -> f32 {
-    if c <= 0.0031308 {
-        c * 12.92
-    } else {
-        c.max(0.0).powf(1.0 / 2.4) * 1.055 - 0.055
-    }
-}
-
 /// Linear light to an sRGB byte triple, applying the same exposure and curve
 /// the wgpu renderer applies.
 ///
@@ -1764,7 +1755,7 @@ fn encode(c: [f32; 3], tm: ToneMapping, exposure: f32) -> [u8; 3] {
         ToneMapping::None => c,
         _ => tm.apply([c[0] * exposure, c[1] * exposure, c[2] * exposure]),
     };
-    mapped.map(|v| (linear_to_srgb(v.clamp(0.0, 1.0)).clamp(0.0, 1.0) * 255.0 + 0.5) as u8)
+    mapped.map(|v| (crate::utils::srgb::linear_to_srgb_f32(v) * 255.0 + 0.5) as u8)
 }
 
 fn hex(c: [u8; 3]) -> String {

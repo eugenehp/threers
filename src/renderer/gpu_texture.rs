@@ -697,7 +697,9 @@ impl GpuTexture {
         // A compressed texture cannot be a render attachment, so the GPU
         // mip generator has nothing to write into: it goes the plain route,
         // which uploads the levels it was given.
-        if oriented.format.is_block_compressed() {
+        // Nor is there anything to generate when the levels came with the
+        // texture: those are what it asked to be sampled through.
+        if oriented.format.is_block_compressed() || !oriented.mips.is_empty() {
             return Self::upload(device, queue, src);
         }
         let bpp = oriented.bytes_per_pixel() as u32;
@@ -872,7 +874,8 @@ fn build_mip_chain(src: &Texture) -> Vec<(u32, u32, Vec<u8>)> {
     // Compressed levels cannot be derived here -- box filtering BC blocks is
     // meaningless and the GPU cannot render into them either. They come from
     // `Texture::mips`, encoded offline; see the upload below.
-    if src.format.is_block_compressed() {
+    // Supplied levels replace the derived ones, whatever the format.
+    if src.format.is_block_compressed() || !src.mips.is_empty() {
         return Vec::new();
     }
     let bpp = src.bytes_per_pixel();
@@ -1009,18 +1012,10 @@ fn srgb_decode_table() -> &'static [f32; 256] {
     TABLE.get_or_init(|| {
         let mut t = [0.0f32; 256];
         for (i, v) in t.iter_mut().enumerate() {
-            *v = srgb_to_linear(i as f32 / 255.0);
+            *v = crate::utils::srgb::srgb_to_linear_f32(i as f32 / 255.0);
         }
         t
     })
-}
-
-fn srgb_to_linear(v: f32) -> f32 {
-    if v <= 0.04045 {
-        v / 12.92
-    } else {
-        ((v + 0.055) / 1.055).powf(2.4)
-    }
 }
 
 /// `linear_to_srgb` over the curved part of the transfer function, sampled and
@@ -1055,18 +1050,6 @@ fn linear_to_srgb_fast(v: f32) -> f32 {
     let f = x - i as f32;
     let t = srgb_encode_table();
     t[i] + (t[(i + 1).min(SRGB_ENCODE_N)] - t[i]) * f
-}
-
-/// The exact transfer function. Only the tests call it now — it is what
-/// [`linear_to_srgb_fast`] is checked against, and keeping the definition
-/// beside the approximation is the point.
-#[cfg_attr(not(test), allow(dead_code))]
-fn linear_to_srgb(v: f32) -> f32 {
-    if v <= 0.0031308 {
-        v * 12.92
-    } else {
-        1.055 * v.powf(1.0 / 2.4) - 0.055
-    }
 }
 
 pub fn wgpu_format(f: TextureFormat) -> wgpu::TextureFormat {
@@ -1142,7 +1125,7 @@ mod mip_tests {
         let mut worst = 0.0f32;
         for i in 0..=20000 {
             let v = i as f32 / 20000.0;
-            worst = worst.max((linear_to_srgb_fast(v) - linear_to_srgb(v)).abs() * 255.0);
+            worst = worst.max((linear_to_srgb_fast(v) - crate::utils::srgb::linear_to_srgb_f32(v)).abs() * 255.0);
         }
         assert!(
             worst < 0.5,
@@ -1199,6 +1182,17 @@ mod mip_tests {
         let (_, _, last) = mips.last().unwrap();
         let red = f16_bits_to_f32(u16::from_le_bytes([last[0], last[1]]));
         assert!((red - 4.0).abs() < 0.01, "1x1 mip came out at {red}");
+    }
+
+    #[test]
+    fn supplied_levels_are_not_derived_again() {
+        // A texture that brings its own chain is sampled through it: deriving
+        // another one too either replaced it (the mip-generator path) or
+        // stacked both into one texture with too many levels.
+        let mut t = Texture::new(4, 4, TextureFormat::Rgba8Unorm, vec![255; 64]);
+        assert_eq!(build_mip_chain(&t).len(), 2);
+        t.mips = vec![Arc::new(vec![0; 16]), Arc::new(vec![0; 4])];
+        assert!(build_mip_chain(&t).is_empty());
     }
 
     #[test]

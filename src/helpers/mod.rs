@@ -24,6 +24,7 @@ pub use light_helpers::{
 pub use polar_grid::PolarGridHelper;
 pub use quad_view::{Pane, PaneSurface, QuadView, ViewSurface, ViewportControl};
 pub use quad_view_controls::{PointerButton, QuadViewControls};
-#[cfg(all(feature = "metal", any(target_os = "macos", target_os = "ios")))]
-pub use quad_view::MetalViewSurface;
+cfg_metal! {
+    pub use quad_view::MetalViewSurface;
+}
 pub use vertex_normals::{VertexNormalsHelper, VertexTangentsHelper};

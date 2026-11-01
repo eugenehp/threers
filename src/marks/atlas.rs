@@ -1,5 +1,6 @@
 //! Images packed into one texture, for sprites and image quads.
 
+use super::gpu;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
@@ -58,8 +59,8 @@ impl std::error::Error for AtlasError {}
 pub type SharedAtlas = Arc<RwLock<TextureAtlas>>;
 
 struct AtlasGpu {
-    texture: wgpu::Texture,
-    view: wgpu::TextureView,
+    texture: gpu::Texture,
+    view: gpu::TextureView,
     size: (u32, u32),
     levels: u32,
     version: u64,
@@ -394,9 +395,9 @@ impl TextureAtlas {
     /// changes whenever a bind group holding the old view must be rebuilt.
     pub fn texture(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-    ) -> (wgpu::TextureView, u64) {
+        device: &gpu::Device,
+        queue: &gpu::Queue,
+    ) -> (gpu::TextureView, u64) {
         let size = (self.width, self.height);
         let max = device.limits().max_texture_dimension_2d;
         let fresh = self
@@ -457,7 +458,7 @@ impl TextureAtlas {
         (g.view.clone(), g.version)
     }
 
-    fn upload(&self, queue: &wgpu::Queue, (x0, y0, x1, y1): (u32, u32, u32, u32)) {
+    fn upload(&self, queue: &gpu::Queue, (x0, y0, x1, y1): (u32, u32, u32, u32)) {
         let g = self.gpu.as_ref().unwrap();
         let levels = g.texture.mip_level_count();
         // Level 0 straight from the packed pixels; each further level a box
@@ -479,7 +480,7 @@ impl TextureAtlas {
                     rows.extend_from_slice(&level[s..s + (rw * 4) as usize]);
                 }
                 queue.write_texture(
-                    wgpu::TexelCopyTextureInfo {
+                    gpu::TexelCopyTextureInfo {
                         texture: &g.texture,
                         mip_level: mip,
                         origin: wgpu::Origin3d {

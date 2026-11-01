@@ -988,8 +988,17 @@ impl Pass for DrawPass {
             }
             None => ((0.1, 100.0), 1.0, 1.0),
         };
-        let device = ctx.renderer.device_arc();
-        let queue = ctx.renderer.queue_arc();
+        // The callback encodes wgpu commands; another backend has nothing to
+        // hand it, and the chain carries on without this pass.
+        let Some(renderer) = ctx.renderer.wgpu() else {
+            warn_skipped_custom_pass(self.name);
+            return;
+        };
+        if write.wgpu_render_target().is_none() || read.wgpu_render_target().is_none() {
+            return;
+        }
+        let device = renderer.device_arc();
+        let queue = renderer.queue_arc();
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some(self.name),
         });
@@ -1046,4 +1055,14 @@ impl Pass for DrawPass {
         drop(f);
         queue.submit(Some(encoder.finish()));
     }
+}
+
+/// Say once that a raw-wgpu pass was skipped on another backend.
+fn warn_skipped_custom_pass(name: &str) {
+    static WARNED: std::sync::Once = std::sync::Once::new();
+    WARNED.call_once(|| {
+        eprintln!(
+            "threers: post pass `{name}` draws with raw wgpu commands and is skipped on this backend"
+        );
+    });
 }

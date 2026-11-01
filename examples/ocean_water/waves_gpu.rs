@@ -2,10 +2,12 @@
 //! buffer in place.
 //!
 //! [`ShaderMaterial`](threers::ShaderMaterial) replaces the fragment stage only,
-//! so there is no vertex hook to displace through. But the example owns the
-//! `wgpu::Device` the renderer is built on, which is enough: mark the geometry
+//! so there is no vertex hook to displace through. But the example computes on
+//! the GPU the renderer draws with — its `marks_gpu`, on wgpu or Metal — which
+//! is enough: mark the geometry
 //! [`gpu_writable`](threers::BufferGeometry::gpu_writable), ask the renderer for
-//! its vertex buffer, and bind it to a compute shader as `storage, read_write`.
+//! its vertex buffer ([`MeshHost`]), and bind it to a compute shader as
+//! `storage, read_write`.
 //!
 //! What that buys is not a faster CPU loop — it is the removal of the whole
 //! round trip. Before, every frame evaluated ~40 components at every vertex on
@@ -17,10 +19,11 @@
 //! nothing here may touch `geometry_version` after setup — the mesh is driven
 //! one way, from this pass.
 
+use threers::marks::gpu;
 use std::sync::Arc;
 
-use threers::{BufferGeometry, Renderer};
-use wgpu::util::DeviceExt;
+use threers::{BufferGeometry, HeadlessRenderer, Renderer};
+use threers::renderer::WindowRenderer;
 
 use crate::ocean_fft::{Cascades, OceanFft};
 
@@ -332,8 +335,8 @@ struct Params {
 @group(0) @binding(1) var cascade_samp : sampler;
 // Per vertex: [x, z, spacing, _] in disc-local space. Never changes.
 @group(0) @binding(2) var<storage, read>        base   : array<vec4<f32>>;
-// The mesh itself: 16 floats per vertex, position(3) normal(3) uv(2)
-// colour(4) tangent(4). Only the first six are ours.
+// The mesh itself: $STRIDE floats per vertex, position(3) normal(3) uv(2)
+// colour(4), and on wgpu tangent(4). Only the first six are ours.
 @group(0) @binding(3) var<storage, read_write>  verts  : array<f32>;
 @group(0) @binding(4) var cascade_a : texture_2d<f32>;
 @group(0) @binding(5) var cascade_b : texture_2d<f32>;
@@ -350,7 +353,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let local = vec2<f32>(b.x, b.y);
     let s = sample_surface(local + params.centre, b.z);
 
-    let o = i * 16u;
+    let o = i * $STRIDEu;
     verts[o]      = local.x + s.disp.x;
     verts[o + 1u] = s.disp.y;
     verts[o + 2u] = local.y + s.disp.z;
@@ -360,6 +363,52 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 "#;
 
+/// What the compute passes need from whichever renderer draws: a geometry on
+/// the GPU, its vertex buffer to write in place, and that buffer's `f32`s a
+/// vertex — 16 on wgpu, 12 on the native Metal backend. The first twelve are
+/// the same on both, and they are all the passes write.
+pub trait MeshHost {
+    fn upload_geometry(&mut self, geometry: &Arc<BufferGeometry>);
+    fn vertex_buffer(&mut self, geometry: &Arc<BufferGeometry>) -> Option<gpu::Buffer>;
+    fn vertex_floats(&self) -> u32;
+}
+
+impl MeshHost for Renderer {
+    fn upload_geometry(&mut self, geometry: &Arc<BufferGeometry>) {
+        Renderer::upload_geometry(self, geometry);
+    }
+    fn vertex_buffer(&mut self, geometry: &Arc<BufferGeometry>) -> Option<gpu::Buffer> {
+        Renderer::vertex_buffer(self, geometry).map(gpu::Buffer::from)
+    }
+    fn vertex_floats(&self) -> u32 {
+        16
+    }
+}
+
+impl MeshHost for HeadlessRenderer {
+    fn upload_geometry(&mut self, geometry: &Arc<BufferGeometry>) {
+        HeadlessRenderer::upload_geometry(self, geometry);
+    }
+    fn vertex_buffer(&mut self, geometry: &Arc<BufferGeometry>) -> Option<gpu::Buffer> {
+        HeadlessRenderer::vertex_buffer(self, geometry)
+    }
+    fn vertex_floats(&self) -> u32 {
+        HeadlessRenderer::vertex_floats(self)
+    }
+}
+
+impl MeshHost for WindowRenderer {
+    fn upload_geometry(&mut self, geometry: &Arc<BufferGeometry>) {
+        WindowRenderer::upload_geometry(self, geometry);
+    }
+    fn vertex_buffer(&mut self, geometry: &Arc<BufferGeometry>) -> Option<gpu::Buffer> {
+        WindowRenderer::vertex_buffer(self, geometry)
+    }
+    fn vertex_floats(&self) -> u32 {
+        WindowRenderer::vertex_floats(self)
+    }
+}
+
 pub struct WaveCompute {
     /// The geometry whose vertex buffer this pass owns, plus the version it had
     /// when the binding was made. Anything that bumps the version makes the
@@ -367,9 +416,9 @@ pub struct WaveCompute {
     /// the mesh would silently freeze rather than error, so it is checked.
     geometry: Arc<BufferGeometry>,
     bound_version: u32,
-    pipeline: wgpu::ComputePipeline,
-    bind_group: wgpu::BindGroup,
-    params: wgpu::Buffer,
+    pipeline: gpu::ComputePipeline,
+    bind_group: gpu::BindGroup,
+    params: gpu::Buffer,
     vertex_count: u32,
     workgroups: u32,
 }
@@ -379,17 +428,17 @@ impl WaveCompute {
     ///
     /// `geometry` must be [`gpu_writable`](BufferGeometry::gpu_writable) and
     /// must already be on the GPU — call
-    /// [`Renderer::upload_geometry`](threers::Renderer::upload_geometry) first.
+    /// [`MeshHost::upload_geometry`] first.
     pub fn new(
-        device: &wgpu::Device,
-        renderer: &Renderer,
+        device: &gpu::Device,
+        host: &mut dyn MeshHost,
         geometry: &Arc<BufferGeometry>,
         base: &[[f32; 4]],
         fft: &OceanFft,
         peak_wavelength: f32,
     ) -> WaveCompute {
         let cas = fft.cas;
-        let vertex_buffer = renderer
+        let vertex_buffer = host
             .vertex_buffer(geometry)
             .expect("water geometry must be uploaded before the compute pass is built");
 
@@ -405,10 +454,11 @@ impl WaveCompute {
                     &cas,
                 ),
             )
-            .replace("$WORKGROUP", &WORKGROUP.to_string());
-        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            .replace("$WORKGROUP", &WORKGROUP.to_string())
+            .replace("$STRIDE", &host.vertex_floats().to_string());
+        let module = device.create_shader_module(gpu::ShaderModuleDescriptor {
             label: Some("ocean wave displacement"),
-            source: wgpu::ShaderSource::Wgsl(source.into()),
+            source: gpu::ShaderSource::Wgsl(source.into()),
         });
 
         let params = device.create_buffer(&wgpu::BufferDescriptor {
@@ -487,47 +537,47 @@ impl WaveCompute {
             ],
         });
 
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let bind_group = device.create_bind_group(&gpu::BindGroupDescriptor {
             label: Some("ocean wave bg"),
             layout: &layout,
             entries: &[
-                wgpu::BindGroupEntry {
+                gpu::BindGroupEntry {
                     binding: 0,
                     resource: params.as_entire_binding(),
                 },
-                wgpu::BindGroupEntry {
+                gpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
+                    resource: gpu::BindingResource::Sampler(&sampler),
                 },
-                wgpu::BindGroupEntry {
+                gpu::BindGroupEntry {
                     binding: 2,
                     resource: base_buf.as_entire_binding(),
                 },
-                wgpu::BindGroupEntry {
+                gpu::BindGroupEntry {
                     binding: 3,
                     resource: vertex_buffer.as_entire_binding(),
                 },
-                wgpu::BindGroupEntry {
+                gpu::BindGroupEntry {
                     binding: 4,
-                    resource: wgpu::BindingResource::TextureView(&fft.cascade_views[0]),
+                    resource: gpu::BindingResource::TextureView(&fft.cascade_views[0]),
                 },
-                wgpu::BindGroupEntry {
+                gpu::BindGroupEntry {
                     binding: 5,
-                    resource: wgpu::BindingResource::TextureView(&fft.cascade_views[1]),
+                    resource: gpu::BindingResource::TextureView(&fft.cascade_views[1]),
                 },
-                wgpu::BindGroupEntry {
+                gpu::BindGroupEntry {
                     binding: 6,
-                    resource: wgpu::BindingResource::TextureView(&fft.cascade_views[2]),
+                    resource: gpu::BindingResource::TextureView(&fft.cascade_views[2]),
                 },
             ],
         });
 
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        let pipeline_layout = device.create_pipeline_layout(&gpu::PipelineLayoutDescriptor {
             label: Some("ocean wave pipeline layout"),
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
-        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        let pipeline = device.create_compute_pipeline(&gpu::ComputePipelineDescriptor {
             label: Some("ocean wave pipeline"),
             layout: Some(&pipeline_layout),
             module: &module,
@@ -552,8 +602,8 @@ impl WaveCompute {
     /// reads the vertices; queue order takes care of the rest.
     pub fn dispatch(
         &self,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
+        queue: &gpu::Queue,
+        encoder: &mut gpu::CommandEncoder,
         centre: [f32; 2],
     ) {
         assert_eq!(

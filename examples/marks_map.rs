@@ -28,14 +28,15 @@ use std::time::Instant;
 use threers::cameras::Camera;
 use threers::captions::CaptionFont;
 use threers::marks::{
-    DensityMarks, Mark, MarkRenderer, MarkTarget, MarkView, Origin, PickHit, PickRequest,
+    DensityMarks, Mark, MarkRenderer, MarkView, Origin, PickHit, PickRequest,
     PointMarks, PolygonFeature, PolygonMarks, SegmentMarks, ShaderHooks, ShapeMarks, SizeUnits,
     TextLabel, TextLabels,
 };
 use threers::math::ColorRamp;
+use threers::renderer::WindowRenderer;
 use threers::{
     AmbientLight, Color, CylinderGeometry, DirectionalLight, MapControls, Mesh, Object3D,
-    PerspectiveCamera, PointerEvent, PolygonGeometry, Renderer, Scene, StandardMaterial, Vector3,
+    PerspectiveCamera, PointerEvent, PolygonGeometry, Scene, StandardMaterial, Vector3,
 };
 
 use winit::{
@@ -467,11 +468,10 @@ fn snapshot(path: &str, shown: &str, distance: Option<f32>) {
     }
 
     hr.render(&mut scene, &camera);
-    let mut marks = MarkRenderer::new(hr.device());
+    let mut marks = hr.mark_renderer();
     let view = MarkView::new(&camera, origin, (w, h));
     layers.labels.place(&view);
-    let (device, queue) = (hr.device().clone(), hr.queue().clone());
-    marks.draw(&device, &queue, &hr.mark_target(), &view, &mut layers.all());
+    hr.draw_marks(&mut marks, &view, &mut layers.all());
     let rgba = hr.read_rgba();
     std::fs::write(path, threers::encode_png(w, h, &rgba)).expect("write png");
     println!("wrote {path}");
@@ -510,75 +510,19 @@ async fn run() {
             .expect("window"),
     );
 
-    let instance = {
-        let mut d = wgpu::InstanceDescriptor::new_without_display_handle();
-        d.backends = wgpu::Backends::PRIMARY;
-        wgpu::Instance::new(d)
-    };
-    let surface = instance.create_surface(window.clone()).expect("surface");
-    let adapter = instance
-        .request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            compatible_surface: Some(&surface),
-            force_fallback_adapter: false,
-            apply_limit_buckets: false,
-        })
-        .await
-        .expect("adapter");
-    // The same limits `controls_orbit` raises for `Renderer::new`.
-    let adapter_limits = adapter.limits();
-    let mut limits = wgpu::Limits::downlevel_defaults().using_resolution(adapter_limits.clone());
-    limits.max_sampled_textures_per_shader_stage =
-        adapter_limits.max_sampled_textures_per_shader_stage;
-    limits.max_samplers_per_shader_stage = adapter_limits.max_samplers_per_shader_stage;
-    let (device, queue) = adapter
-        .request_device(&wgpu::DeviceDescriptor {
-            label: Some("threers device"),
-            required_features: wgpu::Features::empty(),
-            required_limits: limits,
-            ..Default::default()
-        })
-        .await
-        .expect("device");
-    let device = Arc::new(device);
-    let queue = Arc::new(queue);
-
-    let size = window.inner_size();
-    let caps = surface.get_capabilities(&adapter);
-    let format = caps
-        .formats
-        .iter()
-        .copied()
-        .find(|f| f.is_srgb())
-        .unwrap_or(caps.formats[0]);
-    let mut config = wgpu::SurfaceConfiguration {
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-        format,
-        width: size.width.max(1),
-        height: size.height.max(1),
-        present_mode: caps.present_modes[0],
-        alpha_mode: caps.alpha_modes[0],
-        view_formats: vec![],
-        desired_maximum_frame_latency: 2,
-        color_space: wgpu::SurfaceColorSpace::Srgb,
-    };
-    surface.configure(&device, &config);
-    let mut renderer = Renderer::new(
-        device.clone(),
-        queue.clone(),
-        format,
-        config.width,
-        config.height,
-    );
+    // wgpu, or the native Metal backend under `THREERS_BACKEND=metal`.
+    let mut wr = WindowRenderer::new(window.clone()).expect("a GPU for the window");
+    // Single-sampled, so a pick can test against the frame's depth.
+    wr.set_msaa(1);
 
     let origin = Origin::new(CENTRE[0], CENTRE[1], CENTRE[2]);
     let mut scene = scene(&origin);
 
     let data = pickups();
     let mut layers = layers(&data);
-    let mut marks = MarkRenderer::new(&device);
+    let mut marks = MarkRenderer::new_on(&wr.marks_gpu());
 
-    let (mut camera, mut controls) = opening_camera(config.width as f32 / config.height as f32);
+    let (mut camera, mut controls) = opening_camera(wr.aspect());
 
     let mut buttons = (false, false); // (left: pan, right: rotate)
     let mut cursor = (0.0f32, 0.0f32);
@@ -598,15 +542,12 @@ async fn run() {
             if window_id != window_for_loop.id() {
                 return;
             }
-            let viewport = (config.width as f32, config.height as f32);
+            let viewport = (wr.size().0 as f32, wr.size().1 as f32);
             match event {
                 WindowEvent::CloseRequested => target.exit(),
                 WindowEvent::Resized(s) => {
-                    config.width = s.width.max(1);
-                    config.height = s.height.max(1);
-                    surface.configure(&device, &config);
-                    renderer.resize(config.width, config.height);
-                    camera.set_aspect(config.width as f32 / config.height as f32);
+                    wr.resize(s.width, s.height);
+                    camera.set_aspect(wr.aspect());
                 }
                 WindowEvent::KeyboardInput {
                     event:
@@ -650,6 +591,7 @@ async fn run() {
                         wheel: 0.0,
                         panning: buttons.0,
                         rotating: buttons.1,
+                        ..Default::default()
                     };
                     cursor = now;
                     cursor_moved = true;
@@ -676,56 +618,29 @@ async fn run() {
                     layers.points.common.style.params[0] = [hour, hour + WINDOW_HOURS, 0.0, 0.0];
                     layers.routes.common.style.params[0] = [hour, TRAIL_HOURS, 0.0, 0.0];
 
-                    let frame = match surface.get_current_texture() {
-                        wgpu::CurrentSurfaceTexture::Success(f)
-                        | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
-                        wgpu::CurrentSurfaceTexture::Lost
-                        | wgpu::CurrentSurfaceTexture::Outdated => {
-                            surface.configure(&device, &config);
-                            window_for_loop.request_redraw();
-                            return;
-                        }
-                        // Minimised, hidden, or slow: skip this frame, not the
-                        // ones after it.
-                        wgpu::CurrentSurfaceTexture::Occluded
-                        | wgpu::CurrentSurfaceTexture::Timeout => {
-                            window_for_loop.request_redraw();
-                            return;
-                        }
-                        e => {
-                            log::error!("surface error: {e:?}");
-                            return;
-                        }
-                    };
-                    let frame_view = frame.texture.create_view(&Default::default());
-                    renderer.render(&mut scene, &camera, &frame_view, false);
-                    let view = MarkView::new(&camera, origin, renderer.drawing_buffer_size());
-                    layers.labels.place(&view);
-                    let target = MarkTarget::over_frame(&renderer, &frame_view);
-                    marks.draw(&device, &queue, &target, &view, &mut layers.all());
+                    wr.render_with(&mut scene, &camera, |f| {
+                        let view = MarkView::for_surface(&camera, origin, &f.surface);
+                        layers.labels.place(&view);
+                        marks.draw_on(&f.gpu, &f.target, &view, &mut layers.all());
 
-                    // One pick in flight at a time, started when the cursor
-                    // has moved and collected on a later frame.
-                    if pick.is_none() && cursor_moved && !buttons.0 && !buttons.1 {
-                        cursor_moved = false;
-                        // The frame's depth hides marks behind buildings, but
-                        // only a single-sampled one can be read here.
-                        let (msaa, depth, _) = renderer.overlay_attachments();
-                        let occluder = msaa.is_none().then_some(depth);
-                        let only_points: &mut [&mut dyn Mark] = &mut [&mut layers.points];
-                        pick = Some(marks.pick(
-                            &device,
-                            &queue,
-                            &view,
-                            only_points,
-                            occluder,
-                            cursor.0,
-                            cursor.1,
-                            4,
-                        ));
-                    }
-                    queue.present(frame);
-                    let _ = device.poll(wgpu::PollType::Poll);
+                        // One pick in flight at a time, started when the cursor
+                        // has moved and collected on a later frame. The frame's
+                        // depth hides marks behind buildings.
+                        if pick.is_none() && cursor_moved && !buttons.0 && !buttons.1 {
+                            cursor_moved = false;
+                            let only_points: &mut [&mut dyn Mark] = &mut [&mut layers.points];
+                            pick = Some(marks.pick_on(
+                                &f.gpu,
+                                &view,
+                                only_points,
+                                f.occluder.as_ref(),
+                                cursor.0,
+                                cursor.1,
+                                4,
+                            ));
+                        }
+                    });
+                    wr.poll();
                     if let Some(answer) = pick.as_mut().and_then(PickRequest::try_take) {
                         pick = None;
                         let row = answer.map(|h: PickHit| h.index);

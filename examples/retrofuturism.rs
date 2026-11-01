@@ -456,13 +456,16 @@ fn main() {
     // `RETRO_ANIM_FPS=n` renders the Start-event timeline instead of the two
     // stills: 13 seconds, which is one full cycle of the sphere and covers the
     // card's 8-second rise.
-    let matcap = load_matcap(&renderer.device().clone(), &renderer.queue().clone());
+    let matcap = load_matcap();
+    // The frame behind the glass, refilled every frame: one texture, so the
+    // renderer replaces its upload rather than keeping one per frame.
+    let mut capture: Option<Arc<Texture>> = None;
     if let Some(fps) = std::env::var("RETRO_ANIM_FPS").ok().and_then(|v| v.parse::<f32>().ok()) {
         let _ = std::fs::create_dir_all("out/anim");
         let total = (13.0 * fps).round() as u32;
         for i in 0..total {
             let t = i as f32 / fps;
-            let mut rgba = render_frame(&mut renderer, &camera, false, t, half_w, half_h, matcap.clone());
+            let mut rgba = render_frame(&mut renderer, &camera, false, t, half_w, half_h, matcap.clone(), &mut capture);
             // Grain is re-seeded per frame so it crawls, as a noise pass does.
             film_grain_seeded(&mut rgba, NOISE_OPACITY, 0x9e3779b9u32.wrapping_add(i.wrapping_mul(2654435761)));
             let path = format!("out/anim/frame_{i:04}.png");
@@ -482,10 +485,10 @@ fn main() {
         return;
     }
 
-    let matcap = load_matcap(&renderer.device().clone(), &renderer.queue().clone());
+    let matcap = load_matcap();
 
     for revealed in [false, true] {
-        let mut rgba = render_frame(&mut renderer, &camera, revealed, 0.0, half_w, half_h, matcap.clone());
+        let mut rgba = render_frame(&mut renderer, &camera, revealed, 0.0, half_w, half_h, matcap.clone(), &mut capture);
         film_grain(&mut rgba, NOISE_OPACITY);
 
         let path = if revealed {
@@ -553,61 +556,25 @@ fn pose_at(t: f32) -> Pose {
 }
 
 
-/// Render once with the bars hidden and hand that frame back as a GPU texture
-/// for them to refract. The source transmission layer samples a capture of the
-/// scene the same way; doing it here keeps the whole reconstruction inside the
-/// example instead of relying on the renderer's own (tightly clamped) one.
-fn upload_rgba(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    w: u32,
-    h: u32,
-    rgba: &[u8],
-    label: &str,
-) -> std::sync::Arc<wgpu::TextureView> {
-    let tex = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some(label),
-        size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8UnormSrgb,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-        view_formats: &[],
-    });
-    queue.write_texture(
-        wgpu::TexelCopyTextureInfo {
-            texture: &tex,
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        rgba,
-        wgpu::TexelCopyBufferLayout {
-            offset: 0,
-            bytes_per_row: Some(w * 4),
-            rows_per_image: Some(h),
-        },
-        wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-    );
-    std::sync::Arc::new(tex.create_view(&wgpu::TextureViewDescriptor::default()))
+/// An sRGB image for a `ShaderMaterial` slot: the renderer uploads it, on
+/// wgpu or Metal alike.
+fn rgba_texture(w: u32, h: u32, rgba: Vec<u8>) -> Arc<Texture> {
+    Arc::new(Texture::new(w, h, TextureFormat::Rgba8UnormSrgb, rgba))
 }
 
 /// `matcap_reflection_2`, the texture the "Red Gradient" material names. Served
 /// from the source tool's public asset CDN; `RETRO_MATCAP` points at a local copy. With
 /// no file the sphere falls back to gradient + light only, which loses the
 /// specular highlight.
-fn load_matcap(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-) -> Option<std::sync::Arc<wgpu::TextureView>> {
+fn load_matcap() -> Option<Arc<Texture>> {
     let path = std::env::var("RETRO_MATCAP").ok()?;
     let bytes = std::fs::read(&path).ok()?;
     let img = decode_png(&bytes).ok()?;
     println!("matcap: {path} ({}x{})", img.width, img.height);
-    Some(upload_rgba(device, queue, img.width, img.height, &img.rgba, "retro matcap"))
+    Some(rgba_texture(img.width, img.height, img.rgba))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_frame(
     renderer: &mut HeadlessRenderer,
     camera: &OrthographicCamera,
@@ -615,13 +582,12 @@ fn render_frame(
     t: f32,
     half_w: f32,
     half_h: f32,
-    matcap: Option<std::sync::Arc<wgpu::TextureView>>,
+    matcap: Option<Arc<Texture>>,
+    capture: &mut Option<Arc<Texture>>,
 ) -> Vec<u8> {
     let mut behind_scene = build_scene(revealed, t, half_w, half_h, None, matcap.clone());
     let behind_rgba = renderer.render_to_rgba(&mut behind_scene, camera);
 
-    let device = renderer.device().clone();
-    let queue = renderer.queue().clone();
     // three.js drives the transmission sample's blur from roughness via
     // `applyIorToRoughness` + a mip chain. The document stores roughness 4.5, which is
     // far outside 0..1 and saturates that selection to the blurriest levels —
@@ -650,36 +616,23 @@ fn render_frame(
         }
         mips.push((nw, nh, next));
     }
-    let mip_count = mips.len() as u32;
-
-    let tex = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("retro behind-glass capture"),
-        size: wgpu::Extent3d { width: W, height: H, depth_or_array_layers: 1 },
-        mip_level_count: mip_count,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8UnormSrgb,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-        view_formats: &[],
-    });
-    for (level, (mw, mh, data)) in mips.iter().enumerate() {
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &tex,
-                mip_level: level as u32,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            data,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(*mw * 4),
-                rows_per_image: Some(*mh),
-            },
-            wgpu::Extent3d { width: *mw, height: *mh, depth_or_array_layers: 1 },
-        );
-    }
-    let view = std::sync::Arc::new(tex.create_view(&wgpu::TextureViewDescriptor::default()));
+    let levels: Vec<Arc<Vec<u8>>> = mips.into_iter().skip(1).map(|(_, _, d)| Arc::new(d)).collect();
+    let view = match capture {
+        Some(t) => {
+            // Same texture, new pixels: the upload is replaced, not added to.
+            let t = Arc::make_mut(t);
+            t.data = Arc::new(behind_rgba.clone());
+            t.mips = levels;
+            t.upload_seq += 1;
+            capture.clone().unwrap()
+        }
+        None => {
+            let mut t = Texture::new(W, H, TextureFormat::Rgba8UnormSrgb, behind_rgba.clone());
+            t.mips = levels;
+            t.mipmap_filter = Some(TextureFilter::Linear);
+            capture.insert(Arc::new(t)).clone()
+        }
+    };
 
     let n = behind_rgba.len() / 4;
     let mean: f64 = behind_rgba.chunks_exact(4).map(|p| p[0] as f64).sum::<f64>() / n as f64;
@@ -854,8 +807,8 @@ fn build_scene(
     t: f32,
     half_w: f32,
     half_h: f32,
-    behind: Option<std::sync::Arc<wgpu::TextureView>>,
-    matcap: Option<std::sync::Arc<wgpu::TextureView>>,
+    behind: Option<Arc<Texture>>,
+    matcap: Option<Arc<Texture>>,
 ) -> Scene {
     let pose = pose_at(t);
     let mut scene = Scene::new();
@@ -914,7 +867,7 @@ fn build_scene(
     let mut sphere = Object3D::mesh(Mesh::new(
         SphereGeometry::new(347.5816085339573, 64, 64),
         Material::Shader(ShaderMaterial {
-            textures: matcap.clone().into_iter().collect(),
+            maps: matcap.clone().into_iter().collect(),
             ..ShaderMaterial::new(SPHERE_FRAGMENT).with_data(vec![
             [pose.sphere.x, pose.sphere.y, pose.sphere.z, 1.0 / sphere_scale],
             [-534.8627583784917, 532.6500685688682, 0.0, 0.0],
@@ -1005,7 +958,7 @@ fn build_scene(
         if skip_bars { break; }
         let bar_centre = Vector3::new(base.x + 157.9 * k as f32, base.y, base.z);
         let glass = Material::Shader(ShaderMaterial {
-            textures: vec![behind.clone().unwrap()],
+            maps: vec![behind.clone().unwrap()],
             ..ShaderMaterial::new(GLASS_FRAGMENT).with_data(vec![
                 [1.16, 565.0, 0.24, glass_lod],
                 [half_w, half_h, refr_scale, 0.0],

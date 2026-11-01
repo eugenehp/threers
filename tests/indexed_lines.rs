@@ -34,11 +34,8 @@ fn lines(pos: &[f32], index: Vec<u32>, opacity: f32) -> Object3D {
     let mut g = BufferGeometry::new();
     g.set_attribute("position", BufferAttribute::new(pos.to_vec(), 3));
     g.set_index(index);
-    let mut m = LineBasicMaterial::default();
-    m.color = Color::from_hex(0xffffff);
-    m.opacity = opacity;
-    let o = Object3D::line_segments(LineSegments::new(g, Material::Line(m)));
-    o
+    let m = LineBasicMaterial { color: Color::from_hex(0xffffff), opacity, ..Default::default() };
+    Object3D::line_segments(LineSegments::new(g, Material::Line(m)))
 }
 
 /// is anything drawn within `r` pixels of world point (x, y)
@@ -125,9 +122,7 @@ fn lines_filled_in_after_their_first_frame() {
     let mut scene = scene_with(vec![]);
     let mut empty = BufferGeometry::new();
     empty.set_attribute("position", BufferAttribute::new(Vec::new(), 3));
-    let mut m = LineBasicMaterial::default();
-    m.color = Color::from_hex(0xffffff);
-    m.opacity = 0.95;
+    let m = LineBasicMaterial { color: Color::from_hex(0xffffff), opacity: 0.95, ..Default::default() };
     let mat = Material::Line(m);
     let ida = scene.add(Object3D::line_segments(LineSegments::new(empty.clone(), mat.clone())));
     let _ = r.render_to_rgba(&mut scene, &camera());

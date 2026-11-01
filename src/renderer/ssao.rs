@@ -167,9 +167,10 @@ impl Ssao {
             label: Some("threers ssao"),
             source: wgpu::ShaderSource::Wgsl(
                 format!(
-                    "{}\n{}",
+                    "{}\n{}\n{}",
                     crate::renderer::fullscreen::VS,
-                    if raster { RASTER_SHADER } else { SHADER }
+                    if raster { RASTER_SHADER } else { SHADER },
+                    crate::renderer::shader::shared_functions_wgsl(),
                 )
                 .into(),
             ),
@@ -426,21 +427,13 @@ struct P {
 @group(0) @binding(1) var dst   : texture_storage_2d<r32float, write>;
 @group(0) @binding(2) var<uniform> p : P;
 
-// Depth-buffer values are hyperbolic: the same numeric step is millimetres up
-// close and kilometres far away. Everything below works in linear view depth.
-fn linear_depth(raw : f32) -> f32 {
-    // pad0: the depth is reversed (`Renderer::set_reversed_z`).
-    let d = select(raw, 1.0 - raw, p.pad0 > 0.5);
-    if (d >= 1.0) { return p.far; }
-    return (p.near * p.far) / max(p.far - d * (p.far - p.near), 1e-6);
-}
-
-// View-space position from a pixel and its linear depth. Only the ratios
-// matter for a normal, so this needs the projection's shape and not the matrix.
+// The occlusion is the shared `ssao_*` functions (`SHARED_FUNCTIONS`); this
+// pass only fetches depth. pad0: the depth is reversed
+// (`Renderer::set_reversed_z`).
 fn view_pos(c : vec2<i32>, dim : vec2<u32>) -> vec3<f32> {
-    let z = linear_depth(textureLoad(depth, clamp(c, vec2<i32>(0), vec2<i32>(dim) - 1), 0));
-    let uv = (vec2<f32>(c) + 0.5) / vec2<f32>(dim) * 2.0 - 1.0;
-    return vec3<f32>(uv.x * p.aspect * p.tan_half_fov * z, -uv.y * p.tan_half_fov * z, z);
+    let raw = textureLoad(depth, clamp(c, vec2<i32>(0), vec2<i32>(dim) - 1), 0);
+    let z = ssao_linear_depth(raw, p.near, p.far, p.pad0 > 0.5);
+    return ssao_view_pos(c, dim, z, p.aspect, p.tan_half_fov);
 }
 
 @compute @workgroup_size(8, 8)
@@ -457,43 +450,12 @@ fn main(@builtin(global_invocation_id) gid : vec3<u32>) {
         textureStore(dst, vec2<i32>(gid.xy), vec4<f32>(1.0, 0.0, 0.0, 1.0));
         return;
     }
-
-    // NEAREST-SIDE DERIVATIVES. A central difference across a silhouette
-    // returns a normal belonging to neither surface, and silhouettes are where
-    // the creases are. Taking both sides and keeping the smaller depth step
-    // holds the estimate on the near surface.
-    let xr = view_pos(c + vec2<i32>(1, 0), in_dim);
-    let xl = view_pos(c - vec2<i32>(1, 0), in_dim);
-    let yd = view_pos(c + vec2<i32>(0, 1), in_dim);
-    let yu = view_pos(c - vec2<i32>(0, 1), in_dim);
-    var dx = xr - p0;
-    if (abs(xl.z - p0.z) < abs(xr.z - p0.z)) { dx = p0 - xl; }
-    var dy = yd - p0;
-    if (abs(yu.z - p0.z) < abs(yd.z - p0.z)) { dy = p0 - yu; }
-    let n = normalize(cross(dx, dy));
-
-    // Screen-space radius shrinks with distance so the effect keeps a fixed
-    // size in the WORLD rather than a fixed number of pixels.
-    let px = clamp(p.radius / p0.z * f32(in_dim.y) * 0.5 / max(p.tan_half_fov, 1e-4),
-                   2.0, 64.0);
-
+    let n = ssao_normal(p0, view_pos(c + vec2<i32>(1, 0), in_dim), view_pos(c - vec2<i32>(1, 0), in_dim),
+                        view_pos(c + vec2<i32>(0, 1), in_dim), view_pos(c - vec2<i32>(0, 1), in_dim));
+    let px = ssao_radius_px(p.radius, p0.z, f32(in_dim.y), p.tan_half_fov);
     var occ = 0.0;
     for (var i = 0; i < 12; i = i + 1) {
-        let a = f32(i) * 2.39996 + fract(sin(dot(vec2<f32>(c), vec2<f32>(12.9898, 78.233))) * 43758.5453) * 6.2831853;  // golden angle + per-pixel rotation (break coherent streaks)
-        let r = px * sqrt((f32(i) + 0.5) / 12.0);  // uniform over the disc
-        let s = c + vec2<i32>(vec2<f32>(cos(a), sin(a)) * r);
-        let ps = view_pos(s, in_dim);
-        let v = ps - p0;
-        let d = length(v);
-        if (d < 1e-4) { continue; }
-        // A sample occludes only if it sits IN FRONT of this surface — that
-        // dot is the whole difference from the first attempt, and the reason a
-        // slanted plane no longer shadows itself.
-        let cosang = dot(n, v / d);
-        // Falloff so a distant foreground object does not darken everything
-        // behind it: that is a silhouette, not a contact.
-        let fall = clamp(1.0 - d / p.radius, 0.0, 1.0);
-        occ = occ + max(cosang, 0.0) * fall;
+        occ = occ + ssao_occlusion(n, p0, view_pos(ssao_tap(c, i, px), in_dim), p.radius);
     }
     let ao = clamp(1.0 - p.strength * (occ / 12.0), 0.0, 1.0);
     textureStore(dst, vec2<i32>(gid.xy), vec4<f32>(ao, 0.0, 0.0, 1.0));
@@ -504,7 +466,8 @@ fn main(@builtin(global_invocation_id) gid : vec3<u32>) {
 ///
 /// Everything between the two is identical arithmetic — the linearisation, the
 /// nearest-side derivatives, the twelve golden-angle taps and the falloff are
-/// the same lines. What differs is only how the invocation learns which pixel it
+/// the shared `ssao_*` functions, which the Metal backend's pass calls too.
+/// What differs is only how the invocation learns which pixel it
 /// is, where the result goes, and that `depth` is declared as a float texture:
 /// WGSL allows `textureLoad` on a depth texture but GLSL has no `texelFetch` for
 /// a depth sampler, so this module could not be lowered for WebGL2 otherwise.
@@ -517,21 +480,10 @@ struct P {
 @group(0) @binding(0) var depth : texture_2d<f32>;
 @group(0) @binding(2) var<uniform> p : P;
 
-// Depth-buffer values are hyperbolic: the same numeric step is millimetres up
-// close and kilometres far away. Everything below works in linear view depth.
-fn linear_depth(raw : f32) -> f32 {
-    // pad0: the depth is reversed (`Renderer::set_reversed_z`).
-    let d = select(raw, 1.0 - raw, p.pad0 > 0.5);
-    if (d >= 1.0) { return p.far; }
-    return (p.near * p.far) / max(p.far - d * (p.far - p.near), 1e-6);
-}
-
-// View-space position from a pixel and its linear depth. Only the ratios
-// matter for a normal, so this needs the projection's shape and not the matrix.
 fn view_pos(c : vec2<i32>, dim : vec2<u32>) -> vec3<f32> {
-    let z = linear_depth(textureLoad(depth, clamp(c, vec2<i32>(0), vec2<i32>(dim) - 1), 0).r);
-    let uv = (vec2<f32>(c) + 0.5) / vec2<f32>(dim) * 2.0 - 1.0;
-    return vec3<f32>(uv.x * p.aspect * p.tan_half_fov * z, -uv.y * p.tan_half_fov * z, z);
+    let raw = textureLoad(depth, clamp(c, vec2<i32>(0), vec2<i32>(dim) - 1), 0).r;
+    let z = ssao_linear_depth(raw, p.near, p.far, p.pad0 > 0.5);
+    return ssao_view_pos(c, dim, z, p.aspect, p.tan_half_fov);
 }
 
 @fragment
@@ -544,48 +496,15 @@ fn fs_main(@builtin(position) pos : vec4<f32>) -> @location(0) vec4<f32> {
     let c = vec2<i32>(vec2<u32>(gid.x * 2u, gid.y * 2u));
 
     let p0 = view_pos(c, in_dim);
-    // The sky has no crevices, and the linearisation is least trustworthy at
-    // the far plane — leave it rather than invent occlusion there.
     if (p0.z >= p.far * 0.999) {
         return vec4<f32>(1.0, 0.0, 0.0, 1.0);
     }
-
-    // NEAREST-SIDE DERIVATIVES. A central difference across a silhouette
-    // returns a normal belonging to neither surface, and silhouettes are where
-    // the creases are. Taking both sides and keeping the smaller depth step
-    // holds the estimate on the near surface.
-    let xr = view_pos(c + vec2<i32>(1, 0), in_dim);
-    let xl = view_pos(c - vec2<i32>(1, 0), in_dim);
-    let yd = view_pos(c + vec2<i32>(0, 1), in_dim);
-    let yu = view_pos(c - vec2<i32>(0, 1), in_dim);
-    var dx = xr - p0;
-    if (abs(xl.z - p0.z) < abs(xr.z - p0.z)) { dx = p0 - xl; }
-    var dy = yd - p0;
-    if (abs(yu.z - p0.z) < abs(yd.z - p0.z)) { dy = p0 - yu; }
-    let n = normalize(cross(dx, dy));
-
-    // Screen-space radius shrinks with distance so the effect keeps a fixed
-    // size in the WORLD rather than a fixed number of pixels.
-    let px = clamp(p.radius / p0.z * f32(in_dim.y) * 0.5 / max(p.tan_half_fov, 1e-4),
-                   2.0, 64.0);
-
+    let n = ssao_normal(p0, view_pos(c + vec2<i32>(1, 0), in_dim), view_pos(c - vec2<i32>(1, 0), in_dim),
+                        view_pos(c + vec2<i32>(0, 1), in_dim), view_pos(c - vec2<i32>(0, 1), in_dim));
+    let px = ssao_radius_px(p.radius, p0.z, f32(in_dim.y), p.tan_half_fov);
     var occ = 0.0;
     for (var i = 0; i < 12; i = i + 1) {
-        let a = f32(i) * 2.39996 + fract(sin(dot(vec2<f32>(c), vec2<f32>(12.9898, 78.233))) * 43758.5453) * 6.2831853;  // golden angle + per-pixel rotation (break coherent streaks)
-        let r = px * sqrt((f32(i) + 0.5) / 12.0);  // uniform over the disc
-        let s = c + vec2<i32>(vec2<f32>(cos(a), sin(a)) * r);
-        let ps = view_pos(s, in_dim);
-        let v = ps - p0;
-        let d = length(v);
-        if (d < 1e-4) { continue; }
-        // A sample occludes only if it sits IN FRONT of this surface — that
-        // dot is the whole difference from the first attempt, and the reason a
-        // slanted plane no longer shadows itself.
-        let cosang = dot(n, v / d);
-        // Falloff so a distant foreground object does not darken everything
-        // behind it: that is a silhouette, not a contact.
-        let fall = clamp(1.0 - d / p.radius, 0.0, 1.0);
-        occ = occ + max(cosang, 0.0) * fall;
+        occ = occ + ssao_occlusion(n, p0, view_pos(ssao_tap(c, i, px), in_dim), p.radius);
     }
     let ao = clamp(1.0 - p.strength * (occ / 12.0), 0.0, 1.0);
     return vec4<f32>(ao, 0.0, 0.0, 1.0);
@@ -668,6 +587,23 @@ mod tests {
             worst < 1e-5,
             "the two ssao paths differ by {worst} at worst — the raster port \
              does not reproduce the compute one"
+        );
+    }
+
+    /// The raster pass is the WebGL2 one, so it has to survive the GLSL
+    /// translation, shared functions and all.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn the_raster_ssao_translates_for_webgl2() {
+        let source = format!(
+            "{}\n{}\n{}",
+            crate::renderer::fullscreen::VS,
+            RASTER_SHADER,
+            crate::renderer::shader::shared_functions_wgsl(),
+        );
+        crate::materials::shared_passes::assert_webgl2(
+            &source,
+            &[(naga::ShaderStage::Vertex, "vs_main".into()), (naga::ShaderStage::Fragment, "fs_main".into())],
         );
     }
 

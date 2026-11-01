@@ -21,6 +21,11 @@ pub struct PipelineKey {
     pub point_sprites: bool,
     /// Shell fur (`crate::fur`): `vs_fur`/`fs_fur`, the WGSL fur shader's port.
     pub fur: bool,
+    /// A [`ShaderMaterial`](crate::materials::ShaderMaterial) with a Metal
+    /// fragment of its own: `vs_mesh` and `fs_custom` from that shader's
+    /// library, named by its hash (0 for none). See
+    /// `custom_render_pipeline`.
+    pub custom: u64,
     /// An `fx` surface (`crate::fx::Surface`): `vs_fx_surface`/`fs_fx_surface`,
     /// the WGSL surface shader's port.
     pub fx_surface: bool,
@@ -32,6 +37,10 @@ pub struct PipelineKey {
     pub wide_lines: bool,
     /// Source-alpha blending, for transparent materials.
     pub blend: bool,
+    /// three.js `AdditiveBlending` (`RenderState::blending`): `SrcAlpha, One`
+    /// in colour and alpha, as the wgpu backend's `ADDITIVE`. Takes the place
+    /// of `blend`.
+    pub additive: bool,
     /// Draw both eyes in one pass, into two slices of an array attachment.
     pub layered: bool,
     /// Blend the vertex through its bone matrices before the model transform.
@@ -56,6 +65,14 @@ pub struct PipelineKey {
     pub oit_accum: bool,
 }
 
+/// Whether a fragment function may read its colour attachment (programmable
+/// blending). Every Apple GPU can. The iOS, tvOS and visionOS simulators
+/// cannot — those pipelines fail to build there — so blended draws into an
+/// sRGB target use the hardware blend, in linear light, without trying: a
+/// few levels from wgpu's encoded blend on soft edges (an atmosphere shell
+/// measured 3 mean), where a device matches it.
+const READS_FRAMEBUFFER: bool = !cfg!(target_abi = "sim");
+
 /// Build the pipeline state for `key`.
 ///
 /// A blended mesh draw into an 8-bit sRGB attachment blends the *encoded*
@@ -64,18 +81,47 @@ pub struct PipelineKey {
 /// fixed-function blending is off. Where the device cannot read the
 /// framebuffer the pipeline falls back to the hardware blend, in linear light.
 pub fn render_pipeline(device: &MetalDevice, key: PipelineKey) -> Result<Owned, MetalError> {
-    if key.blend && pixel_format::is_srgb(key.color_format) {
-        if let Ok(p) = build_render_pipeline(device, key, true) {
+    if (key.blend || key.additive) && pixel_format::is_srgb(key.color_format) && READS_FRAMEBUFFER {
+        if let Ok(p) = build_render_pipeline(device, key, true, None) {
             return Ok(p);
         }
     }
-    build_render_pipeline(device, key, false)
+    build_render_pipeline(device, key, false, None)
+}
+
+/// A custom shader's pipeline: `vs_mesh` and `fs_custom` out of `library`,
+/// which is the built-in source with the shader's MSL appended. Blending is
+/// the hardware's, in linear light on an sRGB target.
+pub(crate) fn custom_render_pipeline(
+    device: &MetalDevice,
+    key: PipelineKey,
+    library: Id,
+) -> Result<Owned, MetalError> {
+    // Blended into an 8-bit sRGB target, blend the encodings as wgpu does
+    // (`fs_custom_eb`, `fs_custom_eb_add`); the hardware blend where the
+    // device cannot read the framebuffer.
+    if (key.blend || key.additive) && pixel_format::is_srgb(key.color_format) && READS_FRAMEBUFFER {
+        if let Ok(p) = build_render_pipeline(device, key, true, Some(library)) {
+            return Ok(p);
+        }
+    }
+    build_render_pipeline(device, key, false, Some(library))
+}
+
+/// `[library newFunctionWithName:]`, +1.
+pub(crate) fn library_function(library: Id, name: &str) -> Result<Owned, MetalError> {
+    let _pool = AutoreleasePool::new();
+    unsafe {
+        let f: Id = msg1(library, sel!("newFunctionWithName:"), super::objc::nsstring(name));
+        Owned::from_retained(f).ok_or_else(|| MetalError::MissingFunction(name.into()))
+    }
 }
 
 fn build_render_pipeline(
     device: &MetalDevice,
     key: PipelineKey,
     encoded_blend: bool,
+    library: Option<Id>,
 ) -> Result<Owned, MetalError> {
     let _pool = AutoreleasePool::new();
     let (vs, fs) = match (key.point_sprites, key.layered) {
@@ -94,19 +140,37 @@ fn build_render_pipeline(
         (true, false) => ("vs_point", "fs_point"),
         (true, true) => ("vs_point_layered", "fs_point"),
     };
-    let encoded_blend = encoded_blend && (fs == "fs_mesh" || fs == "fs_point" || fs == "fs_fx_surface");
-    if encoded_blend && !key.blend {
+    let encoded_blend = encoded_blend
+        && (fs == "fs_mesh" || fs == "fs_point" || (fs == "fs_fx_surface" && !key.additive));
+    if encoded_blend && !key.blend && !key.additive {
         return Err(MetalError::PipelineCreation("no encoded blend without blending".into()));
     }
     let fs = match (encoded_blend, fs) {
+        (true, "fs_point") if key.additive => "fs_point_encoded_add",
+        (true, "fs_mesh") if key.additive => "fs_mesh_encoded_add",
         (true, "fs_point") => "fs_point_encoded_blend",
         (true, "fs_fx_surface") => "fs_fx_surface_encoded_blend",
         (true, _) => "fs_mesh_encoded_blend",
         (false, fs) => fs,
     };
     let fs = if key.oit_accum { "fs_oit_accum" } else { fs };
-    let vertex_fn = device.function(vs)?;
-    let fragment_fn = device.function(fs)?;
+    let (vertex_fn, fragment_fn) = match library {
+        // The custom library is the whole built-in source plus the shader, so
+        // its `vs_mesh` is the same function as the device's.
+        // A material with its own vertex stage brings `vs_custom_entry`.
+        Some(lib) => (
+            library_function(lib, "vs_custom_entry").or_else(|_| library_function(lib, vs))?,
+            library_function(
+                lib,
+                match (encoded_blend, key.additive) {
+                    (true, true) => "fs_custom_eb_add",
+                    (true, false) => "fs_custom_eb",
+                    (false, _) => "fs_custom",
+                },
+            )?,
+        ),
+        None => (device.function(vs)?, device.function(fs)?),
+    };
 
     unsafe {
         let desc = Owned::from_retained(alloc_init(class!("MTLRenderPipelineDescriptor")))
@@ -154,6 +218,14 @@ fn build_render_pipeline(
                 let _: () = msg1(a, sel!("setSourceAlphaBlendFactor:"), src);
                 let _: () = msg1(a, sel!("setDestinationAlphaBlendFactor:"), alpha_dst);
             }
+        } else if key.additive && !encoded_blend {
+            let _: () = msg1(color, sel!("setBlendingEnabled:"), YES);
+            let _: () = msg1(color, sel!("setRgbBlendOperation:"), blend_op::ADD);
+            let _: () = msg1(color, sel!("setAlphaBlendOperation:"), blend_op::ADD);
+            let _: () = msg1(color, sel!("setSourceRGBBlendFactor:"), blend_factor::SOURCE_ALPHA);
+            let _: () = msg1(color, sel!("setDestinationRGBBlendFactor:"), blend_factor::ONE);
+            let _: () = msg1(color, sel!("setSourceAlphaBlendFactor:"), blend_factor::SOURCE_ALPHA);
+            let _: () = msg1(color, sel!("setDestinationAlphaBlendFactor:"), blend_factor::ONE);
         } else if key.blend && !encoded_blend {
             let _: () = msg1(color, sel!("setBlendingEnabled:"), YES);
             let _: () = msg1(color, sel!("setRgbBlendOperation:"), blend_op::ADD);
@@ -195,6 +267,32 @@ fn build_render_pipeline(
 
 /// Allocate a 2D texture.
 #[allow(clippy::too_many_arguments)]
+/// A `width × height × depth` 3D texture, one level.
+pub fn new_texture_3d(
+    device: &MetalDevice,
+    [width, height, depth]: [u32; 3],
+    pixel_format: NSUInteger,
+    usage: NSUInteger,
+    storage: NSUInteger,
+) -> Result<Owned, MetalError> {
+    let _pool = AutoreleasePool::new();
+    unsafe {
+        let desc = Owned::from_retained(alloc_init(class!("MTLTextureDescriptor")))
+            .ok_or_else(|| MetalError::Allocation("MTLTextureDescriptor".into()))?;
+        let _: () = msg1(desc.id(), sel!("setTextureType:"), texture_type::TYPE_3D);
+        let _: () = msg1(desc.id(), sel!("setPixelFormat:"), pixel_format);
+        let _: () = msg1(desc.id(), sel!("setWidth:"), width.max(1) as NSUInteger);
+        let _: () = msg1(desc.id(), sel!("setHeight:"), height.max(1) as NSUInteger);
+        let _: () = msg1(desc.id(), sel!("setDepth:"), depth.max(1) as NSUInteger);
+        let _: () = msg1(desc.id(), sel!("setUsage:"), usage);
+        let _: () = msg1(desc.id(), sel!("setStorageMode:"), storage);
+        let tex: Id = msg1(device.device_id(), sel!("newTextureWithDescriptor:"), desc.id());
+        Owned::from_retained(tex).ok_or_else(|| {
+            MetalError::Allocation(format!("{width}x{height}x{depth} 3D texture, format {pixel_format}"))
+        })
+    }
+}
+
 pub fn new_texture_2d(
     device: &MetalDevice,
     width: u32,
@@ -326,19 +424,24 @@ fn pixel_format_for(format: TextureFormat, bc_supported: bool) -> Result<NSUInte
 /// Shared storage is not available for textures on a discrete GPU — there is no
 /// memory both sides can address — so those get Managed, where `replaceRegion:`
 /// updates the GPU copy for us. Apple silicon takes Shared and skips the copy.
-fn cpu_writable_storage(device: &MetalDevice) -> NSUInteger {
-    #[cfg(target_os = "ios")]
-    {
-        let _ = device;
-        storage_mode::SHARED
-    }
-    #[cfg(not(target_os = "ios"))]
+///
+/// Managed exists only on a Mac — macOS itself and Mac Catalyst, which can
+/// still be an Intel Mac with a discrete GPU. iOS, tvOS and visionOS reject it
+/// outright, and their simulators report `hasUnifiedMemory` false all the
+/// same, so there the answer is Shared whatever the device says.
+pub(crate) fn cpu_writable_storage(device: &MetalDevice) -> NSUInteger {
+    #[cfg(any(target_os = "macos", target_abi = "macabi"))]
     {
         if device.has_unified_memory() {
             storage_mode::SHARED
         } else {
             storage_mode::MANAGED
         }
+    }
+    #[cfg(not(any(target_os = "macos", target_abi = "macabi")))]
+    {
+        let _ = device;
+        storage_mode::SHARED
     }
 }
 
@@ -988,6 +1091,32 @@ pub fn white_texture(device: &MetalDevice) -> Result<Owned, MetalError> {
     Ok(tex)
 }
 
+/// A 1×1×1 volume of zero, bound at `u_vol0`/`u_vol1` where a material has
+/// no volume: Metal requires every resource a function declares, and an
+/// empty slot reads zero, as on wgpu.
+pub fn zero_volume(device: &MetalDevice) -> Result<Owned, MetalError> {
+    let tex = new_texture_3d(
+        device,
+        [1, 1, 1],
+        pixel_format::RGBA8_UNORM,
+        texture_usage::SHADER_READ,
+        cpu_writable_storage(device),
+    )?;
+    unsafe {
+        let _: () = super::objc::msg6(
+            tex.id(),
+            sel!("replaceRegion:mipmapLevel:slice:withBytes:bytesPerRow:bytesPerImage:"),
+            MTLRegion::image_2d(1, 1),
+            0usize,
+            0usize,
+            [0u8; 4].as_ptr() as *const c_void,
+            4usize,
+            4usize,
+        );
+    }
+    Ok(tex)
+}
+
 /// The order-independent transparency composite, in two halves over what is
 /// behind (`fs_oit_tint`: times the layers' transmittance; `fs_oit_light`:
 /// plus their light), into `color_format` at `sample_count`.
@@ -1071,6 +1200,8 @@ mod tests {
             oit_accum: false,
             fur: false,
             fx_surface: false,
+            custom: 0,
+            additive: false,
             point_sprites: false,
             slim_lines: false,
             wide_lines: false,

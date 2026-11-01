@@ -270,7 +270,7 @@ impl Pipelines {
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("threers fluid"),
             source: wgpu::ShaderSource::Wgsl(
-                format!("{}\n{}", super::read_out::glyphs(), super::shader::SHADER).into(),
+                super::shader::wgsl().into(),
             ),
         });
 
@@ -301,7 +301,7 @@ impl Pipelines {
             pressure: p("fs_pressure", scalar, None),
             gradient: p("fs_gradient", velocity, None),
             residual: p("fs_residual", scalar, None),
-            restrict: p("fs_restrict", scalar, None),
+            restrict: p("fs_restriction", scalar, None),
             prolong: p("fs_prolong", scalar, None),
             bloom_prefilter: p("fs_bloom_prefilter", dye, None),
             bloom_blur: p("fs_bloom_blur", dye, None),

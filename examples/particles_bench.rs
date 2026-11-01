@@ -287,6 +287,11 @@ fn draw() {
             }
         }
     };
+    // One frame read back: on the Metal backend, until a program has read
+    // a frame, wgpu draws each one as well (see `HeadlessRenderer::render`),
+    // and the times would be the two backends' together.
+    hr.render(&mut scene, &camera);
+    let _ = hr.read_rgba();
     let mut times = vec![Vec::new(); configs.len()];
     for round in 0..150 {
         for (k, (_, hidden, shadow)) in configs.iter().enumerate() {
@@ -299,9 +304,7 @@ fn draw() {
             anim.update(&mut scene, 1.0 / 60.0, Some(eye));
             let t = Instant::now();
             hr.render(&mut scene, &camera);
-            let _ = hr
-                .device()
-                .poll(threers::wgpu::PollType::wait_indefinitely());
+            hr.wait_idle();
             if round >= 5 {
                 times[k].push(t.elapsed().as_secs_f64() * 1000.0);
             }

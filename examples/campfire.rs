@@ -18,7 +18,6 @@ use threers::particles::snow::SnowCover;
 use threers::particles::{presets, Heightfield, ParticleAnimator};
 use threers::postprocessing::{EffectComposer, OutputPass, RenderPass, UnrealBloomPass};
 use threers::prelude::*;
-use threers::renderer::{readback, RenderTarget};
 
 const W: u32 = 1280;
 const H: u32 = 720;
@@ -204,13 +203,12 @@ fn main() {
         .expect("a GPU adapter");
     hr.set_msaa(4);
     hr.renderer().set_tone_mapping(ToneMapping::AcesFilmic, 1.1);
-    let mut composer = EffectComposer::new(hr.device().clone(), hr.queue().clone(), W, H, FORMAT);
+    let mut composer = EffectComposer::with_size(W, H);
+    composer.set_screen_format(FORMAT);
     composer.add_pass(RenderPass::new());
     composer.add_pass(UnrealBloomPass::new(W, H, 0.6, 0.45, 0.85));
     composer.add_pass(OutputPass::new());
-    let out = RenderTarget::new(hr.device(), W, H, FORMAT);
-    composer.render(hr.renderer(), &mut scene, &camera, &out.color_view);
-    let px = readback::texture_bytes(hr.device(), hr.queue(), &out.color_texture);
+    let px = hr.compose(&mut composer, &mut scene, &camera);
     std::fs::create_dir_all("out").unwrap();
     std::fs::write("out/campfire.png", encode_png(W, H, &px)).unwrap();
     println!("wrote out/campfire.png");

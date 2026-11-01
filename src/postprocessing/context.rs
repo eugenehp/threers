@@ -5,12 +5,13 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use super::target::{ensure, Target, INTERMEDIATE_FORMAT};
+use super::PostBackend;
 use crate::cameras::Camera;
 use crate::core::{ObjectId, ObjectKind};
 use crate::materials::Material;
 use crate::math::{Color, Matrix4};
 use crate::renderer::{
-    PostFxBlend, PostFxCamera, PostFxNoise, PostFxOp, PostFxOutput, Renderer,
+    PostFxBlend, PostFxCamera, PostFxNoise, PostFxOp, PostFxOutput,
 };
 use crate::scene::Scene;
 
@@ -225,7 +226,7 @@ pub struct SceneDraw {
 
 /// What [`Pass::render`](super::Pass::render) works with.
 pub struct PassContext<'a, 's> {
-    pub renderer: &'a mut Renderer,
+    pub renderer: &'a mut dyn PostBackend,
     pub(crate) scenes: &'a mut [&'s mut Scene],
     pub(crate) cameras: &'a [&'a dyn Camera],
     pub(crate) screen: &'a Screen<'a>,
@@ -493,19 +494,19 @@ impl<'a, 's> PassContext<'a, 's> {
         let mut stand_in_copy = None;
         match dest {
             Dest::Target(t) => {
-                self.renderer.render_to(scene, camera, t.render_target());
+                self.renderer.render_to_target(scene, camera, t);
             }
             Dest::StandIn(t) => {
                 // A stand-in holds what the screen would: the render goes
                 // through a target of its own and is converted on the copy.
                 let (w, h) = t.size();
                 let tmp = ensure(self.scratch, self.renderer, w, h, INTERMEDIATE_FORMAT);
-                self.renderer.render_to(scene, camera, tmp.render_target());
+                self.renderer.render_to_target(scene, camera, &tmp);
                 stand_in_copy = Some((tmp, t.clone()));
             }
             Dest::Screen => match self.screen {
-                Screen::Target(t) => self.renderer.render_to(scene, camera, t.render_target()),
-                Screen::View { view, .. } => self.renderer.render(scene, camera, view, false),
+                Screen::Target(t) => self.renderer.render_to_target(scene, camera, t),
+                Screen::View { view, .. } => self.renderer.render_to_view(scene, camera, view),
                 Screen::None => {}
             },
         }

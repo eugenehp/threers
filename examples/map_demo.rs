@@ -36,10 +36,11 @@ use std::time::{Duration, Instant};
 use threers::captions::CaptionFont;
 use threers::marks::{
     geo, DensityMarks, GlyphField, ImageMarks, ImageQuad, LabelAnchor, LabelIcon, MapView, Mark,
-    MarkRenderer, MarkTarget, SegmentMarks, SharedAtlas, TextLabel, TextLabels, TextureAtlas,
+    MarkRenderer, SegmentMarks, SharedAtlas, TextLabel, TextLabels, TextureAtlas,
 };
 use threers::math::ColorRamp;
-use threers::{Color, PointerEvent, Renderer, Scene};
+use threers::renderer::WindowRenderer;
+use threers::{Color, PointerEvent, Scene};
 
 use winit::{
     event::{ElementState, Event, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent},
@@ -591,7 +592,7 @@ fn snapshot(path: &str, distance: f32, source: Source) {
     let mut map = opening_map((w, h), distance);
     map.controls.pitch = 0.5;
     let mut layers = Layers::new(&map, source);
-    let mut marks = MarkRenderer::new(hr.device());
+    let mut marks = hr.mark_renderer();
     let frame = map.begin_frame();
     let start = Instant::now();
     loop {
@@ -602,14 +603,7 @@ fn snapshot(path: &str, distance: f32, source: Source) {
         std::thread::sleep(Duration::from_millis(50));
     }
     hr.render(&mut scene(), &map.camera);
-    let (device, queue) = (hr.device().clone(), hr.queue().clone());
-    marks.draw(
-        &device,
-        &queue,
-        &hr.mark_target(),
-        &frame.view,
-        &mut layers.all(),
-    );
+    hr.draw_marks(&mut marks, &frame.view, &mut layers.all());
     let rgba = hr.read_rgba_resolved();
     std::fs::write(path, threers::encode_png(w, h, &rgba)).expect("write png");
     println!(
@@ -631,72 +625,14 @@ async fn run(distance: f32, source: Source) {
             .build(&event_loop)
             .expect("window"),
     );
-    let instance = {
-        let mut d = wgpu::InstanceDescriptor::new_without_display_handle();
-        d.backends = wgpu::Backends::PRIMARY;
-        wgpu::Instance::new(d)
-    };
-    let surface = instance.create_surface(window.clone()).expect("surface");
-    let adapter = instance
-        .request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            compatible_surface: Some(&surface),
-            force_fallback_adapter: false,
-            apply_limit_buckets: false,
-        })
-        .await
-        .expect("adapter");
-    // The same limits `controls_orbit` raises for `Renderer::new`.
-    let adapter_limits = adapter.limits();
-    let mut limits = wgpu::Limits::downlevel_defaults().using_resolution(adapter_limits.clone());
-    limits.max_sampled_textures_per_shader_stage =
-        adapter_limits.max_sampled_textures_per_shader_stage;
-    limits.max_samplers_per_shader_stage = adapter_limits.max_samplers_per_shader_stage;
-    let (device, queue) = adapter
-        .request_device(&wgpu::DeviceDescriptor {
-            label: Some("threers device"),
-            required_features: wgpu::Features::empty(),
-            required_limits: limits,
-            ..Default::default()
-        })
-        .await
-        .expect("device");
-    let device = Arc::new(device);
-    let queue = Arc::new(queue);
-
-    let size = window.inner_size();
-    let caps = surface.get_capabilities(&adapter);
-    let format = caps
-        .formats
-        .iter()
-        .copied()
-        .find(|f| f.is_srgb())
-        .unwrap_or(caps.formats[0]);
-    let mut config = wgpu::SurfaceConfiguration {
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-        format,
-        width: size.width.max(1),
-        height: size.height.max(1),
-        present_mode: caps.present_modes[0],
-        alpha_mode: caps.alpha_modes[0],
-        view_formats: vec![],
-        desired_maximum_frame_latency: 2,
-        color_space: wgpu::SurfaceColorSpace::Srgb,
-    };
-    surface.configure(&device, &config);
-    let mut renderer = Renderer::new(
-        device.clone(),
-        queue.clone(),
-        format,
-        config.width,
-        config.height,
-    );
-    renderer.set_msaa(4);
+    // wgpu, or the native Metal backend under `THREERS_BACKEND=metal`.
+    let mut wr = WindowRenderer::new(window.clone()).expect("a GPU for the window");
+    wr.set_msaa(4);
 
     let mut scene = scene();
-    let mut map = opening_map((config.width, config.height), distance);
+    let mut map = opening_map(wr.size(), distance);
     let mut layers = Layers::new(&map, source);
-    let mut marks = MarkRenderer::new(&device);
+    let mut marks = MarkRenderer::new_on(&wr.marks_gpu());
     let mut buttons = (false, false); // (left: pan, right: rotate)
     let mut cursor = (0.0f32, 0.0f32);
     let window_for_loop = window.clone();
@@ -712,11 +648,8 @@ async fn run(distance: f32, source: Source) {
             match event {
                 WindowEvent::CloseRequested => target.exit(),
                 WindowEvent::Resized(s) => {
-                    config.width = s.width.max(1);
-                    config.height = s.height.max(1);
-                    surface.configure(&device, &config);
-                    renderer.resize(config.width, config.height);
-                    map.set_viewport(config.width, config.height);
+                    wr.resize(s.width, s.height);
+                    map.set_viewport(wr.size().0, wr.size().1);
                 }
                 WindowEvent::KeyboardInput {
                     event:
@@ -761,6 +694,7 @@ async fn run(distance: f32, source: Source) {
                         wheel: 0.0,
                         panning: buttons.0,
                         rotating: buttons.1,
+                        ..Default::default()
                     };
                     cursor = now;
                     map.handle(ev, cursor);
@@ -779,34 +713,13 @@ async fn run(distance: f32, source: Source) {
                     );
                 }
                 WindowEvent::RedrawRequested => {
-                    let surface_frame = match surface.get_current_texture() {
-                        wgpu::CurrentSurfaceTexture::Success(f)
-                        | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
-                        wgpu::CurrentSurfaceTexture::Lost
-                        | wgpu::CurrentSurfaceTexture::Outdated => {
-                            surface.configure(&device, &config);
-                            window_for_loop.request_redraw();
-                            return;
-                        }
-                        wgpu::CurrentSurfaceTexture::Occluded
-                        | wgpu::CurrentSurfaceTexture::Timeout => {
-                            window_for_loop.request_redraw();
-                            return;
-                        }
-                        e => {
-                            log::error!("surface error: {e:?}");
-                            return;
-                        }
-                    };
-                    let frame_view = surface_frame.texture.create_view(&Default::default());
                     // Origin, camera, clip planes, the marks' view and the
                     // collision frame, in that order.
-                    let frame = map.begin_frame_for(&renderer);
+                    let frame = map.begin_frame_on(&wr.mark_surface());
                     layers.update(&map, &frame.view);
-                    renderer.render(&mut scene, &map.camera, &frame_view, false);
-                    let target = MarkTarget::over_frame(&renderer, &frame_view);
-                    marks.draw(&device, &queue, &target, &frame.view, &mut layers.all());
-                    queue.present(surface_frame);
+                    wr.render_with(&mut scene, &map.camera, |f| {
+                        marks.draw_on(&f.gpu, &f.target, &frame.view, &mut layers.all());
+                    });
                     let ll = geo::world_to_ground(map.target()).0;
                     let ll = geo::inverse_mercator(ll);
                     window_for_loop.set_title(&format!(

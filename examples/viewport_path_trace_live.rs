@@ -13,6 +13,8 @@
 use std::sync::Arc;
 
 use threers::cameras::Camera;
+use threers::overlay::Overlay;
+use threers::renderer::WindowRenderer;
 use threers::raytrace::{gpu::GpuBackend, Aov, CpuBackend, RaytraceRenderer, RaytraceSettings};
 use threers::{
     AmbientLight, BoxGeometry, Color, DirectionalLight, Material, Mesh, Object3D, OrbitControls,
@@ -93,186 +95,6 @@ impl InputState {
     }
 }
 
-struct RgbaPresenter {
-    texture: wgpu::Texture,
-    #[allow(dead_code)]
-    view: wgpu::TextureView,
-    bind_group: wgpu::BindGroup,
-    pipeline: wgpu::RenderPipeline,
-    width: u32,
-    height: u32,
-}
-
-impl RgbaPresenter {
-    fn new(device: &wgpu::Device, format: wgpu::TextureFormat, width: u32, height: u32) -> Self {
-        let w = width.max(1);
-        let h = height.max(1);
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("path trace preview"),
-            size: wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("path trace preview sampler"),
-            mag_filter: wgpu::FilterMode::Nearest,
-            min_filter: wgpu::FilterMode::Nearest,
-            ..Default::default()
-        });
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("path trace blit layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("path trace blit bind group"),
-            layout: &layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
-                },
-            ],
-        });
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("path trace blit"),
-            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(
-                r#"
-@group(0) @binding(0) var t: texture_2d<f32>;
-@group(0) @binding(1) var s: sampler;
-
-struct VOut { @builtin(position) p: vec4<f32>, @location(0) uv: vec2<f32> };
-
-@vertex fn vs(@builtin(vertex_index) i: u32) -> VOut {
-    var p = array<vec2<f32>, 3>(vec2(-1.0, -1.0), vec2(3.0, -1.0), vec2(-1.0, 3.0));
-    var o: VOut;
-    o.p = vec4(p[i], 0.0, 1.0);
-    o.uv = p[i] * vec2(0.5, -0.5) + vec2(0.5, 0.5);
-    return o;
-}
-
-@fragment fn fs(i: VOut) -> @location(0) vec4<f32> {
-    return textureSample(t, s, i.uv);
-}
-"#,
-            )),
-        });
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("path trace blit pipeline layout"),
-            bind_group_layouts: &[Some(&layout)],
-            ..Default::default()
-        });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("path trace blit"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs"),
-                buffers: &[],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
-        Self {
-            texture,
-            view,
-            bind_group,
-            pipeline,
-            width: w,
-            height: h,
-        }
-    }
-
-    fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32, format: wgpu::TextureFormat) {
-        *self = Self::new(device, format, width, height);
-    }
-
-    fn upload(&self, queue: &wgpu::Queue, rgba: &[u8]) {
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &self.texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            rgba,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(self.width * 4),
-                rows_per_image: Some(self.height),
-            },
-            wgpu::Extent3d {
-                width: self.width,
-                height: self.height,
-                depth_or_array_layers: 1,
-            },
-        );
-    }
-
-    fn draw(&self, encoder: &mut wgpu::CommandEncoder, target: &wgpu::TextureView) {
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("path trace blit pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: target,
-                resolve_target: None,
-                depth_slice: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            ..Default::default()
-        });
-        pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &self.bind_group, &[]);
-        pass.draw(0..3, 0..1);
-    }
-}
-
 fn build_scene() -> Scene {
     let mut scene = Scene::new();
     scene.background = Color::new(0.04, 0.05, 0.08);
@@ -327,60 +149,20 @@ async fn run() {
             .expect("window"),
     );
 
-    let instance = {
-        let mut d = wgpu::InstanceDescriptor::new_without_display_handle();
-        d.backends = wgpu::Backends::PRIMARY;
-        wgpu::Instance::new(d)
-    };
-    let surface = instance.create_surface(window.clone()).expect("surface");
-    let adapter = instance
-        .request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            compatible_surface: Some(&surface),
-            force_fallback_adapter: false,
-            apply_limit_buckets: false,
-        })
-        .await
-        .expect("adapter");
-    let (device, queue) = adapter
-        .request_device(
-            &wgpu::DeviceDescriptor {
-                label: Some("viewport path trace"),
-                required_features: wgpu::Features::empty(),
-                required_limits: adapter.limits(),
-                ..Default::default()
-            },
-        )
-        .await
-        .expect("device");
-    let device = Arc::new(device);
-    let queue = Arc::new(queue);
-
+    // wgpu by default; the native Metal backend with `--features metal` and
+    // `THREERS_BACKEND=metal`. The traced picture goes up as a 2D overlay
+    // over an empty frame, which both backends composite.
+    let mut view = WindowRenderer::new(window.clone()).expect("a GPU for the window");
     let size = window.inner_size();
-    let caps = surface.get_capabilities(&adapter);
-    let format = caps
-        .formats
-        .iter()
-        .copied()
-        .find(|f| f.is_srgb())
-        .unwrap_or(caps.formats[0]);
-    let mut config = wgpu::SurfaceConfiguration {
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-        format,
-        width: size.width.max(1),
-        height: size.height.max(1),
-        present_mode: caps.present_modes[0],
-        alpha_mode: caps.alpha_modes[0],
-        view_formats: vec![],
-        desired_maximum_frame_latency: 2,
-        color_space: wgpu::SurfaceColorSpace::Srgb,
-    };
-    surface.configure(&device, &config);
+    let mut config = (size.width.max(1), size.height.max(1));
+    let mut overlay = Overlay::new(config.0, config.1);
+    let mut blank = Scene::new();
+    blank.background = Color::new(0.0, 0.0, 0.0);
 
     let mut scene = build_scene();
     let mut camera = PerspectiveCamera::new(
         42.0,
-        config.width as f32 / config.height as f32,
+        config.0 as f32 / config.1 as f32,
         0.1,
         100.0,
     );
@@ -394,25 +176,22 @@ async fn run() {
         .with_sample_redistribution(true);
 
     let mut path = if use_gpu() {
-        let backend = GpuBackend::with_device(device.clone(), queue.clone()).with_samples_per_dispatch(4);
-        let mut r = RaytraceRenderer::with_backend(config.width, config.height, Box::new(backend));
+        // A device of its own: the picture comes back as bytes either way,
+        // and the window's may be Metal's.
+        let backend = GpuBackend::headless().expect("a GPU for the path tracer").with_samples_per_dispatch(4);
+        let mut r = RaytraceRenderer::with_backend(config.0, config.1, Box::new(backend));
         r.set_settings(settings);
         r.prepare(&mut scene, &camera);
         eprintln!("backend: gpu");
         r
     } else {
-        let mut r = RaytraceRenderer::with_backend(
-            config.width,
-            config.height,
-            Box::new(CpuBackend::new()),
-        );
+        let mut r = RaytraceRenderer::with_backend(config.0, config.1, Box::new(CpuBackend::new()));
         r.set_settings(settings);
         r.prepare(&mut scene, &camera);
         eprintln!("backend: cpu");
         r
     };
 
-    let mut presenter = RgbaPresenter::new(&device, format, config.width, config.height);
     let mut controls = OrbitControls::new(&camera);
     let mut input = InputState::new();
     let mut title_timer = std::time::Instant::now();
@@ -424,15 +203,11 @@ async fn run() {
                 match event {
                     WindowEvent::CloseRequested => target.exit(),
                     WindowEvent::Resized(new_size) => {
-                        config.width = new_size.width.max(1);
-                        config.height = new_size.height.max(1);
-                        surface.configure(&device, &config);
-                        camera.set_aspect(config.width as f32 / config.height as f32);
-                        let (w, h) = path.set_size(config.width, config.height);
-                        config.width = w;
-                        config.height = h;
+                        view.resize(new_size.width.max(1), new_size.height.max(1));
+                        overlay.resize(new_size.width.max(1), new_size.height.max(1));
+                        camera.set_aspect(new_size.width.max(1) as f32 / new_size.height.max(1) as f32);
+                        config = path.set_size(new_size.width.max(1), new_size.height.max(1));
                         path.prepare_if_changed(&mut scene, &camera);
-                        presenter.resize(&device, config.width, config.height, format);
                         input.camera_dirty = false;
                     }
                     WindowEvent::MouseInput { state, button, .. } => {
@@ -461,11 +236,12 @@ async fn run() {
                             wheel: 0.0,
                             rotating: input.rotating,
                             panning: input.panning,
+                            ..Default::default()
                         };
                         controls.update(
                             ev,
                             &mut camera,
-                            (config.width as f32, config.height as f32),
+                            (config.0 as f32, config.1 as f32),
                         );
                         input.camera_dirty = true;
                         // Clear + coarse preview while dragging so the film
@@ -590,9 +366,10 @@ async fn run() {
                                 wheel,
                                 rotating: false,
                                 panning: false,
+                                ..Default::default()
                             },
                             &mut camera,
-                            (config.width as f32, config.height as f32),
+                            (config.0 as f32, config.1 as f32),
                         );
                         input.camera_dirty = true;
                         path.prepare_if_changed(&mut scene, &camera);
@@ -620,28 +397,8 @@ async fn run() {
                             ViewMode::Error => path.resolve_rgba_error_overlay(0.65),
                             ViewMode::Samples => path.resolve_rgba_samples(),
                         };
-                        presenter.upload(&queue, &rgba);
-
-                        match surface.get_current_texture() {
-                            wgpu::CurrentSurfaceTexture::Success(frame)
-                            | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {
-                                let view = frame
-                                    .texture
-                                    .create_view(&wgpu::TextureViewDescriptor::default());
-                                let mut encoder =
-                                    device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                                        label: Some("viewport path trace frame"),
-                                    });
-                                presenter.draw(&mut encoder, &view);
-                                queue.submit(Some(encoder.finish()));
-                                queue.present(frame);
-                            }
-                            wgpu::CurrentSurfaceTexture::Lost
-                            | wgpu::CurrentSurfaceTexture::Outdated => {
-                                surface.configure(&device, &config);
-                            }
-                            e => log::error!("surface: {e:?}"),
-                        }
+                        overlay.put_image_data(0, 0, config.0, config.1, &rgba);
+                        view.render_frame(&mut blank, &camera, None, Some(&mut overlay));
 
                         if title_timer.elapsed().as_millis() > 250 {
                             title_timer = std::time::Instant::now();

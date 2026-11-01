@@ -321,6 +321,35 @@ impl Overlay {
         &self.pixels
     }
 
+    /// Copy a `width × height` image — straight-alpha sRGB RGBA8, row-major
+    /// from the top-left, as [`pixels`](Self::pixels) — onto the canvas with
+    /// its top-left corner at `(x, y)`, replacing what is there rather than
+    /// blending, as a canvas's `putImageData` does. Clipped to the canvas.
+    /// A frame from a CPU renderer, presented on either backend through
+    /// `WindowRenderer::render_frame`.
+    ///
+    /// # Panics
+    ///
+    /// If `rgba` is shorter than `width × height × 4` bytes.
+    pub fn put_image_data(&mut self, x: i32, y: i32, width: u32, height: u32, rgba: &[u8]) {
+        assert!(rgba.len() >= width as usize * height as usize * 4, "put_image_data: too few bytes");
+        let x0 = x.max(0);
+        let x1 = (x + width as i32).min(self.width as i32);
+        let y0 = y.max(0);
+        let y1 = (y + height as i32).min(self.height as i32);
+        if x0 >= x1 || y0 >= y1 {
+            return;
+        }
+        let row = (x1 - x0) as usize * 4;
+        for dy in y0..y1 {
+            let src = ((dy - y) as usize * width as usize + (x0 - x) as usize) * 4;
+            let dst = (dy as usize * self.width as usize + x0 as usize) * 4;
+            self.pixels[dst..dst + row].copy_from_slice(&rgba[src..src + row]);
+        }
+        self.touched = true;
+        self.mark_rows(y0 as u32, y1 as u32);
+    }
+
     /// Whether anything has been drawn since the last [`Overlay::clear`].
     pub fn touched(&self) -> bool {
         self.touched
@@ -918,6 +947,26 @@ fn widen(band: Option<(u32, u32)>, y0: u32, y1: u32) -> Option<(u32, u32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn put_image_data_copies_clipped_and_marks_the_rows() {
+        let mut o = Overlay::new(4, 3);
+        o.mark_uploaded();
+        // A 2 × 2 image hanging off the right edge at (3, 1): one column lands.
+        let img = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160];
+        o.put_image_data(3, 1, 2, 2, &img);
+        assert!(o.touched());
+        assert_eq!(o.dirty_rows(), Some((1, 3)));
+        assert_eq!(at(&o, 3, 1), [10, 20, 30, 40]);
+        assert_eq!(at(&o, 3, 2), [90, 100, 110, 120]);
+        assert_eq!(at(&o, 2, 1), [0, 0, 0, 0]);
+        // Replaces rather than blends: transparent pixels erase.
+        o.put_image_data(3, 1, 1, 1, &[0, 0, 0, 0]);
+        assert_eq!(at(&o, 3, 1), [0, 0, 0, 0]);
+        // Wholly outside: nothing.
+        o.put_image_data(-5, 0, 2, 2, &img);
+        assert_eq!(at(&o, 0, 0), [0, 0, 0, 0]);
+    }
 
     /// Straight-alpha RGBA at a pixel.
     fn at(o: &Overlay, x: u32, y: u32) -> [u8; 4] {

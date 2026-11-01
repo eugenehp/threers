@@ -1,7 +1,8 @@
 //! A Metal renderer for Apple platforms, written against the Objective-C
 //! runtime directly — no `metal-rs`, no `objc` crate, no build script.
 //!
-//! Behind the `metal` feature, and compiled only for macOS and iOS. The wgpu
+//! Behind the `metal` feature, and compiled only for Apple's Metal platforms:
+//! macOS, iOS and iPadOS (Mac Catalyst included), tvOS and visionOS. The wgpu
 //! [`Renderer`](crate::renderer::Renderer) remains the default and the complete
 //! one; this is a second, self-contained path to the same scene graph for
 //! callers who want to be on Metal with nothing between them and it.
@@ -103,10 +104,33 @@
 //!
 //! # Threads
 //!
-//! Every type here holds Objective-C pointers and none is `Send` or `Sync`.
-//! Drive a renderer from the thread that made it; [`crate::metal::MetalSurface::from_ns_view`]
-//! additionally needs the main thread, because attaching a layer to a view is
-//! an AppKit call.
+//! Render on any thread. [`crate::metal::MetalDevice`] is `Send + Sync` — share
+//! one between threads, and its command queue with it — and the renderers,
+//! targets, surfaces and post chains are `Send`: build one where it is
+//! convenient and move it to the thread that draws. Each one is used by one
+//! thread at a time, which is what `&mut self` already says.
+//!
+//! Every call that makes Objective-C objects drains its own autorelease pool,
+//! dropping a value included, so a plain `std::thread` with no pool of its own
+//! does not leak.
+//!
+//! Two calls want the main thread, because they touch a view:
+//! [`crate::metal::MetalSurface::from_ns_view`] and, on UIKit platforms,
+//! [`crate::metal::MetalSurface::from_ui_view`]. Both say so with an error
+//! rather than leaving it to AppKit or UIKit. Everything after — `resize`,
+//! `next_frame`, `render` — runs on the render thread, the way `MTKView`-free
+//! engines drive a `CAMetalLayer`.
+//!
+//! For a fixed set of render threads that are reused — sized for the
+//! performance cores, and capped low on iOS, tvOS and visionOS where cores and
+//! thermal headroom are scarce — use [`crate::metal::MetalRenderPool`]: each
+//! worker keeps its renderer and its caches from job to job, and the bounded
+//! queue in front of them makes a producer wait or drop a frame rather than
+//! run ahead of the GPU.
+//!
+//! A command buffer the system refuses — iOS rejects GPU work from an app in
+//! the background — comes back from a readback as
+//! [`crate::metal::MetalError::CommandBuffer`] rather than as stale pixels.
 //!
 //! # Layout
 //!
@@ -116,6 +140,7 @@
 //! | [`crate::metal::enums`] | Metal enumerants and by-value structs |
 //! | [`crate::metal::resources`] | Textures, samplers, pipeline states |
 //! | — | [`crate::metal::MetalDevice`], [`crate::metal::MetalRenderer`], [`crate::metal::MetalRenderTarget`], [`crate::metal::MetalSurface`] |
+//! | — | [`crate::metal::MetalRenderPool`]: reusable render threads |
 
 pub mod objc;
 
@@ -130,16 +155,24 @@ pub mod resources;
 #[cfg(feature = "visionos")]
 pub mod visionos;
 
+mod composer;
 mod device;
 mod headless;
+mod overlay;
+mod pool;
 mod postfx;
 mod renderer;
 mod surface;
 mod target;
 pub mod viewport;
 
+pub use composer::{MetalPostBackend, MetalPostFx};
 pub use device::{MetalDevice, MetalError};
+pub(crate) use device::compile_library;
 pub use headless::{MetalHeadlessBuilder, MetalHeadlessConfig, MetalHeadlessRenderer};
+pub use pool::{
+    MetalJob, MetalJobError, MetalRenderPool, MetalRenderPoolConfig, MetalWorker, MetalWorkerQos,
+};
 pub use renderer::{
     MetalRenderStats, MetalRenderer, PassAttachments, RenderView, DEFAULT_CACHE_RETENTION,
     MAX_VIEWS,
@@ -148,7 +181,36 @@ pub use postfx::{MetalBloom, MetalDownsampler, MetalSsao, MetalUpscaler, PostFxC
 pub use surface::{MetalSurface, SurfaceFrame};
 pub use target::MetalRenderTarget;
 
-/// Mesh + post-processing MSL compiled by [`MetalDevice::new`].
+// Moving a renderer to another thread.
+//
+// SAFETY: what these types hold is `MTLDevice`, `MTLCommandQueue`,
+// `MTLLibrary`, `MTLFunction`, `MTLBuffer`, `MTLTexture`, `MTLSamplerState`,
+// `MTLRenderPipelineState`, `MTLDepthStencilState`, a committed
+// `MTLCommandBuffer` waiting to be read back, and (the surface) a
+// `CAMetalLayer` — every one of which Apple documents as usable from any
+// thread. Encoders and uncommitted command buffers, which are not, never
+// outlive the call that made them. The raw `Id`s kept in a field
+// (`MetalRenderer::capture_bound`) point into objects the same value owns.
+//
+// `Send` and not `Sync`: a renderer's caches are `&mut` state, and two threads
+// encoding into one target would race on the GPU however Rust saw it. The
+// device is the exception, and is `Sync` too — see `device.rs`.
+unsafe impl Send for MetalRenderer {}
+unsafe impl Send for MetalRenderTarget {}
+unsafe impl Send for MetalHeadlessRenderer {}
+unsafe impl Send for MetalSurface {}
+unsafe impl Send for MetalSsao {}
+unsafe impl Send for MetalBloom {}
+unsafe impl Send for MetalDownsampler {}
+unsafe impl Send for MetalUpscaler {}
+unsafe impl Send for PostFxChain {}
+unsafe impl Send for postfx::PostFxPipelines {}
+#[cfg(feature = "fluid")]
+unsafe impl Send for MetalFluid {}
+
+/// The hand-written part of the default library: meshes, surfaces and the
+/// post passes not generated. [`shader_source`] is the whole library,
+/// compiled by [`MetalDevice::new`].
 pub const SHADER_SOURCE: &str = concat!(
     include_str!("shaders.metal"),
     "\n",
@@ -157,13 +219,25 @@ pub const SHADER_SOURCE: &str = concat!(
     include_str!("postfx.metal"),
 );
 
-/// The fluid solver's MSL, which [`MetalDevice::new`] does **not** compile.
-///
-/// Kept out of the default library because most Metal work is a scene and a
-/// post chain, and a library is compiled once per device: a caller who will
-/// never run a fluid should not pay for its ten fragment functions. Build a
-/// device for both with
-/// [`fluid_shader_source`].
+/// The default library [`MetalDevice::new`] compiles: [`SHADER_SOURCE`] and
+/// the post passes written once with [`passes!`](crate::passes) for both
+/// backends — bloom's threshold and blur — and the shared functions in
+/// place of their marker.
+pub fn shader_source() -> &'static str {
+    static SOURCE: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+        let bloom = crate::renderer::bloom::BLOOM.msl("BloomParams", "bloom_").expect("bloom translates");
+        use crate::renderer::shader::{SHARED_FUNCTIONS, SHARED_FUNCTIONS_MARKER};
+        let shared = SHARED_FUNCTIONS.msl().expect("the shared functions translate");
+        let source = SHADER_SOURCE.replacen(SHARED_FUNCTIONS_MARKER, &shared, 1);
+        format!("{source}\n{bloom}")
+    });
+    &SOURCE
+}
+
+/// The fluid's frame-rate read-out in MSL — the one part of the fluid's
+/// shaders written by hand. The passes are generated from the `passes!`
+/// source the wgpu module also runs; [`fluid_shader_source`] has the whole
+/// thing.
 #[cfg(feature = "fluid")]
 pub const FLUID_SHADER_SOURCE: &str = include_str!("fluid.metal");
 
@@ -176,9 +250,16 @@ pub const FLUID_SHADER_SOURCE: &str = include_str!("fluid.metal");
 /// let device = MetalDevice::with_shader_source(&fluid_shader_source())?;
 /// # Ok(()) }
 /// ```
+///
+/// Kept out of the default library because most Metal work is a scene and a
+/// post chain, and a library is compiled once per device: a caller who will
+/// never run a fluid should not pay for its twenty fragment functions.
 #[cfg(feature = "fluid")]
 pub fn fluid_shader_source() -> String {
-    format!("{SHADER_SOURCE}\n{FLUID_SHADER_SOURCE}")
+    let passes = crate::fluid::shader::FLUID
+        .msl(crate::fluid::shader::UNIFORMS, "fluid_")
+        .expect("the fluid's passes translate");
+    format!("{}\n{passes}\n{FLUID_SHADER_SOURCE}", shader_source())
 }
 
 /// The fluid, on the Metal backend. See [`fluid`].
@@ -190,6 +271,26 @@ pub use fluid::MetalFluid;
 #[cfg(test)]
 mod tests {
     #[test]
+    fn renderers_can_move_between_threads() {
+        fn send<T: Send>() {}
+        fn sync<T: Sync>() {}
+        send::<super::MetalDevice>();
+        sync::<super::MetalDevice>();
+        send::<super::MetalRenderer>();
+        send::<super::MetalRenderTarget>();
+        send::<super::MetalHeadlessRenderer>();
+        send::<super::MetalSurface>();
+        send::<super::PostFxChain>();
+        send::<super::MetalRenderPool>();
+        sync::<super::MetalRenderPool>();
+        #[cfg(feature = "fluid")]
+        send::<super::MetalFluid>();
+        // What a render thread is handed along with them.
+        send::<crate::scene::Scene>();
+        send::<crate::cameras::PerspectiveCamera>();
+    }
+
+    #[test]
     fn shader_source_declares_the_entry_points() {
         for entry in [
             "vs_mesh",
@@ -200,14 +301,17 @@ mod tests {
             "fs_point_encoded_blend",
             "vs_fx_surface",
             "fs_fx_surface",
-            "fs_bloom_threshold",
-            "fs_bloom_blur",
+            "bloom_fs_threshold",
+            "bloom_fs_blur",
             "fs_downsample",
             "fs_upscale",
             "fs_bloom_composite",
+            "fs_overlay",
+            "fs_mesh_encoded_add",
+            "fs_point_encoded_add",
         ] {
             assert!(
-                super::SHADER_SOURCE.contains(entry),
+                super::shader_source().contains(entry),
                 "shader source is missing `{entry}`"
             );
         }

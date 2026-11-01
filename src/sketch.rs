@@ -7,6 +7,11 @@
 //! example in this crate opens with the same eighty lines. None of it is
 //! interesting and all of it has to be right.
 //!
+//! On macOS, built with `--features metal` and run with
+//! `THREERS_BACKEND=metal`, the same sketch draws on the native Metal backend
+//! — overlay and quad view included — through
+//! [`WindowRenderer`](crate::renderer::WindowRenderer).
+//!
 //! ```no_run
 //! use threers::prelude::*;
 //! use threers::sketch::{sketch, Frame, SketchOptions};
@@ -97,10 +102,11 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::cameras::Camera;
-use crate::helpers::{PointerButton, QuadView, QuadViewControls, ViewSurface};
+use crate::helpers::{PointerButton, QuadView, QuadViewControls};
 use crate::math::{Color, Vector2};
 use crate::overlay::Overlay;
-use crate::{PerspectiveCamera, Renderer, Scene};
+use crate::renderer::WindowRenderer;
+use crate::{PerspectiveCamera, Scene};
 
 /// Window and renderer settings. Everything has a default worth starting from.
 #[derive(Debug, Clone)]
@@ -283,104 +289,25 @@ where
             .expect("window"),
     );
 
-    let instance = {
-        // The display handle only matters for GLES/Wayland presentation; the
-        // backends asked for here ignore it.
-        let mut d = wgpu::InstanceDescriptor::new_without_display_handle();
-        d.backends = wgpu::Backends::PRIMARY;
-        wgpu::Instance::new(d)
-    };
-    let surface = instance.create_surface(window.clone()).expect("surface");
-    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::default(),
-        compatible_surface: Some(&surface),
-        force_fallback_adapter: false,
-        apply_limit_buckets: false,
-    }))
-    .expect("no GPU adapter");
-
-    // The two limits every caller of `Renderer::new` has had to raise by hand.
-    // Downlevel defaults allow sixteen sampled textures and sixteen samplers
-    // per stage; the main pass declares twenty of each, so without these the
-    // renderer fails pipeline-layout validation before a frame is drawn. The
-    // resolution bump is for the 4096 shadow map against a downlevel cap of
-    // 2048.
-    let adapter_limits = adapter.limits();
-    let mut limits = wgpu::Limits::downlevel_defaults().using_resolution(adapter_limits.clone());
-    limits.max_sampled_textures_per_shader_stage =
-        adapter_limits.max_sampled_textures_per_shader_stage;
-    limits.max_samplers_per_shader_stage = adapter_limits.max_samplers_per_shader_stage;
-
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("threers sketch"),
-        required_features: wgpu::Features::empty(),
-        required_limits: limits,
-        ..Default::default()
-    }))
-    .expect("device");
-    let device = Arc::new(device);
-    let queue = Arc::new(queue);
-
-    let size = window.inner_size();
-    let caps = surface.get_capabilities(&adapter);
-    let format = caps
-        .formats
-        .iter()
-        .copied()
-        .find(|f| f.is_srgb())
-        .unwrap_or(caps.formats[0]);
-    // The overlay is blended by fixed-function hardware, which mixes in
-    // whatever space the attachment is in: on an sRGB view it decodes the
-    // destination, mixes light and re-encodes, and on a plain `Unorm` one it
-    // mixes the stored bytes. The 3D pass writes encoded colour either way, so
-    // the second case blends encodings — half coverage of white on black lands
-    // on 128 where the light says 188, and anti-aliased text reads thin.
-    // `format` above is sRGB on every surface that offers one; declaring the
-    // sRGB variant here covers the surfaces that do not, and costs nothing when
-    // it is already sRGB or has no sRGB form at all.
-    let srgb_format = format.add_srgb_suffix();
-    let mut config = wgpu::SurfaceConfiguration {
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-        format,
-        width: size.width.max(1),
-        height: size.height.max(1),
-        present_mode: caps.present_modes[0],
-        alpha_mode: caps.alpha_modes[0],
-        view_formats: if srgb_format == format {
-            vec![]
-        } else {
-            vec![srgb_format]
-        },
-        desired_maximum_frame_latency: 2,
-        color_space: wgpu::SurfaceColorSpace::Srgb,
-    };
-    surface.configure(&device, &config);
-
-    let mut renderer = Renderer::new(
-        device.clone(),
-        queue.clone(),
-        format,
-        config.width,
-        config.height,
-    );
-    if options.msaa > 1 {
-        renderer.set_msaa(options.msaa);
-    }
+    // wgpu, or the native Metal backend with `--features metal` and
+    // `THREERS_BACKEND=metal`.
+    let mut view = WindowRenderer::new(window.clone()).expect("a GPU for the window");
+    view.set_msaa(options.msaa);
     // Viewport and scissor rectangles — the quad view's panes — are logical
     // pixels, like the window size asked for; this maps them to the surface.
-    renderer.set_pixel_ratio(window.scale_factor() as f32);
+    view.set_pixel_ratio(window.scale_factor() as f32);
     let mut quad_view = options.quad_view.clone();
 
     let mut scene = Scene::new();
     scene.background = options.background;
     let mut camera = PerspectiveCamera::new(
         options.fov,
-        config.width as f32 / config.height as f32,
+        view.aspect(),
         0.1,
         1000.0,
     );
 
-    let mut overlay = Overlay::new(config.width, config.height);
+    let mut overlay = Overlay::new(view.size().0, view.size().1);
     let mut draw = {
         let mut s = Setup {
             scene: &mut scene,
@@ -388,8 +315,8 @@ where
             overlay: &mut overlay,
             quad_view: quad_view.as_mut(),
             scale_factor: window.scale_factor() as f32,
-            width: config.width,
-            height: config.height,
+            width: view.size().0,
+            height: view.size().1,
         };
         setup(&mut s)
     };
@@ -419,17 +346,15 @@ where
             match event {
                 WindowEvent::CloseRequested => target.exit(),
                 WindowEvent::Resized(s) => {
-                    config.width = s.width.max(1);
-                    config.height = s.height.max(1);
-                    surface.configure(&device, &config);
-                    renderer.resize(config.width, config.height);
-                    overlay.resize(config.width, config.height);
-                    camera.set_aspect(config.width as f32 / config.height as f32);
-                    renderer.set_pixel_ratio(win.scale_factor() as f32);
+                    view.resize(s.width, s.height);
+                    let (w, h) = view.size();
+                    overlay.resize(w, h);
+                    camera.set_aspect(view.aspect());
+                    view.set_pixel_ratio(win.scale_factor() as f32);
                 }
                 WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                     // The `Resized` that follows reconfigures the surface.
-                    renderer.set_pixel_ratio(scale_factor as f32);
+                    view.set_pixel_ratio(scale_factor as f32);
                 }
                 WindowEvent::CursorEntered { .. } => pointer_inside = true,
                 WindowEvent::CursorLeft { .. } => pointer_inside = false,
@@ -449,7 +374,7 @@ where
                     }
                     if let (Some(ctl), Some(quad)) = (quad_controls.as_mut(), quad_view.as_mut()) {
                         let s = win.scale_factor() as f32;
-                        ctl.set_size(config.width as f32 / s, config.height as f32 / s);
+                        ctl.set_size(view.size().0 as f32 / s, view.size().1 as f32 / s);
                         let (x, y) = (pointer.x / s, pointer.y / s);
                         let button = match button {
                             MouseButton::Left => Some(PointerButton::Primary),
@@ -483,7 +408,7 @@ where
                 WindowEvent::MouseWheel { delta, .. } => {
                     if let (Some(ctl), Some(quad)) = (quad_controls.as_mut(), quad_view.as_mut()) {
                         let s = win.scale_factor() as f32;
-                        ctl.set_size(config.width as f32 / s, config.height as f32 / s);
+                        ctl.set_size(view.size().0 as f32 / s, view.size().1 as f32 / s);
                         // As DOM `deltaY`: positive scrolls down (zooms out).
                         // winit's positive is up; a line is taken as 100 px,
                         // which is what a browser reports for a wheel notch.
@@ -509,12 +434,12 @@ where
                         frame: frame_index,
                         elapsed: start.elapsed().as_secs_f32(),
                         delta,
-                        width: config.width,
-                        height: config.height,
+                        width: view.size().0,
+                        height: view.size().1,
                         pointer,
                         pointer_ndc: Vector2::new(
-                            pointer.x / config.width.max(1) as f32 * 2.0 - 1.0,
-                            1.0 - pointer.y / config.height.max(1) as f32 * 2.0,
+                            pointer.x / view.size().0.max(1) as f32 * 2.0 - 1.0,
+                            1.0 - pointer.y / view.size().1.max(1) as f32 * 2.0,
                         ),
                         pointer_down,
                         pointer_inside,
@@ -534,52 +459,8 @@ where
                     }
                     frame_index += 1;
 
-                    // A minimised window has a zero-sized surface and acquiring
-                    // from it is an error, not a frame to skip quietly.
-                    if config.width > 0 && config.height > 0 {
-                        if let wgpu::CurrentSurfaceTexture::Success(frame)
-                        | wgpu::CurrentSurfaceTexture::Suboptimal(frame) =
-                            surface.get_current_texture()
-                        {
-                            let view = frame
-                                .texture
-                                .create_view(&wgpu::TextureViewDescriptor::default());
-                            match quad_view.as_mut() {
-                                Some(quad) => quad.render(
-                                    &mut ViewSurface {
-                                        renderer: &mut renderer,
-                                        view: &view,
-                                        linear_framebuffer: false,
-                                    },
-                                    &mut scene,
-                                    &camera,
-                                ),
-                                None => renderer.render(&mut scene, &camera, &view, false),
-                            }
-                            // Over the top of the render, and skipped entirely
-                            // on a frame that drew nothing 2D.
-                            if overlay.touched() {
-                                let srgb_view = if srgb_format == config.format {
-                                    None
-                                } else {
-                                    Some(frame.texture.create_view(
-                                        &wgpu::TextureViewDescriptor {
-                                            format: Some(srgb_format),
-                                            ..Default::default()
-                                        },
-                                    ))
-                                };
-                                // Uploads only the rows that changed, which for
-                                // a read-out in the corner is a tenth of them.
-                                renderer.draw_overlay(
-                                    &mut overlay,
-                                    srgb_view.as_ref().unwrap_or(&view),
-                                    srgb_format,
-                                );
-                            }
-                            queue.present(frame);
-                        }
-                    }
+                    // Hidden or minimised: `render_frame` skips the frame.
+                    view.render_frame(&mut scene, &camera, quad_view.as_mut(), Some(&mut overlay));
                     if wants_exit {
                         target.exit();
                     }

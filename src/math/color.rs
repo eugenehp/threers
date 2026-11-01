@@ -41,17 +41,11 @@ impl Color {
     /// shader work, so we do the same — otherwise PBR output diverges by the
     /// linear→sRGB curve on every color literal.
     pub fn from_hex(hex: u32) -> Self {
-        fn srgb_to_linear(s: f32) -> f32 {
-            if s <= 0.04045 {
-                s / 12.92
-            } else {
-                ((s + 0.055) / 1.055).powf(2.4)
-            }
-        }
+        use crate::utils::srgb::srgb_to_linear;
         Self {
-            r: srgb_to_linear(((hex >> 16) & 0xff) as f32 / 255.0),
-            g: srgb_to_linear(((hex >> 8) & 0xff) as f32 / 255.0),
-            b: srgb_to_linear((hex & 0xff) as f32 / 255.0),
+            r: srgb_to_linear((hex >> 16) as u8),
+            g: srgb_to_linear((hex >> 8) as u8),
+            b: srgb_to_linear(hex as u8),
         }
     }
 

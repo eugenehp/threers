@@ -199,7 +199,7 @@ fn decode_px(data: &[u8], off: usize, linear: bool) -> f32 {
     if linear {
         s
     } else {
-        srgb_to_linear(s)
+        crate::utils::srgb::srgb_to_linear_f32(s)
     }
 }
 
@@ -209,14 +209,6 @@ fn decode_rgb(data: &[u8], off: usize, linear: bool) -> [f32; 3] {
         decode_px(data, off + 1, linear),
         decode_px(data, off + 2, linear),
     ]
-}
-
-fn srgb_to_linear(c: f32) -> f32 {
-    if c <= 0.04045 {
-        c / 12.92
-    } else {
-        ((c + 0.055) / 1.055).powf(2.4)
-    }
 }
 
 /// Pack six-face cubemap LOD levels into a CubeUV 2D atlas.

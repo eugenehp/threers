@@ -4,7 +4,7 @@
 //! [`crate::renderer::downsample::Downsampler`]. Compose them with
 //! [`PostFxChain`] on a finished colour target before readback.
 
-use super::device::{MetalDevice, MetalError};
+use super::device::{wait_until_completed, MetalDevice, MetalError};
 use super::enums::*;
 use super::objc::{
     alloc_init, class, error_message, msg0, msg1, msg2, msg3, sel, AutoreleasePool, Id, Owned, NIL,
@@ -21,6 +21,10 @@ struct BloomParams {
     radius: f32,
     dx: f32,
     dy: f32,
+    /// Off: an sRGB source reads decoded (see `BLOOM` in
+    /// `renderer/bloom.rs`, the shared source).
+    decode: f32,
+    pad: [f32; 3],
 }
 
 #[repr(C)]
@@ -261,14 +265,18 @@ impl PostFxPipelines {
     pub fn new(device: &MetalDevice) -> Result<Self, MetalError> {
         Ok(Self {
             // Bloom chain stays in linear float16 (matches wgpu headless bloom).
-            bloom_threshold: fullscreen_pipeline(
+            // Bloom's two passes are generated, with the WebGL2 path's WGSL,
+            // from one `passes!` source (`BLOOM` in `renderer/bloom.rs`).
+            bloom_threshold: fullscreen_pipeline_with(
                 device,
-                "fs_bloom_threshold",
+                "bloom_vs",
+                "bloom_fs_threshold",
                 pixel_format::RGBA16_FLOAT,
             )?,
-            bloom_blur: fullscreen_pipeline(
+            bloom_blur: fullscreen_pipeline_with(
                 device,
-                "fs_bloom_blur",
+                "bloom_vs",
+                "bloom_fs_blur",
                 pixel_format::RGBA16_FLOAT,
             )?,
             downsample: fullscreen_pipeline(
@@ -364,6 +372,8 @@ impl MetalBloom {
                     radius,
                     dx: 0.0,
                     dy: 0.0,
+                    decode: 0.0,
+                    pad: [0.0; 3],
                 },
             )?,
             blur_h_buf: param_buffer(
@@ -373,6 +383,8 @@ impl MetalBloom {
                     radius,
                     dx: 1.0,
                     dy: 0.0,
+                    decode: 0.0,
+                    pad: [0.0; 3],
                 },
             )?,
             blur_v_buf: param_buffer(
@@ -382,6 +394,8 @@ impl MetalBloom {
                     radius,
                     dx: 0.0,
                     dy: 1.0,
+                    decode: 0.0,
+                    pad: [0.0; 3],
                 },
             )?,
         })
@@ -1123,6 +1137,10 @@ impl PostFxChain {
     }
 
     /// Encode postfx into a new command buffer and **commit without waiting**.
+    ///
+    /// The command buffer comes back retained: `[queue commandBuffer]` is
+    /// autoreleased into this call's pool, and once the GPU is done with it
+    /// nothing else would keep it alive to be waited on.
     pub fn encode_async(
         &mut self,
         device: &MetalDevice,
@@ -1131,7 +1149,7 @@ impl PostFxChain {
         src_w: u32,
         src_h: u32,
         format: NSUInteger,
-    ) -> Result<Option<(Id, Id)>, MetalError> {
+    ) -> Result<Option<(Owned, Id)>, MetalError> {
         let _pool = AutoreleasePool::new();
         let needs = self.downsample.is_some()
             || self.upscale.is_some()
@@ -1149,8 +1167,9 @@ impl PostFxChain {
             .expect("needs was true");
         unsafe {
             let _: () = msg0(cmd, sel!("commit"));
+            let cmd = Owned::retain(cmd).ok_or(MetalError::NoCommandQueue)?;
+            Ok(Some((cmd, tex)))
         }
-        Ok(Some((cmd, tex)))
     }
 
     /// Returns the texture to read back after post-processing (`src` if unchanged).
@@ -1166,9 +1185,7 @@ impl PostFxChain {
         match self.encode_async(device, src, depth, src_w, src_h, format)? {
             None => Ok(src),
             Some((cmd, tex)) => {
-                unsafe {
-                    let _: () = msg0(cmd, sel!("waitUntilCompleted"));
-                }
+                unsafe { wait_until_completed(cmd.id())? };
                 Ok(tex)
             }
         }
@@ -1307,7 +1324,7 @@ pub(crate) fn render_pass_descriptor(dst: Id) -> Id {
     }
 }
 
-#[cfg(all(test, feature = "metal", any(target_os = "macos", target_os = "ios")))]
+#[cfg(all(test, metal_backend))]
 mod gpu_tests {
     use super::*;
     use crate::metal::objc::AutoreleasePool;

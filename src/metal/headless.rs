@@ -464,6 +464,46 @@ impl MetalHeadlessRenderer {
         }
     }
 
+    /// Draw one frame and queue its post-processing and readback without
+    /// waiting for either: [`finish_queued_into`](Self::finish_queued_into)
+    /// collects the pixels if they are wanted. A frame still queued from an
+    /// earlier call is dropped unread.
+    pub fn render_queued(&mut self, scene: &mut Scene, camera: &dyn Camera) -> Result<(), MetalError> {
+        if let Some(old) = self.pending.take() {
+            // The queue runs in order: the next frame's copy into this
+            // staging buffer lands after the one in flight.
+            self.recycle_staging(old.staging);
+        }
+        self.last_stats = self
+            .renderer
+            .render(scene, camera, &self.target.attachments())?;
+        self.pending = Some(self.queue_postfx_readback()?);
+        Ok(())
+    }
+
+    /// The pixels of the frame [`render_queued`](Self::render_queued) drew,
+    /// into `out`, waiting for the GPU; `false` when nothing is queued.
+    pub fn finish_queued_into(&mut self, out: &mut Vec<u8>) -> Result<bool, MetalError> {
+        self.drain_pending_into(out)
+    }
+
+    /// Wait for the queued frame's GPU work, leaving its pixels to
+    /// [`finish_queued_into`](Self::finish_queued_into).
+    pub fn wait_queued(&self) -> Result<(), MetalError> {
+        match &self.pending {
+            // SAFETY: a retained, committed command buffer.
+            Some(p) => unsafe { crate::metal::device::wait_until_completed(p.cmd.id()) },
+            None => Ok(()),
+        }
+    }
+
+    /// Drop a queued frame unread.
+    pub fn discard_queued(&mut self) {
+        if let Some(old) = self.pending.take() {
+            self.recycle_staging(old.staging);
+        }
+    }
+
     /// Drain the last queued readback (end of a pipelined sequence).
     pub fn finish_readback_into(&mut self, out: &mut Vec<u8>) -> Result<bool, MetalError> {
         self.drain_pending_into(out)

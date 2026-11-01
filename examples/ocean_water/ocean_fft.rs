@@ -30,9 +30,8 @@
 //! So rlx is not in this path — but it *is* the oracle the butterfly table is
 //! tested against, in [`crate::fft`]. Its FFT validates this one.
 
-use std::sync::Arc;
+use threers::marks::gpu;
 
-use wgpu::util::DeviceExt;
 
 use crate::fft::{butterfly_table, log2_exact};
 use crate::preset::Preset;
@@ -262,26 +261,26 @@ pub struct Mode {
 }
 
 pub struct OceanFft {
-    spectrum: wgpu::ComputePipeline,
-    butterfly: wgpu::ComputePipeline,
-    assemble: wgpu::ComputePipeline,
-    spectrum_bg: wgpu::BindGroup,
+    spectrum: gpu::ComputePipeline,
+    butterfly: gpu::ComputePipeline,
+    assemble: gpu::ComputePipeline,
+    spectrum_bg: gpu::BindGroup,
     /// `[stage][vertical][parity]` — 2 ping-pong directions per stage.
-    stage_bgs: Vec<wgpu::BindGroup>,
-    assemble_bgs: [wgpu::BindGroup; 2],
-    spectrum_params: wgpu::Buffer,
+    stage_bgs: Vec<gpu::BindGroup>,
+    assemble_bgs: [gpu::BindGroup; 2],
+    spectrum_params: gpu::Buffer,
     /// Held only to keep the per-stage uniforms alive for as long as the bind
     /// groups that point at them.
     #[allow(dead_code)]
-    stage_params: Vec<wgpu::Buffer>,
+    stage_params: Vec<gpu::Buffer>,
     /// One `D2` view per cascade, for the material to sample.
-    pub cascade_views: Vec<Arc<wgpu::TextureView>>,
+    pub cascade_views: Vec<gpu::TextureView>,
     /// The strongest modes of the swell cascade, for CPU buoyancy.
     pub modes: Vec<Mode>,
     /// Held so the spectrum can be re-seeded — a wind change rewrites this
     /// texture and nothing else, which is why `set_wind` costs a texture upload
     /// rather than a rebuild.
-    h0_tex: wgpu::Texture,
+    h0_tex: gpu::Texture,
     pub cas: Cascades,
     stages: usize,
     groups: (u32, u32),
@@ -289,8 +288,8 @@ pub struct OceanFft {
 
 impl OceanFft {
     pub fn new(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        device: &gpu::Device,
+        queue: &gpu::Queue,
         preset: &Preset,
         hs: f32,
         cas: Cascades,
@@ -323,7 +322,7 @@ impl OceanFft {
             wgpu::TextureUsages::COPY_DST,
         );
         queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
+            gpu::TexelCopyTextureInfo {
                 texture: &h0_tex,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
@@ -342,7 +341,7 @@ impl OceanFft {
             },
         );
 
-        let work: Vec<wgpu::Texture> = (0..2)
+        let work: Vec<gpu::Texture> = (0..2)
             .map(|i| {
                 array_tex(
                     &format!("ocean fft work {i}"),
@@ -357,44 +356,58 @@ impl OceanFft {
             wgpu::TextureUsages::STORAGE_BINDING,
         );
 
-        let array_view = |t: &wgpu::Texture| t.create_view(&wgpu::TextureViewDescriptor::default());
+        let array_view = |t: &gpu::Texture| t.create_view(&wgpu::TextureViewDescriptor::default());
         let h0_view = array_view(&h0_tex);
-        let work_views: Vec<wgpu::TextureView> = work.iter().map(array_view).collect();
+        let work_views: Vec<gpu::TextureView> = work.iter().map(array_view).collect();
         let disp_array = array_view(&disp);
 
         // A per-layer D2 view is what the material can bind: its texture slots
         // are plain `texture_2d`, and one layer of an array is a valid D2 view.
-        let cascade_views: Vec<Arc<wgpu::TextureView>> = (0..CASCADES)
+        let cascade_views: Vec<gpu::TextureView> = (0..CASCADES)
             .map(|i| {
-                Arc::new(disp.create_view(&wgpu::TextureViewDescriptor {
+                disp.create_view(&wgpu::TextureViewDescriptor {
                     label: Some("ocean cascade"),
                     dimension: Some(wgpu::TextureViewDimension::D2),
                     base_array_layer: i as u32,
                     array_layer_count: Some(1),
                     ..Default::default()
-                }))
+                })
             })
             .collect();
 
         let butterfly_data = butterfly_table(n, 1.0);
-        let butterfly_tex = device.create_texture_with_data(
-            queue,
-            &wgpu::TextureDescriptor {
-                label: Some("ocean butterfly"),
-                size: wgpu::Extent3d {
-                    width: n as u32,
-                    height: stages as u32,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba32Float,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
+        let butterfly_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("ocean butterfly"),
+            size: wgpu::Extent3d {
+                width: n as u32,
+                height: stages as u32,
+                depth_or_array_layers: 1,
             },
-            wgpu::util::TextureDataOrder::LayerMajor,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba32Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            gpu::TexelCopyTextureInfo {
+                texture: &butterfly_tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
             bytemuck::cast_slice(&butterfly_data),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some((n * 16) as u32),
+                rows_per_image: Some(stages as u32),
+            },
+            wgpu::Extent3d {
+                width: n as u32,
+                height: stages as u32,
+                depth_or_array_layers: 1,
+            },
         );
         let butterfly_view = array_view(&butterfly_tex);
 
@@ -453,17 +466,17 @@ impl OceanFft {
             ],
         });
 
-        let pipe = |src: &str, bgl: &wgpu::BindGroupLayout, label: &str| {
-            let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        let pipe = |src: &str, bgl: &gpu::BindGroupLayout, label: &str| {
+            let module = device.create_shader_module(gpu::ShaderModuleDescriptor {
                 label: Some(label),
-                source: wgpu::ShaderSource::Wgsl(src.into()),
+                source: gpu::ShaderSource::Wgsl(src.into()),
             });
-            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            let layout = device.create_pipeline_layout(&gpu::PipelineLayoutDescriptor {
                 label: Some(label),
                 bind_group_layouts: &[Some(bgl)],
                 immediate_size: 0,
             });
-            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            device.create_compute_pipeline(&gpu::ComputePipelineDescriptor {
                 label: Some(label),
                 layout: Some(&layout),
                 module: &module,
@@ -479,21 +492,21 @@ impl OceanFft {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let spectrum_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let spectrum_bg = device.create_bind_group(&gpu::BindGroupDescriptor {
             label: Some("ocean spectrum bg"),
             layout: &spec_bgl,
             entries: &[
-                wgpu::BindGroupEntry {
+                gpu::BindGroupEntry {
                     binding: 0,
                     resource: spectrum_params.as_entire_binding(),
                 },
-                wgpu::BindGroupEntry {
+                gpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&h0_view),
+                    resource: gpu::BindingResource::TextureView(&h0_view),
                 },
-                wgpu::BindGroupEntry {
+                gpu::BindGroupEntry {
                     binding: 2,
-                    resource: wgpu::BindingResource::TextureView(&work_views[0]),
+                    resource: gpu::BindingResource::TextureView(&work_views[0]),
                 },
             ],
         });
@@ -517,25 +530,25 @@ impl OceanFft {
             });
             let src = pass % 2;
             let dst = 1 - src;
-            stage_bgs.push(device.create_bind_group(&wgpu::BindGroupDescriptor {
+            stage_bgs.push(device.create_bind_group(&gpu::BindGroupDescriptor {
                 label: Some("ocean stage bg"),
                 layout: &stage_bgl,
                 entries: &[
-                    wgpu::BindGroupEntry {
+                    gpu::BindGroupEntry {
                         binding: 0,
                         resource: buf.as_entire_binding(),
                     },
-                    wgpu::BindGroupEntry {
+                    gpu::BindGroupEntry {
                         binding: 1,
-                        resource: wgpu::BindingResource::TextureView(&butterfly_view),
+                        resource: gpu::BindingResource::TextureView(&butterfly_view),
                     },
-                    wgpu::BindGroupEntry {
+                    gpu::BindGroupEntry {
                         binding: 2,
-                        resource: wgpu::BindingResource::TextureView(&work_views[src]),
+                        resource: gpu::BindingResource::TextureView(&work_views[src]),
                     },
-                    wgpu::BindGroupEntry {
+                    gpu::BindGroupEntry {
                         binding: 3,
-                        resource: wgpu::BindingResource::TextureView(&work_views[dst]),
+                        resource: gpu::BindingResource::TextureView(&work_views[dst]),
                     },
                 ],
             }));
@@ -543,17 +556,17 @@ impl OceanFft {
         }
 
         let assemble_bgs = [0usize, 1].map(|src| {
-            device.create_bind_group(&wgpu::BindGroupDescriptor {
+            device.create_bind_group(&gpu::BindGroupDescriptor {
                 label: Some("ocean assemble bg"),
                 layout: &asm_bgl,
                 entries: &[
-                    wgpu::BindGroupEntry {
+                    gpu::BindGroupEntry {
                         binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&work_views[src]),
+                        resource: gpu::BindingResource::TextureView(&work_views[src]),
                     },
-                    wgpu::BindGroupEntry {
+                    gpu::BindGroupEntry {
                         binding: 1,
-                        resource: wgpu::BindingResource::TextureView(&disp_array),
+                        resource: gpu::BindingResource::TextureView(&disp_array),
                     },
                 ],
             })
@@ -582,8 +595,8 @@ impl OceanFft {
     /// because all three ride as layers of one array texture.
     pub fn dispatch(
         &self,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
+        queue: &gpu::Queue,
+        encoder: &mut gpu::CommandEncoder,
         t: f32,
         choppiness: f32,
     ) {
@@ -630,11 +643,11 @@ impl OceanFft {
     /// `h0`. So changing it is a texture upload and a new mode table, and no
     /// pipeline, bind group or shader is touched. That is what makes turning the
     /// wind at runtime cost a fraction of a millisecond instead of a rebuild.
-    pub fn set_spectrum(&mut self, queue: &wgpu::Queue, preset: &Preset, hs: f32) {
+    pub fn set_spectrum(&mut self, queue: &gpu::Queue, preset: &Preset, hs: f32) {
         let (data, modes) = build_h0(preset, hs, &self.cas);
         let n = self.cas.n as u32;
         queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
+            gpu::TexelCopyTextureInfo {
                 texture: &self.h0_tex,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,

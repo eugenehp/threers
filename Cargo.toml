@@ -24,7 +24,7 @@ resolver = "2"
 
 [package]
 name = "threers"
-version = "0.0.9"
+version = "0.0.10"
 edition = "2021"
 # wgpu 30 requires 1.87, and this crate uses `is_multiple_of`, stabilised in the
 # same release. Declared so cargo says so up front rather than letting the build
@@ -234,10 +234,10 @@ wasm-full = ["captions", "openscad", "native-codec", "gif", "nurbs", "planet", "
 
 [dependencies]
 # The codecs and the caption data model (pure Rust, no wgpu/winit).
-threers-codec = { path = "crates/threers-codec", version = "0.0.9", default-features = false }
+threers-codec = { path = "crates/threers-codec", version = "0.0.10", default-features = false }
 # Soft bodies that tear and regrow (`softbody`): the solver, on its own so the
 # wasm build can optimise it for speed (see `profile.release-wasm` below).
-threers-softbody = { path = "crates/threers-softbody", version = "0.0.9", features = ["gpu"] }
+threers-softbody = { path = "crates/threers-softbody", version = "0.0.10", features = ["gpu"] }
 wgpu = "30"
 bytemuck = { version = "1.16", features = ["derive"] }
 log = "0.4"
@@ -259,9 +259,13 @@ manifold-rust = { version = "0.13", optional = true }
 
 # Native-only deps (winit + env_logger + pollster only make sense outside wasm).
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-winit = "0.29"
 pollster = "0.3"
 env_logger = "0.11"
+
+# winit 0.29 knows neither tvOS nor visionOS and builds its Wayland backend
+# there, which does not compile; those apps' windows are the system's.
+[target.'cfg(not(any(target_arch = "wasm32", target_os = "tvos", target_os = "visionos")))'.dependencies]
+winit = "0.29"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
@@ -655,7 +659,7 @@ required-features = ["rlx"]
 
 [[example]]
 name = "rlx_video_grade"
-required-features = ["rlx", "video", "native-codec"]
+required-features = ["rlx", "video", "native-codec", "gif"]
 
 [[example]]
 name = "rlx_palette"
@@ -728,6 +732,38 @@ required-features = ["metal"]
 
 [[test]]
 name = "metal_backend"
+required-features = ["metal"]
+
+[[test]]
+name = "metal_threads"
+required-features = ["metal"]
+
+[[test]]
+name = "marks_metal"
+required-features = ["metal"]
+
+[[test]]
+name = "volume_metal"
+required-features = ["metal"]
+
+[[test]]
+name = "gpu_compute_metal"
+required-features = ["metal"]
+
+[[test]]
+name = "shared_shader_lights"
+required-features = ["metal"]
+
+[[test]]
+name = "vertex_buffer_compute"
+required-features = ["metal"]
+
+[[test]]
+name = "apple_window"
+required-features = ["metal"]
+
+[[test]]
+name = "headless_metal_backend"
 required-features = ["metal"]
 
 [[test]]
@@ -826,10 +862,11 @@ name = "watertight_gate"
 required-features = ["openscad"]
 
 # Opt-out cfgs for consumers that embed the renderer in their own wasm crate
-# (set through RUSTFLAGS, e.g. `--cfg threers_no_js_bindings`); declared here so
-# rustc's check-cfg knows them. See src/lib.rs and renderer::upload_ltc.
+# (set through RUSTFLAGS, e.g. `--cfg threers_no_js_bindings`; see src/lib.rs
+# and renderer::upload_ltc), and `metal_backend`, which build.rs sets: the
+# `metal` feature on an Apple OS. Declared here so rustc's check-cfg knows them.
 [lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(threers_no_js_bindings)', 'cfg(threers_no_rect_area_light)'] }
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(threers_no_js_bindings)', 'cfg(threers_no_rect_area_light)', 'cfg(metal_backend)'] }
 
 [[test]]
 name = "glass_bounces"

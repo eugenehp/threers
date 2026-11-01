@@ -5,13 +5,6 @@
 #include <metal_stdlib>
 using namespace metal;
 
-struct BloomParams {
-    float threshold;
-    float radius;
-    float dx;
-    float dy;
-};
-
 struct DownsampleParams {
     uint factor;
     uint srgb;
@@ -57,8 +50,6 @@ struct CompositeParams {
     float chroma_lift;
 };
 
-constant uint BLOOM_SHRINK = 4u;
-
 // ------------------------------------------------------------------- bloom
 
 struct FullscreenOut {
@@ -88,61 +79,6 @@ vertex FullscreenOut vs_fullscreen(uint vid [[vertex_id]]) {
     out.position = float4(uv * 2.0 - 1.0, 0.0, 1.0);
     out.uv = float2(uv.x, 1.0 - uv.y);
     return out;
-}
-
-fragment float4 fs_bloom_threshold(
-    FullscreenOut in [[stage_in]],
-    texture2d<float, access::sample> src [[texture(0)]],
-    constant BloomParams &p [[buffer(0)]])
-{
-    constexpr sampler s(coord::pixel, filter::nearest);
-    const int2 gid = int2(in.position.xy);
-    const uint2 in_dim = uint2(src.get_width(), src.get_height());
-
-    float3 sum = float3(0.0);
-    float n = 0.0;
-    for (uint j = 0u; j < BLOOM_SHRINK; j++) {
-        for (uint i = 0u; i < BLOOM_SHRINK; i++) {
-            const uint2 c = uint2(gid.x * BLOOM_SHRINK + i, gid.y * BLOOM_SHRINK + j);
-            if (c.x >= in_dim.x || c.y >= in_dim.y) { continue; }
-            // sRGB source views decode to linear on sample.
-            const float3 rgb = src.sample(s, float2(c) + float2(0.5)).rgb;
-            const float lum = dot(rgb, float3(0.2126, 0.7152, 0.0722));
-            const float over = max(lum - p.threshold, 0.0);
-            const float w = over / max(lum, 1e-4);
-            sum += rgb * w;
-            n += 1.0;
-        }
-    }
-    return float4(sum / max(n, 1.0), 1.0);
-}
-
-fragment float4 fs_bloom_blur(
-    FullscreenOut in [[stage_in]],
-    texture2d<float, access::sample> src [[texture(0)]],
-    constant BloomParams &p [[buffer(0)]])
-{
-    constexpr sampler s(coord::pixel, filter::nearest);
-    const int2 gid = int2(in.position.xy);
-    const uint2 dim = uint2(src.get_width(), src.get_height());
-    const float2 dir = float2(p.dx, p.dy) * p.radius;
-
-    const float w[5] = {0.2270270, 0.1945946, 0.1216216, 0.0540540, 0.0162162};
-    float3 acc = float3(0.0);
-    for (uint k = 0u; k < 5u; k++) {
-        const float weight = w[k];
-        if (k == 0u) {
-            const int2 c = int2(clamp(float2(gid), float2(0), float2(dim) - 1.0));
-            acc += src.sample(s, float2(c) + float2(0.5)).rgb * weight;
-        } else {
-            const float2 o = dir * float(k);
-            const int2 a = int2(clamp(float2(gid) + o, float2(0), float2(dim) - 1.0));
-            const int2 b = int2(clamp(float2(gid) - o, float2(0), float2(dim) - 1.0));
-            acc += (src.sample(s, float2(a) + float2(0.5)).rgb
-                  + src.sample(s, float2(b) + float2(0.5)).rgb) * weight;
-        }
-    }
-    return float4(acc, 1.0);
 }
 
 // ----------------------------------------------------------- downsample / upscale
@@ -287,21 +223,13 @@ fragment float4 fs_bloom_composite(
 
 // ----------------------------------------------------------------------- ssao
 //
-// Depth-only ambient occlusion, ported from the wgpu compute pass in
-// `renderer/ssao.rs`. Same algorithm, same constants; a fragment pass rather
-// than a compute one because that is what this backend's post chain is built
-// from. See that module for why each piece is shaped the way it is — in
-// particular why the normal is reconstructed with nearest-side derivatives and
-// why depth is linearised before anything compares it.
+// Depth-only ambient occlusion: the shared `ssao_*` functions, which the wgpu
+// compute pass in `renderer/ssao.rs` and its WebGL2 raster twin call too — see
+// them for why each piece is shaped the way it is. This pass only fetches
+// depth, at full resolution, as a fragment pass because that is what this
+// backend's post chain is built from.
 
-static inline float ssao_linear_depth(float d, constant SsaoParams &p) {
-    if (d >= 1.0) { return p.far_z; }
-    return (p.near_z * p.far_z) / max(p.far_z - d * (p.far_z - p.near_z), 1e-6);
-}
-
-// View-space position from a pixel and its linear depth. Only ratios matter for
-// a normal, so this needs the projection's shape and not the matrix.
-static inline float3 ssao_view_pos(
+static inline float3 ssao_view_pos_at(
     int2 c,
     int2 dim,
     depth2d<float, access::sample> depth,
@@ -309,11 +237,9 @@ static inline float3 ssao_view_pos(
 {
     constexpr sampler ds(coord::pixel, filter::nearest, address::clamp_to_edge);
     const int2 cc = clamp(c, int2(0), dim - 1);
-    const float z = ssao_linear_depth(depth.sample(ds, float2(cc) + float2(0.5)), p);
-    const float2 uv = (float2(cc) + 0.5) / float2(dim) * 2.0 - 1.0;
-    // `position` and the WGSL `textureLoad` share a top-left origin, so the
-    // -uv.y that puts +Y up in view space carries over unchanged.
-    return float3(uv.x * p.aspect * p.tan_half_fov * z, -uv.y * p.tan_half_fov * z, z);
+    // This backend's depth is never reversed.
+    const float z = ssao_linear_depth(depth.sample(ds, float2(cc) + float2(0.5)), p.near_z, p.far_z, false);
+    return ssao_view_pos(c, uint2(dim), z, p.aspect, p.tan_half_fov);
 }
 
 fragment float4 fs_ssao(
@@ -329,45 +255,17 @@ fragment float4 fs_ssao(
     // flip the frame against the rest of the chain.
     const float4 color = src.sample(cs, float2(c) + float2(0.5));
 
-    const float3 p0 = ssao_view_pos(c, dim, depth, p);
+    const float3 p0 = ssao_view_pos_at(c, dim, depth, p);
     // Background has no crevices, and the linearisation is least trustworthy at
     // the far plane — leave it rather than invent occlusion there.
     if (p0.z >= p.far_z * 0.999) { return color; }
-
-    // NEAREST-SIDE DERIVATIVES: a central difference across a silhouette returns
-    // a normal belonging to neither surface, and silhouettes are where the
-    // creases are.
-    const float3 xr = ssao_view_pos(c + int2(1, 0), dim, depth, p);
-    const float3 xl = ssao_view_pos(c - int2(1, 0), dim, depth, p);
-    const float3 yd = ssao_view_pos(c + int2(0, 1), dim, depth, p);
-    const float3 yu = ssao_view_pos(c - int2(0, 1), dim, depth, p);
-    float3 dx = xr - p0;
-    if (abs(xl.z - p0.z) < abs(xr.z - p0.z)) { dx = p0 - xl; }
-    float3 dy = yd - p0;
-    if (abs(yu.z - p0.z) < abs(yd.z - p0.z)) { dy = p0 - yu; }
-    const float3 n = normalize(cross(dx, dy));
-
-    // Screen-space radius shrinks with distance so the effect keeps a fixed size
-    // in the WORLD rather than a fixed number of pixels.
-    const float px = clamp(
-        p.radius / p0.z * float(dim.y) * 0.5 / max(p.tan_half_fov, 1e-4), 2.0, 64.0);
-
+    const float3 n = ssao_normal(p0,
+        ssao_view_pos_at(c + int2(1, 0), dim, depth, p), ssao_view_pos_at(c - int2(1, 0), dim, depth, p),
+        ssao_view_pos_at(c + int2(0, 1), dim, depth, p), ssao_view_pos_at(c - int2(0, 1), dim, depth, p));
+    const float px = ssao_radius_px(p.radius, p0.z, float(dim.y), p.tan_half_fov);
     float occ = 0.0;
     for (int i = 0; i < 12; i++) {
-        const float a = float(i) * 2.39996;                 // golden angle
-        const float r = px * sqrt((float(i) + 0.5) / 12.0); // uniform over the disc
-        const int2 sc = c + int2(float2(cos(a), sin(a)) * r);
-        const float3 ps = ssao_view_pos(sc, dim, depth, p);
-        const float3 v = ps - p0;
-        const float d = length(v);
-        if (d < 1e-4) { continue; }
-        // A sample occludes only if it sits IN FRONT of this surface; that dot
-        // is what stops a slanted plane from shadowing itself.
-        const float cosang = dot(n, v / d);
-        // Falloff, so a distant foreground object does not darken everything
-        // behind it: that is a silhouette, not a contact.
-        const float fall = clamp(1.0 - d / p.radius, 0.0, 1.0);
-        occ += max(cosang, 0.0) * fall;
+        occ += ssao_occlusion(n, p0, ssao_view_pos_at(ssao_tap(c, i, px), dim, depth, p), p.radius);
     }
     const float ao = clamp(1.0 - p.strength * (occ / 12.0), 0.0, 1.0);
     // Multiplied in linear light: an sRGB attachment hands back linear on sample
@@ -408,42 +306,31 @@ struct FilmParams {
     float _pad0;
 };
 
-/// Vignette and grain, mirroring `rgb_pack.rs` in the wgpu path.
+/// Vignette and grain: the shared `film_vignette` and `film_grain`, which the
+/// wgpu path's `rgb_pack.rs` calls too, so the film look does not depend on
+/// the backend.
 ///
 /// Both belong in a pass and not on the CPU: they are per-pixel work over the
 /// whole frame, and a CPU walk of an 8K image costs more than everything else
-/// the grade does. Kept identical to the wgpu version line for line, because a
-/// film look that differs by backend is a film look nobody can rely on.
+/// the grade does.
+///
+/// The attachment is sRGB, so `c` is linear: the vignette multiplies it as it
+/// stands, and the grain goes onto the encoded value — where "mid-tone" means
+/// what it does on the wgpu path — and comes back out of it.
 fragment float4 fs_film(
     FullscreenOut in [[stage_in]],
     texture2d<float, access::sample> src [[texture(0)]],
     constant FilmParams &p [[buffer(0)]])
 {
     constexpr sampler s(coord::pixel, filter::nearest, address::clamp_to_edge);
-    float4 c = src.sample(s, in.position.xy);
+    const float4 c = src.sample(s, in.position.xy);
     float3 rgb = c.rgb;
     const uint2 xy = uint2(in.position.xy);
-
     if (p.vignette > 0.0) {
-        // cos-fourth falloff — the one a real lens has. Normalised so the
-        // centre is untouched and only the corners lose light. Vignetting is
-        // lost *light*, so it multiplies in linear.
-        const float2 dim = float2(src.get_width(), src.get_height());
-        const float2 q = (float2(xy) + 0.5) / dim * 2.0 - 1.0;
-        const float f = 1.0 / (1.0 + dot(q, q) * 0.5);
-        rgb *= mix(1.0, f * f, p.vignette);
+        rgb *= film_vignette(xy, float2(src.get_width(), src.get_height()), p.vignette);
     }
     if (p.grain > 0.0) {
-        // Hashed on the pixel *and* the frame, so it moves: static grain is
-        // dirt on the lens, not grain. Weighted to the mid-tones, because film
-        // has almost none in the toe or the shoulder and an even sprinkle over
-        // black reads as sensor noise.
-        uint hsh = xy.x * 374761393u + xy.y * 668265263u + uint(p.seed) * 1274126177u;
-        hsh = hsh ^ (hsh >> 13u);
-        hsh = hsh * 1274126177u;
-        const float n = float((hsh ^ (hsh >> 16u)) & 0xffffu) / 65535.0 - 0.5;
-        const float l = dot(rgb, float3(0.299, 0.587, 0.114));
-        rgb = clamp(rgb + n * p.grain * (4.0 * l * (1.0 - l)), 0.0, 1.0);
+        rgb = srgb_decode(film_grain(srgb_encode(rgb), xy, p.seed, p.grain));
     }
     return float4(rgb, c.a);
 }
@@ -462,4 +349,18 @@ fragment float4 fs_tonemap(
     // Written to an sRGB attachment, which re-encodes on write — so this stays
     // linear and must not apply a gamma itself.
     return float4(aces(hdr), c.a);
+}
+
+// A straight-alpha RGBA overlay (text, panels, captions) over a finished
+// frame, one overlay texel per target pixel. The texture is sRGB, so the sample
+// is linear light; returned premultiplied for the `One, OneMinusSrcAlpha`
+// fullscreen blend, which makes it the same blend as `SrcAlpha,
+// OneMinusSrcAlpha` on the straight colour — the wgpu overlay pass's.
+fragment float4 fs_overlay(
+    FullscreenOut in [[stage_in]],
+    texture2d<float, access::sample> src [[texture(0)]])
+{
+    constexpr sampler s(coord::pixel, filter::nearest, address::clamp_to_edge);
+    const float4 c = src.sample(s, in.position.xy);
+    return float4(c.rgb * c.a, c.a);
 }

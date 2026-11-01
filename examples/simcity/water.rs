@@ -2,6 +2,7 @@
 #![allow(dead_code)]
 
 use super::*;
+use threers::marks::gpu;
 
 // ---------------------------------------------------------------------------
 // Water, driven by a compute shader.
@@ -64,7 +65,7 @@ pub(crate) const WATER_WGSL: &str = r#"
 struct Params {
     // x: seconds, y: amplitude, z: still-water level, w: unused
     wave : vec4<f32>,
-    // x: vertex count, rest unused
+    // x: vertex count, y: f32s a vertex (the renderer's layout), rest unused
     size : vec4<f32>,
 };
 
@@ -84,8 +85,9 @@ fn height(x : f32, z : f32, t : f32) -> f32 {
 fn main(@builtin(global_invocation_id) gid : vec3<u32>) {
     let n = u32(params.size.x);
     if (gid.x >= n) { return; }
-    // Interleaved vertex: position(3), normal(3), uv(2), colour(4), tangent(4).
-    let b = gid.x * 16u;
+    // Interleaved vertex: position(3), normal(3), then what the backend
+    // keeps — the stride is whichever renderer drew it.
+    let b = gid.x * u32(params.size.y);
 
     let x = verts[b + 0u];
     let z = verts[b + 2u];
@@ -109,27 +111,28 @@ fn main(@builtin(global_invocation_id) gid : vec3<u32>) {
 
 /// Owns the compute pipeline that animates the water surface.
 ///
-/// Raw wgpu on purpose: the renderer's job is to draw the mesh, and this
+/// On the renderer's own GPU — wgpu, or the native Metal backend — through
+/// `threers::marks::gpu`: the renderer's job is to draw the mesh, and this
 /// rewrites that mesh's vertices behind its back between frames. Nothing
 /// crosses host memory.
 #[allow(dead_code)]
 pub(crate) struct WaterSim {
-    pub(crate) pipeline: wgpu::ComputePipeline,
-    pub(crate) layout: wgpu::BindGroupLayout,
-    pub(crate) params: wgpu::Buffer,
-    pub(crate) bind: Option<wgpu::BindGroup>,
+    pub(crate) pipeline: gpu::ComputePipeline,
+    pub(crate) layout: gpu::BindGroupLayout,
+    pub(crate) params: gpu::Buffer,
+    pub(crate) bind: Option<(gpu::BindGroup, u32)>,
     pub(crate) vertices: u32,
     pub(crate) level: f32,
 }
 
 #[allow(dead_code)]
 impl WaterSim {
-    pub(crate) fn new(device: &wgpu::Device, vertices: u32, level: f32) -> Self {
-        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+    pub(crate) fn new(gpu: &gpu::Gpu, vertices: u32, level: f32) -> Self {
+        let module = gpu.create_shader_module(gpu::ShaderModuleDescriptor {
             label: Some("simcity water"),
-            source: wgpu::ShaderSource::Wgsl(WATER_WGSL.into()),
+            source: gpu::ShaderSource::Wgsl(WATER_WGSL.into()),
         });
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        let layout = gpu.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("simcity water bgl"),
             entries: &[
                 wgpu::BindGroupLayoutEntry {
@@ -154,14 +157,12 @@ impl WaterSim {
                 },
             ],
         });
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        let pipeline_layout = gpu.create_pipeline_layout(&gpu::PipelineLayoutDescriptor {
             label: Some("simcity water layout"),
-            // wgpu 30: layouts are optional per slot, and push constants are
-            // now "immediates".
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
-        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        let pipeline = gpu.create_compute_pipeline(&gpu::ComputePipelineDescriptor {
             label: Some("simcity water pipeline"),
             layout: Some(&pipeline_layout),
             module: &module,
@@ -169,7 +170,7 @@ impl WaterSim {
             compilation_options: Default::default(),
             cache: None,
         });
-        let params = device.create_buffer(&wgpu::BufferDescriptor {
+        let params = gpu.create_buffer(&wgpu::BufferDescriptor {
             label: Some("simcity water params"),
             size: 32,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
@@ -185,39 +186,38 @@ impl WaterSim {
         }
     }
 
-    /// Run one step. The geometry has to be on the GPU first, which is what
-    /// `upload_geometry` guarantees; after that its vertex buffer is ours to
-    /// write, and the bind group is built once and kept.
+    /// Run one step. `mesh` hands over the water's vertex buffer and its
+    /// `f32`s a vertex, the geometry uploaded first — asked once; after that
+    /// the buffer is ours to write, and the bind group is built once and
+    /// kept.
     pub(crate) fn step(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        renderer: &mut threers::Renderer,
-        geometry: &Arc<BufferGeometry>,
+        gpu: &gpu::Gpu,
+        mesh: impl FnOnce() -> Option<(gpu::Buffer, u32)>,
         time: f32,
         amplitude: f32,
     ) {
         if self.bind.is_none() {
-            renderer.upload_geometry(geometry);
-            let Some(buffer) = renderer.vertex_buffer(geometry) else {
+            let Some((buffer, floats)) = mesh() else {
                 return;
             };
-            self.bind = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+            let bind = gpu.create_bind_group(&gpu::BindGroupDescriptor {
                 label: Some("simcity water bind"),
                 layout: &self.layout,
                 entries: &[
-                    wgpu::BindGroupEntry {
+                    gpu::BindGroupEntry {
                         binding: 0,
                         resource: buffer.as_entire_binding(),
                     },
-                    wgpu::BindGroupEntry {
+                    gpu::BindGroupEntry {
                         binding: 1,
                         resource: self.params.as_entire_binding(),
                     },
                 ],
-            }));
+            });
+            self.bind = Some((bind, floats));
         }
-        let Some(bind) = &self.bind else {
+        let Some((bind, floats)) = &self.bind else {
             return;
         };
         let params: [f32; 8] = [
@@ -226,7 +226,7 @@ impl WaterSim {
             self.level,
             0.0,
             self.vertices as f32,
-            0.0,
+            *floats as f32,
             0.0,
             0.0,
         ];
@@ -234,9 +234,9 @@ impl WaterSim {
         for (i, v) in params.iter().enumerate() {
             bytes[i * 4..i * 4 + 4].copy_from_slice(&v.to_ne_bytes());
         }
-        queue.write_buffer(&self.params, 0, &bytes);
+        gpu.write_buffer(&self.params, 0, &bytes);
 
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        let mut encoder = gpu.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("simcity water encoder"),
         });
         {
@@ -248,6 +248,6 @@ impl WaterSim {
             pass.set_bind_group(0, bind, &[]);
             pass.dispatch_workgroups(self.vertices.div_ceil(64), 1, 1);
         }
-        queue.submit(Some(encoder.finish()));
+        gpu.submit(Some(encoder.finish()));
     }
 }

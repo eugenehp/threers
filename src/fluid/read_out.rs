@@ -252,8 +252,8 @@ impl History {
 /// [`Frames::LEN`] and [`Frames::SCALE_MS`] are substituted in, so the
 /// shader cannot disagree with the upload about how wide the row is or what
 /// a byte means. The MSL transcription in `src/metal/fluid.metal` carries
-/// the two as literals instead, because `FLUID_SHADER_SOURCE` is public and
-/// has to compile as it stands; `the_msl_read_out_agrees_about_the_row`
+/// the two as literals instead, because `FLUID_SHADER_SOURCE` is a public
+/// constant; `the_msl_read_out_agrees_about_the_row`
 /// holds them to these.
 pub(crate) fn glyphs() -> String {
     SOURCE

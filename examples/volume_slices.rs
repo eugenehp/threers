@@ -15,7 +15,7 @@ use std::f32::consts::FRAC_PI_2;
 use threers::extras::MarchingCubes;
 use threers::math::Quaternion;
 use threers::prelude::*;
-use threers::renderer::{readback, PixelRect};
+use threers::renderer::PixelRect;
 use threers::volume::{plane_to_voxel, Data3DTexture, GpuVolume, SliceParams, SliceRenderer};
 
 /// Voxels along each side.
@@ -134,17 +134,20 @@ fn planes() -> [(&'static str, Quaternion, Vector3); 4] {
     ]
 }
 
-/// The slices, drawn on the GPU into panes of their own.
-fn slice_panes(hr: &HeadlessRenderer, values: &[f32], labels: &[u64]) -> Vec<Vec<u8>> {
-    let (device, queue) = (hr.device(), hr.queue());
-    let density = GpuVolume::from_texture(device, queue, &Data3DTexture::from_f32(N, N, N, values));
-    let segments =
-        GpuVolume::from_texture(device, queue, &Data3DTexture::from_u64(N, N, N, labels));
-    let grey = SliceRenderer::window_level(device, FORMAT);
-    let tint = SliceRenderer::labels(device, FORMAT);
-    let grey_binding = grey.create_binding(device, &density);
-    let tint_binding = tint.create_binding(device, &segments);
-    let target = RenderTarget::new(device, P, P, FORMAT);
+/// The slices, drawn on the GPU into panes of their own: each over a
+/// cleared frame of `hr`'s, on whichever backend it runs.
+fn slice_panes(hr: &mut HeadlessRenderer, values: &[f32], labels: &[u64]) -> Vec<Vec<u8>> {
+    let gpu = hr.marks_gpu();
+    let density = GpuVolume::from_texture_on(&gpu, &Data3DTexture::from_f32(N, N, N, values));
+    let segments = GpuVolume::from_texture_on(&gpu, &Data3DTexture::from_u64(N, N, N, labels));
+    let grey = SliceRenderer::window_level(&gpu, FORMAT);
+    let tint = SliceRenderer::labels(&gpu, FORMAT);
+    let grey_binding = grey.create_binding(&gpu, &density);
+    let tint_binding = tint.create_binding(&gpu, &segments);
+    // An empty scene: the frame is its background, the panes' clear colour.
+    let mut blank = Scene::new();
+    blank.background = Color::new(0.006, 0.007, 0.01);
+    let camera = PerspectiveCamera::new(50.0, 1.0, 0.1, 10.0);
     let rect = PixelRect {
         x: 0,
         y: 0,
@@ -162,46 +165,18 @@ fn slice_panes(hr: &HeadlessRenderer, values: &[f32], labels: &[u64]) -> Vec<Vec
                 (P as f32, P as f32),
                 true,
             );
-            let mut encoder = device.create_command_encoder(&Default::default());
-            {
-                let _clear = encoder.begin_render_pass(&threers::wgpu::RenderPassDescriptor {
-                    label: Some("pane clear"),
-                    color_attachments: &[Some(threers::wgpu::RenderPassColorAttachment {
-                        view: &target.color_view,
-                        depth_slice: None,
-                        resolve_target: None,
-                        ops: threers::wgpu::Operations {
-                            load: threers::wgpu::LoadOp::Clear(threers::wgpu::Color {
-                                r: 0.006,
-                                g: 0.007,
-                                b: 0.01,
-                                a: 1.0,
-                            }),
-                            store: threers::wgpu::StoreOp::Store,
-                        },
-                    })],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                    multiview_mask: None,
-                });
-            }
+            hr.render(&mut blank, &camera);
+            let target = hr.mark_target();
+            let mut encoder = gpu.create_command_encoder(&Default::default());
             // Separate uniform writes need separate submissions: each draw
             // reads its binding's uniforms when the queue runs it.
-            grey.update(
-                queue,
-                &grey_binding,
-                &SliceParams::window(to_voxel, BLACK, WHITE),
-            );
-            grey.draw(&mut encoder, &target.color_view, rect, &grey_binding);
-            tint.update(
-                queue,
-                &tint_binding,
-                &SliceParams::labels(to_voxel, 7, 0.35),
-            );
-            tint.draw(&mut encoder, &target.color_view, rect, &tint_binding);
-            queue.submit([encoder.finish()]);
-            readback::texture_bytes(device, queue, &target.color_texture)
+            grey.update_on(&gpu, &grey_binding, &SliceParams::window(to_voxel, BLACK, WHITE));
+            grey.draw_on(&mut encoder, &target.color, rect, &grey_binding);
+            tint.update_on(&gpu, &tint_binding, &SliceParams::labels(to_voxel, 7, 0.35));
+            tint.draw_on(&mut encoder, &target.color, rect, &tint_binding);
+            gpu.submit([encoder.finish()]);
+            drop(target);
+            hr.read_rgba()
         })
         .collect()
 }
@@ -289,12 +264,14 @@ fn surfaces(structures: bool) -> Vec<u8> {
 
 fn main() {
     let (values, labels) = volumes();
-    let hr = HeadlessRenderer::builder()
+    let mut hr = HeadlessRenderer::builder()
         .size(P, P)
         .color_format(FORMAT)
         .build()
         .expect("a GPU adapter");
-    let mut panes = slice_panes(&hr, &values, &labels);
+    // The slices draw single-sampled, straight into the frame.
+    hr.set_msaa(1);
+    let mut panes = slice_panes(&mut hr, &values, &labels);
     panes.push(surfaces(false));
     panes.push(surfaces(true));
 

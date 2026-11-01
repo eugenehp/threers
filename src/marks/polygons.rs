@@ -1,5 +1,6 @@
 //! Filled and extruded polygons, many to a draw.
 
+use super::gpu;
 use super::{
     Column, ColumnFormat, KindUniforms, Mark, MarkCommon, MarkKind, PolygonMesh, PrepareContext,
 };
@@ -63,7 +64,7 @@ pub struct PolygonMarks {
     backgrounds: Column,
     index: Vec<u32>,
     index_dirty: bool,
-    index_gpu: Option<(wgpu::Buffer, u32)>,
+    index_gpu: Option<(gpu::Buffer, u32)>,
     /// Each feature's vertices, `start..end`.
     ranges: Vec<(usize, usize)>,
     /// Each vertex's point in its feature ([`PolygonMesh::source`]).
@@ -97,7 +98,7 @@ pub struct PolygonMarks {
     /// What the pattern columns were built for: (unit, origin, tile origin,
     /// atlas version), or none to build them.
     pattern_built: Option<(u64, [u64; 3], [u64; 2], u64)>,
-    pattern_gpu: Option<(u64, wgpu::BindGroup)>,
+    pattern_gpu: Option<(u64, gpu::BindGroup)>,
     /// Per feature, a procedural pattern ([`set_procedural`](Self::set_procedural)).
     procedural: Option<Vec<Option<ProceduralFrame>>>,
     /// World units one procedural pattern unit spans (before each feature's
@@ -552,7 +553,7 @@ impl Mark for PolygonMarks {
         u32::from(self.procedural.is_some())
     }
 
-    fn extra_bind_group(&self) -> Option<&wgpu::BindGroup> {
+    fn extra_bind_group(&self) -> Option<&gpu::BindGroup> {
         self.pattern_gpu.as_ref().map(|g| &g.1)
     }
 
@@ -584,11 +585,11 @@ impl Mark for PolygonMarks {
         // Walls (horizontal normals) before roofs, each in its order.
         let ordered: std::borrow::Cow<[u32]> = if self.walls_first {
             let nt: &[f32] = bytemuck::cast_slice(self.normal_top.bytes());
-            let roof = |t: &[u32; 3]| t.iter().all(|&v| nt.get(v as usize * 4 + 1).is_some_and(|y| y.abs() > 0.5));
-            let tris = self.index.as_chunks::<3>().0;
+            let roof = |t: &[u32]| t.iter().all(|&v| nt.get(v as usize * 4 + 1).is_some_and(|y| y.abs() > 0.5));
+            let tris = || self.index.chunks_exact(3);
 
-            let walls = tris.iter().filter(|t| !roof(t));
-            let roofs = tris.iter().filter(|t| roof(t));
+            let walls = tris().filter(|t| !roof(t));
+            let roofs = tris().filter(|t| roof(t));
             std::borrow::Cow::Owned(walls.chain(roofs).flatten().copied().collect())
         } else {
             std::borrow::Cow::Borrowed(&self.index)
@@ -623,7 +624,7 @@ impl Mark for PolygonMarks {
             &mut self.backgrounds,
         ]
     }
-    fn index_buffer(&self) -> Option<(&wgpu::Buffer, u32)> {
+    fn index_buffer(&self) -> Option<(&gpu::Buffer, u32)> {
         self.index_gpu.as_ref().map(|(b, n)| (b, *n))
     }
 }

@@ -32,6 +32,13 @@ pub enum MetalError {
     Allocation(String),
     /// An unsupported input reached the backend — see the message.
     Unsupported(String),
+    /// The GPU did not run a command buffer: it finished with
+    /// `MTLCommandBufferStatusError`. Carries the `NSError`'s description.
+    ///
+    /// On iOS this is what an app in the background gets for any GPU work
+    /// (`Insufficient Permission (to submit GPU work from background)`) — the
+    /// frame is lost, not the renderer; draw again once the app is active.
+    CommandBuffer(String),
 }
 
 impl std::fmt::Display for MetalError {
@@ -44,6 +51,7 @@ impl std::fmt::Display for MetalError {
             Self::PipelineCreation(m) => write!(f, "Metal pipeline creation failed: {m}"),
             Self::Allocation(m) => write!(f, "Metal allocation failed: {m}"),
             Self::Unsupported(m) => write!(f, "unsupported by the Metal backend: {m}"),
+            Self::CommandBuffer(m) => write!(f, "Metal command buffer failed: {m}"),
         }
     }
 }
@@ -60,18 +68,27 @@ pub struct MetalDevice {
     device: Owned,
     queue: Owned,
     library: Owned,
+    /// The MSL `library` was compiled from, which a custom shader's library
+    /// starts from.
+    source: std::sync::Arc<str>,
 }
+
+// SAFETY: `MTLDevice`, `MTLCommandQueue` and `MTLLibrary` are documented
+// thread-safe: any thread may message them, concurrently. Command buffers
+// drawn from the shared queue belong to whoever made them.
+unsafe impl Send for MetalDevice {}
+unsafe impl Sync for MetalDevice {}
 
 impl MetalDevice {
     /// Acquire the system default device and compile the built-in shader
     /// library. Compilation happens once, at construction — roughly 100 ms.
     pub fn new() -> Result<Self, MetalError> {
-        Self::with_shader_source(super::SHADER_SOURCE)
+        Self::with_shader_source(super::shader_source())
     }
 
     /// As [`new`](Self::new), but compiling `source` instead of the built-in
     /// library. The source must define the same entry points; see
-    /// [`crate::metal::SHADER_SOURCE`].
+    /// [`crate::metal::shader_source`].
     pub fn with_shader_source(source: &str) -> Result<Self, MetalError> {
         let _pool = AutoreleasePool::new();
         // MTLCreateSystemDefaultDevice returns +1 — take it, do not retain again.
@@ -92,7 +109,7 @@ impl MetalDevice {
     pub unsafe fn adopt(device: Id) -> Result<Self, MetalError> {
         let _pool = AutoreleasePool::new();
         let device = Owned::retain(device).ok_or(MetalError::NoDevice)?;
-        Self::build(device, super::SHADER_SOURCE)
+        Self::build(device, super::shader_source())
     }
 
     /// Command queue + shader library on an owned device.
@@ -104,6 +121,7 @@ impl MetalDevice {
             device,
             queue,
             library,
+            source: source.into(),
         })
     }
 
@@ -117,6 +135,11 @@ impl MetalDevice {
     #[inline]
     pub fn queue_id(&self) -> Id {
         self.queue.id()
+    }
+
+    /// The MSL source of [`library_id`](Self::library_id).
+    pub fn shader_source(&self) -> &str {
+        &self.source
     }
 
     /// The compiled `MTLLibrary`. Borrowed — do not release.
@@ -220,6 +243,28 @@ impl std::fmt::Debug for MetalDevice {
             .field("unified_memory", &self.has_unified_memory())
             .finish()
     }
+}
+
+/// `MTLCommandBufferStatusError`.
+const COMMAND_BUFFER_STATUS_ERROR: NSUInteger = 5;
+
+/// `[cmd waitUntilCompleted]`, then whether the GPU actually ran it.
+///
+/// A command buffer can complete without executing — iOS fails every one an
+/// app commits from the background, and a GPU fault or timeout fails the one
+/// it hit. Reading a buffer it was meant to fill would return whatever was
+/// there before, so a reader waits through this instead.
+///
+/// # Safety
+/// `cmd` must be a committed `MTLCommandBuffer`.
+pub(crate) unsafe fn wait_until_completed(cmd: Id) -> Result<(), MetalError> {
+    let _pool = AutoreleasePool::new();
+    let _: () = msg0(cmd, sel!("waitUntilCompleted"));
+    let status: NSUInteger = msg0(cmd, sel!("status"));
+    if status == COMMAND_BUFFER_STATUS_ERROR {
+        return Err(MetalError::CommandBuffer(error_message(msg0(cmd, sel!("error")))));
+    }
+    Ok(())
 }
 
 /// `[device newLibraryWithSource:options:error:]`, with the compiler's

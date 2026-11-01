@@ -455,7 +455,7 @@ async fn sprites_images_and_styled_lines_draw_in_the_browser() {
 /// bind group — through Tint and on WebGL2.
 #[wasm_bindgen_test]
 async fn a_custom_mark_kind_draws_in_the_browser() {
-    use threers::marks::{
+    use threers::marks::{gpu, 
         Column, ColumnFormat, CustomShader, MarkCommon, MarkKind, PrepareContext,
     };
     const WGSL: &str = r#"
@@ -508,7 +508,7 @@ fn fs_pick(in : SqOut) -> @location(0) vec2<u32> {
         common: MarkCommon,
         shader: CustomShader,
         positions: Column,
-        bind: Option<(wgpu::BindGroupLayout, wgpu::BindGroup)>,
+        bind: Option<(gpu::BindGroupLayout, gpu::BindGroup)>,
     }
     impl Mark for Squares {
         fn kind(&self) -> MarkKind {
@@ -529,10 +529,10 @@ fn fs_pick(in : SqOut) -> @location(0) vec2<u32> {
         fn custom_shader(&self) -> Option<&CustomShader> {
             Some(&self.shader)
         }
-        fn extra_layout(&self) -> Option<&wgpu::BindGroupLayout> {
+        fn extra_layout(&self) -> Option<&gpu::BindGroupLayout> {
             self.bind.as_ref().map(|b| &b.0)
         }
-        fn extra_bind_group(&self) -> Option<&wgpu::BindGroup> {
+        fn extra_bind_group(&self) -> Option<&gpu::BindGroup> {
             self.bind.as_ref().map(|b| &b.1)
         }
         fn prepare(&mut self, ctx: &PrepareContext) {
@@ -559,7 +559,7 @@ fn fs_pick(in : SqOut) -> @location(0) vec2<u32> {
                 view_formats: &[],
             });
             ctx.queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
+                gpu::TexelCopyTextureInfo {
                     texture: &tex,
                     mip_level: 0,
                     origin: wgpu::Origin3d::ZERO,
@@ -601,17 +601,17 @@ fn fs_pick(in : SqOut) -> @location(0) vec2<u32> {
             let sampler = ctx
                 .device
                 .create_sampler(&wgpu::SamplerDescriptor::default());
-            let bg = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            let bg = ctx.device.create_bind_group(&gpu::BindGroupDescriptor {
                 label: None,
                 layout: &layout,
                 entries: &[
-                    wgpu::BindGroupEntry {
+                    gpu::BindGroupEntry {
                         binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&view),
+                        resource: gpu::BindingResource::TextureView(&view),
                     },
-                    wgpu::BindGroupEntry {
+                    gpu::BindGroupEntry {
                         binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&sampler),
+                        resource: gpu::BindingResource::Sampler(&sampler),
                     },
                 ],
             });

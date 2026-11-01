@@ -46,6 +46,7 @@
 //! | `nurbs` | NURBS curve/surface + geometry (`nurbs`) |
 //! | `raytrace` | Path tracer entry points (`raytrace`) |
 //! | [`captions`] | Cue tracks / overlay (`captions`) |
+//! | `metal` | The Metal backend's full working set — surfaces, the reusable render-thread pool, attachments, post chain, pixel formats (`metal`; macOS, iOS, tvOS, visionOS) |
 //! | `video` | GIF/APNG/WebM/H.264/HEVC encoders, MP4, the hardware-first `Mp4Encoder`, and the decoders (`native-codec`; decoders also `video` or `native-decode`) |
 //!
 //! # What is deliberately not in any prelude module
@@ -104,16 +105,20 @@ pub use crate::textures::{
 /// Offscreen rendering, and the PNG round trip that usually follows it.
 #[cfg(not(target_arch = "wasm32"))]
 pub use crate::renderer::headless::{HeadlessBuilder, HeadlessConfig, HeadlessRenderer};
+cfg_apple! {
+    pub use crate::renderer::layer::{LayerGpu, LayerRenderer};
+}
 pub use crate::utils::png::{decode_png, encode_png, PngImage};
 
 /// Vector SVG export, and the raster-in-SVG passthrough beside it.
 pub use crate::renderers::{svg_from_rgba, SvgOptions, SvgRenderer, SvgShading};
 
-/// The Metal backend's entry points, when the `metal` feature is on.
-#[cfg(all(feature = "metal", any(target_os = "macos", target_os = "ios")))]
-pub use crate::metal::{
-    MetalDevice, MetalError, MetalHeadlessRenderer, MetalRenderTarget, MetalRenderer, RenderView,
-};
+cfg_metal! {
+    /// The Metal backend's entry points, when the `metal` feature is on.
+    pub use crate::metal::{
+        MetalDevice, MetalError, MetalHeadlessRenderer, MetalRenderTarget, MetalRenderer, RenderView,
+    };
+}
 
 /// The visionOS frame loop, when the `visionos` feature is on and that is what
 /// is being built.
@@ -209,6 +214,33 @@ pub mod video {
     pub use crate::codec::GifEncoder;
 }
 
+cfg_metal! {
+    /// Everything a Metal app reaches for, on top of the root's renderer and
+    /// device: windows and layers, the reusable render threads, attachments and
+    /// views for stereo, the post chain, and the pixel formats (`metal`).
+    ///
+    /// ```ignore
+    /// use threers::prelude::*;
+    /// use threers::prelude::metal::*;
+    ///
+    /// let device = MetalDevice::new()?;
+    /// let pool = MetalRenderPool::new(&device, MetalRenderPoolConfig::for_this_device());
+    /// ```
+    pub mod metal {
+        pub use crate::metal::enums::pixel_format;
+        pub use crate::metal::{
+            MetalBloom, MetalDevice, MetalError, MetalHeadlessBuilder, MetalHeadlessConfig,
+            MetalHeadlessRenderer, MetalJob, MetalJobError, MetalRenderPool, MetalRenderPoolConfig,
+            MetalRenderStats, MetalRenderTarget, MetalRenderer, MetalSsao, MetalSurface, MetalWorker,
+            MetalWorkerQos, PassAttachments, PostFxChain, RenderView, SsaoSettings, SurfaceFrame,
+        };
+        #[cfg(feature = "fluid")]
+        pub use crate::metal::{fluid_shader_source, MetalFluid};
+        #[cfg(all(feature = "visionos", target_os = "visionos"))]
+        pub use crate::metal::visionos::{ImmersiveRenderer, WorldTracking};
+    }
+}
+
 /// Subtitle cues and on-screen overlay (`captions`).
 #[cfg(feature = "captions")]
 pub mod captions {
@@ -299,6 +331,17 @@ mod tests {
         let image: PngImage = decode_png(&png).unwrap();
         assert_eq!((image.width, image.height), (2, 1));
         assert_eq!(image.rgba, rgba);
+    }
+
+    cfg_metal! {
+            #[test]
+        fn nested_metal_module_names_the_working_set() {
+            use super::metal::*;
+            let config = MetalRenderPoolConfig::for_this_device();
+            assert!(config.threads >= 1);
+            let _ = (pixel_format::BGRA8_UNORM_SRGB, MetalWorkerQos::UserInteractive);
+            let _ = std::mem::size_of::<(MetalSurface, MetalRenderPool, PassAttachments, PostFxChain)>();
+        }
     }
 
     #[test]

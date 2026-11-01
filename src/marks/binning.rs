@@ -5,7 +5,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use wgpu::util::DeviceExt;
+use super::gpu;
 
 /// Weights are summed as fixed point: this many units a weight of 1.
 const WEIGHT_SCALE: f32 = 4096.0;
@@ -92,21 +92,29 @@ impl BinRequest {
     /// Block until they arrive. Native only: a browser cannot wait.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn wait(self, device: &wgpu::Device) -> Option<ScreenBins> {
-        loop {
+        self.wait_on(&gpu::Gpu::from(device))
+    }
+
+    /// [`wait`](Self::wait) on `gpu`.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn wait_on(self, gpu: &gpu::Gpu) -> Option<ScreenBins> {
+        // A Metal submit has finished by now; wgpu needs polling.
+        for _ in 0..1_000_000 {
             if let Some(b) = self.try_take() {
                 return Some(b);
             }
-            device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
+            gpu.poll_wait();
         }
+        None
     }
 }
 
 /// Points kept on the GPU, binned into screen cells for any view.
 pub struct ScreenBinner {
-    pipeline: wgpu::ComputePipeline,
-    layout: wgpu::BindGroupLayout,
-    points: wgpu::Buffer,
-    weights: wgpu::Buffer,
+    pipeline: gpu::ComputePipeline,
+    layout: gpu::BindGroupLayout,
+    points: gpu::Buffer,
+    weights: gpu::Buffer,
     count: u32,
     weighted: bool,
 }
@@ -115,15 +123,26 @@ impl ScreenBinner {
     /// Whether the device runs compute shaders (WebGPU and native do;
     /// WebGL2 does not).
     pub fn supported(device: &wgpu::Device) -> bool {
-        device.limits().max_compute_workgroup_size_x >= 256 && device.limits().max_storage_buffers_per_shader_stage >= 4
+        Self::supported_on(&gpu::Gpu::from(device))
+    }
+
+    /// [`supported`](Self::supported) for either backend — Metal always is.
+    pub fn supported_on(gpu: &gpu::Gpu) -> bool {
+        gpu.is_metal()
+            || (gpu.limits().max_compute_workgroup_size_x >= 256 && gpu.limits().max_storage_buffers_per_shader_stage >= 4)
     }
 
     /// `positions` relative to the origin the views will be given in, and
     /// optional weights.
     pub fn new(device: &wgpu::Device, positions: &[[f32; 3]], weights: Option<&[f32]>) -> Self {
-        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        Self::new_on(&gpu::Gpu::from(device), positions, weights)
+    }
+
+    /// [`new`](Self::new) on `device` — wgpu, or the native Metal backend.
+    pub fn new_on(device: &gpu::Gpu, positions: &[[f32; 3]], weights: Option<&[f32]>) -> Self {
+        let module = device.create_shader_module(gpu::ShaderModuleDescriptor {
             label: Some("threers screen binner"),
-            source: wgpu::ShaderSource::Wgsl(SHADER.into()),
+            source: gpu::ShaderSource::Wgsl(SHADER.into()),
         });
         let entry = |binding, ty| wgpu::BindGroupLayoutEntry {
             binding,
@@ -149,12 +168,12 @@ impl ScreenBinner {
                 ),
             ],
         });
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        let pipeline_layout = device.create_pipeline_layout(&gpu::PipelineLayoutDescriptor {
             label: Some("threers screen binner pipeline layout"),
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
-        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        let pipeline = device.create_compute_pipeline(&gpu::ComputePipelineDescriptor {
             label: Some("threers screen binner"),
             layout: Some(&pipeline_layout),
             module: &module,
@@ -193,6 +212,12 @@ impl ScreenBinner {
     /// Bin the points seen through `view_proj` (origin-relative, as the
     /// positions) on a `viewport` of pixels into `cell`-pixel squares.
     pub fn bin(&self, device: &wgpu::Device, queue: &wgpu::Queue, view_proj: [f32; 16], viewport: (u32, u32), cell: f32) -> BinRequest {
+        self.bin_on(&gpu::Gpu::from((device, queue)), view_proj, viewport, cell)
+    }
+
+    /// [`bin`](Self::bin) on `gpu`, the one the binner was made on.
+    pub fn bin_on(&self, gpu: &gpu::Gpu, view_proj: [f32; 16], viewport: (u32, u32), cell: f32) -> BinRequest {
+        let (device, queue) = (gpu, gpu);
         let cell = cell.max(1.0);
         let cols = ((viewport.0 as f32 / cell).ceil() as u32).max(1);
         let rows = ((viewport.1 as f32 / cell).ceil() as u32).max(1);
@@ -227,15 +252,15 @@ impl ScreenBinner {
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let bind = device.create_bind_group(&gpu::BindGroupDescriptor {
             label: Some("threers screen binner bind group"),
             layout: &self.layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: self.points.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: self.weights.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: counts.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 3, resource: sums.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 4, resource: uniform.as_entire_binding() },
+                gpu::BindGroupEntry { binding: 0, resource: self.points.as_entire_binding() },
+                gpu::BindGroupEntry { binding: 1, resource: self.weights.as_entire_binding() },
+                gpu::BindGroupEntry { binding: 2, resource: counts.as_entire_binding() },
+                gpu::BindGroupEntry { binding: 3, resource: sums.as_entire_binding() },
+                gpu::BindGroupEntry { binding: 4, resource: uniform.as_entire_binding() },
             ],
         });
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("threers screen binning") });

@@ -9,6 +9,7 @@
 //! Vertex buffers rather than storage buffers, because WebGL2 has none of the
 //! latter and every mark has to draw there too.
 
+use super::gpu;
 use std::ops::Range;
 
 /// What a column holds and how the GPU reads it.
@@ -133,7 +134,7 @@ pub struct Column {
     dirty: Option<Range<usize>>,
     /// Rows the GPU buffer was filled for — padding included.
     uploaded_rows: usize,
-    pub(crate) buffer: Option<wgpu::Buffer>,
+    pub(crate) buffer: Option<gpu::Buffer>,
 }
 
 impl Column {
@@ -353,7 +354,7 @@ impl Column {
     }
 
     /// Bring the GPU buffer up to date for `rows` instances.
-    pub(crate) fn upload(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, rows: usize) {
+    pub(crate) fn upload(&mut self, device: &gpu::Device, queue: &gpu::Queue, rows: usize) {
         let stride = self.format.stride() as usize;
         let rows = rows.max(1);
         let need = rows * stride;

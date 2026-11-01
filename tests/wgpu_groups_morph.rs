@@ -116,7 +116,7 @@ fn groups_draw_their_materials_where_the_raycaster_names_them() {
         };
         assert_eq!(&c[..3], &expect, "pixel ({x}, {y})");
         checked += 1;
-        colours[c.iter().take(3).position(|&v| v == 255).map_or(3, |k| k)] += 1;
+        colours[c.iter().take(3).position(|&v| v == 255).unwrap_or(3)] += 1;
     }
     eprintln!("groups: {checked} pixels checked, red/green/blue/none {colours:?}");
     // Every material shows, and so does the cut quad's background.

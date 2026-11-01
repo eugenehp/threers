@@ -25,6 +25,7 @@
 //! # }
 //! ```
 
+mod backend;
 mod composer;
 mod context;
 mod pass;
@@ -34,6 +35,7 @@ pub mod random;
 mod target;
 mod upload;
 
+pub use backend::PostBackend;
 pub use composer::EffectComposer;
 pub use context::{kinds, Dest, Fx, PassContext, SceneDraw, Screen, Visibility};
 pub use params::{ParamInfo, ParamKind, ParamValue};

@@ -89,7 +89,7 @@
 mod cpu;
 pub(crate) mod passes;
 pub(crate) mod read_out;
-mod shader;
+pub(crate) mod shader;
 mod volume;
 mod volume_shader;
 #[cfg(all(target_arch = "wasm32", not(threers_no_js_bindings)))]
@@ -451,6 +451,66 @@ struct Pointer {
     color: [f32; 3],
 }
 
+/// The mouse and every finger, between frames: the input both backends'
+/// `pointer_down`, `pointer_move` and `pointer_up` keep, in uv.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Pointers(Vec<Pointer>);
+
+impl Pointers {
+    /// Press `id` at uv `(x, y)`, painting `color`; the slot of a released
+    /// pointer is reused.
+    pub(crate) fn down(&mut self, id: i32, x: f32, y: f32, color: [f32; 3]) {
+        let p = Pointer { id, x, y, dx: 0.0, dy: 0.0, down: true, moved: false, color };
+        match self.0.iter_mut().find(|p| p.id == id || !p.down) {
+            Some(slot) => *slot = p,
+            None => self.0.push(p),
+        }
+    }
+
+    /// Move a pressed pointer to uv `(x, y)` on a canvas of `aspect`. Ignored
+    /// for a pointer that is not down, which keeps a hovering mouse from
+    /// painting.
+    pub(crate) fn move_to(&mut self, id: i32, x: f32, y: f32, aspect: f32) {
+        let Some(p) = self.0.iter_mut().find(|p| p.id == id && p.down) else {
+            return;
+        };
+        let (px, py) = (p.x, p.y);
+        p.x = x;
+        p.y = y;
+        // The delta drives the splat's force, and is corrected for aspect so a
+        // diagonal drag pushes diagonally on a non-square canvas.
+        p.dx = (p.x - px) * if aspect < 1.0 { aspect } else { 1.0 };
+        p.dy = (p.y - py) / if aspect > 1.0 { aspect } else { 1.0 };
+        p.moved = p.dx != 0.0 || p.dy != 0.0;
+    }
+
+    /// Release `id`. Its slot is reused by the next press.
+    pub(crate) fn up(&mut self, id: i32) {
+        if let Some(p) = self.0.iter_mut().find(|p| p.id == id) {
+            p.down = false;
+        }
+    }
+
+    /// A new colour for every pointer, from `color`.
+    pub(crate) fn recolor(&mut self, mut color: impl FnMut() -> [f32; 3]) {
+        self.0.iter_mut().for_each(|p| p.color = color());
+    }
+
+    /// A splat for every pointer that moved since the last call, its motion
+    /// scaled by `force` and then forgotten, so it is not applied twice:
+    /// `(x, y, dx, dy, color)`.
+    pub(crate) fn take_moved(&mut self, force: f32) -> Vec<(f32, f32, f32, f32, [f32; 3])> {
+        self.0
+            .iter_mut()
+            .filter(|p| p.moved)
+            .map(|p| {
+                p.moved = false;
+                (p.x, p.y, p.dx * force, p.dy * force, p.color)
+            })
+            .collect()
+    }
+}
+
 /// xorshift64*, so splat positions and hues are reproducible from the seed.
 /// Nothing here needs a good generator; it needs the same numbers twice.
 struct Rng(u64);
@@ -559,7 +619,7 @@ struct MgLevel {
 /// Four texels, not two: the coarsest grid is solved by smoothing it hard, and
 /// below about four across there is nothing left for a five-point stencil to
 /// average that clamp-to-edge is not already giving it.
-const MG_COARSEST: u32 = 4;
+pub(crate) const MG_COARSEST: u32 = 4;
 
 /// Relaxation weight for the multigrid smoother: `p <- (1-w)p + w*jacobi(p)`.
 ///
@@ -585,7 +645,7 @@ const MG_COARSEST: u32 = 4;
 /// It stays a parameter of the sweep rather than being folded away, because
 /// the argument is a property of the divergence operator — change that and 4/5
 /// is right again.
-const MG_WEIGHT: f32 = 1.0;
+pub(crate) const MG_WEIGHT: f32 = 1.0;
 
 fn mg_levels(
     device: &wgpu::Device,
@@ -724,7 +784,7 @@ pub struct FluidSim {
     sampler: wgpu::Sampler,
     ubos: Ubos,
 
-    pointers: Vec<Pointer>,
+    pointers: Pointers,
     /// When the last render was, and the smoothed rate since.
     rate: read_out::Rate,
     /// The last sixty-four frame times, for the chart under the number.
@@ -812,7 +872,7 @@ impl FluidSim {
             pipes,
             sampler,
             ubos,
-            pointers: Vec::new(),
+            pointers: Pointers::default(),
             rate: Default::default(),
             history: Default::default(),
             rng: Rng::new(config.seed),
@@ -1021,46 +1081,19 @@ impl FluidSim {
     /// mouse or the touch. `-1` is the convention for a mouse.
     pub fn pointer_down(&mut self, id: i32, x: f32, y: f32) {
         let color = self.generate_color();
-        let (u, v) = (x / self.width as f32, y / self.height as f32);
-        let p = Pointer {
-            id,
-            x: u,
-            y: v,
-            dx: 0.0,
-            dy: 0.0,
-            down: true,
-            moved: false,
-            color,
-        };
-        match self.pointers.iter_mut().find(|p| p.id == id || !p.down) {
-            Some(slot) => *slot = p,
-            None => self.pointers.push(p),
-        }
+        self.pointers.down(id, x / self.width as f32, y / self.height as f32, color);
     }
 
     /// Move a pressed pointer. Ignored for a pointer that is not down, which is
     /// what keeps a hovering mouse from painting.
     pub fn pointer_move(&mut self, id: i32, x: f32, y: f32) {
         let (w, h) = (self.width as f32, self.height as f32);
-        let aspect = w / h;
-        let Some(p) = self.pointers.iter_mut().find(|p| p.id == id && p.down) else {
-            return;
-        };
-        let (px, py) = (p.x, p.y);
-        p.x = x / w;
-        p.y = y / h;
-        // The delta drives the splat's force, and is corrected for aspect so a
-        // diagonal drag pushes diagonally on a non-square canvas.
-        p.dx = (p.x - px) * if aspect < 1.0 { aspect } else { 1.0 };
-        p.dy = (p.y - py) / if aspect > 1.0 { aspect } else { 1.0 };
-        p.moved = p.dx != 0.0 || p.dy != 0.0;
+        self.pointers.move_to(id, x / w, y / h, w / h);
     }
 
     /// Release a pointer. Its slot is reused by the next press.
     pub fn pointer_up(&mut self, id: i32) {
-        if let Some(p) = self.pointers.iter_mut().find(|p| p.id == id) {
-            p.down = false;
-        }
+        self.pointers.up(id);
     }
 
     /// `count` splats at random positions, with random hues and enough velocity
@@ -1165,40 +1198,21 @@ impl FluidSim {
         self.color_timer += dt * self.config.color_update_speed;
         if self.color_timer >= 1.0 {
             self.color_timer = self.color_timer.fract();
-            for i in 0..self.pointers.len() {
-                let color = self.generate_color();
-                self.pointers[i].color = color;
-            }
+            let mut pointers = std::mem::take(&mut self.pointers);
+            pointers.recolor(|| self.generate_color());
+            self.pointers = pointers;
         }
     }
 
     /// Splat for every pointer that moved since the last frame, and forget the
     /// motion so it is not applied twice.
     fn apply_inputs(&mut self) {
-        let moved: Vec<Splat> = self
-            .pointers
-            .iter_mut()
-            .filter(|p| p.moved)
-            .map(|p| {
-                p.moved = false;
-                Splat {
-                    x: p.x,
-                    y: p.y,
-                    dx: p.dx,
-                    dy: p.dy,
-                    color: p.color,
-                }
-            })
-            .collect();
-        let force = self.config.splat_force;
         // One submit for every finger, rather than one each.
-        let scaled: Vec<Splat> = moved
+        let scaled: Vec<Splat> = self
+            .pointers
+            .take_moved(self.config.splat_force)
             .into_iter()
-            .map(|s| Splat {
-                dx: s.dx * force,
-                dy: s.dy * force,
-                ..s
-            })
+            .map(|(x, y, dx, dy, color)| Splat { x, y, dx, dy, color })
             .collect();
         self.record_splats(&scaled);
     }

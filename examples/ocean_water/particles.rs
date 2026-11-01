@@ -15,10 +15,11 @@
 //! thrown off the waves that are actually there rather than scattered over the
 //! sea at random.
 
+use threers::marks::gpu;
 use std::sync::Arc;
 
 use threers::{
-    BufferAttribute, BufferGeometry, Material, Mesh, Object3D, ObjectId, Renderer, Scene,
+    BufferAttribute, BufferGeometry, Material, Mesh, Object3D, ObjectId, Scene,
     ShaderMaterial, Vector3,
 };
 
@@ -159,8 +160,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // the index buffer is fixed, so there is nothing to compact.
     let size = select(params.size, 0.0, life <= 0.0);
 
-    // Camera-facing quad. The vertex layout is threers' interleaved 16 floats:
-    // position(3) normal(3) uv(2) colour(4) tangent(4).
+    // Camera-facing quad. The vertex layout is threers' interleaved $STRIDE
+    // floats: position(3) normal(3) uv(2) colour(4), and on wgpu tangent(4).
     // `var`, not `let`: WGSL only allows a dynamic index into a variable.
     // `var`, not `let`: WGSL only allows a dynamic index into a variable.
     var corners = array<vec2<f32>, 4>(
@@ -184,7 +185,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     for (var c = 0u; c < 4u; c = c + 1u) {
         let q = corners[c];
         let world = p + (ax * q.x + ay * q.y * params.stretch) * size;
-        let o = (i * 4u + c) * 16u;
+        let o = (i * 4u + c) * $STRIDEu;
         verts[o] = world.x;
         verts[o + 1u] = world.y;
         verts[o + 2u] = world.z;
@@ -217,9 +218,9 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 "#;
 
 pub struct Particles {
-    pipeline: wgpu::ComputePipeline,
-    bind_group: wgpu::BindGroup,
-    params: wgpu::Buffer,
+    pipeline: gpu::ComputePipeline,
+    bind_group: gpu::BindGroup,
+    params: gpu::Buffer,
     count: u32,
     kind: Kind,
     extent: f32,
@@ -238,8 +239,8 @@ impl Particles {
     /// Build a system of `count` particles and add its mesh to the scene.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        device: &wgpu::Device,
-        renderer: &mut Renderer,
+        device: &gpu::Device,
+        host: &mut dyn crate::waves_gpu::MeshHost,
         scene: &mut Scene,
         fft: &OceanFft,
         kind: Kind,
@@ -278,25 +279,27 @@ impl Particles {
             geometry.clone(),
             Arc::new(Material::Shader(material)),
         )));
-        renderer.upload_geometry(&geometry);
-        let vertex_buffer = renderer
+        host.upload_geometry(&geometry);
+        let vertex_buffer = host
             .vertex_buffer(&geometry)
             .expect("particle geometry must be uploaded first");
 
-        let source = SHADER.replace(
-            "$CASCADES",
-            &crate::waves_gpu::cascade_wgsl(
-                "cascade_a",
-                "cascade_b",
-                "cascade_c",
-                "cascade_samp",
-                peak_wavelength,
-                &fft.cas,
-            ),
-        );
-        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        let source = SHADER
+            .replace(
+                "$CASCADES",
+                &crate::waves_gpu::cascade_wgsl(
+                    "cascade_a",
+                    "cascade_b",
+                    "cascade_c",
+                    "cascade_samp",
+                    peak_wavelength,
+                    &fft.cas,
+                ),
+            )
+            .replace("$STRIDE", &host.vertex_floats().to_string());
+        let module = device.create_shader_module(gpu::ShaderModuleDescriptor {
             label: Some("ocean particles"),
-            source: wgpu::ShaderSource::Wgsl(source.into()),
+            source: gpu::ShaderSource::Wgsl(source.into()),
         });
 
         let params = device.create_buffer(&wgpu::BufferDescriptor {
@@ -313,9 +316,7 @@ impl Particles {
             init[i * 8 + 3] = -(i as f32 % 97.0) * 0.01;
             init[i * 8 + 7] = i as f32 + 1.0;
         }
-        let state = wgpu::util::DeviceExt::create_buffer_init(
-            device,
-            &wgpu::util::BufferInitDescriptor {
+        let state = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("particle state"),
                 contents: bytemuck::cast_slice(&init),
                 usage: wgpu::BufferUsages::STORAGE,
@@ -376,47 +377,47 @@ impl Particles {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let bind_group = device.create_bind_group(&gpu::BindGroupDescriptor {
             label: Some("particle bg"),
             layout: &layout,
             entries: &[
-                wgpu::BindGroupEntry {
+                gpu::BindGroupEntry {
                     binding: 0,
                     resource: params.as_entire_binding(),
                 },
-                wgpu::BindGroupEntry {
+                gpu::BindGroupEntry {
                     binding: 1,
                     resource: state.as_entire_binding(),
                 },
-                wgpu::BindGroupEntry {
+                gpu::BindGroupEntry {
                     binding: 2,
                     resource: vertex_buffer.as_entire_binding(),
                 },
-                wgpu::BindGroupEntry {
+                gpu::BindGroupEntry {
                     binding: 3,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
+                    resource: gpu::BindingResource::Sampler(&sampler),
                 },
-                wgpu::BindGroupEntry {
+                gpu::BindGroupEntry {
                     binding: 4,
-                    resource: wgpu::BindingResource::TextureView(&fft.cascade_views[0]),
+                    resource: gpu::BindingResource::TextureView(&fft.cascade_views[0]),
                 },
-                wgpu::BindGroupEntry {
+                gpu::BindGroupEntry {
                     binding: 5,
-                    resource: wgpu::BindingResource::TextureView(&fft.cascade_views[1]),
+                    resource: gpu::BindingResource::TextureView(&fft.cascade_views[1]),
                 },
-                wgpu::BindGroupEntry {
+                gpu::BindGroupEntry {
                     binding: 6,
-                    resource: wgpu::BindingResource::TextureView(&fft.cascade_views[2]),
+                    resource: gpu::BindingResource::TextureView(&fft.cascade_views[2]),
                 },
             ],
         });
 
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        let pipeline_layout = device.create_pipeline_layout(&gpu::PipelineLayoutDescriptor {
             label: Some("particle pipeline layout"),
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
-        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        let pipeline = device.create_compute_pipeline(&gpu::ComputePipelineDescriptor {
             label: Some("particle pipeline"),
             layout: Some(&pipeline_layout),
             module: &module,
@@ -450,8 +451,8 @@ impl Particles {
     #[allow(clippy::too_many_arguments)]
     pub fn dispatch(
         &self,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
+        queue: &gpu::Queue,
+        encoder: &mut gpu::CommandEncoder,
         camera: Vector3,
         right: Vector3,
         up: Vector3,

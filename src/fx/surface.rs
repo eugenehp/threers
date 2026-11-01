@@ -235,41 +235,44 @@ impl Backdrop {
     }
 }
 
-/// Floats in [`metal_bytes`]: the sixteen uniform slots, the strand points,
-/// spikes and drops, and the polygon — each padded to its maximum.
-#[cfg(all(feature = "metal", any(target_os = "macos", target_os = "ios")))]
-pub(crate) const METAL_FLOATS: usize =
-    16 * 4 + MAX_STRANDS * STRAND_POINTS * 4 + MAX_SPIKES * 8 + MAX_DROPS * 4 + super::shape::MAX_POLYGON_POINTS * 2;
-
-/// Whether `material` is a surface (or a backdrop) drawn by this module —
-/// what the Metal renderer, which runs no WGSL, recognises to draw it with its
-/// own port of the shader.
-#[cfg(all(feature = "metal", any(target_os = "macos", target_os = "ios")))]
-pub(crate) fn is_surface(material: &ShaderMaterial) -> bool {
-    material.vertex.as_deref() == Some(VERTEX)
+cfg_metal! {
+    /// Floats in [`metal_bytes`]: the sixteen uniform slots, the strand points,
+    /// spikes and drops, and the polygon — each padded to its maximum.
+    pub(crate) const METAL_FLOATS: usize =
+        16 * 4 + MAX_STRANDS * STRAND_POINTS * 4 + MAX_SPIKES * 8 + MAX_DROPS * 4 + super::shape::MAX_POLYGON_POINTS * 2;
 }
 
-/// A surface material's uniforms and arrays in one block, laid out as the
-/// Metal port's `FxSurfaceData` reads them. Under Metal's 4 KB limit for
-/// `setBytes`, so no buffer is needed.
-#[cfg(all(feature = "metal", any(target_os = "macos", target_os = "ios")))]
-pub(crate) fn metal_bytes(material: &ShaderMaterial) -> Box<[f32; METAL_FLOATS]> {
-    let mut out = Box::new([0.0f32; METAL_FLOATS]);
-    let mut at = 0;
-    for slot in material.data_slots() {
-        out[at..at + 4].copy_from_slice(&slot);
-        at += 4;
+cfg_metal! {
+    /// Whether `material` is a surface (or a backdrop) drawn by this module —
+    /// what the Metal renderer, which runs no WGSL, recognises to draw it with its
+    /// own port of the shader.
+    pub(crate) fn is_surface(material: &ShaderMaterial) -> bool {
+        material.vertex.as_deref() == Some(VERTEX)
     }
-    for (src, len) in [
-        (&material.storage0, MAX_STRANDS * STRAND_POINTS * 4),
-        (&material.storage1, MAX_SPIKES * 8 + MAX_DROPS * 4),
-        (&material.storage2, super::shape::MAX_POLYGON_POINTS * 2),
-    ] {
-        let n = src.len().min(len);
-        out[at..at + n].copy_from_slice(&src[..n]);
-        at += len;
+}
+
+cfg_metal! {
+    /// A surface material's uniforms and arrays in one block, laid out as the
+    /// Metal port's `FxSurfaceData` reads them. Under Metal's 4 KB limit for
+    /// `setBytes`, so no buffer is needed.
+    pub(crate) fn metal_bytes(material: &ShaderMaterial) -> Box<[f32; METAL_FLOATS]> {
+        let mut out = Box::new([0.0f32; METAL_FLOATS]);
+        let mut at = 0;
+        for slot in material.data_slots() {
+            out[at..at + 4].copy_from_slice(&slot);
+            at += 4;
+        }
+        for (src, len) in [
+            (&material.storage0, MAX_STRANDS * STRAND_POINTS * 4),
+            (&material.storage1, MAX_SPIKES * 8 + MAX_DROPS * 4),
+            (&material.storage2, super::shape::MAX_POLYGON_POINTS * 2),
+        ] {
+            let n = src.len().min(len);
+            out[at..at + n].copy_from_slice(&src[..n]);
+            at += len;
+        }
+        out
     }
-    out
 }
 
 const FRAGMENT: &str = include_str!("surface.wgsl");

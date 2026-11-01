@@ -32,6 +32,13 @@ const W: u32 = 640;
 const H: u32 = 640;
 
 fn main() {
+    // On one core the full 512 samples take minutes and print nothing new for
+    // tens of seconds at a time, which is easy to mistake for a hang.
+    #[cfg(not(feature = "parallel"))]
+    eprintln!(
+        "path_trace: tracing on one core; add `--features parallel` to use them all \
+         (or SPP=64 for a quick look)"
+    );
     let mut scene = build_scene();
 
     // The camera sits at the open front of the box looking straight in. A 40

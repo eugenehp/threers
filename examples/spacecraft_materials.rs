@@ -31,9 +31,10 @@ use threers::cameras::Camera;
 use threers::materials::presets;
 use threers::{
     AmbientLight, BoxGeometry, CylinderGeometry, DirectionalLight, Material, Mesh, Object3D,
-    OrbitControls, PerspectiveCamera, PhysicalMaterial, PointerEvent, Renderer, Scene,
+    OrbitControls, PerspectiveCamera, PhysicalMaterial, PointerEvent, Scene,
     SphereGeometry, TorusGeometry, Vector3,
 };
+use threers::renderer::WindowRenderer;
 
 use winit::{
     dpi::PhysicalPosition,
@@ -86,82 +87,9 @@ async fn run() {
             .expect("window"),
     );
 
-    let instance = {
-        // wgpu 30 dropped `Default` here; the display handle is only
-        // consulted by GLES/Wayland, not Vulkan, Metal or DX12.
-        let mut d = wgpu::InstanceDescriptor::new_without_display_handle();
-        d.backends = wgpu::Backends::PRIMARY;
-        wgpu::Instance::new(d)
-    };
-    let surface = instance.create_surface(window.clone()).expect("surface");
-
-    let adapter = instance
-        .request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::default(),
-            compatible_surface: Some(&surface),
-            force_fallback_adapter: false,
-            apply_limit_buckets: false,
-        })
-        .await
-        .expect("adapter");
-
-    // Downlevel defaults allow 16 sampled textures and 16 samplers per stage,
-    // and the main pass declares 20 of each in the fragment stage — material
-    // maps, the shadow atlases and the environment all bind there. Without
-    // raising these two, `Renderer::new` fails wgpu 30's pipeline-layout
-    // validation outright. `HeadlessRenderer` raises the same pair.
-    let adapter_limits = adapter.limits();
-    // `using_resolution` for the texture size, too: the renderer allocates a
-    // 4096 shadow map and downlevel caps 2D textures at 2048.
-    let mut limits = wgpu::Limits::downlevel_defaults().using_resolution(adapter_limits.clone());
-    limits.max_sampled_textures_per_shader_stage =
-        adapter_limits.max_sampled_textures_per_shader_stage;
-    limits.max_samplers_per_shader_stage = adapter_limits.max_samplers_per_shader_stage;
-
-    let (device, queue) = adapter
-        .request_device(
-            &wgpu::DeviceDescriptor {
-                label: Some("threers device"),
-                required_features: wgpu::Features::empty(),
-                required_limits: limits,
-                ..Default::default()
-            },
-        )
-        .await
-        .expect("device");
-
-    let device = Arc::new(device);
-    let queue = Arc::new(queue);
-
-    let size = window.inner_size();
-    let caps = surface.get_capabilities(&adapter);
-    let format = caps
-        .formats
-        .iter()
-        .copied()
-        .find(|f| f.is_srgb())
-        .unwrap_or(caps.formats[0]);
-
-    let mut config = wgpu::SurfaceConfiguration {
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-        format,
-        width: size.width.max(1),
-        height: size.height.max(1),
-        present_mode: caps.present_modes[0],
-        alpha_mode: caps.alpha_modes[0],
-        view_formats: vec![],
-        desired_maximum_frame_latency: 2,
-        color_space: wgpu::SurfaceColorSpace::Srgb,
-    };
-    surface.configure(&device, &config);
-
-    let mut renderer = Renderer::new(
-        device.clone(),
-        queue.clone(),
-        format,
-        config.width,
-        config.height,
-    );
+    // wgpu by default; the native Metal backend with `--features metal` and
+    // `THREERS_BACKEND=metal`.
+    let mut view = WindowRenderer::new(window.clone()).expect("a GPU for the window");
 
     let mut scene = Scene::new();
     scene.background = Color::from_hex(0x03040a);
@@ -184,7 +112,7 @@ async fn run() {
     scene.add(bounce);
 
     let mut camera =
-        PerspectiveCamera::new(42.0, config.width as f32 / config.height as f32, 0.1, 200.0);
+        PerspectiveCamera::new(42.0, view.aspect(), 0.1, 200.0);
     camera.position = Vector3::new(4.2, 2.4, 6.0);
     camera.look_at(Vector3::ZERO);
 
@@ -201,11 +129,8 @@ async fn run() {
                 match event {
                     WindowEvent::CloseRequested => target.exit(),
                     WindowEvent::Resized(new_size) => {
-                        config.width = new_size.width.max(1);
-                        config.height = new_size.height.max(1);
-                        surface.configure(&device, &config);
-                        renderer.resize(config.width, config.height);
-                        camera.set_aspect(config.width as f32 / config.height as f32);
+                        view.resize(new_size.width, new_size.height);
+                        camera.set_aspect(view.aspect());
                     }
                     WindowEvent::MouseInput { state, button, .. } => {
                         let pressed = state == ElementState::Pressed;
@@ -230,9 +155,10 @@ async fn run() {
                                 wheel: 0.0,
                                 rotating: input.rotating,
                                 panning: input.panning,
+                                ..Default::default()
                             },
                             &mut camera,
-                            (config.width as f32, config.height as f32),
+                            { let (w, h) = view.size(); (w as f32, h as f32) },
                         );
                     }
                     WindowEvent::MouseWheel { delta, .. } => {
@@ -247,27 +173,15 @@ async fn run() {
                                 wheel,
                                 rotating: false,
                                 panning: false,
+                                ..Default::default()
                             },
                             &mut camera,
-                            (config.width as f32, config.height as f32),
+                            { let (w, h) = view.size(); (w as f32, h as f32) },
                         );
                     }
                     WindowEvent::RedrawRequested => {
                         scene.update_world();
-                        match surface.get_current_texture() {
-                            wgpu::CurrentSurfaceTexture::Success(frame)
-                            | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {
-                                let view = frame
-                                    .texture
-                                    .create_view(&wgpu::TextureViewDescriptor::default());
-                                renderer.render(&mut scene, &camera, &view, false);
-                                queue.present(frame);
-                            }
-                            wgpu::CurrentSurfaceTexture::Lost | wgpu::CurrentSurfaceTexture::Outdated => {
-                                surface.configure(&device, &config);
-                            }
-                            e => log::error!("surface error: {e:?}"),
-                        }
+                        view.render(&mut scene, &camera);
                         window_for_loop.request_redraw();
                     }
                     _ => {}

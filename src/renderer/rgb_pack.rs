@@ -229,7 +229,7 @@ impl RgbPack {
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("threers rgb pack"),
-            source: wgpu::ShaderSource::Wgsl(SHADER.into()),
+            source: wgpu::ShaderSource::Wgsl(shader().into()),
         });
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("threers rgb pack layout"),
@@ -548,6 +548,11 @@ impl RgbPack {
     }
 }
 
+/// [`SHADER`] with the shared functions it calls (the film grade's).
+fn shader() -> String {
+    format!("{SHADER}\n{}", super::shader::shared_functions_wgsl())
+}
+
 const SHADER: &str = r#"
 struct Params {
     width    : u32,
@@ -783,32 +788,14 @@ fn texel(i : u32) -> vec3<u32> {
         rgb = vec3<f32>(to_srgb(lin.r), to_srgb(lin.g), to_srgb(lin.b));
     }
     // THE FILM GRADE, before the overlay for the reason given on with_post_film.
-    if (p.vig > 0.0 || p.grain > 0.0) {
-        let dim = vec2<f32>(textureDimensions(src));
-        if (p.vig > 0.0) {
-            // cos-fourth falloff -- the one a real lens has. Normalised so the
-            // centre is untouched and only the corners lose light. Vignetting
-            // is lost LIGHT, so it multiplies in linear like the AO term.
-            let q = (vec2<f32>(xy) + 0.5) / dim * 2.0 - 1.0;
-            let f = 1.0 / (1.0 + dot(q, q) * 0.5);
-            let k = mix(1.0, f * f, p.vig);
-            let lin = vec3<f32>(to_linear(rgb.r), to_linear(rgb.g), to_linear(rgb.b)) * k;
-            rgb = vec3<f32>(to_srgb(lin.r), to_srgb(lin.g), to_srgb(lin.b));
-        }
-        if (p.grain > 0.0) {
-            // Hashed on the pixel AND the frame, so it moves: static grain is
-            // dirt on the lens, not grain. Weighted to the mid-tones, because
-            // film has almost none in the toe or the shoulder and an even
-            // sprinkle over black reads as sensor noise.
-            var hsh = xy.x * 374761393u + xy.y * 668265263u
-                    + u32(p.seed) * 1274126177u;
-            hsh = hsh ^ (hsh >> 13u);
-            hsh = hsh * 1274126177u;
-            let n = f32((hsh ^ (hsh >> 16u)) & 0xffffu) / 65535.0 - 0.5;
-            let l = dot(rgb, vec3<f32>(0.299, 0.587, 0.114));
-            rgb = clamp(rgb + n * p.grain * (4.0 * l * (1.0 - l)),
-                        vec3<f32>(0.0), vec3<f32>(1.0));
-        }
+    // Both halves are the shared `film_vignette` / `film_grain`, which the
+    // Metal backend's `fs_film` calls too.
+    if (p.vig > 0.0) {
+        let k = film_vignette(xy, vec2<f32>(textureDimensions(src)), p.vig);
+        rgb = srgb3(lin3(rgb) * k);
+    }
+    if (p.grain > 0.0) {
+        rgb = film_grain(rgb, xy, p.seed, p.grain);
     }
     // The overlay goes on LAST, over bloom and everything else: it is graphics
     // laid on the picture, not part of the scene, so nothing should bloom it or

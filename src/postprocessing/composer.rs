@@ -4,7 +4,8 @@ use super::context::{kinds, Dest, Fx, PassContext, Screen};
 use super::pass::{MaskRole, Pass};
 use super::target::{ensure, Target, INTERMEDIATE_FORMAT};
 use crate::cameras::Camera;
-use crate::renderer::{RenderTarget, Renderer};
+use super::PostBackend;
+use crate::renderer::RenderTarget;
 use crate::scene::Scene;
 
 /// three.js `EffectComposer`.
@@ -120,6 +121,10 @@ impl EffectComposer {
     /// The format of the views [`render`](Self::render) draws into.
     pub fn set_screen_format(&mut self, format: wgpu::TextureFormat) {
         self.screen_format = format;
+    }
+
+    pub fn screen_format(&self) -> wgpu::TextureFormat {
+        self.screen_format
     }
 
     fn effective(&self) -> (u32, u32) {
@@ -249,7 +254,7 @@ impl EffectComposer {
     }
 
     /// Allocate (or resize) the two buffers now rather than on the first render.
-    pub fn ensure_buffers(&mut self, renderer: &mut Renderer) {
+    pub fn ensure_buffers(&mut self, renderer: &mut dyn PostBackend) {
         let (w, h) = self.effective();
         if self.user_target {
             if let Some(t) = &self.rt1 {
@@ -268,7 +273,7 @@ impl EffectComposer {
     /// size). Passes' scene and camera indices are all 0 here.
     pub fn render(
         &mut self,
-        renderer: &mut Renderer,
+        renderer: &mut dyn PostBackend,
         scene: &mut Scene,
         camera: &dyn Camera,
         view: &wgpu::TextureView,
@@ -286,7 +291,7 @@ impl EffectComposer {
     /// [`render`](Self::render) into a render target instead of a view.
     pub fn render_to_target(
         &mut self,
-        renderer: &mut Renderer,
+        renderer: &mut dyn PostBackend,
         scene: &mut Scene,
         camera: &dyn Camera,
         target: Target,
@@ -301,7 +306,7 @@ impl EffectComposer {
     /// clock when `None`.
     pub fn render_frame(
         &mut self,
-        renderer: &mut Renderer,
+        renderer: &mut dyn PostBackend,
         scenes: &mut [&mut Scene],
         cameras: &[&dyn Camera],
         screen: &Screen<'_>,
@@ -390,6 +395,6 @@ impl EffectComposer {
     /// The render target behind `readBuffer`, for a caller that wants the
     /// chain's result as a texture.
     pub fn read_render_target(&self) -> Option<&std::sync::Arc<RenderTarget>> {
-        self.read_buffer().map(|t| t.render_target())
+        self.read_buffer().and_then(|t| t.wgpu_render_target())
     }
 }

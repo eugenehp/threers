@@ -1,5 +1,6 @@
 //! Any geometry, drawn once per row.
 
+use super::gpu;
 use super::{
     Column, ColumnFormat, InstancedGeometry, KindUniforms, Mark, MarkCommon, MarkKind,
     PrepareContext,
@@ -7,7 +8,7 @@ use super::{
 use crate::core::BufferGeometry;
 
 /// The uploaded mesh: vertices, vertex count, and indices with their count.
-type MeshGpu = (wgpu::Buffer, u32, Option<(wgpu::Buffer, u32)>);
+type MeshGpu = (gpu::Buffer, u32, Option<(gpu::Buffer, u32)>);
 
 /// One mesh drawn at every row's position, scaled per row and lit by the
 /// view's light — deck.gl's `ColumnLayer` and `SimpleMeshLayer`.
@@ -30,11 +31,11 @@ pub struct ShapeMarks {
     vertex_colors: Vec<f32>,
     /// An image from an atlas the mesh is textured with, by its uvs.
     texture: Option<(super::SharedAtlas, String)>,
-    texture_gpu: Option<(u64, wgpu::BindGroup)>,
+    texture_gpu: Option<(u64, gpu::BindGroup)>,
     /// A texture made on the GPU instead of an atlas: its view and a
     /// generation that changes with it, holding sRGB bytes premultiplied
     /// by alpha in a linear format (a frame drawn by the marks).
-    gpu_texture: Option<(std::sync::Arc<wgpu::TextureView>, u64)>,
+    gpu_texture: Option<(std::sync::Arc<gpu::TextureView>, u64)>,
     /// The atlas version the image's place was taken at, and the place:
     /// `[x, y, width, height]` of the atlas, 0 to 1.
     texture_version: Option<u64>,
@@ -181,7 +182,7 @@ impl ShapeMarks {
     /// drew into a plain `Rgba8Unorm` target, sRGB bytes premultiplied by
     /// alpha — over the whole of its uvs (0 to 1, clamped). `generation`
     /// changes when the view does. Replaces [`set_texture`](Self::set_texture)'s.
-    pub fn set_gpu_texture(&mut self, texture: Option<(std::sync::Arc<wgpu::TextureView>, u64)>) {
+    pub fn set_gpu_texture(&mut self, texture: Option<(std::sync::Arc<gpu::TextureView>, u64)>) {
         if texture.as_ref().map(|t| t.1) != self.gpu_texture.as_ref().map(|t| t.1) {
             self.texture_gpu = None;
         }
@@ -283,12 +284,12 @@ impl Mark for ShapeMarks {
     fn prepare(&mut self, ctx: &PrepareContext) {
         if let Some((view, generation)) = &self.gpu_texture {
             if self.texture_gpu.as_ref().is_none_or(|g| g.0 != *generation) {
-                let bg = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                let bg = ctx.device.create_bind_group(&gpu::BindGroupDescriptor {
                     label: Some("threers shape gpu texture"),
                     layout: &ctx.resources.texture_layout,
                     entries: &[
-                        wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(view) },
-                        wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&ctx.resources.mip_sampler) },
+                        gpu::BindGroupEntry { binding: 0, resource: gpu::BindingResource::TextureView(view) },
+                        gpu::BindGroupEntry { binding: 1, resource: gpu::BindingResource::Sampler(&ctx.resources.mip_sampler) },
                     ],
                 });
                 self.texture_gpu = Some((*generation, bg));
@@ -377,7 +378,7 @@ impl Mark for ShapeMarks {
         let gpu = self.gpu_texture.is_some();
         u32::from(gpu) | (u32::from(gpu && self.cover_only) << 1)
     }
-    fn extra_bind_group(&self) -> Option<&wgpu::BindGroup> {
+    fn extra_bind_group(&self) -> Option<&gpu::BindGroup> {
         self.texture_gpu.as_ref().map(|g| &g.1)
     }
     fn geometry(&self) -> Option<InstancedGeometry<'_>> {

@@ -11,7 +11,7 @@
 //! [`COMMON_WGSL`]. [`slots`] is the Rust side of that same contract; the two
 //! have to be edited together.
 
-use std::sync::Arc;
+use threers::marks::gpu;
 
 use threers::{Material, ShaderMaterial};
 
@@ -129,7 +129,7 @@ pub fn water_material(slots: Vec<[f32; 4]>, peak_wavelength: f32, cas: &Cascades
 pub fn seabed_material(
     slots: Vec<[f32; 4]>,
     peak_wavelength: f32,
-    cascades: [Arc<wgpu::TextureView>; 3],
+    cascades: [gpu::TextureView; 3],
     cas: &Cascades,
 ) -> Material {
     let src = format!("{COMMON_WGSL}{SEABED_BODY}").replace(

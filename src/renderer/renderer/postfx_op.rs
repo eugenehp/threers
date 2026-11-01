@@ -342,7 +342,7 @@ impl Renderer {
                     .create_shader_module(wgpu::ShaderModuleDescriptor {
                         label: Some("threers postfx op shader"),
                         source: wgpu::ShaderSource::Wgsl(
-                            crate::renderer::shader::POSTFX_SHADER.into(),
+                            crate::renderer::shader::postfx_shader().into(),
                         ),
                     }),
             );
@@ -617,7 +617,7 @@ impl Renderer {
 /// as that target holds colour: a display holds the sRGB encoding (an sRGB
 /// format encodes on its own); a stored 8-bit target is read back through a
 /// decoding view, so it too holds the encoding; a half-float one, `c`.
-fn stored_clear(c: [f64; 4], format: wgpu::TextureFormat, display: bool) -> wgpu::Color {
+pub(crate) fn stored_clear(c: [f64; 4], format: wgpu::TextureFormat, display: bool) -> wgpu::Color {
     let encode = !format.is_srgb() && (display || format != wgpu::TextureFormat::Rgba16Float);
     let e = |v: f64| {
         if encode {
