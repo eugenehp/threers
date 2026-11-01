@@ -26,10 +26,10 @@
 //! yet, the next frame simply does not queue another — no growing chain of
 //! staging buffers, and no stall.
 
+use threers::marks::gpu;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use wgpu::util::DeviceExt;
 
 use crate::ocean_fft::OceanFft;
 
@@ -59,13 +59,13 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 "#;
 
 pub struct Probe {
-    pipeline: wgpu::ComputePipeline,
-    bind_group: wgpu::BindGroup,
-    points: wgpu::Buffer,
-    result: wgpu::Buffer,
+    pipeline: gpu::ComputePipeline,
+    bind_group: gpu::BindGroup,
+    points: gpu::Buffer,
+    result: gpu::Buffer,
     /// Behind an `Arc` because the map callback outlives this call and needs
-    /// its own handle; `wgpu::Buffer` is not itself cloneable.
-    staging: Arc<wgpu::Buffer>,
+    /// its own handle; `gpu::Buffer` is not itself cloneable.
+    staging: Arc<gpu::Buffer>,
     /// True from the moment a readback is queued until its answer lands.
     in_flight: Arc<AtomicBool>,
     /// The most recent answer, and how many of its entries are meaningful.
@@ -75,7 +75,7 @@ pub struct Probe {
 }
 
 impl Probe {
-    pub fn new(device: &wgpu::Device, fft: &OceanFft, peak_wavelength: f32) -> Probe {
+    pub fn new(device: &gpu::Device, fft: &OceanFft, peak_wavelength: f32) -> Probe {
         let source = SHADER.replace(
             "$CASCADES",
             &crate::waves_gpu::cascade_wgsl(
@@ -87,9 +87,9 @@ impl Probe {
                 &fft.cas,
             ),
         );
-        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        let module = device.create_shader_module(gpu::ShaderModuleDescriptor {
             label: Some("ocean probe"),
-            source: wgpu::ShaderSource::Wgsl(source.into()),
+            source: gpu::ShaderSource::Wgsl(source.into()),
         });
 
         let bytes = (CAPACITY * 16) as u64;
@@ -156,43 +156,43 @@ impl Probe {
                 tex(5),
             ],
         });
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let bind_group = device.create_bind_group(&gpu::BindGroupDescriptor {
             label: Some("ocean probe bg"),
             layout: &layout,
             entries: &[
-                wgpu::BindGroupEntry {
+                gpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
+                    resource: gpu::BindingResource::Sampler(&sampler),
                 },
-                wgpu::BindGroupEntry {
+                gpu::BindGroupEntry {
                     binding: 1,
                     resource: points.as_entire_binding(),
                 },
-                wgpu::BindGroupEntry {
+                gpu::BindGroupEntry {
                     binding: 2,
                     resource: result.as_entire_binding(),
                 },
-                wgpu::BindGroupEntry {
+                gpu::BindGroupEntry {
                     binding: 3,
-                    resource: wgpu::BindingResource::TextureView(&fft.cascade_views[0]),
+                    resource: gpu::BindingResource::TextureView(&fft.cascade_views[0]),
                 },
-                wgpu::BindGroupEntry {
+                gpu::BindGroupEntry {
                     binding: 4,
-                    resource: wgpu::BindingResource::TextureView(&fft.cascade_views[1]),
+                    resource: gpu::BindingResource::TextureView(&fft.cascade_views[1]),
                 },
-                wgpu::BindGroupEntry {
+                gpu::BindGroupEntry {
                     binding: 5,
-                    resource: wgpu::BindingResource::TextureView(&fft.cascade_views[2]),
+                    resource: gpu::BindingResource::TextureView(&fft.cascade_views[2]),
                 },
             ],
         });
 
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        let pipeline_layout = device.create_pipeline_layout(&gpu::PipelineLayoutDescriptor {
             label: Some("ocean probe pipeline layout"),
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
-        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        let pipeline = device.create_compute_pipeline(&gpu::ComputePipelineDescriptor {
             label: Some("ocean probe pipeline"),
             layout: Some(&pipeline_layout),
             module: &module,
@@ -219,8 +219,8 @@ impl Probe {
     /// it rides the same one every other compute pass in the frame does.
     pub fn dispatch(
         &mut self,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
+        queue: &gpu::Queue,
+        encoder: &mut gpu::CommandEncoder,
         points: &[[f32; 2]],
     ) {
         if self.in_flight.load(Ordering::Acquire) || points.is_empty() {

@@ -249,6 +249,7 @@ use crate::textures::{CubeTexture, Texture, TextureFormat};
 // Post-fx draws described as data, for the composer in `crate::postprocessing`.
 mod postfx_op;
 pub use postfx_op::{PostFxBlend, PostFxNoise, PostFxOp, PostFxOutput};
+pub(crate) use postfx_op::stored_clear;
 
 fn rt_sample_format(format: wgpu::TextureFormat) -> wgpu::TextureFormat {
     if format == wgpu::TextureFormat::Rgba16Float {
@@ -770,6 +771,11 @@ fn local_bounding_sphere(geom: &BufferGeometry) -> Option<Sphere> {
     if let Some(s) = geom.bounding_sphere {
         return Some(s);
     }
+    // A compute pass moves its vertices; the CPU positions are not where
+    // it is, so it has no bounds to cull by.
+    if geom.gpu_writable {
+        return None;
+    }
     let mut lo = Vector3::new(f32::INFINITY, f32::INFINITY, f32::INFINITY);
     let mut hi = Vector3::new(f32::NEG_INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
     for p in geom.positions()? {
@@ -875,7 +881,9 @@ impl ToneMapping {
     /// linear colour, like the WGSL `apply_tone_mapping` does after it scales.
     pub fn apply(self, c: [f32; 3]) -> [f32; 3] {
         match self {
-            ToneMapping::None | ToneMapping::Linear => c,
+            ToneMapping::None => c,
+            // three.js's `LinearToneMapping` clamps, as `linear_tonemap` does.
+            ToneMapping::Linear => c.map(|x| x.clamp(0.0, 1.0)),
             ToneMapping::AcesFilmic => aces_cpu(c),
             ToneMapping::Neutral => neutral_cpu(c),
             ToneMapping::AgX => agx_cpu(c),
@@ -993,6 +1001,38 @@ fn agx_cpu(c: [f32; 3]) -> [f32; 3] {
 /// The material's `RenderState` is not in it: that is applied over the stock
 /// pipeline as a state variant (see `pipeline_state`).
 type CustomPipelineKey = (u64, bool, bool, bool, u32);
+
+/// A cache keyed by a geometry's address.
+///
+/// The address is an identity and nothing more: no key is ever dereferenced
+/// (the impl below is the only `unsafe` in this file), so the map can move
+/// between threads with the renderer that owns it. A raw pointer in the key
+/// would otherwise make the whole [`Renderer`] `!Send`, and a renderer
+/// drawing into an app's layer has to be handed to the thread that draws.
+struct IdentityKeyed<K, V>(HashMap<K, V>);
+
+// SAFETY: see above — the pointers in `K` are compared and hashed, never
+// followed. `V` carries its own bound.
+unsafe impl<K, V: Send> Send for IdentityKeyed<K, V> {}
+
+impl<K, V> Default for IdentityKeyed<K, V> {
+    fn default() -> Self {
+        Self(HashMap::new())
+    }
+}
+
+impl<K, V> std::ops::Deref for IdentityKeyed<K, V> {
+    type Target = HashMap<K, V>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<K, V> std::ops::DerefMut for IdentityKeyed<K, V> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
 
 /// GPU renderer: scene draws, shadow maps, environment sampling, post-fx.
 pub struct Renderer {
@@ -1266,7 +1306,7 @@ pub struct Renderer {
     hw_depth_tex: wgpu::Texture,
     depth_size: (u32, u32),
 
-    geom_cache: HashMap<*const BufferGeometry, CachedGpuMesh>,
+    geom_cache: IdentityKeyed<*const BufferGeometry, CachedGpuMesh>,
     /// Whether to skip colour-pass draws the camera cannot see. On by default,
     /// matching three.js, where `Object3D.frustumCulled` starts true.
     frustum_culling: bool,
@@ -1295,9 +1335,9 @@ pub struct Renderer {
     shadow_stats: (u64, u64),
     /// Renders that drew the shadow maps.
     shadow_updates: u64,
-    skin_attr_cache: HashMap<*const BufferGeometry, wgpu::Buffer>,
+    skin_attr_cache: IdentityKeyed<*const BufferGeometry, wgpu::Buffer>,
     /// Morph-target textures, by geometry (rebuilt on a version change).
-    morph_cache: HashMap<*const BufferGeometry, MorphTexture>,
+    morph_cache: IdentityKeyed<*const BufferGeometry, MorphTexture>,
     /// Each `InstancedMesh`'s instance buffers (matrices and tints in slot
     /// 0, custom columns in slot 1), kept across frames and rewritten only
     /// when the data changes — they used to be allocated anew every frame.
@@ -1308,7 +1348,7 @@ pub struct Renderer {
     /// Source of `InstanceBuffer::stamp`.
     instance_stamps: u64,
     /// Each geometry's [`UvSetTexture`], for those with `uv1`/`uv2`/`uv3`.
-    uv_cache: HashMap<*const BufferGeometry, UvSetTexture>,
+    uv_cache: IdentityKeyed<*const BufferGeometry, UvSetTexture>,
     /// Bound for geometry without extra uv sets (they read zero, as an
     /// attribute a geometry lacks does in three.js).
     default_uv_sets: (wgpu::Texture, wgpu::TextureView),
@@ -1316,7 +1356,7 @@ pub struct Renderer {
     default_morph: (wgpu::Texture, wgpu::TextureView),
     /// Wireframe line lists for partial spans (a group or a draw range of a
     /// `wireframe: true` mesh), by (geometry, version, start, end).
-    wire_span_cache: HashMap<(*const BufferGeometry, u32, u32, u32), (wgpu::Buffer, u32)>,
+    wire_span_cache: IdentityKeyed<(*const BufferGeometry, u32, u32, u32), (wgpu::Buffer, u32)>,
     /// Uploaded textures, by [`Texture::id`].
     tex_cache: HashMap<TexCacheKey, GpuTexture>,
     /// Builds mip chains with the GPU rather than the CPU. See [`MipGenerator`].
@@ -2328,11 +2368,11 @@ fn build_user_bind_group(
     mesh_uniform: wgpu::BufferBinding<'_>,
     data: &[[f32; 4]; 16],
     storage: &[Vec<f32>; 3],
-    textures: &[std::sync::Arc<wgpu::TextureView>],
+    textures: &[Option<&wgpu::TextureView>],
     placeholder: &wgpu::TextureView,
     data_placeholder: &wgpu::TextureView,
     sampler: &wgpu::Sampler,
-    volumes: &[std::sync::Arc<wgpu::TextureView>],
+    volumes: &[crate::marks::gpu::TextureView],
     volume_placeholder: &wgpu::TextureView,
     volume_sampler: &wgpu::Sampler,
 ) -> (wgpu::BindGroup, Vec<wgpu::Buffer>, Vec<wgpu::Texture>) {
@@ -2358,7 +2398,7 @@ fn build_user_bind_group(
         }
     }
     let tex =
-        |i: usize| -> &wgpu::TextureView { textures.get(i).map(|t| &**t).unwrap_or(placeholder) };
+        |i: usize| -> &wgpu::TextureView { textures.get(i).copied().flatten().unwrap_or(placeholder) };
     let mut entries = vec![
         wgpu::BindGroupEntry {
             binding: 0,
@@ -2424,7 +2464,9 @@ fn build_user_bind_group(
             entries.push(wgpu::BindGroupEntry {
                 binding: 13 + i as u32,
                 resource: wgpu::BindingResource::TextureView(
-                    volumes.get(i).map(|v| &**v).unwrap_or(volume_placeholder),
+                    // A Metal view (a volume made for the native backend)
+                    // has nothing to bind here.
+                    volumes.get(i).and_then(|v| v.as_wgpu()).unwrap_or(volume_placeholder),
                 ),
             });
         }
@@ -5776,7 +5818,7 @@ impl Renderer {
         // to a render attachment matching the surface format.
         let postfx_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("threers postfx shader"),
-            source: wgpu::ShaderSource::Wgsl(crate::renderer::shader::POSTFX_SHADER.into()),
+            source: wgpu::ShaderSource::Wgsl(crate::renderer::shader::postfx_shader().into()),
         });
         let postfx_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("threers postfx bgl"),
@@ -6392,7 +6434,12 @@ impl Renderer {
         //
         // KEEP IN STEP with SHADOW_TEXEL in shader.rs, which sizes the PCF
         // kernel and cannot read this constant.
-        let dir_shadows = ShadowArray::new(&device, "threers shadow depth", SPOT_SHADOW_SIZE, 1);
+        //
+        // Allocated at one texel until a light casts: `ensure_shadow_arrays`
+        // sizes them for the frame's casters. A scene without shadows (most
+        // UI views) no longer pays 2 × 128 MB of depth for nothing — per
+        // renderer, so several views multiplied it.
+        let dir_shadows = ShadowArray::new(&device, "threers shadow depth", 1, 1);
         let shadow_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("threers shadow sampler"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -6403,7 +6450,7 @@ impl Renderer {
             ..Default::default()
         });
 
-        let spot_shadows = ShadowArray::new(&device, "threers spot shadow depth", SPOT_SHADOW_SIZE, 1);
+        let spot_shadows = ShadowArray::new(&device, "threers spot shadow depth", 1, 1);
         let spot_shadow_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("threers spot shadow sampler"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -6705,7 +6752,7 @@ impl Renderer {
             depth_texture,
             hw_depth_tex,
             depth_size: (width, height),
-            geom_cache: HashMap::new(),
+            geom_cache: IdentityKeyed::default(),
             frustum_culling: true,
             cull_stats: (0, 0),
             timer: None,
@@ -6715,15 +6762,15 @@ impl Renderer {
             shadow_pass_hashes: Vec::new(),
             shadow_stats: (0, 0),
             shadow_updates: 0,
-            skin_attr_cache: HashMap::new(),
-            morph_cache: HashMap::new(),
+            skin_attr_cache: IdentityKeyed::default(),
+            morph_cache: IdentityKeyed::default(),
             instance_cache: HashMap::new(),
             instance_frame: 0,
             instance_stamps: 0,
-            uv_cache: HashMap::new(),
+            uv_cache: IdentityKeyed::default(),
             default_uv_sets,
             default_morph,
-            wire_span_cache: HashMap::new(),
+            wire_span_cache: IdentityKeyed::default(),
             tex_cache: HashMap::new(),
             mipgen: None,
             rt_view_cache: HashMap::new(),
@@ -7359,7 +7406,7 @@ fn fs_out(@builtin(position) p : vec4<f32>) -> @location(0) vec4<f32> {
     /// the caller does not hold a borrow against `&mut self`. When `additive`
     /// is true, output is blended onto existing framebuffer pixels.
     ///
-    /// `kind` selects the WGSL branch in [`super::shader::POSTFX_SHADER`].
+    /// `kind` selects the WGSL branch in [`super::shader::postfx_shader`].
     /// `time` carries effect-specific data (e.g. glitch RNG seed). `params2` /
     /// `params3` are four-vectors whose meaning depends on `kind`.
     ///
@@ -8951,8 +8998,10 @@ fn fs_out(@builtin(position) p : vec4<f32>) -> @location(0) vec4<f32> {
             vertex: Option<String>,
             data: [[f32; 4]; 16],
             storage: [Vec<f32>; 3],
-            textures: Vec<std::sync::Arc<wgpu::TextureView>>,
-            volumes: Vec<std::sync::Arc<wgpu::TextureView>>,
+            textures: Vec<crate::marks::gpu::TextureView>,
+            /// `ShaderMaterial::maps`: the slots `textures` leaves empty.
+            maps: Vec<Arc<Texture>>,
+            volumes: Vec<crate::marks::gpu::TextureView>,
             /// Drawn from an `InstancedMesh`: the instanced pipeline layout,
             /// with the instance buffer at `instance_buf_idx` in slot 1 and
             /// the custom columns at `custom_buf` in slot 2.
@@ -9441,6 +9490,7 @@ fn fs_out(@builtin(position) p : vec4<f32>) -> @location(0) vec4<f32> {
                             data: sm.data_slots(),
                             storage: [pad(&sm.storage0), pad(&sm.storage1), pad(&sm.storage2)],
                             textures: sm.textures.clone(),
+                            maps: sm.maps.clone(),
                             volumes: sm.volumes.clone(),
                             instanced: false,
                             custom_buf: 0,
@@ -9756,7 +9806,8 @@ fn fs_out(@builtin(position) p : vec4<f32>) -> @location(0) vec4<f32> {
                                 data: sm.data_slots(),
                                 storage: [pad(&sm.storage0), pad(&sm.storage1), pad(&sm.storage2)],
                                 textures: sm.textures.clone(),
-                            volumes: sm.volumes.clone(),
+                                maps: sm.maps.clone(),
+                                volumes: sm.volumes.clone(),
                                 instanced: true,
                                 custom_buf,
                                 alpha_to_coverage: sm.alpha_to_coverage,
@@ -10756,6 +10807,13 @@ fn fs_out(@builtin(position) p : vec4<f32>) -> @location(0) vec4<f32> {
                     if let Topology::Custom(..) = d.topology {
                         match shader_data.get(d.shader_idx) {
                             Some(sd) if sd.textures.is_empty() && sd.volumes.is_empty() => {
+                                // A map is pixels the renderer owns: its id
+                                // and upload count stand for its contents.
+                                sd.maps.iter().for_each(|m| {
+                                    let k = tex_cache_key(m);
+                                    mix(k.0);
+                                    mix(k.1);
+                                });
                                 sd.data.iter().flatten().for_each(|v| mix(v.to_bits() as u64));
                                 sd.storage.iter().for_each(|st| {
                                     mix(st.len() as u64);
@@ -10904,7 +10962,12 @@ fn fs_out(@builtin(position) p : vec4<f32>) -> @location(0) vec4<f32> {
                 }
                 self.shadow_stats.1 += 1;
                 let skinned = matches!(d.topology, Topology::Skinned | Topology::SkinnedAlpha);
-                let instanced = matches!(d.topology, Topology::Instanced | Topology::InstancedAlpha);
+                // A `ShaderMaterial` casts its geometry, as three.js's depth
+                // material draws it (and the Metal backend does): the mesh's
+                // own triangles, on an `InstancedMesh` at each instance.
+                let custom = matches!(d.topology, Topology::Custom(..));
+                let instanced = matches!(d.topology, Topology::Instanced | Topology::InstancedAlpha)
+                    || (custom && shader_data.get(d.shader_idx).is_some_and(|sd| sd.instanced));
                 // A transparent caster casts too: three.js's shadow map ignores
                 // blending (only `alphaTest` cuts a shadow). So does glass in
                 // the modes with passes of their own: solid glass fully, thin
@@ -10915,6 +10978,7 @@ fn fs_out(@builtin(position) p : vec4<f32>) -> @location(0) vec4<f32> {
                     && !d.topology.is_glass_mesh()
                     && !skinned
                     && !instanced
+                    && !custom
                 {
                     continue;
                 }
@@ -11038,6 +11102,9 @@ fn fs_out(@builtin(position) p : vec4<f32>) -> @location(0) vec4<f32> {
         for (i, d) in draws.iter().enumerate() {
             if let Topology::Custom(hash, transparent, screen_space, side) = d.topology {
                 let sd = &shader_data[d.shader_idx];
+                for map in sd.maps.iter().take(4) {
+                    self.ensure_slot_uploaded(&Some(map.clone()));
+                }
                 let key = (hash, linear_framebuffer, transparent, screen_space, side);
                 let layout = if screen_space {
                     self.custom_ss_pipeline_layout.as_ref()
@@ -11152,7 +11219,15 @@ fn fs_out(@builtin(position) p : vec4<f32>) -> @location(0) vec4<f32> {
                     },
                     &sd.data,
                     &sd.storage,
-                    &sd.textures,
+                    &(0..4)
+                        .map(|t| {
+                            sd.textures.get(t).and_then(|v| v.as_wgpu()).or_else(|| {
+                                sd.maps
+                                    .get(t)
+                                    .map(|m| self.view_for(&Some(m.clone()), &self.default_white_linear))
+                            })
+                        })
+                        .collect::<Vec<_>>(),
                     &self.default_white_linear.view,
                     &self.default_data_tex_view,
                     &self.sampler_linear_repeat,

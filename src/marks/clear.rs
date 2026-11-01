@@ -2,9 +2,9 @@
 //! several (deck.gl's `View` `clear`), where a pass's load-op clear would
 //! wipe them all.
 
+use super::gpu;
 use std::collections::HashMap;
 
-use wgpu::util::DeviceExt;
 
 use super::{MarkTarget, DEPTH_FORMAT};
 
@@ -32,17 +32,17 @@ fn fs() -> @location(0) vec4<f32> {
 type Key = (wgpu::TextureFormat, u32, bool, bool, bool);
 
 pub(crate) struct Clearer {
-    module: wgpu::ShaderModule,
-    layout: wgpu::BindGroupLayout,
-    pipeline_layout: wgpu::PipelineLayout,
-    pipelines: HashMap<Key, wgpu::RenderPipeline>,
+    module: gpu::ShaderModule,
+    layout: gpu::BindGroupLayout,
+    pipeline_layout: gpu::PipelineLayout,
+    pipelines: HashMap<Key, gpu::RenderPipeline>,
 }
 
 impl Clearer {
-    pub(crate) fn new(device: &wgpu::Device) -> Self {
-        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+    pub(crate) fn new(device: &gpu::Device) -> Self {
+        let module = device.create_shader_module(gpu::ShaderModuleDescriptor {
             label: Some("threers rect clear"),
-            source: wgpu::ShaderSource::Wgsl(SHADER.into()),
+            source: gpu::ShaderSource::Wgsl(SHADER.into()),
         });
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("threers rect clear bgl"),
@@ -57,7 +57,7 @@ impl Clearer {
                 count: None,
             }],
         });
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        let pipeline_layout = device.create_pipeline_layout(&gpu::PipelineLayoutDescriptor {
             label: Some("threers rect clear layout"),
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
@@ -65,20 +65,20 @@ impl Clearer {
         Self { module, layout, pipeline_layout, pipelines: HashMap::new() }
     }
 
-    fn pipeline(&mut self, device: &wgpu::Device, key: Key) -> &wgpu::RenderPipeline {
+    fn pipeline(&mut self, device: &gpu::Device, key: Key) -> &gpu::RenderPipeline {
         let (format, samples, has_depth, color, depth) = (key.0, key.1, key.2, key.3, key.4);
         let (module, layout) = (&self.module, &self.pipeline_layout);
         self.pipelines.entry(key).or_insert_with(|| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            device.create_render_pipeline(&gpu::RenderPipelineDescriptor {
                 label: Some("threers rect clear"),
                 layout: Some(layout),
-                vertex: wgpu::VertexState {
+                vertex: gpu::VertexState {
                     module,
                     entry_point: Some("vs"),
                     compilation_options: Default::default(),
                     buffers: &[],
                 },
-                fragment: Some(wgpu::FragmentState {
+                fragment: Some(gpu::FragmentState {
                     module,
                     entry_point: Some("fs"),
                     compilation_options: Default::default(),
@@ -108,8 +108,8 @@ impl Clearer {
     /// leaves either as it is.
     pub(crate) fn clear(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        device: &gpu::Device,
+        queue: &gpu::Queue,
         target: &MarkTarget,
         color: Option<wgpu::Color>,
         depth: Option<f32>,
@@ -125,10 +125,10 @@ impl Clearer {
             contents: bytemuck::cast_slice(&uniform),
             usage: wgpu::BufferUsages::UNIFORM,
         });
-        let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let bind = device.create_bind_group(&gpu::BindGroupDescriptor {
             label: Some("threers rect clear bg"),
             layout: &self.layout,
-            entries: &[wgpu::BindGroupEntry { binding: 0, resource: buffer.as_entire_binding() }],
+            entries: &[gpu::BindGroupEntry { binding: 0, resource: buffer.as_entire_binding() }],
         });
         let key = (target.format, target.samples, target.depth.is_some(), color.is_some(), depth.is_some());
         let pipeline = self.pipeline(device, key).clone();

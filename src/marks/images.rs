@@ -1,5 +1,6 @@
 //! Images on quads in the world: raster tiles, overlays, photographs.
 
+use super::gpu;
 use super::atlas::{AtlasRect, SharedAtlas};
 use super::sprites::atlas_bind_group;
 use super::{Column, ColumnFormat, KindUniforms, Mark, MarkCommon, MarkKind, PrepareContext};
@@ -56,7 +57,7 @@ pub struct ImageMarks {
     /// [`subdivisions`](Self::subdivisions) for the curvature.
     pub sphere: Option<([f64; 3], f64)>,
     sphere_rel: [f32; 4],
-    gpu: Option<(u64, wgpu::BindGroup)>,
+    gpu: Option<(u64, gpu::BindGroup)>,
     atlas_size: (u32, u32),
 }
 
@@ -170,7 +171,7 @@ impl Mark for ImageMarks {
             &mut self.colors,
         ]
     }
-    fn extra_bind_group(&self) -> Option<&wgpu::BindGroup> {
+    fn extra_bind_group(&self) -> Option<&gpu::BindGroup> {
         self.gpu.as_ref().map(|g| &g.1)
     }
 }

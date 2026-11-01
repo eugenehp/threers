@@ -7,7 +7,7 @@ API, so existing three.js code runs with an import change.
 
 [![crates.io](https://img.shields.io/crates/v/threers.svg)](https://crates.io/crates/threers)
 [![docs.rs](https://docs.rs/threers/badge.svg)](https://docs.rs/threers)
-· **0.0.9** · [Changelog](CHANGELOG.md) · MIT
+· **0.0.10** · [Changelog](CHANGELOG.md) · MIT
 
 ## Quick start
 

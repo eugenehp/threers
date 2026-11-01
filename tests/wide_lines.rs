@@ -28,11 +28,12 @@ fn camera() -> OrthographicCamera {
 }
 
 fn material(width: f32, opacity: f32) -> LineBasicMaterial {
-    let mut m = LineBasicMaterial::default();
-    m.color = Color::from_hex(0xffffff);
-    m.opacity = opacity;
-    m.line_width = width;
-    m
+    LineBasicMaterial {
+        color: Color::from_hex(0xffffff),
+        opacity,
+        line_width: width,
+        ..Default::default()
+    }
 }
 
 fn lines(pos: &[f32], index: Option<Vec<u32>>, m: LineBasicMaterial) -> Object3D {

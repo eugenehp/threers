@@ -29,6 +29,9 @@ pub struct BufferGeometry {
     /// re-uploads and the CPU-side attribute arrays simply stop being the truth.
     ///
     /// Pair it with [`Renderer::vertex_buffer`](crate::Renderer::vertex_buffer).
+    /// Since the CPU positions are not where the mesh is, it is never frustum
+    /// culled unless it carries a [`bounding_sphere`](Self::bounding_sphere)
+    /// that covers wherever the compute pass can move it.
     /// Off by default: `STORAGE` is not free on every backend, and only a
     /// geometry that is actually driven this way should ask for it.
     pub gpu_writable: bool,

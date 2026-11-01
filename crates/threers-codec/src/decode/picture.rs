@@ -356,7 +356,7 @@ impl Coefficients {
 /// pictures, where starting threads costs more than it saves, and always one
 /// on `wasm32`, which has none.
 fn conversion_threads(w: usize, h: usize) -> usize {
-    if cfg!(target_arch = "wasm32") || w * h < 1 << 17 {
+    if cfg!(target_family = "wasm") || w * h < 1 << 17 {
         return 1;
     }
     std::thread::available_parallelism().map_or(1, |n| n.get()).min(8).min(h / 16).max(1)
@@ -415,7 +415,7 @@ mod tests {
         let u: Vec<u16> = (0..n / 4).map(|i| (i * 13 % 224 + 16) as u16).collect();
         let v: Vec<u16> = (0..n / 4).map(|i| (i * 29 % 224 + 16) as u16).collect();
         let f = frame(w, h, y, u, v, Matrix::Bt709);
-        assert!(conversion_threads(w as usize, h as usize) > 1 || cfg!(target_arch = "wasm32") || std::thread::available_parallelism().map_or(true, |p| p.get() == 1));
+        assert!(conversion_threads(w as usize, h as usize) > 1 || cfg!(target_family = "wasm") || std::thread::available_parallelism().map_or(true, |p| p.get() == 1));
         let mut single = vec![255u8; n * 4];
         f.convert_rows(0..h as usize, &mut single, [2, 1, 0], &Coefficients::new(&f));
         assert!(f.to_bgra() == single);

@@ -501,25 +501,10 @@ enum Axis {
     Y,
 }
 
-/// The bits every pass shares: the fullscreen triangle and the two transfer
+/// The bits every pass shares: the source binding and the sRGB transfer
 /// functions.
-fn preamble() -> &'static str {
-    r#"
-@group(0) @binding(0) var src : texture_2d<f32>;
-
-// One oversized triangle rather than two: no seam down the diagonal.
-fn srgb_to_linear(c : vec3<f32>) -> vec3<f32> {
-    return select(pow((c + 0.055) / 1.055, vec3<f32>(2.4)),
-                  c / 12.92,
-                  c <= vec3<f32>(0.04045));
-}
-
-fn linear_to_srgb(c : vec3<f32>) -> vec3<f32> {
-    return select(1.055 * pow(c, vec3<f32>(1.0 / 2.4)) - 0.055,
-                  c * 12.92,
-                  c <= vec3<f32>(0.0031308));
-}
-"#
+fn preamble() -> String {
+    format!("\n@group(0) @binding(0) var src : texture_2d<f32>;\n{}", super::colorspace::WGSL)
 }
 
 /// `textureLoad` with the coordinate clamped and the colour decoded.

@@ -1,8 +1,4 @@
 // RGB Halftone helpers — port of three.js HalftoneShader (r165).
-const HT_SQRT2_MINUS_ONE: f32 = 0.41421356;
-const HT_SQRT2_HALF_MINUS_ONE: f32 = 0.20710678;
-const HT_PI2: f32 = 6.28318531;
-const HT_SAMPLES: i32 = 8;
 
 struct HtCell {
     normal: vec2<f32>,
@@ -40,7 +36,7 @@ fn ht_distance_to_dot_radius(
         rad = pow(abs(rad), 1.125) * rad_max;
         if (dist != 0.0) {
             let dot_p = abs((p.x - coord.x) / dist * normal.x + (p.y - coord.y) / dist * normal.y);
-            dist = dist * (1.0 - HT_SQRT2_HALF_MINUS_ONE) + dot_p * dist * HT_SQRT2_MINUS_ONE;
+            dist = dist * (1.0 - 0.20710678) + dot_p * dist * 0.41421356;
         }
     } else if (shape == 3) {
         rad = pow(abs(rad), 1.5) * rad_max;
@@ -59,15 +55,15 @@ fn ht_distance_to_dot_radius(
 fn ht_get_sample_channel(point: vec2<f32>, res: vec2<f32>, channel: i32) -> f32 {
     let uv_s = point / res;
     var tex = textureSampleLevel(input_tex, input_sampler, uv_s, 0.0);
-    let base = ht_rand(vec2<f32>(floor(point.x), floor(point.y))) * HT_PI2;
-    let step_a = HT_PI2 / f32(HT_SAMPLES);
+    let base = ht_rand(vec2<f32>(floor(point.x), floor(point.y))) * 6.28318531;
+    let step_a = 6.28318531 / f32(8);
     let dist = u.params2.x * 0.66;
-    for (var i: i32 = 0; i < HT_SAMPLES; i = i + 1) {
+    for (var i: i32 = 0; i < 8; i = i + 1) {
         let r = base + step_a * f32(i);
         let coord = point + vec2<f32>(cos(r) * dist, sin(r) * dist);
         tex = tex + textureSampleLevel(input_tex, input_sampler, coord / res, 0.0);
     }
-    tex = tex / f32(HT_SAMPLES + 1);
+    tex = tex / f32(8 + 1);
     if (channel == 0) { return tex.r; }
     if (channel == 1) { return tex.g; }
     return tex.b;
@@ -116,7 +112,7 @@ fn ht_get_reference_cell(p: vec2<f32>, origin: vec2<f32>, grid_angle: f32, step:
     );
     if (scatter != 0.0) {
         let off_mag = scatter * threshold * 0.5;
-        let off_angle = ht_rand(vec2<f32>(floor(cell.p1.x), floor(cell.p1.y))) * HT_PI2;
+        let off_angle = ht_rand(vec2<f32>(floor(cell.p1.x), floor(cell.p1.y))) * 6.28318531;
         cell.p1 = cell.p1 + vec2<f32>(cos(off_angle) * off_mag, sin(off_angle) * off_mag);
     }
     let normal_step = normal_dir * select(-step, step, offset_normal < threshold);

@@ -19,6 +19,7 @@ pub mod pixel_format {
     use super::NSUInteger;
     pub const R8_UNORM: NSUInteger = 10;
     pub const RG8_UNORM: NSUInteger = 30;
+    pub const R32_FLOAT: NSUInteger = 55;
     pub const RGBA8_UNORM: NSUInteger = 70;
     pub const RGBA8_UNORM_SRGB: NSUInteger = 71;
     pub const BGRA8_UNORM: NSUInteger = 80;
@@ -63,6 +64,7 @@ pub mod texture_type {
     pub const TYPE_2D_ARRAY: NSUInteger = 3;
     pub const TYPE_2D_MULTISAMPLE: NSUInteger = 4;
     pub const TYPE_CUBE: NSUInteger = 5;
+    pub const TYPE_3D: NSUInteger = 7;
 }
 
 /// `MTLTextureUsage` — a bit mask.
@@ -190,6 +192,8 @@ pub mod blend_factor {
     pub const ONE_MINUS_SOURCE_COLOR: NSUInteger = 3;
     pub const SOURCE_ALPHA: NSUInteger = 4;
     pub const ONE_MINUS_SOURCE_ALPHA: NSUInteger = 5;
+    pub const DESTINATION_COLOR: NSUInteger = 6;
+    pub const DESTINATION_ALPHA: NSUInteger = 8;
 }
 
 /// `MTLBlendOperation`.

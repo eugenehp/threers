@@ -390,7 +390,7 @@ fn wgpu_edges_interpolate() {
 ///
 /// A flipped axis shows up here as a negative slope rather than as a picture
 /// someone has to notice, which is the point of measuring rather than looking.
-#[cfg(all(feature = "metal", any(target_os = "macos", target_os = "ios")))]
+#[cfg(metal_backend)]
 #[test]
 fn metal_edges_interpolate() {
     use threers::metal::{MetalError, MetalHeadlessRenderer};

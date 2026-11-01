@@ -233,7 +233,7 @@ mod tests {
     fn the_shader_modules_declare_no_storage_buffers() {
         for (name, source) in [
             ("SHADER_SOURCE", crate::renderer::shader::legacy_shader_source()),
-            ("POSTFX_SHADER", crate::renderer::shader::POSTFX_SHADER),
+            ("POSTFX_SHADER", crate::renderer::shader::postfx_shader()),
         ] {
             assert!(
                 !source.contains("var<storage"),

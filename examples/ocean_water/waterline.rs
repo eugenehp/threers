@@ -26,6 +26,7 @@
 //! It samples the *same* cascades as the surface, through the same shared code,
 //! so the line it draws is the wave that is actually there.
 
+use threers::marks::gpu;
 use std::sync::Arc;
 
 use threers::{
@@ -67,7 +68,7 @@ impl Waterline {
         scene: &mut Scene,
         slots: Vec<[f32; 4]>,
         peak_wavelength: f32,
-        cascades: [Arc<wgpu::TextureView>; 3],
+        cascades: [gpu::TextureView; 3],
         cas: &Cascades,
     ) -> Waterline {
         let src = format!("{COMMON_WGSL}{BODY}").replace(

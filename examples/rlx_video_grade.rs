@@ -1,7 +1,7 @@
-//! A graph applied to every frame of a clip (`--features rlx,video,native-codec`).
+//! A graph applied to every frame of a clip (`--features rlx,video,native-codec,gif`).
 //!
 //! ```text
-//! cargo run --release --features "rlx,video,native-codec" --example rlx_video_grade
+//! cargo run --release --features "rlx,video,native-codec,gif" --example rlx_video_grade
 //! ```
 //!
 //! Writes `out/rlx_video_graded.gif` — an orbiting still life with a colour

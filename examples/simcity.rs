@@ -6,6 +6,7 @@
 //! cargo run --release --example simcity
 //! cargo run --release --example simcity -- --seed 41 --blocks 10
 //! cargo run --release --example simcity -- --layout waterfront
+//! THREERS_BACKEND=metal cargo run --release --features metal --example simcity
 //! ```
 //!
 //! | Input | |
@@ -30,7 +31,8 @@
 use std::time::Instant;
 
 use threers::cameras::Camera;
-use threers::{OrbitControls, PerspectiveCamera, PointerEvent, Renderer, ToneMapping};
+use threers::renderer::WindowRenderer;
+use threers::{OrbitControls, PerspectiveCamera, PointerEvent, ToneMapping};
 
 use winit::{
     dpi::PhysicalPosition,
@@ -126,81 +128,12 @@ async fn run() {
             .expect("window"),
     );
 
-    let instance = {
-        // wgpu 30 dropped `Default` here; the display handle is only consulted
-        // by GLES/Wayland, not Vulkan, Metal or DX12.
-        let mut d = wgpu::InstanceDescriptor::new_without_display_handle();
-        d.backends = wgpu::Backends::PRIMARY;
-        wgpu::Instance::new(d)
-    };
-    let surface = instance.create_surface(window.clone()).expect("surface");
-    let adapter = instance
-        .request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            compatible_surface: Some(&surface),
-            force_fallback_adapter: false,
-            apply_limit_buckets: false,
-        })
-        .await
-        .expect("adapter");
-
-    let adapter_limits = adapter.limits();
-    // Two departures from `downlevel_defaults()`, both required:
-    //
-    // - `using_resolution` for the texture size, because the shadow map is
-    //   4096 and downlevel caps it at 2048.
-    // - the sampled-texture and sampler counts, because the main pass declares
-    //   20 textures in the fragment stage (material maps, shadow atlases, the
-    //   environment) and downlevel allows 16. `using_resolution` does not
-    //   cover binding counts. `HeadlessRenderer` does the same thing.
-    let mut limits = wgpu::Limits::downlevel_defaults().using_resolution(adapter_limits.clone());
-    limits.max_sampled_textures_per_shader_stage =
-        adapter_limits.max_sampled_textures_per_shader_stage;
-    limits.max_samplers_per_shader_stage = adapter_limits.max_samplers_per_shader_stage;
-
-    let (device, queue) = adapter
-        .request_device(&wgpu::DeviceDescriptor {
-            label: Some("threers simcity"),
-            required_features: wgpu::Features::empty(),
-            required_limits: limits,
-            ..Default::default()
-        })
-        .await
-        .expect("device");
-    let device = Arc::new(device);
-    let queue = Arc::new(queue);
-
-    let size = window.inner_size();
-    let caps = surface.get_capabilities(&adapter);
-    let format = caps
-        .formats
-        .iter()
-        .copied()
-        .find(|f| f.is_srgb())
-        .unwrap_or(caps.formats[0]);
-    let mut config = wgpu::SurfaceConfiguration {
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-        format,
-        width: size.width.max(1),
-        height: size.height.max(1),
-        present_mode: caps.present_modes[0],
-        alpha_mode: caps.alpha_modes[0],
-        view_formats: vec![],
-        desired_maximum_frame_latency: 2,
-        color_space: wgpu::SurfaceColorSpace::Srgb,
-    };
-    surface.configure(&device, &config);
-
-    let mut renderer = Renderer::new(
-        device.clone(),
-        queue.clone(),
-        format,
-        config.width,
-        config.height,
-    );
+    // wgpu by default; the native Metal backend with `--features metal` and
+    // `THREERS_BACKEND=metal`.
+    let mut view = WindowRenderer::new(window.clone()).expect("a GPU for the window");
     // Lit windows and a low sun both go well above white; ACES rolls them off
     // without dragging the hue with them.
-    renderer.set_tone_mapping(ToneMapping::AcesFilmic, 1.0);
+    view.set_tone_mapping(ToneMapping::AcesFilmic, 1.0);
 
     let mut scene = Scene::new();
     let mut city = generate_city(&mut scene, &params);
@@ -216,7 +149,7 @@ async fn run() {
 
     let mut camera = PerspectiveCamera::new(
         38.0,
-        config.width as f32 / config.height as f32,
+        view.aspect(),
         1.0,
         city.stats.extent * 14.0,
     );
@@ -229,12 +162,13 @@ async fn run() {
     controls.max_polar_angle = std::f32::consts::FRAC_PI_2 * 0.98;
     controls.enable_damping = true;
 
-    // Raw wgpu: a compute pass rewrites the water mesh's vertex buffer in
-    // place between frames, so the surface never crosses host memory.
+    // A compute pass rewrites the water mesh's vertex buffer in place
+    // between frames, so the surface never crosses host memory.
+    let water_gpu = view.marks_gpu();
     let mut water = city
         .water
         .as_ref()
-        .map(|w| WaterSim::new(&device, w.vertices, w.level));
+        .map(|w| WaterSim::new(&water_gpu, w.vertices, w.level));
 
     let mut input = InputState::default();
     let mut time_of_day = 0.07f32;
@@ -254,11 +188,8 @@ async fn run() {
             Event::WindowEvent { event, window_id } if window_id == window_loop.id() => match event {
                 WindowEvent::CloseRequested => target.exit(),
                 WindowEvent::Resized(new_size) => {
-                    config.width = new_size.width.max(1);
-                    config.height = new_size.height.max(1);
-                    surface.configure(&device, &config);
-                    renderer.resize(config.width, config.height);
-                    camera.set_aspect(config.width as f32 / config.height as f32);
+                    view.resize(new_size.width, new_size.height);
+                    camera.set_aspect(view.aspect());
                 }
                 WindowEvent::MouseInput { state, button, .. } => {
                     let down = state == ElementState::Pressed;
@@ -284,9 +215,10 @@ async fn run() {
                             wheel: 0.0,
                             rotating: input.rotating,
                             panning: input.panning,
+                            ..Default::default()
                         },
                         &mut camera,
-                        (config.width as f32, config.height as f32),
+                        (view.size().0 as f32, view.size().1 as f32),
                     );
                 }
                 WindowEvent::MouseWheel { delta, .. } => {
@@ -301,9 +233,10 @@ async fn run() {
                             wheel,
                             rotating: false,
                             panning: false,
+                            ..Default::default()
                         },
                         &mut camera,
-                        (config.width as f32, config.height as f32),
+                        (view.size().0 as f32, view.size().1 as f32),
                     );
                 }
                 WindowEvent::KeyboardInput { event, .. } => {
@@ -358,14 +291,14 @@ async fn run() {
                         // The old batches' GPU buffers are keyed on geometry
                         // identity and nothing else will drop them, so a
                         // rebuild leaks a city per press without this.
-                        renderer.clear_geometry_cache();
+                        view.clear_geometry_cache();
                         city = generate_city(&mut scene, &params);
                         // The old water buffer went with the geometry cache,
                         // so the compute pass needs a new bind group.
                         water = city
                             .water
                             .as_ref()
-                            .map(|w| WaterSim::new(&device, w.vertices, w.level));
+                            .map(|w| WaterSim::new(&water_gpu, w.vertices, w.level));
                         controls.max_distance = city.stats.extent * 5.0;
                         let s = &city.stats;
                         println!(
@@ -391,7 +324,11 @@ async fn run() {
                         city.drive(&mut scene, if paused { 0.0 } else { dt }, camera.position, elapsed);
                     elapsed += dt;
                     if let (Some(sim), Some(w)) = (&mut water, &city.water) {
-                        sim.step(&device, &queue, &mut renderer, &w.geometry, elapsed, 0.35);
+                        let mesh = || {
+                            view.upload_geometry(&w.geometry);
+                            Some((view.vertex_buffer(&w.geometry)?, view.vertex_floats()))
+                        };
+                        sim.step(&water_gpu, mesh, elapsed, 0.35);
                     }
                     let sky = city.apply_sky(&mut scene, time_of_day);
                     city.place_lights(&mut scene, camera.position, sky.lights);
@@ -412,7 +349,7 @@ async fn run() {
                         controls.update(
                             PointerEvent::default(),
                             &mut camera,
-                            (config.width as f32, config.height as f32),
+                            (view.size().0 as f32, view.size().1 as f32),
                         );
                     }
                     scene.update_world();
@@ -434,24 +371,7 @@ async fn run() {
                         frames = 0;
                         fps_accum = 0.0;
                     }
-                    match surface.get_current_texture() {
-                        wgpu::CurrentSurfaceTexture::Success(frame)
-                        | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {
-                            let view = frame
-                                .texture
-                                .create_view(&wgpu::TextureViewDescriptor::default());
-                            renderer.render(&mut scene, &camera, &view, false);
-                            queue.present(frame);
-                        }
-                        wgpu::CurrentSurfaceTexture::Lost
-                        | wgpu::CurrentSurfaceTexture::Outdated => {
-                            surface.configure(&device, &config);
-                        }
-                        // Window hidden or fully covered — normal, and not
-                        // worth a line of stderr per frame.
-                        wgpu::CurrentSurfaceTexture::Occluded => {}
-                        e => log::error!("surface: {e:?}"),
-                    }
+                    view.render(&mut scene, &camera);
                     window_loop.request_redraw();
                 }
                 _ => {}

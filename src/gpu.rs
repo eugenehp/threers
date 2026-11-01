@@ -147,7 +147,7 @@ impl GpuContext {
     /// surface. Nothing here retains it: the view owns its layer and will
     /// free it when it goes, and a surface pointing at a freed layer is the
     /// one mistake this cannot check for.
-    #[cfg(any(target_os = "ios", target_os = "macos"))]
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos", target_os = "visionos"))]
     pub async unsafe fn from_metal_layer(
         layer: *mut std::ffi::c_void,
     ) -> Result<(Self, wgpu::Surface<'static>), String> {

@@ -161,13 +161,19 @@ impl MapView {
     /// [`begin_frame`](Self::begin_frame) for marks drawn over `renderer`'s
     /// frames: its drawing size, tone mapping and depth direction.
     pub fn begin_frame_for(&mut self, renderer: &crate::Renderer) -> MapFrame {
-        let (w, h) = renderer.drawing_buffer_size();
+        self.begin_frame_on(&super::MarkSurface::of(renderer))
+    }
+
+    /// [`begin_frame_for`](Self::begin_frame_for) for frames described by
+    /// `surface` — a window's on either backend.
+    pub fn begin_frame_on(&mut self, surface: &super::MarkSurface) -> MapFrame {
+        let (w, h) = surface.size;
         if (w, h) != self.viewport {
             self.set_viewport(w, h);
         }
         let shift = self.rebase_if_needed();
         self.sync_camera();
-        let view = MarkView::from_renderer(&self.camera, self.origin, renderer);
+        let view = MarkView::for_surface(&self.camera, self.origin, surface);
         self.collision.lock().unwrap().begin_frame(&view);
         MapFrame { view, shift }
     }

@@ -36,7 +36,7 @@ use crate::hevc::encoder::{pad_plane, Yuv420Frame};
 
 impl Reference {
     fn new(rec: &Reconstruction, mvs: Vec<[i16; 2]>) -> Reference {
-        let threads = if cfg!(target_arch = "wasm32") { 1 } else { std::thread::available_parallelism().map_or(1, |n| n.get()).min(16) };
+        let threads = if cfg!(target_family = "wasm") { 1 } else { std::thread::available_parallelism().map_or(1, |n| n.get()).min(16) };
         let halves = HalfPlanes::new(&rec.y, rec.coded_width as usize, rec.coded_height as usize, threads);
         Reference { y: rec.y.clone(), u: rec.u.clone(), v: rec.v.clone(), halves, mvs }
     }
@@ -142,7 +142,7 @@ impl InterEncoder {
         let sps = nal_unit_base(NalUnitType::Sps, &write_sps_with_refs(&cfg, 1));
         let pps_intra = nal_unit_base(NalUnitType::Pps, &write_pps_with_id(0, true));
         let pps_inter = nal_unit_base(NalUnitType::Pps, &write_pps_with_id(1, false));
-        let threads = if cfg!(target_arch = "wasm32") {
+        let threads = if cfg!(target_family = "wasm") {
             1
         } else {
             std::thread::available_parallelism().map_or(1, |n| n.get()).min(16)

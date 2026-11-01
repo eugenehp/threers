@@ -8,8 +8,9 @@
 //! is two more than can be checked against each other.
 //!
 //! This is the one copy. [`WGSL`] is a prelude string to prepend to a shader;
-//! the renderer splices the same string into its own preamble, so a change here
-//! reaches every surface in the crate at once.
+//! the downsampling and accumulation passes take it. The renderer's own
+//! preamble keeps just `linear_to_srgb` — the rest would clash with
+//! `ShaderMaterial`s that define them — and a test holds that to this text.
 //!
 //! ```
 //! # use threers::renderer::colorspace;
@@ -108,6 +109,14 @@ mod tests {
         )
         .validate(&module)
         .expect("the colour prelude validates");
+    }
+
+    /// The renderer's preamble carries its own `linear_to_srgb`, word for word.
+    #[test]
+    fn the_renderer_preamble_has_this_curve() {
+        let start = WGSL.find("fn linear_to_srgb(").unwrap();
+        let curve = &WGSL[start..start + WGSL[start..].find("\n}\n").unwrap() + 3];
+        assert!(crate::renderer::shader::SHADER_SOURCE.contains(curve), "the preamble's curve differs:\n{curve}");
     }
 
     #[test]

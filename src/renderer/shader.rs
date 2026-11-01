@@ -1,7 +1,7 @@
 //! WGSL sources for the main mesh pass and the post-processing fullscreen pass.
 //!
 //! - [`SHADER_SOURCE`]: lit/unlit materials, shadows, fog, PBR, skinning
-//! - [`POSTFX_SHADER`]: effect kinds 0–34 here (copy, FXAA, glitch, bloom,
+//! - [`postfx_shader`]: effect kinds 0–34 here (copy, FXAA, glitch, bloom,
 //!   SSAO, …) and 40 up in `postfx_kinds.wgsl`, the three.js passes behind
 //!   [`crate::postprocessing`]
 //!
@@ -18,7 +18,7 @@
 /// shader and a switch-driven fragment shader keyed by an `effect_kind`
 /// uniform. Each effect path is implemented in this same module so the
 /// pipeline can be reused across post-fx classes.
-pub const POSTFX_SHADER: &str = concat!(r#"
+const POSTFX_TEMPLATE: &str = concat!(r#"
 struct Out {
     @builtin(position) pos: vec4<f32>,
     @location(0) uv: vec2<f32>,
@@ -183,18 +183,6 @@ fn postfx_luminance(c: vec3<f32>) -> f32 {
 
 // three.js BokehShader's taps after the centre one: (x, y) in GL `vUv` units
 // before the circle of confusion, z the ring's scale (1, 0.9, 0.7, 0.4).
-const BOKEH_TAPS = array<vec3<f32>, 40>(
-    vec3<f32>( 0.0,   0.4,  1.0), vec3<f32>( 0.15,  0.37, 1.0), vec3<f32>( 0.29,  0.29, 1.0), vec3<f32>(-0.37,  0.15, 1.0),
-    vec3<f32>( 0.4,   0.0,  1.0), vec3<f32>( 0.37, -0.15, 1.0), vec3<f32>( 0.29, -0.29, 1.0), vec3<f32>(-0.15, -0.37, 1.0),
-    vec3<f32>( 0.0,  -0.4,  1.0), vec3<f32>(-0.15,  0.37, 1.0), vec3<f32>(-0.29,  0.29, 1.0), vec3<f32>( 0.37,  0.15, 1.0),
-    vec3<f32>(-0.4,   0.0,  1.0), vec3<f32>(-0.37, -0.15, 1.0), vec3<f32>(-0.29, -0.29, 1.0), vec3<f32>( 0.15, -0.37, 1.0),
-    vec3<f32>( 0.15,  0.37, 0.9), vec3<f32>(-0.37,  0.15, 0.9), vec3<f32>( 0.37, -0.15, 0.9), vec3<f32>(-0.15, -0.37, 0.9),
-    vec3<f32>(-0.15,  0.37, 0.9), vec3<f32>( 0.37,  0.15, 0.9), vec3<f32>(-0.37, -0.15, 0.9), vec3<f32>( 0.15, -0.37, 0.9),
-    vec3<f32>( 0.29,  0.29, 0.7), vec3<f32>( 0.4,   0.0,  0.7), vec3<f32>( 0.29, -0.29, 0.7), vec3<f32>( 0.0,  -0.4,  0.7),
-    vec3<f32>(-0.29,  0.29, 0.7), vec3<f32>(-0.4,   0.0,  0.7), vec3<f32>(-0.29, -0.29, 0.7), vec3<f32>( 0.0,   0.4,  0.7),
-    vec3<f32>( 0.29,  0.29, 0.4), vec3<f32>( 0.4,   0.0,  0.4), vec3<f32>( 0.29, -0.29, 0.4), vec3<f32>( 0.0,  -0.4,  0.4),
-    vec3<f32>(-0.29,  0.29, 0.4), vec3<f32>(-0.4,   0.0,  0.4), vec3<f32>(-0.29, -0.29, 0.4), vec3<f32>( 0.0,   0.4,  0.4),
-);
 
 fn ssao_kernel_sample(i: u32) -> vec3<f32> {
     return ssao_kernel_buf.samples[i].xyz;
@@ -276,10 +264,6 @@ fn outline_gaussian_pdf(x: f32, sigma: f32) -> f32 {
 }
 
 // Halftone + Glitch helpers (three.js HalftoneShader / DigitalGlitch ports).
-const HT_SQRT2_MINUS_ONE: f32 = 0.41421356;
-const HT_SQRT2_HALF_MINUS_ONE: f32 = 0.20710678;
-const HT_PI2: f32 = 6.28318531;
-const HT_SAMPLES: i32 = 8;
 
 struct HtCell {
     normal: vec2<f32>,
@@ -317,7 +301,7 @@ fn ht_distance_to_dot_radius(
         rad = pow(abs(rad), 1.125) * rad_max;
         if (dist != 0.0) {
             let dot_p = abs((p.x - coord.x) / dist * normal.x + (p.y - coord.y) / dist * normal.y);
-            dist = dist * (1.0 - HT_SQRT2_HALF_MINUS_ONE) + dot_p * dist * HT_SQRT2_MINUS_ONE;
+            dist = dist * (1.0 - 0.20710678) + dot_p * dist * 0.41421356;
         }
     } else if (shape == 3) {
         rad = pow(abs(rad), 1.5) * rad_max;
@@ -338,15 +322,15 @@ fn ht_distance_to_dot_radius(
 fn ht_get_sample_channel(point: vec2<f32>, res: vec2<f32>, channel: i32) -> f32 {
     let uv_s = gl_uv(point / res);
     var tex = textureSampleLevel(input_tex, input_sampler, uv_s, 0.0);
-    let base = ht_rand(vec2<f32>(floor(point.x), floor(point.y))) * HT_PI2;
-    let step_a = HT_PI2 / f32(HT_SAMPLES);
+    let base = ht_rand(vec2<f32>(floor(point.x), floor(point.y))) * 6.28318531;
+    let step_a = 6.28318531 / f32(8);
     let dist = u.params2.x * 0.66;
-    for (var i: i32 = 0; i < HT_SAMPLES; i = i + 1) {
+    for (var i: i32 = 0; i < 8; i = i + 1) {
         let r = base + step_a * f32(i);
         let coord = point + vec2<f32>(cos(r) * dist, sin(r) * dist);
         tex = tex + textureSampleLevel(input_tex, input_sampler, gl_uv(coord / res), 0.0);
     }
-    tex = tex / f32(HT_SAMPLES + 1);
+    tex = tex / f32(8 + 1);
     if (channel == 0) { return tex.r; }
     if (channel == 1) { return tex.g; }
     return tex.b;
@@ -395,7 +379,7 @@ fn ht_get_reference_cell(p: vec2<f32>, origin: vec2<f32>, grid_angle: f32, step:
     );
     if (scatter != 0.0) {
         let off_mag = scatter * threshold * 0.5;
-        let off_angle = ht_rand(vec2<f32>(floor(cell.p1.x), floor(cell.p1.y))) * HT_PI2;
+        let off_angle = ht_rand(vec2<f32>(floor(cell.p1.x), floor(cell.p1.y))) * 6.28318531;
         cell.p1 = cell.p1 + vec2<f32>(cos(off_angle) * off_mag, sin(off_angle) * off_mag);
     }
     let normal_step = normal_dir * select(-step, step, offset_normal < threshold);
@@ -1061,7 +1045,21 @@ fn postfx_fragment(in: Out) -> vec4<f32> {
         let view_z = perspective_depth_to_view_z(depth, u.ssao0.x, u.ssao0.y);
         let factor = focus + view_z;
         let dofblur = vec2<f32>(clamp(factor * aperture, -max_blur, max_blur));
-        var taps = BOKEH_TAPS;
+        // The 40 bokeh taps, here rather than at module scope: a module-scope
+        // table is emitted into every pipeline's Metal source, and every
+        // pipeline that doesn't sample it warns about it.
+        var taps = array<vec3<f32>, 40>(
+    vec3<f32>( 0.0,   0.4,  1.0), vec3<f32>( 0.15,  0.37, 1.0), vec3<f32>( 0.29,  0.29, 1.0), vec3<f32>(-0.37,  0.15, 1.0),
+    vec3<f32>( 0.4,   0.0,  1.0), vec3<f32>( 0.37, -0.15, 1.0), vec3<f32>( 0.29, -0.29, 1.0), vec3<f32>(-0.15, -0.37, 1.0),
+    vec3<f32>( 0.0,  -0.4,  1.0), vec3<f32>(-0.15,  0.37, 1.0), vec3<f32>(-0.29,  0.29, 1.0), vec3<f32>( 0.37,  0.15, 1.0),
+    vec3<f32>(-0.4,   0.0,  1.0), vec3<f32>(-0.37, -0.15, 1.0), vec3<f32>(-0.29, -0.29, 1.0), vec3<f32>( 0.15, -0.37, 1.0),
+    vec3<f32>( 0.15,  0.37, 0.9), vec3<f32>(-0.37,  0.15, 0.9), vec3<f32>( 0.37, -0.15, 0.9), vec3<f32>(-0.15, -0.37, 0.9),
+    vec3<f32>(-0.15,  0.37, 0.9), vec3<f32>( 0.37,  0.15, 0.9), vec3<f32>(-0.37, -0.15, 0.9), vec3<f32>( 0.15, -0.37, 0.9),
+    vec3<f32>( 0.29,  0.29, 0.7), vec3<f32>( 0.4,   0.0,  0.7), vec3<f32>( 0.29, -0.29, 0.7), vec3<f32>( 0.0,  -0.4,  0.7),
+    vec3<f32>(-0.29,  0.29, 0.7), vec3<f32>(-0.4,   0.0,  0.7), vec3<f32>(-0.29, -0.29, 0.7), vec3<f32>( 0.0,   0.4,  0.7),
+    vec3<f32>( 0.29,  0.29, 0.4), vec3<f32>( 0.4,   0.0,  0.4), vec3<f32>( 0.29, -0.29, 0.4), vec3<f32>( 0.0,  -0.4,  0.4),
+    vec3<f32>(-0.29,  0.29, 0.4), vec3<f32>(-0.4,   0.0,  0.4), vec3<f32>(-0.29, -0.29, 0.4), vec3<f32>( 0.0,   0.4,  0.4),
+);
         var col = textureSampleLevel(input_tex, input_sampler, uv, 0.0);
         for (var i: i32 = 0; i < 40; i = i + 1) {
             let t = taps[i];
@@ -1137,6 +1135,15 @@ fn postfx_fragment(in: Out) -> vec4<f32> {
     return vec4<f32>(postfx_encode(base.rgb), base.a);
 }
 "#, include_str!("postfx_kinds.wgsl"));
+
+/// The post-processing module: its kinds (`postfx_kinds.wgsl` from 40 up)
+/// with `SHARED_FUNCTIONS` in place. The Metal
+/// backend's composer runs it too, through naga's MSL writer.
+pub fn postfx_shader() -> &'static str {
+    static SOURCE: std::sync::LazyLock<String> =
+        std::sync::LazyLock::new(|| POSTFX_TEMPLATE.replacen(SHARED_FUNCTIONS_MARKER, shared_functions_wgsl(), 1));
+    &SOURCE
+}
 
 pub const MAX_DIR_LIGHTS: usize = 8;
 pub const MAX_POINT_LIGHTS: usize = 8;
@@ -1633,49 +1640,7 @@ fn morph_color(c : vec4<f32>, vid : u32) -> vec4<f32> {
     return morph_color_instance(c, vid, 0u);
 }
 
-/// How much of the sun a sphere leaves visible from this point.
-///
-/// The sun and the occluder are both circles on the sky, of angular radii `a`
-/// and `b`, their centres `d` apart. What is lost is the area the two discs
-/// share, over the sun's area — the standard circle-circle lens. Doing it this
-/// way rather than with a shadow map gives the penumbra for nothing, because
-/// the sun is half a degree wide and not a point; it gives the annular ring
-/// when the occluder is smaller and centred; and it works over a lunar orbit,
-/// where a shadow map fitted to the planet would never reach the moon.
-/// Lambert's cosine, softened by the sun being a disc rather than a point.
-///
-/// `max(dot(n, l), 0)` is the cosine for a *point* source, and it puts a hard
-/// edge on the terminator. The sun is about half a degree across, so near the
-/// terminator part of its disc is below the horizon and part is above, and the
-/// light falls off over that angular width instead of switching. From orbit
-/// that is a band roughly thirty kilometres wide on Earth — narrow, but a hard
-/// edge at this scale reads as a rendering artefact rather than as a sunrise.
-///
-/// The returned value is the first moment of the visible part of the disc: it
-/// meets `dot(n, l)` exactly where the disc clears the horizon either way, so
-/// nothing outside the band changes.
-fn soft_lambert(ndl : f32, sun_radius : f32) -> f32 {
-    if (sun_radius <= 0.0) {
-        return max(ndl, 0.0);
-    }
-    let x = ndl / sun_radius;
-    if (x >= 1.0) { return ndl; }
-    if (x <= -1.0) { return 0.0; }
-    return sun_radius * (x * acos(-x) + sqrt(max(1.0 - x * x, 0.0))) / PI;
-}
 
-/// Henyey-Greenstein phase function: how much light scattering off a droplet
-/// carries on in a given direction.
-///
-/// `g` is the asymmetry — 0 scatters evenly, positive keeps light going the way
-/// it was already headed. Cloud droplets are far larger than visible
-/// wavelengths and sit around 0.8, which is why a deck with the sun behind it
-/// glows and the same deck lit from over your shoulder does not.
-fn henyey_greenstein(cos_theta : f32, g : f32) -> f32 {
-    let g2 = g * g;
-    let d = max(1.0 + g2 - 2.0 * g * cos_theta, 1e-4);
-    return (1.0 - g2) / (4.0 * PI * d * sqrt(d));
-}
 
 fn eclipse_factor(world_p : vec3<f32>, to_sun : vec3<f32>) -> f32 {
     let radius = mesh.params12.w;
@@ -2302,110 +2267,15 @@ fn vs_sprite(in : VsIn) -> VsOut {
 
 // ---- helpers ----
 
-fn punctual_attenuation(d : f32, max_d : f32, decay : f32) -> f32 {
-    // Match three.js `getDistanceAttenuation` (lights_pars_begin.glsl.js):
-    // 1.0 / max(pow(lightDistance, decayExponent), 0.01)
-    var att = 1.0 / max(pow(d, decay), 0.01);
-    if (max_d > 0.0) {
-        let t = clamp(1.0 - pow(d / max_d, 4.0), 0.0, 1.0);
-        att = att * t * t;
-    }
-    return att;
-}
-
-// three.js r165 `ACESFilmicToneMapping` (Stephen Hill's RRT + ODT fit, with
-// three.js's 1/0.6 pre-scale) on an already exposed colour. It used to be
-// Narkowicz's single-curve fit, which reads 0.267 for mid grey where three.js
-// reads 0.213 — a visibly brighter, more saturated picture than the reference.
-fn aces_tonemap(x : vec3<f32>) -> vec3<f32> {
-    let aces_input = mat3x3<f32>(
-        vec3<f32>(0.59719, 0.07600, 0.02840),
-        vec3<f32>(0.35458, 0.90834, 0.13383),
-        vec3<f32>(0.04823, 0.01566, 0.83777),
-    );
-    let aces_output = mat3x3<f32>(
-        vec3<f32>(1.60475, -0.10208, -0.00327),
-        vec3<f32>(-0.53108, 1.10813, -0.07276),
-        vec3<f32>(-0.07367, -0.00605, 1.07602),
-    );
-    let v = aces_input * (x / 0.6);
-    let a = v * (v + 0.0245786) - 0.000090537;
-    let b = v * (0.983729 * v + 0.4329510) + 0.238081;
-    return clamp(aces_output * (a / b), vec3<f32>(0.0), vec3<f32>(1.0));
-}
 
 fn gamma_to_linear(c : vec3<f32>) -> vec3<f32> { return pow(c, vec3<f32>(2.2)); }
 fn linear_to_gamma(c : vec3<f32>) -> vec3<f32> { return pow(c, vec3<f32>(1.0 / 2.2)); }
 
-// Khronos PBR Neutral. Almost the identity below the shoulder — a small black
-// offset and nothing else — so an authored colour reaches the screen as itself
-// rather than restyled. Only the top is compressed, desaturating as it goes so
-// an over-exposed highlight resolves towards white.
-fn neutral_tonemap(c_in : vec3<f32>) -> vec3<f32> {
-    let start_compression = 0.8 - 0.04;
-    let desaturation = 0.15;
-    var c = c_in;
-    let x = min(c.r, min(c.g, c.b));
-    var offset = 0.04;
-    if (x < 0.08) { offset = x - 6.25 * x * x; }
-    c = c - vec3<f32>(offset);
-    let peak = max(c.r, max(c.g, c.b));
-    if (peak < start_compression) { return c; }
-    let d = 1.0 - start_compression;
-    let new_peak = 1.0 - d * d / (peak + d - start_compression);
-    c = c * (new_peak / max(peak, 1e-6));
-    let g = 1.0 - 1.0 / (desaturation * (peak - new_peak) + 1.0);
-    return mix(c, vec3<f32>(new_peak), g);
-}
-
-const LINEAR_SRGB_TO_REC2020 = mat3x3<f32>(
-    vec3<f32>(0.6274, 0.0691, 0.0164),
-    vec3<f32>(0.3293, 0.9195, 0.0880),
-    vec3<f32>(0.0433, 0.0113, 0.8956),
-);
-const REC2020_TO_LINEAR_SRGB = mat3x3<f32>(
-    vec3<f32>( 1.6605, -0.1246, -0.0182),
-    vec3<f32>(-0.5876,  1.1329, -0.1006),
-    vec3<f32>(-0.0728, -0.0083,  1.1187),
-);
-
-fn agx_contrast(x : vec3<f32>) -> vec3<f32> {
-    let x2 = x * x;
-    let x4 = x2 * x2;
-    return 15.5 * x4 * x2
-        - 40.14 * x4 * x
-        + 31.96 * x4
-        - 6.868 * x2 * x
-        + 0.4298 * x2
-        + 0.1191 * x
-        - 0.00232;
-}
-
-// AgX, as three.js ships it. A long shoulder — 3.0 lands at 0.82 where ACES is
-// already at 0.95 — so a very bright environment keeps detail in its highlights.
-// It desaturates the shadows noticeably in exchange; that is the look.
-fn agx_tonemap(c_in : vec3<f32>) -> vec3<f32> {
-    let inset = mat3x3<f32>(
-        vec3<f32>(0.856627153315983, 0.137318972929847, 0.11189821299995),
-        vec3<f32>(0.0951212405381588, 0.761241990602591, 0.0767994186031903),
-        vec3<f32>(0.0482516061458583, 0.101439036467562, 0.811302368396859),
-    );
-    let outset = mat3x3<f32>(
-        vec3<f32>( 1.1271005818144368, -0.1413297634984383, -0.14132976349843826),
-        vec3<f32>(-0.11060664309660323,  1.157823702216272, -0.11060664309660294),
-        vec3<f32>(-0.016493938717834573, -0.016493938717834257, 1.2519364065950405),
-    );
-    let min_ev = -12.47393;
-    let max_ev = 4.026069;
-    var c = inset * (LINEAR_SRGB_TO_REC2020 * c_in);
-    c = max(c, vec3<f32>(1e-10));
-    c = (log2(c) - vec3<f32>(min_ev)) / (max_ev - min_ev);
-    c = clamp(c, vec3<f32>(0.0), vec3<f32>(1.0));
-    c = agx_contrast(c);
-    c = outset * c;
-    c = pow(max(c, vec3<f32>(0.0)), vec3<f32>(2.2));
-    return clamp(REC2020_TO_LINEAR_SRGB * c, vec3<f32>(0.0), vec3<f32>(1.0));
-}
+// The functions both backends share (`SHARED_FUNCTIONS`): the tone curves
+// (`aces_tonemap`, `neutral_tonemap`, `agx_tonemap`, …) and the shading
+// helpers — BRDF and IBL fits, light falloff, shadow disc taps, bicubic
+// weights.
+//@@SHARED_FUNCTIONS@@
 
 // Exposure, then whichever curve the renderer is set to.
 //
@@ -2423,7 +2293,7 @@ fn apply_tone_mapping(c : vec3<f32>) -> vec3<f32> {
     let exposure = frame.tone_mapping_exposure.y;
     if (tm == 0u) { return c; }
     let e = c * exposure;
-    if (tm == 1u) { return e; }
+    if (tm == 1u) { return linear_tonemap(e); }
     if (tm == 2u) { return aces_tonemap(e); }
     if (tm == 3u) { return neutral_tonemap(e); }
     return agx_tonemap(e);
@@ -2733,46 +2603,8 @@ fn shadow_at(r : i32, world_pos : vec3<f32>, world_normal : vec3<f32>) -> f32 {
 // replaced, spread over a disc instead of a square.
 const SHADOW_TAPS : u32 = 12u;
 
-// Tap `k` of `n` on a Vogel disc — a golden-angle spiral, evenly spread at
-// any tap count — turned by `phi`, inside the unit circle.
-fn shadow_disc_tap(k : u32, n : u32, phi : f32) -> vec2<f32> {
-    let r = sqrt((f32(k) + 0.5) / f32(n));
-    let t = f32(k) * 2.39996323 + phi;
-    return vec2<f32>(cos(t), sin(t)) * r;
-}
 
-// The disc's turn at a point: varied so the taps' pattern does not show as
-// banding in a wide penumbra, and fixed to the world so it does not crawl as
-// the camera moves.
-fn shadow_disc_rotation(p : vec3<f32>) -> f32 {
-    return fract(sin(dot(p, vec3<f32>(12.9898, 78.233, 37.719))) * 43758.5453) * 6.28318530718;
-}
 
-// The cube face a direction lands on and its uv there: the selection every
-// API's cube sampler makes (major axis, then the face's `sc`/`tc` table),
-// done by hand because the faces live in a 2D array — WebGL2 has no cube
-// arrays. Faces are +X −X +Y −Y +Z −Z, as the point passes draw them.
-fn point_shadow_face(d : vec3<f32>) -> vec3<f32> {
-    let a = abs(d);
-    var face = 0.0;
-    var sc = 0.0;
-    var tc = 0.0;
-    var ma = 1.0;
-    if (a.x >= a.y && a.x >= a.z) {
-        ma = a.x;
-        if (d.x > 0.0) { face = 0.0; sc = -d.z; } else { face = 1.0; sc = d.z; }
-        tc = -d.y;
-    } else if (a.y >= a.z) {
-        ma = a.y;
-        sc = d.x;
-        if (d.y > 0.0) { face = 2.0; tc = d.z; } else { face = 3.0; tc = -d.z; }
-    } else {
-        ma = a.z;
-        if (d.z > 0.0) { face = 4.0; sc = d.x; } else { face = 5.0; sc = -d.x; }
-        tc = -d.y;
-    }
-    return vec3<f32>(0.5 * (sc / ma + 1.0), 0.5 * (tc / ma + 1.0), face);
-}
 
 // three.js `getShadowMask()`: every shadow-casting light's shadow, multiplied.
 fn shadow_mask(world_pos : vec3<f32>, world_normal : vec3<f32>) -> f32 {
@@ -2850,71 +2682,18 @@ fn shade_hemi(n : vec3<f32>, l : HemiLight) -> vec3<f32> {
 }
 
 // ---- PBR (Cook-Torrance GGX) ----
+// `d_ggx`, `v_ggx_smith_correlated`, `f_schlick`, `f_schlick_f90`,
+// `d_charlie`, `v_neubelt`, `ltc_evaluate` and `point_shadow_face` are in
+// `SHARED_FUNCTIONS`, which the Metal backend calls too.
 
-fn d_ggx(n_dot_h : f32, a : f32) -> f32 {
-    let a2 = a * a;
-    let f = (n_dot_h * a2 - n_dot_h) * n_dot_h + 1.0;
-    return a2 / (PI * f * f);
-}
 
-// three.js `V_GGX_SmithCorrelated`: height-correlated Smith visibility, which
-// already carries the 1/(4·NoV·NoL) of the microfacet denominator — so a
-// specular lobe is `D · V · F` with no further divide.
-fn v_ggx_smith_correlated(a : f32, n_dot_l : f32, n_dot_v : f32) -> f32 {
-    let a2 = a * a;
-    let gv = n_dot_l * sqrt(a2 + (1.0 - a2) * n_dot_v * n_dot_v);
-    let gl = n_dot_v * sqrt(a2 + (1.0 - a2) * n_dot_l * n_dot_l);
-    return 0.5 / max(gv + gl, 1e-6);
-}
 
-// three.js `F_Schlick(f0, 1.0, dotVH)`, in its spherical-Gaussian form
-// (`exp2((-5.55473·x − 6.98316)·x)` for `(1 − x)^5`), which is what r165 runs.
-fn f_schlick(v_dot_h : f32, f0 : vec3<f32>) -> vec3<f32> {
-    let x = clamp(v_dot_h, 0.0, 1.0);
-    let fresnel = exp2((-5.55473 * x - 6.98316) * x);
-    return f0 * (1.0 - fresnel) + vec3<f32>(fresnel);
-}
 
 // PMREM CubeUV sampling — ports three.js cube_uv_reflection_fragment.
 const CUBEUV_MIN_MIP_LEVEL : f32 = 4.0;
 const CUBEUV_MIN_TILE_SIZE : f32 = 16.0;
 
-fn cube_uv_get_face(direction : vec3<f32>) -> f32 {
-    let abs_dir = abs(direction);
-    var face = -1.0;
-    if (abs_dir.x > abs_dir.z) {
-        if (abs_dir.x > abs_dir.y) {
-            face = select(3.0, 0.0, direction.x > 0.0);
-        } else {
-            face = select(4.0, 1.0, direction.y > 0.0);
-        }
-    } else {
-        if (abs_dir.z > abs_dir.y) {
-            face = select(5.0, 2.0, direction.z > 0.0);
-        } else {
-            face = select(4.0, 1.0, direction.y > 0.0);
-        }
-    }
-    return face;
-}
 
-fn cube_uv_get_uv(direction : vec3<f32>, face : f32) -> vec2<f32> {
-    var uv = vec2<f32>(0.0);
-    if (face == 0.0) {
-        uv = vec2<f32>(direction.z, direction.y) / abs(direction.x);
-    } else if (face == 1.0) {
-        uv = vec2<f32>(-direction.x, -direction.z) / abs(direction.y);
-    } else if (face == 2.0) {
-        uv = vec2<f32>(-direction.x, direction.y) / abs(direction.z);
-    } else if (face == 3.0) {
-        uv = vec2<f32>(-direction.z, direction.y) / abs(direction.x);
-    } else if (face == 4.0) {
-        uv = vec2<f32>(-direction.x, direction.z) / abs(direction.y);
-    } else {
-        uv = vec2<f32>(direction.x, direction.y) / abs(direction.z);
-    }
-    return 0.5 * (uv + 1.0);
-}
 
 fn bilinear_cube_uv(direction : vec3<f32>, mip_int : f32) -> vec3<f32> {
     let cube_uv_max_mip = env_u.params.z;
@@ -2939,21 +2718,6 @@ fn bilinear_cube_uv(direction : vec3<f32>, mip_int : f32) -> vec3<f32> {
     return textureSampleLevel(env_cube_uv_tex, env_sampler, uv, 0.0).rgb;
 }
 
-fn roughness_to_mip(roughness : f32) -> f32 {
-    var mip = 0.0;
-    if (roughness >= 0.8) {
-        mip = (1.0 - roughness) * (-1.0 - (-2.0)) / (1.0 - 0.8) + (-2.0);
-    } else if (roughness >= 0.4) {
-        mip = (0.8 - roughness) * (2.0 - (-1.0)) / (0.8 - 0.4) + (-1.0);
-    } else if (roughness >= 0.305) {
-        mip = (0.4 - roughness) * (3.0 - 2.0) / (0.4 - 0.305) + 2.0;
-    } else if (roughness >= 0.21) {
-        mip = (0.305 - roughness) * (4.0 - 3.0) / (0.305 - 0.21) + 3.0;
-    } else {
-        mip = -2.0 * log2(1.16 * max(roughness, 0.001));
-    }
-    return mip;
-}
 
 fn texture_cube_uv(sample_dir : vec3<f32>, roughness : f32) -> vec3<f32> {
     let cube_uv_m0 = -2.0;
@@ -3005,15 +2769,6 @@ fn sample_env_cube_unrotated(dir : vec3<f32>, roughness : f32) -> vec3<f32> {
     return mix(c0, c1, mip_f);
 }
 
-// three.js `DFGApprox()` — split-sum approximation used by MeshStandardMaterial IBL.
-fn dfg_approx(normal : vec3<f32>, view_dir : vec3<f32>, roughness : f32) -> vec2<f32> {
-    let dot_nv = clamp(dot(normal, view_dir), 0.0, 1.0);
-    let c0 = vec4<f32>(-1.0, -0.0275, -0.572, 0.022);
-    let c1 = vec4<f32>(1.0, 0.0425, 1.04, -0.04);
-    let r = roughness * c0 + c1;
-    let a004 = min(r.x * r.x, exp2(-9.28 * dot_nv)) * r.x + r.y;
-    return vec2<f32>(-1.04, 1.04) * a004 + r.zw;
-}
 
 fn pbr_brdf(n : vec3<f32>, v : vec3<f32>, l : vec3<f32>, albedo : vec3<f32>, roughness : f32, metalness : f32, f0 : vec3<f32>) -> vec3<f32> {
     let h = normalize(v + l);
@@ -3044,17 +2799,7 @@ fn pbr_brdf(n : vec3<f32>, v : vec3<f32>, l : vec3<f32>, albedo : vec3<f32>, rou
 // is what gives cloth its bright rim and what makes a near-black thermal
 // blanket still show its silhouette against a dark background.
 // ---------------------------------------------------------------------------
-fn d_charlie(n_dot_h : f32, a : f32) -> f32 {
-    let inv_a = 1.0 / max(a, 0.0016);
-    let cos2h = n_dot_h * n_dot_h;
-    let sin2h = max(1.0 - cos2h, 0.0078125); // 2^-7, avoids a fp16 blowup
-    return (2.0 + inv_a) * pow(sin2h, inv_a * 0.5) / (2.0 * PI);
-}
 
-// three.js `V_Neubelt`, saturated as three.js saturates it.
-fn v_neubelt(n_dot_v : f32, n_dot_l : f32) -> f32 {
-    return clamp(1.0 / (4.0 * (n_dot_l + n_dot_v - n_dot_l * n_dot_v)), 0.0, 1.0);
-}
 
 fn brdf_sheen(
     n : vec3<f32>, v : vec3<f32>, l : vec3<f32>,
@@ -3178,41 +2923,12 @@ fn fresnel0_to_ior(f0 : vec3<f32>) -> vec3<f32> {
     return (vec3<f32>(1.0) + s) / (vec3<f32>(1.0) - s);
 }
 
-/// Schlick with a custom F90, used for the film's own interface.
-// three.js `F_Schlick(f0, f90, dotVH)` (`bsdfs`), in its spherical-Gaussian
-// form — the one `BRDF_GGX`, the clearcoat and `evalIridescence` all use.
-fn f_schlick_f90(f0 : vec3<f32>, f90 : vec3<f32>, v_dot_h : f32) -> vec3<f32> {
-    let fresnel = exp2((-5.55473 * v_dot_h - 6.98316) * v_dot_h);
-    return f0 * (1.0 - fresnel) + f90 * fresnel;
-}
 
 fn f_schlick_f90_f(f0 : f32, f90 : f32, v_dot_h : f32) -> f32 {
     let fresnel = exp2((-5.55473 * v_dot_h - 6.98316) * v_dot_h);
     return f0 * (1.0 - fresnel) + f90 * fresnel;
 }
 
-/// Gaussian fit of the CIE XYZ colour-matching functions evaluated at optical
-/// path difference `opd`, converted to linear sRGB.
-fn eval_sensitivity(opd : f32, shift : vec3<f32>) -> vec3<f32> {
-    let phase = 2.0 * PI * opd * 1.0e-9;
-    let val = vec3<f32>(5.4856e-13, 4.4201e-13, 5.2481e-13);
-    let pos = vec3<f32>(1.6810e+06, 1.7953e+06, 2.2084e+06);
-    let vr  = vec3<f32>(4.3278e+09, 9.3046e+09, 6.6121e+09);
-
-    var xyz = val * sqrt(2.0 * PI * vr) * cos(pos * phase + shift) * exp(-(phase * phase) * vr);
-    // The extra x-bar lobe the Gaussian fit needs to stay accurate in the red.
-    let x_extra = 9.7470e-14 * sqrt(2.0 * PI * 4.5282e+09)
-        * cos(2.2399e+06 * phase + shift.x) * exp(-4.5282e+09 * phase * phase);
-    xyz.x = xyz.x + x_extra;
-    xyz = xyz / 1.0685e-7;
-
-    let xyz_to_rgb = mat3x3<f32>(
-        vec3<f32>( 3.2404542, -0.9692660,  0.0556434),
-        vec3<f32>(-1.5371385,  1.8760108, -0.2040259),
-        vec3<f32>(-0.4985314,  0.0415560,  1.0572252),
-    );
-    return xyz_to_rgb * xyz;
-}
 
 /// Reflectance of a `thickness_nm` film of IOR `film_ior` over a base of
 /// reflectance `base_f0`, seen at `cos_theta1`.
@@ -3279,42 +2995,8 @@ fn iridescence_fresnel(
 // Specular-AA tuning. SIGMA is the screen-space filter width, KAPPA the clamp
 // that stops a silhouette (where the normal derivative explodes) from being
 // blurred into a matte band.
-const SPEC_AA_SIGMA : f32 = 0.25;
-const SPEC_AA_KAPPA : f32 = 0.18;
 
-/// Horizon-based specular occlusion (Lagarde & de Rousiers, "Moving Frostbite
-/// to PBR", §4.10.2).
-///
-/// Ambient occlusion answers "how much of the hemisphere can this point see",
-/// which is the right question for a diffuse lobe and the wrong one for a
-/// specular lobe — that only cares about the cone around the reflection
-/// vector. Applying AO to diffuse alone, as three.js does, leaves a cavity in a
-/// *metal* reflecting the whole environment as though nothing were in the way:
-/// a speaker grille's dimples come out as bright crescents rather than as
-/// holes, and a row of them beats against the pixel grid.
-///
-/// Returns 1.0 for an unoccluded point, so a scene with no AO is unchanged.
-fn specular_occlusion(n_dot_v : f32, ao : f32, roughness : f32) -> f32 {
-    return clamp(
-        pow(n_dot_v + ao, exp2(-16.0 * roughness - 1.0)) - 1.0 + ao,
-        0.0,
-        1.0,
-    );
-}
 
-/// Widen the specular lobe to cover the sub-pixel normal distribution.
-///
-/// Works in alpha (= roughness²) space, where variance actually adds; adding in
-/// perceptual-roughness space — as the previous implementation did — is not the
-/// same operation and over-blurs.
-fn specular_aa_roughness(n : vec3<f32>, perceptual_roughness : f32) -> f32 {
-    let du = dpdx(n);
-    let dv = dpdy(n);
-    let variance = SPEC_AA_SIGMA * (dot(du, du) + dot(dv, dv));
-    let alpha = perceptual_roughness * perceptual_roughness;
-    let kernel = min(2.0 * variance, SPEC_AA_KAPPA);
-    return clamp(sqrt(alpha + kernel), 0.0, 1.0);
-}
 
 
 /// One light's contribution to the clearcoat lobe: plain isotropic GGX at the
@@ -3334,20 +3016,6 @@ fn clearcoat_spec(
     return spec * n_dot_l;
 }
 
-// Direct-light PBR dispatch: isotropic GGX unless the material carries an
-// anisotropy strength, in which case the anisotropic lobe is used. `f0` is
-// passed in rather than derived so the iridescence layer can override it.
-// three.js `transmission_pars_fragment` (from the glTF Sample Viewer): N8's
-// mipped bicubic filter, the refracted ray through the volume, Beer–Lambert
-// attenuation and `getIBLVolumeRefraction`.
-fn bicubic_w0(a : f32) -> f32 { return (1.0 / 6.0) * (a * (a * (-a + 3.0) - 3.0) + 1.0); }
-fn bicubic_w1(a : f32) -> f32 { return (1.0 / 6.0) * (a * a * (3.0 * a - 6.0) + 4.0); }
-fn bicubic_w2(a : f32) -> f32 { return (1.0 / 6.0) * (a * (a * (-3.0 * a + 3.0) + 3.0) + 1.0); }
-fn bicubic_w3(a : f32) -> f32 { return (1.0 / 6.0) * (a * a * a); }
-fn bicubic_g0(a : f32) -> f32 { return bicubic_w0(a) + bicubic_w1(a); }
-fn bicubic_g1(a : f32) -> f32 { return bicubic_w2(a) + bicubic_w3(a); }
-fn bicubic_h0(a : f32) -> f32 { return -1.0 + bicubic_w1(a) / (bicubic_w0(a) + bicubic_w1(a)); }
-fn bicubic_h1(a : f32) -> f32 { return 1.0 + bicubic_w3(a) / (bicubic_w2(a) + bicubic_w3(a)); }
 
 fn transmission_bicubic(uv_in : vec2<f32>, texel : vec4<f32>, lod : f32) -> vec4<f32> {
     let uv = uv_in * texel.zw + 0.5;
@@ -3402,14 +3070,6 @@ fn volume_transmission_ray(n : vec3<f32>, v : vec3<f32>, thickness : f32, ior : 
     return normalize(refraction) * thickness * scale;
 }
 
-// three.js `volumeAttenuation` (Beer's law); an infinite distance — here 0,
-// as the material uploads it — attenuates nothing.
-fn volume_attenuation(distance : f32, color : vec3<f32>, attenuation_distance : f32) -> vec3<f32> {
-    if (attenuation_distance <= 0.0) {
-        return vec3<f32>(1.0);
-    }
-    return exp(log(color) / attenuation_distance * distance);
-}
 
 fn ibl_volume_refraction(
     n : vec3<f32>, v : vec3<f32>, roughness : f32, diffuse_color : vec3<f32>,
@@ -3448,54 +3108,9 @@ fn ibl_volume_refraction(
 // `ltc_2` (layer 1), 64×64, sampled linearly.
 @group(3) @binding(14) var ltc_tex : texture_2d_array<f32>;
 
-// three.js `LTC_Uv`: the table coordinate for roughness and the view angle.
-fn ltc_uv(n : vec3<f32>, v : vec3<f32>, roughness : f32) -> vec2<f32> {
-    let lut_size = 64.0;
-    let lut_scale = (lut_size - 1.0) / lut_size;
-    let lut_bias = 0.5 / lut_size;
-    let n_dot_v = clamp(dot(n, v), 0.0, 1.0);
-    return vec2<f32>(roughness, sqrt(1.0 - n_dot_v)) * lut_scale + lut_bias;
-}
 
-// three.js `LTC_ClippedSphereFormFactor`.
-fn ltc_clipped_sphere_form_factor(f : vec3<f32>) -> f32 {
-    let l = length(f);
-    return max((l * l + f.z) / (l + 1.0), 0.0);
-}
 
-// three.js `LTC_EdgeVectorFormFactor`.
-fn ltc_edge_vector_form_factor(v1 : vec3<f32>, v2 : vec3<f32>) -> vec3<f32> {
-    let x = dot(v1, v2);
-    let y = abs(x);
-    let a = 0.8543985 + (0.4965155 + 0.0145206 * y) * y;
-    let b = 3.4175940 + (4.1616724 + y) * y;
-    let v = a / b;
-    let theta_sintheta = select(0.5 * inverseSqrt(max(1.0 - x * x, 1e-7)) - v, v, x > 0.0);
-    return cross(v1, v2) * theta_sintheta;
-}
 
-// three.js `LTC_Evaluate`: the polygon's form factor under the cosine
-// `m_inv` maps to, horizon-clipped; zero behind the light's emitting face.
-fn ltc_evaluate(n : vec3<f32>, v : vec3<f32>, p : vec3<f32>, m_inv : mat3x3<f32>, r0 : vec3<f32>, r1 : vec3<f32>, r2 : vec3<f32>, r3 : vec3<f32>) -> f32 {
-    let e1 = r1 - r0;
-    let e2 = r3 - r0;
-    let light_normal = cross(e1, e2);
-    if (dot(light_normal, p - r0) < 0.0) {
-        return 0.0;
-    }
-    let t1 = normalize(v - n * dot(v, n));
-    let t2 = -cross(n, t1);
-    let m = m_inv * transpose(mat3x3<f32>(t1, t2, n));
-    let c0 = normalize(m * (r0 - p));
-    let c1 = normalize(m * (r1 - p));
-    let c2 = normalize(m * (r2 - p));
-    let c3 = normalize(m * (r3 - p));
-    var f = ltc_edge_vector_form_factor(c0, c1);
-    f = f + ltc_edge_vector_form_factor(c1, c2);
-    f = f + ltc_edge_vector_form_factor(c2, c3);
-    f = f + ltc_edge_vector_form_factor(c3, c0);
-    return ltc_clipped_sphere_form_factor(f);
-}
 
 // three.js `RE_Direct_RectArea_Physical` for one light: `right` and `up`
 // are its half width and half height (three.js's `halfWidth`,
@@ -3610,16 +3225,6 @@ fn three_tangent_frame(p : vec3<f32>, n : vec3<f32>, uv : vec2<f32>) -> TangentF
     return TangentFrame(t * scale, b * scale);
 }
 
-// three.js `IBLSheenBRDF`: Estevez and Kulla's Charlie sheen integrated over
-// the hemisphere, as a curve fit.
-fn ibl_sheen_brdf(n : vec3<f32>, v : vec3<f32>, roughness : f32) -> f32 {
-    let n_dot_v = clamp(dot(n, v), 0.0, 1.0);
-    let r2 = roughness * roughness;
-    let a = select(-8.48 * r2 + 14.3 * roughness - 9.95, -339.2 * r2 + 161.4 * roughness - 25.9, roughness < 0.25);
-    let b = select(1.97 * r2 - 3.27 * roughness + 0.72, 44.0 * r2 - 23.7 * roughness + 3.26, roughness < 0.25);
-    let dg = exp(a * n_dot_v + b) + select(0.1 * (roughness - 0.25), 0.0, roughness < 0.25);
-    return clamp(dg / PI, 0.0, 1.0);
-}
 
 @fragment
 fn fs_main(in : VsOut, @builtin(front_facing) front_facing : bool) -> @location(0) vec4<f32> {
@@ -5297,9 +4902,616 @@ fn sample_matcap(uv : vec2<f32>) -> vec4<f32> { return textureSample(matcap_tex,
 fn sample_cloud(uv : vec2<f32>) -> vec4<f32> { return textureSample(matcap_tex, tex_sampler, uv); }
 "#;
 
+/// Where every shader that takes [`SHARED_FUNCTIONS`] has them put in: the
+/// renderer's ([`SHADER_SOURCE`]), the post-processing module, and the Metal
+/// library.
+pub(crate) const SHARED_FUNCTIONS_MARKER: &str = "//@@SHARED_FUNCTIONS@@";
+
+/// The functions both backends' shaders call, written once with
+/// [`shader_functions!`](crate::shader_functions): three.js r165's
+/// tone-mapping curves, each on an *exposed* linear colour, and the shading
+/// helpers — BRDF and IBL fits, three.js's light falloff, the shadow disc's
+/// taps, the bicubic weights. Pure functions of their arguments: no frame,
+/// no textures.
+pub(crate) static SHARED_FUNCTIONS: std::sync::LazyLock<crate::materials::shared_passes::ShaderFunctions> =
+    std::sync::LazyLock::new(|| {
+        crate::shader_functions! {
+            const LINEAR_SRGB_TO_REC2020: mat3x3f = mat3x3f(
+                vec3f(0.6274, 0.0691, 0.0164),
+                vec3f(0.3293, 0.9195, 0.0880),
+                vec3f(0.0433, 0.0113, 0.8956),
+            );
+            const REC2020_TO_LINEAR_SRGB: mat3x3f = mat3x3f(
+                vec3f(1.6605, -0.1246, -0.0182),
+                vec3f(-0.5876, 1.1329, -0.1006),
+                vec3f(-0.0728, -0.0083, 1.1187),
+            );
+
+            // `LinearToneMapping`: the exposure, clamped to the displayable.
+            fn linear_tonemap(c: vec3f) -> vec3f {
+                return clamp(c, vec3f(0.0), vec3f(1.0));
+            }
+
+            // `ReinhardToneMapping`.
+            fn reinhard_tonemap(c: vec3f) -> vec3f {
+                return clamp(c / (vec3f(1.0) + c), vec3f(0.0), vec3f(1.0));
+            }
+
+            // `CineonToneMapping` (Jim Hejl and Richard Burgess-Dawson's
+            // filmic curve), which has the sRGB encode baked in, so it is
+            // decoded back with a 2.2 power.
+            fn cineon_tonemap(c_in: vec3f) -> vec3f {
+                let c = max(vec3f(0.0), c_in - 0.004);
+                return pow((c * (6.2 * c + 0.5)) / (c * (6.2 * c + 1.7) + 0.06), vec3f(2.2));
+            }
+
+            // `ACESFilmicToneMapping`: Stephen Hill's RRT + ODT fit, with
+            // three.js's 1/0.6 pre-scale. Narkowicz's single-curve fit, which
+            // this replaced, reads 0.267 for mid grey where three.js reads
+            // 0.213.
+            fn aces_tonemap(x: vec3f) -> vec3f {
+                let aces_input = mat3x3f(
+                    vec3f(0.59719, 0.07600, 0.02840),
+                    vec3f(0.35458, 0.90834, 0.13383),
+                    vec3f(0.04823, 0.01566, 0.83777),
+                );
+                let aces_output = mat3x3f(
+                    vec3f(1.60475, -0.10208, -0.00327),
+                    vec3f(-0.53108, 1.10813, -0.07276),
+                    vec3f(-0.07367, -0.00605, 1.07602),
+                );
+                let v = aces_input * (x / 0.6);
+                let a = v * (v + 0.0245786) - 0.000090537;
+                let b = v * (0.983729 * v + 0.4329510) + 0.238081;
+                return clamp(aces_output * (a / b), vec3f(0.0), vec3f(1.0));
+            }
+
+            // Khronos PBR Neutral: almost the identity below the shoulder, so
+            // an authored colour reaches the screen as itself; only the top is
+            // compressed, desaturating towards white.
+            fn neutral_tonemap(c_in: vec3f) -> vec3f {
+                let start_compression = 0.8 - 0.04;
+                let desaturation = 0.15;
+                var c = c_in;
+                let x = min(c.r, min(c.g, c.b));
+                var offset = 0.04;
+                if (x < 0.08) { offset = x - 6.25 * x * x; }
+                c = c - vec3f(offset);
+                let peak = max(c.r, max(c.g, c.b));
+                if (peak < start_compression) { return c; }
+                let d = 1.0 - start_compression;
+                let new_peak = 1.0 - d * d / (peak + d - start_compression);
+                c = c * (new_peak / max(peak, 1e-6));
+                let g = 1.0 - 1.0 / (desaturation * (peak - new_peak) + 1.0);
+                return mix(c, vec3f(new_peak), g);
+            }
+
+            fn agx_contrast(x: vec3f) -> vec3f {
+                let x2 = x * x;
+                let x4 = x2 * x2;
+                return 15.5 * x4 * x2 - 40.14 * x4 * x + 31.96 * x4 - 6.868 * x2 * x + 0.4298 * x2
+                    + 0.1191 * x - 0.00232;
+            }
+
+            // AgX, as three.js ships it: a long shoulder — 3.0 lands at 0.82
+            // where ACES is at 0.95 — so a bright environment keeps detail in
+            // its highlights, at the cost of desaturated shadows.
+            fn agx_tonemap(c_in: vec3f) -> vec3f {
+                let inset = mat3x3f(
+                    vec3f(0.856627153315983, 0.137318972929847, 0.11189821299995),
+                    vec3f(0.0951212405381588, 0.761241990602591, 0.0767994186031903),
+                    vec3f(0.0482516061458583, 0.101439036467562, 0.811302368396859),
+                );
+                let outset = mat3x3f(
+                    vec3f(1.1271005818144368, -0.1413297634984383, -0.14132976349843826),
+                    vec3f(-0.11060664309660323, 1.157823702216272, -0.11060664309660294),
+                    vec3f(-0.016493938717834573, -0.016493938717834257, 1.2519364065950405),
+                );
+                let min_ev = -12.47393;
+                let max_ev = 4.026069;
+                var c = inset * (LINEAR_SRGB_TO_REC2020 * c_in);
+                c = max(c, vec3f(1e-10));
+                c = (log2(c) - vec3f(min_ev)) / (max_ev - min_ev);
+                c = clamp(c, vec3f(0.0), vec3f(1.0));
+                c = agx_contrast(c);
+                c = outset * c;
+                c = pow(max(c, vec3f(0.0)), vec3f(2.2));
+                return clamp(REC2020_TO_LINEAR_SRGB * c, vec3f(0.0), vec3f(1.0));
+            }
+
+            const SHADE_PI: f32 = 3.14159265358979;
+            // Specular anti-aliasing (Kaplanyan & Hoffman): the screen-space variance
+            // of the normal, scaled by `SPEC_AA_SIGMA` and capped at `SPEC_AA_KAPPA`,
+            // widens the lobe so a curved highlight does not sparkle.
+            const SPEC_AA_SIGMA: f32 = 0.25;
+            const SPEC_AA_KAPPA: f32 = 0.18;
+
+            // Direct-light PBR dispatch: isotropic GGX unless the material carries an
+            // anisotropy strength, in which case the anisotropic lobe is used. `f0` is
+            // passed in rather than derived so the iridescence layer can override it.
+            // three.js `transmission_pars_fragment` (from the glTF Sample Viewer): N8's
+            // mipped bicubic filter, the refracted ray through the volume, Beer–Lambert
+            // attenuation and `getIBLVolumeRefraction`.
+            fn bicubic_w0(a: f32) -> f32 { return (1.0 / 6.0) * (a * (a * (-a + 3.0) - 3.0) + 1.0); }
+
+            fn bicubic_w1(a: f32) -> f32 { return (1.0 / 6.0) * (a * a * (3.0 * a - 6.0) + 4.0); }
+
+            fn bicubic_w2(a: f32) -> f32 { return (1.0 / 6.0) * (a * (a * (-3.0 * a + 3.0) + 3.0) + 1.0); }
+
+            fn bicubic_w3(a: f32) -> f32 { return (1.0 / 6.0) * (a * a * a); }
+
+            fn bicubic_g0(a: f32) -> f32 { return bicubic_w0(a) + bicubic_w1(a); }
+
+            fn bicubic_g1(a: f32) -> f32 { return bicubic_w2(a) + bicubic_w3(a); }
+
+            fn bicubic_h0(a: f32) -> f32 { return -1.0 + bicubic_w1(a) / (bicubic_w0(a) + bicubic_w1(a)); }
+
+            fn bicubic_h1(a: f32) -> f32 { return 1.0 + bicubic_w3(a) / (bicubic_w2(a) + bicubic_w3(a)); }
+
+            // three.js `DFGApprox()` — split-sum approximation used by MeshStandardMaterial IBL.
+            fn dfg_approx(normal: vec3f, view_dir: vec3f, roughness: f32) -> vec2f {
+                let dot_nv = clamp(dot(normal, view_dir), 0.0, 1.0);
+                let c0 = vec4f(-1.0, -0.0275, -0.572, 0.022);
+                let c1 = vec4f(1.0, 0.0425, 1.04, -0.04);
+                let r = roughness * c0 + c1;
+                let a004 = min(r.x * r.x, exp2(-9.28 * dot_nv)) * r.x + r.y;
+                return vec2f(-1.04, 1.04) * a004 + r.zw;
+            }
+
+            // Gaussian fit of the CIE XYZ colour-matching functions evaluated at optical
+            // path difference `opd`, converted to linear sRGB.
+            fn eval_sensitivity(opd: f32, shift: vec3f) -> vec3f {
+                let phase = 2.0 * SHADE_PI * opd * 1.0e-9;
+                let val = vec3f(5.4856e-13, 4.4201e-13, 5.2481e-13);
+                let pos = vec3f(1.6810e+06, 1.7953e+06, 2.2084e+06);
+                let vr  = vec3f(4.3278e+09, 9.3046e+09, 6.6121e+09);
+
+                var xyz = val * sqrt(2.0 * SHADE_PI * vr) * cos(pos * phase + shift) * exp(-(phase * phase) * vr);
+                // The extra x-bar lobe the Gaussian fit needs to stay accurate in the red.
+                let x_extra = 9.7470e-14 * sqrt(2.0 * SHADE_PI * 4.5282e+09)
+                    * cos(2.2399e+06 * phase + shift.x) * exp(-4.5282e+09 * phase * phase);
+                xyz.x = xyz.x + x_extra;
+                xyz = xyz / 1.0685e-7;
+
+                let xyz_to_rgb = mat3x3f(
+                    vec3f( 3.2404542, -0.9692660,  0.0556434),
+                    vec3f(-1.5371385,  1.8760108, -0.2040259),
+                    vec3f(-0.4985314,  0.0415560,  1.0572252),
+                );
+                return xyz_to_rgb * xyz;
+            }
+
+            // Henyey-Greenstein phase function: how much light scattering off a droplet
+            // carries on in a given direction.
+            //
+            // `g` is the asymmetry — 0 scatters evenly, positive keeps light going the way
+            // it was already headed. Cloud droplets are far larger than visible
+            // wavelengths and sit around 0.8, which is why a deck with the sun behind it
+            // glows and the same deck lit from over your shoulder does not.
+            fn henyey_greenstein(cos_theta: f32, g: f32) -> f32 {
+                let g2 = g * g;
+                let d = max(1.0 + g2 - 2.0 * g * cos_theta, 1e-4);
+                return (1.0 - g2) / (4.0 * SHADE_PI * d * sqrt(d));
+            }
+
+            // three.js `IBLSheenBRDF`: Estevez and Kulla's Charlie sheen integrated over
+            // the hemisphere, as a curve fit.
+            fn ibl_sheen_brdf(n: vec3f, v: vec3f, roughness: f32) -> f32 {
+                let n_dot_v = clamp(dot(n, v), 0.0, 1.0);
+                let r2 = roughness * roughness;
+                let a = select(-8.48 * r2 + 14.3 * roughness - 9.95, -339.2 * r2 + 161.4 * roughness - 25.9, roughness < 0.25);
+                let b = select(1.97 * r2 - 3.27 * roughness + 0.72, 44.0 * r2 - 23.7 * roughness + 3.26, roughness < 0.25);
+                let dg = exp(a * n_dot_v + b) + select(0.1 * (roughness - 0.25), 0.0, roughness < 0.25);
+                return clamp(dg / SHADE_PI, 0.0, 1.0);
+            }
+
+            // three.js `LTC_ClippedSphereFormFactor`.
+            fn ltc_clipped_sphere_form_factor(f: vec3f) -> f32 {
+                let l = length(f);
+                return max((l * l + f.z) / (l + 1.0), 0.0);
+            }
+
+            // three.js `LTC_EdgeVectorFormFactor`.
+            fn ltc_edge_vector_form_factor(v1: vec3f, v2: vec3f) -> vec3f {
+                let x = dot(v1, v2);
+                let y = abs(x);
+                let a = 0.8543985 + (0.4965155 + 0.0145206 * y) * y;
+                let b = 3.4175940 + (4.1616724 + y) * y;
+                let v = a / b;
+                let theta_sintheta = select(0.5 * inverseSqrt(max(1.0 - x * x, 1e-7)) - v, v, x > 0.0);
+                return cross(v1, v2) * theta_sintheta;
+            }
+
+            // three.js `LTC_Uv`: the table coordinate for roughness and the view angle.
+            fn ltc_uv(n: vec3f, v: vec3f, roughness: f32) -> vec2f {
+                let lut_size = 64.0;
+                let lut_scale = (lut_size - 1.0) / lut_size;
+                let lut_bias = 0.5 / lut_size;
+                let n_dot_v = clamp(dot(n, v), 0.0, 1.0);
+                return vec2f(roughness, sqrt(1.0 - n_dot_v)) * lut_scale + lut_bias;
+            }
+
+            fn punctual_attenuation(d: f32, max_d: f32, decay: f32) -> f32 {
+                // Match three.js `getDistanceAttenuation` (lights_pars_begin.glsl.js):
+                // 1.0 / max(pow(lightDistance, decayExponent), 0.01)
+                var att = 1.0 / max(pow(d, decay), 0.01);
+                if (max_d > 0.0) {
+                    let t = clamp(1.0 - pow(d / max_d, 4.0), 0.0, 1.0);
+                    att = att * t * t;
+                }
+                return att;
+            }
+
+            fn roughness_to_mip(roughness: f32) -> f32 {
+                var mip = 0.0;
+                if (roughness >= 0.8) {
+                    mip = (1.0 - roughness) * (-1.0 - (-2.0)) / (1.0 - 0.8) + (-2.0);
+                } else if (roughness >= 0.4) {
+                    mip = (0.8 - roughness) * (2.0 - (-1.0)) / (0.8 - 0.4) + (-1.0);
+                } else if (roughness >= 0.305) {
+                    mip = (0.4 - roughness) * (3.0 - 2.0) / (0.4 - 0.305) + 2.0;
+                } else if (roughness >= 0.21) {
+                    mip = (0.305 - roughness) * (4.0 - 3.0) / (0.305 - 0.21) + 3.0;
+                } else {
+                    mip = -2.0 * log2(1.16 * max(roughness, 0.001));
+                }
+                return mip;
+            }
+
+            // How much of the sun a sphere leaves visible from this point.
+            //
+            // The sun and the occluder are both circles on the sky, of angular radii `a`
+            // and `b`, their centres `d` apart. What is lost is the area the two discs
+            // share, over the sun's area — the standard circle-circle lens. Doing it this
+            // way rather than with a shadow map gives the penumbra for nothing, because
+            // the sun is half a degree wide and not a point; it gives the annular ring
+            // when the occluder is smaller and centred; and it works over a lunar orbit,
+            // where a shadow map fitted to the planet would never reach the moon.
+            // Lambert's cosine, softened by the sun being a disc rather than a point.
+            //
+            // `max(dot(n, l), 0)` is the cosine for a *point* source, and it puts a hard
+            // edge on the terminator. The sun is about half a degree across, so near the
+            // terminator part of its disc is below the horizon and part is above, and the
+            // light falls off over that angular width instead of switching. From orbit
+            // that is a band roughly thirty kilometres wide on Earth — narrow, but a hard
+            // edge at this scale reads as a rendering artefact rather than as a sunrise.
+            //
+            // The returned value is the first moment of the visible part of the disc: it
+            // meets `dot(n, l)` exactly where the disc clears the horizon either way, so
+            // nothing outside the band changes.
+            fn soft_lambert(ndl: f32, sun_radius: f32) -> f32 {
+                if (sun_radius <= 0.0) {
+                    return max(ndl, 0.0);
+                }
+                let x = ndl / sun_radius;
+                if (x >= 1.0) { return ndl; }
+                if (x <= -1.0) { return 0.0; }
+                return sun_radius * (x * acos(-x) + sqrt(max(1.0 - x * x, 0.0))) / SHADE_PI;
+            }
+
+            // Widen the specular lobe to cover the sub-pixel normal distribution.
+            //
+            // Works in alpha (= roughness²) space, where variance actually adds; adding in
+            // perceptual-roughness space — as the previous implementation did — is not the
+            // same operation and over-blurs.
+            fn specular_aa_roughness(n: vec3f, perceptual_roughness: f32) -> f32 {
+                let du = dpdx(n);
+                let dv = dpdy(n);
+                let variance = SPEC_AA_SIGMA * (dot(du, du) + dot(dv, dv));
+                let alpha = perceptual_roughness * perceptual_roughness;
+                let widen = min(2.0 * variance, SPEC_AA_KAPPA);
+                return clamp(sqrt(alpha + widen), 0.0, 1.0);
+            }
+
+            // Horizon-based specular occlusion (Lagarde & de Rousiers, "Moving Frostbite
+            // to PBR", §4.10.2).
+            //
+            // Ambient occlusion answers "how much of the hemisphere can this point see",
+            // which is the right question for a diffuse lobe and the wrong one for a
+            // specular lobe — that only cares about the cone around the reflection
+            // vector. Applying AO to diffuse alone, as three.js does, leaves a cavity in a
+            // *metal* reflecting the whole environment as though nothing were in the way:
+            // a speaker grille's dimples come out as bright crescents rather than as
+            // holes, and a row of them beats against the pixel grid.
+            //
+            // Returns 1.0 for an unoccluded point, so a scene with no AO is unchanged.
+            fn specular_occlusion(n_dot_v: f32, ao: f32, roughness: f32) -> f32 {
+                return clamp(
+                    pow(n_dot_v + ao, exp2(-16.0 * roughness - 1.0)) - 1.0 + ao,
+                    0.0,
+                    1.0,
+                );
+            }
+
+            // three.js `volumeAttenuation` (Beer's law); an infinite distance — here 0,
+            // as the material uploads it — attenuates nothing.
+            fn volume_attenuation(distance: f32, color: vec3f, attenuation_distance: f32) -> vec3f {
+                if (attenuation_distance <= 0.0) {
+                    return vec3f(1.0);
+                }
+                return exp(log(color) / attenuation_distance * distance);
+            }
+
+            fn cube_uv_get_face(direction: vec3f) -> f32 {
+                let abs_dir = abs(direction);
+                var face = -1.0;
+                if (abs_dir.x > abs_dir.z) {
+                    if (abs_dir.x > abs_dir.y) {
+                        face = select(3.0, 0.0, direction.x > 0.0);
+                    } else {
+                        face = select(4.0, 1.0, direction.y > 0.0);
+                    }
+                } else {
+                    if (abs_dir.z > abs_dir.y) {
+                        face = select(5.0, 2.0, direction.z > 0.0);
+                    } else {
+                        face = select(4.0, 1.0, direction.y > 0.0);
+                    }
+                }
+                return face;
+            }
+
+            fn cube_uv_get_uv(direction: vec3f, face: f32) -> vec2f {
+                var uv = vec2f(0.0);
+                if (face == 0.0) {
+                    uv = vec2f(direction.z, direction.y) / abs(direction.x);
+                } else if (face == 1.0) {
+                    uv = vec2f(-direction.x, -direction.z) / abs(direction.y);
+                } else if (face == 2.0) {
+                    uv = vec2f(-direction.x, direction.y) / abs(direction.z);
+                } else if (face == 3.0) {
+                    uv = vec2f(-direction.z, direction.y) / abs(direction.x);
+                } else if (face == 4.0) {
+                    uv = vec2f(-direction.x, direction.z) / abs(direction.y);
+                } else {
+                    uv = vec2f(direction.x, direction.y) / abs(direction.z);
+                }
+                return 0.5 * (uv + 1.0);
+            }
+
+            // The disc's turn at a point: varied so the taps' pattern does not show as
+            // banding in a wide penumbra, and fixed to the world so it does not crawl as
+            // the camera moves.
+            fn shadow_disc_rotation(p: vec3f) -> f32 {
+                return fract(sin(dot(p, vec3f(12.9898, 78.233, 37.719))) * 43758.5453) * 6.28318530718;
+            }
+
+            // The film grade's vignette: the gain on pixel `xy` of a `dim` frame.
+            // cos-fourth falloff — the one a real lens has — normalised so the
+            // centre is untouched and only the corners lose light. It is lost
+            // light, so multiply it in linear.
+            fn film_vignette(xy: vec2u, dim: vec2f, amount: f32) -> f32 {
+                let q = (vec2f(xy) + 0.5) / dim * 2.0 - 1.0;
+                let f = 1.0 / (1.0 + dot(q, q) * 0.5);
+                return mix(1.0, f * f, amount);
+            }
+
+            // The film grade's grain, on an sRGB-*encoded* colour. Hashed on the
+            // pixel and the frame, so it moves: static grain is dirt on the lens.
+            // Weighted to the mid-tones, because film has almost none in the toe
+            // or the shoulder and an even sprinkle over black reads as sensor
+            // noise — and "mid-tone" means the encoded value, which is why both
+            // backends add it there.
+            fn film_grain(rgb: vec3f, xy: vec2u, seed: f32, amount: f32) -> vec3f {
+                var h = xy.x * 374761393u + xy.y * 668265263u + u32(seed) * 1274126177u;
+                h = h ^ (h >> 13u);
+                h = h * 1274126177u;
+                let n = f32((h ^ (h >> 16u)) & 0xffffu) / 65535.0 - 0.5;
+                let l = dot(rgb, vec3f(0.299, 0.587, 0.114));
+                return clamp(rgb + n * amount * (4.0 * l * (1.0 - l)), vec3f(0.0), vec3f(1.0));
+            }
+
+            // The cube face a direction lands on and its uv there: the selection
+            // every API's cube sampler makes (major axis, then the face's
+            // `sc`/`tc` table), done by hand because the faces live in a 2D
+            // array — WebGL2 has no cube arrays. Faces are +X −X +Y −Y +Z −Z, as
+            // the point passes draw them.
+            fn point_shadow_face(d: vec3f) -> vec3f {
+                let a = abs(d);
+                var face = 0.0;
+                var sc = 0.0;
+                var tc = 0.0;
+                var ma = 1.0;
+                if (a.x >= a.y && a.x >= a.z) {
+                    ma = a.x;
+                    if (d.x > 0.0) {
+                        face = 0.0;
+                        sc = -d.z;
+                    } else {
+                        face = 1.0;
+                        sc = d.z;
+                    }
+                    tc = -d.y;
+                } else if (a.y >= a.z) {
+                    ma = a.y;
+                    sc = d.x;
+                    if (d.y > 0.0) {
+                        face = 2.0;
+                        tc = d.z;
+                    } else {
+                        face = 3.0;
+                        tc = -d.z;
+                    }
+                } else {
+                    ma = a.z;
+                    if (d.z > 0.0) {
+                        face = 4.0;
+                        sc = d.x;
+                    } else {
+                        face = 5.0;
+                        sc = -d.x;
+                    }
+                    tc = -d.y;
+                }
+                return vec3f(0.5 * (sc / ma + 1.0), 0.5 * (tc / ma + 1.0), face);
+            }
+
+            // GGX (Trowbridge-Reitz) normal distribution.
+            fn d_ggx(n_dot_h: f32, a: f32) -> f32 {
+                let a2 = a * a;
+                let f = (n_dot_h * a2 - n_dot_h) * n_dot_h + 1.0;
+                return a2 / (SHADE_PI * f * f);
+            }
+
+            // three.js `V_GGX_SmithCorrelated`: height-correlated Smith
+            // visibility, which already carries the 1/(4·NoV·NoL) of the
+            // microfacet denominator — so a specular lobe is `D · V · F` with no
+            // further divide.
+            fn v_ggx_smith_correlated(a: f32, n_dot_l: f32, n_dot_v: f32) -> f32 {
+                let a2 = a * a;
+                let gv = n_dot_l * sqrt(a2 + (1.0 - a2) * n_dot_v * n_dot_v);
+                let gl = n_dot_v * sqrt(a2 + (1.0 - a2) * n_dot_l * n_dot_l);
+                return 0.5 / max(gv + gl, 1e-6);
+            }
+
+            // three.js `F_Schlick(f0, 1.0, dotVH)`, in its spherical-Gaussian
+            // form (`exp2((-5.55473·x − 6.98316)·x)` for `(1 − x)^5`), which is
+            // what r165 runs.
+            fn f_schlick(v_dot_h: f32, f0: vec3f) -> vec3f {
+                let x = clamp(v_dot_h, 0.0, 1.0);
+                let fresnel = exp2((-5.55473 * x - 6.98316) * x);
+                return f0 * (1.0 - fresnel) + vec3f(fresnel);
+            }
+
+            // three.js `F_Schlick(f0, f90, dotVH)` (`bsdfs`), in the same form —
+            // the one `BRDF_GGX`, the clearcoat and `evalIridescence` all use.
+            fn f_schlick_f90(f0: vec3f, f90: vec3f, v_dot_h: f32) -> vec3f {
+                let fresnel = exp2((-5.55473 * v_dot_h - 6.98316) * v_dot_h);
+                return f0 * (1.0 - fresnel) + f90 * fresnel;
+            }
+
+            // Sheen: the Estevez & Kulla "Charlie" distribution, which three.js
+            // pairs with Neubelt visibility. Unlike GGX it peaks at grazing
+            // angles, which is what gives cloth its bright rim.
+            fn d_charlie(n_dot_h: f32, a: f32) -> f32 {
+                let inv_a = 1.0 / max(a, 0.0016);
+                let cos2h = n_dot_h * n_dot_h;
+                // 2^-7, avoids a fp16 blowup.
+                let sin2h = max(1.0 - cos2h, 0.0078125);
+                return (2.0 + inv_a) * pow(sin2h, inv_a * 0.5) / (2.0 * SHADE_PI);
+            }
+
+            // three.js `V_Neubelt`, saturated as three.js saturates it.
+            fn v_neubelt(n_dot_v: f32, n_dot_l: f32) -> f32 {
+                return clamp(1.0 / (4.0 * (n_dot_l + n_dot_v - n_dot_l * n_dot_v)), 0.0, 1.0);
+            }
+
+            // three.js `LTC_Evaluate`: the polygon's form factor under the
+            // cosine `m_inv` maps to, horizon-clipped; zero behind the light's
+            // emitting face.
+            fn ltc_evaluate(n: vec3f, v: vec3f, p: vec3f, m_inv: mat3x3f, r0: vec3f, r1: vec3f, r2: vec3f, r3: vec3f) -> f32 {
+                let e1 = r1 - r0;
+                let e2 = r3 - r0;
+                let light_normal = cross(e1, e2);
+                if (dot(light_normal, p - r0) < 0.0) {
+                    return 0.0;
+                }
+                let t1 = normalize(v - n * dot(v, n));
+                let t2 = -cross(n, t1);
+                let m = m_inv * transpose(mat3x3f(t1, t2, n));
+                let c0 = normalize(m * (r0 - p));
+                let c1 = normalize(m * (r1 - p));
+                let c2 = normalize(m * (r2 - p));
+                let c3 = normalize(m * (r3 - p));
+                var f = ltc_edge_vector_form_factor(c0, c1);
+                f = f + ltc_edge_vector_form_factor(c1, c2);
+                f = f + ltc_edge_vector_form_factor(c2, c3);
+                f = f + ltc_edge_vector_form_factor(c3, c0);
+                return ltc_clipped_sphere_form_factor(f);
+            }
+
+            // Screen-space ambient occlusion, the arithmetic of it: the wgpu
+            // compute pass, its WebGL2 raster twin and the Metal fragment pass
+            // only fetch depth (`renderer/ssao.rs`, `metal/postfx.metal`).
+
+            // Depth-buffer values are hyperbolic: the same numeric step is
+            // millimetres up close and kilometres far away. Everything works in
+            // linear view depth.
+            fn ssao_linear_depth(raw: f32, near: f32, far: f32, reversed: bool) -> f32 {
+                let d = select(raw, 1.0 - raw, reversed);
+                if (d >= 1.0) {
+                    return far;
+                }
+                return (near * far) / max(far - d * (far - near), 1e-6);
+            }
+
+            // View-space position of pixel `c` of a `dim` buffer at linear depth
+            // `z`. Only ratios matter for a normal, so this needs the
+            // projection's shape and not the matrix.
+            fn ssao_view_pos(c: vec2i, dim: vec2u, z: f32, aspect: f32, tan_half_fov: f32) -> vec3f {
+                let uv = (vec2f(c) + 0.5) / vec2f(dim) * 2.0 - 1.0;
+                return vec3f(uv.x * aspect * tan_half_fov * z, -uv.y * tan_half_fov * z, z);
+            }
+
+            // NEAREST-SIDE DERIVATIVES. A central difference across a silhouette
+            // returns a normal belonging to neither surface, and silhouettes are
+            // where the creases are. Taking both sides and keeping the smaller
+            // depth step holds the estimate on the near surface.
+            fn ssao_normal(p0: vec3f, xr: vec3f, xl: vec3f, yd: vec3f, yu: vec3f) -> vec3f {
+                var dx = xr - p0;
+                if (abs(xl.z - p0.z) < abs(xr.z - p0.z)) {
+                    dx = p0 - xl;
+                }
+                var dy = yd - p0;
+                if (abs(yu.z - p0.z) < abs(yd.z - p0.z)) {
+                    dy = p0 - yu;
+                }
+                return normalize(cross(dx, dy));
+            }
+
+            // The sampling radius in pixels of a `height`-pixel buffer. It
+            // shrinks with distance so the effect keeps a fixed size in the
+            // WORLD rather than a fixed number of pixels.
+            fn ssao_radius_px(radius: f32, z: f32, height: f32, tan_half_fov: f32) -> f32 {
+                return clamp(radius / z * height * 0.5 / max(tan_half_fov, 1e-4), 2.0, 64.0);
+            }
+
+            // Tap `i` of twelve around pixel `c`: a golden-angle spiral, uniform
+            // over the disc, turned per pixel so neighbours do not share
+            // coherent streaks.
+            fn ssao_tap(c: vec2i, i: i32, px: f32) -> vec2i {
+                let turn = fract(sin(dot(vec2f(c), vec2f(12.9898, 78.233))) * 43758.5453) * 6.2831853;
+                let a = f32(i) * 2.39996 + turn;
+                let r = px * sqrt((f32(i) + 0.5) / 12.0);
+                return c + vec2i(vec2f(cos(a), sin(a)) * r);
+            }
+
+            // How much the surface at `ps` occludes `p0`, whose normal is `n`.
+            // Only from IN FRONT of the surface — the dot is what stops a slanted
+            // plane shadowing itself — and falling off with distance, so a far
+            // foreground object does not darken everything behind it: that is a
+            // silhouette, not a contact.
+            fn ssao_occlusion(n: vec3f, p0: vec3f, ps: vec3f, radius: f32) -> f32 {
+                let v = ps - p0;
+                let d = length(v);
+                if (d < 1e-4) {
+                    return 0.0;
+                }
+                return max(dot(n, v / d), 0.0) * clamp(1.0 - d / radius, 0.0, 1.0);
+            }
+
+            // Tap `k` of `n` on a Vogel disc — a golden-angle spiral, evenly spread at
+            // any tap count — turned by `phi`, inside the unit circle.
+            fn shadow_disc_tap(k: u32, n: u32, phi: f32) -> vec2f {
+                let r = sqrt((f32(k) + 0.5) / f32(n));
+                let t = f32(k) * 2.39996323 + phi;
+                return vec2f(cos(t), sin(t)) * r;
+            }
+        }
+    });
+
+/// [`SHARED_FUNCTIONS`] as WGSL.
+pub(crate) fn shared_functions_wgsl() -> &'static str {
+    static WGSL: std::sync::LazyLock<String> =
+        std::sync::LazyLock::new(|| SHARED_FUNCTIONS.wgsl().expect("the shared functions translate"));
+    &WGSL
+}
+
 /// [`SHADER_SOURCE`] with a material-map prelude in place.
 pub fn shader_source_with_maps(prelude: &str) -> String {
-    SHADER_SOURCE.replacen(MATERIAL_MAPS_MARKER, prelude, 1)
+    SHADER_SOURCE
+        .replacen(MATERIAL_MAPS_MARKER, prelude, 1)
+        .replacen(SHARED_FUNCTIONS_MARKER, shared_functions_wgsl(), 1)
 }
 
 /// The main shader with the legacy material-map layout — what every built-in

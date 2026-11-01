@@ -31,7 +31,7 @@
 //! last bit, and a test that demanded they did would be turned off within a
 //! week. What they must agree on is *what is where*.
 
-#![cfg(all(feature = "metal", any(target_os = "macos", target_os = "ios")))]
+#![cfg(metal_backend)]
 
 use threers::cameras::PerspectiveCamera;
 use threers::core::{Mesh, Object3D};
@@ -914,6 +914,30 @@ fn metal_applies_the_film_grade() {
         moved > 0,
         "the grain does not move with the seed — that is dirt on the lens"
     );
+
+    // And it is the same grade: both backends call the shared `film_vignette`
+    // and `film_grain`, and wgpu's first graded frame has seed 1. The two seeds
+    // above set the scale of "different grain".
+    let Some(mut w) = threers::HeadlessRenderer::builder().size(N, N).build().ok() else {
+        eprintln!("skipping the comparison: no wgpu adapter");
+        return;
+    };
+    w.set_film_grade(1.0, 0.6);
+    let wg = w.render_to_rgba(&mut build(), &camera());
+    m.set_film_grade(1.0, 0.6);
+    m.set_grain_seed(1.0);
+    let mg = m.render_to_rgba(&mut build(), &camera()).expect("metal");
+    let mean = |a: &[u8], b: &[u8]| {
+        a.iter().zip(b).map(|(x, y)| x.abs_diff(*y) as f64).sum::<f64>() / a.len() as f64
+    };
+    let apart = mean(&wg, &mg);
+    let reseeded = mean(&g1, &g2);
+    eprintln!("film grade: metal vs wgpu {apart:.3} levels, against {reseeded:.3} between seeds");
+    assert!(
+        apart < reseeded * 0.1,
+        "the film grade differs by backend: {apart:.3} levels apart, where \
+         another seed's grain is {reseeded:.3}"
+    );
 }
 
 /// Skinning: a bone that moves must move the vertices bound to it.
@@ -1356,6 +1380,50 @@ fn metal_bloom_keeps_the_colour() {
     );
 }
 
+/// Bloom draws the same glow on both backends: its threshold and blur are
+/// one `passes!` source (`BLOOM` in `renderer/bloom.rs`), and a bright
+/// square on black spreads into the dark around it by the same amount.
+#[test]
+fn metal_bloom_matches_wgpu() {
+    use threers::materials::BasicMaterial;
+    use threers::metal::{MetalError, MetalHeadlessRenderer};
+
+    let build = || {
+        let mut s = Scene::new();
+        s.background = Color::from_hex(0x000000);
+        s.add(Object3D::mesh(Mesh::new(
+            PlaneGeometry::new(6.0, 6.0),
+            BasicMaterial::new(Color::WHITE).into(),
+        )));
+        s
+    };
+    let mut m = match MetalHeadlessRenderer::builder().size(N, N).build() {
+        Ok(m) => m,
+        Err(MetalError::NoDevice) => {
+            eprintln!("skipping: no Metal device on this machine");
+            return;
+        }
+        Err(e) => panic!("metal renderer: {e:?}"),
+    };
+    let mut w = threers::HeadlessRenderer::builder().size(N, N).build().expect("wgpu");
+    // Plain `render_to_rgba` on both: the post passes apply to it on wgpu
+    // as they do on Metal.
+    let plain = w.render_to_rgba(&mut build(), &camera());
+    w.set_bloom(1.0, 0.5, 1.0);
+    m.set_bloom(1.0, 0.5, 1.0);
+    let a = w.render_to_rgba(&mut build(), &camera());
+    let b = m.render_to_rgba(&mut build(), &camera()).expect("metal");
+    let mean = |x: &[u8], y: &[u8]| {
+        x.chunks(4).zip(y.chunks(4)).map(|(p, q)| (0..3).map(|k| p[k].abs_diff(q[k]) as f64).sum::<f64>() / 3.0).sum::<f64>()
+            / (x.len() / 4) as f64
+    };
+    let glow = mean(&plain, &a);
+    let gap = mean(&a, &b);
+    eprintln!("bloom: moves wgpu by {glow:.2}; Metal is {gap:.3} from it");
+    assert!(glow > 2.0, "bloom barely changed the picture ({glow:.2})");
+    assert!(gap < 0.25 * glow, "Metal's bloom is {gap:.2} from wgpu's, against a glow of {glow:.2}");
+}
+
 /// Which post-processing stage turns the picture upside down.
 ///
 /// Orientation is checked elsewhere here, but only through the plain and
@@ -1504,6 +1572,20 @@ fn metal_instanced_meshes_cast_shadows_as_three_js_does() {
 #[path = "support/blending.rs"]
 mod blending;
 
+/// Blended draws into an sRGB target blend the encoded values on a device,
+/// as three.js and wgpu do; the simulators have no programmable blending and
+/// blend in linear light. There a blend comparison is reported, not asserted.
+const ENCODED_BLEND: bool = !cfg!(target_abi = "sim");
+
+/// Fail with `failures` — or, for blends in a simulator, print them.
+fn assert_blends(failures: &[String]) {
+    if !ENCODED_BLEND {
+        failures.iter().for_each(|f| eprintln!("{f} (simulator: linear-light blending)"));
+        return;
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
 /// Transparent surfaces blend as three.js's default renderer blends them —
 /// on the encoded bytes — at every sample count.
 #[test]
@@ -1524,7 +1606,7 @@ fn metal_blends_transparent_surfaces_as_three_js_does() {
             m.render_to_rgba(s, c).expect("metal render")
         }));
     }
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    assert_blends(&failures);
 }
 
 #[path = "support/tone_mapping_truth.rs"]
@@ -1742,6 +1824,17 @@ fn metal_reads_tangents_as_wgpu_does() {
         let build = || {
             let mut g = SphereGeometry::new(1.0, 64, 32);
             threers::utils::compute_tangents(&mut g);
+            // Turned a quarter turn about the normal: computed tangents are the
+            // frame the screen-space fallback would build anyway, so only
+            // tangents that disagree with it show whether they are read.
+            let normals = g.get_attribute("normal").expect("normals").array.clone();
+            let mut t = g.get_attribute("tangent").expect("tangents").clone();
+            for (i, tv) in t.array.chunks_exact_mut(4).enumerate() {
+                let n = Vector3::new(normals[i * 3], normals[i * 3 + 1], normals[i * 3 + 2]);
+                let r = n.cross(Vector3::new(tv[0], tv[1], tv[2]));
+                tv[..3].copy_from_slice(&[r.x, r.y, r.z]);
+            }
+            g.set_attribute("tangent", t);
             let mut s = Scene::new();
             s.background = Color::from_hex(0x000000);
             s.add_light(AmbientLight::new(Color::WHITE, 0.25));
@@ -2037,13 +2130,54 @@ fn metal_raises_reflective_alpha_as_wgpu_does() {
         let (mean, over) = diff(&a, &b);
         let (moved, _) = diff(&a, &off);
         eprintln!("reflective {name}: Metal mean {mean:.3} from wgpu, {over} over 8; the switch moves wgpu by {moved:.3}");
-        if moved < 0.5 {
-            failures.push(format!("{name}: the switch barely changes wgpu (mean {moved:.3})"));
-        }
+        assert!(moved >= 0.5, "{name}: the switch barely changes wgpu (mean {moved:.3})");
         if mean > 0.5 || over * 500 > (S * S) as usize {
             failures.push(format!("{name}: Metal a mean {mean:.3} from wgpu, {over} pixels over 8 levels"));
         }
     }
     m.renderer().set_reflective_transparency(false);
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    assert_blends(&failures);
+}
+
+/// Sheen draws the same on both backends — rough, and at zero roughness,
+/// where the Charlie distribution divides by the roughness squared and
+/// three.js floors it at 0.0016. Both call the one shared `d_charlie`.
+#[test]
+fn metal_draws_sheen_as_wgpu_does() {
+    use threers::geometries::SphereGeometry;
+    use threers::lights::DirectionalLight;
+    use threers::materials::PhysicalMaterial;
+    use threers::metal::{MetalError, MetalHeadlessRenderer};
+
+    let build = |roughness: f32| {
+        let mut s = Scene::new();
+        s.background = Color::from_hex(0x000000);
+        let mut light = DirectionalLight::new(Color::WHITE, 2.0);
+        light.direction = Vector3::new(-1.0, -0.5, -1.0);
+        s.add_light(light);
+        let mat = PhysicalMaterial::new(Color::from_hex(0x808080)).with_sheen(1.0, Color::from_hex(0xffffff), roughness);
+        s.add(Object3D::mesh(Mesh::new(SphereGeometry::new(14.0, 48, 32), mat.into())));
+        s
+    };
+    let Some(mut w) = threers::HeadlessRenderer::builder().size(N, N).build().ok() else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    let mut m = match MetalHeadlessRenderer::builder().size(N, N).build() {
+        Ok(m) => m,
+        Err(MetalError::NoDevice) => {
+            eprintln!("skipping: no Metal device on this machine");
+            return;
+        }
+        Err(e) => panic!("metal renderer: {e:?}"),
+    };
+    for roughness in [0.0, 0.5] {
+        let reference = tiles(&w.render_to_rgba(&mut build(roughness), &camera()));
+        let got = tiles(&m.render_to_rgba(&mut build(roughness), &camera()).expect("metal"));
+        let lit = reference.iter().cloned().fold(0.0f64, f64::max);
+        let apart = rms(&reference, &got);
+        eprintln!("sheen roughness {roughness}: metal vs wgpu {apart:.4} rms, brightest tile {lit:.3}");
+        assert!(lit > 0.05, "the sphere is not lit, so the comparison proves nothing");
+        assert!(apart < 0.05, "sheen at roughness {roughness} differs by backend: {apart:.4} rms");
+    }
 }

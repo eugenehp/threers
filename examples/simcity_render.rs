@@ -298,15 +298,13 @@ fn main() {
         .renderer()
         .set_tone_mapping(ToneMapping::AcesFilmic, 1.0);
 
-    // Raw wgpu: a compute pass rewrites the water mesh's vertex buffer in
-    // place between frames. Clone the handles up front — `hr.renderer()`
-    // borrows the whole renderer mutably.
-    let device = renderer.device().clone();
-    let queue = renderer.queue().clone();
+    // A compute pass rewrites the water mesh's vertex buffer in place
+    // between frames, on the renderer's own GPU — wgpu or Metal.
+    let gpu = renderer.marks_gpu();
     let mut water = city
         .water
         .as_ref()
-        .map(|w| WaterSim::new(&device, w.vertices, w.level));
+        .map(|w| WaterSim::new(&gpu, w.vertices, w.level));
 
     let mut camera = frame_camera(&view, s.extent, tile_w as f32 / tile_h as f32, city.vista);
     // Free camera, for looking at one thing closely. Coordinates are metres,
@@ -384,8 +382,7 @@ fn main() {
             orbit,
             tile_w,
             tile_h,
-            &device,
-            &queue,
+            &gpu,
             &mut water,
             fx,
         );
@@ -404,7 +401,7 @@ fn main() {
             let mut lap = [0.0f64; 6];
             let t0 = std::time::Instant::now();
             if let (Some(sim), Some(w)) = (&mut water, &city.water) {
-                sim.step(&device, &queue, renderer.renderer(), &w.geometry, clock, 0.35);
+                sim.step(&gpu, || water_mesh(&mut renderer, &w.geometry), clock, 0.35);
             }
             let mut m = std::time::Instant::now();
             lap[0] = (m - t0).as_secs_f64() * 1000.0;
@@ -453,7 +450,7 @@ fn main() {
     let mut sheet = vec![0u8; (w * h * 4) as usize];
     for (i, t) in times.iter().enumerate() {
         if let (Some(sim), Some(w)) = (&mut water, &city.water) {
-            sim.step(&device, &queue, renderer.renderer(), &w.geometry, 11.0, 0.35);
+            sim.step(&gpu, || water_mesh(&mut renderer, &w.geometry), 11.0, 0.35);
         }
         let sky = city.apply_sky(&mut scene, *t);
         city.place_lights(&mut scene, camera.position, sky.lights);
@@ -536,8 +533,7 @@ fn write_animation(
     orbit_deg: f32,
     w: u32,
     h: u32,
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
+    gpu: &threers::marks::gpu::Gpu,
     water: &mut Option<WaterSim>,
     fx: PostFx,
 ) {
@@ -570,7 +566,7 @@ fn write_animation(
             );
         cam.look_at(target);
         if let (Some(sim), Some(w)) = (water.as_mut(), &city.water) {
-            sim.step(device, queue, renderer.renderer(), &w.geometry, f as f32 * 0.35, 0.35);
+            sim.step(gpu, || water_mesh(renderer, &w.geometry), f as f32 * 0.35, 0.35);
         }
         let sky = city.apply_sky(scene, t);
         city.place_lights(scene, cam.position, sky.lights);
@@ -613,13 +609,22 @@ fn write_animation(
     _orbit_deg: f32,
     _w: u32,
     _h: u32,
-    _device: &wgpu::Device,
-    _queue: &wgpu::Queue,
+    _gpu: &threers::marks::gpu::Gpu,
     _water: &mut Option<WaterSim>,
     _fx: PostFx,
 ) {
     eprintln!("--anim needs the `native-codec` feature: cargo run --release \\");
     eprintln!("    --example simcity_render --features native-codec -- --anim out.webm");
+}
+
+/// The water's vertex buffer and its stride, uploaded first, for
+/// [`WaterSim::step`].
+fn water_mesh(
+    renderer: &mut HeadlessRenderer,
+    geometry: &Arc<BufferGeometry>,
+) -> Option<(threers::marks::gpu::Buffer, u32)> {
+    renderer.upload_geometry(geometry);
+    Some((renderer.vertex_buffer(geometry)?, renderer.vertex_floats()))
 }
 
 /// One panel per street layout, cycling from whichever `--layout` was asked
@@ -661,16 +666,8 @@ fn write_layout_sheet(
         city.drive(&mut scene, 0.0, camera.position, 0.0);
         scene.update_world();
         if let Some(w) = &city.water {
-            let device = renderer.device().clone();
-            let queue = renderer.queue().clone();
-            WaterSim::new(&device, w.vertices, w.level).step(
-                &device,
-                &queue,
-                renderer.renderer(),
-                &w.geometry,
-                11.0,
-                0.35,
-            );
+            let gpu = renderer.marks_gpu();
+            WaterSim::new(&gpu, w.vertices, w.level).step(&gpu, || water_mesh(renderer, &w.geometry), 11.0, 0.35);
         }
         println!("  {} {}", layout.name(), if night { "(night)" } else { "" });
         let rgba = shoot(renderer, &mut scene, &camera, fx, sky.lights);

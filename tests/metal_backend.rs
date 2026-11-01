@@ -7,7 +7,7 @@
 //! returns [`MetalError::NoDevice`] and the tests report themselves skipped
 //! rather than failing — a missing GPU is not a broken backend.
 
-#![cfg(all(feature = "metal", any(target_os = "macos", target_os = "ios")))]
+#![cfg(metal_backend)]
 
 
 use threers::cameras::{Camera, OrthographicCamera};
@@ -1760,6 +1760,25 @@ fn polygon_offset_keeps_a_decal_over_its_surface() {
 #[path = "support/alpha_test.rs"]
 mod alpha;
 
+/// `failures` less a simulator's blends, printed instead: it has no
+/// programmable blending, so blends in linear light rather than on the
+/// encoded bytes as three.js does. Every other check still fails.
+fn but_simulator_blends(failures: Vec<String>) -> Vec<String> {
+    if !cfg!(target_abi = "sim") {
+        return failures;
+    }
+    failures
+        .into_iter()
+        .filter(|f| {
+            let blend = f.contains("blended, gave") || f.contains("transparent at");
+            if blend {
+                eprintln!("{f} (simulator: linear-light blending)");
+            }
+            !blend
+        })
+        .collect()
+}
+
 /// three.js `alphaTest` and `transparent` on every material kind, held to the
 /// same three.js rules as the wgpu renderer (`tests/alpha_test.rs`).
 #[test]
@@ -1771,9 +1790,9 @@ fn alpha_test_and_transparent_follow_three_js() {
             Err(MetalError::NoDevice) => return,
             Err(e) => panic!("{e}"),
         };
-        failures.extend(alpha::check(&format!("metal msaa {msaa}"), &mut |s, c| {
+        failures.extend(but_simulator_blends(alpha::check(&format!("metal msaa {msaa}"), &mut |s, c| {
             m.render_to_rgba(s, c).expect("metal render")
-        }));
+        })));
     }
     assert!(failures.is_empty(), "{} failures:\n{}", failures.len(), failures.join("\n"));
 }
@@ -1854,7 +1873,7 @@ fn points_draw_as_three_js_does() {
         Err(MetalError::NoDevice) => return,
         Err(e) => panic!("{e}"),
     };
-    let failures = points::check("metal", &mut |s, c| m.render_to_rgba(s, c).expect("metal render"));
+    let failures = but_simulator_blends(points::check("metal", &mut |s, c| m.render_to_rgba(s, c).expect("metal render")));
     assert!(failures.is_empty(), "{} failures:\n{}", failures.len(), failures.join("\n"));
 }
 
@@ -2016,4 +2035,80 @@ fn toon_gradient_map_shades_as_three_js_does() {
     };
     let failures = toon_gradient::check("metal", &mut |s, c| m.render_to_rgba(s, c).expect("metal render"));
     assert!(failures.is_empty(), "{} failures:\n{}", failures.len(), failures.join("\n"));
+}
+
+/// An opaque overlay is the picture itself, byte for byte: how a CPU
+/// renderer's frame (`examples/viewport_path_trace_live.rs`) reaches a window
+/// on either backend. Every value 0–255 in each channel, at both sample
+/// counts.
+#[test]
+fn an_opaque_overlay_presents_an_image_exactly() {
+    let Ok(device) = MetalDevice::new() else {
+        return;
+    };
+    let mut renderer = threers::metal::MetalRenderer::with_device(device.clone()).unwrap();
+    let (w, h) = (64u32, 4u32);
+    let image: Vec<u8> = (0..w * h)
+        .flat_map(|i| [i as u8, (255 - i) as u8, (i * 7) as u8, 255])
+        .collect();
+    for msaa in [1, 4] {
+        let target = MetalRenderTarget::new(
+            &device,
+            w,
+            h,
+            threers::metal::enums::pixel_format::RGBA8_UNORM_SRGB,
+            msaa,
+        )
+        .unwrap();
+        let mut scene = Scene::new();
+        scene.background = Color::from_hex(0x00ff00);
+        renderer.render(&mut scene, &unit_camera(), &target.attachments()).unwrap();
+        renderer.draw_overlay_rgba8(&image, w, h, &target.attachments()).unwrap();
+        let rgba = target.read_rgba(&device).unwrap();
+        let worst = rgba.iter().zip(&image).map(|(a, b)| (*a as i32 - *b as i32).abs()).max().unwrap();
+        assert!(worst <= 1, "msaa {msaa}: an opaque overlay came back {worst} levels off");
+    }
+}
+
+#[test]
+fn an_overlay_blends_over_the_frame_in_linear_light() {
+    let Ok(device) = MetalDevice::new() else {
+        return;
+    };
+    let mut renderer = threers::metal::MetalRenderer::with_device(device.clone()).unwrap();
+    for msaa in [1, 4] {
+        let target = MetalRenderTarget::new(
+            &device,
+            8,
+            4,
+            threers::metal::enums::pixel_format::RGBA8_UNORM_SRGB,
+            msaa,
+        )
+        .unwrap();
+        let mut scene = Scene::new();
+        scene.background = Color::from_hex(0x0000ff);
+        renderer.render(&mut scene, &unit_camera(), &target.attachments()).unwrap();
+
+        // Row 1, column 2: red at alpha 128. Everything else transparent.
+        let mut overlay = vec![0u8; 8 * 4 * 4];
+        overlay[(8 + 2) * 4..(8 + 2) * 4 + 4].copy_from_slice(&[255, 0, 0, 128]);
+        renderer.draw_overlay_rgba8(&overlay, 8, 4, &target.attachments()).unwrap();
+        let rgba = target.read_rgba(&device).unwrap();
+
+        // Untouched where the overlay is clear.
+        assert!(close([rgba[0], rgba[1], rgba[2], rgba[3]], [0, 0, 255, 255], 1), "msaa {msaa}");
+        // Linear-light mix, encoded: half of red over blue is ~188, not 128.
+        let a = 128.0 / 255.0;
+        let enc = |v: f32| -> i32 {
+            let s = if v <= 0.003_130_8 { v * 12.92 } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 };
+            (s * 255.0).round() as i32
+        };
+        let (r, b) = (enc(a), enc(1.0 - a));
+        let i = (8 + 2) * 4;
+        let got = [rgba[i], rgba[i + 1], rgba[i + 2]];
+        assert!(
+            (got[0] as i32 - r).abs() <= 2 && got[1] <= 1 && (got[2] as i32 - b).abs() <= 2,
+            "msaa {msaa}: got {got:?}, want [{r}, 0, {b}]"
+        );
+    }
 }

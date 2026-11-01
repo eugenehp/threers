@@ -341,6 +341,14 @@ pub(crate) struct DrawUniforms {
     /// ambient occlusion, alpha, light, bump, specular, matcap, then the
     /// physical maps ([`physical_maps`]).
     map_xform: [[f32; 4]; 2 * MAP_COUNT],
+    /// The planet-rendering terms of Standard and Physical materials, as the
+    /// wgpu backend's `params8`/`params10`–`params13`:
+    /// `[emissive_night_side, sun angular radius, twilight wrap width, cloud
+    /// scatter]`, `[twilight colour, scatter anisotropy]`, `[cloud shell
+    /// height, cloud shadow strength, cloud longitude offset, cloud map
+    /// bound]`, `[eclipse occluder centre, radius]`; and `[normal_scale.y,
+    /// 0, 0, 0]`, the normal map's own y scale.
+    planet: [[f32; 4]; 5],
 }
 
 /// How many material maps a draw can bind, `MAP_*` in `shaders.metal`.
@@ -351,6 +359,31 @@ const MAP_PHYS0: usize = 10;
 const PHYS_TEXTURE0: usize = 16;
 /// Sampler slots 0–9: one per distinct filter-and-wrap among a draw's maps.
 const SAMPLER_POOL: usize = 10;
+/// A `ShaderMaterial`'s `maps` — `u_tex0`..`u_tex3` — at fragment and
+/// vertex textures 16–19: the physical maps' slots, which `fs_custom`
+/// never reads. `u_samp`, linear and repeating, at sampler 15.
+const USER_TEXTURE0: usize = 16;
+const USER_SAMPLER_SLOT: usize = 15;
+/// `ShaderMaterial::volumes`: `u_vol0` and `u_vol1` at textures 20 and 21,
+/// `u_vol_samp` (linear, clamp-to-edge, as on wgpu) at sampler 9.
+const USER_VOLUME0: usize = 20;
+const USER_VOLUME_SAMPLER_SLOT: usize = 9;
+const USER_VOLUME_SAMPLER: SamplerKey = SamplerKey {
+    mag_linear: true,
+    min_linear: true,
+    mipmapped: false,
+    mip_linear: false,
+    wrap_s: 0,
+    wrap_t: 0,
+};
+const USER_SAMPLER: SamplerKey = SamplerKey {
+    mag_linear: true,
+    min_linear: true,
+    mipmapped: true,
+    mip_linear: true,
+    wrap_s: 1,
+    wrap_t: 1,
+};
 
 /// MeshPhysicalMaterial's own maps, in `MAP_PHYS0` order, and whether each is
 /// data (linear) rather than colour.
@@ -437,6 +470,7 @@ impl Default for DrawUniforms {
             physical: [[0.0; 4]; 7],
             phys_flags: [0; 4],
             map_xform: IDENTITY_XFORMS,
+            planet: [[0.0; 4], [0.0; 4], [0.0; 4], [0.0; 4], [1.0, 0.0, 0.0, 0.0]],
         }
     }
 }
@@ -730,6 +764,10 @@ struct DrawItem {
     /// An `fx` surface's uniforms and arrays (`crate::fx::surface::metal_bytes`)
     /// when the material is one.
     fx_surface: Option<Box<[f32; crate::fx::surface::METAL_FLOATS]>>,
+    /// A `ShaderMaterial` of the user's — not fur or an `fx` surface, which
+    /// have ports of their own — drawn through its own fragment (`msl`, or
+    /// its WGSL translated; see `MetalRenderer::custom_shader`).
+    custom: bool,
     geometry: Arc<BufferGeometry>,
     material: Arc<Material>,
     world: Matrix4,
@@ -751,6 +789,9 @@ struct DrawItem {
     /// instance, until uploaded after the matrices and morph rows — then
     /// where they start in the instance buffer, in float4s (0: none).
     instance_colors: Option<Vec<f32>>,
+    /// `InstancedMesh::custom`, two float4 a instance: what a custom vertex
+    /// stage reads as `icustom0`/`icustom1`.
+    instance_custom: Option<Vec<f32>>,
     instance_color_offset: u32,
     view_depth: f32,
     render_order: i32,
@@ -763,6 +804,10 @@ struct DrawItem {
     blended_glass: bool,
     /// Order-independent transparency (`TransparencyMode::Oit`).
     oit: bool,
+    /// A `ShaderMaterial` with `screen_space`: it reads the opaque scene
+    /// behind it (`ss_color_tex` / `ss_depth_tex`) from the capture, and is
+    /// left out of it, as the wgpu screen-space pass leaves it out.
+    screen_space: bool,
     /// Left out of the capture pass running now (see `capture_transmission`).
     capture_skip: bool,
     /// The side the item is drawn with in place of its material's — the
@@ -864,6 +909,8 @@ pub struct MetalRenderer {
     /// `depthFunc`.
     depth_states: HashMap<(NSUInteger, bool), Owned>,
     white: Owned,
+    /// See [`zero_volume`](crate::metal::resources::zero_volume).
+    zero_volume: Owned,
     /// three.js's `RectAreaLight` tables, at fragment texture 28.
     ltc: Owned,
     /// three.js's transmission render target — see [`MetalCapture`].
@@ -874,6 +921,9 @@ pub struct MetalRenderer {
     /// A 1×1 black array in the capture's shape, for frames with nothing
     /// transmissive.
     capture_dummy: Owned,
+    /// A 1×1 depth texture, bound at fragment texture 30 when there is no
+    /// capture depth to read.
+    capture_depth_dummy: Owned,
     transmission_sampler: Owned,
     /// Bound at the cube slot when a scene has no environment.
     black_cube: Owned,
@@ -924,6 +974,13 @@ pub struct MetalRenderer {
     cache_retention: u64,
     /// Keep the depth attachment after the pass, for readers like SSAO.
     store_depth: bool,
+    /// Keep the frame's attachments for a later pass that loads them —
+    /// marks drawn over it: a multisampled colour survives its resolve, and
+    /// depth is stored (multisampled as well as resolved).
+    keep_attachments: bool,
+    /// The target the caller asked for is plain `Unorm`, drawn here through
+    /// an sRGB one (`set_encoded_output`).
+    encoded_output: bool,
     /// This frame has OIT items and draws them in their own passes; and which
     /// of `encode_pass`'s two jobs is running — 0 everything else, 1 the OIT
     /// accumulation (`encode_oit`).
@@ -955,6 +1012,15 @@ pub struct MetalRenderer {
     /// Caster kinds and directional map size the maps were last drawn for.
     shadow_sig: Option<(usize, usize, usize, u32, u32)>,
     shadow_updates: u64,
+    /// The 2D overlay's texture and blend pipelines (`draw_overlay`).
+    overlay: super::overlay::MetalOverlay,
+    /// Each custom shader's library — the built-in source with its MSL
+    /// appended — by [`custom_shader_id`]; `None` when it did not compile,
+    /// which has been said once and draws the fallback colour from then on.
+    custom_libs: HashMap<u64, Option<Owned>>,
+    /// Each WGSL fragment's MSL by the hash of the WGSL, translated once;
+    /// `None` when it does not translate (said once, with the reason).
+    translated: HashMap<u64, Option<Arc<str>>>,
 }
 
 impl MetalRenderer {
@@ -973,8 +1039,19 @@ impl MetalRenderer {
             depth_stencil_state(&device, compare::LESS, true)?,
         );
         let white = white_texture(&device)?;
+        let zero_volume = crate::metal::resources::zero_volume(&device)?;
         let ltc = crate::metal::resources::upload_ltc(&device)?;
         let capture_dummy = crate::metal::resources::black_texture_array(&device)?;
+        let capture_depth_dummy = crate::metal::resources::new_texture_2d(
+            &device,
+            1,
+            1,
+            pixel_format::DEPTH32_FLOAT,
+            texture_usage::SHADER_READ | texture_usage::RENDER_TARGET,
+            storage_mode::PRIVATE,
+            1,
+            1,
+        )?;
         let transmission_sampler = new_sampler(
             &device,
             SamplerKey { mag_linear: true, min_linear: true, mipmapped: true, mip_linear: true, wrap_s: 0, wrap_t: 0 },
@@ -999,8 +1076,10 @@ impl MetalRenderer {
             textures: HashMap::new(),
             depth_states,
             white,
+            zero_volume,
             ltc,
             capture_dummy,
+            capture_depth_dummy,
             transmission: None,
             capture_bound: None,
             transmission_sampler,
@@ -1026,6 +1105,8 @@ impl MetalRenderer {
             frame: 0,
             cache_retention: DEFAULT_CACHE_RETENTION,
             store_depth: false,
+            keep_attachments: false,
+            encoded_output: false,
             oit_active: false,
             oit_phase: 0,
             oit_targets: None,
@@ -1040,6 +1121,9 @@ impl MetalRenderer {
             shadow_flags: Default::default(),
             shadow_sig: None,
             shadow_updates: 0,
+            overlay: Default::default(),
+            custom_libs: HashMap::new(),
+            translated: HashMap::new(),
         })
     }
 
@@ -1056,6 +1140,40 @@ impl MetalRenderer {
         &mut self.shadow_flags
     }
 
+    /// Blend an [`Overlay`](crate::overlay::Overlay) over the frame in `pass`,
+    /// uploading only the rows that changed — the Metal side of
+    /// [`Renderer::draw_overlay`](crate::renderer::Renderer::draw_overlay).
+    ///
+    /// [`render`](Self::render) presents a pass's drawable, which would put the
+    /// frame on screen before the overlay; so render with
+    /// [`without_drawable`](PassAttachments::without_drawable) and hand this
+    /// the full attachments, and it presents after blending.
+    pub fn draw_overlay(
+        &mut self,
+        overlay: &mut crate::overlay::Overlay,
+        pass: &PassAttachments,
+    ) -> Result<(), MetalError> {
+        let (width, height) = overlay.size();
+        // An empty band still composites: the frame underneath is new.
+        let rows = overlay.dirty_rows().unwrap_or((0, 0));
+        self.overlay
+            .composite(&self.device, overlay.pixels(), width, height, Some(rows), pass)?;
+        overlay.mark_uploaded();
+        Ok(())
+    }
+
+    /// As [`draw_overlay`](Self::draw_overlay), from straight-alpha sRGB RGBA8
+    /// bytes the size of the frame, uploaded whole.
+    pub fn draw_overlay_rgba8(
+        &mut self,
+        rgba: &[u8],
+        width: u32,
+        height: u32,
+        pass: &PassAttachments,
+    ) -> Result<(), MetalError> {
+        self.overlay.composite(&self.device, rgba, width, height, None, pass)
+    }
+
     /// How many renders so far drew the shadow maps.
     pub fn shadow_map_updates(&self) -> u64 {
         self.shadow_updates
@@ -1064,6 +1182,23 @@ impl MetalRenderer {
     /// The device this renderer draws with.
     pub fn device(&self) -> &MetalDevice {
         &self.device
+    }
+
+    /// Upload `geometry` now rather than at its first draw — for a compute
+    /// pass that writes its [`vertex_buffer`](Self::vertex_buffer).
+    pub fn upload_geometry(&mut self, geometry: &Arc<BufferGeometry>) -> Result<(), MetalError> {
+        self.ensure_geometry(geometry, false).map(|_| ())
+    }
+
+    /// The `MTLBuffer` behind an uploaded geometry and its length in bytes:
+    /// one `Vertex` a vertex, twelve `f32` — position(3), normal(3), uv(2),
+    /// colour(3) and alpha — the first twelve of the wgpu renderer's sixteen
+    /// ([`Renderer::vertex_buffer`](crate::Renderer::vertex_buffer)). Valid
+    /// until the geometry's version changes and it is uploaded again.
+    pub fn vertex_buffer(&self, geometry: &Arc<BufferGeometry>) -> Option<(Id, usize)> {
+        let cached = self.geometries.get(&(Arc::as_ptr(geometry) as usize))?;
+        (cached.version == geometry.geometry_version && !cached.slim)
+            .then(|| (cached.vertices.id(), cached.vertex_count * std::mem::size_of::<Vertex>()))
     }
 
     /// Drop every cached GPU resource. The next frame re-uploads what it needs.
@@ -1142,6 +1277,22 @@ impl MetalRenderer {
     /// Off by default: it costs bandwidth that nothing otherwise reads.
     pub fn set_store_depth(&mut self, on: bool) {
         self.store_depth = on;
+    }
+
+    /// Keep every attachment of the frame for a pass that draws over it
+    /// afterwards — the colour multisampled as well as resolved, and the
+    /// depth. Off by default, like [`set_store_depth`](Self::set_store_depth).
+    pub fn set_keep_attachments(&mut self, on: bool) {
+        self.keep_attachments = on;
+    }
+
+    /// Stand in for a plain `Unorm` target while drawing into an sRGB one,
+    /// as wgpu's renderer draws into `Rgba8Unorm`: a WGSL `ShaderMaterial`'s
+    /// `framebuffer_encode` encodes, and what it returns is stored as it
+    /// stands rather than encoded again. The built-in materials look the same
+    /// either way. Off by default.
+    pub fn set_encoded_output(&mut self, on: bool) {
+        self.encoded_output = on;
     }
 
     pub fn set_cache_retention(&mut self, frames: u64) {
@@ -1376,6 +1527,11 @@ impl MetalRenderer {
             for (map, linear) in [
                 (slots.map, false),
                 (slots.matcap_map, false),
+                // The cloud layer a planet's surface is shadowed by; it
+                // shares the matcap slot (no material has both).
+                (slots.cloud_shadow_map, false),
+                // Heights, read in the vertex stage.
+                (slots.displacement_map, true),
                 (slots.gradient_map, false),
                 (slots.emissive_map, false),
                 (slots.normal_map, true),
@@ -1394,6 +1550,24 @@ impl MetalRenderer {
             {
                 if self.ensure_texture_as(&map, linear)? {
                     stats.texture_uploads += 1;
+                }
+            }
+            // A custom shader's `maps`, decoded by their own formats.
+            if let Material::Shader(m) = &*item.material {
+                if !m.volumes.is_empty() && !self.samplers.contains_key(&USER_VOLUME_SAMPLER) {
+                    let sampler = new_sampler(&self.device, USER_VOLUME_SAMPLER)?;
+                    self.samplers.insert(USER_VOLUME_SAMPLER, sampler);
+                }
+                // Linear and repeat for `textures` as for `maps`: a cascade
+                // or wake map tiles, and an edge-clamped one goes flat.
+                if (!m.maps.is_empty() || !m.textures.is_empty()) && !self.samplers.contains_key(&USER_SAMPLER) {
+                    let sampler = new_sampler(&self.device, USER_SAMPLER)?;
+                    self.samplers.insert(USER_SAMPLER, sampler);
+                }
+                for map in m.maps.iter().take(4) {
+                    if self.ensure_texture_as(map, false)? {
+                        stats.texture_uploads += 1;
+                    }
                 }
             }
             // A Standard/Physical material's own `envMap` prefiltered, as the
@@ -1501,8 +1675,9 @@ impl MetalRenderer {
             let frustum = crate::math::Frustum::from_projection_matrix(&Matrix4 { elements: vp });
             unsafe { self.encode_shadow(&pass_u, &items, slot, map, layer, kind == 2, &frustum) }?;
         }
-        // three.js's `renderTransmissionPass`, when anything is transmissive.
-        if items.iter().any(|i| i.transmissive) {
+        // three.js's `renderTransmissionPass`, when anything is transmissive;
+        // the same capture is what a screen-space `ShaderMaterial` reads.
+        if items.iter().any(|i| i.transmissive || i.screen_space) {
             self.capture_transmission(pass, views, &frame_u, &mut items, scene, slot, &mut stats)?;
         } else {
             self.transmission = None;
@@ -1590,10 +1765,15 @@ impl MetalRenderer {
         fu.viewport = [w as f32, h as f32, 1.0 / w as f32, 1.0 / h as f32];
 
         for it in items.iter_mut() {
-            it.capture_skip = it.transmissive;
+            it.capture_skip = it.transmissive || it.screen_space;
         }
         self.capture_bound = None;
-        unsafe { self.encode(&attachments, &capture_views, &fu, items, scene, slot, stats, None) }?;
+        // Its depth too, for `ss_depth_tex`.
+        let store_depth = self.store_depth;
+        self.store_depth |= items.iter().any(|i| i.screen_space);
+        let drawn = unsafe { self.encode(&attachments, &capture_views, &fu, items, scene, slot, stats, None) };
+        self.store_depth = store_depth;
+        drawn?;
         self.copy_capture()?;
 
         if items.iter().any(|i| i.transmissive && i.material.side() == 2) {
@@ -1683,18 +1863,24 @@ impl MetalRenderer {
         for (i, v) in views.iter().enumerate() {
             view_proj[i] = v.projection_matrix.multiply(&v.view_matrix).elements;
             view_matrices[i] = v.view_matrix.elements;
-            camera_pos[i] = [v.position.x, v.position.y, v.position.z, 1.0];
+            // w: 1 with reversed depth, as the wgpu frame has it — what a
+            // translated `ShaderMaterial` reading `ss_depth_tex` tests.
+            camera_pos[i] = [v.position.x, v.position.y, v.position.z, if pass.reverse_z { 1.0 } else { 0.0 }];
         }
         let mut frame_u = FrameUniforms {
             view_proj,
             view: view_matrices,
             camera_pos,
-            // y: the target encodes sRGB on write, which data outputs (the
-            // normal material) undo so the stored byte is the value.
+            // y: bit 0, the target encodes sRGB on write, which data outputs
+            // (the normal material) undo so the stored byte is the value;
+            // bit 1, it stands in for a `Unorm` one (`set_encoded_output`).
             // z, w: the tone mapping mode and its exposure's bits.
             view_info: [
                 views.len() as u32,
-                pixel_format::is_srgb(pass.color_format) as u32,
+                {
+                    let srgb = pixel_format::is_srgb(pass.color_format);
+                    srgb as u32 | ((srgb && self.encoded_output) as u32) << 1
+                },
                 self.tone_mapping.0.shader_mode() as u32,
                 self.tone_mapping.1.to_bits(),
             ],
@@ -1740,6 +1926,7 @@ impl MetalRenderer {
             let obj_layers = obj.layers;
             // The instance colours for the next item pushed (instanced meshes
             // only), taken by `push_skinned`.
+            let pending_custom: std::cell::RefCell<Option<Vec<f32>>> = std::cell::RefCell::new(None);
             let pending_colors: std::cell::RefCell<Option<Vec<f32>>> =
                 std::cell::RefCell::new(None);
             #[allow(clippy::too_many_arguments)]
@@ -1782,6 +1969,8 @@ impl MetalRenderer {
                         }
                         _ => None,
                     },
+                    custom: matches!(&**material, Material::Shader(m)
+                        if !crate::fur::is_fur(m) && !crate::fx::surface::is_surface(m)),
                     fx_surface: match &**material {
                         Material::Shader(m) if crate::fx::surface::is_surface(m) => {
                             Some(crate::fx::surface::metal_bytes(m))
@@ -1809,6 +1998,7 @@ impl MetalRenderer {
                     instance_morph,
                     instance_morph_layout: None,
                     instance_colors: pending_colors.borrow_mut().take(),
+                    instance_custom: pending_custom.borrow_mut().take(),
                     instance_color_offset: 0,
                     view_depth: center.distance_to(eye),
                     render_order: obj.render_order,
@@ -1828,6 +2018,7 @@ impl MetalRenderer {
                     // than sorted with the transparent draws (`encode_oit`).
                     oit: transparent
                         && matches!(&**material, Material::Physical(m) if m.transparency == crate::materials::TransparencyMode::Oit),
+                    screen_space: matches!(&**material, Material::Shader(m) if m.screen_space),
                     capture_skip: false,
                     side_override: None,
                     state: material.render_state(),
@@ -1965,8 +2156,23 @@ impl MetalRenderer {
                     });
                     // One instanced item per draw — per group with a material
                     // array — as three.js's render list holds them.
+                    // The two custom columns, each padded to a float4.
+                    let custom = (im.custom.iter().any(|c| !c.is_empty())).then(|| {
+                        let n = im.transforms.len();
+                        let mut out = vec![0.0f32; n * 8];
+                        for (slot, values) in im.custom.iter().enumerate() {
+                            let k = im.custom_components[slot].clamp(1, 4) as usize;
+                            for i in 0..n {
+                                for c in 0..k {
+                                    out[i * 8 + slot * 4 + c] = values.get(i * k + c).copied().unwrap_or(0.0);
+                                }
+                            }
+                        }
+                        out
+                    });
                     for d in im.draws() {
                         *pending_colors.borrow_mut() = colors.clone();
+                        *pending_custom.borrow_mut() = custom.clone();
                         push_skinned(
                             &im.geometry,
                             d.material,
@@ -2329,10 +2535,95 @@ impl MetalRenderer {
 
     fn pipeline(&mut self, key: PipelineKey) -> Result<Id, MetalError> {
         if !self.pipelines.contains_key(&key) {
-            let state = render_pipeline(&self.device, key)?;
+            let state = match key.custom {
+                0 => render_pipeline(&self.device, key)?,
+                id => {
+                    let library = self
+                        .custom_libs
+                        .get(&id)
+                        .and_then(|l| l.as_ref())
+                        .map(|l| l.id())
+                        .ok_or_else(|| MetalError::Unsupported("custom shader not compiled".into()))?;
+                    crate::metal::resources::custom_render_pipeline(&self.device, key, library)?
+                }
+            };
             self.pipelines.insert(key, state);
         }
         Ok(self.pipelines[&key].id())
+    }
+
+    /// A custom shader's id with its library compiled, or 0 to draw the
+    /// fallback colour: the material's own [`msl`](crate::ShaderMaterial::msl)
+    /// when it has one, otherwise its WGSL — fragment and any custom vertex
+    /// stage — translated (`wgsl_material_to_msl`).
+    fn custom_shader(&mut self, material: &Material) -> u64 {
+        let Material::Shader(m) = material else { return 0 };
+        let msl: Arc<str> = match &m.msl {
+            Some(msl) => msl.as_str().into(),
+            None => {
+                let key = custom_shader_id(&m.fragment) ^ m.vertex.is_some() as u64;
+                let entry = self.translated.entry(key).or_insert_with(|| {
+                    let result = crate::materials::shared_shader::wgsl_material_to_msl(
+                        &m.fragment,
+                        m.vertex.as_deref(),
+                    );
+                    match result {
+                        Ok(msl) => Some(msl.into()),
+                        Err(why) => {
+                            eprintln!(
+                                "threers: Metal backend: a ShaderMaterial draws its fallback colour: {why}"
+                            );
+                            None
+                        }
+                    }
+                });
+                match entry {
+                    Some(msl) => msl.clone(),
+                    None => return 0,
+                }
+            }
+        };
+        let id = custom_shader_id(&msl);
+        if self.ensure_custom_library(id, &msl) {
+            id
+        } else {
+            0
+        }
+    }
+
+    /// Compile a custom shader's library the first time it is drawn. `false`
+    /// when it does not compile — reported once, with the compiler's
+    /// diagnostics — and the draw falls back to the unlit fallback colour.
+    fn ensure_custom_library(&mut self, id: u64, msl: &str) -> bool {
+        if let Some(lib) = self.custom_libs.get(&id) {
+            return lib.is_some();
+        }
+        let source = format!("{}\n{msl}", self.device.shader_source());
+        let _pool = crate::metal::objc::AutoreleasePool::new();
+        let lib = match unsafe { crate::metal::device::compile_library(self.device.device_id(), &source) } {
+            Ok(lib) => Some(lib),
+            Err(e) => {
+                // The compiler names a line of the combined source, most of
+                // which is the built-in library; quote the line itself.
+                let text = e.to_string();
+                let quoted = text
+                    .split("program_source:")
+                    .nth(1)
+                    .and_then(|rest| rest.split(':').next())
+                    .and_then(|n| n.parse::<usize>().ok())
+                    .and_then(|n| source.lines().nth(n.saturating_sub(1)))
+                    .map(|line| format!("\n    at: {}", line.trim()))
+                    .unwrap_or_default();
+                eprintln!(
+                    "threers: Metal backend: a ShaderMaterial's MSL did not compile; drawing its fallback colour: {}{quoted}",
+                    text.lines().next().unwrap_or(&text)
+                );
+                None
+            }
+        };
+        let ok = lib.is_some();
+        self.custom_libs.insert(id, lib);
+        ok
     }
 
     // -------------------------------------------------------------- encoding
@@ -2573,7 +2864,8 @@ impl MetalRenderer {
         let _: () = msg1(depth, sel!("setTexture:"), depth_texture);
         let _: () = msg1(depth, sel!("setSlice:"), view.slice as NSUInteger);
         let _: () = msg1(depth, sel!("setLoadAction:"), load_action::LOAD);
-        let _: () = msg1(depth, sel!("setStoreAction:"), store_action::DONT_CARE);
+        let keep_depth = if self.keep_attachments { store_action::STORE } else { store_action::DONT_CARE };
+        let _: () = msg1(depth, sel!("setStoreAction:"), keep_depth);
         self.oit_phase = 1;
         let accumulated = self.encode_pass(cmd, rpd, pass, frame_u, view.viewport, Some(view.layers), items, slot, stats, 1, None, None);
         self.oit_phase = 0;
@@ -2595,7 +2887,11 @@ impl MetalRenderer {
             let _: () = msg1(
                 color,
                 sel!("setStoreAction:"),
-                if keep_multisampled { store_action::STORE_AND_MULTISAMPLE_RESOLVE } else { store_action::MULTISAMPLE_RESOLVE },
+                if keep_multisampled || self.keep_attachments {
+                    store_action::STORE_AND_MULTISAMPLE_RESOLVE
+                } else {
+                    store_action::MULTISAMPLE_RESOLVE
+                },
             );
         }
         let encoder: Id = msg1(cmd, sel!("renderCommandEncoderWithDescriptor:"), rpd);
@@ -2805,10 +3101,25 @@ impl MetalRenderer {
                 continue;
             }
             let fx_draw = item.fx_surface.is_some();
+            // A custom shader is a triangle-mesh, single-view draw, like the
+            // fx surface; anything else, or one that did not compile, draws
+            // the fallback colour through the ordinary pipeline.
+            let custom_draw = if item.custom
+                && !layered_draw
+                && !point_sprites
+                && item.primitive == primitive::TRIANGLE
+                && self.oit_phase == 0
+            {
+                let material = item.material.clone();
+                self.custom_shader(&material)
+            } else {
+                0
+            };
             let pipeline = match self.pipeline(PipelineKey {
                 point_sprites,
                 fur: fur_draw,
                 fx_surface: fx_draw,
+                custom: custom_draw,
                 wide_lines: wide,
                 // Must agree with what `ensure_geometry` uploaded, or the
                 // vertex shader reads the wrong stride and the draw is garbage.
@@ -2816,6 +3127,7 @@ impl MetalRenderer {
                     && !layered_draw
                     && slim_lines_enabled(),
                 blend: item.transparent,
+                additive: item.state.blending == crate::materials::Blending::Additive,
                 layered: layered_draw,
                 // Both halves have to be true: a mesh with a skeleton whose
                 // geometry carries no weights has nothing to blend, and a
@@ -2987,6 +3299,67 @@ impl MetalRenderer {
                 set_bytes(encoder, true, &**fx, VB_FUR);
                 set_bytes(encoder, false, &**fx, FB_FUR);
             }
+            // A custom shader's `data` at the fur slot, its storage arrays at
+            // 3–5 and their lengths at 6 (`SharedShader::msl`'s `fs_custom`).
+            if custom_draw != 0 {
+                if let Material::Shader(m) = &*item.material {
+                    let mut data = [[0.0f32; 4]; 16];
+                    for (slot, v) in data.iter_mut().zip(&m.data) {
+                        *slot = *v;
+                    }
+                    set_bytes(encoder, false, &data, FB_FUR);
+                    // The vertex stage sees the same data (a custom vertex
+                    // stage may read it), and the instances' custom columns.
+                    set_bytes(encoder, true, &data, 11);
+                    let custom_buf = match &item.instance_custom {
+                        Some(c) if !c.is_empty() => match self.device.new_buffer(bytemuck::cast_slice(c)) {
+                            Ok(b) => {
+                                let id = b.id();
+                                self.transients[slot].push(b);
+                                id
+                            }
+                            Err(_) => self.identity_instance.id(),
+                        },
+                        _ => self.identity_instance.id(),
+                    };
+                    let _: () = msg3(encoder, sel!("setVertexBuffer:offset:atIndex:"), custom_buf, 0usize, 10usize);
+                    let mut lens = [0u32; 4];
+                    for (k, values) in [&m.storage0, &m.storage1, &m.storage2].into_iter().enumerate() {
+                        lens[k] = values.len() as u32;
+                        let buffer = if values.is_empty() {
+                            self.identity_instance.id()
+                        } else {
+                            match self.device.new_buffer(bytemuck::cast_slice(values)) {
+                                Ok(b) => {
+                                    let id = b.id();
+                                    self.transients[slot].push(b);
+                                    id
+                                }
+                                Err(_) => {
+                                    lens[k] = 0;
+                                    self.identity_instance.id()
+                                }
+                            }
+                        };
+                        let _: () = msg3(
+                            encoder,
+                            sel!("setFragmentBuffer:offset:atIndex:"),
+                            buffer,
+                            0usize,
+                            3 + k as NSUInteger,
+                        );
+                        let _: () = msg3(
+                            encoder,
+                            sel!("setVertexBuffer:offset:atIndex:"),
+                            buffer,
+                            0usize,
+                            12 + k as NSUInteger,
+                        );
+                    }
+                    set_bytes(encoder, false, &lens, 6);
+                    set_bytes(encoder, true, &lens, 15);
+                }
+            }
 
             let (texture, sampler) = self.material_texture(material);
             let _: () = msg2(
@@ -3037,6 +3410,15 @@ impl MetalRenderer {
                 29usize,
             );
             let _: () = msg2(encoder, sel!("setFragmentSamplerState:atIndex:"), self.transmission_sampler.id(), 14usize);
+            // The capture's depth, a screen-space `ShaderMaterial`'s
+            // `ss_depth_tex`: single-slice captures only (a stereo capture's
+            // depth array is not readable), a stand-in otherwise.
+            let capture_depth = self
+                .transmission
+                .as_ref()
+                .filter(|c| c.slices == 1 && self.capture_bound.is_some())
+                .map_or(self.capture_depth_dummy.id(), |c| c.target.depth_texture());
+            let _: () = msg2(encoder, sel!("setFragmentTexture:atIndex:"), capture_depth, 30usize);
             let atlas_sampler = self
                 .samplers
                 .get(&SamplerKey::default_linear())
@@ -3135,6 +3517,40 @@ impl MetalRenderer {
                     phys_bits |= 1 << i;
                 }
             }
+            // A custom shader's `u_tex*` over them: it reads no physical map.
+            if custom_draw != 0 {
+                if let Material::Shader(m) = &*item.material {
+                    // A view made on this device first, then a map, as on
+                    // wgpu; white where the material has neither — the
+                    // fragment slots would otherwise still hold the physical
+                    // maps bound above.
+                    for i in 0..4 {
+                        let tex = match m.textures.get(i).and_then(|v| v.as_metal()) {
+                            Some(t) => t.obj.id(),
+                            None => m.maps.get(i).and_then(|map| self.slot_texture(Some(map), false)).map_or(self.white.id(), |(t, _)| t),
+                        };
+                        let _: () = msg2(encoder, sel!("setFragmentTexture:atIndex:"), tex, USER_TEXTURE0 + i);
+                        let _: () = msg2(encoder, sel!("setVertexTexture:atIndex:"), tex, USER_TEXTURE0 + i);
+                    }
+                }
+                let smp = self.samplers.get(&USER_SAMPLER).map_or(sampler, |s| s.id());
+                let _: () = msg2(encoder, sel!("setFragmentSamplerState:atIndex:"), smp, USER_SAMPLER_SLOT);
+                let _: () = msg2(encoder, sel!("setVertexSamplerState:atIndex:"), smp, USER_SAMPLER_SLOT);
+                // Volumes made on this device (a wgpu view has no texture
+                // here, and reads zero, as an empty slot does).
+                let volumes = match &*item.material {
+                    Material::Shader(m) => m.volumes.as_slice(),
+                    _ => &[],
+                };
+                for i in 0..2 {
+                    let tex = volumes.get(i).and_then(|v| v.as_metal()).map_or(self.zero_volume.id(), |t| t.obj.id());
+                    let _: () = msg2(encoder, sel!("setFragmentTexture:atIndex:"), tex, USER_VOLUME0 + i);
+                    let _: () = msg2(encoder, sel!("setVertexTexture:atIndex:"), tex, USER_VOLUME0 + i);
+                }
+                let smp = self.samplers.get(&USER_VOLUME_SAMPLER).map_or(sampler, |s| s.id());
+                let _: () = msg2(encoder, sel!("setFragmentSamplerState:atIndex:"), smp, USER_VOLUME_SAMPLER_SLOT);
+                let _: () = msg2(encoder, sel!("setVertexSamplerState:atIndex:"), smp, USER_VOLUME_SAMPLER_SLOT);
+            }
 
             let mut draw_u = draw_uniforms(
                 item,
@@ -3154,7 +3570,15 @@ impl MetalRenderer {
             // A matcap's texture, sRGB like a colour map — or, on a toon
             // material, its `gradientMap`, decoded by its own colour space as
             // three.js does. No material has both.
-            let matcap = self.slot_texture(slots.matcap_map.as_ref().or(slots.gradient_map.as_ref()), false);
+            // The displacement map, at vertex texture 0 — bound for every draw,
+            // white when there is none, because `vs_mesh` declares it.
+            let disp = self.slot_texture(slots.displacement_map.as_ref(), true);
+            let _: () = msg2(encoder, sel!("setVertexTexture:atIndex:"), disp.map_or(self.white.id(), |(t, _)| t), 0usize);
+            let _: () = msg2(encoder, sel!("setVertexSamplerState:atIndex:"), disp.map_or(sampler, |(_, s)| s), 0usize);
+            let matcap = self.slot_texture(
+                slots.matcap_map.as_ref().or(slots.gradient_map.as_ref()).or(slots.cloud_shadow_map.as_ref()),
+                false,
+            );
             draw_u.map_scalars[3] = matcap.is_some() as u32 as f32;
             let _: () = msg2(
                 encoder,
@@ -3190,7 +3614,9 @@ impl MetalRenderer {
             let (intensity, rows) = own_env.map_or(self.env_light, |e| (e.1, e.2));
             draw_u.map_params[2] = intensity;
             draw_u.map_params[3] = if env.is_some() { 1.0 } else { 0.0 };
-            if matches!(material.kind(), MaterialKind::Standard | MaterialKind::Physical) {
+            // A custom shader samples the scene's environment too
+            // (`sample_env_cube`).
+            if matches!(material.kind(), MaterialKind::Standard | MaterialKind::Physical) || custom_draw != 0 {
                 draw_u.env_dir = rows;
                 draw_u.env_params = env_atlas_params;
             }
@@ -3486,6 +3912,11 @@ impl MetalRenderer {
                     let _: () = msg2(encoder, sel!("setFragmentSamplerState:atIndex:"), alpha_smp, 1usize);
                     set_bytes(encoder, false, &draw_u, VB_DRAW);
                 }
+                // The caster's displacement map, so its shadow has the relief
+                // its surface has (`displace` in the shadow vertex stages).
+                let disp = self.slot_texture(item.material.texture_slots().displacement_map.as_ref(), true);
+                let _: () = msg2(encoder, sel!("setVertexTexture:atIndex:"), disp.map_or(self.white.id(), |(t, _)| t), 0usize);
+                let _: () = msg2(encoder, sel!("setVertexSamplerState:atIndex:"), disp.map_or(map_sampler, |(_, s)| s), 0usize);
                 let _: () = msg3(encoder, sel!("setVertexBuffer:offset:atIndex:"), vertices, 0usize, 0usize);
                 let _: () = msg3(encoder, sel!("setVertexBuffer:offset:atIndex:"), instances, 0usize, VB_INSTANCES);
                 let _: () = msg3(encoder, sel!("setVertexBuffer:offset:atIndex:"), skin.unwrap_or(vertices), 0usize, VB_SKIN);
@@ -3771,7 +4202,7 @@ impl MetalRenderer {
             let _: () = msg1(
                 color,
                 sel!("setStoreAction:"),
-                if keep_multisampled {
+                if keep_multisampled || self.keep_attachments {
                     store_action::STORE_AND_MULTISAMPLE_RESOLVE
                 } else {
                     store_action::MULTISAMPLE_RESOLVE
@@ -3803,8 +4234,9 @@ impl MetalRenderer {
             // asks (`PassAttachments::with_depth_resolve`) — the multisampled
             // one kept as well while the OIT pass still has to test against
             // it.
+            let store_depth = self.store_depth || self.keep_attachments;
             let resolve_depth =
-                self.store_depth && view.depth.is_null() && !pass.depth_resolve.is_null() && pass.sample_count > 1;
+                store_depth && view.depth.is_null() && !pass.depth_resolve.is_null() && pass.sample_count > 1;
             if resolve_depth {
                 let _: () = msg1(depth, sel!("setResolveTexture:"), pass.depth_resolve);
                 let _: () = msg1(depth, sel!("setResolveSlice:"), slice as NSUInteger);
@@ -3812,7 +4244,7 @@ impl MetalRenderer {
             let _: () = msg1(
                 depth,
                 sel!("setStoreAction:"),
-                match (self.store_depth, resolve_depth, self.oit_active) {
+                match (store_depth, resolve_depth, self.oit_active || self.keep_attachments) {
                     (false, ..) => store_action::DONT_CARE,
                     (true, false, _) => store_action::STORE,
                     (true, true, false) => store_action::MULTISAMPLE_RESOLVE,
@@ -3876,6 +4308,15 @@ fn layered(views: &[RenderView], pass: &PassAttachments) -> bool {
 ///
 /// Metal copies the bytes into the command buffer, so `T` needs to live only
 /// for the call. Capped at 4 KB by the API — both uniform structs are far under.
+/// The id a custom shader's library and pipelines are cached under: a hash of
+/// its MSL, never 0 (which means "none").
+fn custom_shader_id(msl: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    msl.hash(&mut h);
+    h.finish().max(1)
+}
+
 unsafe fn set_bytes<T>(encoder: Id, vertex_stage: bool, value: &T, index: NSUInteger) {
     debug_assert!(std::mem::size_of::<T>() <= 4096);
     let sel = if vertex_stage {
@@ -3966,6 +4407,11 @@ pub(crate) fn normal_matrix(m: &Matrix4) -> [f32; 16] {
 fn geometry_sphere(g: &BufferGeometry) -> Option<crate::math::Sphere> {
     if let Some(s) = g.bounding_sphere {
         return Some(s);
+    }
+    // As wgpu's: a compute pass moves its vertices, so the CPU positions
+    // give no bounds to cull by.
+    if g.gpu_writable {
+        return None;
     }
     let (mut lo, mut hi) = (Vector3::new(f32::MAX, f32::MAX, f32::MAX), Vector3::new(f32::MIN, f32::MIN, f32::MIN));
     let mut any = false;
@@ -4206,6 +4652,23 @@ fn draw_uniforms(
             [u[2], u[3], u[4]]
         },
         map_xform: map_xforms(&slots),
+        planet: {
+            let atmos = material.atmosphere_params();
+            let (eclipse, sun_radius) = material.eclipse();
+            let scatter = material.scatter_params();
+            let twilight = material.twilight_color();
+            let cloud_map = slots.cloud_shadow_map.is_some() && atmos[1] > 0.0;
+            [
+                [material.emissive_night_side(), sun_radius, atmos[3], scatter[0]],
+                [twilight.r, twilight.g, twilight.b, scatter[1]],
+                [atmos[0], atmos[1], atmos[2], cloud_map as u32 as f32],
+                eclipse,
+                {
+                    let (scale, bias) = material.displacement();
+                    [material.normal_scale().y, scale, bias, slots.displacement_map.is_some() as u32 as f32]
+                },
+            ]
+        },
         // Filled in at bind time, where the pool and the uploaded set are known.
         map_samplers: [[0; 4]; 6],
         phys_flags: [0; 4],
@@ -4228,6 +4691,18 @@ fn draw_uniforms(
                     m.dispersion,
                 ],
                 [m.attenuation_color.r, m.attenuation_color.g, m.attenuation_color.b, 0.0],
+            ],
+            // The atmosphere has no physical maps; its own parameters ride
+            // in these slots, as the wgpu path's `params3/4/13/14` (see
+            // `KIND_ATMOSPHERE` in the shader).
+            Material::Atmosphere(m) => [
+                [m.planet_radius, m.atmosphere_radius, m.intensity, m.falloff],
+                [m.sunset_color.r, m.sunset_color.g, m.sunset_color.b, m.airglow],
+                material.scatter_params(),
+                material.aurora_params(),
+                [0.0; 4],
+                [0.0; 4],
+                [0.0; 4],
             ],
             _ => [[0.0; 4]; 7],
         },
@@ -4470,9 +4945,9 @@ mod tests {
             // `model` and `normal_mat`; nine float4/uint4 rows; `extra`,
             // `map_scalars`, `env_params` and the three `env_dir` rows; the
             // six `map_samplers`, seven `physical` and one `phys_flags` rows;
-            // and two `map_xform` rows a map — the members `struct Draw`
-            // declares in `shaders.metal`.
-            64 + 64 + 9 * 16 + 6 * 16 + 6 * 16 + 7 * 16 + 16 + 2 * MAP_COUNT * 16
+            // two `map_xform` rows a map; and the five `planet` rows — the
+            // members `struct Draw` declares in `shaders.metal`.
+            64 + 64 + 9 * 16 + 6 * 16 + 6 * 16 + 7 * 16 + 16 + 2 * MAP_COUNT * 16 + 5 * 16
         );
         assert_eq!(
             std::mem::size_of::<FrameUniforms>(),

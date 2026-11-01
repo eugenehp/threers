@@ -1,5 +1,6 @@
 //! Icons from an atlas, one per row.
 
+use super::gpu;
 use super::atlas::{AtlasRect, SharedAtlas};
 use super::{Column, ColumnFormat, KindUniforms, Mark, MarkCommon, MarkKind, PrepareContext};
 
@@ -130,7 +131,7 @@ pub struct SpriteMarks {
     version: u64,
     /// Marks this layer's boxes in a shared index.
     owner: u64,
-    gpu: Option<(u64, wgpu::BindGroup)>,
+    gpu: Option<(u64, gpu::BindGroup)>,
     atlas_size: (u32, u32),
     atlas_srgb: bool,
 }
@@ -489,24 +490,24 @@ impl SpriteMarks {
 pub(crate) fn atlas_bind_group(
     ctx: &PrepareContext,
     atlas: &SharedAtlas,
-    gpu: &mut Option<(u64, wgpu::BindGroup)>,
+    gpu: &mut Option<(u64, gpu::BindGroup)>,
 ) -> (u32, u32) {
     let mut a = atlas.write().unwrap();
     let (view, generation) = a.texture(ctx.device, ctx.queue);
     let size = a.size();
     drop(a);
     if gpu.as_ref().is_none_or(|g| g.0 != generation) {
-        let bg = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let bg = ctx.device.create_bind_group(&gpu::BindGroupDescriptor {
             label: Some("threers atlas bind group"),
             layout: &ctx.resources.texture_layout,
             entries: &[
-                wgpu::BindGroupEntry {
+                gpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&view),
+                    resource: gpu::BindingResource::TextureView(&view),
                 },
-                wgpu::BindGroupEntry {
+                gpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&ctx.resources.mip_sampler),
+                    resource: gpu::BindingResource::Sampler(&ctx.resources.mip_sampler),
                 },
             ],
         });
@@ -615,7 +616,7 @@ impl Mark for SpriteMarks {
             &mut self.shown,
         ]
     }
-    fn extra_bind_group(&self) -> Option<&wgpu::BindGroup> {
+    fn extra_bind_group(&self) -> Option<&gpu::BindGroup> {
         self.gpu.as_ref().map(|g| &g.1)
     }
 }

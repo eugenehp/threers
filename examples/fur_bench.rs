@@ -137,7 +137,7 @@ fn main() {
             animator.update(&mut scene, f as f32 / 60.0, 1.0 / 60.0);
             hr.render(&mut scene, &camera);
         }
-        let _ = hr.device().poll(wgpu::PollType::wait_indefinitely());
+        hr.wait_idle();
         let (mut update, mut frame, mut submit) = (0.0f64, Vec::new(), 0.0f64);
         for f in 0..frames {
             let t = (f + 5) as f32 / 60.0;
@@ -153,7 +153,7 @@ fn main() {
             let t1 = Instant::now();
             hr.render(&mut scene, &camera);
             let ts = Instant::now();
-            let _ = hr.device().poll(wgpu::PollType::wait_indefinitely());
+            hr.wait_idle();
             let t2 = Instant::now();
             submit += (ts - t1).as_secs_f64() * 1e3;
             update += (t1 - t0).as_secs_f64() * 1e3;

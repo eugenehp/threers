@@ -26,7 +26,7 @@ re-exports it as `threers::codec`.
 
 ```toml
 [dependencies]
-threers-codec = "0.0.9"
+threers-codec = "0.0.10"
 ```
 
 ```rust,no_run

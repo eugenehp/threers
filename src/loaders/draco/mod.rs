@@ -281,11 +281,65 @@ fn start_mesh(buffer: &mut Buffer<'_>, bytes: &[u8]) -> Result<Header, DracoErro
     if !head.is_edgebreaker() {
         return Err(DracoError::Unsupported("sequential connectivity"));
     }
-    if head.flags & METADATA_FLAG != 0 {
-        return Err(DracoError::Unsupported("metadata"));
-    }
     buffer.advance(HEADER_BYTES)?;
+    // Metadata (names and values attached to the geometry and its
+    // attributes: FlyWire's meshes carry it) changes nothing decoded here:
+    // read past it.
+    if head.flags & METADATA_FLAG != 0 {
+        skip_geometry_metadata(buffer)?;
+    }
     Ok(head)
+}
+
+/// Deepest sub-metadata Draco accepts (`kMaxSubmetadataLevel`).
+const MAX_SUBMETADATA_LEVEL: u32 = 1000;
+
+/// Read past a geometry's metadata (`MetadataDecoder::DecodeGeometryMetadata`):
+/// each attribute's (its unique id, then a metadata), then the geometry's.
+fn skip_geometry_metadata(buffer: &mut Buffer<'_>) -> Result<(), DracoError> {
+    let num_attribute_metadata = buffer.varint32()?;
+    for _ in 0..num_attribute_metadata {
+        let _unique_id = buffer.varint32()?;
+        skip_metadata(buffer)?;
+    }
+    skip_metadata(buffer)
+}
+
+/// Read past one metadata (`MetadataDecoder::DecodeMetadata`): its entries
+/// (a name, then a sized value), then its sub-metadata, each a name and a
+/// metadata of the same form.
+fn skip_metadata(buffer: &mut Buffer<'_>) -> Result<(), DracoError> {
+    // (level, named): the top metadata has no name
+    let mut stack = vec![(0u32, false)];
+    while let Some((level, named)) = stack.pop() {
+        if named {
+            if level > MAX_SUBMETADATA_LEVEL {
+                return Err(DracoError::Corrupt);
+            }
+            skip_name(buffer)?;
+        }
+        let num_entries = buffer.varint32()?;
+        for _ in 0..num_entries {
+            skip_name(buffer)?;
+            let size = buffer.varint32()? as usize;
+            if size == 0 {
+                return Err(DracoError::Corrupt);
+            }
+            buffer.advance(size)?;
+        }
+        let num_sub = buffer.varint32()? as usize;
+        if num_sub > buffer.remaining() {
+            return Err(DracoError::Corrupt);
+        }
+        stack.extend(std::iter::repeat_n((level + 1, true), num_sub));
+    }
+    Ok(())
+}
+
+/// A metadata name: a length byte, then that many bytes.
+fn skip_name(buffer: &mut Buffer<'_>) -> Result<(), DracoError> {
+    let len = buffer.u8()? as usize;
+    buffer.advance(len)
 }
 
 /// Read the connectivity, leaving `buffer` at the attribute section.
@@ -340,6 +394,38 @@ mod tests {
 
     const SPHERE: &[u8] = include_bytes!("testdata/sphere.drc");
     const BUNNY: &[u8] = include_bytes!("testdata/bunny.drc");
+
+    /// A file with metadata (attribute and geometry entries, a nested
+    /// sub-metadata) decodes as the same file without it.
+    #[test]
+    fn metadata_is_read_past() {
+        let mut meta = vec![];
+        // one attribute's metadata: unique id 0, an entry `name` = "abc"
+        meta.extend([1, 0, 1, 4]);
+        meta.extend(b"name");
+        meta.extend([3]);
+        meta.extend(b"abc");
+        meta.push(0);
+        // the geometry's: an entry `k` = [7], and a sub-metadata `sub` with
+        // an entry of its own
+        meta.extend([1, 1, b'k', 1, 7, 1]);
+        meta.extend([3]);
+        meta.extend(b"sub");
+        meta.extend([1, 2]);
+        meta.extend(b"id");
+        meta.extend([2, 1, 2, 0]);
+        let mut with = SPHERE[..HEADER_BYTES].to_vec();
+        let flags = u16::from_le_bytes([with[9], with[10]]) | METADATA_FLAG;
+        with[9..11].copy_from_slice(&flags.to_le_bytes());
+        with.extend(&meta);
+        with.extend(&SPHERE[HEADER_BYTES..]);
+        let (a, b) = (decode_mesh(SPHERE).unwrap(), decode_mesh(&with).expect("decoded past the metadata"));
+        assert_eq!(a.indices(), b.indices());
+        assert_eq!(a.num_points(), b.num_points());
+        assert_eq!(format!("{:?}", a.attributes), format!("{:?}", b.attributes));
+        // cut short inside the metadata: an error, not a guess
+        assert!(decode_mesh(&with[..HEADER_BYTES + 6]).is_err());
+    }
 
     /// The header of a real file, written by Google's encoder.
     #[test]

@@ -73,17 +73,10 @@ struct Bench {
 impl Bench {
     /// Draw `mark` once and wait for the GPU.
     fn frame(&mut self, mark: &mut dyn Mark) -> f64 {
-        let (device, queue) = (self.hr.device().clone(), self.hr.queue().clone());
         let t = Instant::now();
-        self.marks.draw(
-            &device,
-            &queue,
-            &self.hr.mark_target(),
-            &self.view,
-            &mut [mark],
-        );
+        self.hr.draw_marks(&mut self.marks, &self.view, &mut [mark]);
         let cpu = ms(t);
-        let _ = device.poll(wgpu::PollType::wait_indefinitely());
+        self.hr.wait_idle();
         if std::env::var_os("CPU_ONLY").is_some() {
             cpu
         } else {
@@ -153,7 +146,7 @@ fn main() {
     controls.pitch = 0.7;
     controls.apply(&mut camera);
     hr.render(&mut Scene::new(), &camera);
-    let marks = MarkRenderer::new(hr.device());
+    let marks = hr.mark_renderer();
     let view = MarkView::new(&camera, origin, (w, h));
     let mut bench = Bench {
         hr,

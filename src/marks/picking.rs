@@ -13,6 +13,7 @@
 //! main thread deadlocks the page, because the callback that would end the wait
 //! runs on that same thread.
 
+use super::gpu;
 use super::{DepthKey, Mark, MarkRenderer, MarkView};
 
 /// The integer target the ids are drawn into: `(layer id, row)`. Layer ids are
@@ -22,12 +23,12 @@ pub(crate) const PICK_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg32Uin
 #[derive(Default)]
 pub(crate) struct PickTargets {
     size: (u32, u32),
-    color: Option<(wgpu::Texture, wgpu::TextureView)>,
-    depth: Option<wgpu::TextureView>,
+    color: Option<(gpu::Texture, gpu::TextureView)>,
+    depth: Option<gpu::TextureView>,
 }
 
 impl PickTargets {
-    fn ensure(&mut self, device: &wgpu::Device, size: (u32, u32)) {
+    fn ensure(&mut self, device: &gpu::Device, size: (u32, u32)) {
         if self.size == size && self.color.is_some() {
             return;
         }
@@ -88,7 +89,7 @@ pub struct PickRequest {
 }
 
 struct Pending {
-    buffer: wgpu::Buffer,
+    buffer: gpu::Buffer,
     rx: std::sync::mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>,
     origin: (u32, u32),
     size: (u32, u32),
@@ -122,9 +123,15 @@ impl PickRectRequest {
 
     /// Block until the hits arrive. **Native only.**
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn wait(mut self, device: &wgpu::Device) -> Vec<PickHit> {
+    pub fn wait(self, device: &wgpu::Device) -> Vec<PickHit> {
+        self.wait_on(&gpu::Gpu::from(device))
+    }
+
+    /// [`wait`](Self::wait) on `gpu`.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn wait_on(mut self, device: &gpu::Gpu) -> Vec<PickHit> {
         loop {
-            let _ = device.poll(wgpu::PollType::wait_indefinitely());
+            device.poll_wait();
             if let Some(hits) = self.try_take() {
                 return hits;
             }
@@ -157,14 +164,20 @@ impl PickRequest {
 
     /// Block until the answer arrives. **Native only.**
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn wait(mut self, device: &wgpu::Device) -> Option<PickHit> {
+    pub fn wait(self, device: &wgpu::Device) -> Option<PickHit> {
+        self.wait_on(&gpu::Gpu::from(device))
+    }
+
+    /// [`wait`](Self::wait) on `gpu`.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn wait_on(mut self, device: &gpu::Gpu) -> Option<PickHit> {
         self.pending.as_ref()?;
-        let _ = device.poll(wgpu::PollType::wait_indefinitely());
+        device.poll_wait();
         loop {
             if let Some(hit) = self.try_take() {
                 return hit;
             }
-            let _ = device.poll(wgpu::PollType::wait_indefinitely());
+            device.poll_wait();
         }
     }
 }
@@ -253,6 +266,23 @@ impl MarkRenderer {
         y: f32,
         radius: u32,
     ) -> PickRequest {
+        let occluder = occluder.map(gpu::TextureView::from);
+        self.pick_on(&gpu::Gpu::from((device, queue)), view, marks, occluder.as_ref(), x, y, radius)
+    }
+
+    /// [`pick`](Self::pick) on `gpu`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn pick_on(
+        &mut self,
+        gpu: &gpu::Gpu,
+        view: &MarkView,
+        marks: &mut [&mut dyn Mark],
+        occluder: Option<&gpu::TextureView>,
+        x: f32,
+        y: f32,
+        radius: u32,
+    ) -> PickRequest {
+        let (device, queue) = (gpu, gpu);
         let (w, h) = view.viewport;
         let cx = x.floor() as i64;
         let cy = y.floor() as i64;
@@ -285,9 +315,24 @@ impl MarkRenderer {
         view: &MarkView,
         marks: &mut [&mut dyn Mark],
         occluder: Option<&wgpu::TextureView>,
+        p0: (u32, u32),
+        p1: (u32, u32),
+    ) -> PickRectRequest {
+        let occluder = occluder.map(gpu::TextureView::from);
+        self.pick_rect_on(&gpu::Gpu::from((device, queue)), view, marks, occluder.as_ref(), p0, p1)
+    }
+
+    /// [`pick_rect`](Self::pick_rect) on `gpu`.
+    pub fn pick_rect_on(
+        &mut self,
+        gpu: &gpu::Gpu,
+        view: &MarkView,
+        marks: &mut [&mut dyn Mark],
+        occluder: Option<&gpu::TextureView>,
         (x0, y0): (u32, u32),
         (x1, y1): (u32, u32),
     ) -> PickRectRequest {
+        let (device, queue) = (gpu, gpu);
         let (w, h) = view.viewport;
         let r = [x0.min(w), y0.min(h), x1.min(w), y1.min(h)];
         let c = ((r[0] + r[2]) as f32 * 0.5, (r[1] + r[3]) as f32 * 0.5);
@@ -299,11 +344,11 @@ impl MarkRenderer {
     #[allow(clippy::too_many_arguments)]
     fn pick_region(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        device: &gpu::Device,
+        queue: &gpu::Queue,
         view: &MarkView,
         marks: &mut [&mut dyn Mark],
-        occluder: Option<&wgpu::TextureView>,
+        occluder: Option<&gpu::TextureView>,
         [x0, y0, x1, y1]: [u32; 4],
         (x, y): (f32, f32),
     ) -> Option<Pending> {
@@ -358,9 +403,9 @@ impl MarkRenderer {
             label: Some("threers mark pick"),
         });
         {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut pass = encoder.begin_render_pass(&gpu::RenderPassDescriptor {
                 label: Some("threers mark pick pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                color_attachments: &[Some(gpu::RenderPassColorAttachment {
                     view: color_view,
                     depth_slice: None,
                     resolve_target: None,
@@ -369,7 +414,7 @@ impl MarkRenderer {
                         store: wgpu::StoreOp::Store,
                     },
                 })],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                depth_stencil_attachment: Some(gpu::RenderPassDepthStencilAttachment {
                     view: depth_view,
                     depth_ops: Some(wgpu::Operations {
                         load: if use_occluder {
@@ -414,13 +459,13 @@ impl MarkRenderer {
             mapped_at_creation: false,
         });
         encoder.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
+            gpu::TexelCopyTextureInfo {
                 texture: color_tex,
                 mip_level: 0,
                 origin: wgpu::Origin3d { x: x0, y: y0, z: 0 },
                 aspect: wgpu::TextureAspect::All,
             },
-            wgpu::TexelCopyBufferInfo {
+            gpu::TexelCopyBufferInfo {
                 buffer: &buffer,
                 layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,

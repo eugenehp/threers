@@ -81,10 +81,9 @@ fn draw(
         .build()
         .expect("a GPU adapter");
     hr.render(scene, camera);
-    let mut marks = MarkRenderer::new(hr.device());
+    let mut marks = hr.mark_renderer();
     then(&mut hr, &mut marks, layers);
-    let (device, queue) = (hr.device().clone(), hr.queue().clone());
-    marks.draw(&device, &queue, &hr.mark_target(), view, layers);
+    hr.draw_marks(&mut marks, view, layers);
     hr.read_rgba()
 }
 
@@ -234,12 +233,9 @@ fn scatter() -> Vec<u8> {
         .build()
         .expect("a GPU adapter");
     hr.render(&mut scene, &camera);
-    let (device, queue) = (hr.device().clone(), hr.queue().clone());
-    let mut marks = MarkRenderer::new(&device);
+    let mut marks = hr.mark_renderer();
     let [sx, sy, _] = view.project([7.6, 4.0, 0.0]).expect("on screen");
-    let hits = marks
-        .pick(&device, &queue, &view, &mut [&mut points], None, sx, sy, 6)
-        .wait(&device);
+    let hits = hr.pick_marks(&mut marks, &view, &mut [&mut points], (sx, sy), 6);
     let mut callout = PointMarks::new();
     let mut callout_text = labels(13.0, Vec::new());
     if let Some(row) = hits.map(|h| h.index as usize) {
@@ -266,10 +262,8 @@ fn scatter() -> Vec<u8> {
     } else {
         println!("  nothing under the cursor");
     }
-    marks.draw(
-        &device,
-        &queue,
-        &hr.mark_target(),
+    hr.draw_marks(
+        &mut marks,
         &view,
         &mut [
             &mut points,

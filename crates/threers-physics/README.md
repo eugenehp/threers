@@ -7,8 +7,8 @@ Pure Rust, no dependencies beyond `threers` itself, and wasm-ready.
 
 ```toml
 [dependencies]
-threers = "0.0.9"
-threers-physics = "0.0.9"
+threers = "0.0.10"
+threers-physics = "0.0.10"
 ```
 
 ```rust

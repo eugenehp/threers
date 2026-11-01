@@ -13,10 +13,10 @@
 //!   picture. Ignored with `--compare`: each backend reports its own measured
 //!   rate, so the two pictures would differ by clock jitter rather than by
 //!   anything about the solver.
-//! * `FLUID_FRAMES=<n>` — steps before the picture is taken. With
-//!   `--compare`, a short run is the one that says whether the two backends
-//!   agree: a fluid is chaotic, so after a few hundred frames even an exact
-//!   match in the arithmetic would drift apart.
+//! * `FLUID_FRAMES=<n>` — steps before the picture is taken. A fluid is
+//!   chaotic and amplifies any difference in rounding, which is what makes a
+//!   long `--compare` run a strict one: the two backends run one shader
+//!   source, and at the default ninety frames they agree to within a level.
 //!
 //! # What this demonstrates
 //!
@@ -24,8 +24,8 @@
 //! `metal-rs`, no `objc` crate, no build script, and no wgpu. That matters for
 //! an app that already owns a `MTLDevice` and a `CAMetalLayer` and does not
 //! want a second graphics abstraction inside it. The solver is the same solver
-//! — `src/metal/fluid.metal` is a transcription of `src/fluid/shader.rs` and
-//! the two share the uniform block — and `--compare` is what keeps it honest.
+//! — every pass is one `passes!` source in `src/fluid/shader.rs`, emitted as
+//! WGSL and as MSL — and `--compare` is what keeps it honest.
 
 use threers::encode_png;
 use threers::fluid::FluidConfig;
@@ -58,25 +58,16 @@ fn main() {
     let config = FluidConfig {
         seed: env("FLUID_SEED").unwrap_or(FluidConfig::default().seed),
         show_fps,
-        // The Metal backend implements the solver and the display, not the
-        // bloom and sunrays — see `threers::metal::fluid`. Switching them off
-        // on the wgpu side too is what makes `--compare` a comparison of the
-        // same thing.
+        // Off, so `--compare` measures the solver and the display; the post
+        // passes have their own comparison in `threers::metal::fluid`'s
+        // tests.
         bloom: false,
         sunrays: false,
-        // Hue cycling is a pointer-driven feature and this backend does not
-        // have it; off, so `unsupported` has nothing to report and the
-        // comparison is of what the two actually share.
+        // Hue cycling recolours pointers, and there are none here; off, so
+        // neither backend draws a hue from the generator the splats share.
         colorful: false,
         ..FluidConfig::default()
     };
-
-    let missing = MetalFluid::unsupported(&config);
-    if !missing.is_empty() {
-        // Said out loud rather than silently ignored: a picture that looks
-        // like a fluid is not evidence that it ran what was asked for.
-        eprintln!("this backend ignores: {}", missing.join(", "));
-    }
 
     let mut fluid = match MetalFluid::new(&device, width, height, config) {
         Ok(f) => f,

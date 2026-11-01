@@ -5,14 +5,14 @@ PyPI (not crates.io). See also [`docs/bindings.md`](bindings.md).
 
 | Artifact | Version | Registry | Arch notes |
 |---|---|---|---|
-| `threers-codec` | 0.0.9 | crates.io | the codecs on their own; new — not yet on the index |
-| `threers-softbody` | 0.0.9 | crates.io | the soft-body lattice and solver (`gpu` feature: WebGPU compute); new — not yet on the index |
-| `threers` | 0.0.9 | crates.io | source; consumers compile |
-| `threers-physics` | 0.0.9 | crates.io | tracks `threers` from 0.0.8; 0.0.1 is on the index |
+| `threers-codec` | 0.0.10 | crates.io | the codecs on their own; new — not yet on the index |
+| `threers-softbody` | 0.0.10 | crates.io | the soft-body lattice and solver (`gpu` feature: WebGPU compute); new — not yet on the index |
+| `threers` | 0.0.10 | crates.io | source; consumers compile |
+| `threers-physics` | 0.0.10 | crates.io | tracks `threers` from 0.0.8; 0.0.1 is on the index |
 | `threers-probe` | 0.0.2 | crates.io | 0.0.1 is on the index |
-| `threers` (npm ESM) | 0.0.9 | npm / Deno | **mini** (default) + **full** wasm entries ([`crates/threers-js`](../crates/threers-js)) |
-| `threers-node` | 0.0.9 | npm | per-arch `.node` via `@threers/node-*` ([`crates/threers-node`](../crates/threers-node)) |
-| `threers` (PyPI) | 0.0.9 | PyPI | per-platform wheels ([`crates/threers-py`](../crates/threers-py)) |
+| `threers` (npm ESM) | 0.0.10 | npm / Deno | **mini** (default) + **full** wasm entries ([`crates/threers-js`](../crates/threers-js)) |
+| `threers-node` | 0.0.10 | npm | per-arch `.node` via `@threers/node-*` ([`crates/threers-node`](../crates/threers-node)) |
+| `threers` (PyPI) | 0.0.10 | PyPI | per-platform wheels ([`crates/threers-py`](../crates/threers-py)) |
 
 `crates/` also holds seven demos and benches. None of them publish
 (`publish = false`), and they fall into two groups:
@@ -33,7 +33,7 @@ same way:
 
 ```toml
 # crates/threers-physics/Cargo.toml
-threers = { path = "../..", version = "0.0.9", features = ["mesh-bvh"] }
+threers = { path = "../..", version = "0.0.10", features = ["mesh-bvh"] }
 ```
 
 A path dependency is what the workspace builds against; the `version` is what the
@@ -152,7 +152,7 @@ cargo publish -p threers-softbody
 cargo publish -p threers
 cargo publish -p threers-physics             # only after the first is on the index
 cargo publish -p threers-probe               # likewise
-git tag -a v0.0.9 -m 'threers 0.0.9' && git push --tags
+git tag -a v0.0.10 -m 'threers 0.0.10' && git push --tags
 
 # 7. Language packages — one script locally; CI on tag push.
 ./scripts/release-versions.sh                    # versions aligned?
@@ -160,7 +160,7 @@ git tag -a v0.0.9 -m 'threers 0.0.9' && git push --tags
 PUBLISH=1 ./scripts/release-all.sh publish     # upload (or push tag → CI)
 
 # Multi-arch npm-node + PyPI: push v* tag → .github/workflows/release-language-packages.yml
-git tag -a v0.0.9 -m 'threers 0.0.9' && git push --tags
+git tag -a v0.0.10 -m 'threers 0.0.10' && git push --tags
 ```
 
 ## One command (`scripts/release-all.sh`)
@@ -185,7 +185,7 @@ PyPI trusted publishing).
 
 ```bash
 # After crates.io publish + version bump:
-git tag v0.0.9 && git push origin v0.0.9
+git tag v0.0.10 && git push origin v0.0.10
 ```
 
 ## npm ESM (`crates/threers-js`)
@@ -276,12 +276,13 @@ curl -s -H 'User-Agent: threers-release' https://crates.io/api/v1/crates/threers
   | python3 -c "import json,sys; print(json.load(sys.stdin)['crate']['max_version'])"
 ```
 
-It reads 0.0.8, so 0.0.9 is what ships.
+It reads 0.0.8 — 0.0.9 was tagged but never published — so 0.0.10 is what
+ships.
 
 `threers-physics` tracks the `threers` version from 0.0.8 on, so it is bumped
 with the rest and `release-versions.sh` treats it as one of the aligned roots.
 Only 0.0.1 (2026-09-11) is on the index; the 0.0.2 the workspace carried was
-never published, nor was 0.0.8, so it jumps from 0.0.1 straight to 0.0.9. `CHECK=1
+never published, nor were 0.0.8 and 0.0.9, so it jumps from 0.0.1 straight to 0.0.10. `CHECK=1
 ./scripts/release-versions.sh` asks crates.io and fails if `threers` or
 `threers-physics` is not ahead of the published version — `cargo publish`
 cannot replace a version, so a stale one would otherwise fail at the upload and

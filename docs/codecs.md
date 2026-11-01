@@ -9,7 +9,7 @@ The codecs live in their own crate, [`threers-codec`](../crates/threers-codec), 
 A program that only encodes or decodes media can depend on `threers-codec` directly and skip the renderer. Its features are `decode` and `gif` (both on by default), `parallel` and `videotoolbox`, and `threers_codec::prelude` imports the common types:
 
 ```rust
-// Cargo.toml: threers-codec = { version = "0.0.9", features = ["parallel", "videotoolbox"] }
+// Cargo.toml: threers-codec = { version = "0.0.10", features = ["parallel", "videotoolbox"] }
 use threers_codec::prelude::*;
 
 let mut enc = Mp4Encoder::new(1280, 720, EncodeOptions::default()).unwrap();
@@ -18,7 +18,7 @@ let mp4: Vec<u8> = enc.finish().unwrap();
 ```
 
 ```rust
-// Cargo.toml: threers = { version = "0.0.9", features = ["gif"] }
+// Cargo.toml: threers = { version = "0.0.10", features = ["gif"] }
 use threers::{encode_gif, decode_gif, GifEncoder, GifOptions, PaletteMode};
 
 let mut enc = GifEncoder::new(64, 64, 0)

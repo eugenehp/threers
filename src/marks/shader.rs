@@ -2752,32 +2752,25 @@ fn localize(body: &str) -> String {
     out
 }
 
-/// The renderer's tone-mapping curves, taken from its own shader so marks can
-/// never drift from the scene they are drawn into, and `mark_tone` over them.
+/// The renderer's tone-mapping curves — the one source every shader that
+/// tone-maps takes them from (`SHARED_FUNCTIONS`), so marks can never drift from
+/// the scene they are drawn into — and `mark_tone` over them.
 pub(crate) fn tone_wgsl() -> &'static str {
     static WGSL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     WGSL.get_or_init(|| {
-        let src = crate::renderer::shader::legacy_shader_source();
-        let start = src
-            .find("fn aces_tonemap(")
-            .expect("the renderer's shader has an aces_tonemap");
-        let end = src[start..]
-            .find("// Exposure, then whichever curve")
-            .map(|e| start + e)
-            .expect("the renderer's shader ends its curves where marks expect");
         format!(
             "{}
 fn mark_tone(c : vec3<f32>) -> vec3<f32> {{
     let tm = u32(frame.misc.z);
     let e = c * frame.misc.w;
     if (tm == 0u) {{ return c; }}
-    if (tm == 1u) {{ return e; }}
+    if (tm == 1u) {{ return linear_tonemap(e); }}
     if (tm == 2u) {{ return aces_tonemap(e); }}
     if (tm == 3u) {{ return neutral_tonemap(e); }}
     return agx_tonemap(e);
 }}
 ",
-            &src[start..end]
+            crate::renderer::shader::shared_functions_wgsl()
         )
     })
 }

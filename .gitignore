@@ -16,6 +16,10 @@ pnpm-debug.log*
 
 # Published JS package staging (crates/threers-js/build.sh)
 /crates/threers-js/dist/
+/crates/threers-js/*.tgz
+
+# Python wheels (maturin build)
+/crates/threers-py/dist/
 
 # Wasm / web build output
 /web/pkg/*

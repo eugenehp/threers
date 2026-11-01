@@ -15,7 +15,6 @@ use threers::postprocessing::{
     SsaoPass, UnrealBloomPass,
 };
 use threers::prelude::*;
-use threers::renderer::{readback, RenderTarget};
 
 const W: u32 = 420;
 const H: u32 = 280;
@@ -147,8 +146,8 @@ fn main() {
     let mut sheet = vec![0u8; (W * cols * H * rows * 4) as usize];
     for (i, (name, effect)) in chains.iter().enumerate() {
         let (mut s, knot) = scene();
-        let mut composer =
-            EffectComposer::new(hr.device().clone(), hr.queue().clone(), W, H, FORMAT);
+        let mut composer = EffectComposer::with_size(W, H);
+        composer.set_screen_format(FORMAT);
         // The pixel-art pass draws the scene itself, in place of RenderPass.
         if *name != "pixelated" {
             composer.add_pass(RenderPass::new());
@@ -157,9 +156,7 @@ fn main() {
             composer.add_boxed(effect(knot));
         }
         composer.add_pass(OutputPass::new());
-        let out = RenderTarget::new(hr.device(), W, H, FORMAT);
-        composer.render(hr.renderer(), &mut s, &camera, &out.color_view);
-        let px = readback::texture_bytes(hr.device(), hr.queue(), &out.color_texture);
+        let px = hr.compose(&mut composer, &mut s, &camera);
         let (cx, cy) = (i as u32 % cols, i as u32 / cols);
         for y in 0..H {
             let row = &px[(y * W * 4) as usize..((y + 1) * W * 4) as usize];

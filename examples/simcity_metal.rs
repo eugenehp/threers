@@ -10,11 +10,10 @@
 //! `Scene` the wgpu examples build, which is the point of the exercise: if the
 //! two backends disagree, it shows up here.
 //!
-//! Two things do not carry across. The water is a flat lattice rather than an
-//! animated one, because the compute pass that moves it is WGSL. And the
-//! prefiltered sky environment is a wgpu-side concept, so glass falls back to
-//! its diffuse tint. Everything else — shadows, emissive window masks,
-//! instanced traffic, the level-of-detail split — is backend-agnostic.
+//! The water stands still here: it is one frame, and nothing steps the
+//! compute pass that moves it. `simcity_render` and the windowed `simcity`
+//! run that pass on Metal too — through `marks::gpu` — under
+//! `THREERS_BACKEND=metal`.
 //!
 //! | Flag | |
 //! |------|--|

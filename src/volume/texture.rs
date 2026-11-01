@@ -1,5 +1,7 @@
 //! Volumes on the CPU ([`Data3DTexture`]) and on the GPU ([`GpuVolume`]).
 
+use crate::marks::gpu;
+
 /// How a volume's texels are stored.
 ///
 /// The integer formats are for labels, where a value is an identity rather
@@ -118,18 +120,23 @@ impl Data3DTexture {
 /// Made whole from a [`Data3DTexture`], or empty and then filled a region at a
 /// time with [`write_region`](Self::write_region) — which is how a volume too
 /// large to load at once is streamed in as its chunks arrive.
+///
+/// On wgpu or the native Metal backend, as [`marks`](crate::marks) are: the
+/// texture is a [`gpu::Texture`]. `view.wgpu()` is the `wgpu::TextureView` a
+/// [`ShaderMaterial`](crate::ShaderMaterial)'s `volumes` take.
 pub struct GpuVolume {
-    pub texture: wgpu::Texture,
-    pub view: wgpu::TextureView,
+    pub texture: gpu::Texture,
+    pub view: gpu::TextureView,
     pub size: [u32; 3],
     pub format: VolumeFormat,
 }
 
 impl GpuVolume {
-    /// An uninitialized volume (texels read as zero until written).
-    pub fn new(device: &wgpu::Device, size: [u32; 3], format: VolumeFormat) -> Self {
+    /// An uninitialized volume (texels read as zero until written), on a
+    /// `wgpu::Device` or a [`gpu::Gpu`].
+    pub fn new(device: impl Into<gpu::Gpu>, size: [u32; 3], format: VolumeFormat) -> Self {
         let [w, h, d] = size.map(|n| n.max(1));
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
+        let texture = device.into().create_texture(&wgpu::TextureDescriptor {
             label: Some("threers volume"),
             size: wgpu::Extent3d {
                 width: w,
@@ -153,8 +160,13 @@ impl GpuVolume {
     }
 
     pub fn from_texture(device: &wgpu::Device, queue: &wgpu::Queue, texture: &Data3DTexture) -> Self {
-        let volume = Self::new(device, texture.size(), texture.format);
-        volume.write_region(queue, [0, 0, 0], texture.size(), &texture.data);
+        Self::from_texture_on(&gpu::Gpu::from((device, queue)), texture)
+    }
+
+    /// [`from_texture`](Self::from_texture) on either backend.
+    pub fn from_texture_on(gpu: &gpu::Gpu, texture: &Data3DTexture) -> Self {
+        let volume = Self::new(gpu, texture.size(), texture.format);
+        volume.write_region_on(gpu, [0, 0, 0], texture.size(), &texture.data);
         volume
     }
 
@@ -166,8 +178,38 @@ impl GpuVolume {
     ///
     /// # Panics
     ///
-    /// If the box is not inside the volume or `bytes` is the wrong length.
+    /// If the box is not inside the volume or `bytes` is the wrong length, or
+    /// the volume is on Metal (use [`write_region_on`](Self::write_region_on)).
     pub fn write_region(&self, queue: &wgpu::Queue, origin: [u32; 3], size: [u32; 3], bytes: &[u8]) {
+        if let Some((copy, layout, extent)) = self.region(origin, size, bytes) {
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: self.texture.wgpu(),
+                    mip_level: copy.mip_level,
+                    origin: copy.origin,
+                    aspect: copy.aspect,
+                },
+                bytes,
+                layout,
+                extent,
+            );
+        }
+    }
+
+    /// [`write_region`](Self::write_region) on either backend.
+    pub fn write_region_on(&self, gpu: &gpu::Gpu, origin: [u32; 3], size: [u32; 3], bytes: &[u8]) {
+        if let Some((copy, layout, extent)) = self.region(origin, size, bytes) {
+            gpu.write_texture(copy, bytes, layout, extent);
+        }
+    }
+
+    /// The copy for a region, checked; `None` when it is empty.
+    fn region(
+        &self,
+        origin: [u32; 3],
+        size: [u32; 3],
+        bytes: &[u8],
+    ) -> Option<(gpu::TexelCopyTextureInfo<'_>, wgpu::TexelCopyBufferLayout, wgpu::Extent3d)> {
         for axis in 0..3 {
             assert!(
                 origin[axis] + size[axis] <= self.size[axis],
@@ -185,10 +227,10 @@ impl GpuVolume {
             w * h * d * bpt
         );
         if w == 0 || h == 0 || d == 0 {
-            return;
+            return None;
         }
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
+        Some((
+            gpu::TexelCopyTextureInfo {
                 texture: &self.texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d {
@@ -198,7 +240,6 @@ impl GpuVolume {
                 },
                 aspect: wgpu::TextureAspect::All,
             },
-            bytes,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(w * bpt),
@@ -209,7 +250,7 @@ impl GpuVolume {
                 height: h,
                 depth_or_array_layers: d,
             },
-        );
+        ))
     }
 }
 

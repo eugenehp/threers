@@ -3067,7 +3067,7 @@ dependencies = [
 
 [[package]]
 name = "threers"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "bytemuck",
  "console_error_panic_hook",
@@ -3105,7 +3105,7 @@ dependencies = [
 
 [[package]]
 name = "threers-codec"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "rayon",
 ]
@@ -3116,7 +3116,7 @@ version = "0.0.1"
 
 [[package]]
 name = "threers-fluid-ios"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "objc2 0.6.5",
  "objc2-core-foundation",
@@ -3128,11 +3128,11 @@ dependencies = [
 
 [[package]]
 name = "threers-js"
-version = "0.0.9"
+version = "0.0.10"
 
 [[package]]
 name = "threers-node"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "napi",
  "napi-build",
@@ -3159,7 +3159,7 @@ dependencies = [
 
 [[package]]
 name = "threers-physics"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "bytemuck",
  "criterion",
@@ -3191,7 +3191,7 @@ dependencies = [
 
 [[package]]
 name = "threers-py"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "pyo3",
  "pyo3-build-config",
@@ -3210,7 +3210,7 @@ dependencies = [
 
 [[package]]
 name = "threers-softbody"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "bytemuck",
  "libm",

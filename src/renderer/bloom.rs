@@ -311,31 +311,30 @@ impl Bloom {
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("threers bloom (raster)"),
-            source: wgpu::ShaderSource::Wgsl(
-                format!("{}\n{RASTER_SHADER}", crate::renderer::fullscreen::VS).into(),
-            ),
+            source: wgpu::ShaderSource::Wgsl(BLOOM.wgsl("BloomParams").expect("bloom translates").into()),
         });
         let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("threers bloom raster bgl"),
+            // The `passes!` layout: the uniforms at 0, `tex_a` at 1.
             entries: &[
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        // Unfilterable: every tap is a `textureLoad`.
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
                     },
                     count: None,
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
                     visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    ty: wgpu::BindingType::Texture {
+                        // Unfilterable: every tap is a `textureLoad`.
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
                     },
                     count: None,
                 },
@@ -352,7 +351,7 @@ impl Bloom {
                 layout: Some(&layout),
                 vertex: wgpu::VertexState {
                     module: &shader,
-                    entry_point: Some("vs_main"),
+                    entry_point: Some("vs"),
                     buffers: &[],
                     compilation_options: Default::default(),
                 },
@@ -400,11 +399,11 @@ impl Bloom {
                 entries: &[
                     wgpu::BindGroupEntry {
                         binding: 0,
-                        resource: wgpu::BindingResource::TextureView(tex),
+                        resource: u.as_entire_binding(),
                     },
                     wgpu::BindGroupEntry {
                         binding: 1,
-                        resource: u.as_entire_binding(),
+                        resource: wgpu::BindingResource::TextureView(tex),
                     },
                 ],
             })
@@ -577,97 +576,108 @@ fn blur(@builtin(global_invocation_id) gid : vec3<u32>) {
 }
 "#;
 
-/// The same arithmetic as [`SHADER`], as fullscreen draws.
-///
-/// Kept as a separate module rather than shared with the compute one because
-/// the two differ in every place that touches the GPU — where the output goes,
-/// how the source is decoded, how the invocation knows which pixel it is — and
-/// a single source threaded with flags would be harder to check against the
-/// other than two that can be read side by side.
-const RASTER_SHADER: &str = r#"
-struct P {
-    threshold : f32,
-    radius    : f32,
-    dx        : f32,
-    dy        : f32,
-    // 1.0 when the source holds sRGB-encoded values in a linear format, so the
-    // transfer function has to be applied here. The compute path gets this from
-    // an sRGB texture view, which needs VIEW_FORMATS — and WebGL2 has none.
-    decode    : f32,
-    pad0      : f32,
-    pad1      : f32,
-    pad2      : f32,
-};
-@group(0) @binding(0) var src : texture_2d<f32>;
-@group(0) @binding(1) var<uniform> p : P;
+/// The same arithmetic as [`SHADER`], as fullscreen draws: the path WebGL2
+/// takes, and the native Metal backend's bloom — one [`passes!`](crate::passes)
+/// source for both.
+pub(crate) static BLOOM: std::sync::LazyLock<crate::materials::shared_passes::PassShader> =
+    std::sync::LazyLock::new(|| {
+        crate::passes! {
+            struct BloomParams {
+                threshold: f32,
+                radius: f32,
+                dx: f32,
+                dy: f32,
+                // 1.0 when the source holds sRGB-encoded values in a linear
+                // format, so the transfer function has to be applied here.
+                // The compute path gets this from an sRGB texture view, which
+                // needs VIEW_FORMATS — and WebGL2 has none. Metal reads an
+                // sRGB texture decoded, and leaves it off.
+                decode: f32,
+                pad0: f32,
+                pad1: f32,
+                pad2: f32,
+            }
 
-// The exact piecewise sRGB curve, not a 2.2 power. The approximation is off by
-// enough near black to move which pixels pass a luminance threshold.
-fn to_linear(v : vec3<f32>) -> vec3<f32> {
-    let lo = v / 12.92;
-    let hi = pow((v + vec3<f32>(0.055)) / 1.055, vec3<f32>(2.4));
-    return select(hi, lo, v <= vec3<f32>(0.04045));
-}
+            const BLOOM_SHRINK: u32 = 4u32;
 
-fn fetch_src(c : vec2<i32>) -> vec3<f32> {
-    let v = textureLoad(src, c, 0).rgb;
-    if (p.decode > 0.5) {
-        return to_linear(v);
-    }
-    return v;
-}
+            // The exact piecewise sRGB curve, not a 2.2 power. The
+            // approximation is off by enough near black to move which pixels
+            // pass a luminance threshold.
+            fn to_linear(v: vec3f) -> vec3f {
+                let lo = v / 12.92;
+                let hi = pow((v + vec3f(0.055)) / 1.055, vec3f(2.4));
+                return select(hi, lo, v <= vec3f(0.04045));
+            }
 
-// Threshold and downsample in one pass, averaging the 4x4 block each output
-// texel stands for — so a highlight one pixel wide still registers instead of
-// being missed by point sampling.
-@fragment
-fn fs_threshold(@builtin(position) pos : vec4<f32>) -> @location(0) vec4<f32> {
-    // `position` is the pixel centre, so truncating gives the texel index.
-    let gid = vec2<u32>(pos.xy);
-    let in_dim = textureDimensions(src);
-    var sum = vec3<f32>(0.0);
-    var n = 0.0;
-    for (var j = 0u; j < 4u; j = j + 1u) {
-        for (var i = 0u; i < 4u; i = i + 1u) {
-            let c = vec2<u32>(gid.x * 4u + i, gid.y * 4u + j);
-            if (c.x >= in_dim.x || c.y >= in_dim.y) { continue; }
-            let rgb = fetch_src(vec2<i32>(c));
-            let lum = dot(rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
-            // Soft knee, as in the compute path: a hard cut makes bloom appear
-            // and vanish as a highlight crosses the threshold, which reads as
+            fn fetch_src(c: vec2i) -> vec3f {
+                let v = load_a(c).rgb;
+                if (u.decode > 0.5) {
+                    return to_linear(v);
+                }
+                return v;
+            }
+
+            // Threshold and downsample in one pass, averaging the 4x4 block
+            // each output texel stands for — so a highlight one pixel wide
+            // still registers instead of being missed by point sampling. Soft
+            // knee, as in the compute path: a hard cut makes bloom appear and
+            // vanish as a highlight crosses the threshold, which reads as
             // flicker.
-            let over = max(lum - p.threshold, 0.0);
-            let w = over / max(lum, 1e-4);
-            sum = sum + rgb * w;
-            n = n + 1.0;
-        }
-    }
-    return vec4<f32>(sum / max(n, 1.0), 1.0);
-}
+            fn threshold(i: Frag) -> vec4f {
+                // `pos` is the pixel centre, so truncating gives the texel.
+                let gid = vec2u(i.pos.xy);
+                let in_dim = size_a();
+                var sum = vec3f(0.0);
+                var n = 0.0;
+                for (var j = 0u32; j < BLOOM_SHRINK; j += 1u32) {
+                    for (var k = 0u32; k < BLOOM_SHRINK; k += 1u32) {
+                        let c = vec2u(gid.x * BLOOM_SHRINK + k, gid.y * BLOOM_SHRINK + j);
+                        if (c.x >= in_dim.x || c.y >= in_dim.y) { continue; }
+                        let rgb = fetch_src(vec2i(c));
+                        let lum = dot(rgb, vec3f(0.2126, 0.7152, 0.0722));
+                        let over = max(lum - u.threshold, 0.0);
+                        let w = over / max(lum, 1e-4);
+                        sum = sum + rgb * w;
+                        n = n + 1.0;
+                    }
+                }
+                return vec4f(sum / max(n, 1.0), 1.0);
+            }
 
-// Separable Gaussian, nine taps, same weights as the compute path. The source
-// here is always a half-float bloom texture, so it is linear already and
-// `decode` is off.
-@fragment
-fn fs_blur(@builtin(position) pos : vec4<f32>) -> @location(0) vec4<f32> {
-    let gid = vec2<i32>(vec2<u32>(pos.xy));
-    let dim = vec2<i32>(textureDimensions(src));
-    let dir = vec2<f32>(p.dx, p.dy) * p.radius;
-    var w = array<f32, 5>(0.2270270, 0.1945946, 0.1216216, 0.0540540, 0.0162162);
-    var acc = textureLoad(src, gid, 0).rgb * w[0];
-    for (var k = 1; k < 5; k = k + 1) {
-        let o = dir * f32(k);
-        let a = clamp(gid + vec2<i32>(o), vec2<i32>(0), dim - vec2<i32>(1));
-        let b = clamp(gid - vec2<i32>(o), vec2<i32>(0), dim - vec2<i32>(1));
-        acc = acc + (textureLoad(src, a, 0).rgb + textureLoad(src, b, 0).rgb) * w[k];
-    }
-    return vec4<f32>(acc, 1.0);
-}
-"#;
+            // One side tap pair of the blur, `o` texels out.
+            fn pair(gid: vec2i, dim: vec2i, o: vec2f) -> vec3f {
+                let a = clamp(gid + vec2i(o), vec2i(0), dim - vec2i(1));
+                let b = clamp(gid - vec2i(o), vec2i(0), dim - vec2i(1));
+                return load_a(a).rgb + load_a(b).rgb;
+            }
+
+            // Separable Gaussian, nine taps, the compute path's weights. The
+            // source is always a half-float bloom texture, linear already.
+            fn blur(i: Frag) -> vec4f {
+                let gid = vec2i(vec2u(i.pos.xy));
+                let dim = vec2i(size_a());
+                let dir = vec2f(u.dx, u.dy) * u.radius;
+                var acc = load_a(gid).rgb * 0.2270270;
+                acc = acc + pair(gid, dim, dir * 1.0) * 0.1945946;
+                acc = acc + pair(gid, dim, dir * 2.0) * 0.1216216;
+                acc = acc + pair(gid, dim, dir * 3.0) * 0.0540540;
+                acc = acc + pair(gid, dim, dir * 4.0) * 0.0162162;
+                return vec4f(acc, 1.0);
+            }
+        }
+    });
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The raster path's module — the one WebGL2 runs — validates and
+    /// translates to GLSL ES 3.00.
+    #[test]
+    fn the_raster_bloom_translates_for_webgl2() {
+        use crate::materials::shared_passes::{assert_webgl2, entry_points};
+        assert_webgl2(&BLOOM.wgsl("BloomParams").unwrap(), &entry_points(&BLOOM));
+    }
 
     /// The compute and raster paths produce the same bloom.
     ///

@@ -7,13 +7,544 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.10] — 2026-11-01
+
+### Breaking
+
+What existing code has to change; each is described in full below.
+
+- A custom `Mark`: `extra_layout`, `extra_bind_group`, `index_buffer`,
+  geometry and density hand back `marks::gpu` objects; `PrepareContext`'s
+  device and queue are a `marks::gpu::Gpu`; `MarkTarget`'s fields are
+  `gpu::TextureView`s, held rather than borrowed.
+- `ShaderMaterial::textures` and `volumes` are `Vec<marks::gpu::TextureView>`:
+  a wgpu view needs `.into()`.
+- `GpuVolume::texture` and `view` are `marks::gpu` objects, and
+  `create_binding_with_lookup` takes `impl Into<gpu::TextureView>`.
+- `MappedFrame::bytes` returns a `marks::gpu::BufferView`.
+- `renderer::shader::POSTFX_SHADER` is the function `postfx_shader()`.
+- `HeadlessRenderer::wait_idle` takes `&mut self`.
+- `PostFxChain::encode_async` returns `Option<(Owned, Id)>`.
+- `MetalSurface::from_ns_view` fails off the main thread.
+- `shader!`: `light_count()` is at most four, and `directional_shadow`,
+  `point_shadow`, `point_light_*`, `hemisphere_light`, `receives_shadow` and
+  `tex0`..`tex3` are accessor names a shader's own functions can't take.
+- `HeadlessRenderer::read_rgba` / `render_to_rgba` on wgpu apply the post
+  passes that are on, so a frame with bloom or SSAO set reads back with it.
+
+### Added
+
+- `marks::gpu` on Metal has 2D array textures, storage-texture writes
+  (`STORAGE_BINDING`) and views of one layer or all of them, as wgpu's
+  `create_view` makes; `write_texture` and `copy_texture_to_buffer` reach
+  any layer of an array.
+- `ShaderMaterial::textures` (`u_tex0`..`u_tex3`) binds on the native Metal
+  backend: it holds `marks::gpu::TextureView`s, made on the renderer's own
+  GPU (`marks_gpu`), as `volumes` does. `with_textures` takes those or
+  `Arc<wgpu::TextureView>`s as before.
+- `examples/ocean_water` runs on Metal with `THREERS_BACKEND=metal`: its
+  FFT, displacement, foam, probe and particle passes run on the renderer's
+  `marks_gpu`, through a `MeshHost` over `Renderer`, `HeadlessRenderer` and
+  `WindowRenderer`, and its window is a `WindowRenderer`. Its picture is
+  1.1 levels from wgpu's on average, and the wgpu one is the same as before.
+  `tests/gpu_compute_metal.rs` covers what it is built from.
+- `passes!` (`threers::materials::shared_passes`): full-screen passes written
+  once, in `shader!`'s syntax, and emitted as a WGSL module for wgpu and as
+  MSL for the native Metal backend — a uniform block read as `u`, three
+  textures (`tex_a`…), a `batch` array, every `fn name(i: Frag) -> vec4f` an
+  entry point, and the two vertex stages generated.
+- Bloom's threshold and blur are one `passes!` source (`BLOOM` in
+  `renderer/bloom.rs`): the WebGL2 raster path's WGSL and the Metal
+  backend's MSL. `threers::metal::shader_source()` is the library
+  `MetalDevice::new` compiles — `SHADER_SOURCE` and the generated passes.
+  `metal_bloom_matches_wgpu` holds Metal's glow to wgpu's.
+- `shader_functions!`: shader functions written once, as WGSL and as MSL
+  (`static inline`), for helpers both backends' shaders call.
+- The functions both backends' shaders call are one `shader_functions!`
+  source, `SHARED_FUNCTIONS` in `renderer/shader.rs`, put in at one marker
+  in each shader that takes them:
+  - the tone-mapping curves, which the renderer's shader, the composer's
+    OutputPass (run on Metal through naga), the marks and the Metal
+    backend's `tone_map` had in three copies. `linear_tonemap`,
+    `reinhard_tonemap` and `cineon_tonemap` join `aces_tonemap`,
+    `neutral_tonemap` and `agx_tonemap`;
+  - 25 shading helpers both material shaders defined separately — the DFG,
+    sheen and LTC fits, three.js's light falloff, specular anti-aliasing and
+    occlusion, the PMREM cube-uv mapping, the shadow disc's taps, the
+    iridescence sensitivity, the bicubic weights;
+  - the film grade, `film_vignette` and `film_grain`, which the wgpu RGB
+    pack and the Metal backend's `fs_film` had a copy each of;
+  - SSAO's arithmetic (`ssao_linear_depth`, `ssao_view_pos`, `ssao_normal`,
+    `ssao_radius_px`, `ssao_tap`, `ssao_occlusion`), which the wgpu compute
+    pass, its WebGL2 raster twin and the Metal pass had a copy each of. The
+    Metal pass had drifted: it now turns its taps per pixel as wgpu's do;
+  - the BRDF kernels `d_ggx`, `v_ggx_smith_correlated`, `f_schlick`,
+    `f_schlick_f90`, `d_charlie`, `v_neubelt`, and `ltc_evaluate` and
+    `point_shadow_face`, which both material shaders defined. Metal's sheen
+    gains three.js's roughness floor with them.
+- `passes!` and `shader_functions!` reject names WGSL or MSL reserves
+  (`kernel`, `restrict`, `half`, …) with the name, where the other backend's
+  compiler would have failed on them.
+- `passes!` gained `load_a(texel)`, `size_a()` (and `_b`, `_c`) for passes
+  that fetch rather than filter, and vertex stages that leave `u` alone when
+  the block has no `texel_size`.
+- The fluid's shaders are one `passes!` source (`src/fluid/shader.rs`): the
+  wgpu module's WGSL and `MetalFluid`'s MSL are both generated from it, and
+  `src/metal/fluid.metal` keeps only the frame-rate read-out. With splats
+  batched on Metal as on wgpu, the two backends' pictures are identical —
+  0.000/255 over five frames, within one level after ninety, where the hand
+  transcription drifted to 4.79.
+
+- `LayerGpu` / `LayerRenderer` (macOS, iOS, tvOS, visionOS): render a scene
+  into a `CAMetalLayer` the app owns — one placed over a web view, say — from
+  any thread, display-paced, several layers sharing one Metal device. The app
+  makes and places the layer on the main thread; acquiring drawables,
+  rendering and presenting happen wherever the renderer lives. `LayerGpu` is
+  `Send + Sync` and `LayerRenderer` is `Send`, so a renderer can be made on
+  one thread and handed to another; a layer that resizes while others on the
+  same `LayerGpu` draw pauses their submissions for the moment wgpu needs the
+  queue empty, where `Surface::configure` otherwise fails and panics. A layer
+  that is not a `CAMetalLayer` is an error rather than wgpu's assertion; a
+  lost surface is rebuilt on the same layer; every call drains its own
+  autorelease pool. `tests/layer_threads.rs` covers all four platforms.
+- Metal backend on any thread: `MetalDevice` is `Send + Sync`;
+  `MetalRenderer`, `MetalRenderTarget`, `MetalHeadlessRenderer`,
+  `MetalSurface`, the post-processing types and `MetalFluid` are `Send`.
+  `tests/metal_threads.rs` draws on fresh threads, hands renderers between
+  threads every frame and runs six renderers at once on one device, byte-equal
+  to a single-threaded frame — on macOS and on the iOS, tvOS and visionOS
+  simulators.
+- `MetalRenderPool`: a fixed set of reusable render threads sharing one
+  device, each keeping its `MetalRenderer` (and any per-worker state, via
+  `MetalWorker::local`) from job to job, behind a bounded queue — `submit`
+  waits, `try_submit` drops the frame. `MetalRenderPoolConfig::for_this_device`
+  sizes it from the performance cores, at most 2 on iOS, tvOS and visionOS and
+  4 on macOS, at user-interactive QoS.
+- `MetalSurface::from_layer` (any thread) adopts a `CAMetalLayer` the app
+  owns; `MetalSurface::from_ui_view` (iOS, tvOS, visionOS) takes a `UIView`
+  whose `layerClass` is `CAMetalLayer`.
+- `MetalError::CommandBuffer`: a readback whose command buffer the GPU did not
+  run — iOS refuses GPU work from a backgrounded app — now fails instead of
+  returning the previous contents of the staging buffer.
+- `threers::prelude::metal`: the Metal backend's full working set.
+- `THREERS_BACKEND=metal` (with `--features metal`, on Apple platforms):
+  `HeadlessRenderer` draws through the native Metal backend with no change to
+  the program — same pixel layout from every readback, pipelined reads one
+  frame behind, bloom, SSAO, film grade and the renderer's tone mapping
+  carried over. A call only wgpu can serve (`device`, `queue`, `target`,
+  overlays, depth of field, motion blur, accumulation) puts that renderer
+  back on wgpu and says which on
+  stderr; until a frame has been read from Metal, wgpu draws it too, so a
+  program that turns out to want wgpu gets the frame it expects.
+- `EffectComposer` on the native Metal backend: `HeadlessRenderer::compose`
+  runs a composer and reads its screen back, on whichever backend the
+  renderer draws with — under `THREERS_BACKEND=metal` every pass runs on
+  Metal (`metal::MetalPostFx` / `MetalPostBackend`). The post-fx shader is
+  the one wgpu runs, translated to MSL by naga, with the same uniform bytes,
+  blends and sRGB handling, so bloom, SSAO, depth of field, SMAA and outline
+  chains match wgpu (`tests/headless_metal_backend.rs`). A `ShaderPass` that
+  encodes raw wgpu commands is skipped there, said once on stderr.
+  `campfire`, `dunes` and `postfx_chain` use it and no longer leave Metal.
+- Marks on the native Metal backend. `marks::gpu` is what the marks draw
+  with — buffers, textures, bind groups, pipelines from WGSL, passes,
+  copies — on wgpu (the wgpu objects themselves, so nothing about a wgpu
+  frame changes) or on Metal, where naga translates the marks' WGSL and the
+  bindings take Metal slots from the pipeline layout. `MarkRenderer::new_on`,
+  `draw_on`, `pick_on`, `pick_rect_on`, `clear_on` and `wait_on` take either;
+  the wgpu-handle methods keep their signatures. `HeadlessRenderer::
+  mark_renderer`, `draw_marks` and `pick_marks` draw over the frame on
+  whichever backend it uses, and `data_charts`, `marks_map`, `map_demo` and
+  `marks_bench` (headless) now stay on Metal: every image pixel-identical to
+  wgpu's, points to labels, tiles and density included
+  (`tests/marks_metal.rs`, every kind, both MSAA settings, and a pick).
+  `MetalRenderer::set_keep_attachments` keeps a frame's multisampled colour
+  and depth for a pass drawn over it. Breaking for a custom `Mark`: its
+  `extra_layout`, `extra_bind_group`, `index_buffer`, geometry and density
+  hand back `marks::gpu` objects, and `PrepareContext`'s device and queue
+  are a `marks::gpu::Gpu` — the same calls, made through it.
+  `MarkTarget`'s fields are `gpu::TextureView`s, held rather than borrowed.
+  `HeadlessRenderer::mark_target` is the Metal frame under the Metal backend
+  (for a `MarkRenderer` on `marks_gpu`) instead of handing the renderer back
+  to wgpu. `ScreenBinner` runs its compute pass on Metal too (`new_on`,
+  `bin_on`, `supported_on`, `BinRequest::wait_on`), the same counts as wgpu.
+- `WindowRenderer::render_with`: draw the scene, then hand a callback the
+  frame as marks see it (`MarksFrame`: the GPU, a `MarkTarget`, a pick
+  occluder when single-sampled, and the `MarkSurface`), then present — on
+  either backend. `marks_gpu`, `mark_surface` and `poll` go with it, and
+  `MarkSurface` / `MarkView::for_surface` / `MapView::begin_frame_on`
+  describe frames without a wgpu `Renderer`. The window modes of
+  `marks_map` (hover picking included) and `map_demo` use it and run on the
+  native Metal backend.
+- Screen-space `ShaderMaterial`s (`with_screen_space`) on the native Metal
+  backend: `ss_color_tex`, `ss_color_samp` and `ss_depth_tex` read the Metal
+  capture of the opaque scene (the transmission capture, its depth kept when
+  one is drawn), through the same `textureSampleLevel` / `textureLoad` /
+  `textureDimensions` calls the WGSL makes. The heat haze over `campfire`'s
+  fire drew a flat white column there; the example now matches wgpu (2.1
+  mean, from 46.6). In the compat frame `camera_position.w` is 1 with
+  reversed depth, as on wgpu.
+- `ShaderMaterial::volumes` on the native Metal backend: a `GpuVolume`
+  made on the renderer's GPU (`HeadlessRenderer::marks_gpu`) binds as
+  `u_vol0`/`u_vol1`. The translated WGSL reads it through `textureSample`,
+  `textureSampleLevel`, `textureLoad` and `textureDimensions`, and an empty
+  slot reads zero, as on wgpu. Metal used to refuse any shader that named
+  `u_vol`. `tests/volume_metal.rs` compares the two backends.
+- `MetalHeadlessRenderer::render_queued`, `wait_queued`,
+  `finish_queued_into` and `discard_queued`: draw a frame and queue its
+  post-processing and readback without waiting. On Metal,
+  `HeadlessRenderer::render` now uses them, so a program that only draws
+  no longer waits for a full readback every frame; reading the frame
+  collects the pixels.
+- `shader!`: shadows, point lights, hemisphere lights and the material's
+  textures, on both backends. `directional_shadow(i, s)` and
+  `point_shadow(i, s)` return the light's shadow at the fragment, filtered
+  as the scene's other shadows are, and 1 where the object does not
+  `receive_shadow`. `point_light_count`, `point_light_direction(i, s)` and
+  `point_light_color(i, s)` (attenuated as the built-in materials
+  attenuate). `hemisphere_light(n)` returns the hemisphere lights'
+  irradiance. `tex0(uv)`..`tex3(uv)`, `tex0_level(uv, lod)` and
+  `tex0_size()` read `ShaderMaterial::maps`, white where there is none.
+  `tests/shared_shader_lights.rs` draws a shadowed, point-lit, mapped scene
+  on wgpu and Metal and gets the same pixels from both.
+- `ShaderMaterial::maps` / `with_maps`: `Texture`s for `u_tex0`..`u_tex3`,
+  uploaded and cached by the renderer like a standard material's maps, on
+  wgpu and on the native Metal backend alike (a slot `textures` fills keeps
+  its wgpu view). On Metal the translated WGSL reads them through the same
+  `textureSample` / `textureSampleLevel` / `textureLoad` /
+  `textureDimensions` / `textureNumLevels` calls, in either stage, at
+  textures 16–19 and `u_samp` at sampler 15. `retrofuturism` hands its
+  behind-the-glass capture and matcap over this way and runs on Metal, every
+  frame within one level of wgpu's.
+- Volumes on the native Metal backend: `GpuVolume` and `SliceRenderer` are
+  built on `marks::gpu`, so they run on either backend. Constructors take a
+  `wgpu::Device` or a `marks::gpu::Gpu` (`impl Into<gpu::Gpu>`);
+  `GpuVolume::from_texture_on` / `write_region_on`,
+  `SliceRenderer::update_on` / `draw_on` / `draw_in_pass_on` take the
+  `Gpu`, and the wgpu-handle methods keep their signatures. `marks::gpu`
+  makes 3D textures and writes regions of them on Metal, and knows
+  `R8Uint` / `R16Uint`. `volume_slices` draws its panes over the
+  renderer's own frame (`marks_gpu` + `mark_target`) and is pixel-identical
+  on Metal (`tests/volume_metal.rs`: window/level and 64-bit labels).
+  Breaking: `GpuVolume::texture` and `view` are `marks::gpu` objects —
+  `view.wgpu()` is the view a `ShaderMaterial`'s `volumes` take — and
+  `create_binding_with_lookup` takes `impl Into<gpu::TextureView>`.
+- `HeadlessRenderer::upload_geometry`, `vertex_buffer` and `vertex_floats`:
+  a mesh's vertex buffer as a `marks::gpu::Buffer`, on either backend, for a
+  compute pass on `marks_gpu` to write in place (12 `f32` a vertex on Metal,
+  16 on wgpu; the first twelve agree). `MetalRenderer::upload_geometry` /
+  `vertex_buffer`. `simcity_render`'s water runs its compute pass this way
+  and the example stays on Metal (`tests/vertex_buffer_compute.rs`).
+- `HeadlessRenderer::read_rgb_frame` / `drain_rgb_frame` stay on the native
+  Metal backend, handing back the bytes it read; `MappedFrame::bytes`
+  returns a `marks::gpu::BufferView` (bytes either way) and `recycle` takes
+  both kinds.
+- `postprocessing::PostBackend`: what a composer asks of a renderer.
+  `PassContext::renderer` and the composer's `render*` / `ensure_buffers`
+  take `&mut dyn PostBackend`; a `&mut Renderer` still goes straight in.
+  `Target` no longer has to be a wgpu render target: `wgpu_render_target()`
+  gives it when it is, `Target::external` names one another backend holds.
+  `EffectComposer::screen_format`.
+- `renderer::WindowRenderer`: a scene in a window, on wgpu or on the native
+  Metal backend on every Apple platform. A winit window — macOS's `NSView`,
+  iOS and iPadOS's `UIView` — goes to Metal under `THREERS_BACKEND=metal` or
+  with `WindowRenderer::with_backend(window, WindowBackend::Metal)` (an
+  explicit Metal that cannot open is an error, not a fallback); an app's own
+  view or layer through `from_ui_view` (iOS, iPadOS, tvOS, visionOS),
+  `from_ns_view` (macOS) or `from_layer` (any, any thread) — on tvOS and
+  visionOS, where winit does not run, the module is built for these alone.
+  `tests/apple_window.rs` draws a scene and marks through a `CAMetalLayer`
+  on macOS and the iOS, tvOS and visionOS simulators, and the marks and
+  headless parity suites now run on those simulators as well. The simulators
+  have no programmable blending, so blended draws into an sRGB target blend
+  in linear light there (not in the encoded values, as on a device and on
+  wgpu) — a few levels on soft edges; the suite reports those comparisons
+  in a simulator rather than asserting them. Thirteen
+  windowed examples (`cube`, `capsule`, `shadow`, `physical`,
+  `bvh_csg_hierarchy`, …) now use it in place of sixty lines of wgpu setup
+  each, and run on either backend. A hidden or occluded window is a frame
+  skipped, not an error logged every frame.
+- `MetalRenderer::draw_overlay` / `draw_overlay_rgba8`: a 2D overlay (an
+  `Overlay` canvas, captions) blended over a finished frame in linear light,
+  uploading only the rows that changed — the Metal side of
+  `Renderer::draw_overlay`. With it, `sketch` runs on the native Metal backend
+  (`THREERS_BACKEND=metal`), overlay and quad view included, through
+  `WindowRenderer::render_frame`; and `HeadlessRenderer::draw_captions` stays
+  on Metal.
+- `shader!` and `ShaderMaterial::from_shared`: a custom shader written once,
+  in a syntax WGSL and MSL share (WGSL's, with Rust literal suffixes), and
+  translated to both — so it draws on the native Metal backend as well as on
+  wgpu. The shader is `fn shade(s: Shading) -> vec4f` returning linear colour;
+  what it reads comes through accessors both sides implement (`data(i)`,
+  `s0(i)`…, `camera_position()`, `light_direction(i)`, `light_color(i)`,
+  `ambient_light()`, `opacity()`, `fog`, `tone_map`). On Metal its functions
+  compile into the built-in library as members of a context struct, one
+  library per shader, cached. `tests/headless_metal_backend.rs` draws one
+  through both backends and holds them within 2 levels.
+- `ShaderMaterial::msl`: a hand-written Metal fragment (`fs_custom`) beside
+  the WGSL, for what the shared syntax does not cover. `MetalDevice::shader_source`.
+- Any `ShaderMaterial` draws on the native Metal backend from its own WGSL —
+  no `msl`, no shared source: the fragment, a custom vertex stage
+  (`vs_custom` over `VsIn` or `InstancedCustomIn`), and the preamble
+  functions they call (shadows, fog, `standard_vertex`, the environment
+  lookup) are translated to MSL against a WGSL-compatible environment —
+  `frame`, `mesh`, `u_data` and the storage arrays under wgpu's names,
+  filled from Metal's uniforms. The particle system (`particles`, `sand`,
+  `snow`), `neon_logo` and `raspberry` now run there within 2.5 levels of
+  wgpu; they drew flat in their fallback colour. What cannot translate — a
+  shader reading a volume, or a wgpu texture view in `textures` — says why,
+  once, and draws the fallback.
+- Metal: `InstancedMesh::custom` reaches a custom vertex stage
+  (`icustom0`/`icustom1`); `RenderState::blending = Additive` is applied
+  (it was ignored); and a blended custom shader into an 8-bit sRGB target
+  blends the encoded values, as wgpu does, rather than in linear light. A
+  shader that does not compile names the generated line it failed on.
+- The Metal backend says once that a `ShaderMaterial`'s custom WGSL does not
+  run there (it draws unlit in its base colour) instead of drawing a flat
+  object silently.
+- The `metal` feature builds for tvOS and visionOS (it compiled only for macOS
+  and iOS, so the `visionos` feature had no backend under it); `winit` and
+  `sketch` are left out on those two, where winit 0.29 fails to build.
+
+- `Overlay::put_image_data`: an RGBA image copied onto the canvas, as a
+  canvas's `putImageData` does — how a CPU renderer's frame reaches a window
+  through `WindowRenderer::render_frame`, on either backend.
+- `examples/viewport_path_trace_live.rs` draws through `WindowRenderer`, so
+  it runs on the native Metal backend with `THREERS_BACKEND=metal`; its
+  hand-written wgpu blit is gone, and `--gpu` traces on a device of its own.
+- `WindowRenderer::set_tone_mapping`, `upload_geometry`, `vertex_buffer`,
+  `vertex_floats` and `clear_geometry_cache`, as on `HeadlessRenderer`, for
+  a compute pass that writes a mesh in place on either backend.
+  `examples/simcity.rs` draws through `WindowRenderer` with them, so the
+  windowed city — its water too — runs on Metal with `THREERS_BACKEND=metal`.
+- `MetalFluid` takes input and changes shape: `pointer_down`,
+  `pointer_move` and `pointer_up` (the wgpu module's pointer handling, now
+  shared between the two), hue cycling (`colorful`), `resize`, `set_config`,
+  and `present`, which draws into a `MetalSurface` frame and presents it.
+  `examples/fluid.rs` runs on it with `THREERS_BACKEND=metal` and
+  `--features fluid,metal`. A resize resamples the dye and velocity into the
+  new grids, as on wgpu.
+- `MetalFluid` does the rest of the wgpu module too: bloom (the soft-knee
+  threshold and the halving chain), sunrays, MacCormack advection and the
+  multigrid pressure solve, each within 0.06/255 of wgpu's picture
+  (`bloom_sunrays_maccormack_and_multigrid_match_wgpu`).
+  `MetalFluid::unsupported`, which could only return an empty list now, is
+  gone.
+- `MetalFluid` no longer waits for the GPU after every splat, step and
+  frame: each pass's uniforms go into its command buffer as it is encoded
+  (`setFragmentBytes`), so nothing the CPU writes next is still in use, and
+  the shared uniform ring is gone. 600 frames of `metal_fluid` take 0.7 s
+  rather than 2. Only a frame with the read-out (`show_fps`) still waits,
+  for its history texture.
+
 ### Changed
+
+- `build.rs` sets a `metal_backend` cfg — the `metal` feature on macOS, iOS,
+  tvOS or visionOS — and the crate and its tests gate on it, in place of
+  the same four-OS condition written out over a hundred times.
+- `ShaderMaterial::textures` is a `Vec<marks::gpu::TextureView>`: code
+  assigning wgpu views to it directly needs `.into()` on each.
+- A Metal `marks::gpu` submit returns without waiting, as wgpu's does. A
+  map or `poll_wait` waits for it, and a `write_buffer` while it runs is
+  copied on the queue instead of into memory the GPU may be reading.
+  `map_async`'s callback runs from a later `Gpu::poll`, `poll_wait` or
+  `submit` once its copy is done, as on wgpu, rather than inside the call —
+  where a caller holding the lock its callback takes deadlocked on Metal
+  only. `WindowRenderer::poll` delivers them on Metal too.
+- `marks::gpu::BufferSlice::get_mapped_range` returns a `MapRangeError`
+  rather than `()`, and on Metal a range past the buffer's end is that error
+  instead of a panic. An object of one backend handed to the other — a
+  pipeline, bind group, layout or command buffer — panics naming the call;
+  a wgpu command buffer submitted on Metal had been dropped silently.
+- `THREERS_BACKEND=metal` says once on stderr when 120 frames have been
+  drawn with none read back, since wgpu draws each of them as well until
+  one is.
+  `ocean_water --bench` on Metal: 5.9 → 0.6 ms of CPU a frame, 87 → 20 ms
+  a frame.
+- `renderer::shader::POSTFX_SHADER` is `postfx_shader()`: the module now has
+  the shared tone curves put in when it is first asked for.
+
+- `HeadlessRenderer::read_rgba` (and `render_to_rgba`) on wgpu applies the
+  post passes — bloom, SSAO, depth of field, film — when any is on and the
+  target is not supersampled, as the Metal backend's readback always has.
+  It returned the frame without them, so `set_bloom` then `render_to_rgba`
+  showed no bloom on wgpu and bloom on Metal.
+
+- `shader!`'s MSL is now its WGSL put through the translation Metal uses
+  for any WGSL `ShaderMaterial`, replacing a second, hand-written MSL
+  version of every accessor. The two had drifted apart: on Metal,
+  `camera_position()` and `fog` read the first view rather than the
+  fragment's own. `light_count()` is now at most four on both backends,
+  as Metal's frame holds four. `directional_shadow`, `point_shadow`,
+  `point_light_*`, `hemisphere_light`, `receives_shadow` and
+  `tex0`..`tex3` (with `_level` and `_size`) are now accessor names, so a
+  shared shader's own functions can't use them.
+- `ShaderMaterial::volumes` is a `Vec<marks::gpu::TextureView>` (a
+  `GpuVolume`'s `view` as it is) rather than `Vec<Arc<wgpu::TextureView>>`;
+  a wgpu view converts with `.into()`.
+- `HeadlessRenderer::wait_idle` takes `&mut self`, and on Metal waits for
+  the frame in flight, which `render` no longer waits for.
+- `tests/backend_parity.rs` builds for tvOS and visionOS as well, where it
+  had compiled to no tests. In the simulators, which blend in linear light,
+  its two blend comparisons are printed instead of asserted, as in
+  `tests/headless_metal_backend.rs`.
+- `tests/metal_backend.rs`, `tests/metal_quad_view.rs` and the Metal case in
+  `tests/interpolation.rs` build for tvOS and visionOS too, where they had
+  compiled to no tests. In a simulator, `metal_backend`'s two encoded-blend
+  checks print instead of failing, as above.
+
+- The Metal gate — the `metal` feature on macOS, iOS, tvOS and visionOS — is
+  written once, as the crate-internal `cfg_metal!`, `cfg_no_metal!`,
+  `cfg_apple!` and `on_metal!` macros, in place of 27 copies of the
+  attribute. `HeadlessRenderer` holds an `Option` of a Metal type that is an
+  empty enum without the backend, so its fields need no gate at all.
+
+- `PostFxChain::encode_async` returns the command buffer retained
+  (`Option<(Owned, Id)>`). It returned an autoreleased pointer whose pool had
+  already drained, so waiting on it — as `PostFxChain::encode` did — messaged a
+  freed object once the GPU finished.
+- `MetalSurface::from_ns_view` returns `MetalError::Unsupported` off the main
+  thread instead of making AppKit calls there.
 
 - `threers-codec`: `ffcompat::reader::VideoReader::decode_rgb` starts decoding
   one sync sample before the last sync sample preceding the first wanted
   frame, instead of at the stream start, so extracting a long video chunk by
   chunk is no longer quadratic. Byte-identical to a full decode on every
   multi-GOP fixture (`tests/decode_seek.rs`, 279 videos checked).
+
+### Fixed
+
+- `threers-fluid-ios` builds again: its touch and pinch events now set
+  `PointerEvent::cursor` (the view's centre), the field 0.0.9 added.
+- A `gpu_writable` geometry is no longer frustum-culled by its CPU
+  positions, which its compute pass has made stale: on Metal its
+  `ShaderMaterial` water vanished, and on wgpu any other material did.
+  A `bounding_sphere` set on it still culls.
+- On a `Rgba8Unorm`/`Bgra8Unorm` target under `THREERS_BACKEND=metal`, a
+  WGSL `ShaderMaterial`'s output is stored as it stands and its
+  `framebuffer_encode` encodes, as on wgpu; Metal draws such a target through
+  an sRGB one and stored the output encoded (0.5 as 188, not 128).
+  `MetalRenderer::set_encoded_output` is the switch.
+- A WGSL `ShaderMaterial` on Metal reads the camera's near and far in
+  `frame.viewport_size.zw`, as on wgpu; they were 0, so a shader
+  linearising the captured depth got none.
+- The film grain is the same on both backends. Metal added it to linear
+  light and wgpu to the sRGB-encoded value, which weights the mid-tones
+  differently: 7.6 levels apart on average, now 0.02
+  (`metal_applies_the_film_grade` compares them). Under
+  `THREERS_BACKEND=metal` the grain also stood still, because nothing
+  advanced its seed; it moves a frame, as on wgpu.
+- `shader_functions!` and `passes!` read `<<` and `>>` as shifts; they came
+  out as `< <` and `> >`, which neither language parses.
+
+- `ToneMapping::Linear` clamps to [0, 1] on wgpu, as three.js's
+  `LinearToneMapping` does (`saturate(exposure * color)`) and the Metal
+  backend already did; the renderer's shader, the marks and
+  `ToneMapping::apply` returned the exposed colour unclamped.
+
+- `examples/ocean_water` and `examples/fluid` logged an error every frame
+  their window was covered (`Occluded`); they skip the frame, as
+  `WindowRenderer` does.
+- Metal: a `ShaderMaterial`'s translated WGSL ran up to ten times slower
+  than wgpu's under MSAA. `particles_bench draw` took ~100 ms a frame,
+  against wgpu's ~6; it now takes ~9, which includes a readback wgpu doesn't
+  do. The shadow cache (`var<private> shadow_cache`) was a member of the
+  struct the translated functions live in. Indexed by a runtime record
+  number, it pushed the whole struct to stack memory: the snow cover took
+  75 ms where it now takes 4. The built-in shaders' `shadow_at` copied the
+  shadow record and indexed the copy by cascade, which cost the same way
+  (8 ms → 3.4 for the snow cover, 3.6 → 2.5 for a `StandardMaterial` on
+  the same mesh); it now reads the record in place, and translated WGSL
+  uses it rather than the preamble's copy.
+- Metal: translated WGSL copied a light or shadow record it named with
+  `let` (`let rec = frame.shadows[r]`) and indexed the copy at run time,
+  which put it in stack memory. It is now a `constant` reference: lit smoke
+  in `particles_bench` takes 8.7 ms a frame, down from 10.7.
+- Metal: translated WGSL carried the hemisphere lights as an array in its
+  copy of the frame, and a loop over them (`frame.hemi_lights[k]`) put the
+  shader's whole state in stack memory. They are a pointer into Metal's
+  frame now, like the other lights, and Metal's `HemiLight` takes wgpu's
+  field names (`sky_color`, `ground_color`, `direction`). The snow cover in
+  `particles_bench draw` costs 2 ms rather than 4; the frame takes about
+  6.5–7 ms on Metal against wgpu's 6.4–6.7, down from 9.
+- Metal: a `ShaderMaterial` with fewer than four `maps` read its empty
+  slots in the fragment stage from whatever the previous physical material
+  left bound; they are white, as on wgpu.
+- `particles_bench draw` reads one frame back before timing. Until a
+  program reads a frame, the Metal path also draws every frame on wgpu, so
+  the bench was timing both backends together.
+
+- wgpu: a `Texture` that brought its own mip levels (`Texture::mips`) in an
+  uncompressed format was sampled through a chain generated from level 0 —
+  the GPU mip generator dropped the supplied levels — or, uploaded the plain
+  way, got both chains stacked into one texture. The supplied levels are now
+  the chain, as the field documents and the Metal backend already did.
+- wgpu: a mesh with a `ShaderMaterial` cast no shadow. The shadow pass drew
+  only built-in topologies and skipped custom-shader draws, whatever their
+  `cast_shadow`; they now draw their geometry into the maps (an
+  `InstancedMesh` at each instance), as three.js's depth material and the
+  Metal backend do. The sand in `dunes` — documented as casting — now shadows
+  its own lee slopes; a ray march over its heightfield puts 69% of the view in
+  the sun's shadow, which wgpu showed none of.
+- `THREERS_BACKEND=metal`: an `Rgba8Unorm` or `Bgra8Unorm` target came back
+  dark, the Metal shaders leaving the sRGB encode to an sRGB attachment the
+  wgpu ones perform themselves; and a `QuadView` drew every pane full-frame
+  over the last, the panes' viewport and scissor being set on the wgpu
+  renderer. `tests/headless_metal_backend.rs` holds both to wgpu's frame.
+- Metal fog was measured along a distance interpolated between vertices,
+  which across a large triangle is the corners' distance everywhere: a
+  two-triangle ground came out entirely fogged. It is now the fragment's
+  view-space depth, as wgpu and three.js measure it, and matches wgpu to the
+  level (`snow`, any fogged scene with large faces).
+- `HeadlessRenderer` and `WindowRenderer` ask for the adapter's
+  `max_buffer_size`: an 11.8M-triangle lattice needs a 376 MiB vertex buffer
+  against wgpu's default 256 MiB, which crashed `lattice` and `simcity_render`.
+- The Metal backend draws `AtmosphereMaterial` — the shell of air round a
+  planet, sunset band, ozone and aurora — as the wgpu shader does; it drew it
+  as an opaque disc in its base colour, hiding the planet (`realistic_earth`).
+- Metal: a normal map on geometry without tangents builds its frame as wgpu's
+  `cotangent_frame` does, at unit length. The three.js-style frame it used
+  keeps the derivatives' lengths, and toward a UV sphere's poles one of them
+  shrinks until the relief along it is gone (`pole_probe`).
+  `metal_reads_tangents_as_wgpu_does` now turns the tangents a quarter turn,
+  since a sphere's computed ones match the fallback frame exactly.
+- Metal draws the planet terms of Standard and Physical materials, as wgpu
+  does: night-side emissive, the sun's angular size softening the
+  terminator, the twilight band, cloud forward-scattering, cloud-map shadows
+  and eclipses; and a `displacement_map` moves vertices in `vs_mesh`.
+  `realistic_earth` came in from 8 levels off wgpu to 0.35, `pole_probe` to
+  under 0.1. The displacement applies in every vertex path wgpu's does —
+  skinned, stereo, and the three shadow passes, so a displaced body's shadow
+  has its relief. A normal map's y scale is its own (`normal_scale.y`), where
+  Metal used x for both.
+- Metal: additive blending on built-in materials into an 8-bit sRGB target
+  adds the encoded values, as wgpu does (`fs_mesh_encoded_add`,
+  `fs_point_encoded_add`); it added light.
+- `HeadlessRenderer::wait_idle`: wait for the GPU on either backend, where
+  `device().poll(..)` hands a `THREERS_BACKEND=metal` renderer back to wgpu.
+  `fur_bench` uses it and stays on Metal.
+- `rlx_video_grade` writes a GIF and now requires the `gif` feature it
+  needs; without it the example built and then failed at export.
+- `path_trace` says when it is tracing on one core (no `parallel` feature),
+  where it takes minutes and looks hung.
+
+- Eight examples (`simcity`, `spacecraft_materials`, `kirigami_orbit`,
+  `controls_orbit`, `map_demo`, `marks_map`, `ocean_water`,
+  `viewport_path_trace_live`) no longer compiled after `PointerEvent` gained
+  `cursor`.
+
+- The wgpu `Renderer` was `!Send` — five caches keyed by geometry address held
+  raw pointers — so no renderer could be handed to another thread. The keys
+  are identities, never dereferenced, and the caches now say so.
+- `strict_float` declared `objc_getClass` and `MTLCreateSystemDefaultDevice`
+  with a different pointer type from the Metal backend, which rustc warned
+  about in every build with `metal` on.
+
+- Metal: releasing a texture or buffer on a thread with no autorelease pool
+  (any `std::thread`) leaked the object the driver autoreleases as it goes —
+  558 of them over the threading tests. Every release, and
+  `MetalFluid::capture_rgba`, now drains a pool of its own;
+  `no_object_is_autoreleased_without_a_pool` reruns the tests under
+  `OBJC_DEBUG_MISSING_POOLS=YES` to keep it that way.
 
 ## [0.0.9] — 2026-10-29
 
@@ -5581,7 +6112,8 @@ on, and a second crate to make things move.
 - Opt-in `mesh-bvh` and `bvh-csg` (three-mesh-bvh / three-bvh-csg parity).
 - Web shim (`THREE.*`) and parity tooling.
 
-[Unreleased]: https://github.com/eugenehp/threers/compare/v0.0.9...HEAD
+[Unreleased]: https://github.com/eugenehp/threers/compare/v0.0.10...HEAD
+[0.0.10]: https://github.com/eugenehp/threers/compare/v0.0.9...v0.0.10
 [0.0.9]: https://github.com/eugenehp/threers/compare/v0.0.8...v0.0.9
 [0.0.8]: https://github.com/eugenehp/threers/compare/v0.0.7...v0.0.8
 [0.0.7]: https://github.com/eugenehp/threers/compare/v0.0.6...v0.0.7

@@ -1,6 +1,6 @@
 //! Offscreen colour + depth attachments, and reading them back.
 
-use super::device::{MetalDevice, MetalError};
+use super::device::{wait_until_completed, MetalDevice, MetalError};
 use super::enums::*;
 use super::objc::{msg0, msg9, sel, AutoreleasePool, Id, Owned, NIL};
 use super::renderer::PassAttachments;
@@ -153,6 +153,11 @@ impl MetalRenderTarget {
     /// Size in pixels.
     pub fn size(&self) -> (u32, u32) {
         (self.width, self.height)
+    }
+
+    /// The colour attachment's `MTLPixelFormat`.
+    pub fn color_format(&self) -> NSUInteger {
+        self.color_format
     }
 
     /// MSAA sample count (1 = off).
@@ -308,11 +313,8 @@ impl MetalRenderTarget {
         staging: &Owned,
         out: &mut Vec<u8>,
     ) -> Result<(), MetalError> {
-        let _pool = AutoreleasePool::new();
-        unsafe {
-            if !cmd.is_null() {
-                let _: () = msg0(cmd, sel!("waitUntilCompleted"));
-            }
+        if !cmd.is_null() {
+            unsafe { wait_until_completed(cmd)? };
         }
         let (width, height, padded, bpp) = self.readback_layout()?;
         self.unpack_staging(staging, width, height, padded, bpp, out)
@@ -346,11 +348,7 @@ impl MetalRenderTarget {
     ) -> Result<(), MetalError> {
         let cmd =
             self.blit_color_to_buffer_async(device, slice, staging, padded, self.height as usize)?;
-        let _pool = AutoreleasePool::new();
-        unsafe {
-            let _: () = msg0(cmd.id(), sel!("waitUntilCompleted"));
-        }
-        Ok(())
+        unsafe { wait_until_completed(cmd.id()) }
     }
 
     fn blit_color_to_buffer_async(
@@ -495,11 +493,8 @@ pub fn finish_texture_readback_into(
     color_format: NSUInteger,
     out: &mut Vec<u8>,
 ) -> Result<(), MetalError> {
-    let _pool = AutoreleasePool::new();
-    unsafe {
-        if !cmd.is_null() {
-            let _: () = msg0(cmd, sel!("waitUntilCompleted"));
-        }
+    if !cmd.is_null() {
+        unsafe { wait_until_completed(cmd)? };
     }
     let bpp = pixel_format::bytes_per_pixel(color_format).ok_or_else(|| {
         MetalError::Unsupported(format!(

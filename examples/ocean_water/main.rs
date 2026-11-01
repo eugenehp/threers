@@ -6,6 +6,7 @@
 //! cargo run --release --example ocean_water -- sunset --quality ultra
 //! cargo run --release --example ocean_water -- moonlit --png ocean.png
 //! cargo run --release --example ocean_water -- tropical --bench
+//! THREERS_BACKEND=metal cargo run --release --features metal --example ocean_water
 //! ```
 //!
 //! Left-drag orbits, right-drag pans, scroll zooms. `--list` prints the presets.
@@ -99,9 +100,10 @@
 //!
 //! [`ShaderMaterial`](threers::ShaderMaterial) replaces the fragment stage only,
 //! so there is no vertex hook to displace through. The way out is that this
-//! example owns the `wgpu::Device` the renderer was built on: the water geometry
-//! is marked [`gpu_writable`](threers::BufferGeometry::gpu_writable), its vertex
-//! buffer is fetched with [`Renderer::vertex_buffer`](threers::Renderer::vertex_buffer),
+//! example computes on the GPU the renderer draws with — its `marks_gpu`, wgpu
+//! or the native Metal backend: the water geometry is marked
+//! [`gpu_writable`](threers::BufferGeometry::gpu_writable), its vertex buffer is
+//! fetched with the renderer's `vertex_buffer` (see [`waves_gpu::MeshHost`]),
 //! and a compute pass writes positions and normals into it directly.
 //!
 //! The mesh is uploaded once and then never again. Per frame the CPU writes the
@@ -131,6 +133,9 @@ mod world;
 
 use std::sync::Arc;
 use std::time::Instant;
+
+use threers::marks::gpu;
+use threers::renderer::WindowRenderer;
 
 use threers::cameras::Camera;
 use threers::{encode_png, HeadlessRenderer, OrbitControls, PointerEvent, Renderer};
@@ -369,9 +374,12 @@ fn offscreen(args: &Args) {
     // one-shot still has none — it just renders a jittered frame against an empty
     // buffer. Supersampling is the right antialiasing for a still; TAA is for the
     // windowed path, where the frames keep coming.
-    let device = hr.device().clone();
-    let queue = hr.queue().clone();
-    let waves = world.attach_waves(&device, &queue, hr.renderer());
+    // The renderer's own GPU — wgpu's device, or under
+    // `THREERS_BACKEND=metal` the Metal one — so the compute passes write
+    // what it draws from.
+    let gpu = hr.marks_gpu();
+    let (device, queue) = (&gpu, &gpu);
+    let waves = world.attach_waves(device, queue, &mut hr);
     if let Some(f) = args.foam {
         let (e, c) = (world.preset.exposure, world.preset.choppiness);
         world.set_look(e, c, f);
@@ -399,18 +407,18 @@ fn offscreen(args: &Args) {
         // Foam and wake are the one part of this ocean that carries state, so a
         // single frame would show them empty. Spin up a few seconds of it.
         for i in 0..90 {
-            world.update(21.0 - (90 - i) as f32 / 60.0, &device, &queue, &waves);
+            world.update(21.0 - (90 - i) as f32 / 60.0, device, queue, &waves);
         }
-        world.update(21.0, &device, &queue, &waves);
+        world.update(21.0, device, queue, &waves);
         let rgba = hr.render_to_rgba_resolved(&mut world.scene, &world.camera);
         std::fs::write(path, encode_png(w, h, &rgba)).expect("write png");
         println!("  wrote       {path} ({w}x{h})");
     }
     if let Some(path) = &args.direct {
-        direct(args, &device, &queue, path);
+        direct(args, path);
     }
     if args.bench {
-        bench(&mut world, &device, &queue, &waves, &mut hr);
+        bench(&mut world, device, queue, &waves, &mut hr);
     }
 }
 
@@ -427,7 +435,13 @@ fn offscreen(args: &Args) {
 /// which is exactly the kind of difference that hides in a demo checked only on
 /// one of them. This builds its own renderer so both can be reproduced here,
 /// with no window and no screen.
-fn direct(args: &Args, device: &Arc<wgpu::Device>, queue: &Arc<wgpu::Queue>, path: &str) {
+///
+/// wgpu's swapchain path, so it runs on a wgpu device of its own whatever
+/// `THREERS_BACKEND` says.
+fn direct(args: &Args, path: &str) {
+    let ctx = threers::gpu::GpuContext::headless_blocking().expect("a wgpu adapter for --direct");
+    let (device, queue) = (&ctx.device, &ctx.queue);
+    let gpu = gpu::Gpu::from((&**device, &**queue));
     let (w, h) = (1280u32, 720u32);
     for (format, tag) in [
         (
@@ -446,11 +460,11 @@ fn direct(args: &Args, device: &Arc<wgpu::Device>, queue: &Arc<wgpu::Queue>, pat
             w as f32 / h as f32,
             cascades(args),
         );
-        let waves = world.attach_waves(device, queue, &mut renderer);
+        let waves = world.attach_waves(&gpu, &gpu, &mut renderer);
         for i in 0..90 {
-            world.update(21.0 - (90 - i) as f32 / 60.0, device, queue, &waves);
+            world.update(21.0 - (90 - i) as f32 / 60.0, &gpu, &gpu, &waves);
         }
-        world.update(21.0, device, queue, &waves);
+        world.update(21.0, &gpu, &gpu, &waves);
 
         let tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("direct target"),
@@ -541,8 +555,8 @@ fn direct(args: &Args, device: &Arc<wgpu::Device>, queue: &Arc<wgpu::Queue>, pat
 /// target back, so it is the real end-to-end cost at this resolution.
 fn bench(
     world: &mut World,
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
+    device: &gpu::Device,
+    queue: &gpu::Queue,
     waves: &waves_gpu::WaveCompute,
     hr: &mut HeadlessRenderer,
 ) {
@@ -583,11 +597,11 @@ fn bench(
     let disp = {
         let t = Instant::now();
         for _ in 0..K {
-            let mut e = device.create_command_encoder(&Default::default());
+            let mut e = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
             waves.dispatch(queue, &mut e, [0.0, 0.0]);
-            queue.submit([e.finish()]);
+            queue.submit(Some(e.finish()));
         }
-        let _ = device.poll(wgpu::PollType::wait_indefinitely());
+        device.poll_wait();
         t.elapsed().as_secs_f64() * 1000.0 / K as f64
     };
 
@@ -595,11 +609,11 @@ fn bench(
     if let Some(state) = &mut world.state {
         let t = Instant::now();
         for _ in 0..K {
-            let mut e = device.create_command_encoder(&Default::default());
+            let mut e = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
             state.dispatch(queue, &mut e, 1.0 / 60.0, [1.0, 0.0], 0.1, 0.3, 1.2, &[]);
-            queue.submit([e.finish()]);
+            queue.submit(Some(e.finish()));
         }
-        let _ = device.poll(wgpu::PollType::wait_indefinitely());
+        device.poll_wait();
         foam = t.elapsed().as_secs_f64() * 1000.0 / K as f64;
     }
 
@@ -607,11 +621,11 @@ fn bench(
     if let Some(fft) = &world.fft {
         let t = Instant::now();
         for i in 0..K {
-            let mut e = device.create_command_encoder(&Default::default());
+            let mut e = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
             fft.dispatch(queue, &mut e, 30.0 + i as f32 * 0.016, 1.0);
-            queue.submit([e.finish()]);
+            queue.submit(Some(e.finish()));
         }
-        let _ = device.poll(wgpu::PollType::wait_indefinitely());
+        device.poll_wait();
         casc = t.elapsed().as_secs_f64() * 1000.0 / K as f64;
     }
     println!(
@@ -647,90 +661,26 @@ async fn windowed(args: Args) {
             .expect("window"),
     );
 
-    let instance = {
-        // wgpu 30 dropped `Default` here; the display handle is only
-        // consulted by GLES/Wayland, not Vulkan, Metal or DX12.
-        let mut d = wgpu::InstanceDescriptor::new_without_display_handle();
-        d.backends = wgpu::Backends::PRIMARY;
-        wgpu::Instance::new(d)
-    };
-    let surface = instance.create_surface(window.clone()).expect("surface");
-    let adapter = instance
-        .request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            compatible_surface: Some(&surface),
-            force_fallback_adapter: false,
-            apply_limit_buckets: false,
-        })
-        .await
-        .expect("adapter");
-    // Downlevel defaults allow 16 sampled textures and 16 samplers per stage,
-    // and the main pass declares 20 of each in the fragment stage — material
-    // maps, the shadow atlases and the environment all bind there. Without
-    // raising these two, `Renderer::new` fails wgpu 30's pipeline-layout
-    // validation outright. `HeadlessRenderer` raises the same pair.
-    let adapter_limits = adapter.limits();
-    // `using_resolution` for the texture size, too: the renderer allocates a
-    // 4096 shadow map and downlevel caps 2D textures at 2048.
-    let mut limits = wgpu::Limits::downlevel_defaults().using_resolution(adapter_limits.clone());
-    limits.max_sampled_textures_per_shader_stage =
-        adapter_limits.max_sampled_textures_per_shader_stage;
-    limits.max_samplers_per_shader_stage = adapter_limits.max_samplers_per_shader_stage;
-
-    let (device, queue) = adapter
-        .request_device(
-            &wgpu::DeviceDescriptor {
-                label: Some("threers device"),
-                required_features: wgpu::Features::empty(),
-                required_limits: limits,
-                ..Default::default()
-            },
-        )
-        .await
-        .expect("device");
-    let device = Arc::new(device);
-    let queue = Arc::new(queue);
-
-    let size = window.inner_size();
-    let caps = surface.get_capabilities(&adapter);
-    let format = caps
-        .formats
-        .iter()
-        .copied()
-        .find(|f| f.is_srgb())
-        .unwrap_or(caps.formats[0]);
-    let mut config = wgpu::SurfaceConfiguration {
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-        format,
-        width: size.width.max(1),
-        height: size.height.max(1),
-        present_mode: caps.present_modes[0],
-        alpha_mode: caps.alpha_modes[0],
-        view_formats: vec![],
-        desired_maximum_frame_latency: 2,
-        color_space: wgpu::SurfaceColorSpace::Srgb,
-    };
-    surface.configure(&device, &config);
-
-    let mut renderer = Renderer::new(
-        device.clone(),
-        queue.clone(),
-        format,
-        config.width,
-        config.height,
-    );
+    // wgpu by default; the native Metal backend with `--features metal` and
+    // `THREERS_BACKEND=metal`.
+    let mut view = WindowRenderer::new(window.clone()).expect("a GPU for the window");
+    let gpu = view.marks_gpu();
 
     let mut world = World::build_with(
         &args.preset,
         &args.quality,
-        config.width as f32 / config.height as f32,
+        view.aspect(),
         cascades(&args),
     );
-    let mut waves = world.attach_waves(&device, &queue, &mut renderer);
+    let mut waves = world.attach_waves(&gpu, &gpu, &mut view);
     report(&world, &args.preset, &args.quality);
     println!("  left-drag orbits · right-drag pans · scroll zooms");
 
-    renderer.set_taa(true);
+    // TAA where the renderer has it; the frames keep coming here, so it has
+    // the history it needs.
+    if let Some(r) = view.renderer() {
+        r.set_taa(true);
+    }
 
     let mut controls = OrbitControls::new(&world.camera);
     controls.min_distance = 8.0;
@@ -771,13 +721,10 @@ async fn windowed(args: Args) {
             match event {
                 WindowEvent::CloseRequested => target.exit(),
                 WindowEvent::Resized(s) => {
-                    config.width = s.width.max(1);
-                    config.height = s.height.max(1);
-                    surface.configure(&device, &config);
-                    renderer.resize(config.width, config.height);
+                    view.resize(s.width, s.height);
                     world
                         .camera
-                        .set_aspect(config.width as f32 / config.height as f32);
+                        .set_aspect(view.aspect());
                 }
                 WindowEvent::MouseInput { state, button, .. } => {
                     let pressed = state == ElementState::Pressed;
@@ -802,9 +749,10 @@ async fn windowed(args: Args) {
                             wheel: 0.0,
                             rotating: input.rotating,
                             panning: input.panning,
+                            ..Default::default()
                         },
                         &mut world.camera,
-                        (config.width as f32, config.height as f32),
+                        (view.size().0 as f32, view.size().1 as f32),
                     );
                 }
                 WindowEvent::MouseWheel { delta, .. } => {
@@ -819,9 +767,10 @@ async fn windowed(args: Args) {
                             wheel,
                             rotating: false,
                             panning: false,
+                            ..Default::default()
                         },
                         &mut world.camera,
-                        (config.width as f32, config.height as f32),
+                        (view.size().0 as f32, view.size().1 as f32),
                     );
                 }
                 WindowEvent::KeyboardInput { event: key, .. } => {
@@ -870,7 +819,7 @@ async fn windowed(args: Args) {
                         "," | "." => {
                             let d = world.preset.wind_dir + if c == "." { 0.2 } else { -0.2 };
                             let sp = world.preset.wind_speed;
-                            world.set_wind(&queue, d, sp);
+                            world.set_wind(&gpu, d, sp);
                             println!(
                                 "  wind        {:.2} rad, {sp:.1} m/s",
                                 world.preset.wind_dir
@@ -936,7 +885,7 @@ async fn windowed(args: Args) {
                         "-" | "=" => {
                             let sp = world.preset.wind_speed + if c == "=" { 1.0 } else { -1.0 };
                             let d = world.preset.wind_dir;
-                            world.set_wind(&queue, d, sp);
+                            world.set_wind(&gpu, d, sp);
                             println!(
                                 "  wind        {d:.2} rad, {:.1} m/s, H_s {:.2} m",
                                 world.preset.wind_speed, world.sea.significant_height
@@ -947,9 +896,9 @@ async fn windowed(args: Args) {
                     if rebuild {
                         let t0 = Instant::now();
                         waves = world.reconfigure(
-                            &device,
-                            &queue,
-                            &mut renderer,
+                            &gpu,
+                            &gpu,
+                            &mut view,
                             &cur_preset,
                             &cur_quality,
                             cur_cas,
@@ -966,21 +915,8 @@ async fn windowed(args: Args) {
                 WindowEvent::RedrawRequested => {
                     // The compute dispatch is submitted here, before the draw
                     // that reads its output; queue order does the rest.
-                    world.update(start.elapsed().as_secs_f32(), &device, &queue, &waves);
-                    match surface.get_current_texture() {
-                        wgpu::CurrentSurfaceTexture::Success(frame)
-                            | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {
-                            let view = frame
-                                .texture
-                                .create_view(&wgpu::TextureViewDescriptor::default());
-                            renderer.render(&mut world.scene, &world.camera, &view, false);
-                            queue.present(frame);
-                        }
-                        wgpu::CurrentSurfaceTexture::Lost | wgpu::CurrentSurfaceTexture::Outdated => {
-                            surface.configure(&device, &config);
-                        }
-                        e => log::error!("surface error: {e:?}"),
-                    }
+                    world.update(start.elapsed().as_secs_f32(), &gpu, &gpu, &waves);
+                    view.render(&mut world.scene, &world.camera);
                     // Frame rate in the title bar: the bench number is
                     // readback-bound and says little about the interactive path.
                     fps_frames += 1;
@@ -1006,3 +942,4 @@ async fn windowed(args: Args) {
         })
         .expect("event loop");
 }
+

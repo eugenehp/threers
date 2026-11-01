@@ -54,6 +54,16 @@ pub type Bool = i8;
 pub const YES: Bool = 1;
 pub const NO: Bool = 0;
 
+extern "C" {
+    /// libSystem: nonzero on the process's main thread.
+    fn pthread_main_np() -> i32;
+}
+
+/// Whether this is the main thread, which AppKit and UIKit require.
+pub fn is_main_thread() -> bool {
+    unsafe { pthread_main_np() != 0 }
+}
+
 #[link(name = "objc", kind = "dylib")]
 extern "C" {
     fn objc_getClass(name: *const c_char) -> Id;
@@ -191,6 +201,12 @@ impl Clone for Owned {
 
 impl Drop for Owned {
     fn drop(&mut self) {
+        // A last release can autorelease on the way out: an AGX texture or
+        // buffer hands its `MTLDevice` to the pool as it deallocates. On a
+        // thread with no pool (any `std::thread`) that object would live until
+        // the thread exits, so give the release one of its own. A push and a
+        // pop are a few nanoseconds against a deallocation.
+        let _pool = AutoreleasePool::new();
         unsafe { objc_release(self.0) }
     }
 }

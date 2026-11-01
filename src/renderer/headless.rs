@@ -16,6 +16,30 @@
 use std::sync::Arc;
 
 use crate::cameras::Camera;
+
+cfg_metal! {
+    use super::headless_metal::MetalPath;
+
+    /// The Metal side of a new renderer, when `THREERS_BACKEND=metal` asks.
+    fn metal_path_for(format: wgpu::TextureFormat, width: u32, height: u32) -> Option<MetalPath> {
+        if super::headless_metal::requested() {
+            MetalPath::new(format, width, height)
+        } else {
+            None
+        }
+    }
+}
+
+cfg_no_metal! {
+    /// Without the Metal backend the field is still there, always `None`: an
+    /// empty enum has no values, so nothing can ever be on this path.
+    enum MetalPath {}
+
+    fn metal_path_for(_: wgpu::TextureFormat, _: u32, _: u32) -> Option<MetalPath> {
+        None
+    }
+}
+
 use crate::renderer::renderer::stratified_jitter;
 use crate::renderer::{RenderTarget, Renderer};
 use crate::scene::Scene;
@@ -224,6 +248,13 @@ impl HeadlessBuilder {
 /// [`render_to_rgba`](Self::render_to_rgba); reach the underlying [`Renderer`]
 /// via [`renderer`](Self::renderer) for post-fx, TAA, etc.
 pub struct HeadlessRenderer {
+    /// `THREERS_BACKEND=metal`: frames drawn by the native Metal backend.
+    metal: Option<MetalPath>,
+    /// The screen [`compose`](Self::compose) draws into on wgpu.
+    compose_target: Option<crate::postprocessing::Target>,
+    /// Set by a `&self` call that hands out wgpu itself (`device`, `queue`,
+    /// `target`, `mark_target`): the frames that follow must be wgpu's.
+    metal_off: std::sync::atomic::AtomicBool,
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
     renderer: Renderer,
@@ -374,6 +405,9 @@ impl HeadlessRenderer {
         limits.max_sampled_textures_per_shader_stage =
             adapter_limits.max_sampled_textures_per_shader_stage;
         limits.max_samplers_per_shader_stage = adapter_limits.max_samplers_per_shader_stage;
+        // A mesh is one vertex buffer, and the default cap is 256 MiB: an
+        // 11.8M-triangle lattice needs 376. Whatever the adapter can hold.
+        limits.max_buffer_size = limits.max_buffer_size.max(adapter_limits.max_buffer_size);
         // WHATEVER COMPRESSION THIS ADAPTER HAS, ask for it.
         //
         // A device only exposes features it was asked for, so with
@@ -417,6 +451,9 @@ impl HeadlessRenderer {
         target.set_presents(true);
 
         Ok(Self {
+            metal: metal_path_for(config.color_format, render_width, render_height),
+            compose_target: None,
+            metal_off: std::sync::atomic::AtomicBool::new(false),
             device,
             queue,
             renderer,
@@ -451,16 +488,67 @@ impl HeadlessRenderer {
     }
 
     /// The wrapped [`Renderer`] (for post-fx, TAA, render-target registration…).
+    ///
+    /// Under `THREERS_BACKEND=metal` its tone mapping still applies: it is
+    /// carried to the Metal renderer each frame.
     pub fn renderer(&mut self) -> &mut Renderer {
         &mut self.renderer
     }
     /// The GPU device (share it to build geometry/textures/render targets).
+    ///
+    /// Resources built on it are wgpu's, so under `THREERS_BACKEND=metal`
+    /// asking for it puts this renderer back on wgpu.
     pub fn device(&self) -> &Arc<wgpu::Device> {
+        self.leave_metal("HeadlessRenderer::device");
         &self.device
     }
-    /// The GPU queue.
+    /// The GPU queue. See [`device`](Self::device).
     pub fn queue(&self) -> &Arc<wgpu::Queue> {
+        self.leave_metal("HeadlessRenderer::queue");
         &self.queue
+    }
+
+    /// Block until the GPU has finished everything submitted — what a timing
+    /// loop waits on. On either backend: on the native Metal one,
+    /// [`render`](Self::render) returns without waiting for the frame, and
+    /// this waits for it (and its readback) without handing the renderer to
+    /// wgpu the way [`device`](Self::device) does.
+    pub fn wait_idle(&mut self) {
+        on_metal! {
+            if let Some(m) = self.metal_path() {
+                m.wait_idle();
+                return;
+            }
+        }
+        let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+    }
+
+    /// Whether frames are being drawn by the native Metal backend
+    /// (`THREERS_BACKEND=metal`, see `headless_metal`).
+    pub fn is_native_metal(&self) -> bool {
+        self.metal.is_some() && !self.metal_off.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Put this renderer back on wgpu for good, saying why (once per reason).
+    fn leave_metal(&self, reason: &str) {
+        let _ = reason;
+        on_metal! {
+            if self.is_native_metal() {
+                super::headless_metal::warn_fallback(reason);
+                self.metal_off.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// The Metal path, if frames still go through it.
+    // Called only from `on_metal!` blocks, which a build without the backend
+    // leaves out.
+    #[allow(dead_code)]
+    fn metal_path(&mut self) -> Option<&mut MetalPath> {
+        if self.metal_off.load(std::sync::atomic::Ordering::Relaxed) {
+            self.metal = None;
+        }
+        self.metal.as_mut()
     }
     /// Enable/disable temporal anti-aliasing (see [`Renderer::set_taa`]).
     pub fn set_taa(&mut self, enabled: bool) {
@@ -470,6 +558,13 @@ impl HeadlessRenderer {
     /// pass. Composes with (and is usually preferable to) `supersample`.
     pub fn set_msaa(&mut self, samples: u32) {
         self.renderer.set_msaa(samples);
+        on_metal! {
+            if let Some(m) = self.metal_path() {
+                if !m.set_msaa(samples) {
+                    self.leave_metal("MSAA on this device");
+                }
+            }
+        }
     }
     /// The render resolution (output size × supersample).
     pub fn render_size(&self) -> (u32, u32) {
@@ -482,6 +577,20 @@ impl HeadlessRenderer {
 
     /// Render `scene` from `camera` into the offscreen target.
     pub fn render(&mut self, scene: &mut Scene, camera: &dyn Camera) {
+        on_metal! {
+            let wgpu = &self.renderer;
+            if let Some(m) = self.metal.as_mut().filter(|_| {
+                !self.metal_off.load(std::sync::atomic::Ordering::Relaxed)
+            }) {
+                match m.render(scene, camera, wgpu) {
+                    // Until a frame has been read from Metal, wgpu draws it too
+                    // (see `MetalPath::confirmed`).
+                    Ok(()) if m.confirmed() => return,
+                    Ok(()) => {}
+                    Err(e) => self.leave_metal(&format!("a frame the Metal backend refused ({e})")),
+                }
+            }
+        }
         // Any ordinary draw invalidates an accumulated frame, so the resolve
         // pass is due again. Keeping the flag until then rather than having the
         // readback consume it makes reading the same frame twice idempotent.
@@ -557,6 +666,9 @@ impl HeadlessRenderer {
     }
 
     pub fn render_accumulated(&mut self, scene: &mut Scene, camera: &dyn Camera, samples: u32) {
+        if self.is_native_metal() {
+            self.leave_metal("render_accumulated (jittered accumulation)");
+        }
         if samples <= 1 {
             self.render(scene, camera);
             return;
@@ -652,22 +764,148 @@ impl HeadlessRenderer {
     /// renderer's scissor test is on, all of it otherwise. See
     /// [`Renderer::clear`].
     pub fn clear(&mut self, color: crate::math::Color, alpha: f32) {
+        on_metal! {
+            let wgpu = &self.renderer;
+            if let Some(m) = self.metal.as_mut().filter(|_| {
+                !self.metal_off.load(std::sync::atomic::Ordering::Relaxed)
+            }) {
+                match m.clear(color, alpha, wgpu) {
+                    Ok(()) if m.confirmed() => return,
+                    Ok(()) => {}
+                    Err(e) => self.leave_metal(&format!("a clear the Metal backend refused ({e})")),
+                }
+            }
+        }
         self.accum_ready = false;
         self.renderer.clear_render_target(&self.target, color, alpha);
+    }
+
+    /// A [`MarkRenderer`](crate::marks::MarkRenderer) for this renderer's
+    /// backend — wgpu's device, or under `THREERS_BACKEND=metal` the Metal
+    /// one its frames are drawn on. Draw with [`draw_marks`](Self::draw_marks).
+    pub fn mark_renderer(&mut self) -> crate::marks::MarkRenderer {
+        crate::marks::MarkRenderer::new_on(&self.marks_gpu())
+    }
+
+    /// Upload `geometry` now rather than at its first draw, on whichever
+    /// backend draws — so a compute pass can write its
+    /// [`vertex_buffer`](Self::vertex_buffer).
+    pub fn upload_geometry(&mut self, geometry: &Arc<crate::core::BufferGeometry>) {
+        on_metal! {
+            if let Some(m) = self.metal_path() {
+                m.upload_geometry(geometry);
+                return;
+            }
+        }
+        self.renderer.upload_geometry(geometry);
+    }
+
+    /// The vertex buffer an uploaded geometry is drawn from, for a compute
+    /// pass on [`marks_gpu`](Self::marks_gpu) to write in place.
+    ///
+    /// [`vertex_floats`](Self::vertex_floats) `f32` a vertex. The first
+    /// twelve are the same on both backends — position(3), normal(3),
+    /// uv(2), colour(4) — and wgpu's has a tangent(4) after them. The
+    /// conditions are [`Renderer::vertex_buffer`]'s:
+    /// [`BufferGeometry::gpu_writable`](crate::core::BufferGeometry::gpu_writable),
+    /// and valid until the geometry's version changes.
+    pub fn vertex_buffer(&mut self, geometry: &Arc<crate::core::BufferGeometry>) -> Option<crate::marks::gpu::Buffer> {
+        on_metal! {
+            if let Some(m) = self.metal_path() {
+                return m.vertex_buffer(geometry);
+            }
+        }
+        self.renderer.vertex_buffer(geometry).map(crate::marks::gpu::Buffer::from)
+    }
+
+    /// `f32`s a vertex in [`vertex_buffer`](Self::vertex_buffer): 16 on
+    /// wgpu, 12 on the native Metal backend.
+    pub fn vertex_floats(&self) -> u32 {
+        if self.is_native_metal() {
+            12
+        } else {
+            (crate::renderer::gpu_mesh::GpuMesh::VERTEX_STRIDE / 4) as u32
+        }
+    }
+
+    /// The GPU [`mark_renderer`](Self::mark_renderer)'s marks draw with.
+    pub fn marks_gpu(&mut self) -> crate::marks::gpu::Gpu {
+        on_metal! {
+            if let Some(m) = self.metal_path() {
+                return m.marks_gpu();
+            }
+        }
+        crate::marks::gpu::Gpu::from((&*self.device, &*self.queue))
+    }
+
+    /// Draw `layers` over the frame [`render`](Self::render) just produced,
+    /// depth-tested against it, on either backend. `marks` comes from
+    /// [`mark_renderer`](Self::mark_renderer). Read the result back as usual.
+    pub fn draw_marks(
+        &mut self,
+        marks: &mut crate::marks::MarkRenderer,
+        view: &crate::marks::MarkView,
+        layers: &mut [&mut dyn crate::marks::Mark],
+    ) {
+        let gpu = self.marks_gpu();
+        on_metal! {
+            if gpu.is_metal() {
+                if let Some(m) = self.metal_path() {
+                    let target = m.mark_target();
+                    marks.draw_on(&gpu, &target, view, layers);
+                    return;
+                }
+            }
+        }
+        let target = self.wgpu_mark_target();
+        marks.draw_on(&gpu, &target, view, layers);
+    }
+
+    /// The layer and row nearest pixel `(x, y)` within `radius` pixels, on
+    /// either backend — [`MarkRenderer::pick`](crate::marks::MarkRenderer::pick)
+    /// without an occluder, waited for.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn pick_marks(
+        &mut self,
+        marks: &mut crate::marks::MarkRenderer,
+        view: &crate::marks::MarkView,
+        layers: &mut [&mut dyn crate::marks::Mark],
+        (x, y): (f32, f32),
+        radius: u32,
+    ) -> Option<crate::marks::PickHit> {
+        let gpu = self.marks_gpu();
+        marks.pick_on(&gpu, view, layers, None, x, y, radius).wait_on(&gpu)
     }
 
     /// Where [`marks`](crate::marks) draw over the frame [`render`](Self::render)
     /// just produced, depth-testing against it. Read the result back with
     /// [`read_rgba`](Self::read_rgba) as usual.
+    ///
+    /// On the backend frames are drawn with: under `THREERS_BACKEND=metal`
+    /// the Metal frame, for a [`MarkRenderer`](crate::marks::MarkRenderer)
+    /// on [`marks_gpu`](Self::marks_gpu) — unless something has already put
+    /// this renderer on wgpu ([`device`](Self::device), for one).
     pub fn mark_target(&self) -> crate::marks::MarkTarget<'_> {
+        on_metal! {
+            if self.is_native_metal() {
+                if let Some(m) = self.metal.as_ref() {
+                    return m.mark_target();
+                }
+            }
+        }
+        self.wgpu_mark_target()
+    }
+
+    fn wgpu_mark_target(&self) -> crate::marks::MarkTarget<'_> {
         match self.renderer.overlay_attachments() {
             (Some(color), depth, samples) if self.renderer.msaa() > 1 => crate::marks::MarkTarget {
-                color,
-                resolve: Some(&self.target.color_view),
-                depth: Some(depth),
+                color: color.into(),
+                resolve: Some((&self.target.color_view).into()),
+                depth: Some(depth.into()),
                 format: self.target.format,
                 samples,
                 rect: None,
+                _borrow: std::marker::PhantomData,
             },
             _ => crate::marks::MarkTarget::render_target(&self.target),
         }
@@ -675,7 +913,45 @@ impl HeadlessRenderer {
 
     /// The target frames are drawn into.
     pub fn target(&self) -> &RenderTarget {
+        self.leave_metal("HeadlessRenderer::target");
         &self.target
+    }
+
+    /// Run `composer` over `scene` from `camera` and read the screen back:
+    /// tightly-packed bytes in the composer's
+    /// [`screen_format`](crate::postprocessing::EffectComposer::screen_format),
+    /// at its [`drawing_size`](crate::postprocessing::EffectComposer::drawing_size).
+    ///
+    /// On whichever backend this renderer draws with — under
+    /// `THREERS_BACKEND=metal` every pass runs on Metal. A composer belongs to
+    /// the backend it first ran on: its targets live there.
+    pub fn compose(
+        &mut self,
+        composer: &mut crate::postprocessing::EffectComposer,
+        scene: &mut Scene,
+        camera: &dyn Camera,
+    ) -> Vec<u8> {
+        on_metal! {
+            let wgpu = &self.renderer;
+            if let Some(m) = self.metal.as_mut().filter(|_| {
+                !self.metal_off.load(std::sync::atomic::Ordering::Relaxed)
+            }) {
+                match m.compose(composer, scene, camera, wgpu) {
+                    Ok(px) => return px,
+                    Err(e) => self.leave_metal(&format!("post-processing the Metal backend refused ({e})")),
+                }
+            }
+        }
+        let (w, h) = composer.drawing_size();
+        let t = crate::postprocessing::ensure_target(
+            &mut self.compose_target,
+            &mut self.renderer,
+            w,
+            h,
+            composer.screen_format(),
+        );
+        composer.render_to_target(&mut self.renderer, scene, camera, t.clone());
+        super::readback::texture_bytes(&self.device, &self.queue, &t.render_target().color_texture)
     }
 
     /// Render, then read the target back as tightly-packed RGBA8 (row-major,
@@ -693,6 +969,21 @@ impl HeadlessRenderer {
     /// for the whole sequence.
     #[cfg(feature = "captions")]
     pub fn draw_captions(&mut self, overlay: &mut crate::captions::CaptionOverlay, time: f64) {
+        on_metal! {
+            let (rw, rh) = (self.render_width, self.render_height);
+            if let Some(m) = self.metal_path() {
+                overlay.set_size(rw, rh);
+                overlay.update(time);
+                if overlay.is_visible() {
+                    m.blend_overlay(overlay.rgba());
+                }
+                // Until Metal is confirmed wgpu holds the frame as well; give
+                // it the captions too.
+                if m.confirmed() {
+                    return;
+                }
+            }
+        }
         let (w, h) = (self.render_width, self.render_height);
         // Blend through an sRGB *view* of the target, not through its own view.
         //
@@ -764,7 +1055,21 @@ impl HeadlessRenderer {
     /// This blocks until the GPU has finished the frame. For a video export,
     /// prefer [`read_rgba_pipelined`](Self::read_rgba_pipelined), which lets the
     /// CPU build the next frame while this one is still being copied.
+    ///
+    /// With post passes on ([`set_bloom`](Self::set_bloom), SSAO, depth of
+    /// field, film) and no supersampling, the frame comes back with them
+    /// applied, as the Metal backend's does; they run where
+    /// [`read_rgba_resolved`](Self::read_rgba_resolved) runs them. A
+    /// supersampled target reads back raw here, at its full size.
     pub fn read_rgba(&mut self) -> Vec<u8> {
+        on_metal! {
+            if let Some(m) = self.metal_path() {
+                return m.frame();
+            }
+        }
+        if self.has_post() && self.config.supersample.max(1) == 1 {
+            return self.read_rgba_resolved();
+        }
         let p = self.queue_readback();
         let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
         self.drain(p)
@@ -800,6 +1105,18 @@ impl HeadlessRenderer {
     /// supersample factor on the GPU. See
     /// [`render_to_rgba_resolved`](Self::render_to_rgba_resolved).
     pub fn read_rgba_resolved(&mut self) -> Vec<u8> {
+        on_metal! {
+            let factor = self.config.supersample.max(1);
+            let (rw, rh) = (self.render_width, self.render_height);
+            if let Some(m) = self.metal_path() {
+                let raw = m.frame();
+                return if factor > 1 {
+                    crate::renderer::downsample::average_blocks_srgb(&raw, rw, rh, factor)
+                } else {
+                    raw
+                };
+            }
+        }
         // Bloom, ambient occlusion and the film grade all live in the RGB pack,
         // which is a compute pass on its way to an encoder — so for a long time
         // asking for them and then reading RGBA got a frame with none of them
@@ -899,6 +1216,12 @@ impl HeadlessRenderer {
     /// if let Some(rgba) = hr.finish_readback() { let _ = rgba; }
     /// ```
     pub fn read_rgba_pipelined(&mut self) -> Option<Vec<u8>> {
+        on_metal! {
+            if let Some(m) = self.metal_path() {
+                let frame = m.frame();
+                return m.pipelined(frame);
+            }
+        }
         let next = self.queue_readback();
         let out = self.pending.take().map(|p| {
             // Poll rather than Wait: Wait blocks on everything submitted, which
@@ -950,6 +1273,12 @@ impl HeadlessRenderer {
     /// if let Some(rgba) = hr.finish_readback() { let _ = rgba; }
     /// ```
     pub fn read_rgba_resolved_pipelined(&mut self) -> Option<Vec<u8>> {
+        on_metal! {
+            if self.is_native_metal() {
+                let frame = self.read_rgba_resolved();
+                return self.metal_path().and_then(|m| m.pipelined(frame));
+            }
+        }
         let factor = self.config.supersample.max(1);
         let resolved = self.run_resolve();
         // The downsampler is built once and cached, so whether the GPU pass is
@@ -987,6 +1316,11 @@ impl HeadlessRenderer {
     /// Drain the last frame left in flight by
     /// [`read_rgba_pipelined`](Self::read_rgba_pipelined).
     pub fn finish_readback(&mut self) -> Option<Vec<u8>> {
+        on_metal! {
+            if let Some(m) = self.metal_path() {
+                return m.finish();
+            }
+        }
         let p = self.pending.take()?;
         let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
         Some(self.drain(p))
@@ -1095,7 +1429,7 @@ impl HeadlessRenderer {
                         };
                         for c in [r, g, b] {
                             let v = c as f32 / 255.0;
-                            f.push(if srgb { srgb_to_linear(v) } else { v });
+                            f.push(if srgb { crate::utils::srgb::srgb_to_linear_f32(v) } else { v });
                         }
                         f.push(1.0);
                     }
@@ -1118,6 +1452,11 @@ impl HeadlessRenderer {
     /// widens its output, so bloom applies to both readbacks. It used to apply
     /// to only one of them, silently.
     pub fn set_bloom(&mut self, strength: f32, threshold: f32, radius: f32) {
+        on_metal! {
+            if let Some(m) = self.metal_path() {
+                m.set_bloom(strength, threshold, radius);
+            }
+        }
         let cfg = (strength, threshold, radius);
         if self.bloom_cfg != Some(cfg) {
             self.bloom_cfg = Some(cfg);
@@ -1146,6 +1485,7 @@ impl HeadlessRenderer {
     /// defocused, so a backdrop with no geometry in it falls away the way a
     /// real one does rather than staying inexplicably sharp.
     pub fn set_depth_of_field(&mut self, focus: f32, range: f32, radius: f32) {
+        self.leave_metal("set_depth_of_field");
         let cfg = (focus, range, radius);
         if radius <= 0.0 {
             if self.dof_cfg.is_some() {
@@ -1170,6 +1510,11 @@ impl HeadlessRenderer {
     /// Cheap to call every frame: only a change of strength or radius rebuilds
     /// anything, and a new depth range is a buffer write.
     pub fn set_ssao(&mut self, strength: f32, radius: f32) {
+        on_metal! {
+            if let Some(m) = self.metal_path() {
+                m.set_ssao(strength, radius);
+            }
+        }
         let rebuild = self
             .ssao_cfg
             .map(|(s, r)| s != strength || r != radius)
@@ -1191,6 +1536,7 @@ impl HeadlessRenderer {
     /// be handed to an encoder without copying it: a CPU composite needs a
     /// writable frame, and the frame the GPU wrote is mapped read-only.
     pub fn set_overlay(&mut self, width: u32, height: u32, rgba: &[u8]) {
+        self.leave_metal("set_overlay");
         if width == 0 || height == 0 || rgba.len() < (width * height * 4) as usize {
             self.overlay = None;
             self.rgb_pack = None;
@@ -1237,6 +1583,7 @@ impl HeadlessRenderer {
     /// of the frame interval the shutter is open — 0.5 is the 180-degree
     /// convention, 0 is off.
     pub fn set_motion_blur(&mut self, shutter: f32) {
+        self.leave_metal("set_motion_blur");
         if self.shutter != shutter {
             self.shutter = shutter;
             self.rgb_pack = None;
@@ -1252,6 +1599,11 @@ impl HeadlessRenderer {
     ///
     /// The seed advances itself per packed frame, so grain moves.
     pub fn set_film_grade(&mut self, vignette: f32, grain: f32) {
+        on_metal! {
+            if let Some(m) = self.metal_path() {
+                m.set_film_grade(vignette, grain);
+            }
+        }
         if self.film.vignette != vignette || self.film.grain != grain {
             self.film.vignette = vignette;
             self.film.grain = grain;
@@ -1301,6 +1653,12 @@ impl HeadlessRenderer {
 /// The post composite packs to RGB because that is what a video encoder wants;
 /// a caller asking for RGBA gets the same pixels widened rather than a second
 /// composite written to produce them.
+/// Drop the alpha: the RGB readbacks' layout, from an RGBA frame.
+#[allow(dead_code)] // only the Metal path builds one from RGBA
+fn rgb_from_rgba(rgba: &[u8]) -> Vec<u8> {
+    rgba.chunks_exact(4).flat_map(|p| [p[0], p[1], p[2]]).collect()
+}
+
 fn rgba_from_rgb(rgb: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(rgb.len() / 3 * 4);
     for p in rgb.chunks_exact(3) {
@@ -1320,18 +1678,34 @@ fn rgba_from_rgb(rgb: &[u8]) -> Vec<u8> {
 /// The buffer belongs to the renderer's pool and MUST come back — call
 /// [`HeadlessRenderer::recycle`] when the bytes have been consumed, or the pool
 /// allocates a fresh 99.5 MB every frame instead of reusing four.
+///
+/// On the native Metal backend the frame has already been read into memory
+/// of its own, and this holds those bytes; recycling it just drops them.
 pub struct MappedFrame {
-    buffer: wgpu::Buffer,
+    frame: Frame,
     len: usize,
 }
 
+enum Frame {
+    Mapped(wgpu::Buffer),
+    #[cfg_attr(not(metal_backend), allow(dead_code))]
+    Read(Vec<u8>),
+}
+
 impl MappedFrame {
+    #[cfg_attr(not(metal_backend), allow(dead_code))]
+    fn read(bytes: Vec<u8>) -> Self {
+        Self { len: bytes.len(), frame: Frame::Read(bytes) }
+    }
+
     /// The frame's bytes. Valid until this is recycled.
-    pub fn bytes(&self) -> wgpu::BufferView {
-        self.buffer
-            .slice(..self.len as u64)
-            .get_mapped_range()
-            .expect("buffer range is mapped")
+    pub fn bytes(&self) -> crate::marks::gpu::BufferView<'_> {
+        match &self.frame {
+            Frame::Mapped(buffer) => crate::marks::gpu::BufferView::Wgpu(
+                buffer.slice(..self.len as u64).get_mapped_range().expect("buffer range is mapped"),
+            ),
+            Frame::Read(bytes) => crate::marks::gpu::BufferView::Metal(bytes),
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -1343,9 +1717,19 @@ impl MappedFrame {
     }
 
     /// Give the buffer back. Unmaps first, which is what makes it reusable.
+    ///
+    /// # Panics
+    ///
+    /// For a frame from the native Metal backend, which has no wgpu buffer;
+    /// [`HeadlessRenderer::recycle`] takes either.
     pub fn into_buffer(self) -> wgpu::Buffer {
-        self.buffer.unmap();
-        self.buffer
+        match self.frame {
+            Frame::Mapped(buffer) => {
+                buffer.unmap();
+                buffer
+            }
+            Frame::Read(_) => panic!("a frame read on the native Metal backend has no wgpu buffer"),
+        }
     }
 }
 
@@ -1356,6 +1740,11 @@ impl HeadlessRenderer {
     /// The returned [`MappedFrame`] must be handed back with
     /// [`recycle`](Self::recycle) once its bytes have been used.
     pub fn read_rgb_frame(&mut self) -> Option<MappedFrame> {
+        on_metal! {
+            if self.is_native_metal() {
+                return self.read_rgb_resolved_pipelined().map(MappedFrame::read);
+            }
+        }
         self.queue_rgb_readback()?;
         if self.rgb_queue.len() <= self.read_ahead {
             return None;
@@ -1369,16 +1758,26 @@ impl HeadlessRenderer {
     /// the last one has been drawn, and every one of them is a frame the caller
     /// asked for. Call until it returns `None`.
     pub fn drain_rgb_frame(&mut self) -> Option<MappedFrame> {
+        on_metal! {
+            if let Some(m) = self.metal_path() {
+                return m.finish().map(MappedFrame::read);
+            }
+        }
         let p = self.rgb_queue.pop_front()?;
         self.await_pending(&p);
         Some(MappedFrame {
-            buffer: p.buffer,
+            frame: Frame::Mapped(p.buffer),
             len: p.unpadded as usize,
         })
     }
 
     /// As [`drain_rgb_frame`](Self::drain_rgb_frame), copying the bytes out.
     pub fn drain_rgb_pixels(&mut self) -> Option<Vec<u8>> {
+        on_metal! {
+            if let Some(m) = self.metal_path() {
+                return m.finish();
+            }
+        }
         let p = self.rgb_queue.pop_front()?;
         self.await_pending(&p);
         Some(self.take_pixels(p))
@@ -1386,7 +1785,9 @@ impl HeadlessRenderer {
 
     /// Return a buffer taken by [`read_rgb_frame`](Self::read_rgb_frame).
     pub fn recycle(&mut self, frame: MappedFrame) {
-        self.spare.push(frame.into_buffer());
+        if let Frame::Mapped(_) = frame.frame {
+            self.spare.push(frame.into_buffer());
+        }
     }
 }
 
@@ -1570,6 +1971,12 @@ impl HeadlessRenderer {
 
     /// Copying readback: the frame comes back as a `Vec`.
     pub fn read_rgb_resolved_pipelined(&mut self) -> Option<Vec<u8>> {
+        on_metal! {
+            if self.is_native_metal() {
+                let frame = rgb_from_rgba(&self.read_rgba_resolved());
+                return self.metal_path().and_then(|m| m.pipelined(frame));
+            }
+        }
         self.queue_rgb_readback()?;
         if self.rgb_queue.len() <= self.read_ahead {
             return None;
@@ -1706,15 +2113,6 @@ impl HeadlessRenderer {
             height: h,
             format: source_format,
         }
-    }
-}
-
-/// sRGB byte value to linear light.
-fn srgb_to_linear(c: f32) -> f32 {
-    if c <= 0.04045 {
-        c / 12.92
-    } else {
-        ((c + 0.055) / 1.055).powf(2.4)
     }
 }
 

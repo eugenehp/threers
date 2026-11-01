@@ -37,7 +37,14 @@ mod imp {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::OnceLock;
 
-    type Id = *mut c_void;
+    /// An Objective-C object, opaque — laid out as `metal::objc::Object` is,
+    /// so the two declarations of `objc_getClass` and
+    /// `MTLCreateSystemDefaultDevice` in this crate agree on their types.
+    #[repr(C)]
+    struct Object {
+        _private: [u8; 0],
+    }
+    type Id = *mut Object;
     type Sel = *const c_void;
     type Imp = unsafe extern "C" fn();
     type NewLibrary = unsafe extern "C" fn(Id, Sel, Id, Id, *mut Id) -> Id;

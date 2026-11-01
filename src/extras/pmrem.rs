@@ -491,7 +491,7 @@ fn resize_face_bytes(data: &[u8], src_size: u32, dst_size: u32, format: TextureF
                     if format == TextureFormat::Rgba8Unorm {
                         v
                     } else {
-                        srgb_to_linear(v)
+                        crate::utils::srgb::srgb_to_linear_f32(v)
                     }
                 };
                 let v0 = sample(x0, y0) * (1.0 - tx) + sample(x1, y0) * tx;
@@ -500,7 +500,7 @@ fn resize_face_bytes(data: &[u8], src_size: u32, dst_size: u32, format: TextureF
                 out.push(if format == TextureFormat::Rgba8Unorm {
                     linear_to_byte(lin)
                 } else {
-                    linear_to_srgb_byte(lin)
+                    crate::utils::srgb::linear_to_srgb(lin)
                 });
             }
             out.push(255);
@@ -850,9 +850,9 @@ fn prepare_pmrem_cube(input: &CubeTexture, size: u32) -> CubeTexture {
                 out.extend_from_slice(px);
                 continue;
             }
-            out.push(linear_to_byte(srgb_to_linear(px[0] as f32 / 255.0)));
-            out.push(linear_to_byte(srgb_to_linear(px[1] as f32 / 255.0)));
-            out.push(linear_to_byte(srgb_to_linear(px[2] as f32 / 255.0)));
+            out.push(linear_to_byte(crate::utils::srgb::srgb_to_linear_f32(px[0] as f32 / 255.0)));
+            out.push(linear_to_byte(crate::utils::srgb::srgb_to_linear_f32(px[1] as f32 / 255.0)));
+            out.push(linear_to_byte(crate::utils::srgb::srgb_to_linear_f32(px[2] as f32 / 255.0)));
             out.push(px.get(3).copied().unwrap_or(255));
         }
         *slot = out;
@@ -927,26 +927,8 @@ fn face_dir(face: usize, u: f32, v: f32) -> Vector3 {
     cube_face_direction(face, u, v)
 }
 
-fn srgb_to_linear(c: f32) -> f32 {
-    if c <= 0.04045 {
-        c / 12.92
-    } else {
-        ((c + 0.055) / 1.055).powf(2.4)
-    }
-}
-
 fn linear_to_byte(c: f32) -> u8 {
     (c.clamp(0.0, 1.0) * 255.0).round() as u8
-}
-
-fn linear_to_srgb_byte(c: f32) -> u8 {
-    let c = c.clamp(0.0, 1.0);
-    let s = if c <= 0.0031308 {
-        c * 12.92
-    } else {
-        1.055 * c.powf(1.0 / 2.4) - 0.055
-    };
-    (s * 255.0).round() as u8
 }
 
 fn sample_cube_linear(cube: &CubeTexture, dir: Vector3) -> [f32; 3] {
@@ -961,9 +943,9 @@ fn sample_cube_linear(cube: &CubeTexture, dir: Vector3) -> [f32; 3] {
         rgb
     } else {
         [
-            srgb_to_linear(rgb[0]),
-            srgb_to_linear(rgb[1]),
-            srgb_to_linear(rgb[2]),
+            crate::utils::srgb::srgb_to_linear_f32(rgb[0]),
+            crate::utils::srgb::srgb_to_linear_f32(rgb[1]),
+            crate::utils::srgb::srgb_to_linear_f32(rgb[2]),
         ]
     }
 }

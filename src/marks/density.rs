@@ -1,5 +1,6 @@
 //! Density fields: kernels summed offscreen, then mapped through a ramp.
 
+use super::gpu;
 use super::{Column, ColumnFormat, KindUniforms, Mark, MarkCommon, MarkKind, PrepareContext};
 use crate::math::ColorRamp;
 
@@ -82,9 +83,9 @@ pub struct DensityMarks {
 #[derive(Debug)]
 struct DensityGpu {
     size: (u32, u32),
-    field: wgpu::TextureView,
-    ramp: wgpu::Texture,
-    bind_group: wgpu::BindGroup,
+    field: gpu::TextureView,
+    ramp: gpu::Texture,
+    bind_group: gpu::BindGroup,
     /// The max reduction, field to one texel.
     levels: Vec<ReduceLevel>,
 }
@@ -93,9 +94,9 @@ struct DensityGpu {
 #[doc(hidden)]
 #[derive(Debug)]
 pub struct ReduceLevel {
-    pub(crate) target: wgpu::TextureView,
+    pub(crate) target: gpu::TextureView,
     /// Reads the level before (the field, for the first).
-    pub(crate) bind_group: wgpu::BindGroup,
+    pub(crate) bind_group: gpu::BindGroup,
 }
 
 /// Each level a quarter of the last per axis, down to one texel.
@@ -323,17 +324,17 @@ impl Mark for DensityMarks {
                     view_formats: &[],
                 });
                 let target = tex.create_view(&Default::default());
-                let bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                let bind_group = ctx.device.create_bind_group(&gpu::BindGroupDescriptor {
                     label: Some("threers density reduce bind group"),
                     layout: &ctx.resources.reduce_layout,
                     entries: &[
-                        wgpu::BindGroupEntry {
+                        gpu::BindGroupEntry {
                             binding: 0,
-                            resource: wgpu::BindingResource::TextureView(&src),
+                            resource: gpu::BindingResource::TextureView(&src),
                         },
-                        wgpu::BindGroupEntry {
+                        gpu::BindGroupEntry {
                             binding: 1,
-                            resource: wgpu::BindingResource::Sampler(
+                            resource: gpu::BindingResource::Sampler(
                                 &ctx.resources.nearest_sampler,
                             ),
                         },
@@ -342,25 +343,25 @@ impl Mark for DensityMarks {
                 src = target.clone();
                 levels.push(ReduceLevel { target, bind_group });
             }
-            let bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            let bind_group = ctx.device.create_bind_group(&gpu::BindGroupDescriptor {
                 label: Some("threers density composite bind group"),
                 layout: &ctx.resources.density_layout,
                 entries: &[
-                    wgpu::BindGroupEntry {
+                    gpu::BindGroupEntry {
                         binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&field_view),
+                        resource: gpu::BindingResource::TextureView(&field_view),
                     },
-                    wgpu::BindGroupEntry {
+                    gpu::BindGroupEntry {
                         binding: 1,
-                        resource: wgpu::BindingResource::TextureView(&ramp_view),
+                        resource: gpu::BindingResource::TextureView(&ramp_view),
                     },
-                    wgpu::BindGroupEntry {
+                    gpu::BindGroupEntry {
                         binding: 2,
-                        resource: wgpu::BindingResource::Sampler(&ctx.resources.linear_sampler),
+                        resource: gpu::BindingResource::Sampler(&ctx.resources.linear_sampler),
                     },
-                    wgpu::BindGroupEntry {
+                    gpu::BindGroupEntry {
                         binding: 3,
-                        resource: wgpu::BindingResource::TextureView(&src),
+                        resource: gpu::BindingResource::TextureView(&src),
                     },
                 ],
             });
@@ -376,7 +377,7 @@ impl Mark for DensityMarks {
             let g = self.gpu.as_ref().unwrap();
             let bytes: Vec<u8> = self.ramp.iter().flatten().copied().collect();
             ctx.queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
+                gpu::TexelCopyTextureInfo {
                     texture: &g.ramp,
                     mip_level: 0,
                     origin: wgpu::Origin3d::ZERO,
@@ -413,7 +414,7 @@ impl Mark for DensityMarks {
     fn columns(&mut self) -> Vec<&mut Column> {
         vec![&mut self.positions, &mut self.weights]
     }
-    fn density(&self) -> Option<(&wgpu::TextureView, &wgpu::BindGroup)> {
+    fn density(&self) -> Option<(&gpu::TextureView, &gpu::BindGroup)> {
         self.gpu.as_ref().map(|g| (&g.field, &g.bind_group))
     }
     fn density_reduction(&self) -> Option<&[ReduceLevel]> {

@@ -1029,7 +1029,7 @@ fn a_trail_hook_cuts_paths_to_the_time_window() {
 /// group — a 2×2 texture each square samples. Hooks, custom columns and
 /// picking come with it for free.
 mod textured_squares {
-    use threers::marks::{
+    use threers::marks::{gpu, 
         Column, ColumnFormat, CustomShader, Mark, MarkCommon, MarkKind, PrepareContext,
     };
 
@@ -1092,8 +1092,8 @@ fn fs_pick(in : SqOut) -> @location(0) vec2<u32> {
         pub common: MarkCommon,
         shader: CustomShader,
         positions: Column,
-        layout: Option<wgpu::BindGroupLayout>,
-        bind_group: Option<wgpu::BindGroup>,
+        layout: Option<gpu::BindGroupLayout>,
+        bind_group: Option<gpu::BindGroup>,
     }
 
     impl TexturedSquares {
@@ -1134,10 +1134,10 @@ fn fs_pick(in : SqOut) -> @location(0) vec2<u32> {
         fn custom_shader(&self) -> Option<&CustomShader> {
             Some(&self.shader)
         }
-        fn extra_layout(&self) -> Option<&wgpu::BindGroupLayout> {
+        fn extra_layout(&self) -> Option<&gpu::BindGroupLayout> {
             self.layout.as_ref()
         }
-        fn extra_bind_group(&self) -> Option<&wgpu::BindGroup> {
+        fn extra_bind_group(&self) -> Option<&gpu::BindGroup> {
             self.bind_group.as_ref()
         }
         fn prepare(&mut self, ctx: &PrepareContext) {
@@ -1163,7 +1163,7 @@ fn fs_pick(in : SqOut) -> @location(0) vec2<u32> {
                 view_formats: &[],
             });
             ctx.queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
+                gpu::TexelCopyTextureInfo {
                     texture: &tex,
                     mip_level: 0,
                     origin: wgpu::Origin3d::ZERO,
@@ -1211,17 +1211,17 @@ fn fs_pick(in : SqOut) -> @location(0) vec2<u32> {
             let nearest = ctx
                 .device
                 .create_sampler(&wgpu::SamplerDescriptor::default());
-            let bg = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            let bg = ctx.device.create_bind_group(&gpu::BindGroupDescriptor {
                 label: None,
                 layout: &layout,
                 entries: &[
-                    wgpu::BindGroupEntry {
+                    gpu::BindGroupEntry {
                         binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&view),
+                        resource: gpu::BindingResource::TextureView(&view),
                     },
-                    wgpu::BindGroupEntry {
+                    gpu::BindGroupEntry {
                         binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&nearest),
+                        resource: gpu::BindingResource::Sampler(&nearest),
                     },
                 ],
             });

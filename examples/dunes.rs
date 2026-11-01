@@ -25,7 +25,6 @@ use threers::particles::sand::{Downwind, SandBed};
 use threers::particles::{presets, Heightfield, ParticleAnimator};
 use threers::postprocessing::{EffectComposer, FilmPass, OutputPass, RenderPass, UnrealBloomPass};
 use threers::prelude::*;
-use threers::renderer::{readback, RenderTarget};
 
 const FORMAT: threers::wgpu::TextureFormat = threers::wgpu::TextureFormat::Rgba8Unorm;
 
@@ -91,14 +90,13 @@ fn render(bed: &SandBed, time: &DesertTime, eye: Vector3, at: Vector3, w: u32, h
         .expect("a GPU adapter");
     hr.set_msaa(4);
     hr.renderer().set_tone_mapping(ToneMapping::AcesFilmic, 1.0);
-    let mut composer = EffectComposer::new(hr.device().clone(), hr.queue().clone(), w, h, FORMAT);
+    let mut composer = EffectComposer::with_size(w, h);
+    composer.set_screen_format(FORMAT);
     composer.add_pass(RenderPass::new());
     composer.add_pass(UnrealBloomPass::new(w, h, 0.45, 0.5, 0.9));
     composer.add_pass(FilmPass::new(0.12, false));
     composer.add_pass(OutputPass::new());
-    let out = RenderTarget::new(hr.device(), w, h, FORMAT);
-    composer.render(hr.renderer(), &mut scene, &camera, &out.color_view);
-    readback::texture_bytes(hr.device(), hr.queue(), &out.color_texture)
+    hr.compose(&mut composer, &mut scene, &camera)
 }
 
 fn main() {

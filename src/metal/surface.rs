@@ -1,8 +1,8 @@
 //! Presenting to a window, via `CAMetalLayer`.
 //!
-//! macOS only. The crate does not open the window — winit (or AppKit, or SDL)
-//! does that, and hands over the `NSView`; this attaches a Metal layer to it
-//! and hands back a drawable per frame.
+//! The crate does not open the window — winit (or AppKit, UIKit, SDL) does
+//! that, and hands over the view or its layer; this attaches a Metal layer to
+//! it and hands back a drawable per frame.
 
 use std::ffi::c_void;
 
@@ -36,14 +36,17 @@ pub struct MetalSurface {
 
 impl MetalSurface {
     /// Attach a new `CAMetalLayer` to an `NSView` and build the surface.
+    /// macOS.
     ///
     /// `ns_view` is what a window toolkit calls the view handle — winit's
     /// `RawWindowHandle::AppKit { ns_view, .. }`, for instance.
     ///
+    /// Must be called on the main thread — `setWantsLayer:` and `setLayer:` are
+    /// AppKit calls — and fails with [`MetalError::Unsupported`] elsewhere. The
+    /// surface it returns can then move to a render thread.
+    ///
     /// # Safety
-    /// `ns_view` must be a live `NSView`, and this must be called on the main
-    /// thread: `setWantsLayer:` and `setLayer:` are AppKit calls and AppKit is
-    /// main-thread-only.
+    /// `ns_view` must be null or a live `NSView`.
     pub unsafe fn from_ns_view(
         device: &MetalDevice,
         ns_view: *mut c_void,
@@ -52,16 +55,104 @@ impl MetalSurface {
         sample_count: u32,
     ) -> Result<Self, MetalError> {
         let _pool = AutoreleasePool::new();
-        let cls = super::objc::get_class("CAMetalLayer\0");
-        if cls.is_null() {
-            return Err(MetalError::Unsupported(
-                "CAMetalLayer is not available — QuartzCore did not link".into(),
-            ));
-        }
+        require_main_thread("MetalSurface::from_ns_view")?;
+        let cls = metal_layer_class()?;
         // `+layer` is autoreleased; retain it for as long as the surface lives.
         let layer = Owned::retain(msg0(cls, sel!("layer")))
             .ok_or_else(|| MetalError::Allocation("CAMetalLayer".into()))?;
+        let surface = Self::build(device, layer, width, height, sample_count)?;
 
+        let view = ns_view as Id;
+        if !view.is_null() {
+            let _: () = msg1(view, sel!("setWantsLayer:"), YES);
+            let _: () = msg1(view, sel!("setLayer:"), surface.layer.id());
+        }
+        Ok(surface)
+    }
+
+    /// The surface of a `UIView` whose layer is a `CAMetalLayer`. iOS, iPadOS,
+    /// Mac Catalyst, tvOS, and visionOS windowed apps.
+    ///
+    /// UIKit fixes a view's layer at creation, so the view has to ask for a
+    /// Metal one:
+    ///
+    /// ```swift
+    /// final class MetalView: UIView {
+    ///     override class var layerClass: AnyClass { CAMetalLayer.self }
+    /// }
+    /// ```
+    ///
+    /// Pass `view.bounds.size × contentScaleFactor` as the size. Must be called
+    /// on the main thread, where reading `view.layer` is legal, and fails with
+    /// [`MetalError::Unsupported`] elsewhere or when the layer is not a
+    /// `CAMetalLayer`. The surface it returns can then move to a render thread.
+    ///
+    /// # Safety
+    /// `ui_view` must be a live `UIView`.
+    #[cfg(any(target_os = "ios", target_os = "tvos", target_os = "visionos"))]
+    pub unsafe fn from_ui_view(
+        device: &MetalDevice,
+        ui_view: *mut c_void,
+        width: u32,
+        height: u32,
+        sample_count: u32,
+    ) -> Result<Self, MetalError> {
+        let _pool = AutoreleasePool::new();
+        require_main_thread("MetalSurface::from_ui_view")?;
+        if ui_view.is_null() {
+            return Err(MetalError::Unsupported("from_ui_view with a null view".into()));
+        }
+        let layer: Id = msg0(ui_view as Id, sel!("layer"));
+        Self::from_layer(device, layer.cast(), width, height, sample_count)
+    }
+
+    /// Adopt a `CAMetalLayer` the app already has — a `UIView` or `NSView`
+    /// backed by one, or one the app made and placed itself.
+    ///
+    /// Sets the layer's device, pixel format (`BGRA8_UNORM_SRGB`),
+    /// `framebufferOnly` and drawable size, and leaves its geometry and
+    /// `contentsScale` to the view that owns it. The layer is retained for as
+    /// long as the surface lives.
+    ///
+    /// Callable on any thread: a `CAMetalLayer`'s rendering properties are
+    /// not UIKit or AppKit state.
+    ///
+    /// # Safety
+    /// `layer` must be null or a live `CALayer`.
+    pub unsafe fn from_layer(
+        device: &MetalDevice,
+        layer: *mut c_void,
+        width: u32,
+        height: u32,
+        sample_count: u32,
+    ) -> Result<Self, MetalError> {
+        let _pool = AutoreleasePool::new();
+        let cls = metal_layer_class()?;
+        let layer = layer as Id;
+        let is_metal: Bool = if layer.is_null() {
+            0
+        } else {
+            msg1(layer, sel!("isKindOfClass:"), cls)
+        };
+        if is_metal == 0 {
+            return Err(MetalError::Unsupported(
+                "the layer is not a CAMetalLayer — on iOS, override the view's \
+                 `layerClass` to return `CAMetalLayer.self`"
+                    .into(),
+            ));
+        }
+        let layer = Owned::retain(layer).ok_or_else(|| MetalError::Allocation("CAMetalLayer".into()))?;
+        Self::build(device, layer, width, height, sample_count)
+    }
+
+    /// Configure `layer` for this device and allocate the attachments.
+    unsafe fn build(
+        device: &MetalDevice,
+        layer: Owned,
+        width: u32,
+        height: u32,
+        sample_count: u32,
+    ) -> Result<Self, MetalError> {
         // BGRA is the layer's native order; sRGB so the shader can keep writing
         // linear values exactly as it does offscreen.
         let color_format = pixel_format::BGRA8_UNORM_SRGB;
@@ -96,12 +187,6 @@ impl MetalSurface {
             )));
         }
         surface.resize(width, height)?;
-
-        let view = ns_view as Id;
-        if !view.is_null() {
-            let _: () = msg1(view, sel!("setWantsLayer:"), YES);
-            let _: () = msg1(view, sel!("setLayer:"), surface.layer.id());
-        }
         Ok(surface)
     }
 
@@ -232,6 +317,30 @@ impl MetalSurface {
     /// The `CAMetalLayer`. Borrowed — do not release.
     pub fn layer_id(&self) -> Id {
         self.layer.id()
+    }
+}
+
+/// `CAMetalLayer`, or an error naming the framework that did not link.
+fn metal_layer_class() -> Result<Id, MetalError> {
+    let cls = super::objc::get_class("CAMetalLayer\0");
+    if cls.is_null() {
+        return Err(MetalError::Unsupported(
+            "CAMetalLayer is not available — QuartzCore did not link".into(),
+        ));
+    }
+    Ok(cls)
+}
+
+/// AppKit and UIKit throw, or corrupt their state, when a view is touched off
+/// the main thread; say so before it happens.
+fn require_main_thread(call: &str) -> Result<(), MetalError> {
+    if super::objc::is_main_thread() {
+        Ok(())
+    } else {
+        Err(MetalError::Unsupported(format!(
+            "{call} touches a view and must run on the main thread; \
+             build the surface there and move it to the render thread"
+        )))
     }
 }
 

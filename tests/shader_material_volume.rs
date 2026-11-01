@@ -4,7 +4,6 @@
 //! with `u_vol_samp` — and an unset slot reads the placeholder's zero.
 //! Skipped without a GPU adapter.
 
-use std::sync::Arc;
 use threers::cameras::OrthographicCamera;
 use threers::core::{Mesh, Object3D};
 use threers::geometries::PlaneGeometry;
@@ -15,7 +14,7 @@ use threers::volume::{Data3DTexture, GpuVolume, VolumeFormat};
 
 const N: u32 = 64;
 
-fn render(r: &mut threers::HeadlessRenderer, vol: Option<Arc<wgpu::TextureView>>, fragment: &str) -> Vec<u8> {
+fn render(r: &mut threers::HeadlessRenderer, vol: Option<threers::marks::gpu::TextureView>, fragment: &str) -> Vec<u8> {
     let mut m = ShaderMaterial::new(fragment);
     m.tone_mapped = false;
     m.volumes = vol.into_iter().collect();
@@ -45,7 +44,7 @@ fn a_shader_material_reads_a_3d_texture() {
     };
     let ramp = Data3DTexture::new(4, 1, 1, VolumeFormat::R8Unorm, vec![0, 85, 170, 255]);
     let vol = GpuVolume::from_texture(r.device(), r.queue(), &ramp);
-    let view = Arc::new(vol.view.clone());
+    let view = vol.view.clone();
 
     // exact: texel i covers the i-th quarter of the quad
     let exact = row(&render(

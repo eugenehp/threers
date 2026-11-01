@@ -247,6 +247,9 @@ impl MetalViewportState {
         staged.color = t.color.id();
         staged.resolve = t.resolve.id();
         staged.depth = t.depth.as_ref().map(|d| d.id()).unwrap_or(NIL);
+        // The destination's resolved depth is the whole target's size; the
+        // pane's depth stays its own (only its colour is copied back).
+        staged.depth_resolve = NIL;
         staged.drawable = NIL;
         staged.width = r.width;
         staged.height = r.height;

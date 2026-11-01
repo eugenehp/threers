@@ -23,9 +23,6 @@
 //   (`fx_display`).
 // ---------------------------------------------------------------------------
 
-const FX_PI: f32 = 3.141592653589793;
-const FX_PI2: f32 = 6.283185307179586;
-const FX_EPSILON: f32 = 1e-6;
 
 fn fx_raw(c: vec4<f32>) -> vec4<f32> {
     if (postfx_linear_out()) {
@@ -106,7 +103,7 @@ fn fx_weight(i: u32) -> f32 {
 // three.js `common` `rand`: the `mod(dt, PI)` variant.
 fn fx_three_rand(uv: vec2<f32>) -> f32 {
     let dt = dot(uv, vec2<f32>(12.9898, 78.233));
-    let sn = dt - FX_PI * floor(dt / FX_PI);
+    let sn = dt - 3.141592653589793 * floor(dt / 3.141592653589793);
     return fract(sin(sn) * 43758.5453);
 }
 
@@ -330,7 +327,7 @@ fn fx_depth_limited_blur(uv: vec2<f32>, res: vec2<f32>) -> vec4<f32> {
     let perspective = u.params3.x > 0.5;
     let p = gl_uv(uv);
     let depth = fx_hw_depth(uv);
-    if (depth >= 1.0 - FX_EPSILON) {
+    if (depth >= 1.0 - 1e-6) {
         return fx_raw(vec4<f32>(1.0));
     }
     let center_view_z = -fx_view_z(depth, near, far, perspective);
@@ -380,7 +377,7 @@ fn fx_sao(uv: vec2<f32>, res: vec2<f32>) -> vec4<f32> {
     let perspective = u.params3.z > 0.5;
     let p = gl_uv(uv);
     let center_depth = fx_hw_depth(uv);
-    if (center_depth >= 1.0 - FX_EPSILON) {
+    if (center_depth >= 1.0 - 1e-6) {
         return fx_raw(vec4<f32>(1.0));
     }
     let center_view_z = fx_view_z(center_depth, near, far, perspective);
@@ -395,8 +392,8 @@ fn fx_sao(uv: vec2<f32>, res: vec2<f32>) -> vec4<f32> {
     let center_normal = 2.0 * fx_normal_tex(uv).xyz - 1.0;
 
     let num_samples = 7;
-    let angle_step = FX_PI2 * 4.0 / 7.0;
-    var angle = fx_three_rand(p + vec2<f32>(u.params3.y)) * FX_PI2;
+    let angle_step = 6.283185307179586 * 4.0 / 7.0;
+    var angle = fx_three_rand(p + vec2<f32>(u.params3.y)) * 6.283185307179586;
     var radius = vec2<f32>(kernel_radius * (1.0 / 7.0)) / res;
     let radius_step = radius;
     var occlusion_sum = 0.0;
@@ -406,7 +403,7 @@ fn fx_sao(uv: vec2<f32>, res: vec2<f32>) -> vec4<f32> {
         radius = radius + radius_step;
         angle = angle + angle_step;
         let sample_depth = fx_hw_depth(gl_uv(sample_uv));
-        if (sample_depth >= 1.0 - FX_EPSILON) {
+        if (sample_depth >= 1.0 - 1e-6) {
             continue;
         }
         let sample_view_z = fx_view_z(sample_depth, near, far, perspective);
@@ -897,104 +894,19 @@ fn fx_transition(uv: vec2<f32>) -> vec4<f32> {
 
 // ---- 64: OutputPass ------------------------------------------------------
 
-fn fx_rrt_and_odt_fit(v: vec3<f32>) -> vec3<f32> {
-    let a = v * (v + 0.0245786) - 0.000090537;
-    let b = v * (0.983729 * v + 0.4329510) + 0.238081;
-    return a / b;
-}
-
-fn fx_agx_contrast(x: vec3<f32>) -> vec3<f32> {
-    let x2 = x * x;
-    let x4 = x2 * x2;
-    return 15.5 * x4 * x2 - 40.14 * x4 * x + 31.96 * x4 - 6.868 * x2 * x + 0.4298 * x2 + 0.1191 * x - 0.00232;
-}
+// The tone curves are the renderer's own (`SHARED_FUNCTIONS`), put in here.
+//@@SHARED_FUNCTIONS@@
 
 // three.js `tonemapping_pars_fragment`, keyed by its constants: 1 Linear,
 // 2 Reinhard, 3 Cineon, 4 ACESFilmic, 6 AgX, 7 Neutral; anything else none.
-fn fx_tone_map(color_in: vec3<f32>, mode: u32, exposure: f32) -> vec3<f32> {
-    var color = color_in;
-    if (mode == 1u) {
-        return clamp(exposure * color, vec3<f32>(0.0), vec3<f32>(1.0));
-    }
-    if (mode == 2u) {
-        color = color * exposure;
-        return clamp(color / (vec3<f32>(1.0) + color), vec3<f32>(0.0), vec3<f32>(1.0));
-    }
-    if (mode == 3u) {
-        color = color * exposure;
-        color = max(vec3<f32>(0.0), color - 0.004);
-        return pow((color * (6.2 * color + 0.5)) / (color * (6.2 * color + 1.7) + 0.06), vec3<f32>(2.2));
-    }
-    if (mode == 4u) {
-        let aces_input = mat3x3<f32>(
-            vec3<f32>(0.59719, 0.07600, 0.02840),
-            vec3<f32>(0.35458, 0.90834, 0.13383),
-            vec3<f32>(0.04823, 0.01566, 0.83777),
-        );
-        let aces_output = mat3x3<f32>(
-            vec3<f32>(1.60475, -0.10208, -0.00327),
-            vec3<f32>(-0.53108, 1.10813, -0.07276),
-            vec3<f32>(-0.07367, -0.00605, 1.07602),
-        );
-        color = color * (exposure / 0.6);
-        color = aces_input * color;
-        color = fx_rrt_and_odt_fit(color);
-        color = aces_output * color;
-        return clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
-    }
-    if (mode == 6u) {
-        let rec2020_to_srgb = mat3x3<f32>(
-            vec3<f32>(1.6605, -0.1246, -0.0182),
-            vec3<f32>(-0.5876, 1.1329, -0.1006),
-            vec3<f32>(-0.0728, -0.0083, 1.1187),
-        );
-        let srgb_to_rec2020 = mat3x3<f32>(
-            vec3<f32>(0.6274, 0.0691, 0.0164),
-            vec3<f32>(0.3293, 0.9195, 0.0880),
-            vec3<f32>(0.0433, 0.0113, 0.8956),
-        );
-        let inset = mat3x3<f32>(
-            vec3<f32>(0.856627153315983, 0.137318972929847, 0.11189821299995),
-            vec3<f32>(0.0951212405381588, 0.761241990602591, 0.0767994186031903),
-            vec3<f32>(0.0482516061458583, 0.101439036467562, 0.811302368396859),
-        );
-        let outset = mat3x3<f32>(
-            vec3<f32>(1.1271005818144368, -0.1413297634984383, -0.14132976349843826),
-            vec3<f32>(-0.11060664309660323, 1.157823702216272, -0.11060664309660294),
-            vec3<f32>(-0.016493938717834573, -0.016493938717834257, 1.2519364065950405),
-        );
-        let min_ev = -12.47393;
-        let max_ev = 4.026069;
-        color = color * exposure;
-        color = srgb_to_rec2020 * color;
-        color = inset * color;
-        color = max(color, vec3<f32>(1e-10));
-        color = log2(color);
-        color = (color - min_ev) / (max_ev - min_ev);
-        color = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
-        color = fx_agx_contrast(color);
-        color = outset * color;
-        color = pow(max(vec3<f32>(0.0), color), vec3<f32>(2.2));
-        color = rec2020_to_srgb * color;
-        return clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
-    }
-    if (mode == 7u) {
-        let start_compression = 0.8 - 0.04;
-        let desaturation = 0.15;
-        color = color * exposure;
-        let x = min(color.r, min(color.g, color.b));
-        let offset = select(0.04, x - 6.25 * x * x, x < 0.08);
-        color = color - offset;
-        let peak = max(color.r, max(color.g, color.b));
-        if (peak < start_compression) {
-            return color;
-        }
-        let d = 1.0 - start_compression;
-        let new_peak = 1.0 - d * d / (peak + d - start_compression);
-        color = color * (new_peak / peak);
-        let g = 1.0 - 1.0 / (desaturation * (peak - new_peak) + 1.0);
-        return mix(color, vec3<f32>(new_peak), g);
-    }
+fn fx_tone_map(color: vec3<f32>, mode: u32, exposure: f32) -> vec3<f32> {
+    let e = color * exposure;
+    if (mode == 1u) { return linear_tonemap(e); }
+    if (mode == 2u) { return reinhard_tonemap(e); }
+    if (mode == 3u) { return cineon_tonemap(e); }
+    if (mode == 4u) { return aces_tonemap(e); }
+    if (mode == 6u) { return agx_tonemap(e); }
+    if (mode == 7u) { return neutral_tonemap(e); }
     return color;
 }
 

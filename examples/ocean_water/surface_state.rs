@@ -14,9 +14,8 @@
 //! textures, so a pass cannot read and write the same image. One is sampled, the
 //! other written, and they swap.
 
-use std::sync::Arc;
+use threers::marks::gpu;
 
-use wgpu::util::DeviceExt;
 
 use crate::ocean_fft::OceanFft;
 
@@ -188,12 +187,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 "#;
 
 pub struct SurfaceState {
-    pipeline: wgpu::ComputePipeline,
+    pipeline: gpu::ComputePipeline,
     /// One bind group per ping-pong direction.
-    binds: [wgpu::BindGroup; 2],
-    views: [Arc<wgpu::TextureView>; 2],
-    params: wgpu::Buffer,
-    wakes: wgpu::Buffer,
+    binds: [gpu::BindGroup; 2],
+    views: [gpu::TextureView; 2],
+    params: gpu::Buffer,
+    wakes: gpu::Buffer,
     flip: usize,
     groups: (u32, u32),
     /// Side of the world square this field covers — the swell cascade's tile,
@@ -205,11 +204,11 @@ pub struct SurfaceState {
 const MAX_WAKES: usize = 16;
 
 impl SurfaceState {
-    pub fn new(device: &wgpu::Device, fft: &OceanFft, peak_wavelength: f32) -> SurfaceState {
+    pub fn new(device: &gpu::Device, fft: &OceanFft, peak_wavelength: f32) -> SurfaceState {
         let cas = fft.cas;
-        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        let module = device.create_shader_module(gpu::ShaderModuleDescriptor {
             label: Some("ocean surface state"),
-            source: wgpu::ShaderSource::Wgsl(
+            source: gpu::ShaderSource::Wgsl(
                 SHADER
                     .replace(
                         "$CASCADES",
@@ -241,7 +240,7 @@ impl SurfaceState {
                 usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
             });
-            Arc::new(t.create_view(&wgpu::TextureViewDescriptor::default()))
+            t.create_view(&wgpu::TextureViewDescriptor::default())
         };
         let views = [make_tex("ocean foam A"), make_tex("ocean foam B")];
 
@@ -333,53 +332,53 @@ impl SurfaceState {
         });
 
         let make_bind = |src: usize, dst: usize| {
-            device.create_bind_group(&wgpu::BindGroupDescriptor {
+            device.create_bind_group(&gpu::BindGroupDescriptor {
                 label: Some("ocean foam bg"),
                 layout: &layout,
                 entries: &[
-                    wgpu::BindGroupEntry {
+                    gpu::BindGroupEntry {
                         binding: 0,
                         resource: params.as_entire_binding(),
                     },
-                    wgpu::BindGroupEntry {
+                    gpu::BindGroupEntry {
                         binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&sampler),
+                        resource: gpu::BindingResource::Sampler(&sampler),
                     },
-                    wgpu::BindGroupEntry {
+                    gpu::BindGroupEntry {
                         binding: 2,
                         resource: wakes.as_entire_binding(),
                     },
-                    wgpu::BindGroupEntry {
+                    gpu::BindGroupEntry {
                         binding: 3,
-                        resource: wgpu::BindingResource::TextureView(&views[src]),
+                        resource: gpu::BindingResource::TextureView(&views[src]),
                     },
-                    wgpu::BindGroupEntry {
+                    gpu::BindGroupEntry {
                         binding: 5,
-                        resource: wgpu::BindingResource::TextureView(&views[dst]),
+                        resource: gpu::BindingResource::TextureView(&views[dst]),
                     },
-                    wgpu::BindGroupEntry {
+                    gpu::BindGroupEntry {
                         binding: 6,
-                        resource: wgpu::BindingResource::TextureView(&fft.cascade_views[0]),
+                        resource: gpu::BindingResource::TextureView(&fft.cascade_views[0]),
                     },
-                    wgpu::BindGroupEntry {
+                    gpu::BindGroupEntry {
                         binding: 7,
-                        resource: wgpu::BindingResource::TextureView(&fft.cascade_views[1]),
+                        resource: gpu::BindingResource::TextureView(&fft.cascade_views[1]),
                     },
-                    wgpu::BindGroupEntry {
+                    gpu::BindGroupEntry {
                         binding: 8,
-                        resource: wgpu::BindingResource::TextureView(&fft.cascade_views[2]),
+                        resource: gpu::BindingResource::TextureView(&fft.cascade_views[2]),
                     },
                 ],
             })
         };
         let binds = [make_bind(0, 1), make_bind(1, 0)];
 
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        let pipeline_layout = device.create_pipeline_layout(&gpu::PipelineLayoutDescriptor {
             label: Some("ocean foam pipeline layout"),
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
-        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        let pipeline = device.create_compute_pipeline(&gpu::ComputePipelineDescriptor {
             label: Some("ocean foam pipeline"),
             layout: Some(&pipeline_layout),
             module: &module,
@@ -401,15 +400,15 @@ impl SurfaceState {
     }
 
     /// The view the water shader should sample this frame — the one just written.
-    pub fn current(&self) -> Arc<wgpu::TextureView> {
+    pub fn current(&self) -> gpu::TextureView {
         self.views[(self.flip + 1) % 2].clone()
     }
 
     #[allow(clippy::too_many_arguments)]
     pub fn dispatch(
         &mut self,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
+        queue: &gpu::Queue,
+        encoder: &mut gpu::CommandEncoder,
         dt: f32,
         wind: [f32; 2],
         foam_threshold: f32,

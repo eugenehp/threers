@@ -34,7 +34,7 @@
 //! ```no_run
 //! use threers::marks::{MarkRenderer, MarkTarget, MarkView, Origin, PointMarks, Mark};
 //! # fn frame(renderer: &mut threers::Renderer, scene: &mut threers::Scene,
-//! #          camera: &threers::PerspectiveCamera, frame_view: &wgpu::TextureView) {
+//! #          camera: &threers::PerspectiveCamera, frame_view: &gpu::TextureView) {
 //! let device = renderer.device_arc();
 //! let queue = renderer.queue_arc();
 //! let mut marks = MarkRenderer::new(&device);
@@ -56,6 +56,9 @@ mod collision;
 mod columns;
 mod density;
 pub mod geo;
+pub mod gpu;
+#[cfg(metal_backend)]
+mod gpu_metal;
 pub mod geojson;
 mod hooks;
 mod images;
@@ -283,9 +286,14 @@ impl MarkView {
         origin: Origin,
         renderer: &crate::Renderer,
     ) -> Self {
-        let mut v = Self::new(camera, origin, renderer.drawing_buffer_size());
-        v.tone_mapping = renderer.tone_mapping();
-        if renderer.reversed_z() {
+        Self::for_surface(camera, origin, &MarkSurface::of(renderer))
+    }
+
+    /// The view of marks drawn over `surface`'s frames.
+    pub fn for_surface(camera: &dyn crate::Camera, origin: Origin, surface: &MarkSurface) -> Self {
+        let mut v = Self::new(camera, origin, surface.size);
+        v.tone_mapping = surface.tone_mapping;
+        if surface.reversed_z {
             v = v.with_reversed_z();
         }
         v
@@ -413,26 +421,56 @@ impl MarkView {
     }
 }
 
+/// What marks need to know of the frames they draw over: their size in
+/// device pixels, the tone mapping they were drawn with, and which way their
+/// depth runs. [`MarkSurface::of`] a wgpu [`Renderer`](crate::Renderer);
+/// [`WindowRenderer::mark_surface`](crate::renderer::WindowRenderer::mark_surface)
+/// for a window on either backend.
+#[derive(Debug, Clone, Copy)]
+pub struct MarkSurface {
+    pub size: (u32, u32),
+    pub tone_mapping: (crate::ToneMapping, f32),
+    pub reversed_z: bool,
+}
+
+impl MarkSurface {
+    pub fn of(renderer: &crate::Renderer) -> Self {
+        Self {
+            size: renderer.drawing_buffer_size(),
+            tone_mapping: renderer.tone_mapping(),
+            reversed_z: renderer.reversed_z(),
+        }
+    }
+}
+
 /// Where marks are drawn: a colour target, and optionally the depth buffer of
 /// the frame already in it.
 pub struct MarkTarget<'a> {
     /// The view drawn into — the multisampled colour when `samples > 1`.
-    pub color: &'a wgpu::TextureView,
+    pub color: gpu::TextureView,
     /// Where a multisampled `color` resolves to.
-    pub resolve: Option<&'a wgpu::TextureView>,
+    pub resolve: Option<gpu::TextureView>,
     /// The frame's depth, [`DEPTH_FORMAT`], with `samples` samples.
-    pub depth: Option<&'a wgpu::TextureView>,
+    pub depth: Option<gpu::TextureView>,
     pub format: wgpu::TextureFormat,
     pub samples: u32,
     /// Draw only within `[x, y, width, height]` (device pixels from the
     /// top left) — one view of several on a canvas. The [`MarkView`]'s
     /// viewport is then this rectangle's size. `None`: all of it.
     pub rect: Option<[u32; 4]>,
+    /// The views are handles; the target borrows nothing, but keeps the
+    /// lifetime its wgpu constructors have always had.
+    pub _borrow: std::marker::PhantomData<&'a ()>,
 }
 
 impl<'a> MarkTarget<'a> {
     /// A plain colour target with no depth: marks draw over everything.
     pub fn new(color: &'a wgpu::TextureView, format: wgpu::TextureFormat) -> Self {
+        Self::from_view(color.into(), format)
+    }
+
+    /// [`new`](Self::new) for a view of either backend.
+    pub fn from_view(color: gpu::TextureView, format: wgpu::TextureFormat) -> Self {
         Self {
             color,
             resolve: None,
@@ -440,6 +478,7 @@ impl<'a> MarkTarget<'a> {
             format,
             samples: 1,
             rect: None,
+            _borrow: std::marker::PhantomData,
         }
     }
 
@@ -451,6 +490,12 @@ impl<'a> MarkTarget<'a> {
 
     /// Depth-test against `depth` ([`DEPTH_FORMAT`], same size and sample count).
     pub fn with_depth(mut self, depth: &'a wgpu::TextureView) -> Self {
+        self.depth = Some(depth.into());
+        self
+    }
+
+    /// [`with_depth`](Self::with_depth) for a view of either backend.
+    pub fn with_depth_view(mut self, depth: gpu::TextureView) -> Self {
         self.depth = Some(depth);
         self
     }
@@ -467,12 +512,13 @@ impl<'a> MarkTarget<'a> {
         let (msaa_color, depth, samples) = renderer.overlay_attachments();
         match msaa_color {
             Some(color) => Self {
-                color,
-                resolve: Some(frame),
-                depth: Some(depth),
+                color: color.into(),
+                resolve: Some(frame.into()),
+                depth: Some(depth.into()),
                 format: renderer.color_format(),
                 samples,
                 rect: None,
+                _borrow: std::marker::PhantomData,
             },
             None => Self::new(frame, renderer.color_format()).with_depth(depth),
         }
@@ -716,7 +762,7 @@ impl MarkCommon {
 
 /// Instanced geometry: a vertex buffer of position + normal, its vertex
 /// count, and an optional `u32` index buffer with its count.
-pub type InstancedGeometry<'a> = (&'a wgpu::Buffer, u32, Option<(&'a wgpu::Buffer, u32)>);
+pub type InstancedGeometry<'a> = (&'a gpu::Buffer, u32, Option<(&'a gpu::Buffer, u32)>);
 
 /// Phong-style lighting for lit marks ([`ShapeMarks`], [`PolygonMarks`]),
 /// as deck.gl's default `LightingEffect` and material light them: the
@@ -834,8 +880,8 @@ pub type KindUniforms = ([f32; 4], [f32; 4], [f32; 4]);
 
 /// What [`Mark::prepare`] gets to upload with.
 pub struct PrepareContext<'a> {
-    pub device: &'a wgpu::Device,
-    pub queue: &'a wgpu::Queue,
+    pub device: &'a gpu::Device,
+    pub queue: &'a gpu::Queue,
     pub view: &'a MarkView,
     pub(crate) resources: &'a SharedResources,
 }
@@ -843,7 +889,7 @@ pub struct PrepareContext<'a> {
 impl PrepareContext<'_> {
     /// The renderer's clamp-to-edge, linearly filtered sampler, for a custom
     /// mark's bind group.
-    pub fn linear_sampler(&self) -> &wgpu::Sampler {
+    pub fn linear_sampler(&self) -> &gpu::Sampler {
         &self.resources.linear_sampler
     }
 }
@@ -875,7 +921,7 @@ pub trait Mark {
         false
     }
     /// An index buffer for a mark with no instanced geometry, and its count.
-    fn index_buffer(&self) -> Option<(&wgpu::Buffer, u32)> {
+    fn index_buffer(&self) -> Option<(&gpu::Buffer, u32)> {
         None
     }
 
@@ -935,11 +981,11 @@ pub trait Mark {
         None
     }
     /// The layout of bind group 2, for a custom kind that binds one.
-    fn extra_layout(&self) -> Option<&wgpu::BindGroupLayout> {
+    fn extra_layout(&self) -> Option<&gpu::BindGroupLayout> {
         None
     }
     /// Bind group 2, for kinds that sample a texture.
-    fn extra_bind_group(&self) -> Option<&wgpu::BindGroup> {
+    fn extra_bind_group(&self) -> Option<&gpu::BindGroup> {
         None
     }
     /// Kind-specific flags for the shader, `ids.z` bits 3 to 7.
@@ -965,7 +1011,7 @@ pub trait Mark {
     }
     /// Density marks: the accumulation target and composite bind group.
     #[doc(hidden)]
-    fn density(&self) -> Option<(&wgpu::TextureView, &wgpu::BindGroup)> {
+    fn density(&self) -> Option<(&gpu::TextureView, &gpu::BindGroup)> {
         None
     }
     /// Density marks that scale to their own maximum: each reduction level,
@@ -1066,18 +1112,18 @@ struct LayerUniforms {
 /// Layouts and samplers the mark types build their bind groups against.
 #[doc(hidden)]
 pub struct SharedResources {
-    pub(crate) frame_layout: wgpu::BindGroupLayout,
-    pub(crate) layer_layout: wgpu::BindGroupLayout,
+    pub(crate) frame_layout: gpu::BindGroupLayout,
+    pub(crate) layer_layout: gpu::BindGroupLayout,
     /// Group 2 of a glyph mark: atlas + sampler.
-    pub(crate) texture_layout: wgpu::BindGroupLayout,
+    pub(crate) texture_layout: gpu::BindGroupLayout,
     /// Group 2 of the density composite: field, ramp, sampler, maximum.
-    pub(crate) density_layout: wgpu::BindGroupLayout,
+    pub(crate) density_layout: gpu::BindGroupLayout,
     /// Group 0 of a density reduction step: the level before, a sampler.
-    pub(crate) reduce_layout: wgpu::BindGroupLayout,
-    pub(crate) nearest_sampler: wgpu::Sampler,
-    pub(crate) linear_sampler: wgpu::Sampler,
+    pub(crate) reduce_layout: gpu::BindGroupLayout,
+    pub(crate) nearest_sampler: gpu::Sampler,
+    pub(crate) linear_sampler: gpu::Sampler,
     /// Linear between mip levels too, for atlases that keep them.
-    pub(crate) mip_sampler: wgpu::Sampler,
+    pub(crate) mip_sampler: gpu::Sampler,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -1123,8 +1169,8 @@ struct PipelineKey {
 /// picked by dynamic offset: a frame of hundreds of tile layers is one
 /// buffer write rather than hundreds.
 struct LayerArena {
-    buffer: wgpu::Buffer,
-    bind_group: wgpu::BindGroup,
+    buffer: gpu::Buffer,
+    bind_group: gpu::BindGroup,
     /// Layers it holds.
     capacity: usize,
 }
@@ -1133,11 +1179,11 @@ struct LayerArena {
 /// for the life of the renderer.
 pub struct MarkRenderer {
     resources: SharedResources,
-    frame_uniform: wgpu::Buffer,
-    frame_bind_group: wgpu::BindGroup,
+    frame_uniform: gpu::Buffer,
+    frame_bind_group: gpu::BindGroup,
     /// The shadow map bound with the frame (a far-plane texel for none).
-    no_shadow: std::sync::Arc<wgpu::TextureView>,
-    shadow_map: std::sync::Arc<wgpu::TextureView>,
+    no_shadow: std::sync::Arc<gpu::TextureView>,
+    shadow_map: std::sync::Arc<gpu::TextureView>,
     shadow_map_dirty: bool,
     /// Draws are into a shadow map ([`set_shadow_pass`](Self::set_shadow_pass)).
     shadow_pass: bool,
@@ -1147,11 +1193,11 @@ pub struct MarkRenderer {
     layer_stride: u64,
     /// The layer uniforms of the prepare in progress.
     layer_bytes: Vec<u8>,
-    modules: HashMap<(MarkKind, u64, [u32; 2], bool), wgpu::ShaderModule>,
-    pipelines: HashMap<PipelineKey, wgpu::RenderPipeline>,
-    composites: HashMap<(wgpu::TextureFormat, u32, DepthKey), wgpu::RenderPipeline>,
-    composite_module: Option<wgpu::ShaderModule>,
-    reduce_pipeline: Option<wgpu::RenderPipeline>,
+    modules: HashMap<(MarkKind, u64, [u32; 2], bool), gpu::ShaderModule>,
+    pipelines: HashMap<PipelineKey, gpu::RenderPipeline>,
+    composites: HashMap<(wgpu::TextureFormat, u32, DepthKey), gpu::RenderPipeline>,
+    composite_module: Option<gpu::ShaderModule>,
+    reduce_pipeline: Option<gpu::RenderPipeline>,
     pick: picking::PickTargets,
     clearer: Option<clear::Clearer>,
 }
@@ -1263,19 +1309,19 @@ fn depth_state(depth: DepthKey) -> Option<wgpu::DepthStencilState> {
 
 impl MarkRenderer {
     fn frame_group(
-        device: &wgpu::Device,
-        layout: &wgpu::BindGroupLayout,
-        uniform: &wgpu::Buffer,
-        shadow: &wgpu::TextureView,
-        sampler: &wgpu::Sampler,
-    ) -> wgpu::BindGroup {
-        device.create_bind_group(&wgpu::BindGroupDescriptor {
+        device: &gpu::Device,
+        layout: &gpu::BindGroupLayout,
+        uniform: &gpu::Buffer,
+        shadow: &gpu::TextureView,
+        sampler: &gpu::Sampler,
+    ) -> gpu::BindGroup {
+        device.create_bind_group(&gpu::BindGroupDescriptor {
             label: Some("threers marks frame bind group"),
             layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: uniform.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(shadow) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(sampler) },
+                gpu::BindGroupEntry { binding: 0, resource: uniform.as_entire_binding() },
+                gpu::BindGroupEntry { binding: 1, resource: gpu::BindingResource::TextureView(shadow) },
+                gpu::BindGroupEntry { binding: 2, resource: gpu::BindingResource::Sampler(sampler) },
             ],
         })
     }
@@ -1284,6 +1330,11 @@ impl MarkRenderer {
     /// packed depths drawn with [`set_shadow_pass`](Self::set_shadow_pass)
     /// on (`None`: none).
     pub fn set_shadow_map(&mut self, map: Option<std::sync::Arc<wgpu::TextureView>>) {
+        self.set_shadow_map_view(map.map(|m| std::sync::Arc::new(gpu::TextureView::from(&*m))));
+    }
+
+    /// [`set_shadow_map`](Self::set_shadow_map) for a view of either backend.
+    pub fn set_shadow_map_view(&mut self, map: Option<std::sync::Arc<gpu::TextureView>>) {
         let map = map.unwrap_or_else(|| self.no_shadow.clone());
         if !std::sync::Arc::ptr_eq(&map, &self.shadow_map) {
             self.shadow_map = map;
@@ -1308,6 +1359,11 @@ impl MarkRenderer {
     }
 
     pub fn new(device: &wgpu::Device) -> Self {
+        Self::new_on(&gpu::Gpu::from(device))
+    }
+
+    /// A renderer on `gpu` — wgpu, or the native Metal backend.
+    pub fn new_on(device: &gpu::Gpu) -> Self {
         let frame_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("threers marks frame bgl"),
             // The frame's uniforms, and the scene's shadow map.
@@ -1428,8 +1484,8 @@ impl MarkRenderer {
     /// Upload everything `marks` need for `view`, and give each its pick id.
     fn prepare_all(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        device: &gpu::Device,
+        queue: &gpu::Queue,
         view: &MarkView,
         marks: &mut [&mut dyn Mark],
     ) {
@@ -1558,12 +1614,12 @@ impl MarkRenderer {
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
-            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            let bind_group = device.create_bind_group(&gpu::BindGroupDescriptor {
                 label: Some("threers mark layer bind group"),
                 layout: &self.resources.layer_layout,
-                entries: &[wgpu::BindGroupEntry {
+                entries: &[gpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    resource: gpu::BindingResource::Buffer(gpu::BufferBinding {
                         buffer: &buffer,
                         offset: 0,
                         size: wgpu::BufferSize::new(LAYER_SIZE),
@@ -1582,7 +1638,7 @@ impl MarkRenderer {
     }
 
     /// The layer arena's bind group, after a prepare.
-    fn layer_bind_group(&self) -> &wgpu::BindGroup {
+    fn layer_bind_group(&self) -> &gpu::BindGroup {
         &self.layers.as_ref().expect("prepared").bind_group
     }
 
@@ -1593,13 +1649,13 @@ impl MarkRenderer {
 
     fn module(
         &mut self,
-        device: &wgpu::Device,
+        device: &gpu::Device,
         kind: MarkKind,
         hooks: &ShaderHooks,
         custom: [u32; 2],
         local: bool,
         custom_shader: Option<&CustomShader>,
-    ) -> &wgpu::ShaderModule {
+    ) -> &gpu::ShaderModule {
         self.modules
             .entry((kind, hooks.key(), custom, local))
             .or_insert_with(|| {
@@ -1609,14 +1665,14 @@ impl MarkRenderer {
                     (None, _) => shader::module_source_with(kind, hooks, custom, local),
                 };
                 dump_wgsl(&format!("{kind:?}"), &source);
-                device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                device.create_shader_module(gpu::ShaderModuleDescriptor {
                     label: Some("threers mark shader"),
-                    source: wgpu::ShaderSource::Wgsl(source.into()),
+                    source: gpu::ShaderSource::Wgsl(source.into()),
                 })
             })
     }
 
-    fn ensure_pipeline(&mut self, device: &wgpu::Device, key: &PipelineKey, mark: &mut dyn Mark) {
+    fn ensure_pipeline(&mut self, device: &gpu::Device, key: &PipelineKey, mark: &mut dyn Mark) {
         if self.pipelines.contains_key(key) {
             return;
         }
@@ -1696,7 +1752,7 @@ impl MarkRenderer {
             })
             .collect();
 
-        let mut groups: Vec<Option<&wgpu::BindGroupLayout>> = vec![
+        let mut groups: Vec<Option<&gpu::BindGroupLayout>> = vec![
             Some(&self.resources.frame_layout),
             Some(&self.resources.layer_layout),
         ];
@@ -1710,7 +1766,7 @@ impl MarkRenderer {
         } else if let Some(l) = mark.extra_layout() {
             groups.push(Some(l));
         }
-        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        let layout = device.create_pipeline_layout(&gpu::PipelineLayoutDescriptor {
             label: Some("threers mark pipeline layout"),
             bind_group_layouts: &groups,
             immediate_size: 0,
@@ -1757,16 +1813,16 @@ impl MarkRenderer {
                 write_mask: wgpu::ColorWrites::ALL,
             }
         };
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let pipeline = device.create_render_pipeline(&gpu::RenderPipelineDescriptor {
             label: Some("threers mark pipeline"),
             layout: Some(&layout),
-            vertex: wgpu::VertexState {
+            vertex: gpu::VertexState {
                 module: &module,
                 entry_point: Some("vs_main"),
                 buffers: &buffers,
                 compilation_options: Default::default(),
             },
-            fragment: Some(wgpu::FragmentState {
+            fragment: Some(gpu::FragmentState {
                 module: &module,
                 entry_point: Some(if key.pick {
                     "fs_pick"
@@ -1816,7 +1872,7 @@ impl MarkRenderer {
 
     fn ensure_composite(
         &mut self,
-        device: &wgpu::Device,
+        device: &gpu::Device,
         format: wgpu::TextureFormat,
         samples: u32,
         depth: DepthKey,
@@ -1827,13 +1883,13 @@ impl MarkRenderer {
         let module = self
             .composite_module
             .get_or_insert_with(|| {
-                device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                device.create_shader_module(gpu::ShaderModuleDescriptor {
                     label: Some("threers density composite"),
-                    source: wgpu::ShaderSource::Wgsl(shader::composite_source().into()),
+                    source: gpu::ShaderSource::Wgsl(shader::composite_source().into()),
                 })
             })
             .clone();
-        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        let layout = device.create_pipeline_layout(&gpu::PipelineLayoutDescriptor {
             label: Some("threers density composite layout"),
             bind_group_layouts: &[
                 Some(&self.resources.frame_layout),
@@ -1842,16 +1898,16 @@ impl MarkRenderer {
             ],
             immediate_size: 0,
         });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let pipeline = device.create_render_pipeline(&gpu::RenderPipelineDescriptor {
             label: Some("threers density composite pipeline"),
             layout: Some(&layout),
-            vertex: wgpu::VertexState {
+            vertex: gpu::VertexState {
                 module: &module,
                 entry_point: Some("vs_main"),
                 buffers: &[],
                 compilation_options: Default::default(),
             },
-            fragment: Some(wgpu::FragmentState {
+            fragment: Some(gpu::FragmentState {
                 module: &module,
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
@@ -1874,30 +1930,30 @@ impl MarkRenderer {
     }
 
     /// The max-of-4×4 step a density field's maximum is reduced by.
-    fn ensure_reduce(&mut self, device: &wgpu::Device) {
+    fn ensure_reduce(&mut self, device: &gpu::Device) {
         if self.reduce_pipeline.is_some() {
             return;
         }
-        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        let module = device.create_shader_module(gpu::ShaderModuleDescriptor {
             label: Some("threers density reduce"),
-            source: wgpu::ShaderSource::Wgsl(shader::reduce_source().into()),
+            source: gpu::ShaderSource::Wgsl(shader::reduce_source().into()),
         });
-        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        let layout = device.create_pipeline_layout(&gpu::PipelineLayoutDescriptor {
             label: Some("threers density reduce layout"),
             bind_group_layouts: &[Some(&self.resources.reduce_layout)],
             immediate_size: 0,
         });
         self.reduce_pipeline = Some(device.create_render_pipeline(
-            &wgpu::RenderPipelineDescriptor {
+            &gpu::RenderPipelineDescriptor {
                 label: Some("threers density reduce pipeline"),
                 layout: Some(&layout),
-                vertex: wgpu::VertexState {
+                vertex: gpu::VertexState {
                     module: &module,
                     entry_point: Some("vs_main"),
                     buffers: &[],
                     compilation_options: Default::default(),
                 },
-                fragment: Some(wgpu::FragmentState {
+                fragment: Some(gpu::FragmentState {
                     module: &module,
                     entry_point: Some("fs_main"),
                     targets: &[Some(wgpu::ColorTargetState {
@@ -1965,9 +2021,9 @@ impl MarkRenderer {
 
     /// Record one mark's draw into `pass`.
     fn record(
-        pass: &mut wgpu::RenderPass<'_>,
-        pipeline: &wgpu::RenderPipeline,
-        layers: &wgpu::BindGroup,
+        pass: &mut gpu::RenderPass<'_>,
+        pipeline: &gpu::RenderPipeline,
+        layers: &gpu::BindGroup,
         mark: &mut dyn Mark,
     ) {
         let count = mark.instance_count() as u32;
@@ -1986,7 +2042,7 @@ impl MarkRenderer {
             slot = 1;
         }
         let kind = mark.kind();
-        let mut buffers: Vec<wgpu::Buffer> = mark
+        let mut buffers: Vec<gpu::Buffer> = mark
             .columns()
             .iter()
             .map(|c| c.buffer.clone().expect("uploaded"))
@@ -2024,6 +2080,12 @@ impl MarkRenderer {
         view: &MarkView,
         marks: &mut [&mut dyn Mark],
     ) {
+        self.draw_on(&gpu::Gpu::from((device, queue)), target, view, marks);
+    }
+
+    /// [`draw`](Self::draw) on `gpu` — the one this renderer was made on.
+    pub fn draw_on(&mut self, gpu: &gpu::Gpu, target: &MarkTarget, view: &MarkView, marks: &mut [&mut dyn Mark]) {
+        let (device, queue) = (gpu, gpu);
         let encode = crate::renderer::shader_applies_transfer(target.format);
         queue.write_buffer(
             &self.frame_uniform,
@@ -2125,9 +2187,9 @@ impl MarkRenderer {
                 );
                 {
                     let (field, _) = m.density().unwrap();
-                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    let mut pass = encoder.begin_render_pass(&gpu::RenderPassDescriptor {
                         label: Some("threers density field"),
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        color_attachments: &[Some(gpu::RenderPassColorAttachment {
                             view: field,
                             depth_slice: None,
                             resolve_target: None,
@@ -2155,9 +2217,9 @@ impl MarkRenderer {
                         .as_ref()
                         .expect("built with the pipelines");
                     for level in levels {
-                        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        let mut pass = encoder.begin_render_pass(&gpu::RenderPassDescriptor {
                             label: Some("threers density reduce"),
-                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            color_attachments: &[Some(gpu::RenderPassColorAttachment {
                                 view: &level.target,
                                 depth_slice: None,
                                 resolve_target: None,
@@ -2194,22 +2256,22 @@ impl MarkRenderer {
     }
 
     fn begin_target_pass<'e>(
-        encoder: &'e mut wgpu::CommandEncoder,
+        encoder: &'e mut gpu::CommandEncoder,
         target: &MarkTarget<'_>,
-    ) -> wgpu::RenderPass<'e> {
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+    ) -> gpu::RenderPass<'e> {
+        let mut pass = encoder.begin_render_pass(&gpu::RenderPassDescriptor {
             label: Some("threers marks pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: target.color,
+            color_attachments: &[Some(gpu::RenderPassColorAttachment {
+                view: &target.color,
                 depth_slice: None,
-                resolve_target: target.resolve,
+                resolve_target: target.resolve.as_ref(),
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Load,
                     store: wgpu::StoreOp::Store,
                 },
             })],
-            depth_stencil_attachment: target.depth.map(|d| {
-                wgpu::RenderPassDepthStencilAttachment {
+            depth_stencil_attachment: target.depth.as_ref().map(|d| {
+                gpu::RenderPassDepthStencilAttachment {
                     view: d,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Load,
@@ -2241,6 +2303,12 @@ impl MarkRenderer {
         color: Option<wgpu::Color>,
         depth: Option<f32>,
     ) {
+        self.clear_on(&gpu::Gpu::from((device, queue)), target, color, depth);
+    }
+
+    /// [`clear`](Self::clear) on `gpu`.
+    pub fn clear_on(&mut self, gpu: &gpu::Gpu, target: &MarkTarget, color: Option<wgpu::Color>, depth: Option<f32>) {
+        let (device, queue) = (gpu, gpu);
         self.clearer.get_or_insert_with(|| clear::Clearer::new(device)).clear(device, queue, target, color, depth);
     }
 }

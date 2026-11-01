@@ -327,7 +327,7 @@ fn slice_color(value : vec4<u32>, params : array<vec4<f32>, 4>) -> vec4<f32> {
         wgpu::Extent3d { width: 4, height: 1, depth_or_array_layers: 1 },
     );
     let (texture, view) = target(&gpu.device);
-    let binding = slices.create_binding_with_lookup(&gpu.device, &volume, &table.create_view(&Default::default()));
+    let binding = slices.create_binding_with_lookup(&gpu.device, &volume, table.create_view(&Default::default()));
     slices.update(&gpu.queue, &binding, &SliceParams::window(whole_slice(), 0.0, 1.0));
     let mut encoder = gpu.device.create_command_encoder(&Default::default());
     drop(fullscreen::begin(&mut encoder, &view, fullscreen::Load::Clear));

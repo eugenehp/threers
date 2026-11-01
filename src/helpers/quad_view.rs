@@ -213,8 +213,9 @@ macro_rules! forward_viewport_control {
 }
 
 forward_viewport_control!(Renderer);
-#[cfg(all(feature = "metal", any(target_os = "macos", target_os = "ios")))]
-forward_viewport_control!(crate::metal::MetalRenderer);
+cfg_metal! {
+    forward_viewport_control!(crate::metal::MetalRenderer);
+}
 
 /// Something the panes can be drawn into: a renderer plus the target it
 /// writes. Implemented for [`HeadlessRenderer`](crate::HeadlessRenderer) and
@@ -266,85 +267,89 @@ impl PaneSurface for crate::HeadlessRenderer {
     }
 }
 
-/// The Metal headless renderer as a pane target. A render or clear that fails
-/// is logged and the pane skipped — [`PaneSurface`] has no error channel.
-#[cfg(all(feature = "metal", any(target_os = "macos", target_os = "ios")))]
-impl PaneSurface for crate::metal::MetalHeadlessRenderer {
-    fn renderer(&mut self) -> &mut dyn ViewportControl {
-        crate::metal::MetalHeadlessRenderer::renderer(self)
-    }
-    fn draw(&mut self, scene: &mut Scene, camera: &dyn Camera) {
-        if let Err(e) = self.render(scene, camera) {
-            log::warn!("quad view: metal pane render failed: {e}");
+cfg_metal! {
+    /// The Metal headless renderer as a pane target. A render or clear that fails
+    /// is logged and the pane skipped — [`PaneSurface`] has no error channel.
+    impl PaneSurface for crate::metal::MetalHeadlessRenderer {
+        fn renderer(&mut self) -> &mut dyn ViewportControl {
+            crate::metal::MetalHeadlessRenderer::renderer(self)
         }
-    }
-    fn clear(&mut self, color: Color, alpha: f32) {
-        if let Err(e) = crate::metal::MetalHeadlessRenderer::clear(self, color, alpha) {
-            log::warn!("quad view: metal clear failed: {e}");
+        fn draw(&mut self, scene: &mut Scene, camera: &dyn Camera) {
+            if let Err(e) = self.render(scene, camera) {
+                log::warn!("quad view: metal pane render failed: {e}");
+            }
+        }
+        fn clear(&mut self, color: Color, alpha: f32) {
+            if let Err(e) = crate::metal::MetalHeadlessRenderer::clear(self, color, alpha) {
+                log::warn!("quad view: metal clear failed: {e}");
+            }
         }
     }
 }
 
-/// A [`MetalRenderer`](crate::metal::MetalRenderer) and the attachments it
-/// draws into this frame — the Metal [`ViewSurface`], e.g. for a window's
-/// [`SurfaceFrame`](crate::metal::SurfaceFrame).
-///
-/// Every pane is its own render on its own command buffer, so the drawable
-/// must not be presented by each of them: the surface draws with it stripped,
-/// and [`present`](Self::present) presents it once at the end.
-///
-/// ```no_run
-/// # #[cfg(all(feature = "metal", target_os = "macos"))]
-/// # fn frame(surface: &threers::metal::MetalSurface, renderer: &mut threers::metal::MetalRenderer,
-/// #          quad: &mut threers::helpers::QuadView, scene: &mut threers::Scene,
-/// #          persp: &threers::PerspectiveCamera) {
-/// use threers::helpers::MetalViewSurface;
-/// if let Some(frame) = surface.next_frame() {
-///     let mut target = MetalViewSurface::new(renderer, frame.attachments());
-///     quad.render(&mut target, scene, persp);
-///     target.present().unwrap();
-/// }
-/// # }
-/// ```
-#[cfg(all(feature = "metal", any(target_os = "macos", target_os = "ios")))]
-pub struct MetalViewSurface<'a> {
-    renderer: &'a mut crate::metal::MetalRenderer,
-    pass: crate::metal::PassAttachments,
-}
-
-#[cfg(all(feature = "metal", any(target_os = "macos", target_os = "ios")))]
-impl<'a> MetalViewSurface<'a> {
-    /// Also tells the renderer the target's size, which
-    /// [`QuadView::render`] lays the panes out by.
-    pub fn new(
+cfg_metal! {
+    /// A [`MetalRenderer`](crate::metal::MetalRenderer) and the attachments it
+    /// draws into this frame — the Metal [`ViewSurface`], e.g. for a window's
+    /// [`SurfaceFrame`](crate::metal::SurfaceFrame).
+    ///
+    /// Every pane is its own render on its own command buffer, so the drawable
+    /// must not be presented by each of them: the surface draws with it stripped,
+    /// and [`present`](Self::present) presents it once at the end.
+    ///
+    /// ```no_run
+    /// # #[cfg(all(feature = "metal", target_os = "macos"))]
+    /// # fn frame(surface: &threers::metal::MetalSurface, renderer: &mut threers::metal::MetalRenderer,
+    /// #          quad: &mut threers::helpers::QuadView, scene: &mut threers::Scene,
+    /// #          persp: &threers::PerspectiveCamera) {
+    /// use threers::helpers::MetalViewSurface;
+    /// if let Some(frame) = surface.next_frame() {
+    ///     let mut target = MetalViewSurface::new(renderer, frame.attachments());
+    ///     quad.render(&mut target, scene, persp);
+    ///     target.present().unwrap();
+    /// }
+    /// # }
+    /// ```
+    pub struct MetalViewSurface<'a> {
         renderer: &'a mut crate::metal::MetalRenderer,
         pass: crate::metal::PassAttachments,
-    ) -> Self {
-        let (w, h) = pass.size();
-        renderer.set_drawing_buffer_size(w, h);
-        Self { renderer, pass }
-    }
-
-    /// Present the pass's drawable, if it has one — after the last pane.
-    pub fn present(self) -> Result<(), crate::metal::MetalError> {
-        self.renderer.present(&self.pass)
     }
 }
 
-#[cfg(all(feature = "metal", any(target_os = "macos", target_os = "ios")))]
-impl PaneSurface for MetalViewSurface<'_> {
-    fn renderer(&mut self) -> &mut dyn ViewportControl {
-        self.renderer
-    }
-    fn draw(&mut self, scene: &mut Scene, camera: &dyn Camera) {
-        let pass = self.pass.without_drawable();
-        if let Err(e) = self.renderer.render(scene, camera, &pass) {
-            log::warn!("quad view: metal pane render failed: {e}");
+cfg_metal! {
+    impl<'a> MetalViewSurface<'a> {
+        /// Also tells the renderer the target's size, which
+        /// [`QuadView::render`] lays the panes out by.
+        pub fn new(
+            renderer: &'a mut crate::metal::MetalRenderer,
+            pass: crate::metal::PassAttachments,
+        ) -> Self {
+            let (w, h) = pass.size();
+            renderer.set_drawing_buffer_size(w, h);
+            Self { renderer, pass }
+        }
+
+        /// Present the pass's drawable, if it has one — after the last pane.
+        pub fn present(self) -> Result<(), crate::metal::MetalError> {
+            self.renderer.present(&self.pass)
         }
     }
-    fn clear(&mut self, color: Color, alpha: f32) {
-        if let Err(e) = self.renderer.clear(&self.pass, color, alpha) {
-            log::warn!("quad view: metal clear failed: {e}");
+}
+
+cfg_metal! {
+    impl PaneSurface for MetalViewSurface<'_> {
+        fn renderer(&mut self) -> &mut dyn ViewportControl {
+            self.renderer
+        }
+        fn draw(&mut self, scene: &mut Scene, camera: &dyn Camera) {
+            let pass = self.pass.without_drawable();
+            if let Err(e) = self.renderer.render(scene, camera, &pass) {
+                log::warn!("quad view: metal pane render failed: {e}");
+            }
+        }
+        fn clear(&mut self, color: Color, alpha: f32) {
+            if let Err(e) = self.renderer.clear(&self.pass, color, alpha) {
+                log::warn!("quad view: metal clear failed: {e}");
+            }
         }
     }
 }
@@ -755,7 +760,7 @@ impl QuadView {
     /// [`backgrounds`](Self::backgrounds) do not apply: gaps and panes share
     /// the scene's background. Use these when the scene is heavy and plain
     /// backgrounds will do; use `render` otherwise.
-    #[cfg(all(feature = "metal", any(target_os = "macos", target_os = "ios")))]
+    #[cfg(metal_backend)]
     pub fn metal_views(
         &mut self,
         perspective: &PerspectiveCamera,
