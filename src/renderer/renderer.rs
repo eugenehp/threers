@@ -8,6 +8,7 @@ use bytemuck::{Pod, Zeroable};
 use crate::lights::shadow::{cascade_frusta, shadow_layer_size, Caster, MAX_SHADOW_RECORDS};
 use std::collections::HashMap;
 use std::sync::Arc;
+use super::pipeline_state::Pipeline;
 
 use super::gpu_mesh::{geom_cache_key, GpuMesh};
 use super::gpu_timer::GpuTimer;
@@ -692,9 +693,9 @@ fn variant_pipeline(
     variants: &HashMap<super::material_maps::MapVariant, (wgpu::ShaderModule, wgpu::BindGroupLayout)>,
     device: &wgpu::Device,
     main: &wgpu::ShaderModule,
-    base: &wgpu::RenderPipeline,
+    base: &Pipeline,
     v: Option<super::material_maps::MapVariant>,
-) -> wgpu::RenderPipeline {
+) -> Pipeline {
     let Some(v) = v else {
         return base.clone();
     };
@@ -744,12 +745,12 @@ fn shadow_cull_point(side: u32) -> Option<wgpu::Face> {
 }
 
 struct ShadowCutPipelines {
-    dir: wgpu::RenderPipeline,
-    spot: wgpu::RenderPipeline,
-    dir_skinned: wgpu::RenderPipeline,
-    spot_skinned: wgpu::RenderPipeline,
-    dir_instanced: wgpu::RenderPipeline,
-    spot_instanced: wgpu::RenderPipeline,
+    dir: Pipeline,
+    spot: Pipeline,
+    dir_skinned: Pipeline,
+    spot_skinned: Pipeline,
+    dir_instanced: Pipeline,
+    spot_instanced: Pipeline,
 }
 
 struct CachedGpuMesh {
@@ -1035,50 +1036,82 @@ impl<K, V> std::ops::DerefMut for IdentityKeyed<K, V> {
 }
 
 /// GPU renderer: scene draws, shadow maps, environment sampling, post-fx.
+/// How a [`Renderer`] builds its pipelines — see [`Renderer::with_options`].
+#[derive(Clone, Debug, Default)]
+#[non_exhaustive]
+pub struct RendererOptions {
+    /// Build the initial pipelines on first use rather than in the
+    /// constructor ([`Renderer::new_lazy`]). [`Renderer::warm_up`] builds
+    /// them ahead of time, on any thread.
+    pub lazy: bool,
+    /// Build every pipeline the renderer makes through this cache. Load one
+    /// from wherever the app keeps it and save it after a warm-up, and the
+    /// next run skips the driver's shader compilation — see
+    /// [`PipelineCache`](crate::renderer::PipelineCache). Needs
+    /// `Features::PIPELINE_CACHE` (Vulkan); `None` elsewhere.
+    pub pipeline_cache: Option<wgpu::PipelineCache>,
+}
+
+impl RendererOptions {
+    /// Initial pipelines on first use.
+    pub fn lazy(mut self, lazy: bool) -> Self {
+        self.lazy = lazy;
+        self
+    }
+
+    /// Pipelines through `cache`: a threers
+    /// [`PipelineCache`](crate::renderer::PipelineCache) (`&cache`, or the
+    /// `&Option` its `open` returns), a `wgpu::PipelineCache`, or `None`.
+    pub fn pipeline_cache(mut self, cache: impl Into<Option<wgpu::PipelineCache>>) -> Self {
+        self.pipeline_cache = cache.into();
+        self
+    }
+}
+
 pub struct Renderer {
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
-    pipeline_tri: wgpu::RenderPipeline,
-    pipeline_tri_alpha: wgpu::RenderPipeline,
+    pipeline_tri: Pipeline,
+    pipeline_tri_alpha: Pipeline,
     // Single-layer glass (depth prepass + LessEqual color pass), sRGB + f16.
-    pipeline_glass_depth: wgpu::RenderPipeline,
-    pipeline_glass_color: wgpu::RenderPipeline,
-    pipeline_glass_depth_f16: wgpu::RenderPipeline,
-    pipeline_glass_color_f16: wgpu::RenderPipeline,
-    pipeline_glass_depth_msaa: wgpu::RenderPipeline,
-    pipeline_glass_color_msaa: wgpu::RenderPipeline,
+    pipeline_glass_depth: Pipeline,
+    pipeline_glass_color: Pipeline,
+    pipeline_glass_depth_f16: Pipeline,
+    pipeline_glass_color_f16: Pipeline,
+    pipeline_glass_depth_msaa: Pipeline,
+    pipeline_glass_color_msaa: Pipeline,
     /// The tint half of the glass colour pass (`GLASS_OUTPUT` 1), drawn just
     /// before the colour half: what is behind times the glass's per-channel
     /// transmittance.
-    pipeline_glass_tint: wgpu::RenderPipeline,
-    pipeline_glass_tint_f16: wgpu::RenderPipeline,
-    pipeline_glass_tint_msaa: wgpu::RenderPipeline,
+    pipeline_glass_tint: Pipeline,
+    pipeline_glass_tint_f16: Pipeline,
+    pipeline_glass_tint_msaa: Pipeline,
     /// `[depth, color, tint]` glass for the encoded-blend pass under MSAA
     /// (sRGB targets only, as `encoded_blend_pipelines`).
-    encoded_glass_msaa: Option<[wgpu::RenderPipeline; 3]>,
+    encoded_glass_msaa: Option<[Pipeline; 3]>,
     // Weighted-blended OIT: accumulation pipeline (MRT) + resolve (sRGB + f16).
     /// Order-independent transparency accumulation. `None` where attachments
     /// cannot blend independently — see
     /// [`caps::supports_independent_blend`](crate::renderer::caps::supports_independent_blend).
-    pipeline_oit: Option<wgpu::RenderPipeline>,
+    pipeline_oit: Option<Pipeline>,
     /// `[tint, light]`: the OIT composite's two halves.
-    pipeline_oit_resolve: [wgpu::RenderPipeline; 2],
-    pipeline_oit_resolve_f16: [wgpu::RenderPipeline; 2],
-    pipeline_oit_resolve_msaa: [wgpu::RenderPipeline; 2],
+    pipeline_oit_resolve: [Pipeline; 2],
+    pipeline_oit_resolve_f16: [Pipeline; 2],
+    pipeline_oit_resolve_msaa: [Pipeline; 2],
     /// OIT accumulation under MSAA, and its multisampled `(width, height,
     /// accum, reveal)`, resolved into `oit_targets` at the end of the pass.
-    pipeline_oit_msaa: Option<wgpu::RenderPipeline>,
+    pipeline_oit_msaa: Option<Pipeline>,
     oit_msaa_targets: Option<(u32, u32, wgpu::TextureView, wgpu::TextureView)>,
     /// As `msaa_targets_spare`, for these.
     oit_msaa_targets_spare: Option<(u32, u32, wgpu::TextureView, wgpu::TextureView)>,
     /// The multisampled opaque depth to the single-sampled one, for the
     /// refraction pass under MSAA (`DEPTH_RESOLVE_SHADER`). `None` where a
     /// shader cannot read a multisampled texture.
-    depth_resolve: Option<(wgpu::BindGroupLayout, wgpu::RenderPipeline)>,
+    depth_resolve: Option<(wgpu::BindGroupLayout, Pipeline)>,
     /// Where depth textures cannot be copied (WebGL2): a fullscreen pass that
     /// samples one depth and writes it as another's, with its layout and the
     /// nearest sampler it reads through.
-    depth_copy: Option<(wgpu::BindGroupLayout, wgpu::RenderPipeline, wgpu::Sampler)>,
+    depth_copy: Option<(wgpu::BindGroupLayout, Pipeline, wgpu::Sampler)>,
     oit_resolve_bgl: wgpu::BindGroupLayout,
     // accum(Rgba16F) + revealage(R16F) targets + the resolve bind group, keyed by size.
     oit_targets: Option<(
@@ -1093,28 +1126,28 @@ pub struct Renderer {
     /// No-cull triangle pipeline, used for `side: BackSide` / `side: DoubleSide`
     /// materials. Without this, three.js apps using BackSide for skybox-style
     /// "inside of a box" rendering silently get culled-to-nothing.
-    pipeline_tri_nocull: wgpu::RenderPipeline,
+    pipeline_tri_nocull: Pipeline,
     /// Sky dome: no cull, no depth write, LessEqual (matches three.js Sky depthWrite:false).
-    pipeline_tri_sky: wgpu::RenderPipeline,
-    pipeline_tri_wire: wgpu::RenderPipeline,
-    pipeline_line: wgpu::RenderPipeline,
-    pipeline_point: wgpu::RenderPipeline,
-    pipeline_point_alpha: wgpu::RenderPipeline,
+    pipeline_tri_sky: Pipeline,
+    pipeline_tri_wire: Pipeline,
+    pipeline_line: Pipeline,
+    pipeline_point: Pipeline,
+    pipeline_point_alpha: Pipeline,
     /// `LineSegments` wider than a pixel (`vs_wide_lines`), opaque and blended.
-    pipeline_wide_line: wgpu::RenderPipeline,
-    pipeline_wide_line_alpha: wgpu::RenderPipeline,
-    pipeline_sprite: wgpu::RenderPipeline,
+    pipeline_wide_line: Pipeline,
+    pipeline_wide_line_alpha: Pipeline,
+    pipeline_sprite: Pipeline,
     // Hardware-MSAA variants of the opaque forward pipelines (surface path).
-    pipeline_tri_msaa: wgpu::RenderPipeline,
-    pipeline_skinned_msaa: wgpu::RenderPipeline,
-    pipeline_instanced_msaa: wgpu::RenderPipeline,
-    pipeline_tri_alpha_msaa: wgpu::RenderPipeline,
-    pipeline_tri_nocull_msaa: wgpu::RenderPipeline,
-    pipeline_tri_sky_msaa: wgpu::RenderPipeline,
-    pipeline_tri_wire_msaa: wgpu::RenderPipeline,
-    pipeline_line_msaa: wgpu::RenderPipeline,
-    pipeline_point_msaa: wgpu::RenderPipeline,
-    pipeline_wide_line_msaa: wgpu::RenderPipeline,
+    pipeline_tri_msaa: Pipeline,
+    pipeline_skinned_msaa: Pipeline,
+    pipeline_instanced_msaa: Pipeline,
+    pipeline_tri_alpha_msaa: Pipeline,
+    pipeline_tri_nocull_msaa: Pipeline,
+    pipeline_tri_sky_msaa: Pipeline,
+    pipeline_tri_wire_msaa: Pipeline,
+    pipeline_line_msaa: Pipeline,
+    pipeline_point_msaa: Pipeline,
+    pipeline_wide_line_msaa: Pipeline,
     /// MSAA sample count for the surface pass: 1 = off, else `MSAA_SAMPLES`.
     msaa: u32,
     /// See [`set_specular_antialiasing`](Self::set_specular_antialiasing).
@@ -1143,66 +1176,66 @@ pub struct Renderer {
     /// What FXAA reads from in that fallback: a copy of the target.
     fxaa_scratch: Option<(wgpu::Texture, wgpu::TextureView)>,
     /// Half-float color-target variants for EffectComposer / postfx RTs.
-    pipeline_tri_f16: wgpu::RenderPipeline,
-    pipeline_tri_alpha_f16: wgpu::RenderPipeline,
-    pipeline_tri_nocull_f16: wgpu::RenderPipeline,
-    pipeline_tri_sky_f16: wgpu::RenderPipeline,
-    pipeline_tri_wire_f16: wgpu::RenderPipeline,
-    pipeline_line_f16: wgpu::RenderPipeline,
-    pipeline_point_f16: wgpu::RenderPipeline,
-    pipeline_point_alpha_f16: wgpu::RenderPipeline,
-    pipeline_wide_line_f16: wgpu::RenderPipeline,
-    pipeline_wide_line_alpha_f16: wgpu::RenderPipeline,
-    pipeline_sprite_f16: wgpu::RenderPipeline,
-    pipeline_instanced_f16: wgpu::RenderPipeline,
-    pipeline_skinned_f16: wgpu::RenderPipeline,
-    pipeline_shadow: wgpu::RenderPipeline,
-    pipeline_shadow_spot: wgpu::RenderPipeline,
-    pipeline_shadow_point: wgpu::RenderPipeline,
+    pipeline_tri_f16: Pipeline,
+    pipeline_tri_alpha_f16: Pipeline,
+    pipeline_tri_nocull_f16: Pipeline,
+    pipeline_tri_sky_f16: Pipeline,
+    pipeline_tri_wire_f16: Pipeline,
+    pipeline_line_f16: Pipeline,
+    pipeline_point_f16: Pipeline,
+    pipeline_point_alpha_f16: Pipeline,
+    pipeline_wide_line_f16: Pipeline,
+    pipeline_wide_line_alpha_f16: Pipeline,
+    pipeline_sprite_f16: Pipeline,
+    pipeline_instanced_f16: Pipeline,
+    pipeline_skinned_f16: Pipeline,
+    pipeline_shadow: Pipeline,
+    pipeline_shadow_spot: Pipeline,
+    pipeline_shadow_point: Pipeline,
     /// The three shadow passes for skinned casters: the posed mesh, on the
     /// skinned layout.
-    pipeline_shadow_skinned: wgpu::RenderPipeline,
-    pipeline_shadow_spot_skinned: wgpu::RenderPipeline,
-    pipeline_shadow_point_skinned: wgpu::RenderPipeline,
+    pipeline_shadow_skinned: Pipeline,
+    pipeline_shadow_spot_skinned: Pipeline,
+    pipeline_shadow_point_skinned: Pipeline,
     /// The three shadow passes for an `InstancedMesh` caster: the instance
     /// matrices (and per-instance morphs) from vertex slot 1.
-    pipeline_shadow_instanced: wgpu::RenderPipeline,
-    pipeline_shadow_spot_instanced: wgpu::RenderPipeline,
+    pipeline_shadow_instanced: Pipeline,
+    pipeline_shadow_spot_instanced: Pipeline,
     /// The directional and spot shadow pipelines for cut-out casters.
     shadow_cut: ShadowCutPipelines,
-    pipeline_shadow_point_instanced: wgpu::RenderPipeline,
-    pipeline_instanced: wgpu::RenderPipeline,
-    pipeline_skinned: wgpu::RenderPipeline,
+    pipeline_shadow_point_instanced: Pipeline,
+    pipeline_instanced: Pipeline,
+    pipeline_skinned: Pipeline,
     /// `wireframe: true` variants of the instanced and skinned pipelines:
     /// LineList over the mesh's wire index buffer, like `pipeline_tri_wire`.
-    pipeline_instanced_wire: wgpu::RenderPipeline,
-    pipeline_instanced_wire_f16: wgpu::RenderPipeline,
+    pipeline_instanced_wire: Pipeline,
+    pipeline_instanced_wire_f16: Pipeline,
     /// Transparent instanced and skinned draws: alpha-blended, no depth
     /// write, as `pipeline_tri_alpha` is for plain meshes.
-    pipeline_instanced_alpha: wgpu::RenderPipeline,
-    pipeline_instanced_alpha_f16: wgpu::RenderPipeline,
-    pipeline_skinned_alpha: wgpu::RenderPipeline,
-    pipeline_skinned_alpha_f16: wgpu::RenderPipeline,
+    pipeline_instanced_alpha: Pipeline,
+    pipeline_instanced_alpha_f16: Pipeline,
+    pipeline_skinned_alpha: Pipeline,
+    pipeline_skinned_alpha_f16: Pipeline,
     /// The blended draws' pipelines into the `Unorm` view of an sRGB target,
     /// for the encoded-blend pass (see `encoded_pass`): sprite, transparent
     /// instanced, transparent skinned. `None` on a target that is not sRGB.
-    encoded_blend_pipelines: Option<[wgpu::RenderPipeline; 8]>,
-    pipeline_skinned_wire: wgpu::RenderPipeline,
-    pipeline_skinned_wire_f16: wgpu::RenderPipeline,
+    encoded_blend_pipelines: Option<[Pipeline; 8]>,
+    pipeline_skinned_wire: Pipeline,
+    pipeline_skinned_wire_f16: Pipeline,
     /// Post-fx fullscreen-quad pipeline. Reads one input texture, writes to
     /// one output attachment, applies the effect selected by the postfx
     /// uniform's effect-kind field.
-    pipeline_postfx: wgpu::RenderPipeline,
+    pipeline_postfx: Pipeline,
     /// Additive-blend variant of the postfx pipeline. Used for bloom composite
     /// where the bloom contribution adds to the existing framebuffer content.
-    pipeline_postfx_add: wgpu::RenderPipeline,
+    pipeline_postfx_add: Pipeline,
     /// Outline overlay: SrcAlpha + One (three.js AdditiveBlending).
-    pipeline_postfx_outline_add: wgpu::RenderPipeline,
+    pipeline_postfx_outline_add: Pipeline,
     /// Multiply-blend variant (DstColor * SrcColor). Used for SSAO composite.
-    pipeline_postfx_multiply: wgpu::RenderPipeline,
+    pipeline_postfx_multiply: Pipeline,
     /// Half-float postfx variants for outline intermediates (Rgba16Float RTs).
-    pipeline_postfx_f16: wgpu::RenderPipeline,
-    pipeline_postfx_add_f16: wgpu::RenderPipeline,
+    pipeline_postfx_f16: Pipeline,
+    pipeline_postfx_add_f16: Pipeline,
     postfx_bgl: wgpu::BindGroupLayout,
     postfx_sampler: wgpu::Sampler,
     postfx_nearest_sampler: wgpu::Sampler,
@@ -1259,7 +1292,7 @@ pub struct Renderer {
     /// Those pipelines, by (topology code — see `build_biased_pipeline` —, target
     /// variant: 0 colour format, 1 half float, 2 multisampled; factor bits,
     /// units).
-    biased_pipelines: HashMap<(u8, u8, u32, i32), wgpu::RenderPipeline>,
+    biased_pipelines: HashMap<(u8, u8, u32, i32), Pipeline>,
     /// The descriptors of every material pipeline, and the variants built
     /// from them for materials with a non-default `depthTest` / `depthWrite`
     /// / `depthFunc` / `colorWrite`. See `pipeline_state`.
@@ -1273,7 +1306,7 @@ pub struct Renderer {
     encoded_scratch: Option<(u32, u32, wgpu::TextureView)>,
     /// The scratch copy's pipelines: in (sRGB target → `Unorm` scratch, bytes
     /// kept) and out (back again), with their bind group layout.
-    encoded_copy: Option<(wgpu::BindGroupLayout, wgpu::RenderPipeline, wgpu::RenderPipeline)>,
+    encoded_copy: Option<(wgpu::BindGroupLayout, Pipeline, Pipeline)>,
     /// Bind group layout for custom-shader draws: mesh uniform (binding 0) plus
     /// `ShaderMaterial` user data (binding 1 uniform + bindings 2-4 storage), all
     /// in @group(1) to stay within WebGPU's 4-bind-group limit.
@@ -1288,14 +1321,14 @@ pub struct Renderer {
     /// main layout leaves out.
     custom_ss_pipeline_layout: Option<wgpu::PipelineLayout>,
     /// Lazily-compiled custom-shader pipelines. See [`CustomPipelineKey`].
-    custom_pipelines: HashMap<CustomPipelineKey, wgpu::RenderPipeline>,
+    custom_pipelines: HashMap<CustomPipelineKey, Pipeline>,
     /// Transparent custom-shader pipelines into the `Unorm` view of an sRGB
     /// target, for the encoded-blend pass; keyed as `custom_pipelines` is,
     /// less the framebuffer flag.
-    custom_encoded_pipelines: HashMap<(u64, bool, bool, u32), wgpu::RenderPipeline>,
+    custom_encoded_pipelines: HashMap<(u64, bool, bool, u32), Pipeline>,
     /// Custom pipelines multisampled, for an opaque shader material in a
     /// frame drawn under MSAA; keyed as `custom_encoded_pipelines` is.
-    custom_msaa_pipelines: HashMap<(u64, bool, bool, u32), wgpu::RenderPipeline>,
+    custom_msaa_pipelines: HashMap<(u64, bool, bool, u32), Pipeline>,
     /// Shaders that would not compile. Remembered so the error is logged once
     /// rather than every frame, and so the draw is skipped rather than retried.
     custom_failed: std::collections::HashSet<CustomPipelineKey>,
@@ -1402,7 +1435,7 @@ pub struct Renderer {
     shadow_pass_buffer: Option<(wgpu::Buffer, wgpu::BindGroup)>,
     /// The opaque depth redrawn single-sampled (see `depth_replay` where it
     /// is built), and its pass uniform: the camera's view-projection.
-    depth_replay: Vec<wgpu::RenderPipeline>,
+    depth_replay: Vec<Pipeline>,
     depth_replay_pass: Option<(wgpu::Buffer, wgpu::BindGroup)>,
     /// Redraw the depth even where it could be resolved: so a test on a
     /// native device runs the path WebGL2 takes.
@@ -1539,17 +1572,17 @@ pub struct Renderer {
     /// How many layers overlapping refraction glass composites in.
     refraction_layers: usize,
     /// Depth-only pipeline rendering glass back faces (cull front) into ss_back_depth.
-    pipeline_ss_back_depth: wgpu::RenderPipeline,
+    pipeline_ss_back_depth: Pipeline,
     /// Fullscreen "sample one texture → write" pipeline (mip downsample + blit),
     /// one per framebuffer format.
-    pipeline_ss_blit: wgpu::RenderPipeline,
-    pipeline_ss_blit_f16: wgpu::RenderPipeline,
+    pipeline_ss_blit: Pipeline,
+    pipeline_ss_blit_f16: Pipeline,
     /// Glass surface pipelines (screen-space refraction/reflection).
-    pipeline_ss_glass: wgpu::RenderPipeline,
-    pipeline_ss_glass_f16: wgpu::RenderPipeline,
+    pipeline_ss_glass: Pipeline,
+    pipeline_ss_glass_f16: Pipeline,
     /// `fs_glass_shadow`: each light's shadow on the refracting surfaces,
     /// into `ss_glass_shadow`.
-    pipeline_glass_shadow: wgpu::RenderPipeline,
+    pipeline_glass_shadow: Pipeline,
     ss_glass_shadow: Option<(wgpu::Texture, wgpu::TextureView)>,
     /// BGL for the blit/downsample pipeline (texture + sampler).
     ss_blit_bgl: wgpu::BindGroupLayout,
@@ -1602,8 +1635,8 @@ pub struct Renderer {
     taa_uniform: wgpu::Buffer,
     taa_bgl: wgpu::BindGroupLayout,
     taa_sampler: wgpu::Sampler,
-    pipeline_taa: wgpu::RenderPipeline,
-    pipeline_taa_f16: wgpu::RenderPipeline,
+    pipeline_taa: Pipeline,
+    pipeline_taa_f16: Pipeline,
 
     color_format: wgpu::TextureFormat,
 }
@@ -2113,7 +2146,7 @@ fn build_custom_pipeline(
     samples: u32,
     alpha_to_coverage: bool,
     pipes: &mut super::pipeline_state::StatePipelines,
-) -> Result<wgpu::RenderPipeline, String> {
+) -> Result<Pipeline, String> {
     // Alpha-to-coverage needs samples to cover; single-sampled, the shader's
     // `coverage_alpha` cuts at half instead. And not with a shader that
     // writes its samples itself (`frag_out`, where `@builtin(sample_mask)`
@@ -3484,6 +3517,9 @@ impl Renderer {
 
     /// Create pipelines and default 1×1 fallback textures.
     ///
+    /// This eagerly constructs the initial pipelines. Use [`Self::new_lazy`]
+    /// to opt into pipeline creation on first use instead.
+    ///
     /// `color_format` is the swapchain or render-target format (typically
     /// `Rgba8Unorm` or `Rgba8UnormSrgb` on web, `Bgra8UnormSrgb` on some desktops).
     pub fn new(
@@ -3493,6 +3529,42 @@ impl Renderer {
         width: u32,
         height: u32,
     ) -> Self {
+        Self::with_options(device, queue, color_format, width, height, RendererOptions::default())
+    }
+
+    /// Defer initial render pipelines until first use. Shader modules, layouts,
+    /// textures and validation remain enabled. Pipeline validation errors and
+    /// driver compilation can occur at first draw instead of construction.
+    /// Warm representative scenes before exposing an interactive viewport.
+    pub fn new_lazy(
+        device: Arc<wgpu::Device>,
+        queue: Arc<wgpu::Queue>,
+        color_format: wgpu::TextureFormat,
+        width: u32,
+        height: u32,
+    ) -> Self {
+        Self::with_options(
+            device,
+            queue,
+            color_format,
+            width,
+            height,
+            RendererOptions { lazy: true, ..Default::default() },
+        )
+    }
+
+    /// [`new`](Self::new) or [`new_lazy`](Self::new_lazy), and optionally
+    /// through a `wgpu::PipelineCache` — see [`RendererOptions`].
+    pub fn with_options(
+        device: Arc<wgpu::Device>,
+        queue: Arc<wgpu::Queue>,
+        color_format: wgpu::TextureFormat,
+        width: u32,
+        height: u32,
+        options: RendererOptions,
+    ) -> Self {
+        let pipeline_source =
+            super::pipeline_state::PipelineSource::new(options.lazy, options.pipeline_cache);
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("threers shader"),
             source: wgpu::ShaderSource::Wgsl(super::shader::legacy_shader_source().into()),
@@ -4160,10 +4232,11 @@ impl Renderer {
         // keeps its descriptor so a material's `depthTest` / `depthWrite` /
         // `depthFunc` / `colorWrite` can be applied to it later — see
         // `pipeline_state`.
-        let state_pipes =
-            std::cell::RefCell::new(super::pipeline_state::StatePipelines::default());
+        let state_pipes = std::cell::RefCell::new(
+            super::pipeline_state::StatePipelines::with_source(pipeline_source.clone()),
+        );
         let record = |desc: &wgpu::RenderPipelineDescriptor| {
-            state_pipes.borrow_mut().create(&device, desc)
+            state_pipes.borrow_mut().create_initial(&device, desc)
         };
         // The layouts whose group 2 is the material's maps, registered so a
         // pipeline on them can be rebuilt for a material shader variant
@@ -4457,7 +4530,7 @@ impl Renderer {
             source: wgpu::ShaderSource::Wgsl(super::shader::SS_BLIT_SHADER.into()),
         });
         let make_ss_blit_pipeline = |fmt: wgpu::TextureFormat, label: &str| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            pipeline_source.create(&device, &wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(&ss_blit_layout),
                 vertex: wgpu::VertexState {
@@ -4590,7 +4663,7 @@ impl Renderer {
             source: wgpu::ShaderSource::Wgsl(super::shader::TAA_SHADER.into()),
         });
         let make_taa = |fmt: wgpu::TextureFormat, label: &str| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            pipeline_source.create(&device, &wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(&taa_layout),
                 vertex: wgpu::VertexState {
@@ -4761,7 +4834,7 @@ impl Renderer {
                     },
                 }
             };
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            pipeline_source.create(&device, &wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(&resolve_layout),
                 vertex: wgpu::VertexState {
@@ -4840,7 +4913,7 @@ impl Renderer {
                 bind_group_layouts: &[Some(&bgl)],
                 immediate_size: 0,
             });
-            let pipe = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            let pipe = pipeline_source.create(&device, &wgpu::RenderPipelineDescriptor {
                 label: Some("threers depth copy pipeline"),
                 layout: Some(&layout),
                 vertex: wgpu::VertexState { module: &module, entry_point: Some("vs"), buffers: &[], compilation_options: Default::default() },
@@ -4891,7 +4964,7 @@ impl Renderer {
                 bind_group_layouts: &[Some(&bgl)],
                 immediate_size: 0,
             });
-            let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            let pipeline = pipeline_source.create(&device, &wgpu::RenderPipelineDescriptor {
                 label: Some("threers depth resolve pipeline"),
                 layout: Some(&layout),
                 vertex: wgpu::VertexState {
@@ -5808,7 +5881,7 @@ impl Renderer {
                 cache: None,
             })
         };
-        let depth_replay: Vec<wgpu::RenderPipeline> =
+        let depth_replay: Vec<Pipeline> =
             [(0, false), (1, false), (2, false), (0, true), (1, true), (2, true)]
                 .iter()
                 .map(|&(w, c)| make_replay(w, c))
@@ -5922,7 +5995,7 @@ impl Renderer {
                 bind_group_layouts: &[Some(&postfx_bgl)],
                 immediate_size: 0,
             });
-        let pipeline_postfx = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let pipeline_postfx = pipeline_source.create(&device, &wgpu::RenderPipelineDescriptor {
             label: Some("threers postfx pipeline"),
             layout: Some(&postfx_pipeline_layout),
             vertex: wgpu::VertexState {
@@ -6030,7 +6103,7 @@ impl Renderer {
         let rgba_upload_view = rgba_upload_tex.create_view(&wgpu::TextureViewDescriptor::default());
         // Same pipeline as `pipeline_postfx`, but with additive blending so
         // the shader output adds to existing framebuffer pixels (bloom composite).
-        let pipeline_postfx_add = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let pipeline_postfx_add = pipeline_source.create(&device, &wgpu::RenderPipelineDescriptor {
             label: Some("threers postfx additive pipeline"),
             layout: Some(&postfx_pipeline_layout),
             vertex: wgpu::VertexState {
@@ -6063,7 +6136,7 @@ impl Renderer {
             cache: None,
         });
         let pipeline_postfx_outline_add =
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            pipeline_source.create(&device, &wgpu::RenderPipelineDescriptor {
                 label: Some("threers postfx outline additive pipeline"),
                 layout: Some(&postfx_pipeline_layout),
                 vertex: wgpu::VertexState {
@@ -6096,7 +6169,7 @@ impl Renderer {
                 cache: None,
             });
         let pipeline_postfx_multiply =
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            pipeline_source.create(&device, &wgpu::RenderPipelineDescriptor {
                 label: Some("threers postfx multiply pipeline"),
                 layout: Some(&postfx_pipeline_layout),
                 vertex: wgpu::VertexState {
@@ -6129,7 +6202,7 @@ impl Renderer {
                 cache: None,
             });
         let postfx_f16_format = wgpu::TextureFormat::Rgba16Float;
-        let pipeline_postfx_f16 = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let pipeline_postfx_f16 = pipeline_source.create(&device, &wgpu::RenderPipelineDescriptor {
             label: Some("threers postfx f16 pipeline"),
             layout: Some(&postfx_pipeline_layout),
             vertex: wgpu::VertexState {
@@ -6155,7 +6228,7 @@ impl Renderer {
             cache: None,
         });
         let pipeline_postfx_add_f16 =
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            pipeline_source.create(&device, &wgpu::RenderPipelineDescriptor {
                 label: Some("threers postfx additive f16 pipeline"),
                 layout: Some(&postfx_pipeline_layout),
                 vertex: wgpu::VertexState {
@@ -6883,6 +6956,75 @@ impl Renderer {
         self.cull_stats
     }
 
+    /// Initial pipelines a lazy renderer has not built yet; 0 for an eager
+    /// one, and once [`warm_up`](Self::warm_up) has run.
+    pub fn pending_pipelines(&self) -> usize {
+        self.state_pipelines.source().uncompiled().len()
+    }
+
+    /// Every initial pipeline not built yet, as a job that builds them —
+    /// on this thread or others; see [`PipelineWarmup`](super::PipelineWarmup).
+    /// Empty for an eager renderer.
+    ///
+    /// This covers the catalogue the constructor would have built. Variants
+    /// a material's state asks for (depth, colour write, culling, a custom
+    /// shader) are made at draw time; [`warm_scene`](Self::warm_scene) draws
+    /// a scene to build those.
+    pub fn warm_up(&self) -> super::PipelineWarmup {
+        super::PipelineWarmup::new(self.state_pipelines.source().uncompiled())
+    }
+
+    /// [`warm_up`](Self::warm_up), only for the pipelines whose label `keep`
+    /// accepts (`"threers mesh pipeline"`, say) — the paths an application
+    /// actually draws with.
+    pub fn warm_up_matching(&self, keep: impl Fn(&str) -> bool) -> super::PipelineWarmup {
+        let pipelines = self.state_pipelines.source().uncompiled();
+        super::PipelineWarmup::new(pipelines.into_iter().filter(|p| keep(p.label().unwrap_or(""))).collect())
+    }
+
+    /// The labels of the initial pipelines not built yet, for choosing what
+    /// [`warm_up_matching`](Self::warm_up_matching) keeps.
+    pub fn pending_pipeline_labels(&self) -> Vec<String> {
+        let mut labels: Vec<String> = self
+            .state_pipelines
+            .source()
+            .uncompiled()
+            .iter()
+            .map(|p| p.label().unwrap_or("").to_owned())
+            .collect();
+        labels.sort();
+        labels.dedup();
+        labels
+    }
+
+    /// Draw `scene` once into a throwaway target and wait for the GPU, so
+    /// every pipeline it needs — material-state variants included — exists
+    /// before the first frame anyone sees. Same size and format as this
+    /// renderer's real target; nothing is presented. **Native only.**
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn warm_scene(&mut self, scene: &mut Scene, camera: &dyn Camera) {
+        let (width, height) = self.drawing_buffer_size();
+        let target = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("threers warm-up target"),
+            size: wgpu::Extent3d { width: width.max(1), height: height.max(1), depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: self.color_format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+        self.render(scene, camera, &view, false);
+        let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+    }
+
+    /// The cache this renderer builds its pipelines through, if it was given
+    /// one ([`RendererOptions::pipeline_cache`]).
+    pub fn pipeline_cache(&self) -> Option<&wgpu::PipelineCache> {
+        self.state_pipelines.source().cache()
+    }
+
     pub fn color_format(&self) -> wgpu::TextureFormat {
         self.color_format
     }
@@ -7277,7 +7419,7 @@ fn fs_out(@builtin(position) p : vec4<f32>) -> @location(0) vec4<f32> {
             immediate_size: 0,
         });
         let pipe = |entry: &str, format: wgpu::TextureFormat| {
-            self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            self.state_pipelines.source().create_now(&self.device, &wgpu::RenderPipelineDescriptor {
                 label: Some("threers encoded blend copy"),
                 layout: Some(&layout),
                 vertex: wgpu::VertexState {
@@ -13660,7 +13802,7 @@ fn build_biased_pipeline(
     factor: f32,
     units: i32,
     pipes: &mut super::pipeline_state::StatePipelines,
-) -> wgpu::RenderPipeline {
+) -> Pipeline {
     let alpha = code == 1;
     let vertex_buffers = [Some(wgpu::VertexBufferLayout {
         array_stride: GpuMesh::VERTEX_STRIDE as wgpu::BufferAddress,

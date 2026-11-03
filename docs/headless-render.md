@@ -6,6 +6,46 @@ Part of the [threers](../README.md) documentation.
 
 Native-only. `HeadlessRenderer` owns the wgpu device and an offscreen target; `export_video` pipes RGBA frames to ffmpeg (or in-process GIF/APNG when `native-codec` is enabled).
 
+## Pipeline initialization
+
+Applications that own their wgpu device can choose when the main renderer's
+pipelines are compiled. `Renderer::new` creates the initial pipeline catalogue
+eagerly. `Renderer::new_lazy` retains those descriptors and creates each pipeline
+on first use, sharing the result across cloned handles and subsequent draws:
+
+```rust
+let mut renderer = threers::Renderer::new_lazy(
+    device.clone(), queue.clone(), color_format, width, height,
+);
+```
+
+Both constructors create the shader modules, layouts, default textures and
+other renderer resources. Lazy initialization preserves the rendering paths,
+material state and sample counts; it does not disable wgpu validation. Initial
+pipeline validation errors and driver compilation can occur on the first draw
+instead of during construction. Runtime custom-shader creation still validates
+its pipeline immediately.
+
+For interactive applications, render representative scenes and wait for their
+GPU submissions to complete on the render worker before marking the viewport
+ready. Warm the material types, target formats and sample counts the application
+uses. A later draw can still need a different pipeline, so measure constructor
+plus completed first-use frames rather than constructor time alone.
+
+`HeadlessRenderer::builder()` continues to use eager initialization. The lazy
+entry point is an explicit choice on `Renderer`, and does not change existing
+callers.
+
+The GPU regression tests compare eager and lazy pixels, exercise material-state
+variants, and check mixed color-target blending and pipeline cache identity:
+
+```bash
+cargo test --test lazy_initialization -- --nocapture
+cargo test --lib renderer::pipeline_state::tests
+```
+
+## Video export
+
 ```bash
 cargo run --release --example headless_video --features video   # H.264 demo
 ```

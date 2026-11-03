@@ -47,8 +47,13 @@ pub struct GpuContext {
 /// needs. Asking for it up front matters: a device opened without it cannot
 /// be told to measure later, and on a machine with anything else running it
 /// is the only way to get a number that means something.
-const OPTIONAL_FEATURES: wgpu::Features =
-    wgpu::Features::RG11B10UFLOAT_RENDERABLE.union(wgpu::Features::TIMESTAMP_QUERY);
+///
+/// `PIPELINE_CACHE` (Vulkan) is what lets
+/// [`PipelineCache`](crate::renderer::PipelineCache) keep compiled
+/// pipelines between runs; the same holds — it cannot be added later.
+const OPTIONAL_FEATURES: wgpu::Features = wgpu::Features::RG11B10UFLOAT_RENDERABLE
+    .union(wgpu::Features::TIMESTAMP_QUERY)
+    .union(wgpu::Features::PIPELINE_CACHE);
 
 impl GpuContext {
     /// A device with no surface — for headless rendering, compute, and tests.

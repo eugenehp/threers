@@ -149,10 +149,10 @@ const _: () = {
 /// releases: a frame that frees its predecessor's textures and buffers lets
 /// the driver autorelease the device on the way, and on a `std::thread` with
 /// no pool that is an object leaked per resource, every frame.
-struct Pool(*mut c_void);
+pub(crate) struct Pool(*mut c_void);
 
 impl Pool {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self(unsafe { objc_autoreleasePoolPush() })
     }
 }

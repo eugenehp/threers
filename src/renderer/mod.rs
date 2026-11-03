@@ -59,6 +59,20 @@ pub mod shader;
 // Batteries-included headless offscreen renderer (native-only: pollster).
 #[cfg(not(target_arch = "wasm32"))]
 pub mod headless;
+// Building a lazy renderer's pipelines ahead of the first draw.
+pub mod warmup;
+pub use warmup::{PipelineError, PipelineWarmup};
+// A `wgpu::PipelineCache` kept on disk between runs.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod pipeline_cache;
+#[cfg(not(target_arch = "wasm32"))]
+pub use pipeline_cache::{CallbackStore, FileStore, MemoryStore, PipelineCache, PipelineCacheStore};
+// A scene in a native window or child view someone else owns (Tauri, Wry,
+// tao, winit, raw handles), several on one device, from any thread.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod surface;
+#[cfg(not(target_arch = "wasm32"))]
+pub use surface::{SurfaceGpu, SurfaceOptions, SurfaceRenderer};
 // A scene in a window, on wgpu or the native Metal backend: a winit window
 // wherever winit runs, and an app's own view or layer on every Apple
 // platform with the `metal` feature (tvOS and visionOS have no winit).
@@ -157,7 +171,7 @@ cfg_apple! {
 }
 pub use render_target::{CubeRenderTarget, RenderTarget};
 pub use viewport::{PixelRect, ShadowMap, ViewportRect};
-pub use renderer::{PostFxCamera, Renderer, ToneMapping};
+pub use renderer::{PostFxCamera, Renderer, RendererOptions, ToneMapping};
 pub use renderer::{PostFxBlend, PostFxNoise, PostFxOp, PostFxOutput};
 #[allow(unused_imports)] // only the Metal backend reads it from outside
 pub(crate) use renderer::stored_clear;
