@@ -66,7 +66,7 @@ pub use warmup::{PipelineError, PipelineWarmup};
 #[cfg(not(target_arch = "wasm32"))]
 pub mod pipeline_cache;
 #[cfg(not(target_arch = "wasm32"))]
-pub use pipeline_cache::{CallbackStore, FileStore, MemoryStore, PipelineCache, PipelineCacheStore};
+pub use pipeline_cache::{CallbackStore, FileStore, IntoPipelineCache, MemoryStore, PipelineCache, PipelineCacheStore};
 // A scene in a native window or child view someone else owns (Tauri, Wry,
 // tao, winit, raw handles), several on one device, from any thread.
 #[cfg(not(target_arch = "wasm32"))]

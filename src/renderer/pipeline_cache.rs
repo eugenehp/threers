@@ -261,32 +261,52 @@ impl std::fmt::Debug for PipelineCache {
     }
 }
 
-impl From<&PipelineCache> for wgpu::PipelineCache {
-    fn from(cache: &PipelineCache) -> Self {
-        cache.cache.clone()
+/// What [`RendererOptions::pipeline_cache`](super::RendererOptions::pipeline_cache)
+/// takes: a threers [`PipelineCache`] — by reference, or the `Option` that
+/// [`PipelineCache::open`] returns, as it comes — or a `wgpu::PipelineCache`.
+pub trait IntoPipelineCache {
+    fn into_pipeline_cache(self) -> Option<wgpu::PipelineCache>;
+}
+
+impl IntoPipelineCache for wgpu::PipelineCache {
+    fn into_pipeline_cache(self) -> Option<wgpu::PipelineCache> {
+        Some(self)
     }
 }
 
-/// `RendererOptions::pipeline_cache(&cache)`.
-impl From<&PipelineCache> for Option<wgpu::PipelineCache> {
-    fn from(cache: &PipelineCache) -> Self {
-        Some(cache.cache.clone())
+impl IntoPipelineCache for Option<wgpu::PipelineCache> {
+    fn into_pipeline_cache(self) -> Option<wgpu::PipelineCache> {
+        self
     }
 }
 
-/// `RendererOptions::pipeline_cache(cache.as_ref())` — the `Option`
-/// [`open`](PipelineCache::open) returns, with or without a cache.
-impl From<Option<&PipelineCache>> for Option<wgpu::PipelineCache> {
-    fn from(cache: Option<&PipelineCache>) -> Self {
-        cache.map(|c| c.cache.clone())
+impl IntoPipelineCache for &PipelineCache {
+    fn into_pipeline_cache(self) -> Option<wgpu::PipelineCache> {
+        Some(self.cache.clone())
     }
 }
 
-/// `RendererOptions::pipeline_cache(&cache)` straight on what
-/// [`open`](PipelineCache::open) returns.
-impl From<&Option<PipelineCache>> for Option<wgpu::PipelineCache> {
-    fn from(cache: &Option<PipelineCache>) -> Self {
-        cache.as_ref().map(|c| c.cache.clone())
+impl IntoPipelineCache for PipelineCache {
+    fn into_pipeline_cache(self) -> Option<wgpu::PipelineCache> {
+        Some(self.cache)
+    }
+}
+
+impl IntoPipelineCache for Option<&PipelineCache> {
+    fn into_pipeline_cache(self) -> Option<wgpu::PipelineCache> {
+        self.map(|c| c.cache.clone())
+    }
+}
+
+impl IntoPipelineCache for &Option<PipelineCache> {
+    fn into_pipeline_cache(self) -> Option<wgpu::PipelineCache> {
+        self.as_ref().map(|c| c.cache.clone())
+    }
+}
+
+impl IntoPipelineCache for Option<PipelineCache> {
+    fn into_pipeline_cache(self) -> Option<wgpu::PipelineCache> {
+        self.map(|c| c.cache)
     }
 }
 

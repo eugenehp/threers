@@ -1061,9 +1061,10 @@ impl RendererOptions {
 
     /// Pipelines through `cache`: a threers
     /// [`PipelineCache`](crate::renderer::PipelineCache) (`&cache`, or the
-    /// `&Option` its `open` returns), a `wgpu::PipelineCache`, or `None`.
-    pub fn pipeline_cache(mut self, cache: impl Into<Option<wgpu::PipelineCache>>) -> Self {
-        self.pipeline_cache = cache.into();
+    /// `Option` its `open` returns, as it comes) or a `wgpu::PipelineCache`.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn pipeline_cache(mut self, cache: impl crate::renderer::pipeline_cache::IntoPipelineCache) -> Self {
+        self.pipeline_cache = cache.into_pipeline_cache();
         self
     }
 }

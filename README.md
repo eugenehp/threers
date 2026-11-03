@@ -81,6 +81,7 @@ self-contained subsystem, behind a Cargo feature where it says so.
 | [Colour](docs/colors.md) | Colour spaces (OkLCh, CIELAB, HSV, …), every CSS Color 4 string, ColorBrewer and Tableau schemes, d3-style log, quantile and threshold scales |
 | [Marks](docs/marks.md) | Data layers for maps, from points, paths and polygons to labels, heatmaps and tiles. `f64` precision, GPU filtering and picking, `MapView` and globe controls |
 | [Headless](docs/headless-render.md) | Offscreen rendering to RGBA, with no window or display; choosing the GPU, and testing on NVIDIA under Linux |
+| [Embedding](docs/embedding.md) | Viewports on an app's own windows (Tauri, Wry, tao, winit, raw handles), lazy pipelines warmed on worker threads, and a pipeline cache kept between runs |
 | [Deploying](docs/deploying.md) | A static site for Vercel, GitHub Pages, Netlify or Cloudflare: hashed wasm, preloading, caching headers, sizes |
 | [Web](docs/web.md) · [WebGL2](docs/webgl.md) (`webgl`) | WebAssembly on WebGPU, or WebGL2 where WebGPU is missing |
 | [Path tracing](docs/path-tracing.md) (`raytrace`) | Global illumination, refraction and depth of field, on CPU and GPU, with denoising |

@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `Renderer::new_lazy`: initial pipelines built on first use instead of in the
+  constructor; `Renderer::new` stays eager. Pixels match the eager renderer
+  (contributed in #1).
+- `Renderer::warm_up` returns a `PipelineWarmup` that builds a lazy
+  renderer's pending pipelines from any number of threads, with `progress`,
+  `is_ready`, `wait` and per-pipeline validation `errors`.
+  `warm_up_matching` builds a subset by label, and `warm_scene` draws a scene
+  once to build its material-state variants.
+- `PipelineCache` keeps a `wgpu::PipelineCache` between runs (Vulkan). It
+  stores to any directory, one file (`FileStore`), memory (`MemoryStore`),
+  two closures (`CallbackStore`) or your own `PipelineCacheStore`. It is
+  `None` off Vulkan, and stale or foreign data is dropped.
+- `RendererOptions` and `Renderer::with_options` set lazy and cache together.
+- `SurfaceGpu` and `SurfaceRenderer` render into any window with
+  raw-window-handle 0.6 handles (Tauri, Wry, tao, winit, raw HWND/X11/Wayland).
+  Several viewports share one device and its pipelines, and each renderer is
+  `Send`. The `surface_viewport` example shows the setup, and
+  `docs/embedding.md` covers all of the above.
+
+### Changed
+
+- `GpuContext` also requests `Features::PIPELINE_CACHE` where the adapter has
+  it.
+
 ## [0.0.10] — 2026-11-01
 
 ### Breaking

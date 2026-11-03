@@ -44,6 +44,10 @@ cargo test --test lazy_initialization -- --nocapture
 cargo test --lib renderer::pipeline_state::tests
 ```
 
+To build the deferred pipelines before the first frame — on worker threads, a
+few per idle frame, or by drawing a representative scene — and to keep the
+compiled pipelines between runs, see [Embedding in a desktop app](embedding.md).
+
 ## Video export
 
 ```bash
