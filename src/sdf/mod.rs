@@ -96,7 +96,7 @@ use crate::math::{Vector2, Vector3};
 /// The primitives and operators as WGSL: `sdf2_*` in 2D, `sdf3_*` in 3D and
 /// `sdf_*` for the operators, which work in either. No bindings, no entry
 /// points — prepend it to your own source. See the [module docs](self).
-pub const WGSL: &str = include_str!("sdf.wgsl");
+pub const WGSL: &str = crate::wgsl!(include_str!("sdf.wgsl"));
 
 /// Union: the nearer of two surfaces. Exact outside both.
 #[inline]

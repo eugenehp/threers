@@ -275,8 +275,8 @@ cfg_metal! {
     }
 }
 
-const FRAGMENT: &str = include_str!("surface.wgsl");
-const VERTEX: &str = include_str!("surface_vs.wgsl");
+const FRAGMENT: &str = crate::wgsl!(include_str!("surface.wgsl"));
+const VERTEX: &str = crate::wgsl!(include_str!("surface_vs.wgsl"));
 
 /// The whole fragment source, built once.
 fn source() -> String {

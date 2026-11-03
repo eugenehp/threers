@@ -19,7 +19,7 @@ using namespace metal;
 // The functions both backends share — the tone curves and the shading
 // helpers (`SHARED_FUNCTIONS` in `renderer/shader.rs`) — put in here by
 // `shader_source()`.
-//@@SHARED_FUNCTIONS@@
+@@SHARED_FUNCTIONS@@
 
 // ---------------------------------------------------------------- vertex data
 

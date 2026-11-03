@@ -553,7 +553,7 @@ fn shader() -> String {
     format!("{SHADER}\n{}", super::shader::shared_functions_wgsl())
 }
 
-const SHADER: &str = r#"
+const SHADER: &str = crate::wgsl!(r#"
 struct Params {
     width    : u32,
     count    : u32,
@@ -827,4 +827,4 @@ fn main(@builtin(global_invocation_id) gid : vec3<u32>) {
     dst[o + 1u] = b.y | (b.z << 8u) | (c.x << 16u) | (c.y << 24u);
     dst[o + 2u] = c.z | (d.x << 8u) | (d.y << 16u) | (d.z << 24u);
 }
-"#;
+"#);

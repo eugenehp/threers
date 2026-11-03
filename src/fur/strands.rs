@@ -815,7 +815,7 @@ impl HairRig {
 /// point moves half the ribbon's width across the strand and the line of
 /// sight, so the ribbon faces the camera. Lit with the root's normal, so a
 /// head of hair shades as a volume.
-pub(crate) const HAIR_VERTEX_WGSL: &str = r#"
+pub(crate) const HAIR_VERTEX_WGSL: &str = crate::wgsl!(r#"
 @vertex
 fn vs_custom(in : VsIn, @builtin(vertex_index) vid : u32) -> VsOut {
     var out = standard_vertex(in);
@@ -881,4 +881,4 @@ fn vs_custom(in : VsIn, @builtin(vertex_index) vid : u32) -> VsOut {
     out.vertex_color = vec4<f32>(in.color.rgb, 1.0);
     return out;
 }
-"#;
+"#);

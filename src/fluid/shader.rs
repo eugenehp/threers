@@ -424,7 +424,7 @@ pub(crate) static FLUID: std::sync::LazyLock<PassShader> = std::sync::LazyLock::
 /// The frame-rate read-out, over the finished picture: WGSL's own, beside
 /// the generated module. `value` is the number; the glyphs are in
 /// `super::read_out`, shared with the volume's shader.
-const OVERLAY: &str = r#"
+const OVERLAY: &str = crate::wgsl!(r#"
 @fragment
 fn fs_overlay(i : VsOut) -> @location(0) vec4<f32> {
     let a = read_out(i.pos.xy, u.value);
@@ -438,7 +438,7 @@ fn fs_overlay(i : VsOut) -> @location(0) vec4<f32> {
     }
     return bar;
 }
-"#;
+"#);
 
 /// The whole wgpu module: the read-out's glyphs, the passes and the overlay.
 pub(crate) fn wgsl() -> String {

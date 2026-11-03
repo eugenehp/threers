@@ -765,7 +765,7 @@ fn clip_fix(v: IRect, c: IRect) -> Matrix4 {
     m
 }
 
-const CLEAR_WGSL: &str = r#"
+const CLEAR_WGSL: &str = crate::wgsl!(r#"
 @vertex
 fn vs(@builtin(vertex_index) i : u32) -> @builtin(position) vec4<f32> {
     let p = vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u));
@@ -775,7 +775,7 @@ fn vs(@builtin(vertex_index) i : u32) -> @builtin(position) vec4<f32> {
 fn fs() -> @location(0) vec4<f32> {
     return vec4<f32>(1.0, 1.0, 1.0, 1.0);
 }
-"#;
+"#);
 
 /// A full-screen triangle whose colour is the *blend constant*: the fragment
 /// writes one, the blend multiplies by the constant and discards the

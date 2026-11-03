@@ -261,7 +261,7 @@ pub(crate) fn glyphs() -> String {
         .replace("SCALE_MS", &format!("{:?}", Frames::SCALE_MS))
 }
 
-const SOURCE: &str = r#"
+const SOURCE: &str = crate::wgsl!(r#"
 // Rows top-to-bottom, three bits each, leftmost pixel in the low bit.
 fn glyph_bits(d : i32) -> u32 {
     switch (d) {
@@ -378,7 +378,7 @@ fn chart(clip : vec2<f32>, hist : texture_2d<f32>, scale_ms : f32, target_ms : f
     }
     return vec4<f32>(0.65, 0.85, 1.0, 0.5);
 }
-"#;
+"#);
 
 #[cfg(test)]
 mod tests {

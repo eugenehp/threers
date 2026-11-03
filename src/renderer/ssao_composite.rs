@@ -31,7 +31,7 @@ use super::ssao::Ssao;
 use super::RenderTarget;
 use crate::renderer::Renderer;
 
-const COMPOSITE: &str = r#"
+const COMPOSITE: &str = crate::wgsl!(r#"
 struct Params { encoded : u32, strength : f32, pad0 : u32, pad1 : u32 };
 @group(0) @binding(0) var src : texture_2d<f32>;
 @group(0) @binding(1) var ao : texture_2d<f32>;
@@ -76,7 +76,7 @@ fn fs_main(in : FullscreenVertex) -> @location(0) vec4<f32> {
     // or a compositor premultiplies — FXAA's included.
     return vec4<f32>(c.rgb * k, 1.0);
 }
-"#;
+"#);
 
 /// Ambient occlusion composited onto a surface. See the [module docs](self).
 pub struct SsaoComposite {

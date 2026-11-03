@@ -422,7 +422,7 @@ pub fn sky_dome(time: &DesertTime, radius: f32) -> Object3D {
 /// toward the sun (`(1 + glow · max(cos θ, 0)⁸)`, the law the sand's fog
 /// follows, so the two meet at the horizon); the sun's aureole and disc; and
 /// stars. Not fogged: it is the fog's far end.
-pub(crate) const SKY_WGSL: &str = r#"
+pub(crate) const SKY_WGSL: &str = crate::wgsl!(r#"
 fn sky_hash(p : vec2<f32>) -> f32 {
     var q = fract(p * vec2<f32>(127.31, 311.71));
     q = q + vec2<f32>(dot(q, q + 19.19));
@@ -454,4 +454,4 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
     }
     return vec4<f32>(framebuffer_encode(apply_tone_mapping(col)), 1.0);
 }
-"#;
+"#);

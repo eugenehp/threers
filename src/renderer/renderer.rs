@@ -1725,7 +1725,7 @@ const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 /// texture, not a depth one: naga writes `textureSampleLevel` of a
 /// `texture_depth_2d` as GLSL `textureLod` with an integer level, which
 /// GLSL ES rejects, and the pipeline never compiles.
-const DEPTH_COPY_SHADER: &str = r#"
+const DEPTH_COPY_SHADER: &str = crate::wgsl!(r#"
 @group(0) @binding(0) var src: texture_2d<f32>;
 @group(0) @binding(1) var samp: sampler;
 
@@ -1741,7 +1741,7 @@ fn fs(@builtin(position) p: vec4<f32>) -> @builtin(frag_depth) f32 {
     let uv = p.xy / vec2<f32>(textureDimensions(src));
     return textureSampleLevel(src, samp, uv, 0.0).r;
 }
-"#;
+"#);
 
 /// Hardware MSAA sample count used when antialiasing is enabled for the
 /// direct-to-surface opaque forward pass. 4× is universally supported.
@@ -7376,7 +7376,7 @@ impl Renderer {
         // scratch's bytes raw and decodes them, and the sRGB target encodes
         // on write: the bytes come back as they are. Both directions are
         // exact for 8-bit values.
-        const COPY: &str = r#"
+        const COPY: &str = crate::wgsl!(r#"
 @group(0) @binding(0) var src : texture_2d<f32>;
 @vertex
 fn vs(@builtin(vertex_index) i : u32) -> @builtin(position) vec4<f32> {
@@ -7396,7 +7396,7 @@ fn fs_out(@builtin(position) p : vec4<f32>) -> @location(0) vec4<f32> {
     let d = select(pow((v.rgb + 0.055) / 1.055, vec3<f32>(2.4)), v.rgb / 12.92, v.rgb <= vec3<f32>(0.04045));
     return vec4<f32>(d, v.a);
 }
-"#;
+"#);
         let module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("threers encoded blend copy"),
             source: wgpu::ShaderSource::Wgsl(COPY.into()),

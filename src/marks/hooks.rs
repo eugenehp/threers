@@ -301,7 +301,7 @@ impl ShaderHooks {
     pub fn validate(&self) -> Result<(), String> {
         for kind in super::shader::HOOKED_KINDS {
             let source = super::shader::module_source(*kind, self, [4, 4]);
-            let offset = super::shader::hook_line(&source);
+            let offset = super::shader::hook_line();
             crate::renderer::validate_custom_shader(&source, 0).map_err(|e| {
                 format!("{kind:?} mark: {e}\n(hook source starts at line {offset} of the module)")
             })?;

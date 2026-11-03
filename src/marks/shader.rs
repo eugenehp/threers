@@ -42,10 +42,12 @@ pub enum MarkKind {
 /// call (`hook_instance`, `hook_color`) so users' hooks apply to it as to
 /// every other mark.
 ///
-/// Custom columns are spliced in where the source writes `/*CUSTOM_IN*/`
-/// (inside its vertex input struct), `/*CUSTOM0*/` and `/*CUSTOM1*/` (the
+/// Custom columns are spliced in where the source writes `@@CUSTOM_IN@@`
+/// (inside its vertex input struct), `@@CUSTOM0@@` and `@@CUSTOM1@@` (the
 /// `vec4<f32>` values, zero-padded), starting at shader location
-/// `custom_location`.
+/// `custom_location`. The comment forms `/*CUSTOM_IN*/`, `/*CUSTOM0*/` and
+/// `/*CUSTOM1*/` are read too: threers' own sources lose their comments at
+/// compile time ([`wgsl!`](crate::wgsl!)), so they use the tokens.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CustomShader {
     /// Named in compile errors.
@@ -88,10 +90,7 @@ impl CustomShader {
     /// without a GPU. Always `Ok` on `wasm32`, where naga is not built in.
     pub fn validate(&self, hooks: &ShaderHooks) -> Result<(), String> {
         let src = self.module_source(hooks, [4, 4]);
-        let offset = src
-            .lines()
-            .position(|l| l.starts_with("// ---- mark ----"))
-            .map_or(1, |i| i + 2);
+        let offset = body_line(hooks);
         crate::renderer::validate_custom_shader(&src, 0).map_err(|e| {
             format!(
                 "{} mark: {e}\n(its source starts at line {offset})",
@@ -116,7 +115,7 @@ pub(crate) const HOOKED_KINDS: &[MarkKind] = &[
 /// Uniforms and helpers every module starts with.
 /// The WGSL every mark module starts with: uniforms, `MarkInstance` and the
 /// helpers a [`CustomShader`] builds on.
-pub const PREAMBLE: &str = r#"
+pub const PREAMBLE: &str = crate::wgsl!(r#"
 struct MarkFrame {
     view_proj : mat4x4<f32>,
     origin_hi : vec4<f32>,
@@ -777,12 +776,12 @@ fn fill_pattern_origin(p1 : vec4<f32>, offset : vec2<f32>) -> vec2<f32> {
     let flip = select(-1.0, 1.0, p1.w > 0.0);
     return vec2<f32>(frame.origin_hi.x + frame.origin_lo.x, (frame.origin_hi.z + frame.origin_lo.z) * flip) + offset;
 }
-"#;
+"#);
 
 /// SwiftShader's texture sampling as WGSL (`mark_ss_sample`), self-contained,
 /// for [`MarkView::swiftshader_sampling`](super::MarkView::swiftshader_sampling)
 /// and for testing it against SwiftShader itself. Part of every mark shader.
-pub const SWIFTSHADER_SAMPLING: &str = r#"
+pub const SWIFTSHADER_SAMPLING: &str = crate::wgsl!(r#"
 /// SwiftShader's filtered sample of an 8-bit texture, bit for bit (as
 /// measured against it), when the view asks (`frame.raster.y`,
 /// `MarkView::swiftshader_sampling`): each texel's byte widened to 16 bits
@@ -830,9 +829,9 @@ fn mark_ss_sample(t : texture_2d<f32>, uv : vec2<f32>, dx : vec2<f32>, dy : vec2
     }
     return c * (1.0 / 65280.0);
 }
-"#;
+"#);
 
-const POINT: &str = r#"
+const POINT: &str = crate::wgsl!(r#"
 struct PointIn {
     @builtin(vertex_index) vid : u32,
     @builtin(instance_index) iid : u32,
@@ -847,7 +846,7 @@ struct PointIn {
     @location(5) normal : vec3<f32>,
     // The colour behind a fill pattern (`ids.z` bit 3).
     @location(6) background : vec4<f32>,
-    /*CUSTOM_IN*/
+    @@CUSTOM_IN@@
 };
 
 struct PointOut {
@@ -883,8 +882,8 @@ fn vs_main(in : PointIn) -> PointOut {
     }
     i.color2 = i.color;
     let stroke_width = layer.style2.x * in.radius.y;
-    i.custom0 = /*CUSTOM0*/;
-    i.custom1 = /*CUSTOM1*/;
+    i.custom0 = @@CUSTOM0@@;
+    i.custom1 = @@CUSTOM1@@;
     i.visible = 1.0;
     i.index = in.iid;
     i = hook_instance(i);
@@ -1002,9 +1001,9 @@ fn fs_pick(in : PointOut) -> @location(0) vec2<u32> {
     }
     return vec2<u32>(layer.ids.x, in.index);
 }
-"#;
+"#);
 
-const SEGMENT: &str = r#"
+const SEGMENT: &str = crate::wgsl!(r#"
 struct SegIn {
     @builtin(vertex_index) vid : u32,
     @builtin(instance_index) iid : u32,
@@ -1023,7 +1022,7 @@ struct SegIn {
     // to the source, next.w the segment's length.
     @location(7) prev : vec4<f32>,
     @location(8) next : vec4<f32>,
-    /*CUSTOM_IN*/
+    @@CUSTOM_IN@@
 };
 
 struct SegOut {
@@ -1189,8 +1188,8 @@ fn vs_main(in : SegIn) -> SegOut {
     let offset = select(0.0, in.width.y, offsets);
     i.color = mark_decode(in.color);
     i.color2 = mark_decode(in.color2);
-    i.custom0 = /*CUSTOM0*/;
-    i.custom1 = /*CUSTOM1*/;
+    i.custom0 = @@CUSTOM0@@;
+    i.custom1 = @@CUSTOM1@@;
     i.visible = 1.0;
     i.index = in.iid;
     i = hook_instance(i);
@@ -1688,9 +1687,9 @@ fn fs_pick(raw : SegOut) -> @location(0) vec2<u32> {
     }
     return vec2<u32>(layer.ids.x, in.index);
 }
-"#;
+"#);
 
-const SHAPE: &str = r#"
+const SHAPE: &str = crate::wgsl!(r#"
 struct ShapeIn {
     @builtin(instance_index) iid : u32,
     @location(0) vertex : vec3<f32>,
@@ -1708,7 +1707,7 @@ struct ShapeIn {
     @location(10) color : vec4<f32>,
     // A unit quaternion turning the scaled mesh.
     @location(11) rotation : vec4<f32>,
-    /*CUSTOM_IN*/
+    @@CUSTOM_IN@@
 };
 
 struct ShapeOut {
@@ -1797,8 +1796,8 @@ fn vs_main(in : ShapeIn) -> ShapeOut {
     i.size = 1.0;
     i.color = mark_decode(in.color) * in.vertex_color;
     i.color2 = i.color;
-    i.custom0 = /*CUSTOM0*/;
-    i.custom1 = /*CUSTOM1*/;
+    i.custom0 = @@CUSTOM0@@;
+    i.custom1 = @@CUSTOM1@@;
     i.visible = 1.0;
     i.index = in.iid;
     i = hook_instance(i);
@@ -1920,9 +1919,9 @@ fn fs_pattern(in : ShapeOut) -> ShapeFrag {
 fn fs_pick(in : ShapeOut) -> @location(0) vec2<u32> {
     return vec2<u32>(layer.ids.x, in.index);
 }
-"#;
+"#);
 
-const POLYGON: &str = r#"
+const POLYGON: &str = crate::wgsl!(r#"
 struct PolyIn {
     @location(0) pos_hi : vec3<f32>,
     @location(1) pos_lo : vec3<f32>,
@@ -1933,7 +1932,7 @@ struct PolyIn {
     @location(5) color : vec4<f32>,
     // The colour behind a fill pattern.
     @location(6) background : vec4<f32>,
-    /*CUSTOM_IN*/
+    @@CUSTOM_IN@@
 };
 
 struct PolyOut {
@@ -1962,8 +1961,8 @@ fn vs_main(in : PolyIn) -> PolyOut {
     i.size = in.elevation;
     i.color = mark_decode(in.color);
     i.color2 = i.color;
-    i.custom0 = /*CUSTOM0*/;
-    i.custom1 = /*CUSTOM1*/;
+    i.custom0 = @@CUSTOM0@@;
+    i.custom1 = @@CUSTOM1@@;
     i.visible = 1.0;
     i.index = u32(in.feature + 0.5);
     i = hook_instance(i);
@@ -2073,9 +2072,9 @@ fn fs_pick(in : PolyOut) -> @location(0) vec2<u32> {
     }
     return vec2<u32>(layer.ids.x, in.index);
 }
-"#;
+"#);
 
-const SPRITE: &str = r#"
+const SPRITE: &str = crate::wgsl!(r#"
 @group(2) @binding(0) var atlas_tex : texture_2d<f32>;
 @group(2) @binding(1) var atlas_samp : sampler;
 
@@ -2099,7 +2098,7 @@ struct SpriteIn {
     // The corners' screen nudges, device pixels: x of the four, then y.
     @location(8) nudge_x : vec4<f32>,
     @location(9) nudge_y : vec4<f32>,
-    /*CUSTOM_IN*/
+    @@CUSTOM_IN@@
 };
 
 struct SpriteOut {
@@ -2152,8 +2151,8 @@ fn vs_main(in : SpriteIn) -> SpriteOut {
     i.size = in.size.x;
     i.color = mark_decode(in.color);
     i.color2 = i.color;
-    i.custom0 = /*CUSTOM0*/;
-    i.custom1 = /*CUSTOM1*/;
+    i.custom0 = @@CUSTOM0@@;
+    i.custom1 = @@CUSTOM1@@;
     i.visible = in.shown.x;
     i.index = in.iid;
     i = hook_instance(i);
@@ -2338,9 +2337,9 @@ fn fs_pick(in : SpriteOut) -> @location(0) vec2<u32> {
     }
     return vec2<u32>(layer.ids.x, in.index);
 }
-"#;
+"#);
 
-const IMAGE: &str = r#"
+const IMAGE: &str = crate::wgsl!(r#"
 @group(2) @binding(0) var atlas_tex : texture_2d<f32>;
 @group(2) @binding(1) var atlas_samp : sampler;
 
@@ -2353,7 +2352,7 @@ struct ImageIn {
     @location(3) down : vec3<f32>,
     @location(4) rect : vec4<f32>,
     @location(5) color : vec4<f32>,
-    /*CUSTOM_IN*/
+    @@CUSTOM_IN@@
 };
 
 struct ImageOut {
@@ -2374,8 +2373,8 @@ fn vs_main(in : ImageIn) -> ImageOut {
     i.size = 1.0;
     i.color = mark_decode(in.color);
     i.color2 = i.color;
-    i.custom0 = /*CUSTOM0*/;
-    i.custom1 = /*CUSTOM1*/;
+    i.custom0 = @@CUSTOM0@@;
+    i.custom1 = @@CUSTOM1@@;
     i.visible = 1.0;
     i.index = in.iid;
     i = hook_instance(i);
@@ -2428,9 +2427,9 @@ fn fs_pick(in : ImageOut) -> @location(0) vec2<u32> {
     }
     return vec2<u32>(layer.ids.x, in.index);
 }
-"#;
+"#);
 
-const GLYPH: &str = r#"
+const GLYPH: &str = crate::wgsl!(r#"
 @group(2) @binding(0) var glyph_atlas : texture_2d<f32>;
 @group(2) @binding(1) var glyph_sampler : sampler;
 
@@ -2581,16 +2580,16 @@ fn fs_pick(in : GlyphOut) -> @location(0) vec2<u32> {
     // should not miss the label.
     return vec2<u32>(layer.ids.x, in.index);
 }
-"#;
+"#);
 
-const SPLAT: &str = r#"
+const SPLAT: &str = crate::wgsl!(r#"
 struct SplatIn {
     @builtin(vertex_index) vid : u32,
     @builtin(instance_index) iid : u32,
     @location(0) pos_hi : vec3<f32>,
     @location(1) pos_lo : vec3<f32>,
     @location(2) weight : f32,
-    /*CUSTOM_IN*/
+    @@CUSTOM_IN@@
 };
 
 struct SplatOut {
@@ -2610,8 +2609,8 @@ fn vs_main(in : SplatIn) -> SplatOut {
     // Splats carry their weight in alpha.
     i.color = vec4<f32>(1.0, 1.0, 1.0, in.weight);
     i.color2 = i.color;
-    i.custom0 = /*CUSTOM0*/;
-    i.custom1 = /*CUSTOM1*/;
+    i.custom0 = @@CUSTOM0@@;
+    i.custom1 = @@CUSTOM1@@;
     i.visible = 1.0;
     i.index = in.iid;
     i = hook_instance(i);
@@ -2650,10 +2649,10 @@ fn fs_main(in : SplatOut) -> @location(0) vec4<f32> {
     // Alpha: the kernels' coverage, for a mean (style2.y: `mean`).
     return vec4<f32>(in.weight * g, 0.0, 0.0, g * layer.style2.y);
 }
-"#;
+"#);
 
 /// Maps the summed density through a colour ramp onto the target.
-pub(crate) const DENSITY_COMPOSITE: &str = r#"
+pub(crate) const DENSITY_COMPOSITE: &str = crate::wgsl!(r#"
 @group(2) @binding(0) var density_field : texture_2d<f32>;
 @group(2) @binding(1) var density_ramp : texture_2d<f32>;
 @group(2) @binding(2) var density_sampler : sampler;
@@ -2689,7 +2688,7 @@ fn fs_main(in : FullscreenVertex) -> @location(0) vec4<f32> {
     }
     return mark_out(vec4<f32>(c.rgb, a * layer.style2.w));
 }
-"#;
+"#);
 
 fn kind_source(kind: MarkKind) -> (&'static str, u32) {
     // (source, first custom location)
@@ -2806,14 +2805,30 @@ fn assemble(body: &str, first: u32, hooks: &ShaderHooks, custom: [u32; 2], local
         loc += 1;
     }
     let body = body
+        .replace("@@CUSTOM_IN@@", &decl)
+        .replace("@@CUSTOM0@@", &exprs[0])
+        .replace("@@CUSTOM1@@", &exprs[1])
         .replace("/*CUSTOM_IN*/", &decl)
         .replace("/*CUSTOM0*/", &exprs[0])
         .replace("/*CUSTOM1*/", &exprs[1]);
-    format!(
-        "{PREAMBLE}\n{SWIFTSHADER_SAMPLING}\n{}\n// ---- hooks ----\n{}\n// ---- mark ----\n{body}",
-        tone_wgsl(),
-        hooks.source()
-    )
+    format!("{}{}\n{body}", head(), hooks.source())
+}
+
+/// What every assembled module starts with, before the hooks.
+fn head() -> &'static str {
+    static HEAD: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    HEAD.get_or_init(|| format!("{PREAMBLE}\n{SWIFTSHADER_SAMPLING}\n{}\n", tone_wgsl()))
+}
+
+/// 1-based line where the hooks begin in an assembled module.
+pub(crate) fn hook_line() -> usize {
+    head().matches('\n').count() + 1
+}
+
+/// 1-based line where the mark's own source begins in a module assembled
+/// with `hooks`.
+pub(crate) fn body_line(hooks: &ShaderHooks) -> usize {
+    hook_line() + hooks.source().matches('\n').count() + 1
 }
 
 /// One step of a density field's max reduction: each output texel the
@@ -2824,14 +2839,14 @@ fn assemble(body: &str, first: u32, hooks: &ShaderHooks, custom: [u32; 2], local
 /// below `DENSITY_MEAN_FLOOR` counting as that much, as deck.gl's
 /// `HeatmapLayer` floors its normalized kernels' sum at 1. Reduced levels
 /// carry alpha 1, so their values pass through.
-pub(crate) const DENSITY_VALUE: &str = r#"
+pub(crate) const DENSITY_VALUE: &str = crate::wgsl!(r#"
 const DENSITY_MEAN_FLOOR : f32 = 0.29540897;
 fn density_value(t : vec4<f32>) -> f32 {
     return select(t.r, t.r / max(DENSITY_MEAN_FLOOR, t.a), t.a > 0.0);
 }
-"#;
+"#);
 
-pub(crate) const DENSITY_REDUCE: &str = r#"
+pub(crate) const DENSITY_REDUCE: &str = crate::wgsl!(r#"
 @group(0) @binding(0) var reduce_src : texture_2d<f32>;
 @group(0) @binding(1) var reduce_samp : sampler;
 
@@ -2849,7 +2864,7 @@ fn fs_main(in : FullscreenVertex) -> @location(0) vec4<f32> {
     }
     return vec4<f32>(m, 0.0, 0.0, 1.0);
 }
-"#;
+"#);
 
 /// The density reduction module.
 pub(crate) fn reduce_source() -> String {
@@ -2865,18 +2880,34 @@ pub(crate) fn composite_source() -> String {
     )
 }
 
-/// 1-based line where the hooks begin in an assembled module.
-pub(crate) fn hook_line(source: &str) -> usize {
-    source
-        .lines()
-        .position(|l| l.starts_with("// ---- hooks ----"))
-        .map(|i| i + 2)
-        .unwrap_or(1)
-}
-
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn line_numbers_point_at_the_hooks_and_the_mark() {
+        let hooks = ShaderHooks::range_filter(0, 0);
+        let src = module_source(MarkKind::Point, &hooks, [1, 0]);
+        let lines: Vec<&str> = src.lines().collect();
+        assert_eq!(lines[hook_line() - 1], hooks.source().lines().next().unwrap());
+        let body = POINT.replace("@@CUSTOM_IN@@", "").replace("@@CUSTOM0@@", "").replace("@@CUSTOM1@@", "");
+        assert_eq!(lines[body_line(&hooks) - 1], body.lines().next().unwrap());
+    }
+
+    #[test]
+    fn custom_columns_splice_at_tokens_and_comments() {
+        let src = |marker: [&str; 3]| {
+            let body = format!(
+                "struct In {{\n    {}\n}}\nfn f() {{ let a = {}; let b = {}; }}\n",
+                marker[0], marker[1], marker[2]
+            );
+            assemble(&body, 3, &ShaderHooks::none(), [2, 4], false)
+        };
+        let tokens = src(["@@CUSTOM_IN@@", "@@CUSTOM0@@", "@@CUSTOM1@@"]);
+        assert_eq!(tokens, src(["/*CUSTOM_IN*/", "/*CUSTOM0*/", "/*CUSTOM1*/"]));
+        assert!(tokens.contains("@location(3) custom0 : vec2<f32>"));
+        assert!(!tokens.contains("@@"));
+    }
 
     #[test]
     fn every_kind_compiles_with_each_custom_width() {

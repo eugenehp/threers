@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use super::{MarkTarget, DEPTH_FORMAT};
 
-const SHADER: &str = r#"
+const SHADER: &str = crate::wgsl!(r#"
 struct Clear {
     color : vec4<f32>,
     // x: the depth written.
@@ -26,7 +26,7 @@ fn vs(@builtin(vertex_index) i : u32) -> @builtin(position) vec4<f32> {
 fn fs() -> @location(0) vec4<f32> {
     return clear.color;
 }
-"#;
+"#);
 
 /// `(format, samples, has depth, writes colour, writes depth)`.
 type Key = (wgpu::TextureFormat, u32, bool, bool, bool);

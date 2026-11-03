@@ -21,7 +21,7 @@
 //! diagonally through itself and is very hard to read as an addressing bug.
 
 /// Every stage of the 3D fluid. Pairs with [`crate::renderer::fullscreen::VS`].
-pub(crate) const SHADER: &str = r#"
+pub(crate) const SHADER: &str = crate::wgsl!(r#"
 // One field's atlas: how big the volume is and how its slices are packed.
 //
 // There are three of them in the block because a pass can touch grids of
@@ -753,4 +753,4 @@ fn fs_raymarch_depth(i : FullscreenVertex) -> Marched {
     let r = march(i.uv, i.clip.xy);
     return Marched(r.colour, vec4<f32>(r.depth, 0.0, 0.0, 1.0));
 }
-"#;
+"#);

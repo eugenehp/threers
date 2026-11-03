@@ -65,18 +65,18 @@ use crate::renderer::PixelRect;
 
 /// Grey ramp over `value.r`: `params[0].x` maps to black, `params[0].y` to
 /// white. For [`VolumeSample::Float`] volumes.
-pub const WINDOW_LEVEL: &str = r#"
+pub const WINDOW_LEVEL: &str = crate::wgsl!(r#"
 fn slice_color(value : vec4<f32>, params : array<vec4<f32>, 4>) -> vec4<f32> {
     let g = clamp((value.r - params[0].x) / (params[0].y - params[0].x), 0.0, 1.0);
     return vec4<f32>(g, g, g, 1.0);
 }
-"#;
+"#);
 
 /// A colour per label, from a hash of the 64-bit value in `.r` (low word) and
 /// `.g` (high word); label 0 is transparent. `params[0].x` is a seed that
 /// reshuffles the colours, `params[0].y` the opacity. For
 /// [`VolumeSample::Uint`] volumes.
-pub const LABELS: &str = r#"
+pub const LABELS: &str = crate::wgsl!(r#"
 fn slice_label_hash(seed : u32, v : u32) -> u32 {
     // MurmurHash3's block mix.
     var k = v * 0xcc9e2d51u;
@@ -94,7 +94,7 @@ fn slice_color(value : vec4<u32>, params : array<vec4<f32>, 4>) -> vec4<f32> {
     let s = 0.5 + 0.5 * f32((h >> 8u) & 0xffu) / 255.0;
     return vec4<f32>(mix(vec3<f32>(1.0), rgb, s), params[0].y);
 }
-"#;
+"#);
 
 /// What one draw shows.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -154,7 +154,7 @@ struct Uniforms {
     _pad: [u32; 3],
 }
 
-const FRAGMENT: &str = r#"
+const FRAGMENT: &str = crate::wgsl!(r#"
 struct SliceUniforms {
     ndc_to_voxel : mat4x4<f32>,
     params : array<vec4<f32>, 4>,
@@ -182,12 +182,12 @@ fn fs(in : FullscreenVertex) -> @location(0) vec4<f32> {
     }
     return c;
 }
-"#;
+"#);
 
 /// [`FRAGMENT`] for a colour function that reads the volume itself:
 /// `slice_color_at(voxel, params)` gets the voxel position (not yet
 /// bounds-checked: it decides what lies outside, and may `discard`).
-const FRAGMENT_AT: &str = r#"
+const FRAGMENT_AT: &str = crate::wgsl!(r#"
 struct SliceUniforms {
     ndc_to_voxel : mat4x4<f32>,
     params : array<vec4<f32>, 4>,
@@ -211,7 +211,7 @@ fn fs(in : FullscreenVertex) -> @location(0) vec4<f32> {
     }
     return c;
 }
-"#;
+"#);
 
 /// How a [`SliceRenderer`] writes its target.
 #[derive(Clone, Copy, Debug, PartialEq)]

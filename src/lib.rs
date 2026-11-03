@@ -231,6 +231,8 @@ pub mod stats;
 pub mod textures;
 pub mod utils;
 pub mod volume;
+/// WGSL stripped of its comments at compile time ([`wgsl!`]).
+pub mod wgsl;
 
 /// Easing curves — the shape of a transition in time.
 pub mod easing;

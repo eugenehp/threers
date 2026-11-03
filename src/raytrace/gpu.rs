@@ -471,7 +471,7 @@ impl GpuBackend {
     pub fn with_device(device: Arc<wgpu::Device>, queue: Arc<wgpu::Queue>) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("threers pathtrace"),
-            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!("pathtrace.wgsl"))),
+            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(crate::wgsl!(include_str!("pathtrace.wgsl")))),
         });
 
         let storage = |binding: u32, read_only: bool| wgpu::BindGroupLayoutEntry {

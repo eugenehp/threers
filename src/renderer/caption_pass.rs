@@ -13,7 +13,7 @@
 use std::borrow::Cow;
 
 /// Full-screen textured quad drawn from three vertices, no vertex buffer.
-const OVERLAY_WGSL: &str = r#"
+const OVERLAY_WGSL: &str = crate::wgsl!(r#"
 
 @group(0) @binding(0) var overlay_tex: texture_2d<f32>;
 @group(0) @binding(1) var overlay_sampler: sampler;
@@ -22,7 +22,7 @@ const OVERLAY_WGSL: &str = r#"
 fn fs_main(in: FullscreenVertex) -> @location(0) vec4<f32> {
     return textureSample(overlay_tex, overlay_sampler, in.uv);
 }
-"#;
+"#);
 
 /// GPU resources for the overlay pass, sized to the current overlay buffer.
 pub(crate) struct CaptionPass {

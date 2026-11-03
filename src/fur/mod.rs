@@ -1374,7 +1374,7 @@ fn direction(m: &Matrix4, v: Vector3) -> Vector3 {
 /// The vertex stage: the standard instanced transform, then the shell's
 /// offset. The shell's height goes to the fragment in `proj_uv`, the strand's
 /// direction in `world_tangent` — fields fur has no other use for.
-pub(crate) const FUR_VERTEX_WGSL: &str = r#"
+pub(crate) const FUR_VERTEX_WGSL: &str = crate::wgsl!(r#"
 // How many shells the fur needs now: two per pixel of its length on screen,
 // measured at the near side of its bounding sphere — at least four, at most
 // all of them. The same for every vertex of the object, so shells stay whole.
@@ -1437,11 +1437,11 @@ fn vs_custom(in : InstancedCustomIn, @builtin(vertex_index) vid : u32,
     out.proj_uv = vec4<f32>(h, in.color.a, 1.0 / shells, 1.0);
     return out;
 }
-"#;
+"#);
 
 /// The fragment stage: which strand (if any) passes through this point of
 /// this shell, then Kajiya-Kay lighting along it.
-pub(crate) const FUR_WGSL: &str = r#"
+pub(crate) const FUR_WGSL: &str = crate::wgsl!(r#"
 // PCG2D/3D (Jarzynski & Olano 2020): exact integer arithmetic, so the scatter
 // is the same on every GPU — a `fract(sin(x))` hash loses its low bits at the
 // cell counts fur needs and draws the grid back in.
@@ -1972,4 +1972,4 @@ fn fs_main(in : VsOut) -> ThreersFragOut {
     }
     return frag_out(vec4<f32>(framebuffer_encode(apply_tone_mapping(apply_fog(col, in.view_z))), alpha), mask);
 }
-"#;
+"#);

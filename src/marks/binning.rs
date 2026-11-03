@@ -10,7 +10,7 @@ use super::gpu;
 /// Weights are summed as fixed point: this many units a weight of 1.
 const WEIGHT_SCALE: f32 = 4096.0;
 
-const SHADER: &str = r#"
+const SHADER: &str = crate::wgsl!(r#"
 struct Params {
     view_proj : mat4x4<f32>,
     // Viewport in pixels, and the cell size in pixels.
@@ -54,7 +54,7 @@ fn bin(@builtin(global_invocation_id) id : vec3<u32>) {
         atomicAdd(&sums[k], i32(round(weights[i] * 4096.0)));
     }
 }
-"#;
+"#);
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]

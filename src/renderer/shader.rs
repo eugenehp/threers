@@ -18,7 +18,7 @@
 /// shader and a switch-driven fragment shader keyed by an `effect_kind`
 /// uniform. Each effect path is implemented in this same module so the
 /// pipeline can be reused across post-fx classes.
-const POSTFX_TEMPLATE: &str = concat!(r#"
+const POSTFX_TEMPLATE: &str = crate::wgsl!(concat!(r#"
 struct Out {
     @builtin(position) pos: vec4<f32>,
     @location(0) uv: vec2<f32>,
@@ -1134,7 +1134,7 @@ fn postfx_fragment(in: Out) -> vec4<f32> {
     }
     return vec4<f32>(postfx_encode(base.rgb), base.a);
 }
-"#, include_str!("postfx_kinds.wgsl"));
+"#, include_str!("postfx_kinds.wgsl")));
 
 /// The post-processing module: its kinds (`postfx_kinds.wgsl` from 40 up)
 /// with `SHARED_FUNCTIONS` in place. The Metal
@@ -1151,7 +1151,7 @@ pub const MAX_SPOT_LIGHTS: usize = 8;
 pub const MAX_HEMI_LIGHTS: usize = 8;
 pub const MAX_RECT_LIGHTS: usize = 8;
 
-pub const SHADER_SOURCE: &str = r#"
+pub const SHADER_SOURCE: &str = crate::wgsl!(r#"
 const MAT_BASIC    : u32 = 0u;
 const MAT_LAMBERT  : u32 = 1u;
 const MAT_PHONG    : u32 = 2u;
@@ -1462,7 +1462,7 @@ fn clip_fragment(world_pos : vec3<f32>) {
 
 // The material's maps: declarations and `sample_*` accessors, generated per
 // material feature set — see `shader_source_with_maps` below.
-//@@MATERIAL_MAPS@@
+@@MATERIAL_MAPS@@
 // three.js's morph-target texture (`WebGLMorphtargets`): one layer per target,
 // `morph.z` texels per vertex — position, then normal, then colour — laid out
 // row-major over the layer's width. Read with `textureLoad` only, so it is an
@@ -2275,7 +2275,7 @@ fn linear_to_gamma(c : vec3<f32>) -> vec3<f32> { return pow(c, vec3<f32>(1.0 / 2
 // (`aces_tonemap`, `neutral_tonemap`, `agx_tonemap`, …) and the shading
 // helpers — BRDF and IBL fits, light falloff, shadow disc taps, bicubic
 // weights.
-//@@SHARED_FUNCTIONS@@
+@@SHARED_FUNCTIONS@@
 
 // Exposure, then whichever curve the renderer is set to.
 //
@@ -4870,16 +4870,16 @@ fn fs_ss_glass(in : VsOut) -> @location(0) vec4<f32> {
     color = mix(behind, color, coverage);
     return vec4<f32>(framebuffer_encode(color), 1.0);
 }
-"#;
+"#);
 
 /// Where [`SHADER_SOURCE`] takes its material-map declarations and accessors.
-pub const MATERIAL_MAPS_MARKER: &str = "//@@MATERIAL_MAPS@@";
+pub const MATERIAL_MAPS_MARKER: &str = "@@MATERIAL_MAPS@@";
 
 /// The legacy material-map layout: every map at a fixed binding in group 2,
 /// one sampler shared by all of them, the uv already transformed by the vertex
 /// stage. Custom shader materials compile against it — their documented
 /// preamble names `albedo_tex`, `tex_sampler` and the rest.
-pub const LEGACY_MATERIAL_MAPS: &str = r#"@group(2) @binding(0) var albedo_tex     : texture_2d<f32>;
+pub const LEGACY_MATERIAL_MAPS: &str = crate::wgsl!(r#"@group(2) @binding(0) var albedo_tex     : texture_2d<f32>;
 @group(2) @binding(1) var normal_tex     : texture_2d<f32>;
 @group(2) @binding(2) var roughness_tex  : texture_2d<f32>;
 @group(2) @binding(3) var metalness_tex  : texture_2d<f32>;
@@ -4900,12 +4900,12 @@ fn sample_emissive_map(uv : vec2<f32>) -> vec4<f32> { return textureSample(emiss
 fn sample_matcap(uv : vec2<f32>) -> vec4<f32> { return textureSample(matcap_tex, tex_sampler, uv); }
 // Cloud cover shares the matcap binding: the two never meet on one material.
 fn sample_cloud(uv : vec2<f32>) -> vec4<f32> { return textureSample(matcap_tex, tex_sampler, uv); }
-"#;
+"#);
 
 /// Where every shader that takes [`SHARED_FUNCTIONS`] has them put in: the
 /// renderer's ([`SHADER_SOURCE`]), the post-processing module, and the Metal
 /// library.
-pub(crate) const SHARED_FUNCTIONS_MARKER: &str = "//@@SHARED_FUNCTIONS@@";
+pub(crate) const SHARED_FUNCTIONS_MARKER: &str = "@@SHARED_FUNCTIONS@@";
 
 /// The functions both backends' shaders call, written once with
 /// [`shader_functions!`](crate::shader_functions): three.js r165's
@@ -5529,7 +5529,7 @@ pub fn legacy_shader_source() -> &'static str {
 /// mip downsample chain and the blit of the opaque capture to the frame target.
 /// A single bilinear tap box-filters a 2× downsample and is an identity copy at
 /// matched resolution.
-pub const SS_BLIT_SHADER: &str = r#"
+pub const SS_BLIT_SHADER: &str = crate::wgsl!(r#"
 @group(0) @binding(0) var src_tex  : texture_2d<f32>;
 @group(0) @binding(1) var src_samp : sampler;
 struct Vo { @builtin(position) pos : vec4<f32>, @location(0) uv : vec2<f32> };
@@ -5546,7 +5546,7 @@ fn vs_main(@builtin(vertex_index) vid : u32) -> Vo {
 fn fs_main(@location(0) uv : vec2<f32>) -> @location(0) vec4<f32> {
     return textureSampleLevel(src_tex, src_samp, uv, 0.0);
 }
-"#;
+"#);
 
 /// Temporal anti-aliasing resolve. Reads the current (jittered) frame, the depth,
 /// and the previous accumulated history; reconstructs each pixel's world position
@@ -5576,7 +5576,7 @@ fn fs_main(@location(0) uv : vec2<f32>) -> @location(0) vec4<f32> {
 /// a per-object flag rasterised into a mask this pass can sample. Until then a
 /// caller whose camera translates fast against a pinned sky should turn TAA off
 /// for that stretch and let MSAA carry it.
-pub const TAA_SHADER: &str = r#"
+pub const TAA_SHADER: &str = crate::wgsl!(r#"
 struct TaaU {
     inv_view_proj  : mat4x4<f32>,  // current, un-jittered
     prev_view_proj : mat4x4<f32>,  // previous, un-jittered
@@ -5702,12 +5702,12 @@ fn taa_linear_to_srgb(c : vec3<f32>) -> vec3<f32> {
                   c * 12.92,
                   c <= vec3<f32>(0.0031308));
 }
-"#;
+"#);
 
 /// A multisampled depth buffer to a single-sampled one, sample 0 of each
 /// pixel: what the screen-space refraction pass marches and tests against
 /// when the opaque scene under it was multisampled.
-pub const DEPTH_RESOLVE_SHADER: &str = r#"
+pub const DEPTH_RESOLVE_SHADER: &str = crate::wgsl!(r#"
 @group(0) @binding(0) var src : texture_depth_multisampled_2d;
 
 @vertex
@@ -5720,11 +5720,11 @@ fn vs_main(@builtin(vertex_index) vi : u32) -> @builtin(position) vec4<f32> {
 fn fs_main(@builtin(position) pos : vec4<f32>) -> @builtin(frag_depth) f32 {
     return textureLoad(src, vec2<i32>(pos.xy), 0);
 }
-"#;
+"#);
 
 /// Resolve pass for weighted-blended OIT: reads the accum + revealage buffers and
 /// produces the order-independent composite, alpha-blended over the opaque image.
-pub const OIT_RESOLVE_SHADER: &str = r#"
+pub const OIT_RESOLVE_SHADER: &str = crate::wgsl!(r#"
 @group(0) @binding(0) var accum_tex  : texture_2d<f32>;
 @group(0) @binding(1) var reveal_tex : texture_2d<f32>;
 
@@ -5752,4 +5752,4 @@ fn fs_main(@builtin(position) pos : vec4<f32>) -> @location(0) vec4<f32> {
     let avg = accum.rgb / max(accum.a, 1e-5);
     return vec4<f32>(avg * cover, cover);
 }
-"#;
+"#);

@@ -895,7 +895,7 @@ fn fx_transition(uv: vec2<f32>) -> vec4<f32> {
 // ---- 64: OutputPass ------------------------------------------------------
 
 // The tone curves are the renderer's own (`SHARED_FUNCTIONS`), put in here.
-//@@SHARED_FUNCTIONS@@
+@@SHARED_FUNCTIONS@@
 
 // three.js `tonemapping_pars_fragment`, keyed by its constants: 1 Linear,
 // 2 Reinhard, 3 Cineon, 4 ACESFilmic, 6 AgX, 7 Neutral; anything else none.

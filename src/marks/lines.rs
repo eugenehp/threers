@@ -5,7 +5,7 @@
 use super::shader::CustomShader;
 use super::{Column, ColumnFormat, Mark, MarkCommon, MarkKind};
 
-const SOURCE: &str = r#"
+const SOURCE: &str = crate::wgsl!(r#"
 struct LineIn {
     @builtin(vertex_index) vid : u32,
     @builtin(instance_index) iid : u32,
@@ -14,7 +14,7 @@ struct LineIn {
     @location(2) b_hi : vec3<f32>,
     @location(3) b_lo : vec3<f32>,
     @location(4) color : vec4<f32>,
-    /*CUSTOM_IN*/
+    @@CUSTOM_IN@@
 };
 
 struct LineOut {
@@ -34,8 +34,8 @@ fn vs_main(in : LineIn) -> LineOut {
     i.size = 1.0;
     i.color = mark_decode(in.color);
     i.color2 = i.color;
-    i.custom0 = /*CUSTOM0*/;
-    i.custom1 = /*CUSTOM1*/;
+    i.custom0 = @@CUSTOM0@@;
+    i.custom1 = @@CUSTOM1@@;
     i.visible = 1.0;
     i.index = in.iid;
     i = hook_instance(i);
@@ -66,10 +66,10 @@ fn fs_pick(in : LineOut) -> @location(0) vec2<u32> {
     }
     return vec2<u32>(layer.ids.x, in.index);
 }
-"#;
+"#);
 
 /// The same lines as SwiftShader's parallelograms ([`LineMarks::parallelogram`]).
-const QUAD_SOURCE: &str = r#"
+const QUAD_SOURCE: &str = crate::wgsl!(r#"
 struct LineIn {
     @builtin(vertex_index) vid : u32,
     @builtin(instance_index) iid : u32,
@@ -78,7 +78,7 @@ struct LineIn {
     @location(2) b_hi : vec3<f32>,
     @location(3) b_lo : vec3<f32>,
     @location(4) color : vec4<f32>,
-    /*CUSTOM_IN*/
+    @@CUSTOM_IN@@
 };
 
 struct LineOut {
@@ -100,8 +100,8 @@ fn vs_main(in : LineIn) -> LineOut {
     i.size = 1.0;
     i.color = mark_decode(in.color);
     i.color2 = i.color;
-    i.custom0 = /*CUSTOM0*/;
-    i.custom1 = /*CUSTOM1*/;
+    i.custom0 = @@CUSTOM0@@;
+    i.custom1 = @@CUSTOM1@@;
     i.visible = 1.0;
     i.index = in.iid;
     i = hook_instance(i);
@@ -161,7 +161,7 @@ fn fs_pick(in : LineOut) -> @location(0) vec2<u32> {
     }
     return vec2<u32>(layer.ids.x, in.index);
 }
-"#;
+"#);
 
 /// Segments drawn one pixel wide by the GPU's line rasterizer, a colour
 /// each — deck.gl's wireframes (`gl.LINES`).

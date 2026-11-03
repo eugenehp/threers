@@ -70,7 +70,7 @@ struct Params {
 
 const WORKGROUP_SIZE: u32 = 64;
 
-const SHADER: &str = r#"
+const SHADER: &str = threers::wgsl!(r#"
 struct Aabb {
     lo: vec4<f32>,
     hi: vec4<f32>,
@@ -116,7 +116,7 @@ fn find_pairs(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 }
-"#;
+"#);
 
 /// All-pairs AABB overlap on the GPU.
 pub struct GpuBroadPhase {

@@ -346,7 +346,7 @@ fn shader_source(encoded: bool) -> String {
     format!("{}{}", SHADER.replace("DECODE", decode).replace("ENCODE", encode), super::colorspace::WGSL)
 }
 
-const SHADER: &str = r#"
+const SHADER: &str = crate::wgsl!(r#"
 struct W { weight : f32, _p0 : f32, _p1 : f32, _p2 : f32 };
 @group(0) @binding(0) var src : texture_2d<f32>;
 @group(0) @binding(1) var<uniform> w : W;
@@ -365,4 +365,4 @@ fn fs_resolve(@builtin(position) pos : vec4<f32>) -> @location(0) vec4<f32> {
     c = vec4<f32>(max(c.rgb, vec3<f32>(0.0)), clamp(c.a, 0.0, 1.0));
     return vec4<f32>(ENCODE, c.a);
 }
-"#;
+"#);
