@@ -292,7 +292,6 @@ pub fn point_radius_for(material: &Material) -> f32 {
     }
 }
 
-
 #[cfg(test)]
 mod color_tests {
     use super::*;
@@ -302,11 +301,17 @@ mod color_tests {
         let mut g = BufferGeometry::new();
         g.set_attribute(
             "position",
-            BufferAttribute::new(vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0], 3),
+            BufferAttribute::new(
+                vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0],
+                3,
+            ),
         );
         g.set_attribute(
             "color",
-            BufferAttribute::new(vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0], 3),
+            BufferAttribute::new(
+                vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
+                3,
+            ),
         );
         g
     }
@@ -315,10 +320,15 @@ mod color_tests {
     fn quads_keep_the_line_colours() {
         // The expansion built a positions-only geometry, so every coloured line
         // reached the tracer white and the traced image was one flat shade.
-        let g = line_segment_quads(&two_segment_lines(), &Matrix4::identity(), 0.1)
-            .expect("quads");
-        let c = g.get_attribute("color").expect("colour survived the expansion");
-        assert_eq!(c.count(), 16, "four corners per blade, two blades per segment");
+        let g = line_segment_quads(&two_segment_lines(), &Matrix4::identity(), 0.1).expect("quads");
+        let c = g
+            .get_attribute("color")
+            .expect("colour survived the expansion");
+        assert_eq!(
+            c.count(),
+            16,
+            "four corners per blade, two blades per segment"
+        );
         assert_eq!(&c.array[0..3], &[1.0, 0.0, 0.0]);
         assert_eq!(
             &c.array[24..27],
@@ -342,9 +352,7 @@ mod color_tests {
 
         // Face normals of the two blades must not be parallel.
         let p = q.get_attribute("position").expect("positions");
-        let v = |i: usize| {
-            Vector3::new(p.array[i * 3], p.array[i * 3 + 1], p.array[i * 3 + 2])
-        };
+        let v = |i: usize| Vector3::new(p.array[i * 3], p.array[i * 3 + 1], p.array[i * 3 + 2]);
         let n0 = (v(1) - v(0)).cross(v(2) - v(0)).normalize();
         let n1 = (v(5) - v(4)).cross(v(6) - v(4)).normalize();
         assert!(

@@ -20,13 +20,22 @@ pub struct Response {
 
 impl Response {
     pub fn new(status: u16, content_type: &str, body: Vec<u8>) -> Response {
-        Response { status, content_type: content_type.to_string(), headers: Vec::new(), body }
+        Response {
+            status,
+            content_type: content_type.to_string(),
+            headers: Vec::new(),
+            body,
+        }
     }
     pub fn json(status: u16, body: String) -> Response {
         Response::new(status, "application/json; charset=utf-8", body.into_bytes())
     }
     pub fn text(status: u16, body: &str) -> Response {
-        Response::new(status, "text/plain; charset=utf-8", body.as_bytes().to_vec())
+        Response::new(
+            status,
+            "text/plain; charset=utf-8",
+            body.as_bytes().to_vec(),
+        )
     }
     pub fn header(mut self, k: &str, v: &str) -> Response {
         self.headers.push((k.to_string(), v.to_string()));
@@ -71,7 +80,11 @@ where
         None => return write_response(&mut stream, "GET", Response::text(400, "bad request\n")),
     };
     if req.method != "GET" && req.method != "HEAD" {
-        return write_response(&mut stream, &req.method, Response::text(405, "method not allowed\n"));
+        return write_response(
+            &mut stream,
+            &req.method,
+            Response::text(405, "method not allowed\n"),
+        );
     }
     let res = route(&req).unwrap_or_else(|| static_file(mounts, &req.path));
     write_response(&mut stream, &req.method, res)
@@ -111,7 +124,10 @@ fn write_response(stream: &mut TcpStream, method: &str, res: Response) -> io::Re
     };
     let mut head = format!(
         "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n",
-        res.status, reason, res.content_type, res.body.len()
+        res.status,
+        reason,
+        res.content_type,
+        res.body.len()
     );
     for (k, v) in &res.headers {
         head.push_str(&format!("{}: {}\r\n", k, v));
@@ -233,7 +249,12 @@ pub fn read_tsv(path: &Path) -> io::Result<(Vec<String>, Vec<Vec<String>>)> {
     let mut text = String::new();
     fs::File::open(path)?.read_to_string(&mut text)?;
     let mut lines = text.lines();
-    let header: Vec<String> = lines.next().unwrap_or("").split('\t').map(str::to_string).collect();
+    let header: Vec<String> = lines
+        .next()
+        .unwrap_or("")
+        .split('\t')
+        .map(str::to_string)
+        .collect();
     let rows = lines
         .filter(|l| !l.is_empty())
         .map(|l| l.split('\t').map(str::to_string).collect())
@@ -261,7 +282,10 @@ pub fn top_partners(
                 (Some(p), Some(d)) if d == "in" || d == "out" => (p.clone(), d.clone()),
                 _ => continue,
             };
-            let w = c_n.and_then(|c| r.get(c)).and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+            let w = c_n
+                .and_then(|c| r.get(c))
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(0);
             *acc.entry((d, p)).or_insert(0) += w;
         }
     }

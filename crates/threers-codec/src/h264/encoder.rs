@@ -153,7 +153,13 @@ pub fn encode_mp4_streaming<F>(
 where
     F: FnMut(usize) -> Yuv420Frame,
 {
-    encode_mp4_inner(width, height, fps, captions, &mut (0..frame_count).map(next))
+    encode_mp4_inner(
+        width,
+        height,
+        fps,
+        captions,
+        &mut (0..frame_count).map(next),
+    )
 }
 
 /// [`encode_mp4_from_iter`] written straight to a sink.

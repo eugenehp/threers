@@ -85,7 +85,10 @@ pub struct UsdVariantSet {
 
 impl UsdVariantSet {
     pub fn get(&self, choice: &str) -> Option<&UsdPrim> {
-        self.variants.iter().find(|(n, _)| n == choice).map(|(_, p)| p)
+        self.variants
+            .iter()
+            .find(|(n, _)| n == choice)
+            .map(|(_, p)| p)
     }
 }
 
@@ -230,7 +233,11 @@ impl UsdLayer {
     /// The prim at an absolute path.
     pub fn prim_at(&self, path: &str) -> Option<&UsdPrim> {
         let mut current: Option<&UsdPrim> = None;
-        for part in path.trim_start_matches('/').split('/').filter(|s| !s.is_empty()) {
+        for part in path
+            .trim_start_matches('/')
+            .split('/')
+            .filter(|s| !s.is_empty())
+        {
             current = match current {
                 None => self.prims.iter().find(|p| p.name == part),
                 Some(prim) => prim.child(part),
@@ -612,9 +619,7 @@ impl Parser<'_> {
                 "uniform" => uniform = true,
                 "varying" => {}
                 "custom" => custom = true,
-                "prepend" | "append" | "delete" | "add" | "reorder" => {
-                    qualifier = w.clone()
-                }
+                "prepend" | "append" | "delete" | "add" | "reorder" => qualifier = w.clone(),
                 "rel" => relationship = true,
                 _ => {
                     words.push(w);
@@ -771,18 +776,18 @@ impl Parser<'_> {
                     let Some(Token::Path(prim_path)) = self.next() else {
                         unreachable!()
                     };
-                    Ok(UsdValue::Reference(self.layer_offset(UsdReference::new(
-                        v, prim_path,
-                    ))))
+                    Ok(UsdValue::Reference(
+                        self.layer_offset(UsdReference::new(v, prim_path)),
+                    ))
                 }
                 // `@clip.usda@ (offset = 100)` is an arc with a time shift and
                 // no prim named. The parentheses cannot be consumed on sight —
                 // an `asset` attribute is followed by its own metadata block in
                 // exactly the same position — so the decision is made on what
                 // is inside them.
-                _ if self.at_layer_offset() => {
-                    Ok(UsdValue::Reference(self.layer_offset(UsdReference::new(v, ""))))
-                }
+                _ if self.at_layer_offset() => Ok(UsdValue::Reference(
+                    self.layer_offset(UsdReference::new(v, "")),
+                )),
                 _ => Ok(UsdValue::Asset(v)),
             },
             Some(Token::Path(v)) => Ok(UsdValue::Path(v)),
@@ -1016,7 +1021,11 @@ def Xform "World"
         assert_eq!(samples[2].1.flat_f32(), vec![10.0, 10.0, 0.0]);
 
         // Arrays animate the same way.
-        let points = layer.prim_at("/Spin/Body").unwrap().value("points").unwrap();
+        let points = layer
+            .prim_at("/Spin/Body")
+            .unwrap()
+            .value("points")
+            .unwrap();
         assert_eq!(points.samples().unwrap().len(), 2);
         assert_eq!(
             points.samples().unwrap()[1].1.flat_f32(),
@@ -1027,7 +1036,11 @@ def Xform "World"
     #[test]
     fn an_animated_value_reads_between_its_samples() {
         let layer = parse(include_str!("testdata/anim.usda")).unwrap();
-        let translate = layer.prim_at("/Spin").unwrap().value("xformOp:translate").unwrap();
+        let translate = layer
+            .prim_at("/Spin")
+            .unwrap()
+            .value("xformOp:translate")
+            .unwrap();
 
         // Held before the first sample and after the last.
         assert_eq!(translate.at_time(-5.0).flat_f32(), vec![0.0, 0.0, 0.0]);
@@ -1097,9 +1110,15 @@ def Mesh "M" (
         // Not a property called `outputs:surface.connect` — a dot inside a
         // property name is not something USD can hold.
         assert!(mat.property("outputs:surface.connect").is_none());
-        let surface = mat.property("outputs:surface").expect("the connected attribute");
+        let surface = mat
+            .property("outputs:surface")
+            .expect("the connected attribute");
         assert!(!surface.relationship, "a connection is not a relationship");
-        assert!(matches!(surface.value, UsdValue::Path(_)), "{:?}", surface.value);
+        assert!(
+            matches!(surface.value, UsdValue::Path(_)),
+            "{:?}",
+            surface.value
+        );
     }
 
     /// A declaration and a connection for one name are one property.
@@ -1118,7 +1137,10 @@ def Shader "S"
         let s = layer.prim_at("/S").unwrap();
         assert_eq!(s.properties.len(), 1, "{:?}", s.properties);
         assert_eq!(s.properties[0].type_name, "token");
-        assert_eq!(s.properties[0].value.as_str(), Some("/Other.outputs:surface"));
+        assert_eq!(
+            s.properties[0].value.as_str(),
+            Some("/Other.outputs:surface")
+        );
     }
 
     #[test]

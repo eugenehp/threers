@@ -1,6 +1,6 @@
 [package]
 name = "threers-mechanism-tour"
-version = "0.0.1"
+version = "0.0.10"
 edition = "2021"
 authors = ["Eugene Hauptmann"]
 description = "The threers-physics mechanism tour in a browser: a .scad model that declares its own joints, assembled, checked, simulated and verified on screen"

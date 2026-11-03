@@ -94,7 +94,10 @@ pub use crate::math::{
     convex_hull, delaunay, inverse_lerp, lerp, map_range, map_range_clamped, smootherstep,
     smoothstep, ticks, voronoi_cells, ColorRamp, RampSpace, Rng, ScaleLinear, ScaleLog, ScalePow,
 };
+<<<<<<< Updated upstream
 pub use crate::math::{ColorScale, ColorSpace, Palette, ScaleKind};
+=======
+>>>>>>> Stashed changes
 pub use crate::overlay::Overlay;
 pub use crate::renderer::{RenderTarget, Renderer, ToneMapping};
 pub use crate::scene::{FogParams, Scene};

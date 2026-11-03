@@ -342,9 +342,7 @@ mod tests {
     /// close.
     #[test]
     fn roundtrip_is_close_at_low_qp() {
-        let orig: [i32; 16] = [
-            12, -7, 3, 0, -5, 9, -2, 1, 4, -1, 6, -3, 0, 2, -4, 8,
-        ];
+        let orig: [i32; 16] = [12, -7, 3, 0, -5, 9, -2, 1, 4, -1, 6, -3, 0, 2, -4, 8];
         let levels = quant4(&forward4(&orig), 10, true);
         let back = inverse4(&dequant4(&levels, 10));
         for (a, b) in orig.iter().zip(&back) {
@@ -354,9 +352,7 @@ mod tests {
 
     #[test]
     fn higher_qp_zeroes_more() {
-        let orig: [i32; 16] = [
-            40, -18, 9, 2, -14, 22, -6, 3, 11, -4, 15, -8, 1, 5, -9, 20,
-        ];
+        let orig: [i32; 16] = [40, -18, 9, 2, -14, 22, -6, 3, 11, -4, 15, -8, 1, 5, -9, 20];
         let c = forward4(&orig);
         let low = quant4(&c, 12, true).iter().filter(|&&v| v != 0).count();
         let high = quant4(&c, 40, true).iter().filter(|&&v| v != 0).count();
@@ -398,9 +394,7 @@ mod tests {
     /// `H·H = 4I` on each side, so applying the 4×4 Hadamard twice scales by 16.
     #[test]
     fn luma_dc_hadamard_is_an_involution_up_to_scale() {
-        let dc: [i32; 16] = [
-            5, -3, 2, 7, 11, -8, 0, 4, -6, 9, 1, -2, 3, 3, -5, 10,
-        ];
+        let dc: [i32; 16] = [5, -3, 2, 7, 11, -8, 0, 4, -6, 9, 1, -2, 3, 3, -5, 10];
         let twice = luma_dc_hadamard(&luma_dc_hadamard(&dc));
         for k in 0..16 {
             assert_eq!(twice[k], 16 * dc[k], "position {k}");
@@ -417,12 +411,7 @@ mod tests {
     /// admits exactly one matrix.
     #[test]
     fn luma_dc_matrix_is_the_one_in_the_spec() {
-        const H: [[i32; 4]; 4] = [
-            [1, 1, 1, 1],
-            [1, 1, -1, -1],
-            [1, -1, -1, 1],
-            [1, -1, 1, -1],
-        ];
+        const H: [[i32; 4]; 4] = [[1, 1, 1, 1], [1, 1, -1, -1], [1, -1, -1, 1], [1, -1, 1, -1]];
         for r in 0..4 {
             for c in 0..4 {
                 let mut imp = [0i32; 16];
@@ -448,7 +437,10 @@ mod tests {
         assert_eq!(f[0], 16 * 7, "DC of a flat field");
         assert!(f[1..].iter().all(|&v| v == 0), "no AC from a flat field");
         let rec = luma_dc_inverse(&[3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], 28);
-        assert!(rec.iter().all(|&v| v == rec[0]), "flat DC level -> flat output");
+        assert!(
+            rec.iter().all(|&v| v == rec[0]),
+            "flat DC level -> flat output"
+        );
     }
 
     #[test]
@@ -473,4 +465,3 @@ mod tests {
         }
     }
 }
-

@@ -31,16 +31,18 @@ fn hinged_bridge() {
     )));
 
     for i in 0..count {
-        planks.push(world.add_body(
-            RigidBody::dynamic()
-                .shape(Shape::cuboid(plank_half, 0.08, 0.6))
-                .translation(Vector3::new(
-                    -4.5 + plank_half + i as f32 * plank_half * 2.0,
-                    3.0,
-                    0.0,
-                ))
-                .can_sleep(false),
-        ));
+        planks.push(
+            world.add_body(
+                RigidBody::dynamic()
+                    .shape(Shape::cuboid(plank_half, 0.08, 0.6))
+                    .translation(Vector3::new(
+                        -4.5 + plank_half + i as f32 * plank_half * 2.0,
+                        3.0,
+                        0.0,
+                    ))
+                    .can_sleep(false),
+            ),
+        );
     }
 
     // Hinge each plank to the previous one about z, at their shared edge.
@@ -110,7 +112,11 @@ fn motorised_arm() {
         world.step(1.0 / 60.0);
         if frame % 45 == 44 {
             let q = world.body(arm).unwrap().rotation();
-            println!("  t = {:.2}s  angle = {:.3} rad", (frame + 1) as f32 / 60.0, 2.0 * q.y.atan2(q.w));
+            println!(
+                "  t = {:.2}s  angle = {:.3} rad",
+                (frame + 1) as f32 / 60.0,
+                2.0 * q.y.atan2(q.w)
+            );
         }
     }
 
@@ -123,7 +129,10 @@ fn motorised_arm() {
         world.step(1.0 / 60.0);
     }
     let q = world.body(arm).unwrap().rotation();
-    println!("  after reversing: angle = {:.3} rad\n", 2.0 * q.y.atan2(q.w));
+    println!(
+        "  after reversing: angle = {:.3} rad\n",
+        2.0 * q.y.atan2(q.w)
+    );
 }
 
 /// A rope that only resists stretching, and a link that snaps under load.
@@ -167,5 +176,8 @@ fn rope_and_break() {
             break;
         }
     }
-    println!("  the anvil is now at y = {:.2}", world.body(anvil).unwrap().translation().y);
+    println!(
+        "  the anvil is now at y = {:.2}",
+        world.body(anvil).unwrap().translation().y
+    );
 }

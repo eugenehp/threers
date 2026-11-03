@@ -66,7 +66,9 @@ fn main() {
     cam.position = Vector3::new(4.0, 3.0, 3.0);
     renderer.prepare_if_changed(&mut scene, &cam);
     while renderer.needs_more_samples() {
-        renderer.accumulate_unconverged_tiles(32, 4).expect("accumulate");
+        renderer
+            .accumulate_unconverged_tiles(32, 4)
+            .expect("accumulate");
     }
 
     let rgba = renderer.resolve_rgba();

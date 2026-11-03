@@ -182,10 +182,7 @@ pub fn write(entries: &[UsdzEntry]) -> Vec<u8> {
 }
 
 fn u16(b: &[u8], at: usize) -> u16 {
-    u16::from_le_bytes([
-        *b.get(at).unwrap_or(&0),
-        *b.get(at + 1).unwrap_or(&0),
-    ])
+    u16::from_le_bytes([*b.get(at).unwrap_or(&0), *b.get(at + 1).unwrap_or(&0)])
 }
 
 fn u32(b: &[u8], at: usize) -> u32 {
@@ -204,7 +201,9 @@ fn find_eocd(b: &[u8]) -> Option<usize> {
         return None;
     }
     let start = b.len().saturating_sub(22 + 0xFFFF);
-    (start..=b.len() - 22).rev().find(|&i| &b[i..i + 4] == b"PK\x05\x06")
+    (start..=b.len() - 22)
+        .rev()
+        .find(|&i| &b[i..i + 4] == b"PK\x05\x06")
 }
 
 /// CRC-32, the zip flavour. Computed on the fly rather than from a table: an
@@ -489,16 +488,31 @@ mod tests {
     #[test]
     fn the_first_layer_is_the_root_whatever_else_is_inside() {
         let bytes = write(&[
-            UsdzEntry { name: "a.png".into(), data: vec![1] },
-            UsdzEntry { name: "first.usdc".into(), data: vec![2] },
-            UsdzEntry { name: "second.usda".into(), data: vec![3] },
+            UsdzEntry {
+                name: "a.png".into(),
+                data: vec![1],
+            },
+            UsdzEntry {
+                name: "first.usdc".into(),
+                data: vec![2],
+            },
+            UsdzEntry {
+                name: "second.usda".into(),
+                data: vec![3],
+            },
         ]);
-        assert_eq!(read(&bytes).unwrap().root_layer().unwrap().name, "first.usdc");
+        assert_eq!(
+            read(&bytes).unwrap().root_layer().unwrap().name,
+            "first.usdc"
+        );
     }
 
     #[test]
     fn truncated_archives_are_errors_not_panics() {
-        let bytes = write(&[UsdzEntry { name: "m.usda".into(), data: vec![7; 100] }]);
+        let bytes = write(&[UsdzEntry {
+            name: "m.usda".into(),
+            data: vec![7; 100],
+        }]);
         assert!(read(&bytes[..bytes.len() / 2]).is_err());
         assert!(read(b"not a zip").is_err());
         assert!(read(&[]).is_err());

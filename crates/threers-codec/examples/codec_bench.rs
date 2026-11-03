@@ -58,9 +58,15 @@ fn main() {
             let n = std::fs::metadata(&args.input).expect("stat input").len() as usize / frame_len;
             let mut file = std::fs::File::open(&args.input).expect("open input");
             eprintln!("codec_bench: streaming {n} frames of {w}x{h}");
-            encode_compressed_mp4_streaming(args.width, args.height, args.fps, args.qp, n, None, |_| {
-                read_one(&mut file, args.width, args.height)
-            })
+            encode_compressed_mp4_streaming(
+                args.width,
+                args.height,
+                args.fps,
+                args.qp,
+                n,
+                None,
+                |_| read_one(&mut file, args.width, args.height),
+            )
         }
         other => {
             eprintln!("unknown encoder `{other}`");
@@ -98,6 +104,7 @@ fn encode_hevc_pcm(args: &Args, frames: &[Yuv420Frame]) -> Vec<u8> {
 /// choices are bad" — two failures that look identical in a PSNR column.
 /// The library export path, optionally tiled.
 fn encode_hevc_mp4(args: &Args, frames: &[Yuv420Frame]) -> Vec<u8> {
+<<<<<<< Updated upstream:crates/threers-codec/examples/codec_bench.rs
     use threers_codec::hevc::compress::CompressedEncoder;
     let enc = CompressedEncoder::new(args.width, args.height, args.qp)
         .tiles(args.tiles.0, args.tiles.1);
@@ -105,6 +112,25 @@ fn encode_hevc_mp4(args: &Args, frames: &[Yuv420Frame]) -> Vec<u8> {
     let (vps, sps, pps) = enc.parameter_sets();
     let mut stream = vec![[vec![0, 0, 0, 1], vps, vec![0, 0, 0, 1], sps, vec![0, 0, 0, 1], pps].concat()];
     stream.extend(threers_codec::map_frames_pub(frames, |f| enc.encode_slice_au(f)));
+=======
+    use threers::codec::hevc::compress::CompressedEncoder;
+    let enc =
+        CompressedEncoder::new(args.width, args.height, args.qp).tiles(args.tiles.0, args.tiles.1);
+    let level = enc.config().level_idc;
+    let (vps, sps, pps) = enc.parameter_sets();
+    let mut stream = vec![[
+        vec![0, 0, 0, 1],
+        vps,
+        vec![0, 0, 0, 1],
+        sps,
+        vec![0, 0, 0, 1],
+        pps,
+    ]
+    .concat()];
+    stream.extend(threers::codec::map_frames_pub(frames, |f| {
+        enc.encode_slice_au(f)
+    }));
+>>>>>>> Stashed changes:examples/codec_bench.rs
     mux_annexb(args, &stream, level)
 }
 

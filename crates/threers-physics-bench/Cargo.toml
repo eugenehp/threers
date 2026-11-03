@@ -1,6 +1,6 @@
 [package]
 name = "threers-physics-bench"
-version = "0.0.1"
+version.workspace = true
 edition = "2021"
 authors = ["Eugene Hauptmann"]
 description = "Browser benchmark for threers-physics: six scenes with live step-time and body counts"

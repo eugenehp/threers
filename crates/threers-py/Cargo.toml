@@ -1,6 +1,6 @@
 [package]
 name = "threers-py"
-version = "0.0.10"
+version.workspace = true
 edition = "2021"
 authors = ["Eugene Hauptmann"]
 description = "Python bindings for threers — headless render, math, animation, and physics (PyO3 / maturin)"
@@ -35,7 +35,7 @@ usd = ["threers/usd"]
 [dependencies]
 threers = { path = "../..", version = "0.0.10" }
 threers-physics = { path = "../threers-physics", version = "0.0.10", optional = true }
-threers-animation = { path = "../threers-animation", version = "0.0.1", optional = true, default-features = false }
+threers-animation = { path = "../threers-animation", version = "0.0.10", optional = true, default-features = false }
 pyo3 = { version = "0.23", features = ["extension-module", "abi3-py39"] }
 
 # `add_extension_module_link_args`: on macOS an extension module leaves the

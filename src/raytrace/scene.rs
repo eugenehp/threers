@@ -28,7 +28,9 @@ use crate::textures::CubeTexture;
 
 use super::bvh::RtBvh;
 use super::distribution::EnvDistribution;
-use super::primitives::{line_segment_quads, line_width_for, point_radius_for, point_spheres, sprite_quads};
+use super::primitives::{
+    line_segment_quads, line_width_for, point_radius_for, point_spheres, sprite_quads,
+};
 use super::sampler::{cosine_hemisphere, Onb};
 use super::settings::{BackgroundMode, RaytraceSettings};
 use super::texture::{CpuTexture, TextureCache};
@@ -567,6 +569,7 @@ pub struct RaytraceScene {
     pub(crate) camera_dependent: bool,
 }
 
+<<<<<<< Updated upstream
 
 /// One mesh draw as the path tracer collects it: geometry, its world
 /// transform, the material it was drawn with, and the span of the index
@@ -578,6 +581,11 @@ type CollectedMesh = (
     Arc<Material>,
     Option<(u32, u32)>,
 );
+=======
+/// One mesh as the path tracer collects it: geometry, its world transform, and
+/// the material it was drawn with.
+type CollectedMesh = (Arc<crate::core::BufferGeometry>, Matrix4, Arc<Material>);
+>>>>>>> Stashed changes
 
 /// Triangles and their shading, keyed by mesh, by the material slot it was
 /// drawn with and by the span drawn — the same geometry under two materials,
@@ -704,71 +712,77 @@ impl RaytraceScene {
                         return;
                     }
                     match light {
-                    Light::Ambient(l) => {
-                        out.world.ambient = out.world.ambient + v3(l.color) * l.intensity;
-                    }
-                    Light::Hemisphere(l) => {
-                        out.world.hemispheres.push(RtHemisphere {
-                            sky: v3(l.sky_color) * l.intensity,
-                            ground: v3(l.ground_color) * l.intensity,
-                            up: transform_direction(&obj.matrix_world, Vector3::UP).normalize(),
-                        });
-                    }
-                    Light::Directional(l) => {
-                        // three.js resolves a directional light's direction as
-                        // `normalize(target - position)` with the target at the
-                        // origin by default; only when the light sits *at* the
-                        // origin does its own `direction` field take over.
-                        let pos = obj.world_position();
-                        let d = Vector3::new(-pos.x, -pos.y, -pos.z);
-                        let direction = if d.length_sq() > 1e-8 {
-                            d.normalize()
-                        } else {
-                            transform_direction(&obj.matrix_world, l.direction).normalize()
-                        };
-                        out.lights.push(RtLight::Directional {
-                            direction,
+                        Light::Ambient(l) => {
+                            out.world.ambient = out.world.ambient + v3(l.color) * l.intensity;
+                        }
+                        Light::Hemisphere(l) => {
+                            out.world.hemispheres.push(RtHemisphere {
+                                sky: v3(l.sky_color) * l.intensity,
+                                ground: v3(l.ground_color) * l.intensity,
+                                up: transform_direction(&obj.matrix_world, Vector3::UP).normalize(),
+                            });
+                        }
+                        Light::Directional(l) => {
+                            // three.js resolves a directional light's direction as
+                            // `normalize(target - position)` with the target at the
+                            // origin by default; only when the light sits *at* the
+                            // origin does its own `direction` field take over.
+                            let pos = obj.world_position();
+                            let d = Vector3::new(-pos.x, -pos.y, -pos.z);
+                            let direction = if d.length_sq() > 1e-8 {
+                                d.normalize()
+                            } else {
+                                transform_direction(&obj.matrix_world, l.direction).normalize()
+                            };
+                            out.lights.push(RtLight::Directional {
+                                direction,
+                                radiance: v3(l.color) * l.intensity,
+                                angular_radius: settings.sun_angular_radius,
+                            });
+                        }
+                        Light::Point(l) => out.lights.push(RtLight::Point {
+                            position: obj.world_position(),
+                            intensity: v3(l.color) * l.intensity,
+                            radius: settings.light_radius,
+                            distance: l.distance,
+                            decay: l.decay,
+                        }),
+                        Light::Spot(l) => out.lights.push(RtLight::Spot {
+                            position: obj.world_position(),
+                            direction: transform_direction(&obj.matrix_world, l.direction)
+                                .normalize(),
+                            intensity: v3(l.color) * l.intensity,
+                            radius: settings.light_radius,
+                            distance: l.distance,
+                            decay: l.decay,
+                            cos_outer: l.angle.cos(),
+                            cos_inner: (l.angle * (1.0 - l.penumbra)).cos(),
+                        }),
+                        Light::RectArea(l) => out.lights.push(RtLight::Rect {
+                            position: obj.world_position(),
+                            right: transform_direction(
+                                &obj.matrix_world,
+                                Vector3::new(l.width * 0.5, 0.0, 0.0),
+                            ),
+                            up: transform_direction(
+                                &obj.matrix_world,
+                                Vector3::new(0.0, l.height * 0.5, 0.0),
+                            ),
                             radiance: v3(l.color) * l.intensity,
-                            angular_radius: settings.sun_angular_radius,
-                        });
+                        }),
                     }
-                    Light::Point(l) => out.lights.push(RtLight::Point {
-                        position: obj.world_position(),
-                        intensity: v3(l.color) * l.intensity,
-                        radius: settings.light_radius,
-                        distance: l.distance,
-                        decay: l.decay,
-                    }),
-                    Light::Spot(l) => out.lights.push(RtLight::Spot {
-                        position: obj.world_position(),
-                        direction: transform_direction(&obj.matrix_world, l.direction).normalize(),
-                        intensity: v3(l.color) * l.intensity,
-                        radius: settings.light_radius,
-                        distance: l.distance,
-                        decay: l.decay,
-                        cos_outer: l.angle.cos(),
-                        cos_inner: (l.angle * (1.0 - l.penumbra)).cos(),
-                    }),
-                    Light::RectArea(l) => out.lights.push(RtLight::Rect {
-                        position: obj.world_position(),
-                        right: transform_direction(
-                            &obj.matrix_world,
-                            Vector3::new(l.width * 0.5, 0.0, 0.0),
-                        ),
-                        up: transform_direction(
-                            &obj.matrix_world,
-                            Vector3::new(0.0, l.height * 0.5, 0.0),
-                        ),
-                        radiance: v3(l.color) * l.intensity,
-                    }),
-                }
                 }
                 ObjectKind::LineSegments(ls) => {
                     let width = line_width_for(&ls.material);
+<<<<<<< Updated upstream
                     let source = line_span(&ls.geometry);
                     if let Some(geom) = line_segment_quads(&source, &obj.matrix_world, width)
                     {
                         collected.push((geom, Matrix4::identity(), ls.material.clone(), None));
+=======
+                    if let Some(geom) = line_segment_quads(&ls.geometry, &obj.matrix_world, width) {
+                        collected.push((geom, Matrix4::identity(), ls.material.clone()));
+>>>>>>> Stashed changes
                     } else {
                         out.report.skipped.push(format!(
                             "'{}': line segments could not be expanded",
@@ -782,7 +796,9 @@ impl RaytraceScene {
                     if let Some(geom) = point_spheres(&source, &obj.matrix_world, radius) {
                         collected.push((geom, Matrix4::identity(), p.material.clone(), None));
                     } else {
-                        out.report.skipped.push(format!("'{}': points could not be expanded", obj.name));
+                        out.report
+                            .skipped
+                            .push(format!("'{}': points could not be expanded", obj.name));
                     }
                 }
                 ObjectKind::Sprite(s) => {
@@ -828,10 +844,7 @@ impl RaytraceScene {
                     out.append_geometry(&geometry, &world, slot, &mat, span);
                     local_mesh_cache.insert(
                         cache_key,
-                        (
-                            out.tris[before..].to_vec(),
-                            out.shading[before..].to_vec(),
-                        ),
+                        (out.tris[before..].to_vec(), out.shading[before..].to_vec()),
                     );
                 }
             } else {

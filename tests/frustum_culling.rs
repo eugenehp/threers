@@ -79,7 +79,11 @@ fn shot(eye: Vector3, look: Vector3) -> PerspectiveCamera {
     c
 }
 
-fn both_ways(r: &mut HeadlessRenderer, shadows: bool, cam: &PerspectiveCamera) -> (Vec<u8>, Vec<u8>) {
+fn both_ways(
+    r: &mut HeadlessRenderer,
+    shadows: bool,
+    cam: &PerspectiveCamera,
+) -> (Vec<u8>, Vec<u8>) {
     r.renderer().set_frustum_culling(true);
     let on = r.render_to_rgba(&mut field(shadows), cam);
     r.renderer().set_frustum_culling(false);
@@ -168,12 +172,19 @@ fn culling_removes_work() {
     let across = shot(Vector3::new(0.0, 3.0, 34.0), Vector3::new(0.0, 0.5, 0.0));
     let _ = r.render_to_rgba(&mut field(false), &across);
     let (drawn, _) = r.renderer().cull_stats();
-    assert!(drawn > 20, "looking straight at the field only drew {drawn} meshes");
+    assert!(
+        drawn > 20,
+        "looking straight at the field only drew {drawn} meshes"
+    );
 
     // And with culling off nothing is ever rejected.
     r.renderer().set_frustum_culling(false);
     let _ = r.render_to_rgba(&mut field(false), &sky);
-    assert_eq!(r.renderer().cull_stats().1, 0, "culling was meant to be off");
+    assert_eq!(
+        r.renderer().cull_stats().1,
+        0,
+        "culling was meant to be off"
+    );
     r.renderer().set_frustum_culling(true);
 }
 

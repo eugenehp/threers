@@ -71,7 +71,15 @@ fn encode_and_decode_with(mut enc: CompressedEncoder, frame: &Yuv420Frame) -> (V
     let dst = dir.join(format!("threers-h264-{uniq}.yuv"));
     std::fs::write(&src, &au).unwrap();
     let ok = Command::new("ffmpeg")
-        .args(["-y", "-hide_banner", "-loglevel", "error", "-f", "h264", "-i"])
+        .args([
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "h264",
+            "-i",
+        ])
         .arg(&src)
         .args(["-f", "rawvideo", "-pix_fmt", "yuv420p"])
         .arg(&dst)
@@ -114,7 +122,8 @@ fn assert_conformant(frame: &Yuv420Frame, qp: i32, what: &str) {
         .max()
         .unwrap_or(0);
     assert_eq!(
-        diffs, 0,
+        diffs,
+        0,
         "{what} (qp {qp}): decoder != encoder reconstruction — \
          {diffs}/{} samples differ, largest by {worst}",
         recon.len()
@@ -203,9 +212,11 @@ fn directional_content_is_conformant() {
         return;
     }
     for (name, f) in [
-        ("vertical stripes", &(|x: u32, _: u32| {
-            (if x.is_multiple_of(3) { 30u8 } else { 220u8 }, 128u8, 128u8)
-        }) as &dyn Fn(u32, u32) -> (u8, u8, u8)),
+        (
+            "vertical stripes",
+            &(|x: u32, _: u32| (if x.is_multiple_of(3) { 30u8 } else { 220u8 }, 128u8, 128u8))
+                as &dyn Fn(u32, u32) -> (u8, u8, u8),
+        ),
         ("horizontal stripes", &|_: u32, y: u32| {
             (if y.is_multiple_of(3) { 30u8 } else { 220u8 }, 128u8, 128u8)
         }),
@@ -258,7 +269,6 @@ fn compressed_is_far_smaller_than_pcm() {
     );
 }
 
-
 /// The one known non-conformance, kept as a precise reproducer.
 ///
 /// Luma of any content is conformant, and so is chroma whose residual is
@@ -288,11 +298,14 @@ fn chroma_ac_across_macroblocks_is_conformant() {
     }
     // Two macroblocks side by side; flat luma so only chroma is in play.
     let f = frame_from(32, 16, |x, y| {
-        (120, (100 + (x * 13 + y * 5) % 100) as u8, (90 + (x * 7 + y * 21) % 120) as u8)
+        (
+            120,
+            (100 + (x * 13 + y * 5) % 100) as u8,
+            (90 + (x * 7 + y * 21) % 120) as u8,
+        )
     });
     assert_conformant(&f, 32, "chroma AC over two macroblocks");
 }
-
 
 /// Steep, wrapping diagonal content: large coefficients and many of them.
 ///
@@ -312,7 +325,6 @@ fn steep_diagonal_content_is_conformant() {
         assert_conformant(&f, qp, "steep diagonal");
     }
 }
-
 
 /// Randomised end-to-end sweep: content, size and QP all varied.
 ///
@@ -388,8 +400,7 @@ fn fuzz_smooth_content_is_conformant() {
             let f = frame_from(w, h, |x, y| {
                 let s = |o: usize, k: i32| {
                     let (xi, yi) = (x as i32, y as i32);
-                    128 + p[o] * xi / k + p[o + 1] * yi / k
-                        - p[o + 2] * ((xi / 7 + yi / 5) % 3)
+                    128 + p[o] * xi / k + p[o + 1] * yi / k - p[o + 2] * ((xi / 7 + yi / 5) % 3)
                 };
                 (
                     s(0, 3).clamp(0, 255) as u8,
@@ -436,7 +447,8 @@ fn varying_quantizer_is_conformant() {
             let (expect, decoded) = encode_and_decode_with(enc, &f);
             let n = expect.iter().zip(&decoded).filter(|(a, b)| a != b).count();
             assert_eq!(
-                n, 0,
+                n,
+                0,
                 "aq {strength} qp {qp}: {n}/{} samples differ",
                 expect.len()
             );

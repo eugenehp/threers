@@ -257,11 +257,7 @@ impl MetalRenderTarget {
 
     /// Read one array slice back — eye `slice` of a
     /// [`layered`](Self::layered) target.
-    pub fn read_rgba_slice(
-        &self,
-        device: &MetalDevice,
-        slice: u32,
-    ) -> Result<Vec<u8>, MetalError> {
+    pub fn read_rgba_slice(&self, device: &MetalDevice, slice: u32) -> Result<Vec<u8>, MetalError> {
         let mut out = Vec::new();
         self.read_rgba_slice_into(device, slice, &mut out)?;
         Ok(out)
@@ -427,8 +423,7 @@ fn unpack_staging_buffer(
     let _pool = AutoreleasePool::new();
     unsafe {
         use std::ffi::c_void;
-        let contents: *const u8 =
-            msg0::<*mut c_void>(staging.id(), sel!("contents")).cast();
+        let contents: *const u8 = msg0::<*mut c_void>(staging.id(), sel!("contents")).cast();
         if contents.is_null() {
             return Err(MetalError::Allocation("readback buffer contents".into()));
         }
@@ -482,7 +477,6 @@ pub fn blit_texture_to_buffer_on_cmd(
     }
     Ok(())
 }
-
 
 /// Unpack a prior async texture readback (after `waitUntilCompleted` on its cmd).
 pub fn finish_texture_readback_into(

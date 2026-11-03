@@ -503,7 +503,6 @@ fn count_boundary_edges(indices: &[u32]) -> usize {
     counts.values().filter(|&&c| c == 1).count()
 }
 
-
 /// Fill a planar patch against its actual boundary rather than its parameter
 /// bounding box.
 ///

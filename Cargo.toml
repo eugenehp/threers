@@ -22,9 +22,15 @@ members = [
 exclude = ["crates/threers-continuum", "crates/threers-mechanism-tour"]
 resolver = "2"
 
+# One version for every crate in the repo. Members inherit it; the excluded
+# crates and the version pins between crates repeat it literally, and
+# `scripts/release-versions.sh` checks that they agree.
+[workspace.package]
+version = "0.0.10"
+
 [package]
 name = "threers"
-version = "0.0.10"
+version.workspace = true
 edition = "2021"
 # wgpu 30 requires 1.87, and this crate uses `is_multiple_of`, stabilised in the
 # same release. Declared so cargo says so up front rather than letting the build

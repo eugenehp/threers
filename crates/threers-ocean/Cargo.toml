@@ -1,6 +1,6 @@
 [package]
 name = "threers-ocean"
-version = "0.0.1"
+version.workspace = true
 edition = "2021"
 authors = ["Eugene Hauptmann"]
 description = "The threers ocean-water demo, as a browser package"

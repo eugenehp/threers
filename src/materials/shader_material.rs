@@ -314,6 +314,7 @@ impl ShaderMaterial {
     /// assert!(m.validate(true).is_ok());
     /// ```
     pub fn validate(&self, storage_buffers: bool) -> Result<(), String> {
+<<<<<<< Updated upstream
         // As drawn single-sampled, and multisampled — where the module gains
         // `@builtin(sample_mask)` on a backend with storage buffers.
         for (coverage, samples) in [(false, 1), (self.alpha_to_coverage, 4)] {
@@ -330,6 +331,14 @@ impl ShaderMaterial {
             )?;
         }
         Ok(())
+=======
+        let source = crate::renderer::custom_shader_module_source(
+            &self.fragment,
+            self.vertex.as_deref(),
+            storage_buffers,
+        );
+        crate::renderer::validate_custom_shader(&source, crate::renderer::custom_preamble_lines())
+>>>>>>> Stashed changes
     }
 
     /// Set the `@group(4)` uniform `vec4` slots (`u_data.data`).

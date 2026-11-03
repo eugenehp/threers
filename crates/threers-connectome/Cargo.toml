@@ -1,6 +1,6 @@
 [package]
 name = "threers-connectome"
-version = "0.0.1"
+version.workspace = true
 edition = "2021"
 # Matches `threers`, whose wasm build the browser side loads.
 rust-version = "1.87"

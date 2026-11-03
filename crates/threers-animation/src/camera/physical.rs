@@ -98,7 +98,11 @@ mod tests {
     fn fifty_mm_on_full_frame_is_about_27_degrees_vertical() {
         let fov = FilmBack::FULL_FRAME.fov_vertical(50.0);
         // 2*atan(12/50) ≈ 27°
-        assert!((fov.to_degrees() - 27.0).abs() < 1.0, "{}", fov.to_degrees());
+        assert!(
+            (fov.to_degrees() - 27.0).abs() < 1.0,
+            "{}",
+            fov.to_degrees()
+        );
     }
 
     #[test]

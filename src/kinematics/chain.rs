@@ -205,11 +205,7 @@ impl SerialChain {
         let n = self.n();
         let poses = self.poses(q);
         let s = self.metres;
-        let g = if gravity {
-            self.gravity
-        } else {
-            [0.0; 3]
-        };
+        let g = if gravity { self.gravity } else { [0.0; 3] };
 
         let mut omega = vec![[0.0; 3]; n];
         let mut alpha = vec![[0.0; 3]; n];
@@ -316,7 +312,13 @@ impl SerialChain {
 
     /// q̈ = M⁻¹ (τ − h). `tau` is N·m; extra diagonal inertia (reflected rotors)
     /// is added before the solve.
-    pub fn forward_dynamics(&self, q: &[f64], qd: &[f64], tau: &[f64], extra_diag: &[f64]) -> Vec<f64> {
+    pub fn forward_dynamics(
+        &self,
+        q: &[f64],
+        qd: &[f64],
+        tau: &[f64],
+        extra_diag: &[f64],
+    ) -> Vec<f64> {
         let n = self.n();
         let mut m = self.mass_matrix(q);
         for i in 0..n {

@@ -516,7 +516,10 @@ fn direct(args: &Args, path: &str) {
         buf.slice(..).map_async(wgpu::MapMode::Read, |_| {});
         let _ = device.poll(wgpu::PollType::wait_indefinitely());
 
-        let data = buf.slice(..).get_mapped_range().expect("buffer range is mapped");
+        let data = buf
+            .slice(..)
+            .get_mapped_range()
+            .expect("buffer range is mapped");
         let mut rgba = Vec::with_capacity((w * h * 4) as usize);
         let mut lit = 0u64;
         for y in 0..h {
@@ -661,10 +664,83 @@ async fn windowed(args: Args) {
             .expect("window"),
     );
 
+<<<<<<< Updated upstream
     // wgpu by default; the native Metal backend with `--features metal` and
     // `THREERS_BACKEND=metal`.
     let mut view = WindowRenderer::new(window.clone()).expect("a GPU for the window");
     let gpu = view.marks_gpu();
+=======
+    let instance = {
+        // wgpu 30 dropped `Default` here; the display handle is only
+        // consulted by GLES/Wayland, not Vulkan, Metal or DX12.
+        let mut d = wgpu::InstanceDescriptor::new_without_display_handle();
+        d.backends = wgpu::Backends::PRIMARY;
+        wgpu::Instance::new(d)
+    };
+    let surface = instance.create_surface(window.clone()).expect("surface");
+    let adapter = instance
+        .request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            compatible_surface: Some(&surface),
+            force_fallback_adapter: false,
+            apply_limit_buckets: false,
+        })
+        .await
+        .expect("adapter");
+    // Downlevel defaults allow 16 sampled textures and 16 samplers per stage,
+    // and the main pass declares 20 of each in the fragment stage — material
+    // maps, the shadow atlases and the environment all bind there. Without
+    // raising these two, `Renderer::new` fails wgpu 30's pipeline-layout
+    // validation outright. `HeadlessRenderer` raises the same pair.
+    let adapter_limits = adapter.limits();
+    // `using_resolution` for the texture size, too: the renderer allocates a
+    // 4096 shadow map and downlevel caps 2D textures at 2048.
+    let mut limits = wgpu::Limits::downlevel_defaults().using_resolution(adapter_limits.clone());
+    limits.max_sampled_textures_per_shader_stage =
+        adapter_limits.max_sampled_textures_per_shader_stage;
+    limits.max_samplers_per_shader_stage = adapter_limits.max_samplers_per_shader_stage;
+
+    let (device, queue) = adapter
+        .request_device(&wgpu::DeviceDescriptor {
+            label: Some("threers device"),
+            required_features: wgpu::Features::empty(),
+            required_limits: limits,
+            ..Default::default()
+        })
+        .await
+        .expect("device");
+    let device = Arc::new(device);
+    let queue = Arc::new(queue);
+
+    let size = window.inner_size();
+    let caps = surface.get_capabilities(&adapter);
+    let format = caps
+        .formats
+        .iter()
+        .copied()
+        .find(|f| f.is_srgb())
+        .unwrap_or(caps.formats[0]);
+    let mut config = wgpu::SurfaceConfiguration {
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        format,
+        width: size.width.max(1),
+        height: size.height.max(1),
+        present_mode: caps.present_modes[0],
+        alpha_mode: caps.alpha_modes[0],
+        view_formats: vec![],
+        desired_maximum_frame_latency: 2,
+        color_space: wgpu::SurfaceColorSpace::Srgb,
+    };
+    surface.configure(&device, &config);
+
+    let mut renderer = Renderer::new(
+        device.clone(),
+        queue.clone(),
+        format,
+        config.width,
+        config.height,
+    );
+>>>>>>> Stashed changes
 
     let mut world = World::build_with(
         &args.preset,
@@ -915,8 +991,27 @@ async fn windowed(args: Args) {
                 WindowEvent::RedrawRequested => {
                     // The compute dispatch is submitted here, before the draw
                     // that reads its output; queue order does the rest.
+<<<<<<< Updated upstream
                     world.update(start.elapsed().as_secs_f32(), &gpu, &gpu, &waves);
                     view.render(&mut world.scene, &world.camera);
+=======
+                    world.update(start.elapsed().as_secs_f32(), &device, &queue, &waves);
+                    match surface.get_current_texture() {
+                        wgpu::CurrentSurfaceTexture::Success(frame)
+                        | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {
+                            let view = frame
+                                .texture
+                                .create_view(&wgpu::TextureViewDescriptor::default());
+                            renderer.render(&mut world.scene, &world.camera, &view, false);
+                            queue.present(frame);
+                        }
+                        wgpu::CurrentSurfaceTexture::Lost
+                        | wgpu::CurrentSurfaceTexture::Outdated => {
+                            surface.configure(&device, &config);
+                        }
+                        e => log::error!("surface error: {e:?}"),
+                    }
+>>>>>>> Stashed changes
                     // Frame rate in the title bar: the bench number is
                     // readback-bound and says little about the interactive path.
                     fps_frames += 1;

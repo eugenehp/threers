@@ -147,14 +147,14 @@ mod tests {
             return;
         };
         let flags = adapter.get_downlevel_capabilities().flags;
-        let Ok((device, _queue)) = pollster::block_on(adapter.request_device(
-            &wgpu::DeviceDescriptor {
+        let Ok((device, _queue)) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
                 label: Some("caps test device"),
                 required_features: wgpu::Features::empty(),
                 required_limits: adapter.limits(),
                 ..Default::default()
-            },
-        )) else {
+            }))
+        else {
             eprintln!("skipping: no device");
             return;
         };
@@ -177,7 +177,8 @@ mod tests {
             ),
         ] {
             assert_eq!(
-                inferred, reported,
+                inferred,
+                reported,
                 "{name}: inferred {inferred} from the limits, but the adapter \
                  reports {reported} — the inference in this module no longer \
                  holds on this backend ({:?})",

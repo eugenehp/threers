@@ -9,6 +9,7 @@
 //! reconstruction has to happen *during* coding, in decoding order — the same
 //! constraint the HEVC path has, for the same reason.
 
+<<<<<<< Updated upstream:crates/threers-codec/src/h264/compress.rs
 use crate::bitstream::{rbsp_trailing_bits, BitWriter};
 use crate::h264::nal::{nal_unit_base, push_annexb, NalUnitType};
 use crate::h264::params::write_sps;
@@ -25,9 +26,27 @@ use crate::h264::cavlc::{self, BlockKind, ZIGZAG4};
 use crate::h264::intra;
 use crate::h264::params::{H264Config, MB_SIZE};
 use crate::h264::transform::{
+=======
+use crate::captions::CaptionTrack;
+use crate::codec::bitstream::{rbsp_trailing_bits, BitWriter};
+use crate::codec::h264::avcc::build_avcc;
+use crate::codec::h264::cabac::{self, Cabac};
+use crate::codec::h264::cavlc::{self, BlockKind, ZIGZAG4};
+use crate::codec::h264::encoder::H264Encoder;
+use crate::codec::h264::intra;
+use crate::codec::h264::nal::{nal_unit_base, push_annexb, NalUnitType};
+use crate::codec::h264::params::write_sps;
+use crate::codec::h264::params::EntropyMode;
+use crate::codec::h264::params::{H264Config, MB_SIZE};
+use crate::codec::h264::pps::write_pps_deblock_control;
+use crate::codec::h264::transform::{
+>>>>>>> Stashed changes:src/codec/h264/compress.rs
     chroma_dc_forward, chroma_dc_inverse, dequant4, fit_luma_dc_levels, forward4, inverse4,
     luma_dc_hadamard, luma_dc_inverse, quant4,
 };
+use crate::codec::hevc::encoder::{pad_plane, Yuv420Frame};
+use crate::codec::mp4::H264Mp4Params;
+use crate::codec::rate::{Quality, RateControl, Reach, PROBE_QP};
 
 /// `mb_type` for `I_NxN` in an I slice (Table 7-11).
 const MB_TYPE_I_NXN: u32 = 0;
@@ -36,15 +55,30 @@ const MB_TYPE_I_NXN: u32 = 0;
 /// in the order the bitstream visits them (Table 6-3): z-order over the four
 /// 8×8 quadrants, and z-order again inside each.
 const BLK_POS: [(usize, usize); 16] = [
-    (0, 0), (1, 0), (0, 1), (1, 1),
-    (2, 0), (3, 0), (2, 1), (3, 1),
-    (0, 2), (1, 2), (0, 3), (1, 3),
-    (2, 2), (3, 2), (2, 3), (3, 3),
+    (0, 0),
+    (1, 0),
+    (0, 1),
+    (1, 1),
+    (2, 0),
+    (3, 0),
+    (2, 1),
+    (3, 1),
+    (0, 2),
+    (1, 2),
+    (0, 3),
+    (1, 3),
+    (2, 2),
+    (3, 2),
+    (2, 3),
+    (3, 3),
 ];
 
 /// Inverse of [`BLK_POS`]: `(x4, y4)` within a macroblock → block index.
 fn blk_index(x4: usize, y4: usize) -> usize {
-    BLK_POS.iter().position(|&p| p == (x4, y4)).expect("in-range")
+    BLK_POS
+        .iter()
+        .position(|&p| p == (x4, y4))
+        .expect("in-range")
 }
 
 /// `coded_block_pattern` code numbers for intra macroblocks (Table 9-4).
@@ -52,9 +86,8 @@ fn blk_index(x4: usize, y4: usize) -> usize {
 const CBP_INTRA_CODE: [u32; 48] = {
     // Table 9-4 lists codeNum → CBP; invert it once at compile time.
     const FROM_CODE: [usize; 48] = [
-        47, 31, 15, 0, 23, 27, 29, 30, 7, 11, 13, 14, 39, 43, 45, 46, 16, 3, 5, 10, 12, 19,
-        21, 26, 28, 35, 37, 42, 44, 1, 2, 4, 8, 17, 18, 20, 24, 6, 9, 22, 25, 32, 33, 34, 36,
-        40, 38, 41,
+        47, 31, 15, 0, 23, 27, 29, 30, 7, 11, 13, 14, 39, 43, 45, 46, 16, 3, 5, 10, 12, 19, 21, 26,
+        28, 35, 37, 42, 44, 1, 2, 4, 8, 17, 18, 20, 24, 6, 9, 22, 25, 32, 33, 34, 36, 40, 38, 41,
     ];
     let mut out = [0u32; 48];
     let mut i = 0;
@@ -364,12 +397,20 @@ fn encode_macroblock(
 
     let nxn = build_nxn(ctx, y, mbx, mby, qp);
     let nxn_state = save_luma(ctx, mbx, mby);
-    let nxn_cost = rd_cost(nxn.ssd, trial_bits(w, ctx, &nxn.coding, &chroma, mbx, mby, qp_delta), qp);
+    let nxn_cost = rd_cost(
+        nxn.ssd,
+        trial_bits(w, ctx, &nxn.coding, &chroma, mbx, mby, qp_delta),
+        qp,
+    );
 
     // `I_16x16` predicts from outside the macroblock only, so it does not care
     // that `build_nxn` has already overwritten the inside.
     let i16 = build_i16(ctx, y, mbx, mby, qp);
-    let i16_cost = rd_cost(i16.ssd, trial_bits(w, ctx, &i16.coding, &chroma, mbx, mby, qp_delta), qp);
+    let i16_cost = rd_cost(
+        i16.ssd,
+        trial_bits(w, ctx, &i16.coding, &chroma, mbx, mby, qp_delta),
+        qp,
+    );
 
     let winner = if i16_cost < nxn_cost {
         &i16.coding
@@ -444,7 +485,10 @@ fn trial_bits(
 }
 
 fn save_luma(ctx: &Ctx, mbx: usize, mby: usize) -> LumaState {
-    let (ox, oy) = ((mbx * MB_SIZE as usize) as u32, (mby * MB_SIZE as usize) as u32);
+    let (ox, oy) = (
+        (mbx * MB_SIZE as usize) as u32,
+        (mby * MB_SIZE as usize) as u32,
+    );
     let mut rec = [0u8; 256];
     for j in 0..16u32 {
         let row = ((oy + j) * ctx.cw + ox) as usize;
@@ -462,7 +506,10 @@ fn save_luma(ctx: &Ctx, mbx: usize, mby: usize) -> LumaState {
 }
 
 fn restore_luma(ctx: &mut Ctx, mbx: usize, mby: usize, s: &LumaState) {
-    let (ox, oy) = ((mbx * MB_SIZE as usize) as u32, (mby * MB_SIZE as usize) as u32);
+    let (ox, oy) = (
+        (mbx * MB_SIZE as usize) as u32,
+        (mby * MB_SIZE as usize) as u32,
+    );
     for j in 0..16u32 {
         let row = ((oy + j) * ctx.cw + ox) as usize;
         let src = (j * 16) as usize;
@@ -535,7 +582,10 @@ fn build_nxn(ctx: &mut Ctx, y: &[u8], mbx: usize, mby: usize, qp: i32) -> Candid
 /// Build the `I_16x16` candidate: one prediction for all 256 samples, the
 /// sixteen block DCs through a 4×4 Hadamard, and the AC left in place.
 fn build_i16(ctx: &mut Ctx, y: &[u8], mbx: usize, mby: usize, qp: i32) -> Candidate {
-    let (ox, oy) = ((mbx * MB_SIZE as usize) as u32, (mby * MB_SIZE as usize) as u32);
+    let (ox, oy) = (
+        (mbx * MB_SIZE as usize) as u32,
+        (mby * MB_SIZE as usize) as u32,
+    );
     let n = luma16_neighbors(ctx, mbx, mby);
     let orig = gather(y, ctx.cw, ox, oy, 16);
     let pred_mode = best_luma16_mode(&orig, &n);
@@ -741,7 +791,10 @@ fn adaptive_qp(y: &[u8], cw: u32, mbw: usize, mbh: usize, base: i32, strength: f
     let mut energy = Vec::with_capacity(mbw * mbh);
     for mby in 0..mbh {
         for mbx in 0..mbw {
-            let (ox, oy) = ((mbx * MB_SIZE as usize) as u32, (mby * MB_SIZE as usize) as u32);
+            let (ox, oy) = (
+                (mbx * MB_SIZE as usize) as u32,
+                (mby * MB_SIZE as usize) as u32,
+            );
             let (mut sum, mut sq) = (0i64, 0i64);
             for j in 0..MB_SIZE {
                 let row = ((oy + j) * cw + ox) as usize;
@@ -812,10 +865,8 @@ fn write_macroblock(
             // Table 7-11 packs the prediction mode and both halves of the coded
             // block pattern into `mb_type` itself, so no `coded_block_pattern`
             // is sent — and `mb_qp_delta` is unconditional.
-            let mb_type = 1
-                + u32::from(l.pred_mode)
-                + 4 * chroma.cbp
-                + 12 * u32::from(l.cbp_luma != 0);
+            let mb_type =
+                1 + u32::from(l.pred_mode) + 4 * chroma.cbp + 12 * u32::from(l.cbp_luma != 0);
             w.write_ue(mb_type);
             w.write_ue(chroma.mode as u32);
             w.write_se(qp_delta);
@@ -908,9 +959,7 @@ impl Entropy {
     ) {
         match self {
             Entropy::Cavlc(w) => write_macroblock(w, ctx, luma, chroma, mbx, mby, qp_delta),
-            Entropy::Cabac(c) => {
-                write_macroblock_cabac(c, ctx, luma, chroma, mbx, mby, qp_delta)
-            }
+            Entropy::Cabac(c) => write_macroblock_cabac(c, ctx, luma, chroma, mbx, mby, qp_delta),
         }
     }
 }
@@ -1201,7 +1250,10 @@ fn blk_origin(mbx: usize, mby: usize, blk: usize) -> (u32, u32) {
 /// Reference samples along the top and left edges of a whole macroblock.
 fn luma16_neighbors(ctx: &Ctx, mbx: usize, mby: usize) -> intra::Neighbors16 {
     let s = |x: i32, y: i32| ctx.ry[(y as u32 * ctx.cw + x as u32) as usize] as i32;
-    let (xi, yi) = ((mbx * MB_SIZE as usize) as i32, (mby * MB_SIZE as usize) as i32);
+    let (xi, yi) = (
+        (mbx * MB_SIZE as usize) as i32,
+        (mby * MB_SIZE as usize) as i32,
+    );
     let (bx, by) = (xi as u32, yi as u32);
     let above = (0..16)
         .all(|k| ctx.avail_luma(xi + k, yi - 1, bx, by))
@@ -1290,12 +1342,10 @@ fn luma_nc(ctx: &Ctx, px: u32, py: u32) -> i32 {
 
 fn chroma_nc(ctx: &Ctx, plane: usize, cx: u32, cy: u32) -> i32 {
     let inside = |x: i32, y: i32| x >= 0 && y >= 0;
-    let left = (inside(cx as i32 - 1, cy as i32)
-        && chroma_block_done(ctx, cx - 4, cy, cx, cy))
-    .then(|| ctx.nnz_c[plane][grid_index(ctx.cwc, cx - 4, cy)]);
-    let above = (inside(cx as i32, cy as i32 - 1)
-        && chroma_block_done(ctx, cx, cy - 4, cx, cy))
-    .then(|| ctx.nnz_c[plane][grid_index(ctx.cwc, cx, cy - 4)]);
+    let left = (inside(cx as i32 - 1, cy as i32) && chroma_block_done(ctx, cx - 4, cy, cx, cy))
+        .then(|| ctx.nnz_c[plane][grid_index(ctx.cwc, cx - 4, cy)]);
+    let above = (inside(cx as i32, cy as i32 - 1) && chroma_block_done(ctx, cx, cy - 4, cx, cy))
+        .then(|| ctx.nnz_c[plane][grid_index(ctx.cwc, cx, cy - 4)]);
     cavlc::derive_nc(left, above)
 }
 
@@ -1316,7 +1366,14 @@ fn luma_neighbors(ctx: &Ctx, px: u32, py: u32) -> intra::Neighbors4 {
 
     let above = (0..4)
         .all(|k| ctx.avail_luma(xi + k, yi - 1, px, py))
-        .then(|| [s(xi, yi - 1), s(xi + 1, yi - 1), s(xi + 2, yi - 1), s(xi + 3, yi - 1)]);
+        .then(|| {
+            [
+                s(xi, yi - 1),
+                s(xi + 1, yi - 1),
+                s(xi + 2, yi - 1),
+                s(xi + 3, yi - 1),
+            ]
+        });
     let above_right = (0..4)
         .all(|k| ctx.avail_luma(xi + 4 + k, yi - 1, px, py))
         .then(|| {
@@ -1329,7 +1386,14 @@ fn luma_neighbors(ctx: &Ctx, px: u32, py: u32) -> intra::Neighbors4 {
         });
     let left = (0..4)
         .all(|k| ctx.avail_luma(xi - 1, yi + k, px, py))
-        .then(|| [s(xi - 1, yi), s(xi - 1, yi + 1), s(xi - 1, yi + 2), s(xi - 1, yi + 3)]);
+        .then(|| {
+            [
+                s(xi - 1, yi),
+                s(xi - 1, yi + 1),
+                s(xi - 1, yi + 2),
+                s(xi - 1, yi + 3),
+            ]
+        });
     let corner = ctx
         .avail_luma(xi - 1, yi - 1, px, py)
         .then(|| s(xi - 1, yi - 1));
@@ -1573,7 +1637,6 @@ impl CompressedEncoder {
     }
 }
 
-
 /// Encode `frames` as a compressed intra H.264 `.mp4` (`avc1`) at quantization
 /// `qp`, entirely in-process — no ffmpeg, and it builds for `wasm32`.
 ///
@@ -1622,7 +1685,16 @@ where
     W: std::io::Write,
     I: IntoIterator<Item = Yuv420Frame>,
 {
-    write_mp4_quality(out, width, height, fps, Quality::Qp(qp), captions, frames, None)
+    write_mp4_quality(
+        out,
+        width,
+        height,
+        fps,
+        Quality::Qp(qp),
+        captions,
+        frames,
+        None,
+    )
 }
 
 /// [`write_mp4_from_iter`] with a quality target rather than a fixed quantizer.
@@ -1739,9 +1811,6 @@ where
     };
     crate::mp4::write_h264(out, &params, captions.filter(|t| !t.is_empty()))
 }
-
-
-
 
 /// A compressed intra H.264 encoder: pixels in, Annex-B out.
 ///

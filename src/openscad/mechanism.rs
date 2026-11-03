@@ -127,11 +127,7 @@ impl MechanismSpec {
     pub fn dangling_parts(&self) -> Vec<&str> {
         let mut out = Vec::new();
         for mate in &self.mates {
-            for name in mate
-                .parts
-                .iter()
-                .chain(mate.carrier.iter())
-            {
+            for name in mate.parts.iter().chain(mate.carrier.iter()) {
                 if self.part(name).is_none() && !out.contains(&name.as_str()) {
                     out.push(name.as_str());
                 }
@@ -967,7 +963,11 @@ mod tests {
         .unwrap();
         let mesh = spec.mate("mesh").unwrap();
         assert_eq!(mesh.carrier.as_deref(), Some("arm"));
-        assert!(spec.dangling_parts().is_empty(), "{:?}", spec.dangling_parts());
+        assert!(
+            spec.dangling_parts().is_empty(),
+            "{:?}",
+            spec.dangling_parts()
+        );
 
         // A mate with no carrier says so, and is the ordinary world-referenced
         // coupling it always was.
@@ -988,5 +988,4 @@ mod tests {
         .unwrap();
         assert_eq!(spec.dangling_parts(), vec!["arn"]);
     }
-
 }

@@ -23,16 +23,9 @@ pub enum FCurveModifier {
         offset: f32,
     },
     /// Repeat the curve (same as Extrapolation::Cycle, as a modifier).
-    Cycles {
-        before: u32,
-        after: u32,
-    },
+    Cycles { before: u32, after: u32 },
     /// Envelope: scale+offset with min/max clamps.
-    Envelope {
-        influence: f32,
-        min: f32,
-        max: f32,
-    },
+    Envelope { influence: f32, min: f32, max: f32 },
     /// y = amplitude * sin(phase + freq * t) + offset
     BuiltInFunction {
         amplitude: f32,
@@ -41,19 +34,11 @@ pub enum FCurveModifier {
         offset: f32,
     },
     /// Polynomial generator: y = c0 + c1*t + c2*t^2 + c3*t^3
-    Generator {
-        coeffs: [f32; 4],
-        additive: bool,
-    },
+    Generator { coeffs: [f32; 4], additive: bool },
     /// Clamp output.
-    Limit {
-        min: f32,
-        max: f32,
-    },
+    Limit { min: f32, max: f32 },
     /// Quantise to steps.
-    Stepped {
-        step_size: f32,
-    },
+    Stepped { step_size: f32 },
 }
 
 impl FCurveModifier {
@@ -83,10 +68,7 @@ impl FCurveModifier {
                 offset,
             } => value + amplitude * (phase + frequency * t).sin() + offset,
             Self::Generator { coeffs, additive } => {
-                let g = coeffs[0]
-                    + coeffs[1] * t
-                    + coeffs[2] * t * t
-                    + coeffs[3] * t * t * t;
+                let g = coeffs[0] + coeffs[1] * t + coeffs[2] * t * t + coeffs[3] * t * t * t;
                 if *additive {
                     value + g
                 } else {

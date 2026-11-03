@@ -1360,6 +1360,7 @@ impl MetalRenderer {
         scene.update_world();
         self.ensure_environment(scene);
         let (mut frame_u, mut items, mut stats, casters) = self.collect(scene, views, pass);
+<<<<<<< Updated upstream
         // Each casting light's record — layers, matrices, biases, filter —
         // and the passes that draw its maps, as the wgpu renderer builds them.
         self.ensure_shadow_arrays(&casters)?;
@@ -1468,6 +1469,43 @@ impl MetalRenderer {
                 }
             }
             frame_u.shadows[r] = rec;
+=======
+        let shadow_caster = casters.directional;
+        // The light's view-projection has to be in the frame uniform before the
+        // shadow pass records anything, since the depth-only vertex function
+        // reads it from there.
+        if let Some((dir, settings)) = shadow_caster {
+            self.ensure_shadow_map(settings.map_size)?;
+            let s = settings.camera_size;
+            // A fixed cube on the origin, matching the wgpu path. Fitting it to
+            // the visible meshes' bounds would waste fewer texels; it would
+            // also make the map's contents depend on the camera, so a shadow
+            // would swim as the view moved.
+            let eye = dir.normalize() * (-s * 1.5);
+            let view = Matrix4::look_at(eye, Vector3::ZERO, Vector3::UP);
+            let proj =
+                Matrix4::orthographic(-s, s, s, -s, settings.camera_near, settings.camera_far);
+            frame_u.shadow_vp = proj.multiply(&view).elements;
+            frame_u.shadow_params = [
+                1.0,
+                settings.bias.max(0.0),
+                1.0 / self.shadow_size.max(1) as f32,
+                settings.normal_bias.max(0.0),
+            ];
+        }
+        if let Some((pos, dir, angle, settings)) = casters.spot {
+            self.ensure_spot_shadow_map(settings.map_size)?;
+            let view = Matrix4::look_at(pos, pos + dir.normalize(), Vector3::UP);
+            // fov = 2 × the outer angle, so the frustum covers the whole cone.
+            let fov = (angle * 2.0).clamp(0.05, std::f32::consts::PI - 0.05);
+            let proj = Matrix4::perspective(fov, 1.0, settings.camera_near, settings.camera_far);
+            frame_u.spot_shadow_vp = proj.multiply(&view).elements;
+            frame_u.spot_params = [1.0, settings.bias.max(0.0), 0.0, 0.0];
+        }
+        if let Some((pos, radius)) = casters.point {
+            self.ensure_point_shadow_cube()?;
+            frame_u.point_shadow_pos = [pos.x, pos.y, pos.z, radius];
+>>>>>>> Stashed changes
         }
         frame_u.shadow_info = [casters.len() as u32, 0, 0, 0];
         // What the maps show, for reusing them (`ShadowMap`): taken here,
@@ -1683,6 +1721,7 @@ impl MetalRenderer {
             self.transmission = None;
             self.capture_bound = None;
         }
+<<<<<<< Updated upstream
         frame_u.rect_counts[1] = self.transmission.as_ref().map_or(0, |c| c.levels);
         let vp = staged.as_ref().map(|s| (s.clear, s.scissor));
         unsafe { self.encode(pass, views, &frame_u, &items, scene, slot, &mut stats, vp) }?;
@@ -1690,6 +1729,41 @@ impl MetalRenderer {
             self.viewport_state.composite(&c)?;
             // The pane pass had the drawable stripped; present after the copy.
             self.present(&c.dest)?;
+=======
+        if frame_u.point_shadow_pos[3] > 0.0 {
+            if let Some(cube) = self.point_shadow_cube.as_ref().map(|t| t.id()) {
+                // Six faces, +X −X +Y −Y +Z −Z, each a 90° frustum. The up
+                // vectors are the conventional cube-map ones: get them wrong
+                // and each face is individually plausible while the seams do
+                // not line up.
+                let pos = Vector3::new(
+                    frame_u.point_shadow_pos[0],
+                    frame_u.point_shadow_pos[1],
+                    frame_u.point_shadow_pos[2],
+                );
+                let radius = frame_u.point_shadow_pos[3];
+                // Metal's cube convention, which is not the GL one the wgpu
+                // path uses: +Y is up on the side faces rather than -Y. Getting
+                // this wrong leaves each face individually plausible and the
+                // shadow landing in the wrong place.
+                let faces: [(Vector3, Vector3); 6] = [
+                    (Vector3::new(1.0, 0.0, 0.0), Vector3::new(0.0, 1.0, 0.0)),
+                    (Vector3::new(-1.0, 0.0, 0.0), Vector3::new(0.0, 1.0, 0.0)),
+                    (Vector3::new(0.0, 1.0, 0.0), Vector3::new(0.0, 0.0, -1.0)),
+                    (Vector3::new(0.0, -1.0, 0.0), Vector3::new(0.0, 0.0, 1.0)),
+                    (Vector3::new(0.0, 0.0, 1.0), Vector3::new(0.0, 1.0, 0.0)),
+                    (Vector3::new(0.0, 0.0, -1.0), Vector3::new(0.0, 1.0, 0.0)),
+                ];
+                let proj =
+                    Matrix4::perspective(std::f32::consts::FRAC_PI_2, 1.0, 0.1, radius.max(1.0));
+                for (face, &(forward, up)) in faces.iter().enumerate() {
+                    let view = Matrix4::look_at(pos, pos + forward, up);
+                    let mut u = frame_u;
+                    u.shadow_vp = mirror_clip_x(proj.multiply(&view)).elements;
+                    unsafe { self.encode_shadow(&u, &items, slot, cube, face, true) }?;
+                }
+            }
+>>>>>>> Stashed changes
         }
         self.evict_unused();
         Ok(stats)
@@ -1931,6 +2005,7 @@ impl MetalRenderer {
                 std::cell::RefCell::new(None);
             #[allow(clippy::too_many_arguments)]
             let mut push_skinned = |geometry: &Arc<BufferGeometry>,
+<<<<<<< Updated upstream
                             material: &Arc<Material>,
                             primitive: NSUInteger,
                             instances: Option<Vec<f32>>,
@@ -1939,6 +2014,12 @@ impl MetalRenderer {
                             range: Option<(u32, u32)>,
                             influences: &[f32],
                             instance_morph: Option<(Vec<f32>, usize)>| {
+=======
+                                    material: &Arc<Material>,
+                                    primitive: NSUInteger,
+                                    instances: Option<Vec<f32>>,
+                                    bones: Option<Vec<f32>>| {
+>>>>>>> Stashed changes
                 if !geometry.attributes.contains_key("position") {
                     stats.skipped += 1;
                     return;
@@ -2026,14 +2107,21 @@ impl MetalRenderer {
             };
             // Everything that is not a skinned mesh, which is everything
             // else: same closure, no pose.
+<<<<<<< Updated upstream
             // The whole draw range, one material: lines, points, instances.
+=======
+>>>>>>> Stashed changes
             let mut push =
                 |g: &Arc<BufferGeometry>,
                  m: &Arc<Material>,
                  p: NSUInteger,
+<<<<<<< Updated upstream
                  inst: Option<Vec<f32>>| {
                     push_skinned(g, m, p, inst, None, None, g.draw_span(None), &[], None)
                 };
+=======
+                 inst: Option<Vec<f32>>| push_skinned(g, m, p, inst, None);
+>>>>>>> Stashed changes
 
             match &obj.kind {
                 // One item per draw — per group with a material array — each
@@ -2316,10 +2404,27 @@ impl MetalRenderer {
                 "geometry buffers: {:.2} GB across {} cached ({})",
                 stats.geometry_bytes as f64 / (1u64 << 30) as f64,
                 self.geometries.len(),
-                if slim_lines_enabled() { "slim lines" } else { "full vertices" },
+                if slim_lines_enabled() {
+                    "slim lines"
+                } else {
+                    "full vertices"
+                },
             );
         }
+<<<<<<< Updated upstream
         (frame_u, items, stats, casters)
+=======
+        (
+            frame_u,
+            items,
+            stats,
+            Casters {
+                directional: shadow_caster,
+                spot: spot_caster,
+                point: point_caster,
+            },
+        )
+>>>>>>> Stashed changes
     }
 
     // --------------------------------------------------------------- uploads
@@ -2432,6 +2537,7 @@ impl MetalRenderer {
         self.geometries.insert(
             key,
             CachedGeometry {
+<<<<<<< Updated upstream
                 morph,
                 uv_sets,
                 bytes: morph_bytes + (vertex_count * if slim {
@@ -2440,6 +2546,15 @@ impl MetalRenderer {
                     std::mem::size_of::<Vertex>()
                 } + index_count * std::mem::size_of::<u32>()) as u64,
                 sphere: geometry_sphere(geometry),
+=======
+                bytes: (vertex_count
+                    * if slim {
+                        std::mem::size_of::<LineVertex>()
+                    } else {
+                        std::mem::size_of::<Vertex>()
+                    }
+                    + index_count * std::mem::size_of::<u32>()) as u64,
+>>>>>>> Stashed changes
                 _geometry: geometry.clone(),
                 version: geometry.geometry_version,
                 vertices: vbuf,
@@ -3475,11 +3590,17 @@ impl MetalRenderer {
                 .as_ref()
                 .map(|t| t.id())
                 .unwrap_or(self.empty_shadow.id());
-            let _: () = msg2(encoder, sel!("setFragmentTexture:atIndex:"), spot_tex, 7usize);
+            let _: () = msg2(
+                encoder,
+                sel!("setFragmentTexture:atIndex:"),
+                spot_tex,
+                7usize,
+            );
             let point_tex = self
                 .point_shadow_map
                 .as_ref()
                 .map(|t| t.id())
+<<<<<<< Updated upstream
                 .unwrap_or(self.empty_shadow.id());
             let _: () = msg2(encoder, sel!("setFragmentTexture:atIndex:"), point_tex, 8usize);
             // The variant-only maps: alpha, light, bump, specular at textures
@@ -3551,6 +3672,21 @@ impl MetalRenderer {
                 let _: () = msg2(encoder, sel!("setFragmentSamplerState:atIndex:"), smp, USER_VOLUME_SAMPLER_SLOT);
                 let _: () = msg2(encoder, sel!("setVertexSamplerState:atIndex:"), smp, USER_VOLUME_SAMPLER_SLOT);
             }
+=======
+                .unwrap_or(self.empty_shadow_cube.id());
+            let _: () = msg2(
+                encoder,
+                sel!("setFragmentTexture:atIndex:"),
+                point_tex,
+                8usize,
+            );
+            let _: () = msg2(
+                encoder,
+                sel!("setFragmentSamplerState:atIndex:"),
+                sampler,
+                0usize,
+            );
+>>>>>>> Stashed changes
 
             let mut draw_u = draw_uniforms(
                 item,
@@ -3782,7 +3918,12 @@ impl MetalRenderer {
         if cmd.is_null() {
             return Err(MetalError::NoCommandQueue);
         }
-        let desc: Id = unsafe { msg0(class!("MTLRenderPassDescriptor"), sel!("renderPassDescriptor")) };
+        let desc: Id = unsafe {
+            msg0(
+                class!("MTLRenderPassDescriptor"),
+                sel!("renderPassDescriptor"),
+            )
+        };
         unsafe {
             let depth: Id = msg0(desc, sel!("depthAttachment"));
             let _: () = msg1(depth, sel!("setTexture:"), map);
@@ -3801,6 +3942,7 @@ impl MetalRenderer {
         let mut last_cull = NSUInteger::MAX;
         unsafe {
             let _: () = msg1(encoder, sel!("setRenderPipelineState:"), pipeline);
+<<<<<<< Updated upstream
             // Counter-clockwise front faces, as the colour pass draws them, so
             // a caster's `side` can choose which faces its shadow records.
             let _: () = msg1(encoder, sel!("setFrontFacingWinding:"), winding::COUNTER_CLOCKWISE);
@@ -3812,6 +3954,16 @@ impl MetalRenderer {
                 self.depth_states[&(compare::LESS, true)].id(),
             );
             set_bytes(encoder, true, pass_u, VB_FRAME);
+=======
+            // Forward-Z, write on: the ordinary depth state the opaque pass
+            // uses, which is exactly what a shadow map wants.
+            let _: () = msg1(
+                encoder,
+                sel!("setDepthStencilState:"),
+                self.depth_states[0].id(),
+            );
+            set_bytes(encoder, true, frame_u, VB_FRAME);
+>>>>>>> Stashed changes
             if radial {
                 // `fs_shadow_point` reads the light's position and radius from
                 // the same uniform, and the fragment stage has its own binding
@@ -3896,6 +4048,7 @@ impl MetalRenderer {
             // faces, a back-sided one its front faces, a double-sided one both.
             let cull = shadow_cull(item.material.side(), radial);
             unsafe {
+<<<<<<< Updated upstream
                 if want != current {
                     let _: () = msg1(encoder, sel!("setRenderPipelineState:"), want);
                     current = want;
@@ -3923,6 +4076,36 @@ impl MetalRenderer {
                 let _: () = msg3(encoder, sel!("setVertexBuffer:offset:atIndex:"), bones, 0usize, VB_BONES);
                 let _: () = msg3(encoder, sel!("setVertexBuffer:offset:atIndex:"), morph_buffer, 0usize, VB_MORPH_DATA);
                 set_bytes(encoder, true, &morph_u, VB_MORPH);
+=======
+                let _: () = msg3(
+                    encoder,
+                    sel!("setVertexBuffer:offset:atIndex:"),
+                    vertices,
+                    0usize,
+                    0usize,
+                );
+                let _: () = msg3(
+                    encoder,
+                    sel!("setVertexBuffer:offset:atIndex:"),
+                    instances,
+                    0usize,
+                    VB_INSTANCES,
+                );
+                let _: () = msg3(
+                    encoder,
+                    sel!("setVertexBuffer:offset:atIndex:"),
+                    skin.unwrap_or(vertices),
+                    0usize,
+                    VB_SKIN,
+                );
+                let _: () = msg3(
+                    encoder,
+                    sel!("setVertexBuffer:offset:atIndex:"),
+                    bones,
+                    0usize,
+                    VB_BONES,
+                );
+>>>>>>> Stashed changes
                 set_bytes(encoder, true, &draw_u, VB_DRAW);
                 let n = item.instance_count.max(1) as NSUInteger;
                 match indices {
@@ -4014,6 +4197,7 @@ impl MetalRenderer {
                 self.shadow_layers[1] = ns;
             }
         }
+<<<<<<< Updated upstream
         if np > 0 {
             // 512 a face, matching the wgpu path. Six faces make a cube
             // expensive to grow — 1024 is four times the memory and four times
@@ -4026,6 +4210,35 @@ impl MetalRenderer {
                 self.point_shadow_pipeline =
                     Some(crate::metal::resources::point_shadow_pipeline(&self.device)?);
             }
+=======
+        Ok(())
+    }
+
+    /// Allocate the spot caster's map, at `size`.
+    fn ensure_spot_shadow_map(&mut self, size: u32) -> Result<(), MetalError> {
+        let size = size.clamp(256, 8192);
+        if self.spot_shadow_map.is_some() {
+            return Ok(());
+        }
+        self.spot_shadow_map = Some(crate::metal::resources::new_shadow_map(&self.device, size)?);
+        self.ensure_shadow_support()
+    }
+
+    /// Allocate the point caster's cube.
+    ///
+    /// Fixed at 512 a face, matching the wgpu path. Six faces make a cube
+    /// expensive to grow — 1024 is four times the memory and four times the
+    /// fill — and a point light's shadow is usually small in frame.
+    fn ensure_point_shadow_cube(&mut self) -> Result<(), MetalError> {
+        if self.point_shadow_cube.is_some() {
+            return Ok(());
+        }
+        self.point_shadow_cube = Some(crate::metal::resources::new_shadow_cube(&self.device, 512)?);
+        if self.point_shadow_pipeline.is_none() {
+            self.point_shadow_pipeline = Some(crate::metal::resources::point_shadow_pipeline(
+                &self.device,
+            )?);
+>>>>>>> Stashed changes
         }
         self.ensure_shadow_support()
     }
@@ -4130,7 +4343,10 @@ impl MetalRenderer {
     /// Each with its own sampler, from the texture's own filter and wrap.
     fn material_maps(&self, material: &Material) -> ([Option<(Id, Id)>; 4], [u32; 4]) {
         let slots = material.texture_slots();
-        let mr = slots.roughness_map.as_ref().or(slots.metalness_map.as_ref());
+        let mr = slots
+            .roughness_map
+            .as_ref()
+            .or(slots.metalness_map.as_ref());
         let ids = [
             self.slot_texture(slots.emissive_map.as_ref(), false),
             self.slot_texture(slots.normal_map.as_ref(), true),
@@ -4508,9 +4724,12 @@ fn build_skin(geometry: &BufferGeometry, vertex_count: usize) -> Vec<SkinVertex>
         .map(|i| {
             let take = |a: Option<&BufferAttribute>, fallback: [f32; 4]| -> [f32; 4] {
                 match a {
-                    Some(a) if (i + 1) * 4 <= a.array.len() => {
-                        [a.array[i * 4], a.array[i * 4 + 1], a.array[i * 4 + 2], a.array[i * 4 + 3]]
-                    }
+                    Some(a) if (i + 1) * 4 <= a.array.len() => [
+                        a.array[i * 4],
+                        a.array[i * 4 + 1],
+                        a.array[i * 4 + 2],
+                        a.array[i * 4 + 3],
+                    ],
                     _ => fallback,
                 }
             };
@@ -4708,6 +4927,7 @@ fn draw_uniforms(
         },
         // `maps` is filled in at bind time, where the uploaded set is known.
         maps: [0; 4],
+<<<<<<< Updated upstream
         object: [
             item.receive_shadow as u32,
             is_sprite,
@@ -4720,6 +4940,10 @@ fn draw_uniforms(
             1.0,
             0.0,
         ],
+=======
+        object: [item.receive_shadow as u32, 0, 0, 0],
+        map_params: [material.normal_scale().x, material.ao_intensity(), 1.0, 0.0],
+>>>>>>> Stashed changes
         misc: [
             0.0,
             material.point_size(),

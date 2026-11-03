@@ -118,12 +118,18 @@ impl Bench {
                     for i in 0..(rows - row) {
                         let n = rows - row;
                         let x = (i as f32 - (n - 1) as f32 * 0.5) * (half * 2.05);
-                        ids.push(world.add_body(
-                            RigidBody::dynamic()
-                                .shape(Shape::cuboid(half, half, half))
-                                .translation(Vector3::new(x, half + row as f32 * half * 2.0, 0.0))
-                                .friction(0.9),
-                        ));
+                        ids.push(
+                            world.add_body(
+                                RigidBody::dynamic()
+                                    .shape(Shape::cuboid(half, half, half))
+                                    .translation(Vector3::new(
+                                        x,
+                                        half + row as f32 * half * 2.0,
+                                        0.0,
+                                    ))
+                                    .friction(0.9),
+                            ),
+                        );
                         sizes.push(half);
                         tints.push(row as f32 / rows as f32);
                     }
@@ -134,23 +140,25 @@ impl Bench {
                 sealed_box(&mut world, 8.0);
                 for _ in 0..count {
                     let r = rng.range(0.2, 0.5);
-                    ids.push(world.add_body(
-                        RigidBody::dynamic()
-                            .shape(Shape::ball(r))
-                            .translation(Vector3::new(
-                                rng.range(-6.0, 6.0),
-                                rng.range(-6.0, 6.0),
-                                rng.range(-6.0, 6.0),
-                            ))
-                            .linear_velocity(Vector3::new(
-                                rng.range(-8.0, 8.0),
-                                rng.range(-8.0, 8.0),
-                                rng.range(-8.0, 8.0),
-                            ))
-                            .restitution(0.9)
-                            .gravity_scale(0.0)
-                            .can_sleep(false),
-                    ));
+                    ids.push(
+                        world.add_body(
+                            RigidBody::dynamic()
+                                .shape(Shape::ball(r))
+                                .translation(Vector3::new(
+                                    rng.range(-6.0, 6.0),
+                                    rng.range(-6.0, 6.0),
+                                    rng.range(-6.0, 6.0),
+                                ))
+                                .linear_velocity(Vector3::new(
+                                    rng.range(-8.0, 8.0),
+                                    rng.range(-8.0, 8.0),
+                                    rng.range(-8.0, 8.0),
+                                ))
+                                .restitution(0.9)
+                                .gravity_scale(0.0)
+                                .can_sleep(false),
+                        ),
+                    );
                     sizes.push(r);
                     tints.push(rng.next());
                 }
@@ -207,14 +215,16 @@ impl Bench {
                     );
                     // Perpendicular to the radius: a circular orbit.
                     let velocity = Vector3::new(-angle.sin(), 0.0, angle.cos()) * speed;
-                    ids.push(world.add_body(
-                        RigidBody::dynamic()
-                            .shape(Shape::ball(0.25))
-                            .translation(position)
-                            .linear_velocity(velocity)
-                            .linear_damping(0.0)
-                            .can_sleep(false),
-                    ));
+                    ids.push(
+                        world.add_body(
+                            RigidBody::dynamic()
+                                .shape(Shape::ball(0.25))
+                                .translation(position)
+                                .linear_velocity(velocity)
+                                .linear_damping(0.0)
+                                .can_sleep(false),
+                        ),
+                    );
                     sizes.push(0.25);
                     tints.push(radius / 14.0);
                 }
@@ -230,17 +240,19 @@ impl Bench {
                         3 => (Shape::cylinder(0.3, 0.3), 0.35),
                         _ => (Shape::cone(0.35, 0.35), 0.35),
                     };
-                    ids.push(world.add_body(
-                        RigidBody::dynamic()
-                            .shape(shape)
-                            .translation(Vector3::new(
-                                rng.range(-2.5, 2.5),
-                                1.0 + i as f32 * 0.55,
-                                rng.range(-2.5, 2.5),
-                            ))
-                            .friction(0.6)
-                            .restitution(0.2),
-                    ));
+                    ids.push(
+                        world.add_body(
+                            RigidBody::dynamic()
+                                .shape(shape)
+                                .translation(Vector3::new(
+                                    rng.range(-2.5, 2.5),
+                                    1.0 + i as f32 * 0.55,
+                                    rng.range(-2.5, 2.5),
+                                ))
+                                .friction(0.6)
+                                .restitution(0.2),
+                        ),
+                    );
                     sizes.push(size);
                     tints.push((i % 5) as f32 / 5.0);
                 }
@@ -257,18 +269,20 @@ impl Bench {
                     );
                 }
                 for i in 0..count {
-                    ids.push(world.add_body(
-                        RigidBody::dynamic()
-                            .shape(Shape::ball(0.15))
-                            .translation(Vector3::new(
-                                -12.0 - rng.range(0.0, 6.0),
-                                1.0 + (i % 12) as f32 * 0.6,
-                                rng.range(-2.5, 2.5),
-                            ))
-                            .linear_velocity(Vector3::new(rng.range(60.0, 140.0), 0.0, 0.0))
-                            .ccd(true)
-                            .can_sleep(false),
-                    ));
+                    ids.push(
+                        world.add_body(
+                            RigidBody::dynamic()
+                                .shape(Shape::ball(0.15))
+                                .translation(Vector3::new(
+                                    -12.0 - rng.range(0.0, 6.0),
+                                    1.0 + (i % 12) as f32 * 0.6,
+                                    rng.range(-2.5, 2.5),
+                                ))
+                                .linear_velocity(Vector3::new(rng.range(60.0, 140.0), 0.0, 0.0))
+                                .ccd(true)
+                                .can_sleep(false),
+                        ),
+                    );
                     sizes.push(0.15);
                     tints.push(rng.next());
                 }
@@ -449,12 +463,30 @@ impl PhysicsBench {
 fn sealed_box(world: &mut World, half: f32) {
     let t = 0.5;
     for (centre, extents) in [
-        (Vector3::new(0.0, -half - t, 0.0), Vector3::new(half + t, t, half + t)),
-        (Vector3::new(0.0, half + t, 0.0), Vector3::new(half + t, t, half + t)),
-        (Vector3::new(-half - t, 0.0, 0.0), Vector3::new(t, half + t, half + t)),
-        (Vector3::new(half + t, 0.0, 0.0), Vector3::new(t, half + t, half + t)),
-        (Vector3::new(0.0, 0.0, -half - t), Vector3::new(half + t, half + t, t)),
-        (Vector3::new(0.0, 0.0, half + t), Vector3::new(half + t, half + t, t)),
+        (
+            Vector3::new(0.0, -half - t, 0.0),
+            Vector3::new(half + t, t, half + t),
+        ),
+        (
+            Vector3::new(0.0, half + t, 0.0),
+            Vector3::new(half + t, t, half + t),
+        ),
+        (
+            Vector3::new(-half - t, 0.0, 0.0),
+            Vector3::new(t, half + t, half + t),
+        ),
+        (
+            Vector3::new(half + t, 0.0, 0.0),
+            Vector3::new(t, half + t, half + t),
+        ),
+        (
+            Vector3::new(0.0, 0.0, -half - t),
+            Vector3::new(half + t, half + t, t),
+        ),
+        (
+            Vector3::new(0.0, 0.0, half + t),
+            Vector3::new(half + t, half + t, t),
+        ),
     ] {
         world.add_body(
             RigidBody::fixed()
@@ -530,7 +562,10 @@ mod tests {
                 .chunks(6)
                 .map(|c| c[1])
                 .fold(0.0f32, f32::max);
-            assert!(highest > 2.0, "{quality:?} collapsed the pyramid to {highest}");
+            assert!(
+                highest > 2.0,
+                "{quality:?} collapsed the pyramid to {highest}"
+            );
         }
     }
 
@@ -560,7 +595,10 @@ mod tests {
             .chunks(6)
             .map(|c| c[0])
             .fold(f32::MIN, f32::max);
-        assert!(furthest < 13.0, "a bullet tunnelled through to x = {furthest}");
+        assert!(
+            furthest < 13.0,
+            "a bullet tunnelled through to x = {furthest}"
+        );
     }
 
     #[test]

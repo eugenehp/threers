@@ -8,9 +8,9 @@ pub mod avcc;
 pub mod cabac;
 pub mod cabac_tables;
 pub mod cavlc;
+pub mod compress;
 pub mod deblock;
 pub mod deblock_tables;
-pub mod compress;
 pub mod encoder;
 pub mod inter;
 pub mod interp;
@@ -28,7 +28,8 @@ pub use compress::{
     CompressedEncoder,
 };
 pub use encoder::{
-    encode_mp4, encode_mp4_from_iter, encode_mp4_streaming, encode_mp4_with_captions, write_mp4_from_iter as write_mp4, H264Encoder,
+    encode_mp4, encode_mp4_from_iter, encode_mp4_streaming, encode_mp4_with_captions,
+    write_mp4_from_iter as write_mp4, H264Encoder,
 };
 pub use inter::{EncodedPicture, InterEncoder};
 pub use nal::{nal_unit, nal_unit_base, push_annexb, split_annexb, NalUnitType, START_CODE};

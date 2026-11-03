@@ -141,12 +141,8 @@ impl MetalHeadlessRenderer {
         let postfx = PostFxChain::new(&device).ok();
         let mut renderer = MetalRenderer::with_device(device.clone())?;
         let (export_w, export_h) = (config.width.max(1), config.height.max(1));
-        let (render_w, render_h) = render_dimensions(
-            export_w,
-            export_h,
-            config.supersample,
-            config.render_scale,
-        );
+        let (render_w, render_h) =
+            render_dimensions(export_w, export_h, config.supersample, config.render_scale);
         let target = MetalRenderTarget::new(
             &device,
             render_w,
@@ -164,7 +160,11 @@ impl MetalHeadlessRenderer {
              (ss {}, scale {}), postfx {}",
             config.supersample.max(1),
             config.render_scale.max(1),
-            if postfx.is_some() { "ready" } else { "UNAVAILABLE" }
+            if postfx.is_some() {
+                "ready"
+            } else {
+                "UNAVAILABLE"
+            }
         );
         Ok(Self {
             device,
@@ -190,9 +190,7 @@ impl MetalHeadlessRenderer {
             || self.config.supersample > 1
             || self.config.render_scale > 1
             || self.ssao_cfg.is_some_and(|s| s.strength > 0.0)
-            || self
-                .bloom_cfg
-                .is_some_and(|(s, _, _)| s > 0.0)
+            || self.bloom_cfg.is_some_and(|(s, _, _)| s > 0.0)
     }
 
     fn staging_buffer(&mut self) -> Result<Owned, MetalError> {
@@ -663,7 +661,12 @@ impl MetalHeadlessRenderer {
     }
 }
 
-fn render_dimensions(export_w: u32, export_h: u32, supersample: u32, render_scale: u32) -> (u32, u32) {
+fn render_dimensions(
+    export_w: u32,
+    export_h: u32,
+    supersample: u32,
+    render_scale: u32,
+) -> (u32, u32) {
     let ss = supersample.max(1);
     let rs = render_scale.max(1);
     (

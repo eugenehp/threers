@@ -488,7 +488,11 @@ pub(crate) fn subdivide(r: Rect, target: f32, depth: u32, rng: &mut Rng, out: &m
         out.push(r);
         return;
     }
-    let split_x = if can_x && can_z { r.w() >= r.d() } else { can_x };
+    let split_x = if can_x && can_z {
+        r.w() >= r.d()
+    } else {
+        can_x
+    };
     let side = if split_x { r.w() } else { r.d() };
     // Never nearer either edge than one buildable lot.
     let lo = (MIN_LOT_SIDE / side).max(SPLIT_MIN);

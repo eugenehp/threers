@@ -26,16 +26,14 @@ const INK: [u32; 10] = [
 
 /// A quad in an arbitrary plane. `right` and `up` are unit vectors; the face
 /// points along `right x up`.
-fn panel(
-    m: &mut MeshBuilder,
-    o: Vector3,
-    right: Vector3,
-    up: Vector3,
-    w: f32,
-    h: f32,
-    c: Color,
-) {
-    let p = |a: f32, b: f32| [o.x + right.x * a + up.x * b, o.y + right.y * a + up.y * b, o.z + right.z * a + up.z * b];
+fn panel(m: &mut MeshBuilder, o: Vector3, right: Vector3, up: Vector3, w: f32, h: f32, c: Color) {
+    let p = |a: f32, b: f32| {
+        [
+            o.x + right.x * a + up.x * b,
+            o.y + right.y * a + up.y * b,
+            o.z + right.z * a + up.z * b,
+        ]
+    };
     let n = right.cross(up);
     m.quad(
         [p(0.0, 0.0), p(w, 0.0), p(w, h), p(0.0, h)],
@@ -214,10 +212,7 @@ fn neon_word(
             2 => {
                 const N: usize = 7;
                 for i in 0..N {
-                    let (a0, a1) = (
-                        i as f32 / N as f32 * TAU,
-                        (i + 1) as f32 / N as f32 * TAU,
-                    );
+                    let (a0, a1) = (i as f32 / N as f32 * TAU, (i + 1) as f32 / N as f32 * TAU);
                     let (rx, ry) = (gw * 0.5, h * 0.5);
                     m.add_limb(
                         at(x + gw * 0.5 + rx * a0.cos(), h * 0.5 + ry * a0.sin()),
@@ -401,16 +396,8 @@ pub(crate) fn add_shop_signage(
             let near = wall.at(bs, y + 0.1, 0.10);
             let far = wall.at(bs, y + 0.1 + bh, 0.10 + bw);
             (
-                Vector3::new(
-                    near.x.min(far.x) - 0.06,
-                    near.y,
-                    near.z.min(far.z) - 0.06,
-                ),
-                Vector3::new(
-                    near.x.max(far.x) + 0.06,
-                    far.y,
-                    near.z.max(far.z) + 0.06,
-                ),
+                Vector3::new(near.x.min(far.x) - 0.06, near.y, near.z.min(far.z) - 0.06),
+                Vector3::new(near.x.max(far.x) + 0.06, far.y, near.z.max(far.z) + 0.06),
             )
         };
         b.trim.add_box(mn, mx, steel, Uv::Unit);
@@ -439,11 +426,7 @@ pub(crate) fn add_shop_signage(
             for i in 0..((bh * 0.85 / 0.30) as usize) {
                 let t = 0.12 + i as f32 * 0.30;
                 for e in [0.03f32, bw * 0.85 - 0.10] {
-                    let p = Vector3::new(
-                        o.x + right.x * e,
-                        o.y + t,
-                        o.z + right.z * e,
-                    );
+                    let p = Vector3::new(o.x + right.x * e, o.y + t, o.z + right.z * e);
                     panel(m, p, right, up, 0.075, 0.075, Color::from_hex(0xfff3cf));
                 }
             }

@@ -694,9 +694,12 @@ impl MeshBvh {
         } else {
             (r, dr, l, dl)
         };
+<<<<<<< Updated upstream
         // `box_entry` reports a missed box as infinitely far, so a miss has to
         // be refused outright: with an unbounded `far` and no hit yet, the
         // limit is infinite too and `<=` alone would open every missed box.
+=======
+>>>>>>> Stashed changes
         let limit = |best: &Option<BvhHit>| best.as_ref().map(|h| h.distance).unwrap_or(far);
         if d1.is_finite() && d1 <= limit(best) {
             self.raycast_node_first(n1, ray, inv, near, far, backface_culling, best);

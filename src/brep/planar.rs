@@ -658,7 +658,6 @@ fn nearest_on_boundary(boundary: &[[f64; 2]], p: [f64; 2]) -> Option<(usize, f64
     best.map(|(_, i, t, at)| (i, t, at))
 }
 
-
 /// Split every segment where it crosses another, so what comes out is a planar
 /// graph rather than a set of loops that may or may not be simple.
 ///

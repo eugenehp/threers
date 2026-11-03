@@ -207,14 +207,20 @@ impl HevcConfig {
     /// may hang off the edge; the quadtree splits them down to blocks that fit.
     pub fn ctbs(&self) -> (u32, u32) {
         let ctb = 1 << self.ctb_log2;
-        (self.coded_width.div_ceil(ctb), self.coded_height.div_ceil(ctb))
+        (
+            self.coded_width.div_ceil(ctb),
+            self.coded_height.div_ceil(ctb),
+        )
     }
 
     /// Set the coding-tree sizes and re-pad the coded picture to whole minimum
     /// coding blocks — which is all HEVC requires, so a bigger CTB costs no
     /// extra padding.
     pub fn with_coding_tree(mut self, ctb_log2: u32, min_cb_log2: u32, max_tb_log2: u32) -> Self {
-        assert!(min_cb_log2 >= 3 && min_cb_log2 <= ctb_log2, "MinCb in [8, CTB]");
+        assert!(
+            min_cb_log2 >= 3 && min_cb_log2 <= ctb_log2,
+            "MinCb in [8, CTB]"
+        );
         assert!((2..=5).contains(&max_tb_log2), "max TB in [4, 32]");
         self.ctb_log2 = ctb_log2;
         self.min_cb_log2 = min_cb_log2;
@@ -476,9 +482,9 @@ fn write_pps_full(
         w.write_ue(tile_grid.0 - 1); // num_tile_columns_minus1
         w.write_ue(tile_grid.1 - 1); // num_tile_rows_minus1
         w.flag(true); // uniform_spacing_flag
-        // Deblocking still runs across tile edges. The filter is a picture-level
-        // pass here — intra prediction reads unfiltered samples — so letting it
-        // cross costs nothing and removes the seams tiling would otherwise leave.
+                      // Deblocking still runs across tile edges. The filter is a picture-level
+                      // pass here — intra prediction reads unfiltered samples — so letting it
+                      // cross costs nothing and removes the seams tiling would otherwise leave.
         w.flag(true); // loop_filter_across_tiles_enabled_flag
     }
     w.flag(false); // pps_loop_filter_across_slices_enabled_flag

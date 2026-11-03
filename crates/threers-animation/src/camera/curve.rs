@@ -142,7 +142,11 @@ impl FCurve {
     }
 
     pub fn from_keys(mut keys: Vec<CurveKey>) -> Self {
-        keys.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap_or(std::cmp::Ordering::Equal));
+        keys.sort_by(|a, b| {
+            a.time
+                .partial_cmp(&b.time)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         Self {
             keys,
             pre: Extrapolation::Constant,
@@ -157,10 +161,11 @@ impl FCurve {
     }
 
     pub fn insert(&mut self, key: CurveKey) {
-        match self
-            .keys
-            .binary_search_by(|k| k.time.partial_cmp(&key.time).unwrap_or(std::cmp::Ordering::Equal))
-        {
+        match self.keys.binary_search_by(|k| {
+            k.time
+                .partial_cmp(&key.time)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        }) {
             Ok(i) => self.keys[i] = key,
             Err(i) => self.keys.insert(i, key),
         }
@@ -432,10 +437,7 @@ mod tests {
 
     #[test]
     fn step_holds() {
-        let c = FCurve::from_keys(vec![
-            CurveKey::step(0.0, 1.0),
-            CurveKey::step(1.0, 5.0),
-        ]);
+        let c = FCurve::from_keys(vec![CurveKey::step(0.0, 1.0), CurveKey::step(1.0, 5.0)]);
         assert_eq!(c.evaluate(0.9), 1.0);
         assert_eq!(c.evaluate(1.0), 5.0);
     }
@@ -452,22 +454,16 @@ mod tests {
 
     #[test]
     fn cycle_repeats() {
-        let c = FCurve::from_keys(vec![
-            CurveKey::linear(0.0, 0.0),
-            CurveKey::linear(1.0, 2.0),
-        ])
-        .with_extrapolation(Extrapolation::Cycle, Extrapolation::Cycle);
+        let c = FCurve::from_keys(vec![CurveKey::linear(0.0, 0.0), CurveKey::linear(1.0, 2.0)])
+            .with_extrapolation(Extrapolation::Cycle, Extrapolation::Cycle);
         assert!((c.evaluate(1.5) - 1.0).abs() < 1e-3);
         assert!((c.evaluate(2.0) - 0.0).abs() < 1e-3 || (c.evaluate(2.0) - 2.0).abs() < 1e-3);
     }
 
     #[test]
     fn cycle_offset_accumulates() {
-        let c = FCurve::from_keys(vec![
-            CurveKey::linear(0.0, 0.0),
-            CurveKey::linear(1.0, 3.0),
-        ])
-        .with_extrapolation(Extrapolation::Constant, Extrapolation::CycleOffset);
+        let c = FCurve::from_keys(vec![CurveKey::linear(0.0, 0.0), CurveKey::linear(1.0, 3.0)])
+            .with_extrapolation(Extrapolation::Constant, Extrapolation::CycleOffset);
         let v = c.evaluate(2.5);
         // two full cycles (+6) + half of next (+1.5) = 7.5
         assert!((v - 7.5).abs() < 0.1, "{v}");

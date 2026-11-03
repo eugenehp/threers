@@ -115,7 +115,10 @@ fn main() {
             shortfall.to_degrees()
         );
     } else {
-        println!("  reached {:.1}°, resting on its own stop", angle.to_degrees());
+        println!(
+            "  reached {:.1}°, resting on its own stop",
+            angle.to_degrees()
+        );
     }
 
     // ---- and it falls shut on its own --------------------------------------

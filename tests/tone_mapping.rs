@@ -371,7 +371,9 @@ fn depth_of_field_blurs_the_far_plane_and_not_the_near_one() {
     // differences, which counts sampling noise as detail and went *up* when the
     // first version of the gather was undersampled.
     let soft = |px: &[u8]| -> u32 {
-        px.chunks_exact(4).filter(|p| (24..232).contains(&p[0])).count() as u32
+        px.chunks_exact(4)
+            .filter(|p| (24..232).contains(&p[0]))
+            .count() as u32
     };
 
     // Six units behind the focus plane: fully defocused.

@@ -620,7 +620,10 @@ impl Solid {
                         } else {
                             eval_solid(solid, &mut CsgEvaluator::new())
                         };
-                        if g.attributes.get("position").is_some_and(|a| !a.array.is_empty()) {
+                        if g.attributes
+                            .get("position")
+                            .is_some_and(|a| !a.array.is_empty())
+                        {
                             geoms.push(g);
                         }
                     }

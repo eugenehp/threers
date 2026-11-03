@@ -98,7 +98,10 @@ fn orientation_alone_does_not_darken_anything() {
         wall > 0.86,
         "an unoccluded wall baked to {wall:.3} — orientation is being read as occlusion"
     );
-    assert!((floor - wall).abs() < 0.16, "floor {floor:.3} vs wall {wall:.3}");
+    assert!(
+        (floor - wall).abs() < 0.16,
+        "floor {floor:.3} vs wall {wall:.3}"
+    );
 }
 
 /// The same city, baked twice, has to come out identical.

@@ -181,13 +181,25 @@ impl Stiffness {
     /// Young's modulus along x, y and z.
     pub fn youngs_moduli(&self) -> [f64; 3] {
         let s = self.compliance();
-        [0, 1, 2].map(|i| if s[i][i].abs() > 1e-30 { 1.0 / s[i][i] } else { 0.0 })
+        [0, 1, 2].map(|i| {
+            if s[i][i].abs() > 1e-30 {
+                1.0 / s[i][i]
+            } else {
+                0.0
+            }
+        })
     }
 
     /// Shear modulus about yz, xz and xy.
     pub fn shear_moduli(&self) -> [f64; 3] {
         let s = self.compliance();
-        [3, 4, 5].map(|i| if s[i][i].abs() > 1e-30 { 1.0 / s[i][i] } else { 0.0 })
+        [3, 4, 5].map(|i| {
+            if s[i][i].abs() > 1e-30 {
+                1.0 / s[i][i]
+            } else {
+                0.0
+            }
+        })
     }
 
     /// Poisson ratios ν_yz, ν_xz, ν_xy — the transverse contraction per unit
@@ -524,7 +536,11 @@ impl Strength {
         let strength = self.uniaxial(solid_yield);
         let mut out = [0.0f64; 3];
         for (i, v) in out.iter_mut().enumerate() {
-            *v = if e[i] > 1e-30 { strength[i] / e[i] } else { 0.0 };
+            *v = if e[i] > 1e-30 {
+                strength[i] / e[i]
+            } else {
+                0.0
+            };
         }
         out
     }
@@ -665,8 +681,7 @@ pub fn homogenize_strength(
 
 /// Von Mises equivalent stress of a Voigt stress vector.
 fn von_mises(s: &[f64; 6]) -> f64 {
-    let deviatoric = 0.5
-        * ((s[0] - s[1]).powi(2) + (s[1] - s[2]).powi(2) + (s[2] - s[0]).powi(2));
+    let deviatoric = 0.5 * ((s[0] - s[1]).powi(2) + (s[1] - s[2]).powi(2) + (s[2] - s[0]).powi(2));
     let shear = 3.0 * (s[3] * s[3] + s[4] * s[4] + s[5] * s[5]);
     (deviatoric + shear).max(0.0).sqrt()
 }
@@ -857,7 +872,12 @@ fn effective<const N: usize, const CASES: usize>(
     let (chi, ran) = match solver {
         Solver::Gpu => gpu_solve(&loads, ke, stiff, &diag, elements, per_node, scale)
             .map(|chi| (chi, Solver::Gpu))
-            .unwrap_or_else(|| (cpu_solve(&loads, ke, stiff, dof_map, &diag, elements, per_node, scale), Solver::Cpu)),
+            .unwrap_or_else(|| {
+                (
+                    cpu_solve(&loads, ke, stiff, dof_map, &diag, elements, per_node, scale),
+                    Solver::Cpu,
+                )
+            }),
         Solver::Cpu => (
             cpu_solve(&loads, ke, stiff, dof_map, &diag, elements, per_node, scale),
             Solver::Cpu,
@@ -1463,9 +1483,21 @@ mod tests {
         let c11 = factor * (1.0 - nu);
         let c12 = factor * nu;
         let c44 = mat.modulus / (2.0 * (1.0 + nu));
-        assert!((c.c[0][0] - c11).abs() < 1e-6 * c11, "{} vs {c11}", c.c[0][0]);
-        assert!((c.c[0][1] - c12).abs() < 1e-6 * c12, "{} vs {c12}", c.c[0][1]);
-        assert!((c.c[3][3] - c44).abs() < 1e-6 * c44, "{} vs {c44}", c.c[3][3]);
+        assert!(
+            (c.c[0][0] - c11).abs() < 1e-6 * c11,
+            "{} vs {c11}",
+            c.c[0][0]
+        );
+        assert!(
+            (c.c[0][1] - c12).abs() < 1e-6 * c12,
+            "{} vs {c12}",
+            c.c[0][1]
+        );
+        assert!(
+            (c.c[3][3] - c44).abs() < 1e-6 * c44,
+            "{} vs {c44}",
+            c.c[3][3]
+        );
         assert!((c.relative_density - 1.0).abs() < 1e-12);
 
         // And the engineering constants read back off it.
@@ -1492,7 +1524,11 @@ mod tests {
         );
         let e = c.youngs_moduli();
         // Half solid, plus the void's own floor.
-        assert!((c.relative_density - 0.5).abs() < 1e-4, "{}", c.relative_density);
+        assert!(
+            (c.relative_density - 0.5).abs() < 1e-4,
+            "{}",
+            c.relative_density
+        );
         // In plane the slabs act in parallel: half the material, half the
         // stiffness. Across them they act in series, and the void governs.
         assert!((e[0] - 0.5).abs() < 0.05, "in plane {}", e[0]);
@@ -1580,9 +1616,17 @@ mod tests {
         // So the strengths come back as the material's own.
         let yielded = s.yield_strength(500.0);
         assert!((yielded[0] - 500.0).abs() < 1e-3, "{}", yielded[0]);
-        assert!((yielded[3] - 500.0 / 3.0f64.sqrt()).abs() < 1e-3, "{}", yielded[3]);
+        assert!(
+            (yielded[3] - 500.0 / 3.0f64.sqrt()).abs() < 1e-3,
+            "{}",
+            yielded[3]
+        );
         // Every gram working: efficiency one.
-        assert!((s.efficiency()[0] - 1.0).abs() < 1e-3, "{:?}", s.efficiency());
+        assert!(
+            (s.efficiency()[0] - 1.0).abs() < 1e-3,
+            "{:?}",
+            s.efficiency()
+        );
         // And the peak agrees with the percentile, there being nothing to
         // concentrate around.
         assert!((s.peak_concentration[0] - 1.0).abs() < 1e-6);
@@ -1607,7 +1651,11 @@ mod tests {
         );
         assert!((s.yield_strength(400.0)[0] - 200.0).abs() < 5.0);
         // Half the material, all of it working: efficiency one again.
-        assert!((s.efficiency()[0] - 1.0).abs() < 0.05, "{:?}", s.efficiency());
+        assert!(
+            (s.efficiency()[0] - 1.0).abs() < 0.05,
+            "{:?}",
+            s.efficiency()
+        );
     }
 
     /// A cell that carries load along its struts wastes less of itself than
@@ -1656,7 +1704,11 @@ mod tests {
             )
         };
         let coarse = build(8);
-        assert!(!coarse.resolved(), "sampled {} of the solid", coarse.sampled);
+        assert!(
+            !coarse.resolved(),
+            "sampled {} of the solid",
+            coarse.sampled
+        );
         // Given enough voxels to hold the slab — and a thickness that is a
         // whole number of them, so the section is exactly what it says — it
         // lands on the exact answer: an eighth of the area, eight times the

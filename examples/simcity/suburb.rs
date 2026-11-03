@@ -49,7 +49,13 @@ fn kerbed(b: &mut Batches, pts: &[(f32, f32)], width: f32, rng: &mut Rng) {
 
 /// One house on its plot, with the things a house has and a block of flats
 /// does not: a drive, a garage, a hedge and a lawn.
-fn dwelling(b: &mut Batches, plan: &LayoutPlan, plot: Rect, front: (f32, f32), rng: &mut Rng) -> bool {
+fn dwelling(
+    b: &mut Batches,
+    plan: &LayoutPlan,
+    plot: Rect,
+    front: (f32, f32),
+    rng: &mut Rng,
+) -> bool {
     if plot.w() < 8.0 || plot.d() < 8.0 {
         return false;
     }
@@ -84,7 +90,11 @@ fn dwelling(b: &mut Batches, plan: &LayoutPlan, plot: Rect, front: (f32, f32), r
     let side = rng.chance(0.5);
     let dw = 3.0f32.min(plot.w().min(plot.d()) * 0.34);
     let drive = if fx.abs() > fz.abs() {
-        let z = if side { plot.z0 + dw * 0.5 + 0.6 } else { plot.z1 - dw * 0.5 - 0.6 };
+        let z = if side {
+            plot.z0 + dw * 0.5 + 0.6
+        } else {
+            plot.z1 - dw * 0.5 - 0.6
+        };
         Rect {
             x0: if fx < 0.0 { plot.x0 } else { house.x1 },
             z0: z - dw * 0.5,
@@ -92,7 +102,11 @@ fn dwelling(b: &mut Batches, plan: &LayoutPlan, plot: Rect, front: (f32, f32), r
             z1: z + dw * 0.5,
         }
     } else {
-        let x = if side { plot.x0 + dw * 0.5 + 0.6 } else { plot.x1 - dw * 0.5 - 0.6 };
+        let x = if side {
+            plot.x0 + dw * 0.5 + 0.6
+        } else {
+            plot.x1 - dw * 0.5 - 0.6
+        };
         Rect {
             x0: x - dw * 0.5,
             z0: if fz < 0.0 { plot.z0 } else { house.z1 },
@@ -122,7 +136,12 @@ fn dwelling(b: &mut Batches, plan: &LayoutPlan, plot: Rect, front: (f32, f32), r
     // a single house on them because every other plot was a few centimetres
     // short of a bay.
     if !add_building(b, plan, house, 1.15, false, rng) {
-        if !b.occ.try_claim([house.x0 - 0.4, house.z0 - 0.4, house.x1 + 0.4, house.z1 + 0.4]) {
+        if !b.occ.try_claim([
+            house.x0 - 0.4,
+            house.z0 - 0.4,
+            house.x1 + 0.4,
+            house.z1 + 0.4,
+        ]) {
             return false;
         }
         const WALL: [u32; 6] = [0xd8cdb8, 0xc4a58a, 0xb8bcc0, 0xd0b9a0, 0xa8b0a4, 0xcfc0a8];
@@ -132,7 +151,10 @@ fn dwelling(b: &mut Batches, plan: &LayoutPlan, plot: Rect, front: (f32, f32), r
         let terrace = rng.chance(0.17);
         let storeys = if rng.chance(0.35) { 1.0f32 } else { 2.0 };
         let h = KERB + storeys * 2.9;
-        let wall = scale_color(Color::from_hex(WALL[rng.below(WALL.len())]), rng.range(0.9, 1.1));
+        let wall = scale_color(
+            Color::from_hex(WALL[rng.below(WALL.len())]),
+            rng.range(0.9, 1.1),
+        );
         b.trim.add_box(
             Vector3::new(house.x0, KERB, house.z0),
             Vector3::new(house.x1, h, house.z1),
@@ -177,7 +199,10 @@ fn dwelling(b: &mut Batches, plan: &LayoutPlan, plot: Rect, front: (f32, f32), r
                 Vector3::new(house.x0 - 0.35, h, house.z0 - 0.35),
                 Vector3::new(house.x1 + 0.35, h, house.z1 + 0.35),
                 rng.range(1.4, 2.6),
-                scale_color(Color::from_hex(ROOF[rng.below(ROOF.len())]), rng.range(0.9, 1.1)),
+                scale_color(
+                    Color::from_hex(ROOF[rng.below(ROOF.len())]),
+                    rng.range(0.9, 1.1),
+                ),
             );
         }
         // Windows on the frontage, and a door under them.
@@ -389,7 +414,11 @@ fn dwelling(b: &mut Batches, plan: &LayoutPlan, plot: Rect, front: (f32, f32), r
             b,
             Vector3::new(ax + fx * 0.12, KERB + 2.6, az + fz * 0.12),
             Vector3::new(fx, 0.0, fz),
-            if rng.chance(0.3) { Cctv::Dome } else { Cctv::Bullet },
+            if rng.chance(0.3) {
+                Cctv::Dome
+            } else {
+                Cctv::Bullet
+            },
             rng,
         );
     }
@@ -431,12 +460,7 @@ fn dwelling(b: &mut Batches, plan: &LayoutPlan, plot: Rect, front: (f32, f32), r
 /// with houses down both sides and around the head.
 ///
 /// Returns how many houses were built, or 0 if the block could not take one.
-pub(crate) fn add_close(
-    b: &mut Batches,
-    plan: &LayoutPlan,
-    cell: Rect,
-    rng: &mut Rng,
-) -> usize {
+pub(crate) fn add_close(b: &mut Batches, plan: &LayoutPlan, cell: Rect, rng: &mut Rng) -> usize {
     // Sized to the block rather than to a fixed ideal. The first version
     // wanted forty metres each way; blocks in this city are fourteen to
     // forty-seven, so it fitted almost nowhere. Check what the generator
@@ -486,9 +510,19 @@ pub(crate) fn add_close(
     let (bx, bz) = *pts.last().unwrap();
     // Claim the road and the head so nothing else is scattered into them.
     let road_rect = if along_x {
-        [mouth.min(head_at), mid - LANE, mouth.max(head_at), mid + LANE]
+        [
+            mouth.min(head_at),
+            mid - LANE,
+            mouth.max(head_at),
+            mid + LANE,
+        ]
     } else {
-        [mid - LANE, mouth.min(head_at), mid + LANE, mouth.max(head_at)]
+        [
+            mid - LANE,
+            mouth.min(head_at),
+            mid + LANE,
+            mouth.max(head_at),
+        ]
     };
     if !b.occ.try_claim(road_rect) {
         return 0;
@@ -531,15 +565,26 @@ pub(crate) fn add_close(
     // Some closes have a little green in the middle of the head, which is
     // where the one tree in the street goes.
     if rng.chance(0.45) {
-        b.grass
-            .add_ground_disc(bx, bz, bulb * 0.42, 12, 0.0, KERB + 0.06, Color::from_hex(0x5f8f3f));
+        b.grass.add_ground_disc(
+            bx,
+            bz,
+            bulb * 0.42,
+            12,
+            0.0,
+            KERB + 0.06,
+            Color::from_hex(0x5f8f3f),
+        );
         add_tree(b, bx, bz, KERB + 0.06, false, false, rng);
     }
     // A no-through-road sign at the mouth.
     let (sx, sz) = pts[0];
     let off = LANE * 0.5 + 1.4;
     b.trim.add_limb(
-        Vector3::new(if along_x { sx } else { sx + off }, KERB, if along_x { sz + off } else { sz }),
+        Vector3::new(
+            if along_x { sx } else { sx + off },
+            KERB,
+            if along_x { sz + off } else { sz },
+        ),
         Vector3::new(
             if along_x { sx } else { sx + off },
             KERB + 2.2,
@@ -568,9 +613,19 @@ pub(crate) fn add_close(
             let inner = mid + s * (LANE * 0.5 + 2.0);
             let outer = mid + s * (LANE * 0.5 + 2.0 + depth);
             let plot = if along_x {
-                Rect { x0: lo, z0: inner.min(outer), x1: hi, z1: inner.max(outer) }
+                Rect {
+                    x0: lo,
+                    z0: inner.min(outer),
+                    x1: hi,
+                    z1: inner.max(outer),
+                }
             } else {
-                Rect { x0: inner.min(outer), z0: lo, x1: outer.max(inner), z1: hi }
+                Rect {
+                    x0: inner.min(outer),
+                    z0: lo,
+                    x1: outer.max(inner),
+                    z1: hi,
+                }
             };
             // Which way the house faces: back towards the road.
             let front = if along_x { (0.0, -s) } else { (-s, 0.0) };
@@ -582,11 +637,20 @@ pub(crate) fn add_close(
     // Round the head.
     for k in 0..3 {
         let a = -PI * 0.5 + (k as f32 - 1.0) * 0.72;
-        let ang = if along_x { a * dirn } else { a * dirn + PI * 0.5 };
+        let ang = if along_x {
+            a * dirn
+        } else {
+            a * dirn + PI * 0.5
+        };
         let rr = bulb + 2.0 + depth * 0.5;
         let (px, pz) = (bx + rr * ang.cos() * dirn.abs(), bz + rr * ang.sin());
         let half = depth * 0.46;
-        let plot = Rect { x0: px - half, z0: pz - half, x1: px + half, z1: pz + half };
+        let plot = Rect {
+            x0: px - half,
+            z0: pz - half,
+            x1: px + half,
+            z1: pz + half,
+        };
         if plot.x0 > cell.x0 && plot.x1 < cell.x1 && plot.z0 > cell.z0 && plot.z1 < cell.z1 {
             let (fx, fz) = (bx - px, bz - pz);
             let l = fx.hypot(fz).max(0.001);
@@ -602,12 +666,7 @@ pub(crate) fn add_close(
 ///
 /// The other suburban form, and the one that says "planned estate" rather than
 /// "infill". Houses face outward from the bow.
-pub(crate) fn add_crescent(
-    b: &mut Batches,
-    plan: &LayoutPlan,
-    cell: Rect,
-    rng: &mut Rng,
-) -> usize {
+pub(crate) fn add_crescent(b: &mut Batches, plan: &LayoutPlan, cell: Rect, rng: &mut Rng) -> usize {
     if cell.w() < 30.0 || cell.d() < 30.0 {
         return 0;
     }
@@ -637,9 +696,19 @@ pub(crate) fn add_crescent(
         })
         .collect();
     let claim = if along_x {
-        [a - 2.0, (base + depth_dir * bow).min(base) - 2.0, c + 2.0, (base + depth_dir * bow).max(base) + 2.0]
+        [
+            a - 2.0,
+            (base + depth_dir * bow).min(base) - 2.0,
+            c + 2.0,
+            (base + depth_dir * bow).max(base) + 2.0,
+        ]
     } else {
-        [(base + depth_dir * bow).min(base) - 2.0, a - 2.0, (base + depth_dir * bow).max(base) + 2.0, c + 2.0]
+        [
+            (base + depth_dir * bow).min(base) - 2.0,
+            a - 2.0,
+            (base + depth_dir * bow).max(base) + 2.0,
+            c + 2.0,
+        ]
     };
     if !b.occ.try_claim(claim) {
         return 0;
@@ -672,7 +741,15 @@ pub(crate) fn add_crescent(
     for _ in 0..2 + rng.below(3) {
         let ang = rng.range(0.0, TAU);
         let rr = bow * rng.range(0.05, 0.26);
-        add_tree(b, gx + rr * ang.cos(), gz + rr * ang.sin(), KERB, false, false, rng);
+        add_tree(
+            b,
+            gx + rr * ang.cos(),
+            gz + rr * ang.sin(),
+            KERB,
+            false,
+            false,
+            rng,
+        );
     }
     // Houses on the outside of the bow, facing in.
     let mut built = 0;
@@ -690,7 +767,11 @@ pub(crate) fn add_crescent(
         let tl = tx.hypot(tz).max(0.001);
         let (mut nx, mut nz) = (-tz / tl, tx / tl);
         // Point it into the block, away from the street the crescent leaves.
-        let inward = if along_x { nz * depth_dir } else { nx * depth_dir };
+        let inward = if along_x {
+            nz * depth_dir
+        } else {
+            nx * depth_dir
+        };
         if inward < 0.0 {
             nx = -nx;
             nz = -nz;
@@ -701,7 +782,12 @@ pub(crate) fn add_crescent(
             mz + nz * (LANE * 0.5 + 2.0 + depth * 0.5),
         );
         let half = depth * 0.44;
-        let plot = Rect { x0: px - half, z0: pz - half, x1: px + half, z1: pz + half };
+        let plot = Rect {
+            x0: px - half,
+            z0: pz - half,
+            x1: px + half,
+            z1: pz + half,
+        };
         // Slide the plot back inside the block rather than discarding it: at
         // the ends of the bow it will always overhang a little.
         let mut plot = plot;
@@ -713,7 +799,11 @@ pub(crate) fn add_crescent(
             x1: plot.x1 + dx,
             z1: plot.z1 + dz,
         };
-        if plot.x0 < cell.x0 - 0.1 || plot.x1 > cell.x1 + 0.1 || plot.z0 < cell.z0 - 0.1 || plot.z1 > cell.z1 + 0.1 {
+        if plot.x0 < cell.x0 - 0.1
+            || plot.x1 > cell.x1 + 0.1
+            || plot.z0 < cell.z0 - 0.1
+            || plot.z1 > cell.z1 + 0.1
+        {
             continue;
         }
         if dwelling(b, plan, plot, (-nx, -nz), rng) {

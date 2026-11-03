@@ -177,7 +177,7 @@ mod tests {
     fn overlapping_boxes_pair_and_distant_ones_do_not() {
         let p = pairs(&[
             (0.0, 0.0, 0.0, 1.0, true),
-            (1.5, 0.0, 0.0, 1.0, true), // overlaps 0
+            (1.5, 0.0, 0.0, 1.0, true),  // overlaps 0
             (50.0, 0.0, 0.0, 1.0, true), // far away
         ]);
         assert_eq!(p, vec![(0, 1)]);
@@ -216,7 +216,10 @@ mod tests {
             .map(|i| (0.0, i as f32 * 3.0, 0.0, 1.0, true))
             .collect();
         let p = pairs(&items);
-        assert!(p.is_empty(), "boxes 3 apart with half-extent 1 do not touch");
+        assert!(
+            p.is_empty(),
+            "boxes 3 apart with half-extent 1 do not touch"
+        );
 
         let items: Vec<_> = (0..10)
             .map(|i| (0.0, i as f32 * 1.5, 0.0, 1.0, true))
@@ -233,10 +236,7 @@ mod tests {
         let mut bp = BroadPhase::new();
         bp.add(
             0,
-            &Aabb::new(
-                Vector3::new(-1e9, -1e9, -1e9),
-                Vector3::new(1e9, 1e9, 1e9),
-            ),
+            &Aabb::new(Vector3::new(-1e9, -1e9, -1e9), Vector3::new(1e9, 1e9, 1e9)),
             false, // a fixed ground plane
         );
         for i in 1..6 {

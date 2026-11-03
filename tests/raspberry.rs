@@ -180,7 +180,10 @@ fn no_hair_is_drawn_thinner_than_a_pixel() {
     let alphas: Vec<f32> = col.array.chunks_exact(4).map(|v| v[3]).collect();
     assert!(!alphas.is_empty(), "no hairs were built at all");
     for a in &alphas {
-        assert!((0.0..=1.0).contains(a), "a hair came back with coverage {a}");
+        assert!(
+            (0.0..=1.0).contains(a),
+            "a hair came back with coverage {a}"
+        );
     }
     let faded = alphas.iter().filter(|a| **a < 0.95).count();
     assert!(
@@ -297,7 +300,10 @@ fn the_berry_renders_red_with_tonal_range() {
          ({p05}..{p95}) — the berry is flat",
         p95 - p05
     );
-    assert!(p95 < 250, "the 95th percentile is {p95}: the berry is clipping");
+    assert!(
+        p95 < 250,
+        "the 95th percentile is {p95}: the berry is clipping"
+    );
 }
 
 /// The fuzz is there to break the silhouette. A berry without it has a hard

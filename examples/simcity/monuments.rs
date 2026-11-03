@@ -73,16 +73,7 @@ impl Monument {
 /// The whole tower is this repeated at shrinking radii, which is both how the
 /// real thing is built and why it reads as ironwork rather than as a solid
 /// pyramid — you can see sky through it.
-fn lattice_bay(
-    b: &mut Batches,
-    cx: f32,
-    cz: f32,
-    y0: f32,
-    y1: f32,
-    r0: f32,
-    r1: f32,
-    iron: Color,
-) {
+fn lattice_bay(b: &mut Batches, cx: f32, cz: f32, y0: f32, y1: f32, r0: f32, r1: f32, iron: Color) {
     let corners = |r: f32| {
         [
             (cx - r, cz - r),
@@ -419,8 +410,8 @@ fn colossus(b: &mut Batches, cx: f32, cz: f32, yaw: f32, rng: &mut Rng) {
     ped(b, 11.0, 10.5, 27.0, stone); // the shaft
     ped(b, 12.4, 27.0, 30.0, scale_color(stone, 1.06)); // upper cornice
     ped(b, 9.6, 30.0, 34.0, scale_color(stone, 0.98)); // attic
-    // Loggia: recessed vertical openings round the shaft, which is what stops
-    // the pedestal being a plain block.
+                                                       // Loggia: recessed vertical openings round the shaft, which is what stops
+                                                       // the pedestal being a plain block.
     for face in 0..4 {
         let ang = face as f32 * PI * 0.5;
         let (fx, fz) = (ang.cos(), ang.sin());
@@ -449,17 +440,17 @@ fn colossus(b: &mut Batches, cx: f32, cz: f32, yaw: f32, rng: &mut Rng) {
     // The robe. Asymmetric hem, a waist, and a chest — and now *fluted*, so it
     // is cloth rather than a cone.
     const PROFILE: [(f32, f32); 12] = [
-        (0.000, 7.2),  // hem
+        (0.000, 7.2), // hem
         (0.070, 6.9),
         (0.180, 6.5),
-        (0.330, 6.0),  // knees
-        (0.500, 5.3),  // hips
-        (0.610, 4.7),  // waist
-        (0.710, 5.1),  // chest
-        (0.780, 5.3),  // shoulders
+        (0.330, 6.0), // knees
+        (0.500, 5.3), // hips
+        (0.610, 4.7), // waist
+        (0.710, 5.1), // chest
+        (0.780, 5.3), // shoulders
         (0.812, 4.4),
         (0.848, 2.7),
-        (0.888, 1.5),  // neck
+        (0.888, 1.5), // neck
         (0.930, 1.4),
     ];
     draped(b, cx, cz, foot, fh, &PROFILE, 11, 0.075, 0.9, yaw, bronze);
@@ -501,8 +492,15 @@ fn colossus(b: &mut Batches, cx: f32, cz: f32, yaw: f32, rng: &mut Rng) {
     let shoulder = foot + fh * 0.78;
     for s2 in [-1.0f32, 1.0] {
         let (kx, kz) = at(0.0, s2 * 4.4);
-        b.trim
-            .add_ellipsoid(Vector3::new(kx, shoulder + 0.2, kz), 1.9, 1.6, 1.9, 6, 18, bronze);
+        b.trim.add_ellipsoid(
+            Vector3::new(kx, shoulder + 0.2, kz),
+            1.9,
+            1.6,
+            1.9,
+            6,
+            18,
+            bronze,
+        );
     }
 
     // Head, above the shoulders on a real neck.
@@ -531,8 +529,15 @@ fn colossus(b: &mut Batches, cx: f32, cz: f32, yaw: f32, rng: &mut Rng) {
     );
     // Hair, gathered at the back.
     let (hx0, hz0) = at(-1.5, 0.0);
-    b.trim
-        .add_ellipsoid(Vector3::new(hx0, head_y - 0.6, hz0), 1.7, 1.9, 2.4, 6, 18, scale_color(bronze, 0.93));
+    b.trim.add_ellipsoid(
+        Vector3::new(hx0, head_y - 0.6, hz0),
+        1.7,
+        1.9,
+        2.4,
+        6,
+        18,
+        scale_color(bronze, 0.93),
+    );
     // Crown: a diadem round the forehead, narrower than the head, and seven
     // long rays.
     b.trim.add_limb(
@@ -592,8 +597,15 @@ fn colossus(b: &mut Batches, cx: f32, cz: f32, yaw: f32, rng: &mut Rng) {
         bronze,
         false,
     );
-    b.trim
-        .add_ellipsoid(Vector3::new(hx, shoulder + 18.7, hz), 1.15, 1.3, 1.15, 6, 16, bronze);
+    b.trim.add_ellipsoid(
+        Vector3::new(hx, shoulder + 18.7, hz),
+        1.15,
+        1.3,
+        1.15,
+        6,
+        16,
+        bronze,
+    );
     // Torch: a fluted handle, a bowl, and a flame that is lit by day and
     // glows by night.
     b.trim.add_limb(
@@ -704,8 +716,15 @@ fn arch(b: &mut Batches, cx: f32, cz: f32, yaw: f32, rng: &mut Rng) {
     let at = |dd: f32, s: f32| (cx + ca * dd - sa * s, cz + sa * dd + ca * s);
 
     // Paved setting, so it stands on something.
-    b.pads
-        .add_ground_disc(cx, cz, w * 0.85, 22, 0.0, KERB + 0.02, Color::from_hex(0xb0a894));
+    b.pads.add_ground_disc(
+        cx,
+        cz,
+        w * 0.85,
+        22,
+        0.0,
+        KERB + 0.02,
+        Color::from_hex(0xb0a894),
+    );
     // The two piers, from the ground to the springing.
     for s in [-1.0f32, 1.0] {
         let inner = s * r;
@@ -890,7 +909,11 @@ fn wheel(b: &mut Batches, cx: f32, cz: f32, yaw: f32, rng: &mut Rng) {
     for s in [-1.0f32, 1.0] {
         for d in [-1.0f32, 1.0] {
             b.trim.add_limb(
-                Vector3::new(cx + nx * 16.0 * s + ca * d * 22.0, KERB, cz + nz * 16.0 * s + sa * d * 22.0),
+                Vector3::new(
+                    cx + nx * 16.0 * s + ca * d * 22.0,
+                    KERB,
+                    cz + nz * 16.0 * s + sa * d * 22.0,
+                ),
                 Vector3::new(cx + nx * 3.0 * s, hub, cz + nz * 3.0 * s),
                 1.5,
                 0.9,
@@ -903,10 +926,7 @@ fn wheel(b: &mut Batches, cx: f32, cz: f32, yaw: f32, rng: &mut Rng) {
     // Rim and spokes.
     const N: usize = 32;
     for k in 0..N {
-        let (a0, a1) = (
-            k as f32 / N as f32 * TAU,
-            (k + 1) as f32 / N as f32 * TAU,
-        );
+        let (a0, a1) = (k as f32 / N as f32 * TAU, (k + 1) as f32 / N as f32 * TAU);
         let (p0x, p0y, p0z) = pt(a0);
         let (p1x, p1y, p1z) = pt(a1);
         b.trim.add_limb(
@@ -986,7 +1006,15 @@ fn wheel(b: &mut Batches, cx: f32, cz: f32, yaw: f32, rng: &mut Rng) {
 /// An obelisk on a paved square.
 fn obelisk(b: &mut Batches, cx: f32, cz: f32, rng: &mut Rng) {
     let stone = scale_color(Color::from_hex(0xc4b89c), rng.range(0.95, 1.05));
-    b.pads.add_ground_disc(cx, cz, 20.0, 20, 0.0, KERB + 0.02, Color::from_hex(0xb0a894));
+    b.pads.add_ground_disc(
+        cx,
+        cz,
+        20.0,
+        20,
+        0.0,
+        KERB + 0.02,
+        Color::from_hex(0xb0a894),
+    );
     for (w, h0, h1) in [(7.0f32, 0.0f32, 3.0f32), (5.0, 3.0, 6.0)] {
         b.trim.add_box(
             Vector3::new(cx - w, KERB + h0, cz - w),
@@ -1025,8 +1053,15 @@ fn obelisk(b: &mut Batches, cx: f32, cz: f32, rng: &mut Rng) {
 fn dome(b: &mut Batches, cx: f32, cz: f32, rng: &mut Rng) {
     let stone = scale_color(Color::from_hex(0xd8d0bc), rng.range(0.96, 1.04));
     let r = 22.0f32;
-    b.pads
-        .add_ground_disc(cx, cz, r + 12.0, 24, 0.0, KERB + 0.02, Color::from_hex(0xb0a894));
+    b.pads.add_ground_disc(
+        cx,
+        cz,
+        r + 12.0,
+        24,
+        0.0,
+        KERB + 0.02,
+        Color::from_hex(0xb0a894),
+    );
     // Steps.
     for k in 0..4 {
         let t = k as f32;
@@ -1171,9 +1206,19 @@ pub(crate) fn add_suspension_bridge(
         }
     };
     if !b.occ.try_claim(if along_x {
-        [t0 - 12.0, fixed - half_w - 6.0, t1 + 12.0, fixed + half_w + 6.0]
+        [
+            t0 - 12.0,
+            fixed - half_w - 6.0,
+            t1 + 12.0,
+            fixed + half_w + 6.0,
+        ]
     } else {
-        [fixed - half_w - 6.0, t0 - 12.0, fixed + half_w + 6.0, t1 + 12.0]
+        [
+            fixed - half_w - 6.0,
+            t0 - 12.0,
+            fixed + half_w + 6.0,
+            t1 + 12.0,
+        ]
     }) {
         return false;
     }

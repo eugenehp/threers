@@ -10,7 +10,6 @@
 //! ```
 #![cfg(all(feature = "webgl", target_arch = "wasm32"))]
 
-
 use threers::renderer::caps;
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
@@ -255,7 +254,8 @@ async fn a_webgl2_device_renders_and_reads_back() {
         mapped_at_creation: false,
     });
 
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+    let mut encoder =
+        device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     {
         encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("clear"),
@@ -305,11 +305,9 @@ async fn a_webgl2_device_renders_and_reads_back() {
     queue.submit(Some(encoder.finish()));
 
     let (tx, mut rx) = futures_channel::oneshot::channel();
-    readback
-        .slice(..)
-        .map_async(wgpu::MapMode::Read, move |r| {
-            let _ = tx.send(r);
-        });
+    readback.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+        let _ = tx.send(r);
+    });
     // Mapping finishes on the event loop, so the thread must not block waiting
     // for it: `wait_indefinitely()` blocks the very loop that would deliver the
     // callback, and the test hangs until the driver is killed. Poll, yield, and
@@ -396,16 +394,107 @@ mod web_postfx;
 #[path = "web_maps/mod.rs"]
 mod web_maps;
 
+<<<<<<< Updated upstream
 // Whole scenes: lit, skinned, refracting, shadowed and post-processed draws,
 // ShaderMaterial, morph targets and groups — shared with the other backend.
 #[path = "web_scenes/mod.rs"]
 mod web_scenes;
+=======
+        renderer.set_render_target(target.id);
+        renderer.render(&mut scene, &camera());
+        renderer.render(&mut scene, &camera());
+        let pixels = read_target(&renderer, target.id, 64, 64).await;
+        assert_eq!(pixels.len(), 64 * 64 * 4, "short read-back");
+        let lit = pixels
+            .chunks(4)
+            .filter(|p| p[0] > 40 && p[0] > p[2])
+            .count();
+        assert!(
+            lit > 50,
+            "only {lit} of {} pixels show the lit cube",
+            pixels.len() / 4
+        );
+    }
+>>>>>>> Stashed changes
 
 type SharedViews = std::rc::Rc<std::cell::RefCell<threers::wasm::WebRenderer>>;
 
+<<<<<<< Updated upstream
 thread_local! {
     static VIEWS: std::cell::RefCell<Option<(SharedViews, web_sys::HtmlCanvasElement)>> =
         const { std::cell::RefCell::new(None) };
+=======
+        renderer.set_render_target(target.id);
+        renderer.render(&mut scene, &camera());
+        renderer.render(&mut scene, &camera());
+        let pixels = read_target(&renderer, target.id, 64, 64).await;
+        let lit = pixels
+            .chunks(4)
+            .filter(|p| p[1] > 40 && p[1] > p[0])
+            .count();
+        assert!(
+            lit > 50,
+            "only {lit} of {} pixels show the skinned cube",
+            pixels.len() / 4
+        );
+    }
+
+    // --- Screen-space refraction. ---
+    //
+    // The pass that could not be built here until the bind groups were split.
+    // wgpu-hal's GL backend assigns a texture unit per *layout* entry rather
+    // than per use, so one shared group 3 carrying both the shadow maps and the
+    // screen-space capture came to seventeen against sixteen. The refraction
+    // pass samples no shadow map, so it now has a group 3 with the capture where
+    // those were, and both layouts come to fourteen.
+    //
+    // An opaque plane stands behind the glass so there is something to refract.
+    {
+        let target = threers::wasm::WebRenderTarget::new(&renderer, 64, 64);
+        let mut scene = threers::wasm::WebScene::new();
+        let backdrop_colour = threers::wasm::WebColor::new(0.1, 0.2, 0.9);
+        let backdrop = threers::wasm::WebMaterial::standard(&backdrop_colour, 0.5, 0.0);
+        let plane = threers::wasm::WebGeometry::box_(6.0, 6.0, 0.2);
+        let back = scene.add(&threers::wasm::WebMesh::new(&plane, &backdrop));
+        scene.set_transform(
+            &back,
+            &threers::wasm::WebVector3::new(0.0, 0.0, -2.0),
+            &threers::wasm::WebEuler::new(0.0, 0.0, 0.0),
+        );
+
+        let glass_colour = threers::wasm::WebColor::new(1.0, 1.0, 1.0);
+        let mut glass = threers::wasm::WebMaterial::physical(&glass_colour, 0.05, 0.0, 0.0, 0.0);
+        glass.set_transmission(1.0, 1.5, 0.5, 0.0);
+        let sphere = threers::wasm::WebGeometry::sphere(1.0, 24, 16);
+        scene.add(&threers::wasm::WebMesh::new(&sphere, &glass));
+        scene.add_light(&sun());
+        scene.add_light(&threers::wasm::WebLight::ambient(&white, 0.5));
+
+        renderer.set_render_target(target.id);
+        renderer.render(&mut scene, &camera());
+        renderer.render(&mut scene, &camera());
+        let pixels = read_target(&renderer, target.id, 64, 64).await;
+        let blue = pixels
+            .chunks(4)
+            .filter(|p| p[2] > 60 && p[2] > p[0])
+            .count();
+        assert!(
+            blue > 500,
+            "only {blue} of {} pixels are backdrop-blue — nothing drew",
+            pixels.len() / 4
+        );
+        // A pass that failed to run would leave a flat backdrop behind an unlit
+        // sphere; what refraction adds is variation *through* the glass.
+        let distinct: std::collections::BTreeSet<(u8, u8, u8)> =
+            pixels.chunks(4).map(|p| (p[0], p[1], p[2])).collect();
+        assert!(
+            distinct.len() > 20,
+            "only {} distinct colours — the frame is a flat fill, so the glass \
+             refracted nothing",
+            distinct.len()
+        );
+    }
+>>>>>>> Stashed changes
 }
 
 /// Take `navigator.gpu` away from this page, so the renderer's WebGPU probe
@@ -434,6 +523,7 @@ async fn views_renderer() -> (SharedViews, web_sys::HtmlCanvasElement) {
             return v;
         }
     }
+<<<<<<< Updated upstream
     let document = web_sys::window().unwrap().document().unwrap();
     let canvas = document
         .create_element("canvas")
@@ -445,6 +535,118 @@ async fn views_renderer() -> (SharedViews, web_sys::HtmlCanvasElement) {
     document.body().unwrap().append_child(&canvas).unwrap();
     hide_webgpu();
     let renderer = threers::wasm::WebRenderer::new(canvas.clone())
+=======
+    let texture = threers::wasm::WebDataTexture::new(8, 8, data);
+    let white = threers::wasm::WebColor::new(1.0, 1.0, 1.0);
+    let mut textured = threers::wasm::WebMaterial::standard(&white, 0.5, 0.0);
+    textured.set_map_data(&texture);
+
+    // A floor to receive the shadow, and a box above it to cast one.
+    let floor = scene.add(&threers::wasm::WebMesh::new(
+        &threers::wasm::WebGeometry::box_(6.0, 0.2, 6.0),
+        &textured,
+    ));
+    scene.set_transform(
+        &floor,
+        &threers::wasm::WebVector3::new(0.0, -1.5, 0.0),
+        &threers::wasm::WebEuler::new(0.0, 0.0, 0.0),
+    );
+    let caster_colour = threers::wasm::WebColor::new(0.3, 0.6, 0.9);
+    let caster = scene.add(&threers::wasm::WebMesh::new(
+        &threers::wasm::WebGeometry::box_(1.2, 1.2, 1.2),
+        &threers::wasm::WebMaterial::standard(&caster_colour, 0.3, 0.0),
+    ));
+    scene.set_object_cast_shadow(&caster, true);
+
+    // And a transparent pane in front, which takes the sorted path.
+    let glass_colour = threers::wasm::WebColor::new(0.9, 0.9, 1.0);
+    let mut pane = threers::wasm::WebMaterial::standard(&glass_colour, 0.1, 0.0);
+    pane.set_opacity(0.4);
+    let front = scene.add(&threers::wasm::WebMesh::new(
+        &threers::wasm::WebGeometry::box_(2.0, 2.0, 0.05),
+        &pane,
+    ));
+    scene.set_transform(
+        &front,
+        &threers::wasm::WebVector3::new(0.0, 0.0, 1.2),
+        &threers::wasm::WebEuler::new(0.0, 0.0, 0.0),
+    );
+
+    let mut sun = threers::wasm::WebLight::directional(&white, 2.2);
+    sun.set_direction(-0.3, -0.9, -0.4);
+    scene.add_light(&sun);
+    scene.add_light(&threers::wasm::WebLight::ambient(&white, 0.35));
+
+    let mut camera = threers::wasm::WebCamera::perspective(55.0, 1.0, 0.1, 100.0);
+    camera.set_position(0.0, 1.5, 5.0);
+
+    renderer.set_render_target(scene_rt.id);
+    renderer.render(&mut scene, &camera);
+    renderer.render(&mut scene, &camera);
+
+    let before = read_target(&renderer, scene_rt.id, 64, 64).await;
+    let distinct_before: std::collections::BTreeSet<(u8, u8, u8)> =
+        before.chunks(4).map(|p| (p[0], p[1], p[2])).collect();
+    assert!(
+        distinct_before.len() > 30,
+        "the scene came back with only {} distinct colours — a textured, lit, \
+         shadowed frame cannot be that flat",
+        distinct_before.len()
+    );
+
+    // Post-processing over the rendered frame. Kind 0 is the plain copy, which
+    // is enough to prove the pass compiles and runs on this backend; the depth
+    // and normal inputs reuse the scene target because this is about whether the
+    // pipeline runs, not about what a particular effect looks like.
+    let identity: Vec<f32> = vec![
+        1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+    ];
+    renderer.apply_post_fx_to_rt(
+        scene_rt.id,
+        post_rt.id,
+        scene_rt.id,
+        scene_rt.id,
+        0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.1,
+        100.0,
+        0.5,
+        16,
+        identity.clone(),
+        identity,
+    );
+    let after = read_target(&renderer, post_rt.id, 64, 64).await;
+    assert_eq!(after.len(), before.len());
+    let lit_after = after
+        .chunks(4)
+        .filter(|p| p[0] > 8 || p[1] > 8 || p[2] > 8)
+        .count();
+    assert!(
+        lit_after > 500,
+        "only {lit_after} of {} pixels survived post-processing — the pass ran \
+         but produced nothing",
+        after.len() / 4
+    );
+}
+
+/// Pull a render target back to the CPU, awaiting the promise it returns.
+async fn read_target(
+    renderer: &threers::wasm::WebRenderer,
+    target_id: u32,
+    w: u32,
+    h: u32,
+) -> Vec<u8> {
+    let promise = renderer.read_render_target_pixels(target_id, 0, 0, w, h);
+    let value = wasm_bindgen_futures::JsFuture::from(promise)
+>>>>>>> Stashed changes
         .await
         .expect("the renderer would not start on this browser");
     assert_eq!(renderer.backend(), "gl", "the WebGL2 suite ran on another backend");

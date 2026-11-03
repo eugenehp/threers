@@ -275,7 +275,10 @@ mod tests {
         let vn = world.body(near).unwrap().linear_velocity.x;
         let vf = world.body(far).unwrap().linear_velocity.x;
         assert!(vn > 0.0 && vf > 0.0, "both should be pushed outward");
-        assert!(vn > vf, "the near body should be pushed harder: {vn} vs {vf}");
+        assert!(
+            vn > vf,
+            "the near body should be pushed harder: {vn} vs {vf}"
+        );
         assert_eq!(
             world.body(outside).unwrap().linear_velocity.length(),
             0.0,
@@ -293,7 +296,12 @@ mod tests {
         );
         world.apply_explosion(Vector3::ZERO, 10.0, 5.0, false);
         world.step(1.0 / 60.0);
-        assert!(world.body(body).unwrap().linear_velocity.length().is_finite());
+        assert!(world
+            .body(body)
+            .unwrap()
+            .linear_velocity
+            .length()
+            .is_finite());
     }
 
     #[test]
@@ -412,7 +420,10 @@ mod tests {
             cork > -1.0,
             "a body lighter than water should float near the surface, got {cork}"
         );
-        assert!(stone < -3.0, "a body denser than water should sink, got {stone}");
+        assert!(
+            stone < -3.0,
+            "a body denser than water should sink, got {stone}"
+        );
     }
 
     #[test]
@@ -445,7 +456,11 @@ mod tests {
             world.step(1.0 / 60.0);
         }
         let v = world.body(leaf).unwrap().linear_velocity;
-        assert!(v.x > 6.0, "the leaf should approach wind speed, got {}", v.x);
+        assert!(
+            v.x > 6.0,
+            "the leaf should approach wind speed, got {}",
+            v.x
+        );
         assert!(
             v.x <= 8.1,
             "it must not be blown faster than the wind, got {}",

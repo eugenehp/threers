@@ -20,7 +20,7 @@
 //! scene into one island — which would then never sleep, because something
 //! somewhere is always moving.
 
-use crate::body::{BodySet, BodyId};
+use crate::body::{BodyId, BodySet};
 use crate::contact::ContactSet;
 use crate::joint::JointSet;
 
@@ -276,18 +276,22 @@ mod tests {
         let mut left = Vec::new();
         let mut right = Vec::new();
         for i in 0..3 {
-            left.push(world.add_body(
-                RigidBody::dynamic()
-                    .shape(Shape::cuboid(0.5, 0.5, 0.5))
-                    .translation(Vector3::new(-10.0, 0.5 + i as f32 * 1.01, 0.0))
-                    .can_sleep(false),
-            ));
-            right.push(world.add_body(
-                RigidBody::dynamic()
-                    .shape(Shape::cuboid(0.5, 0.5, 0.5))
-                    .translation(Vector3::new(10.0, 0.5 + i as f32 * 1.01, 0.0))
-                    .can_sleep(false),
-            ));
+            left.push(
+                world.add_body(
+                    RigidBody::dynamic()
+                        .shape(Shape::cuboid(0.5, 0.5, 0.5))
+                        .translation(Vector3::new(-10.0, 0.5 + i as f32 * 1.01, 0.0))
+                        .can_sleep(false),
+                ),
+            );
+            right.push(
+                world.add_body(
+                    RigidBody::dynamic()
+                        .shape(Shape::cuboid(0.5, 0.5, 0.5))
+                        .translation(Vector3::new(10.0, 0.5 + i as f32 * 1.01, 0.0))
+                        .can_sleep(false),
+                ),
+            );
         }
 
         let islands = islands_of(&mut world, 120);
@@ -306,12 +310,14 @@ mod tests {
         let ground = world.add_body(RigidBody::fixed().shape(Shape::ground()));
         let mut bodies = Vec::new();
         for i in 0..8 {
-            bodies.push(world.add_body(
-                RigidBody::dynamic()
-                    .shape(Shape::ball(0.4))
-                    .translation(Vector3::new(i as f32 * 5.0, 0.4, 0.0))
-                    .can_sleep(false),
-            ));
+            bodies.push(
+                world.add_body(
+                    RigidBody::dynamic()
+                        .shape(Shape::ball(0.4))
+                        .translation(Vector3::new(i as f32 * 5.0, 0.4, 0.0))
+                        .can_sleep(false),
+                ),
+            );
         }
         let islands = islands_of(&mut world, 120);
         assert_eq!(islands.len(), 8, "each ball should be its own island");
@@ -340,7 +346,10 @@ mod tests {
 
         let islands = islands_of(&mut world, 5);
         assert_eq!(islands.len(), 1);
-        assert!(islands.same_island(a, b), "the joint should have coupled them");
+        assert!(
+            islands.same_island(a, b),
+            "the joint should have coupled them"
+        );
     }
 
     #[test]
@@ -349,12 +358,14 @@ mod tests {
         world.add_body(RigidBody::fixed().shape(Shape::ground()).friction(0.8));
         let mut stack = Vec::new();
         for i in 0..6 {
-            stack.push(world.add_body(
-                RigidBody::dynamic()
-                    .shape(Shape::cuboid(0.5, 0.5, 0.5))
-                    .translation(Vector3::new(0.0, 0.5 + i as f32 * 1.01, 0.0))
-                    .can_sleep(false),
-            ));
+            stack.push(
+                world.add_body(
+                    RigidBody::dynamic()
+                        .shape(Shape::cuboid(0.5, 0.5, 0.5))
+                        .translation(Vector3::new(0.0, 0.5 + i as f32 * 1.01, 0.0))
+                        .can_sleep(false),
+                ),
+            );
         }
         let islands = islands_of(&mut world, 180);
         assert_eq!(islands.len(), 1, "a stack is one island");
@@ -437,7 +448,11 @@ mod tests {
             }
         }
         // Every dynamic body, and nothing else.
-        let dynamic = world.bodies().iter().filter(|(_, b)| b.is_dynamic()).count();
+        let dynamic = world
+            .bodies()
+            .iter()
+            .filter(|(_, b)| b.is_dynamic())
+            .count();
         assert_eq!(total, dynamic);
     }
 

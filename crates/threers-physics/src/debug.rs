@@ -418,9 +418,18 @@ impl DebugRenderer {
             corner(-1.0, 1.0, 1.0),
         ];
         const EDGES: [(usize, usize); 12] = [
-            (0, 1), (1, 2), (2, 3), (3, 0),
-            (4, 5), (5, 6), (6, 7), (7, 4),
-            (0, 4), (1, 5), (2, 6), (3, 7),
+            (0, 1),
+            (1, 2),
+            (2, 3),
+            (3, 0),
+            (4, 5),
+            (5, 6),
+            (6, 7),
+            (7, 4),
+            (0, 4),
+            (1, 5),
+            (2, 6),
+            (3, 7),
         ];
         for (a, b) in EDGES {
             self.line(c[a], c[b], colour);
@@ -428,10 +437,10 @@ impl DebugRenderer {
     }
 
     fn line(&mut self, a: Vector3, b: Vector3, colour: Color) {
-        self.positions.extend_from_slice(&[a.x, a.y, a.z, b.x, b.y, b.z]);
-        self.colors_buffer.extend_from_slice(&[
-            colour.r, colour.g, colour.b, colour.r, colour.g, colour.b,
-        ]);
+        self.positions
+            .extend_from_slice(&[a.x, a.y, a.z, b.x, b.y, b.z]);
+        self.colors_buffer
+            .extend_from_slice(&[colour.r, colour.g, colour.b, colour.r, colour.g, colour.b]);
     }
 
     /// Line vertices, two per segment.
@@ -505,8 +514,14 @@ mod tests {
     #[test]
     fn every_shape_kind_draws_something() {
         let hull_points: Vec<Vector3> = [
-            (-1.0f32, -1.0, -1.0), (1.0, -1.0, -1.0), (1.0, 1.0, -1.0), (-1.0, 1.0, -1.0),
-            (-1.0, -1.0, 1.0), (1.0, -1.0, 1.0), (1.0, 1.0, 1.0), (-1.0, 1.0, 1.0),
+            (-1.0f32, -1.0, -1.0),
+            (1.0, -1.0, -1.0),
+            (1.0, 1.0, -1.0),
+            (-1.0, 1.0, -1.0),
+            (-1.0, -1.0, 1.0),
+            (1.0, -1.0, 1.0),
+            (1.0, 1.0, 1.0),
+            (-1.0, 1.0, 1.0),
         ]
         .iter()
         .map(|&(x, y, z)| Vector3::new(x, y, z))
@@ -535,8 +550,14 @@ mod tests {
             (
                 "compound",
                 Shape::compound(vec![
-                    (Isometry::from_translation(Vector3::new(-1.0, 0.0, 0.0)), Shape::ball(0.3)),
-                    (Isometry::from_translation(Vector3::new(1.0, 0.0, 0.0)), Shape::cuboid(0.3, 0.3, 0.3)),
+                    (
+                        Isometry::from_translation(Vector3::new(-1.0, 0.0, 0.0)),
+                        Shape::ball(0.3),
+                    ),
+                    (
+                        Isometry::from_translation(Vector3::new(1.0, 0.0, 0.0)),
+                        Shape::cuboid(0.3, 0.3, 0.3),
+                    ),
                 ]),
             ),
         ];
@@ -600,7 +621,10 @@ mod tests {
         without.draw_joints = false;
         without.render(&world);
 
-        assert!(with.line_count() > without.line_count(), "the joint was not drawn");
+        assert!(
+            with.line_count() > without.line_count(),
+            "the joint was not drawn"
+        );
     }
 
     #[test]

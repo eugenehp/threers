@@ -12,9 +12,7 @@ use crate::math::Vector3;
 #[derive(Clone, Debug, PartialEq)]
 pub enum CuboctAssemblyStep {
     /// Move end effector to a safe pose (mm).
-    Travel {
-        to: [f64; 3],
-    },
+    Travel { to: [f64; 3] },
     /// Pick a face part from a tray (flat on XY).
     PickPart {
         voxel: usize,

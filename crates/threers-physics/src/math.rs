@@ -540,8 +540,14 @@ mod tests {
             Quaternion::from_euler_xyz(0.3, -1.1, 2.0).normalize(),
         );
         let p = Vector3::new(1.0, 2.0, 3.0);
-        assert!(close(iso.inverse().transform_point(iso.transform_point(p)), p));
-        assert!(close(iso.inverse_transform_point(iso.transform_point(p)), p));
+        assert!(close(
+            iso.inverse().transform_point(iso.transform_point(p)),
+            p
+        ));
+        assert!(close(
+            iso.inverse_transform_point(iso.transform_point(p)),
+            p
+        ));
     }
 
     #[test]

@@ -39,8 +39,16 @@ fn have_ffmpeg() -> bool {
 fn frame_from_dct(coeffs: &[((usize, usize), f64)]) -> Yuv420Frame {
     let mut px = [[0.0f64; N]; N];
     for &((u, v), amp) in coeffs {
-        let cu = if u == 0 { (1.0 / N as f64).sqrt() } else { (2.0 / N as f64).sqrt() };
-        let cv = if v == 0 { (1.0 / N as f64).sqrt() } else { (2.0 / N as f64).sqrt() };
+        let cu = if u == 0 {
+            (1.0 / N as f64).sqrt()
+        } else {
+            (2.0 / N as f64).sqrt()
+        };
+        let cv = if v == 0 {
+            (1.0 / N as f64).sqrt()
+        } else {
+            (2.0 / N as f64).sqrt()
+        };
         for (y, row) in px.iter_mut().enumerate() {
             for (x, p) in row.iter_mut().enumerate() {
                 *p += amp
@@ -53,7 +61,10 @@ fn frame_from_dct(coeffs: &[((usize, usize), f64)]) -> Yuv420Frame {
     }
     let y: Vec<u8> = px
         .iter()
-        .flat_map(|row| row.iter().map(|&p| (128.0 + p).round().clamp(0.0, 255.0) as u8))
+        .flat_map(|row| {
+            row.iter()
+                .map(|&p| (128.0 + p).round().clamp(0.0, 255.0) as u8)
+        })
         .collect();
     let chroma = vec![128u8; (N / 2) * (N / 2)];
     Yuv420Frame {
@@ -85,7 +96,15 @@ fn encode_and_decode(frame: &Yuv420Frame, qp: i32) -> (Vec<u8>, Vec<u8>) {
     let dst = dir.join(format!("threers-resid-{uniq}.yuv"));
     std::fs::write(&src, &au).unwrap();
     let ok = Command::new("ffmpeg")
-        .args(["-y", "-hide_banner", "-loglevel", "error", "-f", "hevc", "-i"])
+        .args([
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "hevc",
+            "-i",
+        ])
         .arg(&src)
         .args(["-f", "rawvideo", "-pix_fmt", "yuv420p"])
         .arg(&dst)
@@ -100,7 +119,9 @@ fn encode_and_decode(frame: &Yuv420Frame, qp: i32) -> (Vec<u8>, Vec<u8>) {
     // The reconstruction is at CTB-aligned size; crop to display size like the
     // conformance window makes a decoder do. Here they are equal (16 == CTB).
     let cw = recon.coded_width as usize;
-    let luma: Vec<u8> = (0..N).flat_map(|r| recon.y[r * cw..r * cw + N].to_vec()).collect();
+    let luma: Vec<u8> = (0..N)
+        .flat_map(|r| recon.y[r * cw..r * cw + N].to_vec())
+        .collect();
     (luma, decoded[..N * N].to_vec())
 }
 
@@ -114,7 +135,8 @@ fn assert_conformant(frame: &Yuv420Frame, qp: i32, what: &str) {
     let worst = diffs.iter().map(|d| d.abs()).max().unwrap_or(0);
     let n_diff = diffs.iter().filter(|&&d| d != 0).count();
     assert_eq!(
-        worst, 0,
+        worst,
+        0,
         "{what} (qp {qp}): decoder != encoder reconstruction — \
          {n_diff}/{} samples differ, largest by {worst}",
         recon.len()
@@ -200,9 +222,11 @@ fn fuzz_random_coefficient_sets() {
             failures += 1;
         }
     }
-    assert_eq!(failures, 0, "{failures}/120 random coefficient sets were non-conformant");
+    assert_eq!(
+        failures, 0,
+        "{failures}/120 random coefficient sets were non-conformant"
+    );
 }
-
 
 /// Strongly directional content across several CTBs.
 ///
@@ -223,9 +247,11 @@ fn directional_multi_ctb_content_is_conformant() {
     let (w, h) = (64usize, 64usize);
     for (name, f) in [
         // Near-vertical structure -> horizontal scan.
-        ("vertical stripes", &(|x: usize, y: usize| {
-            (if x.is_multiple_of(3) { 40 } else { 210 }) + (y % 5) as i32
-        }) as &dyn Fn(usize, usize) -> i32),
+        (
+            "vertical stripes",
+            &(|x: usize, y: usize| (if x.is_multiple_of(3) { 40 } else { 210 }) + (y % 5) as i32)
+                as &dyn Fn(usize, usize) -> i32,
+        ),
         // Near-horizontal structure -> vertical scan.
         ("horizontal stripes", &|x: usize, y: usize| {
             (if y.is_multiple_of(3) { 30 } else { 200 }) + (x % 7) as i32
@@ -256,7 +282,8 @@ fn directional_multi_ctb_content_is_conformant() {
             let (recon, decoded) = encode_and_decode_size(&frame, qp, w, h);
             let n_diff = recon.iter().zip(&decoded).filter(|(a, b)| a != b).count();
             assert_eq!(
-                n_diff, 0,
+                n_diff,
+                0,
                 "{name} (qp {qp}): {n_diff}/{} samples differ",
                 recon.len()
             );
@@ -266,12 +293,7 @@ fn directional_multi_ctb_content_is_conformant() {
 
 /// [`encode_and_decode`] for a frame of any size (the helper above is pinned to
 /// a single 16x16 CTB).
-fn encode_and_decode_size(
-    frame: &Yuv420Frame,
-    qp: i32,
-    w: usize,
-    h: usize,
-) -> (Vec<u8>, Vec<u8>) {
+fn encode_and_decode_size(frame: &Yuv420Frame, qp: i32, w: usize, h: usize) -> (Vec<u8>, Vec<u8>) {
     encode_and_decode_aq(frame, qp, w, h, 0.0)
 }
 
@@ -313,7 +335,15 @@ fn encode_and_decode_tiled(
     let dst = dir.join(format!("threers-dir-{uniq}.yuv"));
     std::fs::write(&src, &au).unwrap();
     let ok = Command::new("ffmpeg")
-        .args(["-y", "-hide_banner", "-loglevel", "error", "-f", "hevc", "-i"])
+        .args([
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "hevc",
+            "-i",
+        ])
         .arg(&src)
         .args(["-f", "rawvideo", "-pix_fmt", "yuv420p"])
         .arg(&dst)
@@ -449,10 +479,14 @@ fn per_ctb_quantizer_is_conformant() {
             .flat_map(|yy| (0..w).map(move |xx| f(xx, yy).clamp(0, 255) as u8))
             .collect(),
         u: (0..h / 2)
-            .flat_map(|yy| (0..w / 2).map(move |xx| (f(xx * 2, yy * 2) / 2 + 60).clamp(0, 255) as u8))
+            .flat_map(|yy| {
+                (0..w / 2).map(move |xx| (f(xx * 2, yy * 2) / 2 + 60).clamp(0, 255) as u8)
+            })
             .collect(),
         v: (0..h / 2)
-            .flat_map(|yy| (0..w / 2).map(move |xx| (200 - f(xx * 2, yy * 2) / 3).clamp(0, 255) as u8))
+            .flat_map(|yy| {
+                (0..w / 2).map(move |xx| (200 - f(xx * 2, yy * 2) / 3).clamp(0, 255) as u8)
+            })
             .collect(),
         alpha: None,
     };
@@ -502,10 +536,14 @@ fn tiled_pictures_are_conformant() {
             .flat_map(|yy| (0..w).map(move |xx| f(xx, yy).clamp(0, 255) as u8))
             .collect(),
         u: (0..h / 2)
-            .flat_map(|yy| (0..w / 2).map(move |xx| (f(xx * 2, yy * 2) / 2 + 55).clamp(0, 255) as u8))
+            .flat_map(|yy| {
+                (0..w / 2).map(move |xx| (f(xx * 2, yy * 2) / 2 + 55).clamp(0, 255) as u8)
+            })
             .collect(),
         v: (0..h / 2)
-            .flat_map(|yy| (0..w / 2).map(move |xx| (190 - f(xx * 2, yy * 2) / 3).clamp(0, 255) as u8))
+            .flat_map(|yy| {
+                (0..w / 2).map(move |xx| (190 - f(xx * 2, yy * 2) / 3).clamp(0, 255) as u8)
+            })
             .collect(),
         alpha: None,
     };

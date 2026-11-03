@@ -221,7 +221,11 @@ impl Bvh {
     ///
     /// Only leaves that moved are queried, and each pair is reported once. The
     /// output is sorted, so it is identical run to run.
-    pub fn find_pairs(&mut self, out: &mut Vec<(u32, u32)>, mut accept: impl FnMut(u32, u32) -> bool) {
+    pub fn find_pairs(
+        &mut self,
+        out: &mut Vec<(u32, u32)>,
+        mut accept: impl FnMut(u32, u32) -> bool,
+    ) {
         out.clear();
         if self.root == NIL {
             self.moved.clear();
@@ -365,10 +369,8 @@ impl Bvh {
         // Splice a new internal node in above the sibling.
         let sibling = index;
         let old_parent = self.nodes[sibling as usize].parent;
-        let new_parent = self.allocate(
-            self.nodes[sibling as usize].bounds.union(&leaf_bounds),
-            NIL,
-        );
+        let new_parent =
+            self.allocate(self.nodes[sibling as usize].bounds.union(&leaf_bounds), NIL);
         self.nodes[new_parent as usize].parent = old_parent;
         self.nodes[new_parent as usize].height = self.nodes[sibling as usize].height + 1;
         self.nodes[new_parent as usize].left = sibling;
@@ -460,7 +462,10 @@ impl Bvh {
 
     /// Pivot `heavy` up above `a`, pushing `light` down.
     fn rotate(&mut self, a: u32, heavy: u32, light: u32) -> u32 {
-        let (f, g) = (self.nodes[heavy as usize].left, self.nodes[heavy as usize].right);
+        let (f, g) = (
+            self.nodes[heavy as usize].left,
+            self.nodes[heavy as usize].right,
+        );
 
         self.nodes[heavy as usize].left = a;
         self.nodes[heavy as usize].parent = self.nodes[a as usize].parent;
@@ -574,8 +579,14 @@ mod tests {
                 continue;
             }
             let (l, r) = (node.left, node.right);
-            assert_eq!(tree.nodes[l as usize].parent, index, "left child of {index}");
-            assert_eq!(tree.nodes[r as usize].parent, index, "right child of {index}");
+            assert_eq!(
+                tree.nodes[l as usize].parent, index,
+                "left child of {index}"
+            );
+            assert_eq!(
+                tree.nodes[r as usize].parent, index,
+                "right child of {index}"
+            );
             assert!(
                 contains(&node.bounds, &tree.nodes[l as usize].bounds),
                 "node {index} does not contain its left child"
@@ -584,13 +595,18 @@ mod tests {
                 contains(&node.bounds, &tree.nodes[r as usize].bounds),
                 "node {index} does not contain its right child"
             );
-            let want = 1 + tree.nodes[l as usize].height.max(tree.nodes[r as usize].height);
+            let want = 1 + tree.nodes[l as usize]
+                .height
+                .max(tree.nodes[r as usize].height);
             assert_eq!(node.height, want, "height of {index}");
             stack.push(l);
             stack.push(r);
         }
         assert_eq!(leaves, tree.leaf_count, "leaf count drifted");
-        assert_eq!(tree.nodes[tree.root as usize].parent, NIL, "root has a parent");
+        assert_eq!(
+            tree.nodes[tree.root as usize].parent, NIL,
+            "root has a parent"
+        );
     }
 
     #[test]
@@ -665,11 +681,9 @@ mod tests {
         let tree = Bvh::new();
         let mut hits = 0;
         tree.query_aabb(&aabb(0.0, 0.0, 0.0, 1.0), |_, _| hits += 1);
-        tree.query_ray(
-            &Ray::new(Vector3::ZERO, Vector3::UP),
-            100.0,
-            |_, _| hits += 1,
-        );
+        tree.query_ray(&Ray::new(Vector3::ZERO, Vector3::UP), 100.0, |_, _| {
+            hits += 1
+        });
         assert_eq!(hits, 0);
         assert_eq!(tree.height(), -1);
     }
@@ -704,11 +718,9 @@ mod tests {
         let mut tree = Bvh::new();
         tree.insert(&aabb(0.0, 0.0, 0.0, 5.0), 7);
         let mut hits = Vec::new();
-        tree.query_ray(
-            &Ray::new(Vector3::ZERO, Vector3::UP),
-            100.0,
-            |user, _| hits.push(user),
-        );
+        tree.query_ray(&Ray::new(Vector3::ZERO, Vector3::UP), 100.0, |user, _| {
+            hits.push(user)
+        });
         assert_eq!(hits, vec![7]);
     }
 
@@ -719,11 +731,9 @@ mod tests {
         tree.insert(&aabb(0.0, 500.0, 0.0, 0.5), 2);
 
         let mut hits = Vec::new();
-        tree.query_ray(
-            &Ray::new(Vector3::ZERO, Vector3::UP),
-            10.0,
-            |user, _| hits.push(user),
-        );
+        tree.query_ray(&Ray::new(Vector3::ZERO, Vector3::UP), 10.0, |user, _| {
+            hits.push(user)
+        });
         assert_eq!(hits, vec![1], "the far box should have been pruned");
     }
 
@@ -823,7 +833,10 @@ mod tests {
             // Add two, remove one, move a few — the shape of a real scene.
             for _ in 0..2 {
                 let f = next as f32;
-                let p = tree.insert(&aabb((f * 0.37).sin() * 20.0, (f * 0.11).cos() * 20.0, 0.0, 0.5), next);
+                let p = tree.insert(
+                    &aabb((f * 0.37).sin() * 20.0, (f * 0.11).cos() * 20.0, 0.0, 0.5),
+                    next,
+                );
                 live.push((p, next));
                 next += 1;
             }
@@ -833,7 +846,11 @@ mod tests {
             }
             for (i, (p, _)) in live.iter().enumerate().take(8) {
                 let f = (step + i) as f32;
-                tree.update(*p, &aabb((f * 0.23).sin() * 20.0, (f * 0.19).cos() * 20.0, 0.0, 0.5), Vector3::ZERO);
+                tree.update(
+                    *p,
+                    &aabb((f * 0.23).sin() * 20.0, (f * 0.19).cos() * 20.0, 0.0, 0.5),
+                    Vector3::ZERO,
+                );
             }
         }
         assert_consistent(&tree);

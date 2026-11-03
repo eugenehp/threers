@@ -220,11 +220,7 @@ impl ArmWorld {
         let mut out = Vec::new();
         for (i, p) in poses.iter().enumerate() {
             let des = ActuatorDesign::from_drive(&self.plant.servos[i].drive);
-            let proximal = if i == 0 {
-                base
-            } else {
-                poses[i - 1].origin
-            };
+            let proximal = if i == 0 { base } else { poses[i - 1].origin };
             out.extend(assemble_joint(i, &des, p.origin, p.axis, proximal));
         }
         out
@@ -246,7 +242,10 @@ impl ArmWorld {
         let len = norm(d).max(1e-6);
         let u = scale(d, 1.0 / len);
         let inset = radius.min(len * 0.4);
-        (add3(origin, scale(u, inset)), add3(distal, scale(u, -inset)))
+        (
+            add3(origin, scale(u, inset)),
+            add3(distal, scale(u, -inset)),
+        )
     }
 
     /// Refresh [`Self::contacts`] from the current pose.
@@ -360,11 +359,7 @@ fn capsule_plane(a0: V3, a1: V3, r: f64, floor_z: f64) -> Option<(V3, V3, f64)> 
     // Lowest point of the capsule toward −Z.
     let z0 = a0[2] - r;
     let z1 = a1[2] - r;
-    let (p, z) = if z0 < z1 {
-        (a0, z0)
-    } else {
-        (a1, z1)
-    };
+    let (p, z) = if z0 < z1 { (a0, z0) } else { (a1, z1) };
     if z >= floor_z {
         return None;
     }

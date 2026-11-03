@@ -871,7 +871,6 @@ impl Tendon {
             0.0
         }
     }
-
 }
 
 /// Handle to a tendon in a [`TendonSet`].
@@ -1072,7 +1071,10 @@ mod tests {
     fn stale_handles_do_not_resolve() {
         let (_, a, b) = two_bodies();
         let mut set = TendonSet::new();
-        let route = vec![TendonPoint::new(a, Vector3::ZERO), TendonPoint::new(b, Vector3::ZERO)];
+        let route = vec![
+            TendonPoint::new(a, Vector3::ZERO),
+            TendonPoint::new(b, Vector3::ZERO),
+        ];
         let id = set.insert(Tendon::new(route.clone()));
         set.remove(id);
         let id2 = set.insert(Tendon::new(route));

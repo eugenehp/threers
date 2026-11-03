@@ -77,7 +77,11 @@ impl ColorRamp {
                 .iter()
                 .enumerate()
                 .map(|(i, c)| {
-                    let t = if n > 1 { i as f32 / (n - 1) as f32 } else { 0.0 };
+                    let t = if n > 1 {
+                        i as f32 / (n - 1) as f32
+                    } else {
+                        0.0
+                    };
                     (t, Color::from_hex(*c))
                 })
                 .collect(),
@@ -388,7 +392,14 @@ mod tests {
 
     #[test]
     fn oklab_round_trips() {
-        for hex in [0x000000u32, 0xffffff, 0xff0000, 0x3498db, 0x7f7f7f, 0x12ab34] {
+        for hex in [
+            0x000000u32,
+            0xffffff,
+            0xff0000,
+            0x3498db,
+            0x7f7f7f,
+            0x12ab34,
+        ] {
             let c = Color::from_hex(hex);
             let back = Color::from_oklab(c.to_oklab());
             assert!(
@@ -407,10 +418,23 @@ mod tests {
     fn hsl_round_trips_and_matches_known_colours() {
         // Pure red is hue 0, full saturation, half lightness.
         let hsl = Color::from_hex(0xff0000).to_hsl();
-        assert!(hsl[0].abs() < 1e-3 || (hsl[0] - 1.0).abs() < 1e-3, "{hsl:?}");
-        assert!((hsl[1] - 1.0).abs() < 1e-3 && (hsl[2] - 0.5).abs() < 1e-3, "{hsl:?}");
+        assert!(
+            hsl[0].abs() < 1e-3 || (hsl[0] - 1.0).abs() < 1e-3,
+            "{hsl:?}"
+        );
+        assert!(
+            (hsl[1] - 1.0).abs() < 1e-3 && (hsl[2] - 0.5).abs() < 1e-3,
+            "{hsl:?}"
+        );
 
-        for hex in [0xff0000u32, 0x00ff00, 0x0000ff, 0x808080, 0x3498db, 0xffffff] {
+        for hex in [
+            0xff0000u32,
+            0x00ff00,
+            0x0000ff,
+            0x808080,
+            0x3498db,
+            0xffffff,
+        ] {
             let c = Color::from_hex(hex);
             let [h, s, l] = c.to_hsl();
             assert_eq!(

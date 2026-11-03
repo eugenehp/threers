@@ -156,7 +156,10 @@ fn scene(kind: Kind, occluder: bool) -> Scene {
     let mut floor_mat = StandardMaterial::new(Color::WHITE);
     floor_mat.metalness = 0.0;
     floor_mat.roughness = 1.0;
-    let mut floor = Object3D::mesh(Mesh::new(PlaneGeometry::new(200.0, 200.0), floor_mat.into()));
+    let mut floor = Object3D::mesh(Mesh::new(
+        PlaneGeometry::new(200.0, 200.0),
+        floor_mat.into(),
+    ));
     floor.position = Vector3::new(0.0, 0.0, FLOOR_Z);
     floor.receive_shadow = true;
     s.add(floor);
@@ -214,7 +217,8 @@ fn measure(lit: &[u8], shadowed: &[u8], predicted: (f64, f64)) -> Measured {
         for x in 0..N as usize {
             let i = (y * N as usize + x) * 4;
             let a = to_linear(lit[i]) + to_linear(lit[i + 1]) + to_linear(lit[i + 2]);
-            let b = to_linear(shadowed[i]) + to_linear(shadowed[i + 1]) + to_linear(shadowed[i + 2]);
+            let b =
+                to_linear(shadowed[i]) + to_linear(shadowed[i + 1]) + to_linear(shadowed[i + 2]);
             if a <= 1e-4 {
                 continue;
             }
@@ -253,11 +257,18 @@ fn measure(lit: &[u8], shadowed: &[u8], predicted: (f64, f64)) -> Measured {
 
 /// Render one kind through the wgpu renderer and measure it.
 fn probe_wgpu(kind: Kind) -> Option<Measured> {
-    let mut r = threers::HeadlessRenderer::builder().size(N, N).build().ok()?;
+    let mut r = threers::HeadlessRenderer::builder()
+        .size(N, N)
+        .build()
+        .ok()?;
     let cam = camera();
     let lit = r.render_to_rgba(&mut scene(kind, false), &cam);
     let shadowed = r.render_to_rgba(&mut scene(kind, true), &cam);
-    Some(measure(&lit, &shadowed, to_pixels(predicted_shadow_centre(kind), &cam)))
+    Some(measure(
+        &lit,
+        &shadowed,
+        to_pixels(predicted_shadow_centre(kind), &cam),
+    ))
 }
 
 /// The same through the Metal backend.
@@ -270,9 +281,17 @@ fn probe_metal(kind: Kind) -> Option<Measured> {
         Err(e) => panic!("metal renderer: {e:?}"),
     };
     let cam = camera();
-    let lit = r.render_to_rgba(&mut scene(kind, false), &cam).expect("metal");
-    let shadowed = r.render_to_rgba(&mut scene(kind, true), &cam).expect("metal");
-    Some(measure(&lit, &shadowed, to_pixels(predicted_shadow_centre(kind), &cam)))
+    let lit = r
+        .render_to_rgba(&mut scene(kind, false), &cam)
+        .expect("metal");
+    let shadowed = r
+        .render_to_rgba(&mut scene(kind, true), &cam)
+        .expect("metal");
+    Some(measure(
+        &lit,
+        &shadowed,
+        to_pixels(predicted_shadow_centre(kind), &cam),
+    ))
 }
 
 /// The fixture reporting on itself: every light type, both backends, against

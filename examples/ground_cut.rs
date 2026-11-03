@@ -8,23 +8,14 @@ fn slab(x0: f32, z0: f32, x1: f32, z1: f32, y: f32, c: Color) -> BufferGeometry 
     let mut g = BufferGeometry::new();
     g.set_attribute(
         "position",
-        BufferAttribute::new(
-            vec![x0, y, z0, x0, y, z1, x1, y, z1, x1, y, z0],
-            3,
-        ),
+        BufferAttribute::new(vec![x0, y, z0, x0, y, z1, x1, y, z1, x1, y, z0], 3),
     );
-    g.set_attribute(
-        "normal",
-        BufferAttribute::new([0.0, 1.0, 0.0].repeat(4), 3),
-    );
+    g.set_attribute("normal", BufferAttribute::new([0.0, 1.0, 0.0].repeat(4), 3));
     g.set_attribute(
         "uv",
         BufferAttribute::new(vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 0.0], 2),
     );
-    g.set_attribute(
-        "color",
-        BufferAttribute::new([c.r, c.g, c.b].repeat(4), 3),
-    );
+    g.set_attribute("color", BufferAttribute::new([c.r, c.g, c.b].repeat(4), 3));
     g.set_index(vec![0, 1, 2, 0, 2, 3]);
     g
 }
@@ -58,10 +49,7 @@ fn main() {
         z -= 200.0;
         i += 1;
     }
-    let mut sun = Object3D::light(Light::Directional(DirectionalLight::new(
-        Color::WHITE,
-        2.0,
-    )));
+    let mut sun = Object3D::light(Light::Directional(DirectionalLight::new(Color::WHITE, 2.0)));
     sun.position = Vector3::new(0.0, 500.0, 200.0);
     scene.add(sun);
     let mut camera = PerspectiveCamera::new(42.0, w as f32 / h as f32, 1.0, far);

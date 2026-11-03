@@ -216,24 +216,8 @@ fn scene() -> Vec<Tri> {
         &mut t,
     );
     // Lamp already added with the ceiling hole.
-    box_tris(
-        V3::new(-0.35, 0.6, -0.3),
-        0.3,
-        0.6,
-        0.3,
-        0.3,
-        grey,
-        &mut t,
-    );
-    box_tris(
-        V3::new(0.35, 0.3, 0.35),
-        0.3,
-        0.3,
-        0.3,
-        -0.3,
-        grey,
-        &mut t,
-    );
+    box_tris(V3::new(-0.35, 0.6, -0.3), 0.3, 0.6, 0.3, 0.3, grey, &mut t);
+    box_tris(V3::new(0.35, 0.3, 0.35), 0.3, 0.3, 0.3, -0.3, grey, &mut t);
     t
 }
 
@@ -400,7 +384,10 @@ pub fn pack_view(
     spp: u32,
     bounces: u32,
 ) -> anyhow::Result<Vec<f32>> {
-    anyhow::ensure!(side >= 8 && side.is_multiple_of(8), "side must be a multiple of 8");
+    anyhow::ensure!(
+        side >= 8 && side.is_multiple_of(8),
+        "side must be a multiple of 8"
+    );
     let tris = scene();
     let origin = V3::new(cam_pos[0], cam_pos[1], cam_pos[2]);
     let target = V3::new(cam_target[0], cam_target[1], cam_target[2]);
@@ -434,8 +421,11 @@ pub fn pack_view(
                     j.next_f32()
                 };
                 let dir = camera_ray(origin, target, fov_deg, side, x, y, jx, jy);
-                let mut sample_rng =
-                    Rng(((x as u32 * 1973) ^ (y as u32 * 9277) ^ 0x00C0_FFEE ^ s.wrapping_mul(0x9E37_79B9)) | 1);
+                let mut sample_rng = Rng(((x as u32 * 1973)
+                    ^ (y as u32 * 9277)
+                    ^ 0x00C0_FFEE
+                    ^ s.wrapping_mul(0x9E37_79B9))
+                    | 1);
                 sum = sum.add(trace_probe(origin, dir, &tris, bounces, &mut sample_rng));
             }
             let inv = 1.0 / spp as f32;
@@ -509,10 +499,10 @@ mod tests {
 
         let input = pack_view(16, [0.0, 1.0, 3.9], [0.0, 1.0, 0.0], 40.0, 2, 3).expect("pack");
         assert_eq!(input.len(), IN_CHANNELS * 16 * 16);
-        let lit: usize = input[..16 * 16]
-            .iter()
-            .filter(|&&v| v > 0.01)
-            .count();
-        assert!(lit > 40, "probe should light the room, lit={lit} hits={hits}");
+        let lit: usize = input[..16 * 16].iter().filter(|&&v| v > 0.01).count();
+        assert!(
+            lit > 40,
+            "probe should light the room, lit={lit} hits={hits}"
+        );
     }
 }

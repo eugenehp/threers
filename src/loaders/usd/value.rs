@@ -193,10 +193,9 @@ impl UsdValue {
     /// reference or a path.
     pub fn as_str(&self) -> Option<&str> {
         match self {
-            UsdValue::String(s)
-            | UsdValue::Token(s)
-            | UsdValue::Asset(s)
-            | UsdValue::Path(s) => Some(s),
+            UsdValue::String(s) | UsdValue::Token(s) | UsdValue::Asset(s) | UsdValue::Path(s) => {
+                Some(s)
+            }
             _ => None,
         }
     }
@@ -330,7 +329,10 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, (usize, &'static str)> {
                 i = next;
             }
             _ => {
-                if c == b'-' || c == b'+' || c.is_ascii_digit() || (c == b'.' && i + 1 < b.len() && b[i + 1].is_ascii_digit())
+                if c == b'-'
+                    || c == b'+'
+                    || c.is_ascii_digit()
+                    || (c == b'.' && i + 1 < b.len() && b[i + 1].is_ascii_digit())
                 {
                     let (tok, next) = read_number(src, i).ok_or((i, "bad number"))?;
                     out.push(tok);
@@ -415,7 +417,11 @@ fn read_number(src: &str, at: usize) -> Option<(Token, usize)> {
     let sign = if b[at] == b'-' { -1.0 } else { 1.0 };
     for word in ["inf", "nan"] {
         if src[i..].starts_with(word) {
-            let v = if word == "inf" { f64::INFINITY } else { f64::NAN };
+            let v = if word == "inf" {
+                f64::INFINITY
+            } else {
+                f64::NAN
+            };
             return Some((Token::Number(sign * v), i + word.len()));
         }
     }
@@ -528,7 +534,9 @@ impl fmt::Display for UsdValue {
 }
 
 fn escape(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n")
+    s.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
 }
 
 /// Blend two values of the same shape. Structure is taken from `a`, so a pair
@@ -606,9 +614,12 @@ fn lerp_componentwise(a: &UsdValue, b: &UsdValue, t: f64) -> UsdValue {
         (UsdValue::Int(x), UsdValue::Int(y)) => {
             UsdValue::Float(*x as f64 + (*y as f64 - *x as f64) * t)
         }
-        (UsdValue::Tuple(x), UsdValue::Tuple(y)) if x.len() == y.len() => {
-            UsdValue::Tuple(x.iter().zip(y).map(|(p, q)| lerp_componentwise(p, q, t)).collect())
-        }
+        (UsdValue::Tuple(x), UsdValue::Tuple(y)) if x.len() == y.len() => UsdValue::Tuple(
+            x.iter()
+                .zip(y)
+                .map(|(p, q)| lerp_componentwise(p, q, t))
+                .collect(),
+        ),
         // An array of quaternions is interpolated element by element, and each
         // element is a quaternion — so this recurses through `lerp`.
         (UsdValue::Array(x), UsdValue::Array(y)) if x.len() == y.len() => {
@@ -646,7 +657,10 @@ mod interpolation {
         let half = value.at_time(0.5).flat_f32();
 
         let length = half.iter().map(|v| v * v).sum::<f32>().sqrt();
-        assert!((length - 1.0).abs() < 1e-5, "not a unit quaternion: {length}");
+        assert!(
+            (length - 1.0).abs() < 1e-5,
+            "not a unit quaternion: {length}"
+        );
         // Exactly halfway along the arc: both components equal.
         assert!((half[0] - half[1]).abs() < 1e-5, "{half:?}");
         assert!((half[0] - 0.5f32.sqrt()).abs() < 1e-5, "{half:?}");
@@ -781,7 +795,9 @@ mod tests {
         assert!(toks.contains(&Token::Integer(3)));
         assert!(toks.contains(&Token::Number(3.0)));
         assert!(toks.contains(&Token::Number(-1e-4)));
-        assert!(toks.iter().any(|t| matches!(t, Token::Number(v) if v.is_infinite() && *v < 0.0)));
+        assert!(toks
+            .iter()
+            .any(|t| matches!(t, Token::Number(v) if v.is_infinite() && *v < 0.0)));
     }
 
     #[test]

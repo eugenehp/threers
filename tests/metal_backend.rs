@@ -9,7 +9,6 @@
 
 #![cfg(metal_backend)]
 
-
 use threers::cameras::{Camera, OrthographicCamera};
 use threers::core::{
     BufferAttribute, BufferGeometry, InstancedMesh, LineSegments, Mesh, Object3D, Points,
@@ -888,17 +887,17 @@ fn camera_layers_filter_what_is_drawn() {
 #[test]
 fn headless_render_scale_upscales_on_readback() {
     let Some(mut hr) = (match MetalHeadlessRenderer::builder()
-            .size(SIZE, SIZE)
-            .render_scale(2)
-            .build()
-        {
-            Ok(r) => Some(r),
-            Err(MetalError::NoDevice) => {
-                eprintln!("skipping: no Metal device on this machine");
-                None
-            }
-            Err(e) => panic!("{e}"),
-        }) else {
+        .size(SIZE, SIZE)
+        .render_scale(2)
+        .build()
+    {
+        Ok(r) => Some(r),
+        Err(MetalError::NoDevice) => {
+            eprintln!("skipping: no Metal device on this machine");
+            None
+        }
+        Err(e) => panic!("{e}"),
+    }) else {
         return;
     };
     assert_eq!(hr.export_size(), (SIZE, SIZE));
@@ -919,17 +918,17 @@ fn headless_render_scale_upscales_on_readback() {
 #[test]
 fn headless_supersample_downsample() {
     let Some(mut hr) = (match MetalHeadlessRenderer::builder()
-            .size(SIZE, SIZE)
-            .supersample(4)
-            .build()
-        {
-            Ok(r) => Some(r),
-            Err(MetalError::NoDevice) => {
-                eprintln!("skipping: no Metal device on this machine");
-                None
-            }
-            Err(e) => panic!("{e}"),
-        }) else {
+        .size(SIZE, SIZE)
+        .supersample(4)
+        .build()
+    {
+        Ok(r) => Some(r),
+        Err(MetalError::NoDevice) => {
+            eprintln!("skipping: no Metal device on this machine");
+            None
+        }
+        Err(e) => panic!("{e}"),
+    }) else {
         return;
     };
     assert_eq!(hr.export_size(), (SIZE, SIZE));
@@ -973,7 +972,10 @@ fn headless_bloom_does_not_panic() {
     hr.set_bloom(0.5, 0.2, 2.0);
     let rgba = hr.render_to_rgba(&mut scene, &unit_camera()).unwrap();
     assert_eq!(rgba.len(), (SIZE * SIZE * 4) as usize);
-    assert!(center(&rgba)[0] > 200, "white quad should survive bloom composite");
+    assert!(
+        center(&rgba)[0] > 200,
+        "white quad should survive bloom composite"
+    );
 }
 
 // ------------------------------------------------------------- wireframe

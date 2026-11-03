@@ -327,7 +327,14 @@ impl KirigamiMesh {
     }
 
     /// Tile this patch on a grid. `pitch_*` is the repeat period along each axis.
-    pub fn array(&self, count_x: usize, count_y: usize, pitch_x: f64, pitch_y: f64, gap: f64) -> Self {
+    pub fn array(
+        &self,
+        count_x: usize,
+        count_y: usize,
+        pitch_x: f64,
+        pitch_y: f64,
+        gap: f64,
+    ) -> Self {
         let count_x = count_x.max(1);
         let count_y = count_y.max(1);
         let step_x = pitch_x + gap;
@@ -356,10 +363,7 @@ impl KirigamiMesh {
         for layer in 0..layers {
             let dz = layer as f64 * (layer_h + gap_z);
             let st = if layer % 2 == 1 { stagger } else { [0.0, 0.0] };
-            faces.extend(
-                self.translated([st[0], st[1], dz])
-                    .faces,
-            );
+            faces.extend(self.translated([st[0], st[1], dz]).faces);
         }
         Self {
             faces,
@@ -698,11 +702,7 @@ impl KirigamiPreset {
         if v == KIRIGAMI_NET_VARIANT {
             return None;
         }
-        let i = if v > KIRIGAMI_NET_VARIANT {
-            v - 1
-        } else {
-            v
-        } as usize;
+        let i = if v > KIRIGAMI_NET_VARIANT { v - 1 } else { v } as usize;
         Some(Self::all()[i % Self::count()])
     }
 
@@ -872,10 +872,7 @@ impl KirigamiPreset {
                 .height(36.0)
                 .inclination(68.0_f64.to_radians())
                 .surface(move |x, y| {
-                    34.0
-                        + 10.0
-                            * (x / lx * 0.55).sin()
-                            * (y / (span * 0.5).max(1.0) * 0.55).sin()
+                    34.0 + 10.0 * (x / lx * 0.55).sin() * (y / (span * 0.5).max(1.0) * 0.55).sin()
                 })
                 .evaluate(),
             Self::Wing => base
@@ -889,7 +886,13 @@ impl KirigamiPreset {
             Self::Tiled => {
                 let unit = base.height(50.0).evaluate();
                 let (min, max) = unit.aabb();
-                unit.array(2, 2, (max[0] - min[0]).max(1.0), (max[1] - min[1]).max(1.0), 10.0)
+                unit.array(
+                    2,
+                    2,
+                    (max[0] - min[0]).max(1.0),
+                    (max[1] - min[1]).max(1.0),
+                    10.0,
+                )
             }
             Self::Stacked => {
                 let unit = base.height(45.0).evaluate();
@@ -1228,7 +1231,6 @@ impl KirigamiExpandedMiura {
         let mm = plane_line(lower[3], vp, v, n);
         let pm = plane_line(lower[0], vp, v, n);
 
-        
         if j + 1 < self.ny {
             let upper = self.pad_corners(i, j + 1);
             let mp = plane_line(upper[2], vm, v, n);
@@ -1911,10 +1913,19 @@ mod tests {
 
     #[test]
     fn variant_index_maps_around_net_slot() {
-        assert_eq!(KirigamiPreset::from_variant(4), Some(KirigamiPreset::Exploded));
+        assert_eq!(
+            KirigamiPreset::from_variant(4),
+            Some(KirigamiPreset::Exploded)
+        );
         assert_eq!(KirigamiPreset::from_variant(KIRIGAMI_NET_VARIANT), None);
-        assert_eq!(KirigamiPreset::from_variant(6), Some(KirigamiPreset::Shallow));
-        assert_eq!(KirigamiPreset::from_variant(20), Some(KirigamiPreset::Gradient));
+        assert_eq!(
+            KirigamiPreset::from_variant(6),
+            Some(KirigamiPreset::Shallow)
+        );
+        assert_eq!(
+            KirigamiPreset::from_variant(20),
+            Some(KirigamiPreset::Gradient)
+        );
     }
 
     #[test]

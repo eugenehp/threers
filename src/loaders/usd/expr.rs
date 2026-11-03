@@ -37,12 +37,7 @@ pub type Variables = HashMap<String, String>;
 pub fn variables_of(metadata: &[(String, UsdValue)]) -> Variables {
     let mut out = Variables::new();
     for (key, value) in metadata {
-        if key
-            .split_once(' ')
-            .map(|(_, rest)| rest)
-            .unwrap_or(key)
-            != "expressionVariables"
-        {
+        if key.split_once(' ').map(|(_, rest)| rest).unwrap_or(key) != "expressionVariables" {
             continue;
         }
         if let UsdValue::Dict(entries) = value {
@@ -141,7 +136,10 @@ mod tests {
     #[test]
     fn anything_beyond_substitution_is_declined() {
         let v = vars(&[("A", "1")]);
-        assert_eq!(evaluate("`if(eq(${A}, 1), \"x.usda\", \"y.usda\")`", &v), None);
+        assert_eq!(
+            evaluate("`if(eq(${A}, 1), \"x.usda\", \"y.usda\")`", &v),
+            None
+        );
         assert_eq!(evaluate("`${A}`", &v), None, "not a string literal");
     }
 

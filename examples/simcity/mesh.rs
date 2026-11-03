@@ -92,17 +92,35 @@ impl MeshBuilder {
         let (x1, y1, z1) = (max.x, max.y, max.z);
         let faces: [([f32; 3], [[f32; 3]; 4]); 6] = [
             // +X: u=+Y, v=+Z
-            ([1.0, 0.0, 0.0], [[x1, y0, z0], [x1, y1, z0], [x1, y1, z1], [x1, y0, z1]]),
+            (
+                [1.0, 0.0, 0.0],
+                [[x1, y0, z0], [x1, y1, z0], [x1, y1, z1], [x1, y0, z1]],
+            ),
             // -X: u=+Z, v=+Y
-            ([-1.0, 0.0, 0.0], [[x0, y0, z0], [x0, y0, z1], [x0, y1, z1], [x0, y1, z0]]),
+            (
+                [-1.0, 0.0, 0.0],
+                [[x0, y0, z0], [x0, y0, z1], [x0, y1, z1], [x0, y1, z0]],
+            ),
             // +Y: u=+Z, v=+X
-            ([0.0, 1.0, 0.0], [[x0, y1, z0], [x0, y1, z1], [x1, y1, z1], [x1, y1, z0]]),
+            (
+                [0.0, 1.0, 0.0],
+                [[x0, y1, z0], [x0, y1, z1], [x1, y1, z1], [x1, y1, z0]],
+            ),
             // -Y: u=+X, v=+Z
-            ([0.0, -1.0, 0.0], [[x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1]]),
+            (
+                [0.0, -1.0, 0.0],
+                [[x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1]],
+            ),
             // +Z: u=+X, v=+Y
-            ([0.0, 0.0, 1.0], [[x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]]),
+            (
+                [0.0, 0.0, 1.0],
+                [[x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]],
+            ),
             // -Z: u=+Y, v=+X
-            ([0.0, 0.0, -1.0], [[x0, y0, z0], [x0, y1, z0], [x1, y1, z0], [x1, y0, z0]]),
+            (
+                [0.0, 0.0, -1.0],
+                [[x0, y0, z0], [x0, y1, z0], [x1, y1, z0], [x1, y0, z0]],
+            ),
         ];
         for (n, v) in faces {
             self.quad(v, n, uv, c);
@@ -110,7 +128,16 @@ impl MeshBuilder {
     }
 
     /// Horizontal quad at `y` spanning `x0..x1` by `z0..z1`, facing up.
-    pub(crate) fn add_slab(&mut self, x0: f32, z0: f32, x1: f32, z1: f32, y: f32, c: Color, uv: Uv) {
+    pub(crate) fn add_slab(
+        &mut self,
+        x0: f32,
+        z0: f32,
+        x1: f32,
+        z1: f32,
+        y: f32,
+        c: Color,
+        uv: Uv,
+    ) {
         self.quad(
             [[x0, y, z0], [x0, y, z1], [x1, y, z1], [x1, y, z0]],
             [0.0, 1.0, 0.0],
@@ -360,10 +387,7 @@ impl MeshBuilder {
         };
         // Theta runs backwards: taking it forwards winds the fan face-down.
         for i in 0..n {
-            let (a, bb) = (
-                i as f32 / n as f32 * TAU,
-                (i + 1) as f32 / n as f32 * TAU,
-            );
+            let (a, bb) = (i as f32 / n as f32 * TAU, (i + 1) as f32 / n as f32 * TAU);
             let (ra, rb) = (rad(i), rad(i + 1));
             self.tri(
                 [
@@ -397,10 +421,7 @@ impl MeshBuilder {
             r * (1.0 + wobble * (city_hash2(i as i32 * 13, 7) - 0.5) * 2.0)
         };
         for i in 0..n {
-            let (a, bb) = (
-                i as f32 / n as f32 * TAU,
-                (i + 1) as f32 / n as f32 * TAU,
-            );
+            let (a, bb) = (i as f32 / n as f32 * TAU, (i + 1) as f32 / n as f32 * TAU);
             let (ra, rb) = (rad(i), rad(i + 1));
             let (p0, p1) = (
                 (cx + ra * a.cos(), cz + ra * a.sin()),
@@ -549,8 +570,16 @@ impl MeshBuilder {
                 self.tri(
                     [
                         [base.x, base.y, base.z],
-                        [base.x + a0.cos() * r_bottom, base.y, base.z + a0.sin() * r_bottom],
-                        [base.x + a1.cos() * r_bottom, base.y, base.z + a1.sin() * r_bottom],
+                        [
+                            base.x + a0.cos() * r_bottom,
+                            base.y,
+                            base.z + a0.sin() * r_bottom,
+                        ],
+                        [
+                            base.x + a1.cos() * r_bottom,
+                            base.y,
+                            base.z + a1.sin() * r_bottom,
+                        ],
                     ],
                     [0.0, -1.0, 0.0],
                     [[0.5, 0.5], [0.5, 0.5], [0.5, 0.5]],
@@ -758,7 +787,6 @@ impl MeshBuilder {
             }
         }
     }
-
 
     /// Flat fan facing up, bright at the middle and black at the rim — an
     /// unlit stand-in for the pool of light under a street lamp.

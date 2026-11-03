@@ -195,10 +195,17 @@ impl GpuTimer {
             }
             READY => {
                 if let Ok(view) = self.staging.slice(..).get_mapped_range() {
+<<<<<<< Updated upstream
                     for (i, slot) in self.ticks.iter_mut().enumerate() {
                         *slot = u64::from_le_bytes(
                             view[i * 8..i * 8 + 8].try_into().unwrap_or([0; 8]),
                         );
+=======
+                    let mut t = [0u64; 2];
+                    for (i, slot) in t.iter_mut().enumerate() {
+                        *slot =
+                            u64::from_le_bytes(view[i * 8..i * 8 + 8].try_into().unwrap_or([0; 8]));
+>>>>>>> Stashed changes
                     }
                     // Timestamps can come back equal or out of order on a pass
                     // the driver reordered; report nothing rather than a

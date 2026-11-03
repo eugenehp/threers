@@ -302,7 +302,10 @@ fn relocate(layer: &mut UsdLayer, from: &str, to: &str) {
 }
 
 fn prim_at_mut<'a>(layer: &'a mut UsdLayer, path: &str) -> Option<&'a mut UsdPrim> {
-    let mut parts = path.trim_start_matches('/').split('/').filter(|p| !p.is_empty());
+    let mut parts = path
+        .trim_start_matches('/')
+        .split('/')
+        .filter(|p| !p.is_empty());
     let first = parts.next()?;
     let mut current = layer.prims.iter_mut().find(|p| p.name == first)?;
     for part in parts {
@@ -490,7 +493,7 @@ impl Engine<'_> {
         // very often not the layer that authored the variant set.
         let mut selections: Vec<(String, String)> = Vec::new();
         for source in sources {
-                for (set, choice) in selections_of(&source.prim) {
+            for (set, choice) in selections_of(&source.prim) {
                 // A selection may be an expression too, which is how a shot
                 // picks a look for everything at once.
                 let Some(choice) = expr::evaluate(&choice, &self.variables) else {
@@ -730,33 +733,33 @@ impl Engine<'_> {
 
         // V — variants, which are per-prim bodies rather than a shared list.
         for source in sources {
-        for set in source.prim.variant_sets.clone() {
-            let chosen = selections
-                .iter()
-                .find(|(s, _)| *s == set.name)
-                .map(|(_, c)| c.clone())
-                // With nothing selected anywhere, USD falls back to the first
-                // variant authored.
-                .or_else(|| set.variants.first().map(|(n, _)| n.clone()));
-            let Some(body) = chosen.as_deref().and_then(|c| set.get(c)) else {
-                continue;
-            };
-            let inner = Source {
-                prim: body.clone(),
-                anchor: source.anchor.clone(),
-                stack: source.stack.clone(),
-                time: source.time,
-            };
-            out.push(inner.clone());
-            // A variant may itself carry arcs, and its own variant sets.
-            self.expand_arcs(
-                std::slice::from_ref(&inner),
-                selections,
-                out,
-                visiting,
-                depth + 1,
-            );
-        }
+            for set in source.prim.variant_sets.clone() {
+                let chosen = selections
+                    .iter()
+                    .find(|(s, _)| *s == set.name)
+                    .map(|(_, c)| c.clone())
+                    // With nothing selected anywhere, USD falls back to the first
+                    // variant authored.
+                    .or_else(|| set.variants.first().map(|(n, _)| n.clone()));
+                let Some(body) = chosen.as_deref().and_then(|c| set.get(c)) else {
+                    continue;
+                };
+                let inner = Source {
+                    prim: body.clone(),
+                    anchor: source.anchor.clone(),
+                    stack: source.stack.clone(),
+                    time: source.time,
+                };
+                out.push(inner.clone());
+                // A variant may itself carry arcs, and its own variant sets.
+                self.expand_arcs(
+                    std::slice::from_ref(&inner),
+                    selections,
+                    out,
+                    visiting,
+                    depth + 1,
+                );
+            }
         }
 
         // R — references, then P — payloads, then S — specializes.
@@ -1158,14 +1161,14 @@ mod tests {
     fn a_population_mask_keeps_ancestors_and_descendants() {
         let layer = super::super::parse::parse(include_str!("testdata/mask/src.usda")).unwrap();
         let masked = mask(&layer, &["/World/Keep"]);
-        let paths: Vec<String> = masked
-            .prims_by_path()
-            .into_iter()
-            .map(|(p, _)| p)
-            .collect();
+        let paths: Vec<String> = masked.prims_by_path().into_iter().map(|(p, _)| p).collect();
         assert_eq!(paths, ["/World", "/World/Keep", "/World/Keep/Inner"]);
         assert!(
-            masked.prim_at("/World").unwrap().value("xformOp:translate").is_some(),
+            masked
+                .prim_at("/World")
+                .unwrap()
+                .value("xformOp:translate")
+                .is_some(),
             "the ancestor keeps the transform that places what was kept"
         );
     }
@@ -1215,18 +1218,26 @@ mod tests {
         let masked = mask(&layer, &["/World/Keep/Missing"]);
         let paths: Vec<String> = masked.prims_by_path().into_iter().map(|(p, _)| p).collect();
         assert_eq!(paths, ["/World", "/World/Keep"]);
-        assert!(masked.prim_at("/World/Keep").unwrap().value("size").is_some());
+        assert!(masked
+            .prim_at("/World/Keep")
+            .unwrap()
+            .value("size")
+            .is_some());
 
         // And the same one level deeper, where the surviving chain is longer.
         let deep = mask(&layer, &["/World/Drop/Gone/Deeper"]);
         let paths: Vec<String> = deep.prims_by_path().into_iter().map(|(p, _)| p).collect();
         assert_eq!(paths, ["/World", "/World/Drop", "/World/Drop/Gone"]);
-        assert!(deep.prim_at("/World/Drop/Gone").unwrap().value("radius").is_some());
+        assert!(deep
+            .prim_at("/World/Drop/Gone")
+            .unwrap()
+            .value("radius")
+            .is_some());
     }
 
-    use super::*;
     use super::super::parse::parse;
     use super::super::write::layer_to_usda;
+    use super::*;
 
     /// The three layers of `testdata/comp`, as an in-memory resolver.
     fn pipeline() -> MemoryResolver {
@@ -1300,8 +1311,11 @@ mod tests {
 
             let mut mine_names: Vec<&str> =
                 mine.properties.iter().map(|p| p.name.as_str()).collect();
-            let mut expected_names: Vec<&str> =
-                expected.properties.iter().map(|p| p.name.as_str()).collect();
+            let mut expected_names: Vec<&str> = expected
+                .properties
+                .iter()
+                .map(|p| p.name.as_str())
+                .collect();
             mine_names.sort();
             expected_names.sort();
             assert_eq!(mine_names, expected_names, "properties of {path}");
@@ -1332,12 +1346,16 @@ mod tests {
     fn a_binary_pipeline_composes_to_the_same_thing_as_a_text_one() {
         let mut binary = MemoryResolver::new();
         binary
-            .insert("asset.usda", include_bytes!("testdata/comp/asset.usdc").as_slice())
-            .insert("base.usda", include_bytes!("testdata/comp/base.usdc").as_slice());
-        let root = super::super::UsdLoader::parse_layer(include_bytes!(
-            "testdata/comp/shot.usdc"
-        ))
-        .expect("the binary shot parses");
+            .insert(
+                "asset.usda",
+                include_bytes!("testdata/comp/asset.usdc").as_slice(),
+            )
+            .insert(
+                "base.usda",
+                include_bytes!("testdata/comp/base.usdc").as_slice(),
+            );
+        let root = super::super::UsdLoader::parse_layer(include_bytes!("testdata/comp/shot.usdc"))
+            .expect("the binary shot parses");
         let from_binary = compose(&root, "shot.usda", &binary, &ComposeOptions::default())
             .expect("the binary pipeline composes");
 
@@ -1400,7 +1418,11 @@ mod tests {
         );
 
         // The layer offset, which is what lets a clip start somewhere else.
-        let b = from_binary.prim_at("/B").unwrap().meta("references").unwrap();
+        let b = from_binary
+            .prim_at("/B")
+            .unwrap()
+            .meta("references")
+            .unwrap();
         let b = b.references();
         assert_eq!((b[0].offset, b[0].scale), (10.0, 2.0));
 
@@ -1412,10 +1434,9 @@ mod tests {
     /// Variant sets and the selection of one, read out of a crate file.
     #[test]
     fn variants_survive_the_binary_form() {
-        let layer = super::super::UsdLoader::parse_layer(include_bytes!(
-            "testdata/comp/asset.usdc"
-        ))
-        .unwrap();
+        let layer =
+            super::super::UsdLoader::parse_layer(include_bytes!("testdata/comp/asset.usdc"))
+                .unwrap();
         let chair = layer.prim_at("/Chair").expect("the chair");
 
         let set = chair
@@ -1656,13 +1677,16 @@ mod tests {
             "heavy.usda",
             "#usda 1.0\n(\n    defaultPrim = \"Heavy\"\n)\ndef Mesh \"Heavy\"\n{\n    int[] faceVertexCounts = [3]\n}\n",
         );
-        let root = parse(
-            "#usda 1.0\ndef Xform \"Holder\" (\n    payload = @heavy.usda@\n)\n{\n}\n",
-        )
-        .unwrap();
+        let root =
+            parse("#usda 1.0\ndef Xform \"Holder\" (\n    payload = @heavy.usda@\n)\n{\n}\n")
+                .unwrap();
 
         let loaded = compose(&root, "root.usda", &r, &ComposeOptions::default()).unwrap();
-        assert!(loaded.prim_at("/Holder").unwrap().value("faceVertexCounts").is_some());
+        assert!(loaded
+            .prim_at("/Holder")
+            .unwrap()
+            .value("faceVertexCounts")
+            .is_some());
 
         let unloaded = compose(
             &root,
@@ -1674,7 +1698,9 @@ mod tests {
             },
         )
         .unwrap();
-        let holder = unloaded.prim_at("/Holder").expect("the prim is still there");
+        let holder = unloaded
+            .prim_at("/Holder")
+            .expect("the prim is still there");
         assert!(
             holder.value("faceVertexCounts").is_none(),
             "an unloaded payload should bring nothing in"
@@ -1696,7 +1722,8 @@ mod tests {
         let root = parse(include_str!("testdata/comp/asset.usda")).unwrap();
         let _ = compose(&root, "asset.usda", &r, &ComposeOptions::default());
 
-        let a = parse("#usda 1.0\ndef Xform \"Top\" (\n    references = @a.usda@\n)\n{\n}\n").unwrap();
+        let a =
+            parse("#usda 1.0\ndef Xform \"Top\" (\n    references = @a.usda@\n)\n{\n}\n").unwrap();
         let out = compose(&a, "root.usda", &r, &ComposeOptions::default()).unwrap();
         assert!(out.prim_at("/Top").is_some(), "it should still compose");
     }
@@ -1709,22 +1736,32 @@ mod tests {
             "loop.usda",
             "#usda 1.0\n(\n    subLayers = [\n        @loop.usda@\n    ]\n)\ndef Xform \"X\"\n{\n}\n",
         );
-        let root = parse(
-            "#usda 1.0\n(\n    subLayers = [\n        @loop.usda@\n    ]\n)\n",
-        )
-        .unwrap();
+        let root =
+            parse("#usda 1.0\n(\n    subLayers = [\n        @loop.usda@\n    ]\n)\n").unwrap();
         let out = compose(&root, "root.usda", &r, &ComposeOptions::default()).unwrap();
         assert!(out.prim_at("/X").is_some());
     }
 
     #[test]
     fn paths_resolve_against_the_layer_that_named_them() {
-        assert_eq!(resolve_path("shots/010/shot.usda", "asset.usda"), "shots/010/asset.usda");
-        assert_eq!(resolve_path("shots/010/shot.usda", "../lib/chair.usda"), "shots/lib/chair.usda");
-        assert_eq!(resolve_path("shots/010/shot.usda", "./here.usda"), "shots/010/here.usda");
+        assert_eq!(
+            resolve_path("shots/010/shot.usda", "asset.usda"),
+            "shots/010/asset.usda"
+        );
+        assert_eq!(
+            resolve_path("shots/010/shot.usda", "../lib/chair.usda"),
+            "shots/lib/chair.usda"
+        );
+        assert_eq!(
+            resolve_path("shots/010/shot.usda", "./here.usda"),
+            "shots/010/here.usda"
+        );
         assert_eq!(resolve_path("shot.usda", "asset.usda"), "asset.usda");
         // Absolute stays absolute, and so does anything with no anchor.
-        assert_eq!(resolve_path("shots/shot.usda", "/abs/a.usda"), "/abs/a.usda");
+        assert_eq!(
+            resolve_path("shots/shot.usda", "/abs/a.usda"),
+            "/abs/a.usda"
+        );
         assert_eq!(resolve_path("", "a.usda"), "a.usda");
     }
 
@@ -1745,8 +1782,8 @@ mod tests {
 
 #[cfg(test)]
 mod gaps {
-    use super::*;
     use super::super::parse::parse;
+    use super::*;
 
     /// `foo = None` blocks a weaker layer's opinion. It is not the same as
     /// saying nothing: a declaration with no value takes what is below it, and
@@ -1767,7 +1804,10 @@ mod gaps {
         );
         // Everything else still comes through from below.
         assert_eq!(root_prim.value("kept").unwrap().flat_f32(), vec![1.0]);
-        assert_eq!(root_prim.value("stamp").unwrap().flat_f32(), vec![1.0, 2.0, 3.0]);
+        assert_eq!(
+            root_prim.value("stamp").unwrap().flat_f32(),
+            vec![1.0, 2.0, 3.0]
+        );
         // And a time code is a value like any other.
         assert_eq!(root_prim.value("when").unwrap().flat_f32(), vec![24.0]);
 
@@ -1783,8 +1823,14 @@ mod gaps {
     #[test]
     fn an_expression_in_an_asset_path_resolves() {
         let mut r = MemoryResolver::new();
-        r.insert("red_asset.usda", include_str!("testdata/expr/red_asset.usda"))
-            .insert("blue_asset.usda", include_str!("testdata/expr/blue_asset.usda"));
+        r.insert(
+            "red_asset.usda",
+            include_str!("testdata/expr/red_asset.usda"),
+        )
+        .insert(
+            "blue_asset.usda",
+            include_str!("testdata/expr/blue_asset.usda"),
+        );
         let root = parse(include_str!("testdata/expr/expr.usda")).unwrap();
         let ours = compose(&root, "expr.usda", &r, &ComposeOptions::default()).unwrap();
 
@@ -1799,7 +1845,12 @@ mod gaps {
         let theirs = parse(include_str!("testdata/expr/flat.usda")).unwrap();
         assert_eq!(
             thing.value("which").unwrap().flat_f32(),
-            theirs.prim_at("/Root/Thing").unwrap().value("which").unwrap().flat_f32()
+            theirs
+                .prim_at("/Root/Thing")
+                .unwrap()
+                .value("which")
+                .unwrap()
+                .flat_f32()
         );
     }
 
@@ -1808,15 +1859,23 @@ mod gaps {
     #[test]
     fn changing_the_variable_changes_the_asset() {
         let mut r = MemoryResolver::new();
-        r.insert("red_asset.usda", include_str!("testdata/expr/red_asset.usda"))
-            .insert("blue_asset.usda", include_str!("testdata/expr/blue_asset.usda"));
-        let root = parse(
-            &include_str!("testdata/expr/expr.usda").replace("\"red\"", "\"blue\""),
+        r.insert(
+            "red_asset.usda",
+            include_str!("testdata/expr/red_asset.usda"),
         )
-        .unwrap();
+        .insert(
+            "blue_asset.usda",
+            include_str!("testdata/expr/blue_asset.usda"),
+        );
+        let root =
+            parse(&include_str!("testdata/expr/expr.usda").replace("\"red\"", "\"blue\"")).unwrap();
         let ours = compose(&root, "expr.usda", &r, &ComposeOptions::default()).unwrap();
         assert_eq!(
-            ours.prim_at("/Root/Thing").unwrap().value("which").unwrap().flat_f32(),
+            ours.prim_at("/Root/Thing")
+                .unwrap()
+                .value("which")
+                .unwrap()
+                .flat_f32(),
             vec![2.0]
         );
     }
@@ -1826,7 +1885,10 @@ mod gaps {
     #[test]
     fn an_unresolvable_expression_opens_nothing() {
         let mut r = MemoryResolver::new();
-        r.insert("red_asset.usda", include_str!("testdata/expr/red_asset.usda"));
+        r.insert(
+            "red_asset.usda",
+            include_str!("testdata/expr/red_asset.usda"),
+        );
         let root = parse(
             r#"#usda 1.0
 def Xform "Root"
@@ -1842,7 +1904,10 @@ def Xform "Root"
         .unwrap();
         let ours = compose(&root, "expr.usda", &r, &ComposeOptions::default()).unwrap();
         assert!(
-            ours.prim_at("/Root/Thing").unwrap().value("which").is_none(),
+            ours.prim_at("/Root/Thing")
+                .unwrap()
+                .value("which")
+                .is_none(),
             "an undefined variable should not have resolved to anything"
         );
     }
@@ -1865,7 +1930,8 @@ def Xform "Root"
         assert!(
             ours.prim_at("/Root/Dropped").is_none(),
             "an inactive prim should be gone: {:?}",
-            ours.prim_at("/Root").map(|p| p.children.iter().map(|c| &c.name).collect::<Vec<_>>())
+            ours.prim_at("/Root")
+                .map(|p| p.children.iter().map(|c| &c.name).collect::<Vec<_>>())
         );
         assert!(ours.prim_at("/Root/Dropped/ChildOfDropped").is_none());
 

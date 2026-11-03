@@ -546,8 +546,7 @@ fn point_in_tri2(p: [f64; 2], a: [f64; 2], b: [f64; 2], c: [f64; 2]) -> bool {
     let s1 = (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]);
     let s2 = (c[0] - b[0]) * (p[1] - b[1]) - (c[1] - b[1]) * (p[0] - b[0]);
     let s3 = (a[0] - c[0]) * (p[1] - c[1]) - (a[1] - c[1]) * (p[0] - c[0]);
-    (s1 >= -1e-12 && s2 >= -1e-12 && s3 >= -1e-12)
-        || (s1 <= 1e-12 && s2 <= 1e-12 && s3 <= 1e-12)
+    (s1 >= -1e-12 && s2 >= -1e-12 && s3 >= -1e-12) || (s1 <= 1e-12 && s2 <= 1e-12 && s3 <= 1e-12)
 }
 
 fn tri_ok(verts: &[V3], a: usize, b: usize, c: usize, n: V3) -> bool {
@@ -575,9 +574,11 @@ fn clean_ring(verts: &[V3], face: &[usize]) -> Vec<usize> {
         out.push(i);
     }
     if out.len() >= 2
-        && (out[0] == *out.last().unwrap() || nearly_same(verts[out[0]], verts[*out.last().unwrap()])) {
-            out.pop();
-        }
+        && (out[0] == *out.last().unwrap()
+            || nearly_same(verts[out[0]], verts[*out.last().unwrap()]))
+    {
+        out.pop();
+    }
     out
 }
 

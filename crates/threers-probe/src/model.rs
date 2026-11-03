@@ -63,11 +63,12 @@ impl Head {
             Head::Hops { hops, .. } => hops * HOP_TAPS,
             Head::Kernel { radius } | Head::Hybrid { radius, .. } => {
                 let side = 2 * radius + 1;
-                side * side + if matches!(self, Head::Hybrid { .. }) {
-                    OUT_CHANNELS
-                } else {
-                    0
-                }
+                side * side
+                    + if matches!(self, Head::Hybrid { .. }) {
+                        OUT_CHANNELS
+                    } else {
+                        0
+                    }
             }
         }
     }
@@ -89,15 +90,15 @@ impl Head {
             }),
             2 if radius >= 1 => Some(Head::Hybrid {
                 radius: radius as usize,
-                cap: if cap > 0.0 { cap } else { HYBRID_IRRADIANCE_CAP },
-            }),
-            3 if radius >= 1 => Some(Head::Hops {
-                hops: radius as usize,
                 cap: if cap > 0.0 {
                     cap
                 } else {
-                    HOPS_IRRADIANCE_CAP
+                    HYBRID_IRRADIANCE_CAP
                 },
+            }),
+            3 if radius >= 1 => Some(Head::Hops {
+                hops: radius as usize,
+                cap: if cap > 0.0 { cap } else { HOPS_IRRADIANCE_CAP },
             }),
             _ => None,
         }
@@ -300,7 +301,8 @@ impl ProbeArch {
                 let taps = (2 * radius + 1).pow(2);
                 let colour = graph.narrow_(input, 1, 0, OUT_CHANNELS);
                 let kernel_logits = graph.narrow_(predicted, 1, 0, taps);
-                let gathered = apply_predicted_kernel(graph, colour, kernel_logits, radius, n, h, w);
+                let gathered =
+                    apply_predicted_kernel(graph, colour, kernel_logits, radius, n, h, w);
                 let residual = graph.narrow_(predicted, 1, taps, OUT_CHANNELS);
                 let capped = soft_clamp_irradiance(graph, residual, cap);
                 beauty_from_gathered(graph, input, gathered, capped)
@@ -686,7 +688,18 @@ fn hop_forward(
     let mut light = decode_compressed(graph, colour);
     for i in 0..hops {
         let logits = graph.conv2d(feat, p[2 + i], [1, 1], [1, 1], [0, 0], [1, 1], 1);
-        light = apply_cross_hop(graph, input, light, ddgi, qprobe, demod, logits, 1 << i, h, w);
+        light = apply_cross_hop(
+            graph,
+            input,
+            light,
+            ddgi,
+            qprobe,
+            demod,
+            logits,
+            1 << i,
+            h,
+            w,
+        );
     }
     let gathered = encode_compressed(graph, light);
     let gathered = blend_toward_probe_on_bright(graph, input, gathered);

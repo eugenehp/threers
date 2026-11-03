@@ -274,7 +274,12 @@ mod tests {
         assert_eq!(indices.len(), count);
         let names: Vec<&str> = indices
             .iter()
-            .map(|i| tokens.get(*i as usize).map(String::as_str).unwrap_or("<oob>"))
+            .map(|i| {
+                tokens
+                    .get(*i as usize)
+                    .map(String::as_str)
+                    .unwrap_or("<oob>")
+            })
             .collect();
         assert!(
             !names.contains(&"<oob>"),
@@ -339,7 +344,10 @@ mod tests {
     #[test]
     fn a_step_too_wide_is_refused_rather_than_truncated() {
         assert!(!encodable_u64(&[0, 1 << 40]));
-        assert!(!encodable_u64(&[1 << 40, (1 << 40) + 1]), "the first step counts");
+        assert!(
+            !encodable_u64(&[1 << 40, (1 << 40) + 1]),
+            "the first step counts"
+        );
         assert!(encodable_u64(&[0, 1, 2]));
     }
 

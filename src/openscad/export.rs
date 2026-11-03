@@ -527,7 +527,10 @@ pub fn parts_to_glb(parts: &[crate::openscad::ScadPart]) -> Vec<u8> {
         return Vec::new();
     }
 
-    let node_list: String = (0..nodes.len()).map(|i| i.to_string()).collect::<Vec<_>>().join(",");
+    let node_list: String = (0..nodes.len())
+        .map(|i| i.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
     let json = format!(
         "{{\"asset\":{{\"version\":\"2.0\",\"generator\":\"threers\"}},\
          \"scene\":0,\"scenes\":[{{\"nodes\":[{node_list}]}}],\

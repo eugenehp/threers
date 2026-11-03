@@ -249,8 +249,8 @@ fn vehicles_stay_off_the_water() {
                         if far_x <= wx0 + 0.5 || near_x >= wx1 - 0.5 {
                             continue;
                         }
-                        let on_bridge = m.along_x
-                            && bridges.iter().any(|(c, h)| (z - c).abs() <= h + 0.5);
+                        let on_bridge =
+                            m.along_x && bridges.iter().any(|(c, h)| (z - c).abs() <= h + 0.5);
                         assert!(
                             on_bridge,
                             "{} blocks {blocks}: vehicle over water at ({x:.1}, {z:.1}) len {:.1} \
@@ -368,11 +368,9 @@ fn every_park_kind_builds() {
                 z1: side * 0.5,
             };
             add_park(&mut b, cell, kind, false, true, &mut rng);
-            let tris = b.grass.idx.len() + b.pads.idx.len() + b.trim.idx.len() + b.foliage.idx.len();
-            assert!(
-                tris > 0,
-                "{kind:?} at {side} m built nothing at all",
-            );
+            let tris =
+                b.grass.idx.len() + b.pads.idx.len() + b.trim.idx.len() + b.foliage.idx.len();
+            assert!(tris > 0, "{kind:?} at {side} m built nothing at all",);
         }
     }
 }
@@ -571,7 +569,9 @@ fn parks_stay_inside_their_block() {
             // pieces most likely to walk off the edge.
             let mut worst = 0.0f32;
             for p in b.trim.pos.chunks_exact(3) {
-                worst = worst.max(p[0].abs() - side * 0.5).max(p[2].abs() - side * 0.5);
+                worst = worst
+                    .max(p[0].abs() - side * 0.5)
+                    .max(p[2].abs() - side * 0.5);
             }
             // A couple of metres of slack: a kiosk awning and a bandstand's
             // eaves legitimately overhang a little.
@@ -615,10 +615,7 @@ fn trains_stay_on_the_viaduct() {
                 "a train left the deck: {} vs {deck}",
                 m.base_y
             );
-            assert!(
-                m.cornering().is_none(),
-                "a train tried to turn a corner"
-            );
+            assert!(m.cornering().is_none(), "a train tried to turn a corner");
         }
     }
 }
@@ -777,10 +774,19 @@ fn claimed_ground_cannot_be_claimed_twice() {
     let mut occ = Occupancy::new(4.0);
     assert!(occ.try_claim([0.0, 0.0, 2.0, 2.0]));
     // Overlapping, touching at a corner, and containing.
-    assert!(!occ.try_claim([1.0, 1.0, 3.0, 3.0]), "an overlap was allowed");
-    assert!(!occ.try_claim([0.5, 0.5, 1.0, 1.0]), "a contained box was allowed");
+    assert!(
+        !occ.try_claim([1.0, 1.0, 3.0, 3.0]),
+        "an overlap was allowed"
+    );
+    assert!(
+        !occ.try_claim([0.5, 0.5, 1.0, 1.0]),
+        "a contained box was allowed"
+    );
     // Sharing an edge is not an overlap.
-    assert!(occ.try_claim([2.0, 0.0, 4.0, 2.0]), "an abutting box was refused");
+    assert!(
+        occ.try_claim([2.0, 0.0, 4.0, 2.0]),
+        "an abutting box was refused"
+    );
     // Far away, and across several grid cells.
     assert!(occ.try_claim([100.0, 100.0, 130.0, 130.0]));
     assert!(!occ.try_claim([125.0, 125.0, 140.0, 140.0]));
@@ -837,10 +843,18 @@ fn wheels_are_round() {
             }
         }
         let (r, pts) = best.expect("no wheel vertices found");
-        assert!(pts.len() >= 16, "{}: only {} wheel vertices", kind.label(), pts.len());
+        assert!(
+            pts.len() >= 16,
+            "{}: only {} wheel vertices",
+            kind.label(),
+            pts.len()
+        );
         // A box has vertices at four corners only; a cylinder has them all
         // round. Count how many distinct heights appear away from the axle.
-        let mut heights: Vec<i32> = pts.iter().map(|(dy, _)| (dy / r * 8.0).round() as i32).collect();
+        let mut heights: Vec<i32> = pts
+            .iter()
+            .map(|(dy, _)| (dy / r * 8.0).round() as i32)
+            .collect();
         heights.sort_unstable();
         heights.dedup();
         assert!(
@@ -1090,7 +1104,10 @@ fn every_layout_gets_suburbs() {
         );
         total += city.stats.suburbs;
     }
-    assert!(total >= 18, "only {total} suburban blocks across all layouts");
+    assert!(
+        total >= 18,
+        "only {total} suburban blocks across all layouts"
+    );
 }
 
 /// Nothing outlying is left without a road to it.
@@ -1112,7 +1129,12 @@ fn outlying_sites_are_reachable() {
             w.spurs,
             need
         );
-        assert!(w.peaks > 20, "{}: {} mountain summits", layout.name(), w.peaks);
+        assert!(
+            w.peaks > 20,
+            "{}: {} mountain summits",
+            layout.name(),
+            w.peaks
+        );
         // Managed kerbs. A street with cars on it and nothing else reads as a
         // car park with a road through it; the machines are what say the kerb
         // is controlled. Every layout has streets wide enough for some.
@@ -1194,7 +1216,8 @@ fn outlying_sites_are_reachable() {
             );
         } else {
             assert_eq!(
-                w.cyclists, 0,
+                w.cyclists,
+                0,
                 "{}: cycle lanes on a {} m avenue",
                 layout.name(),
                 layout.plan().avenue_w
@@ -1221,7 +1244,8 @@ fn the_railway_keeps_off_the_airfield() {
     for layout in Layout::ALL {
         for seed in [3u64, 11, 29, 47] {
             let (_scene, city) = build(seed, 7, layout);
-            let (Some(field), Some((along_x, fixed))) = (city.stats.works.airfield, city.stats.works.rail)
+            let (Some(field), Some((along_x, fixed))) =
+                (city.stats.works.airfield, city.stats.works.rail)
             else {
                 continue;
             };
@@ -1243,7 +1267,10 @@ fn the_railway_keeps_off_the_airfield() {
     }
     // A vacuous pass is the failure mode here: if no city gets an airport the
     // loop above asserts nothing at all.
-    assert!(checked >= 14, "only {checked} cities had an airport to check");
+    assert!(
+        checked >= 14,
+        "only {checked} cities had an airport to check"
+    );
 }
 
 /// The hills go all the way round.
@@ -1295,7 +1322,8 @@ fn tunnel_mouths_meet_the_hillside() {
             for t in &city.stats.works.tunnels {
                 for (end, cover) in t.mouth_cover.iter().enumerate() {
                     assert_eq!(
-                        *cover, 0.0,
+                        *cover,
+                        0.0,
                         "{} seed {seed}: tunnel mouth {end} is under {cover:.1} m of hillside",
                         layout.name()
                     );
@@ -1308,7 +1336,12 @@ fn tunnel_mouths_meet_the_hillside() {
                     t.length,
                     t.mid_cover
                 );
-                assert!(t.length >= 70.0, "{}: {:.0} m tunnel", layout.name(), t.length);
+                assert!(
+                    t.length >= 70.0,
+                    "{}: {:.0} m tunnel",
+                    layout.name(),
+                    t.length
+                );
                 total += 1;
             }
         }

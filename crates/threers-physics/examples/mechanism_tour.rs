@@ -40,7 +40,12 @@ fn main() {
     };
 
     println!("== declared ==");
-    println!("  {} parts, {} mates, {} drives", spec.parts.len(), spec.mates.len(), spec.drives.len());
+    println!(
+        "  {} parts, {} mates, {} drives",
+        spec.parts.len(),
+        spec.mates.len(),
+        spec.drives.len()
+    );
     for mate in &spec.mates {
         println!(
             "    {:<12} {:?}  {} on {}",
@@ -68,7 +73,10 @@ fn main() {
     // mechanism wrong, and otherwise shows up much later as a joint that does
     // nothing.
     if !spec.dangling_parts().is_empty() {
-        println!("  !! mates name parts that do not exist: {:?}", spec.dangling_parts());
+        println!(
+            "  !! mates name parts that do not exist: {:?}",
+            spec.dangling_parts()
+        );
     }
 
     // ---- 2. put it together, and check it ----------------------------------
@@ -105,7 +113,10 @@ fn main() {
         );
     }
     if !report.ignored_limits.is_empty() {
-        println!("    {} mate(s) given a range they cannot use", report.ignored_limits.len());
+        println!(
+            "    {} mate(s) given a range they cannot use",
+            report.ignored_limits.len()
+        );
     }
 
     // ---- 3. how far can the lid really open? -------------------------------
@@ -164,7 +175,10 @@ fn main() {
         mech.assembly.speed(crank, &mech.world).unwrap_or(0.0),
         mech.assembly.speed(wheel, &mech.world).unwrap_or(0.0),
     );
-    println!("  the gear holds {:.2}:1", if slow != 0.0 { fast / slow } else { 0.0 });
+    println!(
+        "  the gear holds {:.2}:1",
+        if slow != 0.0 { fast / slow } else { 0.0 }
+    );
 
     let reached = mech
         .assembly
@@ -187,7 +201,12 @@ fn main() {
     println!(
         "  {} frames as {:.1} kB of poses, or {:.1} MB had every frame been baked",
         track.frames(),
-        track.parts().iter().map(|p| p.poses.len() * 7 * 4).sum::<usize>() as f64 / 1e3,
+        track
+            .parts()
+            .iter()
+            .map(|p| p.poses.len() * 7 * 4)
+            .sum::<usize>() as f64
+            / 1e3,
         track.baked_bytes() as f64 / 1e6
     );
     println!(
@@ -205,7 +224,10 @@ fn main() {
     };
     checked.world.substeps = 8;
     let found = Verify::new().run(&mut checked);
-    println!("  {} mate(s) confirmed over {} poses", found.confirmed, found.poses);
+    println!(
+        "  {} mate(s) confirmed over {} poses",
+        found.confirmed, found.poses
+    );
     for finding in &found.findings {
         println!("  {finding}");
     }
@@ -220,11 +242,16 @@ fn main() {
     // ---- 7. measure the parts themselves -----------------------------------
     println!("== the parts, measured ==");
     for name in ["base", "crank", "lid"] {
-        let Some(part) = mech.assembly.part_named(name).and_then(|p| mech.assembly.part_of(p))
+        let Some(part) = mech
+            .assembly
+            .part_named(name)
+            .and_then(|p| mech.assembly.part_of(p))
         else {
             continue;
         };
-        let Some(mesh) = part.geometry.as_ref() else { continue };
+        let Some(mesh) = part.geometry.as_ref() else {
+            continue;
+        };
         let tris = geo::from_geometry(mesh);
         let key = geo::rigid_key(&tris);
         println!(
@@ -238,7 +265,11 @@ fn main() {
     }
     // The identity survives being moved, which is what makes it usable for
     // finding the same body again in another pose.
-    if let Some(part) = mech.assembly.part_named("crank").and_then(|p| mech.assembly.part_of(p)) {
+    if let Some(part) = mech
+        .assembly
+        .part_named("crank")
+        .and_then(|p| mech.assembly.part_of(p))
+    {
         if let Some(mesh) = part.geometry.as_ref() {
             let here = geo::from_geometry(mesh);
             let moved = geo::from_geometry_at(mesh, &shifted());
@@ -286,9 +317,7 @@ fn replay(
     let played = scene.arena.get(nodes[lid]).map(|o| o.quaternion);
     let simulated = track.pose(lid, track.frames() - 1).map(|p| p.rotation);
     match (played, simulated) {
-        (Some(a), Some(b)) if a.dot(b).abs() > 0.999 => {
-            "ends where the simulation ended".into()
-        }
+        (Some(a), Some(b)) if a.dot(b).abs() > 0.999 => "ends where the simulation ended".into(),
         _ => "ends somewhere else".into(),
     }
 }
@@ -349,7 +378,10 @@ fn render(track: &threers_physics::mechanism::PoseTrack) {
         pitch: 26.0,
         zoom: 0.9,
     });
-    let sampled: Vec<_> = (0..track.frames()).step_by(8).map(|i| track.frame(i)).collect();
+    let sampled: Vec<_> = (0..track.frames())
+        .step_by(8)
+        .map(|i| track.frame(i))
+        .collect();
     let images = match renderer.render_evaluated(&sampled) {
         Ok(images) => images,
         Err(e) => return println!("  no renderer available here: {e}"),

@@ -200,10 +200,7 @@ impl CaptionPainter {
             CaptionAlign::Right => (x - self.style.padding).max(self.style.font_size),
             CaptionAlign::Center => (fw - self.style.padding * 2.0).max(self.style.font_size),
         };
-        self.style.max_width = (max_width / fw).clamp(
-            self.style.font_size / fw,
-            1.0,
-        );
+        self.style.max_width = (max_width / fw).clamp(self.style.font_size / fw, 1.0);
         let ok = self.draw_block_at(frame, width, height, text, x, y, align);
         self.style = saved;
         ok
@@ -289,7 +286,9 @@ impl CaptionPainter {
         let style = self.style.clone();
         let align = placement.align.unwrap_or(style.align);
         let (block_left, block_top) = self.place(&laid, &style, align, placement, width, height);
-        self.composite_block(frame, width, height, &laid, &style, align, block_left, block_top)
+        self.composite_block(
+            frame, width, height, &laid, &style, align, block_left, block_top,
+        )
     }
 
     /// Lay out and draw one line at absolute pixel coordinates.
@@ -327,7 +326,9 @@ impl CaptionPainter {
         let pad = style.padding;
         let block_left = block_left.clamp(pad, (fw - laid.width - pad).max(pad));
         let block_top = block_top.clamp(pad, (fh - laid.height - pad).max(pad));
-        self.composite_block(frame, width, height, &laid, &style, align, block_left, block_top)
+        self.composite_block(
+            frame, width, height, &laid, &style, align, block_left, block_top,
+        )
     }
 
     fn composite_block(
@@ -341,7 +342,6 @@ impl CaptionPainter {
         block_left: f32,
         block_top: f32,
     ) -> bool {
-
         // The mask needs room for the outline and the shadow to spread into.
         let outline = style.outline_width.max(0.0);
         let shadow_on = style.shadow_color[3] > 0;
@@ -600,6 +600,7 @@ impl CaptionPainter {
             // one. Rounding per glyph is what makes letter spacing uneven: a
             // 13.7-pixel advance lands on 0, 14, 27, 41, 55 — gaps of 14, 13,
             // 14, 14 — and no amount of care in the compositing fixes it.
+<<<<<<< Updated upstream
             let (origin, phase) = phase_of(x);
             let glyph = match grow {
                 None => self.font.glyph_of(placed.gid, size, phase),
@@ -610,6 +611,15 @@ impl CaptionPainter {
             };
             if glyph.is_blank() {
                 continue;
+=======
+            let cell = pen.floor();
+            let mut phase = ((pen - cell) * SUBPIXEL_PHASES as f32).round() as i32;
+            let mut origin = cell as i32;
+            // A fraction that rounds up to a whole pixel is that pixel.
+            if phase as usize >= SUBPIXEL_PHASES {
+                phase = 0;
+                origin += 1;
+>>>>>>> Stashed changes
             }
             let gx = origin + glyph.offset_x;
             let gy = baseline.round() as i32 + glyph.offset_y;
@@ -797,6 +807,7 @@ fn transform_1d(f: &[f32]) -> Vec<f32> {
     out
 }
 
+<<<<<<< Updated upstream
 
 /// Glyph coverage corrected for the text's colour, as a table over the 256
 /// coverage values.
@@ -838,6 +849,9 @@ fn text_coverage_table(color: [u8; 4]) -> [u8; 256] {
 
 /// Composite `color` through `mask` into an RGBA8 frame at `(ox, oy)`, the
 /// mask's coverage corrected for the colour by [`text_coverage_table`].
+=======
+/// Composite `color` through `mask` into an RGBA8 frame at `(ox, oy)`.
+>>>>>>> Stashed changes
 #[allow(clippy::too_many_arguments)]
 fn blend_mask(
     frame: &mut [u8],
@@ -1310,7 +1324,10 @@ mod tests {
         assert_eq!(r1.iter().filter(|&&v| v > 0).count(), 9);
         let at = |x: u32, y: u32| r1[(y * w + x) as usize];
         assert_eq!(at(4, 4), 255, "the centre stays full");
-        assert!(at(3, 4) > at(3, 3), "the diagonal is further away than the side");
+        assert!(
+            at(3, 4) > at(3, 3),
+            "the diagonal is further away than the side"
+        );
     }
 
     /// The grown shape is round, not a polygon.
@@ -1393,7 +1410,10 @@ mod tests {
             edge_ink(0.3),
             edge_ink(0.0)
         );
-        assert!(edge_ink(0.3) < edge_ink(0.6), "and 0.6 should thicken it more");
+        assert!(
+            edge_ink(0.3) < edge_ink(0.6),
+            "and 0.6 should thicken it more"
+        );
     }
 
     #[test]
@@ -1604,7 +1624,11 @@ mod tests {
         for value in [0u8, 1, 17, 64, 128, 200, 254, 255] {
             let mut frame = vec![9, 9, 9, 255u8];
             blend_pixel(&mut frame, 1, 0, 0, [value, value, value, 255], 255);
-            assert_eq!(frame[0], value, "full coverage of {value} became {}", frame[0]);
+            assert_eq!(
+                frame[0], value,
+                "full coverage of {value} became {}",
+                frame[0]
+            );
         }
     }
 }

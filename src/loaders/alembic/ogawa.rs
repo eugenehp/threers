@@ -52,10 +52,7 @@ impl<'a> Ogawa<'a> {
     }
 
     fn u64_at(&self, at: usize) -> Result<u64, AlembicError> {
-        let b = self
-            .data
-            .get(at..at + 8)
-            .ok_or(AlembicError::Truncated)?;
+        let b = self.data.get(at..at + 8).ok_or(AlembicError::Truncated)?;
         Ok(u64::from_le_bytes(b.try_into().unwrap()))
     }
 

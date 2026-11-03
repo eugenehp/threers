@@ -221,8 +221,15 @@ mod tests {
         for _ in 0..600 {
             peak = peak.max(s.update(1.0 / 60.0));
         }
-        assert!(peak > 1.05, "a bouncy spring should overshoot, peaked at {peak}");
-        assert!((s.value() - 1.0).abs() < 1e-2, "but it must settle: {}", s.value());
+        assert!(
+            peak > 1.05,
+            "a bouncy spring should overshoot, peaked at {peak}"
+        );
+        assert!(
+            (s.value() - 1.0).abs() < 1e-2,
+            "but it must settle: {}",
+            s.value()
+        );
     }
 
     #[test]

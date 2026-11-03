@@ -51,9 +51,7 @@ fn main() {
         meshes.push((p.name().to_string(), mesh, p));
     }
 
-    let net = KirigamiPreset::Planar
-        .evaluate(4, 6, 0.0)
-        .develop_joined();
+    let net = KirigamiPreset::Planar.evaluate(4, 6, 0.0).develop_joined();
     std::fs::write(out_dir.join("kirigami-net.svg"), net.to_svg()).expect("svg");
     println!("wrote {}", out_dir.join("kirigami-net.svg").display());
 
@@ -115,7 +113,12 @@ fn tile_origin(i: usize, rows: usize) -> Vector3 {
     )
 }
 
-fn add_corrugation(scene: &mut Scene, mesh: &KirigamiMesh, preset: KirigamiPreset, origin: Vector3) {
+fn add_corrugation(
+    scene: &mut Scene,
+    mesh: &KirigamiMesh,
+    preset: KirigamiPreset,
+    origin: Vector3,
+) {
     let mut root = Object3D::group();
     root.position = origin;
     root.quaternion = Euler::new(-0.52, 0.62, 0.12).to_quaternion();
@@ -150,7 +153,9 @@ fn add_corrugation(scene: &mut Scene, mesh: &KirigamiMesh, preset: KirigamiPrese
     }
 
     if preset.uses_lattice_core() {
-        let core = preset.core_lattice().unwrap_or(threers::KirigamiCoreLattice::Gyroid);
+        let core = preset
+            .core_lattice()
+            .unwrap_or(threers::KirigamiCoreLattice::Gyroid);
         // Gallery packs every tile into one scene — keep cores light so the
         // combined vertex buffer stays under wgpu's 256 MiB limit.
         let geom = mesh.to_geometry_with_core(core, 0.12);

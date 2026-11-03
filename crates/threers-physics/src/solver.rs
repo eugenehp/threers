@@ -118,7 +118,6 @@ impl SimulationQuality {
     }
 }
 
-
 /// Solver tuning. The defaults are chosen for a 60 Hz step and metre-scale
 /// scenes; the doc on each field says which way to move it.
 ///
@@ -224,8 +223,16 @@ impl SolverBody {
             // A non-movable body keeps zero inverse mass, so every impulse
             // applied to it is silently absorbed — exactly the behaviour of an
             // infinitely heavy object.
-            inv_mass: if movable { body.inv_mass_axes() } else { Vector3::ZERO },
-            inv_inertia: if movable { body.world_inv_inertia() } else { Mat3::ZERO },
+            inv_mass: if movable {
+                body.inv_mass_axes()
+            } else {
+                Vector3::ZERO
+            },
+            inv_inertia: if movable {
+                body.world_inv_inertia()
+            } else {
+                Mat3::ZERO
+            },
             com: body.world_center_of_mass(),
             movable,
         }
@@ -271,7 +278,7 @@ impl SolverBody {
     /// that way: a screw's thread converts force into torque through its lead,
     /// and a gear applies pure torque at no point at all. Those need the two
     /// halves of the Jacobian given separately.
-        #[inline]
+    #[inline]
     fn apply_generalized(&mut self, linear: Vector3, angular: Vector3) {
         self.linear = self.linear + mul_axes(self.inv_mass, linear);
         self.angular = self.angular + self.inv_inertia.mul_vec(angular);
@@ -279,10 +286,9 @@ impl SolverBody {
 
     /// `1 / (J M⁻¹ Jᵀ)` for a Jacobian given as separate linear and angular
     /// rows.
-        #[inline]
+    #[inline]
     fn generalized_mass(&self, linear: Vector3, angular: Vector3) -> f32 {
-        mul_axes(self.inv_mass, linear).dot(linear)
-            + angular.dot(self.inv_inertia.mul_vec(angular))
+        mul_axes(self.inv_mass, linear).dot(linear) + angular.dot(self.inv_inertia.mul_vec(angular))
     }
 }
 
@@ -356,7 +362,8 @@ impl Solver {
         }
 
         self.bodies.clear();
-        self.bodies.resize(bodies.slot_count(), SolverBody::default());
+        self.bodies
+            .resize(bodies.slot_count(), SolverBody::default());
         for i in 0..bodies.slot_count() {
             if let Some(b) = bodies.by_index(i) {
                 self.bodies[i] = SolverBody::from_body(b);
@@ -609,9 +616,7 @@ impl Solver {
                 }
             }
             JointKind::Generic {
-                linear,
-                angular: a,
-                ..
+                linear, angular: a, ..
             } => {
                 for (i, dof) in linear.iter().enumerate() {
                     let lambda = joint.spring_impulse[i];
@@ -679,8 +684,8 @@ impl Solver {
                     if p.tangent_mass[k] == 0.0 {
                         continue;
                     }
-                    let relative = self.bodies[ia].velocity_at(p.r_a)
-                        - self.bodies[ib].velocity_at(p.r_b);
+                    let relative =
+                        self.bodies[ia].velocity_at(p.r_a) - self.bodies[ib].velocity_at(p.r_b);
                     let vt = relative.dot(direction);
                     let delta = -p.tangent_mass[k] * vt;
                     let old = p.tangent_impulse[k];
@@ -715,8 +720,7 @@ impl Solver {
                 if error <= 0.0 {
                     continue;
                 }
-                let target =
-                    (config.baumgarte * error / dt).min(config.max_correction_velocity);
+                let target = (config.baumgarte * error / dt).min(config.max_correction_velocity);
                 let relative = self.bodies[ia].pseudo_velocity_at(p.r_a)
                     - self.bodies[ib].pseudo_velocity_at(p.r_b);
                 let vn = relative.dot(normal);
@@ -969,8 +973,8 @@ impl Solver {
                     let ic = frame.body_c;
                     let mut k = n_a.dot(self.bodies[ia].inv_inertia.mul_vec(n_a))
                         + ratio * ratio * n_b.dot(self.bodies[ib].inv_inertia.mul_vec(n_b));
-                    let mut rate = self.bodies[ia].angular.dot(n_a)
-                        - ratio * self.bodies[ib].angular.dot(n_b);
+                    let mut rate =
+                        self.bodies[ia].angular.dot(n_a) - ratio * self.bodies[ib].angular.dot(n_b);
                     if let Some(c) = ic.and_then(|i| self.bodies.get(i)) {
                         k += j_c.dot(c.inv_inertia.mul_vec(j_c));
                         rate += c.angular.dot(j_c);
@@ -1090,7 +1094,16 @@ impl Solver {
                             config,
                         );
                     }
-                    self.solve_screw_coupling(joint, frame, axis, offset, rest_offset, rest_angle, lead, soft);
+                    self.solve_screw_coupling(
+                        joint,
+                        frame,
+                        axis,
+                        offset,
+                        rest_offset,
+                        rest_angle,
+                        lead,
+                        soft,
+                    );
                     if let Some(l) = limits {
                         joint.limit_impulse = self.solve_linear_limit(
                             frame,
@@ -1137,7 +1150,10 @@ impl Solver {
         // A joint with all three translations locked is a point constraint, and
         // solving it as one — coupled, through the full 3×3 matrix — converges
         // far better than three separate axes fighting each other.
-        if linear.iter().all(|d| d.motion == DofMotion::Locked && d.motor.is_none()) {
+        if linear
+            .iter()
+            .all(|d| d.motion == DofMotion::Locked && d.motor.is_none())
+        {
             self.solve_point_constraint(joint, frame, soft);
         } else {
             for (i, dof) in linear.iter().enumerate() {
@@ -1196,7 +1212,10 @@ impl Solver {
 
         // Likewise: three locked rotations is a weld, and the coupled solve is
         // both cheaper and stiffer than three scalar ones.
-        if angular.iter().all(|d| d.motion == DofMotion::Locked && d.motor.is_none()) {
+        if angular
+            .iter()
+            .all(|d| d.motion == DofMotion::Locked && d.motor.is_none())
+        {
             let error = fixed_angular_error(frame, frame.rest_rotation);
             self.solve_angular_constraint(joint, frame, error, soft);
         } else {
@@ -1291,8 +1310,7 @@ impl Solver {
         // bodies and is thrown away.
         if !soft.is_soft() && error != Vector3::ZERO && soft.bias_rate > 0.0 {
             let (pa, pb) = (self.bodies[ia], self.bodies[ib]);
-            let pseudo_rel =
-                pa.pseudo_velocity_at(frame.r_a) - pb.pseudo_velocity_at(frame.r_b);
+            let pseudo_rel = pa.pseudo_velocity_at(frame.r_a) - pb.pseudo_velocity_at(frame.r_b);
             let correction =
                 inv_k.mul_vec(-(pseudo_rel + error * soft.bias_rate)) * soft.mass_scale;
             self.apply_pseudo_pair(ia, ib, frame.r_a, frame.r_b, correction);
@@ -1311,7 +1329,9 @@ impl Solver {
         soft: SoftParams,
     ) {
         let (ia, ib) = (frame.body_a, frame.body_b);
-        let k = self.bodies[ia].inv_inertia.add(&self.bodies[ib].inv_inertia);
+        let k = self.bodies[ia]
+            .inv_inertia
+            .add(&self.bodies[ib].inv_inertia);
         let inv_k = k.inverse();
         if inv_k == Mat3::ZERO {
             return;
@@ -1420,8 +1440,7 @@ impl Solver {
             let pseudo_rel = (self.bodies[ia].pseudo_velocity_at(frame.r_a)
                 - self.bodies[ib].pseudo_velocity_at(frame.r_b))
             .dot(dir);
-            let correction =
-                -(pseudo_rel + soft.bias_rate * error) / inv_mass * soft.mass_scale;
+            let correction = -(pseudo_rel + soft.bias_rate * error) / inv_mass * soft.mass_scale;
             self.apply_pseudo_pair(ia, ib, frame.r_a, frame.r_b, dir * correction);
         }
         accumulated + lambda
@@ -1704,8 +1723,9 @@ impl Solver {
         if inv_mass <= 0.0 {
             return accumulated;
         }
-        let rate = (self.bodies[ia].velocity_at(frame.r_a) - self.bodies[ib].velocity_at(frame.r_b))
-            .dot(axis);
+        let rate = (self.bodies[ia].velocity_at(frame.r_a)
+            - self.bodies[ib].velocity_at(frame.r_b))
+        .dot(axis);
         let lambda = spring_lambda(
             spring,
             coordinate - spring.rest,
@@ -1952,8 +1972,7 @@ impl Solver {
                         - self.bodies[ia].velocity_at(frame.r_a))
                     .dot(frame.axis_b)
                         - *radius
-                            * (self.bodies[ia].angular - self.bodies[ib].angular)
-                                .dot(frame.axis_a)
+                            * (self.bodies[ia].angular - self.bodies[ib].angular).dot(frame.axis_a)
                 }
                 _ => continue,
             };
@@ -2286,11 +2305,7 @@ fn euler_xyz(q: Quaternion) -> [f32; 3] {
     let sin_y = (2.0 * (x * z + w * y)).clamp(-1.0, 1.0);
     if sin_y.abs() > 0.9999 {
         // At the pole, fold the lost degree of freedom into x and report z as 0.
-        return [
-            2.0 * x.atan2(w),
-            sin_y.asin(),
-            0.0,
-        ];
+        return [2.0 * x.atan2(w), sin_y.asin(), 0.0];
     }
     [
         (-2.0 * (y * z - w * x)).atan2(1.0 - 2.0 * (x * x + y * y)),
@@ -2317,8 +2332,8 @@ mod tests {
     use crate::body::{BodyId, RigidBody};
     use crate::contact::ManifoldKey;
     use crate::narrowphase::{collide, RawManifold};
-    use std::collections::HashSet;
     use crate::shape::Shape;
+    use std::collections::HashSet;
 
     /// Minimal step loop: integrate, collide, solve, integrate. The full
     /// version lives in `World`; this keeps the solver tests independent of it.
@@ -2422,7 +2437,10 @@ mod tests {
         }
 
         let y = bodies.get(cube).unwrap().translation().y;
-        assert!((y - 0.5).abs() < 0.02, "box settled at y = {y}, expected 0.5");
+        assert!(
+            (y - 0.5).abs() < 0.02,
+            "box settled at y = {y}, expected 0.5"
+        );
         let v = bodies.get(cube).unwrap().linear_velocity.length();
         assert!(v < 0.05, "box is still moving at {v}");
     }
@@ -2510,12 +2528,14 @@ mod tests {
         ground(&mut bodies);
         let mut cubes = Vec::new();
         for i in 0..5 {
-            cubes.push(bodies.insert(
-                RigidBody::dynamic()
-                    .shape(Shape::cuboid(0.5, 0.5, 0.5))
-                    .translation(Vector3::new(0.0, 0.5 + i as f32 * 1.001, 0.0))
-                    .friction(0.8),
-            ));
+            cubes.push(
+                bodies.insert(
+                    RigidBody::dynamic()
+                        .shape(Shape::cuboid(0.5, 0.5, 0.5))
+                        .translation(Vector3::new(0.0, 0.5 + i as f32 * 1.001, 0.0))
+                        .friction(0.8),
+                ),
+            );
         }
         for _ in 0..300 {
             step(&mut bodies, &mut contacts, &mut joints, 1.0 / 60.0);
@@ -2558,7 +2578,10 @@ mod tests {
             step(&mut bodies, &mut contacts, &mut joints, 1.0 / 60.0);
         }
         let y = bodies.get(light).unwrap().translation().y;
-        assert!(y > 0.4, "the light box was crushed through the floor to y = {y}");
+        assert!(
+            y > 0.4,
+            "the light box was crushed through the floor to y = {y}"
+        );
     }
 
     #[test]
@@ -2599,7 +2622,10 @@ mod tests {
             "pendulum drifted to a radius error of {radius_error}"
         );
         // Released horizontally, it should reach roughly the bottom of its arc.
-        assert!(lowest < -1.5, "the pendulum only ever got down to y = {lowest}");
+        assert!(
+            lowest < -1.5,
+            "the pendulum only ever got down to y = {lowest}"
+        );
     }
 
     #[test]
@@ -2729,9 +2755,16 @@ mod tests {
             w.y.abs() < 0.51,
             "the hinge gained spin it was never given: {w:?}"
         );
-        assert!(w.x.abs() < 0.01 && w.z.abs() < 0.01, "off-axis spin leaked: {w:?}");
+        assert!(
+            w.x.abs() < 0.01 && w.z.abs() < 0.01,
+            "off-axis spin leaked: {w:?}"
+        );
         // The pivot must still be at the origin.
-        let pivot = bodies.get(door).unwrap().position.transform_point(Vector3::new(-0.5, 0.0, 0.0));
+        let pivot = bodies
+            .get(door)
+            .unwrap()
+            .position
+            .transform_point(Vector3::new(-0.5, 0.0, 0.0));
         assert!(pivot.length() < 0.05, "hinge pivot drifted to {pivot:?}");
     }
 
@@ -2791,7 +2824,10 @@ mod tests {
         for _ in 0..60 {
             step(&mut bodies, &mut contacts, &mut joints, 1.0 / 60.0);
         }
-        assert!(joints.get(id).unwrap().broken, "the joint should have snapped");
+        assert!(
+            joints.get(id).unwrap().broken,
+            "the joint should have snapped"
+        );
         // And the body should now be falling freely.
         assert!(bodies.get(heavy).unwrap().translation().y < -1.2);
     }
@@ -2815,6 +2851,3 @@ mod tests {
         assert_eq!(bodies.get(cube).unwrap().position, before);
     }
 }
-
-
-

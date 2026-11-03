@@ -184,7 +184,13 @@ pub fn write_h264<W: std::io::Write>(
 ) -> std::io::Result<()> {
     let common = CommonMp4Params::from(p);
     let stsd = build_h264_stsd(p);
-    mux_common_to(out, &common, &[b"isom", b"iso2", b"avc1", b"mp41"], stsd, captions)
+    mux_common_to(
+        out,
+        &common,
+        &[b"isom", b"iso2", b"avc1", b"mp41"],
+        stsd,
+        captions,
+    )
 }
 
 /// [`mux_hevc`] streamed to a sink — see `mux_common_to` for why.
@@ -195,7 +201,13 @@ pub fn write_hevc<W: std::io::Write>(
 ) -> std::io::Result<()> {
     let common = CommonMp4Params::from(p);
     let stsd = build_hevc_stsd(p);
-    mux_common_to(out, &common, &[b"isom", b"iso2", b"mp41", b"hvc1"], stsd, captions)
+    mux_common_to(
+        out,
+        &common,
+        &[b"isom", b"iso2", b"mp41", b"hvc1"],
+        stsd,
+        captions,
+    )
 }
 
 /// Mux an H.264 video track plus a `tx3g` soft-subtitle track; see

@@ -2924,10 +2924,17 @@ impl PyHeadlessRenderer {
         &mut self,
         py: Python<'py>,
         scene: &mut PyScene,
+<<<<<<< Updated upstream
         camera: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyBytes>> {
         let rgba = self.render(scene, camera)?;
         Ok(PyBytes::new(py, &rgba))
+=======
+        camera: &PyPerspectiveCamera,
+    ) -> Bound<'py, PyBytes> {
+        let rgba = self.inner.render_to_rgba(&mut scene.inner, &camera.inner);
+        PyBytes::new(py, &rgba)
+>>>>>>> Stashed changes
     }
 
     /// Render and return a PNG as bytes.
@@ -2938,7 +2945,11 @@ impl PyHeadlessRenderer {
         camera: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyBytes>> {
         let (w, h) = self.inner.render_size();
+<<<<<<< Updated upstream
         let rgba = self.render(scene, camera)?;
+=======
+        let rgba = self.inner.render_to_rgba(&mut scene.inner, &camera.inner);
+>>>>>>> Stashed changes
         let png = threers::encode_png(w, h, &rgba);
         Ok(PyBytes::new(py, &png))
     }

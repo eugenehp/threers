@@ -150,7 +150,10 @@ mod tests {
         bytes[8] = 9; // a major version that does not exist
         match read(&bytes) {
             Err(UsdError::UnsupportedCrate(why)) => {
-                assert!(why.contains("9.8.0"), "the message should say what it found: {why}");
+                assert!(
+                    why.contains("9.8.0"),
+                    "the message should say what it found: {why}"
+                );
             }
             other => panic!("expected UnsupportedCrate, got {other:?}"),
         }

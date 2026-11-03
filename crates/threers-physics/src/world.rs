@@ -690,7 +690,9 @@ impl World {
             let Some(direction) = crate::math::try_normalize(motion) else {
                 continue;
             };
-            let bounds = collider.shape.compute_aabb(&crate::math::Isometry::IDENTITY);
+            let bounds = collider
+                .shape
+                .compute_aabb(&crate::math::Isometry::IDENTITY);
             let size = bounds.max - bounds.min;
             let thickness = size.x.min(size.y).min(size.z).max(1e-4);
             if distance <= thickness {
@@ -1078,7 +1080,9 @@ impl World {
             if !include(body_id, body) {
                 continue;
             }
-            let Some(id) = body.scene_object else { continue };
+            let Some(id) = body.scene_object else {
+                continue;
+            };
             let Some(object) = arena.get_mut(id) else {
                 continue;
             };
@@ -1109,7 +1113,9 @@ impl World {
             if !include(body_id, body) {
                 continue;
             }
-            let Some(id) = body.scene_object else { continue };
+            let Some(id) = body.scene_object else {
+                continue;
+            };
             let Some(object) = arena.get_mut(id) else {
                 continue;
             };
@@ -1130,8 +1136,12 @@ impl World {
             if !body.is_kinematic() {
                 continue;
             }
-            let Some(id) = body.scene_object else { continue };
-            let Some(object) = arena.get(id) else { continue };
+            let Some(id) = body.scene_object else {
+                continue;
+            };
+            let Some(object) = arena.get(id) else {
+                continue;
+            };
             let target = crate::math::Isometry::new(object.position, object.quaternion);
             let dt = self.timestep;
             if dt <= 0.0 {
@@ -1142,8 +1152,7 @@ impl World {
             // exactly on the target, and — crucially — the contact solver sees a
             // real velocity, so the body pushes things aside instead of passing
             // straight through them.
-            body.linear_velocity =
-                (target.translation - body.position.translation) * (1.0 / dt);
+            body.linear_velocity = (target.translation - body.position.translation) * (1.0 / dt);
 
             // Same for spin: the shortest rotation from here to the target,
             // expressed as an angular velocity.
@@ -1260,7 +1269,14 @@ mod tests {
         for _ in 0..120 {
             world.step(1.0 / 60.0);
         }
-        assert!(world.body(world.bodies().ids().nth(1).unwrap()).unwrap().translation().y > 0.4);
+        assert!(
+            world
+                .body(world.bodies().ids().nth(1).unwrap())
+                .unwrap()
+                .translation()
+                .y
+                > 0.4
+        );
     }
 
     #[test]
@@ -1275,7 +1291,10 @@ mod tests {
         for _ in 0..180 {
             world.step(1.0 / 60.0);
         }
-        assert!(world.body(resting).unwrap().is_sleeping(), "box never slept");
+        assert!(
+            world.body(resting).unwrap().is_sleeping(),
+            "box never slept"
+        );
 
         // Drop something on it.
         world.add_body(
@@ -1335,7 +1354,11 @@ mod tests {
         let mut saw_start = false;
         for _ in 0..120 {
             world.step(1.0 / 60.0);
-            if world.collision_events().iter().any(|e| e.started && e.is_sensor) {
+            if world
+                .collision_events()
+                .iter()
+                .any(|e| e.started && e.is_sensor)
+            {
                 saw_start = true;
             }
         }
@@ -1424,8 +1447,12 @@ mod tests {
         for _ in 0..120 {
             world.step(1.0 / 60.0);
         }
-        let d = (world.body(b).unwrap().translation() - world.body(a).unwrap().translation()).length();
-        assert!((d - 0.4).abs() < 0.02, "welded spheres drifted to {d} apart");
+        let d =
+            (world.body(b).unwrap().translation() - world.body(a).unwrap().translation()).length();
+        assert!(
+            (d - 0.4).abs() < 0.02,
+            "welded spheres drifted to {d} apart"
+        );
         let v = world.body(a).unwrap().linear_velocity.length();
         assert!(v < 0.05, "the pair is buzzing at {v}");
     }
@@ -1472,10 +1499,16 @@ mod tests {
         world.sync_to_scene_interpolated(&mut arena);
 
         let body = world.body(ball).unwrap();
-        let (lo, hi) = (body.position.translation.y, body.previous_position().translation.y);
+        let (lo, hi) = (
+            body.position.translation.y,
+            body.previous_position().translation.y,
+        );
         let (lo, hi) = (lo.min(hi), lo.max(hi));
         let drawn = arena.get(node).unwrap().position.y;
-        assert!(drawn >= lo - 1e-5 && drawn <= hi + 1e-5, "{drawn} not in [{lo}, {hi}]");
+        assert!(
+            drawn >= lo - 1e-5 && drawn <= hi + 1e-5,
+            "{drawn} not in [{lo}, {hi}]"
+        );
     }
 
     #[test]
@@ -1516,11 +1549,18 @@ mod tests {
     #[test]
     fn gravity_can_be_changed_and_reversed() {
         let mut world = World::new().with_gravity(Vector3::new(0.0, 5.0, 0.0));
-        let ball = world.add_body(RigidBody::dynamic().shape(Shape::ball(0.5)).can_sleep(false));
+        let ball = world.add_body(
+            RigidBody::dynamic()
+                .shape(Shape::ball(0.5))
+                .can_sleep(false),
+        );
         for _ in 0..60 {
             world.step(1.0 / 60.0);
         }
-        assert!(world.body(ball).unwrap().translation().y > 1.0, "it should have risen");
+        assert!(
+            world.body(ball).unwrap().translation().y > 1.0,
+            "it should have risen"
+        );
     }
 
     #[test]

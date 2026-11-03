@@ -236,7 +236,11 @@ fn annexb_and_mp4_decode_identically_via_ffmpeg() {
     let _ = std::fs::remove_file(&h264_path);
     let _ = std::fs::remove_file(&mp4_path);
 
-    assert_planes_match(&from_annexb, &planes_to_vec(std::slice::from_ref(&frame)), "Annex-B");
+    assert_planes_match(
+        &from_annexb,
+        &planes_to_vec(std::slice::from_ref(&frame)),
+        "Annex-B",
+    );
     assert_planes_match(&from_mp4, &planes_to_vec(&[frame]), "MP4");
     assert_eq!(
         from_annexb, from_mp4,

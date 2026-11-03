@@ -106,11 +106,7 @@ fn sky(dir: Vector3) -> [f32; 3] {
     let up = dir.y.clamp(-1.0, 1.0);
     if up >= 0.0 {
         let t = up.powf(0.6);
-        [
-            mix(0.86, 0.55, t),
-            mix(0.88, 0.66, t),
-            mix(0.90, 0.92, t),
-        ]
+        [mix(0.86, 0.55, t), mix(0.88, 0.66, t), mix(0.90, 0.92, t)]
     } else {
         // Bounce off the ground plane beyond the city, which is what fills the
         // underside of an awning or a bridge soffit.
@@ -132,11 +128,7 @@ fn open_sky() -> [f32; 3] {
             acc[c] += s[c];
         }
     }
-    [
-        acc[0] / N as f32,
-        acc[1] / N as f32,
-        acc[2] / N as f32,
-    ]
+    [acc[0] / N as f32, acc[1] / N as f32, acc[2] / N as f32]
 }
 
 /// A cosine-weighted direction about `n`, from a stratified low-discrepancy
@@ -247,11 +239,7 @@ fn tessellate(mb: &mut MeshBuilder, max_edge: f32) {
         let mut split_any = false;
         out.clear();
         for t in work.drain(..) {
-            let e = [
-                long(&t[0], &t[1]),
-                long(&t[1], &t[2]),
-                long(&t[2], &t[0]),
-            ];
+            let e = [long(&t[0], &t[1]), long(&t[1], &t[2]), long(&t[2], &t[0])];
             let (k, &m) = e
                 .iter()
                 .enumerate()

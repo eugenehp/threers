@@ -153,11 +153,17 @@ fn rms(a: &[f64], b: &[f64]) -> f64 {
 }
 
 fn flip_v(t: &[f64]) -> Vec<f64> {
-    (0..G).flat_map(|y| (0..G).map(move |x| (G - 1 - y) * G + x)).map(|i| t[i]).collect()
+    (0..G)
+        .flat_map(|y| (0..G).map(move |x| (G - 1 - y) * G + x))
+        .map(|i| t[i])
+        .collect()
 }
 
 fn flip_h(t: &[f64]) -> Vec<f64> {
-    (0..G).flat_map(|y| (0..G).map(move |x| y * G + (G - 1 - x))).map(|i| t[i]).collect()
+    (0..G)
+        .flat_map(|y| (0..G).map(move |x| y * G + (G - 1 - x)))
+        .map(|i| t[i])
+        .collect()
 }
 
 fn wgpu_reference() -> Option<Vec<f64>> {
@@ -188,46 +194,49 @@ fn metal_draws_the_same_picture_as_wgpu() {
     // paths take different code to the framebuffer and a flip can live in one
     // of them alone.
     for (ss, msaa) in [(1u32, 1u32), (2, 1), (1, 4), (2, 4)] {
-    let mut m = match MetalHeadlessRenderer::builder()
-        .size(N, N)
-        .supersample(ss)
-        .msaa(msaa)
-        .build()
-    {
-        Ok(m) => m,
-        Err(MetalError::NoDevice) => {
-            eprintln!("skipping: no Metal device on this machine");
-            return;
-        }
-        Err(e) => panic!("metal renderer: {e:?}"),
-    };
-    let got = tiles(&m.render_to_rgba(&mut scene(), &camera()).expect("metal render"));
+        let mut m = match MetalHeadlessRenderer::builder()
+            .size(N, N)
+            .supersample(ss)
+            .msaa(msaa)
+            .build()
+        {
+            Ok(m) => m,
+            Err(MetalError::NoDevice) => {
+                eprintln!("skipping: no Metal device on this machine");
+                return;
+            }
+            Err(e) => panic!("metal renderer: {e:?}"),
+        };
+        let got = tiles(
+            &m.render_to_rgba(&mut scene(), &camera())
+                .expect("metal render"),
+        );
 
-    let direct = rms(&reference, &got);
-    let mirrored = rms(&reference, &flip_v(&got));
-    let flopped = rms(&reference, &flip_h(&got));
-    eprintln!(
-        "metal ss{ss} msaa{msaa} vs wgpu: {direct:.4} rms as drawn, {mirrored:.4} \
+        let direct = rms(&reference, &got);
+        let mirrored = rms(&reference, &flip_v(&got));
+        let flopped = rms(&reference, &flip_h(&got));
+        eprintln!(
+            "metal ss{ss} msaa{msaa} vs wgpu: {direct:.4} rms as drawn, {mirrored:.4} \
          mirrored vertically, {flopped:.4} horizontally"
-    );
-    assert!(
-        direct < mirrored,
-        "the Metal backend draws this texture upside down: it matches wgpu \
+        );
+        assert!(
+            direct < mirrored,
+            "the Metal backend draws this texture upside down: it matches wgpu \
          {mirrored:.4} rms when flipped and only {direct:.4} as drawn"
-    );
-    assert!(
-        direct < flopped,
-        "the Metal backend draws this texture mirrored left to right"
-    );
-    // Absolute agreement, once orientation is out of the way. Loose, because
-    // two rasterisers will not agree to the bit -- but a dropped texture, a
-    // missing material, or a transfer curve apart shows up well inside it.
-    assert!(
-        direct < 0.05,
-        "the Metal backend and wgpu disagree by {direct:.4} rms over a 12x12 \
+        );
+        assert!(
+            direct < flopped,
+            "the Metal backend draws this texture mirrored left to right"
+        );
+        // Absolute agreement, once orientation is out of the way. Loose, because
+        // two rasterisers will not agree to the bit -- but a dropped texture, a
+        // missing material, or a transfer curve apart shows up well inside it.
+        assert!(
+            direct < 0.05,
+            "the Metal backend and wgpu disagree by {direct:.4} rms over a 12x12 \
          luma grid at supersample {ss}, msaa {msaa} -- more than filtering \
          differences account for"
-    );
+        );
     }
 }
 
@@ -254,8 +263,7 @@ fn metal_inherits_parent_transforms() {
         mat.map = Some(std::sync::Arc::new(marked_texture()));
         let quad = Object3D::mesh(Mesh::new(PlaneGeometry::new(40.0, 40.0), mat.into()));
         let mut rig = Object3D::group();
-        rig.quaternion =
-            Euler::new(0.35f32, 0.55f32, 0.20f32).to_quaternion();
+        rig.quaternion = Euler::new(0.35f32, 0.55f32, 0.20f32).to_quaternion();
         rig.position = Vector3::new(4.0, -3.0, 0.0);
         let rig_id = s.add(rig);
         s.add_to(rig_id, quad);
@@ -286,7 +294,10 @@ fn metal_inherits_parent_transforms() {
         }
         Err(e) => panic!("metal renderer: {e:?}"),
     };
-    let got = tiles(&m.render_to_rgba(&mut build(), &camera()).expect("metal render"));
+    let got = tiles(
+        &m.render_to_rgba(&mut build(), &camera())
+            .expect("metal render"),
+    );
     let posed = rms(&reference, &got);
     let ignored = rms(&unposed, &got);
     eprintln!("metal with a posed rig: {posed:.4} rms from posed, {ignored:.4} from unposed");
@@ -343,7 +354,9 @@ fn metal_draws_emissive_maps() {
         Err(e) => panic!("metal renderer: {e:?}"),
     };
     let w_px = w.render_to_rgba(&mut build(), &camera());
-    let m_px = m.render_to_rgba(&mut build(), &camera()).expect("metal render");
+    let m_px = m
+        .render_to_rgba(&mut build(), &camera())
+        .expect("metal render");
     let reference = tiles(&w_px);
     let got = tiles(&m_px);
     let d = rms(&reference, &got);
@@ -443,7 +456,10 @@ fn metal_draws_the_remaining_material_maps() {
         ("ao_map", Slot::AmbientOcclusion),
     ] {
         let reference = tiles(&w.render_to_rgba(&mut build(slot), &camera()));
-        let got = tiles(&m.render_to_rgba(&mut build(slot), &camera()).expect("metal render"));
+        let got = tiles(
+            &m.render_to_rgba(&mut build(slot), &camera())
+                .expect("metal render"),
+        );
         let d = rms(&reference, &got);
         eprintln!(
             "{name:14}: {d:.4} rms from wgpu, contrast {:.4} against {:.4}",
@@ -550,7 +566,10 @@ fn metal_lights_from_the_environment() {
     // the second says the two agree about how roughness walks the mip chain.
     for roughness in [0.05f32, 0.6] {
         let reference = tiles(&w.render_to_rgba(&mut build(roughness), &camera()));
-        let got = tiles(&m.render_to_rgba(&mut build(roughness), &camera()).expect("metal"));
+        let got = tiles(
+            &m.render_to_rgba(&mut build(roughness), &camera())
+                .expect("metal"),
+        );
         let d = rms(&reference, &got);
         eprintln!(
             "ibl roughness {roughness:.2}: {d:.4} rms from wgpu, contrast {:.4} against {:.4}",
@@ -615,7 +634,9 @@ fn metal_draws_a_screen_the_way_the_app_builds_one() {
         Err(e) => panic!("metal renderer: {e:?}"),
     };
     let w_px = w.render_to_rgba(&mut build(), &camera());
-    let m_px = m.render_to_rgba(&mut build(), &camera()).expect("metal render");
+    let m_px = m
+        .render_to_rgba(&mut build(), &camera())
+        .expect("metal render");
     let d = rms(&tiles(&w_px), &tiles(&m_px));
     eprintln!(
         "app-style panel: {d:.4} rms from wgpu, saturation {:.3} against {:.3}",
@@ -629,7 +650,10 @@ fn metal_draws_a_screen_the_way_the_app_builds_one() {
         saturation(&m_px),
         saturation(&w_px)
     );
-    assert!(d < 0.11, "the Metal backend and wgpu disagree by {d:.4} rms");
+    assert!(
+        d < 0.11,
+        "the Metal backend and wgpu disagree by {d:.4} rms"
+    );
 }
 
 /// The same panel at the size and shape the app actually uses.
@@ -691,7 +715,9 @@ fn metal_uploads_a_large_non_power_of_two_texture() {
         Err(e) => panic!("metal renderer: {e:?}"),
     };
     let w_px = w.render_to_rgba(&mut build(), &camera());
-    let m_px = m.render_to_rgba(&mut build(), &camera()).expect("metal render");
+    let m_px = m
+        .render_to_rgba(&mut build(), &camera())
+        .expect("metal render");
     let got = tiles(&m_px);
     let reference = tiles(&w_px);
     let d = rms(&reference, &got);
@@ -714,7 +740,10 @@ fn metal_uploads_a_large_non_power_of_two_texture() {
         "a {PW}x{PH} texture is drawn upside down: {mirrored:.4} rms flipped \
          against {d:.4} as drawn"
     );
-    assert!(d < 0.11, "the Metal backend and wgpu disagree by {d:.4} rms");
+    assert!(
+        d < 0.11,
+        "the Metal backend and wgpu disagree by {d:.4} rms"
+    );
 }
 
 /// `set_tonemap` must not take the colour out of the picture.
@@ -754,10 +783,14 @@ fn metal_tonemapping_keeps_the_colour() {
         }
         Err(e) => panic!("metal renderer: {e:?}"),
     };
-    let plain = m.render_to_rgba(&mut build(), &camera()).expect("metal render");
+    let plain = m
+        .render_to_rgba(&mut build(), &camera())
+        .expect("metal render");
     // What the app asks for.
     m.set_tonemap(1.0, 3.4);
-    let graded = m.render_to_rgba(&mut build(), &camera()).expect("metal render");
+    let graded = m
+        .render_to_rgba(&mut build(), &camera())
+        .expect("metal render");
     eprintln!(
         "tonemap: saturation {:.3} before, {:.3} after set_tonemap(1.0, 3.4)",
         saturation(&plain),
@@ -796,7 +829,9 @@ fn metal_exposure_reaches_the_pixels() {
         s
     };
     let mean = |px: &[u8]| {
-        px.chunks(4).map(|p| p[0] as f64 + p[1] as f64 + p[2] as f64).sum::<f64>()
+        px.chunks(4)
+            .map(|p| p[0] as f64 + p[1] as f64 + p[2] as f64)
+            .sum::<f64>()
             / (px.len() / 4) as f64
             / 3.0
     };
@@ -949,7 +984,7 @@ fn metal_applies_the_film_grade() {
 /// that it changes into the same picture wgpu draws.
 #[test]
 fn metal_skins_a_mesh() {
-    use threers::core::{BufferAttribute, Bone, Skeleton, SkinnedMesh};
+    use threers::core::{Bone, BufferAttribute, Skeleton, SkinnedMesh};
     use threers::materials::BasicMaterial;
     use threers::math::{Euler, Matrix4};
     use threers::metal::{MetalError, MetalHeadlessRenderer};
@@ -960,7 +995,10 @@ fn metal_skins_a_mesh() {
         let mut s = Scene::new();
         s.background = Color::from_hex(0x000000);
         let mut geom = PlaneGeometry::with_segments(12.0, 40.0, 1, 8);
-        let count = geom.get_attribute("position").map(|a| a.count()).unwrap_or(0);
+        let count = geom
+            .get_attribute("position")
+            .map(|a| a.count())
+            .unwrap_or(0);
         let ys: Vec<f32> = geom
             .get_attribute("position")
             .map(|a| (0..count).map(|i| a.array[i * 3 + 1]).collect())
@@ -979,8 +1017,14 @@ fn metal_skins_a_mesh() {
         geom.set_attribute("weight", BufferAttribute::new(weights, 4));
 
         let mut skeleton = Skeleton::new(vec![
-            Bone { node: threers::core::ObjectId::default(), inverse_bind: Matrix4::identity() },
-            Bone { node: threers::core::ObjectId::default(), inverse_bind: Matrix4::identity() },
+            Bone {
+                node: threers::core::ObjectId::default(),
+                inverse_bind: Matrix4::identity(),
+            },
+            Bone {
+                node: threers::core::ObjectId::default(),
+                inverse_bind: Matrix4::identity(),
+            },
         ]);
         skeleton.bone_matrices = vec![
             Matrix4::identity(),
@@ -1068,7 +1112,8 @@ fn metal_casts_a_directional_shadow() {
             let mut box_mat = StandardMaterial::new(Color::WHITE);
             box_mat.metalness = 0.0;
             box_mat.roughness = 1.0;
-            let mut b = Object3D::mesh(Mesh::new(BoxGeometry::new(14.0, 14.0, 1.0), box_mat.into()));
+            let mut b =
+                Object3D::mesh(Mesh::new(BoxGeometry::new(14.0, 14.0, 1.0), box_mat.into()));
             b.position = Vector3::new(0.0, 0.0, 6.0);
             // Casters opt in, on both backends.
             b.cast_shadow = true;
@@ -1085,8 +1130,14 @@ fn metal_casts_a_directional_shadow() {
         }
         Err(e) => panic!("metal renderer: {e:?}"),
     };
-    let lit = tiles(&m.render_to_rgba(&mut build(false), &camera()).expect("metal"));
-    let shadowed = tiles(&m.render_to_rgba(&mut build(true), &camera()).expect("metal"));
+    let lit = tiles(
+        &m.render_to_rgba(&mut build(false), &camera())
+            .expect("metal"),
+    );
+    let shadowed = tiles(
+        &m.render_to_rgba(&mut build(true), &camera())
+            .expect("metal"),
+    );
 
     // The occluder covers the middle of the frame, so compare the floor where
     // it is visible: the bottom row of tiles, below the box.
@@ -1124,15 +1175,18 @@ fn metal_casts_a_directional_shadow() {
     };
     let w_lit = tiles(&w.render_to_rgba(&mut build(false), &camera()));
     let w_shadowed = tiles(&w.render_to_rgba(&mut build(true), &camera()));
-    let delta = |a: &[f64], b: &[f64]| -> Vec<f64> {
-        a.iter().zip(b).map(|(x, y)| x - y).collect()
-    };
+    let delta =
+        |a: &[f64], b: &[f64]| -> Vec<f64> { a.iter().zip(b).map(|(x, y)| x - y).collect() };
     let dm = delta(&lit, &shadowed);
     let dw = delta(&w_lit, &w_shadowed);
     let dot: f64 = dm.iter().zip(&dw).map(|(a, b)| a * b).sum();
     let na = dm.iter().map(|a| a * a).sum::<f64>().sqrt();
     let nb = dw.iter().map(|b| b * b).sum::<f64>().sqrt();
-    let correlation = if na > 1e-9 && nb > 1e-9 { dot / (na * nb) } else { 0.0 };
+    let correlation = if na > 1e-9 && nb > 1e-9 {
+        dot / (na * nb)
+    } else {
+        0.0
+    };
     eprintln!("shadow: metal and wgpu agree on its shape to {correlation:.4}");
     assert!(
         correlation > 0.9,
@@ -1278,8 +1332,7 @@ fn shadow_scene(kind: ShadowKind) -> (f64, usize, f64, f64) {
         let mut floor_mat = StandardMaterial::new(Color::WHITE);
         floor_mat.metalness = 0.0;
         floor_mat.roughness = 1.0;
-        let mut floor =
-            Object3D::mesh(Mesh::new(PlaneGeometry::new(60.0, 60.0), floor_mat.into()));
+        let mut floor = Object3D::mesh(Mesh::new(PlaneGeometry::new(60.0, 60.0), floor_mat.into()));
         floor.position = Vector3::new(0.0, 0.0, -6.0);
         floor.receive_shadow = true;
         s.add(floor);
@@ -1297,10 +1350,22 @@ fn shadow_scene(kind: ShadowKind) -> (f64, usize, f64, f64) {
         s
     };
 
-    let mut m = MetalHeadlessRenderer::builder().size(N, N).build().expect("metal");
-    let mut w = threers::HeadlessRenderer::builder().size(N, N).build().expect("wgpu");
-    let lit = tiles(&m.render_to_rgba(&mut build(false), &camera()).expect("metal"));
-    let shadowed = tiles(&m.render_to_rgba(&mut build(true), &camera()).expect("metal"));
+    let mut m = MetalHeadlessRenderer::builder()
+        .size(N, N)
+        .build()
+        .expect("metal");
+    let mut w = threers::HeadlessRenderer::builder()
+        .size(N, N)
+        .build()
+        .expect("wgpu");
+    let lit = tiles(
+        &m.render_to_rgba(&mut build(false), &camera())
+            .expect("metal"),
+    );
+    let shadowed = tiles(
+        &m.render_to_rgba(&mut build(true), &camera())
+            .expect("metal"),
+    );
     let w_lit = tiles(&w.render_to_rgba(&mut build(false), &camera()));
     let w_shadowed = tiles(&w.render_to_rgba(&mut build(true), &camera()));
 
@@ -1314,8 +1379,17 @@ fn shadow_scene(kind: ShadowKind) -> (f64, usize, f64, f64) {
     let dot: f64 = dm.iter().zip(&dw).map(|(a, b)| a * b).sum();
     let na = dm.iter().map(|a| a * a).sum::<f64>().sqrt();
     let nb = dw.iter().map(|b| b * b).sum::<f64>().sqrt();
-    let correlation = if na > 1e-9 && nb > 1e-9 { dot / (na * nb) } else { 0.0 };
-    (darkest, darkened, correlation, dw.iter().cloned().fold(f64::MIN, f64::max))
+    let correlation = if na > 1e-9 && nb > 1e-9 {
+        dot / (na * nb)
+    } else {
+        0.0
+    };
+    (
+        darkest,
+        darkened,
+        correlation,
+        dw.iter().cloned().fold(f64::MIN, f64::max),
+    )
 }
 
 /// Bloom must not take the colour out of the picture.
@@ -1453,11 +1527,13 @@ fn metal_post_processing_keeps_the_picture_upright() {
         )));
         s
     };
-    let reference = tiles(&threers::HeadlessRenderer::builder()
-        .size(N, N)
-        .build()
-        .expect("wgpu")
-        .render_to_rgba(&mut build(), &camera()));
+    let reference = tiles(
+        &threers::HeadlessRenderer::builder()
+            .size(N, N)
+            .build()
+            .expect("wgpu")
+            .render_to_rgba(&mut build(), &camera()),
+    );
 
     // Each stage added to the one before it, so the first row that flips names
     // the stage that flips it.
@@ -1470,7 +1546,11 @@ fn metal_post_processing_keeps_the_picture_upright() {
     ];
     let mut flipped: Vec<&str> = Vec::new();
     for (label, ss, tonemap, bloom) in stages {
-        let mut m = match MetalHeadlessRenderer::builder().size(N, N).supersample(ss).build() {
+        let mut m = match MetalHeadlessRenderer::builder()
+            .size(N, N)
+            .supersample(ss)
+            .build()
+        {
             Ok(m) => m,
             Err(MetalError::NoDevice) => {
                 eprintln!("skipping: no Metal device on this machine");

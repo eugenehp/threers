@@ -86,21 +86,23 @@ fn a_shader_material_samples_its_own_texture() {
         return;
     };
     // A 1×1 texture of a colour nothing else in the scene produces.
-    let tex = r.device().create_texture(&threers::wgpu::TextureDescriptor {
-        label: Some("user tex"),
-        size: threers::wgpu::Extent3d {
-            width: 1,
-            height: 1,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: threers::wgpu::TextureDimension::D2,
-        format: threers::wgpu::TextureFormat::Rgba8Unorm,
-        usage: threers::wgpu::TextureUsages::TEXTURE_BINDING
-            | threers::wgpu::TextureUsages::COPY_DST,
-        view_formats: &[],
-    });
+    let tex = r
+        .device()
+        .create_texture(&threers::wgpu::TextureDescriptor {
+            label: Some("user tex"),
+            size: threers::wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: threers::wgpu::TextureDimension::D2,
+            format: threers::wgpu::TextureFormat::Rgba8Unorm,
+            usage: threers::wgpu::TextureUsages::TEXTURE_BINDING
+                | threers::wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
     r.queue().write_texture(
         threers::wgpu::TexelCopyTextureInfo {
             texture: &tex,

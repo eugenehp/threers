@@ -231,7 +231,10 @@ fn the_same_commanded_pose_gives_the_same_arm_every_time() {
             joint.position = *p;
         }
         for (k, joint) in chain.joints.iter().enumerate() {
-            assert_eq!(joint.position, pose[k], "joint {k} did not come back exactly");
+            assert_eq!(
+                joint.position, pose[k],
+                "joint {k} did not come back exactly"
+            );
         }
     }
 }
@@ -266,8 +269,9 @@ fn a_joint_made_at_runtime_carries_a_load_and_lets_it_go() {
         world.step(DT);
     }
 
-    let grip = world
-        .add_joint(Joint::fixed_at_point(world.bodies(), tool, part, Vector3::new(0.0, 0.16, 0.0)).unwrap());
+    let grip = world.add_joint(
+        Joint::fixed_at_point(world.bodies(), tool, part, Vector3::new(0.0, 0.16, 0.0)).unwrap(),
+    );
     let grip_offset = {
         let (t, p) = (world.body(tool).unwrap(), world.body(part).unwrap());
         (p.translation() - t.translation()).length()
@@ -329,8 +333,9 @@ fn releasing_hands_the_load_its_momentum() {
             .translation(Vector3::new(0.0, -0.12, 0.0))
             .can_sleep(false),
     );
-    let grip = world
-        .add_joint(Joint::fixed_at_point(world.bodies(), tool, part, Vector3::new(0.0, -0.06, 0.0)).unwrap());
+    let grip = world.add_joint(
+        Joint::fixed_at_point(world.bodies(), tool, part, Vector3::new(0.0, -0.06, 0.0)).unwrap(),
+    );
 
     for step in 0..90 {
         let x = step as f32 * 0.02;
@@ -357,5 +362,3 @@ fn releasing_hands_the_load_its_momentum() {
         "the part stopped dead on release, coasting only {coasted}"
     );
 }
-
-

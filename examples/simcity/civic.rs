@@ -107,7 +107,10 @@ fn hospital(b: &mut Batches, lot: Rect, rng: &mut Rng) {
         Vector3::new(ward.x0, KERB, ward.z0),
         Vector3::new(ward.x1, h, ward.z1),
         wall,
-        Uv::World { u: 1.0 / BAY, v: 1.0 / FLOOR },
+        Uv::World {
+            u: 1.0 / BAY,
+            v: 1.0 / FLOOR,
+        },
     );
     b.trim.add_slab(
         ward.x0 - 0.3,
@@ -185,14 +188,30 @@ fn hospital(b: &mut Batches, lot: Rect, rng: &mut Rng) {
         // trim copy, so by day it was a black cross covering the red one. On
         // `glow` it is hidden outright while the sun is up.
         b.glow.add_box(
-            Vector3::new(ward.cx() - cw * 0.5, KERB + FLOOR * 1.4 - ch * 0.5, ward.z0 - 0.14),
-            Vector3::new(ward.cx() + cw * 0.5, KERB + FLOOR * 1.4 + ch * 0.5, ward.z0 - 0.06),
+            Vector3::new(
+                ward.cx() - cw * 0.5,
+                KERB + FLOOR * 1.4 - ch * 0.5,
+                ward.z0 - 0.14,
+            ),
+            Vector3::new(
+                ward.cx() + cw * 0.5,
+                KERB + FLOOR * 1.4 + ch * 0.5,
+                ward.z0 - 0.06,
+            ),
             cross,
             Uv::Unit,
         );
         b.trim.add_box(
-            Vector3::new(ward.cx() - cw * 0.5, KERB + FLOOR * 1.4 - ch * 0.5, ward.z0 - 0.12),
-            Vector3::new(ward.cx() + cw * 0.5, KERB + FLOOR * 1.4 + ch * 0.5, ward.z0 - 0.05),
+            Vector3::new(
+                ward.cx() - cw * 0.5,
+                KERB + FLOOR * 1.4 - ch * 0.5,
+                ward.z0 - 0.12,
+            ),
+            Vector3::new(
+                ward.cx() + cw * 0.5,
+                KERB + FLOOR * 1.4 + ch * 0.5,
+                ward.z0 - 0.05,
+            ),
             cross,
             Uv::Unit,
         );
@@ -227,7 +246,10 @@ fn school(b: &mut Batches, lot: Rect, rng: &mut Rng) {
     // Two low wings meeting at a corner: a school is long and two storeys, not
     // a block, and the shape is what tells it from an office.
     let wall = Color::from_hex(0xc8a882);
-    let uv = Uv::World { u: 1.0 / BAY, v: 1.0 / FLOOR };
+    let uv = Uv::World {
+        u: 1.0 / BAY,
+        v: 1.0 / FLOOR,
+    };
     let h = KERB + 2.0 * FLOOR;
     // The wings are a fraction of the plot, not a fixed twelve metres: on a
     // small block a fixed depth swallows the playground and the two wings
@@ -354,7 +376,10 @@ fn station(b: &mut Batches, lot: Rect, bays: usize, livery: Color, rng: &mut Rng
         Vector3::new(hall.x0, KERB, hall.z0),
         Vector3::new(hall.x1, h, hall.z1),
         Color::from_hex(0xc9c4b8),
-        Uv::World { u: 1.0 / BAY, v: 1.0 / FLOOR },
+        Uv::World {
+            u: 1.0 / BAY,
+            v: 1.0 / FLOOR,
+        },
     );
     b.trim.add_slab(
         hall.x0 - 0.35,
@@ -406,7 +431,10 @@ fn station(b: &mut Batches, lot: Rect, bays: usize, livery: Color, rng: &mut Rng
         Uv::Unit,
     );
     b.paint.add_ground_path(
-        &[(apron.x0 + 1.0, apron.z0 + 1.2), (apron.x1 - 1.0, apron.z0 + 1.2)],
+        &[
+            (apron.x0 + 1.0, apron.z0 + 1.2),
+            (apron.x1 - 1.0, apron.z0 + 1.2),
+        ],
         0.22,
         KERB + 0.02,
         Color::from_hex(0xd8c23a),

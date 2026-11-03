@@ -150,7 +150,11 @@ pub fn mesh_prim(g: &BufferGeometry, name: &str) -> UsdPrim {
     // exported from here arrived grey, and the colours were simply gone.
     if let Some(c) = g.get_attribute("color") {
         properties.push(interpolated(
-            attribute("color3f[]", "primvars:displayColor", float_array(&c.array, 3)),
+            attribute(
+                "color3f[]",
+                "primvars:displayColor",
+                float_array(&c.array, 3),
+            ),
             "vertex",
         ));
     }
@@ -341,32 +345,130 @@ fn texture_slots(material: &Material) -> Vec<Slot<'_>> {
     }
     match material {
         Material::Standard(m) => {
-            push!(m.map, "DiffuseTex", "inputs:diffuseColor", "color3f", "rgb", "sRGB");
-            push!(m.emissive_map, "EmissiveTex", "inputs:emissiveColor", "color3f", "rgb", "sRGB");
-            push!(m.roughness_map, "RoughnessTex", "inputs:roughness", "float", "r", "raw");
-            push!(m.metalness_map, "MetallicTex", "inputs:metallic", "float", "r", "raw");
-            push!(m.ao_map, "OcclusionTex", "inputs:occlusion", "float", "r", "raw");
-            push!(m.displacement_map, "DisplacementTex", "inputs:displacement", "float", "r", "raw");
+            push!(
+                m.map,
+                "DiffuseTex",
+                "inputs:diffuseColor",
+                "color3f",
+                "rgb",
+                "sRGB"
+            );
+            push!(
+                m.emissive_map,
+                "EmissiveTex",
+                "inputs:emissiveColor",
+                "color3f",
+                "rgb",
+                "sRGB"
+            );
+            push!(
+                m.roughness_map,
+                "RoughnessTex",
+                "inputs:roughness",
+                "float",
+                "r",
+                "raw"
+            );
+            push!(
+                m.metalness_map,
+                "MetallicTex",
+                "inputs:metallic",
+                "float",
+                "r",
+                "raw"
+            );
+            push!(
+                m.ao_map,
+                "OcclusionTex",
+                "inputs:occlusion",
+                "float",
+                "r",
+                "raw"
+            );
+            push!(
+                m.displacement_map,
+                "DisplacementTex",
+                "inputs:displacement",
+                "float",
+                "r",
+                "raw"
+            );
             if let Some(t) = m.normal_map.as_deref() {
                 out.push(normal_slot(t));
             }
         }
         Material::Physical(m) => {
-            push!(m.map, "DiffuseTex", "inputs:diffuseColor", "color3f", "rgb", "sRGB");
-            push!(m.emissive_map, "EmissiveTex", "inputs:emissiveColor", "color3f", "rgb", "sRGB");
-            push!(m.roughness_map, "RoughnessTex", "inputs:roughness", "float", "r", "raw");
-            push!(m.metalness_map, "MetallicTex", "inputs:metallic", "float", "r", "raw");
-            push!(m.ao_map, "OcclusionTex", "inputs:occlusion", "float", "r", "raw");
-            push!(m.displacement_map, "DisplacementTex", "inputs:displacement", "float", "r", "raw");
+            push!(
+                m.map,
+                "DiffuseTex",
+                "inputs:diffuseColor",
+                "color3f",
+                "rgb",
+                "sRGB"
+            );
+            push!(
+                m.emissive_map,
+                "EmissiveTex",
+                "inputs:emissiveColor",
+                "color3f",
+                "rgb",
+                "sRGB"
+            );
+            push!(
+                m.roughness_map,
+                "RoughnessTex",
+                "inputs:roughness",
+                "float",
+                "r",
+                "raw"
+            );
+            push!(
+                m.metalness_map,
+                "MetallicTex",
+                "inputs:metallic",
+                "float",
+                "r",
+                "raw"
+            );
+            push!(
+                m.ao_map,
+                "OcclusionTex",
+                "inputs:occlusion",
+                "float",
+                "r",
+                "raw"
+            );
+            push!(
+                m.displacement_map,
+                "DisplacementTex",
+                "inputs:displacement",
+                "float",
+                "r",
+                "raw"
+            );
             if let Some(t) = m.normal_map.as_deref() {
                 out.push(normal_slot(t));
             }
         }
         Material::Basic(m) => {
-            push!(m.map, "DiffuseTex", "inputs:diffuseColor", "color3f", "rgb", "sRGB")
+            push!(
+                m.map,
+                "DiffuseTex",
+                "inputs:diffuseColor",
+                "color3f",
+                "rgb",
+                "sRGB"
+            )
         }
         Material::Sprite(m) => {
-            push!(m.map, "DiffuseTex", "inputs:diffuseColor", "color3f", "rgb", "sRGB")
+            push!(
+                m.map,
+                "DiffuseTex",
+                "inputs:diffuseColor",
+                "color3f",
+                "rgb",
+                "sRGB"
+            )
         }
         _ => {}
     }
@@ -378,7 +480,14 @@ fn normal_slot(texture: &Texture) -> Slot<'_> {
     Slot {
         scale: [2.0, 2.0, 2.0, 1.0],
         bias: [-1.0, -1.0, -1.0, 0.0],
-        ..slot("NormalTex", "inputs:normal", "normal3f", "rgb", "raw", texture)
+        ..slot(
+            "NormalTex",
+            "inputs:normal",
+            "normal3f",
+            "rgb",
+            "raw",
+            texture,
+        )
     }
 }
 
@@ -576,7 +685,11 @@ pub fn material_prim_with_textures(
                 &node,
                 "UsdTransform2d",
                 vec![
-                    connect("float2", "inputs:in", format!("{path}/stReader.outputs:result")),
+                    connect(
+                        "float2",
+                        "inputs:in",
+                        format!("{path}/stReader.outputs:result"),
+                    ),
                     attribute(
                         "float2",
                         "inputs:scale",
@@ -612,7 +725,11 @@ pub fn material_prim_with_textures(
             properties.push(attribute("float4", "inputs:scale", tuple4(slot.scale)));
             properties.push(attribute("float4", "inputs:bias", tuple4(slot.bias)));
         }
-        let out_type = if slot.channel == "rgb" { "float3" } else { "float" };
+        let out_type = if slot.channel == "rgb" {
+            "float3"
+        } else {
+            "float"
+        };
         properties.push(attribute(
             out_type,
             &format!("outputs:{}", slot.channel),
@@ -685,13 +802,13 @@ pub fn material_prim(material: &Material, name: &str) -> UsdPrim {
             attribute("color3f", "inputs:diffuseColor", tuple3(color)),
             attribute("color3f", "inputs:emissiveColor", tuple3(emissive)),
             attribute("float", "inputs:metallic", UsdValue::Float(metallic as f64)),
-            attribute("float", "inputs:roughness", UsdValue::Float(roughness as f64)),
-            attribute("float", "inputs:opacity", UsdValue::Float(opacity as f64)),
             attribute(
-                "token",
-                "outputs:surface",
-                UsdValue::None,
+                "float",
+                "inputs:roughness",
+                UsdValue::Float(roughness as f64),
             ),
+            attribute("float", "inputs:opacity", UsdValue::Float(opacity as f64)),
+            attribute("token", "outputs:surface", UsdValue::None),
         ]
         .into_iter()
         .chain(specular.into_iter().flat_map(|s| {
@@ -810,7 +927,10 @@ pub fn geometry_to_layer(g: &BufferGeometry, name: &str, options: &UsdExportOpti
                 "metersPerUnit".into(),
                 UsdValue::Float(options.meters_per_unit as f64),
             ),
-            ("upAxis".into(), UsdValue::String(options.up_axis.to_string())),
+            (
+                "upAxis".into(),
+                UsdValue::String(options.up_axis.to_string()),
+            ),
         ],
         prims: vec![root],
     }
@@ -893,7 +1013,10 @@ fn scene_to_layer_placed(
                 "metersPerUnit".into(),
                 UsdValue::Float(options.meters_per_unit as f64),
             ),
-            ("upAxis".into(), UsdValue::String(options.up_axis.to_string())),
+            (
+                "upAxis".into(),
+                UsdValue::String(options.up_axis.to_string()),
+            ),
         ],
         prims: vec![root],
     };
@@ -1139,8 +1262,11 @@ fn object_prim_at(
             // material bound to it, so it goes on the mesh. USD's default is
             // single-sided, so only a double-sided material says anything.
             if mesh.material.side() == 2 {
-                prim.properties
-                    .push(uniform(attribute("bool", "doubleSided", UsdValue::Bool(true))));
+                prim.properties.push(uniform(attribute(
+                    "bool",
+                    "doubleSided",
+                    UsdValue::Bool(true),
+                )));
             }
             // With no colour per vertex, the material's own colour stands in as
             // a constant, so the mesh is the right colour even to a reader that
@@ -1557,8 +1683,14 @@ mod tests {
         let layer = super::super::parse::parse(&text).expect("what we wrote, USD can read");
         let material = layer.prim_at("/Root/Material_0").expect("the material");
         assert!(material.property("outputs:surface.connect").is_none());
-        let surface = material.property("outputs:surface").expect("the connection");
-        assert!(matches!(surface.value, UsdValue::Path(_)), "{:?}", surface.value);
+        let surface = material
+            .property("outputs:surface")
+            .expect("the connection");
+        assert!(
+            matches!(surface.value, UsdValue::Path(_)),
+            "{:?}",
+            surface.value
+        );
     }
 
     /// Animation written out and read back is the animation that went in.
@@ -1686,7 +1818,10 @@ mod tests {
             "position",
             BufferAttribute::new(vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0], 3),
         );
-        g.set_attribute("uv", BufferAttribute::new(vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0], 2));
+        g.set_attribute(
+            "uv",
+            BufferAttribute::new(vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0], 2),
+        );
         g.set_index(vec![0, 1, 2]);
         g
     }
@@ -1778,39 +1913,75 @@ mod tests {
         let kinds: Vec<(&str, Material)> = vec![
             (
                 "lambert",
-                LambertMaterial { color: red, ..Default::default() }.into(),
+                LambertMaterial {
+                    color: red,
+                    ..Default::default()
+                }
+                .into(),
             ),
             (
                 "phong",
-                PhongMaterial { color: red, ..Default::default() }.into(),
+                PhongMaterial {
+                    color: red,
+                    ..Default::default()
+                }
+                .into(),
             ),
             (
                 "toon",
-                ToonMaterial { color: red, ..Default::default() }.into(),
+                ToonMaterial {
+                    color: red,
+                    ..Default::default()
+                }
+                .into(),
             ),
             (
                 "matcap",
-                MatcapMaterial { color: red, ..Default::default() }.into(),
+                MatcapMaterial {
+                    color: red,
+                    ..Default::default()
+                }
+                .into(),
             ),
             (
                 "sprite",
-                SpriteMaterial { color: red, ..Default::default() }.into(),
+                SpriteMaterial {
+                    color: red,
+                    ..Default::default()
+                }
+                .into(),
             ),
             (
                 "points",
-                PointsMaterial { color: red, ..Default::default() }.into(),
+                PointsMaterial {
+                    color: red,
+                    ..Default::default()
+                }
+                .into(),
             ),
             (
                 "line",
-                LineBasicMaterial { color: red, ..Default::default() }.into(),
+                LineBasicMaterial {
+                    color: red,
+                    ..Default::default()
+                }
+                .into(),
             ),
             (
                 "mirror",
-                MirrorMaterial { color: red, ..Default::default() }.into(),
+                MirrorMaterial {
+                    color: red,
+                    ..Default::default()
+                }
+                .into(),
             ),
             (
                 "physical",
-                PhysicalMaterial { color: red, ..Default::default() }.into(),
+                PhysicalMaterial {
+                    color: red,
+                    ..Default::default()
+                }
+                .into(),
             ),
             ("basic", BasicMaterial::new(red).into()),
             ("standard", StandardMaterial::new(red).into()),
@@ -1836,7 +2007,9 @@ mod tests {
             2,
             2,
             TextureFormat::Rgba8UnormSrgb,
-            vec![255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 0, 255],
+            vec![
+                255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 0, 255,
+            ],
         );
         t.wrap_s = TextureWrap::Repeat;
         t.wrap_t = TextureWrap::MirroredRepeat;
@@ -1876,8 +2049,14 @@ mod tests {
             texture.value("inputs:file").unwrap().as_str(),
             Some("textures/M_DiffuseTex.png")
         );
-        assert_eq!(texture.value("inputs:wrapS").unwrap().as_str(), Some("repeat"));
-        assert_eq!(texture.value("inputs:wrapT").unwrap().as_str(), Some("mirror"));
+        assert_eq!(
+            texture.value("inputs:wrapS").unwrap().as_str(),
+            Some("repeat")
+        );
+        assert_eq!(
+            texture.value("inputs:wrapT").unwrap().as_str(),
+            Some("mirror")
+        );
         assert_eq!(
             texture.value("inputs:sourceColorSpace").unwrap().as_str(),
             Some("sRGB")
@@ -1897,7 +2076,11 @@ mod tests {
             .iter()
             .filter(|p| p.name == "inputs:diffuseColor")
             .collect();
-        assert_eq!(diffuse.len(), 1, "one property, not a value and a connection");
+        assert_eq!(
+            diffuse.len(),
+            1,
+            "one property, not a value and a connection"
+        );
         assert_eq!(
             diffuse[0].value.as_str(),
             Some("/Root/M/DiffuseTex.outputs:rgb")
@@ -1953,13 +2136,22 @@ mod tests {
             node.value("info:id").unwrap().as_str(),
             Some("UsdTransform2d")
         );
-        assert_eq!(node.value("inputs:scale").unwrap().flat_f32(), vec![2.0, 3.0]);
+        assert_eq!(
+            node.value("inputs:scale").unwrap().flat_f32(),
+            vec![2.0, 3.0]
+        );
         let rotation = node.value("inputs:rotation").unwrap().flat_f32()[0];
-        assert!((rotation - 90.0).abs() < 1e-3, "{rotation} should be degrees");
+        assert!(
+            (rotation - 90.0).abs() < 1e-3,
+            "{rotation} should be degrees"
+        );
 
         // And the texture samples the transform rather than the reader.
         assert_eq!(
-            child(&prim, "DiffuseTex").value("inputs:st").unwrap().as_str(),
+            child(&prim, "DiffuseTex")
+                .value("inputs:st")
+                .unwrap()
+                .as_str(),
             Some("/Root/M/DiffuseTexTransform.outputs:result")
         );
     }
@@ -2018,7 +2210,10 @@ mod tests {
         use crate::core::{Mesh, Object3D, ObjectArena};
         use crate::materials::LambertMaterial;
         for (side, expected) in [(0u32, false), (2, true)] {
-            let m = LambertMaterial { side, ..Default::default() };
+            let m = LambertMaterial {
+                side,
+                ..Default::default()
+            };
             let mut arena = ObjectArena::new();
             let id = arena.insert(Object3D::mesh(Mesh::new(triangle(), m.into())));
             let layer = scene_to_layer(&arena, &[id], &UsdExportOptions::default());
@@ -2046,7 +2241,10 @@ mod tests {
             vec![0.8]
         );
 
-        let plain = material_prim(&StandardMaterial::new(Color::new(1.0, 1.0, 1.0)).into(), "M");
+        let plain = material_prim(
+            &StandardMaterial::new(Color::new(1.0, 1.0, 1.0)).into(),
+            "M",
+        );
         assert!(plain.children[0].value("inputs:ior").is_none());
         assert!(plain.children[0].value("inputs:clearcoat").is_none());
     }
@@ -2274,7 +2472,10 @@ mod tests {
             let Material::Standard(back) = &*mesh.material else {
                 panic!("{:?}", mesh.material)
             };
-            let map = back.map.as_ref().unwrap_or_else(|| panic!("{name} lost its map"));
+            let map = back
+                .map
+                .as_ref()
+                .unwrap_or_else(|| panic!("{name} lost its map"));
             assert_eq!(&map.data[..4], &[255, 0, 0, 255], "{name} pixels changed");
         }
         let _ = std::fs::remove_dir_all(&dir);
@@ -2390,7 +2591,9 @@ def Material "Mat"
     fn a_bottom_up_texture_is_written_the_right_way_up() {
         use crate::textures::{Texture, TextureFormat};
         // Two rows, distinguishable: first row red, second blue.
-        let pixels = vec![255, 0, 0, 255, 255, 0, 0, 255, 0, 0, 255, 255, 0, 0, 255, 255];
+        let pixels = vec![
+            255, 0, 0, 255, 255, 0, 0, 255, 0, 0, 255, 255, 0, 0, 255, 255,
+        ];
         let top_down = Texture::new(2, 2, TextureFormat::Rgba8UnormSrgb, pixels.clone());
         assert!(top_down.flip_y, "an image texture stores the top row first");
 
@@ -2513,8 +2716,8 @@ def Material "Mat"
     #[test]
     fn a_physical_material_survives_the_round_trip() {
         use crate::core::{Mesh, Object3D, ObjectArena};
-        use crate::materials::PhysicalMaterial;
         use crate::loaders::usd::scene::to_scene;
+        use crate::materials::PhysicalMaterial;
 
         let source = PhysicalMaterial {
             color: Color::new(0.3, 0.7, 0.7),
@@ -2592,7 +2795,10 @@ def Material "Mat"
         let prim = material_prim(&phong.clone().into(), "M");
         let surface = &prim.children[0];
         assert_eq!(
-            surface.value("inputs:useSpecularWorkflow").unwrap().flat_u32(),
+            surface
+                .value("inputs:useSpecularWorkflow")
+                .unwrap()
+                .flat_u32(),
             vec![1]
         );
         assert_eq!(
@@ -2603,8 +2809,20 @@ def Material "Mat"
         let rough = surface.value("inputs:roughness").unwrap().flat_f32()[0];
         assert!((rough - 0.25).abs() < 1e-6, "{rough}");
 
+<<<<<<< Updated upstream
         let smoother = material_prim(&PhongMaterial { shininess: 200.0, ..phong.clone() }.into(), "M")
             .children[0]
+=======
+        let smoother = material_prim(
+            &PhongMaterial {
+                shininess: 200.0,
+                ..phong
+            }
+            .into(),
+            "M",
+        )
+        .children[0]
+>>>>>>> Stashed changes
             .value("inputs:roughness")
             .unwrap()
             .flat_f32()[0];
@@ -2614,7 +2832,10 @@ def Material "Mat"
     /// A metallic workflow material says nothing about a specular one.
     #[test]
     fn only_phong_carries_the_specular_workflow() {
-        let prim = material_prim(&StandardMaterial::new(Color::new(1.0, 1.0, 1.0)).into(), "M");
+        let prim = material_prim(
+            &StandardMaterial::new(Color::new(1.0, 1.0, 1.0)).into(),
+            "M",
+        );
         assert!(prim.children[0]
             .value("inputs:useSpecularWorkflow")
             .is_none());
@@ -2647,13 +2868,13 @@ def Material "Mat"
     #[test]
     fn unindexed_geometry_gets_an_index_written_for_it() {
         let mut g = BufferGeometry::new();
-        g.set_attribute(
-            "position",
-            BufferAttribute::new(vec![0.0; 18], 3),
-        );
+        g.set_attribute("position", BufferAttribute::new(vec![0.0; 18], 3));
         let layer = parse(&geometry_to_usda(&g, "M")).unwrap();
         let prim = layer.prim_at("/Root/M").unwrap();
-        assert_eq!(prim.value("faceVertexCounts").unwrap().flat_u32(), vec![3, 3]);
+        assert_eq!(
+            prim.value("faceVertexCounts").unwrap().flat_u32(),
+            vec![3, 3]
+        );
         assert_eq!(
             prim.value("faceVertexIndices").unwrap().flat_u32(),
             vec![0, 1, 2, 3, 4, 5]
@@ -2796,12 +3017,15 @@ pub fn animated_scene_to_layer_with_textures(
     }
 
     if last > 0.0 {
-        layer.metadata.push((
-            "timeCodesPerSecond".into(),
-            UsdValue::Float(rate),
-        ));
-        layer.metadata.push(("startTimeCode".into(), UsdValue::Float(0.0)));
-        layer.metadata.push(("endTimeCode".into(), UsdValue::Float(last)));
+        layer
+            .metadata
+            .push(("timeCodesPerSecond".into(), UsdValue::Float(rate)));
+        layer
+            .metadata
+            .push(("startTimeCode".into(), UsdValue::Float(0.0)));
+        layer
+            .metadata
+            .push(("endTimeCode".into(), UsdValue::Float(last)));
     }
     (layer, textures)
 }
@@ -2880,13 +3104,18 @@ fn set_op(prim: &mut UsdPrim, name: &str, type_name: &str, value: UsdValue) {
         None => prim.properties.push(attribute(type_name, name, value)),
     }
 
-    let ordered = prim.properties.iter().any(|p| {
-        p.name == "xformOpOrder" && p.value.flat_tokens().contains(&name)
-    });
+    let ordered = prim
+        .properties
+        .iter()
+        .any(|p| p.name == "xformOpOrder" && p.value.flat_tokens().contains(&name));
     if ordered {
         return;
     }
-    match prim.properties.iter_mut().find(|p| p.name == "xformOpOrder") {
+    match prim
+        .properties
+        .iter_mut()
+        .find(|p| p.name == "xformOpOrder")
+    {
         Some(order) => {
             if let UsdValue::Array(items) = &mut order.value {
                 items.push(UsdValue::Token(name.into()));
@@ -2940,14 +3169,13 @@ mod external {
             g.set_attribute(
                 "position",
                 BufferAttribute::new(
-                    vec![-0.5, -0.5, 0.0, 0.5, -0.5, 0.0, 0.5, 0.5, 0.0, -0.5, 0.5, 0.0],
+                    vec![
+                        -0.5, -0.5, 0.0, 0.5, -0.5, 0.0, 0.5, 0.5, 0.0, -0.5, 0.5, 0.0,
+                    ],
                     3,
                 ),
             );
-            g.set_attribute(
-                "normal",
-                BufferAttribute::new([0.0, 0.0, 1.0].repeat(4), 3),
-            );
+            g.set_attribute("normal", BufferAttribute::new([0.0, 0.0, 1.0].repeat(4), 3));
             g.set_attribute(
                 "uv",
                 BufferAttribute::new(vec![0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0], 2),

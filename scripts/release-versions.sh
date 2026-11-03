@@ -1,20 +1,25 @@
 #!/usr/bin/env bash
 # Print versions across publish roots — bump these together before a release.
 #
-# `CHECK=1 ./scripts/release-versions.sh` exits non-zero when any root that
-# tracks the crate version has drifted from it. The separately versioned
-# crates (threers-animation, threers-probe) are reported but not checked.
-# With CHECK=1 it also asks crates.io, and fails if threers or threers-physics
-# is not ahead of what is already on the index.
+# Every crate, package and version pin in the repo carries one version, set in
+# `[workspace.package]` in the root Cargo.toml.
+# `CHECK=1 ./scripts/release-versions.sh` exits non-zero when any of them has
+# drifted from it.
+# With CHECK=1 it also asks crates.io, and fails if any published crate is
+# behind the index, or if every one of them is already there at its version.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
+# A crate's version, following `version.workspace = true` to the root.
 v_cargo() {
-  python3 - "$1" <<'PY'
+  python3 - "$1" "$ROOT/Cargo.toml" <<'PY'
 import sys, tomllib, pathlib
 data = tomllib.loads(pathlib.Path(sys.argv[1]).read_text())
-print(data["package"]["version"])
+v = data["package"]["version"]
+if isinstance(v, dict):
+    v = tomllib.loads(pathlib.Path(sys.argv[2]).read_text())["workspace"]["package"]["version"]
+print(v)
 PY
 }
 
@@ -52,9 +57,6 @@ report "jsr threers (deno.json)"     "$(v_json "$ROOT/crates/threers-js/deno.jso
 report "npm threers-node"            "$(v_json "$ROOT/crates/threers-node/package.json")"
 report "npm threers-node (lock)"     "$(v_json "$ROOT/crates/threers-node/package-lock.json")"
 report "PyPI threers"                "$(v_pyproject "$ROOT/crates/threers-py/pyproject.toml")"
-report "crates.io threers-physics"   "$(v_cargo "$ROOT/crates/threers-physics/Cargo.toml")"
-report "crates.io threers-codec"     "$(v_cargo "$ROOT/crates/threers-codec/Cargo.toml")"
-report "crates.io threers-softbody"  "$(v_cargo "$ROOT/crates/threers-softbody/Cargo.toml")"
 report "web shim (package.json)"     "$(v_json "$ROOT/web/package.json")"
 report "web shim (lock)"             "$(v_json "$ROOT/web/package-lock.json")"
 
@@ -64,50 +66,76 @@ for f in "$ROOT/crates/threers-node/npm"/*/package.json; do
   report "$pkg" "$(v_json "$f")"
 done
 
-# threers-physics tracks the crate version (checked above). The bindings pin it
-# by version as well as by path, and cargo refuses to resolve a path dependency
-# whose version does not satisfy the requirement. Check that pairing.
+# Every crate in crates/, workspace member or not.
+printf "\ncrates:\n"
+for f in "$ROOT"/crates/*/Cargo.toml; do
+  d=${f%/Cargo.toml}
+  report "  ${d#"$ROOT/crates/"}" "$(v_cargo "$f")"
+done
+
+# The crates pin each other by version as well as by path, and cargo refuses to
+# resolve a path dependency whose version does not satisfy the requirement.
+printf "\nversion pins between crates:\n"
+while read -r where pinned; do
+  report "  $where" "$pinned"
+done < <(python3 - "$ROOT" <<'PY'
+import sys, tomllib, pathlib
+root = pathlib.Path(sys.argv[1])
+for f in [root / "Cargo.toml", *sorted(root.glob("crates/*/Cargo.toml"))]:
+    data = tomllib.loads(f.read_text())
+    tables = [data.get(k, {}) for k in ("dependencies", "dev-dependencies", "build-dependencies")]
+    for t in data.get("target", {}).values():
+        tables += [t.get(k, {}) for k in ("dependencies", "dev-dependencies", "build-dependencies")]
+    for t in tables:
+        for name, spec in t.items():
+            if name.startswith("threers") and isinstance(spec, dict) and "version" in spec:
+                print(f"{f.parent.name}->{name}", spec["version"])
+PY
+)
+
 PHYSICS=$(v_cargo "$ROOT/crates/threers-physics/Cargo.toml")
 PROBE=$(v_cargo "$ROOT/crates/threers-probe/Cargo.toml")
 ANIM=$(v_cargo "$ROOT/crates/threers-animation/Cargo.toml")
-printf "\nthreers-physics pins:\n"
-for f in "$ROOT/crates/threers-py/Cargo.toml" "$ROOT/crates/threers-node/Cargo.toml" \
-         "$ROOT/crates/threers-animation/Cargo.toml"; do
-  pinned=$(sed -n 's/^threers-physics = .*version = "\([^"]*\)".*/\1/p' "$f")
-  [[ -n "$pinned" ]] || continue
-  printf "%-32s %s" "  ${f#"$ROOT/crates/"}" "$pinned"
-  if [[ "$pinned" != "$PHYSICS" ]]; then
-    printf "   <- expected %s" "$PHYSICS"
-    drift=1
-  fi
-  printf "\n"
-done
-
-printf "\nindependently versioned:\n"
-printf "%-32s %s\n" "crates.io threers-animation" "$ANIM"
-printf "%-32s %s\n" "crates.io threers-probe"    "$PROBE"
-
 
 # `cargo publish` cannot replace a version, so a version that is already on the
-# index fails at the upload and not before. Under CHECK=1, ask crates.io.
+# index fails at the upload and not before. Under CHECK=1, ask crates.io about
+# every crate the release publishes. A version behind the index is an error. One
+# equal to it was already published and release-all.sh skips it, so a publish
+# that stopped halfway can be rerun; but if all of them are equal, nothing would
+# go out, which almost always means the bump was forgotten.
 if [[ "${CHECK:-0}" == "1" ]]; then
   printf "\ncrates.io index:\n"
-  for pair in "threers:$CRATE" "threers-physics:$PHYSICS"; do
+  pending=0 checked=0
+  for pair in "threers:$CRATE" "threers-codec:$(v_cargo "$ROOT/crates/threers-codec/Cargo.toml")" \
+              "threers-softbody:$(v_cargo "$ROOT/crates/threers-softbody/Cargo.toml")" \
+              "threers-physics:$PHYSICS" "threers-animation:$ANIM" "threers-probe:$PROBE"; do
     name=${pair%%:*} local_v=${pair#*:}
     published=$(curl -sf -H 'User-Agent: threers-release' \
         "https://crates.io/api/v1/crates/$name" 2>/dev/null \
       | python3 -c "import json,sys; print(json.load(sys.stdin)['crate']['max_version'])" \
         2>/dev/null) || published=""
-    printf "%-32s %s" "  $name published" "${published:-unknown}"
+    printf "%-32s %-8s local %s" "  $name published" "${published:-none}" "$local_v"
     if [[ -z "$published" ]]; then
-      printf "   (could not reach crates.io)"
-    elif ! python3 -c "import sys; t=lambda v: tuple(map(int, v.split('.'))); sys.exit(t(sys.argv[1]) <= t(sys.argv[2]))" \
-        "$local_v" "$published"; then
-      printf "   <- %s is not ahead of it" "$local_v"
-      drift=1
+      printf "   (not on crates.io, or could not reach it)"
+      pending=1
+    else
+      checked=1
+      cmp=$(python3 -c "import sys; t=lambda v: tuple(map(int, v.split('.'))); a,b=t(sys.argv[1]),t(sys.argv[2]); print((a>b)-(a<b))" \
+          "$local_v" "$published")
+      case "$cmp" in
+        1)  pending=1 ;;
+        0)  printf "   (already published, will be skipped)" ;;
+        *)  printf "   <- %s is behind it" "$local_v"; drift=1 ;;
+      esac
     fi
     printf "\n"
   done
+  # Only fatal when this release publishes crates (release-all.sh sets
+  # CHECK_CRATES); an npm- or PyPI-only release leaves the index alone.
+  if (( checked && ! pending )); then
+    printf "  every crate is already on crates.io at its local version — bump first\n"
+    [[ "${CHECK_CRATES:-1}" == "1" ]] && drift=1
+  fi
 fi
 
 # The newest changelog entry should name the crate version.

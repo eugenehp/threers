@@ -55,8 +55,7 @@ impl CameraShake {
 
     /// Whether any offset would be applied this frame.
     pub fn is_active(&self) -> bool {
-        self.enabled
-            && (self.amplitude > 1e-8 || self.roll_amplitude > 1e-8 || self.impulse > 1e-8)
+        self.enabled && (self.amplitude > 1e-8 || self.roll_amplitude > 1e-8 || self.impulse > 1e-8)
     }
 
     /// Kick the camera — impact reaction. `strength` scales amplitude.

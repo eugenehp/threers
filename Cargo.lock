@@ -3097,7 +3097,7 @@ dependencies = [
 
 [[package]]
 name = "threers-animation"
-version = "0.0.1"
+version = "0.0.10"
 dependencies = [
  "threers",
  "threers-physics",
@@ -3112,7 +3112,7 @@ dependencies = [
 
 [[package]]
 name = "threers-connectome"
-version = "0.0.1"
+version = "0.0.10"
 
 [[package]]
 name = "threers-fluid-ios"
@@ -3144,7 +3144,7 @@ dependencies = [
 
 [[package]]
 name = "threers-ocean"
-version = "0.0.1"
+version = "0.0.10"
 dependencies = [
  "bytemuck",
  "console_error_panic_hook",
@@ -3173,7 +3173,7 @@ dependencies = [
 
 [[package]]
 name = "threers-physics-bench"
-version = "0.0.1"
+version = "0.0.10"
 dependencies = [
  "threers-physics",
  "wasm-bindgen",
@@ -3181,7 +3181,7 @@ dependencies = [
 
 [[package]]
 name = "threers-probe"
-version = "0.0.2"
+version = "0.0.10"
 dependencies = [
  "anyhow",
  "rlx",
@@ -3202,7 +3202,7 @@ dependencies = [
 
 [[package]]
 name = "threers-robot-arm"
-version = "0.0.1"
+version = "0.0.10"
 dependencies = [
  "threers-physics",
  "wasm-bindgen",

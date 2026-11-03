@@ -393,7 +393,6 @@ pub fn insert_knot_surface_v(surface: &NurbsSurface, v: f64, times: usize) -> Nu
     )
 }
 
-
 /// Remove the knot at `u` up to `times` times, keeping the curve within
 /// `tolerance` — Piegl & Tiller A5.8.
 ///

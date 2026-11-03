@@ -358,9 +358,6 @@ where
     Ok(bytes)
 }
 
-
-
-
 /// Encode the MP4 codecs without holding every source frame.
 ///
 /// Frames are pulled from the iterator, converted, encoded and dropped one at a

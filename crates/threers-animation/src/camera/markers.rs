@@ -55,8 +55,11 @@ impl MarkerCameraBind {
 
     pub fn push_marker(&mut self, marker: TimelineMarker) {
         self.markers.push(marker);
-        self.markers
-            .sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap_or(std::cmp::Ordering::Equal));
+        self.markers.sort_by(|a, b| {
+            a.time
+                .partial_cmp(&b.time)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
     }
 
     /// Active camera index at `time` (last marker at or before time).
@@ -71,7 +74,11 @@ impl MarkerCameraBind {
                 break;
             }
         }
-        current.or(if self.cameras.is_empty() { None } else { Some(0) })
+        current.or(if self.cameras.is_empty() {
+            None
+        } else {
+            Some(0)
+        })
     }
 
     pub fn pose(&self, time: f32) -> CameraPose {

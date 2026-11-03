@@ -18,13 +18,13 @@ const W: u32 = 64;
 /// every test below computes where its corners go.
 fn blank_quad() -> BufferGeometry {
     let mut g = BufferGeometry::new();
-    g.set_attribute(
-        "position",
-        BufferAttribute::new(vec![0.0; 12], 3),
-    );
+    g.set_attribute("position", BufferAttribute::new(vec![0.0; 12], 3));
     g.set_attribute(
         "normal",
-        BufferAttribute::new(vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0], 3),
+        BufferAttribute::new(
+            vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
+            3,
+        ),
     );
     g.set_attribute(
         "uv",
@@ -262,13 +262,15 @@ fn a_device_with_no_storage_buffers_reads_the_data_from_a_texture() {
     use std::sync::Arc;
 
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-    let Some(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::default(),
-        compatible_surface: None,
-        force_fallback_adapter: false,
-        apply_limit_buckets: false,
-    }))
-    .ok() else {
+    let Some(adapter) =
+        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::default(),
+            compatible_surface: None,
+            force_fallback_adapter: false,
+            apply_limit_buckets: false,
+        }))
+        .ok()
+    else {
         eprintln!("skipping: no GPU adapter");
         return;
     };

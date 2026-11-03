@@ -43,7 +43,10 @@ pub struct Reconstruction {
 /// `frame.width` / `height` must be ≥ 8 and multiples of 8.
 pub fn encode_intra_frame(frame: &Yuv420Frame) -> (Vec<u8>, Reconstruction) {
     assert!(
-        frame.width >= 8 && frame.height >= 8 && frame.width.is_multiple_of(8) && frame.height.is_multiple_of(8),
+        frame.width >= 8
+            && frame.height >= 8
+            && frame.width.is_multiple_of(8)
+            && frame.height.is_multiple_of(8),
         "VP9 encoder needs dims that are multiples of 8 (got {}×{})",
         frame.width,
         frame.height

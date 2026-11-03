@@ -35,7 +35,11 @@ pub(crate) fn sky_environment(sky: &Sky, size: u32) -> Arc<CubeTexture> {
     // burning through the horizon.
     let disc = 220.0 * sky.elevation.max(0.0).powf(0.7);
     let zenith = scale_color(sky.background, 0.82);
-    let horizon = mix_color(scale_color(sky.background, 1.35), Color::WHITE, 0.10 * sky.day);
+    let horizon = mix_color(
+        scale_color(sky.background, 1.35),
+        Color::WHITE,
+        0.10 * sky.day,
+    );
     let ground = scale_color(Color::from_hex(C_TERRAIN), 0.10 + 0.55 * sky.day);
     // After dark the ground half of the sphere is the city lighting itself,
     // which is what a night-time window actually reflects.

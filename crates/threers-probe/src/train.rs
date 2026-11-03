@@ -110,7 +110,8 @@ impl Trainer {
     ) -> Result<Self> {
         ensure!(n > 0 && h > 0 && w > 0, "empty batch shape {n}x{h}x{w}");
         ensure!(
-            h.is_multiple_of(ProbeArch::TILE_MULTIPLE) && w.is_multiple_of(ProbeArch::TILE_MULTIPLE),
+            h.is_multiple_of(ProbeArch::TILE_MULTIPLE)
+                && w.is_multiple_of(ProbeArch::TILE_MULTIPLE),
             "tile {h}x{w} must be a multiple of {}",
             ProbeArch::TILE_MULTIPLE
         );
@@ -378,7 +379,8 @@ mod tests {
                     ];
                     for c in 0..OUT_CHANNELS {
                         input[(b * IN_CHANNELS + c) * pixels + i] = probe[c];
-                        target[(b * OUT_CHANNELS + c) * pixels + i] = 0.5 * probe[c] + 0.5 * east[c];
+                        target[(b * OUT_CHANNELS + c) * pixels + i] =
+                            0.5 * probe[c] + 0.5 * east[c];
                         input[(b * IN_CHANNELS + 3 + c) * pixels + i] = 0.5;
                         input[(b * IN_CHANNELS + 6 + c) * pixels + i] = 0.5;
                         input[(b * IN_CHANNELS + 10 + c) * pixels + i] = probe[c];
@@ -475,10 +477,7 @@ mod tests {
             last = trainer.step(&batch).expect("step");
             assert!(last.is_finite(), "diverged to {last}");
         }
-        assert!(
-            last < first * 0.5,
-            "loss did not fall: {first} → {last}"
-        );
+        assert!(last < first * 0.5, "loss did not fall: {first} → {last}");
     }
 
     #[test]

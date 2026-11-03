@@ -8,8 +8,10 @@
 #
 # Targets (env TARGETS, comma-separated, or default "language"):
 #   language  — npm ESM (mini+full), npm native (host), PyPI wheel (host)
-#   crates    — crates.io: threers-codec, threers-softbody, threers, threers-physics,
-#               threers-animation, threers-probe
+#   crates    — crates.io: every workspace crate not marked `publish = false`
+#               (today threers-codec, threers-softbody, threers, threers-physics,
+#               threers-animation, threers-probe); versions already on the
+#               index are skipped, so a partial publish can be rerun
 #   npm-esm   — threers npm (wasm mini + full)
 #   npm-node  — threers-node + @threers/node-* (host .node only locally)
 #   pypi      — threers PyPI wheel (host triple)
@@ -42,7 +44,7 @@ while [[ $# -gt 0 ]]; do
     --dry-run) DRY_RUN=1 ;;
     --yes|-y) PUBLISH=1 ;;
     -h|--help)
-      sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *) echo "unknown arg: $1 (try --help)" >&2; exit 1 ;;
@@ -73,7 +75,7 @@ run() {
 }
 
 version_from_cargo() {
-  python3 -c "import tomllib, pathlib; p=tomllib.loads(pathlib.Path('$ROOT/Cargo.toml').read_text()); print(p['package']['version'])"
+  python3 -c "import tomllib, pathlib; p=tomllib.loads(pathlib.Path('$ROOT/Cargo.toml').read_text()); print(p['workspace']['package']['version'])"
 }
 
 VERSION="$(version_from_cargo)"
@@ -82,21 +84,54 @@ log "threers release helper — action=$ACTION targets=$TARGETS version=$VERSION
 # ---------------------------------------------------------------------------
 # crates.io
 # ---------------------------------------------------------------------------
+# Every workspace member cargo would publish (`publish` not false), with its
+# version and whether that version is already on crates.io: "name version state",
+# state one of published / unpublished / unknown (index unreachable).
+crate_publish_state() {
+  cargo metadata --no-deps --format-version 1 --manifest-path "$ROOT/Cargo.toml" \
+    | python3 -c '
+import json, sys, urllib.request, urllib.error
+for p in json.load(sys.stdin)["packages"]:
+    if p.get("publish") == []:
+        continue
+    name, ver = p["name"], p["version"]
+    req = urllib.request.Request(
+        f"https://crates.io/api/v1/crates/{name}/{ver}",
+        headers={"User-Agent": "threers-release"})
+    try:
+        urllib.request.urlopen(req, timeout=20)
+        state = "published"
+    except urllib.error.HTTPError as e:
+        state = "unpublished" if e.code == 404 else "unknown"
+    except Exception:
+        state = "unknown"
+    print(name, ver, state)
+'
+}
+
 release_crates() {
-  # Order is a dependency order, not a preference: each one has to be on the
-  # index before anything naming it by version can even be packaged.
-  # threers-codec and threers-softbody first: threers depends on both by version.
-  log "crates.io (order: threers-codec → threers-softbody → threers → threers-physics → threers-animation → threers-probe)"
-  for pkg in threers-codec threers-softbody threers threers-physics threers-animation threers-probe; do
-    if [[ "$ACTION" == "pack" || "$ACTION" == "publish" ]]; then
-      log "packaging $pkg..."
-      run cargo package -p "$pkg" --allow-dirty
-    fi
-    if [[ "$ACTION" == "publish" ]]; then
-      log "publishing $pkg to crates.io..."
-      run cargo publish -p "$pkg"
-    fi
-  done
+  # The set comes from the workspace, not a list here, so a new publishable
+  # crate is picked up without editing this script. Given several `-p`, cargo
+  # orders them by dependency and waits for each to reach the index before
+  # packaging the next. Versions already on crates.io are left out, so a publish
+  # that stopped halfway can simply be run again. (`--workspace --exclude` would
+  # be shorter, but `cargo package --workspace` does not skip `publish = false`.)
+  log "crates.io: publishable workspace crates"
+  local pkgs=() name ver state
+  while read -r name ver state; do
+    printf "    %-22s %-8s %s\n" "$name" "$ver" "$state"
+    [[ "$state" == "published" ]] || pkgs+=(-p "$name")
+  done < <(crate_publish_state)
+
+  if (( ${#pkgs[@]} == 0 )); then
+    log "every publishable crate is already on crates.io at its current version — nothing to do"
+    return
+  fi
+  if [[ "$ACTION" == "pack" ]]; then
+    run cargo package "${pkgs[@]}" --allow-dirty
+  elif [[ "$ACTION" == "publish" ]]; then
+    run cargo publish "${pkgs[@]}"
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -213,7 +248,9 @@ esac
 # before anything is uploaded.
 if [[ "$ACTION" == "publish" ]]; then
   log "checking versions across publish roots"
-  CHECK=1 "$(dirname "$0")/release-versions.sh"
+  crates_targeted=0
+  has_target crates && crates_targeted=1
+  CHECK=1 CHECK_CRATES=$crates_targeted "$(dirname "$0")/release-versions.sh"
 fi
 
 if has_target crates || [[ "$TARGETS" == "all" ]]; then

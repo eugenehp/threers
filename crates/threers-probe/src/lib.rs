@@ -29,24 +29,29 @@ pub mod wasm;
 pub mod generate;
 
 pub use dataset::Dataset;
-pub use infer::{ProbeGi, ProbeNet};
-pub use nrc::{
-    fuse_beauty, fuse_beauty_with, init_params as init_nrc_params, load_nrc, load_nrc_bytes, mean_albedo, nrc_apply_mask,
-    nrc_eligible, nrc_features, nrc_input_channels, pack_nrc_batch, pack_nrc_batch_with, probe_colour_relative_sq,
-    save_nrc, train_nrc, train_nrc_from, train_nrc_dataset, NrcArch, NrcNet, NRC_CAP, NRC_IN, NRC_IN_DDGI,
-    NRC_MAX_PROBE, NRC_MIN_ALBEDO, NRC_OUT, NRC_PROBE_CONFIDENCE, HOPS_NRC_PROBE_CONFIDENCE, HOPS_NRC_CAP,
-};
 pub use ddgi::{
     bounds_from_world, encode_frame, encode_world_planes, DdgiContext, DDGI_GRID, DDGI_GRID_Y,
     DDGI_VIS_PLANE,
 };
-pub use pack::{colour_planes, geometry_hits, planes, PlaneExtras, DEPTH_PLANE, SKY_DEPTH_COMPRESSED};
+pub use infer::{ProbeGi, ProbeNet};
 pub use model::{
     init_params, Head, ProbeArch, Widths, ALBEDO_FLOOR, GRAPH_ROOM_TINT, HOPS_IRRADIANCE_CAP,
-    HYBRID_IRRADIANCE_CAP,
-    IN_CHANNELS, OUT_CHANNELS,
+    HYBRID_IRRADIANCE_CAP, IN_CHANNELS, OUT_CHANNELS,
 };
-pub use train::{Batch, TrainConfig, Trainer, GI_LOSS_BOOST, HOPS_CHROMA_LOSS_BOOST, HOPS_GI_LOSS_BOOST, HOPS_NEUTRAL_LOSS_BOOST, LOSS_EPSILON, TRAIN_EPSILON};
+pub use nrc::{
+    fuse_beauty, fuse_beauty_with, init_params as init_nrc_params, load_nrc, load_nrc_bytes,
+    mean_albedo, nrc_apply_mask, nrc_eligible, nrc_features, nrc_input_channels, pack_nrc_batch,
+    pack_nrc_batch_with, probe_colour_relative_sq, save_nrc, train_nrc, train_nrc_dataset,
+    train_nrc_from, NrcArch, NrcNet, HOPS_NRC_CAP, HOPS_NRC_PROBE_CONFIDENCE, NRC_CAP, NRC_IN,
+    NRC_IN_DDGI, NRC_MAX_PROBE, NRC_MIN_ALBEDO, NRC_OUT, NRC_PROBE_CONFIDENCE,
+};
+pub use pack::{
+    colour_planes, geometry_hits, planes, PlaneExtras, DEPTH_PLANE, SKY_DEPTH_COMPRESSED,
+};
+pub use train::{
+    Batch, TrainConfig, Trainer, GI_LOSS_BOOST, HOPS_CHROMA_LOSS_BOOST, HOPS_GI_LOSS_BOOST,
+    HOPS_NEUTRAL_LOSS_BOOST, LOSS_EPSILON, TRAIN_EPSILON,
+};
 
 use rlx::Device;
 
@@ -97,10 +102,7 @@ mod tests {
     fn compress_round_trips_finite_radiance() {
         for v in [0.0, 0.01, 0.5, 1.0, 8.0, 100.0] {
             let back = expand(compress(v));
-            assert!(
-                (back - v).abs() / v.max(1e-6) < 1e-5,
-                "{v} -> {back}"
-            );
+            assert!((back - v).abs() / v.max(1e-6) < 1e-5, "{v} -> {back}");
         }
         assert_eq!(compress(f32::INFINITY), 1.0);
         assert_eq!(compress(f32::NAN), 0.0);

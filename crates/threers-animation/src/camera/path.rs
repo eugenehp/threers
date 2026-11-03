@@ -242,7 +242,10 @@ fn sample_bezier(points: &[Vector3], u: f32) -> Vector3 {
     let c1 = points[i + 2];
     let p1 = points[i + 3];
     let omt = 1.0 - t;
-    p0 * (omt * omt * omt) + c0 * (3.0 * omt * omt * t) + c1 * (3.0 * omt * t * t) + p1 * (t * t * t)
+    p0 * (omt * omt * omt)
+        + c0 * (3.0 * omt * omt * t)
+        + c1 * (3.0 * omt * t * t)
+        + p1 * (t * t * t)
 }
 
 fn sample_catmull(points: &[Vector3], u: f32) -> Vector3 {
@@ -283,8 +286,11 @@ mod tests {
 
     #[test]
     fn fixed_target_is_honoured() {
-        let path = CameraPath::linear(vec![Vector3::new(0.0, 0.0, 5.0), Vector3::new(5.0, 0.0, 5.0)])
-            .with_fixed_target(Vector3::ZERO);
+        let path = CameraPath::linear(vec![
+            Vector3::new(0.0, 0.0, 5.0),
+            Vector3::new(5.0, 0.0, 5.0),
+        ])
+        .with_fixed_target(Vector3::ZERO);
         let t = path.sample_target(0.5);
         assert!(t.length() < 1e-5);
     }

@@ -73,7 +73,10 @@ pub(crate) fn srgb_byte(v: f32) -> u8 {
 /// what separates the glass from the wall it is set in. A single roughness
 /// for a whole facade is the difference between a curtain wall and a
 /// painted-on one.
-pub(crate) fn facade_textures(style: &FacadeStyle, seed: u64) -> (Arc<Texture>, Arc<Texture>, Arc<Texture>) {
+pub(crate) fn facade_textures(
+    style: &FacadeStyle,
+    seed: u64,
+) -> (Arc<Texture>, Arc<Texture>, Arc<Texture>) {
     let mut rng = Rng::new(seed);
     let cells = 8usize;
     // Decide each cell up front so the pixel loop is a lookup.
@@ -88,7 +91,7 @@ pub(crate) fn facade_textures(style: &FacadeStyle, seed: u64) -> (Arc<Texture>, 
                 let u = rng.f();
                 (u * u * (3.0 - 2.0 * u) * 0.55 + style.warm_bias * 0.75).clamp(0.0, 1.0)
             },
-            rng.range(0.45, 1.0),         // brightness
+            rng.range(0.45, 1.0), // brightness
             // A blind, drawn down this far. Most windows have one and most of
             // them are up; a facade where every pane is identical glass reads
             // as a texture rather than as a building.
@@ -131,7 +134,8 @@ pub(crate) fn facade_textures(style: &FacadeStyle, seed: u64) -> (Arc<Texture>, 
             // Row 0 of the source is the TOP of the wall, so a blind drawn
             // from the head occupies the low `ly` rows.
             let head = style.head as usize;
-            let blind_rows = (blind * (CELL_PX as usize - head - style.sill as usize) as f32) as usize;
+            let blind_rows =
+                (blind * (CELL_PX as usize - head - style.sill as usize) as f32) as usize;
             let behind_blind = inside && ly < head + blind_rows;
 
             if inside {
@@ -152,7 +156,11 @@ pub(crate) fn facade_textures(style: &FacadeStyle, seed: u64) -> (Arc<Texture>, 
                     } else {
                         mix(style.glass_a[ch], style.glass_b[ch], tone)
                     };
-                    let shade = if behind_blind { 1.0 } else { mix(1.18, 0.78, g) };
+                    let shade = if behind_blind {
+                        1.0
+                    } else {
+                        mix(1.18, 0.78, g)
+                    };
                     albedo[i + ch] = srgb_byte(base * shade * mullion * transom);
                 }
                 let l = if on && behind_blind {
@@ -188,8 +196,8 @@ pub(crate) fn facade_textures(style: &FacadeStyle, seed: u64) -> (Arc<Texture>, 
                 // below it, which is why real buildings are dirtiest in
                 // vertical stripes under their windows and clean between them.
                 let below_sill = ly >= CELL_PX as usize - style.sill as usize;
-                let under_pane = lx >= style.side as usize
-                    && lx < CELL_PX as usize - style.side as usize;
+                let under_pane =
+                    lx >= style.side as usize && lx < CELL_PX as usize - style.side as usize;
                 let streak = if below_sill && under_pane {
                     let run = (ly - (CELL_PX as usize - style.sill as usize)) as f32
                         / style.sill.max(1) as f32;

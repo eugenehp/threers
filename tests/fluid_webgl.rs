@@ -16,7 +16,6 @@
 //! driver is.
 #![cfg(all(feature = "fluid", feature = "webgl", target_arch = "wasm32"))]
 
-
 use threers::fluid::{quality, FluidConfig, FluidFormats, FluidSim};
 use wasm_bindgen::JsCast;
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
