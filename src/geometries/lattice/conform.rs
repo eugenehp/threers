@@ -197,7 +197,10 @@ impl<'a> Conform<'a> {
     pub fn depth(region: Region<'a>) -> Self {
         // The gradient of a distance field is a unit vector, so the map is an
         // isometry wherever the region is honest about its distances.
-        Self::with_stretch(move |p| Vector3::new(p.x, p.y, region.distance(p)), |_| 1.0)
+        Self::with_stretch(
+            move |p| Vector3::new(p.x, p.y, region.distance(p)),
+            |_| 1.0,
+        )
     }
 
     /// The cell pitch that fits `count` cells exactly around a circle of

@@ -29,10 +29,7 @@ impl Dataset {
             tile > 0 && tile.is_multiple_of(8),
             "tile {tile} must be a positive multiple of 8"
         );
-        ensure!(
-            inputs > 0 && outputs > 0,
-            "a tile cannot have {inputs}+{outputs} planes"
-        );
+        ensure!(inputs > 0 && outputs > 0, "a tile cannot have {inputs}+{outputs} planes");
         let per = (inputs + outputs) * tile * tile;
         ensure!(
             data.len().is_multiple_of(per),
@@ -65,11 +62,7 @@ impl Dataset {
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        ensure!(
-            bytes.len() >= 24,
-            "dataset is {} bytes, too short",
-            bytes.len()
-        );
+        ensure!(bytes.len() >= 24, "dataset is {} bytes, too short", bytes.len());
         if &bytes[..8] != MAGIC {
             bail!(
                 "dataset does not start with {}",
@@ -146,11 +139,7 @@ impl Dataset {
         let mut input = Vec::with_capacity(indices.len() * in_plane);
         let mut target = Vec::with_capacity(indices.len() * (per - in_plane));
         for &idx in indices {
-            ensure!(
-                idx < self.count,
-                "tile {idx} is past the set ({})",
-                self.count
-            );
+            ensure!(idx < self.count, "tile {idx} is past the set ({})", self.count);
             let base = idx * per;
             input.extend_from_slice(&self.data[base..base + in_plane]);
             target.extend_from_slice(&self.data[base + in_plane..base + per]);

@@ -9,11 +9,11 @@
 //! cargo run -p threers-physics --example scene_sync
 //! ```
 
-use threers::core::Mesh;
 use threers::core::{Object3D, ObjectArena};
 use threers::geometries::{BoxGeometry, SphereGeometry};
 use threers::materials::{BasicMaterial, Material};
 use threers::math::{Color, Matrix4};
+use threers::core::Mesh;
 use threers_physics::prelude::*;
 
 fn main() {
@@ -55,11 +55,7 @@ fn main() {
         let body = world.add_body(
             RigidBody::dynamic()
                 .shape(Shape::ball(0.4))
-                .translation(Vector3::new(
-                    i as f32 * 0.9 - 1.8,
-                    3.0 + i as f32 * 0.9,
-                    0.0,
-                ))
+                .translation(Vector3::new(i as f32 * 0.9 - 1.8, 3.0 + i as f32 * 0.9, 0.0))
                 .restitution(0.4)
                 .scene_object(node),
         );
@@ -117,11 +113,7 @@ fn main() {
                     object.world_position().y
                 );
             }
-            println!(
-                "  {} of {} bodies asleep",
-                world.sleeping_count(),
-                world.body_count()
-            );
+            println!("  {} of {} bodies asleep", world.sleeping_count(), world.body_count());
         }
     }
 

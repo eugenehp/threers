@@ -139,7 +139,12 @@ fn bound(edges: &mut Vec<Edge>, a: usize, b: usize) {
 fn diamond() -> FoldedState {
     let s = 0.9;
     FoldedState {
-        verts: vec![[0.0, s, 0.0], [s, 0.0, 0.0], [0.0, -s, 0.0], [-s, 0.0, 0.0]],
+        verts: vec![
+            [0.0, s, 0.0],
+            [s, 0.0, 0.0],
+            [0.0, -s, 0.0],
+            [-s, 0.0, 0.0],
+        ],
         faces: vec![vec![0, 1, 2], vec![0, 2, 3]],
     }
 }
@@ -154,7 +159,12 @@ fn fold_down() -> FoldedState {
             [-s, 0.0, 0.0],
             [0.0, 0.0, 0.06],
         ],
-        faces: vec![vec![4, 1, 2], vec![4, 2, 3], vec![0, 1, 4], vec![0, 4, 3]],
+        faces: vec![
+            vec![4, 1, 2],
+            vec![4, 2, 3],
+            vec![0, 1, 4],
+            vec![0, 4, 3],
+        ],
     }
 }
 

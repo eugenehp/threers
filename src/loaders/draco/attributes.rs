@@ -595,9 +595,9 @@ fn decode_prediction_data<'a>(
                     OctahedronPredictionTransform::decode(max_quantized_value, center_value)?,
                 ))
             }
-            transform::NORMAL_OCTAHEDRON => Err(DracoError::Unsupported(
-                "uncanonicalized octahedral normals",
-            )),
+            transform::NORMAL_OCTAHEDRON => {
+                Err(DracoError::Unsupported("uncanonicalized octahedral normals"))
+            }
             transform::DELTA => Err(DracoError::Unsupported("delta prediction transform")),
             _ => Err(DracoError::Unsupported("prediction transform")),
         }
@@ -1061,7 +1061,9 @@ fn compute_original_values(
     transform.compute_original(&zeros, &corr[..nc], &mut out[..nc]);
 
     match scheme {
-        Scheme::GeometricNormal(_) | Scheme::TexCoordsPortable(_) => Err(DracoError::Corrupt),
+        Scheme::GeometricNormal(_) | Scheme::TexCoordsPortable(_) => {
+            Err(DracoError::Corrupt)
+        }
         Scheme::Difference => {
             let mut at = nc;
             while at + nc <= out.len() {
@@ -1151,7 +1153,8 @@ fn compute_original_values(
                                     .ok_or(DracoError::Corrupt)?;
                                 if !is_crease {
                                     kept += 1;
-                                    for (slot, add) in multi[..nc].iter_mut().zip(&candidate[..nc])
+                                    for (slot, add) in
+                                        multi[..nc].iter_mut().zip(&candidate[..nc])
                                     {
                                         *slot = (*slot as u32).wrapping_add(*add as u32) as i32;
                                     }
@@ -1351,9 +1354,7 @@ fn decode_one_decoder(
     let mut transforms: Vec<OutputTransform> = Vec::with_capacity(portable.len());
     for (desc, seq_type) in spec.descriptors.iter().zip(&spec.sequential_types) {
         transforms.push(match *seq_type {
-            sequential::QUANTIZATION => {
-                OutputTransform::Quantization(Quantization::decode(buffer, desc)?)
-            }
+            sequential::QUANTIZATION => OutputTransform::Quantization(Quantization::decode(buffer, desc)?),
             sequential::NORMALS => {
                 let bits = buffer.u8()? as i32;
                 OutputTransform::Octahedron(OctahedronToolBox::new(bits)?)
@@ -1400,7 +1401,9 @@ fn decode_one_decoder(
                 let mut floats = vec![0f32; point_to_value.len() * nc];
                 for (point, value) in point_to_value.iter().enumerate() {
                     for c in 0..nc {
-                        let v = *values.get(value * pc + c).ok_or(DracoError::Corrupt)?;
+                        let v = *values
+                            .get(value * pc + c)
+                            .ok_or(DracoError::Corrupt)?;
                         floats[point * nc + c] = q.dequantize(v, c);
                     }
                 }
@@ -1645,9 +1648,7 @@ mod tests {
         assert_eq!(normal.len(), 423 * 3);
         assert_eq!(fnv1a_f32(&normal), 3815382446277921992, "normals");
 
-        let uv = m
-            .attribute(attribute_type::TEX_COORD)
-            .expect("texture coordinates");
+        let uv = m.attribute(attribute_type::TEX_COORD).expect("texture coordinates");
         assert_eq!(uv.num_components(), 2);
         let uv = uv.as_f32();
         assert_eq!(uv.len(), 423 * 2);
@@ -1695,17 +1696,11 @@ mod tests {
         assert_eq!(m.num_points(), 34834);
         assert_eq!(m.attributes.len(), 2);
 
-        let pos = m
-            .attribute(attribute_type::POSITION)
-            .expect("positions")
-            .as_f32();
+        let pos = m.attribute(attribute_type::POSITION).expect("positions").as_f32();
         assert_eq!(pos.len(), 34834 * 3);
         assert_eq!(fnv1a_f32(&pos), 17836075622030403104, "positions");
 
-        let normal = m
-            .attribute(attribute_type::NORMAL)
-            .expect("normals")
-            .as_f32();
+        let normal = m.attribute(attribute_type::NORMAL).expect("normals").as_f32();
         assert_eq!(normal.len(), 34834 * 3);
         assert_eq!(fnv1a_f32(&normal), 12948339483123031117, "normals");
     }
@@ -1719,10 +1714,7 @@ mod tests {
     fn normals_come_back_as_unit_vectors() {
         for bytes in [SPHERE, BUNNY] {
             let m = decode_mesh(bytes).expect("a decoded mesh");
-            let n = m
-                .attribute(attribute_type::NORMAL)
-                .expect("normals")
-                .as_f32();
+            let n = m.attribute(attribute_type::NORMAL).expect("normals").as_f32();
             for (i, c) in n.chunks(3).enumerate() {
                 let length = (c[0] * c[0] + c[1] * c[1] + c[2] * c[2]).sqrt();
                 assert!(
@@ -1744,13 +1736,14 @@ mod tests {
         // The ranges are the ones draco3d reports for these files.
         for (bytes, lo, hi) in [
             (SPHERE, [-1.0f32, -1.0, -1.0], [1.0f32, 1.0, 1.0]),
-            (BUNNY, [-0.0947, 0.0329, -0.0619], [0.0611, 0.1874, 0.0589]),
+            (
+                BUNNY,
+                [-0.0947, 0.0329, -0.0619],
+                [0.0611, 0.1874, 0.0589],
+            ),
         ] {
             let m = decode_mesh(bytes).expect("a decoded mesh");
-            let pos = m
-                .attribute(attribute_type::POSITION)
-                .expect("positions")
-                .as_f32();
+            let pos = m.attribute(attribute_type::POSITION).expect("positions").as_f32();
             for (i, p) in pos.chunks(3).enumerate() {
                 for c in 0..3 {
                     assert!(
@@ -1835,25 +1828,12 @@ mod tests {
                 9, 0, 12
             ]
         );
-        assert_eq!(
-            fnv1a_f32(&[]),
-            0xcbf2_9ce4_8422_2325,
-            "the hash's empty case"
-        );
-        let pos = m
-            .attribute(attribute_type::POSITION)
-            .expect("positions")
-            .as_f32();
+        assert_eq!(fnv1a_f32(&[]), 0xcbf2_9ce4_8422_2325, "the hash's empty case");
+        let pos = m.attribute(attribute_type::POSITION).expect("positions").as_f32();
         assert_eq!(fnv1a_f32(&pos), 8366847262056489837, "positions");
-        let normal = m
-            .attribute(attribute_type::NORMAL)
-            .expect("normals")
-            .as_f32();
+        let normal = m.attribute(attribute_type::NORMAL).expect("normals").as_f32();
         assert_eq!(fnv1a_f32(&normal), 4395065954670703389, "normals");
-        let uv = m
-            .attribute(attribute_type::TEX_COORD)
-            .expect("uvs")
-            .as_f32();
+        let uv = m.attribute(attribute_type::TEX_COORD).expect("uvs").as_f32();
         assert_eq!(fnv1a_f32(&uv), 8550600021161492673, "texture coordinates");
 
         // An open disc: one boundary loop, so V - E + F is 1 rather than 2.
@@ -1905,22 +1885,12 @@ mod tests {
                 8, 0, 10
             ]
         );
-        assert_eq!(
-            fnv1a_u32(&indices),
-            17713357916668641341,
-            "all 5400 indices"
-        );
+        assert_eq!(fnv1a_u32(&indices), 17713357916668641341, "all 5400 indices");
 
-        let pos = m
-            .attribute(attribute_type::POSITION)
-            .expect("positions")
-            .as_f32();
+        let pos = m.attribute(attribute_type::POSITION).expect("positions").as_f32();
         assert_eq!(pos.len(), 961 * 3);
         assert_eq!(fnv1a_f32(&pos), 14293316393217882539, "positions");
-        let normal = m
-            .attribute(attribute_type::NORMAL)
-            .expect("normals")
-            .as_f32();
+        let normal = m.attribute(attribute_type::NORMAL).expect("normals").as_f32();
         assert_eq!(fnv1a_f32(&normal), 6763978815183453622, "normals");
     }
 
@@ -1958,26 +1928,13 @@ mod tests {
                 8, 0, 10
             ]
         );
-        assert_eq!(
-            fnv1a_u32(&indices),
-            16724102879085218717,
-            "all 3456 indices"
-        );
+        assert_eq!(fnv1a_u32(&indices), 16724102879085218717, "all 3456 indices");
 
-        let pos = m
-            .attribute(attribute_type::POSITION)
-            .expect("positions")
-            .as_f32();
+        let pos = m.attribute(attribute_type::POSITION).expect("positions").as_f32();
         assert_eq!(fnv1a_f32(&pos), 2246799073516984197, "positions");
-        let normal = m
-            .attribute(attribute_type::NORMAL)
-            .expect("normals")
-            .as_f32();
+        let normal = m.attribute(attribute_type::NORMAL).expect("normals").as_f32();
         assert_eq!(fnv1a_f32(&normal), 6119629274032286637, "normals");
-        let uv = m
-            .attribute(attribute_type::TEX_COORD)
-            .expect("uvs")
-            .as_f32();
+        let uv = m.attribute(attribute_type::TEX_COORD).expect("uvs").as_f32();
         assert_eq!(uv.len(), 625 * 2);
         assert_eq!(fnv1a_f32(&uv), 4556528882262129973, "texture coordinates");
         // The source grid's coordinates are a unit square, so anything outside it

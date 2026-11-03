@@ -18,17 +18,15 @@ pub mod caps;
 // No outer doc comments on these three: each carries `//!` docs of its own,
 // and an outer `///` here makes the intra-doc links inside them resolve in
 // *this* scope instead of the module's. The warning for that names no file.
+pub mod colorspace;
+pub mod fullscreen;
+pub mod readback;
 /// Bloom as compute passes over a finished frame. See [`bloom`].
 pub mod bloom;
 mod caption_pass;
-pub mod colorspace;
 pub mod downsample;
-pub mod fullscreen;
 mod gpu_mesh;
 pub mod gpu_texture;
-/// GPU-side timing for the main pass. See [`gpu_timer`].
-pub mod gpu_timer;
-pub mod readback;
 mod render_target;
 // `set_viewport` / `set_scissor` state and the partial clear behind them.
 pub mod viewport;
@@ -37,13 +35,10 @@ pub mod viewport;
 pub mod rgb_pack;
 /// Depth-only ambient occlusion as a compute pass. See [`ssao`].
 pub mod ssao;
-<<<<<<< Updated upstream
 /// [`ssao`] composited onto a live surface. See [`ssao_composite`].
 pub mod ssao_composite;
 /// GPU-side timing for the main pass. See [`gpu_timer`].
 pub mod gpu_timer;
-=======
->>>>>>> Stashed changes
 // The renderer itself, in a file named after it; this module is the facade.
 #[allow(clippy::module_inception)]
 mod renderer;
@@ -161,7 +156,6 @@ cfg_apple! {
     pub use layer::{LayerGpu, LayerRenderer};
 }
 pub use render_target::{CubeRenderTarget, RenderTarget};
-<<<<<<< Updated upstream
 pub use viewport::{PixelRect, ShadowMap, ViewportRect};
 pub use renderer::{PostFxCamera, Renderer, ToneMapping};
 pub use renderer::{PostFxBlend, PostFxNoise, PostFxOp, PostFxOutput};
@@ -194,7 +188,3 @@ mod clear_value_tests {
         }
     }
 }
-=======
-pub use renderer::{halton, stratified_jitter};
-pub use renderer::{PostFxCamera, Renderer, ToneMapping};
->>>>>>> Stashed changes

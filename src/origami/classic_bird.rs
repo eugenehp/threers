@@ -35,9 +35,7 @@ pub fn crease_pattern() -> CreasePattern {
     let p3 = v2(0.5, 0.25);
     let p4 = v2(0.25, 0.5);
 
-    let verts = vec![
-        bl, br, tr, tl, c, bm, rm, tm, lm, q1, q2, q3, q4, p1, p2, p3, p4,
-    ];
+    let verts = vec![bl, br, tr, tl, c, bm, rm, tm, lm, q1, q2, q3, q4, p1, p2, p3, p4];
     let mut edges = Vec::new();
 
     bound(&mut edges, 0, 1);
@@ -132,7 +130,12 @@ fn bound(edges: &mut Vec<Edge>, a: usize, b: usize) {
 fn flat_square() -> FoldedState {
     let s = 0.9;
     let z = 0.0;
-    let verts = vec![[-s, -s, z], [s, -s, z], [s, s, z], [-s, s, z]];
+    let verts = vec![
+        [-s, -s, z],
+        [s, -s, z],
+        [s, s, z],
+        [-s, s, z],
+    ];
     let faces = vec![vec![0, 1, 2], vec![0, 2, 3]];
     FoldedState { verts, faces }
 }

@@ -22,8 +22,8 @@
 //! assert!(!overlay.is_visible());
 //! ```
 
-use super::{CaptionPainter, CaptionStyle, CaptionTrack};
 use crate::utils::srgb::{linear_to_srgb, srgb_to_linear};
+use super::{CaptionPainter, CaptionStyle, CaptionTrack};
 
 /// Caches a rasterized caption overlay across frames.
 #[derive(Debug)]

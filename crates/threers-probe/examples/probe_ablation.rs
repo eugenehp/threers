@@ -118,11 +118,7 @@ fn main() {
     } else {
         ablations()
             .iter()
-            .filter(|a| {
-                filter
-                    .iter()
-                    .any(|f| f == a.id.to_ascii_lowercase().as_str())
-            })
+            .filter(|a| filter.iter().any(|f| f == a.id.to_ascii_lowercase().as_str()))
             .collect()
     };
     assert!(!runs.is_empty(), "no ablations matched ABLATIONS filter");
@@ -205,7 +201,9 @@ fn run_probe(gpu: &str, ab: &Ablation) -> std::io::Result<Score> {
     }
     let status = child.wait()?;
     if !status.success() {
-        return Err(std::io::Error::other(format!("probe exited with {status}")));
+        return Err(std::io::Error::other(format!(
+            "probe exited with {status}"
+        )));
     }
     Ok(score)
 }

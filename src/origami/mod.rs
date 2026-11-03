@@ -30,9 +30,7 @@ pub use classic_bird::{
 pub use eagle::{crease_pattern as eagle_cp, fold_stages as eagle_stages, EagleStage};
 pub use fold::FoldedState;
 pub use frog::{crease_pattern as frog_cp, fold_stages as frog_stages, FrogStage};
-pub use giang_cardinal::{
-    crease_pattern as giang_cardinal_cp, fold_stages as giang_cardinal_stages, GiangCardinalStage,
-};
+pub use giang_cardinal::{crease_pattern as giang_cardinal_cp, fold_stages as giang_cardinal_stages, GiangCardinalStage};
 pub use pattern::{Assignment, ClosureReport, CreasePattern, Edge, EdgeKind};
 pub use vertex::{degree4_from_dirs, kawasaki, reflect_through, Degree4, VertexMode};
 

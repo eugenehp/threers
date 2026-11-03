@@ -12,14 +12,7 @@ use threers::marks::gpu;
 /// vertices per quad and would quadruple the buffer the compute pass walks.
 /// Marked `gpu_writable` so its vertex buffer gets `STORAGE` usage and
 /// `Renderer::vertex_buffer` will hand it back.
-pub(crate) fn water_grid(
-    x0: f32,
-    z0: f32,
-    x1: f32,
-    z1: f32,
-    y: f32,
-    c: Color,
-) -> (BufferGeometry, u32) {
+pub(crate) fn water_grid(x0: f32, z0: f32, x1: f32, z1: f32, y: f32, c: Color) -> (BufferGeometry, u32) {
     // Roughly 8 m a cell, capped so a wide bay does not become a million
     // triangles. The swells are ~15 m across, so this still resolves them.
     let nx = (((x1 - x0) / 8.0).round() as u32).clamp(2, 96);

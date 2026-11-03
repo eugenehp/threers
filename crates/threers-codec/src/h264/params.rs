@@ -89,11 +89,7 @@ pub fn write_sps_with_refs(cfg: &H264Config, max_num_ref_frames: u32) -> Vec<u8>
     let (mbs_w, mbs_h) = cfg.mbs();
     let mut w = BitWriter::new();
     // Baseline forbids CABAC, so a CABAC stream has to declare Main.
-    w.write_byte(if cfg.entropy == EntropyMode::Cabac {
-        77
-    } else {
-        66
-    }); // profile_idc
+    w.write_byte(if cfg.entropy == EntropyMode::Cabac { 77 } else { 66 }); // profile_idc
     w.flag(false); // constraint_set0_flag
     w.flag(false); // constraint_set1_flag
     w.flag(false); // constraint_set2_flag

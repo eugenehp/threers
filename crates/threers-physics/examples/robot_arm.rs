@@ -223,8 +223,7 @@ impl Arm {
     fn stretch(&self) -> f32 {
         let mut worst: f32 = 0.0;
         for (i, expected) in LINKS.iter().enumerate() {
-            let actual =
-                (self.chain.joints[i + 1].position - self.chain.joints[i].position).length();
+            let actual = (self.chain.joints[i + 1].position - self.chain.joints[i].position).length();
             worst = worst.max((actual - expected).abs());
         }
         worst
@@ -298,73 +297,19 @@ fn main() {
 
     let home = Vector3::new(0.75, COLUMN + 0.55, 0.0);
     let programme = [
-        Move {
-            name: "home",
-            target: home,
-            frames: 60,
-            grip: None,
-        },
-        Move {
-            name: "approach",
-            target: Vector3::new(0.95, 0.34, 0.0),
-            frames: 90,
-            grip: None,
-        },
-        Move {
-            name: "descend",
-            target: Vector3::new(0.95, 0.115, 0.0),
-            frames: 60,
-            grip: None,
-        },
-        Move {
-            name: "grip",
-            target: Vector3::new(0.95, 0.115, 0.0),
-            frames: 20,
-            grip: Some(true),
-        },
-        Move {
-            name: "lift",
-            target: Vector3::new(0.85, 0.55, 0.0),
-            frames: 70,
-            grip: None,
-        },
-        Move {
-            name: "traverse",
-            target: Vector3::new(0.20, 0.60, 0.60),
-            frames: 110,
-            grip: None,
-        },
-        Move {
-            name: "over the bin",
-            target: bin + Vector3::new(0.0, 0.42, 0.0),
-            frames: 90,
-            grip: None,
-        },
-        Move {
-            name: "release",
-            target: bin + Vector3::new(0.0, 0.42, 0.0),
-            frames: 20,
-            grip: Some(false),
-        },
-        Move {
-            name: "retreat",
-            target: Vector3::new(0.1, 0.85, 0.5),
-            frames: 70,
-            grip: None,
-        },
-        Move {
-            name: "home",
-            target: home,
-            frames: 90,
-            grip: None,
-        },
+        Move { name: "home",          target: home,                                    frames: 60,  grip: None },
+        Move { name: "approach",      target: Vector3::new(0.95, 0.34, 0.0),           frames: 90,  grip: None },
+        Move { name: "descend",       target: Vector3::new(0.95, 0.115, 0.0),          frames: 60,  grip: None },
+        Move { name: "grip",          target: Vector3::new(0.95, 0.115, 0.0),          frames: 20,  grip: Some(true) },
+        Move { name: "lift",          target: Vector3::new(0.85, 0.55, 0.0),           frames: 70,  grip: None },
+        Move { name: "traverse",      target: Vector3::new(0.20, 0.60, 0.60),          frames: 110, grip: None },
+        Move { name: "over the bin",  target: bin + Vector3::new(0.0, 0.42, 0.0),      frames: 90,  grip: None },
+        Move { name: "release",       target: bin + Vector3::new(0.0, 0.42, 0.0),      frames: 20,  grip: Some(false) },
+        Move { name: "retreat",       target: Vector3::new(0.1, 0.85, 0.5),            frames: 70,  grip: None },
+        Move { name: "home",          target: home,                                    frames: 90,  grip: None },
     ];
 
-    println!(
-        "4-axis arm — reach {:.2} m from a shoulder at {:.2} m",
-        LINKS.iter().sum::<f32>(),
-        COLUMN
-    );
+    println!("4-axis arm — reach {:.2} m from a shoulder at {:.2} m", LINKS.iter().sum::<f32>(), COLUMN);
     println!();
     println!(
         "{:<14} {:>7} {:>8} {:>9}  {:<22} gripper",
@@ -405,11 +350,7 @@ fn main() {
         match step.grip {
             Some(true) => {
                 let got = arm.close_gripper(&mut world, payload);
-                assert!(
-                    got,
-                    "the gripper closed on nothing at {:?}",
-                    arm.chain.tip()
-                );
+                assert!(got, "the gripper closed on nothing at {:?}", arm.chain.tip());
             }
             Some(false) => arm.open_gripper(&mut world),
             None => {}
@@ -444,19 +385,10 @@ fn main() {
 
     let landed = world.body(payload).unwrap().translation();
     println!();
-    println!(
-        "Worst reach error over the programme: {:.2} mm",
-        worst_error * 1000.0
-    );
-    println!(
-        "Worst segment stretch:                {:.5} m",
-        worst_stretch
-    );
+    println!("Worst reach error over the programme: {:.2} mm", worst_error * 1000.0);
+    println!("Worst segment stretch:                {:.5} m", worst_stretch);
     println!("Elbow travelled:                      {elbow_min:.0}° to {elbow_max:.0}°");
-    println!(
-        "Payload came to rest at:              ({:.2}, {:.2}, {:.2})",
-        landed.x, landed.y, landed.z
-    );
+    println!("Payload came to rest at:              ({:.2}, {:.2}, {:.2})", landed.x, landed.y, landed.z);
 
     // ---- the checks ---------------------------------------------------------
     //
@@ -477,10 +409,7 @@ fn main() {
         "the elbow reached {elbow_min:.0}°..{elbow_max:.0}°, outside its hinge limits"
     );
     let in_bin = (landed.x - bin.x).abs() < 0.2 && (landed.z - bin.z).abs() < 0.2;
-    assert!(
-        in_bin,
-        "the payload ended at {landed:?}, not in the bin at {bin:?}"
-    );
+    assert!(in_bin, "the payload ended at {landed:?}, not in the bin at {bin:?}");
     assert!(
         landed.y > 0.0 && landed.y < 0.2,
         "the payload is at y = {:.2}, so it is either buried or perched on a wall",

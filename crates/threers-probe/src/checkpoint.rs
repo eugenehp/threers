@@ -65,11 +65,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<(ProbeArch, Vec<Vec<f32>>)> {
 }
 
 pub fn load_bytes(bytes: &[u8]) -> Result<(ProbeArch, Vec<Vec<f32>>)> {
-    ensure!(
-        bytes.len() >= 32,
-        "weights file is {} bytes, too short",
-        bytes.len()
-    );
+    ensure!(bytes.len() >= 32, "weights file is {} bytes, too short", bytes.len());
     let (head, widths, count, mut off) = match &bytes[..8] {
         m if m == MAGIC_V1 => {
             let inputs = u32::from_le_bytes(bytes[8..12].try_into()?) as usize;
@@ -82,11 +78,7 @@ pub fn load_bytes(bytes: &[u8]) -> Result<(ProbeArch, Vec<Vec<f32>>)> {
             (Head::Direct, widths, count, 32usize)
         }
         m if m == MAGIC_V2 => {
-            ensure!(
-                bytes.len() >= 40,
-                "THRSW002 is {} bytes, too short",
-                bytes.len()
-            );
+            ensure!(bytes.len() >= 40, "THRSW002 is {} bytes, too short", bytes.len());
             let inputs = u32::from_le_bytes(bytes[8..12].try_into()?) as usize;
             ensure!(
                 inputs == IN_CHANNELS,
@@ -95,17 +87,14 @@ pub fn load_bytes(bytes: &[u8]) -> Result<(ProbeArch, Vec<Vec<f32>>)> {
             let widths = read_widths(&bytes[12..28])?;
             let code = u32::from_le_bytes(bytes[28..32].try_into()?);
             let radius = u32::from_le_bytes(bytes[32..36].try_into()?);
-            let head = Head::from_code(code, radius, HYBRID_IRRADIANCE_CAP)
-                .ok_or_else(|| anyhow::anyhow!("unknown probe head code {code} radius {radius}"))?;
+            let head = Head::from_code(code, radius, HYBRID_IRRADIANCE_CAP).ok_or_else(|| {
+                anyhow::anyhow!("unknown probe head code {code} radius {radius}")
+            })?;
             let count = u32::from_le_bytes(bytes[36..40].try_into()?) as usize;
             (head, widths, count, 40usize)
         }
         m if m == MAGIC_V3 => {
-            ensure!(
-                bytes.len() >= 44,
-                "THRSW003 is {} bytes, too short",
-                bytes.len()
-            );
+            ensure!(bytes.len() >= 44, "THRSW003 is {} bytes, too short", bytes.len());
             let inputs = u32::from_le_bytes(bytes[8..12].try_into()?) as usize;
             ensure!(
                 inputs == IN_CHANNELS,
@@ -146,11 +135,7 @@ pub fn load_bytes(bytes: &[u8]) -> Result<(ProbeArch, Vec<Vec<f32>>)> {
             spec.shape,
             spec.elems()
         );
-        ensure!(
-            off + elems * 4 <= bytes.len(),
-            "truncated values at {}",
-            spec.name
-        );
+        ensure!(off + elems * 4 <= bytes.len(), "truncated values at {}", spec.name);
         let mut values = Vec::with_capacity(elems);
         for _ in 0..elems {
             values.push(f32::from_le_bytes(bytes[off..off + 4].try_into()?));
@@ -185,8 +170,10 @@ mod tests {
             ProbeArch::hops(),
         ] {
             let params = init_params(&net, 42);
-            let path =
-                std::env::temp_dir().join(format!("threers-probe-weights-{:?}.bin", net.head()));
+            let path = std::env::temp_dir().join(format!(
+                "threers-probe-weights-{:?}.bin",
+                net.head()
+            ));
             save(&net, &params, &path).unwrap();
             let (loaded, values) = load(&path).unwrap();
             let _ = std::fs::remove_file(&path);

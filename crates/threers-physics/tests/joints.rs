@@ -81,10 +81,7 @@ fn all_axes_free_constrains_nothing() {
     settle(&mut world, 60);
     let y = world.body(load).unwrap().translation().y;
     // One second of free fall from 1.5 is about -3.4.
-    assert!(
-        y < -2.0,
-        "an all-free joint still held the body up at y = {y}"
-    );
+    assert!(y < -2.0, "an all-free joint still held the body up at y = {y}");
 }
 
 #[test]
@@ -242,25 +239,16 @@ fn angles_are_measured_from_the_pose_the_joint_was_built_in() {
             .can_sleep(false),
     );
     world.add_joint(
-        Joint::generic(
-            world.bodies(),
-            a,
-            b,
-            Vector3::new(0.0, 0.25, 0.0),
-            Vector3::new(0.0, -0.25, 0.0),
-        )
-        .unwrap()
-        // A limit of exactly zero: if the rest angle were misread as 1 rad,
-        // the joint would immediately snap the body round to correct it.
-        .with_angular_dof(1, Dof::limited(0.0, 0.0)),
+        Joint::generic(world.bodies(), a, b, Vector3::new(0.0, 0.25, 0.0), Vector3::new(0.0, -0.25, 0.0))
+            .unwrap()
+            // A limit of exactly zero: if the rest angle were misread as 1 rad,
+            // the joint would immediately snap the body round to correct it.
+            .with_angular_dof(1, Dof::limited(0.0, 0.0)),
     );
 
     settle(&mut world, 120);
     let spin = world.body(b).unwrap().angular_velocity.length();
-    assert!(
-        spin < 0.05,
-        "the joint fought a rest pose it should have adopted: {spin}"
-    );
+    assert!(spin < 0.05, "the joint fought a rest pose it should have adopted: {spin}");
 }
 
 // ---- softness -------------------------------------------------------------
@@ -502,3 +490,4 @@ fn a_soft_generic_joint_gives_on_its_locked_axes() {
         "expected about {expected:.4} of sag, got {sag:.4}"
     );
 }
+

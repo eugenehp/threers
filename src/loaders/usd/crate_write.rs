@@ -20,7 +20,7 @@
 
 use std::collections::HashMap;
 
-use super::ints::{encodable_u64, encode_u32, encode_u64, write_u32_array};
+use super::ints::{encode_u32, encode_u64, encodable_u64, write_u32_array};
 use super::lz4;
 use super::parse::{Specifier, UsdLayer, UsdPrim, UsdProperty, UsdVariantSet};
 use super::value::UsdValue;
@@ -347,10 +347,7 @@ impl Writer {
         if path.is_empty() {
             return self.empty_path_slot;
         }
-        self.slots
-            .get(path)
-            .copied()
-            .unwrap_or(self.empty_path_slot)
+        self.slots.get(path).copied().unwrap_or(self.empty_path_slot)
     }
 
     /// Note that the file needs at least this version to be read.
@@ -756,8 +753,7 @@ fn write_property_spec(w: &mut Writer, property: &UsdProperty, prim_path: &str) 
     }
 
     if property.relationship {
-        if let Some(rep) =
-            path_list_op_with(w, &property.value, list_op_header(&property.qualifier))
+        if let Some(rep) = path_list_op_with(w, &property.value, list_op_header(&property.qualifier))
         {
             members.push(w.field("targetPaths", rep) as i32);
         }
@@ -922,18 +918,9 @@ fn combined_field(
             sublists(w, kind::REFERENCE_LIST_OP, parts),
         )]),
         "payload" => Some(vec![("payload", sublists(w, kind::PAYLOAD_LIST_OP, parts))]),
-        "inherits" => Some(vec![(
-            "inheritPaths",
-            sublists(w, kind::PATH_LIST_OP, parts),
-        )]),
-        "specializes" => Some(vec![(
-            "specializes",
-            sublists(w, kind::PATH_LIST_OP, parts),
-        )]),
-        "apiSchemas" => Some(vec![(
-            "apiSchemas",
-            sublists(w, kind::TOKEN_LIST_OP, parts),
-        )]),
+        "inherits" => Some(vec![("inheritPaths", sublists(w, kind::PATH_LIST_OP, parts))]),
+        "specializes" => Some(vec![("specializes", sublists(w, kind::PATH_LIST_OP, parts))]),
+        "apiSchemas" => Some(vec![("apiSchemas", sublists(w, kind::TOKEN_LIST_OP, parts))]),
         "variantSets" => Some(vec![(
             "variantSetNames",
             sublists(w, kind::STRING_LIST_OP, parts),
@@ -1029,6 +1016,7 @@ fn sublists(w: &mut Writer, kind: u8, parts: &[(u8, UsdValue)]) -> u64 {
     referenced(kind, w.intern(bytes), false)
 }
 
+
 /// The `(offset, scale)` that accompanies each sublayer, unshifted.
 fn layer_offsets(w: &mut Writer, offsets: &[(f64, f64)]) -> u64 {
     let mut bytes = (offsets.len() as u64).to_le_bytes().to_vec();
@@ -1038,6 +1026,8 @@ fn layer_offsets(w: &mut Writer, offsets: &[(f64, f64)]) -> u64 {
     }
     referenced(kind::LAYER_OFFSET_VECTOR, w.intern(bytes), false)
 }
+
+
 
 /// A dictionary, as a count and one blob per entry.
 ///
@@ -1081,6 +1071,8 @@ fn as_items(value: &UsdValue) -> Vec<UsdValue> {
     }
 }
 
+
+
 /// `variants`: which choice of each set is selected.
 fn variant_selection(w: &mut Writer, value: &UsdValue) -> Option<u64> {
     let UsdValue::Dict(entries) = value else {
@@ -1091,11 +1083,7 @@ fn variant_selection(w: &mut Writer, value: &UsdValue) -> Option<u64> {
         bytes.extend_from_slice(&w.string(set).to_le_bytes());
         bytes.extend_from_slice(&w.string(choice.as_str().unwrap_or_default()).to_le_bytes());
     }
-    Some(referenced(
-        kind::VARIANT_SELECTION_MAP,
-        w.intern(bytes),
-        false,
-    ))
+    Some(referenced(kind::VARIANT_SELECTION_MAP, w.intern(bytes), false))
 }
 
 /// `subLayers`: a plain list of layer names, and how many there were.
@@ -1111,10 +1099,7 @@ fn string_vector(w: &mut Writer, value: &UsdValue) -> (u64, usize) {
         bytes.extend_from_slice(&w.string(name).to_le_bytes());
     }
     let count = names.len();
-    (
-        referenced(kind::STRING_VECTOR, w.intern(bytes), false),
-        count,
-    )
+    (referenced(kind::STRING_VECTOR, w.intern(bytes), false), count)
 }
 
 fn name_of(value: &UsdValue) -> Option<String> {
@@ -1586,10 +1571,7 @@ fn assemble(w: Writer) -> Vec<u8> {
     let mut body = (fields.len() as u64).to_le_bytes().to_vec();
     write_u32_array(
         &mut body,
-        &fields
-            .iter()
-            .map(|(name, _)| *name as i32)
-            .collect::<Vec<_>>(),
+        &fields.iter().map(|(name, _)| *name as i32).collect::<Vec<_>>(),
     );
     let mut reps = Vec::with_capacity(fields.len() * 8);
     for (_, rep) in &fields {
@@ -1619,18 +1601,9 @@ fn assemble(w: Writer) -> Vec<u8> {
 
     // SPECS.
     let mut body = (specs.len() as u64).to_le_bytes().to_vec();
-    write_u32_array(
-        &mut body,
-        &specs.iter().map(|(p, _, _)| *p as i32).collect::<Vec<_>>(),
-    );
-    write_u32_array(
-        &mut body,
-        &specs.iter().map(|(_, s, _)| *s as i32).collect::<Vec<_>>(),
-    );
-    write_u32_array(
-        &mut body,
-        &specs.iter().map(|(_, _, t)| *t as i32).collect::<Vec<_>>(),
-    );
+    write_u32_array(&mut body, &specs.iter().map(|(p, _, _)| *p as i32).collect::<Vec<_>>());
+    write_u32_array(&mut body, &specs.iter().map(|(_, s, _)| *s as i32).collect::<Vec<_>>());
+    write_u32_array(&mut body, &specs.iter().map(|(_, _, t)| *t as i32).collect::<Vec<_>>());
     section(&mut out, "SPECS", body);
 
     // The table of contents, and the pointer to it.
@@ -1654,8 +1627,8 @@ fn assemble(w: Writer) -> Vec<u8> {
 
 #[cfg(test)]
 mod half_tests {
-    use super::super::crate_read;
     use super::*;
+    use super::super::crate_read;
 
     /// Half conversion has to round, not truncate. Truncating biases every
     /// value toward zero, and the error is visible in the first two decimals:
@@ -1703,10 +1676,7 @@ mod half_tests {
         // bottom of a binade is 2^-11. Truncation would allow twice that, so
         // this bound is what tells the two apart.
         assert!(worst < 0.000489, "worst relative error {worst}");
-        assert!(
-            worst > 0.0001,
-            "suspiciously good — is the sweep hitting anything?"
-        );
+        assert!(worst > 0.0001, "suspiciously good — is the sweep hitting anything?");
     }
 
     /// Rounding up out of the top of the mantissa carries into the exponent.
@@ -1722,9 +1692,9 @@ mod half_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::super::value::UsdValue;
-    use super::super::{crate_read, parse::parse, write::layer_to_usda};
     use super::*;
+    use super::super::{crate_read, parse::parse, write::layer_to_usda};
+    use super::super::value::UsdValue;
 
     /// Write a layer as a crate, read it back, and require it to mean the
     /// same thing.
@@ -1775,10 +1745,7 @@ mod tests {
                 "properties of {path}"
             );
             assert_eq!(
-                want.variant_sets
-                    .iter()
-                    .map(|s| &s.name)
-                    .collect::<Vec<_>>(),
+                want.variant_sets.iter().map(|s| &s.name).collect::<Vec<_>>(),
                 got.variant_sets.iter().map(|s| &s.name).collect::<Vec<_>>(),
                 "variant sets of {path}"
             );
@@ -1883,35 +1850,15 @@ def Xform "Root"
 
         let refs = a.meta("references").expect("references").references();
         assert_eq!(refs.len(), 3);
-        assert_eq!(
-            (refs[0].asset.as_str(), refs[0].prim_path.as_str()),
-            ("asset.usda", "/Chair")
-        );
-        assert_eq!(
-            (refs[1].asset.as_str(), refs[1].prim_path.as_str()),
-            ("other.usda", "")
-        );
-        assert_eq!(
-            (refs[2].asset.as_str(), refs[2].prim_path.as_str()),
-            ("", "/A/Local")
-        );
+        assert_eq!((refs[0].asset.as_str(), refs[0].prim_path.as_str()), ("asset.usda", "/Chair"));
+        assert_eq!((refs[1].asset.as_str(), refs[1].prim_path.as_str()), ("other.usda", ""));
+        assert_eq!((refs[2].asset.as_str(), refs[2].prim_path.as_str()), ("", "/A/Local"));
 
         let payload = a.meta("payload").expect("payload").references();
-        assert_eq!(
-            (payload[0].asset.as_str(), payload[0].prim_path.as_str()),
-            ("heavy.usda", "/Deep")
-        );
-        assert_eq!(
-            a.meta("specializes").unwrap().references()[0].prim_path,
-            "/A/Base"
-        );
+        assert_eq!((payload[0].asset.as_str(), payload[0].prim_path.as_str()), ("heavy.usda", "/Deep"));
+        assert_eq!(a.meta("specializes").unwrap().references()[0].prim_path, "/A/Base");
 
-        let b = layer
-            .prim_at("/B")
-            .unwrap()
-            .meta("references")
-            .unwrap()
-            .references();
+        let b = layer.prim_at("/B").unwrap().meta("references").unwrap().references();
         assert_eq!((b[0].offset, b[0].scale), (10.0, 2.0), "the layer offset");
     }
 
@@ -1930,17 +1877,10 @@ def Xform "Root"
         names.sort();
         assert_eq!(names, vec!["oak", "steel"]);
         assert_eq!(
-            set.get("steel")
-                .unwrap()
-                .value("primvars:displayColor")
-                .unwrap()
-                .flat_f32(),
+            set.get("steel").unwrap().value("primvars:displayColor").unwrap().flat_f32(),
             vec![0.7, 0.7, 0.75]
         );
-        assert_eq!(
-            chair.meta("inherits").unwrap().references()[0].prim_path,
-            "/Furniture"
-        );
+        assert_eq!(chair.meta("inherits").unwrap().references()[0].prim_path, "/Furniture");
     }
 
     /// And the whole pipeline still composes after a trip through the binary
@@ -1960,14 +1900,9 @@ def Xform "Root"
         let root = crate_read::read(&shot).unwrap();
         let composed = compose(&root, "shot.usda", &binary, &ComposeOptions::default()).unwrap();
 
-        let chair = composed
-            .prim_at("/Room/Chair1")
-            .expect("the chair composed");
+        let chair = composed.prim_at("/Room/Chair1").expect("the chair composed");
         assert_eq!(chair.type_name, "Xform");
-        assert_eq!(
-            chair.value("xformOp:translate").unwrap().flat_f32(),
-            vec![9.0, 1.0, 0.0]
-        );
+        assert_eq!(chair.value("xformOp:translate").unwrap().flat_f32(), vec![9.0, 1.0, 0.0]);
         assert_eq!(chair.value("purpose").unwrap().as_str(), Some("render"));
         assert_eq!(
             chair.value("primvars:displayColor").unwrap().flat_f32(),
@@ -2076,11 +2011,7 @@ def Xform "Root"
         };
         for (name, type_name, value) in [
             ("points", "point3f[]", UsdValue::Array(points.clone())),
-            (
-                "faceVertexIndices",
-                "int[]",
-                UsdValue::Array(indices.clone()),
-            ),
+            ("faceVertexIndices", "int[]", UsdValue::Array(indices.clone())),
         ] {
             prim.properties.push(UsdProperty {
                 qualifier: String::new(),
@@ -2157,12 +2088,7 @@ def Xform "Root"
         let layer = round_trip(include_str!("testdata/apple.usda"));
 
         assert_eq!(
-            layer
-                .prim_at("/Root")
-                .unwrap()
-                .value("preliminary:anchoring:type")
-                .unwrap()
-                .as_str(),
+            layer.prim_at("/Root").unwrap().value("preliminary:anchoring:type").unwrap().as_str(),
             Some("plane")
         );
         assert_eq!(
@@ -2187,21 +2113,11 @@ def Xform "Root"
             Some("/Root/Tap/Trigger")
         );
         assert_eq!(
-            layer
-                .prim_at("/Root/Tap/Trigger")
-                .unwrap()
-                .value("info:id")
-                .unwrap()
-                .as_str(),
+            layer.prim_at("/Root/Tap/Trigger").unwrap().value("info:id").unwrap().as_str(),
             Some("TapGesture")
         );
         assert_eq!(
-            layer
-                .prim_at("/Root/Label")
-                .unwrap()
-                .value("content")
-                .unwrap()
-                .as_str(),
+            layer.prim_at("/Root/Label").unwrap().value("content").unwrap().as_str(),
             Some("hello")
         );
     }
@@ -2211,21 +2127,12 @@ def Xform "Root"
     fn apples_ar_schemas_read_from_openusds_own_crate() {
         let theirs = crate_read::read(include_bytes!("testdata/apple.usdc")).expect("reads");
         assert_eq!(
-            theirs
-                .prim_at("/Root")
-                .unwrap()
-                .meta("apiSchemas")
-                .map(UsdValue::flat_tokens),
+            theirs.prim_at("/Root").unwrap().meta("apiSchemas").map(UsdValue::flat_tokens),
             Some(vec!["Preliminary_AnchoringAPI"]),
             "apiSchemas was lost reading OpenUSD's own file"
         );
         assert_eq!(
-            theirs
-                .prim_at("/Root/Label")
-                .unwrap()
-                .value("height")
-                .unwrap()
-                .flat_f32(),
+            theirs.prim_at("/Root/Label").unwrap().value("height").unwrap().flat_f32(),
             vec![0.1]
         );
     }
@@ -2238,11 +2145,7 @@ def Xform "Root"
     #[test]
     fn dictionaries_survive() {
         let layer = round_trip(include_str!("testdata/clips/stage.usda"));
-        let UsdValue::Dict(outer) = layer
-            .prim_at("/Shot")
-            .unwrap()
-            .meta("clips")
-            .expect("clips")
+        let UsdValue::Dict(outer) = layer.prim_at("/Shot").unwrap().meta("clips").expect("clips")
         else {
             panic!("expected a dictionary");
         };
@@ -2296,18 +2199,8 @@ def Xform "Root"
 
         // A bare string is `comment`; `documentation` is a different field,
         // and a layer may carry both.
-        assert!(layer
-            .meta("comment")
-            .unwrap()
-            .as_str()
-            .unwrap()
-            .contains("doc comment"));
-        assert!(layer
-            .meta("documentation")
-            .unwrap()
-            .as_str()
-            .unwrap()
-            .contains("triple-quoted"));
+        assert!(layer.meta("comment").unwrap().as_str().unwrap().contains("doc comment"));
+        assert!(layer.meta("documentation").unwrap().as_str().unwrap().contains("triple-quoted"));
 
         // A sublayer's time offset is part of the sublayer.
         let sub = layer.meta("subLayers").unwrap().references();
@@ -2319,17 +2212,8 @@ def Xform "Root"
             root.meta_exact("add references").unwrap().references()[0].prim_path,
             "/Thing"
         );
-        assert!(
-            root.meta_exact("delete references").is_some(),
-            "{:?}",
-            root.metadata
-        );
-        assert_eq!(
-            root.meta_exact("reorder nameChildren")
-                .unwrap()
-                .flat_tokens(),
-            vec!["B", "A"]
-        );
+        assert!(root.meta_exact("delete references").is_some(), "{:?}", root.metadata);
+        assert_eq!(root.meta_exact("reorder nameChildren").unwrap().flat_tokens(), vec!["B", "A"]);
 
         // `custom` is kept, and so are the typed values inside a dictionary.
         let attr = root.property("customAttr").expect("customAttr");
@@ -2338,9 +2222,7 @@ def Xform "Root"
             panic!("a dictionary");
         };
         let nested = custom_data.iter().find(|(k, _)| k == "nested").unwrap();
-        let UsdValue::Dict(inner) = &nested.1 else {
-            panic!("nested")
-        };
+        let UsdValue::Dict(inner) = &nested.1 else { panic!("nested") };
         assert!(
             matches!(inner[0].1, UsdValue::Token(_)),
             "a `token` declaration makes a token, not a string: {:?}",
@@ -2355,27 +2237,14 @@ def Xform "Root"
             ("listRel4", "reorder"),
         ] {
             assert_eq!(
-                root.property(name)
-                    .unwrap_or_else(|| panic!("{name}"))
-                    .qualifier,
+                root.property(name).unwrap_or_else(|| panic!("{name}")).qualifier,
                 qualifier
             );
         }
 
         // And the variant, with its body and its child.
-        let set = root
-            .variant_sets
-            .iter()
-            .find(|s| s.name == "style")
-            .expect("style");
-        assert_eq!(
-            set.get("plain")
-                .unwrap()
-                .value("inVariant")
-                .unwrap()
-                .flat_f32(),
-            vec![1.0]
-        );
+        let set = root.variant_sets.iter().find(|s| s.name == "style").expect("style");
+        assert_eq!(set.get("plain").unwrap().value("inVariant").unwrap().flat_f32(), vec![1.0]);
         assert_eq!(set.get("plain").unwrap().children[0].name, "OnlyInPlain");
     }
 
@@ -2440,12 +2309,7 @@ def Xform "Root"
     fn a_time_code_is_not_inlined() {
         let layer = round_trip(include_str!("testdata/block/strong.usda"));
         assert_eq!(
-            layer
-                .prim_at("/Root")
-                .unwrap()
-                .value("when")
-                .unwrap()
-                .flat_f32(),
+            layer.prim_at("/Root").unwrap().value("when").unwrap().flat_f32(),
             vec![24.0]
         );
     }
@@ -2464,11 +2328,7 @@ def Material "Mat"
 }
 "#,
         );
-        let binding = layer
-            .prim_at("/M")
-            .unwrap()
-            .property("material:binding")
-            .unwrap();
+        let binding = layer.prim_at("/M").unwrap().property("material:binding").unwrap();
         assert!(binding.relationship);
         assert_eq!(binding.value.as_str(), Some("/Mat"));
     }
@@ -2485,12 +2345,7 @@ def Mesh "M"
 "#,
         );
         assert_eq!(
-            layer
-                .prim_at("/M")
-                .unwrap()
-                .value("material:binding")
-                .unwrap()
-                .as_str(),
+            layer.prim_at("/M").unwrap().value("material:binding").unwrap().as_str(),
             Some("/Nowhere/At/All")
         );
     }
@@ -2546,8 +2401,8 @@ def Mesh "M"
 
 #[cfg(test)]
 mod external {
-    use super::super::parse::parse;
     use super::*;
+    use super::super::parse::parse;
 
     /// Write crate files to disk so OpenUSD's own tools can be pointed at
     /// them. Ignored by default: the assertion that matters is made by

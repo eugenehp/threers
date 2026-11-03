@@ -36,23 +36,13 @@ fn rgba(w: u32, h: u32, t: usize) -> Vec<u8> {
 fn streamed_export_is_playable() {
     let (w, h, n) = (96u32, 64u32, 5usize);
     let out = tmp("ok.mp4");
-    let opts = VideoOptions::new(out.clone())
-        .fps(24)
-        .codec(VideoCodec::H264);
+    let opts = VideoOptions::new(out.clone()).fps(24).codec(VideoCodec::H264);
     export_video(w, h, n, &opts, |i| rgba(w, h, i)).expect("export");
 
     let probe = Command::new("ffprobe")
-        .args([
-            "-v",
-            "error",
-            "-select_streams",
-            "v:0",
-            "-count_frames",
-            "-show_entries",
-            "stream=codec_name,width,height,nb_read_frames",
-            "-of",
-            "csv=p=0",
-        ])
+        .args(["-v", "error", "-select_streams", "v:0", "-count_frames",
+               "-show_entries", "stream=codec_name,width,height,nb_read_frames",
+               "-of", "csv=p=0"])
         .arg(&out)
         .output();
     let size = std::fs::metadata(&out).map(|m| m.len()).unwrap_or(0);
@@ -71,9 +61,7 @@ fn streamed_export_is_playable() {
 fn a_wrong_sized_frame_errors_and_leaves_no_file() {
     let (w, h, n) = (96u32, 64u32, 4usize);
     let out = tmp("bad.mp4");
-    let opts = VideoOptions::new(out.clone())
-        .fps(24)
-        .codec(VideoCodec::H264);
+    let opts = VideoOptions::new(out.clone()).fps(24).codec(VideoCodec::H264);
 
     // Third frame is short. The encoder only discovers this mid-stream, after
     // it has already begun writing.
@@ -86,11 +74,7 @@ fn a_wrong_sized_frame_errors_and_leaves_no_file() {
     });
 
     match r {
-        Err(VideoError::FrameSize {
-            frame,
-            expected,
-            got,
-        }) => {
+        Err(VideoError::FrameSize { frame, expected, got }) => {
             assert_eq!(frame, 2);
             assert_eq!(expected, (w * h * 4) as usize);
             assert_eq!(got, 7);

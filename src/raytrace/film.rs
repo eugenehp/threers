@@ -28,9 +28,7 @@ pub(crate) fn pixel_mean_luminance(p: &Pixel) -> f64 {
         return 0.0;
     }
     let inv = 1.0 / p.samples as f64;
-    LUM_R * p.color[0] as f64 * inv
-        + LUM_G * p.color[1] as f64 * inv
-        + LUM_B * p.color[2] as f64 * inv
+    LUM_R * p.color[0] as f64 * inv + LUM_G * p.color[1] as f64 * inv + LUM_B * p.color[2] as f64 * inv
 }
 
 /// Variance of the pixel's mean luminance estimate. `INFINITY` when unknown.
@@ -80,8 +78,9 @@ pub(crate) fn m2_from_sum_sq(color: [f32; 3], samples: u32, sum_sq: f32) -> f32 
         return f32::INFINITY;
     }
     let n = samples as f64;
-    let mean =
-        LUM_R * color[0] as f64 / n + LUM_G * color[1] as f64 / n + LUM_B * color[2] as f64 / n;
+    let mean = LUM_R * color[0] as f64 / n
+        + LUM_G * color[1] as f64 / n
+        + LUM_B * color[2] as f64 / n;
     let m2 = sum_sq as f64 - n * mean * mean;
     if !m2.is_finite() {
         return f32::INFINITY;
@@ -415,7 +414,11 @@ impl Film {
             } else {
                 1.0
             };
-            let v = Vector3::new(p.normal[0] * inv, p.normal[1] * inv, p.normal[2] * inv);
+            let v = Vector3::new(
+                p.normal[0] * inv,
+                p.normal[1] * inv,
+                p.normal[2] * inv,
+            );
             let v = if v.length_sq() > 1e-12 {
                 v.normalize()
             } else {
@@ -609,7 +612,10 @@ mod tests {
         // One absurd path — should not dominate M₂.
         film.pixels_mut()[0].add(Vector3::new(1e4, 1e4, 1e4), 1.0);
         let v = film.resolve_variance()[0];
-        assert!(v.is_finite() && v < 0.5, "firefly inflated variance to {v}");
+        assert!(
+            v.is_finite() && v < 0.5,
+            "firefly inflated variance to {v}"
+        );
     }
 
     /// Adaptive stop must not get stuck open because one capped firefly landed.
@@ -689,7 +695,10 @@ mod tests {
         a.merge(&b);
         let va = a.resolve_variance()[0];
         let vb = both.resolve_variance()[0];
-        assert!((va - vb).abs() < 1e-5, "merged {va} vs sequential {vb}");
+        assert!(
+            (va - vb).abs() < 1e-5,
+            "merged {va} vs sequential {vb}"
+        );
     }
 
     #[test]

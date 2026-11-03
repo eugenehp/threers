@@ -120,7 +120,9 @@ impl Critter {
     /// reads as a wandering path rather than as an ellipse.
     fn radius(&self, a: f32) -> f32 {
         let s = self.seed as f32 * 0.001;
-        self.r * (1.0 + self.wander * ((a * 2.0 + s).sin() * 0.6 + (a * 3.0 + s * 2.7).sin() * 0.4))
+        self.r
+            * (1.0
+                + self.wander * ((a * 2.0 + s).sin() * 0.6 + (a * 3.0 + s * 2.7).sin() * 0.4))
     }
 
     /// `(x, y, z, yaw, roll)` at time `t`.
@@ -132,7 +134,10 @@ impl Critter {
         // harmonics analytically saves nothing here and is easy to get wrong.
         let da = 0.02;
         let rb = self.radius(a + da);
-        let (x2, z2) = (self.hx + rb * (a + da).cos(), self.hz + rb * (a + da).sin());
+        let (x2, z2) = (
+            self.hx + rb * (a + da).cos(),
+            self.hz + rb * (a + da).sin(),
+        );
         let yaw = (x2 - x).atan2(z2 - z);
         let y = self.y + self.climb * (a * 1.37 + self.seed as f32 * 0.01).sin();
         // Bank into the turn. Curvature is roughly constant round the loop, so
@@ -230,15 +235,7 @@ fn bird_shape(beat: f32, gull: bool) -> BufferGeometry {
     };
     // Body along +Z, which is the heading `write_swarm` rotates to.
     m.add_ellipsoid(Vector3::new(0.0, 0.0, 0.0), 0.075, 0.075, 0.24, 4, 7, body);
-    m.add_ellipsoid(
-        Vector3::new(0.0, 0.03, 0.20),
-        0.055,
-        0.055,
-        0.07,
-        3,
-        6,
-        body,
-    );
+    m.add_ellipsoid(Vector3::new(0.0, 0.03, 0.20), 0.055, 0.055, 0.07, 3, 6, body);
     // Tail.
     m.add_yaw_box(
         Vector3::new(0.0, 0.0, -0.30),
@@ -385,15 +382,7 @@ pub(crate) fn duck_geometry(drake: bool) -> BufferGeometry {
         head,
         false,
     );
-    m.add_ellipsoid(
-        Vector3::new(0.0, 0.22, 0.16),
-        0.042,
-        0.042,
-        0.052,
-        3,
-        6,
-        head,
-    );
+    m.add_ellipsoid(Vector3::new(0.0, 0.22, 0.16), 0.042, 0.042, 0.052, 3, 6, head);
     m.add_limb(
         Vector3::new(0.0, 0.215, 0.19),
         Vector3::new(0.0, 0.205, 0.255),
@@ -438,15 +427,7 @@ pub(crate) fn dog_geometry(swing: f32, coat: Color) -> BufferGeometry {
         coat,
         false,
     );
-    m.add_ellipsoid(
-        Vector3::new(0.0, 0.46, 0.28),
-        0.055,
-        0.055,
-        0.075,
-        3,
-        6,
-        coat,
-    );
+    m.add_ellipsoid(Vector3::new(0.0, 0.46, 0.28), 0.055, 0.055, 0.075, 3, 6, coat);
     m.add_limb(
         Vector3::new(0.0, 0.45, 0.33),
         Vector3::new(0.0, 0.42, 0.40),
@@ -542,11 +523,7 @@ pub(crate) fn squirrel_geometry(sitting: bool) -> BufferGeometry {
         // Forelegs, tucked when sitting.
         m.add_limb(
             Vector3::new(s * 0.026, by, bz + 0.055),
-            Vector3::new(
-                s * 0.026,
-                by - mix(0.055, 0.085, lean),
-                bz + mix(0.045, 0.095, lean),
-            ),
+            Vector3::new(s * 0.026, by - mix(0.055, 0.085, lean), bz + mix(0.045, 0.095, lean)),
             0.013,
             0.010,
             4,
@@ -666,15 +643,7 @@ pub(crate) fn fox_geometry(swing: f32) -> BufferGeometry {
         coat,
         false,
     );
-    m.add_ellipsoid(
-        Vector3::new(0.0, 0.38, 0.31),
-        0.046,
-        0.044,
-        0.060,
-        3,
-        6,
-        coat,
-    );
+    m.add_ellipsoid(Vector3::new(0.0, 0.38, 0.31), 0.046, 0.044, 0.060, 3, 6, coat);
     // A long straight muzzle, which is most of the difference from a dog.
     m.add_limb(
         Vector3::new(0.0, 0.375, 0.35),
@@ -800,16 +769,8 @@ pub(crate) fn butterfly_geometry(open: f32, tint: Color) -> BufferGeometry {
         // `open` swings the wings from folded overhead to flat out.
         let (wx, wy) = (0.075 * open, 0.075 * (1.0 - open * 0.85));
         for (a, b, c) in [
-            (
-                [0.0, 0.0, 0.02],
-                [s * wx, wy, 0.055],
-                [s * wx * 0.9, wy * 0.9, -0.01],
-            ),
-            (
-                [0.0, 0.0, -0.01],
-                [s * wx * 0.9, wy * 0.9, -0.01],
-                [s * wx * 0.6, wy * 0.7, -0.05],
-            ),
+            ([0.0, 0.0, 0.02], [s * wx, wy, 0.055], [s * wx * 0.9, wy * 0.9, -0.01]),
+            ([0.0, 0.0, -0.01], [s * wx * 0.9, wy * 0.9, -0.01], [s * wx * 0.6, wy * 0.7, -0.05]),
         ] {
             m.tri(a_b_c(a, b, c), [0.0, 1.0, 0.0], [[0.5, 0.5]; 3], [tint; 3]);
             m.tri(a_b_c(a, c, b), [0.0, -1.0, 0.0], [[0.5, 0.5]; 3], [tint; 3]);
@@ -826,12 +787,7 @@ pub(crate) fn butterfly_geometry(open: f32, tint: Color) -> BufferGeometry {
 /// and never moves, so it costs one transform and nothing per frame.
 ///
 /// `lean` runs 0 (upright, hands on knees) to 1 (slumped back, legs out).
-pub(crate) fn seated_geometry(
-    lean: f32,
-    coat: Color,
-    skin: Color,
-    trouser: Color,
-) -> BufferGeometry {
+pub(crate) fn seated_geometry(lean: f32, coat: Color, skin: Color, trouser: Color) -> BufferGeometry {
     let mut m = MeshBuilder::default();
     let seat = 0.46f32;
     let back = -0.10 - lean * 0.13;
@@ -908,12 +864,7 @@ pub(crate) fn seated_geometry(
 /// Not a walker with the animation paused: weight on one leg, the other
 /// relaxed, and the hands somewhere. A figure with both feet square and arms
 /// hanging reads as a mannequin, which is worse than a walker.
-pub(crate) fn standing_geometry(
-    pose: usize,
-    coat: Color,
-    skin: Color,
-    trouser: Color,
-) -> BufferGeometry {
+pub(crate) fn standing_geometry(pose: usize, coat: Color, skin: Color, trouser: Color) -> BufferGeometry {
     let mut m = MeshBuilder::default();
     let lean = if pose == 0 { 0.05f32 } else { -0.05 };
     let hip = Vector3::new(lean * 0.10, 0.92, 0.0);
@@ -1044,15 +995,7 @@ pub(crate) fn rat_geometry(scurrying: bool) -> BufferGeometry {
             0.014,
             -0.080 - t * 0.150,
         );
-        m.add_limb(
-            prev,
-            p,
-            0.011 - t * 0.005,
-            0.010 - t * 0.005,
-            4,
-            bare,
-            false,
-        );
+        m.add_limb(prev, p, 0.011 - t * 0.005, 0.010 - t * 0.005, 4, bare, false);
         prev = p;
     }
     m.build()
@@ -1066,15 +1009,7 @@ pub(crate) fn dragonfly_geometry(beat: f32, tint: Color) -> BufferGeometry {
     let mut m = MeshBuilder::default();
     let wing = Color::from_hex(0xcfe0ea);
     // Thorax, then a long tapering abdomen behind it.
-    m.add_ellipsoid(
-        Vector3::new(0.0, 0.0, 0.02),
-        0.018,
-        0.018,
-        0.030,
-        3,
-        5,
-        tint,
-    );
+    m.add_ellipsoid(Vector3::new(0.0, 0.0, 0.02), 0.018, 0.018, 0.030, 3, 5, tint);
     m.add_limb(
         Vector3::new(0.0, 0.0, -0.005),
         Vector3::new(0.0, 0.004, -0.115),
@@ -1098,11 +1033,7 @@ pub(crate) fn dragonfly_geometry(beat: f32, tint: Color) -> BufferGeometry {
         for (z0, len, lift) in [(0.03f32, 0.10f32, 1.0f32), (-0.01, 0.095, -1.0)] {
             let y = 0.012 * beat * lift;
             {
-                let (a, b2, c) = (
-                    [0.0, 0.004, z0],
-                    [s * len, y, z0 + 0.028],
-                    [s * len * 0.9, y, z0 - 0.030],
-                );
+                let (a, b2, c) = ([0.0, 0.004, z0], [s * len, y, z0 + 0.028], [s * len * 0.9, y, z0 - 0.030]);
                 m.tri([a, b2, c], [0.0, 1.0, 0.0], [[0.5, 0.5]; 3], [wing; 3]);
                 m.tri([a, c, b2], [0.0, -1.0, 0.0], [[0.5, 0.5]; 3], [wing; 3]);
             }
@@ -1223,10 +1154,10 @@ pub(crate) fn plane_geometry(strobe: bool) -> BufferGeometry {
         // Tailplane.
         {
             let (a, b, c) = (
-                [sx * 1.2, 0.4, -12.2],
-                [sx * 6.4, 0.9, -16.2],
-                [sx * 1.2, 0.4, -15.8],
-            );
+            [sx * 1.2, 0.4, -12.2],
+            [sx * 6.4, 0.9, -16.2],
+            [sx * 1.2, 0.4, -15.8],
+        );
             m.tri([a, b, c], [0.0, 1.0, 0.0], [[0.5, 0.5]; 3], [hull; 3]);
             m.tri([a, c, b], [0.0, -1.0, 0.0], [[0.5, 0.5]; 3], [hull; 3]);
         }
@@ -1247,7 +1178,11 @@ pub(crate) fn plane_geometry(strobe: bool) -> BufferGeometry {
     }
     // Fin.
     {
-        let (a, b, c) = ([0.0, 0.7, -11.5], [0.0, 6.4, -16.6], [0.0, 0.7, -16.2]);
+        let (a, b, c) = (
+        [0.0, 0.7, -11.5],
+        [0.0, 6.4, -16.6],
+        [0.0, 0.7, -16.2],
+    );
         m.tri([a, b, c], [1.0, 0.0, 0.0], [[0.5, 0.5]; 3], [belly; 3]);
         m.tri([a, c, b], [-1.0, 0.0, 0.0], [[0.5, 0.5]; 3], [belly; 3]);
     }
@@ -1297,7 +1232,11 @@ pub(crate) fn heli_geometry(blade: f32) -> BufferGeometry {
     );
     // Fin and tail rotor.
     {
-        let (a, b, c) = ([0.0, 0.75, -8.6], [0.0, 3.0, -9.4], [0.0, 0.75, -9.6]);
+        let (a, b, c) = (
+        [0.0, 0.75, -8.6],
+        [0.0, 3.0, -9.4],
+        [0.0, 0.75, -9.6],
+    );
         m.tri([a, b, c], [1.0, 0.0, 0.0], [[0.5, 0.5]; 3], [body; 3]);
         m.tri([a, c, b], [-1.0, 0.0, 0.0], [[0.5, 0.5]; 3], [body; 3]);
     }

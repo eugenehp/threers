@@ -106,7 +106,8 @@ fn collide_inner(
         // -- half-spaces are analytic, and always the reference surface --
         (Shape::HalfSpace { normal }, _) => {
             let plane_normal = ia.transform_vector(*normal);
-            if let Some(mut m) = collide_half_space(b, ib, plane_normal, ia.translation, prediction)
+            if let Some(mut m) =
+                collide_half_space(b, ib, plane_normal, ia.translation, prediction)
             {
                 // Reported with the half-space as `b`; flip to match the call.
                 m.normal = -m.normal;
@@ -130,7 +131,8 @@ fn collide_inner(
 
         // -- two spheres: closed form --
         (Shape::Ball { radius: ra }, Shape::Ball { radius: rb }) => {
-            if let Some(mut m) = collide_balls(ia.translation, *ra, ib.translation, *rb, prediction)
+            if let Some(mut m) =
+                collide_balls(ia.translation, *ra, ib.translation, *rb, prediction)
             {
                 m.sub_a = sub_a;
                 m.sub_b = sub_b;
@@ -154,7 +156,9 @@ fn collide_inner(
 
             // Parallel capsules lying side by side need a contact at each end of
             // the overlapping span, or the pair rocks about a single point.
-            if let Some(mut m) = collide_parallel_capsules(a0, a1, *ra, b0, b1, *rb, prediction) {
+            if let Some(mut m) =
+                collide_parallel_capsules(a0, a1, *ra, b0, b1, *rb, prediction)
+            {
                 m.sub_a = sub_a;
                 m.sub_b = sub_b;
                 out.push(m);
@@ -177,12 +181,11 @@ fn collide_inner(
                 half_extents: hb_extents,
             },
         ) => {
-            let mut manifold =
-                match BoxBox::Unresolved.disabled(*ha, ia, *hb_extents, ib, prediction) {
-                    BoxBox::Contact(m) => Some(m),
-                    BoxBox::Apart => None,
-                    BoxBox::Unresolved => collide_convex_pair(a, ia, b, ib, prediction),
-                };
+            let mut manifold = match BoxBox::Unresolved.disabled(*ha, ia, *hb_extents, ib, prediction) {
+                BoxBox::Contact(m) => Some(m),
+                BoxBox::Apart => None,
+                BoxBox::Unresolved => collide_convex_pair(a, ia, b, ib, prediction),
+            };
             if let Some(m) = &mut manifold {
                 m.sub_a = sub_a;
                 m.sub_b = sub_b;
@@ -797,21 +800,9 @@ fn collide_trimesh(
     let mut local_aabb = Aabb::empty();
     for i in 0..8 {
         local_aabb.expand_by_point(inv.transform_point(Vector3::new(
-            if i & 1 == 0 {
-                world_aabb.min.x
-            } else {
-                world_aabb.max.x
-            },
-            if i & 2 == 0 {
-                world_aabb.min.y
-            } else {
-                world_aabb.max.y
-            },
-            if i & 4 == 0 {
-                world_aabb.min.z
-            } else {
-                world_aabb.max.z
-            },
+            if i & 1 == 0 { world_aabb.min.x } else { world_aabb.max.x },
+            if i & 2 == 0 { world_aabb.min.y } else { world_aabb.max.y },
+            if i & 4 == 0 { world_aabb.min.z } else { world_aabb.max.z },
         )));
     }
     local_aabb.expand_by_scalar(prediction);
@@ -834,14 +825,7 @@ fn collide_trimesh(
                 depth,
                 point_a,
                 point_b,
-            } => (
-                normal,
-                RawPoint {
-                    point_a,
-                    point_b,
-                    depth,
-                },
-            ),
+            } => (normal, RawPoint { point_a, point_b, depth }),
             Proximity::Separated {
                 distance,
                 normal,
@@ -851,14 +835,7 @@ fn collide_trimesh(
                 if distance > prediction {
                     return;
                 }
-                (
-                    normal,
-                    RawPoint {
-                        point_a,
-                        point_b,
-                        depth: -distance,
-                    },
-                )
+                (normal, RawPoint { point_a, point_b, depth: -distance })
             }
             Proximity::Failed => return,
         };
@@ -867,11 +844,7 @@ fn collide_trimesh(
         // clipping the shared edges between triangles, and EPA reports the edge
         // direction rather than the surface normal — which yanks the body
         // sideways. When the contact is roughly face-on, snap to the face normal.
-        let oriented = if face_normal.dot(normal) < 0.0 {
-            -face_normal
-        } else {
-            face_normal
-        };
+        let oriented = if face_normal.dot(normal) < 0.0 { -face_normal } else { face_normal };
         if oriented.dot(normal) > 0.5 {
             normal = oriented;
         }
@@ -926,11 +899,7 @@ fn support_face(shape: &Shape, iso: &Isometry, dir: Vector3) -> Face {
             } else {
                 2
             };
-            let sign = if [local_dir.x, local_dir.y, local_dir.z][axis] >= 0.0 {
-                1.0
-            } else {
-                -1.0
-            };
+            let sign = if [local_dir.x, local_dir.y, local_dir.z][axis] >= 0.0 { 1.0 } else { -1.0 };
             let h = *half_extents;
             let (u, v) = ((axis + 1) % 3, (axis + 2) % 3);
             let mut points = Vec::with_capacity(4);
@@ -948,10 +917,7 @@ fn support_face(shape: &Shape, iso: &Isometry, dir: Vector3) -> Face {
                 normal: orient(normal, dir),
             }
         }
-        Shape::Capsule {
-            half_height,
-            radius,
-        } => {
+        Shape::Capsule { half_height, radius } => {
             // Only when the direction is very nearly perpendicular to the axis
             // are *both* end spheres extreme. Tilt the direction even slightly
             // and the true feature is a single point on one cap — emitting a
@@ -959,8 +925,9 @@ fn support_face(shape: &Shape, iso: &Isometry, dir: Vector3) -> Face {
             // a penetration deeper than the shapes actually overlap.
             let axis_component = try_normalize(local_dir).map_or(1.0, |d| d.y.abs());
             if axis_component < 1e-2 {
-                let offset =
-                    try_normalize(local_dir).unwrap_or(Vector3::new(1.0, 0.0, 0.0)) * *radius;
+                let offset = try_normalize(local_dir)
+                    .unwrap_or(Vector3::new(1.0, 0.0, 0.0))
+                    * *radius;
                 return Face {
                     points: vec![
                         iso.transform_point(Vector3::new(0.0, -*half_height, 0.0) + offset),
@@ -971,17 +938,10 @@ fn support_face(shape: &Shape, iso: &Isometry, dir: Vector3) -> Face {
             }
             single(shape.support_local(local_dir).unwrap_or(Vector3::ZERO))
         }
-        Shape::Cylinder {
-            half_height,
-            radius,
-        } => {
+        Shape::Cylinder { half_height, radius } => {
             if local_dir.y.abs() > 0.999 {
                 // Flat cap: sample the rim.
-                let y = if local_dir.y >= 0.0 {
-                    *half_height
-                } else {
-                    -*half_height
-                };
+                let y = if local_dir.y >= 0.0 { *half_height } else { -*half_height };
                 let n = 8;
                 let points = (0..n)
                     .map(|i| {
@@ -1026,9 +986,7 @@ fn support_face(shape: &Shape, iso: &Isometry, dir: Vector3) -> Face {
                 sort_polygon(&mut points, dir);
                 points.truncate(8);
             }
-            let normal = polygon_normal(&points)
-                .map(|n| orient(n, dir))
-                .unwrap_or(dir);
+            let normal = polygon_normal(&points).map(|n| orient(n, dir)).unwrap_or(dir);
             Face { points, normal }
         }
         _ => single(shape.support_local(local_dir).unwrap_or(Vector3::ZERO)),
@@ -1233,11 +1191,7 @@ pub fn reduce_manifold(points: &mut Vec<RawPoint>, normal: Vector3) {
     let deepest = points
         .iter()
         .enumerate()
-        .max_by(|a, b| {
-            a.1.depth
-                .partial_cmp(&b.1.depth)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
+        .max_by(|a, b| a.1.depth.partial_cmp(&b.1.depth).unwrap_or(std::cmp::Ordering::Equal))
         .map(|(i, _)| i)
         .unwrap_or(0);
     kept.push(points.remove(deepest));
@@ -1343,12 +1297,7 @@ mod tests {
 
     #[test]
     fn a_ball_on_the_ground_gets_one_contact_at_the_bottom() {
-        let m = run(
-            &Shape::ball(1.0),
-            &at(0.0, 0.8, 0.0),
-            &Shape::ground(),
-            &at(0.0, 0.0, 0.0),
-        );
+        let m = run(&Shape::ball(1.0), &at(0.0, 0.8, 0.0), &Shape::ground(), &at(0.0, 0.0, 0.0));
         assert_eq!(m[0].points.len(), 1);
         assert!((m[0].points[0].depth - 0.2).abs() < 1e-4);
         assert!((m[0].points[0].point_a - Vector3::new(0.0, -0.2, 0.0)).length() < 1e-4);
@@ -1356,18 +1305,8 @@ mod tests {
 
     #[test]
     fn ground_contacts_work_from_either_argument_order() {
-        let a = run(
-            &Shape::ball(1.0),
-            &at(0.0, 0.8, 0.0),
-            &Shape::ground(),
-            &at(0.0, 0.0, 0.0),
-        );
-        let b = run(
-            &Shape::ground(),
-            &at(0.0, 0.0, 0.0),
-            &Shape::ball(1.0),
-            &at(0.0, 0.8, 0.0),
-        );
+        let a = run(&Shape::ball(1.0), &at(0.0, 0.8, 0.0), &Shape::ground(), &at(0.0, 0.0, 0.0));
+        let b = run(&Shape::ground(), &at(0.0, 0.0, 0.0), &Shape::ball(1.0), &at(0.0, 0.8, 0.0));
         assert_eq!(a.len(), b.len());
         // Normals must be opposite, and witness points swapped.
         assert!((a[0].normal + b[0].normal).length() < 1e-4);
@@ -1376,12 +1315,7 @@ mod tests {
 
     #[test]
     fn two_spheres_report_the_analytic_depth() {
-        let m = run(
-            &Shape::ball(1.0),
-            &at(0.0, 0.0, 0.0),
-            &Shape::ball(1.0),
-            &at(1.5, 0.0, 0.0),
-        );
+        let m = run(&Shape::ball(1.0), &at(0.0, 0.0, 0.0), &Shape::ball(1.0), &at(1.5, 0.0, 0.0));
         assert_eq!(m[0].points.len(), 1);
         assert!((m[0].points[0].depth - 0.5).abs() < 1e-4);
         assert!(m[0].normal.x < -0.99);
@@ -1390,12 +1324,7 @@ mod tests {
     #[test]
     fn speculative_contacts_appear_before_touching() {
         // 0.01 apart, inside the 0.02 prediction margin.
-        let m = run(
-            &Shape::ball(1.0),
-            &at(0.0, 0.0, 0.0),
-            &Shape::ball(1.0),
-            &at(2.01, 0.0, 0.0),
-        );
+        let m = run(&Shape::ball(1.0), &at(0.0, 0.0, 0.0), &Shape::ball(1.0), &at(2.01, 0.0, 0.0));
         assert_eq!(m.len(), 1, "a speculative contact should have been kept");
         assert!(m[0].points[0].depth < 0.0, "it has not touched yet");
     }
@@ -1422,11 +1351,7 @@ mod tests {
         );
         let m = run(&cube, &tilted, &Shape::ground(), &at(0.0, 0.0, 0.0));
         assert_eq!(m.len(), 1);
-        assert!(
-            m[0].points.len() <= 2,
-            "a corner is not a face: {:?}",
-            m[0].points.len()
-        );
+        assert!(m[0].points.len() <= 2, "a corner is not a face: {:?}", m[0].points.len());
     }
 
     #[test]
@@ -1453,8 +1378,7 @@ mod tests {
                     if max_depth <= 0.0 {
                         continue;
                     }
-                    let moved =
-                        Isometry::new(ia.translation + m.normal * (max_depth + 0.05), ia.rotation);
+                    let moved = Isometry::new(ia.translation + m.normal * (max_depth + 0.05), ia.rotation);
                     let after = run(a, &moved, b, &ib);
                     let still_deep = after
                         .iter()
@@ -1477,12 +1401,7 @@ mod tests {
             (at(2.0, 0.0, 0.0), Shape::ball(0.5)),
         ]);
         // Ground just under both ends.
-        let m = run(
-            &dumbbell,
-            &at(0.0, 0.4, 0.0),
-            &Shape::ground(),
-            &at(0.0, 0.0, 0.0),
-        );
+        let m = run(&dumbbell, &at(0.0, 0.4, 0.0), &Shape::ground(), &at(0.0, 0.0, 0.0));
         assert_eq!(m.len(), 2, "both ends should touch");
         assert_eq!(m[0].sub_a, 0);
         assert_eq!(m[1].sub_a, 1);
@@ -1501,12 +1420,7 @@ mod tests {
             vec![[0, 2, 1], [0, 3, 2]],
         )
         .unwrap();
-        let m = run(
-            &Shape::cuboid(0.5, 0.5, 0.5),
-            &at(0.0, 0.45, 0.0),
-            &floor,
-            &at(0.0, 0.0, 0.0),
-        );
+        let m = run(&Shape::cuboid(0.5, 0.5, 0.5), &at(0.0, 0.45, 0.0), &floor, &at(0.0, 0.0, 0.0));
         assert!(!m.is_empty(), "the box should rest on the mesh");
         let total: usize = m.iter().map(|x| x.points.len()).sum();
         assert!(total >= 3, "expected a face manifold, got {total} points");
@@ -1543,10 +1457,7 @@ mod tests {
         let cap = Shape::capsule(1.0, 0.5);
         let m = run(&cap, &at(0.0, 0.0, 0.0), &cap, &at(0.9, 0.0, 0.0));
         let total: usize = m.iter().map(|x| x.points.len()).sum();
-        assert!(
-            total >= 2,
-            "parallel capsules rock on a single point: {total}"
-        );
+        assert!(total >= 2, "parallel capsules rock on a single point: {total}");
     }
 
     #[test]
@@ -1563,10 +1474,7 @@ mod tests {
             .collect();
         reduce_manifold(&mut pts, Vector3::UP);
         assert_eq!(pts.len(), MAX_MANIFOLD_POINTS);
-        assert!(
-            pts.iter().any(|p| p.depth == 10.0),
-            "deepest point was dropped"
-        );
+        assert!(pts.iter().any(|p| p.depth == 10.0), "deepest point was dropped");
         // The kept points should not be clustered.
         let spread = pts
             .iter()

@@ -734,7 +734,10 @@ pub enum AssemblyError {
     UnknownPart(PartId),
     /// A mate needs geometry its features do not carry — a hinge given a point
     /// rather than an axis, say.
-    WrongFeature { mate: MateId, wanted: &'static str },
+    WrongFeature {
+        mate: MateId,
+        wanted: &'static str,
+    },
     /// The pose solve could not satisfy this mate. The residual is in world
     /// units and radians added together, so it is a magnitude rather than a
     /// measurement.
@@ -778,10 +781,7 @@ impl std::fmt::Display for ScadMechanismError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::UnknownPart { mate, part } => {
-                write!(
-                    f,
-                    "{mate}() names part \"{part}\", which no part() declared"
-                )
+                write!(f, "{mate}() names part \"{part}\", which no part() declared")
             }
             Self::UnknownMate { drive } => {
                 write!(f, "drive(\"{drive}\") names a mate that does not exist")
@@ -1118,7 +1118,9 @@ impl Assembly {
     /// [`crate::mechanism::ScadMechanism::from_spec`]. Use
     /// [`Self::from_scad_parts`] to evaluate them some other way.
     #[cfg(feature = "openscad")]
-    pub fn from_scad(spec: &threers::openscad::MechanismSpec) -> Result<Self, ScadMechanismError> {
+    pub fn from_scad(
+        spec: &threers::openscad::MechanismSpec,
+    ) -> Result<Self, ScadMechanismError> {
         Self::from_scad_parts(spec, |part| part.solid.clone().to_geometry_exact())
     }
 
@@ -1175,18 +1177,18 @@ impl Assembly {
         }
 
         for mate in &spec.mates {
-            let moving =
-                asm.part_named(&mate.parts[0])
-                    .ok_or_else(|| ScadMechanismError::UnknownPart {
-                        mate: mate.name.clone(),
-                        part: mate.parts[0].clone(),
-                    })?;
-            let base =
-                asm.part_named(&mate.parts[1])
-                    .ok_or_else(|| ScadMechanismError::UnknownPart {
-                        mate: mate.name.clone(),
-                        part: mate.parts[1].clone(),
-                    })?;
+            let moving = asm.part_named(&mate.parts[0]).ok_or_else(|| {
+                ScadMechanismError::UnknownPart {
+                    mate: mate.name.clone(),
+                    part: mate.parts[0].clone(),
+                }
+            })?;
+            let base = asm.part_named(&mate.parts[1]).ok_or_else(|| {
+                ScadMechanismError::UnknownPart {
+                    mate: mate.name.clone(),
+                    part: mate.parts[1].clone(),
+                }
+            })?;
 
             // Model space is each part's own space, so the one coordinate the
             // model wrote serves as the feature on both parts.
@@ -1242,16 +1244,15 @@ impl Assembly {
         // In the order they happen, not the order they were written. Several
         // drives on one mate queue up, and a model that lists the release before
         // the close means the release to run second all the same.
-        let mut ordered: Vec<&threers::openscad::mechanism::DriveSpec> =
-            spec.drives.iter().collect();
+        let mut ordered: Vec<&threers::openscad::mechanism::DriveSpec> = spec.drives.iter().collect();
         ordered.sort_by(|a, b| a.start.total_cmp(&b.start));
 
         for drive in ordered {
-            let mate =
-                asm.mate_named(&drive.mate)
-                    .ok_or_else(|| ScadMechanismError::UnknownMate {
-                        drive: drive.mate.clone(),
-                    })?;
+            let mate = asm.mate_named(&drive.mate).ok_or_else(|| {
+                ScadMechanismError::UnknownMate {
+                    drive: drive.mate.clone(),
+                }
+            })?;
             let angular = spec
                 .mate(&drive.mate)
                 .map(|m| m.kind.is_angular())
@@ -1440,7 +1441,9 @@ impl Assembly {
                 0.0
             };
             self.residual[i] = residual;
-            if residual > self.tolerance && worst.map(|(_, r)| residual > r).unwrap_or(true) {
+            if residual > self.tolerance
+                && worst.map(|(_, r)| residual > r).unwrap_or(true)
+            {
                 worst = Some((MateId(i as u32), residual));
             }
         }
@@ -1506,10 +1509,12 @@ impl Assembly {
         // about the offset *across* its axis.
         let separation = origin_b - origin_a;
         let translation = match mate.kind {
-            MateKind::Slider | MateKind::Cylindrical | MateKind::Screw { .. } => match dir_b {
-                Some(axis) => separation - axis * separation.dot(axis),
-                None => separation,
-            },
+            MateKind::Slider | MateKind::Cylindrical | MateKind::Screw { .. } => {
+                match dir_b {
+                    Some(axis) => separation - axis * separation.dot(axis),
+                    None => separation,
+                }
+            }
             MateKind::Planar => match dir_b {
                 Some(normal) => normal * separation.dot(normal),
                 None => separation,
@@ -1629,17 +1634,15 @@ impl Assembly {
                 }
                 match self.interference_between(a, b) {
                     PairResult::Clear => {}
-                    PairResult::Overlap { point, depth } => {
-                        report.interferences.push(Interference {
-                            a: PartId(a as u32),
-                            b: PartId(b as u32),
-                            point,
-                            depth,
-                        })
-                    }
-                    PairResult::Untestable => {
-                        report.unchecked.push((PartId(a as u32), PartId(b as u32)))
-                    }
+                    PairResult::Overlap { point, depth } => report.interferences.push(Interference {
+                        a: PartId(a as u32),
+                        b: PartId(b as u32),
+                        point,
+                        depth,
+                    }),
+                    PairResult::Untestable => report
+                        .unchecked
+                        .push((PartId(a as u32), PartId(b as u32))),
                 }
             }
         }
@@ -1682,7 +1685,13 @@ impl Assembly {
 
     /// The same, with the poses given rather than taken from the parts — what
     /// the sweep needs.
-    fn interference_at(&self, pa: &Part, ta: &Isometry, pb: &Part, tb: &Isometry) -> PairResult {
+    fn interference_at(
+        &self,
+        pa: &Part,
+        ta: &Isometry,
+        pb: &Part,
+        tb: &Isometry,
+    ) -> PairResult {
         let mut deepest: Option<(Vector3, f32)> = None;
         let mut testable = false;
         let mut manifolds = Vec::new();
@@ -1757,11 +1766,7 @@ impl Assembly {
         // the first foul: what matters is the travel that is reachable, and past
         // a blockage nothing is.
         for direction in [1.0f32, -1.0] {
-            let span = if direction > 0.0 {
-                limits.max
-            } else {
-                limits.min
-            };
+            let span = if direction > 0.0 { limits.max } else { limits.min };
             if span * direction <= 0.0 {
                 continue;
             }
@@ -1816,14 +1821,20 @@ impl Assembly {
                             r.multiply(t.rotation).normalize(),
                         )
                     }
-                    AxialKind::Offset => Isometry::new(t.translation + axis * value, t.rotation),
+                    AxialKind::Offset => {
+                        Isometry::new(t.translation + axis * value, t.rotation)
+                    }
                 }
             })
             .collect()
     }
 
     /// First interference between the displaced parts and everything else.
-    fn first_foul(&self, moving: &[usize], placed: &[Isometry]) -> Option<(usize, usize, f32)> {
+    fn first_foul(
+        &self,
+        moving: &[usize],
+        placed: &[Isometry],
+    ) -> Option<(usize, usize, f32)> {
         let mated = self.mated_pairs();
         for (slot, &a) in moving.iter().enumerate() {
             for b in 0..self.parts.len() {
@@ -1914,8 +1925,8 @@ impl Assembly {
         }
 
         for (i, part) in self.parts.iter().enumerate() {
-            let mut builder =
-                RigidBodyBuilder::new(part.physics.body_type).position(part.transform);
+            let mut builder = RigidBodyBuilder::new(part.physics.body_type)
+                .position(part.transform);
             for collider in &part.colliders {
                 builder = builder.collider(collider.clone());
             }
@@ -1976,7 +1987,9 @@ impl Assembly {
         let rest = self.rest[index];
 
         let mut joint = match mate.kind {
-            MateKind::Hinge => Joint::revolute(body_a, body_b, anchor_a, anchor_b, axis_a, axis_b),
+            MateKind::Hinge => {
+                Joint::revolute(body_a, body_b, anchor_a, anchor_b, axis_a, axis_b)
+            }
             MateKind::Slider => {
                 Joint::prismatic(body_a, body_b, anchor_a, anchor_b, axis_a, axis_b)
             }
@@ -1994,9 +2007,17 @@ impl Assembly {
                     Some(l) => crate::joint::Dof::limited(l.min, l.max),
                     None => crate::joint::Dof::FREE,
                 };
-                Joint::generic_framed(world.bodies(), body_a, body_b, anchor_a, anchor_b, fa, fb)?
-                    .with_linear_dof(0, slide)
-                    .with_angular_dof(0, crate::joint::Dof::FREE)
+                Joint::generic_framed(
+                    world.bodies(),
+                    body_a,
+                    body_b,
+                    anchor_a,
+                    anchor_b,
+                    fa,
+                    fb,
+                )?
+                .with_linear_dof(0, slide)
+                .with_angular_dof(0, crate::joint::Dof::FREE)
             }
             MateKind::Screw { lead } => Joint::screw(
                 world.bodies(),
@@ -2014,10 +2035,18 @@ impl Assembly {
                 // The joint's x is the plane's normal, so what is left free is
                 // sliding in the plane and spinning about the normal.
                 let (fa, fb) = joint_frames(axis_a, axis_b);
-                Joint::generic_framed(world.bodies(), body_a, body_b, anchor_a, anchor_b, fa, fb)?
-                    .with_linear_dof(1, crate::joint::Dof::FREE)
-                    .with_linear_dof(2, crate::joint::Dof::FREE)
-                    .with_angular_dof(0, crate::joint::Dof::FREE)
+                Joint::generic_framed(
+                    world.bodies(),
+                    body_a,
+                    body_b,
+                    anchor_a,
+                    anchor_b,
+                    fa,
+                    fb,
+                )?
+                .with_linear_dof(1, crate::joint::Dof::FREE)
+                .with_linear_dof(2, crate::joint::Dof::FREE)
+                .with_angular_dof(0, crate::joint::Dof::FREE)
             }
             // The couplings do *not* take the swap the placement mates take.
             //
@@ -2383,9 +2412,7 @@ fn set_motor_force(kind: &mut JointKind, max_force: f32) {
         JointKind::Revolute { motor, .. }
         | JointKind::Prismatic { motor, .. }
         | JointKind::Screw { motor, .. } => apply(motor),
-        JointKind::Generic {
-            linear, angular, ..
-        } => {
+        JointKind::Generic { linear, angular, .. } => {
             for dof in linear.iter_mut().chain(angular.iter_mut()) {
                 apply(&mut dof.motor);
             }
@@ -2475,9 +2502,7 @@ mod tests {
 
         let lid_part = asm.part_of(lid).unwrap();
         // Its hinge edge now sits exactly on the box's.
-        let world_hinge = lid_part
-            .transform
-            .transform_point(Vector3::new(0.0, -0.05, -0.5));
+        let world_hinge = lid_part.transform.transform_point(Vector3::new(0.0, -0.05, -0.5));
         assert!(
             (world_hinge - Vector3::new(0.0, 0.5, -0.5)).length() < 1e-3,
             "hinge landed at {world_hinge:?}"
@@ -2500,11 +2525,7 @@ mod tests {
     #[test]
     fn interference_is_reported_with_a_depth() {
         let mut asm = Assembly::new();
-        let a = asm.part_from_geometry(
-            "a",
-            block(1.0, 1.0, 1.0),
-            PartPhysics::fixed().fit(ColliderFit::Box),
-        );
+        let a = asm.part_from_geometry("a", block(1.0, 1.0, 1.0), PartPhysics::fixed().fit(ColliderFit::Box));
         let b = asm.part_from_geometry("b", block(1.0, 1.0, 1.0), PartPhysics::dynamic());
         asm.place_at(b, [0.6, 0.0, 0.0]);
         let report = asm.check();
@@ -2525,10 +2546,7 @@ mod tests {
         let report = asm.check();
         assert!(report.interferences.is_empty());
         assert_eq!(report.unchecked.len(), 1);
-        assert!(
-            !report.clear(),
-            "an untestable pair must not read as a pass"
-        );
+        assert!(!report.clear(), "an untestable pair must not read as a pass");
     }
 
     #[test]
@@ -2598,11 +2616,7 @@ mod tests {
             "the shelf should have stopped the lid, but it reached {}°",
             angle.to_degrees()
         );
-        assert!(
-            angle > deg(20.0),
-            "it barely moved: {}°",
-            angle.to_degrees()
-        );
+        assert!(angle > deg(20.0), "it barely moved: {}°", angle.to_degrees());
     }
 
     #[test]
@@ -2730,15 +2744,9 @@ mod tests {
 
         // The model drew the parts where they belong, so the pose solve has
         // nothing to do — and says so rather than shifting anything.
-        let before = asm
-            .part_of(asm.part_named("lid").unwrap())
-            .unwrap()
-            .transform;
+        let before = asm.part_of(asm.part_named("lid").unwrap()).unwrap().transform;
         asm.solve().unwrap();
-        let after = asm
-            .part_of(asm.part_named("lid").unwrap())
-            .unwrap()
-            .transform;
+        let after = asm.part_of(asm.part_named("lid").unwrap()).unwrap().transform;
         assert!((before.translation - after.translation).length() < 1e-5);
         assert!(asm.check().clear(), "{:?}", asm.check());
 
@@ -2859,11 +2867,7 @@ mod tests {
 
         let p = world.body(body).unwrap().translation();
         // Gravity is along the bore, so it falls freely.
-        assert!(
-            p.y < -1.0,
-            "the shaft should have dropped, it is at y = {}",
-            p.y
-        );
+        assert!(p.y < -1.0, "the shaft should have dropped, it is at y = {}", p.y);
         // And is held in the two directions across it. Were the joint still
         // measuring along the body's x, one of these would be the free one.
         assert!(
@@ -2887,10 +2891,6 @@ mod tests {
         }
         // The range is 0..100°, and the lid hangs at the bottom of it.
         let angle = asm.coordinate(hinge, &world).unwrap();
-        assert!(
-            angle.abs() < deg(2.0),
-            "it settled at {}°",
-            angle.to_degrees()
-        );
+        assert!(angle.abs() < deg(2.0), "it settled at {}°", angle.to_degrees());
     }
 }

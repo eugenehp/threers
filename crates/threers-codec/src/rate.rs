@@ -411,10 +411,7 @@ mod tests {
         // within a step or two of each other.
         let tail = &qps[55..];
         let swing = tail.iter().max().unwrap() - tail.iter().min().unwrap();
-        assert!(
-            swing <= 2,
-            "quantizer swings by {swing} after settling: {tail:?}"
-        );
+        assert!(swing <= 2, "quantizer swings by {swing} after settling: {tail:?}");
     }
 
     /// Asking for less than the content can be coded in is a request the

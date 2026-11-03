@@ -11,7 +11,6 @@
 //! Verified by decoding with ffmpeg and comparing to the reconstruction this
 //! encoder returns (a conformant decoder must reproduce it bit-for-bit).
 
-<<<<<<< Updated upstream:crates/threers-codec/src/hevc/compress.rs
 use crate::bitstream::{emulation_prevention, BitWriter};
 use crate::hevc::cabac::{CabacEncoder, CtxModel};
 use crate::hevc::encoder::pad_plane;
@@ -28,24 +27,6 @@ use crate::hevc::{intra, quant, residual, Yuv420Frame};
 use crate::mp4::{mux_hevc, mux_hevc_with_captions, Mp4Params};
 use crate::rate::{Quality, Reach, RateControl, PROBE_QP};
 use crate::captions::CaptionTrack;
-=======
-use crate::captions::CaptionTrack;
-use crate::codec::bitstream::{emulation_prevention, BitWriter};
-use crate::codec::hevc::cabac::{CabacEncoder, CtxModel};
-use crate::codec::hevc::deblock::{deblock, EdgeMap};
-use crate::codec::hevc::encoder::pad_plane;
-use crate::codec::hevc::hvcc::{build_hvcc, HvccArray, HvccProfile};
-use crate::codec::hevc::nal::{nal_unit_base, push_annexb, NalUnitType};
-use crate::codec::hevc::params::{
-    write_pps_cu_qp_delta, write_pps_cu_qp_delta_no_deblock, write_pps_tiled, write_sps, write_vps,
-    HevcConfig,
-};
-use crate::codec::hevc::residual::ResidualCtx;
-use crate::codec::hevc::transform::{forward_into, inverse_into, TransformKind, MAX_N};
-use crate::codec::hevc::{intra, quant, residual, Yuv420Frame};
-use crate::codec::mp4::{mux_hevc, mux_hevc_with_captions, Mp4Params};
-use crate::codec::rate::{Quality, RateControl, Reach, PROBE_QP};
->>>>>>> Stashed changes:src/codec/hevc/compress.rs
 
 /// A compressed intra HEVC encoder. Transform-codes intra frames to a decodable
 /// Annex-B stream far smaller than raw.
@@ -141,15 +122,8 @@ impl CompressedEncoder {
         let u = pad_plane(&frame.u, frame.width / 2, frame.height / 2, cw / 2, ch / 2);
         let v = pad_plane(&frame.v, frame.width / 2, frame.height / 2, cw / 2, ch / 2);
 
-        let (slice, recon) = compressed_slice_rbsp(
-            &self.cfg,
-            &y,
-            &u,
-            &v,
-            self.residual,
-            self.aq_strength,
-            self.deblock,
-        );
+        let (slice, recon) =
+            compressed_slice_rbsp(&self.cfg, &y, &u, &v, self.residual, self.aq_strength, self.deblock);
         let mut au = Vec::new();
         if !self.headers_emitted {
             push_annexb(&mut au, &nal_unit_base(NalUnitType::Vps, &write_vps(false)));
@@ -159,7 +133,10 @@ impl CompressedEncoder {
             );
             push_annexb(
                 &mut au,
-                &nal_unit_base(NalUnitType::Pps, &self.pps_payload()),
+                &nal_unit_base(
+                    NalUnitType::Pps,
+                    &self.pps_payload(),
+                ),
             );
             self.headers_emitted = true;
         }
@@ -194,15 +171,8 @@ impl CompressedEncoder {
         let y = pad_plane(&frame.y, frame.width, frame.height, cw, ch);
         let u = pad_plane(&frame.u, frame.width / 2, frame.height / 2, cw / 2, ch / 2);
         let v = pad_plane(&frame.v, frame.width / 2, frame.height / 2, cw / 2, ch / 2);
-        let (slice, _recon) = compressed_slice_rbsp(
-            cfg,
-            &y,
-            &u,
-            &v,
-            self.residual,
-            self.aq_strength,
-            self.deblock,
-        );
+        let (slice, _recon) =
+            compressed_slice_rbsp(cfg, &y, &u, &v, self.residual, self.aq_strength, self.deblock);
         let mut au = Vec::new();
         push_annexb(&mut au, &nal_unit_base(NalUnitType::IdrNLp, &slice));
         au
@@ -438,21 +408,9 @@ pub fn encode_mp4_quality(
     let hvcc = build_hvcc(
         &HvccProfile::main_420(level_idc),
         &[
-            HvccArray {
-                nal_type: 32,
-                complete: true,
-                nals: &vps,
-            },
-            HvccArray {
-                nal_type: 33,
-                complete: true,
-                nals: &sps,
-            },
-            HvccArray {
-                nal_type: 34,
-                complete: true,
-                nals: &pps,
-            },
+            HvccArray { nal_type: 32, complete: true, nals: &vps },
+            HvccArray { nal_type: 33, complete: true, nals: &sps },
+            HvccArray { nal_type: 34, complete: true, nals: &pps },
         ],
     );
 
@@ -693,26 +651,8 @@ fn tiled_slice_rbsp(
     for (job, c) in jobs.iter().zip(&coded) {
         let (x0, y0, tw, th) = job.1;
         paste(&mut recon.y, cw, &c.recon.y, tw, x0, y0, tw, th);
-        paste(
-            &mut recon.u,
-            cwc,
-            &c.recon.u,
-            tw / 2,
-            x0 / 2,
-            y0 / 2,
-            tw / 2,
-            th / 2,
-        );
-        paste(
-            &mut recon.v,
-            cwc,
-            &c.recon.v,
-            tw / 2,
-            x0 / 2,
-            y0 / 2,
-            tw / 2,
-            th / 2,
-        );
+        paste(&mut recon.u, cwc, &c.recon.u, tw / 2, x0 / 2, y0 / 2, tw / 2, th / 2);
+        paste(&mut recon.v, cwc, &c.recon.v, tw / 2, x0 / 2, y0 / 2, tw / 2, th / 2);
         for ty in (0..th).step_by(1 << gl) {
             for tx in (0..tw).step_by(1 << gl) {
                 let src = (ty >> gl) as usize * (tw >> gl) as usize + (tx >> gl) as usize;
@@ -935,17 +875,7 @@ fn encode_ctbs(
             grid.restore(px, py, cfg.ctb_log2, &saved);
             let mut qd = QpDelta::new(qp_prev, delta);
             emit_cu(
-                &mut cabac,
-                &mut ctx,
-                &cu,
-                &mut grid,
-                g,
-                px,
-                py,
-                cfg.ctb_log2,
-                0,
-                lim,
-                &mut qd,
+                &mut cabac, &mut ctx, &cu, &mut grid, g, px, py, cfg.ctb_log2, 0, lim, &mut qd,
             );
             // A coding tree block with nothing to code carries no delta, so the
             // predictor does not move past it.
@@ -1062,9 +992,7 @@ fn build_tu(
     // Above the largest transform size there is no choice: the tree splits and
     // the flag is not coded (§7.3.8.8).
     if log2 > lim.max_tb_log2 {
-        return build_split(
-            p, cabac, ctx, x, y, log2, depth, lim, mode, cmode, lambda, qd,
-        );
+        return build_split(p, cabac, ctx, x, y, log2, depth, lim, mode, cmode, lambda, qd);
     }
     if !(depth < lim.max_depth && log2 > 2) {
         return build_leaf(p, x, y, log2, mode, cmode);
@@ -1072,18 +1000,14 @@ fn build_tu(
 
     let before = save_rect(p, x, y, log2);
     let leaf = build_leaf(p, x, y, log2, mode, cmode);
-    let leaf_cost = node_cost(
-        p, x, y, log2, &leaf, cabac, ctx, depth, lim, mode, cmode, lambda, qd,
-    );
+    let leaf_cost =
+        node_cost(p, x, y, log2, &leaf, cabac, ctx, depth, lim, mode, cmode, lambda, qd);
     let leaf_recon = save_rect(p, x, y, log2);
 
     restore_rect(p, x, y, log2, &before);
-    let split = build_split(
-        p, cabac, ctx, x, y, log2, depth, lim, mode, cmode, lambda, qd,
-    );
-    let split_cost = node_cost(
-        p, x, y, log2, &split, cabac, ctx, depth, lim, mode, cmode, lambda, qd,
-    );
+    let split = build_split(p, cabac, ctx, x, y, log2, depth, lim, mode, cmode, lambda, qd);
+    let split_cost =
+        node_cost(p, x, y, log2, &split, cabac, ctx, depth, lim, mode, cmode, lambda, qd);
 
     if leaf_cost <= split_cost {
         restore_rect(p, x, y, log2, &leaf_recon);
@@ -1182,36 +1106,10 @@ fn code_node_chroma(p: &mut Planes, tu: &mut Tu, x: u32, y: u32, log2: u32, cmod
     let cn = 1usize << (log2 - 1);
     let (cx, cy) = (x / 2, y / 2);
     let (cbf_cb, levels_cb) = code_leaf(
-        p.u,
-        p.ru,
-        p.cwc,
-        p.chc,
-        cx,
-        cy,
-        cn,
-        p.ctb / 2,
-        p.nx,
-        cmode,
-        p.qp_c,
-        false,
-        p.residual,
-        p.scratch,
+        p.u, p.ru, p.cwc, p.chc, cx, cy, cn, p.ctb / 2, p.nx, cmode, p.qp_c, false, p.residual, p.scratch,
     );
     let (cbf_cr, levels_cr) = code_leaf(
-        p.v,
-        p.rv,
-        p.cwc,
-        p.chc,
-        cx,
-        cy,
-        cn,
-        p.ctb / 2,
-        p.nx,
-        cmode,
-        p.qp_c,
-        false,
-        p.residual,
-        p.scratch,
+        p.v, p.rv, p.cwc, p.chc, cx, cy, cn, p.ctb / 2, p.nx, cmode, p.qp_c, false, p.residual, p.scratch,
     );
     tu.cbf_cb = cbf_cb;
     tu.cbf_cr = cbf_cr;
@@ -1290,12 +1188,7 @@ fn code_leaf(
     } else {
         &sc.refs[..nr]
     };
-    split_refs_into(
-        src,
-        n,
-        &mut sc.above[..2 * n + 1],
-        &mut sc.left[..2 * n + 1],
-    );
+    split_refs_into(src, n, &mut sc.above[..2 * n + 1], &mut sc.left[..2 * n + 1]);
     intra::predict_into(
         mode,
         n,
@@ -1822,10 +1715,10 @@ fn mark_tu_edges(tu: &Tu, edges: &mut EdgeMap, x: u32, y: u32) {
 /// evidence that this one should be small too.
 fn split_ctx(grid: &Grid, g: Geo, x: u32, y: u32, depth: u32) -> usize {
     let (xi, yi) = (x as i32, y as i32);
-    let left =
-        available(xi - 1, yi, x, y, g.cw, g.ch, g.ctb, g.nx) && grid.depth_at(x - 1, y) > depth;
-    let above =
-        available(xi, yi - 1, x, y, g.cw, g.ch, g.ctb, g.nx) && grid.depth_at(x, y - 1) > depth;
+    let left = available(xi - 1, yi, x, y, g.cw, g.ch, g.ctb, g.nx)
+        && grid.depth_at(x - 1, y) > depth;
+    let above = available(xi, yi - 1, x, y, g.cw, g.ch, g.ctb, g.nx)
+        && grid.depth_at(x, y - 1) > depth;
     usize::from(left) + usize::from(above)
 }
 
@@ -1882,15 +1775,11 @@ fn search_cu(
     // A block hanging off the picture edge is split without a flag: the decoder
     // knows it cannot be coded whole (§7.3.8.4).
     if !inside {
-        return split_cu(
-            p, cabac, ctx, grid, g, x, y, log2, depth, lim, lambda, false, qd,
-        );
+        return split_cu(p, cabac, ctx, grid, g, x, y, log2, depth, lim, lambda, false, qd);
     }
     // At the minimum coding block size there is nothing to decide.
     if log2 == grid.log2 {
-        return leaf_cu(
-            p, cabac, ctx, grid, g, x, y, log2, depth, lim, lambda, false, qd,
-        );
+        return leaf_cu(p, cabac, ctx, grid, g, x, y, log2, depth, lim, lambda, false, qd);
     }
 
     let before = save_rect(p, x, y, log2);
@@ -1900,19 +1789,7 @@ fn search_cu(
     let mut ctx_one = *ctx;
     let mut qd_one = *qd;
     let (cu_one, cost_one) = leaf_cu(
-        p,
-        &mut cabac_one,
-        &mut ctx_one,
-        grid,
-        g,
-        x,
-        y,
-        log2,
-        depth,
-        lim,
-        lambda,
-        true,
-        &mut qd_one,
+        p, &mut cabac_one, &mut ctx_one, grid, g, x, y, log2, depth, lim, lambda, true, &mut qd_one,
     );
     let recon_one = save_rect(p, x, y, log2);
     let grid_one = grid.save(x, y, log2);
@@ -1923,18 +1800,7 @@ fn search_cu(
     let mut ctx_four = *ctx;
     let mut qd_four = *qd;
     let (cu_four, cost_four) = split_cu(
-        p,
-        &mut cabac_four,
-        &mut ctx_four,
-        grid,
-        g,
-        x,
-        y,
-        log2,
-        depth,
-        lim,
-        lambda,
-        true,
+        p, &mut cabac_four, &mut ctx_four, grid, g, x, y, log2, depth, lim, lambda, true,
         &mut qd_four,
     );
 
@@ -2114,9 +1980,7 @@ fn emit_cu(
             }
             code_luma_mode(cabac, ctx, l.mode, grid, g, x, y);
             cabac.encode_bin(&mut ctx.chroma_mode, 0);
-            emit_tu(
-                cabac, ctx, &l.tu, 0, lim, l.mode, l.cmode, true, true, None, qd,
-            );
+            emit_tu(cabac, ctx, &l.tu, 0, lim, l.mode, l.cmode, true, true, None, qd);
             grid.set_cu(x, y, log2, l.mode, depth, qd.qp_now());
         }
     }
@@ -2139,11 +2003,7 @@ fn best_luma_mode(orig: &[i32], n: usize, vals: &[i32]) -> u8 {
     let mut best = (u32::MAX, intra::DC);
     let mut pred = vec![0i32; n * n];
     for mode in 0..=34u8 {
-        let (above, left) = if filter_flag(mode, n) {
-            &smooth
-        } else {
-            &plain
-        };
+        let (above, left) = if filter_flag(mode, n) { &smooth } else { &plain };
         intra::predict_into(mode, n, above, left, true, &mut pred[..]);
         let sad: u32 = orig
             .iter()
@@ -2384,6 +2244,7 @@ fn refs_generic_into(
         }
     }
 }
+
 
 #[allow(clippy::too_many_arguments)]
 fn refs_luma(recon: &[u8], w: u32, h: u32, x: u32, y: u32, n: u32, nx: u32, ctb: u32) -> Vec<i32> {

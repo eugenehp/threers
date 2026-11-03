@@ -256,7 +256,11 @@ impl Default for Ik {
 
 impl Ik {
     fn clamp_joint(&self, i: usize, q: f64) -> f64 {
-        let (lo, hi) = self.joint_limits.get(i).copied().unwrap_or(self.limits);
+        let (lo, hi) = self
+            .joint_limits
+            .get(i)
+            .copied()
+            .unwrap_or(self.limits);
         q.clamp(lo, hi)
     }
 

@@ -5839,15 +5839,12 @@ mod tests {
         std::fs::write(dir.join("c.FCStd"), &bytes).unwrap();
         std::fs::write(dir.join("c.scad"), "import(\"c.FCStd\");").unwrap();
         let g = parse_scad_file(dir.join("c.scad")).unwrap().to_geometry();
-        let n_tri = g.index.as_ref().map(|i| i.len() / 3).unwrap_or_else(|| {
-            g.get_attribute("position")
-                .map(|a| a.count() / 3)
-                .unwrap_or(0)
-        });
-        assert!(
-            n_tri >= 12,
-            "fcstd cube should have at least 12 triangles, got {n_tri}"
-        );
+        let n_tri = g
+            .index
+            .as_ref()
+            .map(|i| i.len() / 3)
+            .unwrap_or_else(|| g.get_attribute("position").map(|a| a.count() / 3).unwrap_or(0));
+        assert!(n_tri >= 12, "fcstd cube should have at least 12 triangles, got {n_tri}");
         let v = vol(parse_scad_file(dir.join("c.scad")).unwrap());
         assert!((v - 1000.0).abs() < 5.0, "fcstd cube vol {v}");
     }

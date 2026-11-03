@@ -374,18 +374,12 @@ mod tests {
             let o = h.apply(10.0, 0.0, 1.0 / 240.0);
             tau = o.tau_joint;
         }
-        assert!(
-            tau > 0.5 && tau < 10.0,
-            "valve should be mid-ramp, got {tau}"
-        );
+        assert!(tau > 0.5 && tau < 10.0, "valve should be mid-ramp, got {tau}");
         for _ in 0..500 {
             let o = h.apply(10.0, 0.0, 1.0 / 240.0);
             tau = o.tau_joint;
         }
-        assert!(
-            (tau - 10.0).abs() < 2.0,
-            "should settle near 10 N·m, got {tau}"
-        );
+        assert!((tau - 10.0).abs() < 2.0, "should settle near 10 N·m, got {tau}");
     }
 
     #[test]
@@ -397,10 +391,7 @@ mod tests {
         // Steady spin: compare viscous loss magnitude.
         let oc = cold.apply(0.0, 5.0, 1.0 / 240.0).tau_joint.abs();
         let oh = hot.apply(0.0, 5.0, 1.0 / 240.0).tau_joint.abs();
-        assert!(
-            oc > oh,
-            "cold heavy oil should drag more: cold={oc} hot={oh}"
-        );
+        assert!(oc > oh, "cold heavy oil should drag more: cold={oc} hot={oh}");
     }
 
     #[test]

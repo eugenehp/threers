@@ -317,20 +317,13 @@ mod tests {
         tl.seek(1.0);
         let forward = tl.progress_of(a);
         tl.seek(0.25);
-        assert!(
-            tl.progress_of(a) < forward,
-            "seeking backwards did not rewind"
-        );
+        assert!(tl.progress_of(a) < forward, "seeking backwards did not rewind");
 
         // Negative playback.
         tl.seek(1.0);
         tl.speed = -1.0;
         tl.update(0.5);
-        assert!(
-            (tl.time() - 0.5).abs() < 1e-4,
-            "reverse playback: {}",
-            tl.time()
-        );
+        assert!((tl.time() - 0.5).abs() < 1e-4, "reverse playback: {}", tl.time());
     }
 
     #[test]

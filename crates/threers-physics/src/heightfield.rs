@@ -406,10 +406,7 @@ mod tests {
             Vector3::new(-3.0, 5.0, -3.0),
         );
         field.for_each_triangle_in_aabb(&corner, |_| few += 1);
-        assert!(
-            few > 0 && few < all / 4,
-            "corner query returned {few} of {all}"
-        );
+        assert!(few > 0 && few < all / 4, "corner query returned {few} of {all}");
     }
 
     #[test]

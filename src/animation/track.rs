@@ -13,9 +13,7 @@ pub enum TrackTarget {
     /// material doesn't carry a base color.
     Color,
     /// Morph target weight at `index`.
-    MorphWeight {
-        index: usize,
-    },
+    MorphWeight { index: usize },
     /// A light's intensity. Lights are the one thing in a scene whose
     /// brightness is animated as often as its position — a lamp switching on,
     /// a fire flickering — and a free scalar cannot say what it drives.

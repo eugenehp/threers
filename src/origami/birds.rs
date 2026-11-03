@@ -203,11 +203,7 @@ fn cardinal_parts(t: f64) -> Vec<PartSpec> {
             t: t * 1.15,
             pose: PartPose {
                 position: [0.0, 1.05, 0.18],
-                euler: [
-                    -std::f32::consts::FRAC_PI_2,
-                    0.0,
-                    std::f32::consts::FRAC_PI_2,
-                ],
+                euler: [-std::f32::consts::FRAC_PI_2, 0.0, std::f32::consts::FRAC_PI_2],
                 scale: 0.82,
             },
         },
@@ -256,11 +252,7 @@ fn crane_parts(t: f64) -> Vec<PartSpec> {
             t: t * 0.9,
             pose: PartPose {
                 position: [0.0, 0.0, 0.0],
-                euler: [
-                    -std::f32::consts::FRAC_PI_2,
-                    0.0,
-                    std::f32::consts::FRAC_PI_4,
-                ],
+                euler: [-std::f32::consts::FRAC_PI_2, 0.0, std::f32::consts::FRAC_PI_4],
                 scale: 1.15,
             },
         },
@@ -271,11 +263,7 @@ fn crane_parts(t: f64) -> Vec<PartSpec> {
             t: t * 1.2,
             pose: PartPose {
                 position: [0.0, 1.45, 0.05],
-                euler: [
-                    -std::f32::consts::FRAC_PI_2,
-                    0.0,
-                    std::f32::consts::FRAC_PI_2,
-                ],
+                euler: [-std::f32::consts::FRAC_PI_2, 0.0, std::f32::consts::FRAC_PI_2],
                 scale: 1.1,
             },
         },
@@ -377,11 +365,7 @@ fn sparrow_parts(t: f64) -> Vec<PartSpec> {
             t,
             pose: PartPose {
                 position: [0.0, 0.62 * s, 0.12],
-                euler: [
-                    -std::f32::consts::FRAC_PI_2,
-                    0.0,
-                    std::f32::consts::FRAC_PI_2,
-                ],
+                euler: [-std::f32::consts::FRAC_PI_2, 0.0, std::f32::consts::FRAC_PI_2],
                 scale: 0.68 * s,
             },
         },
@@ -560,11 +544,7 @@ fn layout_cross_scaled(offset: V2, alpha: f64, beta: f64, scale: f64) -> LayoutP
 }
 
 fn scale_pattern(cp: &CreasePattern, scale: f64) -> CreasePattern {
-    let verts: Vec<V2> = cp
-        .verts
-        .iter()
-        .map(|v| [v[0] * scale, v[1] * scale])
-        .collect();
+    let verts: Vec<V2> = cp.verts.iter().map(|v| [v[0] * scale, v[1] * scale]).collect();
     CreasePattern::new(verts, cp.edges.clone())
 }
 

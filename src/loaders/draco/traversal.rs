@@ -297,10 +297,7 @@ pub struct TopologySplit {
 ///
 /// Hole events are not read: from bitstream 2.1 the encoder stopped writing
 /// them, and a 2.2 file that had them would be malformed rather than old.
-pub fn topology_splits(
-    buffer: &mut Buffer<'_>,
-    num_faces: u32,
-) -> Result<Vec<TopologySplit>, DracoError> {
+pub fn topology_splits(buffer: &mut Buffer<'_>, num_faces: u32) -> Result<Vec<TopologySplit>, DracoError> {
     let count = buffer.varint32()?;
     if count == 0 {
         return Ok(Vec::new());

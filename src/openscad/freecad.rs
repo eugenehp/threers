@@ -126,7 +126,8 @@ impl Default for FcstdDocumentMeta {
 }
 
 /// Options for [`FcstdWriter`].
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct FcstdWriteOptions {
     pub meta: FcstdDocumentMeta,
     /// When true, weld coincident vertices and write facet neighbour indices
@@ -135,6 +136,7 @@ pub struct FcstdWriteOptions {
     /// Weld coincident vertices even when `neighbours` is false. Default: false.
     pub weld: bool,
 }
+
 
 /// One mesh to include in an export.
 #[derive(Debug, Clone)]
@@ -469,13 +471,11 @@ fn mesh_kernel_bms(verts: &[[f32; 3]], indices: &[u32], neighbours: bool, weld: 
     };
     let n_pts = verts.len() as u32;
     let n_fts = (indices.len() / 3) as u32;
-    let mut out =
-        Vec::with_capacity(8 + 256 + 8 + verts.len() * 12 + (indices.len() / 3) * 24 + 24);
+    let mut out = Vec::with_capacity(8 + 256 + 8 + verts.len() * 12 + (indices.len() / 3) * 24 + 24);
     out.extend_from_slice(&0xA0B0_C0D0u32.to_le_bytes());
     out.extend_from_slice(&0x0001_0000u32.to_le_bytes());
 
-    let banner =
-        b"MESH-MESH-MESH-MESH-MESH-MESH-MESH-MESH-MESH-MESH-MESH-MESH-MESH-MESH-MESH-MESH-\
+    let banner = b"MESH-MESH-MESH-MESH-MESH-MESH-MESH-MESH-MESH-MESH-MESH-MESH-MESH-MESH-MESH-MESH-\
 MESH-MESH-MESH-MESH-MESH-MESH-MESH-MESH-MESH-MESH-MESH-MESH-MESH-MESH-MESH-MESH-\
 MESH-MESH-MESH-MESH-MESH-MESH-MESH-MESH-MESH-MESH-MESH-MESH-MESH-MESH-MESH-MESH-\
 MESH-MESH-MESH-\n";
@@ -674,9 +674,7 @@ fn zip_list_names(z: &[u8]) -> Vec<String> {
         }
         let Some(name_len) = u16(p + 28) else { break };
         let Some(extra_len) = u16(p + 30) else { break };
-        let Some(comment_len) = u16(p + 32) else {
-            break;
-        };
+        let Some(comment_len) = u16(p + 32) else { break };
         if let Some(name) = z
             .get(p + 46..p + 46 + name_len)
             .and_then(|b| std::str::from_utf8(b).ok())
@@ -774,11 +772,7 @@ fn parse_color_prop(block: &str) -> Option<[f32; 4]> {
         if let Some(v) = xml_attr_str(tag, "value") {
             let hex = v.trim().trim_start_matches('#');
             if hex.len() >= 6 {
-                let parse = |i| {
-                    u8::from_str_radix(&hex[i..i + 2], 16)
-                        .ok()
-                        .map(|x| x as f32 / 255.0)
-                };
+                let parse = |i| u8::from_str_radix(&hex[i..i + 2], 16).ok().map(|x| x as f32 / 255.0);
                 if let (Some(r), Some(g), Some(b)) = (parse(0), parse(2), parse(4)) {
                     let a = if hex.len() >= 8 {
                         parse(6).unwrap_or(1.0)
@@ -1252,10 +1246,11 @@ impl FcstdWriter {
         let mut used_names = HashMap::<String, usize>::new();
 
         for (i, spec) in meshes.iter().enumerate() {
-            let (verts, indices) =
-                tri_data(&spec.geometry).ok_or_else(|| FcstdError::EmptyGeometry {
+            let (verts, indices) = tri_data(&spec.geometry).ok_or_else(|| {
+                FcstdError::EmptyGeometry {
                     name: spec.name.clone(),
-                })?;
+                }
+            })?;
             let mut name = sanitize_name(&spec.name, &format!("Mesh{i}"));
             let n = used_names.entry(name.clone()).or_insert(0);
             if *n > 0 {
@@ -1503,9 +1498,7 @@ mod tests {
         let solid = fcstd_to_solid(&bytes).expect("solid");
         let sg = solid.to_geometry_exact();
         let tris = sg.index.as_ref().map(|i| i.len() / 3).unwrap_or_else(|| {
-            sg.get_attribute("position")
-                .map(|a| a.count() / 3)
-                .unwrap_or(0)
+            sg.get_attribute("position").map(|a| a.count() / 3).unwrap_or(0)
         });
         assert_eq!(tris, indices.len() / 3);
     }
@@ -1571,8 +1564,9 @@ mod tests {
     #[test]
     fn placement_translate_roundtrips() {
         let g = cube([2.0, 2.0, 2.0]).to_geometry_exact();
-        let spec = FcstdMeshSpec::new("Moved", g)
-            .with_placement(FcstdPlacement::translate([10.0, -3.0, 5.0]));
+        let spec = FcstdMeshSpec::new("Moved", g).with_placement(FcstdPlacement::translate([
+            10.0, -3.0, 5.0,
+        ]));
         let (bytes, _) = FcstdWriter::write(&[spec], &FcstdWriteOptions::default()).unwrap();
         let doc = FcstdLoader::parse(&bytes).unwrap();
         let m = &doc.meshes[0];
@@ -1600,16 +1594,8 @@ mod tests {
 
         let baked = FcstdLoader::parse(&bytes).unwrap();
         let (lo, hi) = crate::geometry_bounds(&baked.meshes[0].geometry);
-        assert!(
-            (hi[0] - lo[0] - 2.0).abs() < 1e-3,
-            "baked X extent {}",
-            hi[0] - lo[0]
-        );
-        assert!(
-            (hi[1] - lo[1] - 4.0).abs() < 1e-3,
-            "baked Y extent {}",
-            hi[1] - lo[1]
-        );
+        assert!((hi[0] - lo[0] - 2.0).abs() < 1e-3, "baked X extent {}", hi[0] - lo[0]);
+        assert!((hi[1] - lo[1] - 4.0).abs() < 1e-3, "baked Y extent {}", hi[1] - lo[1]);
     }
 
     #[test]
@@ -1643,8 +1629,12 @@ mod tests {
     #[test]
     fn e2e_multipart_assembly_with_placements() {
         let deck = cube([40.0, 20.0, 4.0]).to_geometry_exact();
-        let pinion = cylinder(6.0, 3.0).rotate_x(FRAC_PI_2).to_geometry_exact();
-        let wheel = cylinder(4.0, 8.0).rotate_x(FRAC_PI_2).to_geometry_exact();
+        let pinion = cylinder(6.0, 3.0)
+            .rotate_x(FRAC_PI_2)
+            .to_geometry_exact();
+        let wheel = cylinder(4.0, 8.0)
+            .rotate_x(FRAC_PI_2)
+            .to_geometry_exact();
 
         let specs = [
             FcstdMeshSpec::new("Deck", deck).with_label("Base plate"),
@@ -1712,7 +1702,10 @@ mod tests {
         let a = cube([2.0, 2.0, 2.0]).to_geometry_exact();
         let b = cube([1.0, 1.0, 1.0]).to_geometry_exact();
         let (good, _) = FcstdWriter::write(
-            &[FcstdMeshSpec::new("A", a), FcstdMeshSpec::new("B", b)],
+            &[
+                FcstdMeshSpec::new("A", a),
+                FcstdMeshSpec::new("B", b),
+            ],
             &FcstdWriteOptions::default(),
         )
         .unwrap();
@@ -1868,8 +1861,7 @@ mod tests {
         let a = cube([2.0, 2.0, 2.0]).to_geometry_exact();
         let b = cube([1.0, 1.0, 1.0]).to_geometry_exact();
         let specs = [
-            FcstdMeshSpec::new("Alpha", a)
-                .with_placement(FcstdPlacement::translate([10.0, 0.0, 0.0])),
+            FcstdMeshSpec::new("Alpha", a).with_placement(FcstdPlacement::translate([10.0, 0.0, 0.0])),
             FcstdMeshSpec::new("Beta", b).with_label("Secondary"),
         ];
         let (bytes, _) = FcstdWriter::write(&specs, &FcstdWriteOptions::default()).unwrap();
@@ -1914,7 +1906,8 @@ mod tests {
             .color([0.0, 1.0, 0.0])
             .translate([6.0, 0.0, 0.0]);
         let parts = a.union(b).parts();
-        let (bytes, _) = parts_to_fcstd_with(&parts, "RGB", &FcstdWriteOptions::default()).unwrap();
+        let (bytes, _) =
+            parts_to_fcstd_with(&parts, "RGB", &FcstdWriteOptions::default()).unwrap();
         let doc = FcstdLoader::parse(&bytes).unwrap();
         assert_eq!(doc.mesh_count(), parts.len());
         assert!(doc.meshes.iter().any(|m| m.color.is_some()));

@@ -1051,3 +1051,5 @@ fn palettes_carry_their_own_ambient_light() {
     let pinned = ScadLighting::studio().hemisphere([1.0, 0.0, 0.0], [0.0, 0.0, 1.0]);
     assert_eq!(pinned.hemisphere, Some(([1.0, 0.0, 0.0], [0.0, 0.0, 1.0])));
 }
+
+

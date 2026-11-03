@@ -6,9 +6,9 @@
 use anyhow::{ensure, Result};
 use rlx::{grad_with_loss, DType, Device, Graph, GraphExt, Session, Shape};
 
-use crate::dataset::Dataset;
 use crate::model::{ParamSpec, ALBEDO_FLOOR};
 use crate::pack::geometry_hits;
+use crate::dataset::Dataset;
 use crate::train::{Batch, TrainConfig, TRAIN_EPSILON};
 use crate::{compress, expand};
 
@@ -198,7 +198,11 @@ pub fn nrc_eligible(input: &[f32], pixels: usize, i: usize) -> bool {
 }
 
 /// Training/infer mask: eligible surface and probe not already close to the target.
-pub fn nrc_apply_mask(input: &[f32], base_colour: &[f32], pixels: usize) -> Vec<bool> {
+pub fn nrc_apply_mask(
+    input: &[f32],
+    base_colour: &[f32],
+    pixels: usize,
+) -> Vec<bool> {
     nrc_apply_mask_with(input, base_colour, pixels, NRC_PROBE_CONFIDENCE)
 }
 
@@ -258,7 +262,12 @@ pub fn pack_nrc_batch_with(
 ///
 /// Only eligible geometry pixels where the probe differs from the U-Net output
 /// are modified.
-pub fn fuse_beauty(beauty: &mut [f32], nrc_irradiance: &[f32], input: &[f32], pixels: usize) {
+pub fn fuse_beauty(
+    beauty: &mut [f32],
+    nrc_irradiance: &[f32],
+    input: &[f32],
+    pixels: usize,
+) {
     fuse_beauty_with(beauty, nrc_irradiance, input, pixels, NRC_PROBE_CONFIDENCE);
 }
 
@@ -346,18 +355,7 @@ pub fn train_nrc(
     input: &[f32],
     target: &[f32],
 ) -> Result<Vec<Vec<f32>>> {
-    train_nrc_from(
-        arch,
-        &init_params(arch, 0x4E52_4301),
-        n,
-        h,
-        w,
-        device,
-        config,
-        epochs,
-        input,
-        target,
-    )
+    train_nrc_from(arch, &init_params(arch, 0x4E52_4301), n, h, w, device, config, epochs, input, target)
 }
 
 /// Continue training from existing weights (online / per-scene fine-tune).
@@ -403,14 +401,7 @@ struct NrcTrainer {
 }
 
 impl NrcTrainer {
-    fn new(
-        arch: NrcArch,
-        n: usize,
-        h: usize,
-        w: usize,
-        device: Device,
-        config: TrainConfig,
-    ) -> Result<Self> {
+    fn new(arch: NrcArch, n: usize, h: usize, w: usize, device: Device, config: TrainConfig) -> Result<Self> {
         let params = init_params(&arch, 0x4E52_4301);
         Self::from_params(arch, n, h, w, device, config, &params)
     }
@@ -492,11 +483,7 @@ impl NrcTrainer {
             ("loss_eps", &eps),
             ("d_output", &seed),
         ]);
-        let loss = out
-            .first()
-            .and_then(|v| v.first())
-            .copied()
-            .unwrap_or(f32::NAN);
+        let loss = out.first().and_then(|v| v.first()).copied().unwrap_or(f32::NAN);
         if !loss.is_finite() {
             return Ok(loss);
         }
@@ -532,14 +519,7 @@ pub struct NrcNet {
 }
 
 impl NrcNet {
-    pub fn new(
-        arch: NrcArch,
-        params: Vec<Vec<f32>>,
-        n: usize,
-        h: usize,
-        w: usize,
-        device: Device,
-    ) -> Result<Self> {
+    pub fn new(arch: NrcArch, params: Vec<Vec<f32>>, n: usize, h: usize, w: usize, device: Device) -> Result<Self> {
         let mut graph = Graph::new("nrc_forward");
         let in_ch = arch.in_channels();
         let input = graph.input("input", Shape::new(&[n, in_ch, h, w], DType::F32));
@@ -578,7 +558,8 @@ impl NrcNet {
         }
         let pixels = side * side;
         for (input, base, reference) in scenes {
-            let (nrc_in, nrc_tgt) = pack_nrc_batch_with(input, base, reference, pixels, min_gap);
+            let (nrc_in, nrc_tgt) =
+                pack_nrc_batch_with(input, base, reference, pixels, min_gap);
             self.params = train_nrc_from(
                 &self.arch,
                 &self.params,
@@ -612,7 +593,13 @@ impl NrcNet {
         Self::new(arch, params, n, h, w, device)
     }
 
-    pub fn load_bytes(bytes: &[u8], n: usize, h: usize, w: usize, device: Device) -> Result<Self> {
+    pub fn load_bytes(
+        bytes: &[u8],
+        n: usize,
+        h: usize,
+        w: usize,
+        device: Device,
+    ) -> Result<Self> {
         let (arch, params) = load_nrc_bytes(bytes)?;
         Self::new(arch, params, n, h, w, device)
     }
@@ -622,11 +609,7 @@ const NRC_MAGIC_V1: &[u8; 8] = b"THRSN001";
 const NRC_MAGIC: &[u8; 8] = b"THRSN002";
 
 /// Save trained NRC weights.
-pub fn save_nrc(
-    arch: &NrcArch,
-    params: &[Vec<f32>],
-    path: impl AsRef<std::path::Path>,
-) -> Result<()> {
+pub fn save_nrc(arch: &NrcArch, params: &[Vec<f32>], path: impl AsRef<std::path::Path>) -> Result<()> {
     ensure!(
         params.len() == arch.params().len(),
         "{} tensors for an NRC with {}",
@@ -664,11 +647,7 @@ pub fn load_nrc(path: impl AsRef<std::path::Path>) -> Result<(NrcArch, Vec<Vec<f
 }
 
 pub fn load_nrc_bytes(bytes: &[u8]) -> Result<(NrcArch, Vec<Vec<f32>>)> {
-    ensure!(
-        bytes.len() >= 16,
-        "NRC weights are {} bytes, too short",
-        bytes.len()
-    );
+    ensure!(bytes.len() >= 16, "NRC weights are {} bytes, too short", bytes.len());
     let magic = &bytes[..8];
     ensure!(
         magic == NRC_MAGIC || magic == NRC_MAGIC_V1,
@@ -691,11 +670,7 @@ pub fn load_nrc_bytes(bytes: &[u8]) -> Result<(NrcArch, Vec<Vec<f32>>)> {
     let _ = file_in;
     let mut params = Vec::with_capacity(count);
     for spec in arch.params() {
-        ensure!(
-            off + 4 <= bytes.len(),
-            "truncated NRC header at {}",
-            spec.name
-        );
+        ensure!(off + 4 <= bytes.len(), "truncated NRC header at {}", spec.name);
         let elems = u32::from_le_bytes(bytes[off..off + 4].try_into()?) as usize;
         off += 4;
         ensure!(
@@ -705,11 +680,7 @@ pub fn load_nrc_bytes(bytes: &[u8]) -> Result<(NrcArch, Vec<Vec<f32>>)> {
             spec.shape,
             spec.elems()
         );
-        ensure!(
-            off + elems * 4 <= bytes.len(),
-            "truncated NRC values at {}",
-            spec.name
-        );
+        ensure!(off + elems * 4 <= bytes.len(), "truncated NRC values at {}", spec.name);
         let mut values = Vec::with_capacity(elems);
         for _ in 0..elems {
             values.push(f32::from_le_bytes(bytes[off..off + 4].try_into()?));
@@ -766,14 +737,8 @@ mod tests {
         // Sky: miss encodes as ~1.0.
         input[9 * pixels + 1] = 0.999;
         fuse_beauty(&mut beauty, &nrc, &input, pixels);
-        assert!(
-            (beauty[0] - 0.5).abs() > 1e-4,
-            "geometry pixel should change"
-        );
-        assert!(
-            (beauty[1] - 0.5).abs() < 1e-6,
-            "sky pixel must stay untouched"
-        );
+        assert!((beauty[0] - 0.5).abs() > 1e-4, "geometry pixel should change");
+        assert!((beauty[1] - 0.5).abs() < 1e-6, "sky pixel must stay untouched");
     }
 
     #[test]

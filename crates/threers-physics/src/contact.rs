@@ -173,7 +173,8 @@ impl ContactSet {
                     let mut best: Option<(f32, &ContactPoint)> = None;
                     for q in &old.points {
                         let d = (p.local_a - q.local_a).length_sq();
-                        if d < MATCH_DISTANCE * MATCH_DISTANCE && best.is_none_or(|(bd, _)| d < bd)
+                        if d < MATCH_DISTANCE * MATCH_DISTANCE
+                            && best.is_none_or(|(bd, _)| d < bd)
                         {
                             best = Some((d, q));
                         }
@@ -374,15 +375,7 @@ mod tests {
         let mut set = ContactSet::new();
 
         set.begin_step();
-        set.update(
-            key(a, b),
-            &raw(Vector3::ZERO, 0.1),
-            &iso,
-            &iso,
-            0.5,
-            0.0,
-            false,
-        );
+        set.update(key(a, b), &raw(Vector3::ZERO, 0.1), &iso, &iso, 0.5, 0.0, false);
         set.end_step();
         // Pretend the solver ran.
         set.iter_mut().next().unwrap().points[0].normal_impulse = 7.5;
@@ -408,15 +401,7 @@ mod tests {
         let iso = Isometry::IDENTITY;
         let mut set = ContactSet::new();
         set.begin_step();
-        set.update(
-            key(a, b),
-            &raw(Vector3::ZERO, 0.1),
-            &iso,
-            &iso,
-            0.5,
-            0.0,
-            false,
-        );
+        set.update(key(a, b), &raw(Vector3::ZERO, 0.1), &iso, &iso, 0.5, 0.0, false);
         set.end_step();
         set.iter_mut().next().unwrap().points[0].normal_impulse = 7.5;
 
@@ -442,44 +427,20 @@ mod tests {
 
         // Speculative only — not touching, so no event.
         set.begin_step();
-        set.update(
-            key(a, b),
-            &raw(Vector3::ZERO, -0.01),
-            &iso,
-            &iso,
-            0.5,
-            0.0,
-            false,
-        );
+        set.update(key(a, b), &raw(Vector3::ZERO, -0.01), &iso, &iso, 0.5, 0.0, false);
         set.end_step();
         assert!(set.events().is_empty());
 
         // Now touching.
         set.begin_step();
-        set.update(
-            key(a, b),
-            &raw(Vector3::ZERO, 0.05),
-            &iso,
-            &iso,
-            0.5,
-            0.0,
-            false,
-        );
+        set.update(key(a, b), &raw(Vector3::ZERO, 0.05), &iso, &iso, 0.5, 0.0, false);
         set.end_step();
         assert_eq!(set.events().len(), 1);
         assert!(set.events()[0].started);
 
         // Still touching — no repeat event.
         set.begin_step();
-        set.update(
-            key(a, b),
-            &raw(Vector3::ZERO, 0.05),
-            &iso,
-            &iso,
-            0.5,
-            0.0,
-            false,
-        );
+        set.update(key(a, b), &raw(Vector3::ZERO, 0.05), &iso, &iso, 0.5, 0.0, false);
         set.end_step();
         assert!(set.events().is_empty());
 
@@ -497,15 +458,7 @@ mod tests {
         let iso = Isometry::IDENTITY;
         let mut set = ContactSet::new();
         set.begin_step();
-        set.update(
-            key(a, b),
-            &raw(Vector3::ZERO, 0.1),
-            &iso,
-            &iso,
-            0.5,
-            0.0,
-            false,
-        );
+        set.update(key(a, b), &raw(Vector3::ZERO, 0.1), &iso, &iso, 0.5, 0.0, false);
         set.end_step();
         assert_eq!(set.len(), 1);
         set.remove_body(a);
@@ -518,15 +471,7 @@ mod tests {
         let iso = Isometry::IDENTITY;
         let mut set = ContactSet::new();
         set.begin_step();
-        set.update(
-            key(a, b),
-            &raw(Vector3::ZERO, 0.1),
-            &iso,
-            &iso,
-            0.5,
-            0.0,
-            false,
-        );
+        set.update(key(a, b), &raw(Vector3::ZERO, 0.1), &iso, &iso, 0.5, 0.0, false);
         set.end_step();
         assert_eq!(set.contacts_with(a).count(), 1);
         assert_eq!(set.contacts_with(b).count(), 1);
@@ -539,15 +484,7 @@ mod tests {
         let iso_b = Isometry::from_translation(Vector3::new(0.0, 20.0, 0.0));
         let mut set = ContactSet::new();
         set.begin_step();
-        set.update(
-            key(a, b),
-            &raw(Vector3::ZERO, 0.1),
-            &iso_a,
-            &iso_b,
-            0.5,
-            0.0,
-            false,
-        );
+        set.update(key(a, b), &raw(Vector3::ZERO, 0.1), &iso_a, &iso_b, 0.5, 0.0, false);
         set.end_step();
         let p = set.iter().next().unwrap().points[0];
         assert!((p.local_a - Vector3::new(-10.0, 0.0, 0.0)).length() < 1e-5);

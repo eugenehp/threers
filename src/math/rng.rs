@@ -289,11 +289,7 @@ mod tests {
         let mut a = parent.fork(0);
         let mut b = parent.fork(1);
         let differing = (0..64).filter(|_| a.next_u32() != b.next_u32()).count();
-        assert!(
-            differing > 60,
-            "two forks agreed on {} of 64",
-            64 - differing
-        );
+        assert!(differing > 60, "two forks agreed on {} of 64", 64 - differing);
     }
 
     #[test]

@@ -965,8 +965,8 @@ where
     F: FnMut(usize) -> Vec<u8>,
 {
     use crate::codec::h264::write_compressed_mp4_quality;
-    use crate::codec::hevc::Yuv420Frame;
     use crate::codec::rate::Quality;
+    use crate::codec::hevc::Yuv420Frame;
 
     if !width.is_multiple_of(2) || !height.is_multiple_of(2) {
         return Err(VideoError::Io(std::io::Error::new(
@@ -1373,18 +1373,12 @@ fn append_codec_args(cmd: &mut Command, opts: &VideoOptions) {
     // else takes `-g`. Left unset, x264/x265 use 250 frames while VideoToolbox
     // picks something far shorter, so an unset value is not a neutral default.
     if let Some(g) = opts.keyframe_interval {
-        if !matches!(
-            opts.codec,
-            VideoCodec::Hevc | VideoCodec::Gif | VideoCodec::Apng
-        ) {
+        if !matches!(opts.codec, VideoCodec::Hevc | VideoCodec::Gif | VideoCodec::Apng) {
             cmd.args(["-g", &g.to_string()]);
         }
     }
     if let Some(preset) = &opts.preset {
-        if matches!(
-            opts.codec,
-            VideoCodec::H264 | VideoCodec::Hevc | VideoCodec::Vp9
-        ) {
+        if matches!(opts.codec, VideoCodec::H264 | VideoCodec::Hevc | VideoCodec::Vp9) {
             cmd.args(["-preset", preset]);
         }
     }

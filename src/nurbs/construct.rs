@@ -355,6 +355,7 @@ pub fn torus(center: V3, axis: V3, major: f64, minor: f64) -> NurbsSurface {
     revolve(&profile, center, axis, TAU)
 }
 
+
 /// Bring a set of curves to a common degree and knot vector.
 ///
 /// [`make_compatible`] pairwise is not enough for three or more: each pass can

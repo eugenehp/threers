@@ -149,9 +149,7 @@ fn edge(px: &[u8], axis: Axis, at: u32) -> (f64, f64) {
         to_linear(px[idx as usize * 4])
     };
     // Only the leading half, so the quad's far edge cannot pull the centroid.
-    let grad: Vec<f64> = (1..N / 2)
-        .map(|i| (sample(i) - sample(i - 1)).abs())
-        .collect();
+    let grad: Vec<f64> = (1..N / 2).map(|i| (sample(i) - sample(i - 1)).abs()).collect();
     let total: f64 = grad.iter().sum();
     let peak = grad.iter().cloned().fold(0.0, f64::max);
     assert!(total > 0.05, "no edge found on the {} axis", axis.name());
@@ -326,61 +324,11 @@ fn both_axes(label: &str, render: &mut dyn FnMut(f32, f32) -> Vec<u8>, budget: B
 fn wgpu_edges_interpolate() {
     use threers::HeadlessRenderer;
     let modes: [(&str, u32, u32, u32, Budget); 5] = [
-        (
-            "wgpu plain",
-            1,
-            1,
-            1,
-            Budget {
-                residual: 0.30,
-                width: 1.05,
-                slope: 0.60,
-            },
-        ),
-        (
-            "wgpu msaa 4",
-            1,
-            4,
-            1,
-            Budget {
-                residual: 0.14,
-                width: 1.70,
-                slope: 0.35,
-            },
-        ),
-        (
-            "wgpu supersample 2",
-            2,
-            1,
-            1,
-            Budget {
-                residual: 0.16,
-                width: 1.70,
-                slope: 0.35,
-            },
-        ),
-        (
-            "wgpu supersample 4",
-            4,
-            1,
-            1,
-            Budget {
-                residual: 0.09,
-                width: 2.20,
-                slope: 0.15,
-            },
-        ),
-        (
-            "wgpu accumulate 16",
-            1,
-            1,
-            16,
-            Budget {
-                residual: 0.005,
-                width: 1.70,
-                slope: 0.02,
-            },
-        ),
+        ("wgpu plain", 1, 1, 1, Budget { residual: 0.30, width: 1.05, slope: 0.60 }),
+        ("wgpu msaa 4", 1, 4, 1, Budget { residual: 0.14, width: 1.70, slope: 0.35 }),
+        ("wgpu supersample 2", 2, 1, 1, Budget { residual: 0.16, width: 1.70, slope: 0.35 }),
+        ("wgpu supersample 4", 4, 1, 1, Budget { residual: 0.09, width: 2.20, slope: 0.15 }),
+        ("wgpu accumulate 16", 1, 1, 16, Budget { residual: 0.005, width: 1.70, slope: 0.02 }),
     ];
     for (label, ss, msaa, acc, budget) in modes {
         let Ok(mut r) = HeadlessRenderer::builder()
@@ -432,11 +380,7 @@ fn wgpu_edges_interpolate() {
     both_axes(
         "wgpu perspective, full",
         &mut render,
-        Budget {
-            residual: 0.02,
-            width: 1.70,
-            slope: 0.05,
-        },
+        Budget { residual: 0.02, width: 1.70, slope: 0.05 },
     );
 }
 
@@ -451,36 +395,9 @@ fn wgpu_edges_interpolate() {
 fn metal_edges_interpolate() {
     use threers::metal::{MetalError, MetalHeadlessRenderer};
     for (label, msaa, ss, budget) in [
-        (
-            "metal plain",
-            1u32,
-            1u32,
-            Budget {
-                residual: 0.30,
-                width: 1.05,
-                slope: 0.60,
-            },
-        ),
-        (
-            "metal msaa 4",
-            4,
-            1,
-            Budget {
-                residual: 0.13,
-                width: 1.70,
-                slope: 0.35,
-            },
-        ),
-        (
-            "metal supersample 2",
-            1,
-            2,
-            Budget {
-                residual: 0.16,
-                width: 1.70,
-                slope: 0.35,
-            },
-        ),
+        ("metal plain", 1u32, 1u32, Budget { residual: 0.30, width: 1.05, slope: 0.60 }),
+        ("metal msaa 4", 4, 1, Budget { residual: 0.13, width: 1.70, slope: 0.35 }),
+        ("metal supersample 2", 1, 2, Budget { residual: 0.16, width: 1.70, slope: 0.35 }),
     ] {
         let mut r = match MetalHeadlessRenderer::builder()
             .size(N, N)
@@ -515,11 +432,7 @@ fn metal_edges_interpolate() {
     both_axes(
         "metal perspective, msaa 4",
         &mut render,
-        Budget {
-            residual: 0.13,
-            width: 1.70,
-            slope: 0.35,
-        },
+        Budget { residual: 0.13, width: 1.70, slope: 0.35 },
     );
 }
 
@@ -553,11 +466,7 @@ fn raytrace_edges_interpolate() {
     both_axes(
         "raytrace 64 spp",
         &mut render,
-        Budget {
-            residual: 0.01,
-            width: 1.70,
-            slope: 0.02,
-        },
+        Budget { residual: 0.01, width: 1.70, slope: 0.02 },
     );
 }
 
@@ -627,11 +536,7 @@ fn a_half_covered_pixel_carries_half_the_light() {
         } else {
             r.render_to_rgba(&mut sc, &cam)
         };
-        assert_eq!(
-            px.len(),
-            (N * N * 4) as usize,
-            "{label}: frame is not {N}×{N}"
-        );
+        assert_eq!(px.len(), (N * N * 4) as usize, "{label}: frame is not {N}×{N}");
         let edge = to_linear(px[((N / 2 * N + 16) * 4) as usize]);
         let inside = to_linear(px[((N / 2 * N + 24) * 4) as usize]);
         eprintln!("{label:24} half-covered {edge:.4} (want 0.5)  interior {inside:.4} (want 1.0)");
@@ -693,10 +598,7 @@ fn the_jitter_covers_the_pixel_evenly_on_both_axes() {
         // Both axes stratified is not enough on its own: the pairing has to be
         // a permutation, or the samples fall on a diagonal and the pixel's
         // corners never get sampled.
-        let mut seen: Vec<i32> = j
-            .iter()
-            .map(|o| (o.1 * n as f32 * 2.0).round() as i32)
-            .collect();
+        let mut seen: Vec<i32> = j.iter().map(|o| (o.1 * n as f32 * 2.0).round() as i32).collect();
         seen.sort_unstable();
         seen.dedup();
         assert_eq!(seen.len() as u32, n, "n={n}: the y offsets repeat");

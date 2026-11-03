@@ -81,10 +81,7 @@ fn main() {
             vertical_speed = 0.0;
         }
     }
-    println!(
-        "  jumped to y={peak:.2}, landed back at y={:.2}",
-        position.translation.y
-    );
+    println!("  jumped to y={peak:.2}, landed back at y={:.2}", position.translation.y);
 
     println!("\n-- climbing a 30 degree ramp --");
     position = Isometry::from_translation(Vector3::new(-1.0, 1.0, 0.0));

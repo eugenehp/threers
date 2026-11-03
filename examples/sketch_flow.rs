@@ -76,7 +76,10 @@ fn main() {
                     age: rng.range(0.0, 4.0),
                     life: rng.range(3.0, 7.0),
                 };
-                let mesh = Mesh::new(geometry.clone(), StandardMaterial::new(Color::BLACK).into());
+                let mesh = Mesh::new(
+                    geometry.clone(),
+                    StandardMaterial::new(Color::BLACK).into(),
+                );
                 let mut obj = Object3D::mesh(mesh);
                 obj.position = p.pos;
                 ids.push(s.scene.add(obj));
@@ -117,8 +120,9 @@ fn main() {
                     p.pos.z += vy * step;
                     p.age += f.delta;
 
-                    let escaped =
-                        p.pos.x.abs() > BOUNDS || p.pos.y.abs() > BOUNDS || p.pos.z.abs() > BOUNDS;
+                    let escaped = p.pos.x.abs() > BOUNDS
+                        || p.pos.y.abs() > BOUNDS
+                        || p.pos.z.abs() > BOUNDS;
                     if escaped || p.age > p.life {
                         p.pos = Vector3::new(
                             (p.pos.x * 7.13).sin() * BOUNDS * 0.6,
@@ -133,7 +137,8 @@ fn main() {
                     let speed = (vx * vx + vy * vy).sqrt();
                     let t = map_range_clamped(speed, 0.0, 1.6, 0.0, 1.0);
                     let fade_in = Easing::CubicOut.apply((p.age / 0.6).clamp(0.0, 1.0));
-                    let fade_out = Easing::CubicIn.apply(((p.life - p.age) / 0.8).clamp(0.0, 1.0));
+                    let fade_out =
+                        Easing::CubicIn.apply(((p.life - p.age) / 0.8).clamp(0.0, 1.0));
                     let colour = ramp.at(t).scaled(fade_in * fade_out);
 
                     if let Some(obj) = f.scene.get_mut(*id) {

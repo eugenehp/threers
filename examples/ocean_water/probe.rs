@@ -262,10 +262,7 @@ impl Probe {
             .map_async(wgpu::MapMode::Read, move |res| {
                 if res.is_ok() {
                     {
-                        let view = staging
-                            .slice(..)
-                            .get_mapped_range()
-                            .expect("buffer range is mapped");
+                        let view = staging.slice(..).get_mapped_range().expect("buffer range is mapped");
                         let data: &[[f32; 4]] = bytemuck::cast_slice(&view);
                         if let Ok(mut slot) = out.lock() {
                             slot.0.copy_from_slice(data);

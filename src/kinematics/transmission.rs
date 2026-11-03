@@ -43,8 +43,8 @@ impl StribeckFriction {
     pub fn torque_smooth(&self, omega: f64) -> f64 {
         let sign = if omega >= 0.0 { 1.0 } else { -1.0 };
         let abs_w = omega.abs();
-        let stribeck =
-            self.tau_c + (self.tau_s - self.tau_c) * (-((abs_w / self.v_s).powi(2))).exp();
+        let stribeck = self.tau_c
+            + (self.tau_s - self.tau_c) * (-((abs_w / self.v_s).powi(2))).exp();
         -sign * stribeck - self.viscous * omega
     }
 

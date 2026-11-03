@@ -11,10 +11,7 @@
 #[allow(clippy::manual_checked_ops)]
 fn main() {
     let a: Vec<String> = std::env::args().skip(1).collect();
-    let (src, dst) = (
-        a[0].clone(),
-        a.get(1).cloned().unwrap_or("out/tex_dump.png".into()),
-    );
+    let (src, dst) = (a[0].clone(), a.get(1).cloned().unwrap_or("out/tex_dump.png".into()));
     let t = threers::textures::blob::load(&src).unwrap_or_else(|e| panic!("{e}"));
     println!(
         "{src}: {}x{} {:?}, {} mips",

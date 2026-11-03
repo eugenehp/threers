@@ -64,38 +64,41 @@ mod expr;
 mod ints;
 mod lz4;
 mod parse;
-mod scene;
 mod schemas;
-mod shade;
 mod skel;
 mod subdiv;
+mod scene;
+mod shade;
 mod usdc;
 mod usdz;
 mod value;
 mod write;
 
-pub use crate::core::{MorphAttributes, MorphTarget};
-pub use clips::ClipSet;
-#[cfg(not(target_arch = "wasm32"))]
-pub use compose::FileResolver;
-pub use compose::{compose, mask, resolve_path, AssetResolver, ComposeOptions, MemoryResolver};
-pub use crate_write::write as layer_to_usdc;
+pub use parse::{Specifier, UsdLayer, UsdPrim, UsdProperty, UsdVariantSet};
+pub use value::{UsdReference, UsdValue};
 pub use export::{
     animated_scene_to_layer, animated_scene_to_layer_with_textures, animated_scene_to_usda,
     geometry_to_layer, geometry_to_usda, material_prim, material_prim_with_textures, mesh_prim,
-    scene_to_layer, scene_to_layer_with_textures, scene_to_usda, ExportedTexture, UsdExportOptions,
+    scene_to_layer, scene_to_layer_with_textures, scene_to_usda, ExportedTexture,
+    UsdExportOptions,
 };
-pub use parse::{Specifier, UsdLayer, UsdPrim, UsdProperty, UsdVariantSet};
+pub use crate::core::{MorphAttributes, MorphTarget};
 pub use scene::attach_textures;
 #[cfg(not(target_arch = "wasm32"))]
 pub use scene::attach_textures_from_dir;
 pub use scene::{
     mesh_geometry, mesh_geometry_at, to_scene, to_scene_at, to_scene_with, SceneOptions, UsdScene,
 };
+pub use clips::ClipSet;
 pub use shade::{TextureRequest, TextureSlot, UsdMaterial};
+pub use compose::{
+    compose, mask, resolve_path, AssetResolver, ComposeOptions, MemoryResolver,
+};
+#[cfg(not(target_arch = "wasm32"))]
+pub use compose::FileResolver;
+pub use crate_write::write as layer_to_usdc;
 pub use usdc::{info as usdc_info, CrateInfo};
 pub use usdz::{arkit_issues, ArkitIssue, UsdzArchive, UsdzEntry};
-pub use value::{UsdReference, UsdValue};
 pub use write::layer_to_usda;
 
 /// Why a USD document could not be read.
@@ -117,9 +120,7 @@ pub enum UsdError {
 impl std::fmt::Display for UsdError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            UsdError::Syntax { line, what } => {
-                write!(f, "usda syntax error at line {line}: {what}")
-            }
+            UsdError::Syntax { line, what } => write!(f, "usda syntax error at line {line}: {what}"),
             UsdError::NotUsd => write!(f, "not a USD file"),
             UsdError::EmptyArchive => write!(f, "usdz archive contains no layer"),
             UsdError::UnsupportedCrate(why) => write!(f, "unsupported usdc crate: {why}"),
@@ -403,11 +404,7 @@ impl UsdExport {
     /// the directory the layer's own relative paths resolve against; for a
     /// `.usdz` they go inside and `base` is unused.
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn write_to(
-        &self,
-        path: impl AsRef<std::path::Path>,
-        base: &std::path::Path,
-    ) -> std::io::Result<()> {
+    pub fn write_to(&self, path: impl AsRef<std::path::Path>, base: &std::path::Path) -> std::io::Result<()> {
         let path = path.as_ref();
         let extension = path
             .extension()
@@ -444,7 +441,10 @@ pub fn geometry_to_usdc(g: &crate::core::BufferGeometry, name: &str) -> Vec<u8> 
 /// A scene graph as a `.usdc` crate file.
 /// Any images the materials refer to are *not* returned; a textured scene
 /// wants [`UsdExport`], which keeps the two together.
-pub fn scene_to_usdc(arena: &crate::core::ObjectArena, roots: &[crate::core::ObjectId]) -> Vec<u8> {
+pub fn scene_to_usdc(
+    arena: &crate::core::ObjectArena,
+    roots: &[crate::core::ObjectId],
+) -> Vec<u8> {
     UsdExport::scene(arena, roots).usdc()
 }
 
@@ -549,10 +549,7 @@ mod tests {
 
         let archive = UsdLoader::parse_archive(bytes).unwrap();
         let root = archive.root_layer().unwrap();
-        assert!(
-            root.data.starts_with(b"PXR-USDC"),
-            "the layer inside is binary"
-        );
+        assert!(root.data.starts_with(b"PXR-USDC"), "the layer inside is binary");
 
         let scene = UsdLoader::parse(bytes).expect("archive parses");
         let names: Vec<&str> = scene
@@ -611,9 +608,7 @@ mod tests {
 
     fn names_of(scene: &UsdScene) -> Vec<String> {
         fn walk(scene: &UsdScene, id: crate::core::ObjectId, out: &mut Vec<String>) {
-            let Some(node) = scene.arena.get(id) else {
-                return;
-            };
+            let Some(node) = scene.arena.get(id) else { return };
             out.push(node.name.clone());
             for child in &node.children {
                 walk(scene, *child, out);
@@ -640,16 +635,10 @@ mod tests {
 
             let inner = UsdLoader::parse_archive(&archive).unwrap();
             let root = inner.root_layer().unwrap();
-            assert!(
-                root.data.starts_with(magic),
-                "wrong layer form for {form:?}"
-            );
+            assert!(root.data.starts_with(magic), "wrong layer form for {form:?}");
 
             let scene = UsdLoader::parse(&archive).expect("archive parses");
-            assert_eq!(
-                names_of(&scene),
-                vec!["World", "Quad", "Sub", "Deep", "Mat", "Shader"]
-            );
+            assert_eq!(names_of(&scene), vec!["World", "Quad", "Sub", "Deep", "Mat", "Shader"]);
         }
     }
 
@@ -778,11 +767,7 @@ mod tests {
     #[test]
     fn errors_read_as_sentences() {
         assert_eq!(
-            UsdError::Syntax {
-                line: 4,
-                what: "unterminated prim"
-            }
-            .to_string(),
+            UsdError::Syntax { line: 4, what: "unterminated prim" }.to_string(),
             "usda syntax error at line 4: unterminated prim"
         );
     }

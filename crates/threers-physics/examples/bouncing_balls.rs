@@ -16,7 +16,11 @@ fn main() {
     // `half_space(Vector3::UP)`: solid everywhere below the surface.
     world.add_body(RigidBody::fixed().shape(Shape::ground()));
 
-    let materials = [("dead     ", 0.0), ("rubbery  ", 0.6), ("superball", 0.95)];
+    let materials = [
+        ("dead     ", 0.0),
+        ("rubbery  ", 0.6),
+        ("superball", 0.95),
+    ];
 
     let balls: Vec<(&str, BodyId)> = materials
         .iter()
@@ -65,9 +69,5 @@ fn main() {
         );
     }
 
-    println!(
-        "\n{} bodies, {} asleep",
-        world.body_count(),
-        world.sleeping_count()
-    );
+    println!("\n{} bodies, {} asleep", world.body_count(), world.sleeping_count());
 }

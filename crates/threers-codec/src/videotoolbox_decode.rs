@@ -205,13 +205,7 @@ unsafe extern "C" {
 }
 
 fn cfnum(v: i32) -> CFNumberRef {
-    unsafe {
-        CFNumberCreate(
-            ptr::null(),
-            K_CF_NUMBER_SINT32,
-            &v as *const i32 as *const c_void,
-        )
-    }
+    unsafe { CFNumberCreate(ptr::null(), K_CF_NUMBER_SINT32, &v as *const i32 as *const c_void) }
 }
 
 /// What the decode callback leaves behind.
@@ -380,10 +374,8 @@ impl VideoToolboxDecoder {
                 return Err(format!("VideoToolbox decoding of {:?} is not wired up", track.codec))
             }
         };
-        let pointers: Vec<*const u8> = sets
-            .iter()
-            .map(|(o, _)| track.config[*o..].as_ptr())
-            .collect();
+        let pointers: Vec<*const u8> =
+            sets.iter().map(|(o, _)| track.config[*o..].as_ptr()).collect();
         let sizes: Vec<usize> = sets.iter().map(|(_, l)| *l).collect();
 
         let mut format: CMFormatDescriptionRef = ptr::null();

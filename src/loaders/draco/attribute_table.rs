@@ -161,12 +161,7 @@ impl AttributeCornerTable {
             // the walk below starts on a seam rather than in the middle of one
             // side of it.
             let mut first_c = c;
-            if self
-                .is_vertex_on_seam
-                .get(v as usize)
-                .copied()
-                .unwrap_or(false)
-            {
+            if self.is_vertex_on_seam.get(v as usize).copied().unwrap_or(false) {
                 let mut act_c = self.swing_left(base, first_c);
                 let mut steps = 0u32;
                 while act_c != INVALID_CORNER {
@@ -330,7 +325,9 @@ pub fn assign_points_to_corners(
         let mut act_c = base.swing_right(dedup_first);
         let mut steps = 0u32;
         while act_c != INVALID_CORNER && act_c != dedup_first {
-            let changed = tables.iter().any(|t| t.vertex(act_c) != t.vertex(prev_c));
+            let changed = tables
+                .iter()
+                .any(|t| t.vertex(act_c) != t.vertex(prev_c));
             if changed {
                 corner_to_point[act_c as usize] = point_to_corner.len() as u32;
                 point_to_corner.push(act_c);
@@ -393,10 +390,7 @@ mod tests {
             ]
         );
         assert_eq!(fnv1a(&idx), 11727646580840884174, "all 2160 indices");
-        assert!(
-            idx.iter().all(|i| *i < d.num_points),
-            "an index past the points"
-        );
+        assert!(idx.iter().all(|i| *i < d.num_points), "an index past the points");
     }
 
     /// And the bunny's 208353 indices.
@@ -450,11 +444,7 @@ mod tests {
     #[test]
     fn the_sphere_seams_fall_on_the_texture_coordinates() {
         let d = edgebreaker_connectivity(SPHERE).expect("connectivity");
-        assert_eq!(
-            d.attribute_tables.len(),
-            2,
-            "normals and texture coordinates"
-        );
+        assert_eq!(d.attribute_tables.len(), 2, "normals and texture coordinates");
         let normals = &d.attribute_tables[0];
         let uvs = &d.attribute_tables[1];
         assert!(
@@ -484,8 +474,9 @@ mod tests {
         let d = edgebreaker_connectivity(SPHERE).expect("connectivity");
         let base = &d.replay.table;
         let uvs = &d.attribute_tables[1];
-        let is_cut =
-            |c: u32| base.opposite(c) != INVALID_CORNER && uvs.opposite(base, c) == INVALID_CORNER;
+        let is_cut = |c: u32| {
+            base.opposite(c) != INVALID_CORNER && uvs.opposite(base, c) == INVALID_CORNER
+        };
         let cut: Vec<u32> = (0..base.num_corners()).filter(|c| is_cut(*c)).collect();
         assert!(!cut.is_empty(), "the UV seam cuts no interior edge");
         for c in &cut {
@@ -501,10 +492,7 @@ mod tests {
         let mut per_vertex: std::collections::HashMap<u32, std::collections::HashSet<u32>> =
             std::collections::HashMap::new();
         for c in 0..base.num_corners() {
-            per_vertex
-                .entry(base.vertex(c))
-                .or_default()
-                .insert(uvs.vertex(c));
+            per_vertex.entry(base.vertex(c)).or_default().insert(uvs.vertex(c));
         }
         let total: usize = per_vertex.values().map(|s| s.len()).sum();
         assert_eq!(total, 423, "attribute vertices, summed over positions");

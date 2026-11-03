@@ -64,10 +64,7 @@ pub enum DriverOp {
     Copy,
     Scale(f32),
     Offset(f32),
-    ScaleOffset {
-        scale: f32,
-        offset: f32,
-    },
+    ScaleOffset { scale: f32, offset: f32 },
     /// dest = clamp(scale * src + offset, min, max)
     Expression {
         scale: f32,

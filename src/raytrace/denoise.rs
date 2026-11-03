@@ -190,27 +190,29 @@ fn filter_pass(
     #[cfg(all(feature = "parallel", not(target_arch = "wasm32")))]
     {
         use rayon::prelude::*;
-        dst.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
-            for (x, out) in row.iter_mut().enumerate() {
-                *out = filter_pixel(
-                    x,
-                    y,
-                    w,
-                    h,
-                    step,
-                    sigma_color,
-                    params,
-                    depth_scale,
-                    min_samples,
-                    src,
-                    albedo,
-                    normal,
-                    depth,
-                    variance,
-                    sample_counts,
-                );
-            }
-        });
+        dst.par_chunks_mut(w)
+            .enumerate()
+            .for_each(|(y, row)| {
+                for (x, out) in row.iter_mut().enumerate() {
+                    *out = filter_pixel(
+                        x,
+                        y,
+                        w,
+                        h,
+                        step,
+                        sigma_color,
+                        params,
+                        depth_scale,
+                        min_samples,
+                        src,
+                        albedo,
+                        normal,
+                        depth,
+                        variance,
+                        sample_counts,
+                    );
+                }
+            });
     }
     #[cfg(not(all(feature = "parallel", not(target_arch = "wasm32"))))]
     {
@@ -292,15 +294,17 @@ fn filter_pixel(
                 // walls keep log-lum; specular noise can still blur when linear
                 // says neighbours agree.
                 let dl = dl_log.abs().min(dl_lin);
-                let noise_lin = (v_i + v_j).max((mean_l * 0.01).powi(2).max(1e-12));
+                let noise_lin =
+                    (v_i + v_j).max((mean_l * 0.01).powi(2).max(1e-12));
                 let noise = noise_lin / (scale * scale);
                 (-(dl * dl) / (sigma_color * sigma_color * noise).max(1e-9)).exp()
             } else {
                 1.0
             };
 
-            let dot = (n_i[0] * normal[j][0] + n_i[1] * normal[j][1] + n_i[2] * normal[j][2])
-                .clamp(-1.0, 1.0);
+            let dot =
+                (n_i[0] * normal[j][0] + n_i[1] * normal[j][1] + n_i[2] * normal[j][2])
+                    .clamp(-1.0, 1.0);
             let dn = (1.0 - dot).max(0.0);
             let w_n = (-dn / (params.sigma_normal * params.sigma_normal).max(1e-8)).exp();
 
@@ -374,7 +378,8 @@ fn blend_denoised(c_i: [f32; 3], filtered: [f32; 3], trust: f32) -> [f32; 3] {
             c_i[2] + (filtered[2] - c_i[2]) * trust,
         ];
     }
-    let log_lo = (1.0 + li).ln() + trust * ((1.0 + lf).ln() - (1.0 + li).ln());
+    let log_lo =
+        (1.0 + li).ln() + trust * ((1.0 + lf).ln() - (1.0 + li).ln());
     let lo = log_lo.exp() - 1.0;
     let norm_i = chroma_dir(c_i, li);
     let norm_f = chroma_dir(filtered, lf);

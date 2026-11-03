@@ -14,10 +14,10 @@ use threers_probe::generate::{self, Built};
 use threers_probe::model::{Head, ProbeArch};
 use threers_probe::pack::{self, PlaneExtras};
 use threers_probe::{
-    colour_planes, init_nrc_params, nrc_input_channels, pack_nrc_batch_with, preferred_device,
-    save_nrc, train_nrc_dataset, Batch, Dataset, NrcArch, NrcNet, ProbeGi, ProbeNet, TrainConfig,
-    Trainer, Widths, GI_LOSS_BOOST, HOPS_GI_LOSS_BOOST, HOPS_NRC_CAP, HOPS_NRC_PROBE_CONFIDENCE,
+    colour_planes, init_nrc_params, pack_nrc_batch_with, preferred_device, save_nrc, train_nrc_dataset, Batch, Dataset,
+    HOPS_GI_LOSS_BOOST, NrcArch, NrcNet, ProbeGi, ProbeNet, TrainConfig, Trainer, Widths, GI_LOSS_BOOST,
     IN_CHANNELS, LOSS_EPSILON, NRC_MIN_ALBEDO, NRC_OUT, NRC_PROBE_CONFIDENCE, OUT_CHANNELS,
+    HOPS_NRC_PROBE_CONFIDENCE, HOPS_NRC_CAP, nrc_input_channels,
 };
 
 fn env_u32(name: &str, default: u32) -> u32 {
@@ -138,22 +138,10 @@ fn main() {
             side,
             device,
             nrc_gap,
-            if hops {
-                HOPS_NRC_CAP
-            } else {
-                threers_probe::NRC_CAP
-            },
+            if hops { HOPS_NRC_CAP } else { threers_probe::NRC_CAP },
         )
         .expect("load");
-        score_hostile(
-            &mut rt,
-            &mut stack,
-            frame,
-            probe_spp,
-            probe_bounces,
-            reference_spp,
-            side,
-        );
+        score_hostile(&mut rt, &mut stack, frame, probe_spp, probe_bounces, reference_spp, side);
         return;
     }
 
@@ -190,9 +178,9 @@ fn main() {
     let train_scenes = scenes - val_scenes;
 
     if nrc_only {
-        let (net_loaded, params) =
-            checkpoint::load(weights_path(hops)).expect("load hops for nrc-only");
-        let infer_frame = ProbeNet::new(net_loaded, params, 1, side, side, device).expect("infer");
+        let (net_loaded, params) = checkpoint::load(weights_path(hops)).expect("load hops for nrc-only");
+        let infer_frame =
+            ProbeNet::new(net_loaded, params, 1, side, side, device).expect("infer");
         let mut stack = build_nrc_stack(
             infer_frame,
             &frames,
@@ -240,11 +228,7 @@ fn main() {
         device,
         TrainConfig {
             learning_rate: if hops { 8e-4 } else { 5e-4 },
-            gi_loss_boost: if hops {
-                HOPS_GI_LOSS_BOOST
-            } else {
-                GI_LOSS_BOOST
-            },
+            gi_loss_boost: if hops { HOPS_GI_LOSS_BOOST } else { GI_LOSS_BOOST },
             chroma_loss_boost: 0.0,
             neutral_loss_boost: if hops {
                 env_f32("NEUTRAL_LOSS", 0.0)
@@ -529,7 +513,11 @@ fn score_hostile(
             .expect("reconstruct");
         write_preview(packed.frame, &format!("out/probe/{name}_pred.png"), &pred);
         let fused = stack.reconstruct(&packed.input).expect("fused");
-        write_preview(packed.frame, &format!("out/probe/{name}_fused.png"), &fused);
+        write_preview(
+            packed.frame,
+            &format!("out/probe/{name}_fused.png"),
+            &fused,
+        );
         write_preview(
             packed.frame,
             &format!("out/probe/{name}_ref.png"),
@@ -605,27 +593,9 @@ fn score_ablation(stack: &mut ProbeGi, packed: &Packed, name_hint: &str) -> (f32
     let fused = stack.reconstruct(&packed.input).expect("fused");
     let both = ProbeNet::relative_error(&fused, &packed.target, LOSS_EPSILON);
     if name_hint == "cornell" {
-        print_regions(
-            "cornell regions  probe",
-            colour_planes(&packed.input, pixels),
-            &packed.target,
-            &packed.input,
-            pixels,
-        );
-        print_regions(
-            "cornell regions  hops ",
-            &pred,
-            &packed.target,
-            &packed.input,
-            pixels,
-        );
-        print_regions(
-            "cornell regions  fused",
-            &fused,
-            &packed.target,
-            &packed.input,
-            pixels,
-        );
+        print_regions("cornell regions  probe", colour_planes(&packed.input, pixels), &packed.target, &packed.input, pixels);
+        print_regions("cornell regions  hops ", &pred, &packed.target, &packed.input, pixels);
+        print_regions("cornell regions  fused", &fused, &packed.target, &packed.input, pixels);
     }
     (probe, unet, both)
 }

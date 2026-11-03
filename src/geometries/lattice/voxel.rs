@@ -759,17 +759,11 @@ fn scad_assembly(asm: &CuboctAssembly<'_>) -> String {
     let pitch = asm.pitch;
     let [nx, ny, nz] = asm.cells;
     let mut out = String::from("// Cuboct assembly — Jenett et al. Sci. Adv. 2020\n");
-    out.push_str(&format!(
-        "pitch = {pitch}; plate = {pl}; beam = {beam}; pad = {pad};\n",
-        pl = asm.plate,
-        beam = asm.beam,
-        pad = asm.pad
-    ));
+    out.push_str(&format!("pitch = {pitch}; plate = {pl}; beam = {beam}; pad = {pad};\n",
+        pl = asm.plate, beam = asm.beam, pad = asm.pad));
     out.push_str("module cuboct_face(kind) {\n");
     out.push_str("  // Placeholder: import exported STL/OBJ or extrude from cuboct-face.svg\n");
-    out.push_str(
-        "  color(\"SteelBlue\") linear_extrude(height=plate) square(pitch, center=false);\n",
-    );
+    out.push_str("  color(\"SteelBlue\") linear_extrude(height=plate) square(pitch, center=false);\n");
     out.push_str("}\n\n");
     for iz in 0..nz {
         for iy in 0..ny {
@@ -805,9 +799,7 @@ fn scad_assembly(asm: &CuboctAssembly<'_>) -> String {
         for j in asm.joints() {
             out.push_str(&format!(
                 "translate([{:.3}, {:.3}, {:.3}]) cylinder(h={:.3}, d={:.3}, $fn=16);\n",
-                j.at.x,
-                j.at.y,
-                j.at.z,
+                j.at.x, j.at.y, j.at.z,
                 asm.plate * 1.2,
                 asm.rivet_diameter
             ));
@@ -837,9 +829,7 @@ fn scad_mold(asm: &CuboctAssembly<'_>) -> String {
     ));
     out.push_str("    square(pitch, center=false);\n");
     out.push_str("}\nmodule core() { translate([0,0,plate]) mirror([0,0,1]) cavity(); }\n");
-    out.push_str(
-        "difference() { cube([pitch*1.4, pitch*1.4, plate*2.2], center=true); cavity(); }\n",
-    );
+    out.push_str("difference() { cube([pitch*1.4, pitch*1.4, plate*2.2], center=true); cavity(); }\n");
     if asm.mold_ready {
         for node in FACE_NODES_UV {
             out.push_str(&format!(
@@ -928,9 +918,7 @@ mod tests {
 
     #[test]
     fn one_voxel_has_six_faces() {
-        let asm = CuboctAssembly::new(Cuboct::Rigid)
-            .pitch(10.0)
-            .resolution(16);
+        let asm = CuboctAssembly::new(Cuboct::Rigid).pitch(10.0).resolution(16);
         assert_eq!(asm.parts().len(), 6);
         let geom = asm.build();
         assert!(geom.index.as_ref().unwrap().len() / 3 > 80);

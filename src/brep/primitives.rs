@@ -214,6 +214,7 @@ pub fn tag_cylinder(
     }
 }
 
+
 /// `LatheGeometry` — a profile polyline revolved about `+Y`.
 ///
 /// Exact: the mesh's vertices are `(x·sin φ, y, x·cos φ)` at the same angles the

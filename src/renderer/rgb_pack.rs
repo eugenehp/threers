@@ -156,16 +156,7 @@ impl RgbPack {
         overlay: Option<&wgpu::Texture>,
     ) -> Option<Self> {
         Self::build(
-            device,
-            src,
-            bloom,
-            strength,
-            ao,
-            depth,
-            inv_vp,
-            prev_vp,
-            shutter,
-            overlay,
+            device, src, bloom, strength, ao, depth, inv_vp, prev_vp, shutter, overlay,
             FilmGrade::default(),
         )
     }
@@ -340,21 +331,13 @@ impl RgbPack {
             mapped_at_creation: true,
         });
         {
-            let mut m = ubo
-                .slice(..)
-                .get_mapped_range_mut()
-                .expect("buffer range is mapped");
+            let mut m = ubo.slice(..).get_mapped_range_mut().expect("buffer range is mapped");
             m.slice(..16).copy_from_slice(bytemuck::cast_slice(&params));
-            m.slice(16..32)
-                .copy_from_slice(bytemuck::cast_slice(&fparams));
-            m.slice(32..96)
-                .copy_from_slice(bytemuck::cast_slice(&inv_vp));
-            m.slice(96..160)
-                .copy_from_slice(bytemuck::cast_slice(&prev_vp));
-            m.slice(160..168)
-                .copy_from_slice(bytemuck::cast_slice(&[ov_w, ov_h]));
-            m.slice(168..176)
-                .copy_from_slice(bytemuck::cast_slice(&[film.vignette, film.grain]));
+            m.slice(16..32).copy_from_slice(bytemuck::cast_slice(&fparams));
+            m.slice(32..96).copy_from_slice(bytemuck::cast_slice(&inv_vp));
+            m.slice(96..160).copy_from_slice(bytemuck::cast_slice(&prev_vp));
+            m.slice(160..168).copy_from_slice(bytemuck::cast_slice(&[ov_w, ov_h]));
+            m.slice(168..176).copy_from_slice(bytemuck::cast_slice(&[film.vignette, film.grain]));
             m.slice(176..192)
                 .copy_from_slice(bytemuck::cast_slice(&[film.seed, 0.0f32, 0.0f32, 0.0f32]));
             // Depth of field is set per frame, like the reprojection: focus
@@ -515,15 +498,7 @@ impl RgbPack {
     /// `near`/`far` MUST be the ones the frame was drawn with — the depth
     /// linearisation is wrong otherwise, and wrong silently, in the same way
     /// [`Ssao`](crate::renderer::ssao) is. A radius of zero turns it off.
-    pub fn set_dof(
-        &self,
-        queue: &wgpu::Queue,
-        focus: f32,
-        range: f32,
-        radius: f32,
-        near: f32,
-        far: f32,
-    ) {
+    pub fn set_dof(&self, queue: &wgpu::Queue, focus: f32, range: f32, radius: f32, near: f32, far: f32) {
         queue.write_buffer(
             &self.ubo,
             180,

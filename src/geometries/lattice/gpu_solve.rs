@@ -218,11 +218,7 @@ impl GpuSolver {
             z: buffer("cg z", &zeros, storage),
             p: buffer("cg p", &zeros, storage),
             q: buffer("cg q", &zeros, storage),
-            partials: buffer(
-                "cg partials",
-                &vec![0.0f32; 3 * REDUCE_GROUPS as usize],
-                storage,
-            ),
+            partials: buffer("cg partials", &vec![0.0f32; 3 * REDUCE_GROUPS as usize], storage),
             scalars: buffer(
                 "cg scalars",
                 &[0.0f32; 8],

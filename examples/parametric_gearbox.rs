@@ -58,7 +58,9 @@ fn arg_u(args: &[String], flag: &str) -> Option<u32> {
 }
 
 fn arg_s(args: &[String], flag: &str) -> Option<String> {
-    args.windows(2).find(|w| w[0] == flag).map(|w| w[1].clone())
+    args.windows(2)
+        .find(|w| w[0] == flag)
+        .map(|w| w[1].clone())
 }
 
 fn parse_params() -> Params {
@@ -132,7 +134,11 @@ fn box_from_origin(size: [f32; 3]) -> Solid {
 
 fn build(p: &Params) -> Solid {
     let m = p.module;
-    let a = [26.0, 40.0, p.deck];
+    let a = [
+        26.0,
+        40.0,
+        p.deck,
+    ];
     let b = [
         a[0] + pitch_r(m, p.n_in) + pitch_r(m, p.n_big),
         40.0,
@@ -177,16 +183,23 @@ fn build(p: &Params) -> Solid {
     let house_h = p.deck + p.face * 2.0 + 12.0;
     let housing = box_from_origin([deck_w, wall, house_h])
         .color_named("gray")
-        .union(box_from_origin([deck_w, wall, house_h]).translate([0.0, deck_d - wall, 0.0]))
+        .union(
+            box_from_origin([deck_w, wall, house_h]).translate([0.0, deck_d - wall, 0.0]),
+        )
         .union(box_from_origin([wall, deck_d, house_h]))
-        .union(box_from_origin([wall, deck_d, house_h]).translate([deck_w - wall, 0.0, 0.0]));
+        .union(
+            box_from_origin([wall, deck_d, house_h]).translate([deck_w - wall, 0.0, 0.0]),
+        );
 
     let input = wheel(m, p.n_in, p.face, 0.0)
         .translate([a[0], a[1], a[2]])
         .color_named("indianred");
 
     let compound = wheel(m, p.n_big, p.face, ph_c)
-        .union(wheel(m, p.n_small, p.face + overlap, ph_c).translate([0.0, 0.0, p.face - overlap]))
+        .union(
+            wheel(m, p.n_small, p.face + overlap, ph_c)
+                .translate([0.0, 0.0, p.face - overlap]),
+        )
         .translate([b[0], b[1], b[2]])
         .color_named("steelblue");
 
@@ -194,11 +207,7 @@ fn build(p: &Params) -> Solid {
         .translate([c[0], c[1], c[2] + p.face])
         .color_named("olivedrab");
 
-    frame
-        .union(housing)
-        .union(input)
-        .union(compound)
-        .union(output)
+    frame.union(housing).union(input).union(compound).union(output)
 }
 
 fn main() {

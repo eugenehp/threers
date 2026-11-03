@@ -451,7 +451,8 @@ pub fn replay(
                 } else {
                     table.previous(act_top)
                 };
-                let decoder_split_symbol_id = num_symbols as i64 - split.split_symbol_id as i64 - 1;
+                let decoder_split_symbol_id =
+                    num_symbols as i64 - split.split_symbol_id as i64 - 1;
                 split_active_corners.insert(decoder_split_symbol_id, new_active);
             }
         }
@@ -603,11 +604,7 @@ mod tests {
             let c = face * 3;
             assert_eq!(table.next(c), c + 1);
             assert_eq!(table.next(c + 1), c + 2);
-            assert_eq!(
-                table.next(c + 2),
-                c,
-                "next wraps to the face's first corner"
-            );
+            assert_eq!(table.next(c + 2), c, "next wraps to the face's first corner");
             assert_eq!(table.previous(c), c + 2, "previous wraps the other way");
             assert_eq!(table.previous(c + 1), c);
             assert_eq!(table.previous(c + 2), c + 1);
@@ -629,18 +626,13 @@ mod tests {
     /// stitching wrong and the count of distinct edges moves.
     #[test]
     fn the_sphere_replays_into_a_closed_manifold() {
-        let r = edgebreaker_connectivity(SPHERE)
-            .expect("connectivity")
-            .replay;
+        let r = edgebreaker_connectivity(SPHERE).expect("connectivity").replay;
         let table = &r.table;
         assert_eq!(table.num_faces(), 720);
 
         for c in 0..table.num_corners() {
             let o = table.opposite(c);
-            assert_ne!(
-                o, INVALID_CORNER,
-                "corner {c} has no opposite on a closed mesh"
-            );
+            assert_ne!(o, INVALID_CORNER, "corner {c} has no opposite on a closed mesh");
             assert_eq!(table.opposite(o), c, "opposite is not an involution at {c}");
             assert_ne!(o, c, "a corner cannot be opposite itself");
             assert_ne!(table.vertex(c), INVALID_VERTEX, "corner {c} has no vertex");
@@ -671,10 +663,7 @@ mod tests {
         // connectivity present they are not compacted out of the numbering.
         for v in 0..table.num_vertices() {
             if !table.is_vertex_isolated(v) {
-                assert!(
-                    !r.is_vert_hole[v as usize],
-                    "vertex {v} is interior on a sphere"
-                );
+                assert!(!r.is_vert_hole[v as usize], "vertex {v} is interior on a sphere");
             }
         }
     }
@@ -689,9 +678,7 @@ mod tests {
     /// valence 24, a ring of 48 at valence 5, and 312 ordinary vertices at 6.
     #[test]
     fn the_sphere_valences_match_the_reference_decoder() {
-        let r = edgebreaker_connectivity(SPHERE)
-            .expect("connectivity")
-            .replay;
+        let r = edgebreaker_connectivity(SPHERE).expect("connectivity").replay;
         let hist = valence_histogram(&r.table.triangles());
         let expected: BTreeMap<usize, usize> = [(5, 48), (6, 312), (24, 2)].into_iter().collect();
         assert_eq!(hist, expected, "valences disagree with draco3d");
@@ -706,9 +693,7 @@ mod tests {
     /// closed sphere never reaches.
     #[test]
     fn the_bunny_replays_with_its_boundaries() {
-        let r = edgebreaker_connectivity(BUNNY)
-            .expect("connectivity")
-            .replay;
+        let r = edgebreaker_connectivity(BUNNY).expect("connectivity").replay;
         let table = &r.table;
         assert_eq!(table.num_faces(), 69451);
 
@@ -755,9 +740,7 @@ mod tests {
     /// stitched one split wrongly would move at least two of these counts.
     #[test]
     fn the_bunny_valences_match_the_reference_decoder() {
-        let r = edgebreaker_connectivity(BUNNY)
-            .expect("connectivity")
-            .replay;
+        let r = edgebreaker_connectivity(BUNNY).expect("connectivity").replay;
         let hist = valence_histogram(&r.table.triangles());
         let expected: BTreeMap<usize, usize> = [
             (2, 2),
@@ -785,9 +768,7 @@ mod tests {
     /// vertex — no more, no fewer, no repeats.
     #[test]
     fn corner_rings_agree_with_the_face_list() {
-        let r = edgebreaker_connectivity(SPHERE)
-            .expect("connectivity")
-            .replay;
+        let r = edgebreaker_connectivity(SPHERE).expect("connectivity").replay;
         let table = &r.table;
         let mut from_faces: HashMap<u32, HashSet<u32>> = HashMap::new();
         for c in 0..table.num_corners() {

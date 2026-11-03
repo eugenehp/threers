@@ -265,7 +265,10 @@ mod tests {
     fn a_csg_result_produces_a_collider_that_matches_it() {
         // A block with a hole: the convex hull fills the hole in, which is the
         // documented behaviour and why the fit is a choice.
-        let drilled = difference_all(vec![cube([4.0, 2.0, 2.0]), cylinder(3.0, 0.4)]);
+        let drilled = difference_all(vec![
+            cube([4.0, 2.0, 2.0]),
+            cylinder(3.0, 0.4),
+        ]);
         let part = SolidPhysics::dynamic()
             .fit(ColliderFit::ConvexHull)
             .build(drilled)
@@ -286,7 +289,9 @@ mod tests {
             ColliderFit::Capsule,
             ColliderFit::Cylinder,
         ] {
-            let part = SolidPhysics::fixed().fit(fit).build(cube([2.0, 4.0, 2.0]));
+            let part = SolidPhysics::fixed()
+                .fit(fit)
+                .build(cube([2.0, 4.0, 2.0]));
             assert!(part.is_some(), "{fit:?} produced nothing");
         }
     }
@@ -306,10 +311,7 @@ mod tests {
             world.step(1.0 / 60.0);
         }
         let y = world.body(id).unwrap().translation().y;
-        assert!(
-            (y - 0.5).abs() < 0.06,
-            "the part rested at {y}, expected 0.5"
-        );
+        assert!((y - 0.5).abs() < 0.06, "the part rested at {y}, expected 0.5");
     }
 
     #[test]
@@ -374,9 +376,10 @@ mod tests {
         // Several modelled parts welded into a single rigid body.
         let mut builder = RigidBody::dynamic();
         for (x, size) in [(-1.5f32, 0.5f32), (0.0, 0.8), (1.5, 0.5)] {
-            let collider = collider_from_solid(cube([size, size, size]), ColliderFit::Box, false)
-                .unwrap()
-                .translation(Vector3::new(x, 0.0, 0.0));
+            let collider =
+                collider_from_solid(cube([size, size, size]), ColliderFit::Box, false)
+                    .unwrap()
+                    .translation(Vector3::new(x, 0.0, 0.0));
             builder = builder.collider(collider);
         }
         let body = builder.build();
@@ -388,7 +391,10 @@ mod tests {
 
     #[test]
     fn a_union_of_solids_is_one_part() {
-        let welded = union_all(vec![cube([1.0, 1.0, 1.0]), sphere(0.7)]);
+        let welded = union_all(vec![
+            cube([1.0, 1.0, 1.0]),
+            sphere(0.7),
+        ]);
         let part = SolidPhysics::dynamic().build(welded).unwrap();
         assert!(part.geometry.get_attribute("position").unwrap().count() > 0);
         assert!(part.into_body().mass() > 0.0);

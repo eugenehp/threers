@@ -266,7 +266,8 @@ fn store_sample(sink: &mut Sink, buf: &[u8]) {
             let len = buf.len();
             let mut i = 0usize;
             while i + 4 <= len {
-                let n = u32::from_be_bytes([buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]) as usize;
+                let n =
+                    u32::from_be_bytes([buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]) as usize;
                 if n == 0 || i + 4 + n > len {
                     break;
                 }
@@ -715,7 +716,10 @@ impl VideoToolboxEncoder {
         })
     }
 
-    fn push_bgra(&mut self, fill: impl FnOnce(*mut u8, usize, usize, usize)) -> Result<(), String> {
+    fn push_bgra(
+        &mut self,
+        fill: impl FnOnce(*mut u8, usize, usize, usize),
+    ) -> Result<(), String> {
         let (w, h) = (self.width as usize, self.height as usize);
         // Take the next ring slot and WAIT for the encoder to be finished with
         // it. Without this the write below lands in a buffer still being read.
@@ -834,8 +838,7 @@ impl VideoToolboxEncoder {
                 pps: Vec::new(),
                 samples: Vec::new(),
             },
-        )
-        else {
+        ) else {
             return Err("finish_mp4() requires new_for_mp4()".into());
         };
         let frames = samples.len();

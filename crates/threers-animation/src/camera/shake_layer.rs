@@ -114,7 +114,10 @@ mod tests {
     fn envelope_gates_amplitude() {
         let mut shake = CameraShake::new(1.0, 8.0);
         shake.enabled = true;
-        let env = FCurve::from_keys(vec![CurveKey::linear(0.0, 0.0), CurveKey::linear(1.0, 1.0)]);
+        let env = FCurve::from_keys(vec![
+            CurveKey::linear(0.0, 0.0),
+            CurveKey::linear(1.0, 1.0),
+        ]);
         let mut stack = ShakeStack::new();
         stack.push(ShakeLayer::new("hand", shake).with_envelope(env));
         let pose = CameraPose::new(Vector3::ZERO, 0.0, 1.2, 5.0);

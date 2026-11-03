@@ -218,8 +218,12 @@ fn reduce_simplex(simplex: &mut Vec<Vertex>) -> Option<Vector3> {
             Some(w)
         }
         4 => {
-            let (w, keep) =
-                closest_origin_tetrahedron(simplex[0].w, simplex[1].w, simplex[2].w, simplex[3].w)?;
+            let (w, keep) = closest_origin_tetrahedron(
+                simplex[0].w,
+                simplex[1].w,
+                simplex[2].w,
+                simplex[3].w,
+            )?;
             retain_mask(simplex, keep);
             Some(w)
         }
@@ -368,7 +372,12 @@ fn closest_origin_tetrahedron(
     d: Vector3,
 ) -> Option<(Vector3, u8)> {
     // Faces wound so that the fourth vertex is the interior reference.
-    const FACES: [[usize; 4]; 4] = [[0, 1, 2, 3], [0, 2, 3, 1], [0, 3, 1, 2], [1, 3, 2, 0]];
+    const FACES: [[usize; 4]; 4] = [
+        [0, 1, 2, 3],
+        [0, 2, 3, 1],
+        [0, 3, 1, 2],
+        [1, 3, 2, 0],
+    ];
     let pts = [a, b, c, d];
 
     let mut best: Option<(Vector3, u8, f32)> = None;
@@ -417,7 +426,8 @@ fn closest_origin_tetrahedron(
     if !outside_any {
         return None; // origin enclosed — penetrating
     }
-    best.map(|(p, mask, _)| (p, mask)).or(Some((a, 0b0001)))
+    best.map(|(p, mask, _)| (p, mask))
+        .or(Some((a, 0b0001)))
 }
 
 // ---- EPA ------------------------------------------------------------------
@@ -468,11 +478,7 @@ fn penetration(a: &impl SupportMap, b: &impl SupportMap, simplex: &mut Vec<Verte
         let Some((best_i, best)) = faces
             .iter()
             .enumerate()
-            .min_by(|(_, x), (_, y)| {
-                x.dist
-                    .partial_cmp(&y.dist)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
+            .min_by(|(_, x), (_, y)| x.dist.partial_cmp(&y.dist).unwrap_or(std::cmp::Ordering::Equal))
             .map(|(i, f)| (i, *f))
         else {
             return Proximity::Failed;
@@ -525,11 +531,7 @@ fn penetration(a: &impl SupportMap, b: &impl SupportMap, simplex: &mut Vec<Verte
     // Out of iterations — report the best face found so far rather than nothing.
     faces
         .iter()
-        .min_by(|x, y| {
-            x.dist
-                .partial_cmp(&y.dist)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
+        .min_by(|x, y| x.dist.partial_cmp(&y.dist).unwrap_or(std::cmp::Ordering::Equal))
         .map(|f| epa_result(&verts, &f.idx, f.normal, f.dist.max(0.0)))
         .unwrap_or(Proximity::Failed)
 }
@@ -552,11 +554,7 @@ fn epa_result(verts: &[Vertex], idx: &[usize; 3], normal: Vector3, depth: f32) -
 
 /// Grow a degenerate simplex into a tetrahedron enclosing the origin, which EPA
 /// requires as its starting polytope.
-fn expand_to_tetrahedron(
-    a: &impl SupportMap,
-    b: &impl SupportMap,
-    simplex: &mut Vec<Vertex>,
-) -> bool {
+fn expand_to_tetrahedron(a: &impl SupportMap, b: &impl SupportMap, simplex: &mut Vec<Vertex>) -> bool {
     if simplex.is_empty() {
         simplex.push(minkowski_support(a, b, Vector3::UP));
     }
@@ -583,7 +581,9 @@ fn expand_to_tetrahedron(
     if simplex.len() == 2 {
         // Any direction perpendicular to the segment gives a third point.
         let axis = simplex[1].w - simplex[0].w;
-        let (t1, t2) = crate::math::orthonormal_basis(try_normalize(axis).unwrap_or(Vector3::UP));
+        let (t1, t2) = crate::math::orthonormal_basis(
+            try_normalize(axis).unwrap_or(Vector3::UP),
+        );
         for dir in [t1, t2, -t1, -t2] {
             let w = minkowski_support(a, b, dir);
             let area = (simplex[1].w - simplex[0].w).cross(w.w - simplex[0].w);
@@ -662,13 +662,7 @@ mod tests {
         let a = Shape::ball(1.0);
         let b = Shape::ball(2.0);
         let r = query(&a, &at(0.0, 0.0, 0.0), &b, &at(10.0, 0.0, 0.0));
-        let Proximity::Separated {
-            distance,
-            point_a,
-            point_b,
-            ..
-        } = r
-        else {
+        let Proximity::Separated { distance, point_a, point_b, .. } = r else {
             panic!("expected separation, got {r:?}");
         };
         assert!((distance - 7.0).abs() < 1e-2, "distance = {distance}");
@@ -733,15 +727,9 @@ mod tests {
     fn point_containment_via_gjk() {
         let s = Shape::ball(1.0);
         let iso = at(0.0, 0.0, 0.0);
-        let inside = closest_points(
-            &ShapeProxy::new(&s, &iso).unwrap(),
-            &PointProxy(Vector3::new(0.2, 0.0, 0.0)),
-        );
+        let inside = closest_points(&ShapeProxy::new(&s, &iso).unwrap(), &PointProxy(Vector3::new(0.2, 0.0, 0.0)));
         assert!(matches!(inside, Proximity::Penetrating { .. }));
-        let outside = closest_points(
-            &ShapeProxy::new(&s, &iso).unwrap(),
-            &PointProxy(Vector3::new(3.0, 0.0, 0.0)),
-        );
+        let outside = closest_points(&ShapeProxy::new(&s, &iso).unwrap(), &PointProxy(Vector3::new(3.0, 0.0, 0.0)));
         match outside {
             Proximity::Separated { distance, .. } => assert!((distance - 2.0).abs() < 1e-2),
             other => panic!("expected separation, got {other:?}"),

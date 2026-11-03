@@ -50,9 +50,7 @@ fn main() {
         blend.apply_to_scene(drawn, &world, &mut arena);
         world.sync_from_scene(&arena);
         world.step(dt);
-        world.sync_to_scene_where(&mut arena, |id, _| {
-            !(id == body && blend.owns_scene_write())
-        });
+        world.sync_to_scene_where(&mut arena, |id, _| !(id == body && blend.owns_scene_write()));
 
         if frame % 30 == 29 {
             let p = arena.get(character).unwrap().position;
@@ -69,10 +67,7 @@ fn main() {
     blend.go_limp(&mut world);
     assert!(world.body(body).unwrap().is_dynamic());
     let v = world.body(body).unwrap().linear_velocity;
-    println!(
-        "  inherited velocity ≈ ({:.2}, {:.2}, {:.2})",
-        v.x, v.y, v.z
-    );
+    println!("  inherited velocity ≈ ({:.2}, {:.2}, {:.2})", v.x, v.y, v.z);
 
     for frame in 0..120 {
         // Animation would keep walking; blend freezes the limp pose.
@@ -80,9 +75,7 @@ fn main() {
         world.step(dt);
         let drawn = blend.update(dt, animated, &mut world);
         blend.apply_to_scene(drawn, &world, &mut arena);
-        world.sync_to_scene_where(&mut arena, |id, _| {
-            !(id == body && blend.owns_scene_write())
-        });
+        world.sync_to_scene_where(&mut arena, |id, _| !(id == body && blend.owns_scene_write()));
 
         if frame % 40 == 39 {
             let p = arena.get(character).unwrap().position;
@@ -104,9 +97,7 @@ fn main() {
         world.step(dt);
         let drawn = blend.update(dt, stand, &mut world);
         blend.apply_to_scene(drawn, &world, &mut arena);
-        world.sync_to_scene_where(&mut arena, |id, _| {
-            !(id == body && blend.owns_scene_write())
-        });
+        world.sync_to_scene_where(&mut arena, |id, _| !(id == body && blend.owns_scene_write()));
         if frame % 20 == 19 {
             let p = arena.get(character).unwrap().position;
             println!(

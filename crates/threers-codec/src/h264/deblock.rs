@@ -53,10 +53,7 @@ pub fn deblock(
             let qp_here = mb_qp[mby * mbw + mbx];
             let qp_left = (mbx > 0).then(|| mb_qp[mby * mbw + mbx - 1]);
             let qp_above = (mby > 0).then(|| mb_qp[(mby - 1) * mbw + mbx]);
-            let (ox, oy) = (
-                (mbx * MB_SIZE as usize) as u32,
-                (mby * MB_SIZE as usize) as u32,
-            );
+            let (ox, oy) = ((mbx * MB_SIZE as usize) as u32, (mby * MB_SIZE as usize) as u32);
 
             // --- luma, vertical edges left to right ---
             for e in 0..4u32 {
@@ -67,17 +64,7 @@ pub fn deblock(
                 };
                 let x = ox + e * 4;
                 filter_edge(
-                    y,
-                    cw,
-                    x,
-                    oy,
-                    1,
-                    cw as isize,
-                    MB_SIZE,
-                    bs,
-                    qp_p,
-                    qp_here,
-                    false,
+                    y, cw, x, oy, 1, cw as isize, MB_SIZE, bs, qp_p, qp_here, false,
                 );
             }
             // --- luma, horizontal edges top to bottom ---
@@ -89,17 +76,7 @@ pub fn deblock(
                 };
                 let yy = oy + e * 4;
                 filter_edge(
-                    y,
-                    cw,
-                    ox,
-                    yy,
-                    cw as isize,
-                    1,
-                    MB_SIZE,
-                    bs,
-                    qp_p,
-                    qp_here,
-                    false,
+                    y, cw, ox, yy, cw as isize, 1, MB_SIZE, bs, qp_p, qp_here, false,
                 );
             }
 
@@ -221,22 +198,14 @@ fn filter_edge(
             // visible, up to three samples a side may move.
             let strong = (p0 - q0).abs() < ((alpha >> 2) + 2);
             if !chroma && ap < beta && strong {
-                set(
-                    plane,
-                    -1,
-                    clip1((p2 + 2 * p1 + 2 * p0 + 2 * q0 + q1 + 4) >> 3),
-                );
+                set(plane, -1, clip1((p2 + 2 * p1 + 2 * p0 + 2 * q0 + q1 + 4) >> 3));
                 set(plane, -2, clip1((p2 + p1 + p0 + q0 + 2) >> 2));
                 set(plane, -3, clip1((2 * p3 + 3 * p2 + p1 + p0 + q0 + 4) >> 3));
             } else {
                 set(plane, -1, clip1((2 * p1 + p0 + q1 + 2) >> 2));
             }
             if !chroma && aq < beta && strong {
-                set(
-                    plane,
-                    0,
-                    clip1((q2 + 2 * q1 + 2 * q0 + 2 * p0 + p1 + 4) >> 3),
-                );
+                set(plane, 0, clip1((q2 + 2 * q1 + 2 * q0 + 2 * p0 + p1 + 4) >> 3));
                 set(plane, 1, clip1((q2 + q1 + q0 + p0 + 2) >> 2));
                 set(plane, 2, clip1((2 * q3 + 3 * q2 + q1 + q0 + p0 + 4) >> 3));
             } else {

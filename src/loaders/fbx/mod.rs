@@ -128,10 +128,7 @@ impl FbxLoader {
 fn connections(tree: &Node) -> HashMap<i64, Vec<i64>> {
     let mut out: HashMap<i64, Vec<i64>> = HashMap::new();
     if let Some(list) = tree.child("Connections") {
-        for c in list
-            .children_named("C")
-            .chain(list.children_named("Connect"))
-        {
+        for c in list.children_named("C").chain(list.children_named("Connect")) {
             // The first property is the kind; ids follow. `OP` connections name
             // a property as a fourth field and are otherwise the same shape.
             let ids: Vec<i64> = c.properties[1..]
@@ -266,8 +263,7 @@ fn build_model(
             continue;
         };
         if child_node.name == "Model" && child != id {
-            if let Some(kid) = build_model(child_node, child, by_id, children_of, arena, materials)
-            {
+            if let Some(kid) = build_model(child_node, child, by_id, children_of, arena, materials) {
                 arena.add_child(object_id, kid);
             }
         }
@@ -478,9 +474,7 @@ mod tests {
 
     fn named(scene: &FbxScene, want: &str) -> ObjectId {
         fn walk(scene: &FbxScene, id: ObjectId, want: &str, out: &mut Option<ObjectId>) {
-            let Some(object) = scene.arena.get(id) else {
-                return;
-            };
+            let Some(object) = scene.arena.get(id) else { return };
             if object.name == want {
                 *out = Some(id);
             }
@@ -522,14 +516,8 @@ mod tests {
             let mesh = mesh_of(&scene, id);
             let positions = mesh.geometry.get_attribute("position").unwrap().array.len() / 3;
             assert_eq!(positions, 36, "12 triangles");
-            assert_eq!(
-                mesh.geometry.get_attribute("normal").unwrap().array.len() / 3,
-                36
-            );
-            assert_eq!(
-                mesh.geometry.get_attribute("uv").unwrap().array.len() / 2,
-                36
-            );
+            assert_eq!(mesh.geometry.get_attribute("normal").unwrap().array.len() / 3, 36);
+            assert_eq!(mesh.geometry.get_attribute("uv").unwrap().array.len() / 2, 36);
         }
     }
 
@@ -538,11 +526,7 @@ mod tests {
     fn a_models_transform_is_read() {
         let scene = FbxLoader::parse_scene(BLENDER).expect("parses");
         let child = scene.arena.get(named(&scene, "Child")).unwrap();
-        assert!(
-            (child.position.x - 3.0).abs() < 1e-4,
-            "{:?}",
-            child.position
-        );
+        assert!((child.position.x - 3.0).abs() < 1e-4, "{:?}", child.position);
         assert!((child.position.y - 1.0).abs() < 1e-4);
         assert!((child.position.z - 2.0).abs() < 1e-4);
         assert!((child.scale.x - 2.0).abs() < 1e-4, "{:?}", child.scale);
@@ -660,11 +644,7 @@ mod tests {
     #[test]
     fn units_and_up_axis_come_from_the_file() {
         let scene = FbxLoader::parse_scene(MODES.as_bytes()).expect("parses");
-        assert!(
-            (scene.unit_scale - 2.54).abs() < 1e-6,
-            "{}",
-            scene.unit_scale
-        );
+        assert!((scene.unit_scale - 2.54).abs() < 1e-6, "{}", scene.unit_scale);
         assert_eq!(scene.up_axis, 2, "the fixture declares Z up");
 
         let blender = FbxLoader::parse_scene(BLENDER).expect("parses");
@@ -680,19 +660,11 @@ mod tests {
         let Material::Standard(material) = &*mesh.material else {
             panic!("{:?}", mesh.material);
         };
-        assert!(
-            (material.color.r - 0.8).abs() < 1e-4,
-            "{:?}",
-            material.color
-        );
+        assert!((material.color.r - 0.8).abs() < 1e-4, "{:?}", material.color);
         assert!((material.color.g - 0.1).abs() < 1e-4);
         assert!((material.opacity - 0.5).abs() < 1e-4);
         // Shininess 30 as a roughness: sqrt(2/32) = 0.25.
-        assert!(
-            (material.roughness - 0.25).abs() < 1e-3,
-            "{}",
-            material.roughness
-        );
+        assert!((material.roughness - 0.25).abs() < 1e-3, "{}", material.roughness);
     }
 
     /// The old single-mesh entry point still works.
@@ -700,10 +672,7 @@ mod tests {
     fn the_geometry_only_entry_point_still_reads_a_mesh() {
         for bytes in [BLENDER, ASCII] {
             let geometry = FbxLoader::parse(bytes).expect("a mesh");
-            assert_eq!(
-                geometry.get_attribute("position").unwrap().array.len() / 3,
-                36
-            );
+            assert_eq!(geometry.get_attribute("position").unwrap().array.len() / 3, 36);
         }
     }
 
@@ -731,9 +700,7 @@ mod tests {
             deepest: &mut usize,
             coloured: &mut Vec<String>,
         ) {
-            let Some(object) = scene.arena.get(id) else {
-                return;
-            };
+            let Some(object) = scene.arena.get(id) else { return };
             *deepest = (*deepest).max(at);
             if let ObjectKind::Mesh(mesh) = &object.kind {
                 *meshes += 1;
@@ -747,15 +714,7 @@ mod tests {
             }
         }
         for root in &scene.roots {
-            walk(
-                &scene,
-                *root,
-                1,
-                &mut meshes,
-                &mut triangles,
-                &mut deepest,
-                &mut coloured,
-            );
+            walk(&scene, *root, 1, &mut meshes, &mut triangles, &mut deepest, &mut coloured);
         }
 
         assert_eq!(meshes, 3, "a torus, a sphere and a cone");
@@ -834,9 +793,7 @@ mod external {
                 colour: &mut Vec<String>,
                 depth: &mut usize,
             ) {
-                let Some(object) = scene.arena.get(id) else {
-                    return;
-                };
+                let Some(object) = scene.arena.get(id) else { return };
                 *depth = (*depth).max(at);
                 if let ObjectKind::Mesh(mesh) = &object.kind {
                     *meshes += 1;
@@ -850,15 +807,7 @@ mod external {
                 }
             }
             for root in &scene.roots {
-                walk(
-                    &scene,
-                    *root,
-                    1,
-                    &mut meshes,
-                    &mut triangles,
-                    &mut with_colour,
-                    &mut depth,
-                );
+                walk(&scene, *root, 1, &mut meshes, &mut triangles, &mut with_colour, &mut depth);
             }
             println!(
                 "  {}: meshes={meshes} triangles={triangles} depth={depth} colour_on={with_colour:?}",

@@ -7,15 +7,9 @@
 //! cargo test --features native-codec --test h264_animation_parity -- --nocapture
 //! ```
 
-<<<<<<< Updated upstream:crates/threers-codec/tests/h264_animation_parity.rs
 use threers_codec::hevc::Yuv420Frame;
 use threers_codec::h264::{encode_compressed_mp4, encode_mp4 as encode_pcm_mp4};
 use threers_codec::{encode_animation_rgba, AnimationEncodeOptions, BrowserCodec};
-=======
-use threers::codec::h264::{encode_compressed_mp4, encode_mp4 as encode_pcm_mp4};
-use threers::codec::hevc::Yuv420Frame;
-use threers::{encode_animation_rgba, AnimationEncodeOptions, BrowserCodec};
->>>>>>> Stashed changes:tests/h264_animation_parity.rs
 
 /// FNV-1a 32-bit — must match `web/scripts/video-export-test-lib.mjs`.
 fn fnv1a(data: &[u8]) -> u32 {

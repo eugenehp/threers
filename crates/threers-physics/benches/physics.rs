@@ -312,11 +312,7 @@ fn bench_narrowphase(c: &mut Criterion) {
             Shape::cuboid(0.5, 0.5, 0.5),
             Shape::cuboid(0.5, 0.5, 0.5),
         ),
-        (
-            "ball_cuboid",
-            Shape::ball(0.5),
-            Shape::cuboid(0.5, 0.5, 0.5),
-        ),
+        ("ball_cuboid", Shape::ball(0.5), Shape::cuboid(0.5, 0.5, 0.5)),
         (
             "capsule_capsule",
             Shape::capsule(0.4, 0.25),

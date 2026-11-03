@@ -7,8 +7,8 @@
 use anyhow::{ensure, Result};
 
 use crate::ddgi::{self, DdgiContext};
-use crate::model::ALBEDO_FLOOR;
 use crate::{compress, IN_CHANNELS, OUT_CHANNELS};
+use crate::model::ALBEDO_FLOOR;
 
 /// Optional world-space extras for DDGI and encoded position planes.
 pub struct PlaneExtras<'a> {
@@ -46,22 +46,9 @@ pub fn planes(
     extras: Option<PlaneExtras<'_>>,
 ) -> Result<(Vec<f32>, Vec<f32>)> {
     let n = width * height;
-    ensure!(
-        probe_rgba.len() == n * 4,
-        "probe is {} floats, expected {}",
-        probe_rgba.len(),
-        n * 4
-    );
-    ensure!(
-        reference_rgba.len() == n * 4,
-        "reference is {} floats, expected {}",
-        reference_rgba.len(),
-        n * 4
-    );
-    ensure!(
-        albedo.len() == n && normal.len() == n && depth.len() == n,
-        "guide length mismatch"
-    );
+    ensure!(probe_rgba.len() == n * 4, "probe is {} floats, expected {}", probe_rgba.len(), n * 4);
+    ensure!(reference_rgba.len() == n * 4, "reference is {} floats, expected {}", reference_rgba.len(), n * 4);
+    ensure!(albedo.len() == n && normal.len() == n && depth.len() == n, "guide length mismatch");
     ensure!(
         width.is_multiple_of(PROBE_QUARTER_SCALE) && height.is_multiple_of(PROBE_QUARTER_SCALE),
         "{width}x{height} must be a multiple of {PROBE_QUARTER_SCALE} for quarter-res probe planes"
@@ -89,10 +76,7 @@ pub fn planes(
                         colour[c * n + i] *= gate;
                     }
                 }
-                (
-                    colour,
-                    ddgi::encode_world_planes(ex.world, center, enc_scale),
-                )
+                (colour, ddgi::encode_world_planes(ex.world, center, enc_scale))
             } else {
                 (
                     ddgi::ddgi_planes(width, height, probe_rgba, &ctx),
@@ -193,15 +177,7 @@ pub fn tiles(
     height: usize,
     tile: usize,
 ) -> Result<Vec<f32>> {
-    tiles_with(
-        input,
-        target,
-        IN_CHANNELS,
-        OUT_CHANNELS,
-        width,
-        height,
-        tile,
-    )
+    tiles_with(input, target, IN_CHANNELS, OUT_CHANNELS, width, height, tile)
 }
 
 /// Tile arbitrary channel counts (e.g. NRC features).
@@ -214,14 +190,12 @@ pub fn tiles_with(
     height: usize,
     tile: usize,
 ) -> Result<Vec<f32>> {
-    ensure!(
-        tile > 0 && width.is_multiple_of(tile) && height.is_multiple_of(tile),
-        "{width}x{height} is not a grid of {tile}"
-    );
+    ensure!(tile > 0 && width.is_multiple_of(tile) && height.is_multiple_of(tile), "{width}x{height} is not a grid of {tile}");
     let tiles_x = width / tile;
     let tiles_y = height / tile;
-    let mut out =
-        Vec::with_capacity(tiles_x * tiles_y * (in_channels + out_channels) * tile * tile);
+    let mut out = Vec::with_capacity(
+        tiles_x * tiles_y * (in_channels + out_channels) * tile * tile,
+    );
     for ty in 0..tiles_y {
         for tx in 0..tiles_x {
             out.extend(extract(input, in_channels, height, width, tile, tx, ty));
@@ -323,10 +297,8 @@ mod tests {
         let normal = vec![[0.0, 1.0, 0.0]; n];
         let depth = vec![2.0f32; n];
         let reference = vec![1.0f32; n * 4];
-        let (input, target) = planes(
-            w, h, &probe, &albedo, &normal, &depth, &reference, 2.0, None,
-        )
-        .unwrap();
+        let (input, target) =
+            planes(w, h, &probe, &albedo, &normal, &depth, &reference, 2.0, None).unwrap();
         assert!((input[0] - compress(8.0)).abs() < 1e-6);
         assert!((input[3 * n] - 0.2).abs() < 1e-6);
         assert!((input[7 * n] - 1.0).abs() < 1e-6);
@@ -356,10 +328,8 @@ mod tests {
         let normal = vec![[0.0, 1.0, 0.0]; n];
         let depth = vec![1.0; n];
         let reference = vec![1.0f32; n * 4];
-        let (input, _) = planes(
-            w, h, &probe, &albedo, &normal, &depth, &reference, 1.0, None,
-        )
-        .unwrap();
+        let (input, _) =
+            planes(w, h, &probe, &albedo, &normal, &depth, &reference, 1.0, None).unwrap();
         let block00 = input[13];
         let block01 = input[13 + 4];
         assert!((input[13 + 1] - block00).abs() < 1e-6);

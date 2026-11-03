@@ -733,51 +733,6 @@ pub fn empty_shadow_map(device: &MetalDevice) -> Result<Owned, MetalError> {
     )
 }
 
-<<<<<<< Updated upstream
-=======
-/// A depth *cube* for a point light: six faces, one per direction.
-pub fn new_shadow_cube(device: &MetalDevice, size: u32) -> Result<Owned, MetalError> {
-    let _pool = AutoreleasePool::new();
-    unsafe {
-        let desc = Owned::from_retained(alloc_init(class!("MTLTextureDescriptor")))
-            .ok_or_else(|| MetalError::Allocation("MTLTextureDescriptor".into()))?;
-        let _: () = msg1(desc.id(), sel!("setTextureType:"), texture_type::TYPE_CUBE);
-        let _: () = msg1(
-            desc.id(),
-            sel!("setPixelFormat:"),
-            pixel_format::DEPTH32_FLOAT,
-        );
-        let _: () = msg1(desc.id(), sel!("setWidth:"), size.max(1) as NSUInteger);
-        let _: () = msg1(desc.id(), sel!("setHeight:"), size.max(1) as NSUInteger);
-        let _: () = msg1(desc.id(), sel!("setDepth:"), 1usize);
-        let _: () = msg1(desc.id(), sel!("setMipmapLevelCount:"), 1usize);
-        let _: () = msg1(
-            desc.id(),
-            sel!("setUsage:"),
-            texture_usage::RENDER_TARGET | texture_usage::SHADER_READ,
-        );
-        let _: () = msg1(desc.id(), sel!("setStorageMode:"), storage_mode::PRIVATE);
-        let tex: Id = msg1(
-            device.device_id(),
-            sel!("newTextureWithDescriptor:"),
-            desc.id(),
-        );
-        Owned::from_retained(tex)
-            .ok_or_else(|| MetalError::Allocation(format!("{size} shadow cube")))
-    }
-}
-
-/// A 1x1 depth cube, bound when no point light casts.
-pub fn empty_shadow_cube(device: &MetalDevice) -> Result<Owned, MetalError> {
-    new_shadow_cube(device, 1)
-}
-
-/// A 1x1 depth texture, bound when nothing casts.
-pub fn empty_shadow_map(device: &MetalDevice) -> Result<Owned, MetalError> {
-    new_shadow_map(device, 1)
-}
-
->>>>>>> Stashed changes
 /// The comparison sampler the percentage-closer filter uses.
 ///
 /// `compare_function = less_equal` is what makes each tap a depth *test* rather
@@ -793,23 +748,16 @@ pub fn shadow_sampler(device: &MetalDevice) -> Result<Owned, MetalError> {
         let _: () = msg1(desc.id(), sel!("setMinFilter:"), filter::LINEAR);
         // Clamp: a lookup outside the light's frustum must read "lit", and
         // `shadow_factor` returns early for those anyway.
-        let _: () = msg1(
-            desc.id(),
-            sel!("setSAddressMode:"),
-            address_mode::CLAMP_TO_EDGE,
-        );
-        let _: () = msg1(
-            desc.id(),
-            sel!("setTAddressMode:"),
-            address_mode::CLAMP_TO_EDGE,
-        );
+        let _: () = msg1(desc.id(), sel!("setSAddressMode:"), address_mode::CLAMP_TO_EDGE);
+        let _: () = msg1(desc.id(), sel!("setTAddressMode:"), address_mode::CLAMP_TO_EDGE);
         let _: () = msg1(desc.id(), sel!("setCompareFunction:"), compare::LESS_EQUAL);
         let sampler: Id = msg1(
             device.device_id(),
             sel!("newSamplerStateWithDescriptor:"),
             desc.id(),
         );
-        Owned::from_retained(sampler).ok_or_else(|| MetalError::Allocation("shadow sampler".into()))
+        Owned::from_retained(sampler)
+            .ok_or_else(|| MetalError::Allocation("shadow sampler".into()))
     }
 }
 
@@ -861,8 +809,9 @@ fn shadow_pipeline_named(
             desc.id(),
             &mut err as *mut Id,
         );
-        Owned::from_retained(pipeline)
-            .ok_or_else(|| MetalError::PipelineCreation(error_message(err)))
+        Owned::from_retained(pipeline).ok_or_else(|| {
+            MetalError::PipelineCreation(error_message(err))
+        })
     }
 }
 
@@ -1014,11 +963,7 @@ fn new_texture_cube(
             mip_levels.max(1) as NSUInteger,
         );
         let _: () = msg1(desc.id(), sel!("setUsage:"), texture_usage::SHADER_READ);
-        let _: () = msg1(
-            desc.id(),
-            sel!("setStorageMode:"),
-            cpu_writable_storage(device),
-        );
+        let _: () = msg1(desc.id(), sel!("setStorageMode:"), cpu_writable_storage(device));
         let tex: Id = msg1(
             device.device_id(),
             sel!("newTextureWithDescriptor:"),
@@ -1102,8 +1047,7 @@ pub fn upload_cube(
     device: &MetalDevice,
     cube: &crate::textures::CubeTexture,
 ) -> Result<Owned, MetalError> {
-    let (levels, sizes) =
-        crate::renderer::gpu_texture::mip_chain(cube.format, cube.size, &cube.faces);
+    let (levels, sizes) = crate::renderer::gpu_texture::mip_chain(cube.format, cube.size, &cube.faces);
     let format = match cube.format {
         TextureFormat::Rgba8UnormSrgb => pixel_format::RGBA8_UNORM_SRGB,
         _ => pixel_format::RGBA8_UNORM,
@@ -1295,20 +1239,8 @@ mod tests {
         );
         // Slim lines read a different vertex struct, so they cannot share a
         // pipeline with the mesh path.
-        assert_ne!(
-            a,
-            PipelineKey {
-                slim_lines: true,
-                ..a
-            }
-        );
-        assert_ne!(
-            a,
-            PipelineKey {
-                wide_lines: true,
-                ..a
-            }
-        );
+        assert_ne!(a, PipelineKey { slim_lines: true, ..a });
+        assert_ne!(a, PipelineKey { wide_lines: true, ..a });
         assert_eq!(topology_class::of(primitive::POINT), topology_class::POINT);
         assert_eq!(topology_class::of(primitive::LINE), topology_class::LINE);
         assert_eq!(

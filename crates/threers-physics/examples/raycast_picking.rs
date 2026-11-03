@@ -68,10 +68,7 @@ fn main() {
     // --- every hit along the ray ---
     let mut all = world.raycast_all(&ray, 100.0, QueryFilter::default());
     all.sort_by(|a, b| a.toi.partial_cmp(&b.toi).unwrap());
-    println!(
-        "  all hits: {:?}",
-        all.iter().map(|h| h.toi).collect::<Vec<_>>()
-    );
+    println!("  all hits: {:?}", all.iter().map(|h| h.toi).collect::<Vec<_>>());
 
     // --- line of sight, ignoring the body doing the looking ---
     println!("\n-- line of sight --");
@@ -79,18 +76,12 @@ fn main() {
     let target = Vector3::new(6.0, 0.5, 0.0);
     let sight = Ray::new(eye, target - eye);
     let blocked = world.ray_is_blocked(&sight, (target - eye).length(), QueryFilter::default());
-    println!(
-        "  can the statue be seen from x=-4? {}",
-        if blocked { "no" } else { "yes" }
-    );
+    println!("  can the statue be seen from x=-4? {}", if blocked { "no" } else { "yes" });
 
     // Only look at scenery — the props no longer block.
     let scenery_only = QueryFilter::default().groups(InteractionGroups::new(!0, SCENERY));
     let blocked = world.ray_is_blocked(&sight, (target - eye).length(), scenery_only);
-    println!(
-        "  ignoring props (group filter)?     {}",
-        if blocked { "no" } else { "yes" }
-    );
+    println!("  ignoring props (group filter)?     {}", if blocked { "no" } else { "yes" });
 
     // --- shape cast: will a 1 m sphere fit through here? ---
     println!("\n-- shape cast --");

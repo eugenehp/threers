@@ -22,11 +22,7 @@ pub struct SolvedCameraClip {
 impl SolvedCameraClip {
     pub fn new(keys: Vec<SolvedCameraKey>) -> Self {
         let mut keys = keys;
-        keys.sort_by(|a, b| {
-            a.time
-                .partial_cmp(&b.time)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        keys.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap_or(std::cmp::Ordering::Equal));
         Self { keys }
     }
 
@@ -113,9 +109,7 @@ impl FollowTrackData {
             let up = right.cross(forward).normalize();
             let depth = self.depth.max(1e-3);
             let half_v = (base.fov * 0.5).tan();
-            let target = eye
-                + forward * depth
-                + right * (m.x * half_v * depth)
+            let target = eye + forward * depth + right * (m.x * half_v * depth)
                 + up * (m.y * half_v * depth);
             let mut out = CameraPose::from_look_at(eye, target, base.fov);
             out.roll = base.roll;

@@ -132,9 +132,7 @@ fn main() {
     std::fs::write(&svg_path, svg).expect("write svg");
     println!("wrote {}", svg_path.display());
 
-    let export_dir = std::path::Path::new(&out)
-        .parent()
-        .unwrap_or(std::path::Path::new("out"));
+    let export_dir = std::path::Path::new(&out).parent().unwrap_or(std::path::Path::new("out"));
     let stl_dir = export_dir.join("cuboct_parts_stl");
     let obj_dir = export_dir.join("cuboct_parts_obj");
     let mold_asm = CuboctAssembly::new(Cuboct::Rigid)

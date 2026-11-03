@@ -92,8 +92,7 @@ impl Layer {
             data,
             indices,
             mapping: Mapping::parse(
-                node.value("MappingInformationType")
-                    .and_then(Property::as_str),
+                node.value("MappingInformationType").and_then(Property::as_str),
             ),
             stride,
         })

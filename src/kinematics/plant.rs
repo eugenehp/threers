@@ -151,8 +151,7 @@ mod tests {
     #[test]
     fn gravity_comp_holds_a_horizontal_pose() {
         let chain = SerialChain::planar_3r();
-        let mut plant =
-            ArmPlant::from_train(chain, GearTrain::direct_drive()).with_gravity_comp(true);
+        let mut plant = ArmPlant::from_train(chain, GearTrain::direct_drive()).with_gravity_comp(true);
         let q = [90.0, 0.0, 0.0];
         plant.seed(&q);
         let dt = 1.0 / 240.0;

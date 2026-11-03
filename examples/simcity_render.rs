@@ -130,6 +130,7 @@ fn has_flag(name: &str) -> bool {
     std::env::args().any(|a| a == name)
 }
 
+
 fn main() {
     let out = PathBuf::from(arg("--out").unwrap_or_else(|| "out/simcity.png".into()));
     let view = arg("--view").unwrap_or_else(|| "aerial".into());
@@ -215,11 +216,7 @@ fn main() {
     let wk = &s.works;
     println!(
         "  works: {}, {} pylons, port {}",
-        if wk.plant.is_some() {
-            "power station"
-        } else {
-            "NO power station"
-        },
+        if wk.plant.is_some() { "power station" } else { "NO power station" },
         wk.pylons,
         if wk.port { "yes" } else { "no" },
     );
@@ -261,22 +258,12 @@ fn main() {
     println!("  {} echelon parking bays", wk.echelon_bays);
     println!(
         "  monuments: {}{}",
-        if wk.monuments.is_empty() {
-            "NONE".to_string()
-        } else {
-            wk.monuments.join(", ")
-        },
-        if wk.suspension {
-            " + suspension bridge"
-        } else {
-            ""
-        }
+        if wk.monuments.is_empty() { "NONE".to_string() } else { wk.monuments.join(", ") },
+        if wk.suspension { " + suspension bridge" } else { "" }
     );
     println!(
         "  {} access roads, {} mountain summits, {} road tunnels through them",
-        wk.spurs,
-        wk.peaks,
-        wk.tunnels.len()
+        wk.spurs, wk.peaks, wk.tunnels.len()
     );
     println!(
         "  {} footprints claimed, {} placements refused for overlapping",
@@ -414,18 +401,7 @@ fn main() {
             let mut lap = [0.0f64; 6];
             let t0 = std::time::Instant::now();
             if let (Some(sim), Some(w)) = (&mut water, &city.water) {
-<<<<<<< Updated upstream
                 sim.step(&gpu, || water_mesh(&mut renderer, &w.geometry), clock, 0.35);
-=======
-                sim.step(
-                    &device,
-                    &queue,
-                    renderer.renderer(),
-                    &w.geometry,
-                    clock,
-                    0.35,
-                );
->>>>>>> Stashed changes
             }
             let mut m = std::time::Instant::now();
             lap[0] = (m - t0).as_secs_f64() * 1000.0;
@@ -474,18 +450,7 @@ fn main() {
     let mut sheet = vec![0u8; (w * h * 4) as usize];
     for (i, t) in times.iter().enumerate() {
         if let (Some(sim), Some(w)) = (&mut water, &city.water) {
-<<<<<<< Updated upstream
             sim.step(&gpu, || water_mesh(&mut renderer, &w.geometry), 11.0, 0.35);
-=======
-            sim.step(
-                &device,
-                &queue,
-                renderer.renderer(),
-                &w.geometry,
-                11.0,
-                0.35,
-            );
->>>>>>> Stashed changes
         }
         let sky = city.apply_sky(&mut scene, *t);
         city.place_lights(&mut scene, camera.position, sky.lights);
@@ -601,18 +566,7 @@ fn write_animation(
             );
         cam.look_at(target);
         if let (Some(sim), Some(w)) = (water.as_mut(), &city.water) {
-<<<<<<< Updated upstream
             sim.step(gpu, || water_mesh(renderer, &w.geometry), f as f32 * 0.35, 0.35);
-=======
-            sim.step(
-                device,
-                queue,
-                renderer.renderer(),
-                &w.geometry,
-                f as f32 * 0.35,
-                0.35,
-            );
->>>>>>> Stashed changes
         }
         let sky = city.apply_sky(scene, t);
         city.place_lights(scene, cam.position, sky.lights);
@@ -705,12 +659,7 @@ fn write_layout_sheet(
                 bake: params.bake,
             },
         );
-        let camera = frame_camera(
-            "aerial",
-            city.stats.extent,
-            tw as f32 / th as f32,
-            city.vista,
-        );
+        let camera = frame_camera("aerial", city.stats.extent, tw as f32 / th as f32, city.vista);
         let sky = city.apply_sky(&mut scene, if night { 0.72 } else { 0.07 });
         city.place_lights(&mut scene, camera.position, sky.lights);
         city.animate_lights(&mut scene, 0.0);

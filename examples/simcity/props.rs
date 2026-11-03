@@ -465,11 +465,7 @@ pub(crate) fn add_flowers(
         );
         if rng.chance(0.72) {
             b.foliage.add_ellipsoid(
-                Vector3::new(
-                    p.x + jitter(rng),
-                    p.y + height * rng.range(0.62, 0.95),
-                    p.z + jitter(rng),
-                ),
+                Vector3::new(p.x + jitter(rng), p.y + height * rng.range(0.62, 0.95), p.z + jitter(rng)),
                 width * 0.24,
                 height * 0.22,
                 width * 0.24,
@@ -523,11 +519,7 @@ pub(crate) fn add_hanging_basket(b: &mut Batches, x: f32, y: f32, z: f32, rng: &
             let a = rng.range(0.0, TAU);
             let r = rng.range(0.0, 0.26);
             b.foliage.add_ellipsoid(
-                Vector3::new(
-                    c.x + r * a.cos(),
-                    c.y + rng.range(-0.16, 0.12),
-                    c.z + r * a.sin(),
-                ),
+                Vector3::new(c.x + r * a.cos(), c.y + rng.range(-0.16, 0.12), c.z + r * a.sin()),
                 rng.range(0.07, 0.12),
                 rng.range(0.06, 0.11),
                 rng.range(0.07, 0.12),
@@ -803,11 +795,7 @@ pub(crate) fn add_trash(b: &mut Batches, x: f32, z: f32, rng: &mut Rng) -> bool 
         // The knot at the neck.
         b.trim.add_limb(
             Vector3::new(bx, KERB + r * 1.28, bz),
-            Vector3::new(
-                bx + rng.range(-0.1, 0.1),
-                KERB + r * 1.62,
-                bz + rng.range(-0.1, 0.1),
-            ),
+            Vector3::new(bx + rng.range(-0.1, 0.1), KERB + r * 1.62, bz + rng.range(-0.1, 0.1)),
             0.05,
             0.02,
             4,
@@ -854,11 +842,7 @@ pub(crate) fn add_ground_blob(
     }
     let at = |i: usize| {
         let a = i as f32 / SEGS as f32 * TAU;
-        [
-            cx + a.cos() * rx * r[i % SEGS],
-            y,
-            cz + a.sin() * rz * r[i % SEGS],
-        ]
+        [cx + a.cos() * rx * r[i % SEGS], y, cz + a.sin() * rz * r[i % SEGS]]
     };
     for i in 0..SEGS {
         m.tri(
@@ -872,16 +856,7 @@ pub(crate) fn add_ground_blob(
 
 /// A flat quad lying on the ground at an arbitrary angle. `add_slab` is
 /// axis-aligned, and litter that all points the same way is not litter.
-pub(crate) fn add_ground_quad(
-    m: &mut MeshBuilder,
-    cx: f32,
-    cz: f32,
-    y: f32,
-    w: f32,
-    d: f32,
-    a: f32,
-    c: Color,
-) {
+pub(crate) fn add_ground_quad(m: &mut MeshBuilder, cx: f32, cz: f32, y: f32, w: f32, d: f32, a: f32, c: Color) {
     let (s, k) = (a.sin(), a.cos());
     let (hw, hd) = (w * 0.5, d * 0.5);
     let corner = |sx: f32, sz: f32| {
@@ -1167,24 +1142,12 @@ pub(crate) fn add_signal(b: &mut Batches, x: f32, z: f32, toward: Vector3, phase
             b,
             Vector3::new(x + toward.x * 0.22, KERB + h - 0.5, z + toward.z * 0.22),
             toward,
-            if rng.chance(0.35) {
-                Cctv::Ptz
-            } else {
-                Cctv::Bullet
-            },
+            if rng.chance(0.35) { Cctv::Ptz } else { Cctv::Bullet },
             &mut rng,
         );
     }
-    b.trim.add_cylinder(
-        Vector3::new(x, KERB, z),
-        0.15,
-        0.11,
-        h,
-        6,
-        metal,
-        false,
-        Uv::Unit,
-    );
+    b.trim
+        .add_cylinder(Vector3::new(x, KERB, z), 0.15, 0.11, h, 6, metal, false, Uv::Unit);
     let arm = 3.2;
     let ex = x + toward.x * arm;
     let ez = z + toward.z * arm;
@@ -1295,7 +1258,13 @@ pub(crate) enum Cctv {
 /// `toward` need not be normalised and its Y is ignored; the downward tilt is
 /// applied here, because a camera pointing along the horizontal is a camera
 /// watching the sky.
-pub(crate) fn add_cctv(b: &mut Batches, at: Vector3, toward: Vector3, kind: Cctv, rng: &mut Rng) {
+pub(crate) fn add_cctv(
+    b: &mut Batches,
+    at: Vector3,
+    toward: Vector3,
+    kind: Cctv,
+    rng: &mut Rng,
+) {
     let l = toward.x.hypot(toward.z).max(1e-4);
     let (fx, fz) = (toward.x / l, toward.z / l);
     let body = Color::from_hex(0xd8d4cc);
@@ -1305,7 +1274,8 @@ pub(crate) fn add_cctv(b: &mut Batches, at: Vector3, toward: Vector3, kind: Cctv
         Cctv::Bullet => {
             // Bracket back to the wall, then the barrel, tilted down.
             let root = Vector3::new(at.x - fx * 0.42, at.y + 0.12, at.z - fz * 0.42);
-            b.trim.add_limb(root, at, 0.045, 0.045, 4, dark, false);
+            b.trim
+                .add_limb(root, at, 0.045, 0.045, 4, dark, false);
             let nose = Vector3::new(at.x + fx * 0.46, at.y - 0.20, at.z + fz * 0.46);
             b.trim.add_limb(at, nose, 0.10, 0.085, 6, body, true);
             // Sunshield over the top of the barrel.
@@ -1339,8 +1309,15 @@ pub(crate) fn add_cctv(b: &mut Batches, at: Vector3, toward: Vector3, kind: Cctv
                 body,
                 true,
             );
-            b.trim
-                .add_ellipsoid(Vector3::new(at.x, at.y, at.z), 0.17, 0.13, 0.17, 2, 8, lens);
+            b.trim.add_ellipsoid(
+                Vector3::new(at.x, at.y, at.z),
+                0.17,
+                0.13,
+                0.17,
+                2,
+                8,
+                lens,
+            );
         }
         Cctv::Ptz => {
             // A short mast head: housing on a yoke, pointing down and out.

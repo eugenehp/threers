@@ -2876,7 +2876,6 @@ impl JsHeadlessRenderer {
 
     /// Render and return tightly packed RGBA8 bytes (`width * height * 4`).
     #[napi]
-<<<<<<< Updated upstream
     pub fn render_rgba(
         &mut self,
         scene: &mut JsScene,
@@ -2886,16 +2885,11 @@ impl JsHeadlessRenderer {
         let rgba = with_shadows(&mut scene.inner, shadows, |s| {
             self.inner.render_to_rgba(s, camera_of(&camera))
         });
-=======
-    pub fn render_rgba(&mut self, scene: &mut JsScene, camera: &JsPerspectiveCamera) -> Buffer {
-        let rgba = self.inner.render_to_rgba(&mut scene.inner, &camera.inner);
->>>>>>> Stashed changes
         Buffer::from(rgba)
     }
 
     /// Render and return a PNG as bytes.
     #[napi]
-<<<<<<< Updated upstream
     pub fn render_png(
         &mut self,
         scene: &mut JsScene,
@@ -2906,11 +2900,6 @@ impl JsHeadlessRenderer {
         let rgba = with_shadows(&mut scene.inner, shadows, |s| {
             self.inner.render_to_rgba(s, camera_of(&camera))
         });
-=======
-    pub fn render_png(&mut self, scene: &mut JsScene, camera: &JsPerspectiveCamera) -> Buffer {
-        let (w, h) = self.inner.render_size();
-        let rgba = self.inner.render_to_rgba(&mut scene.inner, &camera.inner);
->>>>>>> Stashed changes
         let png = threers::encode_png(w, h, &rgba);
         Buffer::from(png)
     }

@@ -226,18 +226,16 @@ mod tests {
         world.add_body(RigidBody::fixed().shape(Shape::ground()).friction(0.8));
         let mut ids = Vec::new();
         for i in 0..12 {
-            ids.push(
-                world.add_body(
-                    RigidBody::dynamic()
-                        .shape(Shape::cuboid(0.4, 0.4, 0.4))
-                        .translation(Vector3::new(
-                            (i % 3) as f32 * 0.9 - 0.9,
-                            1.0 + (i / 3) as f32 * 0.95,
-                            0.0,
-                        ))
-                        .friction(0.8),
-                ),
-            );
+            ids.push(world.add_body(
+                RigidBody::dynamic()
+                    .shape(Shape::cuboid(0.4, 0.4, 0.4))
+                    .translation(Vector3::new(
+                        (i % 3) as f32 * 0.9 - 0.9,
+                        1.0 + (i / 3) as f32 * 0.95,
+                        0.0,
+                    ))
+                    .friction(0.8),
+            ));
         }
         (world, ids)
     }
@@ -261,18 +259,10 @@ mod tests {
         for _ in 0..120 {
             world.step_fixed();
         }
-        assert_ne!(
-            state(&world, &ids),
-            at_save,
-            "the world should have moved on"
-        );
+        assert_ne!(state(&world, &ids), at_save, "the world should have moved on");
 
         assert!(world.restore(&saved));
-        assert_eq!(
-            state(&world, &ids),
-            at_save,
-            "restore did not rewind exactly"
-        );
+        assert_eq!(state(&world, &ids), at_save, "restore did not rewind exactly");
     }
 
     #[test]

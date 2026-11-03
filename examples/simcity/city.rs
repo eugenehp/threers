@@ -587,17 +587,9 @@ pub(crate) fn generate_city(scene: &mut Scene, params: &CityParams) -> City {
         }
         Water::Bay => {
             b.grass.add_slab(cx1, -e, e, e, 0.0, terrain, Uv::Unit);
-            b.grass
-                .add_slab(shore, -e, cx1, cz0, 0.0, terrain, Uv::Unit);
+            b.grass.add_slab(shore, -e, cx1, cz0, 0.0, terrain, Uv::Unit);
             b.grass.add_slab(shore, cz1, cx1, e, 0.0, terrain, Uv::Unit);
-            water_surface = Some(water_grid(
-                -wr,
-                -wr,
-                shore.min(wr),
-                wr,
-                -RIVER_DEPTH,
-                water_col,
-            ));
+            water_surface = Some(water_grid(-wr, -wr, shore.min(wr), wr, -RIVER_DEPTH, water_col));
         }
         Water::Dry => {
             b.grass.add_slab(-e, -e, cx0, e, 0.0, terrain, Uv::Unit);
@@ -704,11 +696,7 @@ pub(crate) fn generate_city(scene: &mut Scene, params: &CityParams) -> City {
                 let along_z = Axis::is_road(a) && !Axis::is_road(k);
                 let along_x = Axis::is_road(k) && !Axis::is_road(a);
                 let road_idx = if along_z { a } else { k };
-                let half_here = if along_z {
-                    (x1 - x0) * 0.5
-                } else {
-                    (z1 - z0) * 0.5
-                };
+                let half_here = if along_z { (x1 - x0) * 0.5 } else { (z1 - z0) * 0.5 };
                 if (along_z || along_x) && cycle_route(road_idx, half_here) {
                     let (w0, w1) = if along_z { (x0, x1) } else { (z0, z1) };
                     let mid = (w0 + w1) * 0.5;
@@ -719,7 +707,8 @@ pub(crate) fn generate_city(scene: &mut Scene, params: &CityParams) -> City {
                     // Still has to clear the running lane, which sits at
                     // 0.44 of the half-width with a car's width around it.
                     if half >= 6.6 && lane_c - lane_w * 0.5 > half * 0.44 + 1.05 {
-                        let track = scale_color(Color::from_hex(0x2f6b4f), rng.range(0.92, 1.08));
+                        let track =
+                            scale_color(Color::from_hex(0x2f6b4f), rng.range(0.92, 1.08));
                         for side in [-1.0f32, 1.0] {
                             let c = mid + side * lane_c;
                             let (a0, a1) = (c - lane_w * 0.5, c + lane_w * 0.5);
@@ -757,8 +746,10 @@ pub(crate) fn generate_city(scene: &mut Scene, params: &CityParams) -> City {
                                 if !bike_rng.chance(0.65) {
                                     continue;
                                 }
-                                let cruise = bike_rng
-                                    .range(Vehicle::Bicycle.speed().0, Vehicle::Bicycle.speed().1);
+                                let cruise = bike_rng.range(
+                                    Vehicle::Bicycle.speed().0,
+                                    Vehicle::Bicycle.speed().1,
+                                );
                                 bike_movers.push((
                                     bike_rng.below(Vehicle::Bicycle.colors().len()),
                                     Mover {
@@ -842,30 +833,14 @@ pub(crate) fn generate_city(scene: &mut Scene, params: &CityParams) -> City {
             // not downtown, where the land is towers, and not the outskirts,
             // where nothing would ever pass one.
             if let Some(kind) = civic_wanted.first().copied() {
-                let d0 = core_distance(
-                    &plan,
-                    cell.cx(),
-                    cell.cz(),
-                    extent,
-                    shore,
-                    land_span,
-                    park_r,
-                );
+                let d0 = core_distance(&plan, cell.cx(), cell.cz(), extent, shore, land_span, park_r);
                 if (0.20..0.94).contains(&d0) && add_civic(&mut b, kind, cell, &mut rng) {
                     civic_wanted.remove(0);
                     buildings += 1;
                     continue;
                 }
             }
-            let d = core_distance(
-                &plan,
-                cell.cx(),
-                cell.cz(),
-                extent,
-                shore,
-                land_span,
-                park_r,
-            );
+            let d = core_distance(&plan, cell.cx(), cell.cz(), extent, shore, land_span, park_r);
             let n = city_noise(cell.cx() * 0.012 + 21.5, cell.cz() * 0.012 + 7.25);
             let zone = (d * 1.02 + (n - 0.5) * 0.50).clamp(0.0, 1.25);
 
@@ -959,7 +934,10 @@ pub(crate) fn generate_city(scene: &mut Scene, params: &CityParams) -> City {
                                     g.x1,
                                     g.z1,
                                     KERB + 0.01,
-                                    scale_color(Color::from_hex(C_GRASS), rng.range(0.8, 1.15)),
+                                    scale_color(
+                                        Color::from_hex(C_GRASS),
+                                        rng.range(0.8, 1.15),
+                                    ),
                                     Uv::Unit,
                                 );
                                 if g.w() > 4.0 && g.d() > 4.0 && rng.chance(0.55) {
@@ -1008,7 +986,13 @@ pub(crate) fn generate_city(scene: &mut Scene, params: &CityParams) -> City {
                 // and only on the wider pavements — an entrance takes three
                 // metres of footway and would block a side street.
                 if rng.chance(0.03) {
-                    add_metro_entrance(&mut b, fx, fz, facing(-toward.x, -toward.z), &mut rng);
+                    add_metro_entrance(
+                        &mut b,
+                        fx,
+                        fz,
+                        facing(-toward.x, -toward.z),
+                        &mut rng,
+                    );
                 }
                 // Refuse waiting for collection, against the wall rather than
                 // out on the flags. Remembered so the rats know where to go.
@@ -1193,9 +1177,9 @@ pub(crate) fn generate_city(scene: &mut Scene, params: &CityParams) -> City {
                 // end of a block met in the middle, so most kerbs had no
                 // parking on them at all and the bay markings were drawn in
                 // about thirty places in the entire city.
-                let blocked = (0..cross.len())
-                    .step_by(2)
-                    .any(|k| (p - cross.center(k)).abs() < cross.half(k) + 3.2);
+                let blocked = (0..cross.len()).step_by(2).any(|k| {
+                    (p - cross.center(k)).abs() < cross.half(k) + 3.2
+                });
                 if blocked {
                     p += 4.0;
                     continue;
@@ -1270,14 +1254,11 @@ pub(crate) fn generate_city(scene: &mut Scene, params: &CityParams) -> City {
                             3..=5 => Vehicle::Hatch,
                             _ => Vehicle::Car,
                         };
-                        let paint =
-                            Color::from_hex(kind.colors()[park_rng.below(kind.colors().len())]);
+                        let paint = Color::from_hex(
+                            kind.colors()[park_rng.below(kind.colors().len())],
+                        );
                         let lane = center + side * (half - 2.7);
-                        let (px, pz) = if road_z {
-                            (lane, p - 1.2)
-                        } else {
-                            (p - 1.2, lane)
-                        };
+                        let (px, pz) = if road_z { (lane, p - 1.2) } else { (p - 1.2, lane) };
                         // Nose to the kerb, forty-five degrees off it.
                         let cant = PI * 0.25 * side * if road_z { 1.0 } else { -1.0 };
                         let yaw = if road_z { cant } else { PI * 0.5 + cant };
@@ -1354,7 +1335,9 @@ pub(crate) fn generate_city(scene: &mut Scene, params: &CityParams) -> City {
                         3..=5 => Vehicle::Hatch,
                         _ => Vehicle::Car,
                     };
-                    let paint = Color::from_hex(kind.colors()[park_rng.below(kind.colors().len())]);
+                    let paint = Color::from_hex(
+                        kind.colors()[park_rng.below(kind.colors().len())],
+                    );
                     // Nose in or nose out, and never quite square to the kerb.
                     let flip = if park_rng.chance(0.5) { 0.0 } else { PI };
                     let skew = park_rng.range(-0.05, 0.05);
@@ -1527,7 +1510,9 @@ pub(crate) fn generate_city(scene: &mut Scene, params: &CityParams) -> City {
         let (s_lo, s_hi) = fit_run(s_lo, s_hi, kind.length());
         // One lane per (axis, road, direction). Both directions of a road are
         // separate streams, and a stream may span all four vehicle fleets.
-        let lane = ((road_index as u16) << 2) | ((along_x as u16) << 1) | u16::from(dir > 0.0);
+        let lane = ((road_index as u16) << 2)
+            | ((along_x as u16) << 1)
+            | u16::from(dir > 0.0);
         road[kind as usize].push((
             rng.below(kind.colors().len()),
             Mover {
@@ -1965,8 +1950,7 @@ pub(crate) fn generate_city(scene: &mut Scene, params: &CityParams) -> City {
             // A branch off at right angles, so the grid is a network rather
             // than one line.
             let (bx, bz) = (-pz * 1.5, px * 1.5);
-            works.pylons +=
-                add_power_line(&mut b, (px * 0.35, pz * 0.35), (bx, bz), 92.0, &mut rng);
+            works.pylons += add_power_line(&mut b, (px * 0.35, pz * 0.35), (bx, bz), 92.0, &mut rng);
         }
     }
 
@@ -2066,12 +2050,7 @@ pub(crate) fn generate_city(scene: &mut Scene, params: &CityParams) -> City {
         // Try each remaining site with a rect of the given half-size, squared
         // to the world rather than to the ring: everything here is a shed and
         // a car park, and sheds are rectangular.
-        let take = |occ: &Occupancy,
-                    hw: f32,
-                    hd: f32,
-                    sites: &[(f32, f32, f32)],
-                    next: &mut usize|
-         -> Option<(Rect, bool)> {
+        let take = |occ: &Occupancy, hw: f32, hd: f32, sites: &[(f32, f32, f32)], next: &mut usize| -> Option<(Rect, bool)> {
             // Wraps rather than running off the end. The first version
             // consumed a site on every *attempt*, so a few large footprints
             // that collided with the city walked the cursor past all
@@ -2083,12 +2062,7 @@ pub(crate) fn generate_city(scene: &mut Scene, params: &CityParams) -> City {
                 // Long axis across the radius, so frontages face the city.
                 let along_x = a.cos().abs() < 0.5;
                 let (w, d) = if along_x { (hw, hd) } else { (hd, hw) };
-                let r = Rect {
-                    x0: x - w,
-                    z0: z - d,
-                    x1: x + w,
-                    z1: z + d,
-                };
+                let r = Rect { x0: x - w, z0: z - d, x1: x + w, z1: z + d };
                 // Never in the water.
                 if let Water::River = plan.water {
                     if r.x1 > rx0 - 12.0 && r.x0 < rx1 + 12.0 {
@@ -2136,14 +2110,8 @@ pub(crate) fn generate_city(scene: &mut Scene, params: &CityParams) -> City {
                 break;
             }
             if let Some((r, _)) = take(&b.occ, want, want, &sites, &mut next) {
-                works.ballpark = add_ballpark(
-                    &mut b,
-                    r.cx(),
-                    r.cz(),
-                    want * 0.88,
-                    rng.range(0.0, TAU),
-                    &mut rng,
-                );
+                works.ballpark =
+                    add_ballpark(&mut b, r.cx(), r.cz(), want * 0.88, rng.range(0.0, TAU), &mut rng);
                 if works.ballpark {
                     served.push((r.cx(), r.cz()));
                 }
@@ -2154,14 +2122,8 @@ pub(crate) fn generate_city(scene: &mut Scene, params: &CityParams) -> City {
                 break;
             }
             if let Some((r, _)) = take(&b.occ, want, want, &sites, &mut next) {
-                works.cricket = add_cricket_ground(
-                    &mut b,
-                    r.cx(),
-                    r.cz(),
-                    want * 0.9,
-                    rng.range(0.0, TAU),
-                    &mut rng,
-                );
+                works.cricket =
+                    add_cricket_ground(&mut b, r.cx(), r.cz(), want * 0.9, rng.range(0.0, TAU), &mut rng);
                 if works.cricket {
                     served.push((r.cx(), r.cz()));
                 }
@@ -2185,19 +2147,9 @@ pub(crate) fn generate_city(scene: &mut Scene, params: &CityParams) -> City {
                     served.push((r.cx(), r.cz()));
                     // The car park a supermarket always has in front of it.
                     let lot = if along_x {
-                        Rect {
-                            x0: r.x0,
-                            z0: r.z0,
-                            x1: r.x1,
-                            z1: r.z1 - r.d() * 0.48,
-                        }
+                        Rect { x0: r.x0, z0: r.z0, x1: r.x1, z1: r.z1 - r.d() * 0.48 }
                     } else {
-                        Rect {
-                            x0: r.x0,
-                            z0: r.z0,
-                            x1: r.x1 - r.w() * 0.48,
-                            z1: r.z1,
-                        }
+                        Rect { x0: r.x0, z0: r.z0, x1: r.x1 - r.w() * 0.48, z1: r.z1 }
                     };
                     works.parked_cars +=
                         add_parking_lot(&mut b, &lot, along_x, 0.5, &lot_bodies, &paints, &mut rng);
@@ -2210,29 +2162,12 @@ pub(crate) fn generate_city(scene: &mut Scene, params: &CityParams) -> City {
                     works.strips += 1;
                     served.push((r.cx(), r.cz()));
                     let lot = if along_x {
-                        Rect {
-                            x0: r.x0,
-                            z0: r.z0,
-                            x1: r.x1,
-                            z1: r.z1 - r.d() * 0.36,
-                        }
+                        Rect { x0: r.x0, z0: r.z0, x1: r.x1, z1: r.z1 - r.d() * 0.36 }
                     } else {
-                        Rect {
-                            x0: r.x0,
-                            z0: r.z0,
-                            x1: r.x1 - r.w() * 0.36,
-                            z1: r.z1,
-                        }
+                        Rect { x0: r.x0, z0: r.z0, x1: r.x1 - r.w() * 0.36, z1: r.z1 }
                     };
-                    works.parked_cars += add_parking_lot(
-                        &mut b,
-                        &lot,
-                        along_x,
-                        0.42,
-                        &lot_bodies,
-                        &paints,
-                        &mut rng,
-                    );
+                    works.parked_cars +=
+                        add_parking_lot(&mut b, &lot, along_x, 0.42, &lot_bodies, &paints, &mut rng);
                 }
             }
         }
@@ -2246,15 +2181,8 @@ pub(crate) fn generate_city(scene: &mut Scene, params: &CityParams) -> City {
         }
         for _ in 0..2 {
             if let Some((r, along_x)) = take(&b.occ, 26.0, 20.0, &sites, &mut next) {
-                works.parked_cars += add_parking_lot(
-                    &mut b,
-                    &r,
-                    along_x,
-                    rng.range(0.25, 0.8),
-                    &lot_bodies,
-                    &paints,
-                    &mut rng,
-                );
+                works.parked_cars +=
+                    add_parking_lot(&mut b, &r, along_x, rng.range(0.25, 0.8), &lot_bodies, &paints, &mut rng);
                 served.push((r.cx(), r.cz()));
             }
         }
@@ -2294,9 +2222,8 @@ pub(crate) fn generate_city(scene: &mut Scene, params: &CityParams) -> City {
                 .iter()
                 .position(|l| *l == params.layout)
                 .unwrap_or(0) as u64;
-            let mut mon_rng = Rng::new(
-                params.seed ^ 0x51d2_7fa4_1c93_6e08 ^ (li.wrapping_mul(0x9e37_79b9_7f4a_7c15)),
-            );
+            let mut mon_rng =
+                Rng::new(params.seed ^ 0x51d2_7fa4_1c93_6e08 ^ (li.wrapping_mul(0x9e37_79b9_7f4a_7c15)));
             let mut kinds = MONUMENTS;
             for i in (1..kinds.len()).rev() {
                 kinds.swap(i, mon_rng.below(i + 1));
@@ -2311,14 +2238,8 @@ pub(crate) fn generate_city(scene: &mut Scene, params: &CityParams) -> City {
                 // inside out: a monument nobody passes is not a monument.
                 for _ in 0..3 {
                     if let Some((r, _)) = take(&b.occ, f + 6.0, f + 6.0, &sites, &mut next) {
-                        if add_monument(
-                            &mut b,
-                            kind,
-                            r.cx(),
-                            r.cz(),
-                            mon_rng.range(0.0, TAU),
-                            &mut mon_rng,
-                        ) {
+                        if add_monument(&mut b, kind, r.cx(), r.cz(), mon_rng.range(0.0, TAU), &mut mon_rng)
+                        {
                             works.monuments.push(kind.label());
                             served.push((r.cx(), r.cz()));
                             break;
@@ -2344,7 +2265,13 @@ pub(crate) fn generate_city(scene: &mut Scene, params: &CityParams) -> City {
         }
         for _ in 0..3 {
             if let Some((r, _)) = take(&b.occ, 12.0, 12.0, &sites, &mut next) {
-                if add_telecom_mast(&mut b, r.cx(), r.cz(), rng.range(42.0, 78.0), &mut rng) {
+                if add_telecom_mast(
+                    &mut b,
+                    r.cx(),
+                    r.cz(),
+                    rng.range(42.0, 78.0),
+                    &mut rng,
+                ) {
                     works.masts += 1;
                 }
             }
@@ -2400,18 +2327,18 @@ pub(crate) fn generate_city(scene: &mut Scene, params: &CityParams) -> City {
             // of it is the bay.
             for x0f in [-1.15f32, 0.24] {
                 for k in [1.9f32, -1.9, 1.15, -1.15, 2.7, -2.7] {
-                    let cz = k * extent;
-                    let r = Rect {
-                        x0: hx + extent * x0f,
-                        z0: cz - half,
-                        x1: hx + extent * (x0f + 0.93),
-                        z1: cz + half,
-                    };
-                    if add_depot(&mut b, &r, false, &hgv, &mut rng) {
-                        works.depot = true;
-                        served.push((r.cx(), r.cz()));
-                        break 'depot;
-                    }
+                let cz = k * extent;
+                let r = Rect {
+                    x0: hx + extent * x0f,
+                    z0: cz - half,
+                    x1: hx + extent * (x0f + 0.93),
+                    z1: cz + half,
+                };
+                if add_depot(&mut b, &r, false, &hgv, &mut rng) {
+                    works.depot = true;
+                    served.push((r.cx(), r.cz()));
+                    break 'depot;
+                }
                 }
             }
         }
@@ -2467,11 +2394,7 @@ pub(crate) fn generate_city(scene: &mut Scene, params: &CityParams) -> City {
                 // kilometres apart this far out.
                 {
                     let f = airport_field(px, pz, along, rw);
-                    let (lo, hi) = if rail_along_x {
-                        (f[1], f[3])
-                    } else {
-                        (f[0], f[2])
-                    };
+                    let (lo, hi) = if rail_along_x { (f[1], f[3]) } else { (f[0], f[2]) };
                     let here = if rail_along_x { pz } else { px };
                     let half = (hi - lo) * 0.5;
                     if rail_fixed > lo - 30.0 && rail_fixed < hi + 30.0 {
@@ -2509,7 +2432,15 @@ pub(crate) fn generate_city(scene: &mut Scene, params: &CityParams) -> City {
     match plan.water {
         Water::River => {
             for k in [1.35f32, -1.35, 1.9, -1.9, 2.5, -2.5, 1.05, -1.05, 3.1, -3.1] {
-                if add_suspension_bridge(&mut b, true, cz1 * k, rx0, rx1, KERB + 9.0, &mut rng) {
+                if add_suspension_bridge(
+                    &mut b,
+                    true,
+                    cz1 * k,
+                    rx0,
+                    rx1,
+                    KERB + 9.0,
+                    &mut rng,
+                ) {
                     works.suspension = true;
                     break;
                 }
@@ -3110,7 +3041,10 @@ pub(crate) fn generate_city(scene: &mut Scene, params: &CityParams) -> City {
     }
     train_src.sort_by_key(|(c, _)| *c);
     {
-        let poses: Vec<Arc<BufferGeometry>> = vec![Arc::new(train_geometry(4, Color::WHITE))];
+        let poses: Vec<Arc<BufferGeometry>> = vec![Arc::new(train_geometry(
+            4,
+            Color::WHITE,
+        ))];
         fleets.push(spawn_fleet(
             scene,
             "trains",
@@ -3291,6 +3225,7 @@ pub(crate) fn generate_city(scene: &mut Scene, params: &CityParams) -> City {
         }
     }
 
+
     // --- Wildlife.
     //
     // Two populations that barely overlap. Pigeons, squirrels and butterflies
@@ -3299,15 +3234,15 @@ pub(crate) fn generate_city(scene: &mut Scene, params: &CityParams) -> City {
     let mut swarms: Vec<Swarm> = Vec::new();
     let mut wild = Rng::new(params.seed ^ 0x5eed_b12d);
     let spot = |list: &mut Vec<Critter>,
-                wild: &mut Rng,
-                (cx, cz, cr): (f32, f32, f32),
-                y: f32,
-                n: usize,
-                r: (f32, f32),
-                rate: (f32, f32),
-                wander: (f32, f32),
-                scale: (f32, f32),
-                climb: f32| {
+                    wild: &mut Rng,
+                    (cx, cz, cr): (f32, f32, f32),
+                    y: f32,
+                    n: usize,
+                    r: (f32, f32),
+                    rate: (f32, f32),
+                    wander: (f32, f32),
+                    scale: (f32, f32),
+                    climb: f32| {
         for _ in 0..n {
             let a = wild.range(0.0, TAU);
             let d = cr * wild.range(0.0, 0.85);
@@ -3332,18 +3267,7 @@ pub(crate) fn generate_city(scene: &mut Scene, params: &CityParams) -> City {
     let mut pigeons: Vec<Critter> = Vec::new();
     for g in &gathers {
         let n = 4 + wild.below(9);
-        spot(
-            &mut pigeons,
-            &mut wild,
-            *g,
-            KERB,
-            n,
-            (0.35, 1.4),
-            (0.012, 0.045),
-            (0.25, 0.6),
-            (0.85, 1.15),
-            0.0,
-        );
+        spot(&mut pigeons, &mut wild, *g, KERB, n, (0.35, 1.4), (0.012, 0.045), (0.25, 0.6), (0.85, 1.15), 0.0);
     }
 
     // Squirrels, wherever there are trees to be between. Quicker and more
@@ -3356,18 +3280,7 @@ pub(crate) fn generate_city(scene: &mut Scene, params: &CityParams) -> City {
         let (cx, cz) = ((w.0 + w.2) * 0.5, (w.1 + w.3) * 0.5);
         let cr = ((w.2 - w.0).min(w.3 - w.1) * 0.45).max(1.0);
         let n = 1 + wild.below(4);
-        spot(
-            &mut squirrels,
-            &mut wild,
-            (cx, cz, cr),
-            KERB,
-            n,
-            (0.6, 2.6),
-            (0.05, 0.14),
-            (0.4, 0.9),
-            (0.8, 1.2),
-            0.0,
-        );
+        spot(&mut squirrels, &mut wild, (cx, cz, cr), KERB, n, (0.6, 2.6), (0.05, 0.14), (0.4, 0.9), (0.8, 1.2), 0.0);
     }
 
     // Butterflies over the same green, low and slow, in daylight only.
@@ -3379,18 +3292,7 @@ pub(crate) fn generate_city(scene: &mut Scene, params: &CityParams) -> City {
         let (cx, cz) = ((w.0 + w.2) * 0.5, (w.1 + w.3) * 0.5);
         let cr = ((w.2 - w.0).min(w.3 - w.1) * 0.45).max(1.0);
         let n = 3 + wild.below(7);
-        spot(
-            &mut butterflies,
-            &mut wild,
-            (cx, cz, cr),
-            KERB + 0.9,
-            n,
-            (0.5, 2.2),
-            (0.05, 0.16),
-            (0.5, 1.0),
-            (0.8, 1.3),
-            0.35,
-        );
+        spot(&mut butterflies, &mut wild, (cx, cz, cr), KERB + 0.9, n, (0.5, 2.2), (0.05, 0.16), (0.5, 1.0), (0.8, 1.3), 0.35);
     }
 
     // Waterfowl. Ducks on anything, swans only where there is room for them.
@@ -3398,32 +3300,10 @@ pub(crate) fn generate_city(scene: &mut Scene, params: &CityParams) -> City {
     let mut swans: Vec<Critter> = Vec::new();
     for (px, pz, pr) in &ponds {
         let n = 2 + wild.below(6);
-        spot(
-            &mut ducks,
-            &mut wild,
-            (*px, *pz, pr * 0.55),
-            POND_Y,
-            n,
-            ((pr * 0.12).max(0.6), (pr * 0.34).max(0.9)),
-            (0.008, 0.030),
-            (0.15, 0.45),
-            (0.9, 1.1),
-            0.012,
-        );
+        spot(&mut ducks, &mut wild, (*px, *pz, pr * 0.55), POND_Y, n, ((pr * 0.12).max(0.6), (pr * 0.34).max(0.9)), (0.008, 0.030), (0.15, 0.45), (0.9, 1.1), 0.012);
         if *pr > 7.0 && wild.chance(0.55) {
             let n = 1 + wild.below(3);
-            spot(
-                &mut swans,
-                &mut wild,
-                (*px, *pz, pr * 0.45),
-                POND_Y - 0.02,
-                n,
-                ((pr * 0.14).max(0.9), (pr * 0.30).max(1.4)),
-                (0.005, 0.016),
-                (0.10, 0.30),
-                (0.95, 1.15),
-                0.010,
-            );
+            spot(&mut swans, &mut wild, (*px, *pz, pr * 0.45), POND_Y - 0.02, n, ((pr * 0.14).max(0.9), (pr * 0.30).max(1.4)), (0.005, 0.016), (0.10, 0.30), (0.95, 1.15), 0.010);
         }
     }
 
@@ -3432,18 +3312,7 @@ pub(crate) fn generate_city(scene: &mut Scene, params: &CityParams) -> City {
     let mut park_dogs: Vec<Critter> = Vec::new();
     for r in &runs {
         let n = 2 + wild.below(4);
-        spot(
-            &mut park_dogs,
-            &mut wild,
-            *r,
-            KERB,
-            n,
-            (1.5, r.2.max(2.0)),
-            (0.06, 0.16),
-            (0.35, 0.85),
-            (0.85, 1.15),
-            0.0,
-        );
+        spot(&mut park_dogs, &mut wild, *r, KERB, n, (1.5, r.2.max(2.0)), (0.06, 0.16), (0.35, 0.85), (0.85, 1.15), 0.0);
     }
 
     // Where the water is, for anything that lives over it.
@@ -3519,36 +3388,14 @@ pub(crate) fn generate_city(scene: &mut Scene, params: &CityParams) -> City {
     let mut dragonflies: Vec<Critter> = Vec::new();
     for (px, pz, pr) in &ponds {
         let n = 2 + wild.below(5);
-        spot(
-            &mut dragonflies,
-            &mut wild,
-            (*px, *pz, pr * 0.9),
-            POND_Y + 0.55,
-            n,
-            (0.6, pr.max(1.2)),
-            (0.10, 0.30),
-            (0.5, 0.95),
-            (0.9, 1.3),
-            0.22,
-        );
+        spot(&mut dragonflies, &mut wild, (*px, *pz, pr * 0.9), POND_Y + 0.55, n, (0.6, pr.max(1.2)), (0.10, 0.30), (0.5, 0.95), (0.9, 1.3), 0.22);
     }
     if let Some(wx) = water_x {
         for _ in 0..(6 + (extent / 40.0) as usize) {
             let z = wild.range(-extent, extent);
             let off = wild.range(-14.0, 14.0);
             let n = 1 + wild.below(3);
-            spot(
-                &mut dragonflies,
-                &mut wild,
-                (wx + off, z, 3.0),
-                -RIVER_DEPTH + 0.9,
-                n,
-                (0.8, 3.5),
-                (0.08, 0.26),
-                (0.5, 0.95),
-                (0.9, 1.3),
-                0.30,
-            );
+            spot(&mut dragonflies, &mut wild, (wx + off, z, 3.0), -RIVER_DEPTH + 0.9, n, (0.8, 3.5), (0.08, 0.26), (0.5, 0.95), (0.9, 1.3), 0.30);
         }
     }
 
@@ -3560,18 +3407,7 @@ pub(crate) fn generate_city(scene: &mut Scene, params: &CityParams) -> City {
             continue;
         }
         let n = 5 + wild.below(9);
-        spot(
-            &mut flies,
-            &mut wild,
-            (t.0, t.1, 0.5),
-            KERB + 0.75,
-            n,
-            (0.10, 0.45),
-            (0.35, 0.95),
-            (0.6, 1.0),
-            (0.8, 1.3),
-            0.16,
-        );
+        spot(&mut flies, &mut wild, (t.0, t.1, 0.5), KERB + 0.75, n, (0.10, 0.45), (0.35, 0.95), (0.6, 1.0), (0.8, 1.3), 0.16);
     }
 
     // Rats, after dark, against the refuse. They do not wander: a rat by a
@@ -3582,18 +3418,7 @@ pub(crate) fn generate_city(scene: &mut Scene, params: &CityParams) -> City {
             continue;
         }
         let n = 1 + wild.below(4);
-        spot(
-            &mut rats,
-            &mut wild,
-            (t.0, t.1, 0.9),
-            KERB,
-            n,
-            (0.20, 0.75),
-            (0.10, 0.30),
-            (0.5, 1.0),
-            (0.8, 1.25),
-            0.0,
-        );
+        spot(&mut rats, &mut wild, (t.0, t.1, 0.9), KERB, n, (0.20, 0.75), (0.10, 0.30), (0.5, 1.0), (0.8, 1.25), 0.0);
     }
 
     // Foxes, after dark, along the edges of the green where it meets the
@@ -3605,18 +3430,7 @@ pub(crate) fn generate_city(scene: &mut Scene, params: &CityParams) -> City {
         }
         let (cx, cz) = ((w.0 + w.2) * 0.5, (w.1 + w.3) * 0.5);
         let cr = ((w.2 - w.0).min(w.3 - w.1) * 0.42).max(1.5);
-        spot(
-            &mut foxes,
-            &mut wild,
-            (cx, cz, cr),
-            KERB,
-            1,
-            (2.0, 6.0),
-            (0.02, 0.06),
-            (0.3, 0.8),
-            (0.9, 1.1),
-            0.0,
-        );
+        spot(&mut foxes, &mut wild, (cx, cz, cr), KERB, 1, (2.0, 6.0), (0.02, 0.06), (0.3, 0.8), (0.9, 1.1), 0.0);
     }
 
     // Flocks in the air. Each flock is a shared centre with the birds spread
@@ -3693,166 +3507,22 @@ pub(crate) fn generate_city(scene: &mut Scene, params: &CityParams) -> City {
 
     let wing_colours = [0xe8b83c, 0xd8643c, 0xf0f0e8, 0x6f7fc0, 0xc85a90];
     for (name, critters, kind, args, beat, lod, rough, shift) in [
-        (
-            "planes",
-            planes,
-            CritterKind::Plane,
-            vec![0.0f32, 1.0],
-            1.4f32,
-            4000.0f32,
-            0.42f32,
-            Shift::Always,
-        ),
-        (
-            "helicopters",
-            helis,
-            CritterKind::Helicopter,
-            vec![0.0, 0.33, 0.66],
-            13.0,
-            1600.0,
-            0.55,
-            Shift::Always,
-        ),
-        (
-            "drones",
-            drones,
-            CritterKind::Drone,
-            vec![0.0, 0.33, 0.66],
-            22.0,
-            340.0,
-            0.62,
-            Shift::Always,
-        ),
-        (
-            "birds",
-            birds,
-            CritterKind::Bird,
-            vec![-1.0f32, 0.0, 1.0, 0.0],
-            7.0f32,
-            520.0f32,
-            0.72f32,
-            Shift::Day,
-        ),
-        (
-            "gulls",
-            gulls,
-            CritterKind::Gull,
-            vec![-1.0, 0.0, 1.0, 0.0],
-            5.0,
-            620.0,
-            0.70,
-            Shift::Day,
-        ),
-        (
-            "pigeons",
-            pigeons,
-            CritterKind::Pigeon,
-            vec![0.0, 1.0],
-            0.8,
-            95.0,
-            0.80,
-            Shift::Day,
-        ),
-        (
-            "squirrels",
-            squirrels,
-            CritterKind::Squirrel,
-            vec![0.0, 1.0],
-            1.6,
-            85.0,
-            0.86,
-            Shift::Day,
-        ),
-        (
-            "butterflies",
-            butterflies,
-            CritterKind::Butterfly,
-            vec![0.0, 0.5, 1.0, 0.5],
-            9.0,
-            55.0,
-            0.90,
-            Shift::Day,
-        ),
-        (
-            "dragonflies",
-            dragonflies,
-            CritterKind::Dragonfly,
-            vec![-1.0, 0.0, 1.0, 0.0],
-            14.0,
-            60.0,
-            0.72,
-            Shift::Day,
-        ),
-        (
-            "flies",
-            flies,
-            CritterKind::Fly,
-            vec![-1.0, 1.0],
-            22.0,
-            32.0,
-            0.92,
-            Shift::Day,
-        ),
-        (
-            "ducks",
-            ducks,
-            CritterKind::Duck,
-            vec![0.0, 1.0],
-            0.0,
-            110.0,
-            0.62,
-            Shift::Always,
-        ),
-        (
-            "swans",
-            swans,
-            CritterKind::Swan,
-            vec![0.0, 1.0],
-            0.0,
-            150.0,
-            0.60,
-            Shift::Always,
-        ),
-        (
-            "park-dogs",
-            park_dogs,
-            CritterKind::ParkDog,
-            vec![1.0, -1.0],
-            2.6,
-            130.0,
-            0.88,
-            Shift::Day,
-        ),
-        (
-            "rats",
-            rats,
-            CritterKind::Rat,
-            vec![0.0, 1.0],
-            3.0,
-            60.0,
-            0.88,
-            Shift::Night,
-        ),
-        (
-            "foxes",
-            foxes,
-            CritterKind::Fox,
-            vec![1.0, -1.0],
-            2.2,
-            130.0,
-            0.86,
-            Shift::Night,
-        ),
-        (
-            "bats",
-            bats,
-            CritterKind::Bat,
-            vec![-1.0, 0.2, 1.0, 0.2],
-            12.0,
-            190.0,
-            0.88,
-            Shift::Night,
-        ),
+        ("planes", planes, CritterKind::Plane, vec![0.0f32, 1.0], 1.4f32, 4000.0f32, 0.42f32, Shift::Always),
+        ("helicopters", helis, CritterKind::Helicopter, vec![0.0, 0.33, 0.66], 13.0, 1600.0, 0.55, Shift::Always),
+        ("drones", drones, CritterKind::Drone, vec![0.0, 0.33, 0.66], 22.0, 340.0, 0.62, Shift::Always),
+        ("birds", birds, CritterKind::Bird, vec![-1.0f32, 0.0, 1.0, 0.0], 7.0f32, 520.0f32, 0.72f32, Shift::Day),
+        ("gulls", gulls, CritterKind::Gull, vec![-1.0, 0.0, 1.0, 0.0], 5.0, 620.0, 0.70, Shift::Day),
+        ("pigeons", pigeons, CritterKind::Pigeon, vec![0.0, 1.0], 0.8, 95.0, 0.80, Shift::Day),
+        ("squirrels", squirrels, CritterKind::Squirrel, vec![0.0, 1.0], 1.6, 85.0, 0.86, Shift::Day),
+        ("butterflies", butterflies, CritterKind::Butterfly, vec![0.0, 0.5, 1.0, 0.5], 9.0, 55.0, 0.90, Shift::Day),
+        ("dragonflies", dragonflies, CritterKind::Dragonfly, vec![-1.0, 0.0, 1.0, 0.0], 14.0, 60.0, 0.72, Shift::Day),
+        ("flies", flies, CritterKind::Fly, vec![-1.0, 1.0], 22.0, 32.0, 0.92, Shift::Day),
+        ("ducks", ducks, CritterKind::Duck, vec![0.0, 1.0], 0.0, 110.0, 0.62, Shift::Always),
+        ("swans", swans, CritterKind::Swan, vec![0.0, 1.0], 0.0, 150.0, 0.60, Shift::Always),
+        ("park-dogs", park_dogs, CritterKind::ParkDog, vec![1.0, -1.0], 2.6, 130.0, 0.88, Shift::Day),
+        ("rats", rats, CritterKind::Rat, vec![0.0, 1.0], 3.0, 60.0, 0.88, Shift::Night),
+        ("foxes", foxes, CritterKind::Fox, vec![1.0, -1.0], 2.2, 130.0, 0.86, Shift::Night),
+        ("bats", bats, CritterKind::Bat, vec![-1.0, 0.2, 1.0, 0.2], 12.0, 190.0, 0.88, Shift::Night),
     ] {
         if critters.is_empty() {
             continue;
@@ -3876,7 +3546,9 @@ pub(crate) fn generate_city(scene: &mut Scene, params: &CityParams) -> City {
                 CritterKind::Drone => drone_geometry(*arg),
                 CritterKind::Dragonfly => dragonfly_geometry(
                     *arg,
-                    Color::from_hex([0x2f7fa8u32, 0x3f8f57, 0xa83f5a, 0x2f4a8a][pose % 4]),
+                    Color::from_hex(
+                        [0x2f7fa8u32, 0x3f8f57, 0xa83f5a, 0x2f4a8a][pose % 4],
+                    ),
                 ),
                 CritterKind::Fly => fly_geometry(*arg),
                 CritterKind::Butterfly => butterfly_geometry(
@@ -4090,20 +3762,8 @@ pub(crate) fn generate_city(scene: &mut Scene, params: &CityParams) -> City {
         (Lamp::Beam, "car-beams", 0xffe9b8, 0.85, 0),
         (Lamp::Brake, "car-brakes", 0xff1c0c, 4.2, 0),
         (Lamp::Indicate, "car-indicators", 0xffa617, 4.6, 0),
-        (
-            Lamp::BeaconA,
-            "emergency-beacon-a",
-            0x2a6cff,
-            6.0,
-            emergency,
-        ),
-        (
-            Lamp::BeaconB,
-            "emergency-beacon-b",
-            0xff2418,
-            6.0,
-            emergency,
-        ),
+        (Lamp::BeaconA, "emergency-beacon-a", 0x2a6cff, 6.0, emergency),
+        (Lamp::BeaconB, "emergency-beacon-b", 0xff2418, 6.0, emergency),
     ] {
         let geom = Arc::new(car_lamp_geometry(part));
         let tris = geom.index.as_ref().map(|i| i.len() / 3).unwrap_or(0);
@@ -4121,10 +3781,7 @@ pub(crate) fn generate_city(scene: &mut Scene, params: &CityParams) -> City {
         obj.name = name.into();
         // Lamps are off until `apply_sky` says otherwise — except the ones
         // that signal intent, which are as useful in daylight as at night.
-        obj.visible = matches!(
-            part,
-            Lamp::Brake | Lamp::Indicate | Lamp::BeaconA | Lamp::BeaconB
-        );
+        obj.visible = matches!(part, Lamp::Brake | Lamp::Indicate | Lamp::BeaconA | Lamp::BeaconB);
         let id = scene.add(obj);
         car_lights.push((id, glow));
         car_lamps.push((id, part, glow, only));
@@ -4228,6 +3885,7 @@ pub(crate) fn generate_city(scene: &mut Scene, params: &CityParams) -> City {
     ));
     hemi_obj.name = "sky".into();
     let hemi = scene.add(hemi_obj);
+
 
     City {
         stats: CityStats {
@@ -4403,13 +4061,16 @@ impl City {
             }
         }
         for (id, glow) in &self.car_lights {
-            let signal = self.car_lamps.iter().any(|(m, p, _, _)| {
-                m == id
-                    && matches!(
-                        p,
-                        Lamp::Brake | Lamp::Indicate | Lamp::BeaconA | Lamp::BeaconB
-                    )
-            });
+            let signal = self
+                .car_lamps
+                .iter()
+                .any(|(m, p, _, _)| {
+                    m == id
+                        && matches!(
+                            p,
+                            Lamp::Brake | Lamp::Indicate | Lamp::BeaconA | Lamp::BeaconB
+                        )
+                });
             if let Some(obj) = scene.get_mut(*id) {
                 // A brake light and an indicator are visible in broad daylight
                 // — that is what they are for. Head and tail lamps and the
@@ -4834,13 +4495,7 @@ impl City {
     /// Advance the traffic and the pavements, then push the new transforms
     /// into the instanced meshes. `eye` drives the level-of-detail split and
     /// `time` the signal phase; returns `(drawn at full detail, total)`.
-    pub(crate) fn drive(
-        &mut self,
-        scene: &mut Scene,
-        dt: f32,
-        eye: Vector3,
-        time: f32,
-    ) -> (usize, usize) {
+    pub(crate) fn drive(&mut self, scene: &mut Scene, dt: f32, eye: Vector3, time: f32) -> (usize, usize) {
         if dt > 0.0 {
             self.plan_traffic(signal_phase(time), dt);
         }
@@ -4891,14 +4546,7 @@ impl City {
         // Lamps track the traffic at the same level of detail: a headlamp on a
         // vehicle too far away to see is not worth drawing. Brakes and
         // indicators are filtered further, by what the vehicle is doing.
-        write_lamps(
-            scene,
-            &self.fleets,
-            &self.car_lamps,
-            eye,
-            time,
-            self.activity,
-        );
+        write_lamps(scene, &self.fleets, &self.car_lamps, eye, time, self.activity);
 
         // Skin follows the people fleet exactly: same movers, same poses, same
         // level-of-detail cut.
@@ -5031,7 +4679,12 @@ fn out_today(m: &Mover, share: f32) -> bool {
     ((m.seed >> 7) & 0x3ff) as f32 / 1024.0 < share
 }
 
-pub(crate) fn write_instances(scene: &mut Scene, fleet: &Fleet, eye: Vector3, share: f32) -> usize {
+pub(crate) fn write_instances(
+    scene: &mut Scene,
+    fleet: &Fleet,
+    eye: Vector3,
+    share: f32,
+) -> usize {
     let lod2 = fleet.lod * fleet.lod;
     let mut near_count = 0usize;
 

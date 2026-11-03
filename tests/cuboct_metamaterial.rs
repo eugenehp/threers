@@ -1,8 +1,8 @@
 //! Integration tests for cuboct metamaterials (Jenett et al. Sci. Adv. 2020).
 
 use threers::{
-    ChiralRule, Cuboct, CuboctAssembly, CuboctAssemblyPlan, CuboctFrame, FrameMaterial, Lattice,
-    LatticeKind,
+    ChiralRule, Cuboct, CuboctAssembly, CuboctAssemblyPlan, CuboctFrame, FrameMaterial,
+    Lattice, LatticeKind,
 };
 
 #[test]

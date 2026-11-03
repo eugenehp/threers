@@ -95,195 +95,6 @@ impl InputState {
     }
 }
 
-<<<<<<< Updated upstream
-=======
-struct RgbaPresenter {
-    texture: wgpu::Texture,
-    #[allow(dead_code)]
-    view: wgpu::TextureView,
-    bind_group: wgpu::BindGroup,
-    pipeline: wgpu::RenderPipeline,
-    width: u32,
-    height: u32,
-}
-
-impl RgbaPresenter {
-    fn new(device: &wgpu::Device, format: wgpu::TextureFormat, width: u32, height: u32) -> Self {
-        let w = width.max(1);
-        let h = height.max(1);
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("path trace preview"),
-            size: wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("path trace preview sampler"),
-            mag_filter: wgpu::FilterMode::Nearest,
-            min_filter: wgpu::FilterMode::Nearest,
-            ..Default::default()
-        });
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("path trace blit layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("path trace blit bind group"),
-            layout: &layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
-                },
-            ],
-        });
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("path trace blit"),
-            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(
-                r#"
-@group(0) @binding(0) var t: texture_2d<f32>;
-@group(0) @binding(1) var s: sampler;
-
-struct VOut { @builtin(position) p: vec4<f32>, @location(0) uv: vec2<f32> };
-
-@vertex fn vs(@builtin(vertex_index) i: u32) -> VOut {
-    var p = array<vec2<f32>, 3>(vec2(-1.0, -1.0), vec2(3.0, -1.0), vec2(-1.0, 3.0));
-    var o: VOut;
-    o.p = vec4(p[i], 0.0, 1.0);
-    o.uv = p[i] * vec2(0.5, -0.5) + vec2(0.5, 0.5);
-    return o;
-}
-
-@fragment fn fs(i: VOut) -> @location(0) vec4<f32> {
-    return textureSample(t, s, i.uv);
-}
-"#,
-            )),
-        });
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("path trace blit pipeline layout"),
-            bind_group_layouts: &[Some(&layout)],
-            ..Default::default()
-        });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("path trace blit"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs"),
-                buffers: &[],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
-        Self {
-            texture,
-            view,
-            bind_group,
-            pipeline,
-            width: w,
-            height: h,
-        }
-    }
-
-    fn resize(
-        &mut self,
-        device: &wgpu::Device,
-        width: u32,
-        height: u32,
-        format: wgpu::TextureFormat,
-    ) {
-        *self = Self::new(device, format, width, height);
-    }
-
-    fn upload(&self, queue: &wgpu::Queue, rgba: &[u8]) {
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &self.texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            rgba,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(self.width * 4),
-                rows_per_image: Some(self.height),
-            },
-            wgpu::Extent3d {
-                width: self.width,
-                height: self.height,
-                depth_or_array_layers: 1,
-            },
-        );
-    }
-
-    fn draw(&self, encoder: &mut wgpu::CommandEncoder, target: &wgpu::TextureView) {
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("path trace blit pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: target,
-                resolve_target: None,
-                depth_slice: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            ..Default::default()
-        });
-        pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &self.bind_group, &[]);
-        pass.draw(0..3, 0..1);
-    }
-}
-
->>>>>>> Stashed changes
 fn build_scene() -> Scene {
     let mut scene = Scene::new();
     scene.background = Color::new(0.04, 0.05, 0.08);
@@ -307,9 +118,7 @@ fn build_scene() -> Scene {
 
     let mut hero = Object3D::mesh(Mesh::new(
         BoxGeometry::new(1.2, 1.2, 1.2),
-        Material::Standard(
-            StandardMaterial::new(Color::new(0.78, 0.35, 0.18)).with_roughness(0.35),
-        ),
+        Material::Standard(StandardMaterial::new(Color::new(0.78, 0.35, 0.18)).with_roughness(0.35)),
     ));
     hero.position = Vector3::new(-1.2, 0.6, 0.0);
     scene.add(hero);
@@ -340,40 +149,10 @@ async fn run() {
             .expect("window"),
     );
 
-<<<<<<< Updated upstream
     // wgpu by default; the native Metal backend with `--features metal` and
     // `THREERS_BACKEND=metal`. The traced picture goes up as a 2D overlay
     // over an empty frame, which both backends composite.
     let mut view = WindowRenderer::new(window.clone()).expect("a GPU for the window");
-=======
-    let instance = {
-        let mut d = wgpu::InstanceDescriptor::new_without_display_handle();
-        d.backends = wgpu::Backends::PRIMARY;
-        wgpu::Instance::new(d)
-    };
-    let surface = instance.create_surface(window.clone()).expect("surface");
-    let adapter = instance
-        .request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            compatible_surface: Some(&surface),
-            force_fallback_adapter: false,
-            apply_limit_buckets: false,
-        })
-        .await
-        .expect("adapter");
-    let (device, queue) = adapter
-        .request_device(&wgpu::DeviceDescriptor {
-            label: Some("viewport path trace"),
-            required_features: wgpu::Features::empty(),
-            required_limits: adapter.limits(),
-            ..Default::default()
-        })
-        .await
-        .expect("device");
-    let device = Arc::new(device);
-    let queue = Arc::new(queue);
-
->>>>>>> Stashed changes
     let size = window.inner_size();
     let mut config = (size.width.max(1), size.height.max(1));
     let mut overlay = Overlay::new(config.0, config.1);
@@ -381,17 +160,12 @@ async fn run() {
     blank.background = Color::new(0.0, 0.0, 0.0);
 
     let mut scene = build_scene();
-<<<<<<< Updated upstream
     let mut camera = PerspectiveCamera::new(
         42.0,
         config.0 as f32 / config.1 as f32,
         0.1,
         100.0,
     );
-=======
-    let mut camera =
-        PerspectiveCamera::new(42.0, config.width as f32 / config.height as f32, 0.1, 100.0);
->>>>>>> Stashed changes
     camera.position = Vector3::new(4.5, 2.8, 5.5);
     camera.look_at(Vector3::new(0.0, 0.6, 0.0));
 
@@ -402,16 +176,10 @@ async fn run() {
         .with_sample_redistribution(true);
 
     let mut path = if use_gpu() {
-<<<<<<< Updated upstream
         // A device of its own: the picture comes back as bytes either way,
         // and the window's may be Metal's.
         let backend = GpuBackend::headless().expect("a GPU for the path tracer").with_samples_per_dispatch(4);
         let mut r = RaytraceRenderer::with_backend(config.0, config.1, Box::new(backend));
-=======
-        let backend =
-            GpuBackend::with_device(device.clone(), queue.clone()).with_samples_per_dispatch(4);
-        let mut r = RaytraceRenderer::with_backend(config.width, config.height, Box::new(backend));
->>>>>>> Stashed changes
         r.set_settings(settings);
         r.prepare(&mut scene, &camera);
         eprintln!("backend: gpu");

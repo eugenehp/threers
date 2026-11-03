@@ -232,10 +232,7 @@ mod tests {
         for i in 0..400 {
             let (x, y, z) = (i as f32 * 0.37, i as f32 * -0.21, i as f32 * 0.13);
             assert!((-1.0..=1.0).contains(&SimplexNoise::noise2(x, y)), "noise2");
-            assert!(
-                (-1.0..=1.0).contains(&SimplexNoise::noise3(x, y, z)),
-                "noise3"
-            );
+            assert!((-1.0..=1.0).contains(&SimplexNoise::noise3(x, y, z)), "noise3");
             for octaves in [1u32, 2, 4, 8, 12] {
                 let f = SimplexNoise::fbm2(x, y, octaves, 2.0, 0.5);
                 assert!((-1.0..=1.0).contains(&f), "fbm2 {octaves} octaves: {f}");
@@ -309,9 +306,7 @@ mod tests {
     #[test]
     fn turbulence_creases_where_plain_noise_does_not() {
         let near_zero = |f: &dyn Fn(f32) -> f32| {
-            (0..4000)
-                .filter(|i| f(*i as f32 * 0.01).abs() < 0.02)
-                .count()
+            (0..4000).filter(|i| f(*i as f32 * 0.01).abs() < 0.02).count()
         };
         let turb = near_zero(&|x| SimplexNoise::turbulence2(x, 0.0, 1));
         let plain = near_zero(&|x| SimplexNoise::noise2(x, 0.0) * 0.5 + 0.5);

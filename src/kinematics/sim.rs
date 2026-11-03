@@ -7,8 +7,8 @@
 
 use super::plant::ArmPlant;
 use super::servo::ServoJoint;
-use super::transmission::GearTrain;
 use super::{Goal, Ik, SerialChain, Solution, V3};
+use super::transmission::GearTrain;
 
 fn norm(v: V3) -> f64 {
     (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
@@ -151,7 +151,12 @@ impl IkServoSim {
                 Goal::Point(_) => [0.0, 0.0, 0.0],
             };
 
-            let (p, ax) = tool(&actuators.iter().map(|a| a.theta_deg).collect::<Vec<_>>());
+            let (p, ax) = tool(
+                &actuators
+                    .iter()
+                    .map(|a| a.theta_deg)
+                    .collect::<Vec<_>>(),
+            );
             let position_err = norm([p[0] - target[0], p[1] - target[1], p[2] - target[2]]);
             let axis_err = if matches!(goal, Goal::PointAlong { .. }) {
                 let a = ax;
@@ -283,7 +288,10 @@ impl IkServoSim {
     fn summarise(frames: Vec<SimFrame>, label: &'static str) -> SimReport {
         let skip = frames.len() / 4;
         let steady: Vec<_> = frames.iter().skip(skip).collect();
-        let worst_position_err = steady.iter().map(|f| f.position_err).fold(0.0f64, f64::max);
+        let worst_position_err = steady
+            .iter()
+            .map(|f| f.position_err)
+            .fold(0.0f64, f64::max);
         let worst_axis_err = steady.iter().map(|f| f.axis_err).fold(0.0, f64::max);
         let worst_joint_err = steady.iter().map(|f| f.worst_joint_err).fold(0.0, f64::max);
         let mean_joint_err = if steady.is_empty() {
@@ -348,12 +356,10 @@ impl IkServoSim {
         let _ = duration; // waypoints carry timing
 
         [
-            Self::new(ik.clone()).with_label("direct").with_dt(dt).run(
-                seed,
-                waypoints,
-                &mut direct,
-                tool,
-            ),
+            Self::new(ik.clone())
+                .with_label("direct")
+                .with_dt(dt)
+                .run(seed, waypoints, &mut direct, tool),
             Self::new(ik.clone())
                 .with_label("qdd-15:1")
                 .with_dt(dt)
@@ -455,20 +461,21 @@ fn interpolate_goal(waypoints: &[Waypoint], t: f64) -> Goal {
             p0[1] + u * (p1[1] - p0[1]),
             p0[2] + u * (p1[2] - p0[2]),
         ]),
-        (Goal::PointAlong { at: p0, along: d0 }, Goal::PointAlong { at: p1, along: d1 }) => {
-            Goal::PointAlong {
-                at: [
-                    p0[0] + u * (p1[0] - p0[0]),
-                    p0[1] + u * (p1[1] - p0[1]),
-                    p0[2] + u * (p1[2] - p0[2]),
-                ],
-                along: [
-                    d0[0] + u * (d1[0] - d0[0]),
-                    d0[1] + u * (d1[1] - d0[1]),
-                    d0[2] + u * (d1[2] - d0[2]),
-                ],
-            }
-        }
+        (
+            Goal::PointAlong { at: p0, along: d0 },
+            Goal::PointAlong { at: p1, along: d1 },
+        ) => Goal::PointAlong {
+            at: [
+                p0[0] + u * (p1[0] - p0[0]),
+                p0[1] + u * (p1[1] - p0[1]),
+                p0[2] + u * (p1[2] - p0[2]),
+            ],
+            along: [
+                d0[0] + u * (d1[0] - d0[0]),
+                d0[1] + u * (d1[1] - d0[1]),
+                d0[2] + u * (d1[2] - d0[2]),
+            ],
+        },
         _ => a.goal,
     }
 }

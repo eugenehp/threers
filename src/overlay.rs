@@ -918,8 +918,9 @@ impl Overlay {
                             let out_a = alpha + da * (1.0 - alpha);
                             for c in 0..3 {
                                 let under = table[dst[c] as usize];
-                                let mixed =
-                                    (paint.linear[c] * alpha + under * da * (1.0 - alpha)) / out_a;
+                                let mixed = (paint.linear[c] * alpha
+                                    + under * da * (1.0 - alpha))
+                                    / out_a;
                                 dst[c] = srgb_encode(mixed);
                             }
                             dst[3] = (out_a * 255.0 + 0.5) as u8;
@@ -1035,9 +1036,7 @@ mod tests {
     #[test]
     #[ignore]
     fn the_encode_table_is_faster_than_the_curve() {
-        let vals: Vec<f32> = (0..1 << 16)
-            .map(|i| (i as f32) / ((1 << 16) as f32))
-            .collect();
+        let vals: Vec<f32> = (0..1 << 16).map(|i| (i as f32) / ((1 << 16) as f32)).collect();
         let reps = 200;
         for (label, f) in [
             ("table", srgb_encode as fn(f32) -> u8),
@@ -1108,16 +1107,8 @@ mod tests {
         o.fill_alpha(Color::WHITE, 0.25);
         o.rect(0.0, 0.0, 8.0, 8.0);
         let p = at(&o, 4, 4);
-        assert_eq!(
-            [p[0], p[1], p[2]],
-            [255, 255, 255],
-            "colour not premultiplied"
-        );
-        assert!(
-            (p[3] as i32 - 64).abs() <= 2,
-            "alpha {} should be ~64",
-            p[3]
-        );
+        assert_eq!([p[0], p[1], p[2]], [255, 255, 255], "colour not premultiplied");
+        assert!((p[3] as i32 - 64).abs() <= 2, "alpha {} should be ~64", p[3]);
     }
 
     /// Overlapping half-transparent fills must mix in linear light. Two 50%
@@ -1365,10 +1356,7 @@ mod tests {
         // buffer goes to zero and nothing would tell the texture.
         o.clear();
         let (a, b) = o.dirty_rows().expect("the cleared rows are outstanding");
-        assert!(
-            a <= 20 && b >= 40,
-            "rows {a}..{b} should still cover 20..40"
-        );
+        assert!(a <= 20 && b >= 40, "rows {a}..{b} should still cover 20..40");
 
         // Drawing somewhere else unions with it, because both bands differ from
         // the texture.
@@ -1566,10 +1554,7 @@ mod tests {
             "centred {centre:.1} should be near the midpoint of {left:.1} and {right:.1}"
         );
         let anchor = anchor as f64;
-        assert!(
-            centre > anchor - 60.0 && centre < anchor + 60.0,
-            "centred {centre:.1}"
-        );
+        assert!(centre > anchor - 60.0 && centre < anchor + 60.0, "centred {centre:.1}");
     }
 
     #[cfg(feature = "captions")]

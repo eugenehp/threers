@@ -81,12 +81,7 @@ pub fn decode(
     mode: Mode,
     filter: Filter,
 ) -> Result<Vec<u8>, MeshoptError> {
-    let mut target = vec![
-        0u8;
-        count
-            .checked_mul(stride)
-            .ok_or(MeshoptError::BadParameters)?
-    ];
+    let mut target = vec![0u8; count.checked_mul(stride).ok_or(MeshoptError::BadParameters)?];
     match mode {
         Mode::Attributes => {
             decode_vertex_buffer(&mut target, count, stride, source)?;
@@ -243,11 +238,8 @@ fn decode_vertex_buffer(
             reader.at += header_bytes;
             for group in 0..groups {
                 let selector = (reader.at(header_at + (group >> 2))? >> ((group & 3) << 1)) & 3;
-                let bits = MODES[if version == 0 {
-                    0
-                } else {
-                    control as usize + 1
-                }][selector as usize];
+                let bits = MODES[if version == 0 { 0 } else { control as usize + 1 }]
+                    [selector as usize];
                 let out = delta_base + (group << 4);
                 match bits {
                     // Every delta in the group is zero; nothing is stored.

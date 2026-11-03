@@ -77,7 +77,12 @@ impl Value {
 impl Value {
     /// Build an object from pairs, which reads better than inserting one by one.
     pub fn object<const N: usize>(pairs: [(&str, Value); N]) -> Value {
-        Value::Object(pairs.into_iter().map(|(k, v)| (k.to_string(), v)).collect())
+        Value::Object(
+            pairs
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v))
+                .collect(),
+        )
     }
 
     pub fn number(v: impl Into<f64>) -> Value {

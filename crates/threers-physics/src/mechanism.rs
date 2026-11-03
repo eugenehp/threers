@@ -933,10 +933,7 @@ mod tests {
 
     #[test]
     fn a_model_simulates_into_frames() {
-        let mut mech = ScadMechanism::from_source(LID_BOX)
-            .unwrap()
-            .frames(90)
-            .fps(60);
+        let mut mech = ScadMechanism::from_source(LID_BOX).unwrap().frames(90).fps(60);
         assert_eq!(mech.duration(), 1.5);
 
         let frames = mech.simulate();
@@ -951,13 +948,12 @@ mod tests {
 
     #[test]
     fn the_lid_actually_moves_between_frames() {
-        let mut mech = ScadMechanism::from_source(LID_BOX)
-            .unwrap()
-            .frames(90)
-            .fps(60);
+        let mut mech = ScadMechanism::from_source(LID_BOX).unwrap().frames(90).fps(60);
         let frames = mech.simulate();
 
-        let height = |f: &ScadFrame| f.bounds().map(|(_, max)| max[2]).unwrap_or(0.0);
+        let height = |f: &ScadFrame| {
+            f.bounds().map(|(_, max)| max[2]).unwrap_or(0.0)
+        };
         let first = height(&frames[0]);
         let last = height(&frames[frames.len() - 1]);
         assert!(

@@ -304,7 +304,10 @@ pub(crate) fn star_field(radius: f32, seed: u64, sky: Color) -> MeshBuilder {
         // edge falling off.
         let inner = size * 0.45;
         for i in 0..N {
-            let (a0, a1) = (i as f32 / N as f32 * TAU, (i + 1) as f32 / N as f32 * TAU);
+            let (a0, a1) = (
+                i as f32 / N as f32 * TAU,
+                (i + 1) as f32 / N as f32 * TAU,
+            );
             m.tri(
                 [[p.x, p.y, p.z], at(a1, inner), at(a0, inner)],
                 n,
@@ -341,7 +344,10 @@ pub(crate) fn moon_disc(radius: f32, dir: Vector3) -> MeshBuilder {
     ] {
         const N: usize = 18;
         for i in 0..N {
-            let (a0, a1) = (i as f32 / N as f32 * TAU, (i + 1) as f32 / N as f32 * TAU);
+            let (a0, a1) = (
+                i as f32 / N as f32 * TAU,
+                (i + 1) as f32 / N as f32 * TAU,
+            );
             let at = |a: f32| {
                 let (s, co) = (a.sin(), a.cos());
                 [

@@ -339,10 +339,7 @@ fn an_untouched_overlay_changes_nothing() {
     let overlay = Overlay::new(W, H);
     assert!(!overlay.touched());
     let after = frame(&mut host, Some(&overlay));
-    assert_eq!(
-        before, after,
-        "a transparent overlay must not alter the frame"
-    );
+    assert_eq!(before, after, "a transparent overlay must not alter the frame");
 }
 
 /// One frame of the parity sequence below: a label, and what it draws.
@@ -404,11 +401,7 @@ fn uploading_only_the_changed_rows_matches_uploading_all_of_them() {
         ("wrapping text at the right edge", |o| {
             o.fill(Color::WHITE);
             o.text_size(14.0);
-            o.text(
-                W as f32 - 90.0,
-                8.0,
-                "a longer string that has to wrap somewhere",
-            );
+            o.text(W as f32 - 90.0, 8.0, "a longer string that has to wrap somewhere");
         }),
         ("right-aligned read-out", |o| {
             o.fill(Color::WHITE);
@@ -441,7 +434,11 @@ fn uploading_only_the_changed_rows_matches_uploading_all_of_them() {
             partial.draw_overlay(&mut partial_overlay, view, FORMAT);
         });
 
-        assert_eq!(want.len(), got.len(), "{label}: frames differ in size");
+        assert_eq!(
+            want.len(),
+            got.len(),
+            "{label}: frames differ in size"
+        );
         if want != got {
             let bad = want
                 .chunks(4)
@@ -506,11 +503,7 @@ fn a_renderer_new_to_an_overlay_uploads_the_whole_thing() {
         let mut full = threers::Renderer::new(device.clone(), queue.clone(), FORMAT, W, H);
         full.draw_overlay_rgba8(overlay.pixels(), W, H, view, FORMAT);
     });
-    assert_eq!(
-        px(&got, 30, 20),
-        [255, 255, 255, 255],
-        "the rect is missing"
-    );
+    assert_eq!(px(&got, 30, 20), [255, 255, 255, 255], "the rect is missing");
     assert_eq!(got, want, "a first-time composite must match a full upload");
 }
 
@@ -528,11 +521,7 @@ fn the_overlay_is_not_mirrored_horizontally() {
     overlay.rect(0.0, 0.0, W as f32 * 0.25, H as f32);
     let after = frame(&mut host, Some(&overlay));
 
-    assert_eq!(
-        px(&after, 16, 32),
-        [255, 255, 255, 255],
-        "left quarter is lit"
-    );
+    assert_eq!(px(&after, 16, 32), [255, 255, 255, 255], "left quarter is lit");
     assert_ne!(
         px(&after, W - 16, 32),
         [255, 255, 255, 255],

@@ -19,6 +19,7 @@ fn assert_rate(per_sec: f64, floor: f64, what: &str) {
     }
 }
 
+
 /// A deterministic pile of triangles with plenty of empty space in it, which
 /// is what a city is and what a BVH is for.
 fn scene(n: usize) -> (BufferGeometry, Vec<[Vector3; 3]>) {
@@ -94,7 +95,8 @@ fn rays(count: usize) -> Vec<Ray> {
     (0..count)
         .map(|_| Ray {
             origin: Vector3::new(f() * 200.0 - 100.0, f() * 30.0, f() * 200.0 - 100.0),
-            direction: Vector3::new(f() * 2.0 - 1.0, f() * 2.0 - 1.0, f() * 2.0 - 1.0).normalize(),
+            direction: Vector3::new(f() * 2.0 - 1.0, f() * 2.0 - 1.0, f() * 2.0 - 1.0)
+                .normalize(),
         })
         .collect()
 }
@@ -125,14 +127,15 @@ fn the_first_hit_is_the_nearest_one() {
     let mut hits = 0usize;
     for ray in rays(3000) {
         let want = brute_force(&tris, &ray, 1e-3, 1.0e4);
-        let got = bvh
-            .raycast_first(&ray, 1e-3, 1.0e4, false)
-            .map(|h| h.distance);
+        let got = bvh.raycast_first(&ray, 1e-3, 1.0e4, false).map(|h| h.distance);
         match (want, got) {
             (None, None) => {}
             (Some(a), Some(b)) => {
                 hits += 1;
-                assert!((a - b).abs() < 1e-3, "nearest hit at {a}, bvh returned {b}");
+                assert!(
+                    (a - b).abs() < 1e-3,
+                    "nearest hit at {a}, bvh returned {b}"
+                );
             }
             (a, b) => panic!("brute force {a:?} but bvh {b:?}"),
         }
@@ -155,9 +158,7 @@ fn a_ray_beginning_inside_the_bounds_still_hits() {
     let mut inside = 0usize;
     for ray in rays(1500) {
         let want = brute_force(&tris, &ray, 1e-3, 1.0e4);
-        let got = bvh
-            .raycast_first(&ray, 1e-3, 1.0e4, false)
-            .map(|h| h.distance);
+        let got = bvh.raycast_first(&ray, 1e-3, 1.0e4, false).map(|h| h.distance);
         if want.is_some() {
             inside += 1;
         }
@@ -234,7 +235,9 @@ fn giant_triangles_do_not_collapse_the_tree() {
     // Four ground quads reaching far past everything else.
     let r = 4000.0f32;
     for (a, b) in [(-1.0f32, -1.0f32), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
-        pos.extend_from_slice(&[0.0, -1.0, 0.0, a * r, -1.0, b * r, a * r, -1.0, -b * r]);
+        pos.extend_from_slice(&[
+            0.0, -1.0, 0.0, a * r, -1.0, b * r, a * r, -1.0, -b * r,
+        ]);
     }
     let n = pos.len() / 9;
     let mut g = BufferGeometry::new();

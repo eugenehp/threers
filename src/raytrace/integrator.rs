@@ -403,11 +403,7 @@ impl<'a> Integrator<'a> {
         }
 
         if self.scene.world.fog_mode > 0 {
-            let d = if depth_recorded {
-                depth
-            } else {
-                self.scene.scale() * 4.0
-            };
+            let d = if depth_recorded { depth } else { self.scene.scale() * 4.0 };
             let (vis, fog) = self.scene.world.fog_at(d);
             radiance = radiance * vis + fog;
         }
@@ -544,11 +540,13 @@ impl<'a> Integrator<'a> {
 
             // Reconnect to the surface for lighting.
             let to_surface = -info.ng_facing;
-            if let Some(exit) =
-                self.scene
-                    .bvh
-                    .intersect(&self.scene.tris, pos, to_surface, self.epsilon, mfp * 8.0)
-            {
+            if let Some(exit) = self.scene.bvh.intersect(
+                &self.scene.tris,
+                pos,
+                to_surface,
+                self.epsilon,
+                mfp * 8.0,
+            ) {
                 let exit_info = self.hit_info(&exit, to_surface);
                 if exit_info.material == info.material {
                     let exit_origin = exit_info.p + exit_info.ng_facing * shadow_bias;
@@ -580,7 +578,11 @@ impl<'a> Integrator<'a> {
                 }
             }
 
-            let q = walk_tp.x.max(walk_tp.y).max(walk_tp.z).clamp(0.05, 0.95);
+            let q = walk_tp
+                .x
+                .max(walk_tp.y)
+                .max(walk_tp.z)
+                .clamp(0.05, 0.95);
             if rng.next_f32() >= q {
                 break;
             }

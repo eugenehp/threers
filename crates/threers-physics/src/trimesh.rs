@@ -279,7 +279,10 @@ mod tests {
         let m = box_mesh(1.0);
         // A box hugging the +x face should find the two triangles there and no
         // triangle from the opposite face.
-        let q = Aabb::new(Vector3::new(0.9, -0.5, -0.5), Vector3::new(1.5, 0.5, 0.5));
+        let q = Aabb::new(
+            Vector3::new(0.9, -0.5, -0.5),
+            Vector3::new(1.5, 0.5, 0.5),
+        );
         let mut hits = Vec::new();
         m.for_each_triangle_in_aabb(&q, |i, _| hits.push(i));
         assert!(!hits.is_empty());
@@ -292,10 +295,7 @@ mod tests {
     #[test]
     fn aabb_query_outside_the_mesh_finds_nothing() {
         let m = box_mesh(1.0);
-        let q = Aabb::new(
-            Vector3::new(50.0, 50.0, 50.0),
-            Vector3::new(51.0, 51.0, 51.0),
-        );
+        let q = Aabb::new(Vector3::new(50.0, 50.0, 50.0), Vector3::new(51.0, 51.0, 51.0));
         let mut count = 0;
         m.for_each_triangle_in_aabb(&q, |_, _| count += 1);
         assert_eq!(count, 0);
@@ -323,10 +323,6 @@ mod tests {
     #[test]
     fn signed_volume_of_a_closed_box_is_positive_and_exact() {
         let m = box_mesh(1.5);
-        assert!(
-            (m.signed_volume() - 27.0).abs() < 1e-3,
-            "{}",
-            m.signed_volume()
-        );
+        assert!((m.signed_volume() - 27.0).abs() < 1e-3, "{}", m.signed_volume());
     }
 }

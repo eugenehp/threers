@@ -66,7 +66,8 @@ fn batched_encoding_matches_frame_by_frame() {
 }
 
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {
-    needle.len() <= haystack.len() && haystack.windows(needle.len()).any(|w| w == needle)
+    needle.len() <= haystack.len()
+        && haystack.windows(needle.len()).any(|w| w == needle)
 }
 
 /// The same clip encoded on one thread and on many must produce identical
@@ -100,9 +101,6 @@ fn thread_count_does_not_change_the_output() {
             "HEVC output length changed on {threads} threads"
         );
         assert!(hevc_1 == hevc_n, "HEVC output changed on {threads} threads");
-        assert!(
-            h264_1 == h264_n,
-            "H.264 output changed on {threads} threads"
-        );
+        assert!(h264_1 == h264_n, "H.264 output changed on {threads} threads");
     }
 }

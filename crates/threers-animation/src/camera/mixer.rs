@@ -22,12 +22,7 @@ impl CameraClip {
     }
 
     /// Convenience: two-pose fly encoded as linear keys on every channel.
-    pub fn from_poses(
-        name: impl Into<String>,
-        from: CameraPose,
-        to: CameraPose,
-        duration: f32,
-    ) -> Self {
+    pub fn from_poses(name: impl Into<String>, from: CameraPose, to: CameraPose, duration: f32) -> Self {
         let duration = duration.max(0.0);
         let to = from.unwrap_azimuth_toward(to);
         let mut clip = Self::new(name, duration);
@@ -35,34 +30,10 @@ impl CameraClip {
             c.insert(CurveKey::linear(t0, v0));
             c.insert(CurveKey::linear(t1, v1));
         }
-        pair(
-            &mut clip.curves.target_x,
-            0.0,
-            from.target.x,
-            duration,
-            to.target.x,
-        );
-        pair(
-            &mut clip.curves.target_y,
-            0.0,
-            from.target.y,
-            duration,
-            to.target.y,
-        );
-        pair(
-            &mut clip.curves.target_z,
-            0.0,
-            from.target.z,
-            duration,
-            to.target.z,
-        );
-        pair(
-            &mut clip.curves.azimuth,
-            0.0,
-            from.azimuth,
-            duration,
-            to.azimuth,
-        );
+        pair(&mut clip.curves.target_x, 0.0, from.target.x, duration, to.target.x);
+        pair(&mut clip.curves.target_y, 0.0, from.target.y, duration, to.target.y);
+        pair(&mut clip.curves.target_z, 0.0, from.target.z, duration, to.target.z);
+        pair(&mut clip.curves.azimuth, 0.0, from.azimuth, duration, to.azimuth);
         pair(
             &mut clip.curves.elevation,
             0.0,
@@ -70,13 +41,7 @@ impl CameraClip {
             duration,
             to.elevation,
         );
-        pair(
-            &mut clip.curves.radius,
-            0.0,
-            from.radius,
-            duration,
-            to.radius,
-        );
+        pair(&mut clip.curves.radius, 0.0, from.radius, duration, to.radius);
         pair(&mut clip.curves.roll, 0.0, from.roll, duration, to.roll);
         pair(&mut clip.curves.fov, 0.0, from.fov, duration, to.fov);
         pair(
@@ -86,19 +51,12 @@ impl CameraClip {
             duration,
             to.focus_distance,
         );
-        pair(
-            &mut clip.curves.aperture,
-            0.0,
-            from.aperture,
-            duration,
-            to.aperture,
-        );
+        pair(&mut clip.curves.aperture, 0.0, from.aperture, duration, to.aperture);
         clip
     }
 
     pub fn sample(&self, t: f32, template: CameraPose) -> CameraPose {
-        self.curves
-            .evaluate(t.clamp(0.0, self.duration.max(0.0)), template)
+        self.curves.evaluate(t.clamp(0.0, self.duration.max(0.0)), template)
     }
 }
 

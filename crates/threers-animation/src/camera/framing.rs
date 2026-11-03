@@ -59,12 +59,7 @@ impl Default for FramingStyle {
 }
 
 /// Compute a pose that frames `bounds` for the given FOV and aspect.
-pub fn frame_bounds(
-    bounds: FramingBounds,
-    fov: f32,
-    aspect: f32,
-    style: FramingStyle,
-) -> CameraPose {
+pub fn frame_bounds(bounds: FramingBounds, fov: f32, aspect: f32, style: FramingStyle) -> CameraPose {
     let fill = style.fill.clamp(0.05, 0.95);
     let radius_subject = bounds.bounding_radius().max(1e-4);
     let half_v = (fov * 0.5).tan().max(1e-6);
@@ -112,12 +107,7 @@ mod tests {
     #[test]
     fn framing_puts_camera_outside_the_box() {
         let b = FramingBounds::from_center_size(Vector3::ZERO, Vector3::new(2.0, 2.0, 2.0));
-        let pose = frame_bounds(
-            b,
-            50.0_f32.to_radians(),
-            16.0 / 9.0,
-            FramingStyle::default(),
-        );
+        let pose = frame_bounds(b, 50.0_f32.to_radians(), 16.0 / 9.0, FramingStyle::default());
         assert!(pose.radius > 1.0);
         assert!((pose.target - Vector3::ZERO).length() < 1e-4);
     }

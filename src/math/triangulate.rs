@@ -194,11 +194,7 @@ pub fn delaunay(points: &[Vector2]) -> Vec<[u32; 3]> {
             // false, falling through here would delete triangles and replace
             // them with nothing, which is the one way this loop could punch a
             // hole in the mesh.
-            debug_assert!(
-                bad.is_empty(),
-                "cavity vanished around {} bad triangles",
-                bad.len()
-            );
+            debug_assert!(bad.is_empty(), "cavity vanished around {} bad triangles", bad.len());
             continue;
         }
 
@@ -238,7 +234,8 @@ pub fn convex_hull(points: &[Vector2]) -> Vec<u32> {
     let mut order: Vec<u32> = (0..points.len() as u32).collect();
     order.sort_by(|&a, &b| {
         let (pa, pb) = (points[a as usize], points[b as usize]);
-        pa.x.partial_cmp(&pb.x)
+        pa.x
+            .partial_cmp(&pb.x)
             .unwrap_or(std::cmp::Ordering::Equal)
             .then(pa.y.partial_cmp(&pb.y).unwrap_or(std::cmp::Ordering::Equal))
     });
@@ -248,7 +245,11 @@ pub fn convex_hull(points: &[Vector2]) -> Vec<u32> {
     }
 
     let cross = |o: u32, a: u32, b: u32| {
-        let (o, a, b) = (points[o as usize], points[a as usize], points[b as usize]);
+        let (o, a, b) = (
+            points[o as usize],
+            points[a as usize],
+            points[b as usize],
+        );
         orient(
             [o.x as f64, o.y as f64],
             [a.x as f64, a.y as f64],
@@ -667,7 +668,12 @@ mod tests {
                 if t.contains(&(i as u32)) {
                     continue;
                 }
-                let v = in_circle(c[t[0] as usize], c[t[1] as usize], c[t[2] as usize], *d);
+                let v = in_circle(
+                    c[t[0] as usize],
+                    c[t[1] as usize],
+                    c[t[2] as usize],
+                    *d,
+                );
                 assert!(
                     v <= 1e-6,
                     "point {i} is inside the circumcircle of {t:?} by {v:.3e}"
@@ -749,11 +755,10 @@ mod tests {
         // And nothing is outside it.
         for (i, q) in p.iter().enumerate() {
             for w in 0..hull.len() {
-                let a = orient(
-                    c(hull[w]),
-                    c(hull[(w + 1) % hull.len()]),
-                    [q.x as f64, q.y as f64],
-                );
+                let a = orient(c(hull[w]), c(hull[(w + 1) % hull.len()]), [
+                    q.x as f64,
+                    q.y as f64,
+                ]);
                 assert!(a > -1e-6, "point {i} is outside hull edge {w}");
             }
         }
@@ -888,10 +893,7 @@ mod tests {
         let mut dupes = seeded_grid(3, 11);
         dupes.push(dupes[4]);
         assert!(delaunay_neighbours(&dupes).is_none());
-        let cells = voronoi_cells(
-            &dupes,
-            Box2::new(Vector2::new(-1.0, -1.0), Vector2::new(3.0, 3.0)),
-        );
+        let cells = voronoi_cells(&dupes, Box2::new(Vector2::new(-1.0, -1.0), Vector2::new(3.0, 3.0)));
         assert!(
             cells[4].is_empty() && cells[9].is_empty(),
             "coincident sites have no cell: {:?} {:?}",
@@ -920,7 +922,10 @@ mod tests {
         let cells = voronoi_cells(&[Vector2::new(1.0, 1.0)], bounds);
         assert_eq!(cells[0].len(), 4);
         // Coincident sites have no bisector and no cell, rather than a sliver.
-        let dup = voronoi_cells(&[Vector2::new(1.0, 1.0), Vector2::new(1.0, 1.0)], bounds);
+        let dup = voronoi_cells(
+            &[Vector2::new(1.0, 1.0), Vector2::new(1.0, 1.0)],
+            bounds,
+        );
         assert!(dup[0].is_empty() && dup[1].is_empty());
     }
 }

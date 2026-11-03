@@ -180,9 +180,7 @@ fn luma_segment(plane: &mut [u8], w: u32, x: u32, y: u32, step: isize, along: is
         return;
     }
     let base = (y * w + x) as isize;
-    let at = |plane: &[u8], line: isize, i: isize| {
-        plane[(base + line * along + i * step) as usize] as i32
-    };
+    let at = |plane: &[u8], line: isize, i: isize| plane[(base + line * along + i * step) as usize] as i32;
 
     // The decision reads only the first and last of the four lines: HEVC judges
     // the whole segment on its ends, where H.264 judges every line separately.
@@ -288,16 +286,7 @@ mod tests {
         let mut u = vec![70u8; (cw * ch / 4) as usize];
         let mut v = vec![190u8; (cw * ch / 4) as usize];
         let (y0, u0, v0) = (y.clone(), u.clone(), v.clone());
-        deblock(
-            &mut y,
-            &mut u,
-            &mut v,
-            cw,
-            ch,
-            &full_map(cw, ch, 8),
-            |_, _| 10,
-            |q| q,
-        );
+        deblock(&mut y, &mut u, &mut v, cw, ch, &full_map(cw, ch, 8), |_, _| 10, |q| q);
         assert_eq!(y, y0, "luma untouched");
         assert_eq!((u, v), (u0, v0), "chroma untouched");
     }
@@ -316,16 +305,7 @@ mod tests {
         let before = y.clone();
         let mut u = vec![128u8; (cw * ch / 4) as usize];
         let mut v = vec![128u8; (cw * ch / 4) as usize];
-        deblock(
-            &mut y,
-            &mut u,
-            &mut v,
-            cw,
-            ch,
-            &full_map(cw, ch, 32),
-            |_, _| 40,
-            |q| q,
-        );
+        deblock(&mut y, &mut u, &mut v, cw, ch, &full_map(cw, ch, 32), |_, _| 40, |q| q);
         for row in 0..ch {
             for col in 0..cw {
                 let near_marked = col % 32 < 4 || col % 32 >= 29;
@@ -345,16 +325,7 @@ mod tests {
             let mut y = vec![144u8; (cw * ch) as usize];
             let mut u = vec![88u8; (cw * ch / 4) as usize];
             let mut v = vec![201u8; (cw * ch / 4) as usize];
-            deblock(
-                &mut y,
-                &mut u,
-                &mut v,
-                cw,
-                ch,
-                &full_map(cw, ch, 8),
-                |_, _| qp,
-                |q| q,
-            );
+            deblock(&mut y, &mut u, &mut v, cw, ch, &full_map(cw, ch, 8), |_, _| qp, |q| q);
             assert!(y.iter().all(|&s| s == 144), "luma moved at qp {qp}");
             assert!(u.iter().all(|&s| s == 88), "cb moved at qp {qp}");
             assert!(v.iter().all(|&s| s == 201), "cr moved at qp {qp}");

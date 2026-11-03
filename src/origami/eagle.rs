@@ -169,7 +169,12 @@ fn bound(edges: &mut Vec<Edge>, a: usize, b: usize) {
 
 fn flat_diamond() -> FoldedState {
     let s = 0.9;
-    let verts = vec![[0.0, s, 0.0], [s, 0.0, 0.0], [0.0, -s, 0.0], [-s, 0.0, 0.0]];
+    let verts = vec![
+        [0.0, s, 0.0],
+        [s, 0.0, 0.0],
+        [0.0, -s, 0.0],
+        [-s, 0.0, 0.0],
+    ];
     FoldedState {
         verts,
         faces: vec![vec![0, 1, 2], vec![0, 2, 3]],
@@ -187,7 +192,12 @@ fn diagonals() -> FoldedState {
     ];
     FoldedState {
         verts,
-        faces: vec![vec![0, 1, 4], vec![1, 2, 4], vec![2, 3, 4], vec![3, 0, 4]],
+        faces: vec![
+            vec![0, 1, 4],
+            vec![1, 2, 4],
+            vec![2, 3, 4],
+            vec![3, 0, 4],
+        ],
     }
 }
 
@@ -436,8 +446,11 @@ fn hooked_beak() -> FoldedState {
 
 fn tail_fan() -> FoldedState {
     let mut s = hooked_beak();
-    s.verts
-        .extend_from_slice(&[[-0.22, -0.72, 0.04], [0.0, -0.78, 0.1], [0.22, -0.72, 0.04]]);
+    s.verts.extend_from_slice(&[
+        [-0.22, -0.72, 0.04],
+        [0.0, -0.78, 0.1],
+        [0.22, -0.72, 0.04],
+    ]);
     let n = s.verts.len();
     s.faces.push(vec![6, n - 3, n - 2]);
     s.faces.push(vec![6, n - 2, n - 1]);

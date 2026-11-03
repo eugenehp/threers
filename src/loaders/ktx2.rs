@@ -228,8 +228,8 @@ fn key_values(bytes: &[u8], offset: usize, length: usize) -> HashMap<String, Vec
     };
     let mut at = 0usize;
     while at + 4 <= block.len() {
-        let size =
-            u32::from_le_bytes([block[at], block[at + 1], block[at + 2], block[at + 3]]) as usize;
+        let size = u32::from_le_bytes([block[at], block[at + 1], block[at + 2], block[at + 3]])
+            as usize;
         at += 4;
         let Some(entry) = block.get(at..at + size) else {
             break;
@@ -254,7 +254,6 @@ impl Ktx2 {
     /// bug, which is exactly the failure worth refusing.
     pub fn texture_format(&self) -> Result<TextureFormat, Ktx2Error> {
         Ok(match self.vk_format {
-<<<<<<< Updated upstream
             37 => TextureFormat::Rgba8Unorm,       // R8G8B8A8_UNORM
             43 => TextureFormat::Rgba8UnormSrgb,   // R8G8B8A8_SRGB
             // B8G8R8A8_UNORM / _SRGB: swizzled to RGBA by `to_texture`.
@@ -262,29 +261,11 @@ impl Ktx2 {
             50 => TextureFormat::Rgba8UnormSrgb,
             9 => TextureFormat::R8Unorm,           // R8_UNORM
             97 => TextureFormat::Rgba16Float,      // R16G16B16A16_SFLOAT
-=======
-            37 => TextureFormat::Rgba8Unorm,        // R8G8B8A8_UNORM
-            43 => TextureFormat::Rgba8UnormSrgb,    // R8G8B8A8_SRGB
-            9 => TextureFormat::R8Unorm,            // R8_UNORM
-            97 => TextureFormat::Rgba16Float,       // R16G16B16A16_SFLOAT
->>>>>>> Stashed changes
             134 => TextureFormat::Bc1RgbaUnormSrgb, // BC1_RGBA_SRGB_BLOCK
             146 => TextureFormat::Bc7RgbaUnormSrgb, // BC7_SRGB_BLOCK
-            131 | 133 => {
-                return Err(Ktx2Error::Unsupported(
-                    "linear BC1 (no linear BC format here)",
-                ))
-            }
-            145 => {
-                return Err(Ktx2Error::Unsupported(
-                    "linear BC7 (no linear BC format here)",
-                ))
-            }
-            0 => {
-                return Err(Ktx2Error::Unsupported(
-                    "Basis Universal, which needs transcoding",
-                ))
-            }
+            131 | 133 => return Err(Ktx2Error::Unsupported("linear BC1 (no linear BC format here)")),
+            145 => return Err(Ktx2Error::Unsupported("linear BC7 (no linear BC format here)")),
+            0 => return Err(Ktx2Error::Unsupported("Basis Universal, which needs transcoding")),
             _ => return Err(Ktx2Error::Unsupported("this Vulkan format")),
         })
     }

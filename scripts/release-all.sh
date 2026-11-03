@@ -33,6 +33,11 @@ cd "$ROOT"
 
 ACTION="${1:-build}"
 shift || true
+# Flags alone (`--help`, `--dry-run`) mean the default action.
+if [[ "$ACTION" == -* ]]; then
+  set -- "$ACTION" "$@"
+  ACTION=build
+fi
 
 DRY_RUN="${DRY_RUN:-0}"
 PUBLISH="${PUBLISH:-0}"

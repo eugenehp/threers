@@ -49,11 +49,7 @@ fn main() {
 
 /// A cube that travels, spins and pulses, plus a static plinth under it so the
 /// output has something that does *not* animate.
-fn scene() -> (
-    ObjectArena,
-    Vec<threers::core::ObjectId>,
-    Vec<AnimationClip>,
-) {
+fn scene() -> (ObjectArena, Vec<threers::core::ObjectId>, Vec<AnimationClip>) {
     let mut arena = ObjectArena::new();
 
     let mut cube = Object3D::mesh(Mesh::new(
@@ -181,7 +177,12 @@ fn print_object(scene: &threers::loaders::UsdScene, id: threers::core::ObjectId,
         ),
         _ => "Group".to_string(),
     };
-    println!("{:indent$}{} — {kind}", "", object.name, indent = depth * 2);
+    println!(
+        "{:indent$}{} — {kind}",
+        "",
+        object.name,
+        indent = depth * 2
+    );
     for child in &object.children {
         print_object(scene, *child, depth + 1);
     }

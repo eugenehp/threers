@@ -436,11 +436,7 @@ pub(crate) fn add_building(
             let cx = mix(x0 + 1.4, x1 - 1.4, rng.f());
             b.trim.add_box(
                 Vector3::new(cx - 0.42, KERB + h - 0.2, (z0 + z1) * 0.5 - 0.42),
-                Vector3::new(
-                    cx + 0.42,
-                    KERB + h + rng.range(2.2, 3.2),
-                    (z0 + z1) * 0.5 + 0.42,
-                ),
+                Vector3::new(cx + 0.42, KERB + h + rng.range(2.2, 3.2), (z0 + z1) * 0.5 + 0.42),
                 stack,
                 Uv::Unit,
             );
@@ -662,7 +658,9 @@ pub(crate) fn add_building(
         // white next to a bar's warm amber next to a shuttered one showing
         // nothing at all — the uniform cream was the other half of why every
         // night render looked the same.
-        const SHOPFRONT: [u32; 6] = [0xffe6bc, 0xfff4e2, 0xe8f0ff, 0xffd28a, 0xd8ffe6, 0xffc4d2];
+        const SHOPFRONT: [u32; 6] = [
+            0xffe6bc, 0xfff4e2, 0xe8f0ff, 0xffd28a, 0xd8ffe6, 0xffc4d2,
+        ];
         let sill = KERB + 0.95;
         let head = (KERB + plinth_h * 0.62).min(sill + 1.35);
         if head > sill + 0.3 {
@@ -712,15 +710,7 @@ pub(crate) fn add_building(
     let front = if rng.chance(0.5) { 1.0 } else { -1.0 };
     let face_z = if front > 0.0 { z1 + 0.36 } else { z0 - 0.36 };
     if style == 2 && (4.0..10.0).contains(&floors) && rng.chance(0.6) {
-        add_fire_escape(
-            b,
-            x0 + 0.4,
-            x1 - 0.4,
-            face_z,
-            front,
-            KERB + plinth_h,
-            floors,
-        );
+        add_fire_escape(b, x0 + 0.4, x1 - 0.4, face_z, front, KERB + plinth_h, floors);
     }
     if rng.chance(0.55) && x1 - x0 > 5.0 {
         let shop = mix(x0 + 2.2, x1 - 2.2, rng.f());
@@ -909,11 +899,7 @@ pub(crate) fn add_building(
     //
     // Commoner on the big commercial buildings than on houses, which is also
     // true, and one in seven gets the dome instead.
-    let watched = if house {
-        0.14
-    } else {
-        0.34 + 0.30 * (1.0 - zone)
-    };
+    let watched = if house { 0.14 } else { 0.34 + 0.30 * (1.0 - zone) };
     if rng.chance(watched.clamp(0.0, 0.85)) {
         let h = KERB + 4.2 + rng.range(0.0, 1.4);
         let corners = [
@@ -926,11 +912,7 @@ pub(crate) fn add_building(
         let first = rng.below(4);
         for k in 0..n {
             let (cx, cz, sx, sz) = corners[(first + k * 2) % 4];
-            let kind = if rng.chance(0.15) {
-                Cctv::Dome
-            } else {
-                Cctv::Bullet
-            };
+            let kind = if rng.chance(0.15) { Cctv::Dome } else { Cctv::Bullet };
             add_cctv(
                 b,
                 Vector3::new(cx + sx * 0.10, h, cz + sz * 0.10),
@@ -1034,11 +1016,7 @@ pub(crate) fn add_fire_escape(
         if i + 1 < floors as usize {
             for off in [-0.28f32, 0.28] {
                 b.trim.add_limb(
-                    Vector3::new(
-                        cx + side * (half - 0.1) + off * 0.0,
-                        y + 0.06,
-                        z_face - out + 0.15,
-                    ),
+                    Vector3::new(cx + side * (half - 0.1) + off * 0.0, y + 0.06, z_face - out + 0.15),
                     Vector3::new(cx - side * (half - 0.1), y + FLOOR, z_face - out + 0.85),
                     0.035,
                     0.035,
@@ -1196,11 +1174,7 @@ pub(crate) fn add_back_garden(b: &mut Batches, plot: Rect, rng: &mut Rng) {
     match rng.below(6) {
         // Shed in a corner.
         0 => {
-            let sx = if rng.chance(0.5) {
-                plot.x0 + 1.3
-            } else {
-                plot.x1 - 1.3
-            };
+            let sx = if rng.chance(0.5) { plot.x0 + 1.3 } else { plot.x1 - 1.3 };
             let wood = scale_color(Color::from_hex(0x6a5136), rng.range(0.85, 1.15));
             b.trim.add_box(
                 Vector3::new(sx - 1.1, KERB, plot.z1 - 2.2),
@@ -1254,15 +1228,8 @@ pub(crate) fn add_back_garden(b: &mut Batches, plot: Rect, rng: &mut Rng) {
                 false,
                 Uv::Unit,
             );
-            b.trim.add_ground_disc(
-                cx,
-                cz,
-                1.25,
-                12,
-                0.0,
-                KERB + 0.76,
-                Color::from_hex(0x2b2d31),
-            );
+            b.trim
+                .add_ground_disc(cx, cz, 1.25, 12, 0.0, KERB + 0.76, Color::from_hex(0x2b2d31));
         }
         // A small above-ground pool.
         3 => {
@@ -1276,15 +1243,8 @@ pub(crate) fn add_back_garden(b: &mut Batches, plot: Rect, rng: &mut Rng) {
                 false,
                 Uv::Unit,
             );
-            b.water.add_ground_disc(
-                cx,
-                cz,
-                1.45,
-                14,
-                0.0,
-                KERB + 0.78,
-                Color::from_hex(0x2f7fa8),
-            );
+            b.water
+                .add_ground_disc(cx, cz, 1.45, 14, 0.0, KERB + 0.78, Color::from_hex(0x2f7fa8));
         }
         // Vegetable beds.
         4 => {
@@ -1346,7 +1306,10 @@ pub(crate) fn add_helipad(b: &mut Batches, cx: f32, cz: f32, r: f32, y: f32, rng
     // The touchdown circle, then the H inside it.
     const N: usize = 20;
     for i in 0..N {
-        let (a0, a1) = (i as f32 / N as f32 * TAU, (i + 1) as f32 / N as f32 * TAU);
+        let (a0, a1) = (
+            i as f32 / N as f32 * TAU,
+            (i + 1) as f32 / N as f32 * TAU,
+        );
         let (i0, i1) = (r * 0.66, r * 0.74);
         b.paint.add_ground_quad(
             [
@@ -1366,15 +1329,7 @@ pub(crate) fn add_helipad(b: &mut Batches, cx: f32, cz: f32, r: f32, y: f32, rng
         (h * 0.28, -h, h * 0.62, h),
         (-h * 0.28, -h * 0.20, h * 0.28, h * 0.20),
     ] {
-        b.paint.add_slab(
-            cx + x0,
-            cz + z0,
-            cx + x1,
-            cz + z1,
-            y + 0.08,
-            paint,
-            Uv::Unit,
-        );
+        b.paint.add_slab(cx + x0, cz + z0, cx + x1, cz + z1, y + 0.08, paint, Uv::Unit);
     }
     // Edge lights: green, and only after dark.
     for i in 0..12 {
@@ -1411,16 +1366,8 @@ pub(crate) fn add_helipad(b: &mut Batches, cx: f32, cz: f32, r: f32, y: f32, rng
             Color::from_hex(0xf0efe8)
         };
         b.trim.add_limb(
-            Vector3::new(
-                wx + bearing.cos() * t0,
-                y + 2.9 - t0 * 0.12,
-                wz + bearing.sin() * t0,
-            ),
-            Vector3::new(
-                wx + bearing.cos() * t1,
-                y + 2.9 - t1 * 0.12,
-                wz + bearing.sin() * t1,
-            ),
+            Vector3::new(wx + bearing.cos() * t0, y + 2.9 - t0 * 0.12, wz + bearing.sin() * t0),
+            Vector3::new(wx + bearing.cos() * t1, y + 2.9 - t1 * 0.12, wz + bearing.sin() * t1),
             0.26 - k as f32 * 0.05,
             0.21 - k as f32 * 0.05,
             7,
@@ -1500,11 +1447,7 @@ pub(crate) fn add_construction(b: &mut Batches, lot: Rect, floors: f32, rng: &mu
     for f in 0..done as usize {
         let y = KERB + f as f32 * FLOOR;
         // A slab, shrinking to a partial pour on the top floor.
-        let frac = if f + 1 == done as usize {
-            rng.range(0.35, 0.85)
-        } else {
-            1.0
-        };
+        let frac = if f + 1 == done as usize { rng.range(0.35, 0.85) } else { 1.0 };
         b.trim.add_box(
             Vector3::new(core.x0, y, core.z0),
             Vector3::new(mix(core.x0, core.x1, frac), y + 0.28, core.z1),
@@ -1540,11 +1483,7 @@ pub(crate) fn add_construction(b: &mut Batches, lot: Rect, floors: f32, rng: &mu
             for _ in 0..3 {
                 b.trim.add_limb(
                     Vector3::new(x + rng.range(-0.18, 0.18), top, z + rng.range(-0.18, 0.18)),
-                    Vector3::new(
-                        x + rng.range(-0.3, 0.3),
-                        top + rng.range(0.5, 1.1),
-                        z + rng.range(-0.3, 0.3),
-                    ),
+                    Vector3::new(x + rng.range(-0.3, 0.3), top + rng.range(0.5, 1.1), z + rng.range(-0.3, 0.3)),
                     0.022,
                     0.018,
                     3,
@@ -1621,16 +1560,8 @@ pub(crate) fn add_construction(b: &mut Batches, lot: Rect, floors: f32, rng: &mu
     }
     // Counterweight, and the hoist block hanging on its rope.
     b.trim.add_box(
-        Vector3::new(
-            mx - bearing.cos() * counter - 0.9,
-            jy - 0.4,
-            mz - bearing.sin() * counter - 0.9,
-        ),
-        Vector3::new(
-            mx - bearing.cos() * counter + 0.9,
-            jy + 1.5,
-            mz - bearing.sin() * counter + 0.9,
-        ),
+        Vector3::new(mx - bearing.cos() * counter - 0.9, jy - 0.4, mz - bearing.sin() * counter - 0.9),
+        Vector3::new(mx - bearing.cos() * counter + 0.9, jy + 1.5, mz - bearing.sin() * counter + 0.9),
         Color::from_hex(0x5a5f66),
         Uv::Unit,
     );

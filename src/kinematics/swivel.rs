@@ -159,18 +159,9 @@ impl SwivelNozzle {
     pub fn three_bearing() -> Self {
         Self {
             bearings: vec![
-                Bearing {
-                    cant: 0.0,
-                    station: 0.000,
-                },
-                Bearing {
-                    cant: -23.750,
-                    station: 0.560,
-                },
-                Bearing {
-                    cant: 23.750,
-                    station: 1.280,
-                },
+                Bearing { cant: 0.0, station: 0.000 },
+                Bearing { cant: -23.750, station: 0.560 },
+                Bearing { cant: 23.750, station: 1.280 },
             ],
             exit: 1.680,
             // Each figure is a whole link of the chain, not just its duct: the
@@ -350,10 +341,7 @@ impl SwivelNozzle {
     /// number a transition has to keep small — it is a yawing kick, and the
     /// aircraft has nothing but rudder and roll posts to answer it with.
     pub fn lateral(&self, q: &[f64]) -> f64 {
-        unit(self.exhaust(q).1)[1]
-            .clamp(-1.0, 1.0)
-            .asin()
-            .to_degrees()
+        unit(self.exhaust(q).1)[1].clamp(-1.0, 1.0).asin().to_degrees()
     }
 
     /// Unit jet direction for a deflection and azimuth, both degrees.
@@ -432,20 +420,18 @@ impl SwivelNozzle {
         let want = Self::direction(deflection, azimuth);
         let chain = self.chain();
         let aim = self.aim;
-        let mut sol = self
-            .solver()
-            .solve(seed, &Goal::Point(scale(want, aim)), |q| {
+        let mut sol = self.solver().solve(
+            seed,
+            &Goal::Point(scale(want, aim)),
+            |q| {
                 let e = unit(chain.tool(q).1);
                 (scale(e, aim), e)
-            });
+            },
+        );
         // Report the miss as an angle, which is what the caller commanded in.
         // The chord at `aim` is what the solver minimised; it is not the number
         // anyone wants to read.
-        sol.axis_err = 2.0
-            * (sol.position_err / (2.0 * aim))
-                .clamp(0.0, 1.0)
-                .asin()
-                .to_degrees();
+        sol.axis_err = 2.0 * (sol.position_err / (2.0 * aim)).clamp(0.0, 1.0).asin().to_degrees();
         sol
     }
 
@@ -544,10 +530,7 @@ impl SwivelNozzle {
             }
         }
 
-        Schedule {
-            points,
-            breakout: start,
-        }
+        Schedule { points, breakout: start }
     }
 
     fn sample(&self, q: &[f64], residual: f64) -> SchedulePoint {
@@ -717,11 +700,7 @@ impl Schedule {
         for (i, w) in travel.windows(2).enumerate() {
             if want <= w[1] {
                 let span = w[1] - w[0];
-                let t = if span > 1e-12 {
-                    (want - w[0]) / span
-                } else {
-                    0.0
-                };
+                let t = if span > 1e-12 { (want - w[0]) / span } else { 0.0 };
                 return self.points[i]
                     .bearings
                     .iter()
@@ -761,9 +740,7 @@ impl Schedule {
     /// All of it is in break-out. Past that the loop is closed and this is a
     /// solver tolerance rather than a mechanism property.
     pub fn worst_lateral(&self) -> f64 {
-        self.points
-            .iter()
-            .fold(0.0f64, |m, p| m.max(p.lateral.abs()))
+        self.points.iter().fold(0.0f64, |m, p| m.max(p.lateral.abs()))
     }
 
     /// The worst any closed-loop solve missed its command by, degrees.
@@ -773,13 +750,15 @@ impl Schedule {
 
     /// The least steering authority anywhere on the schedule, and where.
     pub fn worst_authority(&self) -> (f64, f64) {
-        self.points.iter().fold((f64::INFINITY, 0.0), |(a, d), p| {
-            if p.authority < a {
-                (p.authority, p.deflection)
-            } else {
-                (a, d)
-            }
-        })
+        self.points
+            .iter()
+            .fold((f64::INFINITY, 0.0), |(a, d), p| {
+                if p.authority < a {
+                    (p.authority, p.deflection)
+                } else {
+                    (a, d)
+                }
+            })
     }
 
     /// Whether the closed-loop part of the table rises monotonically.
@@ -940,10 +919,7 @@ mod tests {
         let n = nozzle();
         let (exit, dir) = n.exhaust(&[0.0; 3]);
         assert!((exit[0] - n.exit).abs() < 1e-12, "exit at {exit:?}");
-        assert!(
-            exit[1].abs() < 1e-12 && exit[2].abs() < 1e-12,
-            "exit at {exit:?}"
-        );
+        assert!(exit[1].abs() < 1e-12 && exit[2].abs() < 1e-12, "exit at {exit:?}");
         assert!(angle_between(dir, [1.0, 0.0, 0.0]) < 1e-9);
         assert!(n.deflection(&[0.0; 3]) < 1e-9);
     }
@@ -951,17 +927,9 @@ mod tests {
     #[test]
     fn half_a_turn_on_every_bearing_reaches_the_envelope() {
         let n = nozzle();
-        assert!(
-            (n.envelope() - 95.0).abs() < 1e-9,
-            "envelope {}",
-            n.envelope()
-        );
+        assert!((n.envelope() - 95.0).abs() < 1e-9, "envelope {}", n.envelope());
         let q = [180.0; 3];
-        assert!(
-            (n.deflection(&q) - 95.0).abs() < 1e-6,
-            "reached {}",
-            n.deflection(&q)
-        );
+        assert!((n.deflection(&q) - 95.0).abs() < 1e-6, "reached {}", n.deflection(&q));
         // And it lands exactly in the vertical plane, pointing down.
         assert!(n.lateral(&q).abs() < 1e-6);
         assert!(n.exhaust(&q).1[2] < 0.0, "it deflected upward");
@@ -981,15 +949,8 @@ mod tests {
             }
         }
         let _ = q;
-        assert!(
-            worst <= n.envelope() + 1e-6,
-            "found {worst} past {}",
-            n.envelope()
-        );
-        assert!(
-            worst > n.envelope() - 3.0,
-            "the sweep never got near it: {worst}"
-        );
+        assert!(worst <= n.envelope() + 1e-6, "found {worst} past {}", n.envelope());
+        assert!(worst > n.envelope() - 3.0, "the sweep never got near it: {worst}");
     }
 
     #[test]
@@ -998,11 +959,7 @@ mod tests {
         for b in &mut same.bearings {
             b.cant = b.cant.abs();
         }
-        assert!(
-            same.envelope().abs() < 1e-9,
-            "equal signs cancel: {}",
-            same.envelope()
-        );
+        assert!(same.envelope().abs() < 1e-9, "equal signs cancel: {}", same.envelope());
         assert!(same.deflection(&[180.0; 3]) < 1e-6);
     }
 
@@ -1025,22 +982,14 @@ mod tests {
         for (c, yaw) in j[1].iter().enumerate().skip(1) {
             assert!(yaw.abs() > 1e-3, "canted column {c} does nothing either");
         }
-        assert!(
-            n.authority(&[0.0; 3]) < 1e-9,
-            "authority {}",
-            n.authority(&[0.0; 3])
-        );
+        assert!(n.authority(&[0.0; 3]) < 1e-9, "authority {}", n.authority(&[0.0; 3]));
 
         // And it does not matter, which is the point of the roll bearing. The
         // schedule leaves stowed on the two canted joints, whose azimuth is
         // well defined the whole way, and the roll bearing cancels it.
         let s = n.roll_schedule(95.0, 400);
         let q = s.bearings_at(45.0);
-        assert!(
-            n.authority(&q) > 0.2,
-            "authority at 45 deg: {}",
-            n.authority(&q)
-        );
+        assert!(n.authority(&q) > 0.2, "authority at 45 deg: {}", n.authority(&q));
     }
 
     #[test]
@@ -1062,10 +1011,7 @@ mod tests {
         let end = &s.points.last().unwrap().bearings;
         assert!((end[1].abs() - 180.0).abs() < 1e-6, "{end:?}");
         assert!((end[2].abs() - 180.0).abs() < 1e-6, "{end:?}");
-        assert!(
-            (end[1] - end[2]).abs() < 1e-6,
-            "the two canted joints move together"
-        );
+        assert!((end[1] - end[2]).abs() < 1e-6, "the two canted joints move together");
     }
 
     #[test]
@@ -1092,11 +1038,7 @@ mod tests {
     #[test]
     fn the_direction_jacobian_matches_finite_differences() {
         let n = nozzle();
-        for q in [
-            [20.0, 35.0, 60.0],
-            [120.0, -40.0, 150.0],
-            [-70.0, 90.0, 10.0],
-        ] {
+        for q in [[20.0, 35.0, 60.0], [120.0, -40.0, 150.0], [-70.0, 90.0, 10.0]] {
             let j = n.direction_jacobian(&q);
             let base = unit(n.exhaust(&q).1);
             const H: f64 = 1e-6; // radians
@@ -1125,10 +1067,7 @@ mod tests {
         let worst = (0..=180)
             .map(|t| n.lateral(&[t as f64; 3]).abs())
             .fold(0.0f64, f64::max);
-        assert!(
-            worst > 60.0,
-            "the ganged path only wandered {worst} degrees"
-        );
+        assert!(worst > 60.0, "the ganged path only wandered {worst} degrees");
     }
 
     #[test]
@@ -1157,11 +1096,7 @@ mod tests {
         }
         // All of the excursion is in break-out, and on this layout it is several
         // degrees — where `roll_schedule` on the same nozzle is exact.
-        assert!(
-            s.worst_lateral() < 8.0,
-            "worst lateral {}",
-            s.worst_lateral()
-        );
+        assert!(s.worst_lateral() < 8.0, "worst lateral {}", s.worst_lateral());
         assert!(
             n.roll_schedule(95.0, 600).worst_lateral() < 1e-9,
             "the closed form should not wander at all"
@@ -1174,15 +1109,9 @@ mod tests {
         let s = n.schedule(95.0, 400);
         let travel = s.travel();
         assert_eq!(travel.len(), s.points.len());
-        assert!(
-            travel.windows(2).all(|w| w[1] >= w[0]),
-            "travel went backwards"
-        );
+        assert!(travel.windows(2).all(|w| w[1] >= w[0]), "travel went backwards");
         let total = *travel.last().unwrap();
-        assert!(
-            total > 180.0,
-            "the deployment only moved {total} deg of bearing"
-        );
+        assert!(total > 180.0, "the deployment only moved {total} deg of bearing");
 
         // Ends land on the ends.
         assert!(s.bearings_at_travel(0.0).iter().all(|v| v.abs() < 1e-9));
@@ -1202,10 +1131,7 @@ mod tests {
             );
             prev = q;
         }
-        assert!(
-            worst < 0.02 * total,
-            "a lurch of {worst} deg in one percent of travel"
-        );
+        assert!(worst < 0.02 * total, "a lurch of {worst} deg in one percent of travel");
 
         // And it really does sweep the envelope on the way.
         assert!(n.deflection(&s.bearings_at_travel(1.0)) > 94.9);
@@ -1216,10 +1142,7 @@ mod tests {
         let n = nozzle();
         let s = n.schedule(95.0, 400);
         let (worst, at) = s.worst_authority();
-        assert!(
-            worst < 1e-6,
-            "the ends should be singular, got {worst} at {at}"
-        );
+        assert!(worst < 1e-6, "the ends should be singular, got {worst} at {at}");
         let middle = s
             .points
             .iter()
@@ -1228,10 +1151,7 @@ mod tests {
         // Weakest interior point sits around 24 degrees, at a shade over 0.12
         // jet-degrees per bearing-degree. That is a working mechanism: the
         // actuators move eight times the jet does at the worst of it.
-        assert!(
-            middle > 0.10,
-            "the middle of the envelope is weak: {middle}"
-        );
+        assert!(middle > 0.10, "the middle of the envelope is weak: {middle}");
     }
 
     #[test]
@@ -1259,29 +1179,18 @@ mod tests {
         let n = nozzle();
         let q = [180.0; 3];
         let t = n.thrust(&q, 80_000.0);
-        assert!(
-            t.lift_fraction() > 0.99,
-            "lift fraction {}",
-            t.lift_fraction()
-        );
+        assert!(t.lift_fraction() > 0.99, "lift fraction {}", t.lift_fraction());
         // Past 90 degrees the jet points slightly forward, so the reaction on
         // the airframe is rearward: the nozzle brakes as well as lifts.
         assert!(t.axial() < 0.0, "axial {}", t.axial());
-        assert!(
-            t.axial() > -0.15 * t.thrust,
-            "braking far too hard: {}",
-            t.axial()
-        );
+        assert!(t.axial() > -0.15 * t.thrust, "braking far too hard: {}", t.axial());
         assert!(t.side().abs() < 1.0, "side force {}", t.side());
 
         // Stowed it is all thrust and no lift.
         let s = n.thrust(&[0.0; 3], 80_000.0);
         assert!((s.axial() - 80_000.0).abs() < 1e-3);
         assert!(s.lift().abs() < 1e-6);
-        assert!(
-            s.pitch().abs() < 1e-6,
-            "a straight jet on the axis has no moment"
-        );
+        assert!(s.pitch().abs() < 1e-6, "a straight jet on the axis has no moment");
     }
 
     #[test]
@@ -1293,11 +1202,7 @@ mod tests {
         let q = s.bearings_at(90.0);
         let t = n.thrust(&q, 80_000.0);
         assert!(t.lift() > 0.9 * t.thrust);
-        assert!(
-            t.pitch() < 0.0,
-            "lift behind the CG is nose-down: {}",
-            t.pitch()
-        );
+        assert!(t.pitch() < 0.0, "lift behind the CG is nose-down: {}", t.pitch());
         // The arm is a little over five metres, so the moment is that times lift.
         let arm = t.exit[0] - (-4.0);
         assert!(

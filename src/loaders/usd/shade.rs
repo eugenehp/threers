@@ -230,8 +230,8 @@ pub fn resolve(material: &UsdPrim, layer: &UsdLayer) -> UsdMaterial {
         };
     };
 
-    let mut colour =
-        |name: &str, slot: TextureSlot, into: &mut Color| match input(shader, name, slot, layer) {
+    let mut colour = |name: &str, slot: TextureSlot, into: &mut Color| {
+        match input(shader, name, slot, layer) {
             Some(Input::Value(value)) => {
                 let n = value.flat_f32();
                 if n.len() >= 3 {
@@ -240,16 +240,13 @@ pub fn resolve(material: &UsdPrim, layer: &UsdLayer) -> UsdMaterial {
             }
             Some(Input::Texture(request)) => textures.push(request),
             None => {}
-        };
+        }
+    };
     colour("diffuseColor", TextureSlot::BaseColor, &mut standard.color);
-    colour(
-        "emissiveColor",
-        TextureSlot::Emissive,
-        &mut standard.emissive,
-    );
+    colour("emissiveColor", TextureSlot::Emissive, &mut standard.emissive);
 
-    let mut scalar =
-        |name: &str, slot: TextureSlot, into: &mut f32| match input(shader, name, slot, layer) {
+    let mut scalar = |name: &str, slot: TextureSlot, into: &mut f32| {
+        match input(shader, name, slot, layer) {
             Some(Input::Value(value)) => {
                 if let Some(v) = value.as_f64() {
                     *into = v as f32;
@@ -257,15 +254,12 @@ pub fn resolve(material: &UsdPrim, layer: &UsdLayer) -> UsdMaterial {
             }
             Some(Input::Texture(request)) => textures.push(request),
             None => {}
-        };
+        }
+    };
     scalar("roughness", TextureSlot::Roughness, &mut standard.roughness);
     scalar("metallic", TextureSlot::Metalness, &mut standard.metalness);
     scalar("opacity", TextureSlot::Opacity, &mut standard.opacity);
-    scalar(
-        "occlusion",
-        TextureSlot::Occlusion,
-        &mut standard.ao_intensity,
-    );
+    scalar("occlusion", TextureSlot::Occlusion, &mut standard.ao_intensity);
 
     // Normal and displacement are textures or nothing: a constant normal is
     // not a thing anyone authors.
@@ -339,7 +333,9 @@ pub fn material_subsets(mesh: &UsdPrim) -> Vec<FaceSubset> {
     mesh.children
         .iter()
         .filter(|child| child.type_name == "GeomSubset")
-        .filter(|child| child.value("familyName").and_then(|v| v.as_str()) == Some("materialBind"))
+        .filter(|child| {
+            child.value("familyName").and_then(|v| v.as_str()) == Some("materialBind")
+        })
         // `elementType` defaults to `face`, which is the only kind that can
         // carry a material.
         .filter(|child| {
@@ -350,10 +346,7 @@ pub fn material_subsets(mesh: &UsdPrim) -> Vec<FaceSubset> {
         })
         .map(|child| FaceSubset {
             name: child.name.clone(),
-            faces: child
-                .value("indices")
-                .map(|v| v.flat_u32())
-                .unwrap_or_default(),
+            faces: child.value("indices").map(|v| v.flat_u32()).unwrap_or_default(),
             material: child
                 .value("material:binding")
                 .and_then(|v| v.as_str())
@@ -386,9 +379,9 @@ pub fn unclaimed_faces(total: usize, subsets: &[FaceSubset]) -> Vec<u32> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use super::super::parse::parse;
     use super::super::scene::to_scene;
-    use super::*;
 
     fn layer() -> UsdLayer {
         parse(include_str!("testdata/shade.usda")).expect("parses")
@@ -426,11 +419,7 @@ mod tests {
         let Material::Standard(standard) = &resolved.material else {
             panic!("standard");
         };
-        assert!(
-            (standard.metalness - 0.8).abs() < 1e-5,
-            "{}",
-            standard.metalness
-        );
+        assert!((standard.metalness - 0.8).abs() < 1e-5, "{}", standard.metalness);
         assert!((standard.color.r - 1.0).abs() < 1e-5);
     }
 
@@ -482,10 +471,7 @@ mod tests {
             .expect("a normal map");
         assert_eq!(normal.scale, [2.0, 2.0, 2.0, 1.0]);
         assert_eq!(normal.bias, [-1.0, -1.0, -1.0, 0.0]);
-        assert_eq!(
-            normal.color_space, "raw",
-            "a normal map is data, not colour"
-        );
+        assert_eq!(normal.color_space, "raw", "a normal map is data, not colour");
     }
 
     /// A binding applies to everything beneath it. A mesh with none of its own
@@ -552,7 +538,6 @@ mod tests {
             .iter()
             .map(|g| (g.start, g.count, g.material_index))
             .collect();
-<<<<<<< Updated upstream
         assert_eq!(groups, [(0, 12, 0), (12, 12, 1)]);
         let colour = |m: &Material| {
             let Material::Standard(s) = m else { panic!("standard") };
@@ -567,19 +552,6 @@ mod tests {
             let x = p[v as usize * 3];
             assert!((2.0..=3.0).contains(&x) || (6.0..=7.0).contains(&x), "{x}");
         }
-=======
-
-        let blue = colours
-            .iter()
-            .find(|(n, _)| n == "BluePart")
-            .expect("BluePart");
-        assert_eq!(blue.1, [0.0, 0.0, 1.0], "the subset's own material");
-        let rest = colours
-            .iter()
-            .find(|(n, _)| n == "TwoTone")
-            .expect("the remainder");
-        assert_eq!(rest.1, [1.0, 0.0, 0.0], "the mesh's own material");
->>>>>>> Stashed changes
     }
 
     /// Two of four faces belong to the subset, so each half has two.

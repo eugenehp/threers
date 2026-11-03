@@ -67,21 +67,14 @@ fn world_from_seed(seed: u32, count: usize) -> (World, Vec<BodyId>) {
     for _ in 0..count {
         let shape = match rng.below(6) {
             0 => Shape::ball(rng.range(0.2, 0.6)),
-            1 => Shape::cuboid(
-                rng.range(0.2, 0.6),
-                rng.range(0.2, 0.6),
-                rng.range(0.2, 0.6),
-            ),
+            1 => Shape::cuboid(rng.range(0.2, 0.6), rng.range(0.2, 0.6), rng.range(0.2, 0.6)),
             2 => Shape::capsule(rng.range(0.2, 0.5), rng.range(0.15, 0.4)),
             3 => Shape::cylinder(rng.range(0.2, 0.5), rng.range(0.2, 0.5)),
             4 => Shape::cone(rng.range(0.2, 0.5), rng.range(0.2, 0.5)),
-            _ => Shape::convex_hull(
-                &(0..8)
-                    .map(|_| {
-                        Vector3::new(rng.signed() * 0.5, rng.signed() * 0.5, rng.signed() * 0.5)
-                    })
-                    .collect::<Vec<_>>(),
-            )
+            _ => Shape::convex_hull(&(0..8).map(|_| {
+                Vector3::new(rng.signed() * 0.5, rng.signed() * 0.5, rng.signed() * 0.5)
+            })
+            .collect::<Vec<_>>())
             .unwrap_or_else(|| Shape::ball(0.3)),
         };
         let rotation = Quaternion::from_axis_angle(
@@ -133,9 +126,7 @@ fn finite(v: Vector3) -> bool {
 /// Everything that must be true of any body at any moment.
 fn check(world: &World, ids: &[BodyId], seed: u32, step: usize) {
     for id in ids {
-        let Some(body) = world.body(*id) else {
-            continue;
-        };
+        let Some(body) = world.body(*id) else { continue };
         let p = body.translation();
         assert!(
             finite(p) && finite(body.linear_velocity) && finite(body.angular_velocity),
@@ -384,11 +375,7 @@ fn random_scenes_survive_being_poked() {
                 }
                 3 if !ids.is_empty() => {
                     let id = ids[rng.below(ids.len() as u32) as usize];
-                    let to = Vector3::new(
-                        rng.range(-4.0, 4.0),
-                        rng.range(1.0, 8.0),
-                        rng.range(-4.0, 4.0),
-                    );
+                    let to = Vector3::new(rng.range(-4.0, 4.0), rng.range(1.0, 8.0), rng.range(-4.0, 4.0));
                     if let Some(b) = world.body_mut(id) {
                         b.set_translation(to);
                     }
@@ -456,3 +443,7 @@ fn nonsense_input_is_refused_rather_than_absorbed() {
         }
     }
 }
+
+
+
+

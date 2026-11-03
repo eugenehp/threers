@@ -504,10 +504,7 @@ mod tests {
             "{}",
             archive.metadata
         );
-        assert!(
-            archive.metadata.contains("Alembic 1.8"),
-            "written by Alembic"
-        );
+        assert!(archive.metadata.contains("Alembic 1.8"), "written by Alembic");
     }
 
     /// The object hierarchy is the one the file holds.
@@ -525,7 +522,8 @@ mod tests {
         assert_eq!(names, ["Cube", "Ball"], "the mesh and the child xform");
         assert_eq!(top[0].children[1].children[0].name, "Sphere");
         assert_eq!(
-            top[0].children[1].children[0].full_name, "/Cube/Ball/Sphere",
+            top[0].children[1].children[0].full_name,
+            "/Cube/Ball/Sphere",
             "full names are built from the walk"
         );
     }
@@ -573,10 +571,7 @@ mod tests {
             assert!((v.abs() - 1.0).abs() < 1e-5, "{v} is not a cube corner");
         }
 
-        let sphere = meshes
-            .iter()
-            .find(|m| m.name == "Sphere")
-            .expect("the sphere");
+        let sphere = meshes.iter().find(|m| m.name == "Sphere").expect("the sphere");
         assert_eq!(sphere.points.len() / 3, 42);
         assert_eq!(sphere.face_counts.len(), 48);
         assert_eq!(sphere.face_indices.len(), 176);

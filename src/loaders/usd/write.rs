@@ -75,11 +75,7 @@ fn write_prim(out: &mut String, prim: &UsdPrim, depth: usize) {
         let _ = write!(out, "{} ", prim.type_name);
     }
     let _ = write!(out, "\"{}\"", prim.name);
-    if prim
-        .metadata
-        .iter()
-        .any(|(k, _)| !k.is_empty() && !k.starts_with("reorder "))
-    {
+    if prim.metadata.iter().any(|(k, _)| !k.is_empty() && !k.starts_with("reorder ")) {
         out.push('\n');
         indent(out, depth);
         out.push_str("(\n");
@@ -151,10 +147,7 @@ fn write_property(out: &mut String, p: &UsdProperty, depth: usize) {
     };
     // `custom` says the property belongs to no schema. It is written in front
     // of everything else and kept as a field rather than as syntax.
-    if p.metadata
-        .iter()
-        .any(|(k, v)| k == "custom" && *v == UsdValue::Bool(true))
-    {
+    if p.metadata.iter().any(|(k, v)| k == "custom" && *v == UsdValue::Bool(true)) {
         out.push_str("custom ");
     }
     if p.relationship {
@@ -177,10 +170,7 @@ fn write_property(out: &mut String, p: &UsdProperty, depth: usize) {
     if !matches!(p.value, UsdValue::None) {
         let _ = write!(out, " = {}", render(&p.value, depth));
     }
-    if p.metadata
-        .iter()
-        .any(|(k, _)| !k.is_empty() && k != "custom")
-    {
+    if p.metadata.iter().any(|(k, _)| !k.is_empty() && k != "custom") {
         out.push_str(" (\n");
         for (k, v) in &p.metadata {
             // `custom` is written in front of the property, not inside its
@@ -311,10 +301,7 @@ def Xform "World"
         assert_eq!(second.meta("defaultPrim").unwrap().as_str(), Some("World"));
         let m = second.prim_at("/World/M").unwrap();
         assert_eq!(m.type_name, "Mesh");
-        assert_eq!(
-            m.value("faceVertexIndices").unwrap().flat_u32(),
-            vec![0, 1, 2]
-        );
+        assert_eq!(m.value("faceVertexIndices").unwrap().flat_u32(), vec![0, 1, 2]);
         assert_eq!(m.value("points").unwrap().flat_f32().len(), 9);
         assert!(m.property("subdivisionScheme").unwrap().uniform);
         assert!(m.property("material:binding").unwrap().relationship);
@@ -328,23 +315,13 @@ def Xform "World"
     fn long_arrays_are_broken_over_lines() {
         let src = format!(
             "def Mesh \"M\" {{\n    int[] a = [{}]\n}}\n",
-            (0..20)
-                .map(|i| i.to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
+            (0..20).map(|i| i.to_string()).collect::<Vec<_>>().join(", ")
         );
         let text = layer_to_usda(&parse(&src).unwrap());
         assert!(text.contains("[\n"), "long array stayed on one line");
         // …and still reads back.
         assert_eq!(
-            parse(&text)
-                .unwrap()
-                .prim_at("/M")
-                .unwrap()
-                .value("a")
-                .unwrap()
-                .flat_u32()
-                .len(),
+            parse(&text).unwrap().prim_at("/M").unwrap().value("a").unwrap().flat_u32().len(),
             20
         );
     }

@@ -74,7 +74,11 @@ pub enum Finding {
     /// this run was able to say about it.
     Unchecked { mate: String, reason: &'static str },
     /// Two parts that touch at the start and have separated by the end.
-    CameApart { a: String, b: String, widest: f32 },
+    CameApart {
+        a: String,
+        b: String,
+        widest: f32,
+    },
     /// A part that touches nothing, in any pose.
     Floating { part: String },
 }
@@ -104,10 +108,7 @@ impl std::fmt::Display for Finding {
                 mate,
                 declared,
                 observed,
-            } => write!(
-                f,
-                "{mate}: declared a {declared}, behaves like a {observed}"
-            ),
+            } => write!(f, "{mate}: declared a {declared}, behaves like a {observed}"),
             Self::NotRigid { mate, residual } => write!(
                 f,
                 "{mate}: the parts do not move rigidly together — the fit missed by {residual:.4}"
@@ -115,9 +116,10 @@ impl std::fmt::Display for Finding {
             Self::Unchecked { mate, reason } => {
                 write!(f, "{mate}: not checked — {reason}")
             }
-            Self::CameApart { a, b, widest } => {
-                write!(f, "{a} and {b} start in contact and end {widest:.4} apart")
-            }
+            Self::CameApart { a, b, widest } => write!(
+                f,
+                "{a} and {b} start in contact and end {widest:.4} apart"
+            ),
             Self::Floating { part } => write!(f, "{part}: touches nothing, in any pose"),
         }
     }
@@ -246,12 +248,7 @@ impl Verify {
         let triangles = |spec: &threers::openscad::MechanismSpec| -> Vec<(String, Vec<Tri>)> {
             spec.parts
                 .iter()
-                .map(|p| {
-                    (
-                        p.name.clone(),
-                        from_geometry(&p.solid.clone().to_geometry()),
-                    )
-                })
+                .map(|p| (p.name.clone(), from_geometry(&p.solid.clone().to_geometry())))
                 .collect()
         };
         let before = triangles(&a);
@@ -269,9 +266,10 @@ impl Verify {
             if !mate.kind.is_angular() {
                 continue; // only a turn locates an axis
             }
-            let (Some(moving_a), Some(moving_b)) =
-                (find(&before, &mate.parts[0]), find(&after, &mate.parts[0]))
-            else {
+            let (Some(moving_a), Some(moving_b)) = (
+                find(&before, &mate.parts[0]),
+                find(&after, &mate.parts[0]),
+            ) else {
                 report.findings.push(Finding::Unchecked {
                     mate: name,
                     reason: "its moving part is not declared by a part()",
@@ -542,13 +540,16 @@ impl Verify {
             .iter()
             .map(|pose| {
                 (0..bodies)
-                    .map(|i| from_geometry_at(geometry_of(mech, i), &pose[i]))
+                    .map(|i| {
+                        from_geometry_at(geometry_of(mech, i), &pose[i])
+                    })
                     .collect()
             })
             .collect();
         // The correspondence is known — these bodies were moved, not rebuilt —
         // so it is stated rather than guessed at.
-        let alignment: Vec<Vec<Option<usize>>> = vec![(0..bodies).map(Some).collect(); poses.len()];
+        let alignment: Vec<Vec<Option<usize>>> =
+            vec![(0..bodies).map(Some).collect(); poses.len()];
 
         let name = |i: usize| {
             mech.assembly

@@ -98,7 +98,8 @@ pub mod transparent;
 pub use alpha::{alpha_channel_info_sei, AlphaChannelInfo};
 pub use cabac::{CabacEncoder, CtxModel};
 pub use compress::{
-    encode_mp4 as encode_compressed_mp4, encode_mp4_from_iter as encode_compressed_mp4_from_iter,
+    encode_mp4 as encode_compressed_mp4,
+    encode_mp4_from_iter as encode_compressed_mp4_from_iter,
     encode_mp4_streaming as encode_compressed_mp4_streaming,
     encode_mp4_with_captions as encode_compressed_mp4_with_captions, CompressedEncoder,
     Reconstruction,

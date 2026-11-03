@@ -131,11 +131,7 @@ pub(crate) fn add_court(
                     Color::from_hex(0x53585e),
                     false,
                 );
-                let (bx, bz) = if along_x {
-                    (0.10f32, 0.9f32)
-                } else {
-                    (0.9, 0.10)
-                };
+                let (bx, bz) = if along_x { (0.10f32, 0.9f32) } else { (0.9, 0.10) };
                 b.trim.add_box(
                     Vector3::new(hx - bx - s * 0.0, 2.9, hz - bz),
                     Vector3::new(hx + bx, 3.9, hz + bz),
@@ -143,16 +139,8 @@ pub(crate) fn add_court(
                     Uv::Unit,
                 );
                 b.trim.add_limb(
-                    Vector3::new(
-                        hx - if along_x { s * 0.5 } else { 0.0 },
-                        3.05,
-                        hz - if along_x { 0.0 } else { s * 0.5 },
-                    ),
-                    Vector3::new(
-                        hx - if along_x { s * 0.9 } else { 0.0 },
-                        3.05,
-                        hz - if along_x { 0.0 } else { s * 0.9 },
-                    ),
+                    Vector3::new(hx - if along_x { s * 0.5 } else { 0.0 }, 3.05, hz - if along_x { 0.0 } else { s * 0.5 }),
+                    Vector3::new(hx - if along_x { s * 0.9 } else { 0.0 }, 3.05, hz - if along_x { 0.0 } else { s * 0.9 }),
                     0.22,
                     0.22,
                     6,
@@ -163,11 +151,7 @@ pub(crate) fn add_court(
         }
         Court::Tennis | Court::Pickleball => {
             // A net across the middle, with a post each end.
-            let (nx, nz) = if along_x {
-                (0.06f32, dz * 0.5 + 0.5)
-            } else {
-                (dx * 0.5 + 0.5, 0.06)
-            };
+            let (nx, nz) = if along_x { (0.06f32, dz * 0.5 + 0.5) } else { (dx * 0.5 + 0.5, 0.06) };
             b.trim.add_box(
                 Vector3::new(cx - nx, KERB, cz - nz),
                 Vector3::new(cx + nx, KERB + 1.05, cz + nz),
@@ -213,11 +197,7 @@ pub(crate) fn add_court_bank(
     let mut made = 0;
     for i in 0..n {
         let off = (i as f32 - (n as f32 - 1.0) * 0.5) * pitch;
-        let (x, z) = if along_x {
-            (cx, cz + off)
-        } else {
-            (cx + off, cz)
-        };
+        let (x, z) = if along_x { (cx, cz + off) } else { (cx + off, cz) };
         if add_court(b, x, z, kind, along_x, i == 0, rng) {
             made += 1;
         }
@@ -231,14 +211,7 @@ pub(crate) fn add_court_bank(
 /// fanning out from it, the stands wrapped round the back of home plate and
 /// nowhere else. Drawn as a sector rather than an oval for exactly that
 /// reason.
-pub(crate) fn add_ballpark(
-    b: &mut Batches,
-    cx: f32,
-    cz: f32,
-    r: f32,
-    rot: f32,
-    rng: &mut Rng,
-) -> bool {
+pub(crate) fn add_ballpark(b: &mut Batches, cx: f32, cz: f32, r: f32, rot: f32, rng: &mut Rng) -> bool {
     if !b.occ.try_claim([cx - r, cz - r, cx + r, cz + r]) {
         return false;
     }
@@ -259,12 +232,7 @@ pub(crate) fn add_ballpark(
         let (x0, z0) = at(u0, r * 0.86);
         let (x1, z1) = at(u1, r * 0.86);
         b.grass.quad(
-            [
-                [hx, KERB + 0.02, hz],
-                [x0, KERB + 0.02, z0],
-                [x1, KERB + 0.02, z1],
-                [hx, KERB + 0.02, hz],
-            ],
+            [[hx, KERB + 0.02, hz], [x0, KERB + 0.02, z0], [x1, KERB + 0.02, z1], [hx, KERB + 0.02, hz]],
             [0.0, 1.0, 0.0],
             Uv::Unit,
             scale_color(turf, rng.range(0.95, 1.05)),
@@ -277,38 +245,19 @@ pub(crate) fn add_ballpark(
         let (x0, z0) = at(u0, r * 0.44);
         let (x1, z1) = at(u1, r * 0.44);
         b.pads.quad(
-            [
-                [hx, KERB + 0.04, hz],
-                [x0, KERB + 0.04, z0],
-                [x1, KERB + 0.04, z1],
-                [hx, KERB + 0.04, hz],
-            ],
+            [[hx, KERB + 0.04, hz], [x0, KERB + 0.04, z0], [x1, KERB + 0.04, z1], [hx, KERB + 0.04, hz]],
             [0.0, 1.0, 0.0],
             Uv::Unit,
             scale_color(dirt, rng.range(0.95, 1.05)),
         );
     }
     let (mx, mz) = at(0.0, r * 0.32);
-    b.pads.add_ground_disc(
-        mx,
-        mz,
-        r * 0.044,
-        10,
-        0.0,
-        KERB + 0.06,
-        Color::from_hex(0xa87a52),
-    );
+    b.pads
+        .add_ground_disc(mx, mz, r * 0.044, 10, 0.0, KERB + 0.06, Color::from_hex(0xa87a52));
     for (ang, rad) in [(a0, r * 0.44), (0.0, r * 0.44), (a1, r * 0.44)] {
         let (bx, bz) = at(ang, rad * 0.82);
-        b.paint.add_slab(
-            bx - 0.7,
-            bz - 0.7,
-            bx + 0.7,
-            bz + 0.7,
-            KERB + 0.07,
-            Color::WHITE,
-            Uv::Unit,
-        );
+        b.paint
+            .add_slab(bx - 0.7, bz - 0.7, bx + 0.7, bz + 0.7, KERB + 0.07, Color::WHITE, Uv::Unit);
     }
     // Stands behind the plate, and the outfield wall.
     let seats = Color::from_hex(0x27568c);
@@ -367,14 +316,7 @@ pub(crate) fn add_ballpark(
 /// A circle of mown grass with a paler strip across the middle and a rope
 /// round the edge. No stands worth the name: most grounds are a pavilion and
 /// a bank, and the pavilion is the only building.
-pub(crate) fn add_cricket_ground(
-    b: &mut Batches,
-    cx: f32,
-    cz: f32,
-    r: f32,
-    rot: f32,
-    rng: &mut Rng,
-) -> bool {
+pub(crate) fn add_cricket_ground(b: &mut Batches, cx: f32, cz: f32, r: f32, rot: f32, rng: &mut Rng) -> bool {
     if !b.occ.try_claim([cx - r, cz - r, cx + r, cz + r]) {
         return false;
     }
@@ -397,10 +339,7 @@ pub(crate) fn add_cricket_ground(
             22,
             0.0,
             KERB + 0.03 + k as f32 * 0.005,
-            scale_color(
-                Color::from_hex(0x4f8a3c),
-                if k % 2 == 0 { 1.08 } else { 0.93 },
-            ),
+            scale_color(Color::from_hex(0x4f8a3c), if k % 2 == 0 { 1.08 } else { 0.93 }),
         );
     }
     // The square: a pale rectangle of bare-ish turf across the middle.

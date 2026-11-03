@@ -210,15 +210,11 @@ impl Shape {
     /// origin needs the primitive placed at the geometry's centre, and only the
     /// fitter knows where that is. `Isometry::IDENTITY` for the fits that keep
     /// the mesh's own vertices.
-    pub fn fit_to_geometry(
-        geometry: &BufferGeometry,
-        fit: ColliderFit,
-    ) -> Option<(Self, Isometry)> {
+    pub fn fit_to_geometry(geometry: &BufferGeometry, fit: ColliderFit) -> Option<(Self, Isometry)> {
         match fit {
-            ColliderFit::ConvexHull => Some((
-                Self::convex_hull_from_geometry(geometry)?,
-                Isometry::IDENTITY,
-            )),
+            ColliderFit::ConvexHull => {
+                Some((Self::convex_hull_from_geometry(geometry)?, Isometry::IDENTITY))
+            }
             ColliderFit::TriMesh => {
                 Some((Self::trimesh_from_geometry(geometry)?, Isometry::IDENTITY))
             }
@@ -375,42 +371,22 @@ impl Shape {
         Some(match self {
             Self::Ball { radius } => try_normalize(dir).unwrap_or(Vector3::UP) * *radius,
             Self::Cuboid { half_extents } => Vector3::new(
-                if dir.x >= 0.0 {
-                    half_extents.x
-                } else {
-                    -half_extents.x
-                },
-                if dir.y >= 0.0 {
-                    half_extents.y
-                } else {
-                    -half_extents.y
-                },
-                if dir.z >= 0.0 {
-                    half_extents.z
-                } else {
-                    -half_extents.z
-                },
+                if dir.x >= 0.0 { half_extents.x } else { -half_extents.x },
+                if dir.y >= 0.0 { half_extents.y } else { -half_extents.y },
+                if dir.z >= 0.0 { half_extents.z } else { -half_extents.z },
             ),
             Self::Capsule {
                 half_height,
                 radius,
             } => {
-                let y = if dir.y >= 0.0 {
-                    *half_height
-                } else {
-                    -*half_height
-                };
+                let y = if dir.y >= 0.0 { *half_height } else { -*half_height };
                 Vector3::new(0.0, y, 0.0) + try_normalize(dir).unwrap_or(Vector3::UP) * *radius
             }
             Self::Cylinder {
                 half_height,
                 radius,
             } => {
-                let y = if dir.y >= 0.0 {
-                    *half_height
-                } else {
-                    -*half_height
-                };
+                let y = if dir.y >= 0.0 { *half_height } else { -*half_height };
                 let radial = try_normalize(Vector3::new(dir.x, 0.0, dir.z))
                     .map(|d| d * *radius)
                     .unwrap_or(Vector3::ZERO);
@@ -498,11 +474,7 @@ impl Shape {
                 let r = *radius;
                 let mass = density * (4.0 / 3.0) * std::f32::consts::PI * r * r * r;
                 let i = 0.4 * mass * r * r;
-                MassProperties::new(
-                    mass,
-                    Vector3::ZERO,
-                    Mat3::from_diagonal(Vector3::new(i, i, i)),
-                )
+                MassProperties::new(mass, Vector3::ZERO, Mat3::from_diagonal(Vector3::new(i, i, i)))
             }
             Self::Cuboid { half_extents } => {
                 let h = *half_extents;
@@ -550,7 +522,11 @@ impl Shape {
                 MassProperties::new(
                     mc + ms,
                     Vector3::ZERO,
-                    Mat3::from_diagonal(Vector3::new(cyl_x + cap_x, cyl_y + cap_y, cyl_x + cap_x)),
+                    Mat3::from_diagonal(Vector3::new(
+                        cyl_x + cap_x,
+                        cyl_y + cap_y,
+                        cyl_x + cap_x,
+                    )),
                 )
             }
             Self::Cone {
@@ -584,10 +560,7 @@ impl Shape {
                 if m.signed_volume() <= 0.0 {
                     return MassProperties::ZERO;
                 }
-                mass_properties_from_triangles(
-                    (0..m.triangle_count()).map(|i| m.triangle(i)),
-                    density,
-                )
+                mass_properties_from_triangles((0..m.triangle_count()).map(|i| m.triangle(i)), density)
             }
             Self::HalfSpace { .. } => MassProperties::ZERO,
             Self::Compound(parts) => {
@@ -655,8 +628,8 @@ impl MassProperties {
         if mass <= 0.0 {
             return Self::ZERO;
         }
-        let com =
-            (self.center_of_mass * self.mass + other.center_of_mass * other.mass) * (1.0 / mass);
+        let com = (self.center_of_mass * self.mass + other.center_of_mass * other.mass)
+            * (1.0 / mass);
         let inertia = self
             .inertia
             .add(&parallel_axis(self.mass, self.center_of_mass - com))
@@ -668,9 +641,13 @@ impl MassProperties {
 
 /// Parallel-axis term for moving a tensor of `mass` by `d`: `m (d·d I - d⊗d)`.
 fn parallel_axis(mass: f32, d: Vector3) -> Mat3 {
-    Mat3::from_diagonal(Vector3::new(d.length_sq(), d.length_sq(), d.length_sq()))
-        .sub(&Mat3::outer(d, d))
-        .scaled(mass)
+    Mat3::from_diagonal(Vector3::new(
+        d.length_sq(),
+        d.length_sq(),
+        d.length_sq(),
+    ))
+    .sub(&Mat3::outer(d, d))
+    .scaled(mass)
 }
 
 /// Volume integrals of a closed, outward-wound triangle mesh, by summing signed
@@ -763,11 +740,7 @@ mod tests {
     fn cuboid_from_size_halves_the_dimensions() {
         let a = Shape::cuboid_from_size(2.0, 4.0, 6.0);
         let b = Shape::cuboid(1.0, 2.0, 3.0);
-        assert!(approx(
-            a.mass_properties(1.0).mass,
-            b.mass_properties(1.0).mass,
-            1e-6
-        ));
+        assert!(approx(a.mass_properties(1.0).mass, b.mass_properties(1.0).mass, 1e-6));
     }
 
     #[test]
@@ -792,12 +765,7 @@ mod tests {
         }
         let hull = Shape::convex_hull(&pts).unwrap().mass_properties(2.5);
         let cube = Shape::cuboid(h.x, h.y, h.z).mass_properties(2.5);
-        assert!(
-            approx(hull.mass, cube.mass, 1e-3),
-            "{} vs {}",
-            hull.mass,
-            cube.mass
-        );
+        assert!(approx(hull.mass, cube.mass, 1e-3), "{} vs {}", hull.mass, cube.mass);
         for i in [0, 4, 8] {
             assert!(
                 approx(hull.inertia.m[i], cube.inertia.m[i], 1e-2),
@@ -823,11 +791,7 @@ mod tests {
         }
         let mp = Shape::convex_hull(&pts).unwrap().mass_properties(1.0);
         assert!(approx(mp.mass, 8.0, 1e-3));
-        assert!(
-            (mp.center_of_mass - offset).length() < 1e-3,
-            "{:?}",
-            mp.center_of_mass
-        );
+        assert!((mp.center_of_mass - offset).length() < 1e-3, "{:?}", mp.center_of_mass);
         // Inertia about the COM must equal the centred box's.
         let cube = Shape::cuboid(1.0, 1.0, 1.0).mass_properties(1.0);
         assert!(approx(mp.inertia.m[0], cube.inertia.m[0], 1e-2));
@@ -845,14 +809,8 @@ mod tests {
         let whole = Shape::cuboid(2.0, 1.0, 1.0).mass_properties(1.0);
         let half = Shape::cuboid(1.0, 1.0, 1.0);
         let compound = Shape::compound(vec![
-            (
-                Isometry::from_translation(Vector3::new(-1.0, 0.0, 0.0)),
-                half.clone(),
-            ),
-            (
-                Isometry::from_translation(Vector3::new(1.0, 0.0, 0.0)),
-                half,
-            ),
+            (Isometry::from_translation(Vector3::new(-1.0, 0.0, 0.0)), half.clone()),
+            (Isometry::from_translation(Vector3::new(1.0, 0.0, 0.0)), half),
         ])
         .mass_properties(1.0);
         assert!(approx(compound.mass, whole.mass, 1e-4));
@@ -873,11 +831,7 @@ mod tests {
         assert!(Shape::ground().is_static_only());
         // A single triangle is not a closed solid.
         let open = Shape::trimesh(
-            vec![
-                Vector3::ZERO,
-                Vector3::new(1.0, 0.0, 0.0),
-                Vector3::new(0.0, 1.0, 0.0),
-            ],
+            vec![Vector3::ZERO, Vector3::new(1.0, 0.0, 0.0), Vector3::new(0.0, 1.0, 0.0)],
             vec![[0, 1, 2]],
         )
         .unwrap();
@@ -895,10 +849,7 @@ mod tests {
         let top = c.support_local(Vector3::UP).unwrap();
         assert!(approx(top.y, 2.5, 1e-5));
         let cone = Shape::cone(1.0, 1.0);
-        assert_eq!(
-            cone.support_local(Vector3::UP).unwrap(),
-            Vector3::new(0.0, 1.0, 0.0)
-        );
+        assert_eq!(cone.support_local(Vector3::UP).unwrap(), Vector3::new(0.0, 1.0, 0.0));
         assert!(Shape::ground().support_local(Vector3::UP).is_none());
     }
 
@@ -934,8 +885,9 @@ mod tests {
             for i in 0..64 {
                 let a = i as f32 * 0.31;
                 let dir = Vector3::new(a.sin(), (a * 1.7).cos(), (a * 0.6).sin());
-                let p = iso
-                    .transform_point(s.support_local(iso.inverse_transform_vector(dir)).unwrap());
+                let p = iso.transform_point(
+                    s.support_local(iso.inverse_transform_vector(dir)).unwrap(),
+                );
                 assert!(
                     p.x >= aabb.min.x - 1e-4
                         && p.x <= aabb.max.x + 1e-4

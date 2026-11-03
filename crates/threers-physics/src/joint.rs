@@ -560,13 +560,7 @@ pub struct Joint {
 }
 
 impl Joint {
-    fn base(
-        body_a: BodyId,
-        body_b: BodyId,
-        anchor_a: Vector3,
-        anchor_b: Vector3,
-        kind: JointKind,
-    ) -> Self {
+    fn base(body_a: BodyId, body_b: BodyId, anchor_a: Vector3, anchor_b: Vector3, kind: JointKind) -> Self {
         Self {
             body_a,
             body_b,
@@ -595,7 +589,12 @@ impl Joint {
     }
 
     /// Ball socket at the given local anchors.
-    pub fn spherical(body_a: BodyId, body_b: BodyId, anchor_a: Vector3, anchor_b: Vector3) -> Self {
+    pub fn spherical(
+        body_a: BodyId,
+        body_b: BodyId,
+        anchor_a: Vector3,
+        anchor_b: Vector3,
+    ) -> Self {
         Self::base(body_a, body_b, anchor_a, anchor_b, JointKind::Spherical)
     }
 
@@ -866,7 +865,8 @@ impl Joint {
         let local_axis_a = normalize_or_up(axis_a);
         let local_axis_b = normalize_or_up(axis_b);
         let world_axis = a.position.transform_vector(local_axis_a);
-        let delta = a.position.transform_point(anchor_a) - b.position.transform_point(anchor_b);
+        let delta =
+            a.position.transform_point(anchor_a) - b.position.transform_point(anchor_b);
         Some(Self::base(
             body_a,
             body_b,
@@ -1290,11 +1290,7 @@ impl Joint {
     /// [`crate::world::World::joint_state`] is the way to reach this; it looks the
     /// bodies up for you.
     #[cfg(feature = "mechanism")]
-    pub fn state(
-        &self,
-        a: &crate::body::RigidBody,
-        b: &crate::body::RigidBody,
-    ) -> Option<JointState> {
+    pub fn state(&self, a: &crate::body::RigidBody, b: &crate::body::RigidBody) -> Option<JointState> {
         let kind = self.axial_coordinate_kind()?;
         let local_axis_a = match &self.kind {
             JointKind::Revolute { local_axis_a, .. }
@@ -1315,8 +1311,7 @@ impl Joint {
                 JointState {
                     kind,
                     coordinate: (anchor_a - anchor_b).dot(axis),
-                    speed: (a.velocity_at_point(anchor_a) - b.velocity_at_point(anchor_b))
-                        .dot(axis),
+                    speed: (a.velocity_at_point(anchor_a) - b.velocity_at_point(anchor_b)).dot(axis),
                 }
             }
         })

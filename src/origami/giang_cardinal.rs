@@ -129,7 +129,12 @@ fn v2(x: f64, y: f64) -> V2 {
 
 fn flat_diamond() -> FoldedState {
     let s = 0.85;
-    let verts = vec![[0.0, s, 0.0], [s, 0.0, 0.0], [0.0, -s, 0.0], [-s, 0.0, 0.0]];
+    let verts = vec![
+        [0.0, s, 0.0],
+        [s, 0.0, 0.0],
+        [0.0, -s, 0.0],
+        [-s, 0.0, 0.0],
+    ];
     let faces = vec![vec![0, 1, 2], vec![0, 2, 3]];
     FoldedState { verts, faces }
 }

@@ -192,18 +192,15 @@ pub fn sample_times(set: &ClipSet, from_clips: impl Fn(usize) -> Vec<f64>) -> Ve
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use super::super::compose::{compose, ComposeOptions, MemoryResolver};
     use super::super::parse::parse;
-    use super::*;
 
     fn pipeline() -> MemoryResolver {
         let mut r = MemoryResolver::new();
         r.insert("clip_0.usda", include_str!("testdata/clips/clip_0.usda"))
             .insert("clip_1.usda", include_str!("testdata/clips/clip_1.usda"))
-            .insert(
-                "manifest.usda",
-                include_str!("testdata/clips/manifest.usda"),
-            );
+            .insert("manifest.usda", include_str!("testdata/clips/manifest.usda"));
         r
     }
 
@@ -216,13 +213,8 @@ mod tests {
     #[test]
     fn clips_resolve_to_the_same_samples_openusd_produces() {
         let stage = parse(include_str!("testdata/clips/stage.usda")).expect("parses");
-        let out = compose(
-            &stage,
-            "stage.usda",
-            &pipeline(),
-            &ComposeOptions::default(),
-        )
-        .expect("composes");
+        let out = compose(&stage, "stage.usda", &pipeline(), &ComposeOptions::default())
+            .expect("composes");
 
         let mine = out
             .prim_at("/Shot")
@@ -295,12 +287,9 @@ mod tests {
         let schedule = sample_times(&set, |index| match index {
             0 => vec![0.0, 1.0, 2.0],
             _ => vec![2.0, 3.0],
-        });
+            });
         // Frame 2 belongs to clip 1, so clip 0's sample there is not used.
-        assert_eq!(
-            schedule,
-            vec![(0.0, 0.0), (1.0, 1.0), (2.0, 2.0), (3.0, 3.0)]
-        );
+        assert_eq!(schedule, vec![(0.0, 0.0), (1.0, 1.0), (2.0, 2.0), (3.0, 3.0)]);
     }
 
     /// The older flat spelling is the same set under different names, and
@@ -338,18 +327,9 @@ def Xform "Old" (
                 .replace("    double3 xformOp:translate\n", ""),
         )
         .unwrap();
-        let out = compose(
-            &stage,
-            "stage.usda",
-            &pipeline(),
-            &ComposeOptions::default(),
-        )
-        .unwrap();
+        let out = compose(&stage, "stage.usda", &pipeline(), &ComposeOptions::default()).unwrap();
         assert!(
-            out.prim_at("/Shot")
-                .unwrap()
-                .value("xformOp:translate")
-                .is_none(),
+            out.prim_at("/Shot").unwrap().value("xformOp:translate").is_none(),
             "an undeclared attribute stays undeclared"
         );
     }

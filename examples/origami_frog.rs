@@ -48,9 +48,16 @@ fn main() {
         } else {
             view
         };
-        render_scene(frame.to_str().unwrap(), 640, 720, cam, look, |scene| {
-            add_folded_shape(scene, &stage.folded, Vector3::ZERO, scale, euler, plumage);
-        });
+        render_scene(
+            frame.to_str().unwrap(),
+            640,
+            720,
+            cam,
+            look,
+            |scene| {
+                add_folded_shape(scene, &stage.folded, Vector3::ZERO, scale, euler, plumage);
+            },
+        );
         println!("  {}", stage.label);
     }
 

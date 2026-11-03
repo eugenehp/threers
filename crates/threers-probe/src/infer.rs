@@ -30,8 +30,7 @@ impl ProbeNet {
     ) -> Result<Self> {
         ensure!(n > 0 && h > 0 && w > 0, "empty shape {n}x{h}x{w}");
         ensure!(
-            h.is_multiple_of(ProbeArch::TILE_MULTIPLE)
-                && w.is_multiple_of(ProbeArch::TILE_MULTIPLE),
+            h.is_multiple_of(ProbeArch::TILE_MULTIPLE) && w.is_multiple_of(ProbeArch::TILE_MULTIPLE),
             "{h}x{w} must be a multiple of {}",
             ProbeArch::TILE_MULTIPLE
         );
@@ -156,16 +155,7 @@ impl ProbeNet {
         loop {
             let mut x0 = 0usize;
             loop {
-                self.accumulate_tile(
-                    input,
-                    height,
-                    width,
-                    th,
-                    (x0, y0),
-                    margin,
-                    &mut sum,
-                    &mut weight,
-                )?;
+                self.accumulate_tile(input, height, width, th, (x0, y0), margin, &mut sum, &mut weight)?;
                 if x0 + th >= width {
                     break;
                 }
@@ -203,8 +193,15 @@ impl ProbeNet {
         weight: &mut [f32],
     ) -> Result<()> {
         let (x0, y0) = origin;
-        let patch =
-            crate::pack::extract_region(input, crate::IN_CHANNELS, height, width, tile, x0, y0);
+        let patch = crate::pack::extract_region(
+            input,
+            crate::IN_CHANNELS,
+            height,
+            width,
+            tile,
+            x0,
+            y0,
+        );
         let pred = self.run(&patch)?;
         let plane = tile * tile;
         for ty in 0..tile {
@@ -316,14 +313,7 @@ impl ProbeGi {
             Some(path) => Some(NrcNet::load(path, 1, height, width, device)?),
             None => None,
         };
-        Ok(Self::with_nrc_fuse(
-            unet,
-            nrc,
-            height,
-            width,
-            nrc_min_gap,
-            crate::nrc::NRC_CAP,
-        ))
+        Ok(Self::with_nrc_fuse(unet, nrc, height, width, nrc_min_gap, crate::nrc::NRC_CAP))
     }
 
     pub fn load_with_nrc_fuse(
@@ -340,14 +330,7 @@ impl ProbeGi {
             Some(path) => Some(NrcNet::load(path, 1, height, width, device)?),
             None => None,
         };
-        Ok(Self::with_nrc_fuse(
-            unet,
-            nrc,
-            height,
-            width,
-            nrc_min_gap,
-            nrc_cap,
-        ))
+        Ok(Self::with_nrc_fuse(unet, nrc, height, width, nrc_min_gap, nrc_cap))
     }
 
     /// Load from in-memory weight blobs (wasm / embedded assets).
@@ -366,14 +349,7 @@ impl ProbeGi {
             Some(bytes) => Some(NrcNet::load_bytes(bytes, 1, height, width, device)?),
             None => None,
         };
-        Ok(Self::with_nrc_fuse(
-            unet,
-            nrc,
-            height,
-            width,
-            nrc_min_gap,
-            nrc_cap,
-        ))
+        Ok(Self::with_nrc_fuse(unet, nrc, height, width, nrc_min_gap, nrc_cap))
     }
 
     pub fn unet(&self) -> &ProbeNet {
@@ -394,14 +370,7 @@ impl ProbeGi {
         let feat = crate::nrc::nrc_features(input, pixels);
         let nrc_out = nrc.run(&feat)?;
         let mut fused = beauty;
-        crate::nrc::fuse_beauty_with_cap(
-            &mut fused,
-            &nrc_out,
-            input,
-            pixels,
-            self.nrc_min_gap,
-            self.nrc_cap,
-        );
+        crate::nrc::fuse_beauty_with_cap(&mut fused, &nrc_out, input, pixels, self.nrc_min_gap, self.nrc_cap);
         Ok(fused)
     }
 }
@@ -670,7 +639,10 @@ fn albedo_spread(ar: f32, ag: f32, ab: f32) -> f32 {
 #[allow(dead_code)] // parked ablation variant — see the module's env-var switches
 fn lin_chroma(r: f32, g: f32, b: f32) -> f32 {
     let mean = (r + g + b) / 3.0;
-    (r - mean).abs().max((g - mean).abs()).max((b - mean).abs())
+    (r - mean)
+        .abs()
+        .max((g - mean).abs())
+        .max((b - mean).abs())
 }
 
 /// Linear DDGI pull on neutral surfaces when DDGI carries more wall chroma.
@@ -688,7 +660,8 @@ fn blend_room_context_on_neutral(input: &[f32], pred: &mut [f32], pixels: usize)
         if albedo_spread(ar, ag, ab) > 0.10 || mean < 0.45 {
             continue;
         }
-        let probe_avg = (input[i] + input[pixels + i] + input[2 * pixels + i]) / 3.0;
+        let probe_avg =
+            (input[i] + input[pixels + i] + input[2 * pixels + i]) / 3.0;
         if !(0.12..=0.68).contains(&probe_avg) {
             continue;
         }
@@ -978,10 +951,10 @@ mod tests {
                     let mut hi = f32::NEG_INFINITY;
                     for dy in 0..=2 * RADIUS {
                         for dx in 0..=2 * RADIUS {
-                            let yy = (y as i32 + dy as i32 - RADIUS as i32).clamp(0, h as i32 - 1)
-                                as usize;
-                            let xx = (x as i32 + dx as i32 - RADIUS as i32).clamp(0, w as i32 - 1)
-                                as usize;
+                            let yy = (y as i32 + dy as i32 - RADIUS as i32)
+                                .clamp(0, h as i32 - 1) as usize;
+                            let xx = (x as i32 + dx as i32 - RADIUS as i32)
+                                .clamp(0, w as i32 - 1) as usize;
                             let v = input[c * pixels + yy * w + xx];
                             lo = lo.min(v);
                             hi = hi.max(v);
@@ -1036,8 +1009,7 @@ mod tests {
         let params = init_params(&net, 0x5eed_1234);
         let tile = 16usize;
         let (h, w) = (16usize, 32usize);
-        let mut whole =
-            ProbeNet::new(net.clone(), params.clone(), 1, h, w, Device::Cpu).expect("whole");
+        let mut whole = ProbeNet::new(net.clone(), params.clone(), 1, h, w, Device::Cpu).expect("whole");
         let mut tiled = ProbeNet::new(net, params, 1, tile, tile, Device::Cpu).expect("tile");
         let pixels = h * w;
         let mut input = vec![0.0f32; IN_CHANNELS * pixels];

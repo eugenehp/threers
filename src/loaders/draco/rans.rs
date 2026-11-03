@@ -66,8 +66,7 @@ impl<'a> State<'a> {
                 if len < 4 {
                     return Err(DracoError::Corrupt);
                 }
-                let v =
-                    u32::from_le_bytes([buf[len - 4], buf[len - 3], buf[len - 2], buf[len - 1]]);
+                let v = u32::from_le_bytes([buf[len - 4], buf[len - 3], buf[len - 2], buf[len - 1]]);
                 (len - 4, v & 0x3fff_ffff)
             }
         };
@@ -75,7 +74,11 @@ impl<'a> State<'a> {
         if state >= base.saturating_mul(IO_BASE) {
             return Err(DracoError::Corrupt);
         }
-        Ok(State { buf, offset, state })
+        Ok(State {
+            buf,
+            offset,
+            state,
+        })
     }
 }
 
@@ -106,8 +109,7 @@ impl<'a> BitDecoder<'a> {
         let p = P8_PRECISION - self.prob_zero as u32;
         if self.state.state < L_BASE && self.state.offset > 0 {
             self.state.offset -= 1;
-            self.state.state =
-                self.state.state * IO_BASE + self.state.buf[self.state.offset] as u32;
+            self.state.state = self.state.state * IO_BASE + self.state.buf[self.state.offset] as u32;
         }
         let x = self.state.state;
         let quotient = x / P8_PRECISION;

@@ -135,11 +135,7 @@ impl Grid {
     /// World-space bounds of one cell.
     fn cell_bounds(&self, x: usize, y: usize, z: usize) -> Aabb {
         let min = self.origin
-            + Vector3::new(
-                x as f32 * self.cell,
-                y as f32 * self.cell,
-                z as f32 * self.cell,
-            );
+            + Vector3::new(x as f32 * self.cell, y as f32 * self.cell, z as f32 * self.cell);
         Aabb::new(min, min + Vector3::new(self.cell, self.cell, self.cell))
     }
 
@@ -471,12 +467,7 @@ pub fn decompose_to_shape(mesh: &TriMesh, config: &DecompositionConfig) -> Optio
         _ => Some(Shape::compound(
             parts
                 .into_iter()
-                .map(|h| {
-                    (
-                        Isometry::IDENTITY,
-                        Shape::ConvexHull(std::sync::Arc::new(h)),
-                    )
-                })
+                .map(|h| (Isometry::IDENTITY, Shape::ConvexHull(std::sync::Arc::new(h))))
                 .collect(),
         )),
     }
@@ -517,7 +508,8 @@ fn best_split(piece: &Piece, config: &DecompositionConfig) -> Option<(Piece, Pie
             if at <= lo || at > piece.bounds[1][axis] {
                 continue;
             }
-            let (left, right): (Vec<_>, Vec<_>) = piece.cells.iter().partition(|c| c[axis] < at);
+            let (left, right): (Vec<_>, Vec<_>) =
+                piece.cells.iter().partition(|c| c[axis] < at);
             let (Some(left), Some(right)) = (Piece::new(left), Piece::new(right)) else {
                 continue;
             };
@@ -739,11 +731,7 @@ mod tests {
         // if the gap survives, the decomposition is doing its job.
         let mesh = horseshoe();
         let parts = decompose(&mesh, &DecompositionConfig::default());
-        assert!(
-            parts.len() >= 3,
-            "a U needs at least three pieces, got {}",
-            parts.len()
-        );
+        assert!(parts.len() >= 3, "a U needs at least three pieces, got {}", parts.len());
 
         // A point in the middle of the gap must be outside every piece.
         let gap = Vector3::new(1.5, 2.0, 0.5);
@@ -869,11 +857,9 @@ mod tests {
             parts.len()
         );
         // And whatever it produced must not be usable as a lie.
-        assert!(
-            decompose_to_shape(&mesh, &DecompositionConfig::default())
-                .is_some_and(|s| { s.mass_properties(1.0).mass >= 0.0 })
-                || true
-        );
+        assert!(decompose_to_shape(&mesh, &DecompositionConfig::default()).is_some_and(|s| {
+            s.mass_properties(1.0).mass >= 0.0
+        }) || true);
     }
 
     #[test]
@@ -942,3 +928,4 @@ mod tests {
         ));
     }
 }
+

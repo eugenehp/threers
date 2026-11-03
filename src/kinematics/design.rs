@@ -409,7 +409,10 @@ fn assemble_hydraulic(
     for (k, name) in [(1.0, "hose_p"), (-1.0, "hose_t")] {
         let start = add(port, scale(side, k * 5.0));
         // Stay outside the can, land near proximal on the same side.
-        let end = add(add(proximal, scale(side, k * 12.0)), scale(along, -8.0));
+        let end = add(
+            add(proximal, scale(side, k * 12.0)),
+            scale(along, -8.0),
+        );
         let (o, dir, len) = segment(start, end);
         parts.push(DesignPart {
             role: PartRole::Hose,
@@ -505,16 +508,8 @@ fn assemble_tendon(
             radius_mm: t.cable_od_mm * 0.5,
             length_mm: len,
             rgb: tint,
-            metalness: if t.material.name == "steel" {
-                0.85
-            } else {
-                0.05
-            },
-            roughness: if t.material.name == "steel" {
-                0.35
-            } else {
-                0.7
-            },
+            metalness: if t.material.name == "steel" { 0.85 } else { 0.05 },
+            roughness: if t.material.name == "steel" { 0.35 } else { 0.7 },
             joint: ji as i32,
         });
     }
@@ -616,11 +611,7 @@ mod tests {
             .find(|p| p.role == PartRole::Hose)
             .expect("hose");
         assert!(hose.radius_mm < 4.0);
-        assert!(
-            hose.length_mm < 250.0,
-            "hose should track the link, got {}",
-            hose.length_mm
-        );
+        assert!(hose.length_mm < 250.0, "hose should track the link, got {}", hose.length_mm);
         assert!(parts.iter().any(|p| p.role == PartRole::VaneBody));
     }
 

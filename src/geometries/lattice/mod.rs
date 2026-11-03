@@ -1490,7 +1490,12 @@ impl<'a> Lattice<'a> {
 
     /// Over a window of `cells` cells per axis rather than one — see
     /// [`homogenize_window`](Self::homogenize_window), which this mirrors.
-    pub fn conductivity_window(&self, cells: usize, resolution: usize, solid: f64) -> Conductivity {
+    pub fn conductivity_window(
+        &self,
+        cells: usize,
+        resolution: usize,
+        solid: f64,
+    ) -> Conductivity {
         let (occupancy, origin, window, voxels) = self.periodic_window(cells, resolution);
         homogenize_conduction(occupancy, origin, window, voxels, solid, self.solver)
     }
@@ -1623,7 +1628,11 @@ impl<'a> Lattice<'a> {
             Some(trim) => crate::utils::parallel::par_map(&points, |p| trim(*p)),
             None => Vec::new(),
         };
-        DensityGrid { points, cuts, cell }
+        DensityGrid {
+            points,
+            cuts,
+            cell,
+        }
     }
 
     /// Fraction of the part covered by `grid` that lands in solid.
@@ -2765,21 +2774,14 @@ mod tests {
         assert!(along[2] < 0.01, "across {}", along[2]);
         assert!(k.anisotropy() > 50.0, "{}", k.anisotropy());
         // Nearly every gram is in a plate, and every plate runs along the flow.
-        assert!(
-            k.tortuosity_factor(1.0) > 0.9,
-            "{}",
-            k.tortuosity_factor(1.0)
-        );
+        assert!(k.tortuosity_factor(1.0) > 0.9, "{}", k.tortuosity_factor(1.0));
         // A random field's plates are not laid out on the axes to the last
         // degree, so the tensor has small off-diagonal terms and the principal
         // conductivity is a little above the best axis — never below it, which
         // is what the largest eigenvalue of a symmetric matrix always is.
         let principal = k.principal();
         let best_axis = along[0].max(along[1]);
-        assert!(
-            principal[0] >= best_axis - 1e-9,
-            "{principal:?} vs {along:?}"
-        );
+        assert!(principal[0] >= best_axis - 1e-9, "{principal:?} vs {along:?}");
         assert!(principal[0] < best_axis * 1.1, "{principal:?} vs {along:?}");
     }
 
@@ -2839,11 +2841,7 @@ mod tests {
         // one: sizing for the nominal wall is how a graded part comes out as
         // gravel where it is thinnest.
         let resolved = build(true).resolve_walls(3.0);
-        assert!(
-            resolved.wall_samples() >= 3.0,
-            "{}",
-            resolved.wall_samples()
-        );
+        assert!(resolved.wall_samples() >= 3.0, "{}", resolved.wall_samples());
         let nominal = build(false).resolve_walls(3.0);
         assert!(
             resolved.sample_grid()[0] > nominal.sample_grid()[0],
@@ -2857,8 +2855,8 @@ mod tests {
     fn a_region_can_be_used_twice() {
         // Cloning is a reference count, so filling a shell and conforming to
         // the same surface costs one region, not two.
-        let shell =
-            Region::sphere(Vector3::ZERO, 8.0).difference(Region::sphere(Vector3::ZERO, 5.0));
+        let shell = Region::sphere(Vector3::ZERO, 8.0)
+            .difference(Region::sphere(Vector3::ZERO, 5.0));
         let geom = Lattice::new(LatticeKind::Tpms(Tpms::Gyroid))
             .conform(Conform::depth(shell.clone()))
             .fill(shell)
@@ -2883,11 +2881,7 @@ mod tests {
         };
         let octet = measure(Strut::Octet);
         let bcc = measure(Strut::Bcc);
-        assert!(
-            octet.resolved(),
-            "octet unresolved: {:?}",
-            octet.efficiency()
-        );
+        assert!(octet.resolved(), "octet unresolved: {:?}", octet.efficiency());
         assert!(bcc.resolved(), "bcc unresolved: {:?}", bcc.efficiency());
         assert!(
             octet.efficiency()[2] > bcc.efficiency()[2],
@@ -3770,3 +3764,4 @@ mod tests {
         );
     }
 }
+

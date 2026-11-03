@@ -23,7 +23,7 @@
 
 use crate::animation::{AnimationClip, KeyframeTrack, TrackTarget};
 use crate::core::{
-    Bone, BufferAttribute, BufferGeometry, MorphTarget, Object3D, ObjectArena, ObjectId, Skeleton,
+    BufferAttribute, BufferGeometry, Bone, MorphTarget, Object3D, ObjectArena, ObjectId, Skeleton,
 };
 use crate::math::{Matrix4, Quaternion, Vector3};
 
@@ -248,17 +248,13 @@ pub fn blend_shapes(prim: &UsdPrim, layer: &UsdLayer, vertices: usize) -> Vec<Mo
     let mut out = Vec::new();
     for (i, path) in targets.iter().enumerate() {
         // A target may be named by path or sit as a child of the mesh.
-        let Some(shape) = layer.prim_at(path).or_else(|| {
-            prim.children
-                .iter()
-                .find(|c| Some(c.name.as_str()) == path.rsplit('/').next())
-        }) else {
+        let Some(shape) = layer
+            .prim_at(path)
+            .or_else(|| prim.children.iter().find(|c| Some(c.name.as_str()) == path.rsplit('/').next()))
+        else {
             continue;
         };
-        let offsets = shape
-            .value("offsets")
-            .map(|v| v.flat_f32())
-            .unwrap_or_default();
+        let offsets = shape.value("offsets").map(|v| v.flat_f32()).unwrap_or_default();
         if offsets.is_empty() {
             continue;
         }
@@ -318,9 +314,7 @@ pub fn blend_shape_tracks(
     }) else {
         return Vec::new();
     };
-    let Some(samples) = anim
-        .value("blendShapeWeights")
-        .and_then(|v| v.samples().map(<[_]>::to_vec))
+    let Some(samples) = anim.value("blendShapeWeights").and_then(|v| v.samples().map(<[_]>::to_vec))
     else {
         return Vec::new();
     };
@@ -469,7 +463,12 @@ pub fn animation(
 /// A `SkelAnimation` keys *all* joints at once — each sample is an array with
 /// one entry per joint — so a single joint's curve is a column out of that,
 /// not a row.
-fn channel(prim: &UsdPrim, name: &str, slot: usize, lanes: usize) -> Option<(Vec<f64>, Vec<f32>)> {
+fn channel(
+    prim: &UsdPrim,
+    name: &str,
+    slot: usize,
+    lanes: usize,
+) -> Option<(Vec<f64>, Vec<f32>)> {
     let value = prim.value(name)?;
     let samples = value.samples()?;
     if samples.is_empty() {
@@ -522,8 +521,8 @@ fn matrices(value: Option<&UsdValue>) -> Vec<Matrix4> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{parse::parse, scene::to_scene, scene::UsdScene};
     use super::*;
+    use super::super::{parse::parse, scene::to_scene, scene::UsdScene};
     use crate::animation::TrackValues;
     use crate::core::ObjectKind;
 
@@ -563,10 +562,7 @@ mod tests {
     fn a_bound_mesh_becomes_skinned() {
         let scene = stage();
         let ObjectKind::SkinnedMesh(mesh) = &find(&scene, "Body").kind else {
-            panic!(
-                "expected a skinned mesh, got {:?}",
-                find(&scene, "Body").kind
-            );
+            panic!("expected a skinned mesh, got {:?}", find(&scene, "Body").kind);
         };
         assert_eq!(mesh.skeleton.bones.len(), 3, "three joints");
 
@@ -698,27 +694,15 @@ mod blend_tests {
         assert_eq!(morphs.targets.len(), 2);
 
         // `Smile` names points 2 and 3 of a four-point quad.
-        let smile = morphs
-            .targets
-            .iter()
-            .find(|t| t.name == "smile")
-            .expect("smile");
+        let smile = morphs.targets.iter().find(|t| t.name == "smile").expect("smile");
         assert_eq!(smile.position_delta.len(), 4 * 3, "one delta per vertex");
-        assert_eq!(
-            &smile.position_delta[0..6],
-            &[0.0; 6],
-            "points 0 and 1 unmoved"
-        );
+        assert_eq!(&smile.position_delta[0..6], &[0.0; 6], "points 0 and 1 unmoved");
         assert_eq!(smile.position_delta[7], 0.5, "point 2 moved up");
         assert_eq!(smile.position_delta[10], 0.5, "point 3 moved up");
 
         // `Frown` names no indices, so its offsets are for every vertex in
         // order.
-        let frown = morphs
-            .targets
-            .iter()
-            .find(|t| t.name == "frown")
-            .expect("frown");
+        let frown = morphs.targets.iter().find(|t| t.name == "frown").expect("frown");
         assert_eq!(frown.position_delta.len(), 4 * 3);
         assert_eq!(frown.position_delta[1], -0.5);
         assert_eq!(frown.position_delta[10], -0.5);

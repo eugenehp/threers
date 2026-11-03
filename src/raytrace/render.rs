@@ -18,17 +18,15 @@ use crate::cameras::Camera;
 use crate::core::Layers;
 use crate::scene::Scene;
 
-use super::backend::{
-    intersect_box, probe_focus_distance, CpuBackend, RaytraceBackend, RaytraceError, RenderRect,
-};
+use super::backend::{intersect_box, probe_focus_distance, CpuBackend, RaytraceBackend, RaytraceError, RenderRect};
+use crate::math::{Box3, Vector3};
 use super::camera::RtCamera;
 use super::checkpoint::{encode_exr_rgba, FilmCheckpoint};
 use super::denoise::{self, DenoiseGuides, DenoiseParams};
-use super::film::Film;
 use super::fingerprint::SceneFingerprint;
+use super::film::Film;
 use super::scene::{BuildReport, RaytraceScene};
 use super::settings::{Aov, RaytraceSettings};
-use crate::math::{Box3, Vector3};
 
 /// How [`RaytraceRenderer::render_progressive`] paces its updates.
 #[derive(Debug, Clone)]
@@ -128,7 +126,11 @@ impl ProgressiveOptions {
 
     pub fn with_autosave(mut self, every: u32, path: impl Into<String>) -> Self {
         self.autosave_every = every;
-        self.autosave_path = if every > 0 { Some(path.into()) } else { None };
+        self.autosave_path = if every > 0 {
+            Some(path.into())
+        } else {
+            None
+        };
         self
     }
 }
@@ -606,10 +608,9 @@ impl RaytraceRenderer {
             }
         };
         let sample_range = self.film.sample_range();
-        let converged_fraction = self.film.converged_fraction(
-            self.settings.adaptive_threshold,
-            self.settings.adaptive_min_samples,
-        );
+        let converged_fraction = self
+            .film
+            .converged_fraction(self.settings.adaptive_threshold, self.settings.adaptive_min_samples);
         RenderStats {
             efficiency,
             sample_range,
@@ -702,8 +703,7 @@ impl RaytraceRenderer {
         }
         if self.settings.motion_blur_shutter > 0.0 {
             if let Some(prev) = self.prev_camera.as_ref() {
-                rt_camera =
-                    rt_camera.with_motion_previous(prev.clone(), self.settings.motion_blur_shutter);
+                rt_camera = rt_camera.with_motion_previous(prev.clone(), self.settings.motion_blur_shutter);
             }
         }
         rt_camera
@@ -760,7 +760,11 @@ impl RaytraceRenderer {
                 samples,
                 rect,
             )
-        } else if let Some(cpu) = self.backend.as_any_mut().downcast_mut::<CpuBackend>() {
+        } else if let Some(cpu) = self
+            .backend
+            .as_any_mut()
+            .downcast_mut::<CpuBackend>()
+        {
             cpu.render_rect(
                 scene,
                 camera,
@@ -784,7 +788,11 @@ impl RaytraceRenderer {
 
     /// Trace `samples` per pixel across a grid of tiles. Useful for viewport
     /// schedulers that want to spread work in spatial chunks.
-    pub fn accumulate_tiles(&mut self, tile_size: u32, samples: u32) -> Result<(), RaytraceError> {
+    pub fn accumulate_tiles(
+        &mut self,
+        tile_size: u32,
+        samples: u32,
+    ) -> Result<(), RaytraceError> {
         let (w, h) = self.size();
         for rect in RenderRect::tile_grid(w, h, tile_size) {
             self.accumulate_region(rect.x, rect.y, rect.width, rect.height, samples)?;
@@ -861,7 +869,11 @@ impl RaytraceRenderer {
                 samples,
                 tiles,
             )
-        } else if let Some(cpu) = self.backend.as_any_mut().downcast_mut::<CpuBackend>() {
+        } else if let Some(cpu) = self
+            .backend
+            .as_any_mut()
+            .downcast_mut::<CpuBackend>()
+        {
             cpu.render_regions(
                 scene,
                 camera,
@@ -961,10 +973,7 @@ impl RaytraceRenderer {
         }
         let threshold = self.settings.adaptive_threshold;
         if threshold > 0.0
-            && self
-                .film
-                .converged_fraction(threshold, self.settings.adaptive_min_samples)
-                >= 1.0
+            && self.film.converged_fraction(threshold, self.settings.adaptive_min_samples) >= 1.0
         {
             return false;
         }
@@ -978,9 +987,7 @@ impl RaytraceRenderer {
         if threshold <= 0.0 {
             return self.film.samples() >= self.settings.samples_per_pixel;
         }
-        self.film
-            .converged_fraction(threshold, self.settings.adaptive_min_samples)
-            >= 1.0
+        self.film.converged_fraction(threshold, self.settings.adaptive_min_samples) >= 1.0
     }
 
     /// Prepare and trace `samples_per_pixel` in one call.
@@ -1120,7 +1127,8 @@ impl RaytraceRenderer {
         scene: &mut Scene,
         camera: &dyn Camera,
     ) -> Result<Vec<u8>, String> {
-        self.render(scene, camera).map_err(|e| e.to_string())?;
+        self.render(scene, camera)
+            .map_err(|e| e.to_string())?;
         self.encode_exr()
     }
 
@@ -1345,12 +1353,12 @@ impl RaytraceRenderer {
 mod tests {
     use super::*;
     use crate::cameras::PerspectiveCamera;
+    use crate::raytrace::gpu::GpuBackend;
     use crate::core::Object3D;
     use crate::geometries::BoxGeometry;
     use crate::lights::AmbientLight;
     use crate::materials::{Material, StandardMaterial};
     use crate::math::{Color, Vector3};
-    use crate::raytrace::gpu::GpuBackend;
 
     fn scene_and_camera() -> (Scene, PerspectiveCamera) {
         let mut scene = Scene::new();
@@ -1595,25 +1603,15 @@ mod tests {
         };
         let (mut scene, cam) = scene_and_camera();
         let mut r = RaytraceRenderer::with_backend(16, 16, Box::new(gpu));
-        r.set_settings(
-            RaytraceSettings::default()
-                .with_samples(8)
-                .with_denoise(false),
-        );
+        r.set_settings(RaytraceSettings::default().with_samples(8).with_denoise(false));
         r.prepare(&mut scene, &cam);
-        assert!(
-            !r.gpu_scene_cached(),
-            "BVH uploads on first trace, not prepare"
-        );
+        assert!(!r.gpu_scene_cached(), "BVH uploads on first trace, not prepare");
         r.accumulate(1).unwrap();
         assert!(r.gpu_scene_cached());
         let mut cam2 = cam;
         cam2.position.x += 0.5;
         assert!(!r.prepare_if_changed(&mut scene, &cam2));
-        assert!(
-            r.gpu_scene_cached(),
-            "camera-only update must not repack BVH"
-        );
+        assert!(r.gpu_scene_cached(), "camera-only update must not repack BVH");
         assert_eq!(r.samples(), 0);
     }
 

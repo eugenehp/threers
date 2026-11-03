@@ -180,10 +180,8 @@ fn paint_lateral_wall_chroma(
     let mut right_w = 0.0f32;
     for y in 0..gy {
         for z in 0..gz {
-            for (x, acc, wacc) in [
-                (0usize, &mut left, &mut left_w),
-                (gx - 1, &mut right, &mut right_w),
-            ] {
+            for (x, acc, wacc) in [(0usize, &mut left, &mut left_w), (gx - 1, &mut right, &mut right_w)]
+            {
                 let cell = idx(x, y, z);
                 let rgb = [
                     crate::expand(wall_cells[cell]),
@@ -228,7 +226,8 @@ fn paint_lateral_wall_chroma(
             wall[c] = left[c] * (1.0 - t) + right[c] * t;
             local[c] = crate::expand(colour[c * n + i]);
         }
-        if rgb_chroma(wall[0], wall[1], wall[2]) + 0.004 <= rgb_chroma(local[0], local[1], local[2])
+        if rgb_chroma(wall[0], wall[1], wall[2]) + 0.004
+            <= rgb_chroma(local[0], local[1], local[2])
         {
             continue;
         }
@@ -355,16 +354,16 @@ mod tests {
     #[test]
     fn visibility_is_highest_at_cell_centres() {
         let ctx = DdgiContext {
-            world: &[[0.0, 0.0, 0.0], [0.9, 0.0, 0.0]],
+            world: &[
+                [0.0, 0.0, 0.0],
+                [0.9, 0.0, 0.0],
+            ],
             bounds_min: [-1.0, -1.0, -1.0],
             bounds_max: [1.0, 1.0, 1.0],
         };
         let probe = vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0];
         let (_, vis) = ddgi_planes_with_visibility(1, 2, &probe, &ctx);
-        assert!(
-            vis[0] >= vis[1],
-            "centre hit should be at least as visible as edge hit"
-        );
+        assert!(vis[0] >= vis[1], "centre hit should be at least as visible as edge hit");
     }
 
     #[test]

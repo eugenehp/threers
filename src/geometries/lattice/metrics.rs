@@ -194,8 +194,7 @@ impl<'a> Lattice<'a> {
         let cell = self.resolved_cell();
         let size = self.bounds.size();
         let res = samples_per_cell.max(2) as f32;
-        let count =
-            |extent: f32, cell: f32| (((extent / cell.max(1e-6)) * res).ceil() as usize).max(2);
+        let count = |extent: f32, cell: f32| (((extent / cell.max(1e-6)) * res).ceil() as usize).max(2);
         let mut dims = [
             count(size.x, cell.x),
             count(size.y, cell.y),
@@ -267,8 +266,7 @@ impl<'a> Lattice<'a> {
                 |s| s == 2 || s == 0, // walls, and the edge of the part
                 |s| s == 1,
             );
-        let ligament_thickness =
-            2.0 * max_inscribed(&states, dims, spacing, |s| s != 2, |s| s == 2);
+        let ligament_thickness = 2.0 * max_inscribed(&states, dims, spacing, |s| s != 2, |s| s == 2);
 
         let void_volume = part_volume - solid_volume;
         let specific_surface_area = if part_volume > 0.0 {
@@ -678,12 +676,7 @@ mod tests {
             .metrics_at(8);
         assert!(m.relative_density > 0.99, "{}", m.relative_density);
         assert!(m.pore_diameter < 1e-3, "{}", m.pore_diameter);
-        assert!(
-            m.wetted_area < 0.05 * m.surface_area,
-            "{} of {}",
-            m.wetted_area,
-            m.surface_area
-        );
+        assert!(m.wetted_area < 0.05 * m.surface_area, "{} of {}", m.wetted_area, m.surface_area);
         // The block's outside is 6 × 4 × 4.
         assert!((m.surface_area - 96.0).abs() < 5.0, "{}", m.surface_area);
         assert!((m.part_volume - 64.0).abs() < 1.0, "{}", m.part_volume);
@@ -711,18 +704,10 @@ mod tests {
         );
         for m in [sheet, strut] {
             // The density asked for is the density measured.
-            assert!(
-                (m.relative_density - 0.2).abs() < 0.02,
-                "{}",
-                m.relative_density
-            );
+            assert!((m.relative_density - 0.2).abs() < 0.02, "{}", m.relative_density);
             assert!((m.porosity - 0.8).abs() < 0.02, "{}", m.porosity);
             assert!((m.part_volume - 8000.0).abs() < 100.0, "{}", m.part_volume);
-            assert!(
-                m.pore_diameter > 0.0 && m.pore_diameter < 20.0,
-                "{}",
-                m.pore_diameter
-            );
+            assert!(m.pore_diameter > 0.0 && m.pore_diameter < 20.0, "{}", m.pore_diameter);
             assert!(m.permeability > 0.0 && m.permeability.is_finite());
             assert!(m.hydraulic_diameter > 0.0);
             // And it sampled fine enough to mean any of it.
@@ -758,20 +743,12 @@ mod tests {
             "{}",
             gyroid.largest_void_fraction
         );
-        assert!(
-            gyroid.percolates.iter().all(|&p| p),
-            "{:?}",
-            gyroid.percolates
-        );
+        assert!(gyroid.percolates.iter().all(|&p| p), "{:?}", gyroid.percolates);
         assert!(gyroid.open_porosity > 0.95 * gyroid.porosity);
 
         // An open-cell foam is all one space.
         let foam = build(LatticeKind::Stochastic(Stochastic::Voronoi));
-        assert!(
-            foam.largest_void_fraction > 0.9,
-            "{}",
-            foam.largest_void_fraction
-        );
+        assert!(foam.largest_void_fraction > 0.9, "{}", foam.largest_void_fraction);
         assert!(foam.percolates.iter().all(|&p| p), "{:?}", foam.percolates);
     }
 
@@ -827,11 +804,7 @@ mod tests {
             sealed.open_porosity,
             sealed.porosity
         );
-        assert!(
-            !sealed.percolates.iter().any(|&p| p),
-            "{:?}",
-            sealed.percolates
-        );
+        assert!(!sealed.percolates.iter().any(|&p| p), "{:?}", sealed.percolates);
     }
 
     #[test]

@@ -21,7 +21,9 @@ use crate::core::{BufferAttribute, BufferGeometry, InstancedMesh, LineSegments, 
 use crate::geometries::{
     BoxGeometry, CapsuleGeometry, ConeGeometry, CylinderGeometry, PlaneGeometry, SphereGeometry,
 };
-use crate::lights::{AmbientLight, DirectionalLight, Light, PointLight, RectAreaLight, SpotLight};
+use crate::lights::{
+    AmbientLight, DirectionalLight, Light, PointLight, RectAreaLight, SpotLight,
+};
 use crate::materials::{Material, PointsMaterial};
 use crate::math::{Color, Matrix4, Quaternion, Vector3};
 
@@ -89,24 +91,19 @@ fn light_number(prim: &UsdPrim, name: &str, fallback: f32) -> f32 {
 /// lighter states a stop rather than a multiplier.
 pub fn light(prim: &UsdPrim) -> Option<Light> {
     let colour = colour(prim, Color::WHITE);
-    let intensity =
-        light_number(prim, "intensity", 1.0) * light_number(prim, "exposure", 0.0).exp2();
+    let intensity = light_number(prim, "intensity", 1.0) * light_number(prim, "exposure", 0.0).exp2();
 
     Some(match prim.type_name.as_str() {
         // The sun: parallel rays, so only the direction matters.
         "DistantLight" => Light::Directional(DirectionalLight::new(colour, intensity)),
         // A sphere with a cone on it is a spotlight; without one it is a point.
         "SphereLight" | "DiskLight" | "CylinderLight" => {
-            match prim
-                .value("inputs:shaping:cone:angle")
-                .and_then(|v| v.as_f64())
-            {
+            match prim.value("inputs:shaping:cone:angle").and_then(|v| v.as_f64()) {
                 Some(angle) => {
                     let mut spot = SpotLight::new(colour, intensity);
                     // USD states the cone's half-angle in degrees.
                     spot.angle = (angle as f32).to_radians();
-                    spot.penumbra =
-                        light_number(prim, "shaping:cone:softness", 0.0).clamp(0.0, 1.0);
+                    spot.penumbra = light_number(prim, "shaping:cone:softness", 0.0).clamp(0.0, 1.0);
                     Light::Spot(spot)
                 }
                 None => Light::Point(PointLight::new(colour, intensity)),
@@ -335,11 +332,7 @@ pub fn camera(prim: &UsdPrim, object: crate::core::ObjectId) -> UsdCamera {
         out.orthographic = Some(OrthographicCamera::new(-w, w, h, -h, near, far));
     } else {
         let fov = 2.0 * (vertical * 0.5 / focal).atan();
-        let aspect = if vertical > 0.0 {
-            horizontal / vertical
-        } else {
-            1.0
-        };
+        let aspect = if vertical > 0.0 { horizontal / vertical } else { 1.0 };
         let mut camera = PerspectiveCamera::new(fov.to_degrees(), aspect, near, far);
         // Depth of field, which USD states the same way a lens does: where it
         // is focused and how far the iris is open.
@@ -398,10 +391,7 @@ pub fn point_instancer(
         .value("orientations")
         .map(|v| v.flat_f32())
         .unwrap_or_default();
-    let scales = prim
-        .value("scales")
-        .map(|v| v.flat_f32())
-        .unwrap_or_default();
+    let scales = prim.value("scales").map(|v| v.flat_f32()).unwrap_or_default();
     // `invisibleIds` is how a shot turns off individual instances without
     // rebuilding the set.
     let hidden: Vec<i64> = prim
@@ -422,8 +412,11 @@ pub fn point_instancer(
             .filter(|i| indices.get(*i).copied().unwrap_or(0) as usize == slot)
             .filter(|i| !hidden.contains(&(*i as i64)))
             .map(|i| {
-                let position =
-                    Vector3::new(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
+                let position = Vector3::new(
+                    positions[i * 3],
+                    positions[i * 3 + 1],
+                    positions[i * 3 + 2],
+                );
                 // USD writes a quaternion real part first; this one takes it
                 // last.
                 let rotation = match orientations.get(i * 4..i * 4 + 4) {
@@ -452,7 +445,12 @@ pub fn point_instancer(
 pub fn is_light(type_name: &str) -> bool {
     matches!(
         type_name,
-        "DistantLight" | "SphereLight" | "DiskLight" | "CylinderLight" | "RectLight" | "DomeLight"
+        "DistantLight"
+            | "SphereLight"
+            | "DiskLight"
+            | "CylinderLight"
+            | "RectLight"
+            | "DomeLight"
     )
 }
 
@@ -466,8 +464,8 @@ pub fn is_gprim(type_name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{parse::parse, scene::to_scene, scene::UsdScene};
     use super::*;
+    use super::super::{parse::parse, scene::to_scene, scene::UsdScene};
     use crate::core::{Object3D, ObjectId, ObjectKind};
 
     fn stage() -> UsdScene {
@@ -491,9 +489,7 @@ mod tests {
 
     fn names(scene: &UsdScene) -> Vec<String> {
         fn walk(scene: &UsdScene, id: ObjectId, out: &mut Vec<String>) {
-            let Some(node) = scene.arena.get(id) else {
-                return;
-            };
+            let Some(node) = scene.arena.get(id) else { return };
             out.push(node.name.clone());
             for child in &node.children {
                 walk(scene, *child, out);
@@ -513,10 +509,7 @@ mod tests {
         let scene = stage();
 
         let ObjectKind::Light(Light::Directional(sun)) = &find(&scene, "Sun").kind else {
-            panic!(
-                "DistantLight should be directional, got {:?}",
-                find(&scene, "Sun").kind
-            );
+            panic!("DistantLight should be directional, got {:?}", find(&scene, "Sun").kind);
         };
         // Intensity 3 at exposure 1 is three doubled.
         assert!((sun.intensity - 6.0).abs() < 1e-5, "{}", sun.intensity);
@@ -543,16 +536,9 @@ mod tests {
     fn a_shaped_light_is_a_spot() {
         let scene = stage();
         let ObjectKind::Light(Light::Spot(torch)) = &find(&scene, "Torch").kind else {
-            panic!(
-                "a ShapingAPI cone should make a spot, got {:?}",
-                find(&scene, "Torch").kind
-            );
+            panic!("a ShapingAPI cone should make a spot, got {:?}", find(&scene, "Torch").kind);
         };
-        assert!(
-            (torch.angle - 25f32.to_radians()).abs() < 1e-5,
-            "{}",
-            torch.angle
-        );
+        assert!((torch.angle - 25f32.to_radians()).abs() < 1e-5, "{}", torch.angle);
         assert!((torch.penumbra - 0.4).abs() < 1e-5);
     }
 
@@ -630,11 +616,7 @@ mod tests {
         assert!((perspective.aspect - 1.5).abs() < 1e-5);
         assert_eq!((perspective.near, perspective.far), (0.1, 500.0));
 
-        let ortho = scene
-            .cameras
-            .iter()
-            .find(|c| c.name == "Ortho")
-            .expect("Ortho");
+        let ortho = scene.cameras.iter().find(|c| c.name == "Ortho").expect("Ortho");
         let orthographic = ortho.orthographic.as_ref().expect("orthographic");
         assert_eq!((orthographic.left, orthographic.right), (-50.0, 50.0));
         assert!(eye.perspective.is_some() && ortho.perspective.is_none());
@@ -645,16 +627,10 @@ mod tests {
     #[test]
     fn purpose_and_visibility_are_honoured() {
         let scene = stage();
-        assert!(
-            !find(&scene, "Hidden").visible,
-            "invisible should not be visible"
-        );
+        assert!(!find(&scene, "Hidden").visible, "invisible should not be visible");
 
         let names = names(&scene);
-        assert!(
-            names.contains(&"Hidden".to_string()),
-            "invisible still exists"
-        );
+        assert!(names.contains(&"Hidden".to_string()), "invisible still exists");
         assert!(
             !names.contains(&"GuideOnly".to_string()),
             "guide geometry should not be in the scene: {names:?}"
@@ -712,11 +688,7 @@ mod tests {
 
         let third = mesh.transforms[1].elements;
         assert_eq!(third[12], 10.0);
-        assert!(
-            (third[0] - 0.5).abs() < 1e-5,
-            "half scale, got {}",
-            third[0]
-        );
+        assert!((third[0] - 0.5).abs() < 1e-5, "half scale, got {}", third[0]);
     }
 
     /// `invisibleIds` turns instances off without rebuilding the set.
@@ -764,9 +736,7 @@ mod tests {
         );
         assert_eq!(binary.cameras.len(), text.cameras.len());
         assert_eq!(names(&binary), names(&text));
-        for name in [
-            "Sun", "Bulb", "Panel", "Torch", "Box", "Ball", "Dust", "Hair",
-        ] {
+        for name in ["Sun", "Bulb", "Panel", "Torch", "Box", "Ball", "Dust", "Hair"] {
             let a = format!("{:?}", std::mem::discriminant(&find(&text, name).kind));
             let b = format!("{:?}", std::mem::discriminant(&find(&binary, name).kind));
             assert_eq!(a, b, "{name} came out as a different kind of node");

@@ -203,10 +203,7 @@ pub(crate) fn add_power_line(
         }
         // Six conductors and an earth wire, sagging between this tower and the
         // next.
-        let (nx, nz) = (
-            from.0 + dx * (t + 1.0 / n as f32),
-            from.1 + dz * (t + 1.0 / n as f32),
-        );
+        let (nx, nz) = (from.0 + dx * (t + 1.0 / n as f32), from.1 + dz * (t + 1.0 / n as f32));
         for (ty, arm, sag) in [
             (0.72f32, h * 0.30, 2.6f32),
             (0.72, h * 0.18, 2.6),
@@ -311,16 +308,7 @@ pub(crate) fn add_power_station(b: &mut Batches, cx: f32, cz: f32, rng: &mut Rng
                 false,
             );
         }
-        add_plume(
-            b,
-            tx,
-            h,
-            tz,
-            foot * 0.34,
-            h * 1.15,
-            Color::from_hex(0xeef1f4),
-            rng,
-        );
+        add_plume(b, tx, h, tz, foot * 0.34, h * 1.15, Color::from_hex(0xeef1f4), rng);
     }
 
     // --- Turbine hall: one long shed, because that is what they are.
@@ -427,19 +415,9 @@ pub(crate) fn add_port(
         (quay - depth, quay)
     };
     let r = if along_x {
-        Rect {
-            x0: lo,
-            z0: d0,
-            x1: hi,
-            z1: d1,
-        }
+        Rect { x0: lo, z0: d0, x1: hi, z1: d1 }
     } else {
-        Rect {
-            x0: d0,
-            z0: lo,
-            x1: d1,
-            z1: hi,
-        }
+        Rect { x0: d0, z0: lo, x1: d1, z1: hi }
     };
     if !b.occ.try_claim([r.x0, r.z0, r.x1, r.z1]) {
         return false;
@@ -557,10 +535,7 @@ pub(crate) fn add_port(
                 b.trim.add_box(
                     Vector3::new(x0.min(x1), KERB + s as f32 * 2.6, z0.min(z1)),
                     Vector3::new(x0.max(x1), KERB + s as f32 * 2.6 + 2.5, z0.max(z1)),
-                    scale_color(
-                        Color::from_hex(BOX[rng.below(BOX.len())]),
-                        rng.range(0.85, 1.15),
-                    ),
+                    scale_color(Color::from_hex(BOX[rng.below(BOX.len())]), rng.range(0.85, 1.15)),
                     Uv::Unit,
                 );
             }
@@ -644,10 +619,7 @@ pub(crate) fn add_port(
 /// corners — which at night are the brightest thing outside the centre.
 pub(crate) fn add_stadium(b: &mut Batches, cx: f32, cz: f32, rot: f32, rng: &mut Rng) -> bool {
     let (rx, rz) = (54.0f32, 42.0f32);
-    if !b
-        .occ
-        .try_claim([cx - rx - 8.0, cz - rz - 8.0, cx + rx + 8.0, cz + rz + 8.0])
-    {
+    if !b.occ.try_claim([cx - rx - 8.0, cz - rz - 8.0, cx + rx + 8.0, cz + rz + 8.0]) {
         return false;
     }
     let (sa, ca) = rot.sin_cos();
@@ -696,7 +668,11 @@ pub(crate) fn add_stadium(b: &mut Batches, cx: f32, cz: f32, rot: f32, rng: &mut
                 [ox1, KERB + 17.0, oz1],
                 [ox1, KERB, oz1],
             ],
-            [(ox0 + ox1) * 0.5 - cx, 0.0, (oz0 + oz1) * 0.5 - cz],
+            [
+                (ox0 + ox1) * 0.5 - cx,
+                0.0,
+                (oz0 + oz1) * 0.5 - cz,
+            ],
             Uv::Unit,
             scale_color(concrete, rng.range(0.94, 1.06)),
         );
@@ -730,15 +706,7 @@ pub(crate) fn add_stadium(b: &mut Batches, cx: f32, cz: f32, rot: f32, rng: &mut
     );
     // The pitch, with a centre circle so it is obviously a pitch.
     let (px, pz) = (rx * 0.60, rz * 0.60);
-    b.grass.add_ground_disc(
-        cx,
-        cz,
-        px.min(pz),
-        24,
-        0.0,
-        KERB + 0.6,
-        Color::from_hex(0x2f7a34),
-    );
+    b.grass.add_ground_disc(cx, cz, px.min(pz), 24, 0.0, KERB + 0.6, Color::from_hex(0x2f7a34));
     b.paint
         .add_ground_disc(cx, cz, px.min(pz) * 0.18, 16, 0.0, KERB + 0.7, Color::WHITE);
     // Floodlight masts.
@@ -837,19 +805,9 @@ pub(crate) fn add_depot(
     // The shed takes the back third; the rest is the yard the trailers use.
     let depth = (if along_x { r.d() } else { r.w() }) * 0.34;
     let shed = if along_x {
-        Rect {
-            x0: r.x0 + 4.0,
-            z0: r.z1 - depth,
-            x1: r.x1 - 4.0,
-            z1: r.z1 - 4.0,
-        }
+        Rect { x0: r.x0 + 4.0, z0: r.z1 - depth, x1: r.x1 - 4.0, z1: r.z1 - 4.0 }
     } else {
-        Rect {
-            x0: r.x1 - depth,
-            z0: r.z0 + 4.0,
-            x1: r.x1 - 4.0,
-            z1: r.z1 - 4.0,
-        }
+        Rect { x0: r.x1 - depth, z0: r.z0 + 4.0, x1: r.x1 - 4.0, z1: r.z1 - 4.0 }
     };
     let h = 12.0;
     let wall = scale_color(Color::from_hex(0xb9bcc0), rng.range(0.94, 1.06));
@@ -881,11 +839,7 @@ pub(crate) fn add_depot(
         } else {
             (shed.x0, mix(shed.z0, shed.z1, t))
         };
-        let (hw, hd) = if along_x {
-            (1.7f32, 0.25f32)
-        } else {
-            (0.25, 1.7)
-        };
+        let (hw, hd) = if along_x { (1.7f32, 0.25f32) } else { (0.25, 1.7) };
         // Door.
         b.trim.add_box(
             Vector3::new(dx - hw, KERB, dz - hd - 0.1),
@@ -920,14 +874,8 @@ pub(crate) fn add_depot(
             );
             // Bogie and landing legs.
             for (wx, wz) in [
-                (
-                    (bx0 + bx1) * 0.5,
-                    mix(bz0, bz1, if along_x { 0.18 } else { 0.5 }),
-                ),
-                (
-                    (bx0 + bx1) * 0.5,
-                    mix(bz0, bz1, if along_x { 0.30 } else { 0.5 }),
-                ),
+                ((bx0 + bx1) * 0.5, mix(bz0, bz1, if along_x { 0.18 } else { 0.5 })),
+                ((bx0 + bx1) * 0.5, mix(bz0, bz1, if along_x { 0.30 } else { 0.5 })),
             ] {
                 b.trim.add_box(
                     Vector3::new(wx - 1.1, KERB, wz - 0.4),
@@ -942,19 +890,9 @@ pub(crate) fn add_depot(
     let _ = trailers;
     // Lorry park along the front: tractor units nose-in, waiting.
     let front = if along_x {
-        Rect {
-            x0: r.x0 + 6.0,
-            z0: r.z0 + 4.0,
-            x1: r.x1 - 6.0,
-            z1: r.z0 + 16.0,
-        }
+        Rect { x0: r.x0 + 6.0, z0: r.z0 + 4.0, x1: r.x1 - 6.0, z1: r.z0 + 16.0 }
     } else {
-        Rect {
-            x0: r.x0 + 4.0,
-            z0: r.z0 + 6.0,
-            x1: r.x0 + 16.0,
-            z1: r.z1 - 6.0,
-        }
+        Rect { x0: r.x0 + 4.0, z0: r.z0 + 6.0, x1: r.x0 + 16.0, z1: r.z1 - 6.0 }
     };
     let bays = ((if along_x { front.w() } else { front.d() } / 4.2) as usize).max(2);
     for i in 0..bays {
@@ -979,11 +917,7 @@ pub(crate) fn add_depot(
         );
     }
     // Gatehouse and barrier at the entrance, and a mast or two over the yard.
-    let (gx, gz) = if along_x {
-        (r.x0 + 8.0, r.z0 + 3.0)
-    } else {
-        (r.x0 + 3.0, r.z0 + 8.0)
-    };
+    let (gx, gz) = if along_x { (r.x0 + 8.0, r.z0 + 3.0) } else { (r.x0 + 3.0, r.z0 + 8.0) };
     b.trim.add_box(
         Vector3::new(gx - 2.0, KERB, gz - 1.6),
         Vector3::new(gx + 2.0, KERB + 3.0, gz + 1.6),
@@ -992,10 +926,7 @@ pub(crate) fn add_depot(
     );
     for i in 0..2 {
         let t = (i as f32 + 0.5) / 2.0;
-        let (mx, mz) = (
-            mix(r.x0 + 10.0, r.x1 - 10.0, t),
-            mix(r.z0 + 10.0, r.z1 - 10.0, 0.4),
-        );
+        let (mx, mz) = (mix(r.x0 + 10.0, r.x1 - 10.0, t), mix(r.z0 + 10.0, r.z1 - 10.0, 0.4));
         b.trim.add_limb(
             Vector3::new(mx, KERB, mz),
             Vector3::new(mx, 22.0, mz),
@@ -1063,19 +994,9 @@ pub(crate) fn add_rail_yard(
         (fixed - 6.0 - depth, fixed - 6.0)
     };
     let r = if along_x {
-        Rect {
-            x0: lo,
-            z0: d0,
-            x1: hi,
-            z1: d1,
-        }
+        Rect { x0: lo, z0: d0, x1: hi, z1: d1 }
     } else {
-        Rect {
-            x0: d0,
-            z0: lo,
-            x1: d1,
-            z1: hi,
-        }
+        Rect { x0: d0, z0: lo, x1: d1, z1: hi }
     };
     if !b.occ.try_claim([r.x0, r.z0, r.x1, r.z1]) {
         return false;
@@ -1201,16 +1122,8 @@ pub(crate) fn add_rail_yard(
                 let toe = |y: f32| 2.4 + y * 1.4;
                 let a = [p0x + nx / 2.4 * 2.4 * sg, y0, p0z + nz / 2.4 * 2.4 * sg];
                 let d = [p1x + nx / 2.4 * 2.4 * sg, y1, p1z + nz / 2.4 * 2.4 * sg];
-                let e = [
-                    p1x + nx / 2.4 * toe(y1) * sg,
-                    0.0,
-                    p1z + nz / 2.4 * toe(y1) * sg,
-                ];
-                let f = [
-                    p0x + nx / 2.4 * toe(y0) * sg,
-                    0.0,
-                    p0z + nz / 2.4 * toe(y0) * sg,
-                ];
+                let e = [p1x + nx / 2.4 * toe(y1) * sg, 0.0, p1z + nz / 2.4 * toe(y1) * sg];
+                let f = [p0x + nx / 2.4 * toe(y0) * sg, 0.0, p0z + nz / 2.4 * toe(y0) * sg];
                 let q = if sg > 0.0 { [a, d, e, f] } else { [f, e, d, a] };
                 b.grass.quad(
                     q,
@@ -1276,15 +1189,8 @@ pub(crate) fn add_rail_yard(
             let (c1x, c1z) = at(s + 12.0, stack_t + 1.3);
             b.trim.add_box(
                 Vector3::new(c0x.min(c1x), KERB * 0.5 + k as f32 * 2.6, c0z.min(c1z)),
-                Vector3::new(
-                    c0x.max(c1x),
-                    KERB * 0.5 + k as f32 * 2.6 + 2.5,
-                    c0z.max(c1z),
-                ),
-                scale_color(
-                    Color::from_hex(BOX[rng.below(BOX.len())]),
-                    rng.range(0.85, 1.15),
-                ),
+                Vector3::new(c0x.max(c1x), KERB * 0.5 + k as f32 * 2.6 + 2.5, c0z.max(c1z)),
+                scale_color(Color::from_hex(BOX[rng.below(BOX.len())]), rng.range(0.85, 1.15)),
                 Uv::Unit,
             );
         }
@@ -1318,11 +1224,7 @@ pub(crate) fn add_data_centre(b: &mut Batches, r: &Rect, along_x: bool, rng: &mu
         Uv::Unit,
     );
     // Two data halls with a service yard between them.
-    let halls = if (if along_x { r.d() } else { r.w() }) > 84.0 {
-        2
-    } else {
-        1
-    };
+    let halls = if (if along_x { r.d() } else { r.w() }) > 84.0 { 2 } else { 1 };
     let h = 11.0f32;
     let wall = scale_color(Color::from_hex(0xb4b8bc), rng.range(0.95, 1.05));
     let mut plant = 0usize;
@@ -1409,11 +1311,7 @@ pub(crate) fn add_data_centre(b: &mut Batches, r: &Rect, along_x: bool, rng: &mu
         } else {
             (mix(r.x0 + 8.0, r.x1 - 8.0, t), r.z1 - 12.0)
         };
-        let (hw, hd) = if along_x {
-            (5.0f32, 1.6f32)
-        } else {
-            (1.6, 5.0)
-        };
+        let (hw, hd) = if along_x { (5.0f32, 1.6f32) } else { (1.6, 5.0) };
         b.trim.add_box(
             Vector3::new(gx - hw, KERB, gz - hd),
             Vector3::new(gx + hw, KERB + 3.4, gz + hd),
@@ -1463,11 +1361,7 @@ pub(crate) fn add_data_centre(b: &mut Batches, r: &Rect, along_x: bool, rng: &mu
     } else {
         (r.x0 + 5.0, r.z0 + 14.0)
     };
-    let (ow, od) = if along_x {
-        (12.0f32, 4.0f32)
-    } else {
-        (4.0, 12.0)
-    };
+    let (ow, od) = if along_x { (12.0f32, 4.0f32) } else { (4.0, 12.0) };
     b.trim.add_box(
         Vector3::new(ox - ow, KERB, oz - od),
         Vector3::new(ox + ow, KERB + 7.0, oz + od),
@@ -1616,10 +1510,7 @@ pub(crate) fn add_telecom_mast(b: &mut Batches, cx: f32, cz: f32, h: f32, rng: &
     for (t, rr) in [(0.55f32, 1.6f32), (0.66, 1.2)] {
         let a = rng.range(0.0, TAU);
         let y = KERB + h * t;
-        let (px, pz) = (
-            cx + (radius(t) + rr * 0.4) * a.cos(),
-            cz + (radius(t) + rr * 0.4) * a.sin(),
-        );
+        let (px, pz) = (cx + (radius(t) + rr * 0.4) * a.cos(), cz + (radius(t) + rr * 0.4) * a.sin());
         b.trim.add_limb(
             Vector3::new(px, y, pz),
             Vector3::new(px + a.cos() * 0.5, y, pz + a.sin() * 0.5),

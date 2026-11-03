@@ -33,17 +33,29 @@ impl WebPathTracer {
             .await
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
         Ok(Self {
-            inner: RaytraceRenderer::with_backend(width.max(1), height.max(1), Box::new(backend)),
+            inner: RaytraceRenderer::with_backend(
+                width.max(1),
+                height.max(1),
+                Box::new(backend),
+            ),
         })
     }
 
     /// Build on the same WebGPU device as a [`WebRenderer`], so resources are
     /// not duplicated.
-    pub fn new_gpu_from_renderer(renderer: &WebRenderer, width: u32, height: u32) -> WebPathTracer {
+    pub fn new_gpu_from_renderer(
+        renderer: &WebRenderer,
+        width: u32,
+        height: u32,
+    ) -> WebPathTracer {
         let (device, queue) = renderer.gpu_device_queue();
         let backend = crate::raytrace::gpu::GpuBackend::with_device(device, queue);
         Self {
-            inner: RaytraceRenderer::with_backend(width.max(1), height.max(1), Box::new(backend)),
+            inner: RaytraceRenderer::with_backend(
+                width.max(1),
+                height.max(1),
+                Box::new(backend),
+            ),
         }
     }
 
@@ -171,7 +183,10 @@ impl WebPathTracer {
     /// Scene build summary after prepare, or empty.
     #[wasm_bindgen(js_name = reportSummary)]
     pub fn report_summary(&self) -> String {
-        self.inner.report().map(|r| r.summary()).unwrap_or_default()
+        self.inner
+            .report()
+            .map(|r| r.summary())
+            .unwrap_or_default()
     }
 
     /// Beauty with a relative-error heatmap mix-in (`strength` 0..=1).
@@ -228,7 +243,9 @@ impl WebPathTracer {
     /// Encode the current film as linear ZIP EXR bytes.
     #[wasm_bindgen(js_name = encodeExr)]
     pub fn encode_exr(&mut self) -> Result<Vec<u8>, JsValue> {
-        self.inner.encode_exr().map_err(|e| JsValue::from_str(&e))
+        self.inner
+            .encode_exr()
+            .map_err(|e| JsValue::from_str(&e))
     }
 
     /// Suggested tile size for this resolution (multiple of 8).

@@ -34,7 +34,8 @@ fn a_nan_written_straight_into_a_body_is_recorded_not_hidden() {
     // The velocity fields are public on purpose, so no guard can cover this
     // assignment — the engine repairs it during the step and says so.
     let (mut world, ball) = ball_world();
-    world.bodies_mut().get_mut(ball).unwrap().linear_velocity = Vector3::new(f32::NAN, 0.0, 0.0);
+    world.bodies_mut().get_mut(ball).unwrap().linear_velocity =
+        Vector3::new(f32::NAN, 0.0, 0.0);
     world.step_fixed();
 
     let record = world.diagnostics().warning(Warning::NonFiniteVelocity);
@@ -95,7 +96,8 @@ fn falling_behind_real_time_is_recorded_where_the_time_is_dropped() {
 #[test]
 fn a_warning_says_when_it_last_fired_not_only_that_it_did() {
     let (mut world, ball) = ball_world();
-    world.bodies_mut().get_mut(ball).unwrap().linear_velocity = Vector3::new(f32::NAN, 0.0, 0.0);
+    world.bodies_mut().get_mut(ball).unwrap().linear_velocity =
+        Vector3::new(f32::NAN, 0.0, 0.0);
     world.step_fixed();
     for _ in 0..10 {
         world.step_fixed();
@@ -128,10 +130,7 @@ fn counters_describe_the_step_that_just_ran() {
     assert_eq!(c.awake_bodies, 5, "the ground is not dynamic");
     assert_eq!(c.manifolds, 5, "each box rests on the ground");
     assert!(c.contact_points >= 5);
-    assert_eq!(
-        c.islands, 5,
-        "the boxes are spread out and touch nothing else"
-    );
+    assert_eq!(c.islands, 5, "the boxes are spread out and touch nothing else");
     assert_eq!(c.substeps, world.substeps as u32);
 }
 
@@ -173,10 +172,7 @@ fn timings_are_off_until_asked_for() {
         t.accounted(),
         t.step
     );
-    assert!(t
-        .stages()
-        .iter()
-        .any(|(_, d)| *d > std::time::Duration::ZERO));
+    assert!(t.stages().iter().any(|(_, d)| *d > std::time::Duration::ZERO));
 
     // And turning it off puts the numbers back rather than leaving stale ones.
     world.set_profiling(false);

@@ -384,21 +384,9 @@ impl RigidBody {
     #[inline]
     pub fn inv_mass_axes(&self) -> Vector3 {
         Vector3::new(
-            if self.locked_axes.is_translation_locked(0) {
-                0.0
-            } else {
-                self.inv_mass
-            },
-            if self.locked_axes.is_translation_locked(1) {
-                0.0
-            } else {
-                self.inv_mass
-            },
-            if self.locked_axes.is_translation_locked(2) {
-                0.0
-            } else {
-                self.inv_mass
-            },
+            if self.locked_axes.is_translation_locked(0) { 0.0 } else { self.inv_mass },
+            if self.locked_axes.is_translation_locked(1) { 0.0 } else { self.inv_mass },
+            if self.locked_axes.is_translation_locked(2) { 0.0 } else { self.inv_mass },
         )
     }
 
@@ -472,11 +460,7 @@ impl RigidBody {
         }
 
         self.mass = props.mass;
-        self.inv_mass = if props.mass > 0.0 {
-            1.0 / props.mass
-        } else {
-            0.0
-        };
+        self.inv_mass = if props.mass > 0.0 { 1.0 / props.mass } else { 0.0 };
         self.local_com = props.center_of_mass;
         self.local_inv_inertia = props.inertia.inverse();
         self.update_world_inertia();
@@ -668,7 +652,8 @@ impl RigidBody {
         if !self.is_dynamic() {
             return;
         }
-        self.angular_velocity = self.angular_velocity + self.world_inv_inertia.mul_vec(impulse);
+        self.angular_velocity =
+            self.angular_velocity + self.world_inv_inertia.mul_vec(impulse);
         self.wake_up();
     }
 
@@ -704,13 +689,7 @@ impl RigidBody {
         self.angular_velocity = Vector3::ZERO;
     }
 
-    pub(crate) fn update_sleep(
-        &mut self,
-        dt: f32,
-        linear_threshold: f32,
-        angular_threshold: f32,
-        time_to_sleep: f32,
-    ) {
+    pub(crate) fn update_sleep(&mut self, dt: f32, linear_threshold: f32, angular_threshold: f32, time_to_sleep: f32) {
         if !self.can_sleep || !self.is_dynamic() {
             self.sleep_timer = 0.0;
             return;
@@ -805,21 +784,9 @@ impl RigidBody {
         // but still suppressed on locked axes.
         let g = gravity * self.gravity_scale;
         let acc = Vector3::new(
-            if inv.x == 0.0 {
-                0.0
-            } else {
-                g.x + self.force.x * inv.x
-            },
-            if inv.y == 0.0 {
-                0.0
-            } else {
-                g.y + self.force.y * inv.y
-            },
-            if inv.z == 0.0 {
-                0.0
-            } else {
-                g.z + self.force.z * inv.z
-            },
+            if inv.x == 0.0 { 0.0 } else { g.x + self.force.x * inv.x },
+            if inv.y == 0.0 { 0.0 } else { g.y + self.force.y * inv.y },
+            if inv.z == 0.0 { 0.0 } else { g.z + self.force.z * inv.z },
         );
         self.linear_velocity = self.linear_velocity + acc * dt;
         self.angular_velocity =
@@ -831,8 +798,7 @@ impl RigidBody {
         // The gyroscopic term (ω × Iω) is deliberately omitted: it is unstable
         // at game time steps and its absence is imperceptible outside of
         // free-spinning asymmetric bodies.
-        self.linear_velocity =
-            self.linear_velocity * (1.0 / (1.0 + dt * self.linear_damping.max(0.0)));
+        self.linear_velocity = self.linear_velocity * (1.0 / (1.0 + dt * self.linear_damping.max(0.0)));
         self.angular_velocity =
             self.angular_velocity * (1.0 / (1.0 + dt * self.angular_damping.max(0.0)));
 
@@ -1060,9 +1026,7 @@ impl RigidBodyBuilder {
     }
 
     pub fn friction(mut self, friction: f32) -> Self {
-        self.material
-            .get_or_insert_with(PhysicsMaterial::default)
-            .friction = friction.max(0.0);
+        self.material.get_or_insert_with(PhysicsMaterial::default).friction = friction.max(0.0);
         self
     }
 
@@ -1219,11 +1183,7 @@ impl BodySet {
 
     /// Two distinct bodies at once — what every constraint solve needs.
     /// `None` if the handles are equal or either is stale.
-    pub fn get_two_mut(
-        &mut self,
-        a: BodyId,
-        b: BodyId,
-    ) -> Option<(&mut RigidBody, &mut RigidBody)> {
+    pub fn get_two_mut(&mut self, a: BodyId, b: BodyId) -> Option<(&mut RigidBody, &mut RigidBody)> {
         if a.index == b.index {
             return None;
         }
@@ -1315,6 +1275,7 @@ impl BodySet {
             generation: slot.generation,
         })
     }
+
 }
 
 #[cfg(test)]
@@ -1323,10 +1284,7 @@ mod tests {
 
     #[test]
     fn a_dynamic_body_derives_mass_from_its_shape() {
-        let b = RigidBody::dynamic()
-            .shape(Shape::ball(1.0))
-            .density(3.0)
-            .build();
+        let b = RigidBody::dynamic().shape(Shape::ball(1.0)).density(3.0).build();
         let want = 3.0 * (4.0 / 3.0) * std::f32::consts::PI;
         assert!((b.mass() - want).abs() < 1e-3, "{}", b.mass());
         assert!((b.inv_mass() - 1.0 / want).abs() < 1e-4);
@@ -1405,14 +1363,8 @@ mod tests {
 
     #[test]
     fn gravity_accelerates_at_the_same_rate_regardless_of_mass() {
-        let mut light = RigidBody::dynamic()
-            .shape(Shape::ball(1.0))
-            .mass(0.1)
-            .build();
-        let mut heavy = RigidBody::dynamic()
-            .shape(Shape::ball(1.0))
-            .mass(1000.0)
-            .build();
+        let mut light = RigidBody::dynamic().shape(Shape::ball(1.0)).mass(0.1).build();
+        let mut heavy = RigidBody::dynamic().shape(Shape::ball(1.0)).mass(1000.0).build();
         let g = Vector3::new(0.0, -10.0, 0.0);
         for _ in 0..10 {
             light.integrate_velocity(0.01, g);

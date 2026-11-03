@@ -80,11 +80,13 @@ impl WalkFlyNav {
         }
         self.time += dt;
         self.yaw += input.yaw_delta * self.look_speed;
-        self.pitch = (self.pitch + input.pitch_delta * self.look_speed).clamp(-1.5, 1.5);
+        self.pitch = (self.pitch + input.pitch_delta * self.look_speed)
+            .clamp(-1.5, 1.5);
 
         let f = self.forward_dir();
         let r = self.right_dir();
-        let mut move_dir = f * input.forward + r * input.strafe + Vector3::UP * input.up;
+        let mut move_dir =
+            f * input.forward + r * input.strafe + Vector3::UP * input.up;
         if self.flying {
             move_dir = move_dir + self.look_dir() * input.forward * 0.0; // already in f
         }

@@ -265,16 +265,8 @@ mod tests {
     #[test]
     fn every_curve_hits_both_endpoints() {
         for e in Easing::ALL {
-            assert!(
-                (e.apply(0.0)).abs() < 1e-5,
-                "{e:?} at t=0 gave {}",
-                e.apply(0.0)
-            );
-            assert!(
-                (e.apply(1.0) - 1.0).abs() < 1e-5,
-                "{e:?} at t=1 gave {}",
-                e.apply(1.0)
-            );
+            assert!((e.apply(0.0)).abs() < 1e-5, "{e:?} at t=0 gave {}", e.apply(0.0));
+            assert!((e.apply(1.0) - 1.0).abs() < 1e-5, "{e:?} at t=1 gave {}", e.apply(1.0));
         }
     }
 
@@ -361,13 +353,10 @@ mod tests {
 
     #[test]
     fn monotonic_curves_never_go_backwards() {
-        for e in Easing::ALL.iter().filter(|e| {
-            !e.overshoots()
-                && !matches!(
-                    e,
-                    Easing::BounceIn | Easing::BounceOut | Easing::BounceInOut
-                )
-        }) {
+        for e in Easing::ALL
+            .iter()
+            .filter(|e| !e.overshoots() && !matches!(e, Easing::BounceIn | Easing::BounceOut | Easing::BounceInOut))
+        {
             let mut previous = e.apply(0.0);
             for i in 1..=200 {
                 let v = e.apply(i as f32 / 200.0);

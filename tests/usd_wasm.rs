@@ -17,6 +17,7 @@
 //! ```
 #![cfg(feature = "usd")]
 
+
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
 
@@ -69,9 +70,7 @@ fn textured_scene() -> (ObjectArena, Vec<threers::core::ObjectId>) {
         2,
         2,
         TextureFormat::Rgba8UnormSrgb,
-        vec![
-            255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 0, 255,
-        ],
+        vec![255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 0, 255],
     );
     let material = StandardMaterial {
         map: Some(Arc::new(texture)),

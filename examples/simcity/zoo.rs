@@ -205,16 +205,7 @@ fn enclosure(b: &mut Batches, p: &Rect, kind: Pen, rng: &mut Rng) -> usize {
         Pen::BigCat | Pen::Primate | Pen::Bear => {
             // A moat inside the perimeter, and a low wall the public leans on.
             let m = p.inset(1.6);
-            water(
-                b,
-                Rect {
-                    x0: p.x0 + 0.6,
-                    z0: p.z0 + 0.6,
-                    x1: p.x1 - 0.6,
-                    z1: m.z0,
-                },
-                0x2f6a86,
-            );
+            water(b, Rect { x0: p.x0 + 0.6, z0: p.z0 + 0.6, x1: p.x1 - 0.6, z1: m.z0 }, 0x2f6a86);
             b.trim.add_box(
                 Vector3::new(p.x0, KERB, p.z0),
                 Vector3::new(p.x1, KERB + 1.0, p.z0 + 0.4),
@@ -313,10 +304,7 @@ fn enclosure(b: &mut Batches, p: &Rect, kind: Pen, rng: &mut Rng) -> usize {
             water(b, inner.inset(1.0), 0x2f8fc4);
             // Tiled surround and a few rocks.
             for _ in 0..4 {
-                let (rx, rz) = (
-                    rng.range(p.x0 + 1.0, p.x1 - 1.0),
-                    rng.range(p.z0 + 1.0, p.z1 - 1.0),
-                );
+                let (rx, rz) = (rng.range(p.x0 + 1.0, p.x1 - 1.0), rng.range(p.z0 + 1.0, p.z1 - 1.0));
                 b.trim.add_blob(
                     Vector3::new(rx, KERB + 0.3, rz),
                     0.9,
@@ -368,7 +356,10 @@ fn enclosure(b: &mut Batches, p: &Rect, kind: Pen, rng: &mut Rng) -> usize {
         Pen::BigCat | Pen::Bear => {
             // Rocks to lie on, and a dead tree to climb.
             for _ in 0..3 + rng.below(3) {
-                let (rx, rz) = (rng.range(inner.x0, inner.x1), rng.range(inner.z0, inner.z1));
+                let (rx, rz) = (
+                    rng.range(inner.x0, inner.x1),
+                    rng.range(inner.z0, inner.z1),
+                );
                 let s = rng.range(1.2, 2.8);
                 b.trim.add_blob(
                     Vector3::new(rx, KERB + s * 0.35, rz),
@@ -424,20 +415,8 @@ fn enclosure(b: &mut Batches, p: &Rect, kind: Pen, rng: &mut Rng) -> usize {
         Pen::Elephant => {
             for _ in 0..2 + rng.below(2) {
                 let (x, z) = spot(rng);
-                quadruped(
-                    b,
-                    x,
-                    KERB,
-                    z,
-                    rng.range(0.0, TAU),
-                    4.2,
-                    1.5,
-                    1.7,
-                    1.1,
-                    0.8,
-                    Color::from_hex(0x7d7a76),
-                    rng,
-                );
+                quadruped(b, x, KERB, z, rng.range(0.0, TAU), 4.2, 1.5, 1.7, 1.1, 0.8,
+                    Color::from_hex(0x7d7a76), rng);
                 n += 1;
             }
         }
@@ -445,142 +424,63 @@ fn enclosure(b: &mut Batches, p: &Rect, kind: Pen, rng: &mut Rng) -> usize {
             for _ in 0..2 + rng.below(2) {
                 let (x, z) = spot(rng);
                 // Giraffe: the neck is the whole animal.
-                quadruped(
-                    b,
-                    x,
-                    KERB,
-                    z,
-                    rng.range(0.0, TAU),
-                    2.6,
-                    0.72,
-                    2.9,
-                    3.4,
-                    0.18,
-                    Color::from_hex(0xc9a352),
-                    rng,
-                );
+                quadruped(b, x, KERB, z, rng.range(0.0, TAU), 2.6, 0.72, 2.9, 3.4, 0.18,
+                    Color::from_hex(0xc9a352), rng);
                 n += 1;
             }
             for _ in 0..3 + rng.below(3) {
                 let (x, z) = spot(rng);
-                quadruped(
-                    b,
-                    x,
-                    KERB,
-                    z,
-                    rng.range(0.0, TAU),
-                    2.0,
-                    0.52,
-                    1.0,
-                    0.7,
-                    0.6,
-                    Color::from_hex(0xe0dcd4),
-                    rng,
-                );
+                quadruped(b, x, KERB, z, rng.range(0.0, TAU), 2.0, 0.52, 1.0, 0.7, 0.6,
+                    Color::from_hex(0xe0dcd4), rng);
                 n += 1;
             }
         }
         Pen::BigCat => {
             for _ in 0..1 + rng.below(3) {
                 let (x, z) = spot(rng);
-                quadruped(
-                    b,
-                    x,
-                    KERB,
-                    z,
-                    rng.range(0.0, TAU),
-                    1.9,
-                    0.40,
-                    0.55,
-                    0.42,
-                    0.9,
-                    Color::from_hex(0xc9924a),
-                    rng,
-                );
+                quadruped(b, x, KERB, z, rng.range(0.0, TAU), 1.9, 0.40, 0.55, 0.42, 0.9,
+                    Color::from_hex(0xc9924a), rng);
                 n += 1;
             }
         }
         Pen::Bear => {
             for _ in 0..1 + rng.below(2) {
                 let (x, z) = spot(rng);
-                quadruped(
-                    b,
-                    x,
-                    KERB,
-                    z,
-                    rng.range(0.0, TAU),
-                    1.9,
-                    0.62,
-                    0.62,
-                    0.45,
-                    0.85,
-                    Color::from_hex(0x584434),
-                    rng,
-                );
+                quadruped(b, x, KERB, z, rng.range(0.0, TAU), 1.9, 0.62, 0.62, 0.45, 0.85,
+                    Color::from_hex(0x584434), rng);
                 n += 1;
             }
         }
         Pen::Penguin => {
             for _ in 0..7 + rng.below(8) {
                 let (x, z) = spot(rng);
-                wader(
-                    b,
-                    x,
-                    KERB,
-                    z,
-                    0.12,
-                    0.62,
-                    Color::from_hex(0x23262b),
-                    Color::from_hex(0xe8e4dc),
-                );
+                wader(b, x, KERB, z, 0.12, 0.62, Color::from_hex(0x23262b),
+                    Color::from_hex(0xe8e4dc));
                 n += 1;
             }
         }
         Pen::Flamingo => {
             for _ in 0..6 + rng.below(8) {
                 let (x, z) = spot(rng);
-                wader(
-                    b,
-                    x,
-                    KERB,
-                    z,
-                    0.95,
-                    0.5,
-                    Color::from_hex(0xe08fa8),
-                    Color::from_hex(0xd06f8f),
-                );
+                wader(b, x, KERB, z, 0.95, 0.5, Color::from_hex(0xe08fa8),
+                    Color::from_hex(0xd06f8f));
                 n += 1;
             }
         }
         Pen::Aviary => {
             for _ in 0..5 + rng.below(6) {
                 let (x, z) = spot(rng);
-                wader(
-                    b,
-                    x,
-                    KERB + rng.range(0.0, 2.5),
-                    z,
-                    0.10,
-                    0.34,
+                wader(b, x, KERB + rng.range(0.0, 2.5), z, 0.10, 0.34,
                     Color::from_hex([0xd04a3au32, 0x2f6ab5, 0xd8a52e][rng.below(3)]),
-                    Color::from_hex(0x2a2d31),
-                );
+                    Color::from_hex(0x2a2d31));
                 n += 1;
             }
         }
         Pen::Primate => {
             for _ in 0..4 + rng.below(5) {
                 let (x, z) = spot(rng);
-                wader(
-                    b,
-                    x,
-                    KERB,
-                    z,
-                    0.22,
-                    0.44,
-                    Color::from_hex(0x6b5a44),
-                    Color::from_hex(0x8a7458),
-                );
+                wader(b, x, KERB, z, 0.22, 0.44, Color::from_hex(0x6b5a44),
+                    Color::from_hex(0x8a7458));
                 n += 1;
             }
         }
@@ -753,15 +653,7 @@ pub(crate) fn add_zoo(b: &mut Batches, r: &Rect, rng: &mut Rng) -> usize {
     );
     for k in 0..4 {
         let t = (k as f32 + 0.5) / 4.0;
-        add_tree(
-            b,
-            mix(mid.x0, mid.x1, t),
-            mid.z1 + 2.0,
-            KERB,
-            false,
-            false,
-            rng,
-        );
+        add_tree(b, mix(mid.x0, mid.x1, t), mid.z1 + 2.0, KERB, false, false, rng);
     }
     animals
 }

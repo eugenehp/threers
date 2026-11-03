@@ -206,11 +206,7 @@ mod tests {
         for i in 1..=10 {
             t.update(0.1);
             let want = i as f32;
-            assert!(
-                (t.value() - want).abs() < 1e-3,
-                "step {i}: {} vs {want}",
-                t.value()
-            );
+            assert!((t.value() - want).abs() < 1e-3, "step {i}: {} vs {want}", t.value());
         }
         assert!(t.is_finished());
     }
@@ -300,11 +296,7 @@ mod tests {
         t.retarget(-10.0);
         // No jump: the next value is still near where it was.
         t.update(0.01);
-        assert!(
-            (t.value() - midpoint).abs() < 0.3,
-            "retarget jumped to {}",
-            t.value()
-        );
+        assert!((t.value() - midpoint).abs() < 0.3, "retarget jumped to {}", t.value());
         // And it now heads for the new destination.
         for _ in 0..100 {
             t.update(0.02);

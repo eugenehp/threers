@@ -77,11 +77,7 @@ impl CuboctFrame {
 
         let mut node_id = |p: [f64; 3]| -> usize {
             for (i, q) in nodes.iter().enumerate() {
-                let d = [
-                    (p[0] - q[0]).abs(),
-                    (p[1] - q[1]).abs(),
-                    (p[2] - q[2]).abs(),
-                ];
+                let d = [(p[0] - q[0]).abs(), (p[1] - q[1]).abs(), (p[2] - q[2]).abs()];
                 if d[0] < weld && d[1] < weld && d[2] < weld {
                     return i;
                 }
@@ -129,10 +125,9 @@ impl CuboctFrame {
                         if ia == ib {
                             continue;
                         }
-                        let len =
-                            ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2) + (b[2] - a[2]).powi(2))
-                                .sqrt()
-                                .max(weld);
+                        let len = ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2) + (b[2] - a[2]).powi(2))
+                            .sqrt()
+                            .max(weld);
                         elements.push((ia, ib, len));
                     }
                 }
@@ -236,14 +231,7 @@ impl CuboctFrame {
         }
         let mut k = vec![0.0f64; ndof * ndof];
         for &(a, b, len) in &self.elements {
-            add_truss(
-                &mut k,
-                ndof,
-                a,
-                b,
-                self.mat.e * self.mat.a / len,
-                &self.nodes,
-            );
+            add_truss(&mut k, ndof, a, b, self.mat.e * self.mat.a / len, &self.nodes);
             let bend = self.mat.e * self.mat.i / len.powi(3);
             add_bending(&mut k, ndof, a, b, bend, &self.nodes);
         }
@@ -463,7 +451,14 @@ fn gauss_solve(a: &mut [f64], b: &mut [f64], n: usize) {
     }
 }
 
-fn reaction_z(k: &[f64], u: &[f64], ndof: usize, zmin: f64, tol: f64, nodes: &[[f64; 3]]) -> f64 {
+fn reaction_z(
+    k: &[f64],
+    u: &[f64],
+    ndof: usize,
+    zmin: f64,
+    tol: f64,
+    nodes: &[[f64; 3]],
+) -> f64 {
     let mut fz = 0.0;
     for (i, p) in nodes.iter().enumerate() {
         if (p[2] - zmin).abs() < tol {
@@ -560,10 +555,6 @@ mod tests {
             Cuboct::column_half(k, 4)
         })
         .compress_z(0.05);
-        assert!(
-            r.twist_per_strain.abs() > 5e-4,
-            "twist = {}",
-            r.twist_per_strain
-        );
+        assert!(r.twist_per_strain.abs() > 5e-4, "twist = {}", r.twist_per_strain);
     }
 }

@@ -4,13 +4,9 @@
 
 use std::process::Command;
 
-<<<<<<< Updated upstream:crates/threers-codec/tests/hevc_native_mp4.rs
 use threers_codec::hevc::{
     encode_compressed_mp4, encode_compressed_mp4_streaming, Yuv420Frame,
 };
-=======
-use threers::codec::hevc::{encode_compressed_mp4, encode_compressed_mp4_streaming, Yuv420Frame};
->>>>>>> Stashed changes:tests/hevc_native_mp4.rs
 
 fn have_ffmpeg() -> bool {
     Command::new("ffmpeg")
@@ -48,21 +44,13 @@ fn non_ctb_aligned_sizes_are_playable() {
     for &(w, h) in &[(100u32, 60u32), (66, 34), (128, 90)] {
         let frames: Vec<Yuv420Frame> = (0..3).map(|t| frame(w, h, t)).collect();
         let bytes = encode_compressed_mp4(w, h, 24, 27, &frames);
-        let path =
-            std::env::temp_dir().join(format!("threers-native-{}-{w}x{h}.mp4", std::process::id()));
+        let path = std::env::temp_dir()
+            .join(format!("threers-native-{}-{w}x{h}.mp4", std::process::id()));
         std::fs::write(&path, &bytes).unwrap();
         let out = Command::new("ffprobe")
-            .args([
-                "-v",
-                "error",
-                "-select_streams",
-                "v:0",
-                "-count_frames",
-                "-show_entries",
-                "stream=codec_name,width,height,nb_read_frames",
-                "-of",
-                "csv=p=0",
-            ])
+            .args(["-v", "error", "-select_streams", "v:0", "-count_frames",
+                   "-show_entries", "stream=codec_name,width,height,nb_read_frames",
+                   "-of", "csv=p=0"])
             .arg(&path)
             .output()
             .expect("run ffprobe");
@@ -97,17 +85,9 @@ fn compressed_mp4_is_playable_and_far_smaller_than_pcm() {
 
     // ffprobe must see an hvc1 track of the right size and frame count.
     let out = Command::new("ffprobe")
-        .args([
-            "-v",
-            "error",
-            "-select_streams",
-            "v:0",
-            "-count_frames",
-            "-show_entries",
-            "stream=codec_name,width,height,nb_read_frames",
-            "-of",
-            "csv=p=0",
-        ])
+        .args(["-v", "error", "-select_streams", "v:0", "-count_frames",
+               "-show_entries", "stream=codec_name,width,height,nb_read_frames",
+               "-of", "csv=p=0"])
         .arg(&path)
         .output()
         .expect("run ffprobe");
@@ -118,6 +98,7 @@ fn compressed_mp4_is_playable_and_far_smaller_than_pcm() {
         "expected an hevc 128x96 track with {n} frames, ffprobe said {probe:?}"
     );
 }
+
 
 /// The streaming form must be a drop-in for the slice form.
 ///
@@ -137,8 +118,7 @@ fn streaming_matches_the_slice_form_byte_for_byte() {
         encode_compressed_mp4_streaming(w, h, 24, 29, n as usize, None, |i| frame(w, h, i as u32));
 
     assert_eq!(
-        eager,
-        streamed,
+        eager, streamed,
         "streaming produced {} bytes against the slice form's {}",
         streamed.len(),
         eager.len()

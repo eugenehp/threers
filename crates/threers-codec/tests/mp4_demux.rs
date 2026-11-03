@@ -134,10 +134,7 @@ fn composition_offsets_reorder_the_frames() {
     stco.extend_from_slice(&4096u32.to_be_bytes());
 
     // A minimal avc1 sample entry with an avcC.
-    let avcc = bx(
-        b"avcC",
-        &[1, 0x64, 0, 0x1f, 0xff, 0xe1, 0, 1, 0x67, 1, 0, 1, 0x68],
-    );
+    let avcc = bx(b"avcC", &[1, 0x64, 0, 0x1f, 0xff, 0xe1, 0, 1, 0x67, 1, 0, 1, 0x68]);
     let mut entry = vec![0u8; 78];
     entry[24..26].copy_from_slice(&640u16.to_be_bytes());
     entry[26..28].copy_from_slice(&360u16.to_be_bytes());

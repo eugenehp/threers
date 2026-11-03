@@ -3,7 +3,6 @@
 // Sync` natively and are not on wasm, where the API is single-threaded by
 // construction. One shared type has to satisfy both targets, so on wasm the
 // lint fires on code that has no other form.
-<<<<<<< Updated upstream
 #![cfg_attr(
     target_arch = "wasm32",
     allow(clippy::arc_with_non_send_sync)
@@ -11,9 +10,6 @@
 // On docs.rs (nightly, `--cfg docsrs`), every feature-gated item is badged
 // with the features it needs.
 #![cfg_attr(docsrs, feature(doc_cfg))]
-=======
-#![cfg_attr(target_arch = "wasm32", allow(clippy::arc_with_non_send_sync))]
->>>>>>> Stashed changes
 //! threers — a drop-in three.js replacement for Rust and WebAssembly.
 //!
 //! Implements the three.js architecture and API surface: a scene graph of
@@ -216,14 +212,14 @@ pub mod helpers;
 /// with position and tool direction as separate residuals rather than a
 /// weighted sum. See [`kinematics`].
 pub mod kinematics;
+/// Rigid origami: degree-4 vertex kinematics, crease-pattern closure, and a
+/// dual walk that folds a consistent assignment off the plane.
+pub mod origami;
 pub mod lights;
 pub mod loaders;
 pub mod marks;
 pub mod materials;
 pub mod math;
-/// Rigid origami: degree-4 vertex kinematics, crease-pattern closure, and a
-/// dual walk that folds a consistent assignment off the plane.
-pub mod origami;
 pub mod postprocessing;
 /// One import for the things nearly every scene uses — see [`prelude`].
 pub mod prelude;
@@ -239,7 +235,6 @@ pub mod volume;
 /// Easing curves — the shape of a transition in time.
 pub mod easing;
 pub mod overlay;
-<<<<<<< Updated upstream
 // A retained UI: CSS-subset styles, flexbox layout, painting, hit-testing.
 // (Its docs are the module's own `//!`; an outer `///` here would make their
 // intra-doc links resolve in this scope, where `Ui` is not.)
@@ -248,12 +243,8 @@ pub mod ui;
 /// A window, a scene and a loop in one call. Native only, and not tvOS or
 /// visionOS, whose windows belong to the system.
 #[cfg(not(any(target_arch = "wasm32", target_os = "tvos", target_os = "visionos")))]
-=======
-pub mod renderer;
-/// A window, a scene and a loop in one call. Native only.
-#[cfg(not(target_arch = "wasm32"))]
->>>>>>> Stashed changes
 pub mod sketch;
+pub mod renderer;
 
 // No outer doc comment: `gpu.rs` carries `//!` docs, and an outer `///` here
 // would make the intra-doc links inside them resolve in this scope.
@@ -288,7 +279,6 @@ cfg_metal! {
 /// they live in `threers-codec`, and [`codec::hw`] puts both behind one
 /// interface with a software fallback.
 #[cfg(all(feature = "videotoolbox", target_os = "macos"))]
-<<<<<<< Updated upstream
 pub use threers_codec::{videotoolbox, videotoolbox_decode};
 /// NVENC and NVDEC on NVIDIA GPUs; see [`codec::nvidia`](threers_codec::nvidia).
 #[cfg(all(feature = "nvidia", any(target_os = "linux", target_os = "windows"), target_pointer_width = "64"))]
@@ -296,15 +286,6 @@ pub use threers_codec::nvidia;
 /// VAAPI decoding on Linux; see [`codec::vaapi`](threers_codec::vaapi).
 #[cfg(all(feature = "vaapi", target_os = "linux"))]
 pub use threers_codec::vaapi;
-=======
-pub mod videotoolbox;
-#[cfg(all(
-    feature = "videotoolbox",
-    feature = "native-codec",
-    target_os = "macos"
-))]
-pub mod videotoolbox_decode;
->>>>>>> Stashed changes
 
 #[cfg(feature = "mesh-bvh")]
 pub mod mesh_bvh;
@@ -411,7 +392,6 @@ pub use extras::{
 #[cfg(feature = "nurbs")]
 pub use geometries::NurbsGeometry;
 pub use geometries::{
-<<<<<<< Updated upstream
     BoxGeometry, BoxLineGeometry, CapsuleGeometry, CircleGeometry, ConeGeometry, ConvexGeometry,
     CylinderGeometry, DecalGeometry, DodecahedronGeometry, EdgesGeometry, ExtrudeGeometry, Glyph,
     IcosahedronGeometry, Infill, KirigamiAssembly, KirigamiCell, KirigamiCoreLattice,
@@ -424,25 +404,18 @@ pub use geometries::{
     CuboctAssemblyPlan, CuboctAssemblyStep, CuboctFrame, CuboctJoint, CuboctJointKind, FrameMaterial,
     FrameResponse, Hand, Conductivity, Conform, Field, LatticeMetrics, SolidMaterial, Stiffness,
     SeedLayout, Solver, Stochastic, Strength,
-=======
-    BoxGeometry, BoxLineGeometry, CapsuleGeometry, ChiralRule, CircleGeometry, Conductivity,
-    ConeGeometry, Conform, ConvexGeometry, Cuboct, CuboctAssembly, CuboctAssemblyPlan,
-    CuboctAssemblyStep, CuboctFrame, CuboctJoint, CuboctJointKind, CylinderGeometry, DecalGeometry,
-    DodecahedronGeometry, EdgesGeometry, ExtrudeGeometry, Field, FrameMaterial, FrameResponse,
-    Glyph, Hand, IcosahedronGeometry, Infill, KirigamiAssembly, KirigamiCell, KirigamiCoreLattice,
-    KirigamiCrease, KirigamiCreaseKind, KirigamiExpandedMiura, KirigamiFace, KirigamiFaceKind,
-    KirigamiMesh, KirigamiNet, KirigamiNetPanel, KirigamiPreset, LatheGeometry, Lattice,
-    LatticeGeometry, LatticeKind, LatticeMetrics, LatticeStyle, OctahedronGeometry,
-    ParametricGeometry, PlaneGeometry, PolyhedronGeometry, Region, RingGeometry, SolidMaterial,
-    Solver, SphereGeometry, Stiffness, Stochastic, Strength, Strut, TetrahedronGeometry,
-    TextGeometry, TorusGeometry, TorusKnotGeometry, Tpms, TubeGeometry, WireframeGeometry,
-    KIRIGAMI_NET_VARIANT,
->>>>>>> Stashed changes
 };
 pub use helpers::{
     ArrowHelper, AxesHelper, BoxHelper, CameraHelper, DirectionalLightHelper, GridHelper,
     HemisphereLightHelper, PointLightHelper, PolarGridHelper, SkeletonHelper, SpotLightHelper,
     VertexNormalsHelper, VertexTangentsHelper,
+};
+pub use origami::{
+    book_cardinal_cp, book_cardinal_stages, classic_bird_cp, classic_bird_stages, eagle_cp,
+    eagle_stages, frog_cp, frog_stages, giang_cardinal_cp, giang_cardinal_stages, AssembledBird,
+    Assignment, BirdKind, BookCardinalStage, ClassicBirdStage, ClosureReport, CreasePattern,
+    Degree4, EagleStage, Edge, EdgeKind, FoldedBirdPart, FoldedState, FrogStage, GiangCardinalStage,
+    PartPose, TWIST_ALPHA, VertexMode,
 };
 pub use lights::{
     AmbientLight, DirectionalLight, HemisphereLight, Light, PointLight, RectAreaLight,
@@ -453,13 +426,6 @@ pub use loaders::{
     ExrLoader, FbxError, FbxLoader, FbxScene, GltfError, GltfImages, GltfLoader, GltfScene,
     HdrError, HdrLoader, Ktx2, Ktx2Error, MeshoptError, ObjLoader, PlyLoader, PolyMesh, StlLoader,
     TtfError, TtfFont, TtfGlyph,
-};
-pub use origami::{
-    book_cardinal_cp, book_cardinal_stages, classic_bird_cp, classic_bird_stages, eagle_cp,
-    eagle_stages, frog_cp, frog_stages, giang_cardinal_cp, giang_cardinal_stages, AssembledBird,
-    Assignment, BirdKind, BookCardinalStage, ClassicBirdStage, ClosureReport, CreasePattern,
-    Degree4, EagleStage, Edge, EdgeKind, FoldedBirdPart, FoldedState, FrogStage,
-    GiangCardinalStage, PartPose, VertexMode, TWIST_ALPHA,
 };
 // Writing, which the loaders module also provides.
 pub use loaders::{scene_to_glb, scene_to_gltf, GltfExportOptions};
@@ -595,8 +561,8 @@ pub use mesh_bvh::{
 
 #[cfg(feature = "raytrace")]
 pub use raytrace::{
-    intersect_box, Aov, BackgroundMode, CpuBackend, RaytraceBackend, RaytraceError,
-    RaytraceRenderer, RaytraceScene, RaytraceSettings,
+    intersect_box, Aov, BackgroundMode, CpuBackend, RaytraceBackend, RaytraceError, RaytraceRenderer,
+    RaytraceScene, RaytraceSettings,
 };
 
 #[cfg(feature = "bvh-csg")]
@@ -610,11 +576,7 @@ pub use csg::{
 pub use exact_csg::report::{mesh_report, DefectCluster, MeshReport};
 #[cfg(feature = "openscad")]
 pub use openscad::export::{
-<<<<<<< Updated upstream
     geometry_to_3mf, geometry_to_glb, geometry_to_obj, geometry_to_off, geometry_to_ply, parts_to_glb,
-=======
-    geometry_to_3mf, geometry_to_glb, geometry_to_obj, geometry_to_off, parts_to_glb,
->>>>>>> Stashed changes
 };
 #[cfg(feature = "openscad")]
 pub use openscad::freecad::{
@@ -630,9 +592,9 @@ pub use openscad::mechanism::{
 #[cfg(feature = "openscad")]
 pub use openscad::scad::{
     clear_files, parse_scad, parse_scad_at, parse_scad_file, parse_scad_file_at,
-    parse_scad_file_for_parts, parse_scad_file_with, parse_scad_mechanism, parse_scad_mechanism_at,
-    parse_scad_mechanism_file, parse_scad_mechanism_file_at, parse_scad_with, parse_scad_with_base,
-    register_file, scad_file_values, scad_value, scad_values, scad_values_in,
+    parse_scad_file_for_parts, parse_scad_file_with, parse_scad_mechanism, parse_scad_mechanism_at, parse_scad_mechanism_file,
+    parse_scad_mechanism_file_at, parse_scad_with, parse_scad_with_base, register_file,
+    scad_file_values, scad_value, scad_values, scad_values_in,
 };
 #[cfg(feature = "openscad")]
 pub use openscad::schematic::{

@@ -143,7 +143,11 @@ struct RawFace {
 }
 
 fn make_face(points: &[Vector3], a: u32, b: u32, c: u32, interior: Vector3) -> Option<RawFace> {
-    let (pa, pb, pc) = (points[a as usize], points[b as usize], points[c as usize]);
+    let (pa, pb, pc) = (
+        points[a as usize],
+        points[b as usize],
+        points[c as usize],
+    );
     let n = (pb - pa).cross(pc - pa);
     let normal = crate::math::try_normalize(n)?;
     // Orient outward: the hull interior must be on the negative side.
@@ -181,12 +185,19 @@ fn quickhull(points: &[Vector3]) -> Option<Vec<RawFace>> {
     let eps = scale * 1e-6;
 
     let [i0, i1, i2, i3] = initial_simplex(points, eps)?;
-    let interior =
-        (points[i0 as usize] + points[i1 as usize] + points[i2 as usize] + points[i3 as usize])
-            * 0.25;
+    let interior = (points[i0 as usize]
+        + points[i1 as usize]
+        + points[i2 as usize]
+        + points[i3 as usize])
+        * 0.25;
 
     let mut faces = Vec::with_capacity(16);
-    for (a, b, c) in [(i0, i1, i2), (i0, i1, i3), (i0, i2, i3), (i1, i2, i3)] {
+    for (a, b, c) in [
+        (i0, i1, i2),
+        (i0, i1, i3),
+        (i0, i2, i3),
+        (i1, i2, i3),
+    ] {
         faces.push(make_face(points, a, b, c, interior)?);
     }
 
@@ -405,7 +416,11 @@ mod tests {
                 let t = (i as f32 + 0.5) / n as f32;
                 let phi = (1.0 - 2.0 * t).acos();
                 let theta = std::f32::consts::PI * (1.0 + 5.0f32.sqrt()) * i as f32;
-                Vector3::new(phi.sin() * theta.cos(), phi.sin() * theta.sin(), phi.cos())
+                Vector3::new(
+                    phi.sin() * theta.cos(),
+                    phi.sin() * theta.sin(),
+                    phi.cos(),
+                )
             })
             .collect();
         let hull = ConvexHull::from_points(&pts).unwrap();
@@ -413,10 +428,6 @@ mod tests {
             assert!(hull.contains_point(*p), "{p:?} fell outside its own hull");
         }
         // Volume should approach 4/3 π ≈ 4.19 from below.
-        assert!(
-            hull.volume() > 4.0 && hull.volume() < 4.19,
-            "{}",
-            hull.volume()
-        );
+        assert!(hull.volume() > 4.0 && hull.volume() < 4.19, "{}", hull.volume());
     }
 }

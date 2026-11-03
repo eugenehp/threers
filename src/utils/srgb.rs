@@ -76,10 +76,7 @@ mod tests {
         assert_eq!(srgb_to_linear(0), 0.0);
         assert_eq!(srgb_to_linear(255), 1.0);
         let mid = srgb_to_linear(128);
-        assert!(
-            (mid - 0.2158).abs() < 1e-3,
-            "sRGB 128 is {mid} of full light"
-        );
+        assert!((mid - 0.2158).abs() < 1e-3, "sRGB 128 is {mid} of full light");
         // And half the light encodes to 188, not to 128.
         assert_eq!(linear_to_srgb(0.5), 188);
     }

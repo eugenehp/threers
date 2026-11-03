@@ -312,11 +312,7 @@ fn build(arena: &ObjectArena, roots: &[ObjectId], options: &GltfExportOptions) -
         ("scene".to_string(), Value::number(0.0)),
         (
             "scenes".to_string(),
-<<<<<<< Updated upstream
             Value::Array(vec![Value::Object(scene.into_iter().collect())]),
-=======
-            Value::Array(vec![Value::object([("nodes", Value::Array(scene_roots))])]),
->>>>>>> Stashed changes
         ),
         ("nodes".to_string(), Value::Array(w.nodes)),
         (

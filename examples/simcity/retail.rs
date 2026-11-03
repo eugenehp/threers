@@ -50,11 +50,7 @@ pub(crate) fn add_parking_lot(
     );
     // A module is two rows of bays nose to nose with an aisle beside them.
     let module = BAY_L * 2.0 + AISLE;
-    let (span, run) = if along_x {
-        (r.d(), r.w())
-    } else {
-        (r.w(), r.d())
-    };
+    let (span, run) = if along_x { (r.d(), r.w()) } else { (r.w(), r.d()) };
     let modules = (span / module).floor().max(1.0) as usize;
     let bays = (run / BAY_W).floor() as usize;
     let mut cars = 0;
@@ -77,29 +73,12 @@ pub(crate) fn add_parking_lot(
                 // The bay line: one stripe on the left of each bay, which is
                 // how they are actually painted.
                 let (lx, lz, lx1, lz1) = if along_x {
-                    (
-                        x - BAY_W * 0.5,
-                        z - BAY_L * 0.5,
-                        x - BAY_W * 0.5 + 0.12,
-                        z + BAY_L * 0.5,
-                    )
+                    (x - BAY_W * 0.5, z - BAY_L * 0.5, x - BAY_W * 0.5 + 0.12, z + BAY_L * 0.5)
                 } else {
-                    (
-                        x - BAY_L * 0.5,
-                        z - BAY_W * 0.5,
-                        x + BAY_L * 0.5,
-                        z - BAY_W * 0.5 + 0.12,
-                    )
+                    (x - BAY_L * 0.5, z - BAY_W * 0.5, x + BAY_L * 0.5, z - BAY_W * 0.5 + 0.12)
                 };
-                b.paint.add_slab(
-                    lx,
-                    lz,
-                    lx1,
-                    lz1,
-                    KERB + 0.04,
-                    Color::from_hex(0xd8d8d0),
-                    Uv::Unit,
-                );
+                b.paint
+                    .add_slab(lx, lz, lx1, lz1, KERB + 0.04, Color::from_hex(0xd8d8d0), Uv::Unit);
                 if bodies.is_empty() || rng.f() > fill {
                     continue;
                 }
@@ -131,11 +110,7 @@ pub(crate) fn add_parking_lot(
         let u = (i as f32 + 0.5) / masts as f32 * run;
         for m in 0..modules {
             let v = m as f32 * module + BAY_L;
-            let (x, z) = if along_x {
-                (r.x0 + u, r.z0 + v)
-            } else {
-                (r.x0 + v, r.z0 + u)
-            };
+            let (x, z) = if along_x { (r.x0 + u, r.z0 + v) } else { (r.x0 + v, r.z0 + u) };
             b.trim.add_limb(
                 Vector3::new(x, KERB, z),
                 Vector3::new(x, 8.5, z),
@@ -255,26 +230,21 @@ pub(crate) fn add_parking_deck(
 
 /// A strip mall: a long single-storey row of units behind a shared canopy,
 /// facing its own car park.
-pub(crate) fn add_strip_mall(b: &mut Batches, r: &Rect, along_x: bool, rng: &mut Rng) -> bool {
+pub(crate) fn add_strip_mall(
+    b: &mut Batches,
+    r: &Rect,
+    along_x: bool,
+    rng: &mut Rng,
+) -> bool {
     if r.w() < 30.0 || r.d() < 30.0 {
         return false;
     }
     // The building takes the back third; the rest is parking.
     let depth = (if along_x { r.d() } else { r.w() }) * 0.34;
     let shop = if along_x {
-        Rect {
-            x0: r.x0,
-            z0: r.z1 - depth,
-            x1: r.x1,
-            z1: r.z1,
-        }
+        Rect { x0: r.x0, z0: r.z1 - depth, x1: r.x1, z1: r.z1 }
     } else {
-        Rect {
-            x0: r.x1 - depth,
-            z0: r.z0,
-            x1: r.x1,
-            z1: r.z1,
-        }
+        Rect { x0: r.x1 - depth, z0: r.z0, x1: r.x1, z1: r.z1 }
     };
     // Claim the *building*, not the site. Claiming the whole rectangle is what
     // it looks like it should do, and it means the car park in front can never
@@ -306,10 +276,7 @@ pub(crate) fn add_strip_mall(b: &mut Batches, r: &Rect, along_x: bool, rng: &mut
                 z1: mix(shop.z0, shop.z1, u1),
             }
         };
-        let col = scale_color(
-            Color::from_hex(FRONT[rng.below(FRONT.len())]),
-            rng.range(0.9, 1.1),
-        );
+        let col = scale_color(Color::from_hex(FRONT[rng.below(FRONT.len())]), rng.range(0.9, 1.1));
         b.trim.add_box(
             Vector3::new(unit.x0, KERB, unit.z0),
             Vector3::new(unit.x1, h, unit.z1),
@@ -401,19 +368,9 @@ pub(crate) fn add_grocery(b: &mut Batches, r: &Rect, along_x: bool, rng: &mut Rn
     }
     let depth = (if along_x { r.d() } else { r.w() }) * 0.46;
     let shop = if along_x {
-        Rect {
-            x0: r.x0 + 2.0,
-            z0: r.z1 - depth,
-            x1: r.x1 - 2.0,
-            z1: r.z1 - 2.0,
-        }
+        Rect { x0: r.x0 + 2.0, z0: r.z1 - depth, x1: r.x1 - 2.0, z1: r.z1 - 2.0 }
     } else {
-        Rect {
-            x0: r.x1 - depth,
-            z0: r.z0 + 2.0,
-            x1: r.x1 - 2.0,
-            z1: r.z1 - 2.0,
-        }
+        Rect { x0: r.x1 - depth, z0: r.z0 + 2.0, x1: r.x1 - 2.0, z1: r.z1 - 2.0 }
     };
     if !b.occ.try_claim([shop.x0, shop.z0, shop.x1, shop.z1]) {
         return false;
@@ -440,11 +397,7 @@ pub(crate) fn add_grocery(b: &mut Batches, r: &Rect, along_x: bool, rng: &mut Rn
             rng.range(shop.x0 + 3.0, shop.x1 - 3.0),
             rng.range(shop.z0 + 3.0, shop.z1 - 3.0),
         );
-        let (w, d, ph) = (
-            rng.range(1.6, 3.4),
-            rng.range(1.6, 3.0),
-            rng.range(0.8, 1.8),
-        );
+        let (w, d, ph) = (rng.range(1.6, 3.4), rng.range(1.6, 3.0), rng.range(0.8, 1.8));
         b.trim.add_box(
             Vector3::new(px - w * 0.5, h, pz - d * 0.5),
             Vector3::new(px + w * 0.5, h + ph, pz + d * 0.5),
@@ -487,11 +440,7 @@ pub(crate) fn add_grocery(b: &mut Batches, r: &Rect, along_x: bool, rng: &mut Rn
         if bx < r.x0 || bz < r.z0 {
             continue;
         }
-        let (bw, bd) = if along_x {
-            (1.4f32, 5.0f32)
-        } else {
-            (5.0, 1.4)
-        };
+        let (bw, bd) = if along_x { (1.4f32, 5.0f32) } else { (5.0, 1.4) };
         b.trim.add_box(
             Vector3::new(bx - bw, 2.4, bz - bd),
             Vector3::new(bx + bw, 2.7, bz + bd),
@@ -535,12 +484,7 @@ pub(crate) fn add_mall(
     }
     // The building takes two thirds; the rest gets a deck and surface parking.
     let split = r.x0 + r.w() * 0.66;
-    let hull = Rect {
-        x0: r.x0,
-        z0: r.z0,
-        x1: split - 6.0,
-        z1: r.z1,
-    };
+    let hull = Rect { x0: r.x0, z0: r.z0, x1: split - 6.0, z1: r.z1 };
     if !b.occ.try_claim([hull.x0, hull.z0, hull.x1, hull.z1]) {
         return false;
     }
@@ -556,11 +500,7 @@ pub(crate) fn add_mall(
     // extruded rectangle.
     b.trim.add_box(
         Vector3::new(mix(hull.x0, hull.x1, 0.18), h, mix(hull.z0, hull.z1, 0.15)),
-        Vector3::new(
-            mix(hull.x0, hull.x1, 0.72),
-            h + 5.0,
-            mix(hull.z0, hull.z1, 0.85),
-        ),
+        Vector3::new(mix(hull.x0, hull.x1, 0.72), h + 5.0, mix(hull.z0, hull.z1, 0.85)),
         scale_color(wall, 0.95),
         Uv::Unit,
     );
@@ -581,11 +521,7 @@ pub(crate) fn add_mall(
             rng.range(hull.x0 + 4.0, hull.x1 - 4.0),
             rng.range(hull.z0 + 4.0, hull.z1 - 4.0),
         );
-        let (w, d, ph) = (
-            rng.range(2.0, 5.0),
-            rng.range(2.0, 4.0),
-            rng.range(1.0, 2.4),
-        );
+        let (w, d, ph) = (rng.range(2.0, 5.0), rng.range(2.0, 4.0), rng.range(1.0, 2.4));
         b.trim.add_box(
             Vector3::new(px - w * 0.5, h, pz - d * 0.5),
             Vector3::new(px + w * 0.5, h + ph, pz + d * 0.5),
@@ -616,19 +552,9 @@ pub(crate) fn add_mall(
         );
     }
     // The parking deck alongside, and surface bays in front of it.
-    let deck = Rect {
-        x0: split,
-        z0: r.z0 + 4.0,
-        x1: r.x1,
-        z1: mix(r.z0, r.z1, 0.55),
-    };
+    let deck = Rect { x0: split, z0: r.z0 + 4.0, x1: r.x1, z1: mix(r.z0, r.z1, 0.55) };
     add_parking_deck(b, &deck, 3, bodies, paints, rng);
-    let lot = Rect {
-        x0: split,
-        z0: mix(r.z0, r.z1, 0.58),
-        x1: r.x1,
-        z1: r.z1 - 4.0,
-    };
+    let lot = Rect { x0: split, z0: mix(r.z0, r.z1, 0.58), x1: r.x1, z1: r.z1 - 4.0 };
     add_parking_lot(b, &lot, true, 0.55, bodies, paints, rng);
     true
 }

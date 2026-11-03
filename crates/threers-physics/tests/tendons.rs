@@ -288,10 +288,7 @@ fn a_guide_on_a_moving_body_carries_its_share() {
     // the end is pulled straight at the guide (+Y).
     let g = world.body(guide).unwrap().linear_velocity;
     let e = world.body(end).unwrap().linear_velocity;
-    assert!(
-        g.x < -0.1,
-        "the guide was not pulled toward the anchor: {g:?}"
-    );
+    assert!(g.x < -0.1, "the guide was not pulled toward the anchor: {g:?}");
     assert!(g.y < -0.1, "the guide was not pulled toward the end: {g:?}");
     assert!(
         e.y > 0.1 && e.x.abs() < 0.05,

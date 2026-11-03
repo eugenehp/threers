@@ -37,10 +37,7 @@ fn main() -> ExitCode {
         data: crate_dir.join("data"),
         web: repo.join("web"),
     };
-    let mut port: u16 = std::env::var("PORT")
-        .ok()
-        .and_then(|p| p.parse().ok())
-        .unwrap_or(8787);
+    let mut port: u16 = std::env::var("PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(8787);
 
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -100,9 +97,7 @@ fn api(root: &Path, req: &Request) -> Option<Response> {
     }
     // Ids are digits and trees are one of two known keys — that is the whole
     // validation surface for a filesystem path built out of client input.
-    if Release::find(tree).is_none()
-        || id.is_empty()
-        || id.len() > 20
+    if Release::find(tree).is_none() || id.is_empty() || id.len() > 20
         || !id.bytes().all(|b| b.is_ascii_digit())
     {
         return Some(Response::json(400, r#"{"error":"bad tree or id"}"#.into()));
@@ -119,10 +114,9 @@ fn skeleton(dir: &Path, tree: &str, id: &str) -> Response {
     let sk = match read_skeleton(&dir.join("skeleton.swc")) {
         Ok(s) => s,
         Err(_) => {
-            return Response::json(
-                404,
-                format!(r#"{{"error":"no skeleton.swc","tree":"{tree}","id":"{id}"}}"#),
-            )
+            return Response::json(404, format!(
+                r#"{{"error":"no skeleton.swc","tree":"{tree}","id":"{id}"}}"#
+            ))
         }
     };
     let mut body = Vec::with_capacity(sk.segments.len() * 4);
@@ -148,10 +142,9 @@ fn neuron(dir: &Path, tree: &str, id: &str) -> Response {
     let meta = match http::read_kv_tsv(&dir.join("meta.tsv")) {
         Ok(m) => m,
         Err(_) => {
-            return Response::json(
-                404,
-                format!(r#"{{"error":"no such neuron","tree":"{tree}","id":"{id}"}}"#),
-            )
+            return Response::json(404, format!(
+                r#"{{"error":"no such neuron","tree":"{tree}","id":"{id}"}}"#
+            ))
         }
     };
 
@@ -185,12 +178,7 @@ fn neuron(dir: &Path, tree: &str, id: &str) -> Response {
         200,
         format!(
             r#"{{"tree":{},"id":{},"meta":{{{}}},"partners":{{"in":[{}],"out":[{}]}},"layers":[{}]}}"#,
-            esc(tree),
-            esc(id),
-            meta_json,
-            dir_json("in"),
-            dir_json("out"),
-            layers_json
+            esc(tree), esc(id), meta_json, dir_json("in"), dir_json("out"), layers_json
         ),
     )
 }

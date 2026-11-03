@@ -104,11 +104,7 @@ fn loaders(c: &mut Criterion) {
 
     let sphere_glb = include_bytes!("../src/loaders/testdata/sphere_plain.glb");
     g.bench_function("glb sphere", |b| {
-        b.iter(|| {
-            black_box(threers::loaders::GltfLoader::parse_glb(black_box(
-                sphere_glb,
-            )))
-        })
+        b.iter(|| black_box(threers::loaders::GltfLoader::parse_glb(black_box(sphere_glb))))
     });
 
     let ktx = include_bytes!("../src/loaders/testdata/ktx/mips.ktx2");

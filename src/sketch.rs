@@ -129,6 +129,7 @@ pub struct SketchOptions {
     pub quad_controls: bool,
 }
 
+
 impl SketchOptions {
     pub fn new(title: impl Into<String>) -> Self {
         Self {
@@ -458,44 +459,8 @@ where
                     }
                     frame_index += 1;
 
-<<<<<<< Updated upstream
                     // Hidden or minimised: `render_frame` skips the frame.
                     view.render_frame(&mut scene, &camera, quad_view.as_mut(), Some(&mut overlay));
-=======
-                    // A minimised window has a zero-sized surface and acquiring
-                    // from it is an error, not a frame to skip quietly.
-                    if config.width > 0 && config.height > 0 {
-                        if let wgpu::CurrentSurfaceTexture::Success(frame)
-                        | wgpu::CurrentSurfaceTexture::Suboptimal(frame) =
-                            surface.get_current_texture()
-                        {
-                            let view = frame
-                                .texture
-                                .create_view(&wgpu::TextureViewDescriptor::default());
-                            renderer.render(&mut scene, &camera, &view, false);
-                            // Over the top of the render, and skipped entirely
-                            // on a frame that drew nothing 2D.
-                            if overlay.touched() {
-                                let srgb_view = if srgb_format == config.format {
-                                    None
-                                } else {
-                                    Some(frame.texture.create_view(&wgpu::TextureViewDescriptor {
-                                        format: Some(srgb_format),
-                                        ..Default::default()
-                                    }))
-                                };
-                                // Uploads only the rows that changed, which for
-                                // a read-out in the corner is a tenth of them.
-                                renderer.draw_overlay(
-                                    &mut overlay,
-                                    srgb_view.as_ref().unwrap_or(&view),
-                                    srgb_format,
-                                );
-                            }
-                            queue.present(frame);
-                        }
-                    }
->>>>>>> Stashed changes
                     if wants_exit {
                         target.exit();
                     }

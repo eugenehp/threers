@@ -60,7 +60,10 @@ fn main() {
         LatticeKind::Strut(Strut::Cubic),
         |l| {
             let axis = Vector3::new(0.0, 1.0, 0.0);
-            let (top, bottom) = (Vector3::new(0.0, half, 0.0), Vector3::new(0.0, -half, 0.0));
+            let (top, bottom) = (
+                Vector3::new(0.0, half, 0.0),
+                Vector3::new(0.0, -half, 0.0),
+            );
             let wall = 3.0;
             l.fill(
                 Region::cone(bottom, top, half * 0.45, half * 0.85).difference(Region::cone(
@@ -96,45 +99,39 @@ fn main() {
 
     // The cheap half of conforming: world x and y, but z is depth below the
     // surface — so a whole number of layers spans the wall wherever it curves.
-    tiles.push(tile(
-        "depth-mapped dome",
-        LatticeKind::Tpms(Tpms::Diamond),
-        |l| {
-            l.fill(
-                Region::sphere(Vector3::ZERO, half)
-                    .difference(Region::sphere(Vector3::ZERO, half - 5.0)),
-            )
-            .conform(Conform::depth(Region::sphere(Vector3::ZERO, half)))
-            .cell_size(Vector3::new(5.0, 5.0, 2.5))
-        },
-    ));
+    tiles.push(tile("depth-mapped dome", LatticeKind::Tpms(Tpms::Diamond), |l| {
+        l.fill(
+            Region::sphere(Vector3::ZERO, half)
+                .difference(Region::sphere(Vector3::ZERO, half - 5.0)),
+        )
+        .conform(Conform::depth(Region::sphere(Vector3::ZERO, half)))
+        .cell_size(Vector3::new(5.0, 5.0, 2.5))
+    }));
 
     // --- Field-driven: thick where something said it had to be. ---
-    tiles.push(tile(
-        "graded on a field",
-        LatticeKind::Strut(Strut::Octet),
-        |l| {
-            // Stand-in for a solver: hot at one corner, cold at the far one.
-            let bounds =
-                threers::Box3::from_center_and_size(Vector3::ZERO, Vector3::new(PART, PART, PART));
-            let field = Field::scattered(
-                bounds,
-                [10, 10, 10],
-                &[
-                    (Vector3::new(-half, -half, 0.0), 100.0),
-                    (Vector3::new(half, half, 0.0), 0.0),
-                ],
-            );
-            // A grade of 0.4 makes the thinnest strut two fifths of the nominal
-            // one, and `resolve_walls` sizes the grid off the nominal — so the
-            // thin end is what decides the sampling here, and it has to be asked
-            // for. Without this the lattice comes out as gravel where it is
-            // thinnest, silently.
-            l.bounds(bounds)
-                .resolution(40)
-                .grade(field.into_grade(1.8, 0.4))
-        },
-    ));
+    tiles.push(tile("graded on a field", LatticeKind::Strut(Strut::Octet), |l| {
+        // Stand-in for a solver: hot at one corner, cold at the far one.
+        let bounds = threers::Box3::from_center_and_size(
+            Vector3::ZERO,
+            Vector3::new(PART, PART, PART),
+        );
+        let field = Field::scattered(
+            bounds,
+            [10, 10, 10],
+            &[
+                (Vector3::new(-half, -half, 0.0), 100.0),
+                (Vector3::new(half, half, 0.0), 0.0),
+            ],
+        );
+        // A grade of 0.4 makes the thinnest strut two fifths of the nominal
+        // one, and `resolve_walls` sizes the grid off the nominal — so the
+        // thin end is what decides the sampling here, and it has to be asked
+        // for. Without this the lattice comes out as gravel where it is
+        // thinnest, silently.
+        l.bounds(bounds)
+            .resolution(40)
+            .grade(field.into_grade(1.8, 0.4))
+    }));
 
     // --- What they measure as porous media. ---
     //
@@ -181,16 +178,7 @@ fn main() {
     // against each other at one resolution rather than for quoting.
     println!(
         "\n{:<22} {:>7} {:>8} {:>9} {:>9} {:>9} {:>8} {:>7} {:>9} {:>5}",
-        "cell",
-        "voxels",
-        "density",
-        "Ex/Es",
-        "Ez/Es",
-        "anisotropy",
-        "sy/500",
-        "worked",
-        "k/ks",
-        "path"
+        "cell", "voxels", "density", "Ex/Es", "Ez/Es", "anisotropy", "sy/500", "worked", "k/ks", "path"
     );
     let mut ran = None;
     // `window` is how many cells across the periodic window is, `per_cell` how
@@ -202,12 +190,7 @@ fn main() {
         ("octet truss", LatticeKind::Strut(Strut::Octet), 1, 16),
         ("bcc", LatticeKind::Strut(Strut::Bcc), 1, 16),
         ("gyroid sheet", LatticeKind::Tpms(Tpms::Gyroid), 1, 16),
-        (
-            "spinodal",
-            LatticeKind::Stochastic(Stochastic::Spinodal),
-            3,
-            8,
-        ),
+        ("spinodal", LatticeKind::Stochastic(Stochastic::Spinodal), 3, 8),
         (
             "spinodal lamellar",
             LatticeKind::Stochastic(Stochastic::SpinodalLamellar),

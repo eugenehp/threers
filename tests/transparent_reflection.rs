@@ -56,8 +56,7 @@ fn mean_disc(rgba: &[u8]) -> f64 {
                 continue;
             }
             let i = ((y * W + x) * 4) as usize;
-            a +=
-                0.2126 * rgba[i] as f64 + 0.7152 * rgba[i + 1] as f64 + 0.0722 * rgba[i + 2] as f64;
+            a += 0.2126 * rgba[i] as f64 + 0.7152 * rgba[i + 1] as f64 + 0.0722 * rgba[i + 2] as f64;
             n += 1.0;
         }
     }
@@ -101,10 +100,7 @@ fn a_transparent_metal_keeps_its_reflection() {
         eprintln!("skipping: no GPU adapter");
         return;
     };
-    eprintln!(
-        "metal: opaque {opaque:.1}, α=0.25 {faint:.1}, kept {:.0}%",
-        100.0 * faint / opaque
-    );
+    eprintln!("metal: opaque {opaque:.1}, α=0.25 {faint:.1}, kept {:.0}%", 100.0 * faint / opaque);
     assert!(
         opaque > 40.0,
         "the opaque metal should reflect the white environment, got {opaque:.1}"
@@ -128,10 +124,7 @@ fn a_transparent_dielectric_stays_transparent() {
         eprintln!("skipping: no GPU adapter");
         return;
     };
-    eprintln!(
-        "dielectric: opaque {opaque:.1}, α=0.25 {faint:.1}, kept {:.0}%",
-        100.0 * faint / opaque
-    );
+    eprintln!("dielectric: opaque {opaque:.1}, α=0.25 {faint:.1}, kept {:.0}%", 100.0 * faint / opaque);
     assert!(
         faint / opaque < 0.45,
         "a 25%-opacity dielectric kept {:.0}% of its shading ({faint:.1} against {opaque:.1}) — \
