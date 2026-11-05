@@ -11,7 +11,8 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 
 use threers::cameras::Camera;
-use threers::{OrbitControls, PerspectiveCamera, PointerEvent, Renderer};
+use threers::marks::gpu;
+use threers::{OrbitControls, PointerEvent, Renderer};
 
 use crate::preset::{self, Preset, Quality, QUALITY_LEVELS};
 use crate::waves_gpu::WaveCompute;
@@ -24,6 +25,8 @@ struct App {
     config: wgpu::SurfaceConfiguration,
     device: std::sync::Arc<wgpu::Device>,
     queue: std::sync::Arc<wgpu::Queue>,
+    /// The device and queue as the ocean's compute passes take them.
+    gpu: gpu::Gpu,
     renderer: Renderer,
     world: World,
     waves: WaveCompute,
@@ -103,7 +106,7 @@ pub async fn start(
             apply_limit_buckets: false,
         })
         .await
-        .ok_or_else(|| JsValue::from_str("no WebGPU adapter (does this browser support WebGPU?)"))?;
+        .map_err(|e| JsValue::from_str(&format!("no WebGPU adapter (does this browser support WebGPU?): {e}")))?;
 
     // The browser's own defaults, not `downlevel_defaults`: this demo wants
     // storage textures and a handful of storage buffers per stage, and WebGPU's
@@ -146,7 +149,8 @@ pub async fn start(
     renderer.set_taa(true);
 
     let mut world = World::build(&preset, &quality, width as f32 / height as f32);
-    let waves = world.attach_waves(&device, &queue, &mut renderer);
+    let gpu = gpu::Gpu::from((&*device, &*queue));
+    let waves = world.attach_waves(&gpu, &gpu, &mut renderer);
 
     let mut controls = OrbitControls::new(&world.camera);
     controls.min_distance = 2.0;
@@ -158,6 +162,7 @@ pub async fn start(
         config,
         device,
         queue,
+        gpu,
         renderer,
         world,
         waves,
@@ -223,6 +228,7 @@ fn install_input(canvas: &web_sys::HtmlCanvasElement, app: &Rc<RefCell<App>>) ->
             wheel: 0.0,
             rotating: s.rotating,
             panning: s.panning,
+            cursor: (0.0, 0.0),
         };
         let App {
             controls, world, ..
@@ -243,6 +249,7 @@ fn install_input(canvas: &web_sys::HtmlCanvasElement, app: &Rc<RefCell<App>>) ->
             wheel: -e.delta_y() as f32 * 0.6,
             rotating: false,
             panning: false,
+            cursor: (0.0, 0.0),
         };
         let App {
             controls, world, ..
@@ -287,14 +294,8 @@ fn start_frames(canvas: web_sys::HtmlCanvasElement, app: Rc<RefCell<App>>) {
             }
 
             let t = ((now() - s.t0) / 1000.0) as f32;
-            let App {
-                world,
-                device,
-                queue,
-                waves,
-                ..
-            } = &mut *s;
-            world.update(t, device, queue, waves);
+            let App { world, gpu, waves, .. } = &mut *s;
+            world.update(t, gpu, gpu, waves);
 
             if let wgpu::CurrentSurfaceTexture::Success(frame)
             | wgpu::CurrentSurfaceTexture::Suboptimal(frame) =
@@ -303,7 +304,7 @@ fn start_frames(canvas: web_sys::HtmlCanvasElement, app: Rc<RefCell<App>>) {
                     .texture
                     .create_view(&wgpu::TextureViewDescriptor::default());
                 let App {
-                    renderer, world, ..
+                    renderer, world, queue, ..
                 } = &mut *s;
                 renderer.render(&mut world.scene, &world.camera, &view, false);
                 queue.present(frame);
