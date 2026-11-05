@@ -3175,6 +3175,7 @@ dependencies = [
 name = "threers-physics-bench"
 version = "0.0.10"
 dependencies = [
+ "console_error_panic_hook",
  "threers-physics",
  "wasm-bindgen",
 ]

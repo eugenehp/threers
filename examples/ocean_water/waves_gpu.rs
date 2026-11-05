@@ -22,7 +22,10 @@
 use threers::marks::gpu;
 use std::sync::Arc;
 
-use threers::{BufferGeometry, HeadlessRenderer, Renderer};
+use threers::{BufferGeometry, Renderer};
+#[cfg(not(target_arch = "wasm32"))]
+use threers::HeadlessRenderer;
+#[cfg(not(target_arch = "wasm32"))]
 use threers::renderer::WindowRenderer;
 
 use crate::ocean_fft::{Cascades, OceanFft};
@@ -385,6 +388,8 @@ impl MeshHost for Renderer {
     }
 }
 
+// Native only; the browser build (`threers-ocean`) draws through `Renderer`.
+#[cfg(not(target_arch = "wasm32"))]
 impl MeshHost for HeadlessRenderer {
     fn upload_geometry(&mut self, geometry: &Arc<BufferGeometry>) {
         HeadlessRenderer::upload_geometry(self, geometry);
@@ -397,6 +402,7 @@ impl MeshHost for HeadlessRenderer {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl MeshHost for WindowRenderer {
     fn upload_geometry(&mut self, geometry: &Arc<BufferGeometry>) {
         WindowRenderer::upload_geometry(self, geometry);
