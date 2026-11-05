@@ -41,7 +41,10 @@ impl PolarGridHelper {
         let mut g = BufferGeometry::new();
         g.set_attribute("position", BufferAttribute::new(positions, 3));
         // three.js helpers are `toneMapped: false`.
-        let mat = LineBasicMaterial { tone_mapped: false, ..LineBasicMaterial::new(color1) };
+        let mat = LineBasicMaterial {
+            tone_mapped: false,
+            ..LineBasicMaterial::new(color1)
+        };
         Object3D::line_segments(LineSegments::new(g, mat.into()))
     }
 

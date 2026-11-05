@@ -147,7 +147,10 @@ pub struct Adaptive {
 
 impl Default for Adaptive {
     fn default() -> Self {
-        Self { motion_ref: 40.0, floor: 0.15 }
+        Self {
+            motion_ref: 40.0,
+            floor: 0.15,
+        }
     }
 }
 
@@ -233,7 +236,10 @@ impl TimeSmear {
     /// computation; [`wrap`](Self::wrap) streams the same thing.
     pub fn echo_volume(&self, luma: &[f32], width: usize, height: usize) -> Vec<f32> {
         let px = width * height;
-        assert!(px > 0 && luma.len().is_multiple_of(px), "luma is not whole frames");
+        assert!(
+            px > 0 && luma.len().is_multiple_of(px),
+            "luma is not whole frames"
+        );
         let n = luma.len() / px;
         if n == 0 {
             return Vec::new();
@@ -366,7 +372,11 @@ fn tile_motion(win: &[&[f32]], width: usize, height: usize, x0: usize, y0: usize
         for x in x0..x1 {
             let p = y * width + x;
             let mean = win.iter().map(|f| f[p] as f64).sum::<f64>() / WINDOW as f64;
-            let var = win.iter().map(|f| (f[p] as f64 - mean).powi(2)).sum::<f64>() / WINDOW as f64;
+            let var = win
+                .iter()
+                .map(|f| (f[p] as f64 - mean).powi(2))
+                .sum::<f64>()
+                / WINDOW as f64;
             total += var.sqrt();
         }
     }
@@ -396,7 +406,9 @@ impl Kernel {
     }
 
     fn apply(&self, col: &mut [f64; WINDOW]) {
-        let (lo, hi) = col.iter().fold((f64::MAX, f64::MIN), |(a, b), &v| (a.min(v), b.max(v)));
+        let (lo, hi) = col
+            .iter()
+            .fold((f64::MAX, f64::MIN), |(a, b), &v| (a.min(v), b.max(v)));
         let sum: f64 = col.iter().sum();
         // A constant column is the uniform state, which every rotation only
         // rephases: leave it exactly as it is.
@@ -486,13 +498,23 @@ impl<F: FnMut(usize) -> Vec<u8>> Stream<F> {
             return;
         }
         let rgba = (self.render)(t);
-        assert_eq!(rgba.len(), self.width * self.height * 4, "frame {t}: wrong size");
-        self.luma.insert(t, downsample_luma(&rgba, self.width, self.height, self.work));
+        assert_eq!(
+            rgba.len(),
+            self.width * self.height * 4,
+            "frame {t}: wrong size"
+        );
+        self.luma.insert(
+            t,
+            downsample_luma(&rgba, self.width, self.height, self.work),
+        );
         self.sources.insert(t, rgba);
     }
 
     fn frame(&mut self, i: usize) -> Vec<u8> {
-        assert_eq!(i, self.next_output, "TimeSmear frames must be requested in order");
+        assert_eq!(
+            i, self.next_output,
+            "TimeSmear frames must be requested in order"
+        );
         assert!(i < self.frames, "frame {i} past the end ({})", self.frames);
         let (ww, wh) = self.work;
         let px = ww * wh;
@@ -502,11 +524,16 @@ impl<F: FnMut(usize) -> Vec<u8>> Stream<F> {
                 self.load(self.next_input);
                 self.next_input += 1;
             }
-            let win: Vec<&[f32]> = (start..start + WINDOW).map(|t| &self.luma[&t][..]).collect();
+            let win: Vec<&[f32]> = (start..start + WINDOW)
+                .map(|t| &self.luma[&t][..])
+                .collect();
             let echo = self.smear.window_echo(&win, ww, wh);
             for (j, e) in echo.chunks(px).enumerate() {
                 let w = self.weights[j];
-                let slot = self.acc.entry(start + j).or_insert_with(|| (vec![0.0; px], 0.0));
+                let slot = self
+                    .acc
+                    .entry(start + j)
+                    .or_insert_with(|| (vec![0.0; px], 0.0));
                 for (a, &v) in slot.0.iter_mut().zip(e) {
                     *a += w * v;
                 }
@@ -518,11 +545,24 @@ impl<F: FnMut(usize) -> Vec<u8>> Stream<F> {
         let inv = 1.0 / wsum.max(1e-6);
         echo.iter_mut().for_each(|v| *v *= inv);
         let source = self.sources.remove(&i).expect("source frame loaded");
-        let out = composite(&self.smear, &source, &self.luma[&i], &echo, self.width, self.height, self.work);
+        let out = composite(
+            &self.smear,
+            &source,
+            &self.luma[&i],
+            &echo,
+            self.width,
+            self.height,
+            self.work,
+        );
         self.next_output += 1;
         // Luma is needed by windows still to come and by the frames still to
         // be written (the raw look draws it).
-        let keep = self.starts.get(self.next_window).copied().unwrap_or(usize::MAX).min(self.next_output);
+        let keep = self
+            .starts
+            .get(self.next_window)
+            .copied()
+            .unwrap_or(usize::MAX)
+            .min(self.next_output);
         self.luma.retain(|&t, _| t >= keep);
         out
     }
@@ -536,7 +576,12 @@ fn luma_of(px: &[u8]) -> f32 {
 }
 
 /// Box-filtered Rec. 709 luma at the working size.
-pub(crate) fn downsample_luma(rgba: &[u8], width: usize, height: usize, (ww, wh): (usize, usize)) -> Vec<f32> {
+pub(crate) fn downsample_luma(
+    rgba: &[u8],
+    width: usize,
+    height: usize,
+    (ww, wh): (usize, usize),
+) -> Vec<f32> {
     let span = |i: usize, n: usize, full: usize| {
         let a = i * full / n;
         (a, ((i + 1) * full / n).max(a + 1).min(full))
@@ -722,7 +767,8 @@ mod tests {
         };
         vec![
             std::array::from_fn(|t| {
-                40.0 + 30.0 * (t as f64 / 7.0).sin() + if (20..26).contains(&t) { 150.0 } else { 0.0 }
+                40.0 + 30.0 * (t as f64 / 7.0).sin()
+                    + if (20..26).contains(&t) { 150.0 } else { 0.0 }
             }),
             std::array::from_fn(|t| if t == 37 { 230.0 } else { 20.0 }),
             std::array::from_fn(|_| rnd()),
@@ -739,7 +785,10 @@ mod tests {
                     let mut got = col;
                     smear.smear_column(&mut got);
                     for t in 0..WINDOW {
-                        assert!((got[t] - want[t]).abs() < 1e-9, "{rotation:?} s={s} r={r} t={t}");
+                        assert!(
+                            (got[t] - want[t]).abs() < 1e-9,
+                            "{rotation:?} s={s} r={r} t={t}"
+                        );
                     }
                 }
             }
@@ -809,7 +858,11 @@ mod tests {
                 for y in 0..h {
                     for x in 0..w {
                         let p = (y * w + x) * 4;
-                        let v = if x.abs_diff(cx) < 3 && y.abs_diff(h / 2) < 3 { 240 } else { (30 + x) as u8 };
+                        let v = if x.abs_diff(cx) < 3 && y.abs_diff(h / 2) < 3 {
+                            240
+                        } else {
+                            (30 + x) as u8
+                        };
                         f[p..p + 4].copy_from_slice(&[v, v / 2, 255 - v, 255]);
                     }
                 }
@@ -821,7 +874,10 @@ mod tests {
     #[test]
     fn a_still_clip_comes_back_unchanged() {
         let still = vec![clip(48, 24, 1)[0].clone(); 70];
-        let out = TimeSmear::new().strength(0.9).work_width(16).apply(&still, 48, 24);
+        let out = TimeSmear::new()
+            .strength(0.9)
+            .work_width(16)
+            .apply(&still, 48, 24);
         assert!(out == still);
     }
 
@@ -831,12 +887,23 @@ mod tests {
         let frames = clip(w, h, n);
         let smear = TimeSmear::new().work_width(20).look(SmearLook::Raw);
         let (ww, wh) = smear.work_size(w as u32, h as u32);
-        let luma: Vec<f32> = frames.iter().flat_map(|f| downsample_luma(f, w, h, (ww, wh))).collect();
+        let luma: Vec<f32> = frames
+            .iter()
+            .flat_map(|f| downsample_luma(f, w, h, (ww, wh)))
+            .collect();
         let echo = smear.echo_volume(&luma, ww, wh);
         let streamed = smear.apply(&frames, w as u32, h as u32);
         let px = ww * wh;
         for i in 0..n {
-            let want = composite(&smear, &frames[i], &luma[i * px..][..px], &echo[i * px..][..px], w, h, (ww, wh));
+            let want = composite(
+                &smear,
+                &frames[i],
+                &luma[i * px..][..px],
+                &echo[i * px..][..px],
+                w,
+                h,
+                (ww, wh),
+            );
             assert!(streamed[i] == want, "frame {i}");
         }
         // Something moved, so something was smeared.
@@ -851,12 +918,17 @@ mod tests {
         // scaled down towards the floor.
         let (w, h, n) = (72usize, 36usize, 64usize);
         let luma: Vec<f32> = (0..n)
-            .flat_map(|t| (0..w * h).map(move |p| 60.0 + 8.0 * ((p % w) as f32 / 5.0 + t as f32 / 9.0).sin()))
+            .flat_map(|t| {
+                (0..w * h).map(move |p| 60.0 + 8.0 * ((p % w) as f32 / 5.0 + t as f32 / 9.0).sin())
+            })
             .collect();
         let plain = TimeSmear::new().strength(0.6);
         let adaptive = plain.clone().adaptive(Adaptive::default());
         let total = |e: Vec<f32>| e.iter().map(|v| v.abs() as f64).sum::<f64>();
-        let (a, b) = (total(plain.echo_volume(&luma, w, h)), total(adaptive.echo_volume(&luma, w, h)));
+        let (a, b) = (
+            total(plain.echo_volume(&luma, w, h)),
+            total(adaptive.echo_volume(&luma, w, h)),
+        );
         assert!(b < 0.5 * a, "adaptive {b} vs plain {a}");
         assert!(b > 0.0);
     }

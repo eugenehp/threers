@@ -3,7 +3,11 @@
 //! `mul_pair_single`, `hybrid_analysis` and `stereo_interpolate` kernels in
 //! their lane order. Tables come from `ps_tableinit` (see `sbr_tables`).
 
-#![allow(clippy::needless_range_loop, clippy::excessive_precision, clippy::type_complexity)]
+#![allow(
+    clippy::needless_range_loop,
+    clippy::excessive_precision,
+    clippy::type_complexity
+)]
 
 use super::bits::BitReader;
 use super::sbr::LenVlc;
@@ -37,7 +41,11 @@ fn ps_vlcs() -> &'static [LenVlc] {
         (0..10)
             .map(|i| {
                 let n = t::PS_HUFF_COUNTS[i] as usize;
-                let v = LenVlc::new(&t::PS_HUFF_SYM[at..at + n], &t::PS_HUFF_LEN[at..at + n], t::PS_HUFF_OFFSETS[i] as i32);
+                let v = LenVlc::new(
+                    &t::PS_HUFF_SYM[at..at + n],
+                    &t::PS_HUFF_LEN[at..at + n],
+                    t::PS_HUFF_OFFSETS[i] as i32,
+                );
                 at += n;
                 v
             })
@@ -150,10 +158,25 @@ const LOG2_TAB: [u32; 5] = [0, 0, 1, 1, 2];
 impl PsCommon {
     /// `read_{iid,icc,ipdopd}_data`; `Err` on an illegal value.
     #[allow(clippy::too_many_arguments)]
-    fn read_par(gb: &mut BitReader, num: usize, num_env_old: usize, par: &mut Par, table: usize, e: usize, dt: bool, mask: i32, check: &dyn Fn(i32) -> bool) -> Result<(), ()> {
+    fn read_par(
+        gb: &mut BitReader,
+        num: usize,
+        num_env_old: usize,
+        par: &mut Par,
+        table: usize,
+        e: usize,
+        dt: bool,
+        mask: i32,
+        check: &dyn Fn(i32) -> bool,
+    ) -> Result<(), ()> {
         let vlc = &ps_vlcs()[table];
         if dt {
-            let e_prev = if e > 0 { e as i32 - 1 } else { num_env_old as i32 - 1 }.max(0) as usize;
+            let e_prev = if e > 0 {
+                e as i32 - 1
+            } else {
+                num_env_old as i32 - 1
+            }
+            .max(0) as usize;
             for b in 0..num {
                 let mut val = par[e_prev][b] as i32 + vlc.read(gb);
                 if mask != 0 {
@@ -231,8 +254,19 @@ impl Ps {
             if ps.enable_iid {
                 for e in 0..ps.num_env {
                     let dt = gb.bit();
-                    let table = [HUFF_IID_DF0, HUFF_IID_DF1, HUFF_IID_DT0, HUFF_IID_DT1][2 * dt as usize + ps.iid_quant];
-                    PsCommon::read_par(&mut gb, ps.nr_iid_par, ps.num_env_old, &mut ps.iid_par, table, e, dt, 0, &iid_bad)?;
+                    let table = [HUFF_IID_DF0, HUFF_IID_DF1, HUFF_IID_DT0, HUFF_IID_DT1]
+                        [2 * dt as usize + ps.iid_quant];
+                    PsCommon::read_par(
+                        &mut gb,
+                        ps.nr_iid_par,
+                        ps.num_env_old,
+                        &mut ps.iid_par,
+                        table,
+                        e,
+                        dt,
+                        0,
+                        &iid_bad,
+                    )?;
                 }
             } else {
                 ps.iid_par = [[0; MAX_NR_IIDICC]; MAX_NUM_ENV];
@@ -241,7 +275,17 @@ impl Ps {
             if ps.enable_icc {
                 for e in 0..ps.num_env {
                     let dt = gb.bit();
-                    PsCommon::read_par(&mut gb, ps.nr_icc_par, ps.num_env_old, &mut ps.icc_par, if dt { HUFF_ICC_DT } else { HUFF_ICC_DF }, e, dt, 0, &icc_bad)?;
+                    PsCommon::read_par(
+                        &mut gb,
+                        ps.nr_icc_par,
+                        ps.num_env_old,
+                        &mut ps.icc_par,
+                        if dt { HUFF_ICC_DT } else { HUFF_ICC_DF },
+                        e,
+                        dt,
+                        0,
+                        &icc_bad,
+                    )?;
                 }
             } else {
                 ps.icc_par = [[0; MAX_NR_IIDICC]; MAX_NUM_ENV];
@@ -261,9 +305,29 @@ impl Ps {
                             let never = |_: i32| false;
                             for e in 0..ps.num_env {
                                 let dt = gb.bit();
-                                let _ = PsCommon::read_par(&mut gb, ps.nr_ipdopd_par, ps.num_env_old, &mut ps.ipd_par, if dt { HUFF_IPD_DT } else { HUFF_IPD_DF }, e, dt, 7, &never);
+                                let _ = PsCommon::read_par(
+                                    &mut gb,
+                                    ps.nr_ipdopd_par,
+                                    ps.num_env_old,
+                                    &mut ps.ipd_par,
+                                    if dt { HUFF_IPD_DT } else { HUFF_IPD_DF },
+                                    e,
+                                    dt,
+                                    7,
+                                    &never,
+                                );
                                 let dt = gb.bit();
-                                let _ = PsCommon::read_par(&mut gb, ps.nr_ipdopd_par, ps.num_env_old, &mut ps.opd_par, if dt { HUFF_OPD_DT } else { HUFF_OPD_DF }, e, dt, 7, &never);
+                                let _ = PsCommon::read_par(
+                                    &mut gb,
+                                    ps.nr_ipdopd_par,
+                                    ps.num_env_old,
+                                    &mut ps.opd_par,
+                                    if dt { HUFF_OPD_DT } else { HUFF_OPD_DF },
+                                    e,
+                                    dt,
+                                    7,
+                                    &never,
+                                );
                             }
                         }
                         gb.skip(1);
@@ -277,7 +341,11 @@ impl Ps {
             }
             // Fix up envelopes.
             if ps.num_env == 0 || ps.border_position[ps.num_env] < QMF_SLOTS as i32 - 1 {
-                let source = if ps.num_env > 0 { ps.num_env as i32 - 1 } else { ps.num_env_old as i32 - 1 };
+                let source = if ps.num_env > 0 {
+                    ps.num_env as i32 - 1
+                } else {
+                    ps.num_env_old as i32 - 1
+                };
                 if source >= 0 && source as usize != ps.num_env {
                     let (s, d) = (source as usize, ps.num_env);
                     if ps.enable_iid {
@@ -291,10 +359,13 @@ impl Ps {
                         ps.opd_par[d] = ps.opd_par[s];
                     }
                 }
-                if ps.enable_iid && (0..ps.nr_iid_par).any(|b| iid_bad(ps.iid_par[ps.num_env][b] as i32)) {
+                if ps.enable_iid
+                    && (0..ps.nr_iid_par).any(|b| iid_bad(ps.iid_par[ps.num_env][b] as i32))
+                {
                     return Err(());
                 }
-                if ps.enable_icc && (0..ps.nr_iid_par).any(|b| ps.icc_par[ps.num_env][b] as u8 > 7) {
+                if ps.enable_icc && (0..ps.nr_iid_par).any(|b| ps.icc_par[ps.num_env][b] as u8 > 7)
+                {
                     return Err(());
                 }
                 ps.num_env += 1;
@@ -302,7 +373,8 @@ impl Ps {
             }
             ps.is34bands_old = ps.is34bands;
             if ps.enable_iid || ps.enable_icc {
-                ps.is34bands = (ps.enable_iid && ps.nr_iid_par == 34) || (ps.enable_icc && ps.nr_icc_par == 34);
+                ps.is34bands = (ps.enable_iid && ps.nr_iid_par == 34)
+                    || (ps.enable_icc && ps.nr_icc_par == 34);
             }
             if !ps.enable_ipdopd {
                 ps.ipd_par = [[0; MAX_NR_IIDICC]; MAX_NUM_ENV];
@@ -342,7 +414,14 @@ impl Ps {
 
 /// `ff_ps_hybrid_analysis_neon`: `n` filters over 13 complex inputs, output
 /// every `stride` complex values.
-fn hybrid_analysis(out: &mut [[f32; 2]], o: usize, inp: &[[f32; 2]], filter: &[u32], stride: usize, n: usize) {
+fn hybrid_analysis(
+    out: &mut [[f32; 2]],
+    o: usize,
+    inp: &[[f32; 2]],
+    filter: &[u32],
+    stride: usize,
+    n: usize,
+) {
     let re = |j: usize| inp[j][0];
     let im = |j: usize| inp[j][1];
     let v16: [f32; 4] = std::array::from_fn(|j| re(j) + re(12 - j));
@@ -377,7 +456,13 @@ fn hybrid_analysis(out: &mut [[f32; 2]], o: usize, inp: &[[f32; 2]], filter: &[u
 }
 
 /// `ff_ps_stereo_interpolate_neon`.
-fn stereo_interpolate(l: &mut [[f32; 2]], r: &mut [[f32; 2]], h: &[[f32; 4]; 2], hs: &[[f32; 4]; 2], len: usize) {
+fn stereo_interpolate(
+    l: &mut [[f32; 2]],
+    r: &mut [[f32; 2]],
+    h: &[[f32; 4]; 2],
+    hs: &[[f32; 4]; 2],
+    len: usize,
+) {
     let mut v4 = [h[0][0], h[0][0], h[0][1], h[0][1]];
     let mut v5 = [h[0][2], h[0][2], h[0][3], h[0][3]];
     let v6 = [hs[0][0], hs[0][0], hs[0][1], hs[0][1]];
@@ -396,7 +481,13 @@ fn stereo_interpolate(l: &mut [[f32; 2]], r: &mut [[f32; 2]], h: &[[f32; 4]; 2],
 }
 
 /// `ff_ps_stereo_interpolate_ipdopd_neon`.
-fn stereo_interpolate_ipdopd(l: &mut [[f32; 2]], r: &mut [[f32; 2]], h: &[[f32; 4]; 2], hs: &[[f32; 4]; 2], len: usize) {
+fn stereo_interpolate_ipdopd(
+    l: &mut [[f32; 2]],
+    r: &mut [[f32; 2]],
+    h: &[[f32; 4]; 2],
+    hs: &[[f32; 4]; 2],
+    len: usize,
+) {
     let neg = |x: f32| -std::hint::black_box(x);
     let mut v16 = [h[0][0], h[0][0], h[0][1], h[0][1]];
     let mut v17 = [h[0][2], h[0][2], h[0][3], h[0][3]];
@@ -474,24 +565,91 @@ fn map_idx_34_to_20(o: &mut [i8; 34], p: &[i8; 34], full: bool) {
 
 fn map_idx_10_to_34(o: &mut [i8; 34], p: &[i8; 34], full: bool) {
     if full {
-        for (i, s) in [(33, 9), (32, 9), (31, 9), (30, 9), (29, 9), (28, 9), (27, 8), (26, 8), (25, 8), (24, 8), (23, 7), (22, 7), (21, 7), (20, 7), (19, 6), (18, 6), (17, 5), (16, 5)] {
+        for (i, s) in [
+            (33, 9),
+            (32, 9),
+            (31, 9),
+            (30, 9),
+            (29, 9),
+            (28, 9),
+            (27, 8),
+            (26, 8),
+            (25, 8),
+            (24, 8),
+            (23, 7),
+            (22, 7),
+            (21, 7),
+            (20, 7),
+            (19, 6),
+            (18, 6),
+            (17, 5),
+            (16, 5),
+        ] {
             o[i] = p[s];
         }
     } else {
         o[16] = 0;
     }
-    for (i, s) in [(15, 4), (14, 4), (13, 4), (12, 4), (11, 3), (10, 3), (9, 2), (8, 2), (7, 2), (6, 2), (5, 1), (4, 1), (3, 1), (2, 0), (1, 0), (0, 0)] {
+    for (i, s) in [
+        (15, 4),
+        (14, 4),
+        (13, 4),
+        (12, 4),
+        (11, 3),
+        (10, 3),
+        (9, 2),
+        (8, 2),
+        (7, 2),
+        (6, 2),
+        (5, 1),
+        (4, 1),
+        (3, 1),
+        (2, 0),
+        (1, 0),
+        (0, 0),
+    ] {
         o[i] = p[s];
     }
 }
 
 fn map_idx_20_to_34(o: &mut [i8; 34], p: &[i8; 34], full: bool) {
     if full {
-        for (i, s) in [(33, 19), (32, 19), (31, 18), (30, 18), (29, 18), (28, 18), (27, 17), (26, 17), (25, 16), (24, 16), (23, 15), (22, 15), (21, 14), (20, 14), (19, 13), (18, 12), (17, 11)] {
+        for (i, s) in [
+            (33, 19),
+            (32, 19),
+            (31, 18),
+            (30, 18),
+            (29, 18),
+            (28, 18),
+            (27, 17),
+            (26, 17),
+            (25, 16),
+            (24, 16),
+            (23, 15),
+            (22, 15),
+            (21, 14),
+            (20, 14),
+            (19, 13),
+            (18, 12),
+            (17, 11),
+        ] {
             o[i] = p[s];
         }
     }
-    for (i, s) in [(16, 10), (15, 9), (14, 9), (13, 8), (12, 8), (11, 7), (10, 6), (9, 5), (8, 5), (7, 4), (6, 4), (5, 3)] {
+    for (i, s) in [
+        (16, 10),
+        (15, 9),
+        (14, 9),
+        (13, 8),
+        (12, 8),
+        (11, 7),
+        (10, 6),
+        (9, 5),
+        (8, 5),
+        (7, 4),
+        (6, 4),
+        (5, 3),
+    ] {
         o[i] = p[s];
     }
     o[4] = ((p[2] as i32 + p[3] as i32) / 2) as i8;
@@ -529,7 +687,37 @@ fn map_val_34_to_20(p: &mut [f32; 34]) {
 }
 
 fn map_val_20_to_34(p: &mut [f32; 34]) {
-    for (i, s) in [(33, 19), (32, 19), (31, 18), (30, 18), (29, 18), (28, 18), (27, 17), (26, 17), (25, 16), (24, 16), (23, 15), (22, 15), (21, 14), (20, 14), (19, 13), (18, 12), (17, 11), (16, 10), (15, 9), (14, 9), (13, 8), (12, 8), (11, 7), (10, 6), (9, 5), (8, 5), (7, 4), (6, 4), (5, 3)] {
+    for (i, s) in [
+        (33, 19),
+        (32, 19),
+        (31, 18),
+        (30, 18),
+        (29, 18),
+        (28, 18),
+        (27, 17),
+        (26, 17),
+        (25, 16),
+        (24, 16),
+        (23, 15),
+        (22, 15),
+        (21, 14),
+        (20, 14),
+        (19, 13),
+        (18, 12),
+        (17, 11),
+        (16, 10),
+        (15, 9),
+        (14, 9),
+        (13, 8),
+        (12, 8),
+        (11, 7),
+        (10, 6),
+        (9, 5),
+        (8, 5),
+        (7, 4),
+        (6, 4),
+        (5, 3),
+    ] {
         p[i] = p[s];
     }
     p[4] = half_sum(p[2], p[3]);
@@ -576,10 +764,17 @@ impl Ps {
         }
         let out = &mut self.lbuf;
         if is34 {
-            for (band, filt, nf, base) in [(0, &t::F34_0_12[..], 12, 0), (1, &t::F34_1_8[..], 8, 12), (2, &t::F34_2_4[..], 4, 20), (3, &t::F34_2_4[..], 4, 24), (4, &t::F34_2_4[..], 4, 28)] {
+            for (band, filt, nf, base) in [
+                (0, &t::F34_0_12[..], 12, 0),
+                (1, &t::F34_1_8[..], 8, 12),
+                (2, &t::F34_2_4[..], 4, 20),
+                (3, &t::F34_2_4[..], 4, 24),
+                (4, &t::F34_2_4[..], 4, 28),
+            ] {
                 for i in 0..len {
                     let inp = self.in_buf[band][i..i + 13].to_vec();
-                    let mut flat: Vec<[f32; 2]> = (0..nf * 32).map(|q| out[base + q / 32][q % 32]).collect();
+                    let mut flat: Vec<[f32; 2]> =
+                        (0..nf * 32).map(|q| out[base + q / 32][q % 32]).collect();
                     hybrid_analysis(&mut flat, i, &inp, filt, 32, nf);
                     for q in 0..nf {
                         out[base + q][i] = flat[q * 32 + i];
@@ -606,7 +801,15 @@ impl Ps {
                 out[5][i] = [temp[3][0] + temp[4][0], temp[3][1] + temp[4][1]];
             }
             // hybrid2_re
-            const G1_Q2: [f32; 7] = [0.0, 0.01899487526049, 0.0, -0.07293139167538, 0.0, 0.30596630545168, 0.5];
+            const G1_Q2: [f32; 7] = [
+                0.0,
+                0.01899487526049,
+                0.0,
+                -0.07293139167538,
+                0.0,
+                0.30596630545168,
+                0.5,
+            ];
             for (band, base, reverse) in [(1usize, 6usize, 1usize), (2, 8, 0)] {
                 for i in 0..len {
                     let inp = &self.in_buf[band][i..i + 13];
@@ -668,7 +871,12 @@ impl Ps {
         } else {
             for n in 0..len {
                 for c in 0..2 {
-                    out[at(c, n, 0)] = src[0][n][c] + src[1][n][c] + src[2][n][c] + src[3][n][c] + src[4][n][c] + src[5][n][c];
+                    out[at(c, n, 0)] = src[0][n][c]
+                        + src[1][n][c]
+                        + src[2][n][c]
+                        + src[3][n][c]
+                        + src[4][n][c]
+                        + src[5][n][c];
                     out[at(c, n, 1)] = src[6][n][c] + src[7][n][c];
                     out[at(c, n, 2)] = src[8][n][c] + src[9][n][c];
                 }
@@ -714,11 +922,20 @@ impl Ps {
         for i in 0..NR_PAR_BANDS[ix] {
             for n in 0..32 {
                 let decayed_peak = peak_decay_factor * self.peak_decay_nrg[i];
-                self.peak_decay_nrg[i] = if decayed_peak > power[i][n] { decayed_peak } else { power[i][n] };
+                self.peak_decay_nrg[i] = if decayed_peak > power[i][n] {
+                    decayed_peak
+                } else {
+                    power[i][n]
+                };
                 self.power_smooth[i] += a_smooth * (power[i][n] - self.power_smooth[i]);
-                self.peak_decay_diff_smooth[i] += a_smooth * (self.peak_decay_nrg[i] - power[i][n] - self.peak_decay_diff_smooth[i]);
+                self.peak_decay_diff_smooth[i] += a_smooth
+                    * (self.peak_decay_nrg[i] - power[i][n] - self.peak_decay_diff_smooth[i]);
                 let denom = transient_impact * self.peak_decay_diff_smooth[i];
-                transient_gain[i][n] = if denom > self.power_smooth[i] { self.power_smooth[i] / denom } else { 1.0 };
+                transient_gain[i][n] = if denom > self.power_smooth[i] {
+                    self.power_smooth[i] / denom
+                } else {
+                    1.0
+                };
             }
         }
         const A: [f32; 3] = [0.65143905753106, 0.56471812200776, 0.48954165955695];
@@ -734,7 +951,10 @@ impl Ps {
                 self.ap_delay[k][m].copy_within(32..37, 0);
             }
             // ps_decorrelate_c
-            let phi = [f(t::PHI_FRACT[(ix * 50 + k) * 2]), f(t::PHI_FRACT[(ix * 50 + k) * 2 + 1])];
+            let phi = [
+                f(t::PHI_FRACT[(ix * 50 + k) * 2]),
+                f(t::PHI_FRACT[(ix * 50 + k) * 2 + 1]),
+            ];
             let q = |m: usize, c: usize| f(t::Q_FRACT_ALLPASS[((ix * 50 + k) * 3 + m) * 2 + c]);
             let ag: [f32; 3] = std::array::from_fn(|m| A[m] * g_decay_slope);
             let delay = &self.delay[k][MAX_DELAY - 2..];
@@ -766,7 +986,11 @@ impl Ps {
             let d = &mut self.delay[k];
             d.copy_within(32..32 + MAX_DELAY, 0);
             d[MAX_DELAY..MAX_DELAY + 32].copy_from_slice(&s[k]);
-            let off = if k < SHORT_DELAY_BAND[ix] { MAX_DELAY - 14 } else { MAX_DELAY - 1 };
+            let off = if k < SHORT_DELAY_BAND[ix] {
+                MAX_DELAY - 14
+            } else {
+                MAX_DELAY - 1
+            };
             for n in 0..32 {
                 let v = self.delay[k][off + n];
                 self.rbuf[k][n] = [v[0] * transient_gain[i][n], v[1] * transient_gain[i][n]];
@@ -791,7 +1015,10 @@ impl Ps {
         let iid_mapped = remap(&ps2.iid_par, ps2.nr_iid_par, ps2.num_env, true, is34);
         let icc_mapped = remap(&ps2.icc_par, ps2.nr_icc_par, ps2.num_env, true, is34);
         let (ipd_mapped, opd_mapped) = if ps2.enable_ipdopd {
-            (remap(&ps2.ipd_par, ps2.nr_ipdopd_par, ps2.num_env, false, is34), remap(&ps2.opd_par, ps2.nr_ipdopd_par, ps2.num_env, false, is34))
+            (
+                remap(&ps2.ipd_par, ps2.nr_ipdopd_par, ps2.num_env, false, is34),
+                remap(&ps2.opd_par, ps2.nr_ipdopd_par, ps2.num_env, false, is34),
+            )
         } else {
             ([[0i8; 34]; 5], [[0i8; 34]; 5])
         };
@@ -821,8 +1048,10 @@ impl Ps {
                 if ps2.enable_ipdopd && b < NR_IPDOPD_BANDS[ix] {
                     let opd_idx = (self.opd_hist[b] as i32 * 8 + opd_mapped[e][b] as i32) as usize;
                     let ipd_idx = (self.ipd_hist[b] as i32 * 8 + ipd_mapped[e][b] as i32) as usize;
-                    let (opd_re, opd_im) = (f(t::PD_RE_SMOOTH[opd_idx]), f(t::PD_IM_SMOOTH[opd_idx]));
-                    let (ipd_re, ipd_im) = (f(t::PD_RE_SMOOTH[ipd_idx]), f(t::PD_IM_SMOOTH[ipd_idx]));
+                    let (opd_re, opd_im) =
+                        (f(t::PD_RE_SMOOTH[opd_idx]), f(t::PD_IM_SMOOTH[opd_idx]));
+                    let (ipd_re, ipd_im) =
+                        (f(t::PD_RE_SMOOTH[ipd_idx]), f(t::PD_IM_SMOOTH[ipd_idx]));
                     self.opd_hist[b] = (opd_idx & 0x3f) as i8;
                     self.ipd_hist[b] = (ipd_idx & 0x3f) as i8;
                     let ipd_adj_re = opd_re * ipd_re + opd_im * ipd_im;
@@ -858,7 +1087,11 @@ impl Ps {
                 if ps2.enable_ipdopd {
                     let flip = (is34 && (9..=13).contains(&k)) || (!is34 && k <= 1);
                     for c in 0..4 {
-                        h[1][c] = if flip { -self.h[c][1][e][b] } else { self.h[c][1][e][b] };
+                        h[1][c] = if flip {
+                            -self.h[c][1][e][b]
+                        } else {
+                            self.h[c][1][e][b]
+                        };
                     }
                 }
                 for c in 0..4 {

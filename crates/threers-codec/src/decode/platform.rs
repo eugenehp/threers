@@ -24,12 +24,16 @@
 use super::NativeDecoder;
 use crate::mp4_demux::{TrackCodec, VideoTrack};
 
-#[cfg(all(feature = "videotoolbox", target_os = "macos"))]
-use crate::videotoolbox_decode::VideoToolboxDecoder;
-#[cfg(all(feature = "nvidia", any(target_os = "linux", target_os = "windows"), target_pointer_width = "64"))]
+#[cfg(all(
+    feature = "nvidia",
+    any(target_os = "linux", target_os = "windows"),
+    target_pointer_width = "64"
+))]
 use crate::nvidia::NvdecDecoder;
 #[cfg(all(feature = "vaapi", target_os = "linux"))]
 use crate::vaapi::VaapiDecoder;
+#[cfg(all(feature = "videotoolbox", target_os = "macos"))]
+use crate::videotoolbox_decode::VideoToolboxDecoder;
 
 /// Which decoder a [`Decoder`] is using.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,9 +58,17 @@ impl Backend {
     pub fn available(self) -> bool {
         match self {
             Backend::VideoToolbox => cfg!(all(feature = "videotoolbox", target_os = "macos")),
-            #[cfg(all(feature = "nvidia", any(target_os = "linux", target_os = "windows"), target_pointer_width = "64"))]
+            #[cfg(all(
+                feature = "nvidia",
+                any(target_os = "linux", target_os = "windows"),
+                target_pointer_width = "64"
+            ))]
             Backend::Nvdec => crate::nvidia::available(),
-            #[cfg(not(all(feature = "nvidia", any(target_os = "linux", target_os = "windows"), target_pointer_width = "64")))]
+            #[cfg(not(all(
+                feature = "nvidia",
+                any(target_os = "linux", target_os = "windows"),
+                target_pointer_width = "64"
+            )))]
             Backend::Nvdec => false,
             #[cfg(all(feature = "vaapi", target_os = "linux"))]
             Backend::Vaapi => crate::vaapi::available(),
@@ -71,14 +83,21 @@ impl Backend {
 
     /// The backend [`Decoder::new`] tries first.
     pub fn preferred() -> Backend {
-        Self::HARDWARE.into_iter().find(|b| b.available()).unwrap_or(Backend::Native)
+        Self::HARDWARE
+            .into_iter()
+            .find(|b| b.available())
+            .unwrap_or(Backend::Native)
     }
 }
 
 enum Inner {
     #[cfg(all(feature = "videotoolbox", target_os = "macos"))]
     VideoToolbox(VideoToolboxDecoder),
-    #[cfg(all(feature = "nvidia", any(target_os = "linux", target_os = "windows"), target_pointer_width = "64"))]
+    #[cfg(all(
+        feature = "nvidia",
+        any(target_os = "linux", target_os = "windows"),
+        target_pointer_width = "64"
+    ))]
     Nvdec(Box<NvdecDecoder>),
     #[cfg(all(feature = "vaapi", target_os = "linux"))]
     Vaapi(Box<VaapiDecoder>),
@@ -106,7 +125,13 @@ impl Decoder {
     /// [`new`](Self::new) from a decoder configuration alone — an `avcC` or
     /// `hvcC` payload — for streams that do not come from a demuxed file.
     /// `timescale` is the unit of the timestamps given to [`push`](Self::push).
-    pub fn from_config(codec: TrackCodec, config: &[u8], width: u32, height: u32, timescale: u32) -> Result<Self, String> {
+    pub fn from_config(
+        codec: TrackCodec,
+        config: &[u8],
+        width: u32,
+        height: u32,
+        timescale: u32,
+    ) -> Result<Self, String> {
         Self::new(&config_track(codec, config, width, height, timescale))
     }
 
@@ -120,9 +145,17 @@ impl Decoder {
             Backend::VideoToolbox => {
                 return Err("VideoToolbox needs macOS and threers' `videotoolbox` feature".into())
             }
-            #[cfg(all(feature = "nvidia", any(target_os = "linux", target_os = "windows"), target_pointer_width = "64"))]
+            #[cfg(all(
+                feature = "nvidia",
+                any(target_os = "linux", target_os = "windows"),
+                target_pointer_width = "64"
+            ))]
             Backend::Nvdec => Inner::Nvdec(Box::new(NvdecDecoder::new(track)?)),
-            #[cfg(not(all(feature = "nvidia", any(target_os = "linux", target_os = "windows"), target_pointer_width = "64")))]
+            #[cfg(not(all(
+                feature = "nvidia",
+                any(target_os = "linux", target_os = "windows"),
+                target_pointer_width = "64"
+            )))]
             Backend::Nvdec => {
                 return Err("NVDEC needs Linux or Windows and the `nvidia` feature".into())
             }
@@ -140,7 +173,11 @@ impl Decoder {
         match self.inner {
             #[cfg(all(feature = "videotoolbox", target_os = "macos"))]
             Inner::VideoToolbox(_) => Backend::VideoToolbox,
-            #[cfg(all(feature = "nvidia", any(target_os = "linux", target_os = "windows"), target_pointer_width = "64"))]
+            #[cfg(all(
+                feature = "nvidia",
+                any(target_os = "linux", target_os = "windows"),
+                target_pointer_width = "64"
+            ))]
             Inner::Nvdec(_) => Backend::Nvdec,
             #[cfg(all(feature = "vaapi", target_os = "linux"))]
             Inner::Vaapi(_) => Backend::Vaapi,
@@ -153,7 +190,11 @@ impl Decoder {
         match &self.inner {
             #[cfg(all(feature = "videotoolbox", target_os = "macos"))]
             Inner::VideoToolbox(d) => d.size(),
-            #[cfg(all(feature = "nvidia", any(target_os = "linux", target_os = "windows"), target_pointer_width = "64"))]
+            #[cfg(all(
+                feature = "nvidia",
+                any(target_os = "linux", target_os = "windows"),
+                target_pointer_width = "64"
+            ))]
             Inner::Nvdec(d) => d.size(),
             #[cfg(all(feature = "vaapi", target_os = "linux"))]
             Inner::Vaapi(d) => d.size(),
@@ -168,7 +209,11 @@ impl Decoder {
         match &mut self.inner {
             #[cfg(all(feature = "videotoolbox", target_os = "macos"))]
             Inner::VideoToolbox(d) => d.push(sample, pts, dts, duration),
-            #[cfg(all(feature = "nvidia", any(target_os = "linux", target_os = "windows"), target_pointer_width = "64"))]
+            #[cfg(all(
+                feature = "nvidia",
+                any(target_os = "linux", target_os = "windows"),
+                target_pointer_width = "64"
+            ))]
             Inner::Nvdec(d) => d.push(sample, pts, dts, duration),
             #[cfg(all(feature = "vaapi", target_os = "linux"))]
             Inner::Vaapi(d) => d.push(sample, pts, dts, duration),
@@ -182,7 +227,11 @@ impl Decoder {
         match &mut self.inner {
             #[cfg(all(feature = "videotoolbox", target_os = "macos"))]
             Inner::VideoToolbox(d) => d.take(pts),
-            #[cfg(all(feature = "nvidia", any(target_os = "linux", target_os = "windows"), target_pointer_width = "64"))]
+            #[cfg(all(
+                feature = "nvidia",
+                any(target_os = "linux", target_os = "windows"),
+                target_pointer_width = "64"
+            ))]
             Inner::Nvdec(d) => d.take(pts),
             #[cfg(all(feature = "vaapi", target_os = "linux"))]
             Inner::Vaapi(d) => d.take(pts),
@@ -191,8 +240,21 @@ impl Decoder {
     }
 }
 
-fn config_track(codec: TrackCodec, config: &[u8], width: u32, height: u32, timescale: u32) -> VideoTrack {
-    VideoTrack { codec, width, height, config: config.to_vec(), timescale, samples: Vec::new() }
+fn config_track(
+    codec: TrackCodec,
+    config: &[u8],
+    width: u32,
+    height: u32,
+    timescale: u32,
+) -> VideoTrack {
+    VideoTrack {
+        codec,
+        width,
+        height,
+        config: config.to_vec(),
+        timescale,
+        samples: Vec::new(),
+    }
 }
 
 #[cfg(test)]
@@ -203,11 +265,18 @@ mod tests {
     #[test]
     fn decodes_on_every_backend_this_build_has() {
         let (w, h) = (64u32, 32u32);
-        let rgba: Vec<u8> = (0..w * h).flat_map(|i| [(i % 64 * 4) as u8, 120, 200, 255]).collect();
+        let rgba: Vec<u8> = (0..w * h)
+            .flat_map(|i| [(i % 64 * 4) as u8, 120, 200, 255])
+            .collect();
         let enc = CompressedEncoder::new(w, h, 20);
         let sample = enc.encode_sample(&Yuv420Frame::from_rgba(w, h, &rgba));
         let track = config_track(TrackCodec::H264, &enc.avcc(), w, h, 90_000);
-        for backend in [Backend::VideoToolbox, Backend::Nvdec, Backend::Vaapi, Backend::Native] {
+        for backend in [
+            Backend::VideoToolbox,
+            Backend::Nvdec,
+            Backend::Vaapi,
+            Backend::Native,
+        ] {
             let mut dec = match Decoder::with_backend(&track, backend) {
                 Ok(d) => d,
                 // Hardware may refuse a stream (this one is tiny, below some

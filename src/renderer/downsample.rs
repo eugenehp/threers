@@ -504,7 +504,10 @@ enum Axis {
 /// The bits every pass shares: the source binding and the sRGB transfer
 /// functions.
 fn preamble() -> String {
-    format!("\n@group(0) @binding(0) var src : texture_2d<f32>;\n{}", super::colorspace::WGSL)
+    format!(
+        "\n@group(0) @binding(0) var src : texture_2d<f32>;\n{}",
+        super::colorspace::WGSL
+    )
 }
 
 /// `textureLoad` with the coordinate clamped and the colour decoded.

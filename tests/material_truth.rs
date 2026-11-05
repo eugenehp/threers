@@ -10,7 +10,10 @@ mod truth;
 use threers::HeadlessRenderer;
 
 fn renderer() -> Option<HeadlessRenderer> {
-    let mut r = HeadlessRenderer::builder().size(truth::N, truth::N).build().ok()?;
+    let mut r = HeadlessRenderer::builder()
+        .size(truth::N, truth::N)
+        .build()
+        .ok()?;
     r.set_msaa(1);
     Some(r)
 }
@@ -30,7 +33,9 @@ fn every_material_model_matches_three_js() {
         eprintln!("wgpu {name:>15}: {n} px, worst {err} at {at:?}: got {got:?} want {want:?}");
         assert!(n > 5000, "{name}: only {n} pixels compared");
         if err > 2 {
-            failures.push(format!("{name}: {err} levels off at {at:?} (got {got:?}, three.js {want:?})"));
+            failures.push(format!(
+                "{name}: {err} levels off at {at:?} (got {got:?}, three.js {want:?})"
+            ));
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
@@ -55,7 +60,8 @@ fn instanced_meshes_cast_shadows_as_three_js_does() {
         eprintln!("skipping: no GPU adapter");
         return;
     };
-    let failures = truth::check_instanced_shadows("wgpu", &mut |scene, cam| r.render_to_rgba(scene, cam));
+    let failures =
+        truth::check_instanced_shadows("wgpu", &mut |scene, cam| r.render_to_rgba(scene, cam));
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
@@ -67,7 +73,10 @@ mod blending;
 #[test]
 fn transparent_surfaces_blend_as_three_js_does() {
     let mut failures = Vec::new();
-    for format in [wgpu::TextureFormat::Rgba8UnormSrgb, wgpu::TextureFormat::Rgba8Unorm] {
+    for format in [
+        wgpu::TextureFormat::Rgba8UnormSrgb,
+        wgpu::TextureFormat::Rgba8Unorm,
+    ] {
         for msaa in [1, 4] {
             let Ok(mut r) = threers::HeadlessRenderer::builder()
                 .size(blending::N, blending::N)
@@ -78,9 +87,10 @@ fn transparent_surfaces_blend_as_three_js_does() {
                 return;
             };
             r.set_msaa(msaa);
-            failures.extend(blending::check(&format!("wgpu {format:?} msaa {msaa}"), &mut |s, c| {
-                r.render_to_rgba(s, c)
-            }));
+            failures.extend(blending::check(
+                &format!("wgpu {format:?} msaa {msaa}"),
+                &mut |s, c| r.render_to_rgba(s, c),
+            ));
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
@@ -99,7 +109,10 @@ fn transparent_shader_materials_blend_as_three_js_does() {
     const FRAG: &str = "@fragment\nfn fs_main(in: VsOut) -> @location(0) vec4<f32> {\n    let c = u_data.data[0];\n    return vec4<f32>(framebuffer_encode(c.rgb), c.a);\n}\n";
     let mut failures = Vec::new();
     for msaa in [1, 4] {
-        let Ok(mut r) = threers::HeadlessRenderer::builder().size(blending::N, blending::N).build() else {
+        let Ok(mut r) = threers::HeadlessRenderer::builder()
+            .size(blending::N, blending::N)
+            .build()
+        else {
             eprintln!("skipping: no GPU adapter");
             return;
         };
@@ -109,11 +122,19 @@ fn transparent_shader_materials_blend_as_three_js_does() {
             let lin = threers::math::Color::from_hex(front);
             let mut m = ShaderMaterial::new(FRAG).with_data(vec![[lin.r, lin.g, lin.b, a]]);
             m.transparent = true;
-            let mut f = Object3D::mesh(Mesh::new(PlaneGeometry::new(2.5, 2.5), Material::Shader(m)));
+            let mut f =
+                Object3D::mesh(Mesh::new(PlaneGeometry::new(2.5, 2.5), Material::Shader(m)));
             f.position = Vector3::new(0.0, 0.0, 0.5);
             scene.add(f);
             let rgba = r.render_to_rgba(&mut scene, &blending::camera());
-            failures.extend(blending::judge(&format!("wgpu msaa {msaa}"), "shader", &rgba, back, front, a));
+            failures.extend(blending::judge(
+                &format!("wgpu msaa {msaa}"),
+                "shader",
+                &rgba,
+                back,
+                front,
+                a,
+            ));
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
@@ -132,18 +153,24 @@ fn transparent_surfaces_blend_as_three_js_does_in_panes_and_refraction_frames() 
     let n = blending::N as f32;
     let mut failures = Vec::new();
     for msaa in [1, 4] {
-        let Ok(mut r) = threers::HeadlessRenderer::builder().size(blending::N, blending::N).build() else {
+        let Ok(mut r) = threers::HeadlessRenderer::builder()
+            .size(blending::N, blending::N)
+            .build()
+        else {
             eprintln!("skipping: no GPU adapter");
             return;
         };
         r.set_msaa(msaa);
         // A centred pane, scissored: a partial clear.
-        r.renderer().set_viewport(n / 4.0, n / 4.0, n / 2.0, n / 2.0);
+        r.renderer()
+            .set_viewport(n / 4.0, n / 4.0, n / 2.0, n / 2.0);
         r.renderer().set_scissor(n / 4.0, n / 4.0, n / 2.0, n / 2.0);
         r.renderer().set_scissor_test(true);
-        failures.extend(blending::check_kinds(&format!("wgpu pane msaa {msaa}"), &blending::FRONTS, &mut |s, c| {
-            r.render_to_rgba(s, c)
-        }));
+        failures.extend(blending::check_kinds(
+            &format!("wgpu pane msaa {msaa}"),
+            &blending::FRONTS,
+            &mut |s, c| r.render_to_rgba(s, c),
+        ));
         r.renderer().set_scissor_test(false);
         r.renderer().reset_viewport();
         r.renderer().reset_scissor();
@@ -154,7 +181,8 @@ fn transparent_surfaces_blend_as_three_js_does_in_panes_and_refraction_frames() 
                 let mut glass = PhysicalMaterial::new(Color::WHITE);
                 glass.transmission = 1.0;
                 glass.transparency = TransparencyMode::Refract;
-                let mut g = Object3D::mesh(Mesh::new(SphereGeometry::new(0.1, 12, 8), glass.into()));
+                let mut g =
+                    Object3D::mesh(Mesh::new(SphereGeometry::new(0.1, 12, 8), glass.into()));
                 g.position = Vector3::new(-0.85, 0.85, 0.8);
                 scene.add(g);
                 let rgba = r.render_to_rgba(&mut scene, &blending::camera());
@@ -169,5 +197,10 @@ fn transparent_surfaces_blend_as_three_js_does_in_panes_and_refraction_frames() 
             }
         }
     }
-    assert!(failures.is_empty(), "{} failures:\n{}", failures.len(), failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "{} failures:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
 }

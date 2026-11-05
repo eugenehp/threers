@@ -110,7 +110,8 @@ const fn vert_scan<const N: usize>(n: usize) -> [(u8, u8); N] {
 
 /// Scans within a 4×4 sub-block, by `scanIdx` (diagonal, horizontal,
 /// vertical).
-pub const SCAN4: [[(u8, u8); 16]; 3] = [diag_scan::<16>(4), horiz_scan::<16>(4), vert_scan::<16>(4)];
+pub const SCAN4: [[(u8, u8); 16]; 3] =
+    [diag_scan::<16>(4), horiz_scan::<16>(4), vert_scan::<16>(4)];
 
 /// Sub-block scans for 1×1, 2×2, 4×4 and 8×8 grids of sub-blocks.
 pub const SCAN_SB1: [[(u8, u8); 1]; 3] = [[(0, 0)]; 3];
@@ -125,8 +126,8 @@ pub const SCAN8X8: [(u8, u8); 64] = diag_scan::<64>(8);
 /// `32 / n`-th row.
 pub const DCT32: [[i8; 32]; 32] = {
     const T: [i32; 32] = [
-        64, 90, 90, 90, 89, 88, 87, 85, 83, 82, 80, 78, 75, 73, 70, 67, 64, 61, 57, 54, 50, 46,
-        43, 38, 36, 31, 25, 22, 18, 13, 9, 4,
+        64, 90, 90, 90, 89, 88, 87, 85, 83, 82, 80, 78, 75, 73, 70, 67, 64, 61, 57, 54, 50, 46, 43,
+        38, 36, 31, 25, 22, 18, 13, 9, 4,
     ];
     let mut m = [[0i8; 32]; 32];
     let mut k = 0;
@@ -157,4 +158,9 @@ pub const DCT32: [[i8; 32]; 32] = {
 };
 
 /// The 4×4 DST-VII used for intra luma 4×4 blocks.
-pub const DST4: [[i32; 4]; 4] = [[29, 55, 74, 84], [74, 74, 0, -74], [84, -29, -74, 55], [55, -84, 74, -29]];
+pub const DST4: [[i32; 4]; 4] = [
+    [29, 55, 74, 84],
+    [74, 74, 0, -74],
+    [84, -29, -74, 55],
+    [55, -84, 74, -29],
+];

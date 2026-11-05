@@ -123,7 +123,9 @@ impl Node {
     /// flags string, and they are not always the same, so the values are taken
     /// by position from the end of the fixed prefix rather than by matching.
     pub fn property70(&self, name: &str) -> Option<&[Property]> {
-        let bag = self.child("Properties70").or_else(|| self.child("Properties60"))?;
+        let bag = self
+            .child("Properties70")
+            .or_else(|| self.child("Properties60"))?;
         for p in bag.children_named("P") {
             if p.properties.first().and_then(Property::as_str) == Some(name) {
                 return p.properties.get(4..);

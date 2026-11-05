@@ -71,7 +71,10 @@ impl<'a> Rc<'a> {
     fn get_bits(&mut self, n: u32) -> u32 {
         let i = self.index;
         let b = i >> 3;
-        let w = (self.byte(b) << 24) | (self.byte(b + 1) << 16) | (self.byte(b + 2) << 8) | self.byte(b + 3);
+        let w = (self.byte(b) << 24)
+            | (self.byte(b + 1) << 16)
+            | (self.byte(b + 2) << 8)
+            | self.byte(b + 3);
         let v = (w << (i & 7)) >> (32 - n);
         self.index = (i + n as usize).min(self.limit);
         v
@@ -101,13 +104,19 @@ impl<'a> Rc<'a> {
     #[inline]
     fn update(&mut self, scale: u32, low: u32, high: u32, total: u32) {
         self.value = self.value.wrapping_sub(scale.wrapping_mul(total - high));
-        self.range = if low != 0 { scale * (high - low) } else { self.range - scale * (total - high) };
+        self.range = if low != 0 {
+            scale * (high - low)
+        } else {
+            self.range - scale * (total - high)
+        };
         self.normalize();
     }
 
     #[inline]
     pub fn tell(&self) -> u32 {
-        self.total_bits.wrapping_sub(log2(self.range)).wrapping_sub(1)
+        self.total_bits
+            .wrapping_sub(log2(self.range))
+            .wrapping_sub(1)
     }
 
     pub fn tell_frac(&self) -> u32 {
@@ -161,8 +170,16 @@ impl<'a> Rc<'a> {
             self.rb_cachelen += 8;
             self.rb_bytes -= 1;
         }
-        let value = if count >= 32 { self.rb_cacheval } else { self.rb_cacheval & ((1u32 << count) - 1) };
-        self.rb_cacheval = if count >= 32 { 0 } else { self.rb_cacheval >> count };
+        let value = if count >= 32 {
+            self.rb_cacheval
+        } else {
+            self.rb_cacheval & ((1u32 << count) - 1)
+        };
+        self.rb_cacheval = if count >= 32 {
+            0
+        } else {
+            self.rb_cacheval >> count
+        };
         self.rb_cachelen = self.rb_cachelen.wrapping_sub(count);
         self.total_bits += count;
         value
@@ -170,7 +187,11 @@ impl<'a> Rc<'a> {
 
     pub fn dec_uint(&mut self, size: u32) -> u32 {
         let bits = ilog(size - 1);
-        let total = if bits > 8 { ((size - 1) >> (bits - 8)) + 1 } else { size };
+        let total = if bits > 8 {
+            ((size - 1) >> (bits - 8)) + 1
+        } else {
+            size
+        };
         let scale = self.range / total;
         let k = self.value / scale + 1;
         let k = total - k.min(total);
@@ -188,8 +209,16 @@ impl<'a> Rc<'a> {
         let scale = self.range / total;
         let symbol = self.value / scale + 1;
         let symbol = total - symbol.min(total);
-        let k = if symbol < (k0 + 1) * 3 { symbol / 3 } else { symbol - (k0 + 1) * 2 };
-        let (lo, hi) = if k <= k0 { (3 * k, 3 * (k + 1)) } else { ((k - 1 - k0) + 3 * (k0 + 1), (k - k0) + 3 * (k0 + 1)) };
+        let k = if symbol < (k0 + 1) * 3 {
+            symbol / 3
+        } else {
+            symbol - (k0 + 1) * 2
+        };
+        let (lo, hi) = if k <= k0 {
+            (3 * k, 3 * (k + 1))
+        } else {
+            ((k - 1 - k0) + 3 * (k0 + 1), (k - k0) + 3 * (k0 + 1))
+        };
         self.update(scale, lo, hi, total);
         k
     }

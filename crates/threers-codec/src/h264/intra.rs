@@ -287,8 +287,7 @@ pub fn predict16(mode: u8, n: &Neighbors16) -> [i32; 256] {
             let cc = (5 * vv + 32) >> 6;
             for y in 0..16i32 {
                 for x in 0..16i32 {
-                    p[(y * 16 + x) as usize] =
-                        clip((a0 + b * (x - 7) + cc * (y - 7) + 16) >> 5);
+                    p[(y * 16 + x) as usize] = clip((a0 + b * (x - 7) + cc * (y - 7) + 16) >> 5);
                 }
             }
         }
@@ -300,9 +299,7 @@ pub fn predict16(mode: u8, n: &Neighbors16) -> [i32; 256] {
 /// 16×16 DC (§8.3.3.3) — the mean of whichever edges exist, 128 if neither does.
 fn luma16_dc(n: &Neighbors16) -> [i32; 256] {
     let v = match (n.above, n.left) {
-        (Some(a), Some(l)) => {
-            (a.iter().sum::<i32>() + l.iter().sum::<i32>() + 16) >> 5
-        }
+        (Some(a), Some(l)) => (a.iter().sum::<i32>() + l.iter().sum::<i32>() + 16) >> 5,
         (Some(a), None) => (a.iter().sum::<i32>() + 8) >> 4,
         (None, Some(l)) => (l.iter().sum::<i32>() + 8) >> 4,
         (None, None) => 128,
@@ -376,8 +373,7 @@ pub fn predict_chroma(mode: u8, n: &NeighborsC) -> [i32; 64] {
             let cc = (34 * vv + 32) >> 6;
             for y in 0..8i32 {
                 for x in 0..8i32 {
-                    p[(y * 8 + x) as usize] =
-                        clip((a0 + b * (x - 3) + cc * (y - 3) + 16) >> 5);
+                    p[(y * 8 + x) as usize] = clip((a0 + b * (x - 3) + cc * (y - 3) + 16) >> 5);
                 }
             }
         }
@@ -513,7 +509,11 @@ mod tests {
         };
         for mode in 0..=3u8 {
             let p = predict_chroma(mode, &n);
-            assert!(p.iter().all(|&v| v == 64), "chroma mode {mode}: {:?}", &p[..8]);
+            assert!(
+                p.iter().all(|&v| v == 64),
+                "chroma mode {mode}: {:?}",
+                &p[..8]
+            );
         }
     }
 
@@ -526,7 +526,11 @@ mod tests {
             corner: Some(0),
         };
         let p = predict_chroma(C_DC, &n);
-        assert_eq!(p[0], (400 + 4) >> 3, "top-left averages both edges (left is all zero)");
+        assert_eq!(
+            p[0],
+            (400 + 4) >> 3,
+            "top-left averages both edges (left is all zero)"
+        );
         assert_eq!(p[4], (800 + 2) >> 2, "top-right prefers above");
         assert_eq!(p[4 * 8], 0, "bottom-left prefers left, which is all zero");
     }

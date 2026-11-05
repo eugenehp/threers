@@ -233,10 +233,6 @@ impl PipelineRecipe {
         }
     }
 
-    pub(crate) fn build(&self, device: &wgpu::Device, s: ResolvedState) -> wgpu::RenderPipeline {
-        self.rebuild(device, Some(s))
-    }
-
     /// Reconstruct the original descriptor exactly for first use. A material
     /// state override can intentionally normalize all color targets; initial
     /// construction must retain each target's own blend and write mask.
@@ -328,9 +324,23 @@ impl PipelineRecipe {
 #[derive(Clone)]
 pub(crate) struct Pipeline(std::sync::Arc<PipelineInner>);
 
-struct PipelineInner {
+/// Built, or a recipe to build from. A deferred pipeline always has its
+/// recipe; a built one has no use for it.
+enum PipelineInner {
+    Ready(wgpu::RenderPipeline),
+    Deferred(Deferred),
+}
+
+struct Deferred {
     compiled: std::sync::OnceLock<wgpu::RenderPipeline>,
-    deferred: Option<(wgpu::Device, PipelineRecipe)>,
+    device: wgpu::Device,
+    recipe: PipelineRecipe,
+    /// The material state the build applies; `None` builds the recipe as it is.
+    state: Option<ResolvedState>,
+    /// What validation said when a warm-up built it. A pipeline that failed
+    /// is still a handle (wgpu hands back an invalid object), so without
+    /// this a second warm-up would call it built and the error would be gone.
+    failure: std::sync::OnceLock<String>,
 }
 
 impl Pipeline {
@@ -339,36 +349,52 @@ impl Pipeline {
         desc: &wgpu::RenderPipelineDescriptor,
         deferred: bool,
     ) -> Self {
-        if !deferred {
-            return Self::ready(device.create_render_pipeline(desc));
+        if deferred {
+            Self::deferred(device, PipelineRecipe::capture(desc), None)
+        } else {
+            Self::ready(device.create_render_pipeline(desc))
         }
-        Self(std::sync::Arc::new(PipelineInner {
-            compiled: std::sync::OnceLock::new(),
-            deferred: Some((device.clone(), PipelineRecipe::capture(desc))),
-        }))
     }
 
     fn ready(pipeline: wgpu::RenderPipeline) -> Self {
-        Self(std::sync::Arc::new(PipelineInner {
-            compiled: std::sync::OnceLock::from(pipeline),
-            deferred: None,
-        }))
+        Self(std::sync::Arc::new(PipelineInner::Ready(pipeline)))
     }
 
-    fn pending(device: &wgpu::Device, recipe: PipelineRecipe) -> Self {
-        Self(std::sync::Arc::new(PipelineInner {
+    fn deferred(
+        device: &wgpu::Device,
+        recipe: PipelineRecipe,
+        state: Option<ResolvedState>,
+    ) -> Self {
+        Self(std::sync::Arc::new(PipelineInner::Deferred(Deferred {
             compiled: std::sync::OnceLock::new(),
-            deferred: Some((device.clone(), recipe)),
-        }))
+            device: device.clone(),
+            recipe,
+            state,
+            failure: std::sync::OnceLock::new(),
+        })))
     }
 
     pub(crate) fn is_compiled(&self) -> bool {
-        self.0.compiled.get().is_some()
+        match &*self.0 {
+            PipelineInner::Ready(_) => true,
+            PipelineInner::Deferred(d) => d.compiled.get().is_some(),
+        }
     }
 
     /// The descriptor's label, for a pipeline that has not been built yet.
     pub(crate) fn label(&self) -> Option<&str> {
-        self.0.deferred.as_ref().and_then(|(_, r)| r.label.as_deref())
+        match &*self.0 {
+            PipelineInner::Ready(_) => None,
+            PipelineInner::Deferred(d) => d.recipe.label.as_deref(),
+        }
+    }
+
+    /// What validation said when a warm-up built this, if it objected.
+    pub(crate) fn failure(&self) -> Option<&str> {
+        match &*self.0 {
+            PipelineInner::Ready(_) => None,
+            PipelineInner::Deferred(d) => d.failure.get().map(String::as_str),
+        }
     }
 
     /// Build it now if nobody has, and say what validation made of it.
@@ -376,28 +402,42 @@ impl Pipeline {
     /// Error scopes are per thread, so this catches this build's error and no
     /// one else's. A pipeline another thread is building in the meantime
     /// blocks here until it is done (`OnceLock`), and its error, if any, is
-    /// that thread's to see.
+    /// that thread's to see. **Native only**: a browser cannot block on an
+    /// error scope, so there this builds without reporting — use
+    /// [`compile_async`](Self::compile_async).
     pub(crate) fn compile(&self) -> Result<(), String> {
-        let Some((device, _)) = self.0.deferred.as_ref() else {
-            return Ok(());
-        };
-        if self.is_compiled() {
-            return Ok(());
-        }
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-            let _ = &**self;
-            match pollster::block_on(scope.pop()) {
-                Some(e) => Err(e.to_string()),
-                None => Ok(()),
-            }
+            pollster::block_on(self.compile_async())
         }
         #[cfg(target_arch = "wasm32")]
         {
-            let _ = device;
             let _ = &**self;
-            Ok(())
+            self.failure().map_or(Ok(()), |f| Err(f.to_owned()))
+        }
+    }
+
+    /// [`compile`](Self::compile) that awaits the error scope instead of
+    /// blocking on it, so it reports validation errors in a browser too.
+    pub(crate) async fn compile_async(&self) -> Result<(), String> {
+        let PipelineInner::Deferred(d) = &*self.0 else {
+            return Ok(());
+        };
+        if let Some(f) = d.failure.get() {
+            return Err(f.clone());
+        }
+        if d.compiled.get().is_some() {
+            return Ok(());
+        }
+        let scope = d.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let _ = &**self;
+        match scope.pop().await {
+            Some(e) => {
+                let message = e.to_string();
+                let _ = d.failure.set(message.clone());
+                Err(message)
+            }
+            None => Ok(()),
         }
     }
 }
@@ -411,12 +451,18 @@ impl Pipeline {
 pub(crate) struct PipelineSource {
     deferred: bool,
     cache: Option<wgpu::PipelineCache>,
-    pending: std::sync::Arc<std::sync::Mutex<Vec<Pipeline>>>,
+    /// Weak, so a variant nothing draws with any more is freed, and a built
+    /// pipeline is dropped from the list the next time it is read.
+    pending: std::sync::Arc<std::sync::Mutex<Vec<std::sync::Weak<PipelineInner>>>>,
 }
 
 impl PipelineSource {
     pub(crate) fn new(deferred: bool, cache: Option<wgpu::PipelineCache>) -> Self {
-        Self { deferred, cache, ..Default::default() }
+        Self {
+            deferred,
+            cache,
+            ..Default::default()
+        }
     }
 
     pub(crate) fn cache(&self) -> Option<&wgpu::PipelineCache> {
@@ -433,18 +479,54 @@ impl PipelineSource {
     }
 
     /// `desc` built now, or on first use when this source defers.
-    pub(crate) fn create(&self, device: &wgpu::Device, desc: &wgpu::RenderPipelineDescriptor) -> Pipeline {
+    pub(crate) fn create(
+        &self,
+        device: &wgpu::Device,
+        desc: &wgpu::RenderPipelineDescriptor,
+    ) -> Pipeline {
         if self.deferred {
-            let pipeline = Pipeline::pending(device, self.recipe(desc));
-            self.pending.lock().unwrap_or_else(|e| e.into_inner()).push(pipeline.clone());
-            pipeline
+            self.defer(device, self.recipe(desc), None)
         } else {
             self.create_now(device, desc)
         }
     }
 
+    /// `recipe` with `state` applied, built now or on first use when this
+    /// source defers. Variants of a pipeline come through here, so a lazy
+    /// renderer's state variants can be warmed like its initial pipelines.
+    pub(crate) fn build(
+        &self,
+        device: &wgpu::Device,
+        recipe: PipelineRecipe,
+        state: Option<ResolvedState>,
+    ) -> Pipeline {
+        if self.deferred {
+            self.defer(device, recipe, state)
+        } else {
+            Pipeline::ready(recipe.rebuild(device, state))
+        }
+    }
+
+    fn defer(
+        &self,
+        device: &wgpu::Device,
+        recipe: PipelineRecipe,
+        state: Option<ResolvedState>,
+    ) -> Pipeline {
+        let pipeline = Pipeline::deferred(device, recipe, state);
+        self.pending
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(std::sync::Arc::downgrade(&pipeline.0));
+        pipeline
+    }
+
     /// `desc` built now, through the cache.
-    pub(crate) fn create_now(&self, device: &wgpu::Device, desc: &wgpu::RenderPipelineDescriptor) -> Pipeline {
+    pub(crate) fn create_now(
+        &self,
+        device: &wgpu::Device,
+        desc: &wgpu::RenderPipelineDescriptor,
+    ) -> Pipeline {
         match (&self.cache, desc.cache) {
             // The descriptor exactly as given: nothing to add to it.
             (None, _) | (_, Some(_)) => Pipeline::create(device, desc, false),
@@ -452,11 +534,39 @@ impl PipelineSource {
         }
     }
 
-    /// Every deferred pipeline nothing has built yet.
+    /// Every deferred pipeline nothing has built yet, in the order they were
+    /// made. Built ones are dropped from the list, except those validation
+    /// rejected, which [`failed`](Self::failed) still reports.
     pub(crate) fn uncompiled(&self) -> Vec<Pipeline> {
         let mut pending = self.pending.lock().unwrap_or_else(|e| e.into_inner());
-        pending.retain(|p| !p.is_compiled());
-        pending.clone()
+        let mut out = Vec::new();
+        pending.retain(|weak| {
+            let Some(inner) = weak.upgrade() else {
+                return false;
+            };
+            let pipeline = Pipeline(inner);
+            if !pipeline.is_compiled() {
+                out.push(pipeline);
+                true
+            } else {
+                pipeline.failure().is_some()
+            }
+        });
+        out
+    }
+
+    /// Pipelines a warm-up built and validation rejected: `(label, message)`.
+    pub(crate) fn failed(&self) -> Vec<(String, String)> {
+        let pending = self.pending.lock().unwrap_or_else(|e| e.into_inner());
+        pending
+            .iter()
+            .filter_map(|w| w.upgrade())
+            .filter_map(|inner| {
+                let p = Pipeline(inner);
+                p.failure()
+                    .map(|m| (p.label().unwrap_or("").to_owned(), m.to_owned()))
+            })
+            .collect()
     }
 }
 
@@ -464,14 +574,12 @@ impl std::ops::Deref for Pipeline {
     type Target = wgpu::RenderPipeline;
 
     fn deref(&self) -> &Self::Target {
-        self.0.compiled.get_or_init(|| {
-            let (device, recipe) = self
-                .0
-                .deferred
-                .as_ref()
-                .expect("uncompiled pipeline must retain its descriptor and device");
-            recipe.rebuild(device, None)
-        })
+        match &*self.0 {
+            PipelineInner::Ready(pipeline) => pipeline,
+            PipelineInner::Deferred(d) => d
+                .compiled
+                .get_or_init(|| d.recipe.rebuild(&d.device, d.state)),
+        }
     }
 }
 
@@ -491,6 +599,9 @@ impl std::hash::Hash for Pipeline {
 #[derive(Default)]
 pub(crate) struct StatePipelines {
     recipes: HashMap<Pipeline, PipelineRecipe>,
+    /// The initial catalogue, which [`variants_of_initial`](Self::variants_of_initial)
+    /// starts from.
+    initial: Vec<Pipeline>,
     variants: HashMap<(Pipeline, ResolvedState), Pipeline>,
     culls: HashMap<(Pipeline, Option<wgpu::Face>), Pipeline>,
     /// Each registered pipeline layout's bind group layouts, so a pipeline can
@@ -508,14 +619,18 @@ pub(crate) struct StatePipelines {
 
 impl StatePipelines {
     /// Create a pipeline and remember how, so [`variant`](Self::variant) can
-    /// rebuild it.
+    /// rebuild it. Always builds now, even for a lazy renderer: this is for a
+    /// shader material's pipeline, made when the material is first drawn, so
+    /// there is nothing earlier to defer it to. The renderer's initial
+    /// catalogue goes through [`create_initial`](Self::create_initial).
     pub(crate) fn create(
         &mut self,
         device: &wgpu::Device,
         desc: &wgpu::RenderPipelineDescriptor,
     ) -> Pipeline {
         let pipeline = self.source.create_now(device, desc);
-        self.recipes.insert(pipeline.clone(), self.source.recipe(desc));
+        self.recipes
+            .insert(pipeline.clone(), self.source.recipe(desc));
         pipeline
     }
 
@@ -527,12 +642,29 @@ impl StatePipelines {
         desc: &wgpu::RenderPipelineDescriptor,
     ) -> Pipeline {
         let pipeline = self.source.create(device, desc);
-        self.recipes.insert(pipeline.clone(), self.source.recipe(desc));
+        self.recipes
+            .insert(pipeline.clone(), self.source.recipe(desc));
+        self.initial.push(pipeline.clone());
         pipeline
     }
 
+    /// [`variant`](Self::variant) of every initial pipeline for each of
+    /// `states`, so a lazy renderer's warm-up can build the pipelines those
+    /// materials will need, and not only the stock ones. Cheap on a lazy
+    /// source (it records recipes); an eager one builds them here.
+    pub(crate) fn variants_of_initial(&mut self, device: &wgpu::Device, states: &[RenderState]) {
+        for base in self.initial.clone() {
+            for state in states {
+                self.variant(device, &base, state);
+            }
+        }
+    }
+
     pub(crate) fn with_source(source: PipelineSource) -> Self {
-        Self { source, ..Default::default() }
+        Self {
+            source,
+            ..Default::default()
+        }
     }
 
     pub(crate) fn source(&self) -> &PipelineSource {
@@ -583,7 +715,7 @@ impl StatePipelines {
             return p.clone();
         }
         let r = recipe.with_state(resolved);
-        let p = Pipeline::ready(r.build(device, r.stock()));
+        let p = self.source.build(device, r.clone(), Some(r.stock()));
         self.recipes.insert(p.clone(), r);
         self.variants.insert((base.clone(), resolved), p.clone());
         p
@@ -648,7 +780,7 @@ impl StatePipelines {
                 f.module = module.clone();
             }
         }
-        let pipeline = Pipeline::ready(r.build(device, r.stock()));
+        let pipeline = self.source.build(device, r.clone(), Some(r.stock()));
         self.layouts.entry(layout).or_insert_with(|| {
             let mut g = groups;
             if group < g.len() {
@@ -682,7 +814,7 @@ impl StatePipelines {
             .or_insert_with(|| {
                 let mut r = recipe.clone();
                 r.primitive.cull_mode = cull;
-                Pipeline::ready(r.build(device, r.stock()))
+                self.source.build(device, r.clone(), Some(r.stock()))
             })
             .clone()
     }
@@ -823,7 +955,7 @@ struct Outputs { @location(0) a: vec4f, @location(1) b: vec4f }
         let mut images = Vec::new();
         for deferred in [false, true] {
             let pipe = Pipeline::create(&device, &desc, deferred);
-            assert_eq!(pipe.0.compiled.get().is_none(), deferred);
+            assert_eq!(!pipe.is_compiled(), deferred);
             let cloned = pipe.clone();
             // Cache identity must survive compilation of a previously pending handle.
             #[expect(
@@ -832,7 +964,7 @@ struct Outputs { @location(0) a: vec4f, @location(1) b: vec4f }
             )]
             let mut keys = std::collections::HashSet::new();
             keys.insert(cloned);
-            assert_eq!(pipe.0.compiled.get().is_none(), deferred);
+            assert_eq!(!pipe.is_compiled(), deferred);
             let a = crate::RenderTarget::new(&device, 4, 4, wgpu::TextureFormat::Rgba8Unorm);
             let b = crate::RenderTarget::new(&device, 4, 4, wgpu::TextureFormat::Rgba8Unorm);
             let attachment = |view| {
@@ -860,7 +992,7 @@ struct Outputs { @location(0) a: vec4f, @location(1) b: vec4f }
                 pass.set_pipeline(&pipe);
                 pass.draw(0..3, 0..1);
             }
-            assert!(pipe.0.compiled.get().is_some());
+            assert!(pipe.is_compiled());
             assert!(
                 keys.contains(&pipe),
                 "pipeline identity changed after compilation"
@@ -884,5 +1016,72 @@ struct Outputs { @location(0) a: vec4f, @location(1) b: vec4f }
             "fixture must distinguish the two blend states"
         );
         eprintln!("[lazy-recipe] PASS exact mixed-target blends and stable cache identity");
+    }
+
+    /// A pipeline validation rejects is reported by every later check, not
+    /// just the first, and a variant nothing holds any more is not kept.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn rejected_pipeline_stays_reported_and_dropped_variants_are_freed() {
+        let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+        desc.backends = wgpu::Backends::PRIMARY;
+        let instance = wgpu::Instance::new(desc);
+        let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
+            eprintln!("skipping: no GPU adapter");
+            return;
+        };
+        let (device, _queue) =
+            pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("rejected pipeline probe"),
+            source: wgpu::ShaderSource::Wgsl(
+                "@vertex fn vs() -> @builtin(position) vec4f { return vec4f(0.); }\n\
+                 @fragment fn fs() -> @location(0) vec4f { return vec4f(1.); }"
+                    .into(),
+            ),
+        });
+        let targets = [Some(wgpu::ColorTargetState::from(
+            wgpu::TextureFormat::Rgba8Unorm,
+        ))];
+        let desc = |entry: &'static str| wgpu::RenderPipelineDescriptor {
+            label: Some("probe"),
+            layout: None,
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some(entry),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            primitive: Default::default(),
+            depth_stencil: None,
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs"),
+                targets: &targets,
+                compilation_options: Default::default(),
+            }),
+            multiview_mask: None,
+            cache: None,
+        };
+        let source = PipelineSource::new(true, None);
+        let good = source.create(&device, &desc("vs"));
+        let bad = source.create(&device, &desc("no_such_entry_point"));
+        assert_eq!(source.uncompiled().len(), 2);
+        assert_eq!(good.compile(), Ok(()));
+        assert!(bad.compile().is_err());
+        // Asked again, a pipeline that failed still says so…
+        assert!(bad.compile().is_err());
+        assert!(pollster::block_on(bad.compile_async()).is_err());
+        assert_eq!(source.failed().len(), 1);
+        assert_eq!(source.failed()[0].0, "probe");
+        // …and neither built pipeline is left to warm.
+        assert!(source.uncompiled().is_empty());
+        // Handles dropped: the source does not keep them alive.
+        drop((good, bad));
+        assert!(source.failed().is_empty());
+        let dropped = source.create(&device, &desc("vs"));
+        drop(dropped);
+        assert!(source.uncompiled().is_empty());
     }
 }

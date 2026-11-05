@@ -112,14 +112,12 @@ pub async fn start(
     // storage textures and a handful of storage buffers per stage, and WebGPU's
     // baseline already guarantees them.
     let (device, queue) = adapter
-        .request_device(
-            &wgpu::DeviceDescriptor {
-                label: Some("threers ocean"),
-                required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::default().using_resolution(adapter.limits()),
-                ..Default::default()
-            },
-        )
+        .request_device(&wgpu::DeviceDescriptor {
+            label: Some("threers ocean"),
+            required_features: wgpu::Features::empty(),
+            required_limits: wgpu::Limits::default().using_resolution(adapter.limits()),
+            ..Default::default()
+        })
         .await
         .map_err(|e| JsValue::from_str(&format!("no WebGPU device: {e}")))?;
     let device = std::sync::Arc::new(device);
@@ -182,7 +180,10 @@ pub async fn start(
 
 /// Mouse drag and wheel, wired to the same `OrbitControls` the desktop build
 /// uses — so the two behave identically rather than merely similarly.
-fn install_input(canvas: &web_sys::HtmlCanvasElement, app: &Rc<RefCell<App>>) -> Result<(), JsValue> {
+fn install_input(
+    canvas: &web_sys::HtmlCanvasElement,
+    app: &Rc<RefCell<App>>,
+) -> Result<(), JsValue> {
     let target: &web_sys::EventTarget = canvas.as_ref();
 
     let a = app.clone();
@@ -298,8 +299,8 @@ fn start_frames(canvas: web_sys::HtmlCanvasElement, app: Rc<RefCell<App>>) {
             world.update(t, gpu, gpu, waves);
 
             if let wgpu::CurrentSurfaceTexture::Success(frame)
-            | wgpu::CurrentSurfaceTexture::Suboptimal(frame) =
-            s.surface.get_current_texture() {
+            | wgpu::CurrentSurfaceTexture::Suboptimal(frame) = s.surface.get_current_texture()
+            {
                 let view = frame
                     .texture
                     .create_view(&wgpu::TextureViewDescriptor::default());

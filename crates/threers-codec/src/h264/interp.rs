@@ -29,12 +29,16 @@ impl PlaneRef<'_> {
     /// The horizontal 6-tap sum at half-sample `(x + ½, y)`, unrounded.
     #[inline(always)]
     fn tap_h(&self, x: isize, y: isize) -> i32 {
-        self.at(x - 2, y) - 5 * self.at(x - 1, y) + 20 * self.at(x, y) + 20 * self.at(x + 1, y) - 5 * self.at(x + 2, y) + self.at(x + 3, y)
+        self.at(x - 2, y) - 5 * self.at(x - 1, y) + 20 * self.at(x, y) + 20 * self.at(x + 1, y)
+            - 5 * self.at(x + 2, y)
+            + self.at(x + 3, y)
     }
 
     #[inline(always)]
     fn tap_v(&self, x: isize, y: isize) -> i32 {
-        self.at(x, y - 2) - 5 * self.at(x, y - 1) + 20 * self.at(x, y) + 20 * self.at(x, y + 1) - 5 * self.at(x, y + 2) + self.at(x, y + 3)
+        self.at(x, y - 2) - 5 * self.at(x, y - 1) + 20 * self.at(x, y) + 20 * self.at(x, y + 1)
+            - 5 * self.at(x, y + 2)
+            + self.at(x, y + 3)
     }
 
     fn b(&self, x: isize, y: isize) -> i32 {
@@ -69,12 +73,24 @@ impl PlaneRef<'_> {
             (1, 2) => avg(self.h(x, y), self.j(x, y)),
             (3, 2) => avg(self.j(x, y), self.h(x + 1, y)),
             // Diagonals: the two nearest half samples.
-            (xf, yf) => avg(self.b(x, y + (yf == 3) as isize), self.h(x + (xf == 3) as isize, y)),
+            (xf, yf) => avg(
+                self.b(x, y + (yf == 3) as isize),
+                self.h(x + (xf == 3) as isize, y),
+            ),
         }
     }
 
     /// A `w × h` block at full position `(x, y)` plus quarter fraction.
-    pub fn block(&self, x: isize, y: isize, xf: usize, yf: usize, w: usize, h: usize, out: &mut [i32]) {
+    pub fn block(
+        &self,
+        x: isize,
+        y: isize,
+        xf: usize,
+        yf: usize,
+        w: usize,
+        h: usize,
+        out: &mut [i32],
+    ) {
         for r in 0..h {
             for c in 0..w {
                 out[r * w + c] = self.sample(x + c as isize, y + r as isize, xf, yf);
@@ -103,7 +119,11 @@ const PAD: isize = 8;
 impl HalfPlanes {
     /// From an 8-bit plane, on up to `threads` threads.
     pub fn new(data: &[u8], width: usize, height: usize, threads: usize) -> HalfPlanes {
-        let p = PlaneRef { data, width, height };
+        let p = PlaneRef {
+            data,
+            width,
+            height,
+        };
         let (sw, sh) = (width + 2 * PAD as usize, height + 2 * PAD as usize);
         let mut g = vec![0u8; sw * sh];
         let mut b = vec![0u8; sw * sh];
@@ -129,7 +149,13 @@ impl HalfPlanes {
         let b1 = &b1;
         let n = rows_each(sh);
         std::thread::scope(|scope| {
-            for (i, (((gc, bc), hc), jc)) in g.chunks_mut(n * sw).zip(b.chunks_mut(n * sw)).zip(h.chunks_mut(n * sw)).zip(j.chunks_mut(n * sw)).enumerate() {
+            for (i, (((gc, bc), hc), jc)) in g
+                .chunks_mut(n * sw)
+                .zip(b.chunks_mut(n * sw))
+                .zip(h.chunks_mut(n * sw))
+                .zip(j.chunks_mut(n * sw))
+                .enumerate()
+            {
                 scope.spawn(move || {
                     for k in 0..gc.len() {
                         let (r, c) = (i * n + k / sw, k % sw);
@@ -144,7 +170,15 @@ impl HalfPlanes {
                 });
             }
         });
-        HalfPlanes { width, height, stride: sw, g, b, h, j }
+        HalfPlanes {
+            width,
+            height,
+            stride: sw,
+            g,
+            b,
+            h,
+            j,
+        }
     }
 
     #[inline(always)]
@@ -173,12 +207,24 @@ impl HalfPlanes {
             (2, 3) => avg(j[i], b[self.idx(x, y + 1)]),
             (1, 2) => avg(h[i], j[i]),
             (3, 2) => avg(j[i], h[self.idx(x + 1, y)]),
-            (xf, yf) => avg(b[self.idx(x, y + (yf == 3) as isize)], h[self.idx(x + (xf == 3) as isize, y)]),
+            (xf, yf) => avg(
+                b[self.idx(x, y + (yf == 3) as isize)],
+                h[self.idx(x + (xf == 3) as isize, y)],
+            ),
         }
     }
 
     /// A `w × h` block at full position `(x, y)` plus quarter fraction.
-    pub fn block(&self, x: isize, y: isize, xf: usize, yf: usize, w: usize, h: usize, out: &mut [i32]) {
+    pub fn block(
+        &self,
+        x: isize,
+        y: isize,
+        xf: usize,
+        yf: usize,
+        w: usize,
+        h: usize,
+        out: &mut [i32],
+    ) {
         for r in 0..h {
             for c in 0..w {
                 out[r * w + c] = self.sample(x + c as isize, y + r as isize, xf, yf);
@@ -194,14 +240,24 @@ mod tests {
     #[test]
     fn tables_match_direct_interpolation_everywhere() {
         let (w, h) = (37usize, 29usize);
-        let data: Vec<u8> = (0..w * h).map(|i| ((i * 97 + (i / w) * 31) % 256) as u8).collect();
-        let direct = PlaneRef { data: &data, width: w, height: h };
+        let data: Vec<u8> = (0..w * h)
+            .map(|i| ((i * 97 + (i / w) * 31) % 256) as u8)
+            .collect();
+        let direct = PlaneRef {
+            data: &data,
+            width: w,
+            height: h,
+        };
         let tables = HalfPlanes::new(&data, w, h, 3);
         for y in -20..h as isize + 20 {
             for x in -20..w as isize + 20 {
                 for xf in 0..4 {
                     for yf in 0..4 {
-                        assert_eq!(tables.sample(x, y, xf, yf), direct.sample(x, y, xf, yf), "({x}, {y}) + ({xf}, {yf})/4");
+                        assert_eq!(
+                            tables.sample(x, y, xf, yf),
+                            direct.sample(x, y, xf, yf),
+                            "({x}, {y}) + ({xf}, {yf})/4"
+                        );
                     }
                 }
             }
@@ -211,23 +267,41 @@ mod tests {
     #[test]
     fn flat_stays_flat_and_halves_average() {
         let data = vec![100u8; 32 * 32];
-        let p = PlaneRef { data: &data, width: 32, height: 32 };
+        let p = PlaneRef {
+            data: &data,
+            width: 32,
+            height: 32,
+        };
         for xf in 0..4 {
             for yf in 0..4 {
                 assert_eq!(p.sample(10, 10, xf, yf), 100, "({xf}, {yf})");
             }
         }
         // A step: the half sample between 0 and 200 is 100.
-        let step: Vec<u8> = (0..32 * 32).map(|i| if i % 32 < 16 { 0 } else { 200 }).collect();
-        let p = PlaneRef { data: &step, width: 32, height: 32 };
+        let step: Vec<u8> = (0..32 * 32)
+            .map(|i| if i % 32 < 16 { 0 } else { 200 })
+            .collect();
+        let p = PlaneRef {
+            data: &step,
+            width: 32,
+            height: 32,
+        };
         assert_eq!(p.sample(15, 5, 2, 0), 100);
-        assert_eq!(p.sample(15, 5, 0, 2), 0, "vertical half of a vertical edge column");
+        assert_eq!(
+            p.sample(15, 5, 0, 2),
+            0,
+            "vertical half of a vertical edge column"
+        );
     }
 
     #[test]
     fn edges_clamp() {
         let data: Vec<u8> = (0..16 * 16).map(|i| (i % 16 * 10) as u8).collect();
-        let p = PlaneRef { data: &data, width: 16, height: 16 };
+        let p = PlaneRef {
+            data: &data,
+            width: 16,
+            height: 16,
+        };
         assert_eq!(p.sample(-5, -5, 0, 0), 0);
         assert_eq!(p.sample(40, 3, 0, 0), 150);
         let _ = p.sample(-3, 20, 3, 3);

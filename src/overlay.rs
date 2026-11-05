@@ -196,13 +196,13 @@ pub struct Overlay {
     /// Rows whose pixels differ from what the GPU was last given, as one band.
     /// Cleared only by [`Overlay::mark_uploaded`], so skipping a frame's
     /// composite does not lose track of what changed during it.
-    dirty: Option<(u32, u32)>,
+    dirty: Bands,
     /// Rows drawn on since the last [`Overlay::clear`] — which is the band the
     /// GPU will hold ink in once this frame is uploaded, and therefore the band
     /// the *next* clear has to mark dirty. Without it, erasing a panel would
     /// leave it on screen: the CPU buffer goes to zero and nothing tells the
     /// texture.
-    content: Option<(u32, u32)>,
+    content: Bands,
     #[cfg(feature = "captions")]
     painter: Option<crate::captions::CaptionPainter>,
     /// CSS weight for text (400 regular, 700 bold), and italic.
@@ -229,8 +229,8 @@ impl Overlay {
             stroke_weight: 1.0,
             text_size: 16.0,
             touched: false,
-            dirty: None,
-            content: None,
+            dirty: Bands::default(),
+            content: Bands::default(),
             #[cfg(feature = "captions")]
             painter: None,
             #[cfg(feature = "captions")]
@@ -255,13 +255,20 @@ impl Overlay {
         self.touched = false;
         // A new size means a new texture on the other side, which is uploaded
         // whole, so there is nothing outstanding to describe.
-        self.dirty = None;
-        self.content = None;
+        self.dirty = Bands::default();
+        self.content = Bands::default();
     }
 
     /// Erase everything back to transparent.
     pub fn clear(&mut self) {
-        self.pixels.fill(0);
+        // Only the rows something was drawn on: every write marks its rows, so
+        // the rest are zero already. A HUD with a panel at the top and a map at
+        // the bottom then clears those, not the screen.
+        let stride = self.width as usize * 4;
+        for &(a, b) in &self.content.0 {
+            let (a, b) = (a.min(self.height) as usize, b.min(self.height) as usize);
+            self.pixels[a * stride..b * stride].fill(0);
+        }
         self.touched = false;
         // Rows that had ink have none now. The CPU buffer knows; the texture
         // does not, so they stay dirty until something uploads the zeroes.
@@ -270,8 +277,8 @@ impl Overlay {
         // into `content` as well. Doing that kept every row ever drawn on in
         // `content` for the life of the overlay, so a band that touched the
         // bottom of the canvas once stayed full height forever.
-        if let Some((a, b)) = self.content.take() {
-            self.dirty = widen(self.dirty, a, b);
+        for (a, b) in std::mem::take(&mut self.content).0 {
+            self.dirty.add(a, b);
         }
     }
 
@@ -287,14 +294,27 @@ impl Overlay {
     /// calls [`mark_uploaded`](Overlay::mark_uploaded) itself, which is the
     /// reason to prefer it over doing the two by hand.
     pub fn dirty_rows(&self) -> Option<(u32, u32)> {
+        let first = self.dirty.0.first()?.0;
+        let end = self.dirty.0.last()?.1;
+        Some((first.min(self.height), end.min(self.height))).filter(|(a, b)| a < b)
+    }
+
+    /// The same rows as separate bands, top to bottom, with what lies between
+    /// them left out: a panel at the top and another at the bottom are two
+    /// small uploads rather than one of the whole screen. Bands closer than a
+    /// few rows are joined, as two uploads cost more than the rows between.
+    pub fn dirty_bands(&self) -> Vec<(u32, u32)> {
         self.dirty
-            .map(|(a, b)| (a.min(self.height), b.min(self.height)))
+            .0
+            .iter()
+            .map(|&(a, b)| (a.min(self.height), b.min(self.height)))
             .filter(|(a, b)| a < b)
+            .collect()
     }
 
     /// Say that the texture now matches the buffer.
     pub fn mark_uploaded(&mut self) {
-        self.dirty = None;
+        self.dirty = Bands::default();
     }
 
     /// Record that `y0..y1` was drawn on: outstanding for the texture, and part
@@ -303,8 +323,8 @@ impl Overlay {
         if y0 >= y1 {
             return;
         }
-        self.dirty = widen(self.dirty, y0, y1);
-        self.content = widen(self.content, y0, y1);
+        self.dirty.add(y0, y1);
+        self.content.add(y0, y1);
     }
 
     pub fn size(&self) -> (u32, u32) {
@@ -332,7 +352,10 @@ impl Overlay {
     ///
     /// If `rgba` is shorter than `width × height × 4` bytes.
     pub fn put_image_data(&mut self, x: i32, y: i32, width: u32, height: u32, rgba: &[u8]) {
-        assert!(rgba.len() >= width as usize * height as usize * 4, "put_image_data: too few bytes");
+        assert!(
+            rgba.len() >= width as usize * height as usize * 4,
+            "put_image_data: too few bytes"
+        );
         let x0 = x.max(0);
         let x1 = (x + width as i32).min(self.width as i32);
         let y0 = y.max(0);
@@ -504,9 +527,14 @@ impl Overlay {
     pub fn line(&mut self, x0: f32, y0: f32, x1: f32, y1: f32) {
         let (a, b) = (Vector2::new(x0, y0), Vector2::new(x1, y1));
         let half = self.stroke_weight * 0.5;
-        self.stroke_centre(x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1), half, |px, py| {
-            d2::segment(Vector2::new(px, py), a, b)
-        });
+        self.stroke_centre(
+            x0.min(x1),
+            y0.min(y1),
+            x0.max(x1),
+            y0.max(y1),
+            half,
+            |px, py| d2::segment(Vector2::new(px, py), a, b),
+        );
     }
 
     /// A connected run of line segments, open — the last point is not joined
@@ -527,9 +555,56 @@ impl Overlay {
             y1 = y1.max(p.y);
         }
         let half = self.stroke_weight * 0.5;
+        if points.len() < 9 {
+            self.stroke_centre(x0, y0, x1, y1, half, |px, py| {
+                let p = Vector2::new(px, py);
+                points
+                    .windows(2)
+                    .map(|w| d2::segment(p, w[0], w[1]))
+                    .fold(f32::MAX, f32::min)
+            });
+            return;
+        }
+        // Every pixel against every segment is the whole bounding box times the
+        // whole line: a map outline of a hundred and fifty points took two
+        // milliseconds. So the segments are filed by the tiles they come near,
+        // and a pixel looks only at its tile's. Far from any, the distance is
+        // just "far", which is all the coverage needs to know.
+        const TILE: f32 = 8.0;
+        let pad = half + 3.0;
+        let (gx, gy) = (x0 - pad, y0 - pad);
+        let cols = ((x1 - x0 + 2.0 * pad) / TILE) as usize + 1;
+        let rows = ((y1 - y0 + 2.0 * pad) / TILE) as usize + 1;
+        let mut tiles: Vec<Vec<u32>> = vec![Vec::new(); cols * rows];
+        for (i, w) in points.windows(2).enumerate() {
+            let tile = |v: f32, origin: f32, most: usize| {
+                (((v - origin) / TILE).max(0.0) as usize).min(most - 1)
+            };
+            let (c0, c1) = (
+                tile(w[0].x.min(w[1].x) - pad, gx, cols),
+                tile(w[0].x.max(w[1].x) + pad, gx, cols),
+            );
+            let (r0, r1) = (
+                tile(w[0].y.min(w[1].y) - pad, gy, rows),
+                tile(w[0].y.max(w[1].y) + pad, gy, rows),
+            );
+            for r in r0..=r1 {
+                for c in c0..=c1 {
+                    tiles[r * cols + c].push(i as u32);
+                }
+            }
+        }
+        let far = pad * 4.0;
         self.stroke_centre(x0, y0, x1, y1, half, |px, py| {
+            let (c, r) = ((px - gx) / TILE, (py - gy) / TILE);
+            if c < 0.0 || r < 0.0 || c >= cols as f32 || r >= rows as f32 {
+                return far;
+            }
             let p = Vector2::new(px, py);
-            points.windows(2).map(|w| d2::segment(p, w[0], w[1])).fold(f32::MAX, f32::min)
+            tiles[r as usize * cols + c as usize]
+                .iter()
+                .map(|&i| d2::segment(p, points[i as usize], points[i as usize + 1]))
+                .fold(far, f32::min)
         });
     }
 
@@ -556,7 +631,9 @@ impl Overlay {
         }
         // Borrowed, not copied into the closure: `shape` does not outlive this
         // call, and a `move` here was an allocation per polygon per frame.
-        self.shape(x0, y0, x1, y1, |px, py| d2::polygon(Vector2::new(px, py), points));
+        self.shape(x0, y0, x1, y1, |px, py| {
+            d2::polygon(Vector2::new(px, py), points)
+        });
     }
 
     /// Any signed distance field, filled and stroked in the current style —
@@ -676,6 +753,89 @@ impl Overlay {
         self.draw_text(x, y, text, crate::captions::CaptionAlign::Center)
     }
 
+    /// A string turned by `quarter_turns` × 90° counter-clockwise (1: read
+    /// from the bottom up, as a chart's vertical axis label), the rotated
+    /// block's top-left corner at `(x, y)`.
+    ///
+    /// Drawn as [`text`](Overlay::text) draws it, then turned and laid over
+    /// the canvas (source-over), so the style, font and outline are the same.
+    /// Returns whether anything was drawn.
+    #[cfg(feature = "captions")]
+    pub fn text_rotated(&mut self, x: f32, y: f32, text: &str, quarter_turns: i32) -> bool {
+        let q = quarter_turns.rem_euclid(4);
+        if q == 0 {
+            return self.text(x, y, text);
+        }
+        let (tw, th) = self.measure_text(text);
+        // with a margin for the outline
+        let (w, h) = (tw.ceil() as u32 + 4, th.ceil() as u32 + 4);
+        if w > self.width || h > self.height {
+            return false;
+        }
+        // drawn upright in a corner of the canvas cleared for it, taken out,
+        // and the corner put back as it was
+        let (cw, row) = (self.width as usize, w as usize * 4);
+        let saved: Vec<u8> = (0..h as usize)
+            .flat_map(|r| self.pixels[r * cw * 4..r * cw * 4 + row].to_vec())
+            .collect();
+        for r in 0..h as usize {
+            self.pixels[r * cw * 4..r * cw * 4 + row].fill(0);
+        }
+        let (touched, dirty, content) = (self.touched, self.dirty.clone(), self.content.clone());
+        let drawn = self.text(2.0, 2.0, text);
+        let upright: Vec<u8> = (0..h as usize)
+            .flat_map(|r| self.pixels[r * cw * 4..r * cw * 4 + row].to_vec())
+            .collect();
+        for r in 0..h as usize {
+            self.pixels[r * cw * 4..r * cw * 4 + row]
+                .copy_from_slice(&saved[r * row..(r + 1) * row]);
+        }
+        (self.touched, self.dirty, self.content) = (touched, dirty, content);
+        if !drawn {
+            return false;
+        }
+        // turned: (u, v) upright to (i, j) on the canvas
+        let (rw, rh) = if q % 2 == 1 { (h, w) } else { (w, h) };
+        let (x0, y0) = (x.round() as i32, y.round() as i32);
+        let mut any = false;
+        for j in 0..rh {
+            for i in 0..rw {
+                let (u, v) = match q {
+                    1 => (w - 1 - j, i),
+                    2 => (w - 1 - i, h - 1 - j),
+                    _ => (j, h - 1 - i),
+                };
+                let s = &upright[(v as usize * w as usize + u as usize) * 4..][..4];
+                let sa = s[3] as f32 / 255.0;
+                let (px, py) = (x0 + i as i32, y0 + j as i32);
+                if sa == 0.0
+                    || px < 0
+                    || py < 0
+                    || px >= self.width as i32
+                    || py >= self.height as i32
+                {
+                    continue;
+                }
+                let d = &mut self.pixels[(py as usize * cw + px as usize) * 4..][..4];
+                let da = d[3] as f32 / 255.0;
+                let oa = sa + da * (1.0 - sa);
+                for c in 0..3 {
+                    d[c] = ((s[c] as f32 * sa + d[c] as f32 * da * (1.0 - sa)) / oa).round() as u8;
+                }
+                d[3] = (oa * 255.0).round() as u8;
+                any = true;
+            }
+        }
+        if any {
+            self.touched = true;
+            self.mark_rows(
+                y0.max(0) as u32,
+                ((y0 + rh as i32).max(0) as u32).min(self.height),
+            );
+        }
+        any
+    }
+
     /// The one implementation behind [`text`](Overlay::text),
     /// [`text_right`](Overlay::text_right) and
     /// [`text_centered`](Overlay::text_centered).
@@ -772,14 +932,18 @@ impl Overlay {
         F: Fn(f32, f32) -> f32,
     {
         if let Some(paint) = self.fill {
-            self.paint(x0 - 1.0, y0 - 1.0, x1 + 1.0, y1 + 1.0, &paint, |px, py| (sdf(px, py), f32::INFINITY));
+            self.paint(x0 - 1.0, y0 - 1.0, x1 + 1.0, y1 + 1.0, &paint, |px, py| {
+                (sdf(px, py), f32::INFINITY)
+            });
         }
         if let Some(paint) = self.stroke {
             let half = self.stroke_weight * 0.5;
             // The outline is a stroke whose centre line is the edge: the
             // distance to it is the field folded about zero.
             let pad = half + 1.0;
-            self.paint(x0 - pad, y0 - pad, x1 + pad, y1 + pad, &paint, |px, py| (sdf(px, py).abs() - half, half));
+            self.paint(x0 - pad, y0 - pad, x1 + pad, y1 + pad, &paint, |px, py| {
+                (sdf(px, py).abs() - half, half)
+            });
         }
     }
 
@@ -793,7 +957,9 @@ impl Overlay {
             return;
         };
         let pad = half + 1.0;
-        self.paint(x0 - pad, y0 - pad, x1 + pad, y1 + pad, &paint, |px, py| (centre(px, py) - half, half));
+        self.paint(x0 - pad, y0 - pad, x1 + pad, y1 + pad, &paint, |px, py| {
+            (centre(px, py) - half, half)
+        });
     }
 
     /// Rasterise one field over a bounding box.
@@ -918,9 +1084,8 @@ impl Overlay {
                             let out_a = alpha + da * (1.0 - alpha);
                             for c in 0..3 {
                                 let under = table[dst[c] as usize];
-                                let mixed = (paint.linear[c] * alpha
-                                    + under * da * (1.0 - alpha))
-                                    / out_a;
+                                let mixed =
+                                    (paint.linear[c] * alpha + under * da * (1.0 - alpha)) / out_a;
                                 dst[c] = srgb_encode(mixed);
                             }
                             dst[3] = (out_a * 255.0 + 0.5) as u8;
@@ -934,26 +1099,85 @@ impl Overlay {
 }
 
 /// Grow a row band to cover `y0..y1`.
-fn widen(band: Option<(u32, u32)>, y0: u32, y1: u32) -> Option<(u32, u32)> {
-    if y0 >= y1 {
-        return band;
+/// Row ranges, half-open, sorted and apart from each other.
+#[derive(Debug, Clone, Default, PartialEq)]
+struct Bands(Vec<(u32, u32)>);
+
+impl Bands {
+    /// Rows closer than this are one band: an upload has a cost of its own.
+    const JOIN: u32 = 16;
+    /// More bands than this become fewer, joining the closest, so a frame of
+    /// scattered text does not turn into hundreds of uploads.
+    const MOST: usize = 8;
+
+    fn add(&mut self, y0: u32, y1: u32) {
+        if y0 >= y1 {
+            return;
+        }
+        let (mut a, mut b) = (y0, y1);
+        let mut kept = Vec::with_capacity(self.0.len() + 1);
+        for &(c, d) in &self.0 {
+            if d + Self::JOIN < a || b + Self::JOIN < c {
+                kept.push((c, d));
+            } else {
+                a = a.min(c);
+                b = b.max(d);
+            }
+        }
+        kept.push((a, b));
+        kept.sort_unstable();
+        while kept.len() > Self::MOST {
+            let closest = (1..kept.len())
+                .min_by_key(|&i| kept[i].0 - kept[i - 1].1)
+                .unwrap();
+            kept[closest - 1].1 = kept[closest].1;
+            kept.remove(closest);
+        }
+        self.0 = kept;
     }
-    Some(match band {
-        Some((a, b)) => (a.min(y0), b.max(y1)),
-        None => (y0, y1),
-    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    #[cfg(feature = "captions")]
+    #[test]
+    fn rotated_text_is_tall_and_leaves_the_rest() {
+        let mut o = Overlay::new(200, 200);
+        o.fill(Color::WHITE);
+        o.text_size(16.0);
+        let (tw, _) = o.measure_text("Voltage");
+        assert!(o.text_rotated(10.0, 20.0, "Voltage", 1));
+        // ink only inside the turned block: narrow and tall
+        let (mut x0, mut x1, mut y0, mut y1) = (u32::MAX, 0, u32::MAX, 0);
+        for y in 0..200 {
+            for x in 0..200 {
+                if o.pixels()[(y * 200 + x) as usize * 4 + 3] > 0 {
+                    (x0, x1, y0, y1) = (x0.min(x), x1.max(x), y0.min(y), y1.max(y));
+                }
+            }
+        }
+        assert!(x0 >= 10 && y0 >= 20, "inside the block: {x0},{y0}");
+        assert!(
+            y1 - y0 > x1 - x0,
+            "taller than wide: {}x{}",
+            x1 - x0,
+            y1 - y0
+        );
+        assert!((y1 - y0) as f32 >= tw * 0.8, "as tall as the text is long");
+        // the corner used to draw it upright put back (transparent)
+        assert_eq!(o.pixels()[3], 0);
+    }
+
     #[test]
     fn put_image_data_copies_clipped_and_marks_the_rows() {
         let mut o = Overlay::new(4, 3);
         o.mark_uploaded();
         // A 2 × 2 image hanging off the right edge at (3, 1): one column lands.
-        let img = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160];
+        let img = [
+            10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160,
+        ];
         o.put_image_data(3, 1, 2, 2, &img);
         assert!(o.touched());
         assert_eq!(o.dirty_rows(), Some((1, 3)));
@@ -1036,7 +1260,9 @@ mod tests {
     #[test]
     #[ignore]
     fn the_encode_table_is_faster_than_the_curve() {
-        let vals: Vec<f32> = (0..1 << 16).map(|i| (i as f32) / ((1 << 16) as f32)).collect();
+        let vals: Vec<f32> = (0..1 << 16)
+            .map(|i| (i as f32) / ((1 << 16) as f32))
+            .collect();
         let reps = 200;
         for (label, f) in [
             ("table", srgb_encode as fn(f32) -> u8),
@@ -1107,8 +1333,16 @@ mod tests {
         o.fill_alpha(Color::WHITE, 0.25);
         o.rect(0.0, 0.0, 8.0, 8.0);
         let p = at(&o, 4, 4);
-        assert_eq!([p[0], p[1], p[2]], [255, 255, 255], "colour not premultiplied");
-        assert!((p[3] as i32 - 64).abs() <= 2, "alpha {} should be ~64", p[3]);
+        assert_eq!(
+            [p[0], p[1], p[2]],
+            [255, 255, 255],
+            "colour not premultiplied"
+        );
+        assert!(
+            (p[3] as i32 - 64).abs() <= 2,
+            "alpha {} should be ~64",
+            p[3]
+        );
     }
 
     /// Overlapping half-transparent fills must mix in linear light. Two 50%
@@ -1205,7 +1439,9 @@ mod tests {
 
     /// Alpha across column `x`, as coverage.
     fn column(o: &Overlay, x: u32) -> Vec<f32> {
-        (0..o.size().1).map(|y| at(o, x, y)[3] as f32 / 255.0).collect()
+        (0..o.size().1)
+            .map(|y| at(o, x, y)[3] as f32 / 255.0)
+            .collect()
     }
 
     /// A line thinner than a pixel draws at its own weight: its alpha peaks at
@@ -1223,7 +1459,10 @@ mod tests {
             let col = column(&o, 16);
             let total: f32 = col.iter().sum();
             let peak = col.iter().cloned().fold(0.0, f32::max);
-            assert!((total - 0.4).abs() < 0.02, "at y {y}: {total} of ink for a 0.4 line");
+            assert!(
+                (total - 0.4).abs() < 0.02,
+                "at y {y}: {total} of ink for a 0.4 line"
+            );
             assert!(peak <= 0.41, "at y {y}: peak {peak}");
         }
     }
@@ -1240,8 +1479,14 @@ mod tests {
         let mean = sums.iter().sum::<f32>() / sums.len() as f32;
         let spread = sums.iter().map(|s| (s - mean).abs()).fold(0.0, f32::max);
         // a 0.6-wide line at 45 degrees crosses each column over 0.6·√2
-        assert!((mean - 0.6 * std::f32::consts::SQRT_2).abs() < 0.03, "mean ink per column {mean}");
-        assert!(spread < 0.03, "ink per column varies by {spread} along the line");
+        assert!(
+            (mean - 0.6 * std::f32::consts::SQRT_2).abs() < 0.03,
+            "mean ink per column {mean}"
+        );
+        assert!(
+            spread < 0.03,
+            "ink per column varies by {spread} along the line"
+        );
     }
 
     /// A translucent polyline covers its joints once: drawn segment by
@@ -1251,7 +1496,11 @@ mod tests {
         let mut o = Overlay::new(48, 48);
         o.stroke_alpha(Color::WHITE, 0.5);
         o.stroke_weight(3.0);
-        let pts = [Vector2::new(4.0, 24.0), Vector2::new(24.0, 24.0), Vector2::new(44.0, 24.0)];
+        let pts = [
+            Vector2::new(4.0, 24.0),
+            Vector2::new(24.0, 24.0),
+            Vector2::new(44.0, 24.0),
+        ];
         o.polyline(&pts);
         let joint = at(&o, 24, 24)[3];
         let along = at(&o, 14, 24)[3];
@@ -1337,6 +1586,81 @@ mod tests {
     /// The upload band has to describe the difference between the buffer and
     /// the texture, which is not the same as "what this frame drew": erasing a
     /// panel changes rows without drawing on them.
+    /// A long polyline drawn tile by tile is the picture every segment at
+    /// every pixel gives.
+    #[test]
+    fn a_long_polyline_draws_as_the_slow_way_does() {
+        let points: Vec<Vector2> = (0..=60)
+            .map(|i| {
+                let a = i as f32 / 60.0 * 6.283;
+                Vector2::new(
+                    60.0 + 40.0 * a.cos() + (i % 3) as f32,
+                    60.0 + 30.0 * a.sin(),
+                )
+            })
+            .collect();
+        let draw = |o: &mut Overlay| {
+            o.no_fill();
+            o.stroke(Color::WHITE);
+            o.stroke_weight(3.0);
+        };
+        let mut fast = Overlay::new(128, 128);
+        draw(&mut fast);
+        fast.polyline(&points);
+        let mut slow = Overlay::new(128, 128);
+        draw(&mut slow);
+        slow.stroke_centre(0.0, 0.0, 128.0, 128.0, 1.5, |px, py| {
+            let p = Vector2::new(px, py);
+            points
+                .windows(2)
+                .map(|w| d2::segment(p, w[0], w[1]))
+                .fold(f32::MAX, f32::min)
+        });
+        let differ = fast
+            .pixels()
+            .iter()
+            .zip(slow.pixels())
+            .filter(|(a, b)| a != b)
+            .count();
+        assert_eq!(differ, 0);
+        assert!(fast.pixels().iter().any(|&p| p > 0));
+    }
+
+    /// A panel at the top and one at the bottom are two bands, and clearing
+    /// zeroes their rows and nothing else.
+    #[test]
+    fn far_apart_drawing_is_two_bands_and_clearing_is_only_theirs() {
+        let mut o = Overlay::new(64, 400);
+        o.no_stroke();
+        o.rect(0.0, 10.0, 20.0, 20.0);
+        o.rect(0.0, 350.0, 20.0, 20.0);
+        let bands = o.dirty_bands();
+        assert_eq!(bands.len(), 2, "{bands:?}");
+        let upload: u32 = bands.iter().map(|(a, b)| b - a).sum();
+        assert!(upload < 60, "{bands:?}");
+        assert_eq!(
+            o.dirty_rows().map(|(a, b)| (a <= 10, b >= 370)),
+            Some((true, true))
+        );
+        o.mark_uploaded();
+        o.clear();
+        assert!(o.pixels().iter().all(|&p| p == 0));
+        assert_eq!(
+            o.dirty_bands(),
+            bands,
+            "the cleared rows still have to reach the texture"
+        );
+        // Rows near each other join, and a scatter of many stays a few.
+        let mut o = Overlay::new(64, 4000);
+        for i in 0..40 {
+            o.rect(0.0, i as f32 * 90.0, 5.0, 5.0);
+        }
+        assert!(o.dirty_bands().len() <= 8);
+        o.rect(0.0, 3990.0, 5.0, 5.0);
+        let rows: u32 = o.dirty_bands().iter().map(|(a, b)| b - a).sum();
+        assert!(rows < 4000);
+    }
+
     #[test]
     fn the_dirty_band_tracks_what_the_texture_is_missing() {
         let mut o = Overlay::new(64, 200);
@@ -1356,7 +1680,10 @@ mod tests {
         // buffer goes to zero and nothing would tell the texture.
         o.clear();
         let (a, b) = o.dirty_rows().expect("the cleared rows are outstanding");
-        assert!(a <= 20 && b >= 40, "rows {a}..{b} should still cover 20..40");
+        assert!(
+            a <= 20 && b >= 40,
+            "rows {a}..{b} should still cover 20..40"
+        );
 
         // Drawing somewhere else unions with it, because both bands differ from
         // the texture.
@@ -1394,7 +1721,10 @@ mod tests {
                 o.stroke_weight(3.0);
             }
             assert!(o.text(8.0, 8.0, "Outlined"));
-            o.pixels().chunks(4).filter(|p| p[3] > 128 && p[0] > 200 && p[1] < 60).count()
+            o.pixels()
+                .chunks(4)
+                .filter(|p| p[3] > 128 && p[0] > 200 && p[1] < 60)
+                .count()
         };
         assert_eq!(red(false), 0);
         assert!(red(true) > 100, "only {} outline pixels", red(true));
@@ -1406,12 +1736,15 @@ mod tests {
     #[cfg(all(feature = "captions", target_os = "macos"))]
     #[test]
     fn bold_is_the_fonts_bold() {
-        let Some(font) = crate::captions::CaptionFont::try_sf_compact() else { return };
+        let Some(font) = crate::captions::CaptionFont::try_sf_compact() else {
+            return;
+        };
         let ink = |weight: u16| {
             let mut o = Overlay::new(400, 48);
-            o.set_font(font.with_weight(400).unwrap_or_else(|| {
-                crate::captions::CaptionFont::try_sf_compact().unwrap()
-            }));
+            o.set_font(
+                font.with_weight(400)
+                    .unwrap_or_else(|| crate::captions::CaptionFont::try_sf_compact().unwrap()),
+            );
             o.text_size(18.0);
             o.fill(Color::WHITE);
             assert!(o.text_weight(weight), "the face has weight {weight}");
@@ -1421,8 +1754,14 @@ mod tests {
         };
         let (regular, regular_width) = ink(400);
         let (bold, bold_width) = ink(700);
-        assert!(bold > regular * 1.3, "bold ink {bold} against regular {regular}");
-        assert!(bold_width > regular_width, "bold is set wider by its own advances");
+        assert!(
+            bold > regular * 1.3,
+            "bold ink {bold} against regular {regular}"
+        );
+        assert!(
+            bold_width > regular_width,
+            "bold is set wider by its own advances"
+        );
         // And back: the regular face again, from the overlay's cache.
         assert_eq!(ink(400).0, regular);
     }
@@ -1435,7 +1774,12 @@ mod tests {
     fn italic_text_leans() {
         let centre = |italic: bool, rows: std::ops::Range<u32>| -> f32 {
             let mut o = Overlay::new(240, 48);
-            o.set_font(crate::captions::CaptionFont::from_ttf_bytes(include_bytes!("openscad/DejaVuSans.ttf")).unwrap());
+            o.set_font(
+                crate::captions::CaptionFont::from_ttf_bytes(include_bytes!(
+                    "openscad/DejaVuSans.ttf"
+                ))
+                .unwrap(),
+            );
             o.text_size(24.0);
             o.fill(Color::WHITE);
             assert!(o.text_italic(italic));
@@ -1554,7 +1898,10 @@ mod tests {
             "centred {centre:.1} should be near the midpoint of {left:.1} and {right:.1}"
         );
         let anchor = anchor as f64;
-        assert!(centre > anchor - 60.0 && centre < anchor + 60.0, "centred {centre:.1}");
+        assert!(
+            centre > anchor - 60.0 && centre < anchor + 60.0,
+            "centred {centre:.1}"
+        );
     }
 
     #[cfg(feature = "captions")]

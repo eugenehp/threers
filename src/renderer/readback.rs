@@ -294,7 +294,10 @@ impl AsyncReadback {
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        Self { buffer, ready: Default::default() }
+        Self {
+            buffer,
+            ready: Default::default(),
+        }
     }
 
     /// The buffer to copy into.
@@ -306,12 +309,14 @@ impl AsyncReadback {
     /// can be read (or failed to map).
     pub fn map(&self, wake: std::sync::Arc<dyn Fn() + Send + Sync>) {
         let ready = self.ready.clone();
-        self.buffer.slice(..).map_async(wgpu::MapMode::Read, move |r| {
-            if r.is_ok() {
-                ready.store(true, std::sync::atomic::Ordering::Release);
-            }
-            wake();
-        });
+        self.buffer
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, move |r| {
+                if r.is_ok() {
+                    ready.store(true, std::sync::atomic::Ordering::Release);
+                }
+                wake();
+            });
     }
 
     /// Whether [`read`](Self::read) would give the bytes now.

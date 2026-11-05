@@ -2,12 +2,14 @@
 //! (dav1d `src/env.h`).
 
 use super::levels::*;
-use super::obu::{get_poc_diff, FrameHeader, WarpedMotionParams, WM_AFFINE, WM_IDENTITY, WM_ROT_ZOOM, WM_TRANSLATION};
+use super::obu::{
+    get_poc_diff, FrameHeader, WarpedMotionParams, WM_AFFINE, WM_IDENTITY, WM_ROT_ZOOM,
+    WM_TRANSLATION,
+};
 use super::refmvs::RefmvsCandidate;
 use super::tables::TxfmInfo;
 
-#[derive(Clone)]
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct BlockContext {
     pub mode: [u8; 32],
     pub lcoef: [u8; 32],
@@ -30,10 +32,16 @@ pub struct BlockContext {
     pub pal_sz: [u8; 32],
 }
 
-
 type Bc = BlockContext;
 
-pub fn get_intra_ctx(a: &Bc, l: &Bc, yb4: usize, xb4: usize, have_top: bool, have_left: bool) -> usize {
+pub fn get_intra_ctx(
+    a: &Bc,
+    l: &Bc,
+    yb4: usize,
+    xb4: usize,
+    have_top: bool,
+    have_left: bool,
+) -> usize {
     if have_left {
         if have_top {
             let ctx = (l.intra[yb4] + a.intra[xb4]) as usize;
@@ -49,11 +57,13 @@ pub fn get_intra_ctx(a: &Bc, l: &Bc, yb4: usize, xb4: usize, have_top: bool, hav
 }
 
 pub fn get_tx_ctx(a: &Bc, l: &Bc, max_tx: &TxfmInfo, yb4: usize, xb4: usize) -> usize {
-    (l.tx_intra[yb4] as i32 >= max_tx.lh as i32) as usize + (a.tx_intra[xb4] as i32 >= max_tx.lw as i32) as usize
+    (l.tx_intra[yb4] as i32 >= max_tx.lh as i32) as usize
+        + (a.tx_intra[xb4] as i32 >= max_tx.lw as i32) as usize
 }
 
 pub fn get_partition_ctx(a: &Bc, l: &Bc, bl: usize, yb8: usize, xb8: usize) -> usize {
-    ((a.partition[xb8] >> (4 - bl)) & 1) as usize + ((((l.partition[yb8] >> (4 - bl)) & 1) as usize) << 1)
+    ((a.partition[xb8] >> (4 - bl)) & 1) as usize
+        + ((((l.partition[yb8] >> (4 - bl)) & 1) as usize) << 1)
 }
 
 pub fn gather_left_partition_prob(i: &[u16], bl: usize) -> u32 {
@@ -81,17 +91,35 @@ pub fn get_uv_inter_txtp(uvt_dim: &TxfmInfo, ytxtp: u8) -> u8 {
         return if ytxtp == IDTX { IDTX } else { DCT_DCT };
     }
     if uvt_dim.min as usize == TX_16X16
-        && ((1u32 << ytxtp) & ((1 << H_FLIPADST) | (1 << V_FLIPADST) | (1 << H_ADST) | (1 << V_ADST))) != 0
+        && ((1u32 << ytxtp)
+            & ((1 << H_FLIPADST) | (1 << V_FLIPADST) | (1 << H_ADST) | (1 << V_ADST)))
+            != 0
     {
         return DCT_DCT;
     }
     ytxtp
 }
 
-pub fn get_filter_ctx(a: &Bc, l: &Bc, comp: bool, dir: usize, r: i8, yb4: usize, xb4: usize) -> usize {
+pub fn get_filter_ctx(
+    a: &Bc,
+    l: &Bc,
+    comp: bool,
+    dir: usize,
+    r: i8,
+    yb4: usize,
+    xb4: usize,
+) -> usize {
     const N: u8 = 3;
-    let a_f = if a.r#ref[0][xb4] == r || a.r#ref[1][xb4] == r { a.filter[dir][xb4] } else { N };
-    let l_f = if l.r#ref[0][yb4] == r || l.r#ref[1][yb4] == r { l.filter[dir][yb4] } else { N };
+    let a_f = if a.r#ref[0][xb4] == r || a.r#ref[1][xb4] == r {
+        a.filter[dir][xb4]
+    } else {
+        N
+    };
+    let l_f = if l.r#ref[0][yb4] == r || l.r#ref[1][yb4] == r {
+        l.filter[dir][yb4]
+    } else {
+        N
+    };
     let c = comp as usize * 4;
     if a_f == l_f {
         c + a_f as usize
@@ -104,7 +132,14 @@ pub fn get_filter_ctx(a: &Bc, l: &Bc, comp: bool, dir: usize, r: i8, yb4: usize,
     }
 }
 
-pub fn get_comp_ctx(a: &Bc, l: &Bc, yb4: usize, xb4: usize, have_top: bool, have_left: bool) -> usize {
+pub fn get_comp_ctx(
+    a: &Bc,
+    l: &Bc,
+    yb4: usize,
+    xb4: usize,
+    have_top: bool,
+    have_left: bool,
+) -> usize {
     if have_top {
         if have_left {
             if a.comp_type[xb4] != 0 {
@@ -139,7 +174,14 @@ fn has_uni_comp(e: &Bc, off: usize) -> bool {
     (e.r#ref[0][off] < 4) == (e.r#ref[1][off] < 4)
 }
 
-pub fn get_comp_dir_ctx(a: &Bc, l: &Bc, yb4: usize, xb4: usize, have_top: bool, have_left: bool) -> usize {
+pub fn get_comp_dir_ctx(
+    a: &Bc,
+    l: &Bc,
+    yb4: usize,
+    xb4: usize,
+    have_top: bool,
+    have_left: bool,
+) -> usize {
     if have_top && have_left {
         let (ai, li) = (a.intra[xb4] != 0, l.intra[yb4] != 0);
         if ai && li {
@@ -188,7 +230,16 @@ pub fn get_comp_dir_ctx(a: &Bc, l: &Bc, yb4: usize, xb4: usize, have_top: bool, 
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn get_jnt_comp_ctx(nb: u8, poc: u32, ref0poc: u32, ref1poc: u32, a: &Bc, l: &Bc, yb4: usize, xb4: usize) -> usize {
+pub fn get_jnt_comp_ctx(
+    nb: u8,
+    poc: u32,
+    ref0poc: u32,
+    ref1poc: u32,
+    a: &Bc,
+    l: &Bc,
+    yb4: usize,
+    xb4: usize,
+) -> usize {
     let d0 = get_poc_diff(nb, ref0poc as i32, poc as i32).unsigned_abs();
     let d1 = get_poc_diff(nb, poc as i32, ref1poc as i32).unsigned_abs();
     let offset = (d0 == d1) as usize;
@@ -212,7 +263,15 @@ pub fn get_mask_comp_ctx(a: &Bc, l: &Bc, yb4: usize, xb4: usize) -> usize {
 
 /// Neighbour reference counting shared by the `av1_get_*ref*_ctx` family:
 /// `pick(r)` returns the counter slot for reference `r`, if any.
-fn count_refs<const N: usize>(a: &Bc, l: &Bc, yb4: usize, xb4: usize, have_top: bool, have_left: bool, pick: impl Fn(i8) -> Option<usize>) -> [i32; N] {
+fn count_refs<const N: usize>(
+    a: &Bc,
+    l: &Bc,
+    yb4: usize,
+    xb4: usize,
+    have_top: bool,
+    have_left: bool,
+    pick: impl Fn(i8) -> Option<usize>,
+) -> [i32; N] {
     let mut cnt = [0i32; N];
     let mut add = |e: &Bc, o: usize| {
         if let Some(k) = pick(e.r#ref[0][o]) {
@@ -250,32 +309,68 @@ pub fn get_ref_ctx(a: &Bc, l: &Bc, yb4: usize, xb4: usize, ht: bool, hl: bool) -
 }
 
 pub fn get_fwd_ref_ctx(a: &Bc, l: &Bc, yb4: usize, xb4: usize, ht: bool, hl: bool) -> usize {
-    let c = count_refs::<4>(a, l, yb4, xb4, ht, hl, |r| if r < 4 { Some(r as usize) } else { None });
+    let c = count_refs::<4>(a, l, yb4, xb4, ht, hl, |r| {
+        if r < 4 {
+            Some(r as usize)
+        } else {
+            None
+        }
+    });
     cmp3(c[0] + c[1], c[2] + c[3])
 }
 
 pub fn get_fwd_ref_1_ctx(a: &Bc, l: &Bc, yb4: usize, xb4: usize, ht: bool, hl: bool) -> usize {
-    let c = count_refs::<2>(a, l, yb4, xb4, ht, hl, |r| if r < 2 { Some(r as usize) } else { None });
+    let c = count_refs::<2>(a, l, yb4, xb4, ht, hl, |r| {
+        if r < 2 {
+            Some(r as usize)
+        } else {
+            None
+        }
+    });
     cmp3(c[0], c[1])
 }
 
 pub fn get_fwd_ref_2_ctx(a: &Bc, l: &Bc, yb4: usize, xb4: usize, ht: bool, hl: bool) -> usize {
-    let c = count_refs::<2>(a, l, yb4, xb4, ht, hl, |r| if (r as u32 ^ 2) < 2 { Some(r as usize - 2) } else { None });
+    let c = count_refs::<2>(a, l, yb4, xb4, ht, hl, |r| {
+        if (r as u32 ^ 2) < 2 {
+            Some(r as usize - 2)
+        } else {
+            None
+        }
+    });
     cmp3(c[0], c[1])
 }
 
 pub fn get_bwd_ref_ctx(a: &Bc, l: &Bc, yb4: usize, xb4: usize, ht: bool, hl: bool) -> usize {
-    let c = count_refs::<3>(a, l, yb4, xb4, ht, hl, |r| if r >= 4 { Some(r as usize - 4) } else { None });
+    let c = count_refs::<3>(a, l, yb4, xb4, ht, hl, |r| {
+        if r >= 4 {
+            Some(r as usize - 4)
+        } else {
+            None
+        }
+    });
     cmp3(c[1] + c[0], c[2])
 }
 
 pub fn get_bwd_ref_1_ctx(a: &Bc, l: &Bc, yb4: usize, xb4: usize, ht: bool, hl: bool) -> usize {
-    let c = count_refs::<3>(a, l, yb4, xb4, ht, hl, |r| if r >= 4 { Some(r as usize - 4) } else { None });
+    let c = count_refs::<3>(a, l, yb4, xb4, ht, hl, |r| {
+        if r >= 4 {
+            Some(r as usize - 4)
+        } else {
+            None
+        }
+    });
     cmp3(c[0], c[1])
 }
 
 pub fn get_uni_p1_ctx(a: &Bc, l: &Bc, yb4: usize, xb4: usize, ht: bool, hl: bool) -> usize {
-    let c = count_refs::<3>(a, l, yb4, xb4, ht, hl, |r| if (r as i32 as u32).wrapping_sub(1) < 3 { Some(r as usize - 1) } else { None });
+    let c = count_refs::<3>(a, l, yb4, xb4, ht, hl, |r| {
+        if (r as i32 as u32).wrapping_sub(1) < 3 {
+            Some(r as usize - 1)
+        } else {
+            None
+        }
+    });
     cmp3(c[0], c[1] + c[2])
 }
 
@@ -290,7 +385,14 @@ pub fn get_drl_context(stack: &[RefmvsCandidate], idx: usize) -> usize {
 }
 
 /// `get_cur_frame_segid`: (predicted segment id, context).
-pub fn get_cur_frame_segid(by: usize, bx: usize, have_top: bool, have_left: bool, map: &[u8], stride: usize) -> (u8, usize) {
+pub fn get_cur_frame_segid(
+    by: usize,
+    bx: usize,
+    have_top: bool,
+    have_left: bool,
+    map: &[u8],
+    stride: usize,
+) -> (u8, usize) {
     let o = bx + by * stride;
     if have_left && have_top {
         let l = map[o - 1];
@@ -326,7 +428,10 @@ pub struct Mv {
 
 impl Mv {
     pub const ZERO: Mv = Mv { y: 0, x: 0 };
-    pub const INVALID: Mv = Mv { y: i16::MIN, x: i16::MIN };
+    pub const INVALID: Mv = Mv {
+        y: i16::MIN,
+        x: i16::MIN,
+    };
 }
 
 #[inline]
@@ -346,11 +451,21 @@ pub fn fix_mv_precision(hdr: &FrameHeader, mv: &mut Mv) {
     }
 }
 
-pub fn get_gmv_2d(gmv: &WarpedMotionParams, bx4: i32, by4: i32, bw4: i32, bh4: i32, hdr: &FrameHeader) -> Mv {
+pub fn get_gmv_2d(
+    gmv: &WarpedMotionParams,
+    bx4: i32,
+    by4: i32,
+    bw4: i32,
+    bh4: i32,
+    hdr: &FrameHeader,
+) -> Mv {
     match gmv.typ {
         WM_IDENTITY => Mv::ZERO,
         WM_TRANSLATION => {
-            let mut r = Mv { y: (gmv.matrix[0] >> 13) as i16, x: (gmv.matrix[1] >> 13) as i16 };
+            let mut r = Mv {
+                y: (gmv.matrix[0] >> 13) as i16,
+                x: (gmv.matrix[1] >> 13) as i16,
+            };
             if hdr.force_integer_mv {
                 fix_int_mv_precision(&mut r);
             }
@@ -361,8 +476,14 @@ pub fn get_gmv_2d(gmv: &WarpedMotionParams, bx4: i32, by4: i32, bw4: i32, bh4: i
             let m = &gmv.matrix;
             let x = bx4 * 4 + bw4 * 2 - 1;
             let y = by4 * 4 + bh4 * 2 - 1;
-            let xc = (m[2] - (1 << 16)).wrapping_mul(x).wrapping_add(m[3].wrapping_mul(y)).wrapping_add(m[0]);
-            let yc = (m[5] - (1 << 16)).wrapping_mul(y).wrapping_add(m[4].wrapping_mul(x)).wrapping_add(m[1]);
+            let xc = (m[2] - (1 << 16))
+                .wrapping_mul(x)
+                .wrapping_add(m[3].wrapping_mul(y))
+                .wrapping_add(m[0]);
+            let yc = (m[5] - (1 << 16))
+                .wrapping_mul(y)
+                .wrapping_add(m[4].wrapping_mul(x))
+                .wrapping_add(m[1]);
             let shift = 16 - (3 - !hdr.hp as i32);
             let round = (1 << shift) >> 1;
             let f = |c: i32| {

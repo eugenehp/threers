@@ -34,7 +34,11 @@ pub enum LegibilityIssue {
 }
 
 fn rgb(c: [u8; 4]) -> [f32; 3] {
-    [c[0] as f32 / 255.0, c[1] as f32 / 255.0, c[2] as f32 / 255.0]
+    [
+        c[0] as f32 / 255.0,
+        c[1] as f32 / 255.0,
+        c[2] as f32 / 255.0,
+    ]
 }
 
 fn over(top: [u8; 4], under: [f32; 3]) -> [f32; 3] {
@@ -70,7 +74,8 @@ impl CaptionStyle {
         const MIN: f32 = 4.5;
         let boxed = self.background[3] > 0;
         let outline = self.outline_width >= 1.0 && self.outline_color[3] > 0;
-        let shadow = self.shadow_color[3] > 0 && (self.shadow_offset[0].abs() + self.shadow_offset[1].abs()) >= 1.0;
+        let shadow = self.shadow_color[3] > 0
+            && (self.shadow_offset[0].abs() + self.shadow_offset[1].abs()) >= 1.0;
         let box_ratio = self.worst_box_contrast();
         if boxed && box_ratio >= MIN {
             return Vec::new();
@@ -86,10 +91,13 @@ impl CaptionStyle {
                 })
                 .fold(f32::MAX, f32::min)
         };
-        let edge_ratio = [outline.then(|| edge(self.outline_color)), shadow.then(|| edge(self.shadow_color))]
-            .into_iter()
-            .flatten()
-            .fold(0.0f32, f32::max);
+        let edge_ratio = [
+            outline.then(|| edge(self.outline_color)),
+            shadow.then(|| edge(self.shadow_color)),
+        ]
+        .into_iter()
+        .flatten()
+        .fold(0.0f32, f32::max);
         if (outline || shadow) && edge_ratio >= MIN {
             return Vec::new();
         }
@@ -97,7 +105,9 @@ impl CaptionStyle {
         match (boxed, outline || shadow) {
             (false, false) => issues.push(LegibilityIssue::NoBackgroundOrEdge),
             (true, false) => issues.push(LegibilityIssue::LowContrastWithBox { ratio: box_ratio }),
-            (false, true) => issues.push(LegibilityIssue::LowContrastWithEdge { ratio: edge_ratio }),
+            (false, true) => {
+                issues.push(LegibilityIssue::LowContrastWithEdge { ratio: edge_ratio })
+            }
             (true, true) => {
                 issues.push(LegibilityIssue::LowContrastWithBox { ratio: box_ratio });
                 issues.push(LegibilityIssue::LowContrastWithEdge { ratio: edge_ratio });
@@ -117,10 +127,17 @@ mod tests {
     #[test]
     fn the_default_and_the_classics_are_legible() {
         assert_eq!(CaptionStyle::default().legibility_issues(), vec![]);
-        let boxed = CaptionStyle { outline_width: 0.0, background: [0, 0, 0, 255], ..Default::default() };
+        let boxed = CaptionStyle {
+            outline_width: 0.0,
+            background: [0, 0, 0, 255],
+            ..Default::default()
+        };
         assert_eq!(boxed.legibility_issues(), vec![]);
         assert!((boxed.worst_box_contrast() - 21.0).abs() < 1e-3);
-        let edged = CaptionStyle { background: [0; 4], ..Default::default() };
+        let edged = CaptionStyle {
+            background: [0; 4],
+            ..Default::default()
+        };
         assert_eq!(edged.legibility_issues(), vec![]);
     }
 
@@ -129,14 +146,32 @@ mod tests {
     /// text from the picture.
     #[test]
     fn styles_that_vanish_on_some_frames_are_flagged() {
-        let bare = CaptionStyle { outline_width: 0.0, background: [0; 4], ..Default::default() };
-        assert_eq!(bare.legibility_issues(), vec![LegibilityIssue::NoBackgroundOrEdge]);
-        let faint = CaptionStyle { outline_width: 0.0, background: [0, 0, 0, 40], ..Default::default() };
+        let bare = CaptionStyle {
+            outline_width: 0.0,
+            background: [0; 4],
+            ..Default::default()
+        };
+        assert_eq!(
+            bare.legibility_issues(),
+            vec![LegibilityIssue::NoBackgroundOrEdge]
+        );
+        let faint = CaptionStyle {
+            outline_width: 0.0,
+            background: [0, 0, 0, 40],
+            ..Default::default()
+        };
         match faint.legibility_issues().as_slice() {
             [LegibilityIssue::LowContrastWithBox { ratio }] => assert!(*ratio < 1.5, "{ratio}"),
             other => panic!("{other:?}"),
         }
-        let grey = CaptionStyle { background: [0; 4], outline_color: [190, 190, 190, 255], ..Default::default() };
-        assert!(matches!(grey.legibility_issues().as_slice(), [LegibilityIssue::LowContrastWithEdge { .. }]));
+        let grey = CaptionStyle {
+            background: [0; 4],
+            outline_color: [190, 190, 190, 255],
+            ..Default::default()
+        };
+        assert!(matches!(
+            grey.legibility_issues().as_slice(),
+            [LegibilityIssue::LowContrastWithEdge { .. }]
+        ));
     }
 }

@@ -15,12 +15,14 @@ pub use crate::hw::{EncodeBackend, EncodeOptions, Mp4Encoder};
 pub use crate::rate::Quality;
 
 // Video encoders and the frame they take.
-pub use crate::h264::{H264Encoder, InterEncoder};
-pub use crate::hevc::{CompressedEncoder as HevcCompressedEncoder, HevcEncoder, TransparentEncoder, Yuv420Frame};
+pub use crate::animation::{encode_animation_rgba, AnimationEncodeOptions, BrowserCodec};
 pub use crate::apng::ApngEncoder;
 #[cfg(feature = "gif")]
 pub use crate::gif::{decode_gif, encode_gif, GifDecoder, GifEncoder, GifFrame, GifOptions};
-pub use crate::animation::{encode_animation_rgba, AnimationEncodeOptions, BrowserCodec};
+pub use crate::h264::{H264Encoder, InterEncoder};
+pub use crate::hevc::{
+    CompressedEncoder as HevcCompressedEncoder, HevcEncoder, TransparentEncoder, Yuv420Frame,
+};
 
 // Video decoders and what they return.
 #[cfg(feature = "decode")]
@@ -44,11 +46,15 @@ pub use crate::webm::{mux_webm, WebmCodec, WebmFrame, WebmParams};
 // The codec modules, for the next level down.
 pub use crate::{aac, decode, flac, h264, hevc, mp3, mp4, opus, vorbis, vp9, webm};
 
+#[cfg(all(
+    feature = "nvidia",
+    any(target_os = "linux", target_os = "windows"),
+    target_pointer_width = "64"
+))]
+pub use crate::nvidia::{NvdecDecoder, NvencEncoder};
+#[cfg(all(feature = "vaapi", target_os = "linux"))]
+pub use crate::vaapi::VaapiDecoder;
 #[cfg(all(feature = "videotoolbox", target_os = "macos"))]
 pub use crate::videotoolbox::VideoToolboxEncoder;
 #[cfg(all(feature = "videotoolbox", target_os = "macos"))]
 pub use crate::videotoolbox_decode::VideoToolboxDecoder;
-#[cfg(all(feature = "nvidia", any(target_os = "linux", target_os = "windows"), target_pointer_width = "64"))]
-pub use crate::nvidia::{NvdecDecoder, NvencEncoder};
-#[cfg(all(feature = "vaapi", target_os = "linux"))]
-pub use crate::vaapi::VaapiDecoder;

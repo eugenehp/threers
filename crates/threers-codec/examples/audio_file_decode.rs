@@ -17,16 +17,38 @@ fn main() {
             inter.push(c[i]);
         }
     }
-    eprintln!("{} Hz, {ch} ch, {n} frames in {:.3}s", p.sample_rate, t.elapsed().as_secs_f64());
+    eprintln!(
+        "{} Hz, {ch} ch, {n} frames in {:.3}s",
+        p.sample_rate,
+        t.elapsed().as_secs_f64()
+    );
     if a.get(2).map(String::as_str) == Some("--compare") {
         let r = std::fs::read(&a[3]).expect("reference");
-        let r: Vec<f32> = r.chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().unwrap())).collect();
+        let r: Vec<f32> = r
+            .chunks_exact(4)
+            .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+            .collect();
         let m = inter.len().min(r.len());
-        let diff = (0..m).filter(|&i| inter[i].to_bits() != r[i].to_bits()).count();
-        let maxd = (0..m).map(|i| (inter[i] as f64 - r[i] as f64).abs()).fold(0.0, f64::max);
+        let diff = (0..m)
+            .filter(|&i| inter[i].to_bits() != r[i].to_bits())
+            .count();
+        let maxd = (0..m)
+            .map(|i| (inter[i] as f64 - r[i] as f64).abs())
+            .fold(0.0, f64::max);
         let first = (0..m).find(|&i| inter[i].to_bits() != r[i].to_bits());
-        println!("values ours {} ref {}: {diff} differ, max |d| {maxd:.3e}, first {first:?}", inter.len(), r.len());
+        println!(
+            "values ours {} ref {}: {diff} differ, max |d| {maxd:.3e}, first {first:?}",
+            inter.len(),
+            r.len()
+        );
     } else {
-        std::fs::write(&a[2], inter.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<u8>>()).unwrap();
+        std::fs::write(
+            &a[2],
+            inter
+                .iter()
+                .flat_map(|v| v.to_le_bytes())
+                .collect::<Vec<u8>>(),
+        )
+        .unwrap();
     }
 }

@@ -48,6 +48,10 @@ name = "av1_conformance"
 required-features = ["decode"]
 
 [[test]]
+name = "damaged_streams"
+required-features = ["decode"]
+
+[[test]]
 name = "decode_seek"
 required-features = ["decode"]
 

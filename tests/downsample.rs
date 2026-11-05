@@ -88,7 +88,10 @@ fn gpu_resolve_matches_the_cpu_average() {
         // which graphics APIs permit for float-to-unorm conversion. One level
         // still catches the failure that matters: averaging encoded bytes is
         // off by tens.
-        assert!(worst <= 1, "ss{ss}: GPU resolve differs from the CPU average by {worst}");
+        assert!(
+            worst <= 1,
+            "ss{ss}: GPU resolve differs from the CPU average by {worst}"
+        );
     }
 }
 
@@ -234,7 +237,11 @@ fn downsampler_declines_what_it_cannot_do() {
     let ds = Downsampler::new(device, &tex(64, 64), 2).expect("2× of a 64×64 target");
     assert_eq!(ds.size(), (32, 32));
     assert_eq!(ds.factor(), 2);
-    assert_eq!(ds.filter(), DownsampleFilter::Mitchell, "the default filter");
+    assert_eq!(
+        ds.filter(),
+        DownsampleFilter::Mitchell,
+        "the default filter"
+    );
 
     // Every filter has to produce a working pipeline, which means every
     // generated shader has to compile — the one thing that can break when the
@@ -248,7 +255,11 @@ fn downsampler_declines_what_it_cannot_do() {
         for factor in [2u32, 3, 4] {
             let ds = Downsampler::with_filter(device, &tex(96, 96), factor, filter)
                 .unwrap_or_else(|| panic!("{filter:?} at {factor}x"));
-            assert_eq!(ds.size(), (96 / factor, 96 / factor), "{filter:?} {factor}x");
+            assert_eq!(
+                ds.size(),
+                (96 / factor, 96 / factor),
+                "{filter:?} {factor}x"
+            );
             assert_eq!(ds.filter(), filter);
             // Box resolves in place; the separable filters need linear scratch.
             assert_eq!(
@@ -308,7 +319,11 @@ fn staircase_rms(frame: &[u8], w: u32, h: u32) -> (f64, f64) {
             ys.push(num / den);
         }
     }
-    assert!(xs.len() > 32, "no edge found to measure ({} columns)", xs.len());
+    assert!(
+        xs.len() > 32,
+        "no edge found to measure ({} columns)",
+        xs.len()
+    );
     let n = xs.len() as f64;
     let (mx, my) = (xs.iter().sum::<f64>() / n, ys.iter().sum::<f64>() / n);
     let sxy: f64 = xs.iter().zip(&ys).map(|(x, y)| (x - mx) * (y - my)).sum();
@@ -375,7 +390,11 @@ fn a_wider_filter_straightens_a_shallow_edge() {
         let mut scene = shallow_edge_scene();
         let cam = flat_camera(w, h);
         let frame = r.render_to_rgba_resolved(&mut scene, &cam);
-        assert_eq!(frame.len(), (w * h * 4) as usize, "{filter:?}: resolved size");
+        assert_eq!(
+            frame.len(),
+            (w * h * 4) as usize,
+            "{filter:?}: resolved size"
+        );
         let (rms, slope) = staircase_rms(&frame, w, h);
         // All four see the same geometry, so a filter that moved the edge
         // somewhere else would be a bug, not a smoother resolve.

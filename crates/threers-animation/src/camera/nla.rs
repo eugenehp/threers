@@ -29,7 +29,12 @@ pub struct NlaStrip {
 }
 
 impl NlaStrip {
-    pub fn new(name: impl Into<String>, clip: CameraClip, frame_start: f32, frame_end: f32) -> Self {
+    pub fn new(
+        name: impl Into<String>,
+        clip: CameraClip,
+        frame_start: f32,
+        frame_end: f32,
+    ) -> Self {
         let duration = clip.duration.max(0.0);
         Self {
             name: name.into(),
@@ -60,7 +65,9 @@ impl NlaStrip {
         let len = self.length().max(1e-8);
         let mut w = self.influence.clamp(0.0, 1.0);
         if self.blend_in > 0.0 && local < self.blend_in {
-            w *= self.blend_ramp.apply((local / self.blend_in).clamp(0.0, 1.0));
+            w *= self
+                .blend_ramp
+                .apply((local / self.blend_in).clamp(0.0, 1.0));
         }
         if self.blend_out > 0.0 && local > len - self.blend_out {
             let u = ((len - local) / self.blend_out).clamp(0.0, 1.0);

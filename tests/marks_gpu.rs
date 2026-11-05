@@ -320,12 +320,32 @@ fn shapes_turn_by_their_rotation() {
     bar.set_positions(&[[0.0, 0.0, 0.0]]);
     bar.set_default_color([255, 255, 255, 255]);
     bar.ambient = 1.0;
-    let img = frame(&mut hr, &mut mr, &mut scene(), &cam, Origin::ZERO, &mut [&mut bar]);
-    assert!(!is_bg(px(&img, 128 + 25, 64)) && is_bg(px(&img, 128, 64 - 25)), "lying down");
+    let img = frame(
+        &mut hr,
+        &mut mr,
+        &mut scene(),
+        &cam,
+        Origin::ZERO,
+        &mut [&mut bar],
+    );
+    assert!(
+        !is_bg(px(&img, 128 + 25, 64)) && is_bg(px(&img, 128, 64 - 25)),
+        "lying down"
+    );
     let h = std::f32::consts::FRAC_1_SQRT_2;
     bar.set_rotations(&[[0.0, 0.0, h, h]]);
-    let img = frame(&mut hr, &mut mr, &mut scene(), &cam, Origin::ZERO, &mut [&mut bar]);
-    assert!(is_bg(px(&img, 128 + 25, 64)) && !is_bg(px(&img, 128, 64 - 25)), "standing up");
+    let img = frame(
+        &mut hr,
+        &mut mr,
+        &mut scene(),
+        &cam,
+        Origin::ZERO,
+        &mut [&mut bar],
+    );
+    assert!(
+        is_bg(px(&img, 128 + 25, 64)) && !is_bg(px(&img, 128, 64 - 25)),
+        "standing up"
+    );
 }
 
 /// A line flat on the ground, seen from above at a slant, is foreshortened
@@ -346,11 +366,21 @@ fn flat_lines_lie_on_the_ground() {
         line.set_default_color([255, 255, 255, 255]);
         line.common.style.units = SizeUnits::World;
         line.flat = flat;
-        let img = frame(&mut hr, &mut mr, &mut scene(), &cam, Origin::ZERO, &mut [&mut line]);
+        let img = frame(
+            &mut hr,
+            &mut mr,
+            &mut scene(),
+            &cam,
+            Origin::ZERO,
+            &mut [&mut line],
+        );
         (0..H).filter(|&y| px(&img, 128, y)[0] > 128).count() as f32
     };
     let (standing, flat) = (thickness(false), thickness(true));
-    assert!((standing - 20.0).abs() <= 1.5, "facing the camera: {standing} px");
+    assert!(
+        (standing - 20.0).abs() <= 1.5,
+        "facing the camera: {standing} px"
+    );
     // sin 30° of the width.
     assert!((flat - 10.0).abs() <= 1.5, "on the ground: {flat} px");
 }
@@ -364,18 +394,36 @@ fn a_whole_path_highlights() {
     let mut paths = SegmentMarks::new();
     paths.set_paths(&[
         vec![[-100.0, 30.0, 0.0], [-50.0, 30.0, 0.0], [0.0, 30.0, 0.0]],
-        vec![[-100.0, -30.0, 0.0], [-50.0, -30.0, 0.0], [0.0, -30.0, 0.0], [50.0, -30.0, 0.0]],
+        vec![
+            [-100.0, -30.0, 0.0],
+            [-50.0, -30.0, 0.0],
+            [0.0, -30.0, 0.0],
+            [50.0, -30.0, 0.0],
+        ],
     ]);
     paths.set_widths(&[6.0; 5]);
     paths.set_default_color([0, 0, 255, 255]);
     paths.common.style.highlight_color = [255, 0, 0, 255];
     paths.highlight_paths(Some(1..2));
-    let img = frame(&mut hr, &mut mr, &mut scene(), &cam, Origin::ZERO, &mut [&mut paths]);
+    let img = frame(
+        &mut hr,
+        &mut mr,
+        &mut scene(),
+        &cam,
+        Origin::ZERO,
+        &mut [&mut paths],
+    );
     // Every segment of the second path is red; the first stays blue.
     for x in [-75, -25, 25] {
-        assert!(px(&img, (128 + x) as u32, 64 + 30)[0] > 200, "second path at {x}");
+        assert!(
+            px(&img, (128 + x) as u32, 64 + 30)[0] > 200,
+            "second path at {x}"
+        );
     }
-    assert!(px(&img, 128 - 75, 64 - 30)[2] > 200 && px(&img, 128 - 75, 64 - 30)[0] < 50, "first path");
+    assert!(
+        px(&img, 128 - 75, 64 - 30)[2] > 200 && px(&img, 128 - 75, 64 - 30)[0] < 50,
+        "first path"
+    );
 }
 
 /// Each point its own stroke: colour and width per row.
@@ -391,7 +439,14 @@ fn points_take_their_own_strokes() {
     p.stroke_width = 4.0;
     p.set_stroke_colors(&[[255, 0, 0, 255], [0, 255, 0, 255]]);
     p.set_stroke_widths(&[1.0, 3.0]);
-    let img = frame(&mut hr, &mut mr, &mut scene(), &cam, Origin::ZERO, &mut [&mut p]);
+    let img = frame(
+        &mut hr,
+        &mut mr,
+        &mut scene(),
+        &cam,
+        Origin::ZERO,
+        &mut [&mut p],
+    );
     // The left ring: red, 4 px wide about r = 20; the right: green, 12 px.
     assert!(px(&img, 128 - 50 + 20, 64)[0] > 200, "red ring");
     assert!(px(&img, 128 - 50 + 24, 64)[0] < 30, "red ring is thin");
@@ -411,7 +466,11 @@ fn shapes_take_textures_and_vertex_colours() {
     let mut img = Vec::new();
     for _y in 0..4 {
         for x in 0..4 {
-            img.extend_from_slice(if x < 2 { &[255, 0, 0, 255] } else { &[0, 255, 0, 255] });
+            img.extend_from_slice(if x < 2 {
+                &[255, 0, 0, 255]
+            } else {
+                &[0, 255, 0, 255]
+            });
         }
     }
     let mut atlas = TextureAtlas::new(64);
@@ -419,9 +478,20 @@ fn shapes_take_textures_and_vertex_colours() {
     let atlas = atlas.shared();
     // A quad in the view plane, uvs across it.
     let mut quad = threers::BufferGeometry::new();
-    let p = [[-1.0f32, -1.0, 0.0], [1.0, -1.0, 0.0], [1.0, 1.0, 0.0], [-1.0, 1.0, 0.0]];
-    quad.set_attribute("position", threers::BufferAttribute::new(p.iter().flatten().copied().collect(), 3));
-    quad.set_attribute("uv", threers::BufferAttribute::new(vec![0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0], 2));
+    let p = [
+        [-1.0f32, -1.0, 0.0],
+        [1.0, -1.0, 0.0],
+        [1.0, 1.0, 0.0],
+        [-1.0, 1.0, 0.0],
+    ];
+    quad.set_attribute(
+        "position",
+        threers::BufferAttribute::new(p.iter().flatten().copied().collect(), 3),
+    );
+    quad.set_attribute(
+        "uv",
+        threers::BufferAttribute::new(vec![0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0], 2),
+    );
     quad.set_index(vec![0, 1, 2, 0, 2, 3]);
     let mut shapes = ShapeMarks::new(&quad);
     shapes.set_positions(&[[0.0, 0.0, 0.0]]);
@@ -429,16 +499,33 @@ fn shapes_take_textures_and_vertex_colours() {
     shapes.ambient = 1.0;
     shapes.common.style.size_scale = 40.0;
     shapes.set_texture(Some((atlas, "halves".into())));
-    let img = frame(&mut hr, &mut mr, &mut scene(), &cam, Origin::ZERO, &mut [&mut shapes]);
+    let img = frame(
+        &mut hr,
+        &mut mr,
+        &mut scene(),
+        &cam,
+        Origin::ZERO,
+        &mut [&mut shapes],
+    );
     let (l, r) = (px(&img, 128 - 20, 64), px(&img, 128 + 20, 64));
     assert!(l[0] > 200 && l[1] < 60, "left: {l:?}");
     assert!(r[1] > 200 && r[0] < 60, "right: {r:?}");
     // Vertex colours: blue everywhere turns the green half dark, the red
     // half too.
     let mut tinted = quad.clone();
-    tinted.set_attribute("color", threers::BufferAttribute::new([0.0f32, 0.0, 1.0].repeat(4), 3));
+    tinted.set_attribute(
+        "color",
+        threers::BufferAttribute::new([0.0f32, 0.0, 1.0].repeat(4), 3),
+    );
     shapes.set_geometry(&tinted);
-    let img = frame(&mut hr, &mut mr, &mut scene(), &cam, Origin::ZERO, &mut [&mut shapes]);
+    let img = frame(
+        &mut hr,
+        &mut mr,
+        &mut scene(),
+        &cam,
+        Origin::ZERO,
+        &mut [&mut shapes],
+    );
     assert!(px(&img, 128 + 20, 64)[1] < 30, "tinted out");
 }
 
@@ -456,9 +543,17 @@ fn points_bin_into_screen_cells_on_the_gpu() {
     let cam = camera(128.0, 64.0);
     let view = MarkView::new(&cam, Origin::ZERO, (W, H));
     // 1 unit a pixel, (0, 0) at the middle (128, 64): cells of 32 pixels.
-    let points = [[-100.0, 0.0, 0.0], [-99.0, -1.0, 0.0], [10.0, 10.0, 0.0], [500.0, 0.0, 0.0]];
+    let points = [
+        [-100.0, 0.0, 0.0],
+        [-99.0, -1.0, 0.0],
+        [10.0, 10.0, 0.0],
+        [500.0, 0.0, 0.0],
+    ];
     let binner = ScreenBinner::new(&device, &points, Some(&[1.0, 2.5, 4.0, 8.0]));
-    let bins = binner.bin(&device, &queue, view.view_proj, (W, H), 32.0).wait(&device).unwrap();
+    let bins = binner
+        .bin(&device, &queue, view.view_proj, (W, H), 32.0)
+        .wait(&device)
+        .unwrap();
     assert_eq!((bins.cols, bins.rows), (8, 4));
     // (-100, 0) is pixel (28, 64): cell (0, 2); (10, 10) is (138, 54): (4, 1).
     assert_eq!(bins.counts[2 * 8], 2);
@@ -707,7 +802,11 @@ fn thin_segments_keep_their_weight_between_pixels() {
     // Coverage of a white line on black, linear.
     let lin = |b: u8| {
         let c = b as f32 / 255.0;
-        if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+        if c <= 0.04045 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
     };
     let width = 0.4f32;
     for diagonal in [false, true] {
@@ -722,17 +821,34 @@ fn thin_segments_keep_their_weight_between_pixels() {
             }
             line.set_widths(&[width]);
             line.set_default_color([255, 255, 255, 255]);
-            let img = frame(&mut hr, &mut mr, &mut scene(), &cam, Origin::ZERO, &mut [&mut line]);
+            let img = frame(
+                &mut hr,
+                &mut mr,
+                &mut scene(),
+                &cam,
+                Origin::ZERO,
+                &mut [&mut line],
+            );
             for x in [118u32, 128, 137] {
                 let col: Vec<f32> = (0..H).map(|y| lin(px(&img, x, y)[0])).collect();
                 let peak = col.iter().cloned().fold(0.0, f32::max);
-                let expect = if diagonal { width * std::f32::consts::SQRT_2 } else { width };
-                assert!(peak <= expect.min(1.0) + 0.03, "diagonal {diagonal} phase {phase} x {x}: peak {peak}");
+                let expect = if diagonal {
+                    width * std::f32::consts::SQRT_2
+                } else {
+                    width
+                };
+                assert!(
+                    peak <= expect.min(1.0) + 0.03,
+                    "diagonal {diagonal} phase {phase} x {x}: peak {peak}"
+                );
                 sums.push(col.iter().sum::<f32>() / expect);
             }
         }
         for s in &sums {
-            assert!((s - 1.0).abs() < 0.06, "diagonal {diagonal}: column ink {s} of the width, all {sums:?}");
+            assert!(
+                (s - 1.0).abs() < 0.06,
+                "diagonal {diagonal}: column ink {s} of the width, all {sums:?}"
+            );
         }
     }
 }
@@ -745,21 +861,38 @@ fn translucent_round_joints_are_not_doubled() {
     let Some(mut hr) = host() else { return };
     let mut mr = MarkRenderer::new(hr.device());
     let mut path = SegmentMarks::new();
-    path.set_paths(&[vec![[-60.0, -20.0, 0.0], [0.0, -20.0, 0.0], [0.0, 40.0, 0.0]]]);
+    path.set_paths(&[vec![
+        [-60.0, -20.0, 0.0],
+        [0.0, -20.0, 0.0],
+        [0.0, 40.0, 0.0],
+    ]]);
     path.set_widths(&[10.0, 10.0]);
     path.set_default_color([255, 0, 0, 128]);
     path.join = LineJoin::Round;
     let cam = camera(128.0, 64.0);
-    let img = frame(&mut hr, &mut mr, &mut scene(), &cam, Origin::ZERO, &mut [&mut path]);
+    let img = frame(
+        &mut hr,
+        &mut mr,
+        &mut scene(),
+        &cam,
+        Origin::ZERO,
+        &mut [&mut path],
+    );
     let leg = px(&img, 128 - 30, 64 + 20)[0];
     // The joint's centre, and the outside of the turn 3.5 px out (pixel
     // centres are at +0.5): inside the disc.
     for (x, y) in [(128, 64 + 20), (128 + 2, 64 + 22)] {
         let r = px(&img, x, y)[0];
-        assert!(r.abs_diff(leg) <= 3, "({x}, {y}): {r} against the leg's {leg}");
+        assert!(
+            r.abs_diff(leg) <= 3,
+            "({x}, {y}): {r} against the leg's {leg}"
+        );
     }
     // Past the disc on the outside of the turn: nothing.
-    assert!(px(&img, 128 + 6, 64 + 26)[0] < 20, "the disc is round, not a mitre");
+    assert!(
+        px(&img, 128 + 6, 64 + 26)[0] < 20,
+        "the disc is round, not a mitre"
+    );
 }
 
 #[test]
@@ -1029,8 +1162,8 @@ fn a_trail_hook_cuts_paths_to_the_time_window() {
 /// group — a 2×2 texture each square samples. Hooks, custom columns and
 /// picking come with it for free.
 mod textured_squares {
-    use threers::marks::{gpu, 
-        Column, ColumnFormat, CustomShader, Mark, MarkCommon, MarkKind, PrepareContext,
+    use threers::marks::{
+        gpu, Column, ColumnFormat, CustomShader, Mark, MarkCommon, MarkKind, PrepareContext,
     };
 
     const WGSL: &str = r#"
@@ -1703,7 +1836,14 @@ fn lines_take_dashes_caps_and_a_casing() {
     // 5 px cap on the centre line, outside it 4 px off it (pixel centres
     // at +0.5).
     dashed.cap = LineCap::Round;
-    let img = frame(&mut hr, &mut mr, &mut scene(), &cam, Origin::ZERO, &mut [&mut dashed]);
+    let img = frame(
+        &mut hr,
+        &mut mr,
+        &mut scene(),
+        &cam,
+        Origin::ZERO,
+        &mut [&mut dashed],
+    );
     assert!(at(&img, 24 - 100, 0)[0] > 200, "a dash's round end");
     assert!(at(&img, 24 - 100, 4)[0] < 100, "round, not square");
     // Justified: a whole number of periods per segment (100 px: 3 of 33 px,
@@ -1711,7 +1851,14 @@ fn lines_take_dashes_caps_and_a_casing() {
     dashed.cap = LineCap::Butt;
     dashed.dash_justified = true;
     dashed.dash_mode = threers::marks::DashMode::Segment;
-    let img = frame(&mut hr, &mut mr, &mut scene(), &cam, Origin::ZERO, &mut [&mut dashed]);
+    let img = frame(
+        &mut hr,
+        &mut mr,
+        &mut scene(),
+        &cam,
+        Origin::ZERO,
+        &mut [&mut dashed],
+    );
     for (along, on) in [(2, true), (20, false), (33, true), (50, false), (98, true)] {
         let p = at(&img, along - 100, 0);
         assert_eq!(p[0] > 200, on, "justified, {along} px along: {p:?}");
@@ -2570,7 +2717,10 @@ fn msdf_text_keeps_its_corners_when_enlarged() {
             }
         }
         assert!(x0 < W, "{field:?}: something drawn");
-        (y0..y0 + 6).flat_map(|y| (x0..x0 + 6).map(move |x| (x, y))).filter(|&(x, y)| inked(x, y)).count()
+        (y0..y0 + 6)
+            .flat_map(|y| (x0..x0 + 6).map(move |x| (x, y)))
+            .filter(|&(x, y)| inked(x, y))
+            .count()
     };
     let sdf = corner_ink(&mut hr, &mut mr, GlyphField::Sdf);
     let msdf = corner_ink(&mut hr, &mut mr, GlyphField::Msdf);
@@ -2651,7 +2801,14 @@ fn a_label_breaks_lines() {
         let mut labels = TextLabels::new(CaptionFont::builtin());
         labels.font_size = 16.0;
         labels.set_labels(vec![TextLabel::new([0.0, 0.0, 0.0], text)]);
-        let img = frame(&mut hr, &mut mr, &mut scene(), &cam, Origin::ZERO, &mut [&mut labels]);
+        let img = frame(
+            &mut hr,
+            &mut mr,
+            &mut scene(),
+            &cam,
+            Origin::ZERO,
+            &mut [&mut labels],
+        );
         let (mut x0, mut y0, mut x1, mut y1) = (W, H, 0, 0);
         for y in 0..H {
             for x in 0..W {
@@ -2667,9 +2824,15 @@ fn a_label_breaks_lines() {
     let under = bounds("    \nH");
     let taller = (two.3 - two.1) - (one.3 - one.1);
     assert!((taller - 19.2).abs() <= 1.5, "a line lower: {taller} px");
-    assert!((one.1 - two.1 - 9.6).abs() <= 1.5, "the block centred: {one:?} {two:?}");
+    assert!(
+        (one.1 - two.1 - 9.6).abs() <= 1.5,
+        "the block centred: {one:?} {two:?}"
+    );
     let (mid_one, mid_under) = ((one.0 + one.2) * 0.5, (under.0 + under.2) * 0.5);
-    assert!((mid_one - mid_under).abs() <= 1.0, "the short line centred: {mid_one} {mid_under}");
+    assert!(
+        (mid_one - mid_under).abs() <= 1.0,
+        "the short line centred: {mid_one} {mid_under}"
+    );
 }
 
 /// Labels wrap to a width at spaces, and can sit on a padded, bordered
@@ -2687,27 +2850,61 @@ fn labels_wrap_and_take_backgrounds() {
         labels.font_size = 16.0;
         labels.max_width = max_width;
         labels.set_labels(vec![TextLabel::new([0.0, 0.0, 0.0], "HHHH HHHH")]);
-        let img = frame(&mut hr, &mut mr, &mut scene(), &cam, Origin::ZERO, &mut [&mut labels]);
-        let lit: Vec<(u32, u32)> = (0..H).flat_map(|y| (0..W).map(move |x| (x, y))).filter(|&(x, y)| px(&img, x, y)[0] > 128).collect();
-        let (x0, x1) = (lit.iter().map(|p| p.0).min().unwrap(), lit.iter().map(|p| p.0).max().unwrap());
-        let (y0, y1) = (lit.iter().map(|p| p.1).min().unwrap(), lit.iter().map(|p| p.1).max().unwrap());
+        let img = frame(
+            &mut hr,
+            &mut mr,
+            &mut scene(),
+            &cam,
+            Origin::ZERO,
+            &mut [&mut labels],
+        );
+        let lit: Vec<(u32, u32)> = (0..H)
+            .flat_map(|y| (0..W).map(move |x| (x, y)))
+            .filter(|&(x, y)| px(&img, x, y)[0] > 128)
+            .collect();
+        let (x0, x1) = (
+            lit.iter().map(|p| p.0).min().unwrap(),
+            lit.iter().map(|p| p.0).max().unwrap(),
+        );
+        let (y0, y1) = (
+            lit.iter().map(|p| p.1).min().unwrap(),
+            lit.iter().map(|p| p.1).max().unwrap(),
+        );
         (x1 - x0, y1 - y0)
     };
     let (w1, h1) = extent(None);
     let (w2, h2) = extent(Some(80.0));
-    assert!(w2 < w1 * 6 / 10 && h2 > h1 + 10, "wrapped onto two lines: {w1}x{h1} to {w2}x{h2}");
+    assert!(
+        w2 < w1 * 6 / 10 && h2 > h1 + 10,
+        "wrapped onto two lines: {w1}x{h1} to {w2}x{h2}"
+    );
 
     let mut labels = TextLabels::new(CaptionFont::builtin());
     labels.font_size = 16.0;
     let mut label = TextLabel::new([0.0, 0.0, 0.0], "HI");
     label.color = [255, 255, 255, 255];
-    label.background = Some(LabelBackground { color: [255, 0, 0, 255], padding: [10.0; 4], border_color: [0, 255, 0, 255], border_width: 3.0 });
+    label.background = Some(LabelBackground {
+        color: [255, 0, 0, 255],
+        padding: [10.0; 4],
+        border_color: [0, 255, 0, 255],
+        border_width: 3.0,
+    });
     labels.set_labels(vec![label]);
-    let img = frame(&mut hr, &mut mr, &mut scene(), &cam, Origin::ZERO, &mut [&mut labels]);
+    let img = frame(
+        &mut hr,
+        &mut mr,
+        &mut scene(),
+        &cam,
+        Origin::ZERO,
+        &mut [&mut labels],
+    );
     let reds = img.chunks(4).filter(|p| p[0] > 200 && p[1] < 50).count();
     let greens = img.chunks(4).filter(|p| p[1] > 200 && p[0] < 50).count();
     let whites = img.chunks(4).filter(|p| p[0] > 200 && p[1] > 200).count();
-    assert!(reds > 300 && greens > 100 && whites > 20, "box {reds}, border {greens}, text {whites}");
+    assert!(
+        reds > 300 && greens > 100 && whites > 20,
+        "box {reds}, border {greens}, text {whites}"
+    );
 }
 
 /// Glyphs that overlap (joined scripts do): every halo goes under every
@@ -2727,25 +2924,58 @@ fn halos_go_under_overlapping_glyphs() {
     let field = (0..fw * fh)
         .map(|i| {
             let (x, y) = ((i % fw) as f32 + 0.5, (i / fw) as f32 + 0.5);
-            let inside = (x - buffer as f32).min(y - buffer as f32).min((fw - buffer) as f32 - x).min((fh - buffer) as f32 - y);
+            let inside = (x - buffer as f32)
+                .min(y - buffer as f32)
+                .min((fw - buffer) as f32 - x)
+                .min((fh - buffer) as f32 - y);
             (192.0 + inside * 32.0).clamp(0.0, 255.0) as u8
         })
         .collect();
     let mut glyphs = HashMap::new();
-    glyphs.insert(0x4e00, SdfGlyph { width: w, height: h, left: 0, top: -10, advance: 6.0, field });
-    let font = std::sync::Arc::new(SdfGlyphs { size: 24.0, buffer, top_origin: 26.0, glyphs });
+    glyphs.insert(
+        0x4e00,
+        SdfGlyph {
+            width: w,
+            height: h,
+            left: 0,
+            top: -10,
+            advance: 6.0,
+            field,
+        },
+    );
+    let font = std::sync::Arc::new(SdfGlyphs {
+        size: 24.0,
+        buffer,
+        top_origin: 26.0,
+        glyphs,
+    });
     let mut white = |halo: f32| {
         let mut labels = TextLabels::new(CaptionFont::from_sdf_glyphs(font.clone()));
         labels.font_size = 48.0;
         labels.halo_width = halo;
         labels.halo_color = [255, 0, 0, 255];
-        labels.set_labels(vec![TextLabel::new([0.0, 0.0, 0.0], "\u{4e00}\u{4e00}\u{4e00}")]);
-        let img = frame(&mut hr, &mut mr, &mut scene(), &cam, Origin::ZERO, &mut [&mut labels]);
-        img.chunks(4).filter(|p| p[0] > 200 && p[1] > 200 && p[2] > 200).count()
+        labels.set_labels(vec![TextLabel::new(
+            [0.0, 0.0, 0.0],
+            "\u{4e00}\u{4e00}\u{4e00}",
+        )]);
+        let img = frame(
+            &mut hr,
+            &mut mr,
+            &mut scene(),
+            &cam,
+            Origin::ZERO,
+            &mut [&mut labels],
+        );
+        img.chunks(4)
+            .filter(|p| p[0] > 200 && p[1] > 200 && p[2] > 200)
+            .count()
     };
     let (plain, haloed) = (white(0.0), white(4.0));
     assert!(plain > 500, "{plain} px of ink");
-    assert!(haloed as f32 >= plain as f32 * 0.97, "the ink under the halos: {haloed} px against {plain}");
+    assert!(
+        haloed as f32 >= plain as f32 * 0.97,
+        "the ink under the halos: {haloed} px against {plain}"
+    );
 }
 
 /// A label layer replaced while the view holds still (a map tile styled
@@ -2771,14 +3001,32 @@ fn a_replaced_label_layer_gives_back_its_spot() {
     let mut old = make();
     for _ in 0..2 {
         index.lock().unwrap().begin_frame(&view);
-        frame(&mut hr, &mut mr, &mut scene(), &cam, Origin::ZERO, &mut [&mut old]);
+        frame(
+            &mut hr,
+            &mut mr,
+            &mut scene(),
+            &cam,
+            Origin::ZERO,
+            &mut [&mut old],
+        );
     }
     assert_eq!(old.visible(), &[true]);
     drop(old);
     let mut new = make();
     index.lock().unwrap().begin_frame(&view);
-    frame(&mut hr, &mut mr, &mut scene(), &cam, Origin::ZERO, &mut [&mut new]);
-    assert_eq!(new.visible(), &[true], "not hidden behind the dropped layer's box");
+    frame(
+        &mut hr,
+        &mut mr,
+        &mut scene(),
+        &cam,
+        Origin::ZERO,
+        &mut [&mut new],
+    );
+    assert_eq!(
+        new.visible(),
+        &[true],
+        "not hidden behind the dropped layer's box"
+    );
 }
 
 /// A distance-field face first (MapLibre's glyph PBFs hold only the ranges
@@ -2798,20 +3046,45 @@ fn a_distance_field_face_and_a_fallback_both_draw() {
     let field = (0..fw * fh)
         .map(|i| {
             let (x, y) = ((i % fw) as f32 + 0.5, (i / fw) as f32 + 0.5);
-            let inside = (x - buffer as f32).min(y - buffer as f32).min((fw - buffer) as f32 - x).min((fh - buffer) as f32 - y);
+            let inside = (x - buffer as f32)
+                .min(y - buffer as f32)
+                .min((fw - buffer) as f32 - x)
+                .min((fh - buffer) as f32 - y);
             (192.0 + inside * 32.0).clamp(0.0, 255.0) as u8
         })
         .collect();
     let mut glyphs = HashMap::new();
-    glyphs.insert(0x4e00, SdfGlyph { width: w, height: h, left: 1, top: -10, advance: 14.0, field });
-    let set = SdfGlyphs { size: 24.0, buffer, top_origin: 26.0, glyphs };
+    glyphs.insert(
+        0x4e00,
+        SdfGlyph {
+            width: w,
+            height: h,
+            left: 1,
+            top: -10,
+            advance: 14.0,
+            field,
+        },
+    );
+    let set = SdfGlyphs {
+        size: 24.0,
+        buffer,
+        top_origin: 26.0,
+        glyphs,
+    };
     let mut draw = |labels: &mut TextLabels, text: &str| {
         labels.font_size = 32.0;
         labels.halo_width = 2.0;
         labels.halo_color = [255, 0, 0, 255];
         labels.collision = true;
         labels.set_labels(vec![TextLabel::new([0.0, 0.0, 0.0], text)]);
-        let img = frame(&mut hr, &mut mr, &mut scene(), &cam, Origin::ZERO, &mut [labels]);
+        let img = frame(
+            &mut hr,
+            &mut mr,
+            &mut scene(),
+            &cam,
+            Origin::ZERO,
+            &mut [labels],
+        );
         ink(&img, 0, 0, W, H)
     };
     let mut both = TextLabels::new(CaptionFont::from_sdf_glyphs(std::sync::Arc::new(set)));
@@ -2819,7 +3092,10 @@ fn a_distance_field_face_and_a_fallback_both_draw() {
     let with = draw(&mut both, "A\u{4e00}");
     let alone = draw(&mut TextLabels::new(dejavu()), "A");
     // The square is 16 px across at 32 px per em.
-    assert!(with > alone + 200, "the square beside DejaVu's A: {with} px against {alone}");
+    assert!(
+        with > alone + 200,
+        "the square beside DejaVu's A: {with} px against {alone}"
+    );
 }
 
 /// An icon beside the text: drawn in its own colour to the left, and part of
@@ -2903,7 +3179,14 @@ fn lit_points_shade_by_their_normals() {
     points.set_positions(&[[-64.0, 0.0, 0.0], [64.0, 0.0, 0.0]]);
     points.set_radii(&[10.0, 10.0]);
     points.set_default_color([200, 200, 200, 255]);
-    let unlit = frame(&mut hr, &mut mr, &mut scene(), &camera(128.0, 64.0), Origin::ZERO, &mut [&mut points]);
+    let unlit = frame(
+        &mut hr,
+        &mut mr,
+        &mut scene(),
+        &camera(128.0, 64.0),
+        Origin::ZERO,
+        &mut [&mut points],
+    );
     assert_eq!(px(&unlit, 64, 64)[0], 200);
     points.lighting = Some(threers::marks::Lighting {
         ambient: 0.2,
@@ -2917,10 +3200,23 @@ fn lit_points_shade_by_their_normals() {
         specular_color: [0.0; 3],
     });
     points.set_normals(&[[0.0, 0.0, 1.0], [0.0, 0.0, -1.0]]);
-    let lit = frame(&mut hr, &mut mr, &mut scene(), &camera(128.0, 64.0), Origin::ZERO, &mut [&mut points]);
+    let lit = frame(
+        &mut hr,
+        &mut mr,
+        &mut scene(),
+        &camera(128.0, 64.0),
+        Origin::ZERO,
+        &mut [&mut points],
+    );
     let (toward, away) = (px(&lit, 64, 64)[0], px(&lit, 192, 64)[0]);
-    assert!((toward as i32 - 200).abs() <= 1, "facing the light: ambient + diffuse = 1 ({toward})");
-    assert!((away as i32 - 40).abs() <= 1, "facing away: ambient only ({away})");
+    assert!(
+        (toward as i32 - 200).abs() <= 1,
+        "facing the light: ambient + diffuse = 1 ({toward})"
+    );
+    assert!(
+        (away as i32 - 40).abs() <= 1,
+        "facing away: ambient only ({away})"
+    );
 }
 
 /// A target's rectangle: marks drawn within it only, its view the
@@ -2942,10 +3238,19 @@ fn marks_draw_and_clear_within_a_rect() {
     let view = MarkView::new(&cam, Origin::ZERO, (W / 2, H));
     {
         let target = hr.mark_target().with_rect([W / 2, 0, W / 2, H]);
-        mr.clear(&device, &queue, &target, Some(threers::wgpu::Color::GREEN), Some(1.0));
+        mr.clear(
+            &device,
+            &queue,
+            &target,
+            Some(threers::wgpu::Color::GREEN),
+            Some(1.0),
+        );
     }
     let before = hr.read_rgba();
-    assert!(is_bg(px(&before, 10, 10)), "left half untouched by the clear");
+    assert!(
+        is_bg(px(&before, 10, 10)),
+        "left half untouched by the clear"
+    );
     assert_eq!(px(&before, 200, 10)[1], 255, "right half cleared green");
     {
         let target = hr.mark_target().with_rect([W / 2, 0, W / 2, H]);
@@ -2953,5 +3258,9 @@ fn marks_draw_and_clear_within_a_rect() {
     }
     let img = hr.read_rgba();
     assert!(is_bg(px(&img, 10, 64)), "nothing drawn left of the rect");
-    assert_eq!(px(&img, 192, 64), [255, 0, 0, 255], "the dot fills the rect");
+    assert_eq!(
+        px(&img, 192, 64),
+        [255, 0, 0, 255],
+        "the dot fills the rect"
+    );
 }

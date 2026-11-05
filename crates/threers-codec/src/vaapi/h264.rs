@@ -2,7 +2,10 @@
 //! translated into `VAPictureParameterBufferH264`, `VAIQMatrixBufferH264`
 //! and `VASliceParameterBufferH264` (the layout of libva's `va.h`).
 
-use super::{Device, Id, Session, BUF_IQ_MATRIX, BUF_PICTURE_PARAMETER, BUF_SLICE_DATA, BUF_SLICE_PARAMETER, INVALID_ID, PROFILE_H264_HIGH, RT_FORMAT_YUV420};
+use super::{
+    Device, Id, Session, BUF_IQ_MATRIX, BUF_PICTURE_PARAMETER, BUF_SLICE_DATA, BUF_SLICE_PARAMETER,
+    INVALID_ID, PROFILE_H264_HIGH, RT_FORMAT_YUV420,
+};
 use crate::decode::h264::params::{ScalingLists, SliceType, Sps};
 use crate::decode::h264::types::RefPic;
 use crate::decode::h264::{AccelSlice, H264Accel, Result};
@@ -125,7 +128,11 @@ pub(crate) struct VaH264 {
 
 impl VaH264 {
     pub(crate) fn new(dev: Device) -> Self {
-        VaH264 { dev, session: None, target: INVALID_ID }
+        VaH264 {
+            dev,
+            session: None,
+            target: INVALID_ID,
+        }
     }
 
     /// A context for the SPS's coded size, created (or recreated) on demand.
@@ -144,7 +151,14 @@ impl VaH264 {
         // References plus the picture being decoded and a field waiting for
         // its pair, with room for the driver to pipeline.
         let n = (sps.max_num_ref_frames as usize + 4).clamp(6, 24);
-        self.session = Some(Session::new(&self.dev, PROFILE_H264_HIGH, RT_FORMAT_YUV420, w, h, n)?);
+        self.session = Some(Session::new(
+            &self.dev,
+            PROFILE_H264_HIGH,
+            RT_FORMAT_YUV420,
+            w,
+            h,
+            n,
+        )?);
         Ok(())
     }
 
@@ -169,8 +183,16 @@ impl VaH264 {
             picture_id: id,
             frame_idx: if long { p.lt_idx } else { p.frame_num },
             flags,
-            top_field_order_cnt: if structure & 1 != 0 { p.field_poc[0] } else { 0 },
-            bottom_field_order_cnt: if structure & 2 != 0 { p.field_poc[1] } else { 0 },
+            top_field_order_cnt: if structure & 1 != 0 {
+                p.field_poc[0]
+            } else {
+                0
+            },
+            bottom_field_order_cnt: if structure & 2 != 0 {
+                p.field_poc[1]
+            } else {
+                0
+            },
             reserved: [0; 4],
         }
     }
@@ -179,7 +201,11 @@ impl VaH264 {
         let (sps, pps, hdr) = (s.sps, s.pps, s.hdr);
         self.session(sps)?;
         let dpb = s.dpb;
-        self.target = self.session.as_mut().unwrap().claim(s.store_id as i64, |k| dpb.iter().any(|p| p.id as i64 == k))?;
+        self.target = self
+            .session
+            .as_mut()
+            .unwrap()
+            .claim(s.store_id as i64, |k| dpb.iter().any(|p| p.id as i64 == k))?;
         let mut pp: PictureParams = unsafe { std::mem::zeroed() };
         let long_cur = hdr.long_term_reference;
         pp.curr_pic = VaPicture {
@@ -189,9 +215,25 @@ impl VaH264 {
                 1 => PIC_TOP_FIELD,
                 2 => PIC_BOTTOM_FIELD,
                 _ => 0,
-            } | if hdr.nal_ref_idc != 0 { if long_cur { PIC_LONG_TERM } else { PIC_SHORT_TERM } } else { 0 },
-            top_field_order_cnt: if s.structure & 1 != 0 { s.field_poc[0] } else { 0 },
-            bottom_field_order_cnt: if s.structure & 2 != 0 { s.field_poc[1] } else { 0 },
+            } | if hdr.nal_ref_idc != 0 {
+                if long_cur {
+                    PIC_LONG_TERM
+                } else {
+                    PIC_SHORT_TERM
+                }
+            } else {
+                0
+            },
+            top_field_order_cnt: if s.structure & 1 != 0 {
+                s.field_poc[0]
+            } else {
+                0
+            },
+            bottom_field_order_cnt: if s.structure & 2 != 0 {
+                s.field_poc[1]
+            } else {
+                0
+            },
             reserved: [0; 4],
         };
         pp.reference_frames = [VaPicture::INVALID; 16];
@@ -222,7 +264,11 @@ impl VaH264 {
             | (sps.direct_8x8_inference as u32) << 6
             | (sps.log2_max_frame_num - 4) << 8
             | sps.poc_type << 12
-            | (if sps.poc_type == 0 { sps.log2_max_poc_lsb - 4 } else { 0 }) << 14
+            | (if sps.poc_type == 0 {
+                sps.log2_max_poc_lsb - 4
+            } else {
+                0
+            }) << 14
             | (sps.delta_pic_order_always_zero as u32) << 18;
         pp.pic_init_qp_minus26 = (pps.pic_init_qp - 26) as i8;
         pp.chroma_qp_index_offset = pps.chroma_qp_offset[0] as i8;
@@ -240,7 +286,11 @@ impl VaH264 {
         pp.frame_num = hdr.frame_num as u16;
 
         let flat = ScalingLists::flat();
-        let lists = pps.scaling.as_ref().or(sps.scaling.as_ref()).unwrap_or(&flat);
+        let lists = pps
+            .scaling
+            .as_ref()
+            .or(sps.scaling.as_ref())
+            .unwrap_or(&flat);
         let iq = IqMatrix {
             scaling_list_4x4: lists.m4,
             scaling_list_8x8: [lists.m8[0], lists.m8[1]],
@@ -249,7 +299,10 @@ impl VaH264 {
 
         let (dev, ses) = (&self.dev, self.session.as_mut().unwrap());
         ses.begin(dev, self.target)?;
-        let mut ids = [ses.buffer(dev, BUF_PICTURE_PARAMETER, &pp)?, ses.buffer(dev, BUF_IQ_MATRIX, &iq)?];
+        let mut ids = [
+            ses.buffer(dev, BUF_PICTURE_PARAMETER, &pp)?,
+            ses.buffer(dev, BUF_IQ_MATRIX, &iq)?,
+        ];
         ses.render(dev, &mut ids)
     }
 }
@@ -312,7 +365,10 @@ impl H264Accel for VaH264 {
             for l in 0..lists {
                 for (i, wc) in w.weights[l].iter().take(32).enumerate() {
                     let (luma_w, luma_o) = wc[0];
-                    let chroma = [[wc[1].0 as i16, wc[2].0 as i16], [wc[1].1 as i16, wc[2].1 as i16]];
+                    let chroma = [
+                        [wc[1].0 as i16, wc[2].0 as i16],
+                        [wc[1].1 as i16, wc[2].1 as i16],
+                    ];
                     if l == 0 {
                         sp.luma_weight_l0_flag = 1;
                         sp.chroma_weight_l0_flag = 1;
@@ -344,11 +400,18 @@ impl H264Accel for VaH264 {
     }
 
     fn frame(&mut self, store_id: u32, sps: &Sps) -> Result<DecodedFrame> {
-        let surface = self.surface_of(store_id).ok_or("no VA surface holds that picture")?;
+        let surface = self
+            .surface_of(store_id)
+            .ok_or("no VA surface holds that picture")?;
         let (w, h, ..) = self.session.as_ref().unwrap().key;
         let crop = sps.crop.map(|v| v as usize);
-        let color = ColorInfo::from_vui(sps.matrix_coefficients, sps.full_range, h - sps.crop[2] - sps.crop[3]);
-        self.dev.read_frame(surface, w as usize, h as usize, false, crop, color)
+        let color = ColorInfo::from_vui(
+            sps.matrix_coefficients,
+            sps.full_range,
+            h - sps.crop[2] - sps.crop[3],
+        );
+        self.dev
+            .read_frame(surface, w as usize, h as usize, false, crop, color)
     }
 }
 

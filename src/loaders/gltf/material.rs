@@ -166,7 +166,11 @@ pub fn three_wrap(gl: Option<usize>) -> u32 {
 #[derive(Debug, Clone)]
 pub enum ImageData {
     /// 8-bit RGBA, rows top first.
-    Rgba { width: u32, height: u32, data: Arc<Vec<u8>> },
+    Rgba {
+        width: u32,
+        height: u32,
+        data: Arc<Vec<u8>>,
+    },
     /// A texture the image decoded straight to (KTX2: block-compressed, with
     /// its mip chain).
     Gpu(Arc<Texture>),
@@ -239,22 +243,47 @@ impl GltfTexture {
 
     /// The renderer's texture, as colour (`srgb`) or as data.
     pub fn rust(&mut self, srgb: bool) -> Arc<Texture> {
-        let slot = if srgb { &self.rust_srgb } else { &self.rust_linear };
+        let slot = if srgb {
+            &self.rust_srgb
+        } else {
+            &self.rust_linear
+        };
         if let Some(t) = slot {
             return t.clone();
         }
         let mut t = match &self.image_data {
-            ImageData::Rgba { width, height, data } => {
-                let format = if srgb { TextureFormat::Rgba8UnormSrgb } else { TextureFormat::Rgba8Unorm };
+            ImageData::Rgba {
+                width,
+                height,
+                data,
+            } => {
+                let format = if srgb {
+                    TextureFormat::Rgba8UnormSrgb
+                } else {
+                    TextureFormat::Rgba8Unorm
+                };
                 let mut t = Texture::new(*width, *height, format, Vec::new());
                 t.data = data.clone();
                 t
             }
             ImageData::Gpu(t) => (**t).clone(),
         };
-        let nearest = |f: u32| matches!(f, NEAREST_FILTER | NEAREST_MIPMAP_NEAREST_FILTER | NEAREST_MIPMAP_LINEAR_FILTER);
-        t.mag_filter = if nearest(self.mag_filter) { TextureFilter::Nearest } else { TextureFilter::Linear };
-        t.min_filter = if nearest(self.min_filter) { TextureFilter::Nearest } else { TextureFilter::Linear };
+        let nearest = |f: u32| {
+            matches!(
+                f,
+                NEAREST_FILTER | NEAREST_MIPMAP_NEAREST_FILTER | NEAREST_MIPMAP_LINEAR_FILTER
+            )
+        };
+        t.mag_filter = if nearest(self.mag_filter) {
+            TextureFilter::Nearest
+        } else {
+            TextureFilter::Linear
+        };
+        t.min_filter = if nearest(self.min_filter) {
+            TextureFilter::Nearest
+        } else {
+            TextureFilter::Linear
+        };
         let wrap = |w: u32| match w {
             REPEAT_WRAPPING => TextureWrap::Repeat,
             MIRRORED_REPEAT_WRAPPING => TextureWrap::MirroredRepeat,
@@ -386,7 +415,10 @@ pub fn build_rust_material(m: &GltfMaterial, textures: &mut [GltfTexture]) -> Ma
                 anisotropy_map: tex("anisotropyMap", false),
                 anisotropy: num("anisotropy", 0.0),
                 anisotropy_rotation: num("anisotropyRotation", 0.0),
-                attenuation_distance: m.num("attenuationDistance").map(|v| v as f32).unwrap_or(f32::INFINITY),
+                attenuation_distance: m
+                    .num("attenuationDistance")
+                    .map(|v| v as f32)
+                    .unwrap_or(f32::INFINITY),
                 attenuation_color: m.color("attenuationColor").unwrap_or(Color::WHITE),
                 side,
                 ..PhysicalMaterial::default()

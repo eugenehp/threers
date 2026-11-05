@@ -16,7 +16,6 @@
 
 use threers::marks::gpu;
 
-
 use crate::ocean_fft::OceanFft;
 
 /// Side of the world square the texture covers, metres.

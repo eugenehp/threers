@@ -5,25 +5,145 @@ use super::data::{MV_CLASS_TREE, MV_FP_TREE, MV_JOINT_TREE};
 use super::*;
 
 const MV_REF_BLK_OFF: [[[i8; 2]; 8]; 13] = [
-    [[3, -1], [-1, 3], [4, -1], [-1, 4], [-1, -1], [0, -1], [-1, 0], [6, -1]],
-    [[0, -1], [-1, 0], [4, -1], [-1, 2], [-1, -1], [0, -3], [-3, 0], [2, -1]],
-    [[-1, 0], [0, -1], [-1, 4], [2, -1], [-1, -1], [-3, 0], [0, -3], [-1, 2]],
-    [[1, -1], [-1, 1], [2, -1], [-1, 2], [-1, -1], [0, -3], [-3, 0], [-3, -3]],
-    [[0, -1], [-1, 0], [2, -1], [-1, -1], [-1, 1], [0, -3], [-3, 0], [-3, -3]],
-    [[-1, 0], [0, -1], [-1, 2], [-1, -1], [1, -1], [-3, 0], [0, -3], [-3, -3]],
-    [[0, -1], [-1, 0], [1, -1], [-1, 1], [-1, -1], [0, -3], [-3, 0], [-3, -3]],
-    [[0, -1], [-1, 0], [1, -1], [-1, -1], [0, -2], [-2, 0], [-2, -1], [-1, -2]],
-    [[-1, 0], [0, -1], [-1, 1], [-1, -1], [-2, 0], [0, -2], [-1, -2], [-2, -1]],
-    [[0, -1], [-1, 0], [-1, -1], [0, -2], [-2, 0], [-1, -2], [-2, -1], [-2, -2]],
-    [[0, -1], [-1, 0], [-1, -1], [0, -2], [-2, 0], [-1, -2], [-2, -1], [-2, -2]],
-    [[0, -1], [-1, 0], [-1, -1], [0, -2], [-2, 0], [-1, -2], [-2, -1], [-2, -2]],
-    [[0, -1], [-1, 0], [-1, -1], [0, -2], [-2, 0], [-1, -2], [-2, -1], [-2, -2]],
+    [
+        [3, -1],
+        [-1, 3],
+        [4, -1],
+        [-1, 4],
+        [-1, -1],
+        [0, -1],
+        [-1, 0],
+        [6, -1],
+    ],
+    [
+        [0, -1],
+        [-1, 0],
+        [4, -1],
+        [-1, 2],
+        [-1, -1],
+        [0, -3],
+        [-3, 0],
+        [2, -1],
+    ],
+    [
+        [-1, 0],
+        [0, -1],
+        [-1, 4],
+        [2, -1],
+        [-1, -1],
+        [-3, 0],
+        [0, -3],
+        [-1, 2],
+    ],
+    [
+        [1, -1],
+        [-1, 1],
+        [2, -1],
+        [-1, 2],
+        [-1, -1],
+        [0, -3],
+        [-3, 0],
+        [-3, -3],
+    ],
+    [
+        [0, -1],
+        [-1, 0],
+        [2, -1],
+        [-1, -1],
+        [-1, 1],
+        [0, -3],
+        [-3, 0],
+        [-3, -3],
+    ],
+    [
+        [-1, 0],
+        [0, -1],
+        [-1, 2],
+        [-1, -1],
+        [1, -1],
+        [-3, 0],
+        [0, -3],
+        [-3, -3],
+    ],
+    [
+        [0, -1],
+        [-1, 0],
+        [1, -1],
+        [-1, 1],
+        [-1, -1],
+        [0, -3],
+        [-3, 0],
+        [-3, -3],
+    ],
+    [
+        [0, -1],
+        [-1, 0],
+        [1, -1],
+        [-1, -1],
+        [0, -2],
+        [-2, 0],
+        [-2, -1],
+        [-1, -2],
+    ],
+    [
+        [-1, 0],
+        [0, -1],
+        [-1, 1],
+        [-1, -1],
+        [-2, 0],
+        [0, -2],
+        [-1, -2],
+        [-2, -1],
+    ],
+    [
+        [0, -1],
+        [-1, 0],
+        [-1, -1],
+        [0, -2],
+        [-2, 0],
+        [-1, -2],
+        [-2, -1],
+        [-2, -2],
+    ],
+    [
+        [0, -1],
+        [-1, 0],
+        [-1, -1],
+        [0, -2],
+        [-2, 0],
+        [-1, -2],
+        [-2, -1],
+        [-2, -2],
+    ],
+    [
+        [0, -1],
+        [-1, 0],
+        [-1, -1],
+        [0, -2],
+        [-2, 0],
+        [-1, -2],
+        [-2, -1],
+        [-2, -2],
+    ],
+    [
+        [0, -1],
+        [-1, 0],
+        [-1, -1],
+        [0, -2],
+        [-2, 0],
+        [-1, -2],
+        [-2, -1],
+        [-2, -2],
+    ],
 ];
 
 const INVALID_MV: u32 = 0x8000_8000;
 
 fn unpack(m: u32) -> Mv {
-    Mv { x: m as u16 as i16, y: (m >> 16) as u16 as i16 }
+    Mv {
+        x: m as u16 as i16,
+        y: (m >> 16) as u16 as i16,
+    }
 }
 
 /// The search state of `find_ref_mvs` (its `mem` / `mem_sub8x8`).
@@ -36,7 +156,10 @@ struct Search {
 
 impl FrameDec<'_> {
     fn clamp_mv(&self, m: Mv) -> Mv {
-        Mv { x: (m.x as i32).clamp(self.min_mv.0, self.max_mv.0) as i16, y: (m.y as i32).clamp(self.min_mv.1, self.max_mv.1) as i16 }
+        Mv {
+            x: (m.x as i32).clamp(self.min_mv.0, self.max_mv.0) as i16,
+            y: (m.y as i32).clamp(self.min_mv.1, self.max_mv.1) as i16,
+        }
     }
 
     /// `RETURN_DIRECT_MV`: `Some(result)` when the search ends.
@@ -87,7 +210,12 @@ impl FrameDec<'_> {
         let b = &self.b;
         let (row, col, row7) = (self.row as isize, self.col as isize, self.row7);
         let p = &MV_REF_BLK_OFF[b.bs as usize];
-        let mut s = Search { idx, sb, mem: INVALID_MV, mem_sub8x8: INVALID_MV };
+        let mut s = Search {
+            idx,
+            sb,
+            mem: INVALID_MV,
+            mem_sub8x8: INVALID_MV,
+        };
         let stride = self.sb_cols as isize * 8;
         let mvs = &self.cur.mv;
         macro_rules! ret {
@@ -126,7 +254,12 @@ impl FrameDec<'_> {
             }
             i = 2;
         }
-        let in_range = |c: isize, r: isize| c >= self.tile_col_start as isize && c < self.cols as isize && r >= 0 && r < self.rows as isize;
+        let in_range = |c: isize, r: isize| {
+            c >= self.tile_col_start as isize
+                && c < self.cols as isize
+                && r >= 0
+                && r < self.rows as isize
+        };
         // Previously coded MVs in this neighbourhood, same reference.
         for k in i..8 {
             let (c, r) = (p[k][0] as isize + col, p[k][1] as isize + row);
@@ -139,7 +272,11 @@ impl FrameDec<'_> {
                 }
             }
         }
-        let last = if self.h.use_last_frame_mvs { self.mvpair } else { None };
+        let last = if self.h.use_last_frame_mvs {
+            self.mvpair
+        } else {
+            None
+        };
         // At this position in the previous frame, same reference.
         if let Some(lf) = last {
             let mv = &lf.mv[(row * stride + col) as usize];
@@ -150,7 +287,16 @@ impl FrameDec<'_> {
             }
         }
         let sbias = &self.h.signbias;
-        let scaled = |m: Mv, other: i8| if sbias[other as usize] != sbias[r#ref as usize] { Mv { x: m.x.wrapping_neg(), y: m.y.wrapping_neg() } } else { m };
+        let scaled = |m: Mv, other: i8| {
+            if sbias[other as usize] != sbias[r#ref as usize] {
+                Mv {
+                    x: m.x.wrapping_neg(),
+                    y: m.y.wrapping_neg(),
+                }
+            } else {
+                m
+            }
+        };
         // Different reference.
         for k in 0..8 {
             let (c, r) = (p[k][0] as isize + col, p[k][1] as isize + row);
@@ -161,7 +307,10 @@ impl FrameDec<'_> {
                 }
                 // BUG (libvpx): this condition regardless of whether the
                 // first ref MV was used.
-                if mv.r#ref[1] != r#ref && mv.r#ref[1] >= 0 && mv.mv[0].packed() != mv.mv[1].packed() {
+                if mv.r#ref[1] != r#ref
+                    && mv.r#ref[1] >= 0
+                    && mv.mv[0].packed() != mv.mv[1].packed()
+                {
                     ret!(self.ret_mv(&mut s, scaled(mv.mv[1], mv.r#ref[1])));
                 }
             }
@@ -239,10 +388,12 @@ impl FrameDec<'_> {
         let ncomp = if self.b.comp { 2 } else { 1 };
         for z in 0..ncomp {
             let r = self.b.r#ref[z] as i8;
-            let mut mv = self.find_ref_mvs(r, z, mode == NEARMV, if mode == NEWMV { -1 } else { sb });
+            let mut mv =
+                self.find_ref_mvs(r, z, mode == NEARMV, if mode == NEWMV { -1 } else { sb });
             let mut hp = false;
             if mode == NEWMV || sb == -1 {
-                hp = self.h.highprecisionmvs && (mv.x as i32).abs() < 64 && (mv.y as i32).abs() < 64;
+                hp =
+                    self.h.highprecisionmvs && (mv.x as i32).abs() < 64 && (mv.y as i32).abs() < 64;
                 if !hp {
                     if mv.y & 1 != 0 {
                         mv.y += if mv.y < 0 { 1 } else { -1 };

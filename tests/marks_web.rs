@@ -314,16 +314,26 @@ async fn thin_segments_keep_their_weight_in_the_browser() {
             line.set_widths(&[width]);
             line.set_default_color([255, 255, 255, 255]);
             let img = draw(&device, &queue, &mut mr, &mut [&mut line]).await;
-            let expect = if diagonal { width * std::f32::consts::SQRT_2 } else { width };
+            let expect = if diagonal {
+                width * std::f32::consts::SQRT_2
+            } else {
+                width
+            };
             for x in [56u32, 64, 71] {
                 let col: Vec<f32> = (0..H).map(|y| px(&img, x, y)[0] as f32 / 255.0).collect();
                 let peak = col.iter().cloned().fold(0.0, f32::max);
-                assert!(peak <= expect + 0.03, "{BACKEND:?} diagonal {diagonal} phase {phase} x {x}: peak {peak}");
+                assert!(
+                    peak <= expect + 0.03,
+                    "{BACKEND:?} diagonal {diagonal} phase {phase} x {x}: peak {peak}"
+                );
                 sums.push(col.iter().sum::<f32>() / expect);
             }
         }
         for s in &sums {
-            assert!((s - 1.0).abs() < 0.06, "{BACKEND:?} diagonal {diagonal}: column ink {s} of the width, all {sums:?}");
+            assert!(
+                (s - 1.0).abs() < 0.06,
+                "{BACKEND:?} diagonal {diagonal}: column ink {s} of the width, all {sums:?}"
+            );
         }
     }
 }
@@ -455,8 +465,8 @@ async fn sprites_images_and_styled_lines_draw_in_the_browser() {
 /// bind group — through Tint and on WebGL2.
 #[wasm_bindgen_test]
 async fn a_custom_mark_kind_draws_in_the_browser() {
-    use threers::marks::{gpu, 
-        Column, ColumnFormat, CustomShader, MarkCommon, MarkKind, PrepareContext,
+    use threers::marks::{
+        gpu, Column, ColumnFormat, CustomShader, MarkCommon, MarkKind, PrepareContext,
     };
     const WGSL: &str = r#"
 @group(2) @binding(0) var sq_tex : texture_2d<f32>;

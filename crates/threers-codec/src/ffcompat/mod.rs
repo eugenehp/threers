@@ -19,7 +19,7 @@
 pub mod mkv;
 pub mod mov;
 pub mod pipe;
-pub mod swscale;
-pub mod sws_generic;
 #[cfg(feature = "decode")]
 pub mod reader;
+pub mod sws_generic;
+pub mod swscale;

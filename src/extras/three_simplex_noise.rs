@@ -220,9 +220,24 @@ impl ThreeSimplexNoise {
         let [i2, j2, k2, l2] = step(2);
         let [i3, j3, k3, l3] = step(1);
         let off = |d: f64, o: usize, n: f64| d - o as f64 + n * g4;
-        let c1 = [off(x0, i1, 1.0), off(y0, j1, 1.0), off(z0, k1, 1.0), off(w0, l1, 1.0)];
-        let c2 = [off(x0, i2, 2.0), off(y0, j2, 2.0), off(z0, k2, 2.0), off(w0, l2, 2.0)];
-        let c3 = [off(x0, i3, 3.0), off(y0, j3, 3.0), off(z0, k3, 3.0), off(w0, l3, 3.0)];
+        let c1 = [
+            off(x0, i1, 1.0),
+            off(y0, j1, 1.0),
+            off(z0, k1, 1.0),
+            off(w0, l1, 1.0),
+        ];
+        let c2 = [
+            off(x0, i2, 2.0),
+            off(y0, j2, 2.0),
+            off(z0, k2, 2.0),
+            off(w0, l2, 2.0),
+        ];
+        let c3 = [
+            off(x0, i3, 3.0),
+            off(y0, j3, 3.0),
+            off(z0, k3, 3.0),
+            off(w0, l3, 3.0),
+        ];
         let c4 = [
             x0 - 1.0 + 4.0 * g4,
             y0 - 1.0 + 4.0 * g4,
@@ -280,7 +295,10 @@ mod tests {
                 "3" => n.noise3d(a[0], a[1], a[2]),
                 _ => n.noise4d(a[0], a[1], a[2], a[3]),
             };
-            assert!((got - v).abs() <= 1e-12, "noise{kind}({a:?}) = {got}, three.js {v}");
+            assert!(
+                (got - v).abs() <= 1e-12,
+                "noise{kind}({a:?}) = {got}, three.js {v}"
+            );
         }
     }
 }

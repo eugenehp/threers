@@ -147,12 +147,7 @@ async fn run() {
     println!("space pause · [ ] day speed · n night · d day · v street · f frame");
     println!("l next layout · c ride along · r new city");
 
-    let mut camera = PerspectiveCamera::new(
-        38.0,
-        view.aspect(),
-        1.0,
-        city.stats.extent * 14.0,
-    );
+    let mut camera = PerspectiveCamera::new(38.0, view.aspect(), 1.0, city.stats.extent * 14.0);
     place_camera(&mut camera, city.stats.extent);
     let mut controls = OrbitControls::new(&camera);
     controls.min_distance = 25.0;

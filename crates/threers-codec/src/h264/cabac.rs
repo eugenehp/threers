@@ -152,11 +152,19 @@ impl Cabac {
         let prefix = abs.min(9);
         // Truncated unary over cMax = 9; bins after the first use 3, 4, 5, 6, 6…
         for k in 0..prefix {
-            let inc = if k == 0 { first } else { (k as usize + 2).min(6) };
+            let inc = if k == 0 {
+                first
+            } else {
+                (k as usize + 2).min(6)
+            };
             self.bin(base + inc, 1);
         }
         if prefix < 9 {
-            let inc = if prefix == 0 { first } else { (prefix as usize + 2).min(6) };
+            let inc = if prefix == 0 {
+                first
+            } else {
+                (prefix as usize + 2).min(6)
+            };
             self.bin(base + inc, 0);
         } else {
             // Exp-Golomb, k = 3, bypass (§9.3.2.3).
@@ -407,9 +415,18 @@ const _: () = assert!(SIG >= 60 && LAST_SIG >= 60 && ABS_LEVEL >= 60);
 /// The three context blocks tile end to end; one slipped offset would silently
 /// share a probability state between two unrelated block types.
 const _: () = assert!(CBF + CBF_CAT[4] + 3 == 104, "coded_block_flag ends at 104");
-const _: () = assert!(SIG + SIG_CAT[4] + 13 == 165, "significant_coeff_flag ends at 165");
-const _: () = assert!(LAST_SIG + SIG_CAT[4] + 13 == 226, "last_significant ends at 226");
-const _: () = assert!(ABS_LEVEL + ABS_CAT[4] + 9 == 275, "coeff_abs_level ends at 275");
+const _: () = assert!(
+    SIG + SIG_CAT[4] + 13 == 165,
+    "significant_coeff_flag ends at 165"
+);
+const _: () = assert!(
+    LAST_SIG + SIG_CAT[4] + 13 == 226,
+    "last_significant ends at 226"
+);
+const _: () = assert!(
+    ABS_LEVEL + ABS_CAT[4] + 9 == 275,
+    "coeff_abs_level ends at 275"
+);
 
 #[cfg(test)]
 mod tests {

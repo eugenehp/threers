@@ -67,10 +67,7 @@ fn main() {
         "cuboct sphere",
         LatticeKind::Cuboct(Cuboct::Auxetic),
         DENSITY,
-        |l| {
-            l.fill(Region::sphere(Vector3::ZERO, half))
-                .shape(0.18)
-        },
+        |l| l.fill(Region::sphere(Vector3::ZERO, half)).shape(0.18),
     ));
 
     tiles.push(tile(

@@ -71,9 +71,19 @@ pub fn brace_folds(text: &str) -> Vec<Fold> {
         }
         // The line's last such bracket wins.
         if let Some(last) = out.last_mut().filter(|f| f.start_line == line) {
-            *last = Fold { start_line: line, start_col: col, end_line, end_col };
+            *last = Fold {
+                start_line: line,
+                start_col: col,
+                end_line,
+                end_col,
+            };
         } else {
-            out.push(Fold { start_line: line, start_col: col, end_line, end_col });
+            out.push(Fold {
+                start_line: line,
+                start_col: col,
+                end_line,
+                end_col,
+            });
         }
     }
     out
@@ -88,7 +98,9 @@ pub struct Folds {
 impl Folds {
     /// `foldAll`: every range of `text`.
     pub fn fold_all(text: &str) -> Self {
-        Self { folded: brace_folds(text) }
+        Self {
+            folded: brace_folds(text),
+        }
     }
 
     /// `unfold` at `line`: the range starting there opens.
@@ -113,7 +125,10 @@ impl Folds {
         v.sort_by_key(|f| (f.start_line, f.start_col));
         let mut out: Vec<Fold> = vec![];
         for f in v {
-            if out.last().is_some_and(|o| (f.start_line, f.start_col) < (o.end_line, o.end_col)) {
+            if out
+                .last()
+                .is_some_and(|o| (f.start_line, f.start_col) < (o.end_line, o.end_col))
+            {
                 continue;
             }
             out.push(f);
@@ -140,7 +155,10 @@ pub fn shown_lines(text: &str, folds: &Folds) -> Vec<ShownLine> {
     while line < n {
         match outer.iter().find(|f| f.start_line == line) {
             Some(f) => {
-                out.push(ShownLine { line, fold: Some(*f) });
+                out.push(ShownLine {
+                    line,
+                    fold: Some(*f),
+                });
                 line = f.end_line + 1;
             }
             None => {
@@ -158,12 +176,27 @@ mod tests {
 
     #[test]
     fn folds_as_brace_fold_does() {
-        let text = "{\n  \"a\": {\n    \"x\": \"}\"\n  },\n  \"b\": [1, 2],\n  \"c\": [\n    3\n  ]\n}";
+        let text =
+            "{\n  \"a\": {\n    \"x\": \"}\"\n  },\n  \"b\": [1, 2],\n  \"c\": [\n    3\n  ]\n}";
         let folds = brace_folds(text);
         assert_eq!(folds.len(), 3);
-        assert_eq!(folds[1], Fold { start_line: 1, start_col: 7, end_line: 3, end_col: 2 });
+        assert_eq!(
+            folds[1],
+            Fold {
+                start_line: 1,
+                start_col: 7,
+                end_line: 3,
+                end_col: 2
+            }
+        );
         let mut f = Folds::fold_all(text);
-        assert_eq!(shown_lines(text, &f), vec![ShownLine { line: 0, fold: Some(folds[0]) }]);
+        assert_eq!(
+            shown_lines(text, &f),
+            vec![ShownLine {
+                line: 0,
+                fold: Some(folds[0])
+            }]
+        );
         f.unfold(0);
         let shown: Vec<usize> = shown_lines(text, &f).iter().map(|s| s.line).collect();
         assert_eq!(shown, vec![0, 1, 4, 5, 8]);

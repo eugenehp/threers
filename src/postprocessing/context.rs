@@ -10,9 +10,7 @@ use crate::cameras::Camera;
 use crate::core::{ObjectId, ObjectKind};
 use crate::materials::Material;
 use crate::math::{Color, Matrix4};
-use crate::renderer::{
-    PostFxBlend, PostFxCamera, PostFxNoise, PostFxOp, PostFxOutput,
-};
+use crate::renderer::{PostFxBlend, PostFxCamera, PostFxNoise, PostFxOp, PostFxOutput};
 use crate::scene::Scene;
 
 /// Where the composer's last pass draws — three.js's `renderer.setRenderTarget(null)`.
@@ -63,12 +61,16 @@ impl Fx {
 
     /// `CopyShader`: `opacity * texel`.
     pub fn copy(src: &Target, opacity: f32) -> Self {
-        Self::new(kinds::COPY).input(src).p2([opacity, 0.0, 0.0, 0.0])
+        Self::new(kinds::COPY)
+            .input(src)
+            .p2([opacity, 0.0, 0.0, 0.0])
     }
 
     /// A `MeshBasicMaterial` copy: converted to sRGB onto the screen.
     pub fn basic_copy(src: &Target) -> Self {
-        Self::new(kinds::BASIC_COPY).input(src).p2([1.0, 0.0, 0.0, 0.0])
+        Self::new(kinds::BASIC_COPY)
+            .input(src)
+            .p2([1.0, 0.0, 0.0, 0.0])
     }
 
     pub fn input(mut self, t: &Target) -> Self {
@@ -323,7 +325,13 @@ impl<'a, 's> PassContext<'a, 's> {
     /// three.js — to the same bytes.
     pub fn screen_stand_in(&mut self) -> Option<Target> {
         let (w, h) = self.screen_size()?;
-        Some(ensure(self.stand_in, self.renderer, w, h, INTERMEDIATE_FORMAT))
+        Some(ensure(
+            self.stand_in,
+            self.renderer,
+            w,
+            h,
+            INTERMEDIATE_FORMAT,
+        ))
     }
 
     /// Copy a stand-in onto the screen as it stands.
@@ -435,8 +443,10 @@ impl<'a, 's> PassContext<'a, 's> {
                 ObjectKind::Mesh(_) | ObjectKind::SkinnedMesh(_) | ObjectKind::InstancedMesh(_)
             );
             let is_sprite = matches!(obj.kind, ObjectKind::Sprite(_));
-            let is_line_or_points =
-                matches!(obj.kind, ObjectKind::LineSegments(_) | ObjectKind::Points(_));
+            let is_line_or_points = matches!(
+                obj.kind,
+                ObjectKind::LineSegments(_) | ObjectKind::Points(_)
+            );
             let mut visible = obj.visible;
             match &draw.visibility {
                 Visibility::All => {}
@@ -459,11 +469,17 @@ impl<'a, 's> PassContext<'a, 's> {
                 }
             }
             let chosen = match &selection {
-                Some((set, on, off)) => Some(if set.contains(&id) { on.clone() } else { off.clone() }),
+                Some((set, on, off)) => Some(if set.contains(&id) {
+                    on.clone()
+                } else {
+                    off.clone()
+                }),
                 None => draw.override_material.clone(),
             };
             let material = match (&chosen, &mut obj.kind) {
-                (Some(m), ObjectKind::Mesh(mesh)) => Some(std::mem::replace(&mut mesh.material, m.clone())),
+                (Some(m), ObjectKind::Mesh(mesh)) => {
+                    Some(std::mem::replace(&mut mesh.material, m.clone()))
+                }
                 (Some(m), ObjectKind::SkinnedMesh(mesh)) => {
                     Some(std::mem::replace(&mut mesh.material, m.clone()))
                 }

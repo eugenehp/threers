@@ -1,8 +1,8 @@
 //! Turning a [`Rod`] into bodies, elastic stations and cables in a `World`.
 
 use crate::rod::Rod;
-use threers_physics::prelude::*;
 use threers_physics::collider::Collider;
+use threers_physics::prelude::*;
 
 /// The collision group rod links are put in when they may not touch each other.
 ///
@@ -211,7 +211,10 @@ impl Continuum {
         }
 
         let mount = base.map(|b| {
-            let root = world.body(bodies[0]).map(|x| x.translation()).unwrap_or(origin);
+            let root = world
+                .body(bodies[0])
+                .map(|x| x.translation())
+                .unwrap_or(origin);
             let anchor_root = root - up * (props.length * 0.25);
             let joint = Joint::fixed_at_point(world.bodies(), b, bodies[0], anchor_root)
                 .expect("the base and the root link both exist");
@@ -306,12 +309,7 @@ impl Continuum {
     ) -> Vec<TendonId> {
         TendonRoute::ring(n, offset, phase)
             .into_iter()
-            .map(|r| {
-                self.add_tendon(
-                    world,
-                    r.terminating_at(segment).pretensioned(pretension),
-                )
-            })
+            .map(|r| self.add_tendon(world, r.terminating_at(segment).pretensioned(pretension)))
             .collect()
     }
 
@@ -351,9 +349,10 @@ impl Continuum {
         let props = self.rod.link_properties();
         let last = *self.bodies.last().expect("a rod has at least two bodies");
         match world.body(last) {
-            Some(body) => body
-                .position
-                .transform_point(Vector3::new(0.0, props.length * 0.25, 0.0)),
+            Some(body) => {
+                body.position
+                    .transform_point(Vector3::new(0.0, props.length * 0.25, 0.0))
+            }
             None => Vector3::ZERO,
         }
     }
@@ -376,10 +375,7 @@ impl Continuum {
                 props.length * 0.5
             };
             if i == 0 {
-                out.push(
-                    body.position
-                        .transform_point(Vector3::new(0.0, -half, 0.0)),
-                );
+                out.push(body.position.transform_point(Vector3::new(0.0, -half, 0.0)));
             }
             out.push(body.position.transform_point(Vector3::new(0.0, half, 0.0)));
         }
@@ -421,10 +417,7 @@ impl Continuum {
             let i = (x / link_length).round().clamp(1.0, n as f32 - 1.0) as usize;
             (i, i as f32 * link_length)
         };
-        (
-            self.bodies[index],
-            Vector3::new(0.0, x - centre, 0.0),
-        )
+        (self.bodies[index], Vector3::new(0.0, x - centre, 0.0))
     }
 
     /// Where a given arc position currently is, in the world.

@@ -16,9 +16,7 @@
 //! and note `--release`: a hundred shapes at sixty-four iterations is minutes
 //! of debug build and seconds of an optimised one.
 
-use threers_continuum::sorosim::{
-    evaluate_statics, Material, Statics, StaticsRun,
-};
+use threers_continuum::sorosim::{evaluate_statics, Material, Statics, StaticsRun};
 
 /// Small enough to run in a debug build without anyone noticing.
 const SHAPES: usize = 3;
@@ -28,20 +26,23 @@ const SHAPES: usize = 3;
 fn load(material: Material) -> Option<Statics> {
     let set = Statics::load(material);
     if set.is_none() {
-        eprintln!(
-            "skipping: no SoRoSim reference data (see threers_continuum::sorosim)"
-        );
+        eprintln!("skipping: no SoRoSim reference data (see threers_continuum::sorosim)");
     }
     set
 }
 
 fn run() -> StaticsRun {
-    StaticsRun::default().links(10).seconds(8.0)
+    StaticsRun {
+        seconds: 8.0,
+        ..StaticsRun::default().links(10)
+    }
 }
 
 #[test]
 fn the_reference_set_reads_as_a_rod() {
-    let Some(set) = load(Material::Tpu) else { return };
+    let Some(set) = load(Material::Tpu) else {
+        return;
+    };
     assert_eq!(set.shapes.len(), 500, "the set is 500 shapes");
     assert_eq!(set.arc.len(), 14, "14 measurement stations");
     assert!(
@@ -55,7 +56,10 @@ fn the_reference_set_reads_as_a_rod() {
     for shape in set.shapes.iter().take(20) {
         // The rod is clamped at the origin and inextensible, so every shape
         // starts there and its polyline is the rod's own length.
-        assert!(shape.stations[0].length() < 1e-6, "not clamped at the origin");
+        assert!(
+            shape.stations[0].length() < 1e-6,
+            "not clamped at the origin"
+        );
         let polyline: f32 = shape
             .stations
             .windows(2)
@@ -77,7 +81,9 @@ fn the_reference_set_reads_as_a_rod() {
 fn a_soft_rod_matches_the_cosserat_solution() {
     // The headline number. TPU at ten links, against a solver that models the
     // rod as a continuum rather than as ten sticks.
-    let Some(set) = load(Material::Tpu) else { return };
+    let Some(set) = load(Material::Tpu) else {
+        return;
+    };
     let length = Material::Tpu.rod(1).length;
     let report = evaluate_statics(&set, run(), Some(SHAPES));
 
@@ -100,12 +106,14 @@ fn a_soft_rod_matches_the_cosserat_solution() {
 fn chopping_the_rod_finer_matches_the_continuum_better() {
     // The property that makes `links` a fidelity knob: it is not that ten links
     // is accurate, it is that twenty would be more so.
-    let Some(set) = load(Material::Tpu) else { return };
+    let Some(set) = load(Material::Tpu) else {
+        return;
+    };
     let length = Material::Tpu.rod(1).length;
-    let coarse = evaluate_statics(&set, run().links(5), Some(SHAPES))
-        .mean_relative_shape_error(length);
-    let fine = evaluate_statics(&set, run().links(10), Some(SHAPES))
-        .mean_relative_shape_error(length);
+    let coarse =
+        evaluate_statics(&set, run().links(5), Some(SHAPES)).mean_relative_shape_error(length);
+    let fine =
+        evaluate_statics(&set, run().links(10), Some(SHAPES)).mean_relative_shape_error(length);
     assert!(
         fine < coarse,
         "five links matched at {:.2}% and ten at {:.2}% — finer should be closer",
@@ -122,12 +130,28 @@ fn a_rod_that_cannot_twist_cannot_match_a_three_axis_wrench() {
     // refuses the component along its own axis and settles somewhere else
     // entirely. Measured, this is the difference between a few percent and
     // tens of them, and it is the single largest term in the comparison.
-    let Some(set) = load(Material::Tpu) else { return };
+    let Some(set) = load(Material::Tpu) else {
+        return;
+    };
     let length = Material::Tpu.rod(1).length;
-    let twisting = evaluate_statics(&set, run().twist(true), Some(SHAPES))
-        .mean_relative_shape_error(length);
-    let locked = evaluate_statics(&set, run().twist(false), Some(SHAPES))
-        .mean_relative_shape_error(length);
+    let twisting = evaluate_statics(
+        &set,
+        StaticsRun {
+            twist: true,
+            ..run()
+        },
+        Some(SHAPES),
+    )
+    .mean_relative_shape_error(length);
+    let locked = evaluate_statics(
+        &set,
+        StaticsRun {
+            twist: false,
+            ..run()
+        },
+        Some(SHAPES),
+    )
+    .mean_relative_shape_error(length);
     assert!(
         locked > 2.0 * twisting,
         "locking twist cost only {:.2}% -> {:.2}%; if torsion has stopped \
@@ -144,7 +168,9 @@ fn a_stiff_thin_rod_is_the_hard_case_and_we_say_how_hard() {
     // soft rod is indifferent to the solver budget, this one needs four times
     // it — at 16 substeps of 64 iterations the same comparison reads 4.6% and
     // loses a shape in six.
-    let Some(set) = load(Material::SpringSteel) else { return };
+    let Some(set) = load(Material::SpringSteel) else {
+        return;
+    };
     let length = Material::SpringSteel.rod(1).length;
     let report = evaluate_statics(&set, run().links(5).budget(32, 128), Some(SHAPES));
     let shape = report.mean_relative_shape_error(length);

@@ -108,7 +108,14 @@ impl<'a> Marks<'a> {
             Some(0) | None => None,
             Some(o) => Some(usize::from(o)),
         };
-        Some(Self { gpos, gdef, lookups, mkmk_at, classes, store })
+        Some(Self {
+            gpos,
+            gdef,
+            lookups,
+            mkmk_at,
+            classes,
+            store,
+        })
     }
 
     /// Resolve attachment for a run in **logical** order, one entry per glyph.
@@ -133,14 +140,22 @@ impl<'a> Marks<'a> {
             // second mark on the first rather than on the base both of them cover.
             if let Some(b) = (0..i).rev().find(|j| !is_mark(glyphs[*j])) {
                 if let Some((dx, dy)) = self.anchor_pair(*g, glyphs[b], 0, self.mkmk_at) {
-                    out[i] = Attachment { to: u16::try_from(b).ok(), dx, dy };
+                    out[i] = Attachment {
+                        to: u16::try_from(b).ok(),
+                        dx,
+                        dy,
+                    };
                 }
             }
             if i > 0 && is_mark(glyphs[i - 1]) {
                 if let Some((dx, dy)) =
                     self.anchor_pair(*g, glyphs[i - 1], self.mkmk_at, self.lookups.len())
                 {
-                    out[i] = Attachment { to: u16::try_from(i - 1).ok(), dx, dy };
+                    out[i] = Attachment {
+                        to: u16::try_from(i - 1).ok(),
+                        dx,
+                        dy,
+                    };
                 }
             }
         }
@@ -151,13 +166,7 @@ impl<'a> Marks<'a> {
     ///
     /// Within a lookup the subtables are alternatives and the first lookup with an answer
     /// wins: a mark is attached once, not several times.
-    fn anchor_pair(
-        &self,
-        mark: u16,
-        to: u16,
-        from: usize,
-        until: usize,
-    ) -> Option<(f32, f32)> {
+    fn anchor_pair(&self, mark: u16, to: u16, from: usize, until: usize) -> Option<(f32, f32)> {
         for index in self.lookups.get(from..until.min(self.lookups.len()))? {
             // 9 is `GPOS`'s extension type.
             for (kind, sub) in super::gpos::lookup_subtables(self.gpos, 0, *index, 9)? {

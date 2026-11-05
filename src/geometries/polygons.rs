@@ -36,10 +36,17 @@ impl CellPolygons {
         // pole at `r·cos(3π/2)`, ~1e-17 off the axis, and these buffers are
         // three.js's to the bit. Measured against the cell's own size.
         let d2 = |a: [f32; 3], b: [f32; 3]| {
-            let (x, y, z) = ((a[0] - b[0]) as f64, (a[1] - b[1]) as f64, (a[2] - b[2]) as f64);
+            let (x, y, z) = (
+                (a[0] - b[0]) as f64,
+                (a[1] - b[1]) as f64,
+                (a[2] - b[2]) as f64,
+            );
             x * x + y * y + z * z
         };
-        let extent = (0..4).flat_map(|i| (i + 1..4).map(move |j| (i, j))).map(|(i, j)| d2(p[i], p[j])).fold(0.0, f64::max);
+        let extent = (0..4)
+            .flat_map(|i| (i + 1..4).map(move |j| (i, j)))
+            .map(|(i, j)| d2(p[i], p[j]))
+            .fold(0.0, f64::max);
         let collapsed = (0..4).any(|i| (i + 1..4).any(|j| d2(p[i], p[j]) <= extent * 1e-12));
         if collapsed {
             self.0.extend_from_slice(&[1, 1]);

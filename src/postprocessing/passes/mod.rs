@@ -13,8 +13,7 @@ pub use basic::{
 };
 pub use bloom::{convolution_kernel, BloomPass, UnrealBloomPass};
 pub use effects::{
-    AfterimagePass, BokehPass, DotScreenPass, FilmPass, GlitchPass, HalftonePass, LutPass,
-    SmaaPass,
+    AfterimagePass, BokehPass, DotScreenPass, FilmPass, GlitchPass, HalftonePass, LutPass, SmaaPass,
 };
 pub use render_variants::{
     AdaptiveToneMappingPass, RenderPixelatedPass, RenderTransitionPass, SsaaRenderPass,

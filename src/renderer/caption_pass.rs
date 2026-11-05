@@ -13,7 +13,8 @@
 use std::borrow::Cow;
 
 /// Full-screen textured quad drawn from three vertices, no vertex buffer.
-const OVERLAY_WGSL: &str = crate::wgsl!(r#"
+const OVERLAY_WGSL: &str = crate::wgsl!(
+    r#"
 
 @group(0) @binding(0) var overlay_tex: texture_2d<f32>;
 @group(0) @binding(1) var overlay_sampler: sampler;
@@ -22,7 +23,8 @@ const OVERLAY_WGSL: &str = crate::wgsl!(r#"
 fn fs_main(in: FullscreenVertex) -> @location(0) vec4<f32> {
     return textureSample(overlay_tex, overlay_sampler, in.uv);
 }
-"#);
+"#
+);
 
 /// GPU resources for the overlay pass, sized to the current overlay buffer.
 pub(crate) struct CaptionPass {
@@ -156,7 +158,7 @@ impl CaptionPass {
         rgba: &[u8],
         width: u32,
         height: u32,
-        rows: Option<(u32, u32)>,
+        rows: Option<&[(u32, u32)]>,
     ) {
         let stale = !matches!(&self.texture, Some((w, h, _, _)) if *w == width && *h == height);
         if stale {
@@ -199,14 +201,22 @@ impl CaptionPass {
             self.texture = Some((width, height, texture, bind_group));
         }
 
-        let (_, _, texture, _) = self.texture.as_ref().expect("texture just ensured");
-        let (y0, y1) = match rows {
-            Some((a, b)) if !stale => (a.min(height), b.clamp(a.min(height), height)),
-            _ => (0, height),
+        let whole = [(0, height)];
+        let bands = match rows {
+            Some(bands) if !stale => bands,
+            _ => &whole[..],
         };
-        if y0 >= y1 {
-            return;
+        for &(a, b) in bands {
+            let (y0, y1) = (a.min(height), b.clamp(a.min(height), height));
+            if y0 < y1 {
+                self.upload_rows(queue, rgba, width, y0, y1);
+            }
         }
+    }
+
+    /// Copy rows `y0..y1` into the texture, which exists at this size.
+    fn upload_rows(&self, queue: &wgpu::Queue, rgba: &[u8], width: u32, y0: u32, y1: u32) {
+        let (_, _, texture, _) = self.texture.as_ref().expect("texture just ensured");
         let band = y1 - y0;
         // `write_texture` wants rows padded to 256 bytes.
         const ALIGN: u32 = 256;
@@ -259,7 +269,7 @@ impl CaptionPass {
         rgba: &[u8],
         width: u32,
         height: u32,
-        rows: Option<(u32, u32)>,
+        rows: Option<&[(u32, u32)]>,
         target: &wgpu::TextureView,
         format: wgpu::TextureFormat,
     ) {

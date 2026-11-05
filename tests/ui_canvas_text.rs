@@ -25,7 +25,11 @@ fn document() -> web_sys::Document {
 }
 
 fn canvas(width: u32, height: u32) -> (HtmlCanvasElement, CanvasRenderingContext2d) {
-    let c: HtmlCanvasElement = document().create_element("canvas").unwrap().dyn_into().unwrap();
+    let c: HtmlCanvasElement = document()
+        .create_element("canvas")
+        .unwrap()
+        .dyn_into()
+        .unwrap();
     c.set_width(width);
     c.set_height(height);
     document().body().unwrap().append_child(&c).unwrap();
@@ -36,7 +40,11 @@ fn canvas(width: u32, height: u32) -> (HtmlCanvasElement, CanvasRenderingContext
 /// The page's width of `text` in `font`.
 fn page_width(font: &str, text: &str) -> f64 {
     let span = document().create_element("span").unwrap();
-    span.set_attribute("style", &format!("position:absolute;white-space:pre;font:{font}")).unwrap();
+    span.set_attribute(
+        "style",
+        &format!("position:absolute;white-space:pre;font:{font}"),
+    )
+    .unwrap();
     span.set_text_content(Some(text));
     document().body().unwrap().append_child(&span).unwrap();
     let w = span.get_bounding_client_rect().width();
@@ -45,7 +53,11 @@ fn page_width(font: &str, text: &str) -> f64 {
 }
 
 fn style(family: &str, size: f32) -> Style {
-    Style { font_family: family.into(), font_size: size, ..Default::default() }
+    Style {
+        font_family: family.into(),
+        font_size: size,
+        ..Default::default()
+    }
 }
 
 /// Measured widths are the page's — to its 1/64-pixel layout units —
@@ -55,20 +67,32 @@ fn style(family: &str, size: f32) -> Style {
 fn measured_widths_are_the_pages() {
     let (_, ctx) = canvas(8, 8);
     let mut painter = CanvasPainter::new(ctx.clone(), 1.0);
-    for (family, size) in [("Arial", 13.0), ("Times", 14.0), ("Helvetica", 13.0), ("Georgia", 15.0), ("Verdana", 12.0)] {
+    for (family, size) in [
+        ("Arial", 13.0),
+        ("Times", 14.0),
+        ("Helvetica", 13.0),
+        ("Georgia", 15.0),
+        ("Verdana", 12.0),
+    ] {
         let s = style(family, size);
         let font = TextStyle::of(&s).css_font();
         for text in LINES {
             let (w, _) = painter.measure(text, &s);
             let page = page_width(&font, text);
-            assert!((w as f64 - page).abs() < 0.05, "{font} {text:?}: painter {w}, page {page}");
+            assert!(
+                (w as f64 - page).abs() < 0.05,
+                "{font} {text:?}: painter {w}, page {page}"
+            );
         }
         // The canvas alone, on the line with "␣T" and "␣A": what was wrong.
         ctx.set_font(&font);
         let plain = ctx.measure_text(LINES[1]).unwrap().width();
         let page = page_width(&font, LINES[1]);
         if matches!(family, "Arial" | "Times" | "Helvetica") {
-            assert!(plain - page > 0.5, "{font}: canvas alone {plain}, page {page}");
+            assert!(
+                plain - page > 0.5,
+                "{font}: canvas alone {plain}, page {page}"
+            );
         }
     }
 }
@@ -83,7 +107,10 @@ fn drawn_text_ends_where_the_page_puts_it() {
         let font = TextStyle::of(&s).css_font();
         let text = LINES[1];
         let last_ink = |ctx: &CanvasRenderingContext2d| -> i64 {
-            let data = ctx.get_image_data(0.0, 0.0, w as f64, h as f64).unwrap().data();
+            let data = ctx
+                .get_image_data(0.0, 0.0, w as f64, h as f64)
+                .unwrap()
+                .data();
             (0..w as usize)
                 .rev()
                 .find(|&x| (0..h as usize).any(|y| data[(y * w as usize + x) * 4 + 3] > 128))
@@ -95,7 +122,16 @@ fn drawn_text_ends_where_the_page_puts_it() {
         painter.begin(w, h, 1.0);
         let mut ts = TextStyle::of(&s);
         ts.color = [0.0, 0.0, 0.0, 1.0];
-        painter.text(Rect { x: 10.0, y: 0.0, width: 400.0, height: h as f32 }, text, &ts);
+        painter.text(
+            Rect {
+                x: 10.0,
+                y: 0.0,
+                width: 400.0,
+                height: h as f32,
+            },
+            text,
+            &ts,
+        );
         let painted = last_ink(&ctx);
         // The canvas's own run at the same place, for the difference.
         let (_, plain) = canvas(w, h);
@@ -105,7 +141,8 @@ fn drawn_text_ends_where_the_page_puts_it() {
         let canvas_alone = last_ink(&plain);
         let shift = page_width(&font, text) - plain.measure_text(text).unwrap().width();
         assert!(
-            (painted - canvas_alone) as f64 - shift.round() <= 1.0 && (painted - canvas_alone) as f64 - shift.round() >= -1.0,
+            (painted - canvas_alone) as f64 - shift.round() <= 1.0
+                && (painted - canvas_alone) as f64 - shift.round() >= -1.0,
             "{font}: painted ends at {painted}, canvas alone at {canvas_alone}, page shift {shift}"
         );
     }

@@ -83,12 +83,36 @@ fn enclosed(rng: &mut Rng, _fixed: bool) -> Built {
     };
 
     let walls = [
-        (Vector3::new(0.0, 0.0, 0.0), 0.0, -FRAC_PI_2, Color::new(0.73, 0.73, 0.73), 60.0),
+        (
+            Vector3::new(0.0, 0.0, 0.0),
+            0.0,
+            -FRAC_PI_2,
+            Color::new(0.73, 0.73, 0.73),
+            60.0,
+        ),
         (Vector3::new(-half, half, 0.0), FRAC_PI_2, 0.0, left, room),
         (Vector3::new(half, half, 0.0), -FRAC_PI_2, 0.0, right, room),
-        (Vector3::new(0.0, half, -half), 0.0, 0.0, Color::new(0.73, 0.73, 0.70), room),
-        (Vector3::new(0.0, half, half), std::f32::consts::PI, 0.0, Color::new(0.73, 0.73, 0.70), room),
-        (Vector3::new(0.0, room, 0.0), 0.0, FRAC_PI_2, Color::new(0.8, 0.8, 0.78), room),
+        (
+            Vector3::new(0.0, half, -half),
+            0.0,
+            0.0,
+            Color::new(0.73, 0.73, 0.70),
+            room,
+        ),
+        (
+            Vector3::new(0.0, half, half),
+            std::f32::consts::PI,
+            0.0,
+            Color::new(0.73, 0.73, 0.70),
+            room,
+        ),
+        (
+            Vector3::new(0.0, room, 0.0),
+            0.0,
+            FRAC_PI_2,
+            Color::new(0.8, 0.8, 0.78),
+            room,
+        ),
     ];
     for (pos, yaw, pitch, colour, size) in walls {
         let mut m = StandardMaterial::new(colour);
@@ -106,7 +130,12 @@ fn enclosed(rng: &mut Rng, _fixed: bool) -> Built {
     let objects = 1 + (rng.next() * 2.5) as u32;
     add_objects(&mut scene, rng, objects, half * 0.45);
     let panel_size = rng.range(0.4, 1.1);
-    add_panel(&mut scene, rng, Vector3::new(0.0, room - 0.02, 0.0), panel_size);
+    add_panel(
+        &mut scene,
+        rng,
+        Vector3::new(0.0, room - 0.02, 0.0),
+        panel_size,
+    );
     if rng.next() < 0.28 {
         let a = rng.range(0.0, std::f32::consts::TAU);
         let fill_pos = Vector3::new(
@@ -120,7 +149,11 @@ fn enclosed(rng: &mut Rng, _fixed: bool) -> Built {
 
     let yaw = rng.range(-0.45, 0.45);
     let mut camera = PerspectiveCamera::new(rng.range(35.0, 48.0), 1.0, 0.1, 100.0);
-    camera.position = Vector3::new(yaw.sin() * half * 0.35, room * rng.range(0.4, 0.6), half * 0.72);
+    camera.position = Vector3::new(
+        yaw.sin() * half * 0.35,
+        room * rng.range(0.4, 0.6),
+        half * 0.72,
+    );
     camera.target = Vector3::new(0.0, room * 0.35, 0.0);
     Built {
         scene,
@@ -186,8 +219,16 @@ fn cornell_like(rng: &mut Rng) -> Built {
         rng.range(0.68, 0.80),
         rng.range(0.66, 0.78),
     );
-    let red = Color::new(rng.range(0.48, 0.78), rng.range(0.02, 0.14), rng.range(0.02, 0.12));
-    let green = Color::new(rng.range(0.04, 0.18), rng.range(0.32, 0.55), rng.range(0.08, 0.24));
+    let red = Color::new(
+        rng.range(0.48, 0.78),
+        rng.range(0.02, 0.14),
+        rng.range(0.02, 0.12),
+    );
+    let green = Color::new(
+        rng.range(0.04, 0.18),
+        rng.range(0.32, 0.55),
+        rng.range(0.08, 0.24),
+    );
     let (left_c, right_c) = if rng.next() < 0.5 {
         (red, green)
     } else {
@@ -262,7 +303,11 @@ fn cornell_like(rng: &mut Rng) -> Built {
             BoxGeometry::new(tw, th, tw),
             Material::Standard(tall),
         ));
-        block.position = Vector3::new(rng.range(-spread, -0.08), th * 0.5, rng.range(-spread, 0.05));
+        block.position = Vector3::new(
+            rng.range(-spread, -0.08),
+            th * 0.5,
+            rng.range(-spread, 0.05),
+        );
         block.rotate_y(rng.range(-0.5, 0.6));
         scene.add(block);
         let mut short = StandardMaterial::new(Color::new(
@@ -510,7 +555,11 @@ fn add_objects(scene: &mut Scene, rng: &mut Rng, count: u32, spread: f32) {
                 material,
             ))
         };
-        obj.position = Vector3::new(rng.range(-spread, spread), radius, rng.range(-spread, spread));
+        obj.position = Vector3::new(
+            rng.range(-spread, spread),
+            radius,
+            rng.range(-spread, spread),
+        );
         obj.rotate_y(rng.range(0.0, 3.1));
         scene.add(obj);
     }

@@ -266,7 +266,14 @@ mod tests {
             .collect();
         assert_eq!(names.len(), count);
         // The tokens a layer of this shape has to contain.
-        for expected in ["defaultPrim", "Root", "Tri", "points", "faceVertexIndices", "Mesh"] {
+        for expected in [
+            "defaultPrim",
+            "Root",
+            "Tri",
+            "points",
+            "faceVertexIndices",
+            "Mesh",
+        ] {
             assert!(names.contains(&expected), "missing {expected} in {names:?}");
         }
     }
@@ -318,7 +325,11 @@ mod tests {
     #[test]
     fn repetition_compresses() {
         let packed = compress(&vec![0u8; 10_000]);
-        assert!(packed.len() < 200, "10k zeros became {} bytes", packed.len());
+        assert!(
+            packed.len() < 200,
+            "10k zeros became {} bytes",
+            packed.len()
+        );
 
         let text = b"the quick brown fox ".repeat(500);
         let packed = compress(&text);

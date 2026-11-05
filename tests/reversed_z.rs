@@ -22,7 +22,11 @@ const W: u32 = 160;
 const H: u32 = 120;
 
 fn host() -> Option<HeadlessRenderer> {
-    HeadlessRenderer::builder().size(W, H).build().ok()
+    let host = HeadlessRenderer::builder().size(W, H).build().ok();
+    if host.is_none() {
+        eprintln!("skipping: no GPU adapter");
+    }
+    host
 }
 
 fn camera() -> PerspectiveCamera {

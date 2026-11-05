@@ -365,7 +365,10 @@ impl WebScene {
                 });
                 *ls = line_of(g, ls.material.clone(), mode);
             }
-            ObjectKind::Group | ObjectKind::Light(_) | ObjectKind::Sprite(_) => {}
+            ObjectKind::Group
+            | ObjectKind::Light(_)
+            | ObjectKind::Sprite(_)
+            | ObjectKind::Audio(_) => {}
         }
     }
 
@@ -384,7 +387,7 @@ impl WebScene {
             ObjectKind::Points(x) => x.material = m,
             ObjectKind::LineSegments(x) => x.material = m,
             ObjectKind::Sprite(x) => x.material = m,
-            ObjectKind::Group | ObjectKind::Light(_) => {}
+            ObjectKind::Group | ObjectKind::Light(_) | ObjectKind::Audio(_) => {}
         }
     }
 
@@ -544,6 +547,7 @@ impl WebScene {
             ObjectKind::Sprite(_) => "sprite",
             ObjectKind::InstancedMesh(_) => "instanced",
             ObjectKind::SkinnedMesh(_) => "skinned",
+            ObjectKind::Audio(_) => "audio",
         };
         set("kind", JsValue::from_str(kind));
         if let Some(p) = o.parent {

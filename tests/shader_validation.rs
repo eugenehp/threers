@@ -30,7 +30,10 @@ fn validate(name: &str, source: &str) {
 
 #[test]
 fn main_mesh_shader_is_valid() {
-    validate("SHADER_SOURCE", threers::renderer::shader::legacy_shader_source());
+    validate(
+        "SHADER_SOURCE",
+        threers::renderer::shader::legacy_shader_source(),
+    );
 }
 
 #[test]
@@ -57,12 +60,25 @@ fn material_map_variants_are_valid() {
         all = all.with(role);
     }
     variants.push(all);
-    variants.push(MapVariant::default().with(MapRole::Map).with(MapRole::AlphaMap).with(MapRole::BumpMap));
-    variants.push(MapVariant::default().with(MapRole::NormalMap).with(MapRole::LightMap).with(MapRole::DisplacementMap));
+    variants.push(
+        MapVariant::default()
+            .with(MapRole::Map)
+            .with(MapRole::AlphaMap)
+            .with(MapRole::BumpMap),
+    );
+    variants.push(
+        MapVariant::default()
+            .with(MapRole::NormalMap)
+            .with(MapRole::LightMap)
+            .with(MapRole::DisplacementMap),
+    );
     variants.push(MapVariant::default().with_env());
     variants.push(all.with_env());
     for v in variants {
-        validate(&format!("SHADER_SOURCE {v:?}"), &shader_source_with_maps(&prelude(v)));
+        validate(
+            &format!("SHADER_SOURCE {v:?}"),
+            &shader_source_with_maps(&prelude(v)),
+        );
     }
 }
 
@@ -87,10 +103,16 @@ fn material_map_variants_translate_for_webgl2() {
     for v in variants {
         let source = shader_source_with_maps(&prelude(v));
         let module = naga::front::wgsl::parse_str(&source).expect("parses");
-        let info = naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
-            .validate(&module)
-            .expect("validates");
-        for (stage, entry) in [(naga::ShaderStage::Vertex, "vs_main"), (naga::ShaderStage::Fragment, "fs_main")] {
+        let info = naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .expect("validates");
+        for (stage, entry) in [
+            (naga::ShaderStage::Vertex, "vs_main"),
+            (naga::ShaderStage::Fragment, "fs_main"),
+        ] {
             // Pipeline-overridable constants at their defaults, resolved
             // first as wgpu resolves them: the GLSL writer takes none.
             let (module, info) = naga::back::pipeline_constants::process_overrides(
@@ -102,7 +124,10 @@ fn material_map_variants_translate_for_webgl2() {
             .unwrap_or_else(|e| panic!("{v:?} {entry}: {e}"));
             let (module, info) = (&*module, &*info);
             let options = naga::back::glsl::Options {
-                version: naga::back::glsl::Version::Embedded { version: 300, is_webgl: true },
+                version: naga::back::glsl::Version::Embedded {
+                    version: 300,
+                    is_webgl: true,
+                },
                 ..Default::default()
             };
             let pipeline = naga::back::glsl::PipelineOptions {
@@ -120,17 +145,33 @@ fn material_map_variants_translate_for_webgl2() {
                 naga::proc::BoundsCheckPolicies::default(),
             )
             .unwrap_or_else(|e| panic!("{v:?} {entry}: {e}"));
-            writer.write().unwrap_or_else(|e| panic!("{v:?} {entry}: {e}"));
+            writer
+                .write()
+                .unwrap_or_else(|e| panic!("{v:?} {entry}: {e}"));
             let bad: Vec<&str> = out
                 .match_indices("gl_")
-                .filter(|(i, _)| *i == 0 || !out.as_bytes()[i - 1].is_ascii_alphanumeric() && out.as_bytes()[i - 1] != b'_')
+                .filter(|(i, _)| {
+                    *i == 0
+                        || !out.as_bytes()[i - 1].is_ascii_alphanumeric()
+                            && out.as_bytes()[i - 1] != b'_'
+                })
                 .map(|(i, _)| {
-                    let end = out[i..].find(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).map_or(out.len(), |e| i + e);
+                    let end = out[i..]
+                        .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                        .map_or(out.len(), |e| i + e);
                     &out[i..end]
                 })
-                .filter(|name| !name.as_bytes().get(3).is_some_and(|c| c.is_ascii_uppercase()))
+                .filter(|name| {
+                    !name
+                        .as_bytes()
+                        .get(3)
+                        .is_some_and(|c| c.is_ascii_uppercase())
+                })
                 .collect();
-            assert!(bad.is_empty(), "{v:?} {entry}: GLSL names ANGLE rejects: {bad:?}");
+            assert!(
+                bad.is_empty(),
+                "{v:?} {entry}: GLSL names ANGLE rejects: {bad:?}"
+            );
         }
     }
 }

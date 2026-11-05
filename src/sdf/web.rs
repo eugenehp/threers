@@ -44,7 +44,16 @@ impl WebSdf {
     }
     /// From `a` to `b`, radius `ra` at `a` and `rb` at `b`.
     #[allow(clippy::too_many_arguments)]
-    pub fn capsule(ax: f32, ay: f32, az: f32, bx: f32, by: f32, bz: f32, ra: f32, rb: f32) -> WebSdf {
+    pub fn capsule(
+        ax: f32,
+        ay: f32,
+        az: f32,
+        bx: f32,
+        by: f32,
+        bz: f32,
+        ra: f32,
+        rb: f32,
+    ) -> WebSdf {
         Self::of(Shape::tapered_capsule(v(ax, ay, az), v(bx, by, bz), ra, rb))
     }
     pub fn torus(major: f32, minor: f32) -> WebSdf {
@@ -77,7 +86,11 @@ impl WebSdf {
         Self::of(self.inner.clone().translate(v(x, y, z)))
     }
     pub fn rotate(&self, qx: f32, qy: f32, qz: f32, qw: f32) -> WebSdf {
-        Self::of(self.inner.clone().rotate(Quaternion::new(qx, qy, qz, qw).normalize()))
+        Self::of(
+            self.inner
+                .clone()
+                .rotate(Quaternion::new(qx, qy, qz, qw).normalize()),
+        )
     }
     pub fn scale(&self, s: f32) -> WebSdf {
         Self::of(self.inner.clone().scale(s))
@@ -88,20 +101,31 @@ impl WebSdf {
     }
     /// The field at every point of a flat `[x, y, z, …]` array.
     pub fn distances(&self, points: &[f32]) -> Vec<f32> {
-        points.chunks_exact(3).map(|p| self.inner.distance(v(p[0], p[1], p[2]))).collect()
+        points
+            .chunks_exact(3)
+            .map(|p| self.inner.distance(v(p[0], p[1], p[2])))
+            .collect()
     }
     /// `[minX, minY, minZ, maxX, maxY, maxZ]`, or empty when unbounded.
     pub fn bounds(&self) -> Vec<f32> {
-        self.inner.bounds().map_or_else(Vec::new, |(a, b)| vec![a.x, a.y, a.z, b.x, b.y, b.z])
+        self.inner
+            .bounds()
+            .map_or_else(Vec::new, |(a, b)| vec![a.x, a.y, a.z, b.x, b.y, b.z])
     }
     /// Surface nets over the box (or the field's bounds, a cell of margin
     /// round them, when `bounds` is empty).
     #[wasm_bindgen(js_name = surfaceNets)]
     pub fn surface_nets(&self, cell: f32, bounds: &[f32]) -> Result<WebSurfaceNets, JsError> {
         let (lo, hi) = if bounds.len() == 6 {
-            (v(bounds[0], bounds[1], bounds[2]), v(bounds[3], bounds[4], bounds[5]))
+            (
+                v(bounds[0], bounds[1], bounds[2]),
+                v(bounds[3], bounds[4], bounds[5]),
+            )
         } else {
-            let (lo, hi) = self.inner.bounds().ok_or_else(|| JsError::new("this field has no end: give surfaceNets a box"))?;
+            let (lo, hi) = self
+                .inner
+                .bounds()
+                .ok_or_else(|| JsError::new("this field has no end: give surfaceNets a box"))?;
             let m = v(cell * 1.5, cell * 1.5, cell * 1.5);
             (lo - m, hi + m)
         };

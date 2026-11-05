@@ -133,9 +133,9 @@ pub mod build;
 pub mod clark;
 pub mod kinematics;
 pub mod rod;
-pub mod sorosim;
 #[cfg(feature = "openscad")]
 pub mod scad;
+pub mod sorosim;
 
 pub use build::{Continuum, TendonRoute, ROD_GROUP};
 pub use clark::Clark;

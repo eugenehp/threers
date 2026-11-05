@@ -282,7 +282,11 @@ fn srgb_to_linear_bytes() -> &'static [u8; 256] {
     LUT.get_or_init(|| {
         std::array::from_fn(|i| {
             let c = i as f32 / 255.0;
-            let l = if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) };
+            let l = if c <= 0.04045 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            };
             (l * 255.0).round() as u8
         })
     })

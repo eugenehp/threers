@@ -4,6 +4,7 @@
 
 use std::sync::Arc;
 
+use crate::decode::jobs::Slot;
 use crate::decode::picture::Plane;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -23,7 +24,10 @@ pub enum MbKind {
 impl MbKind {
     #[inline]
     pub fn is_intra(self) -> bool {
-        matches!(self, MbKind::I4x4 | MbKind::I8x8 | MbKind::I16x16 | MbKind::IPcm)
+        matches!(
+            self,
+            MbKind::I4x4 | MbKind::I8x8 | MbKind::I16x16 | MbKind::IPcm
+        )
     }
     #[inline]
     pub fn is_skip(self) -> bool {
@@ -327,6 +331,15 @@ pub struct RefPic {
     /// Fields marked "used for long-term reference".
     pub long: u8,
     pub lt_idx: u32,
+    /// With threads, where `planes` and `mbs` will come from: empty until a
+    /// job resolves it.
+    pub(crate) slot: Option<Arc<Slot<RefData>>>,
+}
+
+/// A finished frame, as later ones read it.
+pub(crate) struct RefData {
+    pub planes: Arc<[Plane; 3]>,
+    pub mbs: Arc<Vec<MbInfo>>,
 }
 
 impl RefPic {
@@ -345,7 +358,8 @@ impl RefPic {
             let mut out = Plane::new(p.width, h, 0);
             for y in 0..h {
                 let src = (2 * y + parity) * p.width;
-                out.data[y * p.width..(y + 1) * p.width].copy_from_slice(&p.data[src..src + p.width]);
+                out.data[y * p.width..(y + 1) * p.width]
+                    .copy_from_slice(&p.data[src..src + p.width]);
             }
             out
         };

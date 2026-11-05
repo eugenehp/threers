@@ -30,7 +30,11 @@ pub fn capsule(p: Vector3, a: Vector3, b: Vector3, r: f32) -> f32 {
     let ba = b - a;
     let pa = p - a;
     let len2 = ba.dot(ba);
-    let t = if len2 > 0.0 { (pa.dot(ba) / len2).clamp(0.0, 1.0) } else { 0.0 };
+    let t = if len2 > 0.0 {
+        (pa.dot(ba) / len2).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
     (pa - ba * t).length() - r
 }
 
@@ -43,7 +47,11 @@ pub fn tapered_capsule(p: Vector3, a: Vector3, b: Vector3, ra: f32, rb: f32) -> 
     let a2 = l2 - rr * rr;
     if a2 <= 0.0 {
         // One ball contains the other.
-        return if ra > rb { (p - a).length() - ra } else { (p - b).length() - rb };
+        return if ra > rb {
+            (p - a).length() - ra
+        } else {
+            (p - b).length() - rb
+        };
     }
     let il2 = 1.0 / l2;
     let pa = p - a;
@@ -120,23 +128,47 @@ mod tests {
         // On the axes the surface is at the radii, inside and out.
         assert!(ellipsoid(v(1.0, 0.0, 0.0), r).abs() < 1e-6);
         assert!(ellipsoid(v(0.0, -0.5, 0.0), r).abs() < 1e-6);
-        assert!((ellipsoid(v(0.0, 0.0, 3.0), r) - 1.0).abs() < 1e-6, "on an axis it is the axial gap");
+        assert!(
+            (ellipsoid(v(0.0, 0.0, 3.0), r) - 1.0).abs() < 1e-6,
+            "on an axis it is the axial gap"
+        );
         assert!((ellipsoid(v(0.0, 0.0, 0.0), r) + 0.5).abs() < 1e-6);
         // Equal radii: a sphere.
-        assert!((ellipsoid(v(0.3, -2.0, 0.7), v(0.9, 0.9, 0.9)) - sphere(v(0.3, -2.0, 0.7), 0.9)).abs() < 1e-5);
+        assert!(
+            (ellipsoid(v(0.3, -2.0, 0.7), v(0.9, 0.9, 0.9)) - sphere(v(0.3, -2.0, 0.7), 0.9)).abs()
+                < 1e-5
+        );
         // Never over: no point of the surface is nearer than the field says.
         // The surface, sampled densely, against points around it.
         let mut surf = Vec::new();
         for i in 0..64 {
             for j in 0..32 {
-                let (th, ph) = (i as f32 / 64.0 * std::f32::consts::TAU, (j as f32 + 0.5) / 32.0 * std::f32::consts::PI);
-                surf.push(v(r.x * ph.sin() * th.cos(), r.y * ph.cos(), r.z * ph.sin() * th.sin()));
+                let (th, ph) = (
+                    i as f32 / 64.0 * std::f32::consts::TAU,
+                    (j as f32 + 0.5) / 32.0 * std::f32::consts::PI,
+                );
+                surf.push(v(
+                    r.x * ph.sin() * th.cos(),
+                    r.y * ph.cos(),
+                    r.z * ph.sin() * th.sin(),
+                ));
             }
         }
-        for q in [v(1.5, 0.4, 0.2), v(-0.3, 1.1, 1.7), v(0.2, 0.1, -2.6), v(0.6, -0.9, 0.0)] {
-            let true_d = surf.iter().map(|s| (*s - q).length()).fold(f32::MAX, f32::min);
+        for q in [
+            v(1.5, 0.4, 0.2),
+            v(-0.3, 1.1, 1.7),
+            v(0.2, 0.1, -2.6),
+            v(0.6, -0.9, 0.0),
+        ] {
+            let true_d = surf
+                .iter()
+                .map(|s| (*s - q).length())
+                .fold(f32::MAX, f32::min);
             let d = ellipsoid(q, r);
-            assert!(d > 0.0 && d <= true_d + 2e-2, "at {q:?}: {d} against {true_d}");
+            assert!(
+                d > 0.0 && d <= true_d + 2e-2,
+                "at {q:?}: {d} against {true_d}"
+            );
         }
     }
 
@@ -151,7 +183,9 @@ mod tests {
         assert!((cylinder(v(5.0, 0.0, 0.0), 1.0, 2.0) - 3.0).abs() < 1e-6);
         assert!((cylinder(v(0.0, 0.0, 0.0), 1.0, 2.0) + 1.0).abs() < 1e-6);
         assert_eq!(plane(v(0.0, 3.0, 0.0), v(0.0, 1.0, 0.0), -1.0), 2.0);
-        assert!((capsule(v(1.0, 2.0, 0.0), v(0.0, 0.0, 0.0), v(3.0, 0.0, 0.0), 0.5) - 1.5).abs() < 1e-6);
+        assert!(
+            (capsule(v(1.0, 2.0, 0.0), v(0.0, 0.0, 0.0), v(3.0, 0.0, 0.0), 0.5) - 1.5).abs() < 1e-6
+        );
     }
 
     /// As in 2D: outside the hull of two balls, the distance is the least
@@ -185,6 +219,16 @@ mod tests {
             }
         }
         // Nested balls: the larger one.
-        assert!((tapered_capsule(v(4.0, 0.0, 0.0), v(0.0, 0.0, 0.0), v(0.5, 0.0, 0.0), 2.0, 1.0) - 2.0).abs() < 1e-6);
+        assert!(
+            (tapered_capsule(
+                v(4.0, 0.0, 0.0),
+                v(0.0, 0.0, 0.0),
+                v(0.5, 0.0, 0.0),
+                2.0,
+                1.0
+            ) - 2.0)
+                .abs()
+                < 1e-6
+        );
     }
 }

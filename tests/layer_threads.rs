@@ -6,7 +6,12 @@
 //! window, which is enough for Metal to vend drawables, so this runs headless
 //! on a Mac and in the iOS, tvOS and visionOS simulators alike.
 
-#![cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos", target_os = "visionos"))]
+#![cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "tvos",
+    target_os = "visionos"
+))]
 
 use std::ffi::{c_char, c_void};
 use std::sync::{Arc, Barrier};
@@ -45,7 +50,10 @@ impl Layer {
             let pool = objc_autoreleasePoolPush();
             let send: unsafe extern "C" fn(*mut c_void, *const c_void) -> *mut c_void =
                 std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
-            let layer = send(objc_getClass(class.as_ptr()), sel_registerName(c"layer".as_ptr()));
+            let layer = send(
+                objc_getClass(class.as_ptr()),
+                sel_registerName(c"layer".as_ptr()),
+            );
             assert!(!layer.is_null(), "{class:?}");
             let layer = objc_retain(layer);
             objc_autoreleasePoolPop(pool);
@@ -120,7 +128,9 @@ fn camera() -> PerspectiveCamera {
 
 /// Draw `frames` frames, returning how many reached the layer.
 fn draw(view: &mut LayerRenderer, scene: &mut Scene, frames: usize) -> usize {
-    (0..frames).filter(|_| view.render(scene, &camera())).count()
+    (0..frames)
+        .filter(|_| view.render(scene, &camera()))
+        .count()
 }
 
 #[test]
@@ -185,7 +195,9 @@ fn a_layer_that_is_not_metal_is_an_error_not_a_crash() {
     let Some(gpu) = gpu() else { return };
     let plain = Layer::new(c"CALayer");
     for layer in [plain.ptr(), std::ptr::null_mut()] {
-        let err = unsafe { LayerRenderer::new(&gpu, layer, 8, 8, 1) }.err().expect("an error");
+        let err = unsafe { LayerRenderer::new(&gpu, layer, 8, 8, 1) }
+            .err()
+            .expect("an error");
         assert!(err.contains("CAMetalLayer"), "{err}");
     }
 }
@@ -199,27 +211,45 @@ fn no_object_is_autoreleased_without_a_pool() {
         return;
     }
     let out = std::process::Command::new(std::env::current_exe().unwrap())
-        .args(["--skip", "no_object_is_autoreleased_without_a_pool", "--nocapture"])
+        .args([
+            "--skip",
+            "no_object_is_autoreleased_without_a_pool",
+            "--nocapture",
+        ])
         .env("OBJC_DEBUG_MISSING_POOLS", "YES")
         .env("THREERS_POOL_CHECK", "1")
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success(), "the rerun failed:\n{stderr}");
-    let ours: std::collections::HashSet<&str> =
-        stderr.lines().filter_map(|l| l.strip_prefix("THREERS_THREAD ")).collect();
-    assert!(ours.len() >= 6, "the rerun named too few threads: {}", ours.len());
+    let ours: std::collections::HashSet<&str> = stderr
+        .lines()
+        .filter_map(|l| l.strip_prefix("THREERS_THREAD "))
+        .collect();
+    assert!(
+        ours.len() >= 6,
+        "the rerun named too few threads: {}",
+        ours.len()
+    );
     let missing: Vec<_> = stderr
         .lines()
         .filter(|l| l.contains("MISSING POOLS"))
         .filter(|l| {
-            l.split('(').nth(1).and_then(|r| r.split(')').next()).is_some_and(|t| ours.contains(t))
+            l.split('(')
+                .nth(1)
+                .and_then(|r| r.split(')').next())
+                .is_some_and(|t| ours.contains(t))
         })
         .collect();
     assert!(
         missing.is_empty(),
         "{} objects autoreleased with no pool, first:\n{}",
         missing.len(),
-        missing.iter().take(5).copied().collect::<Vec<_>>().join("\n")
+        missing
+            .iter()
+            .take(5)
+            .copied()
+            .collect::<Vec<_>>()
+            .join("\n")
     );
 }

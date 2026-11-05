@@ -365,8 +365,7 @@ mod tests {
         let l = 0.5f32;
         let angle = 1.0f32;
         let a = piecewise_constant_curvature(&[(l, angle, 0.0)]).position;
-        let b =
-            piecewise_constant_curvature(&[(l, angle, std::f32::consts::FRAC_PI_2)]).position;
+        let b = piecewise_constant_curvature(&[(l, angle, std::f32::consts::FRAC_PI_2)]).position;
         assert!(a.x > 0.01 && a.z.abs() < 1e-5, "{a:?}");
         assert!(b.z < -0.01 && b.x.abs() < 1e-5, "{b:?}");
         assert!(
@@ -397,8 +396,7 @@ mod tests {
         // Closed loop on the analytic model itself: not a physics test, a test
         // that the Jacobian and the solve agree about which way is downhill.
         let mut control =
-            TipController::new(vec![crate::clark::Clark::new(3, 0.004, 0.0)], vec![0.3])
-                .slew(1.0);
+            TipController::new(vec![crate::clark::Clark::new(3, 0.004, 0.0)], vec![0.3]).slew(1.0);
         let target = piecewise_constant_curvature(&[(0.3, 0.6, 0.9)]).position;
 
         let start = (control.predicted_tip() - target).length();

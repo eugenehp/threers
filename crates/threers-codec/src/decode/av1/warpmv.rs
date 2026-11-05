@@ -34,14 +34,22 @@ fn iclip_wmp(v: i32) -> i16 {
 fn resolve_divisor_32(d: u32) -> (i32, i32) {
     let mut shift = 31 - d.leading_zeros() as i32;
     let e = d as i32 - (1 << shift);
-    let f = if shift > 8 { (e + (1 << (shift - 9))) >> (shift - 8) } else { e << (8 - shift) };
+    let f = if shift > 8 {
+        (e + (1 << (shift - 9))) >> (shift - 8)
+    } else {
+        e << (8 - shift)
+    };
     shift += 14;
     (DIV_LUT[f as usize] as i32, shift)
 }
 
 #[inline]
 fn sign64(v: i32, s: i64) -> i32 {
-    if s < 0 { -v } else { v }
+    if s < 0 {
+        -v
+    } else {
+        v
+    }
 }
 
 /// `dav1d_get_shear_params`: true if the model is invalid.
@@ -66,19 +74,35 @@ pub fn get_shear_params(wm: &mut WarpedMotionParams) -> bool {
 fn resolve_divisor_64(d: u64) -> (i32, i32) {
     let mut shift = 63 - d.leading_zeros() as i32;
     let e = d as i64 - (1i64 << shift);
-    let f = if shift > 8 { (e + (1i64 << (shift - 9))) >> (shift - 8) } else { e << (8 - shift) };
+    let f = if shift > 8 {
+        (e + (1i64 << (shift - 9))) >> (shift - 8)
+    } else {
+        e << (8 - shift)
+    };
     shift += 14;
     (DIV_LUT[f as usize] as i32, shift)
 }
 
 fn get_mult_shift(px: i64, idet: i32, shift: i32, lo: i32, hi: i32) -> i32 {
     let v1 = px.wrapping_mul(idet as i64);
-    let v2 = sign64(((v1.unsigned_abs() as i64 + ((1i64 << shift) >> 1)) >> shift) as i32, v1);
+    let v2 = sign64(
+        ((v1.unsigned_abs() as i64 + ((1i64 << shift) >> 1)) >> shift) as i32,
+        v1,
+    );
     v2.clamp(lo, hi)
 }
 
 /// `dav1d_find_affine_int`: true on failure.
-pub fn find_affine_int(pts: &[[[i32; 2]; 2]], np: usize, bw4: i32, bh4: i32, mv: Mv, wm: &mut WarpedMotionParams, bx4: i32, by4: i32) -> bool {
+pub fn find_affine_int(
+    pts: &[[[i32; 2]; 2]],
+    np: usize,
+    bw4: i32,
+    bh4: i32,
+    mv: Mv,
+    wm: &mut WarpedMotionParams,
+    bx4: i32,
+    by4: i32,
+) -> bool {
     let mut a = [[0i32; 2]; 2];
     let mut bx = [0i32; 2];
     let mut by = [0i32; 2];
@@ -117,11 +141,37 @@ pub fn find_affine_int(pts: &[[[i32; 2]; 2]], np: usize, bw4: i32, bh4: i32, mv:
         shift = 0;
     }
     let mat = &mut wm.matrix;
-    mat[2] = get_mult_shift(a[1][1] as i64 * bx[0] as i64 - a[0][1] as i64 * bx[1] as i64, idet, shift, 0xe001, 0x11fff);
-    mat[3] = get_mult_shift(a[0][0] as i64 * bx[1] as i64 - a[0][1] as i64 * bx[0] as i64, idet, shift, -0x1fff, 0x1fff);
-    mat[4] = get_mult_shift(a[1][1] as i64 * by[0] as i64 - a[0][1] as i64 * by[1] as i64, idet, shift, -0x1fff, 0x1fff);
-    mat[5] = get_mult_shift(a[0][0] as i64 * by[1] as i64 - a[0][1] as i64 * by[0] as i64, idet, shift, 0xe001, 0x11fff);
-    mat[0] = (mv.x as i32 * 0x2000 - (isux * (mat[2] - 0x10000) + isuy * mat[3])).clamp(-0x800000, 0x7fffff);
-    mat[1] = (mv.y as i32 * 0x2000 - (isux * mat[4] + isuy * (mat[5] - 0x10000))).clamp(-0x800000, 0x7fffff);
+    mat[2] = get_mult_shift(
+        a[1][1] as i64 * bx[0] as i64 - a[0][1] as i64 * bx[1] as i64,
+        idet,
+        shift,
+        0xe001,
+        0x11fff,
+    );
+    mat[3] = get_mult_shift(
+        a[0][0] as i64 * bx[1] as i64 - a[0][1] as i64 * bx[0] as i64,
+        idet,
+        shift,
+        -0x1fff,
+        0x1fff,
+    );
+    mat[4] = get_mult_shift(
+        a[1][1] as i64 * by[0] as i64 - a[0][1] as i64 * by[1] as i64,
+        idet,
+        shift,
+        -0x1fff,
+        0x1fff,
+    );
+    mat[5] = get_mult_shift(
+        a[0][0] as i64 * by[1] as i64 - a[0][1] as i64 * by[0] as i64,
+        idet,
+        shift,
+        0xe001,
+        0x11fff,
+    );
+    mat[0] = (mv.x as i32 * 0x2000 - (isux * (mat[2] - 0x10000) + isuy * mat[3]))
+        .clamp(-0x800000, 0x7fffff);
+    mat[1] = (mv.y as i32 * 0x2000 - (isux * mat[4] + isuy * (mat[5] - 0x10000)))
+        .clamp(-0x800000, 0x7fffff);
     false
 }

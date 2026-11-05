@@ -29,7 +29,12 @@ pub struct RefmvsBlock {
 
 impl Default for RefmvsBlock {
     fn default() -> Self {
-        RefmvsBlock { mv: [Mv::ZERO; 2], r: [0, -1], bs: 0, mf: 0 }
+        RefmvsBlock {
+            mv: [Mv::ZERO; 2],
+            r: [0, -1],
+            bs: 0,
+            mf: 0,
+        }
     }
 }
 
@@ -39,6 +44,7 @@ pub struct RefmvsCandidate {
     pub weight: i32,
 }
 
+#[derive(Clone)]
 pub struct RefmvsFrame {
     pub iw4: i32,
     pub ih4: i32,
@@ -63,6 +69,7 @@ pub struct RefmvsFrame {
     pub r_stride: usize,
 }
 
+#[derive(Clone)]
 pub struct RefmvsTile {
     pub col_start: i32,
     pub col_end: i32,
@@ -72,7 +79,13 @@ pub struct RefmvsTile {
 
 impl RefmvsFrame {
     /// `dav1d_refmvs_init_frame`.
-    pub fn new(seq: &SeqHeader, hdr: &FrameHeader, ref_poc: &[u32; 7], ref_ref_poc: &[[u32; 7]; 7], rp_ref: [Option<Arc<Vec<TemporalBlock>>>; 7]) -> Self {
+    pub fn new(
+        seq: &SeqHeader,
+        hdr: &FrameHeader,
+        ref_poc: &[u32; 7],
+        ref_ref_poc: &[[u32; 7]; 7],
+        rp_ref: [Option<Arc<Vec<TemporalBlock>>>; 7],
+    ) -> Self {
         let rp_stride = (((hdr.width[0] + 127) & !127) >> 3) as usize;
         let iw8 = (hdr.width[0] + 7) >> 3;
         let ih8 = (hdr.height + 7) >> 3;
@@ -121,7 +134,8 @@ impl RefmvsFrame {
             if rr[5].is_some() && get_poc_diff(nb, ref_poc[5] as i32, poc) > 0 {
                 refs.push(5);
             }
-            if refs.len() < total && rr[6].is_some() && get_poc_diff(nb, ref_poc[6] as i32, poc) > 0 {
+            if refs.len() < total && rr[6].is_some() && get_poc_diff(nb, ref_poc[6] as i32, poc) > 0
+            {
                 refs.push(6);
             }
             if refs.len() < total && rr[1].is_some() {
@@ -209,7 +223,9 @@ impl RefmvsFrame {
                         let pos = pos_y as usize * stride;
                         loop {
                             let x_sb_align = x & !7;
-                            if pos_x >= (x_sb_align - 8).max(col_start8) && pos_x < (x_sb_align + 16).min(col_end8) {
+                            if pos_x >= (x_sb_align - 8).max(col_start8)
+                                && pos_x < (x_sb_align + 16).min(col_end8)
+                            {
                                 let t = &mut self.rp_proj[pos + pos_x as usize];
                                 t.mv = row[rb].mv;
                                 t.r = ref2ref as i8;
@@ -253,12 +269,20 @@ impl RefmvsFrame {
                 let c = self.r[b + x as usize * 2 + 1];
                 let bw8 = (BLOCK_DIMENSIONS[c.bs as usize][0] as i32 + 1) >> 1;
                 let ok = |k: usize| {
-                    c.r[k] > 0 && self.mfmv_sign[c.r[k] as usize - 1] != 0 && ((c.mv[k].y as i32).abs() | (c.mv[k].x as i32).abs()) < 4096
+                    c.r[k] > 0
+                        && self.mfmv_sign[c.r[k] as usize - 1] != 0
+                        && ((c.mv[k].y as i32).abs() | (c.mv[k].x as i32).abs()) < 4096
                 };
                 let t = if ok(1) {
-                    TemporalBlock { mv: c.mv[1], r: c.r[1] }
+                    TemporalBlock {
+                        mv: c.mv[1],
+                        r: c.r[1],
+                    }
                 } else if ok(0) {
-                    TemporalBlock { mv: c.mv[0], r: c.r[0] }
+                    TemporalBlock {
+                        mv: c.mv[0],
+                        r: c.r[0],
+                    }
                 } else {
                     TemporalBlock { mv: Mv::ZERO, r: 0 }
                 };
@@ -273,13 +297,16 @@ impl RefmvsFrame {
 
 fn mv_projection(mv: Mv, num: i32, den: i32) -> Mv {
     const DIV_MULT: [u16; 32] = [
-        0, 16384, 8192, 5461, 4096, 3276, 2730, 2340, 2048, 1820, 1638, 1489, 1365, 1260, 1170, 1092, 1024, 963, 910, 862, 819, 780,
-        744, 712, 682, 655, 630, 606, 585, 564, 546, 528,
+        0, 16384, 8192, 5461, 4096, 3276, 2730, 2340, 2048, 1820, 1638, 1489, 1365, 1260, 1170,
+        1092, 1024, 963, 910, 862, 819, 780, 744, 712, 682, 655, 630, 606, 585, 564, 546, 528,
     ];
     let frac = num * DIV_MULT[den as usize] as i32;
     let y = mv.y as i32 * frac;
     let x = mv.x as i32 * frac;
-    Mv { y: ((y + 8192 + (y >> 31)) >> 14).clamp(-0x3fff, 0x3fff) as i16, x: ((x + 8192 + (x >> 31)) >> 14).clamp(-0x3fff, 0x3fff) as i16 }
+    Mv {
+        y: ((y + 8192 + (y >> 31)) >> 14).clamp(-0x3fff, 0x3fff) as i16,
+        x: ((x + 8192 + (x >> 31)) >> 14).clamp(-0x3fff, 0x3fff) as i16,
+    }
 }
 
 struct Find<'a> {
@@ -300,7 +327,11 @@ impl Find<'_> {
         if self.r[1] == -1 {
             for n in 0..2 {
                 if b.r[n] == self.r[0] {
-                    let cand = if b.mf & 1 != 0 && gmv[0] != Mv::INVALID { gmv[0] } else { b.mv[n] };
+                    let cand = if b.mf & 1 != 0 && gmv[0] != Mv::INVALID {
+                        gmv[0]
+                    } else {
+                        b.mv[n]
+                    };
                     *row_match = true;
                     if newmv {
                         self.have_newmv |= b.mf >> 1 != 0;
@@ -322,8 +353,16 @@ impl Find<'_> {
             }
         } else if b.r == self.r {
             let cand = [
-                if b.mf & 1 != 0 && gmv[0] != Mv::INVALID { gmv[0] } else { b.mv[0] },
-                if b.mf & 1 != 0 && gmv[1] != Mv::INVALID { gmv[1] } else { b.mv[1] },
+                if b.mf & 1 != 0 && gmv[0] != Mv::INVALID {
+                    gmv[0]
+                } else {
+                    b.mv[0]
+                },
+                if b.mf & 1 != 0 && gmv[1] != Mv::INVALID {
+                    gmv[1]
+                } else {
+                    b.mv[1]
+                },
             ];
             *row_match = true;
             if newmv {
@@ -345,14 +384,28 @@ impl Find<'_> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn scan_row(&mut self, y4: i32, x4: i32, bw4: i32, w4: i32, max_rows: i32, step: i32, m: &mut bool, newmv: bool) -> u32 {
+    fn scan_row(
+        &mut self,
+        y4: i32,
+        x4: i32,
+        bw4: i32,
+        w4: i32,
+        max_rows: i32,
+        step: i32,
+        m: &mut bool,
+        newmv: bool,
+    ) -> u32 {
         let rf = self.rf;
         let first = *rf.blk(y4, x4);
         let fdim = BLOCK_DIMENSIONS[first.bs as usize];
         let cand_bw4 = fdim[0] as i32;
         let mut len = step.max(bw4.min(cand_bw4));
         if bw4 <= cand_bw4 {
-            let weight = if bw4 == 1 { 2 } else { 2.max((2 * max_rows).min(fdim[1] as i32)) };
+            let weight = if bw4 == 1 {
+                2
+            } else {
+                2.max((2 * max_rows).min(fdim[1] as i32))
+            };
             self.add_spatial(len * weight, &first, m, newmv);
             return (weight >> 1) as u32;
         }
@@ -370,14 +423,28 @@ impl Find<'_> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn scan_col(&mut self, y4: i32, x4: i32, bh4: i32, h4: i32, max_cols: i32, step: i32, m: &mut bool, newmv: bool) -> u32 {
+    fn scan_col(
+        &mut self,
+        y4: i32,
+        x4: i32,
+        bh4: i32,
+        h4: i32,
+        max_cols: i32,
+        step: i32,
+        m: &mut bool,
+        newmv: bool,
+    ) -> u32 {
         let rf = self.rf;
         let first = *rf.blk(y4, x4);
         let fdim = BLOCK_DIMENSIONS[first.bs as usize];
         let cand_bh4 = fdim[1] as i32;
         let mut len = step.max(bh4.min(cand_bh4));
         if bh4 <= cand_bh4 {
-            let weight = if bh4 == 1 { 2 } else { 2.max((2 * max_cols).min(fdim[0] as i32)) };
+            let weight = if bh4 == 1 {
+                2
+            } else {
+                2.max((2 * max_cols).min(fdim[0] as i32))
+            };
             self.add_spatial(len * weight, &first, m, newmv);
             return (weight >> 1) as u32;
         }
@@ -394,17 +461,29 @@ impl Find<'_> {
         }
     }
 
-    fn add_temporal(&mut self, hdr: &FrameHeader, rb: &TemporalBlock, globalmv_ctx: Option<&mut i32>, tgmv: &[Mv; 2]) {
+    fn add_temporal(
+        &mut self,
+        hdr: &FrameHeader,
+        rb: &TemporalBlock,
+        globalmv_ctx: Option<&mut i32>,
+        tgmv: &[Mv; 2],
+    ) {
         if rb.mv == Mv::INVALID {
             return;
         }
         let rf = self.rf;
-        let mut mv = mv_projection(rb.mv, rf.pocdiff[self.r[0] as usize - 1] as i32, rb.r as i32);
+        let mut mv = mv_projection(
+            rb.mv,
+            rf.pocdiff[self.r[0] as usize - 1] as i32,
+            rb.r as i32,
+        );
         fix_mv_precision(hdr, &mut mv);
         let last = self.cnt;
         if self.r[1] == -1 {
             if let Some(g) = globalmv_ctx {
-                *g = (((mv.x as i32 - tgmv[0].x as i32).abs() | (mv.y as i32 - tgmv[0].y as i32).abs()) >= 16) as i32;
+                *g = (((mv.x as i32 - tgmv[0].x as i32).abs()
+                    | (mv.y as i32 - tgmv[0].y as i32).abs())
+                    >= 16) as i32;
             }
             for n in 0..last {
                 if self.stack[n].mv[0] == mv {
@@ -418,7 +497,11 @@ impl Find<'_> {
                 self.cnt = last + 1;
             }
         } else {
-            let mut mv1 = mv_projection(rb.mv, rf.pocdiff[self.r[1] as usize - 1] as i32, rb.r as i32);
+            let mut mv1 = mv_projection(
+                rb.mv,
+                rf.pocdiff[self.r[1] as usize - 1] as i32,
+                rb.r as i32,
+            );
             fix_mv_precision(hdr, &mut mv1);
             let p = [mv, mv1];
             for n in 0..last {
@@ -437,12 +520,24 @@ impl Find<'_> {
 }
 
 fn neg(m: Mv) -> Mv {
-    Mv { y: m.y.wrapping_neg(), x: m.x.wrapping_neg() }
+    Mv {
+        y: m.y.wrapping_neg(),
+        x: m.x.wrapping_neg(),
+    }
 }
 
 /// `add_compound_extended_candidate`: `same` is stack[base..base+2],
 /// `diff` stack[base+2..base+4].
-fn add_compound_extended(st: &mut [RefmvsCandidate; 9], base: usize, cnt: &mut [usize; 4], c: &RefmvsBlock, s0: u8, s1: u8, r: [i8; 2], sign_bias: &[u8; 7]) {
+fn add_compound_extended(
+    st: &mut [RefmvsCandidate; 9],
+    base: usize,
+    cnt: &mut [usize; 4],
+    c: &RefmvsBlock,
+    s0: u8,
+    s1: u8,
+    r: [i8; 2],
+    sign_bias: &[u8; 7],
+) {
     for n in 0..2 {
         let cr = c.r[n];
         if cr <= 0 {
@@ -488,7 +583,13 @@ fn add_compound_extended(st: &mut [RefmvsCandidate; 9], base: usize, cnt: &mut [
     }
 }
 
-fn add_single_extended(st: &mut [RefmvsCandidate; 9], cnt: &mut usize, c: &RefmvsBlock, sign: u8, sign_bias: &[u8; 7]) {
+fn add_single_extended(
+    st: &mut [RefmvsCandidate; 9],
+    cnt: &mut usize,
+    c: &RefmvsBlock,
+    sign: u8,
+    sign_bias: &[u8; 7],
+) {
     for n in 0..2 {
         let cr = c.r[n];
         if cr <= 0 {
@@ -509,7 +610,16 @@ fn add_single_extended(st: &mut [RefmvsCandidate; 9], cnt: &mut usize, c: &Refmv
 
 /// `dav1d_refmvs_find`: (candidate stack, count, context).
 #[allow(clippy::too_many_arguments)]
-pub fn find(rf: &RefmvsFrame, hdr: &FrameHeader, rt: &RefmvsTile, r: [i8; 2], bs: usize, edge_flags: u8, by4: i32, bx4: i32) -> ([RefmvsCandidate; 8], usize, i32) {
+pub fn find(
+    rf: &RefmvsFrame,
+    hdr: &FrameHeader,
+    rt: &RefmvsTile,
+    r: [i8; 2],
+    bs: usize,
+    edge_flags: u8,
+    by4: i32,
+    bx4: i32,
+) -> ([RefmvsCandidate; 8], usize, i32) {
     let b_dim = BLOCK_DIMENSIONS[bs];
     let bw4 = b_dim[0] as i32;
     let w4 = bw4.min(16).min(rt.col_end - bx4);
@@ -520,29 +630,66 @@ pub fn find(rf: &RefmvsFrame, hdr: &FrameHeader, rt: &RefmvsTile, r: [i8; 2], bs
     if r[0] > 0 {
         let g = &hdr.gmv[r[0] as usize - 1];
         tgmv[0] = get_gmv_2d(g, bx4, by4, bw4, bh4, hdr);
-        gmv[0] = if g.typ > WM_TRANSLATION { tgmv[0] } else { Mv::INVALID };
+        gmv[0] = if g.typ > WM_TRANSLATION {
+            tgmv[0]
+        } else {
+            Mv::INVALID
+        };
     }
     if r[1] > 0 {
         let g = &hdr.gmv[r[1] as usize - 1];
         tgmv[1] = get_gmv_2d(g, bx4, by4, bw4, bh4, hdr);
-        gmv[1] = if g.typ > WM_TRANSLATION { tgmv[1] } else { Mv::INVALID };
+        gmv[1] = if g.typ > WM_TRANSLATION {
+            tgmv[1]
+        } else {
+            Mv::INVALID
+        };
     }
-    let mut f = Find { stack: [RefmvsCandidate::default(); 9], cnt: 0, r, gmv, have_newmv: false, rf };
+    let mut f = Find {
+        stack: [RefmvsCandidate::default(); 9],
+        cnt: 0,
+        r,
+        gmv,
+        have_newmv: false,
+        rf,
+    };
 
     let (mut have_col_mvs, mut have_row_mvs) = (false, false);
     let mut max_rows = 0;
     let mut n_rows = !0u32;
     if by4 > rt.row_start {
         max_rows = ((by4 - rt.row_start + 1) >> 1).min(2 + (bh4 > 1) as i32);
-        n_rows = f.scan_row(by4 - 1, bx4, bw4, w4, max_rows, if bw4 >= 16 { 4 } else { 1 }, &mut have_row_mvs, true);
+        n_rows = f.scan_row(
+            by4 - 1,
+            bx4,
+            bw4,
+            w4,
+            max_rows,
+            if bw4 >= 16 { 4 } else { 1 },
+            &mut have_row_mvs,
+            true,
+        );
     }
     let mut max_cols = 0;
     let mut n_cols = !0u32;
     if bx4 > rt.col_start {
         max_cols = ((bx4 - rt.col_start + 1) >> 1).min(2 + (bw4 > 1) as i32);
-        n_cols = f.scan_col(by4, bx4 - 1, bh4, h4, max_cols, if bh4 >= 16 { 4 } else { 1 }, &mut have_col_mvs, true);
+        n_cols = f.scan_col(
+            by4,
+            bx4 - 1,
+            bh4,
+            h4,
+            max_cols,
+            if bh4 >= 16 { 4 } else { 1 },
+            &mut have_col_mvs,
+            true,
+        );
     }
-    if n_rows != !0 && edge_flags & EDGE_I444_TOP_HAS_RIGHT != 0 && bw4.max(bh4) <= 16 && bw4 + bx4 < rt.col_end {
+    if n_rows != !0
+        && edge_flags & EDGE_I444_TOP_HAS_RIGHT != 0
+        && bw4.max(bh4) <= 16
+        && bw4 + bx4 < rt.col_end
+    {
         let b = *rf.blk(by4 - 1, bx4 + bw4);
         f.add_spatial(4, &b, &mut have_row_mvs, true);
     }
@@ -608,11 +755,29 @@ pub fn find(rf: &RefmvsFrame, hdr: &FrameHeader, rt: &RefmvsTile, r: [i8; 2], bs
     for n in 2..=3u32 {
         if n > n_rows && n as i32 <= max_rows {
             let y4 = by4 - (by4 & 31) + (((by4 & 31) - 2 * n as i32 + 1) | 1);
-            n_rows = n_rows.wrapping_add(f.scan_row(y4, bx4 | 1, bw4, w4, 1 + max_rows - n as i32, if bw4 >= 16 { 4 } else { 2 }, &mut have_row_mvs, false));
+            n_rows = n_rows.wrapping_add(f.scan_row(
+                y4,
+                bx4 | 1,
+                bw4,
+                w4,
+                1 + max_rows - n as i32,
+                if bw4 >= 16 { 4 } else { 2 },
+                &mut have_row_mvs,
+                false,
+            ));
         }
         if n > n_cols && n as i32 <= max_cols {
             let y4 = by4 - (by4 & 31) + ((by4 & 31) | 1);
-            n_cols = n_cols.wrapping_add(f.scan_col(y4, (bx4 - n as i32 * 2 + 1) | 1, bh4, h4, 1 + max_cols - n as i32, if bh4 >= 16 { 4 } else { 2 }, &mut have_col_mvs, false));
+            n_cols = n_cols.wrapping_add(f.scan_col(
+                y4,
+                (bx4 - n as i32 * 2 + 1) | 1,
+                bh4,
+                h4,
+                1 + max_cols - n as i32,
+                if bh4 >= 16 { 4 } else { 2 },
+                &mut have_col_mvs,
+                false,
+            ));
         }
     }
     let ref_match_count = have_col_mvs as i32 + have_row_mvs as i32;

@@ -14,7 +14,14 @@ pub struct Scratch {
 
 /// A view of the `ww × wh` window at `(x0, y0)`: straight into the plane
 /// when it lies inside, otherwise an edge-clamped copy in `win`.
-fn view<'a>(p: &'a Plane, x0: isize, y0: isize, ww: usize, wh: usize, win: &'a mut Vec<u16>) -> (&'a [u16], usize, usize) {
+fn view<'a>(
+    p: &'a Plane,
+    x0: isize,
+    y0: isize,
+    ww: usize,
+    wh: usize,
+    win: &'a mut Vec<u16>,
+) -> (&'a [u16], usize, usize) {
     if x0 >= 0 && y0 >= 0 && x0 as usize + ww <= p.width && y0 as usize + wh <= p.height {
         return (&p.data, p.width, y0 as usize * p.width + x0 as usize);
     }
@@ -78,8 +85,11 @@ fn interp_n<const T: usize>(
         }
         (0, _) => {
             for r in 0..h {
-                let rows: [&[u16]; T] = std::array::from_fn(|k| &src[base + (r + k) * stride + half..][..w]);
-                vfilter(fy, &rows, &mut out[r * w..r * w + w], |a| (a >> shift1) as i16);
+                let rows: [&[u16]; T] =
+                    std::array::from_fn(|k| &src[base + (r + k) * stride + half..][..w]);
+                vfilter(fy, &rows, &mut out[r * w..r * w + w], |a| {
+                    (a >> shift1) as i16
+                });
             }
         }
         _ => {
@@ -96,7 +106,8 @@ fn interp_n<const T: usize>(
                 }
             }
             for r in 0..h {
-                let rows: [&[i32]; T] = std::array::from_fn(|k| &s.tmp[(r + k) * w..(r + k) * w + w]);
+                let rows: [&[i32]; T] =
+                    std::array::from_fn(|k| &s.tmp[(r + k) * w..(r + k) * w + w]);
                 vfilter(fy, &rows, &mut out[r * w..r * w + w], |a| (a >> 6) as i16);
             }
         }
@@ -123,7 +134,12 @@ fn hfilter<const T: usize>(f: &[i32; T], row: &[u16], acc: &mut [i32]) {
 /// `out[c] = fin(Σ f[k] · rows[k][c])`: the vertical pass, one output per
 /// column in a single sweep.
 #[inline(always)]
-fn vfilter<const T: usize, V: Copy + Into<i32>>(f: &[i32; T], rows: &[&[V]; T], out: &mut [i16], fin: impl Fn(i32) -> i16) {
+fn vfilter<const T: usize, V: Copy + Into<i32>>(
+    f: &[i32; T],
+    rows: &[&[V]; T],
+    out: &mut [i16],
+    fin: impl Fn(i32) -> i16,
+) {
     for (c, o) in out.iter_mut().enumerate() {
         let mut v = 0;
         for k in 0..T {
@@ -150,9 +166,35 @@ pub fn interp(
     s: &mut Scratch,
 ) {
     if luma {
-        interp_n(p, x, y, &LUMA_FILTER[xf], &LUMA_FILTER[yf], xf, yf, w, h, bd, out, s);
+        interp_n(
+            p,
+            x,
+            y,
+            &LUMA_FILTER[xf],
+            &LUMA_FILTER[yf],
+            xf,
+            yf,
+            w,
+            h,
+            bd,
+            out,
+            s,
+        );
     } else {
-        interp_n(p, x, y, &CHROMA_FILTER[xf], &CHROMA_FILTER[yf], xf, yf, w, h, bd, out, s);
+        interp_n(
+            p,
+            x,
+            y,
+            &CHROMA_FILTER[xf],
+            &CHROMA_FILTER[yf],
+            xf,
+            yf,
+            w,
+            h,
+            bd,
+            out,
+            s,
+        );
     }
 }
 

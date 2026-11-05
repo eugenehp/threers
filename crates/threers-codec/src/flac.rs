@@ -5,7 +5,12 @@
 //! so the integer samples are the encoder's exactly.
 
 // Ported loop structure is kept as in the C reference.
-#![allow(clippy::needless_range_loop, clippy::manual_memcpy, clippy::unnecessary_cast, clippy::manual_is_multiple_of)]
+#![allow(
+    clippy::needless_range_loop,
+    clippy::manual_memcpy,
+    clippy::unnecessary_cast,
+    clippy::manual_is_multiple_of
+)]
 
 /// The `STREAMINFO` metadata block.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,7 +42,10 @@ impl Flac {
     /// `int / 2^(bits-1)` (libsndfile's float normalisation), per channel.
     pub fn to_f32(&self) -> Vec<Vec<f32>> {
         let s = (1u64 << (self.info.bits_per_sample - 1)) as f64;
-        self.channels.iter().map(|c| c.iter().map(|&v| (v as f64 / s) as f32).collect()).collect()
+        self.channels
+            .iter()
+            .map(|c| c.iter().map(|&v| (v as f64 / s) as f32).collect())
+            .collect()
     }
 }
 
@@ -99,7 +107,11 @@ fn crc8(d: &[u8]) -> u8 {
     for &b in d {
         c ^= b;
         for _ in 0..8 {
-            c = if c & 0x80 != 0 { (c << 1) ^ 0x07 } else { c << 1 };
+            c = if c & 0x80 != 0 {
+                (c << 1) ^ 0x07
+            } else {
+                c << 1
+            };
         }
     }
     c
@@ -110,7 +122,11 @@ fn crc16(d: &[u8]) -> u16 {
     for &b in d {
         c ^= (b as u16) << 8;
         for _ in 0..8 {
-            c = if c & 0x8000 != 0 { (c << 1) ^ 0x8005 } else { c << 1 };
+            c = if c & 0x8000 != 0 {
+                (c << 1) ^ 0x8005
+            } else {
+                c << 1
+            };
         }
     }
     c
@@ -130,7 +146,14 @@ pub fn parse_streaminfo(b: &[u8]) -> Result<StreamInfo, String> {
     let channels = r.bits(3)? as u8 + 1;
     let bits_per_sample = r.bits(5)? as u8 + 1;
     let total_samples = r.bits(36)?;
-    Ok(StreamInfo { min_block, max_block, sample_rate, channels, bits_per_sample, total_samples })
+    Ok(StreamInfo {
+        min_block,
+        max_block,
+        sample_rate,
+        channels,
+        bits_per_sample,
+        total_samples,
+    })
 }
 
 /// Decode one frame starting at `d[0]`; returns its samples per channel and
@@ -250,10 +273,14 @@ fn subframe(r: &mut Bits, block: usize, bps: u32) -> Result<Vec<i64>, String> {
     let bps = bps - wasted;
     let mut s = match kind {
         0 => vec![r.signed(bps)?; block],
-        1 => (0..block).map(|_| r.signed(bps)).collect::<Result<_, _>>()?,
+        1 => (0..block)
+            .map(|_| r.signed(bps))
+            .collect::<Result<_, _>>()?,
         8..=12 => {
             let order = (kind - 8) as usize;
-            let mut s: Vec<i64> = (0..order).map(|_| r.signed(bps)).collect::<Result<_, _>>()?;
+            let mut s: Vec<i64> = (0..order)
+                .map(|_| r.signed(bps))
+                .collect::<Result<_, _>>()?;
             residual(r, block, order, &mut s)?;
             for i in order..block {
                 let p = match order {
@@ -269,7 +296,9 @@ fn subframe(r: &mut Bits, block: usize, bps: u32) -> Result<Vec<i64>, String> {
         }
         32..=63 => {
             let order = (kind - 31) as usize;
-            let mut s: Vec<i64> = (0..order).map(|_| r.signed(bps)).collect::<Result<_, _>>()?;
+            let mut s: Vec<i64> = (0..order)
+                .map(|_| r.signed(bps))
+                .collect::<Result<_, _>>()?;
             let prec = r.bits(4)? as u32 + 1;
             if prec == 16 {
                 return Err("invalid FLAC LPC precision".into());
@@ -278,7 +307,9 @@ fn subframe(r: &mut Bits, block: usize, bps: u32) -> Result<Vec<i64>, String> {
             if shift < 0 {
                 return Err("negative FLAC LPC shift".into());
             }
-            let coefs: Vec<i64> = (0..order).map(|_| r.signed(prec)).collect::<Result<_, _>>()?;
+            let coefs: Vec<i64> = (0..order)
+                .map(|_| r.signed(prec))
+                .collect::<Result<_, _>>()?;
             residual(r, block, order, &mut s)?;
             for i in order..block {
                 let mut acc: i64 = 0;
@@ -314,7 +345,11 @@ fn residual(r: &mut Bits, block: usize, order: usize, s: &mut Vec<i64>) -> Resul
         return Err("bad FLAC partition order".into());
     }
     for p in 0..parts {
-        let n = if p == 0 { block / parts - order } else { block / parts };
+        let n = if p == 0 {
+            block / parts - order
+        } else {
+            block / parts
+        };
         let k = r.bits(param_bits)?;
         if k == escape {
             let nb = r.bits(5)? as u32;
@@ -338,7 +373,9 @@ fn residual(r: &mut Bits, block: usize, order: usize, s: &mut Vec<i64>) -> Resul
 pub fn decode(data: &[u8]) -> Result<Flac, String> {
     let mut off = 0;
     if data.starts_with(b"ID3") && data.len() > 10 {
-        let sz = data[6..10].iter().fold(0usize, |a, &b| (a << 7) | (b & 0x7f) as usize);
+        let sz = data[6..10]
+            .iter()
+            .fold(0usize, |a, &b| (a << 7) | (b & 0x7f) as usize);
         off = 10 + sz;
     }
     if data.get(off..off + 4) != Some(b"fLaC".as_slice()) {
@@ -349,7 +386,9 @@ pub fn decode(data: &[u8]) -> Result<Flac, String> {
     loop {
         let h = *data.get(off).ok_or("truncated FLAC metadata")?;
         let len = u32::from_be_bytes([0, data[off + 1], data[off + 2], data[off + 3]]) as usize;
-        let body = data.get(off + 4..off + 4 + len).ok_or("truncated FLAC metadata")?;
+        let body = data
+            .get(off + 4..off + 4 + len)
+            .ok_or("truncated FLAC metadata")?;
         if h & 0x7f == 0 {
             info = Some(parse_streaminfo(body)?);
         }

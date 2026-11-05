@@ -66,7 +66,8 @@ impl<'a> State<'a> {
                 if len < 4 {
                     return Err(DracoError::Corrupt);
                 }
-                let v = u32::from_le_bytes([buf[len - 4], buf[len - 3], buf[len - 2], buf[len - 1]]);
+                let v =
+                    u32::from_le_bytes([buf[len - 4], buf[len - 3], buf[len - 2], buf[len - 1]]);
                 (len - 4, v & 0x3fff_ffff)
             }
         };
@@ -74,11 +75,7 @@ impl<'a> State<'a> {
         if state >= base.saturating_mul(IO_BASE) {
             return Err(DracoError::Corrupt);
         }
-        Ok(State {
-            buf,
-            offset,
-            state,
-        })
+        Ok(State { buf, offset, state })
     }
 }
 
@@ -109,7 +106,8 @@ impl<'a> BitDecoder<'a> {
         let p = P8_PRECISION - self.prob_zero as u32;
         if self.state.state < L_BASE && self.state.offset > 0 {
             self.state.offset -= 1;
-            self.state.state = self.state.state * IO_BASE + self.state.buf[self.state.offset] as u32;
+            self.state.state =
+                self.state.state * IO_BASE + self.state.buf[self.state.offset] as u32;
         }
         let x = self.state.state;
         let quotient = x / P8_PRECISION;
@@ -142,6 +140,9 @@ struct SymbolDecoder<'a> {
     /// `(probability, cumulative)` per symbol.
     table: Vec<(u32, u32)>,
     precision: u32,
+    /// `log2(precision)`: a symbol is a shift and a mask, not a division
+    /// and a remainder, and this is the entropy layer's innermost loop.
+    precision_bits: u32,
     num_symbols: u32,
     state: Option<State<'a>>,
 }
@@ -154,7 +155,8 @@ fn precision_bits(unique_symbols_bit_length: u32) -> u32 {
 impl<'a> SymbolDecoder<'a> {
     /// Read the probability table.
     fn create(buffer: &mut Buffer<'a>, symbol_bits: u32) -> Result<Self, DracoError> {
-        let precision = 1u32 << precision_bits(symbol_bits);
+        let bits = precision_bits(symbol_bits);
+        let precision = 1u32 << bits;
         let num_symbols = buffer.varint32()?;
         // The table needs at least one byte per 64 symbols, so a count far
         // beyond the buffer is corruption rather than a huge alphabet.
@@ -198,9 +200,7 @@ impl<'a> SymbolDecoder<'a> {
             if next > precision {
                 return Err(DracoError::Corrupt);
             }
-            for slot in cumulative..next {
-                lut[slot as usize] = symbol as u32;
-            }
+            lut[cumulative as usize..next as usize].fill(symbol as u32);
             cumulative = next;
         }
         // The probabilities have to fill the precision exactly, or the decoder
@@ -212,6 +212,7 @@ impl<'a> SymbolDecoder<'a> {
             lut,
             table,
             precision,
+            precision_bits: bits,
             num_symbols,
             state: None,
         })
@@ -237,8 +238,8 @@ impl<'a> SymbolDecoder<'a> {
             state.offset -= 1;
             state.state = state.state * IO_BASE + state.buf[state.offset] as u32;
         }
-        let quotient = state.state / self.precision;
-        let remainder = state.state % self.precision;
+        let quotient = state.state >> self.precision_bits;
+        let remainder = state.state & (self.precision - 1);
         let symbol = self.lut[remainder as usize];
         let (probability, cumulative) = self.table[symbol as usize];
         state.state = quotient * probability + remainder - cumulative;

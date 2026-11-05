@@ -18,9 +18,9 @@ fn triangles(objects: &[ExportObject]) -> impl Iterator<Item = [[f64; 3]; 3]> + 
                     .collect(),
                 (None, Some(n)) => (0..n / 3).map(|t| [t * 3, t * 3 + 1, t * 3 + 2]).collect(),
             };
-            corners.into_iter().map(move |t| {
-                t.map(|i| apply_matrix4(&o.matrix_world, attr3(g, "position", i)))
-            })
+            corners
+                .into_iter()
+                .map(move |t| t.map(|i| apply_matrix4(&o.matrix_world, attr3(g, "position", i))))
         })
 }
 

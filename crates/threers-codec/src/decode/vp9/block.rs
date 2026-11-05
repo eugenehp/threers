@@ -97,8 +97,12 @@ pub struct FrameDec<'a> {
     pub rac: Option<Rac<'a>>,
 }
 
-const LEFT_CTX: [u8; 13] = [0x0, 0x8, 0x0, 0x8, 0xc, 0x8, 0xc, 0xe, 0xc, 0xe, 0xf, 0xe, 0xf];
-const ABOVE_CTX: [u8; 13] = [0x0, 0x0, 0x8, 0x8, 0x8, 0xc, 0xc, 0xc, 0xe, 0xe, 0xe, 0xf, 0xf];
+const LEFT_CTX: [u8; 13] = [
+    0x0, 0x8, 0x0, 0x8, 0xc, 0x8, 0xc, 0xe, 0xc, 0xe, 0xf, 0xe, 0xf,
+];
+const ABOVE_CTX: [u8; 13] = [
+    0x0, 0x0, 0x8, 0x8, 0x8, 0xc, 0xc, 0xc, 0xe, 0xe, 0xe, 0xf, 0xf,
+];
 const MAX_TX_FOR_BL_BP: [u8; 13] = [3, 3, 3, 3, 2, 2, 2, 1, 1, 1, 0, 0, 0];
 const INTER_MODE_CTX_LUT: [[u8; 14]; 14] = {
     let mut t = [[6u8; 14]; 14];
@@ -139,7 +143,12 @@ const INTER_MODE_CTX_LUT: [[u8; 14]; 14] = {
 };
 
 /// `band_counts`.
-const BAND_COUNTS: [[usize; 6]; 4] = [[1, 2, 3, 4, 3, 16 - 13], [1, 2, 3, 4, 11, 64 - 21], [1, 2, 3, 4, 11, 256 - 21], [1, 2, 3, 4, 11, 1024 - 21]];
+const BAND_COUNTS: [[usize; 6]; 4] = [
+    [1, 2, 3, 4, 3, 16 - 13],
+    [1, 2, 3, 4, 11, 64 - 21],
+    [1, 2, 3, 4, 11, 256 - 21],
+    [1, 2, 3, 4, 11, 1024 - 21],
+];
 
 /// `ff_vp9_scans` / `ff_vp9_scans_nb`: `[tx (4 = lossless)][txtp]`.
 pub fn scan(tx: usize, txtp: usize) -> (&'static [i16], &'static [[i16; 2]]) {
@@ -242,7 +251,13 @@ impl<'a> FrameDec<'a> {
             uvblock: [vec![0; 64 * 64], vec![0; 64 * 64]],
             eob: vec![0; 256],
             uveob: [vec![0; 256], vec![0; 256]],
-            lflvl: vec![LfMask { level: [0; 64], mask: [[[[0; 4]; 8]; 2]; 2] }; sb_cols * sb_rows],
+            lflvl: vec![
+                LfMask {
+                    level: [0; 64],
+                    mask: [[[[0; 4]; 8]; 2]; 2]
+                };
+                sb_cols * sb_rows
+            ],
             rac: None,
         }
     }
@@ -257,7 +272,8 @@ impl<'a> FrameDec<'a> {
         let h = self.h;
         let tile_cols = h.tile_cols as usize;
         for tile_row in 0..h.tile_rows {
-            let (tile_row_start, tile_row_end) = set_tile_offset(tile_row, h.log2_tile_rows, self.sb_rows);
+            let (tile_row_start, tile_row_end) =
+                set_tile_offset(tile_row, h.log2_tile_rows, self.sb_rows);
             let mut racs: Vec<Rac<'a>> = Vec::with_capacity(tile_cols);
             for tile_col in 0..tile_cols {
                 let tile_size = if tile_col == tile_cols - 1 && tile_row == h.tile_rows - 1 {
@@ -283,7 +299,8 @@ impl<'a> FrameDec<'a> {
             let mut row = tile_row_start;
             while row < tile_row_end {
                 for tile_col in 0..tile_cols {
-                    let (tile_col_start, tile_col_end) = set_tile_offset(tile_col as u32, h.log2_tile_cols, self.sb_cols);
+                    let (tile_col_start, tile_col_end) =
+                        set_tile_offset(tile_col as u32, h.log2_tile_cols, self.sb_cols);
                     self.tile_col_start = tile_col_start;
                     self.left_partition_ctx = [0; 8];
                     self.left_skip_ctx = [0; 8];
@@ -315,8 +332,13 @@ impl<'a> FrameDec<'a> {
     }
 
     fn decode_sb(&mut self, row: usize, col: usize, bl: u8) {
-        let c = ((self.above_partition_ctx[col] >> (3 - bl)) & 1) as usize | ((((self.left_partition_ctx[row & 7] >> (3 - bl)) & 1) as usize) << 1);
-        let p = if self.h.keyframe || self.h.intraonly { DEFAULT_KF_PARTITION_PROBS[bl as usize][c] } else { self.p.partition[bl as usize][c] };
+        let c = ((self.above_partition_ctx[col] >> (3 - bl)) & 1) as usize
+            | ((((self.left_partition_ctx[row & 7] >> (3 - bl)) & 1) as usize) << 1);
+        let p = if self.h.keyframe || self.h.intraonly {
+            DEFAULT_KF_PARTITION_PROBS[bl as usize][c]
+        } else {
+            self.p.partition[bl as usize][c]
+        };
         let hbs = 4usize >> bl;
         let bp;
         if bl == BL_8X8 {
@@ -376,13 +398,18 @@ impl<'a> FrameDec<'a> {
         self.col = col;
         self.col7 = col & 7;
         self.min_mv = (-(128 + col as i32 * 64), -(128 + row as i32 * 64));
-        self.max_mv = (128 + (self.cols as i32 - col as i32 - w4 as i32) * 64, 128 + (self.rows as i32 - row as i32 - h4 as i32) * 64);
+        self.max_mv = (
+            128 + (self.cols as i32 - col as i32 - w4 as i32) * 64,
+            128 + (self.rows as i32 - row as i32 - h4 as i32) * 64,
+        );
         self.b.bs = bs;
         self.b.bl = bl;
         self.b.bp = bp;
         self.decode_mode();
         let b = &mut self.b;
-        b.uvtx = b.tx - (((self.ss_h != 0) && w4 * 2 == (1 << b.tx)) || ((self.ss_v != 0) && h4 * 2 == (1 << b.tx))) as u8;
+        b.uvtx = b.tx
+            - (((self.ss_h != 0) && w4 * 2 == (1 << b.tx))
+                || ((self.ss_v != 0) && h4 * 2 == (1 << b.tx))) as u8;
         if !self.b.skip {
             let has_coeffs = self.decode_coeffs();
             if !has_coeffs && self.b.bs <= BS_8X8 && !self.b.intra {
@@ -414,7 +441,8 @@ impl<'a> FrameDec<'a> {
         }
         // Loop-filter level and edges.
         let b = self.b;
-        let lvl = self.h.segmentation.feat[b.seg_id as usize].lflvl[if b.intra { 0 } else { b.r#ref[0] as usize + 1 }][(b.mode[3] != ZEROMV) as usize];
+        let lvl = self.h.segmentation.feat[b.seg_id as usize].lflvl
+            [if b.intra { 0 } else { b.r#ref[0] as usize + 1 }][(b.mode[3] != ZEROMV) as usize];
         if self.h.filter_level != 0 && lvl > 0 {
             let x_end = (self.cols - col).min(w4);
             let y_end = (self.rows - row).min(h4);
@@ -425,11 +453,43 @@ impl<'a> FrameDec<'a> {
             for y in 0..h4 {
                 lf.level[(row7 + y) * 8 + col7..(row7 + y) * 8 + col7 + w4].fill(lvl);
             }
-            mask_edges(&mut lf.mask[0], 0, 0, row7, col7, x_end, y_end, 0, 0, b.tx, skip_inter);
+            mask_edges(
+                &mut lf.mask[0],
+                0,
+                0,
+                row7,
+                col7,
+                x_end,
+                y_end,
+                0,
+                0,
+                b.tx,
+                skip_inter,
+            );
             if self.ss_h != 0 || self.ss_v != 0 {
-                let col_end = if self.cols & 1 != 0 && col + w4 >= self.cols { self.cols & 7 } else { 0 };
-                let row_end = if self.rows & 1 != 0 && row + h4 >= self.rows { self.rows & 7 } else { 0 };
-                mask_edges(&mut lf.mask[1], self.ss_h, self.ss_v, row7, col7, x_end, y_end, col_end, row_end, b.uvtx, skip_inter);
+                let col_end = if self.cols & 1 != 0 && col + w4 >= self.cols {
+                    self.cols & 7
+                } else {
+                    0
+                };
+                let row_end = if self.rows & 1 != 0 && row + h4 >= self.rows {
+                    self.rows & 7
+                } else {
+                    0
+                };
+                mask_edges(
+                    &mut lf.mask[1],
+                    self.ss_h,
+                    self.ss_v,
+                    row7,
+                    col7,
+                    x_end,
+                    y_end,
+                    col_end,
+                    row_end,
+                    b.uvtx,
+                    skip_inter,
+                );
             }
         }
     }
@@ -453,12 +513,18 @@ impl<'a> FrameDec<'a> {
         if !seg.enabled {
             self.b.seg_id = 0;
         } else if kf {
-            self.b.seg_id = if !seg.update_map { 0 } else { self.c().get_tree(&SEGMENTATION_TREE, &seg.prob) };
-        } else if !seg.update_map || (seg.temporal && {
-            let c = (self.above_segpred_ctx[col] + self.left_segpred_ctx[row7]) as usize;
-            let pp = seg.pred_prob[c];
-            self.c().get_prob(pp)
-        }) {
+            self.b.seg_id = if !seg.update_map {
+                0
+            } else {
+                self.c().get_tree(&SEGMENTATION_TREE, &seg.prob)
+            };
+        } else if !seg.update_map
+            || (seg.temporal && {
+                let c = (self.above_segpred_ctx[col] + self.left_segpred_ctx[row7]) as usize;
+                let pp = seg.pred_prob[c];
+                self.c().get_prob(pp)
+            })
+        {
             if let (false, Some(rf)) = (h.errorres, self.segmap_ref) {
                 let mut pred = 8u8;
                 for y in 0..h4 {
@@ -524,8 +590,16 @@ impl<'a> FrameDec<'a> {
         if (self.b.intra || !self.b.skip) && h.txfmmode == TX_SWITCHABLE {
             let c = if have_a {
                 if have_l {
-                    let a = if self.above_skip_ctx[col] != 0 { max_tx } else { self.above_txfm_ctx[col] };
-                    let l = if self.left_skip_ctx[row7] != 0 { max_tx } else { self.left_txfm_ctx[row7] };
+                    let a = if self.above_skip_ctx[col] != 0 {
+                        max_tx
+                    } else {
+                        self.above_txfm_ctx[col]
+                    };
+                    let l = if self.left_skip_ctx[row7] != 0 {
+                        max_tx
+                    } else {
+                        self.left_txfm_ctx[row7]
+                    };
                     (a + l > max_tx) as usize
                 } else if self.above_skip_ctx[col] != 0 {
                     1
@@ -625,15 +699,34 @@ impl<'a> FrameDec<'a> {
         let b = self.b;
         let kf = h.keyframe || h.intraonly;
         let switchable = h.filtermode == FilterMode::Switchable;
-        let set = |dir_skip: &mut [u8], dir_txfm: &mut [u8], dir_part: &mut [u8], off: usize, n: usize, part: u8| {
+        let set = |dir_skip: &mut [u8],
+                   dir_txfm: &mut [u8],
+                   dir_part: &mut [u8],
+                   off: usize,
+                   n: usize,
+                   part: u8| {
             dir_skip[off..off + n].fill(b.skip as u8);
             dir_txfm[off..off + n].fill(b.tx);
             dir_part[off..off + n].fill(part);
         };
         let wn = BWH_TAB[1][bs][0] as usize;
         let hn = BWH_TAB[1][bs][1] as usize;
-        set(&mut self.above_skip_ctx, &mut self.above_txfm_ctx, &mut self.above_partition_ctx, col, wn, ABOVE_CTX[bs]);
-        set(&mut self.left_skip_ctx, &mut self.left_txfm_ctx, &mut self.left_partition_ctx, row7, hn, LEFT_CTX[bs]);
+        set(
+            &mut self.above_skip_ctx,
+            &mut self.above_txfm_ctx,
+            &mut self.above_partition_ctx,
+            col,
+            wn,
+            ABOVE_CTX[bs],
+        );
+        set(
+            &mut self.left_skip_ctx,
+            &mut self.left_txfm_ctx,
+            &mut self.left_partition_ctx,
+            row7,
+            hn,
+            LEFT_CTX[bs],
+        );
         if !kf {
             fill(&mut self.above_intra_ctx, col, wn, b.intra as u8);
             fill(&mut self.above_comp_ctx, col, wn, b.comp as u8);
@@ -738,7 +831,9 @@ impl<'a> FrameDec<'a> {
             self.left_mode_ctx[li..li + hn].fill(m);
         }
         let m3 = self.b.mode[3] as usize;
-        self.b.uvmode = self.c().get_tree(&INTRAMODE_TREE, &DEFAULT_KF_UVMODE_PROBS[m3]);
+        self.b.uvmode = self
+            .c()
+            .get_tree(&INTRAMODE_TREE, &DEFAULT_KF_UVMODE_PROBS[m3]);
     }
 
     /// Inter block: comp flag, references, modes, filter and motion
@@ -809,7 +904,9 @@ impl<'a> FrameDec<'a> {
                             if refl == refa && refa == var[1] {
                                 0
                             } else if lc == 0 && ac == 0 {
-                                if (refa == fix && refl == var[0]) || (refl == fix && refa == var[0]) {
+                                if (refa == fix && refl == var[0])
+                                    || (refl == fix && refa == var[0])
+                                {
                                     4
                                 } else if refa == refl {
                                     3
@@ -976,7 +1073,8 @@ impl<'a> FrameDec<'a> {
             } else {
                 const OFF: [usize; 10] = [3, 0, 0, 1, 0, 0, 0, 0, 0, 0];
                 let o = OFF[bs as usize];
-                let c = INTER_MODE_CTX_LUT[self.above_mode_ctx[col + o] as usize][self.left_mode_ctx[row7 + o] as usize] as usize;
+                let c = INTER_MODE_CTX_LUT[self.above_mode_ctx[col + o] as usize]
+                    [self.left_mode_ctx[row7 + o] as usize] as usize;
                 let m = self.c().get_tree(&INTER_MODE_TREE, &p.mv_mode[c]);
                 self.b.mode = [m; 4];
                 self.counts.mv_mode[c][(m - 10) as usize] += 1;
@@ -1009,7 +1107,8 @@ impl<'a> FrameDec<'a> {
         }
 
         if bs > BS_8X8 {
-            let c = INTER_MODE_CTX_LUT[self.above_mode_ctx[col] as usize][self.left_mode_ctx[row7] as usize] as usize;
+            let c = INTER_MODE_CTX_LUT[self.above_mode_ctx[col] as usize]
+                [self.left_mode_ctx[row7] as usize] as usize;
             let m0 = self.c().get_tree(&INTER_MODE_TREE, &p.mv_mode[c]);
             self.b.mode[0] = m0;
             self.counts.mv_mode[c][(m0 - 10) as usize] += 1;
@@ -1049,7 +1148,11 @@ impl<'a> FrameDec<'a> {
             let mv = self.b.mv[0];
             self.b.mv = [mv; 4];
         }
-        let vref = self.b.r#ref[if self.b.comp { h.signbias[h.varcompref[0] as usize] as usize } else { 0 }];
+        let vref = self.b.r#ref[if self.b.comp {
+            h.signbias[h.varcompref[0] as usize] as usize
+        } else {
+            0
+        }];
         (vref, filter_id)
     }
 
@@ -1082,10 +1185,15 @@ impl<'a> FrameDec<'a> {
         while y < end_y {
             let mut x = 0;
             while x < end_x {
-                let mode = b.mode[if b.tx == TX_4X4 && b.bs > BS_8X8 { n } else { 0 }] as usize;
+                let mode = b.mode[if b.tx == TX_4X4 && b.bs > BS_8X8 {
+                    n
+                } else {
+                    0
+                }] as usize;
                 let txtp = INTRA_TXFM_TYPE[mode] as usize;
                 let (sc, nb) = scan(tx, txtp);
-                let nnz = (self.above_y_nnz_ctx[a_off + x] + self.left_y_nnz_ctx[l_off + y]) as usize;
+                let nnz =
+                    (self.above_y_nnz_ctx[a_off + x] + self.left_y_nnz_ctx[l_off + y]) as usize;
                 let rac = self.rac.as_mut().unwrap();
                 let ret = decode_coeffs_b(
                     rac,
@@ -1137,7 +1245,9 @@ impl<'a> FrameDec<'a> {
             while y < end_y {
                 let mut x = 0;
                 while x < end_x {
-                    let nnz = (self.above_uv_nnz_ctx[pl][a_off + x] + self.left_uv_nnz_ctx[pl][l_off + y]) as usize;
+                    let nnz = (self.above_uv_nnz_ctx[pl][a_off + x]
+                        + self.left_uv_nnz_ctx[pl][l_off + y])
+                        as usize;
                     let rac = self.rac.as_mut().unwrap();
                     let ret = decode_coeffs_b(
                         rac,
@@ -1166,8 +1276,18 @@ impl<'a> FrameDec<'a> {
                 y += uvstep;
             }
             if uvstep > 1 {
-                splat(&mut self.above_uv_nnz_ctx[pl][a_off..], end_x, uvstep, end_x == w4);
-                splat(&mut self.left_uv_nnz_ctx[pl][l_off..], end_y, uvstep, end_y == h4);
+                splat(
+                    &mut self.above_uv_nnz_ctx[pl][a_off..],
+                    end_x,
+                    uvstep,
+                    end_x == w4,
+                );
+                splat(
+                    &mut self.left_uv_nnz_ctx[pl][l_off..],
+                    end_y,
+                    uvstep,
+                    end_y == h4,
+                );
             }
         }
         total
@@ -1250,7 +1370,8 @@ fn decode_coeffs_b(
                     band_left = band_counts[band.min(5)];
                 }
                 cache[scan[i] as usize] = 0;
-                nnz = (1 + cache[nb[i][0] as usize] as usize + cache[nb[i][1] as usize] as usize) >> 1;
+                nnz = (1 + cache[nb[i][0] as usize] as usize + cache[nb[i][1] as usize] as usize)
+                    >> 1;
                 tp = &p[band.min(5)][nnz];
                 i += 1;
                 if i == n_coeffs {
@@ -1317,7 +1438,22 @@ fn decode_coeffs_b(
                         v += (c.get_prob(255) as i32) << 15;
                         v += (c.get_prob(255) as i32) << 14;
                     }
-                    for (shift, pr) in [(13, 254), (12, 254), (11, 254), (10, 252), (9, 249), (8, 243), (7, 230), (6, 196), (5, 177), (4, 153), (3, 140), (2, 133), (1, 130), (0, 129)] {
+                    for (shift, pr) in [
+                        (13, 254),
+                        (12, 254),
+                        (11, 254),
+                        (10, 252),
+                        (9, 249),
+                        (8, 243),
+                        (7, 230),
+                        (6, 196),
+                        (5, 177),
+                        (4, 153),
+                        (3, 140),
+                        (2, 133),
+                        (1, 130),
+                        (0, 129),
+                    ] {
                         v += (c.get_prob(pr) as i32) << shift;
                     }
                     val = v;
@@ -1332,7 +1468,11 @@ fn decode_coeffs_b(
         let q = qmul[(i != 0) as usize] as u32;
         let s = if c.get() { -val } else { val };
         let prod = (s as u32).wrapping_mul(q);
-        let v = if is_tx32x32 { (prod as i32) / 2 } else { prod as i32 };
+        let v = if is_tx32x32 {
+            (prod as i32) / 2
+        } else {
+            prod as i32
+        };
         coef[rc] = if eight { v as i16 as i32 } else { v };
         nnz = (1 + cache[nb[i][0] as usize] as usize + cache[nb[i][1] as usize] as usize) >> 1;
         tp = &p[band.min(5)][nnz];
@@ -1346,7 +1486,19 @@ fn decode_coeffs_b(
 
 /// `mask_edges`.
 #[allow(clippy::too_many_arguments)]
-fn mask_edges(mask: &mut [[[u8; 4]; 8]; 2], ss_h: usize, ss_v: usize, row_and_7: usize, col_and_7: usize, mut w: usize, mut h: usize, col_end: usize, row_end: usize, tx: u8, skip_inter: bool) {
+fn mask_edges(
+    mask: &mut [[[u8; 4]; 8]; 2],
+    ss_h: usize,
+    ss_v: usize,
+    row_and_7: usize,
+    col_and_7: usize,
+    mut w: usize,
+    mut h: usize,
+    col_end: usize,
+    row_end: usize,
+    tx: u8,
+    skip_inter: bool,
+) {
     const WIDE_FILTER_COL_MASK: [u32; 2] = [0x11, 0x01];
     const WIDE_FILTER_ROW_MASK: [usize; 2] = [0x03, 0x07];
     if tx == TX_4X4 && (ss_v | ss_h) != 0 {
@@ -1441,6 +1593,7 @@ fn mask_edges(mask: &mut [[[u8; 4]; 8]; 2], ss_h: usize, ss_v: usize, row_and_7:
             mask[0][y][2] |= t4 as u8;
             mask[0][y][1] |= t8 as u8;
         }
-        mask[1][row_and_7][2 - (row_and_7 & WIDE_FILTER_ROW_MASK[ss_v] == 0) as usize] |= m_col as u8;
+        mask[1][row_and_7][2 - (row_and_7 & WIDE_FILTER_ROW_MASK[ss_v] == 0) as usize] |=
+            m_col as u8;
     }
 }

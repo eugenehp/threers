@@ -130,7 +130,6 @@ fn has_flag(name: &str) -> bool {
     std::env::args().any(|a| a == name)
 }
 
-
 fn main() {
     let out = PathBuf::from(arg("--out").unwrap_or_else(|| "out/simcity.png".into()));
     let view = arg("--view").unwrap_or_else(|| "aerial".into());
@@ -216,7 +215,11 @@ fn main() {
     let wk = &s.works;
     println!(
         "  works: {}, {} pylons, port {}",
-        if wk.plant.is_some() { "power station" } else { "NO power station" },
+        if wk.plant.is_some() {
+            "power station"
+        } else {
+            "NO power station"
+        },
         wk.pylons,
         if wk.port { "yes" } else { "no" },
     );
@@ -258,12 +261,22 @@ fn main() {
     println!("  {} echelon parking bays", wk.echelon_bays);
     println!(
         "  monuments: {}{}",
-        if wk.monuments.is_empty() { "NONE".to_string() } else { wk.monuments.join(", ") },
-        if wk.suspension { " + suspension bridge" } else { "" }
+        if wk.monuments.is_empty() {
+            "NONE".to_string()
+        } else {
+            wk.monuments.join(", ")
+        },
+        if wk.suspension {
+            " + suspension bridge"
+        } else {
+            ""
+        }
     );
     println!(
         "  {} access roads, {} mountain summits, {} road tunnels through them",
-        wk.spurs, wk.peaks, wk.tunnels.len()
+        wk.spurs,
+        wk.peaks,
+        wk.tunnels.len()
     );
     println!(
         "  {} footprints claimed, {} placements refused for overlapping",
@@ -566,7 +579,12 @@ fn write_animation(
             );
         cam.look_at(target);
         if let (Some(sim), Some(w)) = (water.as_mut(), &city.water) {
-            sim.step(gpu, || water_mesh(renderer, &w.geometry), f as f32 * 0.35, 0.35);
+            sim.step(
+                gpu,
+                || water_mesh(renderer, &w.geometry),
+                f as f32 * 0.35,
+                0.35,
+            );
         }
         let sky = city.apply_sky(scene, t);
         city.place_lights(scene, cam.position, sky.lights);
@@ -659,7 +677,12 @@ fn write_layout_sheet(
                 bake: params.bake,
             },
         );
-        let camera = frame_camera("aerial", city.stats.extent, tw as f32 / th as f32, city.vista);
+        let camera = frame_camera(
+            "aerial",
+            city.stats.extent,
+            tw as f32 / th as f32,
+            city.vista,
+        );
         let sky = city.apply_sky(&mut scene, if night { 0.72 } else { 0.07 });
         city.place_lights(&mut scene, camera.position, sky.lights);
         city.animate_lights(&mut scene, 0.0);
@@ -667,7 +690,12 @@ fn write_layout_sheet(
         scene.update_world();
         if let Some(w) = &city.water {
             let gpu = renderer.marks_gpu();
-            WaterSim::new(&gpu, w.vertices, w.level).step(&gpu, || water_mesh(renderer, &w.geometry), 11.0, 0.35);
+            WaterSim::new(&gpu, w.vertices, w.level).step(
+                &gpu,
+                || water_mesh(renderer, &w.geometry),
+                11.0,
+                0.35,
+            );
         }
         println!("  {} {}", layout.name(), if night { "(night)" } else { "" });
         let rgba = shoot(renderer, &mut scene, &camera, fx, sky.lights);

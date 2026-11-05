@@ -4,9 +4,13 @@
 #![allow(unused_mut, unused_assignments, unused_variables, clippy::all)]
 
 #[inline(always)]
-fn clip(min: i32, max: i32, v: i32) -> i32 { v.clamp(min, max) }
+fn clip(min: i32, max: i32, v: i32) -> i32 {
+    v.clamp(min, max)
+}
 #[inline(always)]
-fn idx(o: isize, s: isize, k: isize) -> usize { (o + k * s) as usize }
+fn idx(o: isize, s: isize, k: isize) -> usize {
+    (o + k * s) as usize
+}
 
 fn dct4_internal(c: &mut [i32], o: isize, s: isize, min: i32, max: i32, tx64: bool) {
     let in0: i32 = c[idx(o, s, 0)];
@@ -16,17 +20,17 @@ fn dct4_internal(c: &mut [i32], o: isize, s: isize, min: i32, max: i32, tx64: bo
     let mut t2: i32;
     let mut t3: i32;
     if tx64 {
-    t1 = (in0 * 181 + 128) >> 8;
-    t0 = t1;
-    t2 = (in1 * 1567 + 2048) >> 12;
-    t3 = (in1 * 3784 + 2048) >> 12;
+        t1 = (in0 * 181 + 128) >> 8;
+        t0 = t1;
+        t2 = (in1 * 1567 + 2048) >> 12;
+        t3 = (in1 * 3784 + 2048) >> 12;
     } else {
-    let in2: i32 = c[idx(o, s, 2)];
-    let in3: i32 = c[idx(o, s, 3)];
-    t0 = ((in0 + in2) * 181 + 128) >> 8;
-    t1 = ((in0 - in2) * 181 + 128) >> 8;
-    t2 = ((in1 * 1567 - in3 * (3784 - 4096) + 2048) >> 12) - in3;
-    t3 = ((in1 * (3784 - 4096) + in3 * 1567 + 2048) >> 12) + in1;
+        let in2: i32 = c[idx(o, s, 2)];
+        let in3: i32 = c[idx(o, s, 3)];
+        t0 = ((in0 + in2) * 181 + 128) >> 8;
+        t1 = ((in0 - in2) * 181 + 128) >> 8;
+        t2 = ((in1 * 1567 - in3 * (3784 - 4096) + 2048) >> 12) - in3;
+        t3 = ((in1 * (3784 - 4096) + in3 * 1567 + 2048) >> 12) + in1;
     }
     c[idx(o, s, 0)] = clip(min, max, t0 + t3);
     c[idx(o, s, 1)] = clip(min, max, t1 + t2);
@@ -43,17 +47,17 @@ fn dct8_internal(c: &mut [i32], o: isize, s: isize, min: i32, max: i32, tx64: bo
     let mut t6a: i32;
     let mut t7a: i32;
     if tx64 {
-    t4a = (in1 * 799 + 2048) >> 12;
-    t5a = (in3 * -2276 + 2048) >> 12;
-    t6a = (in3 * 3406 + 2048) >> 12;
-    t7a = (in1 * 4017 + 2048) >> 12;
+        t4a = (in1 * 799 + 2048) >> 12;
+        t5a = (in3 * -2276 + 2048) >> 12;
+        t6a = (in3 * 3406 + 2048) >> 12;
+        t7a = (in1 * 4017 + 2048) >> 12;
     } else {
-    let in5: i32 = c[idx(o, s, 5)];
-    let in7: i32 = c[idx(o, s, 7)];
-    t4a = ((in1 * 799 - in7 * (4017 - 4096) + 2048) >> 12) - in7;
-    t5a = (in5 * 1703 - in3 * 1138 + 1024) >> 11;
-    t6a = (in5 * 1138 + in3 * 1703 + 1024) >> 11;
-    t7a = ((in1 * (4017 - 4096) + in7 * 799 + 2048) >> 12) + in1;
+        let in5: i32 = c[idx(o, s, 5)];
+        let in7: i32 = c[idx(o, s, 7)];
+        t4a = ((in1 * 799 - in7 * (4017 - 4096) + 2048) >> 12) - in7;
+        t5a = (in5 * 1703 - in3 * 1138 + 1024) >> 11;
+        t6a = (in5 * 1138 + in3 * 1703 + 1024) >> 11;
+        t7a = ((in1 * (4017 - 4096) + in7 * 799 + 2048) >> 12) + in1;
     }
     let t4: i32 = clip(min, max, t4a + t5a);
     t5a = clip(min, max, t4a - t5a);
@@ -90,27 +94,27 @@ fn dct16_internal(c: &mut [i32], o: isize, s: isize, min: i32, max: i32, tx64: b
     let mut t14a: i32;
     let mut t15a: i32;
     if tx64 {
-    t8a = (in1 * 401 + 2048) >> 12;
-    t9a = (in7 * -2598 + 2048) >> 12;
-    t10a = (in5 * 1931 + 2048) >> 12;
-    t11a = (in3 * -1189 + 2048) >> 12;
-    t12a = (in3 * 3920 + 2048) >> 12;
-    t13a = (in5 * 3612 + 2048) >> 12;
-    t14a = (in7 * 3166 + 2048) >> 12;
-    t15a = (in1 * 4076 + 2048) >> 12;
+        t8a = (in1 * 401 + 2048) >> 12;
+        t9a = (in7 * -2598 + 2048) >> 12;
+        t10a = (in5 * 1931 + 2048) >> 12;
+        t11a = (in3 * -1189 + 2048) >> 12;
+        t12a = (in3 * 3920 + 2048) >> 12;
+        t13a = (in5 * 3612 + 2048) >> 12;
+        t14a = (in7 * 3166 + 2048) >> 12;
+        t15a = (in1 * 4076 + 2048) >> 12;
     } else {
-    let in9: i32 = c[idx(o, s, 9)];
-    let in11: i32 = c[idx(o, s, 11)];
-    let in13: i32 = c[idx(o, s, 13)];
-    let in15: i32 = c[idx(o, s, 15)];
-    t8a = ((in1 * 401 - in15 * (4076 - 4096) + 2048) >> 12) - in15;
-    t9a = (in9 * 1583 - in7 * 1299 + 1024) >> 11;
-    t10a = ((in5 * 1931 - in11 * (3612 - 4096) + 2048) >> 12) - in11;
-    t11a = ((in13 * (3920 - 4096) - in3 * 1189 + 2048) >> 12) + in13;
-    t12a = ((in13 * 1189 + in3 * (3920 - 4096) + 2048) >> 12) + in3;
-    t13a = ((in5 * (3612 - 4096) + in11 * 1931 + 2048) >> 12) + in5;
-    t14a = (in9 * 1299 + in7 * 1583 + 1024) >> 11;
-    t15a = ((in1 * (4076 - 4096) + in15 * 401 + 2048) >> 12) + in1;
+        let in9: i32 = c[idx(o, s, 9)];
+        let in11: i32 = c[idx(o, s, 11)];
+        let in13: i32 = c[idx(o, s, 13)];
+        let in15: i32 = c[idx(o, s, 15)];
+        t8a = ((in1 * 401 - in15 * (4076 - 4096) + 2048) >> 12) - in15;
+        t9a = (in9 * 1583 - in7 * 1299 + 1024) >> 11;
+        t10a = ((in5 * 1931 - in11 * (3612 - 4096) + 2048) >> 12) - in11;
+        t11a = ((in13 * (3920 - 4096) - in3 * 1189 + 2048) >> 12) + in13;
+        t12a = ((in13 * 1189 + in3 * (3920 - 4096) + 2048) >> 12) + in3;
+        t13a = ((in5 * (3612 - 4096) + in11 * 1931 + 2048) >> 12) + in5;
+        t14a = (in9 * 1299 + in7 * 1583 + 1024) >> 11;
+        t15a = ((in1 * (4076 - 4096) + in15 * 401 + 2048) >> 12) + in1;
     }
     let mut t8: i32 = clip(min, max, t8a + t9a);
     let mut t9: i32 = clip(min, max, t8a - t9a);
@@ -120,10 +124,10 @@ fn dct16_internal(c: &mut [i32], o: isize, s: isize, min: i32, max: i32, tx64: b
     let mut t13: i32 = clip(min, max, t12a - t13a);
     let mut t14: i32 = clip(min, max, t15a - t14a);
     let mut t15: i32 = clip(min, max, t15a + t14a);
-    t9a = (( t14 * 1567 - t9 * (3784 - 4096) + 2048) >> 12) - t9;
-    t14a = (( t14 * (3784 - 4096) + t9 * 1567 + 2048) >> 12) + t14;
+    t9a = ((t14 * 1567 - t9 * (3784 - 4096) + 2048) >> 12) - t9;
+    t14a = ((t14 * (3784 - 4096) + t9 * 1567 + 2048) >> 12) + t14;
     t10a = ((-(t13 * (3784 - 4096) + t10 * 1567) + 2048) >> 12) - t13;
-    t13a = (( t13 * 1567 - t10 * (3784 - 4096) + 2048) >> 12) - t10;
+    t13a = ((t13 * 1567 - t10 * (3784 - 4096) + 2048) >> 12) - t10;
     t8a = clip(min, max, t8 + t11);
     t9 = clip(min, max, t9a + t10a);
     t10 = clip(min, max, t9a - t10a);
@@ -189,47 +193,47 @@ fn dct32_internal(c: &mut [i32], o: isize, s: isize, min: i32, max: i32, tx64: b
     let mut t30a: i32;
     let mut t31a: i32;
     if tx64 {
-    t16a = (in1 * 201 + 2048) >> 12;
-    t17a = (in15 * -2751 + 2048) >> 12;
-    t18a = (in9 * 1751 + 2048) >> 12;
-    t19a = (in7 * -1380 + 2048) >> 12;
-    t20a = (in5 * 995 + 2048) >> 12;
-    t21a = (in11 * -2106 + 2048) >> 12;
-    t22a = (in13 * 2440 + 2048) >> 12;
-    t23a = (in3 * -601 + 2048) >> 12;
-    t24a = (in3 * 4052 + 2048) >> 12;
-    t25a = (in13 * 3290 + 2048) >> 12;
-    t26a = (in11 * 3513 + 2048) >> 12;
-    t27a = (in5 * 3973 + 2048) >> 12;
-    t28a = (in7 * 3857 + 2048) >> 12;
-    t29a = (in9 * 3703 + 2048) >> 12;
-    t30a = (in15 * 3035 + 2048) >> 12;
-    t31a = (in1 * 4091 + 2048) >> 12;
+        t16a = (in1 * 201 + 2048) >> 12;
+        t17a = (in15 * -2751 + 2048) >> 12;
+        t18a = (in9 * 1751 + 2048) >> 12;
+        t19a = (in7 * -1380 + 2048) >> 12;
+        t20a = (in5 * 995 + 2048) >> 12;
+        t21a = (in11 * -2106 + 2048) >> 12;
+        t22a = (in13 * 2440 + 2048) >> 12;
+        t23a = (in3 * -601 + 2048) >> 12;
+        t24a = (in3 * 4052 + 2048) >> 12;
+        t25a = (in13 * 3290 + 2048) >> 12;
+        t26a = (in11 * 3513 + 2048) >> 12;
+        t27a = (in5 * 3973 + 2048) >> 12;
+        t28a = (in7 * 3857 + 2048) >> 12;
+        t29a = (in9 * 3703 + 2048) >> 12;
+        t30a = (in15 * 3035 + 2048) >> 12;
+        t31a = (in1 * 4091 + 2048) >> 12;
     } else {
-    let in17: i32 = c[idx(o, s, 17)];
-    let in19: i32 = c[idx(o, s, 19)];
-    let in21: i32 = c[idx(o, s, 21)];
-    let in23: i32 = c[idx(o, s, 23)];
-    let in25: i32 = c[idx(o, s, 25)];
-    let in27: i32 = c[idx(o, s, 27)];
-    let in29: i32 = c[idx(o, s, 29)];
-    let in31: i32 = c[idx(o, s, 31)];
-    t16a = ((in1 * 201 - in31 * (4091 - 4096) + 2048) >> 12) - in31;
-    t17a = ((in17 * (3035 - 4096) - in15 * 2751 + 2048) >> 12) + in17;
-    t18a = ((in9 * 1751 - in23 * (3703 - 4096) + 2048) >> 12) - in23;
-    t19a = ((in25 * (3857 - 4096) - in7 * 1380 + 2048) >> 12) + in25;
-    t20a = ((in5 * 995 - in27 * (3973 - 4096) + 2048) >> 12) - in27;
-    t21a = ((in21 * (3513 - 4096) - in11 * 2106 + 2048) >> 12) + in21;
-    t22a = (in13 * 1220 - in19 * 1645 + 1024) >> 11;
-    t23a = ((in29 * (4052 - 4096) - in3 * 601 + 2048) >> 12) + in29;
-    t24a = ((in29 * 601 + in3 * (4052 - 4096) + 2048) >> 12) + in3;
-    t25a = (in13 * 1645 + in19 * 1220 + 1024) >> 11;
-    t26a = ((in21 * 2106 + in11 * (3513 - 4096) + 2048) >> 12) + in11;
-    t27a = ((in5 * (3973 - 4096) + in27 * 995 + 2048) >> 12) + in5;
-    t28a = ((in25 * 1380 + in7 * (3857 - 4096) + 2048) >> 12) + in7;
-    t29a = ((in9 * (3703 - 4096) + in23 * 1751 + 2048) >> 12) + in9;
-    t30a = ((in17 * 2751 + in15 * (3035 - 4096) + 2048) >> 12) + in15;
-    t31a = ((in1 * (4091 - 4096) + in31 * 201 + 2048) >> 12) + in1;
+        let in17: i32 = c[idx(o, s, 17)];
+        let in19: i32 = c[idx(o, s, 19)];
+        let in21: i32 = c[idx(o, s, 21)];
+        let in23: i32 = c[idx(o, s, 23)];
+        let in25: i32 = c[idx(o, s, 25)];
+        let in27: i32 = c[idx(o, s, 27)];
+        let in29: i32 = c[idx(o, s, 29)];
+        let in31: i32 = c[idx(o, s, 31)];
+        t16a = ((in1 * 201 - in31 * (4091 - 4096) + 2048) >> 12) - in31;
+        t17a = ((in17 * (3035 - 4096) - in15 * 2751 + 2048) >> 12) + in17;
+        t18a = ((in9 * 1751 - in23 * (3703 - 4096) + 2048) >> 12) - in23;
+        t19a = ((in25 * (3857 - 4096) - in7 * 1380 + 2048) >> 12) + in25;
+        t20a = ((in5 * 995 - in27 * (3973 - 4096) + 2048) >> 12) - in27;
+        t21a = ((in21 * (3513 - 4096) - in11 * 2106 + 2048) >> 12) + in21;
+        t22a = (in13 * 1220 - in19 * 1645 + 1024) >> 11;
+        t23a = ((in29 * (4052 - 4096) - in3 * 601 + 2048) >> 12) + in29;
+        t24a = ((in29 * 601 + in3 * (4052 - 4096) + 2048) >> 12) + in3;
+        t25a = (in13 * 1645 + in19 * 1220 + 1024) >> 11;
+        t26a = ((in21 * 2106 + in11 * (3513 - 4096) + 2048) >> 12) + in11;
+        t27a = ((in5 * (3973 - 4096) + in27 * 995 + 2048) >> 12) + in5;
+        t28a = ((in25 * 1380 + in7 * (3857 - 4096) + 2048) >> 12) + in7;
+        t29a = ((in9 * (3703 - 4096) + in23 * 1751 + 2048) >> 12) + in9;
+        t30a = ((in17 * 2751 + in15 * (3035 - 4096) + 2048) >> 12) + in15;
+        t31a = ((in1 * (4091 - 4096) + in31 * 201 + 2048) >> 12) + in1;
     }
     let mut t16: i32 = clip(min, max, t16a + t17a);
     let mut t17: i32 = clip(min, max, t16a - t17a);
@@ -247,14 +251,14 @@ fn dct32_internal(c: &mut [i32], o: isize, s: isize, min: i32, max: i32, tx64: b
     let mut t29: i32 = clip(min, max, t28a - t29a);
     let mut t30: i32 = clip(min, max, t31a - t30a);
     let mut t31: i32 = clip(min, max, t31a + t30a);
-    t17a = (( t30 * 799 - t17 * (4017 - 4096) + 2048) >> 12) - t17;
-    t30a = (( t30 * (4017 - 4096) + t17 * 799 + 2048) >> 12) + t30;
+    t17a = ((t30 * 799 - t17 * (4017 - 4096) + 2048) >> 12) - t17;
+    t30a = ((t30 * (4017 - 4096) + t17 * 799 + 2048) >> 12) + t30;
     t18a = ((-(t29 * (4017 - 4096) + t18 * 799) + 2048) >> 12) - t29;
-    t29a = (( t29 * 799 - t18 * (4017 - 4096) + 2048) >> 12) - t18;
-    t21a = ( t26 * 1703 - t21 * 1138 + 1024) >> 11;
-    t26a = ( t26 * 1138 + t21 * 1703 + 1024) >> 11;
-    t22a = (-(t25 * 1138 + t22 * 1703 ) + 1024) >> 11;
-    t25a = ( t25 * 1703 - t22 * 1138 + 1024) >> 11;
+    t29a = ((t29 * 799 - t18 * (4017 - 4096) + 2048) >> 12) - t18;
+    t21a = (t26 * 1703 - t21 * 1138 + 1024) >> 11;
+    t26a = (t26 * 1138 + t21 * 1703 + 1024) >> 11;
+    t22a = (-(t25 * 1138 + t22 * 1703) + 1024) >> 11;
+    t25a = (t25 * 1703 - t22 * 1138 + 1024) >> 11;
     t16a = clip(min, max, t16 + t19);
     t17 = clip(min, max, t17a + t18a);
     t18 = clip(min, max, t17a - t18a);
@@ -271,14 +275,14 @@ fn dct32_internal(c: &mut [i32], o: isize, s: isize, min: i32, max: i32, tx64: b
     t29 = clip(min, max, t30a - t29a);
     t30 = clip(min, max, t30a + t29a);
     t31a = clip(min, max, t31 + t28);
-    t18a = (( t29 * 1567 - t18 * (3784 - 4096) + 2048) >> 12) - t18;
-    t29a = (( t29 * (3784 - 4096) + t18 * 1567 + 2048) >> 12) + t29;
-    t19 = (( t28a * 1567 - t19a * (3784 - 4096) + 2048) >> 12) - t19a;
-    t28 = (( t28a * (3784 - 4096) + t19a * 1567 + 2048) >> 12) + t28a;
+    t18a = ((t29 * 1567 - t18 * (3784 - 4096) + 2048) >> 12) - t18;
+    t29a = ((t29 * (3784 - 4096) + t18 * 1567 + 2048) >> 12) + t29;
+    t19 = ((t28a * 1567 - t19a * (3784 - 4096) + 2048) >> 12) - t19a;
+    t28 = ((t28a * (3784 - 4096) + t19a * 1567 + 2048) >> 12) + t28a;
     t20 = ((-(t27a * (3784 - 4096) + t20a * 1567) + 2048) >> 12) - t27a;
-    t27 = (( t27a * 1567 - t20a * (3784 - 4096) + 2048) >> 12) - t20a;
+    t27 = ((t27a * 1567 - t20a * (3784 - 4096) + 2048) >> 12) - t20a;
     t21a = ((-(t26 * (3784 - 4096) + t21 * 1567) + 2048) >> 12) - t26;
-    t26a = (( t26 * 1567 - t21 * (3784 - 4096) + 2048) >> 12) - t21;
+    t26a = ((t26 * 1567 - t21 * (3784 - 4096) + 2048) >> 12) - t21;
     t16 = clip(min, max, t16a + t23a);
     t17a = clip(min, max, t17 + t22);
     t18 = clip(min, max, t18a + t21a);
@@ -297,12 +301,12 @@ fn dct32_internal(c: &mut [i32], o: isize, s: isize, min: i32, max: i32, tx64: b
     t31 = clip(min, max, t31a + t24a);
     t20 = ((t27a - t20a) * 181 + 128) >> 8;
     t27 = ((t27a + t20a) * 181 + 128) >> 8;
-    t21a = ((t26 - t21 ) * 181 + 128) >> 8;
-    t26a = ((t26 + t21 ) * 181 + 128) >> 8;
+    t21a = ((t26 - t21) * 181 + 128) >> 8;
+    t26a = ((t26 + t21) * 181 + 128) >> 8;
     t22 = ((t25a - t22a) * 181 + 128) >> 8;
     t25 = ((t25a + t22a) * 181 + 128) >> 8;
-    t23a = ((t24 - t23 ) * 181 + 128) >> 8;
-    t24a = ((t24 + t23 ) * 181 + 128) >> 8;
+    t23a = ((t24 - t23) * 181 + 128) >> 8;
+    t24a = ((t24 + t23) * 181 + 128) >> 8;
     let t0: i32 = c[idx(o, s, 0)];
     let t1: i32 = c[idx(o, s, 2)];
     let t2: i32 = c[idx(o, s, 4)];
@@ -579,22 +583,22 @@ fn dct64(c: &mut [i32], o: isize, s: isize, min: i32, max: i32) {
     t61a = clip(min, max, t61 + t50);
     t62 = clip(min, max, t62a + t49a);
     t63a = clip(min, max, t63 + t48);
-    t40a = ((t55 - t40 ) * 181 + 128) >> 8;
+    t40a = ((t55 - t40) * 181 + 128) >> 8;
     t41 = ((t54a - t41a) * 181 + 128) >> 8;
-    t42a = ((t53 - t42 ) * 181 + 128) >> 8;
+    t42a = ((t53 - t42) * 181 + 128) >> 8;
     t43 = ((t52a - t43a) * 181 + 128) >> 8;
-    t44a = ((t51 - t44 ) * 181 + 128) >> 8;
+    t44a = ((t51 - t44) * 181 + 128) >> 8;
     t45 = ((t50a - t45a) * 181 + 128) >> 8;
-    t46a = ((t49 - t46 ) * 181 + 128) >> 8;
+    t46a = ((t49 - t46) * 181 + 128) >> 8;
     t47 = ((t48a - t47a) * 181 + 128) >> 8;
     t48 = ((t47a + t48a) * 181 + 128) >> 8;
-    t49a = ((t46 + t49 ) * 181 + 128) >> 8;
+    t49a = ((t46 + t49) * 181 + 128) >> 8;
     t50 = ((t45a + t50a) * 181 + 128) >> 8;
-    t51a = ((t44 + t51 ) * 181 + 128) >> 8;
+    t51a = ((t44 + t51) * 181 + 128) >> 8;
     t52 = ((t43a + t52a) * 181 + 128) >> 8;
-    t53a = ((t42 + t53 ) * 181 + 128) >> 8;
+    t53a = ((t42 + t53) * 181 + 128) >> 8;
     t54 = ((t41a + t54a) * 181 + 128) >> 8;
-    t55a = ((t40 + t55 ) * 181 + 128) >> 8;
+    t55a = ((t40 + t55) * 181 + 128) >> 8;
     let t0: i32 = c[idx(o, s, 0)];
     let t1: i32 = c[idx(o, s, 2)];
     let t2: i32 = c[idx(o, s, 4)];
@@ -698,10 +702,25 @@ fn adst4_internal(c: &mut [i32], io: isize, is: isize, min: i32, max: i32, oo: i
     let in1: i32 = c[idx(io, is, 1)];
     let in2: i32 = c[idx(io, is, 2)];
     let in3: i32 = c[idx(io, is, 3)];
-    c[idx(oo, os, 0)] = (( 1321 * in0 + (3803 - 4096) * in2 + (2482 - 4096) * in3 + (3344 - 4096) * in1 + 2048) >> 12) + in2 + in3 + in1;
-    c[idx(oo, os, 1)] = (((2482 - 4096) * in0 - 1321 * in2 - (3803 - 4096) * in3 + (3344 - 4096) * in1 + 2048) >> 12) + in0 - in3 + in1;
+    c[idx(oo, os, 0)] =
+        ((1321 * in0 + (3803 - 4096) * in2 + (2482 - 4096) * in3 + (3344 - 4096) * in1 + 2048)
+            >> 12)
+            + in2
+            + in3
+            + in1;
+    c[idx(oo, os, 1)] =
+        (((2482 - 4096) * in0 - 1321 * in2 - (3803 - 4096) * in3 + (3344 - 4096) * in1 + 2048)
+            >> 12)
+            + in0
+            - in3
+            + in1;
     c[idx(oo, os, 2)] = (209 * (in0 - in2 + in3) + 128) >> 8;
-    c[idx(oo, os, 3)] = (((3803 - 4096) * in0 + (2482 - 4096) * in2 - 1321 * in3 - (3344 - 4096) * in1 + 2048) >> 12) + in0 + in2 - in1;
+    c[idx(oo, os, 3)] =
+        (((3803 - 4096) * in0 + (2482 - 4096) * in2 - 1321 * in3 - (3344 - 4096) * in1 + 2048)
+            >> 12)
+            + in0
+            + in2
+            - in1;
 }
 
 fn adst8_internal(c: &mut [i32], io: isize, is: isize, min: i32, max: i32, oo: isize, os: isize) {
@@ -714,12 +733,12 @@ fn adst8_internal(c: &mut [i32], io: isize, is: isize, min: i32, max: i32, oo: i
     let in6: i32 = c[idx(io, is, 6)];
     let in7: i32 = c[idx(io, is, 7)];
     let t0a: i32 = (((4076 - 4096) * in7 + 401 * in0 + 2048) >> 12) + in7;
-    let t1a: i32 = (( 401 * in7 - (4076 - 4096) * in0 + 2048) >> 12) - in0;
+    let t1a: i32 = ((401 * in7 - (4076 - 4096) * in0 + 2048) >> 12) - in0;
     let t2a: i32 = (((3612 - 4096) * in5 + 1931 * in2 + 2048) >> 12) + in5;
-    let t3a: i32 = (( 1931 * in5 - (3612 - 4096) * in2 + 2048) >> 12) - in2;
-    let mut t4a: i32 = ( 1299 * in3 + 1583 * in4 + 1024) >> 11;
-    let mut t5a: i32 = ( 1583 * in3 - 1299 * in4 + 1024) >> 11;
-    let mut t6a: i32 = (( 1189 * in1 + (3920 - 4096) * in6 + 2048) >> 12) + in6;
+    let t3a: i32 = ((1931 * in5 - (3612 - 4096) * in2 + 2048) >> 12) - in2;
+    let mut t4a: i32 = (1299 * in3 + 1583 * in4 + 1024) >> 11;
+    let mut t5a: i32 = (1583 * in3 - 1299 * in4 + 1024) >> 11;
+    let mut t6a: i32 = ((1189 * in1 + (3920 - 4096) * in6 + 2048) >> 12) + in6;
     let mut t7a: i32 = (((3920 - 4096) * in1 - 1189 * in6 + 2048) >> 12) + in1;
     let t0: i32 = clip(min, max, t0a + t4a);
     let t1: i32 = clip(min, max, t1a + t5a);
@@ -730,13 +749,13 @@ fn adst8_internal(c: &mut [i32], io: isize, is: isize, min: i32, max: i32, oo: i
     let mut t6: i32 = clip(min, max, t2a - t6a);
     let mut t7: i32 = clip(min, max, t3a - t7a);
     t4a = (((3784 - 4096) * t4 + 1567 * t5 + 2048) >> 12) + t4;
-    t5a = (( 1567 * t4 - (3784 - 4096) * t5 + 2048) >> 12) - t5;
+    t5a = ((1567 * t4 - (3784 - 4096) * t5 + 2048) >> 12) - t5;
     t6a = (((3784 - 4096) * t7 - 1567 * t6 + 2048) >> 12) + t7;
-    t7a = (( 1567 * t7 + (3784 - 4096) * t6 + 2048) >> 12) + t6;
-    c[idx(oo, os, 0)] = clip(min, max, t0 + t2 );
-    c[idx(oo, os, 7)] = -clip(min, max, t1 + t3 );
-    t2 = clip(min, max, t0 - t2 );
-    t3 = clip(min, max, t1 - t3 );
+    t7a = ((1567 * t7 + (3784 - 4096) * t6 + 2048) >> 12) + t6;
+    c[idx(oo, os, 0)] = clip(min, max, t0 + t2);
+    c[idx(oo, os, 7)] = -clip(min, max, t1 + t3);
+    t2 = clip(min, max, t0 - t2);
+    t3 = clip(min, max, t1 - t3);
     c[idx(oo, os, 1)] = -clip(min, max, t4a + t6a);
     c[idx(oo, os, 6)] = clip(min, max, t5a + t7a);
     t6 = clip(min, max, t4a - t6a);
@@ -780,16 +799,16 @@ fn adst16_internal(c: &mut [i32], io: isize, is: isize, min: i32, max: i32, oo: 
     let mut t13: i32 = ((in3 * (3857 - 4096) - in12 * 1380 + 2048) >> 12) + in3;
     let mut t14: i32 = ((in1 * 601 + in14 * (4052 - 4096) + 2048) >> 12) + in14;
     let mut t15: i32 = ((in1 * (4052 - 4096) - in14 * 601 + 2048) >> 12) + in1;
-    let mut t0a: i32 = clip(min, max, t0 + t8 );
-    let mut t1a: i32 = clip(min, max, t1 + t9 );
+    let mut t0a: i32 = clip(min, max, t0 + t8);
+    let mut t1a: i32 = clip(min, max, t1 + t9);
     let mut t2a: i32 = clip(min, max, t2 + t10);
     let mut t3a: i32 = clip(min, max, t3 + t11);
     let mut t4a: i32 = clip(min, max, t4 + t12);
     let mut t5a: i32 = clip(min, max, t5 + t13);
     let mut t6a: i32 = clip(min, max, t6 + t14);
     let mut t7a: i32 = clip(min, max, t7 + t15);
-    let mut t8a: i32 = clip(min, max, t0 - t8 );
-    let mut t9a: i32 = clip(min, max, t1 - t9 );
+    let mut t8a: i32 = clip(min, max, t0 - t8);
+    let mut t9a: i32 = clip(min, max, t1 - t9);
     let mut t10a: i32 = clip(min, max, t2 - t10);
     let mut t11a: i32 = clip(min, max, t3 - t11);
     let mut t12a: i32 = clip(min, max, t4 - t12);
@@ -828,22 +847,22 @@ fn adst16_internal(c: &mut [i32], io: isize, is: isize, min: i32, max: i32, oo: 
     t13 = ((t12a * 1567 - t13a * (3784 - 4096) + 2048) >> 12) - t13a;
     t14 = ((t15a * (3784 - 4096) - t14a * 1567 + 2048) >> 12) + t15a;
     t15 = ((t15a * 1567 + t14a * (3784 - 4096) + 2048) >> 12) + t14a;
-    c[idx(oo, os, 0)] = clip(min, max, t0 + t2 );
-    c[idx(oo, os, 15)] = -clip(min, max, t1 + t3 );
-    t2a = clip(min, max, t0 - t2 );
-    t3a = clip(min, max, t1 - t3 );
-    c[idx(oo, os, 3)] = -clip(min, max, t4a + t6a );
-    c[idx(oo, os, 12)] = clip(min, max, t5a + t7a );
-    t6 = clip(min, max, t4a - t6a );
-    t7 = clip(min, max, t5a - t7a );
+    c[idx(oo, os, 0)] = clip(min, max, t0 + t2);
+    c[idx(oo, os, 15)] = -clip(min, max, t1 + t3);
+    t2a = clip(min, max, t0 - t2);
+    t3a = clip(min, max, t1 - t3);
+    c[idx(oo, os, 3)] = -clip(min, max, t4a + t6a);
+    c[idx(oo, os, 12)] = clip(min, max, t5a + t7a);
+    t6 = clip(min, max, t4a - t6a);
+    t7 = clip(min, max, t5a - t7a);
     c[idx(oo, os, 1)] = -clip(min, max, t8a + t10a);
     c[idx(oo, os, 14)] = clip(min, max, t9a + t11a);
     t10 = clip(min, max, t8a - t10a);
     t11 = clip(min, max, t9a - t11a);
-    c[idx(oo, os, 2)] = clip(min, max, t12 + t14 );
-    c[idx(oo, os, 13)] = -clip(min, max, t13 + t15 );
-    t14a = clip(min, max, t12 - t14 );
-    t15a = clip(min, max, t13 - t15 );
+    c[idx(oo, os, 2)] = clip(min, max, t12 + t14);
+    c[idx(oo, os, 13)] = -clip(min, max, t13 + t15);
+    t14a = clip(min, max, t12 - t14);
+    t15a = clip(min, max, t13 - t15);
     c[idx(oo, os, 7)] = -(((t2a + t3a) * 181 + 128) >> 8);
     c[idx(oo, os, 8)] = ((t2a - t3a) * 181 + 128) >> 8;
     c[idx(oo, os, 4)] = ((t6 + t7) * 181 + 128) >> 8;
@@ -911,4 +930,21 @@ pub fn wht4(c: &mut [i32], o: isize, s: isize) {
 }
 
 /// `dav1d_tx1d_types[txtp]`: (first, second) 1-D types.
-pub const TX1D_TYPES: [[u8; 2]; 16] = [[DCT, DCT], [ADST, DCT], [DCT, ADST], [ADST, ADST], [FLIPADST, DCT], [DCT, FLIPADST], [FLIPADST, FLIPADST], [ADST, FLIPADST], [FLIPADST, ADST], [IDENTITY, IDENTITY], [DCT, IDENTITY], [IDENTITY, DCT], [ADST, IDENTITY], [IDENTITY, ADST], [FLIPADST, IDENTITY], [IDENTITY, FLIPADST]];
+pub const TX1D_TYPES: [[u8; 2]; 16] = [
+    [DCT, DCT],
+    [ADST, DCT],
+    [DCT, ADST],
+    [ADST, ADST],
+    [FLIPADST, DCT],
+    [DCT, FLIPADST],
+    [FLIPADST, FLIPADST],
+    [ADST, FLIPADST],
+    [FLIPADST, ADST],
+    [IDENTITY, IDENTITY],
+    [DCT, IDENTITY],
+    [IDENTITY, DCT],
+    [ADST, IDENTITY],
+    [IDENTITY, ADST],
+    [FLIPADST, IDENTITY],
+    [IDENTITY, FLIPADST],
+];

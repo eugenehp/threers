@@ -1,0 +1,183 @@
+[package]
+name = "threers-ecs"
+version.workspace = true
+edition = "2021"
+# Matches `threers`, which this depends on.
+rust-version = "1.87"
+# Not on crates.io yet: `release-all.sh` publishes every member without this.
+publish = false
+authors = ["Eugene Hauptmann"]
+description = "Entities, components and systems over the threers scene graph — every scene node is an entity, so the renderer and loaders work unchanged. Queries, commands, resources, ordered systems and a fixed-timestep loop"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/eugenehp/threers"
+homepage = "https://github.com/eugenehp/threers"
+documentation = "https://docs.rs/threers-ecs"
+keywords = ["ecs", "game", "gamedev", "scene-graph", "three-js"]
+categories = ["game-development", "data-structures", "wasm"]
+
+[lib]
+bench = false
+
+[features]
+default = []
+# `Body`, collisions as entities, and the systems that step and sync the solver.
+# Optional because a game that moves things itself needs no simulation.
+physics = ["dep:threers-physics"]
+# A native window around an `App`. Off, the crate has no windowing dependency.
+window = ["dep:winit"]
+# Draw the window through threers' native Metal renderer instead of wgpu, on
+# macOS and iOS: `WindowOptions::metal()`, or `THREERS_BACKEND=metal`.
+metal = ["window", "threers/metal"]
+# Real gamepads through gilrs. The window polls them; other hosts call
+# `Gamepads::poll`. Off, `Input` still takes pad input fed to it by hand.
+gamepad = ["dep:gilrs"]
+# Sound: a mixer, spatial sources, and WAV, Ogg and MP3 decoding.
+audio = ["dep:symphonia", "dep:cpal"]
+# rayon: `World::par_each`, tasks on its pool, and the solver's parallel narrow phase.
+parallel = ["dep:rayon", "threers/parallel", "threers-physics?/parallel"]
+# `Tasks::spawn_async` on a tokio runtime. Native only.
+tokio = ["dep:tokio"]
+# rayon in a browser: needs a nightly build with atomics and a page with COOP and
+# COEP headers, as `THREADS=1 web/build.sh` does.
+web-threads = ["web", "parallel", "threers/wasm-threads"]
+# A browser canvas around an `App`, on wasm32.
+web = ["dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:js-sys", "dep:web-sys", "dep:wgpu", "dep:console_error_panic_hook"]
+# A retained, CSS-styled UI layer over the game.
+ui = ["threers/ui"]
+
+[[bench]]
+name = "query"
+harness = false
+
+[[test]]
+name = "physics"
+required-features = ["physics"]
+
+# Plays the example, so it needs what the example needs.
+[[test]]
+name = "hop"
+required-features = ["physics", "window", "audio"]
+
+[[test]]
+name = "race"
+required-features = ["physics", "window", "audio"]
+
+[[test]]
+name = "devx2"
+required-features = ["physics", "window"]
+
+[[test]]
+name = "devx"
+required-features = ["physics", "window"]
+
+[[test]]
+name = "preludes"
+required-features = ["physics"]
+
+[[test]]
+name = "car"
+required-features = ["physics"]
+
+[[test]]
+name = "window"
+required-features = ["window"]
+
+[[test]]
+name = "gamepad"
+required-features = ["gamepad"]
+
+[[test]]
+name = "audio"
+required-features = ["audio"]
+
+[[test]]
+name = "ui"
+required-features = ["ui"]
+
+[[example]]
+name = "falling_crate"
+required-features = ["physics"]
+
+[[example]]
+name = "hop"
+required-features = ["physics", "window", "audio"]
+
+[[example]]
+name = "tutorial"
+required-features = ["physics", "window", "audio"]
+
+[[example]]
+name = "minimal"
+required-features = ["window"]
+
+[[example]]
+name = "race"
+required-features = ["physics", "window", "audio"]
+
+[dependencies]
+threers = { path = "../..", version = "0.0.11" }
+threers-physics = { path = "../threers-physics", version = "0.0.11", optional = true }
+slotmap = "1.0"
+gilrs = { version = "0.11", optional = true }
+rayon = { version = "1", optional = true }
+symphonia = { version = "0.5", optional = true, default-features = false, features = ["wav", "pcm", "ogg", "vorbis", "mp3"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+winit = { version = "0.29", optional = true }
+cpal = { version = "0.15", optional = true }
+tokio = { version = "1", optional = true, default-features = false, features = ["rt-multi-thread", "time"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = { version = "0.2", optional = true }
+wasm-bindgen-futures = { version = "0.4", optional = true }
+js-sys = { version = "0.3", optional = true }
+wgpu = { version = "30", optional = true }
+console_error_panic_hook = { version = "0.1", optional = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies.web-sys]
+version = "0.3"
+optional = true
+features = [
+    "AudioContext",
+    "AudioDestinationNode",
+    "AudioNode",
+    "AudioWorklet",
+    "AudioWorkletNode",
+    "AudioWorkletNodeOptions",
+    "BaseAudioContext",
+    "Blob",
+    "BlobPropertyBag",
+    "DomRect",
+    "console",
+    "Document",
+    "Element",
+    "ErrorEvent",
+    "Event",
+    "EventTarget",
+    "Gamepad",
+    "GamepadButton",
+    "HtmlCanvasElement",
+    "KeyboardEvent",
+    "Location",
+    "MessageEvent",
+    "MessagePort",
+    "MouseEvent",
+    "Navigator",
+    "Performance",
+    "Response",
+    "Storage",
+    "Touch",
+    "TouchEvent",
+    "TouchList",
+    "Url",
+    "WheelEvent",
+    "Worker",
+    "WorkerOptions",
+    "WorkerType",
+    "Worklet",
+    "Window",
+]
+
+[dev-dependencies]
+criterion = "0.5"

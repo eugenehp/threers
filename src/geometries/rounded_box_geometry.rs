@@ -29,7 +29,8 @@ fn normalize(v: V3) -> V3 {
 
 /// `Vector3.angleTo`.
 fn angle_to(a: V3, b: V3) -> f64 {
-    let den = ((a[0] * a[0] + a[1] * a[1] + a[2] * a[2]) * (b[0] * b[0] + b[1] * b[1] + b[2] * b[2]))
+    let den = ((a[0] * a[0] + a[1] * a[1] + a[2] * a[2])
+        * (b[0] * b[0] + b[1] * b[1] + b[2] * b[2]))
         .sqrt();
     if den == 0.0 {
         return std::f64::consts::PI / 2.0;
@@ -110,7 +111,12 @@ pub(crate) fn three_box(
 /// heightSegments, depthSegments)` exactly: indexed, six groups, no polygon
 /// grouping (unlike [`BoxGeometry`](super::BoxGeometry), whose faces are
 /// quads). What `EdgesGeometry` / `WireframeGeometry` see for a three.js box.
-pub fn three_box_geometry(width: f64, height: f64, depth: f64, segments: [usize; 3]) -> BufferGeometry {
+pub fn three_box_geometry(
+    width: f64,
+    height: f64,
+    depth: f64,
+    segments: [usize; 3],
+) -> BufferGeometry {
     let (pos, nrm, uv, idx, groups) = three_box(width, height, depth, segments);
     let mut g = BufferGeometry::new();
     g.set_attribute("position", BufferAttribute::new(pos, 3));
@@ -154,7 +160,13 @@ impl RoundedBoxGeometry {
     ///
     /// Unindexed with the box's six groups. As in three.js, `segments = 0`
     /// gives an indexed *unit* box, whatever the dimensions.
-    pub fn new(width: f64, height: f64, depth: f64, segments: usize, radius: f64) -> BufferGeometry {
+    pub fn new(
+        width: f64,
+        height: f64,
+        depth: f64,
+        segments: usize,
+        radius: f64,
+    ) -> BufferGeometry {
         let segments = segments * 2 + 1;
         let radius = (width / 2.0).min(height / 2.0).min(depth / 2.0).min(radius);
         let (pos, nrm, uv, idx, groups) = three_box(1.0, 1.0, 1.0, [segments; 3]);
@@ -188,7 +200,11 @@ impl RoundedBoxGeometry {
         let mut i = 0;
         let mut j = 0;
         while i < positions.len() {
-            let p = [positions[i] as f64, positions[i + 1] as f64, positions[i + 2] as f64];
+            let p = [
+                positions[i] as f64,
+                positions[i + 1] as f64,
+                positions[i + 2] as f64,
+            ];
             let mut n = p;
             for v in n.iter_mut() {
                 *v -= js_sign(*v) * half_segment_size;

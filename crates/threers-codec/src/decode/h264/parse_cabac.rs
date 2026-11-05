@@ -4,7 +4,7 @@
 use super::params::SliceType;
 use super::parse_cavlc::classify;
 use super::slice::{Result, SliceDec};
-use super::tables::{BLK_XY, LAST8, SIG8, SIG8_FIELD, FIELD4, FIELD8, ZIGZAG4, ZIGZAG8};
+use super::tables::{BLK_XY, FIELD4, FIELD8, LAST8, SIG8, SIG8_FIELD, ZIGZAG4, ZIGZAG8};
 use super::types::*;
 use crate::decode::bits::BitReader;
 use crate::decode::cabac::Cabac;
@@ -38,7 +38,11 @@ impl SliceDec<'_> {
                 .map_or(0, |a| !s.pic.mbs[a].kind.is_skip() as usize)
         };
         let inc = cond(self, -1, 0) + cond(self, 0, -1);
-        let base = if self.hdr.slice_type == SliceType::P { 11 } else { 24 };
+        let base = if self.hdr.slice_type == SliceType::P {
+            11
+        } else {
+            24
+        };
         self.bin(c, base + inc) == 1
     }
 
@@ -172,7 +176,11 @@ impl SliceDec<'_> {
         }
         let r = m.ref_idx[l][k8];
         // MBAFF: a field neighbour of a frame macroblock counts refIdx >> 1.
-        let r = if self.mbaff && !self.mb_field && m.field { r >> 1 } else { r };
+        let r = if self.mbaff && !self.mb_field && m.field {
+            r >> 1
+        } else {
+            r
+        };
         (r > 0) as usize
     }
 
@@ -206,13 +214,24 @@ impl SliceDec<'_> {
         let v = m.mvd[l][k][comp] as u32;
         // MBAFF: vertical mvd of a neighbour of the other kind, rescaled
         // (ffmpeg MAP_F2F, which only touches partitions using the list).
-        if comp == 1 && self.mbaff && m.field != self.mb_field && m.ref_idx[l][(k / 8) * 2 + (k % 4) / 2] >= 0 {
+        if comp == 1
+            && self.mbaff
+            && m.field != self.mb_field
+            && m.ref_idx[l][(k / 8) * 2 + (k % 4) / 2] >= 0
+        {
             return if self.mb_field { v >> 1 } else { v << 1 };
         }
         v
     }
 
-    fn mvd_cabac(&mut self, c: &mut Cabac, l: usize, comp: usize, x: usize, y: usize) -> Result<i32> {
+    fn mvd_cabac(
+        &mut self,
+        c: &mut Cabac,
+        l: usize,
+        comp: usize,
+        x: usize,
+        y: usize,
+    ) -> Result<i32> {
         let sum = self.mvd_abs_nb(l, comp, x as isize - 1, y as isize)
             + self.mvd_abs_nb(l, comp, x as isize, y as isize - 1);
         let inc = if sum < 3 {
@@ -245,7 +264,15 @@ impl SliceDec<'_> {
         Ok(if c.bypass() == 1 { -abs } else { abs })
     }
 
-    fn parse_mvd_pair(&mut self, c: &mut Cabac, l: usize, x: usize, y: usize, w: usize, h: usize) -> Result<()> {
+    fn parse_mvd_pair(
+        &mut self,
+        c: &mut Cabac,
+        l: usize,
+        x: usize,
+        y: usize,
+        w: usize,
+        h: usize,
+    ) -> Result<()> {
         let dx = self.mvd_cabac(c, l, 0, x, y)?;
         let dy = self.mvd_cabac(c, l, 1, x, y)?;
         self.fill_mvd(l, x, y, w, h, [dx, dy]);
@@ -454,7 +481,8 @@ impl SliceDec<'_> {
         // (which macroblock of an MBAFF pair, and which row, can differ per
         // 8×8 row).
         let nb8 = |s: &Self, x: isize, y: isize| {
-            s.blk_nb(x, y).map(|(a, k)| (s.pic.mbs[a].cbp >> ((k / 8) * 2 + (k % 4) / 2)) & 1)
+            s.blk_nb(x, y)
+                .map(|(a, k)| (s.pic.mbs[a].cbp >> ((k / 8) * 2 + (k % 4) / 2)) & 1)
         };
         let mut cbp = 0u8;
         for b8 in 0..4usize {
@@ -532,7 +560,14 @@ impl SliceDec<'_> {
     /// One `residual_block_cabac` (§7.3.5.3.3). `cbf_inc` is the
     /// `coded_block_flag` increment, `None` for 8×8 blocks (no flag).
     /// Levels land in `out` by list index; returns how many are non-zero.
-    fn block_cabac(&mut self, c: &mut Cabac, cat: usize, max: usize, cbf_inc: Option<usize>, out: &mut [i32]) -> Result<usize> {
+    fn block_cabac(
+        &mut self,
+        c: &mut Cabac,
+        cat: usize,
+        max: usize,
+        cbf_inc: Option<usize>,
+        out: &mut [i32],
+    ) -> Result<usize> {
         if let Some(inc) = cbf_inc {
             if self.bin(c, 85 + CBF_OFF[cat] + inc) == 0 {
                 return Ok(0);
@@ -605,15 +640,19 @@ impl SliceDec<'_> {
     }
 
     fn residual_cabac(&mut self, c: &mut Cabac) -> Result<()> {
-        let (z4, z8) = if self.field_coded() { (&FIELD4, &FIELD8) } else { (&ZIGZAG4, &ZIGZAG8) };
+        let (z4, z8) = if self.field_coded() {
+            (&FIELD4, &FIELD8)
+        } else {
+            (&ZIGZAG4, &ZIGZAG8)
+        };
         let cbp_l = self.syn.cbp & 15;
         let cbp_c = self.syn.cbp >> 4;
         let i16 = self.syn.kind == MbKind::I16x16;
         let t8 = self.syn.t8x8;
         let mut tmp = [0i32; 64];
         if i16 {
-            let inc = self.cbf_term(self.cbf_dc(0, -1, 0))
-                + 2 * self.cbf_term(self.cbf_dc(0, 0, -1));
+            let inc =
+                self.cbf_term(self.cbf_dc(0, -1, 0)) + 2 * self.cbf_term(self.cbf_dc(0, 0, -1));
             tmp[..16].fill(0);
             let n = self.block_cabac(c, 0, 16, Some(inc), &mut tmp)?;
             for k in 0..16 {

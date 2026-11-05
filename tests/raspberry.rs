@@ -180,7 +180,10 @@ fn no_hair_is_drawn_thinner_than_a_pixel() {
     let alphas: Vec<f32> = col.array.chunks_exact(4).map(|v| v[3]).collect();
     assert!(!alphas.is_empty(), "no hairs were built at all");
     for a in &alphas {
-        assert!((0.0..=1.0).contains(a), "a hair came back with coverage {a}");
+        assert!(
+            (0.0..=1.0).contains(a),
+            "a hair came back with coverage {a}"
+        );
     }
     let faded = alphas.iter().filter(|a| **a < 0.95).count();
     assert!(
@@ -297,7 +300,10 @@ fn the_berry_renders_red_with_tonal_range() {
          ({p05}..{p95}) — the berry is flat",
         p95 - p05
     );
-    assert!(p95 < 250, "the 95th percentile is {p95}: the berry is clipping");
+    assert!(
+        p95 < 250,
+        "the 95th percentile is {p95}: the berry is clipping"
+    );
 }
 
 /// The fuzz is there to break the silhouette. A berry without it has a hard
@@ -439,7 +445,13 @@ fn predicted_halo(
     let (_, sh) = build_studio(&lights);
     let drups = pack_drupelets(DRUPELETS);
     let ss = 2u32;
-    let args = Args { w, h, fuzz, supersample: ss, ..Args::default() };
+    let args = Args {
+        w,
+        h,
+        fuzz,
+        supersample: ss,
+        ..Args::default()
+    };
     let camera = studio_camera(w as f32 / h as f32);
     let g = build_fuzz(&drups, &sh, &lights, &args, &camera);
     let pos = &g.get_attribute("position").expect("position").array;
@@ -452,7 +464,11 @@ fn predicted_halo(
     let sub = |a: Vector3, b: Vector3| Vector3::new(a.x - b.x, a.y - b.y, a.z - b.z);
     let dot = |a: Vector3, b: Vector3| a.x * b.x + a.y * b.y + a.z * b.z;
     let cross = |a: Vector3, b: Vector3| {
-        Vector3::new(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x)
+        Vector3::new(
+            a.y * b.z - a.z * b.y,
+            a.z * b.x - a.x * b.z,
+            a.x * b.y - a.y * b.x,
+        )
     };
     let unit = |a: Vector3| {
         let l = dot(a, a).sqrt();
@@ -463,17 +479,30 @@ fn predicted_halo(
     let u = cross(r, f);
     let t = (camera.fov * 0.5).tan();
     let project = |v: usize| -> [f32; 2] {
-        let d = sub(Vector3::new(pos[v * 3], pos[v * 3 + 1], pos[v * 3 + 2]), camera.position);
+        let d = sub(
+            Vector3::new(pos[v * 3], pos[v * 3 + 1], pos[v * 3 + 2]),
+            camera.position,
+        );
         let z = dot(d, f);
         let nx = dot(d, r) / (z * t * camera.aspect);
         let ny = dot(d, u) / (z * t);
         [(nx + 1.0) * 0.5 * sw as f32, (1.0 - ny) * 0.5 * sh_ as f32]
     };
 
-    let decode = |s: f32| if s <= 0.04045 { s / 12.92 } else { ((s + 0.055) / 1.055).powf(2.4) };
+    let decode = |s: f32| {
+        if s <= 0.04045 {
+            s / 12.92
+        } else {
+            ((s + 0.055) / 1.055).powf(2.4)
+        }
+    };
     let encode = |l: f32| {
         let l = l.clamp(0.0, 1.0);
-        if l <= 0.0031308 { l * 12.92 } else { 1.055 * l.powf(1.0 / 2.4) - 0.055 }
+        if l <= 0.0031308 {
+            l * 12.92
+        } else {
+            1.055 * l.powf(1.0 / 2.4) - 0.055
+        }
     };
     // `pbr_neutral` from raspberry_common.wgsl.
     let neutral = |c: [f32; 3]| -> [f32; 3] {
@@ -498,21 +527,35 @@ fn predicted_halo(
             let (x, y) = (i % sw / ss as usize, i / sw / ss as usize);
             let k = (y * w as usize + x) * 4;
             let e = [bare[k], bare[k + 1], bare[k + 2]].map(|b| b as f32 / 255.0);
-            if linear_blend { e.map(decode) } else { e }
+            if linear_blend {
+                e.map(decode)
+            } else {
+                e
+            }
         })
         .collect();
 
     for tri in index.chunks_exact(3) {
         let v = [tri[0] as usize, tri[1] as usize, tri[2] as usize];
         let p = v.map(project);
-        let area = (p[1][0] - p[0][0]) * (p[2][1] - p[0][1])
-            - (p[2][0] - p[0][0]) * (p[1][1] - p[0][1]);
+        let area =
+            (p[1][0] - p[0][0]) * (p[2][1] - p[0][1]) - (p[2][0] - p[0][0]) * (p[1][1] - p[0][1]);
         if area.abs() < 1e-12 {
             continue;
         }
-        let x0 = p.iter().map(|q| q[0]).fold(f32::MAX, f32::min).floor().max(0.0) as usize;
+        let x0 = p
+            .iter()
+            .map(|q| q[0])
+            .fold(f32::MAX, f32::min)
+            .floor()
+            .max(0.0) as usize;
         let x1 = (p.iter().map(|q| q[0]).fold(f32::MIN, f32::max).ceil() as usize).min(sw);
-        let y0 = p.iter().map(|q| q[1]).fold(f32::MAX, f32::min).floor().max(0.0) as usize;
+        let y0 = p
+            .iter()
+            .map(|q| q[1])
+            .fold(f32::MAX, f32::min)
+            .floor()
+            .max(0.0) as usize;
         let y1 = (p.iter().map(|q| q[1]).fold(f32::MIN, f32::max).ceil() as usize).min(sh_);
         for y in y0..y1 {
             for x in x0..x1 {

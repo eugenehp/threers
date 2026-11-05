@@ -9,7 +9,10 @@ impl CdfContext {
         Box::new(CdfContext {
             coef: DEFAULT_COEF[qcat],
             m: DEFAULT_MODE,
-            mv: CdfMvContext { comp: [DEFAULT_MV_COMP; 2], joint: DEFAULT_MV_JOINT },
+            mv: CdfMvContext {
+                comp: [DEFAULT_MV_COMP; 2],
+                joint: DEFAULT_MV_JOINT,
+            },
             kfym: DEFAULT_KFYM,
         })
     }

@@ -4,7 +4,11 @@
 //! order (the reference build does not contract it); the NEON kernels follow
 //! their lane layout and fused multiply-adds instruction by instruction.
 
-#![allow(clippy::needless_range_loop, clippy::excessive_precision, clippy::type_complexity)]
+#![allow(
+    clippy::needless_range_loop,
+    clippy::excessive_precision,
+    clippy::type_complexity
+)]
 
 use super::bits::BitReader;
 use super::dsp::Imdct;
@@ -69,7 +73,11 @@ fn sbr_vlcs() -> &'static [LenVlc] {
         (0..10)
             .map(|i| {
                 let n = t::SBR_HUFF_COUNTS[i] as usize;
-                let v = LenVlc::new(&t::SBR_HUFF_SYM[at..at + n], &t::SBR_HUFF_LEN[at..at + n], t::SBR_HUFF_OFFSETS[i] as i32);
+                let v = LenVlc::new(
+                    &t::SBR_HUFF_SYM[at..at + n],
+                    &t::SBR_HUFF_LEN[at..at + n],
+                    t::SBR_HUFF_OFFSETS[i] as i32,
+                );
                 at += n;
                 v
             })
@@ -336,7 +344,11 @@ impl Sbr {
     fn make_f_tablelim(&mut self) {
         if self.bs_limiter_bands > 0 {
             #[allow(clippy::excessive_precision)]
-            const WARPED: [f32; 3] = [1.32715174233856803909, 1.18509277094158210129, 1.11987160404675912501];
+            const WARPED: [f32; 3] = [
+                1.32715174233856803909,
+                1.18509277094158210129,
+                1.11987160404675912501,
+            ];
             let lim = WARPED[self.bs_limiter_bands as usize - 1];
             let np = self.num_patches as usize;
             let mut borders = [0i16; 7];
@@ -438,7 +450,13 @@ impl Sbr {
         };
         let offs = &t::SBR_OFFSET[off_row * 16..off_row * 16 + 16];
         let sr = self.sample_rate as u32;
-        let temp: u32 = if sr < 32000 { 3000 } else if sr < 64000 { 4000 } else { 5000 };
+        let temp: u32 = if sr < 32000 {
+            3000
+        } else if sr < 64000 {
+            4000
+        } else {
+            5000
+        };
         let start_min = ((temp << 7) + (sr >> 1)) / sr;
         let stop_min = ((temp << 8) + (sr >> 1)) / sr;
         self.k[0] = start_min as i32 + offs[sp[0] as usize] as i32;
@@ -471,7 +489,13 @@ impl Sbr {
             return Err(());
         }
         let xover = sp[2] as i32;
-        let check = |n_master: i32| if n_master <= 0 || xover >= n_master { Err(()) } else { Ok(()) };
+        let check = |n_master: i32| {
+            if n_master <= 0 || xover >= n_master {
+                Err(())
+            } else {
+                Ok(())
+            }
+        };
         if sp[3] == 0 {
             let dk = sp[4] as i32 + 1;
             self.n_master = ((self.k[2] - self.k[0] + (dk & 2)) >> dk) << 1;
@@ -501,7 +525,8 @@ impl Sbr {
                 two_regions = false;
                 self.k[1] = self.k[2];
             }
-            let num_bands_0 = log2f_lrint(half_bands as f32 * (self.k[1] as f32 / self.k[0] as f32).log2()) * 2;
+            let num_bands_0 =
+                log2f_lrint(half_bands as f32 * (self.k[1] as f32 / self.k[0] as f32).log2()) * 2;
             if num_bands_0 <= 0 {
                 return Err(());
             }
@@ -519,14 +544,21 @@ impl Sbr {
             if two_regions {
                 let mut vk1 = [0i16; 49];
                 #[allow(clippy::excessive_precision)]
-                let invwarp: f32 = if sp[4] != 0 { 0.76923076923076923077 } else { 1.0 };
-                let num_bands_1 = log2f_lrint(half_bands as f32 * invwarp * (self.k[2] as f32 / self.k[1] as f32).log2()) * 2;
+                let invwarp: f32 = if sp[4] != 0 {
+                    0.76923076923076923077
+                } else {
+                    1.0
+                };
+                let num_bands_1 = log2f_lrint(
+                    half_bands as f32 * invwarp * (self.k[2] as f32 / self.k[1] as f32).log2(),
+                ) * 2;
                 make_bands(&mut vk1[1..], self.k[1], self.k[2], num_bands_1);
                 let nb1 = num_bands_1 as usize;
                 let vdk1_min = *vk1[1..=nb1].iter().min().unwrap() as i32;
                 if vdk1_min < vdk0_max {
                     vk1[1..=nb1].sort();
-                    let change = (vdk0_max - vk1[1] as i32).min((vk1[nb1] as i32 - vk1[1] as i32) >> 1);
+                    let change =
+                        (vdk0_max - vk1[1] as i32).min((vk1[nb1] as i32 - vk1[1] as i32) >> 1);
                     vk1[1] += change as i16;
                     vk1[nb1] -= change as i16;
                 }
@@ -592,7 +624,8 @@ impl Sbr {
             }
             let np = self.num_patches as usize;
             self.patch_num_subbands[np] = (sb - usb).max(0) as u8;
-            self.patch_start_subband[np] = (self.k[0] - odd - self.patch_num_subbands[np] as i32) as u8;
+            self.patch_start_subband[np] =
+                (self.k[0] - odd - self.patch_num_subbands[np] as i32) as u8;
             if self.patch_num_subbands[np] > 0 {
                 usb = sb;
                 msb = sb;
@@ -632,7 +665,9 @@ impl Sbr {
         for k in 1..=self.n[0] as usize {
             self.f_tablelow[k] = self.f_tablehigh[2 * k - temp];
         }
-        self.n_q = log2f_lrint(self.spectrum[5] as f32 * (self.k[2] as f32 / self.kx[1] as f32).log2()).max(1);
+        self.n_q =
+            log2f_lrint(self.spectrum[5] as f32 * (self.k[2] as f32 / self.kx[1] as f32).log2())
+                .max(1);
         if self.n_q > 5 {
             return Err(());
         }
@@ -650,7 +685,11 @@ impl Sbr {
     }
 
     fn sbr_reset(&mut self) {
-        if self.make_f_master().and_then(|_| self.make_f_derived()).is_err() {
+        if self
+            .make_f_master()
+            .and_then(|_| self.make_f_derived())
+            .is_err()
+        {
             self.turnoff();
         }
     }
@@ -875,7 +914,11 @@ impl Sbr {
         let delta = (ch == 1 && coupling) as i32 + 1;
         let n_q = self.n_q as usize;
         let v = sbr_vlcs();
-        let (t_huff, f_huff) = if coupling && ch == 1 { (T_NOISE_BAL_3_0, F_ENV_BAL_3_0) } else { (T_NOISE_3_0, F_ENV_3_0) };
+        let (t_huff, f_huff) = if coupling && ch == 1 {
+            (T_NOISE_BAL_3_0, F_ENV_BAL_3_0)
+        } else {
+            (T_NOISE_3_0, F_ENV_3_0)
+        };
         let d = &mut self.data[ch];
         for i in 0..d.bs_num_noise {
             if d.bs_df_noise[i] != 0 {
@@ -997,7 +1040,16 @@ impl Sbr {
     }
 
     /// `ff_aac_sbr_decode_extension`: consumes `cnt` bytes of `gb_host`.
-    pub(crate) fn decode_extension(&mut self, gb_host: &mut BitReader, crc: bool, cnt: isize, id_aac: u32, core_rate: u32, ext_rate: &mut u32, ps_allowed: i32) {
+    pub(crate) fn decode_extension(
+        &mut self,
+        gb_host: &mut BitReader,
+        crc: bool,
+        cnt: isize,
+        id_aac: u32,
+        core_rate: u32,
+        ext_rate: &mut u32,
+        ps_allowed: i32,
+    ) {
         let mut gb = gb_host.clone();
         gb_host.skip_long(cnt * 8 - 4);
         self.reset = false;
@@ -1087,7 +1139,12 @@ fn autocorrelate(x: &[f32], phi: &mut [f32; 12]) {
         v22[l] = (v2[l] + v20[l]) - v17[l];
         v23[l] = (v3[l] + v21[l]) - v18[l];
     }
-    let v23 = [v23[1] * FAC[0], v23[0] * FAC[1], v23[3] * FAC[2], v23[2] * FAC[3]];
+    let v23 = [
+        v23[1] * FAC[0],
+        v23[0] * FAC[1],
+        v23[3] * FAC[2],
+        v23[2] * FAC[3],
+    ];
     for l in 0..4 {
         phi[l] = v22[l] + v23[l];
     }
@@ -1103,7 +1160,17 @@ fn autocorrelate(x: &[f32], phi: &mut [f32; 12]) {
 /// alpha0*in[i-1]*bw` for `i` in `start..end`, with its pairwise sums.
 /// `out`/`inp` index complex value 0 at the given offsets.
 #[allow(clippy::too_many_arguments)]
-fn hf_gen(out: &mut [f32], o: usize, inp: &[f32], ib: usize, a0: [f32; 2], a1: [f32; 2], bw: f32, start: usize, end: usize) {
+fn hf_gen(
+    out: &mut [f32],
+    o: usize,
+    inp: &[f32],
+    ib: usize,
+    a0: [f32; 2],
+    a1: [f32; 2],
+    bw: f32,
+    start: usize,
+    end: usize,
+) {
     let s = [bw * bw, bw * bw, bw * 1.0, bw * 1.0];
     let v0 = [a1[0] * s[0], a1[1] * s[1], a0[0] * s[2], a0[1] * s[3]];
     let v1 = [v0[0], -black(v0[1]), v0[2], -black(v0[3])];
@@ -1134,7 +1201,15 @@ fn black(x: f32) -> f32 {
 
 /// `ff_sbr_hf_apply_noise_{0..3}_neon` on `y` (flat floats from complex
 /// value `kx` of the row), pairs of bands per step.
-fn apply_noise(y: &mut [f32], yo: usize, s_m: &[f32], q_filt: &[f32], noise: u32, phi: [f32; 4], m_max: usize) {
+fn apply_noise(
+    y: &mut [f32],
+    yo: usize,
+    s_m: &[f32],
+    q_filt: &[f32],
+    noise: u32,
+    phi: [f32; 4],
+    m_max: usize,
+) {
     let nt = &t::NOISE_TABLE;
     let mut x3 = noise as usize + 1;
     let mut m = 0usize;
@@ -1143,8 +1218,18 @@ fn apply_noise(y: &mut [f32], yo: usize, s_m: &[f32], q_filt: &[f32], noise: u32
         x3 &= 0x1ff;
         let ntv: [f32; 4] = std::array::from_fn(|l| f(nt[2 * x3 + l]));
         x3 += 2;
-        let sv = [s_m[m], s_m[m], s_m.get(m + 1).copied().unwrap_or(0.0), s_m.get(m + 1).copied().unwrap_or(0.0)];
-        let qv = [q_filt[m], q_filt[m], q_filt.get(m + 1).copied().unwrap_or(0.0), q_filt.get(m + 1).copied().unwrap_or(0.0)];
+        let sv = [
+            s_m[m],
+            s_m[m],
+            s_m.get(m + 1).copied().unwrap_or(0.0),
+            s_m.get(m + 1).copied().unwrap_or(0.0),
+        ];
+        let qv = [
+            q_filt[m],
+            q_filt[m],
+            q_filt.get(m + 1).copied().unwrap_or(0.0),
+            q_filt.get(m + 1).copied().unwrap_or(0.0),
+        ];
         for l in 0..4 {
             let at = yo + 2 * m + l;
             if at >= y.len() {
@@ -1187,7 +1272,9 @@ impl Sbr {
                     } else {
                         (
                             (exp2fi((q0 >> 1) + 7) as f64 * EXP2_TAB[(q0 & 1) as usize]) as f32,
-                            (exp2fi((pan_offset - q1) >> 1) as f64 * EXP2_TAB[((pan_offset - q1) & 1) as usize]) as f32,
+                            (exp2fi((pan_offset - q1) >> 1) as f64
+                                * EXP2_TAB[((pan_offset - q1) & 1) as usize])
+                                as f32,
                         )
                     };
                     if temp1 as f64 > 1e20 {
@@ -1200,7 +1287,8 @@ impl Sbr {
             }
             for e in 1..=self.data[0].bs_num_noise {
                 for k in 0..n_q {
-                    let temp1 = exp2fi(NOISE_FLOOR_OFFSET - self.data[0].noise_facs_q[e][k] as i32 + 1);
+                    let temp1 =
+                        exp2fi(NOISE_FLOOR_OFFSET - self.data[0].noise_facs_q[e][k] as i32 + 1);
                     let temp2 = exp2fi(12 - self.data[1].noise_facs_q[e][k] as i32);
                     let fac = temp1 / (1.0f32 + temp2);
                     self.data[0].noise_facs[e][k] = fac;
@@ -1226,7 +1314,8 @@ impl Sbr {
                 }
                 for e in 1..=d.bs_num_noise {
                     for k in 0..n_q {
-                        d.noise_facs[e][k] = exp2fi(NOISE_FLOOR_OFFSET - d.noise_facs_q[e][k] as i32);
+                        d.noise_facs[e][k] =
+                            exp2fi(NOISE_FLOOR_OFFSET - d.noise_facs_q[e][k] as i32);
                     }
                 }
             }
@@ -1294,13 +1383,16 @@ impl Sbr {
             let mut phi = [0f32; 12];
             autocorrelate(&self.x_low[xl(k, 0)..xl(k, 0) + 80], &mut phi);
             let p = |a: usize, b: usize, c: usize| phi[a * 4 + b * 2 + c];
-            let dk = p(2, 1, 0) * p(1, 0, 0) - (p(1, 1, 0) * p(1, 1, 0) + p(1, 1, 1) * p(1, 1, 1)) / 1.000001f32;
+            let dk = p(2, 1, 0) * p(1, 0, 0)
+                - (p(1, 1, 0) * p(1, 1, 0) + p(1, 1, 1) * p(1, 1, 1)) / 1.000001f32;
             let (a1, a0) = (&mut self.alpha1[k], &mut self.alpha0[k]);
             if dk == 0.0 {
                 *a1 = [0.0, 0.0];
             } else {
-                let tr = p(0, 0, 0) * p(1, 1, 0) - p(0, 0, 1) * p(1, 1, 1) - p(0, 1, 0) * p(1, 0, 0);
-                let ti = p(0, 0, 0) * p(1, 1, 1) + p(0, 0, 1) * p(1, 1, 0) - p(0, 1, 1) * p(1, 0, 0);
+                let tr =
+                    p(0, 0, 0) * p(1, 1, 0) - p(0, 0, 1) * p(1, 1, 1) - p(0, 1, 0) * p(1, 0, 0);
+                let ti =
+                    p(0, 0, 0) * p(1, 1, 1) + p(0, 0, 1) * p(1, 1, 0) - p(0, 1, 1) * p(1, 0, 0);
                 *a1 = [tr / dk, ti / dk];
             }
             if p(1, 0, 0) == 0.0 {
@@ -1323,7 +1415,11 @@ impl Sbr {
         let n_q = self.n_q as usize;
         let d = &mut self.data[ch];
         for i in 0..n_q {
-            let mut new_bw = if d.bs_invf_mode[0][i] + d.bs_invf_mode[1][i] == 1 { 0.6f32 } else { BW_TAB[d.bs_invf_mode[0][i] as usize] };
+            let mut new_bw = if d.bs_invf_mode[0][i] + d.bs_invf_mode[1][i] == 1 {
+                0.6f32
+            } else {
+                BW_TAB[d.bs_invf_mode[0][i] as usize]
+            };
             if new_bw < d.bw_array[i] {
                 new_bw = 0.75f32 * new_bw + 0.25f32 * d.bw_array[i];
             } else {
@@ -1349,7 +1445,17 @@ impl Sbr {
                 if g < 0 {
                     return Err(());
                 }
-                hf_gen(&mut self.x_high, xl(k, ENV_OFF), &self.x_low, xl(p, ENV_OFF), self.alpha0[p], self.alpha1[p], d.bw_array[g as usize], start, end);
+                hf_gen(
+                    &mut self.x_high,
+                    xl(k, ENV_OFF),
+                    &self.x_low,
+                    xl(p, ENV_OFF),
+                    self.alpha0[p],
+                    self.alpha1[p],
+                    d.bw_array[g as usize],
+                    start,
+                    end,
+                );
                 k += 1;
             }
         }
@@ -1371,7 +1477,11 @@ impl Sbr {
         for e in 0..d.bs_num_env {
             let res = d.bs_freq_res[e + 1] as usize;
             let ilim = self.n[res] as usize;
-            let table: &[u16] = if res != 0 { &self.f_tablehigh } else { &self.f_tablelow };
+            let table: &[u16] = if res != 0 {
+                &self.f_tablehigh
+            } else {
+                &self.f_tablelow
+            };
             if kx1 != table[0] as usize {
                 self.start = false;
                 self.ready_for_dequant = false;
@@ -1395,9 +1505,10 @@ impl Sbr {
             }
             for i in 0..self.n[1] as usize {
                 if d.bs_add_harmonic_flag {
-                    let mid = (self.f_tablehigh[i] as usize + self.f_tablehigh[i + 1] as usize) >> 1;
-                    d.s_indexmapped[e + 1][mid - kx1] =
-                        d.bs_add_harmonic[i] * (e as i32 >= e_a[1] || d.s_indexmapped[0][mid - kx1] == 1) as u8;
+                    let mid =
+                        (self.f_tablehigh[i] as usize + self.f_tablehigh[i + 1] as usize) >> 1;
+                    d.s_indexmapped[e + 1][mid - kx1] = d.bs_add_harmonic[i]
+                        * (e as i32 >= e_a[1] || d.s_indexmapped[0][mid - kx1] == 1) as u8;
                 }
             }
             for i in 0..ilim {
@@ -1432,7 +1543,11 @@ impl Sbr {
                 let ilb = d.t_env[e] as usize * 2 + ENV_OFF;
                 let iub = d.t_env[e + 1] as usize * 2 + ENV_OFF;
                 let res = d.bs_freq_res[e + 1] as usize;
-                let table: &[u16] = if res != 0 { &self.f_tablehigh } else { &self.f_tablelow };
+                let table: &[u16] = if res != 0 {
+                    &self.f_tablehigh
+                } else {
+                    &self.f_tablelow
+                };
                 for p in 0..self.n[res] as usize {
                     let (lo, hi) = (table[p] as usize, table[p + 1] as usize);
                     let den = env_size * (hi as i32 - lo as i32);
@@ -1451,22 +1566,35 @@ impl Sbr {
 
     /// `sbr_gain_calc`.
     fn gain_calc(&mut self, ch: usize) {
-        let limgain: [f32; 4] = [0.70795f64 as f32, 1.0, 1.41254f64 as f32, 10000000000f64 as f32];
+        let limgain: [f32; 4] = [
+            0.70795f64 as f32,
+            1.0,
+            1.41254f64 as f32,
+            10000000000f64 as f32,
+        ];
         let kx1 = self.kx[1] as usize;
         let d = &self.data[ch];
         let e_a = d.e_a;
         for e in 0..d.bs_num_env {
             let delta = !(e as i32 == e_a[1] || e as i32 == e_a[0]);
             for k in 0..self.n_lim as usize {
-                let (lo, hi) = (self.f_tablelim[k] as usize - kx1, self.f_tablelim[k + 1] as usize - kx1);
+                let (lo, hi) = (
+                    self.f_tablelim[k] as usize - kx1,
+                    self.f_tablelim[k + 1] as usize - kx1,
+                );
                 for m in lo..hi {
                     let temp = self.e_origmapped[e][m] / (1.0f32 + self.q_mapped[e][m]);
                     self.q_m[e][m] = (temp * self.q_mapped[e][m]).sqrt();
                     self.s_m[e][m] = (temp * d.s_indexmapped[e + 1][m] as f32).sqrt();
                     self.gain[e][m] = if self.s_mapped[e][m] == 0 {
-                        (self.e_origmapped[e][m] / ((1.0f32 + self.e_curr[e][m]) * (1.0f32 + self.q_mapped[e][m] * delta as i32 as f32))).sqrt()
+                        (self.e_origmapped[e][m]
+                            / ((1.0f32 + self.e_curr[e][m])
+                                * (1.0f32 + self.q_mapped[e][m] * delta as i32 as f32)))
+                            .sqrt()
                     } else {
-                        (self.e_origmapped[e][m] * self.q_mapped[e][m] / ((1.0f32 + self.e_curr[e][m]) * (1.0f32 + self.q_mapped[e][m]))).sqrt()
+                        (self.e_origmapped[e][m] * self.q_mapped[e][m]
+                            / ((1.0f32 + self.e_curr[e][m]) * (1.0f32 + self.q_mapped[e][m])))
+                            .sqrt()
                     };
                     self.gain[e][m] += f32::MIN_POSITIVE;
                 }
@@ -1475,21 +1603,40 @@ impl Sbr {
                     sum[0] += self.e_origmapped[e][m];
                     sum[1] += self.e_curr[e][m];
                 }
-                let mut gain_max = limgain[self.bs_limiter_gains as usize] * ((f32::EPSILON + sum[0]) / (f32::EPSILON + sum[1])).sqrt();
-                gain_max = if 100000.0f32 > gain_max { gain_max } else { 100000.0 };
+                let mut gain_max = limgain[self.bs_limiter_gains as usize]
+                    * ((f32::EPSILON + sum[0]) / (f32::EPSILON + sum[1])).sqrt();
+                gain_max = if 100000.0f32 > gain_max {
+                    gain_max
+                } else {
+                    100000.0
+                };
                 for m in lo..hi {
                     let q_m_max = self.q_m[e][m] * gain_max / self.gain[e][m];
-                    self.q_m[e][m] = if self.q_m[e][m] > q_m_max { q_m_max } else { self.q_m[e][m] };
-                    self.gain[e][m] = if self.gain[e][m] > gain_max { gain_max } else { self.gain[e][m] };
+                    self.q_m[e][m] = if self.q_m[e][m] > q_m_max {
+                        q_m_max
+                    } else {
+                        self.q_m[e][m]
+                    };
+                    self.gain[e][m] = if self.gain[e][m] > gain_max {
+                        gain_max
+                    } else {
+                        self.gain[e][m]
+                    };
                 }
                 sum = [0.0, 0.0];
                 for m in lo..hi {
                     sum[0] += self.e_origmapped[e][m];
                     let sel = (delta && self.s_m[e][m] == 0.0) as i32 as f32;
-                    sum[1] += self.e_curr[e][m] * self.gain[e][m] * self.gain[e][m] + self.s_m[e][m] * self.s_m[e][m] + sel * self.q_m[e][m] * self.q_m[e][m];
+                    sum[1] += self.e_curr[e][m] * self.gain[e][m] * self.gain[e][m]
+                        + self.s_m[e][m] * self.s_m[e][m]
+                        + sel * self.q_m[e][m] * self.q_m[e][m];
                 }
                 let mut gain_boost = ((f32::EPSILON + sum[0]) / (f32::EPSILON + sum[1])).sqrt();
-                gain_boost = if 1.584893192f32 > gain_boost { gain_boost } else { 1.584893192 };
+                gain_boost = if 1.584893192f32 > gain_boost {
+                    gain_boost
+                } else {
+                    1.584893192
+                };
                 for m in lo..hi {
                     self.gain[e][m] *= gain_boost;
                     self.q_m[e][m] *= gain_boost;
@@ -1695,7 +1842,17 @@ impl Sbr {
             for k in 0..n {
                 outc[k] = v[k] * window[k];
             }
-            for (vo, wo) in [(192, 64), (256, 128), (448, 192), (512, 256), (704, 320), (768, 384), (960, 448), (1024, 512), (1216, 576)] {
+            for (vo, wo) in [
+                (192, 64),
+                (256, 128),
+                (448, 192),
+                (512, 256),
+                (704, 320),
+                (768, 384),
+                (960, 448),
+                (1024, 512),
+                (1216, 576),
+            ] {
                 vector_fmul_add(outc, &v[vo >> div..], &window[wo >> div..], n);
             }
             o += n;
@@ -1706,12 +1863,25 @@ impl Sbr {
     /// PS, IPD/OPD.
     pub(crate) fn coverage(&self) -> (bool, bool, bool, bool, bool) {
         let c = &self.ps.common;
-        (self.start, self.bs_coupling, c.start, c.is34bands, c.enable_ipdopd)
+        (
+            self.start,
+            self.bs_coupling,
+            c.start,
+            c.is34bands,
+            c.enable_ipdopd,
+        )
     }
 
     /// `ff_aac_sbr_apply`: `l`/`r` hold 1024 core samples on entry and the
     /// SBR output on return (both used when `nch_out == 2`).
-    pub(crate) fn apply(&mut self, id_aac: u32, l: &mut [f32], r: &mut [f32], downsampled: bool, ps_on: bool) {
+    pub(crate) fn apply(
+        &mut self,
+        id_aac: u32,
+        l: &mut [f32],
+        r: &mut [f32],
+        downsampled: bool,
+        ps_on: bool,
+    ) {
         if id_aac != self.id_aac {
             self.turnoff();
         }
@@ -1730,7 +1900,11 @@ impl Sbr {
         }
         let mut nch = if id_aac == TYPE_CPE { 2 } else { 1 };
         for ch in 0..nch {
-            let input: Vec<f32> = if ch == 0 { l[..1024].to_vec() } else { r[..1024].to_vec() };
+            let input: Vec<f32> = if ch == 0 {
+                l[..1024].to_vec()
+            } else {
+                r[..1024].to_vec()
+            };
             self.qmf_analysis(&input, ch);
             self.lf_gen(ch);
             self.data[ch].ypos ^= 1;

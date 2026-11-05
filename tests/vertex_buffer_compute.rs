@@ -6,7 +6,10 @@
 
 use std::sync::Arc;
 use threers::marks::gpu;
-use threers::{BasicMaterial, BufferGeometry, Color, HeadlessRenderer, Material, Mesh, Object3D, PerspectiveCamera, PlaneGeometry, Scene, Vector3};
+use threers::{
+    BasicMaterial, BufferGeometry, Color, HeadlessRenderer, Material, Mesh, Object3D,
+    PerspectiveCamera, PlaneGeometry, Scene, Vector3,
+};
 
 const SIZE: u32 = 96;
 
@@ -33,7 +36,10 @@ fn build(metal: bool) -> HeadlessRenderer {
             std::env::remove_var("THREERS_BACKEND");
         }
     }
-    let hr = HeadlessRenderer::builder().size(SIZE, SIZE).build().expect("headless renderer");
+    let hr = HeadlessRenderer::builder()
+        .size(SIZE, SIZE)
+        .build()
+        .expect("headless renderer");
     unsafe { std::env::remove_var("THREERS_BACKEND") };
     assert_eq!(hr.is_native_metal(), metal);
     hr
@@ -47,7 +53,11 @@ fn shrink(gpu: &gpu::Gpu, buffer: &gpu::Buffer, count: u32, stride: u32) {
     let entry = |binding, ty| wgpu::BindGroupLayoutEntry {
         binding,
         visibility: wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::Buffer { ty, has_dynamic_offset: false, min_binding_size: None },
+        ty: wgpu::BindingType::Buffer {
+            ty,
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
         count: None,
     };
     let layout = gpu.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -79,8 +89,14 @@ fn shrink(gpu: &gpu::Gpu, buffer: &gpu::Buffer, count: u32, stride: u32) {
         label: Some("shrink"),
         layout: &layout,
         entries: &[
-            gpu::BindGroupEntry { binding: 0, resource: buffer.as_entire_binding() },
-            gpu::BindGroupEntry { binding: 1, resource: params.as_entire_binding() },
+            gpu::BindGroupEntry {
+                binding: 0,
+                resource: buffer.as_entire_binding(),
+            },
+            gpu::BindGroupEntry {
+                binding: 1,
+                resource: params.as_entire_binding(),
+            },
         ],
     });
     let mut encoder = gpu.create_command_encoder(&Default::default());
@@ -118,7 +134,9 @@ fn a_compute_pass_moves_a_mesh_on_either_backend() {
             scene.background = Color::new(0.0, 0.0, 0.0);
             scene.add(Object3D::mesh(Mesh::from_arc(
                 plane.clone(),
-                Arc::new(Material::Basic(BasicMaterial::new(Color::new(1.0, 0.0, 0.0)))),
+                Arc::new(Material::Basic(BasicMaterial::new(Color::new(
+                    1.0, 0.0, 0.0,
+                )))),
             )));
             let before = lit(&hr.render_to_rgba(&mut scene, &camera));
             hr.upload_geometry(&plane);
@@ -127,14 +145,29 @@ fn a_compute_pass_moves_a_mesh_on_either_backend() {
             let gpu = hr.marks_gpu();
             shrink(&gpu, &buffer, count, hr.vertex_floats());
             let after_frame = hr.render_to_rgba(&mut scene, &camera);
-            assert_eq!(hr.is_native_metal(), metal, "the compute pass keeps the renderer on its backend");
+            assert_eq!(
+                hr.is_native_metal(),
+                metal,
+                "the compute pass keeps the renderer on its backend"
+            );
             (before, lit(&after_frame), after_frame)
         })
         .collect();
     for (backend, (before, after, _)) in ["wgpu", "Metal"].iter().zip(&frames) {
         let ratio = *after as f32 / *before as f32;
-        assert!((0.2..0.3).contains(&ratio), "{backend}: {before} lit pixels became {after}, not a quarter");
+        assert!(
+            (0.2..0.3).contains(&ratio),
+            "{backend}: {before} lit pixels became {after}, not a quarter"
+        );
     }
-    let differing = frames[0].2.chunks_exact(4).zip(frames[1].2.chunks_exact(4)).filter(|(a, b)| a != b).count();
-    assert!(differing < (SIZE * 2) as usize, "{differing} pixels differ between wgpu and Metal");
+    let differing = frames[0]
+        .2
+        .chunks_exact(4)
+        .zip(frames[1].2.chunks_exact(4))
+        .filter(|(a, b)| a != b)
+        .count();
+    assert!(
+        differing < (SIZE * 2) as usize,
+        "{differing} pixels differ between wgpu and Metal"
+    );
 }

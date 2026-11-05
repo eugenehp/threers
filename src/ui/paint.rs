@@ -49,7 +49,12 @@ impl TextStyle {
     /// A CSS `font` shorthand, as a 2D canvas takes it.
     pub fn css_font(&self) -> String {
         let style = if self.italic { "italic " } else { "" };
-        format!("{style}{} {}px {}", self.weight(), self.font_size, self.font_family)
+        format!(
+            "{style}{} {}px {}",
+            self.weight(),
+            self.font_size,
+            self.font_family
+        )
     }
 }
 
@@ -85,7 +90,15 @@ pub trait Painter: TextMeasure {
                 let c = std::array::from_fn(|i| c0[i] + (c1[i] - c0[i]) * mid);
                 let x0 = rect.x + rect.width * (t0 + (t1 - t0) * a);
                 let x1 = rect.x + rect.width * (t0 + (t1 - t0) * b);
-                self.fill_rect(Rect { x: x0, y: rect.y, width: x1 - x0, height: rect.height }, c);
+                self.fill_rect(
+                    Rect {
+                        x: x0,
+                        y: rect.y,
+                        width: x1 - x0,
+                        height: rect.height,
+                    },
+                    c,
+                );
             }
         }
     }
@@ -96,7 +109,15 @@ pub trait Painter: TextMeasure {
 
     /// SVG path data in `view_box` scaled to `rect`, stroked `stroke` pixels
     /// wide in view-box units and/or filled (non-zero), in `color`.
-    fn path(&mut self, rect: Rect, d: &[String], view_box: [f32; 4], stroke: Option<f32>, fill: bool, color: Rgba);
+    fn path(
+        &mut self,
+        rect: Rect,
+        d: &[String],
+        view_box: [f32; 4],
+        stroke: Option<f32>,
+        fill: bool,
+        color: Rgba,
+    );
 
     /// Restricts painting to `rect` until the matching
     /// [`pop_clip`](Self::pop_clip). Painters that cannot clip may ignore it.
@@ -156,16 +177,32 @@ impl Ui {
         let b = s.border;
         let uniform = b.top > 0.0 && b.top == b.right && b.top == b.bottom && b.top == b.left;
         let (orx, ory) = (
-            s.border_radius.resolve(Some(r.width)).unwrap_or(0.0).min(r.width / 2.0),
-            s.border_radius.resolve(Some(r.height)).unwrap_or(0.0).min(r.height / 2.0),
+            s.border_radius
+                .resolve(Some(r.width))
+                .unwrap_or(0.0)
+                .min(r.width / 2.0),
+            s.border_radius
+                .resolve(Some(r.height))
+                .unwrap_or(0.0)
+                .min(r.height / 2.0),
         );
         // A rounded box with a uniform border over a background: the border
         // colour over the whole rounded box, the background inset from it
         // with the inner radii (`radius − border`).
-        let rounded_border = uniform && orx > 0.0 && ory > 0.0 && s.border_color[3] > 0.0 && s.background.is_some() && !s.background_clip_content;
+        let rounded_border = uniform
+            && orx > 0.0
+            && ory > 0.0
+            && s.border_color[3] > 0.0
+            && s.background.is_some()
+            && !s.background_clip_content;
         if rounded_border {
             painter.fill_rounded_rect(r, orx, ory, fade(s.border_color));
-            let inner = Rect { x: r.x + b.left, y: r.y + b.top, width: (r.width - b.horizontal()).max(0.0), height: (r.height - b.vertical()).max(0.0) };
+            let inner = Rect {
+                x: r.x + b.left,
+                y: r.y + b.top,
+                width: (r.width - b.horizontal()).max(0.0),
+                height: (r.height - b.vertical()).max(0.0),
+            };
             let (irx, iry) = ((orx - b.left).max(0.0), (ory - b.top).max(0.0));
             let bg = fade(s.background.unwrap());
             if irx > 0.0 && iry > 0.0 {
@@ -175,8 +212,16 @@ impl Ui {
             }
         } else if let Some(bg) = s.background {
             let r = bg_rect;
-            let rx = s.border_radius.resolve(Some(r.width)).unwrap_or(0.0).min(r.width / 2.0);
-            let ry = s.border_radius.resolve(Some(r.height)).unwrap_or(0.0).min(r.height / 2.0);
+            let rx = s
+                .border_radius
+                .resolve(Some(r.width))
+                .unwrap_or(0.0)
+                .min(r.width / 2.0);
+            let ry = s
+                .border_radius
+                .resolve(Some(r.height))
+                .unwrap_or(0.0)
+                .min(r.height / 2.0);
             if rx > 0.0 && ry > 0.0 {
                 painter.fill_rounded_rect(r, rx, ry, fade(bg));
             } else {
@@ -184,17 +229,44 @@ impl Ui {
             }
         }
         if !s.background_gradient.is_empty() {
-            let stops: Vec<(f32, Rgba)> = s.background_gradient.iter().map(|&(t, c)| (t, fade(c))).collect();
+            let stops: Vec<(f32, Rgba)> = s
+                .background_gradient
+                .iter()
+                .map(|&(t, c)| (t, fade(c)))
+                .collect();
             painter.fill_linear_gradient(r, &stops, s.blur);
         }
-        if !rounded_border && s.border_color[3] > 0.0 && (b.top > 0.0 || b.right > 0.0 || b.bottom > 0.0 || b.left > 0.0) {
+        if !rounded_border
+            && s.border_color[3] > 0.0
+            && (b.top > 0.0 || b.right > 0.0 || b.bottom > 0.0 || b.left > 0.0)
+        {
             let c = fade(s.border_color);
             let inner_h = (r.height - b.top - b.bottom).max(0.0);
             for side in [
-                Rect { x: r.x, y: r.y, width: r.width, height: b.top },
-                Rect { x: r.x, y: r.y + r.height - b.bottom, width: r.width, height: b.bottom },
-                Rect { x: r.x, y: r.y + b.top, width: b.left, height: inner_h },
-                Rect { x: r.x + r.width - b.right, y: r.y + b.top, width: b.right, height: inner_h },
+                Rect {
+                    x: r.x,
+                    y: r.y,
+                    width: r.width,
+                    height: b.top,
+                },
+                Rect {
+                    x: r.x,
+                    y: r.y + r.height - b.bottom,
+                    width: r.width,
+                    height: b.bottom,
+                },
+                Rect {
+                    x: r.x,
+                    y: r.y + b.top,
+                    width: b.left,
+                    height: inner_h,
+                },
+                Rect {
+                    x: r.x + r.width - b.right,
+                    y: r.y + b.top,
+                    width: b.right,
+                    height: inner_h,
+                },
             ] {
                 if side.width > 0.0 && side.height > 0.0 {
                     painter.fill_rect(side, c);
@@ -216,7 +288,11 @@ impl Ui {
                     // A wrapped run: one line box each.
                     let h = content.height / node.lines.len() as f32;
                     for (i, line) in node.lines.iter().enumerate() {
-                        let r = Rect { y: content.y + i as f32 * h, height: h, ..content };
+                        let r = Rect {
+                            y: content.y + i as f32 * h,
+                            height: h,
+                            ..content
+                        };
                         painter.text(r, line.trim_end_matches([' ', '\u{200b}']), &style);
                     }
                 } else if let [line] = node.lines.as_slice() {
@@ -226,11 +302,24 @@ impl Ui {
                     painter.text(content, t, &style);
                 }
             }
-            NodeKind::Path { d, view_box, stroke, fill } => painter.path(content, d, *view_box, *stroke, *fill, fade(s.color)),
+            NodeKind::Path {
+                d,
+                view_box,
+                stroke,
+                fill,
+            } => painter.path(content, d, *view_box, *stroke, *fill, fade(s.color)),
         }
         if s.clip {
-            let rx = s.border_radius.resolve(Some(r.width)).unwrap_or(0.0).min(r.width / 2.0);
-            let ry = s.border_radius.resolve(Some(r.height)).unwrap_or(0.0).min(r.height / 2.0);
+            let rx = s
+                .border_radius
+                .resolve(Some(r.width))
+                .unwrap_or(0.0)
+                .min(r.width / 2.0);
+            let ry = s
+                .border_radius
+                .resolve(Some(r.height))
+                .unwrap_or(0.0)
+                .min(r.height / 2.0);
             if rx > 0.0 && ry > 0.0 {
                 painter.push_clip_rounded(r, rx, ry);
             } else {
@@ -256,27 +345,63 @@ impl Ui {
 /// `<circle>` as an oval, which rasterizes differently from the same circle
 /// given as arcs.
 pub fn circle_path(cx: f32, cy: f32, r: f32) -> String {
-    format!("M{} {}A{r} {r} 0 1 1 {} {}A{r} {r} 0 1 1 {} {}Z", cx + r, cy, cx - r, cy, cx + r, cy)
+    format!(
+        "M{} {}A{r} {r} 0 1 1 {} {}A{r} {r} 0 1 1 {} {}Z",
+        cx + r,
+        cy,
+        cx - r,
+        cy,
+        cx + r,
+        cy
+    )
 }
 
 /// The centre and radius of path data made by [`circle_path`].
 pub fn parse_circle(d: &str) -> Option<(f32, f32, f32)> {
     let rest = d.strip_prefix('M')?.strip_suffix('Z')?;
     let mut parts = rest.split('A');
-    let start: Vec<f32> = parts.next()?.split(' ').map(str::parse).collect::<Result<_, _>>().ok()?;
-    let a: Vec<f32> = parts.next()?.split(' ').map(str::parse).collect::<Result<_, _>>().ok()?;
-    let b: Vec<f32> = parts.next()?.split(' ').map(str::parse).collect::<Result<_, _>>().ok()?;
+    let start: Vec<f32> = parts
+        .next()?
+        .split(' ')
+        .map(str::parse)
+        .collect::<Result<_, _>>()
+        .ok()?;
+    let a: Vec<f32> = parts
+        .next()?
+        .split(' ')
+        .map(str::parse)
+        .collect::<Result<_, _>>()
+        .ok()?;
+    let b: Vec<f32> = parts
+        .next()?
+        .split(' ')
+        .map(str::parse)
+        .collect::<Result<_, _>>()
+        .ok()?;
     if parts.next().is_some() || start.len() != 2 || a.len() != 7 || b.len() != 7 {
         return None;
     }
     let r = a[0];
     let (cx, cy) = (start[0] - r, start[1]);
-    (a[1] == r && b[0] == r && b[1] == r && a[5] == cx - r && a[6] == cy && b[5] == start[0] && b[6] == cy).then_some((cx, cy, r))
+    (a[1] == r
+        && b[0] == r
+        && b[1] == r
+        && a[5] == cx - r
+        && a[6] == cy
+        && b[5] == start[0]
+        && b[6] == cy)
+        .then_some((cx, cy, r))
 }
 
 /// sRGB `0..=1` to the linear [`Color`] the overlay mixes in.
 fn linear(c: Rgba) -> Color {
-    let f = |v: f32| if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) };
+    let f = |v: f32| {
+        if v <= 0.04045 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    };
     Color::new(f(c[0]), f(c[1]), f(c[2]))
 }
 
@@ -302,23 +427,38 @@ pub struct OverlayPainter<'a> {
 
 impl<'a> OverlayPainter<'a> {
     pub fn new(overlay: &'a mut Overlay) -> Self {
-        Self { overlay, scale: 1.0, clips: Vec::new() }
+        Self {
+            overlay,
+            scale: 1.0,
+            clips: Vec::new(),
+        }
     }
 
     /// Paints a UI laid out in logical pixels onto an overlay `scale` times
     /// as dense.
     pub fn with_scale(overlay: &'a mut Overlay, scale: f32) -> Self {
-        Self { overlay, scale, clips: Vec::new() }
+        Self {
+            overlay,
+            scale,
+            clips: Vec::new(),
+        }
     }
 
     fn px(&self, r: Rect) -> Rect {
         let k = self.scale;
-        Rect { x: r.x * k, y: r.y * k, width: r.width * k, height: r.height * k }
+        Rect {
+            x: r.x * k,
+            y: r.y * k,
+            width: r.width * k,
+            height: r.height * k,
+        }
     }
 
     /// `r` cut to the current clip; `None` when nothing is left.
     fn clipped(&self, r: Rect) -> Option<Rect> {
-        let Some(c) = self.clips.last() else { return Some(r) };
+        let Some(c) = self.clips.last() else {
+            return Some(r);
+        };
         intersect(r, *c)
     }
 }
@@ -328,7 +468,12 @@ fn intersect(a: Rect, b: Rect) -> Option<Rect> {
     let y0 = a.y.max(b.y);
     let x1 = (a.x + a.width).min(b.x + b.width);
     let y1 = (a.y + a.height).min(b.y + b.height);
-    (x1 > x0 && y1 > y0).then_some(Rect { x: x0, y: y0, width: x1 - x0, height: y1 - y0 })
+    (x1 > x0 && y1 > y0).then_some(Rect {
+        x: x0,
+        y: y0,
+        width: x1 - x0,
+        height: y1 - y0,
+    })
 }
 
 impl TextMeasure for OverlayPainter<'_> {
@@ -339,13 +484,18 @@ impl TextMeasure for OverlayPainter<'_> {
         self.overlay.text_italic(style.italic);
         let (w, _) = self.overlay.measure_text(text);
         let bold = if weight >= 600 && !real { 0.5 } else { 0.0 };
-        (w / self.scale + bold, style.line_height.unwrap_or(style.font_size * 1.2))
+        (
+            w / self.scale + bold,
+            style.line_height.unwrap_or(style.font_size * 1.2),
+        )
     }
 }
 
 impl Painter for OverlayPainter<'_> {
     fn fill_rect(&mut self, rect: Rect, color: Rgba) {
-        let Some(r) = self.clipped(self.px(rect)) else { return };
+        let Some(r) = self.clipped(self.px(rect)) else {
+            return;
+        };
         let o = &mut *self.overlay;
         o.no_stroke();
         o.fill_alpha(linear(color), color[3]);
@@ -368,7 +518,12 @@ impl Painter for OverlayPainter<'_> {
     fn push_clip(&mut self, rect: Rect) {
         let r = self.px(rect);
         let c = match self.clips.last() {
-            Some(top) => intersect(r, *top).unwrap_or(Rect { x: r.x, y: r.y, width: 0.0, height: 0.0 }),
+            Some(top) => intersect(r, *top).unwrap_or(Rect {
+                x: r.x,
+                y: r.y,
+                width: 0.0,
+                height: 0.0,
+            }),
             None => r,
         };
         self.clips.push(c);
@@ -431,7 +586,15 @@ impl Painter for OverlayPainter<'_> {
         }
     }
 
-    fn path(&mut self, rect: Rect, d: &[String], view_box: [f32; 4], stroke: Option<f32>, fill: bool, color: Rgba) {
+    fn path(
+        &mut self,
+        rect: Rect,
+        d: &[String],
+        view_box: [f32; 4],
+        stroke: Option<f32>,
+        fill: bool,
+        color: Rgba,
+    ) {
         let rect = self.px(rect);
         if self.clipped(rect).is_none() {
             return;
@@ -440,13 +603,20 @@ impl Painter for OverlayPainter<'_> {
         let (sx, sy) = (rect.width / vw.max(1e-6), rect.height / vh.max(1e-6));
         let o = &mut *self.overlay;
         for data in d {
-            let Ok(subpaths) = crate::curves::parse_svg_subpaths(data) else { continue };
+            let Ok(subpaths) = crate::curves::parse_svg_subpaths(data) else {
+                continue;
+            };
             for sub in subpaths {
                 let closed = sub.curve_path.auto_close;
                 let points: Vec<_> = sub
                     .get_points(12)
                     .into_iter()
-                    .map(|p| crate::math::Vector2::new(rect.x + (p.x - vx) * sx, rect.y + (p.y - vy) * sy))
+                    .map(|p| {
+                        crate::math::Vector2::new(
+                            rect.x + (p.x - vx) * sx,
+                            rect.y + (p.y - vy) * sy,
+                        )
+                    })
                     .collect();
                 if points.len() < 2 {
                     continue;
@@ -486,13 +656,20 @@ mod tests {
 
     impl Painter for Record {
         fn fill_rect(&mut self, r: Rect, c: Rgba) {
-            self.0.push(format!("rect {} {} {} {} {:?}", r.x, r.y, r.width, r.height, c));
+            self.0.push(format!(
+                "rect {} {} {} {} {:?}",
+                r.x, r.y, r.width, r.height, c
+            ));
         }
         fn fill_rounded_rect(&mut self, r: Rect, rx: f32, ry: f32, c: Rgba) {
-            self.0.push(format!("round {} {} {} {} {rx} {ry} {:?}", r.x, r.y, r.width, r.height, c));
+            self.0.push(format!(
+                "round {} {} {} {} {rx} {ry} {:?}",
+                r.x, r.y, r.width, r.height, c
+            ));
         }
         fn text(&mut self, r: Rect, t: &str, s: &TextStyle) {
-            self.0.push(format!("text {} {} {t} {}", r.x, r.y, s.css_font()));
+            self.0
+                .push(format!("text {} {} {t} {}", r.x, r.y, s.css_font()));
         }
         fn path(&mut self, r: Rect, d: &[String], _: [f32; 4], _: Option<f32>, _: bool, _: Rgba) {
             self.0.push(format!("path {} {} {}", r.x, r.y, d.len()));
@@ -546,7 +723,13 @@ mod tests {
         let mut rec = Record::default();
         ui.layout(100.0, 20.0, &mut rec);
         ui.paint(&mut rec);
-        assert_eq!(rec.0, ["round 0 0 13 13 2 2 [0.5, 0.5, 0.5, 1.0]", "round 1 1 11 11 1 1 [1.0, 1.0, 1.0, 1.0]"]);
+        assert_eq!(
+            rec.0,
+            [
+                "round 0 0 13 13 2 2 [0.5, 0.5, 0.5, 1.0]",
+                "round 1 1 11 11 1 1 [1.0, 1.0, 1.0, 1.0]"
+            ]
+        );
     }
 
     #[test]
@@ -563,10 +746,20 @@ mod tests {
         let mut overlay = crate::overlay::Overlay::new(40, 30);
         let mut ui = Ui::new();
         let root = ui.root();
-        ui.set_style(root, Style { background: Some([34.0 / 255.0, 34.0 / 255.0, 34.0 / 255.0, 1.0]), ..Style::default() });
+        ui.set_style(
+            root,
+            Style {
+                background: Some([34.0 / 255.0, 34.0 / 255.0, 34.0 / 255.0, 1.0]),
+                ..Style::default()
+            },
+        );
         let icon = ui.add_path(
             root,
-            Style { width: Length::Px(16.0), height: Length::Px(16.0), ..Style::default() },
+            Style {
+                width: Length::Px(16.0),
+                height: Length::Px(16.0),
+                ..Style::default()
+            },
             vec!["M0 0 L24 0 L24 24 L0 24 Z".into()],
             [0.0, 0.0, 24.0, 24.0],
             None,

@@ -599,8 +599,7 @@ impl<W: Write + Seek> Mp4StreamWriter<W> {
     }
 
     fn build_moov(&self) -> Vec<u8> {
-        let video_movie_ticks =
-            Self::movie_ticks(self.video.duration, self.video_cfg.timescale);
+        let video_movie_ticks = Self::movie_ticks(self.video.duration, self.video_cfg.timescale);
         let audio_movie_ticks = self
             .audio_cfg
             .as_ref()
@@ -718,7 +717,7 @@ impl<W: Write + Seek> Mp4StreamWriter<W> {
         entry.extend_from_slice(&cfg.bits_per_sample.to_be_bytes());
         entry.extend_from_slice(&0u16.to_be_bytes()); // compression_id
         entry.extend_from_slice(&0u16.to_be_bytes()); // packet_size
-        // sample_rate as 16.16 fixed point
+                                                      // sample_rate as 16.16 fixed point
         entry.extend_from_slice(&(cfg.sample_rate << 16).to_be_bytes());
 
         let sample_entry = match &cfg.coding {
@@ -1061,7 +1060,8 @@ mod tests {
             w.write_video_sample(&avcc_frame(64, 0xf0 + i), 16_666, i == 0)
                 .unwrap();
             // AAC-LC codes 1024 samples a packet, whatever the packet weighs.
-            w.write_audio_packet(&vec![i; 180 + i as usize], 1024).unwrap();
+            w.write_audio_packet(&vec![i; 180 + i as usize], 1024)
+                .unwrap();
         }
         let (stats, cursor) = w.finish_with_sink().unwrap();
         let bytes = cursor.into_inner();
@@ -1069,7 +1069,10 @@ mod tests {
         assert_eq!(stats.audio_frames, 4);
         assert_eq!(stats.audio_duration_ticks, 4 * 1024);
 
-        assert!(contains_tag(&bytes, b"mp4a"), "missing the aac sample entry");
+        assert!(
+            contains_tag(&bytes, b"mp4a"),
+            "missing the aac sample entry"
+        );
         assert!(contains_tag(&bytes, b"esds"), "missing the decoder config");
         assert!(!contains_tag(&bytes, b"sowt"), "this is not a pcm track");
         // The whole point of AAC over PCM here: the file stays an MP4 rather
@@ -1099,7 +1102,8 @@ mod tests {
         let cfg = AudioConfig::aac(48_000, 2, ASC.to_vec(), 2048);
         let mut w =
             Mp4StreamWriter::new(Cursor::new(Vec::new()), video_config(), Some(cfg)).unwrap();
-        w.write_video_sample(&avcc_frame(16, 1), 16_666, true).unwrap();
+        w.write_video_sample(&avcc_frame(16, 1), 16_666, true)
+            .unwrap();
         for _ in 0..8 {
             w.write_audio_packet(&[7u8; 128], 1024).unwrap();
         }
@@ -1129,10 +1133,14 @@ mod tests {
         let cfg = AudioConfig::aac(48_000, 2, ASC.to_vec(), 0);
         let mut w =
             Mp4StreamWriter::new(Cursor::new(Vec::new()), video_config(), Some(cfg)).unwrap();
-        w.write_video_sample(&avcc_frame(16, 1), 16_666, true).unwrap();
+        w.write_video_sample(&avcc_frame(16, 1), 16_666, true)
+            .unwrap();
         w.write_audio_packet(&[7u8; 128], 1024).unwrap();
         let bytes = w.finish_with_sink().unwrap().1.into_inner();
-        assert!(!contains_tag(&bytes, b"elst"), "nothing to skip, nothing to say");
+        assert!(
+            !contains_tag(&bytes, b"elst"),
+            "nothing to skip, nothing to say"
+        );
     }
 
     #[test]
@@ -1143,7 +1151,8 @@ mod tests {
         let cfg = AudioConfig::aac(44_100, 1, ASC.to_vec(), 0);
         let mut w =
             Mp4StreamWriter::new(Cursor::new(Vec::new()), video_config(), Some(cfg)).unwrap();
-        w.write_video_sample(&avcc_frame(16, 1), 16_666, true).unwrap();
+        w.write_video_sample(&avcc_frame(16, 1), 16_666, true)
+            .unwrap();
         let packets: [&[u8]; 3] = [&[1u8; 97], &[2u8; 211], &[3u8; 64]];
         for p in packets {
             w.write_audio_packet(p, 1024).unwrap();
@@ -1169,15 +1178,27 @@ mod tests {
 
     #[test]
     fn the_two_codings_refuse_each_other() {
-        let mut aac =
-            Mp4StreamWriter::new(Cursor::new(Vec::new()), video_config(),
-                                 Some(AudioConfig::aac(48_000, 2, ASC.to_vec(), 0))).unwrap();
-        assert!(aac.write_audio_sample(&[0; 16]).is_err(), "pcm into an aac track");
+        let mut aac = Mp4StreamWriter::new(
+            Cursor::new(Vec::new()),
+            video_config(),
+            Some(AudioConfig::aac(48_000, 2, ASC.to_vec(), 0)),
+        )
+        .unwrap();
+        assert!(
+            aac.write_audio_sample(&[0; 16]).is_err(),
+            "pcm into an aac track"
+        );
 
-        let mut pcm =
-            Mp4StreamWriter::new(Cursor::new(Vec::new()), video_config(),
-                                 Some(AudioConfig::pcm_s16le(48_000, 2))).unwrap();
-        assert!(pcm.write_audio_packet(&[0; 16], 1024).is_err(), "a packet into pcm");
+        let mut pcm = Mp4StreamWriter::new(
+            Cursor::new(Vec::new()),
+            video_config(),
+            Some(AudioConfig::pcm_s16le(48_000, 2)),
+        )
+        .unwrap();
+        assert!(
+            pcm.write_audio_packet(&[0; 16], 1024).is_err(),
+            "a packet into pcm"
+        );
     }
 
     #[test]
@@ -1185,7 +1206,10 @@ mod tests {
         // Under 128 bytes it is one byte, which is every ordinary ASC. Over it,
         // the length continues across bytes with the top bit set — getting this
         // wrong truncates the config and the track goes silent.
-        assert_eq!(descriptor(0x05, &[0xaa, 0xbb]), vec![0x05, 0x02, 0xaa, 0xbb]);
+        assert_eq!(
+            descriptor(0x05, &[0xaa, 0xbb]),
+            vec![0x05, 0x02, 0xaa, 0xbb]
+        );
         let long = vec![0u8; 200];
         let d = descriptor(0x04, &long);
         assert_eq!(&d[..3], &[0x04, 0x81, 0x48], "200 is 0x81 0x48 in base 128");

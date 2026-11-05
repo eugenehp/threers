@@ -19,7 +19,13 @@ pub struct TextArea {
 impl TextArea {
     /// `text` with the caret at its start (as CodeMirror's `setValue`).
     pub fn new(text: impl Into<String>) -> Self {
-        Self { text: text.into(), anchor: 0, caret: 0, goal: None, indent_unit: 2 }
+        Self {
+            text: text.into(),
+            anchor: 0,
+            caret: 0,
+            goal: None,
+            indent_unit: 2,
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -95,7 +101,12 @@ impl TextArea {
     pub fn insert(&mut self, s: &str) {
         let (a, z) = self.selection();
         let chars: Vec<char> = self.text.chars().collect();
-        self.text = chars[..a].iter().copied().chain(s.chars()).chain(chars[z..].iter().copied()).collect();
+        self.text = chars[..a]
+            .iter()
+            .copied()
+            .chain(s.chars())
+            .chain(chars[z..].iter().copied())
+            .collect();
         self.caret = a + s.chars().count();
         self.anchor = self.caret;
         self.goal = None;
@@ -138,7 +149,10 @@ impl TextArea {
             "Enter" => {
                 // `newlineAndIndent`, keeping the line's indentation.
                 let (line, _) = self.line_col(a);
-                let indent: String = self.lines()[line].chars().take_while(|c| *c == ' ' || *c == '\t').collect();
+                let indent: String = self.lines()[line]
+                    .chars()
+                    .take_while(|c| *c == ' ' || *c == '\t')
+                    .collect();
                 self.insert(&format!("\n{indent}"));
                 FieldKey::Edited
             }
@@ -147,12 +161,20 @@ impl TextArea {
                 FieldKey::Edited
             }
             "ArrowLeft" => {
-                let to = if a != z && !m.shift { a } else { self.caret.saturating_sub(1) };
+                let to = if a != z && !m.shift {
+                    a
+                } else {
+                    self.caret.saturating_sub(1)
+                };
                 self.move_to(to, m.shift);
                 FieldKey::Moved
             }
             "ArrowRight" => {
-                let to = if a != z && !m.shift { z } else { (self.caret + 1).min(self.len()) };
+                let to = if a != z && !m.shift {
+                    z
+                } else {
+                    (self.caret + 1).min(self.len())
+                };
                 self.move_to(to, m.shift);
                 FieldKey::Moved
             }
@@ -172,7 +194,11 @@ impl TextArea {
             }
             "Home" | "End" => {
                 let to = if command {
-                    if key == "Home" { 0 } else { self.len() }
+                    if key == "Home" {
+                        0
+                    } else {
+                        self.len()
+                    }
                 } else {
                     let (line, _) = self.line_col(self.caret);
                     self.index_of(line, if key == "Home" { 0 } else { usize::MAX })
@@ -227,7 +253,13 @@ mod tests {
         assert_eq!(t.lines()[3], "  ");
         t.key("x", none);
         assert_eq!(t.lines()[3], "  x");
-        t.key("Home", KeyModifiers { shift: true, ..none });
+        t.key(
+            "Home",
+            KeyModifiers {
+                shift: true,
+                ..none
+            },
+        );
         assert_eq!(t.selection_in_line(3), Some((0, 3, false)));
         t.key("Backspace", none);
         assert_eq!(t.lines()[3], "");

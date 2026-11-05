@@ -6,7 +6,13 @@ fn main() {
     let t = std::time::Instant::now();
     let mut tot = 0;
     for _ in 0..n {
-        tot += threers_codec::opus::decode_webm(&data).expect("decode").planes[0].len();
+        tot += threers_codec::opus::decode_webm(&data)
+            .expect("decode")
+            .planes[0]
+            .len();
     }
-    eprintln!("{:.1} ms per decode ({tot})", t.elapsed().as_secs_f64() * 1e3 / n as f64);
+    eprintln!(
+        "{:.1} ms per decode ({tot})",
+        t.elapsed().as_secs_f64() * 1e3 / n as f64
+    );
 }

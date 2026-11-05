@@ -62,7 +62,15 @@ impl SliceDec<'_> {
 
     /// The collocated vector for list `lx` and reference `ref_idx`
     /// (§8.5.3.2.8), or `None`.
-    fn tmvp(&self, xpb: usize, ypb: usize, w: usize, h: usize, lx: usize, ref_idx: i8) -> Option<[i16; 2]> {
+    fn tmvp(
+        &self,
+        xpb: usize,
+        ypb: usize,
+        w: usize,
+        h: usize,
+        lx: usize,
+        ref_idx: i8,
+    ) -> Option<[i16; 2]> {
         let col = self.col?;
         let log2 = self.sps.log2_ctb;
         let (xbr, ybr) = (xpb + w, ypb + h);
@@ -92,11 +100,8 @@ impl SliceDec<'_> {
             self.sh.collocated_from_l0 as usize
         };
         let slice = m.ctb_slice[(y >> m.log2_ctb) * m.ctb_w + (x >> m.log2_ctb)];
-        let (col_ref_poc, col_ref_lt) = *m
-            .slices
-            .get(slice as usize)?
-            .refs[lc]
-            .get(f.ref_idx[lc] as usize)?;
+        let (col_ref_poc, col_ref_lt) =
+            *m.slices.get(slice as usize)?.refs[lc].get(f.ref_idx[lc] as usize)?;
         let cur = self.refs[lx].get(ref_idx as usize)?;
         if cur.long_term != col_ref_lt {
             return None;
@@ -142,16 +147,18 @@ impl SliceDec<'_> {
         let (xi, yi, wi, hi) = (xpb as isize, ypb as isize, w as isize, h as isize);
         // Pruning compares against a neighbour's motion whenever that
         // neighbour is *available* — whether or not it was itself pruned.
-        let a1r = if part == 1 && matches!(pm, PartMode::PNx2N | PartMode::PnLx2N | PartMode::PnRx2N) {
-            None
-        } else {
-            nb(xi - 1, yi + hi - 1)
-        };
-        let b1r = if part == 1 && matches!(pm, PartMode::P2NxN | PartMode::P2NxnU | PartMode::P2NxnD) {
-            None
-        } else {
-            nb(xi + wi - 1, yi - 1)
-        };
+        let a1r =
+            if part == 1 && matches!(pm, PartMode::PNx2N | PartMode::PnLx2N | PartMode::PnRx2N) {
+                None
+            } else {
+                nb(xi - 1, yi + hi - 1)
+            };
+        let b1r =
+            if part == 1 && matches!(pm, PartMode::P2NxN | PartMode::P2NxnU | PartMode::P2NxnD) {
+                None
+            } else {
+                nb(xi + wi - 1, yi - 1)
+            };
         let a1 = a1r;
         let b1 = b1r.filter(|f| a1r != Some(*f));
         let b0 = nb(xi + wi, yi - 1).filter(|f| b1r != Some(*f));
@@ -168,11 +175,18 @@ impl SliceDec<'_> {
         // feed a combined candidate — past `max` spatial ones it cannot.
         if self.sh.temporal_mvp && list.len() < max {
             let l0 = self.tmvp(xpb, ypb, w, h, 0, 0);
-            let l1 = if is_b { self.tmvp(xpb, ypb, w, h, 1, 0) } else { None };
+            let l1 = if is_b {
+                self.tmvp(xpb, ypb, w, h, 1, 0)
+            } else {
+                None
+            };
             if l0.is_some() || l1.is_some() {
                 list.push(MvField {
                     mv: [l0.unwrap_or([0, 0]), l1.unwrap_or([0, 0])],
-                    ref_idx: [if l0.is_some() { 0 } else { -1 }, if l1.is_some() { 0 } else { -1 }],
+                    ref_idx: [
+                        if l0.is_some() { 0 } else { -1 },
+                        if l1.is_some() { 0 } else { -1 },
+                    ],
                 });
             }
         }
@@ -288,7 +302,11 @@ impl SliceDec<'_> {
         if mv_a.is_none() {
             mv_a = a.iter().flatten().find_map(&scaled);
         }
-        let b = [nb(xi + wi, yi - 1), nb(xi + wi - 1, yi - 1), nb(xi - 1, yi - 1)];
+        let b = [
+            nb(xi + wi, yi - 1),
+            nb(xi + wi - 1, yi - 1),
+            nb(xi - 1, yi - 1),
+        ];
         let mut mv_b = b.iter().flatten().find_map(same_pic);
         if !is_scaled {
             if mv_b.is_some() && mv_a.is_none() {

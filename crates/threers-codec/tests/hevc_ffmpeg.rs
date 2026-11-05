@@ -128,9 +128,14 @@ fn roundtrip_lossless(width: u32, height: u32) {
 /// `(major, minor)` of the ffmpeg on `PATH`.
 fn ffmpeg_version() -> Option<(u32, u32)> {
     let out = Command::new("ffmpeg").arg("-version").output().ok()?;
-    let line = String::from_utf8_lossy(&out.stdout).lines().next()?.to_string();
+    let line = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .next()?
+        .to_string();
     let v = line.strip_prefix("ffmpeg version ")?;
-    let mut parts = v.split(|c: char| !c.is_ascii_digit()).filter(|p| !p.is_empty());
+    let mut parts = v
+        .split(|c: char| !c.is_ascii_digit())
+        .filter(|p| !p.is_empty());
     Some((parts.next()?.parse().ok()?, parts.next()?.parse().ok()?))
 }
 

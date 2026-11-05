@@ -65,11 +65,16 @@ fn at(rgba: &[u8], x: i32, y: i32) -> [u8; 3] {
 }
 
 /// Every failure, as a line; empty when each case draws as three.js.
-pub fn check(label: &str, render: &mut dyn FnMut(&mut Scene, &dyn Camera) -> Vec<u8>) -> Vec<String> {
+pub fn check(
+    label: &str,
+    render: &mut dyn FnMut(&mut Scene, &dyn Camera) -> Vec<u8>,
+) -> Vec<String> {
     let mut failures = Vec::new();
     let mut expect = |case: &str, got: [u8; 3], want: [u8; 3]| {
         if (0..3).any(|k| (got[k] as i32 - want[k] as i32).abs() > 2) {
-            failures.push(format!("{label} {case}: got {got:?}, three.js gives {want:?}"));
+            failures.push(format!(
+                "{label} {case}: got {got:?}, three.js gives {want:?}"
+            ));
         }
     };
     let white = [255, 255, 255];
@@ -88,16 +93,36 @@ pub fn check(label: &str, render: &mut dyn FnMut(&mut Scene, &dyn Camera) -> Vec
     persp.position = Vector3::new(0.0, 0.0, 4.0);
     persp.look_at(Vector3::ZERO);
     let img = render(&mut scene(point(2.0, true), None), &persp);
-    expect("attenuated size 2 at 4, 7 px off centre", at(&img, 7, 0), white);
+    expect(
+        "attenuated size 2 at 4, 7 px off centre",
+        at(&img, 7, 0),
+        white,
+    );
     let img = render(&mut scene(point(2.0, false), None), &persp);
-    expect("unattenuated size 2, 7 px off centre", at(&img, 7, 0), black);
+    expect(
+        "unattenuated size 2, 7 px off centre",
+        at(&img, 7, 0),
+        black,
+    );
 
-    let img = render(&mut scene(point(16.0, false), Some([1.0, 0.0, 0.0])), &ortho());
+    let img = render(
+        &mut scene(point(16.0, false), Some([1.0, 0.0, 0.0])),
+        &ortho(),
+    );
     expect("vertex colour", at(&img, 0, 0), [255, 0, 0]);
 
     let mut mapped = point(16.0, false);
     // Row 0 is v = 0, the bottom.
-    mapped.map = Some(tex(2, 2, &[[0, 0, 255, 255], [255, 255, 0, 255], [255, 0, 0, 255], [0, 255, 0, 255]]));
+    mapped.map = Some(tex(
+        2,
+        2,
+        &[
+            [0, 0, 255, 255],
+            [255, 255, 0, 255],
+            [255, 0, 0, 255],
+            [0, 255, 0, 255],
+        ],
+    ));
     let img = render(&mut scene(mapped, None), &ortho());
     expect("map, top-left", at(&img, -4, -4), [255, 0, 0]);
     expect("map, top-right", at(&img, 3, -4), [0, 255, 0]);

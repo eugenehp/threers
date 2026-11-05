@@ -100,7 +100,8 @@ pub fn prepare_intra_edges(
     }
     let (n_left, n_top, n_tl, n_tr, n_bl) = needs(mode);
     // The top row as (slice, index of the block's first top sample).
-    let top_src: Option<(&[u16], isize)> = if have_top && (n_top || n_tl || (n_left && !have_left)) {
+    let top_src: Option<(&[u16], isize)> = if have_top && (n_top || n_tl || (n_left && !have_left))
+    {
         Some(match top_sb {
             Top::Sb(e) => (e, x as isize * 4),
             Top::Frame => (dst, off as isize - stride as isize),
@@ -112,7 +113,8 @@ pub fn prepare_intra_edges(
         let (s, o) = top_src.unwrap();
         s[(o + i) as usize]
     };
-    let px = |dx: isize, dy: isize| -> u16 { dst[(off as isize + dy * stride as isize + dx) as usize] };
+    let px =
+        |dx: isize, dy: isize| -> u16 { dst[(off as isize + dy * stride as isize + dx) as usize] };
 
     if n_left {
         let sz = (th << 2) as usize;
@@ -129,13 +131,21 @@ pub fn prepare_intra_edges(
                 }
             }
         } else {
-            let v = if have_top { tp(0) } else { (((1 << bitdepth) >> 1) + 1) as u16 };
+            let v = if have_top {
+                tp(0)
+            } else {
+                (((1 << bitdepth) >> 1) + 1) as u16
+            };
             for o in &mut out[left..left + sz] {
                 *o = v;
             }
         }
         if n_bl {
-            let have_bl = if !have_left || y + th >= h { false } else { edge_flags & EDGE_I444_LEFT_HAS_BOTTOM != 0 };
+            let have_bl = if !have_left || y + th >= h {
+                false
+            } else {
+                edge_flags & EDGE_I444_LEFT_HAS_BOTTOM != 0
+            };
             if have_bl {
                 let px_have = sz.min(((h - y - th) << 2) as usize);
                 for i in 0..px_have {
@@ -170,13 +180,21 @@ pub fn prepare_intra_edges(
                 }
             }
         } else {
-            let v = if have_left { px(-1, 0) } else { (((1 << bitdepth) >> 1) - 1) as u16 };
+            let v = if have_left {
+                px(-1, 0)
+            } else {
+                (((1 << bitdepth) >> 1) - 1) as u16
+            };
             for o in &mut out[top..top + sz] {
                 *o = v;
             }
         }
         if n_tr {
-            let have_tr = if !have_top || x + tw >= w { false } else { edge_flags & EDGE_I444_TOP_HAS_RIGHT != 0 };
+            let have_tr = if !have_top || x + tw >= w {
+                false
+            } else {
+                edge_flags & EDGE_I444_TOP_HAS_RIGHT != 0
+            };
             if have_tr {
                 let px_have = sz.min(((w - x - tw) << 2) as usize);
                 for i in 0..px_have {
@@ -209,7 +227,8 @@ pub fn prepare_intra_edges(
             ((1 << bitdepth) >> 1) as u16
         };
         if mode == Z2_PRED && tw + th >= 6 && filter_edge {
-            out[TL] = ((((out[TL - 1] as i32 + out[TL + 1] as i32) * 5) + out[TL] as i32 * 6 + 8) >> 4) as u16;
+            out[TL] = ((((out[TL - 1] as i32 + out[TL + 1] as i32) * 5) + out[TL] as i32 * 6 + 8)
+                >> 4) as u16;
         }
     }
     mode
@@ -254,7 +273,11 @@ fn dc_gen(edge: &[u16], w: usize, h: usize, hbd: bool) -> u32 {
     }
     dc >>= (w + h).trailing_zeros();
     if w != h {
-        let (m12, m14, sh) = if hbd { (0xAAAB, 0x6667, 17) } else { (0x5556, 0x3334, 16) };
+        let (m12, m14, sh) = if hbd {
+            (0xAAAB, 0x6667, 17)
+        } else {
+            (0x5556, 0x3334, 16)
+        };
         dc *= if w > h * 2 || h > w * 2 { m14 } else { m12 };
         dc >>= sh;
     }
@@ -318,7 +341,17 @@ fn get_filter_strength(wh: i32, angle: i32, is_sm: bool) -> i32 {
 
 /// `filter_edge`: `inp(i)` reads the input edge at index `i`.
 #[allow(clippy::too_many_arguments)]
-fn filter_edge(out: &mut [u16], o: usize, sz: i32, lim_from: i32, lim_to: i32, inp: &dyn Fn(i32) -> i32, from: i32, to: i32, strength: i32) {
+fn filter_edge(
+    out: &mut [u16],
+    o: usize,
+    sz: i32,
+    lim_from: i32,
+    lim_to: i32,
+    inp: &dyn Fn(i32) -> i32,
+    from: i32,
+    to: i32,
+    strength: i32,
+) {
     const K: [[i32; 5]; 3] = [[0, 4, 8, 4, 0], [0, 5, 6, 5, 0], [2, 4, 4, 4, 2]];
     let mut i = 0;
     while i < sz.min(lim_from) {
@@ -343,7 +376,15 @@ fn get_upsample(wh: i32, angle: i32, is_sm: bool) -> bool {
     angle < 40 && wh <= 16 >> is_sm as i32
 }
 
-fn upsample_edge(out: &mut [u16], o: usize, hsz: i32, inp: &dyn Fn(i32) -> i32, from: i32, to: i32, max: i32) {
+fn upsample_edge(
+    out: &mut [u16],
+    o: usize,
+    hsz: i32,
+    inp: &dyn Fn(i32) -> i32,
+    from: i32,
+    to: i32,
+    max: i32,
+) {
     const K: [i32; 4] = [-1, 9, 9, -1];
     let mut i = 0;
     while i < hsz - 1 {
@@ -360,7 +401,19 @@ fn upsample_edge(out: &mut [u16], o: usize, hsz: i32, inp: &dyn Fn(i32) -> i32, 
 
 /// `intra_pred[mode]`.
 #[allow(clippy::too_many_arguments)]
-pub fn intra_pred(mode: usize, dst: &mut [u16], off: usize, stride: usize, edge: &[u16], w: usize, h: usize, angle: i32, max_w: i32, max_h: i32, bitdepth_max: i32) {
+pub fn intra_pred(
+    mode: usize,
+    dst: &mut [u16],
+    off: usize,
+    stride: usize,
+    edge: &[u16],
+    w: usize,
+    h: usize,
+    angle: i32,
+    max_w: i32,
+    max_h: i32,
+    bitdepth_max: i32,
+) {
     let hbd = bitdepth_max != 255;
     match mode {
         DC_PRED => splat(dst, off, stride, w, h, dc_gen(edge, w, h, hbd) as u16),
@@ -432,21 +485,60 @@ pub fn intra_pred(mode: usize, dst: &mut [u16], off: usize, stride: usize, edge:
             let right = e(edge, w as isize);
             for y in 0..h {
                 for x in 0..w {
-                    let p = wh[x] as i32 * e(edge, -(y as isize + 1)) + (256 - wh[x] as i32) * right;
+                    let p =
+                        wh[x] as i32 * e(edge, -(y as isize + 1)) + (256 - wh[x] as i32) * right;
                     dst[off + y * stride + x] = ((p + 128) >> 8) as u16;
                 }
             }
         }
-        Z1_PRED => z1(dst, off, stride, edge, w as i32, h as i32, angle, bitdepth_max),
-        Z2_PRED => z2(dst, off, stride, edge, w as i32, h as i32, angle, max_w, max_h, bitdepth_max),
-        Z3_PRED => z3(dst, off, stride, edge, w as i32, h as i32, angle, bitdepth_max),
+        Z1_PRED => z1(
+            dst,
+            off,
+            stride,
+            edge,
+            w as i32,
+            h as i32,
+            angle,
+            bitdepth_max,
+        ),
+        Z2_PRED => z2(
+            dst,
+            off,
+            stride,
+            edge,
+            w as i32,
+            h as i32,
+            angle,
+            max_w,
+            max_h,
+            bitdepth_max,
+        ),
+        Z3_PRED => z3(
+            dst,
+            off,
+            stride,
+            edge,
+            w as i32,
+            h as i32,
+            angle,
+            bitdepth_max,
+        ),
         FILTER_PRED => filter_pred(dst, off, stride, edge, w, h, angle, bitdepth_max),
         _ => unreachable!(),
     }
 }
 
 #[allow(clippy::too_many_arguments)]
-fn z1(dst: &mut [u16], off: usize, stride: usize, edge: &[u16], w: i32, h: i32, mut angle: i32, max: i32) {
+fn z1(
+    dst: &mut [u16],
+    off: usize,
+    stride: usize,
+    edge: &[u16],
+    w: i32,
+    h: i32,
+    mut angle: i32,
+    max: i32,
+) {
     let is_sm = (angle >> 9) & 1 != 0;
     let filt = angle >> 10 != 0;
     angle &= 511;
@@ -463,7 +555,11 @@ fn z1(dst: &mut [u16], off: usize, stride: usize, edge: &[u16], w: i32, h: i32, 
         max_base_x = 2 * (w + h) - 2;
         dx <<= 1;
     } else {
-        let fs = if filt { get_filter_strength(w + h, 90 - angle, is_sm) } else { 0 };
+        let fs = if filt {
+            get_filter_strength(w + h, 90 - angle, is_sm)
+        } else {
+            0
+        };
         if fs != 0 {
             filter_edge(&mut top_out, 0, w + h, 0, w + h, &inp, -1, w + w.min(h), fs);
             use_out = true;
@@ -473,7 +569,13 @@ fn z1(dst: &mut [u16], off: usize, stride: usize, edge: &[u16], w: i32, h: i32, 
             max_base_x = w + w.min(h) - 1;
         }
     }
-    let top = |i: i32| if use_out { top_out[i as usize] as i32 } else { e(edge, 1 + i as isize) };
+    let top = |i: i32| {
+        if use_out {
+            top_out[i as usize] as i32
+        } else {
+            e(edge, 1 + i as isize)
+        }
+    };
     let base_inc = 1 + upsample_above as i32;
     let mut xpos = dx;
     for y in 0..h as usize {
@@ -497,7 +599,18 @@ fn z1(dst: &mut [u16], off: usize, stride: usize, edge: &[u16], w: i32, h: i32, 
 }
 
 #[allow(clippy::too_many_arguments)]
-fn z2(dst: &mut [u16], off: usize, stride: usize, edge_in: &[u16], w: i32, h: i32, mut angle: i32, max_w: i32, max_h: i32, max: i32) {
+fn z2(
+    dst: &mut [u16],
+    off: usize,
+    stride: usize,
+    edge_in: &[u16],
+    w: i32,
+    h: i32,
+    mut angle: i32,
+    max_w: i32,
+    max_h: i32,
+    max: i32,
+) {
     let is_sm = (angle >> 9) & 1 != 0;
     let filt = angle >> 10 != 0;
     angle &= 511;
@@ -512,7 +625,11 @@ fn z2(dst: &mut [u16], off: usize, stride: usize, edge_in: &[u16], w: i32, h: i3
         upsample_edge(&mut edge, T, w + 1, &inp_top, 0, w + 1, max);
         dx <<= 1;
     } else {
-        let fs = if filt { get_filter_strength(w + h, angle - 90, is_sm) } else { 0 };
+        let fs = if filt {
+            get_filter_strength(w + h, angle - 90, is_sm)
+        } else {
+            0
+        };
         if fs != 0 {
             let inp = |i: i32| e(edge_in, 1 + i as isize);
             filter_edge(&mut edge, T + 1, w, 0, max_w, &inp, -1, w, fs);
@@ -524,12 +641,34 @@ fn z2(dst: &mut [u16], off: usize, stride: usize, edge_in: &[u16], w: i32, h: i3
     }
     let inp_left = |i: i32| e(edge_in, i as isize - h as isize);
     if upsample_left {
-        upsample_edge(&mut edge, T - (h as usize) * 2, h + 1, &inp_left, 0, h + 1, max);
+        upsample_edge(
+            &mut edge,
+            T - (h as usize) * 2,
+            h + 1,
+            &inp_left,
+            0,
+            h + 1,
+            max,
+        );
         dy <<= 1;
     } else {
-        let fs = if filt { get_filter_strength(w + h, 180 - angle, is_sm) } else { 0 };
+        let fs = if filt {
+            get_filter_strength(w + h, 180 - angle, is_sm)
+        } else {
+            0
+        };
         if fs != 0 {
-            filter_edge(&mut edge, T - h as usize, h, h - max_h, h, &inp_left, 0, h + 1, fs);
+            filter_edge(
+                &mut edge,
+                T - h as usize,
+                h,
+                h - max_h,
+                h,
+                &inp_left,
+                0,
+                h + 1,
+                fs,
+            );
         } else {
             for i in 0..h as usize {
                 edge[T - h as usize + i] = edge_in[TL - h as usize + i];
@@ -545,13 +684,14 @@ fn z2(dst: &mut [u16], off: usize, stride: usize, edge_in: &[u16], w: i32, h: i3
         let frac_x = xpos & 0x3e;
         let mut ypos = (y << (6 + upsample_left as i32)) - dy;
         for x in 0..w {
-            
             let v = if base_x >= 0 {
-                edge[T + base_x as usize] as i32 * (64 - frac_x) + edge[T + base_x as usize + 1] as i32 * frac_x
+                edge[T + base_x as usize] as i32 * (64 - frac_x)
+                    + edge[T + base_x as usize + 1] as i32 * frac_x
             } else {
                 let base_y = ypos >> 6;
                 let frac_y = ypos & 0x3e;
-                edge[(left - base_y as isize) as usize] as i32 * (64 - frac_y) + edge[(left - (base_y as isize + 1)) as usize] as i32 * frac_y
+                edge[(left - base_y as isize) as usize] as i32 * (64 - frac_y)
+                    + edge[(left - (base_y as isize + 1)) as usize] as i32 * frac_y
             };
             dst[off + y as usize * stride + x as usize] = ((v + 32) >> 6) as u16;
             base_x += base_inc_x;
@@ -562,7 +702,16 @@ fn z2(dst: &mut [u16], off: usize, stride: usize, edge_in: &[u16], w: i32, h: i3
 }
 
 #[allow(clippy::too_many_arguments)]
-fn z3(dst: &mut [u16], off: usize, stride: usize, edge: &[u16], w: i32, h: i32, mut angle: i32, max: i32) {
+fn z3(
+    dst: &mut [u16],
+    off: usize,
+    stride: usize,
+    edge: &[u16],
+    w: i32,
+    h: i32,
+    mut angle: i32,
+    max: i32,
+) {
     let is_sm = (angle >> 9) & 1 != 0;
     let filt = angle >> 10 != 0;
     angle &= 511;
@@ -573,15 +722,37 @@ fn z3(dst: &mut [u16], off: usize, stride: usize, edge: &[u16], w: i32, h: i32, 
     // `left[-k]`: either left_out[base - k] or edge[TL - 1 - k].
     let (use_out, lbase, max_base_y);
     if upsample_left {
-        upsample_edge(&mut left_out, 0, w + h, &inp, (w - h).max(0), w + h + 1, max);
+        upsample_edge(
+            &mut left_out,
+            0,
+            w + h,
+            &inp,
+            (w - h).max(0),
+            w + h + 1,
+            max,
+        );
         use_out = true;
         lbase = 2 * (w + h) - 2;
         max_base_y = 2 * (w + h) - 2;
         dy <<= 1;
     } else {
-        let fs = if filt { get_filter_strength(w + h, angle - 180, is_sm) } else { 0 };
+        let fs = if filt {
+            get_filter_strength(w + h, angle - 180, is_sm)
+        } else {
+            0
+        };
         if fs != 0 {
-            filter_edge(&mut left_out, 0, w + h, 0, w + h, &inp, (w - h).max(0), w + h + 1, fs);
+            filter_edge(
+                &mut left_out,
+                0,
+                w + h,
+                0,
+                w + h,
+                &inp,
+                (w - h).max(0),
+                w + h + 1,
+                fs,
+            );
             use_out = true;
             lbase = w + h - 1;
             max_base_y = w + h - 1;
@@ -591,7 +762,13 @@ fn z3(dst: &mut [u16], off: usize, stride: usize, edge: &[u16], w: i32, h: i32, 
             max_base_y = h + w.min(h) - 1;
         }
     }
-    let left = |k: i32| if use_out { left_out[(lbase - k) as usize] as i32 } else { e(edge, -1 - k as isize) };
+    let left = |k: i32| {
+        if use_out {
+            left_out[(lbase - k) as usize] as i32
+        } else {
+            e(edge, -1 - k as isize)
+        }
+    };
     let base_inc = 1 + upsample_left as i32;
     let mut ypos = dy;
     for x in 0..w as usize {
@@ -618,7 +795,16 @@ fn z3(dst: &mut [u16], off: usize, stride: usize, edge: &[u16], w: i32, h: i32, 
 }
 
 #[allow(clippy::too_many_arguments)]
-fn filter_pred(dst: &mut [u16], off: usize, stride: usize, edge: &[u16], w: usize, h: usize, filt_idx: i32, max: i32) {
+fn filter_pred(
+    dst: &mut [u16],
+    off: usize,
+    stride: usize,
+    edge: &[u16],
+    w: usize,
+    h: usize,
+    filt_idx: i32,
+    max: i32,
+) {
     let f = &FILTER_INTRA_TAPS[(filt_idx & 511) as usize];
     // dav1d reads from `topleft_in` for the first row, then from `dst`.
     for y in (0..h).step_by(2) {
@@ -677,7 +863,18 @@ fn filter_pred(dst: &mut [u16], off: usize, stride: usize, edge: &[u16], w: usiz
 
 /// `cfl_ac_c`.
 #[allow(clippy::too_many_arguments)]
-pub fn cfl_ac(ac: &mut [i16], ypx: &[u16], yoff: usize, stride: usize, w_pad: usize, h_pad: usize, width: usize, height: usize, ss_hor: bool, ss_ver: bool) {
+pub fn cfl_ac(
+    ac: &mut [i16],
+    ypx: &[u16],
+    yoff: usize,
+    stride: usize,
+    w_pad: usize,
+    h_pad: usize,
+    width: usize,
+    height: usize,
+    ss_hor: bool,
+    ss_ver: bool,
+) {
     let (sh, sv) = (ss_hor as usize, ss_ver as usize);
     let mut y = 0;
     while y < height - 4 * h_pad {
@@ -720,7 +917,18 @@ pub fn cfl_ac(ac: &mut [i16], ypx: &[u16], yoff: usize, stride: usize, w_pad: us
 
 /// `cfl_pred[mode]`.
 #[allow(clippy::too_many_arguments)]
-pub fn cfl_pred(mode: usize, dst: &mut [u16], off: usize, stride: usize, edge: &[u16], w: usize, h: usize, ac: &[i16], alpha: i32, bitdepth_max: i32) {
+pub fn cfl_pred(
+    mode: usize,
+    dst: &mut [u16],
+    off: usize,
+    stride: usize,
+    edge: &[u16],
+    w: usize,
+    h: usize,
+    ac: &[i16],
+    alpha: i32,
+    bitdepth_max: i32,
+) {
     let hbd = bitdepth_max != 255;
     let dc = match mode {
         DC_PRED => dc_gen(edge, w, h, hbd) as i32,
@@ -732,13 +940,22 @@ pub fn cfl_pred(mode: usize, dst: &mut [u16], off: usize, stride: usize, edge: &
         for x in 0..w {
             let diff = alpha * ac[y * w + x] as i32;
             let v = (diff.abs() + 32) >> 6;
-            dst[off + y * stride + x] = (dc + if diff < 0 { -v } else { v }).clamp(0, bitdepth_max) as u16;
+            dst[off + y * stride + x] =
+                (dc + if diff < 0 { -v } else { v }).clamp(0, bitdepth_max) as u16;
         }
     }
 }
 
 /// `pal_pred_c` on unpacked indices.
-pub fn pal_pred(dst: &mut [u16], off: usize, stride: usize, pal: &[u16; 8], idx: &[u8], w: usize, h: usize) {
+pub fn pal_pred(
+    dst: &mut [u16],
+    off: usize,
+    stride: usize,
+    pal: &[u16; 8],
+    idx: &[u8],
+    w: usize,
+    h: usize,
+) {
     for y in 0..h {
         for x in 0..w {
             dst[off + y * stride + x] = pal[idx[y * w + x] as usize];

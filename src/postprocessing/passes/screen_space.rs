@@ -31,7 +31,11 @@ fn depth_material(double_sided: bool) -> Arc<Material> {
 
 /// Where several draws meant for `dest` go: a stand-in when it is the
 /// screen (see [`PassContext::screen_stand_in`]), else `dest` itself.
-fn composite_dest(ctx: &mut PassContext<'_, '_>, to_screen: bool, target: &Target) -> Option<Target> {
+fn composite_dest(
+    ctx: &mut PassContext<'_, '_>,
+    to_screen: bool,
+    target: &Target,
+) -> Option<Target> {
     if to_screen {
         ctx.screen_stand_in()
     } else {
@@ -124,7 +128,11 @@ impl SsaoPass {
                 let y = random() * 2.0 - 1.0;
                 let z = random();
                 let len = (x * x + y * y + z * z).sqrt();
-                let (x, y, z) = if len > 0.0 { (x / len, y / len, z / len) } else { (0.0, 0.0, 0.0) };
+                let (x, y, z) = if len > 0.0 {
+                    (x / len, y / len, z / len)
+                } else {
+                    (0.0, 0.0, 0.0)
+                };
                 let mut scale = i as f64 / n as f64;
                 scale = 0.1 + (1.0 - 0.1) * (scale * scale);
                 [(x * scale) as f32, (y * scale) as f32, (z * scale) as f32]
@@ -159,7 +167,14 @@ impl Pass for SsaoPass {
         self.height = height.max(1);
     }
 
-    fn render(&mut self, ctx: &mut PassContext<'_, '_>, write: &Target, read: &Target, _d: f32, _m: bool) {
+    fn render(
+        &mut self,
+        ctx: &mut PassContext<'_, '_>,
+        write: &Target,
+        read: &Target,
+        _d: f32,
+        _m: bool,
+    ) {
         let (w, h) = (self.width, self.height);
         let normal = ctx.target(&mut self.normal_rt, w, h);
         // Normals and depth, meshes only. three.js clears to 0x7777ff and the
@@ -200,7 +215,9 @@ impl Pass for SsaoPass {
         );
         let blur = ctx.target(&mut self.blur_rt, w, h);
         ctx.fx(
-            Fx::new(kinds::SSAO_BLUR).input(&ssao).blend(PostFxBlend::Overwrite),
+            Fx::new(kinds::SSAO_BLUR)
+                .input(&ssao)
+                .blend(PostFxBlend::Overwrite),
             Dest::Target(&blur),
         );
 
@@ -216,7 +233,9 @@ impl Pass for SsaoPass {
                     .blend(PostFxBlend::Overwrite),
                 dest,
             ),
-            ssao_output::NORMAL => ctx.fx(Fx::copy(&normal, 1.0).blend(PostFxBlend::Overwrite), dest),
+            ssao_output::NORMAL => {
+                ctx.fx(Fx::copy(&normal, 1.0).blend(PostFxBlend::Overwrite), dest)
+            }
             _ => {
                 // The beauty, then the blurred occlusion multiplied in.
                 let Some(t) = composite_dest(ctx, to_screen, write) else {
@@ -263,8 +282,14 @@ impl Pass for SsaoPass {
             "minDistance" => assign_f32(&mut self.min_distance, &value),
             "maxDistance" => assign_f32(&mut self.max_distance, &value),
             "output" => value.as_i32().map(|v| self.output = v).is_some(),
-            "width" => value.as_i32().map(|v| self.width = v.max(1) as u32).is_some(),
-            "height" => value.as_i32().map(|v| self.height = v.max(1) as u32).is_some(),
+            "width" => value
+                .as_i32()
+                .map(|v| self.width = v.max(1) as u32)
+                .is_some(),
+            "height" => value
+                .as_i32()
+                .map(|v| self.height = v.max(1) as u32)
+                .is_some(),
             _ => false,
         }
     }
@@ -359,7 +384,14 @@ impl Pass for SaoPass {
         self.height = height.max(1);
     }
 
-    fn render(&mut self, ctx: &mut PassContext<'_, '_>, _write: &Target, read: &Target, _d: f32, _m: bool) {
+    fn render(
+        &mut self,
+        ctx: &mut PassContext<'_, '_>,
+        _write: &Target,
+        read: &Target,
+        _d: f32,
+        _m: bool,
+    ) {
         let (w, h) = (self.width, self.height);
         let to_screen = self.state.render_to_screen;
         // Onto the screen three.js first copies readBuffer and later
@@ -368,7 +400,10 @@ impl Pass for SaoPass {
             let Some(s) = ctx.screen_stand_in() else {
                 return;
             };
-            ctx.fx(Fx::copy(read, 1.0).blend(PostFxBlend::Overwrite), Dest::StandIn(&s));
+            ctx.fx(
+                Fx::copy(read, 1.0).blend(PostFxBlend::Overwrite),
+                Dest::StandIn(&s),
+            );
             Some(s)
         } else {
             None
@@ -386,7 +421,11 @@ impl Pass for SaoPass {
         );
 
         let camera = ctx.postfx_camera(self.camera);
-        let perspective = if ctx.camera_is_perspective(self.camera) { 1.0 } else { 0.0 };
+        let perspective = if ctx.camera_is_perspective(self.camera) {
+            1.0
+        } else {
+            0.0
+        };
         let white = [1.0, 1.0, 1.0, 1.0];
         let sao = ctx.target(&mut self.sao_rt, w, h);
         ctx.fx(
@@ -394,7 +433,12 @@ impl Pass for SaoPass {
                 .normal(&normal)
                 .hw_depth(&normal)
                 .camera(camera.clone())
-                .p2([self.sao_bias, self.sao_intensity, self.sao_scale, self.sao_kernel_radius])
+                .p2([
+                    self.sao_bias,
+                    self.sao_intensity,
+                    self.sao_scale,
+                    self.sao_kernel_radius,
+                ])
                 .p3([self.sao_min_resolution, 0.0, perspective, 0.0])
                 .clear_color(white),
             Dest::Target(&sao),
@@ -423,7 +467,11 @@ impl Pass for SaoPass {
             ctx.fx(blur_fx(&blur, [1.0, 0.0]), Dest::Target(&sao));
         }
 
-        let source = if self.output == sao_output::NORMAL { &normal } else { &sao };
+        let source = if self.output == sao_output::NORMAL {
+            &normal
+        } else {
+            &sao
+        };
         let blend = if self.output == sao_output::DEFAULT {
             PostFxBlend::Multiply
         } else {
@@ -590,7 +638,14 @@ impl Pass for SsrPass {
         self.height = height.max(1);
     }
 
-    fn render(&mut self, ctx: &mut PassContext<'_, '_>, write: &Target, _read: &Target, _d: f32, _m: bool) {
+    fn render(
+        &mut self,
+        ctx: &mut PassContext<'_, '_>,
+        write: &Target,
+        _read: &Target,
+        _d: f32,
+        _m: bool,
+    ) {
         let (w, h) = (self.width, self.height);
         let draw = |m: Option<Arc<Material>>| SceneDraw {
             scene: self.scene,
@@ -601,7 +656,10 @@ impl Pass for SsrPass {
         let beauty = ctx.target(&mut self.beauty, w, h);
         ctx.render_scene(Dest::Target(&beauty), &draw(None));
         let normal = ctx.target(&mut self.normal_rt, w, h);
-        ctx.render_scene(Dest::Target(&normal), &draw(Some(self.normal_material.clone())));
+        ctx.render_scene(
+            Dest::Target(&normal),
+            &draw(Some(self.normal_material.clone())),
+        );
         let metalness = ctx.target(&mut self.metalness, w, h);
         if let Some(selects) = &self.selects {
             ctx.render_scene(
@@ -619,7 +677,11 @@ impl Pass for SsrPass {
         let prev = ctx.target(&mut self.prev, w, h);
 
         let camera = ctx.postfx_camera(self.camera);
-        let perspective = if ctx.camera_is_perspective(self.camera) { 1.0 } else { 0.0 };
+        let perspective = if ctx.camera_is_perspective(self.camera) {
+            1.0
+        } else {
+            0.0
+        };
         let flags = u32::from(self.distance_attenuation)
             | u32::from(self.fresnel) << 1
             | u32::from(self.infinite_thick) << 2
@@ -633,16 +695,31 @@ impl Pass for SsrPass {
                 .normal(&normal)
                 .depth(&metalness)
                 .camera(camera.clone())
-                .p2([self.opacity, self.max_distance, self.thickness, flags as f32])
+                .p2([
+                    self.opacity,
+                    self.max_distance,
+                    self.thickness,
+                    flags as f32,
+                ])
                 .p3([max_step, perspective, 0.0, 0.0])
                 .blend(PostFxBlend::Overwrite),
             Dest::Target(&ssr),
         );
         let blur2 = if self.blur {
             let b1 = ctx.target(&mut self.blur1, w, h);
-            ctx.fx(Fx::new(kinds::SSR_BLUR).input(&ssr).blend(PostFxBlend::Overwrite), Dest::Target(&b1));
+            ctx.fx(
+                Fx::new(kinds::SSR_BLUR)
+                    .input(&ssr)
+                    .blend(PostFxBlend::Overwrite),
+                Dest::Target(&b1),
+            );
             let b2 = ctx.target(&mut self.blur2, w, h);
-            ctx.fx(Fx::new(kinds::SSR_BLUR).input(&b1).blend(PostFxBlend::Overwrite), Dest::Target(&b2));
+            ctx.fx(
+                Fx::new(kinds::SSR_BLUR)
+                    .input(&b1)
+                    .blend(PostFxBlend::Overwrite),
+                Dest::Target(&b2),
+            );
             Some(b2)
         } else {
             None
@@ -656,7 +733,10 @@ impl Pass for SsrPass {
             ssr_output::SSR => {
                 ctx.fx(copy(reflection, PostFxBlend::Overwrite), dest);
                 if self.bouncing {
-                    ctx.fx(copy(blur2.as_ref().unwrap_or(&beauty), PostFxBlend::Overwrite), Dest::Target(&prev));
+                    ctx.fx(
+                        copy(blur2.as_ref().unwrap_or(&beauty), PostFxBlend::Overwrite),
+                        Dest::Target(&prev),
+                    );
                     ctx.fx(copy(&ssr, PostFxBlend::Normal), Dest::Target(&prev));
                 }
             }
@@ -737,8 +817,14 @@ impl Pass for SsrPass {
             "fresnel" => assign_bool(&mut self.fresnel, &value),
             "infiniteThick" => assign_bool(&mut self.infinite_thick, &value),
             "bouncing" => assign_bool(&mut self.bouncing, &value),
-            "width" => value.as_i32().map(|v| self.width = v.max(1) as u32).is_some(),
-            "height" => value.as_i32().map(|v| self.height = v.max(1) as u32).is_some(),
+            "width" => value
+                .as_i32()
+                .map(|v| self.width = v.max(1) as u32)
+                .is_some(),
+            "height" => value
+                .as_i32()
+                .map(|v| self.height = v.max(1) as u32)
+                .is_some(),
             "selects" => match value {
                 ParamValue::Objects(ids) => {
                     self.selects = Some(ids);
@@ -774,7 +860,11 @@ const MAX_EDGE_GLOW: f32 = 4.0;
 /// OutlinePass's pulse.
 fn now_ms() -> f64 {
     static START: std::sync::OnceLock<web_time::Instant> = std::sync::OnceLock::new();
-    START.get_or_init(web_time::Instant::now).elapsed().as_secs_f64() * 1000.0
+    START
+        .get_or_init(web_time::Instant::now)
+        .elapsed()
+        .as_secs_f64()
+        * 1000.0
 }
 
 /// three.js `OutlinePass(resolution, scene, camera, selectedObjects)`: a glow
@@ -811,7 +901,13 @@ pub struct OutlinePass {
 }
 
 impl OutlinePass {
-    pub fn new(width: u32, height: u32, scene: usize, camera: usize, selected: Vec<ObjectId>) -> Self {
+    pub fn new(
+        width: u32,
+        height: u32,
+        scene: usize,
+        camera: usize,
+        selected: Vec<ObjectId>,
+    ) -> Self {
         Self {
             state: PassState::swapping(false),
             scene,
@@ -851,7 +947,14 @@ impl Pass for OutlinePass {
         self.height = height.max(1);
     }
 
-    fn render(&mut self, ctx: &mut PassContext<'_, '_>, _write: &Target, read: &Target, _d: f32, _m: bool) {
+    fn render(
+        &mut self,
+        ctx: &mut PassContext<'_, '_>,
+        _write: &Target,
+        read: &Target,
+        _d: f32,
+        _m: bool,
+    ) {
         if !self.selected.is_empty() {
             let (w, h) = (self.width, self.height);
             let round = |v: f32| (v + 0.5).floor().max(1.0) as u32;
@@ -873,9 +976,15 @@ impl Pass for OutlinePass {
                 clear: Some((Color::WHITE, 1.0)),
                 ..SceneDraw::default()
             };
-            ctx.render_scene(Dest::Target(&depth), &draw(Visibility::Except(self.selected.clone())));
+            ctx.render_scene(
+                Dest::Target(&depth),
+                &draw(Visibility::Except(self.selected.clone())),
+            );
             let selected = ctx.target(&mut self.selected_rt, w, h);
-            ctx.render_scene(Dest::Target(&selected), &draw(Visibility::Only(self.selected.clone())));
+            ctx.render_scene(
+                Dest::Target(&selected),
+                &draw(Visibility::Only(self.selected.clone())),
+            );
             let mask = ctx.target(&mut self.mask_rt, w, h);
             ctx.fx(
                 Fx::new(kinds::OUTLINE_MASK)
@@ -892,7 +1001,8 @@ impl Pass for OutlinePass {
             let mut hidden = self.hidden_edge_color;
             if self.pulse_period > 0.0 {
                 let s = (1.0 + 0.25) / 2.0
-                    + (now_ms() * 0.01 / self.pulse_period as f64).cos() as f32 * (1.0 - 0.25) / 2.0;
+                    + (now_ms() * 0.01 / self.pulse_period as f64).cos() as f32 * (1.0 - 0.25)
+                        / 2.0;
                 visible = Color::new(visible.r * s, visible.g * s, visible.b * s);
                 hidden = Color::new(hidden.r * s, hidden.g * s, hidden.b * s);
             }
@@ -914,12 +1024,24 @@ impl Pass for OutlinePass {
                     .p2([radius, dir[0], dir[1], max])
             };
             let blur1 = ctx.target(&mut self.blur1, hw, hh);
-            ctx.fx(blur(&edge1, self.edge_thickness, [1.0, 0.0], MAX_EDGE_THICKNESS), Dest::Target(&blur1));
-            ctx.fx(blur(&blur1, self.edge_thickness, [0.0, 1.0], MAX_EDGE_THICKNESS), Dest::Target(&edge1));
+            ctx.fx(
+                blur(&edge1, self.edge_thickness, [1.0, 0.0], MAX_EDGE_THICKNESS),
+                Dest::Target(&blur1),
+            );
+            ctx.fx(
+                blur(&blur1, self.edge_thickness, [0.0, 1.0], MAX_EDGE_THICKNESS),
+                Dest::Target(&edge1),
+            );
             let blur2 = ctx.target(&mut self.blur2, qw, qh);
-            ctx.fx(blur(&edge1, MAX_EDGE_GLOW, [1.0, 0.0], MAX_EDGE_GLOW), Dest::Target(&blur2));
+            ctx.fx(
+                blur(&edge1, MAX_EDGE_GLOW, [1.0, 0.0], MAX_EDGE_GLOW),
+                Dest::Target(&blur2),
+            );
             let edge2 = ctx.target(&mut self.edge2, qw, qh);
-            ctx.fx(blur(&blur2, MAX_EDGE_GLOW, [0.0, 1.0], MAX_EDGE_GLOW), Dest::Target(&edge2));
+            ctx.fx(
+                blur(&blur2, MAX_EDGE_GLOW, [0.0, 1.0], MAX_EDGE_GLOW),
+                Dest::Target(&edge2),
+            );
 
             // 5. Added over readBuffer.
             let mut overlay = Fx::new(kinds::OUTLINE_OVERLAY)
@@ -942,7 +1064,10 @@ impl Pass for OutlinePass {
             ctx.fx(overlay, Dest::Target(read));
         }
         if self.state.render_to_screen {
-            ctx.fx(Fx::copy(read, 1.0).blend(PostFxBlend::Overwrite), Dest::Screen);
+            ctx.fx(
+                Fx::copy(read, 1.0).blend(PostFxBlend::Overwrite),
+                Dest::Screen,
+            );
         }
     }
 

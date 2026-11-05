@@ -245,7 +245,8 @@ impl PathMesh {
                 };
                 let b = before.map_or([0.0; 3], |q| rel(q, s));
                 let a = after.map_or([0.0; 3], |q| rel(q, t));
-                m.neighbours.push([b[0], b[1], b[2], along as f32, a[0], a[1], a[2], 0.0]);
+                m.neighbours
+                    .push([b[0], b[1], b[2], along as f32, a[0], a[1], a[2], 0.0]);
                 along += len(s, t);
             }
             let first = m.neighbours.len() - edges;
@@ -434,13 +435,19 @@ impl SegmentMarks {
     /// [`set_paths`](Self::set_paths).
     pub fn path_rows(&self, path: usize) -> Option<std::ops::Range<u32>> {
         let start = *self.path_starts.get(path)?;
-        let end = self.path_starts.get(path + 1).copied().unwrap_or(self.sources.len() as u32);
+        let end = self
+            .path_starts
+            .get(path + 1)
+            .copied()
+            .unwrap_or(self.sources.len() as u32);
         Some(start..end)
     }
 
     /// Highlight paths `paths` (consecutive) whole, or nothing.
     pub fn highlight_paths(&mut self, paths: Option<std::ops::Range<usize>>) {
-        let rows = paths.and_then(|p| Some(self.path_rows(p.start)?.start..self.path_rows(p.end.max(p.start + 1) - 1)?.end));
+        let rows = paths.and_then(|p| {
+            Some(self.path_rows(p.start)?.start..self.path_rows(p.end.max(p.start + 1) - 1)?.end)
+        });
         let s = &mut self.common.style;
         s.highlight = rows.as_ref().map(|r| r.start);
         s.highlight_len = rows.map_or(1, |r| (r.end - r.start).max(1));
@@ -493,7 +500,15 @@ impl SegmentMarks {
         self.pack_widths();
     }
     pub fn update_widths(&mut self, start: usize, w: &[f32]) {
-        if start + w.len() > self.width_rows.len() || self.widths.len() != self.width_rows.len().max(self.height_rows.len()).max(self.offset_rows.len()).max(self.dash_rows.len()) {
+        if start + w.len() > self.width_rows.len()
+            || self.widths.len()
+                != self
+                    .width_rows
+                    .len()
+                    .max(self.height_rows.len())
+                    .max(self.offset_rows.len())
+                    .max(self.dash_rows.len())
+        {
             // Not a plain update of what is there: pack it all again.
             let n = self.width_rows.len().max(start + w.len());
             self.width_rows.resize(n, 1.0);
@@ -502,7 +517,9 @@ impl SegmentMarks {
             return;
         }
         self.width_rows[start..start + w.len()].copy_from_slice(w);
-        let packed: Vec<f32> = (start..start + w.len()).flat_map(|i| self.packed_row(i)).collect();
+        let packed: Vec<f32> = (start..start + w.len())
+            .flat_map(|i| self.packed_row(i))
+            .collect();
         self.widths.update_f32(start, &packed);
     }
     /// Each arc's height as a multiple of [`arc_height`](Self::arc_height)
@@ -526,7 +543,11 @@ impl SegmentMarks {
     }
     /// Per path, for paths from [`set_paths`](Self::set_paths).
     pub fn set_path_offsets(&mut self, o: &[f32]) {
-        let o = if o.is_empty() { Vec::new() } else { self.per_path(o) };
+        let o = if o.is_empty() {
+            Vec::new()
+        } else {
+            self.per_path(o)
+        };
         self.set_offsets(&o);
     }
     /// Per path, for paths from [`set_paths`](Self::set_paths).
@@ -541,10 +562,20 @@ impl SegmentMarks {
         } else {
             self.offset_rows.get(i).copied().unwrap_or(0.0)
         };
-        [self.width_rows.get(i).copied().unwrap_or(1.0), y, d[0], d[1]]
+        [
+            self.width_rows.get(i).copied().unwrap_or(1.0),
+            y,
+            d[0],
+            d[1],
+        ]
     }
     fn pack_widths(&mut self) {
-        let n = self.width_rows.len().max(self.height_rows.len()).max(self.offset_rows.len()).max(self.dash_rows.len());
+        let n = self
+            .width_rows
+            .len()
+            .max(self.height_rows.len())
+            .max(self.offset_rows.len())
+            .max(self.dash_rows.len());
         if n == 0 {
             self.widths.set_f32(&[]);
             return;
@@ -634,7 +665,8 @@ impl Mark for SegmentMarks {
     fn kind_material(&self) -> [f32; 4] {
         [
             self.dash_unit_px.map_or(0.0, |p| p.max(1e-6)),
-            (u32::from(self.dash_mode == DashMode::Path) | (u32::from(self.dash_justified) << 1)) as f32,
+            (u32::from(self.dash_mode == DashMode::Path) | (u32::from(self.dash_justified) << 1))
+                as f32,
             self.dash_nominal_px_per_unit.map_or(0.0, |k| k.max(0.0)),
             self.arc_tilt.to_radians(),
         ]

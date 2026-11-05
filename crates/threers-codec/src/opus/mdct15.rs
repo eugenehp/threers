@@ -97,7 +97,15 @@ impl Mdct15 {
             *k <<= 1;
         }
         let sub_map = tx_neon::split_radix_parity_revtab_scatter(m, true);
-        Self { len, m, in_map, out_map, sub_map, exp, tab: tab53() }
+        Self {
+            len,
+            m,
+            in_map,
+            out_map,
+            sub_map,
+            exp,
+            tab: tab53(),
+        }
     }
 
     /// `src[k * stride]` are the `len` coefficients; `dst` gets `len` samples.
@@ -115,7 +123,10 @@ impl Mdct15 {
                 let k = self.in_map[i + j];
                 let (are, aim) = (src[in2 - k * stride], src[k * stride]);
                 let (bre, bim) = self.exp[i + j];
-                fin[j] = C { re: are * bre - aim * bim, im: are * bim + aim * bre };
+                fin[j] = C {
+                    re: are * bre - aim * bim,
+                    im: are * bim + aim * bre,
+                };
             }
             fft15(tmp, 2 * self.sub_map[g], 2 * m, &fin, &t);
         }
@@ -143,15 +154,30 @@ impl Mdct15 {
 #[inline]
 fn fft3(inp: &[C], t: &[f32; 12]) -> [C; 3] {
     let t0 = inp[0];
-    let mut t1 = C { re: inp[1].im - inp[2].im, im: inp[1].re - inp[2].re };
-    let mut t2 = C { re: inp[1].re + inp[2].re, im: inp[1].im + inp[2].im };
-    let o0 = C { re: t0.re + t2.re, im: t0.im + t2.im };
+    let mut t1 = C {
+        re: inp[1].im - inp[2].im,
+        im: inp[1].re - inp[2].re,
+    };
+    let mut t2 = C {
+        re: inp[1].re + inp[2].re,
+        im: inp[1].im + inp[2].im,
+    };
+    let o0 = C {
+        re: t0.re + t2.re,
+        im: t0.im + t2.im,
+    };
     t1.re *= t[8];
     t1.im *= t[9];
     t2.re *= t[10];
     t2.im *= t[10];
-    let o1 = C { re: t0.re - t2.re + t1.re, im: t0.im - t2.im - t1.im };
-    let o2 = C { re: t0.re - t2.re - t1.re, im: t0.im - t2.im + t1.im };
+    let o1 = C {
+        re: t0.re - t2.re + t1.re,
+        im: t0.im - t2.im - t1.im,
+    };
+    let o2 = C {
+        re: t0.re - t2.re - t1.re,
+        im: t0.im - t2.im + t1.im,
+    };
     [o0, o1, o2]
 }
 
@@ -159,27 +185,78 @@ fn fft3(inp: &[C], t: &[f32; 12]) -> [C; 3] {
 #[inline]
 fn fft5(inp: &[C], t: &[f32; 12]) -> [C; 5] {
     let dc = inp[0];
-    let mut t0 = C { re: inp[1].re + inp[4].re, im: inp[1].im + inp[4].im };
-    let mut t1 = C { im: inp[1].re - inp[4].re, re: inp[1].im - inp[4].im };
-    let t2 = C { re: inp[2].re + inp[3].re, im: inp[2].im + inp[3].im };
-    let t3 = C { im: inp[2].re - inp[3].re, re: inp[2].im - inp[3].im };
-    let o0 = C { re: dc.re + t0.re + t2.re, im: dc.im + t0.im + t2.im };
+    let mut t0 = C {
+        re: inp[1].re + inp[4].re,
+        im: inp[1].im + inp[4].im,
+    };
+    let mut t1 = C {
+        im: inp[1].re - inp[4].re,
+        re: inp[1].im - inp[4].im,
+    };
+    let t2 = C {
+        re: inp[2].re + inp[3].re,
+        im: inp[2].im + inp[3].im,
+    };
+    let t3 = C {
+        im: inp[2].re - inp[3].re,
+        re: inp[2].im - inp[3].im,
+    };
+    let o0 = C {
+        re: dc.re + t0.re + t2.re,
+        im: dc.im + t0.im + t2.im,
+    };
     // SMUL(t4.x, t0.x, tab0, tab2, t2.x, t0.x)
-    let t4 = C { re: t[0] * t2.re - t[2] * t0.re, im: t[0] * t2.im - t[2] * t0.im };
-    t0 = C { re: t[0] * t0.re - t[2] * t2.re, im: t[0] * t0.im - t[2] * t2.im };
+    let t4 = C {
+        re: t[0] * t2.re - t[2] * t0.re,
+        im: t[0] * t2.im - t[2] * t0.im,
+    };
+    t0 = C {
+        re: t[0] * t0.re - t[2] * t2.re,
+        im: t[0] * t0.im - t[2] * t2.im,
+    };
     // CMUL(t5.x, t1.x, tab4, tab6, t3.x, t1.x)
-    let t5 = C { re: t[4] * t3.re - t[6] * t1.re, im: t[4] * t3.im - t[6] * t1.im };
-    t1 = C { re: t[4] * t1.re + t[6] * t3.re, im: t[4] * t1.im + t[6] * t3.im };
-    let z0 = C { re: t0.re - t1.re, im: t0.im - t1.im };
-    let z3 = C { re: t0.re + t1.re, im: t0.im + t1.im };
-    let z2 = C { re: t4.re - t5.re, im: t4.im - t5.im };
-    let z1 = C { re: t4.re + t5.re, im: t4.im + t5.im };
+    let t5 = C {
+        re: t[4] * t3.re - t[6] * t1.re,
+        im: t[4] * t3.im - t[6] * t1.im,
+    };
+    t1 = C {
+        re: t[4] * t1.re + t[6] * t3.re,
+        im: t[4] * t1.im + t[6] * t3.im,
+    };
+    let z0 = C {
+        re: t0.re - t1.re,
+        im: t0.im - t1.im,
+    };
+    let z3 = C {
+        re: t0.re + t1.re,
+        im: t0.im + t1.im,
+    };
+    let z2 = C {
+        re: t4.re - t5.re,
+        im: t4.im - t5.im,
+    };
+    let z1 = C {
+        re: t4.re + t5.re,
+        im: t4.im + t5.im,
+    };
     [
         o0,
-        C { re: dc.re + z3.re, im: dc.im + z0.im },
-        C { re: dc.re + z2.re, im: dc.im + z1.im },
-        C { re: dc.re + z1.re, im: dc.im + z2.im },
-        C { re: dc.re + z0.re, im: dc.im + z3.im },
+        C {
+            re: dc.re + z3.re,
+            im: dc.im + z0.im,
+        },
+        C {
+            re: dc.re + z2.re,
+            im: dc.im + z1.im,
+        },
+        C {
+            re: dc.re + z1.re,
+            im: dc.im + z2.im,
+        },
+        C {
+            re: dc.re + z0.re,
+            im: dc.im + z3.im,
+        },
     ]
 }
 
@@ -213,7 +290,9 @@ mod tests {
     #[test]
     fn imdct15_matches_definition() {
         for len in [120usize, 240, 480, 960] {
-            let x: Vec<f32> = (0..len).map(|i| ((i * 7919) % 97) as f32 / 97.0 - 0.5).collect();
+            let x: Vec<f32> = (0..len)
+                .map(|i| ((i * 7919) % 97) as f32 / 97.0 - 0.5)
+                .collect();
             let t = Mdct15::new(len, -1.0 / 32768.0);
             let mut y = vec![0f32; len];
             let mut tmp = Vec::new();
@@ -225,13 +304,18 @@ mod tests {
                 let nn = i as f64 + n / 2.0;
                 let mut s = 0f64;
                 for (k, &xk) in x.iter().enumerate() {
-                    s += xk as f64 * (std::f64::consts::PI / n * (nn + 0.5 + n / 2.0) * (k as f64 + 0.5)).cos();
+                    s += xk as f64
+                        * (std::f64::consts::PI / n * (nn + 0.5 + n / 2.0) * (k as f64 + 0.5))
+                            .cos();
                 }
                 let r = s / 32768.0; // av_tx: -scale times the textbook IMDCT
                 worst = worst.max((r - yi as f64).abs());
             }
             let peak = 1.0 / 32768.0 * n.sqrt();
-            assert!(worst < peak * 1e-5, "len {len}: worst {worst:e} vs scale {peak:e}");
+            assert!(
+                worst < peak * 1e-5,
+                "len {len}: worst {worst:e} vs scale {peak:e}"
+            );
         }
     }
 }

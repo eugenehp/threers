@@ -112,7 +112,9 @@ macro_rules! shader {
 impl SharedShader {
     /// Wrap shared source. Prefer the [`shader!`](crate::shader) macro.
     pub fn new(source: impl Into<String>) -> Self {
-        Self { source: source.into() }
+        Self {
+            source: source.into(),
+        }
     }
 
     /// The fragment as a [`ShaderMaterial`](super::ShaderMaterial) takes it:
@@ -230,7 +232,10 @@ fn fs_main(in: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0)
 pub(super) enum Tok {
     Ident(String),
     /// A number with Rust's suffix split off.
-    Num { text: String, suffix: String },
+    Num {
+        text: String,
+        suffix: String,
+    },
     Punct(String),
 }
 
@@ -244,8 +249,8 @@ fn tokenize(src: &str) -> Result<Vec<Tok>, String> {
     // `>>` is a shift, so a nested template type has to close as `> >`;
     // the shorthand types (`vec4f`) seldom need one.
     const MULTI: [&str; 18] = [
-        "->", "==", "!=", "<=", ">=", "&&", "||", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "::",
-        "<<", ">>",
+        "->", "==", "!=", "<=", ">=", "&&", "||", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=",
+        "::", "<<", ">>",
     ];
     let chars: Vec<char> = src.chars().collect();
     let mut toks = Vec::new();
@@ -290,7 +295,9 @@ fn tokenize(src: &str) -> Result<Vec<Tok>, String> {
                     || (chars[i] == '.' && chars.get(i + 1).is_some_and(|d| d.is_ascii_digit()))
                     || ((chars[i] == '-' || chars[i] == '+')
                         && matches!(chars[i - 1], 'e' | 'E')
-                        && !chars[start..i].iter().any(|c| c.is_ascii_alphabetic() && *c != 'e' && *c != 'E')))
+                        && !chars[start..i]
+                            .iter()
+                            .any(|c| c.is_ascii_alphabetic() && *c != 'e' && *c != 'E')))
             {
                 i += 1;
             }
@@ -354,7 +361,10 @@ pub(super) struct FnItem {
 
 fn parse(src: &str) -> Result<Vec<Item>, String> {
     let items = parse_items(src)?;
-    if !items.iter().any(|it| matches!(it, Item::Fn(f) if f.name == "shade")) {
+    if !items
+        .iter()
+        .any(|it| matches!(it, Item::Fn(f) if f.name == "shade"))
+    {
         return Err("shader!: no `fn shade(s: Shading) -> vec4f` entry point".into());
     }
     Ok(items)
@@ -365,10 +375,16 @@ fn attribute(toks: &[Tok], i: usize) -> Option<(String, Option<String>, usize)> 
     if !toks.get(i)?.is("@") {
         return None;
     }
-    let Tok::Ident(name) = toks.get(i + 1)? else { return None };
+    let Tok::Ident(name) = toks.get(i + 1)? else {
+        return None;
+    };
     if toks.get(i + 2).is_some_and(|t| t.is("(")) {
         let close = matching(toks, i + 2).ok()?;
-        let arg = toks[i + 3..close].iter().map(tok_text).collect::<Vec<_>>().join("");
+        let arg = toks[i + 3..close]
+            .iter()
+            .map(tok_text)
+            .collect::<Vec<_>>()
+            .join("");
         Some((name.clone(), Some(arg), close + 1))
     } else {
         Some((name.clone(), None, i + 2))
@@ -429,8 +445,16 @@ pub(super) fn parse_items(src: &str) -> Result<Vec<Item>, String> {
             let semi = (eq..toks.len())
                 .find(|&j| toks[j].is(";"))
                 .ok_or("shader!: `const` without `;`")?;
-            let ty = if toks[i + 2].is(":") { toks[i + 3..eq].to_vec() } else { Vec::new() };
-            items.push(Item::Const(ConstItem { name, ty, value: toks[eq + 1..semi].to_vec() }));
+            let ty = if toks[i + 2].is(":") {
+                toks[i + 3..eq].to_vec()
+            } else {
+                Vec::new()
+            };
+            items.push(Item::Const(ConstItem {
+                name,
+                ty,
+                value: toks[eq + 1..semi].to_vec(),
+            }));
             i = semi + 1;
         } else if toks[i].is("struct") {
             let name = ident(i + 1)?;
@@ -471,7 +495,9 @@ pub(super) fn parse_items(src: &str) -> Result<Vec<Item>, String> {
                     return Err(format!("shader!: bad parameter in `{name}`"));
                 };
                 if !part.get(1).is_some_and(|t| t.is(":")) {
-                    return Err(format!("shader!: parameter `{pname}` of `{name}` needs a type"));
+                    return Err(format!(
+                        "shader!: parameter `{pname}` of `{name}` needs a type"
+                    ));
                 }
                 params.push((pname.clone(), part[2..].to_vec()));
                 builtins.push(builtin);
@@ -592,7 +618,11 @@ fn num(text: &str, suffix: &str, lang: Lang) -> String {
             return stem.to_string();
         }
         if let Some(stem) = text.strip_suffix('f').or_else(|| text.strip_suffix('h')) {
-            return if stem.contains('.') || stem.contains('e') { format!("{stem}f") } else { format!("{stem}.0f") };
+            return if stem.contains('.') || stem.contains('e') {
+                format!("{stem}f")
+            } else {
+                format!("{stem}.0f")
+            };
         }
     }
     match (suffix, lang) {
@@ -611,9 +641,11 @@ fn collapse_generics(toks: &[Tok]) -> Vec<Tok> {
     let mut i = 0;
     while i < toks.len() {
         if let Tok::Ident(name) = &toks[i] {
-            let templated = ["vec2", "vec3", "vec4", "mat2x2", "mat3x3", "mat4x4", "mat2x3", "mat2x4",
-                "mat3x2", "mat3x4", "mat4x2", "mat4x3", "array", "ptr", "bitcast"]
-                .contains(&name.as_str());
+            let templated = [
+                "vec2", "vec3", "vec4", "mat2x2", "mat3x3", "mat4x4", "mat2x3", "mat2x4", "mat3x2",
+                "mat3x4", "mat4x2", "mat4x3", "array", "ptr", "bitcast",
+            ]
+            .contains(&name.as_str());
             if templated && toks.get(i + 1).is_some_and(|t| t.is("<")) {
                 // The `>` closing this list, counting nested `<`.
                 let mut depth = 0;
@@ -631,7 +663,10 @@ fn collapse_generics(toks: &[Tok]) -> Vec<Tok> {
                 }
                 if let Some(close) = close {
                     let inner = collapse_generics(&toks[i + 2..close]);
-                    let args: Vec<String> = split_top(&inner, ",").iter().map(|a| join(a, Lang::Msl)).collect();
+                    let args: Vec<String> = split_top(&inner, ",")
+                        .iter()
+                        .map(|a| join(a, Lang::Msl))
+                        .collect();
                     let elem = |a: &str| -> String {
                         match a {
                             "f32" | "float" => "float".into(),
@@ -675,7 +710,11 @@ fn join(toks: &[Tok], lang: Lang) -> String {
         collapsed = c
             .iter()
             .enumerate()
-            .filter(|(k, t)| !(t.is(",") && c.get(k + 1).is_some_and(|n| n.is(")") || n.is("]") || n.is("}"))))
+            .filter(|(k, t)| {
+                !(t.is(",")
+                    && c.get(k + 1)
+                        .is_some_and(|n| n.is(")") || n.is("]") || n.is("}")))
+            })
             .map(|(_, t)| t.clone())
             .collect::<Vec<_>>();
         &collapsed[..]
@@ -694,7 +733,8 @@ fn join(toks: &[Tok], lang: Lang) -> String {
                 && k > 0
                 && matches!(toks[k - 1], Tok::Ident(_) | Tok::Punct(_) if !toks[k - 1].is(",") && !toks[k - 1].is("(") && !is_operator(&toks[k - 1])));
         let after_dot = k > 0 && toks[k - 1].is(".");
-        if !out.is_empty() && !glue_left && !after_dot && !out.ends_with('(') && !out.ends_with('[') {
+        if !out.is_empty() && !glue_left && !after_dot && !out.ends_with('(') && !out.ends_with('[')
+        {
             out.push(' ');
         }
         out.push_str(&s);
@@ -756,7 +796,9 @@ fn body(toks: &[Tok], lang: Lang, indent: usize) -> String {
             i = close + 1;
             continue;
         }
-        let end = (i..toks.len()).find(|&k| toks[k].is(";")).unwrap_or(toks.len());
+        let end = (i..toks.len())
+            .find(|&k| toks[k].is(";"))
+            .unwrap_or(toks.len());
         out.push_str(&format!("{pad}{};\n", statement(&toks[i..end], lang)));
         i = end + 1;
     }
@@ -779,7 +821,9 @@ fn statement(st: &[Tok], lang: Lang) -> String {
         } else {
             st.to_vec()
         }[..];
-        let Some(Tok::Ident(name)) = st.get(1) else { return join(st, lang) };
+        let Some(Tok::Ident(name)) = st.get(1) else {
+            return join(st, lang);
+        };
         let eq = st.iter().position(|t| t.is("="));
         let ty = if st.get(2).is_some_and(|t| t.is(":")) {
             Some(join(&st[3..eq.unwrap_or(st.len())], lang))
@@ -811,7 +855,13 @@ fn statement(st: &[Tok], lang: Lang) -> String {
 /// `frame.shadows[r]` and the like: an element of an array `WgslFrame`
 /// points at in constant memory, and nothing more.
 fn is_frame_record(value: &[Tok]) -> bool {
-    const ARRAYS: [&str; 5] = ["shadows", "dir_lights", "point_lights", "spot_lights", "hemi_lights"];
+    const ARRAYS: [&str; 5] = [
+        "shadows",
+        "dir_lights",
+        "point_lights",
+        "spot_lights",
+        "hemi_lights",
+    ];
     value.len() > 4
         && value[0].is("frame")
         && value[1].is(".")
@@ -822,13 +872,21 @@ fn is_frame_record(value: &[Tok]) -> bool {
 
 /// `for (var i = 0u32; i < n; i += 1u32)`: the initialiser is a declaration.
 fn for_head(head: &[Tok], lang: Lang) -> String {
-    let Some(open) = head.iter().position(|t| t.is("(")) else { return join(head, lang) };
+    let Some(open) = head.iter().position(|t| t.is("(")) else {
+        return join(head, lang);
+    };
     let close = matching(head, open).unwrap_or(head.len() - 1);
     let parts = split_top(&head[open + 1..close], ";");
     let rendered: Vec<String> = parts
         .iter()
         .enumerate()
-        .map(|(k, p)| if k == 0 { statement(p, lang) } else { join(p, lang) })
+        .map(|(k, p)| {
+            if k == 0 {
+                statement(p, lang)
+            } else {
+                join(p, lang)
+            }
+        })
         .collect();
     format!("for ({})", rendered.join("; "))
 }
@@ -837,17 +895,39 @@ impl Item {
     pub(super) fn to_wgsl(&self) -> String {
         match self {
             Item::Struct(st) => {
-                let fields: Vec<String> =
-                    st.fields.iter().map(|(n, t)| format!("    {n}: {},", join(t, Lang::Wgsl))).collect();
+                let fields: Vec<String> = st
+                    .fields
+                    .iter()
+                    .map(|(n, t)| format!("    {n}: {},", join(t, Lang::Wgsl)))
+                    .collect();
                 format!("struct {} {{\n{}\n}};", st.name, fields.join("\n"))
             }
-            Item::Const(c) if c.ty.is_empty() => format!("const {} = {};", c.name, join(&c.value, Lang::Wgsl)),
-            Item::Const(c) => format!("const {}: {} = {};", c.name, join(&c.ty, Lang::Wgsl), join(&c.value, Lang::Wgsl)),
+            Item::Const(c) if c.ty.is_empty() => {
+                format!("const {} = {};", c.name, join(&c.value, Lang::Wgsl))
+            }
+            Item::Const(c) => format!(
+                "const {}: {} = {};",
+                c.name,
+                join(&c.ty, Lang::Wgsl),
+                join(&c.value, Lang::Wgsl)
+            ),
             Item::Fn(f) => {
-                let params: Vec<String> =
-                    f.params.iter().map(|(n, t)| format!("{n}: {}", join(t, Lang::Wgsl))).collect();
-                let ret = f.ret.as_ref().map(|r| format!(" -> {}", join(r, Lang::Wgsl))).unwrap_or_default();
-                format!("fn {}({}){ret} {{\n{}}}\n", f.name, params.join(", "), body(&f.body, Lang::Wgsl, 1))
+                let params: Vec<String> = f
+                    .params
+                    .iter()
+                    .map(|(n, t)| format!("{n}: {}", join(t, Lang::Wgsl)))
+                    .collect();
+                let ret = f
+                    .ret
+                    .as_ref()
+                    .map(|r| format!(" -> {}", join(r, Lang::Wgsl)))
+                    .unwrap_or_default();
+                format!(
+                    "fn {}({}){ret} {{\n{}}}\n",
+                    f.name,
+                    params.join(", "),
+                    body(&f.body, Lang::Wgsl, 1)
+                )
             }
         }
     }
@@ -855,20 +935,34 @@ impl Item {
     pub(super) fn to_msl(&self) -> String {
         match self {
             Item::Struct(st) => {
-                let fields: Vec<String> =
-                    st.fields.iter().map(|(n, t)| format!("    {} {n};", join(t, Lang::Msl))).collect();
+                let fields: Vec<String> = st
+                    .fields
+                    .iter()
+                    .map(|(n, t)| format!("    {} {n};", join(t, Lang::Msl)))
+                    .collect();
                 format!("struct {} {{\n{}\n}};", st.name, fields.join("\n"))
             }
             Item::Const(c) => format!(
                 "constant {} {} = {};",
-                if c.ty.is_empty() { "auto".to_string() } else { join(&c.ty, Lang::Msl) },
+                if c.ty.is_empty() {
+                    "auto".to_string()
+                } else {
+                    join(&c.ty, Lang::Msl)
+                },
                 c.name,
                 join(&c.value, Lang::Msl)
             ),
             Item::Fn(f) => {
-                let params: Vec<String> =
-                    f.params.iter().map(|(n, t)| format!("{} {n}", join(t, Lang::Msl))).collect();
-                let ret = f.ret.as_ref().map(|r| join(r, Lang::Msl)).unwrap_or_else(|| "void".into());
+                let params: Vec<String> = f
+                    .params
+                    .iter()
+                    .map(|(n, t)| format!("{} {n}", join(t, Lang::Msl)))
+                    .collect();
+                let ret = f
+                    .ret
+                    .as_ref()
+                    .map(|r| join(r, Lang::Msl))
+                    .unwrap_or_else(|| "void".into());
                 // Not `const`: a WGSL function may write module state
                 // (`var<private>`), which lives in the struct.
                 format!(
@@ -1568,16 +1662,34 @@ fn preamble_constants() -> &'static str {
 /// Names the Metal environment provides itself, which the preamble's WGSL
 /// versions (texture reads, bindings) must not replace.
 const PROVIDED: [&str; 22] = [
-    "sample_env_cube", "sample_env_cube_unrotated",
-    "s0", "s1", "s2", "s_len", "framebuffer_encode", "apply_tone_mapping", "apply_fog",
-    "standard_vertex", "standard_vertex_morphed", "morph_position", "morph_normal", "morph_color",
-    "shadow_compare", "shadow_tap", "shadow_at", "light_shadow_record", "light_shadow", "shadow_factor_dir",
-    "shadow_factor_spot", "shadow_factor_point",
+    "sample_env_cube",
+    "sample_env_cube_unrotated",
+    "s0",
+    "s1",
+    "s2",
+    "s_len",
+    "framebuffer_encode",
+    "apply_tone_mapping",
+    "apply_fog",
+    "standard_vertex",
+    "standard_vertex_morphed",
+    "morph_position",
+    "morph_normal",
+    "morph_color",
+    "shadow_compare",
+    "shadow_tap",
+    "shadow_at",
+    "light_shadow_record",
+    "light_shadow",
+    "shadow_factor_dir",
+    "shadow_factor_spot",
+    "shadow_factor_point",
 ];
 
 /// The preamble's functions, by name, parsed once.
 fn preamble_functions() -> &'static std::collections::HashMap<String, Item> {
-    static FNS: std::sync::OnceLock<std::collections::HashMap<String, Item>> = std::sync::OnceLock::new();
+    static FNS: std::sync::OnceLock<std::collections::HashMap<String, Item>> =
+        std::sync::OnceLock::new();
     FNS.get_or_init(|| {
         let source = crate::renderer::shader::legacy_shader_source();
         let preamble = source.split("@fragment").next().unwrap_or(source);
@@ -1698,20 +1810,34 @@ static inline float4 threers_encoded_blend(float4 src, float4 dst, bool additive
 /// blended draw into an sRGB target (the pipeline turns hardware blending off).
 fn with_encoded_variants(entry: &str) -> String {
     let variant = |name: &str, additive: bool| -> String {
-        let mut e = entry.replacen("fragment float4 fs_custom(", &format!("fragment float4 {name}("), 1);
+        let mut e = entry.replacen(
+            "fragment float4 fs_custom(",
+            &format!("fragment float4 {name}("),
+            1,
+        );
         // The destination, as one more parameter.
         if let Some(at) = e.find(") {") {
-            e.insert_str(at, ",\n                          float4 threers_dst [[color(0)]]");
+            e.insert_str(
+                at,
+                ",\n                          float4 threers_dst [[color(0)]]",
+            );
         }
         // The value returned, blended.
         if let Some(at) = e.rfind("return ") {
             let end = e[at..].find(';').map(|k| at + k).unwrap_or(e.len());
             let value = e[at + 7..end].to_string();
-            e.replace_range(at..end, &format!("return threers_encoded_blend({value}, threers_dst, {additive})"));
+            e.replace_range(
+                at..end,
+                &format!("return threers_encoded_blend({value}, threers_dst, {additive})"),
+            );
         }
         e
     };
-    format!("{entry}{}{}", variant("fs_custom_eb", false), variant("fs_custom_eb_add", true))
+    format!(
+        "{entry}{}{}",
+        variant("fs_custom_eb", false),
+        variant("fs_custom_eb_add", true)
+    )
 }
 
 #[cfg(test)]
@@ -1742,7 +1868,10 @@ mod tests {
         let w = rim().wgsl().unwrap();
         assert!(w.contains("fn shade(s: Shading) -> vec4f {"), "{w}");
         assert!(w.contains("var c = data(0u)"), "{w}");
-        assert!(w.contains("for (var i = 0u; i < light_count(); i += 1u)"), "{w}");
+        assert!(
+            w.contains("for (var i = 0u; i < light_count(); i += 1u)"),
+            "{w}"
+        );
         assert!(w.contains("const GAIN: f32 = 2.0;"), "{w}");
         assert!(w.contains("discard;"), "{w}");
         assert!(w.contains("fn fs_main(in: VsOut"), "{w}");
@@ -1754,8 +1883,14 @@ mod tests {
         assert!(m.contains("float4 shade(Shading s) {"), "{m}");
         assert!(m.contains("float rim(float3 n, float3 v) {"), "{m}");
         assert!(m.contains("auto c = data(0u)"), "{m}");
-        assert!(m.contains("const float r = rim(s.normal, s.view_dir)"), "{m}");
-        assert!(m.contains("for (auto i = 0u; i < light_count(); i += 1u)"), "{m}");
+        assert!(
+            m.contains("const float r = rim(s.normal, s.view_dir)"),
+            "{m}"
+        );
+        assert!(
+            m.contains("for (auto i = 0u; i < light_count(); i += 1u)"),
+            "{m}"
+        );
         assert!(m.contains("constant float GAIN = 2.0;"), "{m}");
         assert!(m.contains("discard_fragment();"), "{m}");
         assert!(m.contains("float4(c + float3(r), opacity())"), "{m}");
@@ -1773,7 +1908,13 @@ mod tests {
             }
         };
         let (w, m) = (lit.wgsl().unwrap(), lit.msl().unwrap());
-        for name in ["tex0(", "hemisphere_light(", "point_light_color(", "point_shadow(", "directional_shadow("] {
+        for name in [
+            "tex0(",
+            "hemisphere_light(",
+            "point_light_color(",
+            "point_shadow(",
+            "directional_shadow(",
+        ] {
             assert!(w.contains(&format!("fn {name}")), "WGSL lacks {name}");
             assert!(m.contains(name), "MSL lacks {name}");
         }
@@ -1802,12 +1943,17 @@ mod tests {
         assert!(m.contains("constant auto &h = frame.hemi_lights[k]"), "{m}");
         assert!(m.contains("constant HemiLight *hemi_lights;"), "{m}");
         // A field of one is a value as before.
-        assert!(m.contains("const auto w = frame.shadows[0].params.x"), "{m}");
+        assert!(
+            m.contains("const auto w = frame.shadows[0].params.x"),
+            "{m}"
+        );
     }
 
     #[test]
     fn a_shader_without_an_entry_point_is_an_error() {
-        let e = crate::shader! { fn f(x: f32) -> f32 { return x; } }.wgsl().unwrap_err();
+        let e = crate::shader! { fn f(x: f32) -> f32 { return x; } }
+            .wgsl()
+            .unwrap_err();
         assert!(e.contains("shade"), "{e}");
     }
 }

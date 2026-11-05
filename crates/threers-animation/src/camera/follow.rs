@@ -75,7 +75,8 @@ impl CameraFollow {
     }
 
     pub fn pose(&self) -> CameraPose {
-        let mut pose = CameraPose::from_look_at(self.eye.value(), self.target.value(), self.fov.value());
+        let mut pose =
+            CameraPose::from_look_at(self.eye.value(), self.target.value(), self.fov.value());
         pose.roll = self.roll;
         pose.focus_distance = self.focus.value();
         pose.aperture = self.aperture;

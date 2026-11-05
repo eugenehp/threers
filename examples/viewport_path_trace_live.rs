@@ -14,8 +14,8 @@ use std::sync::Arc;
 
 use threers::cameras::Camera;
 use threers::overlay::Overlay;
-use threers::renderer::WindowRenderer;
 use threers::raytrace::{gpu::GpuBackend, Aov, CpuBackend, RaytraceRenderer, RaytraceSettings};
+use threers::renderer::WindowRenderer;
 use threers::{
     AmbientLight, BoxGeometry, Color, DirectionalLight, Material, Mesh, Object3D, OrbitControls,
     PerspectiveCamera, PhysicalMaterial, PlaneGeometry, PointerEvent, Scene, SphereGeometry,
@@ -118,7 +118,9 @@ fn build_scene() -> Scene {
 
     let mut hero = Object3D::mesh(Mesh::new(
         BoxGeometry::new(1.2, 1.2, 1.2),
-        Material::Standard(StandardMaterial::new(Color::new(0.78, 0.35, 0.18)).with_roughness(0.35)),
+        Material::Standard(
+            StandardMaterial::new(Color::new(0.78, 0.35, 0.18)).with_roughness(0.35),
+        ),
     ));
     hero.position = Vector3::new(-1.2, 0.6, 0.0);
     scene.add(hero);
@@ -160,12 +162,7 @@ async fn run() {
     blank.background = Color::new(0.0, 0.0, 0.0);
 
     let mut scene = build_scene();
-    let mut camera = PerspectiveCamera::new(
-        42.0,
-        config.0 as f32 / config.1 as f32,
-        0.1,
-        100.0,
-    );
+    let mut camera = PerspectiveCamera::new(42.0, config.0 as f32 / config.1 as f32, 0.1, 100.0);
     camera.position = Vector3::new(4.5, 2.8, 5.5);
     camera.look_at(Vector3::new(0.0, 0.6, 0.0));
 
@@ -178,7 +175,9 @@ async fn run() {
     let mut path = if use_gpu() {
         // A device of its own: the picture comes back as bytes either way,
         // and the window's may be Metal's.
-        let backend = GpuBackend::headless().expect("a GPU for the path tracer").with_samples_per_dispatch(4);
+        let backend = GpuBackend::headless()
+            .expect("a GPU for the path tracer")
+            .with_samples_per_dispatch(4);
         let mut r = RaytraceRenderer::with_backend(config.0, config.1, Box::new(backend));
         r.set_settings(settings);
         r.prepare(&mut scene, &camera);

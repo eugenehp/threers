@@ -15,24 +15,42 @@ pub const MAX_POLYGON_POINTS: usize = 128;
 pub enum Shape {
     /// A box with rounded corners; `half` its half-extents. A pill is
     /// `radius` = half the height ([`Shape::pill`]).
-    RoundRect { center: Vector2, half: Vector2, radius: f32 },
-    Circle { center: Vector2, radius: f32 },
+    RoundRect {
+        center: Vector2,
+        half: Vector2,
+        radius: f32,
+    },
+    Circle {
+        center: Vector2,
+        radius: f32,
+    },
     /// Any closed outline, either winding, grown outward by `radius` — which
     /// rounds every corner. At most [`MAX_POLYGON_POINTS`] points.
-    Polygon { points: Vec<Vector2>, radius: f32 },
+    Polygon {
+        points: Vec<Vector2>,
+        radius: f32,
+    },
 }
 
 impl Shape {
     /// A pill (a stadium), `width` x `height` centred on `center`.
     pub fn pill(center: Vector2, width: f32, height: f32) -> Self {
         let half = Vector2::new(width * 0.5, height * 0.5);
-        Shape::RoundRect { center, half, radius: half.x.min(half.y) }
+        Shape::RoundRect {
+            center,
+            half,
+            radius: half.x.min(half.y),
+        }
     }
 
     /// A box from its top-left corner, with corners rounded by `radius`.
     pub fn rect(x: f32, y: f32, width: f32, height: f32, radius: f32) -> Self {
         let half = Vector2::new(width * 0.5, height * 0.5);
-        Shape::RoundRect { center: Vector2::new(x + half.x, y + half.y), half, radius }
+        Shape::RoundRect {
+            center: Vector2::new(x + half.x, y + half.y),
+            half,
+            radius,
+        }
     }
 
     pub fn circle(center: Vector2, radius: f32) -> Self {
@@ -43,7 +61,9 @@ impl Shape {
     pub fn polygon(points: Vec<Vector2>, radius: f32) -> Self {
         let points = if points.len() > MAX_POLYGON_POINTS {
             let step = points.len() as f32 / MAX_POLYGON_POINTS as f32;
-            (0..MAX_POLYGON_POINTS).map(|i| points[(i as f32 * step) as usize]).collect()
+            (0..MAX_POLYGON_POINTS)
+                .map(|i| points[(i as f32 * step) as usize])
+                .collect()
         } else {
             points
         };
@@ -68,7 +88,12 @@ impl Shape {
     /// its origin at `origin`, as a polygon rounded by `radius`. Curves and
     /// arcs are flattened; long outlines are decimated to
     /// [`MAX_POLYGON_POINTS`].
-    pub fn from_svg_path(d: &str, origin: Vector2, scale: f32, radius: f32) -> Result<Self, SvgPathError> {
+    pub fn from_svg_path(
+        d: &str,
+        origin: Vector2,
+        scale: f32,
+        radius: f32,
+    ) -> Result<Self, SvgPathError> {
         let subpaths = parse_svg_subpaths(d)?;
         let mut points: Vec<Vector2> = Vec::new();
         if let Some(path) = subpaths.first() {
@@ -93,7 +118,11 @@ impl Shape {
     /// Signed distance to the outline, negative inside.
     pub fn distance(&self, p: Vector2) -> f32 {
         match self {
-            Shape::RoundRect { center, half, radius } => d2::round_rect(p - *center, *half, *radius),
+            Shape::RoundRect {
+                center,
+                half,
+                radius,
+            } => d2::round_rect(p - *center, *half, *radius),
             Shape::Circle { center, radius } => d2::circle(p - *center, *radius),
             Shape::Polygon { points, radius } => sdf::round(d2::polygon(p, points), *radius),
         }
@@ -112,7 +141,10 @@ impl Shape {
                 (*center - r, *center + r)
             }
             Shape::Polygon { points, radius } => {
-                let (mut lo, mut hi) = (Vector2::new(f32::MAX, f32::MAX), Vector2::new(f32::MIN, f32::MIN));
+                let (mut lo, mut hi) = (
+                    Vector2::new(f32::MAX, f32::MAX),
+                    Vector2::new(f32::MIN, f32::MIN),
+                );
                 for p in points {
                     lo = lo.min(*p);
                     hi = hi.max(*p);
@@ -131,11 +163,25 @@ impl Shape {
     /// The same shape scaled by `k` about its centre — what a pressed button does.
     pub fn scaled(&self, k: f32) -> Self {
         match self {
-            Shape::RoundRect { center, half, radius } => Shape::RoundRect { center: *center, half: *half * k, radius: radius * k },
-            Shape::Circle { center, radius } => Shape::Circle { center: *center, radius: radius * k },
+            Shape::RoundRect {
+                center,
+                half,
+                radius,
+            } => Shape::RoundRect {
+                center: *center,
+                half: *half * k,
+                radius: radius * k,
+            },
+            Shape::Circle { center, radius } => Shape::Circle {
+                center: *center,
+                radius: radius * k,
+            },
             Shape::Polygon { points, radius } => {
                 let c = self.center();
-                Shape::Polygon { points: points.iter().map(|p| c + (*p - c) * k).collect(), radius: radius * k }
+                Shape::Polygon {
+                    points: points.iter().map(|p| c + (*p - c) * k).collect(),
+                    radius: radius * k,
+                }
             }
         }
     }
@@ -148,9 +194,23 @@ impl Shape {
     /// The same shape moved by `offset`.
     pub fn translated(&self, offset: Vector2) -> Self {
         match self {
-            Shape::RoundRect { center, half, radius } => Shape::RoundRect { center: *center + offset, half: *half, radius: *radius },
-            Shape::Circle { center, radius } => Shape::Circle { center: *center + offset, radius: *radius },
-            Shape::Polygon { points, radius } => Shape::Polygon { points: points.iter().map(|p| *p + offset).collect(), radius: *radius },
+            Shape::RoundRect {
+                center,
+                half,
+                radius,
+            } => Shape::RoundRect {
+                center: *center + offset,
+                half: *half,
+                radius: *radius,
+            },
+            Shape::Circle { center, radius } => Shape::Circle {
+                center: *center + offset,
+                radius: *radius,
+            },
+            Shape::Polygon { points, radius } => Shape::Polygon {
+                points: points.iter().map(|p| *p + offset).collect(),
+                radius: *radius,
+            },
         }
     }
 
@@ -214,7 +274,11 @@ impl Outline {
                 let (a, b) = (raw[seg % n], raw[(seg + 1) % n]);
                 let l = (b - a).length();
                 if along + l >= want || seg >= 2 * n {
-                    let t = if l > 0.0 { ((want - along) / l).clamp(0.0, 1.0) } else { 0.0 };
+                    let t = if l > 0.0 {
+                        ((want - along) / l).clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    };
                     pts.push(a + (b - a) * t);
                     break;
                 }
@@ -227,14 +291,25 @@ impl Outline {
         let nrm = pts
             .iter()
             .map(|p| {
-                let gx = shape.distance(Vector2::new(p.x + h, p.y)) - shape.distance(Vector2::new(p.x - h, p.y));
-                let gy = shape.distance(Vector2::new(p.x, p.y + h)) - shape.distance(Vector2::new(p.x, p.y - h));
+                let gx = shape.distance(Vector2::new(p.x + h, p.y))
+                    - shape.distance(Vector2::new(p.x - h, p.y));
+                let gy = shape.distance(Vector2::new(p.x, p.y + h))
+                    - shape.distance(Vector2::new(p.x, p.y - h));
                 let g = Vector2::new(gx, gy);
-                if g.length() > 1e-6 { g.normalize() } else { Vector2::new(0.0, -1.0) }
+                if g.length() > 1e-6 {
+                    g.normalize()
+                } else {
+                    Vector2::new(0.0, -1.0)
+                }
             })
             .collect();
         let cum = (0..count).map(|k| k as f32 * step).collect();
-        Self { pts, nrm, cum, perimeter: total.max(1.0) }
+        Self {
+            pts,
+            nrm,
+            cum,
+            perimeter: total.max(1.0),
+        }
     }
 
     pub fn perimeter(&self) -> f32 {
@@ -244,7 +319,10 @@ impl Outline {
     /// The point `s` along the outline, wrapping.
     pub fn at(&self, s: f32) -> Edge {
         let s = s.rem_euclid(self.perimeter);
-        let i = match self.cum.binary_search_by(|c| c.partial_cmp(&s).unwrap_or(std::cmp::Ordering::Less)) {
+        let i = match self
+            .cum
+            .binary_search_by(|c| c.partial_cmp(&s).unwrap_or(std::cmp::Ordering::Less))
+        {
             Ok(i) => i,
             Err(i) => i.saturating_sub(1),
         };
@@ -265,7 +343,11 @@ impl Outline {
             let (a, b) = (self.pts[i], self.pts[(i + 1) % n]);
             let ab = b - a;
             let l2 = ab.dot(ab);
-            let t = if l2 > 0.0 { ((q - a).dot(ab) / l2).clamp(0.0, 1.0) } else { 0.0 };
+            let t = if l2 > 0.0 {
+                ((q - a).dot(ab) / l2).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
             let d = (q - (a + ab * t)).length_sq();
             if d < best {
                 best = d;
@@ -293,16 +375,28 @@ impl Outline {
 fn raw_loop(shape: &Shape) -> Vec<Vector2> {
     use std::f32::consts::{FRAC_PI_2, PI, TAU};
     match shape {
-        Shape::RoundRect { center, half, radius } => {
+        Shape::RoundRect {
+            center,
+            half,
+            radius,
+        } => {
             let r = radius.max(0.0).min(half.x.min(half.y));
             let (ix, iy) = (half.x - r, half.y - r);
             // Clockwise on screen from the top-right corner.
-            let corners = [(ix, -iy, -FRAC_PI_2), (ix, iy, 0.0), (-ix, iy, FRAC_PI_2), (-ix, -iy, PI)];
+            let corners = [
+                (ix, -iy, -FRAC_PI_2),
+                (ix, iy, 0.0),
+                (-ix, iy, FRAC_PI_2),
+                (-ix, -iy, PI),
+            ];
             let mut out = Vec::new();
             for (cx, cy, a0) in corners {
                 for k in 0..=16 {
                     let a = a0 + FRAC_PI_2 * k as f32 / 16.0;
-                    out.push(Vector2::new(center.x + cx + a.cos() * r, center.y + cy + a.sin() * r));
+                    out.push(Vector2::new(
+                        center.x + cx + a.cos() * r,
+                        center.y + cy + a.sin() * r,
+                    ));
                 }
             }
             out
@@ -316,7 +410,11 @@ fn raw_loop(shape: &Shape) -> Vec<Vector2> {
         Shape::Polygon { points, radius } => {
             let n = points.len();
             if n < 3 {
-                return vec![Vector2::ZERO, Vector2::new(1.0, 0.0), Vector2::new(0.0, 1.0)];
+                return vec![
+                    Vector2::ZERO,
+                    Vector2::new(1.0, 0.0),
+                    Vector2::new(0.0, 1.0),
+                ];
             }
             if *radius <= 0.0 {
                 return points.clone();
@@ -371,10 +469,17 @@ mod tests {
         assert!((pill.distance(v(100.0, 50.0)) + 20.0).abs() < 1e-4);
         assert!((pill.distance(v(100.0, 0.0)) - 30.0).abs() < 1e-4);
         assert_eq!(pill.bounds(), (v(0.0, 30.0), v(200.0, 70.0)));
-        let square = Shape::polygon(vec![v(0.0, 0.0), v(10.0, 0.0), v(10.0, 10.0), v(0.0, 10.0)], 2.0);
+        let square = Shape::polygon(
+            vec![v(0.0, 0.0), v(10.0, 0.0), v(10.0, 10.0), v(0.0, 10.0)],
+            2.0,
+        );
         assert!((square.distance(v(15.0, 5.0)) - 3.0).abs() < 1e-4);
         assert!(square.contains(v(11.0, 5.0)));
-        assert!((square.inradius() - 7.0).abs() < 0.5, "{}", square.inradius());
+        assert!(
+            (square.inradius() - 7.0).abs() < 0.5,
+            "{}",
+            square.inradius()
+        );
         assert_eq!(pill.scaled(0.5).bounds(), (v(50.0, 40.0), v(150.0, 60.0)));
         assert_eq!(pill.centered_at(v(0.0, 0.0)).center(), v(0.0, 0.0));
         let star = Shape::star(v(0.0, 0.0), 5, 50.0, 20.0, 0.0);
@@ -389,7 +494,9 @@ mod tests {
                 v(a.cos() * 50.0, a.sin() * 50.0)
             })
             .collect();
-        let Shape::Polygon { points, .. } = Shape::polygon(ring, 0.0) else { unreachable!() };
+        let Shape::Polygon { points, .. } = Shape::polygon(ring, 0.0) else {
+            unreachable!()
+        };
         assert_eq!(points.len(), MAX_POLYGON_POINTS);
     }
 
@@ -416,15 +523,28 @@ mod tests {
             let o = Outline::new(&shape);
             for k in 0..200 {
                 let e = o.at(o.perimeter() * k as f32 / 200.0);
-                assert!(shape.distance(e.point).abs() < 0.6, "{shape:?}: {:?} is {} off", e.point, shape.distance(e.point));
-                assert!(shape.distance(e.point + e.normal * 3.0) > 1.5, "{shape:?}: inward normal at {:?}", e.point);
+                assert!(
+                    shape.distance(e.point).abs() < 0.6,
+                    "{shape:?}: {:?} is {} off",
+                    e.point,
+                    shape.distance(e.point)
+                );
+                assert!(
+                    shape.distance(e.point + e.normal * 3.0) > 1.5,
+                    "{shape:?}: inward normal at {:?}",
+                    e.point
+                );
             }
             // whatever `nearest` finds is at least as close as where we started
             for k in 0..20 {
                 let e = o.at(o.perimeter() * k as f32 / 20.0);
                 let q = e.point + e.normal * 10.0;
                 let found = o.at(o.nearest(q)).point;
-                assert!((q - found).length() <= (q - e.point).length() + 0.5, "{shape:?} near {:?}", e.point);
+                assert!(
+                    (q - found).length() <= (q - e.point).length() + 0.5,
+                    "{shape:?} near {:?}",
+                    e.point
+                );
             }
         }
     }
@@ -433,6 +553,10 @@ mod tests {
     fn a_pill_outline_has_the_pills_perimeter() {
         let o = Outline::new(&Shape::pill(v(0.0, 0.0), 240.0, 64.0));
         let want = 2.0 * (240.0 - 64.0) + std::f32::consts::PI * 64.0;
-        assert!((o.perimeter() - want).abs() < 1.0, "{} vs {want}", o.perimeter());
+        assert!(
+            (o.perimeter() - want).abs() < 1.0,
+            "{} vs {want}",
+            o.perimeter()
+        );
     }
 }

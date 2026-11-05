@@ -29,11 +29,11 @@ pub use points::Points;
 pub use raycaster::{
     Face, Intersection, RaycastCamera, Raycaster, RaycasterParams, ThresholdParams,
 };
-pub use skinning::{
-    morph_header, morph_uniforms, update_skeletons, BindMode, Bone, Morph, MorphAttributes, MorphTarget, MorphTexels, Skeleton, SkinnedMesh,
-    MAX_MORPH_TARGETS,
-};
 pub(crate) use skinning::posed_positions;
 #[allow(unused_imports)] // Read by the Metal backend only.
 pub(crate) use skinning::MAX_BONES;
+pub use skinning::{
+    morph_header, morph_uniforms, update_skeletons, BindMode, Bone, Morph, MorphAttributes,
+    MorphTarget, MorphTexels, Skeleton, SkinnedMesh, MAX_MORPH_TARGETS,
+};
 pub use sprite::Sprite;

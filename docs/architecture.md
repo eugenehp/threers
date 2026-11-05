@@ -41,6 +41,8 @@ crates/
   threers-continuum/ Tendon-driven continuum robots: elastic-hinge rods, cables
   threers-mechanism-tour/  Twelve .scad mechanisms, assembled and checked
   threers-animation/ Easing, tweens, springs, timelines, ragdoll blending
+  threers-ecs/       Game layer over the scene graph: ECS, fixed-step App, input, audio
+  threers-hop/       The `hop` example as a browser package
   threers-js/        npm / Deno / Node ESM publish root (THREE shim + wasm)
   threers-node/      npm native Node addon (napi-rs; per-arch @threers/node-*)
   threers-py/        PyPI publish root (PyO3 / maturin)

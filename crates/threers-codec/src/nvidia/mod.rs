@@ -225,9 +225,15 @@ pub fn device_name() -> Option<String> {
     let mut buf = [0 as c_char; 256];
     unsafe {
         let mut dev = 0;
-        if (cuda.device_get)(&mut dev, 0) != 0 || (cuda.device_get_name)(buf.as_mut_ptr(), 256, dev) != 0 {
+        if (cuda.device_get)(&mut dev, 0) != 0
+            || (cuda.device_get_name)(buf.as_mut_ptr(), 256, dev) != 0
+        {
             return None;
         }
-        Some(std::ffi::CStr::from_ptr(buf.as_ptr()).to_string_lossy().into_owned())
+        Some(
+            std::ffi::CStr::from_ptr(buf.as_ptr())
+                .to_string_lossy()
+                .into_owned(),
+        )
     }
 }

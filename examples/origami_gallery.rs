@@ -17,13 +17,14 @@ fn main() {
 
     let mut items: Vec<(String, CreasePattern, Vec<f64>, FoldedState)> = Vec::new();
 
-    let push_mode = |items: &mut Vec<_>, name: &str, cp: CreasePattern, mode: VertexMode, t: f64| {
-        let assign = Assignment::uniform(cp.verts.len(), mode);
-        let drive = cp.drive_hinge(&assign).expect(name);
-        let tans = cp.propagate(&assign, drive, t).expect(name);
-        let folded = cp.fold(&assign, drive, t).expect(name);
-        items.push((name.into(), cp, tans, folded));
-    };
+    let push_mode =
+        |items: &mut Vec<_>, name: &str, cp: CreasePattern, mode: VertexMode, t: f64| {
+            let assign = Assignment::uniform(cp.verts.len(), mode);
+            let drive = cp.drive_hinge(&assign).expect(name);
+            let tans = cp.propagate(&assign, drive, t).expect(name);
+            let folded = cp.fold(&assign, drive, t).expect(name);
+            items.push((name.into(), cp, tans, folded));
+        };
 
     let cross = CreasePattern::cross(std::f64::consts::FRAC_PI_2, std::f64::consts::FRAC_PI_2);
     push_mode(&mut items, "figure1-A", cross.clone(), VertexMode::A, 0.75);
@@ -45,8 +46,16 @@ fn main() {
     items.push(("miura".into(), miura, tans, folded));
 
     for (name, cp, tans, _) in &items {
-        write_next_to(&out, &format!("origami-gallery-{name}.svg"), &cp.to_svg(Some(tans)));
-        println!("{name}: {} faces, {} hinges", cp.faces.len(), cp.hinge_indices().count());
+        write_next_to(
+            &out,
+            &format!("origami-gallery-{name}.svg"),
+            &cp.to_svg(Some(tans)),
+        );
+        println!(
+            "{name}: {} faces, {} hinges",
+            cp.faces.len(),
+            cp.hinge_indices().count()
+        );
     }
 
     render_scene(&out, 1920, 820, [0.0, 1.3, 14.5], Vector3::ZERO, |scene| {

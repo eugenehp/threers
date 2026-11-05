@@ -31,8 +31,14 @@ fn max_value(data_type: u8) -> Option<f32> {
 /// Draco's `ConvertValue<float>`: integers divided by their type's maximum
 /// when the attribute is normalised, taken as they are otherwise.
 fn as_float(a: &DecodedAttribute) -> Vec<f32> {
-    match (&a.values, a.descriptor.normalized, max_value(a.descriptor.data_type)) {
-        (AttributeValues::Integer(v), true, Some(max)) => v.iter().map(|&x| x as f32 / max).collect(),
+    match (
+        &a.values,
+        a.descriptor.normalized,
+        max_value(a.descriptor.data_type),
+    ) {
+        (AttributeValues::Integer(v), true, Some(max)) => {
+            v.iter().map(|&x| x as f32 / max).collect()
+        }
         _ => a.as_f32(),
     }
 }
@@ -54,7 +60,9 @@ pub fn decode_three(bytes: &[u8], srgb_colors: bool) -> Result<BufferGeometry, D
     let mesh = decode_mesh(bytes)?;
     let mut g = BufferGeometry::new();
     for (att_type, name) in NAMES {
-        let Some(a) = mesh.attribute(att_type) else { continue };
+        let Some(a) = mesh.attribute(att_type) else {
+            continue;
+        };
         let size = a.num_components().max(1);
         let mut values = as_float(a);
         if name == "color" && srgb_colors && size >= 3 {

@@ -20,8 +20,22 @@ use super::tab::*;
 pub const MAX_BANDS: usize = 21;
 
 /// Path counters for coverage checks (`OPUS_STATS=1` in opus_dump).
-pub static STATS: [std::sync::atomic::AtomicUsize; 12] = [const { std::sync::atomic::AtomicUsize::new(0) }; 12];
-pub const STAT_NAMES: [&str; 12] = ["transient", "anticollapse", "postfilter", "intensity", "dual_stereo", "silence", "tf_select", "split_stereo_n2", "fold_noise", "inv_phase", "redundancy_pre", "redundancy_post"];
+pub static STATS: [std::sync::atomic::AtomicUsize; 12] =
+    [const { std::sync::atomic::AtomicUsize::new(0) }; 12];
+pub const STAT_NAMES: [&str; 12] = [
+    "transient",
+    "anticollapse",
+    "postfilter",
+    "intensity",
+    "dual_stereo",
+    "silence",
+    "tf_select",
+    "split_stereo_n2",
+    "fold_noise",
+    "inv_phase",
+    "redundancy_pre",
+    "redundancy_post",
+];
 #[inline]
 pub(crate) fn stat(i: usize) {
     STATS[i].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -57,10 +71,20 @@ const MEM_LEN: usize = SCRATCH + 8 * 22;
 type Mem = Vec<f32>;
 
 fn alpha_coef(size: usize) -> f32 {
-    [29440.0f32 / 32768.0, 26112.0 / 32768.0, 21248.0 / 32768.0, 16384.0 / 32768.0][size]
+    [
+        29440.0f32 / 32768.0,
+        26112.0 / 32768.0,
+        21248.0 / 32768.0,
+        16384.0 / 32768.0,
+    ][size]
 }
 fn beta_coef(size: usize) -> f32 {
-    [1.0f32 - (30147.0 / 32768.0), 1.0 - (22282.0 / 32768.0), 1.0 - (12124.0 / 32768.0), 1.0 - (6554.0 / 32768.0)][size]
+    [
+        1.0f32 - (30147.0 / 32768.0),
+        1.0 - (22282.0 / 32768.0),
+        1.0 - (12124.0 / 32768.0),
+        1.0 - (6554.0 / 32768.0),
+    ][size]
 }
 
 /// `ff_opus_deemph_weights`: products of `CELT_EMPH_COEFF` in double.
@@ -68,7 +92,10 @@ fn deemph_weights() -> [f32; 16] {
     let c = 0.8500061035f64;
     let p = [c, c * c, c * c * c, c * c * c * c];
     let z = 0.0f64;
-    [p[0], p[1], p[2], p[3], z, p[0], p[1], p[2], z, z, p[0], p[1], z, z, z, p[0]].map(|v| v as f32)
+    [
+        p[0], p[1], p[2], p[3], z, p[0], p[1], p[2], z, z, p[0], p[1], z, z, z, p[0],
+    ]
+    .map(|v| v as f32)
 }
 
 #[derive(Clone)]
@@ -254,7 +281,8 @@ impl Celt {
             }
             for j in 0..self.channels {
                 let q2 = rc.get_raw(fb as u32);
-                let offset = (q2 as f32 + 0.5f32) * (1i32 << (14 - fb)) as f32 / 16384.0f32 - 0.5f32;
+                let offset =
+                    (q2 as f32 + 0.5f32) * (1i32 << (14 - fb)) as f32 / 16384.0f32 - 0.5f32;
                 self.block[j].energy[i] += offset;
             }
         }
@@ -271,7 +299,9 @@ impl Celt {
                 }
                 for j in 0..self.channels {
                     let q2 = rc.get_raw(1);
-                    let offset = (q2 as f32 - 0.5f32) * (1i32 << (14 - self.fine_bits[i] - 1)) as f32 / 16384.0f32;
+                    let offset = (q2 as f32 - 0.5f32)
+                        * (1i32 << (14 - self.fine_bits[i] - 1)) as f32
+                        / 16384.0f32;
                     self.block[j].energy[i] += offset;
                     bits_left -= 1;
                 }
@@ -326,7 +356,11 @@ impl Celt {
                 let octave = rc.dec_uint(6);
                 let period = (16i32 << octave) + rc.get_raw(4 + octave) as i32 - 1;
                 let gain = 0.09375f32 * (rc.get_raw(3) + 1) as f32;
-                let tapset = if rc.tell() as i32 + 2 <= self.framebits { rc.dec_cdf(&CELT_MODEL_TAPSET) as usize } else { 0 };
+                let tapset = if rc.tell() as i32 + 2 <= self.framebits {
+                    rc.dec_cdf(&CELT_MODEL_TAPSET) as usize
+                } else {
+                    0
+                };
                 for b in self.block.iter_mut() {
                     b.pf_period_new = period.max(POSTFILTER_MINPERIOD);
                     for k in 0..3 {
@@ -348,7 +382,10 @@ impl Celt {
             let thresh = ((-1.0f64 - (0.125f32 * depth as f32) as f64) as f32).exp2();
             let sqrt_1 = 1.0f32 / (n as f32).sqrt();
             let xptr = base + ((CELT_FREQ_BANDS[i] as usize) << self.size);
-            let mut prev = [self.block[ch].prev_energy[0][i], self.block[ch].prev_energy[1][i]];
+            let mut prev = [
+                self.block[ch].prev_energy[0][i],
+                self.block[ch].prev_energy[1][i],
+            ];
             if self.channels == 1 {
                 prev[0] = prev[0].max(self.block[1].prev_energy[0][i]);
                 prev[1] = prev[1].max(self.block[1].prev_energy[1][i]);
@@ -409,7 +446,9 @@ impl Celt {
         }
         for i in 0..self.channels {
             let base = if i == 0 { X0 } else { X1 };
-            self.mem[base..base + MAX_FRAME_SIZE].iter_mut().for_each(|v| *v = 0.0);
+            self.mem[base..base + MAX_FRAME_SIZE]
+                .iter_mut()
+                .for_each(|v| *v = 0.0);
             self.block[i].collapse_masks = [0; MAX_BANDS];
         }
         let mut consumed = rc.tell() as i32;
@@ -421,13 +460,17 @@ impl Celt {
         if self.silence {
             stat(5);
             consumed = self.framebits;
-            rc.total_bits = rc.total_bits.wrapping_add((self.framebits as u32).wrapping_sub(rc.tell()));
+            rc.total_bits = rc
+                .total_bits
+                .wrapping_add((self.framebits as u32).wrapping_sub(rc.tell()));
         }
         consumed = self.parse_postfilter(rc, consumed);
         if self.size != 0 && consumed + 3 <= self.framebits {
             self.transient = rc.dec_log(3) != 0;
         }
-        if self.transient { stat(0); }
+        if self.transient {
+            stat(0);
+        }
         self.blocks = if self.transient { 1 << self.size } else { 1 };
         self.blocksize = frame_size / self.blocks;
         let txi = if self.transient { 0 } else { self.size };
@@ -471,7 +514,9 @@ impl Celt {
             for b in self.block.iter_mut() {
                 b.energy = [ENERGY_SILENCE; MAX_BANDS];
             }
-            self.mem[X0..X0 + 2 * MAX_FRAME_SIZE].iter_mut().for_each(|v| *v = 0.0);
+            self.mem[X0..X0 + 2 * MAX_FRAME_SIZE]
+                .iter_mut()
+                .for_each(|v| *v = 0.0);
         }
 
         let window = &CELT_WINDOW_PADDED[8..8 + OVERLAP];
@@ -479,7 +524,8 @@ impl Celt {
             let base = if i == 0 { X0 } else { X1 };
             for j in 0..self.blocks {
                 let dst = 1024 + j * self.blocksize;
-                let (tx, mem, tmp, block) = (&self.tx[txi], &self.mem, &mut self.tmp, &mut self.block[i]);
+                let (tx, mem, tmp, block) =
+                    (&self.tx[txi], &self.mem, &mut self.tmp, &mut self.block[i]);
                 tx.run(
                     &mut block.buf[dst + OVERLAP / 2..dst + OVERLAP / 2 + self.blocksize],
                     &mem[base + j..],
@@ -495,7 +541,12 @@ impl Celt {
                 }
             }
             postfilter(block, self.blocksize * self.blocks);
-            block.emph_coeff = deemphasis(&mut out[i][..frame_size], &block.buf[1024 - frame_size..1024], block.emph_coeff, &self.weights);
+            block.emph_coeff = deemphasis(
+                &mut out[i][..frame_size],
+                &block.buf[1024 - frame_size..1024],
+                block.emph_coeff,
+                &self.weights,
+            );
         }
 
         if channels == 1 {
@@ -550,14 +601,17 @@ impl Celt {
             self.spread = SPREAD_NORMAL;
         }
         for i in 0..MAX_BANDS {
-            self.caps[i] = self.normc((CELT_STATIC_CAPS[self.size][self.channels - 1][i] as i32 + 64) * fr(i));
+            self.caps[i] =
+                self.normc((CELT_STATIC_CAPS[self.size][self.channels - 1][i] as i32 + 64) * fr(i));
         }
         let mut tbits_8ths = self.framebits << 3;
         for i in start..end {
             let mut quanta = fr(i) << (ch - 1) << size;
             let mut b_dynalloc = dynalloc;
             quanta = (quanta << 3).min((6 << 3).max(quanta));
-            while (rc.tell_frac() as i32) + (b_dynalloc << 3) < tbits_8ths && boost[i] < self.caps[i] {
+            while (rc.tell_frac() as i32) + (b_dynalloc << 3) < tbits_8ths
+                && boost[i] < self.caps[i]
+            {
                 let is_boost = rc.dec_log(b_dynalloc as u32);
                 if is_boost == 0 {
                     break;
@@ -636,7 +690,11 @@ impl Celt {
         low -= 1;
         for i in start..end {
             bits1[i] = self.normc(fr(i) * CELT_STATIC_ALLOC[low as usize][i] as i32);
-            bits2[i] = if high >= VECTORS { self.caps[i] } else { self.normc(fr(i) * CELT_STATIC_ALLOC[high as usize][i] as i32) };
+            bits2[i] = if high >= VECTORS {
+                self.caps[i]
+            } else {
+                self.normc(fr(i) * CELT_STATIC_ALLOC[high as usize][i] as i32)
+            };
             if bits1[i] != 0 {
                 bits1[i] = (bits1[i] + trim_offset[i]).max(0);
             }
@@ -718,14 +776,19 @@ impl Celt {
         self.intensity_stereo = 0;
         self.dual_stereo = false;
         if intensitystereo_bit != 0 {
-            self.intensity_stereo = start + rc.dec_uint((self.coded_bands + 1 - start) as u32) as usize;
-            if self.intensity_stereo < self.coded_bands { stat(3); }
+            self.intensity_stereo =
+                start + rc.dec_uint((self.coded_bands + 1 - start) as u32) as usize;
+            if self.intensity_stereo < self.coded_bands {
+                stat(3);
+            }
         }
         if self.intensity_stereo <= start {
             tbits_8ths += dualstereo_bit;
         } else if dualstereo_bit != 0 {
             self.dual_stereo = rc.dec_log(1) != 0;
-            if self.dual_stereo { stat(4); }
+            if self.dual_stereo {
+                stat(4);
+            }
         }
         let mut remaining = tbits_8ths - total;
         let bandbits = remaining / (fb(self.coded_bands) - fb(start));
@@ -743,7 +806,8 @@ impl Celt {
             if n > 1 {
                 extrabits = (self.pulses[i] - self.caps[i]).max(0);
                 self.pulses[i] -= extrabits;
-                let dof = n * ch + (ch == 2 && n > 2 && !self.dual_stereo && i < self.intensity_stereo) as i32;
+                let dof = n * ch
+                    + (ch == 2 && n > 2 && !self.dual_stereo && i < self.intensity_stereo) as i32;
                 let temp = dof * (CELT_LOG_FREQ_RANGE[i] as i32 + (size << 3));
                 let mut offset = (temp >> 1) - dof * FINE_OFFSET;
                 if n == 2 {
@@ -757,7 +821,8 @@ impl Celt {
                 let fine_bits = (self.pulses[i] + offset + (dof << 2)) / (dof << 3);
                 let max_bits = ((self.pulses[i] >> 3) >> (ch - 1)).clamp(0, MAX_FINE_BITS);
                 self.fine_bits[i] = fine_bits.clamp(0, max_bits);
-                self.fine_priority[i] = (self.fine_bits[i] * (dof << 3) >= self.pulses[i] + offset) as i32;
+                self.fine_priority[i] =
+                    (self.fine_bits[i] * (dof << 3) >= self.pulses[i] + offset) as i32;
                 self.pulses[i] -= self.fine_bits[i] << (ch - 1) << 3;
             } else {
                 extrabits = (self.pulses[i] - (ch << 3)).max(0);
@@ -797,7 +862,11 @@ impl Celt {
             let band_offset = fb(i) << size;
             let band_size = fr(i) << size;
             let x = X0 + band_offset;
-            let y = if self.channels == 2 { Some(X1 + band_offset) } else { None };
+            let y = if self.channels == 2 {
+                Some(X1 + band_offset)
+            } else {
+                None
+            };
             let consumed = rc.tell_frac() as i32;
             let mut effective_lowband: isize = -1;
             let mut b = 0;
@@ -807,20 +876,33 @@ impl Celt {
             self.remaining2 = totalbits - consumed - 1;
             if i < self.coded_bands {
                 let curr_balance = self.remaining / 3.min(self.coded_bands as i32 - i as i32);
-                b = (self.remaining2 + 1).min(self.pulses[i] + curr_balance).clamp(0, (1 << 14) - 1);
+                b = (self.remaining2 + 1)
+                    .min(self.pulses[i] + curr_balance)
+                    .clamp(0, (1 << 14) - 1);
             }
-            if (fb(i) as i32 - fr(i) as i32 >= fb(start) as i32 || i == start + 1) && (update_lowband || lowband_offset == 0) {
+            if (fb(i) as i32 - fr(i) as i32 >= fb(start) as i32 || i == start + 1)
+                && (update_lowband || lowband_offset == 0)
+            {
                 lowband_offset = i;
             }
             if i == start + 1 {
                 let count = (fr(i) - fr(i - 1)) << size;
-                self.mem.copy_within(NORM1 + band_offset - count..NORM1 + band_offset, NORM1 + band_offset);
+                self.mem.copy_within(
+                    NORM1 + band_offset - count..NORM1 + band_offset,
+                    NORM1 + band_offset,
+                );
                 if self.channels == 2 {
-                    self.mem.copy_within(NORM2 + band_offset - count..NORM2 + band_offset, NORM2 + band_offset);
+                    self.mem.copy_within(
+                        NORM2 + band_offset - count..NORM2 + band_offset,
+                        NORM2 + band_offset,
+                    );
                 }
             }
-            if lowband_offset != 0 && (self.spread != SPREAD_AGGRESSIVE || self.blocks > 1 || self.tf_change[i] < 0) {
-                effective_lowband = (fb(start) as isize).max(fb(lowband_offset) as isize - fr(i) as isize);
+            if lowband_offset != 0
+                && (self.spread != SPREAD_AGGRESSIVE || self.blocks > 1 || self.tf_change[i] < 0)
+            {
+                effective_lowband =
+                    (fb(start) as isize).max(fb(lowband_offset) as isize - fr(i) as isize);
                 let mut foldstart = lowband_offset;
                 loop {
                     foldstart -= 1;
@@ -831,7 +913,8 @@ impl Celt {
                 let mut foldend = lowband_offset - 1;
                 loop {
                     foldend += 1;
-                    if !(foldend < i && (fb(foldend) as isize) < effective_lowband + fr(i) as isize) {
+                    if !(foldend < i && (fb(foldend) as isize) < effective_lowband + fr(i) as isize)
+                    {
                         break;
                     }
                 }
@@ -854,10 +937,55 @@ impl Celt {
                 (None, None)
             };
             if self.dual_stereo {
-                cm[0] = self.quant_band(rc, i, x, None, band_size, b >> 1, self.blocks as u32, nl1, size as i32, Some(NORM1 + band_offset), 0, 1.0, Some(SCRATCH), cm[0]);
-                cm[1] = self.quant_band(rc, i, y.unwrap(), None, band_size, b >> 1, self.blocks as u32, nl2, size as i32, Some(NORM2 + band_offset), 0, 1.0, Some(SCRATCH), cm[1]);
+                cm[0] = self.quant_band(
+                    rc,
+                    i,
+                    x,
+                    None,
+                    band_size,
+                    b >> 1,
+                    self.blocks as u32,
+                    nl1,
+                    size as i32,
+                    Some(NORM1 + band_offset),
+                    0,
+                    1.0,
+                    Some(SCRATCH),
+                    cm[0],
+                );
+                cm[1] = self.quant_band(
+                    rc,
+                    i,
+                    y.unwrap(),
+                    None,
+                    band_size,
+                    b >> 1,
+                    self.blocks as u32,
+                    nl2,
+                    size as i32,
+                    Some(NORM2 + band_offset),
+                    0,
+                    1.0,
+                    Some(SCRATCH),
+                    cm[1],
+                );
             } else {
-                cm[0] = self.quant_band(rc, i, x, y, band_size, b, self.blocks as u32, nl1, size as i32, Some(NORM1 + band_offset), 0, 1.0, Some(SCRATCH), cm[0] | cm[1]);
+                cm[0] = self.quant_band(
+                    rc,
+                    i,
+                    x,
+                    y,
+                    band_size,
+                    b,
+                    self.blocks as u32,
+                    nl1,
+                    size as i32,
+                    Some(NORM1 + band_offset),
+                    0,
+                    1.0,
+                    Some(SCRATCH),
+                    cm[0] | cm[1],
+                );
                 cm[1] = cm[0];
             }
             self.block[0].collapse_masks[i] = cm[0] as u8;
@@ -926,13 +1054,27 @@ impl Celt {
         for i in 0..stride {
             let base = x + (i * len) as usize;
             if stride2 != 0 {
-                rotation_impl(&mut self.mem[base..base + len as usize], stride2 as usize, s, c);
+                rotation_impl(
+                    &mut self.mem[base..base + len as usize],
+                    stride2 as usize,
+                    s,
+                    c,
+                );
             }
             rotation_impl(&mut self.mem[base..base + len as usize], 1, c, s);
         }
     }
 
-    fn alg_unquant(&mut self, rc: &mut Rc, x: usize, n: u32, k: u32, spread: i32, blocks: u32, gain: f32) -> u32 {
+    fn alg_unquant(
+        &mut self,
+        rc: &mut Rc,
+        x: usize,
+        n: u32,
+        k: u32,
+        spread: i32,
+        blocks: u32,
+        gain: f32,
+    ) -> u32 {
         let norm = decode_pulses(rc, &mut self.qcoeff[..n as usize], n, k);
         let gain = gain / (norm as f32).sqrt();
         for i in 0..n as usize {
@@ -986,7 +1128,8 @@ impl Celt {
         lowband_scratch: Option<usize>,
         fill: u32,
     ) -> u32 {
-        let (mut n, mut b, mut blocks, mut lowband, mut duration, mut fill, mut y) = (n, b, blocks, lowband, duration, fill, y);
+        let (mut n, mut b, mut blocks, mut lowband, mut duration, mut fill, mut y) =
+            (n, b, blocks, lowband, duration, fill, y);
         let stereo = y.is_some();
         let mut split = stereo;
         let n0 = n;
@@ -1038,7 +1181,8 @@ impl Celt {
                 if let Some(lb) = lowband {
                     self.haar1(lb, n >> k, 1 << k);
                 }
-                fill = CELT_BIT_INTERLEAVE[(fill & 0xF) as usize] as u32 | (CELT_BIT_INTERLEAVE[(fill >> 4) as usize] as u32) << 2;
+                fill = CELT_BIT_INTERLEAVE[(fill & 0xF) as usize] as u32
+                    | (CELT_BIT_INTERLEAVE[(fill >> 4) as usize] as u32) << 2;
             }
             blocks >>= recombine;
             n_b <<= recombine;
@@ -1056,7 +1200,12 @@ impl Celt {
             n_b0 = n_b;
             if b0 > 1 {
                 if let Some(lb) = lowband {
-                    self.deinterleave_hadamard(lb, n_b >> recombine, (b0 << recombine) as usize, longblocks);
+                    self.deinterleave_hadamard(
+                        lb,
+                        n_b >> recombine,
+                        (b0 << recombine) as usize,
+                        longblocks,
+                    );
                 }
             }
         }
@@ -1077,8 +1226,17 @@ impl Celt {
         if split {
             let mut itheta: i32 = 0;
             let pulse_cap = CELT_LOG_FREQ_RANGE[band] as i32 + duration * 8;
-            let offset = (pulse_cap >> 1) - if stereo && n == 2 { QTHETA_OFFSET_TWOPHASE } else { QTHETA_OFFSET };
-            let qn = if stereo && band >= self.intensity_stereo { 1 } else { compute_qn(n as i32, b, offset, pulse_cap, stereo) };
+            let offset = (pulse_cap >> 1)
+                - if stereo && n == 2 {
+                    QTHETA_OFFSET_TWOPHASE
+                } else {
+                    QTHETA_OFFSET
+                };
+            let qn = if stereo && band >= self.intensity_stereo {
+                1
+            } else {
+                compute_qn(n as i32, b, offset, pulse_cap, stereo)
+            };
             let tell = rc.tell_frac() as i32;
             if qn != 1 {
                 itheta = if stereo && n > 2 {
@@ -1090,9 +1248,15 @@ impl Celt {
                 };
                 itheta = itheta * 16384 / qn;
             } else if stereo {
-                inv = if b > 2 << 3 && self.remaining2 > 2 << 3 { rc.dec_log(2) != 0 } else { false };
+                inv = if b > 2 << 3 && self.remaining2 > 2 << 3 {
+                    rc.dec_log(2) != 0
+                } else {
+                    false
+                };
                 inv = if self.apply_phase_inv { inv } else { false };
-                if inv { stat(9); }
+                if inv {
+                    stat(9);
+                }
                 itheta = 0;
             }
             let qalloc = rc.tell_frac() as i32 - tell;
@@ -1102,7 +1266,11 @@ impl Celt {
             if itheta == 0 {
                 imid = 32767;
                 iside = 0;
-                fill &= if blocks >= 32 { u32::MAX } else { (1u32 << blocks) - 1 };
+                fill &= if blocks >= 32 {
+                    u32::MAX
+                } else {
+                    (1u32 << blocks) - 1
+                };
                 delta = -16384;
             } else if itheta == 16384 {
                 imid = 0;
@@ -1121,7 +1289,11 @@ impl Celt {
                 stat(7);
                 let yy = y.unwrap();
                 let mut mbits = b;
-                let sbits = if itheta != 0 && itheta != 16384 { 1 << 3 } else { 0 };
+                let sbits = if itheta != 0 && itheta != 16384 {
+                    1 << 3
+                } else {
+                    0
+                };
                 mbits -= sbits;
                 let c = itheta > 8192;
                 self.remaining2 -= qalloc + sbits;
@@ -1131,7 +1303,22 @@ impl Celt {
                     sign = rc.get_raw(1) as i32;
                 }
                 let sign = 1 - 2 * sign;
-                cm = self.quant_band(rc, band, x2, None, n, mbits, blocks, lowband, duration, lowband_out, level, gain, lowband_scratch, orig_fill);
+                cm = self.quant_band(
+                    rc,
+                    band,
+                    x2,
+                    None,
+                    n,
+                    mbits,
+                    blocks,
+                    lowband,
+                    duration,
+                    lowband_out,
+                    level,
+                    gain,
+                    lowband_scratch,
+                    orig_fill,
+                );
                 self.mem[y2] = -sign as f32 * self.mem[x2 + 1];
                 self.mem[y2 + 1] = sign as f32 * self.mem[x2];
                 self.mem[x] *= mid;
@@ -1172,21 +1359,81 @@ impl Celt {
                 let mut rebalance = self.remaining2;
                 let shift = (b0 >> 1) & (if stereo { 0 } else { u32::MAX });
                 if mbits >= sbits {
-                    cm = self.quant_band(rc, band, x, None, n, mbits, blocks, lowband, duration, next_lowband_out1, next_level, if stereo { 1.0 } else { gain * mid }, lowband_scratch, fill);
+                    cm = self.quant_band(
+                        rc,
+                        band,
+                        x,
+                        None,
+                        n,
+                        mbits,
+                        blocks,
+                        lowband,
+                        duration,
+                        next_lowband_out1,
+                        next_level,
+                        if stereo { 1.0 } else { gain * mid },
+                        lowband_scratch,
+                        fill,
+                    );
                     rebalance = mbits - (rebalance - self.remaining2);
                     if rebalance > 3 << 3 && itheta != 0 {
                         sbits += rebalance - (3 << 3);
                     }
-                    let cmt = self.quant_band(rc, band, yy, None, n, sbits, blocks, next_lowband2, duration, None, next_level, gain * side, None, fill >> blocks);
+                    let cmt = self.quant_band(
+                        rc,
+                        band,
+                        yy,
+                        None,
+                        n,
+                        sbits,
+                        blocks,
+                        next_lowband2,
+                        duration,
+                        None,
+                        next_level,
+                        gain * side,
+                        None,
+                        fill >> blocks,
+                    );
                     cm |= cmt << shift;
                 } else {
-                    cm = self.quant_band(rc, band, yy, None, n, sbits, blocks, next_lowband2, duration, None, next_level, gain * side, None, fill >> blocks);
+                    cm = self.quant_band(
+                        rc,
+                        band,
+                        yy,
+                        None,
+                        n,
+                        sbits,
+                        blocks,
+                        next_lowband2,
+                        duration,
+                        None,
+                        next_level,
+                        gain * side,
+                        None,
+                        fill >> blocks,
+                    );
                     cm <<= shift;
                     rebalance = sbits - (rebalance - self.remaining2);
                     if rebalance > 3 << 3 && itheta != 16384 {
                         mbits += rebalance - (3 << 3);
                     }
-                    cm |= self.quant_band(rc, band, x, None, n, mbits, blocks, lowband, duration, next_lowband_out1, next_level, if stereo { 1.0 } else { gain * mid }, lowband_scratch, fill);
+                    cm |= self.quant_band(
+                        rc,
+                        band,
+                        x,
+                        None,
+                        n,
+                        mbits,
+                        blocks,
+                        lowband,
+                        duration,
+                        next_lowband_out1,
+                        next_level,
+                        if stereo { 1.0 } else { gain * mid },
+                        lowband_scratch,
+                        fill,
+                    );
                 }
             }
         } else {
@@ -1200,7 +1447,11 @@ impl Celt {
                 self.remaining2 -= curr_bits;
             }
             if q != 0 {
-                let k = if q < 8 { q } else { (8 + (q & 7)) << ((q >> 3) - 1) };
+                let k = if q < 8 {
+                    q
+                } else {
+                    (8 + (q & 7)) << ((q >> 3) - 1)
+                };
                 cm = self.alg_unquant(rc, x, n as u32, k as u32, self.spread, blocks, gain);
             } else {
                 let cm_mask = (1u32 << blocks) - 1;
@@ -1216,7 +1467,11 @@ impl Celt {
                         }
                         Some(lb) => {
                             for i in 0..n {
-                                let d = if self.rng() & 0x8000 != 0 { 1.0f32 / 256.0 } else { -1.0f32 / 256.0 };
+                                let d = if self.rng() & 0x8000 != 0 {
+                                    1.0f32 / 256.0
+                                } else {
+                                    -1.0f32 / 256.0
+                                };
                                 self.mem[x + i] = self.mem[lb + i] + d;
                             }
                             cm = fill;
@@ -1241,7 +1496,12 @@ impl Celt {
             }
         } else if level == 0 {
             if b0 > 1 {
-                self.interleave_hadamard(x, n_b >> recombine, (b0 << recombine) as usize, longblocks);
+                self.interleave_hadamard(
+                    x,
+                    n_b >> recombine,
+                    (b0 << recombine) as usize,
+                    longblocks,
+                );
             }
             n_b = n_b0;
             blocks = b0;
@@ -1262,7 +1522,11 @@ impl Celt {
                     self.mem[lo + i] = nn * self.mem[x + i];
                 }
             }
-            cm &= if blocks >= 32 { u32::MAX } else { (1u32 << blocks) - 1 };
+            cm &= if blocks >= 32 {
+                u32::MAX
+            } else {
+                (1u32 << blocks) - 1
+            };
         }
         cm
     }
@@ -1317,7 +1581,8 @@ fn round_mul16(a: i32, b: i32) -> i32 {
 
 fn celt_cos(x: i16) -> i16 {
     let x = (((x as i32) * (x as i32) + 4096) >> 13) as i16 as i32;
-    let x = ((32767 - x) + round_mul16(x, -7651 + round_mul16(x, 8277 + round_mul16(-626, x)))) as i16;
+    let x =
+        ((32767 - x) + round_mul16(x, -7651 + round_mul16(x, 8277 + round_mul16(-626, x)))) as i16;
     (x as i32 + 1) as i16
 }
 
@@ -1326,7 +1591,8 @@ fn celt_log2tan(isin: i32, icos: i32) -> i32 {
     let ls = ilog(isin as u32) as i32;
     let icos = icos << (15 - lc);
     let isin = isin << (15 - ls);
-    (ls << 11) - (lc << 11) + round_mul16(isin, round_mul16(isin, -2597) + 7932) - round_mul16(icos, round_mul16(icos, -2597) + 7932)
+    (ls << 11) - (lc << 11) + round_mul16(isin, round_mul16(isin, -2597) + 7932)
+        - round_mul16(icos, round_mul16(icos, -2597) + 7932)
 }
 
 fn bits2pulses(cache: &[u8], bits: i32) -> i32 {
@@ -1341,7 +1607,11 @@ fn bits2pulses(cache: &[u8], bits: i32) -> i32 {
             low = center;
         }
     }
-    let lowv = if low == 0 { -1 } else { cache[low as usize] as i32 };
+    let lowv = if low == 0 {
+        -1
+    } else {
+        cache[low as usize] as i32
+    };
     if bits - lowv <= cache[high as usize] as i32 - bits {
         low
     } else {
@@ -1362,7 +1632,9 @@ fn compute_qn(n: i32, b: i32, offset: i32, pulse_cap: i32, stereo: bool) -> i32 
     if stereo && n == 2 {
         n2 -= 1;
     }
-    let qb = (b - pulse_cap - (4 << 3)).min((b + n2 * offset) / n2).min(8 << 3);
+    let qb = (b - pulse_cap - (4 << 3))
+        .min((b + n2 * offset) / n2)
+        .min(8 << 3);
     if qb < (1 << 3 >> 1) {
         1
     } else {
@@ -1376,7 +1648,9 @@ fn pvq_u(n: u32, k: u32) -> u32 {
     CELT_PVQ_U[PVQ_ROW[a as usize] + b as usize]
 }
 
-const PVQ_ROW: [usize; 15] = [0, 176, 351, 525, 698, 870, 1041, 1131, 1178, 1207, 1226, 1240, 1248, 1254, 1257];
+const PVQ_ROW: [usize; 15] = [
+    0, 176, 351, 525, 698, 870, 1041, 1131, 1178, 1207, 1226, 1240, 1248, 1254, 1257,
+];
 
 #[inline]
 fn row(n: u32, k: u32) -> u32 {
@@ -1491,7 +1765,13 @@ fn postfilter(b: &mut Block, len: usize) {
     if len > OVERLAP {
         apply_transition(b, 1024 + OVERLAP);
         if b.pf_gains[0] > f32::EPSILON && filter_len > 0 {
-            postfilter_neon(&mut b.buf, 1024 + 2 * OVERLAP, b.pf_period as usize, b.pf_gains, filter_len as usize);
+            postfilter_neon(
+                &mut b.buf,
+                1024 + 2 * OVERLAP,
+                b.pf_period as usize,
+                b.pf_gains,
+                filter_len as usize,
+            );
         }
         b.pf_period_old = b.pf_period;
         b.pf_gains_old = b.pf_gains;

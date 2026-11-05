@@ -7,11 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.11] — 2026-11-04
+
 ### Added
 
+- `threers-ecs`, a new crate (not yet published): entities, components and
+  systems over the scene graph. Every scene node is an entity, so the renderer
+  and loaders work unchanged. Queries with change tracking, commands, resources,
+  events, ordered systems, game states, a fixed-timestep `App` with pause and
+  slow motion, input as named actions, saves and prefabs, asset loading with hot
+  reload, an animation state machine, a HUD, dev tools and a test harness.
+  Features: `physics`, `audio`, `window`, `gamepad`, `web`, `ui`.
+- `GltfScene::extras` and `add_to_scene_mapped`: a glTF node's custom properties
+  and where each node landed.
+- `threers::loaders::json` is public, and `Vector3` is `Default`.
 - `Renderer::new_lazy`: initial pipelines built on first use instead of in the
   constructor; `Renderer::new` stays eager. Pixels match the eager renderer
   (contributed in #1).
+- `PipelineWarmup::on_progress` and `spawn`, `SurfaceRenderer::warm_in_background`
+  (which holds `render` at `false` until the job is done, with `is_warming` and
+  `stop_waiting_for_warm_up`), and `WebRenderer.newLazy` / `warmUp().run()` for
+  pages. `docs/embedding.md` gains render pacing, a webview section and a
+  Tauri recipe.
+- `Renderer::warm_up_states` and `warm_up_ranked`, `PipelineWarmup::step_async`
+  and `run_async`, and `Renderer::pipeline_failures`. A lazy renderer's state
+  variants are deferred like its initial pipelines, so they can be warmed on
+  any target; the async steps report validation errors on the web, where the
+  blocking ones cannot; a pipeline that failed validation stays reported.
 - `Renderer::warm_up` returns a `PipelineWarmup` that builds a lazy
   renderer's pending pipelines from any number of threads, with `progress`,
   `is_ready`, `wait` and per-pipeline validation `errors`.
@@ -28,10 +50,123 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Send`. The `surface_viewport` example shows the setup, and
   `docs/embedding.md` covers all of the above.
 
+- `ExrLoader` reads every scanline compressor: RLE, PIZ, PXR24, B44, B44A,
+  DWAA and DWAB. All but DWA decode exactly as OpenEXR's own reader does; DWA
+  matches it to rounding, as OpenEXR's own DCT paths differ from each other.
+- `threers_codec::av1::Av1Encoder`, a native AV1 encoder: key frames only,
+  sides a multiple of 8. dav1d decodes its streams to the same samples as
+  `decode::av1`.
+- `H264Decoder::set_threads` and `HevcDecoder::set_threads` reconstruct
+  pictures concurrently once their references are finished, and
+  `decode_annexb` and `decode_video` use them with `parallel`. Output is
+  unchanged. H.264 field and MBAFF pictures stay on the calling thread.
+- `ObjectKind::Audio`, `Object3D::audio`, `Scene::audio_mix` and
+  `PositionalAudio::mix` place sound sources in the scene and give each one's
+  gain and pan from an `AudioListener`, by the Web Audio `PannerNode` formulas.
+  `AudioBackend::set_spatial_mix` applies them; it does nothing by default.
+- `scripts/test-no-skips.py` fails a test run on any skip or empty test target,
+  and `scripts/browser-smoke.sh` runs the WebGL2 and WebGPU suites together.
+- A `ci` workflow runs a feature matrix, the codec conformance suites through
+  the skip gate, the native tests on software Vulkan and WebGL2 in Chrome on
+  every push and pull request.
+
 ### Changed
 
 - `GpuContext` also requests `Features::PIPELINE_CACHE` where the adapter has
   it.
+- WebGL2 now draws `Oit` glass as order-independent transparency, in one pass
+  per attachment, rather than falling back to `Glass`. A `screen_space`
+  `ShaderMaterial` draws there too, where it used to be skipped.
+- `threers-ecs`: `car` (`Car`, `CarSpec`, `attach_car`), `camera` (`ChaseCamera`,
+  `CameraTarget`), `World::mesh` and `object` with a `Spawned` builder,
+  `World::single`, `World::sun`, `World::par_query`, `teleport_body`,
+  `System::not_in_state` and `after_if_added`. `TestGame::render` includes the
+  `Hud`. The new `race` example uses them all.
+- `Quaternion::IDENTITY`.
+- `Overlay::dirty_bands`: the rows to upload as separate bands, so a HUD with
+  a panel at the top and a map at the bottom no longer uploads the screen
+  between them. `Overlay::clear` zeroes only the rows drawn on, and a long
+  `polyline` is about 7x faster. A race HUD at 2880x1620 went from 3.3 ms and
+  1,607 uploaded rows a frame to 1.2 ms and 458.
+- `MeshBuilder` and `meshReport` in JavaScript (`THREE.MeshBuilder`, returning
+  a `BufferGeometry`) and `MeshBuilder` and `Geometry.report()` in Python.
+- `threers-ecs`: `Car::slip`, `Car::sliding` and `Car::contacts`, for skid marks
+  and tyre sound.
+- `MeshBuilder` (vertices, triangles, `quad`, `ribbon`, `grid`, `append`,
+  `facing`, smooth or flat normals, vertex colours) and `MeshReport`, which
+  finds open, flipped, crowded and degenerate edges.
+- `threers-ecs`: `World::iter`, `read`, `update`, `node`, `node_mut`,
+  `world_transform`, `edit_mesh` and `Spawned::solid`; `entities` takes `&self`.
+  `Gizmos`, `Timer`, `World::after`, `Tween`, `App::tune` (live-edited JSON
+  for any `reflect!` type), `Recording` with `start_recording` and
+  `stop_recording` (exact playback), `World::set_field` and editing in the
+  `DevTools` panel (F8 to F10, F12 to record), `solid`, `sensor` and `body`
+  glTF properties for level collision, `examples/minimal.rs` and
+  `templates/game`. Missing resources, unbound actions and wrong component or
+  query types say how to fix them, at the caller's line.
+  Systems as functions of parameters (`Query`, `Res`, `ResMut`, `EventReader`,
+  `EventWriter`, `Commands`), checked for aliasing when added and checked under
+  Miri; `World::read_events` lends events, and `send` takes any type.
+  `System::parallel` runs such a system on the thread pool beside its
+  neighbours in the order, when none changes what another uses and none is
+  ordered after another; the world comes out as if they ran in turn.
+  A `metal` feature and `WindowOptions::metal()` draw the window through the
+  native Metal renderer (`--metal` on the race example), and
+  `examples/tauri-race` runs the race's web build in a Tauri window.
+  `Input::consume` takes a press for an overlay: Escape that closes the
+  console no longer also opens the game's pause menu.
+  `App::catch_panics` and per-system timing (`Profile`, `Failures`); `Speakers`
+  for several sounds on one entity; `solid_as`, `body_from_mesh`, `body_mut`,
+  `body_of` and `World::entity`; `Static` and `World::bake_static`; `Rewind`;
+  `HotReload` with `scripts/watch-game.py`; `scripts/web-game.py`; a console
+  (`console`), a free camera, click-to-pick and vehicle debug lines in
+  `DevTools`; text input (`Input::type_text`, `text`, `captured`) and
+  punctuation keys; picture tests that write their actual frame and a diff;
+  `examples/tutorial.rs` and docs/ecs-tutorial.md.
+- Text layouts are cached per font: a HUD redrawing the same strings each frame
+  spent half its text time laying them out again (0.86 ms to 0.35 ms for six
+  strings).
+  `threers_ecs::prelude` is a game's one import: it carries `threers`'s
+  prelude and, by feature, physics, cars, sound and the window's `run`.
+  `threers_ecs::physics` re-exports the physics prelude, with its `World` as
+  `Solver`, so the three preludes glob together. Audio has buses with their own
+  volumes, music with crossfades, live pitch, fades and `waveform`.
+  `ChaseCamera` keeps its distance at any speed, swings the short way round,
+  follows a child node or a named entity, looks back, and can stop short of walls.
+- `threers-ecs`: a filter can name a component the query also borrows, as in
+  `(&C, Changed<C>)`. Capturing closures and `fn` pointers can repeat in a
+  schedule; the same function twice still panics.
+- `App::system`, `fixed_system`, `on_enter`, `on_exit`, `Schedule::add` and
+  `System::{after, before, after_if_added}` take any `IntoSystem`, so a
+  parameter function goes anywhere a closure did.
+- `ObjectKind` has a new variant, and `PositionalAudio` a new
+  `distance_model` field: an exhaustive match or a struct literal without
+  `..Default::default()` has to change.
+
+### Fixed
+
+- Drawn vehicle wheels (`Vehicle::wheel_transform`) spun backwards, and
+  wobbled about a tilted axis on any heading but the one the car started on.
+- Builds with `metal` or `raytrace` failed to compile after `ObjectKind::Audio`
+  was added.
+- WebGL2: a `ShaderMaterial` reading shadows or area lights, which includes
+  fur, hair, particles, weather and dunes, failed its pipeline and drew black.
+- `threers-ecs`: `(Node, NodeRef)` gave a shared and a mutable reference to one
+  node; it now panics as a repeated term does. A row a later term turned down no
+  longer counts as `Changed`.
+- `threers-physics`: `closest_points` could report a false overlap or a wrong
+  distance for curved shapes near a large box, because rounding kept it from
+  ever seeing that it had converged. A capsule character hung on ledges as a
+  result. Those queries are also 2–9× faster, no longer running out their
+  iterations. A shape cast leaving a surface it touches no longer counts as a hit.
+- H.264: intra prediction in field pictures with
+  `disable_deblocking_filter_idc` 2 no longer reads deblocked samples, which
+  broke `slice2_field_aurora4` and any stream like it.
+- `threers-codec` builds without its `decode` feature again, and with it every
+  `threers` build that enables `native-codec` alone.
+- EXR: a chunk stored uncompressed because compression would not have shrunk
+  it no longer comes out black, UINT channels no longer misalign rows, and
+  files in decreasing line order no longer come out scrambled.
 
 ## [0.0.10] — 2026-11-01
 
@@ -6138,7 +6273,8 @@ on, and a second crate to make things move.
 - Opt-in `mesh-bvh` and `bvh-csg` (three-mesh-bvh / three-bvh-csg parity).
 - Web shim (`THREE.*`) and parity tooling.
 
-[Unreleased]: https://github.com/eugenehp/threers/compare/v0.0.10...HEAD
+[Unreleased]: https://github.com/eugenehp/threers/compare/v0.0.11...HEAD
+[0.0.11]: https://github.com/eugenehp/threers/compare/v0.0.10...v0.0.11
 [0.0.10]: https://github.com/eugenehp/threers/compare/v0.0.9...v0.0.10
 [0.0.9]: https://github.com/eugenehp/threers/compare/v0.0.8...v0.0.9
 [0.0.8]: https://github.com/eugenehp/threers/compare/v0.0.7...v0.0.8

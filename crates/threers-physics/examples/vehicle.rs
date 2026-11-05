@@ -47,8 +47,8 @@ fn main() {
     ] {
         car.add_wheel(
             WheelConfig::new(Vector3::new(x, -0.2, z), 0.35)
-                .steering(front)   // front wheels turn
-                .powered(!front),  // rear wheels drive
+                .steering(front) // front wheels turn
+                .powered(!front), // rear wheels drive
         );
     }
 

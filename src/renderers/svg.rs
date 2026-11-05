@@ -552,7 +552,10 @@ fn collect_draws(scene: &Scene, cam_layers: crate::core::Layers) -> Vec<Draw> {
                 topology: Topology::Points,
                 span: full_span(&p.geometry),
             }),
-            ObjectKind::Group | ObjectKind::Light(_) | ObjectKind::Sprite(_) => {}
+            ObjectKind::Group
+            | ObjectKind::Light(_)
+            | ObjectKind::Sprite(_)
+            | ObjectKind::Audio(_) => {}
         }
     });
     draws
@@ -2489,7 +2492,11 @@ mod tests {
             .render_to_string(&mut scene, &camera_at(0.0, 0.0, 6.0));
         assert_eq!(count(&svg, "fill=\"#ff0000\""), 4, "two red quads");
         assert_eq!(count(&svg, "fill=\"#00ff00\""), 2, "one green quad");
-        assert_eq!(count(&svg, "<path"), 6, "the last quad is outside the range");
+        assert_eq!(
+            count(&svg, "<path"),
+            6,
+            "the last quad is outside the range"
+        );
     }
 
     /// One material: groups ignored, the draw range alone.
@@ -2535,10 +2542,7 @@ mod tests {
                 .chunks_exact(3)
                 .flat_map(|p| [p[0] * 1.5, p[1], p[2]])
                 .collect();
-            g.set_morph_attribute(
-                "position",
-                vec![crate::core::BufferAttribute::new(wide, 3)],
-            );
+            g.set_morph_attribute("position", vec![crate::core::BufferAttribute::new(wide, 3)]);
             let mut mesh = Mesh::new(g, Material::Basic(BasicMaterial::new(Color::WHITE)));
             mesh.morph_influences = vec![influence];
             let mut scene = Scene::new();

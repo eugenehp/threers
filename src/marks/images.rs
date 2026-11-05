@@ -1,7 +1,7 @@
 //! Images on quads in the world: raster tiles, overlays, photographs.
 
-use super::gpu;
 use super::atlas::{AtlasRect, SharedAtlas};
+use super::gpu;
 use super::sprites::atlas_bind_group;
 use super::{Column, ColumnFormat, KindUniforms, Mark, MarkCommon, MarkKind, PrepareContext};
 

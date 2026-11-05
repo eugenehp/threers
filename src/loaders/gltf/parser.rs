@@ -76,16 +76,25 @@ impl ObjectType {
     }
     /// three.js `isMesh` (Mesh and its subclasses).
     pub fn is_mesh(self) -> bool {
-        matches!(self, ObjectType::Mesh | ObjectType::SkinnedMesh | ObjectType::InstancedMesh)
+        matches!(
+            self,
+            ObjectType::Mesh | ObjectType::SkinnedMesh | ObjectType::InstancedMesh
+        )
     }
     pub fn is_line(self) -> bool {
-        matches!(self, ObjectType::Line | ObjectType::LineSegments | ObjectType::LineLoop)
+        matches!(
+            self,
+            ObjectType::Line | ObjectType::LineSegments | ObjectType::LineLoop
+        )
     }
     pub fn has_geometry(self) -> bool {
         self.is_mesh() || self.is_line() || self == ObjectType::Points
     }
     fn is_light(self) -> bool {
-        matches!(self, ObjectType::DirectionalLight | ObjectType::PointLight | ObjectType::SpotLight)
+        matches!(
+            self,
+            ObjectType::DirectionalLight | ObjectType::PointLight | ObjectType::SpotLight
+        )
     }
 }
 
@@ -102,8 +111,20 @@ pub struct Record {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum CameraParams {
     /// `fov` in degrees, as three.js's constructor takes it.
-    Perspective { fov: f64, aspect: f64, near: f64, far: f64 },
-    Orthographic { left: f64, right: f64, top: f64, bottom: f64, near: f64, far: f64 },
+    Perspective {
+        fov: f64,
+        aspect: f64,
+        near: f64,
+        far: f64,
+    },
+    Orthographic {
+        left: f64,
+        right: f64,
+        top: f64,
+        bottom: f64,
+        near: f64,
+        far: f64,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -133,7 +154,10 @@ enum NameSpec {
     Mesh,
     /// A `clone()`: the source's name, plus `_instance_<n>` for the root of a
     /// `_getNodeRef` clone.
-    Clone { source: usize, suffix: Option<u32> },
+    Clone {
+        source: usize,
+        suffix: Option<u32>,
+    },
 }
 
 /// An object the loader made, and the node it is in the arena.
@@ -336,7 +360,11 @@ pub struct GltfOptions {
 
 impl Default for GltfOptions {
     fn default() -> Self {
-        GltfOptions { webp: false, avif: false, refuse_unknown_required: true }
+        GltfOptions {
+            webp: false,
+            avif: false,
+            refuse_unknown_required: true,
+        }
     }
 }
 
@@ -407,8 +435,19 @@ pub fn sanitize_node_name(name: &str) -> String {
     let js_space = |c: char| {
         matches!(
             c,
-            '\t' | '\n' | '\u{b}' | '\u{c}' | '\r' | ' ' | '\u{a0}' | '\u{1680}' | '\u{2028}'
-                | '\u{2029}' | '\u{202f}' | '\u{205f}' | '\u{3000}' | '\u{feff}'
+            '\t' | '\n'
+                | '\u{b}'
+                | '\u{c}'
+                | '\r'
+                | ' '
+                | '\u{a0}'
+                | '\u{1680}'
+                | '\u{2028}'
+                | '\u{2029}'
+                | '\u{202f}'
+                | '\u{205f}'
+                | '\u{3000}'
+                | '\u{feff}'
         ) || ('\u{2000}'..='\u{200a}').contains(&c)
     };
     name.chars()
@@ -478,8 +517,12 @@ fn empty_object() -> Value {
 /// `assignExtrasToUserData`: an object's (or array's) members merged in, as
 /// `Object.assign` does; anything else ignored with three.js's warning.
 fn assign_extras(user_data: &mut Value, def: &Value, warnings: &mut Vec<String>) {
-    let Some(extras) = doc::get(def, "extras") else { return };
-    let Some(ud) = user_data.as_object_mut() else { return };
+    let Some(extras) = doc::get(def, "extras") else {
+        return;
+    };
+    let Some(ud) = user_data.as_object_mut() else {
+        return;
+    };
     match extras {
         Value::Object(map) => {
             for (k, v) in map {
@@ -575,7 +618,10 @@ impl GltfParser {
             .iter()
             .filter_map(|v| v.as_str())
             .collect();
-        for used in doc::array(root, "extensionsUsed").iter().filter_map(|v| v.as_str()) {
+        for used in doc::array(root, "extensionsUsed")
+            .iter()
+            .filter_map(|v| v.as_str())
+        {
             if USED_EXTENSIONS.contains(&used) {
                 known.insert(used.to_string());
             } else if required.contains(&used) && !known.contains(used) {
@@ -726,7 +772,12 @@ impl GltfParser {
         let root = &self.doc.root;
         let mut start: Vec<usize> = Vec::new();
         for s in doc::array(root, "scenes") {
-            start.extend(doc::array(s, "nodes").iter().filter_map(|n| n.as_number()).map(|n| n as usize));
+            start.extend(
+                doc::array(s, "nodes")
+                    .iter()
+                    .filter_map(|n| n.as_number())
+                    .map(|n| n as usize),
+            );
         }
         for a in doc::array(root, "animations") {
             for c in doc::array(a, "channels") {
@@ -741,21 +792,36 @@ impl GltfParser {
 
     /// Images a lazily loaded dependency (`kind` as in [`load`](Self::load))
     /// needs.
-    pub fn pending_images_for(&mut self, kind: &str, index: usize) -> Result<Vec<ImageRequest>, GltfError> {
+    pub fn pending_images_for(
+        &mut self,
+        kind: &str,
+        index: usize,
+    ) -> Result<Vec<ImageRequest>, GltfError> {
         let root = &self.doc.root;
         let (materials, textures) = match kind {
             "material" => (vec![index], vec![]),
             "texture" => (vec![], vec![index]),
             "mesh" => {
                 let m = doc::def(root, "meshes", index)
-                    .map(|m| doc::array(m, "primitives").iter().filter_map(|p| doc::index(p, "material")).collect())
+                    .map(|m| {
+                        doc::array(m, "primitives")
+                            .iter()
+                            .filter_map(|p| doc::index(p, "material"))
+                            .collect()
+                    })
                     .unwrap_or_default();
                 (m, vec![])
             }
             "node" => (self.materials_under(vec![index]), vec![]),
             "scene" => {
                 let nodes = doc::def(root, "scenes", index)
-                    .map(|s| doc::array(s, "nodes").iter().filter_map(|n| n.as_number()).map(|n| n as usize).collect())
+                    .map(|s| {
+                        doc::array(s, "nodes")
+                            .iter()
+                            .filter_map(|n| n.as_number())
+                            .map(|n| n as usize)
+                            .collect()
+                    })
                     .unwrap_or_default();
                 (self.materials_under(nodes), vec![])
             }
@@ -764,7 +830,9 @@ impl GltfParser {
                     .map(|a| {
                         doc::array(a, "channels")
                             .iter()
-                            .filter_map(|c| doc::get(c, "target").and_then(|t| doc::index(t, "node")))
+                            .filter_map(|c| {
+                                doc::get(c, "target").and_then(|t| doc::index(t, "node"))
+                            })
                             .collect()
                     })
                     .unwrap_or_default();
@@ -775,7 +843,11 @@ impl GltfParser {
         self.pending_images_for_materials(&materials, &textures)
     }
 
-    fn pending_images_for_materials(&mut self, materials: &[usize], extra: &[usize]) -> Result<Vec<ImageRequest>, GltfError> {
+    fn pending_images_for_materials(
+        &mut self,
+        materials: &[usize],
+        extra: &[usize],
+    ) -> Result<Vec<ImageRequest>, GltfError> {
         let mut textures = extra.to_vec();
         for &m in materials {
             if let Some(def) = doc::def(&self.doc.root, "materials", m) {
@@ -785,7 +857,9 @@ impl GltfParser {
         let mut out = Vec::new();
         let mut seen = HashSet::new();
         for t in textures {
-            let Some(image) = self.texture_image_choice(t)? else { continue };
+            let Some(image) = self.texture_image_choice(t)? else {
+                continue;
+            };
             if !seen.insert(image) {
                 continue;
             }
@@ -793,7 +867,10 @@ impl GltfParser {
                 match self.doc.image_source(image) {
                     Ok(source) => {
                         self.images[image] = ImageSlot::Requested;
-                        out.push(ImageRequest { index: image, source });
+                        out.push(ImageRequest {
+                            index: image,
+                            source,
+                        });
                     }
                     Err(e) => self.images[image] = ImageSlot::Failed(e.to_string()),
                 }
@@ -813,7 +890,9 @@ impl GltfParser {
             if !seen.insert(n) {
                 continue;
             }
-            let Some(node) = doc::def(root, "nodes", n) else { continue };
+            let Some(node) = doc::def(root, "nodes", n) else {
+                continue;
+            };
             for c in doc::array(node, "children") {
                 if let Some(c) = c.as_number() {
                     stack.push(c as usize);
@@ -826,7 +905,8 @@ impl GltfParser {
                     }
                 }
             }
-            let Some(mesh) = doc::index(node, "mesh").and_then(|m| doc::def(root, "meshes", m)) else {
+            let Some(mesh) = doc::index(node, "mesh").and_then(|m| doc::def(root, "meshes", m))
+            else {
                 continue;
             };
             for p in doc::array(mesh, "primitives") {
@@ -848,7 +928,9 @@ impl GltfParser {
         let Some(def) = doc::def(root, "textures", texture) else {
             return Ok(None);
         };
-        if let Some(src) = doc::extension(def, "KHR_texture_basisu").and_then(|e| doc::index(e, "source")) {
+        if let Some(src) =
+            doc::extension(def, "KHR_texture_basisu").and_then(|e| doc::index(e, "source"))
+        {
             match self.images.get(src) {
                 Some(ImageSlot::Failed(reason)) => {
                     if self.required("KHR_texture_basisu") {
@@ -893,7 +975,9 @@ impl GltfParser {
         if i >= self.images.len() {
             return true;
         }
-        const KTX2: [u8; 12] = [0xAB, 0x4B, 0x54, 0x58, 0x20, 0x32, 0x30, 0xBB, 0x0D, 0x0A, 0x1A, 0x0A];
+        const KTX2: [u8; 12] = [
+            0xAB, 0x4B, 0x54, 0x58, 0x20, 0x32, 0x30, 0xBB, 0x0D, 0x0A, 0x1A, 0x0A,
+        ];
         if bytes.len() >= 12 && bytes[..12] == KTX2 {
             self.images[i] = match super::super::ktx2::parse(bytes).and_then(|k| k.to_texture()) {
                 Ok(t) => ImageSlot::Decoded(ImageData::Gpu(Arc::new(t))),
@@ -918,9 +1002,16 @@ impl GltfParser {
     pub fn set_image_rgba(&mut self, i: usize, width: u32, height: u32, rgba: Vec<u8>) {
         if i < self.images.len() {
             self.images[i] = if rgba.len() == width as usize * height as usize * 4 {
-                ImageSlot::Decoded(ImageData::Rgba { width, height, data: Arc::new(rgba) })
+                ImageSlot::Decoded(ImageData::Rgba {
+                    width,
+                    height,
+                    data: Arc::new(rgba),
+                })
             } else {
-                ImageSlot::Failed(format!("image {i}: {} bytes for {width}x{height}", rgba.len()))
+                ImageSlot::Failed(format!(
+                    "image {i}: {} bytes for {width}x{height}",
+                    rgba.len()
+                ))
             };
         }
     }
@@ -985,7 +1076,12 @@ impl GltfParser {
     /// Lazily load one more thing after `parse` (three.js's
     /// `parser.getDependency` for something no scene used). Returns its
     /// index in the matching list.
-    pub fn load(&mut self, arena: &mut ObjectArena, kind: &str, index: usize) -> Result<Option<usize>, GltfError> {
+    pub fn load(
+        &mut self,
+        arena: &mut ObjectArena,
+        kind: &str,
+        index: usize,
+    ) -> Result<Option<usize>, GltfError> {
         self.doc.decode_meshopt_views()?;
         let before = self.objects.len();
         let out = match kind {
@@ -1067,7 +1163,8 @@ impl GltfParser {
         let mut cur = Some(p);
         while let Some(x) = cur {
             if x == c {
-                self.warnings.push("THREE.GLTFLoader: node hierarchy has a cycle; link skipped".into());
+                self.warnings
+                    .push("THREE.GLTFLoader: node hierarchy has a cycle; link skipped".into());
                 return;
             }
             cur = arena.get(x).and_then(|o| o.parent);
@@ -1078,7 +1175,12 @@ impl GltfParser {
     fn children(&self, arena: &ObjectArena, i: usize) -> Vec<usize> {
         arena
             .get(self.objects[i].id)
-            .map(|o| o.children.iter().filter_map(|c| self.object_ids.get(c).copied()).collect())
+            .map(|o| {
+                o.children
+                    .iter()
+                    .filter_map(|c| self.object_ids.get(c).copied())
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
@@ -1109,7 +1211,10 @@ impl GltfParser {
         {
             let o = &mut self.objects[c];
             o.name = s.name.clone();
-            o.name_spec = NameSpec::Clone { source: src, suffix: None };
+            o.name_spec = NameSpec::Clone {
+                source: src,
+                suffix: None,
+            };
             o.user_data = s.user_data.clone();
             o.geometry = s.geometry;
             o.material = s.material;
@@ -1120,7 +1225,8 @@ impl GltfParser {
             o.camera = s.camera;
             o.light = s.light;
         }
-        if let (Some(sn), Some(cn)) = (arena.get(s.id).cloned(), arena.get_mut(self.objects[c].id)) {
+        if let (Some(sn), Some(cn)) = (arena.get(s.id).cloned(), arena.get_mut(self.objects[c].id))
+        {
             cn.position = sn.position;
             cn.quaternion = sn.quaternion;
             cn.scale = sn.scale;
@@ -1139,7 +1245,13 @@ impl GltfParser {
 
     /// `_getNodeRef`: the object itself for a single use, a clone named
     /// `<name>_instance_<n>` (with the associations copied) otherwise.
-    fn get_node_ref(&mut self, arena: &mut ObjectArena, kind: RefKind, index: usize, object: usize) -> usize {
+    fn get_node_ref(
+        &mut self,
+        arena: &mut ObjectArena,
+        kind: RefKind,
+        index: usize,
+        object: usize,
+    ) -> usize {
         let (refs, uses) = match kind {
             RefKind::Mesh => (&self.mesh_refs, &mut self.mesh_uses),
             RefKind::Camera => (&self.camera_refs, &mut self.camera_uses),
@@ -1151,7 +1263,10 @@ impl GltfParser {
         let n = uses[index];
         uses[index] += 1;
         let c = self.clone_object(arena, object);
-        self.objects[c].name_spec = NameSpec::Clone { source: object, suffix: Some(n) };
+        self.objects[c].name_spec = NameSpec::Clone {
+            source: object,
+            suffix: Some(n),
+        };
         self.copy_mappings(arena, object, c);
         c
     }
@@ -1177,7 +1292,9 @@ impl GltfParser {
             return Ok(o);
         }
         if self.node_loading[i] {
-            return Err(GltfError::msg(format!("THREE.GLTFLoader: node {i} is its own ancestor")));
+            return Err(GltfError::msg(format!(
+                "THREE.GLTFLoader: node {i} is its own ancestor"
+            )));
         }
         self.node_loading[i] = true;
         let result = self.load_node(arena, i);
@@ -1188,11 +1305,17 @@ impl GltfParser {
     }
 
     fn load_node(&mut self, arena: &mut ObjectArena, i: usize) -> Result<usize, GltfError> {
-        let def = doc::def(&self.doc.root, "nodes", i).cloned().unwrap_or(Value::Null);
+        let def = doc::def(&self.doc.root, "nodes", i)
+            .cloned()
+            .unwrap_or(Value::Null);
         let node = self.load_node_shallow(arena, i)?;
         let mut children = Vec::new();
         for c in doc::array(&def, "children") {
-            let c = c.as_number().filter(|c| *c >= 0.0).map(|c| c as usize).unwrap_or(usize::MAX);
+            let c = c
+                .as_number()
+                .filter(|c| *c >= 0.0)
+                .map(|c| c as usize)
+                .unwrap_or(usize::MAX);
             children.push(self.get_node(arena, c)?);
         }
         if let Some(skin) = doc::index(&def, "skin") {
@@ -1220,7 +1343,9 @@ impl GltfParser {
         let def = doc::def(&self.doc.root, "nodes", i)
             .cloned()
             .ok_or_else(|| GltfError::msg(format!("node {i} does not exist")))?;
-        let def_name = doc::string(&def, "name").filter(|n| !n.is_empty()).map(str::to_string);
+        let def_name = doc::string(&def, "name")
+            .filter(|n| !n.is_empty())
+            .map(str::to_string);
         let node_name = def_name.as_ref().map(|n| self.create_unique_name(n));
         let mut objects = Vec::new();
         if let Some(m) = self.create_node_mesh_plugins(arena, i, &def)? {
@@ -1231,7 +1356,9 @@ impl GltfParser {
                 objects.push(self.get_node_ref(arena, RefKind::Camera, c, cam));
             }
         }
-        if let Some(l) = doc::extension(&def, "KHR_lights_punctual").and_then(|e| doc::index(e, "light")) {
+        if let Some(l) =
+            doc::extension(&def, "KHR_lights_punctual").and_then(|e| doc::index(e, "light"))
+        {
             let light = self.load_light(arena, l)?;
             objects.push(self.get_node_ref(arena, RefKind::Light, l, light));
         }
@@ -1282,7 +1409,10 @@ impl GltfParser {
         match self.objects[node].association {
             Assoc::Record(r) => self.records[r].nodes = Some(i),
             _ => {
-                let a = self.new_record(Record { nodes: Some(i), ..Default::default() });
+                let a = self.new_record(Record {
+                    nodes: Some(i),
+                    ..Default::default()
+                });
                 self.objects[node].association = a;
             }
         }
@@ -1298,12 +1428,15 @@ impl GltfParser {
         i: usize,
         def: &Value,
     ) -> Result<Option<usize>, GltfError> {
-        if let (Some(ext), Some(mesh_index)) = (doc::extension(def, "EXT_mesh_gpu_instancing"), doc::index(def, "mesh")) {
+        if let (Some(ext), Some(mesh_index)) = (
+            doc::extension(def, "EXT_mesh_gpu_instancing"),
+            doc::index(def, "mesh"),
+        ) {
             let modes_ok = doc::def(&self.doc.root, "meshes", mesh_index)
                 .map(|m| {
-                    doc::array(m, "primitives")
-                        .iter()
-                        .all(|p| matches!(doc::index(p, "mode"), None | Some(4) | Some(5) | Some(6)))
+                    doc::array(m, "primitives").iter().all(|p| {
+                        matches!(doc::index(p, "mode"), None | Some(4) | Some(5) | Some(6))
+                    })
                 })
                 .unwrap_or(false);
             let attrs: Vec<(String, usize)> = doc::get(ext, "attributes")
@@ -1318,14 +1451,20 @@ impl GltfParser {
                 })
                 .unwrap_or_default();
             if modes_ok && !attrs.is_empty() {
-                return self.create_instanced_node_mesh(arena, i, def, &attrs).map(Some);
+                return self
+                    .create_instanced_node_mesh(arena, i, def, &attrs)
+                    .map(Some);
             }
         }
         self.create_node_mesh(arena, def)
     }
 
     /// `GLTFParser.createNodeMesh`.
-    fn create_node_mesh(&mut self, arena: &mut ObjectArena, def: &Value) -> Result<Option<usize>, GltfError> {
+    fn create_node_mesh(
+        &mut self,
+        arena: &mut ObjectArena,
+        def: &Value,
+    ) -> Result<Option<usize>, GltfError> {
         let Some(mesh_index) = doc::index(def, "mesh") else {
             return Ok(None);
         };
@@ -1366,17 +1505,30 @@ impl GltfParser {
             .create_node_mesh(arena, def)?
             .ok_or_else(|| GltfError::msg("EXT_mesh_gpu_instancing on a node without a mesh"))?;
         let is_group = self.objects[node_object].ty == ObjectType::Group;
-        let meshes = if is_group { self.children(arena, node_object) } else { vec![node_object] };
+        let meshes = if is_group {
+            self.children(arena, node_object)
+        } else {
+            vec![node_object]
+        };
         let count = ["TRANSLATION", "ROTATION", "SCALE"]
             .iter()
             .find_map(|k| accessors.iter().find(|(n, _)| n == k))
             .or(accessors.first())
             .map(|(_, a)| a.count)
             .unwrap_or(0);
-        let get = |name: &str| accessors.iter().find(|(n, _)| n == name).map(|(_, a)| a.values());
+        let get = |name: &str| {
+            accessors
+                .iter()
+                .find(|(n, _)| n == name)
+                .map(|(_, a)| a.values())
+        };
         let (t, r, s) = (get("TRANSLATION"), get("ROTATION"), get("SCALE"));
         let mut matrices = Vec::with_capacity(count * 16);
-        let (mut p, mut q, mut sc) = (Vector3::ZERO, Quaternion::new(0.0, 0.0, 0.0, 1.0), Vector3::new(1.0, 1.0, 1.0));
+        let (mut p, mut q, mut sc) = (
+            Vector3::ZERO,
+            Quaternion::new(0.0, 0.0, 0.0, 1.0),
+            Vector3::new(1.0, 1.0, 1.0),
+        );
         for k in 0..count {
             if let Some(t) = &t {
                 if let Some(v) = t.get(k * 3..k * 3 + 3) {
@@ -1405,7 +1557,11 @@ impl GltfParser {
                     colors = Some((acc.values(), acc.item_size));
                 } else if !matches!(name.as_str(), "TRANSLATION" | "ROTATION" | "SCALE") {
                     if let Some(g) = src.geometry {
-                        self.set_geometry_attribute(g, name, BufferAttribute::new(acc.values(), acc.item_size));
+                        self.set_geometry_attribute(
+                            g,
+                            name,
+                            BufferAttribute::new(acc.values(), acc.item_size),
+                        );
                     }
                 }
             }
@@ -1413,10 +1569,17 @@ impl GltfParser {
                 let o = &mut self.objects[im];
                 o.geometry = src.geometry;
                 o.material = src.material;
-                o.instances = Some(Instances { count, matrices: matrices.clone(), colors });
+                o.instances = Some(Instances {
+                    count,
+                    matrices: matrices.clone(),
+                    colors,
+                });
                 // `Object3D.prototype.copy.call(instancedMesh, mesh)`: name,
                 // transform, userData (and children).
-                o.name_spec = NameSpec::Clone { source: mesh, suffix: None };
+                o.name_spec = NameSpec::Clone {
+                    source: mesh,
+                    suffix: None,
+                };
                 o.user_data = src.user_data.clone();
             }
             // An InstancedMesh's own constructor sizes the influences.
@@ -1425,7 +1588,10 @@ impl GltfParser {
             self.objects[im].morph_dictionary = morph
                 .map(|n| (0..n).map(|k| (k.to_string(), k)).collect())
                 .unwrap_or_default();
-            if let (Some(sn), Some(dn)) = (arena.get(src.id).cloned(), arena.get_mut(self.objects[im].id)) {
+            if let (Some(sn), Some(dn)) = (
+                arena.get(src.id).cloned(),
+                arena.get_mut(self.objects[im].id),
+            ) {
                 dn.position = sn.position;
                 dn.quaternion = sn.quaternion;
                 dn.scale = sn.scale;
@@ -1513,7 +1679,9 @@ impl GltfParser {
                 Some(2) => ObjectType::LineLoop,
                 Some(0) => ObjectType::Points,
                 Some(m) => {
-                    return Err(GltfError::msg(format!("THREE.GLTFLoader: Primitive mode unsupported: {m}")))
+                    return Err(GltfError::msg(format!(
+                        "THREE.GLTFLoader: Primitive mode unsupported: {m}"
+                    )))
                 }
             };
             let mut g = geometries[k];
@@ -1547,7 +1715,10 @@ impl GltfParser {
                             .map(|(m, v)| (js_string(v), m))
                             .collect();
                     } else {
-                        self.warnings.push("THREE.GLTFLoader: Invalid extras.targetNames length. Ignoring names.".into());
+                        self.warnings.push(
+                            "THREE.GLTFLoader: Invalid extras.targetNames length. Ignoring names."
+                                .into(),
+                        );
                     }
                 }
                 self.objects[o].morph_influences = Some(inf);
@@ -1561,7 +1732,11 @@ impl GltfParser {
             meshes.push(o);
         }
         for (k, &m) in meshes.iter().enumerate() {
-            let a = self.new_record(Record { meshes: Some(i), primitives: Some(k), ..Default::default() });
+            let a = self.new_record(Record {
+                meshes: Some(i),
+                primitives: Some(k),
+                ..Default::default()
+            });
             self.objects[m].association = a;
         }
         self.mesh_name_jobs.push((i, meshes.clone(), delayed));
@@ -1575,7 +1750,10 @@ impl GltfParser {
             let mut ud = empty_object();
             add_unknown_extensions(&self.known_extensions, &mut ud, &def);
             self.objects[group].user_data = ud;
-            let a = self.new_record(Record { meshes: Some(i), ..Default::default() });
+            let a = self.new_record(Record {
+                meshes: Some(i),
+                ..Default::default()
+            });
             self.objects[group].association = a;
             for m in meshes {
                 self.add(arena, group, m);
@@ -1593,12 +1771,21 @@ impl GltfParser {
     /// normalized integers, rounded back into that storage as three.js's
     /// `setXYZW` does.
     fn normalize_skin_weights(&mut self, g: usize) {
-        let quantize = self.geometries[g].normalized_types.get("skinWeight").copied();
-        if !self.geometries[g].get().attributes.contains_key("skinWeight") {
+        let quantize = self.geometries[g]
+            .normalized_types
+            .get("skinWeight")
+            .copied();
+        if !self.geometries[g]
+            .get()
+            .attributes
+            .contains_key("skinWeight")
+        {
             return;
         }
         let geo = self.geometries[g].edit();
-        let Some(w) = geo.attributes.get_mut("skinWeight") else { return };
+        let Some(w) = geo.attributes.get_mut("skinWeight") else {
+            return;
+        };
         let size = w.item_size.max(1);
         let max = match quantize {
             Some(5121) => Some((255.0f64, false)),
@@ -1614,7 +1801,11 @@ impl GltfParser {
                 *slot = match max {
                     Some((m, signed)) => {
                         let raw = (v[k] as f64 * m).round();
-                        if signed { (raw / m).max(-1.0) } else { raw / m }
+                        if signed {
+                            (raw / m).max(-1.0)
+                        } else {
+                            raw / m
+                        }
                     }
                     None => v[k] as f64,
                 };
@@ -1645,7 +1836,10 @@ impl GltfParser {
     /// triangle-list index (and the original indexed if it was not).
     fn triangulate_draw_mode(&mut self, g: usize, fan: bool) -> usize {
         if self.geometries[g].get().index.is_none() {
-            let n = self.geometries[g].get().get_attribute("position").map(|p| p.count());
+            let n = self.geometries[g]
+                .get()
+                .get_attribute("position")
+                .map(|p| p.count());
             match n {
                 Some(n) => {
                     let e = self.geometries[g].edit();
@@ -1709,7 +1903,8 @@ impl GltfParser {
                 }
                 let acc = acc.as_number().ok_or(GltfError::BadAccessor)? as usize;
                 let a = self.doc.accessor(acc)?;
-                geo.geometry.set_attribute(three.clone(), BufferAttribute::new(a.values(), a.item_size));
+                geo.geometry
+                    .set_attribute(three.clone(), BufferAttribute::new(a.values(), a.item_size));
                 if a.normalized && a.component_type != 5126 {
                     geo.normalized_types.insert(three.clone(), a.component_type);
                 }
@@ -1736,7 +1931,12 @@ impl GltfParser {
 
     /// `GLTFDracoMeshCompressionExtension.decodePrimitive`, the decoder being
     /// `super::super::draco`.
-    fn draco_geometry(&mut self, geo: &mut GltfGeometry, prim: &Value, ext: &Value) -> Result<(), GltfError> {
+    fn draco_geometry(
+        &mut self,
+        geo: &mut GltfGeometry,
+        prim: &Value,
+        ext: &Value,
+    ) -> Result<(), GltfError> {
         let view = doc::index(ext, "bufferView").ok_or(GltfError::MissingField("bufferView"))?;
         let bytes = self.doc.buffer_view(view)?;
         let mesh = super::super::draco::decode_mesh(bytes)?;
@@ -1751,12 +1951,16 @@ impl GltfParser {
                 .attributes
                 .iter()
                 .find(|a| a.descriptor.unique_id == unique_id)
-                .ok_or_else(|| GltfError::msg(format!("Draco attribute {unique_id} not in the stream")))?;
+                .ok_or_else(|| {
+                    GltfError::msg(format!("Draco attribute {unique_id} not in the stream"))
+                })?;
             // The accessor says what type three.js asks DRACOLoader for.
             let accessor = doc::get(prim, "attributes")
                 .and_then(|a| doc::index(a, gltf_name))
                 .and_then(|a| doc::def(&self.doc.root, "accessors", a));
-            let component = accessor.and_then(|a| doc::index(a, "componentType")).unwrap_or(5126) as u32;
+            let component = accessor
+                .and_then(|a| doc::index(a, "componentType"))
+                .unwrap_or(5126) as u32;
             let normalized = accessor
                 .and_then(|a| doc::get(a, "normalized"))
                 .and_then(|v| v.as_bool())
@@ -1768,13 +1972,18 @@ impl GltfParser {
                 if normalized {
                     let s = Accessor::normalized_scale(component);
                     let signed = matches!(component, 5120 | 5122);
-                    raw.iter().map(|v| if signed { (v * s).max(-1.0) } else { v * s }).collect()
+                    raw.iter()
+                        .map(|v| if signed { (v * s).max(-1.0) } else { v * s })
+                        .collect()
                 } else {
                     raw
                 }
             };
             let three = three_attribute_name(gltf_name);
-            geo.geometry.set_attribute(three.clone(), BufferAttribute::new(values, attribute.num_components()));
+            geo.geometry.set_attribute(
+                three.clone(),
+                BufferAttribute::new(values, attribute.num_components()),
+            );
             geo.attribute_order.push(three);
         }
         geo.geometry.set_index(mesh.indices());
@@ -1784,8 +1993,16 @@ impl GltfParser {
     /// `addMorphTargets`: `position` / `normal` / `color` lists, one entry per
     /// target, relative. A target missing an attribute others have gets the
     /// base attribute, as three.js r165 does.
-    fn add_morph_targets(&mut self, geo: &mut GltfGeometry, targets: &[Value]) -> Result<(), GltfError> {
-        for (gltf, three) in [("POSITION", "position"), ("NORMAL", "normal"), ("COLOR_0", "color")] {
+    fn add_morph_targets(
+        &mut self,
+        geo: &mut GltfGeometry,
+        targets: &[Value],
+    ) -> Result<(), GltfError> {
+        for (gltf, three) in [
+            ("POSITION", "position"),
+            ("NORMAL", "normal"),
+            ("COLOR_0", "color"),
+        ] {
             if !targets.iter().any(|t| doc::get(t, gltf).is_some()) {
                 continue;
             }
@@ -1799,7 +2016,11 @@ impl GltfParser {
                     None => match geo.geometry.get_attribute(three) {
                         Some(base) => base.clone(),
                         None => {
-                            let n = geo.geometry.get_attribute("position").map(|p| p.count()).unwrap_or(0);
+                            let n = geo
+                                .geometry
+                                .get_attribute("position")
+                                .map(|p| p.count())
+                                .unwrap_or(0);
                             let size = if three == "color" { 4 } else { 3 };
                             BufferAttribute::new(vec![0.0; n * size], size)
                         }
@@ -1824,7 +2045,9 @@ impl GltfParser {
         let Some(pos) = doc::get(prim, "attributes").and_then(|a| doc::index(a, "POSITION")) else {
             return;
         };
-        let Some(acc) = doc::def(root, "accessors", pos) else { return };
+        let Some(acc) = doc::def(root, "accessors", pos) else {
+            return;
+        };
         let scale_of = |a: &Value| {
             if doc::get(a, "normalized").and_then(|v| v.as_bool()) == Some(true) {
                 Accessor::normalized_scale(doc::index(a, "componentType").unwrap_or(5126) as u32)
@@ -1832,8 +2055,12 @@ impl GltfParser {
                 1.0
             }
         };
-        let (Some(min), Some(max)) = (doc::floats(acc, "min", 3, 0.0), doc::floats(acc, "max", 3, 0.0)) else {
-            self.warnings.push("THREE.GLTFLoader: Missing min/max properties for accessor POSITION.".into());
+        let (Some(min), Some(max)) = (
+            doc::floats(acc, "min", 3, 0.0),
+            doc::floats(acc, "max", 3, 0.0),
+        ) else {
+            self.warnings
+                .push("THREE.GLTFLoader: Missing min/max properties for accessor POSITION.".into());
             return;
         };
         let s = scale_of(acc);
@@ -1841,25 +2068,38 @@ impl GltfParser {
         let mut bmax = Vector3::new(max[0] * s, max[1] * s, max[2] * s);
         let mut disp = Vector3::ZERO;
         for t in doc::array(prim, "targets") {
-            let Some(acc) = doc::index(t, "POSITION").and_then(|a| doc::def(root, "accessors", a)) else {
+            let Some(acc) = doc::index(t, "POSITION").and_then(|a| doc::def(root, "accessors", a))
+            else {
                 continue;
             };
-            match (doc::floats(acc, "min", 3, 0.0), doc::floats(acc, "max", 3, 0.0)) {
+            match (
+                doc::floats(acc, "min", 3, 0.0),
+                doc::floats(acc, "max", 3, 0.0),
+            ) {
                 (Some(mn), Some(mx)) => {
                     let s = scale_of(acc);
                     disp.x = disp.x.max(mn[0].abs().max(mx[0].abs()) * s);
                     disp.y = disp.y.max(mn[1].abs().max(mx[1].abs()) * s);
                     disp.z = disp.z.max(mn[2].abs().max(mx[2].abs()) * s);
                 }
-                _ => self.warnings.push("THREE.GLTFLoader: Missing min/max properties for accessor POSITION.".into()),
+                _ => self.warnings.push(
+                    "THREE.GLTFLoader: Missing min/max properties for accessor POSITION.".into(),
+                ),
             }
         }
         bmin = Vector3::new(bmin.x - disp.x, bmin.y - disp.y, bmin.z - disp.z);
         bmax = Vector3::new(bmax.x + disp.x, bmax.y + disp.y, bmax.z + disp.z);
-        let center = Vector3::new((bmin.x + bmax.x) * 0.5, (bmin.y + bmax.y) * 0.5, (bmin.z + bmax.z) * 0.5);
+        let center = Vector3::new(
+            (bmin.x + bmax.x) * 0.5,
+            (bmin.y + bmax.y) * 0.5,
+            (bmin.z + bmax.z) * 0.5,
+        );
         let d = Vector3::new(bmax.x - bmin.x, bmax.y - bmin.y, bmax.z - bmin.z);
         let radius = (d.x * d.x + d.y * d.y + d.z * d.z).sqrt() / 2.0;
-        geo.geometry.bounding_box = Some(Box3 { min: bmin, max: bmax });
+        geo.geometry.bounding_box = Some(Box3 {
+            min: bmin,
+            max: bmax,
+        });
         geo.geometry.bounding_sphere = Some(Sphere { center, radius });
     }
 
@@ -1894,7 +2134,9 @@ impl GltfParser {
             .ok_or_else(|| GltfError::msg(format!("material {i} does not exist")))?;
         let exts = doc::get(&def, "extensions");
         let has = |name: &str| exts.and_then(|e| doc::get(e, name)).is_some();
-        let pbr = doc::get(&def, "pbrMetallicRoughness").cloned().unwrap_or(Value::Null);
+        let pbr = doc::get(&def, "pbrMetallicRoughness")
+            .cloned()
+            .unwrap_or(Value::Null);
         let mut m;
         let mut textured = false;
         if has("KHR_materials_unlit") {
@@ -1908,8 +2150,14 @@ impl GltfParser {
             };
             m = GltfMaterial::new(ty);
             self.base_color(&mut m, &pbr, &mut textured)?;
-            m.params.insert("metalness", Param::Num(doc::num(&pbr, "metallicFactor").unwrap_or(1.0)));
-            m.params.insert("roughness", Param::Num(doc::num(&pbr, "roughnessFactor").unwrap_or(1.0)));
+            m.params.insert(
+                "metalness",
+                Param::Num(doc::num(&pbr, "metallicFactor").unwrap_or(1.0)),
+            );
+            m.params.insert(
+                "roughness",
+                Param::Num(doc::num(&pbr, "roughnessFactor").unwrap_or(1.0)),
+            );
             if let Some(t) = doc::get(&pbr, "metallicRoughnessTexture").cloned() {
                 textured |= self.assign_texture(&mut m, "metalnessMap", &t, false)?;
                 textured |= self.assign_texture(&mut m, "roughnessMap", &t, false)?;
@@ -1928,7 +2176,10 @@ impl GltfParser {
         } else {
             m.params.insert("transparent", Param::Bool(false));
             if alpha_mode == "MASK" {
-                m.params.insert("alphaTest", Param::Num(doc::num(&def, "alphaCutoff").unwrap_or(0.5)));
+                m.params.insert(
+                    "alphaTest",
+                    Param::Num(doc::num(&def, "alphaCutoff").unwrap_or(0.5)),
+                );
             }
         }
         let lit = m.ty != MaterialType::MeshBasicMaterial;
@@ -1946,7 +2197,8 @@ impl GltfParser {
                 }
             }
             if let Some(e) = doc::floats(&def, "emissiveFactor", 3, 0.0) {
-                m.params.insert("emissive", Param::Color([e[0], e[1], e[2]]));
+                m.params
+                    .insert("emissive", Param::Color([e[0], e[1], e[2]]));
             }
             if let Some(t) = doc::get(&def, "emissiveTexture").cloned() {
                 textured |= self.assign_texture(&mut m, "emissiveMap", &t, true)?;
@@ -1959,7 +2211,10 @@ impl GltfParser {
         if doc::get(&def, "extensions").is_some() {
             add_unknown_extensions(&self.known_extensions, &mut m.user_data, &def);
         }
-        m.association = self.new_record(Record { materials: Some(i), ..Default::default() });
+        m.association = self.new_record(Record {
+            materials: Some(i),
+            ..Default::default()
+        });
         self.materials.push(m);
         let idx = self.materials.len() - 1;
         if let Some(slot) = self.material_cache.get_mut(i) {
@@ -1971,7 +2226,12 @@ impl GltfParser {
         Ok(idx)
     }
 
-    fn base_color(&mut self, m: &mut GltfMaterial, pbr: &Value, textured: &mut bool) -> Result<(), GltfError> {
+    fn base_color(
+        &mut self,
+        m: &mut GltfMaterial,
+        pbr: &Value,
+        textured: &mut bool,
+    ) -> Result<(), GltfError> {
         m.params.insert("color", Param::Color([1.0, 1.0, 1.0]));
         m.params.insert("opacity", Param::Num(1.0));
         if let Some(f) = doc::get(pbr, "baseColorFactor").and_then(|f| f.as_array()) {
@@ -1988,7 +2248,11 @@ impl GltfParser {
     }
 
     /// Every plugin's `extendMaterialParams`, in plugin order.
-    fn extend_material_params(&mut self, m: &mut GltfMaterial, exts: &Value) -> Result<bool, GltfError> {
+    fn extend_material_params(
+        &mut self,
+        m: &mut GltfMaterial,
+        exts: &Value,
+    ) -> Result<bool, GltfError> {
         let mut textured = false;
         let num = |e: &Value, k: &str| doc::num(e, k);
         if let Some(e) = doc::get(exts, "KHR_materials_clearcoat").cloned() {
@@ -2007,20 +2271,25 @@ impl GltfParser {
             if let Some(t) = doc::get(&e, "clearcoatNormalTexture").cloned() {
                 textured |= self.assign_texture(m, "clearcoatNormalMap", &t, false)?;
                 if let Some(s) = num(&t, "scale") {
-                    m.params.insert("clearcoatNormalScale", Param::Vec2([s as f32, s as f32]));
+                    m.params
+                        .insert("clearcoatNormalScale", Param::Vec2([s as f32, s as f32]));
                     m.gltf_clearcoat_normal_scale = Some(s as f32);
                 }
             }
         }
         if let Some(e) = doc::get(exts, "KHR_materials_dispersion") {
-            m.params.insert("dispersion", Param::Num(num(e, "dispersion").unwrap_or(0.0)));
+            m.params.insert(
+                "dispersion",
+                Param::Num(num(e, "dispersion").unwrap_or(0.0)),
+            );
         }
         if let Some(e) = doc::get(exts, "KHR_materials_sheen").cloned() {
             m.params.insert("sheenColor", Param::Color([0.0, 0.0, 0.0]));
             m.params.insert("sheenRoughness", Param::Num(0.0));
             m.params.insert("sheen", Param::Num(1.0));
             if let Some(c) = doc::floats(&e, "sheenColorFactor", 3, 0.0) {
-                m.params.insert("sheenColor", Param::Color([c[0], c[1], c[2]]));
+                m.params
+                    .insert("sheenColor", Param::Color([c[0], c[1], c[2]]));
             }
             if let Some(v) = num(&e, "sheenRoughnessFactor") {
                 m.params.insert("sheenRoughness", Param::Num(v));
@@ -2041,18 +2310,25 @@ impl GltfParser {
             }
         }
         if let Some(e) = doc::get(exts, "KHR_materials_volume").cloned() {
-            m.params.insert("thickness", Param::Num(num(&e, "thicknessFactor").unwrap_or(0.0)));
+            m.params.insert(
+                "thickness",
+                Param::Num(num(&e, "thicknessFactor").unwrap_or(0.0)),
+            );
             if let Some(t) = doc::get(&e, "thicknessTexture").cloned() {
                 textured |= self.assign_texture(m, "thicknessMap", &t, false)?;
             }
             // `extension.attenuationDistance || Infinity`.
-            let d = num(&e, "attenuationDistance").filter(|d| *d != 0.0 && !d.is_nan()).unwrap_or(f64::INFINITY);
+            let d = num(&e, "attenuationDistance")
+                .filter(|d| *d != 0.0 && !d.is_nan())
+                .unwrap_or(f64::INFINITY);
             m.params.insert("attenuationDistance", Param::Num(d));
             let c = doc::floats(&e, "attenuationColor", 3, 0.0).unwrap_or(vec![1.0, 1.0, 1.0]);
-            m.params.insert("attenuationColor", Param::Color([c[0], c[1], c[2]]));
+            m.params
+                .insert("attenuationColor", Param::Color([c[0], c[1], c[2]]));
         }
         if let Some(e) = doc::get(exts, "KHR_materials_ior") {
-            m.params.insert("ior", Param::Num(num(e, "ior").unwrap_or(1.5)));
+            m.params
+                .insert("ior", Param::Num(num(e, "ior").unwrap_or(1.5)));
         }
         if let Some(e) = doc::get(exts, "KHR_materials_emissive_strength") {
             if let Some(v) = num(e, "emissiveStrength") {
@@ -2060,12 +2336,16 @@ impl GltfParser {
             }
         }
         if let Some(e) = doc::get(exts, "KHR_materials_specular").cloned() {
-            m.params.insert("specularIntensity", Param::Num(num(&e, "specularFactor").unwrap_or(1.0)));
+            m.params.insert(
+                "specularIntensity",
+                Param::Num(num(&e, "specularFactor").unwrap_or(1.0)),
+            );
             if let Some(t) = doc::get(&e, "specularTexture").cloned() {
                 textured |= self.assign_texture(m, "specularIntensityMap", &t, false)?;
             }
             let c = doc::floats(&e, "specularColorFactor", 3, 0.0).unwrap_or(vec![1.0, 1.0, 1.0]);
-            m.params.insert("specularColor", Param::Color([c[0], c[1], c[2]]));
+            m.params
+                .insert("specularColor", Param::Color([c[0], c[1], c[2]]));
             if let Some(t) = doc::get(&e, "specularColorTexture").cloned() {
                 textured |= self.assign_texture(m, "specularColorMap", &t, true)?;
             }
@@ -2087,7 +2367,8 @@ impl GltfParser {
             if let Some(v) = num(&e, "iridescenceThicknessMaximum") {
                 range[1] = v as f32;
             }
-            m.params.insert("iridescenceThicknessRange", Param::Range(range));
+            m.params
+                .insert("iridescenceThicknessRange", Param::Range(range));
             if let Some(t) = doc::get(&e, "iridescenceThicknessTexture").cloned() {
                 textured |= self.assign_texture(m, "iridescenceThicknessMap", &t, false)?;
             }
@@ -2104,7 +2385,10 @@ impl GltfParser {
             }
         }
         if let Some(e) = doc::get(exts, "EXT_materials_bump").cloned() {
-            m.params.insert("bumpScale", Param::Num(num(&e, "bumpFactor").unwrap_or(1.0)));
+            m.params.insert(
+                "bumpScale",
+                Param::Num(num(&e, "bumpFactor").unwrap_or(1.0)),
+            );
             if let Some(t) = doc::get(&e, "bumpTexture").cloned() {
                 textured |= self.assign_texture(m, "bumpMap", &t, false)?;
             }
@@ -2113,9 +2397,19 @@ impl GltfParser {
     }
 
     /// `assignTexture`. Returns whether a texture was assigned.
-    fn assign_texture(&mut self, m: &mut GltfMaterial, key: &'static str, map_def: &Value, srgb: bool) -> Result<bool, GltfError> {
-        let Some(index) = doc::index(map_def, "index") else { return Ok(false) };
-        let Some(mut t) = self.get_texture(index)? else { return Ok(false) };
+    fn assign_texture(
+        &mut self,
+        m: &mut GltfMaterial,
+        key: &'static str,
+        map_def: &Value,
+        srgb: bool,
+    ) -> Result<bool, GltfError> {
+        let Some(index) = doc::index(map_def, "index") else {
+            return Ok(false);
+        };
+        let Some(mut t) = self.get_texture(index)? else {
+            return Ok(false);
+        };
         if let Some(tc) = doc::index(map_def, "texCoord").filter(|c| *c > 0) {
             let c = self.textures[t].clone_texture();
             self.textures.push(c);
@@ -2181,7 +2475,8 @@ impl GltfParser {
         let t = match source {
             Some(s) => self.load_texture_image(i, s),
             None => {
-                self.warnings.push(format!("THREE.GLTFLoader: texture {i} has no image source"));
+                self.warnings
+                    .push(format!("THREE.GLTFLoader: texture {i} has no image source"));
                 None
             }
         };
@@ -2192,8 +2487,12 @@ impl GltfParser {
     /// `loadTextureImage`.
     fn load_texture_image(&mut self, texture_index: usize, source_index: usize) -> Option<usize> {
         let root = &self.doc.root;
-        let tdef = doc::def(root, "textures", texture_index).cloned().unwrap_or(Value::Null);
-        let sdef = doc::def(root, "images", source_index).cloned().unwrap_or(Value::Null);
+        let tdef = doc::def(root, "textures", texture_index)
+            .cloned()
+            .unwrap_or(Value::Null);
+        let sdef = doc::def(root, "images", source_index)
+            .cloned()
+            .unwrap_or(Value::Null);
         let key = format!(
             "{}:{}",
             match doc::get(&sdef, "uri").filter(|u| u.as_str().is_some_and(|s| !s.is_empty())) {
@@ -2219,15 +2518,25 @@ impl GltfParser {
                     }
                 }
             }
-            let sampler = doc::index(&tdef, "sampler").and_then(|s| doc::def(&self.doc.root, "samplers", s));
+            let sampler =
+                doc::index(&tdef, "sampler").and_then(|s| doc::def(&self.doc.root, "samplers", s));
             let field = |k: &str| sampler.and_then(|s| doc::index(s, k));
-            tex.mag_filter = three_filter(field("magFilter"), super::material::constants::LINEAR_FILTER);
-            tex.min_filter = three_filter(field("minFilter"), super::material::constants::LINEAR_MIPMAP_LINEAR_FILTER);
+            tex.mag_filter = three_filter(
+                field("magFilter"),
+                super::material::constants::LINEAR_FILTER,
+            );
+            tex.min_filter = three_filter(
+                field("minFilter"),
+                super::material::constants::LINEAR_MIPMAP_LINEAR_FILTER,
+            );
             tex.wrap_s = three_wrap(field("wrapS"));
             tex.wrap_t = three_wrap(field("wrapT"));
         });
         if let Some(t) = t {
-            let a = self.new_record(Record { textures: Some(texture_index), ..Default::default() });
+            let a = self.new_record(Record {
+                textures: Some(texture_index),
+                ..Default::default()
+            });
             self.textures[t].association = a;
         }
         self.texture_key_cache.insert(key, t);
@@ -2248,7 +2557,9 @@ impl GltfParser {
         let result = match self.images.get(source) {
             Some(ImageSlot::Decoded(data)) => {
                 let mut t = GltfTexture::new(source, data.clone());
-                let sdef = doc::def(&self.doc.root, "images", source).cloned().unwrap_or(Value::Null);
+                let sdef = doc::def(&self.doc.root, "images", source)
+                    .cloned()
+                    .unwrap_or(Value::Null);
                 assign_extras(&mut t.user_data, &sdef, &mut self.warnings);
                 let mime = doc::string(&sdef, "mimeType")
                     .map(str::to_string)
@@ -2261,11 +2572,15 @@ impl GltfParser {
                 Some(self.textures.len() - 1)
             }
             Some(ImageSlot::Failed(reason)) => {
-                self.warnings.push(format!("THREE.GLTFLoader: Couldn't load texture {source}: {reason}"));
+                self.warnings.push(format!(
+                    "THREE.GLTFLoader: Couldn't load texture {source}: {reason}"
+                ));
                 None
             }
             _ => {
-                self.warnings.push(format!("THREE.GLTFLoader: Couldn't load texture {source}: image not supplied"));
+                self.warnings.push(format!(
+                    "THREE.GLTFLoader: Couldn't load texture {source}: image not supplied"
+                ));
                 None
             }
         };
@@ -2298,12 +2613,26 @@ impl GltfParser {
                     d.name = src.name.clone();
                     d.user_data = src.user_data.clone();
                     // `Material.prototype.copy`: the base material's own fields.
-                    for k in ["side", "opacity", "transparent", "depthTest", "depthWrite", "alphaTest", "vertexColors"] {
+                    for k in [
+                        "side",
+                        "opacity",
+                        "transparent",
+                        "depthTest",
+                        "depthWrite",
+                        "alphaTest",
+                        "vertexColors",
+                    ] {
                         if let Some(v) = src.params.get(k) {
                             d.params.insert(k, v.clone());
                         }
                     }
-                    d.params.insert("color", src.params.get("color").cloned().unwrap_or(Param::Color([1.0, 1.0, 1.0])));
+                    d.params.insert(
+                        "color",
+                        src.params
+                            .get("color")
+                            .cloned()
+                            .unwrap_or(Param::Color([1.0, 1.0, 1.0])),
+                    );
                     if let Some(map) = src.params.get("map") {
                         d.params.insert("map", map.clone());
                     }
@@ -2341,7 +2670,10 @@ impl GltfParser {
                         d.params.insert("flatShading", Param::Bool(true));
                     }
                     if derivative_tangents {
-                        let pbr = matches!(d.ty, MaterialType::MeshStandardMaterial | MaterialType::MeshPhysicalMaterial);
+                        let pbr = matches!(
+                            d.ty,
+                            MaterialType::MeshStandardMaterial | MaterialType::MeshPhysicalMaterial
+                        );
                         if pbr {
                             let ns = match d.params.get("normalScale") {
                                 Some(Param::Vec2(v)) => *v,
@@ -2354,7 +2686,8 @@ impl GltfParser {
                                 Some(Param::Vec2(v)) => *v,
                                 _ => [1.0, 1.0],
                             };
-                            d.params.insert("clearcoatNormalScale", Param::Vec2([ns[0], -ns[1]]));
+                            d.params
+                                .insert("clearcoatNormalScale", Param::Vec2([ns[0], -ns[1]]));
                         }
                     }
                     d.association = match self.materials[mat].association {
@@ -2374,7 +2707,11 @@ impl GltfParser {
     // ------------------------------------------------- cameras, lights, skins
 
     /// `getDependency('camera', i)` → `loadCamera`.
-    fn get_camera(&mut self, arena: &mut ObjectArena, i: usize) -> Result<Option<usize>, GltfError> {
+    fn get_camera(
+        &mut self,
+        arena: &mut ObjectArena,
+        i: usize,
+    ) -> Result<Option<usize>, GltfError> {
         if let Some(Some(c)) = self.camera_cache.get(i) {
             return Ok(*c);
         }
@@ -2386,7 +2723,11 @@ impl GltfParser {
         let result = match (ty, params) {
             ("perspective", Some(p)) => {
                 let o = self.new_object(arena, ObjectType::PerspectiveCamera);
-                let or = |k: &str, d: f64| doc::num(&p, k).filter(|v| *v != 0.0 && !v.is_nan()).unwrap_or(d);
+                let or = |k: &str, d: f64| {
+                    doc::num(&p, k)
+                        .filter(|v| *v != 0.0 && !v.is_nan())
+                        .unwrap_or(d)
+                };
                 self.objects[o].camera = Some(CameraParams::Perspective {
                     fov: doc::num(&p, "yfov").unwrap_or(f64::NAN).to_degrees(),
                     aspect: or("aspectRatio", 1.0),
@@ -2410,7 +2751,8 @@ impl GltfParser {
                 Some(o)
             }
             _ => {
-                self.warnings.push("THREE.GLTFLoader: Missing camera parameters.".into());
+                self.warnings
+                    .push("THREE.GLTFLoader: Missing camera parameters.".into());
                 None
             }
         };
@@ -2461,13 +2803,16 @@ impl GltfParser {
                 params.distance = range;
                 let spot = doc::get(&def, "spot").cloned().unwrap_or(Value::Null);
                 let inner = doc::num(&spot, "innerConeAngle").unwrap_or(0.0) as f32;
-                let outer = doc::num(&spot, "outerConeAngle").unwrap_or(std::f64::consts::FRAC_PI_4) as f32;
+                let outer =
+                    doc::num(&spot, "outerConeAngle").unwrap_or(std::f64::consts::FRAC_PI_4) as f32;
                 params.angle = outer;
                 params.penumbra = 1.0 - inner / outer;
                 (self.new_object(arena, ObjectType::SpotLight), true)
             }
             other => {
-                return Err(GltfError::msg(format!("THREE.GLTFLoader: Unexpected light type: {other}")));
+                return Err(GltfError::msg(format!(
+                    "THREE.GLTFLoader: Unexpected light type: {other}"
+                )));
             }
         };
         self.objects[o].light = Some(params);
@@ -2482,7 +2827,10 @@ impl GltfParser {
         let mut ud = empty_object();
         assign_extras(&mut ud, &def, &mut self.warnings);
         self.objects[o].user_data = ud;
-        let name = doc::string(&def, "name").filter(|n| !n.is_empty()).map(str::to_string).unwrap_or(format!("light_{i}"));
+        let name = doc::string(&def, "name")
+            .filter(|n| !n.is_empty())
+            .map(str::to_string)
+            .unwrap_or(format!("light_{i}"));
         self.objects[o].name = self.create_unique_name(&name);
         if let Some(slot) = self.light_cache.get_mut(i) {
             *slot = Some(o);
@@ -2500,7 +2848,12 @@ impl GltfParser {
             .ok_or_else(|| GltfError::msg(format!("skin {i} does not exist")))?;
         let joints: Vec<usize> = doc::array(&def, "joints")
             .iter()
-            .map(|j| j.as_number().filter(|j| *j >= 0.0).map(|j| j as usize).unwrap_or(usize::MAX))
+            .map(|j| {
+                j.as_number()
+                    .filter(|j| *j >= 0.0)
+                    .map(|j| j as usize)
+                    .unwrap_or(usize::MAX)
+            })
             .collect();
         let mut shallow = Vec::new();
         for &j in &joints {
@@ -2510,7 +2863,10 @@ impl GltfParser {
             Some(a) => Some(self.doc.accessor(a)?.values()),
             None => None,
         };
-        let mut skeleton = GltfSkeleton { bones: Vec::new(), inverses: Vec::new() };
+        let mut skeleton = GltfSkeleton {
+            bones: Vec::new(),
+            inverses: Vec::new(),
+        };
         for (k, node) in shallow.into_iter().enumerate() {
             match node {
                 Some(n) => {
@@ -2523,7 +2879,10 @@ impl GltfParser {
                     }
                     skeleton.inverses.push(m);
                 }
-                None => self.warnings.push(format!("THREE.GLTFLoader: Joint \"{}\" could not be found.", joints[k])),
+                None => self.warnings.push(format!(
+                    "THREE.GLTFLoader: Joint \"{}\" could not be found.",
+                    joints[k]
+                )),
             }
         }
         self.skeletons.push(skeleton);
@@ -2556,7 +2915,11 @@ impl GltfParser {
         self.objects[group].user_data = ud;
         let mut nodes = Vec::new();
         for n in doc::array(&def, "nodes") {
-            let n = n.as_number().filter(|n| *n >= 0.0).map(|n| n as usize).unwrap_or(usize::MAX);
+            let n = n
+                .as_number()
+                .filter(|n| *n >= 0.0)
+                .map(|n| n as usize)
+                .unwrap_or(usize::MAX);
             nodes.push(self.get_node(arena, n)?);
         }
         for n in nodes {
@@ -2585,21 +2948,39 @@ impl GltfParser {
         let parameters = doc::get(&def, "parameters").cloned();
         let mut channels = Vec::new();
         for ch in doc::array(&def, "channels") {
-            let Some(target) = doc::get(ch, "target") else { continue };
-            let Some(node) = doc::index(target, "node") else { continue };
+            let Some(target) = doc::get(ch, "target") else {
+                continue;
+            };
+            let Some(node) = doc::index(target, "node") else {
+                continue;
+            };
             let Some(sampler) = doc::index(ch, "sampler").and_then(|s| samplers.get(s)) else {
-                self.warnings.push(format!("THREE.GLTFLoader: animation {i} has a channel without a sampler"));
+                self.warnings.push(format!(
+                    "THREE.GLTFLoader: animation {i} has a channel without a sampler"
+                ));
                 continue;
             };
             let mut input = doc::get(sampler, "input").cloned();
             let mut output = doc::get(sampler, "output").cloned();
             if let Some(p) = &parameters {
-                input = input.as_ref().and_then(|k| k.as_str()).and_then(|k| doc::get(p, k)).cloned();
-                output = output.as_ref().and_then(|k| k.as_str()).and_then(|k| doc::get(p, k)).cloned();
+                input = input
+                    .as_ref()
+                    .and_then(|k| k.as_str())
+                    .and_then(|k| doc::get(p, k))
+                    .cloned();
+                output = output
+                    .as_ref()
+                    .and_then(|k| k.as_str())
+                    .and_then(|k| doc::get(p, k))
+                    .cloned();
             }
             let node_obj = self.get_node(arena, node)?;
-            let input = input.and_then(|v| v.as_number()).ok_or(GltfError::BadAccessor)? as usize;
-            let output = output.and_then(|v| v.as_number()).ok_or(GltfError::BadAccessor)? as usize;
+            let input = input
+                .and_then(|v| v.as_number())
+                .ok_or(GltfError::BadAccessor)? as usize;
+            let output = output
+                .and_then(|v| v.as_number())
+                .ok_or(GltfError::BadAccessor)? as usize;
             let interpolation = match doc::string(sampler, "interpolation") {
                 Some("STEP") => TrackInterpolation::Step,
                 Some("CUBICSPLINE") => TrackInterpolation::CubicSpline,
@@ -2613,7 +2994,10 @@ impl GltfParser {
                 interpolation,
             });
         }
-        self.clips.push(GltfClip { name, tracks: Vec::new() });
+        self.clips.push(GltfClip {
+            name,
+            tracks: Vec::new(),
+        });
         let c = self.clips.len() - 1;
         self.pending_channels.push((c, channels));
         if let Some(slot) = self.animation_cache.get_mut(i) {
@@ -2635,13 +3019,19 @@ impl GltfParser {
                     "weights" => ("morphTargetInfluences", TrackKind::Number),
                     _ => (
                         "undefined",
-                        if ch.output.item_size == 1 { TrackKind::Number } else { TrackKind::Vector },
+                        if ch.output.item_size == 1 {
+                            TrackKind::Number
+                        } else {
+                            TrackKind::Vector
+                        },
                     ),
                 };
                 let targets: Vec<usize> = if ch.path == "weights" {
                     let mut t = Vec::new();
                     self.traverse(arena, ch.node, &mut |o| t.push(o));
-                    t.into_iter().filter(|&o| self.objects[o].morph_influences.is_some()).collect()
+                    t.into_iter()
+                        .filter(|&o| self.objects[o].morph_influences.is_some())
+                        .collect()
                 } else {
                     vec![ch.node]
                 };
@@ -2732,7 +3122,9 @@ impl GltfParser {
         let fallback = Arc::new(Material::Standard(StandardMaterial::new(Color::WHITE)));
         for i in 0..self.objects.len() {
             let o = self.objects[i].clone();
-            let Some(node) = arena.get_mut(o.id) else { continue };
+            let Some(node) = arena.get_mut(o.id) else {
+                continue;
+            };
             node.name = o.name.clone();
             if o.finalized {
                 continue;
@@ -2760,7 +3152,11 @@ impl GltfParser {
                     node.kind = ObjectKind::SkinnedMesh(sm);
                 }
                 (ObjectType::InstancedMesh, Some(g)) => {
-                    let inst = o.instances.clone().unwrap_or(Instances { count: 0, matrices: Vec::new(), colors: None });
+                    let inst = o.instances.clone().unwrap_or(Instances {
+                        count: 0,
+                        matrices: Vec::new(),
+                        colors: None,
+                    });
                     let mut im = InstancedMesh::from_arc(g, material, inst.count);
                     im.transforms = inst
                         .matrices
@@ -2774,7 +3170,13 @@ impl GltfParser {
                     if let Some((c, size)) = &inst.colors {
                         im.colors = c
                             .chunks(*size.max(&1))
-                            .map(|v| Color::new(v[0], *v.get(1).unwrap_or(&0.0), *v.get(2).unwrap_or(&0.0)))
+                            .map(|v| {
+                                Color::new(
+                                    v[0],
+                                    *v.get(1).unwrap_or(&0.0),
+                                    *v.get(2).unwrap_or(&0.0),
+                                )
+                            })
                             .collect();
                     }
                     im.morph_influences = influences;
@@ -2790,7 +3192,10 @@ impl GltfParser {
                     node.kind = ObjectKind::LineSegments(LineSegments::strip(g, material, true));
                 }
                 (ObjectType::Points, Some(g)) => {
-                    node.kind = ObjectKind::Points(Points { geometry: g, material });
+                    node.kind = ObjectKind::Points(Points {
+                        geometry: g,
+                        material,
+                    });
                 }
                 (ty, _) if ty.is_light() => {
                     let p = o.light.unwrap_or(LightParams {
@@ -2803,9 +3208,10 @@ impl GltfParser {
                     });
                     let color = Color::new(p.color[0], p.color[1], p.color[2]);
                     node.kind = ObjectKind::Light(match ty {
-                        ObjectType::DirectionalLight => {
-                            Light::Directional(DirectionalLight::new(color, p.intensity).with_direction(Vector3::new(0.0, 0.0, -1.0)))
-                        }
+                        ObjectType::DirectionalLight => Light::Directional(
+                            DirectionalLight::new(color, p.intensity)
+                                .with_direction(Vector3::new(0.0, 0.0, -1.0)),
+                        ),
                         ObjectType::PointLight => {
                             let mut l = PointLight::new(color, p.intensity);
                             l.distance = p.distance;
@@ -2829,21 +3235,30 @@ impl GltfParser {
         }
         // Skeletons reference bones by node, so they go in once every node is.
         for i in 0..self.objects.len() {
-            let Some(s) = self.objects[i].skeleton else { continue };
+            let Some(s) = self.objects[i].skeleton else {
+                continue;
+            };
             let sk = &self.skeletons[s];
             let bones: Vec<SkinBone> = sk
                 .bones
                 .iter()
                 .zip(&sk.inverses)
-                .map(|(&b, inv)| SkinBone { node: self.objects[b].id, inverse_bind: Matrix4 { elements: *inv } })
+                .map(|(&b, inv)| SkinBone {
+                    node: self.objects[b].id,
+                    inverse_bind: Matrix4 { elements: *inv },
+                })
                 .collect();
-            if let Some(ObjectKind::SkinnedMesh(sm)) = arena.get_mut(self.objects[i].id).map(|n| &mut n.kind) {
+            if let Some(ObjectKind::SkinnedMesh(sm)) =
+                arena.get_mut(self.objects[i].id).map(|n| &mut n.kind)
+            {
                 sm.skeleton = Arc::new(Skeleton::new(bones));
             }
         }
         // A cloned light's detached target: aim at it from where the light is.
         for i in 0..self.objects.len() {
-            let Some(t) = self.objects[i].light_target else { continue };
+            let Some(t) = self.objects[i].light_target else {
+                continue;
+            };
             let lid = self.objects[i].id;
             let tid = self.objects[t].id;
             if arena.get(tid).and_then(|n| n.parent) == Some(lid) {
@@ -2851,7 +3266,11 @@ impl GltfParser {
             }
             let lw = world_matrix(arena, lid);
             let tw = world_matrix(arena, tid);
-            let d = [tw.elements[12] - lw.elements[12], tw.elements[13] - lw.elements[13], tw.elements[14] - lw.elements[14]];
+            let d = [
+                tw.elements[12] - lw.elements[12],
+                tw.elements[13] - lw.elements[13],
+                tw.elements[14] - lw.elements[14],
+            ];
             let inv = lw.invert().elements;
             let dir = Vector3::new(
                 inv[0] * d[0] + inv[4] * d[1] + inv[8] * d[2],
@@ -2883,7 +3302,11 @@ pub fn world_matrix(arena: &ObjectArena, id: ObjectId) -> Matrix4 {
     let mut guard = 0;
     while let Some(c) = cur {
         let Some(n) = arena.get(c) else { break };
-        chain.push(if n.matrix_auto_update { local_matrix(n) } else { n.matrix });
+        chain.push(if n.matrix_auto_update {
+            local_matrix(n)
+        } else {
+            n.matrix
+        });
         cur = n.parent;
         guard += 1;
         if guard > 100_000 {
@@ -2899,12 +3322,16 @@ pub fn world_matrix(arena: &ObjectArena, id: ObjectId) -> Matrix4 {
 
 /// `addUnknownExtensionsToUserData`.
 fn add_unknown_extensions(known: &HashSet<String>, user_data: &mut Value, def: &Value) {
-    let Some(exts) = doc::get(def, "extensions").and_then(|e| e.as_object()) else { return };
+    let Some(exts) = doc::get(def, "extensions").and_then(|e| e.as_object()) else {
+        return;
+    };
     for (name, value) in exts {
         if known.contains(name) {
             continue;
         }
-        let Some(ud) = user_data.as_object_mut() else { return };
+        let Some(ud) = user_data.as_object_mut() else {
+            return;
+        };
         let entry = ud
             .entry("gltfExtensions".to_string())
             .or_insert_with(|| Value::Object(HashMap::new()));
@@ -2955,7 +3382,9 @@ fn draco_float(a: &super::super::draco::attributes::DecodedAttribute) -> Vec<f32
         _ => None,
     };
     match (&a.values, a.descriptor.normalized, max) {
-        (AttributeValues::Integer(v), true, Some(max)) => v.iter().map(|&x| x as f32 / max).collect(),
+        (AttributeValues::Integer(v), true, Some(max)) => {
+            v.iter().map(|&x| x as f32 / max).collect()
+        }
         _ => a.as_f32(),
     }
 }
@@ -2978,12 +3407,28 @@ fn collect_material_textures(def: &Value, out: &mut Vec<usize>) {
     push(doc::get(def, "occlusionTexture"));
     push(doc::get(def, "emissiveTexture"));
     let ext_textures: &[(&str, &[&str])] = &[
-        ("KHR_materials_clearcoat", &["clearcoatTexture", "clearcoatRoughnessTexture", "clearcoatNormalTexture"]),
-        ("KHR_materials_sheen", &["sheenColorTexture", "sheenRoughnessTexture"]),
+        (
+            "KHR_materials_clearcoat",
+            &[
+                "clearcoatTexture",
+                "clearcoatRoughnessTexture",
+                "clearcoatNormalTexture",
+            ],
+        ),
+        (
+            "KHR_materials_sheen",
+            &["sheenColorTexture", "sheenRoughnessTexture"],
+        ),
         ("KHR_materials_transmission", &["transmissionTexture"]),
         ("KHR_materials_volume", &["thicknessTexture"]),
-        ("KHR_materials_specular", &["specularTexture", "specularColorTexture"]),
-        ("KHR_materials_iridescence", &["iridescenceTexture", "iridescenceThicknessTexture"]),
+        (
+            "KHR_materials_specular",
+            &["specularTexture", "specularColorTexture"],
+        ),
+        (
+            "KHR_materials_iridescence",
+            &["iridescenceTexture", "iridescenceThicknessTexture"],
+        ),
         ("KHR_materials_anisotropy", &["anisotropyTexture"]),
         ("EXT_materials_bump", &["bumpTexture"]),
     ];

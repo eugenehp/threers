@@ -7,7 +7,11 @@ const NORM_SHIFT: [u8; 256] = {
     let mut t = [0u8; 256];
     let mut i = 0;
     while i < 256 {
-        t[i] = if i == 0 { 8 } else { (i as u8).leading_zeros() as u8 };
+        t[i] = if i == 0 {
+            8
+        } else {
+            (i as u8).leading_zeros() as u8
+        };
         i += 1;
     }
     t
@@ -29,7 +33,14 @@ impl<'a> Rac<'a> {
             return Err("empty VP9 range-coded partition".into());
         }
         let b = |i: usize| buf.get(i).copied().unwrap_or(0) as u32;
-        Ok(Rac { high: 255, bits: -16, buf, pos: 3, code_word: (b(0) << 16) | (b(1) << 8) | b(2), end_reached: 0 })
+        Ok(Rac {
+            high: 255,
+            bits: -16,
+            buf,
+            pos: 3,
+            code_word: (b(0) << 16) | (b(1) << 8) | b(2),
+            end_reached: 0,
+        })
     }
 
     /// ffmpeg `vpx_rac_is_end`: true once the data has been overrun for a
@@ -122,7 +133,9 @@ mod tests {
     fn roundtrips_the_encoder() {
         // threers' VP9 encoder bool coder writes; this reads it back.
         let mut e = crate::vp9::bool_coder::BoolEncoder::new();
-        let bits: Vec<(u8, bool)> = (0..500u32).map(|i| (((i * 37) % 254 + 1) as u8, (i * 7919) % 3 == 0)).collect();
+        let bits: Vec<(u8, bool)> = (0..500u32)
+            .map(|i| (((i * 37) % 254 + 1) as u8, (i * 7919) % 3 == 0))
+            .collect();
         for &(p, b) in &bits {
             e.put_bool(p, b);
         }

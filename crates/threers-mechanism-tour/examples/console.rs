@@ -83,7 +83,11 @@ fn all() {
                 t.facts.triangles,
                 t.facts.simulated_ms,
                 t.facts.reduced_keys,
-                if t.facts.agrees { "agrees" } else { "DISAGREES" },
+                if t.facts.agrees {
+                    "agrees"
+                } else {
+                    "DISAGREES"
+                },
                 t.joints
                     .iter()
                     .map(|j| format!(

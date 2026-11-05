@@ -105,17 +105,19 @@ fn n_body() {
     let mut bodies = Vec::new();
     for i in 0..8 {
         let angle = i as f32 / 8.0 * std::f32::consts::TAU;
-        bodies.push(world.add_body(
-            RigidBody::dynamic()
-                .shape(Shape::ball(0.4))
-                .translation(Vector3::new(angle.cos() * 8.0, 0.0, angle.sin() * 8.0))
-                // A little tangential motion, not enough to escape.
-                .linear_velocity(Vector3::new(-angle.sin() * 1.5, 0.0, angle.cos() * 1.5))
-                .mass(10.0)
-                .linear_damping(0.0)
-                .restitution(0.4)
-                .can_sleep(false),
-        ));
+        bodies.push(
+            world.add_body(
+                RigidBody::dynamic()
+                    .shape(Shape::ball(0.4))
+                    .translation(Vector3::new(angle.cos() * 8.0, 0.0, angle.sin() * 8.0))
+                    // A little tangential motion, not enough to escape.
+                    .linear_velocity(Vector3::new(-angle.sin() * 1.5, 0.0, angle.cos() * 1.5))
+                    .mass(10.0)
+                    .linear_damping(0.0)
+                    .restitution(0.4)
+                    .can_sleep(false),
+            ),
+        );
     }
 
     let spread = |w: &World| -> f32 {
@@ -135,14 +137,20 @@ fn n_body() {
     for _ in 0..900 {
         world.step(1.0 / 60.0);
     }
-    println!("  after 15 s:      {:.2}  (they draw together and collide)", spread(&world));
+    println!(
+        "  after 15 s:      {:.2}  (they draw together and collide)",
+        spread(&world)
+    );
 
     // Momentum is conserved: nothing pushed the cluster anywhere.
     let momentum = bodies
         .iter()
         .filter_map(|id| world.body(*id))
         .fold(Vector3::ZERO, |acc, b| acc + b.linear_velocity * b.mass());
-    println!("  net momentum:    {:.4}  (equal and opposite pulls)", momentum.length());
+    println!(
+        "  net momentum:    {:.4}  (equal and opposite pulls)",
+        momentum.length()
+    );
 }
 
 /// Mass, density and where a body balances.
@@ -151,7 +159,10 @@ fn mass_and_density() {
 
     // Density scales with volume; the same material makes a bigger thing heavier.
     for radius in [0.5f32, 1.0, 2.0] {
-        let b = RigidBody::dynamic().shape(Shape::ball(radius)).density(2.5).build();
+        let b = RigidBody::dynamic()
+            .shape(Shape::ball(radius))
+            .density(2.5)
+            .build();
         println!(
             "  ball r={radius:.1} at density 2.5  ->  mass {:.3}, back-computed density {:.2}",
             b.mass(),
@@ -160,15 +171,24 @@ fn mass_and_density() {
     }
 
     // Or state the mass outright and let the inertia scale with it.
-    let exact = RigidBody::dynamic().shape(Shape::ball(1.0)).mass(12.0).build();
-    println!("  explicit mass 12.0                ->  mass {:.3}", exact.mass());
+    let exact = RigidBody::dynamic()
+        .shape(Shape::ball(1.0))
+        .mass(12.0)
+        .build();
+    println!(
+        "  explicit mass 12.0                ->  mass {:.3}",
+        exact.mass()
+    );
 
     // Move the balance point: a weeble rights itself because its mass sits low.
     let weeble = RigidBody::dynamic()
         .shape(Shape::ball(0.5))
         .center_of_mass(Vector3::new(0.0, -0.35, 0.0))
         .build();
-    println!("  centre of mass override           ->  {:?}", weeble.local_center_of_mass());
+    println!(
+        "  centre of mass override           ->  {:?}",
+        weeble.local_center_of_mass()
+    );
 
     // Or fake a mass distribution the collider does not have.
     let flywheel = RigidBody::dynamic()

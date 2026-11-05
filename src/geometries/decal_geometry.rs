@@ -127,18 +127,18 @@ fn invert(te: &M4) -> M4 {
     let (n12, n22, n32, n42) = (te[4], te[5], te[6], te[7]);
     let (n13, n23, n33, n43) = (te[8], te[9], te[10], te[11]);
     let (n14, n24, n34, n44) = (te[12], te[13], te[14], te[15]);
-    let t11 = n23 * n34 * n42 - n24 * n33 * n42 + n24 * n32 * n43 - n22 * n34 * n43
-        - n23 * n32 * n44
-        + n22 * n33 * n44;
-    let t12 = n14 * n33 * n42 - n13 * n34 * n42 - n14 * n32 * n43 + n12 * n34 * n43
-        + n13 * n32 * n44
-        - n12 * n33 * n44;
-    let t13 = n13 * n24 * n42 - n14 * n23 * n42 + n14 * n22 * n43 - n12 * n24 * n43
-        - n13 * n22 * n44
-        + n12 * n23 * n44;
-    let t14 = n14 * n23 * n32 - n13 * n24 * n32 - n14 * n22 * n33 + n12 * n24 * n33
-        + n13 * n22 * n34
-        - n12 * n23 * n34;
+    let t11 =
+        n23 * n34 * n42 - n24 * n33 * n42 + n24 * n32 * n43 - n22 * n34 * n43 - n23 * n32 * n44
+            + n22 * n33 * n44;
+    let t12 =
+        n14 * n33 * n42 - n13 * n34 * n42 - n14 * n32 * n43 + n12 * n34 * n43 + n13 * n32 * n44
+            - n12 * n33 * n44;
+    let t13 =
+        n13 * n24 * n42 - n14 * n23 * n42 + n14 * n22 * n43 - n12 * n24 * n43 - n13 * n22 * n44
+            + n12 * n23 * n44;
+    let t14 =
+        n14 * n23 * n32 - n13 * n24 * n32 - n14 * n22 * n33 + n12 * n24 * n33 + n13 * n22 * n34
+            - n12 * n23 * n34;
     let det = n11 * t11 + n21 * t12 + n31 * t13 + n41 * t14;
     if det == 0.0 {
         return [0.0; 16];
@@ -260,10 +260,20 @@ fn clip_geometry(input: &[DecalVertex], plane: V3, size: V3) -> Vec<DecalVertex>
                 } else {
                     let (n1, n2, n3, n4) = if o[0] {
                         let (n1, n2) = (tri[1], tri[2]);
-                        (n1, n2, clip(tri[0], n1, plane, s), clip(tri[0], n2, plane, s))
+                        (
+                            n1,
+                            n2,
+                            clip(tri[0], n1, plane, s),
+                            clip(tri[0], n2, plane, s),
+                        )
                     } else {
                         let (n1, n2) = (tri[0], tri[1]);
-                        (n1, n2, clip(tri[2], n1, plane, s), clip(tri[2], n2, plane, s))
+                        (
+                            n1,
+                            n2,
+                            clip(tri[2], n1, plane, s),
+                            clip(tri[2], n2, plane, s),
+                        )
                     };
                     out.extend_from_slice(&[n1, n2, n3, n4, n3, n2]);
                 }
@@ -356,7 +366,11 @@ impl DecalGeometry {
             ]);
             let p = apply_matrix4(v.position, projector);
             out_pos.extend_from_slice(&[p[0] as f32, p[1] as f32, p[2] as f32]);
-            out_nrm.extend_from_slice(&[v.normal[0] as f32, v.normal[1] as f32, v.normal[2] as f32]);
+            out_nrm.extend_from_slice(&[
+                v.normal[0] as f32,
+                v.normal[1] as f32,
+                v.normal[2] as f32,
+            ]);
         }
         let mut g = BufferGeometry::new();
         g.set_attribute("position", BufferAttribute::new(out_pos, 3));
@@ -380,7 +394,9 @@ impl DecalGeometry {
                 .chunks_exact(3)
                 .map(|c| [c[0] as usize, c[1] as usize, c[2] as usize])
                 .collect(),
-            None => (0..base_positions.len() / 3).map(|i| [i * 3, i * 3 + 1, i * 3 + 2]).collect(),
+            None => (0..base_positions.len() / 3)
+                .map(|i| [i * 3, i * 3 + 1, i * 3 + 2])
+                .collect(),
         };
         let mut positions = Vec::with_capacity(tris.len() * 9);
         let mut normals = Vec::with_capacity(tris.len() * 9);

@@ -16,7 +16,16 @@ fn clip(v: i32, max: i32) -> u16 {
 /// for 4×4 diagonal modes); `left` is the column to the left in ffmpeg's
 /// order — bottom to top, except top to bottom for `HOR_UP_PRED`.
 #[allow(clippy::too_many_arguments)]
-pub fn intra_pred(tx: u8, mode: usize, dst: &mut [u16], off: usize, stride: usize, left: &[i32], top: &[i32], bpp: u32) {
+pub fn intra_pred(
+    tx: u8,
+    mode: usize,
+    dst: &mut [u16],
+    off: usize,
+    stride: usize,
+    left: &[i32],
+    top: &[i32],
+    bpp: u32,
+) {
     let n = 4usize << tx;
     let max = (1i32 << bpp) - 1;
     let t = |i: isize| top[(i + 1) as usize];
@@ -50,11 +59,14 @@ pub fn intra_pred(tx: u8, mode: usize, dst: &mut [u16], off: usize, stride: usiz
             let base = 128 << (bpp - 8);
             let dc = match mode {
                 DC_PRED => {
-                    let s: i32 = left[..n].iter().sum::<i32>() + (0..n).map(|i| t(i as isize)).sum::<i32>();
+                    let s: i32 =
+                        left[..n].iter().sum::<i32>() + (0..n).map(|i| t(i as isize)).sum::<i32>();
                     (s + (1 << log)) >> (log + 1)
                 }
                 LEFT_DC_PRED => (left[..n].iter().sum::<i32>() + (1 << (log - 1))) >> log,
-                TOP_DC_PRED => ((0..n).map(|i| t(i as isize)).sum::<i32>() + (1 << (log - 1))) >> log,
+                TOP_DC_PRED => {
+                    ((0..n).map(|i| t(i as isize)).sum::<i32>() + (1 << (log - 1))) >> log
+                }
                 DC_128_PRED => base,
                 DC_127_PRED => base - 1,
                 _ => base + 1,
@@ -88,7 +100,11 @@ pub fn intra_pred(tx: u8, mode: usize, dst: &mut [u16], off: usize, stride: usiz
                 v[n - 2] = (t(n as isize - 2) + t(n as isize - 1) * 3 + 2) >> 2;
                 for j in 0..n {
                     for x in 0..n {
-                        let val = if x < n - 1 - j { v[j + x] } else { t(n as isize - 1) };
+                        let val = if x < n - 1 - j {
+                            v[j + x]
+                        } else {
+                            t(n as isize - 1)
+                        };
                         put(x, j, val);
                     }
                 }
@@ -128,7 +144,8 @@ pub fn intra_pred(tx: u8, mode: usize, dst: &mut [u16], off: usize, stride: usiz
                 let mut v = vec![0i32; 2 * n - 1];
                 for i in 0..n - 2 {
                     v[i] = (left[i] + left[i + 1] * 2 + left[i + 2] + 2) >> 2;
-                    v[n + 1 + i] = (t(i as isize) + t(i as isize + 1) * 2 + t(i as isize + 2) + 2) >> 2;
+                    v[n + 1 + i] =
+                        (t(i as isize) + t(i as isize + 1) * 2 + t(i as isize + 2) + 2) >> 2;
                 }
                 v[n - 2] = (left[n - 2] + left[n - 1] * 2 + t(-1) + 2) >> 2;
                 v[n - 1] = (left[n - 1] + t(-1) * 2 + t(0) + 2) >> 2;
@@ -186,7 +203,8 @@ pub fn intra_pred(tx: u8, mode: usize, dst: &mut [u16], off: usize, stride: usiz
                 vo[n / 2 - 1] = (left[n - 1] + t(-1) * 2 + t(0) + 2) >> 2;
                 for i in 0..n - 1 {
                     ve[n / 2 + i] = (t(i as isize) + t(i as isize + 1) + 1) >> 1;
-                    vo[n / 2 + i] = (t(i as isize - 1) + t(i as isize) * 2 + t(i as isize + 1) + 2) >> 2;
+                    vo[n / 2 + i] =
+                        (t(i as isize - 1) + t(i as isize) * 2 + t(i as isize + 1) + 2) >> 2;
                 }
                 for j in 0..n / 2 {
                     for x in 0..n {
@@ -233,7 +251,8 @@ pub fn intra_pred(tx: u8, mode: usize, dst: &mut [u16], off: usize, stride: usiz
                 for i in 0..n - 2 {
                     v[i * 2] = (left[i + 1] + left[i] + 1) >> 1;
                     v[i * 2 + 1] = (left[i + 2] + left[i + 1] * 2 + left[i] + 2) >> 2;
-                    v[n * 2 + i] = (t(i as isize - 1) + t(i as isize) * 2 + t(i as isize + 1) + 2) >> 2;
+                    v[n * 2 + i] =
+                        (t(i as isize - 1) + t(i as isize) * 2 + t(i as isize + 1) + 2) >> 2;
                 }
                 v[n * 2 - 2] = (t(-1) + left[n - 1] + 1) >> 1;
                 v[n * 2 - 4] = (left[n - 1] + left[n - 2] + 1) >> 1;
@@ -275,7 +294,11 @@ pub fn intra_pred(tx: u8, mode: usize, dst: &mut [u16], off: usize, stride: usiz
                 let last = t(n as isize - 1);
                 for j in 0..n / 2 {
                     for x in 0..n {
-                        let (e, o) = if x < n - j - 1 { (ve[j + x], vo[j + x]) } else { (last, last) };
+                        let (e, o) = if x < n - j - 1 {
+                            (ve[j + x], vo[j + x])
+                        } else {
+                            (last, last)
+                        };
                         put(x, j * 2, e);
                         put(x, j * 2 + 1, o);
                     }
@@ -803,7 +826,11 @@ fn idct32(i: &[i64], o: &mut [i64]) {
 }
 
 fn iwht4(i: &[i64], o: &mut [i64], pass: u32) {
-    let (mut t0, mut t1, mut t2, mut t3) = if pass == 0 { (i[0] >> 2, i[3] >> 2, i[1] >> 2, i[2] >> 2) } else { (i[0], i[3], i[1], i[2]) };
+    let (mut t0, mut t1, mut t2, mut t3) = if pass == 0 {
+        (i[0] >> 2, i[3] >> 2, i[1] >> 2, i[2] >> 2)
+    } else {
+        (i[0], i[3], i[1], i[2])
+    };
     t0 += t2;
     t3 -= t1;
     let t4 = (t0 - t3) >> 1;
@@ -821,7 +848,16 @@ fn iwht4(i: &[i64], o: &mut [i64], pass: u32) {
 /// afterwards) and add it to the `n × n` samples at `off`. `tx` 4 is the
 /// lossless Walsh-Hadamard transform.
 #[allow(clippy::too_many_arguments)]
-pub fn itxfm_add(tx: usize, txtp: usize, dst: &mut [u16], off: usize, stride: usize, block: &mut [i32], eob: usize, bpp: u32) {
+pub fn itxfm_add(
+    tx: usize,
+    txtp: usize,
+    dst: &mut [u16],
+    off: usize,
+    stride: usize,
+    block: &mut [i32],
+    eob: usize,
+    bpp: u32,
+) {
     let eight = bpp == 8;
     let max = (1i32 << bpp) - 1;
     let (sz, bits) = match tx {
@@ -832,7 +868,11 @@ pub fn itxfm_add(tx: usize, txtp: usize, dst: &mut [u16], off: usize, stride: us
         _ => (4, 0),
     };
     let add = |dst: &mut [u16], at: usize, v: i64| {
-        let r = if bits != 0 { ((v + (1i64 << (bits - 1))) as i32) >> bits } else { v as i32 };
+        let r = if bits != 0 {
+            ((v + (1i64 << (bits - 1))) as i32) >> bits
+        } else {
+            v as i32
+        };
         dst[at] = clip(dst[at] as i32 + r, max);
     };
     let has_dconly = tx < 4 && txtp == DCT_DCT;
@@ -895,7 +935,17 @@ pub fn itxfm_add(tx: usize, txtp: usize, dst: &mut [u16], off: usize, stride: us
 /// ffmpeg `loop_filter` over 8 lines: `stridea` steps along the edge,
 /// `strideb` across it; `wd` 4, 8 or 16.
 #[allow(clippy::too_many_arguments)]
-pub fn loop_filter(dst: &mut [u16], off: usize, stridea: isize, strideb: isize, e: i32, i: i32, h: i32, wd: u32, bpp: u32) {
+pub fn loop_filter(
+    dst: &mut [u16],
+    off: usize,
+    stridea: isize,
+    strideb: isize,
+    e: i32,
+    i: i32,
+    h: i32,
+    wd: u32,
+    bpp: u32,
+) {
     let sh = bpp - 8;
     let f = 1i32 << sh;
     let (e, ii, hh) = (e << sh, i << sh, h << sh);
@@ -908,7 +958,9 @@ pub fn loop_filter(dst: &mut [u16], off: usize, stridea: isize, strideb: isize, 
     assert!(strideb > 0);
     for _ in 0..8 {
         // One range check per line covers every tap below.
-        assert!(base - reach * strideb >= 0 && ((base + (reach - 1) * strideb) as usize) < dst.len());
+        assert!(
+            base - reach * strideb >= 0 && ((base + (reach - 1) * strideb) as usize) < dst.len()
+        );
         let at = |k: isize| (base + strideb * k) as usize;
         // SAFETY: |k| <= reach on every call, inside the range checked above.
         let g = |d: &[u16], k: isize| unsafe { *d.get_unchecked(at(k)) } as i32;
@@ -923,7 +975,8 @@ pub fn loop_filter(dst: &mut [u16], off: usize, stridea: isize, strideb: isize, 
             && (p0 - q0).abs() * 2 + ((p1 - q1).abs() >> 1) <= e;
         if fm {
             let mut flat8out = false;
-            let (mut p7, mut p6, mut p5, mut p4, mut q4, mut q5, mut q6, mut q7) = (0, 0, 0, 0, 0, 0, 0, 0);
+            let (mut p7, mut p6, mut p5, mut p4, mut q4, mut q5, mut q6, mut q7) =
+                (0, 0, 0, 0, 0, 0, 0, 0);
             if wd >= 16 {
                 p7 = g(dst, -8);
                 p6 = g(dst, -7);
@@ -952,20 +1005,123 @@ pub fn loop_filter(dst: &mut [u16], off: usize, stridea: isize, strideb: isize, 
             // SAFETY: as for `g`.
             let mut set = |k: isize, v: i32| unsafe { *dst.get_unchecked_mut(at(k)) = v as u16 };
             if wd >= 16 && flat8out && flat8in {
-                set(-7, (p7 * 7 + p6 * 2 + p5 + p4 + p3 + p2 + p1 + p0 + q0 + 8) >> 4);
-                set(-6, (p7 * 6 + p6 + p5 * 2 + p4 + p3 + p2 + p1 + p0 + q0 + q1 + 8) >> 4);
-                set(-5, (p7 * 5 + p6 + p5 + p4 * 2 + p3 + p2 + p1 + p0 + q0 + q1 + q2 + 8) >> 4);
-                set(-4, (p7 * 4 + p6 + p5 + p4 + p3 * 2 + p2 + p1 + p0 + q0 + q1 + q2 + q3 + 8) >> 4);
-                set(-3, (p7 * 3 + p6 + p5 + p4 + p3 + p2 * 2 + p1 + p0 + q0 + q1 + q2 + q3 + q4 + 8) >> 4);
-                set(-2, (p7 * 2 + p6 + p5 + p4 + p3 + p2 + p1 * 2 + p0 + q0 + q1 + q2 + q3 + q4 + q5 + 8) >> 4);
-                set(-1, (p7 + p6 + p5 + p4 + p3 + p2 + p1 + p0 * 2 + q0 + q1 + q2 + q3 + q4 + q5 + q6 + 8) >> 4);
-                set(0, (p6 + p5 + p4 + p3 + p2 + p1 + p0 + q0 * 2 + q1 + q2 + q3 + q4 + q5 + q6 + q7 + 8) >> 4);
-                set(1, (p5 + p4 + p3 + p2 + p1 + p0 + q0 + q1 * 2 + q2 + q3 + q4 + q5 + q6 + q7 * 2 + 8) >> 4);
-                set(2, (p4 + p3 + p2 + p1 + p0 + q0 + q1 + q2 * 2 + q3 + q4 + q5 + q6 + q7 * 3 + 8) >> 4);
-                set(3, (p3 + p2 + p1 + p0 + q0 + q1 + q2 + q3 * 2 + q4 + q5 + q6 + q7 * 4 + 8) >> 4);
-                set(4, (p2 + p1 + p0 + q0 + q1 + q2 + q3 + q4 * 2 + q5 + q6 + q7 * 5 + 8) >> 4);
-                set(5, (p1 + p0 + q0 + q1 + q2 + q3 + q4 + q5 * 2 + q6 + q7 * 6 + 8) >> 4);
-                set(6, (p0 + q0 + q1 + q2 + q3 + q4 + q5 + q6 * 2 + q7 * 7 + 8) >> 4);
+                set(
+                    -7,
+                    (p7 * 7 + p6 * 2 + p5 + p4 + p3 + p2 + p1 + p0 + q0 + 8) >> 4,
+                );
+                set(
+                    -6,
+                    (p7 * 6 + p6 + p5 * 2 + p4 + p3 + p2 + p1 + p0 + q0 + q1 + 8) >> 4,
+                );
+                set(
+                    -5,
+                    (p7 * 5 + p6 + p5 + p4 * 2 + p3 + p2 + p1 + p0 + q0 + q1 + q2 + 8) >> 4,
+                );
+                set(
+                    -4,
+                    (p7 * 4 + p6 + p5 + p4 + p3 * 2 + p2 + p1 + p0 + q0 + q1 + q2 + q3 + 8) >> 4,
+                );
+                set(
+                    -3,
+                    (p7 * 3 + p6 + p5 + p4 + p3 + p2 * 2 + p1 + p0 + q0 + q1 + q2 + q3 + q4 + 8)
+                        >> 4,
+                );
+                set(
+                    -2,
+                    (p7 * 2
+                        + p6
+                        + p5
+                        + p4
+                        + p3
+                        + p2
+                        + p1 * 2
+                        + p0
+                        + q0
+                        + q1
+                        + q2
+                        + q3
+                        + q4
+                        + q5
+                        + 8)
+                        >> 4,
+                );
+                set(
+                    -1,
+                    (p7 + p6
+                        + p5
+                        + p4
+                        + p3
+                        + p2
+                        + p1
+                        + p0 * 2
+                        + q0
+                        + q1
+                        + q2
+                        + q3
+                        + q4
+                        + q5
+                        + q6
+                        + 8)
+                        >> 4,
+                );
+                set(
+                    0,
+                    (p6 + p5
+                        + p4
+                        + p3
+                        + p2
+                        + p1
+                        + p0
+                        + q0 * 2
+                        + q1
+                        + q2
+                        + q3
+                        + q4
+                        + q5
+                        + q6
+                        + q7
+                        + 8)
+                        >> 4,
+                );
+                set(
+                    1,
+                    (p5 + p4
+                        + p3
+                        + p2
+                        + p1
+                        + p0
+                        + q0
+                        + q1 * 2
+                        + q2
+                        + q3
+                        + q4
+                        + q5
+                        + q6
+                        + q7 * 2
+                        + 8)
+                        >> 4,
+                );
+                set(
+                    2,
+                    (p4 + p3 + p2 + p1 + p0 + q0 + q1 + q2 * 2 + q3 + q4 + q5 + q6 + q7 * 3 + 8)
+                        >> 4,
+                );
+                set(
+                    3,
+                    (p3 + p2 + p1 + p0 + q0 + q1 + q2 + q3 * 2 + q4 + q5 + q6 + q7 * 4 + 8) >> 4,
+                );
+                set(
+                    4,
+                    (p2 + p1 + p0 + q0 + q1 + q2 + q3 + q4 * 2 + q5 + q6 + q7 * 5 + 8) >> 4,
+                );
+                set(
+                    5,
+                    (p1 + p0 + q0 + q1 + q2 + q3 + q4 + q5 * 2 + q6 + q7 * 6 + 8) >> 4,
+                );
+                set(
+                    6,
+                    (p0 + q0 + q1 + q2 + q3 + q4 + q5 + q6 * 2 + q7 * 7 + 8) >> 4,
+                );
             } else if wd >= 8 && flat8in {
                 set(-3, (p3 * 3 + 2 * p2 + p1 + p0 + q0 + 4) >> 3);
                 set(-2, (p3 * 2 + p2 + 2 * p1 + p0 + q0 + q1 + 4) >> 3);
@@ -1006,7 +1162,16 @@ pub fn loop_filter(dst: &mut [u16], off: usize, stridea: isize, strideb: isize, 
 /// coordinates clamped to the visible `vis_w × vis_h` (ffmpeg's emulated
 /// edge, used exactly when a read would leave the visible picture).
 #[allow(clippy::too_many_arguments)]
-pub fn fetch(plane: &Plane, x0: isize, y0: isize, w: usize, h: usize, vis_w: usize, vis_h: usize, out: &mut Vec<i32>) {
+pub fn fetch(
+    plane: &Plane,
+    x0: isize,
+    y0: isize,
+    w: usize,
+    h: usize,
+    vis_w: usize,
+    vis_h: usize,
+    out: &mut Vec<i32>,
+) {
     out.clear();
     out.reserve(w * h);
     // Columns before the visible area repeat its first sample, after it its
@@ -1043,10 +1208,27 @@ fn bilin(s: &[i32], at: usize, stride: usize, m: i32) -> i32 {
 /// `ws`, the block's top-left at `(3, 3)`), filter `filter` (`FilterMode`
 /// 0-3), subpel `mx`, `my` in 1/16; `avg` averages with what `dst` holds.
 #[allow(clippy::too_many_arguments)]
-pub fn mc_put(dst: &mut [u16], doff: usize, dstride: usize, win: &[i32], ws: usize, bw: usize, bh: usize, filter: u8, mx: i32, my: i32, avg: bool, bpp: u32) {
+pub fn mc_put(
+    dst: &mut [u16],
+    doff: usize,
+    dstride: usize,
+    win: &[i32],
+    ws: usize,
+    bw: usize,
+    bh: usize,
+    filter: u8,
+    mx: i32,
+    my: i32,
+    avg: bool,
+    bpp: u32,
+) {
     let max = (1i32 << bpp) - 1;
     let store = |dst: &mut [u16], at: usize, v: i32| {
-        dst[at] = if avg { ((dst[at] as i32 + v + 1) >> 1) as u16 } else { v as u16 };
+        dst[at] = if avg {
+            ((dst[at] as i32 + v + 1) >> 1) as u16
+        } else {
+            v as u16
+        };
     };
     let org = 3 * ws + 3;
     if mx == 0 && my == 0 {
@@ -1061,13 +1243,21 @@ pub fn mc_put(dst: &mut [u16], doff: usize, dstride: usize, win: &[i32], ws: usi
         if my == 0 {
             for y in 0..bh {
                 for x in 0..bw {
-                    store(dst, doff + y * dstride + x, bilin(win, org + y * ws + x, 1, mx));
+                    store(
+                        dst,
+                        doff + y * dstride + x,
+                        bilin(win, org + y * ws + x, 1, mx),
+                    );
                 }
             }
         } else if mx == 0 {
             for y in 0..bh {
                 for x in 0..bw {
-                    store(dst, doff + y * dstride + x, bilin(win, org + y * ws + x, ws, my));
+                    store(
+                        dst,
+                        doff + y * dstride + x,
+                        bilin(win, org + y * ws + x, ws, my),
+                    );
                 }
             }
         } else {
@@ -1102,7 +1292,11 @@ pub fn mc_put(dst: &mut [u16], doff: usize, dstride: usize, win: &[i32], ws: usi
         let f = &ft[my as usize];
         for y in 0..bh {
             for x in 0..bw {
-                store(dst, doff + y * dstride + x, tap8(win, org + y * ws + x, ws, f, max));
+                store(
+                    dst,
+                    doff + y * dstride + x,
+                    tap8(win, org + y * ws + x, ws, f, max),
+                );
             }
         }
     } else {
@@ -1120,7 +1314,11 @@ pub fn mc_put(dst: &mut [u16], doff: usize, dstride: usize, win: &[i32], ws: usi
         }
         for y in 0..bh {
             for x in 0..bw {
-                store(dst, doff + y * dstride + x, tap8(&tmp, (y + 3) * 64 + x, 64, fy, max));
+                store(
+                    dst,
+                    doff + y * dstride + x,
+                    tap8(&tmp, (y + 3) * 64 + x, 64, fy, max),
+                );
             }
         }
     }
@@ -1130,10 +1328,29 @@ pub fn mc_put(dst: &mut [u16], doff: usize, dstride: usize, win: &[i32], ws: usi
 /// `win` holds the reference from three samples above-left of the first
 /// integer position; `dx`, `dy` are the 1/16 steps.
 #[allow(clippy::too_many_arguments)]
-pub fn mc_scaled(dst: &mut [u16], doff: usize, dstride: usize, win: &[i32], ws: usize, bw: usize, bh: usize, filter: u8, mx: i32, my: i32, dx: i32, dy: i32, avg: bool, bpp: u32) {
+pub fn mc_scaled(
+    dst: &mut [u16],
+    doff: usize,
+    dstride: usize,
+    win: &[i32],
+    ws: usize,
+    bw: usize,
+    bh: usize,
+    filter: u8,
+    mx: i32,
+    my: i32,
+    dx: i32,
+    dy: i32,
+    avg: bool,
+    bpp: u32,
+) {
     let max = (1i32 << bpp) - 1;
     let store = |dst: &mut [u16], at: usize, v: i32| {
-        dst[at] = if avg { ((dst[at] as i32 + v + 1) >> 1) as u16 } else { v as u16 };
+        dst[at] = if avg {
+            ((dst[at] as i32 + v + 1) >> 1) as u16
+        } else {
+            v as u16
+        };
     };
     if filter == FilterMode::Bilinear as u8 {
         let tmp_h = ((((bh as i32 - 1) * dy + my) >> 4) + 2) as usize;
@@ -1151,7 +1368,11 @@ pub fn mc_scaled(dst: &mut [u16], doff: usize, dstride: usize, win: &[i32], ws: 
         let mut row = 0usize;
         for y in 0..bh {
             for x in 0..bw {
-                store(dst, doff + y * dstride + x, bilin(&tmp, row * 64 + x, 64, my));
+                store(
+                    dst,
+                    doff + y * dstride + x,
+                    bilin(&tmp, row * 64 + x, 64, my),
+                );
             }
             my += dy;
             row += (my >> 4) as usize;
@@ -1182,7 +1403,11 @@ pub fn mc_scaled(dst: &mut [u16], doff: usize, dstride: usize, win: &[i32], ws: 
     for y in 0..bh {
         let f = &ft[my as usize];
         for x in 0..bw {
-            store(dst, doff + y * dstride + x, tap8(&tmp, row * 64 + x, 64, f, max));
+            store(
+                dst,
+                doff + y * dstride + x,
+                tap8(&tmp, row * 64 + x, 64, f, max),
+            );
         }
         my += dy;
         row += (my >> 4) as usize;

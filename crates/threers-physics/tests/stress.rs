@@ -102,12 +102,30 @@ fn assert_world_sane(world: &World, context: &str) {
 fn sealed_room(world: &mut World, half: f32) {
     let t = 0.5;
     let faces = [
-        (Vector3::new(0.0, -half - t, 0.0), Vector3::new(half + t, t, half + t)),
-        (Vector3::new(0.0, half + t, 0.0), Vector3::new(half + t, t, half + t)),
-        (Vector3::new(-half - t, 0.0, 0.0), Vector3::new(t, half + t, half + t)),
-        (Vector3::new(half + t, 0.0, 0.0), Vector3::new(t, half + t, half + t)),
-        (Vector3::new(0.0, 0.0, -half - t), Vector3::new(half + t, half + t, t)),
-        (Vector3::new(0.0, 0.0, half + t), Vector3::new(half + t, half + t, t)),
+        (
+            Vector3::new(0.0, -half - t, 0.0),
+            Vector3::new(half + t, t, half + t),
+        ),
+        (
+            Vector3::new(0.0, half + t, 0.0),
+            Vector3::new(half + t, t, half + t),
+        ),
+        (
+            Vector3::new(-half - t, 0.0, 0.0),
+            Vector3::new(t, half + t, half + t),
+        ),
+        (
+            Vector3::new(half + t, 0.0, 0.0),
+            Vector3::new(t, half + t, half + t),
+        ),
+        (
+            Vector3::new(0.0, 0.0, -half - t),
+            Vector3::new(half + t, half + t, t),
+        ),
+        (
+            Vector3::new(0.0, 0.0, half + t),
+            Vector3::new(half + t, half + t, t),
+        ),
     ];
     for (centre, extents) in faces {
         world.add_body(
@@ -261,17 +279,19 @@ fn energy_never_grows_in_a_closed_inelastic_system() {
 
     let mut bodies = Vec::new();
     for _ in 0..20 {
-        bodies.push(world.add_body(
-            RigidBody::dynamic()
-                .shape(Shape::ball(0.3))
-                .translation(rng.vector(2.5))
-                .linear_velocity(rng.vector(5.0))
-                // No gravity and no bounce: kinetic energy can only fall.
-                .gravity_scale(0.0)
-                .restitution(0.0)
-                .friction(0.0)
-                .can_sleep(false),
-        ));
+        bodies.push(
+            world.add_body(
+                RigidBody::dynamic()
+                    .shape(Shape::ball(0.3))
+                    .translation(rng.vector(2.5))
+                    .linear_velocity(rng.vector(5.0))
+                    // No gravity and no bounce: kinetic energy can only fall.
+                    .gravity_scale(0.0)
+                    .restitution(0.0)
+                    .friction(0.0)
+                    .can_sleep(false),
+            ),
+        );
     }
 
     let kinetic = |w: &World| -> f32 {
@@ -344,11 +364,17 @@ fn removing_bodies_mid_simulation_is_safe() {
     for step in 0..400 {
         // Spawn.
         if step % 3 == 0 {
-            live.push(world.add_body(
-                RigidBody::dynamic()
-                    .shape(rng.shape())
-                    .translation(Vector3::new(rng.range(-2.0, 2.0), 5.0, rng.range(-2.0, 2.0))),
-            ));
+            live.push(
+                world.add_body(
+                    RigidBody::dynamic()
+                        .shape(rng.shape())
+                        .translation(Vector3::new(
+                            rng.range(-2.0, 2.0),
+                            5.0,
+                            rng.range(-2.0, 2.0),
+                        )),
+                ),
+            );
         }
         // Join two at random, so joints reference bodies that may vanish.
         if live.len() >= 2 && step % 7 == 0 {
@@ -550,11 +576,19 @@ fn ik_survives_hostile_targets() {
     ] {
         chain.solve(target);
         for j in &chain.joints {
-            assert!(finite(j.position), "FABRIK produced {:?} for {target:?}", j.position);
+            assert!(
+                finite(j.position),
+                "FABRIK produced {:?} for {target:?}",
+                j.position
+            );
         }
         chain.solve_ccd(target);
         for j in &chain.joints {
-            assert!(finite(j.position), "CCD produced {:?} for {target:?}", j.position);
+            assert!(
+                finite(j.position),
+                "CCD produced {:?} for {target:?}",
+                j.position
+            );
         }
     }
 
@@ -565,5 +599,3 @@ fn ik_survives_hostile_targets() {
         assert!(finite(j.position));
     }
 }
-
-

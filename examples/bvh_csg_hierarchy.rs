@@ -15,12 +15,12 @@
 use std::sync::Arc;
 
 use threers::cameras::Camera;
+use threers::renderer::WindowRenderer;
 use threers::{
     evaluate_hierarchy, AmbientLight, BoxGeometry, BufferGeometry, Color, CsgEvaluator, CsgNode,
     CsgOperation, CsgOperationGroup, DirectionalLight, Mesh, Object3D, PerspectiveCamera, Scene,
     SphereGeometry, StandardMaterial, Vector3, ADDITION, SUBTRACTION,
 };
-use threers::renderer::WindowRenderer;
 
 use winit::{
     event::{Event, WindowEvent},
@@ -36,7 +36,10 @@ const UPSTREAM_TRIANGLES: [usize; 4] = [24, 774, 804, 816];
 fn build_hierarchy_geometry(steps: usize) -> BufferGeometry {
     let soup = |g: BufferGeometry| g.to_non_indexed();
     let mut root = CsgOperation::new(soup(BoxGeometry::new(4.0, 2.5, 2.5)), ADDITION);
-    root.add_child(CsgNode::Operation(CsgOperation::new(soup(BoxGeometry::new(3.6, 2.1, 2.1)), SUBTRACTION)));
+    root.add_child(CsgNode::Operation(CsgOperation::new(
+        soup(BoxGeometry::new(3.6, 2.1, 2.1)),
+        SUBTRACTION,
+    )));
     if steps >= 2 {
         let mut sphere = CsgOperation::new(soup(SphereGeometry::new(0.55, 24, 12)), ADDITION);
         sphere.set_position(-1.1, 0.2, 1.35);
@@ -44,9 +47,15 @@ fn build_hierarchy_geometry(steps: usize) -> BufferGeometry {
     }
     if steps >= 3 {
         let mut window = CsgOperationGroup::new();
-        window.add_child(CsgNode::Operation(CsgOperation::new(soup(BoxGeometry::new(1.2, 1.0, 0.5)), SUBTRACTION)));
+        window.add_child(CsgNode::Operation(CsgOperation::new(
+            soup(BoxGeometry::new(1.2, 1.0, 0.5)),
+            SUBTRACTION,
+        )));
         if steps >= 4 {
-            window.add_child(CsgNode::Operation(CsgOperation::new(soup(BoxGeometry::new(1.2, 1.0, 0.12)), ADDITION)));
+            window.add_child(CsgNode::Operation(CsgOperation::new(
+                soup(BoxGeometry::new(1.2, 1.0, 0.12)),
+                ADDITION,
+            )));
         }
         window.set_position(0.8, 0.15, 1.35);
         root.add_child(CsgNode::Group(window));
@@ -70,7 +79,9 @@ fn main() {
 
 async fn run(steps: usize) {
     let geometry = build_hierarchy_geometry(steps);
-    let triangles = geometry.get_attribute("position").map_or(0, |a| a.count() / 3);
+    let triangles = geometry
+        .get_attribute("position")
+        .map_or(0, |a| a.count() / 3);
     println!(
         "step {steps}: {triangles} triangles (three-bvh-csg {})",
         UPSTREAM_TRIANGLES[steps - 1]
@@ -78,7 +89,9 @@ async fn run(steps: usize) {
     let event_loop = EventLoop::new().expect("event loop");
     let window = Arc::new(
         WindowBuilder::new()
-            .with_title(format!("threers — bvh-csg hierarchy, step {steps}: {triangles} triangles"))
+            .with_title(format!(
+                "threers — bvh-csg hierarchy, step {steps}: {triangles} triangles"
+            ))
             .with_inner_size(winit::dpi::LogicalSize::new(800, 600))
             .build(&event_loop)
             .expect("window"),

@@ -81,5 +81,10 @@ pub fn decode_mp4(data: &[u8]) -> Result<DecodedAudio, AacError> {
         }
         at = end;
     }
-    Ok(DecodedAudio { sample_rate: dec.sample_rate(), planes, frame_lens, stats: dec.stats })
+    Ok(DecodedAudio {
+        sample_rate: dec.sample_rate(),
+        planes,
+        frame_lens,
+        stats: dec.stats,
+    })
 }

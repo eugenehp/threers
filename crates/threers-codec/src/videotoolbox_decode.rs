@@ -34,10 +34,7 @@
 //! the way out if asked, and the hardware does it for nothing. Ask for the
 //! planes instead and it is the caller writing a colour conversion.
 
-#![cfg(all(
-    feature = "videotoolbox",
-    target_os = "macos"
-))]
+#![cfg(all(feature = "videotoolbox", target_os = "macos"))]
 
 use std::ffi::c_void;
 use std::ptr;
@@ -205,7 +202,13 @@ unsafe extern "C" {
 }
 
 fn cfnum(v: i32) -> CFNumberRef {
-    unsafe { CFNumberCreate(ptr::null(), K_CF_NUMBER_SINT32, &v as *const i32 as *const c_void) }
+    unsafe {
+        CFNumberCreate(
+            ptr::null(),
+            K_CF_NUMBER_SINT32,
+            &v as *const i32 as *const c_void,
+        )
+    }
 }
 
 /// What the decode callback leaves behind.
@@ -371,11 +374,16 @@ impl VideoToolboxDecoder {
             TrackCodec::H264 => split_avcc(&track.config)?,
             TrackCodec::Hevc => split_hvcc(&track.config)?,
             TrackCodec::Vp9 | TrackCodec::Av1 => {
-                return Err(format!("VideoToolbox decoding of {:?} is not wired up", track.codec))
+                return Err(format!(
+                    "VideoToolbox decoding of {:?} is not wired up",
+                    track.codec
+                ))
             }
         };
-        let pointers: Vec<*const u8> =
-            sets.iter().map(|(o, _)| track.config[*o..].as_ptr()).collect();
+        let pointers: Vec<*const u8> = sets
+            .iter()
+            .map(|(o, _)| track.config[*o..].as_ptr())
+            .collect();
         let sizes: Vec<usize> = sets.iter().map(|(_, l)| *l).collect();
 
         let mut format: CMFormatDescriptionRef = ptr::null();

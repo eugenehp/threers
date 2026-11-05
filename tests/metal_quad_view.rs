@@ -27,8 +27,8 @@ use threers::scene::Scene;
 #[path = "quad_view_fixture/mod.rs"]
 mod quad_view_fixture;
 use quad_view_fixture::{
-    marker_scene, offset_of, persp, px, quad, rgb, shadow_scene, tilted_box_scene, tl, BLUE,
-    GREEN, RED,
+    marker_scene, offset_of, persp, px, quad, rgb, shadow_scene, tilted_box_scene, tl, BLUE, GREEN,
+    RED,
 };
 
 const W: u32 = 160;
@@ -101,7 +101,11 @@ fn quad_view_renders_four_panes_on_metal() {
             assert_ne!(c, bg, "msaa {msaa}: {pane:?} centre is background");
             assert!(c[0] > 200, "msaa {msaa}: {pane:?} centre {c:?}");
             // ...and its corner is still background, not garbage.
-            assert_eq!(px(&img, W, x0 + 1, y0 + 1), bg, "msaa {msaa}: {pane:?} corner");
+            assert_eq!(
+                px(&img, W, x0 + 1, y0 + 1),
+                bg,
+                "msaa {msaa}: {pane:?} corner"
+            );
             // The red marker: right of centre in top and front, at the centre
             // (towards the camera) in the side view.
             let red = (y0..y1)
@@ -176,13 +180,20 @@ fn render_keeps_gap_colour_and_pane_backgrounds() {
                 (b.0, b.3 - 1),
                 (b.2 - 1, b.3 - 1),
             ] {
-                assert_eq!(px(&img, QW, x, y), bg, "msaa {msaa}: {pane:?} corner ({x},{y})");
+                assert_eq!(
+                    px(&img, QW, x, y),
+                    bg,
+                    "msaa {msaa}: {pane:?} corner ({x},{y})"
+                );
             }
             let drawn = (b.1..b.3)
                 .flat_map(|y| (b.0..b.2).map(move |x| (x, y)))
                 .filter(|&(x, y)| px(&img, QW, x, y) != bg)
                 .count();
-            assert!(drawn > 200, "msaa {msaa}: {pane:?}: only {drawn} pixels drawn");
+            assert!(
+                drawn > 200,
+                "msaa {msaa}: {pane:?}: only {drawn} pixels drawn"
+            );
             pane_pixels += ((b.2 - b.0) * (b.3 - b.1)) as usize;
         }
         let mut gap_pixels = 0usize;
@@ -232,7 +243,11 @@ fn orthographic_panes_face_the_documented_way_on_metal() {
     assert!(right(off(Pane::Front, RED)), "{:?}", off(Pane::Front, RED));
     assert!(up(off(Pane::Front, BLUE)), "{:?}", off(Pane::Front, BLUE));
     assert!(offset_of(&img, QW, b(Pane::Front), GREEN).is_none());
-    assert!(right(off(Pane::Side, GREEN)), "{:?}", off(Pane::Side, GREEN));
+    assert!(
+        right(off(Pane::Side, GREEN)),
+        "{:?}",
+        off(Pane::Side, GREEN)
+    );
     assert!(up(off(Pane::Side, BLUE)), "{:?}", off(Pane::Side, BLUE));
     assert!(centre(off(Pane::Side, RED)), "{:?}", off(Pane::Side, RED));
     let (t, f) = (off(Pane::Top, RED).0, off(Pane::Front, RED).0);
@@ -277,7 +292,11 @@ fn pixel_ratio_follows_the_supersample_on_metal() {
         let bg = rgb(q.backgrounds[pane.index()].unwrap());
         assert_eq!(px(&img, w2, b.0, b.1), bg, "{pane:?}");
         assert_eq!(px(&img, w2, b.2 - 1, b.3 - 1), bg, "{pane:?}");
-        assert_eq!(px(&img, w2, b.2, b.3 - 1), rgb(q.gap_color.unwrap()), "{pane:?}");
+        assert_eq!(
+            px(&img, w2, b.2, b.3 - 1),
+            rgb(q.gap_color.unwrap()),
+            "{pane:?}"
+        );
     }
 }
 
@@ -325,8 +344,14 @@ fn scissored_render_leaves_the_rest_alone_on_metal() {
                 }
             }
         }
-        assert!(inside_bg > 0, "msaa {msaa}: scissor never cleared to the background");
-        assert!(inside_drawn > 0, "msaa {msaa}: nothing drawn inside the scissor");
+        assert!(
+            inside_bg > 0,
+            "msaa {msaa}: scissor never cleared to the background"
+        );
+        assert!(
+            inside_drawn > 0,
+            "msaa {msaa}: nothing drawn inside the scissor"
+        );
         assert!(second_px > 0, "msaa {msaa}: second scissor never cleared");
     }
 }
@@ -366,7 +391,11 @@ fn auto_clear_off_keeps_the_previous_frame_on_metal() {
         hr.renderer().set_auto_clear(true);
         let img = read(&hr);
         assert_eq!(px(&img, QW, 0, 0), rgb(keep), "msaa {msaa}");
-        assert_ne!(px(&img, QW, QW / 2, QH / 2), rgb(keep), "msaa {msaa}: the cube still draws");
+        assert_ne!(
+            px(&img, QW, QW / 2, QH / 2),
+            rgb(keep),
+            "msaa {msaa}: the cube still draws"
+        );
     }
 }
 
@@ -485,7 +514,11 @@ fn wgpu_and_metal_quad_views_agree_pane_for_pane() {
         assert!(mean < 1.0, "{pane:?}: mean difference {mean}");
         assert!(frac < 0.02, "{pane:?}: {differ} of {n} pixels differ");
         // Same background in the corner, byte for byte.
-        assert_eq!(px(&w, QW, b.0, b.1), px(&m, QW, b.0, b.1), "{pane:?} corner");
+        assert_eq!(
+            px(&w, QW, b.0, b.1),
+            px(&m, QW, b.0, b.1),
+            "{pane:?} corner"
+        );
     }
 }
 
@@ -562,7 +595,10 @@ fn shared_shadow_maps_draw_identical_panes_on_metal() {
         let shared = read(&hr);
         assert_eq!(hr.renderer().shadow_map_updates() - n1, 1, "msaa {msaa}");
         assert!(hr.renderer().shadow_map().auto_update);
-        assert!(separate == shared, "msaa {msaa}: shared shadow maps changed a pane");
+        assert!(
+            separate == shared,
+            "msaa {msaa}: shared shadow maps changed a pane"
+        );
         for (_, obj) in scene.arena.nodes.iter_mut() {
             obj.cast_shadow = false;
         }

@@ -62,7 +62,10 @@ impl UnrealBloomPass {
     /// three.js rounds.
     pub fn mip_sizes(&self) -> [(u32, u32); N_MIPS] {
         let mut sizes = [(0, 0); N_MIPS];
-        let (mut x, mut y) = (js_round(self.width as f32 / 2.0), js_round(self.height as f32 / 2.0));
+        let (mut x, mut y) = (
+            js_round(self.width as f32 / 2.0),
+            js_round(self.height as f32 / 2.0),
+        );
         for s in sizes.iter_mut() {
             *s = (x, y);
             x = js_round(x as f32 / 2.0);
@@ -80,7 +83,14 @@ impl Pass for UnrealBloomPass {
         self.height = height.max(1);
     }
 
-    fn render(&mut self, ctx: &mut PassContext<'_, '_>, _write: &Target, read: &Target, _d: f32, _m: bool) {
+    fn render(
+        &mut self,
+        ctx: &mut PassContext<'_, '_>,
+        _write: &Target,
+        read: &Target,
+        _d: f32,
+        _m: bool,
+    ) {
         let sizes = self.mip_sizes();
         let transparent = [
             self.clear_color.r as f64,
@@ -97,7 +107,10 @@ impl Pass for UnrealBloomPass {
                 return;
             };
             ctx.clear(Dest::StandIn(&s), self.clear_color, 0.0);
-            ctx.fx(Fx::basic_copy(read).blend(PostFxBlend::Overwrite), Dest::StandIn(&s));
+            ctx.fx(
+                Fx::basic_copy(read).blend(PostFxBlend::Overwrite),
+                Dest::StandIn(&s),
+            );
             Some(s)
         } else {
             None
@@ -196,8 +209,12 @@ impl Pass for UnrealBloomPass {
             "radius" => ParamValue::Float(self.radius),
             "threshold" => ParamValue::Float(self.threshold),
             "resolution" => ParamValue::Vec2(self.resolution),
-            "clearColor" => ParamValue::Color([self.clear_color.r, self.clear_color.g, self.clear_color.b]),
-            "bloomTintColors" => ParamValue::Floats(self.tint_colors.iter().flatten().copied().collect()),
+            "clearColor" => {
+                ParamValue::Color([self.clear_color.r, self.clear_color.g, self.clear_color.b])
+            }
+            "bloomTintColors" => {
+                ParamValue::Floats(self.tint_colors.iter().flatten().copied().collect())
+            }
             _ => return None,
         })
     }
@@ -293,7 +310,14 @@ impl Pass for BloomPass {
         self.height = height.max(1);
     }
 
-    fn render(&mut self, ctx: &mut PassContext<'_, '_>, _write: &Target, read: &Target, _d: f32, _m: bool) {
+    fn render(
+        &mut self,
+        ctx: &mut PassContext<'_, '_>,
+        _write: &Target,
+        read: &Target,
+        _d: f32,
+        _m: bool,
+    ) {
         let (w, h) = (self.width, self.height);
         let mut weights = vec![[0f32; 4]; 32];
         for (i, k) in self.kernel.iter().enumerate().take(128) {
@@ -304,12 +328,16 @@ impl Pass for BloomPass {
         let n = self.kernel_size as f32;
         let x = ctx.target(&mut self.x, w, h);
         ctx.fx(
-            Fx::new(kinds::CONVOLUTION).input(read).p2([step, 0.0, n, 0.0]),
+            Fx::new(kinds::CONVOLUTION)
+                .input(read)
+                .p2([step, 0.0, n, 0.0]),
             Dest::Target(&x),
         );
         let y = ctx.target(&mut self.y, w, h);
         ctx.fx(
-            Fx::new(kinds::CONVOLUTION).input(&x).p2([0.0, step, n, 0.0]),
+            Fx::new(kinds::CONVOLUTION)
+                .input(&x)
+                .p2([0.0, step, n, 0.0]),
             Dest::Target(&y),
         );
         if self.state.clear {

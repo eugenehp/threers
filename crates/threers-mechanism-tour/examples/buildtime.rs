@@ -66,7 +66,11 @@ fn main() {
             total_tris += tris;
             // A part costing more than a few milliseconds is almost always two
             // solids sharing a face rather than overlapping.
-            let flag = if ms > 40.0 { "   <-- look for a shared face" } else { "" };
+            let flag = if ms > 40.0 {
+                "   <-- look for a shared face"
+            } else {
+                ""
+            };
             println!("  {:<12} {ms:>8.0} ms  {tris:>6} triangles{flag}", p.name);
         }
     }

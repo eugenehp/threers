@@ -230,14 +230,21 @@ f 1 2 3\nusemtl red\nf 1 3 4\nf 2 5 6 3\nusemtl blue\nusemtl green\n\
 f 1 2 4\nusemtl red\nf 5 6 3\n";
         let (g, names) = ObjLoader::parse_with_materials(src);
         assert_eq!(names, ["red", "green", "red"]);
-        let groups: Vec<(u32, u32, u32)> =
-            g.groups.iter().map(|g| (g.start, g.count, g.material_index)).collect();
+        let groups: Vec<(u32, u32, u32)> = g
+            .groups
+            .iter()
+            .map(|g| (g.start, g.count, g.material_index))
+            .collect();
         assert_eq!(groups, [(0, 12, 0), (12, 3, 1), (15, 3, 2)]);
         let mesh = ObjLoader::parse_mesh(src);
         assert_eq!(mesh.materials.len(), 3);
-        assert!(matches!(&*mesh.materials[0], crate::materials::Material::Phong(_)));
+        assert!(matches!(
+            &*mesh.materials[0],
+            crate::materials::Material::Phong(_)
+        ));
         // One material: no groups, no array.
-        let (g1, n1) = ObjLoader::parse_with_materials("v 0 0 0\nv 1 0 0\nv 0 1 0\nusemtl a\nf 1 2 3\n");
+        let (g1, n1) =
+            ObjLoader::parse_with_materials("v 0 0 0\nv 1 0 0\nv 0 1 0\nusemtl a\nf 1 2 3\n");
         assert!(g1.groups.is_empty());
         assert_eq!(n1, ["a"]);
         assert!(!ObjLoader::parse_mesh("v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n").is_multi_material());

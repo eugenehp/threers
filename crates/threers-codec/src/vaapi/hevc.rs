@@ -3,7 +3,10 @@
 //! `VAIQMatrixBufferHEVC` and `VASliceParameterBufferHEVC` (libva's
 //! `va_dec_hevc.h`).
 
-use super::{Device, Id, Session, BUF_IQ_MATRIX, BUF_PICTURE_PARAMETER, BUF_SLICE_DATA, BUF_SLICE_PARAMETER, INVALID_ID, PROFILE_HEVC_MAIN, PROFILE_HEVC_MAIN10, RT_FORMAT_YUV420, RT_FORMAT_YUV420_10};
+use super::{
+    Device, Id, Session, BUF_IQ_MATRIX, BUF_PICTURE_PARAMETER, BUF_SLICE_DATA, BUF_SLICE_PARAMETER,
+    INVALID_ID, PROFILE_HEVC_MAIN, PROFILE_HEVC_MAIN10, RT_FORMAT_YUV420, RT_FORMAT_YUV420_10,
+};
 use crate::decode::hevc::params::{ScalingFactors, SliceType, Sps};
 use crate::decode::hevc::{AccelSlice, HevcAccel, Result};
 use crate::decode::{ColorInfo, DecodedFrame};
@@ -26,7 +29,12 @@ struct VaPicture {
 const _: () = assert!(std::mem::size_of::<VaPicture>() == 28);
 
 impl VaPicture {
-    const INVALID: VaPicture = VaPicture { picture_id: INVALID_ID, pic_order_cnt: 0, flags: PIC_INVALID, reserved: [0; 4] };
+    const INVALID: VaPicture = VaPicture {
+        picture_id: INVALID_ID,
+        pic_order_cnt: 0,
+        flags: PIC_INVALID,
+        reserved: [0; 4],
+    };
 }
 
 /// `VAPictureParameterBufferHEVC`.
@@ -126,7 +134,12 @@ struct SliceParams {
 const _: () = assert!(std::mem::size_of::<SliceParams>() == 264);
 // `delta_luma_weight_l0` at 66, `ChromaOffsetL1` at 216.
 const _: () = assert!(std::mem::offset_of!(SliceParams, weights) == 66);
-const _: () = assert!(std::mem::offset_of!(SliceParams, weights) + std::mem::size_of::<ListWeights>() + std::mem::offset_of!(ListWeights, chroma_offset) == 216);
+const _: () = assert!(
+    std::mem::offset_of!(SliceParams, weights)
+        + std::mem::size_of::<ListWeights>()
+        + std::mem::offset_of!(ListWeights, chroma_offset)
+        == 216
+);
 
 /// One list's prediction weights in `VASliceParameterBufferHEVC`.
 #[repr(C)]
@@ -159,15 +172,28 @@ pub(crate) struct VaHevc {
 
 impl VaHevc {
     pub(crate) fn new(dev: Device) -> Self {
-        VaHevc { dev, session: None, target: INVALID_ID, rf_index: Vec::new(), pending: None }
+        VaHevc {
+            dev,
+            session: None,
+            target: INVALID_ID,
+            rf_index: Vec::new(),
+            pending: None,
+        }
     }
 
     fn session(&mut self, sps: &Sps) -> Result<()> {
-        if sps.chroma_format_idc != 1 || sps.bit_depth_y != sps.bit_depth_c || !(8..=10).contains(&sps.bit_depth_y) {
+        if sps.chroma_format_idc != 1
+            || sps.bit_depth_y != sps.bit_depth_c
+            || !(8..=10).contains(&sps.bit_depth_y)
+        {
             return Err("the VAAPI HEVC path decodes 8- and 10-bit 4:2:0 only".into());
         }
         let deep = sps.bit_depth_y > 8;
-        let (profile, rt) = if deep { (PROFILE_HEVC_MAIN10, RT_FORMAT_YUV420_10) } else { (PROFILE_HEVC_MAIN, RT_FORMAT_YUV420) };
+        let (profile, rt) = if deep {
+            (PROFILE_HEVC_MAIN10, RT_FORMAT_YUV420_10)
+        } else {
+            (PROFILE_HEVC_MAIN, RT_FORMAT_YUV420)
+        };
         let key = (sps.width, sps.height, profile, rt);
         if self.session.as_ref().is_some_and(|s| s.key == key) {
             return Ok(());
@@ -176,14 +202,19 @@ impl VaHevc {
             s.destroy(&self.dev);
         }
         let n = (sps.max_dec_pic_buffering as usize + 3).clamp(6, 20);
-        self.session = Some(Session::new(&self.dev, profile, rt, sps.width, sps.height, n)?);
+        self.session = Some(Session::new(
+            &self.dev, profile, rt, sps.width, sps.height, n,
+        )?);
         Ok(())
     }
 
     fn submit(&mut self, mut sp: SliceParams, data: &[u8], last: bool) -> Result<()> {
         sp.long_slice_flags |= last as u32;
         let (dev, ses) = (&self.dev, self.session.as_mut().ok_or("no VA context")?);
-        let mut ids = [ses.buffer(dev, BUF_SLICE_PARAMETER, &sp)?, ses.raw_buffer(dev, BUF_SLICE_DATA, data.len(), data.as_ptr().cast())?];
+        let mut ids = [
+            ses.buffer(dev, BUF_SLICE_PARAMETER, &sp)?,
+            ses.raw_buffer(dev, BUF_SLICE_DATA, data.len(), data.as_ptr().cast())?,
+        ];
         ses.render(dev, &mut ids)
     }
 
@@ -195,12 +226,19 @@ impl VaHevc {
         self.target = ses.claim(s.poc as i64, |k| dpb.iter().any(|p| p.poc as i64 == k))?;
 
         let mut pp: PictureParams = unsafe { std::mem::zeroed() };
-        pp.curr_pic = VaPicture { picture_id: self.target, pic_order_cnt: s.poc, flags: 0, reserved: [0; 4] };
+        pp.curr_pic = VaPicture {
+            picture_id: self.target,
+            pic_order_cnt: s.poc,
+            flags: 0,
+            reserved: [0; 4],
+        };
         pp.reference_frames = [VaPicture::INVALID; 15];
         self.rf_index = vec![0xff; dpb.len()];
         let mut n = 0;
         for (i, p) in dpb.iter().enumerate() {
-            let Some(id) = ses.surface_of(p.poc as i64) else { continue };
+            let Some(id) = ses.surface_of(p.poc as i64) else {
+                continue;
+            };
             if n == 15 {
                 break;
             }
@@ -212,7 +250,12 @@ impl VaHevc {
             } else if s.lt_curr.contains(&i) {
                 flags |= PIC_LT_CURR;
             }
-            pp.reference_frames[n] = VaPicture { picture_id: id, pic_order_cnt: p.poc, flags, reserved: [0; 4] };
+            pp.reference_frames[n] = VaPicture {
+                picture_id: id,
+                pic_order_cnt: p.poc,
+                flags,
+                reserved: [0; 4],
+            };
             self.rf_index[i] = n as u8;
             n += 1;
         }
@@ -245,7 +288,8 @@ impl VaHevc {
             pp.pcm_sample_bit_depth_luma_minus1 = (sps.pcm_bit_depth_y - 1) as u8;
             pp.pcm_sample_bit_depth_chroma_minus1 = (sps.pcm_bit_depth_c - 1) as u8;
             pp.log2_min_pcm_luma_coding_block_size_minus3 = (sps.log2_min_pcm - 3) as u8;
-            pp.log2_diff_max_min_pcm_luma_coding_block_size = (sps.log2_max_pcm - sps.log2_min_pcm) as u8;
+            pp.log2_diff_max_min_pcm_luma_coding_block_size =
+                (sps.log2_max_pcm - sps.log2_min_pcm) as u8;
         }
         pp.log2_min_luma_coding_block_size_minus3 = (sps.log2_min_cb - 3) as u8;
         pp.log2_diff_max_min_luma_coding_block_size = (sps.log2_ctb - sps.log2_min_cb) as u8;
@@ -288,8 +332,10 @@ impl VaHevc {
         pp.log2_max_pic_order_cnt_lsb_minus4 = (sps.log2_max_poc_lsb - 4) as u8;
         pp.num_short_term_ref_pic_sets = sps.st_rps.len() as u8;
         pp.num_long_term_ref_pic_sps = sps.lt_ref_pics.len() as u8;
-        pp.num_ref_idx_l0_default_active_minus1 = pps.num_ref_idx_default[0].saturating_sub(1) as u8;
-        pp.num_ref_idx_l1_default_active_minus1 = pps.num_ref_idx_default[1].saturating_sub(1) as u8;
+        pp.num_ref_idx_l0_default_active_minus1 =
+            pps.num_ref_idx_default[0].saturating_sub(1) as u8;
+        pp.num_ref_idx_l1_default_active_minus1 =
+            pps.num_ref_idx_default[1].saturating_sub(1) as u8;
         pp.pps_beta_offset_div2 = (pps.beta_offset / 2) as i8;
         pp.pps_tc_offset_div2 = (pps.tc_offset / 2) as i8;
         pp.num_extra_slice_header_bits = pps.extra_slice_header_bits as u8;
@@ -316,7 +362,11 @@ fn iq_matrix(f: &ScalingFactors) -> IqMatrix {
             let (y, x) = (i / 8, i % 8);
             // (0, 0) of a 16×16 or 32×32 matrix holds the DC; its neighbour
             // carries the coded value.
-            if i == 0 && n > 8 { m[1] } else { m[y * rep * n + x * rep] }
+            if i == 0 && n > 8 {
+                m[1]
+            } else {
+                m[y * rep * n + x * rep]
+            }
         })
     };
     for m in 0..6 {
@@ -372,7 +422,11 @@ impl HevcAccel for VaHevc {
             | (sh.deblocking_disabled as u32) << 11
             | (sh.collocated_from_l0 as u32) << 12
             | (sh.loop_filter_across_slices as u32) << 13;
-        sp.collocated_ref_idx = if sh.temporal_mvp { sh.collocated_ref_idx as u8 } else { 0xff };
+        sp.collocated_ref_idx = if sh.temporal_mvp {
+            sh.collocated_ref_idx as u8
+        } else {
+            0xff
+        };
         sp.num_ref_idx_l0_active_minus1 = sh.num_ref_idx[0].saturating_sub(1) as u8;
         sp.num_ref_idx_l1_active_minus1 = sh.num_ref_idx[1].saturating_sub(1) as u8;
         sp.slice_qp_delta = sh.qp_delta as i8;
@@ -414,12 +468,19 @@ impl HevcAccel for VaHevc {
 
     fn frame(&mut self, poc: i32, sps: &Sps) -> Result<DecodedFrame> {
         let ses = self.session.as_ref().ok_or("no VA context")?;
-        let surface = ses.surface_of(poc as i64).ok_or("no VA surface holds that picture")?;
+        let surface = ses
+            .surface_of(poc as i64)
+            .ok_or("no VA surface holds that picture")?;
         let (w, h, ..) = ses.key;
         let deep = sps.bit_depth_y > 8;
         let crop = sps.crop.map(|v| v as usize);
-        let color = ColorInfo::from_vui(sps.matrix_coefficients, sps.full_range, sps.height - sps.crop[2] - sps.crop[3]);
-        self.dev.read_frame(surface, w as usize, h as usize, deep, crop, color)
+        let color = ColorInfo::from_vui(
+            sps.matrix_coefficients,
+            sps.full_range,
+            sps.height - sps.crop[2] - sps.crop[3],
+        );
+        self.dev
+            .read_frame(surface, w as usize, h as usize, deep, crop, color)
     }
 }
 

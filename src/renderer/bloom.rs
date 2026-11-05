@@ -311,7 +311,9 @@ impl Bloom {
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("threers bloom (raster)"),
-            source: wgpu::ShaderSource::Wgsl(BLOOM.wgsl("BloomParams").expect("bloom translates").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                BLOOM.wgsl("BloomParams").expect("bloom translates").into(),
+            ),
         });
         let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("threers bloom raster bgl"),
@@ -518,7 +520,8 @@ impl Bloom {
     }
 }
 
-const SHADER: &str = crate::wgsl!(r#"
+const SHADER: &str = crate::wgsl!(
+    r#"
 struct P { threshold : f32, radius : f32, dx : f32, dy : f32 };
 @group(0) @binding(0) var src : texture_2d<f32>;
 @group(0) @binding(1) var dst : texture_storage_2d<rgba16float, write>;
@@ -574,7 +577,8 @@ fn blur(@builtin(global_invocation_id) gid : vec3<u32>) {
     }
     textureStore(dst, vec2<i32>(gid.xy), vec4<f32>(acc, 1.0));
 }
-"#);
+"#
+);
 
 /// The same arithmetic as [`SHADER`], as fullscreen draws: the path WebGL2
 /// takes, and the native Metal backend's bloom — one [`passes!`](crate::passes)

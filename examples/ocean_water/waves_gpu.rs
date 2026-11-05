@@ -19,14 +19,14 @@
 //! nothing here may touch `geometry_version` after setup — the mesh is driven
 //! one way, from this pass.
 
-use threers::marks::gpu;
 use std::sync::Arc;
+use threers::marks::gpu;
 
-use threers::{BufferGeometry, Renderer};
-#[cfg(not(target_arch = "wasm32"))]
-use threers::HeadlessRenderer;
 #[cfg(not(target_arch = "wasm32"))]
 use threers::renderer::WindowRenderer;
+#[cfg(not(target_arch = "wasm32"))]
+use threers::HeadlessRenderer;
+use threers::{BufferGeometry, Renderer};
 
 use crate::ocean_fft::{Cascades, OceanFft};
 

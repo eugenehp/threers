@@ -14,12 +14,19 @@ use threers::volume::{Data3DTexture, GpuVolume, VolumeFormat};
 
 const N: u32 = 64;
 
-fn render(r: &mut threers::HeadlessRenderer, vol: Option<threers::marks::gpu::TextureView>, fragment: &str) -> Vec<u8> {
+fn render(
+    r: &mut threers::HeadlessRenderer,
+    vol: Option<threers::marks::gpu::TextureView>,
+    fragment: &str,
+) -> Vec<u8> {
     let mut m = ShaderMaterial::new(fragment);
     m.tone_mapped = false;
     m.volumes = vol.into_iter().collect();
     let mut scene = Scene::new();
-    scene.add(Object3D::mesh(Mesh::new(PlaneGeometry::new(2.0, 2.0), Material::Shader(m))));
+    scene.add(Object3D::mesh(Mesh::new(
+        PlaneGeometry::new(2.0, 2.0),
+        Material::Shader(m),
+    )));
     let mut cam = OrthographicCamera::new(-1.0, 1.0, 1.0, -1.0, 0.1, 10.0);
     cam.position = Vector3::new(0.0, 0.0, 5.0);
     cam.look_at(Vector3::ZERO);
@@ -31,7 +38,11 @@ fn row(rgba: &[u8]) -> Vec<f32> {
     (0..N)
         .map(|x| {
             let c = rgba[(((N / 2) * N + x) * 4) as usize] as f32 / 255.0;
-            if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+            if c <= 0.04045 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            }
         })
         .collect()
 }
@@ -58,7 +69,11 @@ fn a_shader_material_reads_a_3d_texture() {
     ));
     for (q, want) in [0.0f32, 85.0, 170.0, 255.0].iter().enumerate() {
         let got = exact[(q as u32 * N / 4 + N / 8) as usize];
-        assert!((got - want / 255.0).abs() < 0.01, "textureLoad quarter {q}: {got}, want {}", want / 255.0);
+        assert!(
+            (got - want / 255.0).abs() < 0.01,
+            "textureLoad quarter {q}: {got}, want {}",
+            want / 255.0
+        );
     }
 
     // filtered: halfway between texel centres 1 and 2 reads their mean, and
@@ -72,9 +87,20 @@ fn a_shader_material_reads_a_3d_texture() {
         }",
     ));
     let mid = (filtered[(N / 2 - 1) as usize] + filtered[(N / 2) as usize]) / 2.0;
-    assert!((mid - 127.5 / 255.0).abs() < 0.02, "filtered midpoint {mid}");
-    assert!(filtered[0] < 0.02, "the left edge wrapped round to the bright end: {}", filtered[0]);
-    assert!(filtered[(N - 1) as usize] > 0.98, "the right edge: {}", filtered[(N - 1) as usize]);
+    assert!(
+        (mid - 127.5 / 255.0).abs() < 0.02,
+        "filtered midpoint {mid}"
+    );
+    assert!(
+        filtered[0] < 0.02,
+        "the left edge wrapped round to the bright end: {}",
+        filtered[0]
+    );
+    assert!(
+        filtered[(N - 1) as usize] > 0.98,
+        "the right edge: {}",
+        filtered[(N - 1) as usize]
+    );
 
     // an empty slot is the 1x1x1 placeholder, zero
     let empty = row(&render(
@@ -85,5 +111,9 @@ fn a_shader_material_reads_a_3d_texture() {
             return vec4<f32>(v, 1.0 - v, 0.0, 1.0);
         }",
     ));
-    assert!(empty[(N / 2) as usize] < 0.01, "the empty slot read {}", empty[(N / 2) as usize]);
+    assert!(
+        empty[(N / 2) as usize] < 0.01,
+        "the empty slot read {}",
+        empty[(N / 2) as usize]
+    );
 }

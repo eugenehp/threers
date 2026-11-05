@@ -2,10 +2,9 @@
 //! and decodes RGB/RGBA HALF or FLOAT scanlines, either clipped to 8-bit RGBA
 //! (`parse`) or kept as half-float (`parse_hdr`).
 //!
-//! Handles the codecs almost every EXR in the wild actually uses: `NONE`,
-//! `ZIPS` (one scanline per chunk) and `ZIP` (sixteen), the last via the
-//! crate's own DEFLATE decoder plus EXR's byte-interleave and delta predictor.
-//! `PIZ`, `B44` and `DWA` return the matching `Unsupported` variant.
+//! Handles every scanline compressor: `NONE`, `RLE`, `ZIPS`, `ZIP`, `PIZ`,
+//! `PXR24`, `B44`, `B44A`, `DWAA` and `DWAB`, the ones beyond ZIP living in
+//! [`exr_codec`](super::exr_codec) and [`exr_dwa`](super::exr_dwa).
 
 use crate::textures::{Texture, TextureFormat};
 
@@ -15,14 +14,13 @@ pub struct ExrLoader;
 pub enum ExrError {
     BadMagic,
     BadHeader,
-    /// Generic fallback for `UnsupportedPiz` / `UnsupportedB44` / `UnsupportedDwa`
-    /// when downstream code doesn't need the specific tag.
+    /// A compression code this reader does not know.
     UnsupportedCompression,
-    /// PIZ wavelet + Huffman. Complex; needs ~1k LOC port. Not implemented.
+    /// No longer returned: PIZ decodes. Kept so matches on it still compile.
     UnsupportedPiz,
-    /// B44/B44A 16×16 fixed-rate block encoding. Not implemented.
+    /// No longer returned: B44 decodes.
     UnsupportedB44,
-    /// DWA (DreamWorks) JPEG-like codec. Not implemented.
+    /// No longer returned: DWA decodes.
     UnsupportedDwa,
     UnsupportedChannel,
 }
@@ -61,7 +59,7 @@ impl ExrLoader {
         // until a single null byte.
         let mut data_window: Option<[i32; 4]> = None;
         let mut compression: u8 = 0; // 0 == NONE
-        let mut channels_present: Vec<(String, u8)> = Vec::new(); // (name, pixel_type)
+        let mut channels_present: Vec<(String, u8, bool)> = Vec::new(); // (name, pixel_type, pLinear)
         loop {
             if pos >= bytes.len() {
                 return Err(ExrError::BadHeader);
@@ -128,21 +126,18 @@ impl ExrLoader {
                             break;
                         }
                         let pixel_type = data[k];
+                        let p_linear = data[k + 4] != 0;
                         k += 16;
-                        channels_present.push((cname, pixel_type));
+                        channels_present.push((cname, pixel_type, p_linear));
                     }
                 }
                 _ => {}
             }
         }
-        // 0 = NONE, 1 = RLE (TODO), 2 = ZIPS, 3 = ZIP, 4 = PIZ,
+        // 0 = NONE, 1 = RLE, 2 = ZIPS, 3 = ZIP, 4 = PIZ,
         // 5 = PXR24, 6 = B44, 7 = B44A, 8 = DWAA, 9 = DWAB.
-        match compression {
-            0 | 2 | 3 => {}
-            4 => return Err(ExrError::UnsupportedPiz),
-            6 | 7 => return Err(ExrError::UnsupportedB44),
-            8 | 9 => return Err(ExrError::UnsupportedDwa),
-            _ => return Err(ExrError::UnsupportedCompression),
+        if compression > 9 {
+            return Err(ExrError::UnsupportedCompression);
         }
         let Some(dw) = data_window else {
             return Err(ExrError::BadHeader);
@@ -157,16 +152,21 @@ impl ExrLoader {
         let pixel_type_of = |name: &str| -> Option<u8> {
             channels_present
                 .iter()
-                .find(|(n, _)| n == name)
-                .map(|(_, t)| *t)
+                .find(|(n, _, _)| n == name)
+                .map(|(_, t, _)| *t)
         };
         let r_type = pixel_type_of("R").ok_or(ExrError::UnsupportedChannel)?;
         let g_type = pixel_type_of("G").ok_or(ExrError::UnsupportedChannel)?;
         let b_type = pixel_type_of("B").ok_or(ExrError::UnsupportedChannel)?;
         let a_type = pixel_type_of("A");
 
-        // ZIP packs 16 scanlines into one chunk; NONE and ZIPS store one each.
-        let scanlines_per_block = if compression == 3 { 16 } else { 1 };
+        // Scanlines in a chunk, by compressor.
+        let scanlines_per_block = match compression {
+            3 | 5 => 16,
+            4 | 6 | 7 | 8 => 32,
+            9 => 256,
+            _ => 1,
+        };
 
         // Skip the chunk-offsets table: one u64 per *chunk*, not per scanline.
         // Assuming one per scanline overshoots a ZIP file by 15/16ths of the
@@ -181,8 +181,7 @@ impl ExrLoader {
         let sample_size = |t: u8| -> usize {
             match t {
                 1 => 2,
-                2 => 4,
-                _ => 0,
+                _ => 4,
             }
         };
         let read_sample = |t: u8, data: &[u8], off: usize| -> f32 {
@@ -199,15 +198,15 @@ impl ExrLoader {
         // used to be re-derived per scanline — a sort of the channel list per
         // chunk and a `HashMap` with `String` keys built and thrown away for
         // every one of four thousand rows.
-        let mut sorted_chans: Vec<&(String, u8)> = channels_present.iter().collect();
+        let mut sorted_chans: Vec<&(String, u8, bool)> = channels_present.iter().collect();
         sorted_chans.sort_by(|a, b| a.0.cmp(&b.0));
         let bytes_per_scanline: usize = sorted_chans
             .iter()
-            .map(|(_, t)| sample_size(*t) * width)
+            .map(|(_, t, _)| sample_size(*t) * width)
             .sum();
         let offset_of = |want: &str| -> usize {
             let mut cursor = 0usize;
-            for (name, t) in &sorted_chans {
+            for (name, t, _) in &sorted_chans {
                 if name == want {
                     return cursor;
                 }
@@ -215,6 +214,14 @@ impl ExrLoader {
             }
             0
         };
+        let channels: Vec<super::exr_codec::Channel> = sorted_chans
+            .iter()
+            .map(|(name, pixel_type, p_linear)| super::exr_codec::Channel {
+                name,
+                pixel_type: *pixel_type,
+                p_linear: *p_linear,
+            })
+            .collect();
         let (r_off, g_off, b_off, a_off) = (
             offset_of("R"),
             offset_of("G"),
@@ -226,12 +233,27 @@ impl ExrLoader {
         // independent deflate stream covering a known band of scanlines, so
         // once their extents are known they can be decoded in parallel — and
         // decompression is the whole cost here.
-        let mut blocks: Vec<&[u8]> = Vec::new();
+        // A chunk says which scanlines it holds: a file written in decreasing
+        // or random line order stores them in that order.
+        let mut blocks: Vec<&[u8]> = vec![&[]; height.div_ceil(scanlines_per_block)];
         {
             let mut scan = pos;
-            let mut y = 0usize;
-            while y < height {
+            for _ in 0..blocks.len() {
                 if scan + 8 > bytes.len() {
+                    return Err(ExrError::BadHeader);
+                }
+                let y = i32::from_le_bytes([
+                    bytes[scan],
+                    bytes[scan + 1],
+                    bytes[scan + 2],
+                    bytes[scan + 3],
+                ]);
+                let row = y as i64 - dw[1] as i64;
+                if row < 0 || row % scanlines_per_block as i64 != 0 {
+                    return Err(ExrError::BadHeader);
+                }
+                let index = row as usize / scanlines_per_block;
+                if index >= blocks.len() {
                     return Err(ExrError::BadHeader);
                 }
                 let block_size = u32::from_le_bytes([
@@ -244,24 +266,32 @@ impl ExrLoader {
                 if scan + block_size > bytes.len() {
                     return Err(ExrError::BadHeader);
                 }
-                blocks.push(&bytes[scan..scan + block_size]);
+                blocks[index] = &bytes[scan..scan + block_size];
                 scan += block_size;
-                y += scanlines_per_block;
             }
         }
 
         let mut rgba: Vec<u8> = vec![0u8; width * height * bpp];
         let chunk_bytes = scanlines_per_block * width * bpp;
         let decode_block = |block_compressed: &[u8], out: &mut [u8], first_y: usize| {
-            let block: Vec<u8> = if compression == 0 {
+            let scanline_count = scanlines_per_block.min(height - first_y);
+            // A chunk that compression would not have shrunk is stored as it is.
+            let block: Vec<u8> = if compression == 0
+                || block_compressed.len() == scanline_count * bytes_per_scanline
+            {
                 block_compressed.to_vec()
             } else {
-                match super::deflate::inflate_zlib(block_compressed) {
-                    Ok(v) => exr_reorder(&v),
-                    Err(_) => return,
+                match super::exr_codec::decompress(
+                    compression,
+                    block_compressed,
+                    &channels,
+                    width,
+                    scanline_count,
+                ) {
+                    Some(v) => v,
+                    None => return,
                 }
             };
-            let scanline_count = scanlines_per_block.min(height - first_y);
             for s in 0..scanline_count {
                 if (s + 1) * bytes_per_scanline > block.len() {
                     break;
@@ -344,7 +374,7 @@ impl ExrLoader {
 /// first, over the still-split buffer, and only then reassemble. Doing it the
 /// other way round decompresses cleanly and produces pure noise, which is the
 /// failure this ordering exists to avoid.
-fn exr_reorder(input: &[u8]) -> Vec<u8> {
+pub(super) fn exr_reorder(input: &[u8]) -> Vec<u8> {
     if input.is_empty() {
         return Vec::new();
     }
@@ -530,12 +560,8 @@ mod tests {
     #[test]
     fn unsupported_codecs_say_which_one() {
         assert!(matches!(
-            ExrLoader::parse(&synth_exr(4, 4, 4)),
-            Err(ExrError::UnsupportedPiz)
-        ));
-        assert!(matches!(
-            ExrLoader::parse(&synth_exr(4, 4, 8)),
-            Err(ExrError::UnsupportedDwa)
+            ExrLoader::parse(&synth_exr(4, 4, 10)),
+            Err(ExrError::UnsupportedCompression)
         ));
     }
 }

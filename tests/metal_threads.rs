@@ -87,10 +87,21 @@ fn scene() -> Scene {
     s.add(floor);
 
     let checker: Vec<u8> = (0..16)
-        .flat_map(|i| if (i + i / 4) % 2 == 0 { [255, 128, 0, 255] } else { [0, 64, 255, 255] })
+        .flat_map(|i| {
+            if (i + i / 4) % 2 == 0 {
+                [255, 128, 0, 255]
+            } else {
+                [0, 64, 255, 255]
+            }
+        })
         .collect();
     let mut mat = StandardMaterial::new(Color::WHITE);
-    mat.map = Some(Arc::new(Texture::new(4, 4, TextureFormat::Rgba8UnormSrgb, checker)));
+    mat.map = Some(Arc::new(Texture::new(
+        4,
+        4,
+        TextureFormat::Rgba8UnormSrgb,
+        checker,
+    )));
     let mut cube = Object3D::mesh(Mesh::new(BoxGeometry::new(1.0, 1.0, 1.0), mat.into()));
     cube.position = Vector3::new(0.0, 0.5, 0.0);
     cube.cast_shadow = true;
@@ -99,7 +110,10 @@ fn scene() -> Scene {
     let mut glass = BasicMaterial::new(Color::from_hex(0xff0000));
     glass.transparent = true;
     glass.opacity = 0.4;
-    let mut pane = Object3D::mesh(Mesh::new(PlaneGeometry::new(1.0, 1.0), Material::Basic(glass)));
+    let mut pane = Object3D::mesh(Mesh::new(
+        PlaneGeometry::new(1.0, 1.0),
+        Material::Basic(glass),
+    ));
     pane.position = Vector3::new(0.6, 0.8, 1.0);
     s.add(pane);
     s
@@ -128,7 +142,9 @@ impl Rig {
     }
 
     fn draw(&mut self, scene: &mut Scene) -> Vec<u8> {
-        self.renderer.render(scene, &camera(), &self.target.attachments()).unwrap();
+        self.renderer
+            .render(scene, &camera(), &self.target.attachments())
+            .unwrap();
         self.target.read_rgba(self.renderer.device()).unwrap()
     }
 }
@@ -143,7 +159,11 @@ fn reference(device: &MetalDevice) -> Vec<u8> {
 }
 
 fn headless() -> MetalHeadlessRenderer {
-    let mut hr = MetalHeadlessRenderer::builder().size(SIZE, SIZE).msaa(4).build().unwrap();
+    let mut hr = MetalHeadlessRenderer::builder()
+        .size(SIZE, SIZE)
+        .msaa(4)
+        .build()
+        .unwrap();
     hr.set_bloom(0.6, 0.5, 0.3);
     hr
 }
@@ -173,7 +193,11 @@ fn a_renderer_built_on_one_thread_draws_on_another() {
     let mut scene = scene();
     assert_eq!(rig.draw(&mut scene), want);
     let (mut rig, mut scene) = spawn(move || {
-        assert_eq!(rig.draw(&mut scene), want, "after moving to the render thread");
+        assert_eq!(
+            rig.draw(&mut scene),
+            want,
+            "after moving to the render thread"
+        );
         (rig, scene)
     })
     .join()
@@ -191,8 +215,9 @@ fn a_renderer_can_change_threads_every_frame() {
     // job system hands a render task to whichever thread is free.
     const WORKERS: usize = 3;
     const FRAMES: usize = 12;
-    let (senders, receivers): (Vec<_>, Vec<_>) =
-        (0..WORKERS).map(|_| mpsc::channel::<(Rig, Scene, usize)>()).unzip();
+    let (senders, receivers): (Vec<_>, Vec<_>) = (0..WORKERS)
+        .map(|_| mpsc::channel::<(Rig, Scene, usize)>())
+        .unzip();
     let (done_tx, done_rx) = mpsc::channel();
     let handles: Vec<_> = receivers
         .into_iter()
@@ -263,9 +288,13 @@ fn a_headless_renderer_moves_with_a_readback_in_flight() {
     let frames = |split: bool| {
         let mut hr = headless();
         let mut scene = scene();
-        let mut out: Vec<Vec<u8>> = (0..3).map(|_| hr.render_to_rgba(&mut scene, &camera()).unwrap()).collect();
+        let mut out: Vec<Vec<u8>> = (0..3)
+            .map(|_| hr.render_to_rgba(&mut scene, &camera()).unwrap())
+            .collect();
         let rest = |hr: &mut MetalHeadlessRenderer, scene: &mut Scene| {
-            (0..3).map(|_| hr.render_to_rgba(scene, &camera()).unwrap()).collect::<Vec<_>>()
+            (0..3)
+                .map(|_| hr.render_to_rgba(scene, &camera()).unwrap())
+                .collect::<Vec<_>>()
         };
         if split {
             out.extend(spawn(move || rest(&mut hr, &mut scene)).join().unwrap());
@@ -284,11 +313,15 @@ fn renderers_drop_cleanly_on_other_threads() {
     // Made here, dropped there — and the reverse — with their GPU work
     // possibly still running.
     let mut rig = Rig::new(&device);
-    rig.renderer.render(&mut scene(), &camera(), &rig.target.attachments()).unwrap();
+    rig.renderer
+        .render(&mut scene(), &camera(), &rig.target.attachments())
+        .unwrap();
     spawn(move || drop(rig)).join().unwrap();
     let rig = spawn(move || {
         let mut rig = Rig::new(&device);
-        rig.renderer.render(&mut scene(), &camera(), &rig.target.attachments()).unwrap();
+        rig.renderer
+            .render(&mut scene(), &camera(), &rig.target.attachments())
+            .unwrap();
         rig
     })
     .join()
@@ -315,7 +348,8 @@ fn a_surface_presents_from_a_render_thread() {
     spawn(move || {
         // Adopting the layer, sizing it and drawing are all render-thread work.
         let mut surface =
-            unsafe { MetalSurface::from_layer(&device, layer_ptr as *mut c_void, 64, 32, 4) }.unwrap();
+            unsafe { MetalSurface::from_layer(&device, layer_ptr as *mut c_void, 64, 32, 4) }
+                .unwrap();
         let mut renderer = MetalRenderer::with_device(device.clone()).unwrap();
         let mut scene = scene();
         let mut presented = 0;
@@ -324,7 +358,9 @@ fn a_surface_presents_from_a_render_thread() {
                 surface.resize(80, 40).unwrap();
             }
             if let Some(f) = surface.next_frame() {
-                renderer.render(&mut scene, &camera(), &f.attachments()).unwrap();
+                renderer
+                    .render(&mut scene, &camera(), &f.attachments())
+                    .unwrap();
                 presented += 1;
             }
         }
@@ -332,8 +368,12 @@ fn a_surface_presents_from_a_render_thread() {
         assert_eq!(surface.size(), (80, 40));
         // The surface itself can change threads too.
         spawn(move || {
-            let f = surface.next_frame().expect("drawable after moving the surface");
-            renderer.render(&mut scene, &camera(), &f.attachments()).unwrap();
+            let f = surface
+                .next_frame()
+                .expect("drawable after moving the surface");
+            renderer
+                .render(&mut scene, &camera(), &f.attachments())
+                .unwrap();
         })
         .join()
         .unwrap();
@@ -373,7 +413,8 @@ fn a_layer_that_is_not_metal_is_refused() {
     track();
     let Some(device) = device() else { return };
     let _pool = AutoreleasePool::new();
-    let plain = unsafe { msg0::<threers::metal::objc::Id>(get_class("CALayer\0"), get_sel("layer\0")) };
+    let plain =
+        unsafe { msg0::<threers::metal::objc::Id>(get_class("CALayer\0"), get_sel("layer\0")) };
     for layer in [plain, std::ptr::null_mut()] {
         let err = unsafe { MetalSurface::from_layer(&device, layer.cast(), 8, 8, 1) }.unwrap_err();
         assert!(
@@ -391,7 +432,12 @@ fn the_fluid_steps_on_another_thread() {
     use threers::metal::{fluid_shader_source, MetalFluid};
     let Some(_) = device() else { return };
     let device = MetalDevice::with_shader_source(&fluid_shader_source()).unwrap();
-    let config = FluidConfig { bloom: false, sunrays: false, colorful: false, ..FluidConfig::default() };
+    let config = FluidConfig {
+        bloom: false,
+        sunrays: false,
+        colorful: false,
+        ..FluidConfig::default()
+    };
     let run = |device: &MetalDevice, fluid: &mut MetalFluid| {
         for _ in 0..4 {
             fluid.step(device, 1.0 / 60.0).unwrap();
@@ -419,7 +465,11 @@ fn pool_frame(worker: &mut MetalWorker) -> (usize, Vec<u8>, usize) {
     // The scene is the worker's too, so its texture is the same object from
     // job to job and the renderer's upload cache can recognise it.
     let mut scene = worker.local::<Option<Scene>>().take().unwrap_or_else(scene);
-    let stats = worker.renderer().unwrap().render(&mut scene, &camera(), &attachments).unwrap();
+    let stats = worker
+        .renderer()
+        .unwrap()
+        .render(&mut scene, &camera(), &attachments)
+        .unwrap();
     *worker.local::<Option<Scene>>() = Some(scene);
     let target: &mut Option<MetalRenderTarget> = worker.local();
     let rgba = target.as_ref().unwrap().read_rgba(&device).unwrap();
@@ -451,7 +501,10 @@ fn a_pool_draws_the_same_frame_on_every_worker() {
 fn a_full_pool_refuses_or_waits() {
     track();
     let Some(device) = device() else { return };
-    let config = MetalRenderPoolConfig { queue_depth: 0, ..MetalRenderPoolConfig::with_threads(1) };
+    let config = MetalRenderPoolConfig {
+        queue_depth: 0,
+        ..MetalRenderPoolConfig::with_threads(1)
+    };
     let pool = MetalRenderPool::new(&device, config);
     let (started_tx, started_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel::<()>();
@@ -464,11 +517,17 @@ fn a_full_pool_refuses_or_waits() {
         .unwrap();
     started_rx.recv().unwrap();
     // The one worker is busy and there is no queue: drop the frame.
-    assert_eq!(pool.try_submit(|_: &mut MetalWorker| ()).err(), Some(MetalJobError::QueueFull));
+    assert_eq!(
+        pool.try_submit(|_: &mut MetalWorker| ()).err(),
+        Some(MetalJobError::QueueFull)
+    );
     release_tx.send(()).unwrap();
     assert_eq!(busy.wait(), Ok(7));
     // `submit` waits for the worker instead.
-    assert_eq!(pool.submit(pool_frame).unwrap().wait().unwrap().1, reference(&device));
+    assert_eq!(
+        pool.submit(pool_frame).unwrap().wait().unwrap().1,
+        reference(&device)
+    );
 }
 
 #[test]
@@ -485,7 +544,10 @@ fn a_panicking_job_does_not_take_its_worker_down() {
         .unwrap()
         .wait()
         .unwrap_err();
-    assert!(matches!(&err, MetalJobError::Panicked(m) if m == "mid-frame"), "{err}");
+    assert!(
+        matches!(&err, MetalJobError::Panicked(m) if m == "mid-frame"),
+        "{err}"
+    );
     // Same worker, fresh renderer: it uploads the texture again and draws the
     // same frame.
     let (_, rgba, uploads) = pool.submit(pool_frame).unwrap().wait().unwrap();
@@ -499,7 +561,10 @@ fn dropping_a_pool_finishes_its_queue() {
     let Some(device) = device() else { return };
     let pool = MetalRenderPool::new(
         &device,
-        MetalRenderPoolConfig { queue_depth: 8, ..MetalRenderPoolConfig::with_threads(2) },
+        MetalRenderPoolConfig {
+            queue_depth: 8,
+            ..MetalRenderPoolConfig::with_threads(2)
+        },
     );
     let jobs: Vec<_> = (0..8).map(|_| pool.submit(pool_frame).unwrap()).collect();
     drop(pool);
@@ -529,29 +594,49 @@ fn no_object_is_autoreleased_without_a_pool() {
         return;
     }
     let out = std::process::Command::new(std::env::current_exe().unwrap())
-        .args(["--skip", "no_object_is_autoreleased_without_a_pool", "--test-threads", "4", "--nocapture"])
+        .args([
+            "--skip",
+            "no_object_is_autoreleased_without_a_pool",
+            "--test-threads",
+            "4",
+            "--nocapture",
+        ])
         .env("OBJC_DEBUG_MISSING_POOLS", "YES")
         .env("THREERS_POOL_CHECK", "1")
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success(), "the rerun failed:\n{stderr}");
-    let ours: std::collections::HashSet<&str> =
-        stderr.lines().filter_map(|l| l.strip_prefix("THREERS_THREAD ")).collect();
-    assert!(ours.len() > 10, "the rerun named too few threads: {}", ours.len());
+    let ours: std::collections::HashSet<&str> = stderr
+        .lines()
+        .filter_map(|l| l.strip_prefix("THREERS_THREAD "))
+        .collect();
+    assert!(
+        ours.len() > 10,
+        "the rerun named too few threads: {}",
+        ours.len()
+    );
     // `objc[pid]: MISSING POOLS: (0x16d42f000) Object …` — the thread is the
     // parenthesised `pthread_t`.
     let missing: Vec<_> = stderr
         .lines()
         .filter(|l| l.contains("MISSING POOLS"))
         .filter(|l| {
-            l.split('(').nth(1).and_then(|r| r.split(')').next()).is_some_and(|t| ours.contains(t))
+            l.split('(')
+                .nth(1)
+                .and_then(|r| r.split(')').next())
+                .is_some_and(|t| ours.contains(t))
         })
         .collect();
     assert!(
         missing.is_empty(),
         "{} objects autoreleased with no pool, first:\n{}",
         missing.len(),
-        missing.iter().take(5).copied().collect::<Vec<_>>().join("\n")
+        missing
+            .iter()
+            .take(5)
+            .copied()
+            .collect::<Vec<_>>()
+            .join("\n")
     );
 }

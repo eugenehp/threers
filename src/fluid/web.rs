@@ -768,7 +768,10 @@ fn install_input(
                 let (w, h) = (app.config.width as f32, app.config.height as f32);
                 if let Some(v) = app.volume() {
                     let ratio = dpr();
-                    let at = ((e.offset_x() as f64 * ratio) as f32, (e.offset_y() as f64 * ratio) as f32);
+                    let at = (
+                        (e.offset_x() as f64 * ratio) as f32,
+                        (e.offset_y() as f64 * ratio) as f32,
+                    );
                     let ev = OrbitEvent {
                         dx: 0.0,
                         dy: 0.0,

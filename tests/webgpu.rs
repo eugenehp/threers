@@ -87,7 +87,10 @@ async fn views_renderer() -> (SharedViews, web_sys::HtmlCanvasElement) {
 async fn the_renderer_draws_a_lit_frame_on_webgpu() {
     let (shared, _canvas) = views_renderer().await;
     let mut renderer = shared.borrow_mut();
-    assert!(renderer.supports_compute(), "WebGPU reported no compute stage");
+    assert!(
+        renderer.supports_compute(),
+        "WebGPU reported no compute stage"
+    );
     let target = threers::wasm::WebRenderTarget::new(&renderer, 64, 64);
     let mut scene = threers::wasm::WebScene::new();
     let white = threers::wasm::WebColor::new(1.0, 1.0, 1.0);
@@ -116,7 +119,10 @@ async fn the_renderer_draws_a_lit_frame_on_webgpu() {
         .await
         .expect("read-back rejected");
     let pixels = js_sys::Uint8Array::new(&value).to_vec();
-    let lit = pixels.chunks(4).filter(|p| p[0] > 40 && p[0] > p[2] + 60).count();
+    let lit = pixels
+        .chunks(4)
+        .filter(|p| p[0] > 40 && p[0] > p[2] + 60)
+        .count();
     assert!(
         lit > 50,
         "only {lit} of {} pixels show the lit cube",

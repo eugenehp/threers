@@ -243,3 +243,17 @@ crates/threers-py/
   python/threers/     pure-Python package surface + `_native.pyi` stubs
   src/lib.rs          PyO3 module `threers._native`
 ```
+
+## Building meshes in code
+
+```python
+import math, threers
+
+m = threers.MeshBuilder()
+m.grid(80, 80, 40, 40, lambda x, z: math.sin(x * 0.2) * math.cos(z * 0.2))  # terrain, facing up
+m.append(threers.Geometry.box(1, 1, 1), position=(0, 2, 0))
+geometry = m.build()
+print(geometry.report())   # {'open_edges': ..., 'flipped_edges': ..., 'is_solid': ...}
+```
+
+`facing`, `ribbon` and `grid` take the side a surface should show, not a vertex order. `append` merges many shapes into one mesh.

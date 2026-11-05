@@ -109,7 +109,10 @@ mod tests {
         let p = HvccProfile::from_sps(&sps).unwrap();
         // The SPS codes only the Main compatibility flag; `main_420` also
         // declares Main 10 (0x60), as the spec recommends for Main.
-        let coded = HvccProfile { compat_flags: [0x40, 0, 0, 0], ..HvccProfile::main_420(enc.config().level_idc) };
+        let coded = HvccProfile {
+            compat_flags: [0x40, 0, 0, 0],
+            ..HvccProfile::main_420(enc.config().level_idc)
+        };
         assert_eq!(p, coded);
     }
 }

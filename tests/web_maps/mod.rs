@@ -170,17 +170,29 @@ async fn bump_and_light_maps_in_the_browser() {
     let mut sun = WebLight::directional(&WebColor::new(1.0, 1.0, 1.0), std::f32::consts::PI);
     sun.set_direction(1.0, 0.0, -1.0);
     let row = draw_lit(&mut renderer, &bumped, Some(sun)).await;
-    assert_eq!(row[N as usize / 2], [255, 255, 255], "the bumped normal faces the light");
+    assert_eq!(
+        row[N as usize / 2],
+        [255, 255, 255],
+        "the bumped normal faces the light"
+    );
 
     let mut lit = WebMaterial::lambert(&WebColor::new(1.0, 1.0, 1.0));
     lit.set_light_map_data(&WebDataTexture::new(1, 1, vec![0, 255, 0, 255]));
     lit.set_light_map_intensity(std::f32::consts::PI);
     let row = draw_lit(&mut renderer, &lit, None).await;
-    assert_eq!(row[N as usize / 2], [0, 255, 0], "the light map's green, exactly");
+    assert_eq!(
+        row[N as usize / 2],
+        [0, 255, 0],
+        "the light map's green, exactly"
+    );
 }
 
 /// [`draw`] with one light (or none) in place of the ambient light.
-async fn draw_lit(renderer: &mut WebRenderer, material: &WebMaterial, light: Option<WebLight>) -> Vec<[u8; 3]> {
+async fn draw_lit(
+    renderer: &mut WebRenderer,
+    material: &WebMaterial,
+    light: Option<WebLight>,
+) -> Vec<[u8; 3]> {
     renderer.set_render_target(0);
     renderer.reset_viewport();
     renderer.set_scissor_test(false);
@@ -233,7 +245,11 @@ async fn env_maps_in_the_browser() {
     assert_eq!(row[N as usize / 2], [255, 0, 255], "head-on: the +Z face");
     material.set_env_map_rotation(0.0, std::f32::consts::FRAC_PI_2, 0.0, "XYZ");
     let row = draw_lit(&mut renderer, &material, None).await;
-    assert_eq!(row[N as usize / 2], [255, 0, 0], "turned a quarter about y: the +X face");
+    assert_eq!(
+        row[N as usize / 2],
+        [255, 0, 0],
+        "turned a quarter about y: the +X face"
+    );
 }
 
 /// A MeshPhysicalMaterial variant — sheen, clearcoat with its own normal map,
@@ -246,14 +262,43 @@ async fn physical_maps_compile_and_draw_in_the_browser() {
     let (shared, _canvas) = super::views_renderer().await;
     let mut renderer = shared.borrow_mut();
     let mut material = WebMaterial::physical(&WebColor::new(0.6, 0.6, 0.6), 0.4, 0.0, 1.0, 0.2);
-    material.set_physical(1.0, 0.2, 1.5, 1.0, 1.0, 0.5, 1.0, 1.3, 100.0, 400.0, 0.5, 0.3, 0.0, 0.0, f32::INFINITY, 0.0);
+    material.set_physical(
+        1.0,
+        0.2,
+        1.5,
+        1.0,
+        1.0,
+        0.5,
+        1.0,
+        1.3,
+        100.0,
+        400.0,
+        0.5,
+        0.3,
+        0.0,
+        0.0,
+        f32::INFINITY,
+        0.0,
+    );
     let grey = || strip([200, 200, 200, 255], [200, 200, 200, 255], 0);
-    for name in ["sheenColorMap", "clearcoatNormalMap", "iridescenceMap", "anisotropyMap", "specularIntensityMap"] {
-        assert!(material.set_named_map_data(name, &grey()), "{name} is a Physical slot");
+    for name in [
+        "sheenColorMap",
+        "clearcoatNormalMap",
+        "iridescenceMap",
+        "anisotropyMap",
+        "specularIntensityMap",
+    ] {
+        assert!(
+            material.set_named_map_data(name, &grey()),
+            "{name} is a Physical slot"
+        );
     }
     let row = draw(&mut renderer, &material).await;
     let centre = row[N as usize / 2];
-    assert!(centre.iter().any(|&c| c > 20), "the physical variant drew nothing: {centre:?}");
+    assert!(
+        centre.iter().any(|&c| c > 20),
+        "the physical variant drew nothing: {centre:?}"
+    );
 }
 
 /// MeshToonMaterial's `gradientMap` in the browser: a light of intensity π
@@ -272,8 +317,15 @@ async fn toon_gradient_map_in_the_browser() {
     };
     let mut material = WebMaterial::toon(&WebColor::new(1.0, 1.0, 1.0));
     let plain = draw_lit(&mut renderer, &material, Some(light())).await;
-    assert_eq!(plain[N as usize / 2], [255, 255, 255], "no gradientMap: all of the light");
-    assert!(material.set_named_map_data("gradientMap", &strip(RED, GREEN, CLAMP)), "Toon has a gradientMap");
+    assert_eq!(
+        plain[N as usize / 2],
+        [255, 255, 255],
+        "no gradientMap: all of the light"
+    );
+    assert!(
+        material.set_named_map_data("gradientMap", &strip(RED, GREEN, CLAMP)),
+        "Toon has a gradientMap"
+    );
     let row = draw_lit(&mut renderer, &material, Some(light())).await;
     assert_eq!(row[N as usize / 2], [0, 255, 0], "the ramp's last texel");
 }

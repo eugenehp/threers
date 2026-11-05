@@ -1,0 +1,15 @@
+[package]
+name = "race-tauri"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "The threers-ecs race example in a Tauri window"
+
+# Its own workspace: Tauri stays out of the engine's dependency graph and lockfile.
+[workspace]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }

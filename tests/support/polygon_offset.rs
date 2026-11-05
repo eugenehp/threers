@@ -54,9 +54,15 @@ pub fn measure(render: &mut dyn FnMut(&mut Scene, &dyn Camera) -> Vec<u8>) -> [(
     let mut alone = scene(None);
     let base_id = alone.arena.get(alone.root).unwrap().children[0];
     alone.arena.get_mut(base_id).unwrap().visible = false;
-    let footprint: Vec<bool> = render(&mut alone, &cam).chunks(4).map(|p| p[2] > 128).collect();
+    let footprint: Vec<bool> = render(&mut alone, &cam)
+        .chunks(4)
+        .map(|p| p[2] > 128)
+        .collect();
     let mut out = [(0, 0); 2];
-    for (k, offset) in [None, Some(PolygonOffset::new(-1.0, -4.0))].into_iter().enumerate() {
+    for (k, offset) in [None, Some(PolygonOffset::new(-1.0, -4.0))]
+        .into_iter()
+        .enumerate()
+    {
         let rgba = render(&mut scene(offset), &cam);
         for (i, p) in rgba.chunks(4).enumerate() {
             let (x, y) = ((i as u32) % N, (i as u32) / N);
@@ -64,7 +70,10 @@ pub fn measure(render: &mut dyn FnMut(&mut Scene, &dyn Camera) -> Vec<u8>) -> [(
             let inside = (-2i32..=2).all(|dy| {
                 (-2i32..=2).all(|dx| {
                     let (xx, yy) = (x as i32 + dx, y as i32 + dy);
-                    xx >= 0 && yy >= 0 && xx < N as i32 && yy < N as i32
+                    xx >= 0
+                        && yy >= 0
+                        && xx < N as i32
+                        && yy < N as i32
                         && footprint[(yy as u32 * N + xx as u32) as usize]
                 })
             });

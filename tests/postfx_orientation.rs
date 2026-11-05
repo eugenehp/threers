@@ -26,9 +26,8 @@ use std::sync::Arc;
 
 use threers::renderer::{readback, PostFxCamera};
 use threers::{
-    BasicMaterial, BoxGeometry, Camera, Color, HeadlessRenderer, Material, Mesh,
-    NormalMaterial, Object3D, OrthographicCamera, PerspectiveCamera, PlaneGeometry, RenderTarget,
-    Scene, Vector3,
+    BasicMaterial, BoxGeometry, Camera, Color, HeadlessRenderer, Material, Mesh, NormalMaterial,
+    Object3D, OrthographicCamera, PerspectiveCamera, PlaneGeometry, RenderTarget, Scene, Vector3,
 };
 
 const W: u32 = 64;
@@ -51,7 +50,11 @@ fn headless() -> Option<HeadlessRenderer> {
 }
 
 /// A fresh target registered under `id`.
-fn target(r: &mut HeadlessRenderer, id: u32, format: threers::wgpu::TextureFormat) -> Arc<RenderTarget> {
+fn target(
+    r: &mut HeadlessRenderer,
+    id: u32,
+    format: threers::wgpu::TextureFormat,
+) -> Arc<RenderTarget> {
     let rt = Arc::new(RenderTarget::new(r.device(), W, H, format));
     r.renderer().register_render_target(id, &rt);
     rt
@@ -63,7 +66,10 @@ fn read(r: &HeadlessRenderer, rt: &RenderTarget) -> Vec<f32> {
     if rt.format == F16 {
         // Clamped as a display would: dot screen, for one, writes far
         // outside [0, 1] into a float target.
-        readback::as_f32(&bytes).into_iter().map(|v| v.clamp(0.0, 1.0)).collect()
+        readback::as_f32(&bytes)
+            .into_iter()
+            .map(|v| v.clamp(0.0, 1.0))
+            .collect()
     } else {
         bytes.iter().map(|&b| b as f32 / 255.0).collect()
     }
@@ -95,7 +101,10 @@ fn marker_quadrant(px: &[f32], w: u32, h: u32) -> String {
     if e[0] > 0.05 && e[0] > others * 1.5 {
         "top-left".into()
     } else {
-        format!("unclear: TL {:.3} TR {:.3} BL {:.3} BR {:.3}", q[0], q[1], q[2], q[3])
+        format!(
+            "unclear: TL {:.3} TR {:.3} BL {:.3} BR {:.3}",
+            q[0], q[1], q[2], q[3]
+        )
     }
 }
 
@@ -139,11 +148,23 @@ fn kinds() -> Vec<Case> {
     let glitch3 = [0.0, 0.0, 0.05, 0.0];
     vec![
         ("0 copy", 0, 0.0, [0.0; 4], [0.0; 4]),
-        ("0 copy, sRGB-decode (p2.y)", 0, 0.0, [0.0, 1.0, 0.0, 0.0], [0.0; 4]),
+        (
+            "0 copy, sRGB-decode (p2.y)",
+            0,
+            0.0,
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0; 4],
+        ),
         ("1 FXAA", 1, 0.0, [1.0 / w, 1.0 / h, 0.0, 0.0], [0.0; 4]),
         ("2 film", 2, 0.25, [0.5, 0.0, 0.0, 0.0], [0.0; 4]),
         ("3 dot screen", 3, 0.0, [1.57, 1.0, 0.5, 0.5], [0.0; 4]),
-        ("4 halftone", 4, 0.0, [4.0, 0.0, 1.0, 1.0], [pi / 12.0, pi / 6.0, pi / 4.0, 1.0]),
+        (
+            "4 halftone",
+            4,
+            0.0,
+            [4.0, 0.0, 1.0, 1.0],
+            [pi / 12.0, pi / 6.0, pi / 4.0, 1.0],
+        ),
         ("5 glitch", 5, 0.5, glitch2, glitch3),
         ("31 glitch, no snow", 31, 0.5, glitch2, glitch3),
         ("6 bloom threshold", 6, 0.0, [0.5, 0.1, 0.0, 0.0], [0.0; 4]),
@@ -155,14 +176,26 @@ fn kinds() -> Vec<Case> {
         ("14 SSAO composite", 14, 0.0, [0.0; 4], [0.0; 4]),
         ("15 SSAO multiply", 15, 0.0, [0.0; 4], [0.0; 4]),
         ("16 outline edge", 16, 0.0, [1.0, 1.0, 1.0, 1.0], [0.0; 4]),
-        ("17 outline overlay", 17, 0.0, [3.0, 0.0, 0.0, 0.0], [0.0; 4]),
+        (
+            "17 outline overlay",
+            17,
+            0.0,
+            [3.0, 0.0, 0.0, 0.0],
+            [0.0; 4],
+        ),
         ("18 outline blur h", 18, 0.0, [2.0, 0.0, 0.0, 0.0], [0.0; 4]),
         ("19 outline blur v", 19, 0.0, [2.0, 0.0, 0.0, 0.0], [0.0; 4]),
         ("20 bilinear resample", 20, 0.0, [0.0; 4], [0.0; 4]),
         ("21 afterimage", 21, 0.0, [0.95, 0.0, 0.0, 0.0], [0.0; 4]),
         ("22 transition", 22, 0.0, [0.0; 4], [0.0; 4]),
         ("24 pixelated", 24, 0.0, [4.0, 0.0, 0.0, 0.0], [0.0; 4]),
-        ("25 adaptive tone map", 25, 0.0, [0.6, 0.01, 16.0, 1.0], [0.0; 4]),
+        (
+            "25 adaptive tone map",
+            25,
+            0.0,
+            [0.6, 0.01, 16.0, 1.0],
+            [0.0; 4],
+        ),
         ("27 SAO", 27, 0.0, [0.5, 0.0, 0.0, 0.0], [0.0; 4]),
         ("28 SMAA", 28, 0.0, [0.0; 4], [0.0; 4]),
         ("30 output", 30, 0.0, [1.0, 0.0, 0.0, 0.0], [0.0; 4]),
@@ -178,10 +211,9 @@ fn every_post_fx_kind_keeps_the_marker_top_left() {
     let camera = front_ortho();
     let mut wrong = Vec::new();
     let mut checked = 0;
-    for (input_format, output_format, label) in [
-        (FORMAT, FORMAT, "rgba8 target"),
-        (F16, F16, "f16 target"),
-    ] {
+    for (input_format, output_format, label) in
+        [(FORMAT, FORMAT, "rgba8 target"), (F16, F16, "f16 target")]
+    {
         let input = target(&mut r, 1, input_format);
         r.renderer().render_to(&mut marker_scene(), &camera, &input);
         let rt_in = read(&r, &input);
@@ -201,16 +233,42 @@ fn every_post_fx_kind_keeps_the_marker_top_left() {
                 if (to_canvas || kind == 15) && input_format == F16 {
                     continue;
                 }
-                let (out_id, out_rt) = if to_canvas { (0, &canvas) } else { (2, &*output) };
+                let (out_id, out_rt) = if to_canvas {
+                    (0, &canvas)
+                } else {
+                    (2, &*output)
+                };
                 // Kind 15 multiplies onto what is there, so give it white.
                 if kind == 15 {
                     r.renderer().apply_postfx_by_id(
-                        1, out_id, &out_rt.color_view, 0, 0, 29, 0.0,
-                        [1.0; 4], [0.0; 4], W, H, false, PostFxCamera::default(),
+                        1,
+                        out_id,
+                        &out_rt.color_view,
+                        0,
+                        0,
+                        29,
+                        0.0,
+                        [1.0; 4],
+                        [0.0; 4],
+                        W,
+                        H,
+                        false,
+                        PostFxCamera::default(),
                     );
                 }
                 r.renderer().apply_postfx_by_id(
-                    1, out_id, &out_rt.color_view, 0, 0, kind, time, p2, p3, W, H, false,
+                    1,
+                    out_id,
+                    &out_rt.color_view,
+                    0,
+                    0,
+                    kind,
+                    time,
+                    p2,
+                    p3,
+                    W,
+                    H,
+                    false,
                     PostFxCamera::default(),
                 );
                 let px = read(&r, out_rt);
@@ -320,8 +378,11 @@ fn ssao_darkens_the_crease_where_it_is() {
     let ao = target(&mut r, 3, FORMAT);
     let canvas = RenderTarget::new(r.device(), W, H, FORMAT);
 
-    r.renderer()
-        .render_to(&mut crease_scene(|c| BasicMaterial::new(c).into()), &camera, &colour);
+    r.renderer().render_to(
+        &mut crease_scene(|c| BasicMaterial::new(c).into()),
+        &camera,
+        &colour,
+    );
     let colour_px = read(&r, &colour);
     let crease = crease_row(&colour_px, W / 4).expect("no wall/floor crease in the left half");
     assert!(
@@ -353,8 +414,19 @@ fn ssao_darkens_the_crease_where_it_is() {
     let mut failures = Vec::new();
     for (dest, out_id, out_rt) in [("target", 3u32, &*ao), ("canvas", 0, &canvas)] {
         r.renderer().apply_postfx_by_id(
-            1, out_id, &out_rt.color_view, 2, 2, 11, 0.0,
-            [0.0005, 0.1, 0.0, 0.0], [0.0; 4], W, H, false, cam.clone(),
+            1,
+            out_id,
+            &out_rt.color_view,
+            2,
+            2,
+            11,
+            0.0,
+            [0.0005, 0.1, 0.0, 0.0],
+            [0.0; 4],
+            W,
+            H,
+            false,
+            cam.clone(),
         );
         let px = read(&r, out_rt);
         let left = 2..W / 2 - 4;
@@ -379,7 +451,11 @@ fn ssao_darkens_the_crease_where_it_is() {
             failures.push(report);
         }
     }
-    assert!(failures.is_empty(), "SSAO misplaced:\n  {}", failures.join("\n  "));
+    assert!(
+        failures.is_empty(),
+        "SSAO misplaced:\n  {}",
+        failures.join("\n  ")
+    );
 }
 
 /// SSR (kind 12) puts a reflection below the object it reflects, in the same
@@ -416,11 +492,17 @@ fn ssr_reflects_below_the_object() {
     };
     let grey = Color::new(0.3, 0.3, 0.3);
     // World y ∈ [0.2, 0.8] is texture v ∈ [0.1, 0.4].
-    r.renderer()
-        .render_to(&mut block(Color::new(1.0, 0.0, 0.0), 0.6, 0.5, grey), &camera, &colour);
+    r.renderer().render_to(
+        &mut block(Color::new(1.0, 0.0, 0.0), 0.6, 0.5, grey),
+        &camera,
+        &colour,
+    );
     // Near (white) over world y ∈ [0.7, 0.8], texture v ∈ [0.1, 0.15].
-    r.renderer()
-        .render_to(&mut block(Color::WHITE, 0.1, 0.75, Color::BLACK), &camera, &depth);
+    r.renderer().render_to(
+        &mut block(Color::WHITE, 0.1, 0.75, Color::BLACK),
+        &camera,
+        &depth,
+    );
 
     let red_at = |px: &[f32], fx: f32, fy: f32| {
         let (x, y) = ((fx * W as f32) as u32, (fy * H as f32) as u32);
@@ -430,8 +512,19 @@ fn ssr_reflects_below_the_object() {
     let mut failures = Vec::new();
     for (dest, out_id, out_rt) in [("target", 3u32, &*out), ("canvas", 0, &canvas)] {
         r.renderer().apply_postfx_by_id(
-            1, out_id, &out_rt.color_view, 2, 0, 12, 0.0,
-            [0.5, 0.1, 1.0, 1.0], [0.0; 4], W, H, false, PostFxCamera::default(),
+            1,
+            out_id,
+            &out_rt.color_view,
+            2,
+            0,
+            12,
+            0.0,
+            [0.5, 0.1, 1.0, 1.0],
+            [0.0; 4],
+            W,
+            H,
+            false,
+            PostFxCamera::default(),
         );
         let px = read(&r, out_rt);
         let checks = [
@@ -452,7 +545,11 @@ fn ssr_reflects_below_the_object() {
             }
         }
     }
-    assert!(failures.is_empty(), "SSR misplaced:\n  {}", failures.join("\n  "));
+    assert!(
+        failures.is_empty(),
+        "SSR misplaced:\n  {}",
+        failures.join("\n  ")
+    );
 }
 
 /// The native `EffectComposer` keeps the marker top-left however many passes
@@ -471,14 +568,23 @@ fn native_composer_chains_keep_the_marker_top_left() {
         ("copy", vec![copy()]),
         ("copy, copy", vec![copy(), copy()]),
         ("fxaa", vec![fxaa()]),
-        ("unreal bloom, fxaa", vec![Box::new(UnrealBloomPass::new(W, H, 1.0, 0.4, 0.5)), fxaa()]),
+        (
+            "unreal bloom, fxaa",
+            vec![Box::new(UnrealBloomPass::new(W, H, 1.0, 0.4, 0.5)), fxaa()],
+        ),
         ("bloom, copy", vec![Box::new(BloomPass::default()), copy()]),
         ("film", vec![Box::new(FilmPass::default())]),
         ("glitch", vec![Box::new(GlitchPass::default())]),
         ("output", vec![Box::new(OutputPass::new())]),
-        ("outline", vec![Box::new(OutlinePass::new(W, H, 0, 0, Vec::new()))]),
+        (
+            "outline",
+            vec![Box::new(OutlinePass::new(W, H, 0, 0, Vec::new()))],
+        ),
         ("ssao", vec![Box::new(SsaoPass::new(0, 0, W, H, 32))]),
-        ("ssao, copy", vec![Box::new(SsaoPass::new(0, 0, W, H, 32)), copy()]),
+        (
+            "ssao, copy",
+            vec![Box::new(SsaoPass::new(0, 0, W, H, 32)), copy()],
+        ),
         ("afterimage", vec![Box::new(AfterimagePass::default())]),
         ("smaa", vec![Box::new(SmaaPass::new(W, H))]),
     ];
@@ -497,7 +603,11 @@ fn native_composer_chains_keep_the_marker_top_left() {
             wrong.push(format!("{name}: {at}"));
         }
     }
-    assert!(wrong.is_empty(), "composer chains moved the marker:\n  {}", wrong.join("\n  "));
+    assert!(
+        wrong.is_empty(),
+        "composer chains moved the marker:\n  {}",
+        wrong.join("\n  ")
+    );
 }
 
 /// The headless renderer's own bloom and SSAO run on the shared fullscreen

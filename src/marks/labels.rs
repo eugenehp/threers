@@ -634,7 +634,11 @@ impl TextLabels {
                 // Words with the space before each but the first.
                 let mut u = Vec::new();
                 for (i, w) in line.split(' ').enumerate() {
-                    u.push(if i == 0 { w.to_string() } else { format!(" {w}") });
+                    u.push(if i == 0 {
+                        w.to_string()
+                    } else {
+                        format!(" {w}")
+                    });
                 }
                 u
             };
@@ -666,9 +670,13 @@ impl TextLabels {
         let metrics = self.fonts[0].metrics(raster);
         let (ascent, descent) = (metrics.ascent * s, metrics.descent * s);
         // Pass 1: make sure every glyph is in the atlas, so uvs are final.
-        if self.labels.iter().any(|l| l.background.is_some()) && !self.atlas.glyphs.contains_key(&GlyphKey::Solid) {
+        if self.labels.iter().any(|l| l.background.is_some())
+            && !self.atlas.glyphs.contains_key(&GlyphKey::Solid)
+        {
             let (x, y) = self.atlas.pack(8, 8, &[[255u8; 4]; 64]);
-            self.atlas.glyphs.insert(GlyphKey::Solid, Some((x, y, 8, 8, 0, 0)));
+            self.atlas
+                .glyphs
+                .insert(GlyphKey::Solid, Some((x, y, 8, 8, 0, 0)));
         }
         // Each label's lines, wrapped to `max_width`.
         let wrapped: Vec<String> = (0..self.labels.len())
@@ -817,7 +825,10 @@ impl TextLabels {
                 LabelAnchor::AboveLeft => (-width, -descent - extra),
             };
             let em = self.font_size;
-            let (dx, dy) = (dx + l.offset[0] + l.offset_em[0] * em, dy + l.offset[1] + l.offset_em[1] * em);
+            let (dx, dy) = (
+                dx + l.offset[0] + l.offset_em[0] * em,
+                dy + l.offset[1] + l.offset_em[1] * em,
+            );
             // The box: the text's line, and the icon where it is taller.
             let (mut top, mut bottom) = (dy - ascent, dy + extra + descent);
             if let Some((icon, _, _, _)) = icon {
@@ -836,10 +847,25 @@ impl TextLabels {
                 let mut boxes: Vec<Quad> = Vec::new();
                 let bw = bg.border_width.max(0.0);
                 if bw > 0.0 && bg.border_color[3] > 0 {
-                    boxes.push(([outer[0] - dx, outer[1] - dy, outer[2], outer[3]], uv, bg.border_color, 0.0));
+                    boxes.push((
+                        [outer[0] - dx, outer[1] - dy, outer[2], outer[3]],
+                        uv,
+                        bg.border_color,
+                        0.0,
+                    ));
                 }
-                let inner = [outer[0] + bw, outer[1] + bw, (outer[2] - 2.0 * bw).max(0.0), (outer[3] - 2.0 * bw).max(0.0)];
-                boxes.push(([inner[0] - dx, inner[1] - dy, inner[2], inner[3]], uv, bg.color, 0.0));
+                let inner = [
+                    outer[0] + bw,
+                    outer[1] + bw,
+                    (outer[2] - 2.0 * bw).max(0.0),
+                    (outer[3] - 2.0 * bw).max(0.0),
+                ];
+                boxes.push((
+                    [inner[0] - dx, inner[1] - dy, inner[2], inner[3]],
+                    uv,
+                    bg.color,
+                    0.0,
+                ));
                 boxes.extend(quads);
                 quads = boxes;
                 (left, right) = (outer[0], outer[0] + outer[2]);
@@ -1035,7 +1061,16 @@ impl TextLabels {
             if let Some(q) = self.labels[i].reserve {
                 let q = q.map(|v| v * self.reserve_scale);
                 // No text: the reserved box alone.
-                b = if start == end { q } else { [b[0].min(q[0]), b[1].min(q[1]), b[2].max(q[2]), b[3].max(q[3])] };
+                b = if start == end {
+                    q
+                } else {
+                    [
+                        b[0].min(q[0]),
+                        b[1].min(q[1]),
+                        b[2].max(q[2]),
+                        b[3].max(q[3]),
+                    ]
+                };
             }
             let r = [
                 p[0] + b[0] - pad,
@@ -1057,7 +1092,11 @@ impl TextLabels {
         }
         // With halo copies, rows `0..n` draw the halos, `n..2n` the fills.
         let n = self.halo_scale.len();
-        let copies: &[(usize, f32)] = if self.halo_copies { &[(0, -1.0), (n, 1.0)] } else { &[(0, 1.0)] };
+        let copies: &[(usize, f32)] = if self.halo_copies {
+            &[(0, -1.0), (n, 1.0)]
+        } else {
+            &[(0, 1.0)]
+        };
         for (row, w) in moved {
             for &(at, _) in copies {
                 self.anchors.update_positions(at + row, &[w]);

@@ -250,12 +250,7 @@ fn lawn_with_hole(
         let t = (reach / c.abs().max(1e-6)).min(reach / si.abs().max(1e-6));
         (cx + t * c, cz + t * si)
     };
-    let corners = [
-        PI * 0.25,
-        PI * 0.75,
-        PI * 1.25,
-        PI * 1.75,
-    ];
+    let corners = [PI * 0.25, PI * 0.75, PI * 1.25, PI * 1.75];
     for i in 0..segs {
         let (a0, a1) = (
             i as f32 / segs as f32 * TAU,
@@ -375,8 +370,13 @@ pub(crate) fn add_bench(b: &mut Batches, x: f32, z: f32, yaw: f32, rng: &mut Rng
         )
     };
     // Seat, back, and two cast ends.
-    b.trim
-        .add_yaw_box(c(0.0, 0.44, 0.0), Vector3::new(0.85, 0.04, 0.24), yaw, wood, Uv::Unit);
+    b.trim.add_yaw_box(
+        c(0.0, 0.44, 0.0),
+        Vector3::new(0.85, 0.04, 0.24),
+        yaw,
+        wood,
+        Uv::Unit,
+    );
     b.trim.add_yaw_box(
         c(0.0, 0.70, -0.22),
         Vector3::new(0.85, 0.22, 0.04),
@@ -423,10 +423,25 @@ fn hedge(b: &mut Batches, a: (f32, f32), c: (f32, f32), h: f32, rng: &mut Rng) {
 fn fountain(b: &mut Batches, cx: f32, cz: f32, r: f32, rng: &mut Rng) {
     let stone = scale_color(Color::from_hex(C_STONE), rng.range(0.92, 1.08));
     let spray = Color::from_hex(0xd6e7ef);
-    b.trim
-        .add_cylinder(Vector3::new(cx, KERB, cz), r, r, 0.55, 20, stone, true, Uv::Unit);
-    b.water
-        .add_ground_disc(cx, cz, r - 0.34, 20, 0.0, KERB + 0.42, Color::from_hex(C_PONDWATER));
+    b.trim.add_cylinder(
+        Vector3::new(cx, KERB, cz),
+        r,
+        r,
+        0.55,
+        20,
+        stone,
+        true,
+        Uv::Unit,
+    );
+    b.water.add_ground_disc(
+        cx,
+        cz,
+        r - 0.34,
+        20,
+        0.0,
+        KERB + 0.42,
+        Color::from_hex(C_PONDWATER),
+    );
     // Pedestal and the bowl it carries.
     let ped = KERB + 0.42;
     b.trim.add_cylinder(
@@ -505,11 +520,7 @@ fn fountain(b: &mut Batches, cx: f32, cz: f32, r: f32, rng: &mut Rng) {
         let (ax, az) = (a.cos(), a.sin());
         b.trim.add_limb(
             Vector3::new(cx + ax * rim, KERB + 0.50, cz + az * rim),
-            Vector3::new(
-                cx + ax * (rim - 0.42),
-                KERB + 1.28,
-                cz + az * (rim - 0.42),
-            ),
+            Vector3::new(cx + ax * (rim - 0.42), KERB + 1.28, cz + az * (rim - 0.42)),
             0.038,
             0.012,
             5,
@@ -557,8 +568,15 @@ fn statue(b: &mut Batches, cx: f32, cz: f32, rng: &mut Rng) {
         bronze,
         Uv::Unit,
     );
-    b.trim
-        .add_ellipsoid(Vector3::new(cx, KERB + 3.95, cz), 0.22, 0.26, 0.22, 6, 8, bronze);
+    b.trim.add_ellipsoid(
+        Vector3::new(cx, KERB + 3.95, cz),
+        0.22,
+        0.26,
+        0.22,
+        6,
+        8,
+        bronze,
+    );
     // One arm out, which is what makes a bronze block read as a person.
     b.trim.add_yaw_box(
         Vector3::new(cx + 0.42 * yaw.cos(), KERB + 3.60, cz + 0.42 * yaw.sin()),
@@ -718,9 +736,15 @@ fn garden(b: &mut Batches, cell: &Rect, warm: bool, near: bool, rng: &mut Rng, o
     b.pads.add_ground_path(&spine, 2.0, PATH_Y, path, Uv::Unit);
     let mid = spine[spine.len() / 2];
     let branch = if along_x {
-        [(mid.0, mid.1), (mid.0 + rng.range(-6.0, 6.0), cell.z1 - 3.0)]
+        [
+            (mid.0, mid.1),
+            (mid.0 + rng.range(-6.0, 6.0), cell.z1 - 3.0),
+        ]
     } else {
-        [(mid.0, mid.1), (cell.x1 - 3.0, mid.1 + rng.range(-6.0, 6.0))]
+        [
+            (mid.0, mid.1),
+            (cell.x1 - 3.0, mid.1 + rng.range(-6.0, 6.0)),
+        ]
     };
     b.pads.add_ground_path(&branch, 1.6, PATH_Y, path, Uv::Unit);
 
@@ -802,7 +826,17 @@ fn garden(b: &mut Batches, cell: &Rect, warm: bool, near: bool, rng: &mut Rng, o
                 Color::from_hex(0xc9a3b4),
                 rng.f(),
             );
-            add_tree_as(b, tx, tz, KERB, near, Species::Broadleaf, Some(bloom), 0.7, rng);
+            add_tree_as(
+                b,
+                tx,
+                tz,
+                KERB,
+                near,
+                Species::Broadleaf,
+                Some(bloom),
+                0.7,
+                rng,
+            );
         } else {
             add_tree(b, tx, tz, KERB, near, warm, rng);
         }
@@ -812,7 +846,12 @@ fn garden(b: &mut Batches, cell: &Rect, warm: bool, near: bool, rng: &mut Rng, o
         add_bench(b, spine[i].0, spine[i].1 + 1.6, facing(0.0, -1.0), rng);
     }
     if cell.w() > 26.0 && cell.d() > 26.0 && rng.chance(0.45) {
-        add_kiosk(b, mix(cell.x0 + 4.0, cell.x1 - 4.0, rng.f()), cell.z0 + 4.0, rng);
+        add_kiosk(
+            b,
+            mix(cell.x0 + 4.0, cell.x1 - 4.0, rng.f()),
+            cell.z0 + 4.0,
+            rng,
+        );
     }
     for _ in 0..2 {
         let i = 1 + rng.below(spine.len() - 2);
@@ -875,7 +914,11 @@ fn pond(b: &mut Batches, cell: &Rect, warm: bool, near: bool, rng: &mut Rng, out
     let (jx, jz) = (cxp + ja.cos(), czp + ja.sin());
     let reach = r * 0.62;
     b.trim.add_yaw_box(
-        Vector3::new(jx + ja.cos() * reach * 0.5, KERB + 0.04, jz + ja.sin() * reach * 0.5),
+        Vector3::new(
+            jx + ja.cos() * reach * 0.5,
+            KERB + 0.04,
+            jz + ja.sin() * reach * 0.5,
+        ),
         Vector3::new(0.9, 0.06, reach * 0.5),
         facing(ja.cos(), ja.sin()),
         Color::from_hex(C_TIMBER),
@@ -910,7 +953,11 @@ fn pond(b: &mut Batches, cell: &Rect, warm: bool, near: bool, rng: &mut Rng, out
         let h = rng.range(0.5, 1.3);
         b.foliage.add_limb(
             Vector3::new(bx, KERB - 0.30, bz),
-            Vector3::new(bx + rng.range(-0.3, 0.3), KERB - 0.30 + h, bz + rng.range(-0.3, 0.3)),
+            Vector3::new(
+                bx + rng.range(-0.3, 0.3),
+                KERB - 0.30 + h,
+                bz + rng.range(-0.3, 0.3),
+            ),
             0.06,
             0.01,
             3,
@@ -961,7 +1008,11 @@ fn sports(b: &mut Batches, cell: &Rect, warm: bool, near: bool, rng: &mut Rng, o
         return;
     }
     let along_x = p.w() >= p.d();
-    let (len, wid) = if along_x { (p.w(), p.d()) } else { (p.d(), p.w()) };
+    let (len, wid) = if along_x {
+        (p.w(), p.d())
+    } else {
+        (p.d(), p.w())
+    };
     let bands = ((len / 5.0).round() as usize).clamp(4, 14);
     let dark = scale_color(Color::from_hex(C_GRASS), 0.88);
     let pale = scale_color(Color::from_hex(C_GRASS), 1.12);
@@ -1033,11 +1084,21 @@ fn sports(b: &mut Batches, cell: &Rect, warm: bool, near: bool, rng: &mut Rng, o
         let (bx0, bz0, bx1, bz1) = if along_x {
             let x = m.x0 + s * m.w();
             let x2 = x + if s == 0.0 { box_len } else { -box_len };
-            (x.min(x2), m.cz() - box_wid * 0.5, x.max(x2), m.cz() + box_wid * 0.5)
+            (
+                x.min(x2),
+                m.cz() - box_wid * 0.5,
+                x.max(x2),
+                m.cz() + box_wid * 0.5,
+            )
         } else {
             let z = m.z0 + s * m.d();
             let z2 = z + if s == 0.0 { box_len } else { -box_len };
-            (m.cx() - box_wid * 0.5, z.min(z2), m.cx() + box_wid * 0.5, z.max(z2))
+            (
+                m.cx() - box_wid * 0.5,
+                z.min(z2),
+                m.cx() + box_wid * 0.5,
+                z.max(z2),
+            )
         };
         b.paint.add_ground_path(
             &[
@@ -1061,7 +1122,11 @@ fn sports(b: &mut Batches, cell: &Rect, warm: bool, near: bool, rng: &mut Rng, o
             (m.cx(), m.z0 + s * m.d())
         };
         // The goal stands on the goal line, so its posts run across the pitch.
-        let (ux, uz) = if along_x { (0.0f32, 1.0f32) } else { (1.0, 0.0) };
+        let (ux, uz) = if along_x {
+            (0.0f32, 1.0f32)
+        } else {
+            (1.0, 0.0)
+        };
         for side in [-1.0f32, 1.0] {
             b.trim.add_cylinder(
                 Vector3::new(
@@ -1089,12 +1154,7 @@ fn sports(b: &mut Batches, cell: &Rect, warm: bool, near: bool, rng: &mut Rng, o
 
     // Floodlight masts, and a small stand along one side.
     let mast = Color::from_hex(0x5a5f63);
-    for (cx, cz) in [
-        (p.x0, p.z0),
-        (p.x1, p.z0),
-        (p.x0, p.z1),
-        (p.x1, p.z1),
-    ] {
+    for (cx, cz) in [(p.x0, p.z0), (p.x1, p.z0), (p.x0, p.z1), (p.x1, p.z1)] {
         b.trim.add_cylinder(
             Vector3::new(cx, KERB, cz),
             0.24,
@@ -1145,11 +1205,20 @@ fn sports(b: &mut Batches, cell: &Rect, warm: bool, near: bool, rng: &mut Rng, o
     }
     // Trees only outside the pitch, in the corners the markings leave over.
     for _ in 0..4 {
-        let cx = if rng.chance(0.5) { cell.x0 + 1.5 } else { cell.x1 - 1.5 };
-        let cz = if rng.chance(0.5) { cell.z0 + 1.5 } else { cell.z1 - 1.5 };
+        let cx = if rng.chance(0.5) {
+            cell.x0 + 1.5
+        } else {
+            cell.x1 - 1.5
+        };
+        let cz = if rng.chance(0.5) {
+            cell.z0 + 1.5
+        } else {
+            cell.z1 - 1.5
+        };
         add_tree(b, cx, cz, KERB, near, warm, rng);
     }
-    out.walks.push((cell.x0 + 1.0, cell.z0 + 1.0, cell.x1 - 1.0, cell.z0 + 2.6));
+    out.walks
+        .push((cell.x0 + 1.0, cell.z0 + 1.0, cell.x1 - 1.0, cell.z0 + 2.6));
 }
 
 /// Playground: sand, a climbing frame, swings, a slide and a fence.
@@ -1196,13 +1265,8 @@ fn play(b: &mut Batches, cell: &Rect, warm: bool, near: bool, rng: &mut Rng, out
         ] {
             let mid = Vector3::new(cx + (a.0 + c.0) * 0.5, KERB + h, cz + (a.1 + c.1) * 0.5);
             let yaw = facing(c.0 - a.0, c.1 - a.1);
-            b.trim.add_yaw_box(
-                mid,
-                Vector3::new(0.05, 0.05, s),
-                yaw,
-                pick(rng),
-                Uv::Unit,
-            );
+            b.trim
+                .add_yaw_box(mid, Vector3::new(0.05, 0.05, s), yaw, pick(rng), Uv::Unit);
         }
     }
 
@@ -1328,7 +1392,11 @@ fn play(b: &mut Batches, cell: &Rect, warm: bool, near: bool, rng: &mut Rng, out
         add_tree(
             b,
             rng.range(cell.x0 + 1.2, cell.x1 - 1.2),
-            if rng.chance(0.5) { cell.z0 + 1.2 } else { cell.z1 - 1.2 },
+            if rng.chance(0.5) {
+                cell.z0 + 1.2
+            } else {
+                cell.z1 - 1.2
+            },
             KERB,
             near,
             warm,
@@ -1424,7 +1492,11 @@ fn plaza(b: &mut Batches, cell: &Rect, warm: bool, near: bool, rng: &mut Rng, ou
                 z,
                 KERB + 0.5,
                 near,
-                if warm { Species::Palm } else { Species::Columnar },
+                if warm {
+                    Species::Palm
+                } else {
+                    Species::Columnar
+                },
                 None,
                 0.85,
                 rng,
@@ -1708,14 +1780,21 @@ fn grove(b: &mut Batches, cell: &Rect, warm: bool, near: bool, rng: &mut Rng, ou
         let tx = rng.range(cell.x0 + 1.5, cell.x1 - 1.5);
         let tz = rng.range(cell.z0 + 1.5, cell.z1 - 1.5);
         // Keep the path walkable.
-        if pts
-            .iter()
-            .any(|p| (p.0 - tx).hypot(p.1 - tz) < 2.2)
-        {
+        if pts.iter().any(|p| (p.0 - tx).hypot(p.1 - tz) < 2.2) {
             continue;
         }
         if rng.chance(0.72) {
-            add_tree_as(b, tx, tz, KERB, near, lead, None, rng.range(0.85, 1.25), rng);
+            add_tree_as(
+                b,
+                tx,
+                tz,
+                KERB,
+                near,
+                lead,
+                None,
+                rng.range(0.85, 1.25),
+                rng,
+            );
         } else {
             add_tree(b, tx, tz, KERB, near, warm, rng);
         }
@@ -1747,16 +1826,36 @@ pub(crate) fn add_bandstand(b: &mut Batches, cx: f32, cz: f32, r: f32, rng: &mut
     let iron = scale_color(Color::from_hex(0x2f4a3c), rng.range(0.85, 1.15));
     let roof = scale_color(Color::from_hex(0x4a5560), rng.range(0.9, 1.1));
     let deck = KERB + 0.85;
-    b.trim
-        .add_cylinder(Vector3::new(cx, KERB, cz), r + 0.30, r + 0.20, 0.70, 8, stone, true, Uv::Unit);
-    b.trim
-        .add_cylinder(Vector3::new(cx, KERB + 0.70, cz), r, r, 0.15, 8, scale_color(stone, 1.08), true, Uv::Unit);
+    b.trim.add_cylinder(
+        Vector3::new(cx, KERB, cz),
+        r + 0.30,
+        r + 0.20,
+        0.70,
+        8,
+        stone,
+        true,
+        Uv::Unit,
+    );
+    b.trim.add_cylinder(
+        Vector3::new(cx, KERB + 0.70, cz),
+        r,
+        r,
+        0.15,
+        8,
+        scale_color(stone, 1.08),
+        true,
+        Uv::Unit,
+    );
     // Steps down one side.
     for k in 0..3 {
         let t = k as f32;
         b.trim.add_box(
             Vector3::new(cx - 0.9, KERB + 0.22 * t, cz + r + 0.30 + 0.30 * (2.0 - t)),
-            Vector3::new(cx + 0.9, KERB + 0.22 * (t + 1.0), cz + r + 0.60 + 0.30 * (2.0 - t)),
+            Vector3::new(
+                cx + 0.9,
+                KERB + 0.22 * (t + 1.0),
+                cz + r + 0.60 + 0.30 * (2.0 - t),
+            ),
             stone,
             Uv::Unit,
         );
@@ -1766,8 +1865,16 @@ pub(crate) fn add_bandstand(b: &mut Batches, cx: f32, cz: f32, r: f32, rng: &mut
     for i in 0..posts {
         let a = i as f32 / posts as f32 * TAU;
         let (px, pz) = (cx + r * 0.88 * a.cos(), cz + r * 0.88 * a.sin());
-        b.trim
-            .add_cylinder(Vector3::new(px, deck, pz), 0.075, 0.065, 2.75, 6, iron, false, Uv::Unit);
+        b.trim.add_cylinder(
+            Vector3::new(px, deck, pz),
+            0.075,
+            0.065,
+            2.75,
+            6,
+            iron,
+            false,
+            Uv::Unit,
+        );
         // Fretwork bracket at the head of each column.
         let a2 = (i + 1) as f32 / posts as f32 * TAU;
         let (qx, qz) = (cx + r * 0.88 * a2.cos(), cz + r * 0.88 * a2.sin());
@@ -1924,10 +2031,7 @@ pub(crate) fn add_kiosk(b: &mut Batches, cx: f32, cz: f32, rng: &mut Rng) {
             );
             const N: usize = 8;
             for k in 0..N {
-                let (a0, a1) = (
-                    k as f32 / N as f32 * TAU,
-                    (k + 1) as f32 / N as f32 * TAU,
-                );
+                let (a0, a1) = (k as f32 / N as f32 * TAU, (k + 1) as f32 / N as f32 * TAU);
                 let rr = 1.25;
                 b.trim.tri(
                     [
@@ -2032,8 +2136,16 @@ pub(crate) fn add_park_furniture(b: &mut Batches, x: f32, z: f32, rng: &mut Rng)
     match rng.below(5) {
         // Litter bin: a slatted drum on a post.
         0 => {
-            b.trim
-                .add_cylinder(Vector3::new(x, KERB, z), 0.09, 0.09, 0.55, 5, iron, false, Uv::Unit);
+            b.trim.add_cylinder(
+                Vector3::new(x, KERB, z),
+                0.09,
+                0.09,
+                0.55,
+                5,
+                iron,
+                false,
+                Uv::Unit,
+            );
             b.trim.add_cylinder(
                 Vector3::new(x, KERB + 0.55, z),
                 0.28,
@@ -2047,8 +2159,16 @@ pub(crate) fn add_park_furniture(b: &mut Batches, x: f32, z: f32, rng: &mut Rng)
         }
         // Drinking fountain.
         1 => {
-            b.trim
-                .add_cylinder(Vector3::new(x, KERB, z), 0.16, 0.13, 0.85, 8, Color::from_hex(0x7d8a80), true, Uv::Unit);
+            b.trim.add_cylinder(
+                Vector3::new(x, KERB, z),
+                0.16,
+                0.13,
+                0.85,
+                8,
+                Color::from_hex(0x7d8a80),
+                true,
+                Uv::Unit,
+            );
             b.trim.add_cylinder(
                 Vector3::new(x, KERB + 0.85, z),
                 0.20,
@@ -2071,8 +2191,16 @@ pub(crate) fn add_park_furniture(b: &mut Batches, x: f32, z: f32, rng: &mut Rng)
         }
         // Fingerpost.
         2 => {
-            b.trim
-                .add_cylinder(Vector3::new(x, KERB, z), 0.055, 0.045, 2.15, 5, iron, false, Uv::Unit);
+            b.trim.add_cylinder(
+                Vector3::new(x, KERB, z),
+                0.055,
+                0.045,
+                2.15,
+                5,
+                iron,
+                false,
+                Uv::Unit,
+            );
             let yaw = rng.range(0.0, TAU);
             for k in 0..2 {
                 b.trim.add_yaw_box(
@@ -2099,7 +2227,8 @@ pub(crate) fn add_park_furniture(b: &mut Batches, x: f32, z: f32, rng: &mut Rng)
                         KERB + 0.72 * a.sin(),
                         bz + 0.34 * a.cos() * yaw.cos(),
                     );
-                    b.trim.add_limb(prev, p, 0.026, 0.026, 4, Color::from_hex(0x5a6a62), false);
+                    b.trim
+                        .add_limb(prev, p, 0.026, 0.026, 4, Color::from_hex(0x5a6a62), false);
                     prev = p;
                 }
             }
@@ -2158,8 +2287,16 @@ fn fence_run(b: &mut Batches, a: (f32, f32), c: (f32, f32), h: f32, col: Color) 
     for k in 1..n {
         let t = k as f32 / n as f32;
         b.trim.add_limb(
-            Vector3::new(a.0 + (c.0 - a.0) * t, KERB + h * 0.10, a.1 + (c.1 - a.1) * t),
-            Vector3::new(a.0 + (c.0 - a.0) * t, KERB + h * 0.96, a.1 + (c.1 - a.1) * t),
+            Vector3::new(
+                a.0 + (c.0 - a.0) * t,
+                KERB + h * 0.10,
+                a.1 + (c.1 - a.1) * t,
+            ),
+            Vector3::new(
+                a.0 + (c.0 - a.0) * t,
+                KERB + h * 0.96,
+                a.1 + (c.1 - a.1) * t,
+            ),
             0.010,
             0.010,
             3,
@@ -2208,8 +2345,16 @@ fn dog_run(b: &mut Batches, cell: &Rect, warm: bool, near: bool, rng: &mut Rng, 
         for k in 0..=n {
             let t = k as f32 / n as f32;
             let (px, pz) = (a.0 + (c.0 - a.0) * t, a.1 + (c.1 - a.1) * t);
-            b.trim
-                .add_cylinder(Vector3::new(px, KERB, pz), 0.055, 0.050, h, 5, post, false, Uv::Unit);
+            b.trim.add_cylinder(
+                Vector3::new(px, KERB, pz),
+                0.055,
+                0.050,
+                h,
+                5,
+                post,
+                false,
+                Uv::Unit,
+            );
         }
         // The mesh itself: a thin panel, drawn as a low box so it reads as a
         // barrier without needing anything transparent.
@@ -2243,8 +2388,14 @@ fn dog_run(b: &mut Batches, cell: &Rect, warm: bool, near: bool, rng: &mut Rng, 
             }
             fence_run(
                 b,
-                (mx + nx * pen * 2.0 - tx * pen, mz + nz * pen * 2.0 - tz * pen),
-                (mx + nx * pen * 2.0 + tx * pen, mz + nz * pen * 2.0 + tz * pen),
+                (
+                    mx + nx * pen * 2.0 - tx * pen,
+                    mz + nz * pen * 2.0 - tz * pen,
+                ),
+                (
+                    mx + nx * pen * 2.0 + tx * pen,
+                    mz + nz * pen * 2.0 + tz * pen,
+                ),
                 h,
                 mesh,
             );
@@ -2297,10 +2448,7 @@ fn dog_run(b: &mut Batches, cell: &Rect, warm: bool, near: bool, rng: &mut Rng, 
     }
     const N: usize = 12;
     for i in 0..N {
-        let (a0, a1) = (
-            i as f32 / N as f32 * TAU,
-            (i + 1) as f32 / N as f32 * TAU,
-        );
+        let (a0, a1) = (i as f32 / N as f32 * TAU, (i + 1) as f32 / N as f32 * TAU);
         let r = 0.55;
         b.trim.add_limb(
             Vector3::new(hx, KERB + 1.0 + r * a0.sin(), hz + r * a0.cos()),
@@ -2327,15 +2475,18 @@ fn dog_run(b: &mut Batches, cell: &Rect, warm: bool, near: bool, rng: &mut Rng, 
         add_tree(
             b,
             rng.range(cell.x0 + 1.0, cell.x1 - 1.0),
-            if rng.chance(0.5) { cell.z0 + 1.0 } else { cell.z1 - 1.0 },
+            if rng.chance(0.5) {
+                cell.z0 + 1.0
+            } else {
+                cell.z1 - 1.0
+            },
             KERB,
             near,
             warm,
             rng,
         );
     }
-    out.runs
-        .push((cx, cz, yard.w().min(yard.d()) * 0.38));
+    out.runs.push((cx, cz, yard.w().min(yard.d()) * 0.38));
     out.walks
         .push((yard.x0 + 1.0, yard.z0 + 1.0, yard.x1 - 1.0, yard.z1 - 1.0));
 }
@@ -2386,16 +2537,26 @@ fn hard_court(
                 .add_ground_path(&[(m.cx(), m.z0), (m.cx(), m.z1)], 0.10, my, white, Uv::Unit);
             for s in [-1.0f32, 1.0] {
                 let x = m.cx() + s * m.w() * 0.22;
-                b.paint
-                    .add_ground_path(&[(x, m.z0 + 0.8), (x, m.z1 - 0.8)], 0.10, my, white, Uv::Unit);
+                b.paint.add_ground_path(
+                    &[(x, m.z0 + 0.8), (x, m.z1 - 0.8)],
+                    0.10,
+                    my,
+                    white,
+                    Uv::Unit,
+                );
             }
         } else {
             b.paint
                 .add_ground_path(&[(m.x0, m.cz()), (m.x1, m.cz())], 0.10, my, white, Uv::Unit);
             for s in [-1.0f32, 1.0] {
                 let z = m.cz() + s * m.d() * 0.22;
-                b.paint
-                    .add_ground_path(&[(m.x0 + 0.8, z), (m.x1 - 0.8, z)], 0.10, my, white, Uv::Unit);
+                b.paint.add_ground_path(
+                    &[(m.x0 + 0.8, z), (m.x1 - 0.8, z)],
+                    0.10,
+                    my,
+                    white,
+                    Uv::Unit,
+                );
             }
         }
         let net = Color::from_hex(0x2b2f33);
@@ -2426,7 +2587,16 @@ fn hard_court(
         }
     } else {
         // Basketball: a key at each end and a backboard on a post.
-        ring_path(&mut b.paint, m.cx(), m.cz(), (m.w().min(m.d()) * 0.16).min(1.8), 0.10, my, white, 16);
+        ring_path(
+            &mut b.paint,
+            m.cx(),
+            m.cz(),
+            (m.w().min(m.d()) * 0.16).min(1.8),
+            0.10,
+            my,
+            white,
+            16,
+        );
         for s in [0.0f32, 1.0] {
             let (bx, bz) = if along_x {
                 (m.x0 + s * m.w(), m.cz())
@@ -2434,7 +2604,11 @@ fn hard_court(
                 (m.cx(), m.z0 + s * m.d())
             };
             let inward = if s == 0.0 { 1.0f32 } else { -1.0 };
-            let (ix, iz) = if along_x { (inward, 0.0) } else { (0.0, inward) };
+            let (ix, iz) = if along_x {
+                (inward, 0.0)
+            } else {
+                (0.0, inward)
+            };
             b.trim.add_cylinder(
                 Vector3::new(bx - ix * 0.3, KERB, bz - iz * 0.3),
                 0.07,
@@ -2454,10 +2628,7 @@ fn hard_court(
             );
             const N: usize = 9;
             for k in 0..N {
-                let (a0, a1) = (
-                    k as f32 / N as f32 * TAU,
-                    (k + 1) as f32 / N as f32 * TAU,
-                );
+                let (a0, a1) = (k as f32 / N as f32 * TAU, (k + 1) as f32 / N as f32 * TAU);
                 let r = 0.23;
                 let c = (bx + ix * 1.0, bz + iz * 1.0);
                 // A hoop is a horizontal circle. Scaling one axis by the
@@ -2519,7 +2690,11 @@ fn hard_court(
         add_tree(
             b,
             rng.range(cell.x0 + 1.0, cell.x1 - 1.0),
-            if rng.chance(0.5) { cell.z0 + 1.0 } else { cell.z1 - 1.0 },
+            if rng.chance(0.5) {
+                cell.z0 + 1.0
+            } else {
+                cell.z1 - 1.0
+            },
             KERB,
             near,
             warm,

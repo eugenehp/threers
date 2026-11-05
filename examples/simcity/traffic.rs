@@ -157,8 +157,7 @@ pub(crate) enum Gait {
 
 pub(crate) const BOAT_COLORS: [u32; 3] = [0x7d3a2c, 0x2c4a6b, 0x54585c];
 
-pub(crate) const WALKER_COLORS: [u32; 5] =
-    [0x4a5a72, 0x936a48, 0xa8524f, 0x5c7f57, 0x8b8d93];
+pub(crate) const WALKER_COLORS: [u32; 5] = [0x4a5a72, 0x936a48, 0xa8524f, 0x5c7f57, 0x8b8d93];
 
 // Proportions of a 1.75 m adult, in metres from the ground. Everything below
 // is measured off these rather than invented per limb, which is what stops the
@@ -460,8 +459,8 @@ pub(crate) const BIKE_PAINT: [u32; 8] = [
 ];
 
 pub(crate) const CAR_PAINT: [u32; 10] = [
-    0xd8d9dd, 0xeceef0, 0x2b2d31, 0x8d9199, 0x5a5f66, 0xa3241f, 0x1d4e8a, 0x2f6b44,
-    0xd8a13c, 0x6b4a7a,
+    0xd8d9dd, 0xeceef0, 0x2b2d31, 0x8d9199, 0x5a5f66, 0xa3241f, 0x1d4e8a, 0x2f6b44, 0xd8a13c,
+    0x6b4a7a,
 ];
 pub(crate) const HATCH_PAINT: [u32; 6] =
     [0xe6e8ea, 0x3a3d42, 0x9aa0a6, 0xc0392b, 0x2e7d64, 0x2f5f8a];
@@ -472,13 +471,11 @@ pub(crate) const VAN_PAINT: [u32; 4] = [0xe4e6e8, 0x2f5f8a, 0xbdb6a6, 0x6d7a52];
 pub(crate) const BUS_PAINT: [u32; 3] = [0xc4342a, 0x2e6f4f, 0x2d4f86];
 pub(crate) const LORRY_PAINT: [u32; 4] = [0x39567d, 0x8d8f93, 0x7a3f33, 0xb0932f];
 pub(crate) const POLICE_PAINT: [u32; 1] = [0xf0f2f4];
-pub(crate) const ESTATE_PAINT: [u32; 5] =
-    [0xdcdee0, 0x35383d, 0x7d8288, 0x2f5f4a, 0x8a4a3a];
+pub(crate) const ESTATE_PAINT: [u32; 5] = [0xdcdee0, 0x35383d, 0x7d8288, 0x2f5f4a, 0x8a4a3a];
 pub(crate) const SUV_PAINT: [u32; 5] = [0x2b2d31, 0xd8d9dd, 0x4a5560, 0x6b4a30, 0x2f4f7a];
 pub(crate) const AMBULANCE_PAINT: [u32; 1] = [0xf4f6f8];
 pub(crate) const FIRE_PAINT: [u32; 1] = [0xc0231c];
-pub(crate) const DELIVERY_PAINT: [u32; 5] =
-    [0xd8a02a, 0x2f6bb5, 0x8f3f2c, 0xf0f2f4, 0x2f7d52];
+pub(crate) const DELIVERY_PAINT: [u32; 5] = [0xd8a02a, 0x2f6bb5, 0x8f3f2c, 0xf0f2f4, 0x2f7d52];
 
 impl Vehicle {
     pub(crate) fn colors(self) -> &'static [u32] {
@@ -850,15 +847,7 @@ impl Vehicle {
                         false,
                     );
                 }
-                m.add_ellipsoid(
-                    Vector3::new(0.0, 1.44, 0.26),
-                    0.11,
-                    0.13,
-                    0.12,
-                    3,
-                    6,
-                    skin,
-                );
+                m.add_ellipsoid(Vector3::new(0.0, 1.44, 0.26), 0.11, 0.13, 0.12, 3, 6, skin);
                 // Helmet.
                 m.add_ellipsoid(
                     Vector3::new(0.0, 1.49, 0.25),
@@ -1967,7 +1956,9 @@ pub(crate) fn fit_run(lo: f32, hi: f32, length: f32) -> (f32, f32) {
 /// needs room to be swept through before it is worth committing to.
 fn pick_turn_dir(preferred: f32, start: f32, lo: f32, hi: f32, leg: f32) -> Option<f32> {
     let room = |d: f32| if d > 0.0 { hi - start } else { start - lo };
-    [preferred, -preferred].into_iter().find(|&d| room(d) >= leg * 1.4)
+    [preferred, -preferred]
+        .into_iter()
+        .find(|&d| room(d) >= leg * 1.4)
 }
 
 /// Turn a vehicle onto the crossing road, if it has just passed the middle of
@@ -2040,8 +2031,8 @@ pub(crate) fn maybe_turn(m: &mut Mover, before: f32, junctions: &[Junction]) {
         };
         // The new road runs along the other axis, so the side is computed for
         // that axis, not the one being left.
-        let new_fixed = (if m.along_x { j.cx } else { j.cz })
-            + lane_side(!m.along_x, new_dir) * half * 0.44;
+        let new_fixed =
+            (if m.along_x { j.cx } else { j.cz }) + lane_side(!m.along_x, new_dir) * half * 0.44;
         if m.along_x {
             m.turn = [p0x, p0z, new_fixed, p0z];
             m.signalled = j.avenue_z;

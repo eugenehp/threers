@@ -170,7 +170,11 @@ fn slice_panes(hr: &mut HeadlessRenderer, values: &[f32], labels: &[u64]) -> Vec
             let mut encoder = gpu.create_command_encoder(&Default::default());
             // Separate uniform writes need separate submissions: each draw
             // reads its binding's uniforms when the queue runs it.
-            grey.update_on(&gpu, &grey_binding, &SliceParams::window(to_voxel, BLACK, WHITE));
+            grey.update_on(
+                &gpu,
+                &grey_binding,
+                &SliceParams::window(to_voxel, BLACK, WHITE),
+            );
             grey.draw_on(&mut encoder, &target.color, rect, &grey_binding);
             tint.update_on(&gpu, &tint_binding, &SliceParams::labels(to_voxel, 7, 0.35));
             tint.draw_on(&mut encoder, &target.color, rect, &tint_binding);

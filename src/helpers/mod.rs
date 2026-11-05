@@ -7,9 +7,9 @@ mod camera_helper;
 mod grid;
 mod light_helpers;
 mod polar_grid;
-pub mod three_lines;
 pub mod quad_view;
 pub mod quad_view_controls;
+pub mod three_lines;
 mod vertex_normals;
 
 pub use arrow::ArrowHelper;

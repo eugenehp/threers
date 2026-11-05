@@ -7,8 +7,8 @@
 use std::sync::Arc;
 use threers::lights::{DirectionalLight, HemisphereLight, Light, PointLight};
 use threers::{
-    BoxGeometry, Color, HeadlessRenderer, Material, Mesh, Object3D, PerspectiveCamera, PlaneGeometry, Scene,
-    ShaderMaterial, StandardMaterial, Texture, TextureFormat, Vector3,
+    BoxGeometry, Color, HeadlessRenderer, Material, Mesh, Object3D, PerspectiveCamera,
+    PlaneGeometry, Scene, ShaderMaterial, StandardMaterial, Texture, TextureFormat, Vector3,
 };
 
 const W: u32 = 128;
@@ -23,7 +23,10 @@ fn build(metal: bool) -> HeadlessRenderer {
             std::env::remove_var("THREERS_BACKEND");
         }
     }
-    let mut hr = HeadlessRenderer::builder().size(W, H).build().expect("headless renderer");
+    let mut hr = HeadlessRenderer::builder()
+        .size(W, H)
+        .build()
+        .expect("headless renderer");
     unsafe { std::env::remove_var("THREERS_BACKEND") };
     hr.set_msaa(1);
     assert_eq!(hr.is_native_metal(), metal);
@@ -56,7 +59,11 @@ fn lit_ground() -> ShaderMaterial {
 fn ground_scene(cast: bool, receive: bool, point: bool) -> Scene {
     let mut s = Scene::new();
     s.background = Color::new(0.0, 0.0, 0.0);
-    s.add_light(HemisphereLight::new(Color::new(0.1, 0.12, 0.2), Color::new(0.05, 0.03, 0.0), 1.0));
+    s.add_light(HemisphereLight::new(
+        Color::new(0.1, 0.12, 0.2),
+        Color::new(0.05, 0.03, 0.0),
+        1.0,
+    ));
     let mut sun = DirectionalLight::new(Color::WHITE, 1.5);
     sun.cast_shadow = true;
     sun.shadow.map_size = 1024;
@@ -65,11 +72,17 @@ fn ground_scene(cast: bool, receive: bool, point: bool) -> Scene {
     l.position = Vector3::new(-3.0, 6.0, 1.0);
     s.add(l);
     if point {
-        let mut p = Object3D::light(Light::Point(PointLight::new(Color::new(1.0, 0.5, 0.2), 4.0)));
+        let mut p = Object3D::light(Light::Point(PointLight::new(
+            Color::new(1.0, 0.5, 0.2),
+            4.0,
+        )));
         p.position = Vector3::new(2.0, 0.6, 1.0);
         s.add(p);
     }
-    let mut ground = Object3D::mesh(Mesh::new(PlaneGeometry::new(8.0, 8.0), Material::Shader(lit_ground())));
+    let mut ground = Object3D::mesh(Mesh::new(
+        PlaneGeometry::new(8.0, 8.0),
+        Material::Shader(lit_ground()),
+    ));
     ground.rotate_x(-std::f32::consts::FRAC_PI_2);
     ground.receive_shadow = receive;
     s.add(ground);
@@ -87,7 +100,13 @@ fn ground_scene(cast: bool, receive: bool, point: bool) -> Scene {
 fn map_scene() -> Scene {
     let n = 8u32;
     let pixels: Vec<u8> = (0..n * n)
-        .flat_map(|i| if ((i % n) / 4 + (i / n) / 4).is_multiple_of(2) { [220, 40, 40, 255] } else { [40, 40, 220, 255] })
+        .flat_map(|i| {
+            if ((i % n) / 4 + (i / n) / 4).is_multiple_of(2) {
+                [220, 40, 40, 255]
+            } else {
+                [40, 40, 220, 255]
+            }
+        })
         .collect();
     let mut checker = Texture::new(n, n, TextureFormat::Rgba8Unorm, pixels);
     checker.mag_filter = threers::TextureFilter::Nearest;
@@ -101,7 +120,10 @@ fn map_scene() -> Scene {
     m.validate(true).expect("the shared shader's WGSL");
     let mut s = Scene::new();
     s.background = Color::new(0.0, 0.0, 0.0);
-    s.add(Object3D::mesh(Mesh::new(PlaneGeometry::new(2.0, 2.0), Material::Shader(m))));
+    s.add(Object3D::mesh(Mesh::new(
+        PlaneGeometry::new(2.0, 2.0),
+        Material::Shader(m),
+    )));
     s
 }
 
@@ -114,7 +136,10 @@ fn diff(a: &[u8], b: &[u8]) -> (f64, u8) {
 
 /// Pixels at least `by` darker (red channel) in `b` than in `a`.
 fn darker(a: &[u8], b: &[u8], by: u8) -> usize {
-    a.chunks_exact(4).zip(b.chunks_exact(4)).filter(|(p, q)| p[0] > q[0].saturating_add(by)).count()
+    a.chunks_exact(4)
+        .zip(b.chunks_exact(4))
+        .filter(|(p, q)| p[0] > q[0].saturating_add(by))
+        .count()
 }
 
 #[test]
@@ -133,26 +158,49 @@ fn shared_lights_shadows_and_maps_match_across_backends() {
     let mut frames = Vec::new();
     for metal in [false, true] {
         let mut hr = build(metal);
-        let mut f = |cast, receive, point| hr.render_to_rgba(&mut ground_scene(cast, receive, point), &cam);
-        let (shadowed, unshadowed, unreceived, no_point) =
-            (f(true, true, true), f(false, true, true), f(true, false, true), f(true, true, false));
+        let mut f =
+            |cast, receive, point| hr.render_to_rgba(&mut ground_scene(cast, receive, point), &cam);
+        let (shadowed, unshadowed, unreceived, no_point) = (
+            f(true, true, true),
+            f(false, true, true),
+            f(true, false, true),
+            f(true, true, false),
+        );
         let map = hr.render_to_rgba(&mut map_scene(), &flat);
-        assert!(hr.is_native_metal() == metal, "the scenes kept the renderer on its backend");
+        assert!(
+            hr.is_native_metal() == metal,
+            "the scenes kept the renderer on its backend"
+        );
         frames.push([shadowed, unshadowed, unreceived, no_point, map]);
     }
-    for (backend, [shadowed, unshadowed, unreceived, no_point, map]) in ["wgpu", "Metal"].iter().zip(&frames) {
+    for (backend, [shadowed, unshadowed, unreceived, no_point, map]) in
+        ["wgpu", "Metal"].iter().zip(&frames)
+    {
         let shade = darker(unshadowed, shadowed, 30);
-        assert!(shade > 60, "{backend}: the box casts a shadow of {shade} px");
+        assert!(
+            shade > 60,
+            "{backend}: the box casts a shadow of {shade} px"
+        );
         let ignored = darker(unreceived, shadowed, 30);
-        assert!(ignored + 50 > shade, "{backend}: receive_shadow off still shadows");
-        assert_eq!(darker(unshadowed, unreceived, 30), 0, "{backend}: an unreceived shadow darkens");
+        assert!(
+            ignored + 50 > shade,
+            "{backend}: receive_shadow off still shadows"
+        );
+        assert_eq!(
+            darker(unshadowed, unreceived, 30),
+            0,
+            "{backend}: an unreceived shadow darkens"
+        );
         let warm = darker(shadowed, no_point, 30);
         assert!(warm > 100, "{backend}: the point light lights {warm} px");
         let centre = |x: u32, y: u32| {
             let i = ((y * W + x) * 4) as usize;
             [map[i], map[i + 1], map[i + 2]]
         };
-        let (a, b) = (centre(W / 2 - 10, H / 2 - 10), centre(W / 2 + 10, H / 2 - 10));
+        let (a, b) = (
+            centre(W / 2 - 10, H / 2 - 10),
+            centre(W / 2 + 10, H / 2 - 10),
+        );
         // A data (`Unorm`) map reads as it is stored; the target encodes it:
         // 220 shows as 239, 40 as 110.
         let near = |v: u8, want: u8| v.abs_diff(want) <= 2;
@@ -161,8 +209,20 @@ fn shared_lights_shadows_and_maps_match_across_backends() {
             "{backend}: the checker reads {a:?} {b:?}"
         );
     }
-    for (k, what) in ["shadowed", "unshadowed", "unreceived", "no point light", "map"].iter().enumerate() {
+    for (k, what) in [
+        "shadowed",
+        "unshadowed",
+        "unreceived",
+        "no point light",
+        "map",
+    ]
+    .iter()
+    .enumerate()
+    {
         let (mean, p99) = diff(&frames[0][k], &frames[1][k]);
-        assert!(mean < 1.5 && p99 < 24, "{what}: wgpu and Metal differ by {mean:.2} mean, {p99} p99");
+        assert!(
+            mean < 1.5 && p99 < 24,
+            "{what}: wgpu and Metal differ by {mean:.2} mean, {p99} p99"
+        );
     }
 }

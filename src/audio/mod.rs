@@ -12,5 +12,5 @@ mod source;
 pub use analyser::AudioAnalyser;
 pub use backend::{AudioBackend, NoopBackend};
 pub use listener::AudioListener;
-pub use positional::PositionalAudio;
+pub use positional::{DistanceModel, PositionalAudio, SpatialMix};
 pub use source::Audio;

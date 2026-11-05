@@ -57,9 +57,7 @@ pub fn rod_from_spec(spec: &ContinuumSpec) -> Rod {
         density: spec.density,
         damping_ratio: spec.damping_ratio,
         twist: spec.twist,
-        station_limit: spec
-            .range
-            .map(|[a, b]| [a.to_radians(), b.to_radians()]),
+        station_limit: spec.range.map(|[a, b]| [a.to_radians(), b.to_radians()]),
         segments: spec.segments.max(1),
         self_collide: false,
     }
@@ -90,11 +88,7 @@ pub fn build_scad_continua(
     let mut out = Vec::with_capacity(spec.continua.len());
     for declaration in &spec.continua {
         let rod = rod_from_spec(declaration);
-        let origin = Vector3::new(
-            declaration.at[0],
-            declaration.at[1],
-            declaration.at[2],
-        );
+        let origin = Vector3::new(declaration.at[0], declaration.at[1], declaration.at[2]);
         let axis = Vector3::new(
             declaration.axis[0],
             declaration.axis[1],
@@ -104,11 +98,7 @@ pub fn build_scad_continua(
         let mut continuum = Continuum::build(world, rod, base, origin, axis);
 
         let mut tendon_names = Vec::new();
-        for cable in spec
-            .tendons
-            .iter()
-            .filter(|t| t.along == declaration.name)
-        {
+        for cable in spec.tendons.iter().filter(|t| t.along == declaration.name) {
             continuum.add_tendon(world, route_from_spec(cable));
             tendon_names.push(cable.name.clone());
             // A declared pull is applied straight away: the model is describing
@@ -189,7 +179,10 @@ mod tests {
         assert_eq!(built.continuum.stations.len(), 12);
         assert_eq!(built.continuum.tendons.len(), 3);
         assert_eq!(built.tendon("t1"), Some(1));
-        assert!(built.continuum.mount.is_some(), "it was told to sit on base");
+        assert!(
+            built.continuum.mount.is_some(),
+            "it was told to sit on base"
+        );
 
         // The rod grows along +Y as declared, so the tip is 0.3 up.
         let tip = built.continuum.tip(&world);

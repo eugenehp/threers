@@ -117,7 +117,11 @@ fn read_elements(
         return Ok(Vec::new());
     }
     let last = offset
-        .checked_add((count - 1).checked_mul(stride).ok_or(GltfError::BadAccessor)?)
+        .checked_add(
+            (count - 1)
+                .checked_mul(stride)
+                .ok_or(GltfError::BadAccessor)?,
+        )
         .and_then(|v| v.checked_add(item_size * width))
         .ok_or(GltfError::BadAccessor)?;
     if last > bytes.len() {
@@ -185,12 +189,19 @@ pub fn string<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
     get(v, key)?.as_str()
 }
 pub fn array<'a>(v: &'a Value, key: &str) -> &'a [Value] {
-    get(v, key).and_then(|a| a.as_array()).map(|a| a.as_slice()).unwrap_or(&[])
+    get(v, key)
+        .and_then(|a| a.as_array())
+        .map(|a| a.as_slice())
+        .unwrap_or(&[])
 }
 /// An array member of numbers, as f32 (missing entries read as `fill`).
 pub fn floats(v: &Value, key: &str, len: usize, fill: f32) -> Option<Vec<f32>> {
     let a = get(v, key)?.as_array()?;
-    Some((0..len).map(|i| a.get(i).and_then(|x| x.as_f32()).unwrap_or(fill)).collect())
+    Some(
+        (0..len)
+            .map(|i| a.get(i).and_then(|x| x.as_f32()).unwrap_or(fill))
+            .collect(),
+    )
 }
 /// The `extensions.<name>` block of a definition.
 pub fn extension<'a>(v: &'a Value, name: &str) -> Option<&'a Value> {
@@ -210,7 +221,12 @@ pub fn decode_data_uri(uri: &str) -> Option<(String, Vec<u8>)> {
     let comma = rest.find(',')?;
     let (meta, payload) = (&rest[..comma], &rest[comma + 1..]);
     let base64 = meta.ends_with(";base64");
-    let mime = meta.trim_end_matches(";base64").split(';').next().unwrap_or("").to_string();
+    let mime = meta
+        .trim_end_matches(";base64")
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .to_string();
     let bytes = if base64 {
         decode_base64(payload).ok()?
     } else {
@@ -287,7 +303,8 @@ pub fn read_container(bytes: &[u8]) -> Result<(String, Option<Vec<u8>>, bool), G
     if bytes.len() < 12 {
         return Err(GltfError::BadMagic);
     }
-    let u32_at = |p: usize| u32::from_le_bytes([bytes[p], bytes[p + 1], bytes[p + 2], bytes[p + 3]]);
+    let u32_at =
+        |p: usize| u32::from_le_bytes([bytes[p], bytes[p + 1], bytes[p + 2], bytes[p + 3]]);
     let version = u32_at(4);
     if version < 2 {
         return Err(GltfError::UnsupportedVersion);
@@ -308,7 +325,8 @@ pub fn read_container(bytes: &[u8]) -> Result<(String, Option<Vec<u8>>, bool), G
         }
         match kind {
             CHUNK_JSON => {
-                let s = std::str::from_utf8(&bytes[start..end]).map_err(|_| GltfError::Json("utf8"))?;
+                let s =
+                    std::str::from_utf8(&bytes[start..end]).map_err(|_| GltfError::Json("utf8"))?;
                 json_text = Some(s.to_string());
             }
             CHUNK_BIN => body = Some(bytes[start..end].to_vec()),
@@ -358,12 +376,15 @@ impl Document {
         };
         // `data:` URIs and the GLB body are known now.
         for i in 0..n {
-            let Some(b) = def(&doc.root, "buffers", i) else { continue };
+            let Some(b) = def(&doc.root, "buffers", i) else {
+                continue;
+            };
             match string(b, "uri") {
                 Some(uri) if uri.starts_with("data:") => match decode_data_uri(uri) {
                     Some((_, bytes)) => doc.buffers[i] = Some(Arc::new(bytes)),
                     None => {
-                        doc.buffer_errors.insert(i, format!("Failed to load buffer \"{uri}\"."));
+                        doc.buffer_errors
+                            .insert(i, format!("Failed to load buffer \"{uri}\"."));
                     }
                 },
                 None if i == 0 => doc.buffers[0] = doc.body.clone(),
@@ -382,8 +403,12 @@ impl Document {
             if slot.is_some() || self.buffer_errors.contains_key(&i) {
                 continue;
             }
-            let Some(b) = def(&self.root, "buffers", i) else { continue };
-            let Some(uri) = string(b, "uri") else { continue };
+            let Some(b) = def(&self.root, "buffers", i) else {
+                continue;
+            };
+            let Some(uri) = string(b, "uri") else {
+                continue;
+            };
             let fallback = extension(b, "EXT_meshopt_compression")
                 .and_then(|e| get(e, "fallback"))
                 .and_then(|f| f.as_bool())
@@ -441,8 +466,12 @@ impl Document {
             if self.decoded_views.contains_key(&i) {
                 continue;
             }
-            let Some(view) = def(&self.root, "bufferViews", i) else { continue };
-            let Some(ext) = extension(view, "EXT_meshopt_compression") else { continue };
+            let Some(view) = def(&self.root, "bufferViews", i) else {
+                continue;
+            };
+            let Some(ext) = extension(view, "EXT_meshopt_compression") else {
+                continue;
+            };
             let buffer = index(ext, "buffer").ok_or(GltfError::BadAccessor)?;
             let offset = index(ext, "byteOffset").unwrap_or(0);
             let length = index(ext, "byteLength").unwrap_or(0);
@@ -484,7 +513,9 @@ impl Document {
     pub fn accessor(&self, i: usize) -> Result<Accessor, GltfError> {
         let a = def(&self.root, "accessors", i)
             .ok_or_else(|| GltfError::msg(format!("accessor {i} does not exist")))?;
-        let item_size = string(a, "type").and_then(type_size).ok_or(GltfError::BadAccessor)?;
+        let item_size = string(a, "type")
+            .and_then(type_size)
+            .ok_or(GltfError::BadAccessor)?;
         let component_type = index(a, "componentType").ok_or(GltfError::BadAccessor)? as u32;
         let width = component_width(component_type).ok_or(GltfError::BadAccessor)?;
         let count = index(a, "count").ok_or(GltfError::BadAccessor)?;
@@ -545,7 +576,13 @@ impl Document {
                 }
             }
         }
-        Ok(Accessor { item_size, count, component_type, normalized, raw })
+        Ok(Accessor {
+            item_size,
+            count,
+            component_type,
+            normalized,
+            raw,
+        })
     }
 
     /// An index accessor as integers (exact past 2^24, which floats are not).
@@ -570,7 +607,9 @@ impl Document {
         for e in 0..count {
             let at = offset + e * stride;
             let b = bytes.get(at..at + 4).ok_or_else(|| {
-                GltfError::msg(format!("accessor {i} reads past the end of its buffer view"))
+                GltfError::msg(format!(
+                    "accessor {i} reads past the end of its buffer view"
+                ))
             })?;
             out.push(u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
         }
@@ -591,14 +630,24 @@ impl Document {
             });
         }
         let Some(uri) = string(def, "uri") else {
-            return Err(GltfError::msg(format!("Image {i} is missing URI and bufferView")));
+            return Err(GltfError::msg(format!(
+                "Image {i} is missing URI and bufferView"
+            )));
         };
         let mime_type = declared.unwrap_or_else(|| guess_mime(uri));
         if uri.starts_with("data:") {
             let (_, bytes) = decode_data_uri(uri)
                 .ok_or_else(|| GltfError::msg(format!("Couldn't load texture {uri}")))?;
-            return Ok(ImageSource { uri: None, bytes: Some(bytes), mime_type });
+            return Ok(ImageSource {
+                uri: None,
+                bytes: Some(bytes),
+                mime_type,
+            });
         }
-        Ok(ImageSource { uri: Some(uri.to_string()), bytes: None, mime_type })
+        Ok(ImageSource {
+            uri: Some(uri.to_string()),
+            bytes: None,
+            mime_type,
+        })
     }
 }

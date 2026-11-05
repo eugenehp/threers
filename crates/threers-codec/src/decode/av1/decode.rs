@@ -5,9 +5,14 @@ use std::sync::Arc;
 
 use super::cdf::CdfContext;
 use super::env::*;
-use super::intra_edge::{self, EdgeNode, EDGE_ALL_LEFT_HAS_BOTTOM, EDGE_ALL_TOP_HAS_RIGHT, EDGE_ALL_TR_AND_BL, EDGE_I444_TOP_HAS_RIGHT};
+use super::intra_edge::{
+    self, EdgeNode, EDGE_ALL_LEFT_HAS_BOTTOM, EDGE_ALL_TOP_HAS_RIGHT, EDGE_ALL_TR_AND_BL,
+    EDGE_I444_TOP_HAS_RIGHT,
+};
 use super::levels::*;
-use super::lf_mask::{self, Av1Filter, Av1FilterLut, Av1Restoration, LfEdges, LfLevels, RestorationUnit};
+use super::lf_mask::{
+    self, Av1Filter, Av1FilterLut, Av1Restoration, LfEdges, LfLevels, RestorationUnit,
+};
 use super::msac::{ulog2, Msac};
 use super::obu::*;
 use super::picture::Picture;
@@ -73,6 +78,7 @@ pub struct Svc {
     pub step: i32,
 }
 
+#[derive(Clone)]
 pub struct TilePos {
     pub col_start: i32,
     pub col_end: i32,
@@ -82,6 +88,7 @@ pub struct TilePos {
     pub row: usize,
 }
 
+#[derive(Clone)]
 pub struct TileState {
     pub cdf: Box<CdfContext>,
     pub msac: Msac,
@@ -97,11 +104,13 @@ pub struct TileState {
 }
 
 /// A reference frame as the current frame sees it.
+#[derive(Clone)]
 pub struct RefFrame {
     pub pic: Arc<Picture>,
     pub hdr: Arc<FrameHeader>,
 }
 
+#[derive(Clone)]
 pub struct LfState {
     pub level: Vec<[u8; 4]>,
     pub mask: Vec<Av1Filter>,
@@ -114,6 +123,7 @@ pub struct LfState {
 }
 
 /// The frame decoder: dav1d's frame, tile and task contexts in one.
+#[derive(Clone)]
 pub struct Fd {
     pub seq: Arc<SeqHeader>,
     pub hdr: Arc<FrameHeader>,
@@ -173,6 +183,23 @@ pub struct Fd {
     pub refpoc: [u32; 7],
     /// Edge-padded reference window for `mc`, reused between blocks.
     pub mc_buf: Vec<u16>,
+    /// The two predictions of a compound block and its segment mask, reused
+    /// between blocks: each is written over the block before it is read.
+    pub comp_buf: Option<Box<([Vec<i16>; 2], Vec<u8>)>>,
+    /// Per-tile output buffers for the tile-parallel decode, lent by the
+    /// decoder so they are allocated once rather than every frame.
+    pub tile_pool: Vec<TileBufs>,
+}
+
+/// One tile worker's pixels, filter levels and motion vectors. A tile reads
+/// back only what it has written this frame, so whatever a buffer held from
+/// an earlier frame is never seen.
+#[derive(Clone, Default)]
+pub struct TileBufs {
+    pub cur: Option<Picture>,
+    pub level: Vec<[u8; 4]>,
+    pub r: Vec<RefmvsBlock>,
+    pub ipred_edge: [Vec<u16>; 3],
 }
 
 #[inline]
@@ -182,12 +209,21 @@ fn set<T: Copy>(a: &mut [T], off: usize, n: usize, v: T) {
     }
 }
 
-pub fn init_quant_tables(seq: &SeqHeader, hdr: &FrameHeader, qidx: i32, dq: &mut [[[u16; 2]; 3]; 8]) {
+pub fn init_quant_tables(
+    seq: &SeqHeader,
+    hdr: &FrameHeader,
+    qidx: i32,
+    dq: &mut [[[u16; 2]; 3]; 8],
+) {
     let n = if hdr.segmentation.enabled { 8 } else { 1 };
     let hbd = seq.hbd as usize;
     let q = &hdr.quant;
     for (i, d) in dq.iter_mut().enumerate().take(n) {
-        let yac = if hdr.segmentation.enabled { (qidx + hdr.segmentation.seg_data.d[i].delta_q as i32).clamp(0, 255) } else { qidx };
+        let yac = if hdr.segmentation.enabled {
+            (qidx + hdr.segmentation.seg_data.d[i].delta_q as i32).clamp(0, 255)
+        } else {
+            qidx
+        };
         let c = |dl: i8| (yac + dl as i32).clamp(0, 255) as usize;
         d[0][0] = DQ_TBL[hbd][c(q.ydc_delta)][0];
         d[0][1] = DQ_TBL[hbd][yac as usize][1];
@@ -281,7 +317,14 @@ impl Fd {
         }
     }
 
-    fn read_tx_tree(&mut self, from: usize, depth: usize, masks: &mut [u16; 2], x_off: usize, y_off: usize) {
+    fn read_tx_tree(
+        &mut self,
+        from: usize,
+        depth: usize,
+        masks: &mut [u16; 2],
+        x_off: usize,
+        y_off: usize,
+    ) {
         let bx4 = (self.bx & 31) as usize;
         let by4 = (self.by & 31) as usize;
         let t_dim = TXFM_DIMENSIONS[from];
@@ -320,18 +363,41 @@ impl Fd {
             self.by -= txsh;
         } else {
             let ai = self.ai;
-            set(&mut self.a[ai].tx, bx4, 1 << t_dim.lw, if is_split { TX_4X4 as i8 } else { txw as i8 });
-            set(&mut self.l.tx, by4, 1 << t_dim.lh, if is_split { TX_4X4 as i8 } else { txh as i8 });
+            set(
+                &mut self.a[ai].tx,
+                bx4,
+                1 << t_dim.lw,
+                if is_split { TX_4X4 as i8 } else { txw as i8 },
+            );
+            set(
+                &mut self.l.tx,
+                by4,
+                1 << t_dim.lh,
+                if is_split { TX_4X4 as i8 } else { txh as i8 },
+            );
         }
     }
 
-    fn find_matching_ref(&self, intra_edge_flags: u8, bw4: i32, bh4: i32, w4: i32, h4: i32, have_left: bool, have_top: bool, r: i8, masks: &mut [u64; 2]) {
+    fn find_matching_ref(
+        &self,
+        intra_edge_flags: u8,
+        bw4: i32,
+        bh4: i32,
+        w4: i32,
+        h4: i32,
+        have_left: bool,
+        have_top: bool,
+        r: i8,
+        masks: &mut [u64; 2],
+    ) {
         let rf = self.rf.as_ref().unwrap();
         let (bx, by) = (self.bx, self.by);
         let mut count = 0;
         let mut have_topleft = have_top && have_left;
-        let mut have_topright =
-            bw4.max(bh4) < 32 && have_top && bx + bw4 < self.ts[self.tsi].tiling.col_end && intra_edge_flags & EDGE_I444_TOP_HAS_RIGHT != 0;
+        let mut have_topright = bw4.max(bh4) < 32
+            && have_top
+            && bx + bw4 < self.ts[self.tsi].tiling.col_end
+            && intra_edge_flags & EDGE_I444_TOP_HAS_RIGHT != 0;
         let matches = |b: &RefmvsBlock| b.r[0] == r + 1 && b.r[1] == -1;
         let bsd = |b: &RefmvsBlock| BLOCK_DIMENSIONS[b.bs as usize];
         if have_top {
@@ -421,7 +487,13 @@ impl Fd {
         let mut pts = [[[0i32; 2]; 2]; 8];
         let mut np = 0usize;
         let bsd = |b: &RefmvsBlock| BLOCK_DIMENSIONS[b.bs as usize];
-        let add = |pts: &mut [[[i32; 2]; 2]; 8], np: &mut usize, dx: i32, dy: i32, sx: i32, sy: i32, b: &RefmvsBlock| {
+        let add = |pts: &mut [[[i32; 2]; 2]; 8],
+                   np: &mut usize,
+                   dx: i32,
+                   dy: i32,
+                   sx: i32,
+                   sy: i32,
+                   b: &RefmvsBlock| {
             let d = bsd(b);
             pts[*np][0][0] = 16 * (2 * dx + sx * d[0] as i32) - 8;
             pts[*np][0][1] = 16 * (2 * dy + sy * d[1] as i32) - 8;
@@ -440,7 +512,15 @@ impl Fd {
                 let tz = xmask.trailing_zeros();
                 off += tz;
                 xmask >>= tz;
-                add(&mut pts, &mut np, off as i32, 0, 1, -1, rf.blk(by - 1, bx + off as i32));
+                add(
+                    &mut pts,
+                    &mut np,
+                    off as i32,
+                    0,
+                    1,
+                    -1,
+                    rf.blk(by - 1, bx + off as i32),
+                );
                 xmask &= !1;
             }
         }
@@ -455,7 +535,15 @@ impl Fd {
                 let tz = ymask.trailing_zeros();
                 off += tz;
                 ymask >>= tz;
-                add(&mut pts, &mut np, 0, off as i32, -1, 1, rf.blk(by + off as i32, bx - 1));
+                add(
+                    &mut pts,
+                    &mut np,
+                    0,
+                    off as i32,
+                    -1,
+                    1,
+                    rf.blk(by + off as i32, bx - 1),
+                );
                 ymask &= !1;
             }
         }
@@ -469,7 +557,8 @@ impl Fd {
         let mut ret = 0usize;
         let thresh = 4 * bw4.max(bh4).clamp(4, 28);
         for i in 0..np {
-            mvd[i] = (pts[i][1][0] - pts[i][0][0] - mv.x as i32).abs() + (pts[i][1][1] - pts[i][0][1] - mv.y as i32).abs();
+            mvd[i] = (pts[i][1][0] - pts[i][0][0] - mv.x as i32).abs()
+                + (pts[i][1][1] - pts[i][0][1] - mv.y as i32).abs();
             if mvd[i] > thresh {
                 mvd[i] = -1;
             } else {
@@ -497,7 +586,9 @@ impl Fd {
             }
         }
         let mut wmp = self.warpmv;
-        if !warpmv::find_affine_int(&pts, ret, bw4, bh4, mv, &mut wmp, bx, by) && !warpmv::get_shear_params(&mut wmp) {
+        if !warpmv::find_affine_int(&pts, ret, bw4, bh4, mv, &mut wmp, bx, by)
+            && !warpmv::get_shear_params(&mut wmp)
+        {
             wmp.typ = WM_AFFINE;
         } else {
             wmp.typ = WM_IDENTITY;
@@ -573,7 +664,15 @@ impl Fd {
         self.rf.as_mut().unwrap().splat(&tmpl, by, bx, bw4, bh4);
     }
 
-    fn order_palette(pal_idx: &[u8], stride: usize, i: usize, first: usize, last: usize, order: &mut [[u8; 8]; 64], ctx: &mut [u8; 64]) {
+    fn order_palette(
+        pal_idx: &[u8],
+        stride: usize,
+        i: usize,
+        first: usize,
+        last: usize,
+        order: &mut [[u8; 8]; 64],
+        ctx: &mut [u8; 64],
+    ) {
         let mut have_top = i > first;
         let mut p = first + (i - first) * stride;
         let mut n = 0;
@@ -611,7 +710,12 @@ impl Fd {
                 } else if same_t_tl | same_l_tl {
                     ctx[n] = 2;
                     add(tl, &mut order[n], &mut o_idx, &mut mask);
-                    add(if same_t_tl { l } else { t }, &mut order[n], &mut o_idx, &mut mask);
+                    add(
+                        if same_t_tl { l } else { t },
+                        &mut order[n],
+                        &mut o_idx,
+                        &mut mask,
+                    );
                 } else {
                     ctx[n] = 1;
                     add(t.min(l), &mut order[n], &mut o_idx, &mut mask);
@@ -634,7 +738,16 @@ impl Fd {
 
     /// `read_pal_indices` + `pal_idx_finish` (indices kept unpacked, one per
     /// byte, `bw4 * 4` wide).
-    fn read_pal_indices(&mut self, uv: bool, pal_sz: usize, pl: usize, w4: usize, h4: usize, bw4: usize, bh4: usize) {
+    fn read_pal_indices(
+        &mut self,
+        uv: bool,
+        pal_sz: usize,
+        pl: usize,
+        w4: usize,
+        h4: usize,
+        bw4: usize,
+        bh4: usize,
+    ) {
         let stride = bw4 * 4;
         let mut tmp = vec![0u8; 64 * 64];
         tmp[0] = self.msac().uniform(pal_sz as u32) as u8;
@@ -656,7 +769,11 @@ impl Fd {
         }
         // pal_idx_finish: fill the invisible right/bottom edges.
         let (w, h, bw, bh) = (w4 * 4, h4 * 4, bw4 * 4, bh4 * 4);
-        let dst = if uv { &mut self.pal_idx_uv } else { &mut self.pal_idx_y };
+        let dst = if uv {
+            &mut self.pal_idx_uv
+        } else {
+            &mut self.pal_idx_y
+        };
         for y in 0..h {
             dst[y * bw..y * bw + w].copy_from_slice(&tmp[y * stride..y * stride + w]);
             let last = tmp[y * stride + w - 1];
@@ -669,14 +786,33 @@ impl Fd {
         }
     }
 
-    fn read_pal_plane(&mut self, b: &mut Av1Block, pl: usize, sz_ctx: usize, bx4: usize, by4: usize) {
+    fn read_pal_plane(
+        &mut self,
+        b: &mut Av1Block,
+        pl: usize,
+        sz_ctx: usize,
+        bx4: usize,
+        by4: usize,
+    ) {
         let pal_sz = sa!(self, 6, m.pal_sz[(pl != 0) as usize][sz_ctx]) + 2;
         b.pal_sz[(pl != 0) as usize] = pal_sz as u8;
         let mut cache = [0u16; 16];
         let mut used_cache = [0u16; 8];
-        let mut l_cache = if pl != 0 { self.pal_sz_uv[1][by4] } else { self.l.pal_sz[by4] } as usize;
+        let mut l_cache = if pl != 0 {
+            self.pal_sz_uv[1][by4]
+        } else {
+            self.l.pal_sz[by4]
+        } as usize;
         let mut n_cache = 0;
-        let mut a_cache = if by4 & 15 != 0 { if pl != 0 { self.pal_sz_uv[0][bx4] } else { self.a[self.ai].pal_sz[bx4] } } else { 0 } as usize;
+        let mut a_cache = if by4 & 15 != 0 {
+            if pl != 0 {
+                self.pal_sz_uv[0][bx4]
+            } else {
+                self.a[self.ai].pal_sz[bx4]
+            }
+        } else {
+            0
+        } as usize;
         let lp = self.al_pal[1][by4][pl];
         let ap = self.al_pal[0][bx4][pl];
         let (mut li, mut ai) = (0, 0);
@@ -829,7 +965,16 @@ impl Fd {
         }
     }
 
-    fn lf_mask_call(&mut self, b: &Av1Block, bs: usize, has_chroma: bool, levels: [u8; 4], inter: Option<(bool, [u16; 2])>, ytx: usize, uvtx: usize) {
+    fn lf_mask_call(
+        &mut self,
+        b: &Av1Block,
+        bs: usize,
+        has_chroma: bool,
+        levels: [u8; 4],
+        inter: Option<(bool, [u16; 2])>,
+        ytx: usize,
+        uvtx: usize,
+    ) {
         let bx4 = (self.bx & 31) as usize;
         let by4 = (self.by & 31) as usize;
         let cbx4 = bx4 >> self.ss_hor;
@@ -839,7 +984,11 @@ impl Fd {
         let l = &mut self.l;
         let (ay, auv) = (&mut a.tx_lpf_y[bx4..], &mut a.tx_lpf_uv[cbx4..]);
         let (ly, luv) = (&mut l.tx_lpf_y[by4..], &mut l.tx_lpf_uv[cby4..]);
-        let e = LfEdges { ay, ly, uv: if has_chroma { Some((auv, luv)) } else { None } };
+        let e = LfEdges {
+            ay,
+            ly,
+            uv: if has_chroma { Some((auv, luv)) } else { None },
+        };
         lf_mask::create_lf_mask(
             &mut self.lf.mask[self.lf_mask],
             &mut self.lf.level,
@@ -889,7 +1038,9 @@ impl Fd {
         let tiling_rs = self.ts[self.tsi].tiling.row_start;
         let have_left = self.bx > tiling_cs;
         let have_top = self.by > tiling_rs;
-        let has_chroma = self.layout != Layout::I400 && (bw4 > ss_hor as i32 || self.bx & 1 != 0) && (bh4 > ss_ver as i32 || self.by & 1 != 0);
+        let has_chroma = self.layout != Layout::I400
+            && (bw4 > ss_hor as i32 || self.bx & 1 != 0)
+            && (bh4 > ss_ver as i32 || self.by & 1 != 0);
         let cw4 = (w4 + ss_hor as i32) >> ss_hor;
         let ch4 = (h4 + ss_ver as i32) >> ss_ver;
         let inter_frame = hdr.is_inter_or_switch();
@@ -930,8 +1081,14 @@ impl Fd {
                         0
                     };
                 } else {
-                    let (pred, seg_ctx) =
-                        get_cur_frame_segid(self.by as usize, self.bx as usize, have_top, have_left, self.cur_segmap.as_ref().unwrap(), self.b4_stride as usize);
+                    let (pred, seg_ctx) = get_cur_frame_segid(
+                        self.by as usize,
+                        self.bx as usize,
+                        have_top,
+                        have_left,
+                        self.cur_segmap.as_ref().unwrap(),
+                        self.b4_stride as usize,
+                    );
                     let diff = sa!(self, 7, m.seg_id[seg_ctx]) as i32;
                     let last_active = segmentation.seg_data.last_active_segid as i32;
                     let mut s = neg_deinterleave(diff, pred as i32, last_active + 1);
@@ -950,7 +1107,12 @@ impl Fd {
         }
 
         // skip_mode
-        if seg.map(|s| !s.globalmv && s.r#ref == -1 && !s.skip).unwrap_or(true) && hdr.skip_mode_enabled && bw4.min(bh4) > 1 {
+        if seg
+            .map(|s| !s.globalmv && s.r#ref == -1 && !s.skip)
+            .unwrap_or(true)
+            && hdr.skip_mode_enabled
+            && bw4.min(bh4) > 1
+        {
             let smctx = (self.a[ai].skip_mode[bx4] + self.l.skip_mode[by4]) as usize;
             b.skip_mode = ba!(self, m.skip_mode[smctx]);
         }
@@ -980,8 +1142,14 @@ impl Fd {
                     0
                 };
             } else {
-                let (pred, seg_ctx) =
-                    get_cur_frame_segid(self.by as usize, self.bx as usize, have_top, have_left, self.cur_segmap.as_ref().unwrap(), self.b4_stride as usize);
+                let (pred, seg_ctx) = get_cur_frame_segid(
+                    self.by as usize,
+                    self.bx as usize,
+                    have_top,
+                    have_left,
+                    self.cur_segmap.as_ref().unwrap(),
+                    self.b4_stride as usize,
+                );
                 let mut s;
                 if b.skip {
                     s = pred as i32;
@@ -1003,7 +1171,11 @@ impl Fd {
 
         // cdef index
         if !b.skip {
-            let idx = if seq.sb128 { (((self.bx & 16) >> 4) + ((self.by & 16) >> 3)) as usize } else { 0 };
+            let idx = if seq.sb128 {
+                (((self.bx & 16) >> 4) + ((self.by & 16) >> 3)) as usize
+            } else {
+                0
+            };
             let m = &mut self.lf.mask[self.lf_mask].cdef_idx;
             let ci = self.cdef_idx;
             if m[ci + idx] == -1 {
@@ -1027,7 +1199,8 @@ impl Fd {
         let sbm = 31 >> (!seq.sb128) as i32;
         if self.bx & sbm == 0 && self.by & sbm == 0 {
             let prev_qidx = self.ts[self.tsi].last_qidx;
-            let have_delta_q = hdr.delta.q_present && (bs != if seq.sb128 { BS_128X128 } else { BS_64X64 } || !b.skip);
+            let have_delta_q = hdr.delta.q_present
+                && (bs != if seq.sb128 { BS_128X128 } else { BS_64X64 } || !b.skip);
             let prev_delta_lf = self.ts[self.tsi].last_delta_lf;
             if have_delta_q {
                 let mut delta_q = sa!(self, 3, m.delta_q) as i32;
@@ -1044,7 +1217,15 @@ impl Fd {
                 let ts = &mut self.ts[self.tsi];
                 ts.last_qidx = (ts.last_qidx + delta_q).clamp(1, 255);
                 if hdr.delta.lf_present {
-                    let n_lfs = if hdr.delta.lf_multi { if self.layout != Layout::I400 { 4 } else { 2 } } else { 1 };
+                    let n_lfs = if hdr.delta.lf_multi {
+                        if self.layout != Layout::I400 {
+                            4
+                        } else {
+                            2
+                        }
+                    } else {
+                        1
+                    };
                     for i in 0..n_lfs {
                         let ci = i + hdr.delta.lf_multi as usize;
                         let mut delta_lf = sa!(self, 3, m.delta_lf[ci]) as i32;
@@ -1059,7 +1240,8 @@ impl Fd {
                             delta_lf *= 1 << hdr.delta.lf_res_log2;
                         }
                         let ts = &mut self.ts[self.tsi];
-                        ts.last_delta_lf[i] = (ts.last_delta_lf[i] as i32 + delta_lf).clamp(-63, 63) as i8;
+                        ts.last_delta_lf[i] =
+                            (ts.last_delta_lf[i] as i32 + delta_lf).clamp(-63, 63) as i8;
                     }
                 }
             }
@@ -1103,7 +1285,10 @@ impl Fd {
                 let cl = INTRA_MODE_CONTEXT[self.l.mode[by4] as usize] as usize;
                 sa!(self, N_INTRA_PRED_MODES - 1, kfym[ca][cl])
             } as u8;
-            if b_dim[2] + b_dim[3] >= 2 && b.y_mode as usize >= VERT_PRED && b.y_mode as usize <= VERT_LEFT_PRED {
+            if b_dim[2] + b_dim[3] >= 2
+                && b.y_mode as usize >= VERT_PRED
+                && b.y_mode as usize <= VERT_LEFT_PRED
+            {
                 let k = b.y_mode as usize - VERT_PRED;
                 b.y_angle = sa!(self, 6, m.angle_delta[k]) as i8 - 3;
             } else {
@@ -1116,7 +1301,11 @@ impl Fd {
                     (CFL_ALLOWED_MASK & (1 << bs)) != 0
                 };
                 let ym = b.y_mode as usize;
-                b.uv_mode = sa!(self, N_UV_INTRA_PRED_MODES - 1 - !cfl_allowed as usize, m.uv_mode[cfl_allowed as usize][ym]) as u8;
+                b.uv_mode = sa!(
+                    self,
+                    N_UV_INTRA_PRED_MODES - 1 - !cfl_allowed as usize,
+                    m.uv_mode[cfl_allowed as usize][ym]
+                ) as u8;
                 b.uv_angle = 0;
                 if b.uv_mode as usize == CFL_PRED {
                     let sign = sa!(self, 7, m.cfl_sign) as i32 + 1;
@@ -1136,7 +1325,10 @@ impl Fd {
                     } else {
                         b.cfl_alpha[1] = 0;
                     }
-                } else if b_dim[2] + b_dim[3] >= 2 && b.uv_mode as usize >= VERT_PRED && b.uv_mode as usize <= VERT_LEFT_PRED {
+                } else if b_dim[2] + b_dim[3] >= 2
+                    && b.uv_mode as usize >= VERT_PRED
+                    && b.uv_mode as usize <= VERT_LEFT_PRED
+                {
                     let k = b.uv_mode as usize - VERT_PRED;
                     b.uv_angle = sa!(self, 6, m.angle_delta[k]) as i8 - 3;
                 }
@@ -1146,7 +1338,8 @@ impl Fd {
             if hdr.allow_screen_content_tools && bw4.max(bh4) <= 16 && bw4 + bh4 >= 4 {
                 let sz_ctx = (b_dim[2] + b_dim[3] - 2) as usize;
                 if b.y_mode as usize == DC_PRED {
-                    let pal_ctx = (self.a[ai].pal_sz[bx4] > 0) as usize + (self.l.pal_sz[by4] > 0) as usize;
+                    let pal_ctx =
+                        (self.a[ai].pal_sz[bx4] > 0) as usize + (self.l.pal_sz[by4] > 0) as usize;
                     if ba!(self, m.pal_y[sz_ctx][pal_ctx]) {
                         self.read_pal_plane(&mut b, 0, sz_ctx, bx4, by4);
                     }
@@ -1159,16 +1352,37 @@ impl Fd {
                 }
             }
 
-            if b.y_mode as usize == DC_PRED && b.pal_sz[0] == 0 && b_dim[2].max(b_dim[3]) <= 3 && seq.filter_intra && ba!(self, m.use_filter_intra[bs]) {
+            if b.y_mode as usize == DC_PRED
+                && b.pal_sz[0] == 0
+                && b_dim[2].max(b_dim[3]) <= 3
+                && seq.filter_intra
+                && ba!(self, m.use_filter_intra[bs])
+            {
                 b.y_mode = FILTER_PRED as u8;
                 b.y_angle = sa!(self, 4, m.filter_intra) as i8;
             }
 
             if b.pal_sz[0] != 0 {
-                self.read_pal_indices(false, b.pal_sz[0] as usize, 0, w4 as usize, h4 as usize, bw4 as usize, bh4 as usize);
+                self.read_pal_indices(
+                    false,
+                    b.pal_sz[0] as usize,
+                    0,
+                    w4 as usize,
+                    h4 as usize,
+                    bw4 as usize,
+                    bh4 as usize,
+                );
             }
             if has_chroma && b.pal_sz[1] != 0 {
-                self.read_pal_indices(true, b.pal_sz[1] as usize, 1, cw4 as usize, ch4 as usize, cbw4 as usize, cbh4 as usize);
+                self.read_pal_indices(
+                    true,
+                    b.pal_sz[1] as usize,
+                    1,
+                    cw4 as usize,
+                    ch4 as usize,
+                    cbw4 as usize,
+                    cbh4 as usize,
+                );
             }
 
             let mut t_dim;
@@ -1197,10 +1411,22 @@ impl Fd {
             if hdr.loopfilter.level_y[0] != 0 || hdr.loopfilter.level_y[1] != 0 {
                 let lv = self.lflvl(b.seg_id as usize);
                 let levels = [lv[0][0][0], lv[1][0][0], lv[2][0][0], lv[3][0][0]];
-                self.lf_mask_call(&b, bs, has_chroma, levels, None, b.tx as usize, b.uvtx as usize);
+                self.lf_mask_call(
+                    &b,
+                    bs,
+                    has_chroma,
+                    levels,
+                    None,
+                    b.tx as usize,
+                    b.uvtx as usize,
+                );
             }
 
-            let y_mode_nofilt = if b.y_mode as usize == FILTER_PRED { DC_PRED as u8 } else { b.y_mode };
+            let y_mode_nofilt = if b.y_mode as usize == FILTER_PRED {
+                DC_PRED as u8
+            } else {
+                b.y_mode
+            };
             for i in 0..2 {
                 let off = if i == 0 { bx4 } else { by4 };
                 let n = 1usize << b_dim[2 + i];
@@ -1228,27 +1454,55 @@ impl Fd {
                 self.copy_pal_block_y(bx4, by4, bw4 as usize, bh4 as usize);
             }
             if has_chroma {
-                set(&mut self.a[ai].uvmode, cbx4, 1 << ulog2(cbw4 as u32), b.uv_mode);
+                set(
+                    &mut self.a[ai].uvmode,
+                    cbx4,
+                    1 << ulog2(cbw4 as u32),
+                    b.uv_mode,
+                );
                 set(&mut self.l.uvmode, cby4, 1 << ulog2(cbh4 as u32), b.uv_mode);
                 if b.pal_sz[1] != 0 {
                     self.copy_pal_block_uv(bx4, by4, bw4 as usize, bh4 as usize);
                 }
             }
             if inter_frame || hdr.allow_intrabc {
-                self.splat(RefmvsBlock { mv: [Mv::INVALID, Mv::ZERO], r: [0, -1], bs: bs as u8, mf: 0 }, bw4, bh4);
+                self.splat(
+                    RefmvsBlock {
+                        mv: [Mv::INVALID, Mv::ZERO],
+                        r: [0, -1],
+                        bs: bs as u8,
+                        mf: 0,
+                    },
+                    bw4,
+                    bh4,
+                );
             }
         } else if hdr.is_key_or_intra() {
             // ------------------------------------------------------- intrabc
-            let (stack, _n_mvs, _ctx) =
-                refmvs::find(self.rf.as_ref().unwrap(), &hdr, &self.rt, [0, -1], bs, intra_edge_flags, self.by, self.bx);
+            let (stack, _n_mvs, _ctx) = refmvs::find(
+                self.rf.as_ref().unwrap(),
+                &hdr,
+                &self.rt,
+                [0, -1],
+                bs,
+                intra_edge_flags,
+                self.by,
+                self.bx,
+            );
             if stack[0].mv[0] != Mv::ZERO {
                 b.mv[0] = stack[0].mv[0];
             } else if stack[1].mv[0] != Mv::ZERO {
                 b.mv[0] = stack[1].mv[0];
             } else if self.by - (16 << seq.sb128 as i32) < tiling_rs {
-                b.mv[0] = Mv { y: 0, x: (-(512 << seq.sb128 as i32) - 2048) as i16 };
+                b.mv[0] = Mv {
+                    y: 0,
+                    x: (-(512 << seq.sb128 as i32) - 2048) as i16,
+                };
             } else {
-                b.mv[0] = Mv { y: -(512 << seq.sb128 as i32) as i16, x: 0 };
+                b.mv[0] = Mv {
+                    y: -(512 << seq.sb128 as i32) as i16,
+                    x: 0,
+                };
             }
             let mut mv = b.mv[0];
             self.read_mv_residual(&mut mv, -1);
@@ -1309,7 +1563,16 @@ impl Fd {
             self.read_vartx_tree(&mut b, bs, bx4, by4);
             self.recon_b_inter(bs, &b)?;
 
-            self.splat(RefmvsBlock { mv: [b.mv[0], Mv::ZERO], r: [0, -1], bs: bs as u8, mf: 0 }, bw4, bh4);
+            self.splat(
+                RefmvsBlock {
+                    mv: [b.mv[0], Mv::ZERO],
+                    r: [0, -1],
+                    bs: bs as u8,
+                    mf: 0,
+                },
+                bw4,
+                bh4,
+            );
             for i in 0..2 {
                 let off = if i == 0 { bx4 } else { by4 };
                 let n = 1usize << b_dim[2 + i];
@@ -1324,15 +1587,30 @@ impl Fd {
                 set(&mut self.pal_sz_uv[i], off, n, 0);
             }
             if has_chroma {
-                set(&mut self.a[ai].uvmode, cbx4, 1 << ulog2(cbw4 as u32), DC_PRED as u8);
-                set(&mut self.l.uvmode, cby4, 1 << ulog2(cbh4 as u32), DC_PRED as u8);
+                set(
+                    &mut self.a[ai].uvmode,
+                    cbx4,
+                    1 << ulog2(cbw4 as u32),
+                    DC_PRED as u8,
+                );
+                set(
+                    &mut self.l.uvmode,
+                    cby4,
+                    1 << ulog2(cbh4 as u32),
+                    DC_PRED as u8,
+                );
             }
         } else {
             // --------------------------------------------------------- inter
             let mut has_subpel_filter;
             let is_comp = if b.skip_mode {
                 true
-            } else if seg.map(|s| s.r#ref == -1 && !s.globalmv && !s.skip).unwrap_or(true) && hdr.switchable_comp_refs && bw4.min(bh4) > 1 {
+            } else if seg
+                .map(|s| s.r#ref == -1 && !s.globalmv && !s.skip)
+                .unwrap_or(true)
+                && hdr.switchable_comp_refs
+                && bw4.min(bh4) > 1
+            {
                 let ctx = get_comp_ctx(&self.a[ai], &self.l, by4, bx4, have_top, have_left);
                 ba!(self, m.comp[ctx])
             } else {
@@ -1365,17 +1643,20 @@ impl Fd {
                     let (a, l) = (&self.a[ai], &self.l);
                     let ctx1 = get_fwd_ref_ctx(a, l, by4, bx4, have_top, have_left);
                     if ba!(self, m.comp_fwd_ref[0][ctx1]) {
-                        let ctx2 = get_fwd_ref_2_ctx(&self.a[ai], &self.l, by4, bx4, have_top, have_left);
+                        let ctx2 =
+                            get_fwd_ref_2_ctx(&self.a[ai], &self.l, by4, bx4, have_top, have_left);
                         b.r#ref[0] = 2 + ba!(self, m.comp_fwd_ref[2][ctx2]) as i8;
                     } else {
-                        let ctx2 = get_fwd_ref_1_ctx(&self.a[ai], &self.l, by4, bx4, have_top, have_left);
+                        let ctx2 =
+                            get_fwd_ref_1_ctx(&self.a[ai], &self.l, by4, bx4, have_top, have_left);
                         b.r#ref[0] = ba!(self, m.comp_fwd_ref[1][ctx2]) as i8;
                     }
                     let ctx3 = get_bwd_ref_ctx(&self.a[ai], &self.l, by4, bx4, have_top, have_left);
                     if ba!(self, m.comp_bwd_ref[0][ctx3]) {
                         b.r#ref[1] = 6;
                     } else {
-                        let ctx4 = get_bwd_ref_1_ctx(&self.a[ai], &self.l, by4, bx4, have_top, have_left);
+                        let ctx4 =
+                            get_bwd_ref_1_ctx(&self.a[ai], &self.l, by4, bx4, have_top, have_left);
                         b.r#ref[1] = 4 + ba!(self, m.comp_bwd_ref[1][ctx4]) as i8;
                     }
                 } else {
@@ -1383,11 +1664,19 @@ impl Fd {
                     if ba!(self, m.comp_uni_ref[0][uctx_p]) {
                         b.r#ref = [4, 6];
                     } else {
-                        let uctx_p1 = get_uni_p1_ctx(&self.a[ai], &self.l, by4, bx4, have_top, have_left);
+                        let uctx_p1 =
+                            get_uni_p1_ctx(&self.a[ai], &self.l, by4, bx4, have_top, have_left);
                         b.r#ref[0] = 0;
                         b.r#ref[1] = 1 + ba!(self, m.comp_uni_ref[1][uctx_p1]) as i8;
                         if b.r#ref[1] == 2 {
-                            let uctx_p2 = get_fwd_ref_2_ctx(&self.a[ai], &self.l, by4, bx4, have_top, have_left);
+                            let uctx_p2 = get_fwd_ref_2_ctx(
+                                &self.a[ai],
+                                &self.l,
+                                by4,
+                                bx4,
+                                have_top,
+                                have_left,
+                            );
                             b.r#ref[1] += ba!(self, m.comp_uni_ref[2][uctx_p2]) as i8;
                         }
                     }
@@ -1403,7 +1692,11 @@ impl Fd {
                     self.by,
                     self.bx,
                 );
-                b.inter_mode = sa!(self, N_COMP_INTER_PRED_MODES - 1, m.comp_inter_mode[ctx as usize]) as u8;
+                b.inter_mode = sa!(
+                    self,
+                    N_COMP_INTER_PRED_MODES - 1,
+                    m.comp_inter_mode[ctx as usize]
+                ) as u8;
                 let im = COMP_INTER_PRED_MODES[b.inter_mode as usize];
                 b.drl_idx = NEAREST_DRL;
                 if b.inter_mode == NEWMV_NEWMV {
@@ -1455,10 +1748,28 @@ impl Fd {
                 if !is_segwedge {
                     if seq.jnt_comp {
                         let poc = hdr.frame_offset as u32;
-                        let r0 = self.refp[b.r#ref[0] as usize].as_ref().unwrap().hdr.frame_offset as u32;
-                        let r1 = self.refp[b.r#ref[1] as usize].as_ref().unwrap().hdr.frame_offset as u32;
-                        let jnt_ctx = get_jnt_comp_ctx(seq.order_hint_n_bits, poc, r0, r1, &self.a[ai], &self.l, by4, bx4);
-                        b.comp_type = COMP_INTER_WEIGHTED_AVG + ba!(self, m.jnt_comp[jnt_ctx]) as u8;
+                        let r0 = self.refp[b.r#ref[0] as usize]
+                            .as_ref()
+                            .unwrap()
+                            .hdr
+                            .frame_offset as u32;
+                        let r1 = self.refp[b.r#ref[1] as usize]
+                            .as_ref()
+                            .unwrap()
+                            .hdr
+                            .frame_offset as u32;
+                        let jnt_ctx = get_jnt_comp_ctx(
+                            seq.order_hint_n_bits,
+                            poc,
+                            r0,
+                            r1,
+                            &self.a[ai],
+                            &self.l,
+                            by4,
+                            bx4,
+                        );
+                        b.comp_type =
+                            COMP_INTER_WEIGHTED_AVG + ba!(self, m.jnt_comp[jnt_ctx]) as u8;
                     } else {
                         b.comp_type = COMP_INTER_AVG;
                     }
@@ -1483,28 +1794,59 @@ impl Fd {
                 } else {
                     let ctx1 = get_ref_ctx(&self.a[ai], &self.l, by4, bx4, have_top, have_left);
                     if ba!(self, m.r#ref[0][ctx1]) {
-                        let ctx2 = get_bwd_ref_ctx(&self.a[ai], &self.l, by4, bx4, have_top, have_left);
+                        let ctx2 =
+                            get_bwd_ref_ctx(&self.a[ai], &self.l, by4, bx4, have_top, have_left);
                         if ba!(self, m.r#ref[1][ctx2]) {
                             b.r#ref[0] = 6;
                         } else {
-                            let ctx3 = get_bwd_ref_1_ctx(&self.a[ai], &self.l, by4, bx4, have_top, have_left);
+                            let ctx3 = get_bwd_ref_1_ctx(
+                                &self.a[ai],
+                                &self.l,
+                                by4,
+                                bx4,
+                                have_top,
+                                have_left,
+                            );
                             b.r#ref[0] = 4 + ba!(self, m.r#ref[5][ctx3]) as i8;
                         }
                     } else {
-                        let ctx2 = get_fwd_ref_ctx(&self.a[ai], &self.l, by4, bx4, have_top, have_left);
+                        let ctx2 =
+                            get_fwd_ref_ctx(&self.a[ai], &self.l, by4, bx4, have_top, have_left);
                         if ba!(self, m.r#ref[2][ctx2]) {
-                            let ctx3 = get_fwd_ref_2_ctx(&self.a[ai], &self.l, by4, bx4, have_top, have_left);
+                            let ctx3 = get_fwd_ref_2_ctx(
+                                &self.a[ai],
+                                &self.l,
+                                by4,
+                                bx4,
+                                have_top,
+                                have_left,
+                            );
                             b.r#ref[0] = 2 + ba!(self, m.r#ref[4][ctx3]) as i8;
                         } else {
-                            let ctx3 = get_fwd_ref_1_ctx(&self.a[ai], &self.l, by4, bx4, have_top, have_left);
+                            let ctx3 = get_fwd_ref_1_ctx(
+                                &self.a[ai],
+                                &self.l,
+                                by4,
+                                bx4,
+                                have_top,
+                                have_left,
+                            );
                             b.r#ref[0] = ba!(self, m.r#ref[3][ctx3]) as i8;
                         }
                     }
                 }
                 b.r#ref[1] = -1;
 
-                let (stack, n_mvs, ctx) =
-                    refmvs::find(self.rf.as_ref().unwrap(), &hdr, &self.rt, [b.r#ref[0] + 1, -1], bs, intra_edge_flags, self.by, self.bx);
+                let (stack, n_mvs, ctx) = refmvs::find(
+                    self.rf.as_ref().unwrap(),
+                    &hdr,
+                    &self.rt,
+                    [b.r#ref[0] + 1, -1],
+                    bs,
+                    intra_edge_flags,
+                    self.by,
+                    self.bx,
+                );
                 let segskip = seg.map(|s| s.skip || s.globalmv).unwrap_or(false);
                 if segskip || {
                     let c = (ctx & 7) as usize;
@@ -1567,10 +1909,18 @@ impl Fd {
 
                 // interintra
                 let ii_sz_grp = YMODE_SIZE_CONTEXT[bs] as usize;
-                if seq.inter_intra && INTERINTRA_ALLOWED_MASK & (1 << bs) != 0 && ba!(self, m.interintra[ii_sz_grp]) {
-                    b.interintra_mode = sa!(self, N_INTER_INTRA_PRED_MODES - 1, m.interintra_mode[ii_sz_grp]) as u8;
+                if seq.inter_intra
+                    && INTERINTRA_ALLOWED_MASK & (1 << bs) != 0
+                    && ba!(self, m.interintra[ii_sz_grp])
+                {
+                    b.interintra_mode = sa!(
+                        self,
+                        N_INTER_INTRA_PRED_MODES - 1,
+                        m.interintra_mode[ii_sz_grp]
+                    ) as u8;
                     let wedge_ctx = WEDGE_CTX_LUT[bs] as usize;
-                    b.interintra_type = INTER_INTRA_BLEND + ba!(self, m.interintra_wedge[wedge_ctx]) as u8;
+                    b.interintra_type =
+                        INTER_INTRA_BLEND + ba!(self, m.interintra_wedge[wedge_ctx]) as u8;
                     if b.interintra_type == INTER_INTRA_WEDGE {
                         b.wedge_idx = sa!(self, 15, m.wedge_idx[wedge_ctx]) as u8;
                     }
@@ -1583,14 +1933,34 @@ impl Fd {
                 if hdr.switchable_motion_mode
                     && b.interintra_type == INTER_INTRA_NONE
                     && bw4.min(bh4) >= 2
-                    && !(!hdr.force_integer_mv && b.inter_mode == GLOBALMV && hdr.gmv[r0].typ > WM_TRANSLATION)
+                    && !(!hdr.force_integer_mv
+                        && b.inter_mode == GLOBALMV
+                        && hdr.gmv[r0].typ > WM_TRANSLATION)
                     && ((have_left && findoddzero(&self.l.intra[by4 + 1..], (h4 >> 1) as usize))
-                        || (have_top && findoddzero(&self.a[ai].intra[bx4 + 1..], (w4 >> 1) as usize)))
+                        || (have_top
+                            && findoddzero(&self.a[ai].intra[bx4 + 1..], (w4 >> 1) as usize)))
                 {
                     let mut mask = [0u64; 2];
-                    self.find_matching_ref(intra_edge_flags, bw4, bh4, w4, h4, have_left, have_top, b.r#ref[0], &mut mask);
-                    let allow_warp = self.svc[r0][0].scale == 0 && !hdr.force_integer_mv && hdr.warp_motion && (mask[0] | mask[1]) != 0;
-                    b.motion_mode = if allow_warp { sa!(self, 2, m.motion_mode[bs]) as u8 } else { ba!(self, m.obmc[bs]) as u8 };
+                    self.find_matching_ref(
+                        intra_edge_flags,
+                        bw4,
+                        bh4,
+                        w4,
+                        h4,
+                        have_left,
+                        have_top,
+                        b.r#ref[0],
+                        &mut mask,
+                    );
+                    let allow_warp = self.svc[r0][0].scale == 0
+                        && !hdr.force_integer_mv
+                        && hdr.warp_motion
+                        && (mask[0] | mask[1]) != 0;
+                    b.motion_mode = if allow_warp {
+                        sa!(self, 2, m.motion_mode[bs]) as u8
+                    } else {
+                        ba!(self, m.obmc[bs]) as u8
+                    };
                     if b.motion_mode == MM_WARP {
                         has_subpel_filter = false;
                         self.derive_warpmv(bw4, bh4, &mask, b.mv[0]);
@@ -1606,10 +1976,13 @@ impl Fd {
                 if has_subpel_filter {
                     let comp = b.comp_type != COMP_INTER_NONE;
                     let ctx1 = get_filter_ctx(&self.a[ai], &self.l, comp, 0, b.r#ref[0], by4, bx4);
-                    filter[0] = sa!(self, N_SWITCHABLE_FILTERS as usize - 1, m.filter[0][ctx1]) as u8;
+                    filter[0] =
+                        sa!(self, N_SWITCHABLE_FILTERS as usize - 1, m.filter[0][ctx1]) as u8;
                     if seq.dual_filter {
-                        let ctx2 = get_filter_ctx(&self.a[ai], &self.l, comp, 1, b.r#ref[0], by4, bx4);
-                        filter[1] = sa!(self, N_SWITCHABLE_FILTERS as usize - 1, m.filter[1][ctx2]) as u8;
+                        let ctx2 =
+                            get_filter_ctx(&self.a[ai], &self.l, comp, 1, b.r#ref[0], by4, bx4);
+                        filter[1] =
+                            sa!(self, N_SWITCHABLE_FILTERS as usize - 1, m.filter[1][ctx2]) as u8;
                     } else {
                         filter[1] = filter[0];
                     }
@@ -1625,7 +1998,8 @@ impl Fd {
             self.recon_b_inter(bs, &b)?;
 
             if hdr.loopfilter.level_y[0] != 0 || hdr.loopfilter.level_y[1] != 0 {
-                let is_globalmv = b.inter_mode == if is_comp { GLOBALMV_GLOBALMV } else { GLOBALMV };
+                let is_globalmv =
+                    b.inter_mode == if is_comp { GLOBALMV_GLOBALMV } else { GLOBALMV };
                 let lv = self.lflvl(b.seg_id as usize);
                 let ri = (b.r#ref[0] + 1) as usize;
                 let gi = !is_globalmv as usize;
@@ -1636,18 +2010,42 @@ impl Fd {
                     ytx = TX_4X4;
                     uvtx = TX_4X4;
                 }
-                self.lf_mask_call(&b, bs, has_chroma, levels, Some((b.skip, tx_split)), ytx, uvtx);
+                self.lf_mask_call(
+                    &b,
+                    bs,
+                    has_chroma,
+                    levels,
+                    Some((b.skip, tx_split)),
+                    ytx,
+                    uvtx,
+                );
             }
 
             if is_comp {
                 let mode = b.inter_mode;
-                let mf = (mode == GLOBALMV_GLOBALMV) as u8 | (((1u32 << mode) & 0xbc != 0) as u8) * 2;
-                self.splat(RefmvsBlock { mv: b.mv, r: [b.r#ref[0] + 1, b.r#ref[1] + 1], bs: bs as u8, mf }, bw4, bh4);
+                let mf =
+                    (mode == GLOBALMV_GLOBALMV) as u8 | (((1u32 << mode) & 0xbc != 0) as u8) * 2;
+                self.splat(
+                    RefmvsBlock {
+                        mv: b.mv,
+                        r: [b.r#ref[0] + 1, b.r#ref[1] + 1],
+                        bs: bs as u8,
+                        mf,
+                    },
+                    bw4,
+                    bh4,
+                );
             } else {
                 let mode = b.inter_mode;
-                let mf = (mode == GLOBALMV && bw4.min(bh4) >= 2) as u8 | ((mode == NEWMV) as u8 * 2);
+                let mf =
+                    (mode == GLOBALMV && bw4.min(bh4) >= 2) as u8 | ((mode == NEWMV) as u8 * 2);
                 self.splat(
-                    RefmvsBlock { mv: [b.mv[0], Mv::ZERO], r: [b.r#ref[0] + 1, if b.interintra_type != 0 { 0 } else { -1 }], bs: bs as u8, mf },
+                    RefmvsBlock {
+                        mv: [b.mv[0], Mv::ZERO],
+                        r: [b.r#ref[0] + 1, if b.interintra_type != 0 { 0 } else { -1 }],
+                        bs: bs as u8,
+                        mf,
+                    },
                     bw4,
                     bh4,
                 );
@@ -1671,8 +2069,18 @@ impl Fd {
                 set(&mut self.pal_sz_uv[i], off, n, 0);
             }
             if has_chroma {
-                set(&mut self.a[ai].uvmode, cbx4, 1 << ulog2(cbw4 as u32), DC_PRED as u8);
-                set(&mut self.l.uvmode, cby4, 1 << ulog2(cbh4 as u32), DC_PRED as u8);
+                set(
+                    &mut self.a[ai].uvmode,
+                    cbx4,
+                    1 << ulog2(cbw4 as u32),
+                    DC_PRED as u8,
+                );
+                set(
+                    &mut self.l.uvmode,
+                    cby4,
+                    1 << ulog2(cbh4 as u32),
+                    DC_PRED as u8,
+                );
             }
         }
 
@@ -1718,8 +2126,17 @@ impl Fd {
         let ctx = get_partition_ctx(&self.a[self.ai], &self.l, bl, by8, bx8);
         let bp;
         if have_h_split && have_v_split {
-            bp = sa!(self, PARTITION_TYPE_COUNT[bl] as usize, m.partition[bl][ctx]);
-            if self.layout == Layout::I422 && matches!(bp, PARTITION_V | PARTITION_V4 | PARTITION_T_LEFT_SPLIT | PARTITION_T_RIGHT_SPLIT) {
+            bp = sa!(
+                self,
+                PARTITION_TYPE_COUNT[bl] as usize,
+                m.partition[bl][ctx]
+            );
+            if self.layout == Layout::I422
+                && matches!(
+                    bp,
+                    PARTITION_V | PARTITION_V4 | PARTITION_T_LEFT_SPLIT | PARTITION_T_RIGHT_SPLIT
+                )
+            {
                 return Err("invalid 4:2:2 partition".into());
             }
             let b = BLOCK_SIZES[bl][bp];
@@ -1840,7 +2257,12 @@ impl Fd {
                 self.bx -= hsz;
             } else {
                 bp = PARTITION_H;
-                self.decode_b(bl, BLOCK_SIZES[bl][PARTITION_H][0] as usize, PARTITION_H, node.h[0])?;
+                self.decode_b(
+                    bl,
+                    BLOCK_SIZES[bl][PARTITION_H][0] as usize,
+                    PARTITION_H,
+                    node.h[0],
+                )?;
             }
         } else {
             let p = {
@@ -1859,14 +2281,29 @@ impl Fd {
                 self.by -= hsz;
             } else {
                 bp = PARTITION_V;
-                self.decode_b(bl, BLOCK_SIZES[bl][PARTITION_V][0] as usize, PARTITION_V, node.v[0])?;
+                self.decode_b(
+                    bl,
+                    BLOCK_SIZES[bl][PARTITION_V][0] as usize,
+                    PARTITION_V,
+                    node.v[0],
+                )?;
             }
         }
         if bp != PARTITION_SPLIT || bl == BL_8X8 {
             let n = hsz as usize;
             let ai = self.ai;
-            set(&mut self.a[ai].partition, bx8, n.min(16), AL_PART_CTX[0][bl][bp]);
-            set(&mut self.l.partition, by8, n.min(16), AL_PART_CTX[1][bl][bp]);
+            set(
+                &mut self.a[ai].partition,
+                bx8,
+                n.min(16),
+                AL_PART_CTX[0][bl][bp],
+            );
+            set(
+                &mut self.l.partition,
+                by8,
+                n.min(16),
+                AL_PART_CTX[1][bl][bp],
+            );
         }
         Ok(())
     }
@@ -1920,8 +2357,13 @@ pub const WEDGE_ALLOWED_MASK: u32 = (1 << BS_32X32)
     | (1 << BS_8X32)
     | (1 << BS_8X16)
     | (1 << BS_8X8);
-pub const INTERINTRA_ALLOWED_MASK: u32 =
-    (1 << BS_32X32) | (1 << BS_32X16) | (1 << BS_16X32) | (1 << BS_16X16) | (1 << BS_16X8) | (1 << BS_8X16) | (1 << BS_8X8);
+pub const INTERINTRA_ALLOWED_MASK: u32 = (1 << BS_32X32)
+    | (1 << BS_32X16)
+    | (1 << BS_16X32)
+    | (1 << BS_16X16)
+    | (1 << BS_16X8)
+    | (1 << BS_8X16)
+    | (1 << BS_8X8);
 
 // Unused-but-referenced helpers keep the type list honest for later stages.
 #[allow(dead_code)]

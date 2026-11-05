@@ -39,7 +39,10 @@ pub fn texels(format: TextureFormat, data: &[u8], count: usize) -> Option<Vec<[f
         TextureFormat::Rgba16Float => {
             for p in data.chunks_exact(8).take(count) {
                 let h = |i: usize| {
-                    crate::renderer::gpu_texture::f16_bits_to_f32(u16::from_le_bytes([p[i], p[i + 1]]))
+                    crate::renderer::gpu_texture::f16_bits_to_f32(u16::from_le_bytes([
+                        p[i],
+                        p[i + 1],
+                    ]))
                 };
                 out.push([h(0), h(2), h(4), h(6)]);
             }

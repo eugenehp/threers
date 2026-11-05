@@ -118,7 +118,18 @@ impl Ui {
 
     fn add(&mut self, parent: NodeId, style: Style, kind: NodeKind) -> NodeId {
         let id = NodeId(self.nodes.len());
-        self.nodes.push(Node { style, kind, parent: Some(parent), children: vec![], rect: Rect::default(), removed: false, scroll_height: 0.0, scrolled: 0.0, lines: vec![], semantics: None });
+        self.nodes.push(Node {
+            style,
+            kind,
+            parent: Some(parent),
+            children: vec![],
+            rect: Rect::default(),
+            removed: false,
+            scroll_height: 0.0,
+            scrolled: 0.0,
+            lines: vec![],
+            semantics: None,
+        });
         self.nodes[parent.0].children.push(id);
         id
     }
@@ -148,8 +159,25 @@ impl Ui {
     }
 
     /// An icon or other vector shape (see [`NodeKind::Path`]).
-    pub fn add_path(&mut self, parent: NodeId, style: Style, d: Vec<String>, view_box: [f32; 4], stroke: Option<f32>, fill: bool) -> NodeId {
-        self.add(parent, style, NodeKind::Path { d, view_box, stroke, fill })
+    pub fn add_path(
+        &mut self,
+        parent: NodeId,
+        style: Style,
+        d: Vec<String>,
+        view_box: [f32; 4],
+        stroke: Option<f32>,
+        fill: bool,
+    ) -> NodeId {
+        self.add(
+            parent,
+            style,
+            NodeKind::Path {
+                d,
+                view_box,
+                stroke,
+                fill,
+            },
+        )
     }
 
     /// Removes `id` and its subtree from layout and painting.
@@ -268,8 +296,14 @@ impl Ui {
     /// order without `z-index`.
     pub fn paint_order(&self, id: NodeId) -> Vec<NodeId> {
         let children = &self.nodes[id.0].children;
-        let positioned = |c: &NodeId| self.nodes[c.0].style.position != super::style::Position::Static;
-        children.iter().copied().filter(|c| !positioned(c)).chain(children.iter().copied().filter(positioned)).collect()
+        let positioned =
+            |c: &NodeId| self.nodes[c.0].style.position != super::style::Position::Static;
+        children
+            .iter()
+            .copied()
+            .filter(|c| !positioned(c))
+            .chain(children.iter().copied().filter(positioned))
+            .collect()
     }
 
     /// A scrolling box's content height and the height it shows (its
@@ -277,7 +311,11 @@ impl Ui {
     pub fn scroll_extent(&self, id: NodeId) -> (f32, f32, f32) {
         let n = &self.nodes[id.0];
         let s = &n.style;
-        (n.scroll_height, (n.rect.height - s.border.vertical()).max(0.0), n.scrolled)
+        (
+            n.scroll_height,
+            (n.rect.height - s.border.vertical()).max(0.0),
+            n.scrolled,
+        )
     }
 
     /// The innermost scrolling box among `id` and its ancestors.

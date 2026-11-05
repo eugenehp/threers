@@ -285,7 +285,9 @@ impl Ui {
     /// Changes `id`'s semantics in place — a checkbox ticked, a value typed
     /// — giving it [`Role::Generic`] first if it had none.
     pub fn semantics_mut(&mut self, id: NodeId) -> &mut Semantics {
-        self.nodes[id.0].semantics.get_or_insert_with(|| Semantics::new(Role::Generic))
+        self.nodes[id.0]
+            .semantics
+            .get_or_insert_with(|| Semantics::new(Role::Generic))
     }
 
     /// Whether `id` is shown: not removed, and neither it nor an ancestor
@@ -303,7 +305,11 @@ impl Ui {
     pub fn text_content(&self, id: NodeId) -> String {
         let mut parts: Vec<String> = Vec::new();
         self.collect_text(id, &mut parts, true);
-        parts.join(" ").split_whitespace().collect::<Vec<_>>().join(" ")
+        parts
+            .join(" ")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 
     fn collect_text(&self, id: NodeId, out: &mut Vec<String>, top: bool) {
@@ -323,7 +329,11 @@ impl Ui {
             }
         }
         if let NodeKind::Text(t) = &node.kind {
-            out.push(if node.lines.is_empty() { t.clone() } else { node.lines.join(" ") });
+            out.push(if node.lines.is_empty() {
+                t.clone()
+            } else {
+                node.lines.join(" ")
+            });
         }
         for &c in &node.children {
             self.collect_text(c, out, false);
@@ -402,7 +412,9 @@ impl Ui {
         out[parent].children.push(index);
         // A node named by its content has spoken its text already; its
         // text children are not read again.
-        let named = inside_named || (s.role.named_by_content() && s.label.is_none()) || s.role == Role::StaticText;
+        let named = inside_named
+            || (s.role.named_by_content() && s.label.is_none())
+            || s.role == Role::StaticText;
         for &c in &node.children {
             self.build(c, index, named, out);
         }
@@ -464,28 +476,44 @@ impl Ui {
         let mut out = Vec::new();
         for (i, node) in self.nodes.iter().enumerate() {
             let id = NodeId(i);
-            let NodeKind::Text(text) = &node.kind else { continue };
+            let NodeKind::Text(text) = &node.kind else {
+                continue;
+            };
             if text.trim().is_empty() || !self.shown(id) {
                 continue;
             }
             // Disabled controls are exempt; text hidden from assistive
             // technology is still seen, and is not.
-            if self.ancestors(id).any(|a| self.nodes[a.0].semantics.as_ref().is_some_and(|s| s.disabled)) {
+            if self.ancestors(id).any(|a| {
+                self.nodes[a.0]
+                    .semantics
+                    .as_ref()
+                    .is_some_and(|s| s.disabled)
+            }) {
                 continue;
             }
             let chain: Vec<NodeId> = self.ancestors(id).collect();
             let mut bg = [page[0], page[1], page[2]];
             for a in chain.iter().rev() {
                 let st = &self.nodes[a.0].style;
-                let fill = st.background.or_else(|| st.background_gradient.first().map(|s| s.1));
+                let fill = st
+                    .background
+                    .or_else(|| st.background_gradient.first().map(|s| s.1));
                 if let Some(c) = fill {
                     let alpha = c[3] * st.opacity;
                     bg = blend([c[0], c[1], c[2]], bg, alpha);
                 }
             }
-            let opacity: f32 = chain.iter().map(|a| self.nodes[a.0].style.opacity).product();
+            let opacity: f32 = chain
+                .iter()
+                .map(|a| self.nodes[a.0].style.opacity)
+                .product();
             let st = &node.style;
-            let fg = blend([st.color[0], st.color[1], st.color[2]], bg, st.color[3] * opacity);
+            let fg = blend(
+                [st.color[0], st.color[1], st.color[2]],
+                bg,
+                st.color[3] * opacity,
+            );
             let ratio = contrast_ratio(fg, bg);
             let bold = match st.font_weight {
                 FontWeight::Bold => true,
@@ -499,7 +527,14 @@ impl Ui {
                 (false, true) => 7.0,
             };
             if ratio < required {
-                out.push(ContrastIssue { id, text: text.clone(), ratio, required, foreground: fg, background: bg });
+                out.push(ContrastIssue {
+                    id,
+                    text: text.clone(),
+                    ratio,
+                    required,
+                    foreground: fg,
+                    background: bg,
+                });
             }
         }
         out
@@ -568,8 +603,18 @@ mod tests {
         ui.set_semantics(deco, Semantics::new(Role::Generic).hidden());
         laid_out(&mut ui);
         let tree = ui.accessibility_tree();
-        let roles: Vec<(Role, &str)> = tree[1..].iter().map(|n| (n.role, n.name.as_str())).collect();
-        assert_eq!(roles, vec![(Role::Button, "Save file"), (Role::StaticText, "Ready"), (Role::Image, "Warning")]);
+        let roles: Vec<(Role, &str)> = tree[1..]
+            .iter()
+            .map(|n| (n.role, n.name.as_str()))
+            .collect();
+        assert_eq!(
+            roles,
+            vec![
+                (Role::Button, "Save file"),
+                (Role::StaticText, "Ready"),
+                (Role::Image, "Warning")
+            ]
+        );
         // All three hang off the root: the flex row had no meaning.
         assert_eq!(tree[0].children, vec![1, 2, 3]);
         assert!(tree[1].focusable && !tree[2].focusable);
@@ -608,17 +653,29 @@ mod tests {
         let grey = 0x99 as f32 / 255.0; // 2.85:1 on white
         let mut ui = Ui::new();
         let root = ui.root();
-        let t = ui.add_box(root, crate::style! { color: {[grey, grey, grey, 1.0]}; font-size: 13px; });
+        let t = ui.add_box(
+            root,
+            crate::style! { color: {[grey, grey, grey, 1.0]}; font-size: 13px; },
+        );
         ui.add_text(t, "faint");
         let panel = ui.add_box(root, crate::style! { background: {[0.1, 0.1, 0.1, 1.0]}; color: {[grey, grey, grey, 1.0]}; font-size: 13px; });
         ui.add_text(panel, "on dark");
-        let big = ui.add_box(root, crate::style! { color: {[0.55, 0.55, 0.55, 1.0]}; font-size: 28px; });
+        let big = ui.add_box(
+            root,
+            crate::style! { color: {[0.55, 0.55, 0.55, 1.0]}; font-size: 28px; },
+        );
         ui.add_text(big, "large");
-        let off = ui.add_box(root, crate::style! { color: {[grey, grey, grey, 1.0]}; font-size: 13px; });
+        let off = ui.add_box(
+            root,
+            crate::style! { color: {[grey, grey, grey, 1.0]}; font-size: 13px; },
+        );
         ui.add_text(off, "disabled");
         ui.set_semantics(off, Semantics::new(Role::Button).disabled(true));
         // Translucent black text on white: #000 at 40% is a light grey.
-        let ghost = ui.add_box(root, crate::style! { color: {[0.0, 0.0, 0.0, 0.4]}; font-size: 13px; });
+        let ghost = ui.add_box(
+            root,
+            crate::style! { color: {[0.0, 0.0, 0.0, 0.4]}; font-size: 13px; },
+        );
         ui.add_text(ghost, "ghost");
         laid_out(&mut ui);
         let issues = ui.contrast_issues([1.0; 4], false);
@@ -626,7 +683,11 @@ mod tests {
         assert_eq!(texts, vec!["faint", "ghost"]);
         assert!((issues[0].ratio - 2.85).abs() < 0.02, "{}", issues[0].ratio);
         // The large grey is 3.36:1: enough for AA's 3, not AAA's 4.5.
-        let aaa: Vec<String> = ui.contrast_issues([1.0; 4], true).into_iter().map(|i| i.text).collect();
+        let aaa: Vec<String> = ui
+            .contrast_issues([1.0; 4], true)
+            .into_iter()
+            .map(|i| i.text)
+            .collect();
         assert!(aaa.contains(&"large".to_string()));
     }
 

@@ -11,9 +11,7 @@ fn ref_poc(pic: &PicState, x: usize, y: usize, f: &MvField, l: usize) -> Option<
         return None;
     }
     let s = pic.ctb_slice[pic.ctb_rs(x, y)];
-    pic.slices
-        .get(s as usize)?
-        .refs[l]
+    pic.slices.get(s as usize)?.refs[l]
         .get(f.ref_idx[l] as usize)
         .map(|e| e.0)
 }
@@ -42,8 +40,16 @@ fn strength(pic: &PicState, p: (usize, usize), q: (usize, usize), tu_edge: bool)
         return 1;
     }
     if np == 1 {
-        let (rp, vp) = if pr[0].is_some() { (pr[0], mp.mv[0]) } else { (pr[1], mp.mv[1]) };
-        let (rq, vq) = if qr[0].is_some() { (qr[0], mq.mv[0]) } else { (qr[1], mq.mv[1]) };
+        let (rp, vp) = if pr[0].is_some() {
+            (pr[0], mp.mv[0])
+        } else {
+            (pr[1], mp.mv[1])
+        };
+        let (rq, vq) = if qr[0].is_some() {
+            (qr[0], mq.mv[0])
+        } else {
+            (qr[1], mq.mv[1])
+        };
         return (rp != rq || far(vp, vq)) as u8;
     }
     if np == 0 {
@@ -125,7 +131,8 @@ fn luma_segment(
     }
     let strong_line = |d: &[u16], l: usize, dpq: i32| {
         2 * dpq < (beta >> 2)
-            && (s(d, px(l, 3)) - s(d, px(l, 0))).abs() + (s(d, qx(l, 0)) - s(d, qx(l, 3))).abs() < (beta >> 3)
+            && (s(d, px(l, 3)) - s(d, px(l, 0))).abs() + (s(d, qx(l, 0)) - s(d, qx(l, 3))).abs()
+                < (beta >> 3)
             && (s(d, px(l, 0)) - s(d, qx(l, 0))).abs() < ((5 * tc + 1) >> 1)
     };
     let strong = strong_line(d, 0, dpq0) && strong_line(d, 3, dpq3);
@@ -139,14 +146,16 @@ fn luma_segment(
             if !no_p {
                 d[px(l, 0)] = ((p[2] + 2 * p[1] + 2 * p[0] + 2 * q[0] + q[1] + 4) >> 3)
                     .clamp(p[0] - 2 * tc, p[0] + 2 * tc) as u16;
-                d[px(l, 1)] = ((p[2] + p[1] + p[0] + q[0] + 2) >> 2).clamp(p[1] - 2 * tc, p[1] + 2 * tc) as u16;
+                d[px(l, 1)] = ((p[2] + p[1] + p[0] + q[0] + 2) >> 2)
+                    .clamp(p[1] - 2 * tc, p[1] + 2 * tc) as u16;
                 d[px(l, 2)] = ((2 * p[3] + 3 * p[2] + p[1] + p[0] + q[0] + 4) >> 3)
                     .clamp(p[2] - 2 * tc, p[2] + 2 * tc) as u16;
             }
             if !no_q {
                 d[qx(l, 0)] = ((p[1] + 2 * p[0] + 2 * q[0] + 2 * q[1] + q[2] + 4) >> 3)
                     .clamp(q[0] - 2 * tc, q[0] + 2 * tc) as u16;
-                d[qx(l, 1)] = ((p[0] + q[0] + q[1] + q[2] + 2) >> 2).clamp(q[1] - 2 * tc, q[1] + 2 * tc) as u16;
+                d[qx(l, 1)] = ((p[0] + q[0] + q[1] + q[2] + 2) >> 2)
+                    .clamp(q[1] - 2 * tc, q[1] + 2 * tc) as u16;
                 d[qx(l, 2)] = ((p[0] + q[0] + q[1] + 3 * q[2] + 2 * q[3] + 4) >> 3)
                     .clamp(q[2] - 2 * tc, q[2] + 2 * tc) as u16;
             }
@@ -163,11 +172,13 @@ fn luma_segment(
                 d[qx(l, 0)] = (q[0] - delta).clamp(0, max) as u16;
             }
             if de_p && !no_p {
-                let dpv = ((((p[2] + p[0] + 1) >> 1) - p[1] + delta) >> 1).clamp(-(tc >> 1), tc >> 1);
+                let dpv =
+                    ((((p[2] + p[0] + 1) >> 1) - p[1] + delta) >> 1).clamp(-(tc >> 1), tc >> 1);
                 d[px(l, 1)] = (p[1] + dpv).clamp(0, max) as u16;
             }
             if de_q && !no_q {
-                let dqv = ((((q[2] + q[0] + 1) >> 1) - q[1] - delta) >> 1).clamp(-(tc >> 1), tc >> 1);
+                let dqv =
+                    ((((q[2] + q[0] + 1) >> 1) - q[1] - delta) >> 1).clamp(-(tc >> 1), tc >> 1);
                 d[qx(l, 1)] = (q[1] + dqv).clamp(0, max) as u16;
             }
         }
@@ -175,7 +186,16 @@ fn luma_segment(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn chroma_segment(d: &mut [u16], at: usize, across: usize, along: usize, tc: i32, bd: u32, no_p: bool, no_q: bool) {
+fn chroma_segment(
+    d: &mut [u16],
+    at: usize,
+    across: usize,
+    along: usize,
+    tc: i32,
+    bd: u32,
+    no_p: bool,
+    no_q: bool,
+) {
     if tc == 0 {
         return;
     }
@@ -199,15 +219,18 @@ pub fn deblock(pic: &mut PicState, sps: &Sps, pps: &Pps) {
     let (bdy, bdc) = (sps.bit_depth_y, sps.bit_depth_c);
     let wl = pic.planes[0].width;
     let wc = pic.planes[1].width;
-    // Vertical chroma shift: 1 for 4:2:0, 0 for 4:2:2.
-    let vs = (sps.chroma_format_idc == 1) as usize;
+    let (hs, vs) = sps.chroma_shift();
     for dir in 0..2 {
         // dir 0: vertical edges (filtering across x), 1: horizontal.
         let mut y = 0;
         while y < h {
             let mut x = 0;
             while x < w {
-                let on_grid = if dir == 0 { x % 8 == 0 && x > 0 } else { y % 8 == 0 && y > 0 };
+                let on_grid = if dir == 0 {
+                    x % 8 == 0 && x > 0
+                } else {
+                    y % 8 == 0 && y > 0
+                };
                 if !on_grid {
                     x += 4;
                     continue;
@@ -240,27 +263,60 @@ pub fn deblock(pic: &mut PicState, sps: &Sps, pps: &Pps) {
                 let qp_av = (pic.qp[ip] as i32 + pic.qp[iq] as i32 + 1) >> 1;
                 let no_p = pic.flags[ip] & flag::NO_FILTER != 0;
                 let no_q = pic.flags[iq] & flag::NO_FILTER != 0;
-                let (at, across, along) = if dir == 0 { (y * wl + x, 1, wl) } else { (y * wl + x, wl, 1) };
-                luma_segment(&mut pic.planes[0].data, at, across, along, bs, qp_av, beta_off, tc_off, bdy, no_p, no_q);
+                let (at, across, along) = if dir == 0 {
+                    (y * wl + x, 1, wl)
+                } else {
+                    (y * wl + x, wl, 1)
+                };
+                luma_segment(
+                    &mut pic.planes[0].data,
+                    at,
+                    across,
+                    along,
+                    bs,
+                    qp_av,
+                    beta_off,
+                    tc_off,
+                    bdy,
+                    no_p,
+                    no_q,
+                );
                 // Chroma edges lie on the 8×8 chroma grid and are filtered
                 // in 4-sample segments, each taking the strength and QP at
                 // its first sample — every other luma segment's where the
-                // chroma is subsampled along the edge.
+                // chroma is subsampled along the edge, every one in 4:4:4.
                 let chroma_seg = if dir == 0 {
-                    x % 16 == 0 && y % (4 << vs) == 0
+                    x % (8 << hs) == 0 && y % (4 << vs) == 0
                 } else {
-                    y % (8 << vs) == 0 && x % 8 == 0
+                    y % (8 << vs) == 0 && x % (4 << hs) == 0
                 };
                 if bs == 2 && chroma_seg {
-                    let (cx, cy) = (x / 2, y >> vs);
-                    let (at, across, along) = if dir == 0 { (cy * wc + cx, 1, wc) } else { (cy * wc + cx, wc, 1) };
+                    let (cx, cy) = (x >> hs, y >> vs);
+                    let (at, across, along) = if dir == 0 {
+                        (cy * wc + cx, 1, wc)
+                    } else {
+                        (cy * wc + cx, wc, 1)
+                    };
                     for (cidx, off) in [(1, cbo), (2, cro)] {
                         // ffmpeg chroma_tc: the table only for 4:2:0.
                         let qpi = (qp_av + off).clamp(0, 57);
-                        let qpc = if vs == 1 { chroma_qp(qpi) } else { qpi.min(51) };
+                        let qpc = if sps.chroma_format_idc == 1 {
+                            chroma_qp(qpi)
+                        } else {
+                            qpi.min(51)
+                        };
                         let qt = (qpc + 2 + tc_off).clamp(0, 53) as usize;
                         let tc = TC[qt] * (1 << (bdc - 8));
-                        chroma_segment(&mut pic.planes[cidx].data, at, across, along, tc, bdc, no_p, no_q);
+                        chroma_segment(
+                            &mut pic.planes[cidx].data,
+                            at,
+                            across,
+                            along,
+                            tc,
+                            bdc,
+                            no_p,
+                            no_q,
+                        );
                     }
                 }
                 x += 4;
@@ -277,9 +333,16 @@ pub fn sao(pic: &mut PicState, sps: &Sps, pps: &Pps) {
         if !pic.sao.iter().any(|s| s[cidx].kind != 0) {
             continue;
         }
-        let subx = if cidx == 0 { 0 } else { 1 };
-        let suby = if cidx == 0 { 0 } else { (sps.chroma_format_idc == 1) as usize };
-        let bd = if cidx == 0 { sps.bit_depth_y } else { sps.bit_depth_c };
+        let (subx, suby) = if cidx == 0 {
+            (0, 0)
+        } else {
+            sps.chroma_shift()
+        };
+        let bd = if cidx == 0 {
+            sps.bit_depth_y
+        } else {
+            sps.bit_depth_c
+        };
         let max = (1i32 << bd) - 1;
         let src = pic.planes[cidx].data.clone();
         let (pw, ph) = (pic.planes[cidx].width, pic.planes[cidx].height);
@@ -312,7 +375,9 @@ pub fn sao(pic: &mut PicState, sps: &Sps, pps: &Pps) {
             let (lx0, ly0) = (x0 << subx, y0 << suby);
             let (lx1, ly1) = (((x1 - 1) << subx) + 1, ((y1 - 1) << suby) + 1);
             let clean = (ly0..ly1).step_by(4).all(|ly| {
-                (lx0..lx1).step_by(4).all(|lx| pic.flags[pic.idx4(lx, ly)] & flag::NO_FILTER == 0)
+                (lx0..lx1)
+                    .step_by(4)
+                    .all(|lx| pic.flags[pic.idx4(lx, ly)] & flag::NO_FILTER == 0)
             });
             let (mut xi0, mut xi1, mut yi0, mut yi1) = (x0, x0, y0, y0);
             if clean {
@@ -323,7 +388,10 @@ pub fn sao(pic: &mut PicState, sps: &Sps, pps: &Pps) {
                         tab[(k + sp.band_or_class as usize) & 31] = sp.offsets[k] as i32;
                     }
                     for y in y0..y1 {
-                        let (s, d) = (&src[y * pw + x0..y * pw + x1], &mut dst[y * pw + x0..y * pw + x1]);
+                        let (s, d) = (
+                            &src[y * pw + x0..y * pw + x1],
+                            &mut dst[y * pw + x0..y * pw + x1],
+                        );
                         for (d, &v) in d.iter_mut().zip(s) {
                             let v = v as i32;
                             *d = (v + tab[(v >> (bd - 5)) as usize]).clamp(0, max) as u16;
@@ -334,8 +402,14 @@ pub fn sao(pic: &mut PicState, sps: &Sps, pps: &Pps) {
                 let o = sp.offsets.map(|v| v as i32);
                 // Indexed by edgeIdx = 2 + sign(v - n0) + sign(v - n1).
                 let eo = [o[0], o[1], 0, o[2], o[3]];
-                (xi0, xi1) = (x0 + hp.contains(&-1) as usize, x1 - hp.contains(&1) as usize);
-                (yi0, yi1) = (y0 + vp.contains(&-1) as usize, y1 - vp.contains(&1) as usize);
+                (xi0, xi1) = (
+                    x0 + hp.contains(&-1) as usize,
+                    x1 - hp.contains(&1) as usize,
+                );
+                (yi0, yi1) = (
+                    y0 + vp.contains(&-1) as usize,
+                    y1 - vp.contains(&1) as usize,
+                );
                 let (d0, d1) = (vp[0] * pw as isize + hp[0], vp[1] * pw as isize + hp[1]);
                 for y in yi0..yi1 {
                     for x in xi0..xi1 {

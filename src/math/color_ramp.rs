@@ -47,8 +47,15 @@ pub enum SchemeKind {
 /// and without d3's `interpolate` or `scheme` prefix — so `"RdYlBu"`,
 /// `"rd_yl_bu"` and `"interpolateRdYlBu"` are the same scheme.
 fn scheme_key(name: &str) -> String {
-    let k: String = name.chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>().to_ascii_lowercase();
-    k.strip_prefix("interpolate").or_else(|| k.strip_prefix("scheme")).unwrap_or(&k).to_string()
+    let k: String = name
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .collect::<String>()
+        .to_ascii_lowercase();
+    k.strip_prefix("interpolate")
+        .or_else(|| k.strip_prefix("scheme"))
+        .unwrap_or(&k)
+        .to_string()
 }
 
 /// A gradient: colours at positions, blended between.
@@ -77,7 +84,11 @@ impl ColorRamp {
                 .iter()
                 .enumerate()
                 .map(|(i, c)| {
-                    let t = if n > 1 { i as f32 / (n - 1) as f32 } else { 0.0 };
+                    let t = if n > 1 {
+                        i as f32 / (n - 1) as f32
+                    } else {
+                        0.0
+                    };
                     (t, Color::from_hex(*c))
                 })
                 .collect(),
@@ -155,12 +166,24 @@ impl ColorRamp {
     /// Every scheme [`named`](Self::named) knows, with its kind.
     pub fn scheme_names() -> Vec<(&'static str, SchemeKind)> {
         let mut v: Vec<(&'static str, SchemeKind)> =
-            ["viridis", "magma", "inferno", "plasma", "turbo"].iter().map(|n| (*n, SchemeKind::Sequential)).collect();
+            ["viridis", "magma", "inferno", "plasma", "turbo"]
+                .iter()
+                .map(|n| (*n, SchemeKind::Sequential))
+                .collect();
         v.push(("cool_warm", SchemeKind::Diverging));
-        v.extend(SEQUENTIAL.iter().chain(EXTRA_SEQUENTIAL).map(|(n, _)| (*n, SchemeKind::Sequential)));
+        v.extend(
+            SEQUENTIAL
+                .iter()
+                .chain(EXTRA_SEQUENTIAL)
+                .map(|(n, _)| (*n, SchemeKind::Sequential)),
+        );
         v.extend(DIVERGING.iter().map(|(n, _)| (*n, SchemeKind::Diverging)));
         v.extend(CYCLIC.iter().map(|(n, _)| (*n, SchemeKind::Cyclic)));
-        v.extend(CATEGORICAL.iter().map(|(n, _)| (*n, SchemeKind::Categorical)));
+        v.extend(
+            CATEGORICAL
+                .iter()
+                .map(|(n, _)| (*n, SchemeKind::Categorical)),
+        );
         v
     }
 
@@ -305,7 +328,10 @@ impl Palette {
     /// named ramp, with [`from_ramp`](Self::from_ramp).
     pub fn named(name: &str) -> Option<Self> {
         let key = scheme_key(name);
-        CATEGORICAL.iter().find(|(n, _)| scheme_key(n) == key).map(|(_, c)| Self::from_hex(c))
+        CATEGORICAL
+            .iter()
+            .find(|(n, _)| scheme_key(n) == key)
+            .map(|(_, c)| Self::from_hex(c))
     }
 
     /// d3's `schemeCategory10` (Tableau 10): the default for categories.
@@ -388,7 +414,14 @@ mod tests {
 
     #[test]
     fn oklab_round_trips() {
-        for hex in [0x000000u32, 0xffffff, 0xff0000, 0x3498db, 0x7f7f7f, 0x12ab34] {
+        for hex in [
+            0x000000u32,
+            0xffffff,
+            0xff0000,
+            0x3498db,
+            0x7f7f7f,
+            0x12ab34,
+        ] {
             let c = Color::from_hex(hex);
             let back = Color::from_oklab(c.to_oklab());
             assert!(
@@ -407,10 +440,23 @@ mod tests {
     fn hsl_round_trips_and_matches_known_colours() {
         // Pure red is hue 0, full saturation, half lightness.
         let hsl = Color::from_hex(0xff0000).to_hsl();
-        assert!(hsl[0].abs() < 1e-3 || (hsl[0] - 1.0).abs() < 1e-3, "{hsl:?}");
-        assert!((hsl[1] - 1.0).abs() < 1e-3 && (hsl[2] - 0.5).abs() < 1e-3, "{hsl:?}");
+        assert!(
+            hsl[0].abs() < 1e-3 || (hsl[0] - 1.0).abs() < 1e-3,
+            "{hsl:?}"
+        );
+        assert!(
+            (hsl[1] - 1.0).abs() < 1e-3 && (hsl[2] - 0.5).abs() < 1e-3,
+            "{hsl:?}"
+        );
 
-        for hex in [0xff0000u32, 0x00ff00, 0x0000ff, 0x808080, 0x3498db, 0xffffff] {
+        for hex in [
+            0xff0000u32,
+            0x00ff00,
+            0x0000ff,
+            0x808080,
+            0x3498db,
+            0xffffff,
+        ] {
             let c = Color::from_hex(hex);
             let [h, s, l] = c.to_hsl();
             assert_eq!(
@@ -488,7 +534,18 @@ mod tests {
 
     #[test]
     fn named_schemes_are_found_however_they_are_spelled() {
-        for name in ["blues", "Blues", "interpolateBlues", "yl_gn_bu", "YlGnBu", "RdBu", "spectral", "cividis", "twilight", "viridis"] {
+        for name in [
+            "blues",
+            "Blues",
+            "interpolateBlues",
+            "yl_gn_bu",
+            "YlGnBu",
+            "RdBu",
+            "spectral",
+            "cividis",
+            "twilight",
+            "viridis",
+        ] {
             assert!(ColorRamp::named(name).is_some(), "{name}");
         }
         assert!(ColorRamp::named("nope").is_none());
@@ -497,7 +554,11 @@ mod tests {
         assert_eq!(blues.at(0.0).to_hex(), 0xf7fbff);
         assert_eq!(blues.at(1.0).to_hex(), 0x08306b);
         let rdbu = ColorRamp::named("RdBu").unwrap();
-        assert_eq!(rdbu.at(0.5).to_hex(), 0xf7f7f7, "a diverging scheme is neutral in the middle");
+        assert_eq!(
+            rdbu.at(0.5).to_hex(),
+            0xf7f7f7,
+            "a diverging scheme is neutral in the middle"
+        );
         // Twilight is cyclic: its ends nearly meet.
         let tw = ColorRamp::twilight();
         let (a, b) = (tw.at(0.0).to_oklab(), tw.at(1.0).to_oklab());

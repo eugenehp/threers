@@ -34,15 +34,39 @@ pub struct Lattice {
     cell_tets: HashMap<i64, Vec<u32>>,
 }
 
-const TET_EVEN: [[usize; 4]; 5] = [[1, 2, 4, 7], [0, 1, 2, 4], [3, 1, 2, 7], [5, 1, 4, 7], [6, 2, 4, 7]];
-const TET_ODD: [[usize; 4]; 5] = [[0, 3, 5, 6], [1, 0, 3, 5], [2, 0, 3, 6], [4, 0, 5, 6], [7, 3, 5, 6]];
+const TET_EVEN: [[usize; 4]; 5] = [
+    [1, 2, 4, 7],
+    [0, 1, 2, 4],
+    [3, 1, 2, 7],
+    [5, 1, 4, 7],
+    [6, 2, 4, 7],
+];
+const TET_ODD: [[usize; 4]; 5] = [
+    [0, 3, 5, 6],
+    [1, 0, 3, 5],
+    [2, 0, 3, 6],
+    [4, 0, 5, 6],
+    [7, 3, 5, 6],
+];
 
 fn tet_volume(p: &[f32], t: &[u32]) -> f64 {
     let at = |i: u32, c: usize| p[3 * i as usize + c] as f64;
     let (a, b, c, d) = (t[0], t[1], t[2], t[3]);
-    let (ux, uy, uz) = (at(b, 0) - at(a, 0), at(b, 1) - at(a, 1), at(b, 2) - at(a, 2));
-    let (vx, vy, vz) = (at(c, 0) - at(a, 0), at(c, 1) - at(a, 1), at(c, 2) - at(a, 2));
-    let (wx, wy, wz) = (at(d, 0) - at(a, 0), at(d, 1) - at(a, 1), at(d, 2) - at(a, 2));
+    let (ux, uy, uz) = (
+        at(b, 0) - at(a, 0),
+        at(b, 1) - at(a, 1),
+        at(b, 2) - at(a, 2),
+    );
+    let (vx, vy, vz) = (
+        at(c, 0) - at(a, 0),
+        at(c, 1) - at(a, 1),
+        at(c, 2) - at(a, 2),
+    );
+    let (wx, wy, wz) = (
+        at(d, 0) - at(a, 0),
+        at(d, 1) - at(a, 1),
+        at(d, 2) - at(a, 2),
+    );
     ((uy * vz - uz * vy) * wx + (uz * vx - ux * vz) * wy + (ux * vy - uy * vx) * wz) / 6.0
 }
 
@@ -76,13 +100,21 @@ impl Lattice {
         for k in 0..nz {
             for j in 0..ny {
                 for i in 0..nx {
-                    let c = (o[0] + (i as f64 + 0.5) * h, o[1] + (j as f64 + 0.5) * h, o[2] + (k as f64 + 0.5) * h);
+                    let c = (
+                        o[0] + (i as f64 + 0.5) * h,
+                        o[1] + (j as f64 + 0.5) * h,
+                        o[2] + (k as f64 + 0.5) * h,
+                    );
                     if f(c.0, c.1, c.2) > h * 0.6 {
                         continue;
                     }
                     let mut corner = [0u32; 8];
                     for (b, slot) in corner.iter_mut().enumerate() {
-                        let (ii, jj, kk) = (i + (b as i64 & 1), j + ((b as i64 >> 1) & 1), k + ((b as i64 >> 2) & 1));
+                        let (ii, jj, kk) = (
+                            i + (b as i64 & 1),
+                            j + ((b as i64 >> 1) & 1),
+                            k + ((b as i64 >> 2) & 1),
+                        );
                         let key = (kk * (ny + 1) + jj) * (nx + 1) + ii;
                         *slot = *node_id.entry(key).or_insert_with(|| {
                             let n = (pos.len() / 3) as u32;
@@ -93,7 +125,11 @@ impl Lattice {
                         });
                     }
                     let mut list = Vec::with_capacity(5);
-                    for t in if (i + j + k) & 1 == 1 { &TET_ODD } else { &TET_EVEN } {
+                    for t in if (i + j + k) & 1 == 1 {
+                        &TET_ODD
+                    } else {
+                        &TET_EVEN
+                    } {
                         list.push((tets.len() / 4) as u32);
                         tets.extend(t.iter().map(|&q| corner[q]));
                     }
@@ -106,7 +142,16 @@ impl Lattice {
                 t.swap(2, 3);
             }
         }
-        Lattice { origin: o, h, nx, ny, nz, nodes: pos, tets, cell_tets }
+        Lattice {
+            origin: o,
+            h,
+            nx,
+            ny,
+            nz,
+            nodes: pos,
+            tets,
+            cell_tets,
+        }
     }
 
     pub fn node_count(&self) -> usize {
@@ -129,10 +174,17 @@ pub struct Embedding {
 /// that the one it is least outside of, searching outward up to three cells.
 pub fn embed_points(points: &[f32], lat: &Lattice, dm_inv: &[f32]) -> Embedding {
     let nv = points.len() / 3;
-    let mut emb = Embedding { tet_of: vec![0; nv], bary: vec![0.0; nv * 3] };
+    let mut emb = Embedding {
+        tet_of: vec![0; nv],
+        bary: vec![0.0; nv * 3],
+    };
     let (o, h, nx, ny) = (lat.origin, lat.h, lat.nx, lat.ny);
     for v in 0..nv {
-        let (px, py, pz) = (points[3 * v] as f64, points[3 * v + 1] as f64, points[3 * v + 2] as f64);
+        let (px, py, pz) = (
+            points[3 * v] as f64,
+            points[3 * v + 1] as f64,
+            points[3 * v + 2] as f64,
+        );
         let ci = ((px - o[0]) / h).floor() as i64;
         let cj = ((py - o[1]) / h).floor() as i64;
         let ck = ((pz - o[2]) / h).floor() as i64;
@@ -145,14 +197,18 @@ pub fn embed_points(points: &[f32], lat: &Lattice, dm_inv: &[f32]) -> Embedding 
                         if di.abs().max(dj.abs()).max(dk.abs()) != r {
                             continue;
                         }
-                        let Some(list) = lat.cell_tets.get(&(((ck + dk) * ny + (cj + dj)) * nx + (ci + di))) else {
+                        let Some(list) = lat
+                            .cell_tets
+                            .get(&(((ck + dk) * ny + (cj + dj)) * nx + (ci + di)))
+                        else {
                             continue;
                         };
                         for &t in list {
                             let a = 3 * lat.tets[4 * t as usize] as usize;
                             let m = 9 * t as usize;
                             let x = &lat.nodes;
-                            let (rx, ry, rz) = (px - x[a] as f64, py - x[a + 1] as f64, pz - x[a + 2] as f64);
+                            let (rx, ry, rz) =
+                                (px - x[a] as f64, py - x[a + 1] as f64, pz - x[a + 2] as f64);
                             let d = |i: usize| dm_inv[m + i] as f64;
                             let b1 = d(0) * rx + d(3) * ry + d(6) * rz;
                             let b2 = d(1) * rx + d(4) * ry + d(7) * rz;
@@ -210,7 +266,12 @@ impl Part {
         let mut face_list: Vec<(u32, [u32; 3])> = Vec::new();
         let p = &lat.nodes;
         for t in 0..nt {
-            let q = [lat.tets[4 * t], lat.tets[4 * t + 1], lat.tets[4 * t + 2], lat.tets[4 * t + 3]];
+            let q = [
+                lat.tets[4 * t],
+                lat.tets[4 * t + 1],
+                lat.tets[4 * t + 2],
+                lat.tets[4 * t + 3],
+            ];
             let a = 3 * q[0] as usize;
             let mut m = [0.0f64; 9];
             for c in 1..=3 {
@@ -246,7 +307,11 @@ impl Part {
             }
         }
         let edges = edge_list.iter().flat_map(|&(a, b)| [a, b]).collect();
-        let boundary = face_list.iter().filter(|f| f.0 == 1).flat_map(|f| f.1).collect();
+        let boundary = face_list
+            .iter()
+            .filter(|f| f.0 == 1)
+            .flat_map(|f| f.1)
+            .collect();
         let radius = (0..nn)
             .map(|i| {
                 let d = f(p[3 * i] as f64, p[3 * i + 1] as f64, p[3 * i + 2] as f64);
@@ -254,7 +319,15 @@ impl Part {
             })
             .collect();
         let skin = embed_points(skin, &lat, &dm_inv);
-        Part { lattice: lat, dm_inv, rest_vol, edges, boundary, radius, skin }
+        Part {
+            lattice: lat,
+            dm_inv,
+            rest_vol,
+            edges,
+            boundary,
+            radius,
+            skin,
+        }
     }
 
     pub fn node_count(&self) -> usize {

@@ -50,6 +50,7 @@ fn camera(x: f32) -> PerspectiveCamera {
 #[test]
 fn shadow_maps_are_redrawn_only_when_they_would_change() {
     let Ok(mut hr) = HeadlessRenderer::builder().size(W, W).build() else {
+        eprintln!("skipping: no GPU adapter");
         return;
     };
     let (mut scene, cube, light) = scene();
@@ -90,6 +91,7 @@ fn shadow_maps_are_redrawn_only_when_they_would_change() {
     // fresh renderer, which has to draw them.
     let (mut fresh_scene, _, _) = scene_at_reuse();
     let Ok(mut fresh) = HeadlessRenderer::builder().size(W, W).build() else {
+        eprintln!("skipping: no GPU adapter");
         return;
     };
     let redrawn = fresh.render_to_rgba(&mut fresh_scene, &camera(1.5));
@@ -104,6 +106,7 @@ fn scene_at_reuse() -> (Scene, threers::core::ObjectId, threers::core::ObjectId)
 #[test]
 fn instanced_casters_reuse_until_an_instance_moves() {
     let Ok(mut hr) = HeadlessRenderer::builder().size(W, W).build() else {
+        eprintln!("skipping: no GPU adapter");
         return;
     };
     let (mut scene, cube, _) = scene();
@@ -148,6 +151,7 @@ fn instanced_casters_reuse_until_an_instance_moves() {
 fn skinned_casters_reuse_until_the_pose_changes() {
     use threers::core::{Bone, BufferAttribute, Skeleton, SkinnedMesh};
     let Ok(mut hr) = HeadlessRenderer::builder().size(W, W).build() else {
+        eprintln!("skipping: no GPU adapter");
         return;
     };
     let (mut scene, cube, _) = scene();
@@ -190,6 +194,7 @@ fn skinned_casters_reuse_until_the_pose_changes() {
 #[test]
 fn custom_shader_casters_reuse_until_their_inputs_change() {
     let Ok(mut hr) = HeadlessRenderer::builder().size(W, W).build() else {
+        eprintln!("skipping: no GPU adapter");
         return;
     };
     let (mut scene, cube, _) = scene();
@@ -229,7 +234,10 @@ fn shadow_of(hr: &mut HeadlessRenderer, scene: &mut Scene, caster: threers::core
         hr.render_to_rgba(scene, &camera(0.0))
     };
     let (lit, shadowed) = (frame(false), frame(true));
-    lit.iter().zip(&shadowed).map(|(a, b)| a.saturating_sub(*b) as u64).sum()
+    lit.iter()
+        .zip(&shadowed)
+        .map(|(a, b)| a.saturating_sub(*b) as u64)
+        .sum()
 }
 
 fn flat_shader() -> ShaderMaterial {
@@ -244,6 +252,7 @@ fn flat_shader() -> ShaderMaterial {
 #[test]
 fn custom_shader_meshes_cast_shadows() {
     let Ok(mut hr) = HeadlessRenderer::builder().size(W, W).build() else {
+        eprintln!("skipping: no GPU adapter");
         return;
     };
     let (mut scene, cube, _) = scene();
@@ -254,12 +263,16 @@ fn custom_shader_meshes_cast_shadows() {
     let custom = shadow_of(&mut hr, &mut scene, cube);
     assert!(standard > 0, "the standard cube casts");
     // The same box, so the same shadow; it used to be none at all.
-    assert_eq!(custom, standard, "a ShaderMaterial cube casts the standard cube's shadow");
+    assert_eq!(
+        custom, standard,
+        "a ShaderMaterial cube casts the standard cube's shadow"
+    );
 }
 
 #[test]
 fn custom_shader_instances_cast_shadows() {
     let Ok(mut hr) = HeadlessRenderer::builder().size(W, W).build() else {
+        eprintln!("skipping: no GPU adapter");
         return;
     };
     let (mut scene, cube, _) = scene();
@@ -267,17 +280,25 @@ fn custom_shader_instances_cast_shadows() {
     let instances = |material: Material| {
         let mut im = InstancedMesh::new(BoxGeometry::new(0.5, 0.5, 0.5), material, 3);
         for i in 0..3 {
-            im.set_matrix_at(i, Matrix4::translation(Vector3::new(i as f32 - 1.0, 0.25, 0.0)));
+            im.set_matrix_at(
+                i,
+                Matrix4::translation(Vector3::new(i as f32 - 1.0, 0.25, 0.0)),
+            );
         }
         Object3D::instanced_mesh(im)
     };
-    let id = scene.add(instances(Material::Standard(StandardMaterial::new(Color::WHITE))));
+    let id = scene.add(instances(Material::Standard(StandardMaterial::new(
+        Color::WHITE,
+    ))));
     let standard = shadow_of(&mut hr, &mut scene, id);
     scene.get_mut(id).unwrap().visible = false;
     let id = scene.add(instances(Material::Shader(flat_shader())));
     let custom = shadow_of(&mut hr, &mut scene, id);
     assert!(standard > 0, "the standard instances cast");
-    assert_eq!(custom, standard, "ShaderMaterial instances cast the same shadows");
+    assert_eq!(
+        custom, standard,
+        "ShaderMaterial instances cast the same shadows"
+    );
 }
 
 /// The Metal renderer reuses its maps by the same rule.
@@ -333,6 +354,7 @@ fn metal_reuses_shadow_maps_until_they_would_change() {
 fn passes_are_reused_one_by_one_and_casters_culled_per_pass() {
     use threers::lights::PointLight;
     let Ok(mut hr) = HeadlessRenderer::builder().size(W, W).build() else {
+        eprintln!("skipping: no GPU adapter");
         return;
     };
     let (mut scene, _, light) = scene();
@@ -350,13 +372,24 @@ fn passes_are_reused_one_by_one_and_casters_culled_per_pass() {
 
     hr.render(&mut scene, &camera(0.0));
     let (passes, draws) = stats(&mut hr);
-    assert_eq!(passes, 4 + 6, "the first render draws every cascade and face");
+    assert_eq!(
+        passes,
+        4 + 6,
+        "the first render draws every cascade and face"
+    );
     // One cube, beside the lamp: it falls in some of the cube's faces only.
-    assert!(draws < 4 + 6, "{draws} caster draws: the cube was drawn into every face");
+    assert!(
+        draws < 4 + 6,
+        "{draws} caster draws: the cube was drawn into every face"
+    );
 
     hr.render(&mut scene, &camera(1.0));
     let (passes2, _) = stats(&mut hr);
-    assert_eq!(passes2 - passes, 4, "a moving camera redraws the cascades and not the lamp's faces");
+    assert_eq!(
+        passes2 - passes,
+        4,
+        "a moving camera redraws the cascades and not the lamp's faces"
+    );
 
     hr.render(&mut scene, &camera(1.0));
     assert_eq!(stats(&mut hr).0, passes2, "a still frame redraws nothing");

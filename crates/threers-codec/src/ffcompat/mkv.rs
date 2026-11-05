@@ -80,7 +80,10 @@ pub fn parse(data: &[u8]) -> Result<(MovVideo, VideoTrack, Vec<u8>), String> {
         other => return Err(format!("Matroska video codec {other} is not supported")),
     };
     if 1_000_000_000 % mkv.timestamp_scale != 0 {
-        return Err(format!("TimestampScale {} is not supported", mkv.timestamp_scale));
+        return Err(format!(
+            "TimestampScale {} is not supported",
+            mkv.timestamp_scale
+        ));
     }
     let ts = (1_000_000_000 / mkv.timestamp_scale) as i64;
     let frames: Vec<_> = mkv.frames_of(t.number).collect();
@@ -94,14 +97,23 @@ pub fn parse(data: &[u8]) -> Result<(MovVideo, VideoTrack, Vec<u8>), String> {
         .map(|f| codec != TrackCodec::Vp9 || crate::decode::vp9_packet::packet_shows(&f.data))
         .collect();
     let all_pts: Vec<i64> = frames.iter().map(|f| f.pts).collect();
-    let pts: Vec<i64> = frames.iter().zip(&shows).filter(|(_, &s)| s).map(|(f, _)| f.pts).collect();
+    let pts: Vec<i64> = frames
+        .iter()
+        .zip(&shows)
+        .filter(|(_, &s)| s)
+        .map(|(f, _)| f.pts)
+        .collect();
     let shown: Vec<usize> = (0..frames.len()).filter(|&i| shows[i]).collect();
 
     // Rates.
     // matroskadec: without a DefaultDuration, the deprecated FrameRate
     // gives one (`1e9 / frame_rate`, truncated).
     let default_duration = t.default_duration.filter(|&d| d > 0).or_else(|| {
-        t.frame_rate.filter(|&f| f > 0.0).map(|f| 1e9 / f).filter(|&d| d < u64::MAX as f64).map(|d| d as u64)
+        t.frame_rate
+            .filter(|&f| f > 0.0)
+            .map(|f| 1e9 / f)
+            .filter(|&d| d < u64::MAX as f64)
+            .map(|d| d as u64)
     });
     let mut r_frame_rate = None;
     let mut avg = None;
@@ -133,7 +145,11 @@ pub fn parse(data: &[u8]) -> Result<(MovVideo, VideoTrack, Vec<u8>), String> {
     let r = r_frame_rate.unwrap_or((ts, 1));
     if avg.is_none() {
         // "Setting avg frame rate based on r frame rate".
-        let steps: Vec<i64> = all_pts[..probed].windows(2).filter(|w| w[1] > w[0]).map(|w| w[1] - w[0]).collect();
+        let steps: Vec<i64> = all_pts[..probed]
+            .windows(2)
+            .filter(|w| w[1] > w[0])
+            .map(|w| w[1] - w[0])
+            .collect();
         if steps.len() > 2 && r_frame_rate.is_some() {
             let mean = steps.iter().sum::<i64>() as f64 / steps.len() as f64;
             if ((ts as f64 * r.1 as f64 / r.0 as f64) - mean).abs() <= 1.0 {
@@ -144,7 +160,9 @@ pub fn parse(data: &[u8]) -> Result<(MovVideo, VideoTrack, Vec<u8>), String> {
     let fps = avg.unwrap_or(r);
 
     // Packet durations.
-    let dd_ticks = default_duration.map(|d| (d / mkv.timestamp_scale) as i64).unwrap_or(0);
+    let dd_ticks = default_duration
+        .map(|d| (d / mkv.timestamp_scale) as i64)
+        .unwrap_or(0);
     let fallback = (ts * r.1) / r.0;
     let pkt_durations: Vec<i64> = frames
         .iter()
@@ -170,7 +188,11 @@ pub fn parse(data: &[u8]) -> Result<(MovVideo, VideoTrack, Vec<u8>), String> {
     let start_us = rescale(start, 1_000_000, ts);
     let dur_us = match mkv.duration {
         Some(d) => (d * mkv.timestamp_scale as f64 * 1000.0 / 1_000_000.0) as i64,
-        None => rescale(all_pts.last().unwrap() + pkt_durations.last().unwrap() - start, 1_000_000, ts),
+        None => rescale(
+            all_pts.last().unwrap() + pkt_durations.last().unwrap() - start,
+            1_000_000,
+            ts,
+        ),
     };
     let banner_duration = ((dur_us + 5000) / 10_000) as f64 / 100.0;
 
@@ -209,6 +231,13 @@ pub fn parse(data: &[u8]) -> Result<(MovVideo, VideoTrack, Vec<u8>), String> {
         width: t.width,
         height: t.height,
     };
-    let track = VideoTrack { codec, width: t.width, height: t.height, config: Vec::new(), timescale: ts as u32, samples };
+    let track = VideoTrack {
+        codec,
+        width: t.width,
+        height: t.height,
+        config: Vec::new(),
+        timescale: ts as u32,
+        samples,
+    };
     Ok((mov, track, buf))
 }

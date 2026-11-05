@@ -123,7 +123,13 @@ impl WgpuCanvas {
         .expect("fluid");
         sim.multiple_splats(20);
         report(&sim);
-        Self { sim, surface, config, device, queue }
+        Self {
+            sim,
+            surface,
+            config,
+            device,
+            queue,
+        }
     }
 }
 
@@ -186,17 +192,27 @@ mod metal {
                 RawWindowHandle::AppKit(handle) => handle.ns_view.as_ptr(),
                 other => panic!("expected an AppKit window handle, got {other:?}"),
             };
-            let device = MetalDevice::with_shader_source(&fluid_shader_source()).expect("Metal device");
+            let device =
+                MetalDevice::with_shader_source(&fluid_shader_source()).expect("Metal device");
             println!("device: {} (native Metal)", device.name());
             // Safety: the handle came from a live winit window, and winit runs
             // its event loop — and this code — on the main thread.
-            let surface = unsafe { MetalSurface::from_ns_view(&device, ns_view, size.width, size.height, 1) }
-                .expect("CAMetalLayer");
-            let mut fluid = MetalFluid::new(&device, size.width, size.height, config).expect("fluid");
+            let surface =
+                unsafe { MetalSurface::from_ns_view(&device, ns_view, size.width, size.height, 1) }
+                    .expect("CAMetalLayer");
+            let mut fluid =
+                MetalFluid::new(&device, size.width, size.height, config).expect("fluid");
             fluid.multiple_splats(&device, 20);
             let ((dw, dh), (sw, sh)) = fluid.grid_sizes();
-            println!("dye {dw}x{dh}  sim {sw}x{sh}  sweeps {}", config.pressure_iterations);
-            Self { device, fluid, surface }
+            println!(
+                "dye {dw}x{dh}  sim {sw}x{sh}  sweeps {}",
+                config.pressure_iterations
+            );
+            Self {
+                device,
+                fluid,
+                surface,
+            }
         }
     }
 
@@ -212,7 +228,9 @@ mod metal {
         }
         fn resize(&mut self, width: u32, height: u32) {
             self.surface.resize(width, height).expect("resize");
-            self.fluid.resize(&self.device, width, height).expect("fluid resize");
+            self.fluid
+                .resize(&self.device, width, height)
+                .expect("fluid resize");
         }
         fn key(&mut self, key: &Key) {
             match action(*self.fluid.config(), key) {
@@ -223,7 +241,9 @@ mod metal {
                     println!("{}", if paused { "paused" } else { "running" });
                 }
                 Some(Action::Set(c, _)) => {
-                    self.fluid.set_config(&self.device, c).expect("fluid config");
+                    self.fluid
+                        .set_config(&self.device, c)
+                        .expect("fluid config");
                 }
                 None => {}
             }
@@ -240,7 +260,11 @@ mod metal {
     }
 }
 
-fn run_loop(event_loop: EventLoop<()>, window: Arc<winit::window::Window>, mut canvas: impl Canvas + 'static) {
+fn run_loop(
+    event_loop: EventLoop<()>,
+    window: Arc<winit::window::Window>,
+    mut canvas: impl Canvas + 'static,
+) {
     let mut cursor = (0.0f32, 0.0f32);
     let mut last = std::time::Instant::now();
     event_loop
@@ -276,7 +300,9 @@ fn run_loop(event_loop: EventLoop<()>, window: Arc<winit::window::Window>, mut c
                         TouchPhase::Ended | TouchPhase::Cancelled => canvas.pointer_up(id),
                     }
                 }
-                WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
+                WindowEvent::KeyboardInput { event, .. }
+                    if event.state == ElementState::Pressed =>
+                {
                     canvas.key(&event.logical_key);
                 }
                 WindowEvent::RedrawRequested => {

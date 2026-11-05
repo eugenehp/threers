@@ -1155,9 +1155,9 @@ impl MetalRenderer {
     ) -> Result<(), MetalError> {
         let (width, height) = overlay.size();
         // An empty band still composites: the frame underneath is new.
-        let rows = overlay.dirty_rows().unwrap_or((0, 0));
+        let bands = overlay.dirty_bands();
         self.overlay
-            .composite(&self.device, overlay.pixels(), width, height, Some(rows), pass)?;
+            .composite(&self.device, overlay.pixels(), width, height, Some(&bands), pass)?;
         overlay.mark_uploaded();
         Ok(())
     }
@@ -2297,7 +2297,7 @@ impl MetalRenderer {
                         frame_u.rect_counts[0] += 1;
                     }
                 },
-                ObjectKind::Group => {}
+                ObjectKind::Group | ObjectKind::Audio(_) => {}
             }
         });
 

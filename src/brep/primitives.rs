@@ -214,7 +214,6 @@ pub fn tag_cylinder(
     }
 }
 
-
 /// `LatheGeometry` — a profile polyline revolved about `+Y`.
 ///
 /// Exact: the mesh's vertices are `(x·sin φ, y, x·cos φ)` at the same angles the
@@ -394,7 +393,12 @@ mod tests {
         use crate::math::Vector3;
         let v = Vector3::new;
         // A tilted, non-rectangular planar quad: a plane, through every vertex.
-        let flat = [v(0.0, 0.0, 0.0), v(2.0, 0.0, 1.0), v(2.5, 1.5, 1.25), v(0.0, 1.0, 0.0)];
+        let flat = [
+            v(0.0, 0.0, 0.0),
+            v(2.0, 0.0, 1.0),
+            v(2.5, 1.5, 1.25),
+            v(0.0, 1.0, 0.0),
+        ];
         assert!(QuadGeometry::is_planar(&flat, 1e-6));
         let g = QuadGeometry::with_segments(flat, 3, 2);
         assert_tagged(&g, "planar quad", 3.0);
@@ -403,7 +407,12 @@ mod tests {
 
         // A saddle: the bilinear patch, through every sampled vertex, and
         // its parameterization is the generator's.
-        let saddle = [v(0.0, 0.0, 0.0), v(1.0, 0.0, 1.0), v(1.0, 1.0, 0.0), v(0.0, 1.0, 1.0)];
+        let saddle = [
+            v(0.0, 0.0, 0.0),
+            v(1.0, 0.0, 1.0),
+            v(1.0, 1.0, 0.0),
+            v(0.0, 1.0, 1.0),
+        ];
         let g = QuadGeometry::with_segments(saddle, 4, 4);
         assert_tagged(&g, "saddle", 1.0);
         let s = &g.surface_table().unwrap().surfaces()[0];
@@ -411,11 +420,22 @@ mod tests {
         for (u, w) in [(0.25f32, 0.5f32), (0.8, 0.1)] {
             let p = QuadGeometry::point_at(&saddle, u, w);
             let q = s.point(u as f64, w as f64);
-            assert!(((p.x as f64 - q[0]).powi(2) + (p.y as f64 - q[1]).powi(2) + (p.z as f64 - q[2]).powi(2)).sqrt() < 1e-6);
+            assert!(
+                ((p.x as f64 - q[0]).powi(2)
+                    + (p.y as f64 - q[1]).powi(2)
+                    + (p.z as f64 - q[2]).powi(2))
+                .sqrt()
+                    < 1e-6
+            );
         }
 
         // Collinear corners: no surface, no tag.
-        let line = [v(0.0, 0.0, 0.0), v(1.0, 0.0, 0.0), v(2.0, 0.0, 0.0), v(3.0, 0.0, 0.0)];
+        let line = [
+            v(0.0, 0.0, 0.0),
+            v(1.0, 0.0, 0.0),
+            v(2.0, 0.0, 0.0),
+            v(3.0, 0.0, 0.0),
+        ];
         assert!(QuadGeometry::new(line).surface_table().is_none());
     }
 

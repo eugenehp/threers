@@ -34,7 +34,7 @@
 //! ```no_run
 //! use threers::marks::{MarkRenderer, MarkTarget, MarkView, Origin, PointMarks, Mark};
 //! # fn frame(renderer: &mut threers::Renderer, scene: &mut threers::Scene,
-//! #          camera: &threers::PerspectiveCamera, frame_view: &gpu::TextureView) {
+//! #          camera: &threers::PerspectiveCamera, frame_view: &wgpu::TextureView) {
 //! let device = renderer.device_arc();
 //! let queue = renderer.queue_arc();
 //! let mut marks = MarkRenderer::new(&device);
@@ -56,15 +56,15 @@ mod collision;
 mod columns;
 mod density;
 pub mod geo;
+pub mod geojson;
 pub mod gpu;
 #[cfg(metal_backend)]
 mod gpu_metal;
-pub mod geojson;
 mod hooks;
 mod images;
-mod lines;
 #[cfg(feature = "captions")]
 mod labels;
+mod lines;
 mod map_view;
 #[cfg(feature = "captions")]
 mod msdf;
@@ -93,18 +93,20 @@ pub mod binning;
 pub use binning::{BinRequest, ScreenBinner, ScreenBins};
 #[cfg(feature = "captions")]
 pub use labels::{GlyphField, LabelAnchor, LabelBackground, LabelIcon, TextLabel, TextLabels};
+pub use lines::LineMarks;
 pub use map_view::{MapFrame, MapView};
 pub use picking::{PickHit, PickRectRequest, PickRequest};
 pub use points::PointMarks;
-pub use lines::LineMarks;
 pub use polygon_mesh::PolygonMesh;
-pub use polygons::{PatternFrame, PolygonFeature, PolygonMarks, PolygonPattern, ProceduralFrame, ProceduralShape};
+pub use polygons::{
+    PatternFrame, PolygonFeature, PolygonMarks, PolygonPattern, ProceduralFrame, ProceduralShape,
+};
 pub use precision::{split_f64, split_f64x3, Origin};
 pub use segments::{ArcProfile, DashMode, LineCap, LineJoin, PathMesh, SegmentMarks};
 pub use shader::{CustomShader, MarkKind, PREAMBLE, SWIFTSHADER_SAMPLING};
 pub use shapes::ShapeMarks;
 
-pub use sprites::{SpriteMarks, SpriteBox, SpriteMode, SpriteSdf};
+pub use sprites::{SpriteBox, SpriteMarks, SpriteMode, SpriteSdf};
 
 use std::collections::HashMap;
 
@@ -343,7 +345,9 @@ impl MarkView {
 
     fn scene_uniforms(&self) -> SceneUniforms {
         let mut u: SceneUniforms = bytemuck::Zeroable::zeroed();
-        let Some(l) = &self.scene_lights else { return u };
+        let Some(l) = &self.scene_lights else {
+            return u;
+        };
         let points = l.points.iter().flatten().count();
         let dirs = l.directional.iter().flatten().count();
         u.counts = [points as f32, dirs as f32, 1.0, 0.0];
@@ -366,7 +370,11 @@ impl MarkView {
             let mut r = [0f32; 16];
             for c in 0..4 {
                 for row in 0..4 {
-                    let v = if c == 3 { m[12 + row] + m[row] * o[0] + m[4 + row] * o[1] + m[8 + row] * o[2] } else { m[c * 4 + row] };
+                    let v = if c == 3 {
+                        m[12 + row] + m[row] * o[0] + m[4 + row] * o[1] + m[8 + row] * o[2]
+                    } else {
+                        m[c * 4 + row]
+                    };
                     r[c * 4 + row] = v as f32;
                 }
             }
@@ -404,7 +412,12 @@ impl MarkView {
             ],
             eye: self.eye,
             // zw: where the target's rectangle begins, device pixels.
-            aa: [if samples > 1 { 1.0 } else { 0.5 }, self.focal_distance, offset[0], offset[1]],
+            aa: [
+                if samples > 1 { 1.0 } else { 0.5 },
+                self.focal_distance,
+                offset[0],
+                offset[1],
+            ],
             // yzw: the sub-pixel snap's steps (0 for none) and bias.
             clip: match self.subpixel_snap {
                 Some((steps, bias)) => [self.clip_epsilon, steps, bias[0], bias[1]],
@@ -624,8 +637,14 @@ pub struct MarkStyle {
     pub tone_mapped: bool,
     /// Darkened where the scene's shadow map ([`SceneLights::shadow`]) says
     /// something nearer the light covers it — deck.gl's `shadowEnabled`.
-    /// Off by default. Also whether the mark casts, in a shadow pass.
+    /// Off by default. Also whether the mark casts, in a shadow pass,
+    /// unless [`cast_shadows`](Self::cast_shadows) says otherwise.
     pub receive_shadows: bool,
+    /// Whether the mark draws into a shadow pass; `None` (the default)
+    /// follows [`receive_shadows`](Self::receive_shadows). deck.gl's
+    /// `shadowEnabled: false` keeps a layer out of the shadow pass while it
+    /// still takes the shadows of others.
+    pub cast_shadows: Option<bool>,
     pub blend: MarkBlend,
     /// Smooth edges by analytic coverage (the default). Off, points and
     /// lines draw hard-edged, every fragment fully in or out — deck.gl's
@@ -643,6 +662,13 @@ pub struct MarkStyle {
     pub focal_pixels: bool,
     pub visible: bool,
     pub pickable: bool,
+}
+
+impl MarkStyle {
+    /// Whether the mark draws into a shadow pass ([`cast_shadows`](Self::cast_shadows)).
+    pub fn casts_shadows(&self) -> bool {
+        self.cast_shadows.unwrap_or(self.receive_shadows)
+    }
 }
 
 impl Default for MarkStyle {
@@ -668,6 +694,7 @@ impl Default for MarkStyle {
             cull_back: false,
             tone_mapped: false,
             receive_shadows: false,
+            cast_shadows: None,
             blend: MarkBlend::Alpha,
             antialias: true,
             mix_srgb: false,
@@ -813,7 +840,10 @@ impl Lighting {
             diffuse: 0.6,
             specular: 30.0 / 255.0,
             shininess: 32.0,
-            lights: [(toward([-1.0, 3.0, -1.0]), 1.0), (toward([1.0, -8.0, -2.5]), 0.9)],
+            lights: [
+                (toward([-1.0, 3.0, -1.0]), 1.0),
+                (toward([1.0, -8.0, -2.5]), 0.9),
+            ],
             srgb: true,
             pbr: None,
             scene: false,
@@ -825,7 +855,11 @@ impl Lighting {
     /// [`SceneLights`], per pixel. `specular_color` is the material's
     /// `specularColor` (sRGB, 0 to 1).
     pub fn deck_gl_scene(specular_color: [f32; 3]) -> Self {
-        Self { scene: true, specular_color, ..Self::deck_gl() }
+        Self {
+            scene: true,
+            specular_color,
+            ..Self::deck_gl()
+        }
     }
 
     /// deck.gl's default lights on luma.gl's physically based material
@@ -841,7 +875,10 @@ impl Lighting {
             ambient: 1.0,
             srgb: false,
             pbr: Some([metallic, roughness]),
-            lights: [(toward([-1.0, 3.0, -1.0]), 1.0), (toward([1.0, -8.0, -2.5]), 0.9)],
+            lights: [
+                (toward([-1.0, 3.0, -1.0]), 1.0),
+                (toward([1.0, -8.0, -2.5]), 0.9),
+            ],
             ..Self::deck_gl()
         }
     }
@@ -853,14 +890,21 @@ impl Lighting {
             None if l.scene => [l.specular, l.shininess.max(1.0), 0.0, 2.0],
             // w: 1 for the physically based model (z is a polygon
             // pattern's mask flag).
-            Some([metallic, roughness]) => [metallic.clamp(0.0, 1.0), roughness.clamp(0.04, 1.0), 0.0, 1.0],
+            Some([metallic, roughness]) => [
+                metallic.clamp(0.0, 1.0),
+                roughness.clamp(0.04, 1.0),
+                0.0,
+                1.0,
+            ],
             None => [l.specular, l.shininess.max(1.0), 0.0, 0.0],
         })
     }
 
     /// `(style2.yz, stroke, extra)` as the lit kinds' shaders read them.
     pub(crate) fn uniforms(lighting: Option<&Lighting>) -> ([f32; 2], [f32; 4], [f32; 4]) {
-        let Some(l) = lighting else { return ([0.0; 2], [0.0; 4], [0.0; 4]) };
+        let Some(l) = lighting else {
+            return ([0.0; 2], [0.0; 4], [0.0; 4]);
+        };
         let light = |(d, i): ([f32; 3], f32)| {
             let n = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-12);
             [d[0] / n, d[1] / n, d[2] / n, i]
@@ -868,9 +912,17 @@ impl Lighting {
         if l.scene {
             // stroke: the highlights' colour.
             let c = l.specular_color;
-            return ([l.diffuse.max(1e-6), 1.0], [c[0], c[1], c[2], 0.0], [0.0; 4]);
+            return (
+                [l.diffuse.max(1e-6), 1.0],
+                [c[0], c[1], c[2], 0.0],
+                [0.0; 4],
+            );
         }
-        ([l.diffuse.max(1e-6), if l.srgb { 1.0 } else { 0.0 }], light(l.lights[0]), light(l.lights[1]))
+        (
+            [l.diffuse.max(1e-6), if l.srgb { 1.0 } else { 0.0 }],
+            light(l.lights[0]),
+            light(l.lights[1]),
+        )
     }
 }
 
@@ -1288,8 +1340,12 @@ fn depth_state(depth: DepthKey) -> Option<wgpu::DepthStencilState> {
     let (write, compare) = match depth {
         DepthKey::None => return None,
         DepthKey::Ignore => (false, wgpu::CompareFunction::Always),
-        DepthKey::Test { test: false, write, .. } => (write, wgpu::CompareFunction::Always),
-        DepthKey::Test { write, reversed, .. } => (
+        DepthKey::Test {
+            test: false, write, ..
+        } => (write, wgpu::CompareFunction::Always),
+        DepthKey::Test {
+            write, reversed, ..
+        } => (
             write,
             if reversed {
                 wgpu::CompareFunction::GreaterEqual
@@ -1319,9 +1375,18 @@ impl MarkRenderer {
             label: Some("threers marks frame bind group"),
             layout,
             entries: &[
-                gpu::BindGroupEntry { binding: 0, resource: uniform.as_entire_binding() },
-                gpu::BindGroupEntry { binding: 1, resource: gpu::BindingResource::TextureView(shadow) },
-                gpu::BindGroupEntry { binding: 2, resource: gpu::BindingResource::Sampler(sampler) },
+                gpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform.as_entire_binding(),
+                },
+                gpu::BindGroupEntry {
+                    binding: 1,
+                    resource: gpu::BindingResource::TextureView(shadow),
+                },
+                gpu::BindGroupEntry {
+                    binding: 2,
+                    resource: gpu::BindingResource::Sampler(sampler),
+                },
             ],
         })
     }
@@ -1355,7 +1420,9 @@ impl MarkRenderer {
     fn drawn(&self, m: &dyn Mark) -> bool {
         m.common().style.visible
             && m.instance_count() > 0
-            && (!self.shadow_pass || (m.common().style.receive_shadows && matches!(m.kind(), MarkKind::Shape | MarkKind::Polygon)))
+            && (!self.shadow_pass
+                || (m.common().style.casts_shadows()
+                    && matches!(m.kind(), MarkKind::Shape | MarkKind::Polygon)))
     }
 
     pub fn new(device: &wgpu::Device) -> Self {
@@ -1423,7 +1490,11 @@ impl MarkRenderer {
         // No shadow map: one texel at the far plane, which shadows nothing.
         let no_shadow = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("threers marks no shadow map"),
-            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -1432,7 +1503,13 @@ impl MarkRenderer {
             view_formats: &[],
         });
         let no_shadow = std::sync::Arc::new(no_shadow.create_view(&Default::default()));
-        let frame_bind_group = Self::frame_group(device, &frame_layout, &frame_uniform, &no_shadow, &linear_sampler);
+        let frame_bind_group = Self::frame_group(
+            device,
+            &frame_layout,
+            &frame_uniform,
+            &no_shadow,
+            &linear_sampler,
+        );
         Self {
             resources: SharedResources {
                 frame_layout,
@@ -1495,7 +1572,9 @@ impl MarkRenderer {
         bytes.resize(marks.len().max(1) * stride, 0);
         // Late marks after the rest; each keeps its own index (pick id,
         // uniform slot, draw order).
-        let mut order: Vec<usize> = (0..marks.len()).filter(|&i| !marks[i].prepare_late()).collect();
+        let mut order: Vec<usize> = (0..marks.len())
+            .filter(|&i| !marks[i].prepare_late())
+            .collect();
         order.extend((0..marks.len()).filter(|&i| marks[i].prepare_late()));
         for i in order {
             let m = &mut marks[i];
@@ -1598,7 +1677,12 @@ impl MarkRenderer {
                 origin_lo: layer_origin.1,
                 extra,
                 extra2,
-                shadow: [if s.receive_shadows { 1.0 } else { 0.0 }, s.depth_bias_units, 0.0, 0.0],
+                shadow: [
+                    if s.receive_shadows { 1.0 } else { 0.0 },
+                    s.depth_bias_units,
+                    0.0,
+                    0.0,
+                ],
             };
             bytes[i * stride..i * stride + LAYER_SIZE as usize]
                 .copy_from_slice(bytemuck::bytes_of(&u));
@@ -1685,7 +1769,11 @@ impl MarkRenderer {
         if key.kind == MarkKind::Shape {
             // Shapes: position, normal, uv, colour, and the vertex's
             // triangle's three corners.
-            let attr = |format, offset, shader_location| wgpu::VertexAttribute { format, offset, shader_location };
+            let attr = |format, offset, shader_location| wgpu::VertexAttribute {
+                format,
+                offset,
+                shader_location,
+            };
             layouts.push((
                 84,
                 wgpu::VertexStepMode::Vertex,
@@ -1837,8 +1925,16 @@ impl MarkRenderer {
                 compilation_options: Default::default(),
             }),
             primitive: wgpu::PrimitiveState {
-                topology: if key.lines { wgpu::PrimitiveTopology::LineList } else { wgpu::PrimitiveTopology::TriangleList },
-                front_face: if key.cull == 2 { wgpu::FrontFace::Cw } else { wgpu::FrontFace::Ccw },
+                topology: if key.lines {
+                    wgpu::PrimitiveTopology::LineList
+                } else {
+                    wgpu::PrimitiveTopology::TriangleList
+                },
+                front_face: if key.cull == 2 {
+                    wgpu::FrontFace::Cw
+                } else {
+                    wgpu::FrontFace::Ccw
+                },
                 cull_mode: (key.cull != 0).then_some(wgpu::Face::Back),
                 ..Default::default()
             },
@@ -2084,17 +2180,33 @@ impl MarkRenderer {
     }
 
     /// [`draw`](Self::draw) on `gpu` — the one this renderer was made on.
-    pub fn draw_on(&mut self, gpu: &gpu::Gpu, target: &MarkTarget, view: &MarkView, marks: &mut [&mut dyn Mark]) {
+    pub fn draw_on(
+        &mut self,
+        gpu: &gpu::Gpu,
+        target: &MarkTarget,
+        view: &MarkView,
+        marks: &mut [&mut dyn Mark],
+    ) {
         let (device, queue) = (gpu, gpu);
         let encode = crate::renderer::shader_applies_transfer(target.format);
         queue.write_buffer(
             &self.frame_uniform,
             0,
-            bytemuck::bytes_of(&view.uniforms(encode, target.samples, target.rect.map_or([0.0; 2], |r| [r[0] as f32, r[1] as f32]))),
+            bytemuck::bytes_of(&view.uniforms(
+                encode,
+                target.samples,
+                target.rect.map_or([0.0; 2], |r| [r[0] as f32, r[1] as f32]),
+            )),
         );
         self.prepare_all(device, queue, view, marks);
         if std::mem::take(&mut self.shadow_map_dirty) {
-            self.frame_bind_group = Self::frame_group(device, &self.resources.frame_layout, &self.frame_uniform, &self.shadow_map, &self.resources.linear_sampler);
+            self.frame_bind_group = Self::frame_group(
+                device,
+                &self.resources.frame_layout,
+                &self.frame_uniform,
+                &self.shadow_map,
+                &self.resources.linear_sampler,
+            );
         }
 
         let has_depth = target.depth.is_some();
@@ -2285,7 +2397,14 @@ impl MarkRenderer {
             multiview_mask: None,
         });
         if let Some([x, y, w, h]) = target.rect {
-            pass.set_viewport(x as f32, y as f32, w.max(1) as f32, h.max(1) as f32, 0.0, 1.0);
+            pass.set_viewport(
+                x as f32,
+                y as f32,
+                w.max(1) as f32,
+                h.max(1) as f32,
+                0.0,
+                1.0,
+            );
             pass.set_scissor_rect(x, y, w.max(1), h.max(1));
         }
         pass
@@ -2307,9 +2426,17 @@ impl MarkRenderer {
     }
 
     /// [`clear`](Self::clear) on `gpu`.
-    pub fn clear_on(&mut self, gpu: &gpu::Gpu, target: &MarkTarget, color: Option<wgpu::Color>, depth: Option<f32>) {
+    pub fn clear_on(
+        &mut self,
+        gpu: &gpu::Gpu,
+        target: &MarkTarget,
+        color: Option<wgpu::Color>,
+        depth: Option<f32>,
+    ) {
         let (device, queue) = (gpu, gpu);
-        self.clearer.get_or_insert_with(|| clear::Clearer::new(device)).clear(device, queue, target, color, depth);
+        self.clearer
+            .get_or_insert_with(|| clear::Clearer::new(device))
+            .clear(device, queue, target, color, depth);
     }
 }
 

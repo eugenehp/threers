@@ -777,7 +777,8 @@ impl HeadlessRenderer {
             }
         }
         self.accum_ready = false;
-        self.renderer.clear_render_target(&self.target, color, alpha);
+        self.renderer
+            .clear_render_target(&self.target, color, alpha);
     }
 
     /// A [`MarkRenderer`](crate::marks::MarkRenderer) for this renderer's
@@ -809,13 +810,18 @@ impl HeadlessRenderer {
     /// conditions are [`Renderer::vertex_buffer`]'s:
     /// [`BufferGeometry::gpu_writable`](crate::core::BufferGeometry::gpu_writable),
     /// and valid until the geometry's version changes.
-    pub fn vertex_buffer(&mut self, geometry: &Arc<crate::core::BufferGeometry>) -> Option<crate::marks::gpu::Buffer> {
+    pub fn vertex_buffer(
+        &mut self,
+        geometry: &Arc<crate::core::BufferGeometry>,
+    ) -> Option<crate::marks::gpu::Buffer> {
         on_metal! {
             if let Some(m) = self.metal_path() {
                 return m.vertex_buffer(geometry);
             }
         }
-        self.renderer.vertex_buffer(geometry).map(crate::marks::gpu::Buffer::from)
+        self.renderer
+            .vertex_buffer(geometry)
+            .map(crate::marks::gpu::Buffer::from)
     }
 
     /// `f32`s a vertex in [`vertex_buffer`](Self::vertex_buffer): 16 on
@@ -874,7 +880,9 @@ impl HeadlessRenderer {
         radius: u32,
     ) -> Option<crate::marks::PickHit> {
         let gpu = self.marks_gpu();
-        marks.pick_on(&gpu, view, layers, None, x, y, radius).wait_on(&gpu)
+        marks
+            .pick_on(&gpu, view, layers, None, x, y, radius)
+            .wait_on(&gpu)
     }
 
     /// Where [`marks`](crate::marks) draw over the frame [`render`](Self::render)
@@ -1429,7 +1437,11 @@ impl HeadlessRenderer {
                         };
                         for c in [r, g, b] {
                             let v = c as f32 / 255.0;
-                            f.push(if srgb { crate::utils::srgb::srgb_to_linear_f32(v) } else { v });
+                            f.push(if srgb {
+                                crate::utils::srgb::srgb_to_linear_f32(v)
+                            } else {
+                                v
+                            });
                         }
                         f.push(1.0);
                     }
@@ -1656,7 +1668,9 @@ impl HeadlessRenderer {
 /// Drop the alpha: the RGB readbacks' layout, from an RGBA frame.
 #[allow(dead_code)] // only the Metal path builds one from RGBA
 fn rgb_from_rgba(rgba: &[u8]) -> Vec<u8> {
-    rgba.chunks_exact(4).flat_map(|p| [p[0], p[1], p[2]]).collect()
+    rgba.chunks_exact(4)
+        .flat_map(|p| [p[0], p[1], p[2]])
+        .collect()
 }
 
 fn rgba_from_rgb(rgb: &[u8]) -> Vec<u8> {
@@ -1695,14 +1709,20 @@ enum Frame {
 impl MappedFrame {
     #[cfg_attr(not(metal_backend), allow(dead_code))]
     fn read(bytes: Vec<u8>) -> Self {
-        Self { len: bytes.len(), frame: Frame::Read(bytes) }
+        Self {
+            len: bytes.len(),
+            frame: Frame::Read(bytes),
+        }
     }
 
     /// The frame's bytes. Valid until this is recycled.
     pub fn bytes(&self) -> crate::marks::gpu::BufferView<'_> {
         match &self.frame {
             Frame::Mapped(buffer) => crate::marks::gpu::BufferView::Wgpu(
-                buffer.slice(..self.len as u64).get_mapped_range().expect("buffer range is mapped"),
+                buffer
+                    .slice(..self.len as u64)
+                    .get_mapped_range()
+                    .expect("buffer range is mapped"),
             ),
             Frame::Read(bytes) => crate::marks::gpu::BufferView::Metal(bytes),
         }

@@ -79,7 +79,10 @@ fn coloured_glass_tints_by_channel_in_every_mode() {
         hr.set_msaa(msaa);
         hr.renderer().force_depth_replay(replay);
         let c = through_glass(&mut hr, mode);
-        assert!(msaa == 1 || hr.renderer().last_frame_multisampled(), "{mode:?} x{msaa} did not multisample");
+        assert!(
+            msaa == 1 || hr.renderer().last_frame_multisampled(),
+            "{mode:?} x{msaa} did not multisample"
+        );
         hr.renderer().force_depth_replay(false);
         hr.set_msaa(1);
         eprintln!("{mode:?} x{msaa}: {c:?}");

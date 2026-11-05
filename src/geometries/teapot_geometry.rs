@@ -112,8 +112,16 @@ impl TeapotGeometry {
         let max_height2 = max_height / 2.0;
         let true_size = o.size / max_height2;
 
-        let mut num_triangles = if o.bottom { (8 * segments - 4) * segments } else { 0 };
-        num_triangles += if o.lid { (16 * segments - 4) * segments } else { 0 };
+        let mut num_triangles = if o.bottom {
+            (8 * segments - 4) * segments
+        } else {
+            0
+        };
+        num_triangles += if o.lid {
+            (16 * segments - 4) * segments
+        } else {
+            0
+        };
         num_triangles += if o.body { 40 * segments * segments } else { 0 };
         let mut indices = vec![0u32; num_triangles * 3];
         let mut num_vertices = if o.bottom { 4 } else { 0 };
@@ -167,8 +175,10 @@ impl TeapotGeometry {
                 let s = sstep as f64 / segments as f64;
                 for tstep in 0..=segments {
                     let t = tstep as f64 / segments as f64;
-                    let (mut sp, mut tp, mut dsp, mut dtp) = ([0.0; 4], [0.0; 4], [0.0; 4], [0.0; 4]);
-                    let (mut sval, mut tval, mut dsval, mut dtval) = (1.0f64, 1.0f64, 0.0f64, 0.0f64);
+                    let (mut sp, mut tp, mut dsp, mut dtp) =
+                        ([0.0; 4], [0.0; 4], [0.0; 4], [0.0; 4]);
+                    let (mut sval, mut tval, mut dsval, mut dtval) =
+                        (1.0f64, 1.0f64, 0.0f64, 0.0f64);
                     for p in (0..4).rev() {
                         sp[p] = sval;
                         tp[p] = tval;
@@ -221,7 +231,8 @@ impl TeapotGeometry {
             }
             for sstep in 0..segments {
                 for tstep in 0..segments {
-                    let v1 = surf_count * vert_per_row * vert_per_row + sstep * vert_per_row + tstep;
+                    let v1 =
+                        surf_count * vert_per_row * vert_per_row + sstep * vert_per_row + tstep;
                     let v2 = v1 + 1;
                     let v3 = v2 + vert_per_row;
                     let v4 = v1 + vert_per_row;

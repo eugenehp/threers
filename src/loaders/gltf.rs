@@ -33,7 +33,8 @@ use std::collections::HashMap;
 
 pub use document::{decode_data_uri, Accessor, Document, ImageSource};
 pub use material::{
-    constants as texture_constants, Assoc, GltfMaterial, GltfTexture, ImageData, MaterialType, Param,
+    constants as texture_constants, Assoc, GltfMaterial, GltfTexture, ImageData, MaterialType,
+    Param,
 };
 pub use parser::{
     sanitize_node_name, three_attribute_name, world_matrix, CameraParams, GltfClip, GltfGeometry,
@@ -43,6 +44,7 @@ pub use parser::{
 
 use crate::animation::{AnimationClip, Interpolation, KeyframeTrack, TrackTarget};
 use crate::core::{Bone, ObjectArena, ObjectId, Skeleton};
+use crate::loaders::json::Value;
 use crate::math::{Matrix4, Quaternion, Vector3};
 use crate::scene::Scene;
 
@@ -87,14 +89,22 @@ impl std::fmt::Display for GltfError {
             GltfError::Json(e) => write!(f, "THREE.GLTFLoader: invalid JSON ({e})"),
             GltfError::BadMagic => write!(f, "THREE.GLTFLoader: Unsupported glTF-Binary header."),
             GltfError::UnsupportedVersion => {
-                write!(f, "THREE.GLTFLoader: Unsupported asset. glTF versions >=2.0 are supported.")
+                write!(
+                    f,
+                    "THREE.GLTFLoader: Unsupported asset. glTF versions >=2.0 are supported."
+                )
             }
-            GltfError::UnsupportedAttribute(a) => write!(f, "THREE.GLTFLoader: unsupported attribute {a}"),
+            GltfError::UnsupportedAttribute(a) => {
+                write!(f, "THREE.GLTFLoader: unsupported attribute {a}")
+            }
             GltfError::MissingField(m) => write!(f, "THREE.GLTFLoader: missing {m}"),
             GltfError::BadBase64 => write!(f, "THREE.GLTFLoader: invalid base64 in a data URI"),
             GltfError::BadAccessor => write!(f, "THREE.GLTFLoader: invalid accessor"),
             GltfError::UnsupportedExtension(e) => {
-                write!(f, "THREE.GLTFLoader: required extension \"{e}\" is not supported")
+                write!(
+                    f,
+                    "THREE.GLTFLoader: required extension \"{e}\" is not supported"
+                )
             }
             GltfError::Draco(e) => write!(f, "THREE.GLTFLoader: KHR_draco_mesh_compression: {e:?}"),
             GltfError::Message(m) => f.write_str(m),
@@ -117,13 +127,19 @@ pub struct GltfScene {
     pub arena: ObjectArena,
     pub animations: Vec<AnimationClip>,
     pub skeletons: Vec<Skeleton>,
+    /// Each node's glTF `extras`, for nodes that have any: what authoring tools
+    /// write custom properties to.
+    pub extras: HashMap<ObjectId, Value>,
 }
 
 pub struct GltfLoader;
 
 impl GltfLoader {
     /// Parse a `.glb` byte slice with optional decoded images (caller-supplied).
-    pub fn parse_glb_with_images(bytes: &[u8], images: &GltfImages) -> Result<GltfScene, GltfError> {
+    pub fn parse_glb_with_images(
+        bytes: &[u8],
+        images: &GltfImages,
+    ) -> Result<GltfScene, GltfError> {
         let doc = Document::from_bytes(bytes)?;
         if !doc.is_glb {
             return Err(GltfError::BadMagic);
@@ -160,7 +176,9 @@ impl GltfLoader {
 
     /// Build from JSON alone, for tests that have no binary chunk.
     #[cfg(test)]
-    pub(crate) fn build_for_test(root: &crate::loaders::json::Value) -> Result<GltfScene, GltfError> {
+    pub(crate) fn build_for_test(
+        root: &crate::loaders::json::Value,
+    ) -> Result<GltfScene, GltfError> {
         let doc = Document::from_parts(root.to_json(), None, false)?;
         load(doc, &HashMap::new())
     }
@@ -180,7 +198,10 @@ pub fn supply_images(parser: &mut GltfParser, images: &GltfImages) -> Result<(),
                 parser.set_image_rgba(req.index, *w, *h, data.clone());
             } else if let Some(bytes) = &req.source.bytes {
                 if !parser.set_image_bytes(req.index, bytes) {
-                    parser.set_image_failed(req.index, format!("no decoder here for {}", req.source.mime_type));
+                    parser.set_image_failed(
+                        req.index,
+                        format!("no decoder here for {}", req.source.mime_type),
+                    );
                 }
             } else {
                 parser.set_image_failed(req.index, "external image not supplied".into());
@@ -197,7 +218,10 @@ fn load(doc: Document, images: &GltfImages) -> Result<GltfScene, GltfError> {
     let mut roots = Vec::new();
     if let Some(scene) = parser.default_scene() {
         let id = parser.objects[scene].id;
-        roots = arena.get(id).map(|n| n.children.clone()).unwrap_or_default();
+        roots = arena
+            .get(id)
+            .map(|n| n.children.clone())
+            .unwrap_or_default();
         // The roots stand on their own here, as they always have.
         arena.delete(id);
     } else if parser.scenes.is_empty() {
@@ -209,7 +233,10 @@ fn load(doc: Document, images: &GltfImages) -> Result<GltfScene, GltfError> {
                 nodes.push(parser.objects[o].id);
             }
         }
-        roots = nodes.into_iter().filter(|id| arena.get(*id).is_some_and(|n| n.parent.is_none())).collect();
+        roots = nodes
+            .into_iter()
+            .filter(|id| arena.get(*id).is_some_and(|n| n.parent.is_none()))
+            .collect();
     }
     let skeletons = parser
         .skeletons
@@ -219,7 +246,10 @@ fn load(doc: Document, images: &GltfImages) -> Result<GltfScene, GltfError> {
                 s.bones
                     .iter()
                     .zip(&s.inverses)
-                    .map(|(&b, inv)| Bone { node: parser.objects[b].id, inverse_bind: Matrix4 { elements: *inv } })
+                    .map(|(&b, inv)| Bone {
+                        node: parser.objects[b].id,
+                        inverse_bind: Matrix4 { elements: *inv },
+                    })
                     .collect(),
             )
         })
@@ -230,7 +260,19 @@ fn load(doc: Document, images: &GltfImages) -> Result<GltfScene, GltfError> {
         .flatten()
         .map(|&c| legacy_clip(&parser, &parser.clips[c]))
         .collect();
-    Ok(GltfScene { roots, arena, animations, skeletons })
+    let extras = parser
+        .objects
+        .iter()
+        .filter(|o| o.user_data.as_object().is_some_and(|ud| !ud.is_empty()))
+        .map(|o| (o.id, o.user_data.clone()))
+        .collect();
+    Ok(GltfScene {
+        roots,
+        arena,
+        animations,
+        skeletons,
+        extras,
+    })
 }
 
 /// A clip in the crate's own animation types: one track per animated
@@ -252,18 +294,38 @@ fn legacy_clip(parser: &GltfParser, clip: &GltfClip) -> AnimationClip {
                 return t.values.to_vec();
             }
             (0..keys)
-                .flat_map(|k| t.values.get(k * size * 3 + size..k * size * 3 + 2 * size).unwrap_or(&[]).to_vec())
+                .flat_map(|k| {
+                    t.values
+                        .get(k * size * 3 + size..k * size * 3 + 2 * size)
+                        .unwrap_or(&[])
+                        .to_vec()
+                })
                 .collect()
         };
         let track = match t.path.as_str() {
             "translation" | "scale" => {
-                let vs = vertices(3).chunks_exact(3).map(|c| Vector3::new(c[0], c[1], c[2])).collect();
-                let target = if t.path == "scale" { TrackTarget::Scale } else { TrackTarget::Position };
+                let vs = vertices(3)
+                    .chunks_exact(3)
+                    .map(|c| Vector3::new(c[0], c[1], c[2]))
+                    .collect();
+                let target = if t.path == "scale" {
+                    TrackTarget::Scale
+                } else {
+                    TrackTarget::Position
+                };
                 Some(KeyframeTrack::vector(object, target, t.times.to_vec(), vs))
             }
             "rotation" => {
-                let vs = vertices(4).chunks_exact(4).map(|c| Quaternion::new(c[0], c[1], c[2], c[3])).collect();
-                Some(KeyframeTrack::quaternion(object, TrackTarget::Quaternion, t.times.to_vec(), vs))
+                let vs = vertices(4)
+                    .chunks_exact(4)
+                    .map(|c| Quaternion::new(c[0], c[1], c[2], c[3]))
+                    .collect();
+                Some(KeyframeTrack::quaternion(
+                    object,
+                    TrackTarget::Quaternion,
+                    t.times.to_vec(),
+                    vs,
+                ))
             }
             "weights" => {
                 // `[w0 … wN]` per key, or `[in(N), value(N), out(N)]` for
@@ -275,12 +337,20 @@ fn legacy_clip(parser: &GltfParser, clip: &GltfClip) -> AnimationClip {
                     let mut vs = Vec::with_capacity(keys * per_key);
                     for k in 0..keys {
                         for part in 0..per_key {
-                            if let Some(&v) = t.values.get(k * morph_count * per_key + part * morph_count + mi) {
+                            if let Some(&v) = t
+                                .values
+                                .get(k * morph_count * per_key + part * morph_count + mi)
+                            {
                                 vs.push(v);
                             }
                         }
                     }
-                    let mut s = KeyframeTrack::scalar(object, TrackTarget::MorphWeight { index: mi }, t.times.to_vec(), vs);
+                    let mut s = KeyframeTrack::scalar(
+                        object,
+                        TrackTarget::MorphWeight { index: mi },
+                        t.times.to_vec(),
+                        vs,
+                    );
                     s.interpolation = interp;
                     tracks.push(s);
                 }
@@ -299,9 +369,22 @@ fn legacy_clip(parser: &GltfParser, clip: &GltfClip) -> AnimationClip {
 /// Append `loaded` into `scene` and return the inserted root ids. Re-parents
 /// every loaded root under `scene.root`.
 pub fn add_to_scene(scene: &mut Scene, loaded: GltfScene) -> Vec<ObjectId> {
+    add_to_scene_mapped(scene, loaded).0
+}
+
+/// [`add_to_scene`], also returning where each loaded node went, for anything
+/// keyed by the ids in [`GltfScene`]: its `extras`, or its animation tracks.
+pub fn add_to_scene_mapped(
+    scene: &mut Scene,
+    loaded: GltfScene,
+) -> (Vec<ObjectId>, HashMap<ObjectId, ObjectId>) {
     let mut remap: HashMap<ObjectId, ObjectId> = HashMap::new();
-    let all: Vec<(ObjectId, crate::core::Object3D)> =
-        loaded.arena.nodes.iter().map(|(k, v)| (k, v.clone())).collect();
+    let all: Vec<(ObjectId, crate::core::Object3D)> = loaded
+        .arena
+        .nodes
+        .iter()
+        .map(|(k, v)| (k, v.clone()))
+        .collect();
     for (old, mut obj) in all {
         obj.parent = None;
         obj.children.clear();
@@ -310,18 +393,27 @@ pub fn add_to_scene(scene: &mut Scene, loaded: GltfScene) -> Vec<ObjectId> {
     }
     // Skinned meshes name their bones by id: point them at the new ones.
     for new in remap.values() {
-        if let Some(crate::core::ObjectKind::SkinnedMesh(sm)) = scene.arena.get_mut(*new).map(|n| &mut n.kind) {
+        if let Some(crate::core::ObjectKind::SkinnedMesh(sm)) =
+            scene.arena.get_mut(*new).map(|n| &mut n.kind)
+        {
             let bones = sm
                 .skeleton
                 .bones
                 .iter()
-                .map(|b| Bone { node: remap.get(&b.node).copied().unwrap_or(b.node), inverse_bind: b.inverse_bind })
+                .map(|b| Bone {
+                    node: remap.get(&b.node).copied().unwrap_or(b.node),
+                    inverse_bind: b.inverse_bind,
+                })
                 .collect();
             sm.skeleton = std::sync::Arc::new(Skeleton::new(bones));
         }
     }
-    let snapshot: Vec<(ObjectId, Vec<ObjectId>)> =
-        loaded.arena.nodes.iter().map(|(k, v)| (k, v.children.clone())).collect();
+    let snapshot: Vec<(ObjectId, Vec<ObjectId>)> = loaded
+        .arena
+        .nodes
+        .iter()
+        .map(|(k, v)| (k, v.children.clone()))
+        .collect();
     for (old_parent, children) in snapshot {
         let new_parent = remap[&old_parent];
         for c in children {
@@ -337,5 +429,5 @@ pub fn add_to_scene(scene: &mut Scene, loaded: GltfScene) -> Vec<ObjectId> {
             roots.push(*nr);
         }
     }
-    roots
+    (roots, remap)
 }

@@ -56,7 +56,8 @@ fn mean_disc(rgba: &[u8]) -> f64 {
                 continue;
             }
             let i = ((y * W + x) * 4) as usize;
-            a += 0.2126 * rgba[i] as f64 + 0.7152 * rgba[i + 1] as f64 + 0.0722 * rgba[i + 2] as f64;
+            a +=
+                0.2126 * rgba[i] as f64 + 0.7152 * rgba[i + 1] as f64 + 0.0722 * rgba[i + 2] as f64;
             n += 1.0;
         }
     }
@@ -100,7 +101,10 @@ fn a_transparent_metal_keeps_its_reflection() {
         eprintln!("skipping: no GPU adapter");
         return;
     };
-    eprintln!("metal: opaque {opaque:.1}, α=0.25 {faint:.1}, kept {:.0}%", 100.0 * faint / opaque);
+    eprintln!(
+        "metal: opaque {opaque:.1}, α=0.25 {faint:.1}, kept {:.0}%",
+        100.0 * faint / opaque
+    );
     assert!(
         opaque > 40.0,
         "the opaque metal should reflect the white environment, got {opaque:.1}"
@@ -124,7 +128,10 @@ fn a_transparent_dielectric_stays_transparent() {
         eprintln!("skipping: no GPU adapter");
         return;
     };
-    eprintln!("dielectric: opaque {opaque:.1}, α=0.25 {faint:.1}, kept {:.0}%", 100.0 * faint / opaque);
+    eprintln!(
+        "dielectric: opaque {opaque:.1}, α=0.25 {faint:.1}, kept {:.0}%",
+        100.0 * faint / opaque
+    );
     assert!(
         faint / opaque < 0.45,
         "a 25%-opacity dielectric kept {:.0}% of its shading ({faint:.1} against {opaque:.1}) — \
@@ -153,12 +160,18 @@ fn opaque_materials_are_untouched() {
 /// of the opaque metal at `opacity = 0.25`.
 #[test]
 fn by_default_a_transparent_metal_blends_as_three_js_does() {
-    let (Some(opaque), Some(faint)) = (render_with(1.0, 1.0, 0.1, false), render_with(0.25, 1.0, 0.1, false)) else {
+    let (Some(opaque), Some(faint)) = (
+        render_with(1.0, 1.0, 0.1, false),
+        render_with(0.25, 1.0, 0.1, false),
+    ) else {
         eprintln!("skipping: no GPU adapter");
         return;
     };
     let kept = faint / opaque;
-    eprintln!("metal, three.js blending: opaque {opaque:.1}, α=0.25 {faint:.1}, kept {:.0}%", 100.0 * kept);
+    eprintln!(
+        "metal, three.js blending: opaque {opaque:.1}, α=0.25 {faint:.1}, kept {:.0}%",
+        100.0 * kept
+    );
     assert!(
         (kept - 0.25).abs() < 0.04,
         "three.js blends a 25%-opacity surface's colour by 0.25; kept {:.0}%",

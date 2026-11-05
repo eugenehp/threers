@@ -10,17 +10,22 @@
 //! `soundfile.read` (libsndfile 1.2.2 / libvorbis 1.3.7, arm64).
 
 // Ported loop structure is kept as in the C reference.
-#![allow(clippy::needless_range_loop, clippy::manual_memcpy, clippy::unnecessary_cast, clippy::manual_is_multiple_of)]
+#![allow(
+    clippy::needless_range_loop,
+    clippy::manual_memcpy,
+    clippy::unnecessary_cast,
+    clippy::manual_is_multiple_of
+)]
 
-#[allow(clippy::all)]
-/// Window shapes and the floor-1 dB table, generated from libvorbis 1.3.7.
-pub mod tables;
 /// Code generated from the reference build's machine code (it was compiled
 /// with `-ffast-math`, so its float order is not the C source's).
 #[allow(clippy::all)]
 /// Kernels in the reference build's own floating-point order (it is compiled
 /// with `-ffast-math`), so output matches it bit for bit.
 pub mod built;
+#[allow(clippy::all)]
+/// Window shapes and the floor-1 dB table, generated from libvorbis 1.3.7.
+pub mod tables;
 
 use super::ogg;
 
@@ -66,7 +71,11 @@ struct Pack<'a> {
 
 impl<'a> Pack<'a> {
     fn new(d: &'a [u8]) -> Self {
-        Self { d, pos: 0, eop: false }
+        Self {
+            d,
+            pos: 0,
+            eop: false,
+        }
     }
     fn left(&self) -> usize {
         if self.eop {
@@ -286,7 +295,15 @@ fn unpack_book(p: &mut Pack, fma: Fma) -> Result<Codebook, String> {
             q_delta = p.read(32) as u32;
             let q_quant = p.read(4) + 1;
             q_seq = p.read(1) == 1;
-            let n = if maptype == 1 { if dim == 0 { 0 } else { maptype1_quantvals(entries, dim) } } else { entries * dim };
+            let n = if maptype == 1 {
+                if dim == 0 {
+                    0
+                } else {
+                    maptype1_quantvals(entries, dim)
+                }
+            } else {
+                entries * dim
+            };
             for _ in 0..n {
                 quant.push(p.read(q_quant as u32));
             }
@@ -344,7 +361,11 @@ fn unpack_book(p: &mut Pack, fma: Fma) -> Result<Codebook, String> {
         let mindel = float32_unpack(q_min);
         let delta = float32_unpack(q_delta);
         cb.values = vec![0f32; used * dim];
-        let quantvals = if maptype == 1 { maptype1_quantvals(entries, dim) } else { 0 };
+        let quantvals = if maptype == 1 {
+            maptype1_quantvals(entries, dim)
+        } else {
+            0
+        };
         let mut count = 0;
         for (j, &l) in lengths.iter().enumerate() {
             if l == 0 {
@@ -494,7 +515,12 @@ fn floor1_unpack(p: &mut Pack, nbooks: usize) -> Result<Floor1, String> {
         partition_class.push(c as usize);
     }
     let n_class = (maxclass + 1) as usize;
-    let (mut class_dim, mut class_subs, mut class_book, mut class_subbook) = (vec![0; n_class], vec![0; n_class], vec![0; n_class], vec![Vec::new(); n_class]);
+    let (mut class_dim, mut class_subs, mut class_book, mut class_subbook) = (
+        vec![0; n_class],
+        vec![0; n_class],
+        vec![0; n_class],
+        vec![Vec::new(); n_class],
+    );
     for j in 0..n_class {
         class_dim[j] = (p.read(3) + 1) as usize;
         let subs = p.read(2);
@@ -569,7 +595,20 @@ fn floor1_unpack(p: &mut Pack, nbooks: usize) -> Result<Floor1, String> {
         loneighbor.push(lo);
         hineighbor.push(hi);
     }
-    Ok(Floor1 { partition_class, class_dim, class_subs, class_book, class_subbook, mult, postlist, forward_index, loneighbor, hineighbor, quant_q, posts: n })
+    Ok(Floor1 {
+        partition_class,
+        class_dim,
+        class_subs,
+        class_book,
+        class_subbook,
+        mult,
+        postlist,
+        forward_index,
+        loneighbor,
+        hineighbor,
+        quant_q,
+        posts: n,
+    })
 }
 
 fn residue_unpack(p: &mut Pack, kind: u32, books: &[Codebook]) -> Result<Residue, String> {
@@ -648,7 +687,18 @@ fn residue_unpack(p: &mut Pack, kind: u32, books: &[Codebook]) -> Result<Residue
         }
         decodemap.push(v);
     }
-    Ok(Residue { kind, begin, end, grouping, groupbook, secondstages, partbooks, stages: maxstage, partvals, decodemap })
+    Ok(Residue {
+        kind,
+        begin,
+        end,
+        grouping,
+        groupbook,
+        secondstages,
+        partbooks,
+        stages: maxstage,
+        partvals,
+        decodemap,
+    })
 }
 
 fn parse_setup(id: &[u8], setup: &[u8], fma: Fma) -> Result<Setup, String> {
@@ -708,7 +758,11 @@ fn parse_setup(id: &[u8], setup: &[u8], fma: Fma) -> Result<Setup, String> {
         if p.read(16) != 0 {
             return Err("bad Vorbis mapping type".into());
         }
-        let submaps = if p.read(1) == 1 { (p.read(4) + 1) as usize } else { 1 };
+        let submaps = if p.read(1) == 1 {
+            (p.read(4) + 1) as usize
+        } else {
+            1
+        };
         let mut coupling = Vec::new();
         if p.read(1) == 1 {
             let steps = p.read(8) + 1;
@@ -745,7 +799,13 @@ fn parse_setup(id: &[u8], setup: &[u8], fma: Fma) -> Result<Setup, String> {
             floorsub.push(f as usize);
             residuesub.push(r as usize);
         }
-        maps.push(Mapping { submaps, coupling, chmux, floorsub, residuesub });
+        maps.push(Mapping {
+            submaps,
+            coupling,
+            chmux,
+            floorsub,
+            residuesub,
+        });
     }
     let nmodes = (p.read(6) + 1) as usize;
     let mut modes = Vec::new();
@@ -757,13 +817,26 @@ fn parse_setup(id: &[u8], setup: &[u8], fma: Fma) -> Result<Setup, String> {
         if wt != 0 || tt != 0 || mapping < 0 || mapping as usize >= nmaps {
             return Err("bad Vorbis mode".into());
         }
-        modes.push(Mode { blockflag, mapping: mapping as usize });
+        modes.push(Mode {
+            blockflag,
+            mapping: mapping as usize,
+        });
     }
     if p.read(1) != 1 {
         return Err("bad Vorbis setup framing".into());
     }
     let modebits = ilog(nmodes as u32 - 1);
-    Ok(Setup { channels, rate, blocksizes: [b0, b1], books, floors, residues, maps, modes, modebits })
+    Ok(Setup {
+        channels,
+        rate,
+        blocksizes: [b0, b1],
+        books,
+        floors,
+        residues,
+        maps,
+        modes,
+        modebits,
+    })
 }
 
 // ---- floor 1 ---------------------------------------------------------------
@@ -819,14 +892,24 @@ fn floor1_inverse1(f: &Floor1, books: &[Codebook], p: &mut Pack) -> Option<Vec<i
     }
     for i in 2..f.posts {
         let (lo, hi) = (f.loneighbor[i - 2], f.hineighbor[i - 2]);
-        let predicted = render_point(f.postlist[lo], f.postlist[hi], fit[lo], fit[hi], f.postlist[i]);
+        let predicted = render_point(
+            f.postlist[lo],
+            f.postlist[hi],
+            fit[lo],
+            fit[hi],
+            f.postlist[i],
+        );
         let hiroom = f.quant_q - predicted;
         let loroom = predicted;
         let room = hiroom.min(loroom) << 1;
         let mut val = fit[i];
         if val != 0 {
             if val >= room {
-                val = if hiroom > loroom { val - loroom } else { -1 - (val - hiroom) };
+                val = if hiroom > loroom {
+                    val - loroom
+                } else {
+                    -1 - (val - hiroom)
+                };
             } else if val & 1 != 0 {
                 val = -((val + 1) >> 1);
             } else {
@@ -927,7 +1010,9 @@ fn decodev_add(b: &Codebook, a: &mut [f32], p: &mut Pack, n: usize) -> bool {
     }
     let mut i = 0;
     while i < n {
-        let Some(e) = b.decode_packed(p) else { return false };
+        let Some(e) = b.decode_packed(p) else {
+            return false;
+        };
         let t = b.vec(e);
         let mut j = 0;
         while i < n && j < b.dim {
@@ -939,7 +1024,14 @@ fn decodev_add(b: &Codebook, a: &mut [f32], p: &mut Pack, n: usize) -> bool {
     true
 }
 
-fn decodevv_add(b: &Codebook, a: &mut [Vec<f32>], idx: &[usize], offset: usize, p: &mut Pack, n: usize) -> bool {
+fn decodevv_add(
+    b: &Codebook,
+    a: &mut [Vec<f32>],
+    idx: &[usize],
+    offset: usize,
+    p: &mut Pack,
+    n: usize,
+) -> bool {
     if b.used == 0 {
         return true;
     }
@@ -948,7 +1040,9 @@ fn decodevv_add(b: &Codebook, a: &mut [Vec<f32>], idx: &[usize], offset: usize, 
     let mut i = offset / ch;
     let mut chptr = 0;
     while i < m {
-        let Some(e) = b.decode_packed(p) else { return false };
+        let Some(e) = b.decode_packed(p) else {
+            return false;
+        };
         let t = b.vec(e);
         let mut j = 0;
         while i < m && j < b.dim {
@@ -964,7 +1058,15 @@ fn decodevv_add(b: &Codebook, a: &mut [Vec<f32>], idx: &[usize], offset: usize, 
     true
 }
 
-fn residue_inverse(r: &Residue, books: &[Codebook], p: &mut Pack, pcm: &mut [Vec<f32>], chans: &[usize], nonzero: &[bool], pcmend: usize) {
+fn residue_inverse(
+    r: &Residue,
+    books: &[Codebook],
+    p: &mut Pack,
+    pcm: &mut [Vec<f32>],
+    chans: &[usize],
+    nonzero: &[bool],
+    pcmend: usize,
+) {
     let spp = r.grouping as usize;
     let ppw = books[r.groupbook].dim;
     if r.kind == 2 {
@@ -996,7 +1098,14 @@ fn residue_inverse(r: &Residue, books: &[Codebook], p: &mut Pack, pcm: &mut [Vec
                     let part = r.decodemap[partword[l]][k];
                     if r.secondstages[part] & (1 << s) != 0 {
                         if let Some(Some(bk)) = r.partbooks[part].get(s) {
-                            if !decodevv_add(&books[*bk], pcm, chans, i * spp + r.begin as usize, p, spp) {
+                            if !decodevv_add(
+                                &books[*bk],
+                                pcm,
+                                chans,
+                                i * spp + r.begin as usize,
+                                p,
+                                spp,
+                            ) {
                                 return;
                             }
                         }
@@ -1070,7 +1179,6 @@ struct Mdct {
     bitrev: Vec<usize>,
 }
 
-
 impl Mdct {
     fn new(n: usize) -> Self {
         let n2 = n >> 1;
@@ -1102,7 +1210,12 @@ impl Mdct {
             bitrev[i * 2] = ((!acc) & mask).wrapping_sub(1);
             bitrev[i * 2 + 1] = acc;
         }
-        Self { n, log2n, trig: t, bitrev }
+        Self {
+            n,
+            log2n,
+            trig: t,
+            bitrev,
+        }
     }
 
     /// One 8-element step of `mdct_butterfly_first/generic` at `x1`/`x2`
@@ -1390,7 +1503,11 @@ pub fn decode_ogg(data: &[u8]) -> Result<Vorbis, String> {
         }
         None => 0,
     };
-    let frames = if last_granule >= 0 { (last_granule - pcm_start).max(0) as usize } else { usize::MAX };
+    let frames = if last_granule >= 0 {
+        (last_granule - pcm_start).max(0) as usize
+    } else {
+        usize::MAX
+    };
 
     // vorbis_dsp_state
     let n1 = s.blocksizes[1] >> 1;
@@ -1444,7 +1561,15 @@ pub fn decode_ogg(data: &[u8]) -> Result<Vorbis, String> {
         }
         for sm in 0..map.submaps {
             let chans: Vec<usize> = (0..ch).filter(|&c| map.chmux[c] == sm).collect();
-            residue_inverse(&s.residues[map.residuesub[sm]], &s.books, &mut p, &mut pcm, &chans, &nonzero, n);
+            residue_inverse(
+                &s.residues[map.residuesub[sm]],
+                &s.books,
+                &mut p,
+                &mut pcm,
+                &chans,
+                &nonzero,
+                n,
+            );
         }
         for &(m, a) in map.coupling.iter().rev() {
             for j in 0..n / 2 {
@@ -1517,7 +1642,8 @@ pub fn decode_ogg(data: &[u8]) -> Result<Vorbis, String> {
             pcm_current = this_center as i64;
         } else {
             pcm_returned = prev_center as i64;
-            pcm_current = prev_center as i64 + ((s.blocksizes[lw] / 4 + s.blocksizes[w] / 4) as i64);
+            pcm_current =
+                prev_center as i64 + ((s.blocksizes[lw] / 4 + s.blocksizes[w] / 4) as i64);
         }
         if sample_count == -1 {
             sample_count = 0;
@@ -1566,5 +1692,8 @@ pub fn decode_ogg(data: &[u8]) -> Result<Vorbis, String> {
             }
         }
     }
-    Ok(Vorbis { sample_rate: s.rate, channels: out })
+    Ok(Vorbis {
+        sample_rate: s.rate,
+        channels: out,
+    })
 }

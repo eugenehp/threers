@@ -276,8 +276,14 @@ mod tests {
     fn from_bgra_matches_from_rgba() {
         let (w, h) = (6u32, 4u32);
         let rgba: Vec<u8> = (0..w * h * 4).map(|i| (i * 37 % 251) as u8).collect();
-        let bgra: Vec<u8> = rgba.chunks_exact(4).flat_map(|p| [p[2], p[1], p[0], p[3]]).collect();
-        let (a, b) = (Yuv420Frame::from_rgba(w, h, &rgba), Yuv420Frame::from_bgra(w, h, &bgra));
+        let bgra: Vec<u8> = rgba
+            .chunks_exact(4)
+            .flat_map(|p| [p[2], p[1], p[0], p[3]])
+            .collect();
+        let (a, b) = (
+            Yuv420Frame::from_rgba(w, h, &rgba),
+            Yuv420Frame::from_bgra(w, h, &bgra),
+        );
         assert_eq!((a.y, a.u, a.v, a.alpha), (b.y, b.u, b.v, b.alpha));
     }
 

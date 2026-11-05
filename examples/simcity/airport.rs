@@ -33,8 +33,15 @@ fn airliner(b: &mut Batches, x: f32, z: f32, yaw: f32, len: f32, tail: Color, rn
     // Fuselage, with a tapered tail cone.
     let (n0x, n0z) = at(-len * 0.5, 0.0);
     let (n1x, n1z) = at(len * 0.34, 0.0);
-    b.trim
-        .add_limb(Vector3::new(n0x, y, n0z), Vector3::new(n1x, y, n1z), r, r, 9, white, true);
+    b.trim.add_limb(
+        Vector3::new(n0x, y, n0z),
+        Vector3::new(n1x, y, n1z),
+        r,
+        r,
+        9,
+        white,
+        true,
+    );
     let (t0x, t0z) = at(len * 0.34, 0.0);
     let (t1x, t1z) = at(len * 0.5, 0.0);
     b.trim.add_limb(
@@ -173,17 +180,35 @@ pub(crate) fn add_airport(
             (cx + t, cz + s)
         }
     };
-    let strip = |b: &mut Batches, s0: f32, s1: f32, t0: f32, t1: f32, y: f32, c: Color, paint: bool| {
-        let (a0, a1) = at(s0, t0);
-        let (c0, c1) = at(s1, t1);
-        let mb = if paint { &mut b.paint } else { &mut b.road };
-        mb.add_slab(a0.min(c0), a1.min(c1), a0.max(c0), a1.max(c1), y, c, Uv::Unit);
-    };
+    let strip =
+        |b: &mut Batches, s0: f32, s1: f32, t0: f32, t1: f32, y: f32, c: Color, paint: bool| {
+            let (a0, a1) = at(s0, t0);
+            let (c0, c1) = at(s1, t1);
+            let mb = if paint { &mut b.paint } else { &mut b.road };
+            mb.add_slab(
+                a0.min(c0),
+                a1.min(c1),
+                a0.max(c0),
+                a1.max(c1),
+                y,
+                c,
+                Uv::Unit,
+            );
+        };
 
     let asphalt = Color::from_hex(0x3c3f45);
     let white = Color::from_hex(0xdedacb);
     // --- Runway.
-    strip(b, -rw_len * 0.5, rw_len * 0.5, -rw_w * 0.5, rw_w * 0.5, 0.10, asphalt, false);
+    strip(
+        b,
+        -rw_len * 0.5,
+        rw_len * 0.5,
+        -rw_w * 0.5,
+        rw_w * 0.5,
+        0.10,
+        asphalt,
+        false,
+    );
     // Centreline: long dashes, widely spaced. This is the marking that says
     // "runway" rather than "road", because no road has dashes this long.
     let n = (rw_len / 60.0) as usize;
@@ -210,13 +235,31 @@ pub(crate) fn add_airport(
             let t = (k as f32 - 3.5) * 3.2;
             let s0 = end * (rw_len * 0.5 - 34.0);
             let s1 = end * (rw_len * 0.5 - 8.0);
-            strip(b, s0.min(s1), s0.max(s1), t - 1.1, t + 1.1, 0.12, white, true);
+            strip(
+                b,
+                s0.min(s1),
+                s0.max(s1),
+                t - 1.1,
+                t + 1.1,
+                0.12,
+                white,
+                true,
+            );
         }
         // Touchdown zone markers.
         for k in 1..4 {
             let s0 = end * (rw_len * 0.5 - 60.0 - k as f32 * 45.0);
             for s2 in [-1.0f32, 1.0] {
-                strip(b, s0 - 12.0, s0 + 12.0, s2 * 3.0, s2 * 5.4, 0.12, white, true);
+                strip(
+                    b,
+                    s0 - 12.0,
+                    s0 + 12.0,
+                    s2 * 3.0,
+                    s2 * 5.4,
+                    0.12,
+                    white,
+                    true,
+                );
             }
         }
         // Approach lighting off the end, on stalks over the grass.
@@ -275,18 +318,63 @@ pub(crate) fn add_airport(
 
     // --- Taxiway, parallel, with two links to the runway.
     let tw_t = rw_w * 0.5 + 60.0;
-    strip(b, -rw_len * 0.42, rw_len * 0.42, tw_t - 11.0, tw_t + 11.0, 0.10, asphalt, false);
-    strip(b, -rw_len * 0.42, rw_len * 0.42, tw_t - 0.3, tw_t + 0.3, 0.12, Color::from_hex(0xd8b13a), true);
+    strip(
+        b,
+        -rw_len * 0.42,
+        rw_len * 0.42,
+        tw_t - 11.0,
+        tw_t + 11.0,
+        0.10,
+        asphalt,
+        false,
+    );
+    strip(
+        b,
+        -rw_len * 0.42,
+        rw_len * 0.42,
+        tw_t - 0.3,
+        tw_t + 0.3,
+        0.12,
+        Color::from_hex(0xd8b13a),
+        true,
+    );
     for link in [-0.34f32, 0.34] {
         let s0 = rw_len * link;
-        strip(b, s0 - 11.0, s0 + 11.0, rw_w * 0.5, tw_t - 11.0, 0.10, asphalt, false);
-        strip(b, s0 - 0.3, s0 + 0.3, rw_w * 0.5, tw_t - 11.0, 0.12, Color::from_hex(0xd8b13a), true);
+        strip(
+            b,
+            s0 - 11.0,
+            s0 + 11.0,
+            rw_w * 0.5,
+            tw_t - 11.0,
+            0.10,
+            asphalt,
+            false,
+        );
+        strip(
+            b,
+            s0 - 0.3,
+            s0 + 0.3,
+            rw_w * 0.5,
+            tw_t - 11.0,
+            0.12,
+            Color::from_hex(0xd8b13a),
+            true,
+        );
     }
 
     // --- Apron and terminal.
     let ap_t0 = tw_t + 11.0;
     let ap_t1 = ap_t0 + 95.0;
-    strip(b, -rw_len * 0.26, rw_len * 0.26, ap_t0, ap_t1, 0.10, Color::from_hex(0x8b8880), false);
+    strip(
+        b,
+        -rw_len * 0.26,
+        rw_len * 0.26,
+        ap_t0,
+        ap_t1,
+        0.10,
+        Color::from_hex(0x8b8880),
+        false,
+    );
     // Terminal along the back of the apron: a long low block with a glazed
     // face and a saw-tooth roof.
     let (tm0x, tm0z) = at(-rw_len * 0.22, ap_t1 - 34.0);
@@ -377,14 +465,35 @@ pub(crate) fn add_airport(
         if rng.chance(0.20) {
             continue;
         }
-        let s0 = mix(-rw_len * 0.19, rw_len * 0.19, (k as f32 + 0.5) / stands as f32);
+        let s0 = mix(
+            -rw_len * 0.19,
+            rw_len * 0.19,
+            (k as f32 + 0.5) / stands as f32,
+        );
         // Stand centreline lead-in.
-        strip(b, s0 - 0.25, s0 + 0.25, ap_t0 + 6.0, ap_t1 - 36.0, 0.12, Color::from_hex(0xd8b13a), true);
+        strip(
+            b,
+            s0 - 0.25,
+            s0 + 0.25,
+            ap_t0 + 6.0,
+            ap_t1 - 36.0,
+            0.12,
+            Color::from_hex(0xd8b13a),
+            true,
+        );
         let (ax, az) = at(s0, ap_t1 - 52.0);
         let len = rng.range(34.0, 46.0);
         // Nose points at the terminal.
         let yaw = if along_x { PI * 0.5 } else { 0.0 };
-        airliner(b, ax, az, yaw, len, Color::from_hex(TAIL[rng.below(TAIL.len())]), rng);
+        airliner(
+            b,
+            ax,
+            az,
+            yaw,
+            len,
+            Color::from_hex(TAIL[rng.below(TAIL.len())]),
+            rng,
+        );
         aircraft += 1;
         // Air bridge from the terminal to the forward door.
         let (j0x, j0z) = at(s0 - 3.0, ap_t1 - 34.0);

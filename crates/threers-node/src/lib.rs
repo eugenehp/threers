@@ -2570,6 +2570,7 @@ fn load_into(
                     arena: s.arena,
                     animations: Vec::new(),
                     skeletons: Vec::new(),
+                    extras: Default::default(),
                 },
             }
         }
@@ -2603,6 +2604,7 @@ fn load_usd(bytes: &[u8]) -> std::result::Result<LoadedScene, String> {
             arena: s.arena,
             animations: Vec::new(),
             skeletons: Vec::new(),
+            extras: Default::default(),
         },
     })
 }

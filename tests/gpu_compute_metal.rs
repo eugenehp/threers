@@ -10,8 +10,8 @@ use std::sync::Arc;
 
 use threers::marks::gpu;
 use threers::{
-    BasicMaterial, BufferGeometry, Color, HeadlessRenderer, Material, Mesh, Object3D, OrthographicCamera,
-    PerspectiveCamera, PlaneGeometry, Scene, ShaderMaterial, Vector3,
+    BasicMaterial, BufferGeometry, Color, HeadlessRenderer, Material, Mesh, Object3D,
+    OrthographicCamera, PerspectiveCamera, PlaneGeometry, Scene, ShaderMaterial, Vector3,
 };
 
 const SIZE: u32 = 32;
@@ -20,7 +20,11 @@ const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 
 /// `v` as the sRGB target stores it.
 fn encoded(v: f32) -> u8 {
-    let s = if v <= 0.0031308 { v * 12.92 } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 };
+    let s = if v <= 0.0031308 {
+        v * 12.92
+    } else {
+        1.055 * v.powf(1.0 / 2.4) - 0.055
+    };
     (s.clamp(0.0, 1.0) * 255.0).round() as u8
 }
 
@@ -41,7 +45,11 @@ fn build_as(metal: bool, format: wgpu::TextureFormat) -> HeadlessRenderer {
             std::env::remove_var("THREERS_BACKEND");
         }
     }
-    let mut hr = HeadlessRenderer::builder().size(SIZE, SIZE).color_format(format).build().expect("headless renderer");
+    let mut hr = HeadlessRenderer::builder()
+        .size(SIZE, SIZE)
+        .color_format(format)
+        .build()
+        .expect("headless renderer");
     unsafe { std::env::remove_var("THREERS_BACKEND") };
     hr.set_msaa(1);
     assert_eq!(hr.is_native_metal(), metal);
@@ -62,12 +70,19 @@ fn at(f: &[u8], x: u32, y: u32) -> [u8; 3] {
 }
 
 /// A compute pipeline over one bind group, from WGSL with entry `main`.
-fn compute(g: &gpu::Gpu, wgsl: &str, entries: &[wgpu::BindGroupLayoutEntry]) -> (gpu::ComputePipeline, gpu::BindGroupLayout) {
+fn compute(
+    g: &gpu::Gpu,
+    wgsl: &str,
+    entries: &[wgpu::BindGroupLayoutEntry],
+) -> (gpu::ComputePipeline, gpu::BindGroupLayout) {
     let module = g.create_shader_module(gpu::ShaderModuleDescriptor {
         label: None,
         source: gpu::ShaderSource::Wgsl(wgsl.into()),
     });
-    let layout = g.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries });
+    let layout = g.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: None,
+        entries,
+    });
     let pipeline_layout = g.create_pipeline_layout(&gpu::PipelineLayoutDescriptor {
         label: None,
         bind_group_layouts: &[Some(&layout)],
@@ -129,7 +144,11 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             let g = hr.marks_gpu();
             let texture = g.create_texture(&wgpu::TextureDescriptor {
                 label: None,
-                size: wgpu::Extent3d { width: 4, height: 1, depth_or_array_layers: 3 },
+                size: wgpu::Extent3d {
+                    width: 4,
+                    height: 1,
+                    depth_or_array_layers: 3,
+                },
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
@@ -155,7 +174,10 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             let bind = g.create_bind_group(&gpu::BindGroupDescriptor {
                 label: None,
                 layout: &layout,
-                entries: &[gpu::BindGroupEntry { binding: 0, resource: gpu::BindingResource::TextureView(&all) }],
+                entries: &[gpu::BindGroupEntry {
+                    binding: 0,
+                    resource: gpu::BindingResource::TextureView(&all),
+                }],
             });
             run(&g, &pipeline, &bind, [4, 1, 3]);
             let layer = texture.create_view(&wgpu::TextureViewDescriptor {
@@ -167,9 +189,16 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             let mut m = ShaderMaterial::new(fragment).with_textures([layer]);
             m.tone_mapped = false;
             let mut scene = Scene::new();
-            scene.add(Object3D::mesh(Mesh::new(PlaneGeometry::new(2.0, 2.0), Material::Shader(m))));
+            scene.add(Object3D::mesh(Mesh::new(
+                PlaneGeometry::new(2.0, 2.0),
+                Material::Shader(m),
+            )));
             let frame = hr.render_to_rgba(&mut scene, &camera);
-            assert_eq!(hr.is_native_metal(), metal, "the textures keep the renderer on its backend");
+            assert_eq!(
+                hr.is_native_metal(),
+                metal,
+                "the textures keep the renderer on its backend"
+            );
             frame
         })
         .collect();
@@ -177,10 +206,19 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         for i in 0..4u32 {
             let p = at(f, i * SIZE / 4 + SIZE / 8, SIZE / 2);
             let want = encoded(i as f32 / 3.0);
-            assert!(p[0].abs_diff(want) <= 2, "{backend}: texel {i} reads {p:?}, wants red {want}");
+            assert!(
+                p[0].abs_diff(want) <= 2,
+                "{backend}: texel {i} reads {p:?}, wants red {want}"
+            );
             // Layer 2 of 3: 2 / 4.
-            assert!(p[1].abs_diff(encoded(0.5)) <= 2, "{backend}: texel {i} is from another layer: {p:?}");
-            assert!(p[2].abs_diff(p[0]) <= 2, "{backend}: u_samp does not repeat at texel {i}: {p:?}");
+            assert!(
+                p[1].abs_diff(encoded(0.5)) <= 2,
+                "{backend}: texel {i} is from another layer: {p:?}"
+            );
+            assert!(
+                p[2].abs_diff(p[0]) <= 2,
+                "{backend}: u_samp does not repeat at texel {i}: {p:?}"
+            );
         }
     }
 }
@@ -204,11 +242,17 @@ fn a_translated_shader_material_sees_near_and_far() {
         let mut m = ShaderMaterial::new(fragment);
         m.tone_mapped = false;
         let mut scene = Scene::new();
-        scene.add(Object3D::mesh(Mesh::new(PlaneGeometry::new(4.0, 4.0), Material::Shader(m))));
+        scene.add(Object3D::mesh(Mesh::new(
+            PlaneGeometry::new(4.0, 4.0),
+            Material::Shader(m),
+        )));
         let f = hr.render_to_rgba(&mut scene, &camera);
         let p = at(&f, SIZE / 2, SIZE / 2);
         // 0.5 and 80 / 100.
-        assert!(p[0].abs_diff(encoded(0.5)) <= 2 && p[1].abs_diff(encoded(0.8)) <= 2, "{backend}: near/far read as {p:?}");
+        assert!(
+            p[0].abs_diff(encoded(0.5)) <= 2 && p[1].abs_diff(encoded(0.8)) <= 2,
+            "{backend}: near/far read as {p:?}"
+        );
     }
 }
 
@@ -247,7 +291,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             Arc::new(BasicMaterial::new(Color::from_hex(0xff0000)).into()),
         )));
         hr.upload_geometry(&geometry);
-        let buffer = hr.vertex_buffer(&geometry).expect("the uploaded vertex buffer");
+        let buffer = hr
+            .vertex_buffer(&geometry)
+            .expect("the uploaded vertex buffer");
         let (pipeline, layout) = compute(
             &g,
             &MOVE.replace("STRIDE", &hr.vertex_floats().to_string()),
@@ -265,13 +311,19 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         let bind = g.create_bind_group(&gpu::BindGroupDescriptor {
             label: None,
             layout: &layout,
-            entries: &[gpu::BindGroupEntry { binding: 0, resource: buffer.as_entire_binding() }],
+            entries: &[gpu::BindGroupEntry {
+                binding: 0,
+                resource: buffer.as_entire_binding(),
+            }],
         });
         let vertices = geometry.attributes["position"].count() as u32;
         run(&g, &pipeline, &bind, [vertices, 1, 1]);
         let f = hr.render_to_rgba(&mut scene, &camera);
         let p = at(&f, SIZE / 2, SIZE / 2);
-        assert!(p[0] > 200 && p[1] < 40, "{backend}: the moved mesh is not drawn: {p:?}");
+        assert!(
+            p[0] > 200 && p[1] < 40,
+            "{backend}: the moved mesh is not drawn: {p:?}"
+        );
     }
 }
 
@@ -297,15 +349,24 @@ fn a_unorm_target_stores_a_shader_material_output_as_it_stands() {
         let mut m = ShaderMaterial::new(fragment);
         m.tone_mapped = false;
         let mut scene = Scene::new();
-        scene.add(Object3D::mesh(Mesh::new(PlaneGeometry::new(2.0, 2.0), Material::Shader(m))));
+        scene.add(Object3D::mesh(Mesh::new(
+            PlaneGeometry::new(2.0, 2.0),
+            Material::Shader(m),
+        )));
         let f = hr.render_to_rgba(&mut scene, &camera);
         let raw = at(&f, SIZE / 4, SIZE / 2);
         let enc = at(&f, SIZE * 3 / 4, SIZE / 2);
         let want_raw = [128u8, 64, 191];
         let want_enc = [encoded(0.5), encoded(0.25), encoded(0.75)];
         for c in 0..3 {
-            assert!(raw[c].abs_diff(want_raw[c]) <= 2, "{backend}: raw output stored as {raw:?}, wants {want_raw:?}");
-            assert!(enc[c].abs_diff(want_enc[c]) <= 2, "{backend}: framebuffer_encode stored as {enc:?}, wants {want_enc:?}");
+            assert!(
+                raw[c].abs_diff(want_raw[c]) <= 2,
+                "{backend}: raw output stored as {raw:?}, wants {want_raw:?}"
+            );
+            assert!(
+                enc[c].abs_diff(want_enc[c]) <= 2,
+                "{backend}: framebuffer_encode stored as {enc:?}, wants {want_enc:?}"
+            );
         }
     }
 }

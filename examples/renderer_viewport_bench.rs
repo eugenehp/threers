@@ -68,7 +68,11 @@ impl BenchOpts {
     }
 }
 
-fn time_one_tile(renderer: &mut RaytraceRenderer, scene: &mut Scene, cam: &PerspectiveCamera) -> Result<f64, String> {
+fn time_one_tile(
+    renderer: &mut RaytraceRenderer,
+    scene: &mut Scene,
+    cam: &PerspectiveCamera,
+) -> Result<f64, String> {
     renderer.prepare_if_changed(scene, cam);
     let t = Instant::now();
     renderer
@@ -148,7 +152,9 @@ fn build_viewport_scene() -> Scene {
 
     let mut hero = Object3D::mesh(Mesh::new(
         BoxGeometry::new(1.2, 1.2, 1.2),
-        Material::Standard(StandardMaterial::new(Color::new(0.78, 0.35, 0.18)).with_roughness(0.35)),
+        Material::Standard(
+            StandardMaterial::new(Color::new(0.78, 0.35, 0.18)).with_roughness(0.35),
+        ),
     ));
     hero.position = Vector3::new(-1.2, 0.6, 0.0);
     scene.add(hero);
@@ -163,11 +169,7 @@ fn build_viewport_scene() -> Scene {
 fn camera(aspect: f32, orbit: u32) -> PerspectiveCamera {
     let angle = orbit as f32 * 0.07;
     let mut cam = PerspectiveCamera::new(42.0, aspect, 0.1, 100.0);
-    cam.position = Vector3::new(
-        4.5 * angle.cos(),
-        2.8,
-        5.5 * angle.sin() + 5.5,
-    );
+    cam.position = Vector3::new(4.5 * angle.cos(), 2.8, 5.5 * angle.sin() + 5.5);
     cam.look_at(Vector3::new(0.0, 0.6, 0.0));
     cam
 }
@@ -289,12 +291,7 @@ fn bench_renderer(opts: &BenchOpts) -> Result<(), String> {
     }
     println!(
         "film: {}×{} · {} iters · tile batch {} spp × {} tiles · {} ms budget",
-        opts.width,
-        opts.height,
-        opts.iters,
-        opts.tile_samples,
-        opts.max_tiles,
-        opts.budget_ms
+        opts.width, opts.height, opts.iters, opts.tile_samples, opts.max_tiles, opts.budget_ms
     );
     if opts.gpu {
         println!(
@@ -307,23 +304,19 @@ fn bench_renderer(opts: &BenchOpts) -> Result<(), String> {
     println!("{:<28} {:>8.2} ms  (median)", "warm trace", warm_med);
     println!(
         "{:<28} {:>8.2} ms  (median)",
-        "camera orbit (cached BVH)",
-        orbit_cached_med
+        "camera orbit (cached BVH)", orbit_cached_med
     );
     println!(
         "{:<28} {:>8.2} ms  (median)",
-        "camera orbit (+ invalidate)",
-        orbit_invalidate_med
+        "camera orbit (+ invalidate)", orbit_invalidate_med
     );
     println!(
         "{:<28} {:>8.2} ms  (median, 1 tile)",
-        "orbit pack test (cached)",
-        pack_cached
+        "orbit pack test (cached)", pack_cached
     );
     println!(
         "{:<28} {:>8.2} ms  (median, 1 tile)",
-        "orbit pack test (invalidate)",
-        pack_invalidate
+        "orbit pack test (invalidate)", pack_invalidate
     );
     println!();
     println!(

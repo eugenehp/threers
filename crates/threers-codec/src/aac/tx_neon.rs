@@ -9,7 +9,11 @@
 //! Lengths 64..=1024 (powers of two) are supported.
 
 // Constants are ffmpeg's, digit for digit.
-#![allow(clippy::excessive_precision, clippy::approx_constant, clippy::needless_range_loop)]
+#![allow(
+    clippy::excessive_precision,
+    clippy::approx_constant,
+    clippy::needless_range_loop
+)]
 
 type R = usize; // vector register index
 
@@ -45,7 +49,9 @@ fn cos_tab(len: usize) -> &'static [f32] {
                     return Vec::new();
                 }
                 let freq = 2.0 * std::f64::consts::PI / len as f64;
-                let mut t: Vec<f32> = (0..len / 4).map(|i| (i as f64 * freq).cos() as f32).collect();
+                let mut t: Vec<f32> = (0..len / 4)
+                    .map(|i| (i as f64 * freq).cos() as f32)
+                    .collect();
                 t.push(0.0);
                 t
             })
@@ -70,12 +76,22 @@ impl Neon<'_> {
     /// `d += a * b`, fused.
     fn fmla(&mut self, d: R, a: R, b: R) {
         let (a, b, c) = (self.v[a], self.v[b], self.v[d]);
-        self.v[d] = [a[0].mul_add(b[0], c[0]), a[1].mul_add(b[1], c[1]), a[2].mul_add(b[2], c[2]), a[3].mul_add(b[3], c[3])];
+        self.v[d] = [
+            a[0].mul_add(b[0], c[0]),
+            a[1].mul_add(b[1], c[1]),
+            a[2].mul_add(b[2], c[2]),
+            a[3].mul_add(b[3], c[3]),
+        ];
     }
     /// `d -= a * b`, fused.
     fn fmls(&mut self, d: R, a: R, b: R) {
         let (a, b, c) = (self.v[a], self.v[b], self.v[d]);
-        self.v[d] = [(-a[0]).mul_add(b[0], c[0]), (-a[1]).mul_add(b[1], c[1]), (-a[2]).mul_add(b[2], c[2]), (-a[3]).mul_add(b[3], c[3])];
+        self.v[d] = [
+            (-a[0]).mul_add(b[0], c[0]),
+            (-a[1]).mul_add(b[1], c[1]),
+            (-a[2]).mul_add(b[2], c[2]),
+            (-a[3]).mul_add(b[3], c[3]),
+        ];
     }
     fn rev64(&mut self, d: R, a: R) {
         let a = self.v[a];
@@ -176,7 +192,20 @@ impl Neon<'_> {
 
     // ---- macros ----
     #[allow(clippy::too_many_arguments)]
-    fn fft8(&mut self, e0: R, e1: R, o0: R, o1: R, t0: R, t1: R, t2: R, t3: R, t4: R, t5: R, t6: R) {
+    fn fft8(
+        &mut self,
+        e0: R,
+        e1: R,
+        o0: R,
+        o1: R,
+        t0: R,
+        t1: R,
+        t2: R,
+        t3: R,
+        t4: R,
+        t5: R,
+        t6: R,
+    ) {
         self.fsub(t1, e1, o1);
         self.fadd(o1, e1, o1);
         self.fsub(t0, e0, o0);
@@ -210,7 +239,20 @@ impl Neon<'_> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn fft4_x2(&mut self, e0: R, o0: R, e1: R, o1: R, t0: R, t1: R, t2: R, t3: R, t4: R, t5: R, t6: R) {
+    fn fft4_x2(
+        &mut self,
+        e0: R,
+        o0: R,
+        e1: R,
+        o1: R,
+        t0: R,
+        t1: R,
+        t2: R,
+        t3: R,
+        t4: R,
+        t5: R,
+        t6: R,
+    ) {
         self.fadd(t0, e0, o0);
         self.fadd(t2, e1, o1);
         self.fsub(e0, e0, o0);
@@ -490,21 +532,37 @@ impl Neon<'_> {
         let [t0, t1, t2] = t;
         self.rev64(t0, o0);
         self.rev64(t1, o2);
-        if part == 0 { self.trn2s(t2, c3) } else { self.trn1s(t2, c3) }
+        if part == 0 {
+            self.trn2s(t2, c3)
+        } else {
+            self.trn1s(t2, c3)
+        }
         self.fmul(t2, t2, 31);
         self.fmul(o2, o2, t2);
         self.fmul(o0, o0, t2);
-        if part == 0 { self.trn1s(t2, c0) } else { self.trn2s(t2, c0) }
+        if part == 0 {
+            self.trn1s(t2, c0)
+        } else {
+            self.trn2s(t2, c0)
+        }
         self.fmul(t1, t1, t2);
         self.fmla(o0, t0, t2);
         self.fsub(t1, t1, o2);
         self.rev64(t2, o1);
         self.rev64(o2, o3);
-        if part == 0 { self.trn2s(t0, c2) } else { self.trn1s(t0, c2) }
+        if part == 0 {
+            self.trn2s(t0, c2)
+        } else {
+            self.trn1s(t0, c2)
+        }
         self.fmul(t0, t0, 31);
         self.fmul(o1, o1, t0);
         self.fmul(o3, o3, t0);
-        if part == 0 { self.trn1s(t0, c1) } else { self.trn2s(t0, c1) }
+        if part == 0 {
+            self.trn1s(t0, c1)
+        } else {
+            self.trn2s(t0, c1)
+        }
         self.fmul(o2, o2, t0);
         self.fmla(o1, t2, t0);
         self.fsub(o2, o2, o3);
@@ -551,7 +609,11 @@ impl Neon<'_> {
         self.ldp(10, 11, x11 + b);
         self.ldp(12, 13, x12 + a);
         self.ldp(14, 15, x12 + b);
-        self.sr_combine([0, 1, 2, 3, 4, 6, 5, 7], [8, 9, 10, 11, 12, 13, 14, 15], Self::T16);
+        self.sr_combine(
+            [0, 1, 2, 3, 4, 6, 5, 7],
+            [8, 9, 10, 11, 12, 13, 14, 15],
+            Self::T16,
+        );
         self.stp(0, 1, x1 + a);
         self.stp(4, 5, x1 + b);
         self.stp(2, 3, x10 + a);
@@ -579,7 +641,11 @@ impl Neon<'_> {
         self.ldp(10, 11, x12 + 16);
         self.ldp(12, 13, x13);
         self.ldp(14, 15, x13 + 16);
-        self.sr_combine([0, 1, 2, 3, 4, 6, 5, 7], [8, 9, 10, 11, 12, 13, 14, 15], Self::T16);
+        self.sr_combine(
+            [0, 1, 2, 3, 4, 6, 5, 7],
+            [8, 9, 10, 11, 12, 13, 14, 15],
+            Self::T16,
+        );
         self.zip1d(16, 0, 4);
         self.zip2d(17, 0, 4);
         self.zip1d(18, 1, 5);
@@ -617,7 +683,11 @@ impl Neon<'_> {
             self.stq(r, x13 + 4 * k);
         }
         let (x10, x11, x12, x13) = (x10 + 16, x11 + 16, x12 + 16, x13 + 16);
-        self.sr_combine([0, 1, 2, 3, 4, 6, 5, 7], [8, 9, 10, 11, 12, 13, 14, 15], Self::T16);
+        self.sr_combine(
+            [0, 1, 2, 3, 4, 6, 5, 7],
+            [8, 9, 10, 11, 12, 13, 14, 15],
+            Self::T16,
+        );
         self.zip1d(16, 0, 4);
         self.zip2d(17, 0, 4);
         self.zip1d(18, 1, 5);
@@ -660,8 +730,17 @@ impl Neon<'_> {
         self.load_input(12, 13, 14, 15);
         self.fft8_x2(8, 9, 10, 11, 12, 13, 14, 15);
         self.fft16(0, 1, 2, 3, 4, 5, 6, 7, [16, 17, 18, 19, 20, 21, 22]);
-        self.sr_combine([0, 1, 2, 3, 4, 5, 6, 7], [8, 9, 10, 11, 12, 13, 14, 15], Self::T16);
-        let groups = [[(0, 4), (1, 6)], [(2, 5), (3, 7)], [(8, 12), (9, 13)], [(10, 14), (11, 15)]];
+        self.sr_combine(
+            [0, 1, 2, 3, 4, 5, 6, 7],
+            [8, 9, 10, 11, 12, 13, 14, 15],
+            Self::T16,
+        );
+        let groups = [
+            [(0, 4), (1, 6)],
+            [(2, 5), (3, 7)],
+            [(8, 12), (9, 13)],
+            [(10, 14), (11, 15)],
+        ];
         for (g, pairs) in groups.into_iter().enumerate() {
             let base = 16 + 4 * g;
             for (p, (a, b)) in pairs.into_iter().enumerate() {
@@ -703,7 +782,11 @@ impl Neon<'_> {
         self.load_input(12, 13, 14, 15);
         self.fft8_x2(8, 9, 10, 11, 12, 13, 14, 15);
         self.fft16(0, 1, 2, 3, 4, 6, 5, 7, [16, 17, 18, 19, 20, 21, 22]);
-        self.sr_combine([0, 1, 2, 3, 4, 6, 5, 7], [8, 9, 10, 11, 12, 13, 14, 15], Self::T16);
+        self.sr_combine(
+            [0, 1, 2, 3, 4, 6, 5, 7],
+            [8, 9, 10, 11, 12, 13, 14, 15],
+            Self::T16,
+        );
         self.stp(2, 3, x1 + 8);
         self.stp(6, 7, x1 + 24);
         self.stp(10, 11, x1 + 40);
@@ -731,12 +814,24 @@ impl Neon<'_> {
             self.deinterleave_64();
             return true;
         }
-        self.sr_combine_lite([0, 1, 8, 9], [2, 3, 16, 17], [24, 25, 26, 27], [28, 29, 30], 0);
+        self.sr_combine_lite(
+            [0, 1, 8, 9],
+            [2, 3, 16, 17],
+            [24, 25, 26, 27],
+            [28, 29, 30],
+            0,
+        );
         self.stp(0, 1, x1);
         self.stp(8, 9, x1 + 32);
         self.stp(2, 3, x1 + 64);
         self.stp(16, 17, x1 + 96);
-        self.sr_combine_half([4, 5, 12, 13], [6, 7, 20, 21], [24, 25, 26, 27], [28, 29, 30, 0, 1, 8], 1);
+        self.sr_combine_half(
+            [4, 5, 12, 13],
+            [6, 7, 20, 21],
+            [24, 25, 26, 27],
+            [28, 29, 30, 0, 1, 8],
+            1,
+        );
         self.stp(4, 20, x1 + 16);
         self.stp(12, 21, x1 + 48);
         self.stp(6, 5, x1 + 80);
@@ -810,8 +905,20 @@ impl Neon<'_> {
     fn deinterleave_64(&mut self) {
         let x1 = self.x1;
         let saved23 = self.v[23];
-        self.sr_combine_lite([0, 1, 8, 9], [2, 3, 16, 17], [24, 25, 26, 27], [28, 29, 30], 0);
-        self.sr_combine_half([4, 5, 12, 13], [6, 7, 20, 21], [24, 25, 26, 27], [28, 29, 30, 23, 24, 26], 1);
+        self.sr_combine_lite(
+            [0, 1, 8, 9],
+            [2, 3, 16, 17],
+            [24, 25, 26, 27],
+            [28, 29, 30],
+            0,
+        );
+        self.sr_combine_half(
+            [4, 5, 12, 13],
+            [6, 7, 20, 21],
+            [24, 25, 26, 27],
+            [28, 29, 30, 23, 24, 26],
+            1,
+        );
         self.zip1d(23, 0, 4);
         self.zip2d(24, 0, 4);
         self.zip1d(25, 1, 20);
@@ -972,7 +1079,16 @@ pub fn split_radix_parity_revtab(len: usize, inv: bool) -> Vec<usize> {
         perm(i, len, inv) * 4 + 1 - 2 * (((i & len == 0) as i64) ^ inv as i64)
     }
     #[allow(clippy::too_many_arguments)]
-    fn gen(rev: &mut [usize], n: i64, inv: bool, offset: i64, is_dual: bool, dual_high: bool, len: i64, basis: i64) {
+    fn gen(
+        rev: &mut [usize],
+        n: i64,
+        inv: bool,
+        offset: i64,
+        is_dual: bool,
+        dual_high: bool,
+        len: i64,
+        basis: i64,
+    ) {
         let len = len >> 1;
         if len <= basis {
             // dual_stride = 0: stride 0, no dual layout.
@@ -987,7 +1103,16 @@ pub fn split_radix_parity_revtab(len: usize, inv: bool) -> Vec<usize> {
         }
         gen(rev, n, inv, offset, false, false, len, basis);
         gen(rev, n, inv, offset + len, true, false, len >> 1, basis);
-        gen(rev, n, inv, offset + len + (len >> 1), true, true, len >> 1, basis);
+        gen(
+            rev,
+            n,
+            inv,
+            offset + len + (len >> 1),
+            true,
+            true,
+            len >> 1,
+            basis,
+        );
     }
     let mut rev = vec![0usize; len];
     gen(&mut rev, len as i64, inv, 0, false, false, len as i64, 4);
@@ -1015,7 +1140,12 @@ mod tests {
         for len in [4usize, 8, 16, 32, 64, 128, 256, 512, 1024] {
             for inv in [false, true] {
                 let x: Vec<(f64, f64)> = (0..len)
-                    .map(|i| (((i * 7919) % 97) as f64 / 97.0 - 0.5, ((i * 104729) % 89) as f64 / 89.0 - 0.5))
+                    .map(|i| {
+                        (
+                            ((i * 7919) % 97) as f64 / 97.0 - 0.5,
+                            ((i * 104729) % 89) as f64 / 89.0 - 0.5,
+                        )
+                    })
                     .collect();
                 let map = split_radix_parity_revtab(len, inv);
                 let mut z = vec![0f32; 2 * len];
@@ -1029,11 +1159,14 @@ mod tests {
                 for k in 0..len {
                     let (mut re, mut im) = (0f64, 0f64);
                     for (n, &(a, b)) in x.iter().enumerate() {
-                        let t = sign * 2.0 * std::f64::consts::PI * ((n * k) % len) as f64 / len as f64;
+                        let t =
+                            sign * 2.0 * std::f64::consts::PI * ((n * k) % len) as f64 / len as f64;
                         re += a * t.cos() - b * t.sin();
                         im += a * t.sin() + b * t.cos();
                     }
-                    worst = worst.max((z[2 * k] as f64 - re).abs()).max((z[2 * k + 1] as f64 - im).abs());
+                    worst = worst
+                        .max((z[2 * k] as f64 - re).abs())
+                        .max((z[2 * k + 1] as f64 - im).abs());
                 }
                 assert!(worst < 1e-4, "len {len} inv {inv}: worst {worst}");
             }

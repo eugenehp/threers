@@ -8,7 +8,11 @@
 //! `dct36_neon64`, `dct64_real_neon64`, the synths, the vectorised antialias
 //! loop) run on them directly.
 
-#![allow(clippy::needless_range_loop, clippy::collapsible_if, clippy::explicit_counter_loop)]
+#![allow(
+    clippy::needless_range_loop,
+    clippy::collapsible_if,
+    clippy::explicit_counter_loop
+)]
 
 use super::built;
 use super::cpu::Cpu;
@@ -28,20 +32,35 @@ const WIN1: u64 = 0xF400; // [4][36]
 const FREQS: [u32; 9] = [44100, 48000, 32000, 22050, 24000, 16000, 11025, 12000, 8000];
 const TABSEL: [[[u32; 16]; 3]; 2] = [
     [
-        [0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448, 0],
-        [0, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 0],
-        [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0],
+        [
+            0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448, 0,
+        ],
+        [
+            0, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 0,
+        ],
+        [
+            0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0,
+        ],
     ],
     [
-        [0, 32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256, 0],
-        [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0],
-        [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0],
+        [
+            0, 32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256, 0,
+        ],
+        [
+            0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0,
+        ],
+        [
+            0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0,
+        ],
     ],
 ];
 
 /// mpg123's `head_check` (layer III only here).
 fn head_check(h: u32) -> bool {
-    (h & 0xffe0_0000) == 0xffe0_0000 && (h >> 17) & 3 != 0 && (h >> 12) & 0xf != 0xf && (h >> 10) & 3 != 3
+    (h & 0xffe0_0000) == 0xffe0_0000
+        && (h >> 17) & 3 != 0
+        && (h >> 12) & 0xf != 0xf
+        && (h >> 10) & 3 != 3
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -74,13 +93,25 @@ fn decode_header(h: u32, free: Option<usize>) -> Result<Header, String> {
     };
     let bitrate_index = ((h >> 12) & 0xf) as usize;
     if lay != 3 {
-        return Err(format!("MPEG audio layer {lay} is not supported (layer III only)"));
+        return Err(format!(
+            "MPEG audio layer {lay} is not supported (layer III only)"
+        ));
     }
     let padding = ((h >> 9) & 1) as usize;
     let mode = (h >> 6) & 3;
     let stereo = if mode == 3 { 1 } else { 2 };
     let error_protection = (h >> 16) & 1 == 0;
-    let mut ssize = if lsf == 1 { if stereo == 1 { 9 } else { 17 } } else if stereo == 1 { 17 } else { 32 };
+    let mut ssize = if lsf == 1 {
+        if stereo == 1 {
+            9
+        } else {
+            17
+        }
+    } else if stereo == 1 {
+        17
+    } else {
+        32
+    };
     if error_protection {
         ssize += 2;
     }
@@ -212,7 +243,12 @@ impl<'a> Dec<'a> {
     fn new(data: &'a [u8]) -> Self {
         // `INT123_init_layer3_gainpow2`: pow(2, -0.25 * (i + 210)), exact in
         // the binary exponent, so split it into 2^-k * 2^(-j/4).
-        let quarter = [1.0f64, 0.840_896_415_253_714_5, std::f64::consts::FRAC_1_SQRT_2, 0.594_603_557_501_360_5];
+        let quarter = [
+            1.0f64,
+            0.840_896_415_253_714_5,
+            std::f64::consts::FRAC_1_SQRT_2,
+            0.594_603_557_501_360_5,
+        ];
         let mut gainpow2 = [0f32; 378];
         for (k, g) in gainpow2.iter_mut().enumerate() {
             let e = k as i64 - 256 + 210; // 2^(-e/4)
@@ -332,7 +368,8 @@ impl<'a> Dec<'a> {
         if self.bits_avail < 0 {
             return 0;
         }
-        let mut r = (self.byte(self.wp) << 16) | (self.byte(self.wp + 1) << 8) | self.byte(self.wp + 2);
+        let mut r =
+            (self.byte(self.wp) << 16) | (self.byte(self.wp + 1) << 8) | self.byte(self.wp + 2);
         r <<= self.bitindex;
         r &= 0xffffff;
         self.bitindex += n;
@@ -409,15 +446,26 @@ const SINGLE_STEREO: i32 = -1;
 
 impl Dec<'_> {
     /// `III_get_side_info`; `Err` is mpg123's "bad frame".
-    fn get_side_info(&mut self, si: &mut SideInfo, stereo: usize, ms_stereo: bool, sfreq: usize) -> Result<(), ()> {
+    fn get_side_info(
+        &mut self,
+        si: &mut SideInfo,
+        stereo: usize,
+        ms_stereo: bool,
+        sfreq: usize,
+    ) -> Result<(), ()> {
         let powdiff = 0; // single != SINGLE_MIX
         let lsf = self.h.lsf;
-        let tab: [u32; 5] = if lsf == 0 { [2, 9, 5, 3, 4] } else { [1, 8, 1, 2, 9] };
+        let tab: [u32; 5] = if lsf == 0 {
+            [2, 9, 5, 3, 4]
+        } else {
+            [1, 8, 1, 2, 9]
+        };
         let mut needbits = tab[1] + if stereo == 1 { tab[2] } else { tab[3] };
         if lsf == 0 {
             needbits += stereo as u32 * 4;
         }
-        needbits += tab[0] * stereo as u32 * (29 + tab[4] + 1 + 22 + if lsf == 0 { 1 } else { 0 } + 2);
+        needbits +=
+            tab[0] * stereo as u32 * (29 + tab[4] + 1 + 22 + if lsf == 0 { 1 } else { 0 } + 2);
         if self.bits_avail < needbits as i64 {
             return Err(());
         }
@@ -478,7 +526,11 @@ impl Dec<'_> {
                         g.region1start = 36 >> 1;
                         g.region2start = 576 >> 1;
                     } else if self.h.mpeg25 {
-                        let r0c = if g.block_type == 2 && g.mixed_block_flag == 0 { 5 } else { 7 };
+                        let r0c = if g.block_type == 2 && g.mixed_block_flag == 0 {
+                            5
+                        } else {
+                            7
+                        };
                         let r1c = 20 - r0c;
                         g.region1start = bi.long_idx[r0c + 1] as u32 >> 1;
                         g.region2start = bi.long_idx[r0c + 1 + r1c + 1] as u32 >> 1;
@@ -493,7 +545,11 @@ impl Dec<'_> {
                     let r0c = self.getbits_fast(4) as usize;
                     let r1c = self.getbits_fast(3) as usize;
                     g.region1start = bi.long_idx[r0c + 1] as u32 >> 1;
-                    g.region2start = if r0c + 1 + r1c + 1 > 22 { 576 >> 1 } else { bi.long_idx[r0c + 1 + r1c + 1] as u32 >> 1 };
+                    g.region2start = if r0c + 1 + r1c + 1 > 22 {
+                        576 >> 1
+                    } else {
+                        bi.long_idx[r0c + 1 + r1c + 1] as u32 >> 1
+                    };
                     g.block_type = 0;
                     g.mixed_block_flag = 0;
                 }
@@ -510,7 +566,10 @@ impl Dec<'_> {
 
     /// `III_get_scale_factors_1`; `None` for "not enough bits".
     fn scale_factors_1(&mut self, scf: &mut [i32; 39], g: &GrInfo) -> Option<i32> {
-        const SLEN: [[u32; 16]; 2] = [[0, 0, 0, 0, 3, 1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4], [0, 1, 2, 3, 0, 1, 2, 3, 1, 2, 3, 1, 2, 3, 2, 3]];
+        const SLEN: [[u32; 16]; 2] = [
+            [0, 0, 0, 0, 3, 1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4],
+            [0, 1, 2, 3, 0, 1, 2, 3, 1, 2, 3, 1, 2, 3, 2, 3],
+        ];
         let num0 = SLEN[0][g.scalefac_compress as usize];
         let num1 = SLEN[1][g.scalefac_compress as usize];
         let mut p = 0;
@@ -557,7 +616,8 @@ impl Dec<'_> {
                 scf[p] = 0;
             } else {
                 let nb = |bit: i32, n: u32, k: u32| if scfsi & bit == 0 { n * k } else { 0 };
-                numbits = (nb(8, num0, 6) + nb(4, num0, 5) + nb(2, num1, 5) + nb(1, num1, 5)) as i32;
+                numbits =
+                    (nb(8, num0, 6) + nb(4, num0, 5) + nb(2, num1, 5) + nb(1, num1, 5)) as i32;
                 if self.bits_avail < numbits as i64 {
                     return None;
                 }
@@ -578,13 +638,43 @@ impl Dec<'_> {
     }
 
     /// `III_get_scale_factors_2`.
-    fn scale_factors_2(&mut self, scf: &mut [i32; 39], g: &mut GrInfo, i_stereo: bool) -> Option<i32> {
+    fn scale_factors_2(
+        &mut self,
+        scf: &mut [i32; 39],
+        g: &mut GrInfo,
+        i_stereo: bool,
+    ) -> Option<i32> {
         const STAB: [[[u32; 4]; 6]; 3] = [
-            [[6, 5, 5, 5], [6, 5, 7, 3], [11, 10, 0, 0], [7, 7, 7, 0], [6, 6, 6, 3], [8, 8, 5, 0]],
-            [[9, 9, 9, 9], [9, 9, 12, 6], [18, 18, 0, 0], [12, 12, 12, 0], [12, 9, 9, 6], [15, 12, 9, 0]],
-            [[6, 9, 9, 9], [6, 9, 12, 6], [15, 18, 0, 0], [6, 15, 12, 0], [6, 12, 9, 6], [6, 18, 9, 0]],
+            [
+                [6, 5, 5, 5],
+                [6, 5, 7, 3],
+                [11, 10, 0, 0],
+                [7, 7, 7, 0],
+                [6, 6, 6, 3],
+                [8, 8, 5, 0],
+            ],
+            [
+                [9, 9, 9, 9],
+                [9, 9, 12, 6],
+                [18, 18, 0, 0],
+                [12, 12, 12, 0],
+                [12, 9, 9, 6],
+                [15, 12, 9, 0],
+            ],
+            [
+                [6, 9, 9, 9],
+                [6, 9, 12, 6],
+                [15, 18, 0, 0],
+                [6, 15, 12, 0],
+                [6, 12, 9, 6],
+                [6, 18, 9, 0],
+            ],
         ];
-        let mut slen = if i_stereo { t::I_SLEN2[(g.scalefac_compress >> 1) as usize] as u32 } else { t::N_SLEN2[g.scalefac_compress as usize] as u32 };
+        let mut slen = if i_stereo {
+            t::I_SLEN2[(g.scalefac_compress >> 1) as usize] as u32
+        } else {
+            t::N_SLEN2[g.scalefac_compress as usize] as u32
+        };
         g.preflag = (slen >> 15) & 1;
         let mut n = 0;
         if g.block_type == 2 {
@@ -611,7 +701,11 @@ impl Dec<'_> {
             let num = slen & 7;
             slen >>= 3;
             for _ in 0..pi {
-                scf[p] = if num != 0 { self.getbits_fast(num) as i32 } else { 0 };
+                scf[p] = if num != 0 {
+                    self.getbits_fast(num) as i32
+                } else {
+                    0
+                };
                 p += 1;
             }
         }
@@ -642,10 +736,21 @@ impl Dec<'_> {
 
     /// `III_dequantize_sample` (USE_NEW_HUFFTABLE, no CUT_SFB21); `Err` is
     /// mpg123's dequantisation failure.
-    fn dequantize(&mut self, xr: &mut [f32; 576], scf: &[i32; 39], g: &mut GrInfo, sfreq: usize, part2bits: i32) -> Result<(), ()> {
+    fn dequantize(
+        &mut self,
+        xr: &mut [f32; 576],
+        scf: &[i32; 39],
+        g: &mut GrInfo,
+        sfreq: usize,
+        part2bits: i32,
+    ) -> Result<(), ()> {
         let shift = 1 + g.scalefac_scale;
         let mut xi: usize = 0; // xrpnt
-        let mut m = Mask { mask: 0, num: 0, part2remain: g.part2_3_length as i32 - part2bits };
+        let mut m = Mask {
+            mask: 0,
+            num: 0,
+            part2remain: g.part2_3_length as i32 - part2bits,
+        };
         let ispow = |x: i32| f(t::ISPOW[x as usize]);
         let mut sp = 0usize; // scf pointer
         if g.part2_3_length > 0 {
@@ -673,7 +778,11 @@ impl Dec<'_> {
                 let mut v = 0f32;
                 let (map, base, end): (&[i16], usize, usize) = if g.mixed_block_flag != 0 {
                     max = [2, 2, 2, -1];
-                    (&t::MAPBUF0, sfreq * 152, sfreq * 152 + if sfreq < 3 { 152 } else { 144 })
+                    (
+                        &t::MAPBUF0,
+                        sfreq * 152,
+                        sfreq * 152 + if sfreq < 3 { 152 } else { 144 },
+                    )
                 } else {
                     (&t::MAPBUF1, sfreq * 156, sfreq * 156 + 156)
                 };
@@ -714,11 +823,19 @@ impl Dec<'_> {
                                 *val += (m.mask >> (32 - linbits)) as i32;
                                 m.num -= linbits as i32 + 1;
                                 m.mask <<= linbits;
-                                xr[xi] = if msb(m.mask) { -ispow(*val) * v } else { ispow(*val) * v };
+                                xr[xi] = if msb(m.mask) {
+                                    -ispow(*val) * v
+                                } else {
+                                    ispow(*val) * v
+                                };
                                 m.mask <<= 1;
                             } else if *val != 0 {
                                 max[lwin] = cb;
-                                xr[xi] = if msb(m.mask) { -ispow(*val) * v } else { ispow(*val) * v };
+                                xr[xi] = if msb(m.mask) {
+                                    -ispow(*val) * v
+                                } else {
+                                    ispow(*val) * v
+                                };
                                 m.num -= 1;
                                 m.mask <<= 1;
                             } else {
@@ -791,9 +908,17 @@ impl Dec<'_> {
                 g.maxband = [max[0] + 1, max[1] + 1, max[2] + 1];
                 g.maxbandl = max[3] + 1;
                 let rmax = max[0].max(max[1]).max(max[2]) + 1;
-                g.maxb = if rmax != 0 { self.short_limit[sfreq][rmax as usize] } else { self.long_limit[sfreq][(max[3] + 1) as usize] } as u32;
+                g.maxb = if rmax != 0 {
+                    self.short_limit[sfreq][rmax as usize]
+                } else {
+                    self.long_limit[sfreq][(max[3] + 1) as usize]
+                } as u32;
             } else {
-                let pretab: &[u8] = if g.preflag != 0 { &t::PRETAB[22..] } else { &t::PRETAB[..22] };
+                let pretab: &[u8] = if g.preflag != 0 {
+                    &t::PRETAB[22..]
+                } else {
+                    &t::PRETAB[..22]
+                };
                 let mut pp = 0usize;
                 let mut max = -1i32;
                 let mut cb = 0i32;
@@ -806,7 +931,8 @@ impl Dec<'_> {
                         mc = map[mi] as i32;
                         cb = map[mi + 1] as i32;
                         mi += 2;
-                        v = self.gainpow2[(g.pow2gain + ((scf[sp] + pretab[pp] as i32) << shift)) as usize];
+                        v = self.gainpow2
+                            [(g.pow2gain + ((scf[sp] + pretab[pp] as i32) << shift)) as usize];
                         sp += 1;
                         pp += 1;
                     }};
@@ -829,11 +955,19 @@ impl Dec<'_> {
                                 *val += (m.mask >> (32 - linbits)) as i32;
                                 m.num -= linbits as i32 + 1;
                                 m.mask <<= linbits;
-                                xr[xi] = if msb(m.mask) { -ispow(*val) * v } else { ispow(*val) * v };
+                                xr[xi] = if msb(m.mask) {
+                                    -ispow(*val) * v
+                                } else {
+                                    ispow(*val) * v
+                                };
                                 m.mask <<= 1;
                             } else if *val != 0 {
                                 max = cb;
-                                xr[xi] = if msb(m.mask) { -ispow(*val) * v } else { ispow(*val) * v };
+                                xr[xi] = if msb(m.mask) {
+                                    -ispow(*val) * v
+                                } else {
+                                    ispow(*val) * v
+                                };
                                 m.num -= 1;
                                 m.mask <<= 1;
                             } else {
@@ -945,7 +1079,14 @@ impl Dec<'_> {
 
 impl Dec<'_> {
     /// `III_i_stereo`.
-    fn i_stereo(xr: &mut [[f32; 576]; 2], scalefac: &[i32; 39], g: &GrInfo, sfreq: usize, ms_stereo: bool, lsf: usize) {
+    fn i_stereo(
+        xr: &mut [[f32; 576]; 2],
+        scalefac: &[i32; 39],
+        g: &GrInfo,
+        sfreq: usize,
+        ms_stereo: bool,
+        lsf: usize,
+    ) {
         let bi = &t::BAND_INFO[sfreq];
         let tab = lsf + (g.scalefac_compress as usize & lsf);
         let ms = ms_stereo as usize;
@@ -1070,7 +1211,15 @@ impl Dec<'_> {
         if g.mixed_block_flag != 0 {
             sb = 2;
             call(c, built::INT123_dct36_neon64, row(0), raw1, raw2, WIN, ts);
-            call(c, built::INT123_dct36_neon64, row(1), raw1 + 72, raw2 + 72, WIN1, ts + 4);
+            call(
+                c,
+                built::INT123_dct36_neon64,
+                row(1),
+                raw1 + 72,
+                raw2 + 72,
+                WIN1,
+                ts + 4,
+            );
             raw1 += 144;
             raw2 += 144;
             ts += 8;
@@ -1079,10 +1228,34 @@ impl Dec<'_> {
         while sb < g.maxb {
             if bt == 2 {
                 call(c, built::dct12, row(sb), raw1, raw2, WIN + 2 * 144, ts);
-                call(c, built::dct12, row(sb + 1), raw1 + 72, raw2 + 72, WIN1 + 2 * 144, ts + 4);
+                call(
+                    c,
+                    built::dct12,
+                    row(sb + 1),
+                    raw1 + 72,
+                    raw2 + 72,
+                    WIN1 + 2 * 144,
+                    ts + 4,
+                );
             } else {
-                call(c, built::INT123_dct36_neon64, row(sb), raw1, raw2, WIN + bt * 144, ts);
-                call(c, built::INT123_dct36_neon64, row(sb + 1), raw1 + 72, raw2 + 72, WIN1 + bt * 144, ts + 4);
+                call(
+                    c,
+                    built::INT123_dct36_neon64,
+                    row(sb),
+                    raw1,
+                    raw2,
+                    WIN + bt * 144,
+                    ts,
+                );
+                call(
+                    c,
+                    built::INT123_dct36_neon64,
+                    row(sb + 1),
+                    raw1 + 72,
+                    raw2 + 72,
+                    WIN1 + bt * 144,
+                    ts + 4,
+                );
             }
             sb += 2;
             ts += 8;
@@ -1136,7 +1309,11 @@ impl Dec<'_> {
         let buf = |ch: u64, j: u64| REAL_BUFFS + (ch * 2 + j) * 0x110 * 4;
         let c = &mut self.cpu;
         let bo = self.bo as u64;
-        let (j0, j1, bo1, a, b) = if bo & 1 != 0 { (0, 1, bo, (bo + 1) & 0xf, bo) } else { (1, 0, bo + 1, bo, bo + 1) };
+        let (j0, j1, bo1, a, b) = if bo & 1 != 0 {
+            (0, 1, bo, (bo + 1) & 0xf, bo)
+        } else {
+            (1, 0, bo + 1, bo, bo + 1)
+        };
         for (ch, band) in [(0, band_l), (1, band_r)] {
             if bo & 1 != 0 {
                 c.x[0] = buf(ch, 1) + a * 4;
@@ -1168,10 +1345,17 @@ impl Dec<'_> {
         let stereo = self.h.stereo;
         let single = SINGLE_STEREO;
         let sfreq = self.h.sfreq;
-        let (ms_stereo, i_stereo) = if self.h.mode == 1 { (self.h.mode_ext & 2 != 0, self.h.mode_ext & 1 != 0) } else { (false, false) };
+        let (ms_stereo, i_stereo) = if self.h.mode == 1 {
+            (self.h.mode_ext & 2 != 0, self.h.mode_ext & 1 != 0)
+        } else {
+            (false, false)
+        };
         let granules = if self.h.lsf != 0 { 1 } else { 2 };
         let mut si = SideInfo::default();
-        if self.get_side_info(&mut si, stereo, ms_stereo, sfreq).is_err() {
+        if self
+            .get_side_info(&mut si, stereo, ms_stereo, sfreq)
+            .is_err()
+        {
             return;
         }
         self.set_pointer(true, si.main_data_begin as usize);
@@ -1183,7 +1367,11 @@ impl Dec<'_> {
                 if g.part2_3_length as i64 > self.bits_avail {
                     return;
                 }
-                let part2bits = if self.h.lsf != 0 { self.scale_factors_2(&mut scalefacs[0], &mut g, false) } else { self.scale_factors_1(&mut scalefacs[0], &g) };
+                let part2bits = if self.h.lsf != 0 {
+                    self.scale_factors_2(&mut scalefacs[0], &mut g, false)
+                } else {
+                    self.scale_factors_1(&mut scalefacs[0], &g)
+                };
                 let Some(part2bits) = part2bits else { return };
                 let r = self.dequantize(&mut xr[0], &scalefacs[0], &mut g, sfreq, part2bits);
                 si.ch[0][gr] = g;
@@ -1193,7 +1381,11 @@ impl Dec<'_> {
             }
             if stereo == 2 {
                 let mut g = si.ch[1][gr];
-                let part2bits = if self.h.lsf != 0 { self.scale_factors_2(&mut scalefacs[1], &mut g, i_stereo) } else { self.scale_factors_1(&mut scalefacs[1], &g) };
+                let part2bits = if self.h.lsf != 0 {
+                    self.scale_factors_2(&mut scalefacs[1], &mut g, i_stereo)
+                } else {
+                    self.scale_factors_1(&mut scalefacs[1], &g)
+                };
                 let Some(part2bits) = part2bits else { return };
                 let r = self.dequantize(&mut xr[1], &scalefacs[1], &mut g, sfreq, part2bits);
                 si.ch[1][gr] = g;
@@ -1220,7 +1412,11 @@ impl Dec<'_> {
                     }
                 }
             }
-            let stereo1 = if stereo == 1 || single != SINGLE_STEREO { 1 } else { 2 };
+            let stereo1 = if stereo == 1 || single != SINGLE_STEREO {
+                1
+            } else {
+                2
+            };
             for ch in 0..stereo1 {
                 self.cpu.put(HYBRID_IN + (ch * 576 * 4) as u64, &xr[ch]);
                 let g = si.ch[ch][gr];
@@ -1253,7 +1449,10 @@ impl Dec<'_> {
         }
         if (h >> 12) & 0xf == 0 && self.freeformat_framesize.is_none() {
             const SAMEMASK: u32 = 0xfffe_fcc0;
-            let i = (4..MAXFRAMESIZE + 4).find(|&i| self.head_at(pos + i + 1).is_some_and(|n| n & SAMEMASK == h & SAMEMASK))?;
+            let i = (4..MAXFRAMESIZE + 4).find(|&i| {
+                self.head_at(pos + i + 1)
+                    .is_some_and(|n| n & SAMEMASK == h & SAMEMASK)
+            })?;
             self.freeformat_framesize = Some(i - 3 - ((h >> 9) & 1) as usize);
         }
         decode_header(h, self.freeformat_framesize).ok()
@@ -1266,7 +1465,12 @@ impl Dec<'_> {
         let mut junk = 0;
         loop {
             let d = self.data.get(pos..)?;
-            if d.len() >= 10 && &d[..3] == b"ID3" && d[3] != 0xff && d[4] != 0xff && d[6..10].iter().all(|b| b & 0x80 == 0) {
+            if d.len() >= 10
+                && &d[..3] == b"ID3"
+                && d[3] != 0xff
+                && d[4] != 0xff
+                && d[6..10].iter().all(|b| b & 0x80 == 0)
+            {
                 let size = d[6..10].iter().fold(0usize, |a, &b| (a << 7) | b as usize);
                 pos += 10 + size + if d[5] & 0x10 != 0 { 10 } else { 0 };
                 continue;
@@ -1315,18 +1519,28 @@ impl Dec<'_> {
         self.fsizeold = self.h.framesize;
         self.to_decode = false;
         self.to_ignore = false;
-        if (self.track_frames > 0 && self.num >= self.track_frames - 1) || (self.gapless_frames > 0 && self.num >= self.gapless_frames - 1) {
+        if (self.track_frames > 0 && self.num >= self.track_frames - 1)
+            || (self.gapless_frames > 0 && self.num >= self.gapless_frames - 1)
+        {
             return false;
         }
         let mut framepos;
         loop {
-            let found = if self.firsthead == 0 { self.sync_first() } else { self.sync_next() };
-            let Some((newhead, hd)) = found else { return false };
+            let found = if self.firsthead == 0 {
+                self.sync_first()
+            } else {
+                self.sync_next()
+            };
+            let Some((newhead, hd)) = found else {
+                return false;
+            };
             if self.firsthead != 0 && !head_compatible(self.firsthead, newhead) {
                 return false;
             }
             framepos = self.filepos - 4;
-            let Some(body) = self.data.get(self.filepos..self.filepos + hd.framesize) else { return false };
+            let Some(body) = self.data.get(self.filepos..self.filepos + hd.framesize) else {
+                return false;
+            };
             self.h = hd;
             let n = self.bsnum;
             self.bsspace[n][512..512 + hd.framesize].copy_from_slice(body);
@@ -1347,7 +1561,9 @@ impl Dec<'_> {
         }
         self.set_pointer(false, 0);
         self.mean_frames += 1;
-        self.mean_framesize = ((self.mean_frames - 1) as f64 * self.mean_framesize + (self.h.framesize as f64 + 4.0)) / self.mean_frames as f64;
+        self.mean_framesize = ((self.mean_frames - 1) as f64 * self.mean_framesize
+            + (self.h.framesize as f64 + 4.0))
+            / self.mean_frames as f64;
         self.num += 1;
         if self.num as usize == self.index.len() {
             self.index.push(framepos);
@@ -1366,7 +1582,17 @@ impl Dec<'_> {
     /// `check_lame_tag`: Xing/Info frame count and LAME delay/padding.
     fn check_lame_tag(&mut self) -> bool {
         let h = self.h;
-        let mut lo = if h.stereo == 2 { if h.lsf != 0 { 17 } else { 32 } } else if h.lsf != 0 { 9 } else { 17 };
+        let mut lo = if h.stereo == 2 {
+            if h.lsf != 0 {
+                17
+            } else {
+                32
+            }
+        } else if h.lsf != 0 {
+            9
+        } else {
+            17
+        };
         if h.framesize < lo + 8 {
             return false;
         }
@@ -1392,7 +1618,11 @@ impl Dec<'_> {
                     break 'tag;
                 }
                 let frames = rd(&mut lo) as i64;
-                self.track_frames = if frames > (u32::MAX as i64) / 4 / 1152 { 0 } else { frames };
+                self.track_frames = if frames > (u32::MAX as i64) / 4 / 1152 {
+                    0
+                } else {
+                    frames
+                };
                 self.gapless_init(self.track_frames, 0, 0);
             }
             if flags & 2 != 0 {
@@ -1447,7 +1677,11 @@ impl Dec<'_> {
     fn gapless_realinit(&mut self) {
         self.begin_os = self.begin_s;
         self.end_os = self.end_s;
-        self.fullend_os = if self.gapless_frames > 0 { self.gapless_frames * self.h.spf as i64 } else { 0 };
+        self.fullend_os = if self.gapless_frames > 0 {
+            self.gapless_frames * self.h.spf as i64
+        } else {
+            0
+        };
     }
 
     fn set_frameseek(&mut self, fe: i64) {
@@ -1562,7 +1796,9 @@ impl Dec<'_> {
         self.hybrid_blc = [0, 0];
         self.cpu.put(HYBRID_BLOCK, &[0.0; 4 * 576]);
         // `stream_seek_frame` from the frame index.
-        let Some(&pos) = self.index.get(fnum as usize) else { return };
+        let Some(&pos) = self.index.get(fnum as usize) else {
+            return;
+        };
         // (`num >= newframe || num < preframe` always holds with step 1.)
         self.filepos = pos;
         self.num = fnum - 1;
@@ -1587,7 +1823,11 @@ impl Dec<'_> {
         let mut start = 0;
         if !(self.gapless_frames > 0 && self.num >= self.gapless_frames) {
             if self.lastframe > -1 && self.num >= self.lastframe {
-                let byteoff = if self.num == self.lastframe { self.lastoff as usize * ch } else { 0 };
+                let byteoff = if self.num == self.lastframe {
+                    self.lastoff as usize * ch
+                } else {
+                    0
+                };
                 fill = fill.min(byteoff);
             }
             if self.firstoff != 0 && self.num == self.firstframe {
@@ -1620,8 +1860,11 @@ pub struct Mp3 {
 /// headers within mpg123's 64 KiB junk window (after any ID3v2 tag).
 pub fn probe(data: &[u8]) -> bool {
     let mut d = Dec::new(data);
-    let Some((h0, h)) = d.sync_first() else { return false };
-    d.head_at(d.filepos + h.framesize).is_some_and(|n| head_check(n) && head_compatible(h0, n))
+    let Some((h0, h)) = d.sync_first() else {
+        return false;
+    };
+    d.head_at(d.filepos + h.framesize)
+        .is_some_and(|n| head_check(n) && head_compatible(h0, n))
 }
 
 /// Decode a whole MP3 (layer III) file.
@@ -1635,7 +1878,11 @@ pub fn decode(data: &[u8]) -> Result<Mp3, String> {
     let x = if d.track_frames > 0 {
         d.track_frames * spf
     } else if d.filelen > 0 {
-        let bpf = if d.mean_framesize != 0.0 { d.mean_framesize } else { d.h.framesize as f64 + 4.0 };
+        let bpf = if d.mean_framesize != 0.0 {
+            d.mean_framesize
+        } else {
+            d.h.framesize as f64 + 4.0
+        };
         (d.filelen as f64 / bpf * spf as f64) as i64
     } else {
         return Err("MP3 length unknown".into());
@@ -1670,5 +1917,9 @@ pub fn decode(data: &[u8]) -> Result<Mp3, String> {
         }
     }
     samples.truncate(want);
-    Ok(Mp3 { sample_rate, channels, samples })
+    Ok(Mp3 {
+        sample_rate,
+        channels,
+        samples,
+    })
 }

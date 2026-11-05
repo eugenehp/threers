@@ -173,7 +173,9 @@ pub fn demux_video(data: &[u8]) -> Result<VideoTrack, String> {
         if ty != b"trak" || video_stbl.is_some() {
             return;
         }
-        let Some(mdia) = find(trak, b"mdia") else { return };
+        let Some(mdia) = find(trak, b"mdia") else {
+            return;
+        };
         let is_video = find(mdia, b"hdlr")
             .map(|h| h.len() >= 12 && &h[8..12] == b"vide")
             .unwrap_or(false);
@@ -231,7 +233,12 @@ pub fn demux_video(data: &[u8]) -> Result<VideoTrack, String> {
         TrackCodec::Av1 => b"av1C",
     };
     let config = find(&entry[86..], want_cfg)
-        .ok_or_else(|| format!("no {} in the sample entry", String::from_utf8_lossy(want_cfg)))?
+        .ok_or_else(|| {
+            format!(
+                "no {} in the sample entry",
+                String::from_utf8_lossy(want_cfg)
+            )
+        })?
         .to_vec();
 
     // --- stts: one duration per sample -------------------------------------
@@ -335,7 +342,11 @@ pub fn demux_video(data: &[u8]) -> Result<VideoTrack, String> {
 
     // --- stss: which samples a decoder can start on -------------------------
     let sync: Option<std::collections::HashSet<u32>> = find(stbl, b"stss").map(|stss| {
-        let n = if stss.len() >= 8 { u32at(stss, 4) as usize } else { 0 };
+        let n = if stss.len() >= 8 {
+            u32at(stss, 4) as usize
+        } else {
+            0
+        };
         (0..n)
             .filter_map(|i| {
                 let o = 8 + i * 4;

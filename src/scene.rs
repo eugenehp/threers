@@ -55,6 +55,22 @@ pub struct Scene {
 }
 
 impl Scene {
+    /// Every visible [`PositionalAudio`](crate::audio::PositionalAudio) as
+    /// `listener` hears it, for a playback backend to apply each frame. Uses
+    /// the world matrices of the last update.
+    pub fn audio_mix(
+        &self,
+        listener: &crate::audio::AudioListener,
+    ) -> Vec<(ObjectId, crate::audio::SpatialMix)> {
+        let mut mix = Vec::new();
+        self.arena.traverse_visible(self.root, &mut |id, obj| {
+            if let crate::core::ObjectKind::Audio(audio) = &obj.kind {
+                mix.push((id, audio.mix(&obj.matrix_world, listener)));
+            }
+        });
+        mix
+    }
+
     /// Empty scene with dark gray background and no fog.
     pub fn new() -> Self {
         let mut arena = ObjectArena::new();

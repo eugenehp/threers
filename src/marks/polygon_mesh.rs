@@ -170,7 +170,9 @@ impl PolygonMesh {
                 let ring = if (signed > 0.0) != hole {
                     // As deck.gl reverses a closed ring: the first point
                     // stays first.
-                    reversed = std::iter::once(ring[0]).chain(ring[1..].iter().rev().copied()).collect();
+                    reversed = std::iter::once(ring[0])
+                        .chain(ring[1..].iter().rev().copied())
+                        .collect();
                     ids[1..].reverse();
                     &reversed
                 } else {
@@ -208,7 +210,8 @@ impl PolygonMesh {
                     };
                     let w = pos.len() as u32;
                     let (ia, ib) = (ids[i], ids[(i + 1) % ring.len()]);
-                    for (p, top, id) in [(wa, 0.0, ia), (wb, 0.0, ib), (wb, 1.0, ib), (wa, 1.0, ia)] {
+                    for (p, top, id) in [(wa, 0.0, ia), (wb, 0.0, ib), (wb, 1.0, ib), (wa, 1.0, ia)]
+                    {
                         source.push(id);
                         pos.push(p);
                         nt.push([n[0], n[1], n[2], top]);
@@ -489,7 +492,12 @@ mod tests {
         let cw: Vec<[f64; 2]> = ccw.iter().rev().copied().collect();
         let hole = square(3.0, 3.0, 2.0);
         let hole_cw: Vec<[f64; 2]> = hole.iter().rev().copied().collect();
-        for (outer, h) in [(&ccw, &hole), (&cw, &hole), (&ccw, &hole_cw), (&cw, &hole_cw)] {
+        for (outer, h) in [
+            (&ccw, &hole),
+            (&cw, &hole),
+            (&ccw, &hole_cw),
+            (&cw, &hole_cw),
+        ] {
             let mut f = PolygonFeature::new(outer.clone());
             f.holes.push(h.clone());
             for on_globe in [false, true] {
@@ -502,7 +510,11 @@ mod tests {
                 let at = |i: u32| {
                     let i = i as usize;
                     let p = mesh.positions[i];
-                    let w = [p[0] as f64 + mesh.origin[0], p[1] as f64 + mesh.origin[1], p[2] as f64 + mesh.origin[2]];
+                    let w = [
+                        p[0] as f64 + mesh.origin[0],
+                        p[1] as f64 + mesh.origin[1],
+                        p[2] as f64 + mesh.origin[2],
+                    ];
                     let up = match mesh.radial {
                         Some(c) => {
                             let d = [w[0] - c[0], w[1] - c[1], w[2] - c[2]];
@@ -512,7 +524,11 @@ mod tests {
                         None => [0.0, 1.0, 0.0],
                     };
                     let rise = 5.0 * mesh.normal_top[i][3] as f64;
-                    [w[0] + up[0] * rise, w[1] + up[1] * rise, w[2] + up[2] * rise]
+                    [
+                        w[0] + up[0] * rise,
+                        w[1] + up[1] * rise,
+                        w[2] + up[2] * rise,
+                    ]
                 };
                 for t in mesh.index.chunks(3) {
                     let (a, b, c) = (at(t[0]), at(t[1]), at(t[2]));

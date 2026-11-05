@@ -41,7 +41,9 @@ fn unsupported<T>(s: impl Into<String>) -> Result<T, AacError> {
 }
 
 /// Sampling rates by `samplingFrequencyIndex` (ISO/IEC 14496-3).
-pub const SAMPLE_RATES: [u32; 13] = [96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350];
+pub const SAMPLE_RATES: [u32; 13] = [
+    96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350,
+];
 
 /// The parts of an `AudioSpecificConfig` the decoder uses.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -99,7 +101,9 @@ impl AudioSpecificConfig {
         let (mut sbr, mut ps) = (-1i32, -1i32);
         let mut ext_sample_rate = 0;
         let mut explicit_sbr = false;
-        if object_type == 5 || (object_type == 29 && !(br.show(3) & 3 != 0 && br.show(9) & 0x3f == 0)) {
+        if object_type == 5
+            || (object_type == 29 && !(br.show(3) & 3 != 0 && br.show(9) & 0x3f == 0))
+        {
             if object_type == 29 {
                 ps = 1;
             }
@@ -141,7 +145,9 @@ impl AudioSpecificConfig {
             ps = 0;
         }
         if object_type != 2 {
-            return unsupported(format!("audio object type {object_type} (only AAC-LC cores)"));
+            return unsupported(format!(
+                "audio object type {object_type} (only AAC-LC cores)"
+            ));
         }
         if sampling_index >= 12 {
             return unsupported(format!("sampling index {sampling_index}"));
@@ -158,7 +164,14 @@ impl AudioSpecificConfig {
             // element_instance_tag, then decode_pce.
             br.skip(4);
             br.skip(2 + 4);
-            let (front, side, back, lfe, assoc, cc) = (br.bits(4), br.bits(4), br.bits(4), br.bits(2), br.bits(3), br.bits(4));
+            let (front, side, back, lfe, assoc, cc) = (
+                br.bits(4),
+                br.bits(4),
+                br.bits(4),
+                br.bits(2),
+                br.bits(3),
+                br.bits(4),
+            );
             for skip in [4, 4] {
                 if br.bit() {
                     br.skip(skip);
@@ -183,7 +196,17 @@ impl AudioSpecificConfig {
         } else if sbr == 1 && ps == -1 {
             ps = 1;
         }
-        Ok(Self { object_type, sampling_index, sample_rate, chan_config, channels, sbr, ps, ext_sample_rate, elem_tag })
+        Ok(Self {
+            object_type,
+            sampling_index,
+            sample_rate,
+            chan_config,
+            channels,
+            sbr,
+            ps,
+            ext_sample_rate,
+            elem_tag,
+        })
     }
 }
 
@@ -335,7 +358,11 @@ impl AacDecoder {
             temp: [0.0; 128],
             libfaac_skip: false,
             stats: ToolStats::default(),
-            sbr: Box::new(super::sbr::Sbr::new(if n == 1 { super::sbr::TYPE_SCE } else { super::sbr::TYPE_CPE })),
+            sbr: Box::new(super::sbr::Sbr::new(if n == 1 {
+                super::sbr::TYPE_SCE
+            } else {
+                super::sbr::TYPE_CPE
+            })),
             locked: false,
             ps_right: vec![0.0; 2048],
         })
@@ -381,7 +408,10 @@ impl AacDecoder {
             match elem_type {
                 0 | 3 => {
                     // SCE / LFE
-                    if self.config.channels != 1 || elem_id as u32 != self.config.elem_tag || elem_type == 3 {
+                    if self.config.channels != 1
+                        || elem_id as u32 != self.config.elem_tag
+                        || elem_type == 3
+                    {
                         return unsupported("element layout beyond mono SCE / stereo CPE");
                     }
                     if present[0] {
@@ -435,7 +465,8 @@ impl AacDecoder {
                         return invalid("FIL overread");
                     }
                     while cnt > 0 {
-                        cnt -= self.extension_payload(&mut br, cnt, have_prev.then_some(prev_type))?;
+                        cnt -=
+                            self.extension_payload(&mut br, cnt, have_prev.then_some(prev_type))?;
                     }
                 }
                 _ => unreachable!(),
@@ -480,7 +511,11 @@ impl AacDecoder {
         }
         if self.config.sbr > 0 {
             // ff_aac_sbr_apply on che->ch[0].output / ch[1].output (2048 each).
-            let id = if self.ch.len() == 2 { super::sbr::TYPE_CPE } else { super::sbr::TYPE_SCE };
+            let id = if self.ch.len() == 2 {
+                super::sbr::TYPE_CPE
+            } else {
+                super::sbr::TYPE_SCE
+            };
             let downsampled = self.config.ext_sample_rate < self.sbr.sample_rate as u32;
             let mut l = vec![0f32; 2048];
             l[..1024].copy_from_slice(&outputs[0]);
@@ -488,7 +523,8 @@ impl AacDecoder {
             if outputs.len() > 1 {
                 r[..1024].copy_from_slice(&outputs[1]);
             }
-            self.sbr.apply(id, &mut l, &mut r, downsampled, self.config.ps == 1);
+            self.sbr
+                .apply(id, &mut l, &mut r, downsampled, self.config.ps == 1);
             let (sbr_on, coupled, ps_on, ps34, ipd) = self.sbr.coverage();
             let st = &mut self.stats;
             st.sbr_frames += sbr_on as u64;
@@ -515,7 +551,12 @@ impl AacDecoder {
         Ok(())
     }
 
-    fn extension_payload(&mut self, br: &mut BitReader, cnt: isize, prev: Option<u32>) -> Result<isize, AacError> {
+    fn extension_payload(
+        &mut self,
+        br: &mut BitReader,
+        cnt: isize,
+        prev: Option<u32>,
+    ) -> Result<isize, AacError> {
         let ty = br.bits(4);
         match ty {
             0xd | 0xe => {
@@ -536,7 +577,8 @@ impl AacDecoder {
                 let core = self.config.sample_rate;
                 let ps_allowed = self.config.ps;
                 let mut ext = self.config.ext_sample_rate;
-                self.sbr.decode_extension(br, ty == 0xe, cnt, id, core, &mut ext, ps_allowed);
+                self.sbr
+                    .decode_extension(br, ty == 0xe, cnt, id, core, &mut ext, ps_allowed);
                 self.config.ext_sample_rate = ext;
                 Ok(cnt)
             }
@@ -559,8 +601,14 @@ impl AacDecoder {
                         let txt = String::from_utf8_lossy(rest);
                         let mut it = txt.splitn(2, '.');
                         let ok = |x: Option<&str>| {
-                            x.map(|v| v.trim_start().chars().take_while(|c| c.is_ascii_digit() || *c == '-').count() > 0)
-                                .unwrap_or(false)
+                            x.map(|v| {
+                                v.trim_start()
+                                    .chars()
+                                    .take_while(|c| c.is_ascii_digit() || *c == '-')
+                                    .count()
+                                    > 0
+                            })
+                            .unwrap_or(false)
                         };
                         if ok(it.next()) && ok(it.next()) {
                             self.libfaac_skip = true;
@@ -580,7 +628,10 @@ impl AacDecoder {
     fn decode_cpe(&mut self, br: &mut BitReader) -> Result<(), AacError> {
         let common_window = br.bit();
         let mut ms_present = 0;
-        let (mut c0, mut c1) = (std::mem::take(&mut self.ch[0]), std::mem::take(&mut self.ch[1]));
+        let (mut c0, mut c1) = (
+            std::mem::take(&mut self.ch[0]),
+            std::mem::take(&mut self.ch[1]),
+        );
         let r = (|| {
             if common_window {
                 self.decode_ics_info(br, &mut c0.ics)?;
@@ -656,7 +707,12 @@ impl AacDecoder {
         Ok(())
     }
 
-    fn decode_ics(&mut self, br: &mut BitReader, sce: &mut Sce, common_window: bool) -> Result<(), AacError> {
+    fn decode_ics(
+        &mut self,
+        br: &mut BitReader,
+        sce: &mut Sce,
+        common_window: bool,
+    ) -> Result<(), AacError> {
         let r = self.decode_ics_inner(br, sce, common_window);
         if r.is_err() {
             sce.tns.present = false;
@@ -664,7 +720,12 @@ impl AacDecoder {
         r
     }
 
-    fn decode_ics_inner(&mut self, br: &mut BitReader, sce: &mut Sce, common_window: bool) -> Result<(), AacError> {
+    fn decode_ics_inner(
+        &mut self,
+        br: &mut BitReader,
+        sce: &mut Sce,
+        common_window: bool,
+    ) -> Result<(), AacError> {
         let global_gain = br.bits(8) as i32;
         if !common_window {
             self.decode_ics_info(br, &mut sce.ics)?;
@@ -677,7 +738,10 @@ impl AacDecoder {
             if sce.ics.window_sequence[0] == EIGHT_SHORT {
                 return invalid("Pulse tool not allowed in eight short sequence");
             }
-            pulse = Some(decode_pulses(br, sce.ics.swb_offset, sce.ics.num_swb).ok_or(AacError::Invalid("pulse".into()))?);
+            pulse = Some(
+                decode_pulses(br, sce.ics.swb_offset, sce.ics.num_swb)
+                    .ok_or(AacError::Invalid("pulse".into()))?,
+            );
             self.stats.pulses += 1;
         }
         sce.tns.present = br.bit();
@@ -690,7 +754,12 @@ impl AacDecoder {
         self.decode_spectrum_and_dequant(br, pulse.as_ref(), sce)
     }
 
-    fn decode_spectrum_and_dequant(&mut self, br: &mut BitReader, pulse: Option<&Pulse>, sce: &mut Sce) -> Result<(), AacError> {
+    fn decode_spectrum_and_dequant(
+        &mut self,
+        br: &mut BitReader,
+        pulse: Option<&Pulse>,
+        sce: &mut Sce,
+    ) -> Result<(), AacError> {
         let tb = tables();
         let ics = &sce.ics;
         let c = 1024 / ics.num_windows;
@@ -719,7 +788,10 @@ impl AacDecoder {
                         let s = base + grp * 128 + off;
                         let cf = &mut coef[s..s + off_len];
                         for v in cf.iter_mut() {
-                            self.random_state = self.random_state.wrapping_mul(1664525).wrapping_add(1013904223);
+                            self.random_state = self
+                                .random_state
+                                .wrapping_mul(1664525)
+                                .wrapping_add(1013904223);
                             *v = self.random_state as i32 as f32;
                         }
                         let band_energy = scalarproduct(cf);
@@ -735,7 +807,9 @@ impl AacDecoder {
                     for grp in 0..g_len {
                         let s = base + grp * 128 + off;
                         let cf = &mut coef[s..s + off_len];
-                        let read = |br: &mut BitReader| vl.read(br).ok_or(AacError::Invalid("spectral VLC".into()));
+                        let read = |br: &mut BitReader| {
+                            vl.read(br).ok_or(AacError::Invalid("spectral VLC".into()))
+                        };
                         match cbt_m1 >> 1 {
                             0 => {
                                 for q in cf.chunks_exact_mut(4) {
@@ -778,7 +852,11 @@ impl AacDecoder {
                                 for q in cf.chunks_exact_mut(2) {
                                     let ix = read(br)?;
                                     let nnz = ix >> 8 & 15;
-                                    let sign = if nnz != 0 { br.show(nnz) << (ix >> 12) } else { 0 };
+                                    let sign = if nnz != 0 {
+                                        br.show(nnz) << (ix >> 12)
+                                    } else {
+                                        0
+                                    };
                                     br.skip(nnz);
                                     // VMUL2S
                                     let sb = sfv.to_bits();
@@ -797,7 +875,11 @@ impl AacDecoder {
                                     }
                                     let nnz = ix >> 12;
                                     let nzt = ix >> 8;
-                                    let mut bits = if nnz != 0 { br.show(nnz) << (32 - nnz) } else { 0 };
+                                    let mut bits = if nnz != 0 {
+                                        br.show(nnz) << (32 - nnz)
+                                    } else {
+                                        0
+                                    };
                                     br.skip(nnz);
                                     for (j, slot) in q.iter_mut().enumerate() {
                                         if nzt & (1 << j) != 0 {
@@ -809,7 +891,9 @@ impl AacDecoder {
                                             br.skip(b + 1);
                                             let b = b + 4;
                                             let n = (1u32 << b) + br.bits(b);
-                                            *slot = f32::from_bits(tb.cbrt[n as usize] | (bits & 1 << 31));
+                                            *slot = f32::from_bits(
+                                                tb.cbrt[n as usize] | (bits & 1 << 31),
+                                            );
                                             bits <<= 1;
                                         } else {
                                             let v = vq[(ix & 15) as usize].to_bits();
@@ -860,7 +944,8 @@ impl AacDecoder {
         for g in 0..ics.num_window_groups {
             for sfb in 0..max_sfb {
                 let idx = g * max_sfb + sfb;
-                if self.ms_mask[idx] && c0.band_type[idx] < NOISE_BT && c1.band_type[idx] < NOISE_BT {
+                if self.ms_mask[idx] && c0.band_type[idx] < NOISE_BT && c1.band_type[idx] < NOISE_BT
+                {
                     ms_bands += 1;
                     for grp in 0..ics.group_len[g] {
                         let s = base + grp * 128 + offsets[sfb] as usize;
@@ -906,15 +991,28 @@ impl AacDecoder {
     fn imdct_and_windowing(&mut self, sce: &mut Sce) {
         let tb = tables();
         let ics = &sce.ics;
-        let swindow: &[f32] = if ics.use_kb_window[0] { &tb.kbd_short } else { &tb.sine_short };
-        let lwindow_prev: &[f32] = if ics.use_kb_window[1] { &tb.kbd_long } else { &tb.sine_long };
-        let swindow_prev: &[f32] = if ics.use_kb_window[1] { &tb.kbd_short } else { &tb.sine_short };
+        let swindow: &[f32] = if ics.use_kb_window[0] {
+            &tb.kbd_short
+        } else {
+            &tb.sine_short
+        };
+        let lwindow_prev: &[f32] = if ics.use_kb_window[1] {
+            &tb.kbd_long
+        } else {
+            &tb.sine_long
+        };
+        let swindow_prev: &[f32] = if ics.use_kb_window[1] {
+            &tb.kbd_short
+        } else {
+            &tb.sine_short
+        };
         let buf = &mut self.buf;
         let temp = &mut self.temp;
         let (ws0, ws1) = (ics.window_sequence[0], ics.window_sequence[1]);
         if ws0 == EIGHT_SHORT {
             for i in (0..1024).step_by(128) {
-                tb.imdct_short.run(&sce.coeffs[i..i + 128], &mut buf[i..i + 128]);
+                tb.imdct_short
+                    .run(&sce.coeffs[i..i + 128], &mut buf[i..i + 128]);
             }
         } else {
             tb.imdct_long.run(&sce.coeffs, buf);
@@ -928,8 +1026,20 @@ impl AacDecoder {
             if ws0 == EIGHT_SHORT {
                 vector_fmul_window(&mut out[448..], &saved[448..], &buf[0..], swindow_prev, 64);
                 vector_fmul_window(&mut out[448 + 128..], &buf[64..], &buf[128..], swindow, 64);
-                vector_fmul_window(&mut out[448 + 256..], &buf[128 + 64..], &buf[256..], swindow, 64);
-                vector_fmul_window(&mut out[448 + 384..], &buf[256 + 64..], &buf[384..], swindow, 64);
+                vector_fmul_window(
+                    &mut out[448 + 256..],
+                    &buf[128 + 64..],
+                    &buf[256..],
+                    swindow,
+                    64,
+                );
+                vector_fmul_window(
+                    &mut out[448 + 384..],
+                    &buf[256 + 64..],
+                    &buf[384..],
+                    swindow,
+                    64,
+                );
                 vector_fmul_window(temp, &buf[384 + 64..], &buf[512..], swindow, 64);
                 out[448 + 512..1024].copy_from_slice(&temp[..64]);
             } else {
@@ -940,8 +1050,20 @@ impl AacDecoder {
         if ws0 == EIGHT_SHORT {
             saved[..64].copy_from_slice(&temp[64..128]);
             vector_fmul_window(&mut saved[64..], &buf[512 + 64..], &buf[640..], swindow, 64);
-            vector_fmul_window(&mut saved[192..], &buf[640 + 64..], &buf[768..], swindow, 64);
-            vector_fmul_window(&mut saved[320..], &buf[768 + 64..], &buf[896..], swindow, 64);
+            vector_fmul_window(
+                &mut saved[192..],
+                &buf[640 + 64..],
+                &buf[768..],
+                swindow,
+                64,
+            );
+            vector_fmul_window(
+                &mut saved[320..],
+                &buf[768 + 64..],
+                &buf[896..],
+                swindow,
+                64,
+            );
             saved[448..512].copy_from_slice(&buf[896 + 64..1024]);
         } else if ws0 == LONG_START {
             saved[..448].copy_from_slice(&buf[512..960]);
@@ -954,7 +1076,11 @@ impl AacDecoder {
 
 fn decode_band_types(br: &mut BitReader, sce: &mut Sce) -> Result<(), AacError> {
     let ics = &sce.ics;
-    let bits = if ics.window_sequence[0] == EIGHT_SHORT { 3 } else { 5 };
+    let bits = if ics.window_sequence[0] == EIGHT_SHORT {
+        3
+    } else {
+        5
+    };
     for g in 0..ics.num_window_groups {
         let mut k = 0;
         while k < ics.max_sfb {
@@ -985,12 +1111,20 @@ fn decode_band_types(br: &mut BitReader, sce: &mut Sce) -> Result<(), AacError> 
     Ok(())
 }
 
-fn decode_scalefactors(br: &mut BitReader, sce: &mut Sce, global_gain: i32) -> Result<(), AacError> {
+fn decode_scalefactors(
+    br: &mut BitReader,
+    sce: &mut Sce,
+    global_gain: i32,
+) -> Result<(), AacError> {
     let ics = &sce.ics;
     let mut offset = [global_gain, global_gain - 90, 0];
     let mut noise_flag = 1;
     let vl = vlc::scalefactor();
-    let read = |br: &mut BitReader| vl.read(br).map(|v| v as i32 - 60).ok_or(AacError::Invalid("scalefactor VLC".into()));
+    let read = |br: &mut BitReader| {
+        vl.read(br)
+            .map(|v| v as i32 - 60)
+            .ok_or(AacError::Invalid("scalefactor VLC".into()))
+    };
     for g in 0..ics.num_window_groups {
         for sfb in 0..ics.max_sfb {
             let i = g * ics.max_sfb + sfb;
@@ -1037,7 +1171,11 @@ fn dequant_scalefactors(sce: &mut Sce) {
 }
 
 fn decode_pulses(br: &mut BitReader, swb_offset: &[u16], num_swb: usize) -> Option<Pulse> {
-    let mut p = Pulse { num_pulse: br.bits(2) as usize + 1, pos: [0; 4], amp: [0; 4] };
+    let mut p = Pulse {
+        num_pulse: br.bits(2) as usize + 1,
+        pos: [0; 4],
+        amp: [0; 4],
+    };
     let swb = br.bits(6) as usize;
     if swb >= num_swb {
         return None;
@@ -1185,4 +1323,3 @@ fn decode_dynamic_range(br: &mut BitReader) -> isize {
     }
     n
 }
-

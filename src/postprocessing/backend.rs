@@ -73,7 +73,8 @@ impl PostBackend for Renderer {
     }
 
     fn registered_target(&self, id: u32) -> Option<Target> {
-        self.registered_render_target(id).map(|rt| Target::from_registered(id, rt))
+        self.registered_render_target(id)
+            .map(|rt| Target::from_registered(id, rt))
     }
 
     fn unregister_render_target(&mut self, id: u32) {

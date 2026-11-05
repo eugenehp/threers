@@ -176,7 +176,9 @@ impl IkChain {
             .enumerate()
             .map(|(i, &position)| IkJoint {
                 position,
-                length: points.get(i + 1).map_or(0.0, |next| (*next - position).length()),
+                length: points
+                    .get(i + 1)
+                    .map_or(0.0, |next| (*next - position).length()),
                 constraint: None,
                 scene_object: None,
             })
@@ -298,8 +300,9 @@ impl IkChain {
             // Backward pass: pin the tip to the target and walk toward the root.
             self.joints[n - 1].position = target;
             for i in (0..n - 1).rev() {
-                let direction = try_normalize(self.joints[i].position - self.joints[i + 1].position)
-                    .unwrap_or(Vector3::UP);
+                let direction =
+                    try_normalize(self.joints[i].position - self.joints[i + 1].position)
+                        .unwrap_or(Vector3::UP);
                 self.joints[i].position =
                     self.joints[i + 1].position + direction * self.joints[i].length;
             }
@@ -312,7 +315,9 @@ impl IkChain {
                 let mut direction =
                     try_normalize(self.joints[i + 1].position - self.joints[i].position)
                         .unwrap_or(Vector3::UP);
-                if let (Some(constraint), Some(previous)) = (self.joints[i].constraint, self.previous_direction(i)) {
+                if let (Some(constraint), Some(previous)) =
+                    (self.joints[i].constraint, self.previous_direction(i))
+                {
                     direction = constraint.apply(direction, previous);
                 }
                 self.joints[i + 1].position =
@@ -395,9 +400,7 @@ impl IkChain {
                             // Exactly opposed: swing through half a turn, and
                             // any perpendicular axis will do it.
                             (perpendicular, std::f32::consts::PI)
-                        } else if ((target - pivot).length()
-                            - (self.tip() - pivot).length())
-                        .abs()
+                        } else if ((target - pivot).length() - (self.tip() - pivot).length()).abs()
                             > self.tolerance
                         {
                             // Aligned, but the wrong distance away — the target
@@ -427,8 +430,8 @@ impl IkChain {
                 if let (Some(constraint), Some(previous)) =
                     (self.joints[i].constraint, self.previous_direction(i))
                 {
-                    let direction = try_normalize(self.joints[i + 1].position - pivot)
-                        .unwrap_or(previous);
+                    let direction =
+                        try_normalize(self.joints[i + 1].position - pivot).unwrap_or(previous);
                     let clamped = constraint.apply(direction, previous);
                     self.rebuild_from(i, clamped);
                 }
@@ -595,7 +598,11 @@ mod tests {
         let mut arm = straight_arm(3, 1.0);
         let target = Vector3::new(1.0, 2.0, 0.0);
         let result = arm.solve(target);
-        assert!(result.reached, "error {} after {} iters", result.error, result.iterations);
+        assert!(
+            result.reached,
+            "error {} after {} iters",
+            result.error, result.iterations
+        );
         assert!((arm.tip() - target).length() <= arm.tolerance);
     }
 
@@ -610,7 +617,11 @@ mod tests {
             Vector3::new(2.9, 0.0, 0.0),
         ] {
             arm.solve(target);
-            assert!(arm.root().length() < 1e-4, "root drifted to {:?}", arm.root());
+            assert!(
+                arm.root().length() < 1e-4,
+                "root drifted to {:?}",
+                arm.root()
+            );
             for (a, b) in segment_lengths(&arm).iter().zip(&original) {
                 assert!((a - b).abs() < 1e-3, "segment stretched: {a} vs {b}");
             }
@@ -636,7 +647,9 @@ mod tests {
         let mut arm = straight_arm(3, 1.0);
         arm.solve(Vector3::ZERO);
         for j in &arm.joints {
-            assert!(j.position.x.is_finite() && j.position.y.is_finite() && j.position.z.is_finite());
+            assert!(
+                j.position.x.is_finite() && j.position.y.is_finite() && j.position.z.is_finite()
+            );
         }
     }
 
@@ -713,7 +726,10 @@ mod tests {
             let a = (arm.joints[i].position - arm.joints[i - 1].position).normalize();
             let b = (arm.joints[i + 1].position - arm.joints[i].position).normalize();
             let angle = a.dot(b).clamp(-1.0, 1.0).acos();
-            assert!(angle <= limit + 0.05, "joint {i} bent {angle}, past the {limit} cone");
+            assert!(
+                angle <= limit + 0.05,
+                "joint {i} bent {angle}, past the {limit} cone"
+            );
         }
     }
 

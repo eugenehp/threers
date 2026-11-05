@@ -300,12 +300,15 @@ impl Vehicle {
         let body = world.body(self.body)?;
         let chassis = &body.position;
         let down = try_normalize(chassis.transform_vector(wheel.config.direction))?;
-        let centre = chassis.transform_point(wheel.config.attachment) + down * wheel.suspension_length;
+        let centre =
+            chassis.transform_point(wheel.config.attachment) + down * wheel.suspension_length;
 
         let up = down * -1.0;
         let steer = Quaternion::from_axis_angle(up, wheel.steering);
-        let axle = chassis.transform_vector(wheel.config.axle);
-        let spin = Quaternion::from_axis_angle(try_normalize(axle)?, wheel.spin);
+        // In the wheel's own frame, where its axle is `config.axle`, and so on
+        // the right of the product. Forward is -Z, so rolling forward about +X
+        // is a negative angle, while `spin` counts forward as positive.
+        let spin = Quaternion::from_axis_angle(try_normalize(wheel.config.axle)?, -wheel.spin);
         Some(Isometry::new(
             centre,
             steer.multiply(chassis.rotation).multiply(spin),
@@ -350,11 +353,10 @@ impl Vehicle {
                 Some(hit) => {
                     // The suspension holds the *axle*, so the length is to the
                     // hub, not to the ground: one radius shorter than the ray.
-                    let length =
-                        (hit.toi - wheel.config.radius).clamp(
-                            wheel.config.rest_length - wheel.config.max_travel,
-                            wheel.config.rest_length,
-                        );
+                    let length = (hit.toi - wheel.config.radius).clamp(
+                        wheel.config.rest_length - wheel.config.max_travel,
+                        wheel.config.rest_length,
+                    );
                     wheel.suspension_length = length;
                     wheel.contact = Some(WheelContact {
                         body: hit.body,
@@ -544,8 +546,7 @@ impl Vehicle {
         };
 
         wheel.slip = if grip > 0.0 {
-            let demanded =
-                (wanted_forward * wanted_forward + wanted_side * wanted_side).sqrt();
+            let demanded = (wanted_forward * wanted_forward + wanted_side * wanted_side).sqrt();
             ((demanded - grip) / grip).clamp(0.0, 1.0)
         } else {
             0.0
@@ -633,7 +634,11 @@ mod tests {
             (0.4..0.9).contains(&y),
             "the car settled at y = {y}, which is either sunk or floating"
         );
-        assert_eq!(car.wheels_on_ground(), 4, "not every wheel found the ground");
+        assert_eq!(
+            car.wheels_on_ground(),
+            4,
+            "not every wheel found the ground"
+        );
     }
 
     #[test]
@@ -657,7 +662,10 @@ mod tests {
         car.set_drive(4000.0);
         drive(&mut world, &mut car, 180);
         let cruising = car.speed(&world);
-        assert!(cruising > 2.0, "three seconds of throttle reached {cruising} units/s");
+        assert!(
+            cruising > 2.0,
+            "three seconds of throttle reached {cruising} units/s"
+        );
 
         car.set_drive(0.0);
         car.set_brake(6000.0);
@@ -696,7 +704,10 @@ mod tests {
 
         let end = world.body(car.body).unwrap().translation();
         let travelled = end - start;
-        assert!(travelled.length() > 3.0, "the car barely moved: {travelled:?}");
+        assert!(
+            travelled.length() > 3.0,
+            "the car barely moved: {travelled:?}"
+        );
         // It set off down -Z; turning must give it some x as well.
         assert!(
             travelled.x.abs() > 0.5,
@@ -734,7 +745,11 @@ mod tests {
         car.set_steering(0.4);
         drive(&mut world, &mut car, 240);
         let slipping = car.wheels.iter().any(|w| w.slip > 0.05);
-        assert!(slipping, "no wheel reported slip: {:?}", car.wheels.iter().map(|w| w.slip).collect::<Vec<_>>());
+        assert!(
+            slipping,
+            "no wheel reported slip: {:?}",
+            car.wheels.iter().map(|w| w.slip).collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -850,9 +865,15 @@ mod tests {
             .map(|w| w.drive_torque)
             .collect();
         assert_eq!(driven.len(), 2);
-        assert!(driven.iter().all(|t| (t - 2000.0).abs() < 1e-3), "{driven:?}");
         assert!(
-            car.wheels.iter().filter(|w| !w.config.powered).all(|w| w.drive_torque == 0.0),
+            driven.iter().all(|t| (t - 2000.0).abs() < 1e-3),
+            "{driven:?}"
+        );
+        assert!(
+            car.wheels
+                .iter()
+                .filter(|w| !w.config.powered)
+                .all(|w| w.drive_torque == 0.0),
             "an undriven wheel got torque"
         );
     }
@@ -872,6 +893,55 @@ mod tests {
             "the wheel did not move with the suspension"
         );
         assert!(car.wheel_transform(&world, 99).is_none());
+    }
+
+    /// A rear wheel's axle stays the chassis's axle, and the top of the wheel
+    /// moves forward relative to its centre, at the car's speed: rolling, on
+    /// any heading.
+    #[test]
+    fn a_wheel_rolls_about_its_axle_the_way_the_car_goes() {
+        for heading in [0.0f32, 1.0, -2.5] {
+            let (mut world, mut car) = car_world();
+            let turned = Quaternion::from_axis_angle(Vector3::new(0.0, 1.0, 0.0), heading);
+            let body = world.body_mut(car.body).unwrap();
+            body.set_position(Isometry::new(Vector3::new(0.0, 1.0, 0.0), turned));
+            drive(&mut world, &mut car, 120);
+            car.set_drive(1500.0);
+            drive(&mut world, &mut car, 120);
+
+            let rear = 2;
+            let speed = car.speed(&world);
+            assert!(speed > 2.0, "heading {heading}: speed {speed}");
+            let chassis = world.body(car.body).unwrap().position;
+            let forward = chassis.transform_vector(Vector3::new(0.0, 0.0, -1.0));
+            let axle = chassis.transform_vector(Vector3::new(1.0, 0.0, 0.0));
+
+            // The point of the rim at the top now, in the wheel's own frame.
+            let start = car.wheel_transform(&world, rear).unwrap();
+            let rim = start.inverse_transform_vector(Vector3::new(0.0, 0.35, 0.0));
+            let top = |car: &Vehicle, world: &World| {
+                let pose = car.wheel_transform(world, rear).unwrap();
+                pose.transform_vector(rim)
+            };
+            let wheel_axle = car
+                .wheel_transform(&world, rear)
+                .unwrap()
+                .transform_vector(Vector3::new(1.0, 0.0, 0.0));
+            assert!(
+                wheel_axle.dot(axle) > 0.999,
+                "heading {heading}: axle {wheel_axle:?} against {axle:?}"
+            );
+
+            let before = top(&car, &world);
+            drive(&mut world, &mut car, 1);
+            let after = top(&car, &world);
+            let moved = (after - before) * (1.0 / DT);
+            let along = moved.dot(forward);
+            assert!(
+                (along - speed).abs() < speed * 0.25,
+                "heading {heading}: the top moves {along} along the car, the car {speed}"
+            );
+        }
     }
 
     #[test]
@@ -900,5 +970,3 @@ mod tests {
         assert_eq!(car.speed(&world), 0.0);
     }
 }
-
-

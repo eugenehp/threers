@@ -1,8 +1,8 @@
 //! H.264 deblocking (§8.7), run over a whole decoded picture.
 
 use super::slice::{CurPic, SliceDeblock};
-use crate::decode::picture::Plane;
 use super::types::MbInfo;
+use crate::decode::picture::Plane;
 use crate::h264::deblock_tables::{ALPHA, BETA, TC0};
 
 /// Boundary strength between 4×4 block `kp` of `p` and `kq` of `q`.
@@ -32,8 +32,16 @@ fn strength(intra_bs: u8, p: &MbInfo, kp: usize, q: &MbInfo, kq: usize, mvy: i32
         return 1;
     }
     if np == 1 {
-        let (rp, mp) = if pr[0] >= 0 { (pr[0], pm[0]) } else { (pr[1], pm[1]) };
-        let (rq, mq) = if qr[0] >= 0 { (qr[0], qm[0]) } else { (qr[1], qm[1]) };
+        let (rp, mp) = if pr[0] >= 0 {
+            (pr[0], pm[0])
+        } else {
+            (pr[1], pm[1])
+        };
+        let (rq, mq) = if qr[0] >= 0 {
+            (qr[0], qm[0])
+        } else {
+            (qr[1], qm[1])
+        };
         return (rp != rq || far(mp, mq)) as u8;
     }
     if np == 0 {
@@ -51,8 +59,7 @@ fn strength(intra_bs: u8, p: &MbInfo, kp: usize, q: &MbInfo, kq: usize, mvy: i32
             (far(pm[0], qm[1]) || far(pm[1], qm[0])) as u8
         }
     } else {
-        ((far(pm[0], qm[0]) || far(pm[1], qm[1])) && (far(pm[0], qm[1]) || far(pm[1], qm[0])))
-            as u8
+        ((far(pm[0], qm[0]) || far(pm[1], qm[1])) && (far(pm[0], qm[1]) || far(pm[1], qm[0]))) as u8
     }
 }
 
@@ -109,12 +116,14 @@ fn filter_edge(
                 data[px(0)] = (p0 + delta).clamp(0, max) as u16;
                 data[qx(0)] = (q0 - delta).clamp(0, max) as u16;
                 if ap < beta {
-                    data[px(1)] =
-                        (p1 + ((p2 + ((p0 + q0 + 1) >> 1) - (p1 << 1)) >> 1).clamp(-tc0, tc0)) as u16;
+                    data[px(1)] = (p1
+                        + ((p2 + ((p0 + q0 + 1) >> 1) - (p1 << 1)) >> 1).clamp(-tc0, tc0))
+                        as u16;
                 }
                 if aq < beta {
-                    data[qx(1)] =
-                        (q1 + ((q2 + ((p0 + q0 + 1) >> 1) - (q1 << 1)) >> 1).clamp(-tc0, tc0)) as u16;
+                    data[qx(1)] = (q1
+                        + ((q2 + ((p0 + q0 + 1) >> 1) - (q1 << 1)) >> 1).clamp(-tc0, tc0))
+                        as u16;
                 }
             } else {
                 let p3 = data[px(3)] as i32;
@@ -151,38 +160,30 @@ fn filter_edge(
 /// `chroma_format_idc` 0 (no chroma), 1 (4:2:0) or 2 (4:2:2).
 /// `field`: a field picture (horizontal intra MB edges take strength 3, and
 /// vertical motion differences count from 2, both in field units).
-pub fn deblock_picture(pic: &mut CurPic, bd_y: u32, bd_c: u32, chroma_format_idc: u32, field: bool) {
+pub fn deblock_picture(
+    pic: &mut CurPic,
+    bd_y: u32,
+    bd_c: u32,
+    chroma_format_idc: u32,
+    field: bool,
+) {
     let n = pic.w_mbs * pic.h_mbs;
-    let f = Filter { bd_y, bd_c, chroma_format_idc, field };
-    deblock_mbs(&mut pic.planes, &pic.mbs, &pic.slices, pic.w_mbs, 0..n, 2, 0, &f);
-}
-
-/// Macroblock row `my` of `pic` after only its own vertical-edge filtering,
-/// as `[luma, cb, cr]` planes one macroblock row high.
-///
-/// ffmpeg intra-predicts from this state in one case: in a field picture
-/// whose slice has `disable_deblocking_filter_idc` 2, `xchg_mb_border` looks
-/// for the top-left macroblock at `mb_xy - 1 - mb_stride`, which is in the
-/// other field (whose `slice_table` entries the field start cleared), so it
-/// never swaps the unfiltered top-left samples back in. Horizontal edges do
-/// not reach a row's last line before the next row is filtered, so vertical
-/// edges are all that line has seen.
-pub fn row_after_vertical(pic: &CurPic, my: usize, bd_y: u32, bd_c: u32, chroma_format_idc: u32) -> [Plane; 3] {
-    let chh = if chroma_format_idc == 2 { 16 } else { 8 };
-    let rows = |p: &Plane, h: usize| Plane {
-        data: p.data[my * h * p.width..(my + 1) * h * p.width].to_vec(),
-        width: p.width,
-        height: h,
+    let f = Filter {
+        bd_y,
+        bd_c,
+        chroma_format_idc,
+        field,
     };
-    let mut planes = [rows(&pic.planes[0], 16), Plane::new(0, 0, 0), Plane::new(0, 0, 0)];
-    if chroma_format_idc != 0 {
-        planes[1] = rows(&pic.planes[1], chh);
-        planes[2] = rows(&pic.planes[2], chh);
-    }
-    let f = Filter { bd_y, bd_c, chroma_format_idc, field: true };
-    let w = pic.w_mbs;
-    deblock_mbs(&mut planes, &pic.mbs, &pic.slices, w, my * w..(my + 1) * w, 1, my, &f);
-    planes
+    deblock_mbs(
+        &mut pic.planes,
+        &pic.mbs,
+        &pic.slices,
+        pic.w_mbs,
+        0..n,
+        2,
+        0,
+        &f,
+    );
 }
 
 #[derive(Clone, Copy)]
@@ -206,7 +207,12 @@ fn deblock_mbs(
     base_row: usize,
     f: &Filter,
 ) {
-    let Filter { bd_y, bd_c, chroma_format_idc, field } = *f;
+    let Filter {
+        bd_y,
+        bd_c,
+        chroma_format_idc,
+        field,
+    } = *f;
     let mvy = if field { 2 } else { 4 };
     let top_bs = if field { 3 } else { 4 };
     let chroma = chroma_format_idc != 0;
@@ -224,12 +230,12 @@ fn deblock_mbs(
             continue;
         }
         let (mx, my) = (addr % w_mbs, addr / w_mbs);
-        let left = (mx > 0).then(|| &mbs[addr - 1]).filter(|l| {
-            l.slice != u32::MAX && !(sp.disable == 2 && l.slice != q.slice)
-        });
-        let top = (my > 0).then(|| &mbs[addr - w_mbs]).filter(|t| {
-            t.slice != u32::MAX && !(sp.disable == 2 && t.slice != q.slice)
-        });
+        let left = (mx > 0)
+            .then(|| &mbs[addr - 1])
+            .filter(|l| l.slice != u32::MAX && !(sp.disable == 2 && l.slice != q.slice));
+        let top = (my > 0)
+            .then(|| &mbs[addr - w_mbs])
+            .filter(|t| t.slice != u32::MAX && !(sp.disable == 2 && t.slice != q.slice));
         // Strengths: [vertical/horizontal][edge][segment].
         let mut bs = [[[0u8; 4]; 4]; 2];
         // With 4:2:2 the internal horizontal chroma edges are filtered even
@@ -237,7 +243,10 @@ fn deblock_mbs(
         let mut skip_luma = [[false; 4]; 2];
         for e in 0..4 {
             if q.t8x8 && e % 2 == 1 {
-                skip_luma = [[skip_luma[0][0], true, skip_luma[0][2], true], [skip_luma[1][0], true, skip_luma[1][2], true]];
+                skip_luma = [
+                    [skip_luma[0][0], true, skip_luma[0][2], true],
+                    [skip_luma[1][0], true, skip_luma[1][2], true],
+                ];
                 if !c422 {
                     continue;
                 }
@@ -395,11 +404,16 @@ pub fn deblock_mbaff(pic: &mut CurPic, bd_y: u32, bd_c: u32, chroma_format_idc: 
                 continue;
             }
             let (a_off, b_off) = (sp.alpha, sp.beta);
-            let avail = |m: &MbInfo| m.slice != u32::MAX && !(sp.disable == 2 && m.slice != q.slice);
+            let avail =
+                |m: &MbInfo| m.slice != u32::MAX && !(sp.disable == 2 && m.slice != q.slice);
             let field = q.field;
             let mvy = if field { 2 } else { 4 };
             // Picture row of the macroblock's view row 0, and the step.
-            let (ly0, step) = if field { (32 * pr + bot, 2) } else { (16 * my, 1) };
+            let (ly0, step) = if field {
+                (32 * pr + bot, 2)
+            } else {
+                (16 * my, 1)
+            };
             let cy0 = if field { 2 * chh * pr + bot } else { chh * my };
             let (x0, cx0) = (mx * 16, mx * 8);
             let ls = step * wl;
@@ -409,7 +423,10 @@ pub fn deblock_mbaff(pic: &mut CurPic, bd_y: u32, bd_c: u32, chroma_format_idc: 
 
             // ---- Left macroblock edge.
             let (lt, lb) = if mx > 0 {
-                (pic.mbs[2 * pr * w + mx - 1], pic.mbs[(2 * pr + 1) * w + mx - 1])
+                (
+                    pic.mbs[2 * pr * w + mx - 1],
+                    pic.mbs[(2 * pr + 1) * w + mx - 1],
+                )
             } else {
                 (MbInfo::default(), MbInfo::default())
             };
@@ -435,12 +452,30 @@ pub fn deblock_mbaff(pic: &mut CurPic, bd_y: u32, bd_c: u32, chroma_format_idc: 
                     } else {
                         ((ly0 + half) * wl + x0, 2 * wl, half)
                     };
-                    let bsi = |l: usize| if field { bs[4 * half + l / 2] } else { bs[half + 2 * (l / 2)] };
+                    let bsi = |l: usize| {
+                        if field {
+                            bs[4 * half + l / 2]
+                        } else {
+                            bs[half + 2 * (l / 2)]
+                        }
+                    };
                     let mut lines = [0u8; 8];
                     for (l, v) in lines.iter_mut().enumerate() {
                         *v = mbaff_line_bs(bs[first], bsi(l));
                     }
-                    filter_edge(&mut pic.planes[0].data, at, 1, along, 8, &lines, qp_av(mbn), a_off, b_off, bd_y, true);
+                    filter_edge(
+                        &mut pic.planes[0].data,
+                        at,
+                        1,
+                        along,
+                        8,
+                        &lines,
+                        qp_av(mbn),
+                        a_off,
+                        b_off,
+                        bd_y,
+                        true,
+                    );
                     if chroma {
                         let n = chh / 2;
                         let (cat, calong) = if field {
@@ -451,11 +486,27 @@ pub fn deblock_mbaff(pic: &mut CurPic, bd_y: u32, bd_c: u32, chroma_format_idc: 
                         let per = n / 4;
                         let mut cl = [0u8; 8];
                         for (l, v) in cl.iter_mut().enumerate().take(n) {
-                            let b = if field { bs[4 * half + l / per] } else { bs[half + 2 * (l / per)] };
+                            let b = if field {
+                                bs[4 * half + l / per]
+                            } else {
+                                bs[half + 2 * (l / per)]
+                            };
                             *v = mbaff_line_bs(bs[first], b);
                         }
                         for c in 0..2 {
-                            filter_edge(&mut pic.planes[1 + c].data, cat, 1, calong, n, &cl[..n], qpc_av(mbn, c), a_off, b_off, bd_c, false);
+                            filter_edge(
+                                &mut pic.planes[1 + c].data,
+                                cat,
+                                1,
+                                calong,
+                                n,
+                                &cl[..n],
+                                qpc_av(mbn, c),
+                                a_off,
+                                b_off,
+                                bd_c,
+                                false,
+                            );
                         }
                     }
                 }
@@ -488,7 +539,11 @@ pub fn deblock_mbaff(pic: &mut CurPic, bd_y: u32, bd_c: u32, chroma_format_idc: 
                 // Field macroblock: the same field's row above. A top field
                 // macroblock over a frame pair meets that pair's bottom MB.
                 let above_top = pic.mbs[(2 * pr - 2) * w + mx];
-                let a = if bot == 0 && above_top.field { (2 * pr - 2) * w + mx } else { (2 * pr - 1) * w + mx };
+                let a = if bot == 0 && above_top.field {
+                    (2 * pr - 2) * w + mx
+                } else {
+                    (2 * pr - 1) * w + mx
+                };
                 top_p = Some(pic.mbs[a]).filter(avail);
             }
             if let Some(p) = top_p {
@@ -527,7 +582,11 @@ pub fn deblock_mbaff(pic: &mut CurPic, bd_y: u32, bd_c: u32, chroma_format_idc: 
                     bs[1][e][s] = strength(3, &q, (e - 1) * 4 + s, &q, e * 4 + s, mvy);
                 }
             }
-            let left_p = if left_ok && lt.field == field { Some(pic.mbs[addr - 1]) } else { None };
+            let left_p = if left_ok && lt.field == field {
+                Some(pic.mbs[addr - 1])
+            } else {
+                None
+            };
             for dir in 0..2 {
                 if dir == 1 && double_top {
                     for j in 0..2 {
@@ -545,7 +604,19 @@ pub fn deblock_mbaff(pic: &mut CurPic, bd_y: u32, bd_c: u32, chroma_format_idc: 
                             *l = bs[i / 4];
                         }
                         let at = (16 * my + j) * wl + x0;
-                        filter_edge(&mut pic.planes[0].data, at, 2 * wl, 1, 16, &lines, qp_av(&mbn), a_off, b_off, bd_y, true);
+                        filter_edge(
+                            &mut pic.planes[0].data,
+                            at,
+                            2 * wl,
+                            1,
+                            16,
+                            &lines,
+                            qp_av(&mbn),
+                            a_off,
+                            b_off,
+                            bd_y,
+                            true,
+                        );
                         if chroma {
                             let mut cl = [0u8; 8];
                             for (i, l) in cl.iter_mut().enumerate() {
@@ -553,7 +624,19 @@ pub fn deblock_mbaff(pic: &mut CurPic, bd_y: u32, bd_c: u32, chroma_format_idc: 
                             }
                             let cat = (chh * my + j) * wc + cx0;
                             for c in 0..2 {
-                                filter_edge(&mut pic.planes[1 + c].data, cat, 2 * wc, 1, 8, &cl, qpc_av(&mbn, c), a_off, b_off, bd_c, false);
+                                filter_edge(
+                                    &mut pic.planes[1 + c].data,
+                                    cat,
+                                    2 * wc,
+                                    1,
+                                    8,
+                                    &cl,
+                                    qpc_av(&mbn, c),
+                                    a_off,
+                                    b_off,
+                                    bd_c,
+                                    false,
+                                );
                             }
                         }
                     }
@@ -564,7 +647,11 @@ pub fn deblock_mbaff(pic: &mut CurPic, bd_y: u32, bd_c: u32, chroma_format_idc: 
                         continue;
                     }
                     let p = if e == 0 {
-                        if dir == 0 { left_p } else { top_p }
+                        if dir == 0 {
+                            left_p
+                        } else {
+                            top_p
+                        }
                     } else {
                         Some(q)
                     };
@@ -578,7 +665,19 @@ pub fn deblock_mbaff(pic: &mut CurPic, bd_y: u32, bd_c: u32, chroma_format_idc: 
                     } else {
                         ((ly0 + step * e * 4) * wl + x0, ls, 1)
                     };
-                    filter_edge(&mut pic.planes[0].data, at, across, along, 16, &lines, qp_av(&p), a_off, b_off, bd_y, true);
+                    filter_edge(
+                        &mut pic.planes[0].data,
+                        at,
+                        across,
+                        along,
+                        16,
+                        &lines,
+                        qp_av(&p),
+                        a_off,
+                        b_off,
+                        bd_y,
+                        true,
+                    );
                 }
                 if !chroma {
                     continue;
@@ -591,7 +690,11 @@ pub fn deblock_mbaff(pic: &mut CurPic, bd_y: u32, bd_c: u32, chroma_format_idc: 
                         continue;
                     }
                     let p = if e == 0 {
-                        if dir == 0 { left_p } else { top_p }
+                        if dir == 0 {
+                            left_p
+                        } else {
+                            top_p
+                        }
                     } else {
                         Some(q)
                     };
@@ -607,7 +710,19 @@ pub fn deblock_mbaff(pic: &mut CurPic, bd_y: u32, bd_c: u32, chroma_format_idc: 
                         ((cy0 + step * ce * 4) * wc + cx0, cs, 1)
                     };
                     for c in 0..2 {
-                        filter_edge(&mut pic.planes[1 + c].data, at, across, along, len, &lines[..len], qpc_av(&p, c), a_off, b_off, bd_c, false);
+                        filter_edge(
+                            &mut pic.planes[1 + c].data,
+                            at,
+                            across,
+                            along,
+                            len,
+                            &lines[..len],
+                            qpc_av(&p, c),
+                            a_off,
+                            b_off,
+                            bd_c,
+                            false,
+                        );
                     }
                 }
             }

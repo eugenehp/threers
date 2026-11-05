@@ -1,3 +1,4 @@
+use super::StandardMaterial;
 use crate::math::{Color, Vector2};
 use crate::textures::Texture;
 use std::sync::Arc;
@@ -415,5 +416,140 @@ impl PhysicalMaterial {
     pub fn with_transparency(mut self, mode: super::TransparencyMode) -> Self {
         self.transparency = mode;
         self
+    }
+}
+
+/// A standard material as a physical one with the same parameters, its
+/// physical layers (clearcoat, transmission, sheen, …) off — three.js's
+/// `MeshPhysicalMaterial` is a `MeshStandardMaterial` with more, so this is
+/// that extension at rest: it shades as the standard material did. For a
+/// standard surface drawn through a physical-only path (`TransparencyMode`'s
+/// single-layer glass): `PhysicalMaterial::from(standard).with_transparency(…)`.
+impl From<StandardMaterial> for PhysicalMaterial {
+    fn from(s: StandardMaterial) -> Self {
+        PhysicalMaterial {
+            color: s.color,
+            emissive: s.emissive,
+            emissive_intensity: s.emissive_intensity,
+            roughness: s.roughness,
+            metalness: s.metalness,
+            ao_intensity: s.ao_intensity,
+            normal_scale: s.normal_scale,
+            displacement_scale: s.displacement_scale,
+            displacement_bias: s.displacement_bias,
+            opacity: s.opacity,
+            alpha_test: s.alpha_test,
+            alpha_map: s.alpha_map,
+            env_map: s.env_map,
+            env_map_intensity: s.env_map_intensity,
+            env_map_rotation: s.env_map_rotation,
+            light_map: s.light_map,
+            light_map_intensity: s.light_map_intensity,
+            bump_map: s.bump_map,
+            bump_scale: s.bump_scale,
+            transparent: s.transparent,
+            wireframe: s.wireframe,
+            map: s.map,
+            normal_map: s.normal_map,
+            roughness_map: s.roughness_map,
+            metalness_map: s.metalness_map,
+            ao_map: s.ao_map,
+            emissive_map: s.emissive_map,
+            eclipse_occluder: s.eclipse_occluder,
+            sun_angular_radius: s.sun_angular_radius,
+            cloud_shadow_map: s.cloud_shadow_map,
+            cloud_height: s.cloud_height,
+            cloud_shadow: s.cloud_shadow,
+            cloud_rotation: s.cloud_rotation,
+            cloud_scatter: s.cloud_scatter,
+            cloud_anisotropy: s.cloud_anisotropy,
+            twilight: s.twilight,
+            twilight_color: s.twilight_color,
+            displacement_map: s.displacement_map,
+            side: s.side,
+            polygon_offset: s.polygon_offset,
+            tone_mapped: s.tone_mapped,
+            render_state: s.render_state,
+            ..PhysicalMaterial::default()
+        }
+    }
+}
+
+/// A physical material's standard parameters (its physical layers dropped,
+/// `emissive_night_side` at its default) — `From<StandardMaterial>` undone.
+impl From<&PhysicalMaterial> for StandardMaterial {
+    fn from(p: &PhysicalMaterial) -> Self {
+        StandardMaterial {
+            color: p.color,
+            emissive: p.emissive,
+            emissive_intensity: p.emissive_intensity,
+            roughness: p.roughness,
+            metalness: p.metalness,
+            ao_intensity: p.ao_intensity,
+            normal_scale: p.normal_scale,
+            displacement_scale: p.displacement_scale,
+            displacement_bias: p.displacement_bias,
+            opacity: p.opacity,
+            alpha_test: p.alpha_test,
+            alpha_map: p.alpha_map.clone(),
+            env_map: p.env_map.clone(),
+            env_map_intensity: p.env_map_intensity,
+            env_map_rotation: p.env_map_rotation,
+            light_map: p.light_map.clone(),
+            light_map_intensity: p.light_map_intensity,
+            bump_map: p.bump_map.clone(),
+            bump_scale: p.bump_scale,
+            transparent: p.transparent,
+            wireframe: p.wireframe,
+            map: p.map.clone(),
+            normal_map: p.normal_map.clone(),
+            roughness_map: p.roughness_map.clone(),
+            metalness_map: p.metalness_map.clone(),
+            ao_map: p.ao_map.clone(),
+            emissive_map: p.emissive_map.clone(),
+            eclipse_occluder: p.eclipse_occluder,
+            sun_angular_radius: p.sun_angular_radius,
+            cloud_shadow_map: p.cloud_shadow_map.clone(),
+            cloud_height: p.cloud_height,
+            cloud_shadow: p.cloud_shadow,
+            cloud_rotation: p.cloud_rotation,
+            cloud_scatter: p.cloud_scatter,
+            cloud_anisotropy: p.cloud_anisotropy,
+            twilight: p.twilight,
+            twilight_color: p.twilight_color,
+            displacement_map: p.displacement_map.clone(),
+            side: p.side,
+            polygon_offset: p.polygon_offset,
+            tone_mapped: p.tone_mapped,
+            render_state: p.render_state,
+            ..StandardMaterial::default()
+        }
+    }
+}
+
+#[cfg(test)]
+mod conversion_tests {
+    use super::*;
+
+    #[test]
+    fn standard_round_trips_through_physical() {
+        let mut s = StandardMaterial::new(Color::new(0.2, 0.4, 0.6))
+            .with_roughness(0.3)
+            .with_metalness(0.7);
+        s.opacity = 0.35;
+        s.transparent = Some(true);
+        let p = PhysicalMaterial::from(s.clone());
+        assert_eq!(p.color, s.color);
+        assert_eq!(p.roughness, 0.3);
+        assert_eq!(p.opacity, 0.35);
+        assert_eq!(p.transparent, Some(true));
+        // its physical layers at rest
+        assert_eq!(p.clearcoat, PhysicalMaterial::default().clearcoat);
+        assert_eq!(p.transmission, PhysicalMaterial::default().transmission);
+        let back = StandardMaterial::from(&p);
+        assert_eq!(back.color, s.color);
+        assert_eq!(back.metalness, 0.7);
+        assert_eq!(back.opacity, 0.35);
+        assert_eq!(back.side, s.side);
     }
 }

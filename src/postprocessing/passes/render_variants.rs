@@ -21,16 +21,67 @@ pub const JITTER_VECTORS: [&[[i8; 2]]; 6] = [
     &[[0, 0]],
     &[[4, 4], [-4, -4]],
     &[[-2, -6], [6, -2], [-6, 2], [2, 6]],
-    &[[1, -3], [-1, 3], [5, 1], [-3, -5], [-5, 5], [-7, -1], [3, 7], [7, -7]],
     &[
-        [1, 1], [-1, -3], [-3, 2], [4, -1], [-5, -2], [2, 5], [5, 3], [3, -5],
-        [-2, 6], [0, -7], [-4, -6], [-6, 4], [-8, 0], [7, -4], [6, 7], [-7, -8],
+        [1, -3],
+        [-1, 3],
+        [5, 1],
+        [-3, -5],
+        [-5, 5],
+        [-7, -1],
+        [3, 7],
+        [7, -7],
     ],
     &[
-        [-4, -7], [-7, -5], [-3, -5], [-5, -4], [-1, -4], [-2, -2], [-6, -1], [-4, 0],
-        [-7, 1], [-1, 2], [-6, 3], [-3, 3], [-7, 6], [-3, 6], [-5, 7], [-1, 7],
-        [5, -7], [1, -6], [6, -5], [4, -4], [2, -3], [7, -2], [1, -1], [4, -1],
-        [2, 1], [6, 2], [0, 4], [4, 4], [2, 5], [7, 5], [5, 6], [3, 7],
+        [1, 1],
+        [-1, -3],
+        [-3, 2],
+        [4, -1],
+        [-5, -2],
+        [2, 5],
+        [5, 3],
+        [3, -5],
+        [-2, 6],
+        [0, -7],
+        [-4, -6],
+        [-6, 4],
+        [-8, 0],
+        [7, -4],
+        [6, 7],
+        [-7, -8],
+    ],
+    &[
+        [-4, -7],
+        [-7, -5],
+        [-3, -5],
+        [-5, -4],
+        [-1, -4],
+        [-2, -2],
+        [-6, -1],
+        [-4, 0],
+        [-7, 1],
+        [-1, 2],
+        [-6, 3],
+        [-3, 3],
+        [-7, 6],
+        [-3, 6],
+        [-5, 7],
+        [-1, 7],
+        [5, -7],
+        [1, -6],
+        [6, -5],
+        [4, -4],
+        [2, -3],
+        [7, -2],
+        [1, -1],
+        [4, -1],
+        [2, 1],
+        [6, 2],
+        [0, 4],
+        [4, 4],
+        [2, 5],
+        [7, 5],
+        [5, 6],
+        [3, 7],
     ],
 ];
 
@@ -113,10 +164,26 @@ fn ssaa_render(
         let Some(s) = ctx.screen_stand_in() else {
             return;
         };
-        accumulate_ssaa(ctx, scene, camera, sample_level, unbiased, &sample, Dest::StandIn(&s));
+        accumulate_ssaa(
+            ctx,
+            scene,
+            camera,
+            sample_level,
+            unbiased,
+            &sample,
+            Dest::StandIn(&s),
+        );
         ctx.present_stand_in(&s);
     } else {
-        accumulate_ssaa(ctx, scene, camera, sample_level, unbiased, &sample, Dest::Target(write));
+        accumulate_ssaa(
+            ctx,
+            scene,
+            camera,
+            sample_level,
+            unbiased,
+            &sample,
+            Dest::Target(write),
+        );
     }
 }
 
@@ -130,7 +197,14 @@ fn ssaa_params() -> Vec<ParamInfo> {
 impl Pass for SsaaRenderPass {
     pass_common!("SSAARenderPass");
 
-    fn render(&mut self, ctx: &mut PassContext<'_, '_>, write: &Target, read: &Target, _d: f32, _m: bool) {
+    fn render(
+        &mut self,
+        ctx: &mut PassContext<'_, '_>,
+        write: &Target,
+        read: &Target,
+        _d: f32,
+        _m: bool,
+    ) {
         ssaa_render(
             ctx,
             &self.state,
@@ -158,7 +232,10 @@ impl Pass for SsaaRenderPass {
 
     fn set(&mut self, name: &str, value: ParamValue) -> bool {
         match name {
-            "sampleLevel" => value.as_i32().map(|v| self.sample_level = v.max(0) as u32).is_some(),
+            "sampleLevel" => value
+                .as_i32()
+                .map(|v| self.sample_level = v.max(0) as u32)
+                .is_some(),
             "unbiased" => assign_bool(&mut self.unbiased, &value),
             _ => false,
         }
@@ -211,7 +288,14 @@ impl TaaRenderPass {
 impl Pass for TaaRenderPass {
     pass_common!("TAARenderPass");
 
-    fn render(&mut self, ctx: &mut PassContext<'_, '_>, write: &Target, read: &Target, _d: f32, _m: bool) {
+    fn render(
+        &mut self,
+        ctx: &mut PassContext<'_, '_>,
+        write: &Target,
+        read: &Target,
+        _d: f32,
+        _m: bool,
+    ) {
         if !self.accumulate {
             ssaa_render(
                 ctx,
@@ -234,7 +318,15 @@ impl Pass for TaaRenderPass {
         if self.accumulate_index == -1 {
             // three.js renders this first average to the screen when the pass
             // is the last; it is the history, so it goes where it is kept.
-            accumulate_ssaa(ctx, self.scene, self.camera, self.sample_level, self.unbiased, &sample, Dest::Target(&hold));
+            accumulate_ssaa(
+                ctx,
+                self.scene,
+                self.camera,
+                self.sample_level,
+                self.unbiased,
+                &sample,
+                Dest::Target(&hold),
+            );
             self.accumulate_index = 0;
         }
         let weight = 1.0 / jitters.len() as f32;
@@ -254,7 +346,10 @@ impl Pass for TaaRenderPass {
                 if self.accumulate_index == 0 {
                     ctx.clear(Dest::Target(&sample), Color::BLACK, 0.0);
                 }
-                ctx.fx(Fx::copy(write, weight).blend(PostFxBlend::Add), Dest::Target(&sample));
+                ctx.fx(
+                    Fx::copy(write, weight).blend(PostFxBlend::Add),
+                    Dest::Target(&sample),
+                );
                 self.accumulate_index += 1;
                 if self.accumulate_index as usize >= jitters.len() {
                     break;
@@ -264,10 +359,16 @@ impl Pass for TaaRenderPass {
         let accumulation = self.accumulate_index as f32 * weight;
         if accumulation > 0.0 {
             ctx.clear(Dest::Target(write), Color::BLACK, 0.0);
-            ctx.fx(Fx::copy(&sample, 1.0).blend(PostFxBlend::Add), Dest::Target(write));
+            ctx.fx(
+                Fx::copy(&sample, 1.0).blend(PostFxBlend::Add),
+                Dest::Target(write),
+            );
         }
         if accumulation < 1.0 {
-            ctx.fx(Fx::copy(&hold, 1.0 - accumulation).blend(PostFxBlend::Add), Dest::Target(write));
+            ctx.fx(
+                Fx::copy(&hold, 1.0 - accumulation).blend(PostFxBlend::Add),
+                Dest::Target(write),
+            );
         }
     }
 
@@ -290,7 +391,10 @@ impl Pass for TaaRenderPass {
 
     fn set(&mut self, name: &str, value: ParamValue) -> bool {
         match name {
-            "sampleLevel" => value.as_i32().map(|v| self.sample_level = v.max(0) as u32).is_some(),
+            "sampleLevel" => value
+                .as_i32()
+                .map(|v| self.sample_level = v.max(0) as u32)
+                .is_some(),
             "unbiased" => assign_bool(&mut self.unbiased, &value),
             "accumulate" => assign_bool(&mut self.accumulate, &value),
             "accumulateIndex" => value.as_i32().map(|v| self.accumulate_index = v).is_some(),
@@ -363,7 +467,14 @@ impl Pass for RenderPixelatedPass {
         self.height = height.max(1);
     }
 
-    fn render(&mut self, ctx: &mut PassContext<'_, '_>, write: &Target, _read: &Target, _d: f32, _m: bool) {
+    fn render(
+        &mut self,
+        ctx: &mut PassContext<'_, '_>,
+        write: &Target,
+        _read: &Target,
+        _d: f32,
+        _m: bool,
+    ) {
         let (rw, rh) = self.render_resolution();
         let beauty = ctx.target(&mut self.beauty, rw, rh);
         let draw = SceneDraw {
@@ -389,7 +500,12 @@ impl Pass for RenderPixelatedPass {
                 .input(&beauty)
                 .hw_depth(&beauty)
                 .normal(&normal)
-                .p2([self.normal_edge_strength, self.depth_edge_strength, 0.0, 0.0])
+                .p2([
+                    self.normal_edge_strength,
+                    self.depth_edge_strength,
+                    0.0,
+                    0.0,
+                ])
                 .p3([rw as f32, rh as f32, 1.0 / rw as f32, 1.0 / rh as f32])
                 .blend(PostFxBlend::Overwrite),
             dest,
@@ -415,7 +531,10 @@ impl Pass for RenderPixelatedPass {
 
     fn set(&mut self, name: &str, value: ParamValue) -> bool {
         match name {
-            "pixelSize" => value.as_i32().map(|v| self.pixel_size = v.max(1) as u32).is_some(),
+            "pixelSize" => value
+                .as_i32()
+                .map(|v| self.pixel_size = v.max(1) as u32)
+                .is_some(),
             "normalEdgeStrength" => assign_f32(&mut self.normal_edge_strength, &value),
             "depthEdgeStrength" => assign_f32(&mut self.depth_edge_strength, &value),
             _ => false,
@@ -477,7 +596,14 @@ impl RenderTransitionPass {
 impl Pass for RenderTransitionPass {
     pass_common!("RenderTransitionPass");
 
-    fn render(&mut self, ctx: &mut PassContext<'_, '_>, write: &Target, read: &Target, _d: f32, _m: bool) {
+    fn render(
+        &mut self,
+        ctx: &mut PassContext<'_, '_>,
+        write: &Target,
+        read: &Target,
+        _d: f32,
+        _m: bool,
+    ) {
         let dest = out(&self.state, write);
         let draw = |scene, camera| SceneDraw {
             scene,
@@ -501,7 +627,12 @@ impl Pass for RenderTransitionPass {
             .input(&a)
             .normal(&b)
             .linear_aux()
-            .p2([self.mix_ratio, self.threshold, if self.use_texture { 1.0 } else { 0.0 }, 0.0]);
+            .p2([
+                self.mix_ratio,
+                self.threshold,
+                if self.use_texture { 1.0 } else { 0.0 },
+                0.0,
+            ]);
         if self.use_texture {
             if let Some(tex) = &self.texture {
                 if let Some(t) = upload::texture_target(ctx.renderer, tex, &mut self.uploaded) {
@@ -618,7 +749,14 @@ impl AdaptiveToneMappingPass {
 impl Pass for AdaptiveToneMappingPass {
     pass_common!("AdaptiveToneMappingPass");
 
-    fn render(&mut self, ctx: &mut PassContext<'_, '_>, write: &Target, read: &Target, delta: f32, _m: bool) {
+    fn render(
+        &mut self,
+        ctx: &mut PassContext<'_, '_>,
+        write: &Target,
+        read: &Target,
+        delta: f32,
+        _m: bool,
+    ) {
         let n = self.resolution;
         if self.needs_init {
             // New targets, zeroed: three.js's start from zero luminance too.
@@ -638,7 +776,10 @@ impl Pass for AdaptiveToneMappingPass {
         if self.adaptive {
             let current = ctx.target(&mut self.current, n, n);
             let previous = ctx.target(&mut self.previous, n, n);
-            ctx.fx(Fx::new(kinds::LUMINOSITY).input(read), Dest::Target(&current));
+            ctx.fx(
+                Fx::new(kinds::LUMINOSITY).input(read),
+                Dest::Target(&current),
+            );
             let mut average = current;
             let mut s = n;
             for slot in self.halvings.iter_mut() {
@@ -658,7 +799,12 @@ impl Pass for AdaptiveToneMappingPass {
         }
         let mut fx = Fx::new(kinds::TONE_MAP)
             .input(read)
-            .p2([self.middle_grey, self.min_luminance, self.max_luminance, self.average_luminance])
+            .p2([
+                self.middle_grey,
+                self.min_luminance,
+                self.max_luminance,
+                self.average_luminance,
+            ])
             .p3([if self.adaptive { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0]);
         if self.adaptive {
             fx = fx.normal(&luminance);

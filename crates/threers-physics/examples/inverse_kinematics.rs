@@ -88,7 +88,9 @@ fn constrained_leg() {
 /// The two solvers on the same problem.
 fn fabrik_vs_ccd() {
     println!("\n-- FABRIK vs CCD --");
-    let points: Vec<Vector3> = (0..6).map(|i| Vector3::new(i as f32 * 0.5, 0.0, 0.0)).collect();
+    let points: Vec<Vector3> = (0..6)
+        .map(|i| Vector3::new(i as f32 * 0.5, 0.0, 0.0))
+        .collect();
     let target = Vector3::new(0.5, 2.0, 0.5);
 
     let mut fabrik = IkChain::from_points(&points);
@@ -97,8 +99,14 @@ fn fabrik_vs_ccd() {
     let mut ccd = IkChain::from_points(&points);
     let b = ccd.solve_ccd(target);
 
-    println!("  FABRIK: {:2} iterations, error {:.6}", a.iterations, a.error);
-    println!("  CCD:    {:2} iterations, error {:.6}", b.iterations, b.error);
+    println!(
+        "  FABRIK: {:2} iterations, error {:.6}",
+        a.iterations, a.error
+    );
+    println!(
+        "  CCD:    {:2} iterations, error {:.6}",
+        b.iterations, b.error
+    );
 
     // Both preserve bone lengths exactly — that is the whole point.
     for (name, chain) in [("FABRIK", &fabrik), ("CCD", &ccd)] {

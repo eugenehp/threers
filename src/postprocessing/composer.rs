@@ -3,8 +3,8 @@
 use super::context::{kinds, Dest, Fx, PassContext, Screen};
 use super::pass::{MaskRole, Pass};
 use super::target::{ensure, Target, INTERMEDIATE_FORMAT};
-use crate::cameras::Camera;
 use super::PostBackend;
+use crate::cameras::Camera;
 use crate::renderer::RenderTarget;
 use crate::scene::Scene;
 
@@ -325,10 +325,9 @@ impl EffectComposer {
             let mut state = self.passes[i].state();
             state.render_to_screen = to_screen;
             self.passes[i].set_state(state);
-            let (Some(write), Some(read)) = (
-                self.write_buffer().cloned(),
-                self.read_buffer().cloned(),
-            ) else {
+            let (Some(write), Some(read)) =
+                (self.write_buffer().cloned(), self.read_buffer().cloned())
+            else {
                 return;
             };
             // MaskPass / ClearMaskPass are not themselves masked; what they

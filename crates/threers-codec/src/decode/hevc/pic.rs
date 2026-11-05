@@ -42,8 +42,12 @@ impl Layout {
         for rs in 0..n {
             let tbx = (rs % ctb_w) as u32;
             let tby = (rs / ctb_w) as u32;
-            let tx = (0..col_bd.len() - 1).rfind(|&i| tbx >= col_bd[i]).unwrap_or(0);
-            let ty = (0..row_bd.len() - 1).rfind(|&j| tby >= row_bd[j]).unwrap_or(0);
+            let tx = (0..col_bd.len() - 1)
+                .rfind(|&i| tbx >= col_bd[i])
+                .unwrap_or(0);
+            let ty = (0..row_bd.len() - 1)
+                .rfind(|&j| tby >= row_bd[j])
+                .unwrap_or(0);
             let mut v = 0u32;
             for i in 0..tx {
                 v += (row_bd[ty + 1] - row_bd[ty]) * (col_bd[i + 1] - col_bd[i]);
@@ -188,11 +192,13 @@ impl PicState {
         let (w, h) = (sps.width as usize, sps.height as usize);
         let n4 = layout.w4 * layout.h4;
         let nctb = layout.ctb_w * layout.ctb_h;
+        let (hs, vs) = sps.chroma_shift();
+        let (cw, ch) = ((w + hs) >> hs, (h + vs) >> vs);
         PicState {
             planes: [
                 Plane::new(w, h, 1 << (sps.bit_depth_y - 1)),
-                Plane::new(w.div_ceil(2), if sps.chroma_format_idc == 2 { h } else { h.div_ceil(2) }, 1 << (sps.bit_depth_c - 1)),
-                Plane::new(w.div_ceil(2), if sps.chroma_format_idc == 2 { h } else { h.div_ceil(2) }, 1 << (sps.bit_depth_c - 1)),
+                Plane::new(cw, ch, 1 << (sps.bit_depth_c - 1)),
+                Plane::new(cw, ch, 1 << (sps.bit_depth_c - 1)),
             ],
             width: w,
             height: h,
@@ -215,10 +221,15 @@ impl PicState {
     /// per-sample or per-block state the native path fills in.
     pub fn sized(sps: &Sps, layout: Arc<Layout>) -> PicState {
         let (w, h) = (sps.width as usize, sps.height as usize);
-        let ch = if sps.chroma_format_idc == 2 { h } else { h.div_ceil(2) };
-        let empty = |width, height| Plane { data: Vec::new(), width, height };
+        let (hs, vs) = sps.chroma_shift();
+        let (cw, ch) = ((w + hs) >> hs, (h + vs) >> vs);
+        let empty = |width, height| Plane {
+            data: Vec::new(),
+            width,
+            height,
+        };
         PicState {
-            planes: [empty(w, h), empty(w.div_ceil(2), ch), empty(w.div_ceil(2), ch)],
+            planes: [empty(w, h), empty(cw, ch), empty(cw, ch)],
             width: w,
             height: h,
             layout,

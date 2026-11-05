@@ -26,9 +26,9 @@ pub mod ctu;
 #[cfg(feature = "decode")]
 pub mod filters;
 #[cfg(feature = "decode")]
-pub mod intra;
-#[cfg(feature = "decode")]
 pub mod inter;
+#[cfg(feature = "decode")]
+pub mod intra;
 #[cfg(feature = "decode")]
 pub mod mv;
 // Parameter sets parse without the decoder: the MP4 muxer reads them.
@@ -43,7 +43,9 @@ pub mod tables;
 pub mod transform;
 
 #[cfg(feature = "decode")]
-use std::sync::Arc;
+use std::collections::BTreeMap;
+#[cfg(feature = "decode")]
+use std::sync::{Arc, Mutex};
 
 #[cfg(feature = "decode")]
 use self::ctu::{Carry, SliceDec};
@@ -53,6 +55,8 @@ use self::params::{Pps, SliceHeader, SliceType, Sps};
 use self::pic::{Layout, MvField, PicState, SliceInfo};
 #[cfg(feature = "decode")]
 use super::bits::unescape;
+#[cfg(feature = "decode")]
+use super::jobs::{caught, Jobs, Slot};
 #[cfg(feature = "decode")]
 use super::picture::{ChromaFormat, ColorInfo, DecodedFrame, Plane};
 
@@ -92,8 +96,16 @@ pub struct Motion {
     pub ctb_w: usize,
 }
 
+/// A finished picture, as later ones read it.
+#[cfg(feature = "decode")]
+pub(crate) struct RefData {
+    planes: Arc<[Plane; 3]>,
+    motion: Arc<Motion>,
+}
+
 /// A picture in the decoded picture buffer.
 #[cfg(feature = "decode")]
+#[derive(Clone)]
 pub struct RefPic {
     /// `PicOrderCntVal`.
     pub poc: i32,
@@ -103,6 +115,11 @@ pub struct RefPic {
     pub planes: Arc<[Plane; 3]>,
     /// The motion it leaves for temporal motion vector prediction.
     pub motion: Arc<Motion>,
+    /// Width and height in luma samples.
+    size: (usize, usize),
+    /// With threads, where `planes` and `motion` will come from: until a job
+    /// resolves it, both are empty.
+    pending: Option<Arc<Slot<RefData>>>,
 }
 
 /// One entry of a reference picture list.
@@ -128,6 +145,30 @@ struct Current {
     st_before: Vec<usize>,
     st_after: Vec<usize>,
     lt_curr: Vec<usize>,
+    /// With threads, the slice segments for its job to reconstruct.
+    work: Vec<SliceWork>,
+}
+
+/// A slice segment whose headers are read and whose data is not.
+#[cfg(feature = "decode")]
+struct SliceWork {
+    rbsp: Vec<u8>,
+    sh: SliceHeader,
+    refs: [Vec<RefEntry>; 2],
+    slice_idx: u16,
+    slice_addr: u32,
+}
+
+/// The state shared with picture jobs.
+#[cfg(feature = "decode")]
+struct Threads {
+    jobs: Arc<Jobs>,
+    /// Finished output pictures by id; `None` for one that failed.
+    finished: Arc<Mutex<BTreeMap<u64, Option<HevcPicture>>>>,
+    /// The first failure in decode order.
+    error: Arc<Mutex<Option<(u64, String)>>>,
+    next_take: u64,
+    next_job: u64,
 }
 
 /// A hardware back end for [`HevcDecoder`]: the decoder parses, derives
@@ -207,6 +248,7 @@ pub struct HevcDecoder {
     accel: Option<Box<dyn HevcAccel>>,
     accel_error: Option<String>,
     accel_started: bool,
+    threads: Option<Threads>,
 }
 
 #[cfg(feature = "decode")]
@@ -239,7 +281,36 @@ impl HevcDecoder {
             accel: None,
             accel_error: None,
             accel_started: false,
+            threads: None,
         }
+    }
+
+    /// Reconstruct up to `threads` pictures at once, each as soon as its
+    /// references are finished. Headers stay in order on the calling thread,
+    /// so [`decode_nal`](Self::decode_nal) can block when too many are
+    /// waiting, and must not be called from the thread pool itself: this does
+    /// nothing there, with one thread, or with an accelerator.
+    ///
+    /// [`take_pictures`](Self::take_pictures) then gives pictures once they
+    /// are finished, leaving out any that failed; decoding carries on past
+    /// those, and [`take_thread_error`](Self::take_thread_error) has the first.
+    pub fn set_threads(&mut self, threads: usize) {
+        if threads > 1 && self.accel.is_none() && crate::pool_can_serve_caller() {
+            self.threads = Some(Threads {
+                jobs: Jobs::new(threads * 2),
+                finished: Arc::default(),
+                error: Arc::default(),
+                next_take: 0,
+                next_job: 0,
+            });
+        }
+    }
+
+    /// The first error from a picture job, in decode order, once
+    /// [`flush_output`](Self::flush_output) has waited for them all.
+    pub fn take_thread_error(&mut self) -> Option<String> {
+        let t = self.threads.as_ref()?;
+        t.error.lock().unwrap().take().map(|e| e.1)
     }
 
     /// Hand reconstruction to `accel` (see [`HevcAccel`]).
@@ -278,7 +349,7 @@ impl HevcDecoder {
                 Ok(())
             }
             34 => {
-                let pps = Pps::parse(&unescape(&nal[2..]))?;
+                let pps = Pps::parse(&unescape(&nal[2..]), &self.spss)?;
                 let id = pps.id as usize;
                 self.ppss[id] = Some(pps);
                 // Encoders re-send a PPS under the same id with a new tile
@@ -312,6 +383,9 @@ impl HevcDecoder {
     pub fn flush_output(&mut self) {
         self.finish_picture();
         while self.bump() {}
+        if let Some(t) = &self.threads {
+            t.jobs.wait();
+        }
     }
 
     /// Output the waiting picture with the smallest POC ("bumping").
@@ -334,7 +408,11 @@ impl HevcDecoder {
                 self.pending.iter().any(|e| e.2 >= max)
             };
             let full = dpb_full && {
-                let refs = self.dpb.iter().filter(|p| !self.pending.iter().any(|e| e.1 == p.poc)).count();
+                let refs = self
+                    .dpb
+                    .iter()
+                    .filter(|p| !self.pending.iter().any(|e| e.1 == p.poc))
+                    .count();
                 refs + self.pending.len() >= sps.max_dec_pic_buffering as usize
             };
             if !(reorder || latency || full) || !self.bump() {
@@ -345,7 +423,41 @@ impl HevcDecoder {
 
     /// The pictures finished since the last call, in decode order.
     pub fn take_pictures(&mut self) -> Vec<HevcPicture> {
+        let finished = self.take_finished().into_iter().filter_map(|p| p.1);
+        let finished: Vec<_> = finished.collect();
+        self.done.extend(finished);
         std::mem::take(&mut self.done)
+    }
+
+    /// With threads: output pictures finished so far by id, in order, `None`
+    /// for one that failed.
+    pub(crate) fn take_finished(&mut self) -> Vec<(u64, Option<HevcPicture>)> {
+        let mut out = Vec::new();
+        if let Some(t) = &mut self.threads {
+            let mut finished = t.finished.lock().unwrap();
+            while let Some(picture) = finished.remove(&t.next_take) {
+                out.push((t.next_take, picture));
+                t.next_take += 1;
+            }
+        }
+        out
+    }
+
+    /// Wait for every picture job to finish.
+    pub(crate) fn wait_for_pictures(&self) {
+        if let Some(t) = &self.threads {
+            t.jobs.wait();
+        }
+    }
+
+    /// Whether [`set_threads`](Self::set_threads) took effect.
+    pub(crate) fn threaded(&self) -> bool {
+        self.threads.is_some()
+    }
+
+    /// The id the next output picture will have.
+    pub(crate) fn next_output_id(&self) -> u64 {
+        self.next_id
     }
 
     fn decode_slice(&mut self, nal: &[u8], rbsp: &[u8], nal_type: u32, tid: u32) -> Result<()> {
@@ -411,6 +523,16 @@ impl HevcDecoder {
                 refs[1].iter().map(|e| (e.poc, e.long_term)).collect(),
             ],
         });
+        if self.threads.is_some() {
+            cur.work.push(SliceWork {
+                rbsp: rbsp.to_vec(),
+                sh,
+                refs,
+                slice_idx,
+                slice_addr,
+            });
+            return Ok(());
+        }
         let mut dec = SliceDec::new(
             &cur.sps,
             &cur.pps,
@@ -427,7 +549,9 @@ impl HevcDecoder {
 
     fn start_picture(&mut self, sh: &SliceHeader, nal_type: u32, tid: u32) -> Result<()> {
         let pps = self.ppss[sh.pps_id as usize].clone().ok_or("missing PPS")?;
-        let sps = self.spss[pps.sps_id as usize].clone().ok_or("missing SPS")?;
+        let sps = self.spss[pps.sps_id as usize]
+            .clone()
+            .ok_or("missing SPS")?;
         let layout = match &self.layout {
             Some((s, p, l))
                 if *s == pps.sps_id as usize
@@ -444,7 +568,7 @@ impl HevcDecoder {
             }
         };
         if let Some(p) = self.dpb.first() {
-            if p.planes[0].width != sps.width as usize || p.planes[0].height != sps.height as usize {
+            if p.size != (sps.width as usize, sps.height as usize) {
                 self.dpb.clear();
             }
         }
@@ -488,7 +612,11 @@ impl HevcDecoder {
             let mut lt_mark = vec![false; self.dpb.len()];
             let mut missing: Vec<(i32, bool, u8)> = Vec::new();
             for &(v, msb_present, used) in &sh.lt {
-                let full = if msb_present { v + poc - (poc & (max_lsb - 1)) } else { v };
+                let full = if msb_present {
+                    v + poc - (poc & (max_lsb - 1))
+                } else {
+                    v
+                };
                 let found = self.dpb.iter().position(|p| {
                     if msb_present {
                         p.poc == full
@@ -556,7 +684,8 @@ impl HevcDecoder {
             // broken stream): stand in a mid-grey picture so decoding goes on.
             for (target, long_term, list) in missing {
                 let i = self.dpb.len();
-                self.dpb.push(Self::placeholder(&sps, &layout, target, long_term));
+                self.dpb
+                    .push(Self::placeholder(&sps, &layout, target, long_term));
                 match list {
                     0 => st_before.push(i),
                     1 => st_after.push(i),
@@ -578,7 +707,11 @@ impl HevcDecoder {
         }
         self.decoded_any = true;
 
-        let mut pic = if self.accel.is_some() { PicState::sized(&sps, layout) } else { PicState::new(&sps, layout) };
+        let mut pic = if self.accel.is_some() || self.threads.is_some() {
+            PicState::sized(&sps, layout)
+        } else {
+            PicState::new(&sps, layout)
+        };
         pic.poc = poc;
         self.cur = Some(Current {
             pic,
@@ -590,6 +723,7 @@ impl HevcDecoder {
             st_before,
             st_after,
             lt_curr,
+            work: Vec::new(),
         });
         Ok(())
     }
@@ -613,6 +747,8 @@ impl HevcDecoder {
                 log2_ctb: layout.log2_ctb as usize,
                 ctb_w: layout.ctb_w,
             }),
+            size: (w, h),
+            pending: None,
         }
     }
 
@@ -634,9 +770,19 @@ impl HevcDecoder {
         for l in 0..(1 + (sh.slice_type == SliceType::B) as usize) {
             let n = sh.num_ref_idx[l] as usize;
             let order: Vec<usize> = if l == 0 {
-                cur.st_before.iter().chain(&cur.st_after).chain(&cur.lt_curr).copied().collect()
+                cur.st_before
+                    .iter()
+                    .chain(&cur.st_after)
+                    .chain(&cur.lt_curr)
+                    .copied()
+                    .collect()
             } else {
-                cur.st_after.iter().chain(&cur.st_before).chain(&cur.lt_curr).copied().collect()
+                cur.st_after
+                    .iter()
+                    .chain(&cur.st_before)
+                    .chain(&cur.lt_curr)
+                    .copied()
+                    .collect()
             };
             let len = n.max(total);
             let temp: Vec<usize> = (0..len).map(|k| order[k % total]).collect();
@@ -646,7 +792,10 @@ impl HevcDecoder {
                         Some(e) => e[i] as usize,
                         None => i,
                     };
-                    temp.get(k).copied().map(entry).ok_or("list_entry out of range")
+                    temp.get(k)
+                        .copied()
+                        .map(entry)
+                        .ok_or("list_entry out of range")
                 })
                 .collect::<std::result::Result<_, _>>()?;
         }
@@ -659,6 +808,10 @@ impl HevcDecoder {
         let Some(mut cur) = self.cur.take() else {
             return;
         };
+        if self.threads.is_some() {
+            self.submit_picture(cur);
+            return;
+        }
         if let Some(accel) = self.accel.as_mut() {
             if std::mem::take(&mut self.accel_started) {
                 if let Err(e) = accel.end_picture() {
@@ -674,13 +827,7 @@ impl HevcDecoder {
         let sps = &cur.sps;
         let pic = cur.pic;
         if cur.output {
-            let color = ColorInfo::from_vui(
-                sps.matrix_coefficients,
-                sps.full_range,
-                sps.height - sps.crop[2] - sps.crop[3],
-            );
-            let crop = sps.crop.map(|v| v as usize);
-            let fmt = if sps.chroma_format_idc == 2 { ChromaFormat::Yuv422 } else { ChromaFormat::Yuv420 };
+            let (fmt, crop, color) = output_format(sps);
             let frame = match self.accel.as_mut() {
                 Some(a) => match a.frame(pic.poc, sps) {
                     Ok(f) => f,
@@ -688,12 +835,19 @@ impl HevcDecoder {
                         // The accelerator's error is reported; the picture
                         // still takes its place in output order, mid-grey.
                         self.accel_error.get_or_insert(e);
-                        let grey = |p: &Plane, bd: u32| Plane::new(p.width, p.height, 1 << (bd - 1));
-                        let planes = [grey(&pic.planes[0], sps.bit_depth_y), grey(&pic.planes[1], sps.bit_depth_c), grey(&pic.planes[2], sps.bit_depth_c)];
+                        let grey =
+                            |p: &Plane, bd: u32| Plane::new(p.width, p.height, 1 << (bd - 1));
+                        let planes = [
+                            grey(&pic.planes[0], sps.bit_depth_y),
+                            grey(&pic.planes[1], sps.bit_depth_c),
+                            grey(&pic.planes[2], sps.bit_depth_c),
+                        ];
                         DecodedFrame::from_planes(&planes, fmt, sps.bit_depth_y as u8, crop, color)
                     }
                 },
-                None => DecodedFrame::from_planes(&pic.planes, fmt, sps.bit_depth_y as u8, crop, color),
+                None => {
+                    DecodedFrame::from_planes(&pic.planes, fmt, sps.bit_depth_y as u8, crop, color)
+                }
             };
             let id = self.next_id;
             self.next_id += 1;
@@ -712,24 +866,192 @@ impl HevcDecoder {
             self.bump_while_over(sps, false);
         }
         let layout = pic.layout.clone();
-        self.dpb.push(RefPic {
-            poc: pic.poc,
-            long_term: false,
-            planes: Arc::new(pic.planes),
-            motion: Arc::new(Motion {
-                mv: pic.mv,
-                w4: layout.w4,
-                ctb_slice: pic.ctb_slice,
-                slices: pic.slices,
-                log2_ctb: layout.log2_ctb as usize,
-                ctb_w: layout.ctb_w,
-            }),
-        });
-        // A broken stream that never lets go of references must not grow
-        // the store without bound.
+        let size = (sps.width as usize, sps.height as usize);
         let cap = (sps.max_dec_pic_buffering as usize).max(1) + 16;
+        let poc = pic.poc;
+        let data = ref_data(pic, &layout);
+        self.dpb.push(RefPic {
+            poc,
+            long_term: false,
+            planes: data.planes,
+            motion: data.motion,
+            size,
+            pending: None,
+        });
+        self.limit_dpb(cap);
+    }
+
+    /// A broken stream that never lets go of references must not grow the
+    /// store without bound.
+    fn limit_dpb(&mut self, cap: usize) {
         while self.dpb.len() > cap {
             self.dpb.remove(0);
         }
     }
+
+    /// Everything [`finish_picture`](Self::finish_picture) does that needs
+    /// only headers; a job does the rest.
+    fn submit_picture(&mut self, cur: Current) {
+        let poc = cur.pic.poc;
+        let out = cur.output.then(|| {
+            let id = self.next_id;
+            self.next_id += 1;
+            for e in &mut self.pending {
+                e.2 += 1;
+            }
+            self.pending.push((id, poc, 0));
+            self.bump_while_over(&cur.sps, false);
+            id
+        });
+        let dpb = self.dpb.clone();
+        // Only what this picture can read: the buffer also holds pictures kept
+        // for later ones, and waiting on those would serialise siblings.
+        let deps: Vec<_> = [&cur.st_before, &cur.st_after, &cur.lt_curr]
+            .into_iter()
+            .flatten()
+            .filter_map(|&i| dpb.get(i)?.pending.clone())
+            .collect();
+        let slot = Slot::new();
+        let size = (cur.sps.width as usize, cur.sps.height as usize);
+        let cap = (cur.sps.max_dec_pic_buffering as usize).max(1) + 16;
+        let layout = cur.pic.layout.clone();
+        let empty = Self::empty_ref(poc, size, slot.clone(), &layout);
+        self.dpb.push(empty);
+        self.limit_dpb(cap);
+
+        let t = self.threads.as_mut().unwrap();
+        let order = t.next_job;
+        t.next_job += 1;
+        let (finished, error) = (t.finished.clone(), t.error.clone());
+        let new_sequence = cur.new_sequence;
+        let sps = cur.sps.clone();
+        t.jobs.clone().submit(&deps, move || {
+            let result = caught(|| reconstruct(cur, dpb));
+            let (data, frame) = match result {
+                Ok((data, frame)) => (data, frame),
+                Err(e) => {
+                    let mut first = error.lock().unwrap();
+                    if first.as_ref().is_none_or(|f| order < f.0) {
+                        *first = Some((order, e));
+                    }
+                    let grey = Self::placeholder(&sps, &layout, poc, false);
+                    (
+                        RefData {
+                            planes: grey.planes,
+                            motion: grey.motion,
+                        },
+                        None,
+                    )
+                }
+            };
+            if let Some(id) = out {
+                let picture = frame.map(|frame| HevcPicture {
+                    id,
+                    frame,
+                    poc,
+                    new_sequence,
+                });
+                finished.lock().unwrap().insert(id, picture);
+            }
+            slot.finish(data);
+        });
+    }
+
+    fn empty_ref(
+        poc: i32,
+        size: (usize, usize),
+        slot: Arc<Slot<RefData>>,
+        layout: &Layout,
+    ) -> RefPic {
+        let none = || Plane::new(0, 0, 0);
+        RefPic {
+            poc,
+            long_term: false,
+            planes: Arc::new([none(), none(), none()]),
+            motion: Arc::new(Motion {
+                mv: Vec::new(),
+                w4: layout.w4,
+                ctb_slice: Vec::new(),
+                slices: Vec::new(),
+                log2_ctb: layout.log2_ctb as usize,
+                ctb_w: layout.ctb_w,
+            }),
+            size,
+            pending: Some(slot),
+        }
+    }
+}
+
+/// How `sps` says a picture leaves the decoder.
+#[cfg(feature = "decode")]
+fn output_format(sps: &Sps) -> (ChromaFormat, [usize; 4], ColorInfo) {
+    let color = ColorInfo::from_vui(
+        sps.matrix_coefficients,
+        sps.full_range,
+        sps.height - sps.crop[2] - sps.crop[3],
+    );
+    let fmt = match sps.chroma_format_idc {
+        3 => ChromaFormat::Yuv444,
+        2 => ChromaFormat::Yuv422,
+        _ => ChromaFormat::Yuv420,
+    };
+    (fmt, sps.crop.map(|v| v as usize), color)
+}
+
+/// What a finished picture leaves in the decoded picture buffer.
+#[cfg(feature = "decode")]
+fn ref_data(pic: PicState, layout: &Layout) -> RefData {
+    RefData {
+        planes: Arc::new(pic.planes),
+        motion: Arc::new(Motion {
+            mv: pic.mv,
+            w4: layout.w4,
+            ctb_slice: pic.ctb_slice,
+            slices: pic.slices,
+            log2_ctb: layout.log2_ctb as usize,
+            ctb_w: layout.ctb_w,
+        }),
+    }
+}
+
+/// A picture job: its slices, the loop filters, and what comes out. `dpb` is
+/// the buffer as this picture saw it, its references all finished by now.
+#[cfg(feature = "decode")]
+fn reconstruct(mut cur: Current, mut dpb: Vec<RefPic>) -> Result<(RefData, Option<DecodedFrame>)> {
+    for p in &mut dpb {
+        if let Some(data) = p.pending.as_ref().and_then(|s| s.get()) {
+            p.planes = data.planes.clone();
+            p.motion = data.motion.clone();
+        }
+    }
+    // The buffers come here rather than in the header walk, which they would
+    // otherwise hold up.
+    let mut pic = PicState::new(&cur.sps, cur.pic.layout.clone());
+    pic.poc = cur.pic.poc;
+    pic.slices = std::mem::take(&mut cur.pic.slices);
+    cur.pic = pic;
+    for w in std::mem::take(&mut cur.work) {
+        let mut dec = SliceDec::new(
+            &cur.sps,
+            &cur.pps,
+            &w.sh,
+            &mut cur.pic,
+            &dpb,
+            &w.refs,
+            &mut cur.carry,
+            w.slice_idx,
+            w.slice_addr,
+        );
+        dec.decode(&w.rbsp)?;
+    }
+    filters::deblock(&mut cur.pic, &cur.sps, &cur.pps);
+    if cur.sps.sao {
+        filters::sao(&mut cur.pic, &cur.sps, &cur.pps);
+    }
+    let frame = cur.output.then(|| {
+        let (fmt, crop, color) = output_format(&cur.sps);
+        DecodedFrame::from_planes(&cur.pic.planes, fmt, cur.sps.bit_depth_y as u8, crop, color)
+    });
+    let layout = cur.pic.layout.clone();
+    Ok((ref_data(cur.pic, &layout), frame))
 }

@@ -92,10 +92,23 @@ impl Topo {
         let rest_len = (0..p.edges.len() / 2)
             .map(|e| {
                 let (a, b) = (3 * p.edges[2 * e] as usize, 3 * p.edges[2 * e + 1] as usize);
-                js::hypot3(r[a] as f64 - r[b] as f64, r[a + 1] as f64 - r[b + 1] as f64, r[a + 2] as f64 - r[b + 2] as f64) as f32
+                js::hypot3(
+                    r[a] as f64 - r[b] as f64,
+                    r[a + 1] as f64 - r[b + 1] as f64,
+                    r[a + 2] as f64 - r[b + 2] as f64,
+                ) as f32
             })
             .collect::<Vec<_>>();
-        let w = mass.iter().map(|&m| if m > 0.0 { (1.0 / m as f64) as f32 } else { 0.0 }).collect();
+        let w = mass
+            .iter()
+            .map(|&m| {
+                if m > 0.0 {
+                    (1.0 / m as f64) as f32
+                } else {
+                    0.0
+                }
+            })
+            .collect();
         let total_vol = p.rest_vol.iter().fold(0.0f64, |a, &b| a + b as f64);
         Topo {
             n,
@@ -164,7 +177,11 @@ pub enum Muscles {
     /// travelling wave (an idle sway; a fast flick when startled).
     Sway,
     /// Each edge shortens by `weight · pulse(t, phase, startle)`.
-    Pulse { weight: Vec<f32>, phase: Vec<f32>, pulse: Pulse },
+    Pulse {
+        weight: Vec<f32>,
+        phase: Vec<f32>,
+        pulse: Pulse,
+    },
     None,
 }
 
@@ -188,7 +205,11 @@ impl Pulse {
     fn at(&self, t: f64, q: f64, st: f64) -> f64 {
         let wave = |x: f64, p: f64| {
             let s = js::sin(x);
-            if p == 0.0 { s } else { js::pow(s.max(0.0), p) }
+            if p == 0.0 {
+                s
+            } else {
+                js::pow(s.max(0.0), p)
+            }
         };
         self.a * (1.0 - self.calm * st) * wave(t * self.omega_a - q * self.phase_a, self.power_a)
             + self.b * st * wave(t * self.omega_b - q * self.phase_b, self.power_b)
@@ -207,7 +228,13 @@ pub struct Params {
 
 impl Default for Params {
     fn default() -> Self {
-        Params { firmness: 0.5, damping: 0.4, regrow: 0.5, substeps: 12, gravity: 9.8 }
+        Params {
+            firmness: 0.5,
+            damping: 0.4,
+            regrow: 0.5,
+            substeps: 12,
+            gravity: 9.8,
+        }
     }
 }
 
@@ -227,8 +254,16 @@ pub struct Measure {
 /// Where a ray met the creature.
 #[derive(Debug, Clone, Copy)]
 pub enum Hit {
-    Part { block: usize, t: f64, point: [f64; 3] },
-    Drop { index: usize, t: f64, point: [f64; 3] },
+    Part {
+        block: usize,
+        t: f64,
+        point: [f64; 3],
+    },
+    Drop {
+        index: usize,
+        t: f64,
+        point: [f64; 3],
+    },
 }
 
 pub const MAX_DROPS: usize = 120;
@@ -328,21 +363,38 @@ fn js_sign(x: f64) -> f64 {
 }
 
 impl SoftBody {
-    pub fn new(body: &Part, limbs: Vec<Limb>, chains: Chains, landmarks: Landmarks, random: Box<dyn Random>) -> SoftBody {
+    pub fn new(
+        body: &Part,
+        limbs: Vec<Limb>,
+        chains: Chains,
+        landmarks: Landmarks,
+        random: Box<dyn Random>,
+    ) -> SoftBody {
         let mut topos = vec![Topo::new(body)];
         topos.extend(limbs.iter().map(|l| Topo::new(&l.part)));
         let mut blocks = Vec::new();
         let mut off = 0;
         let mut add = |topo: usize, leg: i32, slot: u8, blocks: &mut Vec<Block>| {
             blocks.push(Block {
-                topo, off, active: slot == 0, scale: 1.0, grow: 1.0, twitch: 0.0, born: 0.0, leg, slot, strain: 0.0, glue_rest: None,
+                topo,
+                off,
+                active: slot == 0,
+                scale: 1.0,
+                grow: 1.0,
+                twitch: 0.0,
+                born: 0.0,
+                leg,
+                slot,
+                strain: 0.0,
+                glue_rest: None,
             });
             off += topos[topo].n;
             blocks.len() - 1
         };
         add(0, -1, 0, &mut blocks);
-        let leg_slots: Vec<[usize; 3]> =
-            (0..limbs.len()).map(|i| [0u8, 1, 2].map(|slot| add(1 + i, i as i32, slot, &mut blocks))).collect();
+        let leg_slots: Vec<[usize; 3]> = (0..limbs.len())
+            .map(|i| [0u8, 1, 2].map(|slot| add(1 + i, i as i32, slot, &mut blocks)))
+            .collect();
         let n = off;
         let (mut w, mut rad) = (vec![0.0f32; n], vec![0.0f32; n]);
         for b in &blocks {
@@ -353,9 +405,16 @@ impl SoftBody {
 
         // body muscles: lengthwise edges on each flank, weighted toward the tail
         let t = &topos[0];
-        let (mut muscle, mut muscle_x) = (vec![0.0f32; t.rest_len.len()], vec![0.0f32; t.rest_len.len()]);
+        let (mut muscle, mut muscle_x) = (
+            vec![0.0f32; t.rest_len.len()],
+            vec![0.0f32; t.rest_len.len()],
+        );
         for e in 0..t.rest_len.len() {
-            let (a, b, r) = (3 * t.edges[2 * e] as usize, 3 * t.edges[2 * e + 1] as usize, &t.rest);
+            let (a, b, r) = (
+                3 * t.edges[2 * e] as usize,
+                3 * t.edges[2 * e + 1] as usize,
+                &t.rest,
+            );
             let mx = (r[a] as f64 + r[b] as f64) / 2.0;
             let mz = (r[a + 2] as f64 + r[b + 2] as f64) / 2.0;
             let ax = (r[a] as f64 - r[b] as f64).abs() / t.rest_len[e] as f64;
@@ -553,12 +612,16 @@ impl SoftBody {
             if !self.blocks[b].active {
                 continue;
             }
-            let (s, e) = (self.blocks[b].off, self.blocks[b].off + self.topos[self.blocks[b].topo].n);
+            let (s, e) = (
+                self.blocks[b].off,
+                self.blocks[b].off + self.topos[self.blocks[b].topo].n,
+            );
             for i in s..e {
                 self.v[3 * i + 1] = (self.v[3 * i + 1] as f64 - g * dt) as f32;
                 for c in 0..3 {
                     self.prev[3 * i + c] = self.x[3 * i + c];
-                    self.x[3 * i + c] = (self.x[3 * i + c] as f64 + self.v[3 * i + c] as f64 * dt) as f32;
+                    self.x[3 * i + c] =
+                        (self.x[3 * i + c] as f64 + self.v[3 * i + c] as f64 * dt) as f32;
                 }
             }
         }
@@ -592,7 +655,8 @@ impl SoftBody {
             let (mut mx, mut my, mut mz) = (0.0f64, 0.0f64, 0.0f64);
             for i in s..e {
                 for c in 0..3 {
-                    self.v[3 * i + c] = ((self.x[3 * i + c] as f64 - self.prev[3 * i + c] as f64) * inv) as f32;
+                    self.v[3 * i + c] =
+                        ((self.x[3 * i + c] as f64 - self.prev[3 * i + c] as f64) * inv) as f32;
                 }
                 mx += self.v[3 * i] as f64;
                 my += self.v[3 * i + 1] as f64;
@@ -634,7 +698,9 @@ impl SoftBody {
             let factor = if is_body {
                 1.0 + t.modv[e] as f64
             } else if b.twitch != 0.0 && !b.twitch.is_nan() {
-                1.0 + b.twitch * js::sin(self.time * 17.0 + self.leg_phase[b.leg as usize][e] as f64) * 0.22
+                1.0 + b.twitch
+                    * js::sin(self.time * 17.0 + self.leg_phase[b.leg as usize][e] as f64)
+                    * 0.22
             } else {
                 1.0
             };
@@ -657,7 +723,12 @@ impl SoftBody {
         let w = &self.w;
         let mut g = [0.0f32; 12];
         for tt in 0..t.rest_vol.len() {
-            let n = [o + t.tets[4 * tt] as usize, o + t.tets[4 * tt + 1] as usize, o + t.tets[4 * tt + 2] as usize, o + t.tets[4 * tt + 3] as usize];
+            let n = [
+                o + t.tets[4 * tt] as usize,
+                o + t.tets[4 * tt + 1] as usize,
+                o + t.tets[4 * tt + 2] as usize,
+                o + t.tets[4 * tt + 3] as usize,
+            ];
             let i = n.map(|q| 3 * q);
             let d = |p: usize, q: usize, c: usize| x[p + c] as f64 - x[q + c] as f64;
             let (ax, ay, az) = (d(i[1], i[0], 0), d(i[1], i[0], 1), d(i[1], i[0], 2));
@@ -712,7 +783,9 @@ impl SoftBody {
         let s = self.blocks[bi].scale;
         let cached = matches!(&self.blocks[bi].glue_rest, Some((cs, _)) if *cs == s);
         if !cached {
-            let rest: Vec<f32> = (0..self.limbs[i].glue_part.len()).map(|g| self.glue_rest(i, g, s) as f32).collect();
+            let rest: Vec<f32> = (0..self.limbs[i].glue_part.len())
+                .map(|g| self.glue_rest(i, g, s) as f32)
+                .collect();
             self.blocks[bi].glue_rest = Some((s, rest));
         }
         let off = self.blocks[bi].off;
@@ -775,7 +848,9 @@ impl SoftBody {
             }
             // how fast it came down, if it was airborne a moment ago (for the thud)
             if self.prev[3 * i + 1] > 0.004 {
-                self.impact = self.impact.max((self.prev[3 * i + 1] as f64 - self.x[3 * i + 1] as f64) / dt);
+                self.impact = self
+                    .impact
+                    .max((self.prev[3 * i + 1] as f64 - self.x[3 * i + 1] as f64) / dt);
             }
             let pen = -(self.x[3 * i + 1] as f64);
             self.x[3 * i + 1] = 0.0;
@@ -807,7 +882,8 @@ impl SoftBody {
                 let m = (-s).min(0.006);
                 for c in 0..3 {
                     self.x[3 * i + c] = (self.x[3 * i + c] as f64 + wl[k + c] as f64 * m) as f32;
-                    self.prev[3 * i + c] = (self.prev[3 * i + c] as f64 + wl[k + c] as f64 * m * 0.5) as f32;
+                    self.prev[3 * i + c] =
+                        (self.prev[3 * i + c] as f64 + wl[k + c] as f64 * m * 0.5) as f32;
                 }
             }
         }
@@ -827,7 +903,8 @@ impl SoftBody {
             }
             for c in 0..3 {
                 self.dp[3 * i + c] = (self.dp[3 * i + c] as f64 - wl[k + c] as f64 * s) as f32;
-                self.dprev[3 * i + c] = (self.dprev[3 * i + c] as f64 - wl[k + c] as f64 * s * 0.6) as f32;
+                self.dprev[3 * i + c] =
+                    (self.dprev[3 * i + c] as f64 - wl[k + c] as f64 * s * 0.6) as f32;
             }
         }
     }
@@ -848,14 +925,23 @@ impl SoftBody {
                     }
                     let mx = self.muscle_x[e] as f64;
                     m[e] = (self.muscle[e] as f64
-                        * (amp_idle * js::sin(t * 1.7 + mx * 3.2) + amp_flick * js::sin(t * 13.0 + mx * 4.5)))
+                        * (amp_idle * js::sin(t * 1.7 + mx * 3.2)
+                            + amp_flick * js::sin(t * 13.0 + mx * 4.5)))
                         as f32;
                 }
             }
-            Muscles::Pulse { weight, phase, pulse } => {
+            Muscles::Pulse {
+                weight,
+                phase,
+                pulse,
+            } => {
                 for e in 0..m.len() {
                     let wgt = weight[e] as f64;
-                    m[e] = if wgt != 0.0 { (-wgt * pulse.at(t, phase[e] as f64, st)) as f32 } else { 0.0 };
+                    m[e] = if wgt != 0.0 {
+                        (-wgt * pulse.at(t, phase[e] as f64, st)) as f32
+                    } else {
+                        0.0
+                    };
                 }
             }
             Muscles::None => m.fill(0.0),
@@ -880,7 +966,15 @@ impl SoftBody {
             weights.push(f * f);
             offsets.extend([dx, dy, dz]);
         }
-        self.grab = Some(Grab { block, nodes, weights, offsets, target: hit, angle: 0.0, axis: [0.0, 0.0, 1.0] });
+        self.grab = Some(Grab {
+            block,
+            nodes,
+            weights,
+            offsets,
+            target: hit,
+            angle: 0.0,
+            axis: [0.0, 0.0, 1.0],
+        });
         if block == 0 {
             self.poke();
         }
@@ -898,9 +992,14 @@ impl SoftBody {
             let ry = oy * c + (az * ox - ax * oz) * s + ay * d * (1.0 - c);
             let rz = oz * c + (ax * oy - ay * ox) * s + az * d * (1.0 - c);
             let k2 = 0.5 * g.weights[k];
-            self.x[3 * i] = (self.x[3 * i] as f64 + (g.target[0] + rx - self.x[3 * i] as f64) * k2) as f32;
-            self.x[3 * i + 1] = (self.x[3 * i + 1] as f64 + (g.target[1] + ry - self.x[3 * i + 1] as f64) * k2) as f32;
-            self.x[3 * i + 2] = (self.x[3 * i + 2] as f64 + (g.target[2] + rz - self.x[3 * i + 2] as f64) * k2) as f32;
+            self.x[3 * i] =
+                (self.x[3 * i] as f64 + (g.target[0] + rx - self.x[3 * i] as f64) * k2) as f32;
+            self.x[3 * i + 1] = (self.x[3 * i + 1] as f64
+                + (g.target[1] + ry - self.x[3 * i + 1] as f64) * k2)
+                as f32;
+            self.x[3 * i + 2] = (self.x[3 * i + 2] as f64
+                + (g.target[2] + rz - self.x[3 * i + 2] as f64) * k2)
+                as f32;
         }
     }
 
@@ -933,9 +1032,11 @@ impl SoftBody {
         let mut free = [self.leg_slots[i][1], self.leg_slots[i][2]];
         free.sort_by(|&p, &q| {
             let (p, q) = (&self.blocks[p], &self.blocks[q]);
-            (p.active as i32 - q.active as i32)
-                .cmp(&0)
-                .then(p.born.partial_cmp(&q.born).unwrap_or(std::cmp::Ordering::Equal))
+            (p.active as i32 - q.active as i32).cmp(&0).then(
+                p.born
+                    .partial_cmp(&q.born)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            )
         });
         let f = free[0];
         let (ao, fo) = (self.blocks[a].off, self.blocks[f].off);
@@ -962,7 +1063,11 @@ impl SoftBody {
         for _ in 0..14 {
             let ang = self.random.next() * std::f64::consts::PI * 2.0;
             let u = self.random.next();
-            let pos = [p[0] + js::cos(ang) * 0.04, p[1] + 0.06 + u * 0.05, p[2] + js::sin(ang) * 0.04];
+            let pos = [
+                p[0] + js::cos(ang) * 0.04,
+                p[1] + 0.06 + u * 0.05,
+                p[2] + js::sin(ang) * 0.04,
+            ];
             let vy = 1.4 + self.random.next() * 1.6;
             let vel = [js::cos(ang) * (0.6 + u), vy, js::sin(ang) * (0.6 + u)];
             let r = 0.014 + self.random.next() * 0.02;
@@ -990,15 +1095,25 @@ impl SoftBody {
         let l1 = js::hypot(&c1);
         let l1 = if l1 == 0.0 || l1.is_nan() { 1.0 } else { l1 };
         c1 = c1.map(|v| v / l1);
-        let c2 = [c0[1] * c1[2] - c0[2] * c1[1], c0[2] * c1[0] - c0[0] * c1[2], c0[0] * c1[1] - c0[1] * c1[0]];
-        [c0[0], c0[1], c0[2], c1[0], c1[1], c1[2], c2[0], c2[1], c2[2]]
+        let c2 = [
+            c0[1] * c1[2] - c0[2] * c1[1],
+            c0[2] * c1[0] - c0[0] * c1[2],
+            c0[0] * c1[1] - c0[1] * c1[0],
+        ];
+        [
+            c0[0], c0[1], c0[2], c1[0], c1[1], c1[2], c2[0], c2[1], c2[2],
+        ]
     }
 
     /// Where part `i`'s pivot is now, carried by the body round its socket.
     pub fn pivot_now(&self, i: usize) -> [f64; 3] {
         let l = &self.limbs[i];
         let (a, r, br) = (l.anchor, self.socket_rotation(i), &self.topos[0].rest);
-        let d = [l.pivot[0] - br[3 * a] as f64, l.pivot[1] - br[3 * a + 1] as f64, l.pivot[2] - br[3 * a + 2] as f64];
+        let d = [
+            l.pivot[0] - br[3 * a] as f64,
+            l.pivot[1] - br[3 * a + 1] as f64,
+            l.pivot[2] - br[3 * a + 2] as f64,
+        ];
         let x = &self.x;
         [
             x[3 * a] as f64 + r[0] * d[0] + r[3] * d[1] + r[6] * d[2],
@@ -1039,7 +1154,11 @@ impl SoftBody {
                 // ease out with a little overshoot, like a bud swelling then settling
                 let (t, c1) = (b.grow - 1.0, 1.5);
                 let c3 = c1 + 1.0;
-                b.scale = if b.grow >= 1.0 { 1.0 } else { 0.05 + 0.95 * (1.0 + c3 * t * t * t + c1 * t * t) };
+                b.scale = if b.grow >= 1.0 {
+                    1.0
+                } else {
+                    0.05 + 0.95 * (1.0 + c3 * t * t * t + c1 * t * t)
+                };
                 if b.grow >= 1.0 {
                     self.regrown += 1;
                     self.events.push(Event::Regrown { leg: li });
@@ -1062,7 +1181,8 @@ impl SoftBody {
         let rest = self.head_rest;
         for r in 0..3 {
             for c in 0..3 {
-                self.r[3 * r + c] = now[0][r] * rest[0][c] + now[1][r] * rest[1][c] + now[2][r] * rest[2][c];
+                self.r[3 * r + c] =
+                    now[0][r] * rest[0][c] + now[1][r] * rest[1][c] + now[2][r] * rest[2][c];
             }
         }
     }
@@ -1075,7 +1195,11 @@ impl SoftBody {
         for (ri, &root) in g.roots.iter().enumerate() {
             let i = root as usize;
             let t = emb.tet_of[ri] as usize;
-            let (b1, b2, b3) = (emb.bary[3 * ri] as f64, emb.bary[3 * ri + 1] as f64, emb.bary[3 * ri + 2] as f64);
+            let (b1, b2, b3) = (
+                emb.bary[3 * ri] as f64,
+                emb.bary[3 * ri + 1] as f64,
+                emb.bary[3 * ri + 2] as f64,
+            );
             let b0 = 1.0 - b1 - b2 - b3;
             for c in 0..3 {
                 let at = |k: usize| x[3 * tets[4 * t + k] as usize + c] as f64;
@@ -1092,7 +1216,8 @@ impl SoftBody {
             let gv = &mut self.gv;
             gv[3 * i + 1] = (gv[3 * i + 1] as f64 - grav * 0.3 * dt) as f32;
             gv[3 * i] = (gv[3 * i] as f64 + js::sin(t * 3.1 + i as f64 * 0.7) * 0.6 * dt) as f32;
-            gv[3 * i + 2] = (gv[3 * i + 2] as f64 + js::cos(t * 2.6 + i as f64 * 1.3) * 0.6 * dt) as f32;
+            gv[3 * i + 2] =
+                (gv[3 * i + 2] as f64 + js::cos(t * 2.6 + i as f64 * 1.3) * 0.6 * dt) as f32;
             for c in 0..3 {
                 self.gprev[3 * i + c] = gx[3 * i + c];
                 gx[3 * i + c] = (gx[3 * i + c] as f64 + gv[3 * i + c] as f64 * dt) as f32;
@@ -1111,7 +1236,8 @@ impl SoftBody {
             let rz = (s[3 * i + 2] as f64 - s[3 * a + 2] as f64) * breath;
             let k = g.stiff[i] as f64;
             for c in 0..3 {
-                let target = gx[3 * a + c] as f64 + r[3 * c] * rx + r[3 * c + 1] * ry + r[3 * c + 2] * rz;
+                let target =
+                    gx[3 * a + c] as f64 + r[3 * c] * rx + r[3 * c + 1] * ry + r[3 * c + 2] * rz;
                 gx[3 * i + c] = (gx[3 * i + c] as f64 + (target - gx[3 * i + c] as f64) * k) as f32;
             }
             // inextensible link to the parent (only the child moves)
@@ -1132,7 +1258,8 @@ impl SoftBody {
         let kd = js::exp(-3.0 * dt);
         for i in 0..self.gn {
             for c in 0..3 {
-                self.gv[3 * i + c] = ((gx[3 * i + c] as f64 - self.gprev[3 * i + c] as f64) * inv * kd) as f32;
+                self.gv[3 * i + c] =
+                    ((gx[3 * i + c] as f64 - self.gprev[3 * i + c] as f64) * inv * kd) as f32;
             }
         }
     }
@@ -1160,12 +1287,14 @@ impl SoftBody {
             self.dv[3 * i + 1] = (self.dv[3 * i + 1] as f64 - g * dt) as f32;
             for c in 0..3 {
                 self.dprev[3 * i + c] = self.dp[3 * i + c];
-                self.dp[3 * i + c] = (self.dp[3 * i + c] as f64 + self.dv[3 * i + c] as f64 * dt) as f32;
+                self.dp[3 * i + c] =
+                    (self.dp[3 * i + c] as f64 + self.dv[3 * i + c] as f64 * dt) as f32;
             }
         }
         if let Some((i, t)) = self.drop_grab {
             for c in 0..3 {
-                self.dp[3 * i + c] = (self.dp[3 * i + c] as f64 + (t[c] - self.dp[3 * i + c] as f64) * 0.35) as f32;
+                self.dp[3 * i + c] =
+                    (self.dp[3 * i + c] as f64 + (t[c] - self.dp[3 * i + c] as f64) * 0.35) as f32;
             }
         }
         self.touch.fill(0);
@@ -1209,7 +1338,9 @@ impl SoftBody {
         for i in 0..m {
             let r = dr[i] as f64;
             let wd = 1.0 / (r * r * r * 4.2);
-            let cnt = self.hash.query(dp[3 * i] as f64, dp[3 * i + 1] as f64, dp[3 * i + 2] as f64);
+            let cnt = self
+                .hash
+                .query(dp[3 * i] as f64, dp[3 * i + 1] as f64, dp[3 * i + 2] as f64);
             for q in 0..cnt {
                 let n = self.hash.query_ids[q] as usize;
                 let rr = r + self.rad[n] as f64;
@@ -1224,7 +1355,8 @@ impl SoftBody {
                     continue;
                 }
                 if self.d_touch[i] & 1 == 0 && self.touch[i] & 1 == 0 {
-                    let sp = js::hypot3(dv[3 * i] as f64, dv[3 * i + 1] as f64, dv[3 * i + 2] as f64);
+                    let sp =
+                        js::hypot3(dv[3 * i] as f64, dv[3 * i + 1] as f64, dv[3 * i + 2] as f64);
                     if sp > 0.8 && self.events.len() < 40 {
                         self.events.push(Event::Plop { r, speed: sp });
                     }
@@ -1253,17 +1385,27 @@ impl SoftBody {
         for i in 0..m {
             let r = self.dr[i] as f64;
             if (self.dp[3 * i + 1] as f64) < r {
-                if self.dprev[3 * i + 1] as f64 > r + 0.002 && (self.dv[3 * i + 1] as f64) < -0.8 && self.events.len() < 40 {
-                    self.events.push(Event::Plip { r, speed: -(self.dv[3 * i + 1] as f64) });
+                if self.dprev[3 * i + 1] as f64 > r + 0.002
+                    && (self.dv[3 * i + 1] as f64) < -0.8
+                    && self.events.len() < 40
+                {
+                    self.events.push(Event::Plip {
+                        r,
+                        speed: -(self.dv[3 * i + 1] as f64),
+                    });
                 }
                 self.dp[3 * i + 1] = r as f32;
-                self.dp[3 * i] = (self.dp[3 * i] as f64 - (self.dp[3 * i] as f64 - self.dprev[3 * i] as f64) * 0.3) as f32;
-                self.dp[3 * i + 2] =
-                    (self.dp[3 * i + 2] as f64 - (self.dp[3 * i + 2] as f64 - self.dprev[3 * i + 2] as f64) * 0.3) as f32;
+                self.dp[3 * i] = (self.dp[3 * i] as f64
+                    - (self.dp[3 * i] as f64 - self.dprev[3 * i] as f64) * 0.3)
+                    as f32;
+                self.dp[3 * i + 2] = (self.dp[3 * i + 2] as f64
+                    - (self.dp[3 * i + 2] as f64 - self.dprev[3 * i + 2] as f64) * 0.3)
+                    as f32;
             }
             self.walls_drop(i);
             for c in 0..3 {
-                self.dv[3 * i + c] = ((self.dp[3 * i + c] as f64 - self.dprev[3 * i + c] as f64) * inv) as f32;
+                self.dv[3 * i + c] =
+                    ((self.dp[3 * i + c] as f64 - self.dprev[3 * i + c] as f64) * inv) as f32;
             }
             let rr = js::hypot(&[self.dp[3 * i] as f64, self.dp[3 * i + 2] as f64]);
             if rr > 4.0 {
@@ -1300,7 +1442,8 @@ impl SoftBody {
                     for row in 0..3 {
                         f[3 * col + row] = (e[row] as f64 * d[dd + 3 * col] as f64
                             + e[3 + row] as f64 * d[dd + 3 * col + 1] as f64
-                            + e[6 + row] as f64 * d[dd + 3 * col + 2] as f64) as f32;
+                            + e[6 + row] as f64 * d[dd + 3 * col + 2] as f64)
+                            as f32;
                     }
                 }
                 let wv = t.rest_vol[tt] as f64;
@@ -1333,14 +1476,37 @@ impl SoftBody {
             let (ux, uy, uz) = (d(1, 0), d(1, 1), d(1, 2));
             let (vx, vy, vz) = (d(2, 0), d(2, 1), d(2, 2));
             let (wx, wy, wz) = (d(3, 0), d(3, 1), d(3, 2));
-            v += ((uy * vz - uz * vy) * wx + (uz * vx - ux * vz) * wy + (ux * vy - uy * vx) * wz) / 6.0;
+            v += ((uy * vz - uz * vy) * wx + (uz * vx - ux * vz) * wy + (ux * vy - uy * vx) * wz)
+                / 6.0;
         }
         let (s, tl) = (3 * self.landmarks.snout, 3 * self.landmarks.tail);
-        let length = js::hypot3(x[s] as f64 - x[tl] as f64, x[s + 1] as f64 - x[tl + 1] as f64, x[s + 2] as f64 - x[tl + 2] as f64);
-        let attached = self.leg_slots.iter().filter(|s| self.blocks[s[0]].grow >= 1.0).count();
-        let growing = self.leg_slots.iter().map(|s| self.blocks[s[0]].grow).find(|&g| g < 1.0);
-        let loose = self.blocks.iter().filter(|b| b.slot > 0 && b.active).count();
-        Measure { volume: v / t.total_vol, length, attached, growing, loose }
+        let length = js::hypot3(
+            x[s] as f64 - x[tl] as f64,
+            x[s + 1] as f64 - x[tl + 1] as f64,
+            x[s + 2] as f64 - x[tl + 2] as f64,
+        );
+        let attached = self
+            .leg_slots
+            .iter()
+            .filter(|s| self.blocks[s[0]].grow >= 1.0)
+            .count();
+        let growing = self
+            .leg_slots
+            .iter()
+            .map(|s| self.blocks[s[0]].grow)
+            .find(|&g| g < 1.0);
+        let loose = self
+            .blocks
+            .iter()
+            .filter(|b| b.slot > 0 && b.active)
+            .count();
+        Measure {
+            volume: v / t.total_vol,
+            length,
+            attached,
+            growing,
+            loose,
+        }
     }
 
     /// The nearest part or drop along the ray from `o` along unit `d`. Parts
@@ -1355,11 +1521,19 @@ impl SoftBody {
             }
             let (bd, off) = (&self.topos[blk.topo].boundary, blk.off);
             for f in (0..bd.len()).step_by(3) {
-                let (a, b, c) = (3 * (off + bd[f] as usize), 3 * (off + bd[f + 1] as usize), 3 * (off + bd[f + 2] as usize));
+                let (a, b, c) = (
+                    3 * (off + bd[f] as usize),
+                    3 * (off + bd[f + 1] as usize),
+                    3 * (off + bd[f + 2] as usize),
+                );
                 let g = |i: usize| x[i] as f64;
                 let (e1x, e1y, e1z) = (g(b) - g(a), g(b + 1) - g(a + 1), g(b + 2) - g(a + 2));
                 let (e2x, e2y, e2z) = (g(c) - g(a), g(c + 1) - g(a + 1), g(c + 2) - g(a + 2));
-                let (px, py, pz) = (d[1] * e2z - d[2] * e2y, d[2] * e2x - d[0] * e2z, d[0] * e2y - d[1] * e2x);
+                let (px, py, pz) = (
+                    d[1] * e2z - d[2] * e2y,
+                    d[2] * e2x - d[0] * e2z,
+                    d[0] * e2y - d[1] * e2x,
+                );
                 let det = e1x * px + e1y * py + e1z * pz;
                 if det.abs() < 1e-10 {
                     continue;
@@ -1370,7 +1544,11 @@ impl SoftBody {
                 if !(0.0..=1.0).contains(&u) {
                     continue;
                 }
-                let (qx, qy, qz) = (ty * e1z - tz * e1y, tz * e1x - tx * e1z, tx * e1y - ty * e1x);
+                let (qx, qy, qz) = (
+                    ty * e1z - tz * e1y,
+                    tz * e1x - tx * e1z,
+                    tx * e1y - ty * e1x,
+                );
                 let v = (d[0] * qx + d[1] * qy + d[2] * qz) * inv;
                 if v < 0.0 || u + v > 1.0 {
                     continue;
@@ -1379,13 +1557,21 @@ impl SoftBody {
                 let tt = if bi == 0 { t + 0.03 } else { t };
                 if t > 0.0 && tt < best_t {
                     best_t = tt;
-                    best = Some(Hit::Part { block: bi, t: tt, point: [0.0; 3] });
+                    best = Some(Hit::Part {
+                        block: bi,
+                        t: tt,
+                        point: [0.0; 3],
+                    });
                 }
             }
         }
         for i in 0..self.d_count {
             let r = self.dr[i] as f64 * 1.8;
-            let (ox, oy, oz) = (o[0] - self.dp[3 * i] as f64, o[1] - self.dp[3 * i + 1] as f64, o[2] - self.dp[3 * i + 2] as f64);
+            let (ox, oy, oz) = (
+                o[0] - self.dp[3 * i] as f64,
+                o[1] - self.dp[3 * i + 1] as f64,
+                o[2] - self.dp[3 * i + 2] as f64,
+            );
             let b = ox * d[0] + oy * d[1] + oz * d[2];
             let c = ox * ox + oy * oy + oz * oz - r * r;
             let h = b * b - c;
@@ -1395,13 +1581,25 @@ impl SoftBody {
             let t = -b - h.sqrt();
             if t > 0.0 && t < best_t {
                 best_t = t;
-                best = Some(Hit::Drop { index: i, t, point: [0.0; 3] });
+                best = Some(Hit::Drop {
+                    index: i,
+                    t,
+                    point: [0.0; 3],
+                });
             }
         }
         let at = |t: f64| [o[0] + d[0] * t, o[1] + d[1] * t, o[2] + d[2] * t];
         best.map(|h| match h {
-            Hit::Part { block, t, .. } => Hit::Part { block, t, point: at(t) },
-            Hit::Drop { index, t, .. } => Hit::Drop { index, t, point: at(t) },
+            Hit::Part { block, t, .. } => Hit::Part {
+                block,
+                t,
+                point: at(t),
+            },
+            Hit::Drop { index, t, .. } => Hit::Drop {
+                index,
+                t,
+                point: at(t),
+            },
         })
     }
 
@@ -1424,7 +1622,11 @@ fn frame_of(lm: &Landmarks, p: &[f32], off: usize) -> [[f64; 3]; 3] {
     e2 = [e2[0] - e1[0] * d, e2[1] - e1[1] * d, e2[2] - e1[2] * d];
     let l2 = js::hypot(&e2);
     e2 = e2.map(|v| v / l2);
-    let e3 = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
+    let e3 = [
+        e1[1] * e2[2] - e1[2] * e2[1],
+        e1[2] * e2[0] - e1[0] * e2[2],
+        e1[0] * e2[1] - e1[1] * e2[0],
+    ];
     [e1, e2, e3]
 }
 
@@ -1441,14 +1643,26 @@ struct SpatialHash {
 impl SpatialHash {
     fn new(spacing: f64, max_items: usize) -> Self {
         let size = 2 * max_items;
-        SpatialHash { s: spacing, size, start: vec![0; size + 1], entries: vec![0; max_items], query_ids: vec![0; max_items] }
+        SpatialHash {
+            s: spacing,
+            size,
+            start: vec![0; size + 1],
+            entries: vec![0; max_items],
+            query_ids: vec![0; max_items],
+        }
     }
     fn key(&self, xi: f64, yi: f64, zi: f64) -> usize {
-        let h = js::to_int32(xi * 92837111.0) ^ js::to_int32(yi * 689287499.0) ^ js::to_int32(zi * 283923481.0);
+        let h = js::to_int32(xi * 92837111.0)
+            ^ js::to_int32(yi * 689287499.0)
+            ^ js::to_int32(zi * 283923481.0);
         ((h as i64).abs() % self.size as i64) as usize
     }
     fn cell(&self, p: &[f32], i: usize) -> usize {
-        self.key((p[3 * i] as f64 / self.s).floor(), (p[3 * i + 1] as f64 / self.s).floor(), (p[3 * i + 2] as f64 / self.s).floor())
+        self.key(
+            (p[3 * i] as f64 / self.s).floor(),
+            (p[3 * i + 1] as f64 / self.s).floor(),
+            (p[3 * i + 2] as f64 / self.s).floor(),
+        )
     }
     fn build(&mut self, p: &[f32], idx: &[i32], n: usize) {
         self.start.fill(0);
@@ -1469,7 +1683,11 @@ impl SpatialHash {
         }
     }
     fn query(&mut self, x: f64, y: f64, z: f64) -> usize {
-        let (xi, yi, zi) = ((x / self.s).floor(), (y / self.s).floor(), (z / self.s).floor());
+        let (xi, yi, zi) = (
+            (x / self.s).floor(),
+            (y / self.s).floor(),
+            (z / self.s).floor(),
+        );
         let mut n = 0;
         for a in [xi - 1.0, xi, xi + 1.0] {
             for b in [yi - 1.0, yi, yi + 1.0] {

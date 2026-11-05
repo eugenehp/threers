@@ -1,6 +1,8 @@
 //! Circles, one per row.
 
-use super::{Column, ColumnFormat, KindUniforms, Lighting, Mark, MarkCommon, MarkKind, ProceduralFrame};
+use super::{
+    Column, ColumnFormat, KindUniforms, Lighting, Mark, MarkCommon, MarkKind, ProceduralFrame,
+};
 
 /// Antialiased circles, sized in pixels or world units, with an optional
 /// stroke — deck.gl's `ScatterplotLayer`.
@@ -136,14 +138,17 @@ impl PointMarks {
     }
     pub fn update_radii(&mut self, start: usize, r: &[f32]) {
         let n = self.radius_rows.len().max(start + r.len());
-        let whole = n != self.radius_rows.len() || self.radii.len() != n.max(self.stroke_rows.len()).max(self.dash_rows.len());
+        let whole = n != self.radius_rows.len()
+            || self.radii.len() != n.max(self.stroke_rows.len()).max(self.dash_rows.len());
         self.radius_rows.resize(n, 1.0);
         self.radius_rows[start..start + r.len()].copy_from_slice(r);
         if whole {
             self.pack_radii();
             return;
         }
-        let packed: Vec<f32> = (start..start + r.len()).flat_map(|i| self.packed(i)).collect();
+        let packed: Vec<f32> = (start..start + r.len())
+            .flat_map(|i| self.packed(i))
+            .collect();
         self.radii.update_f32(start, &packed);
     }
     /// Each row's stroke width as a multiple of
@@ -167,10 +172,19 @@ impl PointMarks {
     }
     fn packed(&self, i: usize) -> [f32; 4] {
         let d = self.dash_rows.get(i).copied().unwrap_or([0.0, 0.0]);
-        [self.radius_rows.get(i).copied().unwrap_or(1.0), self.stroke_rows.get(i).copied().unwrap_or(1.0), d[0], d[1]]
+        [
+            self.radius_rows.get(i).copied().unwrap_or(1.0),
+            self.stroke_rows.get(i).copied().unwrap_or(1.0),
+            d[0],
+            d[1],
+        ]
     }
     fn pack_radii(&mut self) {
-        let n = self.radius_rows.len().max(self.stroke_rows.len()).max(self.dash_rows.len());
+        let n = self
+            .radius_rows
+            .len()
+            .max(self.stroke_rows.len())
+            .max(self.dash_rows.len());
         if n == 0 {
             self.radii.set_f32(&[]);
             return;
@@ -216,10 +230,15 @@ impl PointMarks {
     }
 
     fn build_procedural_columns(&mut self) {
-        let Some(frames) = &self.procedural else { return };
+        let Some(frames) = &self.procedural else {
+            return;
+        };
         let key = (self.procedural_unit.to_bits(), self.procedural_y_down);
         // Rebuilt too when something else cleared the custom columns.
-        if self.procedural_built == Some(key) && self.common.has_custom(0) && self.common.has_custom(1) {
+        if self.procedural_built == Some(key)
+            && self.common.has_custom(0)
+            && self.common.has_custom(1)
+        {
             return;
         }
         let n = frames.len();
@@ -242,7 +261,9 @@ impl PointMarks {
 
 impl PointMarks {
     fn lit(&self) -> Option<&Lighting> {
-        self.lighting.as_ref().filter(|l| l.pbr.is_none() && !l.scene)
+        self.lighting
+            .as_ref()
+            .filter(|l| l.pbr.is_none() && !l.scene)
     }
 }
 
@@ -282,8 +303,17 @@ impl Mark for PointMarks {
             // style3: the lighting's ambient, diffuse (0: unlit) and sRGB
             // flag; its lights go in stroke and extra.
             // w: the triangle.
-            match self.lighting.as_ref().filter(|l| l.pbr.is_none() && !l.scene) {
-                Some(l) => [l.ambient, l.diffuse.max(1e-6), if l.srgb { 1.0 } else { 0.0 }, if self.triangle { 1.0 } else { 0.0 }],
+            match self
+                .lighting
+                .as_ref()
+                .filter(|l| l.pbr.is_none() && !l.scene)
+            {
+                Some(l) => [
+                    l.ambient,
+                    l.diffuse.max(1e-6),
+                    if l.srgb { 1.0 } else { 0.0 },
+                    if self.triangle { 1.0 } else { 0.0 },
+                ],
                 None => [0.0, 0.0, 0.0, if self.triangle { 1.0 } else { 0.0 }],
             },
             Lighting::uniforms(self.lit()).1,
@@ -309,6 +339,13 @@ impl Mark for PointMarks {
     fn columns(&mut self) -> Vec<&mut Column> {
         // Rows without their own stroke colour take the layer's.
         self.stroke_colors.set_default_rgba(self.stroke_color);
-        vec![&mut self.positions, &mut self.radii, &mut self.colors, &mut self.stroke_colors, &mut self.normals, &mut self.backgrounds]
+        vec![
+            &mut self.positions,
+            &mut self.radii,
+            &mut self.colors,
+            &mut self.stroke_colors,
+            &mut self.normals,
+            &mut self.backgrounds,
+        ]
     }
 }

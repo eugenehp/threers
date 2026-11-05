@@ -83,18 +83,18 @@ pub fn invert(te: &Mat4) -> Mat4 {
     let (n12, n22, n32, n42) = (te[4], te[5], te[6], te[7]);
     let (n13, n23, n33, n43) = (te[8], te[9], te[10], te[11]);
     let (n14, n24, n34, n44) = (te[12], te[13], te[14], te[15]);
-    let t11 = n23 * n34 * n42 - n24 * n33 * n42 + n24 * n32 * n43 - n22 * n34 * n43
-        - n23 * n32 * n44
-        + n22 * n33 * n44;
-    let t12 = n14 * n33 * n42 - n13 * n34 * n42 - n14 * n32 * n43 + n12 * n34 * n43
-        + n13 * n32 * n44
-        - n12 * n33 * n44;
-    let t13 = n13 * n24 * n42 - n14 * n23 * n42 + n14 * n22 * n43 - n12 * n24 * n43
-        - n13 * n22 * n44
-        + n12 * n23 * n44;
-    let t14 = n14 * n23 * n32 - n13 * n24 * n32 - n14 * n22 * n33 + n12 * n24 * n33
-        + n13 * n22 * n34
-        - n12 * n23 * n34;
+    let t11 =
+        n23 * n34 * n42 - n24 * n33 * n42 + n24 * n32 * n43 - n22 * n34 * n43 - n23 * n32 * n44
+            + n22 * n33 * n44;
+    let t12 =
+        n14 * n33 * n42 - n13 * n34 * n42 - n14 * n32 * n43 + n12 * n34 * n43 + n13 * n32 * n44
+            - n12 * n33 * n44;
+    let t13 =
+        n13 * n24 * n42 - n14 * n23 * n42 + n14 * n22 * n43 - n12 * n24 * n43 - n13 * n22 * n44
+            + n12 * n23 * n44;
+    let t14 =
+        n14 * n23 * n32 - n13 * n24 * n32 - n14 * n22 * n33 + n12 * n24 * n33 + n13 * n22 * n34
+            - n12 * n23 * n34;
     let det = n11 * t11 + n21 * t12 + n31 * t13 + n41 * t14;
     if det == 0.0 {
         return [0.0; 16];
@@ -184,7 +184,9 @@ pub fn compose(p: V3, q: Quat, s: V3) -> Mat4 {
 
 /// `Matrix4.extractRotation`.
 fn extract_rotation(m: &Mat4) -> Mat4 {
-    let col = |c: usize| (m[c * 4] * m[c * 4] + m[c * 4 + 1] * m[c * 4 + 1] + m[c * 4 + 2] * m[c * 4 + 2]).sqrt();
+    let col = |c: usize| {
+        (m[c * 4] * m[c * 4] + m[c * 4 + 1] * m[c * 4 + 1] + m[c * 4 + 2] * m[c * 4 + 2]).sqrt()
+    };
     let (sx, sy, sz) = (1.0 / col(0), 1.0 / col(1), 1.0 / col(2));
     [
         m[0] * sx,
@@ -283,7 +285,10 @@ const UP: V3 = [0.0, 1.0, 0.0];
 /// quaternion three.js computes, with the parent's rotation divided out, then
 /// composed back under the parent.
 fn child_looking_at(parent: &Mat4, position: V3, scale: V3, target: V3) -> Mat4 {
-    let world_pos = position_of(&multiply(parent, &compose(position, [0.0, 0.0, 0.0, 1.0], scale)));
+    let world_pos = position_of(&multiply(
+        parent,
+        &compose(position, [0.0, 0.0, 0.0, 1.0], scale),
+    ));
     let mut q = quat_from_rotation(&look_at_matrix(target, world_pos, UP));
     let pq = quat_from_rotation(&extract_rotation(parent));
     // `premultiply(_q1.invert())`: the conjugate, then on the left.
@@ -360,8 +365,17 @@ pub fn directional_light(light_world: &Mat4, target_world: V3, size: f64) -> Hel
             [-size, size, 0.0],
         ],
     );
-    let target_line = child_looking_at(light_world, [0.0; 3], [1.0, 1.0, length_sq(v3).sqrt()], target_world);
-    strip(&mut lines, &target_line, &[[0.0, 0.0, 0.0], [0.0, 0.0, 1.0]]);
+    let target_line = child_looking_at(
+        light_world,
+        [0.0; 3],
+        [1.0, 1.0, length_sq(v3).sqrt()],
+        target_world,
+    );
+    strip(
+        &mut lines,
+        &target_line,
+        &[[0.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+    );
     HelperGeometry {
         lines,
         ..Default::default()
@@ -403,7 +417,12 @@ fn octahedron(radius: f64) -> Vec<V3> {
 /// `π/2` about Y, sky colour on its first half of vertices and ground colour
 /// on the rest, looking away from the light's position. With a fixed `color`,
 /// pass it as both `sky` and `ground`.
-pub fn hemisphere_light(light_world: &Mat4, size: f64, sky: [f32; 3], ground: [f32; 3]) -> HelperGeometry {
+pub fn hemisphere_light(
+    light_world: &Mat4,
+    size: f64,
+    sky: [f32; 3],
+    ground: [f32; 3],
+) -> HelperGeometry {
     // `geometry.rotateY(Math.PI * 0.5)`, through the Float32 attribute.
     let (s, c) = (std::f64::consts::PI * 0.5).sin_cos();
     let positions: Vec<V3> = octahedron(size)
@@ -484,7 +503,12 @@ pub fn point_light(light_world: &Mat4, sphere_size: f64) -> HelperGeometry {
 
 /// `SpotLightHelper(light)`: five spokes and a 32-segment rim, scaled to
 /// `distance` (1000 when 0) and `tan(angle)`, looking at the target.
-pub fn spot_light(light_world: &Mat4, target_world: V3, distance: f64, angle: f64) -> HelperGeometry {
+pub fn spot_light(
+    light_world: &Mat4,
+    target_world: V3,
+    distance: f64,
+    angle: f64,
+) -> HelperGeometry {
     let mut pts: Vec<V3> = vec![
         [0.0, 0.0, 0.0],
         [0.0, 0.0, 1.0],
@@ -506,7 +530,12 @@ pub fn spot_light(light_world: &Mat4, target_world: V3, distance: f64, angle: f6
     }
     let cone_length = if distance != 0.0 { distance } else { 1000.0 };
     let cone_width = cone_length * angle.tan();
-    let cone = child_looking_at(light_world, [0.0; 3], [cone_width, cone_width, cone_length], target_world);
+    let cone = child_looking_at(
+        light_world,
+        [0.0; 3],
+        [cone_width, cone_width, cone_length],
+        target_world,
+    );
     let mut lines = Vec::new();
     segments(&mut lines, &cone, &pts);
     HelperGeometry {
@@ -522,14 +551,24 @@ pub fn camera_default_colors() -> [[f32; 3]; 5] {
         let c = crate::math::Color::from_hex(h);
         [c.r, c.g, c.b]
     };
-    [lin(0xffaa00), lin(0xff0000), lin(0x00aaff), lin(0xffffff), lin(0x333333)]
+    [
+        lin(0xffaa00),
+        lin(0xff0000),
+        lin(0x00aaff),
+        lin(0xffffff),
+        lin(0x333333),
+    ]
 }
 
 /// `CameraHelper(camera)`: frustum, cone, up triangle, target and cross
 /// lines, unprojected through `projectionMatrixInverse` and placed by the
 /// camera's `matrixWorld`; `colors` as `setColors(frustum, cone, up,
 /// target, cross)`.
-pub fn camera(projection_inverse: &Mat4, camera_world: &Mat4, colors: [[f32; 3]; 5]) -> HelperGeometry {
+pub fn camera(
+    projection_inverse: &Mat4,
+    camera_world: &Mat4,
+    colors: [[f32; 3]; 5],
+) -> HelperGeometry {
     let (w, h) = (1.0, 1.0);
     let point = |id: &str| -> V3 {
         let ndc = match id {
@@ -677,7 +716,22 @@ pub fn orthographic_projection(
     let z = (far + near) * p;
     let z_inv = -2.0 * p;
     [
-        2.0 * w, 0.0, 0.0, 0.0, 0.0, 2.0 * h, 0.0, 0.0, 0.0, 0.0, z_inv, 0.0, -x, -y, -z, 1.0,
+        2.0 * w,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        2.0 * h,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        z_inv,
+        0.0,
+        -x,
+        -y,
+        -z,
+        1.0,
     ]
 }
 
@@ -711,7 +765,11 @@ fn arrow_cone() -> (Vec<V3>, Vec<[usize; 3]>) {
         for x in 0..=radial {
             let u = x as f64 / radial as f64;
             let theta = u * std::f64::consts::PI * 2.0;
-            positions.push(f32v([radius * theta.sin(), -v * height + half, radius * theta.cos()]));
+            positions.push(f32v([
+                radius * theta.sin(),
+                -v * height + half,
+                radius * theta.cos(),
+            ]));
             row.push(positions.len() - 1);
         }
         rows.push(row);
@@ -734,7 +792,11 @@ fn arrow_cone() -> (Vec<V3>, Vec<[usize; 3]>) {
     let center_end = positions.len();
     for x in 0..=radial {
         let theta = x as f64 / radial as f64 * std::f64::consts::PI * 2.0;
-        positions.push(f32v([radius_bottom * theta.sin(), -half, radius_bottom * theta.cos()]));
+        positions.push(f32v([
+            radius_bottom * theta.sin(),
+            -half,
+            radius_bottom * theta.cos(),
+        ]));
     }
     for x in 0..radial {
         let c = center_start + x;
@@ -753,16 +815,29 @@ fn arrow_cone() -> (Vec<V3>, Vec<[usize; 3]>) {
 /// shaft as a line and the head as a filled cone. `helper_world` is the
 /// helper's own `matrixWorld` — `compose(origin, arrow_quaternion(dir), 1)`
 /// for one at the scene root that nobody has moved since.
-pub fn arrow(helper_world: &Mat4, length: f64, head_length: f64, head_width: f64) -> HelperGeometry {
+pub fn arrow(
+    helper_world: &Mat4,
+    length: f64,
+    head_length: f64,
+    head_width: f64,
+) -> HelperGeometry {
     let line = multiply(
         helper_world,
-        &compose([0.0; 3], [0.0, 0.0, 0.0, 1.0], [1.0, (length - head_length).max(0.0001), 1.0]),
+        &compose(
+            [0.0; 3],
+            [0.0, 0.0, 0.0, 1.0],
+            [1.0, (length - head_length).max(0.0001), 1.0],
+        ),
     );
     let mut lines = Vec::new();
     strip(&mut lines, &line, &[[0.0, 0.0, 0.0], [0.0, 1.0, 0.0]]);
     let cone = multiply(
         helper_world,
-        &compose([0.0, length, 0.0], [0.0, 0.0, 0.0, 1.0], [head_width, head_length, head_width]),
+        &compose(
+            [0.0, length, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+            [head_width, head_length, head_width],
+        ),
     );
     let (positions, tris) = arrow_cone();
     let mut mesh = Vec::with_capacity(tris.len() * 9);
@@ -850,7 +925,9 @@ pub fn skeleton(root_world: &Mat4, bone_worlds: &[Mat4], parents: &[i32]) -> Hel
 }
 
 /// The edge list `BoxHelper` and `Box3Helper` index their eight corners with.
-const BOX_EDGES: [usize; 24] = [0, 1, 1, 2, 2, 3, 3, 0, 4, 5, 5, 6, 6, 7, 7, 4, 0, 4, 1, 5, 2, 6, 3, 7];
+const BOX_EDGES: [usize; 24] = [
+    0, 1, 1, 2, 2, 3, 3, 0, 4, 5, 5, 6, 6, 7, 7, 4, 0, 4, 1, 5, 2, 6, 3, 7,
+];
 
 /// `BoxHelper(object)`: the twelve edges of the world-space bounding box
 /// `min`..`max` (nothing for an empty box).
@@ -921,8 +998,16 @@ pub fn box3(min: V3, max: V3) -> HelperGeometry {
     if max[0] < min[0] || max[1] < min[1] || max[2] < min[2] {
         return HelperGeometry::default();
     }
-    let center = [(min[0] + max[0]) * 0.5, (min[1] + max[1]) * 0.5, (min[2] + max[2]) * 0.5];
-    let half = [(max[0] - min[0]) * 0.5, (max[1] - min[1]) * 0.5, (max[2] - min[2]) * 0.5];
+    let center = [
+        (min[0] + max[0]) * 0.5,
+        (min[1] + max[1]) * 0.5,
+        (min[2] + max[2]) * 0.5,
+    ];
+    let half = [
+        (max[0] - min[0]) * 0.5,
+        (max[1] - min[1]) * 0.5,
+        (max[2] - min[2]) * 0.5,
+    ];
     let world = compose(center, [0.0, 0.0, 0.0, 1.0], half);
     let unit: [V3; 8] = [
         [1.0, 1.0, 1.0],
@@ -946,7 +1031,12 @@ pub fn box3(min: V3, max: V3) -> HelperGeometry {
 
 /// `VertexNormalsHelper(object, size)`: from every vertex, in world space,
 /// along its normal (through the normal matrix, normalised) for `size`.
-pub fn vertex_normals(object_world: &Mat4, positions: &[f32], normals: &[f32], size: f64) -> HelperGeometry {
+pub fn vertex_normals(
+    object_world: &Mat4,
+    positions: &[f32],
+    normals: &[f32],
+    size: f64,
+) -> HelperGeometry {
     // `Matrix3.getNormalMatrix`: the inverse transpose of the upper 3×3.
     let m = object_world;
     let (n11, n21, n31) = (m[0], m[1], m[2]);
@@ -973,22 +1063,35 @@ pub fn vertex_normals(object_world: &Mat4, positions: &[f32], normals: &[f32], s
         ]
     };
     // Transposed: e[r + 3c] of the result is inv[c + 3r].
-    let e = [inv[0], inv[3], inv[6], inv[1], inv[4], inv[7], inv[2], inv[5], inv[8]];
+    let e = [
+        inv[0], inv[3], inv[6], inv[1], inv[4], inv[7], inv[2], inv[5], inv[8],
+    ];
     let count = (positions.len() / 3).min(normals.len() / 3);
     let mut lines = Vec::with_capacity(count * 6);
     for j in 0..count {
         let p = apply(
             object_world,
-            [positions[j * 3] as f64, positions[j * 3 + 1] as f64, positions[j * 3 + 2] as f64],
+            [
+                positions[j * 3] as f64,
+                positions[j * 3 + 1] as f64,
+                positions[j * 3 + 2] as f64,
+            ],
         );
-        let (x, y, z) = (normals[j * 3] as f64, normals[j * 3 + 1] as f64, normals[j * 3 + 2] as f64);
+        let (x, y, z) = (
+            normals[j * 3] as f64,
+            normals[j * 3 + 1] as f64,
+            normals[j * 3 + 2] as f64,
+        );
         let n = normalize([
             e[0] * x + e[3] * y + e[6] * z,
             e[1] * x + e[4] * y + e[7] * z,
             e[2] * x + e[5] * y + e[8] * z,
         ]);
         push(&mut lines, p);
-        push(&mut lines, [n[0] * size + p[0], n[1] * size + p[1], n[2] * size + p[2]]);
+        push(
+            &mut lines,
+            [n[0] * size + p[0], n[1] * size + p[1], n[2] * size + p[2]],
+        );
     }
     HelperGeometry {
         lines,
@@ -1044,7 +1147,11 @@ pub fn rect_area_light(light_world: &Mat4, width: f64, height: f64) -> HelperGeo
 /// `RectAreaLightHelper`'s colour without a fixed one: the light's colour
 /// times its intensity, scaled back into range so it keeps its hue.
 pub fn rect_area_light_color(color: [f32; 3], intensity: f32) -> [f32; 3] {
-    let mut c = [color[0] * intensity, color[1] * intensity, color[2] * intensity];
+    let mut c = [
+        color[0] * intensity,
+        color[1] * intensity,
+        color[2] * intensity,
+    ];
     let max = c[0].max(c[1]).max(c[2]);
     if max > 1.0 {
         let s = 1.0 / max;

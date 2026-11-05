@@ -1555,11 +1555,7 @@ pub(crate) fn waves(kind: Stochastic, cell: Vector3, seed: u32) -> Vec<Wave> {
             Wave {
                 // Per axis, so an anisotropic cell stretches the field the
                 // same way it stretches every other family.
-                k: Vector3::new(
-                    TAU * n.x / cell.x,
-                    TAU * n.y / cell.y,
-                    TAU * n.z / cell.z,
-                ),
+                k: Vector3::new(TAU * n.x / cell.x, TAU * n.y / cell.y, TAU * n.z / cell.z),
                 phase: h[2] * TAU,
             }
         })

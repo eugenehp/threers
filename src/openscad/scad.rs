@@ -899,6 +899,16 @@ fn bool_arg(args: &[Arg], name: &str, sc: &Scope, env: &Env) -> Option<bool> {
     arg(args, name, 9999, sc, env).map(|v| v.truthy())
 }
 
+/// Whether the file has its own module of this name with something in it. Models
+/// declare empty `module hinge(...) { }` so that stock OpenSCAD can open them, and
+/// those stand aside for the declaration; a `module rack()` that draws a rack is
+/// the file's own, and a mechanism keyword must not swallow it.
+fn defines_geometry(name: &str, env: &Env) -> bool {
+    env.modules
+        .get(name)
+        .is_some_and(|(_, body)| !body.is_empty())
+}
+
 /// Record one mate declaration. Produces no geometry — a joint is not a shape.
 fn record_mate(module: &str, args: &[Arg], sc: &Scope, env: &Env) -> Result<(), String> {
     let name = str_arg(args, "name", 0, sc, env)
@@ -4131,7 +4141,7 @@ fn eval_call_stmt(
         }
         "hinge" | "slider" | "cylindrical" | "ball" | "weld" | "planar" | "screw" | "gear"
         | "rack"
-            if env.mechanism =>
+            if env.mechanism && !defines_geometry(name, env) =>
         {
             record_mate(name, args, sc, env)?;
             None
@@ -5839,12 +5849,15 @@ mod tests {
         std::fs::write(dir.join("c.FCStd"), &bytes).unwrap();
         std::fs::write(dir.join("c.scad"), "import(\"c.FCStd\");").unwrap();
         let g = parse_scad_file(dir.join("c.scad")).unwrap().to_geometry();
-        let n_tri = g
-            .index
-            .as_ref()
-            .map(|i| i.len() / 3)
-            .unwrap_or_else(|| g.get_attribute("position").map(|a| a.count() / 3).unwrap_or(0));
-        assert!(n_tri >= 12, "fcstd cube should have at least 12 triangles, got {n_tri}");
+        let n_tri = g.index.as_ref().map(|i| i.len() / 3).unwrap_or_else(|| {
+            g.get_attribute("position")
+                .map(|a| a.count() / 3)
+                .unwrap_or(0)
+        });
+        assert!(
+            n_tri >= 12,
+            "fcstd cube should have at least 12 triangles, got {n_tri}"
+        );
         let v = vol(parse_scad_file(dir.join("c.scad")).unwrap());
         assert!((v - 1000.0).abs() < 5.0, "fcstd cube vol {v}");
     }

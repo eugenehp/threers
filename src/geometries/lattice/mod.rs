@@ -1014,7 +1014,9 @@ impl<'a> Lattice<'a> {
         let trig = match self.kind {
             LatticeKind::Tpms(_) if self.conform.is_none() => {
                 let axis = |a: usize, n: usize, o: f32, s: f32| -> Vec<(f32, f32)> {
-                    (0..n).map(|i| sampler.tpms_angle(a, o + i as f32 * s).sin_cos()).collect()
+                    (0..n)
+                        .map(|i| sampler.tpms_angle(a, o + i as f32 * s).sin_cos())
+                        .collect()
                 };
                 Some([
                     axis(0, nx, origin.x, step.x),
@@ -1065,7 +1067,8 @@ impl<'a> Lattice<'a> {
                         }
                         Some(Pre::Waves(&here))
                     } else {
-                        trig.as_ref().map(|[tx, ty, tz]| Pre::Tpms([tx[i], ty[j], tz[k]]))
+                        trig.as_ref()
+                            .map(|[tx, ty, tz]| Pre::Tpms([tx[i], ty[j], tz[k]]))
                     };
                     slab[j * nx + i] = sampler.value_trig(Vector3::new(x, y, z), pre);
                 }
@@ -1299,7 +1302,11 @@ impl<'a> Lattice<'a> {
                 stochastic::EdgeBins::new(
                     graph,
                     [-reach as f64; 3],
-                    [(size.x + reach) as f64, (size.y + reach) as f64, (size.z + reach) as f64],
+                    [
+                        (size.x + reach) as f64,
+                        (size.y + reach) as f64,
+                        (size.z + reach) as f64,
+                    ],
                     cull as f64,
                 )
             }
@@ -1490,12 +1497,7 @@ impl<'a> Lattice<'a> {
 
     /// Over a window of `cells` cells per axis rather than one — see
     /// [`homogenize_window`](Self::homogenize_window), which this mirrors.
-    pub fn conductivity_window(
-        &self,
-        cells: usize,
-        resolution: usize,
-        solid: f64,
-    ) -> Conductivity {
+    pub fn conductivity_window(&self, cells: usize, resolution: usize, solid: f64) -> Conductivity {
         let (occupancy, origin, window, voxels) = self.periodic_window(cells, resolution);
         homogenize_conduction(occupancy, origin, window, voxels, solid, self.solver)
     }
@@ -1628,11 +1630,7 @@ impl<'a> Lattice<'a> {
             Some(trim) => crate::utils::parallel::par_map(&points, |p| trim(*p)),
             None => Vec::new(),
         };
-        DensityGrid {
-            points,
-            cuts,
-            cell,
-        }
+        DensityGrid { points, cuts, cell }
     }
 
     /// Fraction of the part covered by `grid` that lands in solid.
@@ -1831,13 +1829,7 @@ impl Sampler<'_> {
     /// [`solid_at`](Self::solid_at), with the TPMS sines and cosines for `p`
     /// when the caller has them. Ignored under a conformal map, which moves
     /// the point before it is evaluated.
-    fn solid_at_trig(
-        &self,
-        p: Vector3,
-        half: f32,
-        depth: f32,
-        pre: Option<Pre<'_>>,
-    ) -> f32 {
+    fn solid_at_trig(&self, p: Vector3, half: f32, depth: f32, pre: Option<Pre<'_>>) -> f32 {
         // A conformal map takes the point into the space the cells are tiled
         // in, and says how much it stretched to get there. `half` is a length
         // in that space, so it is stretched with it and the answer divided back
@@ -1959,7 +1951,9 @@ impl Sampler<'_> {
             // grown by half the film thickness — so neighbouring bubbles, which
             // meet flush on their faces, are parted by a film `thickness` thick.
             LatticeKind::Stochastic(Stochastic::VoronoiWet) => {
-                let skeleton = stochastic::Skeleton::Wet { border: self.plateau_border * stretch };
+                let skeleton = stochastic::Skeleton::Wet {
+                    border: self.plateau_border * stretch,
+                };
                 let cap = half.max(0.0) + margin;
                 // Only the graph knows a two-size foam's weights; for one size
                 // the search is the quicker of the two (measured, against the
@@ -1989,22 +1983,26 @@ impl Sampler<'_> {
             // Weighted seeds take the power diagram's own search.
             LatticeKind::Stochastic(s) if !self.seed_weights.is_empty() => {
                 let wall = s == Stochastic::VoronoiWall;
-                let skeleton =
-                    if wall { stochastic::Skeleton::Walls } else { stochastic::Skeleton::Edges };
+                let skeleton = if wall {
+                    stochastic::Skeleton::Walls
+                } else {
+                    stochastic::Skeleton::Edges
+                };
                 let cap = half.max(0.0) + margin;
-                let d = self.edge_bin_distance(p, skeleton, cap)
+                let d = self
+                    .edge_bin_distance(p, skeleton, cap)
                     .or_else(|| self.graph_distance(p, skeleton, cap, f32::NEG_INFINITY))
                     .unwrap_or_else(|| {
-                    stochastic::power_distance(
-                        p,
-                        self.phase,
-                        self.cell,
-                        wall,
-                        &self.seed_sites,
-                        &self.seed_weights,
-                        cap,
-                    )
-                });
+                        stochastic::power_distance(
+                            p,
+                            self.phase,
+                            self.cell,
+                            wall,
+                            &self.seed_sites,
+                            &self.seed_weights,
+                            cap,
+                        )
+                    });
                 half - d
             }
             LatticeKind::Stochastic(s) => {
@@ -2236,7 +2234,13 @@ mod tests {
                 }
             }
         }
-        mesher::IsoGrid { dims: [nx, ny, nz], origin, step, values }.triangulate()
+        mesher::IsoGrid {
+            dims: [nx, ny, nz],
+            origin,
+            step,
+            values,
+        }
+        .triangulate()
     }
 
     #[test]
@@ -2271,7 +2275,11 @@ mod tests {
             let (fast, slow) = (l.build(), build_per_point(&l));
             assert_eq!(fast.index, slow.index, "{}", s.name());
             let step = l.grid().0 .2.x;
-            let moved = fast.get_attribute("position").unwrap().array.iter()
+            let moved = fast
+                .get_attribute("position")
+                .unwrap()
+                .array
+                .iter()
                 .zip(&slow.get_attribute("position").unwrap().array)
                 .map(|(a, b)| (a - b).abs())
                 .fold(0.0f32, f32::max);
@@ -2296,13 +2304,21 @@ mod tests {
             crate::utils::mesh_check::split_pieces(&all),
             crate::utils::mesh_check::split_pieces(&clean),
         );
-        assert!(after.len() < before.len(), "{} -> {}", before.len(), after.len());
+        assert!(
+            after.len() < before.len(),
+            "{} -> {}",
+            before.len(),
+            after.len()
+        );
         assert!(crate::utils::mesh_check::edge_report(&clean).is_closed());
         // The structure itself is untouched.
         assert!((before[0].volume - after[0].volume).abs() < 1e-3 * before[0].volume);
         // A periodic lattice has none, and is returned as built.
         let gyroid = |drop| {
-            Lattice::new(LatticeKind::Tpms(Tpms::Gyroid)).resolution(8).drop_specks(drop).build()
+            Lattice::new(LatticeKind::Tpms(Tpms::Gyroid))
+                .resolution(8)
+                .drop_specks(drop)
+                .build()
         };
         assert_eq!(gyroid(true).index, gyroid(false).index);
     }
@@ -2388,13 +2404,21 @@ mod tests {
             SeedLayout::Bimodal,
         ];
         for layout in layouts {
-            for kind in [Stochastic::Voronoi, Stochastic::VoronoiWall, Stochastic::VoronoiWet] {
+            for kind in [
+                Stochastic::Voronoi,
+                Stochastic::VoronoiWall,
+                Stochastic::VoronoiWet,
+            ] {
                 // The search has no weights for a wet foam to compare with.
                 if kind == Stochastic::VoronoiWet && layout == SeedLayout::Bimodal {
                     continue;
                 }
                 // Films a few samples thick, so there is a surface to compare.
-                let thickness = if kind == Stochastic::VoronoiWet { 0.3 } else { 0.2 };
+                let thickness = if kind == Stochastic::VoronoiWet {
+                    0.3
+                } else {
+                    0.2
+                };
                 let l = Lattice::new(LatticeKind::Stochastic(kind))
                     .size(Vector3::new(4.0, 4.0, 4.0))
                     .cells([2, 2, 2])
@@ -2418,11 +2442,20 @@ mod tests {
                         }
                     }
                 }
-                let grid = mesher::IsoGrid { dims: [nx, ny, nz], origin, step, values };
+                let grid = mesher::IsoGrid {
+                    dims: [nx, ny, nz],
+                    origin,
+                    step,
+                    values,
+                };
                 let search = grid.triangulate();
                 let what = format!("{} {}", layout.name(), kind.name());
                 assert_eq!(graph.index, search.index, "{what}");
-                let moved = graph.get_attribute("position").unwrap().array.iter()
+                let moved = graph
+                    .get_attribute("position")
+                    .unwrap()
+                    .array
+                    .iter()
                     .zip(&search.get_attribute("position").unwrap().array)
                     .map(|(a, b)| (a - b).abs())
                     .fold(0.0f32, f32::max);
@@ -2774,14 +2807,21 @@ mod tests {
         assert!(along[2] < 0.01, "across {}", along[2]);
         assert!(k.anisotropy() > 50.0, "{}", k.anisotropy());
         // Nearly every gram is in a plate, and every plate runs along the flow.
-        assert!(k.tortuosity_factor(1.0) > 0.9, "{}", k.tortuosity_factor(1.0));
+        assert!(
+            k.tortuosity_factor(1.0) > 0.9,
+            "{}",
+            k.tortuosity_factor(1.0)
+        );
         // A random field's plates are not laid out on the axes to the last
         // degree, so the tensor has small off-diagonal terms and the principal
         // conductivity is a little above the best axis — never below it, which
         // is what the largest eigenvalue of a symmetric matrix always is.
         let principal = k.principal();
         let best_axis = along[0].max(along[1]);
-        assert!(principal[0] >= best_axis - 1e-9, "{principal:?} vs {along:?}");
+        assert!(
+            principal[0] >= best_axis - 1e-9,
+            "{principal:?} vs {along:?}"
+        );
         assert!(principal[0] < best_axis * 1.1, "{principal:?} vs {along:?}");
     }
 
@@ -2841,7 +2881,11 @@ mod tests {
         // one: sizing for the nominal wall is how a graded part comes out as
         // gravel where it is thinnest.
         let resolved = build(true).resolve_walls(3.0);
-        assert!(resolved.wall_samples() >= 3.0, "{}", resolved.wall_samples());
+        assert!(
+            resolved.wall_samples() >= 3.0,
+            "{}",
+            resolved.wall_samples()
+        );
         let nominal = build(false).resolve_walls(3.0);
         assert!(
             resolved.sample_grid()[0] > nominal.sample_grid()[0],
@@ -2855,8 +2899,8 @@ mod tests {
     fn a_region_can_be_used_twice() {
         // Cloning is a reference count, so filling a shell and conforming to
         // the same surface costs one region, not two.
-        let shell = Region::sphere(Vector3::ZERO, 8.0)
-            .difference(Region::sphere(Vector3::ZERO, 5.0));
+        let shell =
+            Region::sphere(Vector3::ZERO, 8.0).difference(Region::sphere(Vector3::ZERO, 5.0));
         let geom = Lattice::new(LatticeKind::Tpms(Tpms::Gyroid))
             .conform(Conform::depth(shell.clone()))
             .fill(shell)
@@ -2881,7 +2925,11 @@ mod tests {
         };
         let octet = measure(Strut::Octet);
         let bcc = measure(Strut::Bcc);
-        assert!(octet.resolved(), "octet unresolved: {:?}", octet.efficiency());
+        assert!(
+            octet.resolved(),
+            "octet unresolved: {:?}",
+            octet.efficiency()
+        );
         assert!(bcc.resolved(), "bcc unresolved: {:?}", bcc.efficiency());
         assert!(
             octet.efficiency()[2] > bcc.efficiency()[2],
@@ -3764,4 +3812,3 @@ mod tests {
         );
     }
 }
-

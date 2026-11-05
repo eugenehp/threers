@@ -56,7 +56,10 @@ pub enum MaskRole {
     None,
     /// A mask is on from here: what `target`'s scene covered (its depth is
     /// written there), inverted when `inverse`.
-    Set { target: Target, inverse: bool },
+    Set {
+        target: Target,
+        inverse: bool,
+    },
     Clear,
 }
 

@@ -132,7 +132,11 @@ impl ExportObject {
         ) {
             let Some(o) = arena.get(id) else { return };
             let local = compose(
-                [o.position.x as f64, o.position.y as f64, o.position.z as f64],
+                [
+                    o.position.x as f64,
+                    o.position.y as f64,
+                    o.position.z as f64,
+                ],
                 [
                     o.quaternion.x as f64,
                     o.quaternion.y as f64,
@@ -283,7 +287,10 @@ pub(crate) fn attr3(g: &BufferGeometry, name: &str, i: usize) -> [f64; 3] {
     let s = a.item_size;
     let get = |k: usize| {
         if k < s {
-            a.array.get(i * s + k).map(|v| *v as f64).unwrap_or(f64::NAN)
+            a.array
+                .get(i * s + k)
+                .map(|v| *v as f64)
+                .unwrap_or(f64::NAN)
         } else {
             0.0
         }

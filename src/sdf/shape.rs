@@ -35,26 +35,68 @@ use crate::math::{Quaternion, Vector3};
 /// operator, more fillets the seam (see [`smooth_union`](super::smooth_union)).
 #[derive(Debug, Clone)]
 pub enum Shape {
-    Sphere { r: f32 },
-    Ellipsoid { radii: Vector3 },
+    Sphere {
+        r: f32,
+    },
+    Ellipsoid {
+        radii: Vector3,
+    },
     /// [`d3::round_cuboid`]; `round` 0 is a sharp box.
-    Cuboid { half: Vector3, round: f32 },
+    Cuboid {
+        half: Vector3,
+        round: f32,
+    },
     /// [`d3::tapered_capsule`]; equal radii are a plain capsule.
-    Capsule { a: Vector3, b: Vector3, ra: f32, rb: f32 },
+    Capsule {
+        a: Vector3,
+        b: Vector3,
+        ra: f32,
+        rb: f32,
+    },
     /// In the xz plane.
-    Torus { major: f32, minor: f32 },
+    Torus {
+        major: f32,
+        minor: f32,
+    },
     /// Along y.
-    Cylinder { half_height: f32, r: f32 },
+    Cylinder {
+        half_height: f32,
+        r: f32,
+    },
     /// The half-space below `dot(p, normal) + offset = 0`.
-    Plane { normal: Vector3, offset: f32 },
-    Union { parts: Vec<Shape>, k: f32 },
-    Intersection { parts: Vec<Shape>, k: f32 },
-    Subtraction { base: Box<Shape>, cut: Box<Shape>, k: f32 },
-    Round { shape: Box<Shape>, r: f32 },
-    Onion { shape: Box<Shape>, t: f32 },
+    Plane {
+        normal: Vector3,
+        offset: f32,
+    },
+    Union {
+        parts: Vec<Shape>,
+        k: f32,
+    },
+    Intersection {
+        parts: Vec<Shape>,
+        k: f32,
+    },
+    Subtraction {
+        base: Box<Shape>,
+        cut: Box<Shape>,
+        k: f32,
+    },
+    Round {
+        shape: Box<Shape>,
+        r: f32,
+    },
+    Onion {
+        shape: Box<Shape>,
+        t: f32,
+    },
     /// Moved by `offset`, turned by `rotation`, then scaled by `scale` about
     /// the origin (uniform, so it stays a distance).
-    Transform { shape: Box<Shape>, offset: Vector3, rotation: Quaternion, scale: f32 },
+    Transform {
+        shape: Box<Shape>,
+        offset: Vector3,
+        rotation: Quaternion,
+        scale: f32,
+    },
 }
 
 impl Shape {
@@ -84,7 +126,10 @@ impl Shape {
     }
     /// `normal` is normalised here.
     pub fn plane(normal: Vector3, offset: f32) -> Self {
-        Shape::Plane { normal: normal.normalize(), offset }
+        Shape::Plane {
+            normal: normal.normalize(),
+            offset,
+        }
     }
 
     /// Every part, joined; the seams filleted over `k`.
@@ -98,7 +143,10 @@ impl Shape {
                 parts.push(other);
                 Shape::Union { parts, k }
             }
-            s => Shape::Union { parts: vec![s, other], k },
+            s => Shape::Union {
+                parts: vec![s, other],
+                k,
+            },
         }
     }
     pub fn intersect(self, other: Shape, k: f32) -> Self {
@@ -107,17 +155,30 @@ impl Shape {
                 parts.push(other);
                 Shape::Intersection { parts, k }
             }
-            s => Shape::Intersection { parts: vec![s, other], k },
+            s => Shape::Intersection {
+                parts: vec![s, other],
+                k,
+            },
         }
     }
     pub fn subtract(self, cut: Shape, k: f32) -> Self {
-        Shape::Subtraction { base: Box::new(self), cut: Box::new(cut), k }
+        Shape::Subtraction {
+            base: Box::new(self),
+            cut: Box::new(cut),
+            k,
+        }
     }
     pub fn round(self, r: f32) -> Self {
-        Shape::Round { shape: Box::new(self), r }
+        Shape::Round {
+            shape: Box::new(self),
+            r,
+        }
     }
     pub fn onion(self, t: f32) -> Self {
-        Shape::Onion { shape: Box::new(self), t }
+        Shape::Onion {
+            shape: Box::new(self),
+            t,
+        }
     }
     pub fn translate(self, by: Vector3) -> Self {
         self.transformed(by, Quaternion::identity(), 1.0)
@@ -134,13 +195,23 @@ impl Shape {
         match self {
             // Fold successive moves into one: p ↦ s·R·p + o, applied after
             // the inner one, is s·R·(s0·R0·p + o0) + o.
-            Shape::Transform { shape, offset: o0, rotation: r0, scale: s0 } => Shape::Transform {
+            Shape::Transform {
+                shape,
+                offset: o0,
+                rotation: r0,
+                scale: s0,
+            } => Shape::Transform {
                 shape,
                 offset: o0.apply_quaternion(rotation) * scale + offset,
                 rotation: rotation.multiply(r0),
                 scale: s0 * scale,
             },
-            s => Shape::Transform { shape: Box::new(s), offset, rotation, scale },
+            s => Shape::Transform {
+                shape: Box::new(s),
+                offset,
+                rotation,
+                scale,
+            },
         }
     }
 
@@ -158,7 +229,9 @@ impl Shape {
                 let g = Vector3::new(r, r, r);
                 Some((a.min(*b) - g, a.max(*b) + g))
             }
-            Shape::Torus { major, minor } => cube(Vector3::new(major + minor, *minor, major + minor)),
+            Shape::Torus { major, minor } => {
+                cube(Vector3::new(major + minor, *minor, major + minor))
+            }
             Shape::Cylinder { half_height, r } => cube(Vector3::new(*r, *half_height, *r)),
             Shape::Plane { .. } => None,
             Shape::Union { parts, k } => {
@@ -188,9 +261,17 @@ impl Shape {
             Shape::Subtraction { base, .. } => base.bounds(),
             Shape::Round { shape, r } => shape.bounds().map(|(lo, hi)| grow(lo, hi, r.max(0.0))),
             Shape::Onion { shape, t } => shape.bounds().map(|(lo, hi)| grow(lo, hi, t.abs())),
-            Shape::Transform { shape, offset, rotation, scale } => {
+            Shape::Transform {
+                shape,
+                offset,
+                rotation,
+                scale,
+            } => {
                 let (lo, hi) = shape.bounds()?;
-                let (mut a, mut b) = (Vector3::new(f32::MAX, f32::MAX, f32::MAX), Vector3::new(f32::MIN, f32::MIN, f32::MIN));
+                let (mut a, mut b) = (
+                    Vector3::new(f32::MAX, f32::MAX, f32::MAX),
+                    Vector3::new(f32::MIN, f32::MIN, f32::MIN),
+                );
                 for c in 0..8 {
                     let corner = Vector3::new(
                         if c & 1 == 0 { lo.x } else { hi.x },
@@ -230,18 +311,31 @@ impl Sdf3 for Shape {
             Shape::Plane { normal, offset } => d3::plane(p, *normal, *offset),
             Shape::Union { parts, k } => {
                 let mut it = parts.iter();
-                let Some(first) = it.next() else { return f32::MAX };
+                let Some(first) = it.next() else {
+                    return f32::MAX;
+                };
                 it.fold(first.distance(p), |d, s| smooth_union(d, s.distance(p), *k))
             }
             Shape::Intersection { parts, k } => {
                 let mut it = parts.iter();
-                let Some(first) = it.next() else { return f32::MAX };
-                it.fold(first.distance(p), |d, s| -smooth_union(-d, -s.distance(p), *k))
+                let Some(first) = it.next() else {
+                    return f32::MAX;
+                };
+                it.fold(first.distance(p), |d, s| {
+                    -smooth_union(-d, -s.distance(p), *k)
+                })
             }
-            Shape::Subtraction { base, cut, k } => -smooth_union(-base.distance(p), cut.distance(p), *k),
+            Shape::Subtraction { base, cut, k } => {
+                -smooth_union(-base.distance(p), cut.distance(p), *k)
+            }
             Shape::Round { shape, r } => shape.distance(p) - r,
             Shape::Onion { shape, t } => shape.distance(p).abs() - t,
-            Shape::Transform { shape, offset, rotation, scale } => {
+            Shape::Transform {
+                shape,
+                offset,
+                rotation,
+                scale,
+            } => {
                 // Back into the shape's own frame, and the distance out of it.
                 let local = ((p - *offset) * (1.0 / scale)).apply_quaternion(rotation.conjugate());
                 shape.distance(local) * scale
@@ -264,8 +358,14 @@ mod tests {
         // The same field written both ways, compared on a grid.
         let shape = Shape::sphere(0.5)
             .translate(v(0.0, 0.6, 0.0))
-            .union(Shape::capsule(v(-1.0, 0.0, 0.0), v(1.0, 0.0, 0.0), 0.2), 0.3)
-            .subtract(Shape::cuboid(v(0.2, 0.2, 0.2)).translate(v(0.9, 0.0, 0.0)), 0.05)
+            .union(
+                Shape::capsule(v(-1.0, 0.0, 0.0), v(1.0, 0.0, 0.0), 0.2),
+                0.3,
+            )
+            .subtract(
+                Shape::cuboid(v(0.2, 0.2, 0.2)).translate(v(0.9, 0.0, 0.0)),
+                0.05,
+            )
             .round(0.01);
         let closure = |p: Vector3| {
             let ball = d3::sphere(p - v(0.0, 0.6, 0.0), 0.5);
@@ -276,7 +376,11 @@ mod tests {
         for i in 0..9 {
             for j in 0..9 {
                 for k in 0..9 {
-                    let p = v(i as f32 * 0.3 - 1.2, j as f32 * 0.25 - 0.8, k as f32 * 0.2 - 0.8);
+                    let p = v(
+                        i as f32 * 0.3 - 1.2,
+                        j as f32 * 0.25 - 0.8,
+                        k as f32 * 0.2 - 0.8,
+                    );
                     assert!((shape.distance(p) - closure(p)).abs() < 1e-6, "at {p:?}");
                 }
             }
@@ -287,11 +391,23 @@ mod tests {
     fn moves_compose_and_keep_distances() {
         let q = Quaternion::from_axis_angle(v(0.0, 0.0, 1.0), std::f32::consts::FRAC_PI_2);
         // A long box along x, turned to lie along y, doubled, then moved.
-        let s = Shape::cuboid(v(1.0, 0.1, 0.1)).rotate(q).scale(2.0).translate(v(3.0, 0.0, 0.0));
-        assert!((s.distance(v(3.0, 2.0, 0.0))).abs() < 1e-5, "the end of the turned, doubled box");
-        assert!((s.distance(v(3.0, 0.0, 1.2)) - 1.0).abs() < 1e-5, "a distance, not a scaled one");
+        let s = Shape::cuboid(v(1.0, 0.1, 0.1))
+            .rotate(q)
+            .scale(2.0)
+            .translate(v(3.0, 0.0, 0.0));
+        assert!(
+            (s.distance(v(3.0, 2.0, 0.0))).abs() < 1e-5,
+            "the end of the turned, doubled box"
+        );
+        assert!(
+            (s.distance(v(3.0, 0.0, 1.2)) - 1.0).abs() < 1e-5,
+            "a distance, not a scaled one"
+        );
         let (lo, hi) = s.bounds().unwrap();
-        assert!(lo.y < -1.99 && hi.y > 1.99 && lo.x > 2.7 && hi.x < 3.3, "{lo:?} {hi:?}");
+        assert!(
+            lo.y < -1.99 && hi.y > 1.99 && lo.x > 2.7 && hi.x < 3.3,
+            "{lo:?} {hi:?}"
+        );
     }
 
     #[test]
@@ -305,8 +421,15 @@ mod tests {
         // Nothing just outside the box is inside the shape.
         for i in 0..20 {
             let t = i as f32 / 19.0;
-            for p in [v(lo.x - 0.01, 0.2, t - 0.5), v(hi.x + 0.01, 0.3, t - 0.5), v(t - 0.5, hi.y + 0.01, 0.0)] {
-                assert!(s.distance(p) > 0.0, "{p:?} outside the bounds is inside the shape");
+            for p in [
+                v(lo.x - 0.01, 0.2, t - 0.5),
+                v(hi.x + 0.01, 0.3, t - 0.5),
+                v(t - 0.5, hi.y + 0.01, 0.0),
+            ] {
+                assert!(
+                    s.distance(p) > 0.0,
+                    "{p:?} outside the bounds is inside the shape"
+                );
             }
         }
         assert!(Shape::plane(v(0.0, 1.0, 0.0), 0.0).bounds().is_none());
@@ -337,9 +460,16 @@ mod tests {
         let vol: f32 = m
             .index
             .chunks_exact(3)
-            .map(|t| m.position[t[0] as usize].dot(m.position[t[1] as usize].cross(m.position[t[2] as usize])) / 6.0)
+            .map(|t| {
+                m.position[t[0] as usize]
+                    .dot(m.position[t[1] as usize].cross(m.position[t[2] as usize]))
+                    / 6.0
+            })
             .sum();
         let ball = 4.0 / 3.0 * std::f32::consts::PI * 0.125;
-        assert!((vol - ball).abs() < ball * 0.03, "volume {vol} against {ball}");
+        assert!(
+            (vol - ball).abs() < ball * 0.03,
+            "volume {vol} against {ball}"
+        );
     }
 }

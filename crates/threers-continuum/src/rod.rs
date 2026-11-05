@@ -268,8 +268,16 @@ mod tests {
     fn a_station_stiffens_as_the_rod_is_chopped_finer() {
         // `n·EI/L`: the rod is the same rod, so the station standing in for
         // half as much of it is twice as stiff.
-        let coarse = Rod { links: 10, ..steel() }.link_properties();
-        let fine = Rod { links: 20, ..steel() }.link_properties();
+        let coarse = Rod {
+            links: 10,
+            ..steel()
+        }
+        .link_properties();
+        let fine = Rod {
+            links: 20,
+            ..steel()
+        }
+        .link_properties();
         assert!((fine.bend_stiffness / coarse.bend_stiffness - 2.0).abs() < 1e-4);
         assert!((fine.mass / coarse.mass - 0.5).abs() < 1e-4);
         assert!((fine.length / coarse.length - 0.5).abs() < 1e-4);
@@ -286,11 +294,13 @@ mod tests {
 
     #[test]
     fn mass_comes_from_the_sheath_and_stiffness_from_the_spine() {
-        let bare = Rod::new(0.3, 30).radius(0.006).material(1.0e6, 0.45, 1200.0);
+        let bare = Rod::new(0.3, 30)
+            .radius(0.006)
+            .material(1.0e6, 0.45, 1200.0);
         let sheathed = bare.clone().core(0.0005);
         assert_eq!(bare.mass(), sheathed.mass(), "same rod, same mass");
-        let ratio = bare.link_properties().bend_stiffness
-            / sheathed.link_properties().bend_stiffness;
+        let ratio =
+            bare.link_properties().bend_stiffness / sheathed.link_properties().bend_stiffness;
         assert!(
             (ratio - (0.006f32 / 0.0005).powi(4)).abs() < 1.0,
             "the fourth power of the radius ratio, got {ratio}"
@@ -300,7 +310,10 @@ mod tests {
     #[test]
     fn a_tube_is_softer_and_lighter_than_the_bar_it_came_from() {
         let bar = Rod::new(0.3, 30).radius(0.01);
-        let tube = Rod { bore: 0.008, ..bar.clone() };
+        let tube = Rod {
+            bore: 0.008,
+            ..bar.clone()
+        };
         assert!(tube.mass() < bar.mass());
         assert!(tube.link_properties().bend_stiffness < bar.link_properties().bend_stiffness);
         // ...but far softer than it is lighter, which is the point of a tube.

@@ -236,7 +236,9 @@ impl Sps {
                 crop[3].saturating_mul(cy),
             ];
             // The decoder subtracts these from the coded size.
-            if crop[0].saturating_add(crop[1]) >= width_mbs * 16 || crop[2].saturating_add(crop[3]) >= height_mbs * 16 {
+            if crop[0].saturating_add(crop[1]) >= width_mbs * 16
+                || crop[2].saturating_add(crop[3]) >= height_mbs * 16
+            {
                 return Err("SPS cropping exceeds the picture".into());
             }
         }
@@ -267,6 +269,7 @@ impl Sps {
         if width_mbs > 1024 || height_mbs > 1024 {
             return Err("picture size out of range".into());
         }
+        crate::decode::picture::check_picture_size(width_mbs * 16, height_mbs * 16)?;
         if crop[0] + crop[1] >= width_mbs * 16 || crop[2] + crop[3] >= height_mbs * 16 {
             return Err("cropping removes the whole picture".into());
         }
@@ -357,7 +360,8 @@ impl Pps {
         if r.more_rbsp_data() {
             transform_8x8_mode = r.flag();
             if r.flag() {
-                let n = 6 + if sps.chroma_format_idc != 3 { 2 } else { 6 } * transform_8x8_mode as usize;
+                let n = 6 + if sps.chroma_format_idc != 3 { 2 } else { 6 }
+                    * transform_8x8_mode as usize;
                 scaling = Some(read_scaling_lists(&mut r, n, sps.scaling.as_ref()));
             }
             cr_off = r.se();
@@ -526,20 +530,22 @@ impl SliceHeader {
         }
         let mut list_mods: [Vec<ListMod>; 2] = [Vec::new(), Vec::new()];
         for list in 0..2 {
-            if ((list == 0 && slice_type != SliceType::I) || (list == 1 && slice_type == SliceType::B))
-                && r.flag() {
-                    loop {
-                        let idc = r.ue();
-                        if idc == 3 {
-                            break;
-                        }
-                        if idc > 3 || list_mods[list].len() > 64 {
-                            return Err("bad ref_pic_list_modification".into());
-                        }
-                        let value = r.ue();
-                        list_mods[list].push(ListMod { idc, value });
+            if ((list == 0 && slice_type != SliceType::I)
+                || (list == 1 && slice_type == SliceType::B))
+                && r.flag()
+            {
+                loop {
+                    let idc = r.ue();
+                    if idc == 3 {
+                        break;
                     }
+                    if idc > 3 || list_mods[list].len() > 64 {
+                        return Err("bad ref_pic_list_modification".into());
+                    }
+                    let value = r.ue();
+                    list_mods[list].push(ListMod { idc, value });
                 }
+            }
         }
         let mut weights = None;
         if (pps.weighted_pred && slice_type == SliceType::P)

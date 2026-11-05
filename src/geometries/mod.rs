@@ -14,6 +14,7 @@ pub mod frenet;
 mod kirigami;
 mod lathe_geometry;
 pub mod lattice;
+mod mesh_builder;
 #[cfg(feature = "nurbs")]
 mod nurbs_geometry;
 mod parametric_geometry;
@@ -58,9 +59,10 @@ pub use lattice::{
     ChiralRule, Conductivity, Conform, Cuboct, CuboctAssembly, CuboctAssemblyPlan,
     CuboctAssemblyStep, CuboctFrame, CuboctJoint, CuboctJointKind, Field, FrameMaterial,
     FrameResponse, Hand, Infill, Lattice, LatticeGeometry, LatticeKind, LatticeMetrics,
-    LatticeStyle, Region, SeedLayout, Segment, SolidMaterial, Solver, Stiffness, Stochastic, Strength, Strut,
-    Tpms,
+    LatticeStyle, Region, SeedLayout, Segment, SolidMaterial, Solver, Stiffness, Stochastic,
+    Strength, Strut, Tpms,
 };
+pub use mesh_builder::{MeshBuilder, MeshReport};
 #[cfg(feature = "nurbs")]
 pub use nurbs_geometry::NurbsGeometry;
 pub use parametric_geometry::ParametricGeometry;

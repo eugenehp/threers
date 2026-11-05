@@ -23,8 +23,18 @@ fn main() {
                 *cfg.entry((p.config, p.stereo, p.code)).or_insert(0) += 1;
             }
         }
-        let s: Vec<String> = STAT_NAMES.iter().zip(&STATS).map(|(n, v)| format!("{n}={}", v.load(std::sync::atomic::Ordering::Relaxed))).collect();
+        let s: Vec<String> = STAT_NAMES
+            .iter()
+            .zip(&STATS)
+            .map(|(n, v)| format!("{n}={}", v.load(std::sync::atomic::Ordering::Relaxed)))
+            .collect();
         println!("cfg(config,stereo,code)={cfg:?}\n  {}", s.join(" "));
     }
-    eprintln!("{} ch, {} samples, {} frames, {:.1} ms", d.planes.len(), n, d.frame_lens.len(), el.as_secs_f64() * 1e3);
+    eprintln!(
+        "{} ch, {} samples, {} frames, {:.1} ms",
+        d.planes.len(),
+        n,
+        d.frame_lens.len(),
+        el.as_secs_f64() * 1e3
+    );
 }

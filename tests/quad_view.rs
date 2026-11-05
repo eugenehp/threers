@@ -345,6 +345,7 @@ fn msaa_pane_matches_a_full_target_render() {
             .build()
             .ok(),
     ) else {
+        eprintln!("skipping: no GPU adapter");
         return;
     };
     full.set_msaa(4);
@@ -457,6 +458,7 @@ fn measure_shared_shadow_maps() {
     use threers::{Mesh, Object3D};
     let (w, h) = (1280u32, 960u32);
     let Some(mut hr) = HeadlessRenderer::builder().size(w, h).build().ok() else {
+        eprintln!("skipping: no GPU adapter");
         return;
     };
     hr.set_msaa(4);

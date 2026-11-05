@@ -26,11 +26,13 @@ const MODE_SILK: u8 = 0;
 const MODE_HYBRID: u8 = 1;
 const MODE_CELT: u8 = 2;
 
-const SILK_FRAME_DURATION_MS: [usize; 16] = [10, 20, 40, 60, 10, 20, 40, 60, 10, 20, 40, 60, 10, 20, 10, 20];
+const SILK_FRAME_DURATION_MS: [usize; 16] = [
+    10, 20, 40, 60, 10, 20, 40, 60, 10, 20, 40, 60, 10, 20, 10, 20,
+];
 const SILK_RESAMPLE_DELAY: [usize; 5] = [4, 8, 11, 11, 11];
 const FRAME_DURATION: [usize; 32] = [
-    480, 960, 1920, 2880, 480, 960, 1920, 2880, 480, 960, 1920, 2880, 480, 960, 480, 960, 120, 240, 480, 960, 120, 240, 480, 960, 120,
-    240, 480, 960, 120, 240, 480, 960,
+    480, 960, 1920, 2880, 480, 960, 1920, 2880, 480, 960, 1920, 2880, 480, 960, 480, 960, 120, 240,
+    480, 960, 120, 240, 480, 960, 120, 240, 480, 960, 120, 240, 480, 960,
 ];
 const MAX_FRAME_SIZE: usize = 1275;
 
@@ -119,7 +121,9 @@ pub fn parse_packet(buf: &[u8], self_delimiting: bool) -> Result<Packet, String>
         0 => {
             pkt.frame_count = 1;
             if self_delimiting {
-                let Some(len) = lacing16(buf, &mut p, end) else { return fail() };
+                let Some(len) = lacing16(buf, &mut p, end) else {
+                    return fail();
+                };
                 if len > end - p {
                     return fail();
                 }
@@ -136,7 +140,9 @@ pub fn parse_packet(buf: &[u8], self_delimiting: bool) -> Result<Packet, String>
         1 => {
             pkt.frame_count = 2;
             if self_delimiting {
-                let Some(len) = lacing16(buf, &mut p, end) else { return fail() };
+                let Some(len) = lacing16(buf, &mut p, end) else {
+                    return fail();
+                };
                 if 2 * len > end - p {
                     return fail();
                 }
@@ -153,9 +159,13 @@ pub fn parse_packet(buf: &[u8], self_delimiting: bool) -> Result<Packet, String>
         2 => {
             pkt.frame_count = 2;
             pkt.vbr = true;
-            let Some(fb0) = lacing16(buf, &mut p, end) else { return fail() };
+            let Some(fb0) = lacing16(buf, &mut p, end) else {
+                return fail();
+            };
             if self_delimiting {
-                let Some(len) = lacing16(buf, &mut p, end) else { return fail() };
+                let Some(len) = lacing16(buf, &mut p, end) else {
+                    return fail();
+                };
                 if len + fb0 > end - p {
                     return fail();
                 }
@@ -182,7 +192,9 @@ pub fn parse_packet(buf: &[u8], self_delimiting: bool) -> Result<Packet, String>
                 return fail();
             }
             if has_padding {
-                let Some(v) = lacing_full(buf, &mut p, end) else { return fail() };
+                let Some(v) = lacing_full(buf, &mut p, end) else {
+                    return fail();
+                };
                 padding = v;
             }
             pkt.frame_size = vec![0; pkt.frame_count];
@@ -190,12 +202,16 @@ pub fn parse_packet(buf: &[u8], self_delimiting: bool) -> Result<Packet, String>
             if pkt.vbr {
                 let mut total = 0;
                 for i in 0..pkt.frame_count - 1 {
-                    let Some(fb) = lacing16(buf, &mut p, end) else { return fail() };
+                    let Some(fb) = lacing16(buf, &mut p, end) else {
+                        return fail();
+                    };
                     pkt.frame_size[i] = fb;
                     total += fb;
                 }
                 if self_delimiting {
-                    let Some(len) = lacing16(buf, &mut p, end) else { return fail() };
+                    let Some(len) = lacing16(buf, &mut p, end) else {
+                        return fail();
+                    };
                     if len + total + padding > end - p {
                         return fail();
                     }
@@ -217,7 +233,9 @@ pub fn parse_packet(buf: &[u8], self_delimiting: bool) -> Result<Packet, String>
             } else {
                 let fb;
                 if self_delimiting {
-                    let Some(v) = lacing16(buf, &mut p, end) else { return fail() };
+                    let Some(v) = lacing16(buf, &mut p, end) else {
+                        return fail();
+                    };
                     if pkt.frame_count * v + padding > end - p {
                         return fail();
                     }
@@ -317,29 +335,36 @@ pub fn parse_head(extradata: &[u8]) -> Result<Head, String> {
     }
     let gain_i = i16::from_le_bytes([extradata[16], extradata[17]]);
     let map_type = extradata[18];
-    let (streams, stereo_streams, channel_map, vorbis): (usize, usize, Vec<u8>, bool) = match map_type {
-        0 => {
-            if channels > 2 {
-                return Err("Channel mapping 0 is only specified for up to 2 channels".into());
+    let (streams, stereo_streams, channel_map, vorbis): (usize, usize, Vec<u8>, bool) =
+        match map_type {
+            0 => {
+                if channels > 2 {
+                    return Err("Channel mapping 0 is only specified for up to 2 channels".into());
+                }
+                (1, channels - 1, vec![0, 1], false)
             }
-            (1, channels - 1, vec![0, 1], false)
+            1 | 2 | 255 => {
+                if extradata.len() < 21 + channels {
+                    return Err(format!("Invalid extradata size: {}", extradata.len()));
+                }
+                let (s, ss) = (extradata[19] as usize, extradata[20] as usize);
+                if s == 0 || ss > s || s + ss > 255 {
+                    return Err(format!("Invalid stream/stereo stream count: {s}/{ss}"));
+                }
+                if map_type == 1 && channels > 8 {
+                    return Err("Channel mapping 1 is only specified for up to 8 channels".into());
+                }
+                (s, ss, extradata[21..21 + channels].to_vec(), map_type == 1)
+            }
+            t => return Err(format!("Mapping type {t}")),
+        };
+    let reorder = |i: usize| {
+        if vorbis {
+            VORBIS_OFFSETS[channels - 1][i]
+        } else {
+            i
         }
-        1 | 2 | 255 => {
-            if extradata.len() < 21 + channels {
-                return Err(format!("Invalid extradata size: {}", extradata.len()));
-            }
-            let (s, ss) = (extradata[19] as usize, extradata[20] as usize);
-            if s == 0 || ss > s || s + ss > 255 {
-                return Err(format!("Invalid stream/stereo stream count: {s}/{ss}"));
-            }
-            if map_type == 1 && channels > 8 {
-                return Err("Channel mapping 1 is only specified for up to 8 channels".into());
-            }
-            (s, ss, extradata[21..21 + channels].to_vec(), map_type == 1)
-        }
-        t => return Err(format!("Mapping type {t}")),
     };
-    let reorder = |i: usize| if vorbis { VORBIS_OFFSETS[channels - 1][i] } else { i };
     let mut maps = vec![ChannelMap::default(); channels];
     for i in 0..channels {
         let idx = channel_map[reorder(i)] as usize;
@@ -359,7 +384,14 @@ pub fn parse_head(extradata: &[u8]) -> Result<Head, String> {
             maps[i].channel_idx = 0;
         }
     }
-    Ok(Head { channels, pre_skip, gain_i, nb_streams: streams, nb_stereo_streams: stereo_streams, maps })
+    Ok(Head {
+        channels,
+        pre_skip,
+        gain_i,
+        nb_streams: streams,
+        nb_stereo_streams: stereo_streams,
+        maps,
+    })
 }
 
 /// `opus_fade(out, in1, in2, window, len)`: `in2*w + in1*(1.0 - w)`, the
@@ -443,7 +475,10 @@ impl Stream {
             }
             for c in 0..self.output_channels {
                 let d = std::mem::take(&mut self.celt_delay[c]);
-                for (o, &v) in self.out[c][self.cur..self.cur + nb_samples].iter_mut().zip(&d) {
+                for (o, &v) in self.out[c][self.cur..self.cur + nb_samples]
+                    .iter_mut()
+                    .zip(&d)
+                {
                     *o = v.mul_add(1.0, *o);
                 }
             }
@@ -462,7 +497,14 @@ impl Stream {
         let mut outs: Vec<&mut [f32]> = vec![&mut a[0][..], &mut b[0][..]];
         outs.truncate(n);
         self.celt
-            .decode_frame(&mut rc, &mut outs, self.packet.stereo as usize + 1, 240, 0, CELT_BAND_END[self.packet.bandwidth] as usize)
+            .decode_frame(
+                &mut rc,
+                &mut outs,
+                self.packet.stereo as usize + 1,
+                240,
+                0,
+                CELT_BAND_END[self.packet.bandwidth] as usize,
+            )
             .map_err(|e| format!("Error decoding the redundancy frame: {e}"))
     }
 
@@ -513,7 +555,11 @@ impl Stream {
         let (mut redundancy_pos, mut redundancy_size) = (false, 0usize);
         if redundancy {
             redundancy_pos = rc.dec_log(1) != 0;
-            redundancy_size = if mode == MODE_HYBRID { rc.dec_uint(256) as usize + 2 } else { size - consumed.div_ceil(8) };
+            redundancy_size = if mode == MODE_HYBRID {
+                rc.dec_uint(256) as usize + 2
+            } else {
+                size - consumed.div_ceil(8)
+            };
             if redundancy_size > size {
                 return Err("Invalid redundancy frame size.".into());
             }
@@ -554,12 +600,14 @@ impl Stream {
                 let (a, b) = self.out.split_at_mut(1);
                 let mut outs: Vec<&mut [f32]> = vec![&mut a[0][cur..], &mut b[0][cur..]];
                 outs.truncate(nch);
-                self.celt.decode_frame(&mut rc, &mut outs, channels, fd, start, end)?;
+                self.celt
+                    .decode_frame(&mut rc, &mut outs, channels, fd, start, end)?;
             } else {
                 let (a, b) = self.celt_out.split_at_mut(1);
                 let mut outs: Vec<&mut [f32]> = vec![&mut a[0][..], &mut b[0][..]];
                 outs.truncate(nch);
-                self.celt.decode_frame(&mut rc, &mut outs, channels, fd, start, end)?;
+                self.celt
+                    .decode_frame(&mut rc, &mut outs, channels, fd, start, end)?;
                 for c in 0..nch {
                     for k in 0..celt_output_samples {
                         let o = &mut self.out[c][out_off + k];
@@ -608,14 +656,18 @@ impl Stream {
         let mut output_samples = 0;
         let mut flush_needed = false;
         if let Some(swr) = &self.swr {
-            flush_needed =
-                if buf.is_some() { self.packet.mode == MODE_CELT || swr.in_rate != self.silk_samplerate } else { self.delayed_samples != 0 };
+            flush_needed = if buf.is_some() {
+                self.packet.mode == MODE_CELT || swr.in_rate != self.silk_samplerate
+            } else {
+                self.delayed_samples != 0
+            };
         }
         if buf.is_none() && !flush_needed {
             return Ok(0);
         }
         if flush_needed {
-            self.flush_resample(self.delayed_samples).map_err(|e| format!("Error flushing the resampler: {e}"))?;
+            self.flush_resample(self.delayed_samples)
+                .map_err(|e| format!("Error flushing the resampler: {e}"))?;
             self.swr = None;
             output_samples += self.delayed_samples;
             self.delayed_samples = 0;
@@ -631,7 +683,9 @@ impl Stream {
                 Err(_) => {
                     let fd = self.packet.frame_duration;
                     for c in 0..self.output_channels {
-                        self.out[c][self.cur..self.cur + fd].iter_mut().for_each(|v| *v = 0.0);
+                        self.out[c][self.cur..self.cur + fd]
+                            .iter_mut()
+                            .for_each(|v| *v = 0.0);
                     }
                     fd
                 }
@@ -655,9 +709,19 @@ impl Decoder {
     /// `opus_decode_init` from the `OpusHead` (Matroska `CodecPrivate`).
     pub fn new(extradata: &[u8]) -> Result<Self, String> {
         let head = parse_head(extradata)?;
-        let gain = if head.gain_i != 0 { 10f64.powf(head.gain_i as f64 / (20.0 * 256.0)) as f32 } else { 0.0 };
-        let streams = (0..head.nb_streams).map(|i| Stream::new(if i < head.nb_stereo_streams { 2 } else { 1 }, true)).collect();
-        Ok(Decoder { head, streams, gain })
+        let gain = if head.gain_i != 0 {
+            10f64.powf(head.gain_i as f64 / (20.0 * 256.0)) as f32
+        } else {
+            0.0
+        };
+        let streams = (0..head.nb_streams)
+            .map(|i| Stream::new(if i < head.nb_stereo_streams { 2 } else { 1 }, true))
+            .collect();
+        Ok(Decoder {
+            head,
+            streams,
+            gain,
+        })
     }
 
     /// `opus_decode_packet`: planar output, one Vec per channel (empty when
@@ -809,26 +873,46 @@ pub fn decode_webm(data: &[u8]) -> Result<Decoded, String> {
 pub fn decode_matroska(data: &[u8]) -> Result<Option<Decoded>, String> {
     use crate::mkv_demux::{Mkv, TrackKind};
     let mkv = Mkv::parse(data)?;
-    let audio: Vec<_> = mkv.tracks.iter().filter(|t| t.kind == TrackKind::Audio).collect();
-    let Some(track) = audio.iter().find(|t| t.flag_default).or(audio.first()).copied() else {
+    let audio: Vec<_> = mkv
+        .tracks
+        .iter()
+        .filter(|t| t.kind == TrackKind::Audio)
+        .collect();
+    let Some(track) = audio
+        .iter()
+        .find(|t| t.flag_default)
+        .or(audio.first())
+        .copied()
+    else {
         return Ok(None);
     };
     if !track.codec_id.starts_with("A_OPUS") {
-        return Err(format!("{}: only Opus audio is decoded from Matroska/WebM", track.codec_id));
+        return Err(format!(
+            "{}: only Opus audio is decoded from Matroska/WebM",
+            track.codec_id
+        ));
     }
     let mut dec = Decoder::new(&track.codec_private)?;
     // matroskadec rescales DiscardPadding by `codecpar->sample_rate`, which
     // avformat_find_stream_info has replaced with the decoder's 48 kHz by the
     // time the (final) padded packets are read.
     let rate = 48000i128;
-    let mut sink = Sink { skip: dec.head.pre_skip, planes: vec![Vec::new(); dec.head.channels], frame_lens: Vec::new() };
+    let mut sink = Sink {
+        skip: dec.head.pre_skip,
+        planes: vec![Vec::new(); dec.head.channels],
+        frame_lens: Vec::new(),
+    };
     for f in mkv.frames_of(track.number) {
         let mut discard = 0usize;
         if f.discard_padding != 0 {
             // av_rescale_q(ns, 1/1e9, 1/rate), to nearest; the side data
             // also replaces skip_samples with its first field.
             let num = f.discard_padding as i128 * rate;
-            let v = if num >= 0 { (num + 500_000_000) / 1_000_000_000 } else { -((-num + 500_000_000) / 1_000_000_000) } as i64;
+            let v = if num >= 0 {
+                (num + 500_000_000) / 1_000_000_000
+            } else {
+                -((-num + 500_000_000) / 1_000_000_000)
+            } as i64;
             if v > 0 {
                 discard = v as usize;
                 sink.skip = 0;
@@ -846,5 +930,9 @@ pub fn decode_matroska(data: &[u8]) -> Result<Option<Decoded>, String> {
         }
         sink.push(frame, 0);
     }
-    Ok(Some(Decoded { sample_rate: 48000, planes: sink.planes, frame_lens: sink.frame_lens }))
+    Ok(Some(Decoded {
+        sample_rate: 48000,
+        planes: sink.planes,
+        frame_lens: sink.frame_lens,
+    }))
 }

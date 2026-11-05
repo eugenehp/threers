@@ -106,9 +106,6 @@ pub mod math;
 /// `ScadAnimation`.
 #[cfg(all(feature = "assembly", feature = "openscad"))]
 pub mod mechanism;
-/// Checking a declared mechanism against the parts that have to perform it.
-#[cfg(all(feature = "assembly", feature = "openscad"))]
-pub mod verify;
 pub mod narrowphase;
 pub mod query;
 /// Colliders straight from an OpenSCAD [`Solid`](threers::openscad::Solid).
@@ -120,6 +117,9 @@ pub mod solver;
 pub mod tendon;
 pub mod trimesh;
 pub mod vehicle;
+/// Checking a declared mechanism against the parts that have to perform it.
+#[cfg(all(feature = "assembly", feature = "openscad"))]
+pub mod verify;
 pub mod world;
 
 /// Everything you normally need, in one import.
@@ -131,6 +131,11 @@ pub mod world;
 /// Re-exports `Vector3`, `Quaternion` and `Ray` from `threers` too, so simple
 /// programs need only this one `use`.
 pub mod prelude {
+    #[cfg(feature = "assembly")]
+    pub use crate::assembly::{
+        Assembly, AssemblyError, AssemblyReport, Axis, Easing, Feature, FeatureKind, Interference,
+        Mate, MateId, MateKind, Part, PartId, PartPhysics, Sweep,
+    };
     pub use crate::body::{BodyId, BodySet, BodyType, LockedAxes, RigidBody, RigidBodyBuilder};
     pub use crate::character::{CharacterController, CharacterMove};
     pub use crate::collider::Collider;
@@ -139,16 +144,11 @@ pub mod prelude {
     pub use crate::gjk::{closest_points, Proximity, ShapeProxy, SupportMap};
     pub use crate::hull::{ConvexHull, HullFace};
     pub use crate::ik::{IkChain, IkConstraint, IkJoint, IkResult};
+    #[cfg(feature = "mechanism")]
+    pub use crate::joint::{AxialKind, JointState, Servo};
     pub use crate::joint::{
         Dof, DofMotion, Joint, JointId, JointKind, JointLimits, JointSet, JointSpring, Motor,
         Softness,
-    };
-    #[cfg(feature = "mechanism")]
-    pub use crate::joint::{AxialKind, JointState, Servo};
-    #[cfg(feature = "assembly")]
-    pub use crate::assembly::{
-        Assembly, AssemblyError, AssemblyReport, Axis, Easing, Feature, FeatureKind, Interference,
-        Mate, MateId, MateKind, Part, PartId, PartPhysics, Sweep,
     };
     pub use crate::material::{CombineRule, InteractionGroups, PhysicsMaterial};
     pub use crate::math::{Aabb, Isometry, Mat3};

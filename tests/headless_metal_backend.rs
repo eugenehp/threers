@@ -39,7 +39,9 @@ fn scene() -> Scene {
     // Dark and saturated, where a missing sRGB encode shows the most.
     s.background = Color::from_hex(0x10204a);
     s.add_light(AmbientLight::new(Color::WHITE, 0.3));
-    s.add_light(DirectionalLight::new(Color::WHITE, 2.0).with_direction(Vector3::new(-0.4, -1.0, -0.6)));
+    s.add_light(
+        DirectionalLight::new(Color::WHITE, 2.0).with_direction(Vector3::new(-0.4, -1.0, -0.6)),
+    );
     let mut floor = Object3D::mesh(Mesh::new(
         PlaneGeometry::new(6.0, 6.0),
         StandardMaterial::new(Color::from_hex(0x336644)).into(),
@@ -48,7 +50,9 @@ fn scene() -> Scene {
     s.add(floor);
     let mut cube = Object3D::mesh(Mesh::new(
         BoxGeometry::new(1.0, 1.0, 1.0),
-        StandardMaterial::new(Color::from_hex(0xff8844)).with_roughness(0.5).into(),
+        StandardMaterial::new(Color::from_hex(0xff8844))
+            .with_roughness(0.5)
+            .into(),
     ));
     cube.position = Vector3::new(0.0, 0.5, 0.0);
     cube.name = "cube".into();
@@ -104,7 +108,10 @@ fn the_metal_backend_draws_what_wgpu_draws() {
         eprintln!("skipping: no Metal device");
         return;
     }
-    for format in [wgpu::TextureFormat::Rgba8UnormSrgb, wgpu::TextureFormat::Rgba8Unorm] {
+    for format in [
+        wgpu::TextureFormat::Rgba8UnormSrgb,
+        wgpu::TextureFormat::Rgba8Unorm,
+    ] {
         for (ss, msaa) in [(1, 1), (1, 4), (2, 1)] {
             let frames: Vec<(Vec<u8>, Vec<u8>)> = [false, true]
                 .into_iter()
@@ -210,7 +217,9 @@ fn the_metal_backend_draws_what_wgpu_draws() {
         let mut s = Scene::new();
         s.background = Color::from_hex(0x0a0a10);
         s.add_light(AmbientLight::new(Color::WHITE, 0.2));
-        s.add_light(DirectionalLight::new(Color::WHITE, 2.0).with_direction(Vector3::new(-0.5, -0.6, -1.0)));
+        s.add_light(
+            DirectionalLight::new(Color::WHITE, 2.0).with_direction(Vector3::new(-0.5, -0.6, -1.0)),
+        );
         s.add(Object3D::mesh(Mesh::new(
             threers::SphereGeometry::new(1.0, 48, 24),
             threers::Material::Shader(material.clone()),
@@ -228,7 +237,10 @@ fn the_metal_backend_draws_what_wgpu_draws() {
         })
         .collect();
     let lit = customs[1].chunks_exact(4).filter(|p| p[0] > 40).count();
-    assert!(lit > 500, "the custom shader drew almost nothing on Metal ({lit} px)");
+    assert!(
+        lit > 500,
+        "the custom shader drew almost nothing on Metal ({lit} px)"
+    );
     let (mean, p99) = diff(&customs[0], &customs[1]);
     assert!(
         mean < 2.0 && p99 < 24,
@@ -261,7 +273,9 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let mut s = Scene::new();
         s.background = Color::from_hex(0x0a0a10);
         s.add_light(AmbientLight::new(Color::WHITE, 0.2));
-        s.add_light(DirectionalLight::new(Color::WHITE, 2.0).with_direction(Vector3::new(-0.5, -0.6, -1.0)));
+        s.add_light(
+            DirectionalLight::new(Color::WHITE, 2.0).with_direction(Vector3::new(-0.5, -0.6, -1.0)),
+        );
         s.add(Object3D::mesh(Mesh::new(
             threers::SphereGeometry::new(1.0, 48, 24),
             threers::Material::Shader(plain.clone()),
@@ -308,7 +322,10 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         cam.target = Vector3::ZERO;
         let fogged: Vec<Vec<u8>> = [false, true]
             .into_iter()
-            .map(|metal| build(metal, wgpu::TextureFormat::Rgba8UnormSrgb, 1, 1).render_to_rgba(&mut fog_scene(), &cam))
+            .map(|metal| {
+                build(metal, wgpu::TextureFormat::Rgba8UnormSrgb, 1, 1)
+                    .render_to_rgba(&mut fog_scene(), &cam)
+            })
             .collect();
         let (mean, p99) = diff(&fogged[0], &fogged[1]);
         assert!(
@@ -327,7 +344,10 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             m.transparent = true;
             m.opacity = 0.6;
             m.render_state.blending = threers::materials::Blending::Additive;
-            let mut quad = Object3D::mesh(Mesh::new(PlaneGeometry::new(1.4, 1.4), threers::Material::Basic(m)));
+            let mut quad = Object3D::mesh(Mesh::new(
+                PlaneGeometry::new(1.4, 1.4),
+                threers::Material::Basic(m),
+            ));
             quad.position = Vector3::new(k as f32 * 0.45 - 0.45, 0.0, k as f32 * 0.01);
             s.add(quad);
         }
@@ -338,9 +358,17 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     cam.target = Vector3::ZERO;
     let added: Vec<Vec<u8>> = [false, true]
         .into_iter()
-        .map(|metal| build(metal, wgpu::TextureFormat::Rgba8UnormSrgb, 1, 1).render_to_rgba(&mut additive_scene(), &cam))
+        .map(|metal| {
+            build(metal, wgpu::TextureFormat::Rgba8UnormSrgb, 1, 1)
+                .render_to_rgba(&mut additive_scene(), &cam)
+        })
         .collect();
-    check("additive blending", diff(&added[0], &added[1]), true, (1.0, 8));
+    check(
+        "additive blending",
+        diff(&added[0], &added[1]),
+        true,
+        (1.0, 8),
+    );
 
     // A displacement map: the terrain relief a planet gets, moving vertices
     // along their normals in the vertex stage.
@@ -361,12 +389,17 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let mut s = Scene::new();
         s.background = Color::from_hex(0x000000);
         s.add_light(AmbientLight::new(Color::WHITE, 0.3));
-        s.add_light(DirectionalLight::new(Color::WHITE, 2.0).with_direction(Vector3::new(-0.5, -0.4, -1.0)));
+        s.add_light(
+            DirectionalLight::new(Color::WHITE, 2.0).with_direction(Vector3::new(-0.5, -0.4, -1.0)),
+        );
         let mut m = StandardMaterial::new(Color::from_hex(0xc0a080));
         m.displacement_map = Some(height_map.clone());
         m.displacement_scale = 0.15;
         m.displacement_bias = -0.05;
-        s.add(Object3D::mesh(Mesh::new(threers::SphereGeometry::new(1.0, 96, 48), threers::Material::Standard(m))));
+        s.add(Object3D::mesh(Mesh::new(
+            threers::SphereGeometry::new(1.0, 96, 48),
+            threers::Material::Standard(m),
+        )));
         s
     };
     let mut cam = PerspectiveCamera::new(40.0, W as f32 / H as f32, 0.1, 100.0);
@@ -378,7 +411,8 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let mut s = Scene::new();
         s.background = Color::from_hex(0x000000);
         s.add_light(AmbientLight::new(Color::WHITE, 0.3));
-        let mut sun = DirectionalLight::new(Color::WHITE, 2.0).with_direction(Vector3::new(-0.3, -1.0, -0.2));
+        let mut sun =
+            DirectionalLight::new(Color::WHITE, 2.0).with_direction(Vector3::new(-0.3, -1.0, -0.2));
         sun.cast_shadow = true;
         sun.shadow.map_size = 1024;
         s.add_light(sun);
@@ -386,10 +420,16 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         m.displacement_map = Some(height_map.clone());
         m.displacement_scale = 0.3;
         m.displacement_bias = -0.1;
-        let mut ball = Object3D::mesh(Mesh::new(threers::SphereGeometry::new(1.0, 96, 48), threers::Material::Standard(m)));
+        let mut ball = Object3D::mesh(Mesh::new(
+            threers::SphereGeometry::new(1.0, 96, 48),
+            threers::Material::Standard(m),
+        ));
         ball.cast_shadow = true;
         s.add(ball);
-        let mut ground = Object3D::mesh(Mesh::new(PlaneGeometry::new(8.0, 8.0), StandardMaterial::new(Color::WHITE).into()));
+        let mut ground = Object3D::mesh(Mesh::new(
+            PlaneGeometry::new(8.0, 8.0),
+            StandardMaterial::new(Color::WHITE).into(),
+        ));
         ground.rotate_x(-std::f32::consts::FRAC_PI_2);
         ground.position = Vector3::new(0.0, -1.4, 0.0);
         ground.receive_shadow = true;
@@ -401,7 +441,10 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     high.target = Vector3::new(0.0, -1.0, 0.0);
     let shadows: Vec<Vec<u8>> = [false, true]
         .into_iter()
-        .map(|metal| build(metal, wgpu::TextureFormat::Rgba8UnormSrgb, 1, 1).render_to_rgba(&mut displaced_shadow(), &high))
+        .map(|metal| {
+            build(metal, wgpu::TextureFormat::Rgba8UnormSrgb, 1, 1)
+                .render_to_rgba(&mut displaced_shadow(), &high)
+        })
         .collect();
     // The relief changes only the shadow's outline, a few dozen pixels: count
     // them rather than averaging them away.
@@ -417,7 +460,10 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     );
     let displaced: Vec<Vec<u8>> = [false, true]
         .into_iter()
-        .map(|metal| build(metal, wgpu::TextureFormat::Rgba8UnormSrgb, 1, 1).render_to_rgba(&mut displaced_scene(), &cam))
+        .map(|metal| {
+            build(metal, wgpu::TextureFormat::Rgba8UnormSrgb, 1, 1)
+                .render_to_rgba(&mut displaced_scene(), &cam)
+        })
         .collect();
     let (mean, p99) = diff(&displaced[0], &displaced[1]);
     assert!(
@@ -460,14 +506,20 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     ss_cam.look_at(Vector3::new(0.0, 0.0, -2.0));
     let ss: Vec<Vec<u8>> = [false, true]
         .into_iter()
-        .map(|metal| build(metal, wgpu::TextureFormat::Rgba8UnormSrgb, 1, 1).render_to_rgba(&mut screen_space_scene(), &ss_cam))
+        .map(|metal| {
+            build(metal, wgpu::TextureFormat::Rgba8UnormSrgb, 1, 1)
+                .render_to_rgba(&mut screen_space_scene(), &ss_cam)
+        })
         .collect();
     let centre = |px: &[u8]| {
         let i = (((H / 2) * W + W / 2) * 4) as usize;
         [px[i], px[i + 1], px[i + 2]]
     };
     let c = centre(&ss[1]);
-    assert!(c[2] > 200 && c[1] > 200 && c[0] < 40, "Metal: the box does not show through as blue and green: {c:?}");
+    assert!(
+        c[2] > 200 && c[1] > 200 && c[0] < 40,
+        "Metal: the box does not show through as blue and green: {c:?}"
+    );
     let (mean, p99) = diff(&ss[0], &ss[1]);
     assert!(
         mean < 2.0 && p99 < 24,
@@ -496,20 +548,42 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let checker: Vec<u8> = (0..n * n)
             .flat_map(|i| {
                 let on = ((i % n) / 8 + (i / n) / 8).is_multiple_of(2);
-                if on { [230, 40, 200, 255] } else { [20, 180, 30, 255] }
+                if on {
+                    [230, 40, 200, 255]
+                } else {
+                    [20, 180, 30, 255]
+                }
             })
             .collect();
-        let mut checker = threers::Texture::new(n, n, threers::TextureFormat::Rgba8UnormSrgb, checker);
+        let mut checker =
+            threers::Texture::new(n, n, threers::TextureFormat::Rgba8UnormSrgb, checker);
         checker.mipmap_filter = Some(threers::TextureFilter::Linear);
-        let ramp: Vec<u8> = (0..16u32 * 4).flat_map(|i| [0, (i * 255 / 63) as u8, 0, 255]).collect();
+        let ramp: Vec<u8> = (0..16u32 * 4)
+            .flat_map(|i| [0, (i * 255 / 63) as u8, 0, 255])
+            .collect();
         let ramp = threers::Texture::new(16, 4, threers::TextureFormat::Rgba8Unorm, ramp);
         let solid = |w: u32, h: u32, px: [u8; 4]| std::sync::Arc::new(px.repeat((w * h) as usize));
-        let mut own = threers::Texture::new(8, 8, threers::TextureFormat::Rgba8Unorm, (*solid(8, 8, [255, 0, 0, 255])).clone());
-        own.mips = vec![solid(4, 4, [0, 0, 255, 255]), solid(2, 2, [0, 0, 255, 255]), solid(1, 1, [0, 0, 255, 255])];
+        let mut own = threers::Texture::new(
+            8,
+            8,
+            threers::TextureFormat::Rgba8Unorm,
+            (*solid(8, 8, [255, 0, 0, 255])).clone(),
+        );
+        own.mips = vec![
+            solid(4, 4, [0, 0, 255, 255]),
+            solid(2, 2, [0, 0, 255, 255]),
+            solid(1, 1, [0, 0, 255, 255]),
+        ];
         let mut s = Scene::new();
-        let m = threers::ShaderMaterial::new(maps_wgsl)
-            .with_maps(vec![std::sync::Arc::new(checker), std::sync::Arc::new(ramp), std::sync::Arc::new(own)]);
-        s.add(Object3D::mesh(Mesh::new(PlaneGeometry::new(4.0, 3.0), m.into())));
+        let m = threers::ShaderMaterial::new(maps_wgsl).with_maps(vec![
+            std::sync::Arc::new(checker),
+            std::sync::Arc::new(ramp),
+            std::sync::Arc::new(own),
+        ]);
+        s.add(Object3D::mesh(Mesh::new(
+            PlaneGeometry::new(4.0, 3.0),
+            m.into(),
+        )));
         s
     };
     let mut maps_cam = PerspectiveCamera::new(50.0, W as f32 / H as f32, 0.1, 50.0);
@@ -517,7 +591,10 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     maps_cam.look_at(Vector3::ZERO);
     let maps: Vec<Vec<u8>> = [false, true]
         .into_iter()
-        .map(|metal| build(metal, wgpu::TextureFormat::Rgba8UnormSrgb, 1, 1).render_to_rgba(&mut maps_scene(), &maps_cam))
+        .map(|metal| {
+            build(metal, wgpu::TextureFormat::Rgba8UnormSrgb, 1, 1)
+                .render_to_rgba(&mut maps_scene(), &maps_cam)
+        })
         .collect();
     let c = centre(&maps[1]);
     assert!(c[1] > 40, "Metal: the data texture does not read: {c:?}");
@@ -525,7 +602,11 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // supplied level.
     for (backend, px) in ["wgpu", "Metal"].iter().zip(&maps) {
         let i = (((H * 3 / 8) * W + W / 2) * 4) as usize;
-        assert!(px[i + 2] > 250, "{backend}: the supplied mip level is not what is sampled: {:?}", &px[i..i + 4]);
+        assert!(
+            px[i + 2] > 250,
+            "{backend}: the supplied mip level is not what is sampled: {:?}",
+            &px[i..i + 4]
+        );
     }
     let (mean, p99) = diff(&maps[0], &maps[1]);
     assert!(
@@ -543,11 +624,15 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     };
     type MakePass = fn(threers::core::ObjectId) -> Box<dyn Pass>;
     let chains: [(&str, MakePass); 5] = [
-        ("bloom", |_| Box::new(UnrealBloomPass::new(W, H, 1.2, 0.4, 0.3))),
+        ("bloom", |_| {
+            Box::new(UnrealBloomPass::new(W, H, 1.2, 0.4, 0.3))
+        }),
         ("ssao", |_| Box::new(SsaoPass::new(0, 0, W, H, 16))),
         ("bokeh", |_| Box::new(BokehPass::new(0, 0, 4.0, 0.05, 0.02))),
         ("smaa", |_| Box::new(SmaaPass::new(W, H))),
-        ("outline", |id| Box::new(OutlinePass::new(W, H, 0, 0, vec![id]))),
+        ("outline", |id| {
+            Box::new(OutlinePass::new(W, H, 0, 0, vec![id]))
+        }),
     ];
     for (name, pass) in chains {
         for msaa in [1, 4] {
@@ -556,14 +641,24 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
                 .map(|metal| {
                     let mut hr = build(metal, wgpu::TextureFormat::Rgba8UnormSrgb, 1, msaa);
                     let mut s = scene();
-                    let cube = s.arena.nodes.iter().find(|(_, o)| o.name == "cube").map(|(id, _)| id).expect("the cube");
+                    let cube = s
+                        .arena
+                        .nodes
+                        .iter()
+                        .find(|(_, o)| o.name == "cube")
+                        .map(|(id, _)| id)
+                        .expect("the cube");
                     let mut composer = EffectComposer::with_size(W, H);
                     composer.set_screen_format(wgpu::TextureFormat::Rgba8Unorm);
                     composer.add_pass(RenderPass::new());
                     composer.add_boxed(pass(cube));
                     composer.add_pass(OutputPass::new());
                     let px = hr.compose(&mut composer, &mut s, &camera());
-                    assert_eq!(hr.is_native_metal(), metal, "{name}: compose stays on its backend");
+                    assert_eq!(
+                        hr.is_native_metal(),
+                        metal,
+                        "{name}: compose stays on its backend"
+                    );
                     assert_eq!(px.len(), (W * H * 4) as usize);
                     px
                 })
@@ -585,5 +680,8 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let _ = hr.device();
     assert!(!hr.is_native_metal(), "device() leaves the Metal path");
     let got = hr.read_rgba();
-    assert_eq!(got, want, "the frame drawn before the hand-off is wgpu's own");
+    assert_eq!(
+        got, want,
+        "the frame drawn before the hand-off is wgpu's own"
+    );
 }

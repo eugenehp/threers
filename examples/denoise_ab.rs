@@ -191,7 +191,8 @@ fn hstack(tile_w: u32, tile_h: u32, packed: &[u8], total_w: u32) -> Vec<u8> {
     let n = (total_w / tile_w) as usize;
     let mut out = vec![0u8; (total_w * tile_h * 4) as usize];
     for (ti, _) in (0..n).enumerate() {
-        let src = &packed[(ti * (tile_w * tile_h * 4) as usize)..][..(tile_w * tile_h * 4) as usize];
+        let src =
+            &packed[(ti * (tile_w * tile_h * 4) as usize)..][..(tile_w * tile_h * 4) as usize];
         for y in 0..tile_h as usize {
             let dst_row = y * total_w as usize + ti * tile_w as usize;
             let src_row = y * tile_w as usize;

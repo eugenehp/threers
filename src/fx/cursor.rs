@@ -32,11 +32,25 @@ impl Default for Cursor {
 const HOT: Vector2 = Vector2::new(11.5, 1.0);
 /// The glove's grips, in its own units.
 const GLOVE_GRIPS: [[f32; 2]; Cursor::GRIPS] = [
-    [11.5, 3.6], [16.2, 13.2], [20.6, 14.0], [24.9, 15.8], [5.6, 18.0], [11.5, 10.0], [18.5, 22.0], [18.7, 31.6],
+    [11.5, 3.6],
+    [16.2, 13.2],
+    [20.6, 14.0],
+    [24.9, 15.8],
+    [5.6, 18.0],
+    [11.5, 10.0],
+    [18.5, 22.0],
+    [18.7, 31.6],
 ];
 /// The hotspot's, in CSS pixels from it.
 const HOTSPOT_GRIPS: [[f32; 2]; Cursor::GRIPS] = [
-    [0.0, 0.0], [5.0, 7.0], [-4.0, 6.0], [8.0, 13.0], [-2.0, 12.0], [3.0, 3.0], [6.0, 18.0], [0.0, 16.0],
+    [0.0, 0.0],
+    [5.0, 7.0],
+    [-4.0, 6.0],
+    [8.0, 13.0],
+    [-2.0, 12.0],
+    [3.0, 3.0],
+    [6.0, 18.0],
+    [0.0, 16.0],
 ];
 
 impl Cursor {
@@ -70,7 +84,14 @@ impl Cursor {
     }
 
     /// Draw the cursor at `hotspot` with whatever effects left on it.
-    pub fn paint(&self, o: &mut Overlay, hotspot: Vector2, decor: &CursorDecor, time: f32, dpr: f32) {
+    pub fn paint(
+        &self,
+        o: &mut Overlay,
+        hotspot: Vector2,
+        decor: &CursorDecor,
+        time: f32,
+        dpr: f32,
+    ) {
         if let Cursor::Glove { scale } = self {
             paint_glove(o, hotspot, *scale, decor, time, dpr);
         }
@@ -140,10 +161,20 @@ fn art() -> &'static GloveArt {
     })
 }
 
-fn paint_glove(o: &mut Overlay, hotspot: Vector2, sc: f32, decor: &CursorDecor, time: f32, dpr: f32) {
+fn paint_glove(
+    o: &mut Overlay,
+    hotspot: Vector2,
+    sc: f32,
+    decor: &CursorDecor,
+    time: f32,
+    dpr: f32,
+) {
     let art = art();
-    let to_px = |g: Vector2, dx: f32, dy: f32| (hotspot + (g + Vector2::new(dx, dy) - HOT) * sc) * dpr;
-    let place = |pts: &[Vector2], dx: f32, dy: f32| pts.iter().map(|&g| to_px(g, dx, dy)).collect::<Vec<_>>();
+    let to_px =
+        |g: Vector2, dx: f32, dy: f32| (hotspot + (g + Vector2::new(dx, dy) - HOT) * sc) * dpr;
+    let place = |pts: &[Vector2], dx: f32, dy: f32| {
+        pts.iter().map(|&g| to_px(g, dx, dy)).collect::<Vec<_>>()
+    };
     o.no_stroke();
     // a soft drop shadow, then the white glove and cuff
     o.fill_alpha(Color::from_hex(0x000000), 0.15);
@@ -174,9 +205,14 @@ fn paint_glove(o: &mut Overlay, hotspot: Vector2, sc: f32, decor: &CursorDecor, 
                     let a = k as f32 / 28.0 * std::f32::consts::TAU;
                     let rr = r
                         * scale
-                        * (1.0 + 0.17 * (4.0 * a + g as f32 * 1.7 + time * 2.2).sin()
+                        * (1.0
+                            + 0.17 * (4.0 * a + g as f32 * 1.7 + time * 2.2).sin()
                             + 0.08 * (7.0 * a - time * 3.1 + g as f32).sin());
-                    to_px(centre + shift + Vector2::new(a.cos() * rr, a.sin() * rr), 0.0, 0.0)
+                    to_px(
+                        centre + shift + Vector2::new(a.cos() * rr, a.sin() * rr),
+                        0.0,
+                        0.0,
+                    )
                 })
                 .collect()
         };
@@ -191,7 +227,9 @@ fn paint_glove(o: &mut Overlay, hotspot: Vector2, sc: f32, decor: &CursorDecor, 
             let shape = blob(scale, shift);
             let (x0, y0, x1, y1) = bounds(&shape);
             o.fill(colour);
-            o.distance_field(x0, y0, x1, y1, |p| sdf::intersection(d2::polygon(p, &shape), hand(p)));
+            o.distance_field(x0, y0, x1, y1, |p| {
+                sdf::intersection(d2::polygon(p, &shape), hand(p))
+            });
         }
     }
 

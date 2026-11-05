@@ -10,7 +10,6 @@
 //! ```
 #![cfg(all(feature = "webgl", target_arch = "wasm32"))]
 
-
 use threers::renderer::caps;
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
@@ -255,7 +254,8 @@ async fn a_webgl2_device_renders_and_reads_back() {
         mapped_at_creation: false,
     });
 
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+    let mut encoder =
+        device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     {
         encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("clear"),
@@ -305,11 +305,9 @@ async fn a_webgl2_device_renders_and_reads_back() {
     queue.submit(Some(encoder.finish()));
 
     let (tx, mut rx) = futures_channel::oneshot::channel();
-    readback
-        .slice(..)
-        .map_async(wgpu::MapMode::Read, move |r| {
-            let _ = tx.send(r);
-        });
+    readback.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+        let _ = tx.send(r);
+    });
     // Mapping finishes on the event loop, so the thread must not block waiting
     // for it: `wait_indefinitely()` blocks the very loop that would deliver the
     // callback, and the test hangs until the driver is killed. Poll, yield, and
@@ -420,7 +418,11 @@ fn hide_webgpu() {
     let descriptor = js_sys::Object::new();
     js_sys::Reflect::set(&descriptor, &"value".into(), &JsValue::UNDEFINED).unwrap();
     js_sys::Reflect::set(&descriptor, &"configurable".into(), &JsValue::TRUE).unwrap();
-    js_sys::Object::define_property(navigator.unchecked_ref::<js_sys::Object>(), &"gpu".into(), &descriptor);
+    js_sys::Object::define_property(
+        navigator.unchecked_ref::<js_sys::Object>(),
+        &"gpu".into(),
+        &descriptor,
+    );
 }
 
 /// The one renderer (and its canvas) the `web_views` tests share — one more
@@ -447,7 +449,11 @@ async fn views_renderer() -> (SharedViews, web_sys::HtmlCanvasElement) {
     let renderer = threers::wasm::WebRenderer::new(canvas.clone())
         .await
         .expect("the renderer would not start on this browser");
-    assert_eq!(renderer.backend(), "gl", "the WebGL2 suite ran on another backend");
+    assert_eq!(
+        renderer.backend(),
+        "gl",
+        "the WebGL2 suite ran on another backend"
+    );
     let v = (std::rc::Rc::new(std::cell::RefCell::new(renderer)), canvas);
     VIEWS.with(|slot| *slot.borrow_mut() = Some(v.clone()));
     v
@@ -469,5 +475,3 @@ async fn webgl_renderer() -> threers::wasm::WebRenderer {
         .await
         .expect("the renderer would not start on this browser")
 }
-
-

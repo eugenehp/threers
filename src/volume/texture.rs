@@ -84,7 +84,8 @@ impl Data3DTexture {
     ///
     /// If `data` is not exactly `width · height · depth` texels long.
     pub fn new(width: u32, height: u32, depth: u32, format: VolumeFormat, data: Vec<u8>) -> Self {
-        let expected = width as usize * height as usize * depth as usize * format.bytes_per_texel() as usize;
+        let expected =
+            width as usize * height as usize * depth as usize * format.bytes_per_texel() as usize;
         assert_eq!(
             data.len(),
             expected,
@@ -101,7 +102,13 @@ impl Data3DTexture {
 
     /// An `R32Float` volume from `f32` values.
     pub fn from_f32(width: u32, height: u32, depth: u32, values: &[f32]) -> Self {
-        Self::new(width, height, depth, VolumeFormat::R32Float, bytemuck::cast_slice(values).to_vec())
+        Self::new(
+            width,
+            height,
+            depth,
+            VolumeFormat::R32Float,
+            bytemuck::cast_slice(values).to_vec(),
+        )
     }
 
     /// An `Rg32Uint` volume from `u64` labels.
@@ -159,7 +166,11 @@ impl GpuVolume {
         }
     }
 
-    pub fn from_texture(device: &wgpu::Device, queue: &wgpu::Queue, texture: &Data3DTexture) -> Self {
+    pub fn from_texture(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        texture: &Data3DTexture,
+    ) -> Self {
         Self::from_texture_on(&gpu::Gpu::from((device, queue)), texture)
     }
 
@@ -180,7 +191,13 @@ impl GpuVolume {
     ///
     /// If the box is not inside the volume or `bytes` is the wrong length, or
     /// the volume is on Metal (use [`write_region_on`](Self::write_region_on)).
-    pub fn write_region(&self, queue: &wgpu::Queue, origin: [u32; 3], size: [u32; 3], bytes: &[u8]) {
+    pub fn write_region(
+        &self,
+        queue: &wgpu::Queue,
+        origin: [u32; 3],
+        size: [u32; 3],
+        bytes: &[u8],
+    ) {
         if let Some((copy, layout, extent)) = self.region(origin, size, bytes) {
             queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
@@ -209,7 +226,11 @@ impl GpuVolume {
         origin: [u32; 3],
         size: [u32; 3],
         bytes: &[u8],
-    ) -> Option<(gpu::TexelCopyTextureInfo<'_>, wgpu::TexelCopyBufferLayout, wgpu::Extent3d)> {
+    ) -> Option<(
+        gpu::TexelCopyTextureInfo<'_>,
+        wgpu::TexelCopyBufferLayout,
+        wgpu::Extent3d,
+    )> {
         for axis in 0..3 {
             assert!(
                 origin[axis] + size[axis] <= self.size[axis],

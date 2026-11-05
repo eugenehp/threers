@@ -3,10 +3,7 @@
 // Sync` natively and are not on wasm, where the API is single-threaded by
 // construction. One shared type has to satisfy both targets, so on wasm the
 // lint fires on code that has no other form.
-#![cfg_attr(
-    target_arch = "wasm32",
-    allow(clippy::arc_with_non_send_sync)
-)]
+#![cfg_attr(target_arch = "wasm32", allow(clippy::arc_with_non_send_sync))]
 // On docs.rs (nightly, `--cfg docsrs`), every feature-gated item is badged
 // with the features it needs.
 #![cfg_attr(docsrs, feature(doc_cfg))]
@@ -198,28 +195,28 @@ pub mod core;
 pub mod curves;
 pub mod exporters;
 pub mod extras;
-pub mod fx;
 /// Fur by shells: [`FurMaterial`] on any mesh (`fur::fur_object`).
 pub mod fur;
+pub mod fx;
 pub use fur::{FurGroom, FurMaterial};
-/// Particles — emitters, physical forces and collisions — and the snow and
-/// sand built on them (`particles::presets`, `particles::snow`,
-/// `particles::sand`).
-pub mod particles;
 pub mod geometries;
 pub mod helpers;
 /// Inverse kinematics: damped least squares joint solving for serial arms,
 /// with position and tool direction as separate residuals rather than a
 /// weighted sum. See [`kinematics`].
 pub mod kinematics;
-/// Rigid origami: degree-4 vertex kinematics, crease-pattern closure, and a
-/// dual walk that folds a consistent assignment off the plane.
-pub mod origami;
 pub mod lights;
 pub mod loaders;
 pub mod marks;
 pub mod materials;
 pub mod math;
+/// Rigid origami: degree-4 vertex kinematics, crease-pattern closure, and a
+/// dual walk that folds a consistent assignment off the plane.
+pub mod origami;
+/// Particles — emitters, physical forces and collisions — and the snow and
+/// sand built on them (`particles::presets`, `particles::snow`,
+/// `particles::sand`).
+pub mod particles;
 pub mod postprocessing;
 /// One import for the things nearly every scene uses — see [`prelude`].
 pub mod prelude;
@@ -240,13 +237,13 @@ pub mod overlay;
 // A retained UI: CSS-subset styles, flexbox layout, painting, hit-testing.
 // (Its docs are the module's own `//!`; an outer `///` here would make their
 // intra-doc links resolve in this scope, where `Ui` is not.)
-#[cfg(feature = "ui")]
-pub mod ui;
+pub mod renderer;
 /// A window, a scene and a loop in one call. Native only, and not tvOS or
 /// visionOS, whose windows belong to the system.
 #[cfg(not(any(target_arch = "wasm32", target_os = "tvos", target_os = "visionos")))]
 pub mod sketch;
-pub mod renderer;
+#[cfg(feature = "ui")]
+pub mod ui;
 
 // No outer doc comment: `gpu.rs` carries `//!` docs, and an outer `///` here
 // would make the intra-doc links inside them resolve in this scope.
@@ -258,15 +255,19 @@ pub mod strict_float;
 /// ~1,200 exports it never calls (exports are roots, so nothing prunes them).
 #[cfg(all(target_arch = "wasm32", not(threers_no_js_bindings)))]
 pub mod wasm;
+/// three-bvh-csg's boolean evaluation for the browser.
+#[cfg(all(target_arch = "wasm32", feature = "bvh-csg"))]
+pub mod wasm_csg;
 /// The trained denoiser in a browser, split so the work can go to web workers.
 #[cfg(all(target_arch = "wasm32", feature = "raytrace"))]
 pub mod wasm_denoise;
 /// Progressive path tracing for the browser.
-#[cfg(all(target_arch = "wasm32", feature = "raytrace", not(threers_no_js_bindings)))]
+#[cfg(all(
+    target_arch = "wasm32",
+    feature = "raytrace",
+    not(threers_no_js_bindings)
+))]
 pub mod wasm_pathtrace;
-/// three-bvh-csg's boolean evaluation for the browser.
-#[cfg(all(target_arch = "wasm32", feature = "bvh-csg"))]
-pub mod wasm_csg;
 
 cfg_metal! {
     /// A second renderer that talks to Metal directly, with no `metal-rs`, no
@@ -276,18 +277,22 @@ cfg_metal! {
     pub mod metal;
 }
 
+/// NVENC and NVDEC on NVIDIA GPUs; see [`codec::nvidia`](threers_codec::nvidia).
+#[cfg(all(
+    feature = "nvidia",
+    any(target_os = "linux", target_os = "windows"),
+    target_pointer_width = "64"
+))]
+pub use threers_codec::nvidia;
+/// VAAPI decoding on Linux; see [`codec::vaapi`](threers_codec::vaapi).
+#[cfg(all(feature = "vaapi", target_os = "linux"))]
+pub use threers_codec::vaapi;
 /// In-process hardware video encoding and decoding through VideoToolbox, so
 /// frames reach the codec without crossing a process boundary. macOS only;
 /// they live in `threers-codec`, and [`codec::hw`] puts both behind one
 /// interface with a software fallback.
 #[cfg(all(feature = "videotoolbox", target_os = "macos"))]
 pub use threers_codec::{videotoolbox, videotoolbox_decode};
-/// NVENC and NVDEC on NVIDIA GPUs; see [`codec::nvidia`](threers_codec::nvidia).
-#[cfg(all(feature = "nvidia", any(target_os = "linux", target_os = "windows"), target_pointer_width = "64"))]
-pub use threers_codec::nvidia;
-/// VAAPI decoding on Linux; see [`codec::vaapi`](threers_codec::vaapi).
-#[cfg(all(feature = "vaapi", target_os = "linux"))]
-pub use threers_codec::vaapi;
 
 #[cfg(feature = "mesh-bvh")]
 pub mod mesh_bvh;
@@ -362,7 +367,10 @@ macro_rules! log {
 pub use animation::{
     AnimationAction, AnimationClip, AnimationMixer, Interpolation, KeyframeTrack, TrackTarget,
 };
-pub use audio::{Audio, AudioAnalyser, AudioBackend, AudioListener, NoopBackend, PositionalAudio};
+pub use audio::{
+    Audio, AudioAnalyser, AudioBackend, AudioListener, DistanceModel, NoopBackend, PositionalAudio,
+    SpatialMix,
+};
 #[cfg(feature = "brep")]
 pub use brep::{retessellate, Surface, SurfaceTable};
 pub use cameras::{Camera, OrthographicCamera, PerspectiveCamera, ScreenProjector};
@@ -373,14 +381,12 @@ pub use captions::{
 };
 pub use controls::{
     ArcballControls, DragControls, FirstPersonControls, GlobeControls, MapControls, OrbitControls,
-    PointerEvent,
-    PointerLockControls, TrackballControls,
+    PointerEvent, PointerLockControls, TrackballControls,
 };
 pub use core::{
     Bone, BufferAttribute, BufferGeometry, Clock, InstancedMesh, Intersection, Layers,
-    DEFAULT_INFER_QUADS_ANGLE,
     LineSegments, Mesh, MorphAttributes, MorphTarget, Object3D, ObjectArena, ObjectId, ObjectKind,
-    Points, Raycaster, Skeleton, SkinnedMesh, Sprite,
+    Points, Raycaster, Skeleton, SkinnedMesh, Sprite, DEFAULT_INFER_QUADS_ANGLE,
 };
 pub use curves::{
     parse_svg_subpaths, segments_to_path_data, CatmullRomCurve3, CubicBezierCurve,
@@ -394,30 +400,23 @@ pub use extras::{
 #[cfg(feature = "nurbs")]
 pub use geometries::NurbsGeometry;
 pub use geometries::{
-    BoxGeometry, BoxLineGeometry, CapsuleGeometry, CircleGeometry, ConeGeometry, ConvexGeometry,
-    CylinderGeometry, DecalGeometry, DodecahedronGeometry, EdgesGeometry, ExtrudeGeometry, Glyph,
-    IcosahedronGeometry, Infill, KirigamiAssembly, KirigamiCell, KirigamiCoreLattice,
-    KirigamiCrease, KirigamiCreaseKind,
-    KirigamiExpandedMiura, KirigamiFace, KirigamiFaceKind, KirigamiMesh, KirigamiNet,
-    KirigamiNetPanel, KirigamiPreset, KIRIGAMI_NET_VARIANT, LatheGeometry, Lattice, LatticeGeometry, LatticeKind, LatticeStyle,
-    OctahedronGeometry, ParametricGeometry, PlaneGeometry, PolygonGeometry, PolyhedronGeometry, QuadGeometry, Region,
-    RingGeometry, SphereGeometry, Strut, TetrahedronGeometry, TextGeometry, TorusGeometry,
-    TorusKnotGeometry, Tpms, TubeGeometry, WireframeGeometry, ChiralRule, Cuboct, CuboctAssembly,
-    CuboctAssemblyPlan, CuboctAssemblyStep, CuboctFrame, CuboctJoint, CuboctJointKind, FrameMaterial,
-    FrameResponse, Hand, Conductivity, Conform, Field, LatticeMetrics, SolidMaterial, Stiffness,
-    SeedLayout, Solver, Stochastic, Strength,
+    BoxGeometry, BoxLineGeometry, CapsuleGeometry, ChiralRule, CircleGeometry, Conductivity,
+    ConeGeometry, Conform, ConvexGeometry, Cuboct, CuboctAssembly, CuboctAssemblyPlan,
+    CuboctAssemblyStep, CuboctFrame, CuboctJoint, CuboctJointKind, CylinderGeometry, DecalGeometry,
+    DodecahedronGeometry, EdgesGeometry, ExtrudeGeometry, Field, FrameMaterial, FrameResponse,
+    Glyph, Hand, IcosahedronGeometry, Infill, KirigamiAssembly, KirigamiCell, KirigamiCoreLattice,
+    KirigamiCrease, KirigamiCreaseKind, KirigamiExpandedMiura, KirigamiFace, KirigamiFaceKind,
+    KirigamiMesh, KirigamiNet, KirigamiNetPanel, KirigamiPreset, LatheGeometry, Lattice,
+    LatticeGeometry, LatticeKind, LatticeMetrics, LatticeStyle, OctahedronGeometry,
+    ParametricGeometry, PlaneGeometry, PolygonGeometry, PolyhedronGeometry, QuadGeometry, Region,
+    RingGeometry, SeedLayout, SolidMaterial, Solver, SphereGeometry, Stiffness, Stochastic,
+    Strength, Strut, TetrahedronGeometry, TextGeometry, TorusGeometry, TorusKnotGeometry, Tpms,
+    TubeGeometry, WireframeGeometry, KIRIGAMI_NET_VARIANT,
 };
 pub use helpers::{
     ArrowHelper, AxesHelper, BoxHelper, CameraHelper, DirectionalLightHelper, GridHelper,
     HemisphereLightHelper, PointLightHelper, PolarGridHelper, SkeletonHelper, SpotLightHelper,
     VertexNormalsHelper, VertexTangentsHelper,
-};
-pub use origami::{
-    book_cardinal_cp, book_cardinal_stages, classic_bird_cp, classic_bird_stages, eagle_cp,
-    eagle_stages, frog_cp, frog_stages, giang_cardinal_cp, giang_cardinal_stages, AssembledBird,
-    Assignment, BirdKind, BookCardinalStage, ClassicBirdStage, ClosureReport, CreasePattern,
-    Degree4, EagleStage, Edge, EdgeKind, FoldedBirdPart, FoldedState, FrogStage, GiangCardinalStage,
-    PartPose, TWIST_ALPHA, VertexMode,
 };
 pub use lights::{
     AmbientLight, DirectionalLight, HemisphereLight, Light, PointLight, RectAreaLight,
@@ -429,19 +428,26 @@ pub use loaders::{
     HdrError, HdrLoader, Ktx2, Ktx2Error, MeshoptError, ObjLoader, PlyLoader, PolyMesh, StlLoader,
     TtfError, TtfFont, TtfGlyph,
 };
+pub use origami::{
+    book_cardinal_cp, book_cardinal_stages, classic_bird_cp, classic_bird_stages, eagle_cp,
+    eagle_stages, frog_cp, frog_stages, giang_cardinal_cp, giang_cardinal_stages, AssembledBird,
+    Assignment, BirdKind, BookCardinalStage, ClassicBirdStage, ClosureReport, CreasePattern,
+    Degree4, EagleStage, Edge, EdgeKind, FoldedBirdPart, FoldedState, FrogStage,
+    GiangCardinalStage, PartPose, VertexMode, TWIST_ALPHA,
+};
 // Writing, which the loaders module also provides.
 pub use loaders::{scene_to_glb, scene_to_gltf, GltfExportOptions};
 pub use materials::MirrorMaterial;
-pub use materials::{Blending, DepthFunc, RenderState};
 pub use materials::{
     AtmosphereMaterial, BasicMaterial, DepthMaterial, LambertMaterial, LineBasicMaterial,
     MatcapMaterial, Material, MaterialKind, MaterialTextureSlots, NormalMaterial, PhongMaterial,
     PhysicalMaterial, PointsMaterial, ShaderMaterial, SpriteMaterial, StandardMaterial,
     ToonMaterial, TransparencyMode,
 };
+pub use materials::{Blending, DepthFunc, RenderState};
 pub use math::{
-    Box2, Box3, Color, Cylindrical, Euler, EulerOrder, Frustum, Line3, Matrix3, Matrix4, Plane, Quaternion,
-    Ray, Sphere, Spherical, Triangle, Vector2, Vector3, Vector4,
+    Box2, Box3, Color, Cylindrical, Euler, EulerOrder, Frustum, Line3, Matrix3, Matrix4, Plane,
+    Quaternion, Ray, Sphere, Spherical, Triangle, Vector2, Vector3, Vector4,
 };
 // Colour beyond `Color`: spaces and CSS parsing, ramps and schemes, scales.
 pub use math::{
@@ -450,8 +456,8 @@ pub use math::{
 #[cfg(feature = "nurbs")]
 pub use nurbs::{NurbsCurve, NurbsSurface, TessellationOptions};
 pub use postprocessing::{
-    BloomPass, CopyPass, EffectComposer, FilmPass, FxaaPass, GlitchPass, OutlinePass,
-    OutputPass, Pass, RenderPass, ShaderPass, SsaoPass, SsrPass, UnrealBloomPass,
+    BloomPass, CopyPass, EffectComposer, FilmPass, FxaaPass, GlitchPass, OutlinePass, OutputPass,
+    Pass, RenderPass, ShaderPass, SsaoPass, SsrPass, UnrealBloomPass,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use renderer::headless::{
@@ -489,8 +495,8 @@ pub use textures::{
     pack_rgba16f, CubeTexture, DataTexture, DepthTexture, Texture, TextureFilter, TextureFormat,
     TextureWrap,
 };
-pub use volume::Data3DTexture;
 pub use utils::png::{decode_png, encode_png, PngImage};
+pub use volume::Data3DTexture;
 
 /// Rendering a sequence: stills, a video, or both from one pass.
 pub mod sequence;
@@ -517,13 +523,6 @@ pub use video::{
     VideoOptions, VideoQuality,
 };
 
-/// From-scratch, pure-Rust media codecs — the
-/// [`threers-codec`](https://docs.rs/threers-codec) crate: H.264, HEVC and VP9
-/// encoders, H.264/HEVC/VP9/AV1 decoders (`native-decode`), AAC, MP3, Opus,
-/// Vorbis and FLAC, MP4/WebM/Matroska/Ogg, APNG and GIF — no ffmpeg, no C
-/// bindings, and wasm-compatible. Enable the `native-codec` feature.
-#[cfg(feature = "native-codec")]
-pub use threers_codec as codec;
 #[cfg(feature = "native-codec")]
 pub use codec::animation::{
     encode_animation_rgba, encode_animation_rgba_with_progress, format_animation_progress,
@@ -533,14 +532,14 @@ pub use codec::animation::{
 #[cfg(feature = "native-codec")]
 pub use codec::apng::ApngEncoder;
 #[cfg(feature = "gif")]
+#[allow(deprecated)]
+pub use codec::gif::DecodedFrame;
+#[cfg(feature = "gif")]
 pub use codec::gif::{
     decode_gif, encode_gif, DisposalMethod, DisposalMode, GifDecoder, GifEncoder, GifError,
     GifFrame, GifFrameMeta, GifInfo, GifOptions, GifVersion, GifWriter, LzwClearMode, PaletteMode,
     QuantizerKind,
 };
-#[cfg(feature = "gif")]
-#[allow(deprecated)]
-pub use codec::gif::DecodedFrame;
 #[cfg(feature = "native-codec")]
 pub use codec::h264::{encode_mp4, encode_mp4_with_captions, H264Encoder};
 #[cfg(feature = "native-codec")]
@@ -554,17 +553,24 @@ pub use codec::vp9::{
 };
 #[cfg(feature = "native-codec")]
 pub use codec::webm::{encode_gray_webm, encode_webm, mux_webm, WebmCodec, WebmFrame, WebmParams};
+/// From-scratch, pure-Rust media codecs — the
+/// [`threers-codec`](https://docs.rs/threers-codec) crate: H.264, HEVC and VP9
+/// encoders, H.264/HEVC/VP9/AV1 decoders (`native-decode`), AAC, MP3, Opus,
+/// Vorbis and FLAC, MP4/WebM/Matroska/Ogg, APNG and GIF — no ffmpeg, no C
+/// bindings, and wasm-compatible. Enable the `native-codec` feature.
+#[cfg(feature = "native-codec")]
+pub use threers_codec as codec;
 
 #[cfg(feature = "mesh-bvh")]
 pub use mesh_bvh::{
-    BuildOptions as MeshBvhBuildOptions, BvhHit, BvhNodeView, MeshBvh, SerializedMeshBvh, AVERAGE, CENTER,
-    CONTAINED, INTERSECTED, NOT_INTERSECTED, SAH,
+    BuildOptions as MeshBvhBuildOptions, BvhHit, BvhNodeView, MeshBvh, SerializedMeshBvh, AVERAGE,
+    CENTER, CONTAINED, INTERSECTED, NOT_INTERSECTED, SAH,
 };
 
 #[cfg(feature = "raytrace")]
 pub use raytrace::{
-    intersect_box, Aov, BackgroundMode, CpuBackend, RaytraceBackend, RaytraceError, RaytraceRenderer,
-    RaytraceScene, RaytraceSettings,
+    intersect_box, Aov, BackgroundMode, CpuBackend, RaytraceBackend, RaytraceError,
+    RaytraceRenderer, RaytraceScene, RaytraceSettings,
 };
 
 #[cfg(feature = "bvh-csg")]
@@ -578,7 +584,8 @@ pub use csg::{
 pub use exact_csg::report::{mesh_report, DefectCluster, MeshReport};
 #[cfg(feature = "openscad")]
 pub use openscad::export::{
-    geometry_to_3mf, geometry_to_glb, geometry_to_obj, geometry_to_off, geometry_to_ply, parts_to_glb,
+    geometry_to_3mf, geometry_to_glb, geometry_to_obj, geometry_to_off, geometry_to_ply,
+    parts_to_glb,
 };
 #[cfg(feature = "openscad")]
 pub use openscad::freecad::{
@@ -594,9 +601,9 @@ pub use openscad::mechanism::{
 #[cfg(feature = "openscad")]
 pub use openscad::scad::{
     clear_files, parse_scad, parse_scad_at, parse_scad_file, parse_scad_file_at,
-    parse_scad_file_for_parts, parse_scad_file_with, parse_scad_mechanism, parse_scad_mechanism_at, parse_scad_mechanism_file,
-    parse_scad_mechanism_file_at, parse_scad_with, parse_scad_with_base, register_file,
-    scad_file_values, scad_value, scad_values, scad_values_in,
+    parse_scad_file_for_parts, parse_scad_file_with, parse_scad_mechanism, parse_scad_mechanism_at,
+    parse_scad_mechanism_file, parse_scad_mechanism_file_at, parse_scad_with, parse_scad_with_base,
+    register_file, scad_file_values, scad_value, scad_values, scad_values_in,
 };
 #[cfg(feature = "openscad")]
 pub use openscad::schematic::{

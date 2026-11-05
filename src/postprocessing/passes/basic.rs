@@ -87,19 +87,27 @@ impl RenderPass {
 impl Pass for RenderPass {
     pass_common!("RenderPass");
 
-    fn render(&mut self, ctx: &mut PassContext<'_, '_>, _write: &Target, read: &Target, _delta: f32, _mask: bool) {
-        let clear = if self.state.clear && (self.clear_color.is_some() || self.clear_alpha.is_some()) {
-            let background = ctx
-                .scene_mut(self.scene)
-                .map(|s| (s.background, s.background_alpha))
-                .unwrap_or((Color::BLACK, 1.0));
-            Some((
-                self.clear_color.unwrap_or(background.0),
-                self.clear_alpha.unwrap_or(background.1),
-            ))
-        } else {
-            None
-        };
+    fn render(
+        &mut self,
+        ctx: &mut PassContext<'_, '_>,
+        _write: &Target,
+        read: &Target,
+        _delta: f32,
+        _mask: bool,
+    ) {
+        let clear =
+            if self.state.clear && (self.clear_color.is_some() || self.clear_alpha.is_some()) {
+                let background = ctx
+                    .scene_mut(self.scene)
+                    .map(|s| (s.background, s.background_alpha))
+                    .unwrap_or((Color::BLACK, 1.0));
+                Some((
+                    self.clear_color.unwrap_or(background.0),
+                    self.clear_alpha.unwrap_or(background.1),
+                ))
+            } else {
+                None
+            };
         let draw = SceneDraw {
             scene: self.scene,
             camera: self.camera,
@@ -292,11 +300,17 @@ impl Uniforms {
     }
 
     pub fn v2(&self, name: &str) -> [f32; 2] {
-        self.0.get(name).and_then(|v| v.as_array::<2>()).unwrap_or([0.0; 2])
+        self.0
+            .get(name)
+            .and_then(|v| v.as_array::<2>())
+            .unwrap_or([0.0; 2])
     }
 
     pub fn v3(&self, name: &str) -> [f32; 3] {
-        self.0.get(name).and_then(|v| v.as_array::<3>()).unwrap_or([0.0; 3])
+        self.0
+            .get(name)
+            .and_then(|v| v.as_array::<3>())
+            .unwrap_or([0.0; 3])
     }
 
     /// Assign `name` if the shader has it, keeping its shape.
@@ -355,10 +369,12 @@ pub(crate) fn shader_fx(kind: ShaderKind, u: &Uniforms, read: &Target) -> Fx {
             let r = u.v2("resolution");
             Fx::new(kinds::FXAA).input(read).p2([r[0], r[1], 0.0, 0.0])
         }
-        ShaderKind::Film => Fx::new(kinds::FILM)
-            .input(read)
-            .time(u.f("time"))
-            .p2([u.f("intensity"), if u.b("grayscale") { 1.0 } else { 0.0 }, 0.0, 0.0]),
+        ShaderKind::Film => Fx::new(kinds::FILM).input(read).time(u.f("time")).p2([
+            u.f("intensity"),
+            if u.b("grayscale") { 1.0 } else { 0.0 },
+            0.0,
+            0.0,
+        ]),
         ShaderKind::DotScreen => {
             let c = u.v2("center");
             let t = u.v2("tSize");
@@ -371,7 +387,12 @@ pub(crate) fn shader_fx(kind: ShaderKind, u: &Uniforms, read: &Target) -> Fx {
             let mut fx = Fx::new(kinds::HALFTONE)
                 .input(read)
                 .p2([u.f("radius"), u.f("scatter"), u.f("shape"), u.f("blending")])
-                .p3([u.f("rotateR"), u.f("rotateG"), u.f("rotateB"), u.f("blendingMode")]);
+                .p3([
+                    u.f("rotateR"),
+                    u.f("rotateG"),
+                    u.f("rotateB"),
+                    u.f("blendingMode"),
+                ]);
             // `width` / `height` ride in params.yz and `greyscale` in the
             // camera block's first slot, where the halftone branch reads them.
             fx = fx.time(u.f("width")).p0z(u.f("height"));
@@ -383,17 +404,27 @@ pub(crate) fn shader_fx(kind: ShaderKind, u: &Uniforms, read: &Target) -> Fx {
             fx
         }
         ShaderKind::DigitalGlitch => Fx::new(kinds::GLITCH)
-        .input(read)
-        .time(u.f("seed"))
-        .p0z(u.f("byp"))
-        .p2([u.f("amount"), u.f("angle"), u.f("distortion_x"), u.f("distortion_y")])
-        .p3([u.f("seed_x"), u.f("seed_y"), u.f("col_s"), u.f("byp")]),
+            .input(read)
+            .time(u.f("seed"))
+            .p0z(u.f("byp"))
+            .p2([
+                u.f("amount"),
+                u.f("angle"),
+                u.f("distortion_x"),
+                u.f("distortion_y"),
+            ])
+            .p3([u.f("seed_x"), u.f("seed_y"), u.f("col_s"), u.f("byp")]),
         ShaderKind::Luminosity => Fx::new(kinds::LUMINOSITY).input(read),
         ShaderKind::LuminosityHighPass => {
             let c = u.v3("defaultColor");
             Fx::new(kinds::LUMINOSITY_HIGH_PASS)
                 .input(read)
-                .p2([u.f("luminosityThreshold"), u.f("smoothWidth"), u.f("defaultOpacity"), 0.0])
+                .p2([
+                    u.f("luminosityThreshold"),
+                    u.f("smoothWidth"),
+                    u.f("defaultOpacity"),
+                    0.0,
+                ])
                 .p3([c[0], c[1], c[2], 0.0])
         }
         ShaderKind::Output => Fx::new(kinds::OUTPUT).input(read).p2([
@@ -443,12 +474,22 @@ impl ShaderPass {
 impl Pass for ShaderPass {
     pass_common!("ShaderPass");
 
-    fn render(&mut self, ctx: &mut PassContext<'_, '_>, write: &Target, read: &Target, _delta: f32, _mask: bool) {
+    fn render(
+        &mut self,
+        ctx: &mut PassContext<'_, '_>,
+        write: &Target,
+        read: &Target,
+        _delta: f32,
+        _mask: bool,
+    ) {
         let dest = out(&self.state, write);
         if self.state.clear && !self.state.render_to_screen {
             ctx.clear(dest, Color::BLACK, 0.0);
         }
-        ctx.fx(shader_fx(self.kind, &self.uniforms, read).blend(PostFxBlend::Overwrite), dest);
+        ctx.fx(
+            shader_fx(self.kind, &self.uniforms, read).blend(PostFxBlend::Overwrite),
+            dest,
+        );
     }
 
     fn params(&self) -> Vec<ParamInfo> {
@@ -498,7 +539,14 @@ impl TexturePass {
 impl Pass for TexturePass {
     pass_common!("TexturePass");
 
-    fn render(&mut self, ctx: &mut PassContext<'_, '_>, _write: &Target, read: &Target, _delta: f32, _mask: bool) {
+    fn render(
+        &mut self,
+        ctx: &mut PassContext<'_, '_>,
+        _write: &Target,
+        read: &Target,
+        _delta: f32,
+        _mask: bool,
+    ) {
         let dest = in_place(&self.state, read);
         if self.state.clear {
             ctx.clear(dest, Color::BLACK, 0.0);
@@ -579,7 +627,14 @@ impl CubeTexturePass {
 impl Pass for CubeTexturePass {
     pass_common!("CubeTexturePass");
 
-    fn render(&mut self, ctx: &mut PassContext<'_, '_>, _write: &Target, read: &Target, _delta: f32, _mask: bool) {
+    fn render(
+        &mut self,
+        ctx: &mut PassContext<'_, '_>,
+        _write: &Target,
+        read: &Target,
+        _delta: f32,
+        _mask: bool,
+    ) {
         let dest = in_place(&self.state, read);
         if self.state.clear {
             ctx.clear(dest, Color::BLACK, 0.0);
@@ -674,7 +729,14 @@ impl ClearPass {
 impl Pass for ClearPass {
     pass_common!("ClearPass");
 
-    fn render(&mut self, ctx: &mut PassContext<'_, '_>, _write: &Target, read: &Target, _delta: f32, _mask: bool) {
+    fn render(
+        &mut self,
+        ctx: &mut PassContext<'_, '_>,
+        _write: &Target,
+        read: &Target,
+        _delta: f32,
+        _mask: bool,
+    ) {
         let (c, a) = match self.clear_color {
             Some(c) => (c, self.clear_alpha),
             None => (Color::BLACK, 1.0),
@@ -746,7 +808,14 @@ impl MaskPass {
 impl Pass for MaskPass {
     pass_common!("MaskPass");
 
-    fn render(&mut self, ctx: &mut PassContext<'_, '_>, _write: &Target, read: &Target, _delta: f32, _mask: bool) {
+    fn render(
+        &mut self,
+        ctx: &mut PassContext<'_, '_>,
+        _write: &Target,
+        read: &Target,
+        _delta: f32,
+        _mask: bool,
+    ) {
         let t = ctx.target(&mut self.mask, read.width(), read.height());
         let draw = SceneDraw {
             scene: self.scene,
@@ -814,7 +883,15 @@ impl ClearMaskPass {
 impl Pass for ClearMaskPass {
     pass_common!("ClearMaskPass");
 
-    fn render(&mut self, _ctx: &mut PassContext<'_, '_>, _w: &Target, _r: &Target, _d: f32, _m: bool) {}
+    fn render(
+        &mut self,
+        _ctx: &mut PassContext<'_, '_>,
+        _w: &Target,
+        _r: &Target,
+        _d: f32,
+        _m: bool,
+    ) {
+    }
 
     fn mask_role(&self) -> MaskRole {
         MaskRole::Clear
@@ -852,7 +929,14 @@ impl OutputPass {
 impl Pass for OutputPass {
     pass_common!("OutputPass");
 
-    fn render(&mut self, ctx: &mut PassContext<'_, '_>, write: &Target, read: &Target, _delta: f32, _mask: bool) {
+    fn render(
+        &mut self,
+        ctx: &mut PassContext<'_, '_>,
+        write: &Target,
+        read: &Target,
+        _delta: f32,
+        _mask: bool,
+    ) {
         let dest = out(&self.state, write);
         if self.state.clear && !self.state.render_to_screen {
             ctx.clear(dest, Color::BLACK, 0.0);
@@ -957,7 +1041,9 @@ impl DrawPass {
 
 impl std::fmt::Debug for DrawPass {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DrawPass").field("name", &self.name).finish()
+        f.debug_struct("DrawPass")
+            .field("name", &self.name)
+            .finish()
     }
 }
 
@@ -978,7 +1064,14 @@ impl Pass for DrawPass {
         self
     }
 
-    fn render(&mut self, ctx: &mut PassContext<'_, '_>, write: &Target, read: &Target, _delta: f32, _mask: bool) {
+    fn render(
+        &mut self,
+        ctx: &mut PassContext<'_, '_>,
+        write: &Target,
+        read: &Target,
+        _delta: f32,
+        _mask: bool,
+    ) {
         let (near_far, tan_half_fov, aspect) = match ctx.camera(0) {
             Some(c) => {
                 let p = c.projection_matrix().elements;

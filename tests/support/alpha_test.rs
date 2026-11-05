@@ -53,7 +53,12 @@ fn white() -> Arc<Texture> {
 /// Left texel alpha 0, right texel opaque, sampled nearest so the halves stay
 /// clean.
 fn half_cut() -> Arc<Texture> {
-    let mut t = Texture::new(2, 1, TextureFormat::Rgba8Unorm, vec![255, 255, 255, 0, 255, 255, 255, 255]);
+    let mut t = Texture::new(
+        2,
+        1,
+        TextureFormat::Rgba8Unorm,
+        vec![255, 255, 255, 0, 255, 255, 255, 255],
+    );
     t.mag_filter = TextureFilter::Nearest;
     t.min_filter = TextureFilter::Nearest;
     Arc::new(t)
@@ -62,7 +67,12 @@ fn half_cut() -> Arc<Texture> {
 /// Left texel green 0 (red 255), right texel green 255 (red 0): the alpha
 /// map's green channel is what counts.
 fn green_cut() -> Arc<Texture> {
-    let mut t = Texture::new(2, 1, TextureFormat::Rgba8Unorm, vec![255, 0, 255, 255, 0, 255, 0, 255]);
+    let mut t = Texture::new(
+        2,
+        1,
+        TextureFormat::Rgba8Unorm,
+        vec![255, 0, 255, 255, 0, 255, 0, 255],
+    );
     t.mag_filter = TextureFilter::Nearest;
     t.min_filter = TextureFilter::Nearest;
     Arc::new(t)
@@ -82,8 +92,12 @@ pub const KINDS: [(&str, bool, Build); 10] = [
         m.set_transparent(false);
         m
     }),
-    ("lambert", false, |o, t, _| finish(LambertMaterial::new(Color::WHITE).into(), o, t)),
-    ("phong", false, |o, t, _| finish(PhongMaterial::new(Color::WHITE).into(), o, t)),
+    ("lambert", false, |o, t, _| {
+        finish(LambertMaterial::new(Color::WHITE).into(), o, t)
+    }),
+    ("phong", false, |o, t, _| {
+        finish(PhongMaterial::new(Color::WHITE).into(), o, t)
+    }),
     ("standard", true, |o, t, map| {
         let mut m = StandardMaterial::new(Color::WHITE);
         m.map = map;
@@ -94,19 +108,25 @@ pub const KINDS: [(&str, bool, Build); 10] = [
         m.map = map;
         finish(m.into(), o, t)
     }),
-    ("toon", false, |o, t, _| finish(ToonMaterial::new(Color::WHITE).into(), o, t)),
+    ("toon", false, |o, t, _| {
+        finish(ToonMaterial::new(Color::WHITE).into(), o, t)
+    }),
     ("matcap", true, |o, t, map| {
         let mut m = MatcapMaterial::new(white());
         m.map = map;
         finish(m.into(), o, t)
     }),
-    ("normal", false, |o, t, _| finish(NormalMaterial::default().into(), o, t)),
+    ("normal", false, |o, t, _| {
+        finish(NormalMaterial::default().into(), o, t)
+    }),
     ("sprite", true, |o, t, map| {
         let mut m = SpriteMaterial::new(Color::WHITE);
         m.map = map;
         finish(m.into(), o, t)
     }),
-    ("sprite-plain", false, |o, t, _| finish(SpriteMaterial::new(Color::WHITE).into(), o, t)),
+    ("sprite-plain", false, |o, t, _| {
+        finish(SpriteMaterial::new(Color::WHITE).into(), o, t)
+    }),
 ];
 
 fn finish(mut m: Material, opacity: f32, alpha_test: f32) -> Material {
@@ -157,7 +177,10 @@ fn drawn(p: [u8; 4]) -> bool {
 }
 
 /// Every failure, as a line; empty when all three cases hold for every kind.
-pub fn check(label: &str, render: &mut dyn FnMut(&mut Scene, &dyn Camera) -> Vec<u8>) -> Vec<String> {
+pub fn check(
+    label: &str,
+    render: &mut dyn FnMut(&mut Scene, &dyn Camera) -> Vec<u8>,
+) -> Vec<String> {
     let cam = camera();
     let (c, left, right) = (N / 2, N / 2 - N / 5, N / 2 + N / 5);
     let mut failures = Vec::new();
@@ -167,16 +190,23 @@ pub fn check(label: &str, render: &mut dyn FnMut(&mut Scene, &dyn Camera) -> Vec
         // alpha 1: a normal material ignores `alphaTest`.
         if name == "normal" {
             if !drawn(px(&cut, c, c)) {
-                failures.push(format!("{label} normal: alphaTest cut a MeshNormalMaterial, which three.js never does"));
+                failures.push(format!(
+                    "{label} normal: alphaTest cut a MeshNormalMaterial, which three.js never does"
+                ));
             }
         } else if drawn(px(&cut, c, c)) {
-            failures.push(format!("{label} {name}: opacity 0.3 under alphaTest 0.5 still drew {:?}", px(&cut, c, c)));
+            failures.push(format!(
+                "{label} {name}: opacity 0.3 under alphaTest 0.5 still drew {:?}",
+                px(&cut, c, c)
+            ));
         }
         let kept = render(&mut scene(build(0.3, 0.2, None)), &cam);
         let full = render(&mut scene(build(1.0, 0.0, None)), &cam);
         let (k, f) = (px(&kept, c, c), px(&full, c, c));
         if !drawn(k) {
-            failures.push(format!("{label} {name}: opacity 0.3 over alphaTest 0.2 was cut: {k:?}"));
+            failures.push(format!(
+                "{label} {name}: opacity 0.3 over alphaTest 0.2 was cut: {k:?}"
+            ));
         } else if (0..3).any(|i| (k[i] as i32 - f[i] as i32).abs() > 1) {
             failures.push(format!(
                 "{label} {name}: transparent false at opacity 0.3 blended ({k:?}) instead of drawing opaquely ({f:?})"
@@ -187,16 +217,22 @@ pub fn check(label: &str, render: &mut dyn FnMut(&mut Scene, &dyn Camera) -> Vec
             *m.map_slot_mut("alphaMap").expect("an alphaMap slot") = Some(green_cut());
             let masked = render(&mut scene(m), &cam);
             if drawn(px(&masked, left, c)) {
-                failures.push(format!("{label} {name}: the alphaMap's green-0 half was not cut"));
+                failures.push(format!(
+                    "{label} {name}: the alphaMap's green-0 half was not cut"
+                ));
             }
             if !drawn(px(&masked, right, c)) {
-                failures.push(format!("{label} {name}: the alphaMap's green-255 half was cut"));
+                failures.push(format!(
+                    "{label} {name}: the alphaMap's green-255 half was cut"
+                ));
             }
         }
         if has_map {
             let mapped = render(&mut scene(build(1.0, 0.5, Some(half_cut()))), &cam);
             if drawn(px(&mapped, left, c)) {
-                failures.push(format!("{label} {name}: the map's alpha-0 half was not cut"));
+                failures.push(format!(
+                    "{label} {name}: the map's alpha-0 half was not cut"
+                ));
             }
             if !drawn(px(&mapped, right, c)) {
                 failures.push(format!("{label} {name}: the map's opaque half was cut"));
@@ -205,7 +241,12 @@ pub fn check(label: &str, render: &mut dyn FnMut(&mut Scene, &dyn Camera) -> Vec
     }
     let mut m = BasicMaterial::new(Color::WHITE);
     m.transparent = true;
-    m.alpha_map = Some(Arc::new(Texture::new(1, 1, TextureFormat::Rgba8Unorm, vec![0, 128, 0, 255])));
+    m.alpha_map = Some(Arc::new(Texture::new(
+        1,
+        1,
+        TextureFormat::Rgba8Unorm,
+        vec![0, 128, 0, 255],
+    )));
     let blended = px(&render(&mut scene(m.into()), &cam), c, c);
     if (0..3).any(|i| (blended[i] as i32 - [128, 128, 255][i]).abs() > 2) {
         failures.push(format!("{label} basic: alphaMap green 128, blended, gave {blended:?}; three.js gives (128, 128, 255)"));

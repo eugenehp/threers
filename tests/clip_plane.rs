@@ -48,14 +48,26 @@ fn a_clip_plane_discards_its_negative_side() {
         for transparent in [false, true] {
             let label = format!("msaa {msaa}, transparent {transparent}");
             let whole = r.render_to_rgba(&mut scene(transparent, None), &cam);
-            assert!(red(&whole, left, mid) > 200 && red(&whole, right, mid) > 200, "{label}: unclipped quad not drawn");
+            assert!(
+                red(&whole, left, mid) > 200 && red(&whole, right, mid) > 200,
+                "{label}: unclipped quad not drawn"
+            );
             let cut = r.render_to_rgba(&mut scene(transparent, Some(keep_right)), &cam);
-            assert!(red(&cut, left, mid) < 10, "{label}: the negative side was drawn");
-            assert!(red(&cut, right, mid) > 200, "{label}: the positive side was clipped");
+            assert!(
+                red(&cut, left, mid) < 10,
+                "{label}: the negative side was drawn"
+            );
+            assert!(
+                red(&cut, right, mid) > 200,
+                "{label}: the positive side was clipped"
+            );
             // the flipped plane keeps the other half
             let flipped = Plane::new(Vector3::new(-1.0, 0.0, 0.0), 0.0);
             let other = r.render_to_rgba(&mut scene(transparent, Some(flipped)), &cam);
-            assert!(red(&other, left, mid) > 200 && red(&other, right, mid) < 10, "{label}: the flipped plane");
+            assert!(
+                red(&other, left, mid) > 200 && red(&other, right, mid) < 10,
+                "{label}: the flipped plane"
+            );
         }
     }
 }

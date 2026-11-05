@@ -255,9 +255,7 @@ impl CameraConstraint {
                 posed.aperture = base.aperture;
                 Self::blend(base, posed, weight.clamp(0.0, 1.0))
             }
-            Self::LockedTrack {
-                target, weight, ..
-            } => {
+            Self::LockedTrack { target, weight, .. } => {
                 // Lock elevation: only yaw the look-at toward the target on XZ.
                 let eye = base.eye();
                 let flat = Vector3::new(target.x, eye.y, target.z);
@@ -567,8 +565,7 @@ mod tests {
 
     #[test]
     fn limit_location_clamps() {
-        let base =
-            CameraPose::from_look_at(Vector3::new(10.0, 0.0, 0.0), Vector3::ZERO, 0.8);
+        let base = CameraPose::from_look_at(Vector3::new(10.0, 0.0, 0.0), Vector3::ZERO, 0.8);
         let mut stack = ConstraintStack::new();
         stack.push(CameraConstraint::LimitLocation {
             min: Vector3::new(-1.0, -1.0, -1.0),

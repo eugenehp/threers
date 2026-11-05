@@ -20,6 +20,8 @@ pub enum ObjectKind {
     Sprite(Sprite),
     InstancedMesh(InstancedMesh),
     SkinnedMesh(SkinnedMesh),
+    /// A sound source at this node. It draws nothing.
+    Audio(Box<crate::audio::PositionalAudio>),
 }
 
 /// A node in the scene graph. Matches three.js's `Object3D`: position,
@@ -116,6 +118,12 @@ impl Object3D {
 
     pub fn light(light: impl Into<Light>) -> Self {
         Self::with_kind(ObjectKind::Light(light.into()))
+    }
+
+    /// A sound source; [`Scene::audio_mix`](crate::Scene::audio_mix) says how
+    /// loud it is from a listener.
+    pub fn audio(audio: crate::audio::PositionalAudio) -> Self {
+        Self::with_kind(ObjectKind::Audio(Box::new(audio)))
     }
 
     pub fn line_segments(ls: LineSegments) -> Self {
@@ -402,6 +410,37 @@ impl ObjectArena {
                 }
             }
         }
+    }
+
+    /// Remove `ids` and everything under them, returning every id removed. Each
+    /// parent has its child list walked once, where [`delete`](Self::delete) in a
+    /// loop walks it per child, which is quadratic for many siblings. Dead ids and
+    /// ids listed twice or inside another's subtree are fine.
+    pub fn delete_subtrees(&mut self, ids: &[ObjectId]) -> Vec<ObjectId> {
+        let tops: std::collections::HashSet<ObjectId> = ids
+            .iter()
+            .copied()
+            .filter(|&id| self.nodes.contains_key(id))
+            .collect();
+        let parents: std::collections::HashSet<ObjectId> = tops
+            .iter()
+            .filter_map(|&id| self.nodes[id].parent)
+            .filter(|parent| !tops.contains(parent))
+            .collect();
+        for parent in parents {
+            if let Some(node) = self.nodes.get_mut(parent) {
+                node.children.retain(|child| !tops.contains(child));
+            }
+        }
+        let mut pending: Vec<ObjectId> = tops.into_iter().collect();
+        let mut removed = Vec::with_capacity(pending.len());
+        while let Some(id) = pending.pop() {
+            if let Some(node) = self.nodes.remove(id) {
+                pending.extend_from_slice(&node.children);
+                removed.push(id);
+            }
+        }
+        removed
     }
 
     /// Make `children`, in that order, exactly `parent`'s children: each is

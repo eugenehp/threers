@@ -33,7 +33,7 @@ fn version() -> &'static str {
 
 // ---- math ------------------------------------------------------------------
 
-#[pyclass(name = "Vector3")]
+#[pyclass(name = "Vector3", from_py_object)]
 #[derive(Clone, Copy)]
 struct PyVector3 {
     inner: Vector3,
@@ -93,7 +93,7 @@ impl PyVector3 {
     }
 }
 
-#[pyclass(name = "Color")]
+#[pyclass(name = "Color", from_py_object)]
 #[derive(Clone, Copy)]
 struct PyColor {
     inner: Color,
@@ -235,10 +235,10 @@ impl PyOrthographicCamera {
 
 /// Borrow `camera` as either camera class for the duration of `f`.
 fn with_camera<R>(camera: &Bound<'_, PyAny>, f: impl FnOnce(&dyn Camera) -> R) -> PyResult<R> {
-    if let Ok(c) = camera.downcast::<PyPerspectiveCamera>() {
+    if let Ok(c) = camera.cast::<PyPerspectiveCamera>() {
         return Ok(f(&c.borrow().inner));
     }
-    if let Ok(c) = camera.downcast::<PyOrthographicCamera>() {
+    if let Ok(c) = camera.cast::<PyOrthographicCamera>() {
         return Ok(f(&c.borrow().inner));
     }
     Err(PyTypeError::new_err(
@@ -1122,7 +1122,7 @@ const MAX_SUBDIVISION_LEVELS: u32 = 6;
 
 /// Shell fur and strand hair's look and motion (``threers::fur::FurMaterial``):
 /// every option a keyword, the rest as the Rust defaults.
-#[pyclass(name = "FurMaterial", unsendable)]
+#[pyclass(name = "FurMaterial", unsendable, from_py_object)]
 #[derive(Clone)]
 struct PyFurMaterial {
     inner: threers::fur::FurMaterial,
@@ -1250,8 +1250,286 @@ struct PyGeometry {
     inner: BufferGeometry,
 }
 
+/// A point from a ``Vector3`` or an ``(x, y, z)`` sequence.
+fn xyz(value: &Bound<'_, PyAny>) -> PyResult<Vector3> {
+    if let Ok(v) = value.extract::<PyRef<PyVector3>>() {
+        return Ok(v.inner);
+    }
+    let (x, y, z): (f32, f32, f32) = value
+        .extract()
+        .map_err(|_| PyTypeError::new_err("expected a Vector3 or an (x, y, z) sequence"))?;
+    Ok(Vector3::new(x, y, z))
+}
+
+fn xyz_list(values: &Bound<'_, PyAny>) -> PyResult<Vec<Vector3>> {
+    values.try_iter()?.map(|v| xyz(&v?)).collect()
+}
+
+/// Build a mesh from vertices and triangles, without assembling attribute
+/// arrays by hand. ``facing``, ``ribbon`` and ``grid`` take the side to show
+/// rather than an order to wind in, which is the mistake this rules out.
+/// Methods that set state return the builder, so they chain.
+///
+/// >>> m = threers.MeshBuilder()
+/// >>> a, b, c, d = (m.vertex(p) for p in [(0, 0, 0), (1, 0, 0), (1, 0, 1), (0, 0, 1)])
+/// >>> geometry = m.facing((0, 1, 0)).quad(a, b, c, d).build()
+#[pyclass(name = "MeshBuilder", unsendable)]
+struct PyMeshBuilder {
+    inner: threers::geometries::MeshBuilder,
+}
+
+#[pymethods]
+impl PyMeshBuilder {
+    #[new]
+    fn new() -> Self {
+        Self {
+            inner: threers::geometries::MeshBuilder::new(),
+        }
+    }
+
+    /// The normal of the vertices to come, instead of one from the faces.
+    fn normal<'py>(
+        mut slf: PyRefMut<'py, Self>,
+        normal: &Bound<'py, PyAny>,
+    ) -> PyResult<PyRefMut<'py, Self>> {
+        slf.inner.normal(xyz(normal)?);
+        Ok(slf)
+    }
+
+    fn auto_normal(mut slf: PyRefMut<'_, Self>) -> PyRefMut<'_, Self> {
+        slf.inner.auto_normal();
+        slf
+    }
+
+    fn uv(mut slf: PyRefMut<'_, Self>, u: f32, v: f32) -> PyRefMut<'_, Self> {
+        slf.inner.uv(u, v);
+        slf
+    }
+
+    /// The colour of the vertices to come, as ``0xRRGGBB`` or a ``Color``.
+    fn color<'py>(
+        mut slf: PyRefMut<'py, Self>,
+        color: &Bound<'py, PyAny>,
+    ) -> PyResult<PyRefMut<'py, Self>> {
+        let color = match color.extract::<PyRef<PyColor>>() {
+            Ok(c) => c.inner,
+            Err(_) => Color::from_hex(
+                color
+                    .extract::<u32>()
+                    .map_err(|_| PyTypeError::new_err("expected a Color or 0xRRGGBB"))?,
+            ),
+        };
+        slf.inner.color(color);
+        Ok(slf)
+    }
+
+    /// Turn the triangles to come towards this side, whatever their order.
+    fn facing<'py>(
+        mut slf: PyRefMut<'py, Self>,
+        side: &Bound<'py, PyAny>,
+    ) -> PyResult<PyRefMut<'py, Self>> {
+        slf.inner.facing(xyz(side)?);
+        Ok(slf)
+    }
+
+    fn as_wound(mut slf: PyRefMut<'_, Self>) -> PyRefMut<'_, Self> {
+        slf.inner.as_wound();
+        slf
+    }
+
+    /// Add a vertex, returning its index.
+    fn vertex(&mut self, position: &Bound<'_, PyAny>) -> PyResult<u32> {
+        Ok(self.inner.vertex(xyz(position)?))
+    }
+
+    fn triangle(
+        mut slf: PyRefMut<'_, Self>,
+        a: u32,
+        b: u32,
+        c: u32,
+    ) -> PyResult<PyRefMut<'_, Self>> {
+        slf.check(&[a, b, c])?;
+        slf.inner.triangle(a, b, c);
+        Ok(slf)
+    }
+
+    fn quad(
+        mut slf: PyRefMut<'_, Self>,
+        a: u32,
+        b: u32,
+        c: u32,
+        d: u32,
+    ) -> PyResult<PyRefMut<'_, Self>> {
+        slf.check(&[a, b, c, d])?;
+        slf.inner.quad(a, b, c, d);
+        Ok(slf)
+    }
+
+    /// A strip between two edges of points, facing ``side``; ``closed`` joins the ends.
+    #[pyo3(signature = (left, right, side=None, closed=false))]
+    fn ribbon<'py>(
+        mut slf: PyRefMut<'py, Self>,
+        left: &Bound<'py, PyAny>,
+        right: &Bound<'py, PyAny>,
+        side: Option<&Bound<'py, PyAny>>,
+        closed: bool,
+    ) -> PyResult<PyRefMut<'py, Self>> {
+        let (left, right) = (xyz_list(left)?, xyz_list(right)?);
+        if left.len() != right.len() {
+            return Err(PyValueError::new_err(format!(
+                "a ribbon's edges must pair up: {} and {} points",
+                left.len(),
+                right.len()
+            )));
+        }
+        let side = side.map(xyz).transpose()?.unwrap_or(Vector3::UP);
+        slf.inner.ribbon(&left, &right, side, closed);
+        Ok(slf)
+    }
+
+    /// A height field over x and z, centred on the origin and facing up.
+    /// ``height`` is a function ``(x, z) -> y``, a sequence of
+    /// ``(columns + 1) * (rows + 1)`` heights row by row, or ``None`` for flat.
+    #[pyo3(signature = (width, depth, columns=1, rows=1, height=None))]
+    fn grid<'py>(
+        mut slf: PyRefMut<'py, Self>,
+        width: f32,
+        depth: f32,
+        columns: u32,
+        rows: u32,
+        height: Option<&Bound<'py, PyAny>>,
+    ) -> PyResult<PyRefMut<'py, Self>> {
+        let (columns, rows) = (columns.max(1), rows.max(1));
+        match height {
+            Some(f) if f.is_callable() => {
+                let mut error = None;
+                slf.inner.grid(width, depth, columns, rows, |x, z| {
+                    match f.call1((x, z)).and_then(|y| y.extract::<f32>()) {
+                        Ok(y) => y,
+                        Err(e) => {
+                            error.get_or_insert(e);
+                            0.0
+                        }
+                    }
+                });
+                if let Some(e) = error {
+                    return Err(e);
+                }
+            }
+            Some(values) => {
+                let heights: Vec<f32> = values.extract()?;
+                let want = ((columns + 1) * (rows + 1)) as usize;
+                if heights.len() != want {
+                    return Err(PyValueError::new_err(format!(
+                        "expected {want} heights for {columns} by {rows} cells, got {}",
+                        heights.len()
+                    )));
+                }
+                let mut at = heights.into_iter();
+                slf.inner
+                    .grid(width, depth, columns, rows, |_, _| at.next().unwrap_or(0.0));
+            }
+            None => {
+                slf.inner.grid(width, depth, columns, rows, |_, _| 0.0);
+            }
+        }
+        Ok(slf)
+    }
+
+    /// Copy a geometry in: moved by ``position`` and turned by ``rotation`` (Euler
+    /// angles in radians, XYZ), or by a 4x4 ``matrix`` of 16 numbers, column by
+    /// column as three.js stores it. Many meshes become one draw.
+    #[pyo3(signature = (geometry, position=None, rotation=None, scale=None, matrix=None))]
+    fn append<'py>(
+        mut slf: PyRefMut<'py, Self>,
+        geometry: PyRef<'py, PyGeometry>,
+        position: Option<&Bound<'py, PyAny>>,
+        rotation: Option<&Bound<'py, PyAny>>,
+        scale: Option<&Bound<'py, PyAny>>,
+        matrix: Option<Vec<f32>>,
+    ) -> PyResult<PyRefMut<'py, Self>> {
+        let transform = match matrix {
+            Some(m) => {
+                if position.is_some() || rotation.is_some() || scale.is_some() {
+                    return Err(PyValueError::new_err(
+                        "give a matrix, or position, rotation and scale, not both",
+                    ));
+                }
+                let elements: [f32; 16] = m.try_into().map_err(|m: Vec<f32>| {
+                    PyValueError::new_err(format!("a matrix has 16 numbers, not {}", m.len()))
+                })?;
+                threers::math::Matrix4 { elements }
+            }
+            None => {
+                let position = position.map(xyz).transpose()?.unwrap_or(Vector3::ZERO);
+                let r = rotation.map(xyz).transpose()?.unwrap_or(Vector3::ZERO);
+                let scale = scale.map(xyz).transpose()?.unwrap_or(Vector3::ONE);
+                let turned = threers::math::Quaternion::from_euler_xyz(r.x, r.y, r.z);
+                threers::math::Matrix4::compose(position, turned, scale)
+            }
+        };
+        slf.inner.append(&geometry.inner, &transform);
+        Ok(slf)
+    }
+
+    #[getter]
+    fn vertex_count(&self) -> usize {
+        self.inner.vertex_count()
+    }
+
+    #[getter]
+    fn triangle_count(&self) -> usize {
+        self.inner.triangle_count()
+    }
+
+    /// The geometry, vertices shared so smooth surfaces shade smooth.
+    fn build(&self) -> PyGeometry {
+        PyGeometry::of(self.inner.build())
+    }
+
+    /// The geometry with each triangle shaded flat.
+    fn build_flat(&self) -> PyGeometry {
+        PyGeometry::of(self.inner.build_flat())
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "MeshBuilder({} vertices, {} triangles)",
+            self.inner.vertex_count(),
+            self.inner.triangle_count()
+        )
+    }
+}
+
+impl PyMeshBuilder {
+    fn check(&self, indices: &[u32]) -> PyResult<()> {
+        let count = self.inner.vertex_count() as u32;
+        match indices.iter().find(|&&i| i >= count) {
+            Some(i) => Err(PyValueError::new_err(format!(
+                "vertex {i} does not exist: there are {count}"
+            ))),
+            None => Ok(()),
+        }
+    }
+}
+
 #[pymethods]
 impl PyGeometry {
+    /// What is wrong with this geometry, if anything: a dict of ``triangles``,
+    /// ``degenerate``, ``open_edges``, ``flipped_edges``, ``crowded_edges`` and
+    /// ``is_solid``. Wrong meshes mostly look like nothing, so this says why.
+    fn report<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let r = threers::geometries::MeshReport::of(&self.inner);
+        let out = PyDict::new(py);
+        out.set_item("triangles", r.triangles)?;
+        out.set_item("degenerate", r.degenerate)?;
+        out.set_item("open_edges", r.open_edges)?;
+        out.set_item("flipped_edges", r.flipped_edges)?;
+        out.set_item("crowded_edges", r.crowded_edges)?;
+        out.set_item("is_solid", r.is_solid())?;
+        Ok(out)
+    }
+
     #[staticmethod]
     #[pyo3(name = "box", signature = (width=1.0, height=1.0, depth=1.0))]
     fn box_geometry(width: f64, height: f64, depth: f64) -> PyResult<Self> {
@@ -2001,7 +2279,7 @@ impl PyMaterial {
 /// and the mipmap filter, the uv transform (``offset``, ``repeat``,
 /// ``rotation``, ``center``), the uv set it reads (``channel``) and whether it
 /// holds sRGB colour or data.
-#[pyclass(name = "Texture", module = "threers")]
+#[pyclass(name = "Texture", module = "threers", from_py_object)]
 #[derive(Clone)]
 struct PyTexture {
     inner: std::sync::Arc<threers::textures::Texture>,
@@ -2759,6 +3037,7 @@ fn load_into(
                     arena: s.arena,
                     animations: Vec::new(),
                     skeletons: Vec::new(),
+                    extras: Default::default(),
                 },
             }
         }
@@ -2792,6 +3071,7 @@ fn load_usd(bytes: &[u8]) -> std::result::Result<LoadedScene, String> {
             arena: s.arena,
             animations: Vec::new(),
             skeletons: Vec::new(),
+            extras: Default::default(),
         },
     })
 }
@@ -3383,6 +3663,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyOrthographicCamera>()?;
     m.add_class::<PyScene>()?;
     m.add_class::<PyGeometry>()?;
+    m.add_class::<PyMeshBuilder>()?;
     m.add_class::<PyMaterial>()?;
     m.add_class::<PyFurMaterial>()?;
     m.add_class::<PyTexture>()?;

@@ -6,9 +6,10 @@ use crate::sdf::d2;
 
 /// Bounding box of `points` as `(x0, y0, x1, y1)`.
 pub(crate) fn bounds(points: &[Vector2]) -> (f32, f32, f32, f32) {
-    points.iter().fold((f32::MAX, f32::MAX, f32::MIN, f32::MIN), |(a, b, c, d), p| {
-        (a.min(p.x), b.min(p.y), c.max(p.x), d.max(p.y))
-    })
+    points.iter().fold(
+        (f32::MAX, f32::MAX, f32::MIN, f32::MIN),
+        |(a, b, c, d), p| (a.min(p.x), b.min(p.y), c.max(p.x), d.max(p.y)),
+    )
 }
 
 /// A run of round-capped segments `half` either side of their centre line,

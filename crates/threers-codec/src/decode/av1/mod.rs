@@ -30,6 +30,7 @@ pub mod picture;
 pub mod qm;
 pub mod recon;
 pub mod refmvs;
+mod sched;
 #[allow(dead_code)]
 pub mod tables;
 pub mod warpmv;
@@ -38,7 +39,7 @@ pub mod wedge;
 use std::sync::Arc;
 
 use cdf_data::CdfContext;
-use frame::{RefSlot, TileData};
+use frame::{Pending, RefSlot, SlotEntry, TileData};
 use obu::*;
 pub use picture::Picture;
 
@@ -86,7 +87,11 @@ impl Av1Frame {
             y: plane(0),
             u: plane(1),
             v: plane(2),
-            color: ColorInfo::from_vui(Some(self.seq.mtrx as u32), self.seq.color_range, p.h as u32),
+            color: ColorInfo::from_vui(
+                Some(self.seq.mtrx as u32),
+                self.seq.color_range,
+                p.h as u32,
+            ),
         }
     }
 }
@@ -122,12 +127,139 @@ pub struct AccelFrame<'a> {
 #[derive(Default)]
 pub struct Av1Decoder {
     seq: Option<Arc<SeqHeader>>,
-    refs: [Option<RefSlot>; 8],
+    refs: [Option<SlotEntry>; 8],
     frame_hdr: Option<FrameHeader>,
     tiles: Vec<TileData>,
     n_tiles: u32,
     operating_point_idc: u16,
     accel: Option<Box<dyn Av1Accel>>,
+    /// Lent to each frame for its tile-parallel decode (`Fd::tile_pool`).
+    tile_pool: Vec<decode::TileBufs>,
+    /// Takes frames during [`decode_each`](Self::decode_each), to be decoded
+    /// concurrently; `None` decodes each as it is parsed.
+    sched: Option<Arc<sched::Sched>>,
+}
+
+/// A frame parsed and waiting to be decoded: its tile data and the
+/// reference slots as they stood before it.
+pub(crate) struct FrameJob {
+    seq: Arc<SeqHeader>,
+    hdr: Arc<FrameHeader>,
+    tiles: Vec<TileData>,
+    refs: [Option<SlotEntry>; 8],
+    done: Arc<Pending>,
+}
+
+/// A frame whose tiles are decoded and loop filters are not yet run.
+struct Reconstructed {
+    fd: decode::Fd,
+    in_cdf: Arc<CdfContext>,
+    out_cdf: Option<CdfContext>,
+}
+
+impl FrameJob {
+    /// Which slots this frame reads: the seven it predicts from and the one
+    /// its CDFs and segment map come from.
+    fn needed_slots(&self) -> [bool; 8] {
+        let mut need = [false; 8];
+        if self.hdr.is_inter_or_switch() {
+            for &i in &self.hdr.refidx {
+                need[i as usize] = true;
+            }
+        }
+        if self.hdr.primary_ref_frame != PRIMARY_REF_NONE {
+            need[self.hdr.refidx[self.hdr.primary_ref_frame as usize] as usize] = true;
+        }
+        need
+    }
+
+    /// The frames that must finish before this one starts.
+    fn dependencies(&self) -> Vec<Arc<Pending>> {
+        let need = self.needed_slots();
+        (0..8)
+            .filter(|&i| need[i])
+            .filter_map(|i| self.refs[i].as_ref().map(|e| e.done.clone()))
+            .collect()
+    }
+
+    /// The slots this frame reads, each waited for.
+    fn resolve_refs(&self) -> Result<[Option<RefSlot>; 8], String> {
+        let need = self.needed_slots();
+        let mut out: [Option<RefSlot>; 8] = Default::default();
+        for i in 0..8 {
+            if let (true, Some(e)) = (need[i], &self.refs[i]) {
+                out[i] = Some(e.done.wait()?);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Entropy decoding and reconstruction, with `pool` lent for the tiles.
+    fn reconstruct(&self, pool: &mut Vec<decode::TileBufs>) -> Result<Reconstructed, String> {
+        let refs = self.resolve_refs()?;
+        let (mut fd, in_cdf) = decode::Fd::new(self.seq.clone(), self.hdr.clone(), &refs)?;
+        fd.tile_pool = std::mem::take(pool);
+        let out_cdf = fd.decode_tiles(&in_cdf, &self.tiles);
+        *pool = std::mem::take(&mut fd.tile_pool);
+        Ok(Reconstructed {
+            fd,
+            in_cdf,
+            out_cdf: out_cdf?,
+        })
+    }
+}
+
+impl Reconstructed {
+    /// Loop filters, then what a reference slot keeps of the frame.
+    fn finish(mut self) -> RefSlot {
+        self.fd.apply_filters();
+        let fd = &mut self.fd;
+        let hdr = fd.hdr.clone();
+        let cdf = if hdr.refresh_context {
+            Arc::new(self.out_cdf.unwrap_or(*self.in_cdf))
+        } else {
+            self.in_cdf
+        };
+        let pic = Arc::new(match fd.sr_cur.take() {
+            Some(sr) => sr,
+            None => std::mem::replace(&mut fd.cur, Picture::new(1, 1, fd.layout, fd.bpc)),
+        });
+        let segmap = fd.cur_segmap.take().map(Arc::new);
+        let refmvs = if (hdr.is_inter_or_switch() || hdr.allow_intrabc) && !hdr.allow_intrabc {
+            fd.rf.take().map(|rf| Arc::new(rf.rp))
+        } else {
+            None
+        };
+        RefSlot {
+            pic,
+            hdr: hdr.clone(),
+            seq: fd.seq.clone(),
+            cdf,
+            segmap,
+            refmvs,
+            refpoc: fd.refpoc,
+            showable: hdr.showable_frame,
+        }
+    }
+}
+
+/// `f`, with a panic turned into an error. A frame thread must always fill
+/// in its frame's [`Pending`]: later frames are blocked on it, and a corrupt
+/// stream that panics the decoder would otherwise hang them for good.
+fn caught<T>(f: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))
+        .unwrap_or_else(|_| Err("frame decode panicked".into()))
+}
+
+/// A header with its global motion models' shear parameters filled in, as
+/// `Fd::new` makes it; the slots keep this form for later frames to parse
+/// against.
+fn with_shear(hdr: &Arc<FrameHeader>) -> Arc<FrameHeader> {
+    let mut h = (**hdr).clone();
+    for g in h.gmv.iter_mut() {
+        let _ = warpmv::get_shear_params(g);
+    }
+    Arc::new(h)
 }
 
 const OBU_SEQ_HDR: u32 = 1;
@@ -171,17 +303,148 @@ impl Av1Decoder {
 
     /// Decode one temporal unit (low-overhead OBU format).
     pub fn decode(&mut self, data: &[u8]) -> Result<Vec<Av1Frame>, String> {
+        let shown = self.parse_temporal_unit(data)?;
+        self.output(shown)
+    }
+
+    /// Every OBU of one temporal unit; returns the frames it shows.
+    fn parse_temporal_unit(&mut self, data: &[u8]) -> Result<Vec<Arc<Pending>>, String> {
         let mut out = Vec::new();
         let mut pos = 0;
         while pos < data.len() {
             pos += self.parse_obu(&data[pos..], &mut out)?;
         }
-        // One picture per temporal unit, the last (highest spatial layer)
-        // shown, as libaom with output_all_layers=0.
-        if out.len() > 1 {
-            out.drain(..out.len() - 1);
+        Ok(out)
+    }
+
+    /// The pictures a temporal unit shows, once decoded: one per unit, the
+    /// last (highest spatial layer), as libaom with output_all_layers=0.
+    fn output(&mut self, mut shown: Vec<Arc<Pending>>) -> Result<Vec<Av1Frame>, String> {
+        if shown.len() > 1 {
+            shown.drain(..shown.len() - 1);
+        }
+        let mut out = Vec::with_capacity(shown.len());
+        for p in shown {
+            let s = p.wait()?;
+            out.push(Av1Frame {
+                pic: s.pic,
+                hdr: s.hdr,
+                seq: s.seq,
+            });
         }
         self.finish_output(&mut out)?;
+        Ok(out)
+    }
+
+    /// Decode many temporal units (low-overhead OBU format), up to `threads`
+    /// frames at once, and give each shown frame to `each` in order, with the
+    /// index of its unit. The frames are those calling
+    /// [`decode`](Self::decode) on each unit would return.
+    ///
+    /// A unit that will not decode is skipped, as a player would: real files
+    /// have damaged frames, and the rest are still worth having. Returns how
+    /// many units gave up a frame that way, or the first error if not one
+    /// frame could be shown. An error from `each` stops at once.
+    ///
+    /// Frames run on the `parallel` feature's thread pool as their references
+    /// finish, and only a window of units is in flight, so memory does not
+    /// grow with the stream. How much this helps depends on the stream: an
+    /// encoder's layered frame structure leaves frames that do not reference
+    /// each other, and a strict chain leaves none.
+    ///
+    /// This call blocks until frames are done, which a browser forbids on its
+    /// main thread: from a threaded wasm build, call it in a Worker. It
+    /// decodes one frame at a time where no pool can help: without `parallel`
+    /// or a second pool thread, from inside the pool, or with an accelerator.
+    pub fn decode_each(
+        &mut self,
+        units: &[&[u8]],
+        threads: usize,
+        mut each: impl FnMut(usize, Av1Frame) -> Result<(), String>,
+    ) -> Result<usize, String> {
+        let (mut shown, mut skipped, mut first_error) = (0usize, 0usize, None);
+        let mut failed = |e: String, first_error: &mut Option<String>| {
+            skipped += 1;
+            first_error.get_or_insert(e);
+        };
+        let concurrent = self.accel.is_none() && threads >= 2 && crate::pool_can_serve_caller();
+        if !concurrent {
+            for (i, u) in units.iter().enumerate() {
+                match self.decode(u) {
+                    Ok(frames) => {
+                        for f in frames {
+                            shown += 1;
+                            each(i, f)?;
+                        }
+                    }
+                    Err(e) => failed(e, &mut first_error),
+                }
+            }
+        } else {
+            let sched = sched::Sched::new(threads, std::mem::take(&mut self.tile_pool));
+            self.sched = Some(sched.clone());
+            // Far enough ahead to reach the frames that can run side by side:
+            // a unit's shown frame can need several hidden ones decoded first.
+            let window = threads * 4;
+            let mut waiting = std::collections::VecDeque::new();
+            let mut run = || -> Result<(), String> {
+                let mut deliver = |this: &mut Self,
+                                   (i, unit): (usize, Vec<Arc<Pending>>)|
+                 -> Result<(), String> {
+                    match this.output(unit) {
+                        Ok(frames) => {
+                            for f in frames {
+                                shown += 1;
+                                each(i, f)?;
+                            }
+                        }
+                        Err(e) => failed(e, &mut first_error),
+                    }
+                    Ok(())
+                };
+                for (i, u) in units.iter().enumerate() {
+                    match self.parse_temporal_unit(u) {
+                        Ok(s) => waiting.push_back((i, s)),
+                        Err(e) => deliver(self, (i, vec![Pending::ready(Err(e))]))?,
+                    }
+                    while waiting.len() > window {
+                        deliver(self, waiting.pop_front().unwrap())?;
+                    }
+                }
+                while let Some(unit) = waiting.pop_front() {
+                    deliver(self, unit)?;
+                }
+                Ok(())
+            };
+            let r = run();
+            self.sched = None;
+            if r.is_err() {
+                sched.cancel();
+            }
+            let (pool, hidden_error) = sched.finish();
+            self.tile_pool = pool;
+            r?;
+            if let Some(e) = hidden_error {
+                first_error.get_or_insert(e);
+            }
+        }
+        match first_error {
+            Some(e) if shown == 0 => Err(e),
+            _ => Ok(skipped),
+        }
+    }
+
+    /// [`decode_each`](Self::decode_each), collecting the frames.
+    pub fn decode_batch(
+        &mut self,
+        units: &[&[u8]],
+        threads: usize,
+    ) -> Result<Vec<Av1Frame>, String> {
+        let mut out = Vec::new();
+        self.decode_each(units, threads, |_, f| {
+            out.push(f);
+            Ok(())
+        })?;
         Ok(out)
     }
 
@@ -203,19 +466,15 @@ impl Av1Decoder {
                 q += osz;
             }
         }
-        let mut out = Vec::new();
+        let mut shown = Vec::new();
         for o in obus {
-            self.parse_obu(o, &mut out)?;
+            self.parse_obu(o, &mut shown)?;
         }
-        if out.len() > 1 {
-            out.drain(..out.len() - 1);
-        }
-        self.finish_output(&mut out)?;
-        Ok(out)
+        self.output(shown)
     }
 
     /// `dav1d_parse_obus` for one OBU; returns the bytes consumed.
-    fn parse_obu(&mut self, data: &[u8], out: &mut Vec<Av1Frame>) -> Result<usize, String> {
+    fn parse_obu(&mut self, data: &[u8], out: &mut Vec<Arc<Pending>>) -> Result<usize, String> {
         let mut gb = GetBits::new(data);
         gb.bit();
         let typ = gb.bits(4);
@@ -256,7 +515,11 @@ impl Av1Decoder {
                 let mut g = GetBits::new(payload);
                 let seq = parse_seq_hdr(&mut g)?;
                 self.operating_point_idc = seq.operating_points[0].idc;
-                let same = self.seq.as_ref().map(|s| s.same_sequence(&seq)).unwrap_or(false);
+                let same = self
+                    .seq
+                    .as_ref()
+                    .map(|s| s.same_sequence(&seq))
+                    .unwrap_or(false);
                 if !same {
                     if self.seq.is_some() {
                         self.refs = Default::default();
@@ -269,7 +532,8 @@ impl Av1Decoder {
             OBU_FRAME | OBU_FRAME_HDR | OBU_REDUNDANT_FRAME_HDR => {
                 let seq = self.seq.clone().ok_or("frame before sequence header")?;
                 let mut g = GetBits::new(payload);
-                let hdr = parse_frame_hdr(&seq, &self.ref_headers(), &mut g, temporal_id, spatial_id)?;
+                let hdr =
+                    parse_frame_hdr(&seq, &self.ref_headers(), &mut g, temporal_id, spatial_id)?;
                 self.tiles.clear();
                 self.n_tiles = 0;
                 let show_existing = hdr.show_existing_frame;
@@ -295,9 +559,14 @@ impl Av1Decoder {
         if let (Some(seq), Some(hdr)) = (self.seq.clone(), self.frame_hdr.as_ref()) {
             if hdr.show_existing_frame {
                 let idx = hdr.existing_frame_idx as usize;
-                let slot = self.refs[idx].clone().ok_or("show_existing_frame of an empty slot")?;
-                out.push(Av1Frame { pic: slot.pic.clone(), hdr: slot.hdr.clone(), seq: slot.seq.clone() });
-                if slot.hdr.frame_type == FRAME_KEY {
+                let entry = self.refs[idx]
+                    .clone()
+                    .ok_or("show_existing_frame of an empty slot")?;
+                out.push(entry.done.clone());
+                if entry.hdr.frame_type == FRAME_KEY {
+                    // Showing a key frame again refreshes every slot with it,
+                    // which needs its decoded data: wait for it here.
+                    let slot = entry.done.wait()?;
                     let mut s = slot.clone();
                     s.showable = false;
                     for i in 0..8 {
@@ -307,7 +576,11 @@ impl Av1Decoder {
                         } else {
                             c.refmvs = slot.refmvs.clone();
                         }
-                        self.refs[i] = Some(c);
+                        self.refs[i] = Some(SlotEntry {
+                            hdr: entry.hdr.clone(),
+                            seq: entry.seq.clone(),
+                            done: Pending::ready(Ok(c)),
+                        });
                     }
                 }
                 self.frame_hdr = None;
@@ -329,52 +602,87 @@ impl Av1Decoder {
         if s > e || s != self.n_tiles {
             return Err("tile groups out of order".into());
         }
-        self.tiles.push(TileData { data: data[g.byte_pos()..].to_vec(), start: s, end: e });
+        self.tiles.push(TileData {
+            data: data[g.byte_pos()..].to_vec(),
+            start: s,
+            end: e,
+        });
         self.n_tiles += 1 + e - s;
         Ok(())
     }
 
-    fn submit_frame(&mut self, seq: Arc<SeqHeader>, hdr: Arc<FrameHeader>, tiles: Vec<TileData>, out: &mut Vec<Av1Frame>) -> Result<(), String> {
-        if let Some(accel) = self.accel.as_mut() {
-            let layout = seq.layout;
-            let pic = Arc::new(Picture { planes: Default::default(), stride: [0; 2], w: hdr.width[1], h: hdr.height, layout, bpc: 8 + 2 * seq.hbd as u32 });
-            accel.frame(&AccelFrame { seq: &seq, hdr: &hdr, tiles: &tiles, refs: &self.refs, cur: &pic })?;
-            let cdf = Arc::new(*CdfContext::default_for(hdr.quant.yac));
-            let slot = RefSlot { pic: pic.clone(), hdr: hdr.clone(), seq: seq.clone(), cdf, segmap: None, refmvs: None, refpoc: [0; 7], showable: hdr.showable_frame };
-            for i in 0..8 {
-                if hdr.refresh_frame_flags & (1 << i) != 0 {
-                    self.refs[i] = Some(slot.clone());
-                }
-            }
-            if hdr.show_frame {
-                out.push(Av1Frame { pic, hdr, seq });
-            }
-            return Ok(());
-        }
-        let (mut fd, in_cdf) = decode::Fd::new(seq.clone(), hdr.clone(), &self.refs)?;
-        let hdr = fd.hdr.clone();
-        let out_cdf = fd.decode_tiles(&in_cdf, &tiles)?;
-        let cdf = if hdr.refresh_context { Arc::new(out_cdf.unwrap_or(*in_cdf)) } else { in_cdf };
-        let pic = Arc::new(match fd.sr_cur.take() {
-            Some(sr) => sr,
-            None => std::mem::replace(&mut fd.cur, Picture::new(1, 1, fd.layout, fd.bpc)),
-        });
-        let segmap = fd.cur_segmap.take().map(Arc::new);
-        let refmvs = if (hdr.is_inter_or_switch() || hdr.allow_intrabc) && !hdr.allow_intrabc {
-            fd.rf.take().map(|rf| Arc::new(rf.rp))
-        } else {
-            None
+    fn submit_frame(
+        &mut self,
+        seq: Arc<SeqHeader>,
+        hdr: Arc<FrameHeader>,
+        tiles: Vec<TileData>,
+        out: &mut Vec<Arc<Pending>>,
+    ) -> Result<(), String> {
+        let done = Pending::new();
+        let refs = self.refs.clone();
+        let entry = SlotEntry {
+            hdr: with_shear(&hdr),
+            seq: seq.clone(),
+            done: done.clone(),
         };
-        let slot = RefSlot { pic: pic.clone(), hdr: hdr.clone(), seq: seq.clone(), cdf, segmap, refmvs, refpoc: fd.refpoc, showable: hdr.showable_frame };
         for i in 0..8 {
             if hdr.refresh_frame_flags & (1 << i) != 0 {
-                self.refs[i] = Some(slot.clone());
+                self.refs[i] = Some(entry.clone());
             }
         }
         if hdr.show_frame {
-            out.push(Av1Frame { pic, hdr, seq });
+            out.push(done.clone());
         }
-        Ok(())
+        let job = FrameJob {
+            seq,
+            hdr,
+            tiles,
+            refs,
+            done,
+        };
+        if let Some(sched) = &self.sched {
+            sched.submit(job);
+            return Ok(());
+        }
+        let r = if let Some(accel) = self.accel.as_mut() {
+            let refs =
+                std::array::from_fn(|i| job.refs[i].as_ref().and_then(|e| e.done.wait().ok()));
+            let (seq, hdr) = (&job.seq, &job.hdr);
+            let pic = Arc::new(Picture {
+                planes: Default::default(),
+                stride: [0; 2],
+                w: hdr.width[1],
+                h: hdr.height,
+                layout: seq.layout,
+                bpc: 8 + 2 * seq.hbd as u32,
+            });
+            accel
+                .frame(&AccelFrame {
+                    seq,
+                    hdr,
+                    tiles: &job.tiles,
+                    refs: &refs,
+                    cur: &pic,
+                })
+                .map(|()| {
+                    let cdf = Arc::new(*CdfContext::default_for(hdr.quant.yac));
+                    RefSlot {
+                        pic,
+                        hdr: hdr.clone(),
+                        seq: seq.clone(),
+                        cdf,
+                        segmap: None,
+                        refmvs: None,
+                        refpoc: [0; 7],
+                        showable: hdr.showable_frame,
+                    }
+                })
+        } else {
+            let pool = &mut self.tile_pool;
+            caught(|| job.reconstruct(pool).map(Reconstructed::finish))
+        };
+        job.done.set(r.clone());
+        r.map(|_| ())
     }
 }
 

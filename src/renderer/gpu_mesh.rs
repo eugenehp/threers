@@ -191,11 +191,13 @@ impl GpuMesh {
         }
         self.segment_vertices = (out.len() / k) as u32;
         out.extend(std::iter::repeat_n(0.0, k));
-        self.segment_buffer = Some(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("threers wide line segments"),
-            contents: bytemuck::cast_slice(&out),
-            usage: wgpu::BufferUsages::VERTEX,
-        }));
+        self.segment_buffer = Some(
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("threers wide line segments"),
+                contents: bytemuck::cast_slice(&out),
+                usage: wgpu::BufferUsages::VERTEX,
+            }),
+        );
     }
 }
 

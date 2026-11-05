@@ -765,7 +765,8 @@ fn clip_fix(v: IRect, c: IRect) -> Matrix4 {
     m
 }
 
-const CLEAR_WGSL: &str = crate::wgsl!(r#"
+const CLEAR_WGSL: &str = crate::wgsl!(
+    r#"
 @vertex
 fn vs(@builtin(vertex_index) i : u32) -> @builtin(position) vec4<f32> {
     let p = vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u));
@@ -775,7 +776,8 @@ fn vs(@builtin(vertex_index) i : u32) -> @builtin(position) vec4<f32> {
 fn fs() -> @location(0) vec4<f32> {
     return vec4<f32>(1.0, 1.0, 1.0, 1.0);
 }
-"#);
+"#
+);
 
 /// A full-screen triangle whose colour is the *blend constant*: the fragment
 /// writes one, the blend multiplies by the constant and discards the
@@ -1053,7 +1055,10 @@ mod tests {
     fn shadow_map_flags_follow_three_js() {
         let mut m = ShadowMap::default();
         assert!(m.auto_update);
-        assert!(m.take_update(true, false), "auto-update redraws what changed");
+        assert!(
+            m.take_update(true, false),
+            "auto-update redraws what changed"
+        );
         assert!(!m.take_update(true, true), "and keeps what did not");
         m.auto_update = false;
         assert!(!m.take_update(true, false), "manual and not asked: reuse");

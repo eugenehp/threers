@@ -224,7 +224,8 @@ impl PmremGenerator {
         }
         let mut bytes = vec![0u8; pixels.len()];
         quantize_atlas_f32_to_u8(&pixels, &mut bytes);
-        let level0 = extract_cube_faces_from_atlas_lod(&bytes, width, cube_size, lod_max, 0, cube_size);
+        let level0 =
+            extract_cube_faces_from_atlas_lod(&bytes, width, cube_size, lod_max, 0, cube_size);
         let atlas = CubeUvAtlas {
             width,
             height,
@@ -236,7 +237,14 @@ impl PmremGenerator {
             pixels_f32: Some(Arc::new(pixels)),
         };
         let [f0, f1, f2, f3, f4, f5] = level0;
-        Some(CubeTexture::new(cube_size, TextureFormat::Rgba8Unorm, [f0, f1, f2, f3, f4, f5]).with_cube_uv_atlas(atlas))
+        Some(
+            CubeTexture::new(
+                cube_size,
+                TextureFormat::Rgba8Unorm,
+                [f0, f1, f2, f3, f4, f5],
+            )
+            .with_cube_uv_atlas(atlas),
+        )
     }
 
     /// Prefilter `input` into a series of cube faces at a single roughness level.
@@ -850,9 +858,15 @@ fn prepare_pmrem_cube(input: &CubeTexture, size: u32) -> CubeTexture {
                 out.extend_from_slice(px);
                 continue;
             }
-            out.push(linear_to_byte(crate::utils::srgb::srgb_to_linear_f32(px[0] as f32 / 255.0)));
-            out.push(linear_to_byte(crate::utils::srgb::srgb_to_linear_f32(px[1] as f32 / 255.0)));
-            out.push(linear_to_byte(crate::utils::srgb::srgb_to_linear_f32(px[2] as f32 / 255.0)));
+            out.push(linear_to_byte(crate::utils::srgb::srgb_to_linear_f32(
+                px[0] as f32 / 255.0,
+            )));
+            out.push(linear_to_byte(crate::utils::srgb::srgb_to_linear_f32(
+                px[1] as f32 / 255.0,
+            )));
+            out.push(linear_to_byte(crate::utils::srgb::srgb_to_linear_f32(
+                px[2] as f32 / 255.0,
+            )));
             out.push(px.get(3).copied().unwrap_or(255));
         }
         *slot = out;

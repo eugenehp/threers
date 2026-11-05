@@ -82,17 +82,131 @@ view.renderer().warm_scene(&mut scene, &camera);  // the scene's own variants
 
 - `run` builds pipelines until none are left, from as many threads as call
   it; `step` builds one, for spreading the work over idle frames.
+  `spawn(n)` starts `n` detached threads and returns at once.
+- `on_progress(|built, total| …)` pushes progress instead of making you poll:
+  it is called after each pipeline, from the thread that built it (keep it
+  short), and once on registering with the current count. Use it to send a
+  Tauri event or a channel message.
+- `SurfaceRenderer::warm_in_background(threads, &states)` does the spawn for
+  you and makes `render` return `false` until the job is done, so a viewport
+  cannot show a frame that stalls on compilation. `is_warming()` says whether
+  it is still holding; `stop_waiting_for_warm_up()` lets it draw anyway.
 - `is_ready`, `progress` and `wait` say when the viewport can be shown without
   a stall. `errors` lists pipelines that failed validation, by label.
 - `warm_up_matching(|label| …)` builds only the pipelines whose labels it
   keeps (`pending_pipeline_labels` lists them) — the paths the app draws with.
-- `warm_scene` draws a scene once into a throwaway target. That builds the
-  variants a material's state asks for at draw time (depth test and write,
-  colour write, culling), which no catalogue warm-up can know about.
+- `warm_up_ranked(|label| rank)` builds the lowest-ranked pipelines first, for
+  a viewport that starts drawing before the job finishes.
+- `warm_up_states(&[RenderState])` queues the variants those states ask for
+  (depth test and write, colour write, additive blending) alongside the stock
+  pipelines. It needs no scene and works on the web.
+- `warm_scene` draws a scene once into a throwaway target (native). That finds
+  the variants a scene asks for without your listing the states.
+- In a browser `step` and `run` cannot hear validation's verdict, so `errors`
+  stays empty there; `step_async` and `run_async` await it and report on every
+  target. `pipeline_failures()` keeps what a warm-up reported.
 - A pipeline being warmed and drawn with at the same moment is built once;
   whichever gets there second waits.
 
 `pending_pipelines()` is 0 for an eager renderer and once a warm-up has run.
+
+### Pacing `render`
+
+`SurfaceRenderer::render` returns `false` when there was no image to draw
+into: the window is minimised or occluded, every image is in flight, the
+surface was just remade, or a background warm-up is still running. Nothing is
+lost, but a loop that calls it again at once spins a core, and a minimised
+window is exactly when an app is idle. Sleep a frame (the example uses 8 ms)
+or wait for the window's next redraw request before trying again.
+
+### In a webview page
+
+A Tauri frontend, or any page, can use the wasm renderer instead of a native
+surface. `WebRenderer.newLazy(canvas)` returns without building pipelines, and
+`await renderer.warmUp().run()` builds them while the page shows a loading
+state, yielding to the browser between pipelines. `run` resolves with the
+count and rejects with the validation errors, one per line. The blocking
+`step` cannot hear validation's verdict in a browser; `run` uses the awaiting
+`step_async`, which can. `built` and `total` on the job give a progress bar.
+
+## In a Tauri app
+
+The pieces above, put together for Tauri 2. `tauri::WebviewWindow` and
+`tauri::Window` implement the raw-window-handle 0.6 traits and clone, which is
+all `SurfaceRenderer::new` asks of a window. (This recipe was written against
+the Tauri 2.12 source and has not been compiled into a Tauri app here; the
+threers calls in it are the ones the tests and `surface_viewport` example
+exercise.)
+
+```rust
+use tauri::{Emitter, Manager, WindowEvent};
+use threers::renderer::{SurfaceGpu, SurfaceOptions, SurfaceRenderer};
+
+#[derive(Clone, serde::Serialize)]
+struct Warming { built: usize, total: usize }
+
+fn open_viewport(app: &tauri::AppHandle, window: tauri::Window) -> Result<(), String> {
+    let cache_dir = app.path().app_cache_dir().map_err(|e| e.to_string())?.join("gpu");
+    let gpu = std::sync::Arc::new(SurfaceGpu::new()?.with_pipeline_cache(cache_dir));
+    let size = window.inner_size().map_err(|e| e.to_string())?;
+
+    // macOS needs the surface made on the main thread; the renderer then moves.
+    let (tx, rx) = std::sync::mpsc::channel();
+    let (gpu2, window2) = (gpu.clone(), window.clone());
+    app.run_on_main_thread(move || {
+        let view = SurfaceRenderer::new(&gpu2, window2, size.width, size.height,
+                                        SurfaceOptions::default().lazy(true));
+        let _ = tx.send(view);
+    }).map_err(|e| e.to_string())?;
+    let mut view = rx.recv().map_err(|e| e.to_string())??;
+
+    // Build pipelines in the background; tell the frontend how far along.
+    let warmup = view.warm_in_background(4, &[/* RenderStates your materials use */]);
+    let handle = app.clone();
+    warmup.on_progress(move |built, total| {
+        let _ = handle.emit("gpu-warmup", Warming { built, total });
+    });
+
+    // Resizes arrive on the event loop; the render thread picks them up.
+    let size_now = std::sync::Arc::new(std::sync::Mutex::new(None::<(u32, u32)>));
+    let closing = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    {
+        let (size_now, closing, gpu) = (size_now.clone(), closing.clone(), gpu.clone());
+        window.on_window_event(move |event| match event {
+            WindowEvent::Resized(s) => *size_now.lock().unwrap() = Some((s.width, s.height)),
+            WindowEvent::CloseRequested { .. } | WindowEvent::Destroyed => {
+                closing.store(true, std::sync::atomic::Ordering::Relaxed);
+                let _ = gpu.save_pipeline_cache(); // the next launch skips compilation
+            }
+            _ => {}
+        });
+    }
+
+    std::thread::spawn(move || {
+        let (mut scene, camera) = build_scene();
+        while !closing.load(std::sync::atomic::Ordering::Relaxed) {
+            if let Some((w, h)) = size_now.lock().unwrap().take() {
+                view.resize(w, h);
+            }
+            if !view.render(&mut scene, &camera) {
+                // Minimised, occluded or still warming: do not spin.
+                std::thread::sleep(std::time::Duration::from_millis(8));
+            }
+        }
+    });
+    Ok(())
+}
+```
+
+On the frontend, `listen("gpu-warmup", e => bar.value = e.payload.built / e.payload.total)`
+drives a loading bar, and the viewport appears when the count reaches the total.
+
+Two things to decide for your layout. A `SurfaceRenderer` draws into the
+window you give it, and a webview in that same window paints over it, so a
+viewport beside the UI wants its own `tauri::Window` (or a child view through
+`SurfaceRenderer::from_raw`) positioned next to the webview. And an app that
+would rather render in the webview itself can use the wasm renderer: see
+[In a webview page](#in-a-webview-page).
 
 ## A pipeline cache that outlives the process
 

@@ -14,14 +14,22 @@ fn u16_at(b: &[u8], p: usize) -> Option<u16> {
     Some(u16::from_be_bytes([*b.get(p)?, *b.get(p + 1)?]))
 }
 fn u32_at(b: &[u8], p: usize) -> Option<u32> {
-    Some(u32::from_be_bytes([*b.get(p)?, *b.get(p + 1)?, *b.get(p + 2)?, *b.get(p + 3)?]))
+    Some(u32::from_be_bytes([
+        *b.get(p)?,
+        *b.get(p + 1)?,
+        *b.get(p + 2)?,
+        *b.get(p + 3)?,
+    ]))
 }
 
 /// One pair-adjustment subtable, resolved at the font's location.
 #[derive(Debug, Clone)]
 enum PairTable {
     /// Explicit pairs: first glyph's coverage, then the second glyph.
-    Glyphs { coverage: HashMap<u16, u16>, pairs: Vec<HashMap<u16, f32>> },
+    Glyphs {
+        coverage: HashMap<u16, u16>,
+        pairs: Vec<HashMap<u16, f32>>,
+    },
     /// Class pairs: `values[c1 * class2_count + c2]`.
     Classes {
         coverage: HashMap<u16, u16>,
@@ -55,13 +63,21 @@ impl GposKerning {
             for table in lookup {
                 match table {
                     PairTable::Glyphs { coverage, pairs } => {
-                        let Some(&i) = coverage.get(&left) else { continue };
+                        let Some(&i) = coverage.get(&left) else {
+                            continue;
+                        };
                         if let Some(v) = pairs.get(i as usize).and_then(|p| p.get(&right)) {
                             total += v;
                             break;
                         }
                     }
-                    PairTable::Classes { coverage, class1, class2, class2_count, values } => {
+                    PairTable::Classes {
+                        coverage,
+                        class1,
+                        class2,
+                        class2_count,
+                        values,
+                    } => {
                         if !coverage.contains_key(&left) {
                             continue;
                         }
@@ -91,12 +107,18 @@ pub(crate) fn feature_lookups(bytes: &[u8], table: usize, tags: &[&[u8; 4]]) -> 
     let script_at = |tag: &[u8; 4]| -> Option<usize> {
         (0..script_count).find_map(|i| {
             let r = scripts + 2 + 6 * i;
-            (bytes.get(r..r + 4)? == tag).then(|| u16_at(bytes, r + 4).map(|o| scripts + o as usize)).flatten()
+            (bytes.get(r..r + 4)? == tag)
+                .then(|| u16_at(bytes, r + 4).map(|o| scripts + o as usize))
+                .flatten()
         })
     };
     let script = script_at(b"latn")
         .or_else(|| script_at(b"DFLT"))
-        .or_else(|| (script_count > 0).then(|| u16_at(bytes, scripts + 6).map(|o| scripts + o as usize)).flatten())?;
+        .or_else(|| {
+            (script_count > 0)
+                .then(|| u16_at(bytes, scripts + 6).map(|o| scripts + o as usize))
+                .flatten()
+        })?;
     let lang_sys = u16_at(bytes, script)? as usize;
     if lang_sys == 0 {
         return Some(Vec::new());
@@ -130,7 +152,12 @@ pub(crate) fn feature_lookups(bytes: &[u8], table: usize, tags: &[&[u8; 4]]) -> 
 /// Lookup `index`'s subtables in a `GSUB` or `GPOS` table at `table`, as
 /// `(type, offset)`, through extension lookups (`extension`: 7 in `GSUB`, 9
 /// in `GPOS`).
-pub(crate) fn lookup_subtables(bytes: &[u8], table: usize, index: u16, extension: u16) -> Option<Vec<(u16, usize)>> {
+pub(crate) fn lookup_subtables(
+    bytes: &[u8],
+    table: usize,
+    index: u16,
+    extension: u16,
+) -> Option<Vec<(u16, usize)>> {
     let lookups = table + u16_at(bytes, table + 8)? as usize;
     if index >= u16_at(bytes, lookups)? {
         return None;
@@ -152,10 +179,16 @@ pub(crate) fn lookup_subtables(bytes: &[u8], table: usize, index: u16, extension
 }
 
 /// `GPOS` at `gpos`; `store` resolves variation deltas when the font has them.
-pub(crate) fn parse(bytes: &[u8], gpos: usize, store: Option<&ItemVariationStore>) -> Option<GposKerning> {
+pub(crate) fn parse(
+    bytes: &[u8],
+    gpos: usize,
+    store: Option<&ItemVariationStore>,
+) -> Option<GposKerning> {
     let mut out = GposKerning::default();
     for index in feature_lookups(bytes, gpos, &[b"kern"])? {
-        let Some(subtables) = lookup_subtables(bytes, gpos, index, 9) else { continue };
+        let Some(subtables) = lookup_subtables(bytes, gpos, index, 9) else {
+            continue;
+        };
         let mut tables = Vec::new();
         for (kind, sub) in subtables {
             if kind != 2 {
@@ -211,14 +244,26 @@ fn pair_table(b: &[u8], sub: usize, store: Option<&ItemVariationStore>) -> Optio
                     values.push(x_advance(b, r, vf1, sub, store)?);
                 }
             }
-            Some(PairTable::Classes { coverage, class1, class2, class2_count: c2n, values })
+            Some(PairTable::Classes {
+                coverage,
+                class1,
+                class2,
+                class2_count: c2n,
+                values,
+            })
         }
         _ => None,
     }
 }
 
 /// A value record's XAdvance plus its variation delta, in font units.
-fn x_advance(b: &[u8], record: usize, format: u16, base: usize, store: Option<&ItemVariationStore>) -> Option<f32> {
+fn x_advance(
+    b: &[u8],
+    record: usize,
+    format: u16,
+    base: usize,
+    store: Option<&ItemVariationStore>,
+) -> Option<f32> {
     if format & 0x0004 == 0 {
         return Some(0.0);
     }
@@ -335,8 +380,13 @@ mod tests {
             class2_count: 1,
             values: vec![0.0],
         };
-        let second = PairTable::Glyphs { coverage, pairs: vec![[(2, -50.0)].into()] };
-        let k = GposKerning { lookups: vec![vec![first, second]] };
+        let second = PairTable::Glyphs {
+            coverage,
+            pairs: vec![[(2, -50.0)].into()],
+        };
+        let k = GposKerning {
+            lookups: vec![vec![first, second]],
+        };
         assert_eq!(k.kern(1, 2), 0.0);
     }
 }

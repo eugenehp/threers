@@ -129,7 +129,6 @@ pub struct SketchOptions {
     pub quad_controls: bool,
 }
 
-
 impl SketchOptions {
     pub fn new(title: impl Into<String>) -> Self {
         Self {
@@ -300,12 +299,7 @@ where
 
     let mut scene = Scene::new();
     scene.background = options.background;
-    let mut camera = PerspectiveCamera::new(
-        options.fov,
-        view.aspect(),
-        0.1,
-        1000.0,
-    );
+    let mut camera = PerspectiveCamera::new(options.fov, view.aspect(), 0.1, 1000.0);
 
     let mut overlay = Overlay::new(view.size().0, view.size().1);
     let mut draw = {
@@ -330,8 +324,8 @@ where
     let mut cursor_visible = true;
     let win = window.clone();
     // Mouse → quad view, after `setup` has placed the camera.
-    let mut quad_controls = (options.quad_controls && quad_view.is_some())
-        .then(|| QuadViewControls::new(&camera));
+    let mut quad_controls =
+        (options.quad_controls && quad_view.is_some()).then(|| QuadViewControls::new(&camera));
     // The last left press, for telling a double-click (winit reports none).
     let mut last_click: Option<(Instant, Vector2)> = None;
 

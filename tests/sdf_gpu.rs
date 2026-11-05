@@ -175,8 +175,14 @@ fn wgsl_matches_the_cpu() {
         label: None,
         layout: &pipeline.get_bind_group_layout(0),
         entries: &[
-            wgpu::BindGroupEntry { binding: 0, resource: input.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 1, resource: output.as_entire_binding() },
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: input.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: output.as_entire_binding(),
+            },
         ],
     });
     let mut encoder = device.create_command_encoder(&Default::default());
@@ -190,8 +196,11 @@ fn wgsl_matches_the_cpu() {
     queue.submit([encoder.finish()]);
     let slice = readback.slice(..);
     slice.map_async(wgpu::MapMode::Read, |r| r.expect("map"));
-    device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
-    let gpu_out: Vec<f32> = bytemuck::cast_slice(&slice.get_mapped_range().expect("mapped")).to_vec();
+    device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .expect("poll");
+    let gpu_out: Vec<f32> =
+        bytemuck::cast_slice(&slice.get_mapped_range().expect("mapped")).to_vec();
 
     let mut worst = (0.0f32, 0usize, 0usize);
     for (i, q) in pts.iter().enumerate() {
@@ -207,5 +216,8 @@ fn wgsl_matches_the_cpu() {
             assert!(err < 1e-4, "function {k} at {q:?}: gpu {got}, cpu {w}");
         }
     }
-    eprintln!("worst relative error {:.2e} (function {} at point {})", worst.0, worst.2, worst.1);
+    eprintln!(
+        "worst relative error {:.2e} (function {} at point {})",
+        worst.0, worst.2, worst.1
+    );
 }

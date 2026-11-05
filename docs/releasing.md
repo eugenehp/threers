@@ -124,6 +124,17 @@ THREERS_REQUIRE_VAAPI=1 RUST_TEST_THREADS=1 cargo test -p threers-codec --releas
 #     VideoToolbox (macOS):
 cargo test -p threers-codec --release --features videotoolbox --test hw
 
+# 3e. Everything that skips itself, with its inputs in place. A skip reports
+#     `ok`; this fails on any skip or empty test target not listed in
+#     scripts/allowed-skips.txt.
+THREERS_H264_CONFORMANCE=~/tools/h264-conformance \
+THREERS_HEVC_CONFORMANCE=~/tools/hevc-conformance \
+THREERS_HM_DECODER=~/tools/hm/bin/umake/clang-21.0/x86_64/release/TAppDecoder \
+  scripts/test-no-skips.py -p threers-codec --release --features parallel,videotoolbox
+
+# 3f. The renderer in real Chrome, on WebGL2 and on WebGPU.
+scripts/browser-smoke.sh
+
 # 4. Docs, including the intra-doc links between the crates.
 #    Keep this *after* the tests, and run `cargo clean -p threers` before going
 #    back to them. `-p threers -p threers-physics -p threers-probe` is a narrower

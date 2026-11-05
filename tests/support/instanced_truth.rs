@@ -92,7 +92,11 @@ pub fn cases() -> Vec<Case> {
         Case {
             name: "groups",
             groups: true,
-            matrices: vec![at(0.0, 0.55), at(0.0, -0.1).multiply(&rot(0.35)), at(0.0, -0.65)],
+            matrices: vec![
+                at(0.0, 0.55),
+                at(0.0, -0.1).multiply(&rot(0.35)),
+                at(0.0, -0.65),
+            ],
             influences: Influences::Shared(vec![0.0, 0.0]),
         },
         Case {
@@ -114,7 +118,11 @@ pub fn cases() -> Vec<Case> {
         Case {
             name: "per-instance morph + groups",
             groups: true,
-            matrices: vec![at(0.0, 0.55), at(0.0, -0.05).multiply(&rot(-0.3)), at(0.0, -0.6)],
+            matrices: vec![
+                at(0.0, 0.55),
+                at(0.0, -0.05).multiply(&rot(-0.3)),
+                at(0.0, -0.6),
+            ],
             influences: Influences::PerInstance(vec![
                 vec![0.9, 0.0],
                 vec![0.0, 1.0],
@@ -182,7 +190,12 @@ pub fn reference_scene(case: &Case) -> (Scene, Vec<ObjectId>) {
     (scene, ids)
 }
 
-fn pick(scene: &mut Scene, cam: &dyn Camera, x: u32, y: u32) -> Option<(ObjectId, Option<usize>, usize)> {
+fn pick(
+    scene: &mut Scene,
+    cam: &dyn Camera,
+    x: u32,
+    y: u32,
+) -> Option<(ObjectId, Option<usize>, usize)> {
     let ndc = Vector2::new(
         (x as f32 + 0.5) / N as f32 * 2.0 - 1.0,
         1.0 - (y as f32 + 0.5) / N as f32 * 2.0,
@@ -191,7 +204,13 @@ fn pick(scene: &mut Scene, cam: &dyn Camera, x: u32, y: u32) -> Option<(ObjectId
     rc.set_from_camera(ndc, cam);
     rc.intersect_object(&scene.arena, scene.root, true)
         .first()
-        .map(|h| (h.object, h.instance_id, h.face.map(|f| f.material_index).unwrap_or(0)))
+        .map(|h| {
+            (
+                h.object,
+                h.instance_id,
+                h.face.map(|f| f.material_index).unwrap_or(0),
+            )
+        })
 }
 
 fn px(rgba: &[u8], x: u32, y: u32) -> [u8; 3] {
@@ -212,9 +231,11 @@ pub fn check(
         reference
             .arena
             .update_world_matrices(reference.root, Matrix4::identity());
-        inst.arena.update_world_matrices(inst.root, Matrix4::identity());
+        inst.arena
+            .update_world_matrices(inst.root, Matrix4::identity());
         let rgba = render(&mut inst, &cam);
-        let morphed = !matches!(&case.influences, Influences::Shared(w) if w.iter().all(|&x| x == 0.0));
+        let morphed =
+            !matches!(&case.influences, Influences::Shared(w) if w.iter().all(|&x| x == 0.0));
         let (mut checked, mut wrong, mut per_colour) = (0, Vec::new(), [0usize; 4]);
         for y in 1..N - 1 {
             for x in 1..N - 1 {
@@ -240,9 +261,8 @@ pub fn check(
                 // morphed (three.js's InstancedMesh.raycast ignores morphs).
                 if !morphed {
                     let got = pick(&mut inst, &cam, x, y);
-                    let expect = want_hit.map(|(o, _, mi)| {
-                        (inst_id, ids.iter().position(|&i| i == o), mi)
-                    });
+                    let expect =
+                        want_hit.map(|(o, _, mi)| (inst_id, ids.iter().position(|&i| i == o), mi));
                     if got != expect {
                         failures.push(format!(
                             "{backend} {}: raycast at ({x}, {y}) {got:?}, plain meshes {expect:?}",
@@ -267,10 +287,16 @@ pub fn check(
         }
         let drawn = per_colour[..3].iter().sum::<usize>();
         if drawn < 200 {
-            failures.push(format!("{backend} {}: only {drawn} pixels drawn", case.name));
+            failures.push(format!(
+                "{backend} {}: only {drawn} pixels drawn",
+                case.name
+            ));
         }
         if case.groups && per_colour[..3].iter().any(|&n| n < 30) {
-            failures.push(format!("{backend} {}: a material is missing: {per_colour:?}", case.name));
+            failures.push(format!(
+                "{backend} {}: a material is missing: {per_colour:?}",
+                case.name
+            ));
         }
     }
     failures
@@ -291,10 +317,15 @@ pub fn check_colour_morph(
 ) -> Vec<String> {
     let cam = camera();
     let mut failures = Vec::new();
-    for (influence, transparent, want) in [(0.5f32, false, [188u8, 0, 188]), (1.0, true, [0, 77, 0])] {
+    for (influence, transparent, want) in
+        [(0.5f32, false, [188u8, 0, 188]), (1.0, true, [0, 77, 0])]
+    {
         let mut g = PlaneGeometry::new(1.2, 1.2);
         let n = g.get_attribute("position").unwrap().count();
-        g.set_attribute("color", BufferAttribute::new([1.0, 0.0, 0.0, 1.0].repeat(n), 4));
+        g.set_attribute(
+            "color",
+            BufferAttribute::new([1.0, 0.0, 0.0, 1.0].repeat(n), 4),
+        );
         g.set_morph_attribute(
             "color",
             vec![BufferAttribute::new([0.0, 0.0, 1.0, 0.0].repeat(n), 4)],
@@ -309,7 +340,10 @@ pub fn check_colour_morph(
         scene.add(Object3D::mesh(mesh));
         let rgba = render(&mut scene, &cam);
         let got = px(&rgba, N / 2, N / 2);
-        let err = (0..3).map(|k| (got[k] as i32 - want[k] as i32).abs()).max().unwrap();
+        let err = (0..3)
+            .map(|k| (got[k] as i32 - want[k] as i32).abs())
+            .max()
+            .unwrap();
         eprintln!("{backend} colour morph {influence}: got {got:?} want {want:?}");
         if err > 2 {
             failures.push(format!(
@@ -334,7 +368,11 @@ pub fn check_instance_colours(
     let cam = camera();
     let encode = |x: f32| -> u8 {
         let x = x.clamp(0.0, 1.0);
-        let s = if x <= 0.0031308 { 12.92 * x } else { 1.055 * x.powf(1.0 / 2.4) - 0.055 };
+        let s = if x <= 0.0031308 {
+            12.92 * x
+        } else {
+            1.055 * x.powf(1.0 / 2.4) - 0.055
+        };
         (s * 255.0).round() as u8
     };
     let material = Color::new(0.9, 0.7, 0.5);
@@ -345,7 +383,10 @@ pub fn check_instance_colours(
         let mut g = PlaneGeometry::new(0.4, 0.4);
         if let Some(v) = vertex {
             let n = g.get_attribute("position").unwrap().count();
-            g.set_attribute("color", BufferAttribute::new([v[0], v[1], v[2]].repeat(n), 3));
+            g.set_attribute(
+                "color",
+                BufferAttribute::new([v[0], v[1], v[2]].repeat(n), 3),
+            );
         }
         let mut im = InstancedMesh::from_arc(
             Arc::new(g),
@@ -371,7 +412,10 @@ pub fn check_instance_colours(
             ];
             let px_x = ((x + 1.0) / 2.0 * N as f32) as u32;
             let got = px(&rgba, px_x, N / 2);
-            let err = (0..3).map(|k| (got[k] as i32 - want[k] as i32).abs()).max().unwrap();
+            let err = (0..3)
+                .map(|k| (got[k] as i32 - want[k] as i32).abs())
+                .max()
+                .unwrap();
             eprintln!("{backend} instance colour {i} (vertex colours {vertex:?}): got {got:?} want {want:?}");
             if err > 1 {
                 failures.push(format!(

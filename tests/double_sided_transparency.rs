@@ -24,9 +24,17 @@ fn quads() -> BufferGeometry {
         -1.0f32, -1.0, 0.5, 1.0, -1.0, 0.5, 1.0, 1.0, 0.5, -1.0, 1.0, 0.5, //
         -1.0, -1.0, -0.5, 1.0, -1.0, -0.5, 1.0, 1.0, -0.5, -1.0, 1.0, -0.5,
     ];
-    let n = [0.0f32, 0.0, 1.0].repeat(4).into_iter().chain([0.0f32, 0.0, -1.0].repeat(4)).collect::<Vec<_>>();
+    let n = [0.0f32, 0.0, 1.0]
+        .repeat(4)
+        .into_iter()
+        .chain([0.0f32, 0.0, -1.0].repeat(4))
+        .collect::<Vec<_>>();
     // red texel for the near quad, green for the far one
-    let uv = [0.25f32, 0.5].repeat(4).into_iter().chain([0.75f32, 0.5].repeat(4)).collect::<Vec<_>>();
+    let uv = [0.25f32, 0.5]
+        .repeat(4)
+        .into_iter()
+        .chain([0.75f32, 0.5].repeat(4))
+        .collect::<Vec<_>>();
     g.set_attribute("position", BufferAttribute::new(p.to_vec(), 3));
     g.set_attribute("normal", BufferAttribute::new(n, 3));
     g.set_attribute("uv", BufferAttribute::new(uv, 2));
@@ -40,7 +48,12 @@ fn a_double_sided_translucent_mesh_draws_its_back_faces_first() {
         eprintln!("skipping: no GPU adapter");
         return;
     };
-    let mut tex = Texture::new(2, 1, TextureFormat::Rgba8Unorm, vec![255, 0, 0, 255, 0, 255, 0, 255]);
+    let mut tex = Texture::new(
+        2,
+        1,
+        TextureFormat::Rgba8Unorm,
+        vec![255, 0, 0, 255, 0, 255, 0, 255],
+    );
     tex.mag_filter = TextureFilter::Nearest;
     tex.min_filter = TextureFilter::Nearest;
     let mut m = BasicMaterial::new(Color::WHITE);
@@ -57,6 +70,13 @@ fn a_double_sided_translucent_mesh_draws_its_back_faces_first() {
     let px = r.render_to_rgba(&mut scene, &cam);
     let c = (((N / 2) * N + N / 2) * 4) as usize;
     let (red, green) = (px[c], px[c + 1]);
-    assert!(red > 0 && green > 0, "both quads should contribute: rgb {:?}", &px[c..c + 3]);
-    assert!(red > green, "the back face blended over the front face: red {red}, green {green}");
+    assert!(
+        red > 0 && green > 0,
+        "both quads should contribute: rgb {:?}",
+        &px[c..c + 3]
+    );
+    assert!(
+        red > green,
+        "the back face blended over the front face: red {red}, green {green}"
+    );
 }

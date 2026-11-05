@@ -40,7 +40,15 @@ fn rounded_div(a: i64, b: i64) -> i64 {
 }
 
 /// `initFilter` for `SWS_BICUBIC` without src/dst vectors.
-fn init_filter(x_inc: i32, src_w: i32, dst_w: i32, filter_align: usize, one: i64, src_pos: i32, dst_pos: i32) -> Filter {
+fn init_filter(
+    x_inc: i32,
+    src_w: i32,
+    dst_w: i32,
+    filter_align: usize,
+    one: i64,
+    src_pos: i32,
+    dst_pos: i32,
+) -> Filter {
     let fone: i64 = 1i64 << (54 - av_log2((src_w / dst_w) as u32).min(8));
     let dw = dst_w as usize;
     let mut pos = vec![0i32; dw];
@@ -54,14 +62,20 @@ fn init_filter(x_inc: i32, src_w: i32, dst_w: i32, filter_align: usize, one: i64
         }
     } else {
         let size_factor = 4i64; // bicubic
-        let fs = if x_inc <= 1 << 16 { 1 + size_factor } else { 1 + (size_factor * src_w as i64 + dst_w as i64 - 1) / dst_w as i64 };
+        let fs = if x_inc <= 1 << 16 {
+            1 + size_factor
+        } else {
+            1 + (size_factor * src_w as i64 + dst_w as i64 - 1) / dst_w as i64
+        };
         filter_size = fs.min(src_w as i64 - 2).max(1) as usize;
         filter = vec![0i64; dw * filter_size];
-        let mut x_dst_in_src: i64 = ((dst_pos as i64 * x_inc as i64) >> 7) - ((src_pos as i64 * 0x10000) >> 7);
+        let mut x_dst_in_src: i64 =
+            ((dst_pos as i64 * x_inc as i64) >> 7) - ((src_pos as i64 * 0x10000) >> 7);
         let b: i64 = 0;
         let c: i64 = (0.6f64 * (1u64 << 24) as f64) as i64;
         for i in 0..dw {
-            let mut xx = ((x_dst_in_src - (filter_size as i64 - 2) * (1i64 << 16)) / (1 << 17)) as i32;
+            let mut xx =
+                ((x_dst_in_src - (filter_size as i64 - 2) * (1i64 << 16)) / (1 << 17)) as i32;
             pos[i] = xx;
             for j in 0..filter_size {
                 let mut d: i64 = ((xx as i64 * (1i64 << 17)) - x_dst_in_src).abs() << 13;
@@ -74,9 +88,14 @@ fn init_filter(x_inc: i32, src_w: i32, dst_w: i32, filter_align: usize, one: i64
                     let dd = (d * d) >> 30;
                     let ddd = (dd * d) >> 30;
                     if d < 1i64 << 30 {
-                        (12 * (1i64 << 24) - 9 * b - 6 * c) * ddd + (-18 * (1i64 << 24) + 12 * b + 6 * c) * dd + (6 * (1i64 << 24) - 2 * b) * (1i64 << 30)
+                        (12 * (1i64 << 24) - 9 * b - 6 * c) * ddd
+                            + (-18 * (1i64 << 24) + 12 * b + 6 * c) * dd
+                            + (6 * (1i64 << 24) - 2 * b) * (1i64 << 30)
                     } else {
-                        (-b - 6 * c) * ddd + (6 * b + 30 * c) * dd + (-12 * b - 48 * c) * d + (8 * b + 24 * c) * (1i64 << 30)
+                        (-b - 6 * c) * ddd
+                            + (6 * b + 30 * c) * dd
+                            + (-12 * b - 48 * c) * d
+                            + (8 * b + 24 * c) * (1i64 << 30)
                     }
                 };
                 coeff /= (1i64 << 54) / fone;
@@ -175,7 +194,11 @@ fn init_filter(x_inc: i32, src_w: i32, dst_w: i32, filter_align: usize, one: i64
             error = v - int_v * sum;
         }
     }
-    Filter { size: fsz, pos, coef }
+    Filter {
+        size: fsz,
+        pos,
+        coef,
+    }
 }
 
 /// `get_local_pos`.
@@ -254,12 +277,52 @@ impl GenericScaler {
         let chr_y_inc = (((chr_src_h as i64) << 16) + (chr_dst_h as i64 >> 1)) / chr_dst_h as i64;
         // vf_scale's calc_chroma_pos (centre siting) for the input; rgb24
         // output has no subsampling (-513).
-        let src_h_chr_pos = if fmt.log2_cw > 0 { 128 * ((1 << fmt.log2_cw) - 1) } else { -513 };
-        let src_v_chr_pos = if fmt.log2_ch > 0 { 128 * ((1 << fmt.log2_ch) - 1) } else { -513 };
-        let h_lum = init_filter(lum_x_inc as i32, src_w, dst_w, 4, 1 << 14, local_pos(0, 0), local_pos(0, 0));
-        let h_chr = init_filter(chr_x_inc as i32, chr_src_w, chr_dst_w, 4, 1 << 14, local_pos(fmt.log2_cw, src_h_chr_pos), local_pos(chr_dst_h_sub, -513));
-        let v_lum = init_filter(lum_y_inc as i32, src_h, dst_h, 2, 1 << 12, local_pos(0, 0), local_pos(0, 0));
-        let v_chr = init_filter(chr_y_inc as i32, chr_src_h, chr_dst_h, 2, 1 << 12, local_pos(fmt.log2_ch, src_v_chr_pos), local_pos(0, -513));
+        let src_h_chr_pos = if fmt.log2_cw > 0 {
+            128 * ((1 << fmt.log2_cw) - 1)
+        } else {
+            -513
+        };
+        let src_v_chr_pos = if fmt.log2_ch > 0 {
+            128 * ((1 << fmt.log2_ch) - 1)
+        } else {
+            -513
+        };
+        let h_lum = init_filter(
+            lum_x_inc as i32,
+            src_w,
+            dst_w,
+            4,
+            1 << 14,
+            local_pos(0, 0),
+            local_pos(0, 0),
+        );
+        let h_chr = init_filter(
+            chr_x_inc as i32,
+            chr_src_w,
+            chr_dst_w,
+            4,
+            1 << 14,
+            local_pos(fmt.log2_cw, src_h_chr_pos),
+            local_pos(chr_dst_h_sub, -513),
+        );
+        let v_lum = init_filter(
+            lum_y_inc as i32,
+            src_h,
+            dst_h,
+            2,
+            1 << 12,
+            local_pos(0, 0),
+            local_pos(0, 0),
+        );
+        let v_chr = init_filter(
+            chr_y_inc as i32,
+            chr_src_h,
+            chr_dst_h,
+            2,
+            1 << 12,
+            local_pos(fmt.log2_ch, src_v_chr_pos),
+            local_pos(0, -513),
+        );
         Self {
             fmt,
             full_chroma,
@@ -276,7 +339,11 @@ impl GenericScaler {
     /// Convert planes (`u16` samples, tightly packed) to rgb24.
     pub fn convert(&self, t: &Yuv2Rgb, y: &[u16], u: &[u16], v: &[u16]) -> Vec<u8> {
         let (w, h) = (self.fmt.w, self.fmt.h);
-        let sh = if self.fmt.bit_depth == 8 { 7 } else { self.fmt.bit_depth - 1 };
+        let sh = if self.fmt.bit_depth == 8 {
+            7
+        } else {
+            self.fmt.bit_depth - 1
+        };
         let (cw, ch, cdw) = (self.chr_src_w, self.chr_src_h, self.chr_dst_w);
         let mut lum = vec![vec![0i16; w]; h];
         for (r, row) in lum.iter_mut().enumerate() {
@@ -299,7 +366,11 @@ impl GenericScaler {
             let us: Vec<&[i16]> = (0..cf.size).map(|j| cu[cp + j].as_slice()).collect();
             let vs: Vec<&[i16]> = (0..cf.size).map(|j| cv[cp + j].as_slice()).collect();
             // packed_vscale: uint16 filter views.
-            let two = |c: &[i16]| c.len() == 2 && (c[1] as u16 as u32 + c[0] as u16 as u32) == 4096 && (c[1] as u16 as u32) <= 4096;
+            let two = |c: &[i16]| {
+                c.len() == 2
+                    && (c[1] as u16 as u32 + c[0] as u16 as u32) == 4096
+                    && (c[1] as u16 as u32) <= 4096
+            };
             if two(lc) && two(cc) {
                 let (ya, ca) = (lc[1] as u16 as i32, cc[1] as u16 as i32);
                 if self.full_chroma {
@@ -334,7 +405,16 @@ fn put_half(t: &Yuv2Rgb, dest: &mut [u8], i: usize, y1: i32, y2: i32, u: i32, v:
 
 /// `yuv2rgb24_2_c`.
 #[allow(clippy::too_many_arguments)]
-fn half_2(t: &Yuv2Rgb, dest: &mut [u8], l: &[&[i16]], u: &[&[i16]], v: &[&[i16]], w: usize, ya: i32, ca: i32) {
+fn half_2(
+    t: &Yuv2Rgb,
+    dest: &mut [u8],
+    l: &[&[i16]],
+    u: &[&[i16]],
+    v: &[&[i16]],
+    w: usize,
+    ya: i32,
+    ca: i32,
+) {
     let (ya1, ca1) = (4096 - ya, 4096 - ca);
     for i in 0..w.div_ceil(2) {
         let y1 = (l[0][2 * i] as i32 * ya1 + l[1][2 * i] as i32 * ya) >> 19;
@@ -347,7 +427,16 @@ fn half_2(t: &Yuv2Rgb, dest: &mut [u8], l: &[&[i16]], u: &[&[i16]], v: &[&[i16]]
 
 /// `yuv2rgb24_X_c`.
 #[allow(clippy::too_many_arguments)]
-fn half_x(t: &Yuv2Rgb, dest: &mut [u8], lf: &[i16], l: &[&[i16]], cf: &[i16], u: &[&[i16]], v: &[&[i16]], w: usize) {
+fn half_x(
+    t: &Yuv2Rgb,
+    dest: &mut [u8],
+    lf: &[i16],
+    l: &[&[i16]],
+    cf: &[i16],
+    u: &[&[i16]],
+    v: &[&[i16]],
+    w: usize,
+) {
     for i in 0..w.div_ceil(2) {
         let (mut y1, mut y2, mut uu, mut vv) = (1i32 << 18, 1i32 << 18, 1i32 << 18, 1i32 << 18);
         for j in 0..lf.len() {
@@ -370,10 +459,18 @@ fn put_full(t: &Yuv2Rgb, dest: &mut [u8], i: usize, y: i32, u: i32, v: i32) {
     y = y.wrapping_mul(yc);
     y = y.wrapping_add(1 << 21);
     let mut r = (y as u32).wrapping_add((v as u32).wrapping_mul(v2r as u32)) as i32;
-    let mut g = (y as u32).wrapping_add((v as u32).wrapping_mul(v2g as u32)).wrapping_add((u as u32).wrapping_mul(u2g as u32)) as i32;
+    let mut g = (y as u32)
+        .wrapping_add((v as u32).wrapping_mul(v2g as u32))
+        .wrapping_add((u as u32).wrapping_mul(u2g as u32)) as i32;
     let mut b = (y as u32).wrapping_add((u as u32).wrapping_mul(u2b as u32)) as i32;
     if (r | g | b) as u32 & 0xC000_0000 != 0 {
-        let clip = |a: i32| if a as u32 & !((1u32 << 30) - 1) != 0 { (!a >> 31) & ((1 << 30) - 1) } else { a };
+        let clip = |a: i32| {
+            if a as u32 & !((1u32 << 30) - 1) != 0 {
+                (!a >> 31) & ((1 << 30) - 1)
+            } else {
+                a
+            }
+        };
         r = clip(r);
         g = clip(g);
         b = clip(b);
@@ -385,7 +482,16 @@ fn put_full(t: &Yuv2Rgb, dest: &mut [u8], i: usize, y: i32, u: i32, v: i32) {
 
 /// `yuv2rgb24_full_2_c`.
 #[allow(clippy::too_many_arguments)]
-fn full_2(t: &Yuv2Rgb, dest: &mut [u8], l: &[&[i16]], u: &[&[i16]], v: &[&[i16]], w: usize, ya: i32, ca: i32) {
+fn full_2(
+    t: &Yuv2Rgb,
+    dest: &mut [u8],
+    l: &[&[i16]],
+    u: &[&[i16]],
+    v: &[&[i16]],
+    w: usize,
+    ya: i32,
+    ca: i32,
+) {
     let (ya1, ca1) = (4096 - ya, 4096 - ca);
     for i in 0..w {
         let y = (l[0][i] as i32 * ya1 + l[1][i] as i32 * ya) >> 10;
@@ -397,7 +503,16 @@ fn full_2(t: &Yuv2Rgb, dest: &mut [u8], l: &[&[i16]], u: &[&[i16]], v: &[&[i16]]
 
 /// `yuv2rgb24_full_X_c`.
 #[allow(clippy::too_many_arguments)]
-fn full_x(t: &Yuv2Rgb, dest: &mut [u8], lf: &[i16], l: &[&[i16]], cf: &[i16], u: &[&[i16]], v: &[&[i16]], w: usize) {
+fn full_x(
+    t: &Yuv2Rgb,
+    dest: &mut [u8],
+    lf: &[i16],
+    l: &[&[i16]],
+    cf: &[i16],
+    u: &[&[i16]],
+    v: &[&[i16]],
+    w: usize,
+) {
     for i in 0..w {
         let mut y: i32 = 1 << 9;
         let mut uu: i32 = (1 << 9) - (128 << 19);

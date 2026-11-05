@@ -140,8 +140,15 @@ fn vec4s(a: &[f32]) -> Vec<[f32; 4]> {
 }
 
 impl GpuSolver {
-    pub fn new(device: Arc<wgpu::Device>, queue: Arc<wgpu::Queue>, sim: &mut SoftBody) -> GpuSolver {
-        assert!(sim.blocks.len() <= MAX_BLOCKS, "the GPU solver takes up to {MAX_BLOCKS} blocks (21 parts)");
+    pub fn new(
+        device: Arc<wgpu::Device>,
+        queue: Arc<wgpu::Queue>,
+        sim: &mut SoftBody,
+    ) -> GpuSolver {
+        assert!(
+            sim.blocks.len() <= MAX_BLOCKS,
+            "the GPU solver takes up to {MAX_BLOCKS} blocks (21 parts)"
+        );
         let d = &device;
         sim.drops_push_nodes = false;
         let n = sim.n;
@@ -156,7 +163,9 @@ impl GpuSolver {
         let state = d.create_buffer(&wgpu::BufferDescriptor {
             label: Some("softbody state"),
             size: (16 * (3 * n + nb)) as u64,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_DST
+                | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
         let mut node = vec![0u32; 2 * n];
@@ -170,7 +179,13 @@ impl GpuSolver {
         // the lattice's cubes, five tetrahedra each in creation order, sorted
         // by the parity of their grid coordinates; each with the edges it
         // owns (those its tetrahedra first name)
-        let lattice_of = |topo: usize| if topo == 0 { &sim.body.lattice } else { &sim.limbs[topo - 1].part.lattice };
+        let lattice_of = |topo: usize| {
+            if topo == 0 {
+                &sim.body.lattice
+            } else {
+                &sim.limbs[topo - 1].part.lattice
+            }
+        };
         let (mut tets, mut edges): (Vec<[u32; 5]>, Vec<[u32; 5]>) = (Vec::new(), Vec::new());
         let mut cells: Vec<(u32, [u32; 4])> = Vec::new();
         for (bi, b) in sim.blocks.iter().enumerate() {
@@ -183,7 +198,9 @@ impl GpuSolver {
                 let q = &t.tets[4 * k..4 * k + 4];
                 for i in 0..4 {
                     for j in i + 1..4 {
-                        owner.entry((q[i].min(q[j]), q[i].max(q[j]))).or_insert(k / 5);
+                        owner
+                            .entry((q[i].min(q[j]), q[i].max(q[j])))
+                            .or_insert(k / 5);
                     }
                 }
             }
@@ -196,7 +213,9 @@ impl GpuSolver {
                 // the cube's grid coordinates, from its lowest corner
                 let corner = (0..4 * 5)
                     .map(|q| t.tets[20 * cell + q] as usize)
-                    .fold([f64::MAX; 3], |m, i| [0, 1, 2].map(|c| m[c].min(lat.nodes[3 * i + c] as f64)));
+                    .fold([f64::MAX; 3], |m, i| {
+                        [0, 1, 2].map(|c| m[c].min(lat.nodes[3 * i + c] as f64))
+                    });
                 let g = [0, 1, 2].map(|c| ((corner[c] - lat.origin[c]) / lat.h).round() as i64);
                 let parity = ((g[0] & 1) | ((g[1] & 1) << 1) | ((g[2] & 1) << 2)) as u32;
                 let first_tet = tets.len() as u32;
@@ -207,10 +226,23 @@ impl GpuSolver {
                 let first_edge = edges.len() as u32;
                 for &e in list {
                     let body_edge = if b.topo == 0 { e as u32 } else { u32::MAX };
-                    let phase = if b.leg >= 0 { sim.leg_phase(b.leg as usize)[e] } else { 0.0 };
-                    edges.push([off + t.edges[2 * e], off + t.edges[2 * e + 1], body_edge, t.rest_len[e].to_bits(), phase.to_bits()]);
+                    let phase = if b.leg >= 0 {
+                        sim.leg_phase(b.leg as usize)[e]
+                    } else {
+                        0.0
+                    };
+                    edges.push([
+                        off + t.edges[2 * e],
+                        off + t.edges[2 * e + 1],
+                        body_edge,
+                        t.rest_len[e].to_bits(),
+                        phase.to_bits(),
+                    ]);
                 }
-                cells.push((parity, [bi as u32, first_tet, first_edge, list.len() as u32]));
+                cells.push((
+                    parity,
+                    [bi as u32, first_tet, first_edge, list.len() as u32],
+                ));
             }
         }
         cells.sort_by_key(|c| c.0);
@@ -270,8 +302,23 @@ impl GpuSolver {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let data = storage("softbody tables", bytemuck::cast_slice(&words), wgpu::BufferUsages::empty());
-        let at = [0, cell_at, tet_at, edge_at, link_at, grab_at, muscle_at, glue_at, links, body_n as u32];
+        let data = storage(
+            "softbody tables",
+            bytemuck::cast_slice(&words),
+            wgpu::BufferUsages::empty(),
+        );
+        let at = [
+            0,
+            cell_at,
+            tet_at,
+            edge_at,
+            link_at,
+            grab_at,
+            muscle_at,
+            glue_at,
+            links,
+            body_n as u32,
+        ];
         let uniform = |label: &str, size: usize| {
             d.create_buffer(&wgpu::BufferDescriptor {
                 label: Some(label),
@@ -299,7 +346,11 @@ impl GpuSolver {
         let entry = |binding: u32, ty: wgpu::BufferBindingType| wgpu::BindGroupLayoutEntry {
             binding,
             visibility: wgpu::ShaderStages::COMPUTE,
-            ty: wgpu::BindingType::Buffer { ty, has_dynamic_offset: false, min_binding_size: None },
+            ty: wgpu::BindingType::Buffer {
+                ty,
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
             count: None,
         };
         let layout0 = d.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -332,7 +383,10 @@ impl GpuSolver {
             entries: &bufs
                 .iter()
                 .enumerate()
-                .map(|(i, b)| wgpu::BindGroupEntry { binding: i as u32, resource: b.as_entire_binding() })
+                .map(|(i, b)| wgpu::BindGroupEntry {
+                    binding: i as u32,
+                    resource: b.as_entire_binding(),
+                })
                 .collect::<Vec<_>>(),
         });
         let range_bind = d.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -340,7 +394,11 @@ impl GpuSolver {
             layout: &layout1,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
-                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer: &range_buf, offset: 0, size: wgpu::BufferSize::new(8) }),
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: &range_buf,
+                    offset: 0,
+                    size: wgpu::BufferSize::new(8),
+                }),
             }],
         });
         let module = d.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -446,7 +504,8 @@ impl GpuSolver {
         let mut data = vec4s(&sim.x);
         data.extend(vec4s(&sim.prev));
         data.extend(vec4s(&sim.v));
-        self.queue.write_buffer(&self.state, 0, bytemuck::cast_slice(&data));
+        self.queue
+            .write_buffer(&self.state, 0, bytemuck::cast_slice(&data));
         self.epoch += 1;
         self.uploaded_grab = None;
     }
@@ -472,7 +531,11 @@ impl GpuSolver {
             }
             self.staging[k].unmap();
             self.pending[k] = None;
-            let dt = if self.behind.is_empty() { 0.0 } else { self.behind.remove(0) };
+            let dt = if self.behind.is_empty() {
+                0.0
+            } else {
+                self.behind.remove(0)
+            };
             if stale {
                 continue;
             }
@@ -490,7 +553,12 @@ impl GpuSolver {
             }
             sim.end_frame();
             // a tear copied a part and set a bud: send them
-            if sim.blocks.iter().zip(&before).any(|(b, &(a, g))| b.active != a || b.grow < g) {
+            if sim
+                .blocks
+                .iter()
+                .zip(&before)
+                .any(|(b, &(a, g))| b.active != a || b.grow < g)
+            {
                 self.upload_all(sim);
             }
             return true;
@@ -525,11 +593,21 @@ impl GpuSolver {
         let _ = MAX_BLOCKS;
         let word = |k: usize| 4 * self.at[k] as u64;
         if !sim.topos[0].modv.is_empty() {
-            q.write_buffer(&self.data, word(6), bytemuck::cast_slice(&sim.topos[0].modv));
+            q.write_buffer(
+                &self.data,
+                word(6),
+                bytemuck::cast_slice(&sim.topos[0].modv),
+            );
         }
-        let scales: Vec<f64> = (0..sim.leg_slots.len()).map(|i| sim.blocks[sim.leg_slots[i][0]].scale).collect();
+        let scales: Vec<f64> = (0..sim.leg_slots.len())
+            .map(|i| sim.blocks[sim.leg_slots[i][0]].scale)
+            .collect();
         if scales != self.glue_scale {
-            let rest: Vec<f32> = self.glue_of.iter().map(|&(i, g)| sim.glue_rest(i, g, scales[i]) as f32).collect();
+            let rest: Vec<f32> = self
+                .glue_of
+                .iter()
+                .map(|&(i, g)| sim.glue_rest(i, g, scales[i]) as f32)
+                .collect();
             if !rest.is_empty() {
                 q.write_buffer(&self.data, word(7), bytemuck::cast_slice(&rest));
             }
@@ -556,14 +634,22 @@ impl GpuSolver {
                 0
             }
         };
-        let (gcos, gsin, target, axis) = sim.grab.as_ref().map_or((1.0, 0.0, [0.0; 4], [0.0, 0.0, 1.0, 0.0]), |g| {
-            (g.angle.cos() as f32, g.angle.sin() as f32, [g.target[0] as f32, g.target[1] as f32, g.target[2] as f32, 0.0], [
-                g.axis[0] as f32,
-                g.axis[1] as f32,
-                g.axis[2] as f32,
-                0.0,
-            ])
-        });
+        let (gcos, gsin, target, axis) =
+            sim.grab
+                .as_ref()
+                .map_or((1.0, 0.0, [0.0; 4], [0.0, 0.0, 1.0, 0.0]), |g| {
+                    (
+                        g.angle.cos() as f32,
+                        g.angle.sin() as f32,
+                        [
+                            g.target[0] as f32,
+                            g.target[1] as f32,
+                            g.target[2] as f32,
+                            0.0,
+                        ],
+                        [g.axis[0] as f32, g.axis[1] as f32, g.axis[2] as f32, 0.0],
+                    )
+                });
         let walls = sim.walls.unwrap_or([0.0; 16]);
         let alpha = sim.edge_compliance() / (dt * dt);
         let frame = Frame {
@@ -581,7 +667,14 @@ impl GpuSolver {
             grab_sin: gsin,
             grab_target: target,
             grab_axis: axis,
-            walls: [0, 1, 2, 3].map(|k| [walls[4 * k], walls[4 * k + 1], walls[4 * k + 2], walls[4 * k + 3]]),
+            walls: [0, 1, 2, 3].map(|k| {
+                [
+                    walls[4 * k],
+                    walls[4 * k + 1],
+                    walls[4 * k + 2],
+                    walls[4 * k + 3],
+                ]
+            }),
             node_at: self.at[0],
             cell_at: self.at[1],
             tet_at: self.at[2],
@@ -596,9 +689,16 @@ impl GpuSolver {
         };
         q.write_buffer(&self.frame_buf, 0, bytemuck::bytes_of(&frame));
 
-        let mut enc = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("softbody step") });
+        let mut enc = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("softbody step"),
+            });
         {
-            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("softbody substeps"), timestamp_writes: None });
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("softbody substeps"),
+                timestamp_writes: None,
+            });
             pass.set_bind_group(0, &self.bind, &[]);
             pass.set_bind_group(1, &self.range_bind, &[0]);
             let nodes = (self.n as u32).div_ceil(128);
@@ -646,12 +746,17 @@ impl GpuSolver {
         if free {
             let ready = Arc::new(AtomicBool::new(false));
             let r = ready.clone();
-            self.staging[k].slice(..).map_async(wgpu::MapMode::Read, move |res| {
-                if res.is_ok() {
-                    r.store(true, Ordering::Release);
-                }
+            self.staging[k]
+                .slice(..)
+                .map_async(wgpu::MapMode::Read, move |res| {
+                    if res.is_ok() {
+                        r.store(true, Ordering::Release);
+                    }
+                });
+            self.pending[k] = Some(Pending {
+                epoch: self.epoch,
+                ready,
             });
-            self.pending[k] = Some(Pending { epoch: self.epoch, ready });
             self.next_staging = 1 - k;
         } else {
             // no room to read this frame back: its CPU half folds into the next

@@ -153,7 +153,13 @@ impl CameraAnimator {
     }
 
     /// Animate focus distance + aperture (DoF pull).
-    pub fn focus_pull(&mut self, focus_distance: f32, aperture: f32, duration: f32, easing: Easing) {
+    pub fn focus_pull(
+        &mut self,
+        focus_distance: f32,
+        aperture: f32,
+        duration: f32,
+        easing: Easing,
+    ) {
         let mut to = self.pose;
         to.focus_distance = focus_distance.max(0.0);
         to.aperture = aperture.max(0.0);

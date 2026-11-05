@@ -10,7 +10,10 @@ mod truth;
 use threers::HeadlessRenderer;
 
 fn renderer() -> Option<HeadlessRenderer> {
-    let mut r = HeadlessRenderer::builder().size(truth::N, truth::N).build().ok()?;
+    let mut r = HeadlessRenderer::builder()
+        .size(truth::N, truth::N)
+        .build()
+        .ok()?;
     r.set_msaa(1);
     Some(r)
 }
@@ -33,7 +36,8 @@ fn instance_colours_tint_each_instance_as_three_js_does() {
         eprintln!("skipping: no GPU adapter");
         return;
     };
-    let failures = truth::check_instance_colours("wgpu", &mut |scene, cam| r.render_to_rgba(scene, cam));
+    let failures =
+        truth::check_instance_colours("wgpu", &mut |scene, cam| r.render_to_rgba(scene, cam));
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
@@ -43,7 +47,8 @@ fn four_component_colours_morph_with_their_alpha() {
         eprintln!("skipping: no GPU adapter");
         return;
     };
-    let failures = truth::check_colour_morph("wgpu", &mut |scene, cam| r.render_to_rgba(scene, cam));
+    let failures =
+        truth::check_colour_morph("wgpu", &mut |scene, cam| r.render_to_rgba(scene, cam));
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
@@ -86,7 +91,10 @@ fn shader_materials_draw_morph_targets() {
         r.render_to_rgba(&mut scene, &truth::camera())
     };
     let coverage = |img: &[u8]| -> Vec<bool> { img.chunks(4).map(|p| p[0] > 128).collect() };
-    let reference = coverage(&render(&mut r, BasicMaterial::new(Color::from_hex(0xff0000)).into()));
+    let reference = coverage(&render(
+        &mut r,
+        BasicMaterial::new(Color::from_hex(0xff0000)).into(),
+    ));
     let lit = reference.iter().filter(|&&b| b).count();
     for (name, material) in [
         ("default vertex", ShaderMaterial::new(FRAG)),
@@ -98,6 +106,9 @@ fn shader_materials_draw_morph_targets() {
         assert!(lit > 2000, "the morphed reference covers {lit} pixels");
         // Edge pixels may round either way; the unmorphed square would differ
         // by thousands.
-        assert!(differ < 40, "{name}: {differ} pixels differ from the morphed shape");
+        assert!(
+            differ < 40,
+            "{name}: {differ} pixels differ from the morphed shape"
+        );
     }
 }

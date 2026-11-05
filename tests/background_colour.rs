@@ -21,15 +21,7 @@ const H: u32 = 48;
 const HEXES: &[u32] = &[
     0x20262c, // the reported dark slate
     0x0a0b0c, // near black, in the linear segment of the curve
-    0x010203,
-    0x000000,
-    0xffffff,
-    0x808080,
-    0xff0000,
-    0x00ff00,
-    0x0000ff,
-    0xff8800,
-    0x3a9a6a,
+    0x010203, 0x000000, 0xffffff, 0x808080, 0xff0000, 0x00ff00, 0x0000ff, 0xff8800, 0x3a9a6a,
     0x7f3f1f,
 ];
 
@@ -78,7 +70,9 @@ fn assert_all(img: &[u8], hex: u32, what: &str) {
 #[test]
 fn background_hex_round_trips_on_every_target_format() {
     for &format in FORMATS {
-        let Some(mut hr) = renderer(format, 1) else { return };
+        let Some(mut hr) = renderer(format, 1) else {
+            return;
+        };
         for &hex in HEXES {
             let mut scene = Scene::new();
             scene.background = Color::from_hex(hex);
@@ -93,7 +87,9 @@ fn background_hex_round_trips_on_every_target_format() {
 #[test]
 fn background_hex_round_trips_through_msaa() {
     for &format in FORMATS {
-        let Some(mut hr) = renderer(format, 1) else { return };
+        let Some(mut hr) = renderer(format, 1) else {
+            return;
+        };
         hr.set_msaa(4);
         for &hex in HEXES {
             let mut scene = Scene::new();
@@ -107,7 +103,9 @@ fn background_hex_round_trips_through_msaa() {
 /// Supersampled, read through the downsample.
 #[test]
 fn background_hex_round_trips_through_the_supersample_resolve() {
-    let Some(mut hr) = renderer(wgpu::TextureFormat::Rgba8UnormSrgb, 2) else { return };
+    let Some(mut hr) = renderer(wgpu::TextureFormat::Rgba8UnormSrgb, 2) else {
+        return;
+    };
     for &hex in HEXES {
         let mut scene = Scene::new();
         scene.background = Color::from_hex(hex);
@@ -122,7 +120,9 @@ fn background_hex_round_trips_through_the_supersample_resolve() {
 #[test]
 fn clear_colour_round_trips_whole_and_scissored() {
     for &format in FORMATS {
-        let Some(mut hr) = renderer(format, 1) else { return };
+        let Some(mut hr) = renderer(format, 1) else {
+            return;
+        };
         for &hex in HEXES {
             hr.clear(Color::from_hex(hex), 1.0);
             let img = hr.read_rgba();
@@ -156,7 +156,9 @@ fn clear_colour_round_trips_whole_and_scissored() {
 fn scissored_render_background_round_trips() {
     for &format in FORMATS {
         for msaa in [1, 4] {
-            let Some(mut hr) = renderer(format, 1) else { return };
+            let Some(mut hr) = renderer(format, 1) else {
+                return;
+            };
             hr.set_msaa(msaa);
             hr.clear(Color::from_hex(0x000000), 1.0);
             let mut scene = Scene::new();
@@ -174,7 +176,11 @@ fn scissored_render_background_round_trips() {
                 .filter(|(i, _)| (*i as u32 % W) >= W / 2)
                 .flat_map(|(_, p)| p.to_vec())
                 .collect();
-            assert_all(&right, 0xff8800, &format!("{format:?} msaa {msaa} scissored render"));
+            assert_all(
+                &right,
+                0xff8800,
+                &format!("{format:?} msaa {msaa} scissored render"),
+            );
         }
     }
 }
@@ -184,7 +190,9 @@ fn scissored_render_background_round_trips() {
 #[test]
 fn a_linear_background_is_encoded_on_the_way_out() {
     for &format in FORMATS {
-        let Some(mut hr) = renderer(format, 1) else { return };
+        let Some(mut hr) = renderer(format, 1) else {
+            return;
+        };
         let mut scene = Scene::new();
         scene.background = Color::new(0.5, 0.5, 0.5);
         let img = hr.render_to_rgba(&mut scene, &camera());

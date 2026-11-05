@@ -38,10 +38,50 @@ impl DecList {
 
 /// 4:2:2 chroma DC `coeff_token` `(TotalCoeff, TrailingOnes, len, code)`
 /// (ffmpeg `chroma422_dc_coeff_token_{len,bits}`, `nC == -2`).
-const CT_CHROMA422_DC: &[(u16, u16, u8, u32)] = &[(0, 0, 1, 1), (1, 0, 7, 15), (1, 1, 2, 1), (2, 0, 7, 14), (2, 1, 7, 13), (2, 2, 3, 1), (3, 0, 9, 7), (3, 1, 7, 12), (3, 2, 7, 11), (3, 3, 5, 1), (4, 0, 9, 6), (4, 1, 9, 5), (4, 2, 7, 10), (4, 3, 6, 1), (5, 0, 10, 7), (5, 1, 10, 6), (5, 2, 9, 4), (5, 3, 7, 9), (6, 0, 11, 7), (6, 1, 11, 6), (6, 2, 10, 5), (6, 3, 7, 8), (7, 0, 12, 7), (7, 1, 12, 6), (7, 2, 11, 5), (7, 3, 10, 4), (8, 0, 13, 7), (8, 1, 12, 5), (8, 2, 12, 4), (8, 3, 11, 4)];
+const CT_CHROMA422_DC: &[(u16, u16, u8, u32)] = &[
+    (0, 0, 1, 1),
+    (1, 0, 7, 15),
+    (1, 1, 2, 1),
+    (2, 0, 7, 14),
+    (2, 1, 7, 13),
+    (2, 2, 3, 1),
+    (3, 0, 9, 7),
+    (3, 1, 7, 12),
+    (3, 2, 7, 11),
+    (3, 3, 5, 1),
+    (4, 0, 9, 6),
+    (4, 1, 9, 5),
+    (4, 2, 7, 10),
+    (4, 3, 6, 1),
+    (5, 0, 10, 7),
+    (5, 1, 10, 6),
+    (5, 2, 9, 4),
+    (5, 3, 7, 9),
+    (6, 0, 11, 7),
+    (6, 1, 11, 6),
+    (6, 2, 10, 5),
+    (6, 3, 7, 8),
+    (7, 0, 12, 7),
+    (7, 1, 12, 6),
+    (7, 2, 11, 5),
+    (7, 3, 10, 4),
+    (8, 0, 13, 7),
+    (8, 1, 12, 5),
+    (8, 2, 12, 4),
+    (8, 3, 11, 4),
+];
 /// 4:2:2 chroma DC `total_zeros` `(len, code)` by `TotalCoeff - 1`.
 const TOTAL_ZEROS_CHROMA422_DC: [&[(u8, u32)]; 7] = [
-    &[(1, 1), (3, 2), (3, 3), (4, 2), (4, 3), (4, 1), (5, 1), (5, 0)],
+    &[
+        (1, 1),
+        (3, 2),
+        (3, 3),
+        (4, 2),
+        (4, 3),
+        (4, 1),
+        (5, 1),
+        (5, 0),
+    ],
     &[(3, 0), (2, 1), (3, 1), (3, 4), (3, 5), (3, 6), (3, 7)],
     &[(3, 0), (3, 1), (2, 1), (2, 2), (3, 6), (3, 7)],
     &[(3, 6), (2, 0), (2, 1), (2, 2), (3, 7)],
@@ -81,13 +121,23 @@ impl CavlcTables {
                 ct(&CT1),
                 ct(&CT2),
                 dc,
-                DecList::from(CT_CHROMA422_DC.iter().map(|&(tc, t1, len, code)| (Vlc { len, code }, (tc << 2) | t1))),
+                DecList::from(
+                    CT_CHROMA422_DC
+                        .iter()
+                        .map(|&(tc, t1, len, code)| (Vlc { len, code }, (tc << 2) | t1)),
+                ),
             ],
             total_zeros: TOTAL_ZEROS_4X4.iter().map(|t| list(t)).collect(),
             total_zeros_dc: TOTAL_ZEROS_CHROMA_DC.iter().map(|t| list(t)).collect(),
             total_zeros_dc422: TOTAL_ZEROS_CHROMA422_DC
                 .iter()
-                .map(|t| DecList::from(t.iter().enumerate().map(|(i, &(len, code))| (Vlc { len, code }, i as u16))))
+                .map(|t| {
+                    DecList::from(
+                        t.iter()
+                            .enumerate()
+                            .map(|(i, &(len, code))| (Vlc { len, code }, i as u16)),
+                    )
+                })
                 .collect(),
             run_before: RUN_BEFORE.iter().map(|t| list(t)).collect(),
         }

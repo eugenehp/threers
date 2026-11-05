@@ -1,0 +1,13 @@
+[package]
+name = "my-game"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Add "physics" for bodies and cars, "audio" for sound, "gamepad" for pads.
+threers-ecs = { git = "https://github.com/eugenehp/threers", features = ["window"] }
+
+# Physics and decoding are slow unoptimised; build dependencies optimised even
+# in a debug build, and keep the game's own code quick to compile.
+[profile.dev.package."*"]
+opt-level = 3

@@ -55,7 +55,12 @@ fn probe(mesh: Mesh) -> Vec<Vec<(usize, usize)>> {
     let mut out = Vec::new();
     for x in XS {
         for y in YS {
-            let rc = Raycaster::new(Vector3::new(x, y, 5.0), Vector3::new(0.0, 0.0, -1.0), 0.0, f32::INFINITY);
+            let rc = Raycaster::new(
+                Vector3::new(x, y, 5.0),
+                Vector3::new(0.0, 0.0, -1.0),
+                0.0,
+                f32::INFINITY,
+            );
             out.push(
                 rc.intersect_object(&arena, id, false)
                     .iter()
@@ -148,12 +153,17 @@ fn draw_range_alone_raycasts_as_three() {
 #[test]
 fn mesh_draws_follow_render_buffer_direct() {
     let mut g = strip(true);
-    g.add_group(0, 6, 1).add_group(6, 12, 0).add_group(3, 6, 2).add_group(18, 6, 7);
+    g.add_group(0, 6, 1)
+        .add_group(6, 12, 0)
+        .add_group(3, 6, 2)
+        .add_group(18, 6, 7);
     g.set_draw_range(3, 12);
     let mats = vec![basic(0), basic(0), basic(2)];
     let single = basic(0);
     let spans = |d: Vec<MeshDraw>| -> Vec<(u32, u32, u32)> {
-        d.iter().map(|d| (d.start, d.end, d.material_index)).collect()
+        d.iter()
+            .map(|d| (d.start, d.end, d.material_index))
+            .collect()
     };
     assert_eq!(
         spans(mesh_draws(&g, &single, &mats)),
@@ -170,7 +180,9 @@ fn mesh_draws_follow_render_buffer_direct() {
 
 fn morph_plane(relative: bool) -> Mesh {
     // `new PlaneGeometry(2, 2, 1, 1)`: corners (-1, 1), (1, 1), (-1, -1), (1, -1).
-    let base = [-1.0f32, 1.0, 0.0, 1.0, 1.0, 0.0, -1.0, -1.0, 0.0, 1.0, -1.0, 0.0];
+    let base = [
+        -1.0f32, 1.0, 0.0, 1.0, 1.0, 0.0, -1.0, -1.0, 0.0, 1.0, -1.0, 0.0,
+    ];
     let mut g = BufferGeometry::new();
     g.set_attribute("position", BufferAttribute::new(base.to_vec(), 3));
     g.set_index(vec![0, 2, 1, 2, 3, 1]);
@@ -206,7 +218,12 @@ fn morphed_meshes_raycast_where_three_puts_them() {
         let mut arena = ObjectArena::new();
         let id = arena.insert(Object3D::mesh(morph_plane(relative)));
         arena.update_world_matrices(id, Matrix4::identity());
-        let rc = Raycaster::new(Vector3::new(1.1, 0.3, 5.0), Vector3::new(0.0, 0.0, -1.0), 0.0, f32::INFINITY);
+        let rc = Raycaster::new(
+            Vector3::new(1.1, 0.3, 5.0),
+            Vector3::new(0.0, 0.0, -1.0),
+            0.0,
+            f32::INFINITY,
+        );
         let hits = rc.intersect_object(&arena, id, false);
         assert_eq!(hits.len(), 1, "relative {relative}");
         let h = &hits[0];
@@ -248,9 +265,15 @@ fn a_non_trs_matrix_survives_the_world_update() {
     let child = arena.insert(c);
     arena.add_child(parent, child);
     arena.update_world_matrices(parent, Matrix4::identity());
-    let want = [1.0, 0.0, 0.0, 0.0, 0.5, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 4.0, 2.0, 3.0, 1.0];
+    let want = [
+        1.0, 0.0, 0.0, 0.0, 0.5, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 4.0, 2.0, 3.0, 1.0,
+    ];
     assert_eq!(arena.get(child).unwrap().matrix_world.elements, want);
-    assert_eq!(arena.get(parent).unwrap().matrix.elements, shear.elements, "kept as written");
+    assert_eq!(
+        arena.get(parent).unwrap().matrix.elements,
+        shear.elements,
+        "kept as written"
+    );
 }
 
 /// three.js:
@@ -276,7 +299,10 @@ fn apply_matrix4_and_euler_orders_as_three() {
     assert!(close(o.position.y, 2.0) && close(o.position.z, 1.6503088746157744));
     let q = o.quaternion;
     assert!(close(q.x, 0.08142363703431536) && close(q.y, 0.4367804573531127));
-    assert!(close(q.z, 0.12311640186217204) && close(q.w, 0.8873755546548608), "{q:?}");
+    assert!(
+        close(q.z, 0.12311640186217204) && close(q.w, 0.8873755546548608),
+        "{q:?}"
+    );
     assert!(close(o.scale.x, 2.0) && close(o.scale.y, 1.0) && close(o.scale.z, 0.5));
     // The Euler view reads back in the object's order.
     assert_eq!(o.rotation_order, EulerOrder::ZYX);
@@ -293,10 +319,16 @@ fn look_at_turns_lights_and_meshes_as_three() {
     p.position = Vector3::new(1.0, 0.0, 0.0);
     p.set_rotation(Euler::new(0.3, 0.5, -0.2));
     let parent = arena.insert(p);
-    let mut m = Object3D::mesh(Mesh::new(BufferGeometry::new(), Material::Basic(BasicMaterial::default())));
+    let mut m = Object3D::mesh(Mesh::new(
+        BufferGeometry::new(),
+        Material::Basic(BasicMaterial::default()),
+    ));
     m.position = Vector3::new(0.0, 1.0, 2.0);
     let mesh = arena.insert(m);
-    let mut l = Object3D::light(threers::lights::DirectionalLight::new(threers::Color::WHITE, 1.0));
+    let mut l = Object3D::light(threers::lights::DirectionalLight::new(
+        threers::Color::WHITE,
+        1.0,
+    ));
     l.position = Vector3::new(0.0, 1.0, 2.0);
     let light = arena.insert(l);
     arena.add_child(parent, mesh);
@@ -317,11 +349,27 @@ fn look_at_turns_lights_and_meshes_as_three() {
     let qm = arena.get(mesh).unwrap().quaternion;
     let ql = arena.get(light).unwrap().quaternion;
     assert!(
-        close(qm, [0.1506021608553702, -0.05651240413073437, 0.05246456135049703, 0.9855824709923353]),
+        close(
+            qm,
+            [
+                0.1506021608553702,
+                -0.05651240413073437,
+                0.05246456135049703,
+                0.9855824709923353
+            ]
+        ),
         "{qm:?}"
     );
     assert!(
-        close(ql, [-0.052464561350497034, 0.9855824709923353, 0.15060216085537026, 0.05651240413073437]),
+        close(
+            ql,
+            [
+                -0.052464561350497034,
+                0.9855824709923353,
+                0.15060216085537026,
+                0.05651240413073437
+            ]
+        ),
         "{ql:?}"
     );
 }
@@ -357,8 +405,16 @@ fn raycaster_defaults_to_layer_zero() {
     o.layers.set(3);
     let id = arena.insert(o);
     arena.update_world_matrices(id, Matrix4::identity());
-    let mut rc = Raycaster::new(Vector3::new(0.2, 0.15, 5.0), Vector3::new(0.0, 0.0, -1.0), 0.0, f32::INFINITY);
-    assert!(rc.intersect_object(&arena, id, false).is_empty(), "layer 3 is not seen");
+    let mut rc = Raycaster::new(
+        Vector3::new(0.2, 0.15, 5.0),
+        Vector3::new(0.0, 0.0, -1.0),
+        0.0,
+        f32::INFINITY,
+    );
+    assert!(
+        rc.intersect_object(&arena, id, false).is_empty(),
+        "layer 3 is not seen"
+    );
     rc.layers.enable(3);
     assert_eq!(rc.intersect_object(&arena, id, false).len(), 1);
     if let ObjectKind::Mesh(m) = &arena.get(id).unwrap().kind {

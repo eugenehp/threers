@@ -103,6 +103,8 @@ pub fn supports_storage_buffers(device: &wgpu::Device) -> bool {
 /// count comes to this same fourteen rather than the eighteen the full group
 /// plus volumes would — and going over panics inside wgpu-hal rather than
 /// failing validation. See the custom env layout in `renderer`.
+/// A shader there that does read shadows or area lights takes the full
+/// environment without the volumes instead, which comes to exactly sixteen.
 pub const CUSTOM_LAYOUT_TEXTURES: u32 = 14;
 
 /// Whether a `ShaderMaterial`'s two volume slots (two 3D textures and a
@@ -147,14 +149,14 @@ mod tests {
             return;
         };
         let flags = adapter.get_downlevel_capabilities().flags;
-        let Ok((device, _queue)) = pollster::block_on(adapter.request_device(
-            &wgpu::DeviceDescriptor {
+        let Ok((device, _queue)) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
                 label: Some("caps test device"),
                 required_features: wgpu::Features::empty(),
                 required_limits: adapter.limits(),
                 ..Default::default()
-            },
-        )) else {
+            }))
+        else {
             eprintln!("skipping: no device");
             return;
         };
@@ -177,7 +179,8 @@ mod tests {
             ),
         ] {
             assert_eq!(
-                inferred, reported,
+                inferred,
+                reported,
                 "{name}: inferred {inferred} from the limits, but the adapter \
                  reports {reported} — the inference in this module no longer \
                  holds on this backend ({:?})",
@@ -232,7 +235,10 @@ mod tests {
     #[test]
     fn the_shader_modules_declare_no_storage_buffers() {
         for (name, source) in [
-            ("SHADER_SOURCE", crate::renderer::shader::legacy_shader_source()),
+            (
+                "SHADER_SOURCE",
+                crate::renderer::shader::legacy_shader_source(),
+            ),
             ("POSTFX_SHADER", crate::renderer::shader::postfx_shader()),
         ] {
             assert!(

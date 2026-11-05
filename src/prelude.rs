@@ -71,8 +71,8 @@ pub use crate::core::{
 };
 pub use crate::geometries::{
     BoxGeometry, CapsuleGeometry, CircleGeometry, ConeGeometry, CylinderGeometry, ExtrudeGeometry,
-    IcosahedronGeometry, LatheGeometry, PlaneGeometry, QuadGeometry, RingGeometry, SphereGeometry,
-    TorusGeometry, TorusKnotGeometry, TubeGeometry,
+    IcosahedronGeometry, LatheGeometry, MeshBuilder, MeshReport, PlaneGeometry, QuadGeometry,
+    RingGeometry, SphereGeometry, TorusGeometry, TorusKnotGeometry, TubeGeometry,
 };
 pub use crate::lights::{
     AmbientLight, DirectionalLight, HemisphereLight, Light, PointLight, RectAreaLight,
@@ -206,12 +206,12 @@ pub mod video {
     pub use crate::codec::decode::{Backend, DecodedFrame, Decoder, NativeDecoder};
     pub use crate::codec::hevc::Yuv420Frame;
     pub use crate::codec::hw::{EncodeBackend, EncodeOptions, Mp4Encoder};
+    #[cfg(feature = "gif")]
+    pub use crate::codec::GifEncoder;
     pub use crate::codec::{
         encode_animation_rgba, encode_webm, h264, hevc, mp4, mp4_demux, AnimationEncodeOptions,
         ApngEncoder, BrowserCodec,
     };
-    #[cfg(feature = "gif")]
-    pub use crate::codec::GifEncoder;
 }
 
 cfg_metal! {

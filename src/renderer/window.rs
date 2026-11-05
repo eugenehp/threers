@@ -144,7 +144,7 @@ struct MetalWindow {
 }
 
 impl WindowRenderer {
-#[cfg(not(any(target_os = "tvos", target_os = "visionos")))]
+    #[cfg(not(any(target_os = "tvos", target_os = "visionos")))]
     /// Open the GPU for `window` and size the drawing to it. Blocks while the
     /// device is acquired. Call on the thread running the event loop.
     ///
@@ -170,7 +170,12 @@ impl WindowRenderer {
             };
             if metal {
                 match MetalWindow::from_winit(&window, size) {
-                    Ok(m) => return Ok(Self { backend: Backend::Metal(Box::new(m)), size }),
+                    Ok(m) => {
+                        return Ok(Self {
+                            backend: Backend::Metal(Box::new(m)),
+                            size,
+                        })
+                    }
                     Err(e) if backend == WindowBackend::Metal => return Err(e),
                     Err(e) => super::headless_metal::warn_fallback(&format!("this window ({e})")),
                 }
@@ -178,10 +183,15 @@ impl WindowRenderer {
         }
         #[cfg(not(metal_backend))]
         if backend == WindowBackend::Metal {
-            return Err("the native Metal backend needs the `metal` feature on an Apple platform".into());
+            return Err(
+                "the native Metal backend needs the `metal` feature on an Apple platform".into(),
+            );
         }
         let w = pollster::block_on(WgpuWindow::new(window, size))?;
-        Ok(Self { backend: Backend::Wgpu(Box::new(w)), size })
+        Ok(Self {
+            backend: Backend::Wgpu(Box::new(w)),
+            size,
+        })
     }
 
     #[cfg(metal_backend)]
@@ -194,7 +204,11 @@ impl WindowRenderer {
     /// `ui_view` is a live `UIView` whose layer is a `CAMetalLayer`, alive as
     /// long as the renderer.
     #[cfg(any(target_os = "ios", target_os = "tvos", target_os = "visionos"))]
-    pub unsafe fn from_ui_view(ui_view: *mut std::ffi::c_void, width: u32, height: u32) -> Result<Self, String> {
+    pub unsafe fn from_ui_view(
+        ui_view: *mut std::ffi::c_void,
+        width: u32,
+        height: u32,
+    ) -> Result<Self, String> {
         Self::from_source(ViewSource::UiView(ui_view), (width, height))
     }
 
@@ -204,7 +218,11 @@ impl WindowRenderer {
     /// # Safety
     /// `ns_view` is a live `NSView`, alive as long as the renderer.
     #[cfg(target_os = "macos")]
-    pub unsafe fn from_ns_view(ns_view: *mut std::ffi::c_void, width: u32, height: u32) -> Result<Self, String> {
+    pub unsafe fn from_ns_view(
+        ns_view: *mut std::ffi::c_void,
+        width: u32,
+        height: u32,
+    ) -> Result<Self, String> {
         Self::from_source(ViewSource::NsView(ns_view), (width, height))
     }
 
@@ -214,7 +232,11 @@ impl WindowRenderer {
     ///
     /// # Safety
     /// `layer` is a live `CAMetalLayer`, alive as long as the renderer.
-    pub unsafe fn from_layer(layer: *mut std::ffi::c_void, width: u32, height: u32) -> Result<Self, String> {
+    pub unsafe fn from_layer(
+        layer: *mut std::ffi::c_void,
+        width: u32,
+        height: u32,
+    ) -> Result<Self, String> {
         Self::from_source(ViewSource::Layer(layer), (width, height))
     }
 
@@ -222,7 +244,10 @@ impl WindowRenderer {
     unsafe fn from_source(source: ViewSource, size: (u32, u32)) -> Result<Self, String> {
         let size = (size.0.max(1), size.1.max(1));
         let m = MetalWindow::new(source, size)?;
-        Ok(Self { backend: Backend::Metal(Box::new(m)), size })
+        Ok(Self {
+            backend: Backend::Metal(Box::new(m)),
+            size,
+        })
     }
 
     /// New drawable size in physical pixels (winit's `Resized`); no-op when
@@ -302,7 +327,9 @@ impl WindowRenderer {
             Backend::Wgpu(w) => w.render(scene, camera),
             #[cfg(metal_backend)]
             Backend::Metal(m) => {
-                let Some(frame) = m.surface.next_frame() else { return false };
+                let Some(frame) = m.surface.next_frame() else {
+                    return false;
+                };
                 match m.renderer.render(scene, camera, &frame.attachments()) {
                     Ok(_) => true,
                     Err(e) => {
@@ -384,8 +411,12 @@ impl WindowRenderer {
         match &mut self.backend {
             #[cfg(not(any(target_os = "tvos", target_os = "visionos")))]
             Backend::Wgpu(w) => {
-                let Some(frame) = w.acquire() else { return false };
-                let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
+                let Some(frame) = w.acquire() else {
+                    return false;
+                };
+                let view = frame
+                    .texture
+                    .create_view(&wgpu::TextureViewDescriptor::default());
                 w.renderer.render(scene, camera, &view, false);
                 let (msaa, depth, _) = w.renderer.overlay_attachments();
                 let mut f = MarksFrame {
@@ -401,7 +432,9 @@ impl WindowRenderer {
             }
             #[cfg(metal_backend)]
             Backend::Metal(m) => {
-                let Some(frame) = m.surface.next_frame() else { return false };
+                let Some(frame) = m.surface.next_frame() else {
+                    return false;
+                };
                 let pass = frame.attachments();
                 // Marks drawn over the frame load it: keep it whole, for this
                 // frame only — it costs bandwidth nothing else reads.
@@ -419,8 +452,15 @@ impl WindowRenderer {
                 };
                 // SAFETY: the frame's textures, alive until it is presented.
                 let target = unsafe { crate::marks::MarkTarget::from_metal_pass(&pass) };
-                let occluder = (target.samples == 1).then(|| target.depth.clone()).flatten();
-                let mut f = MarksFrame { gpu: m.marks.clone(), target, occluder, surface };
+                let occluder = (target.samples == 1)
+                    .then(|| target.depth.clone())
+                    .flatten();
+                let mut f = MarksFrame {
+                    gpu: m.marks.clone(),
+                    target,
+                    occluder,
+                    surface,
+                };
                 over(&mut f);
                 drop(f);
                 if let Err(e) = m.renderer.present(&pass) {
@@ -466,10 +506,16 @@ impl WindowRenderer {
     /// pass on [`marks_gpu`](Self::marks_gpu) to write in place;
     /// [`vertex_floats`](Self::vertex_floats) `f32` a vertex. As
     /// [`HeadlessRenderer::vertex_buffer`](crate::HeadlessRenderer::vertex_buffer).
-    pub fn vertex_buffer(&mut self, geometry: &std::sync::Arc<crate::core::BufferGeometry>) -> Option<crate::marks::gpu::Buffer> {
+    pub fn vertex_buffer(
+        &mut self,
+        geometry: &std::sync::Arc<crate::core::BufferGeometry>,
+    ) -> Option<crate::marks::gpu::Buffer> {
         match &mut self.backend {
             #[cfg(not(any(target_os = "tvos", target_os = "visionos")))]
-            Backend::Wgpu(w) => w.renderer.vertex_buffer(geometry).map(crate::marks::gpu::Buffer::from),
+            Backend::Wgpu(w) => w
+                .renderer
+                .vertex_buffer(geometry)
+                .map(crate::marks::gpu::Buffer::from),
             #[cfg(metal_backend)]
             Backend::Metal(m) => {
                 let (id, size) = m.renderer.vertex_buffer(geometry)?;
@@ -517,7 +563,9 @@ impl WgpuWindow {
         let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
         desc.backends = wgpu::Backends::PRIMARY;
         let instance = wgpu::Instance::new(desc);
-        let surface = instance.create_surface(window).map_err(|e| format!("surface: {e}"))?;
+        let surface = instance
+            .create_surface(window)
+            .map_err(|e| format!("surface: {e}"))?;
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::default(),
@@ -531,8 +579,10 @@ impl WgpuWindow {
         // downlevel limits allow, and allocates a 4096 shadow map; raise those
         // to what the adapter has, as `HeadlessRenderer` does.
         let adapter_limits = adapter.limits();
-        let mut limits = wgpu::Limits::downlevel_defaults().using_resolution(adapter_limits.clone());
-        limits.max_sampled_textures_per_shader_stage = adapter_limits.max_sampled_textures_per_shader_stage;
+        let mut limits =
+            wgpu::Limits::downlevel_defaults().using_resolution(adapter_limits.clone());
+        limits.max_sampled_textures_per_shader_stage =
+            adapter_limits.max_sampled_textures_per_shader_stage;
         limits.max_samplers_per_shader_stage = adapter_limits.max_samplers_per_shader_stage;
         // One vertex buffer a mesh; the default cap of 256 MiB is below what a
         // large mesh needs and well below what the adapter allows.
@@ -548,7 +598,12 @@ impl WgpuWindow {
             .map_err(|e| format!("request_device: {e}"))?;
         let (device, queue) = (Arc::new(device), Arc::new(queue));
         let caps = surface.get_capabilities(&adapter);
-        let format = caps.formats.iter().copied().find(|f| f.is_srgb()).unwrap_or(caps.formats[0]);
+        let format = caps
+            .formats
+            .iter()
+            .copied()
+            .find(|f| f.is_srgb())
+            .unwrap_or(caps.formats[0]);
         let srgb_format = format.add_srgb_suffix();
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -557,18 +612,31 @@ impl WgpuWindow {
             height: size.1,
             present_mode: wgpu::PresentMode::Fifo,
             alpha_mode: caps.alpha_modes[0],
-            view_formats: if srgb_format == format { vec![] } else { vec![srgb_format] },
+            view_formats: if srgb_format == format {
+                vec![]
+            } else {
+                vec![srgb_format]
+            },
             desired_maximum_frame_latency: 2,
             color_space: wgpu::SurfaceColorSpace::Srgb,
         };
         surface.configure(&device, &config);
         let marks = crate::marks::gpu::Gpu::from((&*device, &*queue));
         let renderer = Renderer::new(device.clone(), queue, format, size.0, size.1);
-        Ok(Self { marks, surface, config, srgb_format, device, renderer })
+        Ok(Self {
+            marks,
+            surface,
+            config,
+            srgb_format,
+            device,
+            renderer,
+        })
     }
 
     fn render(&mut self, scene: &mut Scene, camera: &dyn Camera) -> bool {
-        let Some(frame) = self.acquire() else { return false };
+        let Some(frame) = self.acquire() else {
+            return false;
+        };
         self.draw(scene, camera, frame)
     }
 
@@ -579,8 +647,12 @@ impl WgpuWindow {
         quad: Option<&mut QuadView>,
         overlay: Option<&mut Overlay>,
     ) -> bool {
-        let Some(frame) = self.acquire() else { return false };
-        let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let Some(frame) = self.acquire() else {
+            return false;
+        };
+        let view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
         match quad {
             Some(quad) => quad.render(
                 &mut crate::helpers::ViewSurface {
@@ -600,8 +672,11 @@ impl WgpuWindow {
                     ..Default::default()
                 })
             });
-            self.renderer
-                .draw_overlay(overlay, srgb_view.as_ref().unwrap_or(&view), self.srgb_format);
+            self.renderer.draw_overlay(
+                overlay,
+                srgb_view.as_ref().unwrap_or(&view),
+                self.srgb_format,
+            );
         }
         self.renderer.queue_arc().present(frame);
         true
@@ -631,8 +706,15 @@ impl WgpuWindow {
         }
     }
 
-    fn draw(&mut self, scene: &mut Scene, camera: &dyn Camera, frame: wgpu::SurfaceTexture) -> bool {
-        let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
+    fn draw(
+        &mut self,
+        scene: &mut Scene,
+        camera: &dyn Camera,
+        frame: wgpu::SurfaceTexture,
+    ) -> bool {
+        let view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
         self.renderer.render(scene, camera, &view, false);
         self.renderer.queue_arc().present(frame);
         true
@@ -659,11 +741,24 @@ impl MetalWindow {
 
     unsafe fn new(source: ViewSource, size: (u32, u32)) -> Result<Self, String> {
         let device = crate::metal::MetalDevice::new().map_err(|e| e.to_string())?;
-        let renderer = crate::metal::MetalRenderer::with_device(device.clone()).map_err(|e| e.to_string())?;
+        let renderer =
+            crate::metal::MetalRenderer::with_device(device.clone()).map_err(|e| e.to_string())?;
         let marks = crate::marks::gpu::Gpu::from(&device);
-        let surface = source.surface(&device, size, 4).map_err(|e| e.to_string())?;
-        eprintln!("threers: drawing the window on the native Metal backend ({})", device.name());
-        Ok(Self { device, marks, source, sample_count: 4, surface, renderer })
+        let surface = source
+            .surface(&device, size, 4)
+            .map_err(|e| e.to_string())?;
+        eprintln!(
+            "threers: drawing the window on the native Metal backend ({})",
+            device.name()
+        );
+        Ok(Self {
+            device,
+            marks,
+            source,
+            sample_count: 4,
+            surface,
+            renderer,
+        })
     }
 
     fn render_frame(
@@ -673,18 +768,25 @@ impl MetalWindow {
         quad: Option<&mut QuadView>,
         overlay: Option<&mut Overlay>,
     ) -> bool {
-        let Some(frame) = self.surface.next_frame() else { return false };
+        let Some(frame) = self.surface.next_frame() else {
+            return false;
+        };
         let pass = frame.attachments();
         // Drawn without the drawable, so nothing reaches the screen until the
         // overlay is over it; whichever goes last presents.
         let drawn = match quad {
             Some(quad) => {
-                let mut target =
-                    crate::helpers::MetalViewSurface::new(&mut self.renderer, pass.without_drawable());
+                let mut target = crate::helpers::MetalViewSurface::new(
+                    &mut self.renderer,
+                    pass.without_drawable(),
+                );
                 quad.render(&mut target, scene, camera);
                 true
             }
-            None => match self.renderer.render(scene, camera, &pass.without_drawable()) {
+            None => match self
+                .renderer
+                .render(scene, camera, &pass.without_drawable())
+            {
                 Ok(_) => true,
                 Err(e) => {
                     log::error!("Metal render: {e}");

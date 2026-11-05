@@ -996,7 +996,11 @@ mod tests {
         let paths = parse_svg_subpaths("M9 14V3.6a2.5 2.5 0 0 1 5 0V12.2").unwrap();
         let curves = &paths[0].curve_path.curves;
         assert_eq!(curves.len(), 3);
-        assert!(close(curves[2].get_point(0.0), v(14.0, 3.6)), "{:?}", curves[2].get_point(0.0));
+        assert!(
+            close(curves[2].get_point(0.0), v(14.0, 3.6)),
+            "{:?}",
+            curves[2].get_point(0.0)
+        );
         assert!(close(curves[2].get_point(1.0), v(14.0, 12.2)));
         let joined = Path::from_svg_path_data("M0 0 A5 5 0 0 1 10 0 L10 10").unwrap();
         assert!(close(joined.curve_path.get_point(1.0), v(10.0, 10.0)));

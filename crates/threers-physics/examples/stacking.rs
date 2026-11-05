@@ -21,12 +21,14 @@ fn main() {
         for i in 0..count {
             let x = (i as f32 - (count - 1) as f32 * 0.5) * (half * 2.05);
             let y = half + row as f32 * half * 2.0;
-            boxes.push(world.add_body(
-                RigidBody::dynamic()
-                    .shape(Shape::cuboid(half, half, half))
-                    .translation(Vector3::new(x, y, 0.0))
-                    .friction(0.9),
-            ));
+            boxes.push(
+                world.add_body(
+                    RigidBody::dynamic()
+                        .shape(Shape::cuboid(half, half, half))
+                        .translation(Vector3::new(x, y, 0.0))
+                        .friction(0.9),
+                ),
+            );
         }
     }
     println!("built a pyramid of {} boxes", boxes.len());

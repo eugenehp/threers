@@ -32,7 +32,6 @@
 
 use threers::marks::gpu;
 
-
 use crate::fft::{butterfly_table, log2_exact};
 use crate::preset::Preset;
 use crate::spectrum::G;

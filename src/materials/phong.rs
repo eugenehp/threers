@@ -1,7 +1,7 @@
+use crate::math::Color;
 use crate::math::Vector2;
 use crate::textures::Texture;
 use std::sync::Arc;
-use crate::math::Color;
 
 /// Diffuse + Blinn-Phong specular + emissive. Matches three.js's `MeshPhongMaterial`.
 #[derive(Debug, Clone)]

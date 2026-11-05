@@ -152,7 +152,12 @@ pub enum CurveDef {
     /// `QuadraticBezierCurve3`.
     QuadraticBezier3 { v0: Vec3d, v1: Vec3d, v2: Vec3d },
     /// `CubicBezierCurve3`.
-    CubicBezier3 { v0: Vec3d, v1: Vec3d, v2: Vec3d, v3: Vec3d },
+    CubicBezier3 {
+        v0: Vec3d,
+        v1: Vec3d,
+        v2: Vec3d,
+        v3: Vec3d,
+    },
     /// `CatmullRomCurve3`.
     CatmullRom3 {
         points: Vec<Vec3d>,
@@ -161,7 +166,10 @@ pub enum CurveDef {
         tension: f64,
     },
     /// `CurvePath`: its curves, in order, and `autoClose`.
-    Path { curves: Vec<Rc<ThreeCurve>>, auto_close: bool },
+    Path {
+        curves: Vec<Rc<ThreeCurve>>,
+        auto_close: bool,
+    },
     /// A `Curve` subclass whose `getPoint` is a callback.
     Custom(CustomCurve),
 }
@@ -303,7 +311,11 @@ fn catmull_rom3(points: &[Vec3d], closed: bool, ty: CatmullRomType, tension: f64
     let mut out = [0.0; 3];
     match ty {
         CatmullRomType::Centripetal | CatmullRomType::Chordal => {
-            let pow = if ty == CatmullRomType::Chordal { 0.5 } else { 0.25 };
+            let pow = if ty == CatmullRomType::Chordal {
+                0.5
+            } else {
+                0.25
+            };
             let mut dt0 = distance_sq(p0, p1).powf(pow);
             let mut dt1 = distance_sq(p1, p2).powf(pow);
             let mut dt2 = distance_sq(p2, p3).powf(pow);
@@ -565,7 +577,13 @@ impl ThreeCurve {
     }
 
     fn auto_close(&self) -> bool {
-        matches!(&*self.def.borrow(), CurveDef::Path { auto_close: true, .. })
+        matches!(
+            &*self.def.borrow(),
+            CurveDef::Path {
+                auto_close: true,
+                ..
+            }
+        )
     }
 
     /// `getLength()`.
@@ -789,7 +807,9 @@ impl ThreeCurve {
     /// `CurvePath.closePath()`: a line from the end back to the start, when
     /// they differ. No-op on anything but a non-empty path.
     pub fn close_path(&self) {
-        let Some(curves) = self.children() else { return };
+        let Some(curves) = self.children() else {
+            return;
+        };
         let (Some(first), Some(last)) = (curves.first(), curves.last()) else {
             return;
         };
@@ -845,7 +865,10 @@ mod tests {
             ];
             let c = ThreeCurve::catmull_rom3(pts.clone(), false, ty, 0.5);
             for (i, p) in pts.iter().enumerate() {
-                assert!(close(c.get_point(i as f64 / 3.0).unwrap(), *p), "{ty:?} {i}");
+                assert!(
+                    close(c.get_point(i as f64 / 3.0).unwrap(), *p),
+                    "{ty:?} {i}"
+                );
             }
         }
     }

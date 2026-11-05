@@ -107,7 +107,9 @@ pub enum TransformKind {
 /// rows *are* the 16-point rows (the HEVC matrices nest exactly), and the odd
 /// rows are this vector re-indexed and sign-flipped. Sixteen numbers to get
 /// right instead of a thousand and twenty-four.
-const G32: [i32; 16] = [90, 90, 88, 85, 82, 78, 73, 67, 61, 54, 46, 38, 31, 22, 13, 4];
+const G32: [i32; 16] = [
+    90, 90, 88, 85, 82, 78, 73, 67, 61, 54, 46, 38, 31, 22, 13, 4,
+];
 
 /// The 32-point DCT, constructed rather than transcribed. See `G32`.
 pub const DCT32: [[i32; 32]; 32] = build_dct32();
@@ -146,38 +148,10 @@ const fn build_dct32() -> [[i32; 32]; 32] {
 }
 
 const DCT32_ROWS: &[&[i32]] = &[
-    &DCT32[0],
-    &DCT32[1],
-    &DCT32[2],
-    &DCT32[3],
-    &DCT32[4],
-    &DCT32[5],
-    &DCT32[6],
-    &DCT32[7],
-    &DCT32[8],
-    &DCT32[9],
-    &DCT32[10],
-    &DCT32[11],
-    &DCT32[12],
-    &DCT32[13],
-    &DCT32[14],
-    &DCT32[15],
-    &DCT32[16],
-    &DCT32[17],
-    &DCT32[18],
-    &DCT32[19],
-    &DCT32[20],
-    &DCT32[21],
-    &DCT32[22],
-    &DCT32[23],
-    &DCT32[24],
-    &DCT32[25],
-    &DCT32[26],
-    &DCT32[27],
-    &DCT32[28],
-    &DCT32[29],
-    &DCT32[30],
-    &DCT32[31],
+    &DCT32[0], &DCT32[1], &DCT32[2], &DCT32[3], &DCT32[4], &DCT32[5], &DCT32[6], &DCT32[7],
+    &DCT32[8], &DCT32[9], &DCT32[10], &DCT32[11], &DCT32[12], &DCT32[13], &DCT32[14], &DCT32[15],
+    &DCT32[16], &DCT32[17], &DCT32[18], &DCT32[19], &DCT32[20], &DCT32[21], &DCT32[22], &DCT32[23],
+    &DCT32[24], &DCT32[25], &DCT32[26], &DCT32[27], &DCT32[28], &DCT32[29], &DCT32[30], &DCT32[31],
 ];
 
 fn matrix(size: usize, kind: TransformKind) -> &'static [&'static [i32]] {
@@ -371,7 +345,6 @@ pub fn inverse_into(coeff: &[i32], out: &mut [i32], n: usize, kind: TransformKin
 mod tests {
     use super::*;
 
-
     /// Rebuild an `n`-point matrix from the `n/2`-point one plus its own first
     /// odd row, the same construction [`build_dct32`] uses.
     fn construct(n: usize, prev: &[&[i32]], g: &[i32]) -> Vec<Vec<i32>> {
@@ -409,7 +382,11 @@ mod tests {
     fn the_matrix_generator_reproduces_the_known_tables() {
         let d4: Vec<&[i32]> = DCT4.iter().map(|r| &r[..]).collect();
         let g8: Vec<i32> = DCT8[1][..4].to_vec();
-        assert_eq!(construct(8, &d4, &g8), rows_of(&DCT8), "8-point from 4-point");
+        assert_eq!(
+            construct(8, &d4, &g8),
+            rows_of(&DCT8),
+            "8-point from 4-point"
+        );
 
         let d8: Vec<&[i32]> = DCT8.iter().map(|r| &r[..]).collect();
         let g16: Vec<i32> = DCT16[1][..8].to_vec();

@@ -107,7 +107,11 @@ impl GpuContext {
     /// that use something when it is there and do without when it is not
     /// (`FLOAT32_BLENDABLE` for 32-bit float blending, say); check
     /// `device.features()` for what was granted.
-    pub async fn open_with_optional_features(instance: wgpu::Instance, adapter: wgpu::Adapter, optional: wgpu::Features) -> Result<Self, String> {
+    pub async fn open_with_optional_features(
+        instance: wgpu::Instance,
+        adapter: wgpu::Adapter,
+        optional: wgpu::Features,
+    ) -> Result<Self, String> {
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("threers device"),
@@ -152,7 +156,12 @@ impl GpuContext {
     /// surface. Nothing here retains it: the view owns its layer and will
     /// free it when it goes, and a surface pointing at a freed layer is the
     /// one mistake this cannot check for.
-    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos", target_os = "visionos"))]
+    #[cfg(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "tvos",
+        target_os = "visionos"
+    ))]
     pub async unsafe fn from_metal_layer(
         layer: *mut std::ffi::c_void,
     ) -> Result<(Self, wgpu::Surface<'static>), String> {
@@ -182,12 +191,18 @@ impl GpuContext {
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("threers device (WebGL2 limits)"),
                 required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits()),
+                required_limits: wgpu::Limits::downlevel_webgl2_defaults()
+                    .using_resolution(adapter.limits()),
                 ..Default::default()
             })
             .await
             .map_err(|e| format!("no device: {e}"))?;
-        Ok(Self { instance, adapter, device: Arc::new(device), queue: Arc::new(queue) })
+        Ok(Self {
+            instance,
+            adapter,
+            device: Arc::new(device),
+            queue: Arc::new(queue),
+        })
     }
 
     /// [`GpuContext::headless`], run to completion. **Native only** — a

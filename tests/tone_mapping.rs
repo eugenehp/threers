@@ -196,7 +196,11 @@ fn the_cpu_curves_are_three_js_curves() {
     for (mode, name) in MODES {
         for exposure in [1.0f32, 0.6] {
             for c in samples {
-                let exposed = if mode == ToneMapping::None { c } else { c.map(|x| x * exposure) };
+                let exposed = if mode == ToneMapping::None {
+                    c
+                } else {
+                    c.map(|x| x * exposure)
+                };
                 let got = mode.apply(exposed);
                 let want = truth::three_tone_map(mode, exposure as f64, c.map(|x| x as f64));
                 for k in 0..3 {
@@ -371,7 +375,9 @@ fn depth_of_field_blurs_the_far_plane_and_not_the_near_one() {
     // differences, which counts sampling noise as detail and went *up* when the
     // first version of the gather was undersampled.
     let soft = |px: &[u8]| -> u32 {
-        px.chunks_exact(4).filter(|p| (24..232).contains(&p[0])).count() as u32
+        px.chunks_exact(4)
+            .filter(|p| (24..232).contains(&p[0]))
+            .count() as u32
     };
 
     // Six units behind the focus plane: fully defocused.
@@ -497,6 +503,13 @@ fn every_material_tone_maps_as_three_js_does() {
         &mut |mode, exposure| r.borrow_mut().renderer().set_tone_mapping(mode, exposure),
         &mut |scene, cam| r.borrow_mut().render_to_rgba(scene, cam),
     );
-    r.borrow_mut().renderer().set_tone_mapping(ToneMapping::None, 1.0);
-    assert!(failures.is_empty(), "{} failures:\n{}", failures.len(), failures.join("\n"));
+    r.borrow_mut()
+        .renderer()
+        .set_tone_mapping(ToneMapping::None, 1.0);
+    assert!(
+        failures.is_empty(),
+        "{} failures:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
 }

@@ -215,7 +215,8 @@ pub(crate) fn msdf(contours: &[Vec<Vec<P>>], spread: i32, grow: f32) -> Option<F
     if w > 4096 || h > 4096 {
         return None;
     }
-    let encode = |d: f32| ((0.5 - (d - grow) / (2.0 * spread as f32)).clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+    let encode =
+        |d: f32| ((0.5 - (d - grow) / (2.0 * spread as f32)).clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
     let mut texels = Vec::with_capacity((w * h) as usize);
     for j in 0..h {
         for i in 0..w {
@@ -354,7 +355,10 @@ mod tests {
             vec![[0.0, 20.0], [0.0, 0.0]],
         ]];
         let spread = 4;
-        let (plain, grown) = (msdf(&sq, spread, 0.0).unwrap(), msdf(&sq, spread, 1.5).unwrap());
+        let (plain, grown) = (
+            msdf(&sq, spread, 0.0).unwrap(),
+            msdf(&sq, spread, 1.5).unwrap(),
+        );
         assert_eq!(grown.width, plain.width + 4);
         assert_eq!(grown.offset_x, plain.offset_x - 2);
         let at = |f: &Field, x: f32, y: f32| {
@@ -366,7 +370,10 @@ mod tests {
         for (x, y) in [(21.5, 10.5), (18.5, 10.5), (22.5, 22.5)] {
             let (p, g) = (at(&plain, x, y), at(&grown, x, y));
             let m = |t: [u8; 4]| median(decode(t[0], s), decode(t[1], s), decode(t[2], s));
-            assert!((decode(g[3], s) - (decode(p[3], s) - 1.5)).abs() < 0.05, "true at {x},{y}");
+            assert!(
+                (decode(g[3], s) - (decode(p[3], s) - 1.5)).abs() < 0.05,
+                "true at {x},{y}"
+            );
             assert!((m(g) - (m(p) - 1.5)).abs() < 0.05, "median at {x},{y}");
         }
         // A pixel past the old edge is inside the grown one.

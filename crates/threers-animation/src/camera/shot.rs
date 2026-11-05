@@ -228,10 +228,7 @@ mod tests {
         let b = CameraPose::new(Vector3::ZERO, 0.0, 1.2, 1.0);
         let mut tl = ShotTimeline::new();
         tl.push(Shot::hold("a", a, 1.0));
-        tl.push(
-            Shot::hold("b", b, 1.0)
-                .with_transition(ShotTransition::ease(0.5, Easing::Linear)),
-        );
+        tl.push(Shot::hold("b", b, 1.0).with_transition(ShotTransition::ease(0.5, Easing::Linear)));
         tl.seek(1.25); // halfway through blend
         let r = tl.pose().radius;
         assert!(r > 1.0 && r < 5.0, "expected blend, got {r}");

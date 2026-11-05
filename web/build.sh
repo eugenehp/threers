@@ -9,7 +9,7 @@ set -euo pipefail
 # Variants (browser download sizes):
 #   VARIANT=mini  — core renderer only (`--no-default-features`); smallest wasm
 #   VARIANT=full  — `--features wasm-full` (openscad, codecs, nurbs, planet, raytrace, fluid)
-#   (unset)       — opt-in via MESH_BVH / BVH_CSG / OPENSCAD / NATIVE_CODEC / FLUID / … flags
+#   (unset)       — opt-in via MESH_BVH / BVH_CSG / OPENSCAD / NATIVE_CODEC / NATIVE_DECODE / FLUID / … flags
 #
 # Tools: wasm-bindgen (required), wasm-opt (used by default; taken from PATH or
 # fetched pinned through npx), brotli and gzip (used if present, to write
@@ -22,6 +22,17 @@ set -euo pipefail
 #                   translator, which is most of that — so a WebGPU-only
 #                   deployment should not pay it, and mini in particular exists
 #                   to be small.
+#
+#   THREADS=1     — threads in the browser: frames, tiles and loop filters of
+#                   `decodeVideo` run in parallel. Off by default: it needs a
+#                   nightly toolchain, `initThreadPool(n)` called once, blocking
+#                   calls made from a Worker, and a page served with COOP and
+#                   COEP headers.
+#
+#   SIMD=1        — compiles with wasm SIMD (`-C target-feature=+simd128`), so
+#                   LLVM can auto-vectorise. Off by default: a module with any
+#                   SIMD instruction fails to load on engines without it (Safari
+#                   before 16.4), and there is no in-module feature detection.
 #
 # Output always lands in web/pkg/ (and regenerated features.js). The npm package
 # stages mini + full under crates/threers-js/dist/{mini,full}/.
@@ -64,7 +75,7 @@ if [ "$VARIANT" = "mini" ]; then
     echo "==> Variant: mini (core renderer, --no-default-features)"
     NO_DEFAULT_FEATURES="--no-default-features"
     # Clear additive feature envs so a leftover OPENSCAD=1 cannot inflate mini.
-    unset MESH_BVH BVH_CSG NATIVE_CODEC OPENSCAD NURBS BREP BREP_CSG BREP_KERNEL STEP RLX RLX_GEO FLUID || true
+    unset MESH_BVH BVH_CSG NATIVE_CODEC NATIVE_DECODE OPENSCAD NURBS BREP BREP_CSG BREP_KERNEL STEP RLX RLX_GEO FLUID || true
 elif [ "$VARIANT" = "full" ]; then
     echo "==> Variant: full (Cargo feature wasm-full)"
     FEATURE_LIST+=("wasm-full")
@@ -92,6 +103,36 @@ if [ "${WEBGL:-}" = "1" ]; then
     echo "    (webgl feature enabled — WebGL2 fallback for browsers without WebGPU)"
 fi
 
+# Wasm SIMD, composable with any variant: SIMD=1 VARIANT=full ./web/build.sh
+#
+# A target feature, not a Cargo feature: it changes codegen for every crate, so
+# it goes through RUSTFLAGS (appended, so a caller's flags survive). Changing
+# RUSTFLAGS invalidates cargo's cache, so switching this rebuilds everything.
+WASM_OPT_SIMD=""
+if [ "${SIMD:-}" = "1" ]; then
+    export RUSTFLAGS="${RUSTFLAGS:-} -C target-feature=+simd128"
+    WASM_OPT_SIMD="--enable-simd"
+    echo "    (simd128 enabled — needs Chrome 91+, Firefox 89+, Safari 16.4+)"
+fi
+
+# Threads, composable like SIMD: THREADS=1 SIMD=1 NATIVE_DECODE=1 ./web/build.sh
+#
+# Rust's prebuilt wasm std has no atomics, so this rebuilds std on a pinned
+# nightly. The linker flags are not optional: without them rustc emits an
+# unshared memory, and workers fail with "Memory could not be cloned".
+CARGO_CMD="cargo"
+BUILD_STD=""
+WASM_OPT_THREADS=""
+if [ "${THREADS:-}" = "1" ]; then
+    THREADS_TOOLCHAIN="${THREADS_TOOLCHAIN:-nightly-2026-10-30}"
+    FEATURE_LIST+=("wasm-threads")
+    export RUSTFLAGS="${RUSTFLAGS:-} -C target-feature=+atomics,+bulk-memory -C link-arg=--shared-memory -C link-arg=--max-memory=1073741824 -C link-arg=--import-memory -C link-arg=--export=__wasm_init_tls -C link-arg=--export=__tls_size -C link-arg=--export=__tls_align -C link-arg=--export=__tls_base"
+    CARGO_CMD="cargo +$THREADS_TOOLCHAIN"
+    BUILD_STD="-Z build-std=panic_abort,std"
+    WASM_OPT_THREADS="--enable-threads"
+    echo "    (threads enabled — call initThreadPool(n), decode in a Worker, serve with COOP/COEP)"
+fi
+
 echo "==> Building threers ($PROFILE) for wasm32-unknown-unknown..."
 if [ -z "$VARIANT" ]; then
     if [ "${BVH_CSG:-}" = "1" ]; then
@@ -108,6 +149,10 @@ if [ -z "$VARIANT" ]; then
     if [ "${NATIVE_CODEC:-}" = "1" ]; then
         FEATURE_LIST+=("native-codec")
         echo "    (native-codec feature enabled — GIF/APNG/WebM/MP4 browser export)"
+    fi
+    if [ "${NATIVE_DECODE:-}" = "1" ]; then
+        FEATURE_LIST+=("native-decode")
+        echo "    (native-decode feature enabled — decodeVideo(): H.264/HEVC/VP9/AV1 to RGBA)"
     fi
     if [ "${OPENSCAD:-}" = "1" ]; then
         FEATURE_LIST+=("openscad")
@@ -147,7 +192,7 @@ if [ "${#FEATURE_LIST[@]}" -gt 0 ]; then
 fi
 
 # shellcheck disable=SC2086
-cargo build --target wasm32-unknown-unknown --lib $PROFILE_FLAG $NO_DEFAULT_FEATURES $FEATURES
+$CARGO_CMD build --target wasm32-unknown-unknown --lib $PROFILE_FLAG $NO_DEFAULT_FEATURES $FEATURES $BUILD_STD
 
 echo "==> Generating JS bindings into web/pkg..."
 wasm-bindgen \
@@ -196,7 +241,7 @@ if [ "${WASM_OPT:-1}" != "0" ]; then
         $WASM_OPT_BIN \
             --enable-bulk-memory --enable-bulk-memory-opt --enable-reference-types \
             --enable-nontrapping-float-to-int --enable-sign-ext --enable-mutable-globals \
-            --enable-multivalue -Oz \
+            --enable-multivalue $WASM_OPT_SIMD $WASM_OPT_THREADS -Oz \
             -o web/pkg/threers_bg.wasm.opt web/pkg/threers_bg.wasm
         mv web/pkg/threers_bg.wasm.opt web/pkg/threers_bg.wasm
         after=$(wc -c < web/pkg/threers_bg.wasm | tr -d ' ')

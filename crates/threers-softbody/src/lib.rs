@@ -39,4 +39,7 @@ pub use skin::carry;
 #[doc = include_str!("../README.md")]
 struct ReadmeDoctests;
 
-pub use sim::{Block, Chains, Event, Grab, Hit, Landmarks, Limb, Measure, Muscles, Params, Profile, Pulse, SoftBody, Topo, MAX_DROPS};
+pub use sim::{
+    Block, Chains, Event, Grab, Hit, Landmarks, Limb, Measure, Muscles, Params, Profile, Pulse,
+    SoftBody, Topo, MAX_DROPS,
+};

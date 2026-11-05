@@ -24,7 +24,11 @@ impl VideoReader {
         if data.starts_with(&[0x1A, 0x45, 0xDF, 0xA3]) {
             // Matroska / WebM: the packets are copied out back to back.
             let (mov, track, packets) = super::mkv::parse(&data)?;
-            return Ok(Self { data: packets, mov, track });
+            return Ok(Self {
+                data: packets,
+                mov,
+                track,
+            });
         }
         let mov = mov::parse(&data)?;
         let track = demux_video(&data)?;
@@ -52,12 +56,17 @@ impl VideoReader {
     /// Whether [`decode_rgb`](Self::decode_rgb) of `wanted` starts after the
     /// stream start (diagnostics / tests).
     pub fn seeks_for(&self, wanted: &BTreeSet<usize>) -> bool {
-        let need: BTreeMap<usize, usize> = wanted.iter().filter_map(|&i| self.mov.sample.get(i).map(|&s| (s, i))).collect();
+        let need: BTreeMap<usize, usize> = wanted
+            .iter()
+            .filter_map(|&i| self.mov.sample.get(i).map(|&s| (s, i)))
+            .collect();
         self.seek_start(self.mov.decode_range.0, &need) > self.mov.decode_range.0
     }
 
     fn seek_start(&self, from: usize, need: &BTreeMap<usize, usize>) -> usize {
-        let Some(&first) = need.keys().next() else { return from };
+        let Some(&first) = need.keys().next() else {
+            return from;
+        };
         let mut last = None;
         let mut prev = None;
         for si in (from..=first.min(self.track.samples.len().saturating_sub(1))).rev() {
@@ -87,11 +96,16 @@ impl VideoReader {
         wanted: &BTreeSet<usize>,
         mut f: impl FnMut(usize, &[u8]) -> Result<(), String>,
     ) -> Result<(), String> {
-        let Some(&last) = wanted.iter().next_back() else { return Ok(()) };
+        let Some(&last) = wanted.iter().next_back() else {
+            return Ok(());
+        };
         // Decode-order position of every output frame we need.
         let mut need: BTreeMap<usize, usize> = BTreeMap::new(); // sample -> frame index
         for &i in wanted {
-            need.insert(*self.mov.sample.get(i).ok_or("frame index out of range")?, i);
+            need.insert(
+                *self.mov.sample.get(i).ok_or("frame index out of range")?,
+                i,
+            );
         }
         let last_sample = (0..=last).map(|i| self.mov.sample[i]).max().unwrap_or(0);
         let mut dec = NativeDecoder::new(&self.track)?;
@@ -122,7 +136,9 @@ impl VideoReader {
                     frame.width, frame.height, self.track.width, self.track.height
                 ));
             }
-            if frame.chroma == ChromaFormat::Monochrome && self.mov.orientation == mov::Orientation::Identity {
+            if frame.chroma == ChromaFormat::Monochrome
+                && self.mov.orientation == mov::Orientation::Identity
+            {
                 // swscale's gray -> rgb24: R = G = B = Y, high bit depths
                 // rounded down to 8 bits (measured: 10-bit is (y + 2) >> 2).
                 let sh = frame.bit_depth as u32 - 8;
@@ -140,10 +156,16 @@ impl VideoReader {
                 }
                 continue;
             }
-            if frame.color.vui_matrix == Some(0) && frame.chroma == ChromaFormat::Yuv444 && self.mov.orientation == mov::Orientation::Identity {
+            if frame.color.vui_matrix == Some(0)
+                && frame.chroma == ChromaFormat::Yuv444
+                && self.mov.orientation == mov::Orientation::Identity
+            {
                 // Planar G, B, R (VP9 RGB): swscale's gbrp -> rgb24 is a copy.
                 if frame.bit_depth != 8 {
-                    return Err(format!("{}-bit RGB to rgb24 is not supported yet", frame.bit_depth));
+                    return Err(format!(
+                        "{}-bit RGB to rgb24 is not supported yet",
+                        frame.bit_depth
+                    ));
                 }
                 let n = frame.width as usize * frame.height as usize;
                 let mut rgb = vec![0u8; 3 * n];
@@ -165,25 +187,48 @@ impl VideoReader {
                 ChromaFormat::Yuv422 => (1, 0),
                 ChromaFormat::Yuv444 => (0, 0),
                 ChromaFormat::Yuv440 => (0, 1),
-                ChromaFormat::Monochrome => return Err("monochrome to rgb24 is not supported yet".into()),
+                ChromaFormat::Monochrome => {
+                    return Err("monochrome to rgb24 is not supported yet".into())
+                }
             };
             let (w, h) = (frame.width as usize, frame.height as usize);
-            let c = conv.get_or_insert_with(|| Yuv2Rgb::new(frame.color.vui_matrix.unwrap_or(2), frame.color.full_range));
-            let (cw, ch) = ((w + (1 << log2_cw) - 1) >> log2_cw, (h + (1 << log2_ch) - 1) >> log2_ch);
+            let c = conv.get_or_insert_with(|| {
+                Yuv2Rgb::new(frame.color.vui_matrix.unwrap_or(2), frame.color.full_range)
+            });
+            let (cw, ch) = (
+                (w + (1 << log2_cw) - 1) >> log2_cw,
+                (h + (1 << log2_ch) - 1) >> log2_ch,
+            );
             let o = self.mov.orientation;
             let transposed = matches!(o, mov::Orientation::Transpose(_));
             if (transposed || matches!(o, mov::Orientation::Arbitrary(_))) && log2_cw != log2_ch {
-                return Err(format!("{:?} with rotation is not supported yet", frame.chroma));
+                return Err(format!(
+                    "{:?} with rotation is not supported yet",
+                    frame.chroma
+                ));
             }
             let (ow, oh) = if transposed { (h, w) } else { (w, h) };
             // swscale's special converter: 8-bit 4:2:0 / 4:2:2, even height.
             let fast = frame.bit_depth == 8 && log2_cw == 1 && oh % 2 == 0;
             if !fast {
                 if matches!(o, mov::Orientation::Arbitrary(_)) {
-                    return Err(format!("{}-bit {:?} with an arbitrary rotation is not supported yet", frame.bit_depth, frame.chroma));
+                    return Err(format!(
+                        "{}-bit {:?} with an arbitrary rotation is not supported yet",
+                        frame.bit_depth, frame.chroma
+                    ));
                 }
-                let (y, u, v) = (orient(&frame.y, w, h, o), orient(&frame.u, cw, ch, o), orient(&frame.v, cw, ch, o));
-                let fmt = super::sws_generic::SrcFormat { w: ow, h: oh, log2_cw, log2_ch, bit_depth: frame.bit_depth as u32 };
+                let (y, u, v) = (
+                    orient(&frame.y, w, h, o),
+                    orient(&frame.u, cw, ch, o),
+                    orient(&frame.v, cw, ch, o),
+                );
+                let fmt = super::sws_generic::SrcFormat {
+                    w: ow,
+                    h: oh,
+                    log2_cw,
+                    log2_ch,
+                    bit_depth: frame.bit_depth as u32,
+                };
                 let sc = generic.get_or_insert_with(|| super::sws_generic::GenericScaler::new(fmt));
                 ready.insert(idx, sc.convert(c, &y, &u, &v));
             } else {
@@ -199,9 +244,20 @@ impl VideoReader {
                             rotate_plane(&to8(&frame.v), cw, ch, a, 128),
                         )
                     }
-                    _ => (orient(&to8(&frame.y), w, h, o), orient(&to8(&frame.u), cw, ch, o), orient(&to8(&frame.v), cw, ch, o)),
+                    _ => (
+                        orient(&to8(&frame.y), w, h, o),
+                        orient(&to8(&frame.u), cw, ch, o),
+                        orient(&to8(&frame.v), cw, ch, o),
+                    ),
                 };
-                ready.insert(idx, if log2_ch == 1 { c.convert_420(&y, &u, &v, ow, oh) } else { c.convert_422(&y, &u, &v, ow, oh) });
+                ready.insert(
+                    idx,
+                    if log2_ch == 1 {
+                        c.convert_420(&y, &u, &v, ow, oh)
+                    } else {
+                        c.convert_422(&y, &u, &v, ow, oh)
+                    },
+                );
             }
             while let Some(p) = pending {
                 let Some(rgb) = ready.remove(&p) else { break };

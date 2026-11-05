@@ -19,7 +19,12 @@
 //!   `ff_compute_frame_duration` (`1 / r_frame_rate`).
 
 // Ported loop structure is kept as in the C reference.
-#![allow(clippy::needless_range_loop, clippy::manual_memcpy, clippy::unnecessary_cast, clippy::manual_is_multiple_of)]
+#![allow(
+    clippy::needless_range_loop,
+    clippy::manual_memcpy,
+    clippy::unnecessary_cast,
+    clippy::manual_is_multiple_of
+)]
 
 type Result<T> = std::result::Result<T, String>;
 
@@ -95,7 +100,10 @@ impl<'a> Boxes<'a> {
             }
             let p = format!("{path}/{kind}");
             out.push((p.clone(), off + hdr, off + size));
-            if matches!(kind.as_str(), "moov" | "trak" | "mdia" | "minf" | "stbl" | "edts") {
+            if matches!(
+                kind.as_str(),
+                "moov" | "trak" | "mdia" | "minf" | "stbl" | "edts"
+            ) {
                 self.walk(off + hdr, off + size, &p, out);
             }
             if kind == "stsd" && off + hdr + 8 <= off + size {
@@ -108,7 +116,10 @@ impl<'a> Boxes<'a> {
                     }
                     let ek = String::from_utf8_lossy(&d[e + 4..e + 8]).into_owned();
                     out.push((format!("{p}/{ek}"), e + 8, e + esz));
-                    if matches!(ek.as_str(), "avc1" | "avc3" | "hvc1" | "hev1" | "vp09" | "av01") {
+                    if matches!(
+                        ek.as_str(),
+                        "avc1" | "avc3" | "hvc1" | "hev1" | "vp09" | "av01"
+                    ) {
                         self.walk(e + 8 + 78, e + esz, &format!("{p}/{ek}"), out);
                     }
                     e += esz;
@@ -139,7 +150,11 @@ fn time_header(d: &[u8], a: usize) -> (u64, u64) {
 pub fn rescale(a: i64, b: i64, c: i64) -> i64 {
     let n = a as i128 * b as i128;
     let c = c as i128;
-    (if n >= 0 { (n + c / 2) / c } else { -((-n + c / 2) / c) }) as i64
+    (if n >= 0 {
+        (n + c / 2) / c
+    } else {
+        -((-n + c / 2) / c)
+    }) as i64
 }
 
 // ---- SPS VUI timing ----------------------------------------------------
@@ -206,13 +221,20 @@ pub fn sps_vui_timing(sps: &[u8]) -> Result<Option<(u64, u64)>> {
 
 /// The VUI fields ffmpeg uses, from an SPS NAL (with header byte).
 pub fn sps_vui(sps: &[u8]) -> Result<Vui> {
-    let mut vui = Vui { timing: None, matrix: 2, full_range: false };
+    let mut vui = Vui {
+        timing: None,
+        matrix: 2,
+        full_range: false,
+    };
     let rbsp = unescape(&sps[1..]);
     let mut r = Bits { b: &rbsp, p: 0 };
     let profile = r.u(8)?;
     r.u(16)?;
     r.ue()?;
-    if matches!(profile, 100 | 110 | 122 | 244 | 44 | 83 | 86 | 118 | 128 | 138 | 139 | 134 | 135) {
+    if matches!(
+        profile,
+        100 | 110 | 122 | 244 | 44 | 83 | 86 | 118 | 128 | 138 | 139 | 134 | 135
+    ) {
         let cf = r.ue()?;
         if cf == 3 {
             r.u(1)?;
@@ -430,7 +452,9 @@ pub enum Orientation {
 
 /// `get_rotation` + the autorotate branch of `configure_input_video_filter`.
 fn orientation(m: Option<&[i32; 9]>) -> Orientation {
-    let Some(m) = m else { return Orientation::Identity };
+    let Some(m) = m else {
+        return Orientation::Identity;
+    };
     let fp = |x: i32| x as f64 / 65536.0;
     let s0 = fp(m[0]).hypot(fp(m[3]));
     let s1 = fp(m[1]).hypot(fp(m[4]));
@@ -444,7 +468,10 @@ fn orientation(m: Option<&[i32; 9]>) -> Orientation {
     if (theta - 90.0).abs() < 1.0 {
         Orientation::Transpose(if m[3] > 0 { 0 } else { 1 })
     } else if (theta - 180.0).abs() < 1.0 {
-        Orientation::Flip { h: m[0] < 0, v: m[4] < 0 }
+        Orientation::Flip {
+            h: m[0] < 0,
+            v: m[4] < 0,
+        }
     } else if (theta - 270.0).abs() < 1.0 {
         Orientation::Transpose(if m[3] < 0 { 3 } else { 2 })
     } else if theta.abs() > 1.0 {
@@ -464,7 +491,9 @@ fn display_matrix(tkhd: &[i32; 9], mvhd: &[i32; 9]) -> Option<[i32; 9]> {
         for j in 0..3 {
             let mut acc: i32 = 0;
             for e in 0..3 {
-                acc = acc.wrapping_add(((tkhd[i * 3 + e] as i64 * mvhd[e * 3 + j] as i64) >> sh[e]) as i32);
+                acc = acc.wrapping_add(
+                    ((tkhd[i * 3 + e] as i64 * mvhd[e * 3 + j] as i64) >> sh[e]) as i32,
+                );
             }
             r[i * 3 + j] = acc;
         }
@@ -524,7 +553,9 @@ fn fix_index(
             }
             idx = (i >= 0).then_some(i as usize);
         }
-        let start = idx.or_else(|| (0..n).rev().find(|&i| dts[i] <= target)).unwrap_or(0);
+        let start = idx
+            .or_else(|| (0..n).rev().find(|&i| dts[i] <= target))
+            .unwrap_or(0);
         let mut counter = counter_start;
         let mut encountered = false;
         let mut discarded_begin: Vec<i64> = Vec::new();
@@ -540,7 +571,11 @@ fn fix_index(
                 }
             } else {
                 let p = counter + c + dts_shift;
-                min_corrected = if min_corrected < 0 { p } else { min_corrected.min(p) };
+                min_corrected = if min_corrected < 0 {
+                    p
+                } else {
+                    min_corrected.min(p)
+                };
                 if !encountered {
                     encountered = true;
                     // fix_index_entry_timestamps: rewrite the discarded run backwards.
@@ -553,7 +588,11 @@ fn fix_index(
                     }
                 }
             }
-            out.push(Fixed { sample: i, dts: counter, discard });
+            out.push(Fixed {
+                sample: i,
+                dts: counter,
+                discard,
+            });
             if encountered {
                 counter += frame_duration;
             }
@@ -588,7 +627,9 @@ fn stream_timing(d: &[u8], t: &[(String, usize, usize)], movie_ts: i64) -> Optio
     let mut dur = mdhd_dur as i64;
     if let Some((_, sa, _)) = get("/stts") {
         let n = be32(d, sa + 4) as usize;
-        let sum: i64 = (0..n).map(|i| be32(d, sa + 8 + 8 * i) as i64 * be32(d, sa + 12 + 8 * i) as i64).sum();
+        let sum: i64 = (0..n)
+            .map(|i| be32(d, sa + 8 + 8 * i) as i64 * be32(d, sa + 12 + 8 * i) as i64)
+            .sum();
         if sum != 0 {
             dur = dur.min(sum);
         }
@@ -649,23 +690,31 @@ pub fn parse(data: &[u8]) -> Result<MovVideo> {
         }
     }
     let n_streams = traks.len();
-    let get = |t: &[(String, usize, usize)], suffix: &str| t.iter().find(|(p, ..)| p.ends_with(suffix)).cloned();
+    let get = |t: &[(String, usize, usize)], suffix: &str| {
+        t.iter().find(|(p, ..)| p.ends_with(suffix)).cloned()
+    };
     let trak = traks
         .iter()
         .find(|t| get(t, "/mdia/hdlr").is_some_and(|(_, a, _)| &d[a + 8..a + 12] == b"vide"))
         .context("no video track")?;
-    let (codec, entry) = if let Some(e) = get(trak, "/stsd/avc1").or_else(|| get(trak, "/stsd/avc3")) {
-        (TrackCodec::H264, e)
-    } else if let Some(e) = get(trak, "/stsd/hvc1").or_else(|| get(trak, "/stsd/hev1")) {
-        (TrackCodec::Hevc, e)
-    } else if let Some(e) = get(trak, "/stsd/vp09") {
-        (TrackCodec::Vp9, e)
-    } else if let Some(e) = get(trak, "/stsd/av01") {
-        (TrackCodec::Av1, e)
-    } else {
-        return Err("video codec is not H.264, HEVC, VP9 or AV1".into());
-    };
-    if trak.iter().filter(|(p, ..)| p.contains("/stsd/") && p.matches('/').count() == 7).count() > 1 {
+    let (codec, entry) =
+        if let Some(e) = get(trak, "/stsd/avc1").or_else(|| get(trak, "/stsd/avc3")) {
+            (TrackCodec::H264, e)
+        } else if let Some(e) = get(trak, "/stsd/hvc1").or_else(|| get(trak, "/stsd/hev1")) {
+            (TrackCodec::Hevc, e)
+        } else if let Some(e) = get(trak, "/stsd/vp09") {
+            (TrackCodec::Vp9, e)
+        } else if let Some(e) = get(trak, "/stsd/av01") {
+            (TrackCodec::Av1, e)
+        } else {
+            return Err("video codec is not H.264, HEVC, VP9 or AV1".into());
+        };
+    if trak
+        .iter()
+        .filter(|(p, ..)| p.contains("/stsd/") && p.matches('/').count() == 7)
+        .count()
+        > 1
+    {
         return Err("more than one sample description is not supported".into());
     }
     let (width, height) = (
@@ -675,17 +724,28 @@ pub fn parse(data: &[u8]) -> Result<MovVideo> {
     let (ts, mdhd_dur) = time_header(d, get(trak, "/mdia/mdhd").context("no mdhd")?.1);
     let ts = ts as i64;
     let read_m = |at: usize| -> [i32; 9] { std::array::from_fn(|i| be32(d, at + 4 * i) as i32) };
-    let mvhd_at = all.iter().find(|(p, ..)| p == "/moov/mvhd").map(|b| b.1).unwrap();
+    let mvhd_at = all
+        .iter()
+        .find(|(p, ..)| p == "/moov/mvhd")
+        .map(|b| b.1)
+        .unwrap();
     // mvhd: times (20 or 32 bytes), rate 4, volume 2, reserved 10, matrix.
     let mvhd_m = read_m(mvhd_at + if d[mvhd_at] == 1 { 32 } else { 20 } + 16);
     let orientation = match get(trak, "/tkhd") {
-        Some((_, a, _)) => orientation(display_matrix(&read_m(a + if d[a] == 1 { 52 } else { 40 }), &mvhd_m).as_ref()),
+        Some((_, a, _)) => orientation(
+            display_matrix(&read_m(a + if d[a] == 1 { 52 } else { 40 }), &mvhd_m).as_ref(),
+        ),
         None => Orientation::Identity,
     };
     let (_, sa, _) = get(trak, "/stts").context("no stts")?;
     let n = be32(d, sa + 4) as usize;
-    let stts: Vec<(u32, u32)> = (0..n).map(|i| (be32(d, sa + 8 + 8 * i), be32(d, sa + 12 + 8 * i))).collect();
-    let durs: Vec<i64> = stts.iter().flat_map(|&(c, du)| std::iter::repeat_n(du as i64, c as usize)).collect();
+    let stts: Vec<(u32, u32)> = (0..n)
+        .map(|i| (be32(d, sa + 8 + 8 * i), be32(d, sa + 12 + 8 * i)))
+        .collect();
+    let durs: Vec<i64> = stts
+        .iter()
+        .flat_map(|&(c, du)| std::iter::repeat_n(du as i64, c as usize))
+        .collect();
     if durs.is_empty() {
         return Err("empty video track".into());
     }
@@ -703,7 +763,9 @@ pub fn parse(data: &[u8]) -> Result<MovVideo> {
         v
     });
     let has_ctts = ctts.is_some();
-    let dts_shift = ctts.as_ref().map_or(0, |c| c.iter().map(|&x| -x).max().unwrap_or(0).max(0));
+    let dts_shift = ctts
+        .as_ref()
+        .map_or(0, |c| c.iter().map(|&x| -x).max().unwrap_or(0).max(0));
     let key: Vec<bool> = match get(trak, "/stss") {
         Some((_, a, _)) => {
             let mut k = vec![false; n_samples];
@@ -737,7 +799,11 @@ pub fn parse(data: &[u8]) -> Result<MovVideo> {
         })
         .unwrap_or_default();
     let rs = |du: i64| (du * ts + mts as i64 / 2) / mts as i64;
-    let shift: i64 = edits.iter().take_while(|e| e.1 == -1).map(|e| rs(e.0)).sum();
+    let shift: i64 = edits
+        .iter()
+        .take_while(|e| e.1 == -1)
+        .map(|e| rs(e.0))
+        .sum();
     let sum: i64 = durs.iter().sum();
     let mut odts = Vec::with_capacity(n_samples);
     let mut acc = 0;
@@ -755,7 +821,11 @@ pub fn parse(data: &[u8]) -> Result<MovVideo> {
             f_end = f_end.max(s_us + rescale(du, 1_000_000, tts));
         }
     }
-    let start_us = if f_start == i64::MAX { rescale(shift, 1_000_000, ts) } else { f_start };
+    let start_us = if f_start == i64::MAX {
+        rescale(shift, 1_000_000, ts)
+    } else {
+        f_start
+    };
 
     // VUI frame period (fills a non-positive last packet duration).
     let vui = match codec {
@@ -811,7 +881,12 @@ pub fn parse(data: &[u8]) -> Result<MovVideo> {
             let (nu, tsc) = vui.context("last frame needs the VUI frame rate, SPS has none")?;
             (ts * 2 * nu as i64) / tsc as i64
         };
-        (pts, durations, (0..n_samples).collect::<Vec<_>>(), (0, n_samples))
+        (
+            pts,
+            durations,
+            (0..n_samples).collect::<Vec<_>>(),
+            (0, n_samples),
+        )
     } else {
         let c = ctts.as_ref().unwrap();
         let edits_ts: Vec<(i64, i64)> = if edits.is_empty() {

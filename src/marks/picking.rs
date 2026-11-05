@@ -137,6 +137,27 @@ impl PickRectRequest {
             }
         }
     }
+
+    /// Block until the region arrives, and return every pixel of it — its
+    /// width, then row after row from its top left, each pixel's `(mark,
+    /// row)` or `None` where nothing was drawn: a whole id map, rather than
+    /// the distinct hits. **Native only.**
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn wait_grid_on(mut self, device: &gpu::Gpu) -> (u32, Vec<Option<(usize, u32)>>) {
+        let Some(p) = self.pending.take() else {
+            return (0, Vec::new());
+        };
+        loop {
+            device.poll_wait();
+            match p.rx.try_recv() {
+                Ok(Ok(())) => return p.grid(),
+                Ok(Err(_)) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    return (0, Vec::new())
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
+        }
+    }
 }
 
 impl PickRequest {
@@ -195,6 +216,27 @@ impl Pending {
                 .and_then(|f| f.as_ref())
                 .and_then(|f| f.get(row as usize).copied()),
         }
+    }
+
+    /// Every pixel of the region, row by row: its width and the pixels.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn grid(self) -> (u32, Vec<Option<(usize, u32)>>) {
+        let slice = self.buffer.slice(..);
+        let Ok(bytes) = slice.get_mapped_range() else {
+            return (0, Vec::new());
+        };
+        let mut out = Vec::with_capacity((self.size.0 * self.size.1) as usize);
+        for y in 0..self.size.1 {
+            for x in 0..self.size.0 {
+                let o = (y * self.padded_row + x * 8) as usize;
+                let id = u32::from_le_bytes(bytes[o..o + 4].try_into().unwrap());
+                let row = u32::from_le_bytes(bytes[o + 4..o + 8].try_into().unwrap());
+                out.push((id != 0).then(|| (id as usize - 1, row)));
+            }
+        }
+        drop(bytes);
+        self.buffer.unmap();
+        (self.size.0, out)
     }
 
     /// Every distinct hit in the region.
@@ -267,7 +309,15 @@ impl MarkRenderer {
         radius: u32,
     ) -> PickRequest {
         let occluder = occluder.map(gpu::TextureView::from);
-        self.pick_on(&gpu::Gpu::from((device, queue)), view, marks, occluder.as_ref(), x, y, radius)
+        self.pick_on(
+            &gpu::Gpu::from((device, queue)),
+            view,
+            marks,
+            occluder.as_ref(),
+            x,
+            y,
+            radius,
+        )
     }
 
     /// [`pick`](Self::pick) on `gpu`.
@@ -319,7 +369,14 @@ impl MarkRenderer {
         p1: (u32, u32),
     ) -> PickRectRequest {
         let occluder = occluder.map(gpu::TextureView::from);
-        self.pick_rect_on(&gpu::Gpu::from((device, queue)), view, marks, occluder.as_ref(), p0, p1)
+        self.pick_rect_on(
+            &gpu::Gpu::from((device, queue)),
+            view,
+            marks,
+            occluder.as_ref(),
+            p0,
+            p1,
+        )
     }
 
     /// [`pick_rect`](Self::pick_rect) on `gpu`.

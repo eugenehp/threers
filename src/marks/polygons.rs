@@ -135,12 +135,26 @@ pub struct PolygonPattern {
 pub enum ProceduralShape {
     /// Parallel lines at `angle` (degrees), `stroke_width` wide, `gaps`
     /// apart edge to edge (two gaps alternate when `alternating`).
-    Hatch { angle: f32, stroke_width: f32, gaps: [f32; 2], alternating: bool },
+    Hatch {
+        angle: f32,
+        stroke_width: f32,
+        gaps: [f32; 2],
+        alternating: bool,
+    },
     /// Two sets of lines.
-    CrossHatch { angles: [f32; 2], stroke_width: f32, gap: f32 },
+    CrossHatch {
+        angles: [f32; 2],
+        stroke_width: f32,
+        gap: f32,
+    },
     /// Dots of `radius`, `gap` apart edge to edge, on a grid turned by
     /// `angle` with its second axis tilted `skew` towards the first.
-    Dots { radius: f32, gap: f32, angle: f32, skew: f32 },
+    Dots {
+        radius: f32,
+        gap: f32,
+        angle: f32,
+        skew: f32,
+    },
 }
 
 /// One feature's procedural pattern and its scale (pattern units per
@@ -158,14 +172,41 @@ impl ProceduralFrame {
     pub(crate) fn params(&self, unit: f64, y_down: bool) -> ([f32; 4], [f32; 4]) {
         let rad = |d: f32| d.to_radians();
         let (shape, size, gaps, angles, count) = match self.shape {
-            ProceduralShape::Hatch { angle, stroke_width, gaps, alternating } => {
-                (1.0, stroke_width, gaps, [rad(angle), 0.0], if alternating { 2.0 } else { 1.0 })
-            }
-            ProceduralShape::CrossHatch { angles, stroke_width, gap } => (2.0, stroke_width, [gap, gap], [rad(angles[0]), rad(angles[1])], 2.0),
-            ProceduralShape::Dots { radius, gap, angle, skew } => (3.0, radius, [gap, gap], [rad(angle), rad(skew)], 2.0),
+            ProceduralShape::Hatch {
+                angle,
+                stroke_width,
+                gaps,
+                alternating,
+            } => (
+                1.0,
+                stroke_width,
+                gaps,
+                [rad(angle), 0.0],
+                if alternating { 2.0 } else { 1.0 },
+            ),
+            ProceduralShape::CrossHatch {
+                angles,
+                stroke_width,
+                gap,
+            } => (
+                2.0,
+                stroke_width,
+                [gap, gap],
+                [rad(angles[0]), rad(angles[1])],
+                2.0,
+            ),
+            ProceduralShape::Dots {
+                radius,
+                gap,
+                angle,
+                skew,
+            } => (3.0, radius, [gap, gap], [rad(angle), rad(skew)], 2.0),
         };
         let unit = (unit * self.scale as f64) as f32 * if y_down { 1.0 } else { -1.0 };
-        ([shape, size, gaps[0], gaps[1]], [angles[0], angles[1], count, unit])
+        (
+            [shape, size, gaps[0], gaps[1]],
+            [angles[0], angles[1], count, unit],
+        )
     }
 }
 
@@ -256,10 +297,18 @@ impl PolygonMarks {
     /// The per-vertex procedural columns: each feature's shape (type, size,
     /// gaps) and (angles, count, world units per pattern unit, signed by y).
     fn build_procedural_columns(&mut self) {
-        let Some(frames) = &self.procedural else { return };
-        let key = (self.procedural_unit.to_bits(), u64::from(self.procedural_y_down));
+        let Some(frames) = &self.procedural else {
+            return;
+        };
+        let key = (
+            self.procedural_unit.to_bits(),
+            u64::from(self.procedural_y_down),
+        );
         // Rebuilt too when something else cleared the custom columns.
-        if self.procedural_built == Some(key) && self.common.has_custom(0) && self.common.has_custom(1) {
+        if self.procedural_built == Some(key)
+            && self.common.has_custom(0)
+            && self.common.has_custom(1)
+        {
             return;
         }
         let n = self.ranges.len();
@@ -285,7 +334,12 @@ impl PolygonMarks {
         let (aw, ah) = atlas.size();
         let version = atlas.version();
         let origin = self.common.local_origin.unwrap_or([0.0; 3]);
-        let key = (self.pattern_unit.to_bits(), origin.map(f64::to_bits), self.pattern_origin.map(f64::to_bits), version ^ (u64::from(self.procedural_y_down) << 63));
+        let key = (
+            self.pattern_unit.to_bits(),
+            origin.map(f64::to_bits),
+            self.pattern_origin.map(f64::to_bits),
+            version ^ (u64::from(self.procedural_y_down) << 63),
+        );
         if self.pattern_built == Some(key) {
             return;
         }
@@ -294,7 +348,9 @@ impl PolygonMarks {
         let mut tiles = vec![0.0f32; n * 4];
         for (k, f) in p.frames.iter().enumerate().take(n) {
             let Some(f) = f else { continue };
-            let Some(r) = atlas.get(&f.name) else { continue };
+            let Some(r) = atlas.get(&f.name) else {
+                continue;
+            };
             frames[k * 4..k * 4 + 4].copy_from_slice(&[
                 r.x as f32 / aw.max(1) as f32,
                 r.y as f32 / ah.max(1) as f32,
@@ -308,12 +364,22 @@ impl PolygonMarks {
             if px <= 0.0 || pz <= 0.0 {
                 continue;
             }
-            let reduce = |o: f64, period: f64, offset: f32| (o.rem_euclid(period) + offset as f64 * period) as f32;
-            let (tx, tz) = (origin[0] - self.pattern_origin[0], origin[2] - self.pattern_origin[1]);
+            let reduce = |o: f64, period: f64, offset: f32| {
+                (o.rem_euclid(period) + offset as f64 * period) as f32
+            };
+            let (tx, tz) = (
+                origin[0] - self.pattern_origin[0],
+                origin[2] - self.pattern_origin[1],
+            );
             // A tile's y runs along -z when the pattern's y does (a negative
             // height turns it round in the shader).
             let pz_signed = if self.procedural_y_down { pz } else { -pz };
-            tiles[k * 4..k * 4 + 4].copy_from_slice(&[px as f32, pz_signed as f32, reduce(tx, px, f.offset[0]), reduce(tz, pz, f.offset[1])]);
+            tiles[k * 4..k * 4 + 4].copy_from_slice(&[
+                px as f32,
+                pz_signed as f32,
+                reduce(tx, px, f.offset[0]),
+                reduce(tz, pz, f.offset[1]),
+            ]);
         }
         drop(atlas);
         self.set_feature_custom(0, 4, &frames);
@@ -520,7 +586,9 @@ impl Mark for PolygonMarks {
     }
     fn kind_uniforms(&self) -> KindUniforms {
         let (yz, l0, _) = super::Lighting::uniforms(self.lighting.as_ref());
-        let ambient = self.lighting.map_or(self.ambient.clamp(0.0, 1.0), |l| l.ambient);
+        let ambient = self
+            .lighting
+            .map_or(self.ambient.clamp(0.0, 1.0), |l| l.ambient);
         (
             [ambient, yz[0], yz[1], 0.0],
             // style3: the sphere's centre, relative, and 1 to rise from it;
@@ -528,7 +596,12 @@ impl Mark for PolygonMarks {
             if self.radial.is_some() {
                 self.radial_rel
             } else {
-                [self.procedural_offset[0] as f32, self.procedural_offset[1] as f32, 0.0, 0.0]
+                [
+                    self.procedural_offset[0] as f32,
+                    self.procedural_offset[1] as f32,
+                    0.0,
+                    0.0,
+                ]
             },
             l0,
         )
@@ -540,7 +613,11 @@ impl Mark for PolygonMarks {
 
     fn kind_material(&self) -> [f32; 4] {
         let mut m = super::Lighting::material(self.lighting.as_ref());
-        m[2] = if self.pattern.as_ref().is_some_and(|p| p.mask) { 1.0 } else { 0.0 };
+        m[2] = if self.pattern.as_ref().is_some_and(|p| p.mask) {
+            1.0
+        } else {
+            0.0
+        };
         m
     }
 
@@ -585,7 +662,10 @@ impl Mark for PolygonMarks {
         // Walls (horizontal normals) before roofs, each in its order.
         let ordered: std::borrow::Cow<[u32]> = if self.walls_first {
             let nt: &[f32] = bytemuck::cast_slice(self.normal_top.bytes());
-            let roof = |t: &[u32]| t.iter().all(|&v| nt.get(v as usize * 4 + 1).is_some_and(|y| y.abs() > 0.5));
+            let roof = |t: &[u32]| {
+                t.iter()
+                    .all(|&v| nt.get(v as usize * 4 + 1).is_some_and(|y| y.abs() > 0.5))
+            };
             let tris = || self.index.chunks_exact(3);
 
             let walls = tris().filter(|t| !roof(t));

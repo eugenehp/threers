@@ -11,11 +11,11 @@
 use std::sync::Arc;
 
 use threers::cameras::Camera;
+use threers::renderer::WindowRenderer;
 use threers::{
     AmbientLight, BoxGeometry, Color, DirectionalLight, Mesh, Object3D, OrbitControls,
     PerspectiveCamera, PointerEvent, Scene, StandardMaterial, Vector3,
 };
-use threers::renderer::WindowRenderer;
 
 use winit::{
     dpi::PhysicalPosition,
@@ -82,8 +82,7 @@ async fn run() {
     key.position = Vector3::new(3.0, 5.0, 2.0);
     scene.add(key);
 
-    let mut camera =
-        PerspectiveCamera::new(60.0, view.aspect(), 0.1, 100.0);
+    let mut camera = PerspectiveCamera::new(60.0, view.aspect(), 0.1, 100.0);
     camera.position = Vector3::new(2.5, 2.0, 3.5);
     camera.look_at(Vector3::ZERO);
 
@@ -124,11 +123,10 @@ async fn run() {
                             panning: input.panning,
                             ..Default::default()
                         };
-                        controls.update(
-                            ev,
-                            &mut camera,
-                            { let (w, h) = view.size(); (w as f32, h as f32) },
-                        );
+                        controls.update(ev, &mut camera, {
+                            let (w, h) = view.size();
+                            (w as f32, h as f32)
+                        });
                     }
                     WindowEvent::MouseWheel { delta, .. } => {
                         let wheel = match delta {
@@ -143,11 +141,10 @@ async fn run() {
                             panning: false,
                             ..Default::default()
                         };
-                        controls.update(
-                            ev,
-                            &mut camera,
-                            { let (w, h) = view.size(); (w as f32, h as f32) },
-                        );
+                        controls.update(ev, &mut camera, {
+                            let (w, h) = view.size();
+                            (w as f32, h as f32)
+                        });
                     }
                     WindowEvent::RedrawRequested => {
                         view.render(&mut scene, &camera);

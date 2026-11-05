@@ -194,7 +194,10 @@ impl HevcConfig {
         let (nx, ny) = self.ctbs();
         let max_cols = (nx / 256u32.div_ceil(ctb)).max(1);
         let max_rows = (ny / 64u32.div_ceil(ctb)).max(1);
-        self.tile_grid = (self.tile_grid.0.min(max_cols), self.tile_grid.1.min(max_rows));
+        self.tile_grid = (
+            self.tile_grid.0.min(max_cols),
+            self.tile_grid.1.min(max_rows),
+        );
     }
 
     /// Tile the picture only if it is large enough for the tiles to be free.
@@ -207,14 +210,20 @@ impl HevcConfig {
     /// may hang off the edge; the quadtree splits them down to blocks that fit.
     pub fn ctbs(&self) -> (u32, u32) {
         let ctb = 1 << self.ctb_log2;
-        (self.coded_width.div_ceil(ctb), self.coded_height.div_ceil(ctb))
+        (
+            self.coded_width.div_ceil(ctb),
+            self.coded_height.div_ceil(ctb),
+        )
     }
 
     /// Set the coding-tree sizes and re-pad the coded picture to whole minimum
     /// coding blocks — which is all HEVC requires, so a bigger CTB costs no
     /// extra padding.
     pub fn with_coding_tree(mut self, ctb_log2: u32, min_cb_log2: u32, max_tb_log2: u32) -> Self {
-        assert!(min_cb_log2 >= 3 && min_cb_log2 <= ctb_log2, "MinCb in [8, CTB]");
+        assert!(
+            min_cb_log2 >= 3 && min_cb_log2 <= ctb_log2,
+            "MinCb in [8, CTB]"
+        );
         assert!((2..=5).contains(&max_tb_log2), "max TB in [4, 32]");
         self.ctb_log2 = ctb_log2;
         self.min_cb_log2 = min_cb_log2;
@@ -367,10 +376,10 @@ pub fn write_sps_id(cfg: &HevcConfig, sps_id: u32) -> Vec<u8> {
     w.flag(false); // long_term_ref_pics_present_flag
     w.flag(false); // sps_temporal_mvp_enabled_flag
     w.flag(false); // strong_intra_smoothing_enabled_flag
-    // Minimal VUI (§E.2.1). A full-range picture is the alpha auxiliary
-    // layer, which carries opacity, not colour: only the range is signalled.
-    // Anything else is colour from `Yuv420Frame::from_rgba`, BT.601 limited
-    // range — said so, or players assume BT.709 for HD and shift the colours.
+                   // Minimal VUI (§E.2.1). A full-range picture is the alpha auxiliary
+                   // layer, which carries opacity, not colour: only the range is signalled.
+                   // Anything else is colour from `Yuv420Frame::from_rgba`, BT.601 limited
+                   // range — said so, or players assume BT.709 for HD and shift the colours.
     w.flag(true); // vui_parameters_present_flag
     w.flag(false); // aspect_ratio_info_present_flag
     w.flag(false); // overscan_info_present_flag
@@ -476,9 +485,9 @@ fn write_pps_full(
         w.write_ue(tile_grid.0 - 1); // num_tile_columns_minus1
         w.write_ue(tile_grid.1 - 1); // num_tile_rows_minus1
         w.flag(true); // uniform_spacing_flag
-        // Deblocking still runs across tile edges. The filter is a picture-level
-        // pass here — intra prediction reads unfiltered samples — so letting it
-        // cross costs nothing and removes the seams tiling would otherwise leave.
+                      // Deblocking still runs across tile edges. The filter is a picture-level
+                      // pass here — intra prediction reads unfiltered samples — so letting it
+                      // cross costs nothing and removes the seams tiling would otherwise leave.
         w.flag(true); // loop_filter_across_tiles_enabled_flag
     }
     w.flag(false); // pps_loop_filter_across_slices_enabled_flag

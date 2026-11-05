@@ -2,7 +2,11 @@
 //! (ffmpeg `vp9dec.h` ProbContext / counts, `vp9prob.c`).
 
 use super::data::DEFAULT_COEF_PROBS;
-use super::{CompPred, FilterMode, Header, DC_PRED, DIAG_DOWN_LEFT_PRED, DIAG_DOWN_RIGHT_PRED, HOR_DOWN_PRED, HOR_PRED, HOR_UP_PRED, TM_VP8_PRED, TX_SWITCHABLE, VERT_LEFT_PRED, VERT_PRED, VERT_RIGHT_PRED};
+use super::{
+    CompPred, FilterMode, Header, DC_PRED, DIAG_DOWN_LEFT_PRED, DIAG_DOWN_RIGHT_PRED,
+    HOR_DOWN_PRED, HOR_PRED, HOR_UP_PRED, TM_VP8_PRED, TX_SWITCHABLE, VERT_LEFT_PRED, VERT_PRED,
+    VERT_RIGHT_PRED,
+};
 
 #[derive(Clone, Copy, Debug)]
 pub struct MvCompProbs {
@@ -47,7 +51,10 @@ pub struct SavedCtx {
 
 impl SavedCtx {
     pub fn default_ctx() -> Self {
-        SavedCtx { p: super::data::DEFAULT_PROBS, coef: DEFAULT_COEF_PROBS }
+        SavedCtx {
+            p: super::data::DEFAULT_PROBS,
+            coef: DEFAULT_COEF_PROBS,
+        }
     }
 }
 
@@ -125,8 +132,18 @@ fn adapt(p: &mut u8, ct0: u32, ct1: u32, max_count: u32, update_factor: u32) {
 /// `ff_vp9_adapt_probs`: fold this frame's counts into the saved context
 /// `ctx` (the frame's `framectxid`). `cur` is the probability set the frame
 /// was decoded with; `last_keyframe` whether the previous frame was a key.
-pub fn adapt_probs(ctx: &mut SavedCtx, cur: &ProbContext, counts: &Counts, h: &Header, last_keyframe: bool) {
-    let uf = if h.keyframe || h.intraonly || !last_keyframe { 112 } else { 128 };
+pub fn adapt_probs(
+    ctx: &mut SavedCtx,
+    cur: &ProbContext,
+    counts: &Counts,
+    h: &Header,
+    last_keyframe: bool,
+) {
+    let uf = if h.keyframe || h.intraonly || !last_keyframe {
+        112
+    } else {
+        128
+    };
     for i in 0..4 {
         for j in 0..2 {
             for k in 0..2 {
@@ -155,19 +172,43 @@ pub fn adapt_probs(ctx: &mut SavedCtx, cur: &ProbContext, counts: &Counts, h: &H
         return;
     }
     for i in 0..3 {
-        adapt(&mut p.skip[i], counts.skip[i][0], counts.skip[i][1], 20, 128);
+        adapt(
+            &mut p.skip[i],
+            counts.skip[i][0],
+            counts.skip[i][1],
+            20,
+            128,
+        );
     }
     for i in 0..4 {
-        adapt(&mut p.intra[i], counts.intra[i][0], counts.intra[i][1], 20, 128);
+        adapt(
+            &mut p.intra[i],
+            counts.intra[i][0],
+            counts.intra[i][1],
+            20,
+            128,
+        );
     }
     if h.comppredmode == CompPred::Switchable {
         for i in 0..5 {
-            adapt(&mut p.comp[i], counts.comp[i][0], counts.comp[i][1], 20, 128);
+            adapt(
+                &mut p.comp[i],
+                counts.comp[i][0],
+                counts.comp[i][1],
+                20,
+                128,
+            );
         }
     }
     if h.comppredmode != CompPred::Single {
         for i in 0..5 {
-            adapt(&mut p.comp_ref[i], counts.comp_ref[i][0], counts.comp_ref[i][1], 20, 128);
+            adapt(
+                &mut p.comp_ref[i],
+                counts.comp_ref[i][0],
+                counts.comp_ref[i][1],
+                20,
+                128,
+            );
         }
     }
     if h.comppredmode != CompPred::Comp {
@@ -189,10 +230,22 @@ pub fn adapt_probs(ctx: &mut SavedCtx, cur: &ProbContext, counts: &Counts, h: &H
     if h.txfmmode == TX_SWITCHABLE {
         for i in 0..2 {
             let (c16, c32) = (&counts.tx16p[i], &counts.tx32p[i]);
-            adapt(&mut p.tx8p[i], counts.tx8p[i][0], counts.tx8p[i][1], 20, 128);
+            adapt(
+                &mut p.tx8p[i],
+                counts.tx8p[i][0],
+                counts.tx8p[i][1],
+                20,
+                128,
+            );
             adapt(&mut p.tx16p[i][0], c16[0], c16[1] + c16[2], 20, 128);
             adapt(&mut p.tx16p[i][1], c16[1], c16[2], 20, 128);
-            adapt(&mut p.tx32p[i][0], c32[0], c32[1] + c32[2] + c32[3], 20, 128);
+            adapt(
+                &mut p.tx32p[i][0],
+                c32[0],
+                c32[1] + c32[2] + c32[3],
+                20,
+                128,
+            );
             adapt(&mut p.tx32p[i][1], c32[1], c32[2] + c32[3], 20, 128);
             adapt(&mut p.tx32p[i][2], c32[2], c32[3], 20, 128);
         }
@@ -270,7 +323,13 @@ pub fn adapt_probs(ctx: &mut SavedCtx, cur: &ProbContext, counts: &Counts, h: &H
         adapt(&mut pp[3], s2, sum, 20, 128);
         s2 -= c[HOR_PRED];
         adapt(&mut pp[4], c[HOR_PRED], s2, 20, 128);
-        adapt(&mut pp[5], c[DIAG_DOWN_RIGHT_PRED], c[VERT_RIGHT_PRED], 20, 128);
+        adapt(
+            &mut pp[5],
+            c[DIAG_DOWN_RIGHT_PRED],
+            c[VERT_RIGHT_PRED],
+            20,
+            128,
+        );
         sum -= c[DIAG_DOWN_LEFT_PRED];
         adapt(&mut pp[6], c[DIAG_DOWN_LEFT_PRED], sum, 20, 128);
         sum -= c[VERT_LEFT_PRED];

@@ -22,9 +22,17 @@ impl Picture {
         let ss_hor = (layout == Layout::I420 || layout == Layout::I422) as usize;
         let ss_ver = (layout == Layout::I420) as usize;
         let ys = aw;
-        let uvs = if layout == Layout::I400 { 0 } else { aw >> ss_hor };
+        let uvs = if layout == Layout::I400 {
+            0
+        } else {
+            aw >> ss_hor
+        };
         Picture {
-            planes: [vec![0; ys * ah], vec![0; uvs * (ah >> ss_ver)], vec![0; uvs * (ah >> ss_ver)]],
+            planes: [
+                vec![0; ys * ah],
+                vec![0; uvs * (ah >> ss_ver)],
+                vec![0; uvs * (ah >> ss_ver)],
+            ],
             stride: [ys, uvs],
             w,
             h,
@@ -38,7 +46,10 @@ impl Picture {
         if pl == 0 {
             (0, 0)
         } else {
-            ((self.layout == Layout::I420 || self.layout == Layout::I422) as i32, (self.layout == Layout::I420) as i32)
+            (
+                (self.layout == Layout::I420 || self.layout == Layout::I422) as i32,
+                (self.layout == Layout::I420) as i32,
+            )
         }
     }
 

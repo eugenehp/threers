@@ -26,10 +26,9 @@
 //! yet, the next frame simply does not queue another — no growing chain of
 //! staging buffers, and no stall.
 
-use threers::marks::gpu;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-
+use threers::marks::gpu;
 
 use crate::ocean_fft::OceanFft;
 
@@ -262,7 +261,10 @@ impl Probe {
             .map_async(wgpu::MapMode::Read, move |res| {
                 if res.is_ok() {
                     {
-                        let view = staging.slice(..).get_mapped_range().expect("buffer range is mapped");
+                        let view = staging
+                            .slice(..)
+                            .get_mapped_range()
+                            .expect("buffer range is mapped");
                         let data: &[[f32; 4]] = bytemuck::cast_slice(&view);
                         if let Ok(mut slot) = out.lock() {
                             slot.0.copy_from_slice(data);

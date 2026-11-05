@@ -567,7 +567,8 @@ pub fn shadow_caster_geometry(
 
 /// The vertex stage: the unit quad turned to face the camera at the
 /// particle's centre and size, or stretched along its motion.
-pub(crate) const PARTICLE_VERTEX_WGSL: &str = crate::wgsl!(r#"
+pub(crate) const PARTICLE_VERTEX_WGSL: &str = crate::wgsl!(
+    r#"
 @vertex
 fn vs_custom(in : InstancedCustomIn, @builtin(vertex_index) vid : u32,
              @builtin(instance_index) iid : u32) -> VsOut {
@@ -640,12 +641,14 @@ fn vs_custom(in : InstancedCustomIn, @builtin(vertex_index) vid : u32,
     out.uv12 = vec4<f32>(center + shift, in.icustom1.w);
     return out;
 }
-"#);
+"#
+);
 
 /// A distortion: the opaque scene behind, looked up a little to the side —
 /// by the slope of noise of its own, rising as it ages — and faded at the
 /// edge and over its life.
-pub(crate) const PARTICLE_DISTORT_WGSL: &str = crate::wgsl!(r#"
+pub(crate) const PARTICLE_DISTORT_WGSL: &str = crate::wgsl!(
+    r#"
 fn haze_hash(p : vec2<f32>) -> f32 {
     var q = fract(p * vec2<f32>(127.31, 311.71));
     q = q + vec2<f32>(dot(q, q + 19.19));
@@ -680,11 +683,13 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
     // The capture is linear and not yet tone-mapped: finish it as the frame is.
     return vec4<f32>(framebuffer_encode(apply_tone_mapping(c)), fade);
 }
-"#);
+"#
+);
 
 /// The fragment stage: a soft disc, or a lit sphere; lit by the scene's
 /// lights if asked.
-pub(crate) const PARTICLE_WGSL: &str = crate::wgsl!(r#"
+pub(crate) const PARTICLE_WGSL: &str = crate::wgsl!(
+    r#"
 fn particle_hash(p : vec2<f32>) -> f32 {
     var q = fract(p * vec2<f32>(127.31, 311.71));
     q = q + vec2<f32>(dot(q, q + 19.19));
@@ -1041,4 +1046,5 @@ fn particle_light(n : vec3<f32>, l : vec3<f32>, v : vec3<f32>, sphere : bool) ->
     let hg = (1.0 - g * g) / pow(max(1.0 + g * g - 2.0 * g * cos_theta, 1e-4), 1.5);
     return wrap * mix(1.0, hg, min(abs(g) * 2.0, 1.0));
 }
-"#);
+"#
+);

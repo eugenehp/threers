@@ -44,7 +44,12 @@ pub fn camera() -> OrthographicCamera {
 }
 
 fn half_cut() -> Arc<Texture> {
-    let mut t = Texture::new(2, 1, TextureFormat::Rgba8Unorm, vec![255, 255, 255, 0, 255, 255, 255, 255]);
+    let mut t = Texture::new(
+        2,
+        1,
+        TextureFormat::Rgba8Unorm,
+        vec![255, 255, 255, 0, 255, 255, 255, 255],
+    );
     t.mag_filter = TextureFilter::Nearest;
     t.min_filter = TextureFilter::Nearest;
     Arc::new(t)
@@ -52,7 +57,12 @@ fn half_cut() -> Arc<Texture> {
 
 /// Left half green 0, right half green 255 — an `alphaMap`'s channel.
 fn green_cut() -> Arc<Texture> {
-    let mut t = Texture::new(2, 1, TextureFormat::Rgba8Unorm, vec![255, 0, 255, 255, 255, 255, 255, 255]);
+    let mut t = Texture::new(
+        2,
+        1,
+        TextureFormat::Rgba8Unorm,
+        vec![255, 0, 255, 255, 255, 255, 255, 255],
+    );
     t.mag_filter = TextureFilter::Nearest;
     t.min_filter = TextureFilter::Nearest;
     Arc::new(t)
@@ -93,14 +103,22 @@ pub fn scene_with(kind: Kind, alpha_test: f32, side: u32, cast: bool, transparen
     scene_masked(kind, alpha_test, side, cast, transparent, Mask::Map)
 }
 
-pub fn scene_masked(kind: Kind, alpha_test: f32, side: u32, cast: bool, transparent: bool, mask: Mask) -> Scene {
+pub fn scene_masked(
+    kind: Kind,
+    alpha_test: f32,
+    side: u32,
+    cast: bool,
+    transparent: bool,
+    mask: Mask,
+) -> Scene {
     let mut scene = Scene::new();
     scene.background = Color::from_hex(0x000000);
     scene.add_light(AmbientLight::new(Color::WHITE, 0.6));
     match kind {
         Kind::Directional => {
             // Travelling (1, −1, 0): a caster point at height 1 shadows floor x + 1.
-            let mut l = DirectionalLight::new(Color::WHITE, 2.5).with_direction(Vector3::new(1.0, -1.0, 0.0));
+            let mut l = DirectionalLight::new(Color::WHITE, 2.5)
+                .with_direction(Vector3::new(1.0, -1.0, 0.0));
             l.cast_shadow = true;
             l.shadow.camera_size = 6.0;
             scene.add(Object3D::light(Light::Directional(l)));
@@ -175,7 +193,10 @@ fn floor_px(rgba: &[u8], wx: f32, wz: f32) -> [u8; 4] {
 }
 
 /// Every failure, as a line; empty when each light kind casts the cut-out.
-pub fn check(label: &str, render: &mut dyn FnMut(&mut Scene, &dyn Camera) -> Vec<u8>) -> Vec<String> {
+pub fn check(
+    label: &str,
+    render: &mut dyn FnMut(&mut Scene, &dyn Camera) -> Vec<u8>,
+) -> Vec<String> {
     let cam = camera();
     let mut failures = Vec::new();
     for kind in [Kind::Directional, Kind::Spot, Kind::Point] {
@@ -183,7 +204,10 @@ pub fn check(label: &str, render: &mut dyn FnMut(&mut Scene, &dyn Camera) -> Vec
         let (dark_x, cut_x) = (shadow_x(kind, 0.25), shadow_x(kind, -0.25));
         let mut probe = |s: &mut Scene| {
             let img = render(s, &cam);
-            (floor_px(&img, dark_x, 0.0)[0] as i32, floor_px(&img, cut_x, 0.0)[0] as i32)
+            (
+                floor_px(&img, dark_x, 0.0)[0] as i32,
+                floor_px(&img, cut_x, 0.0)[0] as i32,
+            )
         };
         let shadowed = |v: i32, lit: i32| v + 20 < lit;
         let lit = |v: i32, lit: i32| (v - lit).abs() <= 3;
@@ -207,7 +231,9 @@ pub fn check(label: &str, render: &mut dyn FnMut(&mut Scene, &dyn Camera) -> Vec
             failures.push(format!("{label} {kind:?}: the opaque half cast no shadow with alphaTest ({cut_dark} vs lit {ref_dark})"));
         }
         if !lit(cut_cut, ref_cut) {
-            failures.push(format!("{label} {kind:?}: the cut half still casts ({cut_cut} vs lit {ref_cut})"));
+            failures.push(format!(
+                "{label} {kind:?}: the cut half still casts ({cut_cut} vs lit {ref_cut})"
+            ));
         }
         let (am_dark, am_cut) = probe(&mut scene_masked(kind, 0.5, 2, true, false, Mask::AlphaMap));
         if !shadowed(am_dark, ref_dark) || !lit(am_cut, ref_cut) {

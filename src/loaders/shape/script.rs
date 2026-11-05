@@ -10,7 +10,6 @@
 //! script of what surrounds them — preferring what precedes, which is what a trailing
 //! digit or a mark belongs to.
 
-
 use super::script_table::SCRIPTS;
 
 /// Unicode's *common* script: a digit, a space, most punctuation.
@@ -80,7 +79,7 @@ pub fn runs(text: &[char]) -> Vec<(usize, usize, [u8; 4])> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     fn split(s: &str) -> Vec<(usize, usize, String)> {
         runs(&s.chars().collect::<Vec<_>>())
             .into_iter()
@@ -118,7 +117,11 @@ mod tests {
     fn two_scripts_split() {
         assert_eq!(
             split("ab \u{0628}\u{0628} cd"),
-            vec![(0, 3, "latn".into()), (3, 6, "arab".into()), (6, 8, "latn".into())]
+            vec![
+                (0, 3, "latn".into()),
+                (3, 6, "arab".into()),
+                (6, 8, "latn".into())
+            ]
         );
     }
 

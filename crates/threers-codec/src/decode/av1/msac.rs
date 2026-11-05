@@ -7,6 +7,7 @@ const EC_PROB_SHIFT: u32 = 6;
 const EC_MIN_PROB: u32 = 4;
 const EC_WIN_SIZE: i32 = 64;
 
+#[derive(Clone)]
 pub struct Msac {
     buf: Vec<u8>,
     pos: usize,
@@ -34,7 +35,14 @@ pub fn ulog2(v: u32) -> i32 {
 
 impl Msac {
     pub fn new(data: &[u8], disable_cdf_update: bool) -> Self {
-        let mut s = Msac { buf: data.to_vec(), pos: 0, dif: 0, rng: 0x8000, cnt: -15, allow_update_cdf: !disable_cdf_update };
+        let mut s = Msac {
+            buf: data.to_vec(),
+            pos: 0,
+            dif: 0,
+            rng: 0x8000,
+            cnt: -15,
+            allow_update_cdf: !disable_cdf_update,
+        };
         s.refill();
         s
     }

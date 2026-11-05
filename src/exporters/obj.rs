@@ -157,7 +157,11 @@ pub fn write_obj(objects: &[ExportObject], options: &ObjOptions) -> String {
                 if o.kind == ExportKind::LineSegments {
                     let mut j = 1;
                     while j < n {
-                        out.push_str(&format!("l {} {}\n", index_vertex + j, index_vertex + j + 1));
+                        out.push_str(&format!(
+                            "l {} {}\n",
+                            index_vertex + j,
+                            index_vertex + j + 1
+                        ));
                         j += 2;
                     }
                 }

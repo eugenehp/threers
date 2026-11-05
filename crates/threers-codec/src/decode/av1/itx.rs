@@ -30,7 +30,8 @@ fn fn_type(txtp: u8) -> u8 {
 fn shift(tx: usize) -> i32 {
     match tx {
         TX_4X4 | RTX_4X8 | RTX_8X4 => 0,
-        RTX_4X16 | TX_8X8 | RTX_8X16 | RTX_16X4 | RTX_16X8 | RTX_16X32 | RTX_32X16 | RTX_32X64 | RTX_64X32 => 1,
+        RTX_4X16 | TX_8X8 | RTX_8X16 | RTX_16X4 | RTX_16X8 | RTX_16X32 | RTX_32X16 | RTX_32X64
+        | RTX_64X32 => 1,
         _ => 2,
     }
 }
@@ -62,7 +63,16 @@ fn last_nonzero_col(tx: usize) -> &'static [u8] {
 /// `inv_txfm_add_c`: add the inverse transform of `coeff` (which is zeroed)
 /// to `dst[off..]`.
 #[allow(clippy::too_many_arguments)]
-pub fn itxfm_add(dst: &mut [u16], off: usize, stride: usize, coeff: &mut [i32], eob: i32, tx: usize, txtp: u8, bitdepth_max: i32) {
+pub fn itxfm_add(
+    dst: &mut [u16],
+    off: usize,
+    stride: usize,
+    coeff: &mut [i32],
+    eob: i32,
+    tx: usize,
+    txtp: u8,
+    bitdepth_max: i32,
+) {
     if txtp == WHT_WHT {
         return wht_add(dst, off, stride, coeff, bitdepth_max);
     }
@@ -98,7 +108,10 @@ pub fn itxfm_add(dst: &mut [u16], off: usize, stride: usize, coeff: &mut [i32], 
     let (row_clip_min, col_clip_min) = if bitdepth_max == 255 {
         (i16::MIN as i32, i16::MIN as i32)
     } else {
-        ((!(bitdepth_max as u32) << 7) as i32, (!(bitdepth_max as u32) << 5) as i32)
+        (
+            (!(bitdepth_max as u32) << 7) as i32,
+            (!(bitdepth_max as u32) << 5) as i32,
+        )
     };
     let row_clip_max = !row_clip_min;
     let col_clip_max = !col_clip_min;
@@ -116,7 +129,15 @@ pub fn itxfm_add(dst: &mut [u16], off: usize, stride: usize, coeff: &mut [i32], 
             let v = coeff[y + x * shh];
             tmp[c + x] = if is_rect2 { (v * 181 + 128) >> 8 } else { v };
         }
-        tx1d(t_dim.lw as usize, txtps[0], &mut tmp, c as isize, 1, row_clip_min, row_clip_max);
+        tx1d(
+            t_dim.lw as usize,
+            txtps[0],
+            &mut tmp,
+            c as isize,
+            1,
+            row_clip_min,
+            row_clip_max,
+        );
     }
     for v in coeff.iter_mut().take(sw * shh) {
         *v = 0;
@@ -125,7 +146,15 @@ pub fn itxfm_add(dst: &mut [u16], off: usize, stride: usize, coeff: &mut [i32], 
         *v = ((*v + rnd) >> sh).clamp(col_clip_min, col_clip_max);
     }
     for x in 0..w {
-        tx1d(t_dim.lh as usize, txtps[1], &mut tmp, x as isize, w as isize, col_clip_min, col_clip_max);
+        tx1d(
+            t_dim.lh as usize,
+            txtps[1],
+            &mut tmp,
+            x as isize,
+            w as isize,
+            col_clip_min,
+            col_clip_max,
+        );
     }
     for y in 0..h {
         for x in 0..w {

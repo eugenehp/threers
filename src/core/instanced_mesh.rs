@@ -95,7 +95,10 @@ impl InstancedMesh {
     /// ```
     pub fn set_custom(&mut self, slot: usize, components: u32, values: &[f32]) {
         assert!(slot < 2, "custom slot {slot} is not 0 or 1");
-        assert!((1..=4).contains(&components), "{components} components is not 1..=4");
+        assert!(
+            (1..=4).contains(&components),
+            "{components} components is not 1..=4"
+        );
         assert!(
             values.len().is_multiple_of(components as usize),
             "{} floats is not a whole number of {components}-float rows",

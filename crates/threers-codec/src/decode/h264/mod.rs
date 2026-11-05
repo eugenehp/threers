@@ -1,13 +1,13 @@
 //! A from-scratch H.264 / AVC decoder.
 //!
-//! Progressive (frame-coded) streams: Baseline, Main and High profiles —
+//! Baseline, Main and High profiles, frame, field and MBAFF coded —
 //! CAVLC and CABAC, I/P/B slices, multiple slices, 8×8 transforms, scaling
 //! matrices, weighted prediction (explicit and implicit), spatial and
 //! temporal direct, long-term references and every memory management
 //! operation, 4:2:0, 4:2:2 (High 4:2:2) or monochrome, 8 bits and up. Not
 //! supported, and refused with an error rather than decoded wrongly:
-//! interlaced coding (field pictures and MBAFF), 4:4:4, slice groups (FMO),
-//! data partitioning, and SP/SI slices.
+//! 4:4:4, slice groups (FMO), data partitioning, SP/SI slices and lossless
+//! transform bypass.
 //!
 //! Feed it NAL units with [`H264Decoder::decode_nal`]; each finished picture
 //! comes out of [`H264Decoder::finish_picture`] (called for you when a new
@@ -39,7 +39,9 @@ pub mod tables;
 pub mod types;
 
 #[cfg(feature = "decode")]
-use std::sync::Arc;
+use std::collections::BTreeMap;
+#[cfg(feature = "decode")]
+use std::sync::{Arc, Mutex};
 
 #[cfg(feature = "decode")]
 use self::cavlc::CavlcTables;
@@ -48,9 +50,11 @@ use self::params::{Mmco, Pps, SliceHeader, SliceType, Sps};
 #[cfg(feature = "decode")]
 use self::slice::{CurPic, SliceDeblock, SliceDec};
 #[cfg(feature = "decode")]
-use self::types::{MbInfo, RefEntry, RefPic};
+use self::types::{MbInfo, RefData, RefEntry, RefPic};
 #[cfg(feature = "decode")]
 use super::bits::unescape;
+#[cfg(feature = "decode")]
+use super::jobs::{caught, Jobs, Slot};
 #[cfg(feature = "decode")]
 use super::picture::{ChromaFormat, ColorInfo, DecodedFrame, Plane};
 
@@ -96,6 +100,33 @@ struct Current {
     poc_lsb: u32,
     poc_msb: i32,
     frame_num_offset: i32,
+    /// With threads, the slices for its job to reconstruct.
+    work: Vec<SliceWork>,
+}
+
+/// A slice whose header is read and whose data is not.
+#[cfg(feature = "decode")]
+struct SliceWork {
+    rbsp: Vec<u8>,
+    hdr: SliceHeader,
+    pps: Pps,
+    refs: [Vec<RefEntry>; 2],
+    slice_num: u32,
+}
+
+/// The state shared with picture jobs.
+#[cfg(feature = "decode")]
+struct Threads {
+    jobs: Arc<Jobs>,
+    /// Finished pictures in decode order; `None` for one that failed.
+    finished: Arc<Mutex<BTreeMap<u64, Option<H264Picture>>>>,
+    /// The first failure in decode order.
+    error: Arc<Mutex<Option<(u64, String)>>>,
+    next_take: u64,
+    next_job: u64,
+    /// Pictures still go to jobs. A field or MBAFF stream stops that: a
+    /// second field reads the first from the store they share.
+    active: bool,
 }
 
 /// A hardware back end for [`H264Decoder`].
@@ -149,7 +180,7 @@ pub struct AccelSlice<'a> {
 pub struct H264Decoder {
     spss: Vec<Option<Sps>>,
     ppss: Vec<Option<Pps>>,
-    tables: CavlcTables,
+    tables: Arc<CavlcTables>,
     cur: Option<Current>,
     /// Frame stores: references, plus the frame whose first field waits for
     /// its pair.
@@ -173,6 +204,7 @@ pub struct H264Decoder {
     accel_error: Option<String>,
     /// The current picture has had a slice handed to the accelerator.
     accel_started: bool,
+    threads: Option<Threads>,
 }
 
 #[cfg(feature = "decode")]
@@ -184,7 +216,11 @@ impl Default for H264Decoder {
 
 #[cfg(feature = "decode")]
 fn empty_planes() -> [Plane; 3] {
-    [Plane::new(0, 0, 0), Plane::new(0, 0, 0), Plane::new(0, 0, 0)]
+    [
+        Plane::new(0, 0, 0),
+        Plane::new(0, 0, 0),
+        Plane::new(0, 0, 0),
+    ]
 }
 
 #[cfg(feature = "decode")]
@@ -194,7 +230,7 @@ impl H264Decoder {
         H264Decoder {
             spss: vec![None; 32],
             ppss: vec![None; 256],
-            tables: CavlcTables::new(),
+            tables: Arc::new(CavlcTables::new()),
             cur: None,
             dpb: Vec::new(),
             next_id: 1,
@@ -211,7 +247,100 @@ impl H264Decoder {
             accel: None,
             accel_error: None,
             accel_started: false,
+            threads: None,
         }
+    }
+
+    /// Reconstruct up to `threads` frames at once, each as soon as its
+    /// references are finished. Headers stay in order on the calling thread,
+    /// so [`decode_nal`](Self::decode_nal) can block when too many are
+    /// waiting, and must not be called from the thread pool itself: this does
+    /// nothing there, with one thread, or with an accelerator. Field and MBAFF
+    /// pictures decode in order on the calling thread.
+    ///
+    /// [`take_pictures`](Self::take_pictures) then gives pictures once they
+    /// are finished, leaving out any that failed; decoding carries on past
+    /// those, and [`take_thread_error`](Self::take_thread_error) has the first.
+    pub fn set_threads(&mut self, threads: usize) {
+        if threads > 1 && self.accel.is_none() && crate::pool_can_serve_caller() {
+            self.threads = Some(Threads {
+                jobs: Jobs::new(threads * 2),
+                finished: Arc::default(),
+                error: Arc::default(),
+                next_take: 0,
+                next_job: 0,
+                active: true,
+            });
+        }
+    }
+
+    /// Wait for every picture job to finish.
+    pub fn wait_for_pictures(&self) {
+        if let Some(t) = &self.threads {
+            t.jobs.wait();
+        }
+    }
+
+    /// The first error from a picture job, in decode order, once
+    /// [`wait_for_pictures`](Self::wait_for_pictures) has returned.
+    pub fn take_thread_error(&mut self) -> Option<String> {
+        let t = self.threads.as_ref()?;
+        t.error.lock().unwrap().take().map(|e| e.1)
+    }
+
+    /// Whether [`set_threads`](Self::set_threads) took effect.
+    pub(crate) fn threaded(&self) -> bool {
+        self.threads.is_some()
+    }
+
+    /// The number the next finished picture will have.
+    pub(crate) fn next_output_id(&self) -> u64 {
+        self.threads.as_ref().map_or(0, |t| t.next_job)
+    }
+
+    /// With threads: pictures finished so far by number, in decode order,
+    /// `None` for one that failed.
+    pub(crate) fn take_finished(&mut self) -> Vec<(u64, Option<H264Picture>)> {
+        let mut out = Vec::new();
+        if let Some(t) = &mut self.threads {
+            let mut finished = t.finished.lock().unwrap();
+            while let Some(picture) = finished.remove(&t.next_take) {
+                out.push((t.next_take, picture));
+                t.next_take += 1;
+            }
+        }
+        out
+    }
+
+    /// Back to reconstructing here: every job done, and the buffer holding
+    /// real pictures again.
+    fn stop_jobs(&mut self) {
+        let Some(t) = &mut self.threads else {
+            return;
+        };
+        t.jobs.wait();
+        t.active = false;
+        for p in &mut self.dpb {
+            if let Some(data) = p.slot.take().and_then(|s| s.get()) {
+                p.planes = data.planes.clone();
+                p.mbs = data.mbs.clone();
+            }
+        }
+    }
+
+    /// Queue a picture for [`take_pictures`](Self::take_pictures).
+    fn publish(&mut self, picture: H264Picture) {
+        match &mut self.threads {
+            Some(t) => {
+                t.finished.lock().unwrap().insert(t.next_job, Some(picture));
+                t.next_job += 1;
+            }
+            None => self.done.push(picture),
+        }
+    }
+
+    fn jobs_active(&self) -> bool {
+        self.threads.as_ref().is_some_and(|t| t.active)
     }
 
     /// Hand reconstruction to `accel` (see [`H264Accel`]).
@@ -264,15 +393,33 @@ impl H264Decoder {
 
     /// Pictures finished so far, in decode order.
     pub fn take_pictures(&mut self) -> Vec<H264Picture> {
+        let finished: Vec<_> = self
+            .take_finished()
+            .into_iter()
+            .filter_map(|p| p.1)
+            .collect();
+        self.done.extend(finished);
         std::mem::take(&mut self.done)
     }
 
-    fn decode_slice(&mut self, nal: &[u8], rbsp: &[u8], nal_type: u32, nal_ref_idc: u32) -> Result<()> {
+    fn decode_slice(
+        &mut self,
+        nal: &[u8],
+        rbsp: &[u8],
+        nal_type: u32,
+        nal_ref_idc: u32,
+    ) -> Result<()> {
         let hdr = SliceHeader::parse(rbsp, nal_type, nal_ref_idc, &self.spss, &self.ppss)?;
         if hdr.redundant_pic_cnt > 0 {
             return Ok(());
         }
-        let structure = if !hdr.field_pic { 3 } else if hdr.bottom_field { 2 } else { 1 };
+        let structure = if !hdr.field_pic {
+            3
+        } else if hdr.bottom_field {
+            2
+        } else {
+            1
+        };
         let new_pic = match &self.cur {
             None => true,
             Some(c) => {
@@ -289,7 +436,9 @@ impl H264Decoder {
             self.finish_picture();
             self.start_picture(&hdr)?;
         }
-        let pps = self.ppss[hdr.pps_id as usize].clone().ok_or("missing PPS")?;
+        let pps = self.ppss[hdr.pps_id as usize]
+            .clone()
+            .ok_or("missing PPS")?;
         let refs = self.build_lists(&hdr)?;
         if let Some(accel) = self.accel.as_mut() {
             let cur = self.cur.as_ref().unwrap();
@@ -309,7 +458,12 @@ impl H264Decoder {
             self.accel_started = true;
             return accel.slice(&slice);
         }
-        let frefs = if hdr.mbaff { self.field_lists(&refs) } else { Default::default() };
+        let frefs = if hdr.mbaff {
+            self.field_lists(&refs)
+        } else {
+            Default::default()
+        };
+        let jobs = self.jobs_active();
         let cur = self.cur.as_mut().unwrap();
         let slice_num = cur.pic.slices.len() as u32;
         cur.pic.slices.push(SliceDeblock {
@@ -317,6 +471,16 @@ impl H264Decoder {
             alpha: hdr.alpha_offset,
             beta: hdr.beta_offset,
         });
+        if jobs {
+            cur.work.push(SliceWork {
+                rbsp: rbsp.to_vec(),
+                hdr,
+                pps,
+                refs,
+                slice_num,
+            });
+            return Ok(());
+        }
         let mut dec = SliceDec::new(
             &cur.sps,
             &pps,
@@ -364,14 +528,25 @@ impl H264Decoder {
     }
 
     fn start_picture(&mut self, hdr: &SliceHeader) -> Result<()> {
-        let pps = self.ppss[hdr.pps_id as usize].as_ref().ok_or("missing PPS")?;
+        let pps = self.ppss[hdr.pps_id as usize]
+            .as_ref()
+            .ok_or("missing PPS")?;
         let sps = self.spss[pps.sps_id as usize]
             .clone()
             .ok_or("missing SPS")?;
         if sps.transform_bypass {
             return Err("lossless (transform bypass) coding is not supported".into());
         }
-        let structure: u8 = if !hdr.field_pic { 3 } else if hdr.bottom_field { 2 } else { 1 };
+        if !sps.frame_mbs_only && self.jobs_active() {
+            self.stop_jobs();
+        }
+        let structure: u8 = if !hdr.field_pic {
+            3
+        } else if hdr.bottom_field {
+            2
+        } else {
+            1
+        };
         // h264_field_start: pair with a waiting first field of the other
         // parity and the same frame_num; an unmatched one is dropped from
         // display (but stays a reference if marked).
@@ -421,7 +596,14 @@ impl H264Decoder {
                     prev_msb
                 };
                 let top = poc_msb + lsb;
-                (top, if structure == 3 { top + hdr.delta_poc_bottom } else { top })
+                (
+                    top,
+                    if structure == 3 {
+                        top + hdr.delta_poc_bottom
+                    } else {
+                        top
+                    },
+                )
             }
             _ => {
                 let prev_off = if self.prev_had_mmco5 {
@@ -452,7 +634,9 @@ impl H264Decoder {
                         let in_cycle = (abs - 1) % n;
                         let delta: i32 = sps.offset_for_ref_frame.iter().sum();
                         expected = cycle * delta
-                            + sps.offset_for_ref_frame[..=in_cycle as usize].iter().sum::<i32>();
+                            + sps.offset_for_ref_frame[..=in_cycle as usize]
+                                .iter()
+                                .sum::<i32>();
                     }
                     if hdr.nal_ref_idc == 0 {
                         expected += sps.offset_for_non_ref_pic;
@@ -482,13 +666,18 @@ impl H264Decoder {
         let ch_rows = if sps.chroma_format_idc == 2 { 16 } else { 8 };
         // A field picture is half the frame's height.
         let pic_h_mbs = if structure == 3 { h_mbs } else { h_mbs / 2 };
-        let accel = self.accel.is_some();
+        // Neither an accelerator nor a job needs the samples here.
+        let accel = self.accel.is_some() || self.jobs_active();
         let make = |h: usize| {
             if accel {
                 // The accelerator holds the samples.
                 empty_planes()
             } else if sps.chroma_format_idc == 0 {
-                [Plane::new(w_mbs * 16, h * 16, fill_y), Plane::new(0, 0, 0), Plane::new(0, 0, 0)]
+                [
+                    Plane::new(w_mbs * 16, h * 16, fill_y),
+                    Plane::new(0, 0, 0),
+                    Plane::new(0, 0, 0),
+                ]
             } else {
                 [
                     Plane::new(w_mbs * 16, h * 16, fill_y),
@@ -515,6 +704,7 @@ impl H264Decoder {
                     short: 0,
                     long: 0,
                     lt_idx: 0,
+                    slot: None,
                 });
                 self.dpb.len() - 1
             }
@@ -537,7 +727,11 @@ impl H264Decoder {
         self.cur = Some(Current {
             pic: CurPic {
                 planes: make(pic_h_mbs),
-                mbs: if accel { Vec::new() } else { vec![MbInfo::default(); w_mbs * pic_h_mbs] },
+                mbs: if accel {
+                    Vec::new()
+                } else {
+                    vec![MbInfo::default(); w_mbs * pic_h_mbs]
+                },
                 w_mbs,
                 h_mbs: pic_h_mbs,
                 poc,
@@ -559,6 +753,7 @@ impl H264Decoder {
             poc_lsb: hdr.poc_lsb,
             poc_msb,
             frame_num_offset,
+            work: Vec::new(),
         });
         Ok(())
     }
@@ -571,8 +766,13 @@ impl H264Decoder {
         let mut guard = 0;
         // Content of a non-existing frame is unspecified; reuse the newest
         // reference so a stream that does reference one degrades gracefully.
-        let src = self.dpb.iter().filter(|p| p.is_ref()).max_by_key(|p| p.id).map(|p| p.planes.clone());
-        let Some(planes) = src else {
+        let src = self
+            .dpb
+            .iter()
+            .filter(|p| p.is_ref())
+            .max_by_key(|p| p.id)
+            .map(|p| (p.planes.clone(), p.slot.clone()));
+        let Some((planes, slot)) = src else {
             self.prev_ref_frame_num = frame_num.wrapping_sub(1) % max;
             return;
         };
@@ -598,6 +798,7 @@ impl H264Decoder {
                 short: 3,
                 long: 0,
                 lt_idx: 0,
+                slot: slot.clone(),
             });
             self.prev_ref_frame_num = f;
             self.prev_frame_num = f;
@@ -634,8 +835,12 @@ impl H264Decoder {
         }
         // Frames take only stores with both fields marked; fields take any.
         let full = |m: u8| if field { m != 0 } else { m == 3 };
-        let mut short: Vec<usize> = (0..self.dpb.len()).filter(|&i| full(self.dpb[i].short)).collect();
-        let mut long: Vec<usize> = (0..self.dpb.len()).filter(|&i| full(self.dpb[i].long)).collect();
+        let mut short: Vec<usize> = (0..self.dpb.len())
+            .filter(|&i| full(self.dpb[i].short))
+            .collect();
+        let mut long: Vec<usize> = (0..self.dpb.len())
+            .filter(|&i| full(self.dpb[i].long))
+            .collect();
         long.sort_by_key(|&i| self.dpb[i].lt_idx);
         // An ordered list of frame stores -> entries (§8.2.4.2.5 for fields:
         // alternate parities starting with the current one).
@@ -645,7 +850,14 @@ impl H264Decoder {
             if !field {
                 for &i in order {
                     let p = &dpb[i];
-                    out.push(RefEntry { dpb: i, id: p.id * 4 + 3, poc: p.poc, long_term, structure: 3, planes: p.planes.clone() });
+                    out.push(RefEntry {
+                        dpb: i,
+                        id: p.id * 4 + 3,
+                        poc: p.poc,
+                        long_term,
+                        structure: 3,
+                        planes: p.planes.clone(),
+                    });
                 }
                 return out;
             }
@@ -687,8 +899,16 @@ impl H264Decoder {
         } else {
             // B: by the frame (or pair) POC around the current POC; equal
             // POCs go before (ffmpeg add_sorted).
-            let mut before: Vec<usize> = short.iter().copied().filter(|&i| self.dpb[i].poc <= cur_poc).collect();
-            let mut after: Vec<usize> = short.iter().copied().filter(|&i| !before.contains(&i)).collect();
+            let mut before: Vec<usize> = short
+                .iter()
+                .copied()
+                .filter(|&i| self.dpb[i].poc <= cur_poc)
+                .collect();
+            let mut after: Vec<usize> = short
+                .iter()
+                .copied()
+                .filter(|&i| !before.contains(&i))
+                .collect();
             before.sort_by_key(|&i| std::cmp::Reverse(self.dpb[i].poc));
             after.sort_by_key(|&i| self.dpb[i].poc);
             let o0: Vec<usize> = before.iter().chain(after.iter()).copied().collect();
@@ -700,7 +920,10 @@ impl H264Decoder {
             l1.extend(lt);
             // Identical lists (compared by frame store, as ffmpeg does):
             // swap the first two of list 1.
-            if l1.len() > 1 && l0.len() == l1.len() && l0.iter().zip(&l1).all(|(a, b)| a.dpb == b.dpb) {
+            if l1.len() > 1
+                && l0.len() == l1.len()
+                && l0.iter().zip(&l1).all(|(a, b)| a.dpb == b.dpb)
+            {
                 l1.swap(0, 1);
             }
             lists = [l0, l1];
@@ -730,26 +953,44 @@ impl H264Decoder {
                         no_wrap -= max_pic_num;
                     }
                     pred = no_wrap;
-                    let pic_num = if no_wrap > curr_pic_num { no_wrap - max_pic_num } else { no_wrap };
+                    let pic_num = if no_wrap > curr_pic_num {
+                        no_wrap - max_pic_num
+                    } else {
+                        no_wrap
+                    };
                     if field {
-                        let par = if pic_num & 1 == 1 { cur_par } else { 1 - cur_par };
+                        let par = if pic_num & 1 == 1 {
+                            cur_par
+                        } else {
+                            1 - cur_par
+                        };
                         let fnw = pic_num >> 1;
                         self.dpb
                             .iter()
                             .position(|p| p.short & (1 << par) != 0 && p.frame_num_wrap == fnw)
                             .map(|i| (i, Some(par), false))
                     } else {
-                        self.dpb.iter().position(|p| p.short == 3 && p.frame_num_wrap == pic_num).map(|i| (i, None, false))
+                        self.dpb
+                            .iter()
+                            .position(|p| p.short == 3 && p.frame_num_wrap == pic_num)
+                            .map(|i| (i, None, false))
                     }
                 } else if field {
-                    let par = if m.value & 1 == 1 { cur_par } else { 1 - cur_par };
+                    let par = if m.value & 1 == 1 {
+                        cur_par
+                    } else {
+                        1 - cur_par
+                    };
                     let lt = m.value >> 1;
                     self.dpb
                         .iter()
                         .position(|p| p.long & (1 << par) != 0 && p.lt_idx == lt)
                         .map(|i| (i, Some(par), true))
                 } else {
-                    self.dpb.iter().position(|p| p.long == 3 && p.lt_idx == m.value).map(|i| (i, None, true))
+                    self.dpb
+                        .iter()
+                        .position(|p| p.long == 3 && p.lt_idx == m.value)
+                        .map(|i| (i, None, true))
                 };
                 let Some((i, par, long_term)) = target else {
                     return Err("ref_pic_list_modification names a missing picture".into());
@@ -757,12 +998,26 @@ impl H264Decoder {
                 let e = match par {
                     None => {
                         let p = &self.dpb[i];
-                        RefEntry { dpb: i, id: p.id * 4 + 3, poc: p.poc, long_term, structure: 3, planes: p.planes.clone() }
+                        RefEntry {
+                            dpb: i,
+                            id: p.id * 4 + 3,
+                            poc: p.poc,
+                            long_term,
+                            structure: 3,
+                            planes: p.planes.clone(),
+                        }
                     }
                     Some(par) => {
                         let planes = self.dpb[i].field(par);
                         let p = &self.dpb[i];
-                        RefEntry { dpb: i, id: p.id * 4 + 1 + par as u32, poc: p.field_poc[par], long_term, structure: 1 + par as u8, planes }
+                        RefEntry {
+                            dpb: i,
+                            id: p.id * 4 + 1 + par as u32,
+                            poc: p.field_poc[par],
+                            long_term,
+                            structure: 1 + par as u8,
+                            planes,
+                        }
                     }
                 };
                 if idx > lists[l].len() {
@@ -793,7 +1048,10 @@ impl H264Decoder {
         let n_ref = self.dpb.iter().filter(|p| p.is_ref()).count();
         let n_short = self.dpb.iter().filter(|p| p.short != 0).count();
         if n_ref >= max && n_short > 0 {
-            if let Some(i) = (0..self.dpb.len()).filter(|&i| self.dpb[i].short != 0).min_by_key(|&i| self.dpb[i].frame_num_wrap) {
+            if let Some(i) = (0..self.dpb.len())
+                .filter(|&i| self.dpb[i].short != 0)
+                .min_by_key(|&i| self.dpb[i].frame_num_wrap)
+            {
                 self.dpb[i].short = 0;
             }
         }
@@ -821,22 +1079,38 @@ impl H264Decoder {
             }
         }
         // (store, field bits) of a short-term picNumX / long-term pic num.
-        let (curr_pic_num, _) = if field { (2 * cur.frame_num as i32 + 1, 0) } else { (cur.frame_num as i32, 0) };
+        let (curr_pic_num, _) = if field {
+            (2 * cur.frame_num as i32 + 1, 0)
+        } else {
+            (cur.frame_num as i32, 0)
+        };
         let find_short = |dpb: &[RefPic], pic_num: i32| -> Option<(usize, u8)> {
             if field {
-                let par = if pic_num & 1 == 1 { cur_par } else { 1 - cur_par };
+                let par = if pic_num & 1 == 1 {
+                    cur_par
+                } else {
+                    1 - cur_par
+                };
                 let fnw = pic_num >> 1;
-                dpb.iter().position(|p| p.short & (1 << par) != 0 && p.frame_num_wrap == fnw).map(|i| (i, 1u8 << par))
+                dpb.iter()
+                    .position(|p| p.short & (1 << par) != 0 && p.frame_num_wrap == fnw)
+                    .map(|i| (i, 1u8 << par))
             } else {
-                dpb.iter().position(|p| p.short == 3 && p.frame_num_wrap == pic_num).map(|i| (i, 3))
+                dpb.iter()
+                    .position(|p| p.short == 3 && p.frame_num_wrap == pic_num)
+                    .map(|i| (i, 3))
             }
         };
         let find_long = |dpb: &[RefPic], num: u32| -> Option<(usize, u8)> {
             if field {
                 let par = if num & 1 == 1 { cur_par } else { 1 - cur_par };
-                dpb.iter().position(|p| p.long & (1 << par) != 0 && p.lt_idx == num >> 1).map(|i| (i, 1u8 << par))
+                dpb.iter()
+                    .position(|p| p.long & (1 << par) != 0 && p.lt_idx == num >> 1)
+                    .map(|i| (i, 1u8 << par))
             } else {
-                dpb.iter().position(|p| p.long == 3 && p.lt_idx == num).map(|i| (i, 3))
+                dpb.iter()
+                    .position(|p| p.long == 3 && p.lt_idx == num)
+                    .map(|i| (i, 3))
             }
         };
         if cur.idr && !cur.second_field {
@@ -846,7 +1120,10 @@ impl H264Decoder {
             } else {
                 self.max_lt_idx = None;
             }
-        } else if cur.second_field && (self.dpb[cur.store].short != 0 || self.dpb[cur.store].long != 0) && cur.mmcos.is_none() {
+        } else if cur.second_field
+            && (self.dpb[cur.store].short != 0 || self.dpb[cur.store].long != 0)
+            && cur.mmcos.is_none()
+        {
             // The first field already holds the frame's marking: the second
             // takes the same (no sliding window, §8.2.5.3).
             long_term = self.dpb[cur.store].long != 0;
@@ -915,7 +1192,11 @@ impl H264Decoder {
                 // A stream that overfills the DPB with adaptive marking
                 // is broken; slide rather than grow without bound.
                 let max = cur.sps.max_num_ref_frames.max(1) as usize;
-                let others = self.dpb.iter().filter(|p| p.is_ref() && p.id != cur_id).count();
+                let others = self
+                    .dpb
+                    .iter()
+                    .filter(|p| p.is_ref() && p.id != cur_id)
+                    .count();
                 if others >= max {
                     self.sliding_window(&cur.sps, true);
                 }
@@ -942,14 +1223,25 @@ impl H264Decoder {
         };
         let sps = cur.sps.clone();
         let accel = self.accel.is_some();
-        if accel {
+        // Marking below drops entries; the slices' indices are into this.
+        let jobs = self.jobs_active();
+        let snapshot = jobs.then(|| self.dpb.clone());
+        let slot = jobs.then(Slot::new);
+        if jobs {
+            self.dpb[cur.store].slot = slot.clone();
+        } else if accel {
             if std::mem::take(&mut self.accel_started) {
                 if let Err(e) = self.accel.as_mut().unwrap().end_picture() {
                     self.accel_error.get_or_insert(e);
                 }
             }
         } else if cur.mbaff {
-            deblock::deblock_mbaff(&mut cur.pic, sps.bit_depth_luma, sps.bit_depth_chroma, sps.chroma_format_idc);
+            deblock::deblock_mbaff(
+                &mut cur.pic,
+                sps.bit_depth_luma,
+                sps.bit_depth_chroma,
+                sps.chroma_format_idc,
+            );
         } else {
             deblock::deblock_picture(
                 &mut cur.pic,
@@ -961,9 +1253,9 @@ impl H264Decoder {
         }
         // Move the samples and motion into the frame store.
         let structure = cur.structure;
-        let planes = std::mem::replace(&mut cur.pic.planes, empty_planes());
-        let mbs = Arc::new(std::mem::take(&mut cur.pic.mbs));
-        if !accel {
+        if !accel && !jobs {
+            let planes = std::mem::replace(&mut cur.pic.planes, empty_planes());
+            let mbs = Arc::new(std::mem::take(&mut cur.pic.mbs));
             let st = &mut self.dpb[cur.store];
             st.field_planes = [None, None];
             if structure == 3 {
@@ -976,7 +1268,8 @@ impl H264Decoder {
                     let (fp, d) = (&planes[c], &mut dst[c]);
                     for y in 0..fp.height {
                         let o = (2 * y + par) * d.width;
-                        d.data[o..o + d.width].copy_from_slice(&fp.data[y * fp.width..(y + 1) * fp.width]);
+                        d.data[o..o + d.width]
+                            .copy_from_slice(&fp.data[y * fp.width..(y + 1) * fp.width]);
                     }
                 }
                 st.field_mbs[par] = Some(mbs);
@@ -1021,19 +1314,16 @@ impl H264Decoder {
         if !complete {
             self.pending = Some((st_id, structure, cur.frame_num, cur.nal_ref_idc != 0));
         }
+        if let (Some(snapshot), Some(slot)) = (snapshot, slot) {
+            let poc = self.dpb[cur.store].poc;
+            let idr = cur.idr || had_mmco5;
+            self.submit_picture(cur, snapshot, slot, poc, idr);
+            self.prune();
+            return;
+        }
         if complete {
             let st = &self.dpb[cur.store];
-            let chroma = match sps.chroma_format_idc {
-                0 => ChromaFormat::Monochrome,
-                2 => ChromaFormat::Yuv422,
-                _ => ChromaFormat::Yuv420,
-            };
-            let crop = sps.crop.map(|v| v as usize);
-            let color = ColorInfo::from_vui(
-                sps.matrix_coefficients,
-                sps.full_range,
-                sps.height_mbs * 16 - sps.crop[2] - sps.crop[3],
-            );
+            let (chroma, crop, color) = output_format(&sps);
             let frame = match self.accel.as_mut() {
                 Some(a) => match a.frame(st.id, &sps) {
                     Ok(f) => f,
@@ -1043,14 +1333,163 @@ impl H264Decoder {
                         return;
                     }
                 },
-                None => DecodedFrame::from_planes(&st.planes, chroma, sps.bit_depth_luma as u8, crop, color),
+                None => DecodedFrame::from_planes(
+                    &st.planes,
+                    chroma,
+                    sps.bit_depth_luma as u8,
+                    crop,
+                    color,
+                ),
             };
-            self.done.push(H264Picture {
+            let picture = H264Picture {
                 frame,
                 poc: st.poc,
                 idr: cur.idr || had_mmco5,
-            });
+            };
+            self.publish(picture);
         }
         self.prune();
     }
+
+    /// Hand a picture, its marking done, to a job.
+    fn submit_picture(
+        &mut self,
+        cur: Current,
+        dpb: Vec<RefPic>,
+        slot: Arc<Slot<RefData>>,
+        poc: i32,
+        idr: bool,
+    ) {
+        let mut deps: Vec<Arc<Slot<RefData>>> = Vec::new();
+        for entry in cur.work.iter().flat_map(|w| w.refs.iter().flatten()) {
+            if let Some(dep) = dpb.get(entry.dpb).and_then(|p| p.slot.clone()) {
+                if !Arc::ptr_eq(&dep, &slot) && !deps.iter().any(|d| Arc::ptr_eq(d, &dep)) {
+                    deps.push(dep);
+                }
+            }
+        }
+        let t = self.threads.as_mut().unwrap();
+        let order = t.next_job;
+        t.next_job += 1;
+        let (finished, error) = (t.finished.clone(), t.error.clone());
+        let tables = self.tables.clone();
+        let sps = cur.sps.clone();
+        t.jobs.clone().submit(&deps, move || {
+            let (data, frame) = match caught(|| reconstruct(cur, dpb, &tables)) {
+                Ok((data, frame)) => (data, Some(frame)),
+                Err(e) => {
+                    let mut first = error.lock().unwrap();
+                    if first.as_ref().is_none_or(|f| order < f.0) {
+                        *first = Some((order, e));
+                    }
+                    (grey_frame(&sps), None)
+                }
+            };
+            let picture = frame.map(|frame| H264Picture { frame, poc, idr });
+            finished.lock().unwrap().insert(order, picture);
+            slot.finish(data);
+        });
+    }
+}
+
+/// How `sps` says a picture leaves the decoder.
+#[cfg(feature = "decode")]
+fn output_format(sps: &Sps) -> (ChromaFormat, [usize; 4], ColorInfo) {
+    let chroma = match sps.chroma_format_idc {
+        0 => ChromaFormat::Monochrome,
+        2 => ChromaFormat::Yuv422,
+        _ => ChromaFormat::Yuv420,
+    };
+    let color = ColorInfo::from_vui(
+        sps.matrix_coefficients,
+        sps.full_range,
+        sps.height_mbs * 16 - sps.crop[2] - sps.crop[3],
+    );
+    (chroma, sps.crop.map(|v| v as usize), color)
+}
+
+/// What a failed picture leaves for the ones that reference it.
+#[cfg(feature = "decode")]
+fn grey_frame(sps: &Sps) -> RefData {
+    let (w, h) = (sps.width_mbs as usize * 16, sps.height_mbs as usize * 16);
+    let (cw, ch) = match sps.chroma_format_idc {
+        0 => (0, 0),
+        2 => (w / 2, h),
+        _ => (w / 2, h / 2),
+    };
+    let planes = [
+        Plane::new(w, h, 1 << (sps.bit_depth_luma - 1)),
+        Plane::new(cw, ch, 1 << (sps.bit_depth_chroma - 1)),
+        Plane::new(cw, ch, 1 << (sps.bit_depth_chroma - 1)),
+    ];
+    RefData {
+        planes: Arc::new(planes),
+        mbs: Arc::new(vec![
+            MbInfo::default();
+            (sps.width_mbs * sps.height_mbs) as usize
+        ]),
+    }
+}
+
+/// A picture job: its slices, deblocking and what comes out. `dpb` is the
+/// buffer as this frame saw it, its references all finished by now.
+#[cfg(feature = "decode")]
+fn reconstruct(
+    mut cur: Current,
+    mut dpb: Vec<RefPic>,
+    tables: &CavlcTables,
+) -> Result<(RefData, DecodedFrame)> {
+    for p in &mut dpb {
+        if let Some(data) = p.slot.as_ref().and_then(|s| s.get()) {
+            p.planes = data.planes.clone();
+            p.mbs = data.mbs.clone();
+        }
+    }
+    let sps = cur.sps.clone();
+    // The buffers come here rather than in the header walk, which they would
+    // otherwise hold up.
+    let blank = grey_frame(&sps);
+    cur.pic.mbs = (*blank.mbs).clone();
+    cur.pic.planes = Arc::try_unwrap(blank.planes).unwrap_or_else(|p| (*p).clone());
+    for mut w in std::mem::take(&mut cur.work) {
+        // The lists were built before these samples existed.
+        for entry in w.refs.iter_mut().flatten() {
+            entry.planes = dpb
+                .get(entry.dpb)
+                .ok_or("reference out of range")?
+                .planes
+                .clone();
+        }
+        let frefs = Default::default();
+        let mut dec = SliceDec::new(
+            &sps,
+            &w.pps,
+            &w.hdr,
+            w.slice_num,
+            &mut cur.pic,
+            &dpb,
+            &w.refs,
+            &frefs,
+            tables,
+        );
+        dec.decode(&w.rbsp)?;
+    }
+    deblock::deblock_picture(
+        &mut cur.pic,
+        sps.bit_depth_luma,
+        sps.bit_depth_chroma,
+        sps.chroma_format_idc,
+        false,
+    );
+    let planes = std::mem::replace(&mut cur.pic.planes, empty_planes());
+    let (chroma, crop, color) = output_format(&sps);
+    let frame = DecodedFrame::from_planes(&planes, chroma, sps.bit_depth_luma as u8, crop, color);
+    let mbs = Arc::new(std::mem::take(&mut cur.pic.mbs));
+    Ok((
+        RefData {
+            planes: Arc::new(planes),
+            mbs,
+        },
+        frame,
+    ))
 }

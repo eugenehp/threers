@@ -10,8 +10,8 @@ mod action;
 mod clip;
 mod interpolant;
 mod mixer;
-mod track;
 pub mod three;
+mod track;
 
 pub use action::{AnimationAction, LoopMode};
 pub use clip::AnimationClip;

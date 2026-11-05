@@ -43,7 +43,11 @@ pub fn dequant_into(levels: &[i32], n: usize, qp: i32, out: &mut [i32]) {
     let m = 16i64;
     let per = (qp / 6) as i64;
     let rem = (qp % 6) as usize;
-    let add = if bd_shift > 0 { 1i64 << (bd_shift - 1) } else { 0 };
+    let add = if bd_shift > 0 {
+        1i64 << (bd_shift - 1)
+    } else {
+        0
+    };
     for (o, &l) in out.iter_mut().zip(levels) {
         let d = (((l as i64 * m * LEVEL_SCALE[rem]) << per) + add) >> bd_shift;
         *o = d.clamp(-32768, 32767) as i32;

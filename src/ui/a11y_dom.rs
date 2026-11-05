@@ -149,7 +149,10 @@ fn content(n: &AccessNode) -> String {
 fn node_of(target: Option<web_sys::EventTarget>) -> Option<NodeId> {
     let e: Element = target?.dyn_into().ok()?;
     let e = e.closest("[data-threers-node]").ok()??;
-    e.get_attribute("data-threers-node")?.parse().ok().map(NodeId)
+    e.get_attribute("data-threers-node")?
+        .parse()
+        .ok()
+        .map(NodeId)
 }
 
 impl DomAccessibility {
@@ -163,49 +166,84 @@ impl DomAccessibility {
         // `after` needs the canvas in a parent; without one, no mirror.
         canvas.parent_element()?;
         let root = document.create_element("div").ok()?;
-        let place = canvas.get_attribute("style").unwrap_or_else(|| "position:absolute;left:0;top:0;width:100%;height:100%".into());
-        root.set_attribute("style", &format!("{place};pointer-events:none;overflow:hidden")).ok()?;
+        let place = canvas
+            .get_attribute("style")
+            .unwrap_or_else(|| "position:absolute;left:0;top:0;width:100%;height:100%".into());
+        root.set_attribute(
+            "style",
+            &format!("{place};pointer-events:none;overflow:hidden"),
+        )
+        .ok()?;
         root.set_attribute("data-threers-a11y", "").ok()?;
         canvas.after_with_node_1(&root).ok()?;
         let actions: Rc<RefCell<Vec<A11yAction>>> = Rc::default();
         let mut listeners = Vec::new();
-        let listen = |root: &Element, kind: &str, f: Box<dyn FnMut(web_sys::Event)>, out: &mut Vec<Closure<dyn FnMut(web_sys::Event)>>| {
+        let listen = |root: &Element,
+                      kind: &str,
+                      f: Box<dyn FnMut(web_sys::Event)>,
+                      out: &mut Vec<Closure<dyn FnMut(web_sys::Event)>>| {
             let c = Closure::wrap(f);
             let _ = root.add_event_listener_with_callback(kind, c.as_ref().unchecked_ref());
             out.push(c);
         };
         let a = actions.clone();
-        listen(&root, "focusin", Box::new(move |e: web_sys::Event| {
-            if let Some(id) = node_of(e.target()) {
-                a.borrow_mut().push(A11yAction::Focus(id));
-            }
-        }), &mut listeners);
+        listen(
+            &root,
+            "focusin",
+            Box::new(move |e: web_sys::Event| {
+                if let Some(id) = node_of(e.target()) {
+                    a.borrow_mut().push(A11yAction::Focus(id));
+                }
+            }),
+            &mut listeners,
+        );
         let a = actions.clone();
         // A screen reader's "press" is a click on the element.
-        listen(&root, "click", Box::new(move |e: web_sys::Event| {
-            if let Some(id) = node_of(e.target()) {
-                a.borrow_mut().push(A11yAction::Activate(id));
-            }
-        }), &mut listeners);
+        listen(
+            &root,
+            "click",
+            Box::new(move |e: web_sys::Event| {
+                if let Some(id) = node_of(e.target()) {
+                    a.borrow_mut().push(A11yAction::Activate(id));
+                }
+            }),
+            &mut listeners,
+        );
         let a = actions.clone();
-        listen(&root, "keydown", Box::new(move |e: web_sys::Event| {
-            let Some(k) = e.dyn_ref::<web_sys::KeyboardEvent>() else { return };
-            let Some(id) = node_of(e.target()) else { return };
-            let target: Option<Element> = e.target().and_then(|t| t.dyn_into().ok());
-            let role = target.and_then(|t| t.get_attribute("role")).unwrap_or_default();
-            let action = match (k.key().as_str(), role.as_str()) {
-                ("Enter" | " ", "slider") => None,
-                ("Enter" | " ", _) => Some(A11yAction::Activate(id)),
-                ("ArrowUp" | "ArrowRight", "slider") => Some(A11yAction::Increment(id)),
-                ("ArrowDown" | "ArrowLeft", "slider") => Some(A11yAction::Decrement(id)),
-                _ => None,
-            };
-            if let Some(action) = action {
-                e.prevent_default();
-                a.borrow_mut().push(action);
-            }
-        }), &mut listeners);
-        Some(Self { root, elements: HashMap::new(), actions, _listeners: listeners })
+        listen(
+            &root,
+            "keydown",
+            Box::new(move |e: web_sys::Event| {
+                let Some(k) = e.dyn_ref::<web_sys::KeyboardEvent>() else {
+                    return;
+                };
+                let Some(id) = node_of(e.target()) else {
+                    return;
+                };
+                let target: Option<Element> = e.target().and_then(|t| t.dyn_into().ok());
+                let role = target
+                    .and_then(|t| t.get_attribute("role"))
+                    .unwrap_or_default();
+                let action = match (k.key().as_str(), role.as_str()) {
+                    ("Enter" | " ", "slider") => None,
+                    ("Enter" | " ", _) => Some(A11yAction::Activate(id)),
+                    ("ArrowUp" | "ArrowRight", "slider") => Some(A11yAction::Increment(id)),
+                    ("ArrowDown" | "ArrowLeft", "slider") => Some(A11yAction::Decrement(id)),
+                    _ => None,
+                };
+                if let Some(action) = action {
+                    e.prevent_default();
+                    a.borrow_mut().push(action);
+                }
+            }),
+            &mut listeners,
+        );
+        Some(Self {
+            root,
+            elements: HashMap::new(),
+            actions,
+            _listeners: listeners,
+        })
     }
 
     /// Brings the mirror up to `ui`'s accessibility tree as last laid out:
@@ -213,7 +251,9 @@ impl DomAccessibility {
     /// not change left alone (and focused ones keep their focus).
     pub fn update(&mut self, ui: &Ui) {
         let tree = ui.accessibility_tree();
-        let Some(document) = web_sys::window().and_then(|w| w.document()) else { return };
+        let Some(document) = web_sys::window().and_then(|w| w.document()) else {
+            return;
+        };
         let mut seen = std::collections::HashSet::new();
         // Parents before children: the tree's list is in that order.
         let mut parent_of: Vec<Option<usize>> = vec![None; tree.len()];
@@ -235,11 +275,21 @@ impl DomAccessibility {
             let entry = match self.elements.remove(&n.id) {
                 Some(e) => e,
                 None => {
-                    let Ok(element) = document.create_element("div") else { continue };
-                    Mirrored { element, attributes: Vec::new(), text: String::new() }
+                    let Ok(element) = document.create_element("div") else {
+                        continue;
+                    };
+                    Mirrored {
+                        element,
+                        attributes: Vec::new(),
+                        text: String::new(),
+                    }
                 }
             };
-            let Mirrored { element, attributes: old_attrs, text: old_text } = entry;
+            let Mirrored {
+                element,
+                attributes: old_attrs,
+                text: old_text,
+            } = entry;
             if old_attrs != attrs {
                 for (k, _) in &old_attrs {
                     if !attrs.iter().any(|(n, _)| n == k) {
@@ -255,10 +305,15 @@ impl DomAccessibility {
             if old_text != text {
                 // Text goes in its own child, so the element's children
                 // (other nodes' elements) are not replaced with it.
-                let holder = match element.first_element_child().filter(|c| c.has_attribute("data-threers-text")) {
+                let holder = match element
+                    .first_element_child()
+                    .filter(|c| c.has_attribute("data-threers-text"))
+                {
                     Some(h) => h,
                     None => {
-                        let Ok(h) = document.create_element("span") else { continue };
+                        let Ok(h) = document.create_element("span") else {
+                            continue;
+                        };
                         let _ = h.set_attribute("data-threers-text", "");
                         let _ = element.prepend_with_node_1(&h);
                         h
@@ -269,7 +324,14 @@ impl DomAccessibility {
             if element.parent_element().as_ref() != Some(&container) {
                 let _ = container.append_child(&element);
             }
-            self.elements.insert(n.id, Mirrored { element, attributes: attrs, text });
+            self.elements.insert(
+                n.id,
+                Mirrored {
+                    element,
+                    attributes: attrs,
+                    text,
+                },
+            );
         }
         // Gone from the tree: gone from the page.
         self.elements.retain(|id, m| {

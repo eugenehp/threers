@@ -10,12 +10,12 @@
 use std::sync::Arc;
 
 use threers::cameras::Camera;
-use threers::{
-    AmbientLight, Color, DirectionalLight, Euler, KirigamiMesh, KirigamiPreset,
-    KIRIGAMI_NET_VARIANT, LineBasicMaterial, LineSegments, Mesh, Object3D, OrbitControls,
-    PerspectiveCamera, PointerEvent, Scene, SphereGeometry, StandardMaterial, Vector3,
-};
 use threers::renderer::WindowRenderer;
+use threers::{
+    AmbientLight, Color, DirectionalLight, Euler, KirigamiMesh, KirigamiPreset, LineBasicMaterial,
+    LineSegments, Mesh, Object3D, OrbitControls, PerspectiveCamera, PointerEvent, Scene,
+    SphereGeometry, StandardMaterial, Vector3, KIRIGAMI_NET_VARIANT,
+};
 
 use winit::{
     dpi::PhysicalPosition,
@@ -77,12 +77,7 @@ async fn run() {
 
     let mut variant: u32 = 0;
     let mut scene = build_scene(variant);
-    let mut camera = PerspectiveCamera::new(
-        35.0,
-        view.aspect(),
-        1.0,
-        4000.0,
-    );
+    let mut camera = PerspectiveCamera::new(35.0, view.aspect(), 1.0, 4000.0);
     camera.position = Vector3::new(0.0, 90.0, 420.0);
     camera.look_at(Vector3::ZERO);
     let mut controls = OrbitControls::new(&camera);
@@ -163,7 +158,10 @@ async fn run() {
                             ..Default::default()
                         },
                         &mut camera,
-                        { let (w, h) = view.size(); (w as f32, h as f32) },
+                        {
+                            let (w, h) = view.size();
+                            (w as f32, h as f32)
+                        },
                     );
                 }
                 WindowEvent::MouseWheel { delta, .. } => {
@@ -181,7 +179,10 @@ async fn run() {
                             ..Default::default()
                         },
                         &mut camera,
-                        { let (w, h) = view.size(); (w as f32, h as f32) },
+                        {
+                            let (w, h) = view.size();
+                            (w as f32, h as f32)
+                        },
                     );
                 }
                 WindowEvent::RedrawRequested => {
@@ -213,9 +214,7 @@ fn build_scene(variant: u32) -> Scene {
     let root_id = scene.add(root);
 
     if variant == KIRIGAMI_NET_VARIANT {
-        let net = KirigamiPreset::Planar
-            .evaluate(NX, 6, 0.0)
-            .develop_joined();
+        let net = KirigamiPreset::Planar.evaluate(NX, 6, 0.0).develop_joined();
         let geom = net.to_geometry(0.9);
         let mut mat = StandardMaterial::new(Color::new(0.78, 0.82, 0.76));
         mat.metalness = 0.15;

@@ -353,7 +353,10 @@ impl ShaderMaterial {
         self
     }
     /// Attach user textures (`u_tex0`..`u_tex3`). At most four are used.
-    pub fn with_textures<T: Into<crate::marks::gpu::TextureView>>(mut self, t: impl IntoIterator<Item = T>) -> Self {
+    pub fn with_textures<T: Into<crate::marks::gpu::TextureView>>(
+        mut self,
+        t: impl IntoIterator<Item = T>,
+    ) -> Self {
         self.textures = t.into_iter().map(Into::into).collect();
         self
     }

@@ -27,25 +27,44 @@ use crate::bitstream::{emulation_prevention, rbsp_trailing_bits, BitWriter};
 use crate::h264::cabac::{self as cabac_syntax, Cabac};
 use crate::h264::cavlc::{self, BlockKind, ZIGZAG4};
 use crate::h264::compress::{compressed_slice_rbsp, Reconstruction};
+use crate::h264::interp::HalfPlanes;
 use crate::h264::nal::{nal_unit_base, NalUnitType};
 use crate::h264::params::{write_sps_with_refs, EntropyMode, H264Config, MB_SIZE};
 use crate::h264::pps::write_pps_with_id;
-use crate::h264::transform::{chroma_dc_forward, chroma_dc_inverse, dequant4, forward4, inverse4, quant4};
-use crate::h264::interp::HalfPlanes;
+use crate::h264::transform::{
+    chroma_dc_forward, chroma_dc_inverse, dequant4, forward4, inverse4, quant4,
+};
 use crate::hevc::encoder::{pad_plane, Yuv420Frame};
 
 impl Reference {
     fn new(rec: &Reconstruction, mvs: Vec<[i16; 2]>) -> Reference {
-        let threads = if cfg!(target_family = "wasm") { 1 } else { std::thread::available_parallelism().map_or(1, |n| n.get()).min(16) };
-        let halves = HalfPlanes::new(&rec.y, rec.coded_width as usize, rec.coded_height as usize, threads);
-        Reference { y: rec.y.clone(), u: rec.u.clone(), v: rec.v.clone(), halves, mvs }
+        let threads = if cfg!(target_family = "wasm") {
+            1
+        } else {
+            std::thread::available_parallelism()
+                .map_or(1, |n| n.get())
+                .min(16)
+        };
+        let halves = HalfPlanes::new(
+            &rec.y,
+            rec.coded_width as usize,
+            rec.coded_height as usize,
+            threads,
+        );
+        Reference {
+            y: rec.y.clone(),
+            u: rec.u.clone(),
+            v: rec.v.clone(),
+            halves,
+            mvs,
+        }
     }
 }
 
 /// Table 9-4, inter column: code number → `coded_block_pattern`.
 const CBP_INTER_FROM_CODE: [u8; 48] = [
-    0, 16, 1, 2, 4, 8, 32, 3, 5, 10, 12, 15, 47, 7, 11, 13, 14, 6, 9, 31, 35, 37, 42, 44, 33, 34, 36, 40, 39, 43, 45,
-    46, 17, 18, 20, 24, 19, 21, 26, 28, 23, 27, 29, 30, 22, 25, 38, 41,
+    0, 16, 1, 2, 4, 8, 32, 3, 5, 10, 12, 15, 47, 7, 11, 13, 14, 6, 9, 31, 35, 37, 42, 44, 33, 34,
+    36, 40, 39, 43, 45, 46, 17, 18, 20, 24, 19, 21, 26, 28, 23, 27, 29, 30, 22, 25, 38, 41,
 ];
 
 const fn cbp_inter_code() -> [u32; 48] {
@@ -61,15 +80,29 @@ const CBP_INTER_CODE: [u32; 48] = cbp_inter_code();
 
 /// The 4×4 luma blocks in bitstream order (Table 6-3), in 4-sample units.
 const BLK_POS: [(usize, usize); 16] = [
-    (0, 0), (1, 0), (0, 1), (1, 1),
-    (2, 0), (3, 0), (2, 1), (3, 1),
-    (0, 2), (1, 2), (0, 3), (1, 3),
-    (2, 2), (3, 2), (2, 3), (3, 3),
+    (0, 0),
+    (1, 0),
+    (0, 1),
+    (1, 1),
+    (2, 0),
+    (3, 0),
+    (2, 1),
+    (3, 1),
+    (0, 2),
+    (1, 2),
+    (0, 3),
+    (1, 3),
+    (2, 2),
+    (3, 2),
+    (2, 3),
+    (3, 3),
 ];
 
 /// Chroma QP from luma QP (Table 8-15), `chroma_qp_index_offset = 0`.
 fn chroma_qp(qp: i32) -> i32 {
-    const T: [i32; 22] = [29, 30, 31, 32, 32, 33, 34, 34, 35, 35, 36, 36, 37, 37, 37, 38, 38, 38, 39, 39, 39, 39];
+    const T: [i32; 22] = [
+        29, 30, 31, 32, 32, 33, 34, 34, 35, 35, 36, 36, 37, 37, 37, 38, 38, 38, 39, 39, 39, 39,
+    ];
     let q = qp.clamp(0, 51);
     if q < 30 {
         q
@@ -85,7 +118,11 @@ fn lambda(qp: i32) -> f64 {
 
 /// Bits in a `se(v)` code.
 fn se_bits(v: i32) -> u32 {
-    let code = if v > 0 { 2 * v as u32 - 1 } else { 2 * (-v) as u32 };
+    let code = if v > 0 {
+        2 * v as u32 - 1
+    } else {
+        2 * (-v) as u32
+    };
     2 * (32 - (code + 1).leading_zeros() - 1) + 1
 }
 
@@ -145,7 +182,9 @@ impl InterEncoder {
         let threads = if cfg!(target_family = "wasm") {
             1
         } else {
-            std::thread::available_parallelism().map_or(1, |n| n.get()).min(16)
+            std::thread::available_parallelism()
+                .map_or(1, |n| n.get())
+                .min(16)
         };
         InterEncoder {
             qp: cfg.qp,
@@ -243,29 +282,58 @@ impl InterEncoder {
 
     /// Encode the next picture, in display order.
     pub fn encode(&mut self, frame: &Yuv420Frame) -> EncodedPicture {
-        assert_eq!((frame.width, frame.height), (self.cfg.width, self.cfg.height), "frame size differs from encoder size");
+        assert_eq!(
+            (frame.width, frame.height),
+            (self.cfg.width, self.cfg.height),
+            "frame size differs from encoder size"
+        );
         let (cw, ch) = (self.cfg.coded_width, self.cfg.coded_height);
         let y = pad_plane(&frame.y, frame.width, frame.height, cw, ch);
         let u = pad_plane(&frame.u, frame.width / 2, frame.height / 2, cw / 2, ch / 2);
         let v = pad_plane(&frame.v, frame.width / 2, frame.height / 2, cw / 2, ch / 2);
 
-        let due = self.force_key || self.reference.is_none() || self.since_key + 1 >= self.keyframe_interval;
+        let due = self.force_key
+            || self.reference.is_none()
+            || self.since_key + 1 >= self.keyframe_interval;
         if !due {
             let reference = self.reference.as_ref().unwrap();
-            let search = motion_search(&y, reference, cw, ch, self.qp, self.search_range, self.threads);
+            let search = motion_search(
+                &y,
+                reference,
+                cw,
+                ch,
+                self.qp,
+                self.search_range,
+                self.threads,
+            );
             let mad = search.iter().map(|m| m.sad as f64).sum::<f64>() / (cw * ch) as f64;
             // A cut: worse than the threshold, or a sudden jump from how
             // well the last pictures matched.
-            let jump = self.last_mad.is_some_and(|prev| mad > 12.0 && mad > 3.0 * prev.max(2.0));
+            let jump = self
+                .last_mad
+                .is_some_and(|prev| mad > 12.0 && mad > 3.0 * prev.max(2.0));
             if mad <= self.scene_cut && !jump {
                 self.last_mad = Some(mad);
                 let frame_num = (self.since_key + 1) % 16;
-                let (rbsp, rec, mvs) = p_slice(&self.cfg, self.entropy, self.qp, frame_num, &y, &u, &v, reference, &search);
+                let (rbsp, rec, mvs) = p_slice(
+                    &self.cfg,
+                    self.entropy,
+                    self.qp,
+                    frame_num,
+                    &y,
+                    &u,
+                    &v,
+                    reference,
+                    &search,
+                );
                 self.since_key += 1;
                 let nal = nal(1, 2, &rbsp);
                 self.reference = Some(Reference::new(&rec, mvs));
                 self.last = Some(rec);
-                return EncodedPicture { sample: length_prefixed(&[&nal]), keyframe: false };
+                return EncodedPicture {
+                    sample: length_prefixed(&[&nal]),
+                    keyframe: false,
+                };
             }
         }
         self.force_key = false;
@@ -276,7 +344,10 @@ impl InterEncoder {
         self.reference = Some(Reference::new(&rec, vec![[0, 0]; mbs]));
         self.last = Some(rec);
         let nal = nal_unit_base(NalUnitType::Idr, &rbsp);
-        EncodedPicture { sample: length_prefixed(&[&nal]), keyframe: true }
+        EncodedPicture {
+            sample: length_prefixed(&[&nal]),
+            keyframe: true,
+        }
     }
 }
 
@@ -307,7 +378,17 @@ struct Searched {
 
 /// 16×16 SAD of `orig` at `(x, y)` against `refp` displaced by whole samples
 /// `(dx, dy)`, edges clamped as a decoder does.
-fn sad16(orig: &[u8], refp: &[u8], w: u32, h: u32, x: u32, y: u32, dx: i32, dy: i32, limit: u32) -> u32 {
+fn sad16(
+    orig: &[u8],
+    refp: &[u8],
+    w: u32,
+    h: u32,
+    x: u32,
+    y: u32,
+    dx: i32,
+    dy: i32,
+    limit: u32,
+) -> u32 {
     let (rx, ry) = (x as i32 + dx, y as i32 + dy);
     let inside = rx >= 0 && ry >= 0 && rx + 16 <= w as i32 && ry + 16 <= h as i32;
     let mut sad = 0u32;
@@ -315,7 +396,11 @@ fn sad16(orig: &[u8], refp: &[u8], w: u32, h: u32, x: u32, y: u32, dx: i32, dy: 
         let o = &orig[((y + j) * w + x) as usize..][..16];
         if inside {
             let r = &refp[((ry as u32 + j) * w + rx as u32) as usize..][..16];
-            sad += o.iter().zip(r).map(|(a, b)| a.abs_diff(*b) as u32).sum::<u32>();
+            sad += o
+                .iter()
+                .zip(r)
+                .map(|(a, b)| a.abs_diff(*b) as u32)
+                .sum::<u32>();
         } else {
             let yy = (ry + j as i32).clamp(0, h as i32 - 1) as u32;
             for (i, a) in o.iter().enumerate() {
@@ -354,7 +439,8 @@ fn satd16(orig: &[i32; 256], pred: &[i32; 256]) -> u32 {
             for i in 0..4 {
                 let (a, b, c, e) = (t[i], t[4 + i], t[8 + i], t[12 + i]);
                 let (s0, s1, d0, d1) = (a + e, b + c, a - e, b - c);
-                total += ((s0 + s1).abs() + (d0 + d1).abs() + (s0 - s1).abs() + (d0 - d1).abs()) as u32;
+                total +=
+                    ((s0 + s1).abs() + (d0 + d1).abs() + (s0 - s1).abs() + (d0 - d1).abs()) as u32;
             }
         }
     }
@@ -365,7 +451,15 @@ fn satd16(orig: &[i32; 256], pred: &[i32; 256]) -> u32 {
 /// The cost adds a rate term for the vector's distance from the same
 /// macroblock's vector in the previous picture (the spatial predictor is not
 /// known until the picture is coded in order).
-fn motion_search(y: &[u8], r: &Reference, cw: u32, ch: u32, qp: i32, range: i32, threads: usize) -> Vec<Searched> {
+fn motion_search(
+    y: &[u8],
+    r: &Reference,
+    cw: u32,
+    ch: u32,
+    qp: i32,
+    range: i32,
+    threads: usize,
+) -> Vec<Searched> {
     let (mbw, mbh) = ((cw / 16) as usize, (ch / 16) as usize);
     let lambda_sad = lambda(qp).sqrt();
     let search_mb = |mbx: usize, mby: usize| -> Searched {
@@ -373,7 +467,11 @@ fn motion_search(y: &[u8], r: &Reference, cw: u32, ch: u32, qp: i32, range: i32,
         let at = |m: [i32; 2], limit: u32| sad16(y, &r.y, cw, ch, x, y0, m[0], m[1], limit);
         let prev = r.mvs[mby * mbw + mbx];
         let pred = [prev[0] as i32 / 4, prev[1] as i32 / 4];
-        let cost = |m: [i32; 2], sad: u32| sad as f64 + lambda_sad * (se_bits((m[0] - pred[0]) * 4) + se_bits((m[1] - pred[1]) * 4)) as f64;
+        let cost = |m: [i32; 2], sad: u32| {
+            sad as f64
+                + lambda_sad
+                    * (se_bits((m[0] - pred[0]) * 4) + se_bits((m[1] - pred[1]) * 4)) as f64
+        };
         let mut cands = vec![[0, 0], pred];
         for (dx, dy) in [(-1i32, 0i32), (0, -1), (1, 0), (0, 1)] {
             let (nx, ny) = (mbx as i32 + dx, mby as i32 + dy);
@@ -417,18 +515,36 @@ fn motion_search(y: &[u8], r: &Reference, cw: u32, ch: u32, qp: i32, range: i32,
         // than SAD where interpolation smooths the prediction.
         let orig: [i32; 256] = gather(y, cw, x, y0, 16);
         let pred_q = [pred[0] * 4, pred[1] * 4];
-        let qcost = |m: [i32; 2], satd: u32| satd as f64 + lambda_sad * (se_bits(m[0] - pred_q[0]) + se_bits(m[1] - pred_q[1])) as f64;
+        let qcost = |m: [i32; 2], satd: u32| {
+            satd as f64
+                + lambda_sad * (se_bits(m[0] - pred_q[0]) + se_bits(m[1] - pred_q[1])) as f64
+        };
         let mut q = [best[0] * 4, best[1] * 4];
-        let mut q_satd = satd16(&orig, &predict_luma(r, cw, ch, x, y0, [q[0] as i16, q[1] as i16]));
+        let mut q_satd = satd16(
+            &orig,
+            &predict_luma(r, cw, ch, x, y0, [q[0] as i16, q[1] as i16]),
+        );
         let mut q_cost = qcost(q, q_satd);
         for step in [2, 1] {
             let centre = q;
-            for (dx, dy) in [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)] {
+            for (dx, dy) in [
+                (-1, -1),
+                (0, -1),
+                (1, -1),
+                (-1, 0),
+                (1, 0),
+                (-1, 1),
+                (0, 1),
+                (1, 1),
+            ] {
                 let m = [centre[0] + dx * step, centre[1] + dy * step];
                 if m[0].abs() > range * 4 + 3 || m[1].abs() > range * 4 + 3 {
                     continue;
                 }
-                let s = satd16(&orig, &predict_luma(r, cw, ch, x, y0, [m[0] as i16, m[1] as i16]));
+                let s = satd16(
+                    &orig,
+                    &predict_luma(r, cw, ch, x, y0, [m[0] as i16, m[1] as i16]),
+                );
                 let k = qcost(m, s);
                 if k < q_cost {
                     (q, q_satd, q_cost) = (m, s, k);
@@ -436,7 +552,10 @@ fn motion_search(y: &[u8], r: &Reference, cw: u32, ch: u32, qp: i32, range: i32,
             }
         }
         let _ = q_satd;
-        Searched { mv: [q[0] as i16, q[1] as i16], sad: best_sad }
+        Searched {
+            mv: [q[0] as i16, q[1] as i16],
+            sad: best_sad,
+        }
     };
     let mut out = vec![Searched { mv: [0, 0], sad: 0 }; mbw * mbh];
     let rows_each = mbh.div_ceil(threads.max(1));
@@ -468,7 +587,15 @@ fn predict_luma(r: &Reference, w: u32, h: u32, x: u32, y: u32, mv: [i16; 2]) -> 
     if mv[0] & 3 != 0 || mv[1] & 3 != 0 {
         let mut out = [0i32; 256];
         let (fx, fy) = ((mv[0] & 3) as usize, (mv[1] & 3) as usize);
-        r.halves.block(x as isize + (mv[0] as isize >> 2), y as isize + (mv[1] as isize >> 2), fx, fy, 16, 16, &mut out);
+        r.halves.block(
+            x as isize + (mv[0] as isize >> 2),
+            y as isize + (mv[1] as isize >> 2),
+            fx,
+            fy,
+            16,
+            16,
+            &mut out,
+        );
         return out;
     }
     let refp = &r.y;
@@ -507,18 +634,30 @@ fn predict_chroma(refp: &[u8], w: u32, h: u32, cx: u32, cy: u32, mv: [i16; 2]) -
             let r0 = &refp[((iy + j) as u32 * w + ix as u32) as usize..][..9];
             let r1 = &refp[((iy + j + 1) as u32 * w + ix as u32) as usize..][..9];
             for i in 0..8 {
-                out[(j * 8 + i) as usize] =
-                    (wa * r0[i as usize] as i32 + wb * r0[i as usize + 1] as i32 + wc * r1[i as usize] as i32 + wd * r1[i as usize + 1] as i32 + 32) >> 6;
+                out[(j * 8 + i) as usize] = (wa * r0[i as usize] as i32
+                    + wb * r0[i as usize + 1] as i32
+                    + wc * r1[i as usize] as i32
+                    + wd * r1[i as usize + 1] as i32
+                    + 32)
+                    >> 6;
             }
         }
         return out;
     }
-    let at = |x: i32, y: i32| refp[(y.clamp(0, h as i32 - 1) as u32 * w + x.clamp(0, w as i32 - 1) as u32) as usize] as i32;
+    let at = |x: i32, y: i32| {
+        refp[(y.clamp(0, h as i32 - 1) as u32 * w + x.clamp(0, w as i32 - 1) as u32) as usize]
+            as i32
+    };
     for j in 0..8 {
         for i in 0..8 {
             let (x, y) = (ix + i, iy + j);
             let (a, b, c, d) = (at(x, y), at(x + 1, y), at(x, y + 1), at(x + 1, y + 1));
-            out[(j * 8 + i) as usize] = ((8 - fx) * (8 - fy) * a + fx * (8 - fy) * b + (8 - fx) * fy * c + fx * fy * d + 32) >> 6;
+            out[(j * 8 + i) as usize] = ((8 - fx) * (8 - fy) * a
+                + fx * (8 - fy) * b
+                + (8 - fx) * fy * c
+                + fx * fy * d
+                + 32)
+                >> 6;
         }
     }
     out
@@ -581,7 +720,11 @@ impl State {
         if avail.iter().filter(|m| m.is_some()).count() == 1 {
             return avail.into_iter().flatten().next().unwrap();
         }
-        let (a, b, c) = (a.unwrap_or([0, 0]), b.unwrap_or([0, 0]), c.unwrap_or([0, 0]));
+        let (a, b, c) = (
+            a.unwrap_or([0, 0]),
+            b.unwrap_or([0, 0]),
+            c.unwrap_or([0, 0]),
+        );
         let med = |p: i16, q: i16, s: i16| p.max(q).min(p.min(q).max(s));
         [med(a[0], b[0], c[0]), med(a[1], b[1], c[1])]
     }
@@ -608,7 +751,10 @@ impl State {
     /// `mb_skip_flag`'s ctxIdxInc: neighbours that exist and are not skipped.
     fn skip_inc(&self, mbx: usize, mby: usize) -> usize {
         let (x, y) = (mbx as isize, mby as isize);
-        [self.coded_nb(x - 1, y), self.coded_nb(x, y - 1)].iter().filter(|n| n.is_some_and(|i| !self.skip[i])).count()
+        [self.coded_nb(x - 1, y), self.coded_nb(x, y - 1)]
+            .iter()
+            .filter(|n| n.is_some_and(|i| !self.skip[i]))
+            .count()
     }
 
     fn commit_skip(&mut self, mbx: usize, mby: usize) {
@@ -630,17 +776,22 @@ impl State {
         let i = mby * self.mbw + mbx;
         self.skip[i] = false;
         self.cbp[i] = c.cbp;
-        self.mvd[i] = [(c.mv[0] - mvp[0]).unsigned_abs() as u32, (c.mv[1] - mvp[1]).unsigned_abs() as u32];
+        self.mvd[i] = [
+            (c.mv[0] - mvp[0]).unsigned_abs() as u32,
+            (c.mv[1] - mvp[1]).unsigned_abs() as u32,
+        ];
         let chroma = c.cbp >> 4;
         self.cbf_dc[i] = [0, 1].map(|p| chroma > 0 && c.chroma_dc[p].iter().any(|&l| l != 0));
         let gw = (self.cw / 4) as usize;
         for (b, (bx, by)) in BLK_POS.iter().enumerate() {
-            self.cbf_y[(mby * 4 + by) * gw + mbx * 4 + bx] = c.cbp & (1 << (b / 4)) != 0 && c.luma[b].iter().any(|&l| l != 0);
+            self.cbf_y[(mby * 4 + by) * gw + mbx * 4 + bx] =
+                c.cbp & (1 << (b / 4)) != 0 && c.luma[b].iter().any(|&l| l != 0);
         }
         let gwc = (self.cw / 8) as usize;
         for p in 0..2 {
             for b in 0..4usize {
-                self.cbf_c[p][(mby * 2 + b / 2) * gwc + mbx * 2 + b % 2] = chroma == 2 && c.chroma_ac[p][b].iter().any(|&l| l != 0);
+                self.cbf_c[p][(mby * 2 + b / 2) * gwc + mbx * 2 + b % 2] =
+                    chroma == 2 && c.chroma_ac[p][b].iter().any(|&l| l != 0);
             }
         }
     }
@@ -702,7 +853,15 @@ fn code_residual(
     mv: [i16; 2],
 ) -> Coded {
     let qpc = chroma_qp(qp);
-    let mut c = Coded { mv, cbp: 0, luma: [[0; 16]; 16], chroma_dc: [[0; 4]; 2], chroma_ac: [[[0; 15]; 4]; 2], rec_y: *pred_y, rec_c: *pred_c };
+    let mut c = Coded {
+        mv,
+        cbp: 0,
+        luma: [[0; 16]; 16],
+        chroma_dc: [[0; 4]; 2],
+        chroma_ac: [[[0; 15]; 4]; 2],
+        rec_y: *pred_y,
+        rec_c: *pred_c,
+    };
     let mut q4 = [[0i32; 16]; 16];
     for (b, &(bx, by)) in BLK_POS.iter().enumerate() {
         let mut r = [0i32; 16];
@@ -716,7 +875,12 @@ fn code_residual(
     }
     for b8 in 0..4 {
         let blocks = &q4[b8 * 4..b8 * 4 + 4];
-        let nonzero: Vec<i32> = blocks.iter().flatten().copied().filter(|&l| l != 0).collect();
+        let nonzero: Vec<i32> = blocks
+            .iter()
+            .flatten()
+            .copied()
+            .filter(|&l| l != 0)
+            .collect();
         if nonzero.is_empty() || (nonzero.len() == 1 && nonzero[0].abs() == 1) {
             continue;
         }
@@ -803,7 +967,14 @@ fn code_residual(
 /// Write a coded macroblock's `macroblock_layer` (after its `mb_skip_run`),
 /// updating the coefficient counts the next blocks' contexts read. Returns
 /// the bits written.
-fn write_coded(w: &mut BitWriter, st: &mut State, c: &Coded, mvp: [i16; 2], mbx: usize, mby: usize) -> usize {
+fn write_coded(
+    w: &mut BitWriter,
+    st: &mut State,
+    c: &Coded,
+    mvp: [i16; 2],
+    mbx: usize,
+    mby: usize,
+) -> usize {
     let start = w.bit_len();
     w.write_ue(0); // mb_type P_L0_16x16
     w.write_se((c.mv[0] - mvp[0]) as i32);
@@ -850,7 +1021,14 @@ fn write_coded(w: &mut BitWriter, st: &mut State, c: &Coded, mvp: [i16; 2], mbx:
 /// A coded macroblock's `macroblock_layer` in CABAC (after its
 /// `mb_skip_flag`). Reads `st` for the neighbours; the macroblock's own
 /// blocks are tracked locally, so a trial write leaves `st` as it was.
-fn write_coded_cabac(c: &mut Cabac, st: &State, coded: &Coded, mvp: [i16; 2], mbx: usize, mby: usize) {
+fn write_coded_cabac(
+    c: &mut Cabac,
+    st: &State,
+    coded: &Coded,
+    mvp: [i16; 2],
+    mbx: usize,
+    mby: usize,
+) {
     let (x, y) = (mbx as isize, mby as isize);
     let left = st.coded_nb(x - 1, y);
     let above = st.coded_nb(x, y - 1);
@@ -866,11 +1044,28 @@ fn write_coded_cabac(c: &mut Cabac, st: &State, coded: &Coded, mvp: [i16; 2], mb
     let chroma = coded.cbp >> 4;
     let luma_inc: [usize; 4] = std::array::from_fn(|b8| {
         let empty = |n: Option<usize>, bit: usize| n.is_some_and(|i| self_empty(st, i, bit));
-        let a = if b8 % 2 == 1 { cbp_l & (1 << (b8 - 1)) == 0 } else { empty(left, b8 + 1) };
-        let b = if b8 >= 2 { cbp_l & (1 << (b8 - 2)) == 0 } else { empty(above, b8 + 2) };
+        let a = if b8 % 2 == 1 {
+            cbp_l & (1 << (b8 - 1)) == 0
+        } else {
+            empty(left, b8 + 1)
+        };
+        let b = if b8 >= 2 {
+            cbp_l & (1 << (b8 - 2)) == 0
+        } else {
+            empty(above, b8 + 2)
+        };
         usize::from(a) + 2 * usize::from(b)
     });
-    let chroma_has = |n: Option<usize>, two: bool| n.is_some_and(|i| !st.skip[i] && if two { st.cbp[i] >> 4 == 2 } else { st.cbp[i] >> 4 != 0 });
+    let chroma_has = |n: Option<usize>, two: bool| {
+        n.is_some_and(|i| {
+            !st.skip[i]
+                && if two {
+                    st.cbp[i] >> 4 == 2
+                } else {
+                    st.cbp[i] >> 4 != 0
+                }
+        })
+    };
     let cin0 = usize::from(chroma_has(left, false)) + 2 * usize::from(chroma_has(above, false));
     let cin1 = usize::from(chroma_has(left, true)) + 2 * usize::from(chroma_has(above, true));
     c.coded_block_pattern(cbp_l, chroma, luma_inc, cin0, cin1);
@@ -898,10 +1093,24 @@ fn write_coded_cabac(c: &mut Cabac, st: &State, coded: &Coded, mvp: [i16; 2], mb
                 st.cbf_y[gy as usize * gw + gx as usize]
             }
         };
-        let a = nb(bx > 0, if bx > 0 { pos_blk(bx - 1, by) } else { 0 }, gx as isize - 1, gy as isize);
-        let bb = nb(by > 0, if by > 0 { pos_blk(bx, by - 1) } else { 0 }, gx as isize, gy as isize - 1);
+        let a = nb(
+            bx > 0,
+            if bx > 0 { pos_blk(bx - 1, by) } else { 0 },
+            gx as isize - 1,
+            gy as isize,
+        );
+        let bb = nb(
+            by > 0,
+            if by > 0 { pos_blk(bx, by - 1) } else { 0 },
+            gx as isize,
+            gy as isize - 1,
+        );
         let cbf = coded.luma[b].iter().any(|&l| l != 0);
-        c.coded_block_flag(cabac_syntax::CAT_LUMA_4X4, usize::from(a) + 2 * usize::from(bb), cbf);
+        c.coded_block_flag(
+            cabac_syntax::CAT_LUMA_4X4,
+            usize::from(a) + 2 * usize::from(bb),
+            cbf,
+        );
         if cbf {
             c.residual_block(&coded.luma[b], cabac_syntax::CAT_LUMA_4X4);
         }
@@ -911,7 +1120,11 @@ fn write_coded_cabac(c: &mut Cabac, st: &State, coded: &Coded, mvp: [i16; 2], mb
         for p in 0..2 {
             let has = |n: Option<usize>| n.is_some_and(|i| st.cbf_dc[i][p]);
             let cbf = coded.chroma_dc[p].iter().any(|&l| l != 0);
-            c.coded_block_flag(cabac_syntax::CAT_CHROMA_DC, usize::from(has(left)) + 2 * usize::from(has(above)), cbf);
+            c.coded_block_flag(
+                cabac_syntax::CAT_CHROMA_DC,
+                usize::from(has(left)) + 2 * usize::from(has(above)),
+                cbf,
+            );
             if cbf {
                 c.residual_block(&coded.chroma_dc[p], cabac_syntax::CAT_CHROMA_DC);
             }
@@ -924,11 +1137,25 @@ fn write_coded_cabac(c: &mut Cabac, st: &State, coded: &Coded, mvp: [i16; 2], mb
             for b in 0..4usize {
                 let (bx, by) = (b % 2, b / 2);
                 let (gx, gy) = ((mbx * 2 + bx) as isize, (mby * 2 + by) as isize);
-                let grid = |gx: isize, gy: isize| gx >= 0 && gy >= 0 && st.cbf_c[p][gy as usize * gwc + gx as usize];
-                let a = if bx > 0 { local[b - 1] } else { grid(gx - 1, gy) };
-                let bb = if by > 0 { local[b - 2] } else { grid(gx, gy - 1) };
+                let grid = |gx: isize, gy: isize| {
+                    gx >= 0 && gy >= 0 && st.cbf_c[p][gy as usize * gwc + gx as usize]
+                };
+                let a = if bx > 0 {
+                    local[b - 1]
+                } else {
+                    grid(gx - 1, gy)
+                };
+                let bb = if by > 0 {
+                    local[b - 2]
+                } else {
+                    grid(gx, gy - 1)
+                };
                 let cbf = coded.chroma_ac[p][b].iter().any(|&l| l != 0);
-                c.coded_block_flag(cabac_syntax::CAT_CHROMA_AC, usize::from(a) + 2 * usize::from(bb), cbf);
+                c.coded_block_flag(
+                    cabac_syntax::CAT_CHROMA_AC,
+                    usize::from(a) + 2 * usize::from(bb),
+                    cbf,
+                );
                 if cbf {
                     c.residual_block(&coded.chroma_ac[p][b], cabac_syntax::CAT_CHROMA_AC);
                 }
@@ -945,7 +1172,10 @@ fn self_empty(st: &State, i: usize, bit: usize) -> bool {
 }
 
 fn ssd<const N: usize>(a: &[i32; N], b: &[i32; N]) -> u64 {
-    a.iter().zip(b).map(|(x, y)| ((x - y) * (x - y)) as u64).sum()
+    a.iter()
+        .zip(b)
+        .map(|(x, y)| ((x - y) * (x - y)) as u64)
+        .sum()
 }
 
 fn gather<const N: usize>(plane: &[u8], w: u32, x: u32, y: u32, size: u32) -> [i32; N] {
@@ -1000,7 +1230,7 @@ fn p_slice(
     }
     w.write_se(qp - 26); // slice_qp_delta
     w.write_ue(1); // disable_deblocking_filter_idc: off
-    // CABAC data starts byte-aligned, padded with ones (§7.3.4).
+                   // CABAC data starts byte-aligned, padded with ones (§7.3.4).
     let mut header = Vec::new();
     let mut cab: Option<Box<Cabac>> = None;
     if cabac {
@@ -1016,17 +1246,27 @@ fn p_slice(
         mbw,
         mbh,
         nnz_y: vec![0; (cw / 4 * (ch / 4)) as usize],
-        nnz_c: [vec![0; (cwc / 4 * (chc / 4)) as usize], vec![0; (cwc / 4 * (chc / 4)) as usize]],
+        nnz_c: [
+            vec![0; (cwc / 4 * (chc / 4)) as usize],
+            vec![0; (cwc / 4 * (chc / 4)) as usize],
+        ],
         mv: vec![None; mbw * mbh],
         skip: vec![false; mbw * mbh],
         cbp: vec![0; mbw * mbh],
         mvd: vec![[0; 2]; mbw * mbh],
         cbf_y: vec![false; (cw / 4 * (ch / 4)) as usize],
-        cbf_c: [vec![false; (cwc / 4 * (chc / 4)) as usize], vec![false; (cwc / 4 * (chc / 4)) as usize]],
+        cbf_c: [
+            vec![false; (cwc / 4 * (chc / 4)) as usize],
+            vec![false; (cwc / 4 * (chc / 4)) as usize],
+        ],
         cbf_dc: vec![[false; 2]; mbw * mbh],
     };
     let last_mb = mbw * mbh - 1;
-    let (mut ry, mut ru, mut rv) = (vec![0u8; (cw * ch) as usize], vec![0u8; (cwc * chc) as usize], vec![0u8; (cwc * chc) as usize]);
+    let (mut ry, mut ru, mut rv) = (
+        vec![0u8; (cw * ch) as usize],
+        vec![0u8; (cwc * chc) as usize],
+        vec![0u8; (cwc * chc) as usize],
+    );
     let mut skip_run = 0u32;
 
     for mby in 0..mbh {
@@ -1044,7 +1284,11 @@ fn p_slice(
             let mut best = (search[i].mv, f64::INFINITY);
             for cand in [search[i].mv, mvp, skip_mv] {
                 let p = predict_luma(r, cw, ch, x, yy, cand);
-                let sad: u32 = orig_y.iter().zip(&p).map(|(a, b)| (a - b).unsigned_abs()).sum();
+                let sad: u32 = orig_y
+                    .iter()
+                    .zip(&p)
+                    .map(|(a, b)| (a - b).unsigned_abs())
+                    .sum();
                 let bits = se_bits((cand[0] - mvp[0]) as i32) + se_bits((cand[1] - mvp[1]) as i32);
                 let cost = sad as f64 + lambda_sad * bits as f64;
                 if cost < best.1 {
@@ -1055,14 +1299,27 @@ fn p_slice(
 
             // Skip: the prediction at the skip vector, nothing coded.
             let skip_y = predict_luma(r, cw, ch, x, yy, skip_mv);
-            let skip_c = [predict_chroma(&r.u, cwc, chc, cx, cy, skip_mv), predict_chroma(&r.v, cwc, chc, cx, cy, skip_mv)];
-            let skip_cost = (ssd(&orig_y, &skip_y) + ssd(&orig_c[0], &skip_c[0]) + ssd(&orig_c[1], &skip_c[1])) as f64 + lambda_ssd;
+            let skip_c = [
+                predict_chroma(&r.u, cwc, chc, cx, cy, skip_mv),
+                predict_chroma(&r.v, cwc, chc, cx, cy, skip_mv),
+            ];
+            let skip_cost = (ssd(&orig_y, &skip_y)
+                + ssd(&orig_c[0], &skip_c[0])
+                + ssd(&orig_c[1], &skip_c[1])) as f64
+                + lambda_ssd;
 
-            let pred_y = if mv == skip_mv { skip_y } else { predict_luma(r, cw, ch, x, yy, mv) };
+            let pred_y = if mv == skip_mv {
+                skip_y
+            } else {
+                predict_luma(r, cw, ch, x, yy, mv)
+            };
             let pred_c = if mv == skip_mv {
                 skip_c
             } else {
-                [predict_chroma(&r.u, cwc, chc, cx, cy, mv), predict_chroma(&r.v, cwc, chc, cx, cy, mv)]
+                [
+                    predict_chroma(&r.u, cwc, chc, cx, cy, mv),
+                    predict_chroma(&r.v, cwc, chc, cx, cy, mv),
+                ]
             };
             let coded = code_residual(&orig_y, &pred_y, &orig_c, &pred_c, qp, mv);
 
@@ -1086,13 +1343,17 @@ fn p_slice(
                         let mut trial = BitWriter::new();
                         // Coding it also ends the skip run, which costs ue(run).
                         let run_bits = 2 * (32 - (skip_run + 1).leading_zeros() - 1) as usize + 1;
-                        let bits = run_bits + write_coded(&mut trial, &mut st, &coded, mvp, mbx, mby);
+                        let bits =
+                            run_bits + write_coded(&mut trial, &mut st, &coded, mvp, mbx, mby);
                         st.restore_counts(mbx, mby, &saved);
                         (bits, 1)
                     }
                 };
-                let coded_ssd = ssd(&orig_y, &coded.rec_y) + ssd(&orig_c[0], &coded.rec_c[0]) + ssd(&orig_c[1], &coded.rec_c[1]);
-                skip_cost - lambda_ssd + lambda_ssd * skip_bits as f64 <= coded_ssd as f64 + lambda_ssd * bits as f64
+                let coded_ssd = ssd(&orig_y, &coded.rec_y)
+                    + ssd(&orig_c[0], &coded.rec_c[0])
+                    + ssd(&orig_c[1], &coded.rec_c[1]);
+                skip_cost - lambda_ssd + lambda_ssd * skip_bits as f64
+                    <= coded_ssd as f64 + lambda_ssd * bits as f64
             };
 
             if take_skip {
@@ -1138,7 +1399,13 @@ fn p_slice(
         }
     }
     let mvs = st.mv.iter().map(|m| m.unwrap_or([0, 0])).collect();
-    let rec = Reconstruction { y: ry, u: ru, v: rv, coded_width: cw, coded_height: ch };
+    let rec = Reconstruction {
+        y: ry,
+        u: ru,
+        v: rv,
+        coded_width: cw,
+        coded_height: ch,
+    };
     if let Some(c) = cab {
         // The coder's flush ends with the rbsp_stop_one_bit (§9.3.4.3.5).
         header.extend_from_slice(&c.finish());
@@ -1163,7 +1430,10 @@ mod tests {
             seen[c as usize] = true;
         }
         for cbp in 0..48 {
-            assert_eq!(CBP_INTER_FROM_CODE[CBP_INTER_CODE[cbp] as usize] as usize, cbp);
+            assert_eq!(
+                CBP_INTER_FROM_CODE[CBP_INTER_CODE[cbp] as usize] as usize,
+                cbp
+            );
         }
     }
 

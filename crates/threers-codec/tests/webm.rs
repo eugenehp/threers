@@ -1350,6 +1350,7 @@ fn assert_inter_altref_matches_recon(w: u32, h: u32) {
 #[test]
 fn native_vp9_inter_compound_matches_recon() {
     if !ffmpeg_ok() {
+        eprintln!("skipping: ffmpeg not available");
         return;
     }
     for &(w, h) in &[(64u32, 64), (80, 48)] {
@@ -1452,6 +1453,7 @@ fn assert_inter_compound_matches_recon(w: u32, h: u32) {
 #[test]
 fn native_vp9_inter_newmv_neg_col_matches_recon() {
     if !ffmpeg_ok() {
+        eprintln!("skipping: ffmpeg not available");
         return;
     }
     for &(w, h) in &[(64u32, 64), (80, 48)] {

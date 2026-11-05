@@ -62,7 +62,8 @@ fn bench_gpu(name: &str, mut sim: SoftBody, steps: usize) {
         println!("{name} on the GPU: no adapter");
         return;
     };
-    let mut solver = threers::softbody::gpu::GpuSolver::new(gpu.device.clone(), gpu.queue.clone(), &mut sim);
+    let mut solver =
+        threers::softbody::gpu::GpuSolver::new(gpu.device.clone(), gpu.queue.clone(), &mut sim);
     solver.wait = false;
     let (mut cpu, mut wait) = (0.0, 0.0);
     for k in 0..steps + 10 {
@@ -89,14 +90,20 @@ fn main() {
     let gpu = std::env::args().any(|a| a == "--gpu");
     let t = Instant::now();
     let j = jellyfish();
-    println!("jellyfish built in {:.0} ms", t.elapsed().as_secs_f64() * 1000.0);
+    println!(
+        "jellyfish built in {:.0} ms",
+        t.elapsed().as_secs_f64() * 1000.0
+    );
     bench("jellyfish", j.into_soft_body(7), 300);
     if gpu {
         bench_gpu("jellyfish", jellyfish().into_soft_body(7), 300);
     }
     let t = Instant::now();
     let o = octopus();
-    println!("octopus built in {:.0} ms", t.elapsed().as_secs_f64() * 1000.0);
+    println!(
+        "octopus built in {:.0} ms",
+        t.elapsed().as_secs_f64() * 1000.0
+    );
     bench("octopus", o.into_soft_body(7), 300);
     if gpu {
         bench_gpu("octopus", octopus().into_soft_body(7), 300);

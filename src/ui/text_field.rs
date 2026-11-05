@@ -42,7 +42,11 @@ impl TextField {
     pub fn new(text: impl Into<String>) -> Self {
         let text = text.into();
         let n = text.chars().count();
-        Self { text, anchor: n, caret: n }
+        Self {
+            text,
+            anchor: n,
+            caret: n,
+        }
     }
 
     /// `text`, all selected (as a field focused by `select()`).
@@ -74,7 +78,12 @@ impl TextField {
     pub fn insert(&mut self, s: &str) {
         let (a, z) = self.selection();
         let chars: Vec<char> = self.text.chars().collect();
-        self.text = chars[..a].iter().copied().chain(s.chars()).chain(chars[z..].iter().copied()).collect();
+        self.text = chars[..a]
+            .iter()
+            .copied()
+            .chain(s.chars())
+            .chain(chars[z..].iter().copied())
+            .collect();
         self.caret = a + s.chars().count();
         self.anchor = self.caret;
     }
@@ -98,12 +107,20 @@ impl TextField {
             "Escape" => FieldKey::Cancel,
             "Tab" => FieldKey::Tab { backward: m.shift },
             "ArrowLeft" => {
-                let to = if a != z && !m.shift { a } else { self.caret.saturating_sub(1) };
+                let to = if a != z && !m.shift {
+                    a
+                } else {
+                    self.caret.saturating_sub(1)
+                };
                 self.move_to(if command { 0 } else { to }, m.shift);
                 FieldKey::Moved
             }
             "ArrowRight" => {
-                let to = if a != z && !m.shift { z } else { (self.caret + 1).min(n) };
+                let to = if a != z && !m.shift {
+                    z
+                } else {
+                    (self.caret + 1).min(n)
+                };
                 self.move_to(if command { n } else { to }, m.shift);
                 FieldKey::Moved
             }
@@ -150,7 +167,11 @@ impl TextField {
     pub fn spans(&self) -> (String, String, String) {
         let (a, z) = self.selection();
         let chars: Vec<char> = self.text.chars().collect();
-        (chars[..a].iter().collect(), chars[a..z].iter().collect(), chars[z..].iter().collect())
+        (
+            chars[..a].iter().collect(),
+            chars[a..z].iter().collect(),
+            chars[z..].iter().collect(),
+        )
     }
 }
 
@@ -167,14 +188,41 @@ mod tests {
         f.key("x", KeyModifiers::default(), |c| c.is_ascii_digit());
         assert_eq!(f.text, "5");
         f.key("2", KeyModifiers::default(), any);
-        f.key("ArrowLeft", KeyModifiers { shift: true, ..Default::default() }, any);
+        f.key(
+            "ArrowLeft",
+            KeyModifiers {
+                shift: true,
+                ..Default::default()
+            },
+            any,
+        );
         assert_eq!(f.spans(), ("5".into(), "2".into(), "".into()));
         f.key("Backspace", KeyModifiers::default(), any);
         assert_eq!((f.text.as_str(), f.caret), ("5", 1));
         f.key("Home", KeyModifiers::default(), any);
         f.key("Delete", KeyModifiers::default(), any);
         assert!(f.is_empty());
-        assert_eq!(f.key("Tab", KeyModifiers { shift: true, ..Default::default() }, any), FieldKey::Tab { backward: true });
-        assert_eq!(f.key("c", KeyModifiers { meta: true, ..Default::default() }, any), FieldKey::Ignored);
+        assert_eq!(
+            f.key(
+                "Tab",
+                KeyModifiers {
+                    shift: true,
+                    ..Default::default()
+                },
+                any
+            ),
+            FieldKey::Tab { backward: true }
+        );
+        assert_eq!(
+            f.key(
+                "c",
+                KeyModifiers {
+                    meta: true,
+                    ..Default::default()
+                },
+                any
+            ),
+            FieldKey::Ignored
+        );
     }
 }

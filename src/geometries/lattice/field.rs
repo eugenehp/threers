@@ -212,9 +212,11 @@ impl Field {
 
     /// The smallest and largest sample.
     pub fn range(&self) -> (f32, f32) {
-        self.values.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), &v| {
-            (lo.min(v), hi.max(v))
-        })
+        self.values
+            .iter()
+            .fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), &v| {
+                (lo.min(v), hi.max(v))
+            })
     }
 
     /// Put every sample through a function — a square root, a logarithm, a
@@ -467,7 +469,11 @@ mod tests {
     #[test]
     fn a_sparse_field_is_still_defined_everywhere() {
         // One sample in a corner: every node has to find it.
-        let f = Field::scattered(unit_box(), [8, 8, 8], &[(Vector3::new(-1.0, -1.0, -1.0), 7.0)]);
+        let f = Field::scattered(
+            unit_box(),
+            [8, 8, 8],
+            &[(Vector3::new(-1.0, -1.0, -1.0), 7.0)],
+        );
         for p in [
             Vector3::new(1.0, 1.0, 1.0),
             Vector3::ZERO,
@@ -502,7 +508,9 @@ mod tests {
         assert!((lo - 0.0).abs() < 1e-5 && (hi - 1.0).abs() < 1e-5);
         let smooth = f.smoothed(3);
         // Still monotonic in x, just gentler.
-        assert!(smooth.value(Vector3::new(-0.5, 0.0, 0.0)) < smooth.value(Vector3::new(0.5, 0.0, 0.0)));
+        assert!(
+            smooth.value(Vector3::new(-0.5, 0.0, 0.0)) < smooth.value(Vector3::new(0.5, 0.0, 0.0))
+        );
     }
 
     #[test]

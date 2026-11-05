@@ -45,7 +45,10 @@ fn lazy_and_eager_iterators_produce_the_same_bytes() {
         // A lazy iterator that never materialises the whole clip.
         let from_lazy =
             encode_animation_rgba(&opts(codec, w, h), (0..n).map(|t| frame(w, h, t))).unwrap();
-        assert_eq!(from_vec, from_lazy, "{codec:?}: lazy differs from collected");
+        assert_eq!(
+            from_vec, from_lazy,
+            "{codec:?}: lazy differs from collected"
+        );
         assert!(!from_vec.is_empty());
     }
 }
@@ -70,12 +73,19 @@ fn a_wrong_sized_frame_is_still_rejected() {
         let frames = vec![frame(w, h, 0), vec![0u8; 10], frame(w, h, 2)];
         let r = encode_animation_rgba(&opts(codec, w, h), frames);
         match r {
-            Err(AnimationEncodeError::FrameSize { frame, expected, got }) => {
+            Err(AnimationEncodeError::FrameSize {
+                frame,
+                expected,
+                got,
+            }) => {
                 assert_eq!(frame, 1);
                 assert_eq!(expected, (w * h * 4) as usize);
                 assert_eq!(got, 10);
             }
-            other => panic!("{codec:?}: expected FrameSize, got {:?}", other.map(|b| b.len())),
+            other => panic!(
+                "{codec:?}: expected FrameSize, got {:?}",
+                other.map(|b| b.len())
+            ),
         }
     }
 }
@@ -111,7 +121,11 @@ fn progress_reaches_every_frame_and_finishes() {
         )
         .unwrap();
         assert!(!out.is_empty());
-        assert_eq!(seen, (1..=n).collect::<Vec<_>>(), "{codec:?}: progress frames");
+        assert_eq!(
+            seen,
+            (1..=n).collect::<Vec<_>>(),
+            "{codec:?}: progress frames"
+        );
         assert!(done, "{codec:?}: never reported Done");
     }
 }

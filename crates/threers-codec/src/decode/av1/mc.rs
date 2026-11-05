@@ -12,7 +12,10 @@ pub struct Bd {
 
 impl Bd {
     pub fn new(bitdepth_max: i32) -> Self {
-        Bd { max: bitdepth_max, bits: 32 - (bitdepth_max as u32).leading_zeros() }
+        Bd {
+            max: bitdepth_max,
+            bits: 32 - (bitdepth_max as u32).leading_zeros(),
+        }
     }
     #[inline]
     pub fn ib(&self) -> i32 {
@@ -54,7 +57,17 @@ impl Src<'_> {
 /// Clamped fetch of `bw x bh` samples at (x, y) from a plane of visible
 /// size `iw x ih` (`emu_edge_c`).
 #[allow(clippy::too_many_arguments)]
-pub fn fetch(out: &mut Vec<u16>, plane: &[u16], stride: usize, iw: i32, ih: i32, x: i32, y: i32, bw: i32, bh: i32) {
+pub fn fetch(
+    out: &mut Vec<u16>,
+    plane: &[u16],
+    stride: usize,
+    iw: i32,
+    ih: i32,
+    x: i32,
+    y: i32,
+    bw: i32,
+    bh: i32,
+) {
     out.clear();
     out.reserve((bw * bh) as usize);
     // Columns left of the picture repeat its first sample, right of it its
@@ -72,7 +85,17 @@ pub fn fetch(out: &mut Vec<u16>, plane: &[u16], stride: usize, iw: i32, ih: i32,
 }
 
 /// (type_h, type_v) of each `Filter2d`.
-const FT: [(usize, usize); 9] = [(0, 0), (0, 1), (0, 2), (2, 0), (2, 1), (2, 2), (1, 0), (1, 1), (1, 2)];
+const FT: [(usize, usize); 9] = [
+    (0, 0),
+    (0, 1),
+    (0, 2),
+    (2, 0),
+    (2, 1),
+    (2, 2),
+    (1, 0),
+    (1, 1),
+    (1, 2),
+];
 
 #[inline]
 fn h_filter(mx: i32, w: i32, th: usize) -> Option<&'static [i8; 8]> {
@@ -106,23 +129,21 @@ fn f8(s: &Src, x: isize, y: isize, f: &[i8; 8], dx: isize, dy: isize) -> i32 {
 }
 
 #[inline]
-fn f8m(mid: &[i32], o: isize, f: &[i8; 8], stride: isize) -> i32 {
-    let mut acc = 0;
-    for k in 0..8 {
-        acc += f[k] as i32 * mid[(o + (k as isize - 3) * stride) as usize];
-    }
-    acc
-}
-
-#[inline]
 fn rnd(v: i32, sh: i32) -> i32 {
     (v + ((1 << sh) >> 1)) >> sh
 }
 
 /// Output of a `put` (pixels) or `prep` (int16 intermediates).
 pub enum Dst<'a> {
-    Px { buf: &'a mut [u16], off: usize, stride: usize },
-    Tmp { buf: &'a mut [i16], stride: usize },
+    Px {
+        buf: &'a mut [u16],
+        off: usize,
+        stride: usize,
+    },
+    Tmp {
+        buf: &'a mut [i16],
+        stride: usize,
+    },
 }
 
 impl Dst<'_> {
@@ -151,13 +172,16 @@ pub fn mc(dst: &mut Dst, src: &Src, w: i32, h: i32, mx: i32, my: i32, filter2d: 
     let put = dst.is_px();
     if filter2d == 9 {
         // bilinear
-        let fb = |s: &Src, x: isize, y: isize, m: i32, dx: isize, dy: isize| 16 * s.at(x, y) + m * (s.at(x + dx, y + dy) - s.at(x, y));
+        let fb = |s: &Src, x: isize, y: isize, m: i32, dx: isize, dy: isize| {
+            16 * s.at(x, y) + m * (s.at(x + dx, y + dy) - s.at(x, y))
+        };
         if mx != 0 {
             if my != 0 {
                 let mut mid = vec![0i32; 128 * (h as usize + 1)];
                 for y in 0..=h {
                     for x in 0..w {
-                        mid[y as usize * 128 + x as usize] = rnd(fb(src, x as isize, y as isize, mx, 1, 0), 4 - ib);
+                        mid[y as usize * 128 + x as usize] =
+                            rnd(fb(src, x as isize, y as isize, mx, 1, 0), 4 - ib);
                     }
                 }
                 for y in 0..h {
@@ -203,66 +227,148 @@ pub fn mc(dst: &mut Dst, src: &Src, w: i32, h: i32, mx: i32, my: i32, filter2d: 
     let (th, tv) = FT[filter2d];
     let fh = h_filter(mx, w, th);
     let fv = v_filter(my, h, tv);
+    by_width!(w, mc_8tap(dst, src, h as usize, fh, fv, bd));
+}
+
+/// Calls `$f::<W>($args)` for the block width `$w`. AV1 blocks are a power
+/// of two from 4 to 128 wide, and 2 for subsampled chroma of a 4-wide block.
+macro_rules! by_width {
+    ($w:expr, $f:ident($($a:expr),*)) => {
+        match $w {
+            2 => $f::<2>($($a),*),
+            4 => $f::<4>($($a),*),
+            8 => $f::<8>($($a),*),
+            16 => $f::<16>($($a),*),
+            32 => $f::<32>($($a),*),
+            64 => $f::<64>($($a),*),
+            128 => $f::<128>($($a),*),
+            w => unreachable!("MC block width {w}"),
+        }
+    };
+}
+use by_width;
+
+/// Row `y` of `src` from column `x0`, `N` samples.
+#[inline(always)]
+fn src_row<'a, const N: usize>(src: &Src<'a>, x0: isize, y: isize) -> &'a [u16; N] {
+    src.buf[(src.off as isize + y * src.stride as isize + x0) as usize..][..N]
+        .try_into()
+        .unwrap()
+}
+
+/// The 8-tap filter across a row: `taps[k]` is the row for tap `k`.
+#[inline(always)]
+fn filter_row<T: Copy + Into<i32>, const W: usize>(taps: [&[T; W]; 8], f: &[i8; 8]) -> [i32; W] {
+    let mut acc = [0i32; W];
+    for k in 0..8 {
+        let c = f[k] as i32;
+        for x in 0..W {
+            acc[x] += c * taps[k][x].into();
+        }
+    }
+    acc
+}
+
+/// Horizontal taps of row `y`: one window of `W + 7` samples, shifted per tap.
+#[inline(always)]
+fn h_row<const W: usize>(src: &Src, y: isize, f: &[i8; 8]) -> [i32; W] {
+    let s: &[u16] = &src.buf[(src.off as isize + y * src.stride as isize - 3) as usize..][..W + 7];
+    filter_row(std::array::from_fn(|k| s[k..k + W].try_into().unwrap()), f)
+}
+
+/// Write one finished row: a `put` clips `(v + put.0) >> put.1` to the
+/// pixel range, a `prep` stores `((v + prep.0) >> prep.1) - bias`.
+#[inline(always)]
+fn emit<const W: usize>(
+    dst: &mut Dst,
+    y: usize,
+    v: &[i32; W],
+    put: (i32, i32),
+    prep: (i32, i32),
+    bd: Bd,
+) {
+    match dst {
+        Dst::Px { buf, off, stride } => {
+            let row: &mut [u16; W] = (&mut buf[*off + y * *stride..][..W]).try_into().unwrap();
+            for x in 0..W {
+                row[x] = ((v[x] + put.0) >> put.1).clamp(0, bd.max) as u16;
+            }
+        }
+        Dst::Tmp { buf, stride } => {
+            let row: &mut [i16; W] = (&mut buf[y * *stride..][..W]).try_into().unwrap();
+            let bias = bd.bias();
+            for x in 0..W {
+                row[x] = (((v[x] + prep.0) >> prep.1) - bias) as i16;
+            }
+        }
+    }
+}
+
+/// `(rounding, shift)` for `rnd(v, sh)`.
+fn rounding(sh: i32) -> (i32, i32) {
+    ((1 << sh) >> 1, sh)
+}
+
+/// The 8-tap `put` / `prep` for a block `W` wide. The 2D case keeps its
+/// horizontal pass in a ring of the eight rows the vertical taps need.
+fn mc_8tap<const W: usize>(
+    dst: &mut Dst,
+    src: &Src,
+    h: usize,
+    fh: Option<&[i8; 8]>,
+    fv: Option<&[i8; 8]>,
+    bd: Bd,
+) {
+    let ib = bd.ib();
     match (fh, fv) {
         (Some(fh), Some(fv)) => {
-            let mut mid = vec![0i32; 128 * (h as usize + 7)];
-            for y in 0..h + 7 {
-                for x in 0..w {
-                    mid[y as usize * 128 + x as usize] = rnd(f8(src, x as isize, y as isize - 3, fh, 1, 0), 6 - ib);
-                }
+            let (mr, ms) = rounding(6 - ib);
+            let mid_row = |y: isize| h_row::<W>(src, y, fh).map(|v| (v + mr) >> ms);
+            let mut ring = [[0i32; W]; 8];
+            for r in 0..7 {
+                ring[r] = mid_row(r as isize - 3);
             }
             for y in 0..h {
-                for x in 0..w {
-                    let o = (y as isize + 3) * 128 + x as isize;
-                    let v = f8m(&mid, o, fv, 128);
-                    if put {
-                        dst.px(x, y, bd.clip(rnd(v, 6 + ib)));
-                    } else {
-                        dst.tmp(x, y, rnd(v, 6) - bias);
-                    }
-                }
+                ring[(y + 7) & 7] = mid_row(y as isize + 4);
+                let v = filter_row(std::array::from_fn(|k| &ring[(y + k) & 7]), fv);
+                emit(dst, y, &v, rounding(6 + ib), rounding(6), bd);
             }
         }
         (Some(fh), None) => {
-            let irnd = 32 + ((1 << (6 - ib)) >> 1);
+            let put = (32 + ((1 << (6 - ib)) >> 1), 6);
             for y in 0..h {
-                for x in 0..w {
-                    let v = f8(src, x as isize, y as isize, fh, 1, 0);
-                    if put {
-                        dst.px(x, y, bd.clip((v + irnd) >> 6));
-                    } else {
-                        dst.tmp(x, y, rnd(v, 6 - ib) - bias);
-                    }
-                }
+                let v = h_row::<W>(src, y as isize, fh);
+                emit(dst, y, &v, put, rounding(6 - ib), bd);
             }
         }
         (None, Some(fv)) => {
             for y in 0..h {
-                for x in 0..w {
-                    let v = f8(src, x as isize, y as isize, fv, 0, 1);
-                    if put {
-                        dst.px(x, y, bd.clip(rnd(v, 6)));
-                    } else {
-                        dst.tmp(x, y, rnd(v, 6 - ib) - bias);
-                    }
-                }
+                let v = filter_row(
+                    std::array::from_fn(|k| src_row::<W>(src, 0, y as isize + k as isize - 3)),
+                    fv,
+                );
+                emit(dst, y, &v, rounding(6), rounding(6 - ib), bd);
             }
         }
-        (None, None) => copy(dst, src, w, h, bd),
+        (None, None) => copy_w::<W>(dst, src, h, bd),
     }
 }
 
 fn copy(dst: &mut Dst, src: &Src, w: i32, h: i32, bd: Bd) {
+    by_width!(w, copy_w(dst, src, h as usize, bd));
+}
+
+fn copy_w<const W: usize>(dst: &mut Dst, src: &Src, h: usize, bd: Bd) {
     let ib = bd.ib();
-    let bias = bd.bias();
-    let put = dst.is_px();
     for y in 0..h {
-        for x in 0..w {
-            let v = src.at(x as isize, y as isize);
-            if put {
-                dst.px(x, y, v as u16);
-            } else {
-                dst.tmp(x, y, (v << ib) - bias);
+        let s = src_row::<W>(src, 0, y as isize);
+        match dst {
+            Dst::Px { buf, off, stride } => buf[*off + y * *stride..][..W].copy_from_slice(s),
+            Dst::Tmp { buf, stride } => {
+                let bias = bd.bias();
+                for (t, &v) in buf[y * *stride..][..W].iter_mut().zip(s) {
+                    *t = (((v as i32) << ib) - bias) as i16;
+                }
             }
         }
     }
@@ -271,7 +377,18 @@ fn copy(dst: &mut Dst, src: &Src, w: i32, h: i32, bd: Bd) {
 /// `put/prep_8tap_scaled_c`, `put/prep_bilin_scaled_c`. `src` is positioned
 /// at the block's top-left integer sample.
 #[allow(clippy::too_many_arguments)]
-pub fn mc_scaled(dst: &mut Dst, src: &Src, w: i32, h: i32, mx: i32, mut my: i32, dx: i32, dy: i32, filter2d: usize, bd: Bd) {
+pub fn mc_scaled(
+    dst: &mut Dst,
+    src: &Src,
+    w: i32,
+    h: i32,
+    mx: i32,
+    mut my: i32,
+    dx: i32,
+    dy: i32,
+    filter2d: usize,
+    bd: Bd,
+) {
     let ib = bd.ib();
     let bias = bd.bias();
     let put = dst.is_px();
@@ -368,41 +485,83 @@ pub fn mc_scaled(dst: &mut Dst, src: &Src, w: i32, h: i32, mx: i32, mut my: i32,
     }
 }
 
-pub fn avg(dst: &mut [u16], off: usize, stride: usize, t1: &[i16], t2: &[i16], w: usize, h: usize, bd: Bd) {
+pub fn avg(
+    dst: &mut [u16],
+    off: usize,
+    stride: usize,
+    t1: &[i16],
+    t2: &[i16],
+    w: usize,
+    h: usize,
+    bd: Bd,
+) {
     let ib = bd.ib();
     let sh = ib + 1;
     let r = (1 << ib) + bd.bias() * 2;
-    for y in 0..h {
-        for x in 0..w {
-            let v = t1[y * w + x] as i32 + t2[y * w + x] as i32;
-            dst[off + y * stride + x] = bd.clip((v + r) >> sh);
+    for (y, (a, b)) in t1
+        .chunks_exact(w)
+        .zip(t2.chunks_exact(w))
+        .take(h)
+        .enumerate()
+    {
+        for ((d, &a), &b) in dst[off + y * stride..][..w].iter_mut().zip(a).zip(b) {
+            *d = bd.clip((a as i32 + b as i32 + r) >> sh);
         }
     }
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn w_avg(dst: &mut [u16], off: usize, stride: usize, t1: &[i16], t2: &[i16], w: usize, h: usize, weight: i32, bd: Bd) {
+pub fn w_avg(
+    dst: &mut [u16],
+    off: usize,
+    stride: usize,
+    t1: &[i16],
+    t2: &[i16],
+    w: usize,
+    h: usize,
+    weight: i32,
+    bd: Bd,
+) {
     let ib = bd.ib();
     let sh = ib + 4;
     let r = (8 << ib) + bd.bias() * 16;
-    for y in 0..h {
-        for x in 0..w {
-            let v = t1[y * w + x] as i32 * weight + t2[y * w + x] as i32 * (16 - weight);
-            dst[off + y * stride + x] = bd.clip((v + r) >> sh);
+    for (y, (a, b)) in t1
+        .chunks_exact(w)
+        .zip(t2.chunks_exact(w))
+        .take(h)
+        .enumerate()
+    {
+        for ((d, &a), &b) in dst[off + y * stride..][..w].iter_mut().zip(a).zip(b) {
+            *d = bd.clip((a as i32 * weight + b as i32 * (16 - weight) + r) >> sh);
         }
     }
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn mask(dst: &mut [u16], off: usize, stride: usize, t1: &[i16], t2: &[i16], w: usize, h: usize, m: &[u8], bd: Bd) {
+pub fn mask(
+    dst: &mut [u16],
+    off: usize,
+    stride: usize,
+    t1: &[i16],
+    t2: &[i16],
+    w: usize,
+    h: usize,
+    m: &[u8],
+    bd: Bd,
+) {
     let ib = bd.ib();
     let sh = ib + 6;
     let r = (32 << ib) + bd.bias() * 64;
-    for y in 0..h {
-        for x in 0..w {
-            let mm = m[y * w + x] as i32;
-            let v = t1[y * w + x] as i32 * mm + t2[y * w + x] as i32 * (64 - mm);
-            dst[off + y * stride + x] = bd.clip((v + r) >> sh);
+    for (y, ((a, b), m)) in t1
+        .chunks_exact(w)
+        .zip(t2.chunks_exact(w))
+        .zip(m.chunks_exact(w))
+        .take(h)
+        .enumerate()
+    {
+        for (((d, &a), &b), &m) in dst[off + y * stride..][..w].iter_mut().zip(a).zip(b).zip(m) {
+            let m = m as i32;
+            *d = bd.clip((a as i32 * m + b as i32 * (64 - m) + r) >> sh);
         }
     }
 }
@@ -412,7 +571,15 @@ fn blend_px(a: i32, b: i32, m: i32) -> u16 {
     (((a * (64 - m) + b * m) + 32) >> 6) as u16
 }
 
-pub fn blend(dst: &mut [u16], off: usize, stride: usize, tmp: &[u16], w: usize, h: usize, m: &[u8]) {
+pub fn blend(
+    dst: &mut [u16],
+    off: usize,
+    stride: usize,
+    tmp: &[u16],
+    w: usize,
+    h: usize,
+    m: &[u8],
+) {
     for y in 0..h {
         for x in 0..w {
             let d = &mut dst[off + y * stride + x];
@@ -442,7 +609,20 @@ pub fn blend_h(dst: &mut [u16], off: usize, stride: usize, tmp: &[u16], w: usize
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn w_mask(dst: &mut [u16], off: usize, stride: usize, t1: &[i16], t2: &[i16], w: usize, h: usize, mask: &mut [u8], sign: i32, ss_hor: bool, ss_ver: bool, bd: Bd) {
+pub fn w_mask(
+    dst: &mut [u16],
+    off: usize,
+    stride: usize,
+    t1: &[i16],
+    t2: &[i16],
+    w: usize,
+    h: usize,
+    mask: &mut [u8],
+    sign: i32,
+    ss_hor: bool,
+    ss_ver: bool,
+    bd: Bd,
+) {
     let ib = bd.ib();
     let sh = ib + 6;
     let r = (32 << ib) + bd.bias() * 64;
@@ -484,7 +664,16 @@ pub fn w_mask(dst: &mut [u16], off: usize, stride: usize, t1: &[i16], t2: &[i16]
 }
 
 /// `warp_affine_8x8_c` / `_8x8t_c`; `src` positioned at the 8x8 origin.
-pub fn warp8x8(dst: &mut Dst, dx0: i32, dy0: i32, src: &Src, abcd: &[i16; 4], mut mx: i32, mut my: i32, bd: Bd) {
+pub fn warp8x8(
+    dst: &mut Dst,
+    dx0: i32,
+    dy0: i32,
+    src: &Src,
+    abcd: &[i16; 4],
+    mut mx: i32,
+    mut my: i32,
+    bd: Bd,
+) {
     let ib = bd.ib();
     let mut mid = [0i32; 15 * 8];
     for y in 0..15 {
@@ -522,7 +711,15 @@ pub fn warp8x8(dst: &mut Dst, dx0: i32, dy0: i32, src: &Src, abcd: &[i16; 4], mu
 
 /// `resize_c` for one row.
 #[allow(clippy::too_many_arguments)]
-pub fn resize_row(dst: &mut [u16], src: &[u16], dst_w: usize, src_w: i32, dx: i32, mx0: i32, bd: Bd) {
+pub fn resize_row(
+    dst: &mut [u16],
+    src: &[u16],
+    dst_w: usize,
+    src_w: i32,
+    dx: i32,
+    mx0: i32,
+    bd: Bd,
+) {
     let mut mx = mx0;
     let mut src_x = -1i32;
     for d in dst.iter_mut().take(dst_w) {

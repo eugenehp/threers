@@ -8,15 +8,19 @@
 //! Skipped when no GPU adapter is available.
 
 use threers::{
-    BufferAttribute, BufferGeometry, Color, HeadlessRenderer, LineBasicMaterial, LineSegments, Material, Object3D,
-    OrthographicCamera, PerspectiveCamera, Scene, Vector3,
+    BufferAttribute, BufferGeometry, Color, HeadlessRenderer, LineBasicMaterial, LineSegments,
+    Material, Object3D, OrthographicCamera, PerspectiveCamera, Scene, Vector3,
 };
 
 const W: u32 = 128;
 const H: u32 = 128;
 
 fn renderer() -> Option<HeadlessRenderer> {
-    HeadlessRenderer::builder().size(W, H).color_format(wgpu::TextureFormat::Rgba8Unorm).build().ok()
+    HeadlessRenderer::builder()
+        .size(W, H)
+        .color_format(wgpu::TextureFormat::Rgba8Unorm)
+        .build()
+        .ok()
 }
 
 fn camera() -> OrthographicCamera {
@@ -73,7 +77,10 @@ fn a_line_is_as_wide_as_asked() {
     // centred on a pixel boundary, an odd width covers one pixel centre
     // fewer or more than it is wide
     for (width, want) in [(1.0, 1..=2), (4.0, 4..=5), (9.0, 8..=10), (12.0, 12..=13)] {
-        let px = r.render_to_rgba(&mut scene_with(vec![lines(&ACROSS, None, material(width, 1.0))]), &camera());
+        let px = r.render_to_rgba(
+            &mut scene_with(vec![lines(&ACROSS, None, material(width, 1.0))]),
+            &camera(),
+        );
         let t = thickness(&px, W / 2);
         assert!(want.contains(&t), "width {width}: {t} px down the middle");
     }
@@ -82,11 +89,21 @@ fn a_line_is_as_wide_as_asked() {
 #[test]
 fn indexed_and_not_draw_the_same() {
     let Some(mut r) = renderer() else { return };
-    let plain = r.render_to_rgba(&mut scene_with(vec![lines(&ACROSS, None, material(5.0, 1.0))]), &camera());
+    let plain = r.render_to_rgba(
+        &mut scene_with(vec![lines(&ACROSS, None, material(5.0, 1.0))]),
+        &camera(),
+    );
     // the same segment through an index, over vertices in another order
     let pos = [0.6, 0.0, 0.0, 0.0, 0.9, 0.0, -0.6, 0.0, 0.0];
-    let indexed = r.render_to_rgba(&mut scene_with(vec![lines(&pos, Some(vec![2, 0]), material(5.0, 1.0))]), &camera());
-    let differ = plain.chunks(4).zip(indexed.chunks(4)).filter(|(a, b)| a[0].abs_diff(b[0]) > 8).count();
+    let indexed = r.render_to_rgba(
+        &mut scene_with(vec![lines(&pos, Some(vec![2, 0]), material(5.0, 1.0))]),
+        &camera(),
+    );
+    let differ = plain
+        .chunks(4)
+        .zip(indexed.chunks(4))
+        .filter(|(a, b)| a[0].abs_diff(b[0]) > 8)
+        .count();
     assert!(differ <= 4, "{differ} pixels differ");
     // and the unindexed vertex (0, 0.9) is joined to nothing
     assert_eq!(thickness(&indexed, W / 2), thickness(&plain, W / 2));
@@ -97,7 +114,10 @@ fn ends_are_round_and_joints_closed() {
     let Some(mut r) = renderer() else { return };
     // a right angle out of two segments meeting at the origin
     let pos = [-0.6, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.6, 0.0];
-    let px = r.render_to_rgba(&mut scene_with(vec![lines(&pos, None, material(9.0, 1.0))]), &camera());
+    let px = r.render_to_rgba(
+        &mut scene_with(vec![lines(&pos, None, material(9.0, 1.0))]),
+        &camera(),
+    );
     let (cu, cv) = (W / 2, H / 2);
     // the joint's outer corner is filled — butt ends would leave a notch
     // there — and rounded: a square cap would fill a pixel further out
@@ -112,7 +132,10 @@ fn ends_are_round_and_joints_closed() {
 #[test]
 fn blended_lines_fade_at_the_edge() {
     let Some(mut r) = renderer() else { return };
-    let px = r.render_to_rgba(&mut scene_with(vec![lines(&ACROSS, None, material(6.0, 0.5))]), &camera());
+    let px = r.render_to_rgba(
+        &mut scene_with(vec![lines(&ACROSS, None, material(6.0, 0.5))]),
+        &camera(),
+    );
     let col: Vec<u8> = (0..H).map(|v| at(&px, W / 2, v)).collect();
     let peak = *col.iter().max().unwrap();
     // half opacity over black: the middle near half bright, not full
@@ -133,32 +156,54 @@ fn thin_transparent_lines_keep_their_weight_between_pixels() {
         let mut sums = Vec::new();
         for k in 0..8 {
             let d = k as f32 / 8.0 * px_world;
-            let pos = if diagonal { [-0.5 + d, -0.5, 0.0, 0.5 + d, 0.5, 0.0] } else { [-0.6, d, 0.0, 0.6, d, 0.0] };
+            let pos = if diagonal {
+                [-0.5 + d, -0.5, 0.0, 0.5 + d, 0.5, 0.0]
+            } else {
+                [-0.6, d, 0.0, 0.6, d, 0.0]
+            };
             let mut m = material(width, 1.0);
             m.transparent = Some(true);
             let px = r.render_to_rgba(&mut scene_with(vec![lines(&pos, None, m)]), &camera());
-            let expect = if diagonal { width * std::f32::consts::SQRT_2 } else { width };
+            let expect = if diagonal {
+                width * std::f32::consts::SQRT_2
+            } else {
+                width
+            };
             for u in [W / 2 - 10, W / 2, W / 2 + 9] {
                 let col: Vec<f32> = (0..H).map(|v| at(&px, u, v) as f32 / 255.0).collect();
                 let peak = col.iter().cloned().fold(0.0, f32::max);
-                assert!(peak <= expect + 0.03, "diagonal {diagonal} step {k} column {u}: peak {peak}");
+                assert!(
+                    peak <= expect + 0.03,
+                    "diagonal {diagonal} step {k} column {u}: peak {peak}"
+                );
                 sums.push(col.iter().sum::<f32>() / expect);
             }
         }
         for s in &sums {
-            assert!((s - 1.0).abs() < 0.06, "diagonal {diagonal}: column ink {s} of the width, all {sums:?}");
+            assert!(
+                (s - 1.0).abs() < 0.06,
+                "diagonal {diagonal}: column ink {s} of the width, all {sums:?}"
+            );
         }
     }
     // Opaque, it stays a line primitive: whole pixels.
-    let px = r.render_to_rgba(&mut scene_with(vec![lines(&ACROSS, None, material(width, 1.0))]), &camera());
-    assert!((0..H).any(|v| at(&px, W / 2, v) == 255), "an opaque thin line still lights its pixel");
+    let px = r.render_to_rgba(
+        &mut scene_with(vec![lines(&ACROSS, None, material(width, 1.0))]),
+        &camera(),
+    );
+    assert!(
+        (0..H).any(|v| at(&px, W / 2, v) == 255),
+        "an opaque thin line still lights its pixel"
+    );
 }
 
 #[test]
 fn a_draw_range_limits_the_segments() {
     let Some(mut r) = renderer() else { return };
     // two segments, one above the other; the range draws only the first
-    let pos = [-0.6, 0.5, 0.0, 0.6, 0.5, 0.0, -0.6, -0.5, 0.0, 0.6, -0.5, 0.0];
+    let pos = [
+        -0.6, 0.5, 0.0, 0.6, 0.5, 0.0, -0.6, -0.5, 0.0, 0.6, -0.5, 0.0,
+    ];
     let mut g = BufferGeometry::new();
     g.set_attribute("position", BufferAttribute::new(pos.to_vec(), 3));
     g.set_draw_range(0, 2);
@@ -175,7 +220,10 @@ fn vertex_colours_colour_each_end() {
     let Some(mut r) = renderer() else { return };
     let mut g = BufferGeometry::new();
     g.set_attribute("position", BufferAttribute::new(ACROSS.to_vec(), 3));
-    g.set_attribute("color", BufferAttribute::new(vec![1.0, 0.0, 0.0, 0.0, 0.0, 1.0], 3));
+    g.set_attribute(
+        "color",
+        BufferAttribute::new(vec![1.0, 0.0, 0.0, 0.0, 0.0, 1.0], 3),
+    );
     // a colour attribute colours lines (no flag, unlike three.js's `vertexColors`)
     let o = Object3D::line_segments(LineSegments::new(g, Material::Line(material(6.0, 1.0))));
     let px = r.render_to_rgba(&mut scene_with(vec![o]), &camera());
@@ -192,8 +240,13 @@ fn width_holds_in_perspective_and_past_the_camera() {
     cam.position = Vector3::new(0.0, 0.0, 3.0);
     cam.look_at(Vector3::new(0.0, 0.0, 0.0));
     // one near, one far: the same width on screen
-    let pos = [-0.5, 0.3, 2.0, 0.5, 0.3, 2.0, -3.0, -1.0, -10.0, 3.0, -1.0, -10.0];
-    let px = r.render_to_rgba(&mut scene_with(vec![lines(&pos, None, material(6.0, 1.0))]), &cam);
+    let pos = [
+        -0.5, 0.3, 2.0, 0.5, 0.3, 2.0, -3.0, -1.0, -10.0, 3.0, -1.0, -10.0,
+    ];
+    let px = r.render_to_rgba(
+        &mut scene_with(vec![lines(&pos, None, material(6.0, 1.0))]),
+        &cam,
+    );
     let col: Vec<u32> = (0..H).filter(|&v| at(&px, W / 2, v) > 127).collect();
     let runs: Vec<&[u32]> = col.chunk_by(|a, b| b - a == 1).collect();
     assert_eq!(runs.len(), 2, "two lines down the middle: {col:?}");
@@ -202,10 +255,15 @@ fn width_holds_in_perspective_and_past_the_camera() {
     }
     // a segment running from in front of the camera to behind it still draws
     let through = [0.0, -0.2, 0.0, 0.0, -0.2, 10.0];
-    let px = r.render_to_rgba(&mut scene_with(vec![lines(&through, None, material(4.0, 1.0))]), &cam);
-    assert!(px.chunks(4).any(|p| p[0] > 127), "the part in front of the camera is drawn");
+    let px = r.render_to_rgba(
+        &mut scene_with(vec![lines(&through, None, material(4.0, 1.0))]),
+        &cam,
+    );
+    assert!(
+        px.chunks(4).any(|p| p[0] > 127),
+        "the part in front of the camera is drawn"
+    );
 }
-
 
 #[test]
 fn every_target_draws_them() {
@@ -213,19 +271,39 @@ fn every_target_draws_them() {
     // blend pass there), half-float (the linear pipelines), the default
     // format: the same width each time
     let Some(mut plain) = renderer() else { return };
-    let build = |f: wgpu::TextureFormat| HeadlessRenderer::builder().size(W, H).color_format(f).build().unwrap();
+    let build = |f: wgpu::TextureFormat| {
+        HeadlessRenderer::builder()
+            .size(W, H)
+            .color_format(f)
+            .build()
+            .unwrap()
+    };
     let mut srgb = build(wgpu::TextureFormat::Rgba8UnormSrgb);
     let mut half = build(wgpu::TextureFormat::Rgba16Float);
     let mut msaa = build(wgpu::TextureFormat::Rgba8Unorm);
     msaa.set_msaa(4);
     for opacity in [1.0, 0.6] {
-        for (name, r) in [("plain", &mut plain), ("srgb", &mut srgb), ("f16", &mut half), ("msaa", &mut msaa)] {
-            let px = r.render_to_rgba(&mut scene_with(vec![lines(&ACROSS, None, material(6.0, opacity))]), &camera());
+        for (name, r) in [
+            ("plain", &mut plain),
+            ("srgb", &mut srgb),
+            ("f16", &mut half),
+            ("msaa", &mut msaa),
+        ] {
+            let px = r.render_to_rgba(
+                &mut scene_with(vec![lines(&ACROSS, None, material(6.0, opacity))]),
+                &camera(),
+            );
             let lit = (0..H).filter(|&v| at(&px, W / 2, v) > 40).count();
-            assert!((6..=8).contains(&lit), "{name} at opacity {opacity}: {lit} px");
+            assert!(
+                (6..=8).contains(&lit),
+                "{name} at opacity {opacity}: {lit} px"
+            );
         }
     }
     // and the opaque line was drawn multisampled, not on a fallback path
-    let _ = msaa.render_to_rgba(&mut scene_with(vec![lines(&ACROSS, None, material(6.0, 1.0))]), &camera());
+    let _ = msaa.render_to_rgba(
+        &mut scene_with(vec![lines(&ACROSS, None, material(6.0, 1.0))]),
+        &camera(),
+    );
     assert!(msaa.renderer().last_frame_multisampled());
 }

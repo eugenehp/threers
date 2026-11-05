@@ -42,7 +42,11 @@ pub struct SdfSettings {
 
 impl SdfSettings {
     /// deck.gl's defaults: a 4-pixel buffer, radius 12, cutoff 0.25.
-    pub const DECK_GL: Self = Self { buffer: 4, radius: 12.0, cutoff: 0.25 };
+    pub const DECK_GL: Self = Self {
+        buffer: 4,
+        radius: 12.0,
+        cutoff: 0.25,
+    };
 
     /// The field value on a glyph's edge, 0 to 1.
     pub fn edge(&self) -> f32 {
@@ -123,7 +127,11 @@ impl BitmapGlyphs {
             let mut alpha = Vec::with_capacity((w * h) as usize);
             for y in y0..y0 + h {
                 for x in x0..x0 + w {
-                    alpha.push(rgba.get(((y * width + x) * 4 + 3) as usize).copied().unwrap_or(0));
+                    alpha.push(
+                        rgba.get(((y * width + x) * 4 + 3) as usize)
+                            .copied()
+                            .unwrap_or(0),
+                    );
                 }
             }
             glyphs.insert(
@@ -141,7 +149,16 @@ impl BitmapGlyphs {
                 },
             );
         }
-        Self { size, ascent, descent, glyphs, sdf: None, canvas: false, phases: HashMap::new(), page: None }
+        Self {
+            size,
+            ascent,
+            descent,
+            glyphs,
+            sdf: None,
+            canvas: false,
+            phases: HashMap::new(),
+            page: None,
+        }
     }
 
     /// [`from_atlas`](Self::from_atlas) for an atlas that is deck.gl's own
@@ -157,9 +174,17 @@ impl BitmapGlyphs {
         descent: f32,
     ) -> Self {
         let frames: Vec<(char, AtlasFrame)> = frames.into_iter().collect();
-        let boxes = frames.iter().map(|(c, f)| (*c as u32, [f.x, f.y, f.width, f.height])).collect();
+        let boxes = frames
+            .iter()
+            .map(|(c, f)| (*c as u32, [f.x, f.y, f.width, f.height]))
+            .collect();
         let mut set = Self::from_atlas(rgba, width, height, frames, size, ascent, descent);
-        set.page = Some(std::sync::Arc::new(GlyphPage { rgba: rgba.to_vec(), width, height, boxes }));
+        set.page = Some(std::sync::Arc::new(GlyphPage {
+            rgba: rgba.to_vec(),
+            width,
+            height,
+            boxes,
+        }));
         set
     }
 
@@ -170,7 +195,11 @@ impl BitmapGlyphs {
     /// with the ascent and descent ceiled (deck.gl's arithmetic), the face's
     /// line ascent and descent for the whole. Faces without outlines are
     /// measured by their images.
-    pub fn from_font(font: &mut CaptionFont, chars: impl IntoIterator<Item = char>, size: f32) -> Self {
+    pub fn from_font(
+        font: &mut CaptionFont,
+        chars: impl IntoIterator<Item = char>,
+        size: f32,
+    ) -> Self {
         let m = font.metrics(size);
         let mut glyphs = HashMap::new();
         let mut phases = HashMap::new();
@@ -181,7 +210,12 @@ impl BitmapGlyphs {
                 let mut pts = o.iter().flatten().flatten().peekable();
                 pts.peek()?;
                 Some(pts.fold([f32::MAX, f32::MIN, f32::MAX, f32::MIN], |b, p| {
-                    [b[0].min(p[0]), b[1].max(p[0]), b[2].min(p[1]), b[3].max(p[1])]
+                    [
+                        b[0].min(p[0]),
+                        b[1].max(p[0]),
+                        b[2].min(p[1]),
+                        b[3].max(p[1]),
+                    ]
                 }))
             });
             let (ascent, descent, width) = match bounds {
@@ -227,7 +261,16 @@ impl BitmapGlyphs {
             phases.insert(c as u32, [phase(font, 1), phase(font, 2), phase(font, 3)]);
             glyphs.insert(c as u32, glyph);
         }
-        Self { size, ascent: m.ascent.ceil(), descent: m.descent.ceil(), glyphs, sdf: None, canvas: true, phases, page: None }
+        Self {
+            size,
+            ascent: m.ascent.ceil(),
+            descent: m.descent.ceil(),
+            glyphs,
+            sdf: None,
+            canvas: true,
+            phases,
+            page: None,
+        }
     }
 
     /// Every glyph as a signed distance field ([`tiny_sdf`]), `buffer`
@@ -238,12 +281,16 @@ impl BitmapGlyphs {
             .glyphs
             .iter()
             .map(|(&c, g)| {
-                let (w, h) = (g.image_width + 2 * settings.buffer, g.image_height + 2 * settings.buffer);
+                let (w, h) = (
+                    g.image_width + 2 * settings.buffer,
+                    g.image_height + 2 * settings.buffer,
+                );
                 let mut padded = vec![0u8; (w * h) as usize];
                 for y in 0..g.image_height {
                     let src = (y * g.image_width) as usize;
                     let dst = ((y + settings.buffer) * w + settings.buffer) as usize;
-                    padded[dst..dst + g.image_width as usize].copy_from_slice(&g.alpha[src..src + g.image_width as usize]);
+                    padded[dst..dst + g.image_width as usize]
+                        .copy_from_slice(&g.alpha[src..src + g.image_width as usize]);
                 }
                 let field = tiny_sdf(&padded, w, h, settings.radius, settings.cutoff);
                 (
@@ -259,7 +306,14 @@ impl BitmapGlyphs {
                 )
             })
             .collect();
-        Self { glyphs, sdf: Some(settings), canvas: false, phases: HashMap::new(), page: None, ..self.clone() }
+        Self {
+            glyphs,
+            sdf: Some(settings),
+            canvas: false,
+            phases: HashMap::new(),
+            page: None,
+            ..self.clone()
+        }
     }
 
     /// `c` at `size` pixels per em, resampled to coverage — for
@@ -274,7 +328,9 @@ impl BitmapGlyphs {
             offset_y: 0,
             advance,
         };
-        let Some(g) = self.glyphs.get(&(c as u32)) else { return blank(0.0) };
+        let Some(g) = self.glyphs.get(&(c as u32)) else {
+            return blank(0.0);
+        };
         let advance = g.advance * k;
         if g.image_width == 0 || g.image_height == 0 {
             return blank(advance);
@@ -314,7 +370,14 @@ impl BitmapGlyphs {
                 coverage.push(v.round().clamp(0.0, 255.0) as u8);
             }
         }
-        super::font::GlyphBitmap { width: w, height: h, coverage, offset_x: x0, offset_y: y0, advance }
+        super::font::GlyphBitmap {
+            width: w,
+            height: h,
+            coverage,
+            offset_x: x0,
+            offset_y: y0,
+            advance,
+        }
     }
 }
 
@@ -349,7 +412,9 @@ pub fn tiny_sdf(alpha: &[u8], w: u32, h: u32, radius: f32, cutoff: f32) -> Vec<u
     (0..n)
         .map(|i| {
             let d = outer[i].sqrt() - inner[i].sqrt();
-            (255.0 - 255.0 * (d / radius as f64 + cutoff as f64)).round().clamp(0.0, 255.0) as u8
+            (255.0 - 255.0 * (d / radius as f64 + cutoff as f64))
+                .round()
+                .clamp(0.0, 255.0) as u8
         })
         .collect()
 }
@@ -369,7 +434,15 @@ fn edt(grid: &mut [f64], w: usize, h: usize) {
     }
 }
 
-fn edt1d(grid: &mut [f64], offset: usize, stride: usize, n: usize, f: &mut [f64], v: &mut [usize], z: &mut [f64]) {
+fn edt1d(
+    grid: &mut [f64],
+    offset: usize,
+    stride: usize,
+    n: usize,
+    f: &mut [f64],
+    v: &mut [usize],
+    z: &mut [f64],
+) {
     // TinySDF's, line for line.
     v[0] = 0;
     z[0] = -INF;
@@ -424,7 +497,11 @@ mod tests {
         let f = tiny_sdf(&a, w, h, 8.0, 0.25);
         let at = |x: usize, y: usize| f[y * 20 + x] as f32;
         // Outside, 3 pixels from the square: 255 - 255·(3/8 + 0.25).
-        assert!((at(5, 9) - (255.0 - 255.0 * (3.0 / 8.0 + 0.25))).abs() <= 1.0, "{}", at(5, 9));
+        assert!(
+            (at(5, 9) - (255.0 - 255.0 * (3.0 / 8.0 + 0.25))).abs() <= 1.0,
+            "{}",
+            at(5, 9)
+        );
         // Inside is above the edge's 191, outside below.
         assert!(at(9, 9) > 191.0 && at(6, 9) < 191.0);
     }
@@ -438,7 +515,14 @@ mod tests {
                 rgba[(y * 16 + x) * 4 + 3] = 255;
             }
         }
-        let frame = AtlasFrame { x: 2.0, y: 1.0, width: 4.0, height: 8.0, anchor_y: 6.0, advance: 5.0 };
+        let frame = AtlasFrame {
+            x: 2.0,
+            y: 1.0,
+            width: 4.0,
+            height: 8.0,
+            anchor_y: 6.0,
+            advance: 5.0,
+        };
         let set = BitmapGlyphs::from_atlas(&rgba, 16, 16, [('I', frame)], 8.0, 6.0, 2.0);
         let mut font = CaptionFont::from_bitmap_glyphs(std::sync::Arc::new(set));
         assert!(font.has_glyph('I') && !font.has_glyph('J'));

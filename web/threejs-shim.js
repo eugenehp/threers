@@ -3,6 +3,7 @@ import init, {
     WebRenderer, WebRenderTarget, WebCubeRenderTarget, WebScene, WebCamera, WebObjectHandle,
     // geometries
     WebGeometry, WebBufferGeometry, WebBufferAttribute,
+    MeshBuilder as WebMeshBuilder, meshReport as _wasmMeshReport,
     // materials
     WebMaterial,
     WebShaderMaterial,
@@ -7865,6 +7866,81 @@ function _fillFromWasm(target, wasmGeometry) {
     if (bg !== wasmGeometry) bg.free?.();
     wasmGeometry.free?.();
     return target;
+}
+
+/**
+ * threers extension: build a mesh from vertices and triangles, without
+ * assembling attribute arrays by hand. A triangle shows from the side its
+ * vertices run anticlockwise; `facing`, `ribbon` and `grid` take the side you
+ * mean instead, which is the mistake this exists to rule out. Methods chain.
+ *
+ *     const m = new THREE.MeshBuilder();
+ *     const [a, b, c, d] = [[0,0,0],[1,0,0],[1,0,1],[0,0,1]].map(p => m.vertex(...p));
+ *     const geometry = m.facing(new THREE.Vector3(0, 1, 0)).quad(a, b, c, d).build();
+ */
+export class MeshBuilder {
+    constructor() { this._w = new WebMeshBuilder(); }
+    /** The normal of the vertices to come; `autoNormal()` goes back to the faces'. */
+    normal(n, y, z) { const v = _mbXyz(n, y, z); this._w.normal(v[0], v[1], v[2]); return this; }
+    autoNormal() { this._w.autoNormal(); return this; }
+    uv(u, v) { this._w.uv(u, v); return this; }
+    /** The colour of the vertices to come: a Color, a hex number, or r, g, b. */
+    color(c, g, b) {
+        if (typeof c === 'number' && g === undefined) c = new Color(c);
+        if (c && typeof c === 'object') this._w.color(c.r, c.g, c.b); else this._w.color(c, g, b);
+        return this;
+    }
+    /** Turn the triangles to come towards this side (a Vector3 or x, y, z). */
+    facing(n, y, z) { const v = _mbXyz(n, y, z); this._w.facing(v[0], v[1], v[2]); return this; }
+    asWound() { this._w.asWound(); return this; }
+    /** Add a vertex (a Vector3 or x, y, z), returning its index. */
+    vertex(p, y, z) { const v = _mbXyz(p, y, z); return this._w.vertex(v[0], v[1], v[2]); }
+    triangle(a, b, c) { this._w.triangle(a, b, c); return this; }
+    quad(a, b, c, d) { this._w.quad(a, b, c, d); return this; }
+    /** A strip between two edges (arrays of Vector3), facing `side`. */
+    ribbon(left, right, side = new Vector3(0, 1, 0), closed = false) {
+        const s = _mbXyz(side);
+        this._w.ribbon(_mbPoints(left), _mbPoints(right), s[0], s[1], s[2], closed);
+        return this;
+    }
+    /** A height field over x and z, centred on the origin, facing up. `height`
+     *  is `(x, z) => y`, an array of `(columns + 1) * (rows + 1)` heights, or nothing. */
+    grid(width, depth, columns = 1, rows = 1, height) {
+        this._w.grid(width, depth, columns, rows, Array.isArray(height) ? new Float32Array(height) : height);
+        return this;
+    }
+    /** Copy any geometry in, moved by a Matrix4: many meshes become one draw. */
+    append(geometry, matrix) {
+        const w = _wasmGeometryOf(geometry);
+        if (!w) throw new Error('MeshBuilder.append: that has no geometry to copy');
+        this._w.append(w, matrix ? Float32Array.from(matrix.elements ?? matrix) : undefined);
+        return this;
+    }
+    get vertexCount() { return this._w.vertexCount; }
+    get triangleCount() { return this._w.triangleCount; }
+    /** A BufferGeometry, vertices shared so smooth surfaces shade smooth. */
+    build() { return _fillFromWasm(new BufferGeometry(), this._w.build()); }
+    /** A BufferGeometry with each triangle shaded flat. */
+    buildFlat() { return _fillFromWasm(new BufferGeometry(), this._w.buildFlat()); }
+    dispose() { this._w.free(); }
+}
+
+/** threers extension: what is wrong with a geometry, if anything, as
+ *  `{ triangles, degenerate, openEdges, flippedEdges, crowdedEdges, isSolid }`. */
+export function meshReport(geometry) {
+    const w = _wasmGeometryOf(geometry);
+    if (!w) throw new Error('meshReport: that has no geometry');
+    return _wasmMeshReport(w);
+}
+
+function _mbXyz(v, y, z) {
+    if (v && typeof v === 'object') return Array.isArray(v) ? v : [v.x, v.y, v.z];
+    return [v, y, z];
+}
+function _mbPoints(points) {
+    const out = new Float32Array(points.length * 3);
+    points.forEach((p, i) => { const v = _mbXyz(p); out[i * 3] = v[0]; out[i * 3 + 1] = v[1]; out[i * 3 + 2] = v[2]; });
+    return out;
 }
 
 /** Convert built-in wasm geometry or BufferGeometry to non-indexed BufferGeometry (for CSG). */
@@ -18451,6 +18527,7 @@ const THREE = {
     WireframeGeometry, ShapeGeometry, ConvexGeometry, DecalGeometry, TextGeometry,
     ParametricGeometry,
     QuadGeometry, // threers extension
+    MeshBuilder, meshReport, // threers extension
     // Materials
     MeshBasicMaterial, MeshLambertMaterial, MeshStandardMaterial,
     MeshPhongMaterial, MeshPhysicalMaterial, MeshNormalMaterial, MeshDepthMaterial,

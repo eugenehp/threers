@@ -460,7 +460,16 @@ impl Pointers {
     /// Press `id` at uv `(x, y)`, painting `color`; the slot of a released
     /// pointer is reused.
     pub(crate) fn down(&mut self, id: i32, x: f32, y: f32, color: [f32; 3]) {
-        let p = Pointer { id, x, y, dx: 0.0, dy: 0.0, down: true, moved: false, color };
+        let p = Pointer {
+            id,
+            x,
+            y,
+            dx: 0.0,
+            dy: 0.0,
+            down: true,
+            moved: false,
+            color,
+        };
         match self.0.iter_mut().find(|p| p.id == id || !p.down) {
             Some(slot) => *slot = p,
             None => self.0.push(p),
@@ -1081,7 +1090,8 @@ impl FluidSim {
     /// mouse or the touch. `-1` is the convention for a mouse.
     pub fn pointer_down(&mut self, id: i32, x: f32, y: f32) {
         let color = self.generate_color();
-        self.pointers.down(id, x / self.width as f32, y / self.height as f32, color);
+        self.pointers
+            .down(id, x / self.width as f32, y / self.height as f32, color);
     }
 
     /// Move a pressed pointer. Ignored for a pointer that is not down, which is
@@ -1212,7 +1222,13 @@ impl FluidSim {
             .pointers
             .take_moved(self.config.splat_force)
             .into_iter()
-            .map(|(x, y, dx, dy, color)| Splat { x, y, dx, dy, color })
+            .map(|(x, y, dx, dy, color)| Splat {
+                x,
+                y,
+                dx,
+                dy,
+                color,
+            })
             .collect();
         self.record_splats(&scaled);
     }

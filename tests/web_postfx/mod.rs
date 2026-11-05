@@ -11,8 +11,7 @@
 
 use threers::wasm::{
     WebBufferAttribute, WebBufferGeometry, WebCamera, WebColor, WebEffectComposer, WebEuler,
-    WebGeometry, WebMaterial, WebMesh, WebPass, WebRenderTarget, WebRenderer, WebScene,
-    WebVector3,
+    WebGeometry, WebMaterial, WebMesh, WebPass, WebRenderTarget, WebRenderer, WebScene, WebVector3,
 };
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_test::wasm_bindgen_test;
@@ -85,7 +84,10 @@ fn top_half_scene() -> WebScene {
             3,
         ),
     );
-    g.set_attribute("normal", WebBufferAttribute::new([0.0, 0.0, 1.0].repeat(4), 3));
+    g.set_attribute(
+        "normal",
+        WebBufferAttribute::new([0.0, 0.0, 1.0].repeat(4), 3),
+    );
     g.set_index(vec![0, 1, 2, 0, 2, 3]);
     let mut scene = WebScene::new();
     scene.set_background(&WebColor::new(0.0, 0.0, 0.0));
@@ -152,9 +154,17 @@ async fn setup(
     renderer.render(&mut scene, &camera);
     let rt_pixels = read_target(renderer, target.id, w, h).await;
     renderer.set_render_target(0);
-    assert_eq!(orientation(&rt_pixels, w, h), "top", "render target read-back");
+    assert_eq!(
+        orientation(&rt_pixels, w, h),
+        "top",
+        "render target read-back"
+    );
     renderer.render(&mut scene, &camera);
-    assert_eq!(orientation(&read_canvas(canvas), w, h), "top", "direct canvas render");
+    assert_eq!(
+        orientation(&read_canvas(canvas), w, h),
+        "top",
+        "direct canvas render"
+    );
     (target, w, h)
 }
 
@@ -172,9 +182,21 @@ async fn post_fx_to_the_canvas_keeps_the_picture_upright() {
     let (target, w, h) = setup(renderer, &canvas).await;
 
     let cases: [(&str, u32, [f32; 4]); 4] = [
-        ("kind 0, p2.x = 1 (via scratch target)", 0, [1.0, 0.0, 0.0, 0.0]),
-        ("kind 0, p2.y = 1 (sRGB-decode copy)", 0, [0.0, 1.0, 0.0, 0.0]),
-        ("kind 1 (FXAA)", 1, [1.0 / w as f32, 1.0 / h as f32, 0.0, 0.0]),
+        (
+            "kind 0, p2.x = 1 (via scratch target)",
+            0,
+            [1.0, 0.0, 0.0, 0.0],
+        ),
+        (
+            "kind 0, p2.y = 1 (sRGB-decode copy)",
+            0,
+            [0.0, 1.0, 0.0, 0.0],
+        ),
+        (
+            "kind 1 (FXAA)",
+            1,
+            [1.0 / w as f32, 1.0 / h as f32, 0.0, 0.0],
+        ),
         ("kind 20 (bilinear resample)", 20, [0.0; 4]),
     ];
     let mut results = Vec::new();
@@ -187,7 +209,10 @@ async fn post_fx_to_the_canvas_keeps_the_picture_upright() {
     renderer.set_scissor_test(true);
     renderer.set_scissor_test(false);
     renderer.render(&mut top_half_scene(), &front_ortho());
-    results.push(("canvas render after a scissor test", orientation(&read_canvas(&canvas), w, h)));
+    results.push((
+        "canvas render after a scissor test",
+        orientation(&read_canvas(&canvas), w, h),
+    ));
 
     let wrong: Vec<_> = results.iter().filter(|(_, o)| o != "top").collect();
     assert!(
@@ -214,18 +239,43 @@ async fn post_fx_copies_keep_orientation_everywhere() {
     let (target, w, h) = setup(renderer, &canvas).await;
     let mut results = Vec::new();
     post_fx_to_canvas(renderer, target.id, 0, [0.0; 4]);
-    results.push(("canvas kind 0 (plain copy)", orientation(&read_canvas(&canvas), w, h)));
+    results.push((
+        "canvas kind 0 (plain copy)",
+        orientation(&read_canvas(&canvas), w, h),
+    ));
     let second = WebRenderTarget::new(renderer, w, h);
     let identity = vec![
         1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
     ];
     for (name, kind, p2) in [
         ("target kind 0 (copy)", 0u32, [0.0f32; 4]),
-        ("target kind 1 (FXAA)", 1, [1.0 / w as f32, 1.0 / h as f32, 0.0, 0.0]),
+        (
+            "target kind 1 (FXAA)",
+            1,
+            [1.0 / w as f32, 1.0 / h as f32, 0.0, 0.0],
+        ),
     ] {
         renderer.apply_post_fx_to_rt(
-            target.id, second.id, 0, 0, kind, 0.0, p2[0], p2[1], p2[2], p2[3], 0.0, 0.0, 0.0,
-            0.0, 0.1, 100.0, 0.5, 16, identity.clone(), identity.clone(),
+            target.id,
+            second.id,
+            0,
+            0,
+            kind,
+            0.0,
+            p2[0],
+            p2[1],
+            p2[2],
+            p2[3],
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.1,
+            100.0,
+            0.5,
+            16,
+            identity.clone(),
+            identity.clone(),
         );
         let px = read_target(renderer, second.id, w, h).await;
         results.push((name, orientation(&px, w, h)));
@@ -285,16 +335,50 @@ impl Fx {
 
 fn fx_to_canvas(renderer: &mut WebRenderer, input: u32, f: &Fx) {
     renderer.apply_post_fx(
-        input, f.depth, f.normal, f.kind, f.time, f.p2[0], f.p2[1], f.p2[2], f.p2[3], f.p3[0],
-        f.p3[1], f.p3[2], f.p3[3], 0, f.near, f.far, f.kernel_radius, 32, f.proj.clone(),
+        input,
+        f.depth,
+        f.normal,
+        f.kind,
+        f.time,
+        f.p2[0],
+        f.p2[1],
+        f.p2[2],
+        f.p2[3],
+        f.p3[0],
+        f.p3[1],
+        f.p3[2],
+        f.p3[3],
+        0,
+        f.near,
+        f.far,
+        f.kernel_radius,
+        32,
+        f.proj.clone(),
         f.inv_proj.clone(),
     );
 }
 
 fn fx_to_target(renderer: &mut WebRenderer, input: u32, output: u32, f: &Fx) {
     renderer.apply_post_fx_to_rt(
-        input, output, f.depth, f.normal, f.kind, f.time, f.p2[0], f.p2[1], f.p2[2], f.p2[3],
-        f.p3[0], f.p3[1], f.p3[2], f.p3[3], f.near, f.far, f.kernel_radius, 32, f.proj.clone(),
+        input,
+        output,
+        f.depth,
+        f.normal,
+        f.kind,
+        f.time,
+        f.p2[0],
+        f.p2[1],
+        f.p2[2],
+        f.p2[3],
+        f.p3[0],
+        f.p3[1],
+        f.p3[2],
+        f.p3[3],
+        f.near,
+        f.far,
+        f.kernel_radius,
+        32,
+        f.proj.clone(),
         f.inv_proj.clone(),
     );
 }
@@ -348,7 +432,10 @@ fn marker_quadrant(px: &[f32], w: u32, h: u32) -> String {
     if e[0] > 0.05 && e[0] > others * 1.5 {
         "top-left".into()
     } else {
-        format!("unclear: TL {:.3} TR {:.3} BL {:.3} BR {:.3}", q[0], q[1], q[2], q[3])
+        format!(
+            "unclear: TL {:.3} TR {:.3} BL {:.3} BR {:.3}",
+            q[0], q[1], q[2], q[3]
+        )
     }
 }
 
@@ -359,9 +446,15 @@ fn quad(x0: f32, x1: f32, y0: f32, y1: f32, z: f32, color: &WebColor) -> WebMesh
         "position",
         WebBufferAttribute::new(vec![x0, y0, z, x1, y0, z, x1, y1, z, x0, y1, z], 3),
     );
-    g.set_attribute("normal", WebBufferAttribute::new([0.0, 0.0, 1.0].repeat(4), 3));
+    g.set_attribute(
+        "normal",
+        WebBufferAttribute::new([0.0, 0.0, 1.0].repeat(4), 3),
+    );
     g.set_index(vec![0, 1, 2, 0, 2, 3]);
-    WebMesh::new(&WebGeometry::from_buffer_geometry(g), &WebMaterial::basic(color))
+    WebMesh::new(
+        &WebGeometry::from_buffer_geometry(g),
+        &WebMaterial::basic(color),
+    )
 }
 
 /// White square over x ∈ [-0.75, -0.25], y ∈ [0.25, 0.75] of `front_ortho`:
@@ -369,7 +462,14 @@ fn quad(x0: f32, x1: f32, y0: f32, y1: f32, z: f32, color: &WebColor) -> WebMesh
 fn marker_scene() -> WebScene {
     let mut scene = WebScene::new();
     scene.set_background(&WebColor::new(0.0, 0.0, 0.0));
-    scene.add(&quad(-0.75, -0.25, 0.25, 0.75, 0.0, &WebColor::new(1.0, 1.0, 1.0)));
+    scene.add(&quad(
+        -0.75,
+        -0.25,
+        0.25,
+        0.75,
+        0.0,
+        &WebColor::new(1.0, 1.0, 1.0),
+    ));
     scene
 }
 
@@ -385,29 +485,64 @@ fn every_kind(w: u32, h: u32) -> Vec<(&'static str, Fx)> {
     let k = Fx::kind;
     vec![
         ("0 copy", k(0, 0.0, [0.0; 4], [0.0; 4])),
-        ("0 copy, sRGB-decode", k(0, 0.0, [0.0, 1.0, 0.0, 0.0], [0.0; 4])),
-        ("1 FXAA", k(1, 0.0, [1.0 / w as f32, 1.0 / h as f32, 0.0, 0.0], [0.0; 4])),
+        (
+            "0 copy, sRGB-decode",
+            k(0, 0.0, [0.0, 1.0, 0.0, 0.0], [0.0; 4]),
+        ),
+        (
+            "1 FXAA",
+            k(1, 0.0, [1.0 / w as f32, 1.0 / h as f32, 0.0, 0.0], [0.0; 4]),
+        ),
         ("2 film", k(2, 0.25, [0.5, 0.0, 0.0, 0.0], [0.0; 4])),
         ("3 dot screen", k(3, 0.0, [1.57, 1.0, 0.5, 0.5], [0.0; 4])),
-        ("4 halftone", k(4, 0.0, [4.0, 0.0, 1.0, 1.0], [pi / 12.0, pi / 6.0, pi / 4.0, 1.0])),
+        (
+            "4 halftone",
+            k(
+                4,
+                0.0,
+                [4.0, 0.0, 1.0, 1.0],
+                [pi / 12.0, pi / 6.0, pi / 4.0, 1.0],
+            ),
+        ),
         ("5 glitch", k(5, 0.5, glitch2, glitch3)),
         ("31 glitch, no snow", k(31, 0.5, glitch2, glitch3)),
-        ("6 bloom threshold", k(6, 0.0, [0.5, 0.1, 0.0, 0.0], [0.0; 4])),
+        (
+            "6 bloom threshold",
+            k(6, 0.0, [0.5, 0.1, 0.0, 0.0], [0.0; 4]),
+        ),
         ("7 blur h", k(7, 0.0, [2.0, 0.0, 0.0, 0.0], [0.0; 4])),
         ("8 blur v", k(8, 0.0, [2.0, 0.0, 0.0, 0.0], [0.0; 4])),
-        ("9 bloom composite", k(9, 0.0, [1.0, 0.0, 0.0, 0.0], [0.0; 4])),
+        (
+            "9 bloom composite",
+            k(9, 0.0, [1.0, 0.0, 0.0, 0.0], [0.0; 4]),
+        ),
         ("10 sobel", k(10, 0.0, [1.0, 1.0, 1.0, 1.0], [0.0; 4])),
         ("13 SSAO blur", k(13, 0.0, [0.0; 4], [0.0; 4])),
         ("14 SSAO composite", k(14, 0.0, [0.0; 4], [0.0; 4])),
-        ("16 outline edge", k(16, 0.0, [1.0, 1.0, 1.0, 1.0], [0.0; 4])),
-        ("17 outline overlay", k(17, 0.0, [3.0, 0.0, 0.0, 0.0], [0.0; 4])),
-        ("18 outline blur h", k(18, 0.0, [2.0, 0.0, 0.0, 0.0], [0.0; 4])),
-        ("19 outline blur v", k(19, 0.0, [2.0, 0.0, 0.0, 0.0], [0.0; 4])),
+        (
+            "16 outline edge",
+            k(16, 0.0, [1.0, 1.0, 1.0, 1.0], [0.0; 4]),
+        ),
+        (
+            "17 outline overlay",
+            k(17, 0.0, [3.0, 0.0, 0.0, 0.0], [0.0; 4]),
+        ),
+        (
+            "18 outline blur h",
+            k(18, 0.0, [2.0, 0.0, 0.0, 0.0], [0.0; 4]),
+        ),
+        (
+            "19 outline blur v",
+            k(19, 0.0, [2.0, 0.0, 0.0, 0.0], [0.0; 4]),
+        ),
         ("20 bilinear resample", k(20, 0.0, [0.0; 4], [0.0; 4])),
         ("21 afterimage", k(21, 0.0, [0.95, 0.0, 0.0, 0.0], [0.0; 4])),
         ("22 transition", k(22, 0.0, [0.0; 4], [0.0; 4])),
         ("24 pixelated", k(24, 0.0, [4.0, 0.0, 0.0, 0.0], [0.0; 4])),
-        ("25 adaptive tone map", k(25, 0.0, [0.6, 0.01, 16.0, 1.0], [0.0; 4])),
+        (
+            "25 adaptive tone map",
+            k(25, 0.0, [0.6, 0.01, 16.0, 1.0], [0.0; 4]),
+        ),
         ("27 SAO", k(27, 0.0, [0.5, 0.0, 0.0, 0.0], [0.0; 4])),
         ("28 SMAA", k(28, 0.0, [0.0; 4], [0.0; 4])),
         ("30 output", k(30, 0.0, [1.0, 0.0, 0.0, 0.0], [0.0; 4])),
@@ -438,9 +573,17 @@ async fn every_post_fx_kind_keeps_the_marker_top_left() {
     }
     renderer.set_render_target(0);
     let seen = unit(&read_target(renderer, input.id, w, h).await);
-    assert_eq!(marker_quadrant(&seen, w, h), "top-left", "the 8-bit scene render");
+    assert_eq!(
+        marker_quadrant(&seen, w, h),
+        "top-left",
+        "the 8-bit scene render"
+    );
     let seen = read_target_f16(renderer, input_f16.id, w, h).await;
-    assert_eq!(marker_quadrant(&seen, w, h), "top-left", "the half-float scene render");
+    assert_eq!(
+        marker_quadrant(&seen, w, h),
+        "top-left",
+        "the half-float scene render"
+    );
 
     let mut wrong = Vec::new();
     let mut checked = 0;
@@ -465,7 +608,12 @@ async fn every_post_fx_kind_keeps_the_marker_top_left() {
     // Kind 15 multiplies onto the target's contents: give it white first.
     let white = Fx::kind(29, 0.0, [1.0; 4], [0.0; 4]);
     fx_to_target(renderer, input.id, output.id, &white);
-    fx_to_target(renderer, input.id, output.id, &Fx::kind(15, 0.0, [0.0; 4], [0.0; 4]));
+    fx_to_target(
+        renderer,
+        input.id,
+        output.id,
+        &Fx::kind(15, 0.0, [0.0; 4], [0.0; 4]),
+    );
     let at = marker_quadrant(&unit(&read_target(renderer, output.id, w, h).await), w, h);
     if at != "top-left" {
         wrong.push(format!("15 SSAO multiply → target: {at}"));
@@ -526,9 +674,27 @@ async fn the_canvas_copy_matches_the_route_through_a_target() {
     // Something with gradients and partial coverage, not just flat fills.
     let mut scene = WebScene::new();
     scene.set_background(&WebColor::new(0.1, 0.2, 0.3));
-    scene.add(&quad(-0.9, 0.3, -0.2, 0.8, 0.0, &WebColor::new(0.9, 0.4, 0.1)));
-    let tilted = scene.add(&quad(-0.4, 0.6, -0.6, 0.4, 0.5, &WebColor::new(0.2, 0.8, 0.5)));
-    scene.set_transform(&tilted, &WebVector3::new(0.0, 0.0, 0.0), &WebEuler::new(0.0, 0.0, 0.4));
+    scene.add(&quad(
+        -0.9,
+        0.3,
+        -0.2,
+        0.8,
+        0.0,
+        &WebColor::new(0.9, 0.4, 0.1),
+    ));
+    let tilted = scene.add(&quad(
+        -0.4,
+        0.6,
+        -0.6,
+        0.4,
+        0.5,
+        &WebColor::new(0.2, 0.8, 0.5),
+    ));
+    scene.set_transform(
+        &tilted,
+        &WebVector3::new(0.0, 0.0, 0.0),
+        &WebEuler::new(0.0, 0.0, 0.4),
+    );
     let camera = front_ortho();
     let mut differ = Vec::new();
     for half in [false, true] {
@@ -548,12 +714,23 @@ async fn the_canvas_copy_matches_the_route_through_a_target() {
         fx_to_target(renderer, src.id, via.id, &copy);
         fx_to_canvas(renderer, via.id, &copy);
         let routed = read_canvas(&canvas);
-        let n = direct.iter().zip(&routed).filter(|(a, b)| a.abs_diff(**b) > 1).count();
+        let n = direct
+            .iter()
+            .zip(&routed)
+            .filter(|(a, b)| a.abs_diff(**b) > 1)
+            .count();
         if n > 0 {
-            differ.push(format!("{} input: {n} bytes differ", if half { "f16" } else { "8-bit" }));
+            differ.push(format!(
+                "{} input: {n} bytes differ",
+                if half { "f16" } else { "8-bit" }
+            ));
         }
     }
-    assert!(differ.is_empty(), "backend {}: {differ:?}", renderer.backend());
+    assert!(
+        differ.is_empty(),
+        "backend {}: {differ:?}",
+        renderer.backend()
+    );
 }
 
 /// The three.js SSAO kernel shape (points in the +z hemisphere, denser near
@@ -586,12 +763,20 @@ fn crease_scene(material: impl Fn(&WebColor) -> WebMaterial, background: &WebCol
         &WebGeometry::box_(8.0, 0.1, 8.0),
         &material(&WebColor::new(0.0, 0.0, 1.0)),
     ));
-    scene.set_transform(&floor, &WebVector3::new(0.0, -0.05, 0.0), &WebEuler::new(0.0, 0.0, 0.0));
+    scene.set_transform(
+        &floor,
+        &WebVector3::new(0.0, -0.05, 0.0),
+        &WebEuler::new(0.0, 0.0, 0.0),
+    );
     let wall = scene.add(&WebMesh::new(
         &WebGeometry::box_(4.0, 3.0, 0.1),
         &material(&WebColor::new(0.0, 1.0, 0.0)),
     ));
-    scene.set_transform(&wall, &WebVector3::new(-2.0, 1.5, -1.05), &WebEuler::new(0.0, 0.0, 0.0));
+    scene.set_transform(
+        &wall,
+        &WebVector3::new(-2.0, 1.5, -1.05),
+        &WebEuler::new(0.0, 0.0, 0.0),
+    );
     scene
 }
 
@@ -618,7 +803,10 @@ async fn ssao_darkens_the_crease_where_it_is() {
     renderer.render(&mut crease_scene(WebMaterial::basic, &black), &camera);
     renderer.set_render_target(normals.id);
     renderer.render(
-        &mut crease_scene(|_| WebMaterial::normal_mat(), &WebColor::new(0.467, 0.467, 1.0)),
+        &mut crease_scene(
+            |_| WebMaterial::normal_mat(),
+            &WebColor::new(0.467, 0.467, 1.0),
+        ),
         &camera,
     );
     renderer.set_render_target(0);
@@ -636,8 +824,14 @@ async fn ssao_darkens_the_crease_where_it_is() {
         })
     };
     let crease = crease_at(w / 4).expect("no wall/floor crease in the left half");
-    assert!(crease < h / 2 - 4, "the crease is at row {crease}, meant to be in the upper half");
-    assert!(crease_at(w * 3 / 4).is_none(), "the wall is meant to cover the left half only");
+    assert!(
+        crease < h / 2 - 4,
+        "the crease is at row {crease}, meant to be in the upper half"
+    );
+    assert!(
+        crease_at(w * 3 / 4).is_none(),
+        "the wall is meant to cover the left half only"
+    );
 
     let normal_px = read_target(renderer, normals.id, w, h).await;
     let sample = |x: u32, y: u32| {
@@ -754,12 +948,18 @@ async fn ssao_default_output_darkens_the_beauty_in_the_crease_only() {
     // A grey floor and wall, so the multiply shows on every channel.
     renderer.set_render_target(beauty.id);
     renderer.render(
-        &mut crease_scene(|_| WebMaterial::basic(&WebColor::new(0.8, 0.8, 0.8)), &WebColor::new(0.0, 0.0, 0.0)),
+        &mut crease_scene(
+            |_| WebMaterial::basic(&WebColor::new(0.8, 0.8, 0.8)),
+            &WebColor::new(0.0, 0.0, 0.0),
+        ),
         &camera,
     );
     renderer.set_render_target(normals.id);
     renderer.render(
-        &mut crease_scene(|_| WebMaterial::normal_mat(), &WebColor::new(0.467, 0.467, 1.0)),
+        &mut crease_scene(
+            |_| WebMaterial::normal_mat(),
+            &WebColor::new(0.467, 0.467, 1.0),
+        ),
         &camera,
     );
     renderer.set_render_target(0);
@@ -772,7 +972,12 @@ async fn ssao_default_output_darkens_the_beauty_in_the_crease_only() {
     (f.depth, f.normal, f.near, f.far, f.kernel_radius) = (normals.id, normals.id, 0.1, 20.0, 0.6);
     (f.proj, f.inv_proj) = (proj, inv);
     fx_to_target(renderer, beauty.id, ao.id, &f);
-    fx_to_target(renderer, ao.id, blur.id, &Fx::kind(13, 0.0, [0.0; 4], [0.0; 4]));
+    fx_to_target(
+        renderer,
+        ao.id,
+        blur.id,
+        &Fx::kind(13, 0.0, [0.0; 4], [0.0; 4]),
+    );
 
     let copy = Fx::kind(0, 0.0, [0.0, 1.0, 0.0, 0.0], [0.0; 4]);
     fx_to_canvas(renderer, beauty.id, &copy);
@@ -799,20 +1004,37 @@ async fn ssao_default_output_darkens_the_beauty_in_the_crease_only() {
     };
     let left = 2..w / 2 - 4;
     let crease = (2..h / 2)
-        .min_by(|&a, &b| mean(&ao_px, left.clone(), a..a + 1).total_cmp(&mean(&ao_px, left.clone(), b..b + 1)))
+        .min_by(|&a, &b| {
+            mean(&ao_px, left.clone(), a..a + 1).total_cmp(&mean(&ao_px, left.clone(), b..b + 1))
+        })
         .unwrap();
     let band = crease.saturating_sub(1)..crease + 2;
     let floor = h - 8..h - 2;
-    let (plain_crease, shaded_crease) = (mean(&plain, left.clone(), band.clone()), mean(&shaded, left.clone(), band));
-    let (plain_floor, shaded_floor) = (mean(&plain, left.clone(), floor.clone()), mean(&shaded, left, floor));
+    let (plain_crease, shaded_crease) = (
+        mean(&plain, left.clone(), band.clone()),
+        mean(&shaded, left.clone(), band),
+    );
+    let (plain_floor, shaded_floor) = (
+        mean(&plain, left.clone(), floor.clone()),
+        mean(&shaded, left, floor),
+    );
     let report = format!(
         "backend {}: crease row {crease}: beauty {plain_crease:.3} → {shaded_crease:.3}; \
          open floor {plain_floor:.3} → {shaded_floor:.3}",
         renderer.backend()
     );
-    assert!(plain_crease > 0.2 && plain_floor > 0.2, "the beauty pass is not grey: {report}");
-    assert!(shaded_crease < plain_crease * 0.9, "no AO in the crease: {report}");
-    assert!((shaded_floor - plain_floor).abs() < 2.5 / 255.0, "open floor changed: {report}");
+    assert!(
+        plain_crease > 0.2 && plain_floor > 0.2,
+        "the beauty pass is not grey: {report}"
+    );
+    assert!(
+        shaded_crease < plain_crease * 0.9,
+        "no AO in the crease: {report}"
+    );
+    assert!(
+        (shaded_floor - plain_floor).abs() < 2.5 / 255.0,
+        "open floor changed: {report}"
+    );
 }
 
 /// SSR (kind 12) reflects below the object, in its own half, and leaves the
@@ -835,10 +1057,24 @@ async fn ssr_reflects_below_the_object() {
 
     let mut colour_scene = WebScene::new();
     colour_scene.set_background(&WebColor::new(0.3, 0.3, 0.3));
-    colour_scene.add(&quad(-0.8, -0.2, 0.2, 0.8, 0.0, &WebColor::new(0.0, 1.0, 0.0)));
+    colour_scene.add(&quad(
+        -0.8,
+        -0.2,
+        0.2,
+        0.8,
+        0.0,
+        &WebColor::new(0.0, 1.0, 0.0),
+    ));
     let mut depth_scene = WebScene::new();
     depth_scene.set_background(&WebColor::new(0.0, 0.0, 0.0));
-    depth_scene.add(&quad(-0.8, -0.2, 0.7, 0.8, 0.0, &WebColor::new(1.0, 1.0, 1.0)));
+    depth_scene.add(&quad(
+        -0.8,
+        -0.2,
+        0.7,
+        0.8,
+        0.0,
+        &WebColor::new(1.0, 1.0, 1.0),
+    ));
     renderer.set_render_target(colour.id);
     renderer.render(&mut colour_scene, &camera);
     renderer.set_render_target(depth.id);
@@ -888,7 +1124,11 @@ async fn ssr_reflects_below_the_object() {
 
 /// The exact sRGB decode, as a texture view or blend unit applies it.
 fn srgb_decode(c: f32) -> f32 {
-    if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
 }
 
 /// Computed passes store the same bytes on WebGL2 as on WebGPU.
@@ -928,16 +1168,36 @@ async fn computed_post_fx_stores_the_same_bytes_on_every_backend() {
     let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
     let cases: Vec<(&str, Fx, [u8; 3])> = vec![
         ("0 copy", Fx::kind(0, 0.0, [0.0; 4], [0.0; 4]), stored),
-        ("0 copy, sRGB-decode", Fx::kind(0, 0.0, [0.0, 1.0, 0.0, 0.0], [0.0; 4]), lin.map(byte)),
-        ("2 film, intensity 0", Fx::kind(2, 0.0, [0.0; 4], [0.0; 4]), lin.map(byte)),
+        (
+            "0 copy, sRGB-decode",
+            Fx::kind(0, 0.0, [0.0, 1.0, 0.0, 0.0], [0.0; 4]),
+            lin.map(byte),
+        ),
+        (
+            "2 film, intensity 0",
+            Fx::kind(2, 0.0, [0.0; 4], [0.0; 4]),
+            lin.map(byte),
+        ),
         (
             "25 tone mapping",
             Fx::kind(25, 0.0, [0.6, 0.01, 16.0, 1.0], [0.0; 4]),
             lin.map(|c| byte(tone * c)),
         ),
-        ("33 luminosity", Fx::kind(33, 0.0, [0.0; 4], [0.0; 4]), [byte(lum); 3]),
-        ("20 resample", Fx::kind(20, 0.0, [0.0; 4], [0.0; 4]), lin.map(|c| byte(c.powf(1.0 / 2.2)))),
-        ("13 SSAO blur", Fx::kind(13, 0.0, [0.0; 4], [0.0; 4]), [stored[0]; 3]),
+        (
+            "33 luminosity",
+            Fx::kind(33, 0.0, [0.0; 4], [0.0; 4]),
+            [byte(lum); 3],
+        ),
+        (
+            "20 resample",
+            Fx::kind(20, 0.0, [0.0; 4], [0.0; 4]),
+            lin.map(|c| byte(c.powf(1.0 / 2.2))),
+        ),
+        (
+            "13 SSAO blur",
+            Fx::kind(13, 0.0, [0.0; 4], [0.0; 4]),
+            [stored[0]; 3],
+        ),
     ];
     let mut wrong = Vec::new();
     for (name, f, want) in cases {
@@ -980,20 +1240,60 @@ async fn bloom_over_its_copy_keeps_both_on_the_canvas() {
     // the square passes the threshold.
     let mut scene = WebScene::new();
     scene.set_background(&WebColor::new(0.05, 0.05, 0.05));
-    scene.add(&quad(-0.75, -0.25, 0.25, 0.75, 0.0, &WebColor::new(1.0, 1.0, 1.0)));
+    scene.add(&quad(
+        -0.75,
+        -0.25,
+        0.25,
+        0.75,
+        0.0,
+        &WebColor::new(1.0, 1.0, 1.0),
+    ));
     renderer.set_render_target(input.id);
     renderer.render(&mut scene, &front_ortho());
     renderer.set_render_target(0);
     let k = Fx::kind;
-    fx_to_target(renderer, input.id, threshold.id, &k(6, 0.0, [0.85, 0.1, 0.0, 0.0], [0.0; 4]));
-    fx_to_target(renderer, threshold.id, blur_h.id, &k(7, 0.0, [4.7, 0.0, 0.0, 0.0], [0.0; 4]));
-    fx_to_target(renderer, blur_h.id, blur_v.id, &k(8, 0.0, [4.7, 0.0, 0.0, 0.0], [0.0; 4]));
+    fx_to_target(
+        renderer,
+        input.id,
+        threshold.id,
+        &k(6, 0.0, [0.85, 0.1, 0.0, 0.0], [0.0; 4]),
+    );
+    fx_to_target(
+        renderer,
+        threshold.id,
+        blur_h.id,
+        &k(7, 0.0, [4.7, 0.0, 0.0, 0.0], [0.0; 4]),
+    );
+    fx_to_target(
+        renderer,
+        blur_h.id,
+        blur_v.id,
+        &k(8, 0.0, [4.7, 0.0, 0.0, 0.0], [0.0; 4]),
+    );
 
     fx_to_canvas(renderer, input.id, &k(0, 0.0, [0.0; 4], [0.0; 4]));
     let copy = read_canvas(&canvas);
     renderer.apply_post_fx(
-        blur_v.id, 0, 0, 9, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1, 0.1, 100.0, 0.5, 32,
-        IDENTITY.to_vec(), IDENTITY.to_vec(),
+        blur_v.id,
+        0,
+        0,
+        9,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1,
+        0.1,
+        100.0,
+        0.5,
+        32,
+        IDENTITY.to_vec(),
+        IDENTITY.to_vec(),
     );
     let bloomed = read_canvas(&canvas);
     let at = |px: &[u8], x: u32, y: u32| {
@@ -1013,7 +1313,10 @@ async fn bloom_over_its_copy_keeps_both_on_the_canvas() {
         at(&bloomed, w * 7 / 8, h * 7 / 8),
     );
     // The frame: the square still white, the far background still its grey.
-    assert!(at(&bloomed, w / 4, row) >= 250, "the square is gone: {report}");
+    assert!(
+        at(&bloomed, w / 4, row) >= 250,
+        "the square is gone: {report}"
+    );
     assert!(
         (at(&bloomed, w * 7 / 8, h * 7 / 8) - at(&copy, w * 7 / 8, h * 7 / 8)).abs() <= 2
             && at(&copy, w * 7 / 8, h * 7 / 8) > 20,
@@ -1047,9 +1350,13 @@ async fn composer_chains_keep_the_marker_top_left() {
         ("render", |_, _| vec![]),
         ("copy", |_, _| vec![WebPass::shader_pass("CopyShader")]),
         ("fxaa", |_, _| vec![WebPass::shader_pass("FXAAShader")]),
-        ("unreal bloom", |w, h| vec![WebPass::unreal_bloom_pass(w, h, 1.0, 0.4, 0.5)]),
+        ("unreal bloom", |w, h| {
+            vec![WebPass::unreal_bloom_pass(w, h, 1.0, 0.4, 0.5)]
+        }),
         ("ssao", |w, h| vec![WebPass::ssao_pass(w, h, 16)]),
-        ("smaa, output", |w, h| vec![WebPass::smaa_pass(w, h), WebPass::output_pass()]),
+        ("smaa, output", |w, h| {
+            vec![WebPass::smaa_pass(w, h), WebPass::output_pass()]
+        }),
         ("afterimage", |_, _| vec![WebPass::afterimage_pass(0.96)]),
     ];
     let mut wrong = Vec::new();
@@ -1060,7 +1367,15 @@ async fn composer_chains_keep_the_marker_top_left() {
             composer.add_pass(&p);
         }
         let mut scene = marker_scene();
-        composer.render1(renderer, &mut scene, &camera, &camera, &camera, &camera, Some(0.0));
+        composer.render1(
+            renderer,
+            &mut scene,
+            &camera,
+            &camera,
+            &camera,
+            &camera,
+            Some(0.0),
+        );
         let px = unit(&read_canvas(&canvas));
         let at = marker_quadrant(&px, w, h);
         if at != "top-left" {
@@ -1091,14 +1406,29 @@ async fn composer_bloom_onto_the_canvas_keeps_frame_and_glow() {
     let camera = front_ortho();
     let mut scene = WebScene::new();
     scene.set_background(&WebColor::new(0.05, 0.05, 0.05));
-    scene.add(&quad(-0.75, -0.25, 0.25, 0.75, 0.0, &WebColor::new(1.0, 1.0, 1.0)));
+    scene.add(&quad(
+        -0.75,
+        -0.25,
+        0.25,
+        0.75,
+        0.0,
+        &WebColor::new(1.0, 1.0, 1.0),
+    ));
     let render = |renderer: &mut WebRenderer, scene: &mut WebScene, bloom: bool| {
         let mut composer = WebEffectComposer::new(w, h, 1.0);
         composer.add_pass(&WebPass::render_pass());
         let b = WebPass::unreal_bloom_pass(w, h, 1.0, 0.4, 0.5);
         b.set_enabled(bloom);
         composer.add_pass(&b);
-        composer.render1(renderer, scene, &camera, &camera, &camera, &camera, Some(0.0));
+        composer.render1(
+            renderer,
+            scene,
+            &camera,
+            &camera,
+            &camera,
+            &camera,
+            Some(0.0),
+        );
     };
     render(renderer, &mut scene, false);
     let plain = read_canvas(&canvas);
@@ -1116,12 +1446,18 @@ async fn composer_bloom_onto_the_canvas_keeps_frame_and_glow() {
         at(&bloomed, edge + 3, row),
         at(&bloomed, w * 7 / 8, h * 7 / 8),
     );
-    assert!(at(&bloomed, w / 4, row) >= 250, "the square is gone: {report}");
+    assert!(
+        at(&bloomed, w / 4, row) >= 250,
+        "the square is gone: {report}"
+    );
     let near = at(&bloomed, edge + 3, row) - at(&plain, edge + 3, row);
     let far = at(&bloomed, w * 7 / 8, h * 7 / 8) - at(&plain, w * 7 / 8, h * 7 / 8);
     assert!(near > 20, "no bloom beside the square: {report}");
     // The widest mips reach across a small canvas, but faintly.
-    assert!(far >= 0 && far * 4 < near, "no fall-off away from the square: {report}");
+    assert!(
+        far >= 0 && far * 4 < near,
+        "no fall-off away from the square: {report}"
+    );
 }
 
 /// A pass's properties and uniforms forward to the Rust pass by name, from
@@ -1138,11 +1474,24 @@ fn pass_parameters_forward_by_name() {
     let schema = film.param_schema();
     let uniform_names: Vec<String> = schema
         .iter()
-        .filter(|o| js_sys::Reflect::get(o, &"uniform".into()).unwrap().as_bool() == Some(true))
-        .map(|o| js_sys::Reflect::get(&o, &"name".into()).unwrap().as_string().unwrap())
+        .filter(|o| {
+            js_sys::Reflect::get(o, &"uniform".into())
+                .unwrap()
+                .as_bool()
+                == Some(true)
+        })
+        .map(|o| {
+            js_sys::Reflect::get(&o, &"name".into())
+                .unwrap()
+                .as_string()
+                .unwrap()
+        })
         .collect();
     for n in ["intensity", "grayscale", "time"] {
-        assert!(uniform_names.iter().any(|u| u == n), "FilmPass has no uniform {n}: {uniform_names:?}");
+        assert!(
+            uniform_names.iter().any(|u| u == n),
+            "FilmPass has no uniform {n}: {uniform_names:?}"
+        );
     }
     let dot = WebPass::dot_screen_pass(0.25, 0.75, 1.0, 2.0);
     let center = js_sys::Array::from(&dot.get("center"));

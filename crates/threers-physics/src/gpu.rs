@@ -70,7 +70,8 @@ struct Params {
 
 const WORKGROUP_SIZE: u32 = 64;
 
-const SHADER: &str = threers::wgsl!(r#"
+const SHADER: &str = threers::wgsl!(
+    r#"
 struct Aabb {
     lo: vec4<f32>,
     hi: vec4<f32>,
@@ -116,7 +117,8 @@ fn find_pairs(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 }
-"#);
+"#
+);
 
 /// All-pairs AABB overlap on the GPU.
 pub struct GpuBroadPhase {
@@ -230,14 +232,12 @@ impl GpuBroadPhase {
             .await
             .ok()?;
         let (device, queue) = adapter
-            .request_device(
-                &wgpu::DeviceDescriptor {
-                    label: Some("threers-physics"),
-                    required_features: wgpu::Features::empty(),
-                    required_limits: wgpu::Limits::downlevel_defaults(),
+            .request_device(&wgpu::DeviceDescriptor {
+                label: Some("threers-physics"),
+                required_features: wgpu::Features::empty(),
+                required_limits: wgpu::Limits::downlevel_defaults(),
                 ..Default::default()
-                },
-            )
+            })
             .await
             .ok()?;
         Some(Self::from_device(Arc::new(device), Arc::new(queue)))
@@ -288,7 +288,13 @@ impl GpuBroadPhase {
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        (box_buffer, counter_buffer, pair_buffer, params_buffer, readback)
+        (
+            box_buffer,
+            counter_buffer,
+            pair_buffer,
+            params_buffer,
+            readback,
+        )
     }
 
     fn grow(&mut self, boxes: usize, pairs: usize) {
@@ -326,7 +332,8 @@ impl GpuBroadPhase {
 
         self.queue
             .write_buffer(&self.box_buffer, 0, bytemuck::cast_slice(boxes));
-        self.queue.write_buffer(&self.counter_buffer, 0, &0u32.to_ne_bytes());
+        self.queue
+            .write_buffer(&self.counter_buffer, 0, &0u32.to_ne_bytes());
         self.queue.write_buffer(
             &self.params_buffer,
             0,
@@ -399,12 +406,18 @@ impl GpuBroadPhase {
         }
 
         let mut pairs = {
-            let view = self.readback.slice(..).get_mapped_range().expect("buffer range is mapped");
+            let view = self
+                .readback
+                .slice(..)
+                .get_mapped_range()
+                .expect("buffer range is mapped");
             let found = u32::from_ne_bytes([view[0], view[1], view[2], view[3]]) as usize;
             self.overflowed = found > self.pair_capacity;
             let written = found.min(self.pair_capacity);
             let raw: &[u32] = bytemuck::cast_slice(&view[8..8 + written * 8]);
-            raw.chunks_exact(2).map(|c| (c[0], c[1])).collect::<Vec<_>>()
+            raw.chunks_exact(2)
+                .map(|c| (c[0], c[1]))
+                .collect::<Vec<_>>()
         };
         self.readback.unmap();
 
@@ -444,11 +457,7 @@ impl World {
                         return GpuAabb::new(Vector3::ZERO, Vector3::ZERO, false);
                     }
                     aabb.expand_by_scalar(self.prediction_distance);
-                    GpuAabb::new(
-                        aabb.min,
-                        aabb.max,
-                        !body.is_fixed() && !body.is_sleeping(),
-                    )
+                    GpuAabb::new(aabb.min, aabb.max, !body.is_fixed() && !body.is_sleeping())
                 }
                 _ => GpuAabb::new(Vector3::ZERO, Vector3::ZERO, false),
             })

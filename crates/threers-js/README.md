@@ -85,3 +85,15 @@ crates/threers-js/
 
 The working tree under `web/` remains the day-to-day development surface;
 this crate is the **publish root** for registries.
+
+## Building meshes in code (threers extension)
+
+```js
+const m = new THREE.MeshBuilder();
+m.grid(80, 80, 40, 40, (x, z) => Math.sin(x * 0.2) * Math.cos(z * 0.2));  // terrain, facing up
+m.append(new THREE.BoxGeometry(1, 1, 1), new THREE.Matrix4().makeTranslation(0, 2, 0));
+const geometry = m.build();                       // an ordinary BufferGeometry
+console.log(THREE.meshReport(geometry));          // { openEdges, flippedEdges, isSolid, ... }
+```
+
+`facing`, `ribbon` and `grid` take the side a surface should show, not a vertex order, so a wrongly wound triangle cannot slip in unseen. `append` merges many shapes into one mesh and one draw.

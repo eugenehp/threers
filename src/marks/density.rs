@@ -203,7 +203,9 @@ impl DensityMarks {
                 let x = ((k as f32 + 0.5) / 256.0 * n as f32 - 0.5).clamp(0.0, (n - 1) as f32);
                 let (i, f) = (x.floor() as usize, x.fract());
                 let (a, b) = (ramp[i], ramp[(i + 1).min(n - 1)]);
-                std::array::from_fn(|c| (a[c] as f32 + (b[c] as f32 - a[c] as f32) * f).round() as u8)
+                std::array::from_fn(|c| {
+                    (a[c] as f32 + (b[c] as f32 - a[c] as f32) * f).round() as u8
+                })
             })
             .collect();
         self.ramp_dirty = true;
@@ -245,7 +247,8 @@ impl Mark for DensityMarks {
         self.positions.len()
     }
     fn kind_extra(&self) -> [f32; 4] {
-        self.cover.unwrap_or([f32::MIN, f32::MIN, f32::MAX, f32::MAX])
+        self.cover
+            .unwrap_or([f32::MIN, f32::MIN, f32::MAX, f32::MAX])
     }
     fn kind_uniforms(&self) -> KindUniforms {
         // style3: what the composite maps to the ramp.
@@ -254,10 +257,20 @@ impl Mark for DensityMarks {
             None => (0.0, 1.0),
         };
         (
-            [if self.linear_fade { 1.0 } else { 0.0 }, if self.mean { 1.0 } else { 0.0 }, 0.0, 0.0],
+            [
+                if self.linear_fade { 1.0 } else { 0.0 },
+                if self.mean { 1.0 } else { 0.0 },
+                0.0,
+                0.0,
+            ],
             [self.max_weight, self.threshold, auto, fraction],
             // stroke: the extent, on the ground.
-            [self.extent[0].max(1.0), self.extent[1].max(1.0), if self.ground { 1.0 } else { 0.0 }, 0.0],
+            [
+                self.extent[0].max(1.0),
+                self.extent[1].max(1.0),
+                if self.ground { 1.0 } else { 0.0 },
+                0.0,
+            ],
         )
     }
     fn prepare(&mut self, ctx: &PrepareContext) {
@@ -265,8 +278,10 @@ impl Mark for DensityMarks {
         let vp = ctx.view.viewport;
         let [ex, ey] = self.extent.map(|e| e.max(1.0));
         let size = (
-            ((vp.0 as f32 * scale * ex).ceil() as u32).clamp(1, ctx.device.limits().max_texture_dimension_2d),
-            ((vp.1 as f32 * scale * ey).ceil() as u32).clamp(1, ctx.device.limits().max_texture_dimension_2d),
+            ((vp.0 as f32 * scale * ex).ceil() as u32)
+                .clamp(1, ctx.device.limits().max_texture_dimension_2d),
+            ((vp.1 as f32 * scale * ey).ceil() as u32)
+                .clamp(1, ctx.device.limits().max_texture_dimension_2d),
         );
         let stale = self.gpu.as_ref().is_none_or(|g| g.size != size);
         if stale {
@@ -334,9 +349,7 @@ impl Mark for DensityMarks {
                         },
                         gpu::BindGroupEntry {
                             binding: 1,
-                            resource: gpu::BindingResource::Sampler(
-                                &ctx.resources.nearest_sampler,
-                            ),
+                            resource: gpu::BindingResource::Sampler(&ctx.resources.nearest_sampler),
                         },
                     ],
                 });

@@ -218,7 +218,11 @@ impl GpuSolver {
             z: buffer("cg z", &zeros, storage),
             p: buffer("cg p", &zeros, storage),
             q: buffer("cg q", &zeros, storage),
-            partials: buffer("cg partials", &vec![0.0f32; 3 * REDUCE_GROUPS as usize], storage),
+            partials: buffer(
+                "cg partials",
+                &vec![0.0f32; 3 * REDUCE_GROUPS as usize],
+                storage,
+            ),
             scalars: buffer(
                 "cg scalars",
                 &[0.0f32; 8],
@@ -397,7 +401,8 @@ impl GpuProblem<'_> {
 /// `(c & 1, (c >> 1) & 1, (c >> 2) & 1)`, `per_node` degrees of freedom each —
 /// so that the two can be compared element for element and not just in the
 /// aggregate.
-const SHADER: &str = crate::wgsl!(r#"
+const SHADER: &str = crate::wgsl!(
+    r#"
 struct Params {
     n: u32,
     per_node: u32,
@@ -564,4 +569,5 @@ fn update_p(@builtin(global_invocation_id) id: vec3<u32>) {
     if (i >= params.total) { return; }
     p[i] = z[i] + scalars[4] * p[i];
 }
-"#);
+"#
+);

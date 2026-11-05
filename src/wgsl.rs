@@ -141,7 +141,10 @@ mod tests {
 
     #[test]
     fn line_comments_go_with_the_blanks_before_them() {
-        assert_eq!(strip("let a = 1; // one\n  // two\nlet b = 2;"), "let a = 1;\n\nlet b = 2;");
+        assert_eq!(
+            strip("let a = 1; // one\n  // two\nlet b = 2;"),
+            "let a = 1;\n\nlet b = 2;"
+        );
         assert_eq!(strip("// only"), "");
         assert_eq!(strip("a // x\r\nb"), "a\r\nb");
     }
@@ -167,17 +170,27 @@ mod tests {
 
     #[test]
     fn shipped_shaders_carry_no_comments_but_keep_their_splice_tokens() {
-        use crate::renderer::shader::{MATERIAL_MAPS_MARKER, SHADER_SOURCE, SHARED_FUNCTIONS_MARKER};
+        use crate::renderer::shader::{
+            MATERIAL_MAPS_MARKER, SHADER_SOURCE, SHARED_FUNCTIONS_MARKER,
+        };
         for (name, src) in [
             ("SHADER_SOURCE", SHADER_SOURCE),
             ("marks PREAMBLE", crate::marks::shader::PREAMBLE),
             ("fullscreen VS", crate::renderer::fullscreen::VS),
         ] {
-            assert!(!src.contains("//") && !src.contains("/*"), "{name} still has comments");
+            assert!(
+                !src.contains("//") && !src.contains("/*"),
+                "{name} still has comments"
+            );
         }
         assert_eq!(SHADER_SOURCE.matches(MATERIAL_MAPS_MARKER).count(), 1);
         assert_eq!(SHADER_SOURCE.matches(SHARED_FUNCTIONS_MARKER).count(), 1);
-        assert_eq!(crate::renderer::shader::postfx_shader().matches("@@").count(), 0);
+        assert_eq!(
+            crate::renderer::shader::postfx_shader()
+                .matches("@@")
+                .count(),
+            0
+        );
     }
 
     #[test]

@@ -236,24 +236,34 @@ impl TextureAtlas {
     ) -> Result<AtlasRect, AtlasError> {
         let expected = width as usize * height as usize * 4;
         if rgba.len() != expected {
-            return Err(AtlasError::WrongLength { expected, got: rgba.len() });
+            return Err(AtlasError::WrongLength {
+                expected,
+                got: rgba.len(),
+            });
         }
         if x + width > self.width {
-            return Err(AtlasError::TooWide { width: x + width, atlas: self.width });
+            return Err(AtlasError::TooWide {
+                width: x + width,
+                atlas: self.width,
+            });
         }
         let need = y + height;
         if need > self.max_height {
-            return Err(AtlasError::Full { max_height: self.max_height });
+            return Err(AtlasError::Full {
+                max_height: self.max_height,
+            });
         }
         while need > self.height {
             self.height = (self.height * 2).min(self.max_height);
-            self.pixels.resize(self.width as usize * self.height as usize * 4, 0);
+            self.pixels
+                .resize(self.width as usize * self.height as usize * 4, 0);
         }
         let aw = self.width as usize;
         for row in 0..height as usize {
             let src = row * width as usize * 4;
             let dst = ((y as usize + row) * aw + x as usize) * 4;
-            self.pixels[dst..dst + width as usize * 4].copy_from_slice(&rgba[src..src + width as usize * 4]);
+            self.pixels[dst..dst + width as usize * 4]
+                .copy_from_slice(&rgba[src..src + width as usize * 4]);
         }
         if width > 0 && height > 0 {
             self.mark_dirty((x, y, x + width, y + height));
@@ -264,7 +274,12 @@ impl TextureAtlas {
             self.shelf_x = 0;
             self.shelf_h = 0;
         }
-        let rect = AtlasRect { x, y, width, height };
+        let rect = AtlasRect {
+            x,
+            y,
+            width,
+            height,
+        };
         self.entries.insert(name.into(), rect);
         self.version += 1;
         Ok(rect)
@@ -275,7 +290,8 @@ impl TextureAtlas {
     pub fn reserve_height(&mut self, height: u32) {
         while height > self.height && self.height < self.max_height {
             self.height = (self.height * 2).min(self.max_height);
-            self.pixels.resize(self.width as usize * self.height as usize * 4, 0);
+            self.pixels
+                .resize(self.width as usize * self.height as usize * 4, 0);
             self.version += 1;
         }
     }
@@ -393,11 +409,7 @@ impl TextureAtlas {
     /// atlas grew, otherwise only the changed pixels (every level, with
     /// mips). Returns the view and the generation it belongs to, which
     /// changes whenever a bind group holding the old view must be rebuilt.
-    pub fn texture(
-        &mut self,
-        device: &gpu::Device,
-        queue: &gpu::Queue,
-    ) -> (gpu::TextureView, u64) {
+    pub fn texture(&mut self, device: &gpu::Device, queue: &gpu::Queue) -> (gpu::TextureView, u64) {
         let size = (self.width, self.height);
         let max = device.limits().max_texture_dimension_2d;
         let fresh = self
@@ -534,7 +546,11 @@ impl TextureAtlas {
                             acc[c].checked_div(acc[3]).unwrap_or(0) as u8
                         };
                     }
-                    next[o + 3] = if straight { mean4(acc[3]) } else { (acc[3] / 4) as u8 };
+                    next[o + 3] = if straight {
+                        mean4(acc[3])
+                    } else {
+                        (acc[3] / 4) as u8
+                    };
                 }
             }
             owned = Some(next);
@@ -557,7 +573,10 @@ mod tests {
 
     #[test]
     fn mean4_rounds_halves_to_even() {
-        assert_eq!([mean4(4), mean4(5), mean4(6), mean4(7), mean4(10), mean4(11)], [1, 1, 2, 2, 2, 3]);
+        assert_eq!(
+            [mean4(4), mean4(5), mean4(6), mean4(7), mean4(10), mean4(11)],
+            [1, 1, 2, 2, 2, 3]
+        );
     }
 
     /// `write` replaces an image where it lies, gutter and all, and refuses

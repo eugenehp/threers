@@ -311,8 +311,7 @@ impl Bsdf {
                 1.0 + ss * self.surface.subsurface_radius.y * grazing2,
                 1.0 + ss * self.surface.subsurface_radius.z * grazing2,
             );
-            let v = self.surface.base_color
-                .mul_componentwise(ss_boost)
+            let v = self.surface.base_color.mul_componentwise(ss_boost)
                 * ((1.0 - self.surface.metallic)
                     * (1.0 - self.surface.transmission)
                     * kd
@@ -443,9 +442,9 @@ impl Bsdf {
             if denom < 1e-12 {
                 return (0.0, 0.0);
             }
-            let v = d * (1.0 - fr) * g
-                * ((wi.dot(wm) * wo.dot(wm)) / (cos_i * cos_o * denom)).abs()
-                / (etap * etap);
+            let v =
+                d * (1.0 - fr) * g * ((wi.dot(wm) * wo.dot(wm)) / (cos_i * cos_o * denom)).abs()
+                    / (etap * etap);
             let dwm_dwi = wi.dot(wm).abs() / denom;
             let pdf = vndf_pdf(wo, wm, self.ax, self.ay) * dwm_dwi * pt / (pr + pt).max(1e-9);
             let tint = match channel {
@@ -482,7 +481,13 @@ impl Bsdf {
             } else {
                 acc += self.p_transmission;
                 if u < acc {
-                    self.sample_transmission(wo, u1, u2, spec_smooth || self.surface.thin_walled, rng)
+                    self.sample_transmission(
+                        wo,
+                        u1,
+                        u2,
+                        spec_smooth || self.surface.thin_walled,
+                        rng,
+                    )
                 } else {
                     acc += self.p_coat;
                     if u < acc {
@@ -668,7 +673,13 @@ impl Bsdf {
                     fr * weight / wi.z.abs().max(1e-6)
                 } else {
                     // Out into the medium it came from: no radiance scaling.
-                    let etap = if thin { 1.0 } else if wo.z > 0.0 { eta } else { 1.0 / eta };
+                    let etap = if thin {
+                        1.0
+                    } else if wo.z > 0.0 {
+                        eta
+                    } else {
+                        1.0 / eta
+                    };
                     let t = (1.0 - fr) * weight / (etap * etap * wi.z.abs().max(1e-6));
                     match ch {
                         0 => self.surface.base_color.x * t,
@@ -798,11 +809,17 @@ fn eval_sensitivity(opd: f32, shift: Vector3) -> Vector3 {
     let vr = Vector3::new(4.3278e9, 9.3046e9, 6.6121e9);
 
     let mut xyz = Vector3::new(
-        val.x * (2.0 * PI * vr.x).sqrt() * (pos.x * phase + shift.x).cos()
+        val.x
+            * (2.0 * PI * vr.x).sqrt()
+            * (pos.x * phase + shift.x).cos()
             * (-(phase * phase) * vr.x).exp(),
-        val.y * (2.0 * PI * vr.y).sqrt() * (pos.y * phase + shift.y).cos()
+        val.y
+            * (2.0 * PI * vr.y).sqrt()
+            * (pos.y * phase + shift.y).cos()
             * (-(phase * phase) * vr.y).exp(),
-        val.z * (2.0 * PI * vr.z).sqrt() * (pos.z * phase + shift.z).cos()
+        val.z
+            * (2.0 * PI * vr.z).sqrt()
+            * (pos.z * phase + shift.z).cos()
             * (-(phase * phase) * vr.z).exp(),
     );
     let x_extra = 9.7470e-14
@@ -832,7 +849,11 @@ fn iridescence_fresnel(
     thickness_nm: f32,
     cos_theta1: f32,
 ) -> Vector3 {
-    let film_ior = lerp(outside_ior, film_ior_in, smoothstep(0.0, 0.03, thickness_nm));
+    let film_ior = lerp(
+        outside_ior,
+        film_ior_in,
+        smoothstep(0.0, 0.03, thickness_nm),
+    );
     let sin_theta2_sq = (outside_ior / film_ior).powi(2) * (1.0 - cos_theta1 * cos_theta1);
     let cos_theta2_sq = 1.0 - sin_theta2_sq;
     if cos_theta2_sq < 0.0 {
@@ -884,11 +905,7 @@ fn iridescence_fresnel(
     let mut i_out = c0;
     let mut cm = rs - Vector3::new(t121, t121, t121);
     for m in 1..=2 {
-        cm = Vector3::new(
-            cm.x * r123_sqrt.x,
-            cm.y * r123_sqrt.y,
-            cm.z * r123_sqrt.z,
-        );
+        cm = Vector3::new(cm.x * r123_sqrt.x, cm.y * r123_sqrt.y, cm.z * r123_sqrt.z);
         let sm = eval_sensitivity(
             m as f32 * opd,
             Vector3::new(m as f32 * phi.x, m as f32 * phi.y, m as f32 * phi.z),

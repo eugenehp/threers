@@ -44,14 +44,7 @@ fn main() {
             [0.0, 0.4, 3.2],
             Vector3::new(0.0, 0.15, 0.0),
             |scene| {
-                add_folded_shape(
-                    scene,
-                    &stage.folded,
-                    Vector3::ZERO,
-                    1.15,
-                    view,
-                    plumage,
-                );
+                add_folded_shape(scene, &stage.folded, Vector3::ZERO, 1.15, view, plumage);
             },
         );
         println!("  {}", stage.label);
@@ -74,8 +67,7 @@ fn main() {
     });
 
     println!(
-        "Giang Dinh cardinal: {} creases, {} fold stages (traditional single-sheet)."
-        ,
+        "Giang Dinh cardinal: {} creases, {} fold stages (traditional single-sheet).",
         cp.hinge_indices().count(),
         n
     );

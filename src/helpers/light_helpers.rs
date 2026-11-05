@@ -13,7 +13,10 @@ pub(crate) fn line_object(g: &HelperGeometry, color: Color) -> Object3D {
         geometry.set_attribute("color", BufferAttribute::new(g.colors.clone(), 3));
     }
     // three.js helpers are `toneMapped: false`.
-    let material = LineBasicMaterial { tone_mapped: false, ..LineBasicMaterial::new(color) };
+    let material = LineBasicMaterial {
+        tone_mapped: false,
+        ..LineBasicMaterial::new(color)
+    };
     Object3D::line_segments(LineSegments::new(geometry, material.into()))
 }
 
@@ -39,7 +42,10 @@ pub struct PointLightHelper;
 
 impl PointLightHelper {
     pub fn new(light: &PointLight, size: f32) -> Object3D {
-        line_object(&three_lines::point_light(&IDENTITY, size as f64), light.color)
+        line_object(
+            &three_lines::point_light(&IDENTITY, size as f64),
+            light.color,
+        )
     }
 }
 
@@ -50,7 +56,11 @@ pub struct SpotLightHelper;
 
 impl SpotLightHelper {
     pub fn new(light: &SpotLight, length: f32) -> Object3D {
-        let distance = if light.distance != 0.0 { light.distance } else { length };
+        let distance = if light.distance != 0.0 {
+            light.distance
+        } else {
+            length
+        };
         let g = three_lines::spot_light(
             &IDENTITY,
             dir3(light.direction),
@@ -99,6 +109,9 @@ impl SkeletonHelper {
             .iter()
             .map(|(_, parent)| parent.map_or(-1, |p| p as i32))
             .collect();
-        line_object(&three_lines::skeleton(&IDENTITY, &matrices, &parents), Color::WHITE)
+        line_object(
+            &three_lines::skeleton(&IDENTITY, &matrices, &parents),
+            Color::WHITE,
+        )
     }
 }

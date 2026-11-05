@@ -83,7 +83,11 @@ pub struct Tree {
 
 /// `neurons/<last two digits of id>/<id>/`.
 pub fn neuron_dir(root: &Path, tree_key: &str, id: &str) -> PathBuf {
-    let bucket = if id.len() >= 2 { &id[id.len() - 2..] } else { id };
+    let bucket = if id.len() >= 2 {
+        &id[id.len() - 2..]
+    } else {
+        id
+    };
     root.join(tree_key).join("neurons").join(bucket).join(id)
 }
 
@@ -172,7 +176,9 @@ pub fn read_skeleton(path: &Path) -> io::Result<Skeleton> {
             f.next().and_then(parse_f64),
             f.next().and_then(parse_i64),
         ) {
-            (Some(n), Some(t), Some(x), Some(y), Some(z), Some(r), Some(p)) => (n, t, x, y, z, r, p),
+            (Some(n), Some(t), Some(x), Some(y), Some(z), Some(r), Some(p)) => {
+                (n, t, x, y, z, r, p)
+            }
             _ => continue,
         };
         index.insert(n, xyz.len());
@@ -192,7 +198,7 @@ pub fn read_skeleton(path: &Path) -> io::Result<Skeleton> {
     let mut segments = Vec::with_capacity(xyz.len() * 6);
     for (i, &p) in parent.iter().enumerate() {
         let pi = match index.get(&p) {
-            Some(&pi) if pi != i => pi,   // skip roots and self-loops
+            Some(&pi) if pi != i => pi, // skip roots and self-loops
             _ => continue,
         };
         segments.extend_from_slice(&xyz[i]);
@@ -202,7 +208,11 @@ pub fn read_skeleton(path: &Path) -> io::Result<Skeleton> {
     Ok(Skeleton {
         segments,
         nodes: xyz.len(),
-        mean_radius_nm: if radius_n > 0 { radius_sum / radius_n as f64 } else { 0.0 },
+        mean_radius_nm: if radius_n > 0 {
+            radius_sum / radius_n as f64
+        } else {
+            0.0
+        },
         soma,
     })
 }
@@ -216,11 +226,21 @@ impl Tree {
         fs::File::open(&path)?.read_to_string(&mut text)?;
 
         let mut lines = text.split('\n');
-        let header: Vec<&str> = lines.next().unwrap_or("").trim_end_matches('\r').split('\t').collect();
+        let header: Vec<&str> = lines
+            .next()
+            .unwrap_or("")
+            .trim_end_matches('\r')
+            .split('\t')
+            .collect();
         let col = |name: &str| header.iter().position(|h| *h == name);
 
-        let c_id = col("root_id").ok_or_else(|| bad(&format!("{}: no root_id column", path.display())))?;
-        let (c_x, c_y, c_z) = (col(rel.pos_cols[0]), col(rel.pos_cols[1]), col(rel.pos_cols[2]));
+        let c_id =
+            col("root_id").ok_or_else(|| bad(&format!("{}: no root_id column", path.display())))?;
+        let (c_x, c_y, c_z) = (
+            col(rel.pos_cols[0]),
+            col(rel.pos_cols[1]),
+            col(rel.pos_cols[2]),
+        );
         let c_role = col("role");
         let c_nt = col("top_nt");
         let c_class = col("super_class");
@@ -231,7 +251,7 @@ impl Tree {
         let c_out = col("out_synapses");
 
         let mut nodes: Vec<Node> = Vec::new();
-        let mut pending: Vec<(usize, u64)> = Vec::new();   // slot in `nodes`, id
+        let mut pending: Vec<(usize, u64)> = Vec::new(); // slot in `nodes`, id
         let mut indexed = 0usize;
         let mut from_index = 0usize;
 
@@ -262,7 +282,11 @@ impl Tree {
                 _ => None,
             };
 
-            let placed = if pos.is_some() { Placed::Index } else { Placed::Skeleton };
+            let placed = if pos.is_some() {
+                Placed::Index
+            } else {
+                Placed::Skeleton
+            };
             if pos.is_some() {
                 from_index += 1;
             } else {
@@ -323,7 +347,10 @@ fn resolve_missing(root: &Path, key: &str, pending: &[(usize, u64)]) -> Vec<(usi
     }
     let next = AtomicUsize::new(0);
     let out: Mutex<Vec<(usize, [f64; 3])>> = Mutex::new(Vec::new());
-    let workers = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).min(16);
+    let workers = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .min(16);
 
     std::thread::scope(|s| {
         for _ in 0..workers {
@@ -348,7 +375,11 @@ fn resolve_missing(root: &Path, key: &str, pending: &[(usize, u64)]) -> Vec<(usi
 }
 
 fn non_empty(s: &str, fallback: &str) -> String {
-    if s.is_empty() { fallback.to_string() } else { s.to_string() }
+    if s.is_empty() {
+        fallback.to_string()
+    } else {
+        s.to_string()
+    }
 }
 
 fn bad(msg: &str) -> io::Error {
@@ -358,7 +389,8 @@ fn bad(msg: &str) -> io::Error {
 // --- tiny byte-slice parsing, so a 9 GB skeleton corpus never allocates a String
 
 fn split_ws(line: &[u8]) -> impl Iterator<Item = &[u8]> {
-    line.split(|b| b.is_ascii_whitespace()).filter(|s| !s.is_empty())
+    line.split(|b| b.is_ascii_whitespace())
+        .filter(|s| !s.is_empty())
 }
 
 fn parse_f64(b: &[u8]) -> Option<f64> {

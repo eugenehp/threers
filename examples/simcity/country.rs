@@ -324,7 +324,11 @@ fn field(b: &mut Batches, p: &Rect, lod: Lod, rng: &mut Rng) {
         );
         let wall = scale_color(Color::from_hex(0x9a8f7d), rng.range(0.85, 1.15));
         let roof = scale_color(Color::from_hex(0x6b4038), rng.range(0.85, 1.15));
-        let (w, d, h) = (rng.range(5.0, 9.0), rng.range(4.0, 7.0), rng.range(3.5, 5.5));
+        let (w, d, h) = (
+            rng.range(5.0, 9.0),
+            rng.range(4.0, 7.0),
+            rng.range(3.5, 5.5),
+        );
         b.trim.add_box(
             Vector3::new(bx - w * 0.5, 0.0, bz - d * 0.5),
             Vector3::new(bx + w * 0.5, h, bz + d * 0.5),
@@ -378,10 +382,7 @@ fn wood(b: &mut Batches, p: &Rect, lod: Lod, warm: bool, rng: &mut Rng) {
         let crown = scale_color(Color::from_hex(0x354d24), rng.range(0.9, 1.1));
         let k = (p.w().min(p.d()) / 55.0).max(1.0);
         for _ in 0..if lod == Lod::Mid { 7 } else { 4 } {
-            let (cx, cz) = (
-                rng.range(p.x0, p.x1),
-                rng.range(p.z0, p.z1),
-            );
+            let (cx, cz) = (rng.range(p.x0, p.x1), rng.range(p.z0, p.z1));
             let r = rng.range(6.0, 14.0) * k;
             b.foliage.add_blob(
                 Vector3::new(cx, rng.range(4.0, 8.0) * k, cz),
@@ -557,7 +558,10 @@ fn plantation(b: &mut Batches, p: &Rect, lod: Lod, rng: &mut Rng) {
     let pitch = rng.range(5.0, 7.0);
     // One lane left unplanted, straight across.
     let break_t = rng.range(0.3, 0.7);
-    let tint = Some(scale_color(Color::from_hex(0x2f4a2a), rng.range(0.92, 1.08)));
+    let tint = Some(scale_color(
+        Color::from_hex(0x2f4a2a),
+        rng.range(0.92, 1.08),
+    ));
     let scale = rng.range(0.8, 1.0);
     let (nx, nz) = ((p.w() / pitch) as usize, (p.d() / pitch) as usize);
     for i in 0..nx {
@@ -714,12 +718,26 @@ fn plough(b: &mut Batches, p: &Rect, lod: Lod, rng: &mut Rng) {
         let t = (i as f32 + 0.5) * pitch;
         if along_x {
             let z = p.z0 + t;
-            b.grass
-                .add_slab(p.x0, z - pitch * 0.28, p.x1, z + pitch * 0.28, 0.06, dark, Uv::Unit);
+            b.grass.add_slab(
+                p.x0,
+                z - pitch * 0.28,
+                p.x1,
+                z + pitch * 0.28,
+                0.06,
+                dark,
+                Uv::Unit,
+            );
         } else {
             let x = p.x0 + t;
-            b.grass
-                .add_slab(x - pitch * 0.28, p.z0, x + pitch * 0.28, p.z1, 0.06, dark, Uv::Unit);
+            b.grass.add_slab(
+                x - pitch * 0.28,
+                p.z0,
+                x + pitch * 0.28,
+                p.z1,
+                0.06,
+                dark,
+                Uv::Unit,
+            );
         }
     }
     hedge_sides(b, p, 0x35502a, rng);
@@ -1169,7 +1187,11 @@ fn hill(b: &mut Batches, p: &Rect, lod: Lod, warm: bool, rng: &mut Rng) {
             z,
             y,
             false,
-            if rng.chance(0.5) { Species::Conifer } else { Species::Broadleaf },
+            if rng.chance(0.5) {
+                Species::Conifer
+            } else {
+                Species::Broadleaf
+            },
             None,
             rng.range(0.6, 1.1),
             rng,
@@ -1235,7 +1257,11 @@ fn lake(b: &mut Batches, p: &Rect, lod: Lod, rng: &mut Rng) {
         let rr = r * rng.range(1.02, 1.14);
         b.foliage.add_box(
             Vector3::new(cx + rr * a.cos() - 0.5, 0.0, cz + rr * a.sin() - 0.5),
-            Vector3::new(cx + rr * a.cos() + 0.5, rng.range(0.8, 1.6), cz + rr * a.sin() + 0.5),
+            Vector3::new(
+                cx + rr * a.cos() + 0.5,
+                rng.range(0.8, 1.6),
+                cz + rr * a.sin() + 0.5,
+            ),
             scale_color(Color::from_hex(0x5c7a34), rng.range(0.85, 1.15)),
             Uv::Unit,
         );
@@ -1243,7 +1269,15 @@ fn lake(b: &mut Batches, p: &Rect, lod: Lod, rng: &mut Rng) {
     for _ in 0..(2 + rng.below(4)) {
         let a = rng.range(0.0, TAU);
         let rr = r * rng.range(1.25, 1.6);
-        add_tree(b, cx + rr * a.cos(), cz + rr * a.sin(), 0.0, false, false, rng);
+        add_tree(
+            b,
+            cx + rr * a.cos(),
+            cz + rr * a.sin(),
+            0.0,
+            false,
+            false,
+            rng,
+        );
     }
 }
 

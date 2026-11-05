@@ -286,7 +286,10 @@ fn feature(v: &Value) -> Result<Feature, String> {
         .and_then(Value::as_object)
         .map(|o| o.iter().map(|(k, v)| (k.clone(), property(v))).collect())
         .unwrap_or_default();
-    let measures = v.get("geometry").and_then(|g| g.get("coordinates")).and_then(measures);
+    let measures = v
+        .get("geometry")
+        .and_then(|g| g.get("coordinates"))
+        .and_then(measures);
     Ok(Feature {
         geometry,
         properties,
@@ -376,10 +379,16 @@ mod tests {
         )
         .unwrap();
         assert_eq!(fc.features[0].measures, Some(vec![10.0, 20.0]));
-        let fc = FeatureCollection::parse(r#"{"type": "MultiLineString", "coordinates": [[[0, 0, 0, 1]], [[1, 1, 0, 2]]]}"#).unwrap();
+        let fc = FeatureCollection::parse(
+            r#"{"type": "MultiLineString", "coordinates": [[[0, 0, 0, 1]], [[1, 1, 0, 2]]]}"#,
+        )
+        .unwrap();
         assert_eq!(fc.features[0].measures, Some(vec![1.0, 2.0]));
         // Not every position has one.
-        let fc = FeatureCollection::parse(r#"{"type": "LineString", "coordinates": [[0, 0, 0, 10], [1, 1]]}"#).unwrap();
+        let fc = FeatureCollection::parse(
+            r#"{"type": "LineString", "coordinates": [[0, 0, 0, 10], [1, 1]]}"#,
+        )
+        .unwrap();
         assert_eq!(fc.features[0].measures, None);
     }
 

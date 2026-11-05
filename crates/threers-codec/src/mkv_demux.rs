@@ -211,7 +211,12 @@ impl<'a> Reader<'a> {
             return None;
         }
         Some(match sz {
-            Some(s) => (id, start, (start as u64).saturating_add(s).min(limit as u64) as usize, false),
+            Some(s) => (
+                id,
+                start,
+                (start as u64).saturating_add(s).min(limit as u64) as usize,
+                false,
+            ),
             None => (id, start, limit, true),
         })
     }
@@ -266,7 +271,10 @@ impl Mkv {
     /// Parse a whole file.
     pub fn parse(data: &[u8]) -> Result<Mkv, String> {
         let r = Reader { d: data };
-        let mut mkv = Mkv { timestamp_scale: 1_000_000, ..Default::default() };
+        let mut mkv = Mkv {
+            timestamp_scale: 1_000_000,
+            ..Default::default()
+        };
         let mut pos = 0usize;
         let mut saw_ebml = false;
         while pos < data.len() {
@@ -396,7 +404,14 @@ impl Mkv {
                         _ => {}
                     });
                     if let Some((bs, be)) = block {
-                        self.block(&d[bs..be], cluster_ts, duration, Some(!reference), padding, alpha);
+                        self.block(
+                            &d[bs..be],
+                            cluster_ts,
+                            duration,
+                            Some(!reference),
+                            padding,
+                            alpha,
+                        );
                     }
                 }
                 _ => {}
@@ -491,7 +506,12 @@ impl Mkv {
         } else {
             sizes.push(b.len() - p);
         }
-        let prefix = self.tracks.iter().find(|t| t.number == track).map(|t| t.strip_prefix.clone()).unwrap_or_default();
+        let prefix = self
+            .tracks
+            .iter()
+            .find(|t| t.number == track)
+            .map(|t| t.strip_prefix.clone())
+            .unwrap_or_default();
         let n = sizes.len() as i64;
         let lace_dur = duration.map(|d| d / n);
         let pts0 = cluster_ts + rel;
@@ -605,7 +625,9 @@ fn track_entry(r: &Reader, s: usize, e: usize) -> MkvTrack {
 /// An IVF file: `(fourcc, width, height, timebase (num, den), frames as
 /// (pts, data))`.
 #[allow(clippy::type_complexity)]
-pub fn parse_ivf(data: &[u8]) -> Result<([u8; 4], u32, u32, (u32, u32), Vec<(i64, Vec<u8>)>), String> {
+pub fn parse_ivf(
+    data: &[u8],
+) -> Result<([u8; 4], u32, u32, (u32, u32), Vec<(i64, Vec<u8>)>), String> {
     if data.len() < 32 || &data[0..4] != b"DKIF" {
         return Err("not an IVF file".into());
     }
@@ -638,8 +660,19 @@ mod tests {
     fn reads_back_our_own_webm() {
         // A frame muxed by `webm`, read back.
         use crate::webm::{mux_webm, WebmCodec, WebmFrame, WebmParams};
-        let frames = [WebmFrame { data: &[1, 2, 3, 4], alpha: None, timecode: 0, keyframe: true }];
-        let bytes = mux_webm(&WebmParams { width: 16, height: 16, codec: WebmCodec::Vp9, timecode_scale_ns: 0, frames: &frames });
+        let frames = [WebmFrame {
+            data: &[1, 2, 3, 4],
+            alpha: None,
+            timecode: 0,
+            keyframe: true,
+        }];
+        let bytes = mux_webm(&WebmParams {
+            width: 16,
+            height: 16,
+            codec: WebmCodec::Vp9,
+            timecode_scale_ns: 0,
+            frames: &frames,
+        });
         let mkv = Mkv::parse(&bytes).unwrap();
         assert_eq!(mkv.doc_type, "webm");
         let t = mkv.track(TrackKind::Video).unwrap();
@@ -658,11 +691,17 @@ mod tests {
         // 0x80 | (1 + 63) = 0xC0.
         let mut b = vec![0x81, 0x00, 0x00, 0x80 | 0x06, 2, 0x82, 0xC0];
         b.extend_from_slice(&[10, 11, 20, 21, 22, 30]);
-        let mut mkv = Mkv { timestamp_scale: 1_000_000, ..Default::default() };
+        let mut mkv = Mkv {
+            timestamp_scale: 1_000_000,
+            ..Default::default()
+        };
         mkv.block(&b, 100, Some(30), None, 0, None);
         let sizes: Vec<_> = mkv.frames.iter().map(|f| f.data.len()).collect();
         assert_eq!(sizes, vec![2, 3, 1]);
         assert_eq!(mkv.frames[2].data, vec![30]);
-        assert_eq!(mkv.frames.iter().map(|f| f.pts).collect::<Vec<_>>(), vec![100, 110, 120]);
+        assert_eq!(
+            mkv.frames.iter().map(|f| f.pts).collect::<Vec<_>>(),
+            vec![100, 110, 120]
+        );
     }
 }

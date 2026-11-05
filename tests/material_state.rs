@@ -14,7 +14,10 @@ use threers::math::{Color, Vector3};
 #[test]
 fn material_depth_and_colour_state_on_every_draw_kind() {
     let mut failures = Vec::new();
-    for format in [wgpu::TextureFormat::Rgba8UnormSrgb, wgpu::TextureFormat::Rgba8Unorm] {
+    for format in [
+        wgpu::TextureFormat::Rgba8UnormSrgb,
+        wgpu::TextureFormat::Rgba8Unorm,
+    ] {
         for msaa in [1, 4] {
             let Ok(mut r) = threers::HeadlessRenderer::builder()
                 .size(state::N, state::N)
@@ -32,7 +35,12 @@ fn material_depth_and_colour_state_on_every_draw_kind() {
             ));
         }
     }
-    assert!(failures.is_empty(), "{} failures:\n{}", failures.len(), failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "{} failures:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
 }
 
 /// The same state on a `ShaderMaterial`, opaque and transparent: a custom
@@ -40,7 +48,10 @@ fn material_depth_and_colour_state_on_every_draw_kind() {
 #[test]
 fn shader_material_takes_the_material_state() {
     const FRAG: &str = "@fragment\nfn fs_main(in: VsOut) -> @location(0) vec4<f32> {\n    let c = u_data.data[0];\n    return vec4<f32>(framebuffer_encode(c.rgb), c.a);\n}\n";
-    let Ok(mut r) = threers::HeadlessRenderer::builder().size(state::N, state::N).build() else {
+    let Ok(mut r) = threers::HeadlessRenderer::builder()
+        .size(state::N, state::N)
+        .build()
+    else {
         eprintln!("skipping: no GPU adapter");
         return;
     };
@@ -58,13 +69,17 @@ fn shader_material_takes_the_material_state() {
             let mut m = ShaderMaterial::new(FRAG).with_data(vec![[green.r, green.g, green.b, 1.0]]);
             m.transparent = transparent;
             m.render_state = case.subject;
-            let mut s = Object3D::mesh(Mesh::new(PlaneGeometry::new(2.5, 2.5), Material::Shader(m)));
+            let mut s =
+                Object3D::mesh(Mesh::new(PlaneGeometry::new(2.5, 2.5), Material::Shader(m)));
             s.position = Vector3::new(0.0, 0.0, -0.5);
             s.render_order = 1;
             scene.add(s);
             let rgba = r.render_to_rgba(&mut scene, &state::camera());
             let (got, px) = state::classify(&rgba);
-            eprintln!("shader transparent={transparent} {}: {got:06x} {px:?}", case.name);
+            eprintln!(
+                "shader transparent={transparent} {}: {got:06x} {px:?}",
+                case.name
+            );
             if got != case.expect {
                 failures.push(format!(
                     "shader (transparent {transparent}) — {}: centre {px:?}, want {:06x}",
@@ -73,7 +88,12 @@ fn shader_material_takes_the_material_state() {
             }
         }
     }
-    assert!(failures.is_empty(), "{} failures:\n{}", failures.len(), failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "{} failures:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
 }
 
 /// three.js writes depth for a transparent material unless `depthWrite` is
@@ -82,7 +102,10 @@ fn shader_material_takes_the_material_state() {
 /// default — it hides an opaque-ordered subject drawn after it.
 #[test]
 fn a_transparent_material_writes_depth_when_asked() {
-    let Ok(mut r) = threers::HeadlessRenderer::builder().size(state::N, state::N).build() else {
+    let Ok(mut r) = threers::HeadlessRenderer::builder()
+        .size(state::N, state::N)
+        .build()
+    else {
         eprintln!("skipping: no GPU adapter");
         return;
     };
@@ -93,7 +116,10 @@ fn a_transparent_material_writes_depth_when_asked() {
         let mut wm = threers::materials::BasicMaterial::new(Color::from_hex(state::WALL));
         wm.transparent = true;
         wm.opacity = 0.999;
-        wm.render_state = RenderState { depth_write: write, ..RenderState::default() };
+        wm.render_state = RenderState {
+            depth_write: write,
+            ..RenderState::default()
+        };
         let mut wall = Object3D::mesh(Mesh::new(PlaneGeometry::new(2.5, 2.5), wm.into()));
         wall.position = Vector3::new(0.0, 0.0, 0.5);
         scene.add(wall);
@@ -109,9 +135,15 @@ fn a_transparent_material_writes_depth_when_asked() {
         let rgba = r.render_to_rgba(&mut scene, &state::camera());
         let (got, px) = state::classify(&rgba);
         eprintln!("transparent wall depth_write {write:?}: {got:06x} {px:?}");
-        let want = if expect_subject { state::SUBJECT } else { state::WALL };
+        let want = if expect_subject {
+            state::SUBJECT
+        } else {
+            state::WALL
+        };
         if got != want {
-            failures.push(format!("depth_write {write:?}: centre {px:?}, want {want:06x}"));
+            failures.push(format!(
+                "depth_write {write:?}: centre {px:?}, want {want:06x}"
+            ));
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));

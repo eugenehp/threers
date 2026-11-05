@@ -27,15 +27,15 @@ impl MetalOverlay {
     /// Blend `rgba` (`width × height`, straight alpha, sRGB) over the frame in
     /// `pass`, then present its drawable if it has one.
     ///
-    /// `rows` is the band that changed since the last call, `(first, end)`;
-    /// `None` uploads everything. A new size uploads everything regardless.
+    /// `rows` are the bands that changed since the last call, `(first, end)`
+    /// each; `None` uploads everything. A new size uploads everything regardless.
     pub(crate) fn composite(
         &mut self,
         device: &MetalDevice,
         rgba: &[u8],
         width: u32,
         height: u32,
-        rows: Option<(u32, u32)>,
+        rows: Option<&[(u32, u32)]>,
         pass: &PassAttachments,
     ) -> Result<(), MetalError> {
         if rgba.len() < (width as usize) * (height as usize) * 4 {
@@ -59,10 +59,17 @@ impl MetalOverlay {
             )?;
             self.texture = Some((tex, width, height));
         }
-        let (first, end) = if fresh { (0, height) } else { rows.unwrap_or((0, height)) };
-        let (first, end) = (first.min(height), end.min(height));
+        let whole = [(0, height)];
+        let bands = match rows {
+            Some(bands) if !fresh => bands,
+            _ => &whole[..],
+        };
         let tex = self.texture.as_ref().map(|(t, _, _)| t.id()).expect("just made");
-        if end > first {
+        for &(first, end) in bands {
+            let (first, end) = (first.min(height), end.min(height));
+            if end <= first {
+                continue;
+            }
             let stride = width as usize * 4;
             let region = MTLRegion {
                 origin: MTLOrigin { x: 0, y: first as NSUInteger, z: 0 },
@@ -83,6 +90,7 @@ impl MetalOverlay {
                 );
             }
         }
+
 
         // Over the resolved image: a multisampled pass resolves into `resolve`,
         // which is what is presented or read back.

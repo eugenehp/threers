@@ -5,10 +5,10 @@
 use super::gpu;
 use std::collections::HashMap;
 
-
 use super::{MarkTarget, DEPTH_FORMAT};
 
-const SHADER: &str = crate::wgsl!(r#"
+const SHADER: &str = crate::wgsl!(
+    r#"
 struct Clear {
     color : vec4<f32>,
     // x: the depth written.
@@ -26,7 +26,8 @@ fn vs(@builtin(vertex_index) i : u32) -> @builtin(position) vec4<f32> {
 fn fs() -> @location(0) vec4<f32> {
     return clear.color;
 }
-"#);
+"#
+);
 
 /// `(format, samples, has depth, writes colour, writes depth)`.
 type Key = (wgpu::TextureFormat, u32, bool, bool, bool);
@@ -62,7 +63,12 @@ impl Clearer {
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
-        Self { module, layout, pipeline_layout, pipelines: HashMap::new() }
+        Self {
+            module,
+            layout,
+            pipeline_layout,
+            pipelines: HashMap::new(),
+        }
     }
 
     fn pipeline(&mut self, device: &gpu::Device, key: Key) -> &gpu::RenderPipeline {
@@ -85,7 +91,11 @@ impl Clearer {
                     targets: &[Some(wgpu::ColorTargetState {
                         format,
                         blend: None,
-                        write_mask: if color { wgpu::ColorWrites::ALL } else { wgpu::ColorWrites::empty() },
+                        write_mask: if color {
+                            wgpu::ColorWrites::ALL
+                        } else {
+                            wgpu::ColorWrites::empty()
+                        },
                     })],
                 }),
                 primitive: wgpu::PrimitiveState::default(),
@@ -96,7 +106,10 @@ impl Clearer {
                     stencil: Default::default(),
                     bias: Default::default(),
                 }),
-                multisample: wgpu::MultisampleState { count: samples, ..Default::default() },
+                multisample: wgpu::MultisampleState {
+                    count: samples,
+                    ..Default::default()
+                },
                 multiview_mask: None,
                 cache: None,
             })
@@ -119,7 +132,16 @@ impl Clearer {
             return;
         }
         let c = color.unwrap_or(wgpu::Color::TRANSPARENT);
-        let uniform: [f32; 8] = [c.r as f32, c.g as f32, c.b as f32, c.a as f32, depth.unwrap_or(1.0), 0.0, 0.0, 0.0];
+        let uniform: [f32; 8] = [
+            c.r as f32,
+            c.g as f32,
+            c.b as f32,
+            c.a as f32,
+            depth.unwrap_or(1.0),
+            0.0,
+            0.0,
+            0.0,
+        ];
         let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("threers rect clear values"),
             contents: bytemuck::cast_slice(&uniform),
@@ -128,11 +150,22 @@ impl Clearer {
         let bind = device.create_bind_group(&gpu::BindGroupDescriptor {
             label: Some("threers rect clear bg"),
             layout: &self.layout,
-            entries: &[gpu::BindGroupEntry { binding: 0, resource: buffer.as_entire_binding() }],
+            entries: &[gpu::BindGroupEntry {
+                binding: 0,
+                resource: buffer.as_entire_binding(),
+            }],
         });
-        let key = (target.format, target.samples, target.depth.is_some(), color.is_some(), depth.is_some());
+        let key = (
+            target.format,
+            target.samples,
+            target.depth.is_some(),
+            color.is_some(),
+            depth.is_some(),
+        );
         let pipeline = self.pipeline(device, key).clone();
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("threers rect clear") });
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("threers rect clear"),
+        });
         {
             let mut pass = super::MarkRenderer::begin_target_pass(&mut encoder, target);
             pass.set_pipeline(&pipeline);

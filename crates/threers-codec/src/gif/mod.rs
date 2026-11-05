@@ -34,11 +34,11 @@
 
 pub mod decode;
 
+#[allow(deprecated)]
+pub use decode::DecodedFrame;
 pub use decode::{
     decode_gif, DisposalMethod, GifDecoder, GifError, GifFrame, GifFrameMeta, GifInfo, GifVersion,
 };
-#[allow(deprecated)]
-pub use decode::DecodedFrame;
 
 use std::collections::HashMap;
 use std::io::{self, Write};

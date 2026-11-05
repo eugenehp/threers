@@ -223,8 +223,10 @@ pub trait Sdf2 {
     /// The field's gradient by central differences over `h`. Unit length for
     /// an exact field away from its medial axis; shorter near a blend.
     fn gradient(&self, p: Vector2, h: f32) -> Vector2 {
-        let dx = self.distance(Vector2::new(p.x + h, p.y)) - self.distance(Vector2::new(p.x - h, p.y));
-        let dy = self.distance(Vector2::new(p.x, p.y + h)) - self.distance(Vector2::new(p.x, p.y - h));
+        let dx =
+            self.distance(Vector2::new(p.x + h, p.y)) - self.distance(Vector2::new(p.x - h, p.y));
+        let dy =
+            self.distance(Vector2::new(p.x, p.y + h)) - self.distance(Vector2::new(p.x, p.y - h));
         Vector2::new(dx, dy) * (0.5 / h)
     }
 }
@@ -251,7 +253,11 @@ pub struct Raymarch {
 
 impl Default for Raymarch {
     fn default() -> Self {
-        Self { max_distance: 100.0, max_steps: 256, epsilon: 1e-4 }
+        Self {
+            max_distance: 100.0,
+            max_steps: 256,
+            epsilon: 1e-4,
+        }
     }
 }
 
@@ -299,7 +305,12 @@ pub trait Sdf3 {
             let eps = settings.epsilon * t.max(1.0);
             if d < eps {
                 let h = eps.max(1e-5);
-                return Some(RayHit { distance: t, point: p, normal: self.normal(p, h), steps: step + 1 });
+                return Some(RayHit {
+                    distance: t,
+                    point: p,
+                    normal: self.normal(p, h),
+                    steps: step + 1,
+                });
             }
             t += d;
             if t > settings.max_distance {
@@ -317,8 +328,9 @@ pub trait Sdf3 {
     fn to_geometry(&self, resolution: usize, centre: Vector3, size: Vector3) -> BufferGeometry {
         // Marching cubes counts "inside" as above the iso value, which is a
         // signed distance with its sign flipped.
-        let mut geometry = MarchingCubes::new(resolution, size)
-            .extract(0.0, |x, y, z| -self.distance(Vector3::new(x, y, z) + centre));
+        let mut geometry = MarchingCubes::new(resolution, size).extract(0.0, |x, y, z| {
+            -self.distance(Vector3::new(x, y, z) + centre)
+        });
         if centre != Vector3::ZERO {
             if let Some(position) = geometry.get_attribute("position") {
                 let mut array = position.array.clone();
@@ -351,7 +363,8 @@ pub trait Sdf3 {
         let n = |lo: f32, hi: f32| (((hi - lo) / g).ceil() as usize + 1).max(2);
         let (nx, ny, nz) = (n(min.x, max.x), n(min.y, max.y), n(min.z, max.z));
         let id = |i: usize, j: usize, k: usize| (k * ny + j) * nx + i;
-        let at = |i: usize, j: usize, k: usize| min + Vector3::new(i as f32, j as f32, k as f32) * g;
+        let at =
+            |i: usize, j: usize, k: usize| min + Vector3::new(i as f32, j as f32, k as f32) * g;
         let mut field = vec![0.0f32; nx * ny * nz];
         for k in 0..nz {
             for j in 0..ny {
@@ -360,10 +373,30 @@ pub trait Sdf3 {
                 }
             }
         }
-        const CORNER: [[usize; 3]; 8] =
-            [[0, 0, 0], [1, 0, 0], [0, 1, 0], [1, 1, 0], [0, 0, 1], [1, 0, 1], [0, 1, 1], [1, 1, 1]];
-        const EDGE: [[usize; 2]; 12] =
-            [[0, 1], [2, 3], [4, 5], [6, 7], [0, 2], [1, 3], [4, 6], [5, 7], [0, 4], [1, 5], [2, 6], [3, 7]];
+        const CORNER: [[usize; 3]; 8] = [
+            [0, 0, 0],
+            [1, 0, 0],
+            [0, 1, 0],
+            [1, 1, 0],
+            [0, 0, 1],
+            [1, 0, 1],
+            [0, 1, 1],
+            [1, 1, 1],
+        ];
+        const EDGE: [[usize; 2]; 12] = [
+            [0, 1],
+            [2, 3],
+            [4, 5],
+            [6, 7],
+            [0, 2],
+            [1, 3],
+            [4, 6],
+            [5, 7],
+            [0, 4],
+            [1, 5],
+            [2, 6],
+            [3, 7],
+        ];
         let (cx, cy, cz) = (nx - 1, ny - 1, nz - 1);
         let cid = |i: usize, j: usize, k: usize| (k * cy + j) * cx + i;
         let mut cell_vertex = vec![u32::MAX; cx * cy * cz];
@@ -387,7 +420,8 @@ pub trait Sdf3 {
                         }
                         let t = v[a] / (v[a] - v[b]);
                         let (pa, pb) = (CORNER[a], CORNER[b]);
-                        let corner = |q: [usize; 3]| Vector3::new(q[0] as f32, q[1] as f32, q[2] as f32);
+                        let corner =
+                            |q: [usize; 3]| Vector3::new(q[0] as f32, q[1] as f32, q[2] as f32);
                         sum = sum + corner(pa) + (corner(pb) - corner(pa)) * t;
                         count += 1.0;
                     }
@@ -421,7 +455,12 @@ pub trait Sdf3 {
             for j in 1..cy {
                 for i in 0..cx {
                     if (field[id(i, j, k)] < 0.0) != (field[id(i + 1, j, k)] < 0.0) {
-                        quad([cv(i, j - 1, k - 1), cv(i, j, k - 1), cv(i, j, k), cv(i, j - 1, k)]);
+                        quad([
+                            cv(i, j - 1, k - 1),
+                            cv(i, j, k - 1),
+                            cv(i, j, k),
+                            cv(i, j - 1, k),
+                        ]);
                     }
                 }
             }
@@ -430,7 +469,12 @@ pub trait Sdf3 {
             for j in 0..cy {
                 for i in 1..cx {
                     if (field[id(i, j, k)] < 0.0) != (field[id(i, j + 1, k)] < 0.0) {
-                        quad([cv(i - 1, j, k - 1), cv(i - 1, j, k), cv(i, j, k), cv(i, j, k - 1)]);
+                        quad([
+                            cv(i - 1, j, k - 1),
+                            cv(i - 1, j, k),
+                            cv(i, j, k),
+                            cv(i, j, k - 1),
+                        ]);
                     }
                 }
             }
@@ -439,7 +483,12 @@ pub trait Sdf3 {
             for j in 1..cy {
                 for i in 1..cx {
                     if (field[id(i, j, k)] < 0.0) != (field[id(i, j, k + 1)] < 0.0) {
-                        quad([cv(i - 1, j - 1, k), cv(i, j - 1, k), cv(i, j, k), cv(i - 1, j, k)]);
+                        quad([
+                            cv(i - 1, j - 1, k),
+                            cv(i, j - 1, k),
+                            cv(i, j, k),
+                            cv(i - 1, j, k),
+                        ]);
                     }
                 }
             }
@@ -452,7 +501,11 @@ pub trait Sdf3 {
                 t.swap(1, 2);
             }
         }
-        SurfaceNets { position, normal, index }
+        SurfaceNets {
+            position,
+            normal,
+            index,
+        }
     }
 }
 
@@ -537,15 +590,29 @@ mod tests {
     fn raymarch_finds_a_sphere_and_misses_beside_it() {
         let ball = |p: Vector3| d3::sphere(p, 1.0);
         let hit = ball
-            .raymarch(Vector3::new(0.0, 0.0, -4.0), Vector3::new(0.0, 0.0, 2.0), Raymarch::default())
+            .raymarch(
+                Vector3::new(0.0, 0.0, -4.0),
+                Vector3::new(0.0, 0.0, 2.0),
+                Raymarch::default(),
+            )
             .unwrap();
         assert!((hit.distance - 3.0).abs() < 1e-3, "{hit:?}");
         assert!((hit.normal.z + 1.0).abs() < 1e-3, "{hit:?}");
         assert!(ball
-            .raymarch(Vector3::new(1.5, 0.0, -4.0), Vector3::new(0.0, 0.0, 1.0), Raymarch::default())
+            .raymarch(
+                Vector3::new(1.5, 0.0, -4.0),
+                Vector3::new(0.0, 0.0, 1.0),
+                Raymarch::default()
+            )
             .is_none());
         // Starting inside is a hit where it stands.
-        let inside = ball.raymarch(Vector3::ZERO, Vector3::new(1.0, 0.0, 0.0), Raymarch::default()).unwrap();
+        let inside = ball
+            .raymarch(
+                Vector3::ZERO,
+                Vector3::new(1.0, 0.0, 0.0),
+                Raymarch::default(),
+            )
+            .unwrap();
         assert_eq!(inside.distance, 0.0);
     }
 
@@ -556,9 +623,21 @@ mod tests {
         let mut g = ball.to_geometry(32, c, Vector3::new(2.0, 2.0, 2.0));
         assert!(g.triangle_count() > 100);
         let b = g.compute_bounding_box();
-        for (lo, hi, centre) in [(b.min.x, b.max.x, c.x), (b.min.y, b.max.y, c.y), (b.min.z, b.max.z, c.z)] {
-            assert!((lo - (centre - 0.8)).abs() < 0.05, "{lo} vs {}", centre - 0.8);
-            assert!((hi - (centre + 0.8)).abs() < 0.05, "{hi} vs {}", centre + 0.8);
+        for (lo, hi, centre) in [
+            (b.min.x, b.max.x, c.x),
+            (b.min.y, b.max.y, c.y),
+            (b.min.z, b.max.z, c.z),
+        ] {
+            assert!(
+                (lo - (centre - 0.8)).abs() < 0.05,
+                "{lo} vs {}",
+                centre - 0.8
+            );
+            assert!(
+                (hi - (centre + 0.8)).abs() < 0.05,
+                "{hi} vs {}",
+                centre + 0.8
+            );
         }
         // Every vertex on the surface, to within the grid's linear interpolation.
         for p in g.positions().unwrap() {
@@ -572,15 +651,24 @@ mod tests {
     /// (footprint 1) and on a diagonal (footprint √2, pixels √½ apart across it).
     #[test]
     fn stroke_coverage_conserves_the_line_width() {
-        for (w, step) in [(1.0f32, 1.0f32), (std::f32::consts::SQRT_2, std::f32::consts::FRAC_1_SQRT_2)] {
+        for (w, step) in [
+            (1.0f32, 1.0f32),
+            (std::f32::consts::SQRT_2, std::f32::consts::FRAC_1_SQRT_2),
+        ] {
             for half in [0.05f32, 0.2, 0.35, 0.5, 1.3, 4.0] {
                 for k in 0..10 {
                     let phase = k as f32 / 10.0 * step;
-                    let total: f32 = (-20..=20).map(|i| coverage_stroke(i as f32 * step + phase, half, w)).sum();
+                    let total: f32 = (-20..=20)
+                        .map(|i| coverage_stroke(i as f32 * step + phase, half, w))
+                        .sum();
                     // Exact, not approximate: the spacing divides the footprint, so
                     // the footprints tile the line's normal evenly and the sum
                     // integrates the stroke's width.
-                    assert!((total * step - 2.0 * half).abs() < 1e-4 * (1.0 + half), "w {w} half {half} phase {phase}: {}", total * step);
+                    assert!(
+                        (total * step - 2.0 * half).abs() < 1e-4 * (1.0 + half),
+                        "w {w} half {half} phase {phase}: {}",
+                        total * step
+                    );
                 }
             }
         }
@@ -590,13 +678,26 @@ mod tests {
     fn stroke_coverage_peaks_at_the_width_and_matches_edges_when_thick() {
         // a 0.4-pixel line centred on a pixel covers 0.4 of it, not 0.9
         assert!((coverage_stroke(0.0, 0.2, 1.0) - 0.4).abs() < 1e-6);
-        assert!((coverage(0.0 - 0.2) - 0.7).abs() < 1e-6, "what the edge rule gives");
-        assert_eq!(coverage_stroke(1.0, 0.2, 1.0), 0.0, "a pixel away it is gone");
+        assert!(
+            (coverage(0.0 - 0.2) - 0.7).abs() < 1e-6,
+            "what the edge rule gives"
+        );
+        assert_eq!(
+            coverage_stroke(1.0, 0.2, 1.0),
+            0.0,
+            "a pixel away it is gone"
+        );
         // thick: the same as the edge rule on the stroke's edge
         for i in 0..40 {
             let u = i as f32 * 0.1;
-            assert!((coverage_stroke(u, 2.0, 1.0) - coverage(u - 2.0)).abs() < 1e-6, "{u}");
-            assert!((coverage_stroke(u, 2.0, 1.3) - coverage_edge(u - 2.0, 1.3)).abs() < 1e-6, "{u}");
+            assert!(
+                (coverage_stroke(u, 2.0, 1.0) - coverage(u - 2.0)).abs() < 1e-6,
+                "{u}"
+            );
+            assert!(
+                (coverage_stroke(u, 2.0, 1.3) - coverage_edge(u - 2.0, 1.3)).abs() < 1e-6,
+                "{u}"
+            );
         }
     }
 
@@ -606,8 +707,15 @@ mod tests {
         assert!((footprint(Vector2::new(1.0, 1.0)) - std::f32::consts::SQRT_2).abs() < 1e-6);
         assert_eq!(footprint(Vector2::ZERO), 1.0);
         assert_eq!(coverage_edge(0.0, 1.4), 0.5);
-        assert!((coverage_edge(0.6, 1.4) - (0.5 - 0.6 / 1.4)).abs() < 1e-6, "still partly covered");
-        assert_eq!(coverage(0.6), 0.0, "where the one-pixel ramp has already stopped");
+        assert!(
+            (coverage_edge(0.6, 1.4) - (0.5 - 0.6 / 1.4)).abs() < 1e-6,
+            "still partly covered"
+        );
+        assert_eq!(
+            coverage(0.6),
+            0.0,
+            "where the one-pixel ramp has already stopped"
+        );
     }
 
     #[test]
@@ -615,7 +723,8 @@ mod tests {
         let disc = |p: Vector2| d2::circle(p, 1.0);
         let g = disc.gradient(Vector2::new(2.0, 0.0), 1e-3);
         assert!((g.x - 1.0).abs() < 1e-3 && g.y.abs() < 1e-3);
-        let n = (|p: Vector3| d3::cuboid(p, Vector3::new(1.0, 2.0, 3.0))).normal(Vector3::new(0.2, 2.5, 0.1), 1e-3);
+        let n = (|p: Vector3| d3::cuboid(p, Vector3::new(1.0, 2.0, 3.0)))
+            .normal(Vector3::new(0.2, 2.5, 0.1), 1e-3);
         assert!((n.y - 1.0).abs() < 1e-3, "{n:?}");
     }
 }

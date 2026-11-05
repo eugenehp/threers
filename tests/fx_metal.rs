@@ -9,7 +9,9 @@
 
 #![cfg(feature = "metal")]
 
-use threers::fx::{Backdrop, Figure, Gloss, GlossStyle, Look, Shape, Stage, StageInput, Venom, VenomState};
+use threers::fx::{
+    Backdrop, Figure, Gloss, GlossStyle, Look, Shape, Stage, StageInput, Venom, VenomState,
+};
 use threers::math::Vector2;
 use threers::metal::MetalHeadlessRenderer;
 use threers::overlay::Overlay;
@@ -35,16 +37,35 @@ fn scene() -> (Scene, Stage) {
     let mut stage = Stage::new();
     stage.set_backdrop(&mut scene, Backdrop::STUDIO);
     let venom = stage.add(&mut scene, Figure::new(pill()), Venom::default());
-    stage.add(&mut scene, Figure::new(star()), Gloss::new(GlossStyle::default().with_look(Look::GOLD)));
-    stage.add(&mut scene, Figure::new(ball()), Gloss::new(GlossStyle::default().with_look(Look::CHROME)));
+    stage.add(
+        &mut scene,
+        Figure::new(star()),
+        Gloss::new(GlossStyle::default().with_look(Look::GOLD)),
+    );
+    stage.add(
+        &mut scene,
+        Figure::new(ball()),
+        Gloss::new(GlossStyle::default().with_look(Look::CHROME)),
+    );
     let mut overlay = Overlay::new(W, H);
-    let input = StageInput { viewport: Vector2::new(W as f32, H as f32), dpr: 1.0, dt: 1.0 / 60.0, pointer: None, pointer_down: false };
+    let input = StageInput {
+        viewport: Vector2::new(W as f32, H as f32),
+        dpr: 1.0,
+        dt: 1.0 / 60.0,
+        pointer: None,
+        pointer_down: false,
+    };
     let hand = Vector2::new(150.0, 60.0);
     for _ in 0..60 {
         overlay.clear();
-        stage.update_each(&mut scene, &mut overlay, input, &|id| (id == venom).then_some(hand));
+        stage.update_each(&mut scene, &mut overlay, input, &|id| {
+            (id == venom).then_some(hand)
+        });
     }
-    assert_eq!(stage.effect::<Venom>(venom).unwrap().state(), VenomState::Holding);
+    assert_eq!(
+        stage.effect::<Venom>(venom).unwrap().state(),
+        VenomState::Holding
+    );
     (scene, stage)
 }
 
@@ -79,13 +100,23 @@ fn check_against_the_fields(name: &str, px: &[u8]) {
             }
         }
     }
-    let (a, b) = (inside_dark as f32 / inside as f32, outside_pale as f32 / outside as f32);
+    let (a, b) = (
+        inside_dark as f32 / inside as f32,
+        outside_pale as f32 / outside as f32,
+    );
     eprintln!("{name}: lacquer inside the pill dark {a:.3}, backdrop pale {b:.3}");
     assert!(a > 0.97, "{name}: the pill's inside is not lacquer ({a})");
-    assert!(b > 0.97, "{name}: the backdrop is not showing around the shapes ({b})");
+    assert!(
+        b > 0.97,
+        "{name}: the backdrop is not showing around the shapes ({b})"
+    );
     // the gold star is warm, the chrome ball is grey
     let i = ((90 * W + 270) * 4) as usize;
-    assert!(px[i] as i32 - px[i + 2] as i32 > 30, "{name}: the star is not gold: {:?}", &px[i..i + 3]);
+    assert!(
+        px[i] as i32 - px[i + 2] as i32 > 30,
+        "{name}: the star is not gold: {:?}",
+        &px[i..i + 3]
+    );
 }
 
 #[test]
@@ -105,7 +136,10 @@ fn metal_matches_wgpu() {
         eprintln!("skipping: no Metal device");
         return;
     };
-    let Ok(mut hr) = threers::renderer::headless::HeadlessRenderer::builder().size(W, H).build() else {
+    let Ok(mut hr) = threers::renderer::headless::HeadlessRenderer::builder()
+        .size(W, H)
+        .build()
+    else {
         eprintln!("skipping: no wgpu adapter");
         return;
     };
@@ -114,12 +148,23 @@ fn metal_matches_wgpu() {
     let w = hr.render_to_rgba(&mut scene, &camera());
     check_against_the_fields("wgpu", &w);
     if let Ok(dir) = std::env::var("FX_METAL_DUMP") {
-        std::fs::write(format!("{dir}/fx_metal.png"), threers::utils::png::encode_png(W, H, &m)).unwrap();
-        std::fs::write(format!("{dir}/fx_wgpu.png"), threers::utils::png::encode_png(W, H, &w)).unwrap();
+        std::fs::write(
+            format!("{dir}/fx_metal.png"),
+            threers::utils::png::encode_png(W, H, &m),
+        )
+        .unwrap();
+        std::fs::write(
+            format!("{dir}/fx_wgpu.png"),
+            threers::utils::png::encode_png(W, H, &w),
+        )
+        .unwrap();
     }
     let (mut sum, mut big) = (0.0f64, 0usize);
     for (a, b) in m.chunks_exact(4).zip(w.chunks_exact(4)) {
-        let d = (0..3).map(|c| (a[c] as i32 - b[c] as i32).abs()).max().unwrap();
+        let d = (0..3)
+            .map(|c| (a[c] as i32 - b[c] as i32).abs())
+            .max()
+            .unwrap();
         sum += d as f64;
         big += (d > 24) as usize;
     }
@@ -128,5 +173,8 @@ fn metal_matches_wgpu() {
     // Anti-aliased edges and the blend's space can differ by a level or two;
     // a wrong surface differs by tens over thousands of pixels.
     assert!(mean < 1.5, "mean difference {mean:.2} levels");
-    assert!(big < (W * H) as usize / 200, "{big} pixels differ by more than 24 levels");
+    assert!(
+        big < (W * H) as usize / 200,
+        "{big} pixels differ by more than 24 levels"
+    );
 }

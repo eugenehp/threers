@@ -16,6 +16,7 @@ const H: u32 = 96;
 #[test]
 fn six_point_lights_all_light_the_floor() {
     let Ok(mut hr) = HeadlessRenderer::builder().size(W, H).build() else {
+        eprintln!("skipping: no GPU adapter");
         return;
     };
     let mut scene = Scene::new();

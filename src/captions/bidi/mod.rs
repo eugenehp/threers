@@ -93,7 +93,10 @@ impl Class {
     /// given the level of the surrounding text and skipped.
     #[must_use]
     pub fn is_removed_by_x9(self) -> bool {
-        matches!(self, Self::RLE | Self::LRE | Self::RLO | Self::LRO | Self::PDF | Self::BN)
+        matches!(
+            self,
+            Self::RLE | Self::LRE | Self::RLO | Self::LRO | Self::PDF | Self::BN
+        )
     }
 
     /// Whether this is a strong type for **P2** and **N0**'s purposes.
@@ -215,7 +218,11 @@ fn explicit(classes: &[Class], para: u8, pdi_of: &[Option<usize>]) -> (Vec<u8>, 
     let n = classes.len();
     let mut levels = vec![para; n];
     let mut out = classes.to_vec();
-    let mut stack: Vec<Status> = vec![Status { level: para, override_to: None, isolate: false }];
+    let mut stack: Vec<Status> = vec![Status {
+        level: para,
+        override_to: None,
+        isolate: false,
+    }];
     let mut overflow_isolate = 0usize;
     let mut overflow_embedding = 0usize;
     let mut valid_isolate = 0usize;
@@ -234,7 +241,11 @@ fn explicit(classes: &[Class], para: u8, pdi_of: &[Option<usize>]) -> (Vec<u8>, 
                     _ => None,
                 };
                 if next <= MAX_DEPTH && overflow_isolate == 0 && overflow_embedding == 0 {
-                    stack.push(Status { level: next, override_to: over, isolate: false });
+                    stack.push(Status {
+                        level: next,
+                        override_to: over,
+                        isolate: false,
+                    });
                 } else if overflow_isolate == 0 {
                     overflow_embedding += 1;
                 }
@@ -263,7 +274,11 @@ fn explicit(classes: &[Class], para: u8, pdi_of: &[Option<usize>]) -> (Vec<u8>, 
                 let next = next_level(top.level, rtl);
                 if next <= MAX_DEPTH && overflow_isolate == 0 && overflow_embedding == 0 {
                     valid_isolate += 1;
-                    stack.push(Status { level: next, override_to: None, isolate: true });
+                    stack.push(Status {
+                        level: next,
+                        override_to: None,
+                        isolate: true,
+                    });
                 } else {
                     overflow_isolate += 1;
                 }
@@ -399,8 +414,10 @@ fn resolve_inner(classes: &[Class], chars: Option<&[char]>, direction: Direction
     // own: ICU gives `[1, 1, 1, 2, 2, 2]` there and resetting forward gives all ones.
     let n = classes.len();
     let resettable = |k: Class| {
-        matches!(k, Class::WS | Class::LRI | Class::RLI | Class::FSI | Class::PDI)
-            || k.is_removed_by_x9()
+        matches!(
+            k,
+            Class::WS | Class::LRI | Class::RLI | Class::FSI | Class::PDI
+        ) || k.is_removed_by_x9()
     };
     for i in 0..n {
         if !matches!(classes[i], Class::B | Class::S) {
@@ -419,7 +436,11 @@ fn resolve_inner(classes: &[Class], chars: Option<&[char]>, direction: Direction
         i -= 1;
         levels[i] = para;
     }
-    Levels { levels, paragraph: para, classes: classes.to_vec() }
+    Levels {
+        levels,
+        paragraph: para,
+        classes: classes.to_vec(),
+    }
 }
 
 /// One isolating run sequence: the character indices it covers, in order, plus the
@@ -473,11 +494,15 @@ fn isolating_runs(
             used[at] = true;
             indices.extend_from_slice(&runs[at]);
             let last = *runs[at].last().unwrap();
-            let Some(m) = pdi_of.get(last).copied().flatten() else { break };
+            let Some(m) = pdi_of.get(last).copied().flatten() else {
+                break;
+            };
             if !classes[last].is_isolate_initiator() {
                 break;
             }
-            let Some(next) = start_of.get(&m).copied() else { break };
+            let Some(next) = start_of.get(&m).copied() else {
+                break;
+            };
             if used[next] {
                 break;
             }
@@ -488,11 +513,14 @@ fn isolating_runs(
         // adjacent character, as a direction. Past the ends, the paragraph level.
         let before = indices[0];
         let prev = (0..before).rev().find(|i| !classes[*i].is_removed_by_x9());
-        let sos_level = levels[prev.unwrap_or(0)].max(level).max(if prev.is_none() { para } else { 0 });
+        let sos_level =
+            levels[prev.unwrap_or(0)]
+                .max(level)
+                .max(if prev.is_none() { para } else { 0 });
         let after = *indices.last().unwrap();
         // An unmatched isolate initiator at the end takes the paragraph level as eos.
-        let ends_isolated = classes[after].is_isolate_initiator()
-            && pdi_of.get(after).copied().flatten().is_none();
+        let ends_isolated =
+            classes[after].is_isolate_initiator() && pdi_of.get(after).copied().flatten().is_none();
         let next = (after + 1..n).find(|i| !classes[*i].is_removed_by_x9());
         let eos_level = match next {
             // An unmatched isolate initiator, or the end of the paragraph: the
@@ -504,8 +532,16 @@ fn isolating_runs(
         out.push(Sequence {
             indices,
             level,
-            sos: if sos_level % 2 == 1 { Class::R } else { Class::L },
-            eos: if eos_level % 2 == 1 { Class::R } else { Class::L },
+            sos: if sos_level % 2 == 1 {
+                Class::R
+            } else {
+                Class::L
+            },
+            eos: if eos_level % 2 == 1 {
+                Class::R
+            } else {
+                Class::L
+            },
         });
     }
     out
@@ -532,7 +568,9 @@ fn bracket_pairs(indices: &[usize], chars: &[char]) -> Vec<(usize, usize)> {
     let mut stack: Vec<(char, usize)> = Vec::new();
     let mut out: Vec<(usize, usize)> = Vec::new();
     for (k, idx) in indices.iter().enumerate() {
-        let Some(ch) = chars.get(*idx).copied() else { continue };
+        let Some(ch) = chars.get(*idx).copied() else {
+            continue;
+        };
         match bracket_of(ch) {
             Some((pair, bracket_table::Bracket::Open)) => {
                 if stack.len() == 63 {
@@ -594,7 +632,11 @@ fn resolve_sequence(seq: &Sequence, classes: &[Class], levels: &mut [u8], chars:
         if c[i] != Class::EN {
             continue;
         }
-        let strong = (0..i).rev().map(|j| c[j]).find(|k| k.is_strong()).unwrap_or(seq.sos);
+        let strong = (0..i)
+            .rev()
+            .map(|j| c[j])
+            .find(|k| k.is_strong())
+            .unwrap_or(seq.sos);
         if strong == Class::AL {
             c[i] = Class::AN;
         }
@@ -648,7 +690,11 @@ fn resolve_sequence(seq: &Sequence, classes: &[Class], levels: &mut [u8], chars:
         if c[i] != Class::EN {
             continue;
         }
-        let strong = (0..i).rev().map(|j| c[j]).find(|k| k.is_strong()).unwrap_or(seq.sos);
+        let strong = (0..i)
+            .rev()
+            .map(|j| c[j])
+            .find(|k| k.is_strong())
+            .unwrap_or(seq.sos);
         if strong == Class::L {
             c[i] = Class::L;
         }
@@ -659,7 +705,11 @@ fn resolve_sequence(seq: &Sequence, classes: &[Class], levels: &mut [u8], chars:
     // with the sentence. It needs the **characters**, since a bracket is a property of
     // the codepoint and every bracket is already `ON` by class.
     if let Some(chars) = chars {
-        let e = if seq.level % 2 == 1 { Class::R } else { Class::L };
+        let e = if seq.level % 2 == 1 {
+            Class::R
+        } else {
+            Class::L
+        };
         let o = if e == Class::R { Class::L } else { Class::R };
         for (open, close) in bracket_pairs(&seq.indices, chars) {
             // Strong types strictly inside, with a number counting as R.
@@ -735,8 +785,16 @@ fn resolve_sequence(seq: &Sequence, classes: &[Class], levels: &mut [u8], chars:
         while j < n && neutral(c[j]) {
             j += 1;
         }
-        let before = if i == 0 { seq.sos } else { strong_of(c[i - 1]).unwrap_or(seq.sos) };
-        let after = if j == n { seq.eos } else { strong_of(c[j]).unwrap_or(seq.eos) };
+        let before = if i == 0 {
+            seq.sos
+        } else {
+            strong_of(c[i - 1]).unwrap_or(seq.sos)
+        };
+        let after = if j == n {
+            seq.eos
+        } else {
+            strong_of(c[j]).unwrap_or(seq.eos)
+        };
         // N2: and otherwise the embedding direction.
         let to = if before == after {
             before
@@ -793,7 +851,11 @@ pub fn reorder(levels: &[u8], paragraph: u8) -> Vec<usize> {
         .min()
         .copied()
         .unwrap_or(u8::MAX)
-        .min(if paragraph % 2 == 1 { paragraph } else { u8::MAX });
+        .min(if paragraph % 2 == 1 {
+            paragraph
+        } else {
+            u8::MAX
+        });
     if lowest_odd == u8::MAX {
         return out;
     }
@@ -836,7 +898,10 @@ impl Levels {
             .filter(|i| !self.classes[*i].is_removed_by_x9())
             .collect();
         let kept: Vec<u8> = keep.iter().map(|i| self.levels[*i]).collect();
-        reorder(&kept, self.paragraph).into_iter().map(|k| keep[k]).collect()
+        reorder(&kept, self.paragraph)
+            .into_iter()
+            .map(|k| keep[k])
+            .collect()
     }
 }
 
@@ -883,7 +948,10 @@ mod tests {
         assert_eq!(resolve("123 ... \u{5D0}", Direction::Auto).paragraph, 1);
         assert_eq!(resolve("123", Direction::Auto).paragraph, 0);
         // And text inside an isolate is skipped, which is what makes `FSI` work.
-        assert_eq!(resolve("\u{2066}\u{5D0}\u{2069}abc", Direction::Auto).paragraph, 0);
+        assert_eq!(
+            resolve("\u{2066}\u{5D0}\u{2069}abc", Direction::Auto).paragraph,
+            0
+        );
     }
 
     #[test]
@@ -923,7 +991,10 @@ mod tests {
     fn an_override_forces_direction() {
         // RLO makes Latin read right to left, which is the whole point of it.
         let t = "a\u{202E}bcd\u{202C}e";
-        assert_eq!(visual(t, Direction::Ltr), "a\u{202E}dcb\u{202C}e".replace(['\u{202E}', '\u{202C}'], ""));
+        assert_eq!(
+            visual(t, Direction::Ltr),
+            "a\u{202E}dcb\u{202C}e".replace(['\u{202E}', '\u{202C}'], "")
+        );
     }
 
     #[test]
@@ -973,7 +1044,10 @@ mod tests {
         }
         t.push('a');
         let r = resolve(&t, Direction::Ltr);
-        assert!(r.levels.iter().all(|l| *l <= MAX_DEPTH + 1), "a level ran past the cap");
+        assert!(
+            r.levels.iter().all(|l| *l <= MAX_DEPTH + 1),
+            "a level ran past the cap"
+        );
         assert_eq!(r.levels.len(), t.chars().count());
     }
 
@@ -981,7 +1055,14 @@ mod tests {
     fn a_class_is_found_for_every_codepoint() {
         // The generated table covers all of Unicode, so no lookup falls through.
         for c in [
-            '\0', 'a', '\u{5D0}', '\u{627}', '\u{661}', '\u{2066}', '\u{10FFFF}', '\u{E0001}',
+            '\0',
+            'a',
+            '\u{5D0}',
+            '\u{627}',
+            '\u{661}',
+            '\u{2066}',
+            '\u{10FFFF}',
+            '\u{E0001}',
         ] {
             let _ = class(c);
         }

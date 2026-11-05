@@ -166,11 +166,18 @@ impl ShapeMarks {
             }
         }
         self.mesh = (v, geometry.index.clone());
-        self.uvs = geometry.get_attribute("uv").filter(|a| a.item_size == 2 && a.count() == n).map_or(Vec::new(), |a| a.array.clone());
+        self.uvs = geometry
+            .get_attribute("uv")
+            .filter(|a| a.item_size == 2 && a.count() == n)
+            .map_or(Vec::new(), |a| a.array.clone());
         // three.js's vertex colours: linear, RGB or RGBA.
         self.vertex_colors = match geometry.get_attribute("color").filter(|a| a.count() == n) {
             Some(a) if a.item_size == 4 => a.array.clone(),
-            Some(a) if a.item_size == 3 => a.array.chunks_exact(3).flat_map(|c| [c[0], c[1], c[2], 1.0]).collect(),
+            Some(a) if a.item_size == 3 => a
+                .array
+                .chunks_exact(3)
+                .flat_map(|c| [c[0], c[1], c[2], 1.0])
+                .collect(),
             _ => Vec::new(),
         };
         self.mesh_dirty = true;
@@ -264,7 +271,9 @@ impl Mark for ShapeMarks {
     }
     fn kind_uniforms(&self) -> KindUniforms {
         let (yz, l0, _) = super::Lighting::uniforms(self.lighting.as_ref());
-        let ambient = self.lighting.map_or(self.ambient.clamp(0.0, 1.0), |l| l.ambient);
+        let ambient = self
+            .lighting
+            .map_or(self.ambient.clamp(0.0, 1.0), |l| l.ambient);
         // style3: the texture's place in its atlas; a negative width clamps
         // rather than repeats.
         let mut rect = self.texture_rect;
@@ -288,8 +297,14 @@ impl Mark for ShapeMarks {
                     label: Some("threers shape gpu texture"),
                     layout: &ctx.resources.texture_layout,
                     entries: &[
-                        gpu::BindGroupEntry { binding: 0, resource: gpu::BindingResource::TextureView(view) },
-                        gpu::BindGroupEntry { binding: 1, resource: gpu::BindingResource::Sampler(&ctx.resources.mip_sampler) },
+                        gpu::BindGroupEntry {
+                            binding: 0,
+                            resource: gpu::BindingResource::TextureView(view),
+                        },
+                        gpu::BindGroupEntry {
+                            binding: 1,
+                            resource: gpu::BindingResource::Sampler(&ctx.resources.mip_sampler),
+                        },
                     ],
                 });
                 self.texture_gpu = Some((*generation, bg));
@@ -304,7 +319,12 @@ impl Mark for ShapeMarks {
                 self.texture_version = Some(version);
                 if let Some(r) = a.get(name) {
                     let (w, h) = (size.0.max(1) as f32, size.1.max(1) as f32);
-                    self.texture_rect = [r.x as f32 / w, r.y as f32 / h, r.width as f32 / w, r.height as f32 / h];
+                    self.texture_rect = [
+                        r.x as f32 / w,
+                        r.y as f32 / h,
+                        r.width as f32 / w,
+                        r.height as f32 / h,
+                    ];
                 }
             }
         }
@@ -326,7 +346,11 @@ impl Mark for ShapeMarks {
                 let i = v as usize;
                 data.extend_from_slice(&self.mesh.0[i * 6..i * 6 + 6]);
                 data.extend_from_slice(self.uvs.get(i * 2..i * 2 + 2).unwrap_or(&[0.0, 0.0]));
-                data.extend_from_slice(self.vertex_colors.get(i * 4..i * 4 + 4).unwrap_or(&[1.0; 4]));
+                data.extend_from_slice(
+                    self.vertex_colors
+                        .get(i * 4..i * 4 + 4)
+                        .unwrap_or(&[1.0; 4]),
+                );
                 for k in 0..3 {
                     data.extend_from_slice(tri.get(k).map_or(&[0.0f32; 3][..], |&c| pos(c)));
                 }
@@ -365,7 +389,12 @@ impl Mark for ShapeMarks {
         super::column_bytes(self) + mesh
     }
     fn columns(&mut self) -> Vec<&mut Column> {
-        vec![&mut self.positions, &mut self.scales, &mut self.colors, &mut self.rotations]
+        vec![
+            &mut self.positions,
+            &mut self.scales,
+            &mut self.colors,
+            &mut self.rotations,
+        ]
     }
     fn patterned(&self) -> bool {
         self.texture.is_some() || self.gpu_texture.is_some()

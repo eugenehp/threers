@@ -65,11 +65,19 @@ fn decode(pcm: &[u8], n_ch: usize, enc: Enc) -> Vec<Vec<f32>> {
             }
             Enc::F32 { big } => {
                 let a: [u8; 4] = b.try_into().unwrap();
-                (if big { f32::from_be_bytes(a) } else { f32::from_le_bytes(a) }) as f64
+                (if big {
+                    f32::from_be_bytes(a)
+                } else {
+                    f32::from_le_bytes(a)
+                }) as f64
             }
             Enc::F64 { big } => {
                 let a: [u8; 8] = b.try_into().unwrap();
-                if big { f64::from_be_bytes(a) } else { f64::from_le_bytes(a) }
+                if big {
+                    f64::from_be_bytes(a)
+                } else {
+                    f64::from_le_bytes(a)
+                }
             }
         };
         ch[i % n_ch].push(v as f32);
@@ -88,7 +96,8 @@ pub fn read_wav(d: &[u8]) -> Result<Pcm, String> {
         let id = &d[off..off + 4];
         let mut len = le32(d, off + 4) as usize;
         if id == b"ds64" && off + 24 <= d.len() {
-            ds64_data = Some(u64::from_le_bytes(d[off + 16..off + 24].try_into().unwrap()) as usize);
+            ds64_data =
+                Some(u64::from_le_bytes(d[off + 16..off + 24].try_into().unwrap()) as usize);
         }
         if id == b"data" {
             if len == 0xffff_ffff {
@@ -114,15 +123,25 @@ pub fn read_wav(d: &[u8]) -> Result<Pcm, String> {
     }
     let enc = match (tag, bits) {
         (1, 8) => Enc::U8,
-        (1, 16 | 24 | 32) => Enc::Int { bytes: bits / 8, big: false },
+        (1, 16 | 24 | 32) => Enc::Int {
+            bytes: bits / 8,
+            big: false,
+        },
         (3, 32) => Enc::F32 { big: false },
         (3, 64) => Enc::F64 { big: false },
-        _ => return Err(format!("WAV format tag {tag} with {bits} bits is not supported")),
+        _ => {
+            return Err(format!(
+                "WAV format tag {tag} with {bits} bits is not supported"
+            ))
+        }
     };
     if n_ch == 0 {
         return Err("WAV with zero channels".into());
     }
-    Ok(Pcm { sample_rate: rate, channels: decode(data, n_ch, enc) })
+    Ok(Pcm {
+        sample_rate: rate,
+        channels: decode(data, n_ch, enc),
+    })
 }
 
 /// Read an AIFF or AIFF-C file.
@@ -136,7 +155,9 @@ pub fn read_aiff(d: &[u8]) -> Result<Pcm, String> {
     while off + 8 <= d.len() {
         let id = &d[off..off + 4];
         let len = be32(d, off + 4) as usize;
-        let body = d.get(off + 8..(off + 8 + len).min(d.len())).ok_or("truncated AIFF chunk")?;
+        let body = d
+            .get(off + 8..(off + 8 + len).min(d.len()))
+            .ok_or("truncated AIFF chunk")?;
         match id {
             b"COMM" => comm = Some(body),
             b"SSND" => ssnd = Some(body),
@@ -156,13 +177,28 @@ pub fn read_aiff(d: &[u8]) -> Result<Pcm, String> {
     let exp = (u16::from_be_bytes([comm[8], comm[9]]) & 0x7fff) as i32 - 16383;
     let mant = u64::from_be_bytes(comm[10..18].try_into().unwrap());
     let rate = (mant as f64 * 2f64.powi(exp - 63)).round() as u32;
-    let codec: &[u8] = if aifc { comm.get(18..22).ok_or("AIFC without compression type")? } else { b"NONE" };
+    let codec: &[u8] = if aifc {
+        comm.get(18..22).ok_or("AIFC without compression type")?
+    } else {
+        b"NONE"
+    };
     let enc = match codec {
-        b"NONE" | b"twos" => Enc::Int { bytes: bits.div_ceil(8), big: true },
-        b"sowt" => Enc::Int { bytes: bits.div_ceil(8), big: false },
+        b"NONE" | b"twos" => Enc::Int {
+            bytes: bits.div_ceil(8),
+            big: true,
+        },
+        b"sowt" => Enc::Int {
+            bytes: bits.div_ceil(8),
+            big: false,
+        },
         b"fl32" | b"FL32" => Enc::F32 { big: true },
         b"fl64" | b"FL64" => Enc::F64 { big: true },
-        other => return Err(format!("AIFF-C compression {:?} is not supported", String::from_utf8_lossy(other))),
+        other => {
+            return Err(format!(
+                "AIFF-C compression {:?} is not supported",
+                String::from_utf8_lossy(other)
+            ))
+        }
     };
     let start = be32(ssnd, 0) as usize + 8;
     let pcm = ssnd.get(start..).ok_or("bad SSND offset")?;
@@ -173,7 +209,10 @@ pub fn read_aiff(d: &[u8]) -> Result<Pcm, String> {
     for c in &mut ch {
         c.truncate(frames);
     }
-    Ok(Pcm { sample_rate: rate, channels: ch })
+    Ok(Pcm {
+        sample_rate: rate,
+        channels: ch,
+    })
 }
 
 /// A 16-bit PCM WAV file of interleaved `samples`.
@@ -208,6 +247,9 @@ mod tests {
         let p = read_wav(&wav_s16(16000, 2, &s)).unwrap();
         assert_eq!(p.sample_rate, 16000);
         assert_eq!(p.channels[0], vec![0.0, -1.0 / 32768.0, -1.0]);
-        assert_eq!(p.channels[1], vec![1.0 / 32768.0, 32767.0 / 32768.0, 1234.0 / 32768.0]);
+        assert_eq!(
+            p.channels[1],
+            vec![1.0 / 32768.0, 32767.0 / 32768.0, 1234.0 / 32768.0]
+        );
     }
 }

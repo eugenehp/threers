@@ -137,8 +137,14 @@ impl TtfFont {
     /// kerned. A character the font lacks draws as its `?`.
     pub fn create_paths(&self, text: &str, size: f64) -> Vec<crate::curves::shapes::ShapePath> {
         let scale = size / self.units_per_em.max(1) as f64;
-        let line_height = (self.ascender as f64 - self.descender as f64 + self.line_gap as f64) * scale;
-        let gid = |c: char| self.cmap.get(&(c as u32)).or_else(|| self.cmap.get(&('?' as u32))).copied();
+        let line_height =
+            (self.ascender as f64 - self.descender as f64 + self.line_gap as f64) * scale;
+        let gid = |c: char| {
+            self.cmap
+                .get(&(c as u32))
+                .or_else(|| self.cmap.get(&('?' as u32)))
+                .copied()
+        };
         let mut paths = Vec::new();
         let (mut x, mut y) = (0.0f64, 0.0f64);
         let mut previous: Option<u16> = None;
@@ -152,7 +158,9 @@ impl TtfFont {
             if let Some(p) = previous {
                 x += self.kern(p, g) as f64 * scale;
             }
-            let Some(glyph) = self.glyphs.get(g as usize) else { continue };
+            let Some(glyph) = self.glyphs.get(g as usize) else {
+                continue;
+            };
             paths.push(shape_path(&glyph.shape.outline, scale, x, y));
             x += glyph.advance_width as f64 * scale;
             previous = Some(g);
@@ -169,7 +177,10 @@ impl TtfFont {
     /// the extrusion's `curve_segments` decides how finely they are cut.
     pub fn generate_shapes(&self, text: &str, size: f64) -> Vec<crate::curves::shapes::Shape> {
         // TrueType draws outer contours clockwise and holes the other way.
-        self.create_paths(text, size).iter().flat_map(|p| p.to_shapes(false)).collect()
+        self.create_paths(text, size)
+            .iter()
+            .flat_map(|p| p.to_shapes(false))
+            .collect()
     }
 
     /// Parse a TTF byte slice into a usable font — a variable font at its
@@ -239,8 +250,8 @@ impl TtfFont {
             std::collections::HashMap::new();
         let table_tags: [&'static [u8; 4]; 22] = [
             b"head", b"maxp", b"loca", b"glyf", b"cmap", b"hmtx", b"hhea", b"kern", b"fvar",
-            b"avar", b"gvar", b"HVAR", b"GPOS", b"GDEF", b"name", b"trak", b"OS/2",
-            b"CFF ", b"CFF2", b"GSUB",
+            b"avar", b"gvar", b"HVAR", b"GPOS", b"GDEF", b"name", b"trak", b"OS/2", b"CFF ",
+            b"CFF2", b"GSUB",
             // Both only for [`crate::loaders::overlap`]: which composite a run of this
             // face's glyphs gets. `MERG` decides alone where a font has one, and `meta`'s
             // `dlng` names the languages the face was designed for.
@@ -391,68 +402,75 @@ impl TtfFont {
                     .and_then(|c| c.draw(super::cff::GlyphId(g_idx as u16), &mut sink));
                 glyphs.push(TtfGlyph {
                     shape: Shape {
-                        outline: if drawn.is_some() { sink.path } else { Path::new() },
+                        outline: if drawn.is_some() {
+                            sink.path
+                        } else {
+                            Path::new()
+                        },
                         holes: Vec::new(),
                     },
                     advance_width: advance.round().clamp(0.0, u16::MAX as f32) as u16,
                 });
             }
         } else {
-        // `g_idx` is a glyph id, passed to `glyph_offset` as well as indexing.
-        #[allow(clippy::needless_range_loop)]
-        for g_idx in 0..n_glyphs {
-            let off = glyph_offset(g_idx);
-            let next_off = glyph_offset(g_idx + 1);
-            if next_off <= off {
-                // No outline (a space), but its advance still varies.
-                let advance = advance_widths[g_idx] as f32;
-                let varied = match (&hvar, &gvar) {
-                    (Some(h), _) => advance + h[g_idx],
-                    (None, Some(g)) => {
-                        let pp = [
-                            Vector2::new(0.0, 0.0),
-                            Vector2::new(advance, 0.0),
-                            Vector2::new(0.0, 0.0),
-                            Vector2::new(0.0, 0.0),
-                        ];
-                        g.deltas(g_idx, &pp, Some(&[]))
-                            .map_or(advance, |d| advance + d[1].x - d[0].x)
-                    }
-                    (None, None) => advance,
-                };
-                glyphs.push(TtfGlyph {
-                    shape: Shape::new(),
-                    advance_width: varied.round().clamp(0.0, u16::MAX as f32) as u16,
-                });
-                continue;
-            }
-            let advance = advance_widths[g_idx];
-            let Some((mut contours, phantom)) =
-                glyph_contours(bytes, &bounded_offset, g_idx, 0, gvar.as_ref(), advance)
-            else {
-                glyphs.push(TtfGlyph { shape: Shape::new(), advance_width: advance });
-                continue;
-            };
-            // The phantom points carry the varied metrics: the origin (pp1)
-            // and the advance (pp2). The outline is moved so the origin stays
-            // at the pen.
-            let mut varied_advance = advance as f32;
-            if let Some(pp) = phantom {
-                for c in &mut contours {
-                    for (v, _) in c.iter_mut() {
-                        v.x -= pp[0].x;
-                    }
+            // `g_idx` is a glyph id, passed to `glyph_offset` as well as indexing.
+            #[allow(clippy::needless_range_loop)]
+            for g_idx in 0..n_glyphs {
+                let off = glyph_offset(g_idx);
+                let next_off = glyph_offset(g_idx + 1);
+                if next_off <= off {
+                    // No outline (a space), but its advance still varies.
+                    let advance = advance_widths[g_idx] as f32;
+                    let varied = match (&hvar, &gvar) {
+                        (Some(h), _) => advance + h[g_idx],
+                        (None, Some(g)) => {
+                            let pp = [
+                                Vector2::new(0.0, 0.0),
+                                Vector2::new(advance, 0.0),
+                                Vector2::new(0.0, 0.0),
+                                Vector2::new(0.0, 0.0),
+                            ];
+                            g.deltas(g_idx, &pp, Some(&[]))
+                                .map_or(advance, |d| advance + d[1].x - d[0].x)
+                        }
+                        (None, None) => advance,
+                    };
+                    glyphs.push(TtfGlyph {
+                        shape: Shape::new(),
+                        advance_width: varied.round().clamp(0.0, u16::MAX as f32) as u16,
+                    });
+                    continue;
                 }
-                varied_advance += pp[1].x - pp[0].x;
+                let advance = advance_widths[g_idx];
+                let Some((mut contours, phantom)) =
+                    glyph_contours(bytes, &bounded_offset, g_idx, 0, gvar.as_ref(), advance)
+                else {
+                    glyphs.push(TtfGlyph {
+                        shape: Shape::new(),
+                        advance_width: advance,
+                    });
+                    continue;
+                };
+                // The phantom points carry the varied metrics: the origin (pp1)
+                // and the advance (pp2). The outline is moved so the origin stays
+                // at the pen.
+                let mut varied_advance = advance as f32;
+                if let Some(pp) = phantom {
+                    for c in &mut contours {
+                        for (v, _) in c.iter_mut() {
+                            v.x -= pp[0].x;
+                        }
+                    }
+                    varied_advance += pp[1].x - pp[0].x;
+                }
+                if let Some(h) = &hvar {
+                    varied_advance = advance as f32 + h[g_idx];
+                }
+                glyphs.push(TtfGlyph {
+                    shape: shape_from_contours(&contours),
+                    advance_width: varied_advance.round().clamp(0.0, u16::MAX as f32) as u16,
+                });
             }
-            if let Some(h) = &hvar {
-                varied_advance = advance as f32 + h[g_idx];
-            }
-            glyphs.push(TtfGlyph {
-                shape: shape_from_contours(&contours),
-                advance_width: varied_advance.round().clamp(0.0, u16::MAX as f32) as u16,
-            });
-        }
         }
         let kerning = tables
             .get(b"kern")
@@ -514,7 +532,9 @@ impl TtfFont {
             axes,
             instances,
             location,
-            tracking: table(b"trak").and_then(|t| parse_trak(bytes, t)).unwrap_or_default(),
+            tracking: table(b"trak")
+                .and_then(|t| parse_trak(bytes, t))
+                .unwrap_or_default(),
             weight_class: table(b"OS/2")
                 .and_then(|o| bytes.get(o + 4..o + 6))
                 .map(|b| u16::from_be_bytes([b[0], b[1]]))
@@ -561,8 +581,16 @@ impl TtfFont {
     /// glyphs — what choosing a location needs before
     /// [`parse_variation`](Self::parse_variation). Empty for a static font.
     pub fn variation_info(bytes: &[u8]) -> (Vec<VariationAxis>, Vec<NamedInstance>) {
-        let rd16 = |p: usize| bytes.get(p..p + 2).map(|b| u16::from_be_bytes([b[0], b[1]]) as usize);
-        let rd32 = |p: usize| bytes.get(p..p + 4).map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]) as usize);
+        let rd16 = |p: usize| {
+            bytes
+                .get(p..p + 2)
+                .map(|b| u16::from_be_bytes([b[0], b[1]]) as usize)
+        };
+        let rd32 = |p: usize| {
+            bytes
+                .get(p..p + 4)
+                .map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]) as usize)
+        };
         let find = |tag: &[u8; 4]| -> Option<usize> {
             (0..rd16(4)?).find_map(|i| {
                 let r = 12 + 16 * i;
@@ -650,7 +678,8 @@ fn glyph_segments(p: &Path) -> Vec<(bool, Vector2, Option<Vector2>, Vector2)> {
         let (a, m, b) = (c.get_point(0.0), c.get_point(0.5), c.get_point(1.0));
         let starts = last.is_none_or(|l| (l.x - a.x).abs() > 1e-4 || (l.y - a.y).abs() > 1e-4);
         let control = Vector2::new(2.0 * m.x - 0.5 * (a.x + b.x), 2.0 * m.y - 0.5 * (a.y + b.y));
-        let straight = (m.x - 0.5 * (a.x + b.x)).abs() < 1e-3 && (m.y - 0.5 * (a.y + b.y)).abs() < 1e-3;
+        let straight =
+            (m.x - 0.5 * (a.x + b.x)).abs() < 1e-3 && (m.y - 0.5 * (a.y + b.y)).abs() < 1e-3;
         out.push((starts, a, (!straight).then_some(control), b));
         last = Some(b);
     }
@@ -699,7 +728,14 @@ fn shape_path(p: &Path, scale: f64, x: f64, y: f64) -> crate::curves::shapes::Sh
 /// `trak`'s horizontal normal track (track value 0) as `(size, value)`.
 fn parse_trak(b: &[u8], off: usize) -> Option<Vec<(f32, f32)>> {
     let rd16 = |p: usize| Some(u16::from_be_bytes([*b.get(p)?, *b.get(p + 1)?]));
-    let rd32 = |p: usize| Some(u32::from_be_bytes([*b.get(p)?, *b.get(p + 1)?, *b.get(p + 2)?, *b.get(p + 3)?]));
+    let rd32 = |p: usize| {
+        Some(u32::from_be_bytes([
+            *b.get(p)?,
+            *b.get(p + 1)?,
+            *b.get(p + 2)?,
+            *b.get(p + 3)?,
+        ]))
+    };
     let horiz = rd16(off + 6)? as usize;
     if horiz == 0 {
         return None;
@@ -761,7 +797,9 @@ fn glyph_contours(
     let n_contours = i16::from_be_bytes([bytes[off], bytes[off + 1]]);
     if n_contours >= 0 {
         let mut contours = parse_simple_contours(bytes, off)?;
-        let Some(gvar) = gvar else { return Some((contours, None)) };
+        let Some(gvar) = gvar else {
+            return Some((contours, None));
+        };
         let mut points: Vec<Vector2> = contours.iter().flatten().map(|&(v, _)| v).collect();
         let mut ends = Vec::with_capacity(contours.len());
         let mut n = 0;
@@ -876,7 +914,10 @@ fn glyph_contours(
                 contour
                     .into_iter()
                     .map(|(v, on)| {
-                        (Vector2::new(m.0 * v.x + m.2 * v.y + o.x, m.1 * v.x + m.3 * v.y + o.y), on)
+                        (
+                            Vector2::new(m.0 * v.x + m.2 * v.y + o.x, m.1 * v.x + m.3 * v.y + o.y),
+                            on,
+                        )
                     })
                     .collect(),
             );
@@ -894,15 +935,36 @@ fn glyph_contours(
 /// also mapped at the codes they stand for, as browsers do.
 fn parse_cmap(bytes: &[u8], cmap_off: usize) -> Option<std::collections::HashMap<u32, u16>> {
     let rd16 = |p: usize| Some(u16::from_be_bytes([*bytes.get(p)?, *bytes.get(p + 1)?]));
-    let rd32 = |p: usize| Some(u32::from_be_bytes([*bytes.get(p)?, *bytes.get(p + 1)?, *bytes.get(p + 2)?, *bytes.get(p + 3)?]));
+    let rd32 = |p: usize| {
+        Some(u32::from_be_bytes([
+            *bytes.get(p)?,
+            *bytes.get(p + 1)?,
+            *bytes.get(p + 2)?,
+            *bytes.get(p + 3)?,
+        ]))
+    };
     let n = rd16(cmap_off + 2)? as usize;
     let records: Vec<(u16, u16, usize)> = (0..n)
         .filter_map(|i| {
             let rec = cmap_off + 4 + i * 8;
-            Some((rd16(rec)?, rd16(rec + 2)?, cmap_off + rd32(rec + 4)? as usize))
+            Some((
+                rd16(rec)?,
+                rd16(rec + 2)?,
+                cmap_off + rd32(rec + 4)? as usize,
+            ))
         })
         .collect();
-    const PREFERENCE: [(u16, u16); 9] = [(3, 10), (0, 6), (0, 4), (3, 1), (0, 3), (0, 2), (0, 1), (0, 0), (3, 0)];
+    const PREFERENCE: [(u16, u16); 9] = [
+        (3, 10),
+        (0, 6),
+        (0, 4),
+        (3, 1),
+        (0, 3),
+        (0, 2),
+        (0, 1),
+        (0, 0),
+        (3, 0),
+    ];
     let best = PREFERENCE.iter().find_map(|&(p, e)| {
         records
             .iter()
@@ -912,7 +974,9 @@ fn parse_cmap(bytes: &[u8], cmap_off: usize) -> Option<std::collections::HashMap
     let Some((_platform, _encoding, sub_off)) = best else {
         // Nothing Unicode: a Macintosh Roman table (format 0 or 6), as
         // HarfBuzz falls back to — Hoefler Text Ornaments has only that.
-        let (_, _, off) = records.iter().find(|r| r.0 == 1 && r.1 == 0 && matches!(rd16(r.2), Some(0) | Some(6)))?;
+        let (_, _, off) = records
+            .iter()
+            .find(|r| r.0 == 1 && r.1 == 0 && matches!(rd16(r.2), Some(0) | Some(6)))?;
         return parse_cmap_mac_roman(bytes, *off);
     };
     let mut map = match rd16(sub_off)? {
@@ -944,10 +1008,20 @@ fn parse_cmap(bytes: &[u8], cmap_off: usize) -> Option<std::collections::HashMap
 fn parse_cmap_mac_roman(bytes: &[u8], off: usize) -> Option<std::collections::HashMap<u32, u16>> {
     let rd16 = |p: usize| Some(u16::from_be_bytes([*bytes.get(p)?, *bytes.get(p + 1)?]));
     let (first, glyphs): (u16, Vec<u16>) = match rd16(off)? {
-        0 => (0, (0..256).map(|k| bytes.get(off + 6 + k).map(|&g| g as u16)).collect::<Option<_>>()?),
+        0 => (
+            0,
+            (0..256)
+                .map(|k| bytes.get(off + 6 + k).map(|&g| g as u16))
+                .collect::<Option<_>>()?,
+        ),
         _ => {
             let n = rd16(off + 8)? as usize;
-            (rd16(off + 6)?, (0..n).map(|k| rd16(off + 10 + 2 * k)).collect::<Option<_>>()?)
+            (
+                rd16(off + 6)?,
+                (0..n)
+                    .map(|k| rd16(off + 10 + 2 * k))
+                    .collect::<Option<_>>()?,
+            )
         }
     };
     let mut map = std::collections::HashMap::new();
@@ -956,7 +1030,11 @@ fn parse_cmap_mac_roman(bytes: &[u8], off: usize) -> Option<std::collections::Ha
         if g == 0 || byte > 0xFF {
             continue;
         }
-        let c = if byte < 0x80 { byte as u32 } else { MAC_ROMAN[byte - 0x80] as u32 };
+        let c = if byte < 0x80 {
+            byte as u32
+        } else {
+            MAC_ROMAN[byte - 0x80] as u32
+        };
         map.insert(c, g);
     }
     Some(map)
@@ -964,27 +1042,29 @@ fn parse_cmap_mac_roman(bytes: &[u8], off: usize) -> Option<std::collections::Ha
 
 /// Macintosh Roman's upper half in Unicode, from byte 0x80.
 const MAC_ROMAN: [u16; 128] = [
-    0x00C4, 0x00C5, 0x00C7, 0x00C9, 0x00D1, 0x00D6, 0x00DC, 0x00E1,
-    0x00E0, 0x00E2, 0x00E4, 0x00E3, 0x00E5, 0x00E7, 0x00E9, 0x00E8,
-    0x00EA, 0x00EB, 0x00ED, 0x00EC, 0x00EE, 0x00EF, 0x00F1, 0x00F3,
-    0x00F2, 0x00F4, 0x00F6, 0x00F5, 0x00FA, 0x00F9, 0x00FB, 0x00FC,
-    0x2020, 0x00B0, 0x00A2, 0x00A3, 0x00A7, 0x2022, 0x00B6, 0x00DF,
-    0x00AE, 0x00A9, 0x2122, 0x00B4, 0x00A8, 0x2260, 0x00C6, 0x00D8,
-    0x221E, 0x00B1, 0x2264, 0x2265, 0x00A5, 0x00B5, 0x2202, 0x2211,
-    0x220F, 0x03C0, 0x222B, 0x00AA, 0x00BA, 0x03A9, 0x00E6, 0x00F8,
-    0x00BF, 0x00A1, 0x00AC, 0x221A, 0x0192, 0x2248, 0x2206, 0x00AB,
-    0x00BB, 0x2026, 0x00A0, 0x00C0, 0x00C3, 0x00D5, 0x0152, 0x0153,
-    0x2013, 0x2014, 0x201C, 0x201D, 0x2018, 0x2019, 0x00F7, 0x25CA,
-    0x00FF, 0x0178, 0x2044, 0x20AC, 0x2039, 0x203A, 0xFB01, 0xFB02,
-    0x2021, 0x00B7, 0x201A, 0x201E, 0x2030, 0x00C2, 0x00CA, 0x00C1,
-    0x00CB, 0x00C8, 0x00CD, 0x00CE, 0x00CF, 0x00CC, 0x00D3, 0x00D4,
-    0xF8FF, 0x00D2, 0x00DA, 0x00DB, 0x00D9, 0x0131, 0x02C6, 0x02DC,
+    0x00C4, 0x00C5, 0x00C7, 0x00C9, 0x00D1, 0x00D6, 0x00DC, 0x00E1, 0x00E0, 0x00E2, 0x00E4, 0x00E3,
+    0x00E5, 0x00E7, 0x00E9, 0x00E8, 0x00EA, 0x00EB, 0x00ED, 0x00EC, 0x00EE, 0x00EF, 0x00F1, 0x00F3,
+    0x00F2, 0x00F4, 0x00F6, 0x00F5, 0x00FA, 0x00F9, 0x00FB, 0x00FC, 0x2020, 0x00B0, 0x00A2, 0x00A3,
+    0x00A7, 0x2022, 0x00B6, 0x00DF, 0x00AE, 0x00A9, 0x2122, 0x00B4, 0x00A8, 0x2260, 0x00C6, 0x00D8,
+    0x221E, 0x00B1, 0x2264, 0x2265, 0x00A5, 0x00B5, 0x2202, 0x2211, 0x220F, 0x03C0, 0x222B, 0x00AA,
+    0x00BA, 0x03A9, 0x00E6, 0x00F8, 0x00BF, 0x00A1, 0x00AC, 0x221A, 0x0192, 0x2248, 0x2206, 0x00AB,
+    0x00BB, 0x2026, 0x00A0, 0x00C0, 0x00C3, 0x00D5, 0x0152, 0x0153, 0x2013, 0x2014, 0x201C, 0x201D,
+    0x2018, 0x2019, 0x00F7, 0x25CA, 0x00FF, 0x0178, 0x2044, 0x20AC, 0x2039, 0x203A, 0xFB01, 0xFB02,
+    0x2021, 0x00B7, 0x201A, 0x201E, 0x2030, 0x00C2, 0x00CA, 0x00C1, 0x00CB, 0x00C8, 0x00CD, 0x00CE,
+    0x00CF, 0x00CC, 0x00D3, 0x00D4, 0xF8FF, 0x00D2, 0x00DA, 0x00DB, 0x00D9, 0x0131, 0x02C6, 0x02DC,
     0x00AF, 0x02D8, 0x02D9, 0x02DA, 0x00B8, 0x02DD, 0x02DB, 0x02C7,
 ];
 
 /// A format 12 subtable: groups of consecutive codes to consecutive glyphs.
 fn parse_cmap_12(bytes: &[u8], off: usize) -> Option<std::collections::HashMap<u32, u16>> {
-    let rd32 = |p: usize| Some(u32::from_be_bytes([*bytes.get(p)?, *bytes.get(p + 1)?, *bytes.get(p + 2)?, *bytes.get(p + 3)?]));
+    let rd32 = |p: usize| {
+        Some(u32::from_be_bytes([
+            *bytes.get(p)?,
+            *bytes.get(p + 1)?,
+            *bytes.get(p + 2)?,
+            *bytes.get(p + 3)?,
+        ]))
+    };
     let groups = rd32(off + 12)? as usize;
     let mut map = std::collections::HashMap::new();
     for g in 0..groups {
@@ -1432,19 +1512,32 @@ mod variation_tests {
             let a = &f.glyphs[gid(&f, 'A') as usize];
             // fontTools: width 1258.53, bounds (51.11, 0, 1207.43, 1365).
             assert_eq!(a.advance_width, 1259);
-            assert!(close(bounds(a), [51.11, 0.0, 1207.43, 1365.0]), "{:?}", bounds(a));
+            assert!(
+                close(bounds(a), [51.11, 0.0, 1207.43, 1365.0]),
+                "{:?}",
+                bounds(a)
+            );
             let six = &f.glyphs[gid(&f, '6') as usize];
-            assert!(close(bounds(six), [136.33, -27.52, 1100.79, 1390.61]), "{:?}", bounds(six));
+            assert!(
+                close(bounds(six), [136.33, -27.52, 1100.79, 1390.61]),
+                "{:?}",
+                bounds(six)
+            );
             // HarfBuzz: AV 1212 − 1299 = −87 (a class pair); 67 1264 − 1268
             // = −4, a glyph pair whose variation delta is found from its
             // pair set, not its subtable.
             assert!((f.kern(gid(&f, 'A'), gid(&f, 'V')) + 87.0).abs() < 0.5);
             assert!((f.kern(gid(&f, '6'), gid(&f, '7')) + 4.0).abs() < 0.5);
 
-            let bold = TtfFont::parse_variation(&bytes, &[(*b"wght", 790.0), (*b"opsz", 20.0)]).unwrap();
+            let bold =
+                TtfFont::parse_variation(&bytes, &[(*b"wght", 790.0), (*b"opsz", 20.0)]).unwrap();
             let a = &bold.glyphs[gid(&bold, 'A') as usize];
             assert_eq!(a.advance_width, 1298);
-            assert!(close(bounds(a), [9.45, 0.0, 1288.45, 1365.0]), "{:?}", bounds(a));
+            assert!(
+                close(bounds(a), [9.45, 0.0, 1288.45, 1365.0]),
+                "{:?}",
+                bounds(a)
+            );
         }
         if let Some(bytes) = system_font("SFNS.ttf") {
             // Three axes off their defaults, through `avar` and `HVAR`.
@@ -1452,7 +1545,11 @@ mod variation_tests {
             let f = TtfFont::parse_variation(&bytes, &at).unwrap();
             let g = &f.glyphs[gid(&f, 'g') as usize];
             assert_eq!(g.advance_width, 975);
-            assert!(close(bounds(g), [62.88, -366.87, 871.2, 1055.0]), "{:?}", bounds(g));
+            assert!(
+                close(bounds(g), [62.88, -366.87, 871.2, 1055.0]),
+                "{:?}",
+                bounds(g)
+            );
         }
     }
 
@@ -1460,7 +1557,9 @@ mod variation_tests {
     /// at the CSS numbers; and a static font has no axis to set.
     #[test]
     fn css_weights_go_through_the_named_instances() {
-        let Some(bytes) = system_font("SFCompact.ttf") else { return };
+        let Some(bytes) = system_font("SFCompact.ttf") else {
+            return;
+        };
         let (axes, instances) = TtfFont::variation_info(&bytes);
         let w = |css| super::super::ttf_var::wght_for_css_weight(&axes, &instances, css).unwrap();
         assert!((w(400.0) - 457.9).abs() < 0.01);
@@ -1469,14 +1568,18 @@ mod variation_tests {
         // The italic family's names carry a suffix.
         if let Some(italic) = system_font("SFCompactItalic.ttf") {
             let (axes, instances) = TtfFont::variation_info(&italic);
-            let w = |css| super::super::ttf_var::wght_for_css_weight(&axes, &instances, css).unwrap();
+            let w =
+                |css| super::super::ttf_var::wght_for_css_weight(&axes, &instances, css).unwrap();
             assert!((w(400.0) - 457.9).abs() < 0.01);
             assert!((w(700.0) - 790.0).abs() < 0.01);
         }
         // Between named weights, between their coordinates.
         assert!(w(550.0) > 556.0 && w(550.0) < 656.2);
         if let Some(arial) = system_font("Supplemental/Arial.ttf") {
-            assert!(TtfFont::parse(&arial).unwrap().wght_for_css_weight(400.0).is_none());
+            assert!(TtfFont::parse(&arial)
+                .unwrap()
+                .wght_for_css_weight(400.0)
+                .is_none());
         }
     }
 
@@ -1484,7 +1587,9 @@ mod variation_tests {
     /// ones, by the table's values in between them.
     #[test]
     fn tracking_follows_the_trak_table() {
-        let Some(bytes) = system_font("SFCompact.ttf") else { return };
+        let Some(bytes) = system_font("SFCompact.ttf") else {
+            return;
+        };
         let f = TtfFont::parse(&bytes).unwrap();
         assert_eq!(f.tracking_at(14.0), 28.0);
         assert_eq!(f.tracking_at(16.0), 0.0);
@@ -1506,7 +1611,10 @@ mod shape_tests {
     #[test]
     fn an_all_control_point_contour_runs_through_the_midpoints() {
         let corners = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)];
-        let contour: Contour = corners.iter().map(|&(x, y)| (Vector2::new(x, y), false)).collect();
+        let contour: Contour = corners
+            .iter()
+            .map(|&(x, y)| (Vector2::new(x, y), false))
+            .collect();
         let shape = shape_from_contours(&[contour]);
         let curves = &shape.outline.curve_path.curves;
         assert_eq!(curves.len(), 4);
@@ -1514,9 +1622,15 @@ mod shape_tests {
             let (a, m) = (c.get_point(0.0), c.get_point(0.5));
             // Each curve starts on a side midpoint: one coordinate 0, the
             // other ±1.
-            assert!((a.x.abs() + a.y.abs() - 1.0).abs() < 1e-6 && (a.x * a.y).abs() < 1e-6, "{a:?}");
+            assert!(
+                (a.x.abs() + a.y.abs() - 1.0).abs() < 1e-6 && (a.x * a.y).abs() < 1e-6,
+                "{a:?}"
+            );
             // And bulges halfway to its corner: |x| = |y| = 0.75.
-            assert!((m.x.abs() - 0.75).abs() < 1e-6 && (m.y.abs() - 0.75).abs() < 1e-6, "{m:?}");
+            assert!(
+                (m.x.abs() - 0.75).abs() < 1e-6 && (m.y.abs() - 0.75).abs() < 1e-6,
+                "{m:?}"
+            );
         }
     }
 
@@ -1540,7 +1654,9 @@ mod shape_tests {
     /// Compact.
     #[test]
     fn text_shapes_separate_outlines_from_holes() {
-        let Ok(bytes) = std::fs::read("/System/Library/Fonts/SFCompact.ttf") else { return };
+        let Ok(bytes) = std::fs::read("/System/Library/Fonts/SFCompact.ttf") else {
+            return;
+        };
         let f = TtfFont::parse_variation(&bytes, &[(*b"wght", 457.9)]).unwrap();
         let upem = f.units_per_em as f64;
         for (c, shapes, holes, fonttools) in [
@@ -1552,7 +1668,11 @@ mod shape_tests {
         ] {
             let s = f.generate_shapes(&c.to_string(), upem);
             assert_eq!(s.len(), shapes, "{c}: shapes");
-            assert_eq!(s.iter().map(|s| s.holes.len()).sum::<usize>(), holes, "{c}: holes");
+            assert_eq!(
+                s.iter().map(|s| s.holes.len()).sum::<usize>(),
+                holes,
+                "{c}: holes"
+            );
             let ink: f64 = s
                 .iter()
                 .map(|s| {
@@ -1560,31 +1680,54 @@ mod shape_tests {
                     area(&p.shape).abs() - p.holes.iter().map(|h| area(h).abs()).sum::<f64>()
                 })
                 .sum();
-            assert!((ink / fonttools - 1.0).abs() < 1e-4, "{c}: {ink} against {fonttools}");
+            assert!(
+                (ink / fonttools - 1.0).abs() < 1e-4,
+                "{c}: {ink} against {fonttools}"
+            );
         }
     }
 
     /// Kerned, in ems times the size, and a newline drops a line.
     #[test]
     fn text_shapes_are_laid_out_like_the_caption_face() {
-        let Ok(bytes) = std::fs::read("/System/Library/Fonts/SFCompact.ttf") else { return };
+        let Ok(bytes) = std::fs::read("/System/Library/Fonts/SFCompact.ttf") else {
+            return;
+        };
         let f = TtfFont::parse_variation(&bytes, &[(*b"wght", 457.9)]).unwrap();
         let left = |text: &str| -> Vec<f64> {
             f.create_paths(text, 1.0)
                 .iter()
-                .map(|p| p.to_shapes(false)[0].extract_points(4).shape.iter().map(|v| v.x).fold(f64::MAX, f64::min))
+                .map(|p| {
+                    p.to_shapes(false)[0]
+                        .extract_points(4)
+                        .shape
+                        .iter()
+                        .map(|v| v.x)
+                        .fold(f64::MAX, f64::min)
+                })
                 .collect()
         };
         let gid = |c: char| f.cmap[&(c as u32)];
         let upem = f.units_per_em as f64;
         let av = left("AV");
         let v_alone = left("V")[0];
-        let expected =
-            (f.glyphs[gid('A') as usize].advance_width as f64 + f.kern(gid('A'), gid('V')) as f64) / upem + v_alone;
-        assert!((av[1] - expected).abs() < 1e-6, "{} against {expected}", av[1]);
+        let expected = (f.glyphs[gid('A') as usize].advance_width as f64
+            + f.kern(gid('A'), gid('V')) as f64)
+            / upem
+            + v_alone;
+        assert!(
+            (av[1] - expected).abs() < 1e-6,
+            "{} against {expected}",
+            av[1]
+        );
         let two = f.create_paths("A\nA", 1.0);
         let top = |p: &crate::curves::shapes::ShapePath| {
-            p.to_shapes(false)[0].extract_points(4).shape.iter().map(|v| v.y).fold(f64::MIN, f64::max)
+            p.to_shapes(false)[0]
+                .extract_points(4)
+                .shape
+                .iter()
+                .map(|v| v.y)
+                .fold(f64::MIN, f64::max)
         };
         let drop = top(&two[0]) - top(&two[1]);
         let line = (f.ascender as f64 - f.descender as f64 + f.line_gap as f64) / upem;
@@ -1612,7 +1755,9 @@ mod cmap_tests {
     #[test]
     fn unicode_platform_only_fonts_have_their_characters() {
         for name in ["Geneva.ttf", "Monaco.ttf"] {
-            let Ok(bytes) = std::fs::read(format!("/System/Library/Fonts/{name}")) else { continue };
+            let Ok(bytes) = std::fs::read(format!("/System/Library/Fonts/{name}")) else {
+                continue;
+            };
             let font = TtfFont::parse(&bytes).unwrap();
             assert_eq!(font.cmap.get(&('A' as u32)), Some(&36), "{name}");
         }

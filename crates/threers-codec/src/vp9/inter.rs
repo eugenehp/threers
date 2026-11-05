@@ -75,9 +75,7 @@ fn avg_bytes(a: &[u8], b: &[u8], out: &mut [u8]) {
         out[i] = ((u16::from(a[i]) + u16::from(b[i]) + 1) >> 1) as u8;
     }
 }
-use crate::vp9::tokens::{
-    write_coefs, write_coefs_16x16, write_coefs_32x32, write_coefs_8x8,
-};
+use crate::vp9::tokens::{write_coefs, write_coefs_16x16, write_coefs_32x32, write_coefs_8x8};
 use crate::vp9::transform::{
     fdct16x16, fdct32x32, fdct8x8, fht4x4, idct16x16_add, idct32x32_add, idct8x8_add, iht4x4_add,
     TxType,
@@ -486,7 +484,10 @@ fn encode_inter_residual_mv(
     assert_eq!(src.width, last.width);
     assert_eq!(src.height, last.height);
     assert!(
-        src.width >= 8 && src.height >= 8 && src.width.is_multiple_of(8) && src.height.is_multiple_of(8),
+        src.width >= 8
+            && src.height >= 8
+            && src.width.is_multiple_of(8)
+            && src.height.is_multiple_of(8),
         "VP9 inter residual needs dims that are multiples of 8 (got {}×{})",
         src.width,
         src.height
@@ -2514,10 +2515,9 @@ impl<'a> ResidualInterEnc<'a> {
                 if add(&mut list, &mut count, n.mv) {
                     return (list[0], list[1]);
                 }
-            } else if n.is_inter && n.second_ref == ref_frame
-                && add(&mut list, &mut count, n.mv1) {
-                    return (list[0], list[1]);
-                }
+            } else if n.is_inter && n.second_ref == ref_frame && add(&mut list, &mut count, n.mv1) {
+                return (list[0], list[1]);
+            }
         }
         // `IF_DIFF_REF_FRAME_ADD_MV` — negate when sign biases differ.
         if different_ref_found && count < 2 {
@@ -2536,17 +2536,21 @@ impl<'a> ResidualInterEnc<'a> {
                         &mut list,
                         &mut count,
                         scale_mv_for_ref(n.mv, n.ref_frame, ref_frame),
-                    ) {
-                        return (list[0], list[1]);
-                    }
-                if n.second_ref > INTRA_FRAME && n.second_ref != ref_frame && n.mv1 != n.mv
+                    )
+                {
+                    return (list[0], list[1]);
+                }
+                if n.second_ref > INTRA_FRAME
+                    && n.second_ref != ref_frame
+                    && n.mv1 != n.mv
                     && add(
                         &mut list,
                         &mut count,
                         scale_mv_for_ref(n.mv1, n.second_ref, ref_frame),
-                    ) {
-                        return (list[0], list[1]);
-                    }
+                    )
+                {
+                    return (list[0], list[1]);
+                }
             }
         }
         (list[0], list[1])

@@ -80,10 +80,16 @@ impl Form {
 pub fn forms(text: &[char]) -> Vec<Form> {
     let kinds: Vec<Joining> = text.iter().copied().map(joining).collect();
     let prev = |i: usize| -> Option<Joining> {
-        (0..i).rev().map(|j| kinds[j]).find(|k| *k != Joining::Transparent)
+        (0..i)
+            .rev()
+            .map(|j| kinds[j])
+            .find(|k| *k != Joining::Transparent)
     };
     let next = |i: usize| -> Option<Joining> {
-        kinds[i + 1..].iter().copied().find(|k| *k != Joining::Transparent)
+        kinds[i + 1..]
+            .iter()
+            .copied()
+            .find(|k| *k != Joining::Transparent)
     };
     (0..text.len())
         .map(|i| {
@@ -129,7 +135,7 @@ pub fn forms(text: &[char]) -> Vec<Form> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     fn forms_of(s: &str) -> Vec<Form> {
         forms(&s.chars().collect::<Vec<char>>())
     }
@@ -183,7 +189,13 @@ mod tests {
     fn a_space_breaks_the_chain() {
         assert_eq!(
             forms_of("\u{628}\u{628} \u{628}\u{628}"),
-            vec![Form::Initial, Form::Final, Form::Isolated, Form::Initial, Form::Final]
+            vec![
+                Form::Initial,
+                Form::Final,
+                Form::Isolated,
+                Form::Initial,
+                Form::Final
+            ]
         );
     }
 

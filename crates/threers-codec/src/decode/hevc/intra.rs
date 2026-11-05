@@ -32,8 +32,17 @@ pub fn substitute(arr: &mut [i32], avail: &[bool], bd: u32) {
 }
 
 /// Smooth the references (§8.4.4.2.3) when the mode and size call for it.
-pub fn filter(arr: &mut [i32], n: usize, mode: u32, luma: bool, strong_enabled: bool, bd: u32) {
-    if !luma || mode == 1 || n == 4 {
+/// `component` says whether this component is filtered at all (luma, and
+/// 4:4:4 chroma); `strong_enabled` is for luma only.
+pub fn filter(
+    arr: &mut [i32],
+    n: usize,
+    mode: u32,
+    component: bool,
+    strong_enabled: bool,
+    bd: u32,
+) {
+    if !component || mode == 1 || n == 4 {
         return;
     }
     let min_dist = (mode as i32 - 26).abs().min((mode as i32 - 10).abs());
@@ -150,7 +159,8 @@ pub fn predict(out: &mut [i32], arr: &[i32], n: usize, mode: u32, edge_filters: 
             if edge_filters && n < 32 {
                 if mode == 26 {
                     for y in 0..ni {
-                        out[(y * ni) as usize] = (top(0) + ((left(y) - left(-1)) >> 1)).clamp(0, max);
+                        out[(y * ni) as usize] =
+                            (top(0) + ((left(y) - left(-1)) >> 1)).clamp(0, max);
                     }
                 } else if mode == 10 {
                     for x in 0..ni {

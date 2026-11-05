@@ -56,18 +56,22 @@ fn render_both(w: u32, h: u32) -> Option<(Vec<u8>, Vec<u8>)> {
         a.rgb_readback_supported(),
         "an 8-bit colour target must be packable"
     );
-    // Pipelined readbacks hand back the PREVIOUS frame, so render twice and
-    // take the one that comes out; `finish_readback` would do as well.
+    // Pipelined readbacks hand back an earlier frame, how much earlier
+    // depending on the backend and `READAHEAD`, so queue this one and drain the
+    // tail. Getting nothing is a failure: `None` from here would read as a
+    // machine with no GPU.
     a.render(&mut scene, &cam);
-    let _ = a.read_rgba_resolved_pipelined();
-    a.render(&mut scene, &cam);
-    let rgba = a.read_rgba_resolved_pipelined()?;
+    let rgba = a
+        .read_rgba_resolved_pipelined()
+        .or_else(|| a.finish_readback())
+        .expect("the RGBA readback produced no frame");
 
     let mut b = HeadlessRenderer::builder().size(w, h).build().ok()?;
     b.render(&mut scene, &cam);
-    let _ = b.read_rgb_resolved_pipelined();
-    b.render(&mut scene, &cam);
-    let rgb = b.read_rgb_resolved_pipelined()?;
+    let rgb = b
+        .read_rgb_resolved_pipelined()
+        .or_else(|| b.drain_rgb_pixels())
+        .expect("the RGB readback produced no frame");
 
     Some((rgba, rgb))
 }

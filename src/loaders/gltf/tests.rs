@@ -14,8 +14,14 @@ const CHECKER_PNG: &[u8] = include_bytes!("../testdata/gltf/checker.png");
 /// Parse with the three.js-semantics parser, images decoded here.
 fn parse(bytes: &[u8]) -> (GltfParser, ObjectArena) {
     let doc = Document::from_bytes(bytes).expect("container");
-    let mut parser = GltfParser::new(doc, GltfOptions { refuse_unknown_required: false, ..Default::default() })
-        .expect("parser");
+    let mut parser = GltfParser::new(
+        doc,
+        GltfOptions {
+            refuse_unknown_required: false,
+            ..Default::default()
+        },
+    )
+    .expect("parser");
     supply_images(&mut parser, &GltfImages::new()).expect("images");
     let mut arena = ObjectArena::new();
     parser.parse(&mut arena).expect("parse");
@@ -32,7 +38,11 @@ fn dump(p: &GltfParser, arena: &ObjectArena, o: usize, depth: usize, out: &mut S
     };
     out.push_str(&format!("{}{} \"{}\"", "  ".repeat(depth), ty, obj.name));
     if let Some(m) = obj.material {
-        out.push_str(&format!(" mat={}:{}", p.materials[m].ty.name(), p.materials[m].name));
+        out.push_str(&format!(
+            " mat={}:{}",
+            p.materials[m].ty.name(),
+            p.materials[m].name
+        ));
     }
     if let Some(inf) = &obj.morph_influences {
         let v: Vec<String> = inf.iter().map(|x| format!("{x}")).collect();
@@ -45,7 +55,10 @@ fn dump(p: &GltfParser, arena: &ObjectArena, o: usize, depth: usize, out: &mut S
 }
 
 fn find(p: &GltfParser, name: &str) -> usize {
-    p.objects.iter().position(|o| o.name == name).unwrap_or_else(|| panic!("no object {name}"))
+    p.objects
+        .iter()
+        .position(|o| o.name == name)
+        .unwrap_or_else(|| panic!("no object {name}"))
 }
 
 // Written by three.js r165's GLTFLoader for `testdata/gltf/features.gltf`
@@ -109,7 +122,12 @@ fn the_feature_file_has_three_js_structure_and_names() {
         let tracks: Vec<Vec<String>> = p
             .clips
             .iter()
-            .map(|c| c.tracks.iter().map(|t| format!("{}.{}", p.objects[t.target].name, t.property)).collect())
+            .map(|c| {
+                c.tracks
+                    .iter()
+                    .map(|t| format!("{}.{}", p.objects[t.target].name, t.property))
+                    .collect()
+            })
             .collect();
         assert_eq!(
             tracks,
@@ -121,12 +139,19 @@ fn the_feature_file_has_three_js_structure_and_names() {
                     "Morph.morphTargetInfluences",
                     "Animated_Only.position"
                 ],
-                vec!["MultiMorph.morphTargetInfluences", "MultiMorph_1.morphTargetInfluences"],
+                vec![
+                    "MultiMorph.morphTargetInfluences",
+                    "MultiMorph_1.morphTargetInfluences"
+                ],
             ]
         );
         assert_eq!(p.clips[0].name, "Move");
         assert_eq!(p.clips[1].name, "animation_1");
-        let cams: Vec<String> = p.cameras.iter().map(|c| p.objects[c.unwrap()].name.clone()).collect();
+        let cams: Vec<String> = p
+            .cameras
+            .iter()
+            .map(|c| p.objects[c.unwrap()].name.clone())
+            .collect();
         assert_eq!(cams, ["Lens", "Cam_Ortho", "Unused"]);
     }
 }
@@ -143,17 +168,33 @@ fn every_node_is_the_kind_of_rust_node_it_says() {
             (ObjectType::InstancedMesh, ObjectKind::InstancedMesh(im)) => im.transforms.len() == 3,
             (ObjectType::Points, ObjectKind::Points(_)) => true,
             (ObjectType::LineSegments, ObjectKind::LineSegments(l)) => l.strip.is_none(),
-            (ObjectType::Line, ObjectKind::LineSegments(l)) => l.strip.as_ref().is_some_and(|s| !s.closed),
-            (ObjectType::LineLoop, ObjectKind::LineSegments(l)) => l.strip.as_ref().is_some_and(|s| s.closed),
-            (ObjectType::DirectionalLight | ObjectType::PointLight | ObjectType::SpotLight, ObjectKind::Light(_)) => true,
+            (ObjectType::Line, ObjectKind::LineSegments(l)) => {
+                l.strip.as_ref().is_some_and(|s| !s.closed)
+            }
+            (ObjectType::LineLoop, ObjectKind::LineSegments(l)) => {
+                l.strip.as_ref().is_some_and(|s| s.closed)
+            }
+            (
+                ObjectType::DirectionalLight | ObjectType::PointLight | ObjectType::SpotLight,
+                ObjectKind::Light(_),
+            ) => true,
             (ObjectType::Group, ObjectKind::Group) => node.is_group,
             (
-                ObjectType::Object3D | ObjectType::Bone | ObjectType::PerspectiveCamera | ObjectType::OrthographicCamera,
+                ObjectType::Object3D
+                | ObjectType::Bone
+                | ObjectType::PerspectiveCamera
+                | ObjectType::OrthographicCamera,
                 ObjectKind::Group,
             ) => !node.is_group,
             _ => false,
         };
-        assert!(ok, "{:?} {:?} became {:?}", o.ty, o.name, std::mem::discriminant(&node.kind));
+        assert!(
+            ok,
+            "{:?} {:?} became {:?}",
+            o.ty,
+            o.name,
+            std::mem::discriminant(&node.kind)
+        );
     }
 }
 
@@ -167,7 +208,11 @@ fn transforms_follow_trs_and_matrix() {
     // `matrix`: a rotation of -90° about X (y to -z) and a translation.
     let child = arena.get(p.objects[find(&p, "Child")].id).unwrap();
     assert_eq!(child.position, Vector3::new(5.0, 6.0, 7.0));
-    assert!((child.quaternion.x + std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-6, "{:?}", child.quaternion);
+    assert!(
+        (child.quaternion.x + std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-6,
+        "{:?}",
+        child.quaternion
+    );
     assert!((child.scale.x - 1.0).abs() < 1e-6);
 }
 
@@ -180,7 +225,10 @@ fn attributes_are_read_as_three_reads_them() {
     let q = geo("Quantized");
     assert_eq!(q.attribute_order, ["position", "normal", "uv", "color"]);
     let pos = &q.get().get_attribute("position").unwrap().array;
-    assert_eq!(pos, &[0.0, 0.0, 0.0, 100.0, 0.0, 0.0, 50.0, 0.0, 100.0, 0.0, 0.0, 0.0]);
+    assert_eq!(
+        pos,
+        &[0.0, 0.0, 0.0, 100.0, 0.0, 0.0, 50.0, 0.0, 100.0, 0.0, 0.0, 0.0]
+    );
     let n = &q.get().get_attribute("normal").unwrap().array;
     assert_eq!(n[2], 1.0);
     assert_eq!(n[8], -1.0);
@@ -193,14 +241,26 @@ fn attributes_are_read_as_three_reads_them() {
     // Interleaved views read by byteStride.
     let multi = find(&p, "Multi_1");
     let g = p.geometries[p.objects[multi].geometry.unwrap()].get();
-    assert_eq!(g.get_attribute("position").unwrap().array, vec![0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 2.0]);
-    assert_eq!(g.get_attribute("normal").unwrap().array, vec![0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0]);
+    assert_eq!(
+        g.get_attribute("position").unwrap().array,
+        vec![0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 2.0]
+    );
+    assert_eq!(
+        g.get_attribute("normal").unwrap().array,
+        vec![0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0]
+    );
     // A sparse accessor over a buffer view: one value substituted in a copy.
     let sp = geo("mesh_4");
-    assert_eq!(sp.get().get_attribute("position").unwrap().array[3..6], [0.5, 0.5, 0.5]);
+    assert_eq!(
+        sp.get().get_attribute("position").unwrap().array[3..6],
+        [0.5, 0.5, 0.5]
+    );
     // Bounds from the accessor's min/max.
     let bb = geo("Child").get().bounding_box.unwrap();
-    assert_eq!((bb.min, bb.max), (Vector3::ZERO, Vector3::new(1.0, 1.0, 0.0)));
+    assert_eq!(
+        (bb.min, bb.max),
+        (Vector3::ZERO, Vector3::new(1.0, 1.0, 0.0))
+    );
 }
 
 #[test]
@@ -212,24 +272,58 @@ fn morph_targets_skins_and_instances() {
     assert_eq!(geo.morph_order, ["position", "normal"]);
     let pos = &geo.get().morph_attributes["position"];
     // The sparse target, no buffer view: one vertex moved.
-    assert_eq!(pos[1].array, vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.25, 0.5, 0.0, 0.0, 0.0, 0.0]);
+    assert_eq!(
+        pos[1].array,
+        vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.25, 0.5, 0.0, 0.0, 0.0, 0.0]
+    );
     // A target with NORMAL only gets the base positions (three.js r165).
-    assert_eq!(pos[2].array, geo.get().get_attribute("position").unwrap().array);
-    assert_eq!(m.morph_dictionary, [("bulge".into(), 0), ("sparse".into(), 1), ("tilt".into(), 2)]);
+    assert_eq!(
+        pos[2].array,
+        geo.get().get_attribute("position").unwrap().array
+    );
+    assert_eq!(
+        m.morph_dictionary,
+        [
+            ("bulge".into(), 0),
+            ("sparse".into(), 1),
+            ("tilt".into(), 2)
+        ]
+    );
 
     let s = &p.objects[find(&p, "Skinned")];
     let sk = &p.skeletons[s.skeleton.unwrap()];
-    assert_eq!(sk.bones.iter().map(|b| p.objects[*b].name.as_str()).collect::<Vec<_>>(), ["Bone_Root", "Bone_Tip"]);
+    assert_eq!(
+        sk.bones
+            .iter()
+            .map(|b| p.objects[*b].name.as_str())
+            .collect::<Vec<_>>(),
+        ["Bone_Root", "Bone_Tip"]
+    );
     assert_eq!(sk.inverses[1][12..15], [-0.5, -1.0, 0.0]);
-    let w = &p.geometries[s.geometry.unwrap()].get().get_attribute("skinWeight").unwrap().array;
+    let w = &p.geometries[s.geometry.unwrap()]
+        .get()
+        .get_attribute("skinWeight")
+        .unwrap()
+        .array;
     // normalizeSkinWeights, written back into the UNSIGNED_BYTE storage the
     // way three.js r165 does it: [100, 100] halves to 127.5 and rounds down
     // (the double-precision product is 127.49999…), as three.js reports.
     let bytes: Vec<f32> = w.iter().map(|v| (v * 255.0).round()).collect();
-    assert_eq!(bytes, [200.0, 55.0, 0.0, 0.0, 127.0, 127.0, 0.0, 0.0, 255.0, 0.0, 0.0, 0.0, 255.0, 0.0, 0.0, 0.0]);
-    let ObjectKind::SkinnedMesh(sm) = &arena.get(s.id).unwrap().kind else { panic!() };
+    assert_eq!(
+        bytes,
+        [
+            200.0, 55.0, 0.0, 0.0, 127.0, 127.0, 0.0, 0.0, 255.0, 0.0, 0.0, 0.0, 255.0, 0.0, 0.0,
+            0.0
+        ]
+    );
+    let ObjectKind::SkinnedMesh(sm) = &arena.get(s.id).unwrap().kind else {
+        panic!()
+    };
     assert_eq!(sm.skeleton.bones.len(), 2);
-    assert!(sm.geometry.get_attribute("joint").is_some() && sm.geometry.get_attribute("weight").is_some());
+    assert!(
+        sm.geometry.get_attribute("joint").is_some()
+            && sm.geometry.get_attribute("weight").is_some()
+    );
 
     let inst = &p.objects[find(&p, "Instanced")];
     let i = inst.instances.as_ref().unwrap();
@@ -237,13 +331,20 @@ fn morph_targets_skins_and_instances() {
     assert_eq!(i.matrices[16 + 12..16 + 15], [2.0, 0.0, 0.0]);
     assert_eq!(i.colors.as_ref().unwrap().0[..3], [1.0, 0.0, 0.0]);
     // Custom instance attributes go on the geometry under their own name.
-    assert!(p.geometries[inst.geometry.unwrap()].attribute_order.contains(&"_ID".to_string()));
+    assert!(p.geometries[inst.geometry.unwrap()]
+        .attribute_order
+        .contains(&"_ID".to_string()));
 }
 
 #[test]
 fn materials_carry_three_js_parameters() {
     let (p, _) = parse(FEATURES_GLTF.as_bytes());
-    let mat = |name: &str| p.materials.iter().find(|m| m.name == name && m.params.contains_key("color")).unwrap();
+    let mat = |name: &str| {
+        p.materials
+            .iter()
+            .find(|m| m.name == name && m.params.contains_key("color"))
+            .unwrap()
+    };
     let textured = mat("Textured");
     assert_eq!(textured.params["color"], Param::Color([1.0, 0.5, 0.25]));
     assert_eq!(textured.num("opacity"), Some(0.75));
@@ -251,7 +352,10 @@ fn materials_carry_three_js_parameters() {
     assert_eq!(textured.num("side"), Some(2.0));
     assert_eq!(textured.num("aoMapIntensity"), Some(0.6));
     let map = &p.textures[textured.texture("map").unwrap()];
-    assert_eq!((map.offset, map.repeat, map.rotation), ([0.5, 0.25], [2.0, 3.0], 0.3));
+    assert_eq!(
+        (map.offset, map.repeat, map.rotation),
+        ([0.5, 0.25], [2.0, 3.0], 0.3)
+    );
     assert!(map.srgb);
     let ao = &p.textures[textured.texture("aoMap").unwrap()];
     assert_eq!(ao.channel, 1);
@@ -259,22 +363,36 @@ fn materials_carry_three_js_parameters() {
     let glass = mat("Glass");
     assert_eq!(glass.ty, MaterialType::MeshPhysicalMaterial);
     assert_eq!(glass.num("attenuationDistance"), Some(2.0));
-    assert_eq!(glass.params["iridescenceThicknessRange"], Param::Range([100.0, 500.0]));
-    assert_eq!(mat("Brushed").num("attenuationDistance"), Some(f64::INFINITY));
+    assert_eq!(
+        glass.params["iridescenceThicknessRange"],
+        Param::Range([100.0, 500.0])
+    );
+    assert_eq!(
+        mat("Brushed").num("attenuationDistance"),
+        Some(f64::INFINITY)
+    );
     // Unlit: a basic material; no normal map even though the file has one.
     let unlit = mat("Unlit");
     assert_eq!(unlit.ty, MaterialType::MeshBasicMaterial);
     assert!(unlit.texture("normalMap").is_none());
     // The renderer's material is built from the same parameters.
-    let Some(Material::Physical(ph)) = mat("Clearcoat & co").rust.as_deref() else { panic!() };
-    assert_eq!((ph.clearcoat, ph.ior, ph.emissive_intensity), (0.8, 1.8, 4.0));
+    let Some(Material::Physical(ph)) = mat("Clearcoat & co").rust.as_deref() else {
+        panic!()
+    };
+    assert_eq!(
+        (ph.clearcoat, ph.ior, ph.emissive_intensity),
+        (0.8, 1.8, 4.0)
+    );
     assert!(!ph.map.as_ref().unwrap().flip_y);
 }
 
 #[test]
 fn external_resources_are_supplied_by_the_caller() {
     let doc = Document::from_bytes(EXTERNAL_GLTF.as_bytes()).unwrap();
-    assert_eq!(doc.external_buffers(), vec![(0, "external.bin".to_string())]);
+    assert_eq!(
+        doc.external_buffers(),
+        vec![(0, "external.bin".to_string())]
+    );
     let mut doc = doc;
     doc.set_buffer(0, EXTERNAL_BIN.to_vec());
     let mut parser = GltfParser::new(doc, GltfOptions::default()).unwrap();
@@ -302,7 +420,9 @@ fn mesh(bytes: &[u8]) -> (Vec<f32>, Option<Vec<f32>>, Option<Vec<u32>>) {
         .iter()
         .find(|(_, o)| matches!(o.kind, ObjectKind::Mesh(_)))
         .expect("a mesh");
-    let ObjectKind::Mesh(m) = &object.kind else { unreachable!() };
+    let ObjectKind::Mesh(m) = &object.kind else {
+        unreachable!()
+    };
     (
         m.geometry.get_attribute("position").unwrap().array.clone(),
         m.geometry.get_attribute("normal").map(|a| a.array.clone()),
@@ -325,7 +445,11 @@ fn a_meshopt_file_reads_as_the_same_mesh() {
     let (plain, _, plain_index) = mesh(PLAIN);
     let (ours, normals, index) = mesh(MESHOPT);
     assert_eq!(ours.len(), plain.len(), "same vertex count");
-    assert_eq!(index.as_ref().map(Vec::len), plain_index.as_ref().map(Vec::len), "same index count");
+    assert_eq!(
+        index.as_ref().map(Vec::len),
+        plain_index.as_ref().map(Vec::len),
+        "same index count"
+    );
     assert!(normals.is_some(), "normals survived the filter");
     let tolerance = 2.0 / 32767.0 * 4.0;
     for v in ours.chunks_exact(3) {
@@ -333,7 +457,10 @@ fn a_meshopt_file_reads_as_the_same_mesh() {
             .chunks_exact(3)
             .map(|p| ((p[0] - v[0]).powi(2) + (p[1] - v[1]).powi(2) + (p[2] - v[2]).powi(2)).sqrt())
             .fold(f32::MAX, f32::min);
-        assert!(nearest < tolerance, "decoded vertex {v:?} is {nearest} from anything in the original");
+        assert!(
+            nearest < tolerance,
+            "decoded vertex {v:?} is {nearest} from anything in the original"
+        );
     }
     for v in ours.chunks_exact(3) {
         let r = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
@@ -349,10 +476,16 @@ fn meshopt_indices_are_a_valid_triangle_list() {
     let vertices = positions.len() / 3;
     assert_eq!(index.len() % 3, 0, "whole triangles");
     for &i in &index {
-        assert!((i as usize) < vertices, "index {i} past {vertices} vertices");
+        assert!(
+            (i as usize) < vertices,
+            "index {i} past {vertices} vertices"
+        );
     }
     for t in index.chunks_exact(3) {
-        assert!(t[0] != t[1] && t[1] != t[2] && t[0] != t[2], "degenerate {t:?}");
+        assert!(
+            t[0] != t[1] && t[1] != t[2] && t[0] != t[2],
+            "degenerate {t:?}"
+        );
     }
 }
 
@@ -384,8 +517,18 @@ fn an_unknown_required_extension_is_a_warning_in_three_mode() {
         "extensionsRequired":["EXT_not_a_real_extension"],
         "scene":0,"scenes":[{"nodes":[]}],"nodes":[]}"#;
     let doc = Document::from_bytes(json.as_bytes()).unwrap();
-    let p = GltfParser::new(doc, GltfOptions { refuse_unknown_required: false, ..Default::default() }).unwrap();
-    assert_eq!(p.warnings, ["THREE.GLTFLoader: Unknown extension \"EXT_not_a_real_extension\"."]);
+    let p = GltfParser::new(
+        doc,
+        GltfOptions {
+            refuse_unknown_required: false,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        p.warnings,
+        ["THREE.GLTFLoader: Unknown extension \"EXT_not_a_real_extension\"."]
+    );
 }
 
 /// An extension merely *used* does not stop the load.
@@ -438,7 +581,11 @@ fn a_draco_primitive_decodes_to_the_same_mesh_as_its_plain_twin() {
         out
     };
     let plain_unique = dedup(&pp);
-    assert_eq!(plain_unique.len(), 362, "distinct positions in the plain file");
+    assert_eq!(
+        plain_unique.len(),
+        362,
+        "distinct positions in the plain file"
+    );
     assert_eq!(dedup(&dp).len(), 362, "distinct decoded positions");
     let nearest = |p: &[f32]| -> (usize, f32) {
         let mut best = (0usize, f32::MAX);
@@ -457,14 +604,21 @@ fn a_draco_primitive_decodes_to_the_same_mesh_as_its_plain_twin() {
         worst = worst.max(d);
         canonical.push(i);
     }
-    assert!(worst < 2e-3, "a decoded position is {worst} from the nearest in the plain file");
+    assert!(
+        worst < 2e-3,
+        "a decoded position is {worst} from the nearest in the plain file"
+    );
     let hit: std::collections::BTreeSet<usize> = canonical.iter().copied().collect();
     assert_eq!(hit.len(), 362, "the decode does not cover every position");
     let plain_canonical: Vec<usize> = pp.chunks(3).map(|p| nearest(p).0).collect();
     let faces = |idx: &[u32], canon: &[usize]| -> std::collections::BTreeSet<[usize; 3]> {
         idx.chunks(3)
             .map(|t| {
-                let mut k = [canon[t[0] as usize], canon[t[1] as usize], canon[t[2] as usize]];
+                let mut k = [
+                    canon[t[0] as usize],
+                    canon[t[1] as usize],
+                    canon[t[2] as usize],
+                ];
                 k.sort();
                 k
             })
@@ -487,7 +641,10 @@ fn draco_attributes_are_matched_by_id_not_order() {
         let dot = p[0] * n[0] + p[1] * n[1] + p[2] * n[2];
         worst = worst.max((dot - 1.0).abs());
     }
-    assert!(worst < 0.05, "normals disagree with positions by {worst} — attributes are crossed");
+    assert!(
+        worst < 0.05,
+        "normals disagree with positions by {worst} — attributes are crossed"
+    );
 }
 
 /// The uncompressed twin still reads.
@@ -502,7 +659,13 @@ fn the_plain_file_still_reads() {
 /// A truncated stream is an error, not a panic — of any of the fixtures.
 #[test]
 fn truncated_files_do_not_panic() {
-    for file in [MESHOPT, DRACO, PLAIN, FEATURES_GLB, FEATURES_GLTF.as_bytes()] {
+    for file in [
+        MESHOPT,
+        DRACO,
+        PLAIN,
+        FEATURES_GLB,
+        FEATURES_GLTF.as_bytes(),
+    ] {
         for cut in [4, 11, 16, 64, 256, 1024, 4096, 7000, 12000] {
             if cut < file.len() {
                 let _ = GltfLoader::parse_glb(&file[..cut]);
@@ -537,10 +700,16 @@ fn morph_targets_load_as_three() {
     };
     let g = &mesh.geometry;
     assert!(g.morph_targets_relative);
-    let targets: Vec<Vec<f32>> = g.morph_attributes["position"].iter().map(|a| a.array.clone()).collect();
+    let targets: Vec<Vec<f32>> = g.morph_attributes["position"]
+        .iter()
+        .map(|a| a.array.clone())
+        .collect();
     assert_eq!(
         targets,
-        vec![vec![0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0], vec![0.5, 0.0, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5, 0.0]]
+        vec![
+            vec![0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+            vec![0.5, 0.0, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5, 0.0]
+        ]
     );
     assert_eq!(mesh.morph_influences, vec![0.25, 0.5]);
     assert_eq!(mesh.morph_target_dictionary.get("up"), Some(&0));

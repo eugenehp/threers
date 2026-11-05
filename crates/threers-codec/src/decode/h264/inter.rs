@@ -8,7 +8,14 @@ use crate::decode::picture::Plane;
 
 /// A view of the `ww × wh` window at `(x0, y0)`: straight into the plane
 /// when it lies inside, otherwise an edge-clamped copy in `win`.
-fn view<'a>(p: &'a Plane, x0: isize, y0: isize, ww: usize, wh: usize, win: &'a mut Vec<u16>) -> (&'a [u16], usize, usize) {
+fn view<'a>(
+    p: &'a Plane,
+    x0: isize,
+    y0: isize,
+    ww: usize,
+    wh: usize,
+    win: &'a mut Vec<u16>,
+) -> (&'a [u16], usize, usize) {
     if x0 >= 0 && y0 >= 0 && x0 as usize + ww <= p.width && y0 as usize + wh <= p.height {
         return (&p.data, p.width, y0 as usize * p.width + x0 as usize);
     }
@@ -67,7 +74,11 @@ pub struct LumaScratch {
 
 impl Default for LumaScratch {
     fn default() -> Self {
-        LumaScratch { b1: [0; 21 * 16], hh: [0; 16 * 17], j: [0; 16 * 16] }
+        LumaScratch {
+            b1: [0; 21 * 16],
+            hh: [0; 16 * 17],
+            j: [0; 16 * 16],
+        }
     }
 }
 
@@ -75,7 +86,19 @@ impl Default for LumaScratch {
 /// position is `(x, y)` with quarter-sample fraction `(xf, yf)`. Writes
 /// `out[r * w + c]`.
 #[allow(clippy::too_many_arguments)]
-pub fn luma(p: &Plane, x: isize, y: isize, xf: usize, yf: usize, w: usize, h: usize, out: &mut [i32], bd: u32, win: &mut Vec<u16>, scratch: &mut LumaScratch) {
+pub fn luma(
+    p: &Plane,
+    x: isize,
+    y: isize,
+    xf: usize,
+    yf: usize,
+    w: usize,
+    h: usize,
+    out: &mut [i32],
+    bd: u32,
+    win: &mut Vec<u16>,
+    scratch: &mut LumaScratch,
+) {
     let (src, stride, base) = view(p, x - 2, y - 2, w + 5, h + 5, win);
     let max = (1 << bd) - 1;
     // Row `r` of the window, `r` from -2; index `c + 2` is column `c`.
@@ -98,7 +121,11 @@ pub fn luma(p: &Plane, x: isize, y: isize, xf: usize, yf: usize, w: usize, h: us
     // Unrounded horizontal halves `b1`, rows -2..h+3 (index r + 2).
     let LumaScratch { b1, hh, j } = scratch;
     if need_b || need_j {
-        let (lo, hi) = if need_j { (-2isize, h as isize + 3) } else { (0, h as isize + 1) };
+        let (lo, hi) = if need_j {
+            (-2isize, h as isize + 3)
+        } else {
+            (0, h as isize + 1)
+        };
         for r in lo..hi {
             let i = ((r + 2) as usize) * 16;
             h6(row(r), &mut b1[i..i + w]);
@@ -135,23 +162,48 @@ pub fn luma(p: &Plane, x: isize, y: isize, xf: usize, yf: usize, w: usize, h: us
         let o = &mut out[r * w..r * w + w];
         let gr = g(r);
         match (xf, yf) {
-            (1, 0) => o.iter_mut().enumerate().for_each(|(c, o)| *o = avg(gr[c] as i32, b(r, c))),
+            (1, 0) => o
+                .iter_mut()
+                .enumerate()
+                .for_each(|(c, o)| *o = avg(gr[c] as i32, b(r, c))),
             (2, 0) => o.iter_mut().enumerate().for_each(|(c, o)| *o = b(r, c)),
-            (3, 0) => o.iter_mut().enumerate().for_each(|(c, o)| *o = avg(b(r, c), gr[c + 1] as i32)),
-            (0, 1) => o.iter_mut().enumerate().for_each(|(c, o)| *o = avg(gr[c] as i32, hv(r, c))),
+            (3, 0) => o
+                .iter_mut()
+                .enumerate()
+                .for_each(|(c, o)| *o = avg(b(r, c), gr[c + 1] as i32)),
+            (0, 1) => o
+                .iter_mut()
+                .enumerate()
+                .for_each(|(c, o)| *o = avg(gr[c] as i32, hv(r, c))),
             (0, 2) => o.iter_mut().enumerate().for_each(|(c, o)| *o = hv(r, c)),
             (0, 3) => {
                 let gn = g(r + 1);
-                o.iter_mut().enumerate().for_each(|(c, o)| *o = avg(hv(r, c), gn[c] as i32))
+                o.iter_mut()
+                    .enumerate()
+                    .for_each(|(c, o)| *o = avg(hv(r, c), gn[c] as i32))
             }
             (2, 2) => o.iter_mut().enumerate().for_each(|(c, o)| *o = jv(r, c)),
-            (2, 1) => o.iter_mut().enumerate().for_each(|(c, o)| *o = avg(b(r, c), jv(r, c))),
-            (2, 3) => o.iter_mut().enumerate().for_each(|(c, o)| *o = avg(jv(r, c), b(r + 1, c))),
-            (1, 2) => o.iter_mut().enumerate().for_each(|(c, o)| *o = avg(hv(r, c), jv(r, c))),
-            (3, 2) => o.iter_mut().enumerate().for_each(|(c, o)| *o = avg(jv(r, c), hv(r, c + 1))),
+            (2, 1) => o
+                .iter_mut()
+                .enumerate()
+                .for_each(|(c, o)| *o = avg(b(r, c), jv(r, c))),
+            (2, 3) => o
+                .iter_mut()
+                .enumerate()
+                .for_each(|(c, o)| *o = avg(jv(r, c), b(r + 1, c))),
+            (1, 2) => o
+                .iter_mut()
+                .enumerate()
+                .for_each(|(c, o)| *o = avg(hv(r, c), jv(r, c))),
+            (3, 2) => o
+                .iter_mut()
+                .enumerate()
+                .for_each(|(c, o)| *o = avg(jv(r, c), hv(r, c + 1))),
             (xf, yf) => {
                 let (rb, ch) = ((yf == 3) as usize, (xf == 3) as usize);
-                o.iter_mut().enumerate().for_each(|(c, o)| *o = avg(b(r + rb, c), hv(r, c + ch)))
+                o.iter_mut()
+                    .enumerate()
+                    .for_each(|(c, o)| *o = avg(b(r + rb, c), hv(r, c + ch)))
             }
         }
     }
@@ -160,12 +212,25 @@ pub fn luma(p: &Plane, x: isize, y: isize, xf: usize, yf: usize, w: usize, h: us
 /// Predict a `w × h` chroma block at full-sample `(x, y)` with eighth-sample
 /// fraction `(xf, yf)`.
 #[allow(clippy::too_many_arguments)]
-pub fn chroma(p: &Plane, x: isize, y: isize, xf: i32, yf: i32, w: usize, h: usize, out: &mut [i32], win: &mut Vec<u16>) {
+pub fn chroma(
+    p: &Plane,
+    x: isize,
+    y: isize,
+    xf: i32,
+    yf: i32,
+    w: usize,
+    h: usize,
+    out: &mut [i32],
+    win: &mut Vec<u16>,
+) {
     if xf == 0 && yf == 0 {
         // All weight on one sample: (64·a + 32) >> 6 is `a`.
         let (src, stride, base) = view(p, x, y, w, h, win);
         for r in 0..h {
-            for (o, &v) in out[r * w..][..w].iter_mut().zip(&src[base + r * stride..][..w]) {
+            for (o, &v) in out[r * w..][..w]
+                .iter_mut()
+                .zip(&src[base + r * stride..][..w])
+            {
                 *o = v as i32;
             }
         }
@@ -181,7 +246,8 @@ pub fn chroma(p: &Plane, x: isize, y: isize, xf: i32, yf: i32, w: usize, h: usiz
         let (a, b, c, d) = (&r0[..w], &r0[1..], &r1[..w], &r1[1..]);
         let o = &mut out[r * w..][..w];
         for i in 0..w {
-            o[i] = (wa * a[i] as i32 + wb * b[i] as i32 + wc * c[i] as i32 + wd * d[i] as i32 + 32) >> 6;
+            o[i] = (wa * a[i] as i32 + wb * b[i] as i32 + wc * c[i] as i32 + wd * d[i] as i32 + 32)
+                >> 6;
         }
     }
 }

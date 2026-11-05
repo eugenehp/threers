@@ -79,12 +79,30 @@ pub struct Surface {
 impl Surface {
     pub fn new(shape: Shape, look: Look) -> Self {
         let thickness = shape.inradius().min(32.0);
-        Self { shape, look, thickness, lean: 0.0, mound: None, strands: Vec::new(), spikes: Vec::new(), drops: Vec::new() }
+        Self {
+            shape,
+            look,
+            thickness,
+            lean: 0.0,
+            mound: None,
+            strands: Vec::new(),
+            spikes: Vec::new(),
+            drops: Vec::new(),
+        }
     }
 
     /// [`new`](Self::new) with the profile depth given rather than measured.
     pub fn new_with_thickness(shape: Shape, look: Look, thickness: f32) -> Self {
-        Self { shape, look, thickness, lean: 0.0, mound: None, strands: Vec::new(), spikes: Vec::new(), drops: Vec::new() }
+        Self {
+            shape,
+            look,
+            thickness,
+            lean: 0.0,
+            mound: None,
+            strands: Vec::new(),
+            spikes: Vec::new(),
+            drops: Vec::new(),
+        }
     }
 
     /// Top-left and bottom-right of everything on the surface.
@@ -122,14 +140,23 @@ impl Surface {
     /// shades only the box round the surface and its shadow.
     pub fn material(&self, viewport: Vector2, dpr: f32) -> ShaderMaterial {
         let mut pts = vec![0.0f32; MAX_STRANDS * STRAND_POINTS * 4];
-        let strands = self.strands.iter().filter(|s| !s.is_empty()).take(MAX_STRANDS);
+        let strands = self
+            .strands
+            .iter()
+            .filter(|s| !s.is_empty())
+            .take(MAX_STRANDS);
         let mut count = 0;
         for (si, s) in strands.enumerate() {
             count += 1;
             for i in 0..STRAND_POINTS {
                 let b = s[i.min(s.len() - 1)];
                 let o = (si * STRAND_POINTS + i) * 4;
-                pts[o..o + 4].copy_from_slice(&[b.center.x, b.center.y, b.radius.max(MIN_RADIUS), 1.0]);
+                pts[o..o + 4].copy_from_slice(&[
+                    b.center.x,
+                    b.center.y,
+                    b.radius.max(MIN_RADIUS),
+                    1.0,
+                ]);
             }
         }
         let mut s1 = vec![0.0f32; MAX_SPIKES * 8 + MAX_DROPS * 4];
@@ -144,14 +171,23 @@ impl Surface {
             s1[o..o + 4].copy_from_slice(&[d.center.x, d.center.y, d.radius, 1.0]);
         }
         let (kind, shape_slot, corner, poly) = match &self.shape {
-            Shape::RoundRect { center, half, radius } => {
+            Shape::RoundRect {
+                center,
+                half,
+                radius,
+            } => {
                 let r = radius.max(0.0).min(half.x.min(half.y));
                 (0.0, [center.x, center.y, half.x, half.y], r, Vec::new())
             }
-            Shape::Circle { center, radius } => (1.0, [center.x, center.y, *radius, 0.0], 0.0, Vec::new()),
-            Shape::Polygon { points, radius } => {
-                (2.0, [0.0; 4], *radius, points.iter().flat_map(|p| [p.x, p.y]).collect::<Vec<f32>>())
+            Shape::Circle { center, radius } => {
+                (1.0, [center.x, center.y, *radius, 0.0], 0.0, Vec::new())
             }
+            Shape::Polygon { points, radius } => (
+                2.0,
+                [0.0; 4],
+                *radius,
+                points.iter().flat_map(|p| [p.x, p.y]).collect::<Vec<f32>>(),
+            ),
         };
         let look = &self.look;
         let (lo, hi) = self.bounds();
@@ -167,7 +203,12 @@ impl Surface {
             data[3][1] = m.tip_radius;
         }
         data[4] = [lo.x - pad, lo.y - pad, hi.x + pad, hi.y + pad + 10.0];
-        data[5] = [kind, corner, self.thickness.max(1.0), (poly.len() / 2) as f32];
+        data[5] = [
+            kind,
+            corner,
+            self.thickness.max(1.0),
+            (poly.len() / 2) as f32,
+        ];
         data[6] = [look.base[0], look.base[1], look.base[2], look.f0];
         data[7] = [look.tint[0], look.tint[1], look.tint[2], look.glints];
         data[8] = [look.softbox, look.window, look.fill, look.floor];
@@ -176,7 +217,11 @@ impl Surface {
             vertex: Some(VERTEX.to_string()),
             side: 2,
             tone_mapped: false,
-            render_state: RenderState { depth_test: false, depth_write: Some(false), ..RenderState::DEFAULT },
+            render_state: RenderState {
+                depth_test: false,
+                depth_write: Some(false),
+                ..RenderState::DEFAULT
+            },
             ..ShaderMaterial::new(source())
         }
         .with_transparent(true)
@@ -207,8 +252,18 @@ impl Backdrop {
 
     /// From three `0xRRGGBB` colours.
     pub fn gradient(top: u32, middle: u32, bottom: u32) -> Self {
-        let c = |v: u32| [((v >> 16) & 255) as f32 / 255.0, ((v >> 8) & 255) as f32 / 255.0, (v & 255) as f32 / 255.0];
-        Self { top: c(top), middle: c(middle), bottom: c(bottom) }
+        let c = |v: u32| {
+            [
+                ((v >> 16) & 255) as f32 / 255.0,
+                ((v >> 8) & 255) as f32 / 255.0,
+                (v & 255) as f32 / 255.0,
+            ]
+        };
+        Self {
+            top: c(top),
+            middle: c(middle),
+            bottom: c(bottom),
+        }
     }
 
     pub fn solid(rgb: u32) -> Self {
@@ -228,7 +283,11 @@ impl Backdrop {
             vertex: Some(VERTEX.to_string()),
             side: 2,
             tone_mapped: false,
-            render_state: RenderState { depth_test: false, depth_write: Some(false), ..RenderState::DEFAULT },
+            render_state: RenderState {
+                depth_test: false,
+                depth_write: Some(false),
+                ..RenderState::DEFAULT
+            },
             ..ShaderMaterial::new(source())
         }
         .with_data(data)
@@ -281,7 +340,9 @@ const VERTEX: &str = crate::wgsl!(include_str!("surface_vs.wgsl"));
 /// The whole fragment source, built once.
 fn source() -> String {
     static SOURCE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    SOURCE.get_or_init(|| format!("{}\n{}", crate::sdf::WGSL, FRAGMENT)).clone()
+    SOURCE
+        .get_or_init(|| format!("{}\n{}", crate::sdf::WGSL, FRAGMENT))
+        .clone()
 }
 
 #[cfg(test)]
@@ -291,12 +352,22 @@ mod tests {
     #[test]
     fn the_material_carries_the_shape_and_its_box() {
         let mut s = Surface::new(Shape::circle(Vector2::new(100.0, 80.0), 30.0), Look::GOLD);
-        s.strands.push(vec![Blob { center: Vector2::new(140.0, 20.0), radius: 2.0 }; 3]);
+        s.strands.push(vec![
+            Blob {
+                center: Vector2::new(140.0, 20.0),
+                radius: 2.0
+            };
+            3
+        ]);
         let m = s.material(Vector2::new(800.0, 600.0), 2.0);
         let d = m.data_slots();
         assert_eq!(d[0], [800.0, 600.0, 2.0, 1.0]);
         assert_eq!(d[5][0], 1.0, "kind: circle");
-        assert!(d[4][0] < 70.0 && d[4][1] < 0.0 && d[4][2] > 140.0 && d[4][3] > 110.0, "{:?}", d[4]);
+        assert!(
+            d[4][0] < 70.0 && d[4][1] < 0.0 && d[4][2] > 140.0 && d[4][3] > 110.0,
+            "{:?}",
+            d[4]
+        );
         assert_eq!(d[6][..3], Look::GOLD.base);
         // a short strand is padded with its last point
         assert_eq!(m.storage0[(STRAND_POINTS - 1) * 4], 140.0);
@@ -309,10 +380,13 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn the_shader_validates_against_the_preamble() {
-        use crate::renderer::{custom_preamble_lines, custom_shader_module_source, validate_custom_shader};
+        use crate::renderer::{
+            custom_preamble_lines, custom_shader_module_source, validate_custom_shader,
+        };
         for storage in [true, false] {
             let src = custom_shader_module_source(&source(), Some(VERTEX), storage, false, 1);
-            validate_custom_shader(&src, custom_preamble_lines()).unwrap_or_else(|e| panic!("storage={storage}: {e}"));
+            validate_custom_shader(&src, custom_preamble_lines())
+                .unwrap_or_else(|e| panic!("storage={storage}: {e}"));
         }
     }
 }

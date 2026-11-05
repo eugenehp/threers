@@ -12,7 +12,12 @@ fn main() {
     let a: Vec<String> = std::env::args().collect();
     let data = std::fs::read(&a[1]).expect("read");
     let packets: Vec<Vec<u8>> = if data.starts_with(b"DKIF") {
-        parse_ivf(&data).expect("ivf").4.into_iter().map(|(_, d)| d).collect()
+        parse_ivf(&data)
+            .expect("ivf")
+            .4
+            .into_iter()
+            .map(|(_, d)| d)
+            .collect()
     } else {
         let mkv = Mkv::parse(&data).expect("mkv");
         let t = mkv.track(TrackKind::Video).expect("no video track");
@@ -34,12 +39,17 @@ fn main() {
             for pl in 0..3 {
                 let (s, _, _) = f.cropped(pl);
                 if f.bpp == 8 {
-                    out.write_all(&s.iter().map(|&v| v as u8).collect::<Vec<_>>()).unwrap();
+                    out.write_all(&s.iter().map(|&v| v as u8).collect::<Vec<_>>())
+                        .unwrap();
                 } else {
-                    out.write_all(&s.iter().flat_map(|&v| v.to_le_bytes()).collect::<Vec<_>>()).unwrap();
+                    out.write_all(&s.iter().flat_map(|&v| v.to_le_bytes()).collect::<Vec<_>>())
+                        .unwrap();
                 }
             }
-            desc = format!("{}x{} {}-bit ss {}{}", f.width, f.height, f.bpp, f.ss_h, f.ss_v);
+            desc = format!(
+                "{}x{} {}-bit ss {}{}",
+                f.width, f.height, f.bpp, f.ss_h, f.ss_v
+            );
             n += 1;
         }
     }

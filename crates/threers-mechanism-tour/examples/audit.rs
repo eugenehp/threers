@@ -16,9 +16,9 @@
 //! exploding. What you see is the *geometry*, so that is what this follows.
 
 use threers::assembly as geo;
+use threers_mechanism_tour::{model, Tour, MODELS};
 use threers_physics::assembly::{Assembly, PartId};
 use threers_physics::math::Isometry;
-use threers_mechanism_tour::{model, Tour, MODELS};
 
 fn main() {
     let only = std::env::args().nth(1);
@@ -100,8 +100,11 @@ fn audit(m: &threers_mechanism_tour::Model, tour: &Tour) {
         sampled += 1;
         for p in 0..parts {
             let (t, q) = pose(tour, p, f);
+            let Some(id) = asm.part_named(&tour.parts[p]) else {
+                continue;
+            };
             asm.place(
-                PartId::from(p),
+                id,
                 Isometry::new(
                     threers::math::Vector3::new(t[0], t[1], t[2]),
                     threers::math::Quaternion::new(q[0], q[1], q[2], q[3]),

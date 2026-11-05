@@ -226,7 +226,9 @@ fn inherit_animation_velocity(body: &mut RigidBody, animated: Isometry, dt: f32)
         body.set_linear_velocity((animated.translation - body.position.translation) * (1.0 / dt));
     }
     if body.angular_velocity.length_sq() < 1e-8 {
-        let mut delta = animated.rotation.multiply(body.position.rotation.conjugate());
+        let mut delta = animated
+            .rotation
+            .multiply(body.position.rotation.conjugate());
         if delta.w < 0.0 {
             delta = Quaternion::new(-delta.x, -delta.y, -delta.z, -delta.w);
         }
@@ -368,7 +370,10 @@ mod tests {
             let pose = Isometry::from_translation(Vector3::new(i as f32 * 0.1, 3.0, 0.0));
             let drawn = blend.update(1.0 / 60.0, pose, &mut world);
             world.step(1.0 / 60.0);
-            assert_eq!(drawn.translation, pose.translation, "animation should win outright");
+            assert_eq!(
+                drawn.translation, pose.translation,
+                "animation should win outright"
+            );
         }
     }
 
@@ -384,7 +389,10 @@ mod tests {
 
         blend.go_limp(&mut world);
         assert_eq!(blend.state(), BlendState::ToSimulated);
-        assert!(world.body(body).unwrap().is_dynamic(), "it must fall immediately");
+        assert!(
+            world.body(body).unwrap().is_dynamic(),
+            "it must fall immediately"
+        );
         assert!(world.body(body).unwrap().mass() > 0.0);
 
         let first = blend.update(1.0 / 60.0, pose, &mut world);

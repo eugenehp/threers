@@ -10,11 +10,11 @@
 use std::sync::Arc;
 
 use threers::cameras::Camera;
-use threers::{
-    AmbientLight, Color, DataTexture, DirectionalLight, Mesh, Object3D, PerspectiveCamera,
-    Scene, SphereGeometry, StandardMaterial, TextureFormat, Vector3,
-};
 use threers::renderer::WindowRenderer;
+use threers::{
+    AmbientLight, Color, DataTexture, DirectionalLight, Mesh, Object3D, PerspectiveCamera, Scene,
+    SphereGeometry, StandardMaterial, TextureFormat, Vector3,
+};
 
 use winit::{
     event::{Event, WindowEvent},

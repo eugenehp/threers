@@ -26,8 +26,8 @@ use std::sync::Arc;
 use self::probs::{Counts, ProbContext, SavedCtx};
 use self::rac::Rac;
 use crate::decode::bits::BitReader;
-pub use crate::decode::vp9_packet::{packet_shows, split_superframe};
 use crate::decode::picture::Plane;
+pub use crate::decode::vp9_packet::{packet_shows, split_superframe};
 
 // IntraPredMode (ffmpeg order).
 /// Intra prediction mode: Vertical.
@@ -127,7 +127,12 @@ pub enum FilterMode {
 
 impl FilterMode {
     fn from_bits(v: u32) -> Self {
-        [FilterMode::Smooth, FilterMode::Regular, FilterMode::Sharp, FilterMode::Bilinear][v as usize & 3]
+        [
+            FilterMode::Smooth,
+            FilterMode::Regular,
+            FilterMode::Sharp,
+            FilterMode::Bilinear,
+        ][v as usize & 3]
     }
 }
 
@@ -342,7 +347,11 @@ impl Frame {
             y,
             u,
             v,
-            color: ColorInfo::from_vui(Some(SPC[self.color_space as usize & 7]), self.full_range, self.height),
+            color: ColorInfo::from_vui(
+                Some(SPC[self.color_space as usize & 7]),
+                self.full_range,
+                self.height,
+            ),
         })
     }
 
@@ -433,19 +442,19 @@ fn inv_recenter_nonneg(v: i32, m: i32) -> i32 {
 }
 
 const INV_MAP_TABLE: [u8; 255] = [
-    7, 20, 33, 46, 59, 72, 85, 98, 111, 124, 137, 150, 163, 176, 189, 202, 215, 228, 241, 254, 1, 2,
-    3, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30,
-    31, 32, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56,
-    57, 58, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82,
-    83, 84, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 99, 100, 101, 102, 103, 104, 105, 106,
-    107, 108, 109, 110, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 125, 126, 127,
-    128, 129, 130, 131, 132, 133, 134, 135, 136, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147,
-    148, 149, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 164, 165, 166, 167, 168,
-    169, 170, 171, 172, 173, 174, 175, 177, 178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188,
-    190, 191, 192, 193, 194, 195, 196, 197, 198, 199, 200, 201, 203, 204, 205, 206, 207, 208, 209,
-    210, 211, 212, 213, 214, 216, 217, 218, 219, 220, 221, 222, 223, 224, 225, 226, 227, 229, 230,
-    231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 242, 243, 244, 245, 246, 247, 248, 249, 250,
-    251, 252, 253, 253,
+    7, 20, 33, 46, 59, 72, 85, 98, 111, 124, 137, 150, 163, 176, 189, 202, 215, 228, 241, 254, 1,
+    2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 21, 22, 23, 24, 25, 26, 27, 28,
+    29, 30, 31, 32, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 47, 48, 49, 50, 51, 52, 53, 54,
+    55, 56, 57, 58, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 73, 74, 75, 76, 77, 78, 79, 80,
+    81, 82, 83, 84, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 99, 100, 101, 102, 103, 104,
+    105, 106, 107, 108, 109, 110, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 125,
+    126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 138, 139, 140, 141, 142, 143, 144, 145,
+    146, 147, 148, 149, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 164, 165, 166,
+    167, 168, 169, 170, 171, 172, 173, 174, 175, 177, 178, 179, 180, 181, 182, 183, 184, 185, 186,
+    187, 188, 190, 191, 192, 193, 194, 195, 196, 197, 198, 199, 200, 201, 203, 204, 205, 206, 207,
+    208, 209, 210, 211, 212, 213, 214, 216, 217, 218, 219, 220, 221, 222, 223, 224, 225, 226, 227,
+    229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 242, 243, 244, 245, 246, 247, 248,
+    249, 250, 251, 252, 253, 253,
 ];
 
 /// `update_prob`: a differential forward probability update.
@@ -487,16 +496,23 @@ fn clip_u(v: i32, n: u32) -> i32 {
     v.clamp(0, (1 << n) - 1)
 }
 
-
 impl Vp9Decoder {
     /// A decoder waiting for a keyframe.
     pub fn new() -> Self {
         Vp9Decoder {
-            h: Header { sharpness: -1, ..Default::default() },
+            h: Header {
+                sharpness: -1,
+                ..Default::default()
+            },
             refs: Default::default(),
             last: None,
             segmap_ref: None,
-            prob_ctx: [SavedCtx::default_ctx(), SavedCtx::default_ctx(), SavedCtx::default_ctx(), SavedCtx::default_ctx()],
+            prob_ctx: [
+                SavedCtx::default_ctx(),
+                SavedCtx::default_ctx(),
+                SavedCtx::default_ctx(),
+                SavedCtx::default_ctx(),
+            ],
             last_keyframe: false,
             lim_lut: [0; 64],
             mblim_lut: [0; 64],
@@ -535,7 +551,11 @@ impl Vp9Decoder {
     }
 
     fn read_colorspace_details(&mut self, r: &mut BitReader) -> Result<(), String> {
-        let bits = if self.h.profile <= 1 { 0 } else { 1 + r.flag() as usize };
+        let bits = if self.h.profile <= 1 {
+            0
+        } else {
+            1 + r.flag() as usize
+        };
         self.bpp_index = bits;
         self.h.bpp = 8 + bits as u8 * 2;
         self.color_space = r.u(3) as u8;
@@ -549,7 +569,10 @@ impl Vp9Decoder {
                     return Err("VP9: reserved bit set in RGB".into());
                 }
             } else {
-                return Err(format!("VP9: RGB not supported in profile {}", self.h.profile));
+                return Err(format!(
+                    "VP9: RGB not supported in profile {}",
+                    self.h.profile
+                ));
             }
         } else {
             self.full_range = r.flag();
@@ -557,7 +580,10 @@ impl Vp9Decoder {
                 self.ss_h = r.flag() as u8;
                 self.ss_v = r.flag() as u8;
                 if self.ss_h == 1 && self.ss_v == 1 {
-                    return Err(format!("VP9: 4:2:0 not supported in profile {}", self.h.profile));
+                    return Err(format!(
+                        "VP9: 4:2:0 not supported in profile {}",
+                        self.h.profile
+                    ));
                 } else if r.flag() {
                     return Err("VP9: color details reserved bit set".into());
                 }
@@ -571,7 +597,13 @@ impl Vp9Decoder {
 
     /// `decode_frame_header`: `Ok(None)` after the compressed header (then
     /// `(offset of tile data)`), `Ok(Some(ref))` for show-existing.
-    fn decode_frame_header(&mut self, data: &[u8], probs: &mut ProbContext, coef: &mut CoefProbs, w_out: &mut (u32, u32)) -> Result<Result<usize, u8>, String> {
+    fn decode_frame_header(
+        &mut self,
+        data: &[u8],
+        probs: &mut ProbContext,
+        coef: &mut CoefProbs,
+        w_out: &mut (u32, u32),
+    ) -> Result<Result<usize, u8>, String> {
         let mut r = BitReader::new(data);
         if r.u(2) != 2 {
             return Err("VP9: invalid frame marker".into());
@@ -635,7 +667,12 @@ impl Vp9Decoder {
                     self.h.refidx[i] = r.u(3) as u8;
                     self.h.signbias[i] = r.flag() && !self.h.errorres;
                 }
-                if self.h.refidx.iter().any(|&i| self.refs[i as usize].is_none()) {
+                if self
+                    .h
+                    .refidx
+                    .iter()
+                    .any(|&i| self.refs[i as usize].is_none())
+                {
                     return Err("VP9: not all references are available".into());
                 }
                 let rs = |i: usize| {
@@ -652,12 +689,19 @@ impl Vp9Decoder {
                     w = r.u(16) + 1;
                     h = r.u(16) + 1;
                 }
-                self.h.use_last_frame_mvs &= self.last.as_ref().is_some_and(|f| f.width == w && f.height == h);
+                self.h.use_last_frame_mvs &= self
+                    .last
+                    .as_ref()
+                    .is_some_and(|f| f.width == w && f.height == h);
                 if r.flag() {
                     r.skip(32);
                 }
                 self.h.highprecisionmvs = r.flag();
-                self.h.filtermode = if r.flag() { FilterMode::Switchable } else { FilterMode::from_bits(r.u(2)) };
+                self.h.filtermode = if r.flag() {
+                    FilterMode::Switchable
+                } else {
+                    FilterMode::from_bits(r.u(2))
+                };
                 let sb = self.h.signbias;
                 self.h.allowcompinter = sb[0] != sb[1] || sb[0] != sb[2];
                 if self.h.allowcompinter {
@@ -719,10 +763,25 @@ impl Vp9Decoder {
             }
         }
         self.h.yac_qi = r.u(8) as u8;
-        self.h.ydc_qdelta = if r.flag() { sbits_inv(&mut r, 4) as i8 } else { 0 };
-        self.h.uvdc_qdelta = if r.flag() { sbits_inv(&mut r, 4) as i8 } else { 0 };
-        self.h.uvac_qdelta = if r.flag() { sbits_inv(&mut r, 4) as i8 } else { 0 };
-        self.h.lossless = self.h.yac_qi == 0 && self.h.ydc_qdelta == 0 && self.h.uvdc_qdelta == 0 && self.h.uvac_qdelta == 0;
+        self.h.ydc_qdelta = if r.flag() {
+            sbits_inv(&mut r, 4) as i8
+        } else {
+            0
+        };
+        self.h.uvdc_qdelta = if r.flag() {
+            sbits_inv(&mut r, 4) as i8
+        } else {
+            0
+        };
+        self.h.uvac_qdelta = if r.flag() {
+            sbits_inv(&mut r, 4) as i8
+        } else {
+            0
+        };
+        self.h.lossless = self.h.yac_qi == 0
+            && self.h.ydc_qdelta == 0
+            && self.h.uvdc_qdelta == 0
+            && self.h.uvac_qdelta == 0;
         let seg = &mut self.h.segmentation;
         seg.enabled = r.flag();
         if seg.enabled {
@@ -800,8 +859,16 @@ impl Vp9Decoder {
                 let v = clip_u(lflvl + (h.lf_delta_ref[0] as i32) * (1 << sh), 6) as u8;
                 fm.lflvl[0] = [v, v];
                 for j in 1..4 {
-                    fm.lflvl[j][0] = clip_u(lflvl + ((h.lf_delta_ref[j] as i32 + h.lf_delta_mode[0] as i32) * (1 << sh)), 6) as u8;
-                    fm.lflvl[j][1] = clip_u(lflvl + ((h.lf_delta_ref[j] as i32 + h.lf_delta_mode[1] as i32) * (1 << sh)), 6) as u8;
+                    fm.lflvl[j][0] = clip_u(
+                        lflvl
+                            + ((h.lf_delta_ref[j] as i32 + h.lf_delta_mode[0] as i32) * (1 << sh)),
+                        6,
+                    ) as u8;
+                    fm.lflvl[j][1] = clip_u(
+                        lflvl
+                            + ((h.lf_delta_ref[j] as i32 + h.lf_delta_mode[1] as i32) * (1 << sh)),
+                        6,
+                    ) as u8;
                 }
             } else {
                 fm.lflvl = [[lflvl as u8; 2]; 4];
@@ -845,7 +912,10 @@ impl Vp9Decoder {
                         continue;
                     }
                     self.mvscale[i] = [((refw << 14) / w) as u16, ((refh << 14) / h) as u16];
-                    self.mvstep[i] = [((16 * self.mvscale[i][0] as u32) >> 14) as u8, ((16 * self.mvscale[i][1] as u32) >> 14) as u8];
+                    self.mvstep[i] = [
+                        ((16 * self.mvscale[i][0] as u32) >> 14) as u8,
+                        ((16 * self.mvscale[i][1] as u32) >> 14) as u8,
+                    ];
                 }
                 valid += 1;
             }
@@ -866,13 +936,18 @@ impl Vp9Decoder {
         if size2 > data.len().saturating_sub(off) {
             return Err("VP9: invalid compressed header size".into());
         }
+        super::picture::check_picture_size(w, h)?;
         *w_out = (w, h);
         if self.accel.is_some() {
             // The compressed header is the accelerator's to parse.
             self.header_sizes = (off, size2);
             return Ok(Ok(off + size2));
         }
-        let mut rc = Rac::new(&data[off..off + size2])?;
+        let compressed = off
+            .checked_add(size2)
+            .and_then(|end| data.get(off..end))
+            .ok_or("VP9: compressed header overruns the frame")?;
+        let mut rc = Rac::new(compressed)?;
         if rc.get_prob(128) {
             return Err("VP9: marker bit set".into());
         }
@@ -922,7 +997,11 @@ impl Vp9Decoder {
                                 let p = &mut coef[i][j][k][l][m];
                                 let rr = &rf[j][k][l][m];
                                 for n in 0..3 {
-                                    p[n] = if rc.get_prob(252) { update_prob(&mut rc, rr[n]) } else { rr[n] };
+                                    p[n] = if rc.get_prob(252) {
+                                        update_prob(&mut rc, rr[n])
+                                    } else {
+                                        rr[n]
+                                    };
                                 }
                                 let p2 = p[2] as usize;
                                 p[3..11].copy_from_slice(&data::MODEL_PARETO8[p2]);
@@ -986,7 +1065,8 @@ impl Vp9Decoder {
                 if m != 0 {
                     m += rc.get() as u8;
                 }
-                self.h.comppredmode = [CompPred::Single, CompPred::Comp, CompPred::Switchable][m as usize];
+                self.h.comppredmode =
+                    [CompPred::Single, CompPred::Comp, CompPred::Switchable][m as usize];
                 if self.h.comppredmode == CompPred::Switchable {
                     for i in 0..5 {
                         if rc.get_prob(252) {
@@ -1024,7 +1104,8 @@ impl Vp9Decoder {
                 for j in 0..4 {
                     for k in 0..3 {
                         if rc.get_prob(252) {
-                            probs.partition[3 - i][j][k] = update_prob(&mut rc, probs.partition[3 - i][j][k]);
+                            probs.partition[3 - i][j][k] =
+                                update_prob(&mut rc, probs.partition[3 - i][j][k]);
                         }
                     }
                 }
@@ -1071,13 +1152,16 @@ impl Vp9Decoder {
     }
 
     fn decode_frame(&mut self, data: &[u8]) -> Result<Option<Arc<Frame>>, String> {
-        let retain_segmap_ref = self.segmap_ref.is_some() && (!self.h.segmentation.enabled || !self.h.segmentation.update_map);
+        let retain_segmap_ref = self.segmap_ref.is_some()
+            && (!self.h.segmentation.enabled || !self.h.segmentation.update_map);
         let mut probs = data::DEFAULT_PROBS;
         let mut coef: Box<CoefProbs> = Box::new([[[[[[0u8; 11]; 6]; 6]; 2]; 2]; 4]);
         let mut wh = (0, 0);
         let off = match self.decode_frame_header(data, &mut probs, &mut coef, &mut wh)? {
             Err(r) => {
-                let f = self.refs[r as usize].clone().ok_or_else(|| format!("VP9: requested reference {r} not available"))?;
+                let f = self.refs[r as usize]
+                    .clone()
+                    .ok_or_else(|| format!("VP9: requested reference {r} not available"))?;
                 return Ok(Some(f));
             }
             Ok(off) => off,
@@ -1085,23 +1169,38 @@ impl Vp9Decoder {
         let (w, h) = wh;
         let h_ = self.h.clone();
         // Reference frames for segmentation-map prediction and last-frame MVs.
-        let src = if !h_.keyframe && !h_.intraonly && !h_.errorres { self.last.clone() } else { None };
+        let src = if !h_.keyframe && !h_.intraonly && !h_.errorres {
+            self.last.clone()
+        } else {
+            None
+        };
         if !retain_segmap_ref || h_.keyframe || h_.intraonly {
             self.segmap_ref = src.clone();
         }
         let mvpair = src;
         let sb_cols = ((w + 63) >> 6) as usize;
         let sb_rows = ((h + 63) >> 6) as usize;
-        if mvpair.as_ref().is_none_or(|f| f.width != w || f.height != h) {
+        if mvpair
+            .as_ref()
+            .is_none_or(|f| f.width != w || f.height != h)
+        {
             self.segmap_ref = None;
         }
         let (ss_h, ss_v) = (self.ss_h, self.ss_v);
         let lw = sb_cols * 64;
         let lh = sb_rows * 64;
         if let Some(accel) = self.accel.as_mut() {
-            let sized = |w: usize, h: usize| Plane { data: Vec::new(), width: w, height: h };
+            let sized = |w: usize, h: usize| Plane {
+                data: Vec::new(),
+                width: w,
+                height: h,
+            };
             let cur = Arc::new(Frame {
-                planes: [sized(lw, lh), sized(lw >> ss_h, lh >> ss_v), sized(lw >> ss_h, lh >> ss_v)],
+                planes: [
+                    sized(lw, lh),
+                    sized(lw >> ss_h, lh >> ss_v),
+                    sized(lw >> ss_h, lh >> ss_v),
+                ],
                 width: w,
                 height: h,
                 ss_h,
@@ -1114,7 +1213,14 @@ impl Vp9Decoder {
                 sb_cols,
             });
             let (uncompressed_size, compressed_size) = self.header_sizes;
-            accel.frame(&AccelFrame { h: &h_, data, uncompressed_size, compressed_size, cur: &cur, refs: &self.refs })?;
+            accel.frame(&AccelFrame {
+                h: &h_,
+                data,
+                uncompressed_size,
+                compressed_size,
+                cur: &cur,
+                refs: &self.refs,
+            })?;
             for i in 0..8 {
                 if h_.refreshrefmask & (1 << i) != 0 {
                     self.refs[i] = Some(cur.clone());
@@ -1185,7 +1291,13 @@ impl Vp9Decoder {
         }
         if h_.refreshctx && !h_.parallelmode {
             let fc = h_.framectxid as usize;
-            probs::adapt_probs(&mut self.prob_ctx[fc], &probs, &counts, &h_, self.last_keyframe);
+            probs::adapt_probs(
+                &mut self.prob_ctx[fc],
+                &probs,
+                &counts,
+                &h_,
+                self.last_keyframe,
+            );
         }
         let cur = Arc::new(cur);
         for i in 0..8 {

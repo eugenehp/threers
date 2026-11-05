@@ -18,13 +18,13 @@
 pub(crate) use std::f32::consts::{PI, TAU};
 pub(crate) use std::sync::Arc;
 
-pub(crate) use threers::materials::SkyMaterial;
 pub(crate) use threers::lights::SpotLight;
+pub(crate) use threers::materials::SkyMaterial;
 pub(crate) use threers::{
     wgpu, BasicMaterial, BufferAttribute, BufferGeometry, Color, CubeTexture, DirectionalLight,
     HemisphereLight, InstancedMesh, Light, Material, Matrix4, Mesh, Object3D, ObjectId, ObjectKind,
-    PhysicalMaterial, PmremGenerator, Quaternion, Scene, ShadowSettings,
-    SphereGeometry, StandardMaterial, Texture, TextureFormat, TextureWrap, Vector3,
+    PhysicalMaterial, PmremGenerator, Quaternion, Scene, ShadowSettings, SphereGeometry,
+    StandardMaterial, Texture, TextureFormat, TextureWrap, Vector3,
 };
 
 // --- The city's unit system -------------------------------------------------
@@ -102,65 +102,64 @@ const OUTSKIRTS_MIN: f32 = 7000.0;
 const FOG_FAR: f32 = 26.0;
 const FOG_NEAR: f32 = 6.0;
 
-
-pub(crate) mod rng;
+pub(crate) mod airport;
+pub(crate) mod bake;
+pub(crate) mod batches;
+pub(crate) mod buildings;
+pub(crate) mod city;
+pub(crate) mod civic;
+pub(crate) mod country;
+pub(crate) mod creatures;
+pub(crate) mod facade;
+pub(crate) mod ibl;
+pub(crate) mod industry;
+pub(crate) mod layout;
 pub(crate) mod maths;
 pub(crate) mod mesh;
-pub(crate) mod facade;
-pub(crate) mod layout;
-pub(crate) mod batches;
-pub(crate) mod occupancy;
-pub(crate) mod buildings;
-pub(crate) mod props;
-pub(crate) mod park;
-pub(crate) mod country;
-pub(crate) mod civic;
-pub(crate) mod industry;
-pub(crate) mod venues;
-pub(crate) mod retail;
-pub(crate) mod suburb;
-pub(crate) mod roads;
-pub(crate) mod tunnel;
-pub(crate) mod zoo;
-pub(crate) mod airport;
 pub(crate) mod monuments;
-pub(crate) mod creatures;
-pub(crate) mod bake;
-pub(crate) mod signs;
+pub(crate) mod occupancy;
+pub(crate) mod park;
+pub(crate) mod props;
 pub(crate) mod rail;
-pub(crate) mod traffic;
+pub(crate) mod retail;
+pub(crate) mod rng;
+pub(crate) mod roads;
+pub(crate) mod signs;
 pub(crate) mod sky;
+pub(crate) mod suburb;
+pub(crate) mod traffic;
+pub(crate) mod tunnel;
+pub(crate) mod venues;
 pub(crate) mod water;
-pub(crate) mod ibl;
-pub(crate) mod city;
+pub(crate) mod zoo;
 
-pub(crate) use rng::*;
+pub(crate) use airport::*;
+pub(crate) use bake::*;
+pub(crate) use batches::*;
+pub(crate) use buildings::*;
+pub(crate) use city::*;
+pub(crate) use civic::*;
+pub(crate) use country::*;
+pub(crate) use creatures::*;
+pub(crate) use facade::*;
+pub(crate) use ibl::*;
+pub(crate) use industry::*;
+pub(crate) use layout::*;
 pub(crate) use maths::*;
 pub(crate) use mesh::*;
-pub(crate) use facade::*;
-pub(crate) use layout::*;
-pub(crate) use batches::*;
-pub(crate) use occupancy::*;
-pub(crate) use buildings::*;
-pub(crate) use props::*;
-pub(crate) use park::*;
-pub(crate) use country::*;
-pub(crate) use civic::*;
-pub(crate) use industry::*;
-pub(crate) use venues::*;
-pub(crate) use retail::*;
-pub(crate) use suburb::*;
-pub(crate) use roads::*;
-pub(crate) use tunnel::*;
-pub(crate) use zoo::*;
-pub(crate) use airport::*;
 pub(crate) use monuments::*;
-pub(crate) use creatures::*;
-pub(crate) use bake::*;
-pub(crate) use signs::*;
+pub(crate) use occupancy::*;
+pub(crate) use park::*;
+pub(crate) use props::*;
 pub(crate) use rail::*;
-pub(crate) use traffic::*;
+pub(crate) use retail::*;
+pub(crate) use rng::*;
+pub(crate) use roads::*;
+pub(crate) use signs::*;
 pub(crate) use sky::*;
+pub(crate) use suburb::*;
+pub(crate) use traffic::*;
+pub(crate) use tunnel::*;
+pub(crate) use venues::*;
 pub(crate) use water::*;
-pub(crate) use ibl::*;
-pub(crate) use city::*;
+pub(crate) use zoo::*;

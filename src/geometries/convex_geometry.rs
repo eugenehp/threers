@@ -164,7 +164,8 @@ impl ConvexHull {
     }
 
     pub fn contains_point(&self, p: V3) -> bool {
-        self.faces().all(|f| f.distance_to_point(p) <= self.tolerance)
+        self.faces()
+            .all(|f| f.distance_to_point(p) <= self.tolerance)
     }
 
     /// `intersectRay`: the distance along `direction` from `origin` to the
@@ -191,13 +192,21 @@ impl ConvexHull {
                 return None;
             }
         }
-        Some(if t_near != f64::NEG_INFINITY { t_near } else { t_far })
+        Some(if t_near != f64::NEG_INFINITY {
+            t_near
+        } else {
+            t_far
+        })
     }
 
     // ---- vertex lists ----
 
     fn list_append(&mut self, which: bool, v: usize) {
-        let list = if which { self.assigned } else { self.unassigned };
+        let list = if which {
+            self.assigned
+        } else {
+            self.unassigned
+        };
         let mut list = list;
         match list.head {
             None => list.head = Some(v),
@@ -218,7 +227,11 @@ impl ConvexHull {
     }
 
     fn list_append_chain(&mut self, which: bool, v: usize) {
-        let mut list = if which { self.assigned } else { self.unassigned };
+        let mut list = if which {
+            self.assigned
+        } else {
+            self.unassigned
+        };
         match list.head {
             None => list.head = Some(v),
             Some(_) => self.vertices[list.tail.unwrap()].next = Some(v),
@@ -480,7 +493,11 @@ impl ConvexHull {
         for (i, v) in self.vertices.iter().enumerate() {
             if i != v0 && i != v1 {
                 let t = (dot(delta, sub(v.point, p0)) / se2).clamp(0.0, 1.0);
-                let c = [delta[0] * t + p0[0], delta[1] * t + p0[1], delta[2] * t + p0[2]];
+                let c = [
+                    delta[0] * t + p0[0],
+                    delta[1] * t + p0[1],
+                    delta[2] * t + p0[2],
+                ];
                 let d = sub(c, v.point);
                 let d = dot(d, d);
                 if d > max_distance {
@@ -686,7 +703,10 @@ impl ConvexGeometry {
     /// three.js `ConvexGeometry`: the convex hull of `points`, unindexed, one
     /// triangle per hull face with the face normal on each corner.
     pub fn new(points: &[Vector3]) -> BufferGeometry {
-        let pts: Vec<V3> = points.iter().map(|p| [p.x as f64, p.y as f64, p.z as f64]).collect();
+        let pts: Vec<V3> = points
+            .iter()
+            .map(|p| [p.x as f64, p.y as f64, p.z as f64])
+            .collect();
         Self::from_f64(&pts)
     }
 
@@ -741,13 +761,20 @@ mod tests {
         }
         assert!(hull.contains_point([0.0, 0.0, 0.0]));
         assert!(!hull.contains_point([2.0, 0.0, 0.0]));
-        let t = hull.intersect_ray([-5.0, 0.0, 0.0], [1.0, 0.0, 0.0]).unwrap();
+        let t = hull
+            .intersect_ray([-5.0, 0.0, 0.0], [1.0, 0.0, 0.0])
+            .unwrap();
         assert!((t - 4.0).abs() < 1e-12);
     }
 
     #[test]
     fn degenerate_input_gives_no_faces() {
-        let pts = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0], [3.0, 0.0, 0.0]];
+        let pts = [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [3.0, 0.0, 0.0],
+        ];
         let g = ConvexGeometry::from_f64(&pts);
         assert_eq!(g.get_attribute("position").unwrap().array.len() % 9, 0);
     }

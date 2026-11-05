@@ -100,7 +100,10 @@ pub fn camera() -> PerspectiveCamera {
 
 /// Every light the analytic model knows about.
 pub fn add_lights(scene: &mut Scene) {
-    scene.add(Object3D::light(Light::Ambient(AmbientLight::new(c(AMBIENT), 1.0))));
+    scene.add(Object3D::light(Light::Ambient(AmbientLight::new(
+        c(AMBIENT),
+        1.0,
+    ))));
     scene.add(Object3D::light(Light::Hemisphere(HemisphereLight::new(
         c(HEMI_SKY),
         c(HEMI_GROUND),
@@ -131,7 +134,10 @@ pub fn add_lights(scene: &mut Scene) {
 pub fn sphere_scene(material: Material) -> Scene {
     let mut scene = Scene::new();
     scene.background = Color::from_hex(0x000000);
-    scene.add(Object3D::mesh(Mesh::new(SphereGeometry::new(1.0, 192, 96), material)));
+    scene.add(Object3D::mesh(Mesh::new(
+        SphereGeometry::new(1.0, 192, 96),
+        material,
+    )));
     add_lights(&mut scene);
     scene
 }
@@ -203,16 +209,32 @@ fn f_schlick(f0: V3, f90: f64, dot_vh: f64) -> V3 {
 /// A three.js material, by the parameters its shading reads.
 #[derive(Clone, Copy, Debug)]
 pub enum Model {
-    Basic { color: V3 },
-    Lambert { color: V3 },
-    Phong { color: V3, specular: V3, shininess: f64 },
+    Basic {
+        color: V3,
+    },
+    Lambert {
+        color: V3,
+    },
+    Phong {
+        color: V3,
+        specular: V3,
+        shininess: f64,
+    },
     /// No gradient map: three.js's two-tone 0.7 / 1.0 ramp.
-    Toon { color: V3 },
+    Toon {
+        color: V3,
+    },
     /// Standard, and Physical at its defaults (ior 1.5, specularIntensity 1).
-    Standard { color: V3, roughness: f64, metalness: f64 },
+    Standard {
+        color: V3,
+        roughness: f64,
+        metalness: f64,
+    },
     Normal,
     /// No matcap texture: three.js's default `mix(0.2, 0.8, uv.y)`.
-    Matcap { color: V3 },
+    Matcap {
+        color: V3,
+    },
 }
 
 /// What three.js writes for `model` at the surface (`p`, `n`, `v`): linear
@@ -237,7 +259,11 @@ pub fn shade_with(model: Model, n: V3, v: V3, lights: &[(V3, V3)], indirect: V3)
             }
             mul(hadamard(irr, color), inv_pi)
         }
-        Model::Phong { color, specular, shininess } => {
+        Model::Phong {
+            color,
+            specular,
+            shininess,
+        } => {
             let mut irr = indirect;
             let mut spec = [0.0; 3];
             for (l, lc) in lights {
@@ -265,7 +291,11 @@ pub fn shade_with(model: Model, n: V3, v: V3, lights: &[(V3, V3)], indirect: V3)
             }
             mul(hadamard(irr, color), inv_pi)
         }
-        Model::Standard { color, roughness, metalness } => {
+        Model::Standard {
+            color,
+            roughness,
+            metalness,
+        } => {
             let diffuse = mul(color, 1.0 - metalness);
             let f0 = add(mul([0.04; 3], 1.0 - metalness), mul(color, metalness));
             let r = roughness.clamp(0.0525, 1.0);
@@ -370,26 +400,56 @@ pub fn cases() -> Vec<(&'static str, Material, Model)> {
     };
     let albedo: V3 = [0.8, 0.45, 0.2];
     let mut out: Vec<(&'static str, Material, Model)> = Vec::new();
-    out.push(("basic", BasicMaterial::new(c(albedo)).into(), Model::Basic { color: albedo }));
-    out.push(("lambert", LambertMaterial::new(c(albedo)).into(), Model::Lambert { color: albedo }));
+    out.push((
+        "basic",
+        BasicMaterial::new(c(albedo)).into(),
+        Model::Basic { color: albedo },
+    ));
+    out.push((
+        "lambert",
+        LambertMaterial::new(c(albedo)).into(),
+        Model::Lambert { color: albedo },
+    ));
     let spec: V3 = [0.5, 0.5, 0.5];
     out.push((
         "phong",
-        PhongMaterial::new(c(albedo)).with_specular(c(spec), 20.0).into(),
-        Model::Phong { color: albedo, specular: spec, shininess: 20.0 },
+        PhongMaterial::new(c(albedo))
+            .with_specular(c(spec), 20.0)
+            .into(),
+        Model::Phong {
+            color: albedo,
+            specular: spec,
+            shininess: 20.0,
+        },
     ));
-    out.push(("toon", ToonMaterial::new(c(albedo)).into(), Model::Toon { color: albedo }));
+    out.push((
+        "toon",
+        ToonMaterial::new(c(albedo)).into(),
+        Model::Toon { color: albedo },
+    ));
     let mut st = StandardMaterial::new(c(albedo));
     st.roughness = 1.0;
     st.metalness = 0.0;
-    out.push(("standard", st.into(), Model::Standard { color: albedo, roughness: 1.0, metalness: 0.0 }));
+    out.push((
+        "standard",
+        st.into(),
+        Model::Standard {
+            color: albedo,
+            roughness: 1.0,
+            metalness: 0.0,
+        },
+    ));
     let mut st = StandardMaterial::new(c(albedo));
     st.roughness = 1.0;
     st.metalness = 0.6;
     out.push((
         "standard-metal",
         st.into(),
-        Model::Standard { color: albedo, roughness: 1.0, metalness: 0.6 },
+        Model::Standard {
+            color: albedo,
+            roughness: 1.0,
+            metalness: 0.6,
+        },
     ));
     let mut ph = PhysicalMaterial::new(c(albedo));
     ph.roughness = 1.0;
@@ -397,7 +457,11 @@ pub fn cases() -> Vec<(&'static str, Material, Model)> {
     out.push((
         "physical",
         ph.into(),
-        Model::Standard { color: albedo, roughness: 1.0, metalness: 0.3 },
+        Model::Standard {
+            color: albedo,
+            roughness: 1.0,
+            metalness: 0.3,
+        },
     ));
     out.push(("normal", NormalMaterial::new().into(), Model::Normal));
     let mc = MatcapMaterial {
@@ -445,7 +509,10 @@ pub fn shadow_scene(material: Material, caster: Caster) -> Scene {
     use threers::materials::LambertMaterial;
     let mut scene = Scene::new();
     scene.background = Color::new(0.5, 0.5, 0.5);
-    scene.add(Object3D::light(Light::Ambient(AmbientLight::new(c(SHADOW_AMBIENT), 1.0))));
+    scene.add(Object3D::light(Light::Ambient(AmbientLight::new(
+        c(SHADOW_AMBIENT),
+        1.0,
+    ))));
     match caster {
         Caster::Directional => {
             let mut l = DirectionalLight::new(Color::WHITE, SHADOW_DIR_COLOR[0] as f32)
@@ -513,7 +580,10 @@ pub fn shadow_expected(model: Model, caster: Caster, p: V3, shadowed: bool) -> [
     let v = norm(sub([0.0, 0.0, SHADOW_CAM_Z], p));
     let vis = if shadowed { 0.0 } else { 1.0 };
     let light = match caster {
-        Caster::Directional => (norm(mul(SHADOW_DIR_TRAVEL, -1.0)), mul(SHADOW_DIR_COLOR, vis)),
+        Caster::Directional => (
+            norm(mul(SHADOW_DIR_TRAVEL, -1.0)),
+            mul(SHADOW_DIR_COLOR, vis),
+        ),
         Caster::Spot | Caster::Point => {
             let lv = sub(SHADOW_LAMP_POS, p);
             let d2 = dot(lv, lv);
@@ -549,23 +619,49 @@ pub fn check_shadows(
     shadow_mat.transparent = true;
     // (name, material, model; `None` = ShadowMaterial)
     let cases: Vec<(&str, Material, Option<Model>)> = vec![
-        ("basic", BasicMaterial::new(c(albedo)).into(), Some(Model::Basic { color: albedo })),
-        ("lambert", LambertMaterial::new(c(albedo)).into(), Some(Model::Lambert { color: albedo })),
+        (
+            "basic",
+            BasicMaterial::new(c(albedo)).into(),
+            Some(Model::Basic { color: albedo }),
+        ),
+        (
+            "lambert",
+            LambertMaterial::new(c(albedo)).into(),
+            Some(Model::Lambert { color: albedo }),
+        ),
         (
             "phong",
-            PhongMaterial::new(c(albedo)).with_specular(c(spec), 20.0).into(),
-            Some(Model::Phong { color: albedo, specular: spec, shininess: 20.0 }),
+            PhongMaterial::new(c(albedo))
+                .with_specular(c(spec), 20.0)
+                .into(),
+            Some(Model::Phong {
+                color: albedo,
+                specular: spec,
+                shininess: 20.0,
+            }),
         ),
-        ("toon", ToonMaterial::new(c(albedo)).into(), Some(Model::Toon { color: albedo })),
+        (
+            "toon",
+            ToonMaterial::new(c(albedo)).into(),
+            Some(Model::Toon { color: albedo }),
+        ),
         (
             "standard",
             st.into(),
-            Some(Model::Standard { color: albedo, roughness: 1.0, metalness: 0.0 }),
+            Some(Model::Standard {
+                color: albedo,
+                roughness: 1.0,
+                metalness: 0.0,
+            }),
         ),
         (
             "physical",
             ph.into(),
-            Some(Model::Standard { color: albedo, roughness: 1.0, metalness: 0.3 }),
+            Some(Model::Standard {
+                color: albedo,
+                roughness: 1.0,
+                metalness: 0.3,
+            }),
         ),
         ("shadow", shadow_mat.into(), None),
     ];
@@ -585,7 +681,10 @@ pub fn check_shadows(
                     None if shadowed => [0, 0, 0],
                     None => encode([0.5; 3]),
                 };
-                let err = (0..3).map(|k| (got[k] as i32 - want[k] as i32).abs()).max().unwrap();
+                let err = (0..3)
+                    .map(|k| (got[k] as i32 - want[k] as i32).abs())
+                    .max()
+                    .unwrap();
                 eprintln!(
                     "{backend} {caster:?} {name:>9} {}: got {got:?} want {want:?}",
                     if shadowed { "shadow" } else { "lit   " }
@@ -641,7 +740,10 @@ pub fn instanced_shadow_scene(caster: Caster) -> Scene {
     use threers::math::Matrix4;
     let mut scene = Scene::new();
     scene.background = Color::new(0.5, 0.5, 0.5);
-    scene.add(Object3D::light(Light::Ambient(AmbientLight::new(c(SHADOW_AMBIENT), 1.0))));
+    scene.add(Object3D::light(Light::Ambient(AmbientLight::new(
+        c(SHADOW_AMBIENT),
+        1.0,
+    ))));
     match caster {
         Caster::Directional => {
             let mut l = DirectionalLight::new(Color::WHITE, SHADOW_DIR_COLOR[0] as f32)
@@ -722,8 +824,16 @@ pub fn check_instanced_shadows(
         let morphed = add(INST_CENTRES[1], [INST_MORPH_SHIFT, 0.0, 0.0]);
         let probes = [
             ("instance 0", shadow_on_floor(caster, INST_CENTRES[0]), true),
-            ("instance 1, morphed", shadow_on_floor(caster, morphed), true),
-            ("instance 1 unmorphed", shadow_on_floor(caster, INST_CENTRES[1]), false),
+            (
+                "instance 1, morphed",
+                shadow_on_floor(caster, morphed),
+                true,
+            ),
+            (
+                "instance 1 unmorphed",
+                shadow_on_floor(caster, INST_CENTRES[1]),
+                false,
+            ),
         ];
         for (what, target, shadowed) in probes {
             let ((x, y), p) = floor_pixel(target);
@@ -733,16 +843,28 @@ pub fn check_instanced_shadows(
             let v = norm(sub([0.0, 0.0, SHADOW_CAM_Z], p));
             let vis = if shadowed { 0.0 } else { 1.0 };
             let light = match caster {
-                Caster::Directional => (norm(mul(INST_DIR_TRAVEL, -1.0)), mul(SHADOW_DIR_COLOR, vis)),
+                Caster::Directional => {
+                    (norm(mul(INST_DIR_TRAVEL, -1.0)), mul(SHADOW_DIR_COLOR, vis))
+                }
                 Caster::Spot | Caster::Point => {
                     let lv = sub(INST_LAMP_POS, p);
                     (norm(lv), mul(SHADOW_LAMP_COLOR, vis / dot(lv, lv)))
                 }
             };
             let want = encode(
-                shade_with(Model::Lambert { color: albedo }, n, v, &[light], SHADOW_AMBIENT).unwrap(),
+                shade_with(
+                    Model::Lambert { color: albedo },
+                    n,
+                    v,
+                    &[light],
+                    SHADOW_AMBIENT,
+                )
+                .unwrap(),
             );
-            let err = (0..3).map(|k| (got[k] as i32 - want[k] as i32).abs()).max().unwrap();
+            let err = (0..3)
+                .map(|k| (got[k] as i32 - want[k] as i32).abs())
+                .max()
+                .unwrap();
             eprintln!(
                 "{backend} instanced {caster:?} {what} at {target:?} px ({x}, {y}): got {got:?} want {want:?}"
             );

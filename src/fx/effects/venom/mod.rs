@@ -125,7 +125,10 @@ pub struct Venom {
 
 impl Venom {
     pub fn new(style: VenomStyle) -> Self {
-        Self { style, sim: Sim::new() }
+        Self {
+            style,
+            sim: Sim::new(),
+        }
     }
 
     pub fn state(&self) -> VenomState {
@@ -143,7 +146,11 @@ impl Effect for Venom {
     fn update(&mut self, input: &EffectInput) {
         self.sim.cursor = input.cursor;
         self.sim.sync_shape(input.shape);
-        self.sim.step(&self.style, input.dt.clamp(1.0 / 240.0, 1.0 / 30.0), input.pointer);
+        self.sim.step(
+            &self.style,
+            input.dt.clamp(1.0 / 240.0, 1.0 / 30.0),
+            input.pointer,
+        );
     }
 
     fn surface(&self) -> Option<Surface> {
@@ -152,10 +159,18 @@ impl Effect for Venom {
         let holding = sim.holding();
         let seeking = sim.mode == Mode::Seek;
         let thin = sim.thin();
-        let mut surface = Surface::new_with_thickness(sim.shape.clone(), style.look, sim.inradius.min(style.bevel));
+        let mut surface = Surface::new_with_thickness(
+            sim.shape.clone(),
+            style.look,
+            sim.inradius.min(style.bevel),
+        );
         surface.lean = sim.lean;
 
-        let grow = if seeking { 0.55 + 0.45 * sim.seek_f } else { 1.0 };
+        let grow = if seeking {
+            0.55 + 0.45 * sim.seek_f
+        } else {
+            1.0
+        };
         for st in sim.list.iter().filter(|s| !s.hair) {
             let chain = (0..NP)
                 .map(|i| {
@@ -164,12 +179,18 @@ impl Effect for Venom {
                     let mut r = st.width * style.strand_width * (3.0 - 1.9 * f) * thin * grow;
                     // a slow pulse travels from the body toward the hand, as if it is feeding
                     if holding {
-                        r *= 1.0 + 0.24 * (f * 9.0 - sim.time * 6.0 + st.phase).sin() * (f * std::f32::consts::PI).sin();
+                        r *= 1.0
+                            + 0.24
+                                * (f * 9.0 - sim.time * 6.0 + st.phase).sin()
+                                * (f * std::f32::consts::PI).sin();
                     }
                     if sim.mode == Mode::Snap {
                         r *= 1.15; // gathering up as it slumps back
                     }
-                    Blob { center: Vector2::new(st.x[i], st.y[i]), radius: r }
+                    Blob {
+                        center: Vector2::new(st.x[i], st.y[i]),
+                        radius: r,
+                    }
                 })
                 .collect();
             surface.strands.push(chain);
@@ -183,7 +204,12 @@ impl Effect for Venom {
             } else {
                 1.0
             };
-            let len = sp.len * if p > 0.45 { up * up * (3.0 - 2.0 * up) } else { up };
+            let len = sp.len
+                * if p > 0.45 {
+                    up * up * (3.0 - 2.0 * up)
+                } else {
+                    up
+                };
             if len <= 0.6 {
                 continue;
             }
@@ -197,7 +223,10 @@ impl Effect for Venom {
             });
         }
         for d in &sim.drops {
-            surface.drops.push(Blob { center: Vector2::new(d.x, d.y), radius: d.r });
+            surface.drops.push(Blob {
+                center: Vector2::new(d.x, d.y),
+                radius: d.r,
+            });
         }
         let mlen = sim.mound.max(0.0);
         if mlen > 0.3 {
@@ -223,15 +252,27 @@ impl Effect for Venom {
         o.no_fill();
         o.stroke_alpha(self.style.look.base_color(0.8, 0.0), 0.9);
         for st in sim.list.iter().filter(|s| s.hair) {
-            let pts: Vec<Vector2> = smooth_strand(st.x, st.y).iter().map(|p| px(p.x, p.y)).collect();
+            let pts: Vec<Vector2> = smooth_strand(st.x, st.y)
+                .iter()
+                .map(|p| px(p.x, p.y))
+                .collect();
             draw::stroke(o, &pts, 0.35 * sim.thin() * self.style.strand_width * dpr);
         }
         if sim.mode == Mode::Hold {
             o.stroke_alpha(self.style.look.base_color(0.8, 0.0), 0.6);
             for &(a, b, i, j, kink) in &sim.webs {
-                let (Some(sa), Some(sb)) = (sim.list.get(a), sim.list.get(b)) else { continue };
-                let mid = Vector2::new((sa.x[i] + sb.x[j]) / 2.0 + kink, (sa.y[i] + sb.y[j]) / 2.0 - kink.abs() * 0.4);
-                draw::stroke(o, &[px(sa.x[i], sa.y[i]), mid * dpr, px(sb.x[j], sb.y[j])], 0.25 * dpr);
+                let (Some(sa), Some(sb)) = (sim.list.get(a), sim.list.get(b)) else {
+                    continue;
+                };
+                let mid = Vector2::new(
+                    (sa.x[i] + sb.x[j]) / 2.0 + kink,
+                    (sa.y[i] + sb.y[j]) / 2.0 - kink.abs() * 0.4,
+                );
+                draw::stroke(
+                    o,
+                    &[px(sa.x[i], sa.y[i]), mid * dpr, px(sb.x[j], sb.y[j])],
+                    0.25 * dpr,
+                );
             }
         }
     }
@@ -258,11 +299,15 @@ impl Effect for Venom {
                 continue;
             }
             let from = NP - 4;
-            let pts: Vec<Vector2> = (from..NP).map(|i| Vector2::new(st.x[i], st.y[i]) * dpr).collect();
+            let pts: Vec<Vector2> = (from..NP)
+                .map(|i| Vector2::new(st.x[i], st.y[i]) * dpr)
+                .collect();
             let radii: Vec<f32> = (from..NP)
                 .map(|i| {
                     let f = i as f32 / (NP - 1) as f32;
-                    let w = (st.width * self.style.strand_width * (3.0 - 1.9 * f) * sim.thin() * 2.0).max(0.6);
+                    let w =
+                        (st.width * self.style.strand_width * (3.0 - 1.9 * f) * sim.thin() * 2.0)
+                            .max(0.6);
                     w * if st.hair { 0.45 } else { 1.0 } * 0.5 * dpr
                 })
                 .collect();
@@ -302,7 +347,15 @@ mod tests {
         let dt = 1.0 / 60.0;
         let run = |venom: &mut Venom, p: Option<Vector2>, secs: f32| {
             for i in 0..(secs / dt) as usize {
-                let input = EffectInput { shape: &shape, dt, time: i as f32 * dt, pointer: p, cursor: Cursor::default(), hovered: false, pressed: false };
+                let input = EffectInput {
+                    shape: &shape,
+                    dt,
+                    time: i as f32 * dt,
+                    pointer: p,
+                    cursor: Cursor::default(),
+                    hovered: false,
+                    pressed: false,
+                };
                 venom.update(&input);
             }
         };
@@ -317,7 +370,10 @@ mod tests {
         assert!(surface.mound.is_some());
         let mut decor = CursorDecor::default();
         venom.decorate_cursor(&mut decor);
-        assert!(decor.coats.iter().any(|c| c.is_some()), "holding coats the glove");
+        assert!(
+            decor.coats.iter().any(|c| c.is_some()),
+            "holding coats the glove"
+        );
         run(&mut venom, Some(Vector2::new(900.0, 0.0)), 0.1);
         assert_eq!(venom.state(), VenomState::Snapping);
         assert!(!venom.surface().unwrap().spikes.is_empty());

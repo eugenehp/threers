@@ -53,7 +53,9 @@ pub(crate) fn scale_color(c: Color, k: f32) -> Color {
 
 /// Hash-based value noise on a unit lattice — the zoning map's irregularity.
 pub(crate) fn city_hash2(x: i32, y: i32) -> f32 {
-    let mut h = x.wrapping_mul(374_761_393).wrapping_add(y.wrapping_mul(668_265_263));
+    let mut h = x
+        .wrapping_mul(374_761_393)
+        .wrapping_add(y.wrapping_mul(668_265_263));
     h = (h ^ (h >> 13)).wrapping_mul(1_274_126_177);
     ((h ^ (h >> 16)) as u32 as f32) / (u32::MAX as f32)
 }

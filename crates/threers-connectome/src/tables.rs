@@ -112,7 +112,10 @@ pub fn write_tables(out: &Path, root: &Path, trees: &[Tree]) -> io::Result<Meta>
     fs::create_dir_all(out)?;
     write(&out.join("meta.json"), json.as_bytes())?;
 
-    Ok(Meta { root: root.display().to_string(), json })
+    Ok(Meta {
+        root: root.display().to_string(),
+        json,
+    })
 }
 
 fn tree_json(
@@ -126,7 +129,12 @@ fn tree_json(
 ) -> String {
     // Only the first thousand unplaceable ids: enough to check any of them by
     // hand, and the count beside it is the number that matters.
-    let ids: Vec<String> = t.unplaceable.iter().take(1000).map(|i| i.to_string()).collect();
+    let ids: Vec<String> = t
+        .unplaceable
+        .iter()
+        .take(1000)
+        .map(|i| i.to_string())
+        .collect();
     let mut f: Vec<String> = Vec::new();
     f.push(format!("\"key\": {}", jstr(&t.key)));
     f.push(format!("\"title\": {}", jstr(&t.title)));
@@ -138,7 +146,11 @@ fn tree_json(
     f.push(format!("\"unplaceable\": {}", t.unplaceable.len()));
     f.push(format!("\"unplaceable_ids\": [{}]", ids.join(",")));
     f.push(format!("\"pos_source\": {}", jstr(&t.pos_source)));
-    f.push(format!("\"bbox\": {{\"min\": [{}], \"max\": [{}]}}", jnums(lo), jnums(hi)));
+    f.push(format!(
+        "\"bbox\": {{\"min\": [{}], \"max\": [{}]}}",
+        jnums(lo),
+        jnums(hi)
+    ));
     f.push(format!("\"roles\": [{}]", jstrs(&roles.names)));
     f.push(format!("\"role_counts\": [{}]", jusize(&roles.counts)));
     f.push(format!("\"nts\": [{}]", jstrs(&nts.names)));
@@ -176,9 +188,15 @@ fn jstrs(v: &[String]) -> String {
 }
 
 fn jusize(v: &[usize]) -> String {
-    v.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(",")
+    v.iter()
+        .map(|n| n.to_string())
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 fn jnums(v: &[f32; 3]) -> String {
-    v.iter().map(|n| format!("{}", n)).collect::<Vec<_>>().join(",")
+    v.iter()
+        .map(|n| format!("{}", n))
+        .collect::<Vec<_>>()
+        .join(",")
 }

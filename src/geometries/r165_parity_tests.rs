@@ -81,7 +81,11 @@ fn check(name: &str, got: &BufferGeometry, want: &Value, ulps: u32) {
             };
             // Below 1e-12 a difference is a libm's last-bit choice in
             // `f64` showing through at zero, not a different value.
-            let d = if (a as f64 - b as f64).abs() <= 1e-12 { 0 } else { d };
+            let d = if (a as f64 - b as f64).abs() <= 1e-12 {
+                0
+            } else {
+                d
+            };
             if d > worst.0 {
                 worst = (d, i);
             }
@@ -131,7 +135,10 @@ fn check_with_poles(name: &str, got: &BufferGeometry, want: &Value) {
     assert_eq!(g.len(), w.len());
     for (i, (&a, &b)) in g.iter().zip(&w).enumerate() {
         let b = b as f32;
-        assert!(a == b || (a - b).abs() < 1e-15, "{name}.position[{i}]: {a} vs {b}");
+        assert!(
+            a == b || (a - b).abs() < 1e-15,
+            "{name}.position[{i}]: {a} vs {b}"
+        );
     }
     let mut rest = want.clone();
     if let Some(o) = rest.as_object_mut() {
@@ -145,7 +152,10 @@ fn lathe_matches_r165() {
     let f = fixtures();
     for key in ["lathe", "lathe_clamped"] {
         let c = f.get(key).unwrap();
-        let pts: Vec<[f64; 2]> = nums(c, "points").chunks_exact(2).map(|p| [p[0], p[1]]).collect();
+        let pts: Vec<[f64; 2]> = nums(c, "points")
+            .chunks_exact(2)
+            .map(|p| [p[0], p[1]])
+            .collect();
         let seg = c.get("segments").unwrap().as_number().unwrap() as usize;
         let ps = c.get("phiStart").unwrap().as_number().unwrap();
         let pl = c.get("phiLength").unwrap().as_number().unwrap();
@@ -173,7 +183,12 @@ fn tube_matches_r165() {
 fn convex_matches_r165() {
     let f = fixtures();
     let c = f.get("convex").unwrap();
-    check("convex", &ConvexGeometry::from_f64(&triples(&nums(c, "points"))), c, 0);
+    check(
+        "convex",
+        &ConvexGeometry::from_f64(&triples(&nums(c, "points"))),
+        c,
+        0,
+    );
 }
 
 #[test]
@@ -209,7 +224,12 @@ fn rounded_box_matches_r165() {
         let a = nums(c, "args");
         // `acos` in `angleTo`: the platform libm and V8's can differ in the
         // last `f64` bit, which flips the `f32` rounding of a rare uv.
-        check(key, &RoundedBoxGeometry::new(a[0], a[1], a[2], a[3] as usize, a[4]), c, 1);
+        check(
+            key,
+            &RoundedBoxGeometry::new(a[0], a[1], a[2], a[3] as usize, a[4]),
+            c,
+            1,
+        );
     }
 }
 

@@ -5,7 +5,8 @@
 use super::shader::CustomShader;
 use super::{Column, ColumnFormat, Mark, MarkCommon, MarkKind};
 
-const SOURCE: &str = crate::wgsl!(r#"
+const SOURCE: &str = crate::wgsl!(
+    r#"
 struct LineIn {
     @builtin(vertex_index) vid : u32,
     @builtin(instance_index) iid : u32,
@@ -66,10 +67,12 @@ fn fs_pick(in : LineOut) -> @location(0) vec2<u32> {
     }
     return vec2<u32>(layer.ids.x, in.index);
 }
-"#);
+"#
+);
 
 /// The same lines as SwiftShader's parallelograms ([`LineMarks::parallelogram`]).
-const QUAD_SOURCE: &str = crate::wgsl!(r#"
+const QUAD_SOURCE: &str = crate::wgsl!(
+    r#"
 struct LineIn {
     @builtin(vertex_index) vid : u32,
     @builtin(instance_index) iid : u32,
@@ -161,7 +164,8 @@ fn fs_pick(in : LineOut) -> @location(0) vec2<u32> {
     }
     return vec2<u32>(layer.ids.x, in.index);
 }
-"#);
+"#
+);
 
 /// Segments drawn one pixel wide by the GPU's line rasterizer, a colour
 /// each — deck.gl's wireframes (`gl.LINES`).
@@ -236,7 +240,8 @@ impl LineMarks {
 
 impl Mark for LineMarks {
     fn kind(&self) -> MarkKind {
-        self.custom_shader().map_or(self.shader.kind(), |s| s.kind())
+        self.custom_shader()
+            .map_or(self.shader.kind(), |s| s.kind())
     }
     fn common(&self) -> &MarkCommon {
         &self.common
@@ -248,7 +253,11 @@ impl Mark for LineMarks {
         self.sources.len()
     }
     fn vertices_per_instance(&self) -> u32 {
-        if self.parallelogram { 6 } else { 2 }
+        if self.parallelogram {
+            6
+        } else {
+            2
+        }
     }
     fn line_list(&self) -> bool {
         !self.parallelogram
@@ -257,6 +266,10 @@ impl Mark for LineMarks {
         vec![&mut self.sources, &mut self.targets, &mut self.colors]
     }
     fn custom_shader(&self) -> Option<&CustomShader> {
-        Some(if self.parallelogram { &self.quad_shader } else { &self.shader })
+        Some(if self.parallelogram {
+            &self.quad_shader
+        } else {
+            &self.shader
+        })
     }
 }

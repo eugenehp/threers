@@ -13,7 +13,10 @@ use crate::core::BufferAttribute;
 use crate::loaders::json::{self, Value};
 
 fn load(name: &str) -> Vec<ExportObject> {
-    let path = format!("{}/src/exporters/testdata/{name}", env!("CARGO_MANIFEST_DIR"));
+    let path = format!(
+        "{}/src/exporters/testdata/{name}",
+        env!("CARGO_MANIFEST_DIR")
+    );
     let text = std::fs::read_to_string(path).unwrap();
     let doc = json::parse(&text).unwrap();
     let floats = |v: &Value| -> Option<Vec<f32>> {
@@ -98,14 +101,22 @@ fn stl_matches_three_js() {
         &expected("scene.stl"),
         "ascii stl",
     );
-    assert_eq!(write_stl_binary(&objects), expected("scene-bin.stl"), "binary stl");
+    assert_eq!(
+        write_stl_binary(&objects),
+        expected("scene-bin.stl"),
+        "binary stl"
+    );
 }
 
 #[test]
 fn ply_matches_three_js() {
     let objects = load("ply-scene.json");
     let text = |o: &PlyOptions| String::from_utf8(write_ply(&objects, o).unwrap()).unwrap();
-    same_text(&text(&PlyOptions::default()), &expected("scene.ply"), "ascii ply");
+    same_text(
+        &text(&PlyOptions::default()),
+        &expected("scene.ply"),
+        "ascii ply",
+    );
     same_text(
         &text(&PlyOptions {
             exclude_attributes: vec!["index".into(), "uv".into()],
@@ -191,7 +202,10 @@ fn polygons_are_written_as_n_gons_when_asked() {
     )
     .unwrap();
     assert!(ply.contains("element face 3\n"), "{ply}");
-    assert!(ply.ends_with("\n4 0 1 5 4\n4 1 2 6 5\n4 2 3 7 6\n\n"), "{ply}");
+    assert!(
+        ply.ends_with("\n4 0 1 5 4\n4 1 2 6 5\n4 2 3 7 6\n\n"),
+        "{ply}"
+    );
     // No grouping: triangles whatever the option says.
     let plain = [ExportObject::mesh("", strip(false))];
     assert_eq!(

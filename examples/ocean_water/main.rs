@@ -516,7 +516,10 @@ fn direct(args: &Args, path: &str) {
         buf.slice(..).map_async(wgpu::MapMode::Read, |_| {});
         let _ = device.poll(wgpu::PollType::wait_indefinitely());
 
-        let data = buf.slice(..).get_mapped_range().expect("buffer range is mapped");
+        let data = buf
+            .slice(..)
+            .get_mapped_range()
+            .expect("buffer range is mapped");
         let mut rgba = Vec::with_capacity((w * h * 4) as usize);
         let mut lit = 0u64;
         for y in 0..h {
@@ -666,12 +669,7 @@ async fn windowed(args: Args) {
     let mut view = WindowRenderer::new(window.clone()).expect("a GPU for the window");
     let gpu = view.marks_gpu();
 
-    let mut world = World::build_with(
-        &args.preset,
-        &args.quality,
-        view.aspect(),
-        cascades(&args),
-    );
+    let mut world = World::build_with(&args.preset, &args.quality, view.aspect(), cascades(&args));
     let mut waves = world.attach_waves(&gpu, &gpu, &mut view);
     report(&world, &args.preset, &args.quality);
     println!("  left-drag orbits · right-drag pans · scroll zooms");
@@ -722,9 +720,7 @@ async fn windowed(args: Args) {
                 WindowEvent::CloseRequested => target.exit(),
                 WindowEvent::Resized(s) => {
                     view.resize(s.width, s.height);
-                    world
-                        .camera
-                        .set_aspect(view.aspect());
+                    world.camera.set_aspect(view.aspect());
                 }
                 WindowEvent::MouseInput { state, button, .. } => {
                     let pressed = state == ElementState::Pressed;
@@ -942,4 +938,3 @@ async fn windowed(args: Args) {
         })
         .expect("event loop");
 }
-

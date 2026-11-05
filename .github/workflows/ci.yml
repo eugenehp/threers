@@ -1,0 +1,157 @@
+# Every push and pull request. The release workflow only runs on tags, and a
+# build break or a silently skipped suite would otherwise wait for one.
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  # Feature combinations nothing else builds: `native-codec` without `decode`
+  # broke every default build once, and wasm-only code has its own exhaustive
+  # matches that a native check never sees.
+  features:
+    name: feature matrix
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check -p threers-codec --no-default-features
+      - run: cargo check -p threers-codec --all-targets
+      - run: cargo check -p threers-codec --all-targets --features parallel
+      - run: cargo check --all-targets
+      - run: cargo check --target wasm32-unknown-unknown --features webgl
+
+  # Conformance streams through the skip gate: a suite that loses its inputs
+  # fails here rather than reporting ok.
+  codec:
+    name: codec conformance
+    runs-on: ubuntu-latest
+    env:
+      THREERS_ALLOWED_SKIPS: scripts/allowed-skips-ci.txt
+      THREERS_H264_CONFORMANCE: ${{ github.workspace }}/.conformance/h264
+      THREERS_HEVC_CONFORMANCE: ${{ github.workspace }}/.conformance/hevc
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install reference tools
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg x265 rsync
+      - uses: actions/cache@v4
+        with:
+          path: .conformance
+          key: conformance-v1
+      - name: Fetch conformance streams
+        run: |
+          mkdir -p .conformance/h264 .conformance/hevc
+          [ -n "$(ls -A .conformance/h264)" ] || rsync -rltLW rsync://fate-suite.ffmpeg.org/fate-suite/h264-conformance/ .conformance/h264/
+          [ -n "$(ls -A .conformance/hevc)" ] || rsync -rltLW rsync://fate-suite.ffmpeg.org/fate-suite/hevc-conformance/ .conformance/hevc/
+      - run: scripts/test-no-skips.py -p threers-codec --release --features parallel
+
+  # The renderer's tests on Mesa's software Vulkan: no GPU, but a real adapter.
+  native:
+    name: native tests
+    runs-on: ubuntu-latest
+    env:
+      THREERS_ALLOWED_SKIPS: scripts/allowed-skips-ci.txt
+      RUST_TEST_THREADS: 2
+      WGPU_BACKEND: vulkan
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install software Vulkan and ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers vulkan-tools ffmpeg
+      - run: vulkaninfo --summary
+      - run: scripts/test-no-skips.py -p threers --release
+
+  # Real Chrome on WebGL2 through SwiftShader. WebGPU needs a Metal or Vulkan
+  # adapter Chrome will accept, so scripts/browser-smoke.sh covers it locally.
+  webgl:
+    name: WebGL2 in Chrome
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install zsh and the matching test runner
+        run: |
+          sudo apt-get update && sudo apt-get install -y zsh
+          v=$(awk '/^name = "wasm-bindgen"$/ { getline; gsub(/version = |"/, ""); print; exit }' Cargo.lock)
+          cargo install wasm-bindgen-cli --version "$v" --locked
+      - run: FEATURES=webgl TEST=webgl scripts/wasm-browser-test.sh
+
+  # The game layer, and the promise it rests on: a recorded race played back
+  # lands every car on the same bit, which rewind and replays both rely on.
+  game:
+    name: physics and ECS
+    runs-on: ubuntu-latest
+    env:
+      THREERS_ALLOWED_SKIPS: scripts/allowed-skips-ci.txt
+      RUST_TEST_THREADS: 2
+      WGPU_BACKEND: vulkan
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install window, sound, pad and software Vulkan libraries
+        run: >
+          sudo apt-get update && sudo apt-get install -y
+          libasound2-dev libudev-dev libxkbcommon-dev libwayland-dev libx11-dev
+          mesa-vulkan-drivers xvfb ffmpeg
+      - run: cargo test -p threers-physics --release
+      - run: xvfb-run -a scripts/test-no-skips.py -p threers-ecs --release --features physics,window,gamepad,audio,parallel,ui
+      - name: Replays are exact
+        run: cargo test -p threers-ecs --release --features physics,window,audio --test race -- recorded rewinding
+
+  # The JavaScript shim over a fresh wasm build, and the Python package.
+  bindings:
+    name: JS and Python bindings
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install the matching wasm-bindgen
+        run: |
+          v=$(awk '/^name = "wasm-bindgen"$/ { getline; gsub(/version = |"/, ""); print; exit }' Cargo.lock)
+          cargo install wasm-bindgen-cli --version "$v" --locked
+      - name: Build the wasm package
+        run: |
+          cargo build --release --lib --target wasm32-unknown-unknown
+          wasm-bindgen target/wasm32-unknown-unknown/release/threers.wasm --target web --out-dir js-pkg
+      - name: JS tests
+        working-directory: crates/threers-js
+        run: THREERS_PKG_DIR=${{ github.workspace }}/js-pkg node --test test/*.mjs
+      - name: Python tests
+        working-directory: crates/threers-py
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install maturin pytest
+          .venv/bin/maturin develop --release
+          .venv/bin/python -m pytest -q tests
+

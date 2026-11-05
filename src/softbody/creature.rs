@@ -7,10 +7,10 @@
 //! their skins by surface nets; [`Creature::from_fields`] takes any field and
 //! any skin points, which is what the parity test feeds both sides.
 
-use threers_softbody::js_math::{self as js, Lcg};
-use threers_softbody::{Bounds, Chains, Landmarks, Limb, Part, SoftBody};
 use crate::math::Vector3;
 use crate::sdf::{Sdf3, Shape, SurfaceNets};
+use threers_softbody::js_math::{self as js, Lcg};
+use threers_softbody::{Bounds, Chains, Landmarks, Limb, Part, SoftBody};
 
 /// A field the lattice is built over, with the box it is built in.
 pub struct Field<'a> {
@@ -66,7 +66,13 @@ fn nearest(p: &[f32], q: [f64; 3]) -> usize {
 impl Creature {
     /// Its soft body, the goo drawn from a generator seeded with `seed`.
     pub fn into_soft_body(self, seed: u32) -> SoftBody {
-        SoftBody::new(&self.body, self.limbs, self.chains, self.landmarks, Box::new(Lcg(seed)))
+        SoftBody::new(
+            &self.body,
+            self.limbs,
+            self.chains,
+            self.landmarks,
+            Box::new(Lcg(seed)),
+        )
     }
 
     /// Build from fields. `body_f` is the body's field again, for the glue:
@@ -124,7 +130,14 @@ impl Creature {
                 }
             }
             let anchor = nearest(&bn, pivot);
-            limbs.push(Limb { part, name, glue_part, glue_body, pivot, anchor });
+            limbs.push(Limb {
+                part,
+                name,
+                glue_part,
+                glue_body,
+                pivot,
+                anchor,
+            });
         }
         let chains = Self::chains(chains, &body_part);
         let landmarks = Landmarks {
@@ -132,7 +145,13 @@ impl Creature {
             snout: nearest(&bn, marks.span[0]),
             tail: nearest(&bn, marks.span[1]),
         };
-        Ok(Creature { body: body_part, limbs, chains, landmarks, skins: Vec::new() })
+        Ok(Creature {
+            body: body_part,
+            limbs,
+            chains,
+            landmarks,
+            skins: Vec::new(),
+        })
     }
 
     fn chains(specs: &[ChainSpec], body: &Part) -> Chains {
@@ -150,18 +169,27 @@ impl Creature {
                 c.radius.push(r as f32);
                 c.parent.push(if k == 0 { -1 } else { id as i32 - 1 });
                 c.anchor.push(if k == 0 { -1 } else { root });
-                c.stiff.push(if k == 0 { 0.0 } else { (s.stiff * (1.0 - 0.5 * t)) as f32 });
-                c.seg_radius.push(if k == 0 { 0.0 } else { rad[id - 1] as f32 });
+                c.stiff.push(if k == 0 {
+                    0.0
+                } else {
+                    (s.stiff * (1.0 - 0.5 * t)) as f32
+                });
+                c.seg_radius
+                    .push(if k == 0 { 0.0 } else { rad[id - 1] as f32 });
                 if k == 0 {
                     root = id as i32;
                     c.roots.push(id as i32);
                 }
             }
         }
-        let root_pts: Vec<f32> = c.roots.iter().flat_map(|&r| {
-            let r = r as usize;
-            [c.rest[3 * r], c.rest[3 * r + 1], c.rest[3 * r + 2]]
-        }).collect();
+        let root_pts: Vec<f32> = c
+            .roots
+            .iter()
+            .flat_map(|&r| {
+                let r = r as usize;
+                [c.rest[3 * r], c.rest[3 * r + 1], c.rest[3 * r + 2]]
+            })
+            .collect();
         c.root_emb = body.embed(&root_pts);
         c
     }
@@ -169,11 +197,23 @@ impl Creature {
     /// Build from shapes: each skin meshed by surface nets at `cell`, the
     /// lattice at `h`. A part is stopped just inside the body (0.03), so its
     /// skin is a closed shape of its own.
-    pub fn from_shapes(body: &ShapeSpec, parts: &[(String, ShapeSpec)], chains: &[ChainSpec], marks: Marks) -> Result<Creature, String> {
+    pub fn from_shapes(
+        body: &ShapeSpec,
+        parts: &[(String, ShapeSpec)],
+        chains: &[ChainSpec],
+        marks: Marks,
+    ) -> Result<Creature, String> {
         let inner = body.shape.clone().round(-0.03);
         let prepared: Vec<(String, Shape, f32, f64)> = parts
             .iter()
-            .map(|(name, p)| (name.clone(), p.shape.clone().subtract(inner.clone(), 0.0), p.cell, p.h))
+            .map(|(name, p)| {
+                (
+                    name.clone(),
+                    p.shape.clone().subtract(inner.clone(), 0.0),
+                    p.cell,
+                    p.h,
+                )
+            })
             .collect();
         let mut skins = Vec::new();
         let mut build = |shape: &Shape, cell: f32, h: f64| -> Result<(Bounds, Vec<f32>), String> {
@@ -202,11 +242,26 @@ impl Creature {
         let bf = field_of(&body.shape);
         let pfs: Vec<_> = part_fields.iter().map(|(_, s, ..)| field_of(s)).collect();
         let mut c = Creature::from_fields(
-            Field { f: &bf, bounds: bb, h: body.h, skin: bskin },
+            Field {
+                f: &bf,
+                bounds: bb,
+                h: body.h,
+                skin: bskin,
+            },
             part_fields
                 .iter()
                 .zip(&pfs)
-                .map(|((name, _, b, h, skin), f)| (name.clone(), Field { f, bounds: *b, h: *h, skin: skin.clone() }))
+                .map(|((name, _, b, h, skin), f)| {
+                    (
+                        name.clone(),
+                        Field {
+                            f,
+                            bounds: *b,
+                            h: *h,
+                            skin: skin.clone(),
+                        },
+                    )
+                })
                 .collect(),
             chains,
             marks,

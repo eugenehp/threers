@@ -59,9 +59,13 @@ impl VertexTangentsHelper {
         let mut g = BufferGeometry::new();
         g.set_attribute("position", BufferAttribute::new(positions, 3));
         Object3D::line_segments(LineSegments::new(
-        g,
-        LineBasicMaterial { tone_mapped: false, ..LineBasicMaterial::new(color) }.into(),
-    ))
+            g,
+            LineBasicMaterial {
+                tone_mapped: false,
+                ..LineBasicMaterial::new(color)
+            }
+            .into(),
+        ))
     }
 }
 
@@ -70,6 +74,10 @@ fn empty_line(color: Color) -> Object3D {
     g.set_attribute("position", BufferAttribute::new(Vec::new(), 3));
     Object3D::line_segments(LineSegments::new(
         g,
-        LineBasicMaterial { tone_mapped: false, ..LineBasicMaterial::new(color) }.into(),
+        LineBasicMaterial {
+            tone_mapped: false,
+            ..LineBasicMaterial::new(color)
+        }
+        .into(),
     ))
 }

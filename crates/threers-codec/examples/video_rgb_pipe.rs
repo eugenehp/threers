@@ -9,10 +9,11 @@ use std::collections::BTreeSet;
 
 fn main() {
     let a: Vec<String> = std::env::args().collect();
-    let r = threers_codec::ffcompat::reader::VideoReader::open(std::fs::read(&a[1]).expect("read")).unwrap_or_else(|e| {
-        println!("ERROR {e}");
-        std::process::exit(2)
-    });
+    let r = threers_codec::ffcompat::reader::VideoReader::open(std::fs::read(&a[1]).expect("read"))
+        .unwrap_or_else(|e| {
+            println!("ERROR {e}");
+            std::process::exit(2)
+        });
     let frames = r.pipe(None);
     let wanted: BTreeSet<usize> = frames.iter().copied().collect();
     let mut got = std::collections::BTreeMap::new();
@@ -29,8 +30,18 @@ fn main() {
         let reference = std::fs::read(&a[3]).expect("reference");
         let n = out.len().min(reference.len());
         let diff = (0..n).filter(|&i| out[i] != reference[i]).count();
-        let maxd = (0..n).map(|i| (out[i] as i32 - reference[i] as i32).abs()).max().unwrap_or(0);
-        let first = (0..n).find(|&i| out[i] != reference[i]).map(|i| (i / (w as usize * h as usize * 3), (i / 3) % w as usize, (i / 3 / w as usize) % h as usize, i % 3));
+        let maxd = (0..n)
+            .map(|i| (out[i] as i32 - reference[i] as i32).abs())
+            .max()
+            .unwrap_or(0);
+        let first = (0..n).find(|&i| out[i] != reference[i]).map(|i| {
+            (
+                i / (w as usize * h as usize * 3),
+                (i / 3) % w as usize,
+                (i / 3 / w as usize) % h as usize,
+                i % 3,
+            )
+        });
         println!("{w}x{h} frames ours {} ref {}: {diff} bytes differ (max {maxd}), first (frame, x, y, c) {first:?}", out.len() / (w as usize * h as usize * 3), reference.len() / (w as usize * h as usize * 3));
     } else {
         std::fs::write(&a[2], out).expect("write");

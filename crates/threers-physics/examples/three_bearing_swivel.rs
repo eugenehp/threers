@@ -88,10 +88,10 @@ use std::sync::Arc;
 
 use threers::core::{BufferAttribute, BufferGeometry};
 use threers::kinematics::swivel::{cant_of, Bearing, Schedule, SwivelNozzle};
-use threers::openscad::frame::ScadFrame;
-use threers::openscad::ScadPart;
 use threers::kinematics::{DriveEnv, GearTrain, StribeckFriction};
+use threers::openscad::frame::ScadFrame;
 use threers::openscad::mechanism::MechanismSpec;
+use threers::openscad::ScadPart;
 use threers_physics::assembly::MateId;
 use threers_physics::joint::{JointKind, Motor};
 use threers_physics::mechanism::ScadMechanism;
@@ -169,10 +169,9 @@ fn main() {
         let kind = format!("{:?}", mate.kind).to_lowercase();
         let kind = kind.split(&[' ', '{'][..]).next().unwrap_or("").to_string();
         let extra = match mate.kind {
-            threers::openscad::mechanism::MateSpecKind::Hinge => format!(
-                "cant {:+7.3} deg",
-                cant_of(as_f64(mate.axis))
-            ),
+            threers::openscad::mechanism::MateSpecKind::Hinge => {
+                format!("cant {:+7.3} deg", cant_of(as_f64(mate.axis)))
+            }
             threers::openscad::mechanism::MateSpecKind::Gear { ratio } => format!(
                 "ratio {ratio:+.1}, carried on {}",
                 mate.carrier.as_deref().unwrap_or("the world")
@@ -255,7 +254,9 @@ fn main() {
                         "  {name}: clear over {lo:.0}..{hi:.0} deg, then fouls {}",
                         name_of(&mech, on)
                     ),
-                    None => println!("  {name}: clear over its whole declared {lo:.0}..{hi:.0} deg"),
+                    None => {
+                        println!("  {name}: clear over its whole declared {lo:.0}..{hi:.0} deg")
+                    }
                 }
             }
             None => println!("  {name}: not a mate that can be swept"),
@@ -351,7 +352,10 @@ fn main() {
         "  mesh             {mesh_ratio:+.0} : 1   ring gear on the race, pinion on the segment upstream"
     );
     println!("  gearbox          {gearbox:.1} : 1   inside each drive unit");
-    println!("  overall          {:.0} : 1   motor turns per turn of the bearing", train.ratio);
+    println!(
+        "  overall          {:.0} : 1   motor turns per turn of the bearing",
+        train.ratio
+    );
 
     let mut peak_hold = [0.0f64; 3];
     for d in 0..=95 {
@@ -471,7 +475,9 @@ fn main() {
                 "  measured in the world   {:8.2} deg {:9.2} deg {:14.2} deg",
                 bad.hover, bad.worst_track, bad.worst_lateral
             );
-            println!("  The loop spends its authority hiding the wrong plant and mostly gets there:");
+            println!(
+                "  The loop spends its authority hiding the wrong plant and mostly gets there:"
+            );
             println!(
                 "  it still reaches the hover. What it costs is {:.1} deg of jet out of the vertical",
                 bad.worst_lateral
@@ -644,29 +650,63 @@ fn compare() {
         return;
     }
     let (e, i) = (&surveys[0], &surveys[1]);
-    println!("                            {:>10} {:>10}", e.label, i.label);
+    println!(
+        "                            {:>10} {:>10}",
+        e.label, i.label
+    );
     let row = |name: &str, unit: &str, a: f64, b: f64, dp: usize| {
-        println!(
-            "  {name:<24}  {:>10.dp$} {:>10.dp$}  {unit}",
-            a,
-            b,
-            dp = dp
-        );
+        println!("  {name:<24}  {:>10.dp$} {:>10.dp$}  {unit}", a, b, dp = dp);
     };
-    row("mesh ratio", "turns of pinion per turn of bearing", e.ratio, i.ratio, 1);
-    row("gearbox behind it", ": 1", OVERALL / e.ratio.abs(), OVERALL / i.ratio.abs(), 1);
+    row(
+        "mesh ratio",
+        "turns of pinion per turn of bearing",
+        e.ratio,
+        i.ratio,
+        1,
+    );
+    row(
+        "gearbox behind it",
+        ": 1",
+        OVERALL / e.ratio.abs(),
+        OVERALL / i.ratio.abs(),
+        1,
+    );
     row("ring pitch radius", "m", e.r_ring, i.r_ring, 3);
     row("pinion pitch radius", "m", e.r_pin, i.r_pin, 3);
     row("centre distance", "m", e.centres, i.centres, 3);
-    row("narrowest gas radius", "m, at the throat", e.bore, i.bore, 3);
-    row("installed radius", "m, the hole it goes in", e.envelope, i.envelope, 3);
+    row(
+        "narrowest gas radius",
+        "m, at the throat",
+        e.bore,
+        i.bore,
+        3,
+    );
+    row(
+        "installed radius",
+        "m, the hole it goes in",
+        e.envelope,
+        i.envelope,
+        3,
+    );
     row("ring gear, each", "kg", e.ring_mass, i.ring_mass, 0);
     row("swung mass", "kg", e.swung, i.swung, 0);
     row("parts / mates", "", e.parts as f64, i.parts as f64, 0);
     row("worst bearing torque", "N.m", e.hold, i.hold, 0);
     row("tooth load at that", "N", e.tooth_load, i.tooth_load, 0);
-    row("tracked to", "deg of jet", e.run.worst_track, i.run.worst_track, 2);
-    row("worst out of plane", "deg", e.run.worst_lateral, i.run.worst_lateral, 2);
+    row(
+        "tracked to",
+        "deg of jet",
+        e.run.worst_track,
+        i.run.worst_track,
+        2,
+    );
+    row(
+        "worst out of plane",
+        "deg",
+        e.run.worst_lateral,
+        i.run.worst_lateral,
+        2,
+    );
     println!();
     println!("  Same deflection envelope, same schedule, same 200:1 from motor to bearing.");
     println!("  What differs is where the drive lives, and everything else follows from it.");
@@ -684,7 +724,10 @@ fn compare() {
         "  projects, so the race sets the envelope rather than a motor: {:.3} m against {:.3},",
         i.envelope, e.envelope
     );
-    println!("  which is {:.0} mm of bay radius.", (e.envelope - i.envelope) * 1000.0);
+    println!(
+        "  which is {:.0} mm of bay radius.",
+        (e.envelope - i.envelope) * 1000.0
+    );
     println!();
     println!("  The mesh ratio is not a free choice there. An internal pinion sits at");
     println!("  R_ring - R_pinion and has to clear the liner, so it is small, so it needs a lot");
@@ -823,13 +866,13 @@ fn simulate(
     // has to start from somewhere, and "wherever half a tonne of duct sagged to"
     // is not a starting point either version deserves.
     for _ in 0..fps {
-        step(&mut mech, &bearings, &shafts, &ceiling, mesh_ratio, schedule, 0.0, 0.0, KP, dt);
+        step(
+            &mut mech, &bearings, &shafts, &ceiling, mesh_ratio, schedule, 0.0, 0.0, KP, dt,
+        );
     }
     if verbose {
         let (droop, _) = measured_jet(&mech, nozzle_body);
-        println!(
-            "  stowed, the pinions hold the module to {droop:.3} deg off the engine axis"
-        );
+        println!("  stowed, the pinions hold the module to {droop:.3} deg off the engine axis");
         println!("     t     phase      commanded   achieved   out-of-plane   b1      b2      b3");
     }
 
@@ -875,8 +918,16 @@ fn simulate(
         }
 
         step(
-            &mut mech, &bearings, &shafts, &ceiling, mesh_ratio, schedule, u,
-            (ahead - behind) / (2.0 * WINDOW), kp, dt,
+            &mut mech,
+            &bearings,
+            &shafts,
+            &ceiling,
+            mesh_ratio,
+            schedule,
+            u,
+            (ahead - behind) / (2.0 * WINDOW),
+            kp,
+            dt,
         );
 
         let lateral;
@@ -1017,7 +1068,11 @@ fn attachment(spec: &MechanismSpec, schedule: &Schedule) {
             .part_named(name)
             .and_then(|p| mech.assembly.body_of(p))
     };
-    let welded = [("ring1", "swivel_a"), ("ring2", "swivel_b"), ("ring3", "nozzle")];
+    let welded = [
+        ("ring1", "swivel_a"),
+        ("ring2", "swivel_b"),
+        ("ring3", "nozzle"),
+    ];
     let pairs: Vec<(BodyId, BodyId)> = welded
         .iter()
         .filter_map(|(a, b)| Some((body(&mech, a)?, body(&mech, b)?)))
@@ -1029,7 +1084,9 @@ fn attachment(spec: &MechanismSpec, schedule: &Schedule) {
     let fps = 240;
     let dt = 1.0 / fps as f32;
     for _ in 0..fps {
-        step(&mut mech, &bearings, &shafts, &ceiling, ratio, schedule, 0.0, 0.0, KP, dt);
+        step(
+            &mut mech, &bearings, &shafts, &ceiling, ratio, schedule, 0.0, 0.0, KP, dt,
+        );
     }
 
     // How each ring gear sits on its race at rest. It has to still sit that way
@@ -1063,7 +1120,9 @@ fn attachment(spec: &MechanismSpec, schedule: &Schedule) {
     for i in 0..=deploy {
         let u = smoothstep(i as f64 / deploy as f64);
         let du = 1.0 / Transition::DEPLOY;
-        step(&mut mech, &bearings, &shafts, &ceiling, ratio, schedule, u, du, KP, dt);
+        step(
+            &mut mech, &bearings, &shafts, &ceiling, ratio, schedule, u, du, KP, dt,
+        );
         for (k, (a, b)) in pairs.iter().enumerate() {
             let (ra, rb) = (
                 mech.world.body(*a).unwrap().rotation(),
@@ -1072,8 +1131,14 @@ fn attachment(spec: &MechanismSpec, schedule: &Schedule) {
             worst_weld = worst_weld.max(between(rest[k], ra.conjugate().multiply(rb)));
         }
         for k in 0..3 {
-            let b = mech.assembly.coordinate(bearings[k], &mech.world).unwrap_or(0.0) as f64;
-            let s = mech.assembly.coordinate(shafts[k], &mech.world).unwrap_or(0.0) as f64;
+            let b = mech
+                .assembly
+                .coordinate(bearings[k], &mech.world)
+                .unwrap_or(0.0) as f64;
+            let s = mech
+                .assembly
+                .coordinate(shafts[k], &mech.world)
+                .unwrap_or(0.0) as f64;
             turn_b[k] += wrapped(b - last_b[k]);
             turn_s[k] += wrapped(s - last_s[k]);
             last_b[k] = b;
@@ -1119,7 +1184,9 @@ fn attachment(spec: &MechanismSpec, schedule: &Schedule) {
     let loaded = 0.60;
     for i in 0..(fps * 3) {
         let u = 1.0 - (1.0 - loaded) * smoothstep(i as f64 / (fps * 2) as f64);
-        step(&mut mech, &bearings, &shafts, &ceiling, ratio, schedule, u, 0.0, KP, dt);
+        step(
+            &mut mech, &bearings, &shafts, &ceiling, ratio, schedule, u, 0.0, KP, dt,
+        );
     }
     let (held, _) = measured_jet(&mech, nozzle_body);
     for shaft in &shafts {
@@ -1584,7 +1651,12 @@ fn clearance(spec: &MechanismSpec, schedule: &Schedule) {
         .collect();
 
     // One BVH per part, on the geometry in its own frame, built once.
-    let names: Vec<String> = mech.assembly.parts().iter().map(|p| p.name.clone()).collect();
+    let names: Vec<String> = mech
+        .assembly
+        .parts()
+        .iter()
+        .map(|p| p.name.clone())
+        .collect();
     let mut bvh: Vec<Option<MeshBvh>> = Vec::new();
     let mut verts: Vec<Vec<[f32; 3]>> = Vec::new();
     let mut bodies: Vec<Option<BodyId>> = Vec::new();
@@ -1636,7 +1708,9 @@ fn clearance(spec: &MechanismSpec, schedule: &Schedule) {
     let fps = 240;
     let dt = 1.0 / fps as f32;
     for _ in 0..fps {
-        step(&mut mech, &bearings, &shafts, &ceiling, ratio, schedule, 0.0, 0.0, KP, dt);
+        step(
+            &mut mech, &bearings, &shafts, &ceiling, ratio, schedule, 0.0, 0.0, KP, dt,
+        );
     }
 
     let mut worst: Vec<(f32, usize, usize, f64, Vector3)> = Vec::new();
@@ -1649,13 +1723,26 @@ fn clearance(spec: &MechanismSpec, schedule: &Schedule) {
         // what matters is where the parts *are*, not how fast they got there.
         let u = smoothstep(k as f64 / samples as f64);
         for _ in 0..(deploy_steps / samples).max(1) {
-            step(&mut mech, &bearings, &shafts, &ceiling, ratio, schedule, u,
-                 1.0 / Transition::DEPLOY, KP, dt);
+            step(
+                &mut mech,
+                &bearings,
+                &shafts,
+                &ceiling,
+                ratio,
+                schedule,
+                u,
+                1.0 / Transition::DEPLOY,
+                KP,
+                dt,
+            );
         }
         let deflection = nozzle_deflection(&mech, &names, &bodies);
         let poses: Vec<Option<(Vector3, Quaternion)>> = bodies
             .iter()
-            .map(|b| b.and_then(|b| mech.world.body(b)).map(|x| (x.translation(), x.rotation())))
+            .map(|b| {
+                b.and_then(|b| mech.world.body(b))
+                    .map(|x| (x.translation(), x.rotation()))
+            })
             .collect();
         for a in 0..names.len() {
             for b in (a + 1)..names.len() {
@@ -1672,7 +1759,9 @@ fn clearance(spec: &MechanismSpec, schedule: &Schedule) {
                 let mut min = f32::INFINITY;
                 let mut at = Vector3::ZERO;
                 for (from, to, pf, pt) in [(a, b, pa, pb), (b, a, pb, pa)] {
-                    let Some(tree) = bvh[to].as_ref() else { continue };
+                    let Some(tree) = bvh[to].as_ref() else {
+                        continue;
+                    };
                     for v in &verts[from] {
                         let w = Vector3::new(v[0], v[1], v[2]).apply_quaternion(pf.1) + pf.0;
                         let local = (w - pt.0).apply_quaternion(pt.1.conjugate());
@@ -1718,11 +1807,7 @@ fn clearance(spec: &MechanismSpec, schedule: &Schedule) {
 }
 
 /// Deflection read off the simulated nozzle body.
-fn nozzle_deflection(
-    mech: &ScadMechanism,
-    names: &[String],
-    bodies: &[Option<BodyId>],
-) -> f64 {
+fn nozzle_deflection(mech: &ScadMechanism, names: &[String], bodies: &[Option<BodyId>]) -> f64 {
     let Some(i) = names.iter().position(|n| n == "nozzle") else {
         return 0.0;
     };
@@ -1880,7 +1965,9 @@ fn render(spec: &MechanismSpec, schedule: &Schedule) {
     // other way shows the bore and very little else.
     if cut {
         for _ in 0..fps {
-            step(&mut mech, &bearings, &shafts, &ceiling, ratio, schedule, 0.0, 0.0, KP, dt);
+            step(
+                &mut mech, &bearings, &shafts, &ceiling, ratio, schedule, 0.0, 0.0, KP, dt,
+            );
         }
         let shot = mech.snapshot(0, 0.0);
         // Looking down onto the cut, nearly square to it, so the wall reads as a
@@ -1914,7 +2001,9 @@ fn render(spec: &MechanismSpec, schedule: &Schedule) {
         let (_, u) = TRANSITION.at(t);
         const WINDOW: f64 = 0.05;
         let du = (TRANSITION.at(t + WINDOW).1 - TRANSITION.at(t - WINDOW).1) / (2.0 * WINDOW);
-        step(&mut mech, &bearings, &shafts, &ceiling, ratio, schedule, u, du, KP, dt);
+        step(
+            &mut mech, &bearings, &shafts, &ceiling, ratio, schedule, u, du, KP, dt,
+        );
         if i % 3 == 0 {
             shots.push(mech.snapshot(shots.len(), t));
         }

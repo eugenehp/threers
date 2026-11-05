@@ -47,7 +47,12 @@ impl std::fmt::Debug for Target {
 
 impl Target {
     /// A new `width × height` target of `format`, registered with `renderer`.
-    pub fn new(renderer: &mut Renderer, width: u32, height: u32, format: wgpu::TextureFormat) -> Self {
+    pub fn new(
+        renderer: &mut Renderer,
+        width: u32,
+        height: u32,
+        format: wgpu::TextureFormat,
+    ) -> Self {
         let rt = Arc::new(RenderTarget::new(
             &renderer.device_arc(),
             width.max(1),
@@ -66,7 +71,13 @@ impl Target {
 
     /// A handle to a target another backend holds under `id`.
     pub fn external(id: u32, width: u32, height: u32, format: wgpu::TextureFormat) -> Self {
-        Self { id, width: width.max(1), height: height.max(1), format, rt: None }
+        Self {
+            id,
+            width: width.max(1),
+            height: height.max(1),
+            format,
+            rt: None,
+        }
     }
 
     /// A half-float target, the kind every pass works in.
@@ -77,7 +88,13 @@ impl Target {
     /// Wrap a render target registered elsewhere under `id` — one the caller
     /// handed the composer, or the wasm layer's.
     pub fn from_registered(id: u32, rt: Arc<RenderTarget>) -> Self {
-        Self { id, width: rt.width, height: rt.height, format: rt.format, rt: Some(rt) }
+        Self {
+            id,
+            width: rt.width,
+            height: rt.height,
+            format: rt.format,
+            rt: Some(rt),
+        }
     }
 
     pub fn id(&self) -> u32 {
@@ -106,7 +123,9 @@ impl Target {
     /// On a target another backend holds — see
     /// [`wgpu_render_target`](Self::wgpu_render_target).
     pub fn render_target(&self) -> &Arc<RenderTarget> {
-        self.rt.as_ref().expect("a wgpu render target (this one belongs to another backend)")
+        self.rt
+            .as_ref()
+            .expect("a wgpu render target (this one belongs to another backend)")
     }
 
     /// The wgpu render target, if this target is one.

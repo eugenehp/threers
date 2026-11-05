@@ -132,24 +132,39 @@ struct Synthesis {
 /// 0.02 and 0.0055 a pixel, to 0.3. CoreText grows a glyph up, not down:
 /// [`dilate_contours`] then lifts it by the vertical amount.
 fn stem_darkening(size: f32) -> [f32; 2] {
-    [(0.0105 * (size - 6.5)).clamp(0.0, 0.36), (0.0055 * size + 0.02).min(0.3)]
+    [
+        (0.0105 * (size - 6.5)).clamp(0.0, 0.36),
+        (0.0055 * size + 0.02).min(0.3),
+    ]
 }
 
 /// Grow closed device-space `contours` (y down) by `amount` in x and y —
 /// each point moved out along the bisector of its edges' normals — then
 /// lift them by `amount`'s y, so the foot stays and the top grows twice.
 fn dilate_contours(contours: &mut [Vec<(f32, f32)>], amount: [f32; 2]) {
-    let area = |c: &[(f32, f32)]| c.windows(2).map(|w| w[0].0 * w[1].1 - w[1].0 * w[0].1).sum::<f32>();
+    let area = |c: &[(f32, f32)]| {
+        c.windows(2)
+            .map(|w| w[0].0 * w[1].1 - w[1].0 * w[0].1)
+            .sum::<f32>()
+    };
     // Ink is on the same side of every contour's travel (non-zero
     // winding): the side the largest, an outer one, encloses.
-    let Some(largest) = contours.iter().map(|c| area(c)).max_by(|a, b| a.abs().total_cmp(&b.abs())) else {
+    let Some(largest) = contours
+        .iter()
+        .map(|c| area(c))
+        .max_by(|a, b| a.abs().total_cmp(&b.abs()))
+    else {
         return;
     };
     let out = if largest > 0.0 { 1.0 } else { -1.0 };
     let unit = |a: (f32, f32), b: (f32, f32)| {
         let d = (b.0 - a.0, b.1 - a.1);
         let l = (d.0 * d.0 + d.1 * d.1).sqrt();
-        if l > 0.0 { (d.0 / l, d.1 / l) } else { (0.0, 0.0) }
+        if l > 0.0 {
+            (d.0 / l, d.1 / l)
+        } else {
+            (0.0, 0.0)
+        }
     };
     for c in contours.iter_mut() {
         let closed = c.len() > 1 && c.first() == c.last();
@@ -159,12 +174,18 @@ fn dilate_contours(contours: &mut [Vec<(f32, f32)>], amount: [f32; 2]) {
         }
         let pts = c[..n].to_vec();
         for i in 0..n {
-            let (a, b) = (unit(pts[(i + n - 1) % n], pts[i]), unit(pts[i], pts[(i + 1) % n]));
+            let (a, b) = (
+                unit(pts[(i + n - 1) % n], pts[i]),
+                unit(pts[i], pts[(i + 1) % n]),
+            );
             // (dy, -dx): out of a contour whose area is positive.
             let bis = (a.1 + b.1, -(a.0 + b.0));
             let l = (bis.0 * bis.0 + bis.1 * bis.1).sqrt();
             if l > 0.0 {
-                c[i] = (pts[i].0 + out * bis.0 / l * amount[0], pts[i].1 + out * bis.1 / l * amount[1]);
+                c[i] = (
+                    pts[i].0 + out * bis.0 / l * amount[0],
+                    pts[i].1 + out * bis.1 / l * amount[1],
+                );
             }
         }
         if closed {
@@ -259,11 +280,19 @@ impl VerticalWarp {
         // FreeType's fixed-point helpers: 16.16 scales, 26.6 positions.
         let mul_fix = |a: i64, b: i64| -> i64 {
             let p = a * b;
-            if p >= 0 { (p + 0x8000) >> 16 } else { -((-p + 0x8000) >> 16) }
+            if p >= 0 {
+                (p + 0x8000) >> 16
+            } else {
+                -((-p + 0x8000) >> 16)
+            }
         };
         let mul_div = |a: i64, b: i64, c: i64| -> i64 {
             let p = a * b;
-            if p >= 0 { (p + c / 2) / c } else { -((-p + c / 2) / c) }
+            if p >= 0 {
+                (p + c / 2) / c
+            } else {
+                -((-p + c / 2) / c)
+            }
         };
         let round = |v: i64| (v + 32) & !63;
         let upem = font.units_per_em.max(1) as i64;
@@ -321,7 +350,10 @@ impl VerticalWarp {
             knots[i].1 = knots[i].1.max(knots[i - 1].1);
         }
         // Pixels per font unit: 16.16 scale to 26.6 positions.
-        Self { knots, slope: scale as f32 / 65536.0 / 64.0 }
+        Self {
+            knots,
+            slope: scale as f32 / 65536.0 / 64.0,
+        }
     }
 
     /// Font-unit height `y` in pixels, up.
@@ -353,8 +385,18 @@ struct VariableSource {
 impl TtfFace {
     fn fixed(font: TtfFont) -> Self {
         let base = std::sync::Arc::new(font);
-        let family = Family { upright: FamilyFile::Parsed(base.clone()), italic: None };
-        Self { base, source: None, family, synthetic_bold: false, oblique: false, style: (400, false) }
+        let family = Family {
+            upright: FamilyFile::Parsed(base.clone()),
+            italic: None,
+        };
+        Self {
+            base,
+            source: None,
+            family,
+            synthetic_bold: false,
+            oblique: false,
+            style: (400, false),
+        }
     }
 
     /// The face of `family` at CSS `weight`, italic or not: the family's
@@ -368,9 +410,14 @@ impl TtfFace {
         };
         let mut face = match file {
             FamilyFile::Bytes(bytes) => Self::variable(bytes, weight)?,
-            FamilyFile::Parsed(font) => {
-                Self { base: font, source: None, family: family.clone(), synthetic_bold: false, oblique: false, style: (400, false) }
-            }
+            FamilyFile::Parsed(font) => Self {
+                base: font,
+                source: None,
+                family: family.clone(),
+                synthetic_bold: false,
+                oblique: false,
+                style: (400, false),
+            },
         };
         face.family = family.clone();
         let has_weights = face.source.as_ref().is_some_and(|s| s.wght.is_some());
@@ -384,7 +431,11 @@ impl TtfFace {
     fn synthesis(&self, size: f32) -> Synthesis {
         Synthesis {
             skew: if self.oblique { OBLIQUE_SKEW } else { 0.0 },
-            outset: if self.synthetic_bold { synthetic_bold_outset(size) } else { 0.0 },
+            outset: if self.synthetic_bold {
+                synthetic_bold_outset(size)
+            } else {
+                0.0
+            },
             hint: false,
             darken: [0.0; 2],
         }
@@ -400,15 +451,33 @@ impl TtfFace {
             return Ok(face);
         }
         let wght = crate::loaders::wght_for_css_weight(&axes, &instances, weight as f32);
-        let opsz = axes.iter().find(|a| &a.tag == b"opsz").map(|a| (a.min, a.max));
+        let opsz = axes
+            .iter()
+            .find(|a| &a.tag == b"opsz")
+            .map(|a| (a.min, a.max));
         let mut at = Vec::new();
         if let Some(w) = wght {
             at.push((*b"wght", w));
         }
         let base = std::sync::Arc::new(TtfFont::parse_variation(&bytes, &at)?);
-        let family = Family { upright: FamilyFile::Bytes(bytes.clone()), italic: None };
-        let source = VariableSource { bytes, wght, opsz, sized: Default::default() };
-        Ok(Self { base, source: Some(source), family, synthetic_bold: false, oblique: false, style: (weight, false) })
+        let family = Family {
+            upright: FamilyFile::Bytes(bytes.clone()),
+            italic: None,
+        };
+        let source = VariableSource {
+            bytes,
+            wght,
+            opsz,
+            sized: Default::default(),
+        };
+        Ok(Self {
+            base,
+            source: Some(source),
+            family,
+            synthetic_bold: false,
+            oblique: false,
+            style: (weight, false),
+        })
     }
 
     /// The face for type `size` pixels per em: with an `opsz` axis, read at
@@ -416,8 +485,12 @@ impl TtfFace {
     /// do. SF Compact's display cut is visibly tighter than its text cut, and
     /// drawing a 20-pixel line in the text one sets it 5% wide.
     fn at(&self, size: f32) -> std::sync::Arc<TtfFont> {
-        let Some(src) = &self.source else { return self.base.clone() };
-        let Some((lo, hi)) = src.opsz else { return self.base.clone() };
+        let Some(src) = &self.source else {
+            return self.base.clone();
+        };
+        let Some((lo, hi)) = src.opsz else {
+            return self.base.clone();
+        };
         let opsz = size.clamp(lo, hi);
         let key = (opsz * 4.0).round() as u32;
         let mut sized = src.sized.lock().unwrap_or_else(|e| e.into_inner());
@@ -469,8 +542,17 @@ pub struct SdfGlyph {
 /// `c` from a distance-field face at `size`: the field resampled to the
 /// size and turned to coverage, a pixel wide at the edge.
 fn raster_sdf(set: &SdfGlyphs, c: char, size: f32, shift: f32) -> GlyphBitmap {
-    let blank = |advance: f32| GlyphBitmap { width: 0, height: 0, coverage: Vec::new(), offset_x: 0, offset_y: 0, advance };
-    let Some(g) = set.glyphs.get(&(c as u32)) else { return blank(0.0) };
+    let blank = |advance: f32| GlyphBitmap {
+        width: 0,
+        height: 0,
+        coverage: Vec::new(),
+        offset_x: 0,
+        offset_y: 0,
+        advance,
+    };
+    let Some(g) = set.glyphs.get(&(c as u32)) else {
+        return blank(0.0);
+    };
     let k = size / set.size.max(1.0);
     let advance = g.advance * k;
     if g.width == 0 || g.height == 0 {
@@ -489,7 +571,10 @@ fn raster_sdf(set: &SdfGlyphs, c: char, size: f32, shift: f32) -> GlyphBitmap {
     let h = (g.height as f32 * k).ceil() as u32 + 3;
     let sample = |x: f32, y: f32| -> f32 {
         // Bilinear, texel centres at +0.5, clamped to the field.
-        let (x, y) = ((x - 0.5).clamp(0.0, fw as f32 - 1.0), (y - 0.5).clamp(0.0, fh as f32 - 1.0));
+        let (x, y) = (
+            (x - 0.5).clamp(0.0, fw as f32 - 1.0),
+            (y - 0.5).clamp(0.0, fh as f32 - 1.0),
+        );
         let (ix, iy) = (x.floor() as u32, y.floor() as u32);
         let (fx, fy) = (x - ix as f32, y - iy as f32);
         let at = |cx: u32, cy: u32| g.field[(cy.min(fh - 1) * fw + cx.min(fw - 1)) as usize] as f32;
@@ -510,7 +595,14 @@ fn raster_sdf(set: &SdfGlyphs, c: char, size: f32, shift: f32) -> GlyphBitmap {
             coverage.push(((d + 0.5).clamp(0.0, 1.0) * 255.0).round() as u8);
         }
     }
-    GlyphBitmap { width: w, height: h, coverage, offset_x: x0, offset_y: y0, advance }
+    GlyphBitmap {
+        width: w,
+        height: h,
+        coverage,
+        offset_x: x0,
+        offset_y: y0,
+        advance,
+    }
 }
 
 /// A font face plus its rasterized-glyph cache.
@@ -529,6 +621,9 @@ pub struct CaptionFont {
     /// Glyphs grown by an outline radius, by codepoint, size, phase and
     /// radius (sixteenths of a pixel).
     grown: HashMap<(u32, u32, u32, u32), GlyphBitmap>,
+    /// Text already laid out, by its string, style and width: a HUD draws the
+    /// same strings every frame, and shaping them again was half of its cost.
+    pub(crate) layouts: HashMap<u64, super::layout::LaidOutText>,
     /// The optical size glyphs are drawn at regardless of their pixel size;
     /// `None` follows the size. See [`set_optical_size`](Self::set_optical_size).
     optical_size: Option<f32>,
@@ -568,6 +663,7 @@ impl CaptionFont {
             face: Face::Builtin,
             cache: HashMap::new(),
             grown: HashMap::new(),
+            layouts: HashMap::new(),
             optical_size: None,
             hinting: Hinting::None,
             font_smoothing: false,
@@ -581,6 +677,7 @@ impl CaptionFont {
             face: Face::Ttf(Box::new(TtfFace::fixed(font))),
             cache: HashMap::new(),
             grown: HashMap::new(),
+            layouts: HashMap::new(),
             optical_size: None,
             hinting: Hinting::None,
             font_smoothing: false,
@@ -594,6 +691,7 @@ impl CaptionFont {
             face: Face::Sdf(glyphs),
             cache: HashMap::new(),
             grown: HashMap::new(),
+            layouts: HashMap::new(),
             optical_size: None,
             hinting: Hinting::None,
             font_smoothing: false,
@@ -608,6 +706,7 @@ impl CaptionFont {
             face: Face::Bitmap(glyphs),
             cache: HashMap::new(),
             grown: HashMap::new(),
+            layouts: HashMap::new(),
             optical_size: None,
             hinting: Hinting::None,
             font_smoothing: false,
@@ -642,6 +741,7 @@ impl CaptionFont {
             face: Face::Ttf(Box::new(TtfFace::variable(bytes.into(), weight)?)),
             cache: HashMap::new(),
             grown: HashMap::new(),
+            layouts: HashMap::new(),
             optical_size: None,
             hinting: Hinting::None,
             font_smoothing: false,
@@ -657,11 +757,16 @@ impl CaptionFont {
     /// 64th of the size each side and widens the advances to match; italic
     /// slants them by a quarter. `None` for a face without outlines.
     pub fn styled(&self, weight: u16, italic: bool) -> Option<Self> {
-        let Face::Ttf(face) = &self.face else { return None };
+        let Face::Ttf(face) = &self.face else {
+            return None;
+        };
         Some(Self {
-            face: Face::Ttf(Box::new(TtfFace::styled(&face.family, weight, italic).ok()?)),
+            face: Face::Ttf(Box::new(
+                TtfFace::styled(&face.family, weight, italic).ok()?,
+            )),
             cache: HashMap::new(),
             grown: HashMap::new(),
+            layouts: HashMap::new(),
             optical_size: self.optical_size,
             hinting: self.hinting,
             font_smoothing: self.font_smoothing,
@@ -711,12 +816,15 @@ impl CaptionFont {
                 "/System/Library/Fonts/SFCompactRounded.ttf",
             ];
             for path in PATHS {
-                let Ok(bytes) = std::fs::read(path) else { continue };
+                let Ok(bytes) = std::fs::read(path) else {
+                    continue;
+                };
                 if let Ok(mut font) = Self::from_ttf_bytes_weight(&bytes, weight) {
                     // Its italic is a file of its own.
-                    if let (Face::Ttf(face), Ok(italic)) =
-                        (&mut font.face, std::fs::read(path.replace(".ttf", "Italic.ttf")))
-                    {
+                    if let (Face::Ttf(face), Ok(italic)) = (
+                        &mut font.face,
+                        std::fs::read(path.replace(".ttf", "Italic.ttf")),
+                    ) {
                         face.family.italic = Some(italic.into());
                     }
                     return Some(font);
@@ -784,13 +892,18 @@ impl CaptionFont {
     }
 
     fn darkening(&self, size: f32) -> [f32; 2] {
-        if self.font_smoothing { stem_darkening(size) } else { [0.0; 2] }
+        if self.font_smoothing {
+            stem_darkening(size)
+        } else {
+            [0.0; 2]
+        }
     }
 
     /// Drop every cached glyph raster.
     pub fn clear_cache(&mut self) {
         self.cache.clear();
         self.grown.clear();
+        self.layouts.clear();
     }
 
     /// Vertical metrics at `size` pixels per em.
@@ -809,7 +922,11 @@ impl CaptionFont {
             },
             Face::Bitmap(b) => {
                 let k = size / b.size.max(1e-6);
-                FontMetrics { ascent: b.ascent * k, descent: b.descent * k, line_gap: 0.0 }
+                FontMetrics {
+                    ascent: b.ascent * k,
+                    descent: b.descent * k,
+                    line_gap: 0.0,
+                }
             }
             Face::Ttf(face) => {
                 let font = &face.base;
@@ -882,7 +999,11 @@ impl CaptionFont {
                     size,
                     shift,
                     self.optical_size.unwrap_or(size),
-                    Synthesis { hint: self.hinting == Hinting::Slight, darken: self.darkening(size), ..face.synthesis(size) },
+                    Synthesis {
+                        hint: self.hinting == Hinting::Slight,
+                        darken: self.darkening(size),
+                        ..face.synthesis(size)
+                    },
                 ),
                 Face::Sdf(set) => raster_sdf(set, c, size, shift),
                 Face::Bitmap(set) => set.raster(c, size, shift),
@@ -901,7 +1022,13 @@ impl CaptionFont {
     /// the outline, each pixel's signed distance to it gives the exact edge,
     /// rounded corners and all. `None` for a face without outlines (the
     /// bitmap face, distance-field glyphs), which grow from the mask.
-    pub fn grown_glyph_at(&mut self, c: char, size: f32, phase: usize, radius: f32) -> Option<&GlyphBitmap> {
+    pub fn grown_glyph_at(
+        &mut self,
+        c: char,
+        size: f32,
+        phase: usize,
+        radius: f32,
+    ) -> Option<&GlyphBitmap> {
         let gid = self.gid(c);
         self.grown_glyph_of(gid, size, phase, radius)
     }
@@ -914,14 +1041,25 @@ impl CaptionFont {
         phase: usize,
         radius: f32,
     ) -> Option<&GlyphBitmap> {
-        let Face::Ttf(face) = &self.face else { return None };
+        let Face::Ttf(face) = &self.face else {
+            return None;
+        };
         let size = size.max(1.0);
         let phase = phase % SUBPIXEL_PHASES;
-        let key = (gid, (size * 4.0).round() as u32, phase as u32, (radius.max(0.0) * 16.0).round() as u32);
+        let key = (
+            gid,
+            (size * 4.0).round() as u32,
+            phase as u32,
+            (radius.max(0.0) * 16.0).round() as u32,
+        );
         if !self.grown.contains_key(&key) {
             let font = face.at(self.optical_size.unwrap_or(size));
             let shift = phase as f32 / SUBPIXEL_PHASES as f32;
-            let syn = Synthesis { hint: self.hinting == Hinting::Slight, darken: self.darkening(size), ..face.synthesis(size) };
+            let syn = Synthesis {
+                hint: self.hinting == Hinting::Slight,
+                darken: self.darkening(size),
+                ..face.synthesis(size)
+            };
             let mut bitmap = raster_grown(
                 &font,
                 gid,
@@ -957,9 +1095,7 @@ impl CaptionFont {
     #[must_use]
     pub fn gid(&self, c: char) -> u32 {
         match &self.face {
-            Face::Ttf(face) => u32::from(
-                face.base.cmap.get(&(c as u32)).copied().unwrap_or(0),
-            ),
+            Face::Ttf(face) => u32::from(face.base.cmap.get(&(c as u32)).copied().unwrap_or(0)),
             Face::Builtin | Face::Sdf(_) | Face::Bitmap(_) => c as u32,
         }
     }
@@ -972,7 +1108,9 @@ impl CaptionFont {
     #[must_use]
     pub fn attachments(&self, glyphs: &[u32], size: f32) -> Vec<crate::loaders::mark::Attachment> {
         let blank = || vec![crate::loaders::mark::Attachment::default(); glyphs.len()];
-        let Face::Ttf(face) = &self.face else { return blank() };
+        let Face::Ttf(face) = &self.face else {
+            return blank();
+        };
         let font = face.at(self.optical_size.unwrap_or(size));
         if font.gpos.is_empty() {
             return blank();
@@ -985,7 +1123,10 @@ impl CaptionFont {
         else {
             return blank();
         };
-        let ids: Vec<u16> = glyphs.iter().map(|g| u16::try_from(*g).unwrap_or(0)).collect();
+        let ids: Vec<u16> = glyphs
+            .iter()
+            .map(|g| u16::try_from(*g).unwrap_or(0))
+            .collect();
         let scale = size.max(1.0) / font.units_per_em.max(1) as f32;
         marks
             .attach(&ids)
@@ -1010,7 +1151,11 @@ impl CaptionFont {
     #[must_use]
     pub fn shape_run(&self, chars: &[char], script: &[u8; 4], size: f32) -> Vec<(u32, usize)> {
         let Face::Ttf(face) = &self.face else {
-            return chars.iter().enumerate().map(|(i, c)| (*c as u32, i)).collect();
+            return chars
+                .iter()
+                .enumerate()
+                .map(|(i, c)| (*c as u32, i))
+                .collect();
         };
         let font = face.at(self.optical_size.unwrap_or(size));
         let gsub = crate::loaders::shape::gsub::Gsub::parse(&font.gsub);
@@ -1064,12 +1209,14 @@ impl CaptionFont {
                         + 2.0 * face.synthesis(size).outset
                 })
             }
-            Face::Sdf(set) => {
-                set.glyphs.get(&gid).map_or(0.0, |g| g.advance * size / set.size.max(1.0))
-            }
-            Face::Bitmap(set) => {
-                set.glyphs.get(&gid).map_or(0.0, |g| g.advance * size / set.size.max(1e-6))
-            }
+            Face::Sdf(set) => set
+                .glyphs
+                .get(&gid)
+                .map_or(0.0, |g| g.advance * size / set.size.max(1.0)),
+            Face::Bitmap(set) => set
+                .glyphs
+                .get(&gid)
+                .map_or(0.0, |g| g.advance * size / set.size.max(1e-6)),
         }
     }
 
@@ -1486,11 +1633,26 @@ const SUBSAMPLES: usize = 16;
 /// Rasterize `c` from `font` at `size` pixels per em.
 /// `optical`: the size whose tracking applies (see [`CaptionFont::set_optical_size`]);
 /// `syn`, a synthetic bold or italic's changes to the outline.
-fn raster_ttf(font: &TtfFont, gid: u32, size: f32, shift: f32, optical: f32, syn: Synthesis) -> GlyphBitmap {
+fn raster_ttf(
+    font: &TtfFont,
+    gid: u32,
+    size: f32,
+    shift: f32,
+    optical: f32,
+    syn: Synthesis,
+) -> GlyphBitmap {
     if syn.outset > 0.0 {
         // Grown about the outline, then moved over by the growth so the
         // left side bearing stays; the advance takes both sides.
-        let mut g = raster_grown(font, gid, size, shift + syn.outset, syn.outset, optical, syn);
+        let mut g = raster_grown(
+            font,
+            gid,
+            size,
+            shift + syn.outset,
+            syn.outset,
+            optical,
+            syn,
+        );
         g.advance += 2.0 * syn.outset;
         return g;
     }
@@ -1595,7 +1757,15 @@ fn raster_ttf(font: &TtfFont, gid: u32, size: f32, shift: f32, optical: f32, syn
 /// `c` grown by `radius`: per pixel, its centre's signed distance to the
 /// outline (negative inside) as a ramp one pixel wide at `radius`, which for
 /// a straight edge is exactly the pixel's share of the grown shape.
-fn raster_grown(font: &TtfFont, gid: u32, size: f32, shift: f32, radius: f32, optical: f32, syn: Synthesis) -> GlyphBitmap {
+fn raster_grown(
+    font: &TtfFont,
+    gid: u32,
+    size: f32,
+    shift: f32,
+    radius: f32,
+    optical: f32,
+    syn: Synthesis,
+) -> GlyphBitmap {
     let scale = size / font.units_per_em.max(1) as f32;
     let Some(glyph) = font.glyphs.get(gid as usize) else {
         return GlyphBitmap::default();
@@ -1612,7 +1782,10 @@ fn raster_grown(font: &TtfFont, gid: u32, size: f32, shift: f32, radius: f32, op
         .filter(|(a, b)| a != b)
         .collect();
     if segments.is_empty() {
-        return GlyphBitmap { advance, ..Default::default() };
+        return GlyphBitmap {
+            advance,
+            ..Default::default()
+        };
     }
     let (mut min_x, mut min_y, mut max_x, mut max_y) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
     for &(a, _) in &segments {
@@ -1627,7 +1800,10 @@ fn raster_grown(font: &TtfFont, gid: u32, size: f32, shift: f32, radius: f32, op
     let width = ((max_x + reach).ceil() as i32 - x0).max(1) as u32;
     let height = ((max_y + reach).ceil() as i32 - y0).max(1) as u32;
     if width > 8192 || height > 8192 {
-        return GlyphBitmap { advance, ..Default::default() };
+        return GlyphBitmap {
+            advance,
+            ..Default::default()
+        };
     }
     // Two by two samples a pixel, each a ramp half a pixel wide: one sample
     // at the centre gets a straight edge exactly but a corner, where the
@@ -1675,7 +1851,14 @@ fn raster_grown(font: &TtfFont, gid: u32, size: f32, shift: f32, radius: f32, op
     }
     let k = 1.0 / (N * N) as f32;
     let coverage = acc.iter().map(|v| (v * k * 255.0).round() as u8).collect();
-    GlyphBitmap { width, height, coverage, offset_x: x0, offset_y: y0, advance }
+    GlyphBitmap {
+        width,
+        height,
+        coverage,
+        offset_x: x0,
+        offset_y: y0,
+        advance,
+    }
 }
 
 /// Accumulate horizontal coverage for the span `[x0, x1)` into `row`, giving
@@ -1807,7 +1990,11 @@ fn flatten_contours(
 
 /// [`flatten_contours`] keeping each curve's points apart, so the joints
 /// between curves — where a glyph's corners are — stay visible.
-fn flatten_curves(glyph: &crate::loaders::TtfGlyph, scale: f32, skew: f32) -> Vec<Vec<Vec<[f32; 2]>>> {
+fn flatten_curves(
+    glyph: &crate::loaders::TtfGlyph,
+    scale: f32,
+    skew: f32,
+) -> Vec<Vec<Vec<[f32; 2]>>> {
     let mut contours: Vec<Vec<Vec<[f32; 2]>>> = Vec::new();
     let mut current: Vec<Vec<[f32; 2]>> = Vec::new();
     let mut last: Option<[f32; 2]> = None;
@@ -2082,7 +2269,10 @@ mod tests {
                 for c in ['A', 'g', ' ', '7', '\u{2603}'] {
                     let from_metrics = font.advance(c, size);
                     let from_raster = font.glyph(c, size).advance;
-                    assert!((from_metrics - from_raster).abs() < 1e-4, "{c:?} at {size}: {from_metrics} against {from_raster}");
+                    assert!(
+                        (from_metrics - from_raster).abs() < 1e-4,
+                        "{c:?} at {size}: {from_metrics} against {from_raster}"
+                    );
                 }
             }
         }
@@ -2094,16 +2284,34 @@ mod tests {
     /// advances are the 14-pixel ones scaled. Skipped without SF Compact.
     #[test]
     fn an_optical_size_holds_at_any_pixel_size() {
-        let Some(mut font) = CaptionFont::try_sf_compact() else { return };
+        let Some(mut font) = CaptionFont::try_sf_compact() else {
+            return;
+        };
         let display = font.advance('a', 48.0);
         let text = font.advance('a', 14.0) * 48.0 / 14.0;
-        assert!(text > display + 0.1, "text cut {text}, display cut {display}");
-        let display_ink: u32 = font.glyph('a', 48.0).coverage.iter().map(|&v| v as u32).sum();
+        assert!(
+            text > display + 0.1,
+            "text cut {text}, display cut {display}"
+        );
+        let display_ink: u32 = font
+            .glyph('a', 48.0)
+            .coverage
+            .iter()
+            .map(|&v| v as u32)
+            .sum();
         assert!(font.set_optical_size(Some(14.0)));
-        assert!(!font.set_optical_size(Some(14.0)), "no change the second time");
+        assert!(
+            !font.set_optical_size(Some(14.0)),
+            "no change the second time"
+        );
         assert!((font.advance('a', 48.0) - text).abs() < 1e-3);
         assert!((font.glyph('a', 48.0).advance - text).abs() < 1e-3);
-        let text_ink: u32 = font.glyph('a', 48.0).coverage.iter().map(|&v| v as u32).sum();
+        let text_ink: u32 = font
+            .glyph('a', 48.0)
+            .coverage
+            .iter()
+            .map(|&v| v as u32)
+            .sum();
         assert_ne!(text_ink, display_ink, "the text cut's shape");
         // A face without the axis has nothing to change.
         assert!(!CaptionFont::builtin().set_optical_size(Some(14.0)));
@@ -2122,7 +2330,10 @@ mod tests {
         let cols: Vec<u32> = (0..g.width)
             .filter(|&x| (0..g.height).any(|y| g.coverage[(y * g.width + x) as usize] > 127))
             .collect();
-        (g.offset_x + cols[0] as i32, g.offset_x + *cols.last().unwrap() as i32)
+        (
+            g.offset_x + cols[0] as i32,
+            g.offset_x + *cols.last().unwrap() as i32,
+        )
     }
 
     /// A static face asked for bold grows its outlines — by a 48th to a 64th
@@ -2136,13 +2347,25 @@ mod tests {
         let size = 24.0;
         let outset = synthetic_bold_outset(size);
         assert!((outset - size / 56.0).abs() < size / 200.0, "{outset}");
-        let (r, b) = (regular.glyph('H', size).clone(), bold.glyph('H', size).clone());
+        let (r, b) = (
+            regular.glyph('H', size).clone(),
+            bold.glyph('H', size).clone(),
+        );
         // An H's stems and bar, each grown on both sides: well over a tenth
         // more ink.
-        assert!(ink(&b) > ink(&r) * 1.1, "bold {} against {}", ink(&b), ink(&r));
+        assert!(
+            ink(&b) > ink(&r) * 1.1,
+            "bold {} against {}",
+            ink(&b),
+            ink(&r)
+        );
         assert!((b.advance - r.advance - 2.0 * outset).abs() < 1e-4);
         assert!((bold.advance('H', size) - b.advance).abs() < 1e-4);
-        assert_eq!(ink_columns(&b).0, ink_columns(&r).0, "the left side bearing stays");
+        assert_eq!(
+            ink_columns(&b).0,
+            ink_columns(&r).0,
+            "the left side bearing stays"
+        );
         // Asked for anything under 600, it is the regular.
         let mut medium = regular.styled(500, false).unwrap();
         assert_eq!(ink(medium.glyph('H', size)), ink(&r));
@@ -2152,7 +2375,9 @@ mod tests {
     /// Arial Bold.
     #[test]
     fn a_bold_face_is_not_emboldened_again() {
-        let Ok(bytes) = std::fs::read("/System/Library/Fonts/Supplemental/Arial Bold.ttf") else { return };
+        let Ok(bytes) = std::fs::read("/System/Library/Fonts/Supplemental/Arial Bold.ttf") else {
+            return;
+        };
         let mut face = CaptionFont::from_ttf_bytes(&bytes).unwrap();
         let mut bold = face.styled(700, false).unwrap();
         assert_eq!(ink(face.glyph('H', 24.0)), ink(bold.glyph('H', 24.0)));
@@ -2165,7 +2390,10 @@ mod tests {
         let mut upright = dejavu();
         let mut italic = upright.styled(400, true).unwrap();
         let size = 40.0;
-        let (u, i) = (upright.glyph('l', size).clone(), italic.glyph('l', size).clone());
+        let (u, i) = (
+            upright.glyph('l', size).clone(),
+            italic.glyph('l', size).clone(),
+        );
         assert_eq!(u.advance, i.advance);
         let centre = |g: &GlyphBitmap, row: u32| -> f32 {
             let (mut sum, mut w) = (0.0, 0.0);
@@ -2188,11 +2416,19 @@ mod tests {
     /// without SF Compact.
     #[test]
     fn sf_compact_italic_is_its_own_design() {
-        let Some(sf) = CaptionFont::try_sf_compact() else { return };
+        let Some(sf) = CaptionFont::try_sf_compact() else {
+            return;
+        };
         let mut real = sf.styled(400, true).unwrap();
         let bytes = std::fs::read("/System/Library/Fonts/SFCompact.ttf").unwrap();
-        let mut slanted = CaptionFont::from_ttf_bytes(&bytes).unwrap().styled(400, true).unwrap();
-        let (r, s) = (real.glyph('a', 40.0).clone(), slanted.glyph('a', 40.0).clone());
+        let mut slanted = CaptionFont::from_ttf_bytes(&bytes)
+            .unwrap()
+            .styled(400, true)
+            .unwrap();
+        let (r, s) = (
+            real.glyph('a', 40.0).clone(),
+            slanted.glyph('a', 40.0).clone(),
+        );
         assert!(r.coverage != s.coverage || r.advance != s.advance);
         // And both weights of it are real ones.
         let mut bold = real.with_weight(700).unwrap();
@@ -2206,7 +2442,10 @@ mod tests {
             .filter(|&y| (0..g.width).any(|x| g.coverage[(y * g.width + x) as usize] > 128))
             .map(|y| y as i32)
             .collect();
-        (-(g.offset_y + rows[0]), -(g.offset_y + rows[rows.len() - 1] + 1))
+        (
+            -(g.offset_y + rows[0]),
+            -(g.offset_y + rows[rows.len() - 1] + 1),
+        )
     }
 
     /// Slight hinting puts DejaVu's zones where FreeType's light autohinter
@@ -2260,9 +2499,15 @@ mod tests {
     #[test]
     fn hinting_keeps_the_advances() {
         let mut font = dejavu();
-        let plain: Vec<f32> = "Hamburg".chars().map(|c| font.glyph(c, 13.0).advance).collect();
+        let plain: Vec<f32> = "Hamburg"
+            .chars()
+            .map(|c| font.glyph(c, 13.0).advance)
+            .collect();
         font.set_hinting(Hinting::Slight);
-        let hinted: Vec<f32> = "Hamburg".chars().map(|c| font.glyph(c, 13.0).advance).collect();
+        let hinted: Vec<f32> = "Hamburg"
+            .chars()
+            .map(|c| font.glyph(c, 13.0).advance)
+            .collect();
         assert_eq!(plain, hinted);
     }
 
@@ -2300,10 +2545,19 @@ mod tests {
         // side. Measured on the built-in face, where every advance is the size, so the
         // numbers say exactly how many glyphs were counted.
         let mut font = CaptionFont::builtin();
-        assert_eq!(font.measure("e\u{0301}", 16.0, 0.0), font.measure("é", 16.0, 0.0));
-        assert_eq!(font.measure("Noe\u{0308}l", 16.0, 0.0), font.measure("Noël", 16.0, 0.0));
+        assert_eq!(
+            font.measure("e\u{0301}", 16.0, 0.0),
+            font.measure("é", 16.0, 0.0)
+        );
+        assert_eq!(
+            font.measure("Noe\u{0308}l", 16.0, 0.0),
+            font.measure("Noël", 16.0, 0.0)
+        );
         // And the letter spacing counts letters, not characters: four letters, three gaps.
-        assert_eq!(font.measure("Noe\u{0308}l", 16.0, 2.0), 4.0 * 16.0 + 3.0 * 2.0);
+        assert_eq!(
+            font.measure("Noe\u{0308}l", 16.0, 2.0),
+            4.0 * 16.0 + 3.0 * 2.0
+        );
     }
 
     #[test]

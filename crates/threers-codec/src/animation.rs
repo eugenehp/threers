@@ -150,7 +150,10 @@ impl fmt::Display for AnimationEncodeError {
             Self::Dimension => write!(f, "invalid dimensions, frame rate, or codec options"),
             Self::Io(message) => write!(f, "animation encoding I/O failed: {message}"),
             Self::FeatureDisabled(feature) => {
-                write!(f, "this build has no {feature} encoder (enable the `{feature}` feature)")
+                write!(
+                    f,
+                    "this build has no {feature} encoder (enable the `{feature}` feature)"
+                )
             }
         }
     }
@@ -358,9 +361,6 @@ where
     Ok(bytes)
 }
 
-
-
-
 /// Encode the MP4 codecs without holding every source frame.
 ///
 /// Frames are pulled from the iterator, converted, encoded and dropped one at a
@@ -467,7 +467,10 @@ mod tests {
                 encode_animation_rgba(&options, [solid(255, 0, 0, 255), solid(0, 0, 255, 128)]);
             // Without the `gif` feature GIF is an error naming it, not a panic.
             if cfg!(not(feature = "gif")) && matches!(codec, BrowserCodec::Gif) {
-                assert!(matches!(result, Err(AnimationEncodeError::FeatureDisabled("gif"))));
+                assert!(matches!(
+                    result,
+                    Err(AnimationEncodeError::FeatureDisabled("gif"))
+                ));
                 continue;
             }
             let bytes = result.unwrap();

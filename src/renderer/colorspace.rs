@@ -31,7 +31,8 @@
 /// Neither clamps: a caller working in half float may legitimately be carrying
 /// values above one, and clamping here would quietly cap an HDR pass. Clamp at
 /// the point of storage instead, where the range is actually known.
-pub const WGSL: &str = crate::wgsl!(r#"
+pub const WGSL: &str = crate::wgsl!(
+    r#"
 // IEC 61966-2-1 sRGB OETF — matches three.js `sRGBTransferOETF`.
 fn linear_to_srgb_1(c : f32) -> f32 {
     if (c <= 0.0031308) {
@@ -61,7 +62,8 @@ fn srgb_to_linear(c : vec3<f32>) -> vec3<f32> {
     let hi = pow((max(c, vec3<f32>(0.0)) + vec3<f32>(0.055)) / 1.055, vec3<f32>(2.4));
     return select(hi, lo, c <= vec3<f32>(0.04045));
 }
-"#);
+"#
+);
 
 /// The names [`WGSL`] defines, so a shader that already declares one of them
 /// can be checked rather than failing to compile with a duplicate-symbol error
@@ -116,7 +118,10 @@ mod tests {
     fn the_renderer_preamble_has_this_curve() {
         let start = WGSL.find("fn linear_to_srgb(").unwrap();
         let curve = &WGSL[start..start + WGSL[start..].find("\n}\n").unwrap() + 3];
-        assert!(crate::renderer::shader::SHADER_SOURCE.contains(curve), "the preamble's curve differs:\n{curve}");
+        assert!(
+            crate::renderer::shader::SHADER_SOURCE.contains(curve),
+            "the preamble's curve differs:\n{curve}"
+        );
     }
 
     #[test]

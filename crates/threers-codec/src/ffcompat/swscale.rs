@@ -9,11 +9,11 @@
 /// `ff_yuv2rgb_coeffs[colorspace]` (crv, cbu, cgu, cgv).
 pub fn coefficients(colorspace: u32) -> [i64; 4] {
     match colorspace {
-        1 => [117489, 138438, 13975, 34925],         // BT.709
-        4 => [104448, 132798, 24759, 53109],         // FCC
-        7 => [117579, 136230, 16907, 35559],         // SMPTE 240M
-        9 | 10 => [110013, 140363, 12277, 42626],    // BT.2020
-        _ => [104597, 132201, 25675, 53279],         // BT.601 / default
+        1 => [117489, 138438, 13975, 34925],      // BT.709
+        4 => [104448, 132798, 24759, 53109],      // FCC
+        7 => [117579, 136230, 16907, 35559],      // SMPTE 240M
+        9 | 10 => [110013, 140363, 12277, 42626], // BT.2020
+        _ => [104597, 132201, 25675, 53279],      // BT.601 / default
     }
 }
 
@@ -103,9 +103,18 @@ impl Yuv2Rgb {
                 .collect()
         };
         let fill_gv = |inc: i64| -> Vec<i64> {
-            (0..n as i64).map(|i| -(inc >> 9) + ((clip_u8(i - HEADROOM) * inc) >> 16)).collect()
+            (0..n as i64)
+                .map(|i| -(inc >> 9) + ((clip_u8(i - HEADROOM) * inc) >> 16))
+                .collect()
         };
-        Self { y_table, r_v: fill(crv), g_u: fill(cgu), g_v: fill_gv(cgv), b_u: fill(cbu), full }
+        Self {
+            y_table,
+            r_v: fill(crv),
+            g_u: fill(cgu),
+            g_v: fill_gv(cgv),
+            b_u: fill(cbu),
+            full,
+        }
     }
 
     /// Convert 8-bit 4:2:0 planes (tightly packed, even `w` and `h`) to rgb24.

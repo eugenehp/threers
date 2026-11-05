@@ -9,7 +9,11 @@ use threers_codec::mp4_demux::TrackCodec;
 
 fn main() {
     let a: Vec<String> = std::env::args().collect();
-    let codec = if a[1] == "hevc" { TrackCodec::Hevc } else { TrackCodec::H264 };
+    let codec = if a[1] == "hevc" {
+        TrackCodec::Hevc
+    } else {
+        TrackCodec::H264
+    };
     let data = std::fs::read(&a[2]).expect("read");
     let frames = decode_annexb(codec, &data).unwrap_or_else(|e| {
         println!("ERROR {e}");
@@ -27,6 +31,13 @@ fn main() {
     }
     std::fs::write(&a[3], out).expect("write");
     if let Some(f) = frames.first() {
-        println!("{} frames, {}x{} {:?} {}-bit", frames.len(), f.width, f.height, f.chroma, f.bit_depth);
+        println!(
+            "{} frames, {}x{} {:?} {}-bit",
+            frames.len(),
+            f.width,
+            f.height,
+            f.chroma,
+            f.bit_depth
+        );
     }
 }

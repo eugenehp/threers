@@ -21,7 +21,9 @@
 //! [`threers::fx`]. `--look` takes `lacquer`, `chrome`, `gold` or `toxic`; see
 //! `examples/venom_gallery.rs` for the style on other shapes and other effects.
 
-use threers::fx::{Backdrop, Button, Cursor, EventKind, Look, Stage, StageInput, Venom, VenomStyle};
+use threers::fx::{
+    Backdrop, Button, Cursor, EventKind, Look, Stage, StageInput, Venom, VenomStyle,
+};
 use threers::math::Vector2;
 use threers::overlay::Overlay;
 use threers::prelude::*;
@@ -44,7 +46,11 @@ fn style() -> VenomStyle {
 
 /// The stage: the studio backdrop and one button.
 fn stage(scene: &mut Scene) -> Stage {
-    let cursor = if flag("--cursor") { Cursor::Hotspot } else { Cursor::default() };
+    let cursor = if flag("--cursor") {
+        Cursor::Hotspot
+    } else {
+        Cursor::default()
+    };
     let mut stage = Stage::new().with_cursor(cursor);
     stage.set_backdrop(scene, Backdrop::STUDIO);
     stage.add(scene, Button::new(LABEL), Venom::new(style()));
@@ -59,40 +65,43 @@ fn main() {
     let autoplay = flag("--autoplay");
     let frame_limit: Option<u64> = arg("--frames").and_then(|s| s.parse().ok());
 
-    sketch(SketchOptions::new("threers — venom button").size(900, 560), move |s| {
-        let mut stage = stage(s.scene);
-        let mut last_seen = f32::NEG_INFINITY;
+    sketch(
+        SketchOptions::new("threers — venom button").size(900, 560),
+        move |s| {
+            let mut stage = stage(s.scene);
+            let mut last_seen = f32::NEG_INFINITY;
 
-        move |f: &mut Frame| {
-            if f.pointer_inside {
-                last_seen = f.elapsed;
-            }
-            let events = if !f.pointer_inside && autoplay && f.elapsed - last_seen > 2.5 {
-                // a ghost hand plays until the pointer comes back
-                let dpr = f.scale_factor;
-                let view = Vector2::new(f.width as f32 / dpr, f.height as f32 / dpr);
-                let input = StageInput {
-                    viewport: view,
-                    dpr,
-                    dt: f.delta,
-                    pointer: Some(ghost_at(f.elapsed, view.x, view.y)),
-                    pointer_down: false,
+            move |f: &mut Frame| {
+                if f.pointer_inside {
+                    last_seen = f.elapsed;
+                }
+                let events = if !f.pointer_inside && autoplay && f.elapsed - last_seen > 2.5 {
+                    // a ghost hand plays until the pointer comes back
+                    let dpr = f.scale_factor;
+                    let view = Vector2::new(f.width as f32 / dpr, f.height as f32 / dpr);
+                    let input = StageInput {
+                        viewport: view,
+                        dpr,
+                        dt: f.delta,
+                        pointer: Some(ghost_at(f.elapsed, view.x, view.y)),
+                        pointer_down: false,
+                    };
+                    f.cursor_visible = true;
+                    stage.update(f.scene, f.overlay, input)
+                } else {
+                    stage.sketch_frame(f)
                 };
-                f.cursor_visible = true;
-                stage.update(f.scene, f.overlay, input)
-            } else {
-                stage.sketch_frame(f)
-            };
-            for event in events {
-                if event.kind == EventKind::Click {
-                    println!("clicked: {LABEL}");
+                for event in events {
+                    if event.kind == EventKind::Click {
+                        println!("clicked: {LABEL}");
+                    }
+                }
+                if frame_limit.is_some_and(|n| f.frame + 1 >= n) {
+                    f.exit = true;
                 }
             }
-            if frame_limit.is_some_and(|n| f.frame + 1 >= n) {
-                f.exit = true;
-            }
-        }
-    });
+        },
+    );
 }
 
 /// No window: a scripted hand drifts in, is grabbed, holds over the button and
@@ -103,7 +112,10 @@ fn headless(prefix: &str) {
     let dpr = arg("--dpr").and_then(|s| s.parse().ok()).unwrap_or(2.0f32);
     let view = Vector2::new(900.0, 560.0);
     let (pw, ph) = ((view.x * dpr) as u32, (view.y * dpr) as u32);
-    let mut hr = HeadlessRenderer::builder().size(pw, ph).build().expect("headless renderer");
+    let mut hr = HeadlessRenderer::builder()
+        .size(pw, ph)
+        .build()
+        .expect("headless renderer");
     let mut scene = Scene::new();
     let mut camera = PerspectiveCamera::new(60.0, view.x / view.y, 0.1, 100.0);
     camera.position = Vector3::new(0.0, 0.0, 2.0);
@@ -112,7 +124,13 @@ fn headless(prefix: &str) {
     let mut overlay = Overlay::new(pw, ph);
 
     // one frame without a pointer to lay the button out, then the script
-    let input = |pointer| StageInput { viewport: view, dpr, dt: 1.0 / 60.0, pointer, pointer_down: false };
+    let input = |pointer| StageInput {
+        viewport: view,
+        dpr,
+        dt: 1.0 / 60.0,
+        pointer,
+        pointer_down: false,
+    };
     stage.update(&mut scene, &mut overlay, input(None));
     let button = stage.ids().next().expect("the button");
     let (lo, hi) = stage.shape(button).expect("its shape").bounds();
@@ -126,7 +144,13 @@ fn headless(prefix: &str) {
         (5.0, at(300.0, -240.0)),
         (8.0, at(300.0, -240.0)),
     ];
-    let shots = [(1.4, "reach"), (2.4, "seek"), (3.6, "hold"), (4.9, "stretch"), (5.3, "snap")];
+    let shots = [
+        (1.4, "reach"),
+        (2.4, "seek"),
+        (3.6, "hold"),
+        (4.9, "stretch"),
+        (5.3, "snap"),
+    ];
     let mut t = 0.0f32;
     for (when, name) in shots {
         while t < when {
@@ -137,6 +161,9 @@ fn headless(prefix: &str) {
         let mut rgba = hr.render_to_rgba(&mut scene, &camera);
         composite(&mut rgba, overlay.pixels());
         write_png(&format!("{prefix}_{name}.png"), pw, ph, &rgba);
-        println!("  t={t:.2}s {:?}", stage.effect::<Venom>(button).map(|v| v.state()));
+        println!(
+            "  t={t:.2}s {:?}",
+            stage.effect::<Venom>(button).map(|v| v.state())
+        );
     }
 }

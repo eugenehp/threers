@@ -34,19 +34,39 @@ pub struct Edges {
 }
 
 impl Edges {
-    pub const ZERO: Edges = Edges { top: 0.0, right: 0.0, bottom: 0.0, left: 0.0 };
+    pub const ZERO: Edges = Edges {
+        top: 0.0,
+        right: 0.0,
+        bottom: 0.0,
+        left: 0.0,
+    };
 
     pub fn all(v: f32) -> Self {
-        Self { top: v, right: v, bottom: v, left: v }
+        Self {
+            top: v,
+            right: v,
+            bottom: v,
+            left: v,
+        }
     }
 
     /// `vertical horizontal`, as in `padding: 0px 2px`.
     pub fn symmetric(vertical: f32, horizontal: f32) -> Self {
-        Self { top: vertical, right: horizontal, bottom: vertical, left: horizontal }
+        Self {
+            top: vertical,
+            right: horizontal,
+            bottom: vertical,
+            left: horizontal,
+        }
     }
 
     pub fn new(top: f32, right: f32, bottom: f32, left: f32) -> Self {
-        Self { top, right, bottom, left }
+        Self {
+            top,
+            right,
+            bottom,
+            left,
+        }
     }
 
     pub fn horizontal(&self) -> f32 {
@@ -253,6 +273,10 @@ impl Default for Style {
 impl Style {
     /// `display: flex` with `flex-direction`.
     pub fn flex(direction: FlexDirection) -> Self {
-        Self { display: Display::Flex, flex_direction: direction, ..Self::default() }
+        Self {
+            display: Display::Flex,
+            flex_direction: direction,
+            ..Self::default()
+        }
     }
 }

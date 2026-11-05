@@ -12,7 +12,6 @@
     any(target_os = "macos", target_os = "ios")
 ))]
 
-
 use threers::metal::{MetalError, MetalHeadlessRenderer};
 use threers::{
     encode_animation_rgba, AnimationEncodeOptions, BasicMaterial, BrowserCodec, Color, Material,

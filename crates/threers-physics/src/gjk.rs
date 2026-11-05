@@ -16,6 +16,9 @@ use threers::math::Vector3;
 
 const MAX_ITERATIONS: usize = 64;
 const EPS: f32 = 1e-7;
+/// Rounding in a dot product of support points, relative to their squared size.
+/// Progress smaller than this is noise, however far from zero it looks.
+const ROUNDING: f32 = 4.0 * f32::EPSILON;
 
 /// Anything GJK can ask for extreme points of.
 pub trait SupportMap {
@@ -159,14 +162,41 @@ pub fn closest_points(a: &impl SupportMap, b: &impl SupportMap) -> Proximity {
 
         // Termination: the support point along -v is no closer to the origin
         // than v itself, so v is the true minimum-norm point of `a ⊖ b`.
+        //
+        // The bar scales with the simplex. Beside a large box the support points
+        // are big and the gap small, so progress bottoms out at rounding, above
+        // any fixed bar. Carrying on from there feeds near-duplicates into the
+        // simplex, which then cycles or "encloses" an origin it is nowhere near.
+        let size = simplex
+            .iter()
+            .fold(w.w.length_sq(), |size, s| size.max(s.w.length_sq()));
         let progress = v.dot(v) - v.dot(w.w);
-        if progress <= EPS * v.dot(v).max(1.0) {
+        if progress <= (EPS * v.dot(v).max(1.0)).max(ROUNDING * size) {
             break;
         }
 
+        let kept = simplex.len();
+        let mut before = [simplex[0]; 4];
+        before[..kept].copy_from_slice(&simplex);
+
         simplex.push(w);
         match reduce_simplex(&mut simplex) {
+            // Exact arithmetic only ever moves v closer, so a step that does not
+            // is rounding too. Keep the simplex that gave the better answer.
+            Some(closest) if closest.length_sq() >= v.length_sq() => {
+                simplex.clear();
+                simplex.extend_from_slice(&before[..kept]);
+                break;
+            }
             Some(closest) => v = closest,
+            // A sliver can seem to enclose the origin. But `w` is the extreme
+            // point along -v, so if it is still on v's side then all of `a ⊖ b`
+            // is, and the origin cannot be inside it.
+            None if v.dot(w.w) > 0.0 => {
+                simplex.clear();
+                simplex.extend_from_slice(&before[..kept]);
+                break;
+            }
             // The origin is enclosed by the simplex.
             None => return penetration(a, b, &mut simplex),
         }
@@ -218,12 +248,8 @@ fn reduce_simplex(simplex: &mut Vec<Vertex>) -> Option<Vector3> {
             Some(w)
         }
         4 => {
-            let (w, keep) = closest_origin_tetrahedron(
-                simplex[0].w,
-                simplex[1].w,
-                simplex[2].w,
-                simplex[3].w,
-            )?;
+            let (w, keep) =
+                closest_origin_tetrahedron(simplex[0].w, simplex[1].w, simplex[2].w, simplex[3].w)?;
             retain_mask(simplex, keep);
             Some(w)
         }
@@ -372,12 +398,7 @@ fn closest_origin_tetrahedron(
     d: Vector3,
 ) -> Option<(Vector3, u8)> {
     // Faces wound so that the fourth vertex is the interior reference.
-    const FACES: [[usize; 4]; 4] = [
-        [0, 1, 2, 3],
-        [0, 2, 3, 1],
-        [0, 3, 1, 2],
-        [1, 3, 2, 0],
-    ];
+    const FACES: [[usize; 4]; 4] = [[0, 1, 2, 3], [0, 2, 3, 1], [0, 3, 1, 2], [1, 3, 2, 0]];
     let pts = [a, b, c, d];
 
     let mut best: Option<(Vector3, u8, f32)> = None;
@@ -426,8 +447,7 @@ fn closest_origin_tetrahedron(
     if !outside_any {
         return None; // origin enclosed — penetrating
     }
-    best.map(|(p, mask, _)| (p, mask))
-        .or(Some((a, 0b0001)))
+    best.map(|(p, mask, _)| (p, mask)).or(Some((a, 0b0001)))
 }
 
 // ---- EPA ------------------------------------------------------------------
@@ -478,7 +498,11 @@ fn penetration(a: &impl SupportMap, b: &impl SupportMap, simplex: &mut Vec<Verte
         let Some((best_i, best)) = faces
             .iter()
             .enumerate()
-            .min_by(|(_, x), (_, y)| x.dist.partial_cmp(&y.dist).unwrap_or(std::cmp::Ordering::Equal))
+            .min_by(|(_, x), (_, y)| {
+                x.dist
+                    .partial_cmp(&y.dist)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
             .map(|(i, f)| (i, *f))
         else {
             return Proximity::Failed;
@@ -531,7 +555,11 @@ fn penetration(a: &impl SupportMap, b: &impl SupportMap, simplex: &mut Vec<Verte
     // Out of iterations — report the best face found so far rather than nothing.
     faces
         .iter()
-        .min_by(|x, y| x.dist.partial_cmp(&y.dist).unwrap_or(std::cmp::Ordering::Equal))
+        .min_by(|x, y| {
+            x.dist
+                .partial_cmp(&y.dist)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
         .map(|f| epa_result(&verts, &f.idx, f.normal, f.dist.max(0.0)))
         .unwrap_or(Proximity::Failed)
 }
@@ -554,7 +582,11 @@ fn epa_result(verts: &[Vertex], idx: &[usize; 3], normal: Vector3, depth: f32) -
 
 /// Grow a degenerate simplex into a tetrahedron enclosing the origin, which EPA
 /// requires as its starting polytope.
-fn expand_to_tetrahedron(a: &impl SupportMap, b: &impl SupportMap, simplex: &mut Vec<Vertex>) -> bool {
+fn expand_to_tetrahedron(
+    a: &impl SupportMap,
+    b: &impl SupportMap,
+    simplex: &mut Vec<Vertex>,
+) -> bool {
     if simplex.is_empty() {
         simplex.push(minkowski_support(a, b, Vector3::UP));
     }
@@ -581,9 +613,7 @@ fn expand_to_tetrahedron(a: &impl SupportMap, b: &impl SupportMap, simplex: &mut
     if simplex.len() == 2 {
         // Any direction perpendicular to the segment gives a third point.
         let axis = simplex[1].w - simplex[0].w;
-        let (t1, t2) = crate::math::orthonormal_basis(
-            try_normalize(axis).unwrap_or(Vector3::UP),
-        );
+        let (t1, t2) = crate::math::orthonormal_basis(try_normalize(axis).unwrap_or(Vector3::UP));
         for dir in [t1, t2, -t1, -t2] {
             let w = minkowski_support(a, b, dir);
             let area = (simplex[1].w - simplex[0].w).cross(w.w - simplex[0].w);
@@ -627,6 +657,94 @@ mod tests {
         closest_points(&a, &b)
     }
 
+    /// Distance from a point to an axis-aligned box at the origin.
+    fn to_box(p: Vector3, half: Vector3) -> f32 {
+        let d = Vector3::new(
+            (p.x.abs() - half.x).max(0.0),
+            (p.y.abs() - half.y).max(0.0),
+            (p.z.abs() - half.z).max(0.0),
+        );
+        d.length()
+    }
+
+    /// True gap to a box for anything that is a segment grown by a radius.
+    fn swept_gap(centre: Vector3, half_height: f32, radius: f32, half: Vector3) -> f32 {
+        let samples = 400;
+        (0..=samples)
+            .map(|i| {
+                let t = i as f32 / samples as f32 * 2.0 - 1.0;
+                to_box(centre + Vector3::new(0.0, half_height * t, 0.0), half)
+            })
+            .fold(f32::MAX, f32::min)
+            - radius
+    }
+
+    /// Curved shapes beside a long box, where every support point has a large
+    /// coordinate and the gap is small. Rounding then sits above any fixed
+    /// tolerance: the search reaches the answer, cannot tell it has, and wrecks
+    /// its simplex carrying on. A character walking off a ledge lands exactly here.
+    #[test]
+    fn curved_shapes_near_a_large_box_report_the_true_gap() {
+        let mut state = 12345_u32;
+        let mut next = move || {
+            state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+            (state >> 8) as f32 / (1 << 24) as f32
+        };
+
+        let mut wrong = 0;
+        let mut total = 0;
+        let mut worst = (0.0_f32, Vector3::ZERO);
+        for &(extent, half_height, radius) in &[
+            (2.5, 0.4, 0.4),
+            (2.5, 0.0, 0.5),
+            (25.0, 0.4, 0.4),
+            (0.5, 0.1, 0.1),
+            (250.0, 1.0, 0.5),
+        ] {
+            let half = Vector3::new(extent, extent * 0.2, extent);
+            let body = Shape::cuboid(half.x, half.y, half.z);
+            let shape = if half_height > 0.0 {
+                Shape::capsule(half_height, radius)
+            } else {
+                Shape::ball(radius)
+            };
+            let origin = Isometry::IDENTITY;
+            for i in 0..4000 {
+                // Around the top edge, and on its plane of symmetry half the time.
+                let reach = radius + half_height;
+                let z = if i % 2 == 0 {
+                    1e-8
+                } else {
+                    (next() - 0.5) * extent
+                };
+                let centre = Vector3::new(
+                    extent + (next() - 0.3) * reach * 2.0,
+                    half.y + (next() - 0.3) * reach * 2.0 + half_height,
+                    z,
+                );
+                let truth = swept_gap(centre, half_height, radius, half);
+                if truth < 0.002 * extent.max(1.0) {
+                    continue;
+                }
+                total += 1;
+                let at = Isometry::from_translation(centre);
+                let got = match query(&shape, &at, &body, &origin) {
+                    Proximity::Separated { distance, .. } => distance,
+                    _ => -1.0,
+                };
+                let error = (got - truth).abs();
+                if error > 2e-3 * extent.max(1.0) {
+                    wrong += 1;
+                    if error > worst.0 {
+                        worst = (error, centre);
+                    }
+                }
+            }
+        }
+        assert!(total > 5000, "only {total} cases");
+        assert_eq!(wrong, 0, "of {total}, worst {worst:?}");
+    }
+
     #[test]
     fn separated_boxes_report_the_gap() {
         let s = Shape::cuboid(1.0, 1.0, 1.0);
@@ -662,7 +780,13 @@ mod tests {
         let a = Shape::ball(1.0);
         let b = Shape::ball(2.0);
         let r = query(&a, &at(0.0, 0.0, 0.0), &b, &at(10.0, 0.0, 0.0));
-        let Proximity::Separated { distance, point_a, point_b, .. } = r else {
+        let Proximity::Separated {
+            distance,
+            point_a,
+            point_b,
+            ..
+        } = r
+        else {
             panic!("expected separation, got {r:?}");
         };
         assert!((distance - 7.0).abs() < 1e-2, "distance = {distance}");
@@ -727,9 +851,15 @@ mod tests {
     fn point_containment_via_gjk() {
         let s = Shape::ball(1.0);
         let iso = at(0.0, 0.0, 0.0);
-        let inside = closest_points(&ShapeProxy::new(&s, &iso).unwrap(), &PointProxy(Vector3::new(0.2, 0.0, 0.0)));
+        let inside = closest_points(
+            &ShapeProxy::new(&s, &iso).unwrap(),
+            &PointProxy(Vector3::new(0.2, 0.0, 0.0)),
+        );
         assert!(matches!(inside, Proximity::Penetrating { .. }));
-        let outside = closest_points(&ShapeProxy::new(&s, &iso).unwrap(), &PointProxy(Vector3::new(3.0, 0.0, 0.0)));
+        let outside = closest_points(
+            &ShapeProxy::new(&s, &iso).unwrap(),
+            &PointProxy(Vector3::new(3.0, 0.0, 0.0)),
+        );
         match outside {
             Proximity::Separated { distance, .. } => assert!((distance - 2.0).abs() < 1e-2),
             other => panic!("expected separation, got {other:?}"),

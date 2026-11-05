@@ -69,10 +69,30 @@ const SOLIDS: [Box3; 12] = [
     bx([2.291, -0.756, -2.621], [1.546, 1.552, 1.496], -0.286, None),
     bx([-2.193, -0.369, -5.547], [3.875, 3.487, 2.986], 0.516, None),
     // -x right, -x left, +x, +z, -z, +y
-    bx([-16.116, 14.37, 8.208], [0.1, 2.428, 2.739], 0.0, Some(50.0)),
-    bx([-16.109, 18.021, -8.207], [0.1, 2.425, 2.751], 0.0, Some(50.0)),
-    bx([14.904, 12.198, -1.832], [0.15, 4.265, 6.331], 0.0, Some(17.0)),
-    bx([-0.462, 8.89, 14.520], [4.38, 5.441, 0.088], 0.0, Some(43.0)),
+    bx(
+        [-16.116, 14.37, 8.208],
+        [0.1, 2.428, 2.739],
+        0.0,
+        Some(50.0),
+    ),
+    bx(
+        [-16.109, 18.021, -8.207],
+        [0.1, 2.425, 2.751],
+        0.0,
+        Some(50.0),
+    ),
+    bx(
+        [14.904, 12.198, -1.832],
+        [0.15, 4.265, 6.331],
+        0.0,
+        Some(17.0),
+    ),
+    bx(
+        [-0.462, 8.89, 14.520],
+        [4.38, 5.441, 0.088],
+        0.0,
+        Some(43.0),
+    ),
     bx([3.235, 11.486, -12.541], [2.5, 2.0, 0.1], 0.0, Some(20.0)),
     bx([0.0, 20.0, 0.0], [1.0, 0.1, 1.0], 0.0, Some(100.0)),
 ];
@@ -83,7 +103,11 @@ impl Box3 {
     fn slab(&self, o: [f32; 3], d: [f32; 3]) -> Option<(f32, f32, [f32; 3], [f32; 3])> {
         // into the box's frame: undo the translation, then the yaw
         let (s, c) = self.yaw.sin_cos();
-        let rel = [o[0] - self.centre[0], o[1] - self.centre[1], o[2] - self.centre[2]];
+        let rel = [
+            o[0] - self.centre[0],
+            o[1] - self.centre[1],
+            o[2] - self.centre[2],
+        ];
         // R_y(θ)ᵀ applied to (x, z)
         let lo = [c * rel[0] - s * rel[2], rel[1], s * rel[0] + c * rel[2]];
         let ld = [c * d[0] - s * d[2], d[1], s * d[0] + c * d[2]];
@@ -140,7 +164,9 @@ pub struct RoomEnvironment;
 impl RoomEnvironment {
     /// Linear radiance seen from the origin along `dir` (any length).
     pub fn radiance(dir: Vector3) -> [f32; 3] {
-        let len = (dir.x * dir.x + dir.y * dir.y + dir.z * dir.z).sqrt().max(1e-12);
+        let len = (dir.x * dir.x + dir.y * dir.y + dir.z * dir.z)
+            .sqrt()
+            .max(1e-12);
         let d = [dir.x / len, dir.y / len, dir.z / len];
         let o = [0.0f32; 3];
 
@@ -168,7 +194,11 @@ impl RoomEnvironment {
         // white Lambertian (MeshStandardMaterial defaults: roughness 1,
         // metalness 0) under the one point light, unshadowed
         let p = [d[0] * t, d[1] * t, d[2] * t];
-        let l = [LIGHT_POS[0] - p[0], LIGHT_POS[1] - p[1], LIGHT_POS[2] - p[2]];
+        let l = [
+            LIGHT_POS[0] - p[0],
+            LIGHT_POS[1] - p[1],
+            LIGHT_POS[2] - p[2],
+        ];
         let dist = (l[0] * l[0] + l[1] * l[1] + l[2] * l[2]).sqrt();
         let ndl = ((normal[0] * l[0] + normal[1] * l[1] + normal[2] * l[2]) / dist).max(0.0);
         let v = LIGHT_INTENSITY * falloff(dist) * ndl / PI;
@@ -257,9 +287,17 @@ mod tests {
         let d = (l[0] * l[0] + l[1] * l[1] + l[2] * l[2]).sqrt();
         let want = 900.0 / (d * d) * (1.0 - (d / 28.0).powi(4)).powi(2) * (l[1] / d) / PI;
         let got = RoomEnvironment::radiance(v(0.0, -1.0, 0.0))[0];
-        assert!((got - want).abs() < 1e-4, "floor below: {got}, three.js gives {want}");
+        assert!(
+            (got - want).abs() < 1e-4,
+            "floor below: {got}, three.js gives {want}"
+        );
         // every lit surface stays between black and the dimmest panel
-        for dir in [v(0.3, 1.0, 0.4), v(0.0, 0.0, -1.0), v(-1.0, 0.2, 0.0), v(0.05, -1.0, 0.6)] {
+        for dir in [
+            v(0.3, 1.0, 0.4),
+            v(0.0, 0.0, -1.0),
+            v(-1.0, 0.2, 0.0),
+            v(0.05, -1.0, 0.6),
+        ] {
             let r = RoomEnvironment::radiance(dir)[0];
             assert!(r > 0.0 && r < 17.0, "{dir:?}: {r}");
         }
@@ -275,12 +313,20 @@ mod tests {
             let (s, c) = yaw.sin_cos();
             let (lx, lz) = (b.half[0] * 0.9, b.half[2] * 0.9);
             // three's R_y(θ): x' = c·x + s·z, z' = −s·x + c·z
-            let p = [b.centre[0] + c * lx + s * lz, b.centre[1], b.centre[2] - s * lx + c * lz];
+            let p = [
+                b.centre[0] + c * lx + s * lz,
+                b.centre[1],
+                b.centre[2] - s * lx + c * lz,
+            ];
             let dist = (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt();
             let d = [p[0] / dist, p[1] / dist, p[2] / dist];
-            b.slab([0.0; 3], d).is_some_and(|(t0, t1, _, _)| t0 < dist && dist < t1)
+            b.slab([0.0; 3], d)
+                .is_some_and(|(t0, t1, _, _)| t0 < dist && dist < t1)
         };
-        assert!(inside(b.yaw), "a point inside the box as three places it is missed");
+        assert!(
+            inside(b.yaw),
+            "a point inside the box as three places it is missed"
+        );
         assert!(!inside(-b.yaw), "the box is turned the wrong way");
     }
 
@@ -310,13 +356,21 @@ mod tests {
         }
         assert_eq!(best, 43.0);
         let (x, y) = (at as u32 % n, at as u32 / n);
-        let d = face_direction(4, (x as f32 + 0.5) / n as f32 * 2.0 - 1.0, (y as f32 + 0.5) / n as f32 * 2.0 - 1.0);
+        let d = face_direction(
+            4,
+            (x as f32 + 0.5) / n as f32 * 2.0 - 1.0,
+            (y as f32 + 0.5) / n as f32 * 2.0 - 1.0,
+        );
         // stored mirrored in x (see `cube`)
         let c = SOLIDS[9].centre;
         let p = [-c[0], c[1], c[2]];
         let dot = (d.x * p[0] + d.y * p[1] + d.z * p[2])
-            / ((d.x * d.x + d.y * d.y + d.z * d.z).sqrt() * (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt());
-        assert!(dot > 0.97, "the +z panel is drawn away from where it is ({dot})");
+            / ((d.x * d.x + d.y * d.y + d.z * d.z).sqrt()
+                * (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt());
+        assert!(
+            dot > 0.97,
+            "the +z panel is drawn away from where it is ({dot})"
+        );
     }
 
     /// Prefiltered at roughness 1 — what a matte surface reads its diffuse
@@ -340,10 +394,18 @@ mod tests {
             })
             .collect();
         let sigma = 0.582f32;
-        for dir in [[0.0f32, 1.0, 0.0], [0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0]] {
+        for dir in [
+            [0.0f32, 1.0, 0.0],
+            [0.0, -1.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [-1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ] {
             let (mut w_sum, mut l_sum) = (0.0f64, 0.0f64);
             for (d, l) in &samples {
-                let th = (d[0] * dir[0] + d[1] * dir[1] + d[2] * dir[2]).clamp(-1.0, 1.0).acos();
+                let th = (d[0] * dir[0] + d[1] * dir[1] + d[2] * dir[2])
+                    .clamp(-1.0, 1.0)
+                    .acos();
                 let w = (-(th * th) / (2.0 * sigma * sigma)).exp() as f64;
                 w_sum += w;
                 l_sum += w * *l as f64;
@@ -363,9 +425,17 @@ mod tests {
     #[test]
     fn a_prefiltered_atlas_round_trips() {
         let env = RoomEnvironment::pmrem(64);
-        let data = env.cube_uv_atlas.as_ref().and_then(|a| a.pixels_f32.as_ref()).expect("f32 atlas").to_vec();
+        let data = env
+            .cube_uv_atlas
+            .as_ref()
+            .and_then(|a| a.pixels_f32.as_ref())
+            .expect("f32 atlas")
+            .to_vec();
         let back = PmremGenerator::from_atlas_f32(64, data.clone()).expect("a 64 atlas");
-        let (a, b) = (env.cube_uv_atlas.as_ref().unwrap(), back.cube_uv_atlas.as_ref().unwrap());
+        let (a, b) = (
+            env.cube_uv_atlas.as_ref().unwrap(),
+            back.cube_uv_atlas.as_ref().unwrap(),
+        );
         for dir in [[0.0f32, 1.0, 0.0], [0.6, -0.2, 0.77], [-1.0, 0.0, 0.0]] {
             for r in [0.0f32, 0.35, 0.7, 1.0] {
                 let (x, y) = (
@@ -375,6 +445,9 @@ mod tests {
                 assert_eq!(x, y, "{dir:?} at roughness {r}");
             }
         }
-        assert!(PmremGenerator::from_atlas_f32(128, data).is_none(), "a 64 atlas taken for a 128 one");
+        assert!(
+            PmremGenerator::from_atlas_f32(128, data).is_none(),
+            "a 64 atlas taken for a 128 one"
+        );
     }
 }

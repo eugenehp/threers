@@ -51,7 +51,8 @@ pub use a11y::{contrast_ratio, AccessNode, ContrastIssue, Role, Semantics};
 pub use layout::{layout_unit, FixedWidthText, TextMeasure};
 pub use paint::{circle_path, parse_circle, OverlayPainter, Painter, TextStyle};
 pub use style::{
-    AlignItems, BoxSizing, Display, Edges, FlexDirection, FontWeight, JustifyContent, Length, Position, Rgba, Style,
+    AlignItems, BoxSizing, Display, Edges, FlexDirection, FontWeight, JustifyContent, Length,
+    Position, Rgba, Style,
 };
 pub use text_area::TextArea;
 pub use text_field::{FieldKey, KeyModifiers, TextField};

@@ -11,7 +11,9 @@
 use threers::marks::{Mark, MarkRenderer, MarkView, Origin, PointMarks};
 use threers::metal::objc::{alloc_init, get_class, Owned};
 use threers::renderer::WindowRenderer;
-use threers::{BoxGeometry, Color, Mesh, Object3D, PerspectiveCamera, Scene, StandardMaterial, Vector3};
+use threers::{
+    BoxGeometry, Color, Mesh, Object3D, PerspectiveCamera, Scene, StandardMaterial, Vector3,
+};
 
 #[test]
 fn a_metal_layer_window_draws_a_scene_and_marks() {
@@ -20,8 +22,10 @@ fn a_metal_layer_window_draws_a_scene_and_marks() {
         return;
     }
     // SAFETY: a fresh CAMetalLayer, kept alive for the whole test.
-    let layer = unsafe { Owned::from_retained(alloc_init(get_class("CAMetalLayer\0"))) }.expect("a CAMetalLayer");
-    let mut wr = unsafe { WindowRenderer::from_layer(layer.id().cast(), 96, 64) }.expect("a Metal window renderer");
+    let layer = unsafe { Owned::from_retained(alloc_init(get_class("CAMetalLayer\0"))) }
+        .expect("a CAMetalLayer");
+    let mut wr = unsafe { WindowRenderer::from_layer(layer.id().cast(), 96, 64) }
+        .expect("a Metal window renderer");
     assert!(wr.is_native_metal());
     assert_eq!(wr.size(), (96, 64));
 
@@ -51,7 +55,12 @@ fn a_metal_layer_window_draws_a_scene_and_marks() {
                 // Single-sampled frames can be picked against.
                 assert_eq!(f.occluder.is_some(), msaa == 1);
                 let view = MarkView::for_surface(&camera, Origin::ZERO, &f.surface);
-                marks.draw_on(&f.gpu, &f.target, &view, &mut [&mut points as &mut dyn Mark]);
+                marks.draw_on(
+                    &f.gpu,
+                    &f.target,
+                    &view,
+                    &mut [&mut points as &mut dyn Mark],
+                );
                 over = true;
             });
             if ok {

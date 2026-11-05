@@ -52,6 +52,31 @@ pub fn layout(
     style: &CaptionStyle,
     max_width: f32,
 ) -> LaidOutText {
+    use std::hash::{Hash, Hasher};
+    /// Enough for a HUD's strings; past it the cache starts again.
+    const KEEP: usize = 512;
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut h);
+    format!("{style:?}").hash(&mut h);
+    max_width.to_bits().hash(&mut h);
+    let key = h.finish();
+    if let Some(laid) = font.layouts.get(&key) {
+        return laid.clone();
+    }
+    let laid = layout_uncached(font, text, style, max_width);
+    if font.layouts.len() >= KEEP {
+        font.layouts.clear();
+    }
+    font.layouts.insert(key, laid.clone());
+    laid
+}
+
+fn layout_uncached(
+    font: &mut CaptionFont,
+    text: &str,
+    style: &CaptionStyle,
+    max_width: f32,
+) -> LaidOutText {
     let size = style.font_size;
     let metrics = font.metrics(size);
     let line_advance = size * style.line_height;

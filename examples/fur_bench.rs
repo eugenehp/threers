@@ -41,14 +41,24 @@ fn coat() -> FurMaterial {
             },
             ..Default::default()
         },
-        shells: std::env::var("SHELLS").ok().and_then(|v| v.parse().ok()).unwrap_or(32),
-        shadow_height: std::env::var("FUR_SHADOW").ok().and_then(|v| v.parse().ok()).unwrap_or(0.6),
+        shells: std::env::var("SHELLS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(32),
+        shadow_height: std::env::var("FUR_SHADOW")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0.6),
         wind: if std::env::var("NOWIND").is_ok() {
             Vector3::ZERO
         } else {
             Vector3::new(3.0, 0.0, 1.0)
         },
-        flutter: if std::env::var("NOWIND").is_ok() { 0.0 } else { 0.1 },
+        flutter: if std::env::var("NOWIND").is_ok() {
+            0.0
+        } else {
+            0.1
+        },
         ..Default::default()
     }
 }
@@ -75,12 +85,18 @@ fn skinned_ball(scene: &mut Scene) -> (ObjectId, ObjectId) {
 
 fn main() {
     let (w, h) = (1280u32, 720u32);
-    let mut hr = HeadlessRenderer::builder().size(w, h).build().expect("a GPU adapter");
+    let mut hr = HeadlessRenderer::builder()
+        .size(w, h)
+        .build()
+        .expect("a GPU adapter");
     if std::env::var("MSAA").is_ok() {
         hr.set_msaa(4);
     }
     let mut camera = PerspectiveCamera::new(40.0, w as f32 / h as f32, 0.1, 50.0);
-    let dist: f32 = std::env::var("DIST").ok().and_then(|v| v.parse().ok()).unwrap_or(4.0);
+    let dist: f32 = std::env::var("DIST")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(4.0);
     camera.position = Vector3::new(0.0, 0.5, dist);
     camera.look_at(Vector3::ZERO);
     let hair_options = StrandOptions {
@@ -93,37 +109,62 @@ fn main() {
     type Build = Box<dyn Fn(&mut Scene, &mut FurAnimator) -> Option<ObjectId>>;
     let cases: Vec<(&str, Build)> = vec![
         ("empty", Box::new(|_: &mut Scene, _: &mut FurAnimator| None)),
-        ("sphere", Box::new(|s: &mut Scene, _: &mut FurAnimator| {
-            s.add(Object3D::mesh(Mesh::new(
-                SphereGeometry::new(1.0, 96, 48),
-                Material::Standard(StandardMaterial::new(Color::WHITE)),
-            )));
-            None
-        })),
-        ("fur, still", Box::new(|s: &mut Scene, a: &mut FurAnimator| {
-            let seg: usize = std::env::var("SEG").ok().and_then(|v| v.parse().ok()).unwrap_or(96);
-            let id = s.add(fur_object(SphereGeometry::new(1.0, seg, seg / 2), &coat()));
-            a.track(id, &coat());
-            None
-        })),
-        ("fur, skinned", Box::new(|s: &mut Scene, a: &mut FurAnimator| {
-            let (bone, body) = skinned_ball(s);
-            a.grow_on_skinned(s, body, &coat());
-            Some(bone)
-        })),
-        ("hair 30k, still", Box::new(move |s: &mut Scene, a: &mut FurAnimator| {
-            let id = s.add(hair_object(&SphereGeometry::new(1.0, 64, 32), &coat(), &hair_options));
-            a.track(id, &coat());
-            None
-        })),
-        ("hair 30k, skinned", Box::new(move |s: &mut Scene, a: &mut FurAnimator| {
-            let (bone, body) = skinned_ball(s);
-            a.grow_hair_on_skinned(s, body, &coat(), &hair_options);
-            Some(bone)
-        })),
+        (
+            "sphere",
+            Box::new(|s: &mut Scene, _: &mut FurAnimator| {
+                s.add(Object3D::mesh(Mesh::new(
+                    SphereGeometry::new(1.0, 96, 48),
+                    Material::Standard(StandardMaterial::new(Color::WHITE)),
+                )));
+                None
+            }),
+        ),
+        (
+            "fur, still",
+            Box::new(|s: &mut Scene, a: &mut FurAnimator| {
+                let seg: usize = std::env::var("SEG")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(96);
+                let id = s.add(fur_object(SphereGeometry::new(1.0, seg, seg / 2), &coat()));
+                a.track(id, &coat());
+                None
+            }),
+        ),
+        (
+            "fur, skinned",
+            Box::new(|s: &mut Scene, a: &mut FurAnimator| {
+                let (bone, body) = skinned_ball(s);
+                a.grow_on_skinned(s, body, &coat());
+                Some(bone)
+            }),
+        ),
+        (
+            "hair 30k, still",
+            Box::new(move |s: &mut Scene, a: &mut FurAnimator| {
+                let id = s.add(hair_object(
+                    &SphereGeometry::new(1.0, 64, 32),
+                    &coat(),
+                    &hair_options,
+                ));
+                a.track(id, &coat());
+                None
+            }),
+        ),
+        (
+            "hair 30k, skinned",
+            Box::new(move |s: &mut Scene, a: &mut FurAnimator| {
+                let (bone, body) = skinned_ball(s);
+                a.grow_hair_on_skinned(s, body, &coat(), &hair_options);
+                Some(bone)
+            }),
+        ),
     ];
     let frames = 120;
-    println!("{:<20} {:>12} {:>12} {:>10}", "case", "update ms", "median ms", "fps");
+    println!(
+        "{:<20} {:>12} {:>12} {:>10}",
+        "case", "update ms", "median ms", "fps"
+    );
     let only = std::env::var("CASE").ok();
     for (name, build) in &cases {
         if only.as_deref().is_some_and(|o| !name.starts_with(o)) {

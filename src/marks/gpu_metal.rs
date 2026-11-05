@@ -16,7 +16,10 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::metal::enums::*;
-use crate::metal::objc::{alloc_init, class, msg0, msg1, msg2, msg3, msg4, msg5, msg8, msg9, sel, AutoreleasePool, Id, Owned, NIL, YES};
+use crate::metal::objc::{
+    alloc_init, class, msg0, msg1, msg2, msg3, msg4, msg5, msg8, msg9, sel, AutoreleasePool, Id,
+    Owned, NIL, YES,
+};
 use crate::metal::MetalDevice;
 
 /// The highest buffer slot; vertex buffer `i` binds at `TOP - i`.
@@ -39,7 +42,10 @@ unsafe impl Sync for MGpu {}
 
 impl MGpu {
     pub fn new(device: MetalDevice) -> Self {
-        Self { device, libraries: Mutex::new(HashMap::new()) }
+        Self {
+            device,
+            libraries: Mutex::new(HashMap::new()),
+        }
     }
 }
 
@@ -123,21 +129,40 @@ type Sizes = Option<(u8, Vec<(u32, u32)>)>;
 fn runtime_sized(module: &wgpu::naga::Module, slots: &Slots) -> Sizes {
     use wgpu::naga::{ArraySize, TypeInner};
     let dynamic = |ty: wgpu::naga::Handle<wgpu::naga::Type>| match &module.types[ty].inner {
-        TypeInner::Array { size: ArraySize::Dynamic, .. } => true,
+        TypeInner::Array {
+            size: ArraySize::Dynamic,
+            ..
+        } => true,
         TypeInner::Struct { members, .. } => members.last().is_some_and(|m| {
-            matches!(module.types[m.ty].inner, TypeInner::Array { size: ArraySize::Dynamic, .. })
+            matches!(
+                module.types[m.ty].inner,
+                TypeInner::Array {
+                    size: ArraySize::Dynamic,
+                    ..
+                }
+            )
         }),
         _ => false,
     };
     let list: Vec<(u32, u32)> = module
         .global_variables
         .iter()
-        .filter_map(|(_, g)| g.binding.as_ref().filter(|_| dynamic(g.ty)).map(|b| (b.group, b.binding)))
+        .filter_map(|(_, g)| {
+            g.binding
+                .as_ref()
+                .filter(|_| dynamic(g.ty))
+                .map(|b| (b.group, b.binding))
+        })
         .collect();
     if list.is_empty() {
         return None;
     }
-    let next = slots.values().filter(|(k, _)| *k == 0).map(|(_, s)| s + 1).max().unwrap_or(0);
+    let next = slots
+        .values()
+        .filter(|(k, _)| *k == 0)
+        .map(|(_, s)| s + 1)
+        .max()
+        .unwrap_or(0);
     Some((next, list))
 }
 
@@ -248,21 +273,47 @@ impl Drop for MPass {
 // ------------------------------------------------------------- conversions
 
 /// A private 2D array texture, `depth_or_array_layers` slices.
-fn new_texture_2d_array(device: &MetalDevice, desc: &wgpu::TextureDescriptor, format: NSUInteger, usage: NSUInteger) -> Result<Owned, crate::metal::MetalError> {
+fn new_texture_2d_array(
+    device: &MetalDevice,
+    desc: &wgpu::TextureDescriptor,
+    format: NSUInteger,
+    usage: NSUInteger,
+) -> Result<Owned, crate::metal::MetalError> {
     let _pool = AutoreleasePool::new();
     unsafe {
         let d = Owned::from_retained(alloc_init(class!("MTLTextureDescriptor")))
             .ok_or_else(|| crate::metal::MetalError::Allocation("MTLTextureDescriptor".into()))?;
         let _: () = msg1(d.id(), sel!("setTextureType:"), texture_type::TYPE_2D_ARRAY);
         let _: () = msg1(d.id(), sel!("setPixelFormat:"), format);
-        let _: () = msg1(d.id(), sel!("setWidth:"), desc.size.width.max(1) as NSUInteger);
-        let _: () = msg1(d.id(), sel!("setHeight:"), desc.size.height.max(1) as NSUInteger);
-        let _: () = msg1(d.id(), sel!("setArrayLength:"), desc.size.depth_or_array_layers as NSUInteger);
-        let _: () = msg1(d.id(), sel!("setMipmapLevelCount:"), desc.mip_level_count.max(1) as NSUInteger);
+        let _: () = msg1(
+            d.id(),
+            sel!("setWidth:"),
+            desc.size.width.max(1) as NSUInteger,
+        );
+        let _: () = msg1(
+            d.id(),
+            sel!("setHeight:"),
+            desc.size.height.max(1) as NSUInteger,
+        );
+        let _: () = msg1(
+            d.id(),
+            sel!("setArrayLength:"),
+            desc.size.depth_or_array_layers as NSUInteger,
+        );
+        let _: () = msg1(
+            d.id(),
+            sel!("setMipmapLevelCount:"),
+            desc.mip_level_count.max(1) as NSUInteger,
+        );
         let _: () = msg1(d.id(), sel!("setUsage:"), usage);
         let _: () = msg1(d.id(), sel!("setStorageMode:"), storage_mode::PRIVATE);
-        let tex: Id = msg1(device.device_id(), sel!("newTextureWithDescriptor:"), d.id());
-        Owned::from_retained(tex).ok_or_else(|| crate::metal::MetalError::Allocation("2D array texture".into()))
+        let tex: Id = msg1(
+            device.device_id(),
+            sel!("newTextureWithDescriptor:"),
+            d.id(),
+        );
+        Owned::from_retained(tex)
+            .ok_or_else(|| crate::metal::MetalError::Allocation("2D array texture".into()))
     }
 }
 
@@ -274,8 +325,15 @@ impl MTexture {
     pub(crate) fn view(&self, desc: &wgpu::TextureViewDescriptor) -> MTexture {
         use wgpu::TextureViewDimension as D;
         let base = desc.base_array_layer.min(self.layers.saturating_sub(1));
-        let count = desc.array_layer_count.unwrap_or(self.layers - base).clamp(1, self.layers - base);
-        let natural = if self.layers > 1 { texture_type::TYPE_2D_ARRAY } else { texture_type::TYPE_2D };
+        let count = desc
+            .array_layer_count
+            .unwrap_or(self.layers - base)
+            .clamp(1, self.layers - base);
+        let natural = if self.layers > 1 {
+            texture_type::TYPE_2D_ARRAY
+        } else {
+            texture_type::TYPE_2D
+        };
         let ty = match desc.dimension {
             Some(D::D2) => texture_type::TYPE_2D,
             Some(D::D2Array) => texture_type::TYPE_2D_ARRAY,
@@ -293,12 +351,26 @@ impl MTexture {
                 sel!("newTextureViewWithPixelFormat:textureType:levels:slices:"),
                 pixel_format(self.format),
                 ty,
-                NSRange { location: first_mip as NSUInteger, length: mips as NSUInteger },
-                NSRange { location: base as NSUInteger, length: count as NSUInteger },
+                NSRange {
+                    location: first_mip as NSUInteger,
+                    length: mips as NSUInteger,
+                },
+                NSRange {
+                    location: base as NSUInteger,
+                    length: count as NSUInteger,
+                },
             );
             Owned::from_retained(v).expect("a Metal texture view")
         };
-        MTexture { obj, format: self.format, width: self.width, height: self.height, mips, depth: 1, layers: count }
+        MTexture {
+            obj,
+            format: self.format,
+            width: self.width,
+            height: self.height,
+            mips,
+            depth: 1,
+            layers: count,
+        }
     }
 }
 
@@ -436,7 +508,10 @@ pub fn wait_in_flight() {
         // MTLCommandBufferStatusError.
         if status == 5 {
             let err: Id = msg0(cmd.id(), sel!("error"));
-            log::warn!("marks on Metal: a command buffer failed: {}", crate::metal::objc::error_message(err));
+            log::warn!(
+                "marks on Metal: a command buffer failed: {}",
+                crate::metal::objc::error_message(err)
+            );
         }
     }
 }
@@ -450,8 +525,14 @@ type MapCallback = Box<dyn FnOnce() + Send>;
 
 /// Run `callback` once the work committed before now has finished.
 pub fn queue_map(callback: MapCallback) {
-    let after = IN_FLIGHT.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|c| InFlight(c.0.clone()));
-    MAPS.lock().unwrap_or_else(|e| e.into_inner()).push((after, callback));
+    let after = IN_FLIGHT
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .map(|c| InFlight(c.0.clone()));
+    MAPS.lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push((after, callback));
 }
 
 /// Run the `map_async` callbacks whose work has finished: all of them after
@@ -462,13 +543,15 @@ pub fn run_maps(wait: bool) {
     }
     let ready: Vec<_> = {
         let mut maps = MAPS.lock().unwrap_or_else(|e| e.into_inner());
-        let (ready, pending) = std::mem::take(&mut *maps).into_iter().partition(|(after, _)| {
-            wait || after.as_ref().is_none_or(|c| {
-                // MTLCommandBufferStatusCompleted (4) or Error (5).
-                let status: NSUInteger = unsafe { msg0(c.0.id(), sel!("status")) };
-                status >= 4
-            })
-        });
+        let (ready, pending) = std::mem::take(&mut *maps)
+            .into_iter()
+            .partition(|(after, _)| {
+                wait || after.as_ref().is_none_or(|c| {
+                    // MTLCommandBufferStatusCompleted (4) or Error (5).
+                    let status: NSUInteger = unsafe { msg0(c.0.id(), sel!("status")) };
+                    status >= 4
+                })
+            });
         *maps = pending;
         ready
     };
@@ -499,7 +582,11 @@ pub fn mapped_bytes(buffer: &MBuffer) -> &[u8] {
 impl MGpu {
     pub fn limits(&self) -> wgpu::Limits {
         wgpu::Limits {
-            max_texture_dimension_2d: if cfg!(target_os = "macos") { 16384 } else { 8192 },
+            max_texture_dimension_2d: if cfg!(target_os = "macos") {
+                16384
+            } else {
+                8192
+            },
             ..wgpu::Limits::default()
         }
     }
@@ -536,7 +623,10 @@ impl MGpu {
             return;
         }
         let end = offset as usize + bytes.len();
-        assert!(end as u64 <= buffer.size.max(4), "write past the end of a marks buffer");
+        assert!(
+            end as u64 <= buffer.size.max(4),
+            "write past the end of a marks buffer"
+        );
         if !busy() {
             // Nothing committed is running: the memory is the CPU's.
             copy_into(buffer, offset, bytes);
@@ -564,7 +654,6 @@ impl MGpu {
         }
     }
 
-
     pub fn create_texture(&self, desc: &wgpu::TextureDescriptor) -> MTexture {
         let mut usage = 0;
         if desc.usage.contains(wgpu::TextureUsages::TEXTURE_BINDING) {
@@ -577,7 +666,11 @@ impl MGpu {
             usage |= texture_usage::SHADER_WRITE;
         }
         let volume = desc.dimension == wgpu::TextureDimension::D3;
-        let layers = if volume { 1 } else { desc.size.depth_or_array_layers.max(1) };
+        let layers = if volume {
+            1
+        } else {
+            desc.size.depth_or_array_layers.max(1)
+        };
         let obj = if layers > 1 {
             new_texture_2d_array(&self.device, desc, pixel_format(desc.format), usage)
         } else if volume {
@@ -608,7 +701,11 @@ impl MGpu {
             width: desc.size.width.max(1),
             height: desc.size.height.max(1),
             mips: desc.mip_level_count.max(1),
-            depth: if volume { desc.size.depth_or_array_layers.max(1) } else { 1 },
+            depth: if volume {
+                desc.size.depth_or_array_layers.max(1)
+            } else {
+                1
+            },
             layers,
         }
     }
@@ -631,7 +728,10 @@ impl MGpu {
     }
 
     pub fn create_module(&self, source: String) -> MModule {
-        MModule(Arc::new(ModuleSrc { source, parsed: OnceLock::new() }))
+        MModule(Arc::new(ModuleSrc {
+            source,
+            parsed: OnceLock::new(),
+        }))
     }
 
     /// `bytes` into `texture` at `origin`, `bytes_per_row` apart, through a
@@ -645,11 +745,17 @@ impl MGpu {
         size: wgpu::Extent3d,
     ) {
         let bpp = texture.format.block_copy_size(None).unwrap_or(4) as u64;
-        let row = layout.bytes_per_row.map_or(size.width as u64 * bpp, u64::from);
+        let row = layout
+            .bytes_per_row
+            .map_or(size.width as u64 * bpp, u64::from);
         let rows = layout.rows_per_image.unwrap_or(size.height) as u64;
         // A 3D texture's region is `depth` images deep, and an array's is
         // that many slices, copied one at a time; a 2D one's is one image.
-        let images = if texture.depth > 1 || texture.layers > 1 { size.depth_or_array_layers.max(1) as u64 } else { 1 };
+        let images = if texture.depth > 1 || texture.layers > 1 {
+            size.depth_or_array_layers.max(1) as u64
+        } else {
+            1
+        };
         let need = layout.offset + row * rows * (images - 1) + row * size.height as u64;
         if (bytes.len() as u64) < need {
             return;
@@ -658,7 +764,9 @@ impl MGpu {
         let _pool = AutoreleasePool::new();
         // (source offset, slice, images in this copy, z)
         let copies: Vec<(u64, u64, u64, u64)> = if texture.layers > 1 {
-            (0..images).map(|i| (layout.offset + row * rows * i, origin.z as u64 + i, 1, 0)).collect()
+            (0..images)
+                .map(|i| (layout.offset + row * rows * i, origin.z as u64 + i, 1, 0))
+                .collect()
         } else if texture.depth > 1 {
             vec![(layout.offset, 0, images, origin.z as u64)]
         } else {
@@ -692,7 +800,8 @@ impl MGpu {
 
     pub fn create_encoder(&self) -> MEncoder {
         let _pool = AutoreleasePool::new();
-        let cmd = unsafe { Owned::retain(self.device.command_buffer()) }.expect("a Metal command buffer");
+        let cmd =
+            unsafe { Owned::retain(self.device.command_buffer()) }.expect("a Metal command buffer");
         MEncoder { cmd }
     }
 
@@ -714,9 +823,12 @@ impl ModuleSrc {
                 use wgpu::naga::valid;
                 let module = wgpu::naga::front::wgsl::parse_str(&self.source)
                     .map_err(|e| e.emit_to_string(&self.source))?;
-                let info = valid::Validator::new(valid::ValidationFlags::all(), valid::Capabilities::all())
-                    .validate(&module)
-                    .map_err(|e| format!("{e:?}"))?;
+                let info = valid::Validator::new(
+                    valid::ValidationFlags::all(),
+                    valid::Capabilities::all(),
+                )
+                .validate(&module)
+                .map_err(|e| format!("{e:?}"))?;
                 Ok((module, info))
             })
             .as_ref()
@@ -748,27 +860,43 @@ fn slots_for(layouts: &[MLayout]) -> Slots {
 impl MGpu {
     /// The module translated for `slots` and compiled, and its entry points'
     /// names in MSL.
-    fn library(&self, module: &MModule, slots: &Slots, layouts: &[MLayout]) -> Result<(Owned, Names, Sizes), String> {
+    fn library(
+        &self,
+        module: &MModule,
+        slots: &Slots,
+        layouts: &[MLayout],
+    ) -> Result<(Owned, Names, Sizes), String> {
         use wgpu::naga::back::msl;
         let (naga_module, info) = module.0.parsed()?;
         let sizes = runtime_sized(naga_module, slots);
         let mut resources = msl::BindingMap::new();
         for (g, layout) in layouts.iter().enumerate() {
             for e in layout.0.iter() {
-                let Some(&(kind, slot)) = slots.get(&(g as u32, e.binding)) else { continue };
+                let Some(&(kind, slot)) = slots.get(&(g as u32, e.binding)) else {
+                    continue;
+                };
                 let mut target = msl::BindTarget::default();
                 match kind {
                     0 => {
                         target.buffer = Some(slot);
                         target.mutable = matches!(
                             e.ty,
-                            wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, .. }
+                            wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Storage { read_only: false },
+                                ..
+                            }
                         );
                     }
                     1 => target.texture = Some(slot),
                     _ => target.sampler = Some(msl::BindSamplerTarget::Resource(slot)),
                 }
-                resources.insert(wgpu::naga::ResourceBinding { group: g as u32, binding: e.binding }, target);
+                resources.insert(
+                    wgpu::naga::ResourceBinding {
+                        group: g as u32,
+                        binding: e.binding,
+                    },
+                    target,
+                );
             }
         }
         let entry = msl::EntryPointResources {
@@ -778,12 +906,21 @@ impl MGpu {
         };
         let options = msl::Options {
             lang_version: (2, 1),
-            per_entry_point_map: naga_module.entry_points.iter().map(|ep| (ep.name.clone(), entry.clone())).collect(),
+            per_entry_point_map: naga_module
+                .entry_points
+                .iter()
+                .map(|ep| (ep.name.clone(), entry.clone()))
+                .collect(),
             fake_missing_bindings: false,
             ..Default::default()
         };
-        let (text, tinfo) = msl::write_string(naga_module, info, &options, &msl::PipelineOptions::default())
-            .map_err(|e| format!("{e:?}"))?;
+        let (text, tinfo) = msl::write_string(
+            naga_module,
+            info,
+            &options,
+            &msl::PipelineOptions::default(),
+        )
+        .map_err(|e| format!("{e:?}"))?;
         let names: Names = naga_module
             .entry_points
             .iter()
@@ -795,7 +932,8 @@ impl MGpu {
             return Ok((lib.clone(), names, sizes));
         }
         let _pool = AutoreleasePool::new();
-        let lib = unsafe { crate::metal::compile_library(self.device.device_id(), &text) }.map_err(|e| e.to_string())?;
+        let lib = unsafe { crate::metal::compile_library(self.device.device_id(), &text) }
+            .map_err(|e| e.to_string())?;
         libs.insert(text, lib.clone());
         Ok((lib, names, sizes))
     }
@@ -822,14 +960,19 @@ impl MGpu {
             None => None,
         };
         let _pool = AutoreleasePool::new();
-        let vs = crate::metal::resources::library_function(vlib.id(), &entry_name(&vnames, vertex_entry)?)
-            .map_err(|e| e.to_string())?;
+        let vs = crate::metal::resources::library_function(
+            vlib.id(),
+            &entry_name(&vnames, vertex_entry)?,
+        )
+        .map_err(|e| e.to_string())?;
         unsafe {
-            let desc = Owned::from_retained(alloc_init(class!("MTLRenderPipelineDescriptor"))).ok_or("descriptor")?;
+            let desc = Owned::from_retained(alloc_init(class!("MTLRenderPipelineDescriptor")))
+                .ok_or("descriptor")?;
             let _: () = msg1(desc.id(), sel!("setVertexFunction:"), vs.id());
             let mut _fs_keep = None;
             if let Some((lib, name, targets)) = &fragment_lib {
-                let fs = crate::metal::resources::library_function(lib.id(), name).map_err(|e| e.to_string())?;
+                let fs = crate::metal::resources::library_function(lib.id(), name)
+                    .map_err(|e| e.to_string())?;
                 let _: () = msg1(desc.id(), sel!("setFragmentFunction:"), fs.id());
                 _fs_keep = Some(fs);
                 let attachments: Id = msg0(desc.id(), sel!("colorAttachments"));
@@ -846,19 +989,51 @@ impl MGpu {
                     let _: () = msg1(a, sel!("setWriteMask:"), mask as NSUInteger);
                     if let Some(b) = t.blend {
                         let _: () = msg1(a, sel!("setBlendingEnabled:"), YES);
-                        let _: () = msg1(a, sel!("setRgbBlendOperation:"), blend_operation(b.color.operation));
-                        let _: () = msg1(a, sel!("setAlphaBlendOperation:"), blend_operation(b.alpha.operation));
-                        let _: () = msg1(a, sel!("setSourceRGBBlendFactor:"), blend_factor(b.color.src_factor));
-                        let _: () = msg1(a, sel!("setDestinationRGBBlendFactor:"), blend_factor(b.color.dst_factor));
-                        let _: () = msg1(a, sel!("setSourceAlphaBlendFactor:"), blend_factor(b.alpha.src_factor));
-                        let _: () = msg1(a, sel!("setDestinationAlphaBlendFactor:"), blend_factor(b.alpha.dst_factor));
+                        let _: () = msg1(
+                            a,
+                            sel!("setRgbBlendOperation:"),
+                            blend_operation(b.color.operation),
+                        );
+                        let _: () = msg1(
+                            a,
+                            sel!("setAlphaBlendOperation:"),
+                            blend_operation(b.alpha.operation),
+                        );
+                        let _: () = msg1(
+                            a,
+                            sel!("setSourceRGBBlendFactor:"),
+                            blend_factor(b.color.src_factor),
+                        );
+                        let _: () = msg1(
+                            a,
+                            sel!("setDestinationRGBBlendFactor:"),
+                            blend_factor(b.color.dst_factor),
+                        );
+                        let _: () = msg1(
+                            a,
+                            sel!("setSourceAlphaBlendFactor:"),
+                            blend_factor(b.alpha.src_factor),
+                        );
+                        let _: () = msg1(
+                            a,
+                            sel!("setDestinationAlphaBlendFactor:"),
+                            blend_factor(b.alpha.dst_factor),
+                        );
                     }
                 }
             }
             if let Some(d) = depth_stencil {
-                let _: () = msg1(desc.id(), sel!("setDepthAttachmentPixelFormat:"), pixel_format(d.format));
+                let _: () = msg1(
+                    desc.id(),
+                    sel!("setDepthAttachmentPixelFormat:"),
+                    pixel_format(d.format),
+                );
             }
-            let _: () = msg1(desc.id(), sel!("setRasterSampleCount:"), samples.max(1) as NSUInteger);
+            let _: () = msg1(
+                desc.id(),
+                sel!("setRasterSampleCount:"),
+                samples.max(1) as NSUInteger,
+            );
             if !buffers.is_empty() {
                 let vd: Id = msg0(class!("MTLVertexDescriptor"), sel!("vertexDescriptor"));
                 let attrs: Id = msg0(vd, sel!("attributes"));
@@ -875,7 +1050,11 @@ impl MGpu {
                     let _: () = msg1(l, sel!("setStepFunction:"), step);
                     let _: () = msg1(l, sel!("setStepRate:"), 1usize);
                     for a in b.attributes {
-                        let at: Id = msg1(attrs, sel!("objectAtIndexedSubscript:"), a.shader_location as NSUInteger);
+                        let at: Id = msg1(
+                            attrs,
+                            sel!("objectAtIndexedSubscript:"),
+                            a.shader_location as NSUInteger,
+                        );
                         let _: () = msg1(at, sel!("setFormat:"), vertex_format(a.format));
                         let _: () = msg1(at, sel!("setOffset:"), a.offset as NSUInteger);
                         let _: () = msg1(at, sel!("setBufferIndex:"), index as NSUInteger);
@@ -890,14 +1069,28 @@ impl MGpu {
                 desc.id(),
                 &mut err as *mut Id,
             );
-            let state = Owned::from_retained(state).ok_or_else(|| crate::metal::objc::error_message(err))?;
+            let state = Owned::from_retained(state)
+                .ok_or_else(|| crate::metal::objc::error_message(err))?;
             let depth = match depth_stencil {
                 Some(d) => {
-                    let dd = Owned::from_retained(alloc_init(class!("MTLDepthStencilDescriptor"))).ok_or("depth descriptor")?;
+                    let dd = Owned::from_retained(alloc_init(class!("MTLDepthStencilDescriptor")))
+                        .ok_or("depth descriptor")?;
                     let compare = d.depth_compare.unwrap_or(wgpu::CompareFunction::Always);
-                    let _: () = msg1(dd.id(), sel!("setDepthCompareFunction:"), compare_function(compare));
-                    let _: () = msg1(dd.id(), sel!("setDepthWriteEnabled:"), d.depth_write_enabled.unwrap_or(false));
-                    let s: Id = msg1(self.device.device_id(), sel!("newDepthStencilStateWithDescriptor:"), dd.id());
+                    let _: () = msg1(
+                        dd.id(),
+                        sel!("setDepthCompareFunction:"),
+                        compare_function(compare),
+                    );
+                    let _: () = msg1(
+                        dd.id(),
+                        sel!("setDepthWriteEnabled:"),
+                        d.depth_write_enabled.unwrap_or(false),
+                    );
+                    let s: Id = msg1(
+                        self.device.device_id(),
+                        sel!("newDepthStencilStateWithDescriptor:"),
+                        dd.id(),
+                    );
                     Owned::from_retained(s)
                 }
                 None => None,
@@ -933,7 +1126,12 @@ impl MGpu {
 }
 
 impl MGpu {
-    pub fn create_compute_pipeline(&self, layouts: &[MLayout], module: &MModule, entry: &str) -> Result<MComputePipeline, String> {
+    pub fn create_compute_pipeline(
+        &self,
+        layouts: &[MLayout],
+        module: &MModule,
+        entry: &str,
+    ) -> Result<MComputePipeline, String> {
         let slots = slots_for(layouts);
         let (lib, names, sizes) = self.library(module, &slots, layouts)?;
         let (naga_module, _) = module.0.parsed()?;
@@ -953,8 +1151,14 @@ impl MGpu {
                 f.id(),
                 &mut err as *mut Id,
             );
-            let state = Owned::from_retained(state).ok_or_else(|| crate::metal::objc::error_message(err))?;
-            Ok(MComputePipeline(Arc::new(ComputeInner { state, slots, threads, sizes })))
+            let state = Owned::from_retained(state)
+                .ok_or_else(|| crate::metal::objc::error_message(err))?;
+            Ok(MComputePipeline(Arc::new(ComputeInner {
+                state,
+                slots,
+                threads,
+                sizes,
+            })))
         }
     }
 }
@@ -963,18 +1167,30 @@ impl MGpu {
 /// compute stage.
 fn bind_groups(e: Id, slots: &Slots, groups: &[Option<(MBindGroup, Vec<u32>)>], compute: bool) {
     for (g, group) in groups.iter().enumerate() {
-        let Some((group, offsets)) = group else { continue };
+        let Some((group, offsets)) = group else {
+            continue;
+        };
         // Dynamic offsets apply in binding order to the entries that take one.
         let mut dynamic: Vec<u32> = group
             .layout
             .0
             .iter()
-            .filter(|l| matches!(l.ty, wgpu::BindingType::Buffer { has_dynamic_offset: true, .. }))
+            .filter(|l| {
+                matches!(
+                    l.ty,
+                    wgpu::BindingType::Buffer {
+                        has_dynamic_offset: true,
+                        ..
+                    }
+                )
+            })
             .map(|l| l.binding)
             .collect();
         dynamic.sort_unstable();
         for (binding, res) in group.entries.iter() {
-            let Some(&(_, slot)) = slots.get(&(g as u32, *binding)) else { continue };
+            let Some(&(_, slot)) = slots.get(&(g as u32, *binding)) else {
+                continue;
+            };
             let slot = slot as NSUInteger;
             unsafe {
                 match res {
@@ -989,8 +1205,15 @@ fn bind_groups(e: Id, slots: &Slots, groups: &[Option<(MBindGroup, Vec<u32>)>], 
                         if compute {
                             let _: () = msg3(e, sel!("setBuffer:offset:atIndex:"), b.id(), o, slot);
                         } else {
-                            let _: () = msg3(e, sel!("setVertexBuffer:offset:atIndex:"), b.id(), o, slot);
-                            let _: () = msg3(e, sel!("setFragmentBuffer:offset:atIndex:"), b.id(), o, slot);
+                            let _: () =
+                                msg3(e, sel!("setVertexBuffer:offset:atIndex:"), b.id(), o, slot);
+                            let _: () = msg3(
+                                e,
+                                sel!("setFragmentBuffer:offset:atIndex:"),
+                                b.id(),
+                                o,
+                                slot,
+                            );
                         }
                     }
                     MRes::Texture(t) => {
@@ -1005,8 +1228,10 @@ fn bind_groups(e: Id, slots: &Slots, groups: &[Option<(MBindGroup, Vec<u32>)>], 
                         if compute {
                             let _: () = msg2(e, sel!("setSamplerState:atIndex:"), s.id(), slot);
                         } else {
-                            let _: () = msg2(e, sel!("setVertexSamplerState:atIndex:"), s.id(), slot);
-                            let _: () = msg2(e, sel!("setFragmentSamplerState:atIndex:"), s.id(), slot);
+                            let _: () =
+                                msg2(e, sel!("setVertexSamplerState:atIndex:"), s.id(), slot);
+                            let _: () =
+                                msg2(e, sel!("setFragmentSamplerState:atIndex:"), s.id(), slot);
                         }
                     }
                 }
@@ -1018,7 +1243,11 @@ fn bind_groups(e: Id, slots: &Slots, groups: &[Option<(MBindGroup, Vec<u32>)>], 
 impl MComputePass {
     pub fn set_pipeline(&mut self, pipeline: &MComputePipeline) {
         unsafe {
-            let _: () = msg1(self.enc.id(), sel!("setComputePipelineState:"), pipeline.0.state.id());
+            let _: () = msg1(
+                self.enc.id(),
+                sel!("setComputePipelineState:"),
+                pipeline.0.state.id(),
+            );
         }
         self.pipeline = Some(pipeline.clone());
     }
@@ -1038,10 +1267,20 @@ impl MComputePass {
             let bytes = sizes_bytes(list, &self.groups);
             let len = std::mem::size_of_val(bytes.as_slice()) as NSUInteger;
             unsafe {
-                let _: () = msg3(self.enc.id(), sel!("setBytes:length:atIndex:"), bytes.as_ptr(), len, *slot as NSUInteger);
+                let _: () = msg3(
+                    self.enc.id(),
+                    sel!("setBytes:length:atIndex:"),
+                    bytes.as_ptr(),
+                    len,
+                    *slot as NSUInteger,
+                );
             }
         }
-        let size = |v: [u32; 3]| MTLSize { width: v[0] as NSUInteger, height: v[1] as NSUInteger, depth: v[2] as NSUInteger };
+        let size = |v: [u32; 3]| MTLSize {
+            width: v[0] as NSUInteger,
+            height: v[1] as NSUInteger,
+            depth: v[2] as NSUInteger,
+        };
         unsafe {
             let _: () = msg2(
                 self.enc.id(),
@@ -1070,23 +1309,43 @@ pub struct DepthAttachment {
 }
 
 impl MEncoder {
-    pub fn begin_render_pass(&mut self, color: &[ColorAttachment], depth: Option<DepthAttachment>) -> MPass {
+    pub fn begin_render_pass(
+        &mut self,
+        color: &[ColorAttachment],
+        depth: Option<DepthAttachment>,
+    ) -> MPass {
         let _pool = AutoreleasePool::new();
         unsafe {
-            let desc: Id = msg0(class!("MTLRenderPassDescriptor"), sel!("renderPassDescriptor"));
+            let desc: Id = msg0(
+                class!("MTLRenderPassDescriptor"),
+                sel!("renderPassDescriptor"),
+            );
             let attachments: Id = msg0(desc, sel!("colorAttachments"));
             for (i, c) in color.iter().enumerate() {
                 let a: Id = msg1(attachments, sel!("objectAtIndexedSubscript:"), i);
                 let _: () = msg1(a, sel!("setTexture:"), c.texture);
                 let _: () = msg1(a, sel!("setLoadAction:"), load_action(&c.load));
                 if let wgpu::LoadOp::Clear(v) = c.load {
-                    let _: () = msg1(a, sel!("setClearColor:"), MTLClearColor { red: v.r, green: v.g, blue: v.b, alpha: v.a });
+                    let _: () = msg1(
+                        a,
+                        sel!("setClearColor:"),
+                        MTLClearColor {
+                            red: v.r,
+                            green: v.g,
+                            blue: v.b,
+                            alpha: v.a,
+                        },
+                    );
                 }
                 let store = matches!(c.store, wgpu::StoreOp::Store);
                 let action = match (c.resolve, store) {
                     (Some(r), s) => {
                         let _: () = msg1(a, sel!("setResolveTexture:"), r);
-                        if s { store_action::STORE_AND_MULTISAMPLE_RESOLVE } else { store_action::MULTISAMPLE_RESOLVE }
+                        if s {
+                            store_action::STORE_AND_MULTISAMPLE_RESOLVE
+                        } else {
+                            store_action::MULTISAMPLE_RESOLVE
+                        }
                     }
                     (None, true) => store_action::STORE,
                     (None, false) => store_action::DONT_CARE,
@@ -1100,11 +1359,24 @@ impl MEncoder {
                 if let wgpu::LoadOp::Clear(v) = d.load {
                     let _: () = msg1(a, sel!("setClearDepth:"), v as f64);
                 }
-                let store = if matches!(d.store, wgpu::StoreOp::Store) { store_action::STORE } else { store_action::DONT_CARE };
+                let store = if matches!(d.store, wgpu::StoreOp::Store) {
+                    store_action::STORE
+                } else {
+                    store_action::DONT_CARE
+                };
                 let _: () = msg1(a, sel!("setStoreAction:"), store);
             }
-            let enc: Id = msg1(self.cmd.id(), sel!("renderCommandEncoderWithDescriptor:"), desc);
-            MPass { enc: Owned::retain(enc).expect("a render encoder"), pipeline: None, groups: Vec::new(), index: None }
+            let enc: Id = msg1(
+                self.cmd.id(),
+                sel!("renderCommandEncoderWithDescriptor:"),
+                desc,
+            );
+            MPass {
+                enc: Owned::retain(enc).expect("a render encoder"),
+                pipeline: None,
+                groups: Vec::new(),
+                index: None,
+            }
         }
     }
 
@@ -1112,11 +1384,22 @@ impl MEncoder {
         let _pool = AutoreleasePool::new();
         unsafe {
             let enc: Id = msg0(self.cmd.id(), sel!("computeCommandEncoder"));
-            MComputePass { enc: Owned::retain(enc).expect("a compute encoder"), pipeline: None, groups: Vec::new() }
+            MComputePass {
+                enc: Owned::retain(enc).expect("a compute encoder"),
+                pipeline: None,
+                groups: Vec::new(),
+            }
         }
     }
 
-    pub fn copy_buffer_to_buffer(&mut self, src: &MBuffer, src_offset: u64, dst: &MBuffer, dst_offset: u64, size: u64) {
+    pub fn copy_buffer_to_buffer(
+        &mut self,
+        src: &MBuffer,
+        src_offset: u64,
+        dst: &MBuffer,
+        dst_offset: u64,
+        size: u64,
+    ) {
         unsafe {
             let blit: Id = msg0(self.cmd.id(), sel!("blitCommandEncoder"));
             let _: () = msg5(
@@ -1224,7 +1507,12 @@ impl MPass {
     }
 
     pub fn set_scissor_rect(&mut self, x: u32, y: u32, w: u32, h: u32) {
-        let r = MTLScissorRect { x: x as NSUInteger, y: y as NSUInteger, width: w as NSUInteger, height: h as NSUInteger };
+        let r = MTLScissorRect {
+            x: x as NSUInteger,
+            y: y as NSUInteger,
+            width: w as NSUInteger,
+            height: h as NSUInteger,
+        };
         unsafe {
             let _: () = msg1(self.enc.id(), sel!("setScissorRect:"), r);
         }
@@ -1239,8 +1527,20 @@ impl MPass {
                 let len = std::mem::size_of_val(bytes.as_slice()) as NSUInteger;
                 unsafe {
                     let e = self.enc.id();
-                    let _: () = msg3(e, sel!("setVertexBytes:length:atIndex:"), bytes.as_ptr(), len, *slot as NSUInteger);
-                    let _: () = msg3(e, sel!("setFragmentBytes:length:atIndex:"), bytes.as_ptr(), len, *slot as NSUInteger);
+                    let _: () = msg3(
+                        e,
+                        sel!("setVertexBytes:length:atIndex:"),
+                        bytes.as_ptr(),
+                        len,
+                        *slot as NSUInteger,
+                    );
+                    let _: () = msg3(
+                        e,
+                        sel!("setFragmentBytes:length:atIndex:"),
+                        bytes.as_ptr(),
+                        len,
+                        *slot as NSUInteger,
+                    );
                 }
             }
         }
@@ -1265,8 +1565,15 @@ impl MPass {
         }
     }
 
-    pub fn draw_indexed(&mut self, indices: std::ops::Range<u32>, base_vertex: i32, instances: std::ops::Range<u32>) {
-        let (Some(p), Some((buffer, offset, t))) = (&self.pipeline, &self.index) else { return };
+    pub fn draw_indexed(
+        &mut self,
+        indices: std::ops::Range<u32>,
+        base_vertex: i32,
+        instances: std::ops::Range<u32>,
+    ) {
+        let (Some(p), Some((buffer, offset, t))) = (&self.pipeline, &self.index) else {
+            return;
+        };
         if indices.is_empty() || instances.is_empty() {
             return;
         }

@@ -8,7 +8,6 @@
 //! come from the platform libm, so the hashes are asserted on the reference
 //! platform (macOS aarch64) and the lengths everywhere.
 
-
 use std::path::Path;
 
 fn fnv1a(bytes: &[u8]) -> u64 {
@@ -24,7 +23,10 @@ fn opus_webm_matches_ffmpeg() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/support/opus");
     let manifest = std::fs::read_to_string(dir.join("expected.txt")).unwrap();
     let mut checked = 0;
-    for line in manifest.lines().filter(|l| !l.starts_with('#') && !l.trim().is_empty()) {
+    for line in manifest
+        .lines()
+        .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
+    {
         let mut it = line.split_whitespace();
         let (name, len, hash) = (it.next().unwrap(), it.next().unwrap(), it.next().unwrap());
         let len: usize = len.parse().unwrap();
@@ -39,7 +41,11 @@ fn opus_webm_matches_ffmpeg() {
             }
         }
         assert_eq!(out.len(), len, "{name}: output length");
-        assert_eq!(d.frame_lens.iter().sum::<usize>(), n, "{name}: frame lengths");
+        assert_eq!(
+            d.frame_lens.iter().sum::<usize>(),
+            n,
+            "{name}: frame lengths"
+        );
         if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
             assert_eq!(fnv1a(&out), hash, "{name}: samples differ from ffmpeg");
         }

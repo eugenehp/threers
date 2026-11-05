@@ -19,9 +19,9 @@ pub enum Joining {
 
 pub mod gsub;
 pub mod joining;
+mod joining_table;
 pub mod read;
 pub mod script;
-mod joining_table;
 mod script_table;
 
 /// One shaped glyph and which character it came from.
@@ -49,8 +49,7 @@ pub struct Shaped {
 /// The order is not cosmetic: with `rclt` first, lam-alef in isolation ligates to the
 /// wrong glyph — 1414 where Core Text says 965 — because `rclt` has already rewritten the
 /// lam's form by the time the ligature lookup sees it.
-pub const AFTER_FORMS: &[[u8; 4]] =
-    &[*b"ccmp", *b"rlig", *b"rclt", *b"calt", *b"liga"];
+pub const AFTER_FORMS: &[[u8; 4]] = &[*b"ccmp", *b"rlig", *b"rclt", *b"calt", *b"liga"];
 
 /// Shape `text` with `font`: characters in, glyphs out.
 ///
@@ -85,13 +84,18 @@ pub fn shape(
         }
     }
     let Some(gsub) = gsub else {
-        return pairs.into_iter().map(|(glyph, cluster)| Shaped { glyph, cluster }).collect();
+        return pairs
+            .into_iter()
+            .map(|(glyph, cluster)| Shaped { glyph, cluster })
+            .collect();
     };
     let mut buf = gsub::Buffer::new(&pairs);
 
     // The joining forms, by the cluster's character rather than by glyph position.
     for i in 0..buf.len() {
-        let Some(form) = forms.get(buf.clusters[i]) else { continue };
+        let Some(form) = forms.get(buf.clusters[i]) else {
+            continue;
+        };
         let mut one = gsub::Buffer::new(&[(buf.glyphs[i], buf.clusters[i])]);
         gsub.apply_feature(script, &form.tag(), &mut one);
         if one.len() == 1 {
@@ -105,6 +109,9 @@ pub fn shape(
     buf.glyphs
         .iter()
         .zip(&buf.clusters)
-        .map(|(glyph, cluster)| Shaped { glyph: *glyph, cluster: *cluster })
+        .map(|(glyph, cluster)| Shaped {
+            glyph: *glyph,
+            cluster: *cluster,
+        })
         .collect()
 }

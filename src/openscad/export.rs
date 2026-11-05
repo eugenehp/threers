@@ -527,7 +527,10 @@ pub fn parts_to_glb(parts: &[crate::openscad::ScadPart]) -> Vec<u8> {
         return Vec::new();
     }
 
-    let node_list: String = (0..nodes.len()).map(|i| i.to_string()).collect::<Vec<_>>().join(",");
+    let node_list: String = (0..nodes.len())
+        .map(|i| i.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
     let json = format!(
         "{{\"asset\":{{\"version\":\"2.0\",\"generator\":\"threers\"}},\
          \"scene\":0,\"scenes\":[{{\"nodes\":[{node_list}]}}],\
@@ -614,7 +617,12 @@ mod tests {
 
     fn unit_quad() -> BufferGeometry {
         from_faces(
-            &[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0]],
+            &[
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [1.0, 1.0, 0.0],
+                [0.0, 1.0, 0.0],
+            ],
             &[&[0, 1, 2, 3]],
         )
     }
@@ -652,8 +660,16 @@ mod tests {
     }
 
     fn assert_same_polygons(back: &BufferGeometry, g: &BufferGeometry, what: &str) {
-        assert_eq!(back.polygon_counts(), g.polygon_counts(), "{what}: grouping");
-        assert_eq!(polygon_positions(back), polygon_positions(g), "{what}: corners");
+        assert_eq!(
+            back.polygon_counts(),
+            g.polygon_counts(),
+            "{what}: grouping"
+        );
+        assert_eq!(
+            polygon_positions(back),
+            polygon_positions(g),
+            "{what}: corners"
+        );
     }
 
     fn face_corner_counts(lines: impl Iterator<Item = usize>) -> Vec<usize> {

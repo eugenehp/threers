@@ -18,8 +18,8 @@ use std::time::Instant;
 use threers::cameras::Camera as _;
 use threers::renderer::{SurfaceGpu, SurfaceOptions, SurfaceRenderer};
 use threers::{
-    AmbientLight, BoxGeometry, Color, DirectionalLight, Euler, Mesh, Object3D, PerspectiveCamera, Scene,
-    StandardMaterial, Vector3,
+    AmbientLight, BoxGeometry, Color, DirectionalLight, Euler, Mesh, Object3D, PerspectiveCamera,
+    Scene, StandardMaterial, Vector3,
 };
 use winit::event::{Event, WindowEvent};
 use winit::event_loop::EventLoopBuilder;
@@ -28,7 +28,9 @@ use winit::window::WindowBuilder;
 fn main() {
     env_logger::init();
     let frames: Option<u64> = std::env::var("FRAMES").ok().and_then(|v| v.parse().ok());
-    let event_loop = EventLoopBuilder::<()>::with_user_event().build().expect("event loop");
+    let event_loop = EventLoopBuilder::<()>::with_user_event()
+        .build()
+        .expect("event loop");
     let window = Arc::new(
         WindowBuilder::new()
             .with_title("threers — surface viewport")
@@ -41,34 +43,50 @@ fn main() {
     let cache_dir = std::env::temp_dir().join("threers-surface-viewport-cache");
     // Any `PipelineCacheStore`: a directory here; `MemoryStore`, `FileStore`
     // or a `CallbackStore` into the app's own storage work the same way.
-    let gpu = SurfaceGpu::new().expect("a GPU").with_pipeline_cache(cache_dir);
+    let gpu = SurfaceGpu::new()
+        .expect("a GPU")
+        .with_pipeline_cache(cache_dir);
     println!("device: {:.1} ms ({})", ms(t), gpu.context().describe());
 
     // On the main thread: macOS requires it for the surface.
     let size = window.inner_size();
     let t = Instant::now();
-    let mut view = SurfaceRenderer::new(&gpu, window.clone(), size.width, size.height, SurfaceOptions::default().lazy(true))
-        .expect("a surface on the window");
+    let mut view = SurfaceRenderer::new(
+        &gpu,
+        window.clone(),
+        size.width,
+        size.height,
+        SurfaceOptions::default().lazy(true),
+    )
+    .expect("a surface on the window");
     println!("viewport: {:.1} ms ({:?})", ms(t), view.format());
 
-    // Warm on worker threads; an app would show its loading state meanwhile.
+    // Warm on background threads. `render` returns false until they are
+    // done, so the thread below could already be running; an app shows its
+    // loading state from `on_progress` meanwhile (a Tauri event, say).
     let t = Instant::now();
-    let warmup = view.renderer().warm_up();
-    let workers: Vec<_> = (0..4)
-        .map(|_| {
-            let w = warmup.clone();
-            std::thread::spawn(move || w.run())
-        })
-        .collect();
+    let warmup = view.warm_in_background(4, &[]);
+    warmup.on_progress(|done, total| {
+        if done == total || done % 25 == 0 {
+            println!("warming: {done}/{total}");
+        }
+    });
     warmup.wait();
-    workers.into_iter().for_each(|w| drop(w.join()));
-    println!("warm-up: {} pipelines in {:.1} ms, {} errors", warmup.len(), ms(t), warmup.errors().len());
+    println!(
+        "warm-up: {} pipelines in {:.1} ms, {} errors",
+        warmup.len(),
+        ms(t),
+        warmup.errors().len()
+    );
     let (mut scene, mut camera, cube) = build_scene(size.width as f32 / size.height.max(1) as f32);
     let t = Instant::now();
     view.renderer().warm_scene(&mut scene, &camera);
     println!("scene warm-up: {:.1} ms", ms(t));
     match gpu.save_pipeline_cache() {
-        Ok(true) => println!("pipeline cache saved ({})", gpu.pipeline_cache().unwrap().key()),
+        Ok(true) => println!(
+            "pipeline cache saved ({})",
+            gpu.pipeline_cache().unwrap().key()
+        ),
         Ok(false) => println!("no pipeline cache on this backend"),
         Err(e) => println!("pipeline cache not saved: {e}"),
     }
@@ -104,6 +122,10 @@ fn main() {
                         let _ = proxy.send_event(());
                         return;
                     }
+                } else {
+                    // No image: minimised, occluded or still warming. Wait a
+                    // frame rather than spin a core.
+                    std::thread::sleep(std::time::Duration::from_millis(8));
                 }
             }
         });
@@ -115,7 +137,9 @@ fn main() {
             Event::UserEvent(()) => target.exit(),
             Event::WindowEvent { event, window_id } if window_id == id => match event {
                 WindowEvent::CloseRequested => target.exit(),
-                WindowEvent::Resized(s) => *pending_size.lock().unwrap() = Some((s.width, s.height)),
+                WindowEvent::Resized(s) => {
+                    *pending_size.lock().unwrap() = Some((s.width, s.height))
+                }
                 _ => {}
             },
             _ => {}
@@ -126,11 +150,17 @@ fn main() {
 fn build_scene(aspect: f32) -> (Scene, PerspectiveCamera, threers::ObjectId) {
     let mut scene = Scene::new();
     scene.background = Color::from_hex(0x202030);
-    let mat = StandardMaterial::new(Color::from_hex(0xff6633)).with_roughness(0.4).with_metalness(0.1);
-    let cube = scene.add(Object3D::mesh(Mesh::new(BoxGeometry::new(1.0, 1.0, 1.0), mat.into())));
+    let mat = StandardMaterial::new(Color::from_hex(0xff6633))
+        .with_roughness(0.4)
+        .with_metalness(0.1);
+    let cube = scene.add(Object3D::mesh(Mesh::new(
+        BoxGeometry::new(1.0, 1.0, 1.0),
+        mat.into(),
+    )));
     scene.add_light(AmbientLight::new(Color::from_hex(0xffffff), 0.25));
     let mut key = Object3D::light(
-        DirectionalLight::new(Color::from_hex(0xffffff), 1.0).with_direction(Vector3::new(-0.5, -1.0, -0.4)),
+        DirectionalLight::new(Color::from_hex(0xffffff), 1.0)
+            .with_direction(Vector3::new(-0.5, -1.0, -0.4)),
     );
     key.position = Vector3::new(3.0, 5.0, 2.0);
     scene.add(key);

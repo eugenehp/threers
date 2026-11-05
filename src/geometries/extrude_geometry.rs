@@ -182,7 +182,10 @@ impl ExtrudeBuffers {
         let normals = non_indexed_vertex_normals(&positions);
         let mut g = BufferGeometry::new();
         g.set_attribute("position", BufferAttribute::new(positions, 3));
-        g.set_attribute("uv", BufferAttribute::new(self.uvs.iter().map(|&v| v as f32).collect(), 2));
+        g.set_attribute(
+            "uv",
+            BufferAttribute::new(self.uvs.iter().map(|&v| v as f32).collect(), 2),
+        );
         g.set_attribute("normal", BufferAttribute::new(normals, 3));
         for (s, c, m) in self.groups {
             g.add_group(s, c, m);
@@ -198,7 +201,13 @@ impl ExtrudeBuffers {
 pub(crate) fn non_indexed_vertex_normals(positions: &[f32]) -> Vec<f32> {
     let mut normals = vec![0.0f32; positions.len()];
     for (tri, out) in positions.chunks_exact(9).zip(normals.chunks_exact_mut(9)) {
-        let p = |k: usize| [tri[k * 3] as f64, tri[k * 3 + 1] as f64, tri[k * 3 + 2] as f64];
+        let p = |k: usize| {
+            [
+                tri[k * 3] as f64,
+                tri[k * 3 + 1] as f64,
+                tri[k * 3 + 2] as f64,
+            ]
+        };
         let (a, b, c) = (p(0), p(1), p(2));
         let cb = [c[0] - b[0], c[1] - b[1], c[2] - b[2]];
         let ab = [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
@@ -254,7 +263,15 @@ fn bevel_vec(pt: V2, prev: V2, next: V2) -> V2 {
         shrink_by = (v_trans_lensq / 2.0).sqrt();
     } else {
         // `Math.sign` equality: 0 and -0 agree, NaN never does.
-        let js_sign = |v: f64| if v > 0.0 { 1.0 } else if v < 0.0 { -1.0 } else { v };
+        let js_sign = |v: f64| {
+            if v > 0.0 {
+                1.0
+            } else if v < 0.0 {
+                -1.0
+            } else {
+                v
+            }
+        };
         let direction_eq = if v_prev_x > f64::EPSILON {
             v_next_x > f64::EPSILON
         } else if v_prev_x < -f64::EPSILON {
@@ -305,7 +322,10 @@ impl ExtrudeGeometry {
 
     /// [`from_shapes`](Self::from_shapes) stopped before the buffers: for a
     /// caller with its own UV generator to rewrite `uvs` over `faces`.
-    pub fn build(shapes: &[crate::curves::shapes::Shape], options: &ExtrudeOptions) -> ExtrudeBuffers {
+    pub fn build(
+        shapes: &[crate::curves::shapes::Shape],
+        options: &ExtrudeOptions,
+    ) -> ExtrudeBuffers {
         let mut out = ExtrudeBuffers::default();
         for shape in shapes {
             add_shape(shape, options, &mut out);
@@ -394,7 +414,11 @@ fn add_shape(shape: &crate::curves::shapes::Shape, o: &ExtrudeOptions, out: &mut
         let p = path.points[s];
         let nx = [n[0] * vert.x, n[1] * vert.x, n[2] * vert.x];
         let by = [bn[0] * vert.y, bn[1] * vert.y, bn[2] * vert.y];
-        [p[0] + nx[0] + by[0], p[1] + nx[1] + by[1], p[2] + nx[2] + by[2]]
+        [
+            p[0] + nx[0] + by[0],
+            p[1] + nx[1] + by[1],
+            p[2] + nx[2] + by[2],
+        ]
     };
     for i in 0..vlen {
         let vert = if bevel_enabled {
@@ -468,7 +492,13 @@ fn add_shape(shape: &crate::curves::shapes::Shape, o: &ExtrudeOptions, out: &mut
         }
         let offset = vlen * (steps + bevel_segments * 2);
         for f in &faces {
-            f3(positions, uvs, f[0] as usize + offset, f[1] as usize + offset, f[2] as usize + offset);
+            f3(
+                positions,
+                uvs,
+                f[0] as usize + offset,
+                f[1] as usize + offset,
+                f[2] as usize + offset,
+            );
         }
     } else {
         for f in &faces {
@@ -476,7 +506,13 @@ fn add_shape(shape: &crate::curves::shapes::Shape, o: &ExtrudeOptions, out: &mut
         }
         let offset = vlen * steps;
         for f in &faces {
-            f3(positions, uvs, f[0] as usize + offset, f[1] as usize + offset, f[2] as usize + offset);
+            f3(
+                positions,
+                uvs,
+                f[0] as usize + offset,
+                f[1] as usize + offset,
+                f[2] as usize + offset,
+            );
         }
     }
     let _ = flen;
@@ -486,34 +522,35 @@ fn add_shape(shape: &crate::curves::shapes::Shape, o: &ExtrudeOptions, out: &mut
     // Sides.
     let start = end;
     let mut layer_offset = 0;
-    let mut sidewalls = |positions: &mut Vec<f64>, uvs: &mut Vec<f64>, len: usize, layer_offset: usize| {
-        let mut i = len as isize;
-        loop {
-            i -= 1;
-            if i < 0 {
-                break;
-            }
-            let j = i as usize;
-            let k = if i == 0 { len - 1 } else { j - 1 };
-            for s in 0..(steps + bevel_segments * 2) {
-                let slen1 = vlen * s;
-                let slen2 = vlen * (s + 1);
-                let a = layer_offset + j + slen1;
-                let b = layer_offset + k + slen1;
-                let c = layer_offset + k + slen2;
-                let d = layer_offset + j + slen2;
-                for idx in [a, b, d, b, c, d] {
-                    add_vertex(positions, idx);
+    let mut sidewalls =
+        |positions: &mut Vec<f64>, uvs: &mut Vec<f64>, len: usize, layer_offset: usize| {
+            let mut i = len as isize;
+            loop {
+                i -= 1;
+                if i < 0 {
+                    break;
                 }
-                let n = positions.len() / 3;
-                let uv = side_wall_uv(positions, n - 6, n - 3, n - 2, n - 1);
-                for q in [0, 1, 3, 1, 2, 3] {
-                    uvs.extend_from_slice(&uv[q]);
+                let j = i as usize;
+                let k = if i == 0 { len - 1 } else { j - 1 };
+                for s in 0..(steps + bevel_segments * 2) {
+                    let slen1 = vlen * s;
+                    let slen2 = vlen * (s + 1);
+                    let a = layer_offset + j + slen1;
+                    let b = layer_offset + k + slen1;
+                    let c = layer_offset + k + slen2;
+                    let d = layer_offset + j + slen2;
+                    for idx in [a, b, d, b, c, d] {
+                        add_vertex(positions, idx);
+                    }
+                    let n = positions.len() / 3;
+                    let uv = side_wall_uv(positions, n - 6, n - 3, n - 2, n - 1);
+                    for q in [0, 1, 3, 1, 2, 3] {
+                        uvs.extend_from_slice(&uv[q]);
+                    }
+                    face_log.push(ExtrudeFace::Side);
                 }
-                face_log.push(ExtrudeFace::Side);
             }
-        }
-    };
+        };
     sidewalls(positions, uvs, contour.len(), layer_offset);
     layer_offset += contour.len();
     for h in &holes {
@@ -532,8 +569,18 @@ fn side_wall_uv(v: &[f64], a: usize, b: usize, c: usize, d: usize) -> [[f64; 2];
     let (cx, cy, cz) = p(c);
     let (dx, dy, dz) = p(d);
     if (ay - by).abs() < (ax - bx).abs() {
-        [[ax, 1.0 - az], [bx, 1.0 - bz], [cx, 1.0 - cz], [dx, 1.0 - dz]]
+        [
+            [ax, 1.0 - az],
+            [bx, 1.0 - bz],
+            [cx, 1.0 - cz],
+            [dx, 1.0 - dz],
+        ]
     } else {
-        [[ay, 1.0 - az], [by, 1.0 - bz], [cy, 1.0 - cz], [dy, 1.0 - dz]]
+        [
+            [ay, 1.0 - az],
+            [by, 1.0 - bz],
+            [cy, 1.0 - cz],
+            [dy, 1.0 - dz],
+        ]
     }
 }

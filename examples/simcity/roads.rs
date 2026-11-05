@@ -62,7 +62,13 @@ impl Route {
 /// The verge is what stops a country road reading as a strip of tape laid on
 /// grass: a real one has a metre of scuffed ground either side of it before
 /// the field starts.
-pub(crate) fn pave(b: &mut Batches, pts: &[(f32, f32)], width: f32, centre_line: bool, rng: &mut Rng) {
+pub(crate) fn pave(
+    b: &mut Batches,
+    pts: &[(f32, f32)],
+    width: f32,
+    centre_line: bool,
+    rng: &mut Rng,
+) {
     b.grass.add_ground_path(
         pts,
         width + 4.0,
@@ -84,10 +90,7 @@ pub(crate) fn pave(b: &mut Batches, pts: &[(f32, f32)], width: f32, centre_line:
             let len = (c.0 - a.0).hypot(c.1 - a.1);
             let n = (len / 9.0).round().max(1.0) as usize;
             for k in 0..n {
-                let (t0, t1) = (
-                    (k as f32 + 0.15) / n as f32,
-                    (k as f32 + 0.65) / n as f32,
-                );
+                let (t0, t1) = ((k as f32 + 0.15) / n as f32, (k as f32 + 0.65) / n as f32);
                 b.paint.add_ground_path(
                     &[
                         (mix(a.0, c.0, t0), mix(a.1, c.1, t0)),
@@ -207,7 +210,10 @@ pub(crate) fn add_ring(b: &mut Batches, hx: f32, hz: f32, rng: &mut Rng) -> Rout
         }
         let (nx, nz) = (p.0, p.1);
         let l = nx.hypot(nz).max(0.001);
-        let (px, pz) = (p.0 + nx / l * (RING_W * 0.5 + 1.4), p.1 + nz / l * (RING_W * 0.5 + 1.4));
+        let (px, pz) = (
+            p.0 + nx / l * (RING_W * 0.5 + 1.4),
+            p.1 + nz / l * (RING_W * 0.5 + 1.4),
+        );
         b.trim.add_limb(
             Vector3::new(px, RURAL_Y, pz),
             Vector3::new(px, 9.0, pz),
@@ -264,12 +270,7 @@ pub(crate) fn add_lane(
 ///
 /// An L rather than a straight line: access roads meet the road they leave at
 /// something close to a right angle, and run square to whatever they serve.
-pub(crate) fn add_spur(
-    b: &mut Batches,
-    site: (f32, f32),
-    routes: &[Route],
-    rng: &mut Rng,
-) -> bool {
+pub(crate) fn add_spur(b: &mut Batches, site: (f32, f32), routes: &[Route], rng: &mut Rng) -> bool {
     let mut best: Option<((f32, f32), f32)> = None;
     for r in routes {
         let (p, d) = r.nearest(site.0, site.1);
@@ -436,13 +437,7 @@ pub(crate) fn add_highway(
         line(b, s * (median * 0.5 + 0.25), 0.20, false, white);
         // Lane divisions, dashed.
         for k in 1..lanes {
-            line(
-                b,
-                s * (median * 0.5 + k as f32 * LANE_W),
-                0.16,
-                true,
-                white,
-            );
+            line(b, s * (median * 0.5 + k as f32 * LANE_W), 0.16, true, white);
         }
         // Hard shoulder edge line, solid and wider — the one line on a
         // motorway that is not the same as the others.
@@ -455,7 +450,14 @@ pub(crate) fn add_highway(
         );
     }
     // Median, with a barrier down it.
-    ribbon(b, -median * 0.5, median * 0.5, deck + 0.05, Color::from_hex(0x6f7a44), 1);
+    ribbon(
+        b,
+        -median * 0.5,
+        median * 0.5,
+        deck + 0.05,
+        Color::from_hex(0x6f7a44),
+        1,
+    );
     let n = ((hi - lo) / 6.0).round().max(2.0) as usize;
     for k in 0..=n {
         let s = mix(lo, hi, k as f32 / n as f32);
@@ -546,7 +548,8 @@ pub(crate) fn add_highway(
     let (dx0, dz0) = (bx0.min(bx1), bz0.min(bz1));
     let (dx1, dz1) = (bx0.max(bx1), bz0.max(bz1));
     // Running surface.
-    b.road.add_slab(dx0, dz0, dx1, dz1, bh, Color::from_hex(0x43434a), Uv::Unit);
+    b.road
+        .add_slab(dx0, dz0, dx1, dz1, bh, Color::from_hex(0x43434a), Uv::Unit);
     // Edge beams down both sides — the deep fascia that gives a bridge its
     // line.
     for s2 in [-1.0f32, 1.0] {
@@ -589,7 +592,10 @@ pub(crate) fn add_highway(
         let n = 26;
         for i in 0..=n {
             let u = i as f32 / n as f32;
-            let (px, pz) = at(junction + s2 * (br - 0.35), mix(-(span + 6.0), span + 6.0, u));
+            let (px, pz) = at(
+                junction + s2 * (br - 0.35),
+                mix(-(span + 6.0), span + 6.0, u),
+            );
             b.trim.add_limb(
                 Vector3::new(px, bh + 0.16, pz),
                 Vector3::new(px, bh + 1.35, pz),
@@ -736,12 +742,8 @@ pub(crate) fn add_highway(
     // Claim the whole corridor.
     let (c0x, c0z) = at(lo, -span);
     let (c1x, c1z) = at(hi, span);
-    b.occ.claim([
-        c0x.min(c1x),
-        c0z.min(c1z),
-        c0x.max(c1x),
-        c0z.max(c1z),
-    ]);
+    b.occ
+        .claim([c0x.min(c1x), c0z.min(c1z), c0x.max(c1x), c0z.max(c1z)]);
     // One entry per running lane: where it sits across the road, and which
     // way traffic on it goes. Drive on the left, so the carriageway at
     // negative offset runs one way and the other runs back.
@@ -879,7 +881,11 @@ pub(crate) fn add_green_bridge(
                 tz,
                 bh,
                 false,
-                if rng.chance(0.5) { Species::Conifer } else { Species::Broadleaf },
+                if rng.chance(0.5) {
+                    Species::Conifer
+                } else {
+                    Species::Broadleaf
+                },
                 None,
                 rng.range(0.45, 0.8),
                 rng,
@@ -998,13 +1004,22 @@ pub(crate) fn add_foot_bridge(
             for k in 0..steps {
                 let (u0, u1) = (k as f32 / steps as f32, (k + 1) as f32 / steps as f32);
                 // Each leg covers half the climb; the second doubles back.
-                let (h0, h1) = (
-                    bh * (leg as f32 + u0) * 0.5,
-                    bh * (leg as f32 + u1) * 0.5,
-                );
+                let (h0, h1) = (bh * (leg as f32 + u0) * 0.5, bh * (leg as f32 + u1) * 0.5);
                 let off = if leg == 0 { -6.0f32 } else { 6.0 };
-                let d0 = span + 4.0 + if leg == 0 { 28.0 * u0 } else { 28.0 * (1.0 - u0) };
-                let d1 = span + 4.0 + if leg == 0 { 28.0 * u1 } else { 28.0 * (1.0 - u1) };
+                let d0 = span
+                    + 4.0
+                    + if leg == 0 {
+                        28.0 * u0
+                    } else {
+                        28.0 * (1.0 - u0)
+                    };
+                let d1 = span
+                    + 4.0
+                    + if leg == 0 {
+                        28.0 * u1
+                    } else {
+                        28.0 * (1.0 - u1)
+                    };
                 let (q0x, q0z) = at(at_s + off - half, side * d0);
                 let (q1x, q1z) = at(at_s + off + half, side * d1);
                 b.pads.quad(

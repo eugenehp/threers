@@ -12,7 +12,10 @@
 use std::ffi::{c_int, c_uint, c_void};
 
 use super::enc_layout::*;
-use super::{ConfigAttrib, Device, Id, Image, ImageFormat, ATTRIB_RT_FORMAT, ENTRYPOINT_ENC_SLICE, ENTRYPOINT_ENC_SLICE_LP, INVALID_ID, PROFILE_HEVC_MAIN, PROGRESSIVE, RT_FORMAT_YUV420};
+use super::{
+    ConfigAttrib, Device, Id, Image, ImageFormat, ATTRIB_RT_FORMAT, ENTRYPOINT_ENC_SLICE,
+    ENTRYPOINT_ENC_SLICE_LP, INVALID_ID, PROFILE_HEVC_MAIN, PROGRESSIVE, RT_FORMAT_YUV420,
+};
 use crate::hevc::hvcc::{build_hvcc, HvccArray, HvccProfile};
 
 const ATTRIB_RATE_CONTROL: c_int = 5;
@@ -96,7 +99,11 @@ impl Blob {
 pub(crate) fn open_device() -> Result<(Device, c_int), String> {
     Device::open_for(PROFILE_HEVC_MAIN, ENTRYPOINT_ENC_SLICE)
         .map(|d| (d, ENTRYPOINT_ENC_SLICE))
-        .or_else(|e| Device::open_for(PROFILE_HEVC_MAIN, ENTRYPOINT_ENC_SLICE_LP).map(|d| (d, ENTRYPOINT_ENC_SLICE_LP)).map_err(|_| e))
+        .or_else(|e| {
+            Device::open_for(PROFILE_HEVC_MAIN, ENTRYPOINT_ENC_SLICE_LP)
+                .map(|d| (d, ENTRYPOINT_ENC_SLICE_LP))
+                .map_err(|_| e)
+        })
 }
 
 /// What the driver's encoder requires of the stream, which our headers and
@@ -119,22 +126,53 @@ struct Requirements {
 impl Requirements {
     fn query(dev: &Device, entrypoint: c_int) -> Requirements {
         let mut a = [
-            ConfigAttrib { kind: ATTRIB_ENC_HEVC_FEATURES, value: 0 },
-            ConfigAttrib { kind: ATTRIB_PREDICTION_DIRECTION, value: 0 },
-            ConfigAttrib { kind: ATTRIB_ENC_HEVC_BLOCK_SIZES, value: 0 },
+            ConfigAttrib {
+                kind: ATTRIB_ENC_HEVC_FEATURES,
+                value: 0,
+            },
+            ConfigAttrib {
+                kind: ATTRIB_PREDICTION_DIRECTION,
+                value: 0,
+            },
+            ConfigAttrib {
+                kind: ATTRIB_ENC_HEVC_BLOCK_SIZES,
+                value: 0,
+            },
         ];
-        let ok = unsafe { (dev.va.get_config_attributes)(dev.dpy, PROFILE_HEVC_MAIN, entrypoint, a.as_mut_ptr(), 3) } == 0;
+        let ok = unsafe {
+            (dev.va.get_config_attributes)(
+                dev.dpy,
+                PROFILE_HEVC_MAIN,
+                entrypoint,
+                a.as_mut_ptr(),
+                3,
+            )
+        } == 0;
         let known = |v: c_uint| ok && v != ATTRIB_NOT_SUPPORTED;
         // VAConfigAttribValEncHEVCFeatures: two bits a feature, 2 = required.
-        let feature = |i: u32| if known(a[0].value) { (a[0].value >> (2 * i)) & 3 } else { 0 };
+        let feature = |i: u32| {
+            if known(a[0].value) {
+                (a[0].value >> (2 * i)) & 3
+            } else {
+                0
+            }
+        };
         Requirements {
             amp: feature(2) == 2,
             cu_qp_delta: feature(11) == 2,
             low_delay_b: known(a[1].value) && a[1].value & PREDICTION_BI_NOT_EMPTY != 0,
             // VAConfigAttribValEncHEVCBlockSizes, two bits a field:
             // max_max_transform_hierarchy_depth_inter is field 5, _intra 7.
-            depth_inter: if known(a[2].value) { (a[2].value >> 10) & 3 } else { 0 },
-            depth_intra: if known(a[2].value) { (a[2].value >> 14) & 3 } else { 0 },
+            depth_inter: if known(a[2].value) {
+                (a[2].value >> 10) & 3
+            } else {
+                0
+            },
+            depth_intra: if known(a[2].value) {
+                (a[2].value >> 14) & 3
+            } else {
+                0
+            },
         }
     }
 }
@@ -166,7 +204,13 @@ pub struct VaapiEncoder {
 impl VaapiEncoder {
     /// Open an encoder for `width × height` frames (even sizes) at `fps`,
     /// rate-controlled by `rate`, an IDR frame every `keyframe_secs` seconds.
-    pub fn new(width: u32, height: u32, fps: u32, rate: VaapiRate, keyframe_secs: u32) -> Result<Self, String> {
+    pub fn new(
+        width: u32,
+        height: u32,
+        fps: u32,
+        rate: VaapiRate,
+        keyframe_secs: u32,
+    ) -> Result<Self, String> {
         if width == 0 || height == 0 || !width.is_multiple_of(2) || !height.is_multiple_of(2) {
             return Err(format!("VAAPI encodes even sizes; {width}x{height} is not"));
         }
@@ -176,7 +220,10 @@ impl VaapiEncoder {
         let fps = fps.max(1);
         unsafe {
             let mut attribs = [
-                ConfigAttrib { kind: ATTRIB_RT_FORMAT, value: RT_FORMAT_YUV420 },
+                ConfigAttrib {
+                    kind: ATTRIB_RT_FORMAT,
+                    value: RT_FORMAT_YUV420,
+                },
                 ConfigAttrib {
                     kind: ATTRIB_RATE_CONTROL,
                     value: match rate {
@@ -187,22 +234,53 @@ impl VaapiEncoder {
                 // Parameter sets and slice headers come from us ([`headers`]):
                 // drivers differ on whether they write their own (Mesa writes
                 // none), and ours carry the colour description.
-                ConfigAttrib { kind: ATTRIB_ENC_PACKED_HEADERS, value: PACKED_HEADERS },
+                ConfigAttrib {
+                    kind: ATTRIB_ENC_PACKED_HEADERS,
+                    value: PACKED_HEADERS,
+                },
             ];
             let mut config = 0;
-            va.check("vaCreateConfig", (va.create_config)(dpy, PROFILE_HEVC_MAIN, entrypoint, attribs.as_mut_ptr(), attribs.len() as c_int, &mut config))?;
+            va.check(
+                "vaCreateConfig",
+                (va.create_config)(
+                    dpy,
+                    PROFILE_HEVC_MAIN,
+                    entrypoint,
+                    attribs.as_mut_ptr(),
+                    attribs.len() as c_int,
+                    &mut config,
+                ),
+            )?;
             // Surfaces padded to 16, as other VA clients allocate them; the
             // SPS crops to the picture.
             let (sw, sh) = (width.next_multiple_of(16), height.next_multiple_of(16));
             let mut surfaces = [INVALID_ID; 3];
-            let r = (va.create_surfaces)(dpy, RT_FORMAT_YUV420, sw, sh, surfaces.as_mut_ptr(), 3, std::ptr::null_mut(), 0);
+            let r = (va.create_surfaces)(
+                dpy,
+                RT_FORMAT_YUV420,
+                sw,
+                sh,
+                surfaces.as_mut_ptr(),
+                3,
+                std::ptr::null_mut(),
+                0,
+            );
             if let Err(e) = va.check("vaCreateSurfaces", r) {
                 (va.destroy_config)(dpy, config);
                 return Err(e);
             }
             let mut recon = [surfaces[1], surfaces[2]];
             let mut context = 0;
-            let r = (va.create_context)(dpy, config, sw as c_int, sh as c_int, PROGRESSIVE, recon.as_mut_ptr(), 2, &mut context);
+            let r = (va.create_context)(
+                dpy,
+                config,
+                sw as c_int,
+                sh as c_int,
+                PROGRESSIVE,
+                recon.as_mut_ptr(),
+                2,
+                &mut context,
+            );
             if let Err(e) = va.check("vaCreateContext", r) {
                 (va.destroy_surfaces)(dpy, surfaces.as_mut_ptr(), 3);
                 (va.destroy_config)(dpy, config);
@@ -210,13 +288,25 @@ impl VaapiEncoder {
             }
             let mut coded = INVALID_ID;
             let size = (sw * sh * 3 / 2 + (1 << 16)) as c_uint;
-            let r = (va.create_buffer)(dpy, context, BUF_ENC_CODED, size, 1, std::ptr::null_mut(), &mut coded);
+            let r = (va.create_buffer)(
+                dpy,
+                context,
+                BUF_ENC_CODED,
+                size,
+                1,
+                std::ptr::null_mut(),
+                &mut coded,
+            );
             let mut fmt: ImageFormat = std::mem::zeroed();
             fmt.fourcc = super::FOURCC_NV12;
             fmt.byte_order = 1;
             fmt.bits_per_pixel = 12;
             let mut image: Image = std::mem::zeroed();
-            let r2 = if r == 0 { (va.create_image)(dpy, &mut fmt, width as c_int, height as c_int, &mut image) } else { r };
+            let r2 = if r == 0 {
+                (va.create_image)(dpy, &mut fmt, width as c_int, height as c_int, &mut image)
+            } else {
+                r
+            };
             if let Err(e) = va.check("vaCreateBuffer/vaCreateImage", r2) {
                 if coded != INVALID_ID {
                     (va.destroy_buffer)(dpy, coded);
@@ -265,8 +355,14 @@ impl VaapiEncoder {
             let mut p: *mut c_void = std::ptr::null_mut();
             va.check("vaMapBuffer", (va.map_buffer)(dpy, self.image.buf, &mut p))?;
             let data = std::slice::from_raw_parts_mut(p as *mut u8, self.image.data_size as usize);
-            let (yp, up) = (self.image.pitches[0] as usize, self.image.pitches[1] as usize);
-            let (yo, uo) = (self.image.offsets[0] as usize, self.image.offsets[1] as usize);
+            let (yp, up) = (
+                self.image.pitches[0] as usize,
+                self.image.pitches[1] as usize,
+            );
+            let (yo, uo) = (
+                self.image.offsets[0] as usize,
+                self.image.offsets[1] as usize,
+            );
             for y in 0..h {
                 let src = &rgba[y * w * 4..][..w * 4];
                 let dst = &mut data[yo + y * yp..][..w];
@@ -276,7 +372,10 @@ impl VaapiEncoder {
                 }
             }
             for cy in 0..h / 2 {
-                let (r0, r1) = (&rgba[2 * cy * w * 4..][..w * 4], &rgba[(2 * cy + 1) * w * 4..][..w * 4]);
+                let (r0, r1) = (
+                    &rgba[2 * cy * w * 4..][..w * 4],
+                    &rgba[(2 * cy + 1) * w * 4..][..w * 4],
+                );
                 let dst = &mut data[uo + cy * up..][..w];
                 for (cx, d) in dst.chunks_exact_mut(2).enumerate() {
                     let mut s = [0i32; 3];
@@ -293,14 +392,36 @@ impl VaapiEncoder {
                 }
             }
             (va.unmap_buffer)(dpy, self.image.buf);
-            let r = (va.put_image)(dpy, self.input, self.image.image_id, 0, 0, w as c_uint, h as c_uint, 0, 0, w as c_uint, h as c_uint);
+            let r = (va.put_image)(
+                dpy,
+                self.input,
+                self.image.image_id,
+                0,
+                0,
+                w as c_uint,
+                h as c_uint,
+                0,
+                0,
+                w as c_uint,
+                h as c_uint,
+            );
             va.check("vaPutImage", r)
         }
     }
 
     fn buffer(&self, kind: c_int, blob: &Blob, size: usize) -> Result<Id, String> {
         let mut id = INVALID_ID;
-        let r = unsafe { (self.dev.va.create_buffer)(self.dev.dpy, self.context, kind, size as c_uint, 1, blob.ptr() as *mut c_void, &mut id) };
+        let r = unsafe {
+            (self.dev.va.create_buffer)(
+                self.dev.dpy,
+                self.context,
+                kind,
+                size as c_uint,
+                1,
+                blob.ptr() as *mut c_void,
+                &mut id,
+            )
+        };
         self.dev.va.check("vaCreateBuffer", r)?;
         Ok(id)
     }
@@ -313,7 +434,17 @@ impl VaapiEncoder {
         p.u8(8, 1); // has_emulation_bytes
         ids.push(self.buffer(BUF_PACKED_HEADER_PARAMS, &p, PACKED_PARAM_SIZE)?);
         let mut id = INVALID_ID;
-        let r = unsafe { (self.dev.va.create_buffer)(self.dev.dpy, self.context, BUF_PACKED_HEADER_DATA, nal.len() as c_uint, 1, nal.as_ptr() as *mut c_void, &mut id) };
+        let r = unsafe {
+            (self.dev.va.create_buffer)(
+                self.dev.dpy,
+                self.context,
+                BUF_PACKED_HEADER_DATA,
+                nal.len() as c_uint,
+                1,
+                nal.as_ptr() as *mut c_void,
+                &mut id,
+            )
+        };
         self.dev.va.check("vaCreateBuffer", r)?;
         ids.push(id);
         Ok(())
@@ -356,7 +487,12 @@ impl VaapiEncoder {
             seq.u32(SEQ_BPS, bitrate);
             seq.u16(SEQ_WIDTH, self.width.next_multiple_of(16) as u16);
             seq.u16(SEQ_HEIGHT, self.height.next_multiple_of(16) as u16);
-            seq.u32(SEQ_FIELDS, 1 << SEQ_BIT_CHROMA_FORMAT | 1 << SEQ_BIT_LOW_DELAY | (self.req.amp as u32) << SEQ_BIT_AMP);
+            seq.u32(
+                SEQ_FIELDS,
+                1 << SEQ_BIT_CHROMA_FORMAT
+                    | 1 << SEQ_BIT_LOW_DELAY
+                    | (self.req.amp as u32) << SEQ_BIT_AMP,
+            );
             seq.u8(SEQ_LOG2_MIN_CB, 0);
             seq.u8(SEQ_LOG2_DIFF_CB, (LOG2_CTB - 3) as u8);
             seq.u8(SEQ_LOG2_MIN_TB, 0);
@@ -409,7 +545,11 @@ impl VaapiEncoder {
         let cu_qp = hdr.cu_qp_delta as u32;
         pic.u32(
             PIC_FIELDS,
-            (idr as u32) << PIC_BIT_IDR | coding_type << PIC_BIT_CODING_TYPE | 1 << PIC_BIT_REFERENCE | cu_qp << PIC_BIT_CU_QP_DELTA | 1 << PIC_BIT_LF_ACROSS_SLICES,
+            (idr as u32) << PIC_BIT_IDR
+                | coding_type << PIC_BIT_CODING_TYPE
+                | 1 << PIC_BIT_REFERENCE
+                | cu_qp << PIC_BIT_CU_QP_DELTA
+                | 1 << PIC_BIT_LF_ACROSS_SLICES,
         );
         ids.push(self.buffer(BUF_ENC_PICTURE, &pic, PIC_SIZE)?);
 
@@ -422,13 +562,26 @@ impl VaapiEncoder {
             seq.extend(headers::pps(&hdr));
             self.packed(PACKED_SEQUENCE, &seq, &mut ids)?;
         }
-        self.packed(PACKED_SLICE, &headers::slice(&hdr, idr, poc_in_gop), &mut ids)?;
+        self.packed(
+            PACKED_SLICE,
+            &headers::slice(&hdr, idr, poc_in_gop),
+            &mut ids,
+        )?;
         let mut slice = Blob::new(SLICE_SIZE);
         slice.u32(SLICE_ADDRESS, 0);
         slice.u32(SLICE_NUM_CTU, ctus);
         // I, P, or for encoders without P slices B with both lists the
         // previous frame.
-        slice.u8(SLICE_TYPE, if idr { 2 } else if self.req.low_delay_b { 0 } else { 1 });
+        slice.u8(
+            SLICE_TYPE,
+            if idr {
+                2
+            } else if self.req.low_delay_b {
+                0
+            } else {
+                1
+            },
+        );
         slice.invalid_pictures(SLICE_REF_L0, 15);
         slice.invalid_pictures(SLICE_REF_L1, 15);
         if !idr {
@@ -438,15 +591,26 @@ impl VaapiEncoder {
             }
         }
         slice.u8(SLICE_MAX_MERGE, 5);
-        slice.u32(SLICE_FIELDS, 1 << SLICE_BIT_LAST | 1 << SLICE_BIT_LF_ACROSS_SLICES);
+        slice.u32(
+            SLICE_FIELDS,
+            1 << SLICE_BIT_LAST | 1 << SLICE_BIT_LF_ACROSS_SLICES,
+        );
         ids.push(self.buffer(BUF_ENC_SLICE, &slice, SLICE_SIZE)?);
 
         let (va, dpy) = (self.dev.va, self.dev.dpy);
         let r = unsafe {
-            va.check("vaBeginPicture", (va.begin_picture)(dpy, self.context, self.input))
-                .and_then(|_| va.check("vaRenderPicture", (va.render_picture)(dpy, self.context, ids.as_mut_ptr(), ids.len() as c_int)))
-                .and_then(|_| va.check("vaEndPicture", (va.end_picture)(dpy, self.context)))
-                .and_then(|_| va.check("vaSyncSurface", (va.sync_surface)(dpy, self.input)))
+            va.check(
+                "vaBeginPicture",
+                (va.begin_picture)(dpy, self.context, self.input),
+            )
+            .and_then(|_| {
+                va.check(
+                    "vaRenderPicture",
+                    (va.render_picture)(dpy, self.context, ids.as_mut_ptr(), ids.len() as c_int),
+                )
+            })
+            .and_then(|_| va.check("vaEndPicture", (va.end_picture)(dpy, self.context)))
+            .and_then(|_| va.check("vaSyncSurface", (va.sync_surface)(dpy, self.input)))
         };
         for id in ids {
             unsafe { (va.destroy_buffer)(dpy, id) };
@@ -512,9 +676,21 @@ impl VaapiEncoder {
         let hvcc = build_hvcc(
             &profile,
             &[
-                HvccArray { nal_type: 32, complete: true, nals: &vps },
-                HvccArray { nal_type: 33, complete: true, nals: &sps },
-                HvccArray { nal_type: 34, complete: true, nals: &pps },
+                HvccArray {
+                    nal_type: 32,
+                    complete: true,
+                    nals: &vps,
+                },
+                HvccArray {
+                    nal_type: 33,
+                    complete: true,
+                    nals: &sps,
+                },
+                HvccArray {
+                    nal_type: 34,
+                    complete: true,
+                    nals: &pps,
+                },
             ],
         );
         Ok(crate::mp4::mux_hevc(&crate::mp4::Mp4Params {
@@ -558,7 +734,10 @@ fn level_idc(w: u32, h: u32, fps: u32) -> u8 {
         (35_651_584, 1_069_547_520, 180),
         (35_651_584, 2_139_095_040, 183),
     ];
-    levels.iter().find(|(s, r, _)| samples <= *s && rate <= *r).map_or(186, |l| l.2)
+    levels
+        .iter()
+        .find(|(s, r, _)| samples <= *s && rate <= *r)
+        .map_or(186, |l| l.2)
 }
 
 /// The VPS, SPS, PPS and slice headers, written to match exactly what the VA
@@ -634,9 +813,9 @@ mod headers {
         profile_tier_level(&mut w, p.level_idc);
         w.write_ue(0); // sps_seq_parameter_set_id
         w.write_ue(1); // chroma_format_idc: 4:2:0
-        // The coded size is the surface's (16-aligned); the window crops to
-        // the picture. Mesa copies the window from here into the SPS it
-        // writes, and always codes the surface's size.
+                       // The coded size is the surface's (16-aligned); the window crops to
+                       // the picture. Mesa copies the window from here into the SPS it
+                       // writes, and always codes the surface's size.
         let (cw, ch) = (p.width.next_multiple_of(16), p.height.next_multiple_of(16));
         w.write_ue(cw);
         w.write_ue(ch);
@@ -738,11 +917,17 @@ mod headers {
             w.flag(false); // no_output_of_prior_pics_flag
         }
         w.write_ue(0); // slice_pic_parameter_set_id
-        w.write_ue(if idr { 2 } else if p.low_delay_b { 0 } else { 1 }); // slice_type: I, P or B
+        w.write_ue(if idr {
+            2
+        } else if p.low_delay_b {
+            0
+        } else {
+            1
+        }); // slice_type: I, P or B
         if !idr {
             w.write_bits(poc & 0xff, 8); // slice_pic_order_cnt_lsb
             w.flag(false); // short_term_ref_pic_set_sps_flag
-            // st_ref_pic_set(0): the previous picture, used.
+                           // st_ref_pic_set(0): the previous picture, used.
             w.write_ue(1); // num_negative_pics
             w.write_ue(0); // num_positive_pics
             w.write_ue(0); // delta_poc_s0_minus1
@@ -754,9 +939,9 @@ mod headers {
             w.write_ue(0); // five_minus_max_num_merge_cand
         }
         w.write_se(0); // slice_qp_delta
-        // pps_loop_filter_across_slices_enabled_flag, deblocking on:
+                       // pps_loop_filter_across_slices_enabled_flag, deblocking on:
         w.flag(true); // slice_loop_filter_across_slices_enabled_flag
-        // byte_alignment()
+                      // byte_alignment()
         w.write_bit(1);
         w.align_zero();
         nal(if idr { 19 } else { 1 }, w)

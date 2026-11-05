@@ -21,7 +21,10 @@ use super::gpu_metal as m;
 /// A device and its queue.
 #[derive(Clone)]
 pub enum Gpu {
-    Wgpu { device: wgpu::Device, queue: Option<wgpu::Queue> },
+    Wgpu {
+        device: wgpu::Device,
+        queue: Option<wgpu::Queue>,
+    },
     #[cfg(metal_backend)]
     Metal(Arc<m::MGpu>),
 }
@@ -33,13 +36,20 @@ pub type Device = Gpu;
 
 impl std::fmt::Debug for Gpu {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(if self.is_metal() { "Gpu::Metal" } else { "Gpu::Wgpu" })
+        f.write_str(if self.is_metal() {
+            "Gpu::Metal"
+        } else {
+            "Gpu::Wgpu"
+        })
     }
 }
 
 impl From<(&wgpu::Device, &wgpu::Queue)> for Gpu {
     fn from((device, queue): (&wgpu::Device, &wgpu::Queue)) -> Self {
-        Gpu::Wgpu { device: device.clone(), queue: Some(queue.clone()) }
+        Gpu::Wgpu {
+            device: device.clone(),
+            queue: Some(queue.clone()),
+        }
     }
 }
 
@@ -51,7 +61,10 @@ impl From<&Gpu> for Gpu {
 
 impl From<&wgpu::Device> for Gpu {
     fn from(device: &wgpu::Device) -> Self {
-        Gpu::Wgpu { device: device.clone(), queue: None }
+        Gpu::Wgpu {
+            device: device.clone(),
+            queue: None,
+        }
     }
 }
 
@@ -130,9 +143,22 @@ impl TextureView {
     ///
     /// # Safety
     /// `texture` is a live `MTLTexture` of `format` and `width × height`.
-    pub unsafe fn from_metal(texture: crate::metal::objc::Id, format: wgpu::TextureFormat, width: u32, height: u32) -> Self {
+    pub unsafe fn from_metal(
+        texture: crate::metal::objc::Id,
+        format: wgpu::TextureFormat,
+        width: u32,
+        height: u32,
+    ) -> Self {
         let obj = crate::metal::objc::Owned::retain(texture).expect("a Metal texture");
-        Self::Metal(m::MTexture { obj, format, width, height, mips: 1, depth: 1, layers: 1 })
+        Self::Metal(m::MTexture {
+            obj,
+            format,
+            width,
+            height,
+            mips: 1,
+            depth: 1,
+            layers: 1,
+        })
     }
 }
 
@@ -239,7 +265,9 @@ pub type TexelCopyBufferInfo<'a> = wgpu::TexelCopyBufferInfoBase<&'a Buffer>;
 // ------------------------------------------------------------------ device
 
 fn wq(queue: &Option<wgpu::Queue>) -> &wgpu::Queue {
-    queue.as_ref().expect("a marks GPU made from a device alone has no queue; give it the queue too")
+    queue
+        .as_ref()
+        .expect("a marks GPU made from a device alone has no queue; give it the queue too")
 }
 
 impl Gpu {
@@ -274,7 +302,9 @@ impl Gpu {
 
     pub fn create_buffer_init(&self, desc: &wgpu::util::BufferInitDescriptor) -> Buffer {
         match self {
-            Gpu::Wgpu { device, .. } => Buffer::Wgpu(wgpu::util::DeviceExt::create_buffer_init(device, desc)),
+            Gpu::Wgpu { device, .. } => {
+                Buffer::Wgpu(wgpu::util::DeviceExt::create_buffer_init(device, desc))
+            }
             #[cfg(metal_backend)]
             Gpu::Metal(g) => Buffer::Metal(g.create_buffer_init(desc.contents)),
         }
@@ -296,9 +326,14 @@ impl Gpu {
         }
     }
 
-    pub fn create_bind_group_layout(&self, desc: &wgpu::BindGroupLayoutDescriptor) -> BindGroupLayout {
+    pub fn create_bind_group_layout(
+        &self,
+        desc: &wgpu::BindGroupLayoutDescriptor,
+    ) -> BindGroupLayout {
         match self {
-            Gpu::Wgpu { device, .. } => BindGroupLayout::Wgpu(device.create_bind_group_layout(desc)),
+            Gpu::Wgpu { device, .. } => {
+                BindGroupLayout::Wgpu(device.create_bind_group_layout(desc))
+            }
             #[cfg(metal_backend)]
             Gpu::Metal(_) => BindGroupLayout::Metal(m::MLayout(Arc::new(desc.entries.to_vec()))),
         }
@@ -307,19 +342,25 @@ impl Gpu {
     pub fn create_bind_group(&self, desc: &BindGroupDescriptor) -> BindGroup {
         match self {
             Gpu::Wgpu { device, .. } => {
-                let BindGroupLayout::Wgpu(layout) = desc.layout else { mixed("Gpu::create_bind_group", "bind group layout", false) };
+                let BindGroupLayout::Wgpu(layout) = desc.layout else {
+                    mixed("Gpu::create_bind_group", "bind group layout", false)
+                };
                 let entries: Vec<wgpu::BindGroupEntry> = desc
                     .entries
                     .iter()
                     .map(|e| wgpu::BindGroupEntry {
                         binding: e.binding,
                         resource: match &e.resource {
-                            BindingResource::Buffer(b) => wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                                buffer: b.buffer.wgpu(),
-                                offset: b.offset,
-                                size: b.size,
-                            }),
-                            BindingResource::TextureView(v) => wgpu::BindingResource::TextureView(v.wgpu()),
+                            BindingResource::Buffer(b) => {
+                                wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                                    buffer: b.buffer.wgpu(),
+                                    offset: b.offset,
+                                    size: b.size,
+                                })
+                            }
+                            BindingResource::TextureView(v) => {
+                                wgpu::BindingResource::TextureView(v.wgpu())
+                            }
                             BindingResource::Sampler(s) => wgpu::BindingResource::Sampler(s.wgpu()),
                         },
                     })
@@ -332,20 +373,29 @@ impl Gpu {
             }
             #[cfg(metal_backend)]
             Gpu::Metal(_) => {
-                let BindGroupLayout::Metal(layout) = desc.layout else { mixed("Gpu::create_bind_group", "bind group layout", true) };
+                let BindGroupLayout::Metal(layout) = desc.layout else {
+                    mixed("Gpu::create_bind_group", "bind group layout", true)
+                };
                 let entries = desc
                     .entries
                     .iter()
                     .map(|e| {
                         let res = match &e.resource {
-                            BindingResource::Buffer(b) => m::MRes::Buffer(b.buffer.metal().obj.clone(), b.offset),
-                            BindingResource::TextureView(v) => m::MRes::Texture(v.metal().obj.clone()),
+                            BindingResource::Buffer(b) => {
+                                m::MRes::Buffer(b.buffer.metal().obj.clone(), b.offset)
+                            }
+                            BindingResource::TextureView(v) => {
+                                m::MRes::Texture(v.metal().obj.clone())
+                            }
                             BindingResource::Sampler(s) => m::MRes::Sampler(s.metal().0.clone()),
                         };
                         (e.binding, res)
                     })
                     .collect();
-                BindGroup::Metal(m::MBindGroup { layout: layout.clone(), entries: Arc::new(entries) })
+                BindGroup::Metal(m::MBindGroup {
+                    layout: layout.clone(),
+                    entries: Arc::new(entries),
+                })
             }
         }
     }
@@ -353,19 +403,26 @@ impl Gpu {
     pub fn create_pipeline_layout(&self, desc: &PipelineLayoutDescriptor) -> PipelineLayout {
         match self {
             Gpu::Wgpu { device, .. } => {
-                let layouts: Vec<Option<&wgpu::BindGroupLayout>> =
-                    desc.bind_group_layouts.iter().map(|l| l.map(|l| l.wgpu())).collect();
-                PipelineLayout::Wgpu(device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                    label: desc.label,
-                    bind_group_layouts: &layouts,
-                    immediate_size: desc.immediate_size,
-                }))
+                let layouts: Vec<Option<&wgpu::BindGroupLayout>> = desc
+                    .bind_group_layouts
+                    .iter()
+                    .map(|l| l.map(|l| l.wgpu()))
+                    .collect();
+                PipelineLayout::Wgpu(device.create_pipeline_layout(
+                    &wgpu::PipelineLayoutDescriptor {
+                        label: desc.label,
+                        bind_group_layouts: &layouts,
+                        immediate_size: desc.immediate_size,
+                    },
+                ))
             }
             #[cfg(metal_backend)]
             Gpu::Metal(_) => PipelineLayout::Metal(m::MPipelineLayout(Arc::new(
                 desc.bind_group_layouts
                     .iter()
-                    .map(|l| l.map_or_else(|| m::MLayout(Arc::new(Vec::new())), |l| l.metal().clone()))
+                    .map(|l| {
+                        l.map_or_else(|| m::MLayout(Arc::new(Vec::new())), |l| l.metal().clone())
+                    })
                     .collect(),
             ))),
         }
@@ -374,10 +431,12 @@ impl Gpu {
     pub fn create_shader_module(&self, desc: ShaderModuleDescriptor) -> ShaderModule {
         let ShaderSource::Wgsl(source) = desc.source;
         match self {
-            Gpu::Wgpu { device, .. } => ShaderModule::Wgpu(device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: desc.label,
-                source: wgpu::ShaderSource::Wgsl(source),
-            })),
+            Gpu::Wgpu { device, .. } => {
+                ShaderModule::Wgpu(device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: desc.label,
+                    source: wgpu::ShaderSource::Wgsl(source),
+                }))
+            }
             #[cfg(metal_backend)]
             Gpu::Metal(g) => ShaderModule::Metal(g.create_module(source.into_owned())),
         }
@@ -385,34 +444,40 @@ impl Gpu {
 
     pub fn create_render_pipeline(&self, desc: &RenderPipelineDescriptor) -> RenderPipeline {
         match self {
-            Gpu::Wgpu { device, .. } => RenderPipeline::Wgpu(device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: desc.label,
-                layout: desc.layout.map(|l| l.wgpu()),
-                vertex: wgpu::VertexState {
-                    module: desc.vertex.module.wgpu(),
-                    entry_point: desc.vertex.entry_point,
-                    buffers: desc.vertex.buffers,
-                    compilation_options: desc.vertex.compilation_options.clone(),
+            Gpu::Wgpu { device, .. } => RenderPipeline::Wgpu(device.create_render_pipeline(
+                &wgpu::RenderPipelineDescriptor {
+                    label: desc.label,
+                    layout: desc.layout.map(|l| l.wgpu()),
+                    vertex: wgpu::VertexState {
+                        module: desc.vertex.module.wgpu(),
+                        entry_point: desc.vertex.entry_point,
+                        buffers: desc.vertex.buffers,
+                        compilation_options: desc.vertex.compilation_options.clone(),
+                    },
+                    fragment: desc.fragment.as_ref().map(|f| wgpu::FragmentState {
+                        module: f.module.wgpu(),
+                        entry_point: f.entry_point,
+                        targets: f.targets,
+                        compilation_options: f.compilation_options.clone(),
+                    }),
+                    primitive: desc.primitive,
+                    depth_stencil: desc.depth_stencil.clone(),
+                    multisample: desc.multisample,
+                    multiview_mask: desc.multiview_mask,
+                    cache: None,
                 },
-                fragment: desc.fragment.as_ref().map(|f| wgpu::FragmentState {
-                    module: f.module.wgpu(),
-                    entry_point: f.entry_point,
-                    targets: f.targets,
-                    compilation_options: f.compilation_options.clone(),
-                }),
-                primitive: desc.primitive,
-                depth_stencil: desc.depth_stencil.clone(),
-                multisample: desc.multisample,
-                multiview_mask: desc.multiview_mask,
-                cache: None,
-            })),
+            )),
             #[cfg(metal_backend)]
             Gpu::Metal(g) => {
-                let layouts: Vec<m::MLayout> = desc.layout.map_or_else(Vec::new, |l| l.metal().0.to_vec());
-                let fragment = desc
-                    .fragment
-                    .as_ref()
-                    .map(|f| (f.module.metal(), f.entry_point.unwrap_or("fs_main"), f.targets));
+                let layouts: Vec<m::MLayout> =
+                    desc.layout.map_or_else(Vec::new, |l| l.metal().0.to_vec());
+                let fragment = desc.fragment.as_ref().map(|f| {
+                    (
+                        f.module.metal(),
+                        f.entry_point.unwrap_or("fs_main"),
+                        f.targets,
+                    )
+                });
                 match g.create_render_pipeline(
                     &layouts,
                     desc.vertex.module.metal(),
@@ -424,7 +489,10 @@ impl Gpu {
                     desc.multisample.count,
                 ) {
                     Ok(p) => RenderPipeline::Metal(p),
-                    Err(e) => panic!("marks on Metal: {} did not build: {e}", desc.label.unwrap_or("a pipeline")),
+                    Err(e) => panic!(
+                        "marks on Metal: {} did not build: {e}",
+                        desc.label.unwrap_or("a pipeline")
+                    ),
                 }
             }
         }
@@ -432,20 +500,30 @@ impl Gpu {
 
     pub fn create_compute_pipeline(&self, desc: &ComputePipelineDescriptor) -> ComputePipeline {
         match self {
-            Gpu::Wgpu { device, .. } => ComputePipeline::Wgpu(device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: desc.label,
-                layout: desc.layout.map(|l| l.wgpu()),
-                module: desc.module.wgpu(),
-                entry_point: desc.entry_point,
-                compilation_options: desc.compilation_options.clone(),
-                cache: None,
-            })),
+            Gpu::Wgpu { device, .. } => ComputePipeline::Wgpu(device.create_compute_pipeline(
+                &wgpu::ComputePipelineDescriptor {
+                    label: desc.label,
+                    layout: desc.layout.map(|l| l.wgpu()),
+                    module: desc.module.wgpu(),
+                    entry_point: desc.entry_point,
+                    compilation_options: desc.compilation_options.clone(),
+                    cache: None,
+                },
+            )),
             #[cfg(metal_backend)]
             Gpu::Metal(g) => {
-                let layouts: Vec<m::MLayout> = desc.layout.map_or_else(Vec::new, |l| l.metal().0.to_vec());
-                match g.create_compute_pipeline(&layouts, desc.module.metal(), desc.entry_point.unwrap_or("main")) {
+                let layouts: Vec<m::MLayout> =
+                    desc.layout.map_or_else(Vec::new, |l| l.metal().0.to_vec());
+                match g.create_compute_pipeline(
+                    &layouts,
+                    desc.module.metal(),
+                    desc.entry_point.unwrap_or("main"),
+                ) {
                     Ok(p) => ComputePipeline::Metal(p),
-                    Err(e) => panic!("marks on Metal: {} did not build: {e}", desc.label.unwrap_or("a compute pipeline")),
+                    Err(e) => panic!(
+                        "marks on Metal: {} did not build: {e}",
+                        desc.label.unwrap_or("a compute pipeline")
+                    ),
                 }
             }
         }
@@ -487,7 +565,9 @@ impl Gpu {
                 size,
             ),
             #[cfg(metal_backend)]
-            Gpu::Metal(g) => g.write_texture(texture.texture.metal(), texture.origin, data, layout, size),
+            Gpu::Metal(g) => {
+                g.write_texture(texture.texture.metal(), texture.origin, data, layout, size)
+            }
         }
     }
 
@@ -543,7 +623,11 @@ impl Gpu {
 #[cold]
 #[track_caller]
 fn mixed(call: &str, what: &str, on_metal: bool) -> ! {
-    let (here, there) = if on_metal { ("Metal", "wgpu") } else { ("wgpu", "Metal") };
+    let (here, there) = if on_metal {
+        ("Metal", "wgpu")
+    } else {
+        ("wgpu", "Metal")
+    };
     panic!("{call}: a {there} {what} used on {here}; make every object a frame uses from the same marks::gpu::Gpu")
 }
 
@@ -566,7 +650,11 @@ macro_rules! unwrap_as {
                 match self {
                     Self::Wgpu(v) => v,
                     #[cfg(metal_backend)]
-                    Self::Metal(_) => panic!(concat!("a Metal ", stringify!($ty), " where wgpu's was needed")),
+                    Self::Metal(_) => panic!(concat!(
+                        "a Metal ",
+                        stringify!($ty),
+                        " where wgpu's was needed"
+                    )),
                 }
             }
             /// The Metal object, or `None` for a wgpu one.
@@ -584,7 +672,11 @@ macro_rules! unwrap_as {
             pub(crate) fn metal(&self) -> &$metal {
                 match self {
                     Self::Metal(v) => v,
-                    Self::Wgpu(_) => panic!(concat!("a wgpu ", stringify!($ty), " where Metal's was needed")),
+                    Self::Wgpu(_) => panic!(concat!(
+                        "a wgpu ",
+                        stringify!($ty),
+                        " where Metal's was needed"
+                    )),
                 }
             }
         }
@@ -621,11 +713,18 @@ impl Buffer {
             Bound::Excluded(&e) => e,
             Bound::Unbounded => self.size(),
         };
-        BufferSlice { buffer: self, range: start..end }
+        BufferSlice {
+            buffer: self,
+            range: start..end,
+        }
     }
 
     pub fn as_entire_binding(&self) -> BindingResource<'_> {
-        BindingResource::Buffer(BufferBinding { buffer: self, offset: 0, size: None })
+        BindingResource::Buffer(BufferBinding {
+            buffer: self,
+            offset: 0,
+            size: None,
+        })
     }
 
     pub fn unmap(&self) {
@@ -665,7 +764,11 @@ impl<'a> BufferSlice<'a> {
     /// wgpu's `map_async`. On either backend the callback runs from a later
     /// [`Gpu::poll`], [`Gpu::poll_wait`] or [`Gpu::submit`], once the work
     /// committed so far has finished — never inside this call.
-    pub fn map_async(&self, mode: wgpu::MapMode, callback: impl FnOnce(Result<(), wgpu::BufferAsyncError>) + wgpu::WasmNotSend + 'static) {
+    pub fn map_async(
+        &self,
+        mode: wgpu::MapMode,
+        callback: impl FnOnce(Result<(), wgpu::BufferAsyncError>) + wgpu::WasmNotSend + 'static,
+    ) {
         match self.buffer {
             Buffer::Wgpu(_) => self.wgpu().map_async(mode, callback),
             #[cfg(metal_backend)]
@@ -675,14 +778,21 @@ impl<'a> BufferSlice<'a> {
 
     pub fn get_mapped_range(&self) -> Result<BufferView<'a>, MapRangeError> {
         match self.buffer {
-            Buffer::Wgpu(_) => self.wgpu().get_mapped_range().map(BufferView::Wgpu).map_err(|e| MapRangeError(e.to_string())),
+            Buffer::Wgpu(_) => self
+                .wgpu()
+                .get_mapped_range()
+                .map(BufferView::Wgpu)
+                .map_err(|e| MapRangeError(e.to_string())),
             #[cfg(metal_backend)]
             Buffer::Metal(b) => {
                 let all = m::mapped_bytes(b);
                 let (start, end) = (self.range.start as usize, self.range.end as usize);
-                all.get(start..end)
-                    .map(BufferView::Metal)
-                    .ok_or_else(|| MapRangeError(format!("range {start}..{end} of a {}-byte buffer", all.len())))
+                all.get(start..end).map(BufferView::Metal).ok_or_else(|| {
+                    MapRangeError(format!(
+                        "range {start}..{end} of a {}-byte buffer",
+                        all.len()
+                    ))
+                })
             }
         }
     }
@@ -713,7 +823,11 @@ impl Texture {
         match self {
             Self::Wgpu(t) => t.size(),
             #[cfg(metal_backend)]
-            Self::Metal(t) => wgpu::Extent3d { width: t.width, height: t.height, depth_or_array_layers: t.depth.max(t.layers) },
+            Self::Metal(t) => wgpu::Extent3d {
+                width: t.width,
+                height: t.height,
+                depth_or_array_layers: t.depth.max(t.layers),
+            },
         }
     }
 
@@ -764,7 +878,11 @@ impl ComputePass<'_> {
             #[cfg(metal_backend)]
             (Self::Metal(p, _), ComputePipeline::Metal(pl)) => p.set_pipeline(pl),
             #[cfg(metal_backend)]
-            (pass, _) => mixed("ComputePass::set_pipeline", "pipeline", matches!(pass, Self::Metal(..))),
+            (pass, _) => mixed(
+                "ComputePass::set_pipeline",
+                "pipeline",
+                matches!(pass, Self::Metal(..)),
+            ),
         }
     }
 
@@ -774,7 +892,11 @@ impl ComputePass<'_> {
             #[cfg(metal_backend)]
             (Self::Metal(p, _), BindGroup::Metal(g)) => p.set_bind_group(index, g, offsets),
             #[cfg(metal_backend)]
-            (pass, _) => mixed("ComputePass::set_bind_group", "bind group", matches!(pass, Self::Metal(..))),
+            (pass, _) => mixed(
+                "ComputePass::set_bind_group",
+                "bind group",
+                matches!(pass, Self::Metal(..)),
+            ),
         }
     }
 
@@ -850,15 +972,25 @@ impl CommandEncoder {
                     })
                     .collect();
                 let depth = desc.depth_stencil_attachment.as_ref().map(|d| {
-                    let ops = d.depth_ops.unwrap_or(wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store });
-                    m::DepthAttachment { texture: d.view.metal().obj.id(), load: ops.load, store: ops.store }
+                    let ops = d.depth_ops.unwrap_or(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    });
+                    m::DepthAttachment {
+                        texture: d.view.metal().obj.id(),
+                        load: ops.load,
+                        store: ops.store,
+                    }
                 });
                 RenderPass::Metal(e.begin_render_pass(&color, depth), std::marker::PhantomData)
             }
         }
     }
 
-    pub fn begin_compute_pass<'e>(&'e mut self, desc: &wgpu::ComputePassDescriptor<'_>) -> ComputePass<'e> {
+    pub fn begin_compute_pass<'e>(
+        &'e mut self,
+        desc: &wgpu::ComputePassDescriptor<'_>,
+    ) -> ComputePass<'e> {
         match self {
             Self::Wgpu(e) => ComputePass::Wgpu(e.begin_compute_pass(desc).forget_lifetime()),
             #[cfg(metal_backend)]
@@ -866,15 +998,31 @@ impl CommandEncoder {
         }
     }
 
-    pub fn copy_buffer_to_buffer(&mut self, src: &Buffer, src_offset: u64, dst: &Buffer, dst_offset: u64, size: u64) {
+    pub fn copy_buffer_to_buffer(
+        &mut self,
+        src: &Buffer,
+        src_offset: u64,
+        dst: &Buffer,
+        dst_offset: u64,
+        size: u64,
+    ) {
         match self {
-            Self::Wgpu(e) => e.copy_buffer_to_buffer(src.wgpu(), src_offset, dst.wgpu(), dst_offset, size),
+            Self::Wgpu(e) => {
+                e.copy_buffer_to_buffer(src.wgpu(), src_offset, dst.wgpu(), dst_offset, size)
+            }
             #[cfg(metal_backend)]
-            Self::Metal(e) => e.copy_buffer_to_buffer(src.metal(), src_offset, dst.metal(), dst_offset, size),
+            Self::Metal(e) => {
+                e.copy_buffer_to_buffer(src.metal(), src_offset, dst.metal(), dst_offset, size)
+            }
         }
     }
 
-    pub fn copy_texture_to_buffer(&mut self, source: TexelCopyTextureInfo, dest: TexelCopyBufferInfo, size: wgpu::Extent3d) {
+    pub fn copy_texture_to_buffer(
+        &mut self,
+        source: TexelCopyTextureInfo,
+        dest: TexelCopyBufferInfo,
+        size: wgpu::Extent3d,
+    ) {
         match self {
             Self::Wgpu(e) => e.copy_texture_to_buffer(
                 wgpu::TexelCopyTextureInfo {
@@ -883,14 +1031,25 @@ impl CommandEncoder {
                     origin: source.origin,
                     aspect: source.aspect,
                 },
-                wgpu::TexelCopyBufferInfo { buffer: dest.buffer.wgpu(), layout: dest.layout },
+                wgpu::TexelCopyBufferInfo {
+                    buffer: dest.buffer.wgpu(),
+                    layout: dest.layout,
+                },
                 size,
             ),
             #[cfg(metal_backend)]
             Self::Metal(e) => {
                 let row = dest.layout.bytes_per_row.unwrap_or(0) as u64;
                 let rows = dest.layout.rows_per_image.unwrap_or(size.height) as u64;
-                e.copy_texture_to_buffer(source.texture.metal(), source.origin, dest.buffer.metal(), dest.layout.offset, row, rows, size)
+                e.copy_texture_to_buffer(
+                    source.texture.metal(),
+                    source.origin,
+                    dest.buffer.metal(),
+                    dest.layout.offset,
+                    row,
+                    rows,
+                    size,
+                )
             }
         }
     }
@@ -903,7 +1062,11 @@ impl RenderPass<'_> {
             #[cfg(metal_backend)]
             (Self::Metal(p, _), RenderPipeline::Metal(pl)) => p.set_pipeline(pl),
             #[cfg(metal_backend)]
-            (pass, _) => mixed("RenderPass::set_pipeline", "pipeline", matches!(pass, Self::Metal(..))),
+            (pass, _) => mixed(
+                "RenderPass::set_pipeline",
+                "pipeline",
+                matches!(pass, Self::Metal(..)),
+            ),
         }
     }
 
@@ -913,7 +1076,11 @@ impl RenderPass<'_> {
             #[cfg(metal_backend)]
             (Self::Metal(p, _), BindGroup::Metal(g)) => p.set_bind_group(index, g, offsets),
             #[cfg(metal_backend)]
-            (pass, _) => mixed("RenderPass::set_bind_group", "bind group", matches!(pass, Self::Metal(..))),
+            (pass, _) => mixed(
+                "RenderPass::set_bind_group",
+                "bind group",
+                matches!(pass, Self::Metal(..)),
+            ),
         }
     }
 
@@ -929,7 +1096,9 @@ impl RenderPass<'_> {
         match self {
             Self::Wgpu(p) => p.set_index_buffer(slice.wgpu(), format),
             #[cfg(metal_backend)]
-            Self::Metal(p, _) => p.set_index_buffer(slice.buffer.metal(), slice.range.start, format),
+            Self::Metal(p, _) => {
+                p.set_index_buffer(slice.buffer.metal(), slice.range.start, format)
+            }
         }
     }
 
@@ -986,9 +1155,11 @@ impl super::MarkTarget<'static> {
         let (w, h) = (pass.width, pass.height);
         Self {
             color: TextureView::from_metal(pass.color, format, w, h),
-            resolve: (!pass.resolve.is_null()).then(|| TextureView::from_metal(pass.resolve, format, w, h)),
-            depth: (!pass.depth.is_null())
-                .then(|| TextureView::from_metal(pass.depth, wgpu::TextureFormat::Depth32Float, w, h)),
+            resolve: (!pass.resolve.is_null())
+                .then(|| TextureView::from_metal(pass.resolve, format, w, h)),
+            depth: (!pass.depth.is_null()).then(|| {
+                TextureView::from_metal(pass.depth, wgpu::TextureFormat::Depth32Float, w, h)
+            }),
             format,
             samples: pass.sample_count.max(1),
             rect: None,

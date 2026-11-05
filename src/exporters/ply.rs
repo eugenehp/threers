@@ -73,12 +73,7 @@ pub fn write_ply(objects: &[ExportObject], options: &PlyOptions) -> Option<Vec<u
         return None;
     }
     let face_count: usize = face_lists.iter().map(Vec::len).sum();
-    let widest = face_lists
-        .iter()
-        .flatten()
-        .map(Vec::len)
-        .max()
-        .unwrap_or(3);
+    let widest = face_lists.iter().flatten().map(Vec::len).max().unwrap_or(3);
     // three.js only writes triangles; a polygon past 255 corners needs a
     // wider count than `uchar`.
     let count_type = if widest > 255 { "int" } else { "uchar" };

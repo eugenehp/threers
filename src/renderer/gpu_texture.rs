@@ -111,7 +111,8 @@ impl MipGenerator {
                 format!(
                     "{}\n{}",
                     crate::renderer::fullscreen::VS,
-                    crate::wgsl!(r#"
+                    crate::wgsl!(
+                        r#"
 @group(0) @binding(0) var src  : texture_2d<f32>;
 @group(0) @binding(1) var samp : sampler;
 
@@ -121,7 +122,8 @@ fn fs(in : FullscreenVertex) -> @location(0) vec4<f32> {
     // so a single bilinear tap returns their average.
     return textureSampleLevel(src, samp, in.uv, 0.0);
 }
-"#)
+"#
+                    )
                 )
                 .into(),
             ),
@@ -1125,7 +1127,9 @@ mod mip_tests {
         let mut worst = 0.0f32;
         for i in 0..=20000 {
             let v = i as f32 / 20000.0;
-            worst = worst.max((linear_to_srgb_fast(v) - crate::utils::srgb::linear_to_srgb_f32(v)).abs() * 255.0);
+            worst = worst.max(
+                (linear_to_srgb_fast(v) - crate::utils::srgb::linear_to_srgb_f32(v)).abs() * 255.0,
+            );
         }
         assert!(
             worst < 0.5,

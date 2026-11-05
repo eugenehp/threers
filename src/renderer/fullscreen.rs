@@ -34,7 +34,8 @@ use std::collections::HashMap;
 ///
 /// Declares `vs_main` and a `FullscreenVertex` struct with `uv` at
 /// `@location(0)`. Draw it with `pass.draw(0..3, 0..1)`, or with [`draw`].
-pub const VS: &str = crate::wgsl!(r#"
+pub const VS: &str = crate::wgsl!(
+    r#"
 struct FullscreenVertex {
     @builtin(position) clip : vec4<f32>,
     @location(0) uv : vec2<f32>,
@@ -49,7 +50,8 @@ fn vs_main(@builtin(vertex_index) vid : u32) -> FullscreenVertex {
     out.clip = vec4<f32>(x * 2.0 - 1.0, 1.0 - y * 2.0, 0.0, 1.0);
     return out;
 }
-"#);
+"#
+);
 
 /// The entry point [`VS`] declares.
 pub const VS_ENTRY: &str = "vs_main";

@@ -77,12 +77,7 @@ impl Value {
 impl Value {
     /// Build an object from pairs, which reads better than inserting one by one.
     pub fn object<const N: usize>(pairs: [(&str, Value); N]) -> Value {
-        Value::Object(
-            pairs
-                .into_iter()
-                .map(|(k, v)| (k.to_string(), v))
-                .collect(),
-        )
+        Value::Object(pairs.into_iter().map(|(k, v)| (k.to_string(), v)).collect())
     }
 
     pub fn number(v: impl Into<f64>) -> Value {
@@ -324,7 +319,10 @@ impl<'a> Parser<'a> {
     fn hex4(&mut self) -> Result<u32, &'static str> {
         let mut v = 0u32;
         for _ in 0..4 {
-            let d = self.bump().and_then(|b| (b as char).to_digit(16)).ok_or("bad \\u escape")?;
+            let d = self
+                .bump()
+                .and_then(|b| (b as char).to_digit(16))
+                .ok_or("bad \\u escape")?;
             v = v * 16 + d;
         }
         Ok(v)

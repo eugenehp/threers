@@ -200,10 +200,7 @@ impl CaptionPainter {
             CaptionAlign::Right => (x - self.style.padding).max(self.style.font_size),
             CaptionAlign::Center => (fw - self.style.padding * 2.0).max(self.style.font_size),
         };
-        self.style.max_width = (max_width / fw).clamp(
-            self.style.font_size / fw,
-            1.0,
-        );
+        self.style.max_width = (max_width / fw).clamp(self.style.font_size / fw, 1.0);
         let ok = self.draw_block_at(frame, width, height, text, x, y, align);
         self.style = saved;
         ok
@@ -289,7 +286,9 @@ impl CaptionPainter {
         let style = self.style.clone();
         let align = placement.align.unwrap_or(style.align);
         let (block_left, block_top) = self.place(&laid, &style, align, placement, width, height);
-        self.composite_block(frame, width, height, &laid, &style, align, block_left, block_top)
+        self.composite_block(
+            frame, width, height, &laid, &style, align, block_left, block_top,
+        )
     }
 
     /// Lay out and draw one line at absolute pixel coordinates.
@@ -327,7 +326,9 @@ impl CaptionPainter {
         let pad = style.padding;
         let block_left = block_left.clamp(pad, (fw - laid.width - pad).max(pad));
         let block_top = block_top.clamp(pad, (fh - laid.height - pad).max(pad));
-        self.composite_block(frame, width, height, &laid, &style, align, block_left, block_top)
+        self.composite_block(
+            frame, width, height, &laid, &style, align, block_left, block_top,
+        )
     }
 
     fn composite_block(
@@ -341,7 +342,6 @@ impl CaptionPainter {
         block_left: f32,
         block_top: f32,
     ) -> bool {
-
         // The mask needs room for the outline and the shadow to spread into.
         let outline = style.outline_width.max(0.0);
         let shadow_on = style.shadow_color[3] > 0;
@@ -440,7 +440,8 @@ impl CaptionPainter {
         // fill: from their outlines where the face has them, else the mask
         // grown.
         if outline > 0.0 && style.outline_color[3] > 0 {
-            let grown = fill_mask(self, Some(outline)).unwrap_or_else(|| dilate(&mask, mask_w, mask_h, outline));
+            let grown = fill_mask(self, Some(outline))
+                .unwrap_or_else(|| dilate(&mask, mask_w, mask_h, outline));
             blend_mask(
                 frame,
                 width,
@@ -796,7 +797,6 @@ fn transform_1d(f: &[f32]) -> Vec<f32> {
     }
     out
 }
-
 
 /// Glyph coverage corrected for the text's colour, as a table over the 256
 /// coverage values.
@@ -1310,7 +1310,10 @@ mod tests {
         assert_eq!(r1.iter().filter(|&&v| v > 0).count(), 9);
         let at = |x: u32, y: u32| r1[(y * w + x) as usize];
         assert_eq!(at(4, 4), 255, "the centre stays full");
-        assert!(at(3, 4) > at(3, 3), "the diagonal is further away than the side");
+        assert!(
+            at(3, 4) > at(3, 3),
+            "the diagonal is further away than the side"
+        );
     }
 
     /// The grown shape is round, not a polygon.
@@ -1393,7 +1396,10 @@ mod tests {
             edge_ink(0.3),
             edge_ink(0.0)
         );
-        assert!(edge_ink(0.3) < edge_ink(0.6), "and 0.6 should thicken it more");
+        assert!(
+            edge_ink(0.3) < edge_ink(0.6),
+            "and 0.6 should thicken it more"
+        );
     }
 
     #[test]
@@ -1481,16 +1487,29 @@ mod tests {
             };
             let mut p = CaptionPainter::with_font(CaptionFont::builtin()).style(style);
             assert!(p.draw_text_at(&mut frame, w, h, 4.3, 4.0, "Weigh me"));
-            frame.chunks(4).map(|p| (p[0] as f32 - bg as f32).abs() / 255.0).sum()
+            frame
+                .chunks(4)
+                .map(|p| (p[0] as f32 - bg as f32).abs() / 255.0)
+                .sum()
         };
         let (dark, light) = (ink(0, 255), ink(255, 0));
-        assert!((dark / light - 1.0).abs() < 0.01, "black on white {dark}, white on black {light}");
+        assert!(
+            (dark / light - 1.0).abs() < 0.01,
+            "black on white {dark}, white on black {light}"
+        );
     }
 
     /// The coverage an outline of `radius` should have, from the glyph's own
     /// geometry: per pixel, the share of an 8×8 grid of points inside the
     /// outline or within `radius` of it.
-    fn true_outline(contours: &[Vec<[f32; 2]>], x0: i32, y0: i32, w: u32, h: u32, radius: f32) -> Vec<f32> {
+    fn true_outline(
+        contours: &[Vec<[f32; 2]>],
+        x0: i32,
+        y0: i32,
+        w: u32,
+        h: u32,
+        radius: f32,
+    ) -> Vec<f32> {
         let segs: Vec<([f32; 2], [f32; 2])> = contours
             .iter()
             .flat_map(|c| (0..c.len()).map(move |i| (c[i], c[(i + 1) % c.len()])))
@@ -1511,7 +1530,11 @@ mod tests {
             segs.iter().any(|&(a, b)| {
                 let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
                 let l = dx * dx + dy * dy;
-                let t = if l > 0.0 { (((x - a[0]) * dx + (y - a[1]) * dy) / l).clamp(0.0, 1.0) } else { 0.0 };
+                let t = if l > 0.0 {
+                    (((x - a[0]) * dx + (y - a[1]) * dy) / l).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
                 let (px, py) = (a[0] + t * dx - x, a[1] + t * dy - y);
                 px * px + py * py <= radius * radius
             })
@@ -1544,7 +1567,9 @@ mod tests {
     /// Skipped without SF Compact.
     #[test]
     fn outlines_follow_the_glyph_geometry() {
-        let Some(mut font) = CaptionFont::try_sf_compact() else { return };
+        let Some(mut font) = CaptionFont::try_sf_compact() else {
+            return;
+        };
         for (size, radius) in [(34.0f32, 2.0f32), (16.0, 1.0), (24.0, 3.0)] {
             let (mut grown_sum, mut grown_n, mut grown_max) = (0.0f32, 0, 0.0f32);
             let (mut mask_sum, mut mask_n) = (0.0f32, 0);
@@ -1558,7 +1583,8 @@ mod tests {
                 let edge = |truth: f32, v: u8| truth > 0.0 && truth < 1.0 || v > 0 && v < 255;
 
                 let g = font.grown_glyph_at(c, size, 0, radius).unwrap().clone();
-                let truth = true_outline(&contours, g.offset_x, g.offset_y, g.width, g.height, radius);
+                let truth =
+                    true_outline(&contours, g.offset_x, g.offset_y, g.width, g.height, radius);
                 for (t, &v) in truth.iter().zip(&g.coverage) {
                     let e = (v as f32 / 255.0 - t).abs();
                     grown_max = grown_max.max(e);
@@ -1575,11 +1601,19 @@ mod tests {
                 let mut mask = vec![0u8; (w * h) as usize];
                 for y in 0..g.height {
                     for x in 0..g.width {
-                        mask[((y + pad) * w + x + pad) as usize] = g.coverage[(y * g.width + x) as usize];
+                        mask[((y + pad) * w + x + pad) as usize] =
+                            g.coverage[(y * g.width + x) as usize];
                     }
                 }
                 let dilated = dilate(&mask, w, h, radius);
-                let truth = true_outline(&contours, g.offset_x - pad as i32, g.offset_y - pad as i32, w, h, radius);
+                let truth = true_outline(
+                    &contours,
+                    g.offset_x - pad as i32,
+                    g.offset_y - pad as i32,
+                    w,
+                    h,
+                    radius,
+                );
                 for (t, &v) in truth.iter().zip(&dilated) {
                     if edge(*t, v) {
                         mask_sum += (v as f32 / 255.0 - t).abs();
@@ -1589,9 +1623,18 @@ mod tests {
             }
             let grown = grown_sum / grown_n as f32;
             let masked = mask_sum / mask_n as f32;
-            assert!(grown < 0.025, "size {size} radius {radius}: mean edge error {grown}");
-            assert!(grown_max < 0.25, "size {size} radius {radius}: worst pixel {grown_max}");
-            assert!(grown * 5.0 < masked, "from the outline {grown}, from the mask {masked}");
+            assert!(
+                grown < 0.025,
+                "size {size} radius {radius}: mean edge error {grown}"
+            );
+            assert!(
+                grown_max < 0.25,
+                "size {size} radius {radius}: worst pixel {grown_max}"
+            );
+            assert!(
+                grown * 5.0 < masked,
+                "from the outline {grown}, from the mask {masked}"
+            );
         }
     }
 
@@ -1604,7 +1647,11 @@ mod tests {
         for value in [0u8, 1, 17, 64, 128, 200, 254, 255] {
             let mut frame = vec![9, 9, 9, 255u8];
             blend_pixel(&mut frame, 1, 0, 0, [value, value, value, 255], 255);
-            assert_eq!(frame[0], value, "full coverage of {value} became {}", frame[0]);
+            assert_eq!(
+                frame[0], value,
+                "full coverage of {value} became {}",
+                frame[0]
+            );
         }
     }
 }

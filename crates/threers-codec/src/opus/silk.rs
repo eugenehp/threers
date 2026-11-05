@@ -126,7 +126,8 @@ fn stabilize_lsf(nlsf: &mut [i16; 16], order: usize, min_delta: &[u16]) {
         nlsf[0] = min_delta[0] as i16;
     }
     for i in 1..order {
-        nlsf[i] = (nlsf[i] as i32).max((nlsf[i - 1] as i32 + min_delta[i] as i32).min(32767)) as i16;
+        nlsf[i] =
+            (nlsf[i] as i32).max((nlsf[i - 1] as i32 + min_delta[i] as i32).min(32767)) as i16;
     }
     if nlsf[order - 1] as i32 > 32768 - min_delta[order] as i32 {
         nlsf[order - 1] = (32768 - min_delta[order] as i32) as i16;
@@ -169,7 +170,8 @@ fn is_lpc_stable(lpc: &[i16; 16], order: usize) -> bool {
         let prevrow = row;
         cur = k & 1;
         for j in 0..k {
-            let x = (prevrow[j] as i64 - round_mull(prevrow[k - j - 1] as i64, rc as i64, 31)).clamp(i32::MIN as i64, i32::MAX as i64);
+            let x = (prevrow[j] as i64 - round_mull(prevrow[k - j - 1] as i64, rc as i64, 31))
+                .clamp(i32::MIN as i64, i32::MAX as i64);
             let tmp = round_mull(x, gain as i64, fbits);
             if tmp < i32::MIN as i64 || tmp > i32::MAX as i64 {
                 return false;
@@ -184,10 +186,12 @@ fn lsp2poly(lsp: &[i32], pol: &mut [i32; 9], half_order: usize) {
     pol[0] = 65536;
     pol[1] = -lsp[0];
     for i in 1..half_order {
-        pol[i + 1] = (pol[i - 1] as i64 * 2 - round_mull(lsp[2 * i] as i64, pol[i] as i64, 16)) as i32;
+        pol[i + 1] =
+            (pol[i - 1] as i64 * 2 - round_mull(lsp[2 * i] as i64, pol[i] as i64, 16)) as i32;
         let mut j = i;
         while j > 1 {
-            pol[j] = (pol[j] as i64 + pol[j - 2] as i64 - round_mull(lsp[2 * i] as i64, pol[j - 1] as i64, 16)) as i32;
+            pol[j] = (pol[j] as i64 + pol[j - 2] as i64
+                - round_mull(lsp[2 * i] as i64, pol[j - 1] as i64, 16)) as i32;
             j -= 1;
         }
         pol[1] -= lsp[2 * i];
@@ -203,7 +207,11 @@ fn lsf2lpc(nlsf: &[i16; 16], lpcf: &mut [f32; 16], order: usize) {
     for k in 0..order {
         let index = (nlsf[k] >> 8) as usize;
         let offset = (nlsf[k] & 255) as i32;
-        let k2 = if order == 10 { SILK_LSF_ORDERING_NBMB[k] } else { SILK_LSF_ORDERING_WB[k] } as usize;
+        let k2 = if order == 10 {
+            SILK_LSF_ORDERING_NBMB[k]
+        } else {
+            SILK_LSF_ORDERING_WB[k]
+        } as usize;
         let mut v = SILK_COSINE[index] as i32 * 256;
         v += (SILK_COSINE[index + 1] as i32 - SILK_COSINE[index] as i32) * offset;
         lsp[k2] = (v + 4) >> 3;
@@ -231,7 +239,8 @@ fn lsf2lpc(nlsf: &[i16; 16], lpcf: &mut [f32; 16], order: usize) {
         maxabs = (maxabs + 16) >> 5;
         if maxabs > 32767 {
             maxabs = maxabs.min(163838);
-            let chirp_base = 65470u32.wrapping_sub(((maxabs - 32767) << 14) / ((maxabs * (k as u32 + 1)) >> 2));
+            let chirp_base =
+                65470u32.wrapping_sub(((maxabs - 32767) << 14) / ((maxabs * (k as u32 + 1)) >> 2));
             let mut chirp = chirp_base;
             for k in 0..order {
                 lpc32[k] = round_mull(lpc32[k] as i64, chirp as i64, 16) as i32;
@@ -295,7 +304,14 @@ impl Silk {
         self.prev_stereo_weights = [0.0; 2];
     }
 
-    fn decode_lpc(&mut self, ch: usize, rc: &mut Rc, lpc_leadin: &mut [f32; 16], lpc: &mut [f32; 16], voiced: usize) -> (usize, bool) {
+    fn decode_lpc(
+        &mut self,
+        ch: usize,
+        rc: &mut Rc,
+        lpc_leadin: &mut [f32; 16],
+        lpc: &mut [f32; 16],
+        voiced: usize,
+    ) -> (usize, bool) {
         let wb = self.wb;
         let order = if wb { 16 } else { 10 };
         let mut lsf_i2 = [0i8; 16];
@@ -303,7 +319,11 @@ impl Silk {
         let mut nlsf = [0i16; 16];
         let lsf_i1 = rc.dec_cdf(&SILK_MODEL_LSF_S1[wb as usize][voiced]) as usize;
         for i in 0..order {
-            let index = if wb { SILK_LSF_S2_MODEL_SEL_WB[lsf_i1][i] } else { SILK_LSF_S2_MODEL_SEL_NBMB[lsf_i1][i] } as usize;
+            let index = if wb {
+                SILK_LSF_S2_MODEL_SEL_WB[lsf_i1][i]
+            } else {
+                SILK_LSF_S2_MODEL_SEL_NBMB[lsf_i1][i]
+            } as usize;
             lsf_i2[i] = (rc.dec_cdf(&SILK_MODEL_LSF_S2[index]) as i32 - 4) as i8;
             if lsf_i2[i] == -4 {
                 lsf_i2[i] -= rc.dec_cdf(&SILK_MODEL_LSF_S2_EXT) as i8;
@@ -330,10 +350,18 @@ impl Silk {
             }
         }
         for i in 0..order {
-            let codebook: &[u8] = if wb { &SILK_LSF_CODEBOOK_WB[lsf_i1] } else { &SILK_LSF_CODEBOOK_NBMB[lsf_i1] };
+            let codebook: &[u8] = if wb {
+                &SILK_LSF_CODEBOOK_WB[lsf_i1]
+            } else {
+                &SILK_LSF_CODEBOOK_NBMB[lsf_i1]
+            };
             let cur = codebook[i] as i32;
             let prev = if i > 0 { codebook[i - 1] as i32 } else { 0 };
-            let next = if i + 1 < order { codebook[i + 1] as i32 } else { 256 };
+            let next = if i + 1 < order {
+                codebook[i + 1] as i32
+            } else {
+                256
+            };
             let weight_sq = (1024 / (cur - prev) + 1024 / (next - cur)) << 16;
             let ipart = ilog(weight_sq as u32) as i32;
             let fpart = (weight_sq >> (ipart - 8)) & 127;
@@ -342,7 +370,15 @@ impl Silk {
             let value = cur * 128 + (lsf_res[i] as i32 * 16384) / weight;
             nlsf[i] = value.clamp(0, 32767) as i16;
         }
-        stabilize_lsf(&mut nlsf, order, if wb { &SILK_LSF_MIN_SPACING_WB } else { &SILK_LSF_MIN_SPACING_NBMB });
+        stabilize_lsf(
+            &mut nlsf,
+            order,
+            if wb {
+                &SILK_LSF_MIN_SPACING_WB
+            } else {
+                &SILK_LSF_MIN_SPACING_NBMB
+            },
+        );
         let frame = &mut self.frame[ch];
         let mut has_lpc_leadin = false;
         if self.subframes == 4 {
@@ -352,7 +388,9 @@ impl Silk {
                 if offset != 0 {
                     let mut leadin = [0i16; 16];
                     for i in 0..order {
-                        leadin[i] = (frame.nlsf[i] as i32 + (((nlsf[i] as i32 - frame.nlsf[i] as i32) * offset) >> 2)) as i16;
+                        leadin[i] = (frame.nlsf[i] as i32
+                            + (((nlsf[i] as i32 - frame.nlsf[i] as i32) * offset) >> 2))
+                            as i16;
                     }
                     lsf2lpc(&leadin, lpc_leadin, order);
                 } else {
@@ -383,7 +421,14 @@ impl Silk {
         }
     }
 
-    fn decode_excitation(&self, rc: &mut Rc, out: &mut [f32], qoffset_high: usize, active: usize, voiced: usize) {
+    fn decode_excitation(
+        &self,
+        rc: &mut Rc,
+        out: &mut [f32],
+        qoffset_high: usize,
+        active: usize,
+        voiced: usize,
+    ) {
         let mut pulsecount = [0u8; 20];
         let mut lsbcount = [0u8; 20];
         let mut excitation = [0i32; 320];
@@ -429,12 +474,16 @@ impl Silk {
         }
         for i in 0..shellblocks << 4 {
             for _ in 0..lsbcount[i >> 4] {
-                excitation[i] = (excitation[i] << 1) | rc.dec_cdf(&SILK_MODEL_EXCITATION_LSB) as i32;
+                excitation[i] =
+                    (excitation[i] << 1) | rc.dec_cdf(&SILK_MODEL_EXCITATION_LSB) as i32;
             }
         }
         for i in 0..shellblocks << 4 {
             if excitation[i] != 0 {
-                let sign = rc.dec_cdf(&SILK_MODEL_EXCITATION_SIGN[active + voiced][qoffset_high][(pulsecount[i >> 4] as usize).min(6)]);
+                let sign = rc.dec_cdf(
+                    &SILK_MODEL_EXCITATION_SIGN[active + voiced][qoffset_high]
+                        [(pulsecount[i >> 4] as usize).min(6)],
+                );
                 if sign == 0 {
                     excitation[i] *= -1;
                 }
@@ -442,7 +491,8 @@ impl Silk {
         }
         for i in 0..shellblocks << 4 {
             let value = excitation[i];
-            excitation[i] = value.wrapping_mul(256) | SILK_QUANT_OFFSET[voiced][qoffset_high] as i32;
+            excitation[i] =
+                value.wrapping_mul(256) | SILK_QUANT_OFFSET[voiced][qoffset_high] as i32;
             if value < 0 {
                 excitation[i] += 20;
             } else if value > 0 {
@@ -457,7 +507,16 @@ impl Silk {
         }
     }
 
-    fn decode_frame(&mut self, rc: &mut Rc, frame_num: usize, channel: usize, coded_channels: usize, active: usize, active1: usize, redundant: bool) {
+    fn decode_frame(
+        &mut self,
+        rc: &mut Rc,
+        frame_num: usize,
+        channel: usize,
+        coded_channels: usize,
+        active: usize,
+        active1: usize,
+        redundant: bool,
+    ) {
         let mut lpc_leadin = [0f32; 16];
         let mut lpc_body = [0f32; 16];
         let mut residual = [0f32; MAX_LAG + HISTORY];
@@ -485,7 +544,11 @@ impl Silk {
             }
             self.stereo_weights[0] = ((w[0] - w[1]) as f64 / 8192.0) as f32;
             self.stereo_weights[1] = (w[1] as f64 / 8192.0) as f32;
-            self.midonly = if active1 != 0 { false } else { rc.dec_cdf(&SILK_MODEL_MID_ONLY) != 0 };
+            self.midonly = if active1 != 0 {
+                false
+            } else {
+                rc.dec_cdf(&SILK_MODEL_MID_ONLY) != 0
+            };
         }
 
         let (qoffset_high, voiced);
@@ -509,17 +572,21 @@ impl Silk {
                 }
             } else {
                 let delta_gain = rc.dec_cdf(&SILK_MODEL_GAIN_DELTA) as i32;
-                log_gain = ((delta_gain << 1) - 16).max(frame.log_gain + delta_gain - 4).clamp(0, 63);
+                log_gain = ((delta_gain << 1) - 16)
+                    .max(frame.log_gain + delta_gain - 4)
+                    .clamp(0, 63);
             }
             frame.log_gain = log_gain;
             let lg = ((log_gain * 0x1D1C71) >> 16) + 2090;
             let ipart = lg >> 7;
             let fpart = lg & 127;
-            let lingain = (1i32 << ipart) + (((-174 * fpart * (128 - fpart)) >> 16) + fpart) * ((1i32 << ipart) >> 7);
+            let lingain = (1i32 << ipart)
+                + (((-174 * fpart * (128 - fpart)) >> 16) + fpart) * ((1i32 << ipart) >> 7);
             sf[i].gain = lingain as f32 / 65536.0f32;
         }
 
-        let (order, has_lpc_leadin) = self.decode_lpc(channel, rc, &mut lpc_leadin, &mut lpc_body, voiced);
+        let (order, has_lpc_leadin) =
+            self.decode_lpc(channel, rc, &mut lpc_leadin, &mut lpc_body, voiced);
 
         if voiced != 0 {
             let bw = self.bandwidth;
@@ -541,14 +608,17 @@ impl Silk {
                     1 => rc.dec_cdf(&SILK_MODEL_PITCH_LOWBITS_MB),
                     _ => rc.dec_cdf(&SILK_MODEL_PITCH_LOWBITS_WB),
                 } as i32;
-                primarylag = SILK_PITCH_MIN_LAG[bw] as i32 + highbits * SILK_PITCH_SCALE[bw] as i32 + lowbits;
+                primarylag = SILK_PITCH_MIN_LAG[bw] as i32
+                    + highbits * SILK_PITCH_SCALE[bw] as i32
+                    + lowbits;
             }
             frame.primarylag = primarylag;
             let offsets: &[i8] = if self.subframes == 2 {
                 if bw == 0 {
                     &SILK_PITCH_OFFSET_NB10MS[rc.dec_cdf(&SILK_MODEL_PITCH_CONTOUR_NB10MS) as usize]
                 } else {
-                    &SILK_PITCH_OFFSET_MBWB10MS[rc.dec_cdf(&SILK_MODEL_PITCH_CONTOUR_MBWB10MS) as usize]
+                    &SILK_PITCH_OFFSET_MBWB10MS
+                        [rc.dec_cdf(&SILK_MODEL_PITCH_CONTOUR_MBWB10MS) as usize]
                 }
             } else if bw == 0 {
                 &SILK_PITCH_OFFSET_NB20MS[rc.dec_cdf(&SILK_MODEL_PITCH_CONTOUR_NB20MS) as usize]
@@ -556,7 +626,8 @@ impl Silk {
                 &SILK_PITCH_OFFSET_MBWB20MS[rc.dec_cdf(&SILK_MODEL_PITCH_CONTOUR_MBWB20MS) as usize]
             };
             for i in 0..self.subframes {
-                sf[i].pitchlag = (primarylag + offsets[i] as i32).clamp(SILK_PITCH_MIN_LAG[bw] as i32, SILK_PITCH_MAX_LAG[bw] as i32);
+                sf[i].pitchlag = (primarylag + offsets[i] as i32)
+                    .clamp(SILK_PITCH_MIN_LAG[bw] as i32, SILK_PITCH_MAX_LAG[bw] as i32);
             }
             let ltpfilter = rc.dec_cdf(&SILK_MODEL_LTP_FILTER) as usize;
             for i in 0..self.subframes {
@@ -573,7 +644,8 @@ impl Silk {
         }
 
         let ltpscale = if voiced != 0 && frame_num == 0 {
-            SILK_LTP_SCALE_FACTOR[rc.dec_cdf(&SILK_MODEL_LTP_SCALE_INDEX) as usize] as f32 / 16384.0f32
+            SILK_LTP_SCALE_FACTOR[rc.dec_cdf(&SILK_MODEL_LTP_SCALE_INDEX) as usize] as f32
+                / 16384.0f32
         } else {
             15565.0f32 / 16384.0f32
         };
@@ -588,22 +660,33 @@ impl Silk {
         let interp4 = self.nlsf_interp_factor == 4;
         let frame = &mut self.frame[channel];
         for i in 0..self.subframes {
-            let lpc_coeff = if i < 2 && has_lpc_leadin { &lpc_leadin } else { &lpc_body };
+            let lpc_coeff = if i < 2 && has_lpc_leadin {
+                &lpc_leadin
+            } else {
+                &lpc_body
+            };
             let dst = HISTORY + i * sflength;
             let resp = MAX_LAG + i * sflength;
             let lpc = HISTORY + i * sflength;
             if voiced != 0 {
-                let (out_end, scale) =
-                    if i < 2 || interp4 { (-((i * sflength) as isize), ltpscale) } else { (-(((i - 2) * sflength) as isize), 1.0f32) };
+                let (out_end, scale) = if i < 2 || interp4 {
+                    (-((i * sflength) as isize), ltpscale)
+                } else {
+                    (-(((i - 2) * sflength) as isize), 1.0f32)
+                };
                 let mut j = -(sf[i].pitchlag as isize) - (LTP_ORDER / 2) as isize;
                 while j < out_end {
                     let at = (dst as isize + j) as usize;
                     let mut sum = frame.output[at];
                     // dst[j - k - 1] for k = 0..order, in that order.
-                    for (c, x) in lpc_coeff[..order].iter().zip(frame.output[at - order..at].iter().rev()) {
+                    for (c, x) in lpc_coeff[..order]
+                        .iter()
+                        .zip(frame.output[at - order..at].iter().rev())
+                    {
                         sum -= c * x;
                     }
-                    residual[(resp as isize + j) as usize] = sum.clamp(-1.0, 1.0) * scale / sf[i].gain;
+                    residual[(resp as isize + j) as usize] =
+                        sum.clamp(-1.0, 1.0) * scale / sf[i].gain;
                     j += 1;
                 }
                 if out_end != 0 {
@@ -617,7 +700,8 @@ impl Silk {
                     let at = resp + j;
                     let mut sum = residual[at];
                     // resptr[j - lag + 2 - k] for k = 0..5, in that order.
-                    let w = &residual[at + LTP_ORDER / 2 - lag - (LTP_ORDER - 1)..=at + LTP_ORDER / 2 - lag];
+                    let w = &residual
+                        [at + LTP_ORDER / 2 - lag - (LTP_ORDER - 1)..=at + LTP_ORDER / 2 - lag];
                     for (t, x) in taps.iter().zip(w.iter().rev()) {
                         sum += t * x;
                     }
@@ -629,7 +713,10 @@ impl Silk {
                 let at = lpc + j;
                 let mut sum = residual[resp + j] * gain;
                 // lpc[j - k] for k = 1..=order, in that order.
-                for (c, x) in lpc_coeff[..order].iter().zip(frame.lpc_history[at - order..at].iter().rev()) {
+                for (c, x) in lpc_coeff[..order]
+                    .iter()
+                    .zip(frame.lpc_history[at - order..at].iter().rev())
+                {
                     sum += c * x;
                 }
                 frame.lpc_history[at] = sum;
@@ -655,7 +742,10 @@ impl Silk {
             let (m2, m1, m0, s1) = (mid[i], mid[i + 1], mid[i + 2], side[i + 1]);
             let p0 = (0.25f64 * (m2 + 2.0 * m1 + m0) as f64) as f32;
             let (i0, i1) = if i < n1 {
-                (w0p + i as f32 * (w0 - w0p) / n1 as f32, w1p + i as f32 * (w1 - w1p) / n1 as f32)
+                (
+                    w0p + i as f32 * (w0 - w0p) / n1 as f32,
+                    w1p + i as f32 * (w1 - w1p) / n1 as f32,
+                )
             } else {
                 (w0, w1)
             };
@@ -666,7 +756,14 @@ impl Silk {
     }
 
     /// `ff_silk_decode_superframe`. Returns the samples per channel written.
-    pub fn decode_superframe(&mut self, rc: &mut Rc, out: &mut [Vec<f32>; 2], bandwidth: usize, coded_channels: usize, duration_ms: usize) -> Result<usize, String> {
+    pub fn decode_superframe(
+        &mut self,
+        rc: &mut Rc,
+        out: &mut [Vec<f32>; 2],
+        bandwidth: usize,
+        coded_channels: usize,
+        duration_ms: usize,
+    ) -> Result<usize, String> {
         if bandwidth > 2 || coded_channels > 2 || duration_ms > 60 {
             return Err("Invalid parameters passed to the SILK decoder.".into());
         }
@@ -690,13 +787,21 @@ impl Silk {
         }
         for i in 0..coded_channels {
             if redundancy[i] != 0 && duration_ms > 20 {
-                redundancy[i] = rc.dec_cdf(if duration_ms == 40 { &SILK_MODEL_LBRR_FLAGS_40 } else { &SILK_MODEL_LBRR_FLAGS_60 });
+                redundancy[i] = rc.dec_cdf(if duration_ms == 40 {
+                    &SILK_MODEL_LBRR_FLAGS_40
+                } else {
+                    &SILK_MODEL_LBRR_FLAGS_60
+                });
             }
         }
         for i in 0..nb_frames {
             for j in 0..coded_channels {
                 if redundancy[j] & (1 << i) != 0 {
-                    let active1 = if j == 0 && redundancy[1] & (1 << i) == 0 { 0 } else { 1 };
+                    let active1 = if j == 0 && redundancy[1] & (1 << i) == 0 {
+                        0
+                    } else {
+                        1
+                    };
                     self.decode_frame(rc, i, j, coded_channels, 1, active1, true);
                 }
             }
@@ -719,11 +824,15 @@ impl Silk {
             }
             if coded_channels == 1 || self.output_channels == 1 {
                 for j in 0..self.output_channels {
-                    out[j][i * fl..(i + 1) * fl].copy_from_slice(&self.frame[0].output[HISTORY - fl - 2..HISTORY - 2]);
+                    out[j][i * fl..(i + 1) * fl]
+                        .copy_from_slice(&self.frame[0].output[HISTORY - fl - 2..HISTORY - 2]);
                 }
             } else {
                 let (a, b) = out.split_at_mut(1);
-                self.unmix_ms(&mut a[0][i * fl..(i + 1) * fl], &mut b[0][i * fl..(i + 1) * fl]);
+                self.unmix_ms(
+                    &mut a[0][i * fl..(i + 1) * fl],
+                    &mut b[0][i * fl..(i + 1) * fl],
+                );
             }
             self.midonly = false;
         }

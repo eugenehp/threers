@@ -15,7 +15,7 @@
 //! in every model here, and that is the whole reason it is worth stating.
 
 use threers::openscad::animate::{ScadCamera, ScadRender};
-use threers_mechanism_tour::{model, Tour, MODELS};
+use threers_mechanism_tour::{model, Model, Tour, MODELS};
 
 /// The page's own default view, in degrees.
 const YAW: f32 = -51.6;
@@ -38,7 +38,7 @@ fn main() {
             continue;
         }
         let Some(m) = model(m.id) else { continue };
-        let tour = match Tour::run(m.source, m.settings()) {
+        let tour = match Tour::run(m.source, m.frames, m.fps, m.units_per_metre, m.substeps) {
             Ok(t) => t,
             Err(e) => {
                 println!("{}: {e}", m.id);
@@ -48,8 +48,8 @@ fn main() {
         // The pose track is what the solver produced; re-run it here only to
         // pick the one frame we want to look at.
         let frame = ((when * tour.fps as f32) as usize).min(tour.frames - 1);
-        let evaluated = match rebuild(m.source, m.settings(), frame) {
-            Ok(parts) => parts,
+        let evaluated = match rebuild(m, frame) {
+            Ok(evaluated) => evaluated,
             Err(e) => {
                 println!("{}: {e}", m.id);
                 continue;
@@ -76,21 +76,14 @@ fn main() {
 }
 
 /// One frame of the run, as placed solids the renderer can take.
-fn rebuild(
-    source: &str,
-    set: threers_mechanism_tour::Settings,
-    frame: usize,
-) -> Result<Vec<threers::openscad::ScadPart>, String> {
-    let spec = threers::parse_scad_mechanism(source)?;
+fn rebuild(m: &Model, frame: usize) -> Result<threers::openscad::frame::ScadFrame, String> {
+    let spec = threers::parse_scad_mechanism(m.source)?;
     let mut mech = threers_physics::mechanism::ScadMechanism::from_spec(&spec)
         .map_err(|e| format!("{e}"))?
-        .frames(set.frames)
-        .fps(set.fps)
-        .units(set.units_per_metre);
-    if let Some(rate) = set.rate {
-        mech = mech.physics_rate(rate);
-    }
-    mech.world.substeps = set.substeps;
+        .frames(m.frames)
+        .fps(m.fps)
+        .units(m.units_per_metre);
+    mech.world.substeps = m.substeps;
     let track = mech.record();
     Ok(track.frame(frame.min(track.frames().saturating_sub(1))))
 }

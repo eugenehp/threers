@@ -13,22 +13,58 @@ const O153: u8 = 5;
 
 type Cb = [(u8, u8, u8); 16];
 const CB_HGTW: Cb = [
-    (O27, 4, 4), (O63, 4, 4), (O117, 4, 4), (O153, 4, 4),
-    (HOR, 4, 2), (HOR, 4, 4), (HOR, 4, 6), (VER, 4, 4),
-    (O27, 4, 2), (O27, 4, 6), (O153, 4, 2), (O153, 4, 6),
-    (O63, 2, 4), (O63, 6, 4), (O117, 2, 4), (O117, 6, 4),
+    (O27, 4, 4),
+    (O63, 4, 4),
+    (O117, 4, 4),
+    (O153, 4, 4),
+    (HOR, 4, 2),
+    (HOR, 4, 4),
+    (HOR, 4, 6),
+    (VER, 4, 4),
+    (O27, 4, 2),
+    (O27, 4, 6),
+    (O153, 4, 2),
+    (O153, 4, 6),
+    (O63, 2, 4),
+    (O63, 6, 4),
+    (O117, 2, 4),
+    (O117, 6, 4),
 ];
 const CB_HLTW: Cb = [
-    (O27, 4, 4), (O63, 4, 4), (O117, 4, 4), (O153, 4, 4),
-    (VER, 2, 4), (VER, 4, 4), (VER, 6, 4), (HOR, 4, 4),
-    (O27, 4, 2), (O27, 4, 6), (O153, 4, 2), (O153, 4, 6),
-    (O63, 2, 4), (O63, 6, 4), (O117, 2, 4), (O117, 6, 4),
+    (O27, 4, 4),
+    (O63, 4, 4),
+    (O117, 4, 4),
+    (O153, 4, 4),
+    (VER, 2, 4),
+    (VER, 4, 4),
+    (VER, 6, 4),
+    (HOR, 4, 4),
+    (O27, 4, 2),
+    (O27, 4, 6),
+    (O153, 4, 2),
+    (O153, 4, 6),
+    (O63, 2, 4),
+    (O63, 6, 4),
+    (O117, 2, 4),
+    (O117, 6, 4),
 ];
 const CB_HEQW: Cb = [
-    (O27, 4, 4), (O63, 4, 4), (O117, 4, 4), (O153, 4, 4),
-    (HOR, 4, 2), (HOR, 4, 6), (VER, 2, 4), (VER, 6, 4),
-    (O27, 4, 2), (O27, 4, 6), (O153, 4, 2), (O153, 4, 6),
-    (O63, 2, 4), (O63, 6, 4), (O117, 2, 4), (O117, 6, 4),
+    (O27, 4, 4),
+    (O63, 4, 4),
+    (O117, 4, 4),
+    (O153, 4, 4),
+    (HOR, 4, 2),
+    (HOR, 4, 6),
+    (VER, 2, 4),
+    (VER, 6, 4),
+    (O27, 4, 2),
+    (O27, 4, 6),
+    (O153, 4, 2),
+    (O153, 4, 6),
+    (O63, 2, 4),
+    (O63, 6, 4),
+    (O117, 2, 4),
+    (O117, 6, 4),
 ];
 
 pub struct Masks {
@@ -93,7 +129,10 @@ fn init_chroma(luma: &[u8], sign: i32, w: usize, h: usize, ss_ver: usize) -> Vec
 }
 
 fn build_nondc_ii(w: usize, h: usize, step: usize) -> [Vec<u8>; 3] {
-    const W1D: [u8; 32] = [60, 52, 45, 39, 34, 30, 26, 22, 19, 17, 15, 13, 11, 10, 8, 7, 6, 6, 5, 4, 4, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1];
+    const W1D: [u8; 32] = [
+        60, 52, 45, 39, 34, 30, 26, 22, 19, 17, 15, 13, 11, 10, 8, 7, 6, 6, 5, 4, 4, 3, 3, 2, 2, 2,
+        2, 1, 1, 1, 1, 1,
+    ];
     let mut v = vec![0u8; w * h];
     let mut hm = vec![0u8; w * h];
     let mut sm = vec![0u8; w * h];
@@ -115,13 +154,25 @@ pub fn masks() -> &'static Masks {
         let border_vert = [0, 2, 7, 21, 43, 57, 62, 64];
         let mut master: Vec<Vec<u8>> = vec![vec![0u8; 64 * 64]; 6];
         for y in 0..64 {
-            insert_border(&mut master[VER as usize][y * 64..y * 64 + 64], &border_vert, 32);
+            insert_border(
+                &mut master[VER as usize][y * 64..y * 64 + 64],
+                &border_vert,
+                32,
+            );
         }
         let mut ctr = 48;
         let mut y = 0;
         while y < 64 {
-            insert_border(&mut master[O63 as usize][y * 64..y * 64 + 64], &border_even, ctr);
-            insert_border(&mut master[O63 as usize][(y + 1) * 64..(y + 1) * 64 + 64], &border_odd, ctr - 1);
+            insert_border(
+                &mut master[O63 as usize][y * 64..y * 64 + 64],
+                &border_even,
+                ctr,
+            );
+            insert_border(
+                &mut master[O63 as usize][(y + 1) * 64..(y + 1) * 64 + 64],
+                &border_odd,
+                ctr - 1,
+            );
             y += 2;
             ctr -= 1;
         }
@@ -132,7 +183,8 @@ pub fn masks() -> &'static Masks {
 
         let nb = BS_8X8 - BS_32X32 + 1;
         let empty = || -> [[Vec<u8>; 16]; 2] { Default::default() };
-        let mut wedge: Vec<Vec<[[Vec<u8>; 16]; 2]>> = (0..3).map(|_| (0..nb).map(|_| empty()).collect()).collect();
+        let mut wedge: Vec<Vec<[[Vec<u8>; 16]; 2]>> =
+            (0..3).map(|_| (0..nb).map(|_| empty()).collect()).collect();
         let fills: [(usize, usize, usize, &Cb, u32); 9] = [
             (32, 32, BS_32X32, &CB_HEQW, 0x7bfb),
             (32, 16, BS_32X16, &CB_HLTW, 0x7beb),
@@ -171,7 +223,9 @@ pub fn masks() -> &'static Masks {
                 signs >>= 1;
             }
         }
-        let mut ii: Vec<Vec<[Vec<u8>; 4]>> = (0..3).map(|_| (0..nb).map(|_| Default::default()).collect()).collect();
+        let mut ii: Vec<Vec<[Vec<u8>; 4]>> = (0..3)
+            .map(|_| (0..nb).map(|_| Default::default()).collect())
+            .collect();
         let dc = vec![32u8; 32 * 32];
         let nd = |w, h, s| build_nondc_ii(w, h, s);
         let n32x32 = nd(32, 32, 1);
@@ -211,7 +265,13 @@ pub fn wedge_mask(c: usize, bs: usize, sign: usize, idx: usize) -> &'static [u8]
 }
 
 /// `II_MASK(c, bs, b)`.
-pub fn ii_mask(c: usize, bs: usize, interintra_type: u8, interintra_mode: u8, wedge_idx: u8) -> &'static [u8] {
+pub fn ii_mask(
+    c: usize,
+    bs: usize,
+    interintra_type: u8,
+    interintra_mode: u8,
+    wedge_idx: u8,
+) -> &'static [u8] {
     if interintra_type == INTER_INTRA_BLEND {
         &masks().ii[c][bs - BS_32X32][interintra_mode as usize]
     } else {

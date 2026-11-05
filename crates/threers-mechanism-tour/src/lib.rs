@@ -14,9 +14,10 @@
 use std::fmt::Write as _;
 
 use threers::assembly as geo;
+use threers::math::Vector3;
 use threers::openscad::mechanism::{MateSpecKind, MechanismSpec};
 use threers::openscad::ScadPart;
-use threers_physics::assembly::Assembly;
+use threers_physics::assembly::{Assembly, MateKind, Part};
 use threers_physics::mechanism::{PoseTrack, ScadMechanism, Tolerance};
 use threers_physics::verify::Verify;
 
@@ -55,16 +56,8 @@ impl Piece {
         let mut positions = Vec::with_capacity(tris.len() * 9);
         let mut normals = Vec::with_capacity(tris.len() * 9);
         for t in &tris {
-            let e1 = [
-                t[1][0] - t[0][0],
-                t[1][1] - t[0][1],
-                t[1][2] - t[0][2],
-            ];
-            let e2 = [
-                t[2][0] - t[0][0],
-                t[2][1] - t[0][1],
-                t[2][2] - t[0][2],
-            ];
+            let e1 = [t[1][0] - t[0][0], t[1][1] - t[0][1], t[1][2] - t[0][2]];
+            let e2 = [t[2][0] - t[0][0], t[2][1] - t[0][1], t[2][2] - t[0][2]];
             let mut n = [
                 e1[1] * e2[2] - e1[2] * e2[1],
                 e1[2] * e2[0] - e1[0] * e2[2],
@@ -140,6 +133,185 @@ impl JointBuild {
     pub fn built(&self) -> bool {
         self.gap <= self.fit
     }
+}
+
+/// A triangle's closest point to `p`, after Ericson, *Real-Time Collision Detection*.
+fn closest_on_triangle(p: Vector3, [a, b, c]: [Vector3; 3]) -> Vector3 {
+    let (ab, ac, ap) = (b - a, c - a, p - a);
+    let (d1, d2) = (ab.dot(ap), ac.dot(ap));
+    if d1 <= 0.0 && d2 <= 0.0 {
+        return a;
+    }
+    let bp = p - b;
+    let (d3, d4) = (ab.dot(bp), ac.dot(bp));
+    if d3 >= 0.0 && d4 <= d3 {
+        return b;
+    }
+    let vc = d1 * d4 - d3 * d2;
+    if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
+        return a + ab * (d1 / (d1 - d3));
+    }
+    let cp = p - c;
+    let (d5, d6) = (ab.dot(cp), ac.dot(cp));
+    if d6 >= 0.0 && d5 <= d6 {
+        return c;
+    }
+    let vb = d5 * d2 - d1 * d6;
+    if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 {
+        return a + ac * (d2 / (d2 - d6));
+    }
+    let va = d3 * d6 - d5 * d4;
+    if va <= 0.0 && d4 >= d3 && d5 >= d6 {
+        return b + (c - b) * ((d4 - d3) / ((d4 - d3) + (d5 - d6)));
+    }
+    let scale = 1.0 / (va + vb + vc);
+    a + ab * (vb * scale) + ac * (vc * scale)
+}
+
+/// A part's triangles where the assembly has placed them.
+fn world_triangles(part: &Part) -> Vec<[Vector3; 3]> {
+    let Some(geometry) = &part.geometry else {
+        return Vec::new();
+    };
+    geo::from_geometry(geometry)
+        .iter()
+        .map(|t| {
+            t.map(|[x, y, z]| {
+                part.transform
+                    .transform_point(Vector3::new(x as f32, y as f32, z as f32))
+            })
+        })
+        .collect()
+}
+
+/// How far `point` is from the line through `origin` along unit `direction`.
+fn off_line(point: Vector3, origin: Vector3, direction: Vector3) -> f32 {
+    let along = point - origin;
+    (along - direction * along.dot(direction)).length()
+}
+
+/// Whether a point is inside a closed mesh: an odd number of crossings along a ray.
+/// The ray is off every axis, so it does not run along a model's edges.
+fn inside(point: Vector3, mesh: &[&[Vector3; 3]]) -> bool {
+    let ray = Vector3::new(0.5773, 0.5801, 0.5744);
+    let crossings = mesh
+        .iter()
+        .filter(|[a, b, c]| {
+            // Moller-Trumbore, from `point` along `ray`.
+            let (e1, e2) = (*b - *a, *c - *a);
+            let h = ray.cross(e2);
+            let det = e1.dot(h);
+            if det.abs() < 1e-9 {
+                return false;
+            }
+            let s = point - *a;
+            let u = s.dot(h) / det;
+            let q = s.cross(e1);
+            let v = ray.dot(q) / det;
+            u >= 0.0 && v >= 0.0 && u + v <= 1.0 && e2.dot(q) / det > 0.0
+        })
+        .count();
+    crossings % 2 == 1
+}
+
+/// The closest approach of two parts near a line, and how far off it that was. A
+/// point inside the other part is touching it, whatever its distance to the surface:
+/// a pin lives inside both halves of the joint it makes.
+fn closest_near(
+    from: &[[Vector3; 3]],
+    to: &[[Vector3; 3]],
+    origin: Vector3,
+    direction: Vector3,
+    reach: f32,
+) -> (f32, f32) {
+    let near = |t: &&[Vector3; 3]| t.iter().any(|v| off_line(*v, origin, direction) <= reach);
+    let targets: Vec<_> = to.iter().filter(near).collect();
+    let whole: Vec<_> = to.iter().collect();
+    let mut best = (f32::MAX, 0.0);
+    for point in from.iter().filter(near).flatten() {
+        if inside(*point, &whole) {
+            return (0.0, off_line(*point, origin, direction));
+        }
+        for triangle in &targets {
+            let gap = (closest_on_triangle(*point, **triangle) - *point).length();
+            if gap < best.0 {
+                best = (gap, off_line(*point, origin, direction));
+            }
+        }
+    }
+    best
+}
+
+/// Measure, for every joint a model declares, whether its two parts actually meet
+/// there: whether something was drawn where the declaration says it turns.
+///
+/// Couplings are left out, since a gear ratio joins two axes that something else
+/// holds, and the parts it joins need not touch at any line of their own.
+///
+/// # Errors
+///
+/// If the model cannot be read or assembled.
+pub fn joints_built(source: &str) -> Result<Vec<JointBuild>, String> {
+    let spec = threers::parse_scad_mechanism(source)
+        .map_err(|e| format!("could not read the model: {e}"))?;
+    let mut asm =
+        Assembly::from_scad(&spec).map_err(|e| format!("the declarations do not line up: {e}"))?;
+    asm.solve()
+        .map_err(|e| format!("the model and its declarations disagree: {e}"))?;
+
+    let triangles: Vec<Vec<[Vector3; 3]>> = asm.parts().iter().map(world_triangles).collect();
+    let mut low = Vector3::new(f32::MAX, f32::MAX, f32::MAX);
+    let mut high = low * -1.0;
+    for vertex in triangles.iter().flatten().flatten() {
+        low = Vector3::new(
+            low.x.min(vertex.x),
+            low.y.min(vertex.y),
+            low.z.min(vertex.z),
+        );
+        high = Vector3::new(
+            high.x.max(vertex.x),
+            high.y.max(vertex.y),
+            high.z.max(vertex.z),
+        );
+    }
+    let size = (high - low).length();
+    // A clearance fit, and how far from the axis a stem or a guide can sit.
+    let (fit, reach) = (size * 0.005, size * 0.2);
+
+    let mut built = Vec::new();
+    for mate in asm.mates() {
+        if matches!(mate.kind, MateKind::Gear { .. } | MateKind::Rack { .. }) {
+            continue;
+        }
+        let (a, b) = (mate.a.part, mate.b.part);
+        let (Some(part_a), Some(part_b)) = (asm.part_of(a), asm.part_of(b)) else {
+            continue;
+        };
+        let origin = part_a.transform.transform_point(mate.a.origin());
+        let direction = mate
+            .a
+            .direction()
+            .map(|d| part_a.transform.transform_vector(d).normalize())
+            .unwrap_or(Vector3::new(0.0, 0.0, 1.0));
+        let (ta, tb) = (&triangles[a.index()], &triangles[b.index()]);
+        let one_way = closest_near(ta, tb, origin, direction, reach);
+        let other_way = closest_near(tb, ta, origin, direction, reach);
+        let (gap, off_axis) = if one_way.0 <= other_way.0 {
+            one_way
+        } else {
+            other_way
+        };
+        let kind = format!("{:?}", mate.kind);
+        built.push(JointBuild {
+            name: mate.name.clone(),
+            kind: kind.split([' ', '{']).next().unwrap_or("").to_owned(),
+            parts: vec![part_a.name.clone(), part_b.name.clone()],
+            gap,
+            off_axis,
+            fit,
+        });
+    }
+    Ok(built)
 }
 
 /// The numbers the page puts in its header, rather than in the transcript.

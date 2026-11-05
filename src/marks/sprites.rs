@@ -1,7 +1,7 @@
 //! Icons from an atlas, one per row.
 
-use super::gpu;
 use super::atlas::{AtlasRect, SharedAtlas};
+use super::gpu;
 use super::{Column, ColumnFormat, KindUniforms, Mark, MarkCommon, MarkKind, PrepareContext};
 
 /// The view, collision generation, content version and box settings
@@ -44,7 +44,11 @@ pub struct SpriteSdf {
 
 impl Default for SpriteSdf {
     fn default() -> Self {
-        Self { edge: 0.5, smoothing: None, outline: None }
+        Self {
+            edge: 0.5,
+            smoothing: None,
+            outline: None,
+        }
     }
 }
 
@@ -179,7 +183,9 @@ impl SpriteMarks {
             follow: None,
             shown: {
                 let mut c = Column::new(ColumnFormat::Float4x4);
-                c.set_default_f32(&[1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
+                c.set_default_f32(&[
+                    1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                ]);
                 c
             },
             shown_rows: Vec::new(),
@@ -370,14 +376,25 @@ impl SpriteMarks {
     /// the exact projection does not. Empty for none.
     pub fn set_corner_nudges(&mut self, n: &[[[f32; 2]; 4]]) {
         self.version += 1;
-        self.nudge_rows = n.iter().map(|c| [c[0][0], c[1][0], c[2][0], c[3][0], c[0][1], c[1][1], c[2][1], c[3][1]]).collect();
+        self.nudge_rows = n
+            .iter()
+            .map(|c| {
+                [
+                    c[0][0], c[1][0], c[2][0], c[3][0], c[0][1], c[1][1], c[2][1], c[3][1],
+                ]
+            })
+            .collect();
         self.pack_shown();
     }
 
     /// The visibility, depth and nudge column, from the last placement,
     /// the depth offsets and the nudges.
     fn pack_shown(&mut self) {
-        let n = self.shown_rows.len().max(self.depth_rows.len()).max(self.nudge_rows.len());
+        let n = self
+            .shown_rows
+            .len()
+            .max(self.depth_rows.len())
+            .max(self.nudge_rows.len());
         let packed: Vec<f32> = (0..n)
             .flat_map(|i| {
                 let d = self.depth_rows.get(i).copied().unwrap_or([0.0; 4]);
@@ -465,7 +482,10 @@ impl SpriteMarks {
             let (sn, cs) = a.sin_cos();
             // The image's centre in screen space (y down): the anchor, the
             // row's offset turned with it, then its pixel offset.
-            let local = [size[1] * k - self.anchor[0] * half[0], size[2] * k + self.anchor[1] * half[1]];
+            let local = [
+                size[1] * k - self.anchor[0] * half[0],
+                size[2] * k + self.anchor[1] * half[1],
+            ];
             let c = [
                 p[0] + cs * local[0] + sn * local[1] + turn[1],
                 p[1] - sn * local[0] + cs * local[1] + turn[2],
@@ -537,7 +557,12 @@ impl Mark for SpriteMarks {
             SpriteMode::RoundedBox => 3.0,
         };
         (
-            [mode, self.alpha_cutoff, if self.ground { 1.0 } else { 0.0 }, 0.0],
+            [
+                mode,
+                self.alpha_cutoff,
+                if self.ground { 1.0 } else { 0.0 },
+                0.0,
+            ],
             [
                 self.atlas_size.0 as f32,
                 self.atlas_size.1 as f32,
@@ -551,7 +576,12 @@ impl Mark for SpriteMarks {
     /// (-1: none); or a box's corner radius and border width.
     fn kind_extra(&self) -> [f32; 4] {
         match self.mode {
-            SpriteMode::RoundedBox => [self.box_style.corner_radius, self.box_style.border_width, 0.0, 0.0],
+            SpriteMode::RoundedBox => [
+                self.box_style.corner_radius,
+                self.box_style.border_width,
+                0.0,
+                0.0,
+            ],
             // w: a colour image in a linear atlas holds sRGB bytes, read
             // after filtering as WebGL reads them.
             SpriteMode::Color => [0.0, 0.0, -1.0, if self.atlas_srgb { 0.0 } else { 1.0 }],
@@ -576,8 +606,16 @@ impl Mark for SpriteMarks {
         self.atlas_srgb = self.atlas.read().map_or(true, |a| a.is_srgb());
         if let Some((vis, rows)) = &self.follow {
             let vis = vis.lock().unwrap();
-            let shown: Vec<f32> =
-                rows.iter().map(|&r| if vis.get(r as usize).copied().unwrap_or(false) { 1.0 } else { 0.0 }).collect();
+            let shown: Vec<f32> = rows
+                .iter()
+                .map(|&r| {
+                    if vis.get(r as usize).copied().unwrap_or(false) {
+                        1.0
+                    } else {
+                        0.0
+                    }
+                })
+                .collect();
             drop(vis);
             self.shown_rows = shown;
             self.pack_shown();

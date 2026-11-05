@@ -12,6 +12,24 @@ pub struct Plane {
     pub height: usize,
 }
 
+/// Refuse a picture too large to decode, as an error. A damaged header can
+/// claim any size, and allocation failure aborts: on wasm, with memory capped,
+/// that takes the whole instance down. No level of AV1, H.264, HEVC or VP9
+/// allows more luma samples than this, and the memory for a few such pictures
+/// has to be there before anything is sized from the header.
+pub(crate) fn check_picture_size(width: u32, height: u32) -> Result<(), String> {
+    const MAX_LUMA_SAMPLES: u64 = 35_651_584;
+    let luma = width as u64 * height as u64;
+    if luma > MAX_LUMA_SAMPLES {
+        return Err(format!("{width}x{height} is larger than any level allows"));
+    }
+    // Four 4:4:4 pictures of 16-bit samples.
+    let mut probe = Vec::<u16>::new();
+    probe
+        .try_reserve_exact(luma as usize * 3 * 4)
+        .map_err(|_| format!("not enough memory for {width}x{height} pictures"))
+}
+
 impl Plane {
     /// A `width × height` plane with every sample set to `fill`.
     pub fn new(width: usize, height: usize, fill: u16) -> Self {
@@ -118,7 +136,11 @@ impl ColorInfo {
             _ if height >= 720 => Matrix::Bt709,
             _ => Matrix::Bt601,
         };
-        ColorInfo { matrix, full_range, vui_matrix: matrix_coefficients }
+        ColorInfo {
+            matrix,
+            full_range,
+            vui_matrix: matrix_coefficients,
+        }
     }
 }
 
@@ -158,6 +180,7 @@ impl DecodedFrame {
     }
 
     /// Crop planes out of the coded picture.
+    #[cfg(feature = "decode")]
     pub(crate) fn from_planes(
         planes: &[Plane; 3],
         chroma: ChromaFormat,
@@ -216,37 +239,44 @@ impl DecodedFrame {
 
     /// Convert to tightly packed 8-bit BGRA, alpha 255, with the stream's
     /// matrix and range ([`ColorInfo`]) and bilinear chroma upsampling.
-    /// Large pictures are converted on several threads (not on `wasm32`).
+    /// Large pictures are converted on several threads with `parallel`.
     pub fn to_bgra(&self) -> Vec<u8> {
-        self.to_rgb_order([2, 1, 0])
+        let mut out = Vec::new();
+        self.convert_into::<true>(&mut out);
+        out
     }
 
     /// [`to_bgra`](Self::to_bgra), in RGBA order.
     pub fn to_rgba(&self) -> Vec<u8> {
-        self.to_rgb_order([0, 1, 2])
+        let mut out = Vec::new();
+        self.to_rgba_into(&mut out);
+        out
     }
 
-    fn to_rgb_order(&self, order: [usize; 3]) -> Vec<u8> {
+    /// [`to_rgba`](Self::to_rgba) into `out`, replacing what it holds. Reusing
+    /// one buffer across frames saves allocating and clearing a whole picture
+    /// each time.
+    pub fn to_rgba_into(&self, out: &mut Vec<u8>) {
+        self.convert_into::<false>(out);
+    }
+
+    fn convert_into<const BGR: bool>(&self, out: &mut Vec<u8>) {
         let (w, h) = (self.width as usize, self.height as usize);
-        let mut out = vec![255u8; w * h * 4];
+        out.resize(w * h * 4, 0);
         if w == 0 || h == 0 {
-            return out;
+            return;
         }
         let k = Coefficients::new(self);
-        let threads = conversion_threads(w, h);
-        if threads <= 1 {
-            self.convert_rows(0..h, &mut out, order, &k);
-            return out;
+        let rows_each = rows_per_band(w, h);
+        if rows_each >= h {
+            self.convert_rows::<BGR>(0..h, out, &k);
+            return;
         }
-        let rows_each = h.div_ceil(threads);
-        std::thread::scope(|scope| {
-            for (n, chunk) in out.chunks_mut(rows_each * w * 4).enumerate() {
-                let (k, start) = (&k, n * rows_each);
-                let rows = start..(start + rows_each).min(h);
-                scope.spawn(move || self.convert_rows(rows, chunk, order, k));
-            }
+        let bands: Vec<_> = out.chunks_mut(rows_each * w * 4).enumerate().collect();
+        crate::for_each_owned(bands, |(n, band)| {
+            let start = n * rows_each;
+            self.convert_rows::<BGR>(start..(start + rows_each).min(h), band, &k);
         });
-        out
     }
 
     /// Rows `rows` of the picture into `out`, which holds exactly those rows.
@@ -257,7 +287,16 @@ impl DecodedFrame {
     /// pixel's chroma is a weighted sum scaled by 8 — vertical weights 3:1
     /// (or 4), horizontal 1:1 at odd columns (or 2) — so the arithmetic stays
     /// in integers.
-    fn convert_rows(&self, rows: std::ops::Range<usize>, out: &mut [u8], order: [usize; 3], k: &Coefficients) {
+    ///
+    /// A row's chroma is upsampled first, so the pixel loop has no branches
+    /// and vectorises; on wasm, where this runs on one thread beside the
+    /// decoder, it is otherwise the slowest stage of decoding to RGBA.
+    fn convert_rows<const BGR: bool>(
+        &self,
+        rows: std::ops::Range<usize>,
+        out: &mut [u8],
+        k: &Coefficients,
+    ) {
         let w = self.width as usize;
         let mono = self.chroma == ChromaFormat::Monochrome;
         let (sw, sh) = self.chroma.subsampling();
@@ -267,11 +306,18 @@ impl DecodedFrame {
         // One chroma row, interpolated vertically, scaled by 4, centred on 0.
         let mut ru = vec![0i32; cw];
         let mut rv = vec![0i32; cw];
+        // The same across the picture's width, scaled by 8.
+        let mut cb = vec![0i32; w];
+        let mut cr = vec![0i32; w];
         for (row, y) in rows.enumerate() {
             if !mono {
                 let (a, b) = if sh == 2 {
                     let c = (y / 2).min(ch - 1);
-                    let other = if y % 2 == 0 { c.saturating_sub(1) } else { (c + 1).min(ch - 1) };
+                    let other = if y % 2 == 0 {
+                        c.saturating_sub(1)
+                    } else {
+                        (c + 1).min(ch - 1)
+                    };
                     (c, other)
                 } else {
                     (y.min(ch - 1), y.min(ch - 1))
@@ -283,29 +329,40 @@ impl DecodedFrame {
                     ru[i] = wa * ua[i] as i32 + wb * ub[i] as i32 - 4 * mid;
                     rv[i] = wa * va[i] as i32 + wb * vb[i] as i32 - 4 * mid;
                 }
+                if sw == 2 {
+                    upsample_row(&ru, &mut cb);
+                    upsample_row(&rv, &mut cr);
+                } else {
+                    for x in 0..w {
+                        cb[x] = 2 * ru[x];
+                        cr[x] = 2 * rv[x];
+                    }
+                }
             }
             let luma = &self.y[y * w..][..w];
             let line = &mut out[row * w * 4..][..w * 4];
-            for (x, (px, &l)) in line.chunks_exact_mut(4).zip(luma).enumerate() {
-                let (cb, cr) = if mono {
-                    (0, 0)
-                } else if sw == 2 {
-                    let j = x / 2;
-                    if x % 2 == 0 {
-                        (2 * ru[j], 2 * rv[j])
-                    } else {
-                        let n = (j + 1).min(cw - 1);
-                        (ru[j] + ru[n], rv[j] + rv[n])
-                    }
-                } else {
-                    (2 * ru[x], 2 * rv[x])
-                };
+            let to8 = |v: i32| ((v + (1 << 15)) >> 16).clamp(0, 255) as u32;
+            for (((px, &l), &cb), &cr) in line.chunks_exact_mut(4).zip(luma).zip(&cb).zip(&cr) {
                 let yv = k.y * (l as i32 - k.y_off);
-                let to8 = |v: i32| ((v + (1 << 15)) >> 16).clamp(0, 255) as u8;
-                px[order[0]] = to8(yv + k.rv * cr);
-                px[order[1]] = to8(yv - k.gu * cb - k.gv * cr);
-                px[order[2]] = to8(yv + k.bu * cb);
+                let r = to8(yv + k.rv * cr);
+                let g = to8(yv - k.gu * cb - k.gv * cr);
+                let b = to8(yv + k.bu * cb);
+                let (first, last) = if BGR { (b, r) } else { (r, b) };
+                px.copy_from_slice(&(first | g << 8 | last << 16 | 255 << 24).to_le_bytes());
             }
+        }
+    }
+}
+
+/// `row`, sited on even columns, across twice the width: each even column as
+/// it is and doubled, each odd one the sum of its neighbours. The picture's
+/// last column may be even and past the last pair.
+fn upsample_row(row: &[i32], out: &mut [i32]) {
+    let last = row.len() - 1;
+    for (j, pair) in out.chunks_mut(2).enumerate() {
+        pair[0] = 2 * row[j];
+        if let Some(odd) = pair.get_mut(1) {
+            *odd = row[j] + row[(j + 1).min(last)];
         }
     }
 }
@@ -352,21 +409,27 @@ impl Coefficients {
     }
 }
 
-/// How many threads to convert a `w × h` picture on: one for small
-/// pictures, where starting threads costs more than it saves, and always one
-/// on `wasm32`, which has none.
-fn conversion_threads(w: usize, h: usize) -> usize {
-    if cfg!(target_family = "wasm") || w * h < 1 << 17 {
-        return 1;
+/// Rows to convert at a time on the thread pool: enough that a band outweighs
+/// handing it over, and all of a small picture.
+fn rows_per_band(w: usize, h: usize) -> usize {
+    if !crate::threaded() || w * h < 1 << 17 {
+        return h;
     }
-    std::thread::available_parallelism().map_or(1, |n| n.get()).min(8).min(h / 16).max(1)
+    ((1 << 16) / w).max(8)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn frame(w: u32, h: u32, y: Vec<u16>, u: Vec<u16>, v: Vec<u16>, matrix: Matrix) -> DecodedFrame {
+    fn frame(
+        w: u32,
+        h: u32,
+        y: Vec<u16>,
+        u: Vec<u16>,
+        v: Vec<u16>,
+        matrix: Matrix,
+    ) -> DecodedFrame {
         DecodedFrame {
             width: w,
             height: h,
@@ -375,7 +438,11 @@ mod tests {
             y,
             u,
             v,
-            color: ColorInfo { matrix, full_range: false, vui_matrix: None },
+            color: ColorInfo {
+                matrix,
+                full_range: false,
+                vui_matrix: None,
+            },
         }
     }
 
@@ -383,11 +450,25 @@ mod tests {
     fn flat_colours_convert_like_the_formula() {
         // BT.601 limited: (81, 90, 240) is pure red, (16, 128, 128) black,
         // (235, 128, 128) white.
-        for (yuv, rgb) in [((81, 90, 240), [255, 0, 0]), ((16, 128, 128), [0, 0, 0]), ((235, 128, 128), [255, 255, 255])] {
-            let f = frame(4, 4, vec![yuv.0; 16], vec![yuv.1; 4], vec![yuv.2; 4], Matrix::Bt601);
+        for (yuv, rgb) in [
+            ((81, 90, 240), [255, 0, 0]),
+            ((16, 128, 128), [0, 0, 0]),
+            ((235, 128, 128), [255, 255, 255]),
+        ] {
+            let f = frame(
+                4,
+                4,
+                vec![yuv.0; 16],
+                vec![yuv.1; 4],
+                vec![yuv.2; 4],
+                Matrix::Bt601,
+            );
             for px in f.to_rgba().chunks_exact(4) {
                 for c in 0..3 {
-                    assert!((px[c] as i32 - rgb[c]).abs() <= 1, "{yuv:?} → {px:?}, want {rgb:?}");
+                    assert!(
+                        (px[c] as i32 - rgb[c]).abs() <= 1,
+                        "{yuv:?} → {px:?}, want {rgb:?}"
+                    );
                 }
                 assert_eq!(px[3], 255);
             }
@@ -400,7 +481,14 @@ mod tests {
         // and 2–3). Column 1 sits halfway: its blue is between its
         // neighbours', not equal to one of them.
         let (w, h) = (4u32, 2u32);
-        let f = frame(w, h, vec![128; 8], vec![128, 228], vec![128, 128], Matrix::Bt709);
+        let f = frame(
+            w,
+            h,
+            vec![128; 8],
+            vec![128, 228],
+            vec![128, 128],
+            Matrix::Bt709,
+        );
         let bgra = f.to_bgra();
         let blue: Vec<u8> = (0..w as usize).map(|x| bgra[x * 4]).collect();
         assert!(blue[0] < blue[1] && blue[1] < blue[2], "{blue:?}");
@@ -415,9 +503,98 @@ mod tests {
         let u: Vec<u16> = (0..n / 4).map(|i| (i * 13 % 224 + 16) as u16).collect();
         let v: Vec<u16> = (0..n / 4).map(|i| (i * 29 % 224 + 16) as u16).collect();
         let f = frame(w, h, y, u, v, Matrix::Bt709);
-        assert!(conversion_threads(w as usize, h as usize) > 1 || cfg!(target_family = "wasm") || std::thread::available_parallelism().map_or(true, |p| p.get() == 1));
+        assert!(rows_per_band(w as usize, h as usize) < h as usize || !crate::threaded());
         let mut single = vec![255u8; n * 4];
-        f.convert_rows(0..h as usize, &mut single, [2, 1, 0], &Coefficients::new(&f));
+        f.convert_rows::<true>(0..h as usize, &mut single, &Coefficients::new(&f));
         assert!(f.to_bgra() == single);
+    }
+
+    /// The conversion pixel by pixel, as it reads in the definition: the
+    /// reference for the vectorised rows.
+    fn reference_rgba(f: &DecodedFrame) -> Vec<u8> {
+        let k = Coefficients::new(f);
+        let (w, h) = (f.width as usize, f.height as usize);
+        let mono = f.chroma == ChromaFormat::Monochrome;
+        let (sw, sh) = f.chroma.subsampling();
+        let (cw, ch) = f.chroma_size();
+        let (cw, ch) = (cw as usize, ch as usize);
+        let to8 = |v: i32| ((v + (1 << 15)) >> 16).clamp(0, 255) as u8;
+        let mut out = vec![255u8; w * h * 4];
+        for y in 0..h {
+            for x in 0..w {
+                let (mut cb, mut cr) = (0, 0);
+                if !mono {
+                    let (a, b) = if sh == 2 {
+                        let c = (y / 2).min(ch - 1);
+                        (
+                            c,
+                            if y % 2 == 0 {
+                                c.saturating_sub(1)
+                            } else {
+                                (c + 1).min(ch - 1)
+                            },
+                        )
+                    } else {
+                        (y.min(ch - 1), y.min(ch - 1))
+                    };
+                    let (wa, wb) = if sh == 2 { (3, 1) } else { (4, 0) };
+                    let vert = |p: &[u16], i: usize| {
+                        wa * p[a * cw + i] as i32 + wb * p[b * cw + i] as i32 - 4 * k.c_mid
+                    };
+                    (cb, cr) = if sw == 2 && x % 2 == 1 {
+                        let (j, n) = (x / 2, (x / 2 + 1).min(cw - 1));
+                        (vert(&f.u, j) + vert(&f.u, n), vert(&f.v, j) + vert(&f.v, n))
+                    } else {
+                        let j = if sw == 2 { x / 2 } else { x };
+                        (2 * vert(&f.u, j), 2 * vert(&f.v, j))
+                    };
+                }
+                let yv = k.y * (f.y[y * w + x] as i32 - k.y_off);
+                let px = &mut out[(y * w + x) * 4..][..3];
+                px[0] = to8(yv + k.rv * cr);
+                px[1] = to8(yv - k.gu * cb - k.gv * cr);
+                px[2] = to8(yv + k.bu * cb);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn rows_match_the_per_pixel_definition() {
+        let mut x = 0x9e37_79b9u32;
+        let mut rnd = move |n: u32| {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            x % n
+        };
+        for chroma in [
+            ChromaFormat::Yuv420,
+            ChromaFormat::Yuv422,
+            ChromaFormat::Yuv444,
+            ChromaFormat::Monochrome,
+        ] {
+            for bit_depth in [8u8, 10, 12] {
+                for (w, h) in [(1, 1), (2, 2), (3, 5), (17, 9), (64, 33), (333, 21)] {
+                    let mut f = frame(w, h, Vec::new(), Vec::new(), Vec::new(), Matrix::Bt709);
+                    (f.chroma, f.bit_depth) = (chroma, bit_depth);
+                    let (cw, ch) = f.chroma_size();
+                    let max = 1u32 << bit_depth;
+                    f.y = (0..w * h).map(|_| rnd(max) as u16).collect();
+                    f.u = (0..cw * ch).map(|_| rnd(max) as u16).collect();
+                    f.v = (0..cw * ch).map(|_| rnd(max) as u16).collect();
+                    let want = reference_rgba(&f);
+                    assert!(f.to_rgba() == want, "{chroma:?} {bit_depth}-bit {w}x{h}");
+                    let bgr: Vec<u8> = want
+                        .chunks(4)
+                        .flat_map(|p| [p[2], p[1], p[0], p[3]])
+                        .collect();
+                    assert!(
+                        f.to_bgra() == bgr,
+                        "{chroma:?} {bit_depth}-bit {w}x{h} BGRA"
+                    );
+                }
+            }
+        }
     }
 }

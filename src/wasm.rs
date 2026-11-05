@@ -40,6 +40,7 @@ mod generators;
 mod gltf;
 // Scene data behind the shim's Box3 / Sphere / Frustum: geometry and vertex bounds.
 mod math;
+mod mesh_builder;
 mod mesh_state;
 // The shim's scene-graph mirror: nodes, structure, raycasting, DragControls.
 mod scene_graph;
@@ -53,6 +54,44 @@ pub use time_smear::WebTimeSmear;
 // Post-processing: the composer and its passes.
 mod postfx;
 pub use postfx::{WebEffectComposer, WebPass};
+
+/// A lazy renderer's pipelines, to be built from a page's event loop. Hold it
+/// past the renderer's own borrow: awaiting `run()` does not lock the renderer.
+#[wasm_bindgen]
+pub struct WebWarmup(crate::renderer::PipelineWarmup);
+
+#[wasm_bindgen]
+impl WebWarmup {
+    /// How many pipelines the job builds.
+    #[wasm_bindgen(getter)]
+    pub fn total(&self) -> u32 {
+        self.0.len() as u32
+    }
+
+    /// How many are built so far.
+    #[wasm_bindgen(getter)]
+    pub fn built(&self) -> u32 {
+        self.0.progress().0 as u32
+    }
+
+    /// Build the pipelines one after another, yielding to the browser between
+    /// them. Resolves with the count built; rejects with the validation
+    /// errors, one per line, if any pipeline was rejected.
+    pub async fn run(&self) -> Result<u32, JsValue> {
+        let mut built = 0;
+        while self.0.step_async().await {
+            built += 1;
+            yield_to_event_loop().await;
+        }
+        let errors = self.0.errors();
+        if errors.is_empty() {
+            Ok(built)
+        } else {
+            let lines: Vec<String> = errors.iter().map(|e| e.to_string()).collect();
+            Err(JsValue::from_str(&lines.join("\n")))
+        }
+    }
+}
 
 /// Top-level WebGPU renderer bound to a canvas element. The constructor is
 /// async because adapter/device acquisition is async on the web.
@@ -409,7 +448,7 @@ pub async fn open_browser_gpu(
 }
 
 #[cfg(target_arch = "wasm32")]
-async fn acquire_browser_gpu(
+pub async fn acquire_browser_gpu(
     adapter: &wgpu::Adapter,
 ) -> Result<(Arc<wgpu::Device>, Arc<wgpu::Queue>), JsValue> {
     // Shared across canvases on WebGPU, where `requestAdapter` + `requestDevice`
@@ -525,7 +564,7 @@ impl WebRenderTarget {
 }
 
 /// Prefer alpha compositing modes that preserve a transparent canvas.
-fn pick_surface_alpha_mode(modes: &[wgpu::CompositeAlphaMode]) -> wgpu::CompositeAlphaMode {
+pub fn pick_surface_alpha_mode(modes: &[wgpu::CompositeAlphaMode]) -> wgpu::CompositeAlphaMode {
     for preferred in [
         wgpu::CompositeAlphaMode::PreMultiplied,
         wgpu::CompositeAlphaMode::PostMultiplied,
@@ -601,6 +640,30 @@ impl WebRenderer {
 impl WebRenderer {
     /// Async factory. Pass an HTMLCanvasElement and the renderer attaches to it.
     pub async fn new(canvas: web_sys::HtmlCanvasElement) -> Result<WebRenderer, JsValue> {
+        Self::create(canvas, false).await
+    }
+
+    /// [`new`](Self::new) with the pipelines built on first use instead of in
+    /// the constructor, which returns much sooner. Call
+    /// [`warm_up`](Self::warm_up) and await its `run()` while a loading state
+    /// shows, or the first frames stall as the browser compiles.
+    #[wasm_bindgen(js_name = newLazy)]
+    pub async fn new_lazy(canvas: web_sys::HtmlCanvasElement) -> Result<WebRenderer, JsValue> {
+        Self::create(canvas, true).await
+    }
+
+    /// The pipelines a lazy renderer has not built yet, as a job. Awaiting
+    /// its `run()` builds them and reports validation errors (a browser
+    /// cannot block on them). Empty for an eager renderer.
+    #[wasm_bindgen(js_name = warmUp)]
+    pub fn warm_up(&self) -> WebWarmup {
+        WebWarmup(self.renderer.warm_up())
+    }
+
+    async fn create(
+        canvas: web_sys::HtmlCanvasElement,
+        lazy: bool,
+    ) -> Result<WebRenderer, JsValue> {
         console_error_panic_hook::set_once();
         install_console_logger();
 
@@ -634,8 +697,11 @@ impl WebRenderer {
         };
         surface.configure(&device, &config);
 
-        let renderer =
-            crate::Renderer::new(device.clone(), queue.clone(), surface_format, width, height);
+        let renderer = if lazy {
+            crate::Renderer::new_lazy(device.clone(), queue.clone(), surface_format, width, height)
+        } else {
+            crate::Renderer::new(device.clone(), queue.clone(), surface_format, width, height)
+        };
         // Continue construction below — see existing return statement.
 
         Ok(WebRenderer {
@@ -7975,6 +8041,91 @@ pub fn encode_mp4_rgba(
         256,
         &frames,
     )
+}
+
+/// `initThreadPool(n)`: start `n` threads, once, before anything that uses
+/// them. Blocking calls such as `decodeVideo` must then run in a Worker, as a
+/// browser will not let its main thread wait, and the page must be
+/// cross-origin isolated (COOP and COEP headers) for `SharedArrayBuffer`.
+#[cfg(all(target_arch = "wasm32", feature = "wasm-threads"))]
+pub use wasm_bindgen_rayon::init_thread_pool;
+
+/// Decode a video file to RGBA frames (`native-decode` feature): MP4/MOV
+/// (H.264, HEVC, AV1), WebM (VP9, AV1), IVF (VP9, AV1), or a raw H.264/HEVC
+/// Annex B stream. Returns `{ width, height, time, data }` per frame in
+/// display order, where `data` is a `Uint8ClampedArray` ready for
+/// `new ImageData(data, width, height)` and `time` is seconds from the first
+/// frame (`undefined` for raw streams, which carry no timing).
+///
+/// Every frame is held at once, about 8 MB each at 1080p; for anything long use
+/// [`decodeVideoStream`](decode_video_stream).
+#[cfg(feature = "native-decode")]
+#[wasm_bindgen(js_name = decodeVideo)]
+pub fn decode_video(bytes: &[u8]) -> Result<js_sys::Array, JsValue> {
+    let frames = js_sys::Array::new();
+    let mut rgba = Vec::new();
+    let skipped = crate::codec::decode::decode_video_in_order(bytes, |time, f| {
+        frames.push(&rgba_object(time, &f, &mut rgba));
+        Ok(true)
+    })
+    .map_err(|e| JsValue::from_str(&e))?;
+    js_set(&frames, "skipped", &(skipped as u32).into());
+    Ok(frames)
+}
+
+/// `decodeVideoStream(bytes, onFrame)`: [`decodeVideo`](decode_video) one
+/// frame at a time, in display order, for clips too long to hold. `onFrame`
+/// gets each `{ width, height, time, data }` and may keep it, or transfer
+/// `data.buffer` to another thread; return `false` to stop.
+///
+/// Packets that will not decode are skipped, as a player would, and the
+/// return value says how many; it throws only if no frame could be decoded.
+/// `decodeVideo` does the same, with the count as the array's `skipped`.
+///
+/// ```js
+/// // In a Worker, which a build with threads requires:
+/// decodeVideoStream(bytes, (f) => {
+///   postMessage(f, [f.data.buffer]);
+/// });
+/// ```
+#[cfg(feature = "native-decode")]
+#[wasm_bindgen(js_name = decodeVideoStream)]
+pub fn decode_video_stream(bytes: &[u8], on_frame: &js_sys::Function) -> Result<u32, JsValue> {
+    // A throw from `onFrame` comes back to the caller as itself.
+    let mut thrown = None;
+    let mut rgba = Vec::new();
+    let r = crate::codec::decode::decode_video_in_order(bytes, |time, f| {
+        match on_frame.call1(&JsValue::NULL, &rgba_object(time, &f, &mut rgba)) {
+            Ok(v) => Ok(v != JsValue::FALSE),
+            Err(e) => {
+                thrown = Some(e);
+                Err("onFrame threw".to_string())
+            }
+        }
+    });
+    match (thrown, r) {
+        (Some(e), _) => Err(e),
+        (None, r) => r.map(|n| n as u32).map_err(|e| JsValue::from_str(&e)),
+    }
+}
+
+/// `{ width, height, time, data }`, straight into a JS buffer: wasm memory
+/// holds one frame at a time, in `rgba`, reused from frame to frame.
+#[cfg(feature = "native-decode")]
+fn rgba_object(
+    time: Option<f64>,
+    f: &crate::codec::decode::DecodedFrame,
+    rgba: &mut Vec<u8>,
+) -> js_sys::Object {
+    f.to_rgba_into(rgba);
+    let data = js_sys::Uint8ClampedArray::new_with_length(rgba.len() as u32);
+    data.copy_from(rgba);
+    let o = js_sys::Object::new();
+    js_set(&o, "width", &f.width.into());
+    js_set(&o, "height", &f.height.into());
+    js_set(&o, "time", &time.map_or(JsValue::UNDEFINED, JsValue::from));
+    js_set(&o, "data", &data);
+    o
 }
 
 // ---------------------------------------------------------------------------

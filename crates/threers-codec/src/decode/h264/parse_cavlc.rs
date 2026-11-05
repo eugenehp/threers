@@ -162,9 +162,13 @@ impl SliceDec<'_> {
             let code = r.ue() as usize;
             let intra = self.syn.kind.is_intra();
             let cbp = if self.chroma {
-                *CBP_420[(!intra) as usize].get(code).ok_or("coded_block_pattern out of range")?
+                *CBP_420[(!intra) as usize]
+                    .get(code)
+                    .ok_or("coded_block_pattern out of range")?
             } else {
-                *CBP_400[(!intra) as usize].get(code).ok_or("coded_block_pattern out of range")?
+                *CBP_400[(!intra) as usize]
+                    .get(code)
+                    .ok_or("coded_block_pattern out of range")?
             };
             self.syn.cbp = cbp;
             if cbp & 15 != 0
@@ -208,7 +212,10 @@ impl SliceDec<'_> {
     /// selection reads it back from neighbours, and motion derivation from
     /// the partition's top-left block.
     pub fn fill_mvd(&mut self, l: usize, x: usize, y: usize, w: usize, h: usize, d: [i32; 2]) {
-        let abs = [d[0].unsigned_abs().min(255) as u8, d[1].unsigned_abs().min(255) as u8];
+        let abs = [
+            d[0].unsigned_abs().min(255) as u8,
+            d[1].unsigned_abs().min(255) as u8,
+        ];
         let m = &mut self.pic.mbs[self.addr];
         for yy in y..y + h {
             for xx in x..x + w {
@@ -240,7 +247,11 @@ impl SliceDec<'_> {
     }
 
     fn residual_cavlc(&mut self, r: &mut BitReader) -> Result<()> {
-        let (z4, z8) = if self.field_coded() { (&FIELD4, &FIELD8) } else { (&ZIGZAG4, &ZIGZAG8) };
+        let (z4, z8) = if self.field_coded() {
+            (&FIELD4, &FIELD8)
+        } else {
+            (&ZIGZAG4, &ZIGZAG8)
+        };
         let cbp_l = self.syn.cbp & 15;
         let cbp_c = self.syn.cbp >> 4;
         let i16 = self.syn.kind == MbKind::I16x16;
@@ -300,7 +311,8 @@ impl SliceDec<'_> {
             for c in 0..2 {
                 tmp = [0; 16];
                 let n = if self.c422 { 8 } else { 4 };
-                self.tables.residual_block(r, if self.c422 { -2 } else { -1 }, n, &mut tmp)?;
+                self.tables
+                    .residual_block(r, if self.c422 { -2 } else { -1 }, n, &mut tmp)?;
                 self.syn.dc_c[c][..n].copy_from_slice(&tmp[..n]);
                 self.pic.mbs[self.addr].cbf_dc |=
                     ((tmp[..n].iter().any(|&v| v != 0)) as u8) << (1 + c);

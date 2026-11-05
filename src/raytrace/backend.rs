@@ -42,10 +42,7 @@ impl RenderRect {
     }
 
     pub fn contains(&self, x: u32, y: u32) -> bool {
-        x >= self.x
-            && y >= self.y
-            && x < self.x + self.width
-            && y < self.y + self.height
+        x >= self.x && y >= self.y && x < self.x + self.width && y < self.y + self.height
     }
 
     /// Split a full frame into fixed-size tiles (last row/column may be smaller).
@@ -78,9 +75,8 @@ impl RenderRect {
         min_samples: u32,
         tile_size: u32,
     ) -> impl Iterator<Item = Self> + '_ {
-        Self::tile_grid(film.width(), film.height(), tile_size).filter(move |tile| {
-            tile.any_unconverged(film, threshold, min_samples)
-        })
+        Self::tile_grid(film.width(), film.height(), tile_size)
+            .filter(move |tile| tile.any_unconverged(film, threshold, min_samples))
     }
 
     /// Whether any pixel in this rectangle has not converged.
@@ -174,7 +170,17 @@ fn render_pixels_standard(
             if pixel.is_converged(settings.adaptive_threshold, settings.adaptive_min_samples) {
                 break;
             }
-            trace_one(integrator, camera, settings, film_w, film_h, x, y, pixel, &mut scratch);
+            trace_one(
+                integrator,
+                camera,
+                settings,
+                film_w,
+                film_h,
+                x,
+                y,
+                pixel,
+                &mut scratch,
+            );
         }
     }
 }
@@ -388,9 +394,7 @@ impl CpuBackend {
         samples: u32,
         rect: RenderRect,
     ) -> Result<(), RaytraceError> {
-        self.render_rect_impl(
-            scene, camera, settings, film, first_sample, samples, rect,
-        )?;
+        self.render_rect_impl(scene, camera, settings, film, first_sample, samples, rect)?;
         film.advance(samples);
         Ok(())
     }
@@ -410,15 +414,7 @@ impl CpuBackend {
             return Ok(());
         }
         for rect in regions {
-            self.render_rect_impl(
-                scene,
-                camera,
-                settings,
-                film,
-                first_sample,
-                samples,
-                *rect,
-            )?;
+            self.render_rect_impl(scene, camera, settings, film, first_sample, samples, *rect)?;
         }
         film.advance(samples);
         Ok(())
@@ -929,8 +925,7 @@ mod tests {
                 p.lum_sq = 0.0; // Welford M₂ — zero spread
             }
         }
-        let tiles: Vec<_> =
-            RenderRect::unconverged_tiles(&film, 0.02, 2, 2).collect();
+        let tiles: Vec<_> = RenderRect::unconverged_tiles(&film, 0.02, 2, 2).collect();
         assert_eq!(tiles.len(), 3);
         assert!(tiles.iter().all(|t| t.x >= 2 || t.y >= 2));
     }
@@ -976,8 +971,7 @@ mod tests {
         film.pixels_mut()[7].samples = 8;
         film.pixels_mut()[7].color = [0.0, 16.0, 0.0];
         film.pixels_mut()[7].lum_sq = 112.0;
-        let mut tiles: Vec<_> =
-            RenderRect::unconverged_tiles(&film, 0.02, 2, 2).collect();
+        let mut tiles: Vec<_> = RenderRect::unconverged_tiles(&film, 0.02, 2, 2).collect();
         tiles.sort_by(|a, b| {
             b.max_relative_error(&film)
                 .partial_cmp(&a.max_relative_error(&film))
@@ -1419,15 +1413,8 @@ mod tests {
             .render(&rt, &rtc, &settings, &mut film, 0, 128)
             .unwrap();
         let (lo, hi) = film.sample_range();
-        assert!(
-            lo < 128,
-            "HDR adaptive stopped nothing (range {lo}..{hi})"
-        );
-        let total: u64 = film
-            .resolve_sample_counts()
-            .iter()
-            .map(|&n| n as u64)
-            .sum();
+        assert!(lo < 128, "HDR adaptive stopped nothing (range {lo}..{hi})");
+        let total: u64 = film.resolve_sample_counts().iter().map(|&n| n as u64).sum();
         let budget = 128u64 * 32 * 32;
         assert!(
             total < (budget * 3) / 4,
@@ -1723,7 +1710,9 @@ mod tests {
         let dir = Vector3::new(0.0, 0.0, -1.0);
         let t = super::intersect_box(origin, dir, 0.0, 100.0, &b).expect("hit");
         assert!((t - 3.0).abs() < 1e-4, "entry t={t}");
-        assert!(super::super::RaytraceRenderer::intersect_box(origin, dir, 0.0, 100.0, &b) == Some(t));
+        assert!(
+            super::super::RaytraceRenderer::intersect_box(origin, dir, 0.0, 100.0, &b) == Some(t)
+        );
     }
 
     #[test]

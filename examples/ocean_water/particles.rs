@@ -15,12 +15,12 @@
 //! thrown off the waves that are actually there rather than scattered over the
 //! sea at random.
 
-use threers::marks::gpu;
 use std::sync::Arc;
+use threers::marks::gpu;
 
 use threers::{
-    BufferAttribute, BufferGeometry, Material, Mesh, Object3D, ObjectId, Scene,
-    ShaderMaterial, Vector3,
+    BufferAttribute, BufferGeometry, Material, Mesh, Object3D, ObjectId, Scene, ShaderMaterial,
+    Vector3,
 };
 
 use crate::ocean_fft::OceanFft;
@@ -317,11 +317,10 @@ impl Particles {
             init[i * 8 + 7] = i as f32 + 1.0;
         }
         let state = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("particle state"),
-                contents: bytemuck::cast_slice(&init),
-                usage: wgpu::BufferUsages::STORAGE,
-            },
-        );
+            label: Some("particle state"),
+            contents: bytemuck::cast_slice(&init),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
 
         let storage = |b: u32| wgpu::BindGroupLayoutEntry {
             binding: b,

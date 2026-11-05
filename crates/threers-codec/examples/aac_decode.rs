@@ -16,7 +16,10 @@ fn main() {
     // to test the post-processing on its own.
     if let Ok(f) = std::env::var("AAC_PLANES_FROM") {
         let r = std::fs::read(f).expect("read planes");
-        let r: Vec<f32> = r.chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().unwrap())).collect();
+        let r: Vec<f32> = r
+            .chunks_exact(4)
+            .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+            .collect();
         let ch = a.planes.len();
         for (c, p) in a.planes.iter_mut().enumerate() {
             *p = r.iter().skip(c).step_by(ch).copied().collect();
@@ -24,7 +27,11 @@ fn main() {
     }
     let ch = a.planes.len();
     let n = a.planes[0].len();
-    eprintln!("{} Hz, {ch} ch, {n} samples, decoded in {:.3}s", a.sample_rate, t.elapsed().as_secs_f64());
+    eprintln!(
+        "{} Hz, {ch} ch, {n} samples, decoded in {:.3}s",
+        a.sample_rate,
+        t.elapsed().as_secs_f64()
+    );
     eprintln!("{:?}", a.stats);
     let mut inter = Vec::with_capacity(n * ch);
     for i in 0..n {
@@ -38,7 +45,11 @@ fn main() {
         let rate: u32 = args[3].parse().unwrap();
         let ch: usize = args.get(5).map_or(2, |c| c.parse().unwrap());
         let ours = threers_codec::swr::ffmpeg_cli_s16(
-            &threers_codec::swr::DecodedFrames { planes: &a.planes, sample_rate: a.sample_rate, frame_lens: &a.frame_lens },
+            &threers_codec::swr::DecodedFrames {
+                planes: &a.planes,
+                sample_rate: a.sample_rate,
+                frame_lens: &a.frame_lens,
+            },
             rate,
             ch,
         )
@@ -47,10 +58,17 @@ fn main() {
             std::process::exit(2)
         });
         let r = std::fs::read(&args[4]).expect("read reference");
-        let r: Vec<i16> = r.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])).collect();
+        let r: Vec<i16> = r
+            .chunks_exact(2)
+            .map(|b| i16::from_le_bytes([b[0], b[1]]))
+            .collect();
         let m = ours.len().min(r.len());
         let diff: Vec<usize> = (0..m).filter(|&i| ours[i] != r[i]).collect();
-        let maxd = diff.iter().map(|&i| (ours[i] as i32 - r[i] as i32).abs()).max().unwrap_or(0);
+        let maxd = diff
+            .iter()
+            .map(|&i| (ours[i] as i32 - r[i] as i32).abs())
+            .max()
+            .unwrap_or(0);
         println!(
             "s16: ours {} ref {} values, {} differ (max {maxd}), first {:?}",
             ours.len(),
@@ -62,7 +80,10 @@ fn main() {
     }
     if args.get(2).map(String::as_str) == Some("--compare") {
         let r = std::fs::read(&args[3]).expect("read reference");
-        let r: Vec<f32> = r.chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().unwrap())).collect();
+        let r: Vec<f32> = r
+            .chunks_exact(4)
+            .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+            .collect();
         println!("samples: ours {} ref {}", inter.len() / ch, r.len() / ch);
         let m = inter.len().min(r.len());
         let (mut max_abs, mut max_ulp, mut exact) = (0f64, 0i64, 0usize);

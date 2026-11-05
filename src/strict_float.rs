@@ -76,13 +76,24 @@ mod imp {
         unsafe { sel_registerName(name.as_ptr()) }
     }
 
-    unsafe extern "C" fn new_library(this: Id, cmd: Sel, source: Id, options: Id, error: *mut Id) -> Id {
+    unsafe extern "C" fn new_library(
+        this: Id,
+        cmd: Sel,
+        source: Id,
+        options: Id,
+        error: *mut Id,
+    ) -> Id {
         let original: NewLibrary = std::mem::transmute(ORIGINAL.load(Ordering::Acquire));
-        let send_id: unsafe extern "C" fn(Id, Sel) -> Id = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
-        let utf8: unsafe extern "C" fn(Id, Sel) -> *const c_char = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
-        let from_utf8: unsafe extern "C" fn(Id, Sel, *const c_char) -> Id = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
-        let set_u64: unsafe extern "C" fn(Id, Sel, u64) = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
-        let responds: unsafe extern "C" fn(Id, Sel, Sel) -> i8 = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let send_id: unsafe extern "C" fn(Id, Sel) -> Id =
+            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let utf8: unsafe extern "C" fn(Id, Sel) -> *const c_char =
+            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let from_utf8: unsafe extern "C" fn(Id, Sel, *const c_char) -> Id =
+            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let set_u64: unsafe extern "C" fn(Id, Sel, u64) =
+            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let responds: unsafe extern "C" fn(Id, Sel, Sel) -> i8 =
+            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
 
         let text = utf8(source, sel(c"UTF8String"));
         let strict = if text.is_null() {
@@ -92,21 +103,37 @@ mod imp {
             s.push_str(&CStr::from_ptr(text).to_string_lossy());
             s.push('\0');
             // Autoreleased; the caller's pool holds it for the call.
-            from_utf8(objc_getClass(c"NSString".as_ptr()), sel(c"stringWithUTF8String:"), s.as_ptr().cast())
+            from_utf8(
+                objc_getClass(c"NSString".as_ptr()),
+                sel(c"stringWithUTF8String:"),
+                s.as_ptr().cast(),
+            )
         };
         let options = if options.is_null() {
-            send_id(send_id(objc_getClass(c"MTLCompileOptions".as_ptr()), sel(c"new")), sel(c"autorelease"))
+            send_id(
+                send_id(objc_getClass(c"MTLCompileOptions".as_ptr()), sel(c"new")),
+                sel(c"autorelease"),
+            )
         } else {
             options
         };
         // macOS 15: MTLMathModeSafe (0) and MTLMathFloatingPointFunctionsPrecise (1).
-        for (setter, value) in [(c"setMathMode:", 0u64), (c"setMathFloatingPointFunctions:", 1)] {
+        for (setter, value) in [
+            (c"setMathMode:", 0u64),
+            (c"setMathFloatingPointFunctions:", 1),
+        ] {
             if responds(options, sel(c"respondsToSelector:"), sel(setter)) != 0 {
                 set_u64(options, sel(setter), value);
             }
         }
-        if responds(options, sel(c"respondsToSelector:"), sel(c"setFastMathEnabled:")) != 0 {
-            let set_bool: unsafe extern "C" fn(Id, Sel, i8) = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        if responds(
+            options,
+            sel(c"respondsToSelector:"),
+            sel(c"setFastMathEnabled:"),
+        ) != 0
+        {
+            let set_bool: unsafe extern "C" fn(Id, Sel, i8) =
+                std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
             // Deprecated in favour of mathMode, which it would override when
             // set after it: only where mathMode is missing.
             if responds(options, sel(c"respondsToSelector:"), sel(c"setMathMode:")) == 0 {
@@ -123,11 +150,16 @@ mod imp {
                 return false;
             }
             let class = object_getClass(device);
-            let method = class_getInstanceMethod(class, sel(c"newLibraryWithSource:options:error:"));
-            let release: unsafe extern "C" fn(Id, Sel) = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+            let method =
+                class_getInstanceMethod(class, sel(c"newLibraryWithSource:options:error:"));
+            let release: unsafe extern "C" fn(Id, Sel) =
+                std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
             // wgpu opens its own device, of the same class.
             release(device, sel(c"release"));
-            let Some(previous) = (!method.is_null()).then(|| method_getImplementation(method)).flatten() else {
+            let Some(previous) = (!method.is_null())
+                .then(|| method_getImplementation(method))
+                .flatten()
+            else {
                 return false;
             };
             ORIGINAL.store(previous as usize, Ordering::Release);

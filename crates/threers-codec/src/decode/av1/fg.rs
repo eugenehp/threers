@@ -32,7 +32,10 @@ fn generate_grain_y(d: &FilmGrainData, bd8: i32) -> Lut {
     let ctr = 128 << bd8;
     for row in buf.iter_mut().take(GH) {
         for v in row.iter_mut() {
-            *v = round2(GAUSSIAN_SEQUENCE[get_random_number(11, &mut seed) as usize] as i32, shift);
+            *v = round2(
+                GAUSSIAN_SEQUENCE[get_random_number(11, &mut seed) as usize] as i32,
+                shift,
+            );
         }
     }
     let lag = d.ar_coeff_lag as isize;
@@ -45,7 +48,8 @@ fn generate_grain_y(d: &FilmGrainData, bd8: i32) -> Lut {
                     if dx == 0 && dy == 0 {
                         break 'o;
                     }
-                    sum += d.ar_coeffs_y[k] as i32 * buf[(y as isize + dy) as usize][(x as isize + dx) as usize];
+                    sum += d.ar_coeffs_y[k] as i32
+                        * buf[(y as isize + dy) as usize][(x as isize + dx) as usize];
                     k += 1;
                 }
             }
@@ -55,7 +59,14 @@ fn generate_grain_y(d: &FilmGrainData, bd8: i32) -> Lut {
     buf
 }
 
-fn generate_grain_uv(d: &FilmGrainData, buf_y: &Lut, uv: usize, subx: usize, suby: usize, bd8: i32) -> Lut {
+fn generate_grain_uv(
+    d: &FilmGrainData,
+    buf_y: &Lut,
+    uv: usize,
+    subx: usize,
+    suby: usize,
+    bd8: i32,
+) -> Lut {
     let mut buf = vec![[0i32; GW]; GH + 1];
     let mut seed = d.seed ^ if uv != 0 { 0x49d8 } else { 0xb524 };
     let shift = (4 - bd8 + d.grain_scale_shift) as u64;
@@ -64,7 +75,10 @@ fn generate_grain_uv(d: &FilmGrainData, buf_y: &Lut, uv: usize, subx: usize, sub
     let ch = if suby != 0 { SUB_GH } else { GH };
     for row in buf.iter_mut().take(ch) {
         for v in row.iter_mut().take(cw) {
-            *v = round2(GAUSSIAN_SEQUENCE[get_random_number(11, &mut seed) as usize] as i32, shift);
+            *v = round2(
+                GAUSSIAN_SEQUENCE[get_random_number(11, &mut seed) as usize] as i32,
+                shift,
+            );
         }
     }
     let lag = d.ar_coeff_lag as isize;
@@ -91,7 +105,8 @@ fn generate_grain_uv(d: &FilmGrainData, buf_y: &Lut, uv: usize, subx: usize, sub
                         sum += luma * coeff[k] as i32;
                         break 'o;
                     }
-                    sum += coeff[k] as i32 * buf[(y as isize + dy) as usize][(x as isize + dx) as usize];
+                    sum += coeff[k] as i32
+                        * buf[(y as isize + dy) as usize][(x as isize + dx) as usize];
                     k += 1;
                 }
             }
@@ -103,7 +118,11 @@ fn generate_grain_uv(d: &FilmGrainData, buf_y: &Lut, uv: usize, subx: usize, sub
 
 fn generate_scaling(bitdepth: u32, points: &[[u8; 2]], num: usize) -> Vec<u8> {
     let shift_x = if bitdepth == 8 { 0 } else { bitdepth - 8 } as usize;
-    let size = if bitdepth == 8 { 256 } else { 1usize << bitdepth };
+    let size = if bitdepth == 8 {
+        256
+    } else {
+        1usize << bitdepth
+    };
     let mut s = vec![0u8; size];
     if num == 0 {
         return s;
@@ -147,7 +166,16 @@ fn generate_scaling(bitdepth: u32, points: &[[u8; 2]], num: usize) -> Vec<u8> {
 }
 
 #[inline]
-fn sample_lut(lut: &Lut, offsets: &[[i32; 2]; 2], subx: usize, suby: usize, bx: usize, by: usize, x: usize, y: usize) -> i32 {
+fn sample_lut(
+    lut: &Lut,
+    offsets: &[[i32; 2]; 2],
+    subx: usize,
+    suby: usize,
+    bx: usize,
+    by: usize,
+    x: usize,
+    y: usize,
+) -> i32 {
     let r = offsets[bx][by];
     let offx = 3 + (2 >> subx) * (3 + (r >> 4)) as usize;
     let offy = 3 + (2 >> suby) * (3 + (r & 0xf)) as usize;
@@ -157,9 +185,24 @@ fn sample_lut(lut: &Lut, offsets: &[[i32; 2]; 2], subx: usize, suby: usize, bx: 
 /// Grain for one plane and one 32-row band (`fgy_32x32xn_c` /
 /// `fguv_32x32xn_c`); `luma` is the pre-grain luma for chroma scaling.
 #[allow(clippy::too_many_arguments)]
-fn apply_band(out: &mut Picture, inp: &Picture, pl: usize, d: &FilmGrainData, scaling: &[u8], lut: &Lut, row: usize, is_id: bool, bitdepth_max: i32) {
+fn apply_band(
+    out: &mut Picture,
+    inp: &Picture,
+    pl: usize,
+    d: &FilmGrainData,
+    scaling: &[u8],
+    lut: &Lut,
+    row: usize,
+    is_id: bool,
+    bitdepth_max: i32,
+) {
     let bd8 = (32 - (bitdepth_max as u32).leading_zeros()) as i32 - 8;
-    let (sx, sy) = if pl == 0 { (0usize, 0usize) } else { let (a, b) = inp.ss(1); (a as usize, b as usize) };
+    let (sx, sy) = if pl == 0 {
+        (0usize, 0usize)
+    } else {
+        let (a, b) = inp.ss(1);
+        (a as usize, b as usize)
+    };
     let pw = ((inp.w as usize) + sx) >> sx;
     let lw = inp.w as usize;
     let bh = ((FG.min(inp.h as usize - row * FG)) + sy) >> sy;
@@ -193,8 +236,16 @@ fn apply_band(out: &mut Picture, inp: &Picture, pl: usize, d: &FilmGrainData, sc
         for i in 0..rows {
             offsets[0][i] = get_random_number(8, &mut seed[i]);
         }
-        let ystart = if d.overlap_flag && row != 0 { (2 >> sy).min(bh) } else { 0 };
-        let xstart = if d.overlap_flag && bx != 0 { (2 >> sx).min(bw) } else { 0 };
+        let ystart = if d.overlap_flag && row != 0 {
+            (2 >> sy).min(bh)
+        } else {
+            0
+        };
+        let xstart = if d.overlap_flag && bx != 0 {
+            (2 >> sx).min(bw)
+        } else {
+            0
+        };
         let mut add = |x: usize, y: usize, grain: i32| {
             let src = inp.planes[pl][(y0 + y) * stride + bx + x] as i32;
             let val = if pl == 0 {
@@ -219,7 +270,9 @@ fn apply_band(out: &mut Picture, inp: &Picture, pl: usize, d: &FilmGrainData, sc
         };
         let wx = |x: usize| w[sx][x];
         let wy = |y: usize| w[sy][y];
-        let blend = |old: i32, cur: i32, ww: [i32; 2]| round2(old * ww[0] + cur * ww[1], 5).clamp(gmin, gmax);
+        let blend = |old: i32, cur: i32, ww: [i32; 2]| {
+            round2(old * ww[0] + cur * ww[1], 5).clamp(gmin, gmax)
+        };
         for y in ystart..bh {
             for x in xstart..bw {
                 add(x, y, sample_lut(lut, &offsets, sx, sy, 0, 0, x, y));
@@ -256,9 +309,22 @@ pub fn apply_grain(inp: &Picture, d: &FilmGrainData, seq: &SeqHeader) -> Picture
     let bitdepth_max = (1i32 << inp.bpc) - 1;
     let bd8 = inp.bpc as i32 - 8;
     let lut_y = generate_grain_y(d, bd8);
-    let (sx, sy) = if inp.layout == Layout::I400 { (0, 0) } else { let (a, b) = inp.ss(1); (a as usize, b as usize) };
-    let lut_u = if d.num_uv_points[0] != 0 || d.chroma_scaling_from_luma { Some(generate_grain_uv(d, &lut_y, 0, sx, sy, bd8)) } else { None };
-    let lut_v = if d.num_uv_points[1] != 0 || d.chroma_scaling_from_luma { Some(generate_grain_uv(d, &lut_y, 1, sx, sy, bd8)) } else { None };
+    let (sx, sy) = if inp.layout == Layout::I400 {
+        (0, 0)
+    } else {
+        let (a, b) = inp.ss(1);
+        (a as usize, b as usize)
+    };
+    let lut_u = if d.num_uv_points[0] != 0 || d.chroma_scaling_from_luma {
+        Some(generate_grain_uv(d, &lut_y, 0, sx, sy, bd8))
+    } else {
+        None
+    };
+    let lut_v = if d.num_uv_points[1] != 0 || d.chroma_scaling_from_luma {
+        Some(generate_grain_uv(d, &lut_y, 1, sx, sy, bd8))
+    } else {
+        None
+    };
     let sc_y = generate_scaling(inp.bpc, &d.y_points, d.num_y_points as usize);
     let sc_u = generate_scaling(inp.bpc, &d.uv_points[0], d.num_uv_points[0] as usize);
     let sc_v = generate_scaling(inp.bpc, &d.uv_points[1], d.num_uv_points[1] as usize);
@@ -272,14 +338,54 @@ pub fn apply_grain(inp: &Picture, d: &FilmGrainData, seq: &SeqHeader) -> Picture
             continue;
         }
         if d.chroma_scaling_from_luma {
-            apply_band(&mut out, inp, 1, d, &sc_y, lut_u.as_ref().unwrap(), row, is_id, bitdepth_max);
-            apply_band(&mut out, inp, 2, d, &sc_y, lut_v.as_ref().unwrap(), row, is_id, bitdepth_max);
+            apply_band(
+                &mut out,
+                inp,
+                1,
+                d,
+                &sc_y,
+                lut_u.as_ref().unwrap(),
+                row,
+                is_id,
+                bitdepth_max,
+            );
+            apply_band(
+                &mut out,
+                inp,
+                2,
+                d,
+                &sc_y,
+                lut_v.as_ref().unwrap(),
+                row,
+                is_id,
+                bitdepth_max,
+            );
         } else {
             if d.num_uv_points[0] != 0 {
-                apply_band(&mut out, inp, 1, d, &sc_u, lut_u.as_ref().unwrap(), row, is_id, bitdepth_max);
+                apply_band(
+                    &mut out,
+                    inp,
+                    1,
+                    d,
+                    &sc_u,
+                    lut_u.as_ref().unwrap(),
+                    row,
+                    is_id,
+                    bitdepth_max,
+                );
             }
             if d.num_uv_points[1] != 0 {
-                apply_band(&mut out, inp, 2, d, &sc_v, lut_v.as_ref().unwrap(), row, is_id, bitdepth_max);
+                apply_band(
+                    &mut out,
+                    inp,
+                    2,
+                    d,
+                    &sc_v,
+                    lut_v.as_ref().unwrap(),
+                    row,
+                    is_id,
+                    bitdepth_max,
+                );
             }
         }
     }

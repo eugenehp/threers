@@ -52,15 +52,25 @@ fn read(device: &wgpu::Device, queue: &wgpu::Queue, rt: &RenderTarget) -> Vec<u8
         rt.color_texture.as_image_copy(),
         wgpu::TexelCopyBufferInfo {
             buffer: &buf,
-            layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(padded), rows_per_image: Some(N) },
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(padded),
+                rows_per_image: Some(N),
+            },
         },
-        wgpu::Extent3d { width: N, height: N, depth_or_array_layers: 1 },
+        wgpu::Extent3d {
+            width: N,
+            height: N,
+            depth_or_array_layers: 1,
+        },
     );
     queue.submit([enc.finish()]);
     buf.slice(..).map_async(wgpu::MapMode::Read, |_| {});
     let _ = device.poll(wgpu::PollType::wait_indefinitely());
     let data = buf.slice(..).get_mapped_range().expect("mapped").to_vec();
-    (0..N).flat_map(|y| data[(y * padded) as usize..(y * padded + N * 4) as usize].to_vec()).collect()
+    (0..N)
+        .flat_map(|y| data[(y * padded) as usize..(y * padded + N * 4) as usize].to_vec())
+        .collect()
 }
 
 fn centre(rgba: &[u8]) -> u8 {
@@ -76,17 +86,29 @@ fn tone_mapping_and_read_back_follow_three_js() {
     hr.renderer().set_tone_mapping(ToneMapping::Linear, 0.5);
     let cam = camera();
     // The picture is tone-mapped.
-    assert_eq!(centre(&hr.render_to_rgba(&mut scene(1.0), &cam)), 188, "the picture, tone-mapped");
+    assert_eq!(
+        centre(&hr.render_to_rgba(&mut scene(1.0), &cam)),
+        188,
+        "the picture, tone-mapped"
+    );
 
     let renderer = hr.renderer();
     let (device, queue) = (renderer.device_arc(), renderer.queue_arc());
     let rt = RenderTarget::new(&device, N, N, renderer.color_format());
     renderer.render_to(&mut scene(1.0), &cam, &rt);
-    assert_eq!(centre(&read(&device, &queue, &rt)), 255, "a render target stores untone-mapped light");
+    assert_eq!(
+        centre(&read(&device, &queue, &rt)),
+        255,
+        "a render target stores untone-mapped light"
+    );
 
     rt.set_presents(true);
     renderer.render_to(&mut scene(1.0), &cam, &rt);
-    assert_eq!(centre(&read(&device, &queue, &rt)), 188, "a presenting target is the picture, tone-mapped");
+    assert_eq!(
+        centre(&read(&device, &queue, &rt)),
+        188,
+        "a presenting target is the picture, tone-mapped"
+    );
 
     renderer.set_tone_mapping(ToneMapping::None, 1.0);
     rt.set_presents(false);
@@ -99,9 +121,19 @@ fn tone_mapping_and_read_back_follow_three_js() {
     let mut encoded = raw.clone();
     rt.bytes_as_color_space(&mut encoded);
     assert_eq!(centre(&encoded), 188, "SRGBColorSpace reads back encoded");
-    assert_eq!(bytes[3 + ((N / 2 * N + N / 2) * 4) as usize], 255, "alpha untouched");
+    assert_eq!(
+        bytes[3 + ((N / 2 * N + N / 2) * 4) as usize],
+        255,
+        "alpha untouched"
+    );
 
     let resized = rt.resized(2 * N, N);
-    assert_eq!((resized.width, resized.height, resized.format), (2 * N, N, rt.format));
-    assert!(resized.srgb_color_space() && !resized.presents(), "setSize keeps the configuration");
+    assert_eq!(
+        (resized.width, resized.height, resized.format),
+        (2 * N, N, rt.format)
+    );
+    assert!(
+        resized.srgb_color_space() && !resized.presents(),
+        "setSize keeps the configuration"
+    );
 }

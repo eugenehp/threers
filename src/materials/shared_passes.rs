@@ -83,11 +83,14 @@ macro_rules! shader_functions {
 impl ShaderFunctions {
     /// Wrap shared source. Prefer the [`shader_functions!`](crate::shader_functions) macro.
     pub fn new(source: impl Into<String>) -> Self {
-        Self { source: source.into() }
+        Self {
+            source: source.into(),
+        }
     }
 
     fn items(&self) -> Result<Vec<Item>, String> {
-        let items = parse_items(&self.source).map_err(|e| e.replace("shader!", "shader_functions!"))?;
+        let items =
+            parse_items(&self.source).map_err(|e| e.replace("shader!", "shader_functions!"))?;
         check_names(&items, "shader_functions!")?;
         Ok(items)
     }
@@ -130,12 +133,19 @@ macro_rules! passes {
 impl PassShader {
     /// Wrap shared source. Prefer the [`passes!`](crate::passes) macro.
     pub fn new(source: impl Into<String>) -> Self {
-        Self { source: source.into() }
+        Self {
+            source: source.into(),
+        }
     }
 
     /// The passes' names, in source order.
     pub fn passes(&self) -> Result<Vec<String>, String> {
-        Ok(self.parsed(None)?.1.iter().map(|f| f.name.clone()).collect())
+        Ok(self
+            .parsed(None)?
+            .1
+            .iter()
+            .map(|f| f.name.clone())
+            .collect())
     }
 
     /// The WGSL module: the varyings, the bindings and accessors, the
@@ -143,7 +153,11 @@ impl PassShader {
     /// fs_{name}` for every pass. `uniforms` names the struct bound as `u`.
     pub fn wgsl(&self, uniforms: &str) -> Result<String, String> {
         let (items, passes) = self.parsed(Some(uniforms))?;
-        let offset = if has_texel_size(&items, uniforms) { "u.texel_size" } else { "vec2<f32>(0.0)" };
+        let offset = if has_texel_size(&items, uniforms) {
+            "u.texel_size"
+        } else {
+            "vec2<f32>(0.0)"
+        };
         let mut out = String::from(
             "struct VsOut {
     @builtin(position) pos : vec4<f32>,
@@ -218,12 +232,17 @@ fn vs_blur(@builtin(vertex_index) vid : u32) -> VsOut {{ return pass_vertex(vid,
     pub fn msl(&self, uniforms: &str, prefix: &str) -> Result<String, String> {
         let (items, passes) = self.parsed(Some(uniforms))?;
         let (offset, vertex_u) = if has_texel_size(&items, uniforms) {
-            ("u.texel_size", format!(", constant {uniforms} &u [[buffer(0)]]"))
+            (
+                "u.texel_size",
+                format!(", constant {uniforms} &u [[buffer(0)]]"),
+            )
         } else {
             ("float2(0.0)", String::new())
         };
-        let functions: Vec<&FnItem> =
-            items.iter().filter_map(|it| if let Item::Fn(f) = it { Some(f) } else { None }).collect();
+        let functions: Vec<&FnItem> = items
+            .iter()
+            .filter_map(|it| if let Item::Fn(f) = it { Some(f) } else { None })
+            .collect();
         let batched = calls_batch(&functions);
         let vertex = format!("{prefix}PassVertex");
         let ctx = format!("{prefix}PassContext");
@@ -313,7 +332,10 @@ vertex {vertex} {prefix}vs_blur(uint vid [[vertex_id]]{vertex_u}) {{
         let items = parse_items(&self.source).map_err(|e| e.replace("shader!", "passes!"))?;
         check_names(&items, "passes!")?;
         if let Some(name) = uniforms {
-            if !items.iter().any(|it| matches!(it, Item::Struct(st) if st.name == name)) {
+            if !items
+                .iter()
+                .any(|it| matches!(it, Item::Struct(st) if st.name == name))
+            {
                 return Err(format!("passes!: no `struct {name}` for the uniform block"));
             }
         }
@@ -335,18 +357,66 @@ vertex {vertex} {prefix}vs_blur(uint vid [[vertex_id]]{vertex_u}) {{
 /// only when the other backend compiles the shader: `restrict` is a WGSL
 /// keyword, `kernel` an MSL one.
 const RESERVED: &[&str] = &[
-    "auto", "case", "centroid", "char", "class", "constant", "default", "delete", "device", "do", "double",
-    "enum", "explicit", "extern", "flat", "fragment", "friend", "goto", "half", "inline", "kernel", "long",
-    "namespace", "new", "operator", "packed", "private", "protected", "public", "register", "restrict",
-    "sample", "sampler", "short", "signed", "sizeof", "smooth", "static", "switch", "template", "texture",
-    "this", "thread", "threadgroup", "typedef", "typename", "uniform", "union", "unsigned", "vertex",
-    "virtual", "volatile",
+    "auto",
+    "case",
+    "centroid",
+    "char",
+    "class",
+    "constant",
+    "default",
+    "delete",
+    "device",
+    "do",
+    "double",
+    "enum",
+    "explicit",
+    "extern",
+    "flat",
+    "fragment",
+    "friend",
+    "goto",
+    "half",
+    "inline",
+    "kernel",
+    "long",
+    "namespace",
+    "new",
+    "operator",
+    "packed",
+    "private",
+    "protected",
+    "public",
+    "register",
+    "restrict",
+    "sample",
+    "sampler",
+    "short",
+    "signed",
+    "sizeof",
+    "smooth",
+    "static",
+    "switch",
+    "template",
+    "texture",
+    "this",
+    "thread",
+    "threadgroup",
+    "typedef",
+    "typename",
+    "uniform",
+    "union",
+    "unsigned",
+    "vertex",
+    "virtual",
+    "volatile",
 ];
 
 /// Every function, parameter and local name, against [`RESERVED`].
 fn check_names(items: &[Item], macro_name: &str) -> Result<(), String> {
     let bad = |name: &str, what: &str| {
-        Err(format!("{macro_name}: `{name}` ({what}) is reserved in WGSL or MSL; rename it"))
+        Err(format!(
+            "{macro_name}: `{name}` ({what}) is reserved in WGSL or MSL; rename it"
+        ))
     };
     for it in items {
         let Item::Fn(f) = it else { continue };
@@ -381,20 +451,19 @@ fn is_pass(f: &FnItem) -> bool {
     f.params.len() == 1
         && f.params[0].1.len() == 1
         && f.params[0].1[0].is("Frag")
-        && f.ret.as_ref().is_some_and(|r| r.len() == 1 && r[0].is("vec4f"))
+        && f.ret
+            .as_ref()
+            .is_some_and(|r| r.len() == 1 && r[0].is("vec4f"))
 }
 
 /// The functions that read `batch`, directly or through another.
 fn calls_batch(functions: &[&FnItem]) -> Vec<String> {
-    let calls = |f: &FnItem, name: &str| {
-        f.body.windows(2).any(|w| w[0].is(name) && w[1].is("("))
-    };
+    let calls = |f: &FnItem, name: &str| f.body.windows(2).any(|w| w[0].is(name) && w[1].is("("));
     let mut found: Vec<String> = Vec::new();
     loop {
         let before = found.len();
         for f in functions {
-            if !found.contains(&f.name)
-                && (calls(f, "batch") || found.iter().any(|g| calls(f, g)))
+            if !found.contains(&f.name) && (calls(f, "batch") || found.iter().any(|g| calls(f, g)))
             {
                 found.push(f.name.clone());
             }
@@ -410,29 +479,60 @@ fn calls_batch(functions: &[&FnItem]) -> Vec<String> {
 /// itself to this.
 #[cfg(all(test, not(target_arch = "wasm32")))]
 pub(crate) fn assert_webgl2(source: &str, entries: &[(naga::ShaderStage, String)]) {
-    let module = naga::front::wgsl::parse_str(source).unwrap_or_else(|e| panic!("{}", e.emit_to_string(source)));
-    let info = naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
-        .validate(&module)
-        .unwrap_or_else(|e| panic!("{e:?}"));
-    assert_eq!(entries.len(), module.entry_points.len(), "an entry point not checked, or one that is not there");
+    let module = naga::front::wgsl::parse_str(source)
+        .unwrap_or_else(|e| panic!("{}", e.emit_to_string(source)));
+    let info = naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::all(),
+    )
+    .validate(&module)
+    .unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(
+        entries.len(),
+        module.entry_points.len(),
+        "an entry point not checked, or one that is not there"
+    );
     for (stage, entry) in entries {
         let options = naga::back::glsl::Options {
-            version: naga::back::glsl::Version::Embedded { version: 300, is_webgl: true },
+            version: naga::back::glsl::Version::Embedded {
+                version: 300,
+                is_webgl: true,
+            },
             ..Default::default()
         };
-        let pipeline = naga::back::glsl::PipelineOptions { shader_stage: *stage, entry_point: entry.clone(), multiview: None };
+        let pipeline = naga::back::glsl::PipelineOptions {
+            shader_stage: *stage,
+            entry_point: entry.clone(),
+            multiview: None,
+        };
         let mut out = String::new();
-        naga::back::glsl::Writer::new(&mut out, &module, &info, &options, &pipeline, Default::default())
-            .and_then(|mut w| w.write().map(|_| ()))
-            .unwrap_or_else(|e| panic!("{entry}: {e}"));
+        naga::back::glsl::Writer::new(
+            &mut out,
+            &module,
+            &info,
+            &options,
+            &pipeline,
+            Default::default(),
+        )
+        .and_then(|mut w| w.write().map(|_| ()))
+        .unwrap_or_else(|e| panic!("{entry}: {e}"));
     }
 }
 
 /// Every entry point of `shader`'s WGSL: the two vertex stages and each pass.
 #[cfg(all(test, not(target_arch = "wasm32")))]
 pub(crate) fn entry_points(shader: &PassShader) -> Vec<(naga::ShaderStage, String)> {
-    let mut out = vec![(naga::ShaderStage::Vertex, "vs".to_string()), (naga::ShaderStage::Vertex, "vs_blur".into())];
-    out.extend(shader.passes().unwrap().into_iter().map(|p| (naga::ShaderStage::Fragment, format!("fs_{p}"))));
+    let mut out = vec![
+        (naga::ShaderStage::Vertex, "vs".to_string()),
+        (naga::ShaderStage::Vertex, "vs_blur".into()),
+    ];
+    out.extend(
+        shader
+            .passes()
+            .unwrap()
+            .into_iter()
+            .map(|p| (naga::ShaderStage::Fragment, format!("fs_{p}"))),
+    );
     out
 }
 
@@ -458,16 +558,25 @@ mod tests {
         assert_eq!(p.passes().unwrap(), ["darker", "summed"]);
         let w = p.wgsl("TestParams").unwrap();
         assert!(w.contains("var<uniform> u : TestParams;"), "{w}");
-        assert!(w.contains("fn fs_darker(i : VsOut) -> @location(0) vec4<f32> { return darker(i); }"), "{w}");
+        assert!(
+            w.contains("fn fs_darker(i : VsOut) -> @location(0) vec4<f32> { return darker(i); }"),
+            "{w}"
+        );
         assert!(w.contains("fn vs_blur("), "{w}");
         let m = p.msl("TestParams", "t_").unwrap();
         assert!(m.contains("fragment float4 t_fs_darker("), "{m}");
         assert!(m.contains("vertex t_PassVertex t_vs("), "{m}");
         // Only the pass that reads the batch takes its buffer.
         let summed = &m[m.find("t_fs_summed(").unwrap()..];
-        assert!(summed[..summed.find('{').unwrap()].contains("[[buffer(1)]]"), "{m}");
+        assert!(
+            summed[..summed.find('{').unwrap()].contains("[[buffer(1)]]"),
+            "{m}"
+        );
         let darker = &m[m.find("t_fs_darker(").unwrap()..];
-        assert!(!darker[..darker.find('{').unwrap()].contains("[[buffer(1)]]"), "{m}");
+        assert!(
+            !darker[..darker.find('{').unwrap()].contains("[[buffer(1)]]"),
+            "{m}"
+        );
         assert!(m.contains("constant float SCALE = 0.5;"), "{m}");
     }
 
@@ -484,9 +593,16 @@ mod tests {
             fn brighter(c: vec3f) -> vec3f { return c * GAIN; }
         };
         let w = f.wgsl().unwrap();
-        assert!(w.contains("const GAIN: f32 = 2.0;") && w.contains("fn brighter(c: vec3f) -> vec3f {"), "{w}");
+        assert!(
+            w.contains("const GAIN: f32 = 2.0;") && w.contains("fn brighter(c: vec3f) -> vec3f {"),
+            "{w}"
+        );
         let m = f.msl().unwrap();
-        assert!(m.contains("constant float GAIN = 2.0;") && m.contains("static inline float3 brighter(float3 c) {"), "{m}");
+        assert!(
+            m.contains("constant float GAIN = 2.0;")
+                && m.contains("static inline float3 brighter(float3 c) {"),
+            "{m}"
+        );
     }
 
     #[test]
@@ -514,13 +630,23 @@ mod tests {
             }
         };
         let w = p.wgsl("FetchParams").unwrap();
-        assert!(w.contains("return pass_vertex(vid, vec2<f32>(0.0), false); }"), "{w}");
-        let module = naga::front::wgsl::parse_str(&w).unwrap_or_else(|e| panic!("{}\n{w}", e.emit_to_string(&w)));
-        naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
-            .validate(&module)
-            .unwrap_or_else(|e| panic!("{e:?}\n{w}"));
+        assert!(
+            w.contains("return pass_vertex(vid, vec2<f32>(0.0), false); }"),
+            "{w}"
+        );
+        let module = naga::front::wgsl::parse_str(&w)
+            .unwrap_or_else(|e| panic!("{}\n{w}", e.emit_to_string(&w)));
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .unwrap_or_else(|e| panic!("{e:?}\n{w}"));
         let m = p.msl("FetchParams", "f_").unwrap();
-        assert!(m.contains("vertex f_PassVertex f_vs(uint vid [[vertex_id]]) {"), "{m}");
+        assert!(
+            m.contains("vertex f_PassVertex f_vs(uint vid [[vertex_id]]) {"),
+            "{m}"
+        );
         assert!(m.contains("pass_tex_a.read(uint2(c))"), "{m}");
     }
 
@@ -532,9 +658,13 @@ mod tests {
             fn darker(i: Frag) -> vec4f { return tex_a(i.uv) * u.gain + batch(0u32) + tex_c(i.pos.xy); }
         };
         let w = p.wgsl("TestParams").unwrap();
-        let module = naga::front::wgsl::parse_str(&w).unwrap_or_else(|e| panic!("{}\n{w}", e.emit_to_string(&w)));
-        naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
-            .validate(&module)
-            .unwrap_or_else(|e| panic!("{e:?}\n{w}"));
+        let module = naga::front::wgsl::parse_str(&w)
+            .unwrap_or_else(|e| panic!("{}\n{w}", e.emit_to_string(&w)));
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .unwrap_or_else(|e| panic!("{e:?}\n{w}"));
     }
 }

@@ -238,7 +238,20 @@ mod tests {
     #[test]
     fn exp_golomb_round_trips() {
         let mut w = BitWriter::new();
-        let vals = [0u32, 1, 2, 3, 7, 8, 254, 255, 65534, 65535, 1 << 20, 0xFFFF_FFFE];
+        let vals = [
+            0u32,
+            1,
+            2,
+            3,
+            7,
+            8,
+            254,
+            255,
+            65534,
+            65535,
+            1 << 20,
+            0xFFFF_FFFE,
+        ];
         for &v in &vals {
             w.write_ue(v);
         }
@@ -260,7 +273,10 @@ mod tests {
 
     #[test]
     fn unescape_drops_only_emulation_bytes() {
-        assert_eq!(unescape(&[0, 0, 3, 1, 0, 0, 3, 0, 0, 3]), vec![0, 0, 1, 0, 0, 0, 0]);
+        assert_eq!(
+            unescape(&[0, 0, 3, 1, 0, 0, 3, 0, 0, 3]),
+            vec![0, 0, 1, 0, 0, 0, 0]
+        );
         assert_eq!(unescape(&[0, 3, 0, 0, 3, 3]), vec![0, 3, 0, 0, 3]);
     }
 

@@ -24,7 +24,10 @@ fn face() -> Option<CaptionFont> {
 
 /// The glyph ids `text` draws as, in drawing order.
 fn gids(font: &CaptionFont, text: &str) -> Vec<u32> {
-    order::visual(text, font, 24.0).into_iter().map(|p| p.gid).collect()
+    order::visual(text, font, 24.0)
+        .into_iter()
+        .map(|p| p.gid)
+        .collect()
 }
 
 #[test]
@@ -57,7 +60,12 @@ fn lam_alef_becomes_one_glyph() {
     let Some(f) = face() else { return };
     // The one ligature every Arabic font has, and it is mandatory rather than optional.
     let two = gids(&f, "\u{0644}\u{0627}");
-    assert_eq!(two.len(), 1, "lam-alef drew {} glyphs, not a ligature", two.len());
+    assert_eq!(
+        two.len(),
+        1,
+        "lam-alef drew {} glyphs, not a ligature",
+        two.len()
+    );
 }
 
 #[test]
@@ -66,7 +74,10 @@ fn a_shaped_run_still_reads_right_to_left() {
     // Shaping must not undo the reordering: the clusters descend.
     let run = order::visual("\u{0645}\u{0631}\u{062D}\u{0628}\u{0627}", &f, 24.0);
     assert!(run.len() >= 5, "only {} glyphs", run.len());
-    assert!(run.iter().all(|p| p.rtl), "an Arabic run was not marked right to left");
+    assert!(
+        run.iter().all(|p| p.rtl),
+        "an Arabic run was not marked right to left"
+    );
     let first = run.first().expect("non-empty").cluster;
     let last = run.last().expect("non-empty").cluster;
     assert!(first > last, "clusters {first} then {last}: not reversed");
@@ -109,8 +120,9 @@ fn a_dot_is_a_mark_and_hangs_off_its_skeleton() {
     // mark in it: SF Arabic's `rclt` decomposes the teh into a skeleton plus its two
     // dots, and the dots are mark glyphs with no codepoint of their own.
     let run = order::visual("\u{0643}\u{062A}\u{0627}\u{0628}", &f, 24.0);
-    let attached: Vec<usize> =
-        (0..run.len()).filter(|k| run[*k].attach.is_some()).collect();
+    let attached: Vec<usize> = (0..run.len())
+        .filter(|k| run[*k].attach.is_some())
+        .collect();
     assert!(
         !attached.is_empty(),
         "no glyph of كتاب attached to anything, so the dots sit at the skeleton's origin"
@@ -121,7 +133,10 @@ fn a_dot_is_a_mark_and_hangs_off_its_skeleton() {
         assert_ne!(to, k, "a glyph attached to itself");
         // Measured in rswift against CTRunGetPositions: the dot sits 0.3857pt right of
         // its base at 24pt. The anchor delta is what puts it there.
-        assert!(dx.abs() > 0.01, "the anchor delta is {dx}, so nothing was read");
+        assert!(
+            dx.abs() > 0.01,
+            "the anchor delta is {dx}, so nothing was read"
+        );
     }
 }
 
@@ -144,7 +159,9 @@ fn the_dot_lands_where_core_text_puts_it() {
 
 #[test]
 fn a_face_without_mark_positioning_pays_nothing_for_it() {
-    let Ok(bytes) = std::fs::read("/System/Library/Fonts/SFNS.ttf") else { return };
+    let Ok(bytes) = std::fs::read("/System/Library/Fonts/SFNS.ttf") else {
+        return;
+    };
     let f = CaptionFont::from_ttf_bytes(&bytes).expect("parses");
     // SF Pro registers `kern` and one `ss09` lookup and no mark positioning, so the
     // GPOS and GDEF bytes are not kept at all — and nothing attaches.

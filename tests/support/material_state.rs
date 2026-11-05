@@ -88,14 +88,62 @@ pub fn cases() -> Vec<Case> {
     let d = RenderState::default;
     let func = |f: DepthFunc| st(|s| s.depth_func = f);
     vec![
-        Case { name: "defaults: the wall hides the subject", wall: d(), subject: d(), coplanar: false, expect: WALL },
-        Case { name: "subject depthTest false", wall: d(), subject: st(|s| s.depth_test = false), coplanar: false, expect: SUBJECT },
-        Case { name: "wall depthWrite false", wall: st(|s| s.depth_write = Some(false)), subject: d(), coplanar: false, expect: SUBJECT },
-        Case { name: "wall colorWrite false", wall: st(|s| s.color_write = false), subject: d(), coplanar: false, expect: BACKGROUND },
-        Case { name: "subject depthFunc Greater", wall: d(), subject: func(DepthFunc::Greater), coplanar: false, expect: SUBJECT },
-        Case { name: "subject depthFunc Always", wall: d(), subject: func(DepthFunc::Always), coplanar: false, expect: SUBJECT },
-        Case { name: "subject depthFunc Never", wall: d(), subject: func(DepthFunc::Never), coplanar: false, expect: WALL },
-        Case { name: "subject depthFunc GreaterEqual", wall: d(), subject: func(DepthFunc::GreaterEqual), coplanar: false, expect: SUBJECT },
+        Case {
+            name: "defaults: the wall hides the subject",
+            wall: d(),
+            subject: d(),
+            coplanar: false,
+            expect: WALL,
+        },
+        Case {
+            name: "subject depthTest false",
+            wall: d(),
+            subject: st(|s| s.depth_test = false),
+            coplanar: false,
+            expect: SUBJECT,
+        },
+        Case {
+            name: "wall depthWrite false",
+            wall: st(|s| s.depth_write = Some(false)),
+            subject: d(),
+            coplanar: false,
+            expect: SUBJECT,
+        },
+        Case {
+            name: "wall colorWrite false",
+            wall: st(|s| s.color_write = false),
+            subject: d(),
+            coplanar: false,
+            expect: BACKGROUND,
+        },
+        Case {
+            name: "subject depthFunc Greater",
+            wall: d(),
+            subject: func(DepthFunc::Greater),
+            coplanar: false,
+            expect: SUBJECT,
+        },
+        Case {
+            name: "subject depthFunc Always",
+            wall: d(),
+            subject: func(DepthFunc::Always),
+            coplanar: false,
+            expect: SUBJECT,
+        },
+        Case {
+            name: "subject depthFunc Never",
+            wall: d(),
+            subject: func(DepthFunc::Never),
+            coplanar: false,
+            expect: WALL,
+        },
+        Case {
+            name: "subject depthFunc GreaterEqual",
+            wall: d(),
+            subject: func(DepthFunc::GreaterEqual),
+            coplanar: false,
+            expect: SUBJECT,
+        },
     ]
 }
 
@@ -105,10 +153,34 @@ pub fn coplanar_cases() -> Vec<Case> {
     let d = RenderState::default;
     let func = |f: DepthFunc| st(|s| s.depth_func = f);
     vec![
-        Case { name: "coplanar, default LessEqual", wall: d(), subject: d(), coplanar: true, expect: SUBJECT },
-        Case { name: "coplanar, Less", wall: d(), subject: func(DepthFunc::Less), coplanar: true, expect: WALL },
-        Case { name: "coplanar, Equal", wall: d(), subject: func(DepthFunc::Equal), coplanar: true, expect: SUBJECT },
-        Case { name: "coplanar, NotEqual", wall: d(), subject: func(DepthFunc::NotEqual), coplanar: true, expect: WALL },
+        Case {
+            name: "coplanar, default LessEqual",
+            wall: d(),
+            subject: d(),
+            coplanar: true,
+            expect: SUBJECT,
+        },
+        Case {
+            name: "coplanar, Less",
+            wall: d(),
+            subject: func(DepthFunc::Less),
+            coplanar: true,
+            expect: WALL,
+        },
+        Case {
+            name: "coplanar, Equal",
+            wall: d(),
+            subject: func(DepthFunc::Equal),
+            coplanar: true,
+            expect: SUBJECT,
+        },
+        Case {
+            name: "coplanar, NotEqual",
+            wall: d(),
+            subject: func(DepthFunc::NotEqual),
+            coplanar: true,
+            expect: WALL,
+        },
     ]
 }
 
@@ -121,13 +193,19 @@ fn plane_material(hex: u32, state: RenderState) -> Material {
 /// The subject, drawn as `kind`, at depth `z`.
 fn subject(kind: Kind, state: RenderState, z: f32) -> Object3D {
     let mut o = match kind {
-        Kind::Mesh => Object3D::mesh(Mesh::new(PlaneGeometry::new(2.5, 2.5), plane_material(SUBJECT, state))),
+        Kind::Mesh => Object3D::mesh(Mesh::new(
+            PlaneGeometry::new(2.5, 2.5),
+            plane_material(SUBJECT, state),
+        )),
         Kind::Line => {
             // Through the centre row of pixels: row N/2's centre is at
             // y = 1 − (N/2 + ½)·2/N.
             let y = 1.0 - (N as f32 / 2.0 + 0.5) * 2.0 / N as f32;
             let mut g = BufferGeometry::new();
-            g.set_attribute("position", BufferAttribute::new(vec![-2.0, y, 0.0, 2.0, y, 0.0], 3));
+            g.set_attribute(
+                "position",
+                BufferAttribute::new(vec![-2.0, y, 0.0, 2.0, y, 0.0], 3),
+            );
             let mut m = LineBasicMaterial::new(Color::from_hex(SUBJECT));
             m.render_state = state;
             Object3D::line_segments(LineSegments::new(g, Material::Line(m)))
@@ -159,13 +237,20 @@ fn subject(kind: Kind, state: RenderState, z: f32) -> Object3D {
             let mut g = PlaneGeometry::new(2.5, 2.5);
             let n = g.get_attribute("position").unwrap().count();
             g.set_attribute("joint", BufferAttribute::new(vec![0.0; n * 4], 4));
-            g.set_attribute("weight", BufferAttribute::new([1.0, 0.0, 0.0, 0.0].repeat(n), 4));
+            g.set_attribute(
+                "weight",
+                BufferAttribute::new([1.0, 0.0, 0.0, 0.0].repeat(n), 4),
+            );
             let mut skeleton = Skeleton::new(vec![Bone {
                 node: ObjectId::default(),
                 inverse_bind: Matrix4::identity(),
             }]);
             skeleton.bone_matrices = vec![Matrix4::identity()];
-            Object3D::skinned_mesh(SkinnedMesh::new(g, plane_material(SUBJECT, state), skeleton))
+            Object3D::skinned_mesh(SkinnedMesh::new(
+                g,
+                plane_material(SUBJECT, state),
+                skeleton,
+            ))
         }
     };
     o.position = Vector3::new(0.0, 0.0, z);
@@ -176,16 +261,27 @@ fn subject(kind: Kind, state: RenderState, z: f32) -> Object3D {
 pub fn scene(kind: Kind, case: &Case) -> Scene {
     let mut scene = Scene::new();
     scene.background = Color::from_hex(BACKGROUND);
-    let mut wall = Object3D::mesh(Mesh::new(PlaneGeometry::new(2.5, 2.5), plane_material(WALL, case.wall)));
+    let mut wall = Object3D::mesh(Mesh::new(
+        PlaneGeometry::new(2.5, 2.5),
+        plane_material(WALL, case.wall),
+    ));
     wall.position = Vector3::new(0.0, 0.0, 0.5);
     wall.render_order = 0;
     scene.add(wall);
-    scene.add(subject(kind, case.subject, if case.coplanar { 0.5 } else { -0.5 }));
+    scene.add(subject(
+        kind,
+        case.subject,
+        if case.coplanar { 0.5 } else { -0.5 },
+    ));
     scene
 }
 
 fn rgb(hex: u32) -> [i32; 3] {
-    [((hex >> 16) & 0xff) as i32, ((hex >> 8) & 0xff) as i32, (hex & 0xff) as i32]
+    [
+        ((hex >> 16) & 0xff) as i32,
+        ((hex >> 8) & 0xff) as i32,
+        (hex & 0xff) as i32,
+    ]
 }
 
 /// Which of the three colours the centre pixel is nearest.
@@ -196,7 +292,10 @@ pub fn classify(rgba: &[u8]) -> (u32, [u8; 3]) {
         let c = rgb(hex);
         (0..3).map(|k| (got[k] as i32 - c[k]).pow(2)).sum::<i32>()
     };
-    let best = [WALL, SUBJECT, BACKGROUND].into_iter().min_by_key(|&h| dist(h)).unwrap();
+    let best = [WALL, SUBJECT, BACKGROUND]
+        .into_iter()
+        .min_by_key(|&h| dist(h))
+        .unwrap();
     (best, got)
 }
 

@@ -58,7 +58,10 @@ fn main() {
         }
     }
     if !spec.dangling_parts().is_empty() {
-        println!("  !! mates name parts that do not exist: {:?}", spec.dangling_parts());
+        println!(
+            "  !! mates name parts that do not exist: {:?}",
+            spec.dangling_parts()
+        );
     }
 
     // ---- 2. check it, before simulating anything ---------------------------

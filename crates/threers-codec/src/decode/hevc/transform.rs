@@ -60,7 +60,10 @@ fn inverse_n<const NN: usize>(c: &mut [i32], n: usize, dst: bool, bd: u32) {
     let mut out = [0i32; 32];
     // Columns first.
     for x in 0..n {
-        let last = (0..n).rev().find(|&y| c[y * n + x] != 0).map_or(0, |y| y + 1);
+        let last = (0..n)
+            .rev()
+            .find(|&y| c[y * n + x] != 0)
+            .map_or(0, |y| y + 1);
         if last == 0 {
             continue; // `tmp` is zero there already.
         }
@@ -114,5 +117,21 @@ pub fn transform_skip(c: &mut [i32], n: usize, bd: u32) {
     let add = 1 << (shift - 1);
     for v in c.iter_mut().take(n * n) {
         *v = ((*v << ts_shift) + add) >> shift;
+    }
+}
+
+/// Residual DPCM (range extensions): each residual accumulates the one
+/// before it, along columns when `vertical`, else along rows.
+pub fn rdpcm(c: &mut [i32], n: usize, vertical: bool) {
+    if vertical {
+        for i in n..n * n {
+            c[i] += c[i - n];
+        }
+    } else {
+        for y in 0..n {
+            for x in 1..n {
+                c[y * n + x] += c[y * n + x - 1];
+            }
+        }
     }
 }

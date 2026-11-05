@@ -89,7 +89,7 @@
 //! |---------|---------|--------------|
 //! | `decode` | **on** | The video decoders in [`decode`] (H.264, HEVC, VP9, AV1) |
 //! | `gif` | **on** | GIF89a encode and decode ([`gif`]), and GIF in [`animation`] |
-//! | `parallel` | | Frame-parallel encoding on `rayon` |
+//! | `parallel` | | Frame-parallel encoding, and AV1 decoding across frames, tiles and loop filters, on `rayon` |
 //! | `videotoolbox` | | VideoToolbox encode and decode on macOS (links Apple's frameworks; inert elsewhere) |
 //! | `nvidia` | | NVENC encode and NVDEC decode on Linux and Windows (driver loaded at run time; implies `decode`; inert elsewhere) |
 //! | `vaapi` | | VAAPI HEVC encode and H.264/HEVC/VP9/AV1 decode on Linux (libva loaded at run time; implies `decode`; inert elsewhere) |
@@ -100,13 +100,19 @@
 // The codecs follow their specifications' notation: loops over indices that
 // address several parallel arrays, argument lists that mirror the spec's
 // processes, and the reference decoders' own nested types.
-#![allow(clippy::too_many_arguments, clippy::needless_range_loop, clippy::type_complexity)]
+#![allow(
+    clippy::too_many_arguments,
+    clippy::needless_range_loop,
+    clippy::type_complexity
+)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 pub mod aac;
 pub mod animation;
 pub mod apng;
 pub mod audio_file;
+#[cfg(feature = "decode")]
+pub mod av1;
 pub mod bitstream;
 pub mod captions;
 pub mod contrast;
@@ -123,16 +129,20 @@ pub mod mp3;
 pub mod mp4;
 pub mod mp4_demux;
 pub mod mp4_stream;
-#[cfg(all(feature = "nvidia", any(target_os = "linux", target_os = "windows"), target_pointer_width = "64"))]
+#[cfg(all(
+    feature = "nvidia",
+    any(target_os = "linux", target_os = "windows"),
+    target_pointer_width = "64"
+))]
 pub mod nvidia;
-#[cfg(all(feature = "vaapi", target_os = "linux"))]
-pub mod vaapi;
 pub mod ogg;
 pub mod opus;
 pub mod pcm;
 pub mod prelude;
 pub mod rate;
 pub mod swr;
+#[cfg(all(feature = "vaapi", target_os = "linux"))]
+pub mod vaapi;
 #[cfg(all(feature = "videotoolbox", target_os = "macos"))]
 pub mod videotoolbox;
 #[cfg(all(feature = "videotoolbox", target_os = "macos"))]
@@ -149,14 +159,14 @@ pub use animation::{
 pub use apng::ApngEncoder;
 pub use bitstream::{emulation_prevention, rbsp_trailing_bits, BitWriter};
 #[cfg(feature = "gif")]
+#[allow(deprecated)]
+pub use gif::DecodedFrame;
+#[cfg(feature = "gif")]
 pub use gif::{
     decode_gif, encode_gif, DisposalMethod, DisposalMode, GifDecoder, GifEncoder, GifError,
     GifFrame, GifFrameMeta, GifInfo, GifOptions, GifVersion, GifWriter, LzwClearMode, PaletteMode,
     QuantizerKind,
 };
-#[cfg(feature = "gif")]
-#[allow(deprecated)]
-pub use gif::DecodedFrame;
 pub use vp9::{encode_intra_frame, encode_intra_gray, Reconstruction};
 pub use webm::{encode_gray_webm, encode_webm, mux_webm, WebmCodec, WebmFrame, WebmParams};
 
@@ -285,3 +295,88 @@ pub(crate) fn map_indexed<T, R>(items: &[T], f: impl Fn(usize, &T) -> R + Sync +
     items.iter().enumerate().map(|(i, t)| f(i, t)).collect()
 }
 
+/// Run `f` on each of `items`, on every available thread with `parallel`.
+/// Callers give each item its own disjoint piece of the output (a band of
+/// rows, say), so the result is the same whatever the schedule.
+///
+/// On wasm this needs a build with `+atomics` and a thread pool the page has
+/// started (`wasm-bindgen-rayon`); without atomics it runs in order, as a
+/// plain wasm32 build has no threads to spawn.
+#[cfg(all(
+    feature = "parallel",
+    any(not(target_arch = "wasm32"), target_feature = "atomics")
+))]
+pub(crate) fn for_each_owned<T: Send>(items: Vec<T>, f: impl Fn(T) + Sync + Send) {
+    use rayon::prelude::*;
+    items.into_par_iter().for_each(f)
+}
+
+/// Run `f` on the thread pool, returning at once.
+#[cfg(all(
+    feature = "parallel",
+    any(not(target_arch = "wasm32"), target_feature = "atomics")
+))]
+pub(crate) fn spawn(f: impl FnOnce() + Send + 'static) {
+    rayon::spawn(f)
+}
+
+#[cfg(not(all(
+    feature = "parallel",
+    any(not(target_arch = "wasm32"), target_feature = "atomics")
+)))]
+pub(crate) fn spawn(f: impl FnOnce() + Send + 'static) {
+    f()
+}
+
+/// Whether the caller can block while the pool does work for it: there must
+/// be a pool, the caller must not be one of its threads, and with one thread
+/// there would be nothing to gain.
+#[cfg(all(
+    feature = "parallel",
+    any(not(target_arch = "wasm32"), target_feature = "atomics")
+))]
+pub(crate) fn pool_can_serve_caller() -> bool {
+    rayon::current_thread_index().is_none() && rayon::current_num_threads() > 1
+}
+
+#[cfg(not(all(
+    feature = "parallel",
+    any(not(target_arch = "wasm32"), target_feature = "atomics")
+)))]
+pub(crate) fn pool_can_serve_caller() -> bool {
+    false
+}
+
+/// How many frames to decode at once by default.
+#[cfg(all(
+    feature = "parallel",
+    any(not(target_arch = "wasm32"), target_feature = "atomics")
+))]
+pub(crate) fn frame_threads() -> usize {
+    rayon::current_num_threads().min(8)
+}
+
+#[cfg(not(all(
+    feature = "parallel",
+    any(not(target_arch = "wasm32"), target_feature = "atomics")
+)))]
+pub(crate) fn frame_threads() -> usize {
+    1
+}
+
+/// Whether [`for_each_owned`] runs its items on more than one thread, for
+/// callers whose parallel path has a setup cost worth skipping otherwise.
+pub(crate) fn threaded() -> bool {
+    cfg!(all(
+        feature = "parallel",
+        any(not(target_arch = "wasm32"), target_feature = "atomics")
+    ))
+}
+
+#[cfg(not(all(
+    feature = "parallel",
+    any(not(target_arch = "wasm32"), target_feature = "atomics")
+)))]
+pub(crate) fn for_each_owned<T: Send>(items: Vec<T>, f: impl Fn(T) + Sync + Send) {
+    items.into_iter().for_each(f)
+}

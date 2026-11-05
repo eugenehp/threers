@@ -18,18 +18,19 @@ pub mod caps;
 // No outer doc comments on these three: each carries `//!` docs of its own,
 // and an outer `///` here makes the intra-doc links inside them resolve in
 // *this* scope instead of the module's. The warning for that names no file.
-pub mod colorspace;
-pub mod fullscreen;
-pub mod readback;
 /// Bloom as compute passes over a finished frame. See [`bloom`].
 pub mod bloom;
 mod caption_pass;
+pub mod colorspace;
 pub mod downsample;
+pub mod fullscreen;
 mod gpu_mesh;
 pub mod gpu_texture;
+pub mod readback;
 mod render_target;
 // `set_viewport` / `set_scissor` state and the partial clear behind them.
-pub mod viewport;
+/// GPU-side timing for the main pass. See [`gpu_timer`].
+pub mod gpu_timer;
 /// Pack RGBA to tightly-packed RGB on the GPU, so the alpha never crosses the
 /// readback. See [`rgb_pack`].
 pub mod rgb_pack;
@@ -37,8 +38,7 @@ pub mod rgb_pack;
 pub mod ssao;
 /// [`ssao`] composited onto a live surface. See [`ssao_composite`].
 pub mod ssao_composite;
-/// GPU-side timing for the main pass. See [`gpu_timer`].
-pub mod gpu_timer;
+pub mod viewport;
 // The renderer itself, in a file named after it; this module is the facade.
 #[allow(clippy::module_inception)]
 mod renderer;
@@ -66,7 +66,9 @@ pub use warmup::{PipelineError, PipelineWarmup};
 #[cfg(not(target_arch = "wasm32"))]
 pub mod pipeline_cache;
 #[cfg(not(target_arch = "wasm32"))]
-pub use pipeline_cache::{CallbackStore, FileStore, IntoPipelineCache, MemoryStore, PipelineCache, PipelineCacheStore};
+pub use pipeline_cache::{
+    CallbackStore, FileStore, IntoPipelineCache, MemoryStore, PipelineCache, PipelineCacheStore,
+};
 // A scene in a native window or child view someone else owns (Tauri, Wry,
 // tao, winit, raw handles), several on one device, from any thread.
 #[cfg(not(target_arch = "wasm32"))]
@@ -170,12 +172,12 @@ cfg_apple! {
     pub use layer::{LayerGpu, LayerRenderer};
 }
 pub use render_target::{CubeRenderTarget, RenderTarget};
-pub use viewport::{PixelRect, ShadowMap, ViewportRect};
-pub use renderer::{PostFxCamera, Renderer, RendererOptions, ToneMapping};
-pub use renderer::{PostFxBlend, PostFxNoise, PostFxOp, PostFxOutput};
 #[allow(unused_imports)] // only the Metal backend reads it from outside
 pub(crate) use renderer::stored_clear;
 pub use renderer::{halton, stratified_jitter};
+pub use renderer::{PostFxBlend, PostFxNoise, PostFxOp, PostFxOutput};
+pub use renderer::{PostFxCamera, Renderer, RendererOptions, ToneMapping};
+pub use viewport::{PixelRect, ShadowMap, ViewportRect};
 
 #[cfg(test)]
 mod clear_value_tests {

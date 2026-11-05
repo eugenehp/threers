@@ -37,7 +37,10 @@ fn render_with(r: &mut threers::HeadlessRenderer, glass_order: Option<i32>) -> [
     let mut glass = PhysicalMaterial::new(Color::WHITE);
     glass.opacity = 0.3;
     glass.transparency = TransparencyMode::Glass;
-    let mut front = Object3D::mesh(Mesh::new(PlaneGeometry::new(1.6, 1.6), Material::Physical(glass)));
+    let mut front = Object3D::mesh(Mesh::new(
+        PlaneGeometry::new(1.6, 1.6),
+        Material::Physical(glass),
+    ));
     front.position = Vector3::new(0.0, 0.0, 0.5);
     if let Some(o) = glass_order {
         front.render_order = o;
@@ -56,8 +59,15 @@ fn render_with(r: &mut threers::HeadlessRenderer, glass_order: Option<i32>) -> [
 fn render_order_puts_glass_after_what_is_inside_it() {
     // sRGB targets blend translucent draws in a separate encoded pass; plain
     // ones in the main pass. The order has to hold on both.
-    for format in [wgpu::TextureFormat::Rgba8UnormSrgb, wgpu::TextureFormat::Rgba8Unorm] {
-        let Ok(mut r) = threers::HeadlessRenderer::builder().size(N, N).color_format(format).build() else {
+    for format in [
+        wgpu::TextureFormat::Rgba8UnormSrgb,
+        wgpu::TextureFormat::Rgba8Unorm,
+    ] {
+        let Ok(mut r) = threers::HeadlessRenderer::builder()
+            .size(N, N)
+            .color_format(format)
+            .build()
+        else {
             eprintln!("skipping: no GPU adapter");
             return;
         };
@@ -66,6 +76,9 @@ fn render_order_puts_glass_after_what_is_inside_it() {
         // the glass is grey-white: red is only what the quad behind contributes
         let redness = |c: [u8; 3]| c[0] as i32 - c[1] as i32;
         assert!(redness(hidden) < 10, "{format:?}, equal orders: the glass prepass should hide the quad behind, got {hidden:?}");
-        assert!(redness(shown) > 60, "{format:?}: glass ordered last should blend over the red quad, got {shown:?}");
+        assert!(
+            redness(shown) > 60,
+            "{format:?}: glass ordered last should blend over the red quad, got {shown:?}"
+        );
     }
 }

@@ -38,7 +38,11 @@ fn psnr(rgba: &[u8], bgra: &[u8]) -> f64 {
 }
 
 fn encode(backend: EncodeBackend) -> Vec<u8> {
-    let opts = EncodeOptions { fps: 24, quality: 0.8, ..Default::default() };
+    let opts = EncodeOptions {
+        fps: 24,
+        quality: 0.8,
+        ..Default::default()
+    };
     let mut enc = Mp4Encoder::with_backend(W, H, opts, backend).unwrap();
     assert_eq!(enc.backend(), backend);
     for i in 0..FRAMES {
@@ -54,15 +58,22 @@ fn decode_and_score(mp4: &[u8], backend: Backend) -> Vec<f64> {
     let mut dec = Decoder::with_backend(&track, backend).unwrap();
     // Samples go in in decode order; pictures come out by presentation time.
     for s in &track.samples {
-        dec.push(&mp4[s.offset as usize..][..s.size as usize], s.pts, s.dts, s.duration as i64)
-            .unwrap();
+        dec.push(
+            &mp4[s.offset as usize..][..s.size as usize],
+            s.pts,
+            s.dts,
+            s.duration as i64,
+        )
+        .unwrap();
     }
     track
         .presentation_order()
         .into_iter()
         .enumerate()
         .map(|(i, idx)| {
-            let bgra = dec.take(track.samples[idx].pts).expect("a picture per sample");
+            let bgra = dec
+                .take(track.samples[idx].pts)
+                .expect("a picture per sample");
             psnr(&frame(i as u32), &bgra)
         })
         .collect()
@@ -70,8 +81,18 @@ fn decode_and_score(mp4: &[u8], backend: Backend) -> Vec<f64> {
 
 #[test]
 fn every_encode_backend_round_trips_through_every_decoder() {
-    let encoders = [EncodeBackend::Native, EncodeBackend::VideoToolbox, EncodeBackend::Nvenc, EncodeBackend::Vaapi];
-    let decoders = [Backend::Native, Backend::VideoToolbox, Backend::Nvdec, Backend::Vaapi];
+    let encoders = [
+        EncodeBackend::Native,
+        EncodeBackend::VideoToolbox,
+        EncodeBackend::Nvenc,
+        EncodeBackend::Vaapi,
+    ];
+    let decoders = [
+        Backend::Native,
+        Backend::VideoToolbox,
+        Backend::Nvdec,
+        Backend::Vaapi,
+    ];
     let mut ran = 0;
     for e in encoders.into_iter().filter(|b| b.available()) {
         let mp4 = encode(e);
@@ -97,6 +118,7 @@ fn the_default_encoder_is_the_preferred_backend() {
 #[test]
 fn hardware_and_native_decoders_agree() {
     let Some(hw_backend) = Backend::HARDWARE.into_iter().find(|b| b.available()) else {
+        eprintln!("skipping: no hardware decoder");
         return;
     };
     let mp4 = encode(EncodeBackend::Native);
@@ -112,6 +134,10 @@ fn hardware_and_native_decoders_agree() {
         for p in as_rgba.chunks_exact_mut(4) {
             p.swap(0, 2);
         }
-        assert!(psnr(&as_rgba, &a) > 40.0, "decoders disagree at pts {}", s.pts);
+        assert!(
+            psnr(&as_rgba, &a) > 40.0,
+            "decoders disagree at pts {}",
+            s.pts
+        );
     }
 }

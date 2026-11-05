@@ -328,6 +328,117 @@ async fn a_full_scene_draws() {
 /// WebGL2 has no storage buffers, so `s0(i)` has to resolve to a texture read.
 /// A shader written with `u_s0[i]` does not compile on this backend at all,
 /// which is exactly the failure this is meant to catch before a user does.
+/// `Oit` on both backends: two panes of equal weight mix evenly, whichever is
+/// in front, where sorted blending would let the front one win. WebGL2 gets
+/// there in two passes, so this is what shows they add up to the one.
+#[wasm_bindgen_test]
+async fn oit_panes_mix_whichever_is_in_front() {
+    use threers::wasm::{
+        WebCamera, WebColor, WebEuler, WebGeometry, WebLight, WebMaterial, WebMesh, WebScene,
+        WebVector3,
+    };
+    let (shared, _canvas) = super::views_renderer().await;
+    let mut renderer = shared.borrow_mut();
+    reset(&mut renderer);
+    let target = threers::wasm::WebRenderTarget::new(&renderer, 64, 64);
+    let pane = |r: f32, b: f32| {
+        let mut m = WebMaterial::physical(&WebColor::new(r, 0.0, b), 0.5, 0.0, 0.0, 0.0);
+        m.set_opacity(0.5);
+        m.set_transparent(true);
+        m.set_transparency_mode(2);
+        WebMesh::new(&WebGeometry::plane(4.0, 4.0), &m)
+    };
+    let mut seen = Vec::new();
+    for (red_z, blue_z) in [(0.1, -0.1), (-0.1, 0.1)] {
+        let mut scene = WebScene::new();
+        scene.set_background(&WebColor::new(0.0, 0.0, 0.0));
+        scene.add_light(&WebLight::ambient(&WebColor::new(1.0, 1.0, 1.0), 3.0));
+        let red = scene.add(&pane(1.0, 0.0));
+        let blue = scene.add(&pane(0.0, 1.0));
+        scene.set_transform(
+            &red,
+            &WebVector3::new(0.0, 0.0, red_z),
+            &WebEuler::new(0.0, 0.0, 0.0),
+        );
+        scene.set_transform(
+            &blue,
+            &WebVector3::new(0.0, 0.0, blue_z),
+            &WebEuler::new(0.0, 0.0, 0.0),
+        );
+        let mut camera = WebCamera::perspective(40.0, 1.0, 0.1, 100.0);
+        camera.set_position(0.0, 0.0, 4.0);
+        renderer.set_render_target(target.id);
+        renderer.render(&mut scene, &camera);
+        renderer.render(&mut scene, &camera);
+        let px = read_target(&renderer, target.id, 64, 64).await;
+        let at = (32 * 64 + 32) * 4;
+        seen.push([px[at] as i32, px[at + 1] as i32, px[at + 2] as i32]);
+    }
+    renderer.set_render_target(0);
+    for [r, _, b] in &seen {
+        assert!(*r > 30 && *b > 30, "both panes show: {seen:?}");
+        assert!((r - b).abs() <= 12, "the panes mix evenly: {seen:?}");
+    }
+    let drift = (seen[0][0] - seen[1][0]).abs() + (seen[0][2] - seen[1][2]).abs();
+    assert!(drift <= 12, "the order changes nothing: {seen:?}");
+}
+
+/// A `ShaderMaterial` that reads the scene behind it, on both backends.
+#[wasm_bindgen_test]
+async fn a_screen_space_shader_material_reads_the_scene() {
+    use threers::wasm::{
+        WebCamera, WebColor, WebEuler, WebGeometry, WebMaterial, WebMesh, WebScene,
+        WebShaderMaterial, WebVector3,
+    };
+    let (shared, _canvas) = super::views_renderer().await;
+    let mut renderer = shared.borrow_mut();
+    reset(&mut renderer);
+    let target = threers::wasm::WebRenderTarget::new(&renderer, 64, 64);
+    let mut pane = WebShaderMaterial::new(
+        "@fragment\n\
+         fn fs_main(in: VsOut) -> @location(0) vec4<f32> {\n\
+         let uv = in.clip_pos.xy / vec2<f32>(textureDimensions(ss_depth_tex));\n\
+         let behind = textureSampleLevel(ss_color_tex, ss_color_samp, uv, 0.0).rgb;\n\
+         return vec4<f32>(behind.bgr, 1.0);\n\
+         }\n",
+    );
+    pane.set_screen_space(true);
+    let mut scene = WebScene::new();
+    scene.set_background(&WebColor::new(0.0, 0.0, 0.0));
+    let wall = scene.add(&WebMesh::new(
+        &WebGeometry::plane(20.0, 20.0),
+        &WebMaterial::basic(&WebColor::new(1.0, 0.0, 0.0)),
+    ));
+    scene.set_transform(
+        &wall,
+        &WebVector3::new(0.0, 0.0, -2.0),
+        &WebEuler::new(0.0, 0.0, 0.0),
+    );
+    scene.add(&WebMesh::new(
+        &WebGeometry::plane(1.0, 1.0),
+        &pane.material(),
+    ));
+    let mut camera = WebCamera::perspective(40.0, 1.0, 0.1, 100.0);
+    camera.set_position(0.0, 0.0, 4.0);
+    renderer.set_render_target(target.id);
+    renderer.render(&mut scene, &camera);
+    renderer.render(&mut scene, &camera);
+    let px = read_target(&renderer, target.id, 64, 64).await;
+    renderer.set_render_target(0);
+    let at = (32 * 64 + 32) * 4;
+    let wall_px = (4 * 64 + 4) * 4;
+    assert!(
+        px[wall_px] > 200 && px[wall_px + 2] < 40,
+        "the wall is red: {:?}",
+        &px[wall_px..wall_px + 3]
+    );
+    assert!(
+        px[at] < 40 && px[at + 2] > 200,
+        "the pane swaps red into blue: {:?}",
+        &px[at..at + 3]
+    );
+}
+
 #[wasm_bindgen_test]
 async fn a_shader_material_draws() {
     let (shared, _canvas) = super::views_renderer().await;
@@ -761,8 +872,8 @@ async fn points_draw_sized_quads() {
 /// 3 has room for one texture beside its capture, so its glass gets its
 /// shadows packed in an integer texture (`fs_glass_shadow`); `Glass` draws in
 /// two halves selected by a pipeline-overridable constant; `Oit` cannot blend
-/// two attachments differently on WebGL2 and falls back to `Glass`; and the
-/// shadow maps are depth arrays, a layer per light. On WebGPU, Tint has to
+/// two attachments differently on WebGL2, so it draws each in its own pass; and
+/// the shadow maps are depth arrays, a layer per light. On WebGPU, Tint has to
 /// accept the same WGSL and the multisampled OIT and refraction paths run.
 #[wasm_bindgen_test]
 async fn glass_modes_draw_under_many_shadowing_lights() {
@@ -1622,13 +1733,22 @@ async fn particles_draw_to_the_canvas() {
         renderer.render(&mut scene, &camera);
         let red = (0..9)
             .flat_map(|a| (0..9).map(move |b| (a, b)))
-            .map(|(a, b)| canvas_pixel(&canvas, cw / 2 - cw / 20 + a * cw / 80, ch / 2 - ch / 20 + b * ch / 80))
+            .map(|(a, b)| {
+                canvas_pixel(
+                    &canvas,
+                    cw / 2 - cw / 20 + a * cw / 80,
+                    ch / 2 - ch / 20 + b * ch / 80,
+                )
+            })
             // Red over the blue background — on top of it, for additive
             // particles, which add their light to it.
             .filter(|p| p[0] > 100 && (blend == "additive" || p[0] as i32 > p[2] as i32))
             .count();
         let sky = canvas_pixel(&canvas, cw / 2, ch / 20);
-        assert!(sky[2] > 200 && sky[0] < 40, "{kind}/{blend}: the background reads {sky:?}");
+        assert!(
+            sky[2] > 200 && sky[0] < 40,
+            "{kind}/{blend}: the background reads {sky:?}"
+        );
         assert!(red > 40, "{kind}/{blend}: {red} of 81 centre pixels red");
     }
 }
@@ -1648,7 +1768,9 @@ async fn dunes_draw_to_the_canvas() {
     scene.set_background(&WebColor::new(0.0, 0.0, 0.0));
     let bed = scene.create_sand_bed(0.0, 0.0, 120.0, 120.0, 60, 0.0);
     scene.shape_dunes(&bed, 30.0, 5.0, 2.0, 2.0, 7, "+x");
-    scene.set_sand_look(&bed, 0.72, 0.42, 0.18, 0.3, 0.2, 0.15, 0.6, 0.35, 1.0, 0.25, 0.35);
+    scene.set_sand_look(
+        &bed, 0.72, 0.42, 0.18, 0.3, 0.2, 0.15, 0.6, 0.35, 1.0, 0.25, 0.35,
+    );
     let sky = scene.create_desert_sky("day", 400.0);
     scene.set_children(&scene.root_handle(), vec![bed.id(), sky.id()]);
     scene.add_light(&WebLight::ambient(&WebColor::new(1.0, 1.0, 1.0), 1.0));
@@ -1661,7 +1783,10 @@ async fn dunes_draw_to_the_canvas() {
     camera.look_at(0.0, 0.0, 0.0);
     renderer.render(&mut scene, &camera);
     let sky_px = canvas_pixel(&canvas, cw / 2, ch / 20);
-    assert!(sky_px[2] > sky_px[0] && sky_px[2] > 120, "the sky reads {sky_px:?}");
+    assert!(
+        sky_px[2] > sky_px[0] && sky_px[2] > 120,
+        "the sky reads {sky_px:?}"
+    );
     let sand = canvas_pixel(&canvas, cw / 2, ch * 3 / 4);
     assert!(sand[0] > sand[2] && sand[0] > 60, "the sand reads {sand:?}");
 }
@@ -1701,7 +1826,10 @@ async fn weather_draws_to_the_canvas() {
         camera.look_at(0.0, 0.0, 0.0);
         renderer.render(&mut scene, &camera);
         let sky = canvas_pixel(&canvas, cw / 2, ch / 50);
-        assert!(sky[2] > 200 && sky[0] < 40, "{kind}: the background reads {sky:?}");
+        assert!(
+            sky[2] > 200 && sky[0] < 40,
+            "{kind}: the background reads {sky:?}"
+        );
         let n = lit_pixels
             .call1(&wasm_bindgen::JsValue::NULL, &canvas)
             .expect("canvas read")

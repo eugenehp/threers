@@ -346,7 +346,11 @@ impl Denoiser {
         width: usize,
         height: usize,
     ) -> Result<Vec<f32>, DenoiseError> {
-        if width == 0 || height == 0 || !width.is_multiple_of(TILE_MULTIPLE) || !height.is_multiple_of(TILE_MULTIPLE) {
+        if width == 0
+            || height == 0
+            || !width.is_multiple_of(TILE_MULTIPLE)
+            || !height.is_multiple_of(TILE_MULTIPLE)
+        {
             return Err(DenoiseError::BadTileSize { width, height });
         }
         let wanted = self.inputs * width * height;

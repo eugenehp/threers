@@ -479,7 +479,7 @@ impl Raycaster {
             ObjectKind::LineSegments(ls) => self.raycast_line_segments(id, obj, ls, hits),
             ObjectKind::Points(p) => self.raycast_points(id, obj, p, hits),
             ObjectKind::Sprite(s) => self.raycast_sprite(id, obj, s, hits),
-            ObjectKind::Group | ObjectKind::Light(_) => {}
+            ObjectKind::Group | ObjectKind::Light(_) | ObjectKind::Audio(_) => {}
         }
     }
 

@@ -2,6 +2,7 @@
 
 use super::tables::{DEFAULT_SCALING, SCAN4, SCAN8X8};
 use crate::decode::bits::BitReader;
+use crate::decode::picture::check_picture_size;
 
 pub type Result<T> = std::result::Result<T, String>;
 
@@ -267,7 +268,7 @@ fn sub_layer_hrd(r: &mut BitReader, cpb_cnt: u32, sub_pic: bool) {
     }
 }
 
-fn hrd_parameters(r: &mut BitReader, common: bool, max_sub_layers_minus1: u32) {
+fn hrd_parameters(r: &mut BitReader, common: bool, max_sub_layers_minus1: u32) -> Result<()> {
     let mut nal = false;
     let mut vcl = false;
     let mut sub_pic = false;
@@ -296,6 +297,11 @@ fn hrd_parameters(r: &mut BitReader, common: bool, max_sub_layers_minus1: u32) {
             low_delay = r.flag();
         }
         let cpb_cnt = if !low_delay { r.ue() } else { 0 };
+        // Bounded by the spec, and a loop count below: damage here must not
+        // become four billion iterations.
+        if cpb_cnt > 31 {
+            return Err("cpb_cnt_minus1 out of range".into());
+        }
         if nal {
             sub_layer_hrd(r, cpb_cnt, sub_pic);
         }
@@ -303,6 +309,7 @@ fn hrd_parameters(r: &mut BitReader, common: bool, max_sub_layers_minus1: u32) {
             sub_layer_hrd(r, cpb_cnt, sub_pic);
         }
     }
+    Ok(())
 }
 
 #[derive(Clone, Debug)]
@@ -342,6 +349,21 @@ pub struct Sps {
     pub lt_ref_pics: Vec<(u32, bool)>,
     pub temporal_mvp: bool,
     pub strong_intra_smoothing: bool,
+    /// Range extension: no reference smoothing in intra prediction.
+    pub intra_smoothing_disabled: bool,
+    /// Range extension: 4×4 intra residuals without a transform are
+    /// rotated by 180°.
+    pub transform_skip_rotation: bool,
+    /// Range extension: one significance context for untransformed blocks.
+    pub transform_skip_context: bool,
+    /// Range extension: residual DPCM, implied for intra blocks predicted
+    /// straight across and signalled for inter ones.
+    pub implicit_rdpcm: bool,
+    pub explicit_rdpcm: bool,
+    /// Range extension: weighted-prediction offsets at full bit depth.
+    pub high_precision_offsets: bool,
+    /// Range extension: Rice parameters carried between sub-blocks.
+    pub persistent_rice_adaptation: bool,
     /// The VUI's colour description, when it has one.
     pub colour_primaries: Option<u32>,
     pub transfer_characteristics: Option<u32>,
@@ -350,6 +372,15 @@ pub struct Sps {
 }
 
 impl Sps {
+    /// Chroma subsampling as shifts, `(horizontal, vertical)`: (1, 1) for
+    /// 4:2:0, (1, 0) for 4:2:2, (0, 0) for 4:4:4.
+    pub fn chroma_shift(&self) -> (usize, usize) {
+        (
+            (self.chroma_format_idc != 3) as usize,
+            (self.chroma_format_idc == 1) as usize,
+        )
+    }
+
     pub fn parse(rbsp: &[u8]) -> Result<Sps> {
         let mut r = BitReader::new(rbsp);
         r.skip(4);
@@ -364,25 +395,32 @@ impl Sps {
         if chroma_format_idc == 3 && r.flag() {
             return Err("separate colour planes are not supported".into());
         }
-        if chroma_format_idc != 1 && chroma_format_idc != 2 {
+        if !(1..=3).contains(&chroma_format_idc) {
             return Err(format!(
-                "HEVC chroma_format_idc {chroma_format_idc} is not supported (4:2:0 and 4:2:2 only)"
+                "HEVC chroma_format_idc {chroma_format_idc} is not supported (4:2:0, 4:2:2 and 4:4:4 only)"
             ));
         }
         let width = r.ue();
         let height = r.ue();
         let mut crop = [0u32; 4];
         if r.flag() {
-            // SubWidthC = 2; SubHeightC = 2 (4:2:0) or 1 (4:2:2).
+            // In chroma units: SubWidthC and SubHeightC.
+            let sw = if chroma_format_idc == 3 { 1 } else { 2 };
             let sh = if chroma_format_idc == 1 { 2 } else { 1 };
             let c = [r.ue(), r.ue(), r.ue(), r.ue()];
-            crop = [c[0].saturating_mul(2), c[1].saturating_mul(2), c[2].saturating_mul(sh), c[3].saturating_mul(sh)];
+            crop = [
+                c[0].saturating_mul(sw),
+                c[1].saturating_mul(sw),
+                c[2].saturating_mul(sh),
+                c[3].saturating_mul(sh),
+            ];
         }
         // Bounds before anything is sized from these (§7.4.3.2.1): garbage
         // reads as all-ones Exp-Golomb codes.
         if width == 0 || height == 0 || width > 1 << 14 || height > 1 << 14 {
             return Err("SPS picture size out of range".into());
         }
+        check_picture_size(width, height)?;
         if crop[0].saturating_add(crop[1]) >= width || crop[2].saturating_add(crop[3]) >= height {
             return Err("SPS conformance window exceeds the picture".into());
         }
@@ -399,7 +437,11 @@ impl Sps {
         let mut max_dec_pic_buffering = 1;
         let mut max_num_reorder = 0;
         let mut max_latency_increase_plus1 = 0;
-        let start = if ordering_all { 0 } else { max_sub_layers_minus1 };
+        let start = if ordering_all {
+            0
+        } else {
+            max_sub_layers_minus1
+        };
         for _ in start..=max_sub_layers_minus1 {
             max_dec_pic_buffering = r.ue().saturating_add(1);
             if max_dec_pic_buffering > 16 {
@@ -412,7 +454,18 @@ impl Sps {
         let log2_ctb = log2_min_cb.saturating_add(r.ue());
         let log2_min_tb = r.ue().saturating_add(2);
         let log2_max_tb = log2_min_tb.saturating_add(r.ue());
-        if !(4..=6).contains(&log2_ctb) || log2_max_tb > 5 || log2_min_tb >= log2_min_cb || log2_max_tb > log2_ctb {
+        // Whole minimum coding blocks: a block past this edge could not be
+        // split back inside the picture, and every per-block array is sized
+        // to the picture.
+        let min_cb = 1u64.checked_shl(log2_min_cb).unwrap_or(u64::MAX);
+        if (width as u64 | height as u64) & (min_cb - 1) != 0 {
+            return Err("picture size is not a multiple of the minimum coding block".into());
+        }
+        if !(4..=6).contains(&log2_ctb)
+            || log2_max_tb > 5
+            || log2_min_tb >= log2_min_cb
+            || log2_max_tb > log2_ctb
+        {
             return Err("coding/transform block sizes out of range".into());
         }
         let max_th_depth_inter = r.ue();
@@ -429,7 +482,8 @@ impl Sps {
         let amp = r.flag();
         let sao = r.flag();
         let pcm = r.flag();
-        let (mut pcm_bit_depth_y, mut pcm_bit_depth_c, mut log2_min_pcm, mut log2_max_pcm) = (8, 8, 0, 0);
+        let (mut pcm_bit_depth_y, mut pcm_bit_depth_c, mut log2_min_pcm, mut log2_max_pcm) =
+            (8, 8, 0, 0);
         let mut pcm_loop_filter_disabled = false;
         if pcm {
             pcm_bit_depth_y = r.u(4) + 1;
@@ -497,7 +551,7 @@ impl Sps {
                     r.ue();
                 }
                 if r.flag() {
-                    hrd_parameters(&mut r, true, max_sub_layers_minus1);
+                    hrd_parameters(&mut r, true, max_sub_layers_minus1)?;
                 }
             }
             if r.flag() {
@@ -509,11 +563,28 @@ impl Sps {
                 r.ue();
             }
         }
+        let mut tools = 0;
         if r.flag() {
-            let range = r.flag();
+            // As for the PPS: before version 2 these were arbitrary extension
+            // data bits, so only RExt and later profiles have a range
+            // extension. JCT-VC EXT_A_ericsson_3 sets them on a Main stream;
+            // read this way it decodes to exactly what HM makes of its
+            // reissue, EXT_A_ericsson_4. (ffmpeg gates only the PPS one, and
+            // refuses _3.)
+            let range = r.flag() && profile_idc >= 4;
             let _others = r.u(7);
-            if range && r.u(9) != 0 {
-                return Err("HEVC range extension tools are not supported".into());
+            if range {
+                // Nine flags, first to last: transform skip rotation and
+                // context, implicit and explicit RDPCM, extended precision,
+                // intra smoothing disabled, high precision offsets,
+                // persistent Rice adaptation, CABAC bypass alignment.
+                tools = r.u(9);
+                if tools & 0x10 != 0 {
+                    return Err("extended precision processing is not supported".into());
+                }
+                if tools & 0x01 != 0 {
+                    return Err("CABAC bypass alignment is not supported".into());
+                }
             }
         }
         if r.overrun() {
@@ -556,6 +627,13 @@ impl Sps {
             lt_ref_pics,
             temporal_mvp,
             strong_intra_smoothing,
+            intra_smoothing_disabled: tools & 0x08 != 0,
+            transform_skip_rotation: tools & 0x100 != 0,
+            transform_skip_context: tools & 0x80 != 0,
+            implicit_rdpcm: tools & 0x40 != 0,
+            explicit_rdpcm: tools & 0x20 != 0,
+            high_precision_offsets: tools & 0x04 != 0,
+            persistent_rice_adaptation: tools & 0x02 != 0,
             colour_primaries,
             transfer_characteristics,
             matrix_coefficients,
@@ -592,6 +670,17 @@ pub struct Pps {
     pub cb_qp_offset: i32,
     pub cr_qp_offset: i32,
     pub slice_chroma_qp_offsets_present: bool,
+    /// Range extension: the (Cb, Cr) QP offsets a coding unit can pick from,
+    /// empty when `chroma_qp_offset_list_enabled_flag` is off.
+    pub chroma_qp_offset_list: Vec<[i32; 2]>,
+    /// Depth below the CTB of the groups that each code one choice.
+    pub diff_cu_chroma_qp_offset_depth: u32,
+    /// Range extension: largest transform-skip block, log2 (2 without it).
+    pub log2_max_transform_skip: u32,
+    /// Range extension: chroma residuals may add a scaled luma residual.
+    pub cross_component_prediction: bool,
+    /// Range extension: SAO offsets are scaled up by these, luma and chroma.
+    pub log2_sao_offset_scale: [u32; 2],
     pub weighted_pred: bool,
     pub weighted_bipred: bool,
     pub transquant_bypass: bool,
@@ -643,7 +732,9 @@ impl TileSpacing {
 }
 
 impl Pps {
-    pub fn parse(rbsp: &[u8]) -> Result<Pps> {
+    /// `spss` are the sequence parameter sets received so far, indexed by id:
+    /// the referenced one's profile decides whether a range extension is read.
+    pub fn parse(rbsp: &[u8], spss: &[Option<Sps>]) -> Result<Pps> {
         let mut r = BitReader::new(rbsp);
         let id = r.ue();
         let sps_id = r.ue();
@@ -666,6 +757,9 @@ impl Pps {
         let diff_cu_qp_delta_depth = if cu_qp_delta { r.ue() } else { 0 };
         let cb_qp_offset = r.se();
         let cr_qp_offset = r.se();
+        if !(-12..=12).contains(&cb_qp_offset) || !(-12..=12).contains(&cr_qp_offset) {
+            return Err("pps_cb_qp_offset or pps_cr_qp_offset out of range".into());
+        }
         let slice_chroma_qp_offsets_present = r.flag();
         let weighted_pred = r.flag();
         let weighted_bipred = r.flag();
@@ -689,8 +783,10 @@ impl Pps {
                 tile_cols = TileSpacing::Uniform(ncols);
                 tile_rows = TileSpacing::Uniform(nrows);
             } else {
-                tile_cols = TileSpacing::Explicit((1..ncols).map(|_| r.ue().saturating_add(1)).collect());
-                tile_rows = TileSpacing::Explicit((1..nrows).map(|_| r.ue().saturating_add(1)).collect());
+                tile_cols =
+                    TileSpacing::Explicit((1..ncols).map(|_| r.ue().saturating_add(1)).collect());
+                tile_rows =
+                    TileSpacing::Explicit((1..nrows).map(|_| r.ue().saturating_add(1)).collect());
             }
             loop_filter_across_tiles = r.flag();
         }
@@ -714,24 +810,48 @@ impl Pps {
         let lists_modification_present = r.flag();
         let log2_parallel_merge_level = r.ue().saturating_add(2);
         let slice_header_extension_present = r.flag();
+        let mut chroma_qp_offset_list = Vec::new();
+        let mut diff_cu_chroma_qp_offset_depth = 0;
+        let mut log2_max_transform_skip = 2;
+        let mut cross_component_prediction = false;
+        let mut log2_sao_offset_scale = [0, 0];
         if r.flag() {
-            let range = r.flag();
+            // Streams older than the range extensions (version 2) set
+            // pps_extension_flag and follow it with arbitrary extension data,
+            // which a Main or Main 10 decoder must ignore (JCT-VC PS_A_VIDYO_3
+            // tests exactly that). So, as ffmpeg does, read the range extension
+            // only for RExt and later profiles; without the SPS, assume one.
+            let rext = spss
+                .get(sps_id as usize)
+                .and_then(Option::as_ref)
+                .is_none_or(|s| s.profile_idc >= 4);
+            let range = r.flag() && rext;
             let _others = r.u(7);
             if range {
-                if transform_skip
-                    && r.ue() != 0 {
-                        return Err("transform skip above 4x4 (range extension) is not supported".into());
+                if transform_skip {
+                    // Only ever compared with block sizes; HM accepts the
+                    // out-of-range 8 in JCT-VC PERSIST_RPARAM_A_RExt_Sony_1.
+                    log2_max_transform_skip = r.ue().saturating_add(2);
+                }
+                cross_component_prediction = r.flag();
+                if r.flag() {
+                    diff_cu_chroma_qp_offset_depth = r.ue();
+                    let len = r.ue().saturating_add(1);
+                    if len > 6 {
+                        return Err("chroma_qp_offset_list_len_minus1 out of range".into());
                     }
-                if r.flag() {
-                    return Err("cross-component prediction is not supported".into());
+                    for _ in 0..len {
+                        let pair = [r.se(), r.se()];
+                        if pair.iter().any(|o| !(-12..=12).contains(o)) {
+                            return Err("chroma QP offset list entry out of range".into());
+                        }
+                        chroma_qp_offset_list.push(pair);
+                    }
                 }
-                if r.flag() {
-                    return Err("chroma QP offset lists are not supported".into());
-                }
-                let log2_sao_luma = r.ue();
-                let log2_sao_chroma = r.ue();
-                if log2_sao_luma != 0 || log2_sao_chroma != 0 {
-                    return Err("SAO offset scaling is not supported".into());
+                log2_sao_offset_scale = [r.ue(), r.ue()];
+                // At most bitDepth − 10, so never above 6 (16-bit).
+                if log2_sao_offset_scale.iter().any(|&v| v > 6) {
+                    return Err("log2_sao_offset_scale out of range".into());
                 }
             }
         }
@@ -752,6 +872,11 @@ impl Pps {
             cb_qp_offset,
             cr_qp_offset,
             slice_chroma_qp_offsets_present,
+            chroma_qp_offset_list,
+            diff_cu_chroma_qp_offset_depth,
+            log2_max_transform_skip,
+            cross_component_prediction,
+            log2_sao_offset_scale,
             weighted_pred,
             weighted_bipred,
             transquant_bypass,
@@ -816,6 +941,9 @@ pub struct SliceHeader {
     pub qp_delta: i32,
     pub cb_qp_offset: i32,
     pub cr_qp_offset: i32,
+    /// `cu_chroma_qp_offset_enabled_flag`: coding units may pick from the
+    /// PPS chroma QP offset list.
+    pub cu_chroma_qp_offset: bool,
     pub deblocking_disabled: bool,
     pub beta_offset: i32,
     pub tc_offset: i32,
@@ -899,6 +1027,7 @@ impl SliceHeader {
                 qp_delta: 0,
                 cb_qp_offset: 0,
                 cr_qp_offset: 0,
+                cu_chroma_qp_offset: false,
                 deblocking_disabled: pps.deblocking_disabled,
                 beta_offset: pps.beta_offset,
                 tc_offset: pps.tc_offset,
@@ -941,7 +1070,11 @@ impl SliceHeader {
                         .clone();
                 }
                 if sps.long_term_present {
-                    let n_sps = if !sps.lt_ref_pics.is_empty() { r.ue() } else { 0 };
+                    let n_sps = if !sps.lt_ref_pics.is_empty() {
+                        r.ue()
+                    } else {
+                        0
+                    };
                     let n_pics = r.ue();
                     if n_sps as usize > sps.lt_ref_pics.len() || n_sps + n_pics > 32 {
                         return Err("too many long-term pictures".into());
@@ -964,7 +1097,11 @@ impl SliceHeader {
                         let mut poc = lsb;
                         if msb_present {
                             let delta = r.ue() as i32;
-                            msb_cycle = if i == 0 || i == n_sps { delta } else { delta + msb_cycle };
+                            msb_cycle = if i == 0 || i == n_sps {
+                                delta
+                            } else {
+                                delta + msb_cycle
+                            };
                             // The rest of the MSB comes from the current
                             // POC, which the caller adds: §7.4.7.1 (7-52).
                             poc = lsb - msb_cycle * max_lsb;
@@ -1035,9 +1172,24 @@ impl SliceHeader {
                 }
             }
             h.qp_delta = r.se();
+            // QP arithmetic below indexes tables by these, and only stays in
+            // range if the slice starts in range.
+            let qp_bd_offset = 6 * (sps.bit_depth_y as i32 - 8);
+            if !(-qp_bd_offset..=51).contains(&pps.init_qp.saturating_add(h.qp_delta)) {
+                return Err("SliceQpY out of range".into());
+            }
             if pps.slice_chroma_qp_offsets_present {
                 h.cb_qp_offset = r.se();
                 h.cr_qp_offset = r.se();
+                let sum = |a: i32, b: i32| a.saturating_add(b);
+                if !(-12..=12).contains(&sum(pps.cb_qp_offset, h.cb_qp_offset))
+                    || !(-12..=12).contains(&sum(pps.cr_qp_offset, h.cr_qp_offset))
+                {
+                    return Err("slice chroma QP offset out of range".into());
+                }
+            }
+            if !pps.chroma_qp_offset_list.is_empty() {
+                h.cu_chroma_qp_offset = r.flag();
             }
             let mut override_flag = false;
             if pps.deblocking_override_enabled {
@@ -1099,8 +1251,13 @@ fn pred_weight_table(r: &mut BitReader, sps: &Sps, h: &SliceHeader) -> Result<Pr
         return Err("chroma weight denominator out of range".into());
     }
     w.chroma_log2_denom = cd as u32;
-    let sy = sps.bit_depth_y as i32 - 8;
-    let sc = sps.bit_depth_c as i32 - 8;
+    // Offsets are coded at 8 bits and scaled up, or with
+    // high_precision_offsets_enabled_flag at the full bit depth.
+    let (sy, sc, half) = if sps.high_precision_offsets {
+        (0, 0, 1 << (sps.bit_depth_c - 1))
+    } else {
+        (sps.bit_depth_y as i32 - 8, sps.bit_depth_c as i32 - 8, 128)
+    };
     for l in 0..(1 + (h.slice_type == SliceType::B) as usize) {
         let n = h.num_ref_idx[l] as usize;
         let luma: Vec<bool> = (0..n).map(|_| r.flag()).collect();
@@ -1120,8 +1277,8 @@ fn pred_weight_table(r: &mut BitReader, sps: &Sps, h: &SliceHeader) -> Result<Pr
                     let dw = r.se();
                     let doff = r.se();
                     let wc = (1 << w.chroma_log2_denom) + dw;
-                    let half = 128;
-                    let off = (half - ((half * wc) >> w.chroma_log2_denom) + doff).clamp(-half, half - 1);
+                    let off =
+                        (half - ((half * wc) >> w.chroma_log2_denom) + doff).clamp(-half, half - 1);
                     *ec = (wc, off << sc);
                 }
             }
@@ -1129,4 +1286,29 @@ fn pred_weight_table(r: &mut BitReader, sps: &Sps, h: &SliceHeader) -> Result<Pr
         }
     }
     Ok(w)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `cpb_cnt_minus1` is a loop count, so a value past the spec's 31 has
+    /// to stop parsing: damage can make it four billion.
+    #[test]
+    fn hrd_refuses_a_cpb_count_past_the_limit() {
+        // nal_hrd = 1, vcl_hrd = 0, sub_pic = 0, 23 skipped bits, then
+        // fixed_pic_rate_general = 1, elemental_duration ue(0) = 1, and
+        // cpb_cnt_minus1 as ue(v).
+        fn hrd(cpb_code: &str) -> Result<()> {
+            let bits = format!("100{}11{cpb_code}{}", "0".repeat(23), "1".repeat(64));
+            let bytes: Vec<u8> = bits
+                .as_bytes()
+                .chunks(8)
+                .map(|c| c.iter().fold(0, |b, &d| b << 1 | (d - b'0')) << (8 - c.len()))
+                .collect();
+            hrd_parameters(&mut BitReader::new(&bytes), true, 0)
+        }
+        assert!(hrd("00000100000").is_ok(), "31 is allowed");
+        assert!(hrd("00000100001").is_err(), "32 is not");
+    }
 }

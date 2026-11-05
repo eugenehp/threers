@@ -62,7 +62,9 @@ pub fn back_scene(back: u32) -> Scene {
 /// [`scene`] with the blended surface drawn as `kind`.
 pub fn scene_with(back: u32, front: u32, opacity: f32, kind: Front) -> Scene {
     use std::sync::Arc;
-    use threers::core::{Bone, BufferAttribute, InstancedMesh, ObjectId, Skeleton, SkinnedMesh, Sprite};
+    use threers::core::{
+        Bone, BufferAttribute, InstancedMesh, ObjectId, Skeleton, SkinnedMesh, Sprite,
+    };
     use threers::materials::{Material, SpriteMaterial};
     use threers::math::Matrix4;
     let mut scene = back_scene(back);
@@ -91,7 +93,10 @@ pub fn scene_with(back: u32, front: u32, opacity: f32, kind: Front) -> Scene {
             let mut g = PlaneGeometry::new(2.5, 2.5);
             let n = g.get_attribute("position").unwrap().count();
             g.set_attribute("joint", BufferAttribute::new(vec![0.0; n * 4], 4));
-            g.set_attribute("weight", BufferAttribute::new([1.0, 0.0, 0.0, 0.0].repeat(n), 4));
+            g.set_attribute(
+                "weight",
+                BufferAttribute::new([1.0, 0.0, 0.0, 0.0].repeat(n), 4),
+            );
             let mut skeleton = Skeleton::new(vec![Bone {
                 node: ObjectId::default(),
                 inverse_bind: Matrix4::identity(),
@@ -153,13 +158,25 @@ pub fn check_kinds(
 
 /// The centre pixel of `rgba` against three.js's blend; a failure message
 /// when it is more than a level off.
-pub fn judge(backend: &str, what: &str, rgba: &[u8], back: u32, front: u32, a: f32) -> Option<String> {
+pub fn judge(
+    backend: &str,
+    what: &str,
+    rgba: &[u8],
+    back: u32,
+    front: u32,
+    a: f32,
+) -> Option<String> {
     let i = ((N / 2 * N + N / 2) * 4) as usize;
     let got = [rgba[i], rgba[i + 1], rgba[i + 2]];
     let want = expected(back, front, a);
-    let err = (0..3).map(|k| (got[k] as i32 - want[k] as i32).abs()).max().unwrap();
+    let err = (0..3)
+        .map(|k| (got[k] as i32 - want[k] as i32).abs())
+        .max()
+        .unwrap();
     eprintln!("{backend} {what} {front:06x} @ {a} over {back:06x}: got {got:?} want {want:?}");
     (err > 1).then(|| {
-        format!("{backend} {what}: {front:06x} at {a} over {back:06x} is {got:?}, three.js {want:?}")
+        format!(
+            "{backend} {what}: {front:06x} at {a} over {back:06x} is {got:?}, three.js {want:?}"
+        )
     })
 }

@@ -105,16 +105,21 @@ fn link_between(
     radius: f32,
     color: Color,
 ) {
-    let mid = Vector3::new(
-        0.5 * (a.x + b.x),
-        0.5 * (a.y + b.y),
-        0.5 * (a.z + b.z),
-    );
+    let mid = Vector3::new(0.5 * (a.x + b.x), 0.5 * (a.y + b.y), 0.5 * (a.z + b.z));
     let dx = b.x - a.x;
     let dy = b.y - a.y;
     let dz = b.z - a.z;
     let len = (dx * dx + dy * dy + dz * dz).sqrt().max(1e-4);
-    let geom = CylinderGeometry::new(radius, radius, len, 16, 1, false, 0.0, std::f32::consts::TAU);
+    let geom = CylinderGeometry::new(
+        radius,
+        radius,
+        len,
+        16,
+        1,
+        false,
+        0.0,
+        std::f32::consts::TAU,
+    );
     let mut obj = Object3D::mesh(Mesh::new(geom, mat(color, 0.45, 0.15).into()));
     obj.position = mid;
     // Cylinder default is +Y; map +Y → unit direction of the link.
@@ -134,10 +139,8 @@ fn link_between(
         let az = -ux;
         let alen = (ax * ax + ay * ay + az * az).sqrt();
         let angle = dot.clamp(-1.0, 1.0).acos();
-        obj.quaternion = Quaternion::from_axis_angle(
-            Vector3::new(ax / alen, ay / alen, az / alen),
-            angle,
-        );
+        obj.quaternion =
+            Quaternion::from_axis_angle(Vector3::new(ax / alen, ay / alen, az / alen), angle);
     }
     scene.add_to(parent, obj);
 }
@@ -191,9 +194,30 @@ fn hinge_pin(scene: &mut Scene, parent: ObjectId, origin: [f64; 3], axis: [f64; 
     let flange = Color::new(0.62, 0.66, 0.72);
     let cue = Color::new(1.0, 0.8, 0.35);
     link_between(scene, parent, along(-house), along(house), 0.13, housing);
-    link_between(scene, parent, along(-(house + 0.036)), along(-(house + 0.004)), 0.155, flange);
-    link_between(scene, parent, along(house + 0.004), along(house + 0.036), 0.155, flange);
-    link_between(scene, parent, along(-(house + 0.1)), along(house + 0.1), 0.014, cue);
+    link_between(
+        scene,
+        parent,
+        along(-(house + 0.036)),
+        along(-(house + 0.004)),
+        0.155,
+        flange,
+    );
+    link_between(
+        scene,
+        parent,
+        along(house + 0.004),
+        along(house + 0.036),
+        0.155,
+        flange,
+    );
+    link_between(
+        scene,
+        parent,
+        along(-(house + 0.1)),
+        along(house + 0.1),
+        0.014,
+        cue,
+    );
 }
 
 fn add_arm(scene: &mut Scene, arm: &PlanarArm, view: &ArmView, at: Vector3) {
@@ -248,7 +272,13 @@ fn add_arm(scene: &mut Scene, arm: &PlanarArm, view: &ArmView, at: Vector3) {
     let tgt = v(view.target);
     ball(scene, root_id, tgt, 0.12, Color::new(0.95, 0.35, 0.2));
     if let Some(tip) = act.last() {
-        error_line(scene, root_id, v(tip.distal), tgt, Color::new(1.0, 0.55, 0.15));
+        error_line(
+            scene,
+            root_id,
+            v(tip.distal),
+            tgt,
+            Color::new(1.0, 0.55, 0.15),
+        );
     }
 
     let bar_h = (view.tip_err as f32 * SCALE * 25.0).clamp(0.08, 3.0);

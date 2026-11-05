@@ -7,6 +7,10 @@ members = [
     "crates/threers-physics",
     "crates/threers-ocean",
     "crates/threers-animation",
+    "crates/threers-ecs",
+    "crates/threers-hop",
+    "crates/threers-continuum",
+    "crates/threers-mechanism-tour",
     "crates/threers-connectome",
     "crates/threers-robot-arm",
     "crates/threers-physics-bench",
@@ -15,18 +19,14 @@ members = [
     "crates/threers-node",
     "crates/threers-fluid-ios",
 ]
-# `crates/threers-continuum` and `crates/threers-mechanism-tour` build as
-# libraries but their tests and examples still call an older shape of their own
-# API — builder methods that are now fields, argument lists a version behind.
-# They are left out until that is reconciled, so `--all-targets` stays clean.
-exclude = ["crates/threers-continuum", "crates/threers-mechanism-tour"]
+
 resolver = "2"
 
 # One version for every crate in the repo. Members inherit it; the excluded
 # crates and the version pins between crates repeat it literally, and
 # `scripts/release-versions.sh` checks that they agree.
 [workspace.package]
-version = "0.0.10"
+version = "0.0.11"
 
 [package]
 name = "threers"
@@ -128,6 +128,15 @@ strip = true
 [profile.release-wasm.package.threers-softbody]
 opt-level = 3
 
+# The video decoders are the same shape: `z` ran them 1.35–2.5x slower in wasm
+# (H.264/HEVC/VP9/AV1, 1080p, ms per frame: 35.6/38.2/19.2/40.7 against
+# 19.3/16.4/14.3/16.5 at 3). It is also what lets `SIMD=1` pay off, as `z` does
+# not vectorise loops: with simd128 on top, 15.4/13.9/12.6/13.9. The decoders
+# alone grew by about 0.35 MB; this applies to the whole crate, so the
+# encoders in `native-codec` builds (`VARIANT=full`) are compiled at 3 too.
+[profile.release-wasm.package.threers-codec]
+opt-level = 3
+
 [features]
 default = ["captions"]
 # Subtitles — SRT + WebVTT, on-screen and burned in.
@@ -181,6 +190,9 @@ nvidia = ["native-decode", "threers-codec/nvidia"]
 vaapi = ["native-decode", "threers-codec/vaapi"]
 # rayon-backed CSG/BVH work (native; a no-op on wasm32).
 parallel = ["dep:rayon", "threers-codec/parallel"]
+# Threads in the browser: `parallel` on wasm, with `initThreadPool` exported to
+# start the pool. Needs a build with atomics, which is `THREADS=1 web/build.sh`.
+wasm-threads = ["parallel", "dep:wasm-bindgen-rayon"]
 # tokio runtime for callers driving loaders concurrently (native).
 async = ["dep:tokio"]
 # Tensors ↔ geometry and pixels, graph runner, convolution, mesh smoothing.
@@ -240,10 +252,10 @@ wasm-full = ["captions", "openscad", "native-codec", "gif", "nurbs", "planet", "
 
 [dependencies]
 # The codecs and the caption data model (pure Rust, no wgpu/winit).
-threers-codec = { path = "crates/threers-codec", version = "0.0.10", default-features = false }
+threers-codec = { path = "crates/threers-codec", version = "0.0.11", default-features = false }
 # Soft bodies that tear and regrow (`softbody`): the solver, on its own so the
 # wasm build can optimise it for speed (see `profile.release-wasm` below).
-threers-softbody = { path = "crates/threers-softbody", version = "0.0.10", features = ["gpu"] }
+threers-softbody = { path = "crates/threers-softbody", version = "0.0.11", features = ["gpu"] }
 wgpu = "30"
 bytemuck = { version = "1.16", features = ["derive"] }
 log = "0.4"
@@ -275,6 +287,7 @@ winit = "0.29"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
+wasm-bindgen-rayon = { version = "1.3", features = ["no-bundler"], optional = true }
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
 console_error_panic_hook = "0.1"

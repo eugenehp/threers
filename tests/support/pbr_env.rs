@@ -36,10 +36,21 @@ use threers::textures::{CubeTexture, TextureFormat};
 
 pub const N: u32 = 32;
 
-const FACES: [[u8; 3]; 6] = [[255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 0], [255, 0, 255], [0, 255, 255]];
+const FACES: [[u8; 3]; 6] = [
+    [255, 0, 0],
+    [0, 255, 0],
+    [0, 0, 255],
+    [255, 255, 0],
+    [255, 0, 255],
+    [0, 255, 255],
+];
 
 fn cube(faces: [[u8; 3]; 6]) -> Arc<CubeTexture> {
-    Arc::new(CubeTexture::new(8, TextureFormat::Rgba8UnormSrgb, faces.map(|c| [c[0], c[1], c[2], 255].repeat(64))))
+    Arc::new(CubeTexture::new(
+        8,
+        TextureFormat::Rgba8UnormSrgb,
+        faces.map(|c| [c[0], c[1], c[2], 255].repeat(64)),
+    ))
 }
 
 fn uniform(c: [u8; 3]) -> Arc<CubeTexture> {
@@ -54,7 +65,9 @@ fn camera() -> OrthographicCamera {
 }
 
 fn mirror() -> StandardMaterial {
-    StandardMaterial::new(Color::WHITE).with_roughness(0.0).with_metalness(1.0)
+    StandardMaterial::new(Color::WHITE)
+        .with_roughness(0.0)
+        .with_metalness(1.0)
 }
 
 fn scene(material: StandardMaterial, env: Option<Arc<CubeTexture>>, turn: f32) -> Scene {
@@ -79,14 +92,19 @@ fn centre(rgba: &[u8]) -> [u8; 3] {
 }
 
 /// Every failure, as a line; empty when each case matches three.js.
-pub fn check(label: &str, render: &mut dyn FnMut(&mut Scene, &dyn Camera) -> Vec<u8>) -> Vec<String> {
+pub fn check(
+    label: &str,
+    render: &mut dyn FnMut(&mut Scene, &dyn Camera) -> Vec<u8>,
+) -> Vec<String> {
     use std::f32::consts::{FRAC_PI_2, FRAC_PI_4};
     let cam = camera();
     let mut failures = Vec::new();
     let mut expect = |case: &str, s: &mut Scene, want: [bool; 3]| {
         let got = centre(&render(s, &cam));
         if lit(got) != want {
-            failures.push(format!("{label} {case}: got {got:?}, three.js lights {want:?}"));
+            failures.push(format!(
+                "{label} {case}: got {got:?}, three.js lights {want:?}"
+            ));
         }
     };
     const MAGENTA: [bool; 3] = [true, false, true];
@@ -95,8 +113,16 @@ pub fn check(label: &str, render: &mut dyn FnMut(&mut Scene, &dyn Camera) -> Vec
     const BLUE: [bool; 3] = [false, false, true];
     const BLACK: [bool; 3] = [false, false, false];
 
-    expect("scene environment, head on", &mut scene(mirror(), Some(cube(FACES)), 0.0), MAGENTA);
-    expect("scene environment, turned 45° (flipEnvMap)", &mut scene(mirror(), Some(cube(FACES)), FRAC_PI_4), GREEN);
+    expect(
+        "scene environment, head on",
+        &mut scene(mirror(), Some(cube(FACES)), 0.0),
+        MAGENTA,
+    );
+    expect(
+        "scene environment, turned 45° (flipEnvMap)",
+        &mut scene(mirror(), Some(cube(FACES)), FRAC_PI_4),
+        GREEN,
+    );
     let mut s = scene(mirror(), Some(cube(FACES)), 0.0);
     s.environment_rotation = Euler::new(0.0, FRAC_PI_2, 0.0);
     expect("environmentRotation.y 90°", &mut s, RED);
@@ -112,9 +138,25 @@ pub fn check(label: &str, render: &mut dyn FnMut(&mut Scene, &dyn Camera) -> Vec
         m
     };
     let green = || Some(uniform([0, 255, 0]));
-    expect("envMap over scene.environment", &mut scene(own(1.0, 0.0, uniform([0, 0, 255])), green(), 0.0), BLUE);
-    expect("envMap with no scene environment", &mut scene(own(1.0, 0.0, uniform([0, 0, 255])), None, 0.0), BLUE);
-    expect("envMapIntensity 0", &mut scene(own(0.0, 0.0, uniform([0, 0, 255])), green(), 0.0), BLACK);
-    expect("envMapRotation.y 90°", &mut scene(own(1.0, FRAC_PI_2, cube(FACES)), None, 0.0), RED);
+    expect(
+        "envMap over scene.environment",
+        &mut scene(own(1.0, 0.0, uniform([0, 0, 255])), green(), 0.0),
+        BLUE,
+    );
+    expect(
+        "envMap with no scene environment",
+        &mut scene(own(1.0, 0.0, uniform([0, 0, 255])), None, 0.0),
+        BLUE,
+    );
+    expect(
+        "envMapIntensity 0",
+        &mut scene(own(0.0, 0.0, uniform([0, 0, 255])), green(), 0.0),
+        BLACK,
+    );
+    expect(
+        "envMapRotation.y 90°",
+        &mut scene(own(1.0, FRAC_PI_2, cube(FACES)), None, 0.0),
+        RED,
+    );
     failures
 }

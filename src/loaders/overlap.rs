@@ -74,14 +74,16 @@ const CONNECTED_RANGES: &[(u32, u32)] = &[
 /// Gujarati, Oriya, Tamil, Telugu, Kannada, Malayalam, Sinhala, Chinese, Japanese or
 /// Korean.
 const CONNECTED_LANGUAGES: &[&str] = &[
-    "ar", "fa", "ur", "ps", "sd", "ckb", "ug", "bal", "syr", "nqo", "mn", "hi", "bn", "pa",
-    "mr", "ne", "sa", "as", "kok", "doi", "brx", "mai", "bho", "mni", "new", "ks", "adlm",
-    "rhg",
+    "ar", "fa", "ur", "ps", "sd", "ckb", "ug", "bal", "syr", "nqo", "mn", "hi", "bn", "pa", "mr",
+    "ne", "sa", "as", "kok", "doi", "brx", "mai", "bho", "mni", "new", "ks", "adlm", "rhg",
 ];
 
 /// Core Text's hard-coded set, for connected scripts whose `meta` does not name theirs.
-const CONNECTED_NAMES: &[&str] =
-    &["NotoSansAdlam", "NotoSansHanifiRohingya", "NotoSansMongolian"];
+const CONNECTED_NAMES: &[&str] = &[
+    "NotoSansAdlam",
+    "NotoSansHanifiRohingya",
+    "NotoSansMongolian",
+];
 
 fn u16_at(d: &[u8], at: usize) -> Option<u16> {
     Some(u16::from_be_bytes([*d.get(at)?, *d.get(at + 1)?]))
@@ -185,7 +187,9 @@ fn postscript_name(name: &[u8]) -> Option<String> {
         let off = u16_at(name, rec + 10)? as usize;
         let raw = name.get(storage + off..storage.checked_add(off)?.checked_add(len)?)?;
         return Some(if matches!(platform, 0 | 3) {
-            raw.chunks(2).filter_map(|c| c.get(1).map(|b| *b as char)).collect()
+            raw.chunks(2)
+                .filter_map(|c| c.get(1).map(|b| *b as char))
+                .collect()
         } else {
             raw.iter().map(|b| *b as char).collect()
         });

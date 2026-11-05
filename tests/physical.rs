@@ -70,7 +70,9 @@ fn an_instanced_transmissive_mesh_draws_as_the_mesh_does() {
     let build = |instanced: bool| {
         let mut s = Scene::new();
         s.background = Color::from_hex(0x000000);
-        s.add_light(DirectionalLight::new(Color::WHITE, 2.0).with_direction(Vector3::new(-1.0, -1.0, -2.0)));
+        s.add_light(
+            DirectionalLight::new(Color::WHITE, 2.0).with_direction(Vector3::new(-1.0, -1.0, -2.0)),
+        );
         let mut back = StandardMaterial::new(Color::from_hex(0xd04020));
         back.emissive = Color::from_hex(0xd04020);
         let mut b = Object3D::mesh(Mesh::new(BoxGeometry::new(1.2, 6.0, 0.2), back.into()));
@@ -92,12 +94,24 @@ fn an_instanced_transmissive_mesh_draws_as_the_mesh_does() {
     let inst = r.render_to_rgba(&mut build(true), &cam);
     // The bar behind shows through the glass, refracted: red at the centre.
     let c = ((S / 2 * S + S / 2) * 4) as usize;
-    assert!(mesh[c] > 120 && mesh[c] > 2 * mesh[c + 2], "mesh centre {:?}", &mesh[c..c + 3]);
+    assert!(
+        mesh[c] > 120 && mesh[c] > 2 * mesh[c + 2],
+        "mesh centre {:?}",
+        &mesh[c..c + 3]
+    );
     let worst = mesh
         .chunks(4)
         .zip(inst.chunks(4))
-        .map(|(a, b)| (0..3).map(|k| (a[k] as i32 - b[k] as i32).abs()).max().unwrap())
+        .map(|(a, b)| {
+            (0..3)
+                .map(|k| (a[k] as i32 - b[k] as i32).abs())
+                .max()
+                .unwrap()
+        })
         .max()
         .unwrap();
-    assert!(worst <= 1, "the instanced glass is {worst} levels from the mesh");
+    assert!(
+        worst <= 1,
+        "the instanced glass is {worst} levels from the mesh"
+    );
 }

@@ -81,7 +81,10 @@ pub fn lon_lat_to_world(p: [f64; 3]) -> [f64; 3] {
 /// being cut flat at the map's edge.
 pub fn lon_lat_to_world_extended(p: [f64; 3]) -> [f64; 3] {
     let lat = p[1].clamp(-89.9999, 89.9999);
-    let xy = [EARTH_RADIUS * p[0].to_radians(), EARTH_RADIUS * lat.to_radians().sin().atanh()];
+    let xy = [
+        EARTH_RADIUS * p[0].to_radians(),
+        EARTH_RADIUS * lat.to_radians().sin().atanh(),
+    ];
     ground_to_world(xy, p[2] / lat.to_radians().cos())
 }
 

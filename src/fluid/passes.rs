@@ -269,9 +269,7 @@ impl Pipelines {
         });
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("threers fluid"),
-            source: wgpu::ShaderSource::Wgsl(
-                super::shader::wgsl().into(),
-            ),
+            source: wgpu::ShaderSource::Wgsl(super::shader::wgsl().into()),
         });
 
         // The plane does not use `volume_dye`; see its docs for why the

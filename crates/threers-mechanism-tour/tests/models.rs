@@ -171,3 +171,37 @@ fn the_cam_lifts_the_follower_without_being_told_to() {
         "the throw should be about 16: {lo} .. {hi}"
     );
 }
+
+/// Every joint a model declares has its parts meeting there. A model can simulate
+/// and read perfectly with nothing drawn at the joint, which is why it is measured.
+#[test]
+fn every_declared_joint_is_built() {
+    for m in MODELS {
+        let joints = threers_mechanism_tour::joints_built(m.source)
+            .unwrap_or_else(|e| panic!("{}: {e}", m.id));
+        assert!(!joints.is_empty(), "{}", m.id);
+        for joint in &joints {
+            assert!(
+                joint.built(),
+                "{}: {} is {} apart with a fit of {}",
+                m.id,
+                joint.name,
+                joint.gap,
+                joint.fit
+            );
+        }
+    }
+}
+
+/// Two parts a long way apart, joined only by a declaration.
+#[test]
+fn a_joint_in_empty_air_is_reported() {
+    let model = r#"
+        part("frame", fixed = true) cube([10, 10, 10]);
+        part("arm") translate([100, 0, 0]) cube([10, 10, 10]);
+        hinge("nothing", parts = ["frame", "arm"], at = [50, 5, 5], axis = [0, 0, 1]);
+    "#;
+    let joints = threers_mechanism_tour::joints_built(model).unwrap();
+    assert_eq!(joints.len(), 1);
+    assert!(!joints[0].built(), "{}", joints[0].gap);
+}

@@ -21,14 +21,14 @@ use crate::math::{Color, Matrix4, Quaternion, Vector3};
 
 use super::parse::{UsdLayer, UsdPrim, UsdProperty};
 use super::schemas::{self, UsdCamera};
-use super::skel::{self, UsdSkeleton};
 use super::shade;
+use super::skel::{self, UsdSkeleton};
 use super::subdiv;
-use crate::core::Skeleton;
-use std::rc::Rc;
 use super::usdz::UsdzArchive;
 use super::value::UsdValue;
+use crate::core::Skeleton;
 use crate::textures::{Texture, TextureFormat, TextureWrap};
+use std::rc::Rc;
 
 /// A USD layer as a scene graph.
 pub struct UsdScene {
@@ -306,7 +306,11 @@ fn attach_morphs(
             let n = *count as usize;
             if n >= 3 && at + n <= indices.len() {
                 for k in 1..n - 1 {
-                    let tri = if flip { [at, at + k + 1, at + k] } else { [at, at + k, at + k + 1] };
+                    let tri = if flip {
+                        [at, at + k + 1, at + k]
+                    } else {
+                        [at, at + k, at + k + 1]
+                    };
                     out.extend(tri.iter().map(|&c| indices[c] as usize));
                 }
             }
@@ -323,7 +327,10 @@ fn attach_morphs(
             Some(c) => c
                 .iter()
                 .flat_map(|&p| {
-                    delta.get(p * 3..p * 3 + 3).map(|d| [d[0], d[1], d[2]]).unwrap_or([0.0; 3])
+                    delta
+                        .get(p * 3..p * 3 + 3)
+                        .map(|d| [d[0], d[1], d[2]])
+                        .unwrap_or([0.0; 3])
                 })
                 .collect(),
         }
@@ -398,7 +405,10 @@ fn grouped_by_subset(prim: &UsdPrim, path: &str, context: &mut Build) -> Option<
     if start as usize != geometry.draw_count() {
         return None;
     }
-    Some(Mesh::with_materials(std::sync::Arc::new(geometry), materials))
+    Some(Mesh::with_materials(
+        std::sync::Arc::new(geometry),
+        materials,
+    ))
 }
 
 /// A mesh split into one child per material subset.
@@ -522,9 +532,7 @@ fn vertex_animation(
         }
         tracks.push(KeyframeTrack::scalar(
             object,
-            TrackTarget::MorphWeight {
-                index: index - 1,
-            },
+            TrackTarget::MorphWeight { index: index - 1 },
             times,
             values,
         ));
@@ -555,7 +563,9 @@ fn property_tracks(
     let mut out = Vec::new();
 
     let scalar = |out: &mut Vec<KeyframeTrack>, value: &UsdValue, target: TrackTarget| {
-        let Some(samples) = value.samples() else { return };
+        let Some(samples) = value.samples() else {
+            return;
+        };
         let times: Vec<f32> = samples.iter().map(|(t, _)| (t / rate) as f32).collect();
         let values: Vec<f32> = samples
             .iter()
@@ -564,7 +574,9 @@ fn property_tracks(
         out.push(KeyframeTrack::scalar(object, target, times, values));
     };
     let colour = |out: &mut Vec<KeyframeTrack>, value: &UsdValue| {
-        let Some(samples) = value.samples() else { return };
+        let Some(samples) = value.samples() else {
+            return;
+        };
         let times: Vec<f32> = samples.iter().map(|(t, _)| (t / rate) as f32).collect();
         let values: Vec<Color> = samples
             .iter()
@@ -577,7 +589,12 @@ fn property_tracks(
                 }
             })
             .collect();
-        out.push(KeyframeTrack::color(object, TrackTarget::Color, times, values));
+        out.push(KeyframeTrack::color(
+            object,
+            TrackTarget::Color,
+            times,
+            values,
+        ));
     };
 
     // `visibility` is a token — `inherited` or `invisible` — so what is
@@ -605,7 +622,10 @@ fn property_tracks(
     }
 
     if schemas::is_light(&prim.type_name) {
-        if let Some(value) = prim.value("inputs:intensity").or_else(|| prim.value("intensity")) {
+        if let Some(value) = prim
+            .value("inputs:intensity")
+            .or_else(|| prim.value("intensity"))
+        {
             scalar(&mut out, value, TrackTarget::Intensity);
         }
         if let Some(value) = prim.value("inputs:color").or_else(|| prim.value("color")) {
@@ -705,7 +725,11 @@ fn build(
     }
     // `guide` geometry is never drawn, and `proxy` is a stand-in shown only
     // when the real thing is absent — which here it never is.
-    if !schemas::is_drawable(prim, context.options.show_guides, context.options.show_proxies) {
+    if !schemas::is_drawable(
+        prim,
+        context.options.show_guides,
+        context.options.show_proxies,
+    ) {
         return None;
     }
     // Filled in if this prim turns out to carry blend shapes, so the weight
@@ -833,8 +857,7 @@ fn build(
             let prototype_root = path.clone();
             let meshes = schemas::point_instancer(prim, layer, |prototype| {
                 let path = format!("{prototype_root}/{}", prototype.name);
-                mesh_geometry_at(prototype, level)
-                    .map(|g| (g, bound_material_at(&path, layer).0))
+                mesh_geometry_at(prototype, level).map(|g| (g, bound_material_at(&path, layer).0))
             });
             let mut group = Object3D::group();
             group.name = prim.name.clone();
@@ -883,9 +906,11 @@ fn build(
         {
             let tracks = skel::blend_shape_tracks(anim, &morph_order, id, context.rate);
             if !tracks.is_empty() {
-                context
-                    .clips
-                    .push(AnimationClip::new(format!("{}-blend", prim.name), 0.0, tracks));
+                context.clips.push(AnimationClip::new(
+                    format!("{}-blend", prim.name),
+                    0.0,
+                    tracks,
+                ));
             }
         }
     }
@@ -922,9 +947,11 @@ fn build(
     }
 
     if !tracks.is_empty() {
-        context
-            .clips
-            .push(AnimationClip::new(format!("{}-properties", prim.name), 0.0, tracks));
+        context.clips.push(AnimationClip::new(
+            format!("{}-properties", prim.name),
+            0.0,
+            tracks,
+        ));
     }
 
     // A `SkelRoot` reads its skeleton before its meshes, because the meshes
@@ -938,7 +965,12 @@ fn build(
             let source_skeleton = source.children.iter().find(|c| c.type_name == "Skeleton");
             if let Some(clip) = source_skeleton
                 .and_then(|c| skel::animation_source(c, context.source_layer))
-                .or_else(|| source.children.iter().find(|c| c.type_name == "SkelAnimation"))
+                .or_else(|| {
+                    source
+                        .children
+                        .iter()
+                        .find(|c| c.type_name == "SkelAnimation")
+                })
                 .and_then(|anim| skel::animation(anim, &found, context.rate, &prim.name))
             {
                 context.clips.push(clip);
@@ -979,7 +1011,11 @@ fn build(
 /// applies nothing — which is not the same as identity by accident, so the
 /// absence is honoured rather than guessed around.
 fn transform_of(prim: &UsdPrim) -> (Vector3, Quaternion, Vector3) {
-    let identity = (Vector3::ZERO, Quaternion::identity(), Vector3::new(1.0, 1.0, 1.0));
+    let identity = (
+        Vector3::ZERO,
+        Quaternion::identity(),
+        Vector3::new(1.0, 1.0, 1.0),
+    );
     let Some(order) = prim.value("xformOpOrder") else {
         return identity;
     };
@@ -992,7 +1028,9 @@ fn transform_of(prim: &UsdPrim) -> (Vector3, Quaternion, Vector3) {
             Some(rest) => (true, rest),
             None => (false, name),
         };
-        let Some(value) = prim.value(name) else { continue };
+        let Some(value) = prim.value(name) else {
+            continue;
+        };
         let step = op_matrix(name, value);
         let Some(step) = step else { continue };
         any = true;
@@ -1128,12 +1166,24 @@ pub fn mesh_geometry_of_faces(
     let mut only = prim.clone();
     only.children.clear();
     for (name, value) in [
-        ("faceVertexCounts", UsdValue::Array(
-            kept_counts.iter().map(|c| UsdValue::Int(*c as i128)).collect(),
-        )),
-        ("faceVertexIndices", UsdValue::Array(
-            kept_indices.iter().map(|i| UsdValue::Int(*i as i128)).collect(),
-        )),
+        (
+            "faceVertexCounts",
+            UsdValue::Array(
+                kept_counts
+                    .iter()
+                    .map(|c| UsdValue::Int(*c as i128))
+                    .collect(),
+            ),
+        ),
+        (
+            "faceVertexIndices",
+            UsdValue::Array(
+                kept_indices
+                    .iter()
+                    .map(|i| UsdValue::Int(*i as i128))
+                    .collect(),
+            ),
+        ),
     ] {
         if let Some(property) = only.properties.iter_mut().find(|p| p.name == name) {
             property.value = value;
@@ -1384,7 +1434,9 @@ fn pick_uvs(prim: &UsdPrim) -> Option<Primvar> {
     ];
     let mut first: Option<Primvar> = None;
     for name in SETS {
-        let Some(pv) = primvar(prim, name) else { continue };
+        let Some(pv) = primvar(prim, name) else {
+            continue;
+        };
         if !escapes_unit_square(&pv) {
             return Some(pv);
         }
@@ -1400,9 +1452,7 @@ fn pick_uvs(prim: &UsdPrim) -> Option<Primvar> {
 /// nothing sits near the boundary between the two.
 fn escapes_unit_square(pv: &Primvar) -> bool {
     const SLACK: f32 = 0.01;
-    pv.data
-        .iter()
-        .any(|v| *v < -SLACK || *v > 1.0 + SLACK)
+    pv.data.iter().any(|v| *v < -SLACK || *v > 1.0 + SLACK)
 }
 
 fn primvar(prim: &UsdPrim, name: &str) -> Option<Primvar> {
@@ -1549,7 +1599,9 @@ pub fn attach_textures_from_dir(scene: &mut UsdScene, base: &std::path::Path) ->
         }
         std::fs::read(base.join(relative)).ok()
     };
-    attach_with(scene, |request| read(request).and_then(|bytes| decode(&bytes, request)))
+    attach_with(scene, |request| {
+        read(request).and_then(|bytes| decode(&bytes, request))
+    })
 }
 
 /// One request as a texture, out of the archive that carries it.
@@ -1594,7 +1646,11 @@ fn wrap_from(name: &str) -> TextureWrap {
 }
 
 /// Hang a texture on the slot it belongs to, reporting whether it fit.
-fn put_map(object: &mut Object3D, slot: shade::TextureSlot, texture: &std::sync::Arc<Texture>) -> bool {
+fn put_map(
+    object: &mut Object3D,
+    slot: shade::TextureSlot,
+    texture: &std::sync::Arc<Texture>,
+) -> bool {
     use shade::TextureSlot as S;
     let ObjectKind::Mesh(mesh) = &mut object.kind else {
         return false;
@@ -1928,7 +1984,10 @@ def Xform "A"
 
     #[test]
     fn face_varying_primvars_split_the_vertices() {
-        let src = QUAD.replace("interpolation = \"vertex\"", "interpolation = \"faceVarying\"");
+        let src = QUAD.replace(
+            "interpolation = \"vertex\"",
+            "interpolation = \"faceVarying\"",
+        );
         let layer = parse(&src).unwrap();
         let g = mesh_geometry(layer.prim_at("/World/Quad").unwrap()).unwrap();
         // Unindexed: six corners, because a per-corner UV cannot be shared.
@@ -1998,7 +2057,9 @@ mod animation_kinds {
     use crate::core::ObjectKind;
 
     fn stage() -> UsdScene {
-        to_scene(&super::super::parse::parse(include_str!("testdata/allanim.usda")).expect("parses"))
+        to_scene(
+            &super::super::parse::parse(include_str!("testdata/allanim.usda")).expect("parses"),
+        )
     }
 
     fn id_of(scene: &UsdScene, name: &str) -> ObjectId {
@@ -2016,10 +2077,7 @@ mod animation_kinds {
             .unwrap_or_else(|| panic!("no prim called {name}"))
     }
 
-    fn tracks_for(
-        scene: &UsdScene,
-        object: ObjectId,
-    ) -> Vec<&crate::animation::KeyframeTrack> {
+    fn tracks_for(scene: &UsdScene, object: ObjectId) -> Vec<&crate::animation::KeyframeTrack> {
         scene
             .animations
             .iter()
@@ -2140,7 +2198,10 @@ mod animation_kinds {
         let ObjectKind::Mesh(mesh) = &scene.arena.get(id_of(&scene, "Wobble")).unwrap().kind else {
             panic!("a mesh");
         };
-        assert_eq!(&mesh.geometry.get_attribute("position").unwrap().array[3..5], &[1.0, 0.0]);
+        assert_eq!(
+            &mesh.geometry.get_attribute("position").unwrap().array[3..5],
+            &[1.0, 0.0]
+        );
     }
 
     /// And every one of them again out of the crate form.

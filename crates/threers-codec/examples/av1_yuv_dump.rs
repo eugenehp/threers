@@ -15,9 +15,18 @@ fn main() {
     // anything else that is not IVF is taken as Annex B.
     let annexb = !data.starts_with(b"DKIF") && !data.starts_with(&[0x12, 0x00]);
     let packets: Vec<Vec<u8>> = if data.starts_with(b"DKIF") {
-        parse_ivf(&data).expect("ivf").4.into_iter().map(|(_, d)| d).collect()
+        parse_ivf(&data)
+            .expect("ivf")
+            .4
+            .into_iter()
+            .map(|(_, d)| d)
+            .collect()
     } else if annexb {
-        threers_codec::decode::av1::split_annexb(&data).expect("annexb").into_iter().map(|t| t.to_vec()).collect()
+        threers_codec::decode::av1::split_annexb(&data)
+            .expect("annexb")
+            .into_iter()
+            .map(|t| t.to_vec())
+            .collect()
     } else {
         vec![data]
     };
@@ -27,7 +36,11 @@ fn main() {
     let mut desc = String::new();
     let mut sizes = String::new();
     for p in &packets {
-        let frames = match if annexb { dec.decode_annexb(p) } else { dec.decode(p) } {
+        let frames = match if annexb {
+            dec.decode_annexb(p)
+        } else {
+            dec.decode(p)
+        } {
             Ok(f) => f,
             Err(e) => {
                 println!("ERROR {e} (after {n} frames)");
@@ -36,7 +49,11 @@ fn main() {
         };
         for f in frames {
             let pic = &f.pic;
-            let np = if pic.layout == threers_codec::decode::av1::obu::Layout::I400 { 1 } else { 3 };
+            let np = if pic.layout == threers_codec::decode::av1::obu::Layout::I400 {
+                1
+            } else {
+                3
+            };
             for pl in 0..np {
                 let (ssh, ssv) = pic.ss(pl);
                 let w = ((pic.w + ssh) >> ssh) as usize;
@@ -45,9 +62,15 @@ fn main() {
                 for y in 0..h {
                     let row = &pic.planes[pl][y * s..y * s + w];
                     if pic.bpc == 8 {
-                        out.write_all(&row.iter().map(|&v| v as u8).collect::<Vec<_>>()).unwrap();
+                        out.write_all(&row.iter().map(|&v| v as u8).collect::<Vec<_>>())
+                            .unwrap();
                     } else {
-                        out.write_all(&row.iter().flat_map(|&v| v.to_le_bytes()).collect::<Vec<_>>()).unwrap();
+                        out.write_all(
+                            &row.iter()
+                                .flat_map(|&v| v.to_le_bytes())
+                                .collect::<Vec<_>>(),
+                        )
+                        .unwrap();
                     }
                 }
             }

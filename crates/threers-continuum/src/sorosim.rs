@@ -113,8 +113,8 @@ pub fn data_dir() -> Option<PathBuf> {
         let path = PathBuf::from(dir);
         return path.is_dir().then_some(path);
     }
-    let beside = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../opencr-mujoco/data/reference/sorosim");
+    let beside =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../opencr-mujoco/data/reference/sorosim");
     beside.is_dir().then(|| beside)
 }
 
@@ -303,7 +303,9 @@ impl Statics {
             arc.push((seg - 1.0 + local) / segments as f32);
         }
 
-        let rows: Vec<Vec<&str>> = lines.map(|l| l.split(',').map(str::trim).collect()).collect();
+        let rows: Vec<Vec<&str>> = lines
+            .map(|l| l.split(',').map(str::trim).collect())
+            .collect();
         let mut shapes = Vec::with_capacity(rows.len() / 6);
         for group in rows.chunks_exact(6) {
             // Six rows per shape: the three Euler rows carry the *moment* of a
@@ -366,9 +368,9 @@ impl TipRelease {
     /// Load test `index` (1-based, 1..=10) for a material.
     pub fn load(material: Material, index: usize) -> Option<Self> {
         let dir = data_dir()?;
-        let path = dir
-            .join("sorosim_dynamics")
-            .join(format!("{}_{}.txt", material.test_type(), index));
+        let path =
+            dir.join("sorosim_dynamics")
+                .join(format!("{}_{}.txt", material.test_type(), index));
         let text = std::fs::read_to_string(path).ok()?;
         Self::parse(material, &text)
     }
@@ -605,8 +607,7 @@ pub fn evaluate_shape(set: &Statics, index: usize, run: StaticsRun) -> Option<Sh
     let finite = simulated
         .iter()
         .all(|p| p.x.is_finite() && p.y.is_finite() && p.z.is_finite());
-    let diverged =
-        !finite || (arc_length - length).abs() > run.stretch_tolerance * length;
+    let diverged = !finite || (arc_length - length).abs() > run.stretch_tolerance * length;
 
     let n = simulated.len().min(reference.len()).max(1);
     let shape_error = simulated
@@ -666,12 +667,7 @@ fn interpolate_at(arc: &[f32], points: &[Vector3], target: f32) -> Vector3 {
 }
 
 fn segment_number(column: &str) -> Option<usize> {
-    column
-        .split('_')
-        .next()?
-        .strip_prefix("seg")?
-        .parse()
-        .ok()
+    column.split('_').next()?.strip_prefix("seg")?.parse().ok()
 }
 
 #[cfg(test)]
@@ -743,7 +739,10 @@ Pz_s001,9.81,9,12,0,0.15,0.3,0.3,0.45,0.6
     #[test]
     fn the_materials_match_the_rods_the_reference_used() {
         let steel = Material::SpringSteel.rod(30);
-        assert_eq!((steel.length, steel.radius, steel.youngs), (0.6, 0.0008, 200.0e9));
+        assert_eq!(
+            (steel.length, steel.radius, steel.youngs),
+            (0.6, 0.0008, 200.0e9)
+        );
         let tpu = Material::Tpu.rod(30);
         assert_eq!((tpu.length, tpu.radius, tpu.youngs), (0.4, 0.005, 70.0e6));
         // Bare rods: no sheath, so the two radii agree and the comparison does

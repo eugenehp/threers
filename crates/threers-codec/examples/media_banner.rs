@@ -11,7 +11,12 @@ fn main() {
             let m = &r.mov;
             println!(
                 "fps {} tbr {}/{} duration {:.2} start_us {} frames {}",
-                m.banner_fps, m.r_frame_rate.0, m.r_frame_rate.1, m.banner_duration, m.start_us, m.pts.len()
+                m.banner_fps,
+                m.r_frame_rate.0,
+                m.r_frame_rate.1,
+                m.banner_duration,
+                m.start_us,
+                m.pts.len()
             );
         }
         Err(e) => println!("ERROR {e}"),

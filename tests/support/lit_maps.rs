@@ -164,15 +164,20 @@ pub fn scene(material: Material, lighting: Lighting) -> Scene {
             scene.add_light(AmbientLight::new(Color::WHITE, PI));
         }
         Lighting::Direct => {
-            let l = DirectionalLight::new(Color::WHITE, PI).with_direction(Vector3::new(0.0, 0.0, -1.0));
+            let l = DirectionalLight::new(Color::WHITE, PI)
+                .with_direction(Vector3::new(0.0, 0.0, -1.0));
             scene.add(Object3D::light(Light::Directional(l)));
         }
         Lighting::FromLeft => {
-            let l = DirectionalLight::new(Color::WHITE, PI).with_direction(Vector3::new(1.0, 0.0, -1.0));
+            let l = DirectionalLight::new(Color::WHITE, PI)
+                .with_direction(Vector3::new(1.0, 0.0, -1.0));
             scene.add(Object3D::light(Light::Directional(l)));
         }
     }
-    scene.add(Object3D::mesh(Mesh::new(PlaneGeometry::new(1.6, 1.6), material)));
+    scene.add(Object3D::mesh(Mesh::new(
+        PlaneGeometry::new(1.6, 1.6),
+        material,
+    )));
     scene
 }
 
@@ -188,7 +193,10 @@ fn near(got: [u8; 3], want: [u8; 3]) -> bool {
 }
 
 /// Every failure, as a line; empty when each kind shades its maps as three.js.
-pub fn check(label: &str, render: &mut dyn FnMut(&mut Scene, &dyn Camera) -> Vec<u8>) -> Vec<String> {
+pub fn check(
+    label: &str,
+    render: &mut dyn FnMut(&mut Scene, &dyn Camera) -> Vec<u8>,
+) -> Vec<String> {
     let cam = camera();
     let red = || texel([255, 0, 0, 255]);
     let black = || texel([0, 0, 0, 255]);
@@ -200,43 +208,130 @@ pub fn check(label: &str, render: &mut dyn FnMut(&mut Scene, &dyn Camera) -> Vec
         // encode — and toon's default ramp (r165 `getGradientIrradiance`:
         // below n·l = 0.4 the 0.7 band) gives 0.7, 218.
         let tilted = texel([251, 128, 160, 255]);
-        let tilted_want = if name == "toon" { [218, 218, 218] } else { [139, 139, 139] };
+        let tilted_want = if name == "toon" {
+            [218, 218, 218]
+        } else {
+            [139, 139, 139]
+        };
         let white = || texel([255, 255, 255, 255]);
         // Heights 0 | 1, linearly filtered: a ramp over u ∈ [¼, ¾], so 2 per
         // unit of u. The quad is 1.6 of the view's 2 across N pixels — u moves
         // 1 / (0.8 N) a pixel — and `bumpScale` 0.4 N makes each pixel's
         // forward difference exactly 1.
-        let ramp = Arc::new(Texture::new(2, 1, TextureFormat::Rgba8Unorm, vec![0, 0, 0, 255, 255, 255, 255, 255]));
+        let ramp = Arc::new(Texture::new(
+            2,
+            1,
+            TextureFormat::Rgba8Unorm,
+            vec![0, 0, 0, 255, 255, 255, 255, 255],
+        ));
         let bump = || Some((ramp.clone(), 0.4 * N as f32));
         let flat = texel([128, 128, 255, 255]);
         let cases: [(&str, Maps, Lighting, [u8; 3]); 10] = [
-            ("light map", Maps { light: Some((red(), PI)), ..Default::default() }, Lighting::None, [255, 0, 0]),
+            (
+                "light map",
+                Maps {
+                    light: Some((red(), PI)),
+                    ..Default::default()
+                },
+                Lighting::None,
+                [255, 0, 0],
+            ),
             (
                 "light map under a black aoMap",
-                Maps { light: Some((white(), PI)), ao: Some((black(), 1.0)), ..Default::default() },
+                Maps {
+                    light: Some((white(), PI)),
+                    ao: Some((black(), 1.0)),
+                    ..Default::default()
+                },
                 Lighting::None,
                 [0, 0, 0],
             ),
-            ("bump map, light from the left", Maps { bump: bump(), ..Default::default() }, Lighting::FromLeft, [255, 255, 255]),
+            (
+                "bump map, light from the left",
+                Maps {
+                    bump: bump(),
+                    ..Default::default()
+                },
+                Lighting::FromLeft,
+                [255, 255, 255],
+            ),
             (
                 "bump map under a normal map",
-                Maps { bump: bump(), normal: Some(flat), ..Default::default() },
+                Maps {
+                    bump: bump(),
+                    normal: Some(flat),
+                    ..Default::default()
+                },
                 Lighting::FromLeft,
-                if name == "toon" { [255, 255, 255] } else { [219, 219, 219] },
+                if name == "toon" {
+                    [255, 255, 255]
+                } else {
+                    [219, 219, 219]
+                },
             ),
-            ("normal map, direct", Maps { normal: Some(tilted), ..Default::default() }, Lighting::Direct, tilted_want),
-            ("map", Maps { map: Some(red()), ..Default::default() }, Lighting::Ambient, [255, 0, 0]),
-            ("ao, ambient", Maps { ao: Some((black(), 1.0)), ..Default::default() }, Lighting::Ambient, [0, 0, 0]),
-            ("ao 0.5, ambient", Maps { ao: Some((black(), 0.5)), ..Default::default() }, Lighting::Ambient, [188, 188, 188]),
-            ("ao, direct", Maps { ao: Some((black(), 1.0)), ..Default::default() }, Lighting::Direct, [255, 255, 255]),
-            ("emissive map", Maps { emissive: Some(red()), ..Default::default() }, Lighting::None, [255, 0, 0]),
+            (
+                "normal map, direct",
+                Maps {
+                    normal: Some(tilted),
+                    ..Default::default()
+                },
+                Lighting::Direct,
+                tilted_want,
+            ),
+            (
+                "map",
+                Maps {
+                    map: Some(red()),
+                    ..Default::default()
+                },
+                Lighting::Ambient,
+                [255, 0, 0],
+            ),
+            (
+                "ao, ambient",
+                Maps {
+                    ao: Some((black(), 1.0)),
+                    ..Default::default()
+                },
+                Lighting::Ambient,
+                [0, 0, 0],
+            ),
+            (
+                "ao 0.5, ambient",
+                Maps {
+                    ao: Some((black(), 0.5)),
+                    ..Default::default()
+                },
+                Lighting::Ambient,
+                [188, 188, 188],
+            ),
+            (
+                "ao, direct",
+                Maps {
+                    ao: Some((black(), 1.0)),
+                    ..Default::default()
+                },
+                Lighting::Direct,
+                [255, 255, 255],
+            ),
+            (
+                "emissive map",
+                Maps {
+                    emissive: Some(red()),
+                    ..Default::default()
+                },
+                Lighting::None,
+                [255, 0, 0],
+            ),
         ];
         for (case, maps, lighting, want) in cases {
             // Toon has no cos 45° — its ramp is 1 above n·l = 0.4 — so the
             // "ignored under a normal map" case cannot tell it apart there.
             let got = centre(&render(&mut scene(build(maps), lighting), &cam));
             if !near(got, want) {
-                failures.push(format!("{label} {name} {case}: got {got:?}, three.js gives {want:?}"));
+                failures.push(format!(
+                    "{label} {name} {case}: got {got:?}, three.js gives {want:?}"
+                ));
             }
         }
     }
@@ -245,13 +340,19 @@ pub fn check(label: &str, render: &mut dyn FnMut(&mut Scene, &dyn Camera) -> Vec
 }
 
 /// The specular map on Phong, and the light map on Basic and Standard.
-fn more(label: &str, render: &mut dyn FnMut(&mut Scene, &dyn Camera) -> Vec<u8>, cam: &dyn Camera) -> Vec<String> {
+fn more(
+    label: &str,
+    render: &mut dyn FnMut(&mut Scene, &dyn Camera) -> Vec<u8>,
+    cam: &dyn Camera,
+) -> Vec<String> {
     use threers::materials::{BasicMaterial, StandardMaterial};
     let mut failures = Vec::new();
     let mut check = |case: &str, m: Material, lighting: Lighting, want: [u8; 3]| {
         let got = centre(&render(&mut scene(m, lighting), cam));
         if !near(got, want) {
-            failures.push(format!("{label} {case}: got {got:?}, three.js gives {want:?}"));
+            failures.push(format!(
+                "{label} {case}: got {got:?}, three.js gives {want:?}"
+            ));
         }
     };
     let shiny = |map: Option<Arc<Texture>>| {
@@ -261,8 +362,18 @@ fn more(label: &str, render: &mut dyn FnMut(&mut Scene, &dyn Camera) -> Vec<u8>,
         x.specular_map = map;
         Material::from(x)
     };
-    check("phong highlight", shiny(None), Lighting::Direct, [255, 255, 255]);
-    check("phong highlight under a specularMap with red 0", shiny(Some(texel([0, 255, 255, 255]))), Lighting::Direct, [0, 0, 0]);
+    check(
+        "phong highlight",
+        shiny(None),
+        Lighting::Direct,
+        [255, 255, 255],
+    );
+    check(
+        "phong highlight under a specularMap with red 0",
+        shiny(Some(texel([0, 255, 255, 255]))),
+        Lighting::Direct,
+        [0, 0, 0],
+    );
     let mut basic = BasicMaterial::new(Color::WHITE);
     basic.light_map = Some(texel([255, 0, 0, 255]));
     basic.light_map_intensity = PI;
@@ -275,6 +386,11 @@ fn more(label: &str, render: &mut dyn FnMut(&mut Scene, &dyn Camera) -> Vec<u8>,
     let mut standard = StandardMaterial::new(Color::WHITE);
     standard.light_map = Some(texel([255, 0, 0, 255]));
     standard.light_map_intensity = PI;
-    check("standard light map", standard.into(), Lighting::None, [255, 0, 0]);
+    check(
+        "standard light map",
+        standard.into(),
+        Lighting::None,
+        [255, 0, 0],
+    );
     failures
 }

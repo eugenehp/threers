@@ -52,7 +52,13 @@ impl Backend {
             #[cfg(not(feature = "metal"))]
             panic!("--metal needs `--features metal`");
         }
-        Backend::Wgpu(HeadlessRenderer::builder().size(w, h).supersample(2).build().expect("headless renderer"))
+        Backend::Wgpu(
+            HeadlessRenderer::builder()
+                .size(w, h)
+                .supersample(2)
+                .build()
+                .expect("headless renderer"),
+        )
     }
 
     fn size(&self) -> (u32, u32) {
@@ -115,7 +121,11 @@ fn main() {
                 o.position = Vector3::new(-4.5 + 9.0 * u, -0.6 + 0.5 * (TAU * u).sin(), 0.0);
             }
             if let Some(o) = scene.get_mut(dot) {
-                o.position = Vector3::new(2.6 + 0.8 * (2.0 * TAU * u).cos(), 1.3 + 0.8 * (2.0 * TAU * u).sin(), 0.5);
+                o.position = Vector3::new(
+                    2.6 + 0.8 * (2.0 * TAU * u).cos(),
+                    1.3 + 0.8 * (2.0 * TAU * u).sin(),
+                    0.5,
+                );
             }
             if let Some(o) = scene.get_mut(block) {
                 o.position = Vector3::new(-2.4, 1.2, 0.0);
@@ -154,14 +164,21 @@ fn main() {
             }
         }
     }
-    let name = if metal { "time_smear/sheet-metal.png" } else { "time_smear/sheet.png" };
+    let name = if metal {
+        "time_smear/sheet-metal.png"
+    } else {
+        "time_smear/sheet.png"
+    };
     std::fs::write(name, encode_png(sw as u32, sh as u32, &sheet)).unwrap();
     println!("wrote {name} (rows: source, faithful, ghost, raw, echo; frames {picks:?})");
 
     #[cfg(feature = "video")]
     for ((name, _), row) in looks.iter().zip(&rows[1..]) {
         let path = format!("time_smear/{name}.mp4");
-        let opts = threers::VideoOptions::new(&path).fps(30).codec(threers::VideoCodec::H264).crf(18);
+        let opts = threers::VideoOptions::new(&path)
+            .fps(30)
+            .codec(threers::VideoCodec::H264)
+            .crf(18);
         threers::export_video(rw, rh, FRAMES, &opts, |i| row[i].clone()).expect("export");
         println!("wrote {path}");
     }

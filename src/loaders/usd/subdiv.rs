@@ -128,7 +128,8 @@ mod tests {
     fn the_corners_move_inward() {
         let out = subdivide(cube(), 1, &Options::default());
         let corner = out.positions[0];
-        let distance = (corner[0] * corner[0] + corner[1] * corner[1] + corner[2] * corner[2]).sqrt();
+        let distance =
+            (corner[0] * corner[0] + corner[1] * corner[1] + corner[2] * corner[2]).sqrt();
         let original = 3f32.sqrt();
         assert!(
             distance < original * 0.9,
@@ -225,7 +226,10 @@ def Mesh "Polygonal"
 "#,
         )
         .unwrap();
-        assert!(wanted(layer.prim_at("/Quiet").unwrap()), "the default is catmullClark");
+        assert!(
+            wanted(layer.prim_at("/Quiet").unwrap()),
+            "the default is catmullClark"
+        );
         assert!(!wanted(layer.prim_at("/Polygonal").unwrap()));
     }
 
@@ -261,7 +265,7 @@ def Mesh "M"
     #[test]
     fn a_loaded_mesh_refines_when_asked() {
         use super::super::parse::parse;
-        use super::super::scene::{mesh_geometry_at, mesh_geometry};
+        use super::super::scene::{mesh_geometry, mesh_geometry_at};
         // A cube that says nothing about its scheme, so it is one.
         let layer = parse(
             r#"#usda 1.0
@@ -298,7 +302,10 @@ def Mesh "Cube"
         // And the cage's corners pulled in toward the sphere it approximates.
         let corner = &refined.get_attribute("position").unwrap().array[0..3];
         let distance = (corner[0].powi(2) + corner[1].powi(2) + corner[2].powi(2)).sqrt();
-        assert!(distance < 3f32.sqrt() * 0.9, "corner did not move: {distance}");
+        assert!(
+            distance < 3f32.sqrt() * 0.9,
+            "corner did not move: {distance}"
+        );
 
         // And `none` is left alone however high the level goes.
         let layer = parse(
@@ -315,8 +322,16 @@ def Mesh "Flat"
         .unwrap();
         let flat = layer.prim_at("/Flat").unwrap();
         assert_eq!(
-            mesh_geometry_at(flat, 3).unwrap().get_attribute("position").unwrap().count(),
-            mesh_geometry(flat).unwrap().get_attribute("position").unwrap().count()
+            mesh_geometry_at(flat, 3)
+                .unwrap()
+                .get_attribute("position")
+                .unwrap()
+                .count(),
+            mesh_geometry(flat)
+                .unwrap()
+                .get_attribute("position")
+                .unwrap()
+                .count()
         );
     }
 

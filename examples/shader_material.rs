@@ -13,11 +13,11 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use threers::cameras::Camera;
+use threers::renderer::WindowRenderer;
 use threers::{
     AmbientLight, BoxGeometry, Color, DirectionalLight, Euler, Mesh, Object3D, PerspectiveCamera,
     Scene, ShaderMaterial, Vector3,
 };
-use threers::renderer::WindowRenderer;
 use winit::{
     event::{Event, WindowEvent},
     event_loop::EventLoop,
@@ -84,8 +84,7 @@ async fn run() {
     key.position = Vector3::new(3.0, 5.0, 2.0);
     scene.add(key);
 
-    let mut camera =
-        PerspectiveCamera::new(60.0, view.aspect(), 0.1, 100.0);
+    let mut camera = PerspectiveCamera::new(60.0, view.aspect(), 0.1, 100.0);
     camera.position = Vector3::new(2.5, 2.0, 3.5);
     camera.look_at(Vector3::ZERO);
 

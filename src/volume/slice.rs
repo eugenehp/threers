@@ -40,7 +40,7 @@
 //! use threers::volume::{plane_to_voxel, Data3DTexture, GpuVolume, SliceParams, SliceRenderer};
 //! use threers::math::{Quaternion, Vector3};
 //! use threers::renderer::PixelRect;
-//! # fn demo(device: impl Into<gpu::Gpu>, queue: &wgpu::Queue, frame: &wgpu::TextureView) {
+//! # fn demo(device: &wgpu::Device, queue: &wgpu::Queue, frame: &wgpu::TextureView) {
 //! let data = Data3DTexture::from_f32(64, 64, 64, &vec![0.5; 64 * 64 * 64]);
 //! let volume = GpuVolume::from_texture(device, queue, &data);
 //! let slices = SliceRenderer::window_level(device, wgpu::TextureFormat::Bgra8UnormSrgb);
@@ -65,18 +65,21 @@ use crate::renderer::PixelRect;
 
 /// Grey ramp over `value.r`: `params[0].x` maps to black, `params[0].y` to
 /// white. For [`VolumeSample::Float`] volumes.
-pub const WINDOW_LEVEL: &str = crate::wgsl!(r#"
+pub const WINDOW_LEVEL: &str = crate::wgsl!(
+    r#"
 fn slice_color(value : vec4<f32>, params : array<vec4<f32>, 4>) -> vec4<f32> {
     let g = clamp((value.r - params[0].x) / (params[0].y - params[0].x), 0.0, 1.0);
     return vec4<f32>(g, g, g, 1.0);
 }
-"#);
+"#
+);
 
 /// A colour per label, from a hash of the 64-bit value in `.r` (low word) and
 /// `.g` (high word); label 0 is transparent. `params[0].x` is a seed that
 /// reshuffles the colours, `params[0].y` the opacity. For
 /// [`VolumeSample::Uint`] volumes.
-pub const LABELS: &str = crate::wgsl!(r#"
+pub const LABELS: &str = crate::wgsl!(
+    r#"
 fn slice_label_hash(seed : u32, v : u32) -> u32 {
     // MurmurHash3's block mix.
     var k = v * 0xcc9e2d51u;
@@ -94,7 +97,8 @@ fn slice_color(value : vec4<u32>, params : array<vec4<f32>, 4>) -> vec4<f32> {
     let s = 0.5 + 0.5 * f32((h >> 8u) & 0xffu) / 255.0;
     return vec4<f32>(mix(vec3<f32>(1.0), rgb, s), params[0].y);
 }
-"#);
+"#
+);
 
 /// What one draw shows.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -111,14 +115,20 @@ impl SliceParams {
     pub fn window(ndc_to_voxel: Matrix4, black: f32, white: f32) -> Self {
         let mut params = [[0.0; 4]; 4];
         params[0] = [black, white, 0.0, 0.0];
-        Self { ndc_to_voxel, params }
+        Self {
+            ndc_to_voxel,
+            params,
+        }
     }
 
     /// For [`LABELS`]: a colour `seed` and an `opacity`.
     pub fn labels(ndc_to_voxel: Matrix4, seed: u32, opacity: f32) -> Self {
         let mut params = [[0.0; 4]; 4];
         params[0] = [seed as f32, opacity, 0.0, 0.0];
-        Self { ndc_to_voxel, params }
+        Self {
+            ndc_to_voxel,
+            params,
+        }
     }
 }
 
@@ -154,7 +164,8 @@ struct Uniforms {
     _pad: [u32; 3],
 }
 
-const FRAGMENT: &str = crate::wgsl!(r#"
+const FRAGMENT: &str = crate::wgsl!(
+    r#"
 struct SliceUniforms {
     ndc_to_voxel : mat4x4<f32>,
     params : array<vec4<f32>, 4>,
@@ -182,12 +193,14 @@ fn fs(in : FullscreenVertex) -> @location(0) vec4<f32> {
     }
     return c;
 }
-"#);
+"#
+);
 
 /// [`FRAGMENT`] for a colour function that reads the volume itself:
 /// `slice_color_at(voxel, params)` gets the voxel position (not yet
 /// bounds-checked: it decides what lies outside, and may `discard`).
-const FRAGMENT_AT: &str = crate::wgsl!(r#"
+const FRAGMENT_AT: &str = crate::wgsl!(
+    r#"
 struct SliceUniforms {
     ndc_to_voxel : mat4x4<f32>,
     params : array<vec4<f32>, 4>,
@@ -211,7 +224,8 @@ fn fs(in : FullscreenVertex) -> @location(0) vec4<f32> {
     }
     return c;
 }
-"#);
+"#
+);
 
 /// How a [`SliceRenderer`] writes its target.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -280,7 +294,12 @@ impl SliceRenderer {
         sample: VolumeSample,
         color_wgsl: &str,
     ) -> Self {
-        Self::with_target(device, SliceTarget::blended(target_format), sample, color_wgsl)
+        Self::with_target(
+            device,
+            SliceTarget::blended(target_format),
+            sample,
+            color_wgsl,
+        )
     }
 
     /// [`with_color`](Self::with_color) with control over blending and
@@ -299,11 +318,22 @@ impl SliceRenderer {
     /// function can read: a `texture_2d<u32>` named `slice_lookup` (for
     /// example a sorted set of label IDs to search, or a colour map). Make
     /// bindings with [`create_binding_with_lookup`](Self::create_binding_with_lookup).
-    pub fn with_lookup(device: impl Into<gpu::Gpu>, target: SliceTarget, sample: VolumeSample, color_wgsl: &str) -> Self {
+    pub fn with_lookup(
+        device: impl Into<gpu::Gpu>,
+        target: SliceTarget,
+        sample: VolumeSample,
+        color_wgsl: &str,
+    ) -> Self {
         Self::build(&device.into(), target, sample, color_wgsl, true)
     }
 
-    fn build(device: &gpu::Gpu, target: SliceTarget, sample: VolumeSample, color_wgsl: &str, lookup: bool) -> Self {
+    fn build(
+        device: &gpu::Gpu,
+        target: SliceTarget,
+        sample: VolumeSample,
+        color_wgsl: &str,
+        lookup: bool,
+    ) -> Self {
         let target_format = target.format;
         let sample_type = match sample {
             VolumeSample::Float => wgpu::TextureSampleType::Float { filterable: false },
@@ -353,7 +383,12 @@ impl SliceRenderer {
         let shader = device.create_shader_module(gpu::ShaderModuleDescriptor {
             label: Some("threers slice shader"),
             source: gpu::ShaderSource::Wgsl(
-                if lookup { Self::shader_source_with_lookup(sample, color_wgsl) } else { Self::shader_source(sample, color_wgsl) }.into(),
+                if lookup {
+                    Self::shader_source_with_lookup(sample, color_wgsl)
+                } else {
+                    Self::shader_source(sample, color_wgsl)
+                }
+                .into(),
             ),
         });
         let pipeline = device.create_render_pipeline(&gpu::RenderPipelineDescriptor {
@@ -376,13 +411,15 @@ impl SliceRenderer {
                 compilation_options: Default::default(),
             }),
             primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: target.depth.map(|(format, compare)| wgpu::DepthStencilState {
-                format,
-                depth_write_enabled: Some(true),
-                depth_compare: Some(compare),
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
+            depth_stencil: target
+                .depth
+                .map(|(format, compare)| wgpu::DepthStencilState {
+                    format,
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(compare),
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
             multisample: wgpu::MultisampleState::default(),
             multiview_mask: None,
             cache: None,
@@ -401,7 +438,10 @@ impl SliceRenderer {
     /// without a device, or reading what went wrong with one.
     /// [`shader_source`](Self::shader_source) for [`with_lookup`](Self::with_lookup).
     pub fn shader_source_with_lookup(sample: VolumeSample, color_wgsl: &str) -> String {
-        format!("@group(0) @binding(2) var slice_lookup : texture_2d<u32>;\n{}", Self::shader_source(sample, color_wgsl))
+        format!(
+            "@group(0) @binding(2) var slice_lookup : texture_2d<u32>;\n{}",
+            Self::shader_source(sample, color_wgsl)
+        )
     }
 
     pub fn shader_source(sample: VolumeSample, color_wgsl: &str) -> String {
@@ -411,7 +451,11 @@ impl SliceRenderer {
         };
         // A colour function reading the volume itself (several texels per
         // pixel, say) defines `slice_color_at` and gets the voxel instead.
-        let fragment = if color_wgsl.contains("fn slice_color_at(") { FRAGMENT_AT } else { FRAGMENT };
+        let fragment = if color_wgsl.contains("fn slice_color_at(") {
+            FRAGMENT_AT
+        } else {
+            FRAGMENT
+        };
         format!(
             "{}\n{}\n{}",
             fullscreen::VS,
@@ -424,7 +468,10 @@ impl SliceRenderer {
     ///
     /// If the volume's sample type is not the one this renderer was made for.
     pub fn create_binding(&self, device: impl Into<gpu::Gpu>, volume: &GpuVolume) -> SliceBinding {
-        assert!(!self.lookup, "this slice renderer reads a lookup table: use create_binding_with_lookup");
+        assert!(
+            !self.lookup,
+            "this slice renderer reads a lookup table: use create_binding_with_lookup"
+        );
         self.binding(&device.into(), volume, None)
     }
 
@@ -441,11 +488,19 @@ impl SliceRenderer {
         volume: &GpuVolume,
         lookup: impl Into<gpu::TextureView>,
     ) -> SliceBinding {
-        assert!(self.lookup, "this slice renderer takes no lookup table: use create_binding");
+        assert!(
+            self.lookup,
+            "this slice renderer takes no lookup table: use create_binding"
+        );
         self.binding(&device.into(), volume, Some(&lookup.into()))
     }
 
-    fn binding(&self, device: &gpu::Gpu, volume: &GpuVolume, lookup: Option<&gpu::TextureView>) -> SliceBinding {
+    fn binding(
+        &self,
+        device: &gpu::Gpu,
+        volume: &GpuVolume,
+        lookup: Option<&gpu::TextureView>,
+    ) -> SliceBinding {
         assert_eq!(
             volume.format.sample(),
             self.sample,
@@ -486,12 +541,20 @@ impl SliceRenderer {
     }
 
     pub fn update(&self, queue: &wgpu::Queue, binding: &SliceBinding, params: &SliceParams) {
-        queue.write_buffer(binding.uniforms.wgpu(), 0, bytemuck::bytes_of(&self.uniforms(params)));
+        queue.write_buffer(
+            binding.uniforms.wgpu(),
+            0,
+            bytemuck::bytes_of(&self.uniforms(params)),
+        );
     }
 
     /// [`update`](Self::update) on either backend.
     pub fn update_on(&self, gpu: &gpu::Gpu, binding: &SliceBinding, params: &SliceParams) {
-        gpu.write_buffer(&binding.uniforms, 0, bytemuck::bytes_of(&self.uniforms(params)));
+        gpu.write_buffer(
+            &binding.uniforms,
+            0,
+            bytemuck::bytes_of(&self.uniforms(params)),
+        );
     }
 
     fn uniforms(&self, params: &SliceParams) -> Uniforms {
@@ -521,7 +584,12 @@ impl SliceRenderer {
     /// Draws into `rect` within a pass you began, whose attachments match
     /// the [`SliceTarget`] this renderer was made for. Many draws can share
     /// one pass.
-    pub fn draw_in_pass(&self, pass: &mut wgpu::RenderPass<'_>, rect: PixelRect, binding: &SliceBinding) {
+    pub fn draw_in_pass(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        rect: PixelRect,
+        binding: &SliceBinding,
+    ) {
         if rect.width == 0 || rect.height == 0 {
             return;
         }
@@ -570,7 +638,12 @@ impl SliceRenderer {
     }
 
     /// [`draw_in_pass`](Self::draw_in_pass) on either backend.
-    pub fn draw_in_pass_on(&self, pass: &mut gpu::RenderPass<'_>, rect: PixelRect, binding: &SliceBinding) {
+    pub fn draw_in_pass_on(
+        &self,
+        pass: &mut gpu::RenderPass<'_>,
+        rect: PixelRect,
+        binding: &SliceBinding,
+    ) {
         if rect.width == 0 || rect.height == 0 {
             return;
         }

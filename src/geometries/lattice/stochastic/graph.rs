@@ -160,23 +160,23 @@ impl SeedGraph {
         // (seed, cell offset), and copied into every cell.
         let tiled: Option<Vec<TileCell>> = (!tile.is_empty()).then(|| {
             crate::utils::parallel::par_map_range_coarse(per_cell, |k| {
-                    let me = [0, 1, 2].map(|a| tile[k][a] * cell[a]);
-                    let mut candidates = Vec::new();
-                    for oz in -2..=2 {
-                        for oy in -2..=2 {
-                            for ox in -2..=2 {
-                                let o = [ox, oy, oz];
-                                for (m, t) in tile.iter().enumerate() {
-                                    if o == [0, 0, 0] && m == k {
-                                        continue;
-                                    }
-                                    let q = [0, 1, 2].map(|a| (o[a] as f64 + t[a]) * cell[a]);
-                                    candidates.push((q, weight_of(m), (m, o)));
+                let me = [0, 1, 2].map(|a| tile[k][a] * cell[a]);
+                let mut candidates = Vec::new();
+                for oz in -2..=2 {
+                    for oy in -2..=2 {
+                        for ox in -2..=2 {
+                            let o = [ox, oy, oz];
+                            for (m, t) in tile.iter().enumerate() {
+                                if o == [0, 0, 0] && m == k {
+                                    continue;
                                 }
+                                let q = [0, 1, 2].map(|a| (o[a] as f64 + t[a]) * cell[a]);
+                                candidates.push((q, weight_of(m), (m, o)));
                             }
                         }
                     }
-                    clip_cell(me, weight_of(k), &candidates, cell)
+                }
+                clip_cell(me, weight_of(k), &candidates, cell)
             })
         });
 
@@ -224,39 +224,36 @@ impl SeedGraph {
         type Clipped = (Vec<u32>, bool, Vec<[[f64; 3]; 2]>);
         let clip_random = |c: [i32; 3]| -> Clipped {
             'cell: {
-                                // A seed near the block's edge has candidates
-                                // missing, so its cell cannot be trusted — and
-                                // is not worth clipping at all.
-                                let edge = (0..3)
-                                    .any(|a| c[a] - lo[a] < 2 || lo[a] + dims[a] - 1 - c[a] < 2);
-                                if edge {
-                                    break 'cell (Vec::new(), false, Vec::new());
-                                }
-                                let me = graph.pos[graph.id(c, 0).unwrap() as usize];
-                                let mut candidates = Vec::new();
-                                for oz in -2..=2 {
-                                    for oy in -2..=2 {
-                                        for ox in -2..=2 {
-                                            if [ox, oy, oz] == [0, 0, 0] {
-                                                continue;
-                                            }
-                                            let d = [c[0] + ox, c[1] + oy, c[2] + oz];
-                                            if let Some(id) = graph.id(d, 0) {
-                                                let q = graph.pos[id as usize];
-                                                let rel =
-                                                    [q[0] - me[0], q[1] - me[1], q[2] - me[2]];
-                                                candidates.push((rel, 0.0, (id as usize, [0; 3])));
-                                            }
-                                        }
-                                    }
-                                }
-                                let (faces, closed, edges) =
-                                    clip_cell([0.0; 3], 0.0, &candidates, cell);
-                                (
-                                    faces.into_iter().map(|(id, _)| id as u32).collect(),
-                                    closed,
-                                    edges,
-                                )
+                // A seed near the block's edge has candidates
+                // missing, so its cell cannot be trusted — and
+                // is not worth clipping at all.
+                let edge = (0..3).any(|a| c[a] - lo[a] < 2 || lo[a] + dims[a] - 1 - c[a] < 2);
+                if edge {
+                    break 'cell (Vec::new(), false, Vec::new());
+                }
+                let me = graph.pos[graph.id(c, 0).unwrap() as usize];
+                let mut candidates = Vec::new();
+                for oz in -2..=2 {
+                    for oy in -2..=2 {
+                        for ox in -2..=2 {
+                            if [ox, oy, oz] == [0, 0, 0] {
+                                continue;
+                            }
+                            let d = [c[0] + ox, c[1] + oy, c[2] + oz];
+                            if let Some(id) = graph.id(d, 0) {
+                                let q = graph.pos[id as usize];
+                                let rel = [q[0] - me[0], q[1] - me[1], q[2] - me[2]];
+                                candidates.push((rel, 0.0, (id as usize, [0; 3])));
+                            }
+                        }
+                    }
+                }
+                let (faces, closed, edges) = clip_cell([0.0; 3], 0.0, &candidates, cell);
+                (
+                    faces.into_iter().map(|(id, _)| id as u32).collect(),
+                    closed,
+                    edges,
+                )
             }
         };
         let mut clipped: Vec<Clipped> = if tiled.is_none() {

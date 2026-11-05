@@ -12,11 +12,15 @@ pub struct Av1FilterLut {
 
 impl Default for Av1FilterLut {
     fn default() -> Self {
-        Av1FilterLut { e: [0; 64], i: [0; 64], sharp: [0; 2] }
+        Av1FilterLut {
+            e: [0; 64],
+            i: [0; 64],
+            sharp: [0; 2],
+        }
     }
 }
 
-#[derive(Clone, Copy, Default, Debug)]
+#[derive(Clone, Copy, Default, Debug, PartialEq)]
 pub struct RestorationUnit {
     /// SGR: `RESTORATION_SGRPROJ + sgr_idx`.
     pub typ: u8,
@@ -26,8 +30,7 @@ pub struct RestorationUnit {
 }
 
 /// One 128x128 area (1 or 4 superblocks), pre-superres.
-#[derive(Clone, Copy)]
-#[derive(Default)]
+#[derive(Clone, Copy, Default)]
 pub struct Av1Filter {
     /// `[col/row][pos][tx class][half]`, each bit one 4px line.
     pub filter_y: [[[[u16; 2]; 3]; 32]; 2],
@@ -35,7 +38,6 @@ pub struct Av1Filter {
     pub cdef_idx: [i8; 4],
     pub noskip_mask: [[u16; 2]; 16],
 }
-
 
 /// One 128x128 area, post-superres.
 #[derive(Clone, Copy, Default)]
@@ -47,21 +49,61 @@ pub struct Av1Restoration {
 type Txa = [[[[u8; 32]; 32]; 2]; 2];
 
 #[allow(clippy::too_many_arguments)]
-fn decomp_tx(txa: &mut Txa, oy: usize, ox: usize, from: usize, depth: usize, y_off: usize, x_off: usize, tx_masks: &[u16; 2]) {
+fn decomp_tx(
+    txa: &mut Txa,
+    oy: usize,
+    ox: usize,
+    from: usize,
+    depth: usize,
+    y_off: usize,
+    x_off: usize,
+    tx_masks: &[u16; 2],
+) {
     let t = &TXFM_DIMENSIONS[from];
-    let is_split = if from == 0 || depth > 1 { false } else { (tx_masks[depth] >> (y_off * 4 + x_off)) & 1 != 0 };
+    let is_split = if from == 0 || depth > 1 {
+        false
+    } else {
+        (tx_masks[depth] >> (y_off * 4 + x_off)) & 1 != 0
+    };
     if is_split {
         let sub = t.sub as usize;
         let htw4 = (t.w >> 1) as usize;
         let hth4 = (t.h >> 1) as usize;
         decomp_tx(txa, oy, ox, sub, depth + 1, y_off * 2, x_off * 2, tx_masks);
         if t.w >= t.h {
-            decomp_tx(txa, oy, ox + htw4, sub, depth + 1, y_off * 2, x_off * 2 + 1, tx_masks);
+            decomp_tx(
+                txa,
+                oy,
+                ox + htw4,
+                sub,
+                depth + 1,
+                y_off * 2,
+                x_off * 2 + 1,
+                tx_masks,
+            );
         }
         if t.h >= t.w {
-            decomp_tx(txa, oy + hth4, ox, sub, depth + 1, y_off * 2 + 1, x_off * 2, tx_masks);
+            decomp_tx(
+                txa,
+                oy + hth4,
+                ox,
+                sub,
+                depth + 1,
+                y_off * 2 + 1,
+                x_off * 2,
+                tx_masks,
+            );
             if t.w >= t.h {
-                decomp_tx(txa, oy + hth4, ox + htw4, sub, depth + 1, y_off * 2 + 1, x_off * 2 + 1, tx_masks);
+                decomp_tx(
+                    txa,
+                    oy + hth4,
+                    ox + htw4,
+                    sub,
+                    depth + 1,
+                    y_off * 2 + 1,
+                    x_off * 2 + 1,
+                    tx_masks,
+                );
             }
         }
     } else {
@@ -88,7 +130,18 @@ fn set_bit(m: &mut [u16; 2], mask: u32) {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn mask_edges_inter(masks: &mut [[[[u16; 2]; 3]; 32]; 2], by4: usize, bx4: usize, w4: usize, h4: usize, skip: bool, max_tx: usize, tx_masks: &[u16; 2], a: &mut [u8], l: &mut [u8]) {
+fn mask_edges_inter(
+    masks: &mut [[[[u16; 2]; 3]; 32]; 2],
+    by4: usize,
+    bx4: usize,
+    w4: usize,
+    h4: usize,
+    skip: bool,
+    max_tx: usize,
+    tx_masks: &[u16; 2],
+    a: &mut [u8],
+    l: &mut [u8],
+) {
     let t = &TXFM_DIMENSIONS[max_tx];
     let mut txa: Txa = [[[[0; 32]; 32]; 2]; 2];
     let mut y_off = 0;
@@ -151,7 +204,16 @@ fn mask_edges_inter(masks: &mut [[[[u16; 2]; 3]; 32]; 2], by4: usize, bx4: usize
 }
 
 #[allow(clippy::too_many_arguments)]
-fn mask_edges_intra(masks: &mut [[[[u16; 2]; 3]; 32]; 2], by4: usize, bx4: usize, w4: usize, h4: usize, tx: usize, a: &mut [u8], l: &mut [u8]) {
+fn mask_edges_intra(
+    masks: &mut [[[[u16; 2]; 3]; 32]; 2],
+    by4: usize,
+    bx4: usize,
+    w4: usize,
+    h4: usize,
+    tx: usize,
+    a: &mut [u8],
+    l: &mut [u8],
+) {
     let t = &TXFM_DIMENSIONS[tx];
     let twl4c = t.lw.min(2);
     let thl4c = t.lh.min(2);
@@ -190,7 +252,19 @@ fn mask_edges_intra(masks: &mut [[[[u16; 2]; 3]; 32]; 2], by4: usize, bx4: usize
 }
 
 #[allow(clippy::too_many_arguments)]
-fn mask_edges_chroma(masks: &mut [[[[u16; 2]; 2]; 32]; 2], cby4: usize, cbx4: usize, cw4: usize, ch4: usize, skip_inter: bool, tx: usize, a: &mut [u8], l: &mut [u8], ss_hor: usize, ss_ver: usize) {
+fn mask_edges_chroma(
+    masks: &mut [[[[u16; 2]; 2]; 32]; 2],
+    cby4: usize,
+    cbx4: usize,
+    cw4: usize,
+    ch4: usize,
+    skip_inter: bool,
+    tx: usize,
+    a: &mut [u8],
+    l: &mut [u8],
+    ss_hor: usize,
+    ss_ver: usize,
+) {
     let t = &TXFM_DIMENSIONS[tx];
     let twl4c = (t.lw != 0) as u8;
     let thl4c = (t.lh != 0) as u8;
@@ -286,14 +360,27 @@ pub fn create_lf_mask(
         }
         match inter {
             None => mask_edges_intra(&mut lflvl.filter_y, by4, bx4, bw4, bh4, ytx, e.ay, e.ly),
-            Some((skip, tx_masks)) => mask_edges_inter(&mut lflvl.filter_y, by4, bx4, bw4, bh4, skip, ytx, &tx_masks, e.ay, e.ly),
+            Some((skip, tx_masks)) => mask_edges_inter(
+                &mut lflvl.filter_y,
+                by4,
+                bx4,
+                bw4,
+                bh4,
+                skip,
+                ytx,
+                &tx_masks,
+                e.ay,
+                e.ly,
+            ),
         }
     }
     let Some((auv, luv)) = e.uv else { return };
     let ss_ver = (layout == Layout::I420) as usize;
     let ss_hor = (layout != Layout::I444) as usize;
-    let cbw4 = (((iw + ss_hor) >> ss_hor) - (bx >> ss_hor)).min((b_dim[0] as usize + ss_hor) >> ss_hor);
-    let cbh4 = (((ih + ss_ver) >> ss_ver) - (by >> ss_ver)).min((b_dim[1] as usize + ss_ver) >> ss_ver);
+    let cbw4 =
+        (((iw + ss_hor) >> ss_hor) - (bx >> ss_hor)).min((b_dim[0] as usize + ss_hor) >> ss_hor);
+    let cbh4 =
+        (((ih + ss_ver) >> ss_ver) - (by >> ss_ver)).min((b_dim[1] as usize + ss_ver) >> ss_ver);
     if cbw4 == 0 || cbh4 == 0 {
         return;
     }
@@ -307,7 +394,19 @@ pub fn create_lf_mask(
         }
     }
     let skip_inter = inter.map(|(s, _)| s).unwrap_or(false);
-    mask_edges_chroma(&mut lflvl.filter_uv, cby4, cbx4, cbw4, cbh4, skip_inter, uvtx, auv, luv, ss_hor, ss_ver);
+    mask_edges_chroma(
+        &mut lflvl.filter_uv,
+        cby4,
+        cbx4,
+        cbw4,
+        cbh4,
+        skip_inter,
+        uvtx,
+        auv,
+        luv,
+        ss_hor,
+        ss_ver,
+    );
 }
 
 pub fn calc_eih(lut: &mut Av1FilterLut, sharp: i32) {
@@ -328,7 +427,13 @@ pub fn calc_eih(lut: &mut Av1FilterLut, sharp: i32) {
 /// `[seg][dir][ref][is_gmv]`.
 pub type LfLevels = [[[[u8; 2]; 8]; 4]; 8];
 
-fn calc_lf_value(v: &mut [[u8; 2]; 8], base_lvl: i32, lf_delta: i32, seg_delta: i32, mr: Option<&LoopfilterModeRefDeltas>) {
+fn calc_lf_value(
+    v: &mut [[u8; 2]; 8],
+    base_lvl: i32,
+    lf_delta: i32,
+    seg_delta: i32,
+    mr: Option<&LoopfilterModeRefDeltas>,
+) {
     let base = ((base_lvl + lf_delta).clamp(0, 63) + seg_delta).clamp(0, 63);
     match mr {
         None => *v = [[base as u8; 2]; 8],
@@ -355,19 +460,53 @@ pub fn calc_lf_values(values: &mut LfLevels, hdr: &FrameHeader, lf_delta: [i8; 4
         }
         return;
     }
-    let mr = if lf.mode_ref_delta_enabled { Some(&lf.mode_ref_deltas) } else { None };
+    let mr = if lf.mode_ref_delta_enabled {
+        Some(&lf.mode_ref_deltas)
+    } else {
+        None
+    };
     let multi = hdr.delta.lf_multi;
     for s in 0..n_seg {
-        let segd = if hdr.segmentation.enabled { Some(&hdr.segmentation.seg_data.d[s]) } else { None };
-        let sd = |f: fn(&super::obu::SegmentationData) -> i8| segd.map(|d| f(d) as i32).unwrap_or(0);
-        calc_lf_value(&mut values[s][0], lf.level_y[0] as i32, lf_delta[0] as i32, sd(|d| d.delta_lf_y_v), mr);
-        calc_lf_value(&mut values[s][1], lf.level_y[1] as i32, lf_delta[if multi { 1 } else { 0 }] as i32, sd(|d| d.delta_lf_y_h), mr);
-        for (k, (lvl, dl)) in [(lf.level_u, 2usize), (lf.level_v, 3)].into_iter().enumerate() {
-            let seg = if k == 0 { sd(|d| d.delta_lf_u) } else { sd(|d| d.delta_lf_v) };
+        let segd = if hdr.segmentation.enabled {
+            Some(&hdr.segmentation.seg_data.d[s])
+        } else {
+            None
+        };
+        let sd =
+            |f: fn(&super::obu::SegmentationData) -> i8| segd.map(|d| f(d) as i32).unwrap_or(0);
+        calc_lf_value(
+            &mut values[s][0],
+            lf.level_y[0] as i32,
+            lf_delta[0] as i32,
+            sd(|d| d.delta_lf_y_v),
+            mr,
+        );
+        calc_lf_value(
+            &mut values[s][1],
+            lf.level_y[1] as i32,
+            lf_delta[if multi { 1 } else { 0 }] as i32,
+            sd(|d| d.delta_lf_y_h),
+            mr,
+        );
+        for (k, (lvl, dl)) in [(lf.level_u, 2usize), (lf.level_v, 3)]
+            .into_iter()
+            .enumerate()
+        {
+            let seg = if k == 0 {
+                sd(|d| d.delta_lf_u)
+            } else {
+                sd(|d| d.delta_lf_v)
+            };
             if lvl == 0 {
                 values[s][2 + k] = [[0; 2]; 8];
             } else {
-                calc_lf_value(&mut values[s][2 + k], lvl as i32, lf_delta[if multi { dl } else { 0 }] as i32, seg, mr);
+                calc_lf_value(
+                    &mut values[s][2 + k],
+                    lvl as i32,
+                    lf_delta[if multi { dl } else { 0 }] as i32,
+                    seg,
+                    mr,
+                );
             }
         }
     }

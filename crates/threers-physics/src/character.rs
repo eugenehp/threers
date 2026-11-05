@@ -142,7 +142,13 @@ impl CharacterController {
                 break;
             }
 
-            match world.cast_shape(&self.shape, &position, direction, distance + self.skin, filter) {
+            match world.cast_shape(
+                &self.shape,
+                &position,
+                direction,
+                distance + self.skin,
+                filter,
+            ) {
                 None => {
                     // Clear: take the whole remaining step. Nothing reads
                     // `remaining` past this point, so it is simply consumed.
@@ -177,15 +183,14 @@ impl CharacterController {
         let feet = position.translation;
         if !result.grounded {
             let probe = self.snap_to_ground.max(self.skin * 2.0);
-            if let Some(hit) =
-                world.cast_shape(&self.shape, &position, -self.up, probe, filter)
-            {
-                if self.is_walkable(hit.normal) {
+            if let Some(hit) = world.cast_shape(&self.shape, &position, -self.up, probe, filter) {
+                // Only when moving down or level. The probe still reaches the floor just
+                // after a jump, and that is neither standing on it nor a reason to
+                // pin the character back to it.
+                if self.is_walkable(hit.normal) && desired.dot(self.up) <= 0.0 {
                     result.grounded = true;
                     result.ground_normal = Some(hit.normal);
-                    // Only snap when already moving downward or level; snapping
-                    // during a jump would pin the character to the floor.
-                    if desired.dot(self.up) <= 0.0 {
+                    {
                         position.translation =
                             position.translation - self.up * (hit.toi - self.skin).max(0.0);
                     }
@@ -214,6 +219,55 @@ impl CharacterController {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn leaving_the_ground_is_not_standing_on_it() {
+        let mut world = crate::world::World::new();
+        world.add_body(crate::body::RigidBody::fixed().shape(Shape::ground()));
+        world.step_fixed();
+        let controller = CharacterController::new(Shape::capsule(0.4, 0.4)).snap_to_ground(0.3);
+        let on_floor = Isometry::from_translation(Vector3::new(0.0, 0.85, 0.0));
+
+        let rising = Vector3::new(0.0, 0.05, 0.0);
+        let moved = controller.move_and_slide(&world, on_floor, rising, QueryFilter::default());
+        assert!(!moved.grounded);
+        assert!(
+            moved.translation.y > 0.04,
+            "pinned: {:?}",
+            moved.translation
+        );
+
+        let level = Vector3::new(0.05, 0.0, 0.0);
+        let moved = controller.move_and_slide(&world, on_floor, level, QueryFilter::default());
+        assert!(moved.grounded);
+    }
+
+    /// The capsule's round end reaches past the corner before its centre does,
+    /// so for a while it stands on the edge with nothing under it.
+    #[test]
+    fn walking_off_a_ledge_falls_rather_than_hanging_on_the_corner() {
+        let mut world = crate::world::World::new();
+        world.add_body(crate::body::RigidBody::fixed().shape(Shape::cuboid(2.5, 0.5, 2.5)));
+        world.step_fixed();
+        let controller = CharacterController::new(Shape::capsule(0.4, 0.4))
+            .max_slope_degrees(45.0)
+            .snap_to_ground(0.2);
+
+        let dt = 1.0 / 60.0;
+        let mut position = Isometry::from_translation(Vector3::new(2.0, 1.32, 0.0));
+        let mut vertical_speed = 0.0_f32;
+        for _ in 0..180 {
+            vertical_speed -= 9.81 * dt;
+            let wanted = Vector3::new(5.0 * dt, vertical_speed * dt, 0.0);
+            let moved = controller.move_and_slide(&world, position, wanted, QueryFilter::default());
+            position.translation = position.translation + moved.translation;
+            if moved.grounded {
+                vertical_speed = 0.0;
+            }
+        }
+        assert!(position.translation.x > 10.0, "{:?}", position.translation);
+        assert!(position.translation.y < -5.0, "{:?}", position.translation);
+    }
+
     use super::*;
     use crate::body::RigidBody;
 
@@ -233,7 +287,11 @@ mod tests {
         let c = CharacterController::new(Shape::capsule(0.5, 0.3));
         let desired = Vector3::new(1.0, 0.0, 2.0);
         let r = c.move_and_slide(&world, capsule_at(5.0), desired, QueryFilter::default());
-        assert!((r.translation - desired).length() < 1e-4, "{:?}", r.translation);
+        assert!(
+            (r.translation - desired).length() < 1e-4,
+            "{:?}",
+            r.translation
+        );
         assert!(!r.grounded);
     }
 
@@ -255,7 +313,12 @@ mod tests {
         let stop = 1.9 - 0.3;
 
         // Straight into it: stopped by the wall well short of the 3.0 asked for.
-        let r = c.move_and_slide(&world, start, Vector3::new(3.0, 0.0, 0.0), QueryFilter::default());
+        let r = c.move_and_slide(
+            &world,
+            start,
+            Vector3::new(3.0, 0.0, 0.0),
+            QueryFilter::default(),
+        );
         assert!(r.hit_wall, "should have hit the wall");
         assert!(
             r.translation.x <= stop + 1e-3,
@@ -264,8 +327,17 @@ mod tests {
         );
 
         // Diagonally into it: blocked in x, but the z component survives.
-        let r = c.move_and_slide(&world, start, Vector3::new(3.0, 0.0, 2.0), QueryFilter::default());
-        assert!(r.translation.z > 1.5, "did not slide along the wall: {:?}", r.translation);
+        let r = c.move_and_slide(
+            &world,
+            start,
+            Vector3::new(3.0, 0.0, 2.0),
+            QueryFilter::default(),
+        );
+        assert!(
+            r.translation.z > 1.5,
+            "did not slide along the wall: {:?}",
+            r.translation
+        );
         assert!(
             r.translation.x <= stop + 1e-3,
             "went through the wall: {:?}",
@@ -314,7 +386,11 @@ mod tests {
             Vector3::new(0.0, 0.3, 0.0),
             QueryFilter::default(),
         );
-        assert!(r.translation.y > 0.25, "the jump was snapped back down: {:?}", r.translation);
+        assert!(
+            r.translation.y > 0.25,
+            "the jump was snapped back down: {:?}",
+            r.translation
+        );
     }
 
     #[test]
@@ -359,7 +435,12 @@ mod tests {
     fn a_zero_move_is_a_no_op_that_still_reports_ground() {
         let world = flat_world();
         let c = CharacterController::new(Shape::capsule(0.5, 0.3));
-        let r = c.move_and_slide(&world, capsule_at(0.81), Vector3::ZERO, QueryFilter::default());
+        let r = c.move_and_slide(
+            &world,
+            capsule_at(0.81),
+            Vector3::ZERO,
+            QueryFilter::default(),
+        );
         assert!(r.translation.length() < 0.05);
         assert!(r.grounded);
     }

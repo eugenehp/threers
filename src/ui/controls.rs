@@ -40,7 +40,14 @@ const TICK: &str = "M1.865 7.235L5.286 10.657L11.212 3.250L9.588 1.950L5.114 7.5
 /// A checkbox `size` px square (13 by default): checked, the accent with a
 /// white tick; else white inside a 1px `border` (Chrome's `#767676`, or
 /// darker over a dark page).
-pub fn checkbox(ui: &mut Ui, parent: NodeId, checked: bool, size: f32, border: Rgba, margin: Edges) -> NodeId {
+pub fn checkbox(
+    ui: &mut Ui,
+    parent: NodeId,
+    checked: bool,
+    size: f32,
+    border: Rgba,
+    margin: Edges,
+) -> NodeId {
     let node = ui.add_box(
         parent,
         style! {
@@ -59,13 +66,27 @@ pub fn checkbox(ui: &mut Ui, parent: NodeId, checked: bool, size: f32, border: R
         // premultiplied); the pixels beside them, 0.99 there, opaque here.
         ui.style_mut(node).position = Position::Relative;
         let corner = [36.0 / 255.0, 135.0 / 255.0, 1.0, 0.443];
-        for (x, y, w, h, color) in [(1.0, 0.0, 11.0, 13.0, ACCENT), (0.0, 1.0, 13.0, 11.0, ACCENT), (0.0, 0.0, 1.0, 1.0, corner), (12.0, 0.0, 1.0, 1.0, corner), (0.0, 12.0, 1.0, 1.0, corner), (12.0, 12.0, 1.0, 1.0, corner)] {
+        for (x, y, w, h, color) in [
+            (1.0, 0.0, 11.0, 13.0, ACCENT),
+            (0.0, 1.0, 13.0, 11.0, ACCENT),
+            (0.0, 0.0, 1.0, 1.0, corner),
+            (12.0, 0.0, 1.0, 1.0, corner),
+            (0.0, 12.0, 1.0, 1.0, corner),
+            (12.0, 12.0, 1.0, 1.0, corner),
+        ] {
             ui.add_box(node, style! { position: absolute; left: {x}; top: {y}; width: {w}; height: {h}; background: {color}; });
         }
         ui.add_path(node, style! { position: absolute; left: 0; top: 0; width: {size}; height: {size}; color: white; }, vec![TICK.into()], [0.0, 0.0, 13.0, 13.0], None, true);
     } else if checked {
         ui.style_mut(node).background = Some(ACCENT);
-        ui.add_path(node, style! { width: {size}; height: {size}; color: white; }, vec![TICK.into()], [0.0, 0.0, 13.0, 13.0], None, true);
+        ui.add_path(
+            node,
+            style! { width: {size}; height: {size}; color: white; },
+            vec![TICK.into()],
+            [0.0, 0.0, 13.0, 13.0],
+            None,
+            true,
+        );
     } else {
         let s = ui.style_mut(node);
         s.border = Edges::all(1.0);
@@ -110,7 +131,9 @@ pub fn color_well(ui: &mut Ui, parent: NodeId, color: [f32; 3], width: f32) -> N
     let hex = color.map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8);
     ui.set_semantics(
         node,
-        Semantics::new(Role::Button).label("Colour").value(format!("#{:02x}{:02x}{:02x}", hex[0], hex[1], hex[2])),
+        Semantics::new(Role::Button)
+            .label("Colour")
+            .value(format!("#{:02x}{:02x}{:02x}", hex[0], hex[1], hex[2])),
     );
     node
 }
@@ -118,7 +141,13 @@ pub fn color_well(ui: &mut Ui, parent: NodeId, color: [f32; 3], width: f32) -> N
 /// A `<button>` with `label` in `font` (Chrome's 13.33px Arial by default;
 /// neuroglancer's 11pt): light grey, rounded, 6px padding, as tall as Arial's
 /// line and 6px.
-pub fn button(ui: &mut Ui, parent: NodeId, label: &str, font: &Style, text: &mut dyn TextMeasure) -> NodeId {
+pub fn button(
+    ui: &mut Ui,
+    parent: NodeId,
+    label: &str,
+    font: &Style,
+    text: &mut dyn TextMeasure,
+) -> NodeId {
     let (w, _) = text.measure(label, font);
     let node = ui.add_box(
         parent,
@@ -147,8 +176,18 @@ pub fn button(ui: &mut Ui, parent: NodeId, label: &str, font: &Style, text: &mut
 
 /// A closed `<select>` showing `value`: white, rounded, a chevron; as wide
 /// as its widest option plus 22px, 19px tall.
-pub fn select(ui: &mut Ui, parent: NodeId, value: &str, options: &[&str], font: &Style, text: &mut dyn TextMeasure) -> NodeId {
-    let widest = options.iter().map(|o| text.measure(o, font).0).fold(0.0, f32::max);
+pub fn select(
+    ui: &mut Ui,
+    parent: NodeId,
+    value: &str,
+    options: &[&str],
+    font: &Style,
+    text: &mut dyn TextMeasure,
+) -> NodeId {
+    let widest = options
+        .iter()
+        .map(|o| text.measure(o, font).0)
+        .fold(0.0, f32::max);
     let node = ui.add_box(
         parent,
         style! {
@@ -176,7 +215,10 @@ pub fn select(ui: &mut Ui, parent: NodeId, value: &str, options: &[&str], font: 
         Some(2.0),
         false,
     );
-    ui.set_semantics(node, Semantics::new(Role::ComboBox).value(value).expanded(false));
+    ui.set_semantics(
+        node,
+        Semantics::new(Role::ComboBox).value(value).expanded(false),
+    );
     // The choice is its value; the text showing it is not read again.
     hide_text(ui, node);
     node
@@ -186,7 +228,15 @@ pub fn select(ui: &mut Ui, parent: NodeId, value: &str, options: &[&str], font: 
 /// select's box), added to `parent` (absolutely placed: give it the root).
 /// The `hovered` option, else the `current` one, is highlighted. Returns
 /// the list and each option's node.
-pub fn select_popup(ui: &mut Ui, parent: NodeId, anchor: Rect, options: &[&str], current: Option<usize>, hovered: Option<usize>, font: &Style) -> (NodeId, Vec<NodeId>) {
+pub fn select_popup(
+    ui: &mut Ui,
+    parent: NodeId,
+    anchor: Rect,
+    options: &[&str],
+    current: Option<usize>,
+    hovered: Option<usize>,
+    font: &Style,
+) -> (NodeId, Vec<NodeId>) {
     let list = ui.add_box(
         parent,
         style! {
@@ -230,12 +280,33 @@ const RANGE_RUN: f32 = 129.0 - 16.0;
 
 pub fn range(ui: &mut Ui, parent: NodeId, fraction: f32, hovered: bool) -> NodeId {
     let (accent, track, edge) = if hovered {
-        (ACCENT_HOVER, [229.0 / 255.0, 229.0 / 255.0, 229.0 / 255.0, 1.0], [0x28 as f32 / 255.0, 0x55 as f32 / 255.0, 0x8b as f32 / 255.0, 1.0])
+        (
+            ACCENT_HOVER,
+            [229.0 / 255.0, 229.0 / 255.0, 229.0 / 255.0, 1.0],
+            [
+                0x28 as f32 / 255.0,
+                0x55 as f32 / 255.0,
+                0x8b as f32 / 255.0,
+                1.0,
+            ],
+        )
     } else {
-        (ACCENT, [239.0 / 255.0, 239.0 / 255.0, 239.0 / 255.0, 1.0], [0x3b as f32 / 255.0, 0x76 as f32 / 255.0, 0xba as f32 / 255.0, 1.0])
+        (
+            ACCENT,
+            [239.0 / 255.0, 239.0 / 255.0, 239.0 / 255.0, 1.0],
+            [
+                0x3b as f32 / 255.0,
+                0x76 as f32 / 255.0,
+                0xba as f32 / 255.0,
+                1.0,
+            ],
+        )
     };
     let f = fraction.clamp(0.0, 1.0);
-    let node = ui.add_box(parent, style! { position: relative; width: 129px; height: 16px; flex-shrink: 0; });
+    let node = ui.add_box(
+        parent,
+        style! { position: relative; width: 129px; height: 16px; flex-shrink: 0; },
+    );
     ui.add_box(
         node,
         style! { position: absolute; left: 1px; right: 1px; top: 4px; height: 8px; box-sizing: border-box; border: 1px solid #b2b2b2; border-radius: 4px; background: {track}; },
@@ -243,7 +314,10 @@ pub fn range(ui: &mut Ui, parent: NodeId, fraction: f32, hovered: bool) -> NodeI
     // The thumb's run: 8px in from each end; the thumb at whole pixels
     // along it.
     let offset = (f * RANGE_RUN).round();
-    let run = ui.add_box(node, style! { position: absolute; left: 8px; right: 8px; top: 0; bottom: 0; });
+    let run = ui.add_box(
+        node,
+        style! { position: absolute; left: 8px; right: 8px; top: 0; bottom: 0; },
+    );
     // The fill: from the track's start (7px before the run) to the thumb.
     ui.add_box(
         run,
@@ -251,7 +325,10 @@ pub fn range(ui: &mut Ui, parent: NodeId, fraction: f32, hovered: bool) -> NodeI
     );
     ui.add_box(run, style! { position: absolute; left: {offset}; margin-left: -8px; top: 0; width: 16px; height: 16px; border-radius: 8px; background: {accent}; });
     // As a page's range input reads by default: 0 to 100.
-    ui.set_semantics(node, Semantics::new(Role::Slider).range(0.0, 100.0, (f * 100.0).round()));
+    ui.set_semantics(
+        node,
+        Semantics::new(Role::Slider).range(0.0, 100.0, (f * 100.0).round()),
+    );
     node
 }
 
@@ -294,9 +371,16 @@ pub fn text_contents(ui: &mut Ui, node: NodeId, view: TextView, text: &mut dyn T
             ui.add_box(node, style! { position: absolute; left: {x}; top: 2px; width: 1px; height: 15px; background: {view.font.color}; });
         }
     }
-    let (s, color) = if shown.is_empty() { (view.placeholder, view.placeholder_color) } else { (shown, view.font.color) };
+    let (s, color) = if shown.is_empty() {
+        (view.placeholder, view.placeholder_color)
+    } else {
+        (shown, view.font.color)
+    };
     if !s.is_empty() {
-        let t = ui.add_box(node, style! { ..view.font.clone(); position: relative; color: {color}; white-space: pre; });
+        let t = ui.add_box(
+            node,
+            style! { ..view.font.clone(); position: relative; color: {color}; white-space: pre; },
+        );
         ui.add_text(t, s);
     }
     // A text box whose value is the text, not the placeholder: that is a
@@ -327,7 +411,14 @@ pub fn focus_ring(ui: &mut Ui, node: NodeId) -> NodeId {
 /// with a #ddd edge, lines of coloured runs in `font`, 4px padding, `height`
 /// tall (which may be fractional: the last pixel row is blended, as Chrome
 /// does for an editor 8em tall).
-pub fn code_view(ui: &mut Ui, parent: NodeId, lines: &[Vec<(String, Rgba)>], font: &Style, line_height: f32, height: f32) -> NodeId {
+pub fn code_view(
+    ui: &mut Ui,
+    parent: NodeId,
+    lines: &[Vec<(String, Rgba)>],
+    font: &Style,
+    line_height: f32,
+    height: f32,
+) -> NodeId {
     let editor = ui.add_box(parent, style! { display: flex; position: relative; box-sizing: border-box; height: {height}; border: 1px solid transparent; flex-shrink: 0; });
     let whole = height.floor();
     ui.add_box(editor, style! { position: absolute; left: -1px; top: -1px; right: -1px; height: {whole}; background: white; });
@@ -335,20 +426,40 @@ pub fn code_view(ui: &mut Ui, parent: NodeId, lines: &[Vec<(String, Rgba)>], fon
         ui.add_box(editor, style! { position: absolute; left: -1px; top: {whole - 1.0}; right: -1px; height: {height - whole}; background: {[1.0, 1.0, 1.0, height - whole]}; });
     }
     // Over those (positioned, later): the gutter and the lines, clipped.
-    let inner = ui.add_box(editor, style! { display: flex; position: relative; flex: 1; min-width: 0; overflow: hidden; });
+    let inner = ui.add_box(
+        editor,
+        style! { display: flex; position: relative; flex: 1; min-width: 0; overflow: hidden; },
+    );
     ui.add_box(inner, style! { width: 16px; border-width: 0 1px 0 0; border-color: #ddd; background: #f7f7f7; flex-shrink: 0; });
-    let body = ui.add_box(inner, style! { display: flex; flex-direction: column; padding: 4px; flex: 1; min-width: 0; });
+    let body = ui.add_box(
+        inner,
+        style! { display: flex; flex-direction: column; padding: 4px; flex: 1; min-width: 0; },
+    );
     for runs in lines {
-        let line = ui.add_box(body, style! { display: flex; height: {line_height}; flex-shrink: 0; });
+        let line = ui.add_box(
+            body,
+            style! { display: flex; height: {line_height}; flex-shrink: 0; },
+        );
         for (s, color) in runs {
-            let t = ui.add_box(line, style! { ..font.clone(); color: {*color}; white-space: pre; flex-shrink: 0; });
+            let t = ui.add_box(
+                line,
+                style! { ..font.clone(); color: {*color}; white-space: pre; flex-shrink: 0; },
+            );
             ui.add_text(t, s);
         }
     }
     // Read as a block of text, not run by run; not editable, so not a Tab
     // stop.
-    let value: Vec<String> = lines.iter().map(|l| l.iter().map(|(s, _)| s.as_str()).collect()).collect();
-    ui.set_semantics(editor, Semantics::new(Role::TextArea).value(value.join("\n")).focusable(false));
+    let value: Vec<String> = lines
+        .iter()
+        .map(|l| l.iter().map(|(s, _)| s.as_str()).collect())
+        .collect();
+    ui.set_semantics(
+        editor,
+        Semantics::new(Role::TextArea)
+            .value(value.join("\n"))
+            .focusable(false),
+    );
     hide_text(ui, editor);
     editor
 }
@@ -364,7 +475,6 @@ fn hide_text(ui: &mut Ui, node: NodeId) {
         }
     }
 }
-
 
 /// What [`code_editor`] shows.
 pub struct CodeEditorView<'a> {
@@ -398,15 +508,27 @@ pub struct CodeEditorNodes {
 /// A CodeMirror editor (default theme): white, its gutters, the lines with
 /// folded ranges as `↔`, the selection and caret. Text starts 4px into each
 /// line; [`code_column`] maps a pointer to a column.
-pub fn code_editor(ui: &mut Ui, parent: NodeId, view: &CodeEditorView, text: &mut dyn TextMeasure) -> CodeEditorNodes {
+pub fn code_editor(
+    ui: &mut Ui,
+    parent: NodeId,
+    view: &CodeEditorView,
+    text: &mut dyn TextMeasure,
+) -> CodeEditorNodes {
     let editor = ui.add_box(parent, style! { display: flex; position: relative; box-sizing: border-box; height: {view.height}; flex-shrink: 0; });
     let whole = view.height.floor();
     ui.add_box(editor, style! { position: absolute; left: 0; top: 0; right: 0; height: {whole}; background: white; });
     if view.height > whole {
         ui.add_box(editor, style! { position: absolute; left: 0; top: {whole}; right: 0; height: {view.height - whole}; background: {[1.0, 1.0, 1.0, view.height - whole]}; });
     }
-    let inner = ui.add_box(editor, style! { display: flex; position: relative; flex: 1; min-width: 0; overflow: hidden; });
-    let fold_width = if view.fold_gutter { 0.7 * view.font.font_size } else { 0.0 };
+    let inner = ui.add_box(
+        editor,
+        style! { display: flex; position: relative; flex: 1; min-width: 0; overflow: hidden; },
+    );
+    let fold_width = if view.fold_gutter {
+        0.7 * view.font.font_size
+    } else {
+        0.0
+    };
     // `.CodeMirror-gutters`: #f7f7f7 with a #ddd edge.
     // The lines start past the gutters' `offsetWidth`: whole pixels.
     let gutters = ui.add_box(inner, style! { display: flex; flex-direction: column; width: {(16.0 + fold_width).round()}; border-width: 0 1px 0 0; border-color: #ddd; background: #f7f7f7; flex-shrink: 0; });
@@ -414,11 +536,30 @@ pub fn code_editor(ui: &mut Ui, parent: NodeId, view: &CodeEditorView, text: &mu
     let pad = ui.add_box(body, style! { height: 4px; flex-shrink: 0; });
     let _ = pad;
     let shown = super::code::shown_lines(&view.area.text, view.folds);
-    let foldable: Vec<usize> = if view.fold_gutter { super::code::brace_folds(&view.area.text).iter().map(|f| f.start_line).collect() } else { vec![] };
+    let foldable: Vec<usize> = if view.fold_gutter {
+        super::code::brace_folds(&view.area.text)
+            .iter()
+            .map(|f| f.start_line)
+            .collect()
+    } else {
+        vec![]
+    };
     let lines_text: Vec<&str> = view.area.lines();
     let (caret_line, caret_col) = view.area.line_col(view.area.caret);
-    let selection: Rgba = if view.focused { [0xd7 as f32 / 255.0, 0xd4 as f32 / 255.0, 0xf0 as f32 / 255.0, 1.0] } else { [0xd9 as f32 / 255.0; 4] };
-    let gutter_pad = ui.add_box(gutters, style! { height: {4.0 - view.scroll_top}; flex-shrink: 0; });
+    let selection: Rgba = if view.focused {
+        [
+            0xd7 as f32 / 255.0,
+            0xd4 as f32 / 255.0,
+            0xf0 as f32 / 255.0,
+            1.0,
+        ]
+    } else {
+        [0xd9 as f32 / 255.0; 4]
+    };
+    let gutter_pad = ui.add_box(
+        gutters,
+        style! { height: {4.0 - view.scroll_top}; flex-shrink: 0; },
+    );
     let _ = gutter_pad;
     let mut out_lines = vec![];
     let mut markers = vec![];
@@ -442,7 +583,11 @@ pub fn code_editor(ui: &mut Ui, parent: NodeId, view: &CodeEditorView, text: &mu
             let mut col = 0;
             for (t, color) in runs {
                 let chars: Vec<char> = t.chars().collect();
-                let (a, z) = (from.max(col).min(col + chars.len()), to.min(col + chars.len()).max(from.max(col).min(col + chars.len())));
+                let (a, z) = (
+                    from.max(col).min(col + chars.len()),
+                    to.min(col + chars.len())
+                        .max(from.max(col).min(col + chars.len())),
+                );
                 if z > a {
                     let n = ui.add_box(row, style! { ..view.font.clone(); color: {*color}; white-space: pre; position: relative; flex-shrink: 0; });
                     ui.add_text(n, chars[a - col..z - col].iter().collect::<String>());
@@ -457,7 +602,11 @@ pub fn code_editor(ui: &mut Ui, parent: NodeId, view: &CodeEditorView, text: &mu
                 // `.CodeMirror-foldmarker`: a blue `↔` in Arial with a #b9f
                 // glow (`text-shadow` at ±1px both ways, blurred 2px). Its
                 // size is `medium` again outside `monospace`: 16px.
-                let size = if view.font.font_family == "monospace" { 16.0 } else { view.font.font_size };
+                let size = if view.font.font_family == "monospace" {
+                    16.0
+                } else {
+                    view.font.font_size
+                };
                 // (`line-height: .3` puts it 2px above the line.)
                 let m = ui.add_box(row, style! { display: flex; align-items: center; height: {view.line_height}; top: -1px; font-family: Arial; font-size: {size}; color: blue; position: relative; flex-shrink: 0; });
                 for (dx, dy) in [(1.0, 1.0), (-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0)] {
@@ -471,8 +620,16 @@ pub fn code_editor(ui: &mut Ui, parent: NodeId, view: &CodeEditorView, text: &mu
                 push_runs(ui, &end_runs, f.end_col, usize::MAX);
             }
         }
-        if view.focused && view.caret_on && caret_line == s.line && view.area.selection().0 == view.area.selection().1 {
-            let x = 4.0 + width_of(text, &src[..caret_col.min(src.len())].iter().collect::<String>());
+        if view.focused
+            && view.caret_on
+            && caret_line == s.line
+            && view.area.selection().0 == view.area.selection().1
+        {
+            let x = 4.0
+                + width_of(
+                    text,
+                    &src[..caret_col.min(src.len())].iter().collect::<String>(),
+                );
             ui.add_box(row, style! { position: absolute; left: {x}; top: 0; width: 1px; height: {view.line_height}; background: black; });
         }
         // The gutter's row: `▾` open, `▸` folded.
@@ -485,14 +642,28 @@ pub fn code_editor(ui: &mut Ui, parent: NodeId, view: &CodeEditorView, text: &mu
         }
         out_lines.push((row, s));
     }
-    ui.set_semantics(editor, Semantics::new(Role::TextArea).value(view.area.text.clone()));
+    ui.set_semantics(
+        editor,
+        Semantics::new(Role::TextArea).value(view.area.text.clone()),
+    );
     hide_text(ui, editor);
-    CodeEditorNodes { editor, body, lines: out_lines, markers }
+    CodeEditorNodes {
+        editor,
+        body,
+        lines: out_lines,
+        markers,
+    }
 }
 
 /// The column of `line` under pointer `x`, for a line box `row` of a
 /// [`code_editor`]: the nearest character boundary.
-pub fn code_column(row: Rect, x: f32, line: &str, font: &Style, text: &mut dyn TextMeasure) -> usize {
+pub fn code_column(
+    row: Rect,
+    x: f32,
+    line: &str,
+    font: &Style,
+    text: &mut dyn TextMeasure,
+) -> usize {
     let chars: Vec<char> = line.chars().collect();
     let mut best = (0, f32::INFINITY);
     for k in 0..=chars.len() {
@@ -581,7 +752,14 @@ const HUE_H: f32 = 12.0;
 /// the system has none): saturation across and value down a field of the
 /// hue, a hue strip, then a swatch and the hex value. Absolutely placed at
 /// `(x, y)` in `parent`. `hsv` is the colour shown (each 0–1).
-pub fn color_picker(ui: &mut Ui, parent: NodeId, x: f32, y: f32, hsv: [f32; 3], font: &Style) -> ColorPickerNodes {
+pub fn color_picker(
+    ui: &mut Ui,
+    parent: NodeId,
+    x: f32,
+    y: f32,
+    hsv: [f32; 3],
+    font: &Style,
+) -> ColorPickerNodes {
     let popup = ui.add_box(
         parent,
         style! { position: absolute; left: {x}; top: {y}; display: flex; flex-direction: column; padding: 8px; background: white; border: 1px solid #767676; border-radius: 2px; },
@@ -591,8 +769,12 @@ pub fn color_picker(ui: &mut Ui, parent: NodeId, x: f32, y: f32, hsv: [f32; 3], 
     let field = ui.add_box(popup, style! { position: relative; width: {PICKER_W}; height: {PICKER_H}; flex-shrink: 0; overflow: hidden; });
     let pure = hsv_to_rgb([hsv[0], 1.0, 1.0]);
     ui.style_mut(field).background = Some([pure[0], pure[1], pure[2], 1.0]);
-    let white = ui.add_box(field, style! { position: absolute; left: 0; top: 0; width: {PICKER_W}; height: {PICKER_H}; });
-    ui.style_mut(white).background_gradient = vec![(0.0, [1.0, 1.0, 1.0, 1.0]), (1.0, [1.0, 1.0, 1.0, 0.0])];
+    let white = ui.add_box(
+        field,
+        style! { position: absolute; left: 0; top: 0; width: {PICKER_W}; height: {PICKER_H}; },
+    );
+    ui.style_mut(white).background_gradient =
+        vec![(0.0, [1.0, 1.0, 1.0, 1.0]), (1.0, [1.0, 1.0, 1.0, 0.0])];
     const STRIPS: usize = 65;
     let strip = PICKER_H / STRIPS as f32;
     for k in 0..STRIPS {
@@ -604,17 +786,27 @@ pub fn color_picker(ui: &mut Ui, parent: NodeId, x: f32, y: f32, hsv: [f32; 3], 
     ui.add_box(field, style! { position: absolute; left: {cx - 6.0}; top: {cy - 6.0}; width: 12px; height: 12px; border: 2px solid white; border-radius: 6px; box-sizing: border-box; });
     // The hue strip, with its place.
     let hue = ui.add_box(popup, style! { position: relative; width: {PICKER_W}; height: {HUE_H}; margin-top: 8px; flex-shrink: 0; border-radius: 6px; });
-    ui.style_mut(hue).background_gradient = (0..=6).map(|k| {
-        let c = hsv_to_rgb([k as f32 / 6.0, 1.0, 1.0]);
-        (k as f32 / 6.0, [c[0], c[1], c[2], 1.0])
-    }).collect();
+    ui.style_mut(hue).background_gradient = (0..=6)
+        .map(|k| {
+            let c = hsv_to_rgb([k as f32 / 6.0, 1.0, 1.0]);
+            (k as f32 / 6.0, [c[0], c[1], c[2], 1.0])
+        })
+        .collect();
     let hx = hsv[0] * PICKER_W;
     ui.add_box(hue, style! { position: absolute; left: {hx - 6.0}; top: 0; width: 12px; height: 12px; border: 2px solid white; border-radius: 6px; box-sizing: border-box; });
     // The swatch and the hex value.
-    let row = ui.add_box(popup, style! { display: flex; align-items: center; margin-top: 8px; flex-shrink: 0; });
+    let row = ui.add_box(
+        popup,
+        style! { display: flex; align-items: center; margin-top: 8px; flex-shrink: 0; },
+    );
     let rgb = hsv_to_rgb(hsv);
     ui.add_box(row, style! { width: 24px; height: 16px; border: 1px solid #767676; background: {[rgb[0], rgb[1], rgb[2], 1.0]}; flex-shrink: 0; });
-    let hex = format!("#{:02x}{:02x}{:02x}", (rgb[0] * 255.0).round() as u8, (rgb[1] * 255.0).round() as u8, (rgb[2] * 255.0).round() as u8);
+    let hex = format!(
+        "#{:02x}{:02x}{:02x}",
+        (rgb[0] * 255.0).round() as u8,
+        (rgb[1] * 255.0).round() as u8,
+        (rgb[2] * 255.0).round() as u8
+    );
     let label = ui.add_box(row, style! { ..font.clone(); margin-left: 8px; });
     ui.add_text(label, hex);
     ColorPickerNodes { popup, field, hue }
@@ -622,7 +814,10 @@ pub fn color_picker(ui: &mut Ui, parent: NodeId, x: f32, y: f32, hsv: [f32; 3], 
 
 /// Saturation and value under `(x, y)` on a picker's field `r`, clamped.
 pub fn color_picker_field(r: Rect, x: f32, y: f32) -> (f32, f32) {
-    (((x - r.x) / r.width).clamp(0.0, 1.0), (1.0 - (y - r.y) / r.height).clamp(0.0, 1.0))
+    (
+        ((x - r.x) / r.width).clamp(0.0, 1.0),
+        (1.0 - (y - r.y) / r.height).clamp(0.0, 1.0),
+    )
 }
 
 /// The hue under `x` on a picker's hue strip `r`, clamped.
@@ -650,9 +845,19 @@ mod tests {
         focus_ring(&mut ui, b);
         let c = checkbox(&mut ui, root, true, 13.0, BORDER, Edges::ZERO);
         ui.semantics_mut(c).label = Some("Wireframe".into());
-        select(&mut ui, root, "Linear", &["Linear", "Nearest"], &font, &mut text);
+        select(
+            &mut ui,
+            root,
+            "Linear",
+            &["Linear", "Nearest"],
+            &font,
+            &mut text,
+        );
         range(&mut ui, root, 0.25, false);
-        let field = ui.add_box(root, crate::style! { position: relative; width: 100px; height: 19px; });
+        let field = ui.add_box(
+            root,
+            crate::style! { position: relative; width: 100px; height: 19px; },
+        );
         ui.semantics_mut(field).label = Some("Name".into());
         let view = TextView {
             value: "cube",
@@ -667,8 +872,10 @@ mod tests {
         text_contents(&mut ui, field, view, &mut text);
         ui.layout(600.0, 200.0, &mut text);
         let tree = ui.accessibility_tree();
-        let got: Vec<(Role, String, Option<String>, Option<bool>)> =
-            tree[1..].iter().map(|n| (n.role, n.name.clone(), n.value.clone(), n.checked)).collect();
+        let got: Vec<(Role, String, Option<String>, Option<bool>)> = tree[1..]
+            .iter()
+            .map(|n| (n.role, n.name.clone(), n.value.clone(), n.checked))
+            .collect();
         assert_eq!(
             got,
             vec![
@@ -688,25 +895,40 @@ mod tests {
     fn controls_take_chromes_sizes() {
         let mut ui = Ui::new();
         let root = ui.root();
-        ui.set_style(root, crate::style! { display: flex; align-items: flex-start; });
+        ui.set_style(
+            root,
+            crate::style! { display: flex; align-items: flex-start; },
+        );
         let font = crate::style! { font-family: Arial; font-size: 13px; color: black; };
         let mut text = FixedWidthText(7.0);
         let b = button(&mut ui, root, "Min-Max", &font, &mut text);
         let c = checkbox(&mut ui, root, false, 13.0, BORDER, Edges::ZERO);
         let r = range(&mut ui, root, 0.25, false);
         ui.layout(400.0, 50.0, &mut text);
-        assert_eq!((ui.rect(b).width, ui.rect(c).width, ui.rect(r).width), (49.0 + 16.0, 13.0, 129.0));
+        assert_eq!(
+            (ui.rect(b).width, ui.rect(c).width, ui.rect(r).width),
+            (49.0 + 16.0, 13.0, 129.0)
+        );
         // The thumb's centre: 8 + 0.25 × 113, at a whole pixel.
         let run = ui.children(r)[1];
         let thumb = ui.children(run)[1];
         let t = ui.rect(thumb);
         assert_eq!(t.x + 8.0 - ui.rect(r).x, 8.0 + (0.25f32 * 113.0).round());
-        assert_eq!(range_fraction(ui.rect(r), ui.rect(r).x + 8.0 + 0.25 * 113.0), 0.25);
+        assert_eq!(
+            range_fraction(ui.rect(r), ui.rect(r).x + 8.0 + 0.25 * 113.0),
+            0.25
+        );
     }
 
     #[test]
     fn colours_convert_and_pick() {
-        for c in [[1.0, 0.0, 0.0], [0.2, 0.4, 0.6], [0.5, 0.5, 0.5], [0.0, 0.0, 0.0], [1.0, 1.0, 0.0]] {
+        for c in [
+            [1.0, 0.0, 0.0],
+            [0.2, 0.4, 0.6],
+            [0.5, 0.5, 0.5],
+            [0.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0],
+        ] {
             let back = hsv_to_rgb(rgb_to_hsv(c));
             for k in 0..3 {
                 assert!((back[k] - c[k]).abs() < 1e-5, "{c:?} {back:?}");
@@ -729,11 +951,23 @@ mod tests {
     fn text_contents_put_the_selection_under_the_text() {
         let mut ui = Ui::new();
         let root = ui.root();
-        let node = ui.add_box(root, crate::style! { display: flex; position: relative; width: 100px; height: 17px; });
+        let node = ui.add_box(
+            root,
+            crate::style! { display: flex; position: relative; width: 100px; height: 17px; },
+        );
         let font = crate::style! { font-family: monospace; font-size: 13px; color: white; };
         let mut field = TextField::selected("50");
         field.anchor = 1;
-        let view = TextView { value: "50", placeholder: "", placeholder_color: [0.5; 4], editing: Some(&field), caret_on: true, font: &font, x_offset: 2.0, selection: SELECTION };
+        let view = TextView {
+            value: "50",
+            placeholder: "",
+            placeholder_color: [0.5; 4],
+            editing: Some(&field),
+            caret_on: true,
+            font: &font,
+            x_offset: 2.0,
+            selection: SELECTION,
+        };
         let mut text = FixedWidthText(7.0);
         text_contents(&mut ui, node, view, &mut text);
         ui.layout(100.0, 20.0, &mut text);

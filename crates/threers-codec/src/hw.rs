@@ -34,12 +34,16 @@ use crate::hevc::{CompressedEncoder, HvccArray, HvccProfile, Yuv420Frame};
 use crate::mp4::{mux_hevc, Mp4Params};
 use crate::rate::{RateControl, PROBE_QP};
 
-#[cfg(all(feature = "videotoolbox", target_os = "macos"))]
-use crate::videotoolbox::{VideoToolboxEncoder, VtTuning};
-#[cfg(all(feature = "nvidia", any(target_os = "linux", target_os = "windows"), target_pointer_width = "64"))]
+#[cfg(all(
+    feature = "nvidia",
+    any(target_os = "linux", target_os = "windows"),
+    target_pointer_width = "64"
+))]
 use crate::nvidia::{NvencEncoder, NvencRate};
 #[cfg(all(feature = "vaapi", target_os = "linux"))]
 use crate::vaapi::{VaapiEncoder, VaapiRate};
+#[cfg(all(feature = "videotoolbox", target_os = "macos"))]
+use crate::videotoolbox::{VideoToolboxEncoder, VtTuning};
 
 /// Which encoder an [`Mp4Encoder`] is using.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -65,9 +69,17 @@ impl EncodeBackend {
             EncodeBackend::VideoToolbox => {
                 cfg!(all(feature = "videotoolbox", target_os = "macos"))
             }
-            #[cfg(all(feature = "nvidia", any(target_os = "linux", target_os = "windows"), target_pointer_width = "64"))]
+            #[cfg(all(
+                feature = "nvidia",
+                any(target_os = "linux", target_os = "windows"),
+                target_pointer_width = "64"
+            ))]
             EncodeBackend::Nvenc => crate::nvidia::available(),
-            #[cfg(not(all(feature = "nvidia", any(target_os = "linux", target_os = "windows"), target_pointer_width = "64")))]
+            #[cfg(not(all(
+                feature = "nvidia",
+                any(target_os = "linux", target_os = "windows"),
+                target_pointer_width = "64"
+            )))]
             EncodeBackend::Nvenc => false,
             #[cfg(all(feature = "vaapi", target_os = "linux"))]
             EncodeBackend::Vaapi => crate::vaapi::encode_available(),
@@ -78,11 +90,18 @@ impl EncodeBackend {
     }
 
     /// The hardware backends, in the order [`Mp4Encoder::new`] tries them.
-    pub const HARDWARE: [EncodeBackend; 3] = [EncodeBackend::VideoToolbox, EncodeBackend::Nvenc, EncodeBackend::Vaapi];
+    pub const HARDWARE: [EncodeBackend; 3] = [
+        EncodeBackend::VideoToolbox,
+        EncodeBackend::Nvenc,
+        EncodeBackend::Vaapi,
+    ];
 
     /// The backend [`Mp4Encoder::new`] tries first.
     pub fn preferred() -> EncodeBackend {
-        Self::HARDWARE.into_iter().find(|b| b.available()).unwrap_or(EncodeBackend::Native)
+        Self::HARDWARE
+            .into_iter()
+            .find(|b| b.available())
+            .unwrap_or(EncodeBackend::Native)
     }
 }
 
@@ -128,7 +147,11 @@ impl EncodeOptions {
 enum Inner {
     #[cfg(all(feature = "videotoolbox", target_os = "macos"))]
     VideoToolbox(VideoToolboxEncoder),
-    #[cfg(all(feature = "nvidia", any(target_os = "linux", target_os = "windows"), target_pointer_width = "64"))]
+    #[cfg(all(
+        feature = "nvidia",
+        any(target_os = "linux", target_os = "windows"),
+        target_pointer_width = "64"
+    ))]
     Nvenc(Box<NvencEncoder>),
     #[cfg(all(feature = "vaapi", target_os = "linux"))]
     Vaapi(Box<VaapiEncoder>),
@@ -149,7 +172,10 @@ impl Mp4Encoder {
     /// The first [hardware backend](EncodeBackend::HARDWARE) available that
     /// opens a session, or the native encoder when none does.
     pub fn new(width: u32, height: u32, options: EncodeOptions) -> Result<Self, String> {
-        for b in EncodeBackend::HARDWARE.into_iter().filter(|b| b.available()) {
+        for b in EncodeBackend::HARDWARE
+            .into_iter()
+            .filter(|b| b.available())
+        {
             if let Ok(e) = Self::with_backend(width, height, options, b) {
                 return Ok(e);
             }
@@ -191,18 +217,37 @@ impl Mp4Encoder {
             EncodeBackend::VideoToolbox => {
                 Err("VideoToolbox needs macOS and the `videotoolbox` feature".into())
             }
-            #[cfg(all(feature = "nvidia", any(target_os = "linux", target_os = "windows"), target_pointer_width = "64"))]
+            #[cfg(all(
+                feature = "nvidia",
+                any(target_os = "linux", target_os = "windows"),
+                target_pointer_width = "64"
+            ))]
             EncodeBackend::Nvenc => {
                 let rate = match options.bitrate {
                     Some(bps) => NvencRate::Bitrate(bps),
                     None => NvencRate::ConstQp(options.native_qp() as u32),
                 };
                 let keyframe_secs = if options.realtime { 2 } else { 5 };
-                let enc = NvencEncoder::new(width, height, options.fps, rate, keyframe_secs, options.realtime)?;
-                Ok(Self { inner: Inner::Nvenc(Box::new(enc)) })
+                let enc = NvencEncoder::new(
+                    width,
+                    height,
+                    options.fps,
+                    rate,
+                    keyframe_secs,
+                    options.realtime,
+                )?;
+                Ok(Self {
+                    inner: Inner::Nvenc(Box::new(enc)),
+                })
             }
-            #[cfg(not(all(feature = "nvidia", any(target_os = "linux", target_os = "windows"), target_pointer_width = "64")))]
-            EncodeBackend::Nvenc => Err("NVENC needs Linux or Windows and the `nvidia` feature".into()),
+            #[cfg(not(all(
+                feature = "nvidia",
+                any(target_os = "linux", target_os = "windows"),
+                target_pointer_width = "64"
+            )))]
+            EncodeBackend::Nvenc => {
+                Err("NVENC needs Linux or Windows and the `nvidia` feature".into())
+            }
             #[cfg(all(feature = "vaapi", target_os = "linux"))]
             EncodeBackend::Vaapi => {
                 let rate = match options.bitrate {
@@ -211,7 +256,9 @@ impl Mp4Encoder {
                 };
                 let keyframe_secs = if options.realtime { 2 } else { 5 };
                 let enc = VaapiEncoder::new(width, height, options.fps, rate, keyframe_secs)?;
-                Ok(Self { inner: Inner::Vaapi(Box::new(enc)) })
+                Ok(Self {
+                    inner: Inner::Vaapi(Box::new(enc)),
+                })
             }
             #[cfg(not(all(feature = "vaapi", target_os = "linux")))]
             EncodeBackend::Vaapi => Err("VAAPI needs Linux and the `vaapi` feature".into()),
@@ -226,7 +273,11 @@ impl Mp4Encoder {
         match &self.inner {
             #[cfg(all(feature = "videotoolbox", target_os = "macos"))]
             Inner::VideoToolbox(_) => EncodeBackend::VideoToolbox,
-            #[cfg(all(feature = "nvidia", any(target_os = "linux", target_os = "windows"), target_pointer_width = "64"))]
+            #[cfg(all(
+                feature = "nvidia",
+                any(target_os = "linux", target_os = "windows"),
+                target_pointer_width = "64"
+            ))]
             Inner::Nvenc(_) => EncodeBackend::Nvenc,
             #[cfg(all(feature = "vaapi", target_os = "linux"))]
             Inner::Vaapi(_) => EncodeBackend::Vaapi,
@@ -239,7 +290,11 @@ impl Mp4Encoder {
         match &mut self.inner {
             #[cfg(all(feature = "videotoolbox", target_os = "macos"))]
             Inner::VideoToolbox(e) => e.push_rgba(rgba),
-            #[cfg(all(feature = "nvidia", any(target_os = "linux", target_os = "windows"), target_pointer_width = "64"))]
+            #[cfg(all(
+                feature = "nvidia",
+                any(target_os = "linux", target_os = "windows"),
+                target_pointer_width = "64"
+            ))]
             Inner::Nvenc(e) => e.push_rgba(rgba),
             #[cfg(all(feature = "vaapi", target_os = "linux"))]
             Inner::Vaapi(e) => e.push_rgba(rgba),
@@ -252,7 +307,11 @@ impl Mp4Encoder {
         match self.inner {
             #[cfg(all(feature = "videotoolbox", target_os = "macos"))]
             Inner::VideoToolbox(e) => e.finish_mp4_bytes().map(|(_, mp4)| mp4),
-            #[cfg(all(feature = "nvidia", any(target_os = "linux", target_os = "windows"), target_pointer_width = "64"))]
+            #[cfg(all(
+                feature = "nvidia",
+                any(target_os = "linux", target_os = "windows"),
+                target_pointer_width = "64"
+            ))]
             Inner::Nvenc(e) => e.finish(),
             #[cfg(all(feature = "vaapi", target_os = "linux"))]
             Inner::Vaapi(e) => e.finish(),
@@ -308,7 +367,10 @@ impl NativeMp4 {
         // The first frame tells a bitrate target what this content costs.
         if let Some(r) = self.rc.as_mut() {
             if self.samples.is_empty() && self.pending.is_empty() {
-                r.seed(PROBE_QP, self.enc.encode_slice_au_at(&frame, PROBE_QP).len());
+                r.seed(
+                    PROBE_QP,
+                    self.enc.encode_slice_au_at(&frame, PROBE_QP).len(),
+                );
                 if let Some(q2) = r.probe_again() {
                     r.seed_pair(q2, self.enc.encode_slice_au_at(&frame, q2).len());
                 }
@@ -352,9 +414,21 @@ impl NativeMp4 {
         let hvcc = crate::hevc::build_hvcc(
             &HvccProfile::main_420(self.enc.config().level_idc),
             &[
-                HvccArray { nal_type: 32, complete: true, nals: &vps },
-                HvccArray { nal_type: 33, complete: true, nals: &sps },
-                HvccArray { nal_type: 34, complete: true, nals: &pps },
+                HvccArray {
+                    nal_type: 32,
+                    complete: true,
+                    nals: &vps,
+                },
+                HvccArray {
+                    nal_type: 33,
+                    complete: true,
+                    nals: &sps,
+                },
+                HvccArray {
+                    nal_type: 34,
+                    complete: true,
+                    nals: &pps,
+                },
             ],
         );
         let timescale = 600u32;
@@ -376,7 +450,13 @@ mod tests {
 
     #[test]
     fn quality_maps_onto_the_usable_quantizers() {
-        let at = |quality| EncodeOptions { quality, ..Default::default() }.native_qp();
+        let at = |quality| {
+            EncodeOptions {
+                quality,
+                ..Default::default()
+            }
+            .native_qp()
+        };
         assert_eq!(at(0.0), 40);
         assert_eq!(at(0.5), 29);
         assert_eq!(at(1.0), 18);
@@ -411,7 +491,8 @@ mod tests {
     #[test]
     fn unavailable_backends_say_so() {
         if !EncodeBackend::VideoToolbox.available() {
-            let r = Mp4Encoder::with_backend(16, 16, Default::default(), EncodeBackend::VideoToolbox);
+            let r =
+                Mp4Encoder::with_backend(16, 16, Default::default(), EncodeBackend::VideoToolbox);
             assert!(r.is_err());
         }
         assert!(EncodeBackend::Native.available());

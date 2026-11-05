@@ -153,11 +153,17 @@ fn rms(a: &[f64], b: &[f64]) -> f64 {
 }
 
 fn flip_v(t: &[f64]) -> Vec<f64> {
-    (0..G).flat_map(|y| (0..G).map(move |x| (G - 1 - y) * G + x)).map(|i| t[i]).collect()
+    (0..G)
+        .flat_map(|y| (0..G).map(move |x| (G - 1 - y) * G + x))
+        .map(|i| t[i])
+        .collect()
 }
 
 fn flip_h(t: &[f64]) -> Vec<f64> {
-    (0..G).flat_map(|y| (0..G).map(move |x| y * G + (G - 1 - x))).map(|i| t[i]).collect()
+    (0..G)
+        .flat_map(|y| (0..G).map(move |x| y * G + (G - 1 - x)))
+        .map(|i| t[i])
+        .collect()
 }
 
 fn wgpu_reference() -> Option<Vec<f64>> {
@@ -188,46 +194,49 @@ fn metal_draws_the_same_picture_as_wgpu() {
     // paths take different code to the framebuffer and a flip can live in one
     // of them alone.
     for (ss, msaa) in [(1u32, 1u32), (2, 1), (1, 4), (2, 4)] {
-    let mut m = match MetalHeadlessRenderer::builder()
-        .size(N, N)
-        .supersample(ss)
-        .msaa(msaa)
-        .build()
-    {
-        Ok(m) => m,
-        Err(MetalError::NoDevice) => {
-            eprintln!("skipping: no Metal device on this machine");
-            return;
-        }
-        Err(e) => panic!("metal renderer: {e:?}"),
-    };
-    let got = tiles(&m.render_to_rgba(&mut scene(), &camera()).expect("metal render"));
+        let mut m = match MetalHeadlessRenderer::builder()
+            .size(N, N)
+            .supersample(ss)
+            .msaa(msaa)
+            .build()
+        {
+            Ok(m) => m,
+            Err(MetalError::NoDevice) => {
+                eprintln!("skipping: no Metal device on this machine");
+                return;
+            }
+            Err(e) => panic!("metal renderer: {e:?}"),
+        };
+        let got = tiles(
+            &m.render_to_rgba(&mut scene(), &camera())
+                .expect("metal render"),
+        );
 
-    let direct = rms(&reference, &got);
-    let mirrored = rms(&reference, &flip_v(&got));
-    let flopped = rms(&reference, &flip_h(&got));
-    eprintln!(
-        "metal ss{ss} msaa{msaa} vs wgpu: {direct:.4} rms as drawn, {mirrored:.4} \
+        let direct = rms(&reference, &got);
+        let mirrored = rms(&reference, &flip_v(&got));
+        let flopped = rms(&reference, &flip_h(&got));
+        eprintln!(
+            "metal ss{ss} msaa{msaa} vs wgpu: {direct:.4} rms as drawn, {mirrored:.4} \
          mirrored vertically, {flopped:.4} horizontally"
-    );
-    assert!(
-        direct < mirrored,
-        "the Metal backend draws this texture upside down: it matches wgpu \
+        );
+        assert!(
+            direct < mirrored,
+            "the Metal backend draws this texture upside down: it matches wgpu \
          {mirrored:.4} rms when flipped and only {direct:.4} as drawn"
-    );
-    assert!(
-        direct < flopped,
-        "the Metal backend draws this texture mirrored left to right"
-    );
-    // Absolute agreement, once orientation is out of the way. Loose, because
-    // two rasterisers will not agree to the bit -- but a dropped texture, a
-    // missing material, or a transfer curve apart shows up well inside it.
-    assert!(
-        direct < 0.05,
-        "the Metal backend and wgpu disagree by {direct:.4} rms over a 12x12 \
+        );
+        assert!(
+            direct < flopped,
+            "the Metal backend draws this texture mirrored left to right"
+        );
+        // Absolute agreement, once orientation is out of the way. Loose, because
+        // two rasterisers will not agree to the bit -- but a dropped texture, a
+        // missing material, or a transfer curve apart shows up well inside it.
+        assert!(
+            direct < 0.05,
+            "the Metal backend and wgpu disagree by {direct:.4} rms over a 12x12 \
          luma grid at supersample {ss}, msaa {msaa} -- more than filtering \
          differences account for"
-    );
+        );
     }
 }
 
@@ -254,8 +263,7 @@ fn metal_inherits_parent_transforms() {
         mat.map = Some(std::sync::Arc::new(marked_texture()));
         let quad = Object3D::mesh(Mesh::new(PlaneGeometry::new(40.0, 40.0), mat.into()));
         let mut rig = Object3D::group();
-        rig.quaternion =
-            Euler::new(0.35f32, 0.55f32, 0.20f32).to_quaternion();
+        rig.quaternion = Euler::new(0.35f32, 0.55f32, 0.20f32).to_quaternion();
         rig.position = Vector3::new(4.0, -3.0, 0.0);
         let rig_id = s.add(rig);
         s.add_to(rig_id, quad);
@@ -286,7 +294,10 @@ fn metal_inherits_parent_transforms() {
         }
         Err(e) => panic!("metal renderer: {e:?}"),
     };
-    let got = tiles(&m.render_to_rgba(&mut build(), &camera()).expect("metal render"));
+    let got = tiles(
+        &m.render_to_rgba(&mut build(), &camera())
+            .expect("metal render"),
+    );
     let posed = rms(&reference, &got);
     let ignored = rms(&unposed, &got);
     eprintln!("metal with a posed rig: {posed:.4} rms from posed, {ignored:.4} from unposed");
@@ -343,7 +354,9 @@ fn metal_draws_emissive_maps() {
         Err(e) => panic!("metal renderer: {e:?}"),
     };
     let w_px = w.render_to_rgba(&mut build(), &camera());
-    let m_px = m.render_to_rgba(&mut build(), &camera()).expect("metal render");
+    let m_px = m
+        .render_to_rgba(&mut build(), &camera())
+        .expect("metal render");
     let reference = tiles(&w_px);
     let got = tiles(&m_px);
     let d = rms(&reference, &got);
@@ -443,7 +456,10 @@ fn metal_draws_the_remaining_material_maps() {
         ("ao_map", Slot::AmbientOcclusion),
     ] {
         let reference = tiles(&w.render_to_rgba(&mut build(slot), &camera()));
-        let got = tiles(&m.render_to_rgba(&mut build(slot), &camera()).expect("metal render"));
+        let got = tiles(
+            &m.render_to_rgba(&mut build(slot), &camera())
+                .expect("metal render"),
+        );
         let d = rms(&reference, &got);
         eprintln!(
             "{name:14}: {d:.4} rms from wgpu, contrast {:.4} against {:.4}",
@@ -550,7 +566,10 @@ fn metal_lights_from_the_environment() {
     // the second says the two agree about how roughness walks the mip chain.
     for roughness in [0.05f32, 0.6] {
         let reference = tiles(&w.render_to_rgba(&mut build(roughness), &camera()));
-        let got = tiles(&m.render_to_rgba(&mut build(roughness), &camera()).expect("metal"));
+        let got = tiles(
+            &m.render_to_rgba(&mut build(roughness), &camera())
+                .expect("metal"),
+        );
         let d = rms(&reference, &got);
         eprintln!(
             "ibl roughness {roughness:.2}: {d:.4} rms from wgpu, contrast {:.4} against {:.4}",
@@ -615,7 +634,9 @@ fn metal_draws_a_screen_the_way_the_app_builds_one() {
         Err(e) => panic!("metal renderer: {e:?}"),
     };
     let w_px = w.render_to_rgba(&mut build(), &camera());
-    let m_px = m.render_to_rgba(&mut build(), &camera()).expect("metal render");
+    let m_px = m
+        .render_to_rgba(&mut build(), &camera())
+        .expect("metal render");
     let d = rms(&tiles(&w_px), &tiles(&m_px));
     eprintln!(
         "app-style panel: {d:.4} rms from wgpu, saturation {:.3} against {:.3}",
@@ -629,7 +650,10 @@ fn metal_draws_a_screen_the_way_the_app_builds_one() {
         saturation(&m_px),
         saturation(&w_px)
     );
-    assert!(d < 0.11, "the Metal backend and wgpu disagree by {d:.4} rms");
+    assert!(
+        d < 0.11,
+        "the Metal backend and wgpu disagree by {d:.4} rms"
+    );
 }
 
 /// The same panel at the size and shape the app actually uses.
@@ -691,7 +715,9 @@ fn metal_uploads_a_large_non_power_of_two_texture() {
         Err(e) => panic!("metal renderer: {e:?}"),
     };
     let w_px = w.render_to_rgba(&mut build(), &camera());
-    let m_px = m.render_to_rgba(&mut build(), &camera()).expect("metal render");
+    let m_px = m
+        .render_to_rgba(&mut build(), &camera())
+        .expect("metal render");
     let got = tiles(&m_px);
     let reference = tiles(&w_px);
     let d = rms(&reference, &got);
@@ -714,7 +740,10 @@ fn metal_uploads_a_large_non_power_of_two_texture() {
         "a {PW}x{PH} texture is drawn upside down: {mirrored:.4} rms flipped \
          against {d:.4} as drawn"
     );
-    assert!(d < 0.11, "the Metal backend and wgpu disagree by {d:.4} rms");
+    assert!(
+        d < 0.11,
+        "the Metal backend and wgpu disagree by {d:.4} rms"
+    );
 }
 
 /// `set_tonemap` must not take the colour out of the picture.
@@ -754,10 +783,14 @@ fn metal_tonemapping_keeps_the_colour() {
         }
         Err(e) => panic!("metal renderer: {e:?}"),
     };
-    let plain = m.render_to_rgba(&mut build(), &camera()).expect("metal render");
+    let plain = m
+        .render_to_rgba(&mut build(), &camera())
+        .expect("metal render");
     // What the app asks for.
     m.set_tonemap(1.0, 3.4);
-    let graded = m.render_to_rgba(&mut build(), &camera()).expect("metal render");
+    let graded = m
+        .render_to_rgba(&mut build(), &camera())
+        .expect("metal render");
     eprintln!(
         "tonemap: saturation {:.3} before, {:.3} after set_tonemap(1.0, 3.4)",
         saturation(&plain),
@@ -796,7 +829,9 @@ fn metal_exposure_reaches_the_pixels() {
         s
     };
     let mean = |px: &[u8]| {
-        px.chunks(4).map(|p| p[0] as f64 + p[1] as f64 + p[2] as f64).sum::<f64>()
+        px.chunks(4)
+            .map(|p| p[0] as f64 + p[1] as f64 + p[2] as f64)
+            .sum::<f64>()
             / (px.len() / 4) as f64
             / 3.0
     };
@@ -928,7 +963,11 @@ fn metal_applies_the_film_grade() {
     m.set_grain_seed(1.0);
     let mg = m.render_to_rgba(&mut build(), &camera()).expect("metal");
     let mean = |a: &[u8], b: &[u8]| {
-        a.iter().zip(b).map(|(x, y)| x.abs_diff(*y) as f64).sum::<f64>() / a.len() as f64
+        a.iter()
+            .zip(b)
+            .map(|(x, y)| x.abs_diff(*y) as f64)
+            .sum::<f64>()
+            / a.len() as f64
     };
     let apart = mean(&wg, &mg);
     let reseeded = mean(&g1, &g2);
@@ -949,7 +988,7 @@ fn metal_applies_the_film_grade() {
 /// that it changes into the same picture wgpu draws.
 #[test]
 fn metal_skins_a_mesh() {
-    use threers::core::{BufferAttribute, Bone, Skeleton, SkinnedMesh};
+    use threers::core::{Bone, BufferAttribute, Skeleton, SkinnedMesh};
     use threers::materials::BasicMaterial;
     use threers::math::{Euler, Matrix4};
     use threers::metal::{MetalError, MetalHeadlessRenderer};
@@ -960,7 +999,10 @@ fn metal_skins_a_mesh() {
         let mut s = Scene::new();
         s.background = Color::from_hex(0x000000);
         let mut geom = PlaneGeometry::with_segments(12.0, 40.0, 1, 8);
-        let count = geom.get_attribute("position").map(|a| a.count()).unwrap_or(0);
+        let count = geom
+            .get_attribute("position")
+            .map(|a| a.count())
+            .unwrap_or(0);
         let ys: Vec<f32> = geom
             .get_attribute("position")
             .map(|a| (0..count).map(|i| a.array[i * 3 + 1]).collect())
@@ -979,8 +1021,14 @@ fn metal_skins_a_mesh() {
         geom.set_attribute("weight", BufferAttribute::new(weights, 4));
 
         let mut skeleton = Skeleton::new(vec![
-            Bone { node: threers::core::ObjectId::default(), inverse_bind: Matrix4::identity() },
-            Bone { node: threers::core::ObjectId::default(), inverse_bind: Matrix4::identity() },
+            Bone {
+                node: threers::core::ObjectId::default(),
+                inverse_bind: Matrix4::identity(),
+            },
+            Bone {
+                node: threers::core::ObjectId::default(),
+                inverse_bind: Matrix4::identity(),
+            },
         ]);
         skeleton.bone_matrices = vec![
             Matrix4::identity(),
@@ -1068,7 +1116,8 @@ fn metal_casts_a_directional_shadow() {
             let mut box_mat = StandardMaterial::new(Color::WHITE);
             box_mat.metalness = 0.0;
             box_mat.roughness = 1.0;
-            let mut b = Object3D::mesh(Mesh::new(BoxGeometry::new(14.0, 14.0, 1.0), box_mat.into()));
+            let mut b =
+                Object3D::mesh(Mesh::new(BoxGeometry::new(14.0, 14.0, 1.0), box_mat.into()));
             b.position = Vector3::new(0.0, 0.0, 6.0);
             // Casters opt in, on both backends.
             b.cast_shadow = true;
@@ -1085,8 +1134,14 @@ fn metal_casts_a_directional_shadow() {
         }
         Err(e) => panic!("metal renderer: {e:?}"),
     };
-    let lit = tiles(&m.render_to_rgba(&mut build(false), &camera()).expect("metal"));
-    let shadowed = tiles(&m.render_to_rgba(&mut build(true), &camera()).expect("metal"));
+    let lit = tiles(
+        &m.render_to_rgba(&mut build(false), &camera())
+            .expect("metal"),
+    );
+    let shadowed = tiles(
+        &m.render_to_rgba(&mut build(true), &camera())
+            .expect("metal"),
+    );
 
     // The occluder covers the middle of the frame, so compare the floor where
     // it is visible: the bottom row of tiles, below the box.
@@ -1120,19 +1175,23 @@ fn metal_casts_a_directional_shadow() {
     // exactly how dark: the difference each backend's occluder makes, tile by
     // tile, correlated.
     let Some(mut w) = threers::HeadlessRenderer::builder().size(N, N).build().ok() else {
+        eprintln!("skipping: no GPU adapter");
         return;
     };
     let w_lit = tiles(&w.render_to_rgba(&mut build(false), &camera()));
     let w_shadowed = tiles(&w.render_to_rgba(&mut build(true), &camera()));
-    let delta = |a: &[f64], b: &[f64]| -> Vec<f64> {
-        a.iter().zip(b).map(|(x, y)| x - y).collect()
-    };
+    let delta =
+        |a: &[f64], b: &[f64]| -> Vec<f64> { a.iter().zip(b).map(|(x, y)| x - y).collect() };
     let dm = delta(&lit, &shadowed);
     let dw = delta(&w_lit, &w_shadowed);
     let dot: f64 = dm.iter().zip(&dw).map(|(a, b)| a * b).sum();
     let na = dm.iter().map(|a| a * a).sum::<f64>().sqrt();
     let nb = dw.iter().map(|b| b * b).sum::<f64>().sqrt();
-    let correlation = if na > 1e-9 && nb > 1e-9 { dot / (na * nb) } else { 0.0 };
+    let correlation = if na > 1e-9 && nb > 1e-9 {
+        dot / (na * nb)
+    } else {
+        0.0
+    };
     eprintln!("shadow: metal and wgpu agree on its shape to {correlation:.4}");
     assert!(
         correlation > 0.9,
@@ -1278,8 +1337,7 @@ fn shadow_scene(kind: ShadowKind) -> (f64, usize, f64, f64) {
         let mut floor_mat = StandardMaterial::new(Color::WHITE);
         floor_mat.metalness = 0.0;
         floor_mat.roughness = 1.0;
-        let mut floor =
-            Object3D::mesh(Mesh::new(PlaneGeometry::new(60.0, 60.0), floor_mat.into()));
+        let mut floor = Object3D::mesh(Mesh::new(PlaneGeometry::new(60.0, 60.0), floor_mat.into()));
         floor.position = Vector3::new(0.0, 0.0, -6.0);
         floor.receive_shadow = true;
         s.add(floor);
@@ -1297,10 +1355,22 @@ fn shadow_scene(kind: ShadowKind) -> (f64, usize, f64, f64) {
         s
     };
 
-    let mut m = MetalHeadlessRenderer::builder().size(N, N).build().expect("metal");
-    let mut w = threers::HeadlessRenderer::builder().size(N, N).build().expect("wgpu");
-    let lit = tiles(&m.render_to_rgba(&mut build(false), &camera()).expect("metal"));
-    let shadowed = tiles(&m.render_to_rgba(&mut build(true), &camera()).expect("metal"));
+    let mut m = MetalHeadlessRenderer::builder()
+        .size(N, N)
+        .build()
+        .expect("metal");
+    let mut w = threers::HeadlessRenderer::builder()
+        .size(N, N)
+        .build()
+        .expect("wgpu");
+    let lit = tiles(
+        &m.render_to_rgba(&mut build(false), &camera())
+            .expect("metal"),
+    );
+    let shadowed = tiles(
+        &m.render_to_rgba(&mut build(true), &camera())
+            .expect("metal"),
+    );
     let w_lit = tiles(&w.render_to_rgba(&mut build(false), &camera()));
     let w_shadowed = tiles(&w.render_to_rgba(&mut build(true), &camera()));
 
@@ -1314,8 +1384,17 @@ fn shadow_scene(kind: ShadowKind) -> (f64, usize, f64, f64) {
     let dot: f64 = dm.iter().zip(&dw).map(|(a, b)| a * b).sum();
     let na = dm.iter().map(|a| a * a).sum::<f64>().sqrt();
     let nb = dw.iter().map(|b| b * b).sum::<f64>().sqrt();
-    let correlation = if na > 1e-9 && nb > 1e-9 { dot / (na * nb) } else { 0.0 };
-    (darkest, darkened, correlation, dw.iter().cloned().fold(f64::MIN, f64::max))
+    let correlation = if na > 1e-9 && nb > 1e-9 {
+        dot / (na * nb)
+    } else {
+        0.0
+    };
+    (
+        darkest,
+        darkened,
+        correlation,
+        dw.iter().cloned().fold(f64::MIN, f64::max),
+    )
 }
 
 /// Bloom must not take the colour out of the picture.
@@ -1405,7 +1484,10 @@ fn metal_bloom_matches_wgpu() {
         }
         Err(e) => panic!("metal renderer: {e:?}"),
     };
-    let mut w = threers::HeadlessRenderer::builder().size(N, N).build().expect("wgpu");
+    let mut w = threers::HeadlessRenderer::builder()
+        .size(N, N)
+        .build()
+        .expect("wgpu");
     // Plain `render_to_rgba` on both: the post passes apply to it on wgpu
     // as they do on Metal.
     let plain = w.render_to_rgba(&mut build(), &camera());
@@ -1414,14 +1496,20 @@ fn metal_bloom_matches_wgpu() {
     let a = w.render_to_rgba(&mut build(), &camera());
     let b = m.render_to_rgba(&mut build(), &camera()).expect("metal");
     let mean = |x: &[u8], y: &[u8]| {
-        x.chunks(4).zip(y.chunks(4)).map(|(p, q)| (0..3).map(|k| p[k].abs_diff(q[k]) as f64).sum::<f64>() / 3.0).sum::<f64>()
+        x.chunks(4)
+            .zip(y.chunks(4))
+            .map(|(p, q)| (0..3).map(|k| p[k].abs_diff(q[k]) as f64).sum::<f64>() / 3.0)
+            .sum::<f64>()
             / (x.len() / 4) as f64
     };
     let glow = mean(&plain, &a);
     let gap = mean(&a, &b);
     eprintln!("bloom: moves wgpu by {glow:.2}; Metal is {gap:.3} from it");
     assert!(glow > 2.0, "bloom barely changed the picture ({glow:.2})");
-    assert!(gap < 0.25 * glow, "Metal's bloom is {gap:.2} from wgpu's, against a glow of {glow:.2}");
+    assert!(
+        gap < 0.25 * glow,
+        "Metal's bloom is {gap:.2} from wgpu's, against a glow of {glow:.2}"
+    );
 }
 
 /// Which post-processing stage turns the picture upside down.
@@ -1453,11 +1541,13 @@ fn metal_post_processing_keeps_the_picture_upright() {
         )));
         s
     };
-    let reference = tiles(&threers::HeadlessRenderer::builder()
-        .size(N, N)
-        .build()
-        .expect("wgpu")
-        .render_to_rgba(&mut build(), &camera()));
+    let reference = tiles(
+        &threers::HeadlessRenderer::builder()
+            .size(N, N)
+            .build()
+            .expect("wgpu")
+            .render_to_rgba(&mut build(), &camera()),
+    );
 
     // Each stage added to the one before it, so the first row that flips names
     // the stage that flips it.
@@ -1470,7 +1560,11 @@ fn metal_post_processing_keeps_the_picture_upright() {
     ];
     let mut flipped: Vec<&str> = Vec::new();
     for (label, ss, tonemap, bloom) in stages {
-        let mut m = match MetalHeadlessRenderer::builder().size(N, N).supersample(ss).build() {
+        let mut m = match MetalHeadlessRenderer::builder()
+            .size(N, N)
+            .supersample(ss)
+            .build()
+        {
             Ok(m) => m,
             Err(MetalError::NoDevice) => {
                 eprintln!("skipping: no Metal device on this machine");
@@ -1509,7 +1603,10 @@ mod truth;
 #[test]
 fn metal_material_models_match_three_js() {
     use threers::metal::{MetalError, MetalHeadlessRenderer};
-    let mut m = match MetalHeadlessRenderer::builder().size(truth::N, truth::N).build() {
+    let mut m = match MetalHeadlessRenderer::builder()
+        .size(truth::N, truth::N)
+        .build()
+    {
         Ok(m) => m,
         Err(MetalError::NoDevice) => {
             eprintln!("skipping: no Metal device on this machine");
@@ -1539,7 +1636,10 @@ fn metal_material_models_match_three_js() {
 #[test]
 fn metal_materials_receive_shadows_as_three_js_does() {
     use threers::metal::{MetalError, MetalHeadlessRenderer};
-    let mut m = match MetalHeadlessRenderer::builder().size(truth::N, truth::N).build() {
+    let mut m = match MetalHeadlessRenderer::builder()
+        .size(truth::N, truth::N)
+        .build()
+    {
         Ok(m) => m,
         Err(MetalError::NoDevice) => {
             eprintln!("skipping: no Metal device on this machine");
@@ -1558,7 +1658,10 @@ fn metal_materials_receive_shadows_as_three_js_does() {
 #[test]
 fn metal_instanced_meshes_cast_shadows_as_three_js_does() {
     use threers::metal::{MetalError, MetalHeadlessRenderer};
-    let mut m = match MetalHeadlessRenderer::builder().size(truth::N, truth::N).build() {
+    let mut m = match MetalHeadlessRenderer::builder()
+        .size(truth::N, truth::N)
+        .build()
+    {
         Ok(m) => m,
         Err(MetalError::NoDevice) => return,
         Err(e) => panic!("metal renderer: {e:?}"),
@@ -1580,7 +1683,9 @@ const ENCODED_BLEND: bool = !cfg!(target_abi = "sim");
 /// Fail with `failures` — or, for blends in a simulator, print them.
 fn assert_blends(failures: &[String]) {
     if !ENCODED_BLEND {
-        failures.iter().for_each(|f| eprintln!("{f} (simulator: linear-light blending)"));
+        failures
+            .iter()
+            .for_each(|f| eprintln!("{f} (simulator: linear-light blending)"));
         return;
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
@@ -1602,9 +1707,10 @@ fn metal_blends_transparent_surfaces_as_three_js_does() {
             Err(MetalError::NoDevice) => return,
             Err(e) => panic!("metal renderer: {e:?}"),
         };
-        failures.extend(blending::check(&format!("metal msaa {msaa}"), &mut |s, c| {
-            m.render_to_rgba(s, c).expect("metal render")
-        }));
+        failures.extend(blending::check(
+            &format!("metal msaa {msaa}"),
+            &mut |s, c| m.render_to_rgba(s, c).expect("metal render"),
+        ));
     }
     assert_blends(&failures);
 }
@@ -1618,7 +1724,10 @@ mod tone_truth;
 #[test]
 fn metal_tone_maps_every_material_as_three_js_does() {
     use threers::metal::{MetalError, MetalHeadlessRenderer};
-    let m = match MetalHeadlessRenderer::builder().size(tone_truth::N, tone_truth::N).build() {
+    let m = match MetalHeadlessRenderer::builder()
+        .size(tone_truth::N, tone_truth::N)
+        .build()
+    {
         Ok(m) => m,
         Err(MetalError::NoDevice) => return,
         Err(e) => panic!("metal renderer: {e:?}"),
@@ -1629,7 +1738,12 @@ fn metal_tone_maps_every_material_as_three_js_does() {
         &mut |mode, exposure| m.borrow_mut().renderer().set_tone_mapping(mode, exposure),
         &mut |s, c| m.borrow_mut().render_to_rgba(s, c).expect("metal render"),
     );
-    assert!(failures.is_empty(), "{} failures:\n{}", failures.len(), failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "{} failures:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
 }
 
 #[path = "support/material_state.rs"]
@@ -1658,7 +1772,12 @@ fn metal_applies_material_depth_and_colour_state() {
             &mut |s, c| m.render_to_rgba(s, c).expect("metal render"),
         ));
     }
-    assert!(failures.is_empty(), "{} failures:\n{}", failures.len(), failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "{} failures:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
 }
 
 /// MeshPhysicalMaterial's lobes on Metal against wgpu, pixel for pixel — the
@@ -1691,12 +1810,25 @@ fn metal_shades_physical_materials_as_wgpu_does() {
     };
     let environment = {
         let size = 16u32;
-        let colours: [[u8; 3]; 6] = [[220, 60, 60], [60, 200, 60], [60, 60, 220], [220, 220, 60], [200, 60, 200], [60, 200, 200]];
+        let colours: [[u8; 3]; 6] = [
+            [220, 60, 60],
+            [60, 200, 60],
+            [60, 60, 220],
+            [220, 220, 60],
+            [200, 60, 200],
+            [60, 200, 200],
+        ];
         let faces = std::array::from_fn(|i| {
             let c = colours[i];
-            (0..size * size).flat_map(|_| [c[0], c[1], c[2], 255]).collect::<Vec<u8>>()
+            (0..size * size)
+                .flat_map(|_| [c[0], c[1], c[2], 255])
+                .collect::<Vec<u8>>()
         });
-        std::sync::Arc::new(CubeTexture::new(size, threers::textures::TextureFormat::Rgba8UnormSrgb, faces))
+        std::sync::Arc::new(CubeTexture::new(
+            size,
+            threers::textures::TextureFormat::Rgba8UnormSrgb,
+            faces,
+        ))
     };
     let phys = |c: u32, f: &dyn Fn(&mut PhysicalMaterial)| {
         let mut x = PhysicalMaterial::new(Color::from_hex(c));
@@ -1704,12 +1836,56 @@ fn metal_shades_physical_materials_as_wgpu_does() {
         x
     };
     let cases: Vec<(&str, PhysicalMaterial)> = vec![
-        ("ior 2.33", phys(0x4060a0, &|x| { x.roughness = 0.3; x.ior = 2.33; })),
-        ("specular", phys(0x4060a0, &|x| { x.roughness = 0.3; x.specular_intensity = 0.25; x.specular_color = Color::from_hex(0xff6020); })),
-        ("sheen", phys(0x1a1a40, &|x| { x.roughness = 0.9; x.sheen = 1.0; x.sheen_color = Color::from_hex(0xffe0b0); x.sheen_roughness = 0.35; })),
-        ("iridescence", phys(0x202020, &|x| { x.roughness = 0.25; x.iridescence = 1.0; x.iridescence_ior = 1.4; x.iridescence_thickness_range = [100.0, 380.0]; })),
-        ("anisotropy", phys(0xd0d0d0, &|x| { x.roughness = 0.35; x.metalness = 1.0; x.anisotropy = 0.8; x.anisotropy_rotation = 0.4; })),
-        ("clearcoat", phys(0xc03020, &|x| { x.roughness = 0.7; x.clearcoat = 1.0; x.clearcoat_roughness = 0.05; })),
+        (
+            "ior 2.33",
+            phys(0x4060a0, &|x| {
+                x.roughness = 0.3;
+                x.ior = 2.33;
+            }),
+        ),
+        (
+            "specular",
+            phys(0x4060a0, &|x| {
+                x.roughness = 0.3;
+                x.specular_intensity = 0.25;
+                x.specular_color = Color::from_hex(0xff6020);
+            }),
+        ),
+        (
+            "sheen",
+            phys(0x1a1a40, &|x| {
+                x.roughness = 0.9;
+                x.sheen = 1.0;
+                x.sheen_color = Color::from_hex(0xffe0b0);
+                x.sheen_roughness = 0.35;
+            }),
+        ),
+        (
+            "iridescence",
+            phys(0x202020, &|x| {
+                x.roughness = 0.25;
+                x.iridescence = 1.0;
+                x.iridescence_ior = 1.4;
+                x.iridescence_thickness_range = [100.0, 380.0];
+            }),
+        ),
+        (
+            "anisotropy",
+            phys(0xd0d0d0, &|x| {
+                x.roughness = 0.35;
+                x.metalness = 1.0;
+                x.anisotropy = 0.8;
+                x.anisotropy_rotation = 0.4;
+            }),
+        ),
+        (
+            "clearcoat",
+            phys(0xc03020, &|x| {
+                x.roughness = 0.7;
+                x.clearcoat = 1.0;
+                x.clearcoat_roughness = 0.05;
+            }),
+        ),
     ];
     let mut cam = PerspectiveCamera::new(30.0, 1.0, 0.1, 100.0);
     cam.position = Vector3::new(0.0, 0.3, 4.2);
@@ -1724,12 +1900,17 @@ fn metal_shades_physical_materials_as_wgpu_does() {
                     s.environment = Some(environment.clone());
                 } else {
                     s.add_light(AmbientLight::new(Color::WHITE, 0.25));
-                    let key = DirectionalLight::new(Color::WHITE, 2.5).with_direction(Vector3::new(-3.0, -4.0, -5.0));
-                    let rim = DirectionalLight::new(Color::WHITE, 1.5).with_direction(Vector3::new(4.0, -1.0, 2.0));
+                    let key = DirectionalLight::new(Color::WHITE, 2.5)
+                        .with_direction(Vector3::new(-3.0, -4.0, -5.0));
+                    let rim = DirectionalLight::new(Color::WHITE, 1.5)
+                        .with_direction(Vector3::new(4.0, -1.0, 2.0));
                     s.add(Object3D::light(Light::Directional(key)));
                     s.add(Object3D::light(Light::Directional(rim)));
                 }
-                s.add(Object3D::mesh(Mesh::new(SphereGeometry::new(1.0, 64, 32), mat.clone().into())));
+                s.add(Object3D::mesh(Mesh::new(
+                    SphereGeometry::new(1.0, 64, 32),
+                    mat.clone().into(),
+                )));
                 s
             };
             let a = w.render_to_rgba(&mut build(), &cam);
@@ -1749,7 +1930,10 @@ fn metal_shades_physical_materials_as_wgpu_does() {
                     }
                     n += 1;
                     let i = ((y as u32 * S + x as u32) * 4) as usize;
-                    let d = (0..3).map(|k| (a[i + k] as i32 - b[i + k] as i32).abs()).max().unwrap();
+                    let d = (0..3)
+                        .map(|k| (a[i + k] as i32 - b[i + k] as i32).abs())
+                        .max()
+                        .unwrap();
                     worst = worst.max(d);
                     sum += d as u64;
                     if d > 3 {
@@ -1759,7 +1943,9 @@ fn metal_shades_physical_materials_as_wgpu_does() {
             }
             let label = format!("{name}{}", if env { ", environment" } else { "" });
             let mean = sum as f64 / n.max(1) as f64;
-            eprintln!("physical {label:>26}: {n} px, mean {mean:.2}, {over} over 3 levels, worst {worst}");
+            eprintln!(
+                "physical {label:>26}: {n} px, mean {mean:.2}, {over} over 3 levels, worst {worst}"
+            );
             assert!(n > 5000, "{label}: only {n} pixels compared");
             // Anisotropy reads its tangent frame off screen-space derivatives
             // (three.js's `getTangentFrame`, for geometry without tangents),
@@ -1767,7 +1953,11 @@ fn metal_shades_physical_materials_as_wgpu_does() {
             // into scattered single-pixel differences — as three.js's own
             // output differs from wgpu's on `physical-anisotropy`. A lobe that
             // is wrong moves the whole highlight, which the mean still catches.
-            let (share, worst_ok) = if *name == "anisotropy" { (25, 48) } else { (200, 12) };
+            let (share, worst_ok) = if *name == "anisotropy" {
+                (25, 48)
+            } else {
+                (200, 12)
+            };
             if over * share > n || worst > worst_ok || mean > 1.0 {
                 failures.push(format!(
                     "{label}: {over} of {n} pixels over 3 levels from wgpu, mean {mean:.2}, worst {worst}"
@@ -1799,7 +1989,12 @@ fn metal_reads_tangents_as_wgpu_does() {
         Err(MetalError::NoDevice) => return,
         Err(e) => panic!("metal renderer: {e:?}"),
     };
-    let tilted = std::sync::Arc::new(Texture::new(1, 1, TextureFormat::Rgba8Unorm, vec![220, 128, 200, 255]));
+    let tilted = std::sync::Arc::new(Texture::new(
+        1,
+        1,
+        TextureFormat::Rgba8Unorm,
+        vec![220, 128, 200, 255],
+    ));
     let cases: Vec<(&str, Material)> = vec![
         ("normal map", {
             let mut x = StandardMaterial::new(Color::from_hex(0xb0b0b0));
@@ -1838,7 +2033,8 @@ fn metal_reads_tangents_as_wgpu_does() {
             let mut s = Scene::new();
             s.background = Color::from_hex(0x000000);
             s.add_light(AmbientLight::new(Color::WHITE, 0.25));
-            let key = DirectionalLight::new(Color::WHITE, 2.5).with_direction(Vector3::new(-3.0, -4.0, -5.0));
+            let key = DirectionalLight::new(Color::WHITE, 2.5)
+                .with_direction(Vector3::new(-3.0, -4.0, -5.0));
             s.add(Object3D::light(Light::Directional(key)));
             s.add(Object3D::mesh(Mesh::new(g, mat.clone())));
             s
@@ -1847,9 +2043,13 @@ fn metal_reads_tangents_as_wgpu_does() {
             let mut s = Scene::new();
             s.background = Color::from_hex(0x000000);
             s.add_light(AmbientLight::new(Color::WHITE, 0.25));
-            let key = DirectionalLight::new(Color::WHITE, 2.5).with_direction(Vector3::new(-3.0, -4.0, -5.0));
+            let key = DirectionalLight::new(Color::WHITE, 2.5)
+                .with_direction(Vector3::new(-3.0, -4.0, -5.0));
             s.add(Object3D::light(Light::Directional(key)));
-            s.add(Object3D::mesh(Mesh::new(SphereGeometry::new(1.0, 64, 32), mat.clone())));
+            s.add(Object3D::mesh(Mesh::new(
+                SphereGeometry::new(1.0, 64, 32),
+                mat.clone(),
+            )));
             m.render_to_rgba(&mut s, &cam).expect("metal")
         };
         let a = w.render_to_rgba(&mut build(), &cam);
@@ -1860,7 +2060,10 @@ fn metal_reads_tangents_as_wgpu_does() {
                 continue;
             }
             n += 1;
-            sum += (0..3).map(|k| (pa[k] as i32 - pb[k] as i32).unsigned_abs() as u64).max().unwrap();
+            sum += (0..3)
+                .map(|k| (pa[k] as i32 - pb[k] as i32).unsigned_abs() as u64)
+                .max()
+                .unwrap();
             if (0..3).any(|k| (pb[k] as i32 - pc[k] as i32).abs() > 3) {
                 changed += 1;
             }
@@ -1868,10 +2071,14 @@ fn metal_reads_tangents_as_wgpu_does() {
         let mean = sum as f64 / n.max(1) as f64;
         eprintln!("tangents {name}: {n} px, mean {mean:.2} from wgpu, {changed} px changed by the tangents");
         if mean > 1.0 {
-            failures.push(format!("{name}: Metal is a mean {mean:.2} levels from wgpu"));
+            failures.push(format!(
+                "{name}: Metal is a mean {mean:.2} levels from wgpu"
+            ));
         }
         if changed * 20 < n {
-            failures.push(format!("{name}: the tangents changed only {changed} of {n} pixels on Metal"));
+            failures.push(format!(
+                "{name}: the tangents changed only {changed} of {n} pixels on Metal"
+            ));
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
@@ -1903,15 +2110,29 @@ fn metal_lights_rect_areas_as_wgpu_does() {
     cam.position = Vector3::new(0.0, 0.5, 4.5);
     cam.look_at(Vector3::ZERO);
     let mut failures = Vec::new();
-    for (name, roughness, metalness) in [("smooth", 0.15f32, 0.0f32), ("rough", 0.6, 0.0), ("metal", 0.35, 1.0)] {
+    for (name, roughness, metalness) in [
+        ("smooth", 0.15f32, 0.0f32),
+        ("rough", 0.6, 0.0),
+        ("metal", 0.35, 1.0),
+    ] {
         let build = || {
             let mut s = Scene::new();
             s.background = Color::from_hex(0x000000);
-            let mut warm = Object3D::light(Light::RectArea(RectAreaLight::new(Color::from_hex(0xffb070), 6.0, 2.5, 1.2)));
+            let mut warm = Object3D::light(Light::RectArea(RectAreaLight::new(
+                Color::from_hex(0xffb070),
+                6.0,
+                2.5,
+                1.2,
+            )));
             warm.position = Vector3::new(-2.2, 2.0, 2.5);
             warm.look_at(Vector3::ZERO);
             s.add(warm);
-            let mut cool = Object3D::light(Light::RectArea(RectAreaLight::new(Color::from_hex(0x80b0ff), 4.0, 1.5, 3.0)));
+            let mut cool = Object3D::light(Light::RectArea(RectAreaLight::new(
+                Color::from_hex(0x80b0ff),
+                4.0,
+                1.5,
+                3.0,
+            )));
             cool.position = Vector3::new(2.6, 1.0, 1.8);
             cool.scale = Vector3::new(2.0, 2.0, 2.0);
             cool.look_at(Vector3::new(0.0, 0.5, 0.0));
@@ -1920,7 +2141,10 @@ fn metal_lights_rect_areas_as_wgpu_does() {
             let mut mat = StandardMaterial::new(Color::from_hex(0xd0d0d0));
             mat.roughness = roughness;
             mat.metalness = metalness;
-            s.add(Object3D::mesh(Mesh::new(SphereGeometry::new(1.0, 64, 32), mat.into())));
+            s.add(Object3D::mesh(Mesh::new(
+                SphereGeometry::new(1.0, 64, 32),
+                mat.into(),
+            )));
             s
         };
         let a = w.render_to_rgba(&mut build(), &cam);
@@ -1934,12 +2158,19 @@ fn metal_lights_rect_areas_as_wgpu_does() {
             if pa[..3].iter().any(|&c| c > 40) {
                 lit += 1;
             }
-            let d = (0..3).map(|k| (pa[k] as i32 - pb[k] as i32).abs()).max().unwrap();
+            let d = (0..3)
+                .map(|k| (pa[k] as i32 - pb[k] as i32).abs())
+                .max()
+                .unwrap();
             sum += d as u64;
             worst = worst.max(d);
         }
         let mean = sum as f64 / n.max(1) as f64;
-        let over = a.chunks(4).zip(b.chunks(4)).filter(|(pa, pb)| (0..3).any(|k| (pa[k] as i32 - pb[k] as i32).abs() > 8)).count();
+        let over = a
+            .chunks(4)
+            .zip(b.chunks(4))
+            .filter(|(pa, pb)| (0..3).any(|k| (pa[k] as i32 - pb[k] as i32).abs() > 8))
+            .count();
         eprintln!("rect {name}: {n} px, {lit} lit, mean {mean:.2}, {over} over 8, worst {worst}");
         // A metal's silhouette reads the tables at grazing angles, where the
         // two compilers' last bits show: a handful of pixels there, and
@@ -1989,18 +2220,24 @@ fn metal_transmits_as_wgpu_does() {
     };
     let cases = [
         ("clear", glass(&|_| {})),
-        ("rough, attenuated", glass(&|g| {
-            g.roughness = 0.35;
-            g.thickness = 1.5;
-            g.attenuation_color = Color::from_hex(0xff8040);
-            g.attenuation_distance = 1.2;
-        })),
-        ("double-sided, dispersive", glass(&|g| {
-            g.ior = 1.7;
-            g.dispersion = 3.0;
-            g.side = 2;
-            g.transmission = 0.9;
-        })),
+        (
+            "rough, attenuated",
+            glass(&|g| {
+                g.roughness = 0.35;
+                g.thickness = 1.5;
+                g.attenuation_color = Color::from_hex(0xff8040);
+                g.attenuation_distance = 1.2;
+            }),
+        ),
+        (
+            "double-sided, dispersive",
+            glass(&|g| {
+                g.ior = 1.7;
+                g.dispersion = 3.0;
+                g.side = 2;
+                g.transmission = 0.9;
+            }),
+        ),
     ];
     let mut failures = Vec::new();
     for (name, mat) in cases {
@@ -2009,14 +2246,21 @@ fn metal_transmits_as_wgpu_does() {
             s.background = Color::from_hex(0x202028);
             s.add_light(AmbientLight::new(Color::WHITE, 0.4));
             s.add(Object3D::light(Light::Directional(
-                DirectionalLight::new(Color::WHITE, 2.0).with_direction(Vector3::new(-3.0, -4.0, -5.0)),
+                DirectionalLight::new(Color::WHITE, 2.0)
+                    .with_direction(Vector3::new(-3.0, -4.0, -5.0)),
             )));
             for (i, c) in [0xe04040u32, 0x40c040, 0x4060e0].into_iter().enumerate() {
-                let mut b = Object3D::mesh(Mesh::new(BoxGeometry::new(0.7, 2.0, 0.7), StandardMaterial::new(Color::from_hex(c)).into()));
+                let mut b = Object3D::mesh(Mesh::new(
+                    BoxGeometry::new(0.7, 2.0, 0.7),
+                    StandardMaterial::new(Color::from_hex(c)).into(),
+                ));
                 b.position = Vector3::new((i as f32 - 1.0) * 0.9, 0.0, -2.0);
                 s.add(b);
             }
-            s.add(Object3D::mesh(Mesh::new(SphereGeometry::new(1.0, 64, 32), mat.clone().into())));
+            s.add(Object3D::mesh(Mesh::new(
+                SphereGeometry::new(1.0, 64, 32),
+                mat.clone().into(),
+            )));
             s
         };
         let a = w.render_to_rgba(&mut build(), &cam);
@@ -2031,10 +2275,16 @@ fn metal_transmits_as_wgpu_does() {
                 }
                 let i = ((y * S + x) * 4) as usize;
                 n += 1;
-                let d = (0..3).map(|k| (a[i + k] as i32 - b[i + k] as i32).abs()).max().unwrap();
+                let d = (0..3)
+                    .map(|k| (a[i + k] as i32 - b[i + k] as i32).abs())
+                    .max()
+                    .unwrap();
                 sum += d as u64;
                 worst = worst.max(d);
-                let (mx, mn) = (a[i..i + 3].iter().max().unwrap(), a[i..i + 3].iter().min().unwrap());
+                let (mx, mn) = (
+                    a[i..i + 3].iter().max().unwrap(),
+                    a[i..i + 3].iter().min().unwrap(),
+                );
                 if mx - mn > 40 {
                     colourful += 1;
                 }
@@ -2043,10 +2293,14 @@ fn metal_transmits_as_wgpu_does() {
         let mean = sum as f64 / n.max(1) as f64;
         eprintln!("transmission {name}: {n} px, {colourful} showing the boxes' colour, mean {mean:.2}, worst {worst}");
         if colourful < n / 10 {
-            failures.push(format!("{name}: only {colourful} of {n} pixels show the boxes through the glass"));
+            failures.push(format!(
+                "{name}: only {colourful} of {n} pixels show the boxes through the glass"
+            ));
         }
         if mean > 1.5 {
-            failures.push(format!("{name}: Metal a mean {mean:.2} from wgpu (worst {worst})"));
+            failures.push(format!(
+                "{name}: Metal a mean {mean:.2} from wgpu (worst {worst})"
+            ));
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
@@ -2080,7 +2334,14 @@ fn metal_raises_reflective_alpha_as_wgpu_does() {
         8,
         threers::textures::TextureFormat::Rgba8UnormSrgb,
         std::array::from_fn(|i| {
-            let c = [[200u8, 180, 160], [60, 70, 90], [230, 230, 230], [30, 30, 30], [120, 150, 200], [90, 60, 40]][i];
+            let c = [
+                [200u8, 180, 160],
+                [60, 70, 90],
+                [230, 230, 230],
+                [30, 30, 30],
+                [120, 150, 200],
+                [90, 60, 40],
+            ][i];
             (0..64).flat_map(|_| [c[0], c[1], c[2], 255]).collect()
         }),
     ));
@@ -2093,7 +2354,9 @@ fn metal_raises_reflective_alpha_as_wgpu_does() {
         if env {
             s.environment = Some(environment.clone());
         }
-        s.add_light(DirectionalLight::new(Color::WHITE, 2.0).with_direction(Vector3::new(-1.0, -1.0, -2.0)));
+        s.add_light(
+            DirectionalLight::new(Color::WHITE, 2.0).with_direction(Vector3::new(-1.0, -1.0, -2.0)),
+        );
         // A bright backdrop the sphere's alpha lets through.
         let mut back = StandardMaterial::new(Color::from_hex(0x30c060));
         back.emissive = Color::from_hex(0x30c060);
@@ -2105,13 +2368,19 @@ fn metal_raises_reflective_alpha_as_wgpu_does() {
         mat.metalness = metalness;
         mat.opacity = 0.2;
         mat.transparent = Some(true);
-        s.add(Object3D::mesh(Mesh::new(SphereGeometry::new(1.2, 64, 32), mat.into())));
+        s.add(Object3D::mesh(Mesh::new(
+            SphereGeometry::new(1.2, 64, 32),
+            mat.into(),
+        )));
         s
     };
     let diff = |a: &[u8], b: &[u8]| {
         let (mut sum, mut over) = (0u64, 0usize);
         for (pa, pb) in a.chunks(4).zip(b.chunks(4)) {
-            let d = (0..3).map(|k| (pa[k] as i32 - pb[k] as i32).abs()).max().unwrap();
+            let d = (0..3)
+                .map(|k| (pa[k] as i32 - pb[k] as i32).abs())
+                .max()
+                .unwrap();
             sum += d as u64;
             if d > 8 {
                 over += 1;
@@ -2120,19 +2389,31 @@ fn metal_raises_reflective_alpha_as_wgpu_does() {
         (sum as f64 / (a.len() / 4) as f64, over)
     };
     let mut failures = Vec::new();
-    for (name, env, metalness) in [("dielectric", false, 0.0f32), ("metal", false, 1.0), ("dielectric, env", true, 0.0), ("metal, env", true, 1.0)] {
+    for (name, env, metalness) in [
+        ("dielectric", false, 0.0f32),
+        ("metal", false, 1.0),
+        ("dielectric, env", true, 0.0),
+        ("metal, env", true, 1.0),
+    ] {
         w.renderer().set_reflective_transparency(true);
         m.renderer().set_reflective_transparency(true);
         let a = w.render_to_rgba(&mut build(env, metalness), &cam);
-        let b = m.render_to_rgba(&mut build(env, metalness), &cam).expect("metal");
+        let b = m
+            .render_to_rgba(&mut build(env, metalness), &cam)
+            .expect("metal");
         w.renderer().set_reflective_transparency(false);
         let off = w.render_to_rgba(&mut build(env, metalness), &cam);
         let (mean, over) = diff(&a, &b);
         let (moved, _) = diff(&a, &off);
         eprintln!("reflective {name}: Metal mean {mean:.3} from wgpu, {over} over 8; the switch moves wgpu by {moved:.3}");
-        assert!(moved >= 0.5, "{name}: the switch barely changes wgpu (mean {moved:.3})");
+        assert!(
+            moved >= 0.5,
+            "{name}: the switch barely changes wgpu (mean {moved:.3})"
+        );
         if mean > 0.5 || over * 500 > (S * S) as usize {
-            failures.push(format!("{name}: Metal a mean {mean:.3} from wgpu, {over} pixels over 8 levels"));
+            failures.push(format!(
+                "{name}: Metal a mean {mean:.3} from wgpu, {over} pixels over 8 levels"
+            ));
         }
     }
     m.renderer().set_reflective_transparency(false);
@@ -2155,8 +2436,15 @@ fn metal_draws_sheen_as_wgpu_does() {
         let mut light = DirectionalLight::new(Color::WHITE, 2.0);
         light.direction = Vector3::new(-1.0, -0.5, -1.0);
         s.add_light(light);
-        let mat = PhysicalMaterial::new(Color::from_hex(0x808080)).with_sheen(1.0, Color::from_hex(0xffffff), roughness);
-        s.add(Object3D::mesh(Mesh::new(SphereGeometry::new(14.0, 48, 32), mat.into())));
+        let mat = PhysicalMaterial::new(Color::from_hex(0x808080)).with_sheen(
+            1.0,
+            Color::from_hex(0xffffff),
+            roughness,
+        );
+        s.add(Object3D::mesh(Mesh::new(
+            SphereGeometry::new(14.0, 48, 32),
+            mat.into(),
+        )));
         s
     };
     let Some(mut w) = threers::HeadlessRenderer::builder().size(N, N).build().ok() else {
@@ -2173,11 +2461,22 @@ fn metal_draws_sheen_as_wgpu_does() {
     };
     for roughness in [0.0, 0.5] {
         let reference = tiles(&w.render_to_rgba(&mut build(roughness), &camera()));
-        let got = tiles(&m.render_to_rgba(&mut build(roughness), &camera()).expect("metal"));
+        let got = tiles(
+            &m.render_to_rgba(&mut build(roughness), &camera())
+                .expect("metal"),
+        );
         let lit = reference.iter().cloned().fold(0.0f64, f64::max);
         let apart = rms(&reference, &got);
-        eprintln!("sheen roughness {roughness}: metal vs wgpu {apart:.4} rms, brightest tile {lit:.3}");
-        assert!(lit > 0.05, "the sphere is not lit, so the comparison proves nothing");
-        assert!(apart < 0.05, "sheen at roughness {roughness} differs by backend: {apart:.4} rms");
+        eprintln!(
+            "sheen roughness {roughness}: metal vs wgpu {apart:.4} rms, brightest tile {lit:.3}"
+        );
+        assert!(
+            lit > 0.05,
+            "the sphere is not lit, so the comparison proves nothing"
+        );
+        assert!(
+            apart < 0.05,
+            "sheen at roughness {roughness} differs by backend: {apart:.4} rms"
+        );
     }
 }

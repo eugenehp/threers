@@ -115,7 +115,8 @@ pub(crate) const HOOKED_KINDS: &[MarkKind] = &[
 /// Uniforms and helpers every module starts with.
 /// The WGSL every mark module starts with: uniforms, `MarkInstance` and the
 /// helpers a [`CustomShader`] builds on.
-pub const PREAMBLE: &str = crate::wgsl!(r#"
+pub const PREAMBLE: &str = crate::wgsl!(
+    r#"
 struct MarkFrame {
     view_proj : mat4x4<f32>,
     origin_hi : vec4<f32>,
@@ -363,8 +364,18 @@ fn mark_snap(clip : vec4<f32>) -> vec2<f32> {
     }
     let bias = frame.clip.zw;
     let start = frame.aa.zw;
-    let px = (clip.xy / clip.w * 0.5 + 0.5) * frame.viewport.xy + start - bias;
-    let snapped = round(px * steps) / steps + bias - start;
+    // As SwiftShader's vertex routine snaps: `RoundInt(X0xF + x · rhw ·
+    // WxF)`, `rhw = 1 / w`, `WxF` half the viewport in steps and `X0xF`
+    // its centre in steps less half a pixel — each step rounded on its
+    // own, as it rounds them (equal to the plain form in exact arithmetic,
+    // not always in float32).
+    let rhw = 1.0 / clip.w;
+    let half = frame.viewport.xy * 0.5;
+    let wxf = half * steps;
+    let x0f = (start - bias + half) * steps - steps * 0.5;
+    let t = clip.xy * rhw;
+    let fixed = round(x0f + t * wxf);
+    let snapped = (fixed + steps * 0.5) / steps + bias - start;
     return ((snapped / frame.viewport.xy - 0.5) * 2.0) * clip.w;
 }
 
@@ -776,12 +787,14 @@ fn fill_pattern_origin(p1 : vec4<f32>, offset : vec2<f32>) -> vec2<f32> {
     let flip = select(-1.0, 1.0, p1.w > 0.0);
     return vec2<f32>(frame.origin_hi.x + frame.origin_lo.x, (frame.origin_hi.z + frame.origin_lo.z) * flip) + offset;
 }
-"#);
+"#
+);
 
 /// SwiftShader's texture sampling as WGSL (`mark_ss_sample`), self-contained,
 /// for [`MarkView::swiftshader_sampling`](super::MarkView::swiftshader_sampling)
 /// and for testing it against SwiftShader itself. Part of every mark shader.
-pub const SWIFTSHADER_SAMPLING: &str = crate::wgsl!(r#"
+pub const SWIFTSHADER_SAMPLING: &str = crate::wgsl!(
+    r#"
 /// SwiftShader's filtered sample of an 8-bit texture, bit for bit (as
 /// measured against it), when the view asks (`frame.raster.y`,
 /// `MarkView::swiftshader_sampling`): each texel's byte widened to 16 bits
@@ -789,9 +802,17 @@ pub const SWIFTSHADER_SAMPLING: &str = crate::wgsl!(r#"
 /// the mip level from the longer squared footprint by its float bits
 /// (`log2sqrt`), levels blended the same way, and scaled by `1 / 0xFF00`.
 /// Clamped to the edge; `dx`, `dy` the texture coordinate's derivatives.
+/// Set while sampling an sRGB-format texture: its loads come back
+/// linear, and SwiftShader filters the bytes themselves.
+var<private> mark_ss_srgb_texels : bool = false;
+
 fn mark_ss_texel(t : texture_2d<f32>, level : i32, p : vec2<i32>, size : vec2<i32>) -> vec4<f32> {
     let q = clamp(p, vec2<i32>(0), size - vec2<i32>(1));
-    return round(textureLoad(t, q, level) * 255.0) * 256.0;
+    var c = textureLoad(t, q, level);
+    if (mark_ss_srgb_texels) {
+        c = vec4<f32>(mark_linear_to_srgb(c.rgb), c.a);
+    }
+    return round(c * 255.0) * 256.0;
 }
 
 fn mark_ss_bilinear(t : texture_2d<f32>, level : i32, uv : vec2<f32>) -> vec4<f32> {
@@ -829,9 +850,11 @@ fn mark_ss_sample(t : texture_2d<f32>, uv : vec2<f32>, dx : vec2<f32>, dy : vec2
     }
     return c * (1.0 / 65280.0);
 }
-"#);
+"#
+);
 
-const POINT: &str = crate::wgsl!(r#"
+const POINT: &str = crate::wgsl!(
+    r#"
 struct PointIn {
     @builtin(vertex_index) vid : u32,
     @builtin(instance_index) iid : u32,
@@ -1001,9 +1024,11 @@ fn fs_pick(in : PointOut) -> @location(0) vec2<u32> {
     }
     return vec2<u32>(layer.ids.x, in.index);
 }
-"#);
+"#
+);
 
-const SEGMENT: &str = crate::wgsl!(r#"
+const SEGMENT: &str = crate::wgsl!(
+    r#"
 struct SegIn {
     @builtin(vertex_index) vid : u32,
     @builtin(instance_index) iid : u32,
@@ -1687,9 +1712,11 @@ fn fs_pick(raw : SegOut) -> @location(0) vec2<u32> {
     }
     return vec2<u32>(layer.ids.x, in.index);
 }
-"#);
+"#
+);
 
-const SHAPE: &str = crate::wgsl!(r#"
+const SHAPE: &str = crate::wgsl!(
+    r#"
 struct ShapeIn {
     @builtin(instance_index) iid : u32,
     @location(0) vertex : vec3<f32>,
@@ -1761,11 +1788,13 @@ fn shape_scene_lit(rgb : vec3<f32>, n : vec3<f32>, p : vec3<f32>) -> vec3<f32> {
 /// otherwise. `flat` is the face's normal, for meshes without normals.
 fn shape_shade(in : ShapeOut, flat : vec3<f32>) -> vec3<f32> {
     if (layer.material.w > 1.5 && layer.material.w < 2.5) {
+        // deck.gl's: normalized per vertex, interpolated, not normalized
+        // again (shorter between vertices, which dims the highlights).
         var n = in.normal;
         if (dot(n, n) < 1e-12) {
             n = flat;
         }
-        return shape_scene_lit(in.color.rgb, normalize(n), in.world);
+        return shape_scene_lit(in.color.rgb, n, in.world);
     }
     return in.color.rgb;
 }
@@ -1886,6 +1915,14 @@ fn fs_pattern(in : ShapeOut) -> ShapeFrag {
     var t = textureSampleGrad(shape_texture, shape_sampler, at, dpdx(in.uv) * rect.zw, dpdy(in.uv) * rect.zw);
     let cdx = dpdxCoarse(in.uv) * rect.zw;
     let cdy = dpdyCoarse(in.uv) * rect.zw;
+    // An image (an sRGB atlas), sampled as SwiftShader samples its bytes,
+    // when asked.
+    if (((layer.ids.z >> 3u) & 1u) == 0u && mark_ss_sampling()) {
+        mark_ss_srgb_texels = true;
+        let b = mark_ss_sample(shape_texture, at, cdx, cdy);
+        mark_ss_srgb_texels = false;
+        t = vec4<f32>(mark_srgb_to_linear(b.rgb), b.a);
+    }
     // ids.z bit 3: a frame the marks drew — premultiplied sRGB bytes.
     if (((layer.ids.z >> 3u) & 1u) != 0u) {
         // A plain 8-bit target: sampled as SwiftShader samples, when asked.
@@ -1919,9 +1956,11 @@ fn fs_pattern(in : ShapeOut) -> ShapeFrag {
 fn fs_pick(in : ShapeOut) -> @location(0) vec2<u32> {
     return vec2<u32>(layer.ids.x, in.index);
 }
-"#);
+"#
+);
 
-const POLYGON: &str = crate::wgsl!(r#"
+const POLYGON: &str = crate::wgsl!(
+    r#"
 struct PolyIn {
     @location(0) pos_hi : vec3<f32>,
     @location(1) pos_lo : vec3<f32>,
@@ -2072,9 +2111,11 @@ fn fs_pick(in : PolyOut) -> @location(0) vec2<u32> {
     }
     return vec2<u32>(layer.ids.x, in.index);
 }
-"#);
+"#
+);
 
-const SPRITE: &str = crate::wgsl!(r#"
+const SPRITE: &str = crate::wgsl!(
+    r#"
 @group(2) @binding(0) var atlas_tex : texture_2d<f32>;
 @group(2) @binding(1) var atlas_samp : sampler;
 
@@ -2337,9 +2378,11 @@ fn fs_pick(in : SpriteOut) -> @location(0) vec2<u32> {
     }
     return vec2<u32>(layer.ids.x, in.index);
 }
-"#);
+"#
+);
 
-const IMAGE: &str = crate::wgsl!(r#"
+const IMAGE: &str = crate::wgsl!(
+    r#"
 @group(2) @binding(0) var atlas_tex : texture_2d<f32>;
 @group(2) @binding(1) var atlas_samp : sampler;
 
@@ -2427,9 +2470,11 @@ fn fs_pick(in : ImageOut) -> @location(0) vec2<u32> {
     }
     return vec2<u32>(layer.ids.x, in.index);
 }
-"#);
+"#
+);
 
-const GLYPH: &str = crate::wgsl!(r#"
+const GLYPH: &str = crate::wgsl!(
+    r#"
 @group(2) @binding(0) var glyph_atlas : texture_2d<f32>;
 @group(2) @binding(1) var glyph_sampler : sampler;
 
@@ -2580,9 +2625,11 @@ fn fs_pick(in : GlyphOut) -> @location(0) vec2<u32> {
     // should not miss the label.
     return vec2<u32>(layer.ids.x, in.index);
 }
-"#);
+"#
+);
 
-const SPLAT: &str = crate::wgsl!(r#"
+const SPLAT: &str = crate::wgsl!(
+    r#"
 struct SplatIn {
     @builtin(vertex_index) vid : u32,
     @builtin(instance_index) iid : u32,
@@ -2649,10 +2696,12 @@ fn fs_main(in : SplatOut) -> @location(0) vec4<f32> {
     // Alpha: the kernels' coverage, for a mean (style2.y: `mean`).
     return vec4<f32>(in.weight * g, 0.0, 0.0, g * layer.style2.y);
 }
-"#);
+"#
+);
 
 /// Maps the summed density through a colour ramp onto the target.
-pub(crate) const DENSITY_COMPOSITE: &str = crate::wgsl!(r#"
+pub(crate) const DENSITY_COMPOSITE: &str = crate::wgsl!(
+    r#"
 @group(2) @binding(0) var density_field : texture_2d<f32>;
 @group(2) @binding(1) var density_ramp : texture_2d<f32>;
 @group(2) @binding(2) var density_sampler : sampler;
@@ -2688,7 +2737,8 @@ fn fs_main(in : FullscreenVertex) -> @location(0) vec4<f32> {
     }
     return mark_out(vec4<f32>(c.rgb, a * layer.style2.w));
 }
-"#);
+"#
+);
 
 fn kind_source(kind: MarkKind) -> (&'static str, u32) {
     // (source, first custom location)
@@ -2839,14 +2889,17 @@ pub(crate) fn body_line(hooks: &ShaderHooks) -> usize {
 /// below `DENSITY_MEAN_FLOOR` counting as that much, as deck.gl's
 /// `HeatmapLayer` floors its normalized kernels' sum at 1. Reduced levels
 /// carry alpha 1, so their values pass through.
-pub(crate) const DENSITY_VALUE: &str = crate::wgsl!(r#"
+pub(crate) const DENSITY_VALUE: &str = crate::wgsl!(
+    r#"
 const DENSITY_MEAN_FLOOR : f32 = 0.29540897;
 fn density_value(t : vec4<f32>) -> f32 {
     return select(t.r, t.r / max(DENSITY_MEAN_FLOOR, t.a), t.a > 0.0);
 }
-"#);
+"#
+);
 
-pub(crate) const DENSITY_REDUCE: &str = crate::wgsl!(r#"
+pub(crate) const DENSITY_REDUCE: &str = crate::wgsl!(
+    r#"
 @group(0) @binding(0) var reduce_src : texture_2d<f32>;
 @group(0) @binding(1) var reduce_samp : sampler;
 
@@ -2864,11 +2917,15 @@ fn fs_main(in : FullscreenVertex) -> @location(0) vec4<f32> {
     }
     return vec4<f32>(m, 0.0, 0.0, 1.0);
 }
-"#);
+"#
+);
 
 /// The density reduction module.
 pub(crate) fn reduce_source() -> String {
-    format!("{}\n{DENSITY_VALUE}\n{DENSITY_REDUCE}", crate::renderer::fullscreen::VS)
+    format!(
+        "{}\n{DENSITY_VALUE}\n{DENSITY_REDUCE}",
+        crate::renderer::fullscreen::VS
+    )
 }
 
 /// The density composite module.
@@ -2889,8 +2946,14 @@ mod tests {
         let hooks = ShaderHooks::range_filter(0, 0);
         let src = module_source(MarkKind::Point, &hooks, [1, 0]);
         let lines: Vec<&str> = src.lines().collect();
-        assert_eq!(lines[hook_line() - 1], hooks.source().lines().next().unwrap());
-        let body = POINT.replace("@@CUSTOM_IN@@", "").replace("@@CUSTOM0@@", "").replace("@@CUSTOM1@@", "");
+        assert_eq!(
+            lines[hook_line() - 1],
+            hooks.source().lines().next().unwrap()
+        );
+        let body = POINT
+            .replace("@@CUSTOM_IN@@", "")
+            .replace("@@CUSTOM0@@", "")
+            .replace("@@CUSTOM1@@", "");
         assert_eq!(lines[body_line(&hooks) - 1], body.lines().next().unwrap());
     }
 

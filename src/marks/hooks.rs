@@ -336,7 +336,10 @@ mod tests {
         ShaderHooks::none().validate().unwrap();
         ShaderHooks::range_filter(0, 0).validate().unwrap();
         ShaderHooks::fade(4).validate().unwrap();
-        ShaderHooks::range_filter(0, 0).combine(&ShaderHooks::fade(4)).validate().unwrap();
+        ShaderHooks::range_filter(0, 0)
+            .combine(&ShaderHooks::fade(4))
+            .validate()
+            .unwrap();
         ShaderHooks::range_filters(&[(1, 0), (6, 3)])
             .validate()
             .unwrap();

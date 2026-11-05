@@ -553,8 +553,17 @@ mod tests {
     /// Matroska's codec IDs, as the demuxers (ours and everyone's) match them.
     #[test]
     fn codec_ids_read_back() {
-        for (codec, id) in [(WebmCodec::Vp8, "V_VP8"), (WebmCodec::Vp9, "V_VP9"), (WebmCodec::Av1, "V_AV1")] {
-            let frame = WebmFrame { data: &[0x12, 0x00], alpha: None, timecode: 0, keyframe: true };
+        for (codec, id) in [
+            (WebmCodec::Vp8, "V_VP8"),
+            (WebmCodec::Vp9, "V_VP9"),
+            (WebmCodec::Av1, "V_AV1"),
+        ] {
+            let frame = WebmFrame {
+                data: &[0x12, 0x00],
+                alpha: None,
+                timecode: 0,
+                keyframe: true,
+            };
             let bytes = mux_webm(&WebmParams {
                 width: 16,
                 height: 16,

@@ -32,7 +32,11 @@ pub fn segment(p: Vector2, a: Vector2, b: Vector2) -> f32 {
     let v = b - a;
     let w = p - a;
     let len2 = v.dot(v);
-    let t = if len2 > 0.0 { (w.dot(v) / len2).clamp(0.0, 1.0) } else { 0.0 };
+    let t = if len2 > 0.0 {
+        (w.dot(v) / len2).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
     (w - v * t).length()
 }
 
@@ -65,7 +69,11 @@ pub fn tapered_capsule_radius(p: Vector2, a: Vector2, b: Vector2, ra: f32, rb: f
     if h <= bb * bb {
         // One disc contains the other: there are no tangents, only the
         // larger disc.
-        return if ra > rb { (p.length() - ra, ra) } else { ((p - pb).length() - rb, rb) };
+        return if ra > rb {
+            (p.length() - ra, ra)
+        } else {
+            ((p - pb).length() - rb, rb)
+        };
     }
     let qx = (p.x * pb.y - p.y * pb.x).abs() / h;
     let qy = p.dot(pb) / h;

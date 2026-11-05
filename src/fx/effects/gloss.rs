@@ -23,7 +23,12 @@ pub struct GlossStyle {
 
 impl Default for GlossStyle {
     fn default() -> Self {
-        Self { look: Look::LACQUER, bevel: 32.0, swell: 6.0, reach: 120.0 }
+        Self {
+            look: Look::LACQUER,
+            bevel: 32.0,
+            swell: 6.0,
+            reach: 120.0,
+        }
     }
 }
 
@@ -47,7 +52,15 @@ pub struct Gloss {
 
 impl Gloss {
     pub fn new(style: GlossStyle) -> Self {
-        Self { style, shape: None, lean: 0.0, bulge: 0.0, bulge_v: 0.0, at: 0.0, toward: Vector2::ZERO }
+        Self {
+            style,
+            shape: None,
+            lean: 0.0,
+            bulge: 0.0,
+            bulge_v: 0.0,
+            at: 0.0,
+            toward: Vector2::ZERO,
+        }
     }
 }
 
@@ -68,7 +81,9 @@ impl Effect for Gloss {
         let (shape, outline, _) = self.shape.as_ref().expect("just set");
         let dt = input.dt.clamp(1.0 / 240.0, 1.0 / 30.0);
         let (lo, hi) = shape.bounds();
-        let target_lean = input.pointer.map_or(0.0, |p| ((p.x - (lo.x + hi.x) * 0.5) / ((hi.x - lo.x) * 1.5).max(1.0)).clamp(-1.0, 1.0));
+        let target_lean = input.pointer.map_or(0.0, |p| {
+            ((p.x - (lo.x + hi.x) * 0.5) / ((hi.x - lo.x) * 1.5).max(1.0)).clamp(-1.0, 1.0)
+        });
         self.lean += (target_lean - self.lean) * (dt * 4.0).min(1.0);
 
         let mut target = 0.0;
@@ -77,7 +92,8 @@ impl Effect for Gloss {
             let d = shape.distance(anchor).max(0.0);
             if d < self.style.reach {
                 target = self.style.swell * (1.0 - d / self.style.reach);
-                self.at += outline.loop_diff(self.at, outline.nearest(anchor)) * (dt * 8.0).min(1.0);
+                self.at +=
+                    outline.loop_diff(self.at, outline.nearest(anchor)) * (dt * 8.0).min(1.0);
                 self.toward = anchor;
             }
         }
@@ -87,13 +103,22 @@ impl Effect for Gloss {
 
     fn surface(&self) -> Option<Surface> {
         let (shape, outline, inradius) = self.shape.as_ref()?;
-        let mut surface = Surface::new_with_thickness(shape.clone(), self.style.look, inradius.min(self.style.bevel));
+        let mut surface = Surface::new_with_thickness(
+            shape.clone(),
+            self.style.look,
+            inradius.min(self.style.bevel),
+        );
         surface.lean = self.lean;
         if self.bulge > 0.3 {
             let e = outline.at(self.at);
             let dir = (e.normal * 0.6 + (self.toward - e.point).normalize() * 0.4).normalize();
             let r = 10.0 + self.bulge;
-            surface.mound = Some(Mound { from: e.point - e.normal * 6.0, to: e.point + dir * self.bulge, base_radius: r, tip_radius: r * 0.6 });
+            surface.mound = Some(Mound {
+                from: e.point - e.normal * 6.0,
+                to: e.point + dir * self.bulge,
+                base_radius: r,
+                tip_radius: r * 0.6,
+            });
         }
         Some(surface)
     }

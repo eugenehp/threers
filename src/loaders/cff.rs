@@ -173,11 +173,20 @@ pub(crate) struct Affine {
 }
 
 impl Affine {
-    pub(crate) const IDENTITY: Self =
-        Self { a: 1.0, b: 0.0, c: 0.0, d: 1.0, x: 0.0, y: 0.0 };
+    pub(crate) const IDENTITY: Self = Self {
+        a: 1.0,
+        b: 0.0,
+        c: 0.0,
+        d: 1.0,
+        x: 0.0,
+        y: 0.0,
+    };
 
     pub(crate) fn apply(self, px: f64, py: f64) -> (f64, f64) {
-        (self.a * px + self.c * py + self.x, self.b * px + self.d * py + self.y)
+        (
+            self.a * px + self.c * py + self.x,
+            self.b * px + self.d * py + self.y,
+        )
     }
 }
 
@@ -280,7 +289,13 @@ impl<'a> Index<'a> {
         };
         if count == 0 {
             // An empty INDEX is its count and no offset array at all.
-            return Some((Self { data, ..Self::default() }, at.checked_add(head)?));
+            return Some((
+                Self {
+                    data,
+                    ..Self::default()
+                },
+                at.checked_add(head)?,
+            ));
         }
         let off_size = usize::from(u8_at(data, at.checked_add(head)?)?);
         if off_size == 0 || off_size > 4 {
@@ -288,12 +303,25 @@ impl<'a> Index<'a> {
         }
         let offs = at.checked_add(head + 1)?;
         let base = offs.checked_add(count.checked_add(1)?.checked_mul(off_size)?)? - 1;
-        let last = uint_at(data, offs.checked_add(count.checked_mul(off_size)?)?, off_size)?;
+        let last = uint_at(
+            data,
+            offs.checked_add(count.checked_mul(off_size)?)?,
+            off_size,
+        )?;
         let end = base.checked_add(last as usize)?;
         if end > data.len() {
             return None;
         }
-        Some((Self { data, count, off_size, offs, base }, end))
+        Some((
+            Self {
+                data,
+                count,
+                off_size,
+                offs,
+                base,
+            },
+            end,
+        ))
     }
 
     fn get(&self, i: usize) -> Option<&'a [u8]> {
@@ -301,7 +329,11 @@ impl<'a> Index<'a> {
             return None;
         }
         let at = |k: usize| -> Option<usize> {
-            let o = uint_at(self.data, self.offs.checked_add(k.checked_mul(self.off_size)?)?, self.off_size)?;
+            let o = uint_at(
+                self.data,
+                self.offs.checked_add(k.checked_mul(self.off_size)?)?,
+                self.off_size,
+            )?;
             self.base.checked_add(o as usize)
         };
         let (a, b) = (at(i)?, at(i + 1)?);
@@ -430,7 +462,9 @@ fn real_at(d: &[u8], mut i: usize) -> (f64, usize) {
             }
         }
     }
-    let v = core::str::from_utf8(&buf[..n]).ok().and_then(|s| s.parse::<f64>().ok());
+    let v = core::str::from_utf8(&buf[..n])
+        .ok()
+        .and_then(|s| s.parse::<f64>().ok());
     (v.unwrap_or(0.0), i)
 }
 
@@ -620,8 +654,7 @@ impl<'a> Cff<'a> {
             fd_select: fds,
             xf: matrix.unwrap_or(Affine::IDENTITY),
             wide,
-            store: vstore
-                .and_then(|at| super::ttf_var::ItemVariationStore::new(data, at, coords)),
+            store: vstore.and_then(|at| super::ttf_var::ItemVariationStore::new(data, at, coords)),
             charset,
             std_stems: priv_at
                 .and_then(|(o, n)| private_stems(data, o, n))
@@ -650,7 +683,9 @@ impl<'a> Cff<'a> {
     /// On a CID-keyed font that is the Private DICT of the font DICT `FDSelect` names;
     /// on every other font it is the Top DICT's own, and `FDSelect` is absent.
     fn local(&self, glyph: GlyphId) -> Index<'a> {
-        let Some(fda) = self.fd_array else { return self.subrs };
+        let Some(fda) = self.fd_array else {
+            return self.subrs;
+        };
         // `FDSelect` is absent when every glyph shares one font DICT, which `CFF2` allows
         // and SF India uses. Falling back to the Top DICT's `Subrs` there finds nothing at
         // all: `CFF2` has no Top DICT `Private`.
@@ -658,7 +693,9 @@ impl<'a> Cff<'a> {
             Some(at) => fd_select(self.data, at, glyph).unwrap_or(0),
             None => 0,
         };
-        let Some(dict) = fda.get(usize::from(fd)) else { return self.subrs };
+        let Some(dict) = fda.get(usize::from(fd)) else {
+            return self.subrs;
+        };
         let mut priv_at = None;
         dict_scan(dict, |key, ops| {
             if let (18, [size, off, ..]) = (key, ops) {
@@ -683,7 +720,10 @@ impl<'a> Cff<'a> {
     /// bug, and the oracle in `swiftui-map/examples/cff_oracle` is what named it.
     /// Same type, same precomputed scalars, different table.
     fn region_scalars(&self, index: usize) -> Option<(usize, [f64; MAX_REGIONS])> {
-        let scalars = self.store.as_ref()?.region_scalars(u16::try_from(index).ok()?)?;
+        let scalars = self
+            .store
+            .as_ref()?
+            .region_scalars(u16::try_from(index).ok()?)?;
         if scalars.len() > MAX_REGIONS {
             return None;
         }
@@ -699,11 +739,7 @@ impl<'a> Cff<'a> {
     /// `None` if the charstring is missing, malformed, or uses an operator this does not
     /// implement — a wrong outline is worse than none, so an unknown operator stops the
     /// glyph rather than being skipped.
-    pub(crate) fn draw(
-        &self,
-        glyph: GlyphId,
-        sink: &mut dyn Outline,
-    ) -> Option<()> {
+    pub(crate) fn draw(&self, glyph: GlyphId, sink: &mut dyn Outline) -> Option<()> {
         let code = self.char_strings.get(usize::from(glyph.0))?;
         let mut run = Run {
             cff: self,
@@ -900,7 +936,9 @@ impl Run<'_, '_> {
                 251..=254 => {
                     let lo = *code.get(i)?;
                     i += 1;
-                    self.push(f64::from(-((i32::from(b) - 251) * 256) - i32::from(lo) - 108))?;
+                    self.push(f64::from(
+                        -((i32::from(b) - 251) * 256) - i32::from(lo) - 108,
+                    ))?;
                 }
                 // 16.16, and in a charstring rather than a DICT: the only place a
                 // non-integer coordinate can come from.
@@ -1015,7 +1053,8 @@ impl Run<'_, '_> {
                         k = 1;
                     }
                     while k + 4 <= self.n {
-                        let (a, b2, c, d) = (self.st[k], self.st[k + 1], self.st[k + 2], self.st[k + 3]);
+                        let (a, b2, c, d) =
+                            (self.st[k], self.st[k + 1], self.st[k + 2], self.st[k + 3]);
                         let (c1, c2, to) = if b == 26 {
                             let c1 = (self.x + off, self.y + a);
                             let c2 = (c1.0 + b2, c1.1 + c);
@@ -1038,7 +1077,8 @@ impl Run<'_, '_> {
                     let mut k = 0;
                     while self.n - k >= 4 {
                         let last = self.n - k == 5;
-                        let (a, b2, c, d) = (self.st[k], self.st[k + 1], self.st[k + 2], self.st[k + 3]);
+                        let (a, b2, c, d) =
+                            (self.st[k], self.st[k + 1], self.st[k + 2], self.st[k + 3]);
                         let e = if last { self.st[k + 4] } else { 0.0 };
                         let (c1, c2, to) = if horizontal {
                             let c1 = (self.x + a, self.y);

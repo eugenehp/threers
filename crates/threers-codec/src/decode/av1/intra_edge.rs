@@ -10,8 +10,10 @@ pub const EDGE_I420_TOP_HAS_RIGHT: u8 = 1 << 2;
 pub const EDGE_I444_LEFT_HAS_BOTTOM: u8 = 1 << 3;
 pub const EDGE_I422_LEFT_HAS_BOTTOM: u8 = 1 << 4;
 pub const EDGE_I420_LEFT_HAS_BOTTOM: u8 = 1 << 5;
-pub const EDGE_ALL_TOP_HAS_RIGHT: u8 = EDGE_I444_TOP_HAS_RIGHT | EDGE_I422_TOP_HAS_RIGHT | EDGE_I420_TOP_HAS_RIGHT;
-pub const EDGE_ALL_LEFT_HAS_BOTTOM: u8 = EDGE_I444_LEFT_HAS_BOTTOM | EDGE_I422_LEFT_HAS_BOTTOM | EDGE_I420_LEFT_HAS_BOTTOM;
+pub const EDGE_ALL_TOP_HAS_RIGHT: u8 =
+    EDGE_I444_TOP_HAS_RIGHT | EDGE_I422_TOP_HAS_RIGHT | EDGE_I420_TOP_HAS_RIGHT;
+pub const EDGE_ALL_LEFT_HAS_BOTTOM: u8 =
+    EDGE_I444_LEFT_HAS_BOTTOM | EDGE_I422_LEFT_HAS_BOTTOM | EDGE_I420_LEFT_HAS_BOTTOM;
 pub const EDGE_ALL_TR_AND_BL: u8 = EDGE_ALL_TOP_HAS_RIGHT | EDGE_ALL_LEFT_HAS_BOTTOM;
 
 #[derive(Clone, Copy, Default)]
@@ -39,10 +41,12 @@ fn init_edges(node: &mut EdgeNode, bl: usize, edge_flags: u8) {
     node.v[0] = edge_flags | EDGE_ALL_TOP_HAS_RIGHT;
     if bl == BL_8X8 {
         node.h[1] = edge_flags & (EDGE_ALL_LEFT_HAS_BOTTOM | EDGE_I420_TOP_HAS_RIGHT);
-        node.v[1] = edge_flags & (EDGE_ALL_TOP_HAS_RIGHT | EDGE_I420_LEFT_HAS_BOTTOM | EDGE_I422_LEFT_HAS_BOTTOM);
+        node.v[1] = edge_flags
+            & (EDGE_ALL_TOP_HAS_RIGHT | EDGE_I420_LEFT_HAS_BOTTOM | EDGE_I422_LEFT_HAS_BOTTOM);
         node.tip_split[0] = (edge_flags & EDGE_ALL_TOP_HAS_RIGHT) | EDGE_I422_LEFT_HAS_BOTTOM;
         node.tip_split[1] = edge_flags | EDGE_I444_TOP_HAS_RIGHT;
-        node.tip_split[2] = edge_flags & (EDGE_I420_TOP_HAS_RIGHT | EDGE_I420_LEFT_HAS_BOTTOM | EDGE_I422_LEFT_HAS_BOTTOM);
+        node.tip_split[2] = edge_flags
+            & (EDGE_I420_TOP_HAS_RIGHT | EDGE_I420_LEFT_HAS_BOTTOM | EDGE_I422_LEFT_HAS_BOTTOM);
     } else {
         node.h[1] = edge_flags & EDGE_ALL_LEFT_HAS_BOTTOM;
         node.v[1] = edge_flags & EDGE_ALL_TOP_HAS_RIGHT;
@@ -55,14 +59,27 @@ fn init_edges(node: &mut EdgeNode, bl: usize, edge_flags: u8) {
     }
 }
 
-fn init_mode_node(nodes: &mut Vec<EdgeNode>, bl: usize, top_has_right: bool, left_has_bottom: bool) -> usize {
+fn init_mode_node(
+    nodes: &mut Vec<EdgeNode>,
+    bl: usize,
+    top_has_right: bool,
+    left_has_bottom: bool,
+) -> usize {
     let idx = nodes.len();
     nodes.push(EdgeNode::default());
     let mut n0 = EdgeNode::default();
     init_edges(
         &mut n0,
         bl,
-        (if top_has_right { EDGE_ALL_TOP_HAS_RIGHT } else { 0 }) | (if left_has_bottom { EDGE_ALL_LEFT_HAS_BOTTOM } else { 0 }),
+        (if top_has_right {
+            EDGE_ALL_TOP_HAS_RIGHT
+        } else {
+            0
+        }) | (if left_has_bottom {
+            EDGE_ALL_LEFT_HAS_BOTTOM
+        } else {
+            0
+        }),
     );
     for n in 0..4 {
         let thr = !(n == 3 || (n == 1 && !top_has_right));
@@ -73,7 +90,8 @@ fn init_mode_node(nodes: &mut Vec<EdgeNode>, bl: usize, top_has_right: bool, lef
             init_edges(
                 &mut tip,
                 bl + 1,
-                (if thr { EDGE_ALL_TOP_HAS_RIGHT } else { 0 }) | (if lhb { EDGE_ALL_LEFT_HAS_BOTTOM } else { 0 }),
+                (if thr { EDGE_ALL_TOP_HAS_RIGHT } else { 0 })
+                    | (if lhb { EDGE_ALL_LEFT_HAS_BOTTOM } else { 0 }),
             );
             nodes.push(tip);
             t
@@ -91,6 +109,9 @@ pub fn tree() -> &'static EdgeTree {
         let mut nodes = Vec::new();
         let r128 = init_mode_node(&mut nodes, BL_128X128, true, false);
         let r64 = init_mode_node(&mut nodes, BL_64X64, true, false);
-        EdgeTree { nodes, root: [r128, r64] }
+        EdgeTree {
+            nodes,
+            root: [r128, r64],
+        }
     })
 }

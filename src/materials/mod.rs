@@ -25,7 +25,10 @@ mod toon;
 /// for every cube that is not a render target — and x mirrored
 /// (`flipEnvMap = −1`).
 pub(crate) fn env_lookup_rows(rotation: crate::math::Euler) -> [[f32; 4]; 3] {
-    let e = crate::math::Euler { x: -rotation.x, ..rotation };
+    let e = crate::math::Euler {
+        x: -rotation.x,
+        ..rotation
+    };
     let m = crate::math::Matrix4::from_quaternion(crate::math::Quaternion::from_euler(e)).elements;
     // Column-major: row r, column c is m[c * 4 + r]; column 0 takes the flip.
     std::array::from_fn(|r| [-m[r], m[4 + r], m[8 + r], 0.0])
@@ -36,7 +39,12 @@ pub(crate) fn env_lookup_rows(rotation: crate::math::Euler) -> [[f32; 4]; 3] {
 /// Euler with every axis negated, for the cube's left-handed frame, and no
 /// mirror (`WebGLMaterials.refreshUniformsCommon`).
 pub(crate) fn pmrem_lookup_rows(rotation: crate::math::Euler) -> [[f32; 4]; 3] {
-    let e = crate::math::Euler { x: -rotation.x, y: -rotation.y, z: -rotation.z, ..rotation };
+    let e = crate::math::Euler {
+        x: -rotation.x,
+        y: -rotation.y,
+        z: -rotation.z,
+        ..rotation
+    };
     let m = crate::math::Matrix4::from_quaternion(crate::math::Quaternion::from_euler(e)).elements;
     std::array::from_fn(|r| [m[r], m[4 + r], m[8 + r], 0.0])
 }
@@ -1066,8 +1074,14 @@ impl Material {
     /// `envMapIntensity` and `envMapRotation`.
     pub fn pbr_env(&self) -> Option<(&Arc<crate::textures::CubeTexture>, f32, crate::math::Euler)> {
         match self {
-            Material::Standard(m) => m.env_map.as_ref().map(|e| (e, m.env_map_intensity, m.env_map_rotation)),
-            Material::Physical(m) => m.env_map.as_ref().map(|e| (e, m.env_map_intensity, m.env_map_rotation)),
+            Material::Standard(m) => m
+                .env_map
+                .as_ref()
+                .map(|e| (e, m.env_map_intensity, m.env_map_rotation)),
+            Material::Physical(m) => m
+                .env_map
+                .as_ref()
+                .map(|e| (e, m.env_map_intensity, m.env_map_rotation)),
             _ => None,
         }
     }
@@ -1094,9 +1108,27 @@ impl Material {
             _ => (1.0, 1.0),
         };
         let env = match self {
-            Material::Basic(m) => Some((&m.env_map, m.combine, m.reflectivity, m.refraction_ratio, m.env_map_rotation)),
-            Material::Lambert(m) => Some((&m.env_map, m.combine, m.reflectivity, m.refraction_ratio, m.env_map_rotation)),
-            Material::Phong(m) => Some((&m.env_map, m.combine, m.reflectivity, m.refraction_ratio, m.env_map_rotation)),
+            Material::Basic(m) => Some((
+                &m.env_map,
+                m.combine,
+                m.reflectivity,
+                m.refraction_ratio,
+                m.env_map_rotation,
+            )),
+            Material::Lambert(m) => Some((
+                &m.env_map,
+                m.combine,
+                m.reflectivity,
+                m.refraction_ratio,
+                m.env_map_rotation,
+            )),
+            Material::Phong(m) => Some((
+                &m.env_map,
+                m.combine,
+                m.reflectivity,
+                m.refraction_ratio,
+                m.env_map_rotation,
+            )),
             _ => None,
         };
         let (params, rows) = match env {
@@ -1105,11 +1137,19 @@ impl Material {
                     .as_ref()
                     .is_some_and(|c| c.mapping == crate::textures::CubeMapping::Refraction);
                 (
-                    [combine as u32 as f32, reflectivity, ratio, refraction as u32 as f32],
+                    [
+                        combine as u32 as f32,
+                        reflectivity,
+                        ratio,
+                        refraction as u32 as f32,
+                    ],
                     env_lookup_rows(rotation),
                 )
             }
-            None => ([0.0, 1.0, 0.98, 0.0], env_lookup_rows(crate::math::Euler::default())),
+            None => (
+                [0.0, 1.0, 0.98, 0.0],
+                env_lookup_rows(crate::math::Euler::default()),
+            ),
         };
         let (thickness_min, cc_scale) = match self {
             Material::Physical(m) => (m.iridescence_thickness_range[0], m.clearcoat_normal_scale),
@@ -1270,20 +1310,41 @@ impl Material {
                 light_map: m.light_map.clone(),
                 bump_map: m.bump_map.clone(),
                 specular_map: m.specular_map.clone(),
-                ..lit_slots(&m.map, &m.emissive_map, &m.normal_map, &m.ao_map, &m.displacement_map, &m.alpha_map)
+                ..lit_slots(
+                    &m.map,
+                    &m.emissive_map,
+                    &m.normal_map,
+                    &m.ao_map,
+                    &m.displacement_map,
+                    &m.alpha_map,
+                )
             },
             Material::Phong(m) => MaterialTextureSlots {
                 env_map: m.env_map.clone(),
                 light_map: m.light_map.clone(),
                 bump_map: m.bump_map.clone(),
                 specular_map: m.specular_map.clone(),
-                ..lit_slots(&m.map, &m.emissive_map, &m.normal_map, &m.ao_map, &m.displacement_map, &m.alpha_map)
+                ..lit_slots(
+                    &m.map,
+                    &m.emissive_map,
+                    &m.normal_map,
+                    &m.ao_map,
+                    &m.displacement_map,
+                    &m.alpha_map,
+                )
             },
             Material::Toon(m) => MaterialTextureSlots {
                 gradient_map: m.gradient_map.clone(),
                 light_map: m.light_map.clone(),
                 bump_map: m.bump_map.clone(),
-                ..lit_slots(&m.map, &m.emissive_map, &m.normal_map, &m.ao_map, &m.displacement_map, &m.alpha_map)
+                ..lit_slots(
+                    &m.map,
+                    &m.emissive_map,
+                    &m.normal_map,
+                    &m.ao_map,
+                    &m.displacement_map,
+                    &m.alpha_map,
+                )
             },
             Material::Points(m) => MaterialTextureSlots {
                 map: m.map.clone(),

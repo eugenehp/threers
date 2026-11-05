@@ -407,7 +407,13 @@ pub fn mask_at(p: Vector3, i: usize, drups: &[Drupelet]) -> Mask {
 fn drupelet_shell(
     i: usize,
     drups: &[Drupelet],
-) -> (Vec<[f32; 3]>, Vec<[f32; 3]>, Vec<[f32; 2]>, Vec<[f32; 4]>, Vec<u32>) {
+) -> (
+    Vec<[f32; 3]>,
+    Vec<[f32; 3]>,
+    Vec<[f32; 2]>,
+    Vec<[f32; 4]>,
+    Vec<u32>,
+) {
     let d = drups[i];
     // A sac is not a ball: it is flattened against the receptacle and very
     // slightly egg-shaped, more so the closer it is to the apex.
@@ -546,7 +552,13 @@ pub fn build_skin(drups: &[Drupelet]) -> BufferGeometry {
 #[allow(clippy::type_complexity)]
 fn cavity_lining(
     drups: &[Drupelet],
-) -> (Vec<[f32; 3]>, Vec<[f32; 3]>, Vec<[f32; 2]>, Vec<[f32; 4]>, Vec<u32>) {
+) -> (
+    Vec<[f32; 3]>,
+    Vec<[f32; 3]>,
+    Vec<[f32; 2]>,
+    Vec<[f32; 4]>,
+    Vec<u32>,
+) {
     const NU: usize = 64;
     const NV: usize = 40;
     let mut pos = Vec::new();
@@ -562,7 +574,11 @@ fn cavity_lining(
             let fu = iu as f32 / NU as f32;
             let phi = fu * TAU;
             let r = BERRY_R * profile(v) - 0.13;
-            let p = v3(r.max(0.02) * phi.cos(), v * BERRY_H, r.max(0.02) * phi.sin());
+            let p = v3(
+                r.max(0.02) * phi.cos(),
+                v * BERRY_H,
+                r.max(0.02) * phi.sin(),
+            );
             // Inward-facing: this is seen from inside a crevice.
             let n = norm(mul(sub(p, berry_center()), -1.0));
             let near = nearest(p, drups);
@@ -876,9 +892,7 @@ fn main() {
         .expect("headless renderer");
     // Tone mapping is applied inside the materials, so the renderer must not
     // apply a second curve on the way out.
-    renderer
-        .renderer()
-        .set_tone_mapping(ToneMapping::None, 1.0);
+    renderer.renderer().set_tone_mapping(ToneMapping::None, 1.0);
     renderer.set_film_grade(0.55, 0.004);
 
     let frames = args.turntable.max(1);
@@ -945,8 +959,8 @@ pub fn build_scene(
         // The common block rides with the *vertex* source: the module is
         // assembled preamble, then vertex, then fragment, and WGSL wants a
         // function declared before it is called.
-        let mut sm = ShaderMaterial::new(STYLE_FRAGMENT)
-            .with_vertex(format!("{COMMON_WGSL}{STYLE_VERTEX}"));
+        let mut sm =
+            ShaderMaterial::new(STYLE_FRAGMENT).with_vertex(format!("{COMMON_WGSL}{STYLE_VERTEX}"));
         sm.data = vec![
             [args.exposure, 1.0, 1.0, 0.0],
             [0.0, BERRY_H * 0.42, 0.0, 0.0],
@@ -984,7 +998,18 @@ pub fn build_scene(
 fn backdrop_geometry() -> BufferGeometry {
     let (w, h, z) = (26.0f32, 20.0f32, -7.0f32);
     let pos = vec![
-        -w, -h * 0.35, z, w, -h * 0.35, z, w, h * 0.9, z, -w, h * 0.9, z,
+        -w,
+        -h * 0.35,
+        z,
+        w,
+        -h * 0.35,
+        z,
+        w,
+        h * 0.9,
+        z,
+        -w,
+        h * 0.9,
+        z,
     ];
     let nrm = vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0];
     let uv = vec![0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0];
@@ -1344,7 +1369,10 @@ fn skin_uniforms(args: &Args) -> Vec<[f32; 4]> {
 
 /// `RASPBERRY_DEBUG=diffuse|specular|sheen|glow|ao|dome|free|env|normal`
 fn debug_mode() -> f32 {
-    match std::env::var("RASPBERRY_DEBUG").unwrap_or_default().as_str() {
+    match std::env::var("RASPBERRY_DEBUG")
+        .unwrap_or_default()
+        .as_str()
+    {
         "diffuse" => 1.0,
         "specular" => 2.0,
         "sheen" => 3.0,

@@ -37,7 +37,12 @@ fn i16_at(b: &[u8], p: usize) -> Option<i16> {
     u16_at(b, p).map(|v| v as i16)
 }
 fn u32_at(b: &[u8], p: usize) -> Option<u32> {
-    Some(u32::from_be_bytes([*b.get(p)?, *b.get(p + 1)?, *b.get(p + 2)?, *b.get(p + 3)?]))
+    Some(u32::from_be_bytes([
+        *b.get(p)?,
+        *b.get(p + 1)?,
+        *b.get(p + 2)?,
+        *b.get(p + 3)?,
+    ]))
 }
 fn fixed_at(b: &[u8], p: usize) -> Option<f32> {
     u32_at(b, p).map(|v| v as i32 as f32 / 65536.0)
@@ -108,9 +113,15 @@ fn parse_names(bytes: &[u8], off: usize) -> std::collections::HashMap<u16, Strin
             continue;
         }
         let start = off + storage as usize + at as usize;
-        let Some(raw) = bytes.get(start..start + len as usize) else { continue };
-        let units: Vec<u16> = raw.chunks_exact(2).map(|c| u16::from_be_bytes([c[0], c[1]])).collect();
-        out.entry(id).or_insert_with(|| String::from_utf16_lossy(&units));
+        let Some(raw) = bytes.get(start..start + len as usize) else {
+            continue;
+        };
+        let units: Vec<u16> = raw
+            .chunks_exact(2)
+            .map(|c| u16::from_be_bytes([c[0], c[1]]))
+            .collect();
+        out.entry(id)
+            .or_insert_with(|| String::from_utf16_lossy(&units));
     }
     out
 }
@@ -123,7 +134,11 @@ fn parse_names(bytes: &[u8], off: usize) -> std::collections::HashMap<u16, Strin
 /// on its own scale, which CSS `400` and `700` must land on to look like the
 /// system's text. Elsewhere it is the weight itself, which is what `wght` is
 /// defined to be.
-pub fn wght_for_css_weight(axes: &[VariationAxis], instances: &[NamedInstance], weight: f32) -> Option<f32> {
+pub fn wght_for_css_weight(
+    axes: &[VariationAxis],
+    instances: &[NamedInstance],
+    weight: f32,
+) -> Option<f32> {
     let axis = axes.iter().position(|a| &a.tag == b"wght")?;
     let a = axes[axis];
     // CSS's names. Apple's SF calls its lightest "Ultralight" and the next
@@ -147,13 +162,23 @@ pub fn wght_for_css_weight(axes: &[VariationAxis], instances: &[NamedInstance], 
     let mut points: Vec<(f32, f32)> = instances
         .iter()
         .filter(|i| {
-            i.coords.iter().enumerate().all(|(k, &c)| k == axis || c == axes[k].default)
+            i.coords
+                .iter()
+                .enumerate()
+                .all(|(k, &c)| k == axis || c == axes[k].default)
         })
         .filter_map(|i| {
             // An italic family names them "Bold Italic", and its regular
             // just "Italic".
-            let name = i.name.trim_end_matches(" Italic").trim_end_matches(" Oblique");
-            let name = if matches!(name, "Italic" | "Oblique") { "Regular" } else { name };
+            let name = i
+                .name
+                .trim_end_matches(" Italic")
+                .trim_end_matches(" Oblique");
+            let name = if matches!(name, "Italic" | "Oblique") {
+                "Regular"
+            } else {
+                name
+            };
             let css = if name == "Black" {
                 900.0
             } else {
@@ -173,7 +198,10 @@ pub fn wght_for_css_weight(axes: &[VariationAxis], instances: &[NamedInstance], 
     let points = kept;
     let w = weight.clamp(1.0, 1000.0);
     let v = if points.len() >= 2 {
-        let i = points.windows(2).position(|s| w <= s[1].0).unwrap_or(points.len() - 2);
+        let i = points
+            .windows(2)
+            .position(|s| w <= s[1].0)
+            .unwrap_or(points.len() - 2);
         let (p, q) = (points[i], points[i + 1]);
         p.1 + (w - p.0) / (q.0 - p.0) * (q.1 - p.1)
     } else {
@@ -217,7 +245,9 @@ pub(crate) fn normalize(
 
 /// `avar` version 1: a piecewise-linear remap of each normalized axis.
 fn apply_avar(bytes: &[u8], off: usize, coords: &mut [f32]) {
-    let Some(axis_count) = u16_at(bytes, off + 6) else { return };
+    let Some(axis_count) = u16_at(bytes, off + 6) else {
+        return;
+    };
     let mut p = off + 8;
     for (a, c) in coords.iter_mut().enumerate() {
         if a >= axis_count as usize {
@@ -225,7 +255,12 @@ fn apply_avar(bytes: &[u8], off: usize, coords: &mut [f32]) {
         }
         let Some(n) = u16_at(bytes, p) else { return };
         let map: Option<Vec<(f32, f32)>> = (0..n as usize)
-            .map(|i| Some((f2dot14_at(bytes, p + 2 + 4 * i)?, f2dot14_at(bytes, p + 4 + 4 * i)?)))
+            .map(|i| {
+                Some((
+                    f2dot14_at(bytes, p + 2 + 4 * i)?,
+                    f2dot14_at(bytes, p + 4 + 4 * i)?,
+                ))
+            })
             .collect();
         p += 2 + 4 * n as usize;
         let Some(map) = map else { return };
@@ -235,7 +270,11 @@ fn apply_avar(bytes: &[u8], off: usize, coords: &mut [f32]) {
         let v = *c;
         if let Some(i) = map.windows(2).position(|w| v >= w[0].0 && v <= w[1].0) {
             let (a, b) = (map[i], map[i + 1]);
-            *c = if b.0 > a.0 { a.1 + (v - a.0) / (b.0 - a.0) * (b.1 - a.1) } else { a.1 };
+            *c = if b.0 > a.0 {
+                a.1 + (v - a.0) / (b.0 - a.0) * (b.1 - a.1)
+            } else {
+                a.1
+            };
         }
     }
 }
@@ -356,7 +395,12 @@ impl<'a> Gvar<'a> {
                     return None;
                 }
                 (0..self.axis_count)
-                    .map(|a| f2dot14_at(self.bytes, self.shared_tuples + 2 * (i * self.axis_count + a)))
+                    .map(|a| {
+                        f2dot14_at(
+                            self.bytes,
+                            self.shared_tuples + 2 * (i * self.axis_count + a),
+                        )
+                    })
                     .collect::<Option<Vec<_>>>()?
             };
             let intermediate = if index & 0x4000 != 0 {
@@ -546,13 +590,21 @@ fn interpolate_untouched(original: &[Vector2], ends: &[usize], d: &mut [Option<V
 }
 
 fn iup_axis(p: f32, a: f32, b: f32, da: f32, db: f32) -> f32 {
-    let (lo, hi, dlo, dhi) = if a <= b { (a, b, da, db) } else { (b, a, db, da) };
+    let (lo, hi, dlo, dhi) = if a <= b {
+        (a, b, da, db)
+    } else {
+        (b, a, db, da)
+    };
     if p <= lo {
         dlo
     } else if p >= hi {
         dhi
     } else if hi == lo {
-        if dlo == dhi { dlo } else { 0.0 }
+        if dlo == dhi {
+            dlo
+        } else {
+            0.0
+        }
     } else {
         dlo + (p - lo) / (hi - lo) * (dhi - dlo)
     }
@@ -581,11 +633,20 @@ impl<'a> ItemVariationStore<'a> {
             for a in 0..axis_count {
                 let p = regions + 4 + (r * axis_count + a) * 6;
                 let c = coords.get(a).copied().unwrap_or(0.0);
-                s *= axis_scalar(c, f2dot14_at(bytes, p)?, f2dot14_at(bytes, p + 2)?, f2dot14_at(bytes, p + 4)?);
+                s *= axis_scalar(
+                    c,
+                    f2dot14_at(bytes, p)?,
+                    f2dot14_at(bytes, p + 2)?,
+                    f2dot14_at(bytes, p + 4)?,
+                );
             }
             scalars.push(s);
         }
-        Some(Self { bytes, off, scalars })
+        Some(Self {
+            bytes,
+            off,
+            scalars,
+        })
     }
 
     /// The region scalars of subtable `outer`, in that subtable's own region order.
@@ -660,10 +721,19 @@ impl<'a> ItemVariationStore<'a> {
 }
 
 /// `HVAR`'s advance-width delta for each glyph, in font units.
-pub(crate) fn hvar_advance_deltas(bytes: &[u8], off: usize, coords: &[f32], n_glyphs: usize) -> Option<Vec<f32>> {
+pub(crate) fn hvar_advance_deltas(
+    bytes: &[u8],
+    off: usize,
+    coords: &[f32],
+    n_glyphs: usize,
+) -> Option<Vec<f32>> {
     let store = ItemVariationStore::new(bytes, off + u32_at(bytes, off + 4)? as usize, coords)?;
     let map_off = u32_at(bytes, off + 8)? as usize;
-    let map = if map_off == 0 { None } else { Some(off + map_off) };
+    let map = if map_off == 0 {
+        None
+    } else {
+        Some(off + map_off)
+    };
     let mut out = Vec::with_capacity(n_glyphs);
     for gid in 0..n_glyphs {
         let (outer, inner) = match map {
@@ -695,7 +765,10 @@ fn delta_set_index(b: &[u8], off: usize, i: usize) -> Option<(u16, u16)> {
     for k in 0..size {
         v = (v << 8) | *b.get(p + k)? as u32;
     }
-    Some(((v >> inner_bits) as u16, (v & ((1 << inner_bits) - 1)) as u16))
+    Some((
+        (v >> inner_bits) as u16,
+        (v & ((1 << inner_bits) - 1)) as u16,
+    ))
 }
 
 #[cfg(test)]
@@ -770,7 +843,11 @@ mod tests {
     /// One touched point moves its whole contour; none leaves it alone.
     #[test]
     fn a_single_touched_point_shifts_its_contour() {
-        let o = [Vector2::new(0.0, 0.0), Vector2::new(1.0, 0.0), Vector2::new(5.0, 5.0)];
+        let o = [
+            Vector2::new(0.0, 0.0),
+            Vector2::new(1.0, 0.0),
+            Vector2::new(5.0, 5.0),
+        ];
         let mut d = vec![None, Some(Vector2::new(3.0, -2.0)), None];
         interpolate_untouched(&o, &[2], &mut d);
         assert!(d.iter().all(|v| *v == Some(Vector2::new(3.0, -2.0))));

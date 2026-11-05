@@ -15,7 +15,8 @@ fn main() {
     let mut frames = std::collections::BTreeMap::new();
     for s in &track.samples {
         let bytes = &data[s.offset as usize..s.offset as usize + s.size as usize];
-        dec.push(bytes, s.pts, s.dts, s.duration as i64).expect("decode");
+        dec.push(bytes, s.pts, s.dts, s.duration as i64)
+            .expect("decode");
         if let Some(f) = dec.take_frame(s.pts) {
             frames.insert(s.pts, f);
         }
@@ -32,6 +33,11 @@ fn main() {
         }
         n += 1;
     }
-    eprintln!("{n} frames of {} samples, {}x{}", track.samples.len(), track.width, track.height);
+    eprintln!(
+        "{n} frames of {} samples, {}x{}",
+        track.samples.len(),
+        track.width,
+        track.height
+    );
     std::fs::write(&a[2], out).expect("write");
 }

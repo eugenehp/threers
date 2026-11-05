@@ -160,7 +160,13 @@ pub(crate) struct Cuvid {
     create_decoder: unsafe extern "C" fn(*mut CuvidDecoder, *mut CreateInfo) -> CuResult,
     destroy_decoder: unsafe extern "C" fn(CuvidDecoder) -> CuResult,
     decode_picture: unsafe extern "C" fn(CuvidDecoder, *mut c_void) -> CuResult,
-    map: unsafe extern "C" fn(CuvidDecoder, c_int, *mut u64, *mut c_uint, *mut ProcParams) -> CuResult,
+    map: unsafe extern "C" fn(
+        CuvidDecoder,
+        c_int,
+        *mut u64,
+        *mut c_uint,
+        *mut ProcParams,
+    ) -> CuResult,
     unmap: unsafe extern "C" fn(CuvidDecoder, u64) -> CuResult,
 }
 
@@ -219,7 +225,10 @@ impl State {
         let mut proc: ProcParams = std::mem::zeroed();
         proc.progressive_frame = 1;
         let (mut dptr, mut pitch) = (0u64, 0u32);
-        check("cuvidMapVideoFrame", (self.cuvid.map)(self.decoder, index, &mut dptr, &mut pitch, &mut proc))?;
+        check(
+            "cuvidMapVideoFrame",
+            (self.cuvid.map)(self.decoder, index, &mut dptr, &mut pitch, &mut proc),
+        )?;
         let [left, top, right, bottom] = fmt.display_area;
         let (w, h) = ((right - left) as usize, (bottom - top) as usize);
         let deep = fmt.bit_depth_luma_minus8 > 0;
@@ -242,9 +251,24 @@ impl State {
             m.height = rows;
             check("cuMemcpy2D", (cuda.memcpy_2d)(&m))
         };
-        let r = copy(dptr, left as usize * bps, top as usize, &mut luma, w * bps, h).and_then(|_| {
+        let r = copy(
+            dptr,
+            left as usize * bps,
+            top as usize,
+            &mut luma,
+            w * bps,
+            h,
+        )
+        .and_then(|_| {
             let uv = dptr + (pitch * ((surface_h + 1) & !1)) as u64;
-            copy(uv, (left as usize & !1) * bps, top as usize / 2, &mut chroma, w.div_ceil(2) * 2 * bps, h.div_ceil(2))
+            copy(
+                uv,
+                (left as usize & !1) * bps,
+                top as usize / 2,
+                &mut chroma,
+                w.div_ceil(2) * 2 * bps,
+                h.div_ceil(2),
+            )
         });
         (self.cuvid.unmap)(self.decoder, dptr);
         r?;
@@ -294,7 +318,10 @@ unsafe extern "C" fn on_sequence(user: *mut c_void, fmt: *mut VideoFormat) -> c_
     let s = &mut *(user as *mut State);
     let f = *fmt;
     if f.chroma_format != CHROMA_420 {
-        return s.fail(format!("NVDEC path handles 4:2:0 only (chroma format {})", f.chroma_format));
+        return s.fail(format!(
+            "NVDEC path handles 4:2:0 only (chroma format {})",
+            f.chroma_format
+        ));
     }
     let surfaces = (f.min_num_decode_surfaces as c_ulong).max(1) + 4;
     if !s.decoder.is_null() {
@@ -311,7 +338,11 @@ unsafe extern "C" fn on_sequence(user: *mut c_void, fmt: *mut VideoFormat) -> c_
     ci.chroma_format = f.chroma_format;
     ci.creation_flags = CREATE_PREFER_CUVID;
     ci.bit_depth_minus8 = f.bit_depth_luma_minus8 as c_ulong;
-    ci.output_format = if f.bit_depth_luma_minus8 > 0 { SURFACE_P016 } else { SURFACE_NV12 };
+    ci.output_format = if f.bit_depth_luma_minus8 > 0 {
+        SURFACE_P016
+    } else {
+        SURFACE_NV12
+    };
     // Copies cover the display area themselves; the output surface is the
     // whole coded picture so the offsets mean the same on every driver.
     ci.display_area = [0, 0, f.coded_width as c_short, f.coded_height as c_short];
@@ -320,7 +351,10 @@ unsafe extern "C" fn on_sequence(user: *mut c_void, fmt: *mut VideoFormat) -> c_
     ci.num_output_surfaces = 2;
     let r = (s.cuvid.create_decoder)(&mut s.decoder, &mut ci);
     if r != 0 {
-        return s.fail(format!("cuvidCreateDecoder failed (CUDA error {r}): {}x{} codec {}", f.coded_width, f.coded_height, f.codec));
+        return s.fail(format!(
+            "cuvidCreateDecoder failed (CUDA error {r}): {}x{} codec {}",
+            f.coded_width, f.coded_height, f.codec
+        ));
     }
     s.format = Some(f);
     surfaces as c_int
@@ -338,7 +372,9 @@ unsafe extern "C" fn on_decode(user: *mut c_void, pic: *mut c_void) -> c_int {
     if s.on_display {
         return 1;
     }
-    let index = *(pic as *const u8).add(PICPARAMS_CURR_PIC_IDX).cast::<c_int>();
+    let index = *(pic as *const u8)
+        .add(PICPARAMS_CURR_PIC_IDX)
+        .cast::<c_int>();
     s.picture(index)
 }
 
@@ -387,7 +423,15 @@ impl NvdecDecoder {
             TrackCodec::Vp9 => (CODEC_VP9, 0, None),
             // `av1C`: four bytes of header, then the configuration OBUs
             // (normally the sequence header).
-            TrackCodec::Av1 => (CODEC_AV1, 0, track.config.get(4..).filter(|o| !o.is_empty()).map(<[u8]>::to_vec)),
+            TrackCodec::Av1 => (
+                CODEC_AV1,
+                0,
+                track
+                    .config
+                    .get(4..)
+                    .filter(|o| !o.is_empty())
+                    .map(<[u8]>::to_vec),
+            ),
         };
         let mut state = Box::new(State {
             cuvid,
@@ -409,7 +453,11 @@ impl NvdecDecoder {
         params.decode = Some(on_decode);
         params.display = Some(on_display);
         let mut parser = std::ptr::null_mut();
-        ctx.with(|| check("cuvidCreateVideoParser", unsafe { (cuvid.create_parser)(&mut parser, &mut params) }))?;
+        ctx.with(|| {
+            check("cuvidCreateVideoParser", unsafe {
+                (cuvid.create_parser)(&mut parser, &mut params)
+            })
+        })?;
         Ok(NvdecDecoder {
             parser,
             state,
@@ -431,7 +479,13 @@ impl NvdecDecoder {
     /// Hand one coded frame to the decoder, in decode order: an MP4 sample
     /// (length-prefixed NAL units), a VP9 frame or superframe, or an AV1
     /// temporal unit. Its picture is copied to the host before this returns.
-    pub fn push(&mut self, sample: &[u8], pts: i64, _dts: i64, _duration: i64) -> Result<(), String> {
+    pub fn push(
+        &mut self,
+        sample: &[u8],
+        pts: i64,
+        _dts: i64,
+        _duration: i64,
+    ) -> Result<(), String> {
         self.buf.clear();
         if let Some(p) = self.prefix.take() {
             self.buf.extend_from_slice(&p);

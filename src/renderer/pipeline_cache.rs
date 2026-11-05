@@ -187,7 +187,11 @@ impl PipelineCache {
     /// The cache `store` holds for this adapter, empty if it holds none.
     /// `None` when the device was opened without `Features::PIPELINE_CACHE`
     /// or the backend has no pipeline cache (everything but Vulkan).
-    pub fn open(device: &wgpu::Device, adapter: &wgpu::AdapterInfo, store: impl PipelineCacheStore + 'static) -> Option<Self> {
+    pub fn open(
+        device: &wgpu::Device,
+        adapter: &wgpu::AdapterInfo,
+        store: impl PipelineCacheStore + 'static,
+    ) -> Option<Self> {
         if !device.features().contains(wgpu::Features::PIPELINE_CACHE) {
             return None;
         }
@@ -204,11 +208,19 @@ impl PipelineCache {
                 fallback: true,
             })
         };
-        Some(Self { cache, key, store: Arc::new(store) })
+        Some(Self {
+            cache,
+            key,
+            store: Arc::new(store),
+        })
     }
 
     /// [`open`](Self::open) on a directory: one file per adapter in `dir`.
-    pub fn in_dir(device: &wgpu::Device, adapter: &wgpu::AdapterInfo, dir: impl Into<PathBuf>) -> Option<Self> {
+    pub fn in_dir(
+        device: &wgpu::Device,
+        adapter: &wgpu::AdapterInfo,
+        dir: impl Into<PathBuf>,
+    ) -> Option<Self> {
         Self::open(device, adapter, dir.into())
     }
 
@@ -221,7 +233,11 @@ impl PipelineCache {
     /// [`open`](Self::open) in memory, starting from `bytes` — what an
     /// earlier [`data`](Self::data) returned, kept wherever the app keeps
     /// things. Stale or foreign bytes are dropped, not trusted.
-    pub fn from_bytes(device: &wgpu::Device, adapter: &wgpu::AdapterInfo, bytes: Option<&[u8]>) -> Option<Self> {
+    pub fn from_bytes(
+        device: &wgpu::Device,
+        adapter: &wgpu::AdapterInfo,
+        bytes: Option<&[u8]>,
+    ) -> Option<Self> {
         let store = MemoryStore::new();
         if let (Some(bytes), Some(key)) = (bytes, wgpu::util::pipeline_cache_key(adapter)) {
             store.set(key, bytes.to_vec());
@@ -257,7 +273,9 @@ impl PipelineCache {
 
 impl std::fmt::Debug for PipelineCache {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PipelineCache").field("key", &self.key).finish_non_exhaustive()
+        f.debug_struct("PipelineCache")
+            .field("key", &self.key)
+            .finish_non_exhaustive()
     }
 }
 
@@ -322,14 +340,20 @@ mod tests {
         dir.save("k", b"one").unwrap();
         dir.save("k", b"two").unwrap();
         assert_eq!(dir.load("k").as_deref(), Some(&b"two"[..]));
-        let names: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name()).collect();
+        let names: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
         assert_eq!(names, ["k"]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn a_file_store_ignores_the_key() {
-        let path = std::env::temp_dir().join(format!("threers-store-{}/nested/cache.bin", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "threers-store-{}/nested/cache.bin",
+            std::process::id()
+        ));
         let store = FileStore(path.clone());
         store.save("a", b"bytes").unwrap();
         assert_eq!(store.load("b").as_deref(), Some(&b"bytes"[..]));

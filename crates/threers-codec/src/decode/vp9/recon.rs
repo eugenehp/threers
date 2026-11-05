@@ -10,10 +10,22 @@ const MODE_CONV: [[[usize; 2]; 2]; 10] = [
     [[DC_127_PRED, VERT_PRED], [DC_127_PRED, VERT_PRED]],
     [[DC_129_PRED, DC_129_PRED], [HOR_PRED, HOR_PRED]],
     [[DC_128_PRED, TOP_DC_PRED], [LEFT_DC_PRED, DC_PRED]],
-    [[DC_127_PRED, DIAG_DOWN_LEFT_PRED], [DC_127_PRED, DIAG_DOWN_LEFT_PRED]],
-    [[DIAG_DOWN_RIGHT_PRED, DIAG_DOWN_RIGHT_PRED], [DIAG_DOWN_RIGHT_PRED, DIAG_DOWN_RIGHT_PRED]],
-    [[VERT_RIGHT_PRED, VERT_RIGHT_PRED], [VERT_RIGHT_PRED, VERT_RIGHT_PRED]],
-    [[HOR_DOWN_PRED, HOR_DOWN_PRED], [HOR_DOWN_PRED, HOR_DOWN_PRED]],
+    [
+        [DC_127_PRED, DIAG_DOWN_LEFT_PRED],
+        [DC_127_PRED, DIAG_DOWN_LEFT_PRED],
+    ],
+    [
+        [DIAG_DOWN_RIGHT_PRED, DIAG_DOWN_RIGHT_PRED],
+        [DIAG_DOWN_RIGHT_PRED, DIAG_DOWN_RIGHT_PRED],
+    ],
+    [
+        [VERT_RIGHT_PRED, VERT_RIGHT_PRED],
+        [VERT_RIGHT_PRED, VERT_RIGHT_PRED],
+    ],
+    [
+        [HOR_DOWN_PRED, HOR_DOWN_PRED],
+        [HOR_DOWN_PRED, HOR_DOWN_PRED],
+    ],
     [[DC_127_PRED, VERT_LEFT_PRED], [DC_127_PRED, VERT_LEFT_PRED]],
     [[DC_129_PRED, DC_129_PRED], [HOR_UP_PRED, HOR_UP_PRED]],
     [[DC_129_PRED, VERT_PRED], [HOR_PRED, TM_VP8_PRED]],
@@ -48,7 +60,10 @@ fn rounded_div(a: i32, b: i32) -> i32 {
 }
 
 fn avg2(a: Mv, b: Mv) -> Mv {
-    Mv { x: rounded_div(a.x as i32 + b.x as i32, 2) as i16, y: rounded_div(a.y as i32 + b.y as i32, 2) as i16 }
+    Mv {
+        x: rounded_div(a.x as i32 + b.x as i32, 2) as i16,
+        y: rounded_div(a.y as i32 + b.y as i32, 2) as i16,
+    }
 }
 
 fn avg4(a: Mv, b: Mv, c: Mv, d: Mv) -> Mv {
@@ -63,8 +78,22 @@ impl FrameDec<'_> {
     /// `(px, py)` (samples) of plane `p`. `x`, `y` are its 4×4 position in
     /// the block, `w` the block width in 4×4 units.
     #[allow(clippy::too_many_arguments)]
-    fn intra_block(&mut self, mode: usize, p: usize, px: usize, py: usize, x: usize, y: usize, w: usize, tx: u8) {
-        let (ss_h, ss_v) = if p == 0 { (0, 0) } else { (self.ss_h, self.ss_v) };
+    fn intra_block(
+        &mut self,
+        mode: usize,
+        p: usize,
+        px: usize,
+        py: usize,
+        x: usize,
+        y: usize,
+        w: usize,
+        tx: u8,
+    ) {
+        let (ss_h, ss_v) = if p == 0 {
+            (0, 0)
+        } else {
+            (self.ss_h, self.ss_v)
+        };
         let (row, col) = (self.row, self.col);
         let bpp = self.bpp;
         let have_top = row > 0 || y > 0;
@@ -80,10 +109,19 @@ impl FrameDec<'_> {
         let mut left = [0i32; 32];
         if needs_top {
             let n_px_need = n;
-            let n_px_have = ((((self.cols - col) << (1 - ss_h)) as isize - x as isize) * 4).max(0) as usize;
-            let n_px_need_tr = if tx == TX_4X4 && needs_topright && have_right { 4 } else { 0 };
+            let n_px_have =
+                ((((self.cols - col) << (1 - ss_h)) as isize - x as isize) * 4).max(0) as usize;
+            let n_px_need_tr = if tx == TX_4X4 && needs_topright && have_right {
+                4
+            } else {
+                0
+            };
             let at = |xx: usize| plane.data[(py - 1) * stride + xx] as i32;
-            if have_top && (!needs_topleft || have_left) && (tx != TX_4X4 || !needs_topright || have_right) && n_px_need + n_px_need_tr <= n_px_have {
+            if have_top
+                && (!needs_topleft || have_left)
+                && (tx != TX_4X4 || !needs_topright || have_right)
+                && n_px_need + n_px_need_tr <= n_px_have
+            {
                 // ffmpeg reads the row above in place (`*a = top`).
                 for i in 0..n + n_px_need_tr {
                     top[1 + i] = at(px + i);
@@ -118,7 +156,11 @@ impl FrameDec<'_> {
                     }
                 }
                 if needs_topleft {
-                    top[0] = if have_left && have_top { at(px - 1) } else { base + if have_top { 1 } else { -1 } };
+                    top[0] = if have_left && have_top {
+                        at(px - 1)
+                    } else {
+                        base + if have_top { 1 } else { -1 }
+                    };
                 }
                 if tx == TX_4X4 && needs_topright {
                     if have_top && have_right && n_px_need + n_px_need_tr <= n_px_have {
@@ -136,7 +178,8 @@ impl FrameDec<'_> {
         if needs_left {
             if have_left {
                 let n_px_need = n;
-                let n_px_have = ((((self.rows - row) << (1 - ss_v)) as isize - y as isize) * 4).max(0) as usize;
+                let n_px_have =
+                    ((((self.rows - row) << (1 - ss_v)) as isize - y as isize) * 4).max(0) as usize;
                 let lv = |i: usize| plane.data[(py + i) * stride + px - 1] as i32;
                 if invert_left {
                     let k = n_px_need.min(n_px_have);
@@ -167,7 +210,16 @@ impl FrameDec<'_> {
         }
         let plane = &mut self.cur.planes[p];
         let stride = plane.width;
-        dsp::intra_pred(tx, mode, &mut plane.data, py * stride + px, stride, &left, &top, bpp);
+        dsp::intra_pred(
+            tx,
+            mode,
+            &mut plane.data,
+            py * stride + px,
+            stride,
+            &left,
+            &top,
+            bpp,
+        );
     }
 
     /// `intra_recon`.
@@ -190,7 +242,11 @@ impl FrameDec<'_> {
         while y < end_y {
             let mut x = 0;
             while x < end_x {
-                let mode = b.mode[if b.bs > BS_8X8 && b.tx == TX_4X4 { y * 2 + x } else { 0 }] as usize;
+                let mode = b.mode[if b.bs > BS_8X8 && b.tx == TX_4X4 {
+                    y * 2 + x
+                } else {
+                    0
+                }] as usize;
                 let txtp = INTRA_TXFM_TYPE[mode] as usize;
                 let eob = if b.skip { 0 } else { self.eob[n] as usize };
                 let (px, py) = (x0 + 4 * x, y0 + 4 * y);
@@ -198,7 +254,16 @@ impl FrameDec<'_> {
                 if eob != 0 {
                     let pl = &mut self.cur.planes[0];
                     let stride = pl.width;
-                    dsp::itxfm_add(tx, txtp, &mut pl.data, py * stride + px, stride, &mut self.block[16 * n..], eob, bpp);
+                    dsp::itxfm_add(
+                        tx,
+                        txtp,
+                        &mut pl.data,
+                        py * stride + px,
+                        stride,
+                        &mut self.block[16 * n..],
+                        eob,
+                        bpp,
+                    );
                 }
                 x += step1d;
                 n += step;
@@ -224,7 +289,16 @@ impl FrameDec<'_> {
                     if eob != 0 {
                         let pl = &mut self.cur.planes[1 + p];
                         let stride = pl.width;
-                        dsp::itxfm_add(uvtx, DCT_DCT, &mut pl.data, py * stride + px, stride, &mut self.uvblock[p][16 * n..], eob, bpp);
+                        dsp::itxfm_add(
+                            uvtx,
+                            DCT_DCT,
+                            &mut pl.data,
+                            py * stride + px,
+                            stride,
+                            &mut self.uvblock[p][16 * n..],
+                            eob,
+                            bpp,
+                        );
                     }
                     x += uvstep1d;
                     n += uvstep;
@@ -238,7 +312,20 @@ impl FrameDec<'_> {
     /// is the block's sample position, `(px, py, pw, ph)` its sub-block
     /// offset and the whole block size (for the scaled MV clamp).
     #[allow(clippy::too_many_arguments)]
-    fn mc_luma(&mut self, refi: usize, x: usize, y: usize, mv: Mv, px: i32, py: i32, pw: i32, ph: i32, bw: usize, bh: usize, avg: bool) {
+    fn mc_luma(
+        &mut self,
+        refi: usize,
+        x: usize,
+        y: usize,
+        mv: Mv,
+        px: i32,
+        py: i32,
+        pw: i32,
+        ph: i32,
+        bw: usize,
+        bh: usize,
+        avg: bool,
+    ) {
         let rf = self.refs[self.b.r#ref[refi] as usize].clone().unwrap();
         let (w, h) = (rf.width as usize, rf.height as usize);
         let filter = self.b.filter;
@@ -253,14 +340,42 @@ impl FrameDec<'_> {
             let yy = y as isize + (my >> 3) as isize;
             let xx = x as isize + (mx >> 3) as isize;
             let (mx, my) = ((mx & 7) << 1, (my & 7) << 1);
-            dsp::fetch(&rf.planes[0], xx - 3, yy - 3, bw + 8, bh + 8, w, h, &mut win);
-            dsp::mc_put(&mut dst.data, doff, dstride, &win, bw + 8, bw, bh, filter, mx, my, avg, bpp);
+            dsp::fetch(
+                &rf.planes[0],
+                xx - 3,
+                yy - 3,
+                bw + 8,
+                bh + 8,
+                w,
+                h,
+                &mut win,
+            );
+            dsp::mc_put(
+                &mut dst.data,
+                doff,
+                dstride,
+                &win,
+                bw + 8,
+                bw,
+                bh,
+                filter,
+                mx,
+                my,
+                avg,
+                bpp,
+            );
         } else {
             let step = self.mvstep[self.b.r#ref[refi] as usize];
             let sm = |n: i64, d: usize| ((n * scale[d] as i64) >> 14) as i32;
             let (x, y) = (x as i32, y as i32);
-            let mvx = (mv.x as i32).clamp(-(x + pw - px + 4) * 8, (self.cols as i32 * 8 - x + px + 3) * 8);
-            let mvy = (mv.y as i32).clamp(-(y + ph - py + 4) * 8, (self.rows as i32 * 8 - y + py + 3) * 8);
+            let mvx = (mv.x as i32).clamp(
+                -(x + pw - px + 4) * 8,
+                (self.cols as i32 * 8 - x + px + 3) * 8,
+            );
+            let mvy = (mv.y as i32).clamp(
+                -(y + ph - py + 4) * 8,
+                (self.rows as i32 * 8 - y + py + 3) * 8,
+            );
             // BUG (libvpx-compatible): the components scale separately.
             let mx = sm(mvx as i64 * 2, 0) + sm(x as i64 * 16, 0);
             let my = sm(mvy as i64 * 2, 1) + sm(y as i64 * 16, 1);
@@ -268,8 +383,32 @@ impl FrameDec<'_> {
             let (mx, my) = (mx & 15, my & 15);
             let refbw_m1 = (((bw as i32 - 1) * step[0] as i32 + mx) >> 4) as usize;
             let refbh_m1 = (((bh as i32 - 1) * step[1] as i32 + my) >> 4) as usize;
-            dsp::fetch(&rf.planes[0], xx as isize - 3, yy as isize - 3, refbw_m1 + 8, refbh_m1 + 8, w, h, &mut win);
-            dsp::mc_scaled(&mut dst.data, doff, dstride, &win, refbw_m1 + 8, bw, bh, filter, mx, my, step[0] as i32, step[1] as i32, avg, bpp);
+            dsp::fetch(
+                &rf.planes[0],
+                xx as isize - 3,
+                yy as isize - 3,
+                refbw_m1 + 8,
+                refbh_m1 + 8,
+                w,
+                h,
+                &mut win,
+            );
+            dsp::mc_scaled(
+                &mut dst.data,
+                doff,
+                dstride,
+                &win,
+                refbw_m1 + 8,
+                bw,
+                bh,
+                filter,
+                mx,
+                my,
+                step[0] as i32,
+                step[1] as i32,
+                avg,
+                bpp,
+            );
         }
     }
 
@@ -277,7 +416,20 @@ impl FrameDec<'_> {
     /// `mc_chroma_scaled`. `(x, y)` in chroma samples; `w`, `h` the
     /// reference's chroma size.
     #[allow(clippy::too_many_arguments)]
-    fn mc_chroma(&mut self, refi: usize, x: usize, y: usize, mv: Mv, px: i32, py: i32, pw: i32, ph: i32, bw: usize, bh: usize, avg: bool) {
+    fn mc_chroma(
+        &mut self,
+        refi: usize,
+        x: usize,
+        y: usize,
+        mv: Mv,
+        px: i32,
+        py: i32,
+        pw: i32,
+        ph: i32,
+        bw: usize,
+        bh: usize,
+        avg: bool,
+    ) {
         let rf = self.refs[self.b.r#ref[refi] as usize].clone().unwrap();
         let (ss_h, ss_v) = (self.ss_h, self.ss_v);
         let w = ((rf.width as usize) + ss_h) >> ss_h;
@@ -293,10 +445,32 @@ impl FrameDec<'_> {
             let xx = x as isize + (mx >> 4) as isize;
             let (mx, my) = (mx & 15, my & 15);
             for p in 1..3 {
-                dsp::fetch(&rf.planes[p], xx - 3, yy - 3, bw + 8, bh + 8, w, h, &mut win);
+                dsp::fetch(
+                    &rf.planes[p],
+                    xx - 3,
+                    yy - 3,
+                    bw + 8,
+                    bh + 8,
+                    w,
+                    h,
+                    &mut win,
+                );
                 let dst = &mut self.cur.planes[p];
                 let dstride = dst.width;
-                dsp::mc_put(&mut dst.data, y * dstride + x, dstride, &win, bw + 8, bw, bh, filter, mx, my, avg, bpp);
+                dsp::mc_put(
+                    &mut dst.data,
+                    y * dstride + x,
+                    dstride,
+                    &win,
+                    bw + 8,
+                    bw,
+                    bh,
+                    filter,
+                    mx,
+                    my,
+                    avg,
+                    bpp,
+                );
             }
         } else {
             let step = self.mvstep[self.b.r#ref[refi] as usize];
@@ -304,17 +478,29 @@ impl FrameDec<'_> {
             let (x, y) = (x as i32, y as i32);
             let mx = if ss_h != 0 {
                 // BUG (libvpx-compatible, webm issue 820).
-                let mvx = (mv.x as i32).clamp(-(x + pw - px + 4) * 16, (self.cols as i32 * 4 - x + px + 3) * 16);
+                let mvx = (mv.x as i32).clamp(
+                    -(x + pw - px + 4) * 16,
+                    (self.cols as i32 * 4 - x + px + 3) * 16,
+                );
                 sm(mvx as i64, 0) + (sm(x as i64 * 16, 0) & !15) + (sm(x as i64 * 32, 0) & 15)
             } else {
-                let mvx = (mv.x as i32).clamp(-(x + pw - px + 4) * 8, (self.cols as i32 * 8 - x + px + 3) * 8);
+                let mvx = (mv.x as i32).clamp(
+                    -(x + pw - px + 4) * 8,
+                    (self.cols as i32 * 8 - x + px + 3) * 8,
+                );
                 sm(mvx as i64 * 2, 0) + sm(x as i64 * 16, 0)
             };
             let my = if ss_v != 0 {
-                let mvy = (mv.y as i32).clamp(-(y + ph - py + 4) * 16, (self.rows as i32 * 4 - y + py + 3) * 16);
+                let mvy = (mv.y as i32).clamp(
+                    -(y + ph - py + 4) * 16,
+                    (self.rows as i32 * 4 - y + py + 3) * 16,
+                );
                 sm(mvy as i64, 1) + (sm(y as i64 * 16, 1) & !15) + (sm(y as i64 * 32, 1) & 15)
             } else {
-                let mvy = (mv.y as i32).clamp(-(y + ph - py + 4) * 8, (self.rows as i32 * 8 - y + py + 3) * 8);
+                let mvy = (mv.y as i32).clamp(
+                    -(y + ph - py + 4) * 8,
+                    (self.rows as i32 * 8 - y + py + 3) * 8,
+                );
                 sm(mvy as i64 * 2, 1) + sm(y as i64 * 16, 1)
             };
             let (xx, yy) = (mx >> 4, my >> 4);
@@ -322,10 +508,34 @@ impl FrameDec<'_> {
             let refbw_m1 = (((bw as i32 - 1) * step[0] as i32 + mx) >> 4) as usize;
             let refbh_m1 = (((bh as i32 - 1) * step[1] as i32 + my) >> 4) as usize;
             for p in 1..3 {
-                dsp::fetch(&rf.planes[p], xx as isize - 3, yy as isize - 3, refbw_m1 + 8, refbh_m1 + 8, w, h, &mut win);
+                dsp::fetch(
+                    &rf.planes[p],
+                    xx as isize - 3,
+                    yy as isize - 3,
+                    refbw_m1 + 8,
+                    refbh_m1 + 8,
+                    w,
+                    h,
+                    &mut win,
+                );
                 let dst = &mut self.cur.planes[p];
                 let dstride = dst.width;
-                dsp::mc_scaled(&mut dst.data, y as usize * dstride + x as usize, dstride, &win, refbw_m1 + 8, bw, bh, filter, mx, my, step[0] as i32, step[1] as i32, avg, bpp);
+                dsp::mc_scaled(
+                    &mut dst.data,
+                    y as usize * dstride + x as usize,
+                    dstride,
+                    &win,
+                    refbw_m1 + 8,
+                    bw,
+                    bh,
+                    filter,
+                    mx,
+                    my,
+                    step[0] as i32,
+                    step[1] as i32,
+                    avg,
+                    bpp,
+                );
             }
         }
     }
@@ -335,7 +545,8 @@ impl FrameDec<'_> {
         let b = self.b;
         let (row, col) = (self.row, self.col);
         let (ss_h, ss_v) = (self.ss_h, self.ss_v);
-        let scaled = self.mvscale[b.r#ref[0] as usize][0] != 0 || (b.comp && self.mvscale[b.r#ref[1] as usize][0] != 0);
+        let scaled = self.mvscale[b.r#ref[0] as usize][0] != 0
+            || (b.comp && self.mvscale[b.r#ref[1] as usize][0] != 0);
         let refs = if b.comp { 2 } else { 1 };
         if b.bs > BS_8X8 {
             for i in 0..refs {
@@ -346,23 +557,95 @@ impl FrameDec<'_> {
                     self.mc_luma(i, col * 8, row * 8 + 4, mv(2), 0, 0, 0, 0, 8, 4, avg);
                     if ss_v != 0 {
                         let uv = avg2(mv(0), mv(2));
-                        self.mc_chroma(i, (col * 8) >> ss_h, row * 4, uv, 0, 0, 0, 0, 8 >> ss_h, 4, avg);
+                        self.mc_chroma(
+                            i,
+                            (col * 8) >> ss_h,
+                            row * 4,
+                            uv,
+                            0,
+                            0,
+                            0,
+                            0,
+                            8 >> ss_h,
+                            4,
+                            avg,
+                        );
                     } else {
-                        self.mc_chroma(i, (col * 8) >> ss_h, row * 8, mv(0), 0, 0, 0, 0, 8 >> ss_h, 4, avg);
+                        self.mc_chroma(
+                            i,
+                            (col * 8) >> ss_h,
+                            row * 8,
+                            mv(0),
+                            0,
+                            0,
+                            0,
+                            0,
+                            8 >> ss_h,
+                            4,
+                            avg,
+                        );
                         // BUG (libvpx, webm issue 993): 4:2:2 8x8 bottom
                         // block's chroma uses the wrong motion vector.
                         let uv = if ss_h == 0 { mv(2) } else { avg2(mv(0), mv(2)) };
-                        self.mc_chroma(i, (col * 8) >> ss_h, row * 8 + 4, uv, 0, 0, 0, 0, 8 >> ss_h, 4, avg);
+                        self.mc_chroma(
+                            i,
+                            (col * 8) >> ss_h,
+                            row * 8 + 4,
+                            uv,
+                            0,
+                            0,
+                            0,
+                            0,
+                            8 >> ss_h,
+                            4,
+                            avg,
+                        );
                     }
                 } else if b.bs == BS_4X8 && !scaled {
                     self.mc_luma(i, col * 8, row * 8, mv(0), 0, 0, 0, 0, 4, 8, avg);
                     self.mc_luma(i, col * 8 + 4, row * 8, mv(1), 0, 0, 0, 0, 4, 8, avg);
                     if ss_h != 0 {
                         let uv = avg2(mv(0), mv(1));
-                        self.mc_chroma(i, col * 4, (row * 8) >> ss_v, uv, 0, 0, 0, 0, 4, 8 >> ss_v, avg);
+                        self.mc_chroma(
+                            i,
+                            col * 4,
+                            (row * 8) >> ss_v,
+                            uv,
+                            0,
+                            0,
+                            0,
+                            0,
+                            4,
+                            8 >> ss_v,
+                            avg,
+                        );
                     } else {
-                        self.mc_chroma(i, col * 8, (row * 8) >> ss_v, mv(0), 0, 0, 0, 0, 4, 8 >> ss_v, avg);
-                        self.mc_chroma(i, col * 8 + 4, (row * 8) >> ss_v, mv(1), 0, 0, 0, 0, 4, 8 >> ss_v, avg);
+                        self.mc_chroma(
+                            i,
+                            col * 8,
+                            (row * 8) >> ss_v,
+                            mv(0),
+                            0,
+                            0,
+                            0,
+                            0,
+                            4,
+                            8 >> ss_v,
+                            avg,
+                        );
+                        self.mc_chroma(
+                            i,
+                            col * 8 + 4,
+                            (row * 8) >> ss_v,
+                            mv(1),
+                            0,
+                            0,
+                            0,
+                            0,
+                            4,
+                            8 >> ss_v,
+                            avg,
+                        );
                     }
                 } else {
                     // 4×4 (and, when scaled, 8×4 / 4×8).
@@ -404,8 +687,32 @@ impl FrameDec<'_> {
             for i in 0..refs {
                 let avg = i == 1;
                 let mv = b.mv[0][i];
-                self.mc_luma(i, col * 8, row * 8, mv, 0, 0, bw as i32, bh as i32, bw, bh, avg);
-                self.mc_chroma(i, (col * 8) >> ss_h, (row * 8) >> ss_v, mv, 0, 0, uvbw as i32, uvbh as i32, uvbw, uvbh, avg);
+                self.mc_luma(
+                    i,
+                    col * 8,
+                    row * 8,
+                    mv,
+                    0,
+                    0,
+                    bw as i32,
+                    bh as i32,
+                    bw,
+                    bh,
+                    avg,
+                );
+                self.mc_chroma(
+                    i,
+                    (col * 8) >> ss_h,
+                    (row * 8) >> ss_v,
+                    mv,
+                    0,
+                    0,
+                    uvbw as i32,
+                    uvbh as i32,
+                    uvbw,
+                    uvbh,
+                    avg,
+                );
             }
         }
     }
@@ -413,7 +720,9 @@ impl FrameDec<'_> {
     /// `inter_recon`.
     pub(super) fn inter_recon(&mut self) {
         let b = self.b;
-        if self.mvscale[b.r#ref[0] as usize][0] == 0xFFFF || (b.comp && self.mvscale[b.r#ref[1] as usize][0] == 0xFFFF) {
+        if self.mvscale[b.r#ref[0] as usize][0] == 0xFFFF
+            || (b.comp && self.mvscale[b.r#ref[1] as usize][0] == 0xFFFF)
+        {
             return;
         }
         self.inter_pred();
@@ -442,7 +751,16 @@ impl FrameDec<'_> {
                 if eob != 0 {
                     let pl = &mut self.cur.planes[0];
                     let stride = pl.width;
-                    dsp::itxfm_add(tx, DCT_DCT, &mut pl.data, (y0 + 4 * y) * stride + x0 + 4 * x, stride, &mut self.block[16 * n..], eob, bpp);
+                    dsp::itxfm_add(
+                        tx,
+                        DCT_DCT,
+                        &mut pl.data,
+                        (y0 + 4 * y) * stride + x0 + 4 * x,
+                        stride,
+                        &mut self.block[16 * n..],
+                        eob,
+                        bpp,
+                    );
                 }
                 x += step1d;
                 n += step;
@@ -464,7 +782,16 @@ impl FrameDec<'_> {
                     if eob != 0 {
                         let pl = &mut self.cur.planes[1 + p];
                         let stride = pl.width;
-                        dsp::itxfm_add(uvtx, DCT_DCT, &mut pl.data, (cy0 + 4 * y) * stride + cx0 + 4 * x, stride, &mut self.uvblock[p][16 * n..], eob, bpp);
+                        dsp::itxfm_add(
+                            uvtx,
+                            DCT_DCT,
+                            &mut pl.data,
+                            (cy0 + 4 * y) * stride + cx0 + 4 * x,
+                            stride,
+                            &mut self.uvblock[p][16 * n..],
+                            eob,
+                            bpp,
+                        );
                     }
                     x += uvstep1d;
                     n += uvstep;

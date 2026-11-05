@@ -117,6 +117,7 @@ fn one_material_on_a_mesh_and_an_instanced_mesh() {
         .color_format(threers::wgpu::TextureFormat::Rgba8Unorm)
         .build()
     else {
+        eprintln!("skipping: no GPU adapter");
         return;
     };
     r.renderer().set_tone_mapping(ToneMapping::None, 1.0);
@@ -151,6 +152,7 @@ fn instance_data_changed_between_frames_is_drawn() {
         .color_format(threers::wgpu::TextureFormat::Rgba8Unorm)
         .build()
     else {
+        eprintln!("skipping: no GPU adapter");
         return;
     };
     r.renderer().set_tone_mapping(ToneMapping::None, 1.0);
@@ -171,13 +173,23 @@ fn instance_data_changed_between_frames_is_drawn() {
     let again = r.render_to_rgba(&mut scene, &cam);
     assert_eq!(px, again);
     // Move instance 2 up and recolour instance 0.
-    if let Some(threers::core::ObjectKind::InstancedMesh(im)) = scene.arena.get_mut(id).map(|o| &mut o.kind) {
+    if let Some(threers::core::ObjectKind::InstancedMesh(im)) =
+        scene.arena.get_mut(id).map(|o| &mut o.kind)
+    {
         im.transforms[2] = Matrix4::translation(Vector3::new(40.0, 20.0, 0.0));
         im.colors[0] = Color::from_hex(0x00ff00);
     }
     let moved = r.render_to_rgba(&mut scene, &cam);
-    assert_eq!(at(&moved, 104, 32), [0, 0, 0], "instance 2 left its old place");
-    assert_eq!(at(&moved, 104, 12), [255, 0, 0], "and is drawn at its new one");
+    assert_eq!(
+        at(&moved, 104, 32),
+        [0, 0, 0],
+        "instance 2 left its old place"
+    );
+    assert_eq!(
+        at(&moved, 104, 12),
+        [255, 0, 0],
+        "and is drawn at its new one"
+    );
     assert_eq!(at(&moved, 24, 32), [0, 255, 0], "instance 0 recoloured");
 }
 
@@ -188,10 +200,20 @@ fn instance_data_changed_between_frames_is_drawn() {
 #[test]
 #[ignore]
 fn time_static_instances() {
-    let Ok(mut r) = HeadlessRenderer::builder().size(256, 256).build() else { return };
-    let mut im = InstancedMesh::new(BoxGeometry::new(0.5, 0.5, 0.5), Material::Basic(Default::default()), 200_000);
+    let Ok(mut r) = HeadlessRenderer::builder().size(256, 256).build() else {
+        return;
+    };
+    let mut im = InstancedMesh::new(
+        BoxGeometry::new(0.5, 0.5, 0.5),
+        Material::Basic(Default::default()),
+        200_000,
+    );
     for (k, t) in im.transforms.iter_mut().enumerate() {
-        *t = Matrix4::translation(Vector3::new((k % 500) as f32 - 250.0, (k / 500) as f32 - 200.0, 0.0));
+        *t = Matrix4::translation(Vector3::new(
+            (k % 500) as f32 - 250.0,
+            (k / 500) as f32 - 200.0,
+            0.0,
+        ));
     }
     if std::env::var_os("VERSIONED").is_some() {
         im.instance_version = Some(1);
@@ -203,8 +225,13 @@ fn time_static_instances() {
     scene.update_world();
     let _ = r.render_to_rgba(&mut scene, &cam);
     let t = std::time::Instant::now();
-    for _ in 0..30 { let _ = r.render_to_rgba(&mut scene, &cam); }
-    eprintln!("200k static instances: {:.2} ms/frame", t.elapsed().as_secs_f64() * 1e3 / 30.0);
+    for _ in 0..30 {
+        let _ = r.render_to_rgba(&mut scene, &cam);
+    }
+    eprintln!(
+        "200k static instances: {:.2} ms/frame",
+        t.elapsed().as_secs_f64() * 1e3 / 30.0
+    );
 }
 
 /// With an `instance_version`, the data is read only when the version moves:
@@ -217,6 +244,7 @@ fn a_versioned_instanced_mesh_reads_its_data_when_the_version_moves() {
         .color_format(threers::wgpu::TextureFormat::Rgba8Unorm)
         .build()
     else {
+        eprintln!("skipping: no GPU adapter");
         return;
     };
     r.renderer().set_tone_mapping(ToneMapping::None, 1.0);
@@ -248,5 +276,9 @@ fn a_versioned_instanced_mesh_reads_its_data_when_the_version_moves() {
     assert_eq!(at(&px, 24, 32), [255, 0, 0], "not re-read without a bump");
     edit(&mut scene, true);
     let px = r.render_to_rgba(&mut scene, &cam);
-    assert_eq!(at(&px, 24, 32), [0, 255, 0], "re-read once the version moved");
+    assert_eq!(
+        at(&px, 24, 32),
+        [0, 255, 0],
+        "re-read once the version moved"
+    );
 }

@@ -418,7 +418,8 @@ impl Ssao {
     }
 }
 
-const SHADER: &str = crate::wgsl!(r#"
+const SHADER: &str = crate::wgsl!(
+    r#"
 struct P {
     near : f32, far : f32, radius : f32, strength : f32,
     tan_half_fov : f32, aspect : f32, pad0 : f32, pad1 : f32,
@@ -460,7 +461,8 @@ fn main(@builtin(global_invocation_id) gid : vec3<u32>) {
     let ao = clamp(1.0 - p.strength * (occ / 12.0), 0.0, 1.0);
     textureStore(dst, vec2<i32>(gid.xy), vec4<f32>(ao, 0.0, 0.0, 1.0));
 }
-"#);
+"#
+);
 
 /// The same pass as [`SHADER`], as a fullscreen draw.
 ///
@@ -472,7 +474,8 @@ fn main(@builtin(global_invocation_id) gid : vec3<u32>) {
 /// WGSL allows `textureLoad` on a depth texture but GLSL has no `texelFetch` for
 /// a depth sampler, so this module could not be lowered for WebGL2 otherwise.
 /// Depth arrives in `.r`.
-const RASTER_SHADER: &str = crate::wgsl!(r#"
+const RASTER_SHADER: &str = crate::wgsl!(
+    r#"
 struct P {
     near : f32, far : f32, radius : f32, strength : f32,
     tan_half_fov : f32, aspect : f32, pad0 : f32, pad1 : f32,
@@ -509,7 +512,8 @@ fn fs_main(@builtin(position) pos : vec4<f32>) -> @location(0) vec4<f32> {
     let ao = clamp(1.0 - p.strength * (occ / 12.0), 0.0, 1.0);
     return vec4<f32>(ao, 0.0, 0.0, 1.0);
 }
-"#);
+"#
+);
 
 #[cfg(test)]
 mod tests {
@@ -603,7 +607,10 @@ mod tests {
         );
         crate::materials::shared_passes::assert_webgl2(
             &source,
-            &[(naga::ShaderStage::Vertex, "vs_main".into()), (naga::ShaderStage::Fragment, "fs_main".into())],
+            &[
+                (naga::ShaderStage::Vertex, "vs_main".into()),
+                (naga::ShaderStage::Fragment, "fs_main".into()),
+            ],
         );
     }
 

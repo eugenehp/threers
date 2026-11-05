@@ -120,10 +120,7 @@ pub(crate) fn add_road_tunnels(
             portal(b, c, out, rng);
             let m = point(route, (enter + exit) * 0.5);
             built.push(Tunnel {
-                mouth_cover: [
-                    cover_at(summits, a.0, a.1),
-                    cover_at(summits, c.0, c.1),
-                ],
+                mouth_cover: [cover_at(summits, a.0, a.1), cover_at(summits, c.0, c.1)],
                 mid_cover: cover_at(summits, m.0, m.1),
                 length: exit - enter,
             });
@@ -224,7 +221,8 @@ fn buried_runs(route: &Route, summits: &[Summit]) -> Vec<(f32, f32)> {
 fn portal(b: &mut Batches, at: (f32, f32), bearing: f32, rng: &mut Rng) {
     let (sa, ca) = bearing.sin_cos();
     // `f` is metres out along the facing direction, `t` across it, `y` up.
-    let p = |f: f32, t: f32, y: f32| Vector3::new(at.0 + ca * f - sa * t, y, at.1 + sa * f + ca * t);
+    let p =
+        |f: f32, t: f32, y: f32| Vector3::new(at.0 + ca * f - sa * t, y, at.1 + sa * f + ca * t);
     let v = |f: f32, t: f32, y: f32| {
         let q = p(f, t, y);
         [q.x, q.y, q.z]
@@ -304,11 +302,7 @@ fn portal(b: &mut Batches, at: (f32, f32), bearing: f32, rng: &mut Rng) {
         // Soffit normals point down and inwards, towards the bore's axis.
         let (mt, my) = ((t0 + t1) * 0.5, (y0 + y1) * 0.5 - spring);
         let ln = (mt * mt + my * my).sqrt().max(1e-3);
-        let n = [
-            across[0] * (-mt / ln),
-            -my / ln,
-            across[2] * (-mt / ln),
-        ];
+        let n = [across[0] * (-mt / ln), -my / ln, across[2] * (-mt / ln)];
         panel(
             &mut b.trim,
             [
@@ -481,7 +475,10 @@ fn point(route: &Route, s: f32) -> (f32, f32) {
         let seg = (w[1].0 - w[0].0).hypot(w[1].1 - w[0].1);
         if acc + seg >= s && seg > 1e-4 {
             let t = (s - acc) / seg;
-            return (w[0].0 + (w[1].0 - w[0].0) * t, w[0].1 + (w[1].1 - w[0].1) * t);
+            return (
+                w[0].0 + (w[1].0 - w[0].0) * t,
+                w[0].1 + (w[1].1 - w[0].1) * t,
+            );
         }
         acc += seg;
     }

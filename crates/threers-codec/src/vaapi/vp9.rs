@@ -5,7 +5,10 @@
 
 use std::sync::Arc;
 
-use super::{Device, Id, Session, BUF_PICTURE_PARAMETER, BUF_SLICE_DATA, BUF_SLICE_PARAMETER, INVALID_ID, RT_FORMAT_YUV420, RT_FORMAT_YUV420_10};
+use super::{
+    Device, Id, Session, BUF_PICTURE_PARAMETER, BUF_SLICE_DATA, BUF_SLICE_PARAMETER, INVALID_ID,
+    RT_FORMAT_YUV420, RT_FORMAT_YUV420_10,
+};
 use crate::decode::vp9::{AccelFrame, Frame, Vp9Accel};
 use crate::decode::{ColorInfo, DecodedFrame};
 
@@ -77,14 +80,22 @@ pub(crate) struct VaVp9 {
 
 impl VaVp9 {
     pub(crate) fn new(dev: Device) -> Self {
-        VaVp9 { dev, session: None, pinned: Vec::new() }
+        VaVp9 {
+            dev,
+            session: None,
+            pinned: Vec::new(),
+        }
     }
 
     fn session(&mut self, f: &Frame) -> Result<(), String> {
         if (f.ss_h, f.ss_v) != (1, 1) || !(f.bpp == 8 || f.bpp == 10) {
             return Err("the VAAPI VP9 path decodes 8- and 10-bit 4:2:0 only".into());
         }
-        let (profile, rt) = if f.bpp > 8 { (PROFILE_VP9_2, RT_FORMAT_YUV420_10) } else { (PROFILE_VP9_0, RT_FORMAT_YUV420) };
+        let (profile, rt) = if f.bpp > 8 {
+            (PROFILE_VP9_2, RT_FORMAT_YUV420_10)
+        } else {
+            (PROFILE_VP9_0, RT_FORMAT_YUV420)
+        };
         let key = (f.width, f.height, profile, rt);
         if self.session.as_ref().is_some_and(|s| s.key == key) {
             return Ok(());
@@ -103,7 +114,13 @@ impl Vp9Accel for VaVp9 {
     fn frame(&mut self, a: &AccelFrame<'_>) -> Result<(), String> {
         let (h, cur) = (a.h, a.cur);
         self.session(cur)?;
-        let live: Vec<i64> = a.refs.iter().flatten().map(|f| key(f)).chain(self.pinned.iter().map(|f| key(f))).collect();
+        let live: Vec<i64> = a
+            .refs
+            .iter()
+            .flatten()
+            .map(|f| key(f))
+            .chain(self.pinned.iter().map(|f| key(f)))
+            .collect();
         let ses = self.session.as_mut().unwrap();
         let target = ses.claim(key(cur), |k| live.contains(&k))?;
 
@@ -111,7 +128,10 @@ impl Vp9Accel for VaVp9 {
         pp.frame_width = cur.width as u16;
         pp.frame_height = cur.height as u16;
         for (i, r) in a.refs.iter().enumerate() {
-            pp.reference_frames[i] = r.as_ref().and_then(|f| ses.surface_of(key(f))).unwrap_or(INVALID_ID);
+            pp.reference_frames[i] = r
+                .as_ref()
+                .and_then(|f| ses.surface_of(key(f)))
+                .unwrap_or(INVALID_ID);
         }
         let fm = h.filtermode as u32;
         let seg = &h.segmentation;
@@ -145,7 +165,11 @@ impl Vp9Accel for VaVp9 {
         pp.frame_header_length_in_bytes = a.uncompressed_size as u8;
         pp.first_partition_size = a.compressed_size as u16;
         pp.mb_segment_tree_probs = seg.prob;
-        pp.segment_pred_probs = if seg.temporal { seg.pred_prob } else { [255; 3] };
+        pp.segment_pred_probs = if seg.temporal {
+            seg.pred_prob
+        } else {
+            [255; 3]
+        };
         pp.profile = h.profile;
         pp.bit_depth = h.bpp;
 
@@ -153,7 +177,9 @@ impl Vp9Accel for VaVp9 {
         sp.slice_data_size = a.data.len() as u32;
         for (i, f) in seg.feat.iter().enumerate() {
             sp.seg_param[i] = SegmentParams {
-                segment_flags: f.ref_enabled as u16 | (f.ref_val as u16) << 1 | (f.skip_enabled as u16) << 3,
+                segment_flags: f.ref_enabled as u16
+                    | (f.ref_val as u16) << 1
+                    | (f.skip_enabled as u16) << 3,
                 filter_level: f.lflvl,
                 luma_ac_quant_scale: f.qmul[0][1],
                 luma_dc_quant_scale: f.qmul[0][0],
@@ -182,11 +208,24 @@ impl Vp9Accel for VaVp9 {
     fn read(&mut self, f: &Frame) -> Result<DecodedFrame, String> {
         self.pinned.retain(|p| key(p) != key(f));
         let ses = self.session.as_ref().ok_or("no VA context")?;
-        let surface = ses.surface_of(key(f)).ok_or("no VA surface holds that frame")?;
+        let surface = ses
+            .surface_of(key(f))
+            .ok_or("no VA surface holds that frame")?;
         // VP9's colour_space, as the matrix number the native decoder reports.
         const SPC: [u32; 8] = [2, 5, 1, 6, 7, 9, 2, 0];
-        let color = ColorInfo::from_vui(Some(SPC[f.color_space as usize & 7]), f.full_range, f.height);
-        self.dev.read_frame(surface, f.width as usize, f.height as usize, f.bpp > 8, [0; 4], color)
+        let color = ColorInfo::from_vui(
+            Some(SPC[f.color_space as usize & 7]),
+            f.full_range,
+            f.height,
+        );
+        self.dev.read_frame(
+            surface,
+            f.width as usize,
+            f.height as usize,
+            f.bpp > 8,
+            [0; 4],
+            color,
+        )
     }
 }
 

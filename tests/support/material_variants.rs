@@ -113,21 +113,32 @@ pub fn check(
             64,
             64,
             TextureFormat::Rgba8Unorm,
-            (0..64 * 64).flat_map(|i| {
-                let v = if (i % 64 + i / 64) % 2 == 0 { 255 } else { 0 };
-                [v, v, v, 255]
-            }).collect(),
+            (0..64 * 64)
+                .flat_map(|i| {
+                    let v = if (i % 64 + i / 64) % 2 == 0 { 255 } else { 0 };
+                    [v, v, v, 255]
+                })
+                .collect(),
         );
         board.mag_filter = TextureFilter::Nearest;
-        board.min_filter = if mip.is_some() { TextureFilter::Linear } else { TextureFilter::Nearest };
+        board.min_filter = if mip.is_some() {
+            TextureFilter::Linear
+        } else {
+            TextureFilter::Nearest
+        };
         board.mipmap_filter = mip;
         let mut mat = threers::materials::BasicMaterial::new(Color::WHITE);
         mat.map = Some(Arc::new(board));
         let mut sc = Scene::new();
         sc.background = Color::from_hex(0x000000);
-        sc.add(Object3D::mesh(Mesh::new(PlaneGeometry::new(0.25, 0.25), mat.into())));
+        sc.add(Object3D::mesh(Mesh::new(
+            PlaneGeometry::new(0.25, 0.25),
+            mat.into(),
+        )));
         let rgba = render(&mut sc, &cam);
-        let px: Vec<u8> = (N / 2 - 2..N / 2 + 2).map(|x| rgba[((N / 2 * N + x) * 4) as usize]).collect();
+        let px: Vec<u8> = (N / 2 - 2..N / 2 + 2)
+            .map(|x| rgba[((N / 2 * N + x) * 4) as usize])
+            .collect();
         let ok = if want_grey {
             px.iter().all(|v| (*v as i32 - 188).abs() <= 6)
         } else {
@@ -136,7 +147,11 @@ pub fn check(
         if !ok {
             failures.push(format!(
                 "{label} mipmap_filter {mip:?}: centre row {px:?}; three.js gives {}",
-                if want_grey { "the average, 188" } else { "single texels, 0 or 255" }
+                if want_grey {
+                    "the average, 188"
+                } else {
+                    "single texels, 0 or 255"
+                }
             ));
         }
     }
@@ -165,10 +180,20 @@ pub fn check(
             mat.map = Some(Arc::new(map));
             let mut geometry = PlaneGeometry::new(2.0, 2.0);
             if with_sets {
-                let uv = geometry.get_attribute("uv").expect("a plane has uvs").clone();
-                let mirrored: Vec<f32> = uv.array.chunks(2).flat_map(|c| [1.0 - c[0], c[1]]).collect();
+                let uv = geometry
+                    .get_attribute("uv")
+                    .expect("a plane has uvs")
+                    .clone();
+                let mirrored: Vec<f32> = uv
+                    .array
+                    .chunks(2)
+                    .flat_map(|c| [1.0 - c[0], c[1]])
+                    .collect();
                 for name in ["uv1", "uv2", "uv3"] {
-                    geometry.set_attribute(name, threers::core::BufferAttribute::new(mirrored.clone(), 2));
+                    geometry.set_attribute(
+                        name,
+                        threers::core::BufferAttribute::new(mirrored.clone(), 2),
+                    );
                 }
             }
             let mut sc = Scene::new();

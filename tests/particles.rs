@@ -653,6 +653,7 @@ fn sand_is_brighter_seen_down_sun() {
 fn rain_makes_a_rainbow_at_42_degrees() {
     const S: u32 = 240;
     let Ok(mut hr) = HeadlessRenderer::builder().size(S, S).build() else {
+        eprintln!("skipping: no GPU adapter");
         return;
     };
     let mut scene = Scene::new();
@@ -742,6 +743,7 @@ fn rain_makes_a_rainbow_at_42_degrees() {
 fn level_plates_glint_in_a_column() {
     const S: u32 = 160;
     let Ok(mut hr) = HeadlessRenderer::builder().size(S, S).build() else {
+        eprintln!("skipping: no GPU adapter");
         return;
     };
     let mut share = |plates: f32| {

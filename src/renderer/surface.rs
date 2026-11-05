@@ -56,7 +56,11 @@ impl SurfaceGpu {
     /// [`with_pipeline_cache`](Self::with_pipeline_cache) to do anything
     /// (`GpuContext` asks for it wherever there is one).
     pub fn from_context(gpu: GpuContext) -> Self {
-        Self { gpu, frames: Arc::new(RwLock::new(())), cache: None }
+        Self {
+            gpu,
+            frames: Arc::new(RwLock::new(())),
+            cache: None,
+        }
     }
 
     /// Build every viewport's pipelines through the cache `store` holds — a
@@ -125,7 +129,12 @@ pub struct SurfaceOptions {
 
 impl Default for SurfaceOptions {
     fn default() -> Self {
-        Self { msaa: 4, lazy: false, present_mode: wgpu::PresentMode::AutoVsync, transparent: false }
+        Self {
+            msaa: 4,
+            lazy: false,
+            present_mode: wgpu::PresentMode::AutoVsync,
+            transparent: false,
+        }
     }
 }
 
@@ -179,6 +188,8 @@ pub struct SurfaceRenderer {
     frames: Arc<RwLock<()>>,
     /// The last configure failed; try again before the next frame.
     unconfigured: bool,
+    /// A warm-up [`render`](Self::render) waits for.
+    warming: Option<super::PipelineWarmup>,
 }
 
 impl SurfaceRenderer {
@@ -190,13 +201,30 @@ impl SurfaceRenderer {
     ///
     /// On macOS, call this on the main thread (wgpu reads the view's layer);
     /// the renderer can then move to any thread.
-    pub fn new<W>(gpu: &SurfaceGpu, window: W, width: u32, height: u32, options: SurfaceOptions) -> Result<Self, String>
+    pub fn new<W>(
+        gpu: &SurfaceGpu,
+        window: W,
+        width: u32,
+        height: u32,
+        options: SurfaceOptions,
+    ) -> Result<Self, String>
     where
         W: wgpu::WindowHandle + wgpu::rwh::HasDisplayHandle + Clone + 'static,
     {
         let make = move || wgpu::SurfaceTarget::from(window.clone());
-        let surface = gpu.gpu.instance.create_surface(make()).map_err(|e| format!("window surface: {e}"))?;
-        Self::finish(gpu, surface, Target::Safe(Box::new(make)), width, height, options)
+        let surface = gpu
+            .gpu
+            .instance
+            .create_surface(make())
+            .map_err(|e| format!("window surface: {e}"))?;
+        Self::finish(
+            gpu,
+            surface,
+            Target::Safe(Box::new(make)),
+            width,
+            height,
+            options,
+        )
     }
 
     /// [`new`](Self::new) from raw handles — what a framework that does not
@@ -213,11 +241,21 @@ impl SurfaceRenderer {
         height: u32,
         options: SurfaceOptions,
     ) -> Result<Self, String> {
-        let target = wgpu::SurfaceTargetUnsafe::RawHandle { raw_display_handle: display, raw_window_handle: window };
+        let target = wgpu::SurfaceTargetUnsafe::RawHandle {
+            raw_display_handle: display,
+            raw_window_handle: window,
+        };
         // SAFETY: the caller's contract.
-        let surface =
-            unsafe { gpu.gpu.instance.create_surface_unsafe(target) }.map_err(|e| format!("window surface: {e}"))?;
-        Self::finish(gpu, surface, Target::Raw(RawHandles { display, window }), width, height, options)
+        let surface = unsafe { gpu.gpu.instance.create_surface_unsafe(target) }
+            .map_err(|e| format!("window surface: {e}"))?;
+        Self::finish(
+            gpu,
+            surface,
+            Target::Raw(RawHandles { display, window }),
+            width,
+            height,
+            options,
+        )
     }
 
     fn finish(
@@ -228,7 +266,12 @@ impl SurfaceRenderer {
         height: u32,
         options: SurfaceOptions,
     ) -> Result<Self, String> {
-        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos", target_os = "visionos"))]
+        #[cfg(any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "tvos",
+            target_os = "visionos"
+        ))]
         let _pool = super::layer::Pool::new();
         let (width, height) = (width.max(1), height.max(1));
         let caps = surface.get_capabilities(&gpu.gpu.adapter);
@@ -239,9 +282,17 @@ impl SurfaceRenderer {
                 gpu.gpu.adapter.get_info().name
             ));
         }
-        let format = caps.formats.iter().copied().find(|f| f.is_srgb()).unwrap_or(caps.formats[0]);
+        let format = caps
+            .formats
+            .iter()
+            .copied()
+            .find(|f| f.is_srgb())
+            .unwrap_or(caps.formats[0]);
         let alpha_preference: &[wgpu::CompositeAlphaMode] = if options.transparent {
-            &[wgpu::CompositeAlphaMode::PreMultiplied, wgpu::CompositeAlphaMode::PostMultiplied]
+            &[
+                wgpu::CompositeAlphaMode::PreMultiplied,
+                wgpu::CompositeAlphaMode::PostMultiplied,
+            ]
         } else {
             &[wgpu::CompositeAlphaMode::Opaque]
         };
@@ -252,8 +303,10 @@ impl SurfaceRenderer {
             .find(|m| caps.alpha_modes.contains(m))
             .unwrap_or(caps.alpha_modes[0]);
         let present_mode = if caps.present_modes.contains(&options.present_mode)
-            || matches!(options.present_mode, wgpu::PresentMode::AutoVsync | wgpu::PresentMode::AutoNoVsync)
-        {
+            || matches!(
+                options.present_mode,
+                wgpu::PresentMode::AutoVsync | wgpu::PresentMode::AutoNoVsync
+            ) {
             options.present_mode
         } else {
             wgpu::PresentMode::Fifo
@@ -294,6 +347,7 @@ impl SurfaceRenderer {
             },
             frames: gpu.frames.clone(),
             unconfigured: true,
+            warming: None,
         };
         this.configure();
         Ok(this)
@@ -305,7 +359,12 @@ impl SurfaceRenderer {
         if (width, height) == (self.config.width, self.config.height) {
             return;
         }
-        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos", target_os = "visionos"))]
+        #[cfg(any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "tvos",
+            target_os = "visionos"
+        ))]
         let _pool = super::layer::Pool::new();
         self.config.width = width;
         self.config.height = height;
@@ -320,7 +379,10 @@ impl SurfaceRenderer {
         let _alone = self.frames.write().unwrap_or_else(|e| e.into_inner());
         // Error scopes are per thread in wgpu, so this catches this
         // configure's error and nobody else's.
-        let scope = self.gpu.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let scope = self
+            .gpu
+            .device
+            .push_error_scope(wgpu::ErrorFilter::Validation);
         self.surface.configure(&self.gpu.device, &self.config);
         self.unconfigured = pollster::block_on(scope.pop()).is_some();
         !self.unconfigured
@@ -335,12 +397,56 @@ impl SurfaceRenderer {
         self.config.format
     }
 
+    /// Build the pipelines on `threads` background threads, and make
+    /// [`render`](Self::render) return `false` until they are done, so the
+    /// first frame anyone sees does not stall on compilation. The caller shows
+    /// its own loading state meanwhile; `on_progress` on the returned job
+    /// feeds it. `states` are the material states the app draws with (see
+    /// [`Renderer::warm_up_states`]); an eager renderer has nothing to warm
+    /// and is not held. After the job, check
+    /// [`errors`](super::PipelineWarmup::errors).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn warm_in_background(
+        &mut self,
+        threads: usize,
+        states: &[crate::materials::RenderState],
+    ) -> super::PipelineWarmup {
+        let warmup = self.renderer.warm_up_states(states);
+        warmup.spawn(threads);
+        self.warming = (!warmup.is_ready()).then(|| warmup.clone());
+        warmup
+    }
+
+    /// Whether [`render`](Self::render) is waiting on a
+    /// [`warm_in_background`](Self::warm_in_background) job.
+    pub fn is_warming(&self) -> bool {
+        self.warming.as_ref().is_some_and(|w| !w.is_ready())
+    }
+
+    /// Draw before the background warm-up has finished, taking the stall on
+    /// the frames that need a pipeline the job has not reached.
+    pub fn stop_waiting_for_warm_up(&mut self) {
+        self.warming = None;
+    }
+
     /// Render and present one frame. `false`: no image this time (minimised,
-    /// occluded, every image in flight, or the surface was just remade), and
-    /// the next call draws.
+    /// occluded, every image in flight, the surface was just remade, or a
+    /// [`warm_in_background`](Self::warm_in_background) job is still
+    /// running), and the next call draws. Do not spin on `false`: sleep a
+    /// frame (or wait for the window's next redraw request) before trying
+    /// again, or a minimised window costs a core.
     pub fn render(&mut self, scene: &mut Scene, camera: &dyn Camera) -> bool {
         use wgpu::CurrentSurfaceTexture as Acquired;
-        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos", target_os = "visionos"))]
+        if self.is_warming() {
+            return false;
+        }
+        self.warming = None;
+        #[cfg(any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "tvos",
+            target_os = "visionos"
+        ))]
         let _pool = super::layer::Pool::new();
         if self.unconfigured && !self.configure() {
             return false;
@@ -373,7 +479,12 @@ impl SurfaceRenderer {
     /// has to happen on the main thread and this may be a render thread; a
     /// reconfigure is what Metal needs there.
     fn remake(&mut self) {
-        if cfg!(any(target_os = "macos", target_os = "ios", target_os = "tvos", target_os = "visionos")) {
+        if cfg!(any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "tvos",
+            target_os = "visionos"
+        )) {
             return;
         }
         let surface = match &self.target {
@@ -396,7 +507,9 @@ impl SurfaceRenderer {
     fn draw(&mut self, scene: &mut Scene, camera: &dyn Camera, frame: wgpu::SurfaceTexture) {
         // Shared: viewports draw in parallel, and only a reconfigure waits.
         let _frame = self.frames.read().unwrap_or_else(|e| e.into_inner());
-        let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
         self.renderer.render(scene, camera, &view, false);
         self.gpu.queue.present(frame);
     }

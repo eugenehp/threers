@@ -46,9 +46,7 @@ fn main() {
     let out: Vec<String> = font
         .shape_run(&chars, &script, 24.0)
         .into_iter()
-        .map(|(gid, cluster)| {
-            format!("{gid}={}", byte_of.get(cluster).copied().unwrap_or(0))
-        })
+        .map(|(gid, cluster)| format!("{gid}={}", byte_of.get(cluster).copied().unwrap_or(0)))
         .collect();
     println!("{}", out.join("|"));
 }

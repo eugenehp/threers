@@ -31,7 +31,8 @@ use super::ssao::Ssao;
 use super::RenderTarget;
 use crate::renderer::Renderer;
 
-const COMPOSITE: &str = crate::wgsl!(r#"
+const COMPOSITE: &str = crate::wgsl!(
+    r#"
 struct Params { encoded : u32, strength : f32, pad0 : u32, pad1 : u32 };
 @group(0) @binding(0) var src : texture_2d<f32>;
 @group(0) @binding(1) var ao : texture_2d<f32>;
@@ -76,7 +77,8 @@ fn fs_main(in : FullscreenVertex) -> @location(0) vec4<f32> {
     // or a compositor premultiplies — FXAA's included.
     return vec4<f32>(c.rgb * k, 1.0);
 }
-"#);
+"#
+);
 
 /// Ambient occlusion composited onto a surface. See the [module docs](self).
 pub struct SsaoComposite {
@@ -114,11 +116,22 @@ impl SsaoComposite {
         let aspect = target.width as f32 / target.height.max(1) as f32;
         // Placeholder camera numbers: `render`/`finish` refresh them from the
         // renderer every frame, before anything is recorded.
-        let ssao = Ssao::new(device, &target.depth_texture, 0.1, 1000.0, radius, 1.0, 0.5, aspect)?;
+        let ssao = Ssao::new(
+            device,
+            &target.depth_texture,
+            0.1,
+            1000.0,
+            radius,
+            1.0,
+            0.5,
+            aspect,
+        )?;
 
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("ssao composite"),
-            source: wgpu::ShaderSource::Wgsl(format!("{}\n{}", super::fullscreen::VS, COMPOSITE).into()),
+            source: wgpu::ShaderSource::Wgsl(
+                format!("{}\n{}", super::fullscreen::VS, COMPOSITE).into(),
+            ),
         });
         let texture = |binding, filterable| wgpu::BindGroupLayoutEntry {
             binding,
@@ -227,7 +240,11 @@ impl SsaoComposite {
     pub fn set_params(&mut self, queue: &wgpu::Queue, radius: f32, strength: f32) {
         self.radius = radius;
         self.strength = strength;
-        queue.write_buffer(&self.params, 0, bytemuck::cast_slice(&[self.encoded, strength.to_bits(), 0, 0]));
+        queue.write_buffer(
+            &self.params,
+            0,
+            bytemuck::cast_slice(&[self.encoded, strength.to_bits(), 0, 0]),
+        );
     }
 
     /// Antialias the composited frame with FXAA (three.js's `FXAAShader`, the
@@ -247,7 +264,11 @@ impl SsaoComposite {
         }
         let tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("ssao composite fxaa input"),
-            size: wgpu::Extent3d { width: self.target.width, height: self.target.height, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: self.target.width,
+                height: self.target.height,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -274,7 +295,16 @@ impl SsaoComposite {
                 self.finish(renderer, input);
                 let (w, h) = (self.target.width, self.target.height);
                 // postfx kind 1 is FXAA; `params2.xy` its texel size
-                renderer.apply_postfx(input, view, 1, 0.0, [1.0 / w as f32, 1.0 / h as f32, 0.0, 0.0], [0.0; 4], w, h);
+                renderer.apply_postfx(
+                    input,
+                    view,
+                    1,
+                    0.0,
+                    [1.0 / w as f32, 1.0 / h as f32, 0.0, 0.0],
+                    [0.0; 4],
+                    w,
+                    h,
+                );
             }
             None => self.finish(renderer, view),
         }
@@ -289,7 +319,16 @@ impl SsaoComposite {
     pub fn finish(&self, renderer: &Renderer, view: &wgpu::TextureView) {
         let (near, far) = renderer.camera_planes();
         let (tan_half_fov, aspect) = renderer.camera_lens();
-        self.composite(&renderer.device_arc(), &renderer.queue_arc(), view, near, far, tan_half_fov, aspect, renderer.reversed_z());
+        self.composite(
+            &renderer.device_arc(),
+            &renderer.queue_arc(),
+            view,
+            near,
+            far,
+            tan_half_fov,
+            aspect,
+            renderer.reversed_z(),
+        );
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -305,7 +344,8 @@ impl SsaoComposite {
         reversed: bool,
     ) {
         self.ssao.set_reversed_depth(queue, reversed);
-        self.ssao.set_range(queue, near, far, self.radius, 1.0, tan_half_fov, aspect);
+        self.ssao
+            .set_range(queue, near, far, self.radius, 1.0, tan_half_fov, aspect);
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("ssao composite"),
         });
@@ -352,18 +392,31 @@ mod tests {
             return;
         };
         let device = Arc::new(device);
-        for format in [wgpu::TextureFormat::Rgba8Unorm, wgpu::TextureFormat::Rgba8UnormSrgb] {
+        for format in [
+            wgpu::TextureFormat::Rgba8Unorm,
+            wgpu::TextureFormat::Rgba8UnormSrgb,
+        ] {
             let ao = SsaoComposite::new(&device, format, W, W, 2.0, 6.0).expect("ssao composite");
 
             fill(&device, &queue, &ao, false);
             let flat = run(&device, &queue, &ao, format);
-            let off = flat.iter().map(|v| (*v as i32 - GREY as i32).abs()).max().unwrap();
-            assert!(off <= 1, "{format:?}: a flat wall moved by {off} — it should not occlude");
+            let off = flat
+                .iter()
+                .map(|v| (*v as i32 - GREY as i32).abs())
+                .max()
+                .unwrap();
+            assert!(
+                off <= 1,
+                "{format:?}: a flat wall moved by {off} — it should not occlude"
+            );
 
             fill(&device, &queue, &ao, true);
             let step = run(&device, &queue, &ao, format);
             let darkest = *step.iter().min().unwrap();
-            assert!(darkest < GREY - 10, "{format:?}: the crease is not occluded (darkest {darkest})");
+            assert!(
+                darkest < GREY - 10,
+                "{format:?}: the crease is not occluded (darkest {darkest})"
+            );
             assert!(darkest > 0, "{format:?}: the crease clamped to black");
         }
     }
@@ -454,10 +507,19 @@ mod tests {
 
     /// Composite into a fresh texture of `format` and read its red channel back
     /// as stored bytes.
-    fn run(device: &Arc<wgpu::Device>, queue: &wgpu::Queue, ao: &SsaoComposite, format: wgpu::TextureFormat) -> Vec<u8> {
+    fn run(
+        device: &Arc<wgpu::Device>,
+        queue: &wgpu::Queue,
+        ao: &SsaoComposite,
+        format: wgpu::TextureFormat,
+    ) -> Vec<u8> {
         let out = device.create_texture(&wgpu::TextureDescriptor {
             label: None,
-            size: wgpu::Extent3d { width: W, height: W, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: W,
+                height: W,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -485,16 +547,26 @@ mod tests {
                     rows_per_image: Some(W),
                 },
             },
-            wgpu::Extent3d { width: W, height: W, depth_or_array_layers: 1 },
+            wgpu::Extent3d {
+                width: W,
+                height: W,
+                depth_or_array_layers: 1,
+            },
         );
         queue.submit(Some(encoder.finish()));
         readback.slice(..).map_async(wgpu::MapMode::Read, |_| {});
         let _ = device.poll(wgpu::PollType::wait_indefinitely());
-        let data = readback.slice(..).get_mapped_range().expect("buffer range is mapped");
+        let data = readback
+            .slice(..)
+            .get_mapped_range()
+            .expect("buffer range is mapped");
         (0..W)
             .flat_map(|row| {
                 let start = (row * bytes_per_row) as usize;
-                data[start..start + (W * 4) as usize].chunks_exact(4).map(|c| c[0]).collect::<Vec<_>>()
+                data[start..start + (W * 4) as usize]
+                    .chunks_exact(4)
+                    .map(|c| c[0])
+                    .collect::<Vec<_>>()
             })
             .collect()
     }

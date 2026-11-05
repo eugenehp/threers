@@ -188,7 +188,8 @@ pub(crate) fn with_time(material: &Material, time: f32) -> Option<Material> {
     None
 }
 
-pub(crate) const SURFACE_WGSL: &str = crate::wgsl!(r#"
+pub(crate) const SURFACE_WGSL: &str = crate::wgsl!(
+    r#"
 fn surface_hash2(p : vec2<f32>) -> f32 {
     var q = fract(p * vec2<f32>(443.897, 441.423));
     q = q + vec2<f32>(dot(q, q.yx + 19.19));
@@ -459,4 +460,5 @@ fn surface_light(n : vec3<f32>, t : vec3<f32>, b : vec3<f32>, alpha : vec2<f32>,
     }
     return albedo * (max(ndl, 0.0) * surge + through) * RECIP_PI + vec3<f32>(ice + sparkle);
 }
-"#);
+"#
+);

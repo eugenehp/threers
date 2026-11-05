@@ -14,9 +14,8 @@ use threers_connectome::{tables, Release, Tree};
 const DEFAULT_TREE: &str = "/Volumes/C4TB/connectome-fs";
 
 fn main() -> ExitCode {
-    let mut tree_root = PathBuf::from(
-        std::env::var("CONNECTOME_FS").unwrap_or_else(|_| DEFAULT_TREE.to_string()),
-    );
+    let mut tree_root =
+        PathBuf::from(std::env::var("CONNECTOME_FS").unwrap_or_else(|_| DEFAULT_TREE.to_string()));
     let mut out = default_data_dir();
 
     let mut args = std::env::args().skip(1);

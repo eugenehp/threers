@@ -292,7 +292,11 @@ impl<K: HostKind> AnimationObjectGroup<K> {
         self.value_types.push((value_type, value_size));
         let mut list: Vec<Option<PropertyBinding<K>>> =
             (0..self.objects.len()).map(|_| None).collect();
-        for (slot, object) in list.iter_mut().zip(&self.objects).skip(self.n_cached_objects) {
+        for (slot, object) in list
+            .iter_mut()
+            .zip(&self.objects)
+            .skip(self.n_cached_objects)
+        {
             *slot = Self::new_binding(host, object, path, parsed, (value_type, value_size));
         }
         self.bindings.push(list);

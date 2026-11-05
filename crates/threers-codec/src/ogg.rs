@@ -43,10 +43,14 @@ pub fn packets(data: &[u8]) -> Result<(Vec<Packet>, i64), String> {
         let granule = i64::from_le_bytes(data[off + 6..off + 14].try_into().unwrap());
         let ser = u32::from_le_bytes(data[off + 14..off + 18].try_into().unwrap());
         let nseg = data[off + 26] as usize;
-        let lacing = data.get(off + 27..off + 27 + nseg).ok_or("truncated Ogg page")?;
+        let lacing = data
+            .get(off + 27..off + 27 + nseg)
+            .ok_or("truncated Ogg page")?;
         let body_len: usize = lacing.iter().map(|&l| l as usize).sum();
         let body_start = off + 27 + nseg;
-        let body = data.get(body_start..body_start + body_len).ok_or("truncated Ogg page")?;
+        let body = data
+            .get(body_start..body_start + body_len)
+            .ok_or("truncated Ogg page")?;
         let next = body_start + body_len;
         if serial.is_none() {
             serial = Some(ser);

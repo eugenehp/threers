@@ -9,7 +9,6 @@
 
 #![cfg(metal_backend)]
 
-
 use threers::cameras::{Camera, OrthographicCamera};
 use threers::core::{
     BufferAttribute, BufferGeometry, InstancedMesh, LineSegments, Mesh, Object3D, Points,
@@ -97,6 +96,7 @@ fn device_reports_a_name_and_a_library() {
 #[test]
 fn shader_compilation_errors_carry_the_diagnostics() {
     if MetalDevice::new().is_err() {
+        eprintln!("skipping: no Metal device");
         return;
     }
     let err = MetalDevice::with_shader_source("this is not Metal Shading Language")
@@ -435,7 +435,11 @@ fn thin_line_quads_keep_their_weight_between_pixels() {
         (0..SIZE)
             .map(|y| {
                 let c = rgba[((y * SIZE + x) * 4) as usize] as f32 / 255.0;
-                if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+                if c <= 0.04045 {
+                    c / 12.92
+                } else {
+                    ((c + 0.055) / 1.055).powf(2.4)
+                }
             })
             .collect()
     };
@@ -443,32 +447,52 @@ fn thin_line_quads_keep_their_weight_between_pixels() {
         let mut sums = Vec::new();
         for k in 0..8 {
             let d = k as f32 / 8.0 * px_world;
-            let pos = if diagonal { vec![-0.7 + d, -0.7, 0.0, 0.7 + d, 0.7, 0.0] } else { vec![-0.9, d, 0.0, 0.9, d, 0.0] };
+            let pos = if diagonal {
+                vec![-0.7 + d, -0.7, 0.0, 0.7 + d, 0.7, 0.0]
+            } else {
+                vec![-0.9, d, 0.0, 0.9, d, 0.0]
+            };
             let mut geometry = BufferGeometry::new();
             geometry.set_attribute("position", BufferAttribute::new(pos, 3));
             let mut material = LineBasicMaterial::new(Color::from_hex(0xffffff));
             material.transparent = Some(true);
             let mut scene = Scene::new();
             scene.background = Color::from_hex(0x000000);
-            scene.add(Object3D::line_segments(LineSegments::new(geometry, Material::Line(material))));
+            scene.add(Object3D::line_segments(LineSegments::new(
+                geometry,
+                Material::Line(material),
+            )));
             let rgba = hr.render_to_rgba(&mut scene, &unit_camera()).unwrap();
-            let expect = if diagonal { width * std::f32::consts::SQRT_2 } else { width };
+            let expect = if diagonal {
+                width * std::f32::consts::SQRT_2
+            } else {
+                width
+            };
             for x in [SIZE / 2 - 6, SIZE / 2, SIZE / 2 + 5] {
                 let col = column(&rgba, x);
                 let peak = col.iter().cloned().fold(0.0, f32::max);
-                assert!(peak <= expect + 0.03, "diagonal {diagonal} step {k} column {x}: peak {peak}");
+                assert!(
+                    peak <= expect + 0.03,
+                    "diagonal {diagonal} step {k} column {x}: peak {peak}"
+                );
                 sums.push(col.iter().sum::<f32>() / expect);
             }
         }
         for s in &sums {
-            assert!((s - 1.0).abs() < 0.06, "diagonal {diagonal}: column ink {s} of the width, all {sums:?}");
+            assert!(
+                (s - 1.0).abs() < 0.06,
+                "diagonal {diagonal}: column ink {s} of the width, all {sums:?}"
+            );
         }
     }
     let mut geometry = BufferGeometry::new();
     // A quarter pixel off the boundary between two rows, where both centres
     // would tie at half a pixel.
     let y = 0.25 * px_world;
-    geometry.set_attribute("position", BufferAttribute::new(vec![-0.9, y, 0.0, 0.9, y, 0.0], 3));
+    geometry.set_attribute(
+        "position",
+        BufferAttribute::new(vec![-0.9, y, 0.0, 0.9, y, 0.0], 3),
+    );
     let mut scene = Scene::new();
     scene.background = Color::from_hex(0x000000);
     scene.add(Object3D::line_segments(LineSegments::new(
@@ -476,7 +500,10 @@ fn thin_line_quads_keep_their_weight_between_pixels() {
         Material::Line(LineBasicMaterial::new(Color::from_hex(0xffffff))),
     )));
     let rgba = hr.render_to_rgba(&mut scene, &unit_camera()).unwrap();
-    let lit = column(&rgba, SIZE / 2).iter().filter(|&&c| c > 0.99).count();
+    let lit = column(&rgba, SIZE / 2)
+        .iter()
+        .filter(|&&c| c > 0.99)
+        .count();
     assert!((1..=2).contains(&lit), "opaque: {lit} whole pixels");
 }
 
@@ -635,6 +662,7 @@ fn resizing_reallocates_the_target() {
 #[test]
 fn an_offscreen_target_can_be_driven_directly() {
     let Ok(device) = MetalDevice::new() else {
+        eprintln!("skipping: no Metal device");
         return;
     };
     let mut renderer = threers::metal::MetalRenderer::with_device(device.clone()).unwrap();
@@ -671,6 +699,7 @@ fn the_bgra_surface_format_draws_and_reads_back_in_rgba_order() {
     // be inspected from a test — so exercise that exact pipeline and readback
     // path against an offscreen target instead.
     let Ok(device) = MetalDevice::new() else {
+        eprintln!("skipping: no Metal device");
         return;
     };
     let mut renderer = threers::metal::MetalRenderer::with_device(device.clone()).unwrap();
@@ -706,6 +735,7 @@ fn the_bgra_surface_format_draws_and_reads_back_in_rgba_order() {
 #[test]
 fn both_eyes_draw_into_their_own_slice_in_one_pass() {
     let Ok(device) = MetalDevice::new() else {
+        eprintln!("skipping: no Metal device");
         return;
     };
     let mut renderer = threers::metal::MetalRenderer::with_device(device.clone()).unwrap();
@@ -763,6 +793,7 @@ fn both_eyes_draw_into_their_own_slice_in_one_pass() {
 #[test]
 fn views_with_separate_targets_render_one_pass_each() {
     let Ok(device) = MetalDevice::new() else {
+        eprintln!("skipping: no Metal device");
         return;
     };
     let mut renderer = threers::metal::MetalRenderer::with_device(device.clone()).unwrap();
@@ -803,6 +834,7 @@ fn views_with_separate_targets_render_one_pass_each() {
 #[test]
 fn reverse_z_keeps_the_nearer_surface() {
     let Ok(device) = MetalDevice::new() else {
+        eprintln!("skipping: no Metal device");
         return;
     };
     let mut renderer = threers::metal::MetalRenderer::with_device(device.clone()).unwrap();
@@ -888,17 +920,17 @@ fn camera_layers_filter_what_is_drawn() {
 #[test]
 fn headless_render_scale_upscales_on_readback() {
     let Some(mut hr) = (match MetalHeadlessRenderer::builder()
-            .size(SIZE, SIZE)
-            .render_scale(2)
-            .build()
-        {
-            Ok(r) => Some(r),
-            Err(MetalError::NoDevice) => {
-                eprintln!("skipping: no Metal device on this machine");
-                None
-            }
-            Err(e) => panic!("{e}"),
-        }) else {
+        .size(SIZE, SIZE)
+        .render_scale(2)
+        .build()
+    {
+        Ok(r) => Some(r),
+        Err(MetalError::NoDevice) => {
+            eprintln!("skipping: no Metal device on this machine");
+            None
+        }
+        Err(e) => panic!("{e}"),
+    }) else {
         return;
     };
     assert_eq!(hr.export_size(), (SIZE, SIZE));
@@ -919,17 +951,17 @@ fn headless_render_scale_upscales_on_readback() {
 #[test]
 fn headless_supersample_downsample() {
     let Some(mut hr) = (match MetalHeadlessRenderer::builder()
-            .size(SIZE, SIZE)
-            .supersample(4)
-            .build()
-        {
-            Ok(r) => Some(r),
-            Err(MetalError::NoDevice) => {
-                eprintln!("skipping: no Metal device on this machine");
-                None
-            }
-            Err(e) => panic!("{e}"),
-        }) else {
+        .size(SIZE, SIZE)
+        .supersample(4)
+        .build()
+    {
+        Ok(r) => Some(r),
+        Err(MetalError::NoDevice) => {
+            eprintln!("skipping: no Metal device on this machine");
+            None
+        }
+        Err(e) => panic!("{e}"),
+    }) else {
         return;
     };
     assert_eq!(hr.export_size(), (SIZE, SIZE));
@@ -973,7 +1005,10 @@ fn headless_bloom_does_not_panic() {
     hr.set_bloom(0.5, 0.2, 2.0);
     let rgba = hr.render_to_rgba(&mut scene, &unit_camera()).unwrap();
     assert_eq!(rgba.len(), (SIZE * SIZE * 4) as usize);
-    assert!(center(&rgba)[0] > 200, "white quad should survive bloom composite");
+    assert!(
+        center(&rgba)[0] > 200,
+        "white quad should survive bloom composite"
+    );
 }
 
 // ------------------------------------------------------------- wireframe
@@ -1000,7 +1035,10 @@ fn wire_quad(polygons: bool) -> BufferGeometry {
 fn wire_scene(polygons: bool) -> Scene {
     let mut scene = Scene::new();
     scene.background = Color::from_hex(0x000000);
-    scene.add(Object3D::mesh(Mesh::new(wire_quad(polygons), wire_material())));
+    scene.add(Object3D::mesh(Mesh::new(
+        wire_quad(polygons),
+        wire_material(),
+    )));
     scene
 }
 
@@ -1011,16 +1049,24 @@ fn wireframe_quad_draws_its_outline_without_the_diagonal() {
     // Control: without a polygon table it is three.js's per-triangle
     // wireframe, so the plane's own diagonal is drawn. Proves the probe can
     // see a diagonal at all.
-    let rgba = hr.render_to_rgba(&mut wire_scene(false), &unit_camera()).unwrap();
+    let rgba = hr
+        .render_to_rgba(&mut wire_scene(false), &unit_camera())
+        .unwrap();
     assert_eq!(
         diagonals_drawn(&rgba),
         1,
         "triangle wireframe should show exactly one diagonal"
     );
 
-    let rgba = hr.render_to_rgba(&mut wire_scene(true), &unit_camera()).unwrap();
+    let rgba = hr
+        .render_to_rgba(&mut wire_scene(true), &unit_camera())
+        .unwrap();
     assert_outline_only(&rgba, "metal");
-    assert_eq!(hr.stats().triangles, 2, "a wireframe still reports its triangles");
+    assert_eq!(
+        hr.stats().triangles,
+        2,
+        "a wireframe still reports its triangles"
+    );
 }
 
 #[test]
@@ -1043,7 +1089,9 @@ fn instanced_wireframe_quads_draw_outlines_only() {
 #[test]
 fn wireframe_quad_matches_the_wgpu_backend() {
     let Some(mut hr) = renderer(1) else { return };
-    let metal = hr.render_to_rgba(&mut wire_scene(true), &unit_camera()).unwrap();
+    let metal = hr
+        .render_to_rgba(&mut wire_scene(true), &unit_camera())
+        .unwrap();
 
     let Ok(mut wr) = threers::HeadlessRenderer::builder()
         .size(SIZE, SIZE)
@@ -1068,7 +1116,10 @@ fn wireframe_quad_matches_the_wgpu_backend() {
             }
         }
     }
-    eprintln!("wireframe: {lit} lit pixels, {} differ from wgpu", differ.len());
+    eprintln!(
+        "wireframe: {lit} lit pixels, {} differ from wgpu",
+        differ.len()
+    );
     assert!(lit > 100, "metal lit only {lit} pixels");
     assert!(
         differ.len() * 50 <= lit,
@@ -1388,8 +1439,8 @@ fn classes_match_picks(
     for y in 1..SIZE as i32 - 1 {
         for x in 1..SIZE as i32 - 1 {
             let here = colour_class(rgba, x, y);
-            let uniform = (-1..=1)
-                .all(|dy| (-1..=1).all(|dx| colour_class(rgba, x + dx, y + dy) == here));
+            let uniform =
+                (-1..=1).all(|dy| (-1..=1).all(|dx| colour_class(rgba, x + dx, y + dy) == here));
             if !uniform {
                 continue;
             }
@@ -1433,7 +1484,8 @@ fn groups_draw_their_materials_where_the_raycaster_reports_them() {
         if let Some((s, c)) = range {
             g.set_draw_range(s, c);
         }
-        let mesh = Mesh::with_materials(std::sync::Arc::new(g), vec![flat(0x00ff00), flat(0xff0000)]);
+        let mesh =
+            Mesh::with_materials(std::sync::Arc::new(g), vec![flat(0x00ff00), flat(0xff0000)]);
         let mut scene = Scene::new();
         scene.background = Color::from_hex(0x000000);
         scene.add(Object3D::mesh(mesh));
@@ -1445,17 +1497,34 @@ fn groups_draw_their_materials_where_the_raycaster_reports_them() {
         let mut scene = build(range);
         let rgba = hr.render_to_rgba(&mut scene, &cam).unwrap();
         let (checked, counts, wrong) = classes_match_picks(&rgba, &mut scene, &cam, &classes);
-        eprintln!("{name}: {checked} checked, classes {counts:?}, {} wrong", wrong.len());
-        assert!(counts[1] > 100 && counts[2] > 100, "{name}: both materials drawn: {counts:?}");
+        eprintln!(
+            "{name}: {checked} checked, classes {counts:?}, {} wrong",
+            wrong.len()
+        );
+        assert!(
+            counts[1] > 100 && counts[2] > 100,
+            "{name}: both materials drawn: {counts:?}"
+        );
         assert!(counts[0] > 100, "{name}: background around the plane");
         assert_eq!(counts[3], 0, "{name}: no pixel in neither material");
-        assert!(wrong.is_empty(), "{name}: pixels disagree with picks: {:?}", &wrong[..wrong.len().min(10)]);
+        assert!(
+            wrong.is_empty(),
+            "{name}: pixels disagree with picks: {:?}",
+            &wrong[..wrong.len().min(10)]
+        );
     }
     // The cut range leaves less of each drawn.
     let full = hr.render_to_rgba(&mut build(None), &cam).unwrap();
     let cut = hr.render_to_rgba(&mut build(Some((6, 12))), &cam).unwrap();
-    let lit_count = |img: &[u8]| (0..SIZE as i32 * SIZE as i32).filter(|i| lit(img, i % SIZE as i32, i / SIZE as i32)).count();
-    assert!(lit_count(&cut) * 3 < lit_count(&full) * 2, "drawRange cut the plane");
+    let lit_count = |img: &[u8]| {
+        (0..SIZE as i32 * SIZE as i32)
+            .filter(|i| lit(img, i % SIZE as i32, i / SIZE as i32))
+            .count()
+    };
+    assert!(
+        lit_count(&cut) * 3 < lit_count(&full) * 2,
+        "drawRange cut the plane"
+    );
 }
 
 /// A plane under morph targets — absolute, and relative ones describing the
@@ -1480,7 +1549,10 @@ fn morphed_meshes_are_drawn_where_they_are_picked() {
             }
         }
         g.morph_targets_relative = relative;
-        g.set_morph_attribute("position", vec![BufferAttribute::new(t0, 3), BufferAttribute::new(t1, 3)]);
+        g.set_morph_attribute(
+            "position",
+            vec![BufferAttribute::new(t0, 3), BufferAttribute::new(t1, 3)],
+        );
         let mut mesh = Mesh::new(g, BasicMaterial::new(Color::WHITE).into());
         mesh.morph_influences = vec![1.0, 0.75];
         let mut scene = Scene::new();
@@ -1488,12 +1560,21 @@ fn morphed_meshes_are_drawn_where_they_are_picked() {
         let id = scene.add(Object3D::mesh(mesh));
         let rgba = hr.render_to_rgba(&mut scene, &cam).unwrap();
         let (inside, outside, wrong) = picks_match_pixels(&rgba, &mut scene, &cam, id);
-        eprintln!("morph relative={relative}: {inside} in, {outside} out, {} wrong", wrong.len());
+        eprintln!(
+            "morph relative={relative}: {inside} in, {outside} out, {} wrong",
+            wrong.len()
+        );
         assert!(wrong.is_empty(), "relative={relative}: {wrong:?}");
         // 1.6 × 1 at y ∈ [-0.2, 0.8]: y = 0.61 is covered and y = -0.42 is
         // not — the rest pose, y ∈ [-0.5, 0.5], was the reverse.
-        assert!(lit(&rgba, 32, 12) && !lit(&rgba, 32, 45), "relative={relative}");
-        assert!(lit(&rgba, 7, 25) && lit(&rgba, 56, 25), "widened to x = ±0.8");
+        assert!(
+            lit(&rgba, 32, 12) && !lit(&rgba, 32, 45),
+            "relative={relative}"
+        );
+        assert!(
+            lit(&rgba, 7, 25) && lit(&rgba, 56, 25),
+            "widened to x = ±0.8"
+        );
         assert!(inside > 1000, "{inside}");
     }
 }
@@ -1513,7 +1594,9 @@ fn morph_targets_apply_before_skinning() {
         let n = g.get_attribute("position").unwrap().count();
         let pos = g.get_attribute("position").unwrap().array.clone();
         // Relative: stretch the strip along its length.
-        let delta: Vec<f32> = (0..n).flat_map(|v| [0.0, pos[v * 3 + 1] * 0.5, 0.0]).collect();
+        let delta: Vec<f32> = (0..n)
+            .flat_map(|v| [0.0, pos[v * 3 + 1] * 0.5, 0.0])
+            .collect();
         g.morph_targets_relative = true;
         g.set_morph_attribute("position", vec![BufferAttribute::new(delta, 3)]);
         sm.geometry = std::sync::Arc::new(g);
@@ -1525,9 +1608,15 @@ fn morph_targets_apply_before_skinning() {
     eprintln!("skinned morph: rest {lit_rest}, morphed {lit_morph}, {differ} differ");
     assert!(differ > 50, "the morph moved the skinned strip");
     let (inside, outside, wrong) = picks_match_pixels(&morphed, &mut scene, &cam, id);
-    eprintln!("skinned morph picks: {inside} in, {outside} out, {} wrong", wrong.len());
+    eprintln!(
+        "skinned morph picks: {inside} in, {outside} out, {} wrong",
+        wrong.len()
+    );
     assert!(inside > 80 && outside > 1000);
-    assert!(wrong.is_empty(), "picks disagree with the pixels at {wrong:?}");
+    assert!(
+        wrong.is_empty(),
+        "picks disagree with the pixels at {wrong:?}"
+    );
 }
 
 /// Morph normals reach the lighting: a plane facing the camera whose normal
@@ -1545,9 +1634,13 @@ fn morph_normals_change_the_shading() {
         let tn: Vec<f32> = (0..n).flat_map(|_| [0.0, -s, c]).collect();
         let tp = g.get_attribute("position").unwrap().array.clone();
         g.set_morph_attribute("position", vec![BufferAttribute::new(tp, 3)]);
-        g.morph_attributes.insert("normal".into(), vec![BufferAttribute::new(tn, 3)]);
+        g.morph_attributes
+            .insert("normal".into(), vec![BufferAttribute::new(tn, 3)]);
         g.bump_version();
-        let mut mesh = Mesh::new(g, threers::materials::LambertMaterial::new(Color::WHITE).into());
+        let mut mesh = Mesh::new(
+            g,
+            threers::materials::LambertMaterial::new(Color::WHITE).into(),
+        );
         mesh.morph_influences = vec![influence];
         let mut scene = Scene::new();
         scene.background = Color::from_hex(0x000000);
@@ -1563,7 +1656,10 @@ fn morph_normals_change_the_shading() {
     eprintln!("lambert centre: rest {flat_lit}, normal-morphed {tilted}");
     assert!(flat_lit > 100, "{flat_lit}");
     // cos 60° = 0.5 of the light in linear terms: clearly darker, not black.
-    assert!(tilted + 30 < flat_lit && tilted > 40, "{tilted} vs {flat_lit}");
+    assert!(
+        tilted + 30 < flat_lit && tilted > 40,
+        "{tilted} vs {flat_lit}"
+    );
 }
 
 /// Per-pixel colour parity of two images: how many pixels differ in any
@@ -1637,7 +1733,8 @@ fn morph_targets_match_the_wgpu_backend() {
             }
         }
         g.morph_targets_relative = relative;
-        g.morph_attributes.insert("normal".into(), vec![BufferAttribute::new(n0, 3)]);
+        g.morph_attributes
+            .insert("normal".into(), vec![BufferAttribute::new(n0, 3)]);
         g.set_morph_attribute("position", vec![BufferAttribute::new(t0, 3)]);
         // Standard rather than Lambert: the two backends' Lambert paths are
         // not held to each other (Metal's runs about 3x brighter), the
@@ -1669,7 +1766,9 @@ fn morph_targets_match_the_wgpu_backend() {
         let mut g = (*sm.geometry).clone();
         let n = g.get_attribute("position").unwrap().count();
         let pos = g.get_attribute("position").unwrap().array.clone();
-        let delta: Vec<f32> = (0..n).flat_map(|v| [pos[v * 3] * 0.6, pos[v * 3 + 1] * 0.4, 0.0]).collect();
+        let delta: Vec<f32> = (0..n)
+            .flat_map(|v| [pos[v * 3] * 0.6, pos[v * 3 + 1] * 0.4, 0.0])
+            .collect();
         g.morph_targets_relative = true;
         g.set_morph_attribute("position", vec![BufferAttribute::new(delta, 3)]);
         sm.geometry = std::sync::Arc::new(g);
@@ -1707,7 +1806,9 @@ fn truth_renderer() -> Option<MetalHeadlessRenderer> {
 /// and picked with each instance's `materialIndex`.
 #[test]
 fn instanced_meshes_draw_groups_and_morphs_as_three_js_does() {
-    let Some(mut m) = truth_renderer() else { return };
+    let Some(mut m) = truth_renderer() else {
+        return;
+    };
     let failures = instanced_truth::check("metal", &mut |scene, cam| {
         m.render_to_rgba(scene, cam).expect("metal render")
     });
@@ -1717,7 +1818,9 @@ fn instanced_meshes_draw_groups_and_morphs_as_three_js_does() {
 /// three.js morphs a 4-component vertex colour in all four channels.
 #[test]
 fn four_component_colours_morph_with_their_alpha() {
-    let Some(mut m) = truth_renderer() else { return };
+    let Some(mut m) = truth_renderer() else {
+        return;
+    };
     let failures = instanced_truth::check_colour_morph("metal", &mut |scene, cam| {
         m.render_to_rgba(scene, cam).expect("metal render")
     });
@@ -1728,7 +1831,9 @@ fn four_component_colours_morph_with_their_alpha() {
 /// colour) per instance.
 #[test]
 fn instance_colours_tint_each_instance_as_three_js_does() {
-    let Some(mut m) = truth_renderer() else { return };
+    let Some(mut m) = truth_renderer() else {
+        return;
+    };
     let failures = instanced_truth::check_instance_colours("metal", &mut |scene, cam| {
         m.render_to_rgba(scene, cam).expect("metal render")
     });
@@ -1743,7 +1848,11 @@ mod decal;
 #[test]
 fn polygon_offset_keeps_a_decal_over_its_surface() {
     for msaa in [1, 4] {
-        let mut m = match MetalHeadlessRenderer::builder().size(decal::N, decal::N).msaa(msaa).build() {
+        let mut m = match MetalHeadlessRenderer::builder()
+            .size(decal::N, decal::N)
+            .msaa(msaa)
+            .build()
+        {
             Ok(m) => m,
             Err(MetalError::NoDevice) => return,
             Err(e) => panic!("{e}"),
@@ -1751,9 +1860,18 @@ fn polygon_offset_keeps_a_decal_over_its_surface() {
         let [(blue0, red0), (blue1, red1)] =
             decal::measure(&mut |s, c| m.render_to_rgba(s, c).expect("metal render"));
         eprintln!("metal msaa {msaa}: no offset {blue0} blue / {red0} red; offset {blue1} blue / {red1} red");
-        assert!(blue1 > 1000, "msaa {msaa}: decal interior is {blue1} pixels");
-        assert_eq!(red1, 0, "msaa {msaa}: with polygonOffset the surface shows through the decal");
-        assert!(red0 * 20 > blue0 + red0, "msaa {msaa}: without an offset the two should z-fight");
+        assert!(
+            blue1 > 1000,
+            "msaa {msaa}: decal interior is {blue1} pixels"
+        );
+        assert_eq!(
+            red1, 0,
+            "msaa {msaa}: with polygonOffset the surface shows through the decal"
+        );
+        assert!(
+            red0 * 20 > blue0 + red0,
+            "msaa {msaa}: without an offset the two should z-fight"
+        );
     }
 }
 
@@ -1785,16 +1903,26 @@ fn but_simulator_blends(failures: Vec<String>) -> Vec<String> {
 fn alpha_test_and_transparent_follow_three_js() {
     let mut failures = Vec::new();
     for msaa in [1, 4] {
-        let mut m = match MetalHeadlessRenderer::builder().size(alpha::N, alpha::N).msaa(msaa).build() {
+        let mut m = match MetalHeadlessRenderer::builder()
+            .size(alpha::N, alpha::N)
+            .msaa(msaa)
+            .build()
+        {
             Ok(m) => m,
             Err(MetalError::NoDevice) => return,
             Err(e) => panic!("{e}"),
         };
-        failures.extend(but_simulator_blends(alpha::check(&format!("metal msaa {msaa}"), &mut |s, c| {
-            m.render_to_rgba(s, c).expect("metal render")
-        })));
+        failures.extend(but_simulator_blends(alpha::check(
+            &format!("metal msaa {msaa}"),
+            &mut |s, c| m.render_to_rgba(s, c).expect("metal render"),
+        )));
     }
-    assert!(failures.is_empty(), "{} failures:\n{}", failures.len(), failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "{} failures:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
 }
 
 #[path = "support/shadow_cutout.rs"]
@@ -1805,13 +1933,23 @@ mod cutout;
 /// `shadowSide`) — directional, spot and point, as on wgpu.
 #[test]
 fn alpha_tested_casters_cast_cut_out_shadows() {
-    let mut m = match MetalHeadlessRenderer::builder().size(cutout::N, cutout::N).build() {
+    let mut m = match MetalHeadlessRenderer::builder()
+        .size(cutout::N, cutout::N)
+        .build()
+    {
         Ok(m) => m,
         Err(MetalError::NoDevice) => return,
         Err(e) => panic!("{e}"),
     };
-    let failures = cutout::check("metal", &mut |s, c| m.render_to_rgba(s, c).expect("metal render"));
-    assert!(failures.is_empty(), "{} failures:\n{}", failures.len(), failures.join("\n"));
+    let failures = cutout::check("metal", &mut |s, c| {
+        m.render_to_rgba(s, c).expect("metal render")
+    });
+    assert!(
+        failures.is_empty(),
+        "{} failures:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
 }
 
 #[path = "support/lit_maps.rs"]
@@ -1821,13 +1959,23 @@ mod lit_maps;
 /// on wgpu (`tests/lit_maps.rs`).
 #[test]
 fn lambert_phong_toon_shade_their_maps_as_three_js_does() {
-    let mut m = match MetalHeadlessRenderer::builder().size(lit_maps::N, lit_maps::N).build() {
+    let mut m = match MetalHeadlessRenderer::builder()
+        .size(lit_maps::N, lit_maps::N)
+        .build()
+    {
         Ok(m) => m,
         Err(MetalError::NoDevice) => return,
         Err(e) => panic!("{e}"),
     };
-    let failures = lit_maps::check("metal", &mut |s, c| m.render_to_rgba(s, c).expect("metal render"));
-    assert!(failures.is_empty(), "{} failures:\n{}", failures.len(), failures.join("\n"));
+    let failures = lit_maps::check("metal", &mut |s, c| {
+        m.render_to_rgba(s, c).expect("metal render")
+    });
+    assert!(
+        failures.is_empty(),
+        "{} failures:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
 }
 
 #[path = "support/material_variants.rs"]
@@ -1837,13 +1985,23 @@ mod variants;
 /// repeat included — as on wgpu (`tests/material_variants.rs`).
 #[test]
 fn each_texture_keeps_its_own_sampler_and_transform() {
-    let mut m = match MetalHeadlessRenderer::builder().size(variants::N, variants::N).build() {
+    let mut m = match MetalHeadlessRenderer::builder()
+        .size(variants::N, variants::N)
+        .build()
+    {
         Ok(m) => m,
         Err(MetalError::NoDevice) => return,
         Err(e) => panic!("{e}"),
     };
-    let failures = variants::check("metal", &mut |s, c| m.render_to_rgba(s, c).expect("metal render"));
-    assert!(failures.is_empty(), "{} failures:\n{}", failures.len(), failures.join("\n"));
+    let failures = variants::check("metal", &mut |s, c| {
+        m.render_to_rgba(s, c).expect("metal render")
+    });
+    assert!(
+        failures.is_empty(),
+        "{} failures:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
 }
 
 #[path = "support/env_map.rs"]
@@ -1853,13 +2011,23 @@ mod env_map;
 /// (`tests/env_map.rs`).
 #[test]
 fn env_maps_reflect_and_combine_as_three_js_does() {
-    let mut m = match MetalHeadlessRenderer::builder().size(env_map::N, env_map::N).build() {
+    let mut m = match MetalHeadlessRenderer::builder()
+        .size(env_map::N, env_map::N)
+        .build()
+    {
         Ok(m) => m,
         Err(MetalError::NoDevice) => return,
         Err(e) => panic!("{e}"),
     };
-    let failures = env_map::check("metal", &mut |s, c| m.render_to_rgba(s, c).expect("metal render"));
-    assert!(failures.is_empty(), "{} failures:\n{}", failures.len(), failures.join("\n"));
+    let failures = env_map::check("metal", &mut |s, c| {
+        m.render_to_rgba(s, c).expect("metal render")
+    });
+    assert!(
+        failures.is_empty(),
+        "{} failures:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
 }
 
 #[path = "support/points.rs"]
@@ -1868,13 +2036,23 @@ mod points;
 /// three.js `Points`, as on wgpu (`tests/points.rs`).
 #[test]
 fn points_draw_as_three_js_does() {
-    let mut m = match MetalHeadlessRenderer::builder().size(points::N, points::N).build() {
+    let mut m = match MetalHeadlessRenderer::builder()
+        .size(points::N, points::N)
+        .build()
+    {
         Ok(m) => m,
         Err(MetalError::NoDevice) => return,
         Err(e) => panic!("{e}"),
     };
-    let failures = but_simulator_blends(points::check("metal", &mut |s, c| m.render_to_rgba(s, c).expect("metal render")));
-    assert!(failures.is_empty(), "{} failures:\n{}", failures.len(), failures.join("\n"));
+    let failures = but_simulator_blends(points::check("metal", &mut |s, c| {
+        m.render_to_rgba(s, c).expect("metal render")
+    }));
+    assert!(
+        failures.is_empty(),
+        "{} failures:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
 }
 
 #[path = "support/pbr_env.rs"]
@@ -1885,13 +2063,23 @@ mod pbr_env;
 /// (`tests/pbr_env.rs`).
 #[test]
 fn standard_materials_read_their_environment_as_three_js_does() {
-    let mut m = match MetalHeadlessRenderer::builder().size(pbr_env::N, pbr_env::N).build() {
+    let mut m = match MetalHeadlessRenderer::builder()
+        .size(pbr_env::N, pbr_env::N)
+        .build()
+    {
         Ok(m) => m,
         Err(MetalError::NoDevice) => return,
         Err(e) => panic!("{e}"),
     };
-    let failures = pbr_env::check("metal", &mut |s, c| m.render_to_rgba(s, c).expect("metal render"));
-    assert!(failures.is_empty(), "{} failures:\n{}", failures.len(), failures.join("\n"));
+    let failures = pbr_env::check("metal", &mut |s, c| {
+        m.render_to_rgba(s, c).expect("metal render")
+    });
+    assert!(
+        failures.is_empty(),
+        "{} failures:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
 }
 
 #[path = "support/physical_specular.rs"]
@@ -1901,13 +2089,23 @@ mod physical_specular;
 /// against three.js r165's formulas, as on wgpu (`tests/physical.rs`).
 #[test]
 fn ior_and_specular_follow_three_js() {
-    let mut m = match MetalHeadlessRenderer::builder().size(physical_specular::N, physical_specular::N).build() {
+    let mut m = match MetalHeadlessRenderer::builder()
+        .size(physical_specular::N, physical_specular::N)
+        .build()
+    {
         Ok(m) => m,
         Err(MetalError::NoDevice) => return,
         Err(e) => panic!("{e}"),
     };
-    let failures = physical_specular::check("metal", &mut |s, c| m.render_to_rgba(s, c).expect("metal render"));
-    assert!(failures.is_empty(), "{} failures:\n{}", failures.len(), failures.join("\n"));
+    let failures = physical_specular::check("metal", &mut |s, c| {
+        m.render_to_rgba(s, c).expect("metal render")
+    });
+    assert!(
+        failures.is_empty(),
+        "{} failures:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
 }
 
 #[path = "support/physical_maps.rs"]
@@ -1917,13 +2115,23 @@ mod physical_maps;
 /// folded in, as on wgpu (`tests/physical.rs`).
 #[test]
 fn physical_maps_scale_their_scalars_as_three_js_does() {
-    let mut m = match MetalHeadlessRenderer::builder().size(physical_maps::N, physical_maps::N).build() {
+    let mut m = match MetalHeadlessRenderer::builder()
+        .size(physical_maps::N, physical_maps::N)
+        .build()
+    {
         Ok(m) => m,
         Err(MetalError::NoDevice) => return,
         Err(e) => panic!("{e}"),
     };
-    let failures = physical_maps::check("metal", &mut |s, c| m.render_to_rgba(s, c).expect("metal render"));
-    assert!(failures.is_empty(), "{} failures:\n{}", failures.len(), failures.join("\n"));
+    let failures = physical_maps::check("metal", &mut |s, c| {
+        m.render_to_rgba(s, c).expect("metal render")
+    });
+    assert!(
+        failures.is_empty(),
+        "{} failures:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
 }
 
 /// Transmission seen in stereo: each eye refracts the scene captured from
@@ -1939,6 +2147,7 @@ fn each_eye_refracts_its_own_capture() {
     use threers::metal::enums::MTLViewport;
 
     let Ok(device) = MetalDevice::new() else {
+        eprintln!("skipping: no Metal device");
         return;
     };
     let mut renderer = threers::metal::MetalRenderer::with_device(device.clone()).unwrap();
@@ -1947,9 +2156,14 @@ fn each_eye_refracts_its_own_capture() {
 
     let mut scene = Scene::new();
     scene.background = Color::from_hex(0x000000);
-    scene.add_light(DirectionalLight::new(Color::WHITE, 2.0).with_direction(Vector3::new(-1.0, -1.0, -2.0)));
+    scene.add_light(
+        DirectionalLight::new(Color::WHITE, 2.0).with_direction(Vector3::new(-1.0, -1.0, -2.0)),
+    );
     // Bars of different colours behind the glass, so a shifted capture shows.
-    for (i, hex) in [0xd02020u32, 0x20d020, 0x2020d0, 0xd0d020, 0xd020d0].into_iter().enumerate() {
+    for (i, hex) in [0xd02020u32, 0x20d020, 0x2020d0, 0xd0d020, 0xd020d0]
+        .into_iter()
+        .enumerate()
+    {
         let mut m = StandardMaterial::new(Color::from_hex(hex));
         m.emissive = Color::from_hex(hex);
         let mut bar = Object3D::mesh(Mesh::new(BoxGeometry::new(0.5, 5.0, 0.2), m.into()));
@@ -1961,7 +2175,10 @@ fn each_eye_refracts_its_own_capture() {
     glass.transmission = 1.0;
     glass.thickness = 1.5;
     glass.ior = 1.5;
-    scene.add(Object3D::mesh(Mesh::new(SphereGeometry::new(1.0, 48, 24), glass.into())));
+    scene.add(Object3D::mesh(Mesh::new(
+        SphereGeometry::new(1.0, 48, 24),
+        glass.into(),
+    )));
 
     let camera = |x: f32| {
         let mut c = PerspectiveCamera::new(45.0, 1.0, 0.1, 100.0);
@@ -1981,12 +2198,20 @@ fn each_eye_refracts_its_own_capture() {
     let worst = |a: &[u8], b: &[u8]| {
         a.chunks(4)
             .zip(b.chunks(4))
-            .map(|(p, q)| (0..3).map(|k| (p[k] as i32 - q[k] as i32).abs()).max().unwrap())
+            .map(|(p, q)| {
+                (0..3)
+                    .map(|k| (p[k] as i32 - q[k] as i32).abs())
+                    .max()
+                    .unwrap()
+            })
             .max()
             .unwrap()
     };
     // The two eyes do see different things through the glass.
-    assert!(worst(&mono[0], &mono[1]) > 60, "the eyes' mono renders barely differ");
+    assert!(
+        worst(&mono[0], &mono[1]) > 60,
+        "the eyes' mono renders barely differ"
+    );
 
     // Layered: a slice per eye.
     let target = MetalRenderTarget::layered(&device, S, S, format, 2).unwrap();
@@ -1994,7 +2219,9 @@ fn each_eye_refracts_its_own_capture() {
         RenderView::from_camera(&eyes[0]).with_slice(0),
         RenderView::from_camera(&eyes[1]).with_slice(1),
     ];
-    renderer.render_views(&mut scene, &views, &target.attachments()).unwrap();
+    renderer
+        .render_views(&mut scene, &views, &target.attachments())
+        .unwrap();
     for (i, m) in mono.iter().enumerate() {
         let got = target.read_rgba_slice(&device, i as u32).unwrap();
         let d = worst(&got, m);
@@ -2003,12 +2230,21 @@ fn each_eye_refracts_its_own_capture() {
 
     // Side by side: two viewports, a pass each.
     let wide = MetalRenderTarget::new(&device, 2 * S, S, format, 1).unwrap();
-    let half = |x: f64| MTLViewport { origin_x: x, origin_y: 0.0, width: S as f64, height: S as f64, znear: 0.0, zfar: 1.0 };
+    let half = |x: f64| MTLViewport {
+        origin_x: x,
+        origin_y: 0.0,
+        width: S as f64,
+        height: S as f64,
+        znear: 0.0,
+        zfar: 1.0,
+    };
     let views = [
         RenderView::from_camera(&eyes[0]).with_viewport(half(0.0)),
         RenderView::from_camera(&eyes[1]).with_viewport(half(S as f64)),
     ];
-    renderer.render_views(&mut scene, &views, &wide.attachments()).unwrap();
+    renderer
+        .render_views(&mut scene, &views, &wide.attachments())
+        .unwrap();
     let px = wide.read_rgba(&device).unwrap();
     for (i, m) in mono.iter().enumerate() {
         let got: Vec<u8> = (0..S as usize)
@@ -2018,7 +2254,10 @@ fn each_eye_refracts_its_own_capture() {
             })
             .collect();
         let d = worst(&got, m);
-        assert!(d <= 2, "side-by-side eye {i} is {d} levels from its mono render");
+        assert!(
+            d <= 2,
+            "side-by-side eye {i} is {d} levels from its mono render"
+        );
     }
 }
 
@@ -2028,13 +2267,23 @@ mod toon_gradient;
 /// MeshToonMaterial's `gradientMap`, as on wgpu (`tests/toon.rs`).
 #[test]
 fn toon_gradient_map_shades_as_three_js_does() {
-    let mut m = match MetalHeadlessRenderer::builder().size(toon_gradient::N, toon_gradient::N).build() {
+    let mut m = match MetalHeadlessRenderer::builder()
+        .size(toon_gradient::N, toon_gradient::N)
+        .build()
+    {
         Ok(m) => m,
         Err(MetalError::NoDevice) => return,
         Err(e) => panic!("{e}"),
     };
-    let failures = toon_gradient::check("metal", &mut |s, c| m.render_to_rgba(s, c).expect("metal render"));
-    assert!(failures.is_empty(), "{} failures:\n{}", failures.len(), failures.join("\n"));
+    let failures = toon_gradient::check("metal", &mut |s, c| {
+        m.render_to_rgba(s, c).expect("metal render")
+    });
+    assert!(
+        failures.is_empty(),
+        "{} failures:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
 }
 
 /// An opaque overlay is the picture itself, byte for byte: how a CPU
@@ -2044,6 +2293,7 @@ fn toon_gradient_map_shades_as_three_js_does() {
 #[test]
 fn an_opaque_overlay_presents_an_image_exactly() {
     let Ok(device) = MetalDevice::new() else {
+        eprintln!("skipping: no Metal device");
         return;
     };
     let mut renderer = threers::metal::MetalRenderer::with_device(device.clone()).unwrap();
@@ -2062,17 +2312,30 @@ fn an_opaque_overlay_presents_an_image_exactly() {
         .unwrap();
         let mut scene = Scene::new();
         scene.background = Color::from_hex(0x00ff00);
-        renderer.render(&mut scene, &unit_camera(), &target.attachments()).unwrap();
-        renderer.draw_overlay_rgba8(&image, w, h, &target.attachments()).unwrap();
+        renderer
+            .render(&mut scene, &unit_camera(), &target.attachments())
+            .unwrap();
+        renderer
+            .draw_overlay_rgba8(&image, w, h, &target.attachments())
+            .unwrap();
         let rgba = target.read_rgba(&device).unwrap();
-        let worst = rgba.iter().zip(&image).map(|(a, b)| (*a as i32 - *b as i32).abs()).max().unwrap();
-        assert!(worst <= 1, "msaa {msaa}: an opaque overlay came back {worst} levels off");
+        let worst = rgba
+            .iter()
+            .zip(&image)
+            .map(|(a, b)| (*a as i32 - *b as i32).abs())
+            .max()
+            .unwrap();
+        assert!(
+            worst <= 1,
+            "msaa {msaa}: an opaque overlay came back {worst} levels off"
+        );
     }
 }
 
 #[test]
 fn an_overlay_blends_over_the_frame_in_linear_light() {
     let Ok(device) = MetalDevice::new() else {
+        eprintln!("skipping: no Metal device");
         return;
     };
     let mut renderer = threers::metal::MetalRenderer::with_device(device.clone()).unwrap();
@@ -2087,20 +2350,31 @@ fn an_overlay_blends_over_the_frame_in_linear_light() {
         .unwrap();
         let mut scene = Scene::new();
         scene.background = Color::from_hex(0x0000ff);
-        renderer.render(&mut scene, &unit_camera(), &target.attachments()).unwrap();
+        renderer
+            .render(&mut scene, &unit_camera(), &target.attachments())
+            .unwrap();
 
         // Row 1, column 2: red at alpha 128. Everything else transparent.
         let mut overlay = vec![0u8; 8 * 4 * 4];
         overlay[(8 + 2) * 4..(8 + 2) * 4 + 4].copy_from_slice(&[255, 0, 0, 128]);
-        renderer.draw_overlay_rgba8(&overlay, 8, 4, &target.attachments()).unwrap();
+        renderer
+            .draw_overlay_rgba8(&overlay, 8, 4, &target.attachments())
+            .unwrap();
         let rgba = target.read_rgba(&device).unwrap();
 
         // Untouched where the overlay is clear.
-        assert!(close([rgba[0], rgba[1], rgba[2], rgba[3]], [0, 0, 255, 255], 1), "msaa {msaa}");
+        assert!(
+            close([rgba[0], rgba[1], rgba[2], rgba[3]], [0, 0, 255, 255], 1),
+            "msaa {msaa}"
+        );
         // Linear-light mix, encoded: half of red over blue is ~188, not 128.
         let a = 128.0 / 255.0;
         let enc = |v: f32| -> i32 {
-            let s = if v <= 0.003_130_8 { v * 12.92 } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 };
+            let s = if v <= 0.003_130_8 {
+                v * 12.92
+            } else {
+                1.055 * v.powf(1.0 / 2.4) - 0.055
+            };
             (s * 255.0).round() as i32
         };
         let (r, b) = (enc(a), enc(1.0 - a));

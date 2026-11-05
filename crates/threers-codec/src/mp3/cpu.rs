@@ -21,7 +21,12 @@ impl Default for Cpu {
         mem[RODATA_BASE as usize..RODATA_BASE as usize + ro.len()].copy_from_slice(ro);
         let mut x = [0u64; 32];
         x[31] = RODATA_BASE - 0x100; // sp, below the constant pool
-        Cpu { x, v: [[0; 4]; 32], z: false, mem }
+        Cpu {
+            x,
+            v: [[0; 4]; 32],
+            z: false,
+            mem,
+        }
     }
 }
 
@@ -68,7 +73,15 @@ impl Cpu {
     #[inline(always)]
     pub fn vop4(&mut self, d: usize, n: usize, m: usize, f: impl Fn(f32, f32, f32) -> f32) {
         let (a, b, c) = (self.vf(n), self.vf(m), self.vf(d));
-        self.setvf(d, [f(a[0], b[0], c[0]), f(a[1], b[1], c[1]), f(a[2], b[2], c[2]), f(a[3], b[3], c[3])]);
+        self.setvf(
+            d,
+            [
+                f(a[0], b[0], c[0]),
+                f(a[1], b[1], c[1]),
+                f(a[2], b[2], c[2]),
+                f(a[3], b[3], c[3]),
+            ],
+        );
     }
     /// A 2-lane float op; the upper half of the destination is zeroed.
     #[inline(always)]
@@ -83,6 +96,8 @@ impl Cpu {
         }
     }
     pub fn get(&self, addr: u64, n: usize) -> Vec<f32> {
-        (0..n).map(|i| f32::from_bits(self.ld32(addr + 4 * i as u64))).collect()
+        (0..n)
+            .map(|i| f32::from_bits(self.ld32(addr + 4 * i as u64)))
+            .collect()
     }
 }

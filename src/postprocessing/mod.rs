@@ -28,9 +28,9 @@
 mod backend;
 mod composer;
 mod context;
+pub mod params;
 mod pass;
 mod passes;
-pub mod params;
 pub mod random;
 mod target;
 mod upload;

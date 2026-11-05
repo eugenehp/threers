@@ -195,7 +195,10 @@ mod tests {
     fn a_caption_with_a_decomposed_accent_is_one_glyph_per_letter() {
         // The reason this is here: four characters in, four letters out, not five.
         assert_eq!(run("Noe\u{0308}l"), "Noël".chars().collect::<Vec<_>>());
-        assert_eq!(run("e\u{0301}te\u{0301}"), "été".chars().collect::<Vec<_>>());
+        assert_eq!(
+            run("e\u{0301}te\u{0301}"),
+            "été".chars().collect::<Vec<_>>()
+        );
     }
 
     #[test]

@@ -26,6 +26,7 @@ fn white() -> Material {
 #[test]
 fn polygons_and_shapes_render_lit_and_shadowed_as_meshes() {
     let Ok(mut hr) = HeadlessRenderer::builder().size(W, H).build() else {
+        eprintln!("skipping: no GPU adapter");
         return;
     };
     let origin = Origin::new(CENTRE[0], CENTRE[1], CENTRE[2]);

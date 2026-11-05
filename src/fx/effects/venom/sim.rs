@@ -158,7 +158,11 @@ impl Sim {
         let (wa, wb) = ((a.1 - a.0).length(), (b.1 - b.0).length());
         let same_kind = std::mem::discriminant(&self.shape) == std::mem::discriminant(shape);
         self.inradius = match shape {
-            Shape::Polygon { points, .. } if same_kind && wa > 0.0 && matches!(&self.shape, Shape::Polygon { points: p, .. } if p.len() == points.len()) => {
+            Shape::Polygon { points, .. }
+                if same_kind
+                    && wa > 0.0
+                    && matches!(&self.shape, Shape::Polygon { points: p, .. } if p.len() == points.len()) =>
+            {
                 self.inradius * wb / wa
             }
             _ => shape.inradius(),
@@ -177,7 +181,10 @@ impl Sim {
     }
 
     pub fn grip_at(&self, grip: (usize, usize)) -> Vector2 {
-        let (a, b) = (self.cursor.grip(self.hand, grip.0), self.cursor.grip(self.hand, grip.1));
+        let (a, b) = (
+            self.cursor.grip(self.hand, grip.0),
+            self.cursor.grip(self.hand, grip.1),
+        );
         (a + b) * 0.5
     }
 
@@ -200,7 +207,11 @@ impl Sim {
             // each thick strand claims a grip; each hair a spot between two of them
             let grip = if hair { (mi, mi + 1) } else { (mi, mi) };
             let r = &mut self.rng;
-            let spread = if total > 1 { (k as f32 / (total - 1) as f32) * 2.0 - 1.0 } else { 0.0 };
+            let spread = if total > 1 {
+                (k as f32 / (total - 1) as f32) * 2.0 - 1.0
+            } else {
+                0.0
+            };
             self.list.push(Strand {
                 x: [root.x; NP],
                 y: [root.y; NP],
@@ -227,7 +238,8 @@ impl Sim {
                 let count = 1 + (self.rng.f() * 2.0) as usize;
                 for _ in 0..count {
                     let i = 3 + (self.rng.f() * (NP - 5) as f32) as usize;
-                    let j = ((i as f32 + ((self.rng.f() - 0.5) * 3.0).round()) as usize).clamp(2, NP - 2);
+                    let j = ((i as f32 + ((self.rng.f() - 0.5) * 3.0).round()) as usize)
+                        .clamp(2, NP - 2);
                     let kink = (self.rng.f() - 0.5) * 5.0;
                     self.webs.push((k, k + 1, i, j, kink));
                 }
@@ -260,8 +272,18 @@ impl Sim {
             seen.push(key);
             let s = st.s;
             if style.spikes && self.spikes.len() < MSPK {
-                let (tilt, len, life) = ((self.rng.f() - 0.5) * 0.8, 10.0 + self.rng.f() * 16.0, 1.1 + self.rng.f() * 0.6);
-                self.spikes.push(Spike { s, tilt, len, age: 0.0, life });
+                let (tilt, len, life) = (
+                    (self.rng.f() - 0.5) * 0.8,
+                    10.0 + self.rng.f() * 16.0,
+                    1.1 + self.rng.f() * 0.6,
+                );
+                self.spikes.push(Spike {
+                    s,
+                    tilt,
+                    len,
+                    age: 0.0,
+                    life,
+                });
             }
             if style.droplets && self.rng.f() < 0.6 && self.drops.len() < MDROP {
                 let i = 4 + (self.rng.f() * 4.0) as usize;
@@ -269,7 +291,14 @@ impl Sim {
                 let st = &self.list[k];
                 let (x, y) = (st.x[i], st.y[i]);
                 let r = 2.0 + self.rng.f() * 2.2;
-                self.drops.push(Drop { x, y, vx: (root.x - x) * 2.0, vy: (root.y - y) * 2.0 - 40.0, r, age: 0.0 });
+                self.drops.push(Drop {
+                    x,
+                    y,
+                    vx: (root.x - x) * 2.0,
+                    vy: (root.y - y) * 2.0 - 40.0,
+                    r,
+                    age: 0.0,
+                });
             }
         }
     }
@@ -290,7 +319,11 @@ impl Sim {
         let (sn, rc, rl) = (style.sense, style.reach, style.release.max(style.reach));
         let (lo, hi) = self.shape.bounds();
         let (cx, width) = ((lo.x + hi.x) * 0.5, (hi.x - lo.x).max(1.0));
-        let lean_t = if self.live { ((self.hand.x - cx) / (width * 1.5)).clamp(-1.0, 1.0) } else { 0.0 };
+        let lean_t = if self.live {
+            ((self.hand.x - cx) / (width * 1.5)).clamp(-1.0, 1.0)
+        } else {
+            0.0
+        };
         self.lean += (lean_t - self.lean) * (dt * 4.0).min(1.0);
 
         let live = self.live;
@@ -327,7 +360,10 @@ impl Sim {
 
         // ---- the strands ----
         // Roots spread along at most an eighth of the outline.
-        let spread_px = (d * 0.4 + 14.0).min(self.outline.perimeter() * 0.13).max(14.0) * if seeking { 0.65 } else { 1.0 };
+        let spread_px = (d * 0.4 + 14.0)
+            .min(self.outline.perimeter() * 0.13)
+            .max(14.0)
+            * if seeking { 0.65 } else { 1.0 };
         self.spread_px = spread_px;
         let mut alive = 0;
         let mode = self.mode;
@@ -337,9 +373,13 @@ impl Sim {
             let outline = &self.outline;
             let st = &mut self.list[idx];
             let target = near_s + st.spread * spread_px;
-            st.s += outline.loop_diff(st.s, target) * (dt * if mode == Mode::Snap { 1.5 } else { 6.0 }).min(1.0);
+            st.s += outline.loop_diff(st.s, target)
+                * (dt * if mode == Mode::Snap { 1.5 } else { 6.0 }).min(1.0);
             let root = outline.at(st.s);
-            let (rx, ry) = (root.point.x - root.normal.x * 3.0, root.point.y - root.normal.y * 3.0);
+            let (rx, ry) = (
+                root.point.x - root.normal.x * 3.0,
+                root.point.y - root.normal.y * 3.0,
+            );
             let mut pin_tip = false;
             if seeking {
                 // a pseudopod reaching for its grip: part of the way there, feeling about as it goes
@@ -367,7 +407,11 @@ impl Sim {
                     gx += a.cos() * coil;
                     gy += a.sin() * coil * 0.8;
                 }
-                let rate = if mode == Mode::Grow { 20.0 + st.follow } else { st.follow * 1.4 };
+                let rate = if mode == Mode::Grow {
+                    20.0 + st.follow
+                } else {
+                    st.follow * 1.4
+                };
                 let k = 1.0 - (-dt * rate).exp();
                 st.ex += (gx - st.ex) * k;
                 st.ey += (gy - st.ey) * k;
@@ -380,7 +424,11 @@ impl Sim {
                 }
             }
             // verlet: heavy damping, gravity and a slow wander
-            let damp = if mode == Mode::Snap { style.damping - 0.06 } else { style.damping };
+            let damp = if mode == Mode::Snap {
+                style.damping - 0.06
+            } else {
+                style.damping
+            };
             for i in 1..NP {
                 let vx = (st.x[i] - st.px[i]) * damp;
                 let vy = (st.y[i] - st.py[i]) * damp;
@@ -407,7 +455,13 @@ impl Sim {
                     let dd = dx.hypot(dy).max(1e-4);
                     let diff = (dd - len) / dd;
                     let a = if i == 0 { 0.0 } else { 0.5 };
-                    let b = if pin_tip && i + 1 == NP - 1 { 0.0 } else if i == 0 { 1.0 } else { 0.5 };
+                    let b = if pin_tip && i + 1 == NP - 1 {
+                        0.0
+                    } else if i == 0 {
+                        1.0
+                    } else {
+                        0.5
+                    };
                     let m = if a + b > 0.0 { a + b } else { 1.0 };
                     st.x[i] += dx * diff * (a / m);
                     st.y[i] += dy * diff * (a / m);
@@ -473,9 +527,16 @@ impl Sim {
         for g in 0..self.coat.len() {
             let caught = style.coat
                 && holding
-                && self.list.iter().any(|st| st.gi == Some(g) && (Vector2::new(st.ex, st.ey) - self.grip_at(st.grip)).length() < 6.0);
+                && self.list.iter().any(|st| {
+                    st.gi == Some(g)
+                        && (Vector2::new(st.ex, st.ey) - self.grip_at(st.grip)).length() < 6.0
+                });
             // it spreads slowly while it holds on, and slides off quickly when it lets go
-            self.coat[g] = if caught { (self.coat[g] + dt * 0.5).min(1.0) } else { (self.coat[g] - dt * 1.4).max(0.0) };
+            self.coat[g] = if caught {
+                (self.coat[g] + dt * 0.5).min(1.0)
+            } else {
+                (self.coat[g] - dt * 1.4).max(0.0)
+            };
         }
     }
 }

@@ -85,8 +85,12 @@ impl Look {
     };
 
     /// Every preset, with its name.
-    pub const PRESETS: [(&'static str, Look); 4] =
-        [("lacquer", Look::LACQUER), ("chrome", Look::CHROME), ("gold", Look::GOLD), ("toxic", Look::TOXIC)];
+    pub const PRESETS: [(&'static str, Look); 4] = [
+        ("lacquer", Look::LACQUER),
+        ("chrome", Look::CHROME),
+        ("gold", Look::GOLD),
+        ("toxic", Look::TOXIC),
+    ];
 
     /// A preset by name — `lacquer`, `chrome`, `gold`, `toxic` — for command
     /// lines and config files.
@@ -125,13 +129,21 @@ impl Look {
 }
 
 fn hex3(rgb: u32) -> [f32; 3] {
-    [((rgb >> 16) & 255) as f32 / 255.0, ((rgb >> 8) & 255) as f32 / 255.0, (rgb & 255) as f32 / 255.0]
+    [
+        ((rgb >> 16) & 255) as f32 / 255.0,
+        ((rgb >> 8) & 255) as f32 / 255.0,
+        (rgb & 255) as f32 / 255.0,
+    ]
 }
 
 fn shade(rgb: [f32; 3], k: f32, lift: f32) -> Color {
     let lin = |s: f32| {
         let s = (s * k + lift).clamp(0.0, 1.0);
-        if s <= 0.04045 { s / 12.92 } else { ((s + 0.055) / 1.055).powf(2.4) }
+        if s <= 0.04045 {
+            s / 12.92
+        } else {
+            ((s + 0.055) / 1.055).powf(2.4)
+        }
     };
     Color::new(lin(rgb[0]), lin(rgb[1]), lin(rgb[2]))
 }

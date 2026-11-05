@@ -26,8 +26,8 @@
 //! It samples the *same* cascades as the surface, through the same shared code,
 //! so the line it draws is the wave that is actually there.
 
-use threers::marks::gpu;
 use std::sync::Arc;
+use threers::marks::gpu;
 
 use threers::{
     Material, Mesh, Object3D, ObjectId, ObjectKind, PlaneGeometry, Quaternion, Scene,

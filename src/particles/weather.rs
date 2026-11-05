@@ -178,7 +178,8 @@ impl Weather {
 /// a fall speed, a size and a phase, all hashed; falling, carried by the
 /// wind, swaying; wrapped round the box (centred on `data[2].xy`), and faded
 /// near its faces. Then the same camera-facing quad as a particle's.
-pub(crate) const WEATHER_VERTEX_WGSL: &str = crate::wgsl!(r#"
+pub(crate) const WEATHER_VERTEX_WGSL: &str = crate::wgsl!(
+    r#"
 fn weather_hash(n : f32) -> f32 {
     return fract(sin(n * 12.9898 + 78.233) * 43758.5453);
 }
@@ -256,4 +257,5 @@ fn vs_custom(in : InstancedCustomIn, @builtin(vertex_index) vid : u32,
     out.uv12 = vec4<f32>(centre + shift, 0.0);
     return out;
 }
-"#);
+"#
+);

@@ -62,7 +62,10 @@ impl EdgesGeometry {
     /// (`Math.cos(MathUtils.DEG2RAD * thresholdAngle)`), so the cut-off is
     /// the same to the last bit.
     pub fn with_threshold_degrees(source: &BufferGeometry, threshold_angle: f64) -> BufferGeometry {
-        Self::with_threshold_dot(source, ((std::f64::consts::PI / 180.0) * threshold_angle).cos())
+        Self::with_threshold_dot(
+            source,
+            ((std::f64::consts::PI / 180.0) * threshold_angle).cos(),
+        )
     }
 
     fn with_threshold_dot(source: &BufferGeometry, threshold_dot: f64) -> BufferGeometry {

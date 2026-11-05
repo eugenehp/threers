@@ -26,7 +26,11 @@ fn build(metal: bool) -> HeadlessRenderer {
             std::env::remove_var("THREERS_BACKEND");
         }
     }
-    let mut hr = HeadlessRenderer::builder().size(SIZE, SIZE).color_format(FORMAT).build().expect("headless renderer");
+    let mut hr = HeadlessRenderer::builder()
+        .size(SIZE, SIZE)
+        .color_format(FORMAT)
+        .build()
+        .expect("headless renderer");
     unsafe { std::env::remove_var("THREERS_BACKEND") };
     hr.set_msaa(1);
     assert_eq!(hr.is_native_metal(), metal);
@@ -63,15 +67,22 @@ fn volume_slices_on_metal_draw_what_they_draw_on_wgpu() {
         (SIZE as f32, SIZE as f32),
         true,
     );
-    let rect = PixelRect { x: 0, y: 0, width: SIZE, height: SIZE };
+    let rect = PixelRect {
+        x: 0,
+        y: 0,
+        width: SIZE,
+        height: SIZE,
+    };
     let frames: Vec<(Vec<u8>, Vec<u8>)> = [false, true]
         .into_iter()
         .map(|metal| {
             let mut hr = build(metal);
             let gpu = hr.marks_gpu();
             assert_eq!(gpu.is_metal(), metal);
-            let density = GpuVolume::from_texture_on(&gpu, &Data3DTexture::from_f32(4, 4, 4, &values));
-            let segments = GpuVolume::from_texture_on(&gpu, &Data3DTexture::from_u64(4, 4, 4, &labels));
+            let density =
+                GpuVolume::from_texture_on(&gpu, &Data3DTexture::from_f32(4, 4, 4, &values));
+            let segments =
+                GpuVolume::from_texture_on(&gpu, &Data3DTexture::from_u64(4, 4, 4, &labels));
             assert_eq!(density.texture.size().depth_or_array_layers, 4);
             let grey = SliceRenderer::window_level(&gpu, FORMAT);
             let tint = SliceRenderer::labels(&gpu, FORMAT);
@@ -84,7 +95,11 @@ fn volume_slices_on_metal_draw_what_they_draw_on_wgpu() {
                 hr.render(&mut blank, &camera);
                 let target = hr.mark_target();
                 let mut encoder = gpu.create_command_encoder(&Default::default());
-                grey.update_on(&gpu, &grey_binding, &SliceParams::window(to_voxel, 0.0, 1.0));
+                grey.update_on(
+                    &gpu,
+                    &grey_binding,
+                    &SliceParams::window(to_voxel, 0.0, 1.0),
+                );
                 grey.draw_on(&mut encoder, &target.color, rect, &grey_binding);
                 if labelled {
                     tint.update_on(&gpu, &tint_binding, &SliceParams::labels(to_voxel, 7, 1.0));
@@ -103,19 +118,33 @@ fn volume_slices_on_metal_draw_what_they_draw_on_wgpu() {
         for x in 0..4 {
             let expected = (x as f32 / 3.0 * 255.0).round() as u8;
             let p = pixel(grey, x, 2);
-            assert!(p[0].abs_diff(expected) <= 1 && p[0] == p[1] && p[1] == p[2], "{backend}: x={x}: {p:?}");
+            assert!(
+                p[0].abs_diff(expected) <= 1 && p[0] == p[1] && p[1] == p[2],
+                "{backend}: x={x}: {p:?}"
+            );
         }
     }
     let (wgpu, metal) = (&frames[0], &frames[1]);
     assert_eq!(wgpu.0, metal.0, "the window/level slice on Metal is wgpu's");
     // Labels 0 leave the ramp; the two others are opaque colours of their own.
     let (a, b) = (pixel(&wgpu.1, 2, 1), pixel(&wgpu.1, 3, 1));
-    assert_eq!(pixel(&wgpu.1, 0, 1), pixel(&wgpu.0, 0, 1), "label 0 is clear");
+    assert_eq!(
+        pixel(&wgpu.1, 0, 1),
+        pixel(&wgpu.0, 0, 1),
+        "label 0 is clear"
+    );
     assert_ne!(a, b, "two labels, two colours");
     assert_ne!(a, pixel(&wgpu.0, 2, 1), "a label tints its voxel");
     let voxels = |f: &[u8]| (0..16).map(|i| pixel(f, i % 4, i / 4)).collect::<Vec<_>>();
-    assert_eq!(voxels(&wgpu.1), voxels(&metal.1), "the label slice on Metal is wgpu's");
-    assert!(wgpu.1 == metal.1, "the label slice on Metal is wgpu's between voxel centres too");
+    assert_eq!(
+        voxels(&wgpu.1),
+        voxels(&metal.1),
+        "the label slice on Metal is wgpu's"
+    );
+    assert!(
+        wgpu.1 == metal.1,
+        "the label slice on Metal is wgpu's between voxel centres too"
+    );
 }
 
 /// A `ShaderMaterial` reads a volume made on the renderer's own GPU — exactly
@@ -123,7 +152,9 @@ fn volume_slices_on_metal_draw_what_they_draw_on_wgpu() {
 /// same on both backends.
 #[test]
 fn a_shader_material_reads_a_volume_on_either_backend() {
-    use threers::{Material, Mesh, Object3D, OrthographicCamera, PlaneGeometry, ShaderMaterial, Vector3 as V};
+    use threers::{
+        Material, Mesh, Object3D, OrthographicCamera, PlaneGeometry, ShaderMaterial, Vector3 as V,
+    };
     if threers::metal::MetalDevice::new().is_err() {
         eprintln!("skipping: no Metal device");
         return;
@@ -136,7 +167,13 @@ fn a_shader_material_reads_a_volume_on_either_backend() {
         let empty = textureLoad(u_vol1, vec3<i32>(0, 0, 0), 0).r;
         return vec4<f32>(exact, filtered, empty + size.x / 8.0, 1.0);
     }";
-    let ramp = threers::volume::Data3DTexture::new(4, 1, 1, threers::volume::VolumeFormat::R8Unorm, vec![0, 85, 170, 255]);
+    let ramp = threers::volume::Data3DTexture::new(
+        4,
+        1,
+        1,
+        threers::volume::VolumeFormat::R8Unorm,
+        vec![0, 85, 170, 255],
+    );
     let mut camera = OrthographicCamera::new(-1.0, 1.0, 1.0, -1.0, 0.1, 10.0);
     camera.position = V::new(0.0, 0.0, 5.0);
     camera.look_at(V::ZERO);
@@ -150,9 +187,16 @@ fn a_shader_material_reads_a_volume_on_either_backend() {
             m.volumes = vec![volume.view.clone()];
             m.validate(true).expect("the volume shader's WGSL");
             let mut scene = Scene::new();
-            scene.add(Object3D::mesh(Mesh::new(PlaneGeometry::new(2.0, 2.0), Material::Shader(m))));
+            scene.add(Object3D::mesh(Mesh::new(
+                PlaneGeometry::new(2.0, 2.0),
+                Material::Shader(m),
+            )));
             let frame = hr.render_to_rgba(&mut scene, &camera);
-            assert_eq!(hr.is_native_metal(), metal, "a volume keeps the renderer on its backend");
+            assert_eq!(
+                hr.is_native_metal(),
+                metal,
+                "a volume keeps the renderer on its backend"
+            );
             frame
         })
         .collect();
@@ -164,8 +208,18 @@ fn a_shader_material_reads_a_volume_on_either_backend() {
         // Texel 1 of 4 (85/255) through the sRGB target: 156. The size,
         // 4 / 8, encodes to 188; an empty slot adds nothing.
         let p = at(f, SIZE * 3 / 8);
-        assert!(p[0].abs_diff(156) <= 2 && p[2].abs_diff(188) <= 2, "{backend}: {p:?}");
+        assert!(
+            p[0].abs_diff(156) <= 2 && p[2].abs_diff(188) <= 2,
+            "{backend}: {p:?}"
+        );
     }
-    let differing = frames[0].chunks_exact(4).zip(frames[1].chunks_exact(4)).filter(|(a, b)| a != b).count();
-    assert!(differing < SIZE as usize, "{differing} pixels differ between wgpu and Metal");
+    let differing = frames[0]
+        .chunks_exact(4)
+        .zip(frames[1].chunks_exact(4))
+        .filter(|(a, b)| a != b)
+        .count();
+    assert!(
+        differing < SIZE as usize,
+        "{differing} pixels differ between wgpu and Metal"
+    );
 }

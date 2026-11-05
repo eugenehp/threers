@@ -9,7 +9,10 @@ mod lit;
 #[test]
 fn lambert_phong_toon_shade_their_maps_as_three_js_does() {
     let mut failures = Vec::new();
-    for format in [wgpu::TextureFormat::Rgba8UnormSrgb, wgpu::TextureFormat::Rgba8Unorm] {
+    for format in [
+        wgpu::TextureFormat::Rgba8UnormSrgb,
+        wgpu::TextureFormat::Rgba8Unorm,
+    ] {
         let Ok(mut r) = threers::HeadlessRenderer::builder()
             .size(lit::N, lit::N)
             .color_format(format)
@@ -18,7 +21,14 @@ fn lambert_phong_toon_shade_their_maps_as_three_js_does() {
             eprintln!("skipping: no GPU adapter");
             return;
         };
-        failures.extend(lit::check(&format!("wgpu {format:?}"), &mut |s, c| r.render_to_rgba(s, c)));
+        failures.extend(lit::check(&format!("wgpu {format:?}"), &mut |s, c| {
+            r.render_to_rgba(s, c)
+        }));
     }
-    assert!(failures.is_empty(), "{} failures:\n{}", failures.len(), failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "{} failures:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
 }

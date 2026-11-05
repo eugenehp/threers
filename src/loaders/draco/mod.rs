@@ -265,7 +265,11 @@ pub fn decode_mesh_with(bytes: &[u8], options: &DecodeOptions) -> Result<Decoded
     let mut buffer = Buffer::new(bytes);
     start_mesh(&mut buffer, bytes)?;
     let connectivity = connectivity_from(&mut buffer)?;
-    let attributes = attributes::decode_attributes_skipping(&mut buffer, &connectivity, &options.skip_attribute_transform)?;
+    let attributes = attributes::decode_attributes_skipping(
+        &mut buffer,
+        &connectivity,
+        &options.skip_attribute_transform,
+    )?;
     Ok(DecodedMesh {
         connectivity,
         attributes,
@@ -419,7 +423,10 @@ mod tests {
         with[9..11].copy_from_slice(&flags.to_le_bytes());
         with.extend(&meta);
         with.extend(&SPHERE[HEADER_BYTES..]);
-        let (a, b) = (decode_mesh(SPHERE).unwrap(), decode_mesh(&with).expect("decoded past the metadata"));
+        let (a, b) = (
+            decode_mesh(SPHERE).unwrap(),
+            decode_mesh(&with).expect("decoded past the metadata"),
+        );
         assert_eq!(a.indices(), b.indices());
         assert_eq!(a.num_points(), b.num_points());
         assert_eq!(format!("{:?}", a.attributes), format!("{:?}", b.attributes));
@@ -433,7 +440,10 @@ mod tests {
         let h = header(SPHERE).expect("a Draco header");
         assert_eq!((h.major, h.minor), (2, 2));
         assert!(h.is_mesh(), "a triangular mesh");
-        assert!(h.is_edgebreaker(), "edgebreaker, which is what encoders write");
+        assert!(
+            h.is_edgebreaker(),
+            "edgebreaker, which is what encoders write"
+        );
         assert_eq!(h.flags, 0);
 
         let b = header(BUNNY).expect("a Draco header");
@@ -462,7 +472,10 @@ mod tests {
         assert_eq!(c.num_faces, 720, "2160 indices / 3");
         assert_eq!(c.num_encoded_vertices, 362);
         assert_eq!(c.num_attribute_data, 2, "normals and texture coordinates");
-        assert_eq!(c.num_encoded_symbols, 719, "one face is the seed, not a symbol");
+        assert_eq!(
+            c.num_encoded_symbols, 719,
+            "one face is the seed, not a symbol"
+        );
         assert_eq!(c.num_encoded_split_symbols, 19);
         // Vertices plus splits, then seams, must reach the 423 points the
         // accessors declare.
@@ -482,7 +495,11 @@ mod tests {
         buffer.advance(11).unwrap();
         let traversal = traversal_type(&mut buffer).expect("a traversal type");
         let c = connectivity_header(&mut buffer).expect("connectivity header");
-        assert!(c.num_faces > 1000, "the bunny is not a toy mesh: {}", c.num_faces);
+        assert!(
+            c.num_faces > 1000,
+            "the bunny is not a toy mesh: {}",
+            c.num_faces
+        );
         assert!(c.num_encoded_symbols <= c.num_faces);
         println!("bunny: {traversal:?} {c:?}");
     }
@@ -543,7 +560,11 @@ mod tests {
             count(Symbol::S) + 1,
             "one component: every split ends, and so does the whole"
         );
-        assert!(count(Symbol::C) > 300, "most of a smooth mesh is C: {}", count(Symbol::C));
+        assert!(
+            count(Symbol::C) > 300,
+            "most of a smooth mesh is C: {}",
+            count(Symbol::C)
+        );
     }
 
     /// And on the bunny, which is a different size and a different encoder run.
@@ -578,10 +599,7 @@ mod tests {
     #[test]
     fn a_non_draco_stream_is_refused() {
         assert_eq!(header(b"nope").unwrap_err(), DracoError::Truncated);
-        assert_eq!(
-            header(b"NOTDRACO....").unwrap_err(),
-            DracoError::BadHeader
-        );
+        assert_eq!(header(b"NOTDRACO....").unwrap_err(), DracoError::BadHeader);
     }
 
     /// A truncated stream is an error at every length.

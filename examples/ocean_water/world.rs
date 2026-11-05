@@ -17,8 +17,8 @@
 //!   something a person clicks and would be absurd per frame, which is why the
 //!   two tiers above exist.
 
-use threers::marks::gpu;
 use std::sync::Arc;
+use threers::marks::gpu;
 
 use threers::lights::Light;
 use threers::scene::FogParams;

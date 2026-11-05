@@ -349,7 +349,6 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 }
 "#;
 
-
 /// EASING_TYPE, read out of the source bundle:
 /// `LINEAR=0, EASE=1, EASE_IN=2, EASE_OUT=3, EASE_IN_OUT=4, CUBIC=5, SPRING=6,
 /// ARC=7, NONE=8`. Every one of them is a cubic Bezier, and the two this scene
@@ -387,7 +386,6 @@ fn lerp3(a: Vector3, b: Vector3, t: f32) -> Vector3 {
         a.z + (b.z - a.z) * t,
     )
 }
-
 
 /// Uniform scale on the "CTA container" group the type hangs under. One em of
 /// a child's `fontSize` is this many world units.
@@ -460,19 +458,39 @@ fn main() {
     // The frame behind the glass, refilled every frame: one texture, so the
     // renderer replaces its upload rather than keeping one per frame.
     let mut capture: Option<Arc<Texture>> = None;
-    if let Some(fps) = std::env::var("RETRO_ANIM_FPS").ok().and_then(|v| v.parse::<f32>().ok()) {
+    if let Some(fps) = std::env::var("RETRO_ANIM_FPS")
+        .ok()
+        .and_then(|v| v.parse::<f32>().ok())
+    {
         let _ = std::fs::create_dir_all("out/anim");
         let total = (13.0 * fps).round() as u32;
         for i in 0..total {
             let t = i as f32 / fps;
-            let mut rgba = render_frame(&mut renderer, &camera, false, t, half_w, half_h, matcap.clone(), &mut capture);
+            let mut rgba = render_frame(
+                &mut renderer,
+                &camera,
+                false,
+                t,
+                half_w,
+                half_h,
+                matcap.clone(),
+                &mut capture,
+            );
             // Grain is re-seeded per frame so it crawls, as a noise pass does.
-            film_grain_seeded(&mut rgba, NOISE_OPACITY, 0x9e3779b9u32.wrapping_add(i.wrapping_mul(2654435761)));
+            film_grain_seeded(
+                &mut rgba,
+                NOISE_OPACITY,
+                0x9e3779b9u32.wrapping_add(i.wrapping_mul(2654435761)),
+            );
             let path = format!("out/anim/frame_{i:04}.png");
             std::fs::write(&path, encode_png(W, H, &rgba)).expect("write png");
             if i % 10 == 0 {
-                println!("  t={t:5.2}s  card.y={:8.1}  sphere=({:7.1},{:7.1})",
-                         pose_at(t).card.y, pose_at(t).sphere.x, pose_at(t).sphere.y);
+                println!(
+                    "  t={t:5.2}s  card.y={:8.1}  sphere=({:7.1},{:7.1})",
+                    pose_at(t).card.y,
+                    pose_at(t).sphere.x,
+                    pose_at(t).sphere.y
+                );
             }
         }
         println!("wrote {total} frames to out/anim/ at {fps} fps");
@@ -480,7 +498,10 @@ fn main() {
     }
 
     #[cfg(feature = "raytrace")]
-    if let Some(spp) = std::env::var("RETRO_RAYTRACE").ok().and_then(|v| v.parse().ok()) {
+    if let Some(spp) = std::env::var("RETRO_RAYTRACE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+    {
         render_raytraced(&camera, spp);
         return;
     }
@@ -488,7 +509,16 @@ fn main() {
     let matcap = load_matcap();
 
     for revealed in [false, true] {
-        let mut rgba = render_frame(&mut renderer, &camera, revealed, 0.0, half_w, half_h, matcap.clone(), &mut capture);
+        let mut rgba = render_frame(
+            &mut renderer,
+            &camera,
+            revealed,
+            0.0,
+            half_w,
+            half_h,
+            matcap.clone(),
+            &mut capture,
+        );
         film_grain(&mut rgba, NOISE_OPACITY);
 
         let path = if revealed {
@@ -555,7 +585,6 @@ fn pose_at(t: f32) -> Pose {
     Pose { card, sphere }
 }
 
-
 /// An sRGB image for a `ShaderMaterial` slot: the renderer uploads it, on
 /// wgpu or Metal alike.
 fn rgba_texture(w: u32, h: u32, rgba: Vec<u8>) -> Arc<Texture> {
@@ -616,7 +645,11 @@ fn render_frame(
         }
         mips.push((nw, nh, next));
     }
-    let levels: Vec<Arc<Vec<u8>>> = mips.into_iter().skip(1).map(|(_, _, d)| Arc::new(d)).collect();
+    let levels: Vec<Arc<Vec<u8>>> = mips
+        .into_iter()
+        .skip(1)
+        .map(|(_, _, d)| Arc::new(d))
+        .collect();
     let view = match capture {
         Some(t) => {
             // Same texture, new pixels: the upload is replaced, not added to.
@@ -635,7 +668,11 @@ fn render_frame(
     };
 
     let n = behind_rgba.len() / 4;
-    let mean: f64 = behind_rgba.chunks_exact(4).map(|p| p[0] as f64).sum::<f64>() / n as f64;
+    let mean: f64 = behind_rgba
+        .chunks_exact(4)
+        .map(|p| p[0] as f64)
+        .sum::<f64>()
+        / n as f64;
     println!("    pass1 (no bars): {n} px, mean R = {mean:.2}");
     let mut scene = build_scene(revealed, t, half_w, half_h, Some(view), matcap);
     let out = renderer.render_to_rgba(&mut scene, camera);
@@ -643,7 +680,6 @@ fn render_frame(
     println!("    pass2 (bars)   : mean R = {mean2:.2}");
     out
 }
-
 
 /// Path-traced variant, behind the `raytrace` feature.
 ///
@@ -662,8 +698,16 @@ fn render_frame(
 /// can be mapped back to the object-space X the depth layer ramps along.
 #[cfg(feature = "raytrace")]
 fn bake_gradient_emissive(n: u32) -> Texture {
-    let c0 = [0.7897781683427412f32, 0.46977418894155454, 0.46977418894155454];
-    let c1 = [0.44236163134928375f32, 0.2446691092228538, 0.09349247465558384];
+    let c0 = [
+        0.7897781683427412f32,
+        0.46977418894155454,
+        0.46977418894155454,
+    ];
+    let c1 = [
+        0.44236163134928375f32,
+        0.2446691092228538,
+        0.09349247465558384,
+    ];
     let (near, far) = (-534.8627583784917f32, 532.6500685688682f32);
     let radius = 347.5816085339573f32;
     let mut data = vec![0u8; (n * n * 4) as usize];
@@ -718,7 +762,10 @@ fn render_raytraced(camera: &OrthographicCamera, spp: u32) {
         SphereGeometry::new(347.5816085339573, 64, 64),
         Material::Physical(PhysicalMaterial {
             emissive: Color::WHITE,
-            emissive_intensity: std::env::var("RETRO_EMIT").ok().and_then(|v| v.parse().ok()).unwrap_or(1.0),
+            emissive_intensity: std::env::var("RETRO_EMIT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(1.0),
             emissive_map: Some(ramp),
             roughness: 1.0,
             ..PhysicalMaterial::new(Color::BLACK)
@@ -748,7 +795,16 @@ fn render_raytraced(camera: &OrthographicCamera, spp: u32) {
     let base = Vector3::new(-284.2456753518419, -279.9290563101541, 124.5);
     for k in 0..24 {
         let mut bar = Object3D::mesh(Mesh::new(
-            CylinderGeometry::new(124.5, 124.5, bar_len, 8, 1, false, 0.0, std::f32::consts::TAU),
+            CylinderGeometry::new(
+                124.5,
+                124.5,
+                bar_len,
+                8,
+                1,
+                false,
+                0.0,
+                std::f32::consts::TAU,
+            ),
             glass.clone(),
         ));
         bar.position = Vector3::new(base.x + 157.9 * k as f32, base.y, base.z);
@@ -869,37 +925,63 @@ fn build_scene(
         Material::Shader(ShaderMaterial {
             maps: matcap.clone().into_iter().collect(),
             ..ShaderMaterial::new(SPHERE_FRAGMENT).with_data(vec![
-            [pose.sphere.x, pose.sphere.y, pose.sphere.z, 1.0 / sphere_scale],
-            [-534.8627583784917, 532.6500685688682, 0.0, 0.0],
-            [0.7897781683427412, 0.46977418894155454, 0.46977418894155454, 1.0],
-            [0.44236163134928375, 0.2446691092228538, 0.09349247465558384, 1.0],
-            // matcap alpha, light alpha, phong specular, shininess
-            [
-                if matcap.is_some() { 1.0 } else { 0.0 },
-                std::env::var("RETRO_LIGHT_A").ok().and_then(|v| v.parse().ok()).unwrap_or(1.0),
-                0.2,
-                5.0,
-            ],
-            // light BRDF scale, output conversion passes
-            [
-                std::env::var("RETRO_LIT_SCALE").ok().and_then(|v| v.parse().ok())
-                    // Rebalanced once the hemisphere term was added: it lifts
-                    // `lit` a long way, so this drops from 0.22 to 0.06.
-                    .unwrap_or(0.06),
-                // 1, not 2. Fitted against the recorded frames: one conversion
-                // scores 35.6 mean|diff| where two scores 44.1. The hardware
-                // sRGB write supplies the other half of the round trip.
-                std::env::var("RETRO_OUT_PASSES").ok().and_then(|v| v.parse().ok()).unwrap_or(1.0),
-                // 0.4. At 1.0 the directional term swings `lit` across
-                // Overlay's 0.5 branch point between the sunset's lit top and
-                // unlit bottom, so the bottom read red and the top washed to
-                // tan — a vertical hue split of 0.39 in G/R. With the hemisphere
-                // floor restored and this weighted back, the split is 0.11 and
-                // the average G/R is 0.37 against the reference's ~0.35.
-                std::env::var("RETRO_DIR_W").ok().and_then(|v| v.parse().ok()).unwrap_or(0.4),
-                0.0,
-            ],
-        ])
+                [
+                    pose.sphere.x,
+                    pose.sphere.y,
+                    pose.sphere.z,
+                    1.0 / sphere_scale,
+                ],
+                [-534.8627583784917, 532.6500685688682, 0.0, 0.0],
+                [
+                    0.7897781683427412,
+                    0.46977418894155454,
+                    0.46977418894155454,
+                    1.0,
+                ],
+                [
+                    0.44236163134928375,
+                    0.2446691092228538,
+                    0.09349247465558384,
+                    1.0,
+                ],
+                // matcap alpha, light alpha, phong specular, shininess
+                [
+                    if matcap.is_some() { 1.0 } else { 0.0 },
+                    std::env::var("RETRO_LIGHT_A")
+                        .ok()
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(1.0),
+                    0.2,
+                    5.0,
+                ],
+                // light BRDF scale, output conversion passes
+                [
+                    std::env::var("RETRO_LIT_SCALE")
+                        .ok()
+                        .and_then(|v| v.parse().ok())
+                        // Rebalanced once the hemisphere term was added: it lifts
+                        // `lit` a long way, so this drops from 0.22 to 0.06.
+                        .unwrap_or(0.06),
+                    // 1, not 2. Fitted against the recorded frames: one conversion
+                    // scores 35.6 mean|diff| where two scores 44.1. The hardware
+                    // sRGB write supplies the other half of the round trip.
+                    std::env::var("RETRO_OUT_PASSES")
+                        .ok()
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(1.0),
+                    // 0.4. At 1.0 the directional term swings `lit` across
+                    // Overlay's 0.5 branch point between the sunset's lit top and
+                    // unlit bottom, so the bottom read red and the top washed to
+                    // tan — a vertical hue split of 0.39 in G/R. With the hemisphere
+                    // floor restored and this weighted back, the split is 0.11 and
+                    // the average G/R is 0.37 against the reference's ~0.35.
+                    std::env::var("RETRO_DIR_W")
+                        .ok()
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(0.4),
+                    0.0,
+                ],
+            ])
         }),
     ));
     sphere.position = pose.sphere;
@@ -955,7 +1037,9 @@ fn build_scene(
         .unwrap_or(6000.0);
     let base = Vector3::new(-284.2456753518419, -279.9290563101541, 124.5);
     for k in 0..24 {
-        if skip_bars { break; }
+        if skip_bars {
+            break;
+        }
         let bar_centre = Vector3::new(base.x + 157.9 * k as f32, base.y, base.z);
         let glass = Material::Shader(ShaderMaterial {
             maps: vec![behind.clone().unwrap()],
@@ -970,14 +1054,29 @@ fn build_scene(
                     // and the matcap behaves the same way — both are layers I
                     // can read but evidently do not reproduce correctly, rather
                     // than layers the source omits. `RETRO_GLASS_DEPTH=1` restores it.
-                    std::env::var("RETRO_GLASS_DEPTH").ok().and_then(|v| v.parse().ok()).unwrap_or(0.0),
-                    std::env::var("RETRO_GLASS_FRESNEL").ok().and_then(|v| v.parse().ok()).unwrap_or(1.0),
+                    std::env::var("RETRO_GLASS_DEPTH")
+                        .ok()
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(0.0),
+                    std::env::var("RETRO_GLASS_FRESNEL")
+                        .ok()
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(1.0),
                     0.0,
                 ],
             ])
         });
         let mut bar = Object3D::mesh(Mesh::new(
-            CylinderGeometry::new(124.5, 124.5, bar_len, 8, 1, false, 0.0, std::f32::consts::TAU),
+            CylinderGeometry::new(
+                124.5,
+                124.5,
+                bar_len,
+                8,
+                1,
+                false,
+                0.0,
+                std::f32::consts::TAU,
+            ),
             glass,
         ));
         bar.position = bar_centre;
@@ -991,8 +1090,7 @@ fn build_scene(
         bar.scale = Vector3::new(BAR_W / BAR_D, 1.0, 1.0);
         // rotation [0, 0, 45] — degrees, XYZ Euler order. Only Z is non-zero
         // here so the order does not bite, but it is the convention the source uses.
-        bar.quaternion =
-            Quaternion::from_euler_xyz(0.0, 0.0, 45.0_f32.to_radians());
+        bar.quaternion = Quaternion::from_euler_xyz(0.0, 0.0, 45.0_f32.to_radians());
         bar.name = format!("Cylinder {k}");
         scene.add(bar);
     }
@@ -1063,7 +1161,14 @@ struct TextSpec {
 }
 
 fn add_text(scene: &mut Scene, font: &mut CaptionFont, spec: &TextSpec) {
-    let TextSpec { text, wrap_fraction, font_size, line_height, center, ink_w } = *spec;
+    let TextSpec {
+        text,
+        wrap_fraction,
+        font_size,
+        line_height,
+        center,
+        ink_w,
+    } = *spec;
     // Rasterise at a fixed pixel size, then scale the quad by the em ratio.
     const PX: f32 = 96.0;
     let wrap_px = wrap_fraction.map(|ems| PX * ems);
@@ -1081,7 +1186,12 @@ fn add_text(scene: &mut Scene, font: &mut CaptionFont, spec: &TextSpec) {
         100.0 * (quad_w - ink_w) / ink_w
     );
 
-    let tex = Arc::new(DataTexture::new(tw, th, TextureFormat::Rgba8UnormSrgb, rgba));
+    let tex = Arc::new(DataTexture::new(
+        tw,
+        th,
+        TextureFormat::Rgba8UnormSrgb,
+        rgba,
+    ));
     let mut quad = Object3D::mesh(Mesh::new(
         PlaneGeometry::new(quad_w, quad_h),
         Material::Basic(BasicMaterial {

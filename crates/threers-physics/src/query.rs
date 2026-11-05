@@ -322,13 +322,9 @@ impl World {
                 }
                 let target_iso = collider.world_transform(&body.position);
                 let limit = best.map_or(max_toi, |b| b.toi);
-                let Some(hit) = cast_against(
-                    &cast_proxy,
-                    &collider.shape,
-                    &target_iso,
-                    direction,
-                    limit,
-                ) else {
+                let Some(hit) =
+                    cast_against(&cast_proxy, &collider.shape, &target_iso, direction, limit)
+                else {
                     continue;
                 };
                 let (toi, witness_cast, witness_target, normal) = hit;
@@ -393,8 +389,10 @@ impl World {
             }
             let hit = body.colliders().iter().any(|c| {
                 filter.accepts_collider(c)
-                    && c.shape
-                        .contains_point_local(c.world_transform(&body.position).inverse_transform_point(point))
+                    && c.shape.contains_point_local(
+                        c.world_transform(&body.position)
+                            .inverse_transform_point(point),
+                    )
             });
             if hit {
                 out.push(id);
@@ -415,7 +413,8 @@ impl World {
                     continue;
                 }
                 let iso = collider.world_transform(&body.position);
-                let Some((surface, distance, inside)) = project_onto_shape(&collider.shape, &iso, point)
+                let Some((surface, distance, inside)) =
+                    project_onto_shape(&collider.shape, &iso, point)
                 else {
                     continue;
                 };
@@ -497,7 +496,11 @@ fn raycast_shape(shape: &Shape, ray: &Ray, max_toi: f32) -> Option<(f32, Vector3
             // Orient against the ray so the caller always gets a facing normal.
             Some((
                 toi,
-                if normal.dot(ray.direction) > 0.0 { -normal } else { normal },
+                if normal.dot(ray.direction) > 0.0 {
+                    -normal
+                } else {
+                    normal
+                },
             ))
         }
         Shape::Compound(parts) => {
@@ -539,9 +542,18 @@ fn raycast_shape(shape: &Shape, ray: &Ray, max_toi: f32) -> Option<(f32, Vector3
 fn box_normal(point: Vector3, half: Vector3) -> Vector3 {
     // Whichever face the point is closest to is the one it exited through.
     let d = [
-        (half.x - point.x.abs(), Vector3::new(point.x.signum(), 0.0, 0.0)),
-        (half.y - point.y.abs(), Vector3::new(0.0, point.y.signum(), 0.0)),
-        (half.z - point.z.abs(), Vector3::new(0.0, 0.0, point.z.signum())),
+        (
+            half.x - point.x.abs(),
+            Vector3::new(point.x.signum(), 0.0, 0.0),
+        ),
+        (
+            half.y - point.y.abs(),
+            Vector3::new(0.0, point.y.signum(), 0.0),
+        ),
+        (
+            half.z - point.z.abs(),
+            Vector3::new(0.0, 0.0, point.z.signum()),
+        ),
     ];
     d.iter()
         .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
@@ -575,7 +587,10 @@ fn raycast_capsule(ray: &Ray, half_height: f32, radius: f32) -> Option<(f32, Vec
         let disc = qb * qb - 4.0 * qa * qc;
         if disc >= 0.0 {
             let sqrt_disc = disc.sqrt();
-            for t in [(-qb - sqrt_disc) / (2.0 * qa), (-qb + sqrt_disc) / (2.0 * qa)] {
+            for t in [
+                (-qb - sqrt_disc) / (2.0 * qa),
+                (-qb + sqrt_disc) / (2.0 * qa),
+            ] {
                 if t < 0.0 {
                     continue;
                 }
@@ -696,6 +711,9 @@ fn cast_against(
                 normal,
             } => {
                 if distance < CONTACT_EPS {
+                    if leaving(toi, normal, direction) {
+                        return None;
+                    }
                     return Some((toi, point_a, point_b, normal));
                 }
                 // How fast the gap closes as we advance. Non-positive means the
@@ -716,11 +734,23 @@ fn cast_against(
                 point_b,
                 normal,
                 ..
-            } => return Some((toi, point_a, point_b, normal)),
+            } => {
+                if leaving(toi, normal, direction) {
+                    return None;
+                }
+                return Some((toi, point_a, point_b, normal));
+            }
             Proximity::Failed => return None,
         }
     }
     None
+}
+
+/// Whether a cast that starts in contact is heading out of it. Like the
+/// half-space above: a surface being left is not one being hit, and calling it a
+/// hit at t = 0 would pin a character to the ledge it is stepping off.
+fn leaving(toi: f32, normal: Vector3, direction: Vector3) -> bool {
+    toi == 0.0 && normal.dot(direction) > 1e-6
 }
 
 /// Closest point on a shape's surface to `point`, plus whether it is inside.
@@ -751,7 +781,11 @@ fn project_onto_shape(
         }
         Shape::HalfSpace { normal } => {
             let distance = normal.dot(local);
-            Some((iso.transform_point(local - *normal * distance), distance.abs(), false))
+            Some((
+                iso.transform_point(local - *normal * distance),
+                distance.abs(),
+                false,
+            ))
         }
         _ => {
             let proxy = ShapeProxy::new(shape, iso)?;
@@ -785,7 +819,9 @@ mod tests {
                 .shape(Shape::ball(1.0))
                 .translation(Vector3::new(0.0, 0.0, 0.0)),
         );
-        let hit = world.raycast(&down_ray(0.0, 5.0), 100.0, QueryFilter::default()).unwrap();
+        let hit = world
+            .raycast(&down_ray(0.0, 5.0), 100.0, QueryFilter::default())
+            .unwrap();
         assert_eq!(hit.body, ball);
         assert!((hit.toi - 4.0).abs() < 1e-3, "toi = {}", hit.toi);
         assert!((hit.point - Vector3::new(0.0, 1.0, 0.0)).length() < 1e-3);
@@ -796,9 +832,13 @@ mod tests {
     fn a_ray_misses_what_is_not_there() {
         let mut world = World::new();
         world.add_body(RigidBody::fixed().shape(Shape::ball(1.0)));
-        assert!(world.raycast(&down_ray(50.0, 5.0), 100.0, QueryFilter::default()).is_none());
+        assert!(world
+            .raycast(&down_ray(50.0, 5.0), 100.0, QueryFilter::default())
+            .is_none());
         // And respects max_toi.
-        assert!(world.raycast(&down_ray(0.0, 5.0), 1.0, QueryFilter::default()).is_none());
+        assert!(world
+            .raycast(&down_ray(0.0, 5.0), 1.0, QueryFilter::default())
+            .is_none());
     }
 
     #[test]
@@ -814,9 +854,16 @@ mod tests {
                 .shape(Shape::ball(0.5))
                 .translation(Vector3::new(0.0, 1.0, 0.0)),
         );
-        let hit = world.raycast(&down_ray(0.0, 10.0), 100.0, QueryFilter::default()).unwrap();
+        let hit = world
+            .raycast(&down_ray(0.0, 10.0), 100.0, QueryFilter::default())
+            .unwrap();
         assert_eq!(hit.body, near);
-        assert_eq!(world.raycast_all(&down_ray(0.0, 10.0), 100.0, QueryFilter::default()).len(), 2);
+        assert_eq!(
+            world
+                .raycast_all(&down_ray(0.0, 10.0), 100.0, QueryFilter::default())
+                .len(),
+            2
+        );
     }
 
     #[test]
@@ -842,11 +889,17 @@ mod tests {
 
         // Type filters.
         assert_eq!(
-            world.raycast(&ray, 100.0, QueryFilter::default().only_fixed()).unwrap().body,
+            world
+                .raycast(&ray, 100.0, QueryFilter::default().only_fixed())
+                .unwrap()
+                .body,
             fixed
         );
         assert_eq!(
-            world.raycast(&ray, 100.0, QueryFilter::default().only_dynamic()).unwrap().body,
+            world
+                .raycast(&ray, 100.0, QueryFilter::default().only_dynamic())
+                .unwrap()
+                .body,
             dynamic
         );
 
@@ -856,7 +909,13 @@ mod tests {
                 .collider(Collider::new(Shape::ball(0.5)).sensor(true))
                 .translation(Vector3::new(0.0, 6.0, 0.0)),
         );
-        assert_ne!(world.raycast(&ray, 100.0, QueryFilter::default()).unwrap().body, sensor);
+        assert_ne!(
+            world
+                .raycast(&ray, 100.0, QueryFilter::default())
+                .unwrap()
+                .body,
+            sensor
+        );
         assert_eq!(
             world
                 .raycast(&ray, 100.0, QueryFilter::default().include_sensors())
@@ -895,7 +954,9 @@ mod tests {
     fn a_ray_hits_a_ground_plane_and_a_triangle_mesh() {
         let mut world = World::new();
         world.add_body(RigidBody::fixed().shape(Shape::ground()));
-        let hit = world.raycast(&down_ray(3.0, 5.0), 100.0, QueryFilter::default()).unwrap();
+        let hit = world
+            .raycast(&down_ray(3.0, 5.0), 100.0, QueryFilter::default())
+            .unwrap();
         assert!((hit.toi - 5.0).abs() < 1e-3);
         assert!(hit.normal.y > 0.99);
 
@@ -914,7 +975,9 @@ mod tests {
                 .unwrap(),
             ),
         );
-        let hit = world.raycast(&down_ray(1.0, 5.0), 100.0, QueryFilter::default()).unwrap();
+        let hit = world
+            .raycast(&down_ray(1.0, 5.0), 100.0, QueryFilter::default())
+            .unwrap();
         assert!((hit.toi - 5.0).abs() < 1e-3, "toi = {}", hit.toi);
         assert!(hit.normal.y > 0.99, "normal = {:?}", hit.normal);
     }
@@ -928,7 +991,9 @@ mod tests {
                 .shape(Shape::cuboid(2.0, 0.1, 2.0))
                 .translation(Vector3::new(0.0, 1.0, 0.0)),
         );
-        let hit = world.raycast(&down_ray(0.0, 5.0), 100.0, QueryFilter::default()).unwrap();
+        let hit = world
+            .raycast(&down_ray(0.0, 5.0), 100.0, QueryFilter::default())
+            .unwrap();
         assert!((hit.toi - 3.9).abs() < 1e-2, "toi = {}", hit.toi);
     }
 
@@ -964,6 +1029,23 @@ mod tests {
         // Ball surface at 0.5, wall face at 4.5 → 4.0 of travel.
         assert!((hit.toi - 4.0).abs() < 0.05, "toi = {}", hit.toi);
         assert!(hit.normal.x < -0.9, "normal = {:?}", hit.normal);
+    }
+
+    #[test]
+    fn a_cast_leaving_a_touching_surface_hits_nothing() {
+        let mut world = World::new();
+        world.add_body(RigidBody::fixed().shape(Shape::cuboid(2.5, 0.5, 2.5)));
+        world.step_fixed();
+        let ball = Shape::ball(0.5);
+        // Resting exactly on top, then sunk in a little.
+        for y in [1.0, 0.95] {
+            let start = Isometry::from_translation(Vector3::new(0.0, y, 0.0));
+            let cast =
+                |direction| world.cast_shape(&ball, &start, direction, 0.5, QueryFilter::default());
+            assert!(cast(Vector3::new(0.0, 1.0, 0.0)).is_none(), "up from {y}");
+            let hit = cast(Vector3::new(0.0, -1.0, 0.0)).expect("still hits going down");
+            assert_eq!(hit.toi, 0.0);
+        }
     }
 
     #[test]
@@ -1037,7 +1119,11 @@ mod tests {
             .project_point(Vector3::new(4.0, 0.0, 0.0), QueryFilter::default())
             .unwrap();
         assert!(!outside.is_inside);
-        assert!((outside.distance - 3.0).abs() < 1e-2, "distance = {}", outside.distance);
+        assert!(
+            (outside.distance - 3.0).abs() < 1e-2,
+            "distance = {}",
+            outside.distance
+        );
         assert!((outside.point - Vector3::new(1.0, 0.0, 0.0)).length() < 1e-2);
 
         let inside = world
@@ -1060,7 +1146,9 @@ mod tests {
             world.step(1.0 / 60.0);
         }
         // The ball came to rest on the ground; a downward ray must meet it first.
-        let hit = world.raycast(&down_ray(0.0, 10.0), 100.0, QueryFilter::default()).unwrap();
+        let hit = world
+            .raycast(&down_ray(0.0, 10.0), 100.0, QueryFilter::default())
+            .unwrap();
         assert!((hit.toi - 9.0).abs() < 0.1, "toi = {}", hit.toi);
     }
 

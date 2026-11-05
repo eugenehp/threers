@@ -331,7 +331,11 @@ fn bilinear_taps(width: u32, height: u32, u: f32, v: f32) -> ([usize; 4], f32, f
     let y0 = y.floor() as usize;
     let x1 = (x0 + 1).min(w - 1);
     let y1 = (y0 + 1).min(h - 1);
-    ([y0 * w + x0, y0 * w + x1, y1 * w + x0, y1 * w + x1], x - x0 as f32, y - y0 as f32)
+    (
+        [y0 * w + x0, y0 * w + x1, y1 * w + x0, y1 * w + x1],
+        x - x0 as f32,
+        y - y0 as f32,
+    )
 }
 
 fn sample_atlas_pixel(pixels: &[u8], width: u32, height: u32, u: f32, v: f32) -> [f32; 3] {
@@ -652,12 +656,25 @@ mod texel_convention_tests {
         for k in 0..w {
             let u = (k as f32 + 0.5) / w as f32;
             let v = 2.5 / h as f32;
-            assert_eq!(sample_atlas_pixel_f32(&px, w, h, u, v)[0], (2 * w + k) as f32, "texel {k}");
+            assert_eq!(
+                sample_atlas_pixel_f32(&px, w, h, u, v)[0],
+                (2 * w + k) as f32,
+                "texel {k}"
+            );
         }
         // halfway between texel centres 3 and 4
-        assert_eq!(sample_atlas_pixel_f32(&px, w, h, 4.0 / w as f32, 0.5 / h as f32)[0], 3.5);
+        assert_eq!(
+            sample_atlas_pixel_f32(&px, w, h, 4.0 / w as f32, 0.5 / h as f32)[0],
+            3.5
+        );
         // the edges clamp rather than reading a neighbour row
-        assert_eq!(sample_atlas_pixel_f32(&px, w, h, 0.0, 0.5 / h as f32)[0], 0.0);
-        assert_eq!(sample_atlas_pixel_f32(&px, w, h, 1.0, 0.5 / h as f32)[0], (w - 1) as f32);
+        assert_eq!(
+            sample_atlas_pixel_f32(&px, w, h, 0.0, 0.5 / h as f32)[0],
+            0.0
+        );
+        assert_eq!(
+            sample_atlas_pixel_f32(&px, w, h, 1.0, 0.5 / h as f32)[0],
+            (w - 1) as f32
+        );
     }
 }

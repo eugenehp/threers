@@ -177,7 +177,15 @@ pub fn pred_nxn(
 
 /// Intra 16×16 prediction into `out` (raster 16×16). `top`/`left` have 17
 /// entries.
-pub fn pred_16x16(out: &mut [i32; 256], mode: u8, top: &[i32], left: &[i32], at: bool, al: bool, bd: u32) {
+pub fn pred_16x16(
+    out: &mut [i32; 256],
+    mode: u8,
+    top: &[i32],
+    left: &[i32],
+    at: bool,
+    al: bool,
+    bd: u32,
+) {
     match mode {
         0 => {
             for y in 0..16 {
@@ -226,7 +234,16 @@ pub fn pred_16x16(out: &mut [i32; 256], mode: u8, top: &[i32], left: &[i32], at:
 #[allow(clippy::too_many_arguments)]
 /// `al` is the left availability per 4-row block (they differ only beside
 /// an MBAFF pair of the other kind under constrained intra prediction).
-pub fn pred_chroma(out: &mut [i32; 128], h: usize, mode: u8, top: &[i32], left: &[i32], at: bool, al: &[bool; 4], bd: u32) {
+pub fn pred_chroma(
+    out: &mut [i32; 128],
+    h: usize,
+    mode: u8,
+    top: &[i32],
+    left: &[i32],
+    at: bool,
+    al: &[bool; 4],
+    bd: u32,
+) {
     match mode {
         0 => {
             for by in 0..h / 4 {
@@ -297,7 +314,9 @@ pub fn pred_chroma(out: &mut [i32; 128], h: usize, mode: u8, top: &[i32], left: 
             let c = ((if ycf != 0 { 5 } else { 34 }) * v + 32) >> 6;
             for y in 0..h {
                 for x in 0..8 {
-                    out[y * 8 + x] = ((a + b * (x as i32 - 3) + c * (y as i32 - 3 - ycf as i32) + 16) >> 5).clamp(0, max);
+                    out[y * 8 + x] =
+                        ((a + b * (x as i32 - 3) + c * (y as i32 - 3 - ycf as i32) + 16) >> 5)
+                            .clamp(0, max);
                 }
             }
         }

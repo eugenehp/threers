@@ -25,8 +25,8 @@ use std::sync::OnceLock;
 
 mod av1;
 mod av1_layout;
-mod encode;
 mod enc_layout;
+mod encode;
 mod h264;
 mod hevc;
 mod vp9;
@@ -106,24 +106,51 @@ pub(crate) struct Va {
     initialize: unsafe extern "C" fn(Display, *mut c_int, *mut c_int) -> Status,
     terminate: unsafe extern "C" fn(Display) -> Status,
     error_str: unsafe extern "C" fn(Status) -> *const c_char,
-    set_info_callback: Option<unsafe extern "C" fn(Display, *mut c_void, *mut c_void) -> *mut c_void>,
-    pub create_config: unsafe extern "C" fn(Display, c_int, c_int, *mut ConfigAttrib, c_int, *mut Id) -> Status,
-    pub get_config_attributes: unsafe extern "C" fn(Display, c_int, c_int, *mut ConfigAttrib, c_int) -> Status,
+    set_info_callback:
+        Option<unsafe extern "C" fn(Display, *mut c_void, *mut c_void) -> *mut c_void>,
+    pub create_config:
+        unsafe extern "C" fn(Display, c_int, c_int, *mut ConfigAttrib, c_int, *mut Id) -> Status,
+    pub get_config_attributes:
+        unsafe extern "C" fn(Display, c_int, c_int, *mut ConfigAttrib, c_int) -> Status,
     pub destroy_config: unsafe extern "C" fn(Display, Id) -> Status,
-    pub create_surfaces: unsafe extern "C" fn(Display, c_uint, c_uint, c_uint, *mut Id, c_uint, *mut c_void, c_uint) -> Status,
+    pub create_surfaces: unsafe extern "C" fn(
+        Display,
+        c_uint,
+        c_uint,
+        c_uint,
+        *mut Id,
+        c_uint,
+        *mut c_void,
+        c_uint,
+    ) -> Status,
     pub destroy_surfaces: unsafe extern "C" fn(Display, *mut Id, c_int) -> Status,
-    pub create_context: unsafe extern "C" fn(Display, Id, c_int, c_int, c_int, *mut Id, c_int, *mut Id) -> Status,
+    pub create_context:
+        unsafe extern "C" fn(Display, Id, c_int, c_int, c_int, *mut Id, c_int, *mut Id) -> Status,
     pub destroy_context: unsafe extern "C" fn(Display, Id) -> Status,
-    pub create_buffer: unsafe extern "C" fn(Display, Id, c_int, c_uint, c_uint, *mut c_void, *mut Id) -> Status,
+    pub create_buffer:
+        unsafe extern "C" fn(Display, Id, c_int, c_uint, c_uint, *mut c_void, *mut Id) -> Status,
     pub destroy_buffer: unsafe extern "C" fn(Display, Id) -> Status,
     pub begin_picture: unsafe extern "C" fn(Display, Id, Id) -> Status,
     pub render_picture: unsafe extern "C" fn(Display, Id, *mut Id, c_int) -> Status,
     pub end_picture: unsafe extern "C" fn(Display, Id) -> Status,
     pub sync_surface: unsafe extern "C" fn(Display, Id) -> Status,
     derive_image: unsafe extern "C" fn(Display, Id, *mut Image) -> Status,
-    pub create_image: unsafe extern "C" fn(Display, *mut ImageFormat, c_int, c_int, *mut Image) -> Status,
+    pub create_image:
+        unsafe extern "C" fn(Display, *mut ImageFormat, c_int, c_int, *mut Image) -> Status,
     get_image: unsafe extern "C" fn(Display, Id, c_int, c_int, c_uint, c_uint, Id) -> Status,
-    pub put_image: unsafe extern "C" fn(Display, Id, Id, c_int, c_int, c_uint, c_uint, c_int, c_int, c_uint, c_uint) -> Status,
+    pub put_image: unsafe extern "C" fn(
+        Display,
+        Id,
+        Id,
+        c_int,
+        c_int,
+        c_uint,
+        c_uint,
+        c_int,
+        c_int,
+        c_uint,
+        c_uint,
+    ) -> Status,
     pub destroy_image: unsafe extern "C" fn(Display, Id) -> Status,
     pub map_buffer: unsafe extern "C" fn(Display, Id, *mut *mut c_void) -> Status,
     pub unmap_buffer: unsafe extern "C" fn(Display, Id) -> Status,
@@ -200,7 +227,11 @@ impl Va {
         if s == 0 {
             return Ok(());
         }
-        let msg = unsafe { CStr::from_ptr((self.error_str)(s)).to_string_lossy().into_owned() };
+        let msg = unsafe {
+            CStr::from_ptr((self.error_str)(s))
+                .to_string_lossy()
+                .into_owned()
+        };
         Err(format!("{what} failed: {msg} (VA status {s})"))
     }
 }
@@ -234,7 +265,13 @@ impl Device {
         let mut last = String::from("no DRM render node (/dev/dri/renderD*)");
         for n in 128..136 {
             let path = format!("/dev/dri/renderD{n}");
-            let Ok(node) = std::fs::OpenOptions::new().read(true).write(true).open(&path) else { continue };
+            let Ok(node) = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&path)
+            else {
+                continue;
+            };
             use std::os::fd::AsRawFd;
             let dpy = unsafe { (va.get_display_drm)(node.as_raw_fd()) };
             if dpy.is_null() {
@@ -246,15 +283,27 @@ impl Device {
                 unsafe { f(dpy, std::ptr::null_mut(), std::ptr::null_mut()) };
             }
             let (mut major, mut minor) = (0, 0);
-            if let Err(e) = va.check(&format!("vaInitialize on {path}"), unsafe { (va.initialize)(dpy, &mut major, &mut minor) }) {
+            if let Err(e) = va.check(&format!("vaInitialize on {path}"), unsafe {
+                (va.initialize)(dpy, &mut major, &mut minor)
+            }) {
                 last = e;
                 continue;
             }
-            let dev = Device { va, dpy, _node: node, readback: std::cell::Cell::new(None) };
+            let dev = Device {
+                va,
+                dpy,
+                _node: node,
+                readback: std::cell::Cell::new(None),
+            };
             // Does this driver decode the profile at all?
-            let mut attrib = ConfigAttrib { kind: ATTRIB_RT_FORMAT, value: RT_FORMAT_YUV420 };
+            let mut attrib = ConfigAttrib {
+                kind: ATTRIB_RT_FORMAT,
+                value: RT_FORMAT_YUV420,
+            };
             let mut cfg = 0;
-            match va.check("vaCreateConfig", unsafe { (va.create_config)(dpy, profile, entrypoint, &mut attrib, 1, &mut cfg) }) {
+            match va.check("vaCreateConfig", unsafe {
+                (va.create_config)(dpy, profile, entrypoint, &mut attrib, 1, &mut cfg)
+            }) {
                 Ok(()) => {
                     unsafe { (va.destroy_config)(dpy, cfg) };
                     return Ok(dev);
@@ -267,11 +316,28 @@ impl Device {
 
     /// `vaCreateImage` + `vaGetImage` into `img`; false (and nothing held)
     /// when the driver cannot.
-    unsafe fn get_image(&self, surface: Id, w: usize, h: usize, fourcc: u32, deep: bool, img: &mut Image) -> bool {
+    unsafe fn get_image(
+        &self,
+        surface: Id,
+        w: usize,
+        h: usize,
+        fourcc: u32,
+        deep: bool,
+        img: &mut Image,
+    ) -> bool {
         let va = self.va;
         match self.readback.take() {
             Some((cached, cw, ch, cf)) if (cw, ch, cf) == (w, h, fourcc) => {
-                if (va.get_image)(self.dpy, surface, 0, 0, w as c_uint, h as c_uint, cached.image_id) == 0 {
+                if (va.get_image)(
+                    self.dpy,
+                    surface,
+                    0,
+                    0,
+                    w as c_uint,
+                    h as c_uint,
+                    cached.image_id,
+                ) == 0
+                {
                     *img = cached;
                     return true;
                 }
@@ -290,7 +356,16 @@ impl Device {
         if (va.create_image)(self.dpy, &mut fmt, w as c_int, h as c_int, img) != 0 {
             return false;
         }
-        if (va.get_image)(self.dpy, surface, 0, 0, w as c_uint, h as c_uint, img.image_id) != 0 {
+        if (va.get_image)(
+            self.dpy,
+            surface,
+            0,
+            0,
+            w as c_uint,
+            h as c_uint,
+            img.image_id,
+        ) != 0
+        {
             (va.destroy_image)(self.dpy, img.image_id);
             *img = std::mem::zeroed();
             return false;
@@ -301,7 +376,15 @@ impl Device {
     /// The decoded picture in `surface` (`w × h` coded, NV12, or P010 when
     /// `deep`), cropped by `crop` (`[left, right, top, bottom]`, luma
     /// samples) straight out of the mapped image, after waiting for it.
-    pub(crate) fn read_frame(&self, surface: Id, w: usize, h: usize, deep: bool, crop: [usize; 4], color: ColorInfo) -> Result<DecodedFrame, String> {
+    pub(crate) fn read_frame(
+        &self,
+        surface: Id,
+        w: usize,
+        h: usize,
+        deep: bool,
+        crop: [usize; 4],
+        color: ColorInfo,
+    ) -> Result<DecodedFrame, String> {
         let fourcc = if deep { FOURCC_P010 } else { FOURCC_NV12 };
         let va = self.va;
         unsafe {
@@ -312,7 +395,8 @@ impl Device {
             let mut img: Image = std::mem::zeroed();
             let copied = self.get_image(surface, w, h, fourcc, deep, &mut img);
             if !copied {
-                let derived = (va.derive_image)(self.dpy, surface, &mut img) == 0 && img.format.fourcc == fourcc;
+                let derived = (va.derive_image)(self.dpy, surface, &mut img) == 0
+                    && img.format.fourcc == fourcc;
                 if !derived {
                     if img.image_id != 0 && img.image_id != INVALID_ID {
                         (va.destroy_image)(self.dpy, img.image_id);
@@ -330,7 +414,10 @@ impl Device {
             let (yp, up) = (img.pitches[0] as usize, img.pitches[1] as usize);
             let (yo, uo) = (img.offsets[0] as usize, img.offsets[1] as usize);
             let [left, right, top, bottom] = crop;
-            let (fw, fh) = (w.saturating_sub(left + right), h.saturating_sub(top + bottom));
+            let (fw, fh) = (
+                w.saturating_sub(left + right),
+                h.saturating_sub(top + bottom),
+            );
             let (cw, ch) = (fw.div_ceil(2), fh.div_ceil(2));
             let (cx, cy) = (left / 2, top / 2);
             // Straight loops per format, so they vectorise: this copy runs
@@ -340,7 +427,10 @@ impl Device {
             let mut u = vec![0u16; cw * ch];
             let mut v = vec![0u16; cw * ch];
             for r in 0..fh {
-                let (src, dst) = (&data[yo + (top + r) * yp + left * bps..][..fw * bps], &mut y[r * fw..][..fw]);
+                let (src, dst) = (
+                    &data[yo + (top + r) * yp + left * bps..][..fw * bps],
+                    &mut y[r * fw..][..fw],
+                );
                 if deep {
                     // P010: 10-bit samples in the high bits of little-endian u16s.
                     for (d, s) in dst.iter_mut().zip(src.chunks_exact(2)) {
@@ -423,26 +513,64 @@ pub(crate) struct Session {
 }
 
 impl Session {
-    pub(crate) fn new(dev: &Device, profile: c_int, rt: c_uint, w: u32, h: u32, n: usize) -> Result<Session, String> {
+    pub(crate) fn new(
+        dev: &Device,
+        profile: c_int,
+        rt: c_uint,
+        w: u32,
+        h: u32,
+        n: usize,
+    ) -> Result<Session, String> {
         let (va, dpy) = (dev.va, dev.dpy);
         unsafe {
-            let mut attrib = ConfigAttrib { kind: ATTRIB_RT_FORMAT, value: rt };
+            let mut attrib = ConfigAttrib {
+                kind: ATTRIB_RT_FORMAT,
+                value: rt,
+            };
             let mut config = 0;
-            va.check("vaCreateConfig", (va.create_config)(dpy, profile, ENTRYPOINT_VLD, &mut attrib, 1, &mut config))?;
+            va.check(
+                "vaCreateConfig",
+                (va.create_config)(dpy, profile, ENTRYPOINT_VLD, &mut attrib, 1, &mut config),
+            )?;
             let mut surfaces = vec![INVALID_ID; n];
-            let r = (va.create_surfaces)(dpy, rt, w, h, surfaces.as_mut_ptr(), n as c_uint, std::ptr::null_mut(), 0);
+            let r = (va.create_surfaces)(
+                dpy,
+                rt,
+                w,
+                h,
+                surfaces.as_mut_ptr(),
+                n as c_uint,
+                std::ptr::null_mut(),
+                0,
+            );
             if let Err(e) = va.check("vaCreateSurfaces", r) {
                 (va.destroy_config)(dpy, config);
                 return Err(e);
             }
             let mut context = 0;
-            let r = (va.create_context)(dpy, config, w as c_int, h as c_int, PROGRESSIVE, surfaces.as_mut_ptr(), n as c_int, &mut context);
+            let r = (va.create_context)(
+                dpy,
+                config,
+                w as c_int,
+                h as c_int,
+                PROGRESSIVE,
+                surfaces.as_mut_ptr(),
+                n as c_int,
+                &mut context,
+            );
             if let Err(e) = va.check("vaCreateContext", r) {
                 (va.destroy_surfaces)(dpy, surfaces.as_mut_ptr(), n as c_int);
                 (va.destroy_config)(dpy, config);
                 return Err(e);
             }
-            Ok(Session { config, context, surfaces, owner: vec![None; n], key: (w, h, profile, rt), buffers: Vec::new() })
+            Ok(Session {
+                config,
+                context,
+                surfaces,
+                owner: vec![None; n],
+                key: (w, h, profile, rt),
+                buffers: Vec::new(),
+            })
         }
     }
 
@@ -453,14 +581,21 @@ impl Session {
                 (va.destroy_buffer)(dpy, id);
             }
             (va.destroy_context)(dpy, self.context);
-            (va.destroy_surfaces)(dpy, self.surfaces.as_mut_ptr(), self.surfaces.len() as c_int);
+            (va.destroy_surfaces)(
+                dpy,
+                self.surfaces.as_mut_ptr(),
+                self.surfaces.len() as c_int,
+            );
             (va.destroy_config)(dpy, self.config);
         }
     }
 
     /// The surface holding picture `key`.
     pub(crate) fn surface_of(&self, key: i64) -> Option<Id> {
-        self.owner.iter().position(|o| *o == Some(key)).map(|i| self.surfaces[i])
+        self.owner
+            .iter()
+            .position(|o| *o == Some(key))
+            .map(|i| self.surfaces[i])
     }
 
     /// The surface for picture `key`: its own if it has one, else one whose
@@ -469,39 +604,77 @@ impl Session {
         if let Some(s) = self.surface_of(key) {
             return Ok(s);
         }
-        let i = self.owner.iter().position(|o| o.is_none_or(|k| !live(k))).ok_or("every VA surface holds a reference")?;
+        let i = self
+            .owner
+            .iter()
+            .position(|o| o.is_none_or(|k| !live(k)))
+            .ok_or("every VA surface holds a reference")?;
         self.owner[i] = Some(key);
         Ok(self.surfaces[i])
     }
 
     pub(crate) fn buffer<T>(&mut self, dev: &Device, kind: c_int, data: &T) -> Result<Id, String> {
-        self.raw_buffer(dev, kind, std::mem::size_of::<T>(), (data as *const T).cast())
+        self.raw_buffer(
+            dev,
+            kind,
+            std::mem::size_of::<T>(),
+            (data as *const T).cast(),
+        )
     }
 
-    pub(crate) fn raw_buffer(&mut self, dev: &Device, kind: c_int, size: usize, data: *const c_void) -> Result<Id, String> {
+    pub(crate) fn raw_buffer(
+        &mut self,
+        dev: &Device,
+        kind: c_int,
+        size: usize,
+        data: *const c_void,
+    ) -> Result<Id, String> {
         self.raw_buffer_n(dev, kind, size, 1, data)
     }
 
     /// A buffer of `n` elements of `size` bytes each.
-    pub(crate) fn raw_buffer_n(&mut self, dev: &Device, kind: c_int, size: usize, n: usize, data: *const c_void) -> Result<Id, String> {
+    pub(crate) fn raw_buffer_n(
+        &mut self,
+        dev: &Device,
+        kind: c_int,
+        size: usize,
+        n: usize,
+        data: *const c_void,
+    ) -> Result<Id, String> {
         let mut id = INVALID_ID;
-        let r = unsafe { (dev.va.create_buffer)(dev.dpy, self.context, kind, size as c_uint, n as c_uint, data as *mut c_void, &mut id) };
+        let r = unsafe {
+            (dev.va.create_buffer)(
+                dev.dpy,
+                self.context,
+                kind,
+                size as c_uint,
+                n as c_uint,
+                data as *mut c_void,
+                &mut id,
+            )
+        };
         dev.va.check("vaCreateBuffer", r)?;
         self.buffers.push(id);
         Ok(id)
     }
 
     pub(crate) fn begin(&mut self, dev: &Device, target: Id) -> Result<(), String> {
-        dev.va.check("vaBeginPicture", unsafe { (dev.va.begin_picture)(dev.dpy, self.context, target) })
+        dev.va.check("vaBeginPicture", unsafe {
+            (dev.va.begin_picture)(dev.dpy, self.context, target)
+        })
     }
 
     pub(crate) fn render(&mut self, dev: &Device, ids: &mut [Id]) -> Result<(), String> {
-        dev.va.check("vaRenderPicture", unsafe { (dev.va.render_picture)(dev.dpy, self.context, ids.as_mut_ptr(), ids.len() as c_int) })
+        dev.va.check("vaRenderPicture", unsafe {
+            (dev.va.render_picture)(dev.dpy, self.context, ids.as_mut_ptr(), ids.len() as c_int)
+        })
     }
 
     /// `vaEndPicture`, then free the picture's buffers.
     pub(crate) fn end(&mut self, dev: &Device) -> Result<(), String> {
-        let r = dev.va.check("vaEndPicture", unsafe { (dev.va.end_picture)(dev.dpy, self.context) });
+        let r = dev.va.check("vaEndPicture", unsafe {
+            (dev.va.end_picture)(dev.dpy, self.context)
+        });
         for id in self.buffers.drain(..) {
             unsafe { (dev.va.destroy_buffer)(dev.dpy, id) };
         }
@@ -600,12 +773,21 @@ impl VaapiDecoder {
                 TrackCodec::Hevc => (PROFILE_HEVC_MAIN, 8),
             };
             let probe = Device::open(profile)?;
-            let (w, h) = (track.width.next_multiple_of(align), track.height.next_multiple_of(align));
+            let (w, h) = (
+                track.width.next_multiple_of(align),
+                track.height.next_multiple_of(align),
+            );
             Session::new(&probe, profile, RT_FORMAT_YUV420, w.max(1), h.max(1), 1)
                 .map_err(|e| format!("{}x{}: {e}", track.width, track.height))?
                 .destroy(&probe);
         }
-        let mut me = VaapiDecoder { dec, nal_len, width: track.width, height: track.height, ready: Vec::new() };
+        let mut me = VaapiDecoder {
+            dec,
+            nal_len,
+            width: track.width,
+            height: track.height,
+            ready: Vec::new(),
+        };
         for s in sets {
             me.nal(s)?;
         }
@@ -627,7 +809,13 @@ impl VaapiDecoder {
 
     /// Hand one coded frame (length-prefixed NAL units) to the decoder, in
     /// decode order. Its picture is read back before this returns.
-    pub fn push(&mut self, sample: &[u8], pts: i64, _dts: i64, _duration: i64) -> Result<(), String> {
+    pub fn push(
+        &mut self,
+        sample: &[u8],
+        pts: i64,
+        _dts: i64,
+        _duration: i64,
+    ) -> Result<(), String> {
         if let Inner::Av1(d) = &mut self.dec {
             // A temporal unit shows at most one picture; the decoder has
             // already read it back from the GPU.
@@ -650,11 +838,17 @@ impl VaapiDecoder {
         let (frames, error): (Vec<DecodedFrame>, _) = match &mut self.dec {
             Inner::H264(d) => {
                 d.finish_picture();
-                (d.take_pictures().into_iter().map(|p| p.frame).collect(), d.take_accel_error())
+                (
+                    d.take_pictures().into_iter().map(|p| p.frame).collect(),
+                    d.take_accel_error(),
+                )
             }
             Inner::Hevc(d) => {
                 d.finish_picture();
-                (d.take_pictures().into_iter().map(|p| p.frame).collect(), d.take_accel_error())
+                (
+                    d.take_pictures().into_iter().map(|p| p.frame).collect(),
+                    d.take_accel_error(),
+                )
             }
             Inner::Vp9(_) | Inner::Av1(_) => unreachable!("VP9 and AV1 returned above"),
         };

@@ -5,7 +5,10 @@
 //! `rgba(0, 0, 0, 0.3)`, `1px solid #ccc`, `blur(8px)`) or, written `{expr}`
 //! in the macro, a Rust value of the property's type ([`Value`]).
 
-use super::style::{AlignItems, BoxSizing, Display, Edges, FlexDirection, FontWeight, JustifyContent, Length, Position, Rgba, Style};
+use super::style::{
+    AlignItems, BoxSizing, Display, Edges, FlexDirection, FontWeight, JustifyContent, Length,
+    Position, Rgba, Style,
+};
 
 /// A computed value for a property, given as a Rust expression.
 #[derive(Debug, Clone, PartialEq)]
@@ -114,7 +117,12 @@ pub fn length(v: &str) -> Option<Length> {
     if let Some(p) = v.strip_suffix('%') {
         return p.trim().parse().ok().map(Length::Percent);
     }
-    v.strip_suffix("px").unwrap_or(v).trim().parse().ok().map(Length::Px)
+    v.strip_suffix("px")
+        .unwrap_or(v)
+        .trim()
+        .parse()
+        .ok()
+        .map(Length::Px)
 }
 
 fn px(v: &str) -> Option<f32> {
@@ -142,17 +150,31 @@ pub fn color(v: &str) -> Option<Rgba> {
         _ => {}
     }
     if let Some(hex) = v.strip_prefix('#') {
-        let digits: Vec<u8> = hex.chars().map(|c| c.to_digit(16).map(|d| d as u8)).collect::<Option<_>>()?;
+        let digits: Vec<u8> = hex
+            .chars()
+            .map(|c| c.to_digit(16).map(|d| d as u8))
+            .collect::<Option<_>>()?;
         let channels: Vec<u8> = match digits.len() {
             3 | 4 => digits.iter().map(|d| d * 17).collect(),
             6 | 8 => digits.chunks(2).map(|p| p[0] * 16 + p[1]).collect(),
             _ => return None,
         };
         let a = channels.get(3).map_or(1.0, |&a| a as f32 / 255.0);
-        return Some([channels[0] as f32 / 255.0, channels[1] as f32 / 255.0, channels[2] as f32 / 255.0, a]);
+        return Some([
+            channels[0] as f32 / 255.0,
+            channels[1] as f32 / 255.0,
+            channels[2] as f32 / 255.0,
+            a,
+        ]);
     }
-    let args = v.strip_prefix("rgba(").or_else(|| v.strip_prefix("rgb("))?.strip_suffix(')')?;
-    let n: Vec<f32> = args.split(',').map(|a| a.trim().parse().ok()).collect::<Option<_>>()?;
+    let args = v
+        .strip_prefix("rgba(")
+        .or_else(|| v.strip_prefix("rgb("))?
+        .strip_suffix(')')?;
+    let n: Vec<f32> = args
+        .split(',')
+        .map(|a| a.trim().parse().ok())
+        .collect::<Option<_>>()?;
     match n[..] {
         [r, g, b] => Some([r / 255.0, g / 255.0, b / 255.0, 1.0]),
         [r, g, b, a] => Some([r / 255.0, g / 255.0, b / 255.0, a]),
@@ -292,7 +314,9 @@ pub fn apply(s: &mut Style, name: &str, value: &str) {
                 }
             }
             "border-radius" => s.border_radius = length(v)?,
-            "background" | "background-color" => s.background = if v == "none" { None } else { Some(color(v)?) },
+            "background" | "background-color" => {
+                s.background = if v == "none" { None } else { Some(color(v)?) }
+            }
             "color" => s.color = color(v)?,
             "font-family" => s.font_family = v.trim_matches('"').to_owned(),
             "font-size" => s.font_size = px(v)?,
@@ -497,7 +521,9 @@ fn set_length(s: &mut Style, name: &str, l: Length) -> bool {
         "padding" => s.padding = Edges::all(px(l)),
         "border-width" => s.border = Edges::all(px(l)),
         _ => {
-            let Some((base, side)) = name.rsplit_once('-') else { return false };
+            let Some((base, side)) = name.rsplit_once('-') else {
+                return false;
+            };
             let v = px(l);
             return match base {
                 "margin" => edge(&mut s.margin, side, v),
@@ -650,10 +676,16 @@ mod tests {
         assert_eq!(length("12px"), Some(Length::Px(12.0)));
         assert_eq!(length("-1.5px"), Some(Length::Px(-1.5)));
         assert_eq!(length("20%"), Some(Length::Percent(20.0)));
-        assert_eq!(color("#9a7518"), Some([154.0 / 255.0, 117.0 / 255.0, 24.0 / 255.0, 1.0]));
+        assert_eq!(
+            color("#9a7518"),
+            Some([154.0 / 255.0, 117.0 / 255.0, 24.0 / 255.0, 1.0])
+        );
         assert_eq!(color("#f00"), Some([1.0, 0.0, 0.0, 1.0]));
         assert_eq!(color("rgba(0, 0, 0, 0.3)"), Some([0.0, 0.0, 0.0, 0.3]));
-        assert_eq!(edges("1px 1px 1px 5px"), Some(Edges::new(1.0, 1.0, 1.0, 5.0)));
+        assert_eq!(
+            edges("1px 1px 1px 5px"),
+            Some(Edges::new(1.0, 1.0, 1.0, 5.0))
+        );
         // One edge's border.
         let mut e = Style::default();
         apply(&mut e, "border-left", "2px solid #181818");
@@ -702,6 +734,9 @@ mod tests {
         assert_eq!(t.border, Edges::all(1.0));
         assert!(t.clip && t.line_through);
         assert_eq!(t.blur, 9.6);
-        assert_eq!((t.flex_grow, t.flex_shrink, t.flex_basis), (1.0, 1.0, Length::Percent(0.0)));
+        assert_eq!(
+            (t.flex_grow, t.flex_shrink, t.flex_basis),
+            (1.0, 1.0, Length::Percent(0.0))
+        );
     }
 }

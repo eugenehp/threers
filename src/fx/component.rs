@@ -126,7 +126,11 @@ impl Button {
     }
 
     fn rest(&self) -> Shape {
-        Shape::pill(self.center, self.width.unwrap_or(self.height * 3.0), self.height)
+        Shape::pill(
+            self.center,
+            self.width.unwrap_or(self.height * 3.0),
+            self.height,
+        )
     }
 }
 
@@ -143,16 +147,14 @@ impl Component for Button {
             {
                 layout.overlay.text_weight(self.font_weight);
                 layout.overlay.text_size(self.font_size);
-                self.width =
-                    Some(layout.overlay.measure_text(&self.label).0 + self.padding * 2.0);
+                self.width = Some(layout.overlay.measure_text(&self.label).0 + self.padding * 2.0);
             }
             #[cfg(not(feature = "captions"))]
             {
                 // Half the type size per character is the usual average for a UI face,
                 // which keeps a button the right order of size without a measurement.
                 self.width = Some(
-                    self.label.chars().count() as f32 * self.font_size * 0.5
-                        + self.padding * 2.0,
+                    self.label.chars().count() as f32 * self.font_size * 0.5 + self.padding * 2.0,
                 );
             }
         }
@@ -180,15 +182,15 @@ impl Component for Button {
         let _ = (c, dpr);
         #[cfg(feature = "captions")]
         {
-        o.text_weight(self.font_weight);
-        o.text_size(self.font_size * dpr * self.scale);
-        let (_, th) = o.measure_text(&self.label);
-        let (x, y) = (c.x * dpr, c.y * dpr - th / 2.0);
-        // the text shadow a button has in a page
-        o.fill_alpha(Color::from_hex(0x000000), 0.75);
-        o.text_centered(x, y + dpr, &self.label);
-        o.fill(self.text);
-        o.text_centered(x, y, &self.label);
+            o.text_weight(self.font_weight);
+            o.text_size(self.font_size * dpr * self.scale);
+            let (_, th) = o.measure_text(&self.label);
+            let (x, y) = (c.x * dpr, c.y * dpr - th / 2.0);
+            // the text shadow a button has in a page
+            o.fill_alpha(Color::from_hex(0x000000), 0.75);
+            o.text_centered(x, y + dpr, &self.label);
+            o.fill(self.text);
+            o.text_centered(x, y, &self.label);
         }
     }
 }
@@ -207,7 +209,12 @@ pub struct Figure {
 
 impl Figure {
     pub fn new(shape: Shape) -> Self {
-        Self { placed: shape.clone(), shape, anchor: None, interactive: true }
+        Self {
+            placed: shape.clone(),
+            shape,
+            anchor: None,
+            interactive: true,
+        }
     }
 
     pub fn at(mut self, anchor: Anchor) -> Self {

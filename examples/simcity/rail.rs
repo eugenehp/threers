@@ -104,9 +104,7 @@ pub(crate) fn add_railway(
     let springing = DECK - 0.9 - (span - pier_w) * 0.5;
     // Nothing may stand between the banks, and the abutments each side are
     // pulled out to the water's edge so the clear span reads as deliberate.
-    let in_channel = |a: f32, c: f32| {
-        channel.is_some_and(|(w0, w1)| a < w1 + 2.0 && c > w0 - 2.0)
-    };
+    let in_channel = |a: f32, c: f32| channel.is_some_and(|(w0, w1)| a < w1 + 2.0 && c > w0 - 2.0);
     for i in 0..=n {
         let s = mix(lo, hi, i as f32 / n as f32);
         if in_channel(s - pier_w * 0.5, s + pier_w * 0.5) {
@@ -143,13 +141,28 @@ pub(crate) fn add_railway(
                 mix(0.9, springing, u0),
                 mix(0.9, springing, u1) + 0.02,
             );
-            b.trim.add_box(c0, c1, scale_color(dark, 1.0 - u0 * 0.06), Uv::Unit);
+            b.trim
+                .add_box(c0, c1, scale_color(dark, 1.0 - u0 * 0.06), Uv::Unit);
         }
         // A splayed plinth at the foot, and an impost band at the springing —
         // the two horizontal lines that give a pier its scale.
-        let (b0, b1) = bx(s - pier_w * 0.62, s + pier_w * 0.62, -HALF_W - 0.25, HALF_W + 0.25, 0.0, 1.1);
+        let (b0, b1) = bx(
+            s - pier_w * 0.62,
+            s + pier_w * 0.62,
+            -HALF_W - 0.25,
+            HALF_W + 0.25,
+            0.0,
+            1.1,
+        );
         b.trim.add_box(b0, b1, scale_color(dark, 0.92), Uv::Unit);
-        let (i0, i1) = bx(s - pier_w * 0.60, s + pier_w * 0.60, -HALF_W - 0.18, HALF_W + 0.18, springing - 0.45, springing);
+        let (i0, i1) = bx(
+            s - pier_w * 0.60,
+            s + pier_w * 0.60,
+            -HALF_W - 0.18,
+            HALF_W + 0.18,
+            springing - 0.45,
+            springing,
+        );
         b.trim.add_box(i0, i1, scale_color(stone, 0.96), Uv::Unit);
 
         if i == n {
@@ -213,14 +226,8 @@ pub(crate) fn add_railway(
                 let ring = 0.55f32;
                 let (e0x, e0z) = at(u0, t0);
                 let (e1x, e1z) = at(u1, t1);
-                let (o0, o1) = (
-                    (u0 - arch_mid) / r * ring,
-                    (u1 - arch_mid) / r * ring,
-                );
-                let (h0, h1) = (
-                    (y0 - springing) / r * ring,
-                    (y1 - springing) / r * ring,
-                );
+                let (o0, o1) = ((u0 - arch_mid) / r * ring, (u1 - arch_mid) / r * ring);
+                let (h0, h1) = ((y0 - springing) / r * ring, (y1 - springing) / r * ring);
                 let (f0x, f0z) = at(u0 + o0, t0);
                 let (f1x, f1z) = at(u1 + o1, t1);
                 b.trim.quad(
@@ -230,7 +237,11 @@ pub(crate) fn add_railway(
                         [f1x, y1 + h1, f1z],
                         [e1x, y1, e1z],
                     ],
-                    if along_x { [0.0, 0.0, 1.0] } else { [1.0, 0.0, 0.0] },
+                    if along_x {
+                        [0.0, 0.0, 1.0]
+                    } else {
+                        [1.0, 0.0, 0.0]
+                    },
                     Uv::Unit,
                     scale_color(stone, 1.02),
                 );
@@ -240,10 +251,7 @@ pub(crate) fn add_railway(
             let ext0 = y0 + (y0 - springing) / r * 0.55;
             let ext1 = y1 + (y1 - springing) / r * 0.55;
             if ext0.min(ext1) < top {
-                for (t0, t1) in [
-                    (-HALF_W, -HALF_W + 0.35),
-                    (HALF_W - 0.35, HALF_W),
-                ] {
+                for (t0, t1) in [(-HALF_W, -HALF_W + 0.35), (HALF_W - 0.35, HALF_W)] {
                     let (g0x, g0z) = at(u0 + (u0 - arch_mid) / r * 0.55, t0);
                     let (g1x, g1z) = at(u1 + (u1 - arch_mid) / r * 0.55, t1);
                     let (gx0, gz0) = (g0x.min(g1x), g0z.min(g1z));
@@ -295,8 +303,12 @@ pub(crate) fn add_railway(
     // --- Ballast, sleepers and rail. The sleepers are what make it read as
     // track rather than as two lines painted on a bridge.
     let (b0, b1) = bx(lo, hi, -2.5, 2.5, DECK, DECK + 0.30);
-    b.trim
-        .add_box(b0, b1, scale_color(Color::from_hex(0x6b6157), 0.9), Uv::Unit);
+    b.trim.add_box(
+        b0,
+        b1,
+        scale_color(Color::from_hex(0x6b6157), 0.9),
+        Uv::Unit,
+    );
     let ties = ((hi - lo) / 0.65) as usize;
     for i in 0..ties {
         let s = mix(lo, hi, (i as f32 + 0.5) / ties as f32);
@@ -304,7 +316,10 @@ pub(crate) fn add_railway(
         b.trim.add_box(
             t0,
             t1,
-            scale_color(Color::from_hex(0x4a3a2c), 0.85 + 0.3 * city_hash2(i as i32, 3)),
+            scale_color(
+                Color::from_hex(0x4a3a2c),
+                0.85 + 0.3 * city_hash2(i as i32, 3),
+            ),
             Uv::Unit,
         );
     }
@@ -325,10 +340,21 @@ pub(crate) fn add_railway(
             0.0,
             DECK + 4.2,
         );
-        b.grass
-            .add_box(e0, e1, scale_color(Color::from_hex(C_TERRAIN), 0.92), Uv::Unit);
+        b.grass.add_box(
+            e0,
+            e1,
+            scale_color(Color::from_hex(C_TERRAIN), 0.92),
+            Uv::Unit,
+        );
         // The face, and the hole.
-        let (f0, f1) = bx(mouth - dir * 0.9, mouth, -HALF_W - 1.2, HALF_W + 1.2, 0.0, DECK + 3.4);
+        let (f0, f1) = bx(
+            mouth - dir * 0.9,
+            mouth,
+            -HALF_W - 1.2,
+            HALF_W + 1.2,
+            0.0,
+            DECK + 3.4,
+        );
         b.trim.add_box(f0, f1, stone, Uv::Unit);
         let (h0, h1) = bx(
             mouth - dir * 1.4,
@@ -338,9 +364,17 @@ pub(crate) fn add_railway(
             DECK - 0.1,
             DECK + 2.6,
         );
-        b.trim.add_box(h0, h1, Color::new(0.02, 0.02, 0.025), Uv::Unit);
+        b.trim
+            .add_box(h0, h1, Color::new(0.02, 0.02, 0.025), Uv::Unit);
         // A keystone and coping, so the mouth has an arch over it.
-        let (k0, k1) = bx(mouth - dir * 1.1, mouth + dir * 0.1, -0.5, 0.5, DECK + 2.5, DECK + 3.1);
+        let (k0, k1) = bx(
+            mouth - dir * 1.1,
+            mouth + dir * 0.1,
+            -0.5,
+            0.5,
+            DECK + 2.5,
+            DECK + 3.1,
+        );
         b.trim.add_box(k0, k1, scale_color(stone, 1.15), Uv::Unit);
     }
 
@@ -349,8 +383,12 @@ pub(crate) fn add_railway(
     let plat = (mid - 22.0, mid + 22.0);
     for t in [-3.1f32, 2.1] {
         let (p0, p1) = bx(plat.0, plat.1, t, t + 1.0, DECK + 0.40, DECK + 0.95);
-        b.trim
-            .add_box(p0, p1, scale_color(Color::from_hex(0x9a958c), 1.0), Uv::Unit);
+        b.trim.add_box(
+            p0,
+            p1,
+            scale_color(Color::from_hex(0x9a958c), 1.0),
+            Uv::Unit,
+        );
     }
     // Canopy on columns, and a valance along its edge.
     let cols = 7;
@@ -370,9 +408,20 @@ pub(crate) fn add_railway(
             );
         }
     }
-    let (c0, c1) = bx(plat.0 - 1.0, plat.1 + 1.0, -3.4, 3.3, DECK + 4.05, DECK + 4.25);
-    b.trim
-        .add_box(c0, c1, scale_color(Color::from_hex(0x3f4a50), 1.0), Uv::Unit);
+    let (c0, c1) = bx(
+        plat.0 - 1.0,
+        plat.1 + 1.0,
+        -3.4,
+        3.3,
+        DECK + 4.05,
+        DECK + 4.25,
+    );
+    b.trim.add_box(
+        c0,
+        c1,
+        scale_color(Color::from_hex(0x3f4a50), 1.0),
+        Uv::Unit,
+    );
     // Lit platform edge after dark, which is what a station looks like at
     // night from anywhere else in the city.
     for t in [-3.1f32, 3.05] {
@@ -387,7 +436,11 @@ pub(crate) fn add_railway(
         for k in 0..4 {
             let u = (k as f32 + 0.5) / 4.0;
             let s0 = mix(plat.0, plat.1, u);
-            let (px, pz) = if along_x { (s0, fixed + t) } else { (fixed + t, s0) };
+            let (px, pz) = if along_x {
+                (s0, fixed + t)
+            } else {
+                (fixed + t, s0)
+            };
             add_cctv(
                 b,
                 Vector3::new(px, DECK + 3.7, pz),
@@ -561,8 +614,16 @@ pub(crate) fn add_metro_entrance(b: &mut Batches, x: f32, z: f32, yaw: f32, rng:
     // recognises from across a street.
     let sx = x + 1.9 * yaw.cos();
     let sz = z + 1.9 * yaw.sin();
-    b.trim
-        .add_cylinder(Vector3::new(sx, KERB, sz), 0.06, 0.055, 2.6, 5, iron, false, Uv::Unit);
+    b.trim.add_cylinder(
+        Vector3::new(sx, KERB, sz),
+        0.06,
+        0.055,
+        2.6,
+        5,
+        iron,
+        false,
+        Uv::Unit,
+    );
     // Painted, on `trim`, NOT on `neon`. A neon batch is a Basic material
     // scaled by `sky.lights`, which is zero whenever the sun is up — so the
     // roundel the comment above calls the one recognisable piece of a metro

@@ -109,7 +109,16 @@ mod bvh;
 mod camera;
 mod checkpoint;
 mod denoise;
+/// The trained denoiser's forward pass, dependency-free and wasm-capable.
+pub mod denoise_net;
+mod distribution;
+mod film;
 mod fingerprint;
+mod integrator;
+/// The trained denoiser. Needs `learned-denoise`.
+#[cfg(all(feature = "learned-denoise", not(target_arch = "wasm32")))]
+pub mod learned;
+mod lights;
 /// Turning lines and points into the triangles a tracer can intersect.
 ///
 /// Public because a rasteriser needs the same expansion: hardware lines are one
@@ -117,15 +126,6 @@ mod fingerprint;
 /// width means building these quads either way, and two copies of the
 /// construction would drift.
 pub mod primitives;
-/// The trained denoiser's forward pass, dependency-free and wasm-capable.
-pub mod denoise_net;
-mod distribution;
-mod film;
-mod integrator;
-/// The trained denoiser. Needs `learned-denoise`.
-#[cfg(all(feature = "learned-denoise", not(target_arch = "wasm32")))]
-pub mod learned;
-mod lights;
 mod render;
 mod sampler;
 mod scene;
@@ -135,18 +135,20 @@ mod texture;
 /// The wgpu compute backend — see [`crate::raytrace::gpu::GpuBackend`].
 pub mod gpu;
 
-pub use backend::{intersect_box, probe_focus_distance, CpuBackend, RaytraceBackend, RaytraceError, RenderRect};
+pub use backend::{
+    intersect_box, probe_focus_distance, CpuBackend, RaytraceBackend, RaytraceError, RenderRect,
+};
 pub use bsdf::{Bsdf, BsdfSample, Surface};
 pub use bvh::{RtBvh, RtHit};
 pub use camera::RtCamera;
 pub use checkpoint::{encode_exr_rgba, FilmCheckpoint};
-pub use fingerprint::SceneFingerprint;
 pub use denoise::{denoise, DenoiseExample, DenoiseGuides, DenoiseParams};
 pub use denoise_net::{DenoiseError, Denoiser as NetDenoiser, Widths as NetWidths};
 pub use distribution::{
     direction_from_uv, uv_from_direction, EnvDistribution, ENV_HEIGHT, ENV_WIDTH,
 };
 pub use film::{tone_map, Film, Pixel};
+pub use fingerprint::SceneFingerprint;
 pub use integrator::{Integrator, PathResult, Scratch};
 pub use lights::{
     distance_attenuation, emissive_pdf, sample_analytic, sample_emissive, sample_world, world_pdf,

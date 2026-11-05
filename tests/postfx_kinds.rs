@@ -22,7 +22,11 @@ const FORMAT: threers::wgpu::TextureFormat = threers::wgpu::TextureFormat::Rgba8
 const F16: threers::wgpu::TextureFormat = threers::wgpu::TextureFormat::Rgba16Float;
 
 fn headless() -> Option<HeadlessRenderer> {
-    match HeadlessRenderer::builder().size(W, H).color_format(FORMAT).build() {
+    match HeadlessRenderer::builder()
+        .size(W, H)
+        .color_format(FORMAT)
+        .build()
+    {
         Ok(r) => Some(r),
         Err(e) => {
             eprintln!("skipping: no GPU adapter ({e})");
@@ -72,14 +76,35 @@ fn pass(
 ) {
     let (out_id, out_rt) = output;
     r.renderer().apply_postfx_by_id(
-        input, out_id, &out_rt.color_view, second.0, second.1, kind, time, p2, p3,
-        out_rt.width, out_rt.height, false, camera,
+        input,
+        out_id,
+        &out_rt.color_view,
+        second.0,
+        second.1,
+        kind,
+        time,
+        p2,
+        p3,
+        out_rt.width,
+        out_rt.height,
+        false,
+        camera,
     );
 }
 
 /// Fill target `id` with one colour (kind 29), reading from `scratch`.
 fn fill(r: &mut HeadlessRenderer, scratch: u32, id: u32, rt: &RenderTarget, c: [f32; 4]) {
-    pass(r, scratch, (id, rt), (0, 0), 29, 0.0, c, [0.0; 4], PostFxCamera::default());
+    pass(
+        r,
+        scratch,
+        (id, rt),
+        (0, 0),
+        29,
+        0.0,
+        c,
+        [0.0; 4],
+        PostFxCamera::default(),
+    );
 }
 
 /// three.js `luminance()`.
@@ -113,7 +138,14 @@ fn adaptive_tone_mapping_maps_a_bright_frame_down() {
 
     // Fixed average luminance 1.
     pass(
-        &mut r, 1, (2, &out), (0, 0), 25, 0.0, [middle, min_lum, max_lum, 1.0], [0.0; 4],
+        &mut r,
+        1,
+        (2, &out),
+        (0, 0),
+        25,
+        0.0,
+        [middle, min_lum, max_lum, 1.0],
+        [0.0; 4],
         PostFxCamera::default(),
     );
     let fixed = at_centre(&read(&r, &out), W);
@@ -125,7 +157,17 @@ fn adaptive_tone_mapping_maps_a_bright_frame_down() {
 
     // Adaptive: the luminance, averaged down to one texel.
     let lum = target(&mut r, 3, F16, W, H);
-    pass(&mut r, 1, (3, &lum), (0, 0), 33, 0.0, [0.0; 4], [0.0; 4], PostFxCamera::default());
+    pass(
+        &mut r,
+        1,
+        (3, &lum),
+        (0, 0),
+        33,
+        0.0,
+        [0.0; 4],
+        [0.0; 4],
+        PostFxCamera::default(),
+    );
     let mut src = 3;
     let mut size = W;
     let mut id = 10;
@@ -133,7 +175,17 @@ fn adaptive_tone_mapping_maps_a_bright_frame_down() {
     while size > 1 {
         size /= 2;
         let rt = target(&mut r, id, F16, size, size);
-        pass(&mut r, src, (id, &rt), (0, 0), 20, 0.0, [0.0; 4], [0.0; 4], PostFxCamera::default());
+        pass(
+            &mut r,
+            src,
+            (id, &rt),
+            (0, 0),
+            20,
+            0.0,
+            [0.0; 4],
+            [0.0; 4],
+            PostFxCamera::default(),
+        );
         halvings.push(rt);
         src = id;
         id += 1;
@@ -151,7 +203,14 @@ fn adaptive_tone_mapping_maps_a_bright_frame_down() {
     for (delta, tau) in [(0.1f32, 1.0f32), (100.0, 1.0)] {
         fill(&mut r, 99, 4, &previous, [initial, initial, initial, 1.0]);
         pass(
-            &mut r, src, (5, &adapted), (0, 4), 34, 0.0, [min_lum, delta, tau, 0.0], [0.0; 4],
+            &mut r,
+            src,
+            (5, &adapted),
+            (0, 4),
+            34,
+            0.0,
+            [min_lum, delta, tau, 0.0],
+            [0.0; 4],
             PostFxCamera::default(),
         );
         let got = read(&r, &adapted)[0];
@@ -166,8 +225,15 @@ fn adaptive_tone_mapping_maps_a_bright_frame_down() {
 
     // Tone mapped against the converged adaption (16, the luminance squared).
     pass(
-        &mut r, 1, (2, &out), (0, 5), 25, 0.0, [middle, min_lum, max_lum, 1.0],
-        [1.0, 0.0, 0.0, 0.0], PostFxCamera::default(),
+        &mut r,
+        1,
+        (2, &out),
+        (0, 5),
+        25,
+        0.0,
+        [middle, min_lum, max_lum, 1.0],
+        [1.0, 0.0, 0.0, 0.0],
+        PostFxCamera::default(),
     );
     let mapped = at_centre(&read(&r, &out), W);
     let want = tone_map(grey, luminance([grey; 3]).powi(2), middle, min_lum, max_lum);
@@ -175,7 +241,10 @@ fn adaptive_tone_mapping_maps_a_bright_frame_down() {
         (mapped - want).abs() < 0.01 * want.max(0.1),
         "kind 25, adaptive: {grey} → {mapped}, three.js gives {want}"
     );
-    assert!(mapped < 0.25 * grey, "a bright frame is meant to come down: {grey} → {mapped}");
+    assert!(
+        mapped < 0.25 * grey,
+        "a bright frame is meant to come down: {grey} → {mapped}"
+    );
 }
 
 /// Vertical stripes two pixels wide, white on black, over the whole frame.
@@ -226,7 +295,8 @@ fn bokeh_blurs_what_is_out_of_focus_and_keeps_the_focus_sharp() {
     let colour = target(&mut r, 1, FORMAT, W, H);
     let depth = target(&mut r, 2, FORMAT, W, H);
     let out = target(&mut r, 3, FORMAT, W, H);
-    r.renderer().render_to(&mut stripes(), &front_ortho(), &colour);
+    r.renderer()
+        .render_to(&mut stripes(), &front_ortho(), &colour);
 
     // Looking down -z: a wall at distance 2 left of x = 0, one at 10 right of it.
     let mut camera = PerspectiveCamera::new(50.0, 1.0, 0.1, 20.0);
@@ -257,7 +327,17 @@ fn bokeh_blurs_what_is_out_of_focus_and_keeps_the_focus_sharp() {
         inv_proj: proj.invert().elements,
     };
     // focus 2, aperture 0.025, maxblur 0.1, aspect 1.
-    pass(&mut r, 1, (3, &out), (2, 2), 26, 0.0, [2.0, 0.025, 0.1, 1.0], [0.0; 4], cam);
+    pass(
+        &mut r,
+        1,
+        (3, &out),
+        (2, 2),
+        26,
+        0.0,
+        [2.0, 0.025, 0.1, 1.0],
+        [0.0; 4],
+        cam,
+    );
     let before = read(&r, &colour);
     let after = read(&r, &out);
     let (left, right) = (4..W / 2 - 8, W / 2 + 8..W - 5);
@@ -268,7 +348,10 @@ fn bokeh_blurs_what_is_out_of_focus_and_keeps_the_focus_sharp() {
         contrast(&before, right.clone()),
         contrast(&after, right.clone()),
     );
-    assert!(contrast(&before, left.clone()) > 0.3, "no stripes to blur: {report}");
+    assert!(
+        contrast(&before, left.clone()) > 0.3,
+        "no stripes to blur: {report}"
+    );
     assert!(
         contrast(&after, left.clone()) > 0.95 * contrast(&before, left),
         "the wall in focus was blurred: {report}"
@@ -301,13 +384,24 @@ fn the_renumbered_glitch_kinds_still_split_the_channels() {
     let Some(mut r) = headless() else { return };
     let input = target(&mut r, 1, FORMAT, W, H);
     let out = target(&mut r, 2, F16, W, H);
-    r.renderer().render_to(&mut marker(), &front_ortho(), &input);
+    r.renderer()
+        .render_to(&mut marker(), &front_ortho(), &input);
     // Bands off-screen, no displacement, a 0.05 (3.2 px) split.
     let p2 = [0.05, 0.0, 2.0, 2.0];
     let p3 = [0.0, 0.0, 0.05, 0.0];
     {
         let kind = 31u32;
-        pass(&mut r, 1, (2, &out), (0, 0), kind, 0.5, p2, p3, PostFxCamera::default());
+        pass(
+            &mut r,
+            1,
+            (2, &out),
+            (0, 0),
+            kind,
+            0.5,
+            p2,
+            p3,
+            PostFxCamera::default(),
+        );
         let px = read(&r, &out);
         // The square spans x, y ∈ [8, 24): two pixels left of it.
         let split = (12..20)
@@ -316,7 +410,10 @@ fn the_renumbered_glitch_kinds_still_split_the_channels() {
                 px[i] > 0.5 && px[i + 1] < 0.2
             })
             .count();
-        assert!(split >= 6, "kind {kind}: no red left of the square ({split} rows of 8)");
+        assert!(
+            split >= 6,
+            "kind {kind}: no red left of the square ({split} rows of 8)"
+        );
     }
 }
 
@@ -348,7 +445,14 @@ fn glitch_snow_hashes_gl_frag_coord() {
     let out = target(&mut r, 2, F16, W, H);
     let (seed, amount) = (2.0e-6f32, 0.025f32);
     pass(
-        &mut r, 1, (2, &out), (0, 0), 5, seed, [amount, 0.0, 2.0, 2.0], [0.0, 0.0, 0.05, 0.0],
+        &mut r,
+        1,
+        (2, &out),
+        (0, 0),
+        5,
+        seed,
+        [amount, 0.0, 2.0, 2.0],
+        [0.0, 0.0, 0.05, 0.0],
         PostFxCamera::default(),
     );
     let px = read(&r, &out);

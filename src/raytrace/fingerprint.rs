@@ -62,7 +62,10 @@ fn hash_object(scene: &Scene, id: ObjectId, h: &mut DefaultHasher) {
         return;
     }
     obj.name.hash(h);
-    obj.matrix_world.elements.iter().for_each(|v| v.to_bits().hash(h));
+    obj.matrix_world
+        .elements
+        .iter()
+        .for_each(|v| v.to_bits().hash(h));
     obj.layers.mask.hash(h);
     match &obj.kind {
         ObjectKind::Mesh(m) => {
@@ -133,9 +136,14 @@ fn hash_object(scene: &Scene, id: ObjectId, h: &mut DefaultHasher) {
             }
             obj.layers.mask.hash(h);
         }
-        ObjectKind::Group => {}
+        ObjectKind::Group | ObjectKind::Audio(_) => {}
     }
-    for child in scene.arena.get(id).into_iter().flat_map(|o| o.children.clone()) {
+    for child in scene
+        .arena
+        .get(id)
+        .into_iter()
+        .flat_map(|o| o.children.clone())
+    {
         hash_object(scene, child, h);
     }
 }

@@ -102,7 +102,14 @@ impl Default for Stage {
 impl Stage {
     /// A stage with the glove cursor and no backdrop.
     pub fn new() -> Self {
-        Self { elements: Vec::new(), spare: Vec::new(), cursor: Cursor::default(), backdrop: None, time: 0.0, was_down: false }
+        Self {
+            elements: Vec::new(),
+            spare: Vec::new(),
+            cursor: Cursor::default(),
+            backdrop: None,
+            time: 0.0,
+            was_down: false,
+        }
     }
 
     pub fn with_cursor(mut self, cursor: Cursor) -> Self {
@@ -135,10 +142,18 @@ impl Stage {
 
     /// Add an element: `component` wearing `effect`, drawn after every
     /// element already on the stage.
-    pub fn add(&mut self, scene: &mut Scene, component: impl Component, effect: impl Effect) -> ElementId {
+    pub fn add(
+        &mut self,
+        scene: &mut Scene,
+        component: impl Component,
+        effect: impl Effect,
+    ) -> ElementId {
         let quad = self.spare.pop().unwrap_or_else(|| {
             let placeholder = Surface::new(Shape::circle(Vector2::ZERO, 1.0), super::Look::LACQUER);
-            let id = scene.add_mesh(Surface::quad(), Material::Shader(placeholder.material(Vector2::new(1.0, 1.0), 1.0)));
+            let id = scene.add_mesh(
+                Surface::quad(),
+                Material::Shader(placeholder.material(Vector2::new(1.0, 1.0), 1.0)),
+            );
             if let Some(obj) = scene.get_mut(id) {
                 // late, so the elements blend over the scene, in order
                 obj.render_order = 1_000_000 + self.elements.len() as i32;
@@ -146,7 +161,13 @@ impl Stage {
             }
             id
         });
-        let element = Element { component: Box::new(component), effect: Box::new(effect), quad, hovered: false, pressed: false };
+        let element = Element {
+            component: Box::new(component),
+            effect: Box::new(effect),
+            quad,
+            hovered: false,
+            pressed: false,
+        };
         if let Some(i) = self.elements.iter().position(|e| e.is_none()) {
             self.elements[i] = Some(element);
             ElementId(i)
@@ -169,7 +190,11 @@ impl Stage {
 
     /// Every element on the stage, in drawing order.
     pub fn ids(&self) -> impl Iterator<Item = ElementId> + '_ {
-        self.elements.iter().enumerate().filter(|(_, e)| e.is_some()).map(|(i, _)| ElementId(i))
+        self.elements
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.is_some())
+            .map(|(i, _)| ElementId(i))
     }
 
     fn get(&self, id: ElementId) -> Option<&Element> {
@@ -223,7 +248,12 @@ impl Stage {
 
     /// One frame: lay out, hit-test, step the effects, put their surfaces in
     /// the scene and paint the overlay. Returns what happened.
-    pub fn update(&mut self, scene: &mut Scene, overlay: &mut Overlay, input: StageInput) -> Vec<Event> {
+    pub fn update(
+        &mut self,
+        scene: &mut Scene,
+        overlay: &mut Overlay,
+        input: StageInput,
+    ) -> Vec<Event> {
         self.run(scene, overlay, input, None)
     }
 
@@ -257,14 +287,21 @@ impl Stage {
         let (cursor, time) = (self.cursor, self.time);
 
         if let Some((backdrop, id)) = &self.backdrop {
-            set_material(scene, *id, Material::Shader(backdrop.material(input.viewport, input.dpr)));
+            set_material(
+                scene,
+                *id,
+                Material::Shader(backdrop.material(input.viewport, input.dpr)),
+            );
         }
 
         // ---- lay out, hit-test, step ----
         for (i, slot) in self.elements.iter_mut().enumerate() {
             let Some(e) = slot else { continue };
             let id = ElementId(i);
-            e.component.layout(&mut Layout { viewport: input.viewport, overlay });
+            e.component.layout(&mut Layout {
+                viewport: input.viewport,
+                overlay,
+            });
             let pointer = match pointer_for {
                 Some(f) => f(id),
                 None => input.pointer,
@@ -273,7 +310,11 @@ impl Stage {
                 let over = pointer.is_some_and(|p| e.component.shape().contains(p));
                 let mut raise = |kind| events.push(Event { element: id, kind });
                 if over != e.hovered {
-                    raise(if over { EventKind::Enter } else { EventKind::Leave });
+                    raise(if over {
+                        EventKind::Enter
+                    } else {
+                        EventKind::Leave
+                    });
                     e.hovered = over;
                 }
                 if down_edge && over {
@@ -288,12 +329,28 @@ impl Stage {
                     }
                 }
             }
-            e.component.update(&ComponentInput { dt, hovered: e.hovered, pressed: e.pressed });
+            e.component.update(&ComponentInput {
+                dt,
+                hovered: e.hovered,
+                pressed: e.pressed,
+            });
             let shape = e.component.shape();
-            e.effect.update(&EffectInput { shape: &shape, dt, time, pointer, cursor, hovered: e.hovered, pressed: e.pressed });
+            e.effect.update(&EffectInput {
+                shape: &shape,
+                dt,
+                time,
+                pointer,
+                cursor,
+                hovered: e.hovered,
+                pressed: e.pressed,
+            });
             match e.effect.surface() {
                 Some(surface) => {
-                    set_material(scene, e.quad, Material::Shader(surface.material(input.viewport, input.dpr)));
+                    set_material(
+                        scene,
+                        e.quad,
+                        Material::Shader(surface.material(input.viewport, input.dpr)),
+                    );
                     set_visible(scene, e.quad, true);
                 }
                 None => set_visible(scene, e.quad, false),
@@ -376,7 +433,13 @@ mod tests {
     use crate::fx::{Button, Figure, Gloss, Venom, VenomState};
 
     fn input(pointer: Option<Vector2>, down: bool) -> StageInput {
-        StageInput { viewport: Vector2::new(800.0, 600.0), dpr: 1.0, dt: 1.0 / 60.0, pointer, pointer_down: down }
+        StageInput {
+            viewport: Vector2::new(800.0, 600.0),
+            dpr: 1.0,
+            dt: 1.0 / 60.0,
+            pointer,
+            pointer_down: down,
+        }
     }
 
     #[test]
@@ -387,19 +450,39 @@ mod tests {
         let button = stage.add(&mut scene, Button::new("go"), Gloss::default());
         let centre = Some(Vector2::new(400.0, 300.0));
         let kinds = |events: Vec<Event>| events.into_iter().map(|e| e.kind).collect::<Vec<_>>();
-        assert!(stage.update(&mut scene, &mut overlay, input(None, false)).is_empty());
-        assert_eq!(kinds(stage.update(&mut scene, &mut overlay, input(centre, false))), [EventKind::Enter]);
-        assert_eq!(kinds(stage.update(&mut scene, &mut overlay, input(centre, true))), [EventKind::Press]);
+        assert!(stage
+            .update(&mut scene, &mut overlay, input(None, false))
+            .is_empty());
+        assert_eq!(
+            kinds(stage.update(&mut scene, &mut overlay, input(centre, false))),
+            [EventKind::Enter]
+        );
+        assert_eq!(
+            kinds(stage.update(&mut scene, &mut overlay, input(centre, true))),
+            [EventKind::Press]
+        );
         for _ in 0..10 {
             stage.update(&mut scene, &mut overlay, input(centre, true));
         }
-        assert!(stage.component::<Button>(button).unwrap().scale() < 0.99, "it gives while held");
-        assert_eq!(kinds(stage.update(&mut scene, &mut overlay, input(centre, false))), [EventKind::Release, EventKind::Click]);
+        assert!(
+            stage.component::<Button>(button).unwrap().scale() < 0.99,
+            "it gives while held"
+        );
+        assert_eq!(
+            kinds(stage.update(&mut scene, &mut overlay, input(centre, false))),
+            [EventKind::Release, EventKind::Click]
+        );
         // pressed, dragged off, released: no click
         stage.update(&mut scene, &mut overlay, input(centre, true));
         let off = Some(Vector2::new(10.0, 10.0));
-        assert_eq!(kinds(stage.update(&mut scene, &mut overlay, input(off, true))), [EventKind::Leave]);
-        assert_eq!(kinds(stage.update(&mut scene, &mut overlay, input(off, false))), [EventKind::Release]);
+        assert_eq!(
+            kinds(stage.update(&mut scene, &mut overlay, input(off, true))),
+            [EventKind::Leave]
+        );
+        assert_eq!(
+            kinds(stage.update(&mut scene, &mut overlay, input(off, false))),
+            [EventKind::Release]
+        );
     }
 
     #[test]
@@ -407,20 +490,43 @@ mod tests {
         let mut scene = Scene::new();
         let mut overlay = Overlay::new(800, 600);
         let mut stage = Stage::new();
-        let a = stage.add(&mut scene, Figure::new(Shape::circle(Vector2::new(200.0, 200.0), 40.0)), Venom::default());
-        let b = stage.add(&mut scene, Figure::new(Shape::circle(Vector2::new(600.0, 200.0), 40.0)).decorative(), Gloss::default());
+        let a = stage.add(
+            &mut scene,
+            Figure::new(Shape::circle(Vector2::new(200.0, 200.0), 40.0)),
+            Venom::default(),
+        );
+        let b = stage.add(
+            &mut scene,
+            Figure::new(Shape::circle(Vector2::new(600.0, 200.0), 40.0)).decorative(),
+            Gloss::default(),
+        );
         for _ in 0..60 {
-            stage.update(&mut scene, &mut overlay, input(Some(Vector2::new(220.0, 120.0)), false));
+            stage.update(
+                &mut scene,
+                &mut overlay,
+                input(Some(Vector2::new(220.0, 120.0)), false),
+            );
         }
-        assert_eq!(stage.effect::<Venom>(a).unwrap().state(), VenomState::Holding);
+        assert_eq!(
+            stage.effect::<Venom>(a).unwrap().state(),
+            VenomState::Holding
+        );
         assert!(stage.effect::<Venom>(b).is_none(), "b wears gloss");
         assert!(stage.effect_mut::<Gloss>(b).is_some());
         assert!(overlay.touched(), "the glove and hairs were painted");
         let quad = stage.get(a).unwrap().quad;
         stage.remove(&mut scene, a);
         assert!(!scene.get(quad).unwrap().visible);
-        let c = stage.add(&mut scene, Figure::new(Shape::circle(Vector2::new(400.0, 400.0), 40.0)), Gloss::default());
-        assert_eq!(stage.get(c).unwrap().quad, quad, "the removed element's quad was reused");
+        let c = stage.add(
+            &mut scene,
+            Figure::new(Shape::circle(Vector2::new(400.0, 400.0), 40.0)),
+            Gloss::default(),
+        );
+        assert_eq!(
+            stage.get(c).unwrap().quad,
+            quad,
+            "the removed element's quad was reused"
+        );
         assert_eq!(stage.ids().collect::<Vec<_>>(), vec![c, b]);
     }
 }

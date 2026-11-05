@@ -28,9 +28,9 @@ use std::time::Instant;
 use threers::cameras::Camera;
 use threers::captions::CaptionFont;
 use threers::marks::{
-    DensityMarks, Mark, MarkRenderer, MarkView, Origin, PickHit, PickRequest,
-    PointMarks, PolygonFeature, PolygonMarks, SegmentMarks, ShaderHooks, ShapeMarks, SizeUnits,
-    TextLabel, TextLabels,
+    DensityMarks, Mark, MarkRenderer, MarkView, Origin, PickHit, PickRequest, PointMarks,
+    PolygonFeature, PolygonMarks, SegmentMarks, ShaderHooks, ShapeMarks, SizeUnits, TextLabel,
+    TextLabels,
 };
 use threers::math::ColorRamp;
 use threers::renderer::WindowRenderer;

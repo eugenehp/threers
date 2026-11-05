@@ -32,8 +32,18 @@ fn main() {
     copy_weights("out/nrc_hops.bin", out_dir.join("nrc_hops.bin"));
     write_f32(out_dir.join("cornell_input.bin"), &packed.input);
     write_f32(out_dir.join("cornell_ref.bin"), &packed.target);
-    write_png(out_dir.join("cornell_probe.png"), frame, &packed.input, true);
-    write_png(out_dir.join("cornell_ref.png"), frame, &packed.target, false);
+    write_png(
+        out_dir.join("cornell_probe.png"),
+        frame,
+        &packed.input,
+        true,
+    );
+    write_png(
+        out_dir.join("cornell_ref.png"),
+        frame,
+        &packed.target,
+        false,
+    );
     println!(
         "wrote {} (input {} floats, ref {} floats, weights)",
         out_dir.display(),

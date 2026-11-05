@@ -114,9 +114,13 @@ impl ScaleLinear {
 
     pub fn get(&self, v: f32) -> f32 {
         match self.clamping {
-            Clamping::Extrapolate => {
-                map_range(v, self.domain[0], self.domain[1], self.range[0], self.range[1])
-            }
+            Clamping::Extrapolate => map_range(
+                v,
+                self.domain[0],
+                self.domain[1],
+                self.range[0],
+                self.range[1],
+            ),
             Clamping::Clamp => map_range_clamped(
                 v,
                 self.domain[0],
@@ -129,7 +133,13 @@ impl ScaleLinear {
 
     /// The input that would produce `v`. Exact for a linear scale.
     pub fn invert(&self, v: f32) -> f32 {
-        map_range(v, self.range[0], self.range[1], self.domain[0], self.domain[1])
+        map_range(
+            v,
+            self.range[0],
+            self.range[1],
+            self.domain[0],
+            self.domain[1],
+        )
     }
 
     pub fn domain(&self) -> [f32; 2] {
@@ -145,7 +155,10 @@ impl ScaleLinear {
     pub fn nice(mut self, count: usize) -> Self {
         let step = tick_step(self.domain[0], self.domain[1], count);
         if step > 0.0 && step.is_finite() {
-            let (lo, hi) = (self.domain[0].min(self.domain[1]), self.domain[0].max(self.domain[1]));
+            let (lo, hi) = (
+                self.domain[0].min(self.domain[1]),
+                self.domain[0].max(self.domain[1]),
+            );
             let (nlo, nhi) = ((lo / step).floor() * step, (hi / step).ceil() * step);
             self.domain = if self.domain[0] <= self.domain[1] {
                 [nlo, nhi]

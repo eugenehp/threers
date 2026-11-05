@@ -10,7 +10,8 @@ use super::gpu;
 /// Weights are summed as fixed point: this many units a weight of 1.
 const WEIGHT_SCALE: f32 = 4096.0;
 
-const SHADER: &str = crate::wgsl!(r#"
+const SHADER: &str = crate::wgsl!(
+    r#"
 struct Params {
     view_proj : mat4x4<f32>,
     // Viewport in pixels, and the cell size in pixels.
@@ -54,7 +55,8 @@ fn bin(@builtin(global_invocation_id) id : vec3<u32>) {
         atomicAdd(&sums[k], i32(round(weights[i] * 4096.0)));
     }
 }
-"#);
+"#
+);
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -129,7 +131,8 @@ impl ScreenBinner {
     /// [`supported`](Self::supported) for either backend — Metal always is.
     pub fn supported_on(gpu: &gpu::Gpu) -> bool {
         gpu.is_metal()
-            || (gpu.limits().max_compute_workgroup_size_x >= 256 && gpu.limits().max_storage_buffers_per_shader_stage >= 4)
+            || (gpu.limits().max_compute_workgroup_size_x >= 256
+                && gpu.limits().max_storage_buffers_per_shader_stage >= 4)
     }
 
     /// `positions` relative to the origin the views will be given in, and
@@ -164,7 +167,11 @@ impl ScreenBinner {
                 entry(3, storage(false)),
                 entry(
                     4,
-                    wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
+                    wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
                 ),
             ],
         });
@@ -211,12 +218,25 @@ impl ScreenBinner {
 
     /// Bin the points seen through `view_proj` (origin-relative, as the
     /// positions) on a `viewport` of pixels into `cell`-pixel squares.
-    pub fn bin(&self, device: &wgpu::Device, queue: &wgpu::Queue, view_proj: [f32; 16], viewport: (u32, u32), cell: f32) -> BinRequest {
+    pub fn bin(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        view_proj: [f32; 16],
+        viewport: (u32, u32),
+        cell: f32,
+    ) -> BinRequest {
         self.bin_on(&gpu::Gpu::from((device, queue)), view_proj, viewport, cell)
     }
 
     /// [`bin`](Self::bin) on `gpu`, the one the binner was made on.
-    pub fn bin_on(&self, gpu: &gpu::Gpu, view_proj: [f32; 16], viewport: (u32, u32), cell: f32) -> BinRequest {
+    pub fn bin_on(
+        &self,
+        gpu: &gpu::Gpu,
+        view_proj: [f32; 16],
+        viewport: (u32, u32),
+        cell: f32,
+    ) -> BinRequest {
         let (device, queue) = (gpu, gpu);
         let cell = cell.max(1.0);
         let cols = ((viewport.0 as f32 / cell).ceil() as u32).max(1);
@@ -241,11 +261,16 @@ impl ScreenBinner {
             device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some(label),
                 size: n * 4,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             })
         };
-        let (counts, sums) = (make("threers screen bin counts"), make("threers screen bin sums"));
+        let (counts, sums) = (
+            make("threers screen bin counts"),
+            make("threers screen bin sums"),
+        );
         let staging = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("threers screen bin readback"),
             size: n * 8,
@@ -256,17 +281,37 @@ impl ScreenBinner {
             label: Some("threers screen binner bind group"),
             layout: &self.layout,
             entries: &[
-                gpu::BindGroupEntry { binding: 0, resource: self.points.as_entire_binding() },
-                gpu::BindGroupEntry { binding: 1, resource: self.weights.as_entire_binding() },
-                gpu::BindGroupEntry { binding: 2, resource: counts.as_entire_binding() },
-                gpu::BindGroupEntry { binding: 3, resource: sums.as_entire_binding() },
-                gpu::BindGroupEntry { binding: 4, resource: uniform.as_entire_binding() },
+                gpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.points.as_entire_binding(),
+                },
+                gpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.weights.as_entire_binding(),
+                },
+                gpu::BindGroupEntry {
+                    binding: 2,
+                    resource: counts.as_entire_binding(),
+                },
+                gpu::BindGroupEntry {
+                    binding: 3,
+                    resource: sums.as_entire_binding(),
+                },
+                gpu::BindGroupEntry {
+                    binding: 4,
+                    resource: uniform.as_entire_binding(),
+                },
             ],
         });
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("threers screen binning") });
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("threers screen binning"),
+        });
         // Fresh buffers are zeroed.
         {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("threers screen binning"), timestamp_writes: None });
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("threers screen binning"),
+                timestamp_writes: None,
+            });
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &bind, &[]);
             pass.dispatch_workgroups(self.count.div_ceil(256).max(1), 1, 1);
@@ -283,7 +328,9 @@ impl ScreenBinner {
                 return;
             }
             let bins = {
-                let Ok(data) = mapped.slice(..).get_mapped_range() else { return };
+                let Ok(data) = mapped.slice(..).get_mapped_range() else {
+                    return;
+                };
                 let words: &[u32] = bytemuck::cast_slice(&data);
                 let (c, s) = words.split_at(n as usize);
                 ScreenBins {

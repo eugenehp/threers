@@ -8,7 +8,10 @@
 use std::sync::Arc;
 
 use super::av1_layout::*;
-use super::{Device, Session, BUF_PICTURE_PARAMETER, BUF_SLICE_DATA, BUF_SLICE_PARAMETER, INVALID_ID, RT_FORMAT_YUV420, RT_FORMAT_YUV420_10};
+use super::{
+    Device, Session, BUF_PICTURE_PARAMETER, BUF_SLICE_DATA, BUF_SLICE_PARAMETER, INVALID_ID,
+    RT_FORMAT_YUV420, RT_FORMAT_YUV420_10,
+};
 use crate::decode::av1::obu::Layout;
 use crate::decode::av1::{AccelFrame, Av1Accel, Picture};
 
@@ -51,14 +54,22 @@ pub(crate) struct VaAv1 {
 
 impl VaAv1 {
     pub(crate) fn new(dev: Device) -> Self {
-        VaAv1 { dev, session: None, pinned: Vec::new() }
+        VaAv1 {
+            dev,
+            session: None,
+            pinned: Vec::new(),
+        }
     }
 
     fn session(&mut self, p: &Picture, max: (i32, i32)) -> Result<(), String> {
         if p.layout != Layout::I420 || !(p.bpc == 8 || p.bpc == 10) {
             return Err("the VAAPI AV1 path decodes 8- and 10-bit 4:2:0 only".into());
         }
-        let rt = if p.bpc > 8 { RT_FORMAT_YUV420_10 } else { RT_FORMAT_YUV420 };
+        let rt = if p.bpc > 8 {
+            RT_FORMAT_YUV420_10
+        } else {
+            RT_FORMAT_YUV420
+        };
         // Surfaces at the sequence's maximum size, so frames of any size up to
         // it (and references of other sizes) share one context.
         let key = (max.0 as u32, max.1 as u32, PROFILE_AV1_0, rt);
@@ -68,7 +79,14 @@ impl VaAv1 {
         if let Some(mut s) = self.session.take() {
             s.destroy(&self.dev);
         }
-        self.session = Some(Session::new(&self.dev, PROFILE_AV1_0, rt, key.0, key.1, 12)?);
+        self.session = Some(Session::new(
+            &self.dev,
+            PROFILE_AV1_0,
+            rt,
+            key.0,
+            key.1,
+            12,
+        )?);
         Ok(())
     }
 }
@@ -81,13 +99,22 @@ impl Av1Accel for VaAv1 {
     fn frame(&mut self, a: &AccelFrame<'_>) -> Result<(), String> {
         let (seq, h, cur) = (a.seq, a.hdr, a.cur);
         self.session(cur, (seq.max_width, seq.max_height))?;
-        let live: Vec<i64> = a.refs.iter().flatten().map(|s| key(&s.pic)).chain(self.pinned.iter().map(|p| key(p))).collect();
+        let live: Vec<i64> = a
+            .refs
+            .iter()
+            .flatten()
+            .map(|s| key(&s.pic))
+            .chain(self.pinned.iter().map(|p| key(p)))
+            .collect();
         let ses = self.session.as_mut().unwrap();
         let target = ses.claim(key(cur), |k| live.contains(&k))?;
 
         let mut p = Blob::new(P_SIZE);
         p.u8(P_profile, seq.profile);
-        p.u8(P_order_hint_bits_minus_1, seq.order_hint_n_bits.saturating_sub(1));
+        p.u8(
+            P_order_hint_bits_minus_1,
+            seq.order_hint_n_bits.saturating_sub(1),
+        );
         p.u8(P_bit_depth_idx, seq.hbd);
         p.u8(P_matrix_coefficients, seq.mtrx);
         p.u32(
@@ -114,7 +141,10 @@ impl Av1Accel for VaAv1 {
         p.u16(P_frame_width_minus1, (h.width[1] - 1) as u16);
         p.u16(P_frame_height_minus1, (h.height - 1) as u16);
         for (i, r) in a.refs.iter().enumerate() {
-            let s = r.as_ref().and_then(|r| ses.surface_of(key(&r.pic))).unwrap_or(INVALID_ID);
+            let s = r
+                .as_ref()
+                .and_then(|r| ses.surface_of(key(&r.pic)))
+                .unwrap_or(INVALID_ID);
             p.u32(P_ref_frame_map + 4 * i, s);
         }
         for i in 0..7 {
@@ -134,7 +164,16 @@ impl Av1Accel for VaAv1 {
         );
         if seg.enabled {
             for (i, d) in seg.seg_data.d.iter().enumerate() {
-                let values = [d.delta_q, d.delta_lf_y_v as i16, d.delta_lf_y_h as i16, d.delta_lf_u as i16, d.delta_lf_v as i16, d.r#ref.max(0) as i16, 0, 0];
+                let values = [
+                    d.delta_q,
+                    d.delta_lf_y_v as i16,
+                    d.delta_lf_y_h as i16,
+                    d.delta_lf_u as i16,
+                    d.delta_lf_v as i16,
+                    d.r#ref.max(0) as i16,
+                    0,
+                    0,
+                ];
                 for (j, v) in values.into_iter().enumerate() {
                     p.u16(s0 + SEG_FEATURE_DATA + 2 * (8 * i + j), v as u16);
                 }
@@ -146,12 +185,21 @@ impl Av1Accel for VaAv1 {
         p.u8(P_tile_cols, t.cols);
         p.u8(P_tile_rows, t.rows);
         for i in 0..t.cols as usize {
-            p.u16(P_width_in_sbs_minus_1 + 2 * i, t.col_start_sb[i + 1] - t.col_start_sb[i] - 1);
+            p.u16(
+                P_width_in_sbs_minus_1 + 2 * i,
+                t.col_start_sb[i + 1] - t.col_start_sb[i] - 1,
+            );
         }
         for i in 0..t.rows as usize {
-            p.u16(P_height_in_sbs_minus_1 + 2 * i, t.row_start_sb[i + 1] - t.row_start_sb[i] - 1);
+            p.u16(
+                P_height_in_sbs_minus_1 + 2 * i,
+                t.row_start_sb[i + 1] - t.row_start_sb[i] - 1,
+            );
         }
-        p.u16(P_tile_count_minus_1, (t.cols as u16 * t.rows as u16).saturating_sub(1));
+        p.u16(
+            P_tile_count_minus_1,
+            (t.cols as u16 * t.rows as u16).saturating_sub(1),
+        );
         p.u16(P_context_update_tile_id, t.update);
         p.u32(
             P_pic_info_fields,
@@ -171,7 +219,10 @@ impl Av1Accel for VaAv1 {
                 | (t.uniform as u32) << B_UNIFORM_TILES
                 | (h.warp_motion as u32) << B_WARP,
         );
-        p.u8(P_superres_scale_denominator, h.super_res_width_scale_denominator);
+        p.u8(
+            P_superres_scale_denominator,
+            h.super_res_width_scale_denominator,
+        );
         p.u8(P_interp_filter, h.subpel_filter_mode);
         let lf = &h.loopfilter;
         p.u8(P_filter_level, lf.level_y[0]);
@@ -180,7 +231,9 @@ impl Av1Accel for VaAv1 {
         p.u8(P_filter_level_v, lf.level_v);
         p.u8(
             P_loop_filter_info_fields,
-            (lf.sharpness << B_SHARP) | (lf.mode_ref_delta_enabled as u8) << B_MRD_ENABLED | (lf.mode_ref_delta_update as u8) << B_MRD_UPDATE,
+            (lf.sharpness << B_SHARP)
+                | (lf.mode_ref_delta_enabled as u8) << B_MRD_ENABLED
+                | (lf.mode_ref_delta_update as u8) << B_MRD_UPDATE,
         );
         for i in 0..8 {
             p.u8(P_ref_deltas + i, lf.mode_ref_deltas.ref_delta[i] as u8);
@@ -197,7 +250,10 @@ impl Av1Accel for VaAv1 {
         p.u8(P_v_ac_delta_q, q.vac_delta as u8);
         p.u16(
             P_qmatrix_fields,
-            ((q.qm as u32) << B_QM | (q.qm_y as u32) << B_QM_Y | (q.qm_u as u32) << B_QM_U | (q.qm_v as u32) << B_QM_V) as u16,
+            ((q.qm as u32) << B_QM
+                | (q.qm_y as u32) << B_QM_Y
+                | (q.qm_u as u32) << B_QM_U
+                | (q.qm_v as u32) << B_QM_V) as u16,
         );
         let d = &h.delta;
         p.u32(
@@ -254,7 +310,10 @@ impl Av1Accel for VaAv1 {
                 } else {
                     let raw = tg.data.get(at..at + nb).ok_or("tile size overrun")?;
                     at += nb;
-                    raw.iter().enumerate().fold(0usize, |s, (i, &b)| s | (b as usize) << (8 * i)) + 1
+                    raw.iter()
+                        .enumerate()
+                        .fold(0usize, |s, (i, &b)| s | (b as usize) << (8 * i))
+                        + 1
                 };
                 let s = k * S_SIZE;
                 params.u32(s + S_DATA_SIZE, size as u32);
@@ -266,7 +325,12 @@ impl Av1Accel for VaAv1 {
                 at += size;
             }
             ids.push(ses.raw_buffer_n(dev, BUF_SLICE_PARAMETER, S_SIZE, n, params.ptr())?);
-            ids.push(ses.raw_buffer(dev, BUF_SLICE_DATA, tg.data.len(), tg.data.as_ptr().cast())?);
+            ids.push(ses.raw_buffer(
+                dev,
+                BUF_SLICE_DATA,
+                tg.data.len(),
+                tg.data.as_ptr().cast(),
+            )?);
         }
         let r = ses.render(dev, &mut ids);
         let e = ses.end(dev);
@@ -280,9 +344,18 @@ impl Av1Accel for VaAv1 {
     fn read(&mut self, pic: &Picture) -> Result<Picture, String> {
         self.pinned.retain(|p| key(p) != key(pic));
         let ses = self.session.as_ref().ok_or("no VA context")?;
-        let surface = ses.surface_of(key(pic)).ok_or("no VA surface holds that picture")?;
+        let surface = ses
+            .surface_of(key(pic))
+            .ok_or("no VA surface holds that picture")?;
         let color = crate::decode::ColorInfo::from_vui(None, false, pic.h as u32);
-        let f = self.dev.read_frame(surface, pic.w as usize, pic.h as usize, pic.bpc > 8, [0; 4], color)?;
+        let f = self.dev.read_frame(
+            surface,
+            pic.w as usize,
+            pic.h as usize,
+            pic.bpc > 8,
+            [0; 4],
+            color,
+        )?;
         // Into a picture laid out as the native decoder's, for film grain and
         // `Av1Frame::to_decoded`.
         let mut out = Picture::new(pic.w, pic.h, pic.layout, pic.bpc);

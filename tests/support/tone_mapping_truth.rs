@@ -23,7 +23,7 @@ use threers::cameras::{Camera, OrthographicCamera};
 use threers::core::{Mesh, Object3D, Sprite};
 use threers::geometries::PlaneGeometry;
 use threers::materials::{
-    BasicMaterial, LambertMaterial, Material, MatcapMaterial, NormalMaterial, PhongMaterial,
+    BasicMaterial, LambertMaterial, MatcapMaterial, Material, NormalMaterial, PhongMaterial,
     PhysicalMaterial, SpriteMaterial, StandardMaterial, ToonMaterial,
 };
 use threers::math::{Color, Vector3};
@@ -72,24 +72,45 @@ pub fn three_tone_map(mode: ToneMapping, exposure: f64, c: V3) -> V3 {
             mat3(output, fit).map(saturate)
         }
         ToneMapping::AgX => {
-            let to2020 = [[0.6274, 0.0691, 0.0164], [0.3293, 0.9195, 0.0880], [0.0433, 0.0113, 0.8956]];
-            let to709 = [[1.6605, -0.1246, -0.0182], [-0.5876, 1.1329, -0.1006], [-0.0728, -0.0083, 1.1187]];
+            let to2020 = [
+                [0.6274, 0.0691, 0.0164],
+                [0.3293, 0.9195, 0.0880],
+                [0.0433, 0.0113, 0.8956],
+            ];
+            let to709 = [
+                [1.6605, -0.1246, -0.0182],
+                [-0.5876, 1.1329, -0.1006],
+                [-0.0728, -0.0083, 1.1187],
+            ];
             let inset = [
                 [0.856627153315983, 0.137318972929847, 0.11189821299995],
                 [0.0951212405381588, 0.761241990602591, 0.0767994186031903],
                 [0.0482516061458583, 0.101439036467562, 0.811302368396859],
             ];
             let outset = [
-                [1.1271005818144368, -0.1413297634984383, -0.14132976349843826],
-                [-0.11060664309660323, 1.157823702216272, -0.11060664309660294],
-                [-0.016493938717834573, -0.016493938717834257, 1.2519364065950405],
+                [
+                    1.1271005818144368,
+                    -0.1413297634984383,
+                    -0.14132976349843826,
+                ],
+                [
+                    -0.11060664309660323,
+                    1.157823702216272,
+                    -0.11060664309660294,
+                ],
+                [
+                    -0.016493938717834573,
+                    -0.016493938717834257,
+                    1.2519364065950405,
+                ],
             ];
             let (min_ev, max_ev) = (-12.47393, 4.026069);
             let v = mat3(inset, mat3(to2020, c.map(|x| x * exposure)));
             let v = v.map(|x| {
                 let x = saturate((x.max(1e-10).log2() - min_ev) / (max_ev - min_ev));
                 let (x2, x4) = (x * x, x * x * x * x);
-                15.5 * x4 * x2 - 40.14 * x4 * x + 31.96 * x4 - 6.868 * x2 * x + 0.4298 * x2
+                15.5 * x4 * x2 - 40.14 * x4 * x + 31.96 * x4 - 6.868 * x2 * x
+                    + 0.4298 * x2
                     + 0.1191 * x
                     - 0.00232
             });
@@ -120,7 +141,11 @@ pub fn three_tone_map(mode: ToneMapping, exposure: f64, c: V3) -> V3 {
 pub fn encode(c: V3) -> [u8; 3] {
     c.map(|x| {
         let x = saturate(x);
-        let s = if x <= 0.0031308 { 12.92 * x } else { 1.055 * x.powf(1.0 / 2.4) - 0.055 };
+        let s = if x <= 0.0031308 {
+            12.92 * x
+        } else {
+            1.055 * x.powf(1.0 / 2.4) - 0.055
+        };
         (s * 255.0).round() as u8
     })
 }
@@ -193,7 +218,11 @@ pub fn cases(c: V3, tone_mapped: bool) -> Vec<(&'static str, Material, Out)> {
         out.push(("mirror", Material::Mirror(mirror), Out::Light(c)));
     }
     // `packNormalToRGB` of the view-space normal (0, 0, 1), written raw.
-    out.push(("normal", NormalMaterial::new().into(), Out::Data([128, 128, 255])));
+    out.push((
+        "normal",
+        NormalMaterial::new().into(),
+        Out::Data([128, 128, 255]),
+    ));
     out
 }
 
@@ -206,7 +235,10 @@ pub fn scene(material: Material) -> Scene {
         o.scale = Vector3::new(3.0, 3.0, 1.0);
         scene.add(o);
     } else {
-        scene.add(Object3D::mesh(Mesh::new(PlaneGeometry::new(3.0, 3.0), material)));
+        scene.add(Object3D::mesh(Mesh::new(
+            PlaneGeometry::new(3.0, 3.0),
+            material,
+        )));
     }
     scene
 }
@@ -246,7 +278,10 @@ pub fn check(
                         Out::Light(l) => encode(l),
                         Out::Data(d) => d,
                     };
-                    let err = (0..3).map(|k| (got[k] as i32 - want[k] as i32).abs()).max().unwrap();
+                    let err = (0..3)
+                        .map(|k| (got[k] as i32 - want[k] as i32).abs())
+                        .max()
+                        .unwrap();
                     if err > 2 {
                         failures.push(format!(
                             "{backend} {mode:?} x{exposure} {name} (toneMapped {tone_mapped}) \

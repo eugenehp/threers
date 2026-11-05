@@ -127,7 +127,9 @@ impl Warning {
             Warning::InvalidTimestep => "step called with a non-positive or non-finite timestep",
             Warning::TimeDiscarded => "real time arrived faster than max_substeps could consume",
             Warning::TendonInsideObstacle => "a tendon point is inside the obstacle it wraps",
-            Warning::MalformedTendonPath => "a tendon path element could not be read and was skipped",
+            Warning::MalformedTendonPath => {
+                "a tendon path element could not be read and was skipped"
+            }
             Warning::NonFinitePosition => "a body's position was not finite and was restored",
         }
     }

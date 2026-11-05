@@ -7,11 +7,11 @@
 
 #![cfg(metal_backend)]
 
-use threers::lights::{AmbientLight, DirectionalLight};
 use threers::captions::CaptionFont;
+use threers::lights::{AmbientLight, DirectionalLight};
 use threers::marks::{
-    DensityMarks, Mark, MarkView, Origin, PointMarks, PolygonFeature, PolygonMarks, SegmentMarks, ShapeMarks,
-    TextLabel, TextLabels,
+    DensityMarks, Mark, MarkView, Origin, PointMarks, PolygonFeature, PolygonMarks, SegmentMarks,
+    ShapeMarks, TextLabel, TextLabels,
 };
 use threers::{
     BoxGeometry, Color, HeadlessRenderer, Mesh, Object3D, PerspectiveCamera, PlaneGeometry, Scene,
@@ -25,7 +25,9 @@ fn scene() -> Scene {
     let mut s = Scene::new();
     s.background = Color::from_hex(0x10204a);
     s.add_light(AmbientLight::new(Color::WHITE, 0.3));
-    s.add_light(DirectionalLight::new(Color::WHITE, 2.0).with_direction(Vector3::new(-0.4, -1.0, -0.6)));
+    s.add_light(
+        DirectionalLight::new(Color::WHITE, 2.0).with_direction(Vector3::new(-0.4, -1.0, -0.6)),
+    );
     let mut floor = Object3D::mesh(Mesh::new(
         PlaneGeometry::new(6.0, 6.0),
         StandardMaterial::new(Color::from_hex(0x336644)).into(),
@@ -57,7 +59,10 @@ fn build(metal: bool, msaa: u32) -> HeadlessRenderer {
             std::env::remove_var("THREERS_BACKEND");
         }
     }
-    let mut hr = HeadlessRenderer::builder().size(W, H).build().expect("headless renderer");
+    let mut hr = HeadlessRenderer::builder()
+        .size(W, H)
+        .build()
+        .expect("headless renderer");
     unsafe { std::env::remove_var("THREERS_BACKEND") };
     hr.set_msaa(msaa);
     assert_eq!(hr.is_native_metal(), metal);
@@ -81,7 +86,11 @@ fn layers() -> (PointMarks, SegmentMarks) {
     let mut points = PointMarks::new();
     let pos: Vec<[f64; 3]> = (0..9).map(|i| [-1.6 + i as f64 * 0.4, 0.5, 0.0]).collect();
     points.set_positions(&pos);
-    points.set_colors(&(0..9).map(|i| [255, (i * 28) as u8, 40, 255]).collect::<Vec<_>>());
+    points.set_colors(
+        &(0..9)
+            .map(|i| [255, (i * 28) as u8, 40, 255])
+            .collect::<Vec<_>>(),
+    );
     points.style_mut().size_scale = 7.0;
     let mut path = SegmentMarks::new();
     path.set_paths(&[vec![[-2.0, 0.01, 1.5], [0.0, 0.01, 2.0], [2.0, 0.01, 1.0]]]);
@@ -101,7 +110,14 @@ struct More {
 fn more(view: &MarkView) -> More {
     let mut shapes = ShapeMarks::new(&BoxGeometry::new(0.3, 0.3, 0.3));
     shapes.set_positions(&[[-1.5, 0.15, -1.5], [1.5, 0.15, -1.5], [1.5, 0.15, 1.5]]);
-    let square = |x: f64, z: f64, r: f64| vec![[x - r, z - r], [x + r, z - r], [x + r, z + r], [x - r, z + r]];
+    let square = |x: f64, z: f64, r: f64| {
+        vec![
+            [x - r, z - r],
+            [x + r, z - r],
+            [x + r, z + r],
+            [x - r, z + r],
+        ]
+    };
     let mut tower = PolygonFeature::new(square(-1.6, 1.0, 0.5));
     tower.holes.push(square(-1.6, 1.0, 0.2));
     let mut polygons = PolygonMarks::new();
@@ -109,12 +125,24 @@ fn more(view: &MarkView) -> More {
     polygons.set_colors(&[[80, 160, 255, 220]]);
     polygons.set_elevations(&[0.6]);
     let mut density = DensityMarks::new();
-    density.set_positions(&(0..40).map(|i| [0.8 + (i % 7) as f64 * 0.1, 0.0, -0.5 - (i / 7) as f64 * 0.1]).collect::<Vec<_>>());
+    density.set_positions(
+        &(0..40)
+            .map(|i| [0.8 + (i % 7) as f64 * 0.1, 0.0, -0.5 - (i / 7) as f64 * 0.1])
+            .collect::<Vec<_>>(),
+    );
     let mut labels = TextLabels::new(CaptionFont::builtin());
     labels.font_size = 14.0;
-    labels.set_labels(vec![TextLabel::new([0.0, 1.3, 0.0], "cube"), TextLabel::new([-1.6, 0.7, -1.0], "tower")]);
+    labels.set_labels(vec![
+        TextLabel::new([0.0, 1.3, 0.0], "cube"),
+        TextLabel::new([-1.6, 0.7, -1.0], "tower"),
+    ]);
     labels.place(view);
-    More { shapes, polygons, density, labels }
+    More {
+        shapes,
+        polygons,
+        density,
+        labels,
+    }
 }
 
 #[test]
@@ -137,7 +165,13 @@ fn marks_on_metal_draw_what_they_draw_on_wgpu() {
                 let mut m = more(&view);
                 // A pick, before the marks are drawn: the same answer.
                 let [sx, sy, _] = view.project([-0.4, 0.5, 0.0]).expect("on screen");
-                let hit = hr.pick_marks(&mut marks, &view, &mut [&mut points as &mut dyn Mark], (sx, sy), 4);
+                let hit = hr.pick_marks(
+                    &mut marks,
+                    &view,
+                    &mut [&mut points as &mut dyn Mark],
+                    (sx, sy),
+                    4,
+                );
                 picks.push(hit.map(|h| (h.mark, h.index)));
                 let bare = hr.read_rgba();
                 hr.draw_marks(
@@ -155,13 +189,23 @@ fn marks_on_metal_draw_what_they_draw_on_wgpu() {
                 assert_eq!(hr.is_native_metal(), metal, "marks stay on the backend");
                 let drawn = hr.read_rgba();
                 // The marks are there: a few hundred pixels of them.
-                let changed = bare.chunks_exact(4).zip(drawn.chunks_exact(4)).filter(|(a, b)| a != b).count();
-                assert!(changed > 300, "metal={metal} msaa{msaa}: marks changed only {changed} pixels");
+                let changed = bare
+                    .chunks_exact(4)
+                    .zip(drawn.chunks_exact(4))
+                    .filter(|(a, b)| a != b)
+                    .count();
+                assert!(
+                    changed > 300,
+                    "metal={metal} msaa{msaa}: marks changed only {changed} pixels"
+                );
                 drawn
             })
             .collect();
         assert!(picks[0].is_some(), "msaa{msaa}: wgpu picks a point");
-        assert_eq!(picks[0], picks[1], "msaa{msaa}: the pick on Metal is wgpu's");
+        assert_eq!(
+            picks[0], picks[1],
+            "msaa{msaa}: the pick on Metal is wgpu's"
+        );
         let (mean, p99) = diff(&frames[0], &frames[1]);
         assert!(
             mean < 2.0 && p99 < 24,
@@ -188,7 +232,10 @@ fn marks_on_metal_draw_what_they_draw_on_wgpu() {
             } else {
                 hr.draw_marks(&mut marks, &view, layers);
             }
-            assert!(hr.is_native_metal(), "mark_target keeps the renderer on Metal");
+            assert!(
+                hr.is_native_metal(),
+                "mark_target keeps the renderer on Metal"
+            );
             hr.read_rgba()
         })
         .collect();
@@ -196,7 +243,15 @@ fn marks_on_metal_draw_what_they_draw_on_wgpu() {
 
     // Points binned into screen cells by a compute pass: the same counts.
     use threers::marks::ScreenBinner;
-    let points: Vec<[f32; 3]> = (0..500).map(|i| [((i * 37) % 100) as f32 * 0.04 - 2.0, 0.5, ((i * 11) % 50) as f32 * 0.04 - 1.0]).collect();
+    let points: Vec<[f32; 3]> = (0..500)
+        .map(|i| {
+            [
+                ((i * 37) % 100) as f32 * 0.04 - 2.0,
+                0.5,
+                ((i * 11) % 50) as f32 * 0.04 - 1.0,
+            ]
+        })
+        .collect();
     let weights: Vec<f32> = (0..500).map(|i| (i % 7) as f32 * 0.5).collect();
     let bins: Vec<_> = [false, true]
         .into_iter()
@@ -205,9 +260,15 @@ fn marks_on_metal_draw_what_they_draw_on_wgpu() {
             let gpu = hr.marks_gpu();
             assert!(ScreenBinner::supported_on(&gpu));
             let binner = ScreenBinner::new_on(&gpu, &points, Some(&weights));
-            binner.bin_on(&gpu, view.view_proj, (W, H), 16.0).wait_on(&gpu).expect("bins")
+            binner
+                .bin_on(&gpu, view.view_proj, (W, H), 16.0)
+                .wait_on(&gpu)
+                .expect("bins")
         })
         .collect();
-    assert!(bins[0].counts.iter().sum::<u32>() > 100, "points land in cells");
+    assert!(
+        bins[0].counts.iter().sum::<u32>() > 100,
+        "points land in cells"
+    );
     assert_eq!(bins[0], bins[1], "the binning on Metal is wgpu's");
 }

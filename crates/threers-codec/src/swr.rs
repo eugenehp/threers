@@ -72,7 +72,14 @@ impl Resampler {
         }
         let filter_alloc = (filter_length + 7) & !7;
         let mut bank = vec![0f32; filter_alloc * (phase_count as usize + 1)];
-        build_filter(&mut bank, factor, filter_length, filter_alloc, phase_count as usize, 9.0);
+        build_filter(
+            &mut bank,
+            factor,
+            filter_length,
+            filter_alloc,
+            phase_count as usize,
+            9.0,
+        );
         let pc = phase_count as usize;
         let (head, tail) = bank.split_at_mut(filter_alloc * pc + 1);
         tail[..filter_alloc - 1].copy_from_slice(&head[..filter_alloc - 1]);
@@ -151,16 +158,28 @@ impl Resampler {
 }
 
 /// `build_filter` for `AV_SAMPLE_FMT_FLTP`, Kaiser window.
-fn build_filter(bank: &mut [f32], factor: f64, tap_count: usize, alloc: usize, phase_count: usize, kaiser_beta: f64) {
+fn build_filter(
+    bank: &mut [f32],
+    factor: f64,
+    tap_count: usize,
+    alloc: usize,
+    phase_count: usize,
+    kaiser_beta: f64,
+) {
     use std::f64::consts::PI;
-    let ph_nb = if phase_count % 2 == 1 { phase_count } else { phase_count / 2 + 1 };
+    let ph_nb = if phase_count % 2 == 1 {
+        phase_count
+    } else {
+        phase_count / 2 + 1
+    };
     let center = (tap_count as i64 - 1) / 2;
     let mut tab = vec![0f64; tap_count + 1];
     let mut sin_lut = vec![0f64; ph_nb];
     let factor = factor.min(1.0);
     if factor == 1.0 {
         for (ph, s) in sin_lut.iter_mut().enumerate() {
-            *s = (PI * ph as f64 / phase_count as f64).sin() * if center & 1 == 1 { 1.0 } else { -1.0 };
+            *s = (PI * ph as f64 / phase_count as f64).sin()
+                * if center & 1 == 1 { 1.0 } else { -1.0 };
         }
     }
     let mut norm = 0f64;
@@ -207,7 +226,9 @@ fn to_s16(out: &mut Vec<i16>, planes: &[&[f32]], len: usize) {
         for p in planes {
             let x = p[i];
             out.push(if i < off {
-                let t = (x as f64 * 2147483648.0).trunc().clamp(i32::MIN as f64, i32::MAX as f64);
+                let t = (x as f64 * 2147483648.0)
+                    .trunc()
+                    .clamp(i32::MIN as f64, i32::MAX as f64);
                 let t = if t.is_nan() { 0 } else { t as i32 as i64 };
                 if mono {
                     ((t + 0x8000) >> 16).clamp(-32768, 32767) as i16
@@ -233,7 +254,11 @@ pub fn ffmpeg_cli_s16_stereo(input: &DecodedFrames, out_rate: u32) -> Result<Vec
 /// `swr_build_matrix2`'s: mono -> stereo `x * (float)M_SQRT1_2` per side;
 /// stereo -> mono `0.5f*L + 0.5f*R` (`M_SQRT1_2` each, normalised by their
 /// sum because s16 output caps the gain at 1).
-pub fn ffmpeg_cli_s16(input: &DecodedFrames, out_rate: u32, out_ch: usize) -> Result<Vec<i16>, String> {
+pub fn ffmpeg_cli_s16(
+    input: &DecodedFrames,
+    out_rate: u32,
+    out_ch: usize,
+) -> Result<Vec<i16>, String> {
     let in_ch = input.planes.len();
     let n: usize = input.frame_lens.iter().sum();
     if input.planes.iter().any(|p| p.len() != n) {
@@ -243,7 +268,9 @@ pub fn ffmpeg_cli_s16(input: &DecodedFrames, out_rate: u32, out_ch: usize) -> Re
         return Err(format!("{in_ch} -> {out_ch} channels"));
     }
     let up = std::f64::consts::FRAC_1_SQRT_2 as f32;
-    let down = (std::f64::consts::FRAC_1_SQRT_2 / (std::f64::consts::FRAC_1_SQRT_2 + std::f64::consts::FRAC_1_SQRT_2)) as f32;
+    let down = (std::f64::consts::FRAC_1_SQRT_2
+        / (std::f64::consts::FRAC_1_SQRT_2 + std::f64::consts::FRAC_1_SQRT_2))
+        as f32;
     // swri_rematrix on planar float chunks (C, uncontracted).
     let rematrix = |p: &[&[f32]]| -> Vec<Vec<f32>> {
         match (in_ch, out_ch) {
@@ -251,14 +278,19 @@ pub fn ffmpeg_cli_s16(input: &DecodedFrames, out_rate: u32, out_ch: usize) -> Re
                 let m: Vec<f32> = p[0].iter().map(|&x| up * x).collect();
                 vec![m.clone(), m]
             }
-            (2, 1) => vec![p[0].iter().zip(p[1]).map(|(&l, &r)| down * l + down * r).collect()],
+            (2, 1) => vec![p[0]
+                .iter()
+                .zip(p[1])
+                .map(|(&l, &r)| down * l + down * r)
+                .collect()],
             _ => p.iter().map(|c| c.to_vec()).collect(),
         }
     };
     let resample = input.sample_rate != out_rate;
     // resample_first: `out_ch/in_ch - 1` (integer) < `out_rate/(float)in_rate - 1.0`.
     let resample_first = resample
-        && (((out_ch / in_ch) as i64 - 1) as f64) < (out_rate as f32 / input.sample_rate as f32) as f64 - 1.0;
+        && (((out_ch / in_ch) as i64 - 1) as f64)
+            < (out_rate as f32 / input.sample_rate as f32) as f64 - 1.0;
     let mut out = Vec::new();
     if !resample {
         let mut at = 0;
@@ -305,7 +337,13 @@ pub fn ffmpeg_cli_s16(input: &DecodedFrames, out_rate: u32, out_ch: usize) -> Re
     let (mut s, mut index, mut frac) = (0usize, 0i64, 0i64);
     let nch = pre.len();
     let mut ys: Vec<Vec<f32>> = vec![Vec::new(); nch];
-    let emit = |ext: &Vec<Vec<f32>>, avail: usize, ys: &mut Vec<Vec<f32>>, s: &mut usize, index: &mut i64, frac: &mut i64, limit: usize| {
+    let emit = |ext: &Vec<Vec<f32>>,
+                avail: usize,
+                ys: &mut Vec<Vec<f32>>,
+                s: &mut usize,
+                index: &mut i64,
+                frac: &mut i64,
+                limit: usize| {
         let mut produced = 0;
         while *s + l <= avail && produced < limit {
             for c in 0..nch {
@@ -328,7 +366,15 @@ pub fn ffmpeg_cli_s16(input: &DecodedFrames, out_rate: u32, out_ch: usize) -> Re
     let mut avail = half;
     for &len in input.frame_lens {
         avail += len;
-        let k = emit(&ext, avail, &mut ys, &mut s, &mut index, &mut frac, usize::MAX);
+        let k = emit(
+            &ext,
+            avail,
+            &mut ys,
+            &mut s,
+            &mut index,
+            &mut frac,
+            usize::MAX,
+        );
         let start = ys[0].len() - k;
         let chunk: Vec<&[f32]> = ys.iter().map(|y| &y[start..]).collect();
         let m = post(&chunk);
@@ -385,7 +431,12 @@ pub struct SwrStream {
 impl SwrStream {
     /// A resampler from `in_rate` to `out_rate` with ffmpeg's `filter_size` taps
     /// per phase (32 is swresample's default).
-    pub fn new(in_rate: u32, out_rate: u32, channels: usize, filter_size: usize) -> Result<Self, String> {
+    pub fn new(
+        in_rate: u32,
+        out_rate: u32,
+        channels: usize,
+        filter_size: usize,
+    ) -> Result<Self, String> {
         let r = Resampler::with_filter_size(out_rate as i64, in_rate as i64, filter_size)?;
         let half = (r.filter_length - 1) / 2;
         Ok(Self {

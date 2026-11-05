@@ -184,7 +184,13 @@ pub fn write_h264<W: std::io::Write>(
 ) -> std::io::Result<()> {
     let common = CommonMp4Params::from(p);
     let stsd = build_h264_stsd(p);
-    mux_common_to(out, &common, &[b"isom", b"iso2", b"avc1", b"mp41"], stsd, captions)
+    mux_common_to(
+        out,
+        &common,
+        &[b"isom", b"iso2", b"avc1", b"mp41"],
+        stsd,
+        captions,
+    )
 }
 
 /// [`mux_hevc`] streamed to a sink — see `mux_common_to` for why.
@@ -195,7 +201,13 @@ pub fn write_hevc<W: std::io::Write>(
 ) -> std::io::Result<()> {
     let common = CommonMp4Params::from(p);
     let stsd = build_hevc_stsd(p);
-    mux_common_to(out, &common, &[b"isom", b"iso2", b"mp41", b"hvc1"], stsd, captions)
+    mux_common_to(
+        out,
+        &common,
+        &[b"isom", b"iso2", b"mp41", b"hvc1"],
+        stsd,
+        captions,
+    )
 }
 
 /// Mux an H.264 video track plus a `tx3g` soft-subtitle track; see
@@ -247,7 +259,12 @@ fn mux_h264_internal(p: &H264Mp4Params, captions: Option<&CaptionTrack>) -> Vec<
 /// description gets BT.709, limited range — nothing asks VideoToolbox for
 /// full range, and its default for 8-bit is video range.
 fn colr_box(stream: Option<StreamColour>) -> Vec<u8> {
-    let c = stream.unwrap_or(StreamColour { primaries: 1, transfer: 1, matrix: 1, full_range: false });
+    let c = stream.unwrap_or(StreamColour {
+        primaries: 1,
+        transfer: 1,
+        matrix: 1,
+        full_range: false,
+    });
     let mut v = Vec::with_capacity(19);
     v.extend_from_slice(b"nclx");
     v.extend_from_slice(&c.primaries.to_be_bytes()); // colour_primaries
@@ -268,7 +285,12 @@ struct StreamColour {
 
 impl StreamColour {
     /// From a parsed SPS's VUI; `None` when it describes no matrix.
-    fn from_vui(primaries: Option<u32>, transfer: Option<u32>, matrix: Option<u32>, full_range: bool) -> Option<Self> {
+    fn from_vui(
+        primaries: Option<u32>,
+        transfer: Option<u32>,
+        matrix: Option<u32>,
+        full_range: bool,
+    ) -> Option<Self> {
         Some(StreamColour {
             matrix: matrix? as u16,
             primaries: primaries.unwrap_or(2) as u16,
@@ -285,8 +307,15 @@ impl StreamColour {
         }
         let len = u16::from_be_bytes([*avcc.get(6)?, *avcc.get(7)?]) as usize;
         let nal = avcc.get(8..8 + len)?;
-        let sps = crate::decode::h264::params::Sps::parse(&crate::decode::bits::unescape(nal.get(1..)?)).ok()?;
-        Self::from_vui(sps.colour_primaries, sps.transfer_characteristics, sps.matrix_coefficients, sps.full_range)
+        let sps =
+            crate::decode::h264::params::Sps::parse(&crate::decode::bits::unescape(nal.get(1..)?))
+                .ok()?;
+        Self::from_vui(
+            sps.colour_primaries,
+            sps.transfer_characteristics,
+            sps.matrix_coefficients,
+            sps.full_range,
+        )
     }
 
     /// The base layer's SPS in an `hvcC` payload.
@@ -305,7 +334,12 @@ impl StreamColour {
                 if kind == 33 && layer == 0 {
                     let rbsp = crate::decode::bits::unescape(nal.get(2..)?);
                     let sps = crate::decode::hevc::params::Sps::parse(&rbsp).ok()?;
-                    return Self::from_vui(sps.colour_primaries, sps.transfer_characteristics, sps.matrix_coefficients, sps.full_range);
+                    return Self::from_vui(
+                        sps.colour_primaries,
+                        sps.transfer_characteristics,
+                        sps.matrix_coefficients,
+                        sps.full_range,
+                    );
                 }
             }
         }
@@ -855,7 +889,8 @@ mod tests {
     fn colr_follows_the_stream_and_survives_garbage() {
         // threers' encoder tags BT.601 (matrix 6), limited range.
         let enc = crate::h264::CompressedEncoder::new(32, 16, 30);
-        let c = StreamColour::of_avcc(&enc.avcc()).expect("the encoder writes a colour description");
+        let c =
+            StreamColour::of_avcc(&enc.avcc()).expect("the encoder writes a colour description");
         assert_eq!((c.matrix, c.full_range), (6, false));
         // Parameter sets the parser cannot make sense of fall back, never panic.
         let mut seed = 0x2545_f491_4f6c_dd1du64;

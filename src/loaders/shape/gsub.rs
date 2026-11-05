@@ -34,7 +34,6 @@
 //! language-specific one. No font in this stack's cascade distinguishes them, and
 //! guessing a language from the characters is a different problem.
 
-
 use super::read::{tag_at, u16_at, u32_at};
 
 /// A run of glyphs being substituted, and which character each came from.
@@ -73,7 +72,8 @@ impl Buffer {
         let cluster = self.clusters.get(at).copied().unwrap_or(0);
         let end = (at + take).min(self.glyphs.len());
         self.glyphs.splice(at..end, with.iter().copied());
-        self.clusters.splice(at..end, core::iter::repeat_n(cluster, with.len()));
+        self.clusters
+            .splice(at..end, core::iter::repeat_n(cluster, with.len()));
     }
 }
 
@@ -153,18 +153,26 @@ impl<'a> Gsub<'a> {
             .or_else(|| self.features_of(b"DFLT"))
             .unwrap_or_default();
         let mut out = Vec::new();
-        let Some(count) = u16_at(self.data, self.feature_list) else { return out };
+        let Some(count) = u16_at(self.data, self.feature_list) else {
+            return out;
+        };
         for i in 0..usize::from(count) {
-            let Some(rec) = self.feature_list.checked_add(2 + 6 * i) else { break };
+            let Some(rec) = self.feature_list.checked_add(2 + 6 * i) else {
+                break;
+            };
             if tag_at(self.data, rec) != Some(*tag) {
                 continue;
             }
             if !allowed.contains(&u16::try_from(i).unwrap_or(u16::MAX)) {
                 continue;
             }
-            let Some(off) = u16_at(self.data, rec + 4) else { continue };
+            let Some(off) = u16_at(self.data, rec + 4) else {
+                continue;
+            };
             let feature = self.feature_list + usize::from(off);
-            let Some(n) = u16_at(self.data, feature + 2) else { continue };
+            let Some(n) = u16_at(self.data, feature + 2) else {
+                continue;
+            };
             for j in 0..usize::from(n) {
                 if let Some(idx) = u16_at(self.data, feature + 4 + 2 * j) {
                     if !out.contains(&idx) {
@@ -234,7 +242,9 @@ impl<'a> Gsub<'a> {
         if depth > MAX_DEPTH || at >= buf.len() {
             return false;
         }
-        let Some((kind, subs)) = self.subtables(index) else { return false };
+        let Some((kind, subs)) = self.subtables(index) else {
+            return false;
+        };
         for sub in subs {
             let did = match kind {
                 1 => self.single(sub, buf.glyphs[at]).map(|g| {
@@ -251,10 +261,12 @@ impl<'a> Gsub<'a> {
                     buf.glyphs[at] = g;
                     true
                 }),
-                4 => self.ligature_in(sub, buf.glyphs[at], &buf.glyphs[at..]).map(|(g, n)| {
-                    buf.splice(at, n, &[g]);
-                    true
-                }),
+                4 => self
+                    .ligature_in(sub, buf.glyphs[at], &buf.glyphs[at..])
+                    .map(|(g, n)| {
+                        buf.splice(at, n, &[g]);
+                        true
+                    }),
                 5 | 6 => self.contextual(sub, buf, at, kind, depth),
                 _ => None,
             };
@@ -325,17 +337,29 @@ impl<'a> Gsub<'a> {
             if input_n == 0 || at + input_n > buf.len() || backtrack.len() > at {
                 continue;
             }
-            if !input.iter().enumerate().all(|(k, g)| buf.glyphs[at + 1 + k] == *g) {
+            if !input
+                .iter()
+                .enumerate()
+                .all(|(k, g)| buf.glyphs[at + 1 + k] == *g)
+            {
                 continue;
             }
-            if !backtrack.iter().enumerate().all(|(k, g)| buf.glyphs[at - 1 - k] == *g) {
+            if !backtrack
+                .iter()
+                .enumerate()
+                .all(|(k, g)| buf.glyphs[at - 1 - k] == *g)
+            {
                 continue;
             }
             let after = at + input_n;
             if after + lookahead.len() > buf.len() {
                 continue;
             }
-            if !lookahead.iter().enumerate().all(|(k, g)| buf.glyphs[after + k] == *g) {
+            if !lookahead
+                .iter()
+                .enumerate()
+                .all(|(k, g)| buf.glyphs[after + k] == *g)
+            {
                 continue;
             }
             let mut did = false;
@@ -478,17 +502,29 @@ impl<'a> Gsub<'a> {
                 continue;
             }
             let class = |def: usize, i: usize| self.class_of(def, buf.glyphs[i]);
-            if !input.iter().enumerate().all(|(k, c)| class(input_def, at + 1 + k) == *c) {
+            if !input
+                .iter()
+                .enumerate()
+                .all(|(k, c)| class(input_def, at + 1 + k) == *c)
+            {
                 continue;
             }
-            if !backtrack.iter().enumerate().all(|(k, c)| class(back_def, at - 1 - k) == *c) {
+            if !backtrack
+                .iter()
+                .enumerate()
+                .all(|(k, c)| class(back_def, at - 1 - k) == *c)
+            {
                 continue;
             }
             let after = at + input_n;
             if after + lookahead.len() > buf.len() {
                 continue;
             }
-            if !lookahead.iter().enumerate().all(|(k, c)| class(ahead_def, after + k) == *c) {
+            if !lookahead
+                .iter()
+                .enumerate()
+                .all(|(k, c)| class(ahead_def, after + k) == *c)
+            {
                 continue;
             }
             let mut did = false;
@@ -708,7 +744,7 @@ pub fn coverage_index(d: &[u8], at: usize, glyph: u16) -> Option<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     /// A `GSUB` with one feature under one script, pointing at `lookups`.
     ///
     /// Built by hand rather than checked in as a binary, so the test says which bytes
@@ -724,8 +760,8 @@ mod tests {
         out.extend_from_slice(&1u16.to_be_bytes()); // scriptCount
         out.extend_from_slice(b"arab");
         out.extend_from_slice(&8u16.to_be_bytes()); // scriptOffset, past this record
-        // Relative to the Script table, which is four bytes: the offset itself and
-        // `langSysCount`.
+                                                    // Relative to the Script table, which is four bytes: the offset itself and
+                                                    // `langSysCount`.
         out.extend_from_slice(&4u16.to_be_bytes()); // defaultLangSysOffset
         out.extend_from_slice(&0u16.to_be_bytes()); // langSysCount
         out.extend_from_slice(&0u16.to_be_bytes()); // lookupOrder
@@ -803,9 +839,21 @@ mod tests {
         let g = Gsub::parse(&t).expect("parses");
         // Each stage, so a broken fixture names itself rather than looking like a broken
         // reader.
-        assert_eq!(g.features_of(b"arab"), Some(vec![0]), "the script's features");
-        assert_eq!(g.lookups_for_script(b"arab", b"init"), vec![0], "the feature's lookups");
-        assert_eq!(g.subtables(0).map(|(k, s)| (k, s.len())), Some((1, 1)), "the subtables");
+        assert_eq!(
+            g.features_of(b"arab"),
+            Some(vec![0]),
+            "the script's features"
+        );
+        assert_eq!(
+            g.lookups_for_script(b"arab", b"init"),
+            vec![0],
+            "the feature's lookups"
+        );
+        assert_eq!(
+            g.subtables(0).map(|(k, s)| (k, s.len())),
+            Some((1, 1)),
+            "the subtables"
+        );
         let mut b = Buffer::new(&[(10, 0), (11, 1), (12, 2)]);
         g.apply_feature(b"arab", b"init", &mut b);
         assert_eq!(b.glyphs, vec![110, 111, 12], "the uncovered glyph changed");
@@ -813,7 +861,7 @@ mod tests {
         // Format 2: a replacement listed per covered glyph.
         let mut sub = vec![];
         sub.extend_from_slice(&2u16.to_be_bytes()); // substFormat
-        // The header is six bytes plus two per substitute, so the coverage goes after.
+                                                    // The header is six bytes plus two per substitute, so the coverage goes after.
         sub.extend_from_slice(&10u16.to_be_bytes()); // coverageOffset
         sub.extend_from_slice(&2u16.to_be_bytes()); // glyphCount
         sub.extend_from_slice(&77u16.to_be_bytes());
@@ -832,7 +880,7 @@ mod tests {
         sub.extend_from_slice(&1u16.to_be_bytes());
         sub.extend_from_slice(&8u16.to_be_bytes()); // coverageOffset
         sub.extend_from_slice(&1u16.to_be_bytes()); // sequenceCount
-        // A one-glyph coverage is six bytes, 8..14, so the sequence follows it.
+                                                    // A one-glyph coverage is six bytes, 8..14, so the sequence follows it.
         sub.extend_from_slice(&14u16.to_be_bytes()); // sequenceOffsets[0]
         sub.extend_from_slice(&coverage(&[10]));
         sub.extend_from_slice(&2u16.to_be_bytes()); // glyphCount
@@ -898,7 +946,11 @@ mod tests {
         // list — so nothing is allowed and nothing applies.
         let mut b = Buffer::new(&[(10, 0)]);
         g.apply_feature(b"latn", b"rlig", &mut b);
-        assert_eq!(b.glyphs, vec![10], "a lookup from another script was applied");
+        assert_eq!(
+            b.glyphs,
+            vec![10],
+            "a lookup from another script was applied"
+        );
     }
 
     #[test]

@@ -33,6 +33,19 @@ let (_info, frames) = decode_gif(&bytes).unwrap();
 
 See the `threers_codec` crate docs and `crates/threers-codec/tests/{gif,apng,webm,h264_*,hevc_*}.rs` for VP9/WebM, APNG, H.264/MP4, and HEVC usage.
 
+## Encoding AV1
+
+`threers_codec::av1::Av1Encoder` writes AV1 from scratch: 8-bit 4:2:0, sides a multiple of 8, a `qidx` from 1 to 255. Every picture is a key frame, so a clip compresses like Motion JPEG rather than like video.
+
+```rust
+use threers_codec::av1::Av1Encoder;
+
+let mut enc = Av1Encoder::new(1280, 720, 80).unwrap();
+// let unit: Vec<u8> = enc.encode(&y, &u, &v).unwrap();
+```
+
+Each call returns one temporal unit for `mux_webm` with `WebmCodec::Av1`. It chooses blocks of 8, 16 or 32 by activity and uses DC prediction and the DCT, with default probabilities and no loop filters, so it needs more bytes than a full encoder at the same quality. `tests/av1_encode.rs` holds it to dav1d: both decoders must produce the same samples.
+
 ## Hardware acceleration
 
 `codec::hw::Mp4Encoder` and `codec::decode::Decoder` put the hardware codecs and the native ones behind one interface each. With the `videotoolbox` feature on macOS they open a VideoToolbox session; with the `nvidia` feature on Linux or Windows they use the GPU's NVENC and NVDEC engines (HEVC encode; H.264, HEVC 8/10-bit, VP9 and AV1 decode). Without the feature, without the hardware, or when the hardware refuses a stream (VideoToolbox and VP9/AV1, for one), they fall back to the pure-Rust codec instead of failing.
@@ -84,13 +97,15 @@ for s in &track.samples {
 
 | | Supported | Refused with an error |
 |---|---|---|
-| H.264 | Baseline, Main and High (progressive); CAVLC and CABAC; I/P/B slices, multiple slices, 8×8 transform, scaling matrices; explicit and implicit weighted prediction; spatial and temporal direct; long-term references and every MMCO; 4:2:0 and monochrome, 8–14 bit | interlaced (field pictures, MBAFF), 4:2:2/4:4:4, FMO, data partitioning, SP/SI, lossless transform bypass |
+| H.264 | Baseline, Main and High, field pictures and MBAFF included; CAVLC and CABAC; I/P/B slices, multiple slices, 8×8 transform, scaling matrices; explicit and implicit weighted prediction; spatial and temporal direct; long-term references and every MMCO; 4:2:0, 4:2:2 and monochrome, 8–14 bit | 4:4:4, FMO, data partitioning, SP/SI, lossless transform bypass |
 | HEVC | Main, Main 10, Main Still Picture, 4:2:0 Main 12; AMP, tiles, WPP, dependent slice segments, PCM, transform skip, transquant bypass, sign data hiding, scaling lists, weighted prediction, long-term references, TMVP, deblocking, SAO; base layer of multi-layer streams (Apple's alpha layer is skipped) | 4:2:2/4:4:4 and the other range-extension tools |
 
 Output is bit-exact. `crates/threers-codec/tests/native_decode.rs` compares every decoded sample against an independent truth: the crate's own encoders (PCM must come back lossless), x264 streams against ffmpeg's decode, and x265 streams against x265's own reconstruction. The external-tool checks skip themselves when the tools are not installed. During development the decoders were also matched against VideoToolbox-encoded H.264 and HEVC (8- and 10-bit), and against libde265.
 
-Some tools are implemented but appear in none of those streams, because no encoder available here produces them: H.264 long-term references, MMCO operations 2–6, POC type 1 and CABAC `I_PCM`; HEVC long-term references and dependent slice segments. Treat those paths as less proven than the rest.
+The JVT H.264 and JCT-VC HEVC conformance sets cover what no encoder here produces: long-term references, MMCO 2–6, POC type 1, CABAC `I_PCM`, field pictures, MBAFF and dependent slice segments. `h264_conformance_suite_matches_ffmpeg` runs the first against ffmpeg with `THREERS_H264_CONFORMANCE` set to a copy of `rsync://fate-suite.ffmpeg.org/fate-suite/h264-conformance/`: 189 of 195 streams match, and the other six use FMO or SP/SI, which are refused.
 
 For HEVC the reference is HM (`TAppDecoder`), the JCT-VC reference decoder. Every stream above decodes identically to it, including 10- and 12-bit and VideoToolbox output. HM isn't packaged, so `crates/threers-codec/tests/native_decode.rs` uses it only when `THREERS_HM_DECODER` points at the binary. To build it on macOS, clone `https://vcgit.hhi.fraunhofer.de/jvet/HM.git`, remove `-Werror` from `cmake/CMakeBuild/cmake/modules/BBuildEnv.cmake` (newer clang trips it), then `cmake -DCMAKE_BUILD_TYPE=Release .. && make TAppDecoder`. Without HM, the test compares against x265's `--recon`. With `THREERS_HEVC_CONFORMANCE` also set to a copy of the JCT-VC conformance bitstreams (`rsync -rltLW rsync://fate-suite.ffmpeg.org/fate-suite/hevc-conformance/ dir`), the whole suite is checked too: 172 of 188 streams match HM, the 10 using 4:2:2/4:4:4 or range extensions are refused, and HM itself cannot decode the other 6. Including the decode order of pictures, which follows the spec's DPB output process (§C.5.2). Don't use ffmpeg or libde265 as the HEVC reference: ffmpeg 8 deblocks chroma too late for SAO with 16×16 CTBs (off by two chroma samples; a fix is prepared for upstream), and libde265 wrong on multi-slice x265 streams.
 
-Speed is single-threaded Rust written so the compiler vectorises the hot loops. On one performance core of an i9-12900H, 1080p decodes at about 16 ms a frame for H.264 and HEVC, 13 ms for VP9 and 22 ms for AV1 (x264, x265, libvpx and SVT-AV1 streams at ordinary settings): real-time at 1080p30 for all but AV1, but still three to five times slower than ffmpeg's hand-written SIMD. Where VideoToolbox or NVDEC is available, `Decoder` uses it.
+With `parallel`, `decode_annexb` and `decode_video` reconstruct H.264 and HEVC pictures concurrently: headers stay in order on the calling thread, and a picture starts once its references have finished. On an i9-12900H a 1080p x265 stream goes from 12.1 to 6.4 ms a frame and an x264 one from 12.6 to 7.7, reached by four threads. More do not help, because a picture waits for its reference to finish completely, so the chain of P-frames sets the pace. Field and MBAFF H.264 stays on the calling thread, and `NativeDecoder::push` is unthreaded.
+
+Speed on one thread is Rust written so the compiler vectorises the hot loops. On one performance core of an i9-12900H, 1080p decodes at about 16 ms a frame for H.264 and HEVC, 13 ms for VP9 and 22 ms for AV1 (x264, x265, libvpx and SVT-AV1 streams at ordinary settings): real-time at 1080p30 for all but AV1, but still three to five times slower than ffmpeg's hand-written SIMD. Where VideoToolbox or NVDEC is available, `Decoder` uses it.

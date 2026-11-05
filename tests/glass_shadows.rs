@@ -115,7 +115,10 @@ fn floor_under_shadow(hr: &mut HeadlessRenderer, mode: TransparencyMode, casts: 
         .with_roughness(0.15)
         .with_transmission(1.0, 1.5, 0.8)
         .with_transparency(mode);
-    let mut ball = Object3D::mesh(Mesh::new(SphereGeometry::new(0.5, 48, 24), Material::Physical(glass)));
+    let mut ball = Object3D::mesh(Mesh::new(
+        SphereGeometry::new(0.5, 48, 24),
+        Material::Physical(glass),
+    ));
     ball.position = Vector3::new(0.0, 1.5, 0.0);
     ball.cast_shadow = casts;
     scene.add(ball);
@@ -165,10 +168,17 @@ fn glass_casts_shadows_in_every_mode() {
         let open = floor_under_shadow(&mut hr, mode, false);
         let shaded = floor_under_shadow(&mut hr, mode, true);
         eprintln!("{mode:?}: floor {open:.1} without the ball's shadow, {shaded:.1} with it");
-        assert!(open > 60.0, "{mode:?}: the floor is not lit ({open:.1}) — the fixture is off");
+        assert!(
+            open > 60.0,
+            "{mode:?}: the floor is not lit ({open:.1}) — the fixture is off"
+        );
         // Thin clear glass lets nearly all the light through: its shadow is
         // the few percent it reflects (216 → 210 when this was written).
-        let most = if mode == TransparencyMode::Glass { 0.99 } else { 0.7 };
+        let most = if mode == TransparencyMode::Glass {
+            0.99
+        } else {
+            0.7
+        };
         assert!(
             shaded < open * most,
             "{mode:?}: the ball casts no shadow — floor {shaded:.1} against {open:.1} unshadowed"

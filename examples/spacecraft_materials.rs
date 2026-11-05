@@ -29,12 +29,12 @@
 use std::f32::consts::{PI, TAU};
 use threers::cameras::Camera;
 use threers::materials::presets;
+use threers::renderer::WindowRenderer;
 use threers::{
     AmbientLight, BoxGeometry, CylinderGeometry, DirectionalLight, Material, Mesh, Object3D,
-    OrbitControls, PerspectiveCamera, PhysicalMaterial, PointerEvent, Scene,
-    SphereGeometry, TorusGeometry, Vector3,
+    OrbitControls, PerspectiveCamera, PhysicalMaterial, PointerEvent, Scene, SphereGeometry,
+    TorusGeometry, Vector3,
 };
-use threers::renderer::WindowRenderer;
 
 use winit::{
     dpi::PhysicalPosition,
@@ -111,8 +111,7 @@ async fn run() {
     bounce.position = Vector3::new(-0.3, -1.0, 0.2) * 12.0;
     scene.add(bounce);
 
-    let mut camera =
-        PerspectiveCamera::new(42.0, view.aspect(), 0.1, 200.0);
+    let mut camera = PerspectiveCamera::new(42.0, view.aspect(), 0.1, 200.0);
     camera.position = Vector3::new(4.2, 2.4, 6.0);
     camera.look_at(Vector3::ZERO);
 
@@ -158,7 +157,10 @@ async fn run() {
                                 ..Default::default()
                             },
                             &mut camera,
-                            { let (w, h) = view.size(); (w as f32, h as f32) },
+                            {
+                                let (w, h) = view.size();
+                                (w as f32, h as f32)
+                            },
                         );
                     }
                     WindowEvent::MouseWheel { delta, .. } => {
@@ -176,7 +178,10 @@ async fn run() {
                                 ..Default::default()
                             },
                             &mut camera,
-                            { let (w, h) = view.size(); (w as f32, h as f32) },
+                            {
+                                let (w, h) = view.size();
+                                (w as f32, h as f32)
+                            },
                         );
                     }
                     WindowEvent::RedrawRequested => {

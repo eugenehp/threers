@@ -284,7 +284,9 @@ fn helicoid(trig: [(f32, f32); 3]) -> (f32, [f32; 3]) {
 
 /// Distance from the helicoid's column axis, in radians of the cell's `2π`.
 pub(crate) fn axis_radius(trig: [(f32, f32); 3]) -> f32 {
-    (-trig[0].0).atan2(-trig[0].1).hypot((-trig[1].0).atan2(-trig[1].1))
+    (-trig[0].0)
+        .atan2(-trig[0].1)
+        .hypot((-trig[1].0).atan2(-trig[1].1))
 }
 
 #[cfg(test)]

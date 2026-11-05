@@ -97,9 +97,15 @@ fn itunsmpb_priming(udta: &[u8]) -> Option<i64> {
         if name != Some(b"iTunSMPB".as_slice()) {
             return;
         }
-        let Some(data) = find(item, b"data").and_then(|d| d.get(8..)) else { return };
+        let Some(data) = find(item, b"data").and_then(|d| d.get(8..)) else {
+            return;
+        };
         let s = String::from_utf8_lossy(data);
-        let f: Vec<i64> = s.split_whitespace().take(4).filter_map(|x| i64::from_str_radix(x, 16).ok()).collect();
+        let f: Vec<i64> = s
+            .split_whitespace()
+            .take(4)
+            .filter_map(|x| i64::from_str_radix(x, 16).ok())
+            .collect();
         if f.len() >= 4 {
             out = Some(f[1]);
         }
@@ -114,7 +120,11 @@ pub fn demux_aac(data: &[u8]) -> Result<AacTrack, String> {
     }
     let moov = find(data, b"moov").ok_or("no moov box")?;
     let mvhd = find(moov, b"mvhd").ok_or("no mvhd")?;
-    let movie_ts = if mvhd.first() == Some(&1) { u32at(mvhd, 20) } else { u32at(mvhd, 12) } as i64;
+    let movie_ts = if mvhd.first() == Some(&1) {
+        u32at(mvhd, 20)
+    } else {
+        u32at(mvhd, 12)
+    } as i64;
 
     let mut found: Option<(&[u8], &[u8])> = None; // (trak, mdia)
     let mut last_trak_is_ours = false;
@@ -125,8 +135,12 @@ pub fn demux_aac(data: &[u8]) -> Result<AacTrack, String> {
             if found.is_some() {
                 return;
             }
-            let Some(mdia) = find(body, b"mdia") else { return };
-            let is_audio = find(mdia, b"hdlr").map(|h| h.len() >= 12 && &h[8..12] == b"soun").unwrap_or(false);
+            let Some(mdia) = find(body, b"mdia") else {
+                return;
+            };
+            let is_audio = find(mdia, b"hdlr")
+                .map(|h| h.len() >= 12 && &h[8..12] == b"soun")
+                .unwrap_or(false);
             if is_audio {
                 found = Some((body, mdia));
                 last_trak_is_ours = true;
@@ -144,11 +158,17 @@ pub fn demux_aac(data: &[u8]) -> Result<AacTrack, String> {
     });
     let (trak, mdia) = found.ok_or("no audio track")?;
     let mdhd = find(mdia, b"mdhd").ok_or("no mdhd")?;
-    let timescale = if mdhd.first() == Some(&1) { u32at(mdhd, 20) } else { u32at(mdhd, 12) };
+    let timescale = if mdhd.first() == Some(&1) {
+        u32at(mdhd, 20)
+    } else {
+        u32at(mdhd, 12)
+    };
     if timescale == 0 {
         return Err("audio track has no timescale".into());
     }
-    let stbl = find(mdia, b"minf").and_then(|m| find(m, b"stbl")).ok_or("no stbl")?;
+    let stbl = find(mdia, b"minf")
+        .and_then(|m| find(m, b"stbl"))
+        .ok_or("no stbl")?;
 
     let stsd = find(stbl, b"stsd").ok_or("no stsd")?;
     if stsd.len() < 16 || u32at(stsd, 4) != 1 {
@@ -177,28 +197,46 @@ pub fn demux_aac(data: &[u8]) -> Result<AacTrack, String> {
         if o + 8 > stts.len() {
             break;
         }
-        durations.extend(std::iter::repeat_n(u32at(stts, o + 4), u32at(stts, o) as usize));
+        durations.extend(std::iter::repeat_n(
+            u32at(stts, o + 4),
+            u32at(stts, o) as usize,
+        ));
     }
     let stsz = find(stbl, b"stsz").ok_or("no stsz")?;
     let uniform = u32at(stsz, 4);
     let count = u32at(stsz, 8) as usize;
     let sizes: Vec<u32> = (0..count)
-        .map(|i| if uniform != 0 { uniform } else { u32at(stsz, 12 + i * 4) })
+        .map(|i| {
+            if uniform != 0 {
+                uniform
+            } else {
+                u32at(stsz, 12 + i * 4)
+            }
+        })
         .collect();
     let stsc = find(stbl, b"stsc").ok_or("no stsc")?;
     let runs: Vec<(u32, u32)> = (0..u32at(stsc, 4) as usize)
         .map(|i| (u32at(stsc, 8 + i * 12), u32at(stsc, 12 + i * 12)))
         .collect();
     let chunks: Vec<u64> = if let Some(co64) = find(stbl, b"co64") {
-        (0..u32at(co64, 4) as usize).map(|i| u64at(co64, 8 + i * 8)).collect()
+        (0..u32at(co64, 4) as usize)
+            .map(|i| u64at(co64, 8 + i * 8))
+            .collect()
     } else {
         let stco = find(stbl, b"stco").ok_or("no stco")?;
-        (0..u32at(stco, 4) as usize).map(|i| u32at(stco, 8 + i * 4) as u64).collect()
+        (0..u32at(stco, 4) as usize)
+            .map(|i| u32at(stco, 8 + i * 4) as u64)
+            .collect()
     };
     let mut samples = Vec::with_capacity(count);
     let mut dts = 0i64;
     for (ci, &off) in chunks.iter().enumerate() {
-        let per = runs.iter().rev().find(|r| r.0 <= ci as u32 + 1).map(|r| r.1).unwrap_or(0);
+        let per = runs
+            .iter()
+            .rev()
+            .find(|r| r.0 <= ci as u32 + 1)
+            .map(|r| r.1)
+            .unwrap_or(0);
         let mut at = off;
         for _ in 0..per {
             let i = samples.len();
@@ -206,7 +244,12 @@ pub fn demux_aac(data: &[u8]) -> Result<AacTrack, String> {
                 break;
             }
             let duration = durations.get(i).copied().unwrap_or(0);
-            samples.push(AudioSample { offset: at, size: sizes[i], dts, duration });
+            samples.push(AudioSample {
+                offset: at,
+                size: sizes[i],
+                dts,
+                duration,
+            });
             at += sizes[i] as u64;
             dts += duration as i64;
         }
@@ -261,5 +304,11 @@ pub fn demux_aac(data: &[u8]) -> Result<AacTrack, String> {
     if let Some(p) = priming {
         skip = p;
     }
-    Ok(AacTrack { asc, timescale, samples, keep, skip_samples: skip as u64 })
+    Ok(AacTrack {
+        asc,
+        timescale,
+        samples,
+        keep,
+        skip_samples: skip as u64,
+    })
 }

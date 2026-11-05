@@ -1,0 +1,16 @@
+# Skips scripts/test-no-skips.py accepts: one Python regex per line, matched
+# against `<target>: <message>`. Each one needs a reason nothing can fix.
+
+# The hardware backends do not exist on this platform at all.
+built on (Linux|64-bit Linux and Windows) only
+
+# Compares against dumps of a reference build, made by a script outside the
+# repo; the kernels it covers are generated, and tested end to end by decoding.
+# Parallel tests can glue other output onto the line, hence the second `.*`.
+src/lib\.rs: .*SKIP .*(dct12|dct36|dct64|synth|synth_s)$
+
+# wasm-only suites: they run in Chrome (scripts/browser-smoke.sh), not here.
+tests/(marks_web|webgpu|webgl|usd_wasm|fluid_webgl)\.rs: running 0 tests
+
+# The pipeline cache is a Vulkan feature; the Linux run covers it.
+tests/pipeline_warmup\.rs: skipping: no pipeline cache on Metal

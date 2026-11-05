@@ -98,7 +98,10 @@ fn a_slider_reports_its_travel_and_a_ball_socket_reports_nothing() {
         Vector3::ZERO,
         Vector3::ZERO,
     ));
-    assert!(world.joint_state(ball).is_none(), "a ball socket has no one coordinate");
+    assert!(
+        world.joint_state(ball).is_none(),
+        "a ball socket has no one coordinate"
+    );
 }
 
 #[test]
@@ -123,7 +126,10 @@ fn joint_speed_is_zero_at_rest_and_signed_while_moving() {
     };
     settle(&mut world, 30);
     let speed = world.joint_speed(hinge).unwrap();
-    assert!((speed - 2.0).abs() < 0.2, "the motor asked for 2 rad/s, got {speed}");
+    assert!(
+        (speed - 2.0).abs() < 0.2,
+        "the motor asked for 2 rad/s, got {speed}"
+    );
 }
 
 // ---- servo ---------------------------------------------------------------
@@ -136,7 +142,10 @@ fn a_servo_holds_the_angle_it_was_given() {
     settle(&mut world, 240);
 
     let angle = world.joint_angle(hinge).unwrap();
-    assert!((angle - target).abs() < 0.02, "settled at {angle}, wanted {target}");
+    assert!(
+        (angle - target).abs() < 0.02,
+        "settled at {angle}, wanted {target}"
+    );
     assert!(
         world.joint_speed(hinge).unwrap().abs() < 0.05,
         "it arrived but never stopped"
@@ -168,7 +177,10 @@ fn a_servo_cannot_beat_a_limit() {
         angle <= 0.4 + 0.02,
         "the servo pushed through the limit to {angle}"
     );
-    assert!(angle > 0.35, "it should be sitting on the limit, not at {angle}");
+    assert!(
+        angle > 0.35,
+        "it should be sitting on the limit, not at {angle}"
+    );
 }
 
 #[test]
@@ -183,7 +195,11 @@ fn a_weak_servo_stalls_where_a_strong_one_arrives() {
         settle(&mut world, 400);
         reached.push(world.joint_angle(hinge).unwrap());
     }
-    assert!(reached[0] < 0.5, "a 0.05 N·m servo lifted the bar to {}", reached[0]);
+    assert!(
+        reached[0] < 0.5,
+        "a 0.05 N·m servo lifted the bar to {}",
+        reached[0]
+    );
     assert!(
         (reached[1] - 1.2).abs() < 0.05,
         "a 200 N·m servo should have got there, not {}",
@@ -253,14 +269,8 @@ fn gear_rig(ratio: f32) -> (World, JointId, JointId, JointId) {
                 .can_sleep(false),
         );
         let hinge = world.add_joint(
-            Joint::revolute_at_point(
-                world.bodies(),
-                frame,
-                body,
-                Vector3::new(x, 0.0, 0.0),
-                axis,
-            )
-            .unwrap(),
+            Joint::revolute_at_point(world.bodies(), frame, body, Vector3::new(x, 0.0, 0.0), axis)
+                .unwrap(),
         );
         (body, hinge)
     };
@@ -398,21 +408,20 @@ fn a_screw_advances_as_it_turns_and_cannot_do_one_without_the_other() {
     );
     let axis = Vector3::new(0.0, 1.0, 0.0);
     // A 2 mm-per-turn thread, in a model drawn in millimetres.
-    let screw = world
-        .add_joint(
-            Joint::screw_from_pitch(
-                world.bodies(),
-                nut,
-                bolt,
-                Vector3::ZERO,
-                Vector3::ZERO,
-                axis,
-                axis,
-                2.0,
-            )
-            .unwrap()
-            .with_motor(3.0, 500.0),
-        );
+    let screw = world.add_joint(
+        Joint::screw_from_pitch(
+            world.bodies(),
+            nut,
+            bolt,
+            Vector3::ZERO,
+            Vector3::ZERO,
+            axis,
+            axis,
+            2.0,
+        )
+        .unwrap()
+        .with_motor(3.0, 500.0),
+    );
 
     settle(&mut world, 120);
 
@@ -602,7 +611,11 @@ fn a_carrier_that_cannot_move_changes_nothing() {
     assert!((ends[0].1 - ends[1].1).abs() < 1e-5, "{ends:?}");
     // And it is the ratio that was asked for: the planet runs twice the sun,
     // the other way.
-    assert!((ends[1].0 - 3.0).abs() < 0.2, "the sun ran at {}", ends[1].0);
+    assert!(
+        (ends[1].0 - 3.0).abs() < 0.2,
+        "the sun ran at {}",
+        ends[1].0
+    );
     assert!(
         (ends[1].1 + 2.0 * ends[1].0).abs() < 0.3,
         "a -2:1 mesh gave {} against the sun's {}",
@@ -629,7 +642,10 @@ fn a_turning_carrier_drives_the_planet_even_with_the_sun_held() {
     let arm = world.joint_speed(arm_hinge).unwrap();
     let sun = world.joint_speed(sun_hinge).unwrap();
     assert!((arm - W).abs() < 0.2, "the arm ran at {arm}");
-    assert!(sun.abs() < 0.2, "the sun was supposed to be held, ran at {sun}");
+    assert!(
+        sun.abs() < 0.2,
+        "the sun was supposed to be held, ran at {sun}"
+    );
 
     // Relative to the arm, which is what the mesh constrains.
     let relative = world.joint_speed(planet_hinge).unwrap();
@@ -671,7 +687,10 @@ fn a_world_referenced_mesh_gets_the_same_train_wrong() {
         .y;
     // It holds the planet still in the world, which is what it was asked to do
     // and not what the gear train does.
-    assert!(planet_world.abs() < 0.3, "world-referenced gave {planet_world}");
+    assert!(
+        planet_world.abs() < 0.3,
+        "world-referenced gave {planet_world}"
+    );
 }
 
 #[test]
@@ -693,17 +712,12 @@ fn a_fixed_carrier_costs_nothing_and_is_allowed() {
             .translation(Vector3::new(0.6, 0.0, 0.0))
             .can_sleep(false),
     );
-    let ha = world
-        .add_joint(Joint::revolute_at_point(world.bodies(), frame, a, Vector3::ZERO, axis).unwrap());
+    let ha = world.add_joint(
+        Joint::revolute_at_point(world.bodies(), frame, a, Vector3::ZERO, axis).unwrap(),
+    );
     let hb = world.add_joint(
-        Joint::revolute_at_point(
-            world.bodies(),
-            frame,
-            b,
-            Vector3::new(0.6, 0.0, 0.0),
-            axis,
-        )
-        .unwrap(),
+        Joint::revolute_at_point(world.bodies(), frame, b, Vector3::new(0.6, 0.0, 0.0), axis)
+            .unwrap(),
     );
     world.add_joint(Joint::gear_on_carrier(a, b, frame, axis, axis, -2.0));
     world.joint_mut(ha).unwrap().kind = drive_with_motor(&world, ha, 4.0);

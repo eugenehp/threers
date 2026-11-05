@@ -406,22 +406,54 @@ mod tests {
         let mut orbit = OrbitControls::new(&cam);
         orbit.enable_damping = true;
         orbit.damping = 0.08;
-        let idle = PointerEvent { dx: 0.0, dy: 0.0, wheel: 0.0, rotating: false, panning: false, cursor: (0.0, 0.0) };
+        let idle = PointerEvent {
+            dx: 0.0,
+            dy: 0.0,
+            wheel: 0.0,
+            rotating: false,
+            panning: false,
+            cursor: (0.0, 0.0),
+        };
         // a drag's total turn, once settled, is what it would be undamped
         let start = orbit.spherical.theta;
-        orbit.update_dt(PointerEvent { dx: 60.0, rotating: true, ..idle }, &mut cam, (800.0, 600.0), 1.0 / 60.0);
+        orbit.update_dt(
+            PointerEvent {
+                dx: 60.0,
+                rotating: true,
+                ..idle
+            },
+            &mut cam,
+            (800.0, 600.0),
+            1.0 / 60.0,
+        );
         for _ in 0..600 {
             orbit.update_dt(idle, &mut cam, (800.0, 600.0), 1.0 / 60.0);
         }
         let expect = -60.0 / 600.0 * std::f32::consts::TAU;
-        assert!((orbit.spherical.theta - start - expect).abs() < 1e-3, "turned {} not {expect}", orbit.spherical.theta - start);
+        assert!(
+            (orbit.spherical.theta - start - expect).abs() < 1e-3,
+            "turned {} not {expect}",
+            orbit.spherical.theta - start
+        );
         // and a wheel notch zooms by its factor, not that factor ^ (1 / damping)
         let r0 = orbit.spherical.radius;
-        orbit.update_dt(PointerEvent { wheel: 100.0, ..idle }, &mut cam, (800.0, 600.0), 1.0 / 60.0);
+        orbit.update_dt(
+            PointerEvent {
+                wheel: 100.0,
+                ..idle
+            },
+            &mut cam,
+            (800.0, 600.0),
+            1.0 / 60.0,
+        );
         for _ in 0..600 {
             orbit.update_dt(idle, &mut cam, (800.0, 600.0), 1.0 / 60.0);
         }
-        assert!((orbit.spherical.radius / r0 - 0.9).abs() < 1e-3, "zoomed ×{}", orbit.spherical.radius / r0);
+        assert!(
+            (orbit.spherical.radius / r0 - 0.9).abs() < 1e-3,
+            "zoomed ×{}",
+            orbit.spherical.radius / r0
+        );
         // auto-rotate settles at `auto_rotate_speed` rad/s
         orbit.auto_rotate = true;
         orbit.auto_rotate_speed = 0.5;
@@ -432,7 +464,11 @@ mod tests {
         for _ in 0..60 {
             orbit.update_dt(idle, &mut cam, (800.0, 600.0), 1.0 / 60.0);
         }
-        assert!((orbit.spherical.theta - t0 - 0.5).abs() < 1e-3, "{} rad/s", orbit.spherical.theta - t0);
+        assert!(
+            (orbit.spherical.theta - t0 - 0.5).abs() < 1e-3,
+            "{} rad/s",
+            orbit.spherical.theta - t0
+        );
     }
 
     #[test]
@@ -453,15 +489,33 @@ mod tests {
         };
         orbit.update(ev, &mut cam, (800.0, 600.0));
         assert!(orbit.spherical.radius < 10.0, "zoom in shrinks radius");
-        assert!(orbit.target.x > 0.01, "target shifts toward the +x cursor, got {}", orbit.target.x);
-        assert!(orbit.target.y.abs() < 1e-4 && orbit.target.z.abs() < 1e-4, "no cross-axis drift");
+        assert!(
+            orbit.target.x > 0.01,
+            "target shifts toward the +x cursor, got {}",
+            orbit.target.x
+        );
+        assert!(
+            orbit.target.y.abs() < 1e-4 && orbit.target.z.abs() < 1e-4,
+            "no cross-axis drift"
+        );
 
         // centred cursor must not move the target
         let mut cam2 = PerspectiveCamera::new(50.0, 1.0, 0.1, 100.0);
         cam2.position = Vector3::new(0.0, 0.0, 10.0);
         let mut orbit2 = OrbitControls::new(&cam2);
         orbit2.zoom_to_cursor = true;
-        orbit2.update(PointerEvent { wheel: 200.0, cursor: (0.0, 0.0), ..Default::default() }, &mut cam2, (800.0, 600.0));
-        assert!(orbit2.target.length() < 1e-4, "centred zoom keeps the target put");
+        orbit2.update(
+            PointerEvent {
+                wheel: 200.0,
+                cursor: (0.0, 0.0),
+                ..Default::default()
+            },
+            &mut cam2,
+            (800.0, 600.0),
+        );
+        assert!(
+            orbit2.target.length() < 1e-4,
+            "centred zoom keeps the target put"
+        );
     }
 }

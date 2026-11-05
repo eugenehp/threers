@@ -147,7 +147,10 @@ fn transparency_is_per_group() {
     let left = px(&rgba, 16, 32);
     let right = px(&rgba, 48, 32);
     assert_eq!(left[2], 255, "opaque group: {left:?}");
-    assert!(right[2] > 100 && right[2] < 220, "transparent group blends: {right:?}");
+    assert!(
+        right[2] > 100 && right[2] < 220,
+        "transparent group blends: {right:?}"
+    );
 }
 
 fn morph_plane(relative: bool, influences: [f32; 2]) -> Mesh {
@@ -177,8 +180,16 @@ fn morph_plane(relative: bool, influences: [f32; 2]) -> Mesh {
     }
     g.set_attribute("color", BufferAttribute::new(vec![1.0; count * 3], 3));
     g.morph_targets_relative = relative;
-    let n1 = if relative { vec![0.0; count * 3] } else { g.get_attribute("normal").unwrap().array.clone() };
-    let c1 = if relative { vec![0.0; count * 3] } else { vec![1.0; count * 3] };
+    let n1 = if relative {
+        vec![0.0; count * 3]
+    } else {
+        g.get_attribute("normal").unwrap().array.clone()
+    };
+    let c1 = if relative {
+        vec![0.0; count * 3]
+    } else {
+        vec![1.0; count * 3]
+    };
     g.morph_attributes.insert(
         "normal".into(),
         vec![BufferAttribute::new(n0, 3), BufferAttribute::new(n1, 3)],
@@ -249,7 +260,10 @@ fn gpu_morph_matches_the_cpu_pose_and_the_raycaster() {
             checked += 1;
             agree += (here == hit) as usize;
         }
-        assert_eq!(agree, checked, "relative={relative}: picks disagree with pixels");
+        assert_eq!(
+            agree, checked,
+            "relative={relative}: picks disagree with pixels"
+        );
     }
 }
 
@@ -267,7 +281,13 @@ fn skinned_morph_composes_morph_then_skin() {
     let count = g.get_attribute("position").unwrap().count();
     let mut joints = vec![0.0f32; count * 4];
     let mut weights = vec![0.0f32; count * 4];
-    let ys: Vec<f32> = g.get_attribute("position").unwrap().array.chunks(3).map(|p| p[1]).collect();
+    let ys: Vec<f32> = g
+        .get_attribute("position")
+        .unwrap()
+        .array
+        .chunks(3)
+        .map(|p| p[1])
+        .collect();
     for v in 0..count {
         joints[v * 4 + 1] = 1.0;
         let t = (ys[v] + 0.5).clamp(0.0, 1.0);
@@ -291,7 +311,11 @@ fn skinned_morph_composes_morph_then_skin() {
         Matrix4::from_quaternion(threers::math::Euler::new(0.0, 0.0, 0.5).to_quaternion()),
     ];
     let mut sm = SkinnedMesh::new(g, (*mesh.material).clone(), skeleton);
-    assert_eq!(sm.morph_influences, vec![0.0, 0.0], "sized from the geometry");
+    assert_eq!(
+        sm.morph_influences,
+        vec![0.0, 0.0],
+        "sized from the geometry"
+    );
     sm.morph_influences = vec![0.8, 0.0];
 
     let mut scene = lit_scene();
@@ -311,7 +335,10 @@ fn skinned_morph_composes_morph_then_skin() {
     let gpu = r.render_to_rgba(&mut scene, &cam);
     let mut flat = Scene::new();
     flat.background = Color::from_hex(0x000000);
-    flat.add(Object3D::mesh(Mesh::new(posed, BasicMaterial::new(Color::WHITE).into())));
+    flat.add(Object3D::mesh(Mesh::new(
+        posed,
+        BasicMaterial::new(Color::WHITE).into(),
+    )));
     let cpu = r.render_to_rgba(&mut flat, &cam);
     let cover = |img: &[u8], x: u32, y: u32| px(img, x, y)[..3].iter().any(|&v| v > 8);
     let (mut differ, mut lit) = (0, 0);
@@ -348,7 +375,8 @@ fn skinned_casters_shadow_their_pose() {
         floor_mat.metalness = 0.0;
         floor_mat.roughness = 1.0;
         let mut floor = Object3D::mesh(Mesh::new(PlaneGeometry::new(4.0, 4.0), floor_mat.into()));
-        floor.quaternion = threers::math::Euler::new(-std::f32::consts::FRAC_PI_2, 0.0, 0.0).to_quaternion();
+        floor.quaternion =
+            threers::math::Euler::new(-std::f32::consts::FRAC_PI_2, 0.0, 0.0).to_quaternion();
         floor.receive_shadow = true;
         scene.add(floor);
         let mut sun = DirectionalLight::new(Color::WHITE, 1.0);

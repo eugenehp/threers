@@ -1,6 +1,6 @@
 [package]
 name = "threers-continuum"
-version = "0.0.10"
+version = "0.0.11"
 edition = "2021"
 authors = ["Eugene Hauptmann"]
 description = "Tendon-driven continuum robots for threers-physics: a flexible rod as a chain of elastic hinges, cable routing, Clark coordinates and task-space tip control"

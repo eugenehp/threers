@@ -1,0 +1,21 @@
+# Skips that are right on a hosted runner and nowhere else (see
+# scripts/test-no-skips.py). Everything here still runs in docs/releasing.md's
+# local pass, on a machine that has it.
+
+# HM isn't packaged anywhere.
+tests/native_decode\.rs: .*skipping: THREERS_HEVC_CONFORMANCE / THREERS_HM_DECODER not set
+tests/native_decode\.rs: .*skipping: THREERS_HM_DECODER not set
+
+# 242 libaom vectors, listed one by one; SVT-AV1 streams still run.
+tests/av1_conformance\.rs: .*SKIP: no AV1 streams under
+
+# No GPU with a decoder, and no VideoToolbox.
+tests/hw\.rs: .*skipping: no hardware decoder
+tests/nvidia\.rs: .*SKIP
+tests/vaapi\.rs: .*SKIP
+
+# Metal is macOS only.
+.*skipping: no Metal device
+
+# A hosted runner has no sound card.
+tests/audio\.rs: .*SKIP: no audio output device

@@ -7,8 +7,8 @@
 //! cargo test --features native-codec --test h264_animation_parity -- --nocapture
 //! ```
 
-use threers_codec::hevc::Yuv420Frame;
 use threers_codec::h264::{encode_compressed_mp4, encode_mp4 as encode_pcm_mp4};
+use threers_codec::hevc::Yuv420Frame;
 use threers_codec::{encode_animation_rgba, AnimationEncodeOptions, BrowserCodec};
 
 /// FNV-1a 32-bit — must match `web/scripts/video-export-test-lib.mjs`.

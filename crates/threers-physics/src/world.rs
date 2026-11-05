@@ -690,7 +690,9 @@ impl World {
             let Some(direction) = crate::math::try_normalize(motion) else {
                 continue;
             };
-            let bounds = collider.shape.compute_aabb(&crate::math::Isometry::IDENTITY);
+            let bounds = collider
+                .shape
+                .compute_aabb(&crate::math::Isometry::IDENTITY);
             let size = bounds.max - bounds.min;
             let thickness = size.x.min(size.y).min(size.z).max(1e-4);
             if distance <= thickness {
@@ -747,6 +749,13 @@ impl World {
     /// amount to draw without stutter.
     pub fn interpolation_alpha(&self) -> f32 {
         self.interpolation_alpha
+    }
+
+    /// Set the interpolation point directly, for a host that runs its own fixed
+    /// steps through [`Self::step_fixed`] and so knows how far into the next one
+    /// the frame is.
+    pub fn set_interpolation_alpha(&mut self, alpha: f32) {
+        self.interpolation_alpha = alpha.clamp(0.0, 1.0);
     }
 
     /// Accelerations from [`Self::gravity_model`], one per body slot.
@@ -1078,13 +1087,10 @@ impl World {
             if !include(body_id, body) {
                 continue;
             }
-            let Some(id) = body.scene_object else { continue };
-            let Some(object) = arena.get_mut(id) else {
+            let Some(id) = body.scene_object else {
                 continue;
             };
-            object.position = body.position.translation;
-            object.quaternion = body.position.rotation;
-            object.update_matrix();
+            place_node(arena, id, body.position);
         }
     }
 
@@ -1109,14 +1115,10 @@ impl World {
             if !include(body_id, body) {
                 continue;
             }
-            let Some(id) = body.scene_object else { continue };
-            let Some(object) = arena.get_mut(id) else {
+            let Some(id) = body.scene_object else {
                 continue;
             };
-            let pose = body.previous_position().lerp(&body.position, t);
-            object.position = pose.translation;
-            object.quaternion = pose.rotation;
-            object.update_matrix();
+            place_node(arena, id, body.previous_position().lerp(&body.position, t));
         }
     }
 
@@ -1130,9 +1132,16 @@ impl World {
             if !body.is_kinematic() {
                 continue;
             }
-            let Some(id) = body.scene_object else { continue };
-            let Some(object) = arena.get(id) else { continue };
-            let target = crate::math::Isometry::new(object.position, object.quaternion);
+            let Some(id) = body.scene_object else {
+                continue;
+            };
+            let Some(object) = arena.get(id) else {
+                continue;
+            };
+            let target = parent_pose(arena, object.parent).mul(&crate::math::Isometry::new(
+                object.position,
+                object.quaternion,
+            ));
             let dt = self.timestep;
             if dt <= 0.0 {
                 continue;
@@ -1142,8 +1151,7 @@ impl World {
             // exactly on the target, and — crucially — the contact solver sees a
             // real velocity, so the body pushes things aside instead of passing
             // straight through them.
-            body.linear_velocity =
-                (target.translation - body.position.translation) * (1.0 / dt);
+            body.linear_velocity = (target.translation - body.position.translation) * (1.0 / dt);
 
             // Same for spin: the shortest rotation from here to the target,
             // expressed as an angular velocity.
@@ -1191,8 +1199,70 @@ impl World {
     }
 }
 
+/// Where a node's parent is in the world, as a rigid transform.
+pub(crate) fn parent_pose(arena: &ObjectArena, parent: Option<ObjectId>) -> crate::math::Isometry {
+    let mut pose = crate::math::Isometry::IDENTITY;
+    let mut next = parent;
+    while let Some(node) = next.and_then(|id| arena.get(id)) {
+        pose = crate::math::Isometry::new(node.position, node.quaternion).mul(&pose);
+        next = node.parent;
+    }
+    pose
+}
+
+/// Put a node at a world pose. Bodies are in world space and a node's fields are
+/// its parent's, so a node under a moved parent has to be converted.
+fn place_node(arena: &mut ObjectArena, id: ObjectId, pose: crate::math::Isometry) {
+    let parent = arena.get(id).and_then(|node| node.parent);
+    let local = parent_pose(arena, parent).inverse().mul(&pose);
+    if let Some(object) = arena.get_mut(id) {
+        object.position = local.translation;
+        object.quaternion = local.rotation;
+        object.update_matrix();
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_body_lands_on_a_node_under_a_moved_parent_where_the_world_says() {
+        use crate::body::RigidBody;
+        use crate::shape::Shape;
+        use threers::core::Object3D;
+        use threers::math::Quaternion;
+
+        let mut arena = ObjectArena::new();
+        let parent = arena.insert(Object3D::group());
+        let child = arena.insert(Object3D::group());
+        arena.add_child(parent, child);
+        let node = arena.get_mut(parent).unwrap();
+        node.position = Vector3::new(3.0, 0.0, 0.0);
+        node.quaternion = Quaternion::from_axis_angle(Vector3::new(0.0, 1.0, 0.0), 1.0);
+
+        let mut world = World::new();
+        let at = Vector3::new(1.0, 2.0, 3.0);
+        world.add_body(
+            RigidBody::fixed()
+                .shape(Shape::ball(0.5))
+                .translation(at)
+                .scene_object(child),
+        );
+        world.sync_to_scene(&mut arena);
+
+        arena.update_world_matrices(parent, threers::math::Matrix4::identity());
+        let drawn = arena.get(child).unwrap().matrix_world.decompose().0;
+        assert!((drawn - at).length() < 1e-4, "{drawn:?}");
+    }
+
+    #[test]
+    fn a_host_stepping_by_hand_can_set_the_interpolation_point() {
+        let mut world = World::new();
+        world.set_interpolation_alpha(0.25);
+        assert_eq!(world.interpolation_alpha(), 0.25);
+        world.set_interpolation_alpha(9.0);
+        assert_eq!(world.interpolation_alpha(), 1.0);
+    }
+
     use super::*;
     use crate::collider::Collider;
     use crate::joint::Joint;
@@ -1260,7 +1330,14 @@ mod tests {
         for _ in 0..120 {
             world.step(1.0 / 60.0);
         }
-        assert!(world.body(world.bodies().ids().nth(1).unwrap()).unwrap().translation().y > 0.4);
+        assert!(
+            world
+                .body(world.bodies().ids().nth(1).unwrap())
+                .unwrap()
+                .translation()
+                .y
+                > 0.4
+        );
     }
 
     #[test]
@@ -1275,7 +1352,10 @@ mod tests {
         for _ in 0..180 {
             world.step(1.0 / 60.0);
         }
-        assert!(world.body(resting).unwrap().is_sleeping(), "box never slept");
+        assert!(
+            world.body(resting).unwrap().is_sleeping(),
+            "box never slept"
+        );
 
         // Drop something on it.
         world.add_body(
@@ -1335,7 +1415,11 @@ mod tests {
         let mut saw_start = false;
         for _ in 0..120 {
             world.step(1.0 / 60.0);
-            if world.collision_events().iter().any(|e| e.started && e.is_sensor) {
+            if world
+                .collision_events()
+                .iter()
+                .any(|e| e.started && e.is_sensor)
+            {
                 saw_start = true;
             }
         }
@@ -1424,8 +1508,12 @@ mod tests {
         for _ in 0..120 {
             world.step(1.0 / 60.0);
         }
-        let d = (world.body(b).unwrap().translation() - world.body(a).unwrap().translation()).length();
-        assert!((d - 0.4).abs() < 0.02, "welded spheres drifted to {d} apart");
+        let d =
+            (world.body(b).unwrap().translation() - world.body(a).unwrap().translation()).length();
+        assert!(
+            (d - 0.4).abs() < 0.02,
+            "welded spheres drifted to {d} apart"
+        );
         let v = world.body(a).unwrap().linear_velocity.length();
         assert!(v < 0.05, "the pair is buzzing at {v}");
     }
@@ -1472,10 +1560,16 @@ mod tests {
         world.sync_to_scene_interpolated(&mut arena);
 
         let body = world.body(ball).unwrap();
-        let (lo, hi) = (body.position.translation.y, body.previous_position().translation.y);
+        let (lo, hi) = (
+            body.position.translation.y,
+            body.previous_position().translation.y,
+        );
         let (lo, hi) = (lo.min(hi), lo.max(hi));
         let drawn = arena.get(node).unwrap().position.y;
-        assert!(drawn >= lo - 1e-5 && drawn <= hi + 1e-5, "{drawn} not in [{lo}, {hi}]");
+        assert!(
+            drawn >= lo - 1e-5 && drawn <= hi + 1e-5,
+            "{drawn} not in [{lo}, {hi}]"
+        );
     }
 
     #[test]
@@ -1516,11 +1610,18 @@ mod tests {
     #[test]
     fn gravity_can_be_changed_and_reversed() {
         let mut world = World::new().with_gravity(Vector3::new(0.0, 5.0, 0.0));
-        let ball = world.add_body(RigidBody::dynamic().shape(Shape::ball(0.5)).can_sleep(false));
+        let ball = world.add_body(
+            RigidBody::dynamic()
+                .shape(Shape::ball(0.5))
+                .can_sleep(false),
+        );
         for _ in 0..60 {
             world.step(1.0 / 60.0);
         }
-        assert!(world.body(ball).unwrap().translation().y > 1.0, "it should have risen");
+        assert!(
+            world.body(ball).unwrap().translation().y > 1.0,
+            "it should have risen"
+        );
     }
 
     #[test]

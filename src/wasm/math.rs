@@ -341,7 +341,7 @@ impl WebScene {
                 sprite = sprite_geometry();
                 &sprite
             }
-            ObjectKind::Group | ObjectKind::Light(_) => return None,
+            ObjectKind::Group | ObjectKind::Light(_) | ObjectKind::Audio(_) => return None,
         };
         let m = matrix16(&matrix);
         let w = influences.as_deref();
@@ -376,7 +376,7 @@ impl WebScene {
                 sprite = sprite_geometry();
                 &sprite
             }
-            ObjectKind::Group | ObjectKind::Light(_) => return None,
+            ObjectKind::Group | ObjectKind::Light(_) | ObjectKind::Audio(_) => return None,
         };
         if mode == 1 {
             geometry_sphere(g).map(|s| s.to_vec())

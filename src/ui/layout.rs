@@ -11,7 +11,9 @@
 //! positioned boxes are placed in their nearest positioned ancestor's padding
 //! box. Text is one line (`white-space: nowrap`).
 
-use super::style::{AlignItems, BoxSizing, Display, FlexDirection, JustifyContent, Length, Position, Style};
+use super::style::{
+    AlignItems, BoxSizing, Display, FlexDirection, JustifyContent, Length, Position, Style,
+};
 use super::tree::{NodeId, NodeKind, Rect, Ui};
 
 /// Measures a line of text: its advance width and its line box height
@@ -26,7 +28,10 @@ pub struct FixedWidthText(pub f32);
 
 impl TextMeasure for FixedWidthText {
     fn measure(&mut self, text: &str, style: &Style) -> (f32, f32) {
-        (text.chars().count() as f32 * self.0, style.line_height.unwrap_or(style.font_size * 1.2))
+        (
+            text.chars().count() as f32 * self.0,
+            style.line_height.unwrap_or(style.font_size * 1.2),
+        )
     }
 }
 
@@ -76,7 +81,15 @@ fn onto_grid(v: f32) -> f32 {
 pub(crate) fn layout(ui: &mut Ui, width: f32, height: f32, text: &mut dyn TextMeasure) {
     let root = ui.root();
     let mut ctx = Ctx { ui, text };
-    ctx.place(root, Rect { x: 0.0, y: 0.0, width, height });
+    ctx.place(
+        root,
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width,
+            height,
+        },
+    );
 }
 
 /// A flex item with its resolved main size.
@@ -111,7 +124,12 @@ impl Ctx<'_> {
 
     /// The border-box size `id` takes by its content (max-content), given
     /// a definite border-box width if there is one.
-    fn content_size(&mut self, id: NodeId, width: Option<f32>, height_base: Option<f32>) -> (f32, f32) {
+    fn content_size(
+        &mut self,
+        id: NodeId,
+        width: Option<f32>,
+        height_base: Option<f32>,
+    ) -> (f32, f32) {
         let style = self.style(id).clone();
         let (fx, fy) = (frame(&style, true), frame(&style, false));
         if let NodeKind::Text(t) = &self.ui.nodes[id.0].kind {
@@ -189,18 +207,31 @@ impl Ctx<'_> {
 
     /// A box's border-box size from its own `width`/`height` where given,
     /// else its content, clamped by `min-*`/`max-*`.
-    fn outer_size(&mut self, id: NodeId, width: Option<f32>, height_base: Option<f32>) -> (f32, f32) {
+    fn outer_size(
+        &mut self,
+        id: NodeId,
+        width: Option<f32>,
+        height_base: Option<f32>,
+    ) -> (f32, f32) {
         let style = self.style(id).clone();
         let w = width.or_else(|| border_box(&style, style.width, None, true));
         let h = border_box(&style, style.height, height_base, false);
-        let (cw, ch) = if w.is_none() || h.is_none() { self.content_size(id, w, height_base) } else { (0.0, 0.0) };
+        let (cw, ch) = if w.is_none() || h.is_none() {
+            self.content_size(id, w, height_base)
+        } else {
+            (0.0, 0.0)
+        };
         let w = self.clamp(&style, w.unwrap_or(cw), true, None);
         let h = self.clamp(&style, h.unwrap_or(ch), false, height_base);
         (w, h)
     }
 
     fn clamp(&self, style: &Style, v: f32, horizontal: bool, base: Option<f32>) -> f32 {
-        let (min, max) = if horizontal { (style.min_width, style.max_width) } else { (style.min_height, style.max_height) };
+        let (min, max) = if horizontal {
+            (style.min_width, style.max_width)
+        } else {
+            (style.min_height, style.max_height)
+        };
         let mut v = v;
         if let Some(m) = border_box(style, max, base, horizontal) {
             v = v.min(m);
@@ -235,7 +266,8 @@ impl Ctx<'_> {
             let s = s.trim_end_matches([' ', '\u{200b}']);
             let w = if units && !before.is_empty() {
                 let up = |v: f32| (v * 64.0).ceil() / 64.0;
-                up(this.text.measure(&format!("{before}{s}"), style).0) - up(this.text.measure(before, style).0)
+                up(this.text.measure(&format!("{before}{s}"), style).0)
+                    - up(this.text.measure(before, style).0)
             } else {
                 this.text.measure(s, style).0
             };
@@ -280,7 +312,9 @@ impl Ctx<'_> {
     /// keep what fits before `…` (or the `…` alone), as one line.
     fn ellipsize(&mut self, id: NodeId, width: f32) {
         for c in self.ui.nodes[id.0].children.clone() {
-            let NodeKind::Text(t) = &self.ui.nodes[c.0].kind else { continue };
+            let NodeKind::Text(t) = &self.ui.nodes[c.0].kind else {
+                continue;
+            };
             let t = t.clone();
             let style = self.style(c).clone();
             let measure = |ctx: &mut Self, s: &str| ctx.text.measure(s, &style).0;
@@ -291,7 +325,10 @@ impl Ctx<'_> {
             let mut n = chars.len();
             let mut line = String::from("\u{2026}");
             while n > 0 {
-                let candidate: String = chars[..n].iter().chain(std::iter::once(&'\u{2026}')).collect();
+                let candidate: String = chars[..n]
+                    .iter()
+                    .chain(std::iter::once(&'\u{2026}'))
+                    .collect();
                 if measure(self, &candidate) <= width {
                     line = candidate;
                     break;
@@ -307,7 +344,12 @@ impl Ctx<'_> {
     /// Gives `id` its border box and lays out its children inside it.
     fn place(&mut self, id: NodeId, rect: Rect) {
         let rect = if self.ui.layout_units {
-            Rect { x: onto_grid(rect.x), y: onto_grid(rect.y), width: onto_grid(rect.width), height: onto_grid(rect.height) }
+            Rect {
+                x: onto_grid(rect.x),
+                y: onto_grid(rect.y),
+                width: onto_grid(rect.width),
+                height: onto_grid(rect.height),
+            }
         } else {
             rect
         };
@@ -380,7 +422,12 @@ impl Ctx<'_> {
                 .unwrap_or((content.width - cs.margin.horizontal()).max(0.0));
             let width = self.clamp(&cs, width, true, None);
             let (_, height) = self.outer_size(c, Some(width), Some(content.height));
-            let mut r = Rect { x: content.x + cs.margin.left, y: y + cs.margin.top, width, height };
+            let mut r = Rect {
+                x: content.x + cs.margin.left,
+                y: y + cs.margin.top,
+                width,
+                height,
+            };
             if cs.position == Position::Relative {
                 r.x += cs.left.resolve(Some(content.width)).unwrap_or(0.0);
                 r.y += cs.top.resolve(Some(content.height)).unwrap_or(0.0);
@@ -393,7 +440,13 @@ impl Ctx<'_> {
     /// The in-flow items of flex container `id` with their main sizes
     /// resolved (`flex-basis`, then growing or shrinking into `main_size`
     /// with min/max clamping).
-    fn flex_items(&mut self, id: NodeId, style: &Style, main_size: f32, cross_size: f32) -> Vec<FlexItem> {
+    fn flex_items(
+        &mut self,
+        id: NodeId,
+        style: &Style,
+        main_size: f32,
+        cross_size: f32,
+    ) -> Vec<FlexItem> {
         let row = style.flex_direction == FlexDirection::Row;
         let items = self.in_flow(id);
         let mut list: Vec<FlexItem> = vec![];
@@ -405,7 +458,15 @@ impl Ctx<'_> {
                 l => border_box(&cs, l, Some(main_size), row),
             };
             let content_main = {
-                let (w, h) = self.content_size(c, if row { None } else { Some(cross_size - cs.margin.horizontal()) }, Some(cross_size));
+                let (w, h) = self.content_size(
+                    c,
+                    if row {
+                        None
+                    } else {
+                        Some(cross_size - cs.margin.horizontal())
+                    },
+                    Some(cross_size),
+                );
                 if row {
                     w
                 } else {
@@ -413,15 +474,33 @@ impl Ctx<'_> {
                 }
             };
             let base = base.unwrap_or(content_main);
-            let (min_len, max_len) = if row { (cs.min_width, cs.max_width) } else { (cs.min_height, cs.max_height) };
+            let (min_len, max_len) = if row {
+                (cs.min_width, cs.max_width)
+            } else {
+                (cs.min_height, cs.max_height)
+            };
             // `min-width: auto`: the content size, or the specified size if
             // smaller; nothing for a box that clips (a scroll container).
             let specified = border_box(&cs, main_len, Some(main_size), row);
-            let automatic = if cs.clip { 0.0 } else { specified.map_or(content_main, |v| content_main.min(v)) };
-            let min = border_box(&cs, min_len, Some(main_size), row).unwrap_or(automatic).max(frame(&cs, row));
+            let automatic = if cs.clip {
+                0.0
+            } else {
+                specified.map_or(content_main, |v| content_main.min(v))
+            };
+            let min = border_box(&cs, min_len, Some(main_size), row)
+                .unwrap_or(automatic)
+                .max(frame(&cs, row));
             let max = border_box(&cs, max_len, Some(main_size), row).unwrap_or(f32::INFINITY);
-            let margin_main = if row { (cs.margin.left, cs.margin.right) } else { (cs.margin.top, cs.margin.bottom) };
-            let margin_cross = if row { (cs.margin.top, cs.margin.bottom) } else { (cs.margin.left, cs.margin.right) };
+            let margin_main = if row {
+                (cs.margin.left, cs.margin.right)
+            } else {
+                (cs.margin.top, cs.margin.bottom)
+            };
+            let margin_cross = if row {
+                (cs.margin.top, cs.margin.bottom)
+            } else {
+                (cs.margin.left, cs.margin.right)
+            };
             list.push(FlexItem {
                 id: c,
                 base,
@@ -435,15 +514,28 @@ impl Ctx<'_> {
             });
         }
         let gaps = style.gap * list.len().saturating_sub(1) as f32;
-        let used: f32 = list.iter().map(|i| i.main + i.margin_main.0 + i.margin_main.1).sum::<f32>() + gaps;
+        let used: f32 = list
+            .iter()
+            .map(|i| i.main + i.margin_main.0 + i.margin_main.1)
+            .sum::<f32>()
+            + gaps;
         let free = main_size - used;
         // Resolve flexible lengths, freezing items that hit their limits.
         if free > 0.0 && list.iter().any(|i| i.grow > 0.0) {
             let mut frozen = vec![false; list.len()];
             for _ in 0..list.len() + 1 {
-                let used: f32 = list.iter().map(|i| i.main + i.margin_main.0 + i.margin_main.1).sum::<f32>() + gaps;
+                let used: f32 = list
+                    .iter()
+                    .map(|i| i.main + i.margin_main.0 + i.margin_main.1)
+                    .sum::<f32>()
+                    + gaps;
                 let remaining = main_size - used;
-                let total: f32 = list.iter().zip(&frozen).filter(|(_, f)| !**f).map(|(i, _)| i.grow).sum();
+                let total: f32 = list
+                    .iter()
+                    .zip(&frozen)
+                    .filter(|(_, f)| !**f)
+                    .map(|(i, _)| i.grow)
+                    .sum();
                 if remaining <= 1e-4 || total <= 0.0 {
                     break;
                 }
@@ -465,9 +557,18 @@ impl Ctx<'_> {
         } else if free < 0.0 {
             let mut frozen = vec![false; list.len()];
             for _ in 0..list.len() + 1 {
-                let used: f32 = list.iter().map(|i| i.main + i.margin_main.0 + i.margin_main.1).sum::<f32>() + gaps;
+                let used: f32 = list
+                    .iter()
+                    .map(|i| i.main + i.margin_main.0 + i.margin_main.1)
+                    .sum::<f32>()
+                    + gaps;
                 let overflow = used - main_size;
-                let total: f32 = list.iter().zip(&frozen).filter(|(_, f)| !**f).map(|(i, _)| i.shrink * i.base).sum();
+                let total: f32 = list
+                    .iter()
+                    .zip(&frozen)
+                    .filter(|(_, f)| !**f)
+                    .map(|(i, _)| i.shrink * i.base)
+                    .sum();
                 if overflow <= 1e-4 || total <= 0.0 {
                     break;
                 }
@@ -492,11 +593,19 @@ impl Ctx<'_> {
 
     fn flex(&mut self, id: NodeId, style: &Style, content: Rect) {
         let row = style.flex_direction == FlexDirection::Row;
-        let (main_size, cross_size) = if row { (content.width, content.height) } else { (content.height, content.width) };
+        let (main_size, cross_size) = if row {
+            (content.width, content.height)
+        } else {
+            (content.height, content.width)
+        };
         let list = self.flex_items(id, style, main_size, cross_size);
         let gaps = style.gap * list.len().saturating_sub(1) as f32;
         // Main-axis placement.
-        let used: f32 = list.iter().map(|i| i.main + i.margin_main.0 + i.margin_main.1).sum::<f32>() + gaps;
+        let used: f32 = list
+            .iter()
+            .map(|i| i.main + i.margin_main.0 + i.margin_main.1)
+            .sum::<f32>()
+            + gaps;
         // Negative when the items overflow: centred and end-aligned items then
         // overflow both ends or the start, as in CSS (`unsafe` alignment).
         let leftover = main_size - used;
@@ -504,7 +613,9 @@ impl Ctx<'_> {
             JustifyContent::FlexStart => (0.0, 0.0),
             JustifyContent::Center => (leftover / 2.0, 0.0),
             JustifyContent::FlexEnd => (leftover, 0.0),
-            JustifyContent::SpaceBetween if list.len() > 1 => (0.0, leftover.max(0.0) / (list.len() - 1) as f32),
+            JustifyContent::SpaceBetween if list.len() > 1 => {
+                (0.0, leftover.max(0.0) / (list.len() - 1) as f32)
+            }
             JustifyContent::SpaceBetween => (0.0, 0.0),
         };
         for item in &list {
@@ -536,9 +647,19 @@ impl Ctx<'_> {
             } + item.margin_cross.0;
             pos += item.margin_main.0;
             let mut r = if row {
-                Rect { x: content.x + pos, y: content.y + cross_off, width: item.main, height: cross }
+                Rect {
+                    x: content.x + pos,
+                    y: content.y + cross_off,
+                    width: item.main,
+                    height: cross,
+                }
             } else {
-                Rect { x: content.x + cross_off, y: content.y + pos, width: cross, height: item.main }
+                Rect {
+                    x: content.x + cross_off,
+                    y: content.y + pos,
+                    width: cross,
+                    height: item.main,
+                }
             };
             if cs.position == Position::Relative {
                 r.x += cs.left.resolve(Some(content.width)).unwrap_or(0.0);
@@ -578,11 +699,18 @@ impl Ctx<'_> {
                 (Some(l), Some(r)) => Some((pad.width - l - r - cs.margin.horizontal()).max(0.0)),
                 _ => None,
             });
-            let height = border_box(&cs, cs.height, Some(pad.height), false).or(match (top, bottom) {
-                (Some(t), Some(b)) => Some((pad.height - t - b - cs.margin.vertical()).max(0.0)),
-                _ => None,
-            });
-            let (cw, ch) = if width.is_none() || height.is_none() { self.content_size(c, width, Some(pad.height)) } else { (0.0, 0.0) };
+            let height =
+                border_box(&cs, cs.height, Some(pad.height), false).or(match (top, bottom) {
+                    (Some(t), Some(b)) => {
+                        Some((pad.height - t - b - cs.margin.vertical()).max(0.0))
+                    }
+                    _ => None,
+                });
+            let (cw, ch) = if width.is_none() || height.is_none() {
+                self.content_size(c, width, Some(pad.height))
+            } else {
+                (0.0, 0.0)
+            };
             let w = self.clamp(&cs, width.unwrap_or(cw), true, Some(pad.width));
             let h = self.clamp(&cs, height.unwrap_or(ch), false, Some(pad.height));
             let x = match (left, right) {
@@ -595,7 +723,15 @@ impl Ctx<'_> {
                 (None, Some(b)) => pad.y + pad.height - b - cs.margin.bottom - h,
                 _ => pad.y + cs.margin.top,
             };
-            self.place(c, Rect { x, y, width: w, height: h });
+            self.place(
+                c,
+                Rect {
+                    x,
+                    y,
+                    width: w,
+                    height: h,
+                },
+            );
         }
     }
 }
@@ -610,13 +746,37 @@ mod tests {
 
     #[test]
     fn layout_units_put_boxes_on_the_64th_pixel_grid() {
-        assert_eq!((layout_unit(976.6199), layout_unit(976.63), layout_unit(-0.01)), (976.609375, 976.625, 0.0));
-        assert_eq!((super::onto_grid(976.62463), super::onto_grid(976.6199), super::onto_grid(33.359375)), (976.625, 976.6199, 33.359375));
+        assert_eq!(
+            (
+                layout_unit(976.6199),
+                layout_unit(976.63),
+                layout_unit(-0.01)
+            ),
+            (976.609375, 976.625, 0.0)
+        );
+        assert_eq!(
+            (
+                super::onto_grid(976.62463),
+                super::onto_grid(976.6199),
+                super::onto_grid(33.359375)
+            ),
+            (976.625, 976.6199, 33.359375)
+        );
         let mut ui = Ui::new();
         ui.set_layout_units(true);
         let root = ui.root();
         ui.set_style(root, Style::flex(FlexDirection::Row));
-        let kids: Vec<_> = (0..3).map(|_| ui.add_box(root, Style { flex_grow: 1.0, ..Style::default() })).collect();
+        let kids: Vec<_> = (0..3)
+            .map(|_| {
+                ui.add_box(
+                    root,
+                    Style {
+                        flex_grow: 1.0,
+                        ..Style::default()
+                    },
+                )
+            })
+            .collect();
         ui.layout(96.0, 10.0, &mut FixedWidthText(7.0));
         for k in kids {
             let r = ui.rect(k);
@@ -633,7 +793,10 @@ mod tests {
         let mut ui = Ui::new();
         ui.set_layout_units(true);
         let root = ui.root();
-        let block = ui.add_box(root, crate::style! { width: 14.016px; white-space: normal; word-wrap: break-word; });
+        let block = ui.add_box(
+            root,
+            crate::style! { width: 14.016px; white-space: normal; word-wrap: break-word; },
+        );
         let t = ui.add_text(block, "a bb");
         ui.layout(100.0, 100.0, &mut FixedWidthText(7.01));
         assert_eq!(ui.nodes[t.0].lines, vec!["a ", "bb"]);
@@ -647,11 +810,38 @@ mod tests {
         let mut ui = Ui::new();
         let root = ui.root();
         ui.set_style(root, Style::flex(FlexDirection::Row));
-        let a = ui.add_box(root, Style { width: px(100.0), ..Style::default() });
-        let b = ui.add_box(root, Style { flex_grow: 1.0, margin: Edges::new(0.0, 5.0, 0.0, 5.0), ..Style::default() });
-        let c = ui.add_box(root, Style { flex_grow: 3.0, ..Style::default() });
+        let a = ui.add_box(
+            root,
+            Style {
+                width: px(100.0),
+                ..Style::default()
+            },
+        );
+        let b = ui.add_box(
+            root,
+            Style {
+                flex_grow: 1.0,
+                margin: Edges::new(0.0, 5.0, 0.0, 5.0),
+                ..Style::default()
+            },
+        );
+        let c = ui.add_box(
+            root,
+            Style {
+                flex_grow: 3.0,
+                ..Style::default()
+            },
+        );
         ui.layout(500.0, 50.0, &mut FixedWidthText(7.0));
-        assert_eq!(ui.rect(a), Rect { x: 0.0, y: 0.0, width: 100.0, height: 50.0 });
+        assert_eq!(
+            ui.rect(a),
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 100.0,
+                height: 50.0
+            }
+        );
         // 390 free: 97.5 and 292.5.
         assert_eq!(ui.rect(b).x, 105.0);
         assert_eq!(ui.rect(b).width, 97.5);
@@ -666,7 +856,14 @@ mod tests {
         ui.set_style(root, Style::flex(FlexDirection::Row));
         let a = ui.add_box(
             root,
-            Style { width: px(20.0), height: px(18.0), padding: Edges::symmetric(0.0, 2.0), border: Edges::all(1.0), align_self: Some(AlignItems::FlexStart), ..Style::default() },
+            Style {
+                width: px(20.0),
+                height: px(18.0),
+                padding: Edges::symmetric(0.0, 2.0),
+                border: Edges::all(1.0),
+                align_self: Some(AlignItems::FlexStart),
+                ..Style::default()
+            },
         );
         ui.layout(100.0, 100.0, &mut FixedWidthText(7.0));
         assert_eq!(ui.rect(a).width, 26.0);
@@ -677,10 +874,28 @@ mod tests {
     fn text_sizes_items_and_shrinks_stop_at_content() {
         let mut ui = Ui::new();
         let root = ui.root();
-        ui.set_style(root, Style { align_items: AlignItems::Center, ..Style::flex(FlexDirection::Row) });
-        let label = ui.add_box(root, Style { padding: Edges::all(1.0), ..Style::default() });
+        ui.set_style(
+            root,
+            Style {
+                align_items: AlignItems::Center,
+                ..Style::flex(FlexDirection::Row)
+            },
+        );
+        let label = ui.add_box(
+            root,
+            Style {
+                padding: Edges::all(1.0),
+                ..Style::default()
+            },
+        );
         let t = ui.add_text(label, "abcd");
-        let filler = ui.add_box(root, Style { width: px(1000.0), ..Style::default() });
+        let filler = ui.add_box(
+            root,
+            Style {
+                width: px(1000.0),
+                ..Style::default()
+            },
+        );
         ui.layout(300.0, 40.0, &mut FixedWidthText(7.0));
         // The label keeps its 28 + 2 px; the filler takes the rest.
         assert_eq!(ui.rect(label).width, 30.0);
@@ -694,15 +909,52 @@ mod tests {
     fn columns_justify_and_absolute_children_place_by_offsets() {
         let mut ui = Ui::new();
         let root = ui.root();
-        ui.set_style(root, Style { justify_content: JustifyContent::SpaceBetween, position: Position::Relative, ..Style::flex(FlexDirection::Column) });
-        let a = ui.add_box(root, Style { height: px(10.0), ..Style::default() });
-        let b = ui.add_box(root, Style { height: px(10.0), ..Style::default() });
-        let abs = ui.add_box(root, Style { position: Position::Absolute, right: px(4.0), bottom: px(6.0), width: px(16.0), height: px(16.0), ..Style::default() });
+        ui.set_style(
+            root,
+            Style {
+                justify_content: JustifyContent::SpaceBetween,
+                position: Position::Relative,
+                ..Style::flex(FlexDirection::Column)
+            },
+        );
+        let a = ui.add_box(
+            root,
+            Style {
+                height: px(10.0),
+                ..Style::default()
+            },
+        );
+        let b = ui.add_box(
+            root,
+            Style {
+                height: px(10.0),
+                ..Style::default()
+            },
+        );
+        let abs = ui.add_box(
+            root,
+            Style {
+                position: Position::Absolute,
+                right: px(4.0),
+                bottom: px(6.0),
+                width: px(16.0),
+                height: px(16.0),
+                ..Style::default()
+            },
+        );
         ui.layout(200.0, 100.0, &mut FixedWidthText(7.0));
         assert_eq!(ui.rect(a).y, 0.0);
         assert_eq!(ui.rect(b).y, 90.0);
         assert_eq!(ui.rect(a).width, 200.0, "stretched across");
-        assert_eq!(ui.rect(abs), Rect { x: 180.0, y: 78.0, width: 16.0, height: 16.0 });
+        assert_eq!(
+            ui.rect(abs),
+            Rect {
+                x: 180.0,
+                y: 78.0,
+                width: 16.0,
+                height: 16.0
+            }
+        );
         assert_eq!(ui.hit_test(185.0, 80.0), Some(abs));
         assert_eq!(ui.hit_test(5.0, 95.0), Some(b));
     }
@@ -729,10 +981,25 @@ mod tests {
                 ..Style::flex(FlexDirection::Row)
             },
         );
-        let inner = ui.add_box(button, Style { width: px(15.0), height: px(15.0), ..Style::default() });
+        let inner = ui.add_box(
+            button,
+            Style {
+                width: px(15.0),
+                height: px(15.0),
+                ..Style::default()
+            },
+        );
         ui.add_text(inner, "ab");
         ui.layout(100.0, 100.0, &mut FixedWidthText(6.5));
-        assert_eq!(ui.rect(inner), Rect { x: 7.0 + (4.0 - 13.0) / 2.0, y: 1.5, width: 13.0, height: 15.0 });
+        assert_eq!(
+            ui.rect(inner),
+            Rect {
+                x: 7.0 + (4.0 - 13.0) / 2.0,
+                y: 1.5,
+                width: 13.0,
+                height: 15.0
+            }
+        );
     }
 
     #[test]
@@ -741,7 +1008,18 @@ mod tests {
         let root = ui.root();
         ui.set_style(root, Style::flex(FlexDirection::Column));
         let list = ui.add_box(root, crate::style! { display: flex; flex-direction: column; height: 50px; overflow: auto; scroll-top: {30.0}; });
-        let rows: Vec<_> = (0..4).map(|_| ui.add_box(list, Style { height: px(20.0), flex_shrink: 0.0, ..Style::default() })).collect();
+        let rows: Vec<_> = (0..4)
+            .map(|_| {
+                ui.add_box(
+                    list,
+                    Style {
+                        height: px(20.0),
+                        flex_shrink: 0.0,
+                        ..Style::default()
+                    },
+                )
+            })
+            .collect();
         ui.layout(100.0, 100.0, &mut FixedWidthText(7.0));
         // Rows that do not shrink overflow.
         assert_eq!(ui.scroll_extent(list), (80.0, 50.0, 30.0));
@@ -758,14 +1036,23 @@ mod tests {
     fn text_wraps_at_break_opportunities_then_anywhere() {
         let mut ui = Ui::new();
         let root = ui.root();
-        let block = ui.add_box(root, crate::style! { width: 70px; white-space: normal; word-wrap: break-word; });
+        let block = ui.add_box(
+            root,
+            crate::style! { width: 70px; white-space: normal; word-wrap: break-word; },
+        );
         // 10 px a character: "ab://" "cd/" fit in 7, "efghijkl" breaks.
         let t = ui.add_text(block, "ab://\u{200b}cd/\u{200b}efghijklmnop");
         ui.layout(200.0, 200.0, &mut FixedWidthText(10.0));
-        assert_eq!(ui.nodes[t.0].lines, vec!["ab://\u{200b}", "cd/\u{200b}", "efghijk", "lmnop"]);
+        assert_eq!(
+            ui.nodes[t.0].lines,
+            vec!["ab://\u{200b}", "cd/\u{200b}", "efghijk", "lmnop"]
+        );
         assert_eq!(ui.rect(t).height, 4.0 * 19.2);
         // Vertical text is as tall as it is long.
-        let v = ui.add_box(root, crate::style! { writing-mode: vertical-lr; position: absolute; });
+        let v = ui.add_box(
+            root,
+            crate::style! { writing-mode: vertical-lr; position: absolute; },
+        );
         let vt = ui.add_text(v, "abc");
         ui.layout(200.0, 200.0, &mut FixedWidthText(10.0));
         assert_eq!((ui.rect(vt).width, ui.rect(vt).height), (19.2, 30.0));
@@ -777,9 +1064,15 @@ mod tests {
     fn text_overflow_ellipsizes() {
         let mut ui = Ui::new();
         let root = ui.root();
-        let narrow = ui.add_box(root, crate::style! { width: 50px; overflow: hidden; text-overflow: ellipsis; });
+        let narrow = ui.add_box(
+            root,
+            crate::style! { width: 50px; overflow: hidden; text-overflow: ellipsis; },
+        );
         let t = ui.add_text(narrow, "abcdefghij");
-        let wide = ui.add_box(root, crate::style! { width: 200px; overflow: hidden; text-overflow: ellipsis; });
+        let wide = ui.add_box(
+            root,
+            crate::style! { width: 200px; overflow: hidden; text-overflow: ellipsis; },
+        );
         let u = ui.add_text(wide, "abcdefghij");
         ui.layout(300.0, 200.0, &mut FixedWidthText(10.0));
         assert_eq!(ui.nodes[t.0].lines, vec!["abcd\u{2026}"]);
@@ -795,7 +1088,10 @@ mod tests {
         let mut ui = Ui::new();
         let root = ui.root();
         ui.set_style(root, Style::flex(FlexDirection::Column));
-        let row = ui.add_box(root, crate::style! { display: flex; width: 100px; align-items: flex-start; });
+        let row = ui.add_box(
+            root,
+            crate::style! { display: flex; width: 100px; align-items: flex-start; },
+        );
         let a = ui.add_box(row, crate::style! { flex: 1; min-width: 0; });
         ui.add_text(a, "Name");
         let b = ui.add_box(row, crate::style! { flex: 1; min-width: 0; });
@@ -814,10 +1110,32 @@ mod tests {
         let mut ui = Ui::new();
         let root = ui.root();
         ui.set_style(root, Style::flex(FlexDirection::Column));
-        let bar = ui.add_box(root, Style { height: px(20.0), margin: Edges::new(0.0, 0.0, 3.0, 0.0), ..Style::default() });
-        let panel = ui.add_box(root, Style { height: px(24.0), margin: Edges::new(-1.0, 0.0, 0.0, -5.0), ..Style::default() });
+        let bar = ui.add_box(
+            root,
+            Style {
+                height: px(20.0),
+                margin: Edges::new(0.0, 0.0, 3.0, 0.0),
+                ..Style::default()
+            },
+        );
+        let panel = ui.add_box(
+            root,
+            Style {
+                height: px(24.0),
+                margin: Edges::new(-1.0, 0.0, 0.0, -5.0),
+                ..Style::default()
+            },
+        );
         ui.layout(1200.0, 800.0, &mut FixedWidthText(7.0));
         assert_eq!(ui.rect(bar).height, 20.0);
-        assert_eq!(ui.rect(panel), Rect { x: -5.0, y: 22.0, width: 1205.0, height: 24.0 });
+        assert_eq!(
+            ui.rect(panel),
+            Rect {
+                x: -5.0,
+                y: 22.0,
+                width: 1205.0,
+                height: 24.0
+            }
+        );
     }
 }

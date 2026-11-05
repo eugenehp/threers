@@ -330,7 +330,11 @@ async fn a_subdivided_cube_renders_and_outlines_its_quads() {
     let camera = front_ortho();
 
     let cube = WebGeometry::box_(2.0, 2.0, 2.0).to_buffer_geometry();
-    assert_eq!(cube.polygon_counts(), Some(vec![2; 6]), "the box is six quads");
+    assert_eq!(
+        cube.polygon_counts(),
+        Some(vec![2; 6]),
+        "the box is six quads"
+    );
     let level1 = cube.subdivide(Some(1), None).expect("level 1");
     assert_eq!(level1.polygon_counts(), Some(vec![2; 24]));
     let level2 = cube.subdivide(Some(2), None).expect("level 2");
@@ -349,7 +353,10 @@ async fn a_subdivided_cube_renders_and_outlines_its_quads() {
         &WebMaterial::basic(&WebColor::new(0.0, 1.0, 0.0)),
     ));
     let filled = draw(renderer, &mut scene, &camera).await;
-    let drawn = filled.chunks(4).filter(|p| is_green([p[0], p[1], p[2]])).count();
+    let drawn = filled
+        .chunks(4)
+        .filter(|p| is_green([p[0], p[1], p[2]]))
+        .count();
     assert!(drawn > 1000, "only {drawn} pixels drawn");
     assert!(
         is_green(px(&filled, W, H, 32, 32)),
@@ -374,7 +381,10 @@ async fn a_subdivided_cube_renders_and_outlines_its_quads() {
     for g in [grouped, ungrouped] {
         let mut scene = WebScene::new();
         scene.set_background(&WebColor::new(0.0, 0.0, 0.0));
-        scene.add(&WebMesh::new(&WebGeometry::from_buffer_geometry(g), &white_wire()));
+        scene.add(&WebMesh::new(
+            &WebGeometry::from_buffer_geometry(g),
+            &white_wire(),
+        ));
         let wire = draw(renderer, &mut scene, &camera).await;
         // Inside each front sub-quad (4..14 px off the centre on both axes),
         // clear of its outline; the corner-to-centre diagonal crosses it.
@@ -840,7 +850,11 @@ async fn quad_view_panes_are_antialiased_with_msaa() {
         counts.push(mixed_edge_pixels(&pixels, &quad, w, h));
     }
     assert_eq!(counts[0], 0, "no MSAA, yet {} mixed pixels", counts[0]);
-    assert!(counts[1] > 8, "MSAA 4 left only {} mixed edge pixels", counts[1]);
+    assert!(
+        counts[1] > 8,
+        "MSAA 4 left only {} mixed edge pixels",
+        counts[1]
+    );
 }
 
 /// The interaction bindings: a drag in the top pane pans the shared centre,
@@ -854,7 +868,9 @@ fn quad_view_pointer_bindings() {
     // Top pane: the top-left quadrant of the canvas.
     let (tx, ty) = (w * 0.25, h * 0.25);
     assert_eq!(
-        quad.pointer_down(&mut persp, tx, ty, 0, w, h).unwrap().as_deref(),
+        quad.pointer_down(&mut persp, tx, ty, 0, w, h)
+            .unwrap()
+            .as_deref(),
         Some("top")
     );
     assert!(quad.pointer_move(&mut persp, tx + 10.0, ty).unwrap());
@@ -867,11 +883,15 @@ fn quad_view_pointer_bindings() {
     let before = persp.read_position();
     let (px_, py_) = (w * 0.75, h * 0.25);
     assert_eq!(
-        quad.pointer_down(&mut persp, px_, py_, 0, w, h).unwrap().as_deref(),
+        quad.pointer_down(&mut persp, px_, py_, 0, w, h)
+            .unwrap()
+            .as_deref(),
         Some("perspective")
     );
     let zoom = quad.zoom();
-    assert!(quad.pointer_move(&mut persp, px_ + 12.0, py_ + 3.0).unwrap());
+    assert!(quad
+        .pointer_move(&mut persp, px_ + 12.0, py_ + 3.0)
+        .unwrap());
     quad.pointer_up();
     let after = persp.read_position();
     assert!(
@@ -880,7 +900,10 @@ fn quad_view_pointer_bindings() {
     );
     assert_eq!(quad.zoom(), zoom, "orbit leaves the ortho panes alone");
     // Double-click maximises the side pane (bottom-right), and restores.
-    assert_eq!(quad.dblclick(w * 0.75, h * 0.75, w, h).as_deref(), Some("side"));
+    assert_eq!(
+        quad.dblclick(w * 0.75, h * 0.75, w, h).as_deref(),
+        Some("side")
+    );
     assert_eq!(quad.maximized().as_deref(), Some("side"));
     quad.dblclick(5.0, 5.0, w, h);
     assert_eq!(quad.maximized(), None);
@@ -1220,7 +1243,10 @@ async fn transparent_surfaces_blend_on_the_canvas_as_three_js_does() {
     let (cw, ch) = (canvas.width(), canvas.height());
     let got = px(&pixels, cw, ch, cw / 2, ch / 2);
     let want = [128u8, 0, 128];
-    let err = (0..3).map(|k| (got[k] as i32 - want[k] as i32).abs()).max().unwrap();
+    let err = (0..3)
+        .map(|k| (got[k] as i32 - want[k] as i32).abs())
+        .max()
+        .unwrap();
     assert!(
         err <= 1,
         "{}: 50% red over blue on the canvas is {got:?}; three.js writes {want:?}",

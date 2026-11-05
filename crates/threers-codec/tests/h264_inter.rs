@@ -3,7 +3,6 @@
 //! threers' decoder and, when installed, ffmpeg — and the stream is much
 //! smaller than all-intra.
 
-
 use std::process::Command;
 
 use threers_codec::decode::NativeDecoder;
@@ -26,8 +25,13 @@ fn frame(w: u32, h: u32, t: u32, cut: u32) -> Yuv420Frame {
                 [((x * 7 + y * 3) % 256) as u8, 40, ((y * 5) % 256) as u8]
             } else {
                 let checker = ((u / 6) + (v / 6)) % 2 == 0;
-                let wave = (((u as f32 * 0.21).sin() + (v as f32 * 0.13).cos()) * 50.0 + 120.0) as u8;
-                if checker { [wave, 90, 200] } else { [30, wave, 60] }
+                let wave =
+                    (((u as f32 * 0.21).sin() + (v as f32 * 0.13).cos()) * 50.0 + 120.0) as u8;
+                if checker {
+                    [wave, 90, 200]
+                } else {
+                    [30, wave, 60]
+                }
             };
             if (sq_x..sq_x + 20).contains(&x) && (sq_y..sq_y + 20).contains(&y) {
                 px = [240, 240, 20];
@@ -40,7 +44,9 @@ fn frame(w: u32, h: u32, t: u32, cut: u32) -> Yuv420Frame {
 
 /// The top-left `w × h` of a coded-size plane.
 fn crop(p: &[u8], stride: u32, w: u32, h: u32) -> Vec<u8> {
-    (0..h).flat_map(|y| p[(y * stride) as usize..][..w as usize].to_vec()).collect()
+    (0..h)
+        .flat_map(|y| p[(y * stride) as usize..][..w as usize].to_vec())
+        .collect()
 }
 
 struct Encoded {
@@ -51,8 +57,14 @@ struct Encoded {
 }
 
 fn encode(w: u32, h: u32, n: u32, cut: u32, qp: i32, keyint: u32) -> Encoded {
-    let mut enc = InterEncoder::new(w, h, qp).keyframe_interval(keyint).threads(4);
-    let mut out = Encoded { avcc: enc.avcc(), samples: vec![], recon: vec![] };
+    let mut enc = InterEncoder::new(w, h, qp)
+        .keyframe_interval(keyint)
+        .threads(4);
+    let mut out = Encoded {
+        avcc: enc.avcc(),
+        samples: vec![],
+        recon: vec![],
+    };
     for t in 0..n {
         let pic = enc.encode(&frame(w, h, t, cut));
         out.samples.push((pic.sample, pic.keyframe));
@@ -81,8 +93,11 @@ fn threers_decoder_reproduces_the_reconstruction() {
 
         let mut dec = NativeDecoder::from_config(TrackCodec::H264, &e.avcc, w, h).unwrap();
         for (i, (sample, _)) in e.samples.iter().enumerate() {
-            dec.push(sample, i as i64, i as i64, 1).unwrap_or_else(|err| panic!("{w}×{h} picture {i}: {err}"));
-            let f = dec.take_frame(i as i64).unwrap_or_else(|| panic!("picture {i} not decoded"));
+            dec.push(sample, i as i64, i as i64, 1)
+                .unwrap_or_else(|err| panic!("{w}×{h} picture {i}: {err}"));
+            let f = dec
+                .take_frame(i as i64)
+                .unwrap_or_else(|| panic!("picture {i} not decoded"));
             for (plane, (got, want)) in [&f.y, &f.u, &f.v].iter().zip(&e.recon[i]).enumerate() {
                 let got: Vec<u8> = got.iter().map(|&s| s as u8).collect();
                 assert!(
@@ -101,9 +116,17 @@ fn p_frames_are_much_smaller_than_all_intra() {
     let e = encode(w, h, n, u32::MAX, 26, 100);
     let inter: usize = e.samples.iter().map(|(s, _)| s.len()).sum();
     let intra_enc = CompressedEncoder::new(w, h, 26).deblock(true);
-    let intra: usize = (0..n).map(|t| intra_enc.encode_sample(&frame(w, h, t, u32::MAX)).len()).sum();
-    eprintln!("all-intra {intra} bytes, with P-frames {inter} bytes ({:.0}%)", 100.0 * inter as f64 / intra as f64);
-    assert!(inter * 2 < intra, "P-frames: {inter} bytes, all-intra: {intra}");
+    let intra: usize = (0..n)
+        .map(|t| intra_enc.encode_sample(&frame(w, h, t, u32::MAX)).len())
+        .sum();
+    eprintln!(
+        "all-intra {intra} bytes, with P-frames {inter} bytes ({:.0}%)",
+        100.0 * inter as f64 / intra as f64
+    );
+    assert!(
+        inter * 2 < intra,
+        "P-frames: {inter} bytes, all-intra: {intra}"
+    );
 }
 
 #[test]
@@ -113,21 +136,33 @@ fn a_still_scene_is_almost_all_skip() {
     let mut enc = InterEncoder::new(w, h, 26);
     let key = enc.encode(&still).sample.len();
     let p: Vec<usize> = (0..5).map(|_| enc.encode(&still).sample.len()).collect();
-    assert!(p.iter().all(|&s| s < 40), "keyframe {key} bytes, then {p:?}");
+    assert!(
+        p.iter().all(|&s| s < 40),
+        "keyframe {key} bytes, then {p:?}"
+    );
 }
 
 #[test]
 fn keyframe_interval_and_forcing() {
     let (w, h) = (64u32, 48u32);
     let mut enc = InterEncoder::new(w, h, 30).keyframe_interval(4);
-    let keys: Vec<bool> = (0..9).map(|t| enc.encode(&frame(w, h, t, u32::MAX)).keyframe).collect();
-    assert_eq!(keys, [true, false, false, false, true, false, false, false, true]);
+    let keys: Vec<bool> = (0..9)
+        .map(|t| enc.encode(&frame(w, h, t, u32::MAX)).keyframe)
+        .collect();
+    assert_eq!(
+        keys,
+        [true, false, false, false, true, false, false, false, true]
+    );
     enc.force_keyframe();
     assert!(enc.encode(&frame(w, h, 9, u32::MAX)).keyframe);
 }
 
 fn ffmpeg_available() -> bool {
-    Command::new("ffmpeg").arg("-version").output().map(|o| o.status.success()).unwrap_or(false)
+    Command::new("ffmpeg")
+        .arg("-version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }
 
 #[test]
@@ -178,11 +213,19 @@ fn ffmpeg_decodes_the_same_pictures() {
     assert!(status.success());
     let yuv = std::fs::read(&out).unwrap();
     let size = (w * h + 2 * (w / 2) * (h / 2)) as usize;
-    assert_eq!(yuv.len(), size * e.recon.len(), "ffmpeg decoded every picture");
+    assert_eq!(
+        yuv.len(),
+        size * e.recon.len(),
+        "ffmpeg decoded every picture"
+    );
     for (i, r) in e.recon.iter().enumerate() {
         let want: Vec<u8> = r.concat();
         let got = &yuv[i * size..][..size];
-        assert!(got == want.as_slice(), "picture {i} differs from ffmpeg's first at {:?}", first_difference(got, &want));
+        assert!(
+            got == want.as_slice(),
+            "picture {i} differs from ffmpeg's first at {:?}",
+            first_difference(got, &want)
+        );
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -194,7 +237,8 @@ fn drifting(w: u32, h: u32, t: u32) -> Yuv420Frame {
     let rgba: Vec<u8> = (0..w * h)
         .flat_map(|i| {
             let (x, y) = ((i % w) as f64 + ox, (i / w) as f64 + oy);
-            let v = 128.0 + 60.0 * (x * 0.31).sin() * (y * 0.23).cos() + 40.0 * ((x + y) * 0.11).sin();
+            let v =
+                128.0 + 60.0 * (x * 0.31).sin() * (y * 0.23).cos() + 40.0 * ((x + y) * 0.11).sin();
             let u = 128.0 + 50.0 * (x * 0.07 - y * 0.05).cos();
             [v as u8, u as u8, (255.0 - v) as u8, 255]
         })
@@ -205,7 +249,9 @@ fn drifting(w: u32, h: u32, t: u32) -> Yuv420Frame {
 #[test]
 fn sub_sample_motion_decodes_exactly_and_pays() {
     let (w, h, n) = (160u32, 96u32, 16u32);
-    let mut enc = InterEncoder::new(w, h, 24).keyframe_interval(100).threads(2);
+    let mut enc = InterEncoder::new(w, h, 24)
+        .keyframe_interval(100)
+        .threads(2);
     let avcc = enc.avcc();
     let mut dec = NativeDecoder::from_config(TrackCodec::H264, &avcc, w, h).unwrap();
     let mut p_bytes = 0;
@@ -219,17 +265,28 @@ fn sub_sample_motion_decodes_exactly_and_pays() {
         let r = enc.reconstruction().unwrap();
         let want = crop(&r.y, r.coded_width, w, h);
         let got: Vec<u8> = f.y.iter().map(|&s| s as u8).collect();
-        assert!(got == want, "picture {t} luma differs first at {:?}", first_difference(&got, &want));
+        assert!(
+            got == want,
+            "picture {t} luma differs first at {:?}",
+            first_difference(&got, &want)
+        );
         for (plane, rec) in [(&f.u, &r.u), (&f.v, &r.v)] {
             let want = crop(rec, r.coded_width / 2, w / 2, h / 2);
             let got: Vec<u8> = plane.iter().map(|&s| s as u8).collect();
-            assert!(got == want, "picture {t} chroma differs first at {:?}", first_difference(&got, &want));
+            assert!(
+                got == want,
+                "picture {t} chroma differs first at {:?}",
+                first_difference(&got, &want)
+            );
         }
     }
     // Whole-sample prediction of a 0.75-sample drift leaves a residual in
     // every macroblock; quarter samples remove most of it.
     let raw = (w * h * 3 / 2) as usize * (n as usize - 1);
-    eprintln!("sub-sample drift: P-frames {p_bytes} bytes, {:.1}% of raw", 100.0 * p_bytes as f64 / raw as f64);
+    eprintln!(
+        "sub-sample drift: P-frames {p_bytes} bytes, {:.1}% of raw",
+        100.0 * p_bytes as f64 / raw as f64
+    );
     assert!(p_bytes * 25 < raw, "P-frames {p_bytes} bytes for {raw} raw");
 }
 
@@ -237,7 +294,9 @@ fn sub_sample_motion_decodes_exactly_and_pays() {
 fn cavlc_p_slices_still_decode_exactly() {
     use threers_codec::h264::EntropyMode;
     let (w, h) = (120u32, 90u32);
-    let mut enc = InterEncoder::new(w, h, 26).entropy(EntropyMode::Cavlc).threads(2);
+    let mut enc = InterEncoder::new(w, h, 26)
+        .entropy(EntropyMode::Cavlc)
+        .threads(2);
     let mut dec = NativeDecoder::from_config(TrackCodec::H264, &enc.avcc(), w, h).unwrap();
     for t in 0..12 {
         let pic = enc.encode(&frame(w, h, t, 8));
@@ -246,6 +305,10 @@ fn cavlc_p_slices_still_decode_exactly() {
         let r = enc.reconstruction().unwrap();
         let want = crop(&r.y, r.coded_width, w, h);
         let got: Vec<u8> = f.y.iter().map(|&s| s as u8).collect();
-        assert!(got == want, "picture {t} differs first at {:?}", first_difference(&got, &want));
+        assert!(
+            got == want,
+            "picture {t} differs first at {:?}",
+            first_difference(&got, &want)
+        );
     }
 }

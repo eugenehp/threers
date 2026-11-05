@@ -1,7 +1,7 @@
+use super::frenet::compute_frenet_frames;
 use crate::core::{BufferAttribute, BufferGeometry};
 use crate::curves::Curve3;
 use crate::math::Vector3;
-use super::frenet::compute_frenet_frames;
 
 pub struct TubeGeometry;
 
@@ -105,7 +105,10 @@ impl TubeGeometry {
         }
         for i in 0..=ts {
             for j in 0..=rs {
-                uvs.extend_from_slice(&[(i as f64 / ts as f64) as f32, (j as f64 / rs as f64) as f32]);
+                uvs.extend_from_slice(&[
+                    (i as f64 / ts as f64) as f32,
+                    (j as f64 / rs as f64) as f32,
+                ]);
             }
         }
 
@@ -161,7 +164,8 @@ mod tests {
             .chunks_exact(3)
             .map(|p| {
                 let n = ids.len();
-                *ids.entry([0, 1, 2].map(|k| (p[k] * 1e4).round() as i64)).or_insert(n)
+                *ids.entry([0, 1, 2].map(|k| (p[k] * 1e4).round() as i64))
+                    .or_insert(n)
             })
             .collect();
         let mut edges: HashMap<(usize, usize), usize> = HashMap::new();
@@ -183,8 +187,16 @@ mod tests {
         let (ts, rs) = (8, 6);
         for closed in [false, true] {
             let g = TubeGeometry::new(&path, ts, 0.25, rs, closed);
-            assert_eq!(positions(&g).len() / 3, (ts + 1) * (rs + 1), "closed={closed}");
-            assert_eq!(g.index.as_deref().unwrap().len(), ts * rs * 6, "closed={closed}");
+            assert_eq!(
+                positions(&g).len() / 3,
+                (ts + 1) * (rs + 1),
+                "closed={closed}"
+            );
+            assert_eq!(
+                g.index.as_deref().unwrap().len(),
+                ts * rs * 6,
+                "closed={closed}"
+            );
         }
     }
 
@@ -194,8 +206,14 @@ mod tests {
         let g = TubeGeometry::new(&path, 8, 0.25, 6, false);
         let pos = positions(&g);
         let idx = g.index.as_deref().unwrap();
-        let max_z = idx.iter().map(|&v| pos[v as usize * 3 + 2]).fold(f32::MIN, f32::max);
-        assert!((max_z - 4.0).abs() < 1e-5, "indexed tube ends at z = {max_z}");
+        let max_z = idx
+            .iter()
+            .map(|&v| pos[v as usize * 3 + 2])
+            .fold(f32::MIN, f32::max);
+        assert!(
+            (max_z - 4.0).abs() < 1e-5,
+            "indexed tube ends at z = {max_z}"
+        );
         // An open tube's only boundary is its two end circles.
         assert_eq!(open_edges(&g), 2 * 6);
     }
