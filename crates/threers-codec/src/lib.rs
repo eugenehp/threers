@@ -46,6 +46,7 @@
 //! |------|---------|
 //! | Video encoders | [`h264`] (CAVLC/CABAC, intra + inter), [`hevc`] (intra, alpha), [`vp9`] (intra + inter, alpha) |
 //! | Video decoders | [`decode`]: H.264, HEVC, VP9, AV1 — bit-exact against the reference decoders (feature `decode`) |
+//! | Audio encoders | [`aac::encoder`] (AAC-LC to raw units or ADTS, 8 to 96 kHz, mono and stereo) and [`aac::m4a`] (the same in an `.m4a`, with the priming edit list); [`mp3::encoder`] (MPEG-1 Layer III, 32 to 320 kbit/s, with a gapless `Info` frame) |
 //! | Audio decoders | [`aac`] (LC, HE-AAC SBR + PS), [`mp3`], [`opus`] (SILK, CELT, hybrid), [`vorbis`], [`flac`], [`pcm`] (WAV/RF64, AIFF); [`audio_file`] sniffs and dispatches |
 //! | Animated images | [`gif`] (encode and decode, feature `gif`), [`apng`]; [`animation`] picks one for a browser |
 //! | Containers | [`mp4`] / [`mp4_stream`] (write), [`mp4_demux`] (read), [`webm`] (write), [`mkv_demux`] (read, plus IVF), [`ogg`] (read) |

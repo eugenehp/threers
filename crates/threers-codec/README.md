@@ -64,6 +64,7 @@ for s in &track.samples {
 |------|---------|
 | Video encoders | H.264 (CAVLC and CABAC, intra and inter), HEVC (intra, with alpha), VP9 (intra and inter, with alpha) |
 | Video decoders | H.264, HEVC, VP9, AV1 |
+| Audio encoders | AAC-LC (raw, ADTS, `.m4a`), MP3 (MPEG-1 Layer III, with a gapless `Info` frame) |
 | Audio decoders | AAC (LC, HE-AAC with SBR and PS), MP3, Opus (SILK, CELT, hybrid), Vorbis, FLAC, WAV/RF64, AIFF |
 | Animated images | GIF (encode and decode), APNG |
 | Containers | MP4 (mux, streaming mux, demux), WebM (mux), Matroska/WebM and IVF (demux), Ogg (demux) |

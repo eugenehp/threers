@@ -10,6 +10,7 @@
 pub mod built;
 pub mod cpu;
 pub mod decoder;
+pub mod encoder;
 /// Dequantisation and synthesis tables, generated from mpg123 1.32.3.
 #[allow(clippy::all)]
 pub mod tables;

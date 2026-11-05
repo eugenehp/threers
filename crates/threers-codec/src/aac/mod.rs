@@ -20,6 +20,8 @@
 pub mod bits;
 pub mod decoder;
 pub mod dsp;
+pub mod encoder;
+pub mod m4a;
 pub mod mp4;
 pub mod ps;
 pub mod sbr;
