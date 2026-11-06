@@ -39,6 +39,7 @@
 //! | [`CaptionFont`] | built-in 8×8 bitmap face, or a TrueType face |
 //! | [`CaptionPainter`] | wraps text and composites it into RGBA pixels |
 //! | [`CaptionOverlay`] | caches a frame-sized overlay for on-screen drawing |
+//! | [`CaptionFont::system_for_language`] | finds an installed face that covers a language's text (Chinese, Japanese, Korean, Devanagari, Thai) |
 //!
 //! Video export wires these in through `VideoOptions::captions` (the `video`
 //! feature); the wgpu
@@ -54,6 +55,7 @@ pub mod layout;
 pub mod order;
 pub mod overlay;
 pub mod raster;
+pub mod system_fonts;
 
 pub use font::{CaptionFont, GlyphBitmap, Hinting, SdfGlyph, SdfGlyphs};
 pub use layout::{LaidOutText, LineBox};
