@@ -64,6 +64,43 @@ impl CaptionFont {
 }
 
 impl CaptionFont {
+    /// The system's ordinary sans-serif face, for a user interface: SF Compact where the system has it
+    /// (macOS), otherwise the first of Noto Sans, Ubuntu, Liberation Sans, DejaVu Sans, Droid Sans,
+    /// Segoe UI, Arial or Helvetica that is installed and covers Latin and Cyrillic. `None` where there is
+    /// none; [`CaptionFont::ui`] then gives the bitmap face, which is monospaced and wide.
+    ///
+    /// [`CaptionFont::ui`] stays as it was, so a program that wants the better face asks for this one.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn system_sans() -> Option<Self> {
+        if let Some(font) = Self::try_sf_compact() {
+            return Some(font);
+        }
+        // Letters an interface face must have: Latin with accents, digits, punctuation, Cyrillic.
+        const SAMPLE: &str = "Hamburgefonstiv 0123456789 .,:;!?%()+- éüñçÅøß Привет";
+        let linux = ["/usr/share/fonts/truetype", "/usr/share/fonts/opentype", "/usr/share/fonts/TTF", "/usr/share/fonts/liberation", "/usr/share/fonts/dejavu", "/usr/share/fonts"];
+        let mut paths: Vec<String> = Vec::new();
+        for (sub, file) in [
+            ("noto", "NotoSans-Regular.ttf"),
+            ("ubuntu", "Ubuntu-R.ttf"),
+            ("ubuntu", "UbuntuSans[wdth,wght].ttf"),
+            ("liberation", "LiberationSans-Regular.ttf"),
+            ("liberation2", "LiberationSans-Regular.ttf"),
+            ("dejavu", "DejaVuSans.ttf"),
+            ("droid", "DroidSans.ttf"),
+        ] {
+            for root in linux {
+                paths.push(format!("{root}/{sub}/{file}"));
+            }
+        }
+        paths.extend(["/usr/share/fonts/TTF/DejaVuSans.ttf", "/usr/share/fonts/NotoSans-Regular.ttf", "/usr/share/fonts/liberation/LiberationSans-Regular.ttf"].map(String::from));
+        paths.extend(["segoeui.ttf", "arial.ttf"].map(|f| format!("C:/Windows/Fonts/{f}")));
+        paths.extend(["Helvetica.ttc", "HelveticaNeue.ttc"].map(|f| format!("/System/Library/Fonts/{f}")));
+        paths.into_iter().find_map(|path| {
+            let bytes = std::fs::read(path).ok()?;
+            Self::from_collection(&bytes, SAMPLE)
+        })
+    }
+
     /// This face with an installed face behind it for each of Japanese, Chinese,
     /// Korean, Hindi, Thai, Hebrew and Arabic that the machine has, so text in any of them mixed
     /// with this face's own draws letters wherever the first face has none (see
@@ -124,6 +161,7 @@ pub fn system_font_paths(language: &str) -> Vec<std::path::PathBuf> {
     let mac_extra = "/System/Library/Fonts/Supplemental";
     let win = "C:/Windows/Fonts";
     let linux = [
+        "/usr/share/fonts/truetype/noto",
         "/usr/share/fonts/opentype/noto",
         "/usr/share/fonts/noto-cjk",
         "/usr/share/fonts/truetype/noto",
@@ -226,10 +264,43 @@ pub fn system_font_paths(language: &str) -> Vec<std::path::PathBuf> {
         }
         _ => {}
     }
+    // Where the packages name their files differently (Noto has Thai as `NotoSansThai`, `NotoLoopedThai` or
+    // `NotoSansThaiUI`, by distribution), look in the folders for the script's name.
+    let keywords: &[&str] = match script {
+        "hi" => &["devanagari"],
+        "th" => &["thai"],
+        "he" => &["hebrew"],
+        "ar" => &["arabic"],
+        _ => &[],
+    };
+    if !keywords.is_empty() {
+        paths.extend(scan_script_fonts(&linux, keywords));
+    }
     // The broad faces, last: they have all of the script, rarely well.
     paths.push(format!("{mac_extra}/Arial Unicode.ttf"));
     paths.push("/Library/Fonts/Arial Unicode.ttf".to_string());
     paths.into_iter().map(Into::into).collect()
+}
+
+/// The font files in `dirs` whose names mention one of `keywords`, the plain-weight sans ones first: `NotoSansThai-Regular.ttf`
+/// before `NotoSerifThai-Bold.ttf`. Folders that do not exist are skipped.
+fn scan_script_fonts(dirs: &[&str], keywords: &[&str]) -> Vec<String> {
+    let mut found: Vec<(u8, String)> = Vec::new();
+    for dir in dirs {
+        let Ok(entries) = std::fs::read_dir(dir) else { continue };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let lower = name.to_ascii_lowercase();
+            if !(lower.ends_with(".ttf") || lower.ends_with(".otf") || lower.ends_with(".ttc")) || !keywords.iter().any(|k| lower.contains(k)) {
+                continue;
+            }
+            // Lower ranks first: regular beats bold and italic, sans beats serif, UI cuts are as good.
+            let rank = u8::from(!lower.contains("regular")) * 4 + u8::from(lower.contains("serif")) * 2 + u8::from(lower.contains("bold") || lower.contains("italic") || lower.contains("mono"));
+            found.push((rank, format!("{dir}/{name}")));
+        }
+    }
+    found.sort();
+    found.into_iter().map(|(_, p)| p).collect()
 }
 
 #[cfg(test)]
@@ -306,6 +377,36 @@ mod tests {
         assert_eq!(ja_first.gid('中') >> 24, 1);
         // The same languages again add nothing.
         assert_eq!(CaptionFont::builtin().with_system_fallbacks(&["zh", "zh-TW", "zh"]).fallback_count(), chain.fallback_count());
+    }
+
+    /// The interface face is a real sans where the machine has one, not the monospaced bitmap.
+    #[test]
+    fn the_system_has_a_sans_face_for_an_interface() {
+        let Some(font) = CaptionFont::system_sans() else {
+            // A machine with no fonts at all is not a failure of the code.
+            assert!(["/usr/share/fonts", "/System/Library/Fonts", "C:/Windows/Fonts"].iter().all(|d| !std::path::Path::new(d).exists()) || cfg!(not(any(target_os = "macos", target_os = "linux", target_os = "windows"))));
+            return;
+        };
+        assert!(font.covers("Hamburgefonstiv 0123 Привет éüñ"));
+        let mut font = font;
+        // It is proportional: an i is narrower than an m, which the bitmap face never is.
+        assert!(font.advance('i', 16.0) < font.advance('m', 16.0) - 2.0);
+        assert!(!CaptionFont::builtin().covers("Привет"));
+    }
+
+    #[test]
+    fn script_fonts_are_found_by_name_and_the_plain_ones_come_first() {
+        let dir = std::env::temp_dir().join(format!("threers-fonts-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in ["NotoSerifThai-Bold.ttf", "NotoSansThai-Regular.ttf", "NotoSansThai-Bold.ttf", "NotoLoopedThai-Regular.ttf", "NotoSansHebrew-Regular.ttf", "readme.txt", "NotoSansThai.json"] {
+            std::fs::write(dir.join(name), b"x").unwrap();
+        }
+        let found: Vec<String> = scan_script_fonts(&[dir.to_str().unwrap(), "/no/such/folder"], &["thai"]).into_iter().map(|p| p.rsplit('/').next().unwrap().to_string()).collect();
+        assert_eq!(found.len(), 4, "{found:?}");
+        // Regular sans before bold and before serif.
+        assert!(found[..2].contains(&"NotoSansThai-Regular.ttf".to_string()) && found[..2].contains(&"NotoLoopedThai-Regular.ttf".to_string()), "{found:?}");
+        assert_eq!(found[3], "NotoSerifThai-Bold.ttf");
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// On a Mac the system's own faces are there: each language gets one that covers its text.
