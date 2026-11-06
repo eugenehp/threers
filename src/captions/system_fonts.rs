@@ -63,6 +63,47 @@ impl CaptionFont {
     }
 }
 
+impl CaptionFont {
+    /// This face with an installed face behind it for each of Japanese, Chinese,
+    /// Korean, Hindi, Thai, Hebrew and Arabic that the machine has, so text in any of them mixed
+    /// with this face's own draws letters wherever the first face has none (see
+    /// [`with_fallback`](CaptionFont::with_fallback)).
+    ///
+    /// `preferred` names the languages (tags as in [`system_for_language`](Self::system_for_language))
+    /// whose faces go first. The order matters where scripts overlap: Han characters are drawn
+    /// by the first face that has them, so `&["zh-TW"]` draws Chinese text in a Traditional
+    /// face and `&["ja"]` Japanese in a Japanese one. The rest follow in a fixed order.
+    ///
+    /// Each face is read from disk and held in memory, a few megabytes each: do it once,
+    /// not per frame.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[must_use]
+    pub fn with_system_fallbacks(mut self, preferred: &[&str]) -> Self {
+        // A few letters every face for the script has, to take the first face that is one.
+        const SAMPLES: [(&str, &str); 7] = [("ja", "日本語かな"), ("zh", "中文"), ("ko", "한국어"), ("hi", "हिन्दी"), ("th", "ไทย"), ("he", "שלום"), ("ar", "مرحبا")];
+        let base = |tag: &str| tag.split(['-', '_']).next().unwrap_or("").to_ascii_lowercase();
+        let mut order: Vec<(String, &str)> = Vec::new();
+        for tag in preferred {
+            if let Some(&(b, sample)) = SAMPLES.iter().find(|(b, _)| *b == base(tag)) {
+                if !order.iter().any(|(t, _)| base(t) == b) {
+                    order.push(((*tag).to_string(), sample));
+                }
+            }
+        }
+        for &(b, sample) in &SAMPLES {
+            if !order.iter().any(|(t, _)| base(t) == b) {
+                order.push((b.to_string(), sample));
+            }
+        }
+        for (tag, sample) in order {
+            if let Some(face) = Self::system_for_language(&tag, sample) {
+                self = self.with_fallback(face);
+            }
+        }
+        self
+    }
+}
+
 /// Where faces for `language` are usually kept, best first, on every platform
 /// (the ones that do not exist are skipped when they are read). The last
 /// entries are the broad faces that cover several scripts at once.
@@ -75,6 +116,8 @@ pub fn system_font_paths(language: &str) -> Vec<std::path::PathBuf> {
         "ko" | "ko-kr" => "ko",
         "hi" | "hi-in" | "mr" | "ne" | "sa" => "hi",
         "th" | "th-th" => "th",
+        "he" | "iw" | "he-il" => "he",
+        "ar" | "ar-sa" | "fa" | "ur" => "ar",
         _ => return Vec::new(),
     };
     let mac = "/System/Library/Fonts";
@@ -137,6 +180,8 @@ pub fn system_font_paths(language: &str) -> Vec<std::path::PathBuf> {
             }
         }
         "hi" => {
+            // The system's own: one face per Indic script, Devanagari the second of them.
+            add(mac, "SFIndia.ttc");
             add(mac, "Kohinoor.ttc");
             add(mac_extra, "DevanagariMT.ttc");
             add(mac_extra, "ITFDevanagari.ttc");
@@ -145,6 +190,26 @@ pub fn system_font_paths(language: &str) -> Vec<std::path::PathBuf> {
             }
             for d in linux {
                 add(d, "NotoSansDevanagari-Regular.ttf");
+            }
+        }
+        "he" => {
+            add(mac, "SFHebrew.ttf");
+            add(mac_extra, "Arial Hebrew.ttc");
+            for f in ["arial.ttf", "david.ttf"] {
+                add(win, f);
+            }
+            for d in linux {
+                add(d, "NotoSansHebrew-Regular.ttf");
+            }
+        }
+        "ar" => {
+            add(mac, "SFArabic.ttf");
+            add(mac, "GeezaPro.ttc");
+            for f in ["arial.ttf", "segoeui.ttf", "tahoma.ttf"] {
+                add(win, f);
+            }
+            for d in linux {
+                add(d, "NotoSansArabic-Regular.ttf");
             }
         }
         "th" => {
@@ -202,7 +267,7 @@ mod tests {
 
     #[test]
     fn each_language_that_needs_a_face_has_places_to_look() {
-        for tag in ["ja", "zh", "zh-CN", "zh-Hans", "zh-TW", "zh_HK", "zh-Hant", "ko", "hi", "th"] {
+        for tag in ["ja", "zh", "zh-CN", "zh-Hans", "zh-TW", "zh_HK", "zh-Hant", "ko", "hi", "th", "he", "ar"] {
             let paths = system_font_paths(tag);
             assert!(paths.len() > 3, "{tag}: {paths:?}");
             assert!(paths.iter().any(|p| p.ends_with("Arial Unicode.ttf")), "{tag} ends with the broad face");
@@ -213,6 +278,34 @@ mod tests {
         for tag in ["en", "fr", "ru", "vi", "id", "", "xx"] {
             assert!(system_font_paths(tag).is_empty(), "{tag}");
         }
+    }
+
+    /// With the system's faces behind a Latin one, a line of all five scripts is drawn, each by its own face; and
+    /// the language asked for first decides who draws the Han characters the languages share.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_system_faces_can_stand_behind_a_face_and_the_preferred_language_goes_first() {
+        let text = "Hello 日本語 中文 한국어 हिन्दी ไทย";
+        let chain = CaptionFont::builtin().with_system_fallbacks(&["ko"]);
+        // Hebrew and Arabic are there too, where the machine has them.
+        let semitic = CaptionFont::builtin().with_system_fallbacks(&[]);
+        if semitic.fallback_count() >= 7 {
+            assert!(semitic.can_draw_all("שלום مرحبا"));
+        }
+        if chain.fallback_count() < 5 {
+            return; // a machine without the faces is not a failure of the code
+        }
+        assert!(chain.can_draw_all(text));
+        assert!(!CaptionFont::builtin().can_draw_all(text));
+        // Korean first: its face is the first fallback, and has the Hangul.
+        assert_eq!(chain.gid('한') >> 24, 1);
+        // A Han character both the Japanese and the Chinese face have goes to whichever came first.
+        let zh_first = CaptionFont::builtin().with_system_fallbacks(&["zh"]);
+        let ja_first = CaptionFont::builtin().with_system_fallbacks(&["ja"]);
+        assert_eq!(zh_first.gid('中') >> 24, 1);
+        assert_eq!(ja_first.gid('中') >> 24, 1);
+        // The same languages again add nothing.
+        assert_eq!(CaptionFont::builtin().with_system_fallbacks(&["zh", "zh-TW", "zh"]).fallback_count(), chain.fallback_count());
     }
 
     /// On a Mac the system's own faces are there: each language gets one that covers its text.

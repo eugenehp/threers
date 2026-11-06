@@ -78,7 +78,8 @@ fn layout_uncached(
     max_width: f32,
 ) -> LaidOutText {
     let size = style.font_size;
-    let metrics = font.metrics(size);
+    // The box of the faces the text is drawn in, which is the first face's alone unless it falls back.
+    let metrics = font.metrics_of(text, size);
     let line_advance = size * style.line_height;
     let mut lines: Vec<LineBox> = Vec::new();
 

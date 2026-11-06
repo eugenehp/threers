@@ -631,7 +631,16 @@ pub struct CaptionFont {
     hinting: Hinting,
     /// See [`set_font_smoothing`](Self::set_font_smoothing).
     font_smoothing: bool,
+    /// Faces tried, in order, for a character this one has no glyph for. See
+    /// [`with_fallback`](Self::with_fallback).
+    fallbacks: Vec<CaptionFont>,
 }
+
+/// A glyph index carries the face it belongs to in its top byte: 0 for this
+/// face, `k` for the `k`th fallback. The rest is the face's own index (a glyph
+/// id, or a codepoint for the character-keyed faces: both are below 2²⁴).
+const FACE_SHIFT: u32 = 24;
+const FACE_MASK: u32 = (1 << FACE_SHIFT) - 1;
 
 impl Default for CaptionFont {
     fn default() -> Self {
@@ -652,6 +661,7 @@ impl std::fmt::Debug for CaptionFont {
                 },
             )
             .field("cached_glyphs", &self.cache.len())
+            .field("fallbacks", &self.fallbacks.len())
             .finish()
     }
 }
@@ -667,6 +677,7 @@ impl CaptionFont {
             optical_size: None,
             hinting: Hinting::None,
             font_smoothing: false,
+            fallbacks: Vec::new(),
         }
     }
 
@@ -681,6 +692,7 @@ impl CaptionFont {
             optical_size: None,
             hinting: Hinting::None,
             font_smoothing: false,
+            fallbacks: Vec::new(),
         }
     }
 
@@ -695,6 +707,7 @@ impl CaptionFont {
             optical_size: None,
             hinting: Hinting::None,
             font_smoothing: false,
+            fallbacks: Vec::new(),
         }
     }
 
@@ -710,6 +723,7 @@ impl CaptionFont {
             optical_size: None,
             hinting: Hinting::None,
             font_smoothing: false,
+            fallbacks: Vec::new(),
         }
     }
 
@@ -745,6 +759,7 @@ impl CaptionFont {
             optical_size: None,
             hinting: Hinting::None,
             font_smoothing: false,
+            fallbacks: Vec::new(),
         })
     }
 
@@ -770,6 +785,8 @@ impl CaptionFont {
             optical_size: self.optical_size,
             hinting: self.hinting,
             font_smoothing: self.font_smoothing,
+            // Each fallback in the same style: real where it has one, a plain copy where it has none.
+            fallbacks: self.fallbacks.iter().filter_map(|f| f.styled(weight, italic).or_else(|| f.duplicate())).collect(),
         })
     }
 
@@ -868,6 +885,9 @@ impl CaptionFont {
             self.hinting = hinting;
             self.clear_cache();
         }
+        for f in &mut self.fallbacks {
+            f.set_hinting(hinting);
+        }
     }
 
     /// The hinting glyphs are drawn with.
@@ -884,6 +904,9 @@ impl CaptionFont {
         if self.font_smoothing != on {
             self.font_smoothing = on;
             self.clear_cache();
+        }
+        for f in &mut self.fallbacks {
+            f.set_font_smoothing(on);
         }
     }
 
@@ -904,6 +927,9 @@ impl CaptionFont {
         self.cache.clear();
         self.grown.clear();
         self.layouts.clear();
+        for f in &mut self.fallbacks {
+            f.clear_cache();
+        }
     }
 
     /// Vertical metrics at `size` pixels per em.
@@ -951,6 +977,34 @@ impl CaptionFont {
         }
     }
 
+    /// The metrics of a line of `text`: the largest ascent, descent and gap over the faces that
+    /// draw it. A line takes its box from the faces it uses, not from the first face alone, so
+    /// Japanese in a Latin face is as tall as Japanese needs and a line of only Latin is not
+    /// made taller by a face it never touches. White space is the first face's, so a line with
+    /// spaces counts the first face too. Without fallbacks this is [`metrics`](Self::metrics).
+    pub fn metrics_of(&self, text: &str, size: f32) -> FontMetrics {
+        if self.fallbacks.is_empty() {
+            return self.metrics(size);
+        }
+        let mut used = vec![false; self.fallbacks.len() + 1];
+        for c in text.chars() {
+            used[self.face_for(c)] = true;
+        }
+        let mut out: Option<FontMetrics> = None;
+        for (i, _) in used.iter().enumerate().filter(|(_, u)| **u) {
+            let m = if i == 0 { self.metrics(size) } else { self.fallbacks[i - 1].metrics(size) };
+            out = Some(match out {
+                None => m,
+                Some(o) => FontMetrics {
+                    ascent: o.ascent.max(m.ascent),
+                    descent: o.descent.max(m.descent),
+                    line_gap: o.line_gap.max(m.line_gap),
+                },
+            });
+        }
+        out.unwrap_or_else(|| self.metrics(size))
+    }
+
     /// Rasterize `c` at `size` pixels per em, caching the result.
     pub fn glyph(&mut self, c: char, size: f32) -> &GlyphBitmap {
         self.glyph_at(c, size, 0)
@@ -983,6 +1037,11 @@ impl CaptionFont {
     /// The cache is keyed on the id rather than the character, which also merges the
     /// entries for two codepoints that a font maps to one glyph.
     pub fn glyph_of(&mut self, gid: u32, size: f32, phase: usize) -> &GlyphBitmap {
+        let tag = (gid >> FACE_SHIFT) as usize;
+        if tag != 0 && tag <= self.fallbacks.len() {
+            return self.fallbacks[tag - 1].glyph_of(gid & FACE_MASK, size, phase);
+        }
+        let gid = gid & FACE_MASK;
         let size = size.max(1.0);
         let phase = phase % SUBPIXEL_PHASES;
         let key = (gid, (size * 4.0).round() as u32, phase as u32);
@@ -1041,6 +1100,10 @@ impl CaptionFont {
         phase: usize,
         radius: f32,
     ) -> Option<&GlyphBitmap> {
+        let tag = (gid >> FACE_SHIFT) as usize;
+        if tag != 0 {
+            return self.fallbacks.get_mut(tag - 1)?.grown_glyph_of(gid & FACE_MASK, size, phase, radius);
+        }
         let Face::Ttf(face) = &self.face else {
             return None;
         };
@@ -1092,12 +1155,86 @@ impl CaptionFont {
     /// face that cannot be shaped simply reports the identity.
     ///
     /// A `CaptionFont` holds exactly one face, so the two meanings never meet.
+    ///
+    /// For a character this face has no glyph for and a fallback does, the index is the
+    /// fallback's, tagged with which one (see [`with_fallback`](Self::with_fallback)).
     #[must_use]
     pub fn gid(&self, c: char) -> u32 {
+        match self.face_for(c) {
+            0 => self.own_gid(c),
+            tag => (tag as u32) << FACE_SHIFT | self.fallbacks[tag - 1].own_gid(c),
+        }
+    }
+
+    /// This face's own index for `c`, whether it has a glyph or not (glyph 0, the missing box).
+    fn own_gid(&self, c: char) -> u32 {
         match &self.face {
             Face::Ttf(face) => u32::from(face.base.cmap.get(&(c as u32)).copied().unwrap_or(0)),
             Face::Builtin | Face::Sdf(_) | Face::Bitmap(_) => c as u32,
         }
+    }
+
+    /// Which face draws `c`: 0 for this one, `k` for the `k`th fallback. This face when it has
+    /// a glyph, or when none does (so a missing character is the box of the face it is in);
+    /// white space and controls stay with this face, as they need no glyph.
+    fn face_for(&self, c: char) -> usize {
+        if self.fallbacks.is_empty() || c.is_whitespace() || c.is_control() || self.has_glyph(c) {
+            return 0;
+        }
+        self.fallbacks.iter().position(|f| f.has_glyph(c)).map_or(0, |i| i + 1)
+    }
+
+    /// Whether this face or one of its fallbacks has a glyph for `c`: what can be drawn.
+    pub fn can_draw(&self, c: char) -> bool {
+        self.has_glyph(c) || self.fallbacks.iter().any(|f| f.has_glyph(c))
+    }
+
+    /// Whether every character of `text` can be drawn, by this face or a fallback. White space and
+    /// controls need no glyph. See [`covers`](Self::covers) for this face alone.
+    pub fn can_draw_all(&self, text: &str) -> bool {
+        text.chars().filter(|c| !c.is_whitespace() && !c.is_control()).all(|c| self.can_draw(c))
+    }
+
+    /// This face with `font` tried, after any fallbacks already added, for characters it has no
+    /// glyph for: a Latin face with a Japanese one behind it draws a line that mixes the two.
+    ///
+    /// Each character is drawn by the first face that has it, at the same size, so measuring,
+    /// kerning (within one face), shaping and mark attachment all follow. `font`'s own fallbacks
+    /// are not kept; add each face to the face that is drawn with. Line height and baseline
+    /// come from this face.
+    #[must_use]
+    pub fn with_fallback(mut self, mut font: CaptionFont) -> Self {
+        font.fallbacks.clear();
+        self.fallbacks.push(font);
+        // Text laid out before has no memory of the new face.
+        self.layouts.clear();
+        self
+    }
+
+    /// How many fallback faces follow this one.
+    pub fn fallback_count(&self) -> usize {
+        self.fallbacks.len()
+    }
+
+    /// A copy of the face, with an empty cache and no fallbacks. `None` only for a TrueType
+    /// face whose style cannot be made again.
+    fn duplicate(&self) -> Option<Self> {
+        let face = match &self.face {
+            Face::Builtin => Face::Builtin,
+            Face::Ttf(f) => Face::Ttf(Box::new(TtfFace::styled(&f.family, f.style.0, f.style.1).ok()?)),
+            Face::Sdf(set) => Face::Sdf(set.clone()),
+            Face::Bitmap(set) => Face::Bitmap(set.clone()),
+        };
+        Some(Self {
+            face,
+            cache: HashMap::new(),
+            grown: HashMap::new(),
+            layouts: HashMap::new(),
+            optical_size: self.optical_size,
+            hinting: self.hinting,
+            font_smoothing: self.font_smoothing,
+            fallbacks: Vec::new(),
+        })
     }
 
     /// Where each glyph of a run attaches, in **pixels** at `size`.
@@ -1107,6 +1244,29 @@ impl CaptionFont {
     /// character-keyed ones — reports nothing attached.
     #[must_use]
     pub fn attachments(&self, glyphs: &[u32], size: f32) -> Vec<crate::loaders::mark::Attachment> {
+        if self.fallbacks.is_empty() {
+            return self.attachments_own(glyphs, size);
+        }
+        // Marks hang off the letter before them in the same face: each stretch of one face is
+        // resolved by that face, and its indices moved to where the stretch is in the run.
+        let mut out = Vec::with_capacity(glyphs.len());
+        let mut start = 0;
+        while start < glyphs.len() {
+            let tag = glyphs[start] >> FACE_SHIFT;
+            let end = (start..glyphs.len()).find(|&i| glyphs[i] >> FACE_SHIFT != tag).unwrap_or(glyphs.len());
+            let bare: Vec<u32> = glyphs[start..end].iter().map(|g| g & FACE_MASK).collect();
+            let face = if tag == 0 { Some(self) } else { self.fallbacks.get(tag as usize - 1) };
+            let found = face.map_or_else(|| vec![crate::loaders::mark::Attachment::default(); bare.len()], |f| f.attachments_own(&bare, size));
+            out.extend(found.into_iter().map(|mut a| {
+                a.to = a.to.map(|t| t + start as u16);
+                a
+            }));
+            start = end;
+        }
+        out
+    }
+
+    fn attachments_own(&self, glyphs: &[u32], size: f32) -> Vec<crate::loaders::mark::Attachment> {
         let blank = || vec![crate::loaders::mark::Attachment::default(); glyphs.len()];
         let Face::Ttf(face) = &self.face else {
             return blank();
@@ -1150,6 +1310,24 @@ impl CaptionFont {
     /// need to be, since nothing it can draw joins.
     #[must_use]
     pub fn shape_run(&self, chars: &[char], script: &[u8; 4], size: f32) -> Vec<(u32, usize)> {
+        if self.fallbacks.is_empty() {
+            return self.shape_own(chars, script, size);
+        }
+        // A run is shaped by one face: split where the face that draws a character changes, shape
+        // each stretch in its own face, and tag what comes back.
+        let mut out = Vec::with_capacity(chars.len());
+        let mut start = 0;
+        while start < chars.len() {
+            let tag = self.face_for(chars[start]);
+            let end = (start..chars.len()).find(|&i| self.face_for(chars[i]) != tag).unwrap_or(chars.len());
+            let face = if tag == 0 { self } else { &self.fallbacks[tag - 1] };
+            out.extend(face.shape_own(&chars[start..end], script, size).into_iter().map(|(g, cluster)| ((tag as u32) << FACE_SHIFT | g, start + cluster)));
+            start = end;
+        }
+        out
+    }
+
+    fn shape_own(&self, chars: &[char], script: &[u8; 4], size: f32) -> Vec<(u32, usize)> {
         let Face::Ttf(face) = &self.face else {
             return chars
                 .iter()
@@ -1197,6 +1375,13 @@ impl CaptionFont {
 
     /// The advance of one glyph, by the index [`Self::gid`] gives.
     pub fn advance_of(&mut self, gid: u32, size: f32) -> f32 {
+        if gid >> FACE_SHIFT != 0 {
+            let tag = (gid >> FACE_SHIFT) as usize;
+            return match self.fallbacks.get_mut(tag - 1) {
+                Some(f) => f.advance_of(gid & FACE_MASK, size),
+                None => 0.0,
+            };
+        }
         let size = size.max(1.0);
         match &self.face {
             Face::Builtin => size,
@@ -1225,6 +1410,14 @@ impl CaptionFont {
     /// `left` and `right` are in **logical** order, which for a reversed run is the
     /// reverse of what is on the screen — see [`super::order::pair`].
     pub fn kerning_of(&self, left: u32, right: u32, size: f32) -> f32 {
+        // Pairs are within one face: across two there is nothing to adjust.
+        let (tag_left, tag_right) = (left >> FACE_SHIFT, right >> FACE_SHIFT);
+        if tag_left != tag_right {
+            return 0.0;
+        }
+        if tag_left != 0 {
+            return self.fallbacks.get(tag_left as usize - 1).map_or(0.0, |f| f.kerning_of(left & FACE_MASK, right & FACE_MASK, size));
+        }
         let Face::Ttf(face) = &self.face else {
             return 0.0;
         };
@@ -2608,5 +2801,127 @@ mod tests {
         assert!((row[1] - 1.0).abs() < 1e-6);
         add_span(&mut row, 1.0, 1.0);
         assert!((row[1] - 1.0).abs() < 1e-6);
+    }
+
+    // ---------------------------------------------------------------- fallbacks
+
+    /// The bitmap face has Latin only and DejaVu has Greek, so a line of both needs the chain.
+    fn with_greek() -> CaptionFont {
+        CaptionFont::builtin().with_fallback(dejavu())
+    }
+
+    #[test]
+    fn a_fallback_is_asked_for_what_the_first_face_lacks() {
+        let plain = CaptionFont::builtin();
+        let with = with_greek();
+        assert_eq!(with.fallback_count(), 1);
+        assert!(!plain.can_draw('α') && with.can_draw('α'));
+        assert!(with.can_draw_all("aα β") && !plain.can_draw_all("aα"));
+        // Its own glyph stays its own; a missing one is the fallback's, tagged; white space is nobody's.
+        assert_eq!(with.gid('a') >> 24, 0);
+        assert_eq!(with.gid('α') >> 24, 1);
+        assert_eq!(with.gid(' ') >> 24, 0);
+        assert_eq!(with.gid('\n') >> 24, 0);
+        // What no face has is the first face's box, not a hole.
+        assert_eq!(with.gid('\u{4E00}') >> 24, 0);
+        // `has_glyph` is still about this face alone.
+        assert!(!with.has_glyph('α'));
+    }
+
+    #[test]
+    fn a_line_measures_as_each_face_measures_its_own_letters() {
+        let mut with = with_greek();
+        let mut dejavu = dejavu();
+        let mut builtin = CaptionFont::builtin();
+        let size = 16.0;
+        let expected = builtin.advance('a', size) + dejavu.advance('α', size) + builtin.advance('b', size);
+        assert!((with.measure("aαb", size, 0.0) - expected).abs() < 1e-3, "{} vs {expected}", with.measure("aαb", size, 0.0));
+        // The advance of a fallback's glyph, asked of the chain, is the fallback's.
+        assert!((with.advance('α', size) - dejavu.advance('α', size)).abs() < 1e-4);
+        // Letter spacing counts the letters of both faces.
+        assert!((with.measure("aαb", size, 2.0) - (expected + 4.0)).abs() < 1e-3);
+    }
+
+    #[test]
+    fn a_fallback_glyph_is_the_fallbacks_glyph() {
+        let mut with = with_greek();
+        let mut plain = CaptionFont::builtin();
+        let mut dejavu = dejavu();
+        let same = |a: &GlyphBitmap, b: &GlyphBitmap| (a.width, a.height, a.offset_x, a.offset_y, a.advance, &a.coverage) == (b.width, b.height, b.offset_x, b.offset_y, b.advance, &b.coverage);
+        let drawn = with.glyph('α', 20.0).clone();
+        assert!(same(&drawn, dejavu.glyph('α', 20.0)), "the same bitmap as the face itself");
+        assert_ne!(drawn.coverage, plain.glyph('α', 20.0).coverage, "not the missing-glyph box");
+        // Its own letters are unchanged by having a chain.
+        assert!(same(&with.glyph('a', 20.0).clone(), plain.glyph('a', 20.0)));
+        // A grown outline comes from the face that has the letter, too.
+        let grown_with = with.grown_glyph_at('α', 20.0, 0, 1.0).map(|g| g.coverage.clone());
+        let grown_alone = dejavu.grown_glyph_at('α', 20.0, 0, 1.0).map(|g| g.coverage.clone());
+        assert_eq!(grown_with, grown_alone);
+    }
+
+    #[test]
+    fn runs_are_shaped_in_the_face_that_draws_them() {
+        let with = with_greek();
+        let run = with.shape_run(&['a', 'α', 'β', 'b'], b"latn", 16.0);
+        assert_eq!(run.iter().map(|r| r.0 >> 24).collect::<Vec<_>>(), [0, 1, 1, 0]);
+        assert_eq!(run.iter().map(|r| r.1).collect::<Vec<_>>(), [0, 1, 2, 3], "clusters stay the run's own indices");
+        // The tagged ids are the ones `gid` gives.
+        assert_eq!(run[1].0, with.gid('α'));
+        // No marks, so nothing attaches, in whichever face.
+        let marks = with.attachments(&run.iter().map(|r| r.0).collect::<Vec<_>>(), 16.0);
+        assert_eq!(marks.len(), 4);
+        assert!(marks.iter().all(|m| m.to.is_none()));
+        // Pairs are within a face: across two there is nothing to kern.
+        assert_eq!(with.kerning_of(with.gid('a'), with.gid('α'), 16.0), 0.0);
+    }
+
+    #[test]
+    fn a_style_of_the_face_keeps_its_fallbacks() {
+        let face = dejavu().with_fallback(CaptionFont::builtin());
+        let bold = face.styled(700, false).expect("DejaVu has outlines");
+        assert_eq!(bold.fallback_count(), 1);
+        let heavier = bold.with_weight(900).expect("again");
+        assert_eq!(heavier.fallback_count(), 1);
+        // A fallback that cannot be styled (the bitmap face) is carried over as it is.
+        assert!(heavier.can_draw('A'));
+    }
+
+    #[test]
+    fn text_drawn_through_the_chain_has_the_fallbacks_ink() {
+        use crate::overlay::Overlay;
+        let ink = |font: CaptionFont, text: &str| {
+            let mut o = Overlay::new(96, 48);
+            o.set_font(font);
+            o.text_size(24.0);
+            o.fill(crate::Color::WHITE);
+            assert!(o.text(4.0, 4.0, text));
+            o.pixels().chunks(4).map(|p| f32::from(p[3]) / 255.0).sum::<f32>()
+        };
+        let box_only = ink(CaptionFont::builtin(), "α");
+        let chained = ink(with_greek(), "α");
+        let alone = ink(dejavu(), "α");
+        assert!((chained - alone).abs() < alone * 0.02, "{chained} against {alone}");
+        assert!((chained - box_only).abs() > alone * 0.1, "not the box: {chained} against {box_only}");
+    }
+
+    #[test]
+    fn a_line_takes_its_box_from_the_faces_it_uses() {
+        let font = with_greek();
+        let size = 20.0;
+        let builtin = CaptionFont::builtin().metrics(size);
+        let dejavu = dejavu().metrics(size);
+        assert!((builtin.ascent - dejavu.ascent).abs() > 0.1 || (builtin.descent - dejavu.descent).abs() > 0.1, "the two faces differ, or this proves nothing");
+        let same = |a: FontMetrics, b: FontMetrics| (a.ascent, a.descent, a.line_gap) == (b.ascent, b.descent, b.line_gap);
+        // Only the first face's letters: its box. Only the fallback's: the fallback's.
+        assert!(same(font.metrics_of("abc", size), builtin));
+        assert!(same(font.metrics_of("αβγ", size), dejavu));
+        // Mixed, or with a space (which is the first face's): the larger of each.
+        let both = font.metrics_of("a α", size);
+        assert_eq!(both.ascent, builtin.ascent.max(dejavu.ascent));
+        assert_eq!(both.descent, builtin.descent.max(dejavu.descent));
+        assert_eq!(both.line_gap, builtin.line_gap.max(dejavu.line_gap));
+        // Without a chain, nothing changes.
+        assert!(same(CaptionFont::builtin().metrics_of("αβγ", size), builtin));
+        assert!(same(font.metrics_of("", size), builtin));
     }
 }
