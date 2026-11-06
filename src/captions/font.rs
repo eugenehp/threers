@@ -93,6 +93,11 @@ struct TtfFace {
 struct Family {
     upright: FamilyFile,
     italic: Option<std::sync::Arc<[u8]>>,
+    /// The bold and bold-italic files, where a static family has them: asked for 600 or more, the
+    /// real bold is used rather than the upright grown. (A variable font reaches bold through its
+    /// weight axis and needs neither.)
+    bold: Option<std::sync::Arc<[u8]>>,
+    bold_italic: Option<std::sync::Arc<[u8]>>,
 }
 
 #[derive(Clone)]
@@ -384,10 +389,16 @@ struct VariableSource {
 
 impl TtfFace {
     fn fixed(font: TtfFont) -> Self {
-        let base = std::sync::Arc::new(font);
+        Self::shared(std::sync::Arc::new(font))
+    }
+
+    /// A face over a font parsed once and shared.
+    fn shared(base: std::sync::Arc<TtfFont>) -> Self {
         let family = Family {
             upright: FamilyFile::Parsed(base.clone()),
             italic: None,
+            bold: None,
+            bold_italic: None,
         };
         Self {
             base,
@@ -404,10 +415,20 @@ impl TtfFace {
     /// 600 or more of a face that is lighter and has no weight axis, an
     /// oblique when there is no italic file.
     fn styled(family: &Family, weight: u16, italic: bool) -> Result<Self, TtfError> {
-        let file = match (&family.italic, italic) {
-            (Some(bytes), true) => FamilyFile::Bytes(bytes.clone()),
-            _ => family.upright.clone(),
-        };
+        let want_bold = weight >= 600;
+        // The family's own file for the style, if it has one: (file, it is an italic file, it is a bold file).
+        // Missing ones are made up for below, bold by growing the outlines and italic by slanting them.
+        let bytes = |b: &Option<std::sync::Arc<[u8]>>| b.clone().map(FamilyFile::Bytes);
+        let (file, italic_file, bold_file) = match (want_bold, italic) {
+            (true, true) => bytes(&family.bold_italic)
+                .map(|f| (f, true, true))
+                .or_else(|| bytes(&family.italic).map(|f| (f, true, false)))
+                .or_else(|| bytes(&family.bold).map(|f| (f, false, true))),
+            (true, false) => bytes(&family.bold).map(|f| (f, false, true)),
+            (false, true) => bytes(&family.italic).map(|f| (f, true, false)),
+            (false, false) => None,
+        }
+        .unwrap_or_else(|| (family.upright.clone(), false, false));
         let mut face = match file {
             FamilyFile::Bytes(bytes) => Self::variable(bytes, weight)?,
             FamilyFile::Parsed(font) => Self {
@@ -421,8 +442,8 @@ impl TtfFace {
         };
         face.family = family.clone();
         let has_weights = face.source.as_ref().is_some_and(|s| s.wght.is_some());
-        face.synthetic_bold = weight >= 600 && !has_weights && face.base.weight_class < 600;
-        face.oblique = italic && family.italic.is_none();
+        face.synthetic_bold = want_bold && !bold_file && !has_weights && face.base.weight_class < 600;
+        face.oblique = italic && !italic_file;
         face.style = (weight, italic);
         Ok(face)
     }
@@ -463,6 +484,8 @@ impl TtfFace {
         let family = Family {
             upright: FamilyFile::Bytes(bytes.clone()),
             italic: None,
+            bold: None,
+            bold_italic: None,
         };
         let source = VariableSource {
             bytes,
@@ -671,6 +694,47 @@ impl CaptionFont {
     pub fn builtin() -> Self {
         Self {
             face: Face::Builtin,
+            cache: HashMap::new(),
+            grown: HashMap::new(),
+            layouts: HashMap::new(),
+            optical_size: None,
+            hinting: Hinting::None,
+            font_smoothing: false,
+            fallbacks: Vec::new(),
+        }
+    }
+
+    /// A family of static font files: the upright one, and where the family has them its bold, italic and bold-italic
+    /// files. [`styled`](Self::styled) then uses the family's own bold and italic, which draw better than the upright
+    /// grown or slanted; any it lacks are made up as before. Each is the bytes of a `.ttf`/`.otf`, or the first face of
+    /// a collection.
+    pub fn from_family_files(
+        upright: &[u8],
+        bold: Option<&[u8]>,
+        italic: Option<&[u8]>,
+        bold_italic: Option<&[u8]>,
+    ) -> Result<Self, TtfError> {
+        let mut face = TtfFace::variable(upright.into(), 400)?;
+        face.family.bold = bold.map(Into::into);
+        face.family.italic = italic.map(Into::into);
+        face.family.bold_italic = bold_italic.map(Into::into);
+        Ok(Self {
+            face: Face::Ttf(Box::new(face)),
+            cache: HashMap::new(),
+            grown: HashMap::new(),
+            layouts: HashMap::new(),
+            optical_size: None,
+            hinting: Hinting::None,
+            font_smoothing: false,
+            fallbacks: Vec::new(),
+        })
+    }
+
+    /// A face over a font that is parsed once and shared: what a cache of system faces hands out, so that loading the
+    /// same file for a second window costs a reference, not a parse.
+    pub fn from_shared_face(font: std::sync::Arc<TtfFont>) -> Self {
+        Self {
+            face: Face::Ttf(Box::new(TtfFace::shared(font))),
             cache: HashMap::new(),
             grown: HashMap::new(),
             layouts: HashMap::new(),
@@ -2923,5 +2987,57 @@ mod tests {
         // Without a chain, nothing changes.
         assert!(same(CaptionFont::builtin().metrics_of("αβγ", size), builtin));
         assert!(same(font.metrics_of("", size), builtin));
+    }
+
+    // ------------------------------------------------------------ family files
+
+    #[test]
+    fn a_familys_own_bold_is_used_instead_of_growing_the_upright() {
+        let bytes = include_bytes!("../openscad/DejaVuSans.ttf");
+        let plain = CaptionFont::from_family_files(bytes, None, None, None).unwrap();
+        // The same bytes stand in for the bold file: what is checked is which route the style takes.
+        let with_bold = CaptionFont::from_family_files(bytes, Some(bytes), None, None).unwrap();
+        let (mut grown, mut real) = (plain.styled(700, false).unwrap(), with_bold.styled(700, false).unwrap());
+        let synthetic = |f: &CaptionFont| matches!(&f.face, Face::Ttf(t) if t.synthetic_bold);
+        assert!(synthetic(&grown), "no bold file: the upright is grown");
+        assert!(!synthetic(&real), "a bold file: used as it is");
+        // Growing widens each advance; the family's own bold does not.
+        assert!(grown.advance('n', 16.0) > real.advance('n', 16.0) + 0.3, "{} vs {}", grown.advance('n', 16.0), real.advance('n', 16.0));
+        // Regular stays regular, and a request for bold keeps its weight.
+        assert_eq!(real.weight(), Some(700));
+        assert!(!synthetic(&with_bold.styled(400, false).unwrap()));
+    }
+
+    #[test]
+    fn italic_and_bold_italic_take_their_own_files_in_turn() {
+        let bytes = include_bytes!("../openscad/DejaVuSans.ttf");
+        let oblique = |f: &CaptionFont| matches!(&f.face, Face::Ttf(t) if t.oblique);
+        let synthetic = |f: &CaptionFont| matches!(&f.face, Face::Ttf(t) if t.synthetic_bold);
+        // Only an italic file: bold italic is that file, grown; italic alone is it as it is.
+        let italic_only = CaptionFont::from_family_files(bytes, None, Some(bytes), None).unwrap();
+        let (i, bi) = (italic_only.styled(400, true).unwrap(), italic_only.styled(700, true).unwrap());
+        assert!(!oblique(&i) && !synthetic(&i));
+        assert!(!oblique(&bi) && synthetic(&bi));
+        // A bold-italic file serves bold italic whole.
+        let all = CaptionFont::from_family_files(bytes, Some(bytes), Some(bytes), Some(bytes)).unwrap();
+        let bi = all.styled(700, true).unwrap();
+        assert!(!oblique(&bi) && !synthetic(&bi));
+        // Without any: both made up.
+        let none = CaptionFont::from_family_files(bytes, None, None, None).unwrap();
+        let bi = none.styled(700, true).unwrap();
+        assert!(oblique(&bi) && synthetic(&bi));
+        // The family survives a second styling.
+        assert!(!synthetic(&bi.with_weight(400).unwrap()) && oblique(&bi.with_weight(400).unwrap()));
+        assert!(CaptionFont::from_family_files(b"not a font", None, None, None).is_err());
+    }
+
+    #[test]
+    fn a_shared_face_draws_like_an_owned_one() {
+        let bytes = include_bytes!("../openscad/DejaVuSans.ttf");
+        let shared = std::sync::Arc::new(TtfFont::parse(bytes).unwrap());
+        let (mut a, mut b) = (CaptionFont::from_shared_face(shared.clone()), CaptionFont::from_shared_face(shared));
+        let mut owned = CaptionFont::from_ttf(TtfFont::parse(bytes).unwrap());
+        assert_eq!(a.advance('g', 20.0), owned.advance('g', 20.0));
+        assert_eq!(a.glyph('g', 20.0).coverage, b.glyph('g', 20.0).coverage);
     }
 }
