@@ -115,6 +115,7 @@ pub mod audio_file;
 #[cfg(feature = "decode")]
 pub mod av1;
 pub mod bitstream;
+pub mod bytes;
 pub mod captions;
 pub mod contrast;
 pub mod decode;
@@ -313,6 +314,7 @@ pub(crate) fn for_each_owned<T: Send>(items: Vec<T>, f: impl Fn(T) + Sync + Send
 }
 
 /// Run `f` on the thread pool, returning at once.
+#[cfg(feature = "decode")]
 #[cfg(all(
     feature = "parallel",
     any(not(target_arch = "wasm32"), target_feature = "atomics")
@@ -321,6 +323,7 @@ pub(crate) fn spawn(f: impl FnOnce() + Send + 'static) {
     rayon::spawn(f)
 }
 
+#[cfg(feature = "decode")]
 #[cfg(not(all(
     feature = "parallel",
     any(not(target_arch = "wasm32"), target_feature = "atomics")
@@ -332,6 +335,7 @@ pub(crate) fn spawn(f: impl FnOnce() + Send + 'static) {
 /// Whether the caller can block while the pool does work for it: there must
 /// be a pool, the caller must not be one of its threads, and with one thread
 /// there would be nothing to gain.
+#[cfg(feature = "decode")]
 #[cfg(all(
     feature = "parallel",
     any(not(target_arch = "wasm32"), target_feature = "atomics")
@@ -340,6 +344,7 @@ pub(crate) fn pool_can_serve_caller() -> bool {
     rayon::current_thread_index().is_none() && rayon::current_num_threads() > 1
 }
 
+#[cfg(feature = "decode")]
 #[cfg(not(all(
     feature = "parallel",
     any(not(target_arch = "wasm32"), target_feature = "atomics")
@@ -349,6 +354,7 @@ pub(crate) fn pool_can_serve_caller() -> bool {
 }
 
 /// How many frames to decode at once by default.
+#[cfg(feature = "decode")]
 #[cfg(all(
     feature = "parallel",
     any(not(target_arch = "wasm32"), target_feature = "atomics")
@@ -357,6 +363,7 @@ pub(crate) fn frame_threads() -> usize {
     rayon::current_num_threads().min(8)
 }
 
+#[cfg(feature = "decode")]
 #[cfg(not(all(
     feature = "parallel",
     any(not(target_arch = "wasm32"), target_feature = "atomics")

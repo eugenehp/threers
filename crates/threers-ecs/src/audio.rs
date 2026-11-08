@@ -30,46 +30,78 @@ pub struct VoiceId(u64);
 /// A group of sounds with one volume, for a settings menu.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Bus {
+    /// Background music; [`AudioOut::play_music`] plays on it.
     Music,
+    /// Sound effects: the default.
     #[default]
     Effects,
+    /// Speech.
     Voice,
 }
 
 /// What the game asks of the mixer.
 #[derive(Debug, Clone)]
 pub enum Command {
+    /// Start a sound.
     Play {
+        /// The id later commands use for it.
         id: VoiceId,
+        /// Interleaved samples, from -1 to 1.
         samples: Arc<Vec<f32>>,
+        /// 1 for mono, 2 for stereo.
         channels: u16,
+        /// Samples per second per channel, as recorded.
         rate: f32,
+        /// Start again at the end, for good.
         looping: bool,
+        /// Volume, 1 as recorded.
         gain: f32,
+        /// -1 full left to 1 full right.
         pan: f32,
+        /// The group whose volume it follows.
         bus: Bus,
         /// Seconds to rise from silence. Zero starts at full level.
         fade_in: f32,
     },
+    /// Stop one sound at once.
     Stop(VoiceId),
+    /// Change a playing sound's volume and pan, smoothly.
     Mix {
+        /// The sound.
         id: VoiceId,
+        /// Volume, 1 as recorded.
         gain: f32,
+        /// -1 full left to 1 full right.
         pan: f32,
     },
     /// Play faster or slower, and so higher or lower: 1 is as recorded. Glides
     /// there rather than steps, so a rising engine has no zipper noise.
     Pitch {
+        /// The sound.
         id: VoiceId,
+        /// Playback speed: 2 is an octave up.
         factor: f32,
+    },
+    /// Move a playing sound to `seconds` from its start, as recorded: how a
+    /// video's soundtrack follows a seek or a loop.
+    Seek {
+        /// The sound.
+        id: VoiceId,
+        /// Where to carry on from.
+        seconds: f64,
     },
     /// Fall to silence over `seconds` and stop.
     FadeOut {
+        /// The sound.
         id: VoiceId,
+        /// How long the fade takes.
         seconds: f32,
     },
+    /// Set a bus's volume, 0 to 1.
     BusVolume(Bus, f32),
+    /// Set the overall volume, 0 to 1.
     Master(f32),
+    /// Pause or resume everything; paused voices keep their place.
     Pause(bool),
     /// Silence everything at once.
     StopAll,
@@ -159,10 +191,12 @@ impl Mixer {
         }
     }
 
+    /// How many sounds are playing.
     pub fn voices(&self) -> usize {
         self.voices.len()
     }
 
+    /// Carry out one command. The output thread calls this; a test can too.
     pub fn apply(&mut self, command: Command) {
         match command {
             Command::Play {
@@ -211,6 +245,14 @@ impl Mixer {
             Command::Pitch { id, factor } => {
                 if let Some(voice) = self.voices.iter_mut().find(|voice| voice.id == id) {
                     voice.pitch_target = factor.max(0.01) as f64;
+                }
+            }
+            Command::Seek { id, seconds } => {
+                let rate = self.rate as f64;
+                if let Some(voice) = self.voices.iter_mut().find(|voice| voice.id == id) {
+                    let frames = voice.frames() as f64;
+                    let at = seconds.max(0.0) * voice.step * rate;
+                    voice.position = if voice.looping { at % frames.max(1.0) } else { at.min(frames) };
                 }
             }
             Command::FadeOut { id, seconds } => {
@@ -567,6 +609,11 @@ impl AudioOut {
         self.send(Command::Pitch { id: voice, factor });
     }
 
+    /// Move a playing sound to `seconds` from its start.
+    pub fn seek(&mut self, voice: VoiceId, seconds: f64) {
+        self.send(Command::Seek { id: voice, seconds });
+    }
+
     /// Fade a playing sound to silence and stop it.
     pub fn fade_out(&mut self, voice: VoiceId, seconds: f32) {
         self.send(Command::FadeOut { id: voice, seconds });
@@ -603,6 +650,7 @@ impl AudioOut {
         self.send(Command::StopAll);
     }
 
+    /// Stop one sound at once. A voice that has already ended is ignored.
     pub fn stop(&mut self, voice: VoiceId) {
         self.send(Command::Stop(voice));
     }
@@ -674,6 +722,7 @@ impl Speaker {
         Self::new(sound)
     }
 
+    /// Whether its sound has started and not been stopped.
     pub fn is_playing(&self) -> bool {
         self.voice.is_some()
     }
@@ -733,6 +782,8 @@ impl Plugin for AudioPlugin {
                 w.resource_mut::<AudioOut>().stop(voice);
             }
         });
+        #[cfg(feature = "video")]
+        app.world.on_remove::<crate::video::Video>(|w, _, video| crate::video::on_remove(w, video));
         app.world.on_remove::<Speakers>(|w, _, speakers| {
             for voice in speakers.0.iter().filter_map(|s| s.voice) {
                 w.resource_mut::<AudioOut>().stop(voice);

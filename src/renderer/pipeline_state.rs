@@ -328,7 +328,7 @@ pub(crate) struct Pipeline(std::sync::Arc<PipelineInner>);
 /// recipe; a built one has no use for it.
 enum PipelineInner {
     Ready(wgpu::RenderPipeline),
-    Deferred(Deferred),
+    Deferred(Box<Deferred>),
 }
 
 struct Deferred {
@@ -365,13 +365,13 @@ impl Pipeline {
         recipe: PipelineRecipe,
         state: Option<ResolvedState>,
     ) -> Self {
-        Self(std::sync::Arc::new(PipelineInner::Deferred(Deferred {
+        Self(std::sync::Arc::new(PipelineInner::Deferred(Box::new(Deferred {
             compiled: std::sync::OnceLock::new(),
             device: device.clone(),
             recipe,
             state,
             failure: std::sync::OnceLock::new(),
-        })))
+        }))))
     }
 
     pub(crate) fn is_compiled(&self) -> bool {

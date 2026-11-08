@@ -23,7 +23,7 @@ fn vaapi_is_linux_only() {
 mod va {
     use std::process::Command;
 
-    use threers_codec::decode::{Backend, DecodedFrame, Decoder, NativeDecoder};
+    use threers_codec::decode::{Backend, DecodedFrame, Decoder, NativeDecoder, Picture};
     use threers_codec::mp4_demux::demux_video;
     use threers_codec::vaapi::{self, VaapiDecoder};
 
@@ -160,6 +160,22 @@ mod va {
         (track, frames.iter().map(|f| f.data.clone()).collect())
     }
 
+    /// The picture as the hardware left it: NV12 or P010, never planes the
+    /// CPU converted; except AV1 film grain (a stream named `…_grain`),
+    /// which the CPU adds, so planes. Then as planes, to compare.
+    fn packed(name: &str, picture: Option<Picture>) -> Option<DecodedFrame> {
+        picture.map(|p| {
+            let grain = name.ends_with("_grain");
+            assert_eq!(
+                matches!(p, Picture::Packed(_)),
+                !grain,
+                "{name}: VAAPI handed back {}",
+                if grain { "a picture without its film grain" } else { "planes, not the surface's NV12/P010" }
+            );
+            p.into_decoded()
+        })
+    }
+
     /// [`compare`] for a WebM.
     fn compare_webm(name: &str, data: &[u8]) {
         let (track, frames) = webm(data);
@@ -172,7 +188,7 @@ mod va {
             sw.push(bytes, s.pts, s.dts, 1).unwrap();
         }
         for s in &track.samples {
-            let (a, b) = (hw.take_frame(s.pts), sw.take_frame(s.pts));
+            let (a, b) = (packed(name, hw.take_picture(s.pts)), sw.take_frame(s.pts));
             match (a, b) {
                 (Some(a), Some(b)) => assert!(
                     same(&a, &b),
@@ -209,8 +225,7 @@ mod va {
         }
         for i in track.presentation_order() {
             let pts = track.samples[i].pts;
-            let a = hw
-                .take_frame(pts)
+            let a = packed(name, hw.take_picture(pts))
                 .unwrap_or_else(|| panic!("{name}: VAAPI has no picture at {pts}"));
             let b = sw.take_frame(pts).unwrap();
             assert!(

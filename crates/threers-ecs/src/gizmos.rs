@@ -53,6 +53,7 @@ fn key(color: Color) -> u32 {
 }
 
 impl Gizmos {
+    /// A line from `from` to `to`.
     pub fn line(&mut self, from: Vector3, to: Vector3, color: Color) -> &mut Self {
         if self.enabled {
             let segment = Segment(from, to, key(color));
@@ -167,6 +168,7 @@ impl Gizmos {
         self.frame.len() + self.fixed.len()
     }
 
+    /// Whether nothing is queued to draw.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }

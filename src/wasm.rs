@@ -5400,6 +5400,95 @@ impl WebPmremGenerator {
 pub struct WebDataTexture {
     inner: Arc<crate::Texture>,
 }
+
+/// A video playing into a texture, for JavaScript: `WebVideoPlayer.open(bytes)`,
+/// put [`texture`](Self::texture) in a material, call [`update`](Self::update)
+/// each frame with the seconds that passed.
+///
+/// Decoding is the browser's (WebCodecs), in hardware where it has it, and
+/// its frames are copied into the texture GPU to GPU; a browser without
+/// WebCodecs, or one that refuses the codec, gets the native decoders.
+#[cfg(feature = "native-decode")]
+#[wasm_bindgen]
+pub struct WebVideoPlayer {
+    inner: crate::video_player::VideoPlayer,
+}
+
+#[cfg(feature = "native-decode")]
+#[wasm_bindgen]
+impl WebVideoPlayer {
+    /// Open MP4/MOV, WebM/Matroska or IVF bytes.
+    pub fn open(data: Vec<u8>) -> Result<WebVideoPlayer, JsValue> {
+        crate::video_player::VideoPlayer::open(data)
+            .map(|inner| WebVideoPlayer { inner })
+            .map_err(|e| JsValue::from_str(&e))
+    }
+
+    /// The texture the video plays in, for a material's map.
+    pub fn texture(&self) -> WebDataTexture {
+        WebDataTexture {
+            inner: self.inner.texture(),
+        }
+    }
+
+    /// Move playback on by `seconds` and show the picture due.
+    pub fn update(&mut self, seconds: f64) {
+        self.inner.update(seconds);
+    }
+
+    /// Where playback is, in seconds.
+    #[wasm_bindgen(getter)]
+    pub fn time(&self) -> f64 {
+        self.inner.time()
+    }
+
+    /// The clip's length in seconds.
+    #[wasm_bindgen(getter)]
+    pub fn duration(&self) -> f64 {
+        self.inner.duration()
+    }
+
+    /// Pictures shown so far.
+    #[wasm_bindgen(getter, js_name = framesShown)]
+    pub fn frames_shown(&self) -> f64 {
+        self.inner.video_texture().stream().frames() as f64
+    }
+
+    /// `"browser"` when WebCodecs decodes, `"inline"` when the native
+    /// decoders do.
+    #[wasm_bindgen(getter)]
+    pub fn decoder(&self) -> String {
+        format!("{:?}", self.inner.decoder()).to_lowercase()
+    }
+
+    /// Why decoding stopped, if it did.
+    #[wasm_bindgen(getter)]
+    pub fn error(&self) -> Option<String> {
+        self.inner.error().map(str::to_owned)
+    }
+
+    #[wasm_bindgen(js_name = setLooping)]
+    pub fn set_looping(&mut self, looping: bool) {
+        self.inner.set_looping(looping);
+    }
+
+    #[wasm_bindgen(js_name = setSpeed)]
+    pub fn set_speed(&mut self, speed: f64) {
+        self.inner.set_speed(speed);
+    }
+
+    pub fn play(&mut self) {
+        self.inner.play();
+    }
+
+    pub fn pause(&mut self) {
+        self.inner.pause();
+    }
+
+    pub fn seek(&mut self, seconds: f64) {
+        self.inner.seek(seconds);
+    }
+}
 #[wasm_bindgen]
 impl WebDataTexture {
     /// three.js `texture.colorSpace`: `true` for `SRGBColorSpace` (the bytes
@@ -5449,6 +5538,53 @@ impl WebDataTexture {
                 data,
             )),
         }
+    }
+
+    /// A texture fed with frames, as three.js's `VideoTexture` is: it stays
+    /// the same texture whatever is written, so the renderer copies each frame
+    /// into the GPU texture it already has. Oriented and formatted as the
+    /// plain constructor's, so the shim's UV handling is the same for both.
+    #[wasm_bindgen(js_name = newStreamed)]
+    pub fn new_streamed(width: u32, height: u32) -> WebDataTexture {
+        let video = crate::textures::VideoTexture::new(width, height);
+        let mut texture = (*video.texture()).clone();
+        texture.flip_y = false;
+        texture.format = crate::TextureFormat::Rgba8Unorm;
+        WebDataTexture {
+            inner: Arc::new(texture),
+        }
+    }
+
+    /// Show a new frame in a texture made by `newStreamed`: RGBA8,
+    /// `width * height * 4` bytes. False if it is not streamed or the length
+    /// is wrong.
+    #[wasm_bindgen(js_name = writeFrame)]
+    pub fn write_frame(&self, data: &[u8]) -> bool {
+        self.inner.stream.as_ref().is_some_and(|s| s.write_rgba(data))
+    }
+
+    /// Show the browser's own decoded picture in a texture made by
+    /// `newStreamed`: a `<video>` element (its current frame) or a WebCodecs
+    /// `VideoFrame` (owned from here on and closed when the next replaces
+    /// it). The renderer copies it GPU to GPU, never through the CPU, and the
+    /// browser decodes in hardware where it can: how 4K and 8K video plays on
+    /// a mesh. False if the texture is not streamed, the source is neither,
+    /// or its size is not the texture's.
+    #[wasm_bindgen(js_name = writeVideo)]
+    pub fn write_video(&self, source: JsValue) -> bool {
+        use crate::textures::BrowserImage;
+        use wasm_bindgen::JsCast;
+        let Some(stream) = self.inner.stream.as_ref() else {
+            return false;
+        };
+        let image = match source.dyn_into::<web_sys::HtmlVideoElement>() {
+            Ok(video) => BrowserImage::Video(video),
+            Err(other) => match other.dyn_into::<web_sys::VideoFrame>() {
+                Ok(frame) => BrowserImage::Frame(frame),
+                Err(_) => return false,
+            },
+        };
+        stream.write_browser(image)
     }
 
     /// Replace RGBA8 level-0 bytes without allocating a new texture id.

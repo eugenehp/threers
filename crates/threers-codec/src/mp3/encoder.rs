@@ -518,9 +518,7 @@ impl Mp3Encoder {
                 z[slot] = state.previous[sb][slot];
                 z[18 + slot] = slots[slot][sb] * flip;
             }
-            for slot in 0..18 {
-                state.previous[sb][slot] = z[18 + slot];
-            }
+            state.previous[sb].copy_from_slice(&z[18..36]);
             for k in 0..18 {
                 xr[sb * 18 + k] = (0..36).map(|i| t.mdct_window[i] * z[i] * t.mdct_cos[k][i]).sum();
             }
@@ -641,7 +639,7 @@ impl Mp3Encoder {
         }
         // Stuffing: zeros to the end of the frame.
         let mut bytes = {
-            while w.bit_len() % 8 != 0 {
+            while !w.bit_len().is_multiple_of(8) {
                 w.write_bits(0, 1);
             }
             w.finish()

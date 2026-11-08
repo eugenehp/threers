@@ -266,7 +266,7 @@ fn put_tuple(out: &mut Sink, cb: usize, v: &[i32]) {
     if cb == 11 {
         for &x in v {
             if x.abs() >= 16 {
-                let m = x.abs() as u32;
+                let m = x.unsigned_abs();
                 let n = 31 - m.leading_zeros();
                 // n - 4 ones, a zero, then the n low bits.
                 for _ in 0..n - 4 {
@@ -515,7 +515,7 @@ impl AacEncoder {
                 .pending
                 .iter_mut()
                 .map(|p| {
-                    let mut f: Vec<f32> = if round == 0 { p.drain(..).collect() } else { Vec::new() };
+                    let mut f: Vec<f32> = if round == 0 { std::mem::take(p) } else { Vec::new() };
                     f.resize(FRAME, 0.0);
                     f
                 })

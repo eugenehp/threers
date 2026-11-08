@@ -784,6 +784,71 @@ impl BufferGeometry {
         s
     }
 
+    /// Which side of this mesh faces out, as a material's `side`: `0`
+    /// (front) when it is closed and its triangles wind counter-clockwise
+    /// seen from outside (a positive enclosed volume), `1` (back) when they
+    /// wind the other way, `None` for an open sheet or one too ragged to
+    /// tell. Closed: an edge belongs to exactly two triangles (at least 99%
+    /// of them), counted by position, so vertices split for flat normals or
+    /// seams still join.
+    ///
+    /// A translucent closed surface drawn `DoubleSide` lights and blends
+    /// every fold twice (its far walls through its near ones), which on a
+    /// folded mesh is most of a frame; drawn on this side alone it reads
+    /// the same shell for a fraction of the work. three.js leaves the side
+    /// to the caller, and so does this: it only answers which one.
+    pub fn outer_side(&self) -> Option<u32> {
+        let p = &self.get_attribute("position")?.array;
+        let n = p.len() / 3;
+        let seq: Vec<u32>;
+        let faces: &[u32] = match &self.index {
+            Some(ix) => ix,
+            None => {
+                seq = (0..n as u32).collect();
+                &seq
+            }
+        };
+        if faces.len() < 12 || faces.iter().any(|&v| v as usize >= n) {
+            return None;
+        }
+        let mut at: HashMap<[u32; 3], u32> = HashMap::with_capacity(n);
+        let weld: Vec<u32> = p
+            .chunks_exact(3)
+            .map(|c| {
+                let next = at.len() as u32;
+                *at.entry([c[0].to_bits(), c[1].to_bits(), c[2].to_bits()])
+                    .or_insert(next)
+            })
+            .collect();
+        let mut edges: HashMap<(u32, u32), u32> = HashMap::with_capacity(faces.len());
+        // the enclosed volume (x 6) about the first vertex, and its scale
+        let (mut volume, mut size) = (0.0f64, 0.0f64);
+        let pt = |v: u32| {
+            let v = v as usize;
+            [0, 1, 2].map(|k| p[3 * v + k] as f64 - p[k] as f64)
+        };
+        for t in faces.chunks_exact(3) {
+            let w = [
+                weld[t[0] as usize],
+                weld[t[1] as usize],
+                weld[t[2] as usize],
+            ];
+            for (a, b) in [(w[0], w[1]), (w[1], w[2]), (w[2], w[0])] {
+                *edges.entry((a.min(b), a.max(b))).or_insert(0) += 1;
+            }
+            let [a, b, c] = [pt(t[0]), pt(t[1]), pt(t[2])];
+            let det = a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0])
+                + a[2] * (b[0] * c[1] - b[1] * c[0]);
+            volume += det;
+            size += det.abs();
+        }
+        let shared = edges.values().filter(|&&k| k == 2).count();
+        if (shared as f64) < 0.99 * edges.len() as f64 || volume.abs() < 1e-3 * size {
+            return None;
+        }
+        Some(if volume > 0.0 { 0 } else { 1 })
+    }
+
     /// Build and store a BVH bounds tree on this geometry.
     #[cfg(feature = "mesh-bvh")]
     pub fn compute_bounds_tree(
@@ -814,6 +879,49 @@ fn unordered(a: [u32; 3], b: [u32; 3]) -> ([u32; 3], [u32; 3]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// a unit cube, its faces wound counter-clockwise seen from outside
+    fn outward_cube() -> (Vec<f32>, Vec<u32>) {
+        let p = (0..8u32)
+            .flat_map(|i| [(i & 1) as f32, (i >> 1 & 1) as f32, (i >> 2 & 1) as f32])
+            .collect();
+        let quads = [
+            [0, 2, 3, 1],
+            [4, 5, 7, 6],
+            [0, 1, 5, 4],
+            [2, 6, 7, 3],
+            [0, 4, 6, 2],
+            [1, 3, 7, 5],
+        ];
+        let ix = quads
+            .iter()
+            .flat_map(|q| [q[0], q[1], q[2], q[0], q[2], q[3]])
+            .collect();
+        (p, ix)
+    }
+
+    fn mesh(p: Vec<f32>, ix: Option<Vec<u32>>) -> BufferGeometry {
+        let mut g = BufferGeometry::new();
+        g.set_attribute("position", BufferAttribute::new(p, 3));
+        g.index = ix;
+        g
+    }
+
+    #[test]
+    fn outer_side_follows_the_winding_of_a_closed_mesh() {
+        let (p, ix) = outward_cube();
+        assert_eq!(mesh(p.clone(), Some(ix.clone())).outer_side(), Some(0));
+        let flipped: Vec<u32> = ix.chunks(3).flat_map(|t| [t[0], t[2], t[1]]).collect();
+        assert_eq!(mesh(p.clone(), Some(flipped)).outer_side(), Some(1));
+        // a vertex per corner, unindexed: joined by position
+        let soup: Vec<f32> = ix
+            .iter()
+            .flat_map(|&v| p[3 * v as usize..3 * v as usize + 3].to_vec())
+            .collect();
+        assert_eq!(mesh(soup, None).outer_side(), Some(0));
+        // an open box: no answer
+        assert_eq!(mesh(p, Some(ix[6..].to_vec())).outer_side(), None);
+    }
 
     fn unit_cube_positions() -> BufferAttribute {
         BufferAttribute::new(

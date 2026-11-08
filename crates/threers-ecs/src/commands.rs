@@ -44,6 +44,7 @@ impl Commands {
             .push_back(Queued::Run(Box::new(command)));
     }
 
+    /// Queue a spawn of `object` under the scene root, with `bundle` attached.
     pub fn spawn(&self, object: Object3D, bundle: impl Bundle) {
         self.add(move |w| {
             let id = w.spawn(object);
@@ -58,12 +59,14 @@ impl Commands {
         self.queue.borrow_mut().push_back(Queued::Despawn(id));
     }
 
+    /// Queue attaching components. Does nothing if the entity is gone by then.
     pub fn insert(&self, id: Entity, bundle: impl Bundle) {
         self.add(move |w| {
             w.insert(id, bundle);
         });
     }
 
+    /// Queue taking a component off. Does nothing if it is not there.
     pub fn remove<C: Component>(&self, id: Entity) {
         self.add(move |w| {
             w.remove::<C>(id);

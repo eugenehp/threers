@@ -31,8 +31,12 @@
 //! ```
 //!
 //! Frames come back as BGRA because VideoToolbox will do the YUV conversion on
-//! the way out if asked, and the hardware does it for nothing. Ask for the
-//! planes instead and it is the caller writing a colour conversion.
+//! the way out if asked, and the hardware does it for nothing. A caller with a
+//! GPU to convert on asks for the planes instead,
+//! [`new_planar`](VideoToolboxDecoder::new_planar) and
+//! [`take_packed`](VideoToolboxDecoder::take_packed): NV12 as a
+//! [`PackedFrame`], the decoder's own format, so VideoToolbox converts
+//! nothing, and less than half the bytes of BGRA.
 
 #![cfg(all(feature = "videotoolbox", target_os = "macos"))]
 
@@ -40,6 +44,7 @@ use std::ffi::c_void;
 use std::ptr;
 use std::sync::Mutex;
 
+use crate::decode::{ColorInfo, DecodedFrame, PackedFrame};
 use crate::mp4_demux::{TrackCodec, VideoTrack};
 
 type OSStatus = i32;
@@ -56,6 +61,9 @@ type VTDecompressionSessionRef = *mut c_void;
 const K_CF_NUMBER_SINT32: i32 = 3;
 /// `kCVPixelFormatType_32BGRA`.
 const PIXEL_FORMAT_BGRA: i32 = 0x4247_5241;
+/// `kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange` (`420v`): NV12, what
+/// the hardware decodes to.
+const PIXEL_FORMAT_NV12: i32 = 0x3432_3076;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -117,6 +125,8 @@ unsafe extern "C" {
         key_cb: *const c_void,
         value_cb: *const c_void,
     ) -> CFDictionaryRef;
+    fn CFDataCreate(alloc: CFAllocatorRef, bytes: *const u8, len: isize) -> *const c_void;
+    fn CFStringCreateWithCString(alloc: CFAllocatorRef, s: *const std::ffi::c_char, encoding: u32) -> CFStringRef;
     static kCFAllocatorNull: CFAllocatorRef;
     static kCFTypeDictionaryKeyCallBacks: c_void;
     static kCFTypeDictionaryValueCallBacks: c_void;
@@ -141,6 +151,16 @@ unsafe extern "C" {
         extensions: CFDictionaryRef,
         out: *mut CMFormatDescriptionRef,
     ) -> OSStatus;
+
+    fn CMVideoFormatDescriptionCreate(
+        alloc: CFAllocatorRef,
+        codec: u32,
+        width: i32,
+        height: i32,
+        extensions: CFDictionaryRef,
+        out: *mut CMFormatDescriptionRef,
+    ) -> OSStatus;
+    static kCMFormatDescriptionExtension_SampleDescriptionExtensionAtoms: CFStringRef;
 
     fn CMBlockBufferCreateWithMemoryBlock(
         alloc: CFAllocatorRef,
@@ -168,6 +188,7 @@ unsafe extern "C" {
 
 #[link(name = "VideoToolbox", kind = "framework")]
 unsafe extern "C" {
+    fn VTRegisterSupplementalVideoDecoderIfAvailable(codec: u32);
     fn VTDecompressionSessionCreate(
         alloc: CFAllocatorRef,
         format: CMFormatDescriptionRef,
@@ -199,6 +220,11 @@ unsafe extern "C" {
     fn CVPixelBufferGetBytesPerRow(pb: CVPixelBufferRef) -> usize;
     fn CVPixelBufferGetWidth(pb: CVPixelBufferRef) -> usize;
     fn CVPixelBufferGetHeight(pb: CVPixelBufferRef) -> usize;
+    fn CVPixelBufferGetPlaneCount(pb: CVPixelBufferRef) -> usize;
+    fn CVPixelBufferGetBaseAddressOfPlane(pb: CVPixelBufferRef, plane: usize) -> *mut c_void;
+    fn CVPixelBufferGetBytesPerRowOfPlane(pb: CVPixelBufferRef, plane: usize) -> usize;
+    fn CVPixelBufferGetWidthOfPlane(pb: CVPixelBufferRef, plane: usize) -> usize;
+    fn CVPixelBufferGetHeightOfPlane(pb: CVPixelBufferRef, plane: usize) -> usize;
 }
 
 fn cfnum(v: i32) -> CFNumberRef {
@@ -219,9 +245,21 @@ fn cfnum(v: i32) -> CFNumberRef {
 /// when it arrives.
 #[derive(Default)]
 struct Sink {
-    /// `(presentation time, tightly packed BGRA)`, in whatever order they came.
-    ready: Vec<(i64, Vec<u8>)>,
+    /// `(presentation time, picture)`, in whatever order they came.
+    ready: Vec<(i64, Picture)>,
     err: Option<String>,
+    /// The session was asked for planes, not BGRA.
+    planar: bool,
+    /// Where the planes' buffers come from.
+    pool: crate::bytes::FramePool,
+}
+
+/// One decoded picture, as the session was asked to give it.
+enum Picture {
+    /// Tightly packed BGRA.
+    Bgra(Vec<u8>),
+    /// NV12.
+    Planes(PackedFrame),
 }
 
 extern "C" fn on_decoded(
@@ -254,6 +292,13 @@ extern "C" fn on_decoded(
         }
         let w = CVPixelBufferGetWidth(image);
         let h = CVPixelBufferGetHeight(image);
+        if sink.planar {
+            if let Some(frame) = planes(image, w, h, &sink.pool) {
+                sink.ready.push((pts.value, Picture::Planes(frame)));
+            }
+            CVPixelBufferUnlockBaseAddress(image, 1);
+            return;
+        }
         let stride = CVPixelBufferGetBytesPerRow(image);
         let base = CVPixelBufferGetBaseAddress(image) as *const u8;
         if !base.is_null() && w > 0 && h > 0 {
@@ -266,10 +311,51 @@ extern "C" fn on_decoded(
                 let dst = frame.as_mut_ptr().add(y * w * 4);
                 ptr::copy_nonoverlapping(src, dst, w * 4);
             }
-            sink.ready.push((pts.value, frame));
+            sink.ready.push((pts.value, Picture::Bgra(frame)));
         }
         CVPixelBufferUnlockBaseAddress(image, 1);
     }
+}
+
+/// A locked NV12 buffer's two planes, row by row past the hardware's
+/// padding: a copy, and nothing else.
+///
+/// # Safety
+/// `image` must be a locked bi-planar pixel buffer.
+unsafe fn planes(image: CVPixelBufferRef, w: usize, h: usize, pool: &crate::bytes::FramePool) -> Option<PackedFrame> {
+    if w == 0 || h == 0 || CVPixelBufferGetPlaneCount(image) != 2 {
+        return None;
+    }
+    let mut out: [Vec<u8>; 2] = [pool.take(w * h), pool.take(w.div_ceil(2) * 2 * h.div_ceil(2))];
+    for (i, plane) in out.iter_mut().enumerate() {
+        // Luma; then Cb and Cr side by side, half as many rows.
+        let (row, rows) = if i == 0 { (w, h) } else { (w.div_ceil(2) * 2, h.div_ceil(2)) };
+        let base = CVPixelBufferGetBaseAddressOfPlane(image, i) as *const u8;
+        let stride = CVPixelBufferGetBytesPerRowOfPlane(image, i);
+        let samples_across = if i == 0 { w } else { w.div_ceil(2) };
+        if base.is_null()
+            || CVPixelBufferGetWidthOfPlane(image, i) < samples_across
+            || CVPixelBufferGetHeightOfPlane(image, i) < rows
+            || stride < row
+        {
+            return None;
+        }
+        plane.reserve(row * rows);
+        for y in 0..rows {
+            plane.extend_from_slice(std::slice::from_raw_parts(base.add(y * stride), row));
+        }
+    }
+    let [y, uv] = out;
+    Some(PackedFrame {
+        width: w as u32,
+        height: h as u32,
+        bit_depth: 8,
+        y,
+        uv,
+        // The session keeps the stream's matrix; which it is is not read
+        // back here, so the usual guess: BT.709 from 720 lines up.
+        color: ColorInfo::from_vui(None, false, h as u32),
+    })
 }
 
 /// Split an `avcC` into its SPS and PPS, and report the NAL length prefix.
@@ -354,6 +440,62 @@ fn split_hvcc(cfg: &[u8]) -> Result<(Vec<(usize, usize)>, i32), String> {
     Ok((sets, nal_len))
 }
 
+/// A format description for AV1 or VP9 from the track's configuration
+/// record (`av1C`, `vpcC`) as a sample-description atom: how those codecs
+/// are described to CoreMedia. Hardware AV1 is on M3 and later; VP9 comes
+/// from a decoder VideoToolbox registers on request, where the Mac has one.
+///
+/// # Safety
+/// Writes a +1 description to `out` on success.
+unsafe fn atom_format(track: &VideoTrack, out: &mut CMFormatDescriptionRef) -> OSStatus {
+    // `kCFStringEncodingUTF8`.
+    const UTF8: u32 = 0x0800_0100;
+    let (codec, atom): (u32, &[u8]) = match track.codec {
+        TrackCodec::Av1 => (u32::from_be_bytes(*b"av01"), b"av1C\0"),
+        _ => {
+            VTRegisterSupplementalVideoDecoderIfAvailable(u32::from_be_bytes(*b"vp09"));
+            (u32::from_be_bytes(*b"vp09"), b"vpcC\0")
+        }
+    };
+    if track.config.is_empty() {
+        // -12710, kCMFormatDescriptionError_InvalidParameter: no record to
+        // describe the stream with (VP9 in Matroska carries none).
+        return -12710;
+    }
+    let key = CFStringCreateWithCString(ptr::null(), atom.as_ptr() as *const std::ffi::c_char, UTF8);
+    let data = CFDataCreate(ptr::null(), track.config.as_ptr(), track.config.len() as isize);
+    let atoms = CFDictionaryCreate(
+        ptr::null(),
+        &key as *const CFStringRef,
+        &data as *const *const c_void,
+        1,
+        &kCFTypeDictionaryKeyCallBacks as *const c_void,
+        &kCFTypeDictionaryValueCallBacks as *const c_void,
+    );
+    let outer_key = kCMFormatDescriptionExtension_SampleDescriptionExtensionAtoms;
+    let extensions = CFDictionaryCreate(
+        ptr::null(),
+        &outer_key as *const CFStringRef,
+        &atoms as *const CFDictionaryRef,
+        1,
+        &kCFTypeDictionaryKeyCallBacks as *const c_void,
+        &kCFTypeDictionaryValueCallBacks as *const c_void,
+    );
+    let st = CMVideoFormatDescriptionCreate(
+        ptr::null(),
+        codec,
+        track.width as i32,
+        track.height as i32,
+        extensions,
+        out,
+    );
+    CFRelease(extensions);
+    CFRelease(atoms);
+    CFRelease(data);
+    CFRelease(key);
+    st
+}
+
 /// A VideoToolbox decompression session, fed one coded frame at a time.
 pub struct VideoToolboxDecoder {
     session: VTDecompressionSessionRef,
@@ -368,17 +510,24 @@ pub struct VideoToolboxDecoder {
 }
 
 impl VideoToolboxDecoder {
-    /// Open a session for `track`'s codec and configuration.
+    /// Open a session for `track`'s codec and configuration, giving BGRA.
     pub fn new(track: &VideoTrack) -> Result<Self, String> {
+        Self::open(track, false)
+    }
+
+    /// As [`new`](Self::new), giving NV12 for [`take_packed`](Self::take_packed)
+    /// (or planes, through [`take_frame`](Self::take_frame)) instead of BGRA:
+    /// for a caller that converts on the GPU. Deeper streams come back at 8
+    /// bits.
+    pub fn new_planar(track: &VideoTrack) -> Result<Self, String> {
+        Self::open(track, true)
+    }
+
+    fn open(track: &VideoTrack, planar: bool) -> Result<Self, String> {
         let (sets, nal_len) = match track.codec {
             TrackCodec::H264 => split_avcc(&track.config)?,
             TrackCodec::Hevc => split_hvcc(&track.config)?,
-            TrackCodec::Vp9 | TrackCodec::Av1 => {
-                return Err(format!(
-                    "VideoToolbox decoding of {:?} is not wired up",
-                    track.codec
-                ))
-            }
+            TrackCodec::Vp9 | TrackCodec::Av1 => (Vec::new(), 0),
         };
         let pointers: Vec<*const u8> = sets
             .iter()
@@ -397,7 +546,7 @@ impl VideoToolboxDecoder {
                     nal_len,
                     &mut format,
                 ),
-                TrackCodec::Vp9 | TrackCodec::Av1 => unreachable!("refused above"),
+                TrackCodec::Vp9 | TrackCodec::Av1 => atom_format(track, &mut format),
                 TrackCodec::Hevc => CMVideoFormatDescriptionCreateFromHEVCParameterSets(
                     ptr::null(),
                     pointers.len(),
@@ -414,12 +563,17 @@ impl VideoToolboxDecoder {
         }
 
         // Ask for BGRA out. The hardware does the YUV conversion on the way
-        // past for nothing; not asking means writing one here.
-        let sink = Box::new(Mutex::new(Sink::default()));
+        // past for nothing; not asking means writing one here. Or planes, for
+        // a caller that converts on the GPU.
+        let sink = Box::new(Mutex::new(Sink {
+            planar,
+            pool: Default::default(),
+            ..Sink::default()
+        }));
         let mut session: VTDecompressionSessionRef = ptr::null_mut();
         let st = unsafe {
             let key = kCVPixelBufferPixelFormatTypeKey;
-            let val = cfnum(PIXEL_FORMAT_BGRA);
+            let val = cfnum(if planar { PIXEL_FORMAT_NV12 } else { PIXEL_FORMAT_BGRA });
             let attrs = CFDictionaryCreate(
                 ptr::null(),
                 &key as *const CFStringRef,
@@ -564,7 +718,38 @@ impl VideoToolboxDecoder {
     /// produced it yet. Tightly packed BGRA, `width * height * 4`.
     ///
     /// Frames before `pts` are dropped on the way past: they have been shown.
+    /// On a [planar](Self::new_planar) session, converted here.
     pub fn take(&mut self, pts: i64) -> Option<Vec<u8>> {
+        match self.take_picture(pts)? {
+            Picture::Bgra(bgra) => Some(bgra),
+            Picture::Planes(frame) => Some(frame.to_decoded().to_bgra()),
+        }
+    }
+
+    /// Take the picture for presentation time `pts` as planes, from a session
+    /// made with [`new_planar`](Self::new_planar); `None` from a BGRA one.
+    pub fn take_frame(&mut self, pts: i64) -> Option<DecodedFrame> {
+        self.take_packed(pts).map(|f| f.to_decoded())
+    }
+
+    /// Copy pictures into buffers from `pool` (see
+    /// [`FramePool`](crate::bytes::FramePool)), to be given back there.
+    pub fn set_pool(&mut self, pool: crate::bytes::FramePool) {
+        if let Ok(mut sink) = self.sink.lock() {
+            sink.pool = pool;
+        }
+    }
+
+    /// Take the picture for presentation time `pts` as the decoder left it,
+    /// NV12, from a session made with [`new_planar`](Self::new_planar).
+    pub fn take_packed(&mut self, pts: i64) -> Option<PackedFrame> {
+        match self.take_picture(pts)? {
+            Picture::Planes(frame) => Some(frame),
+            Picture::Bgra(_) => None,
+        }
+    }
+
+    fn take_picture(&mut self, pts: i64) -> Option<Picture> {
         let mut sink = self.sink.lock().ok()?;
         let hit = sink.ready.iter().position(|(p, _)| *p == pts)?;
         let (_, frame) = sink.ready.remove(hit);

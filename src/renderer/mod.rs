@@ -28,6 +28,7 @@ mod gpu_mesh;
 pub mod gpu_texture;
 pub mod readback;
 mod render_target;
+pub(crate) mod yuv;
 // `set_viewport` / `set_scissor` state and the partial clear behind them.
 /// GPU-side timing for the main pass. See [`gpu_timer`].
 pub mod gpu_timer;
@@ -78,15 +79,9 @@ pub use surface::{SurfaceGpu, SurfaceOptions, SurfaceRenderer};
 // A scene in a window, on wgpu or the native Metal backend: a winit window
 // wherever winit runs, and an app's own view or layer on every Apple
 // platform with the `metal` feature (tvOS and visionOS have no winit).
-#[cfg(all(
-    not(target_arch = "wasm32"),
-    any(not(any(target_os = "tvos", target_os = "visionos")), metal_backend)
-))]
+#[cfg(any(winit_window, all(not(target_arch = "wasm32"), metal_backend)))]
 pub mod window;
-#[cfg(all(
-    not(target_arch = "wasm32"),
-    any(not(any(target_os = "tvos", target_os = "visionos")), metal_backend)
-))]
+#[cfg(any(winit_window, all(not(target_arch = "wasm32"), metal_backend)))]
 pub use window::{MarksFrame, WindowBackend, WindowRenderer};
 
 // `THREERS_BACKEND=metal`: the headless renderer on the native Metal backend.

@@ -93,10 +93,6 @@ for f in [root / "Cargo.toml", *sorted(root.glob("crates/*/Cargo.toml"))]:
 PY
 )
 
-PHYSICS=$(v_cargo "$ROOT/crates/threers-physics/Cargo.toml")
-PROBE=$(v_cargo "$ROOT/crates/threers-probe/Cargo.toml")
-ANIM=$(v_cargo "$ROOT/crates/threers-animation/Cargo.toml")
-
 # `cargo publish` cannot replace a version, so a version that is already on the
 # index fails at the upload and not before. Under CHECK=1, ask crates.io about
 # every crate the release publishes. A version behind the index is an error. One
@@ -106,9 +102,13 @@ ANIM=$(v_cargo "$ROOT/crates/threers-animation/Cargo.toml")
 if [[ "${CHECK:-0}" == "1" ]]; then
   printf "\ncrates.io index:\n"
   pending=0 checked=0
-  for pair in "threers:$CRATE" "threers-codec:$(v_cargo "$ROOT/crates/threers-codec/Cargo.toml")" \
-              "threers-softbody:$(v_cargo "$ROOT/crates/threers-softbody/Cargo.toml")" \
-              "threers-physics:$PHYSICS" "threers-animation:$ANIM" "threers-probe:$PROBE"; do
+  # The set comes from the workspace (`publish` not false), as in release-all.sh.
+  for pair in $(cargo metadata --no-deps --format-version 1 --manifest-path "$ROOT/Cargo.toml" \
+      | python3 -c '
+import json, sys
+for p in json.load(sys.stdin)["packages"]:
+    if p.get("publish") != []:
+        print(p["name"] + ":" + p["version"])'); do
     name=${pair%%:*} local_v=${pair#*:}
     published=$(curl -sf -H 'User-Agent: threers-release' \
         "https://crates.io/api/v1/crates/$name" 2>/dev/null \

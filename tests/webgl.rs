@@ -399,6 +399,12 @@ mod web_maps;
 #[path = "web_scenes/mod.rs"]
 mod web_scenes;
 
+// Video: the browser's frames copied on the GPU, and the player on WebCodecs
+// — shared with the other backend.
+#[cfg(feature = "native-decode")]
+#[path = "web_video/mod.rs"]
+mod web_video;
+
 type SharedViews = std::rc::Rc<std::cell::RefCell<threers::wasm::WebRenderer>>;
 
 thread_local! {

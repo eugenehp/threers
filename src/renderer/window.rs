@@ -29,10 +29,10 @@
 //! # }
 //! ```
 
-#[cfg(not(any(target_os = "tvos", target_os = "visionos")))]
+#[cfg(winit_window)]
 use std::sync::Arc;
 
-#[cfg(not(any(target_os = "tvos", target_os = "visionos")))]
+#[cfg(winit_window)]
 use winit::window::Window;
 
 use super::Renderer;
@@ -111,13 +111,13 @@ pub struct WindowRenderer {
 }
 
 enum Backend {
-    #[cfg(not(any(target_os = "tvos", target_os = "visionos")))]
+    #[cfg(winit_window)]
     Wgpu(Box<WgpuWindow>),
     #[cfg(metal_backend)]
     Metal(Box<MetalWindow>),
 }
 
-#[cfg(not(any(target_os = "tvos", target_os = "visionos")))]
+#[cfg(winit_window)]
 struct WgpuWindow {
     /// What marks draw with: this device and its queue.
     marks: crate::marks::gpu::Gpu,
@@ -144,7 +144,7 @@ struct MetalWindow {
 }
 
 impl WindowRenderer {
-    #[cfg(not(any(target_os = "tvos", target_os = "visionos")))]
+    #[cfg(winit_window)]
     /// Open the GPU for `window` and size the drawing to it. Blocks while the
     /// device is acquired. Call on the thread running the event loop.
     ///
@@ -154,7 +154,7 @@ impl WindowRenderer {
         Self::with_backend(window, WindowBackend::Auto)
     }
 
-    #[cfg(not(any(target_os = "tvos", target_os = "visionos")))]
+    #[cfg(winit_window)]
     /// [`new`](Self::new) on the backend `backend` names. An explicit
     /// [`WindowBackend::Metal`] that cannot open is an error rather than a
     /// fallback to wgpu.
@@ -259,7 +259,7 @@ impl WindowRenderer {
         }
         self.size = size;
         match &mut self.backend {
-            #[cfg(not(any(target_os = "tvos", target_os = "visionos")))]
+            #[cfg(winit_window)]
             Backend::Wgpu(w) => {
                 w.config.width = size.0;
                 w.config.height = size.1;
@@ -279,7 +279,7 @@ impl WindowRenderer {
     pub fn set_msaa(&mut self, samples: u32) {
         let samples = if samples <= 1 { 1 } else { 4 };
         match &mut self.backend {
-            #[cfg(not(any(target_os = "tvos", target_os = "visionos")))]
+            #[cfg(winit_window)]
             Backend::Wgpu(w) => w.renderer.set_msaa(samples),
             #[cfg(metal_backend)]
             Backend::Metal(m) => {
@@ -301,7 +301,7 @@ impl WindowRenderer {
     /// (a quad view's panes) can be given in logical pixels.
     pub fn set_pixel_ratio(&mut self, ratio: f32) {
         match &mut self.backend {
-            #[cfg(not(any(target_os = "tvos", target_os = "visionos")))]
+            #[cfg(winit_window)]
             Backend::Wgpu(w) => w.renderer.set_pixel_ratio(ratio),
             #[cfg(metal_backend)]
             Backend::Metal(m) => m.renderer.set_pixel_ratio(ratio),
@@ -323,7 +323,7 @@ impl WindowRenderer {
     /// which is normal and needs nothing from the caller.
     pub fn render(&mut self, scene: &mut Scene, camera: &dyn Camera) -> bool {
         match &mut self.backend {
-            #[cfg(not(any(target_os = "tvos", target_os = "visionos")))]
+            #[cfg(winit_window)]
             Backend::Wgpu(w) => w.render(scene, camera),
             #[cfg(metal_backend)]
             Backend::Metal(m) => {
@@ -354,7 +354,7 @@ impl WindowRenderer {
     ) -> bool {
         let overlay = overlay.filter(|o| o.touched());
         match &mut self.backend {
-            #[cfg(not(any(target_os = "tvos", target_os = "visionos")))]
+            #[cfg(winit_window)]
             Backend::Wgpu(w) => w.render_frame(scene, camera, quad, overlay),
             #[cfg(metal_backend)]
             Backend::Metal(m) => m.render_frame(scene, camera, quad, overlay),
@@ -365,7 +365,7 @@ impl WindowRenderer {
     /// native Metal backend.
     pub fn renderer(&mut self) -> Option<&mut Renderer> {
         match &mut self.backend {
-            #[cfg(not(any(target_os = "tvos", target_os = "visionos")))]
+            #[cfg(winit_window)]
             Backend::Wgpu(w) => Some(&mut w.renderer),
             #[cfg(metal_backend)]
             Backend::Metal(_) => None,
@@ -377,7 +377,7 @@ impl WindowRenderer {
     /// [`new_on`](crate::marks::MarkRenderer::new_on) it.
     pub fn marks_gpu(&self) -> crate::marks::gpu::Gpu {
         match &self.backend {
-            #[cfg(not(any(target_os = "tvos", target_os = "visionos")))]
+            #[cfg(winit_window)]
             Backend::Wgpu(w) => w.marks.clone(),
             #[cfg(metal_backend)]
             Backend::Metal(m) => m.marks.clone(),
@@ -389,7 +389,7 @@ impl WindowRenderer {
     /// [`MapView`](crate::marks::MapView) frame.
     pub fn mark_surface(&self) -> crate::marks::MarkSurface {
         match &self.backend {
-            #[cfg(not(any(target_os = "tvos", target_os = "visionos")))]
+            #[cfg(winit_window)]
             Backend::Wgpu(w) => crate::marks::MarkSurface::of(&w.renderer),
             #[cfg(metal_backend)]
             Backend::Metal(m) => crate::marks::MarkSurface {
@@ -409,7 +409,7 @@ impl WindowRenderer {
         over: impl FnOnce(&mut MarksFrame<'_>),
     ) -> bool {
         match &mut self.backend {
-            #[cfg(not(any(target_os = "tvos", target_os = "visionos")))]
+            #[cfg(winit_window)]
             Backend::Wgpu(w) => {
                 let Some(frame) = w.acquire() else {
                     return false;
@@ -480,7 +480,7 @@ impl WindowRenderer {
     /// Tone mapping and exposure, as [`Renderer::set_tone_mapping`].
     pub fn set_tone_mapping(&mut self, mode: crate::renderer::ToneMapping, exposure: f32) {
         match &mut self.backend {
-            #[cfg(not(any(target_os = "tvos", target_os = "visionos")))]
+            #[cfg(winit_window)]
             Backend::Wgpu(w) => w.renderer.set_tone_mapping(mode, exposure),
             #[cfg(metal_backend)]
             Backend::Metal(m) => m.renderer.set_tone_mapping(mode, exposure),
@@ -491,7 +491,7 @@ impl WindowRenderer {
     /// pass that writes its [`vertex_buffer`](Self::vertex_buffer).
     pub fn upload_geometry(&mut self, geometry: &std::sync::Arc<crate::core::BufferGeometry>) {
         match &mut self.backend {
-            #[cfg(not(any(target_os = "tvos", target_os = "visionos")))]
+            #[cfg(winit_window)]
             Backend::Wgpu(w) => w.renderer.upload_geometry(geometry),
             #[cfg(metal_backend)]
             Backend::Metal(m) => {
@@ -511,7 +511,7 @@ impl WindowRenderer {
         geometry: &std::sync::Arc<crate::core::BufferGeometry>,
     ) -> Option<crate::marks::gpu::Buffer> {
         match &mut self.backend {
-            #[cfg(not(any(target_os = "tvos", target_os = "visionos")))]
+            #[cfg(winit_window)]
             Backend::Wgpu(w) => w
                 .renderer
                 .vertex_buffer(geometry)
@@ -539,7 +539,7 @@ impl WindowRenderer {
     /// after replacing a scene's geometry wholesale.
     pub fn clear_geometry_cache(&mut self) {
         match &mut self.backend {
-            #[cfg(not(any(target_os = "tvos", target_os = "visionos")))]
+            #[cfg(winit_window)]
             Backend::Wgpu(w) => w.renderer.clear_geometry_cache(),
             #[cfg(metal_backend)]
             Backend::Metal(m) => m.renderer.clear_caches(),
@@ -549,7 +549,7 @@ impl WindowRenderer {
     /// Whether this window draws through the native Metal backend.
     pub fn is_native_metal(&self) -> bool {
         match &self.backend {
-            #[cfg(not(any(target_os = "tvos", target_os = "visionos")))]
+            #[cfg(winit_window)]
             Backend::Wgpu(_) => false,
             #[cfg(metal_backend)]
             Backend::Metal(_) => true,
@@ -557,7 +557,7 @@ impl WindowRenderer {
     }
 }
 
-#[cfg(not(any(target_os = "tvos", target_os = "visionos")))]
+#[cfg(winit_window)]
 impl WgpuWindow {
     async fn new(window: Arc<Window>, size: (u32, u32)) -> Result<Self, String> {
         let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
@@ -724,7 +724,7 @@ impl WgpuWindow {
 #[cfg(metal_backend)]
 impl MetalWindow {
     /// The view under a winit window: AppKit's on macOS, UIKit's on iOS.
-    #[cfg(not(any(target_os = "tvos", target_os = "visionos")))]
+    #[cfg(winit_window)]
     fn from_winit(window: &Window, size: (u32, u32)) -> Result<Self, String> {
         use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
         let source = match window.window_handle().map_err(|e| e.to_string())?.as_raw() {

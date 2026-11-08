@@ -192,7 +192,7 @@ fn every_shadow_casting_light_casts() {
     });
 }
 
-#[cfg(feature = "metal")]
+#[cfg(metal_backend)]
 #[test]
 fn every_shadow_casting_light_casts_on_metal() {
     use threers::metal::{MetalError, MetalHeadlessRenderer};

@@ -9,8 +9,8 @@ Rigid-body physics lives in the companion crate
 
 ```toml
 [dependencies]
-threers = "0.0.10"
-threers-physics = "0.0.10"
+threers = "0.0.12"
+threers-physics = "0.0.12"
 ```
 
 ```rust

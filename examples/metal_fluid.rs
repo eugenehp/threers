@@ -27,16 +27,22 @@
 //! — every pass is one `passes!` source in `src/fluid/shader.rs`, emitted as
 //! WGSL and as MSL — and `--compare` is what keeps it honest.
 
+// Metal is macOS and iOS only; elsewhere this example says so and stops.
+#![cfg_attr(not(metal_backend), allow(dead_code, unused_imports))]
+
 use threers::encode_png;
 use threers::fluid::FluidConfig;
+#[cfg(metal_backend)]
 use threers::metal::{fluid_shader_source, MetalDevice, MetalFluid, MetalRenderTarget};
 
 /// Simulated seconds a frame, fixed so the picture repeats.
 const DT: f32 = 1.0 / 60.0;
 /// What `capture_rgba` writes into, so the two paths produce the same bytes.
+#[cfg(metal_backend)]
 const FORMAT: usize = threers::metal::enums::pixel_format::RGBA8_UNORM;
 const DEFAULT_FRAMES: u32 = 90;
 
+#[cfg(metal_backend)]
 fn main() {
     let (width, height) = size();
     let frames: u32 = env("FLUID_FRAMES").unwrap_or(DEFAULT_FRAMES);
@@ -201,4 +207,9 @@ fn write(path: &str, rgba: &[u8], width: u32, height: u32) {
     }
     std::fs::write(path, encode_png(width, height, rgba)).expect("write png");
     println!("wrote {path} ({width}x{height})");
+}
+
+#[cfg(not(metal_backend))]
+fn main() {
+    eprintln!("this example needs the Metal backend: macOS or iOS, with `--features metal`");
 }

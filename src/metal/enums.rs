@@ -18,7 +18,16 @@ pub type NSUInteger = usize;
 pub mod pixel_format {
     use super::NSUInteger;
     pub const R8_UNORM: NSUInteger = 10;
+    /// One 8-bit unsigned integer channel: an 8-bit video plane's samples.
+    pub const R8_UINT: NSUInteger = 13;
+    /// One 16-bit unsigned integer channel: a deeper video plane's samples.
+    pub const R16_UINT: NSUInteger = 23;
     pub const RG8_UNORM: NSUInteger = 30;
+    /// Two 8-bit unsigned integer channels: an NV12 Cb/Cr plane.
+    pub const RG8_UINT: NSUInteger = 33;
+    /// Two 16-bit unsigned integer channels: a P010 Cb/Cr plane.
+    pub const RG16_UINT: NSUInteger = 63;
+    pub const R16_FLOAT: NSUInteger = 25;
     pub const R32_FLOAT: NSUInteger = 55;
     pub const RGBA8_UNORM: NSUInteger = 70;
     pub const RGBA8_UNORM_SRGB: NSUInteger = 71;
@@ -38,7 +47,8 @@ pub mod pixel_format {
     pub fn bytes_per_pixel(format: NSUInteger) -> Option<usize> {
         Some(match format {
             R8_UNORM => 1,
-            RG8_UNORM => 2,
+            RG8_UNORM | R16_FLOAT => 2,
+            R32_FLOAT => 4,
             RGBA8_UNORM | RGBA8_UNORM_SRGB | BGRA8_UNORM | BGRA8_UNORM_SRGB => 4,
             RGBA16_FLOAT => 8,
             RGBA32_FLOAT => 16,

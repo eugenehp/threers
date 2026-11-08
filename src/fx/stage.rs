@@ -398,7 +398,7 @@ impl Stage {
     /// [`update`](Self::update) from a [`sketch`](crate::sketch) frame: its
     /// pointer, clock and overlay, and the system cursor hidden while the
     /// stage draws its own.
-    #[cfg(not(any(target_arch = "wasm32", target_os = "tvos", target_os = "visionos")))]
+    #[cfg(winit_window)]
     pub fn sketch_frame(&mut self, f: &mut crate::sketch::Frame) -> Vec<Event> {
         let dpr = f.scale_factor;
         let input = StageInput {

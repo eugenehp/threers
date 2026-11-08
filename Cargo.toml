@@ -26,7 +26,7 @@ resolver = "2"
 # crates and the version pins between crates repeat it literally, and
 # `scripts/release-versions.sh` checks that they agree.
 [workspace.package]
-version = "0.0.11"
+version = "0.0.12"
 
 [package]
 name = "threers"
@@ -138,7 +138,11 @@ opt-level = 3
 opt-level = 3
 
 [features]
-default = ["captions"]
+default = ["captions", "sketch"]
+# `sketch()` and the winit-window `WindowRenderer`: pulls in winit 0.29. Turn it
+# off (`default-features = false`) for a headless renderer or when the host
+# owns its own window / winit version (`SurfaceRenderer` needs neither).
+sketch = ["dep:winit"]
 # Subtitles — SRT + WebVTT, on-screen and burned in.
 captions = []
 # A retained UI: CSS-subset styles, flexbox layout, painting and hit-testing
@@ -172,7 +176,19 @@ video = ["captions", "threers-codec/decode"]
 native-codec = ["captions"]
 # The pure-Rust H.264/HEVC decoders (`codec::decode`) without the ffmpeg-backed
 # `video` export module.
-native-decode = ["native-codec", "threers-codec/decode"]
+# Decoding uses every core and every hardware decoder there is: the codec
+# crate's threads (inert in single-threaded wasm), VideoToolbox (macOS),
+# NVDEC (NVIDIA on Linux and Windows) and VAAPI (Linux). The hardware ones
+# are loaded at run time and compiled only where they exist, so they cost
+# nothing elsewhere.
+native-decode = [
+    "native-codec",
+    "threers-codec/decode",
+    "threers-codec/parallel",
+    "threers-codec/videotoolbox",
+    "threers-codec/nvidia",
+    "threers-codec/vaapi",
+]
 # GIF89a encode and decode (`codec::gif`), and GIF in the animation and video
 # exporters. Off, choosing GIF there is an error rather than a missing variant.
 gif = ["native-codec", "threers-codec/gif"]
@@ -252,10 +268,10 @@ wasm-full = ["captions", "openscad", "native-codec", "gif", "nurbs", "planet", "
 
 [dependencies]
 # The codecs and the caption data model (pure Rust, no wgpu/winit).
-threers-codec = { path = "crates/threers-codec", version = "0.0.11", default-features = false }
+threers-codec = { path = "crates/threers-codec", version = "0.0.12", default-features = false }
 # Soft bodies that tear and regrow (`softbody`): the solver, on its own so the
 # wasm build can optimise it for speed (see `profile.release-wasm` below).
-threers-softbody = { path = "crates/threers-softbody", version = "0.0.11", features = ["gpu"] }
+threers-softbody = { path = "crates/threers-softbody", version = "0.0.12", features = ["gpu"] }
 wgpu = "30"
 bytemuck = { version = "1.16", features = ["derive"] }
 log = "0.4"
@@ -283,7 +299,7 @@ env_logger = "0.11"
 # winit 0.29 knows neither tvOS nor visionOS and builds its Wayland backend
 # there, which does not compile; those apps' windows are the system's.
 [target.'cfg(not(any(target_arch = "wasm32", target_os = "tvos", target_os = "visionos")))'.dependencies]
-winit = "0.29"
+winit = { version = "0.29", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
@@ -323,6 +339,11 @@ features = [
     "Event",
     "FocusEvent",
     "KeyboardEventInit",
+    # Video: a `<video>` or WebCodecs `VideoFrame` copied into a texture on
+    # the GPU (`textures::BrowserImage`).
+    "HtmlMediaElement",
+    "HtmlVideoElement",
+    "VideoFrame",
 ]
 
 [[example]]
@@ -365,7 +386,7 @@ required-features = ["metal", "fluid"]
 
 [[example]]
 name = "fluid"
-required-features = ["fluid"]
+required-features = ["fluid", "sketch"]
 
 # `captions` is on by default, so these only need saying for
 # `--no-default-features` builds — where they are the two examples that break.
@@ -383,11 +404,11 @@ required-features = ["captions"]
 
 [[example]]
 name = "marks_map"
-required-features = ["captions"]
+required-features = ["captions", "sketch"]
 
 [[example]]
 name = "map_demo"
-required-features = ["captions"]
+required-features = ["captions", "sketch"]
 
 [[example]]
 name = "headless_video"
@@ -428,46 +449,57 @@ required-features = ["native-codec"]
 [[example]]
 name = "cube"
 path = "examples/cube.rs"
+required-features = ["sketch"]
 
 [[example]]
 name = "shader_material"
 path = "examples/shader_material.rs"
+required-features = ["sketch"]
 
 [[example]]
 name = "scene_graph"
 path = "examples/scene_graph.rs"
+required-features = ["sketch"]
 
 [[example]]
 name = "controls_orbit"
 path = "examples/controls_orbit.rs"
+required-features = ["sketch"]
 
 [[example]]
 name = "lathe"
 path = "examples/lathe.rs"
+required-features = ["sketch"]
 
 [[example]]
 name = "normal_map"
 path = "examples/normal_map.rs"
+required-features = ["sketch"]
 
 [[example]]
 name = "colored_dir"
 path = "examples/colored_dir.rs"
+required-features = ["sketch"]
 
 [[example]]
 name = "many_meshes"
 path = "examples/many_meshes.rs"
+required-features = ["sketch"]
 
 [[example]]
 name = "physical"
 path = "examples/physical.rs"
+required-features = ["sketch"]
 
 [[example]]
 name = "shadow"
 path = "examples/shadow.rs"
+required-features = ["sketch"]
 
 [[example]]
 name = "capsule"
 path = "examples/capsule.rs"
+required-features = ["sketch"]
 
 [[example]]
 name = "mesh_bvh_picking"
@@ -477,7 +509,7 @@ required-features = ["mesh-bvh"]
 [[example]]
 name = "bvh_csg_hierarchy"
 path = "examples/bvh_csg_hierarchy.rs"
-required-features = ["bvh-csg"]
+required-features = ["bvh-csg", "sketch"]
 
 [[example]]
 name = "openscad_bracket"
@@ -602,11 +634,15 @@ required-features = ["raytrace"]
 
 [[example]]
 name = "viewport_path_trace_live"
-required-features = ["raytrace"]
+required-features = ["raytrace", "sketch"]
 
 [[example]]
 name = "hdri_lighting"
 required-features = ["raytrace"]
+
+[[example]]
+name = "video_texture"
+required-features = ["native-decode", "sketch"]
 
 [[example]]
 name = "metal_headless"
@@ -618,7 +654,7 @@ required-features = ["metal"]
 
 [[example]]
 name = "metal_window"
-required-features = ["metal"]
+required-features = ["metal", "sketch"]
 
 [[example]]
 name = "metal_stereo"
@@ -748,6 +784,10 @@ required-features = ["bvh-csg"]
 [[test]]
 name = "backend_parity"
 required-features = ["metal"]
+
+[[test]]
+name = "video_texture"
+required-features = ["native-decode"]
 
 [[test]]
 name = "metal_backend"
@@ -882,10 +922,11 @@ required-features = ["openscad"]
 
 # Opt-out cfgs for consumers that embed the renderer in their own wasm crate
 # (set through RUSTFLAGS, e.g. `--cfg threers_no_js_bindings`; see src/lib.rs
-# and renderer::upload_ltc), and `metal_backend`, which build.rs sets: the
-# `metal` feature on an Apple OS. Declared here so rustc's check-cfg knows them.
+# and renderer::upload_ltc), and the cfgs build.rs sets: `metal_backend` (the
+# `metal` feature on an Apple OS) and `winit_window` (the `sketch` feature where
+# winit builds). Declared here so rustc's check-cfg knows them.
 [lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(threers_no_js_bindings)', 'cfg(threers_no_rect_area_light)', 'cfg(metal_backend)'] }
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(threers_no_js_bindings)', 'cfg(threers_no_rect_area_light)', 'cfg(metal_backend)', 'cfg(winit_window)'] }
 
 [[test]]
 name = "glass_bounces"
@@ -907,3 +948,39 @@ required-features = ["metal"]
 name = "fx_metal"
 required-features = ["metal"]
 
+# Examples that open a window through `sketch` or winit.
+[[example]]
+name = "kirigami_orbit"
+required-features = ["sketch"]
+
+[[example]]
+name = "simcity"
+required-features = ["sketch"]
+
+[[example]]
+name = "venom_button"
+required-features = ["sketch"]
+
+[[example]]
+name = "sketch_flow"
+required-features = ["sketch"]
+
+[[example]]
+name = "venom_gallery"
+required-features = ["sketch"]
+
+[[example]]
+name = "sketch_labels"
+required-features = ["sketch"]
+
+[[example]]
+name = "spacecraft_materials"
+required-features = ["sketch"]
+
+[[example]]
+name = "ocean_water"
+required-features = ["sketch"]
+
+[[example]]
+name = "surface_viewport"
+required-features = ["sketch"]

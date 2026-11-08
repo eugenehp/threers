@@ -28,8 +28,6 @@
 //! video and not like waiting.
 
 pub mod arm;
-#[cfg(target_arch = "wasm32")]
-mod web;
 
 pub use arm::{ArmDriver, Chain, KinematicArm, ServoArm, COLUMN, ELBOW, LINKS};
 

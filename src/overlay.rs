@@ -1592,7 +1592,7 @@ mod tests {
     fn a_long_polyline_draws_as_the_slow_way_does() {
         let points: Vec<Vector2> = (0..=60)
             .map(|i| {
-                let a = i as f32 / 60.0 * 6.283;
+                let a = i as f32 / 60.0 * std::f32::consts::TAU;
                 Vector2::new(
                     60.0 + 40.0 * a.cos() + (i % 3) as f32,
                     60.0 + 30.0 * a.sin(),

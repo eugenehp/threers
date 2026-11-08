@@ -93,6 +93,7 @@ impl SaveSlots {
         world.load(&text)
     }
 
+    /// Whether a save called `slot` exists.
     pub fn exists(&self, slot: &str) -> bool {
         check(slot).is_ok() && matches!(self.get(slot), Ok(Some(_)))
     }

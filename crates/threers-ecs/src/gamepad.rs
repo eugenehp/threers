@@ -84,6 +84,7 @@ impl Gamepads {
         }
     }
 
+    /// How many pads are connected now.
     pub fn connected(&self) -> usize {
         self.gilrs.gamepads().count()
     }
@@ -133,6 +134,7 @@ pub fn trigger(button: Button) -> Option<PadAxis> {
     }
 }
 
+/// The [`PadAxis`] for one of gilrs's axes, if it has one.
 pub fn pad_axis(axis: Axis) -> Option<PadAxis> {
     match axis {
         Axis::LeftStickX => Some(PadAxis::LeftX),

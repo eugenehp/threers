@@ -290,7 +290,7 @@ fn main() {
     std::fs::write("out/gummy_wgpu.png", encode_png(W, H, &wgpu_frame)).expect("write png");
     println!("wrote out/gummy_wgpu.png (wgpu)");
 
-    #[cfg(feature = "metal")]
+    #[cfg(metal_backend)]
     {
         let mut metal = threers::metal::MetalHeadlessRenderer::builder()
             .size(W, H)

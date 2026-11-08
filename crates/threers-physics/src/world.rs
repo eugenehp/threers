@@ -126,7 +126,15 @@ pub struct World {
     /// What the engine noticed while it was running: timings, counters and
     /// warnings. Reset at the top of each [`World::step`].
     diagnostics: Diagnostics,
-    /// Fixed steps actually run by the last [`World::step`] call.
+    /// Solver substeps per fixed step: each one integrates, collides and
+    /// solves over `timestep / substeps`. One by default.
+    ///
+    /// Raise it for long chains of stiff constraints — a rod, a rope, a tall
+    /// stack — where a shorter step does more than more iterations do. Applied
+    /// forces, kinematic targets and [`RigidBody::previous_position`] all span
+    /// the whole fixed step, so interpolation and the force API are unchanged.
+    ///
+    /// [`RigidBody::previous_position`]: crate::body::RigidBody::previous_position
     pub substeps: usize,
 
     accumulator: f32,
@@ -169,7 +177,7 @@ impl World {
             broadphase: BroadPhase::new(),
             solver: Solver::new(),
             diagnostics: Diagnostics::default(),
-            substeps: 0,
+            substeps: 1,
             accumulator: 0.0,
             interpolation_alpha: 0.0,
             pairs: Vec::new(),
@@ -612,7 +620,6 @@ impl World {
             self.accumulator -= self.timestep;
             steps += 1;
         }
-        self.substeps = steps;
         self.interpolation_alpha = (self.accumulator / self.timestep).clamp(0.0, 1.0);
     }
 
@@ -620,34 +627,42 @@ impl World {
     /// deterministic and headless simulation.
     pub fn step_fixed(&mut self) {
         let dt = self.timestep;
-        self.substeps = 1;
+        let n = self.substeps.max(1);
+        let h = dt / n as f32;
 
         // Every clock read here costs nothing while profiling is off: the
         // stopwatch simply never starts, and reads back zero.
         let whole = self.diagnostics.stopwatch();
         let mut timings = crate::diagnostics::Timings::default();
 
-        let clock = self.diagnostics.stopwatch();
-        self.integrate_velocities(dt);
-        timings.integration = clock.read();
+        for k in 0..n {
+            let (first, last) = (k == 0, k + 1 == n);
+
+            let clock = self.diagnostics.stopwatch();
+            self.integrate_velocities(h, first.then_some(dt));
+            timings.integration += clock.read();
+
+            let clock = self.diagnostics.stopwatch();
+            self.detect_collisions();
+            timings.narrow_phase += clock.read();
+
+            let clock = self.diagnostics.stopwatch();
+            self.solver.solve(
+                &mut self.bodies,
+                &mut self.contacts,
+                &mut self.joints,
+                &mut self.tendons,
+                h,
+                &self.solver_config,
+            );
+            timings.solver += clock.read();
+
+            let clock = self.diagnostics.stopwatch();
+            self.integrate_positions(h, last);
+            timings.integration += clock.read();
+        }
 
         let clock = self.diagnostics.stopwatch();
-        self.detect_collisions();
-        timings.narrow_phase = clock.read();
-
-        let clock = self.diagnostics.stopwatch();
-        self.solver.solve(
-            &mut self.bodies,
-            &mut self.contacts,
-            &mut self.joints,
-            &mut self.tendons,
-            dt,
-            &self.solver_config,
-        );
-        timings.solver = clock.read();
-
-        let clock = self.diagnostics.stopwatch();
-        self.integrate_positions(dt);
         self.resolve_ccd();
         timings.integration += clock.read();
 
@@ -815,7 +830,10 @@ impl World {
         out
     }
 
-    fn integrate_velocities(&mut self, dt: f32) {
+    /// `step` is the whole fixed step on the first substep and `None` after:
+    /// the start pose is recorded and kinematic targets are turned into
+    /// velocities once, over the time they have to get there.
+    fn integrate_velocities(&mut self, dt: f32, step: Option<f32>) {
         let gravity = self.gravity;
         let model = self.model_accelerations();
         let limit = self.max_velocity;
@@ -823,7 +841,7 @@ impl World {
         let mut clamped = 0u32;
         let mut non_finite_position = 0u32;
         for (index, (_, body)) in self.bodies.iter_mut().enumerate() {
-            let (bad_velocity, bad_position) = body.begin_step();
+            let (bad_velocity, bad_position) = body.begin_step(step.is_some());
             if bad_velocity {
                 non_finite += 1;
             }
@@ -832,7 +850,9 @@ impl World {
             }
             // A kinematic body's velocity comes from where it was told to go,
             // not from forces, so this happens before the integration.
-            body.drive_to_kinematic_target(dt);
+            if let Some(step) = step {
+                body.drive_to_kinematic_target(step);
+            }
             if let Some(a) = model.get(index) {
                 if *a != Vector3::ZERO && body.is_dynamic() && !body.is_sleeping() {
                     body.linear_velocity = body.linear_velocity + *a * (dt * body.gravity_scale);
@@ -866,10 +886,14 @@ impl World {
         }
     }
 
-    fn integrate_positions(&mut self, dt: f32) {
+    /// Applied forces hold for the whole fixed step, so they are cleared only
+    /// after its last substep.
+    fn integrate_positions(&mut self, dt: f32, last: bool) {
         for (_, body) in self.bodies.iter_mut() {
             body.integrate_position(dt);
-            body.reset_forces();
+            if last {
+                body.reset_forces();
+            }
         }
     }
 

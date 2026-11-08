@@ -63,7 +63,7 @@ pub fn write_m4a(cfg: &EncoderConfig, asc: [u8; 2], units: &[Vec<u8>], input_sam
     let esds = {
         let decoder_specific = descriptor(0x05, &asc);
         let mut config = vec![0x40, 0x15]; // MPEG-4 audio, audio stream
-        config.extend_from_slice(&[0, (cfg.channels * 6144 / 8 >> 8) as u8, (cfg.channels * 6144 / 8) as u8]); // buffer size in bytes
+        config.extend_from_slice(&[0, ((cfg.channels * 6144 / 8) >> 8) as u8, (cfg.channels * 6144 / 8) as u8]); // buffer size in bytes
         config.extend_from_slice(&peak.to_be_bytes());
         config.extend_from_slice(&average.to_be_bytes());
         config.extend_from_slice(&decoder_specific);

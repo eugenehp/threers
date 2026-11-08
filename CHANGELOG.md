@@ -7,10 +7,86 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.0.11] — 2026-11-04
+## [0.0.12] — 2026-11-07
 
 ### Added
 
+- Video on meshes, at 1080p, 4K and 8K. `video_player::VideoPlayer`
+  (`native-decode` or `video`) decodes MP4/MOV, WebM/Matroska and IVF into a
+  `textures::VideoTexture`, for any material slot. Natively a thread decodes
+  ahead; in a browser it decodes inline as pictures come due. It does looping,
+  seeking, pause and speed. `examples/video_texture.rs` shows it on a screen
+  and a spinning cube. See "Video on a mesh" in `docs/codecs.md`.
+- GPU colour conversion for video: `textures::YuvFrame` (planes of
+  `textures::Samples`, a byte or a `u16` a sample, planar or with Cb and Cr
+  interleaved as NV12) written with
+  `TextureStream::write_yuv` is converted to RGB by a shader pass on the wgpu
+  and Metal renderers, which also turns it over, rebuilds its mip chain and
+  shrinks a frame too big for the device. Any depth from 8 to 16 bits, 4:2:0,
+  4:2:2, 4:4:0, 4:4:4 and monochrome, BT.601/709/2020, both ranges.
+- Hardware video decoding in `VideoReader`, on by default with
+  `native-decode` (which now turns on the codec crate's `videotoolbox`,
+  `nvidia`, `vaapi` and `parallel` features; each hardware decoder is loaded
+  at run time and compiled only where it exists): VideoToolbox (H.264, HEVC,
+  VP9, AV1 on M3 and later), NVDEC and VAAPI, falling back to the native
+  decoders, also when a hardware decoder takes a stream and gives no picture.
+  Bit-exact with the native decoders on all four codecs (VideoToolbox on an
+  M4 Pro, NVDEC on an RTX 3080 Ti). `VideoReader::backend`, `open_software`,
+  `open_shared`, `open_file`.
+- `decode::PackedFrame` and `decode::Picture`: NV12/P010 as hardware decoders
+  leave it, through `VideoReader::next_picture`, `VideoToolboxDecoder::take_packed`
+  (its planar sessions now ask for NV12) and `NvdecDecoder::take_packed`. With
+  the GPU reading it as it is, NVDEC at 8K went from 66–82 ms a picture to
+  20–29 ms. `VideoToolboxDecoder` also opens AV1 and VP9.
+- `VaapiDecoder::take_picture`: VAAPI hands back NV12/P010 too (AV1 with film
+  grain as planes, the grain added on the CPU), and `VideoReader` uses it. On
+  a Radeon 780M, 8K AV1 went from 135 ms a picture to 39 ms, 8K VP9 from 72
+  to 39 and 8K HEVC from 72 to 53; bit-exact on Mesa (Radeon) and Intel's
+  `iHD`. `Av1Accel::read_shown`, with a default, lets an accelerator keep a
+  picture shown without film grain.
+- `codec::bytes::FramePool`, `VideoReader::frame_pool` and
+  `VideoReader::recycle`: the hardware decoders copy pictures into reused
+  buffers, and `VideoPlayer` gives each back once it is off the screen
+  (`TextureStream::swap_yuv` hands back the frame it replaced). 8K HEVC went
+  from 44 to 35–39 ms a picture on a Radeon 780M and from 27 to 17–21 ms on
+  NVDEC; NVDEC no longer zero-fills a buffer it is about to copy into.
+- Matroska/WebM and IVF are demuxed in place: `Mkv::index`, `MkvFrame::at`
+  and `MkvFrame::bytes`, `mkv_demux::index_ivf`, and
+  `ffcompat::mkv::parse_in_place`. `VideoReader` no longer copies a WebM's
+  packets (twice, before) when it opens one.
+- `VideoReader` decodes H.264 and HEVC several pictures at once on the thread
+  pool, output unchanged: 2–2.5x faster at 4K and 8K.
+- `codec::bytes::Bytes`: shared bytes, in memory or a mapped file
+  (`Bytes::map`); `VideoPlayer::open_file` and `VideoReader::open_file` map
+  rather than read.
+- `codec::decode::demux` (`Demuxed`, `CodedSample`) and
+  `codec::decode::webcodecs`: codec strings, descriptions and key frames for
+  the browser's decoder.
+- In the browser, `VideoPlayer` decodes with WebCodecs (hardware where the
+  browser has it) and the frames go into the texture GPU to GPU;
+  `WebVideoPlayer` is the same for JavaScript. `TextureStream::write_browser`
+  and `WebDataTexture.writeVideo` take a `<video>` or a `VideoFrame` and the
+  wgpu renderer copies it with `copyExternalImageToTexture`. The three.js
+  shim's `VideoTexture` uses it, and copies only new frames, instead of
+  reading every frame back through a 2D canvas.
+- Video soundtracks: `VideoPlayer::soundtrack` (AAC in MP4/MOV, Opus in
+  WebM/Matroska, decoded on its own thread) and `VideoPlayer::jumps` and
+  `speed` to keep it in step.
+- `textures::TextureStream` and `Texture::stream`: pixels that change while the
+  texture stays the same. The wgpu and Metal renderers put each new frame into
+  the GPU texture they already have, with no new texture and no new bind
+  groups. `Texture::pixels` reads the frame on show, and the path tracer and
+  the USD exporter use it.
+- `codec::decode::VideoReader`: a file's pictures one at a time in display
+  order, with `rewind`.
+- `threers-ecs`: `Spawned::video(player)` and the `Video` component (feature
+  `video`), moved on with game time. With the `audio` feature the soundtrack
+  plays in step through `AudioOut`; `Video::muted` for none. The mixer has
+  `Command::Seek` and `AudioOut::seek`.
+
+- `threers-continuum` (tendon-driven continuum robots for `threers-physics`)
+  is a workspace member again, but not published: a cable under steady tension
+  does not yet hold the rod at a steady bend.
 - `threers-ecs`, a new crate (not yet published): entities, components and
   systems over the scene graph. Every scene node is an entity, so the renderer
   and loaders work unchanged. Queries with change tracking, commands, resources,
@@ -72,6 +148,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `winit` is now optional, behind a new default `sketch` feature. It gates
+  `sketch()` and the winit-window `renderer::WindowRenderer`; with
+  `default-features = false` a headless renderer, `SurfaceRenderer` and the
+  Metal layer renderer build without winit, so a host on another winit
+  version no longer compiles a second copy. `threers-ecs`'s `window` feature
+  turns `sketch` on. Examples that open a window need `--features sketch`
+  when default features are off.
+
 - `GpuContext` also requests `Features::PIPELINE_CACHE` where the adapter has
   it.
 - WebGL2 now draws `Oit` glass as order-independent transparency, in one pass
@@ -115,6 +199,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `examples/tauri-race` runs the race's web build in a Tauri window.
   `Input::consume` takes a press for an overlay: Escape that closes the
   console no longer also opens the game's pause menu.
+  Every public item has rustdoc and the crate warns on `missing_docs`;
+  `docs/ecs.md` maps every module and the README lists all features.
   `App::catch_panics` and per-system timing (`Profile`, `Failures`); `Speakers`
   for several sounds on one entity; `solid_as`, `body_from_mesh`, `body_mut`,
   `body_of` and `World::entity`; `Static` and `World::bake_static`; `Rewind`;
@@ -159,6 +245,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ever seeing that it had converged. A capsule character hung on ledges as a
   result. Those queries are also 2–9× faster, no longer running out their
   iterations. A shape cast leaving a surface it touches no longer counts as a hit.
+- `threers-physics`: `World::substeps` did nothing. Each fixed step was solved
+  once, whatever it said, and `World::step` overwrote it with the number of
+  fixed steps it had run. It now splits every fixed step into that many solver
+  substeps (one by default, so a scene that never set it is unchanged). Applied
+  forces, kinematic targets and `previous_position` still span the whole step.
+  `World::tendon_tension` divided by the same field, so it now reads correctly
+  for a tendon solved over several substeps.
+- `threers-continuum`: a rod settles at the droop beam theory predicts again,
+  which needed the substeps above. `StaticsRun::twist` was ignored, so the
+  sorosim comparison always ran with twisting stations.
 - H.264: intra prediction in field pictures with
   `disable_deblocking_filter_idc` 2 no longer reads deblocked samples, which
   broke `slice2_field_aurora4` and any stream like it.
@@ -6273,8 +6369,8 @@ on, and a second crate to make things move.
 - Opt-in `mesh-bvh` and `bvh-csg` (three-mesh-bvh / three-bvh-csg parity).
 - Web shim (`THREE.*`) and parity tooling.
 
-[Unreleased]: https://github.com/eugenehp/threers/compare/v0.0.11...HEAD
-[0.0.11]: https://github.com/eugenehp/threers/compare/v0.0.10...v0.0.11
+[Unreleased]: https://github.com/eugenehp/threers/compare/v0.0.12...HEAD
+[0.0.12]: https://github.com/eugenehp/threers/compare/v0.0.10...v0.0.12
 [0.0.10]: https://github.com/eugenehp/threers/compare/v0.0.9...v0.0.10
 [0.0.9]: https://github.com/eugenehp/threers/compare/v0.0.8...v0.0.9
 [0.0.8]: https://github.com/eugenehp/threers/compare/v0.0.7...v0.0.8

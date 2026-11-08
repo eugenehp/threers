@@ -21,7 +21,7 @@ macro_rules! keys {
         /// movement wants.
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
         pub enum Key {
-            $($name,)+
+            $(#[doc = concat!("`", stringify!($name), "`")] $name,)+
         }
 
         impl Key {
@@ -115,38 +115,57 @@ keys!(
     Slash,
 );
 
+/// Mouse buttons.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MouseButton {
+    /// The primary button.
     Left,
+    /// The secondary button.
     Right,
+    /// The wheel pressed.
     Middle,
 }
 
 /// Gamepad buttons by position, so `South` is A on one pad and Cross on another.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PadButton {
+    /// The bottom face button: A, or Cross.
     South,
+    /// The right face button: B, or Circle.
     East,
+    /// The left face button: X, or Square.
     West,
+    /// The top face button: Y, or Triangle.
     North,
+    /// The left bumper.
     LeftShoulder,
+    /// The right bumper.
     RightShoulder,
     /// The trigger pulled past its click point. Its travel is
     /// [`PadAxis::LeftTrigger`].
     LeftTrigger,
+    /// As `LeftTrigger`, on the right.
     RightTrigger,
     /// The stick pressed in.
     LeftThumb,
+    /// As `LeftThumb`, on the right.
     RightThumb,
+    /// Start, Menu or Options.
     Start,
+    /// Select, View or Share.
     Select,
+    /// The pad's up direction.
     DPadUp,
+    /// The pad's down direction.
     DPadDown,
+    /// The pad's left direction.
     DPadLeft,
+    /// The pad's right direction.
     DPadRight,
 }
 
 impl PadButton {
+    /// Every button, for binding menus and polling.
     pub const ALL: [PadButton; 16] = [
         PadButton::South,
         PadButton::East,
@@ -171,15 +190,22 @@ impl PadButton {
 /// agree. Triggers run from 0 to 1.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PadAxis {
+    /// Left stick, right positive.
     LeftX,
+    /// Left stick, up positive.
     LeftY,
+    /// Right stick, right positive.
     RightX,
+    /// Right stick, up positive.
     RightY,
+    /// Left trigger, 0 to 1.
     LeftTrigger,
+    /// Right trigger, 0 to 1.
     RightTrigger,
 }
 
 impl PadAxis {
+    /// Every axis.
     pub const ALL: [PadAxis; 6] = [
         PadAxis::LeftX,
         PadAxis::LeftY,
@@ -193,9 +219,13 @@ impl PadAxis {
 /// Something one gamepad did.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PadEvent {
+    /// A button went down.
     Pressed(PadButton),
+    /// A button came up.
     Released(PadButton),
+    /// An axis moved to this value.
     Axis(PadAxis, f32),
+    /// The pad went away; what it held is released.
     Disconnected,
 }
 
@@ -266,8 +296,11 @@ impl PadTracker {
 /// Anything that is either down or up.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Button {
+    /// A key.
     Key(Key),
+    /// A mouse button.
     Mouse(MouseButton),
+    /// A gamepad button, on any pad.
     Pad(PadButton),
     /// An on-screen button, by its place in [`TouchControls`](crate::touch::TouchControls).
     Touch(u8),
@@ -319,6 +352,7 @@ pub struct Touch {
 pub struct Rumble {
     /// From 0 to 1.
     pub strength: f32,
+    /// How long.
     pub seconds: f32,
 }
 
@@ -573,6 +607,7 @@ impl Input {
 
     // ---- reading raw devices ----------------------------------------------
 
+    /// Whether it is held now. Raw, so it reports even while [`captured`](Self::captured).
     pub fn is_down(&self, button: impl Into<Button>) -> bool {
         self.down.contains(&button.into())
     }

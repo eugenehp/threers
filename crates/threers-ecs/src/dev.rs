@@ -32,8 +32,11 @@ pub struct DevTools;
 /// What the tools are showing.
 #[derive(Debug, Default)]
 pub struct DevState {
+    /// The panel of timings and counts, F3.
     pub panel: bool,
+    /// Collider outlines, F4.
     pub colliders: bool,
+    /// What F7 picked, for the inspector.
     pub selected: Option<Entity>,
     /// Which of the selected entity's fields F9 and F10 change.
     pub field: usize,
@@ -51,8 +54,11 @@ pub struct DevState {
 /// A free camera's state.
 #[derive(Debug, Clone)]
 pub struct Flight {
+    /// Where the free camera is.
     pub position: threers::math::Vector3,
+    /// Which way it faces about the vertical, in radians.
     pub yaw: f32,
+    /// How far it looks up or down, in radians.
     pub pitch: f32,
     saved: threers::cameras::PerspectiveCamera,
     was_paused: bool,

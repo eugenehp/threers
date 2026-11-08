@@ -9,6 +9,9 @@
 //! `src/metal`. `--frames N` renders N frames and exits, which is what makes
 //! this runnable from a script.
 
+// Metal is macOS and iOS only; elsewhere this example says so and stops.
+#![cfg_attr(not(metal_backend), allow(dead_code, unused_imports))]
+
 use std::f32::consts::TAU;
 
 use threers::cameras::Camera;
@@ -17,6 +20,7 @@ use threers::geometries::{BoxGeometry, PlaneGeometry, TorusKnotGeometry};
 use threers::lights::{AmbientLight, DirectionalLight, PointLight};
 use threers::materials::{Material, StandardMaterial};
 use threers::math::{Color, Quaternion, Vector3};
+#[cfg(metal_backend)]
 use threers::metal::{MetalDevice, MetalRenderer, MetalSurface};
 use threers::scene::Scene;
 use threers::PerspectiveCamera;
@@ -27,6 +31,7 @@ use winit::event_loop::{ControlFlow, EventLoop};
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use winit::window::WindowBuilder;
 
+#[cfg(metal_backend)]
 fn main() {
     // `--frames N` exits after N frames; without it the window stays open.
     let mut args = std::env::args().skip(1);
@@ -172,4 +177,9 @@ fn build_scene() -> (Scene, threers::core::ObjectId) {
     scene.add(fill);
 
     (scene, knot)
+}
+
+#[cfg(not(metal_backend))]
+fn main() {
+    eprintln!("this example needs the Metal backend: macOS or iOS, with `--features metal`");
 }

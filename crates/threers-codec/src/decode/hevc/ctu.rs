@@ -1810,7 +1810,9 @@ impl<'a> SliceDec<'a> {
                         }
                         ((((1u32 << (prefix - 3)) + 2) << rice) + c.bypass_bits(nb)) as i32
                     };
-                    abs = base + rem;
+                    // Wrapping: only damaged data overflows, and `dequant`
+                    // clamps the coefficient to 16 bits further on.
+                    abs = base.wrapping_add(rem);
                     if abs > 3 * (1 << rice) {
                         rice = if persistent {
                             rice + 1
@@ -1830,7 +1832,8 @@ impl<'a> SliceDec<'a> {
                         rice_updated = true;
                     }
                 }
-                sum_abs += abs;
+                // Only its parity is read, which wrapping keeps.
+                sum_abs = i32::wrapping_add(sum_abs, abs);
                 let neg = if k < nsign {
                     (signs >> (31 - k as u32)) & 1 == 1
                 } else {
@@ -1839,7 +1842,7 @@ impl<'a> SliceDec<'a> {
                 };
                 let pos = sig[k] as usize;
                 let (xc, yc) = (xs * 4 + scan[pos].0 as usize, ys * 4 + scan[pos].1 as usize);
-                out[yc * n + xc] = if neg { -abs } else { abs };
+                out[yc * n + xc] = if neg { abs.wrapping_neg() } else { abs };
             }
         }
         Ok(ResidualInfo {

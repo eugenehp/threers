@@ -144,6 +144,92 @@ impl ColorInfo {
     }
 }
 
+/// A 4:2:0 picture as hardware decoders keep it: a luma plane and one plane
+/// of Cb and Cr interleaved (NV12; P010 above 8 bits, two little-endian bytes
+/// a sample with the value in the high bits). VideoToolbox, NVDEC, VAAPI and
+/// the browser's WebCodecs all decode to this, so handing it on as it is, to
+/// a GPU that converts it, costs no pass over the pixels.
+#[derive(Debug, Clone)]
+pub struct PackedFrame {
+    /// Display width in pixels.
+    pub width: u32,
+    /// Display height in pixels.
+    pub height: u32,
+    /// Bits a sample: 8 (NV12), or 10 to 16 (P010, P016).
+    pub bit_depth: u8,
+    /// Luma, `width * height` samples, tightly packed.
+    pub y: Vec<u8>,
+    /// Cb, Cr, Cb, Cr…: `ceil(width / 2) * ceil(height / 2)` pairs.
+    pub uv: Vec<u8>,
+    /// What the stream says about its colour.
+    pub color: ColorInfo,
+}
+
+impl PackedFrame {
+    /// Bytes a sample: 1 for NV12, 2 above 8 bits.
+    pub fn bytes_per_sample(&self) -> usize {
+        if self.bit_depth > 8 {
+            2
+        } else {
+            1
+        }
+    }
+
+    /// As planes of `u16` samples, the form the native decoders give: one
+    /// pass over the picture, for callers that want [`DecodedFrame`].
+    pub fn to_decoded(&self) -> DecodedFrame {
+        let deep = self.bit_depth > 8;
+        let shift = 16 - self.bit_depth.min(16) as u32;
+        let at = |b: &[u8], i: usize| -> u16 {
+            if deep {
+                u16::from_le_bytes([b[2 * i], b[2 * i + 1]]) >> shift
+            } else {
+                b[i] as u16
+            }
+        };
+        let (w, h) = (self.width as usize, self.height as usize);
+        let pairs = w.div_ceil(2) * h.div_ceil(2);
+        DecodedFrame {
+            width: self.width,
+            height: self.height,
+            bit_depth: self.bit_depth,
+            chroma: ChromaFormat::Yuv420,
+            y: (0..w * h).map(|i| at(&self.y, i)).collect(),
+            u: (0..pairs).map(|i| at(&self.uv, 2 * i)).collect(),
+            v: (0..pairs).map(|i| at(&self.uv, 2 * i + 1)).collect(),
+            color: self.color,
+        }
+    }
+}
+
+/// A decoded picture: planes from the native decoders, or packed as the
+/// hardware ones give it.
+#[derive(Debug, Clone)]
+pub enum Picture {
+    /// Separate planes, `u16` a sample.
+    Planes(DecodedFrame),
+    /// NV12 or P010.
+    Packed(PackedFrame),
+}
+
+impl Picture {
+    /// Its size in pixels.
+    pub fn size(&self) -> (u32, u32) {
+        match self {
+            Picture::Planes(f) => (f.width, f.height),
+            Picture::Packed(f) => (f.width, f.height),
+        }
+    }
+
+    /// As planes, converting a packed picture.
+    pub fn into_decoded(self) -> DecodedFrame {
+        match self {
+            Picture::Planes(f) => f,
+            Picture::Packed(f) => f.to_decoded(),
+        }
+    }
+}
+
 /// A decoded picture, cropped to its display size.
 #[derive(Debug, Clone)]
 pub struct DecodedFrame {

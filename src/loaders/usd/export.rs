@@ -209,7 +209,7 @@ pub struct ExportedTexture {
 /// still exports — it keeps its constant values and loses only the map.
 fn rgba8(texture: &Texture) -> Option<Vec<u8>> {
     let count = (texture.width as usize).checked_mul(texture.height as usize)?;
-    if count == 0 || texture.data.is_empty() {
+    if count == 0 || (texture.data.is_empty() && texture.stream.is_none()) {
         return None;
     }
     let pixels = unflipped(texture, count)?;
@@ -236,8 +236,9 @@ fn rgba8(texture: &Texture) -> Option<Vec<u8>> {
 /// The pixels as 8-bit RGBA in the order they are held.
 fn unflipped(texture: &Texture, count: usize) -> Option<Vec<u8>> {
     match texture.format {
+        // A video's frame as it is when exported.
         TextureFormat::Rgba8UnormSrgb | TextureFormat::Rgba8Unorm => {
-            texture.data.get(..count * 4).map(<[u8]>::to_vec)
+            texture.pixels().get(..count * 4).map(<[u8]>::to_vec)
         }
         // One channel becomes grey, so the written file says what the single
         // channel said however a reader samples it.
@@ -256,6 +257,12 @@ fn unflipped(texture: &Texture, count: usize) -> Option<Vec<u8>> {
                 })
                 .collect()
         }),
+        // The other floats likewise, one channel as grey.
+        f @ (TextureFormat::R16Float | TextureFormat::R32Float | TextureFormat::Rgba32Float) => {
+            let v = f.texels_f32(texture.data.get(..f.data_len(texture.width, texture.height))?)?;
+            let byte = |x: f32| (x.clamp(0.0, 1.0) * 255.0).round() as u8;
+            Some(if f.channels() == 1 { v.iter().flat_map(|x| [byte(*x), byte(*x), byte(*x), 255]).collect() } else { v.iter().map(|x| byte(*x)).collect() })
+        }
         _ => None,
     }
 }

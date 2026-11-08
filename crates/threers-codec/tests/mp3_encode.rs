@@ -78,7 +78,7 @@ fn raw_quality(input: &[f32], decoded: &[f32]) -> (i64, f64, f64) {
 #[test]
 fn a_mono_stream_decodes_to_the_input_after_the_known_delay() {
     let x = aperiodic(44_100, 3.0, 7);
-    let bytes = encode_raw(&[x.clone()], Mp3Config::new(44_100, 1, 128));
+    let bytes = encode_raw(std::slice::from_ref(&x), Mp3Config::new(44_100, 1, 128));
     let (lag, gain, snr) = raw_quality(&x, &decode(&bytes)[0]);
     eprintln!("mono 128k: lag {lag}, gain {gain:.4}, SNR {snr:.1} dB");
     assert_eq!(lag as usize, DELAY);
@@ -103,7 +103,7 @@ fn every_rate_and_bitrate_works_and_the_size_is_constant() {
     for rate in [32_000u32, 44_100, 48_000] {
         let x = aperiodic(rate, 2.0, 11);
         for kbps in [32u32, 64, 128, 320] {
-            let bytes = encode_raw(&[x.clone()], Mp3Config::new(rate, 1, kbps));
+            let bytes = encode_raw(std::slice::from_ref(&x), Mp3Config::new(rate, 1, kbps));
             let frames = (x.len() + DELAY).div_ceil(FRAME);
             let expected = frames as f64 * 144_000.0 * f64::from(kbps) / f64::from(rate);
             assert!((bytes.len() as f64 - expected).abs() <= frames as f64, "{rate}/{kbps}: {} bytes, expected {expected}", bytes.len());
@@ -121,7 +121,7 @@ fn more_bits_sound_closer() {
     let x = aperiodic(44_100, 2.0, 5);
     let mut last = f64::MIN;
     for kbps in [32u32, 64, 128, 256] {
-        let (_, _, snr) = raw_quality(&x, &decode(&encode_raw(&[x.clone()], Mp3Config::new(44_100, 1, kbps)))[0]);
+        let (_, _, snr) = raw_quality(&x, &decode(&encode_raw(std::slice::from_ref(&x), Mp3Config::new(44_100, 1, kbps)))[0]);
         eprintln!("{kbps}k: SNR {snr:.1} dB");
         assert!(snr > last, "{kbps}k should beat the one below ({snr} vs {last})");
         last = snr;
@@ -132,7 +132,7 @@ fn more_bits_sound_closer() {
 fn loud_low_tones_use_the_linbits_tables() {
     // A full-scale low tone makes large coefficients: the escape tables.
     let x: Vec<f32> = (0..44_100 * 2).map(|i| (0.95 * (2.0 * std::f64::consts::PI * 80.0 * i as f64 / 44_100.0).sin()) as f32).collect();
-    let bytes = encode_raw(&[x.clone()], Mp3Config::new(44_100, 1, 256));
+    let bytes = encode_raw(std::slice::from_ref(&x), Mp3Config::new(44_100, 1, 256));
     let decoded = &decode(&bytes)[0];
     let n = x.len() - 4 * FRAME;
     let (gain, snr) = compare(&x[..n], &decoded[DELAY..DELAY + n]);
@@ -150,7 +150,7 @@ fn silence_decodes_to_silence_and_costs_nothing_extra() {
 fn input_can_arrive_in_any_size_pieces() {
     let x = aperiodic(44_100, 2.0, 9);
     let cfg = Mp3Config::new(44_100, 1, 96);
-    let whole = encode_raw(&[x.clone()], cfg);
+    let whole = encode_raw(std::slice::from_ref(&x), cfg);
     let mut enc = Mp3Encoder::new(cfg).unwrap();
     let mut out = Vec::new();
     for piece in x.chunks(777) {
@@ -193,7 +193,7 @@ fn frame_sizes(bytes: &[u8]) -> Vec<usize> {
 #[test]
 fn the_file_is_a_clean_run_of_frames_with_an_info_frame_first() {
     let x = aperiodic(44_100, 2.0, 2);
-    let file = encode_mp3(&[x.clone()], &Mp3Config::new(44_100, 1, 128)).unwrap();
+    let file = encode_mp3(std::slice::from_ref(&x), &Mp3Config::new(44_100, 1, 128)).unwrap();
     let sizes = frame_sizes(&file);
     assert_eq!(&file[21..25], b"Info");
     assert_eq!(sizes.len(), (x.len() + DELAY).div_ceil(FRAME) + 1);
@@ -202,7 +202,7 @@ fn the_file_is_a_clean_run_of_frames_with_an_info_frame_first() {
 #[test]
 fn the_info_frame_makes_decoders_trim_to_the_input() {
     let x = aperiodic(44_100, 3.0, 6);
-    let file = encode_mp3(&[x.clone()], &Mp3Config::new(44_100, 1, 128)).unwrap();
+    let file = encode_mp3(std::slice::from_ref(&x), &Mp3Config::new(44_100, 1, 128)).unwrap();
     let decoded = &decode(&file)[0];
     eprintln!("with Info frame: {} samples out for {} in", decoded.len(), x.len());
     assert_eq!(decoded.len(), x.len(), "gapless: exactly the input's length");

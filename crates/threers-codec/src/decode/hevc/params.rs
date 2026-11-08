@@ -715,13 +715,15 @@ impl TileSpacing {
         match self {
             TileSpacing::Uniform(n) => {
                 for i in 0..*n {
-                    b.push(((i + 1) * total) / n);
+                    b.push(((i as u64 + 1) * total as u64 / *n as u64) as u32);
                 }
             }
             TileSpacing::Explicit(sizes) => {
                 let mut acc = 0;
+                // Saturating: a damaged parameter set can state sizes that
+                // add up past `u32`.
                 for &s in sizes {
-                    acc += s;
+                    acc = u32::saturating_add(acc, s);
                     b.push(acc.min(total));
                 }
                 b.push(total);
@@ -809,6 +811,11 @@ impl Pps {
         }
         let lists_modification_present = r.flag();
         let log2_parallel_merge_level = r.ue().saturating_add(2);
+        // At most CtbLog2SizeY, which is at most 6; merge candidates shift by
+        // it, so a damaged value has to stop here.
+        if log2_parallel_merge_level > 6 {
+            return Err("log2_parallel_merge_level_minus2 out of range".into());
+        }
         let slice_header_extension_present = r.flag();
         let mut chroma_qp_offset_list = Vec::new();
         let mut diff_cu_chroma_qp_offset_depth = 0;
@@ -1166,10 +1173,13 @@ impl SliceHeader {
                 {
                     h.weights = Some(pred_weight_table(&mut r, sps, &h)?);
                 }
-                h.max_merge_cand = 5 - r.ue();
-                if !(1..=5).contains(&h.max_merge_cand) {
+                // Checked before subtracting: a damaged value above 4 would
+                // underflow.
+                let five_minus = r.ue();
+                if five_minus > 4 {
                     return Err("five_minus_max_num_merge_cand out of range".into());
                 }
+                h.max_merge_cand = 5 - five_minus;
             }
             h.qp_delta = r.se();
             // QP arithmetic below indexes tables by these, and only stays in

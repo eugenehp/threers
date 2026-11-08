@@ -3,7 +3,7 @@
 //!
 //! Skips without a Metal device (or a wgpu adapter, for the comparison).
 
-#![cfg(feature = "metal")]
+#![cfg(metal_backend)]
 
 use threers::fur::{fur_object, FurGroom, FurMaterial, FurPlacement};
 use threers::metal::MetalHeadlessRenderer;

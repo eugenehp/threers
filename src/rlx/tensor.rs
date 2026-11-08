@@ -354,19 +354,22 @@ pub fn texture_to_tensor(
             got: texture.data.len(),
         });
     }
-    let channels = match texture.format {
-        TextureFormat::R8Unorm => 1,
-        _ => 4,
-    };
+    let channels = texture.format.channels();
     let stored_srgb = matches!(texture.format, TextureFormat::Rgba8UnormSrgb);
     let want_linear = matches!(space, ColorSpace::Linear);
     let bytes = &texture.data;
+    // The wider floats decoded once (half floats are read in place).
+    let floats = match texture.format {
+        TextureFormat::R16Float | TextureFormat::R32Float | TextureFormat::Rgba32Float => texture.format.texels_f32(bytes),
+        _ => None,
+    };
     Ok(pack(width, height, channels, layout, |i, c| {
         let v = match texture.format {
             TextureFormat::Rgba16Float => {
                 let o = i * 8 + c * 2;
                 f16_to_f32(u16::from_le_bytes([bytes[o], bytes[o + 1]]))
             }
+            _ if floats.is_some() => floats.as_ref().map_or(0.0, |f| f[i * channels + c]),
             _ => bytes[i * bpp + c] as f32 / 255.0,
         };
         match (stored_srgb, want_linear, c) {
@@ -395,7 +398,7 @@ pub fn tensor_to_texture(
     let (width, height, channels) = image_dims(tensor, layout)?;
     let pixels = width as usize * height as usize;
     let fits = match format {
-        TextureFormat::R8Unorm => channels == 1,
+        TextureFormat::R8Unorm | TextureFormat::R16Float | TextureFormat::R32Float => channels == 1,
         _ => channels == 3 || channels == 4,
     };
     if !fits {
@@ -422,6 +425,12 @@ pub fn tensor_to_texture(
                 }
             }
             pack_rgba16f(&rgba)
+        }
+        TextureFormat::R16Float => crate::math::float::pack_f16(&(0..pixels).map(|i| sample(i, 0)).collect::<Vec<_>>()),
+        TextureFormat::R32Float => crate::math::float::pack_f32(&(0..pixels).map(|i| sample(i, 0)).collect::<Vec<_>>()),
+        TextureFormat::Rgba32Float => {
+            let rgba: Vec<f32> = (0..pixels * 4).map(|k| if k % 4 < channels { sample(k / 4, k % 4) } else { 1.0 }).collect();
+            crate::math::float::pack_f32(&rgba)
         }
         _ => {
             let mut out = Vec::with_capacity(pixels * 4);

@@ -33,6 +33,7 @@
 //! ```
 
 pub mod a11y;
+pub mod anim;
 #[cfg(target_arch = "wasm32")]
 pub mod a11y_dom;
 #[cfg(target_arch = "wasm32")]
@@ -40,8 +41,10 @@ pub mod canvas;
 pub mod code;
 pub mod controls;
 pub mod css;
+pub mod damage;
 mod layout;
 mod paint;
+pub mod region;
 mod style;
 mod text_area;
 mod text_field;

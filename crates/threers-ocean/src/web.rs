@@ -39,6 +39,8 @@ struct App {
     t0: f64,
     frames: u32,
     fps_since: f64,
+    /// Frames per second over the last half second, for the page.
+    fps: f64,
 }
 
 fn now() -> f64 {
@@ -70,14 +72,15 @@ fn lookup_quality(name: Option<String>) -> Quality {
     }
 }
 
-/// Start the demo on `canvas`. Resolves once the first frame is scheduled;
-/// the loop then runs until the page goes away.
+/// Start the demo on `canvas`. Resolves once the first frame is scheduled,
+/// with the handle the page's panel drives; the loop then runs until the page
+/// goes away.
 #[wasm_bindgen]
 pub async fn start(
     canvas: web_sys::HtmlCanvasElement,
     preset_name: Option<String>,
     quality_name: Option<String>,
-) -> Result<(), JsValue> {
+) -> Result<Ocean, JsValue> {
     console_error_panic_hook::set_once();
 
     let presets = preset::all();
@@ -171,11 +174,168 @@ pub async fn start(
         t0: now(),
         frames: 0,
         fps_since: now(),
+        fps: 0.0,
     }));
 
     install_input(&canvas, &app)?;
-    start_frames(canvas, app);
-    Ok(())
+    start_frames(canvas, app.clone());
+    Ok(Ocean { app })
+}
+
+/// The running demo, as the page sees it. The world owns every value; `state`
+/// reports them and the setters go through the same `World` methods the native
+/// example's keys use, at the same three costs: a rebuild (preset, quality,
+/// cascades, max scale), a re-seed (wind), or uniform slots (sky, look).
+#[wasm_bindgen]
+pub struct Ocean {
+    app: Rc<RefCell<App>>,
+}
+
+#[wasm_bindgen]
+impl Ocean {
+    /// Every value the panel shows, as JSON: the current settings under the
+    /// panel's control ids, the sea they make (`waveHeight`, `peak`, metres),
+    /// and the presets and quality tiers to choose from.
+    pub fn state(&self) -> String {
+        let s = self.app.borrow();
+        let (w, p) = (&s.world, &s.world.preset);
+        let presets: Vec<String> = preset::all()
+            .iter()
+            .map(|p| format!("{{\"name\":{},\"blurb\":{}}}", json_str(p.name), json_str(p.blurb)))
+            .collect();
+        let qualities: Vec<String> = QUALITY_LEVELS
+            .iter()
+            .map(|q| format!("{{\"name\":{},\"cascade\":{}}}", json_str(q.name), q.cascade_n))
+            .collect();
+        format!(
+            "{{\"preset\":{},\"quality\":{},\"cascade\":{},\"maxScale\":{},\
+             \"windDeg\":{},\"windSpeed\":{},\
+             \"elevation\":{},\"azimuth\":{},\"turbidity\":{},\"rayleigh\":{},\"mie\":{},\"mieG\":{},\"clouds\":{},\
+             \"exposure\":{},\"choppiness\":{},\"foam\":{},\
+             \"waveHeight\":{},\"peak\":{},\
+             \"presets\":[{}],\"qualities\":[{}]}}",
+            json_str(p.name),
+            json_str(w.quality.name),
+            w.cas.n,
+            w.cas.extent(),
+            p.wind_dir.to_degrees().rem_euclid(360.0),
+            p.wind_speed,
+            p.sun_elevation,
+            p.sun_azimuth,
+            p.turbidity,
+            p.rayleigh,
+            p.mie_coefficient,
+            p.mie_directional_g,
+            p.clouds,
+            p.exposure,
+            p.choppiness,
+            p.foam_amount,
+            w.sea.significant_height,
+            w.sea.peak_wavelength,
+            presets.join(","),
+            qualities.join(","),
+        )
+    }
+
+    /// Switch to a named preset (its own sky, wind and look), at the current
+    /// quality tier and max scale. Unknown names are ignored.
+    pub fn load_preset(&self, name: &str) {
+        let Some(p) = preset::all().into_iter().find(|p| p.name == name) else { return };
+        let (q, cas) = {
+            let w = &self.app.borrow().world;
+            (w.quality, w.cas.with_resolution(w.quality.cascade_n))
+        };
+        self.rebuild(p, q, cas);
+    }
+
+    /// Change the quality tier (mesh density and its cascade lattice), keeping
+    /// the sea, sky and look as they are. Unknown names are ignored.
+    pub fn set_quality(&self, name: &str) {
+        let Some(q) = QUALITY_LEVELS.iter().find(|q| q.name == name).copied() else { return };
+        let (p, cas) = {
+            let w = &self.app.borrow().world;
+            (w.preset, w.cas.with_resolution(q.cascade_n))
+        };
+        self.rebuild(p, q, cas);
+    }
+
+    /// Texels per side of each cascade (snapped to a power of two, 64..1024).
+    pub fn set_cascade_resolution(&self, n: u32) {
+        let (p, q, cas) = {
+            let w = &self.app.borrow().world;
+            (w.preset, w.quality, w.cas.with_resolution(n as usize))
+        };
+        self.rebuild(p, q, cas);
+    }
+
+    /// The largest tile, metres: how far the swell runs before it repeats.
+    pub fn set_max_scale(&self, metres: f32) {
+        let (p, q, cas) = {
+            let w = &self.app.borrow().world;
+            (w.preset, w.quality, w.cas.with_max_scale(metres))
+        };
+        self.rebuild(p, q, cas);
+    }
+
+    /// Wind direction in degrees, speed in m/s. Re-seeds the spectrum.
+    pub fn set_wind(&self, degrees: f32, speed: f32) {
+        let mut s = self.app.borrow_mut();
+        let App { world, gpu, .. } = &mut *s;
+        world.set_wind(gpu, degrees.to_radians(), speed);
+    }
+
+    /// Sun (degrees) and atmosphere, as three.js `Sky` takes them.
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_sky(&self, elevation: f32, azimuth: f32, turbidity: f32, rayleigh: f32, mie: f32, mie_g: f32, clouds: f32) {
+        self.app.borrow_mut().world.set_sky(elevation, azimuth, turbidity, rayleigh, mie, mie_g, clouds);
+    }
+
+    pub fn set_look(&self, exposure: f32, choppiness: f32, foam: f32) {
+        self.app.borrow_mut().world.set_look(exposure, choppiness, foam);
+    }
+
+    pub fn fps(&self) -> f64 {
+        self.app.borrow().fps
+    }
+
+    /// Whether the camera is below the waterline.
+    pub fn submerged(&self) -> bool {
+        self.app.borrow().world.submerged
+    }
+
+    /// Height of the surface as drawn at world `(x, z)`, metres, now.
+    pub fn sample_height(&self, x: f32, z: f32) -> f32 {
+        let s = self.app.borrow();
+        let t = ((now() - s.t0) / 1000.0) as f32;
+        s.world.sample_surface(x, z, t).0
+    }
+
+    /// Recreate the world around new settings, keeping the camera.
+    fn rebuild(&self, preset: Preset, quality: Quality, cas: crate::ocean_fft::Cascades) {
+        let mut s = self.app.borrow_mut();
+        let aspect = s.config.width as f32 / s.config.height as f32;
+        let App { world, gpu, renderer, waves, .. } = &mut *s;
+        *waves = world.reconfigure(gpu, gpu, renderer, &preset, &quality, cas);
+        // The world keeps the aspect it was first built with; the canvas may
+        // have been resized since.
+        world.camera.set_aspect(aspect);
+    }
+}
+
+/// A JSON string literal.
+fn json_str(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 /// Mouse drag and wheel, wired to the same `OrbitControls` the desktop build
@@ -317,6 +477,7 @@ fn start_frames(canvas: web_sys::HtmlCanvasElement, app: Rc<RefCell<App>>) {
             let dt = now() - s.fps_since;
             if dt >= 500.0 {
                 let fps = s.frames as f64 * 1000.0 / dt;
+                s.fps = fps;
                 let submerged = s.world.submerged;
                 if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
                     doc.set_title(&format!(

@@ -639,8 +639,9 @@ fn rewinding_puts_the_race_back_where_it_was() {
 }
 
 /// What a rewind costs against the session it replays: printed, not checked.
-/// Run in release, `--nocapture`.
+/// `cargo test --release ... --test race rewind_cost -- --ignored --nocapture`
 #[test]
+#[ignore = "a measurement; run it in release"]
 fn rewind_cost() {
     use threers_ecs::replay::Rewind;
     fn cpu() -> f64 {

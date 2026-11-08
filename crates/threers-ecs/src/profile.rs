@@ -14,6 +14,7 @@ pub struct SystemTime {
     pub ms: f64,
     /// The slowest single run lately, decaying back towards `ms`.
     pub peak_ms: f64,
+    /// How many runs have been timed.
     pub runs: u64,
 }
 
@@ -39,6 +40,7 @@ impl Profile {
         all
     }
 
+    /// One system's timing, by its function's name, with or without the module path.
     pub fn get(&self, name: &str) -> Option<SystemTime> {
         self.systems
             .iter()
@@ -55,7 +57,9 @@ impl Profile {
 /// A system panicked and was switched off.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SystemFailed {
+    /// The system's function name.
     pub system: &'static str,
+    /// The panic message.
     pub message: String,
 }
 

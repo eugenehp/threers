@@ -99,7 +99,7 @@ fn coloured_glass_tints_by_channel_in_every_mode() {
     }
 }
 
-#[cfg(feature = "metal")]
+#[cfg(metal_backend)]
 #[test]
 fn coloured_glass_tints_by_channel_on_metal() {
     use threers::metal::{MetalError, MetalHeadlessRenderer};

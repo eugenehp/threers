@@ -38,6 +38,7 @@ pub struct HotReload {
 
 /// Where the state goes, and when it last went.
 pub struct HotState {
+    /// The file the state is saved to and resumed from.
     pub path: PathBuf,
     every: f64,
     last: f64,
@@ -47,6 +48,8 @@ pub struct HotState {
 }
 
 impl HotReload {
+    /// Save the registered state to `path` twice a second; a game started by the
+    /// watcher resumes from it.
     pub fn new(path: impl Into<PathBuf>) -> Self {
         Self {
             path: path.into(),

@@ -110,7 +110,7 @@ impl PipelineWarmup {
             return false;
         };
         let result = pipeline.compile();
-        self.finish(&pipeline, result);
+        self.finish(pipeline, result);
         true
     }
 
@@ -121,7 +121,7 @@ impl PipelineWarmup {
             return false;
         };
         let result = pipeline.compile_async().await;
-        self.finish(&pipeline, result);
+        self.finish(pipeline, result);
         true
     }
 

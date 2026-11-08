@@ -47,8 +47,11 @@ pub struct Console;
 /// has been said.
 #[derive(Default)]
 pub struct ConsoleState {
+    /// Whether it is showing and taking the keys.
     pub open: bool,
+    /// What is typed so far.
     pub line: String,
+    /// Lines run, oldest first; up recalls them.
     pub history: Vec<String>,
     output: Vec<(String, bool)>,
     recall: Option<usize>,

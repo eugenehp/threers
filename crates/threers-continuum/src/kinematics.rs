@@ -219,9 +219,7 @@ impl TipController {
 
     /// Put the command back to straight.
     pub fn home(&mut self) {
-        for c in &mut self.clark {
-            *c = [0.0; 2];
-        }
+        self.clark.fill([0.0; 2]);
     }
 
     fn arcs(&self, clark: &[[f32; 2]]) -> Vec<(f32, f32, f32)> {

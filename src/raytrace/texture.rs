@@ -50,11 +50,13 @@ impl CpuTexture {
     /// pixels at all — a render-target handle, or a format without a decoder
     /// (BC7, which the crate can upload but not expand).
     pub fn from_texture(tex: &Texture) -> Option<Self> {
-        if tex.is_handle() || tex.width == 0 || tex.height == 0 {
+        if (tex.is_handle() && tex.stream.is_none()) || tex.width == 0 || tex.height == 0 {
             return None;
         }
         let (w, h) = (tex.width, tex.height);
-        let src = tex.data.as_ref();
+        // A video's newest frame, or the texture's own bytes.
+        let pixels = tex.pixels();
+        let src: &[u8] = &pixels;
         let texels = match tex.format {
             TextureFormat::Rgba8UnormSrgb => Texels::Ldr {
                 data: fit(src, (w * h * 4) as usize),
@@ -87,6 +89,18 @@ impl CpuTexture {
                     let hi = src.get(i * 2 + 1).copied().unwrap_or(0);
                     *o = f16_to_f32(u16::from_le_bytes([lo, hi]));
                 }
+                Texels::Hdr(out)
+            }
+            // Other floats as linear RGBA, one channel splat like `R8Unorm`.
+            f @ (TextureFormat::R16Float | TextureFormat::R32Float | TextureFormat::Rgba32Float) => {
+                let count = (w * h) as usize;
+                let v = f.texels_f32(src).unwrap_or_default();
+                let at = |i: usize| v.get(i).copied().unwrap_or(0.0);
+                let out = if f.channels() == 1 {
+                    (0..count).flat_map(|i| [at(i), at(i), at(i), 1.0]).collect()
+                } else {
+                    (0..count * 4).map(at).collect()
+                };
                 Texels::Hdr(out)
             }
             TextureFormat::Bc1RgbaUnormSrgb => Texels::Ldr {
@@ -367,10 +381,11 @@ pub fn f16_to_f32(bits: u16) -> f32 {
 
 /// Decodes each distinct [`Texture`] once, keyed by `Arc` identity — the same
 /// rule the GPU renderer's upload cache uses, so a map shared by twenty
-/// materials is expanded once.
+/// materials is expanded once. A streamed texture (video) is decoded again
+/// when its stream has moved on to a new frame.
 #[derive(Debug, Default)]
 pub struct TextureCache {
-    by_ptr: HashMap<usize, Option<Arc<CpuTexture>>>,
+    by_ptr: HashMap<(usize, u64), Option<Arc<CpuTexture>>>,
 }
 
 impl TextureCache {
@@ -379,7 +394,12 @@ impl TextureCache {
     }
 
     pub fn get(&mut self, tex: &Arc<Texture>) -> Option<Arc<CpuTexture>> {
-        let key = Arc::as_ptr(tex) as usize;
+        let frame = tex.stream.as_ref().map_or(0, |s| s.frames());
+        let key = (Arc::as_ptr(tex) as usize, frame);
+        if frame > 0 {
+            // The frame before this one is not drawn again.
+            self.by_ptr.retain(|k, _| k.0 != key.0 || k.1 == frame);
+        }
         self.by_ptr
             .entry(key)
             .or_insert_with(|| CpuTexture::from_texture(tex).map(Arc::new))

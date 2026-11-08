@@ -185,6 +185,10 @@ struct MarkLayer {
     material : vec4<f32>,
     // A fifth vec4 of the kind's own (custom kinds' `Mark::kind_extra2`).
     extra2 : vec4<f32>,
+    // A sixth to eighth (`Mark::kind_extra3`).
+    extra3 : vec4<f32>,
+    extra4 : vec4<f32>,
+    extra5 : vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> frame : MarkFrame;
@@ -323,6 +327,78 @@ fn mark_hidden() -> vec4<f32> {
     return vec4<f32>(0.0, 0.0, 2.0, 1.0);
 }
 
+/// A triangle clipped to the view volume as SwiftShader's `Clipper` clips
+/// it: `n` vertices (GL clip positions) and their varyings, in order.
+struct MarkSsPoly {
+    n : u32,
+    p : array<vec4<f32>, 9>,
+    k : array<vec4<f32>, 9>,
+}
+
+/// Distance inside plane `i` of SwiftShader's clipper, in its order: near
+/// and far on ANGLE's depth `(z + w) / 2`, left, right, then y's two.
+fn mark_ss_clip_distance(i : u32, v : vec4<f32>) -> f32 {
+    switch (i) {
+        case 0u: { return (v.z + v.w) * 0.5; }
+        case 1u: { return v.w - (v.z + v.w) * 0.5; }
+        case 2u: { return v.w + v.x; }
+        case 3u: { return v.w - v.x; }
+        case 4u: { return v.w + v.y; }
+        default: { return v.w - v.y; }
+    }
+}
+
+/// SwiftShader's `Clipper`: a plane only when a corner is past it; a new
+/// vertex `(dj · Vi − di · Vj) / (dj − di)` in float32 between the inside
+/// `Vi` and the outside `Vj`, the varyings with the same weights. A GPU
+/// rasterizes past the viewport instead (a guard band); SwiftShader's new
+/// vertices are snapped like any other, moving the edges that leave the
+/// screen a little.
+fn mark_ss_clip(a : vec4<f32>, b : vec4<f32>, c : vec4<f32>, ka : vec4<f32>, kb : vec4<f32>, kc : vec4<f32>) -> MarkSsPoly {
+    var poly : MarkSsPoly;
+    poly.n = 3u;
+    poly.p[0] = a;
+    poly.p[1] = b;
+    poly.p[2] = c;
+    poly.k[0] = ka;
+    poly.k[1] = kb;
+    poly.k[2] = kc;
+    for (var i = 0u; i < 6u; i++) {
+        if (poly.n < 3u) {
+            break;
+        }
+        if (!(mark_ss_clip_distance(i, a) < 0.0 || mark_ss_clip_distance(i, b) < 0.0 || mark_ss_clip_distance(i, c) < 0.0)) {
+            continue;
+        }
+        var next : MarkSsPoly;
+        next.n = 0u;
+        for (var v = 0u; v < poly.n; v++) {
+            let w = select(v + 1u, 0u, v + 1u == poly.n);
+            let di = mark_ss_clip_distance(i, poly.p[v]);
+            let dj = mark_ss_clip_distance(i, poly.p[w]);
+            if (di >= 0.0) {
+                next.p[next.n] = poly.p[v];
+                next.k[next.n] = poly.k[v];
+                next.n++;
+                if (dj < 0.0) {
+                    let d = 1.0 / (dj - di);
+                    next.p[next.n] = (dj * poly.p[v] - di * poly.p[w]) * d;
+                    next.k[next.n] = (dj * poly.k[v] - di * poly.k[w]) * d;
+                    next.n++;
+                }
+            } else if (dj > 0.0) {
+                let d = 1.0 / (di - dj);
+                next.p[next.n] = (di * poly.p[w] - dj * poly.p[v]) * d;
+                next.k[next.n] = (di * poly.k[w] - dj * poly.k[v]) * d;
+                next.n++;
+            }
+        }
+        poly = next;
+    }
+    return poly;
+}
+
+
 /// `clip` with the depth of `p` moved towards the camera by `px` screen
 /// pixels' worth of world, times the layer's lift, so a sprite resting on a
 /// surface is not cut off where the surface comes nearer than its anchor.
@@ -405,9 +481,11 @@ fn mark_ss_window(p : vec4<f32>) -> vec3<f32> {
 }
 
 fn mark_ss_plane(a : vec4<f32>, b : vec4<f32>, c : vec4<f32>) -> MarkPlane {
-    var v0 = a;
-    var v1 = b;
-    var v2 = c;
+    // SwiftShader takes a GL triangle's corners last first (ANGLE's last
+    // provoking vertex); each sort below tests the values before it.
+    var v0 = c;
+    var v1 = a;
+    var v2 = b;
     // GL's clip y: the frame drawn upside down has it negated.
     let flip = select(1.0, -1.0, frame.raster.x > 0.5);
     let y0 = v0.y * flip;
@@ -2320,10 +2398,15 @@ fn sprite_color(in : SpriteOut) -> vec4<f32> {
         let r = min(layer.extra.x, min(in.half.x, in.half.y));
         let q = abs(in.local) - in.half + vec2<f32>(r);
         let d = length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0) - r;
-        let inside = clamp(0.5 - d, 0.0, 1.0);
+        // deck.gl's `smoothedge` (a pixel-wide smoothstep): a rounded box's
+        // outline eased off, a square one's left to the quad's own edge.
+        // Only within the box's own quad, as deck.gl's draws it (ours is
+        // grown for the ramp).
+        let in_quad = all(abs(in.local) <= in.half);
+        let inside = select(0.0, select(1.0, smoothstep(d - 0.5, d + 0.5, 0.0), r > 0.0), in_quad);
         var c = in.color;
         if (layer.extra.y > 0.0) {
-            var border = clamp(d + layer.extra.y + 0.5, 0.0, 1.0);
+            var border = smoothstep(-d - 0.5, -d + 0.5, layer.extra.y);
             // A dashed border: in its gaps, the fill — deck.gl's
             // PathStyleExtension on a text background.
             let period = in.dash.x + in.dash.y;
@@ -2336,7 +2419,8 @@ fn sprite_color(in : SpriteOut) -> vec4<f32> {
                     }
                 }
             }
-            c = mix(c, layer.material, border);
+            // On sRGB values, as deck.gl's shader mixes them.
+            c = mark_mix(c, layer.material, border);
         }
         return vec4<f32>(c.rgb, c.a * inside);
     }

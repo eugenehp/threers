@@ -105,6 +105,13 @@ pub trait Av1Accel {
     fn frame(&mut self, f: &AccelFrame<'_>) -> Result<(), String>;
     /// The samples of a picture it decoded (before film grain).
     fn read(&mut self, pic: &Picture) -> Result<Picture, String>;
+    /// [`read`](Self::read) for a picture shown without film grain, whose
+    /// samples nothing here touches again: an accelerator that hands
+    /// pictures on its own way may keep this one and return an empty
+    /// picture. By default, `read`.
+    fn read_shown(&mut self, pic: &Picture) -> Result<Picture, String> {
+        self.read(pic)
+    }
 }
 
 /// Everything an [`Av1Accel`] is told about one frame.
@@ -284,7 +291,11 @@ impl Av1Decoder {
     fn finish_output(&mut self, out: &mut [Av1Frame]) -> Result<(), String> {
         for f in out.iter_mut() {
             if let Some(a) = self.accel.as_mut() {
-                f.pic = Arc::new(a.read(&f.pic)?);
+                f.pic = Arc::new(if f.hdr.film_grain_present {
+                    a.read(&f.pic)?
+                } else {
+                    a.read_shown(&f.pic)?
+                });
             }
             if f.hdr.film_grain_present {
                 f.pic = Arc::new(fg::apply_grain(&f.pic, &f.hdr.film_grain, &f.seq));

@@ -543,7 +543,7 @@ impl Rng {
 /// [`hsv_to_rgb`], for the Metal backend — which needs the *same* sequence of
 /// colours from the same seed, or a parity test is comparing two pictures of
 /// different fluids.
-#[cfg(feature = "metal")]
+#[cfg(metal_backend)]
 pub(crate) fn hsv_to_rgb_for_backends(h: f32, s: f32, v: f32) -> [f32; 3] {
     hsv_to_rgb(h, s, v)
 }

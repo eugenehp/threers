@@ -46,18 +46,31 @@ Always there:
   the frame rate cannot lose or repeat one.
 - **Systems** ordered with `.before(f)` and `.after(f)`, naming the function itself,
   and gated with `.run_if` and `.in_state`.
+- **Systems as functions** (`params`): `fn movement(q: Query<(Node, &Velocity)>,
+  time: Res<Time>)`, checked for aliasing when added. `System::parallel(f)` runs
+  systems at once when none changes what another uses.
 - **`App`**: a fixed-timestep loop that opens no window, with game states, pause,
-  slow motion and single-stepping.
+  slow motion and single-stepping. `catch_panics` switches a failing system off
+  instead of ending the game; `profile` times every system.
 - **`Input`**: named actions and axes over keys, mouse and gamepads, with presses
-  that reach fixed systems exactly once at any frame rate.
+  that reach fixed systems exactly once at any frame rate. `Input::consume` takes a
+  press for an overlay. `touch` adds an on-screen stick and buttons.
 - **`registry`**: `reflect!` a component and it can be saved, loaded, stamped out as a
-  prefab and shown in the inspector.
-- **`assets`**: background loading, hot reload, and `spawn_scene` for `.glb` files,
-  whose `extras` become components.
+  prefab and shown in the inspector. `saves` keeps slots in files or `localStorage`.
+- **`assets`**: background loading, hot reload, a loading screen, and `spawn_scene`
+  for `.glb` files, whose `extras` become components.
 - **`animator`**: a state machine over clips, with crossfades.
 - **`hud`**: a canvas over the game, and a retained UI with the `ui` feature.
+- **`camera`**: `ChaseCamera`, which follows whatever has `CameraTarget`.
+- **`batch`**: `Static` and `World::bake_static`, many still meshes as few draws.
+- **`timer`**: `Timer`, `w.after(seconds, ..)` and `Tween`, all on game time.
+- **`tasks`**: work longer than a frame, on threads or Web Workers.
+- **`replay`**: record input, play it back bit-exact, and `Rewind` on F1.
 - **`testing`**: `TestGame` plays a game with no window, and compares rendered frames.
-- **`dev`**: F3 to F7 for frame time, colliders, pause, step and an inspector.
+- **`dev`**: F1 to F12 for rewind, a free camera, the panel, colliders, pause, step
+  and an inspector; a console on backquote; `gizmos` for drawing what code thinks;
+  `tuning` for numbers edited in a file while the game runs; `hot` to keep the
+  game's state across a rebuild.
 
 Features:
 
@@ -70,6 +83,10 @@ Features:
 | `gamepad` | Real pads through gilrs |
 | `web` | A browser canvas, with DOM input, the Gamepad API, Web Audio and `fetch` |
 | `ui` | The retained UI layer |
+| `parallel` | rayon: parallel systems, `World::par_each`, tasks on its pool, and the solver's parallel narrow phase |
+| `web-threads` | `parallel` in a browser: a nightly build with atomics, and a page with COOP and COEP headers |
+| `tokio` | `Tasks::spawn_async` on a tokio runtime, natively |
+| `video` | `Spawned::video(player)`: a video playing on a mesh, on game time; with `audio`, its soundtrack plays in step |
 
 ## Physics
 

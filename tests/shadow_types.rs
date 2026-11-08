@@ -283,7 +283,7 @@ fn shadow_filters_and_cascades() {
     all(&mut |scene, cam| hr.render_to_rgba(scene, cam));
 }
 
-#[cfg(feature = "metal")]
+#[cfg(metal_backend)]
 #[test]
 fn shadow_filters_and_cascades_on_metal() {
     use threers::metal::{MetalError, MetalHeadlessRenderer};

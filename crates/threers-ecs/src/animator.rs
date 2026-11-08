@@ -30,7 +30,9 @@ use threers::animation::{AnimationClip, AnimationMixer, LoopMode};
 /// When a transition fires.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Condition {
+    /// A float parameter, set with [`Animator::set`], went above this value.
     Above(String, f32),
+    /// A float parameter went below this value.
     Below(String, f32),
     /// Fired once with [`Animator::trigger`].
     Trigger(String),
@@ -40,14 +42,17 @@ pub enum Condition {
 }
 
 impl Condition {
+    /// [`Condition::Above`], without the `to_owned`.
     pub fn above(parameter: &str, value: f32) -> Self {
         Condition::Above(parameter.to_owned(), value)
     }
 
+    /// [`Condition::Below`], without the `to_owned`.
     pub fn below(parameter: &str, value: f32) -> Self {
         Condition::Below(parameter.to_owned(), value)
     }
 
+    /// [`Condition::Trigger`], without the `to_owned`.
     pub fn trigger(name: &str) -> Self {
         Condition::Trigger(name.to_owned())
     }
@@ -56,7 +61,9 @@ impl Condition {
 /// A one-shot state's clip reached its end.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AnimationFinished {
+    /// The entity whose [`Animator`] it is.
     pub entity: Entity,
+    /// The state whose clip finished.
     pub state: String,
 }
 
@@ -96,6 +103,7 @@ impl Default for Animator {
 impl Component for Animator {}
 
 impl Animator {
+    /// An animator with no states. It starts in the first one added.
     pub fn new() -> Self {
         Self {
             mixer: Some(AnimationMixer::new()),

@@ -83,10 +83,25 @@ pub struct MkvFrame {
     pub keyframe: bool,
     /// `DiscardPadding`, nanoseconds.
     pub discard_padding: i64,
-    /// The coded frame, with any header-stripping prefix restored.
+    /// The coded frame, with any header-stripping prefix restored. Empty
+    /// when [`Mkv::index`] left it in the file: see [`at`](Self::at).
     pub data: Vec<u8>,
+    /// Where the coded frame lies in the file, when [`Mkv::index`] left it
+    /// there rather than copying it into [`data`](Self::data).
+    pub at: Option<std::ops::Range<usize>>,
     /// `BlockAdditional` with `BlockAddID` 1 (the WebM alpha bitstream).
     pub alpha: Option<Vec<u8>>,
+}
+
+impl MkvFrame {
+    /// The coded frame: [`data`](Self::data), or where it lies in `file`
+    /// (the bytes [`Mkv::index`] was given).
+    pub fn bytes<'a>(&'a self, file: &'a [u8]) -> &'a [u8] {
+        match &self.at {
+            Some(at) => &file[at.clone()],
+            None => &self.data,
+        }
+    }
 }
 
 /// A parsed Matroska / WebM file.
@@ -102,6 +117,9 @@ pub struct Mkv {
     pub tracks: Vec<MkvTrack>,
     /// Every frame of every track, in file order.
     pub frames: Vec<MkvFrame>,
+    /// With [`index`](Self::index): the file's address, to find where a
+    /// block lies in it.
+    in_place: Option<usize>,
 }
 
 // Element ids.
@@ -270,9 +288,23 @@ fn children(r: &Reader, start: usize, end: usize, mut f: impl FnMut(u32, usize, 
 impl Mkv {
     /// Parse a whole file.
     pub fn parse(data: &[u8]) -> Result<Mkv, String> {
+        Self::parse_with(data, None)
+    }
+
+    /// [`parse`](Self::parse), but leave the frames in the file: each
+    /// frame's [`at`](MkvFrame::at) says where, and its `data` is empty
+    /// (except for a frame that needs a stripped header put back, which
+    /// is copied). For a film of gigabytes, nothing is copied; read a frame
+    /// with [`MkvFrame::bytes`].
+    pub fn index(data: &[u8]) -> Result<Mkv, String> {
+        Self::parse_with(data, Some(data.as_ptr() as usize))
+    }
+
+    fn parse_with(data: &[u8], in_place: Option<usize>) -> Result<Mkv, String> {
         let r = Reader { d: data };
         let mut mkv = Mkv {
             timestamp_scale: 1_000_000,
+            in_place,
             ..Default::default()
         };
         let mut pos = 0usize;
@@ -516,8 +548,17 @@ impl Mkv {
         let lace_dur = duration.map(|d| d / n);
         let pts0 = cluster_ts + rel;
         for (i, &s) in sizes.iter().enumerate() {
-            let mut data = prefix.clone();
-            data.extend_from_slice(&b[p..p + s]);
+            let (data, at) = match self.in_place {
+                Some(file) if prefix.is_empty() => {
+                    let start = b.as_ptr() as usize - file + p;
+                    (Vec::new(), Some(start..start + s))
+                }
+                _ => {
+                    let mut data = prefix.clone();
+                    data.extend_from_slice(&b[p..p + s]);
+                    (data, None)
+                }
+            };
             p += s;
             let last = i + 1 == sizes.len();
             self.frames.push(MkvFrame {
@@ -527,6 +568,7 @@ impl Mkv {
                 keyframe: key,
                 discard_padding: if last { discard_padding } else { 0 },
                 data,
+                at,
                 alpha: if i == 0 { alpha.clone() } else { None },
             });
         }
@@ -628,6 +670,16 @@ fn track_entry(r: &Reader, s: usize, e: usize) -> MkvTrack {
 pub fn parse_ivf(
     data: &[u8],
 ) -> Result<([u8; 4], u32, u32, (u32, u32), Vec<(i64, Vec<u8>)>), String> {
+    let (fourcc, w, h, rate, frames) = index_ivf(data)?;
+    let frames = frames.into_iter().map(|(pts, at)| (pts, data[at].to_vec())).collect();
+    Ok((fourcc, w, h, rate, frames))
+}
+
+/// [`parse_ivf`], but where each frame lies in `data` rather than a copy.
+#[allow(clippy::type_complexity)]
+pub fn index_ivf(
+    data: &[u8],
+) -> Result<([u8; 4], u32, u32, (u32, u32), Vec<(i64, std::ops::Range<usize>)>), String> {
     if data.len() < 32 || &data[0..4] != b"DKIF" {
         return Err("not an IVF file".into());
     }
@@ -646,7 +698,7 @@ pub fn parse_ivf(
         if pos + size > data.len() {
             break;
         }
-        frames.push((pts, data[pos..pos + size].to_vec()));
+        frames.push((pts, pos..pos + size));
         pos += size;
     }
     Ok((fourcc, w, h, (num, den), frames))

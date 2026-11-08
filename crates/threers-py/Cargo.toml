@@ -33,9 +33,9 @@ animation = ["dep:threers-animation"]
 usd = ["threers/usd"]
 
 [dependencies]
-threers = { path = "../..", version = "0.0.11" }
-threers-physics = { path = "../threers-physics", version = "0.0.11", optional = true }
-threers-animation = { path = "../threers-animation", version = "0.0.11", optional = true, default-features = false }
+threers = { path = "../..", version = "0.0.12" }
+threers-physics = { path = "../threers-physics", version = "0.0.12", optional = true }
+threers-animation = { path = "../threers-animation", version = "0.0.12", optional = true, default-features = false }
 pyo3 = { version = "0.29", features = ["extension-module", "abi3-py39"] }
 
 # `add_extension_module_link_args`: on macOS an extension module leaves the

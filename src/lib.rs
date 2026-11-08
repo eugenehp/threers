@@ -36,6 +36,7 @@
 //! | Feature | Default | Role | Extra deps |
 //! |---------|---------|------|------------|
 //! | `captions` | **on** | Subtitles — SRT + WebVTT, on-screen and burned in | — |
+//! | `sketch` | **on** | `sketch()` and the winit-window `WindowRenderer`; off, winit is not built | — |
 //! | `mesh-bvh` | | Accelerated raycast / shapecast | — |
 //! | `raytrace` | | Path tracer: global illumination, area lights, refraction, DoF; CPU + wgpu-compute backends | — |
 //! | `bvh-csg` | | Constructive solid geometry (implies `mesh-bvh`) | — |
@@ -46,7 +47,7 @@
 //! | `usd` | | Universal Scene Description — `.usda`, `.usdc`, `.usdz`, read and written | — |
 //! | `video` | | Native frame-sequence export via ffmpeg (implies `captions`) | — |
 //! | `native-codec` | | Pure-Rust video encoders, audio decoders and containers (wasm-safe; the `threers-codec` crate) | — |
-//! | `native-decode` | | Pure-Rust H.264, HEVC, VP9 and AV1 decoders (implies `native-codec`) | — |
+//! | `native-decode` | | Pure-Rust H.264, HEVC, VP9 and AV1 decoders, and [`video_player`] for video on meshes, sound included (implies `native-codec`). Decodes on every core, and in hardware where there is some (VideoToolbox, NVDEC, VAAPI, loaded at run time) | — |
 //! | `metal` | | A second renderer on Metal directly, via the Objective-C runtime (macOS/iOS) | — |
 //! | `visionos` | | CompositorServices frame loop + ARKit world tracking, stereo and reverse-Z (implies `metal`) | — |
 //! | `videotoolbox` | | In-process VideoToolbox encode and decode (macOS) | — |
@@ -238,9 +239,9 @@ pub mod overlay;
 // (Its docs are the module's own `//!`; an outer `///` here would make their
 // intra-doc links resolve in this scope, where `Ui` is not.)
 pub mod renderer;
-/// A window, a scene and a loop in one call. Native only, and not tvOS or
-/// visionOS, whose windows belong to the system.
-#[cfg(not(any(target_arch = "wasm32", target_os = "tvos", target_os = "visionos")))]
+/// A window, a scene and a loop in one call. Needs the `sketch` feature; native
+/// only, and not tvOS or visionOS, whose windows belong to the system.
+#[cfg(winit_window)]
 pub mod sketch;
 #[cfg(feature = "ui")]
 pub mod ui;
@@ -560,6 +561,9 @@ pub use codec::webm::{encode_gray_webm, encode_webm, mux_webm, WebmCodec, WebmFr
 /// bindings, and wasm-compatible. Enable the `native-codec` feature.
 #[cfg(feature = "native-codec")]
 pub use threers_codec as codec;
+// Video on a mesh; the module documents itself.
+#[cfg(any(feature = "video", feature = "native-decode"))]
+pub mod video_player;
 
 #[cfg(feature = "mesh-bvh")]
 pub use mesh_bvh::{

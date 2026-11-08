@@ -55,7 +55,7 @@ struct Frame<'a> {
 impl Av1Encoder {
     /// An encoder at quantiser `qidx`, 1 (nearly lossless) to 255.
     pub fn new(width: usize, height: usize, qidx: u8) -> Result<Self, String> {
-        if width == 0 || height == 0 || width % 8 != 0 || height % 8 != 0 {
+        if width == 0 || height == 0 || !width.is_multiple_of(8) || !height.is_multiple_of(8) {
             return Err(format!(
                 "AV1 encoder needs sides that are multiples of 8, not {width}x{height}"
             ));
@@ -367,11 +367,7 @@ impl Av1Encoder {
                 .sum::<u32>();
         }
         let count = n as u32 * ((y0 > 0) as u32 + (x0 > 0) as u32);
-        let dc = if count == 0 {
-            128
-        } else {
-            (sum + count / 2) / count
-        };
+        let dc = (sum + count / 2).checked_div(count).unwrap_or(128);
 
         // Rows then columns of the orthonormal DCT.
         let log2 = tx + 2;

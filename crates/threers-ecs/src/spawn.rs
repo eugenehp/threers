@@ -31,6 +31,7 @@ pub struct Spawned<'w> {
 }
 
 impl Spawned<'_> {
+    /// Put it at `position`, relative to its parent.
     pub fn at(self, position: Vector3) -> Self {
         if let Some(node) = self.world.scene.get_mut(self.id) {
             node.position = position;
@@ -38,6 +39,7 @@ impl Spawned<'_> {
         self
     }
 
+    /// Turn it to `rotation`.
     pub fn rotated(self, rotation: Quaternion) -> Self {
         if let Some(node) = self.world.scene.get_mut(self.id) {
             node.quaternion = rotation;
@@ -45,6 +47,7 @@ impl Spawned<'_> {
         self
     }
 
+    /// Name it, as the inspector and the console's `select` show it.
     pub fn named(self, name: impl Into<String>) -> Self {
         if let Some(node) = self.world.scene.get_mut(self.id) {
             node.name = name.into();
@@ -149,6 +152,25 @@ impl Spawned<'_> {
         self
     }
 
+    /// Play `player` on this mesh: its texture becomes the material's `map`,
+    /// and the app moves it on with game time, sound and all (with the `audio`
+    /// feature and plugin). The material is copied for this mesh first if
+    /// others share it. Needs the `video` feature. For a silent one, insert
+    /// [`Video::muted`](crate::video::Video::muted) instead.
+    #[cfg(feature = "video")]
+    pub fn video(self, player: crate::video::VideoPlayer) -> Self {
+        if let Some(node) = self.world.scene.get_mut(self.id) {
+            if let ObjectKind::Mesh(mesh) = &mut node.kind {
+                if let Some(slot) = std::sync::Arc::make_mut(&mut mesh.material).map_slot_mut("map") {
+                    *slot = Some(player.texture());
+                }
+            }
+        }
+        self.world.insert(self.id, crate::video::Video::new(player));
+        self
+    }
+
+    /// The entity, to keep.
     pub fn id(self) -> Entity {
         self.id
     }

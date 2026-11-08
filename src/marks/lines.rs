@@ -120,13 +120,34 @@ fn vs_main(in : LineIn) -> LineOut {
     let dx = half_w * (cb.x / cb.w - ca.x / ca.w);
     let dy = half_h * (cb.y / cb.w - ca.y / ca.w);
     let x_major = (dx > -dy) == (dx > dy);
-    let c = mark_corner_signed(mark_quad_corner(in.vid));
-    let far = c.x > 0.0;
-    let base = select(ca, cb, far);
-    let across = select(vec2<f32>(0.5 * base.w / half_w, 0.0), vec2<f32>(0.0, 0.5 * base.w / half_h), x_major);
-    let off = across * c.y;
-    let hidden = i.visible <= 0.0 || ca.w <= 0.0 || cb.w <= 0.0 || (dx == 0.0 && dy == 0.0);
-    out.clip = select(mark_order(vec4<f32>(base.xy + off, base.z, base.w)), mark_hidden(), hidden);
+    // The parallelogram's corner `k` in GL's clip space.
+    var corners : array<vec4<f32>, 4>;
+    for (var k = 0u; k < 4u; k++) {
+        let c = mark_corner_signed(k);
+        let base = select(ca, cb, c.x > 0.0);
+        let across = select(vec2<f32>(0.5 * base.w / half_w, 0.0), vec2<f32>(0.0, 0.5 * base.w / half_h), x_major);
+        corners[k] = vec4<f32>(base.xy + across * c.y, base.z, base.w);
+    }
+    // Its two triangles, (0, 1, 2) and (0, 2, 3), each 21 vertices: under
+    // SwiftShader emulation the fan of what its clipper leaves (the vertex
+    // hidden past the last piece), else the triangle alone.
+    let tri = in.vid / 21u;
+    let local = in.vid % 21u;
+    let piece = local / 3u;
+    let corner = local % 3u;
+    let ids = select(vec3<u32>(0u, 1u, 2u), vec3<u32>(0u, 2u, 3u), tri == 1u);
+    var poly : MarkSsPoly;
+    poly.n = 3u;
+    poly.p[0] = corners[ids[0]];
+    poly.p[1] = corners[ids[1]];
+    poly.p[2] = corners[ids[2]];
+    if (frame.raster.z > 0.5) {
+        poly = mark_ss_clip(corners[ids[0]], corners[ids[1]], corners[ids[2]], vec4<f32>(0.0), vec4<f32>(0.0), vec4<f32>(0.0));
+    }
+    let at = select(select(piece + 2u, piece + 1u, corner == 1u), 0u, corner == 0u);
+    let far = mark_corner_signed(ids[corner]).x > 0.0;
+    let hidden = i.visible <= 0.0 || ca.w <= 0.0 || cb.w <= 0.0 || (dx == 0.0 && dy == 0.0) || piece + 3u > poly.n;
+    out.clip = select(mark_order(poly.p[min(at, 8u)]), mark_hidden(), hidden);
     if (frame.raster.z > 0.5) {
         let plane = mark_ss_line_plane(mark_order(ca), mark_order(cb));
         out.plane = plane.abc;
@@ -254,7 +275,8 @@ impl Mark for LineMarks {
     }
     fn vertices_per_instance(&self) -> u32 {
         if self.parallelogram {
-            6
+            // Two triangles, each up to seven pieces once clipped.
+            42
         } else {
             2
         }

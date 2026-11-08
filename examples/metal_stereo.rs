@@ -11,9 +11,14 @@
 //! read back and written side by side, so you can cross your eyes at
 //! `out/metal_stereo.png` and see the parallax the headset would.
 
+// Metal is macOS and iOS only; elsewhere this example says so and stops.
+#![cfg_attr(not(metal_backend), allow(dead_code, unused_imports))]
+
 use std::path::PathBuf;
 
+#[cfg(metal_backend)]
 use threers::metal::enums::pixel_format;
+#[cfg(metal_backend)]
 use threers::metal::{MetalDevice, MetalError, MetalRenderTarget, MetalRenderer, RenderView};
 use threers::prelude::*;
 
@@ -23,6 +28,7 @@ const EYE_H: u32 = 640;
 /// Vision Pro reports.
 const IPD: f32 = 0.063;
 
+#[cfg(metal_backend)]
 fn main() -> Result<(), MetalError> {
     let device = MetalDevice::new()?;
     println!("device: {}", device.name());
@@ -132,4 +138,9 @@ fn join_horizontally(left: &[u8], right: &[u8], width: u32, height: u32) -> Vec<
         out[y * row * 2 + row..(y + 1) * row * 2].copy_from_slice(&right[y * row..(y + 1) * row]);
     }
     out
+}
+
+#[cfg(not(metal_backend))]
+fn main() {
+    eprintln!("this example needs the Metal backend: macOS or iOS, with `--features metal`");
 }

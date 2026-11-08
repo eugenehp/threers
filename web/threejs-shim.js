@@ -16956,11 +16956,47 @@ export class VideoTexture extends Texture {
     _syncUv() {
         if (_syncTextureUv(this)) _rebindTexture(this);
     }
+    _gpuVideo(video) {
+        const proto = WebDataTexture.prototype;
+        if (!WebDataTexture.newStreamed || !proto || !proto.writeVideo) return false;
+        const w = video.videoWidth, h = video.videoHeight;
+        if (!w || !h || video.readyState < 2) return false;
+        if (!this._w || !this._gpu || this._lw !== w || this._lh !== h) {
+            this._w = WebDataTexture.newStreamed(w, h);
+            this._gpu = true;
+            this._lw = w;
+            this._lh = h;
+            this._fresh = true;
+            this._syncUv();
+        }
+        // Copy only when the video has a new frame, where the browser says.
+        if (typeof video.requestVideoFrameCallback === 'function') {
+            if (!this._watching) {
+                this._watching = true;
+                const watch = () => {
+                    this._fresh = true;
+                    video.requestVideoFrameCallback(watch);
+                };
+                video.requestVideoFrameCallback(watch);
+            }
+            if (!this._fresh) return true;
+        }
+        if (!this._w.writeVideo(video)) return false;
+        this._fresh = false;
+        this.needsUpdate = true;
+        return true;
+    }
     update() {
         const video = this.image;
+        if (!video) return;
+        // The fast path: the browser's own decoded frame (hardware where it
+        // has it) copied into the texture GPU to GPU. Nothing comes back to
+        // the CPU, which is what lets 4K and 8K play; and with
+        // requestVideoFrameCallback only new frames are copied.
+        if (this._gpuVideo(video)) return;
         const canvas = this._canvas;
         const ctx = this._ctx;
-        if (!video || !canvas || !ctx) return;
+        if (!canvas || !ctx) return;
         const w = video.videoWidth || 1280;
         const h = video.videoHeight || 720;
         if (canvas.width !== w) canvas.width = w;
@@ -16977,13 +17013,23 @@ export class VideoTexture extends Texture {
             this._buf = new Uint8Array(byteLen);
         }
         this._buf.set(data);
-        if (this._w && this._lw === w && this._lh === h && this._w.replaceRgba) {
-            if (this._w.replaceRgba(this._buf)) {
+        if (this._w && this._lw === w && this._lh === h) {
+            // A streamed texture takes the frame into the GPU texture it
+            // already has; `replaceRgba` makes a new one each time.
+            const done = this._w.writeFrame ? this._w.writeFrame(this._buf)
+                : (this._w.replaceRgba && this._w.replaceRgba(this._buf));
+            if (done) {
                 this.needsUpdate = true;
                 return;
             }
         }
-        this._w = new WebDataTexture(w, h, this._buf);
+        if (WebDataTexture.newStreamed) {
+            this._w = WebDataTexture.newStreamed(w, h);
+            this._gpu = false;
+            this._w.writeFrame(this._buf);
+        } else {
+            this._w = new WebDataTexture(w, h, this._buf);
+        }
         this._lw = w;
         this._lh = h;
         this._syncUv();

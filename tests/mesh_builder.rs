@@ -75,7 +75,7 @@ fn a_grid_follows_its_height_and_slopes_shade() {
     m.grid(10.0, 10.0, 10, 10, |x, _| x);
     let g = m.build();
     assert_eq!(g.triangle_count(), 200);
-    let bounds = g.bounding_box.clone().unwrap();
+    let bounds = g.bounding_box.unwrap();
     assert!((bounds.max.y - 5.0).abs() < 1e-4);
     // Rising towards +x, the surface leans towards -x.
     let n = normal_at(&g, 60);
@@ -91,7 +91,7 @@ fn appended_shapes_stay_solid_and_land_where_they_were_put() {
     m.append(&cube, &Matrix4::translation(Vector3::new(-10.0, 0.0, 0.0)));
     let g = m.build();
     assert_eq!(g.triangle_count(), cube.triangle_count() * 2);
-    let bounds = g.bounding_box.clone().unwrap();
+    let bounds = g.bounding_box.unwrap();
     assert!((bounds.max.x - 10.5).abs() < 1e-4 && (bounds.min.x + 10.5).abs() < 1e-4);
     assert!(MeshReport::of(&g).is_solid(), "{:?}", MeshReport::of(&g));
 }

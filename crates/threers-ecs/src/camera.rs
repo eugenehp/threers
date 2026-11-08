@@ -72,6 +72,7 @@ impl Default for ChaseCamera {
 }
 
 impl ChaseCamera {
+    /// A camera that follows nothing until [`CameraTarget`] marks an entity, at the default distance, height and stiffness.
     pub fn new() -> Self {
         Self {
             target: None,

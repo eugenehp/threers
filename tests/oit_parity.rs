@@ -7,6 +7,8 @@
 //! used to draw `Oit` as sorted blending, now has to land on wgpu's colour,
 //! with MSAA and without.
 
+#![cfg(metal_backend)]
+
 use threers::materials::TransparencyMode;
 use threers::metal::{MetalError, MetalHeadlessRenderer};
 use threers::prelude::*;

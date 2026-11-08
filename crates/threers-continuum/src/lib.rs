@@ -75,7 +75,7 @@
 //!
 //! **Raise it.** A rod is a chain, sequential impulses carry information about
 //! roughly one constraint per iteration, and
-//! [`World`](threers_physics::world::World)'s defaults — 4 substeps of 4
+//! [`World`](threers_physics::world::World)'s defaults — one substep of 8
 //! iterations — are tuned for scenes of loose bodies. On a chain they do not
 //! merely let it sag: past a handful of links the chain *diverges*, stretching
 //! visibly and thrashing. That is a property of the solver rather than of the

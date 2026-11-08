@@ -34,10 +34,15 @@ use threers::math::{Quaternion, Vector3};
 /// One field's value, in a form that can be saved and shown.
 #[derive(Debug, Clone, PartialEq)]
 pub enum FieldValue {
+    /// A `bool`.
     Bool(bool),
+    /// Any number, as `f64`.
     Number(f64),
+    /// A `String`.
     Text(String),
+    /// A [`Vector3`], as `x, y, z`.
     Vector([f32; 3]),
+    /// A reference to another entity, or none.
     Entity(Option<Entity>),
 }
 
@@ -56,7 +61,9 @@ impl std::fmt::Display for FieldValue {
 
 /// A type that can be one field of a reflected component.
 pub trait Field: Sized {
+    /// This value, for saving and showing.
     fn to_field(&self) -> FieldValue;
+    /// Back from a field; `None` if it is the wrong kind.
     fn from_field(value: &FieldValue) -> Option<Self>;
 }
 
@@ -137,6 +144,7 @@ pub type Fields = Vec<(&'static str, FieldValue)>;
 pub trait Reflect: Default + 'static {
     /// The name saves use, so renaming a type invalidates old saves.
     fn type_name() -> &'static str;
+    /// The fields, by name, in declaration order.
     fn fields(&self) -> Fields;
     /// Returns false if there is no such field or the value is the wrong kind.
     fn set_field(&mut self, name: &str, value: &FieldValue) -> bool;

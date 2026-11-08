@@ -23,7 +23,9 @@ impl Component for Static {}
 /// What [`World::bake_static`] made: the merged meshes it spawned.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Baked {
+    /// How many meshes went into the merged ones.
     pub merged: usize,
+    /// The merged meshes, one per material and shadow setting.
     pub meshes: Vec<Entity>,
 }
 

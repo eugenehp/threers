@@ -47,6 +47,14 @@ pub fn texels(format: TextureFormat, data: &[u8], count: usize) -> Option<Vec<[f
                 out.push([h(0), h(2), h(4), h(6)]);
             }
         }
+        f @ (TextureFormat::R16Float | TextureFormat::R32Float | TextureFormat::Rgba32Float) => {
+            let v = f.texels_f32(data)?;
+            if f.channels() == 1 {
+                out.extend(v.iter().take(count).map(|&x| [x, x, x, 1.0]));
+            } else {
+                out.extend(v.chunks_exact(4).take(count).map(|p| [p[0], p[1], p[2], p[3]]));
+            }
+        }
         _ => return None,
     }
     (out.len() == count).then_some(out)

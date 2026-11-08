@@ -164,6 +164,7 @@ mod postfx;
 mod renderer;
 mod surface;
 mod target;
+mod video;
 pub mod viewport;
 
 pub use composer::{MetalPostBackend, MetalPostFx};

@@ -7,7 +7,7 @@
 //!
 //! Skips without a Metal device (or a wgpu adapter, for the comparison).
 
-#![cfg(feature = "metal")]
+#![cfg(metal_backend)]
 
 use threers::fx::{
     Backdrop, Figure, Gloss, GlossStyle, Look, Shape, Stage, StageInput, Venom, VenomState,

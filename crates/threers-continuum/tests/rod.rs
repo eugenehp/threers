@@ -191,7 +191,7 @@ fn a_long_chain_needs_a_bigger_solver_budget() {
     let rod = test_rod(10);
     let predicted = beam_droop(&rod);
 
-    let mut lean = World::new(); // the defaults: 4 substeps, 4 iterations
+    let mut lean = World::new(); // the defaults: 1 substep, 8 iterations
     let arm = Continuum::build(
         &mut lean,
         rod.clone(),

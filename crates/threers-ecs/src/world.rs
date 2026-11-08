@@ -77,6 +77,7 @@ bundle_tuple!(A, B, C, D, E, F, G, H);
 /// `scene` stays public and is the same [`Scene`] the renderer takes, so
 /// `renderer.render_to_rgba(&mut world.scene, &camera)` needs no adapter.
 pub struct World {
+    /// The scene graph. Every node in it is an entity.
     pub scene: Scene,
     pub(crate) stores: HashMap<TypeId, Box<dyn AnyStore>>,
     resources: HashMap<TypeId, Box<dyn Any>>,
@@ -152,6 +153,7 @@ fn missing_resource(name: &str, w: &World) -> ! {
 }
 
 impl World {
+    /// An empty world over an empty scene.
     pub fn new() -> Self {
         Self::with_scene(Scene::new())
     }
@@ -194,6 +196,7 @@ impl World {
         self.scene.arena.insert(Object3D::group())
     }
 
+    /// Whether `id` is an entity that has not been despawned.
     pub fn is_alive(&self, id: Entity) -> bool {
         self.scene.arena.nodes.contains_key(id)
     }
@@ -209,6 +212,7 @@ impl World {
         true
     }
 
+    /// Take a component off, handing it back. [`on_remove`](Self::on_remove) hooks run.
     pub fn remove<C: Component>(&mut self, id: Entity) -> Option<C> {
         let value = self.store_mut_if_any::<C>()?.remove(id)?;
         self.run_hooks(id, &value);
@@ -226,15 +230,18 @@ impl World {
         self.store_mut::<C>().hooks.push(Rc::new(hook));
     }
 
+    /// A component, if the entity has one.
     pub fn get<C: Component>(&self, id: Entity) -> Option<&C> {
         self.store::<C>()?.get(id)
     }
 
+    /// A component to change, if the entity has one. Marks it changed.
     pub fn get_mut<C: Component>(&mut self, id: Entity) -> Option<&mut C> {
         let tick = self.tick;
         self.store_mut_if_any::<C>()?.get_mut(id, tick)
     }
 
+    /// Whether the entity has a `C`.
     pub fn has<C: Component>(&self, id: Entity) -> bool {
         self.get::<C>(id).is_some()
     }
@@ -573,6 +580,7 @@ impl World {
         self.since = self.outside_since;
     }
 
+    /// Add a resource, replacing and returning any of its type.
     pub fn insert_resource<R: 'static>(&mut self, resource: R) -> Option<R> {
         self.resource_names
             .insert(TypeId::of::<R>(), type_name::<R>());
@@ -581,6 +589,7 @@ impl World {
             .map(|old| *old.downcast().expect("resource stored under its own type"))
     }
 
+    /// Take a resource out.
     pub fn remove_resource<R: 'static>(&mut self) -> Option<R> {
         self.resource_names.remove(&TypeId::of::<R>());
         self.resources
@@ -588,10 +597,12 @@ impl World {
             .map(|old| *old.downcast().expect("resource stored under its own type"))
     }
 
+    /// A resource, or `None` if there is none.
     pub fn get_resource<R: 'static>(&self) -> Option<&R> {
         self.resources.get(&TypeId::of::<R>())?.downcast_ref()
     }
 
+    /// A resource to change, or `None` if there is none.
     pub fn get_resource_mut<R: 'static>(&mut self) -> Option<&mut R> {
         self.resources.get_mut(&TypeId::of::<R>())?.downcast_mut()
     }

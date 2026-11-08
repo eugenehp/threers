@@ -5,7 +5,7 @@ Tweens, springs, timelines and cinematic camera animation for
 
 ```toml
 [dependencies]
-threers-animation = "0.0.10"
+threers-animation = "0.0.12"
 ```
 
 ```rust

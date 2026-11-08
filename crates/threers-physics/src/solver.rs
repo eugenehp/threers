@@ -125,9 +125,10 @@ impl SimulationQuality {
 ///
 /// Sequential impulses carry information roughly one contact per iteration, so
 /// how well a stack converges depends on its height against the iteration
-/// budget. Measured, as steps for a settling stack of unit boxes to fall asleep:
+/// budget. Measured, as steps for a settling stack of unit boxes to fall asleep,
+/// at substeps × iterations (the default is one substep of eight):
 ///
-/// | boxes high | 4×4 (default) | 8×8 |
+/// | boxes high | 4×4 | 8×8 |
 /// |---|---|---|
 /// | 1–5 | ~30 | ~30 |
 /// | 10 | ~1100 | ~54 |
@@ -2343,7 +2344,7 @@ mod tests {
         let mut solver = Solver::new();
 
         for (_, b) in bodies.iter_mut() {
-            let _ = b.begin_step();
+            let _ = b.begin_step(true);
             b.integrate_velocity(dt, gravity);
         }
 

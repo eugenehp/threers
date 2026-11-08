@@ -89,6 +89,7 @@ impl<T> Clone for Handle<T> {
 }
 
 impl<T> Handle<T> {
+    /// The path it was asked for, relative to the asset root.
     pub fn path(&self) -> &str {
         &self.path
     }
@@ -97,6 +98,7 @@ impl<T> Handle<T> {
 /// An asset's data has arrived.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AssetLoaded {
+    /// The path it was asked for, as [`Handle::path`] gives it.
     pub path: String,
     /// False the first time, true when a change on disk replaced it.
     pub reloaded: bool,
@@ -105,7 +107,9 @@ pub struct AssetLoaded {
 /// An asset could not be read or parsed.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AssetFailed {
+    /// The path it was asked for.
     pub path: String,
+    /// Why: the read or parse error, as text.
     pub error: String,
 }
 
@@ -400,6 +404,7 @@ pub struct AssetsPlugin {
 }
 
 impl AssetsPlugin {
+    /// Load from `root`: a directory natively, a URL prefix in a browser (`""` for beside the page).
     pub fn new(root: impl Into<PathBuf>) -> Self {
         Self { root: root.into() }
     }
@@ -524,7 +529,9 @@ fn font_step(w: &mut World) {
 ///     .plugin(LoadingScreen { during: Screen::Loading, then: Screen::Playing });
 /// ```
 pub struct LoadingScreen<S> {
+    /// The state to show the loading screen in.
     pub during: S,
+    /// The state to go to once nothing is loading.
     pub then: S,
 }
 
@@ -596,6 +603,7 @@ impl Asset for SceneAsset {
 
 /// An entity that shows a scene file. Everything from the file hangs under it.
 pub struct SceneInstance {
+    /// The file it shows.
     pub scene: Handle<SceneAsset>,
     /// The file's animations, retargeted at the nodes of this copy.
     pub animations: Vec<AnimationClip>,

@@ -302,7 +302,7 @@ fn custom_shader_instances_cast_shadows() {
 }
 
 /// The Metal renderer reuses its maps by the same rule.
-#[cfg(feature = "metal")]
+#[cfg(metal_backend)]
 #[test]
 fn metal_reuses_shadow_maps_until_they_would_change() {
     use threers::metal::{MetalError, MetalHeadlessRenderer};

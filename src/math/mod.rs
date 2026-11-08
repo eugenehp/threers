@@ -9,6 +9,7 @@ mod color_schemes;
 mod color_space;
 mod cylindrical;
 mod euler;
+pub mod float;
 mod frustum;
 mod line3;
 mod matrix3;

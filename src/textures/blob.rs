@@ -34,6 +34,10 @@ fn format_code(f: TextureFormat) -> Option<u32> {
         TextureFormat::Rgba8UnormSrgb => 3,
         TextureFormat::Rgba8Unorm => 4,
         TextureFormat::R8Unorm => 5,
+        // Data: heights, distances, fields baked offline.
+        TextureFormat::R16Float => 6,
+        TextureFormat::R32Float => 7,
+        TextureFormat::Rgba32Float => 8,
         // No code for Rgba16Float: HDR sources here are environment maps and
         // get built in memory, so writing one would be a mistake worth
         // reporting rather than a case worth supporting.
@@ -48,6 +52,9 @@ fn format_from(code: u32) -> Option<TextureFormat> {
         3 => TextureFormat::Rgba8UnormSrgb,
         4 => TextureFormat::Rgba8Unorm,
         5 => TextureFormat::R8Unorm,
+        6 => TextureFormat::R16Float,
+        7 => TextureFormat::R32Float,
+        8 => TextureFormat::Rgba32Float,
         _ => return None,
     })
 }

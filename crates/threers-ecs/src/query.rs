@@ -72,6 +72,7 @@ pub unsafe trait Parallel {}
     note = "a component type `C` needs `impl Component for C {{}}`"
 )]
 pub unsafe trait Term: sealed::Sealed {
+    /// What the query hands out for each entity.
     type Item<'w>;
     #[doc(hidden)]
     type State;

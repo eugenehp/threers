@@ -11,6 +11,7 @@ use threers::overlay::Overlay;
 pub struct Hud(pub Overlay);
 
 impl Hud {
+    /// A clear canvas of this size, in pixels.
     pub fn new(width: u32, height: u32) -> Self {
         Self(Overlay::new(width, height))
     }
@@ -46,6 +47,7 @@ mod retained {
     /// A retained UI drawn over the game.
     #[derive(Default)]
     pub struct UiLayer {
+        /// The UI tree; build it in a system and it is drawn over the game.
         pub ui: Ui,
     }
 

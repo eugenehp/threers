@@ -47,10 +47,13 @@ fn within(secs: u64, f: impl FnOnce() + Send + 'static) {
 
 /// Parameter sets and slice headers are where a stream states sizes, counts
 /// and QPs, and they all sit in the first few hundred bytes. The stream is cut
-/// short too, so that many rounds stay quick.
+/// short too, so that many rounds stay quick. An unoptimised build is about
+/// fifteen times slower, so it runs a tenth of the rounds; the release runs
+/// in `docs/releasing.md` cover the rest.
 #[test]
 fn hevc_header_damage_ends_cleanly() {
-    within(240, || {
+    let rounds = if cfg!(debug_assertions) { 600 } else { 6000 };
+    within(240, move || {
         let mut x = 0x2545_f491_4f6c_dd1du64;
         let mut rnd = move || {
             x ^= x << 13;
@@ -60,7 +63,7 @@ fn hevc_header_damage_ends_cleanly() {
         };
         for f in FIXTURES {
             let clean = &f[..f.len().min(6000)];
-            for _ in 0..6000 {
+            for _ in 0..rounds {
                 let mut d = clean.to_vec();
                 for _ in 0..1 + rnd() % 3 {
                     let at = rnd() % 300;

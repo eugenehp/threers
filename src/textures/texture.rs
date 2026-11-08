@@ -16,6 +16,16 @@ pub enum TextureFormat {
     /// alongside a sky (a real ratio of ~10^4:1). Use with a tone-mapped
     /// renderer — see [`crate::renderer::ToneMapping`].
     Rgba16Float,
+    /// One 16-bit float channel (2 bytes/px): a height or density field at
+    /// half the memory of `R32Float`, filterable everywhere.
+    R16Float,
+    /// One 32-bit float channel (4 bytes/px): data that must keep f32
+    /// precision — heights, distances, ids up to 2^24. Filtering it needs
+    /// `wgpu::Features::FLOAT32_FILTERABLE`; without it, sample it nearest.
+    R32Float,
+    /// Four 32-bit float channels (16 bytes/px): positions, or HDR colour
+    /// that must not round to half. Filterable as `R32Float`.
+    Rgba32Float,
     /// BC1 ("DXT1"), sRGB. 4x4 blocks in 8 bytes — half a byte a pixel, an
     /// eighth of `Rgba8UnormSrgb`.
     ///
@@ -60,6 +70,9 @@ impl TextureFormat {
             Self::Rgba8UnormSrgb | Self::Rgba8Unorm => 4,
             Self::R8Unorm => 1,
             Self::Rgba16Float => 8,
+            Self::R16Float => 2,
+            Self::R32Float => 4,
+            Self::Rgba32Float => 16,
             Self::Bc1RgbaUnormSrgb => 8,
             Self::Bc7RgbaUnormSrgb => 16,
         }
@@ -86,6 +99,38 @@ impl TextureFormat {
     pub fn rows_per_image(self, height: u32) -> u32 {
         let (_, bh) = self.block_dim();
         height.max(1).div_ceil(bh)
+    }
+
+    /// Whether texels are floats (any width), which hold values outside
+    /// `[0, 1]` and are not colour-encoded.
+    pub fn is_float(self) -> bool {
+        matches!(self, Self::Rgba16Float | Self::R16Float | Self::R32Float | Self::Rgba32Float)
+    }
+
+    /// Channels a texel holds.
+    pub fn channels(self) -> usize {
+        match self {
+            Self::R8Unorm | Self::R16Float | Self::R32Float => 1,
+            _ => 4,
+        }
+    }
+
+    /// Whether linear filtering needs `wgpu::Features::FLOAT32_FILTERABLE`
+    /// (32-bit floats; WebGL2 needs `OES_texture_float_linear` for it).
+    pub fn needs_float32_filterable(self) -> bool {
+        matches!(self, Self::R32Float | Self::Rgba32Float)
+    }
+
+    /// Texels of uncompressed `data` in this format as f32s, every channel
+    /// (`R8Unorm` and the 8-bit formats as `byte / 255`, sRGB not decoded).
+    /// `None` for the block formats.
+    pub fn texels_f32(self, data: &[u8]) -> Option<Vec<f32>> {
+        Some(match self {
+            Self::Rgba8UnormSrgb | Self::Rgba8Unorm | Self::R8Unorm => data.iter().map(|b| *b as f32 / 255.0).collect(),
+            Self::Rgba16Float | Self::R16Float => crate::math::float::unpack_f16(data),
+            Self::R32Float | Self::Rgba32Float => crate::math::float::unpack_f32(data),
+            Self::Bc1RgbaUnormSrgb | Self::Bc7RgbaUnormSrgb => return None,
+        })
     }
 }
 
@@ -178,6 +223,12 @@ pub struct Texture {
     /// Bumped when [`replace_rgba_bytes`](Self::replace_rgba_bytes) swaps pixel
     /// data so the renderer re-uploads without allocating a new texture id.
     pub upload_seq: u64,
+    /// Frames that replace the pixels while the texture stays the same, as
+    /// [`VideoTexture`](super::VideoTexture) writes them. The GPU renderers
+    /// copy the newest into the texture they already have, and
+    /// [`pixels`](Self::pixels) reads it for CPU paths (the path tracer,
+    /// exporters). A streamed texture's own `data` may be empty.
+    pub stream: Option<Arc<super::TextureStream>>,
 }
 
 /// Source of [`Texture::id`]. Monotonic; wrapping it would take 500 years of
@@ -237,6 +288,7 @@ impl Texture {
             mips: Vec::new(),
             id: next_texture_id(),
             upload_seq: 0,
+            stream: None,
         }
     }
 
@@ -267,6 +319,7 @@ impl Texture {
             mips: Vec::new(),
             id: next_texture_id(),
             upload_seq: 0,
+            stream: None,
         }
     }
 
@@ -317,17 +370,18 @@ impl Texture {
                 .iter()
                 .flat_map(|v| [*v, *v, *v, 255])
                 .collect(),
-            // Half float down to 8 bits. Anything above 1.0 clamps, which is a
-            // real loss and only reachable for an HDR image.
-            TextureFormat::Rgba16Float => self
-                .data
-                .get(..count * 8)?
-                .chunks_exact(2)
-                .map(|h| {
-                    let v = half_to_f32(u16::from_le_bytes([h[0], h[1]]));
-                    (v.clamp(0.0, 1.0) * 255.0).round() as u8
-                })
-                .collect(),
+            // Floats down to 8 bits. Anything above 1.0 clamps, which is a
+            // real loss and only reachable for HDR or data; one channel
+            // becomes grey, as `R8Unorm` does.
+            f if f.is_float() => {
+                let texels = f.texels_f32(self.data.get(..f.data_len(self.width, self.height))?)?;
+                let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+                if f.channels() == 1 {
+                    texels.iter().flat_map(|v| [byte(*v), byte(*v), byte(*v), 255]).collect()
+                } else {
+                    texels.iter().map(|v| byte(*v)).collect()
+                }
+            }
             _ => return None,
         };
         if self.flip_y {
@@ -390,6 +444,17 @@ impl Texture {
         }
     }
 
+    /// The pixels as they are now: a [streamed](Self::stream) texture's
+    /// newest frame (as RGBA8, converted on this thread if it was written as
+    /// YUV), otherwise [`data`](Self::data). Rows in the order `data` holds
+    /// them.
+    pub fn pixels(&self) -> std::borrow::Cow<'_, [u8]> {
+        match &self.stream {
+            Some(stream) => std::borrow::Cow::Owned(stream.read(|rgba, _| rgba.to_vec())),
+            None => std::borrow::Cow::Borrowed(&self.data[..]),
+        }
+    }
+
     /// Whether this is a [`handle`](Self::handle) — metadata with no pixels.
     pub fn is_handle(&self) -> bool {
         self.data.is_empty() && self.width > 0 && self.height > 0
@@ -400,6 +465,50 @@ impl Texture {
         self.format.data_len(self.width, self.height)
     }
 
+    /// A float texture of `values` (`format.channels()` a texel, rows as
+    /// `data` holds them), each stored at the format's width: halves rounded
+    /// to nearest even, f32s as they are.
+    ///
+    /// # Panics
+    /// If `format` is not a float format or `values` is not a texel's
+    /// channels for every one of `width × height`.
+    pub fn from_f32(width: u32, height: u32, format: TextureFormat, values: &[f32]) -> Self {
+        assert!(format.is_float(), "from_f32 needs a float format, not {format:?}");
+        assert_eq!(values.len(), width as usize * height as usize * format.channels(), "values for {width}×{height} {format:?}");
+        let data = match format {
+            TextureFormat::Rgba16Float | TextureFormat::R16Float => crate::math::float::pack_f16(values),
+            _ => crate::math::float::pack_f32(values),
+        };
+        let mut t = Self::new(width, height, format, data);
+        t.mipmap_filter = None;
+        if format.needs_float32_filterable() {
+            // Sampled nearest unless the device can filter 32-bit floats.
+            t.mag_filter = TextureFilter::Nearest;
+            t.min_filter = TextureFilter::Nearest;
+        }
+        t
+    }
+
+    /// [`from_f32`](Self::from_f32) of f64s, each rounded once to the
+    /// format's width (straight to half, not through f32).
+    pub fn from_f64(width: u32, height: u32, format: TextureFormat, values: &[f64]) -> Self {
+        match format {
+            TextureFormat::Rgba16Float | TextureFormat::R16Float => {
+                assert_eq!(values.len(), width as usize * height as usize * format.channels(), "values for {width}×{height} {format:?}");
+                let mut t = Self::new(width, height, format, crate::math::float::pack_f16_from_f64(values));
+                t.mipmap_filter = None;
+                t
+            }
+            _ => Self::from_f32(width, height, format, &values.iter().map(|v| *v as f32).collect::<Vec<_>>()),
+        }
+    }
+
+    /// Level 0's texels as f32s, every channel, if the bytes are here and
+    /// uncompressed ([`TextureFormat::texels_f32`]).
+    pub fn texels_f32(&self) -> Option<Vec<f32>> {
+        self.format.texels_f32(self.data.get(..self.data_len())?)
+    }
+
     /// Build a solid-color 1x1 texture in linear RGBA8. Useful as a placeholder
     /// when a material slot is unused.
     pub fn solid(rgba: [u8; 4], format: TextureFormat) -> Self {
@@ -407,7 +516,3 @@ impl Texture {
     }
 }
 
-/// An IEEE half as an `f32`.
-fn half_to_f32(bits: u16) -> f32 {
-    crate::renderer::readback::f16_to_f32(bits)
-}

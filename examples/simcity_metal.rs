@@ -22,8 +22,12 @@
 //! | `--view V` | `aerial` (default), `skyline`, `close`, `street` |
 //! | `--size WxH` · `--out PATH` | output |
 
+// Metal is macOS and iOS only; elsewhere this example says so and stops.
+#![cfg_attr(not(metal_backend), allow(dead_code, unused_imports))]
+
 use std::path::PathBuf;
 
+#[cfg(metal_backend)]
 use threers::metal::{MetalError, MetalHeadlessRenderer};
 
 // The city itself lives in `examples/simcity/`, shared by all three
@@ -47,6 +51,7 @@ fn arg(name: &str) -> Option<String> {
     None
 }
 
+#[cfg(metal_backend)]
 fn main() -> Result<(), MetalError> {
     let defaults = CityParams::default();
     let params = CityParams {
@@ -121,4 +126,9 @@ fn main() -> Result<(), MetalError> {
     std::fs::write(&out, threers::encode_png(w, h, &rgba)).expect("write png");
     println!("wrote {} ({w}x{h})", out.display());
     Ok(())
+}
+
+#[cfg(not(metal_backend))]
+fn main() {
+    eprintln!("this example needs the Metal backend: macOS or iOS, with `--features metal`");
 }

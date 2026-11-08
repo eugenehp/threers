@@ -557,6 +557,9 @@ pub enum MarkBlend {
     /// Colours add — glows, and dense layers that should brighten where they
     /// overlap.
     Additive,
+    /// No blending: what is drawn replaces what was there (data written as
+    /// colour, such as a shadow map's packed depths).
+    Replace,
 }
 
 /// Settings every mark has.
@@ -1006,6 +1009,11 @@ pub trait Mark {
     fn kind_extra2(&self) -> [f32; 4] {
         [0.0; 4]
     }
+    /// A sixth to eighth, read as `layer.extra3`, `layer.extra4` and
+    /// `layer.extra5` (custom kinds).
+    fn kind_extra3(&self) -> [[f32; 4]; 3] {
+        [[0.0; 4]; 3]
+    }
     /// The kind's surface: x the specular reflectance, y the shininess, of
     /// a lit kind's [`Lighting`] (`layer.material`).
     fn kind_material(&self) -> [f32; 4] {
@@ -1159,6 +1167,10 @@ struct LayerUniforms {
     material: [f32; 4],
     /// [`Mark::kind_extra2`].
     extra2: [f32; 4],
+    /// [`Mark::kind_extra3`].
+    extra3: [f32; 4],
+    extra4: [f32; 4],
+    extra5: [f32; 4],
 }
 
 /// Layouts and samplers the mark types build their bind groups against.
@@ -1291,6 +1303,7 @@ fn sampler_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
 
 fn blend_state(blend: MarkBlend) -> wgpu::BlendState {
     match blend {
+        MarkBlend::Replace => wgpu::BlendState::REPLACE,
         MarkBlend::Alpha => wgpu::BlendState {
             color: wgpu::BlendComponent {
                 src_factor: wgpu::BlendFactor::SrcAlpha,
@@ -1597,6 +1610,7 @@ impl MarkRenderer {
             let (mut style2, style3, stroke) = m.kind_uniforms();
             let extra = m.kind_extra();
             let extra2 = m.kind_extra2();
+            let [extra3, extra4, extra5] = m.kind_extra3();
             let material = m.kind_material();
             let kind_flags = m.kind_flags();
             let common = m.common_mut();
@@ -1677,6 +1691,9 @@ impl MarkRenderer {
                 origin_lo: layer_origin.1,
                 extra,
                 extra2,
+                extra3,
+                extra4,
+                extra5,
                 shadow: [
                     if s.receive_shadows { 1.0 } else { 0.0 },
                     s.depth_bias_units,
@@ -1897,7 +1914,7 @@ impl MarkRenderer {
         } else {
             wgpu::ColorTargetState {
                 format: key.format,
-                blend: Some(blend_state(key.blend)),
+                blend: (key.blend != MarkBlend::Replace).then(|| blend_state(key.blend)),
                 write_mask: wgpu::ColorWrites::ALL,
             }
         };

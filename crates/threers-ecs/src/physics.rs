@@ -92,7 +92,9 @@ impl Component for Body {}
 /// straight to the solver with no node.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Collision {
+    /// One body's entity.
     pub a: Option<Entity>,
+    /// The other body's entity.
     pub b: Option<Entity>,
     /// True when the pair began touching, false when it stopped.
     pub started: bool,
@@ -256,6 +258,7 @@ fn world_pose(w: &World, id: Entity) -> Option<Isometry> {
 /// the rest. Add one with [`AttachBody::attach_character`].
 #[derive(Debug, Clone)]
 pub struct Character {
+    /// The shape, slope limit and step height it moves with.
     pub controller: CharacterController,
     /// Wanted velocity along the ground, in units per second.
     pub walk: Vector3,
@@ -275,6 +278,7 @@ pub struct Character {
 impl Component for Character {}
 
 impl Character {
+    /// Standing still, with a gravity of 9.81 units/s².
     pub fn new(controller: CharacterController) -> Self {
         Self {
             controller,

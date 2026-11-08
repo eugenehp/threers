@@ -1,7 +1,10 @@
 [package]
 name = "threers-continuum"
-version = "0.0.11"
+version = "0.0.12"
 edition = "2021"
+# Not on crates.io yet: a cable under steady tension does not hold the rod at
+# a steady bend (`pulling_a_cable_bends_the_rod_toward_it` in tests/rod.rs).
+publish = false
 authors = ["Eugene Hauptmann"]
 description = "Tendon-driven continuum robots for threers-physics: a flexible rod as a chain of elastic hinges, cable routing, Clark coordinates and task-space tip control"
 license = "MIT"
@@ -22,5 +25,5 @@ default = []
 openscad = ["threers/openscad", "threers-physics/openscad"]
 
 [dependencies]
-threers = { path = "../.." }
-threers-physics = { path = "../threers-physics", features = ["mechanism"] }
+threers = { path = "../..", version = "0.0.12" }
+threers-physics = { path = "../threers-physics", version = "0.0.12", features = ["mechanism"] }

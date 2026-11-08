@@ -89,10 +89,12 @@ impl Timer {
         }
     }
 
+    /// Seconds left; 0 once done.
     pub fn remaining(&self) -> f32 {
         (self.duration - self.elapsed).max(0.0)
     }
 
+    /// Back to the start, as if just made.
     pub fn reset(&mut self) {
         self.elapsed = 0.0;
         self.fired = 0;
@@ -176,14 +178,17 @@ enum Target {
 pub struct TweenFinished(pub Entity);
 
 impl Tween {
+    /// Move to `position` over `seconds`.
     pub fn to_position(position: Vector3, seconds: f32) -> Self {
         Self::new(Target::Position(position), seconds)
     }
 
+    /// Scale to `scale` over `seconds`.
     pub fn to_scale(scale: Vector3, seconds: f32) -> Self {
         Self::new(Target::Scale(scale), seconds)
     }
 
+    /// Turn to `rotation` over `seconds`.
     pub fn to_rotation(rotation: Quaternion, seconds: f32) -> Self {
         Self::new(Target::Rotation(rotation), seconds)
     }

@@ -152,42 +152,9 @@ fn classify(channels: &[Channel], rules: &[Rule]) -> (Vec<u8>, Vec<[usize; 3]>) 
 }
 
 /// Single precision to half, rounding to nearest even and keeping subnormals
-/// and infinities, as the format's own arithmetic does. The loader's
-/// `f32_to_f16` flushes and saturates, which is right for pixels leaving it and
-/// wrong for a value still being decoded.
+/// and infinities, as the format's own arithmetic does.
 fn half_bits(f: f32) -> u16 {
-    let x = f.to_bits();
-    let sign = (x >> 16) as u16 & 0x8000;
-    let abs = x & 0x7fff_ffff;
-    if abs >= 0x7f80_0000 {
-        return sign
-            | 0x7c00
-            | if abs > 0x7f80_0000 {
-                0x200 | (abs >> 13) as u16
-            } else {
-                0
-            };
-    }
-    if abs >= 0x4780_0000 - 0x1000 {
-        return sign | 0x7c00;
-    }
-    if abs < 0x3880_0000 {
-        // Subnormal in half, or zero.
-        if abs < 0x3300_0000 {
-            return sign;
-        }
-        let exponent = abs >> 23;
-        let mantissa = (abs & 0x007f_ffff) | 0x0080_0000;
-        let shift = 126 - exponent;
-        let half = mantissa >> shift;
-        let rest = mantissa & ((1 << shift) - 1);
-        let tie = 1u32 << (shift - 1);
-        let up = rest > tie || (rest == tie && half & 1 != 0);
-        return sign | (half + up as u32) as u16;
-    }
-    let base = abs - 0x3800_0000;
-    let rounded = base + 0xfff + ((base >> 13) & 1);
-    sign | (rounded >> 13) as u16
+    crate::math::float::f32_to_f16(f)
 }
 
 fn half_float(h: u16) -> f32 {
@@ -210,7 +177,7 @@ fn to_linear() -> &'static [u16] {
                 let (px, py) = if f <= 1.0 {
                     (f, 2.2f32)
                 } else {
-                    (9.02501329156f32, f - 1.0)
+                    (9.025_013f32, f - 1.0)
                 };
                 half_bits(sign * px.powf(py))
             })
@@ -237,6 +204,7 @@ pub(super) fn b44_to_linear() -> &'static [u16] {
 /// The separable inverse DCT, in place.
 fn inverse_dct(data: &mut [f32; 64]) {
     // The format's constants are built from this value of pi.
+    #[allow(clippy::approx_constant)]
     const PI: f32 = 3.14159;
     let a = 0.5 * (PI / 4.0).cos();
     let b = 0.5 * (PI / 16.0).cos();
@@ -343,11 +311,12 @@ fn decode_dct(
                 }
             }
             if comps == 3 {
-                for i in 0..64 {
-                    let (s0, s1, s2) = (blocks[0][i], blocks[1][i], blocks[2][i]);
-                    blocks[0][i] = s0 + 1.5747 * s2;
-                    blocks[1][i] = s0 - 0.1873 * s1 - 0.4682 * s2;
-                    blocks[2][i] = s0 + 1.8556 * s1;
+                let [b0, b1, b2] = &mut blocks;
+                for ((v0, v1), v2) in b0.iter_mut().zip(b1.iter_mut()).zip(b2.iter_mut()) {
+                    let (s0, s1, s2) = (*v0, *v1, *v2);
+                    *v0 = s0 + 1.5747 * s2;
+                    *v1 = s0 - 0.1873 * s1 - 0.4682 * s2;
+                    *v2 = s0 + 1.8556 * s1;
                 }
             }
             for (c, plane) in planes.iter_mut().enumerate() {

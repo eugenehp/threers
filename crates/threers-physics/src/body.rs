@@ -745,7 +745,10 @@ impl RigidBody {
     ///
     /// [`Warning::NonFiniteVelocity`]: crate::diagnostics::Warning
     /// [`Warning::NonFinitePosition`]: crate::diagnostics::Warning
-    pub(crate) fn begin_step(&mut self) -> (bool, bool) {
+    ///
+    /// `record` is false on every substep after a fixed step's first, so
+    /// `previous_position` stays where the step began.
+    pub(crate) fn begin_step(&mut self, record: bool) -> (bool, bool) {
         let finite = |v: Vector3| v.x.is_finite() && v.y.is_finite() && v.z.is_finite();
         let sane = |iso: &Isometry| {
             finite(iso.translation)
@@ -788,7 +791,9 @@ impl RigidBody {
             self.angular_velocity = Vector3::ZERO;
             repaired = true;
         }
-        self.previous_position = self.position;
+        if record {
+            self.previous_position = self.position;
+        }
         (velocity, repaired)
     }
 

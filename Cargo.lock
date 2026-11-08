@@ -3479,7 +3479,7 @@ dependencies = [
 
 [[package]]
 name = "threers"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "bytemuck",
  "console_error_panic_hook",
@@ -3510,7 +3510,7 @@ dependencies = [
 
 [[package]]
 name = "threers-animation"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "threers",
  "threers-physics",
@@ -3518,18 +3518,18 @@ dependencies = [
 
 [[package]]
 name = "threers-codec"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "rayon",
 ]
 
 [[package]]
 name = "threers-connectome"
-version = "0.0.11"
+version = "0.0.12"
 
 [[package]]
 name = "threers-continuum"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "threers",
  "threers-physics",
@@ -3537,7 +3537,7 @@ dependencies = [
 
 [[package]]
 name = "threers-ecs"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "console_error_panic_hook",
  "cpal",
@@ -3559,7 +3559,7 @@ dependencies = [
 
 [[package]]
 name = "threers-fluid-ios"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "objc2 0.6.5",
  "objc2-core-foundation",
@@ -3571,7 +3571,7 @@ dependencies = [
 
 [[package]]
 name = "threers-hop"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "rayon",
  "threers",
@@ -3584,11 +3584,11 @@ dependencies = [
 
 [[package]]
 name = "threers-js"
-version = "0.0.11"
+version = "0.0.12"
 
 [[package]]
 name = "threers-mechanism-tour"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "console_error_panic_hook",
  "threers",
@@ -3598,7 +3598,7 @@ dependencies = [
 
 [[package]]
 name = "threers-node"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "napi",
  "napi-build",
@@ -3610,7 +3610,7 @@ dependencies = [
 
 [[package]]
 name = "threers-ocean"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "bytemuck",
  "console_error_panic_hook",
@@ -3625,7 +3625,7 @@ dependencies = [
 
 [[package]]
 name = "threers-physics"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "bytemuck",
  "criterion",
@@ -3639,7 +3639,7 @@ dependencies = [
 
 [[package]]
 name = "threers-physics-bench"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "console_error_panic_hook",
  "threers-physics",
@@ -3648,7 +3648,7 @@ dependencies = [
 
 [[package]]
 name = "threers-probe"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "anyhow",
  "rlx",
@@ -3658,7 +3658,7 @@ dependencies = [
 
 [[package]]
 name = "threers-py"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "pyo3",
  "pyo3-build-config",
@@ -3669,7 +3669,7 @@ dependencies = [
 
 [[package]]
 name = "threers-robot-arm"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "threers-physics",
  "wasm-bindgen",
@@ -3677,7 +3677,7 @@ dependencies = [
 
 [[package]]
 name = "threers-softbody"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "bytemuck",
  "libm",

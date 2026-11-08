@@ -6,6 +6,8 @@
 //!
 //! Skipped without a Metal device.
 
+#![cfg(metal_backend)]
+
 use threers::metal::{MetalHeadlessRenderer, SsaoSettings};
 use threers::prelude::*;
 

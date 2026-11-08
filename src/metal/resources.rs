@@ -409,6 +409,9 @@ fn pixel_format_for(format: TextureFormat, bc_supported: bool) -> Result<NSUInte
         TextureFormat::Rgba8Unorm => pixel_format::RGBA8_UNORM,
         TextureFormat::R8Unorm => pixel_format::R8_UNORM,
         TextureFormat::Rgba16Float => pixel_format::RGBA16_FLOAT,
+        TextureFormat::R16Float => pixel_format::R16_FLOAT,
+        TextureFormat::R32Float => pixel_format::R32_FLOAT,
+        TextureFormat::Rgba32Float => pixel_format::RGBA32_FLOAT,
         TextureFormat::Bc1RgbaUnormSrgb if bc_supported => pixel_format::BC1_RGBA_SRGB,
         TextureFormat::Bc7RgbaUnormSrgb if bc_supported => pixel_format::BC7_RGBA_SRGB,
         other => {
@@ -502,22 +505,34 @@ pub fn upload_texture_as(
     let supplied_mips = src.mips.len() as u32;
     let mip_levels = if supplied_mips > 0 {
         supplied_mips + 1
-    } else if bc || src.width <= 1 || src.height <= 1 {
+    } else if bc || src.width <= 1 || src.height <= 1 || (src.stream.is_some() && src.mipmap_filter.is_none()) {
+        // A streamed texture with a chain has it rebuilt after each frame
+        // (`video.rs`); one without is sampled at level 0 only.
         1
     } else {
         32 - src.width.max(src.height).leading_zeros()
     };
 
+    // A streamed texture is drawn into: video frames are converted from YUV
+    // by a render pass. Its frames come from the stream, not `data`.
+    let usage = if src.stream.is_some() {
+        texture_usage::SHADER_READ | texture_usage::RENDER_TARGET
+    } else {
+        texture_usage::SHADER_READ
+    };
     let tex = new_texture_2d(
         device,
         src.width,
         src.height,
         pixel_format,
-        texture_usage::SHADER_READ,
+        usage,
         cpu_writable_storage(device),
         1,
         mip_levels,
     )?;
+    if src.stream.is_some() {
+        return Ok(tex);
+    }
 
     let (bw, bh) = src.format.block_dim();
     let bytes_per_block = src.format.bytes_per_block();

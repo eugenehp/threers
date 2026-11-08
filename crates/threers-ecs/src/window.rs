@@ -21,8 +21,11 @@ use winit::window::{CursorGrabMode, WindowBuilder};
 /// Window settings. Everything has a default worth starting from.
 #[derive(Debug, Clone)]
 pub struct WindowOptions {
+    /// The window's title.
     pub title: String,
+    /// Width in logical pixels.
     pub width: u32,
+    /// Height in logical pixels.
     pub height: u32,
     /// Multisampling. `1` is off; `4` is the usual choice.
     pub msaa: u32,
@@ -32,6 +35,7 @@ pub struct WindowOptions {
 }
 
 impl WindowOptions {
+    /// A 1280 by 720 window with 4x multisampling.
     pub fn new(title: impl Into<String>) -> Self {
         Self {
             title: title.into(),
@@ -42,12 +46,14 @@ impl WindowOptions {
         }
     }
 
+    /// The size, in logical pixels.
     pub fn size(mut self, width: u32, height: u32) -> Self {
         self.width = width;
         self.height = height;
         self
     }
 
+    /// Multisampling: 1 is off.
     pub fn msaa(mut self, samples: u32) -> Self {
         self.msaa = samples;
         self
@@ -61,6 +67,7 @@ impl WindowOptions {
         self
     }
 
+    /// Choose what draws it.
     pub fn backend(mut self, backend: WindowBackend) -> Self {
         self.backend = backend;
         self

@@ -32,7 +32,7 @@ fn overlay_cost() {
     });
     let pts: Vec<Vector2> = (0..=150)
         .map(|i| {
-            let a = i as f32 / 150.0 * 6.283;
+            let a = i as f32 / 150.0 * std::f32::consts::TAU;
             Vector2::new(1300.0 + 100.0 * a.cos(), 1300.0 + 100.0 * a.sin())
         })
         .collect();

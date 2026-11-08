@@ -69,7 +69,7 @@ fn compare(original: &[f32], decoded: &[f32]) -> (f64, f64) {
 #[test]
 fn a_mono_tone_comes_back_at_the_same_level() {
     let x = tone(44_100, 1_000.0, 0.5, 44_100 * 2);
-    let (decoded, bytes) = round_trip(&[x.clone()], EncoderConfig::new(44_100, 1, 64_000));
+    let (decoded, bytes) = round_trip(std::slice::from_ref(&x), EncoderConfig::new(44_100, 1, 64_000));
     let (gain, snr) = compare(&x, &decoded[0]);
     eprintln!("mono tone: gain {gain:.4}, SNR {snr:.1} dB, {bytes} bytes");
     assert!((gain - 1.0).abs() < 0.03, "gain {gain}");
@@ -130,7 +130,7 @@ fn every_sample_rate_works() {
         let hz = (f64::from(rate) / 8.0).min(3_000.0);
         let x = tone(rate, hz, 0.4, rate as usize);
         let kbps = (rate / 1000 * 2).clamp(16, 128);
-        let (decoded, _) = round_trip(&[x.clone()], EncoderConfig::new(rate, 1, kbps * 1000));
+        let (decoded, _) = round_trip(std::slice::from_ref(&x), EncoderConfig::new(rate, 1, kbps * 1000));
         let (gain, snr) = compare(&x, &decoded[0]);
         assert!((gain - 1.0).abs() < 0.05 && snr > 15.0, "{rate} Hz: gain {gain}, SNR {snr}");
     }
@@ -140,7 +140,7 @@ fn every_sample_rate_works() {
 fn loud_and_full_scale_audio_survives_escape_codes() {
     // Full scale low tones make large coefficients: codebook 11 with escapes.
     let x: Vec<f32> = (0..44_100 * 2).map(|i| (0.99 * (2.0 * std::f64::consts::PI * 60.0 * i as f64 / 44_100.0).sin()) as f32).collect();
-    let (decoded, _) = round_trip(&[x.clone()], EncoderConfig::new(44_100, 1, 192_000));
+    let (decoded, _) = round_trip(std::slice::from_ref(&x), EncoderConfig::new(44_100, 1, 192_000));
     let (gain, snr) = compare(&x, &decoded[0]);
     eprintln!("full-scale 60 Hz: gain {gain:.4}, SNR {snr:.1} dB");
     assert!((gain - 1.0).abs() < 0.02 && snr > 30.0, "gain {gain}, SNR {snr}");
@@ -157,7 +157,7 @@ fn silence_costs_almost_nothing_and_decodes_to_silence() {
 fn input_can_arrive_in_any_size_pieces() {
     let x = music(44_100, 2.0, 5);
     let cfg = EncoderConfig::new(44_100, 1, 96_000);
-    let (whole, _) = round_trip(&[x.clone()], cfg);
+    let (whole, _) = round_trip(std::slice::from_ref(&x), cfg);
     let mut enc = AacEncoder::new(cfg).unwrap();
     let mut units = Vec::new();
     for piece in x.chunks(777) {

@@ -1,29 +1,28 @@
 # Releasing
 
-Five crates publish to **crates.io**. Language packages publish to npm and
+Seven crates publish to **crates.io**. Language packages publish to npm and
 PyPI (not crates.io). See also [`docs/bindings.md`](bindings.md).
 
-| Artifact | Version | Registry | Arch notes |
+| Artifact | Version | Registry | On the index (2026-11-06) |
 |---|---|---|---|
-| `threers-codec` | 0.0.10 | crates.io | the codecs on their own; new — not yet on the index |
-| `threers-softbody` | 0.0.10 | crates.io | the soft-body lattice and solver (`gpu` feature: WebGPU compute); new — not yet on the index |
-| `threers` | 0.0.10 | crates.io | source; consumers compile |
-| `threers-physics` | 0.0.10 | crates.io | tracks `threers` from 0.0.8; 0.0.1 is on the index |
-| `threers-probe` | 0.0.2 | crates.io | 0.0.1 is on the index |
-| `threers` (npm ESM) | 0.0.10 | npm / Deno | **mini** (default) + **full** wasm entries ([`crates/threers-js`](../crates/threers-js)) |
-| `threers-node` | 0.0.10 | npm | per-arch `.node` via `@threers/node-*` ([`crates/threers-node`](../crates/threers-node)) |
-| `threers` (PyPI) | 0.0.10 | PyPI | per-platform wheels ([`crates/threers-py`](../crates/threers-py)) |
+| `threers-codec` | 0.0.12 | crates.io | 0.0.10 |
+| `threers-softbody` | 0.0.12 | crates.io | 0.0.10; the soft-body lattice and solver (`gpu` feature: WebGPU compute) |
+| `threers` | 0.0.12 | crates.io | 0.0.10 |
+| `threers-physics` | 0.0.12 | crates.io | 0.0.10 |
+| `threers-animation` | 0.0.12 | crates.io | 0.0.1 |
+| `threers-probe` | 0.0.12 | crates.io | 0.0.2 |
+| `threers` (npm ESM) | 0.0.12 | npm / Deno | not yet; **mini** (default) + **full** wasm entries ([`crates/threers-js`](../crates/threers-js)) |
+| `threers-node` | 0.0.12 | npm | not yet; per-arch `.node` via `@threers/node-*` ([`crates/threers-node`](../crates/threers-node)) |
+| `threers` (PyPI) | 0.0.12 | PyPI | not yet; per-platform wheels ([`crates/threers-py`](../crates/threers-py)) |
 
-`crates/` also holds seven demos and benches. None of them publish
-(`publish = false`), and they fall into two groups:
-
-- **In the workspace and building**: `threers-ocean`, `threers-animation`,
-  `threers-robot-arm`, `threers-physics-bench`, `threers-connectome`.
-- **`exclude`d**: `threers-continuum` and `threers-mechanism-tour`. Both build as
-  libraries, but their own tests and examples call an older shape of their API —
-  builder methods that became fields, argument lists a version behind. They are
-  out of the workspace so `--all-targets` stays clean; reconcile them and move
-  them back into `members`.
+Everything else under `crates/` is a demo, a bench, a binding or not ready
+for the index, and says `publish = false`: `threers-ocean`,
+`threers-robot-arm`, `threers-physics-bench`, `threers-connectome`,
+`threers-mechanism-tour`, `threers-hop`, `threers-fluid-ios`, the three
+binding crates (published as language packages instead), `threers-ecs`
+(not on crates.io yet) and `threers-continuum` (held back: a cable under
+steady tension does not yet hold the rod at a steady bend). All of them are workspace members, so
+`--all-targets` builds their tests and examples too.
 
 ## The order is not optional
 
@@ -33,7 +32,7 @@ same way:
 
 ```toml
 # crates/threers-physics/Cargo.toml
-threers = { path = "../..", version = "0.0.10", features = ["mesh-bvh"] }
+threers = { path = "../..", version = "0.0.12", features = ["mesh-bvh"] }
 ```
 
 A path dependency is what the workspace builds against; the `version` is what the
@@ -163,7 +162,8 @@ cargo publish -p threers-softbody
 cargo publish -p threers
 cargo publish -p threers-physics             # only after the first is on the index
 cargo publish -p threers-probe               # likewise
-git tag -a v0.0.10 -m 'threers 0.0.10' && git push --tags
+cargo publish -p threers-animation           # after threers-physics, which it depends on
+git tag -a v0.0.12 -m 'threers 0.0.12' && git push --tags
 
 # 7. Language packages — one script locally; CI on tag push.
 ./scripts/release-versions.sh                    # versions aligned?
@@ -171,7 +171,7 @@ git tag -a v0.0.10 -m 'threers 0.0.10' && git push --tags
 PUBLISH=1 ./scripts/release-all.sh publish     # upload (or push tag → CI)
 
 # Multi-arch npm-node + PyPI: push v* tag → .github/workflows/release-language-packages.yml
-git tag -a v0.0.10 -m 'threers 0.0.10' && git push --tags
+git tag -a v0.0.12 -m 'threers 0.0.12' && git push --tags
 ```
 
 ## One command (`scripts/release-all.sh`)
@@ -196,7 +196,7 @@ PyPI trusted publishing).
 
 ```bash
 # After crates.io publish + version bump:
-git tag v0.0.10 && git push origin v0.0.10
+git tag v0.0.12 && git push origin v0.0.12
 ```
 
 ## npm ESM (`crates/threers-js`)
@@ -287,26 +287,25 @@ curl -s -H 'User-Agent: threers-release' https://crates.io/api/v1/crates/threers
   | python3 -c "import json,sys; print(json.load(sys.stdin)['crate']['max_version'])"
 ```
 
-It reads 0.0.8 — 0.0.9 was tagged but never published — so 0.0.10 is what
-ships.
+It reads 0.0.10, and 0.0.12 is what ships: 0.0.11 was prepared but never
+published or tagged, so the index goes straight from 0.0.10. Note that 0.0.10 was published
+but never tagged (the tags stop at `v0.0.9`), and 0.0.9 was tagged but never
+published: tag after publishing, so the two agree.
 
-`threers-physics` tracks the `threers` version from 0.0.8 on, so it is bumped
-with the rest and `release-versions.sh` treats it as one of the aligned roots.
-Only 0.0.1 (2026-09-11) is on the index; the 0.0.2 the workspace carried was
-never published, nor were 0.0.8 and 0.0.9, so it jumps from 0.0.1 straight to 0.0.10. `CHECK=1
-./scripts/release-versions.sh` asks crates.io and fails if `threers` or
-`threers-physics` is not ahead of the published version — `cargo publish`
-cannot replace a version, so a stale one would otherwise fail at the upload and
-not before.
-
-`threers-probe` still carries its own version (0.0.2; 0.0.1 is on the index).
-Check either companion by hand the same way:
+Every published crate now carries the one workspace version, so they all go
+up together; `release-versions.sh` treats each as an aligned root. Several
+skip versions on the index because of that: `threers-animation` goes from
+0.0.1 to 0.0.12 and `threers-probe` from 0.0.2. `CHECK=1
+./scripts/release-versions.sh` asks crates.io and fails if a published crate
+is not ahead of its version there — `cargo publish` cannot replace a version,
+so a stale one would otherwise fail at the upload and not before. Check any
+of them by hand the same way:
 
 ```bash
-for c in threers-physics threers-probe; do
+for c in threers threers-codec threers-softbody threers-physics threers-animation threers-probe; do
   printf '%-18s ' "$c"
   curl -s -H 'User-Agent: threers-release' "https://crates.io/api/v1/crates/$c" \
-    | python3 -c "import json,sys; print(json.load(sys.stdin)['crate']['max_version'])"
+    | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('crate', {}).get('max_version', 'not published'))"
 done
 ```
 

@@ -115,7 +115,7 @@ pub fn data_dir() -> Option<PathBuf> {
     }
     let beside =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../opencr-mujoco/data/reference/sorosim");
-    beside.is_dir().then(|| beside)
+    beside.is_dir().then_some(beside)
 }
 
 /// A force and a moment applied at one point.
@@ -561,7 +561,10 @@ pub fn evaluate_shape(set: &Statics, index: usize, run: StaticsRun) -> Option<Sh
     use threers_physics::prelude::*;
 
     let shape = set.shapes.get(index)?;
-    let rod = set.material.rod(run.links);
+    let rod = Rod {
+        twist: run.twist,
+        ..set.material.rod(run.links)
+    };
     let length = rod.length;
 
     let mut world = World::new();

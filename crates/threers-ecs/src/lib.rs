@@ -87,6 +87,7 @@
 
 // `Send` checks on a parsed scene walk deep through the renderer's types.
 #![recursion_limit = "512"]
+#![warn(missing_docs)]
 
 pub mod animator;
 mod app;
@@ -128,6 +129,8 @@ pub mod testing;
 pub mod timer;
 pub mod touch;
 pub mod tuning;
+#[cfg(feature = "video")]
+pub mod video;
 #[cfg(all(feature = "web", target_arch = "wasm32"))]
 pub mod web;
 #[cfg(all(feature = "window", not(target_arch = "wasm32")))]
@@ -187,4 +190,6 @@ pub mod prelude {
     pub use crate::physics::*;
     #[cfg(all(feature = "window", not(target_arch = "wasm32")))]
     pub use crate::window::{run, WindowOptions};
+    #[cfg(feature = "video")]
+    pub use crate::video::{Video, VideoPlayer, VideoTexture};
 }

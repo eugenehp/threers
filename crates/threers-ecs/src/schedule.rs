@@ -156,11 +156,13 @@ impl System {
         self.prepare.is_some()
     }
 
+    /// Run before `other`, a function or system in this schedule. Panics on the first run if it is not.
     pub fn before<M, F: crate::params::IntoSystem<M> + 'static>(mut self, _other: F) -> Self {
         self.before.push(Label::of::<F>());
         self
     }
 
+    /// Run after `other`. The schedule panics on its first run if `other` is not in it; see [`after_if_added`](Self::after_if_added).
     pub fn after<M, F: crate::params::IntoSystem<M> + 'static>(mut self, _other: F) -> Self {
         self.after.push(Label::of::<F>());
         self
@@ -207,6 +209,7 @@ pub struct Schedule {
 }
 
 impl Schedule {
+    /// An empty schedule.
     pub fn new() -> Self {
         Self::default()
     }

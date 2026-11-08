@@ -364,3 +364,105 @@ fragment float4 fs_overlay(
     const float4 c = src.sample(s, in.position.xy);
     return float4(c.rgb * c.a, c.a);
 }
+
+// ------------------------------------------------------------------ video YUV
+
+// A decoder's YUV planes into a video texture: the twin of `fs` in
+// `renderer/yuv.rs`, line for line, so both backends show the same colours.
+struct YuvParams {
+    uint4 dims;   // luma w, h; chroma w, h
+    uint4 mode;   // chroma halved across, halved down, turned over, luma only
+    uint4 out;    // source pixels a target pixel, sRGB target, target height, interleaved
+    float4 k0;    // luma offset, luma scale, chroma midpoint
+    float4 k1;    // Cr→R, Cb→G, Cr→G, Cb→B
+};
+
+static inline float3 yuv_to_linear(float3 c) {
+    return select(pow((c + 0.055) / 1.055, float3(2.4)), c / 12.92, c <= 0.04045);
+}
+
+static inline float3 yuv_to_srgb(float3 c) {
+    return select(1.055 * pow(c, float3(1.0 / 2.4)) - 0.055, c * 12.92, c <= 0.0031308);
+}
+
+// `channel` picks Cb or Cr out of an interleaved (NV12) plane; 0 otherwise.
+static inline float yuv_chroma(texture2d<uint, access::read> plane, constant YuvParams &p, uint x, uint y, uint channel) {
+    const uint cw = p.dims.z;
+    const uint ch = p.dims.w;
+    uint r0 = min(y, ch - 1u);
+    uint r1 = r0;
+    float wr0 = 4.0;
+    float wr1 = 0.0;
+    if (p.mode.y == 1u) {
+        r0 = min(y / 2u, ch - 1u);
+        r1 = (y % 2u == 0u) ? (r0 == 0u ? 0u : r0 - 1u) : min(r0 + 1u, ch - 1u);
+        wr0 = 3.0;
+        wr1 = 1.0;
+    }
+    uint c0 = min(x, cw - 1u);
+    uint c1 = c0;
+    float wc0 = 2.0;
+    float wc1 = 0.0;
+    if (p.mode.x == 1u) {
+        c0 = x / 2u;
+        c1 = c0;
+        if (x % 2u == 1u) {
+            c1 = min(c0 + 1u, cw - 1u);
+            wc0 = 1.0;
+            wc1 = 1.0;
+        }
+    }
+    const float sum = wr0 * (wc0 * float(plane.read(uint2(c0, r0))[channel]) + wc1 * float(plane.read(uint2(c1, r0))[channel]))
+        + wr1 * (wc0 * float(plane.read(uint2(c0, r1))[channel]) + wc1 * float(plane.read(uint2(c1, r1))[channel]));
+    return sum / 8.0 - p.k0.z;
+}
+
+static inline float3 yuv_rgb_at(
+    texture2d<uint, access::read> yp,
+    texture2d<uint, access::read> up,
+    texture2d<uint, access::read> vp,
+    constant YuvParams &p,
+    uint x,
+    uint y)
+{
+    const float l = p.k0.y * (float(yp.read(uint2(x, y)).r) - p.k0.x);
+    float cb = 0.0;
+    float cr = 0.0;
+    if (p.mode.w == 0u) {
+        if (p.out.w == 1u) {
+            cb = yuv_chroma(up, p, x, y, 0u);
+            cr = yuv_chroma(up, p, x, y, 1u);
+        } else {
+            cb = yuv_chroma(up, p, x, y, 0u);
+            cr = yuv_chroma(vp, p, x, y, 0u);
+        }
+    }
+    const float3 rgb = float3(l + p.k1.x * cr, l - p.k1.y * cb - p.k1.z * cr, l + p.k1.w * cb);
+    return clamp(rgb, 0.0, 1.0);
+}
+
+fragment float4 fs_yuv(
+    FullscreenOut in [[stage_in]],
+    texture2d<uint, access::read> yp [[texture(0)]],
+    texture2d<uint, access::read> up [[texture(1)]],
+    texture2d<uint, access::read> vp [[texture(2)]],
+    constant YuvParams &p [[buffer(0)]])
+{
+    const uint2 px = uint2(in.position.xy);
+    const uint k = max(p.out.x, 1u);
+    const uint row = p.mode.z == 1u ? p.out.z - 1u - px.y : px.y;
+    if (k == 1u) {
+        const float3 c = yuv_rgb_at(yp, up, vp, p, min(px.x, p.dims.x - 1u), min(row, p.dims.y - 1u));
+        return float4(p.out.y == 1u ? yuv_to_linear(c) : c, 1.0);
+    }
+    float3 sum = 0.0;
+    for (uint j = 0u; j < k; j++) {
+        for (uint i = 0u; i < k; i++) {
+            const uint x = min(px.x * k + i, p.dims.x - 1u);
+            const uint y = min(row * k + j, p.dims.y - 1u);
+            sum += yuv_to_linear(yuv_rgb_at(yp, up, vp, p, x, y));
+        }
+    }
+    const float3 lin = sum / float(k * k);
+    return float4(p.out.y == 1u ? lin : yuv_to_srgb(lin), 1.0);
+}

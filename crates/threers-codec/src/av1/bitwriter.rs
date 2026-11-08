@@ -9,7 +9,7 @@ pub(super) struct BitWriter {
 impl BitWriter {
     pub(super) fn put(&mut self, value: u32, n: u32) {
         for i in (0..n).rev() {
-            if self.bits % 8 == 0 {
+            if self.bits.is_multiple_of(8) {
                 self.out.push(0);
             }
             let bit = ((value >> i) & 1) as u8;

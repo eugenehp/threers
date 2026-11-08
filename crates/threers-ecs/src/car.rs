@@ -42,9 +42,12 @@ use threers_physics::prelude::{BodyId, RigidBody, Shape, Vehicle, WheelConfig};
 /// Which wheels the engine turns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Driven {
+    /// Front-wheel drive.
     Front,
+    /// Rear-wheel drive: the default.
     #[default]
     Rear,
+    /// Four-wheel drive, the pull split evenly.
     All,
 }
 
@@ -52,19 +55,24 @@ pub enum Driven {
 /// whatever the wheel size. The default is a light, quick road car of a tonne.
 #[derive(Debug, Clone)]
 pub struct CarSpec {
+    /// In kilograms.
     pub mass: f32,
     /// Half the body's width, height and length.
     pub half_size: Vector3,
+    /// In metres (units).
     pub wheel_radius: f32,
     /// How far each wheel sits from the centre line, and the axles from the middle.
     pub track: f32,
+    /// Half the distance between the axles.
     pub wheelbase: f32,
+    /// Which wheels the engine turns.
     pub driven: Driven,
     /// Pull at low speed.
     pub engine_force: f32,
     /// Power in watts: above `power / engine_force` the pull falls with speed,
     /// which is what sets the top speed.
     pub power: f32,
+    /// Braking force at the road, in newtons, at full brake.
     pub brake_force: f32,
     /// How far the front wheels turn at rest, in radians.
     pub max_steer: f32,
@@ -73,6 +81,7 @@ pub struct CarSpec {
     pub steer_falloff: f32,
     /// How quickly the wheels reach the lock asked for, in radians per second.
     pub steer_rate: f32,
+    /// Forward grip: how much of the weight on a tyre it can push with before it spins.
     pub grip: f32,
     /// Sideways grip as a share of forward grip; below 1 the car slides.
     pub lateral_grip: f32,
@@ -110,6 +119,7 @@ pub struct Car {
     pub brake: f32,
     /// -1 is full left, 1 full right.
     pub steer: f32,
+    /// Locks the rear wheels: a slide on purpose.
     pub handbrake: bool,
     /// A brake that is always on, 0 to 1, for rough ground.
     pub drag: f32,
@@ -119,8 +129,11 @@ pub struct Car {
     pub sliding: f32,
     /// The most any tyre is asked past its grip, 0 to 1: wheelspin or a skid.
     pub slip: f32,
+    /// How many wheels touched the ground on the last step.
     pub wheels_on_ground: usize,
+    /// The solver's vehicle, for what this component does not cover.
     pub vehicle: Vehicle,
+    /// What it was made with. Changing it does not rebuild the car.
     pub spec: CarSpec,
     wheels: Vec<Entity>,
     steering: f32,

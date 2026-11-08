@@ -28,9 +28,9 @@ animation = ["dep:threers-animation"]
 usd = ["threers/usd"]
 
 [dependencies]
-threers = { path = "../..", version = "0.0.11" }
-threers-physics = { path = "../threers-physics", version = "0.0.11", optional = true }
-threers-animation = { path = "../threers-animation", version = "0.0.11", optional = true, default-features = false }
+threers = { path = "../..", version = "0.0.12" }
+threers-physics = { path = "../threers-physics", version = "0.0.12", optional = true }
+threers-animation = { path = "../threers-animation", version = "0.0.12", optional = true, default-features = false }
 napi = { version = "2", default-features = false, features = ["napi4"] }
 napi-derive = "2"
 

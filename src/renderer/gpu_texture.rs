@@ -23,47 +23,16 @@ fn pad_rows_for_upload(pixels: &[u8], width: u32, height: u32, bpp: u32) -> (Vec
 
 /// IEEE-754 f32 → f16, rounding to nearest with ties to even.
 ///
-/// The crate used to carry two of these — this one and a second inside the EXR
-/// loader — which is exactly as safe as it sounds: this one masked the exponent
-/// to fourteen bits where an f16 has fifteen, so every value from 2.0 up lost
-/// its top exponent bit and came back a subnormal near zero, while the EXR copy
-/// was correct the whole time. That reached `pack_rgba16f` and the PMREM atlas,
-/// so every HDR environment map brighter than 2.0 was flattened before the GPU
-/// saw it. The loader's version is now the only one, and both call it.
+/// The crate used to carry several of these, and copies drift: one masked the
+/// exponent to fourteen bits and flattened every value from 2.0 up, and the
+/// later ones all rounded a subnormal tie up rather than to even. There is one
+/// now, [`crate::math::float::f32_to_f16`], tested against every half.
 pub fn f32_to_f16_bits(v: f32) -> u16 {
-    let bits = v.to_bits();
-    let sign = ((bits >> 16) & 0x8000) as u16;
-    let exp = ((bits >> 23) & 0xff) as i32;
-    let mant = bits & 0x007f_ffff;
-
-    if exp == 0xff {
-        // Inf or NaN — keep a NaN's payload non-zero so it stays a NaN.
-        return sign | 0x7c00 | if mant != 0 { 0x0200 } else { 0 };
-    }
-    // Rebias 127 → 15.
-    let e = exp - 127 + 15;
-    if e >= 0x1f {
-        return sign | 0x7c00; // overflow → inf
-    }
-    if e <= 0 {
-        if e < -10 {
-            return sign; // underflow → zero
-        }
-        // Subnormal: shift the implicit 1 back in, then round.
-        let m = mant | 0x0080_0000;
-        let shift = (14 - e) as u32;
-        let half = (m >> shift) as u16;
-        let round = ((m >> (shift - 1)) & 1) as u16;
-        return sign | (half + round);
-    }
-    let half = ((e as u32) << 10) as u16 | (mant >> 13) as u16;
-    let sticky = mant & 0x1fff;
-    let round = u16::from(sticky > 0x1000 || (sticky == 0x1000 && (half & 1) == 1));
-    sign | (half + round)
+    crate::math::float::f32_to_f16(v)
 }
 
 pub fn f16_bits_to_f32(h: u16) -> f32 {
-    crate::renderer::readback::f16_to_f32(h)
+    crate::math::float::f16_to_f32(h)
 }
 
 fn pad_rows_rgba16f(f32_pixels: &[f32], width: u32, height: u32) -> (Vec<u8>, u32) {
@@ -168,12 +137,13 @@ fn fs(in : FullscreenVertex) -> @location(0) vec4<f32> {
     }
 
     /// Whether a format can be rendered into, and so filtered this way.
-    fn renderable(format: wgpu::TextureFormat) -> bool {
+    pub(crate) fn renderable(format: wgpu::TextureFormat) -> bool {
         matches!(
             format,
             wgpu::TextureFormat::Rgba8Unorm
                 | wgpu::TextureFormat::Rgba8UnormSrgb
                 | wgpu::TextureFormat::Rgba16Float
+                | wgpu::TextureFormat::R16Float
                 | wgpu::TextureFormat::R8Unorm
         )
     }
@@ -754,6 +724,90 @@ impl GpuTexture {
         Self { texture, view }
     }
 
+    /// A texture for a [`TextureStream`](crate::textures::TextureStream),
+    /// rewritten in place as frames arrive, so its view and every bind group
+    /// around it stay valid: by [`write_frame`](Self::write_frame) for RGBA
+    /// frames, or drawn into by the YUV conversion pass. A full mip chain when
+    /// the texture asks for one, rebuilt after each frame. `max` is the
+    /// device's largest texture side; a bigger frame is held shrunk by a whole
+    /// factor.
+    pub fn streamed(device: &wgpu::Device, src: &Texture, max: u32) -> Self {
+        let (_, width, height) = super::yuv::fit(src.width.max(1), src.height.max(1), max);
+        let levels = if src.mipmap_filter.is_some() {
+            32 - width.max(height).leading_zeros()
+        } else {
+            1
+        };
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("threers streamed texture"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: levels,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu_format(src.format),
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        Self { texture, view }
+    }
+
+    /// Write one RGBA8 frame, top row first, into level 0 of a texture made
+    /// by [`streamed`](Self::streamed). With `flip_y` the rows go in reversed,
+    /// through `scratch`, as [`upload`](Self::upload) turns an image over.
+    /// Nothing is written when the frame is not the texture's size.
+    pub fn write_frame(
+        &self,
+        queue: &wgpu::Queue,
+        frame: &[u8],
+        width: u32,
+        height: u32,
+        flip_y: bool,
+        scratch: &mut Vec<u8>,
+    ) {
+        let stride = width as usize * 4;
+        if frame.len() != stride * height as usize
+            || stride == 0
+            || (width, height) != (self.texture.width(), self.texture.height())
+        {
+            return;
+        }
+        let bytes = if flip_y {
+            scratch.clear();
+            for row in frame.chunks_exact(stride).rev() {
+                scratch.extend_from_slice(row);
+            }
+            &scratch[..]
+        } else {
+            frame
+        };
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            bytes,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(stride as u32),
+                rows_per_image: Some(height),
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+
     pub fn upload(device: &wgpu::Device, queue: &wgpu::Queue, src: &Texture) -> Self {
         // Orient before anything else, so the mip chain is built from the
         // pixels that actually get uploaded.
@@ -866,8 +920,7 @@ impl GpuTexture {
 ///
 /// Empty when the texture is already 1×1, is render-target backed, carries the
 /// wrong amount of data, or is a format this does not downsample
-/// (`Rgba16Float` — HDR sources here are environment maps, which get their
-/// chain from the PMREM path instead).
+/// (block-compressed ones; floats are averaged at their own width).
 pub fn mip_chain_for(src: &Texture) -> usize {
     build_mip_chain(src).len()
 }
@@ -888,8 +941,8 @@ fn build_mip_chain(src: &Texture) -> Vec<(u32, u32, Vec<u8>)> {
     {
         return Vec::new();
     }
-    if matches!(src.format, TextureFormat::Rgba16Float) {
-        return half_mip_chain(src);
+    if src.format.is_float() {
+        return float_mip_chain(src);
     }
     build_mip_chain_8(src, w, h, bpp)
 }
@@ -903,17 +956,17 @@ fn build_mip_chain(src: &Texture) -> Vec<(u32, u32, Vec<u8>)> {
 /// the sampler has only level 0 to work with, so every star smaller than a
 /// pixel is point-sampled — in frame at one camera angle, gone at the next.
 /// From a vacuum that reads as twinkling.
-fn half_mip_chain(src: &Texture) -> Vec<(u32, u32, Vec<u8>)> {
+///
+/// The same for every float format, at its own channel count and width:
+/// averaged in f32 and stored back rounded once to the format.
+fn float_mip_chain(src: &Texture) -> Vec<(u32, u32, Vec<u8>)> {
     let (mut w, mut h) = (src.width.max(1), src.height.max(1));
-    let mut level: Vec<f32> = src
-        .data
-        .chunks_exact(2)
-        .map(|b| f16_bits_to_f32(u16::from_le_bytes([b[0], b[1]])))
-        .collect();
+    let n = src.format.channels();
+    let Some(mut level) = src.texels_f32() else { return Vec::new() };
     let mut out = Vec::new();
     while w > 1 || h > 1 {
         let (nw, nh) = ((w / 2).max(1), (h / 2).max(1));
-        let mut next = vec![0f32; (nw as usize) * (nh as usize) * 4];
+        let mut next = vec![0f32; (nw as usize) * (nh as usize) * n];
         for y in 0..nh as usize {
             let y0 = (y * 2).min(h as usize - 1);
             let y1 = (y * 2 + 1).min(h as usize - 1);
@@ -921,21 +974,21 @@ fn half_mip_chain(src: &Texture) -> Vec<(u32, u32, Vec<u8>)> {
                 let x0 = (x * 2).min(w as usize - 1);
                 let x1 = (x * 2 + 1).min(w as usize - 1);
                 let taps = [
-                    (y0 * w as usize + x0) * 4,
-                    (y0 * w as usize + x1) * 4,
-                    (y1 * w as usize + x0) * 4,
-                    (y1 * w as usize + x1) * 4,
+                    (y0 * w as usize + x0) * n,
+                    (y0 * w as usize + x1) * n,
+                    (y1 * w as usize + x0) * n,
+                    (y1 * w as usize + x1) * n,
                 ];
-                let dst = (y * nw as usize + x) * 4;
-                for c in 0..4 {
+                let dst = (y * nw as usize + x) * n;
+                for c in 0..n {
                     next[dst + c] = taps.iter().map(|t| level[t + c]).sum::<f32>() * 0.25;
                 }
             }
         }
-        let bytes = next
-            .iter()
-            .flat_map(|&v| f32_to_f16_bits(v).to_le_bytes())
-            .collect();
+        let bytes = match src.format {
+            TextureFormat::Rgba16Float | TextureFormat::R16Float => crate::math::float::pack_f16(&next),
+            _ => crate::math::float::pack_f32(&next),
+        };
         out.push((nw, nh, bytes));
         level = next;
         w = nw;
@@ -1060,6 +1113,9 @@ pub fn wgpu_format(f: TextureFormat) -> wgpu::TextureFormat {
         TextureFormat::Rgba8Unorm => wgpu::TextureFormat::Rgba8Unorm,
         TextureFormat::R8Unorm => wgpu::TextureFormat::R8Unorm,
         TextureFormat::Rgba16Float => wgpu::TextureFormat::Rgba16Float,
+        TextureFormat::R16Float => wgpu::TextureFormat::R16Float,
+        TextureFormat::R32Float => wgpu::TextureFormat::R32Float,
+        TextureFormat::Rgba32Float => wgpu::TextureFormat::Rgba32Float,
         TextureFormat::Bc1RgbaUnormSrgb => wgpu::TextureFormat::Bc1RgbaUnormSrgb,
         TextureFormat::Bc7RgbaUnormSrgb => wgpu::TextureFormat::Bc7RgbaUnormSrgb,
     }
@@ -1101,6 +1157,9 @@ pub fn tex_cache_key(t: &Arc<Texture>) -> TexCacheKey {
         TextureFormat::Rgba16Float => 3,
         TextureFormat::Bc1RgbaUnormSrgb => 4,
         TextureFormat::Bc7RgbaUnormSrgb => 5,
+        TextureFormat::R16Float => 6,
+        TextureFormat::R32Float => 7,
+        TextureFormat::Rgba32Float => 8,
     };
     // `flip_y` is in the key because the upload honours it — two textures over
     // the same bytes with opposite flips are genuinely different images. The

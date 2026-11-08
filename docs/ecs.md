@@ -78,6 +78,8 @@ Each repeat has its own place in event queues and its own `Added`/`Changed` wind
 | F12 | record your input to `recordings/` |
 | backquote | the console: `help`, `select`, `set`, `tp`, `speed`, `systems`, and a game's own (`World::console_command`) |
 
+The console takes the keys while open (`Input::captured`), and the Escape or backquote that closes it is consumed, so it does not also reach the game's pause menu.
+
 It also turns on `App::catch_panics`: a system that panics is switched off and named on the panel, and the game goes on. A failing picture test (`TestGame::assert_frame_matches`) writes `<name>.actual.png` and `<name>.diff.png` beside the reference.
 
 `scripts/watch-game.py` rebuilds and restarts the game on every save, and with `HotReload` it starts where the old build was. `scripts/web-game.py` builds the browser package and page, serves it, and with `--watch` reloads the open page.
@@ -168,6 +170,17 @@ A test can play the game by its keys and look at it: `tests/race.rs` drives a wh
 | Glide something somewhere | `Tween::to_position`, `to_scale`, `to_rotation`, then `TweenFinished` |
 | Turn a bug someone found into a test | F12 with `DevTools` records to `recordings/`; `Recording::from_text(..).play(&mut app)` plays it back exactly |
 | A level from Blender | `spawn_scene("level.glb")`; custom properties become components, and `solid`, `sensor` and `body` give collision |
+| A loading screen | `AssetsPlugin::new("assets")` and `LoadingScreen { during, then }`: the state moves on when nothing is loading |
+| Save slots | `reflect!` what to keep, then `SaveSlots::new("game")` with `write`, `read`, `list`: files natively, `localStorage` in a browser |
+| Stamp out a thing many times | `World::capture_prefab(root)`, then `spawn_prefab`: the entity, its children and their reflected components |
+| Animation states | `Animator`: `state`, `once`, `transition` on `Condition::above`/`below`/`trigger`, crossfades |
+| A walking character | `attach_character` and `Character::walk`/`jump`; `character_step` moves it |
+| Thumbs on a phone | `TouchControls::new().stick("turn", "forward").button(..)`, read through the same actions |
+| Work longer than a frame | `Tasks::spawn` natively, `Jobs` for the same job on threads or Web Workers |
+| Hundreds of still meshes | mark them `Static` and call `World::bake_static`: one draw per material |
+| A screen showing a video | feature `video`: `w.mesh(..).video(VideoPlayer::open(bytes)?)`. It plays on game time, so a paused game pauses it. With `audio` and an `AudioPlugin` its soundtrack plays in step, through seeks, loops and pauses; insert `Video::muted(player)` for none |
+| An overlay that takes a key | `Input::consume(key)`: nothing later this frame sees it pressed, as the console does with Escape |
+| Know which systems broke | `Failures` and `SystemFailed` events, with `App::catch_panics(true)` |
 
 Gizmos drawn by a fixed system stay up until the next fixed step, since a frame may run none. Timers, delays and tweens run on game time, so a pause stops them.
 
@@ -213,6 +226,43 @@ Merging is where it pays in a game. The race's scenery went from 529 meshes to 3
 `World::par_each` runs over one component's packed rows. `World::par_query` takes several terms, as long as they are `Parallel`: components and filters, not `Node`, because the arena is one value rather than a row each. Both run on one thread without the `parallel` feature, for short lists, and on a browser's main thread.
 
 Threads pay only for real work per row. On 100,000 rows doing one addition, `par_query` measured about nine times slower than `each` (3.3 ms against 0.38 ms, on a loaded machine): dispatch costs more than the loop. Use it for pathfinding or a heavy update, and measure with `cargo bench`.
+
+## Every module
+
+| Module | What is in it |
+|---|---|
+| `world`, `query` (root) | `World`, `Entity`, queries and their terms, resources, events, commands |
+| `params` | `Query`, `Res`, `ResMut`, `EventReader`, `EventWriter`, `Commands`; `IntoSystem`, `IntoParallel` |
+| `schedule` (root) | `System` (`before`, `after`, `run_if`, `in_state`, `parallel`), `Schedule` |
+| `app` (root) | `App`, `Plugin`, `Time`, `Exit`, `MainCamera`, game states |
+| `input` | `Input`, `Key`, `MouseButton`, `PadButton`, `PadAxis`, `Button`, `Rumble` |
+| `touch` | `TouchControls`, `TouchButton` |
+| `gamepad` | `Gamepads` (feature `gamepad`) |
+| `physics` | `Body`, `Collision`, `Character`, `AttachBody` (feature `physics`) |
+| `car` | `Car`, `CarSpec`, `Driven`, `AttachCar` (feature `physics`) |
+| `camera` | `ChaseCamera`, `CameraTarget` |
+| `audio` | `AudioOut`, `Speaker`, `Speakers`, `Bus`, `AudioPlugin` (feature `audio`) |
+| `animator` | `Animator`, `Condition`, `AnimationFinished` |
+| `assets` | `AssetsPlugin`, `Handle`, `LoadingScreen`, `SceneInstance`, `AssetLoaded`, `AssetFailed` |
+| `registry` | `reflect!`, `Reflect`, `Field`, `FieldValue`, `Prefab` |
+| `saves` | `SaveSlots` |
+| `batch` | `Static`, `Baked` |
+| `timer` | `Timer`, `Tween`, `TweenFinished` |
+| `video` | `Video`, `VideoPlayer`, `VideoTexture` (feature `video`) |
+| `tasks` | `Tasks`, `Jobs` |
+| `hud` | `Hud`, `UiLayer` (feature `ui`) |
+| `gizmos` | `Gizmos` |
+| `tuning` | `App::tune` |
+| `profile` | `Profile`, `SystemTime`, `Failures`, `SystemFailed` |
+| `replay` | `Recording`, `InputEvent`, `Rewind`, `RewindState` |
+| `dev` | `DevTools`, `DevState`, `Flight` |
+| `console` | `Console`, `ConsoleState`, `World::console_command` |
+| `hot` | `HotReload`, `HotState` (native) |
+| `testing` | `TestGame` |
+| `window` | `run`, `WindowOptions` (feature `window`; `metal` for the Metal backend) |
+| `web` | `run` on a canvas (feature `web`, wasm32) |
+
+Every public item has rustdoc, and `#![warn(missing_docs)]` keeps it so: `cargo doc -p threers-ecs --all-features --open`.
 
 ## Testing it
 

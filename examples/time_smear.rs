@@ -34,14 +34,14 @@ const PULSE: std::ops::Range<usize> = 70..86;
 #[allow(clippy::large_enum_variant)]
 enum Backend {
     Wgpu(HeadlessRenderer),
-    #[cfg(feature = "metal")]
+    #[cfg(metal_backend)]
     Metal(threers::metal::MetalHeadlessRenderer),
 }
 
 impl Backend {
     fn new(metal: bool, w: u32, h: u32) -> Self {
         if metal {
-            #[cfg(feature = "metal")]
+            #[cfg(metal_backend)]
             return Backend::Metal(
                 threers::metal::MetalHeadlessRenderer::builder()
                     .size(w, h)
@@ -49,7 +49,7 @@ impl Backend {
                     .build()
                     .expect("metal renderer"),
             );
-            #[cfg(not(feature = "metal"))]
+            #[cfg(not(metal_backend))]
             panic!("--metal needs `--features metal`");
         }
         Backend::Wgpu(
@@ -64,7 +64,7 @@ impl Backend {
     fn size(&self) -> (u32, u32) {
         match self {
             Backend::Wgpu(r) => r.render_size(),
-            #[cfg(feature = "metal")]
+            #[cfg(metal_backend)]
             Backend::Metal(r) => r.render_size(),
         }
     }
@@ -72,7 +72,7 @@ impl Backend {
     fn render(&mut self, scene: &mut Scene, cam: &PerspectiveCamera) -> Vec<u8> {
         match self {
             Backend::Wgpu(r) => r.render_to_rgba(scene, cam),
-            #[cfg(feature = "metal")]
+            #[cfg(metal_backend)]
             Backend::Metal(r) => r.render_to_rgba(scene, cam).expect("metal frame"),
         }
     }

@@ -75,11 +75,13 @@ pub struct Exit;
 
 /// A feature that sets itself up on an [`App`]: resources, systems and hooks.
 pub trait Plugin {
+    /// Add this feature's resources, systems and hooks to `app`.
     fn build(self, app: &mut App);
 }
 
 /// A world and the two schedules that run over it.
 pub struct App {
+    /// Everything the game holds. Systems get it; so can code outside them.
     pub world: World,
     fixed: Schedule,
     update: Schedule,
@@ -91,10 +93,12 @@ pub struct App {
 }
 
 impl App {
+    /// An app with an empty scene, [`Time`](crate::app::Time), [`Input`](crate::input::Input) and the other resources every game uses.
     pub fn new() -> Self {
         Self::with_scene(Scene::new())
     }
 
+    /// As [`new`](Self::new), over a scene that already has content.
     pub fn with_scene(scene: Scene) -> Self {
         let mut world = World::with_scene(scene);
         world.insert_resource(Time::default());
@@ -211,11 +215,13 @@ impl App {
             .unwrap_or_else(|| panic!("no state {}: call App::state", std::any::type_name::<S>()))
     }
 
+    /// Set up a [`Plugin`].
     pub fn plugin(&mut self, plugin: impl Plugin) -> &mut Self {
         plugin.build(self);
         self
     }
 
+    /// Insert a resource, replacing any of its type: [`World::insert_resource`] that chains.
     pub fn resource<R: 'static>(&mut self, resource: R) -> &mut Self {
         self.world.insert_resource(resource);
         self
@@ -292,6 +298,8 @@ impl App {
         time.alpha = alpha as f32;
         crate::timer::run_delays(&mut self.world);
         crate::timer::run_tweens(&mut self.world);
+        #[cfg(feature = "video")]
+        crate::video::run_videos(&mut self.world);
         self.world.flush();
         self.update.run(&mut self.world);
         crate::gizmos::draw_gizmos(&mut self.world);

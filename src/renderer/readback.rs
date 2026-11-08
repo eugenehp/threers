@@ -23,70 +23,15 @@
 //! callback it is waiting for. Use [`copy_texture_to_buffer`] and drive the
 //! mapping yourself from an async context.
 
-/// One IEEE 754 binary16 as an `f32`.
-///
-/// Exact for every input, subnormals and infinities included — a `bits >> 10`
-/// shortcut gets the normals right and silently flattens the subnormals to
-/// zero, which is most of the interesting range when the values being read
-/// back are small.
+/// One IEEE 754 binary16 as an `f32` ([`crate::math::float::f16_to_f32`]).
 pub fn f16_to_f32(bits: u16) -> f32 {
-    let sign = if bits & 0x8000 != 0 { -1.0f32 } else { 1.0 };
-    let exponent = ((bits >> 10) & 0x1f) as i32;
-    let mantissa = (bits & 0x3ff) as u32;
-    match exponent {
-        // Subnormal (and zero): no implicit leading one, and a fixed exponent
-        // of 2^-24. Writing it as a multiply rather than by renormalising into
-        // float32 bits is both shorter and the version that is obviously right.
-        0 => sign * mantissa as f32 * 5.960_464_5e-8,
-        0x1f => {
-            if mantissa == 0 {
-                sign * f32::INFINITY
-            } else {
-                f32::NAN
-            }
-        }
-        _ => {
-            let s = u32::from(bits & 0x8000 != 0) << 31;
-            f32::from_bits(s | (((exponent + 127 - 15) as u32) << 23) | (mantissa << 13))
-        }
-    }
+    crate::math::float::f16_to_f32(bits)
 }
 
-/// An `f32` as the nearest IEEE 754 binary16, round-to-nearest-even.
-///
-/// The inverse of [`f16_to_f32`], for writing a float texture from the CPU.
+/// An `f32` as the nearest IEEE 754 binary16, round-to-nearest-even
+/// ([`crate::math::float::f32_to_f16`]), for writing a float texture.
 pub fn f32_to_f16(value: f32) -> u16 {
-    let bits = value.to_bits();
-    let sign = ((bits >> 16) & 0x8000) as u16;
-    let exp = ((bits >> 23) & 0xff) as i32 - 127 + 15;
-    let mantissa = bits & 0x7f_ffff;
-    if exp >= 0x1f {
-        // Overflow, infinity, or NaN. A NaN must stay a NaN rather than
-        // becoming an infinity, so keep a mantissa bit set.
-        let payload = if ((bits >> 23) & 0xff) == 0xff && mantissa != 0 {
-            0x200
-        } else {
-            0
-        };
-        return sign | 0x7c00 | payload;
-    }
-    if exp <= 0 {
-        // Subnormal or zero in half precision.
-        if exp < -10 {
-            return sign;
-        }
-        let m = mantissa | 0x80_0000;
-        let shift = (14 - exp) as u32;
-        let half = (m >> shift) as u16;
-        let round = (m >> (shift - 1)) & 1;
-        return sign | (half + round as u16);
-    }
-    let half = ((exp as u32) << 10) as u16 | (mantissa >> 13) as u16;
-    // Round to nearest, ties to even.
-    let round = (mantissa >> 12) & 1;
-    let sticky = (mantissa & 0xfff != 0) as u32;
-    let up = round & (sticky | (half as u32 & 1));
-    sign | (half + up as u16)
+    crate::math::float::f32_to_f16(value)
 }
 
 /// The padded row stride a buffer copy of `width` texels of `format` needs.

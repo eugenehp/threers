@@ -25,7 +25,7 @@ default = []
 # Optional because a game that moves things itself needs no simulation.
 physics = ["dep:threers-physics"]
 # A native window around an `App`. Off, the crate has no windowing dependency.
-window = ["dep:winit"]
+window = ["dep:winit", "threers/sketch"]
 # Draw the window through threers' native Metal renderer instead of wgpu, on
 # macOS and iOS: `WindowOptions::metal()`, or `THREERS_BACKEND=metal`.
 metal = ["window", "threers/metal"]
@@ -45,6 +45,9 @@ web-threads = ["web", "parallel", "threers/wasm-threads"]
 web = ["dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:js-sys", "dep:web-sys", "dep:wgpu", "dep:console_error_panic_hook"]
 # A retained, CSS-styled UI layer over the game.
 ui = ["threers/ui"]
+# Video on meshes: `Spawned::video` and the `Video` component, over threers's
+# pure-Rust decoders.
+video = ["threers/native-decode"]
 
 [[bench]]
 name = "query"
@@ -58,6 +61,10 @@ required-features = ["physics"]
 [[test]]
 name = "hop"
 required-features = ["physics", "window", "audio"]
+
+[[test]]
+name = "video"
+required-features = ["video"]
 
 [[test]]
 name = "race"
@@ -116,8 +123,8 @@ name = "race"
 required-features = ["physics", "window", "audio"]
 
 [dependencies]
-threers = { path = "../..", version = "0.0.11" }
-threers-physics = { path = "../threers-physics", version = "0.0.11", optional = true }
+threers = { path = "../..", version = "0.0.12" }
+threers-physics = { path = "../threers-physics", version = "0.0.12", optional = true }
 slotmap = "1.0"
 gilrs = { version = "0.11", optional = true }
 rayon = { version = "1", optional = true }

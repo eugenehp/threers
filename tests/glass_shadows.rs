@@ -186,7 +186,7 @@ fn glass_casts_shadows_in_every_mode() {
     }
 }
 
-#[cfg(feature = "metal")]
+#[cfg(metal_backend)]
 #[test]
 fn glass_highlights_respect_shadows_on_metal() {
     use threers::metal::{MetalError, MetalHeadlessRenderer};

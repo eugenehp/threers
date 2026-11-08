@@ -14,7 +14,7 @@ use std::ffi::{c_int, c_short, c_uint, c_ulong, c_void};
 use std::sync::OnceLock;
 
 use super::{check, Context, CuResult, Lib, Memcpy2d, MEMORYTYPE_DEVICE, MEMORYTYPE_HOST};
-use crate::decode::{ChromaFormat, ColorInfo, DecodedFrame};
+use crate::decode::{ColorInfo, DecodedFrame, PackedFrame};
 use crate::mp4_demux::{TrackCodec, VideoTrack};
 
 type Parser = *mut c_void;
@@ -208,8 +208,10 @@ struct State {
     pts: i64,
     /// Pictures copied out during the current `push`.
     copied: i64,
-    ready: Vec<(i64, DecodedFrame)>,
+    ready: Vec<(i64, PackedFrame)>,
     error: Option<String>,
+    /// Where the pictures' buffers come from.
+    pool: crate::bytes::FramePool,
 }
 
 impl State {
@@ -218,8 +220,9 @@ impl State {
         0
     }
 
-    /// Map surface `index` and copy the display area to the host.
-    unsafe fn copy_out(&mut self, index: c_int) -> Result<DecodedFrame, String> {
+    /// Map surface `index` and copy the display area to the host, as the
+    /// decoder left it: NV12, or P016 above 8 bits.
+    unsafe fn copy_out(&mut self, index: c_int) -> Result<PackedFrame, String> {
         let fmt = self.format.ok_or("a picture before the sequence header")?;
         let cuda = super::cuda().ok_or("CUDA went away")?;
         let mut proc: ProcParams = std::mem::zeroed();
@@ -235,9 +238,12 @@ impl State {
         let bps = if deep { 2 } else { 1 };
         let surface_h = fmt.coded_height as usize;
         let pitch = pitch as usize;
-        let mut luma = vec![0u8; w * h * bps];
-        let mut chroma = vec![0u8; w.div_ceil(2) * 2 * h.div_ceil(2) * bps];
-        let copy = |src: u64, x: usize, y: usize, dst: &mut [u8], width: usize, rows: usize| {
+        // From the pool, not zeroed: the copies below write every byte, and
+        // the lengths are set only once they have.
+        let (luma_len, chroma_len) = (w * h * bps, w.div_ceil(2) * 2 * h.div_ceil(2) * bps);
+        let mut luma = self.pool.take(luma_len);
+        let mut chroma = self.pool.take(chroma_len);
+        let copy = |src: u64, x: usize, y: usize, dst: *mut u8, width: usize, rows: usize| {
             let mut m = Memcpy2d::zeroed();
             m.src_memory_type = MEMORYTYPE_DEVICE;
             m.src_device = src;
@@ -245,7 +251,7 @@ impl State {
             m.src_x_in_bytes = x;
             m.src_y = y;
             m.dst_memory_type = MEMORYTYPE_HOST;
-            m.dst_host = dst.as_mut_ptr().cast();
+            m.dst_host = dst.cast();
             m.dst_pitch = width;
             m.width_in_bytes = width;
             m.height = rows;
@@ -255,7 +261,7 @@ impl State {
             dptr,
             left as usize * bps,
             top as usize,
-            &mut luma,
+            luma.as_mut_ptr(),
             w * bps,
             h,
         )
@@ -265,39 +271,26 @@ impl State {
                 uv,
                 (left as usize & !1) * bps,
                 top as usize / 2,
-                &mut chroma,
+                chroma.as_mut_ptr(),
                 w.div_ceil(2) * 2 * bps,
                 h.div_ceil(2),
             )
         });
         (self.cuvid.unmap)(self.decoder, dptr);
         r?;
+        // Both copies wrote whole rows, `width` bytes apart, over each
+        // buffer's length.
+        luma.set_len(luma_len);
+        chroma.set_len(chroma_len);
 
-        let sample = |b: &[u8], i: usize| -> u16 {
-            if deep {
-                // P016: the sample sits in the high bits.
-                u16::from_le_bytes([b[2 * i], b[2 * i + 1]]) >> (8 - fmt.bit_depth_luma_minus8)
-            } else {
-                b[i] as u16
-            }
-        };
-        let (cw, ch) = (w.div_ceil(2), h.div_ceil(2));
-        let mut u = Vec::with_capacity(cw * ch);
-        let mut v = Vec::with_capacity(cw * ch);
-        for i in 0..cw * ch {
-            u.push(sample(&chroma, 2 * i));
-            v.push(sample(&chroma, 2 * i + 1));
-        }
         let vsd = fmt.video_signal_description;
         let full_range = vsd[0] & 0x08 != 0;
-        Ok(DecodedFrame {
+        Ok(PackedFrame {
             width: w as u32,
             height: h as u32,
             bit_depth: 8 + fmt.bit_depth_luma_minus8,
-            chroma: ChromaFormat::Yuv420,
-            y: (0..w * h).map(|i| sample(&luma, i)).collect(),
-            u,
-            v,
+            y: luma,
+            uv: chroma,
             color: ColorInfo::from_vui(Some(vsd[3] as u32), full_range, h as u32),
         })
     }
@@ -442,6 +435,7 @@ impl NvdecDecoder {
             copied: 0,
             ready: Vec::new(),
             error: None,
+            pool: Default::default(),
         });
         let mut params: ParserParams = unsafe { std::mem::zeroed() };
         params.codec_type = codec_type;
@@ -524,6 +518,19 @@ impl NvdecDecoder {
 
     /// [`take`](Self::take), but the planes at the stream's bit depth.
     pub fn take_frame(&mut self, pts: i64) -> Option<DecodedFrame> {
+        self.take_packed(pts).map(|f| f.to_decoded())
+    }
+
+    /// [`take`](Self::take), as the decoder left the picture: NV12, or P016
+    /// above 8 bits. No pass over the pixels; for a caller converting on the
+    /// GPU.
+    /// Copy pictures into buffers from `pool` (see
+    /// [`FramePool`](crate::bytes::FramePool)), to be given back there.
+    pub fn set_pool(&mut self, pool: crate::bytes::FramePool) {
+        self.state.pool = pool;
+    }
+
+    pub fn take_packed(&mut self, pts: i64) -> Option<PackedFrame> {
         let ready = &mut self.state.ready;
         let hit = ready.iter().position(|(p, _)| *p == pts)?;
         let (_, frame) = ready.remove(hit);

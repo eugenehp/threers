@@ -176,6 +176,8 @@ impl Default for Tasks {
 }
 
 impl Tasks {
+    /// The task pools: rayon's with the `parallel` feature, a small one of its own
+    /// otherwise, and a tokio runtime with `tokio`.
     pub fn new() -> Self {
         Self {
             #[cfg(all(not(target_arch = "wasm32"), not(feature = "parallel")))]
@@ -251,10 +253,12 @@ pub struct Jobs {
 }
 
 impl Jobs {
+    /// No jobs yet.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Add a job a worker can run by name.
     pub fn register(mut self, name: &str, job: JobFn) -> Self {
         self.table.insert(name.to_owned(), job);
         self

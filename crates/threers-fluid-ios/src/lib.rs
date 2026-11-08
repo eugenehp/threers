@@ -39,6 +39,11 @@
 //! [`threers_fluid_suggested_budget_mb`] is a starting point, not an answer —
 //! only the app knows what else is resident.
 
+// A `CAMetalLayer` exists only on Apple's platforms, and so does
+// `GpuContext::from_metal_layer`. Elsewhere the crate is empty, so the
+// workspace still builds there.
+#![cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos", target_os = "visionos"))]
+
 use std::ffi::c_void;
 
 use threers::controls::{OrbitControls, PointerEvent};

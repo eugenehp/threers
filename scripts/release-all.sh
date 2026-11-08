@@ -10,8 +10,8 @@
 #   language  — npm ESM (mini+full), npm native (host), PyPI wheel (host)
 #   crates    — crates.io: every workspace crate not marked `publish = false`
 #               (today threers-codec, threers-softbody, threers, threers-physics,
-#               threers-animation, threers-probe); versions already on the
-#               index are skipped, so a partial publish can be rerun
+#               threers-animation, threers-probe); versions
+#               already on the index are skipped, so a partial publish can be rerun
 #   npm-esm   — threers npm (wasm mini + full)
 #   npm-node  — threers-node + @threers/node-* (host .node only locally)
 #   pypi      — threers PyPI wheel (host triple)
@@ -49,7 +49,7 @@ while [[ $# -gt 0 ]]; do
     --dry-run) DRY_RUN=1 ;;
     --yes|-y) PUBLISH=1 ;;
     -h|--help)
-      sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n "2,28p" "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *) echo "unknown arg: $1 (try --help)" >&2; exit 1 ;;

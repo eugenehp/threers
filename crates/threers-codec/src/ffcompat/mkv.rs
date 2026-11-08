@@ -72,7 +72,19 @@ fn av_reduce(num: u64, den: u64, max: u64) -> (i64, i64) {
 /// Parse a Matroska/WebM file: the video timing and its packets, laid out
 /// back to back in the returned buffer (`VideoTrack::samples` index it).
 pub fn parse(data: &[u8]) -> Result<(MovVideo, VideoTrack, Vec<u8>), String> {
-    let mkv = Mkv::parse(data)?;
+    let (mov, track, packets) = parse_with(data, Mkv::parse(data)?)?;
+    Ok((mov, track, packets.unwrap_or_default()))
+}
+
+/// [`parse`], but with the track's sample offsets pointing into `data`
+/// itself, nothing copied, where every packet lies there whole (a track with
+/// header stripping has its packets laid end to end as `parse` does, and
+/// returned).
+pub fn parse_in_place(data: &[u8]) -> Result<(MovVideo, VideoTrack, Option<Vec<u8>>), String> {
+    parse_with(data, Mkv::index(data)?)
+}
+
+fn parse_with(data: &[u8], mkv: Mkv) -> Result<(MovVideo, VideoTrack, Option<Vec<u8>>), String> {
     let t = mkv.track(TrackKind::Video).ok_or("no video track")?;
     let codec = match t.codec_id.as_str() {
         "V_VP9" => TrackCodec::Vp9,
@@ -94,7 +106,7 @@ pub fn parse(data: &[u8]) -> Result<(MovVideo, VideoTrack, Vec<u8>), String> {
     // CLI never sees a frame for it).
     let shows: Vec<bool> = frames
         .iter()
-        .map(|f| codec != TrackCodec::Vp9 || crate::decode::vp9_packet::packet_shows(&f.data))
+        .map(|f| codec != TrackCodec::Vp9 || crate::decode::vp9_packet::packet_shows(f.bytes(data)))
         .collect();
     let all_pts: Vec<i64> = frames.iter().map(|f| f.pts).collect();
     let pts: Vec<i64> = frames
@@ -196,19 +208,27 @@ pub fn parse(data: &[u8]) -> Result<(MovVideo, VideoTrack, Vec<u8>), String> {
     };
     let banner_duration = ((dur_us + 5000) / 10_000) as f64 / 100.0;
 
-    // Packets back to back.
+    // Packets where they lie in the file, or back to back.
+    let in_place = frames.iter().all(|f| f.at.is_some());
     let mut buf = Vec::new();
     let mut samples = Vec::with_capacity(frames.len());
     for (i, f) in frames.iter().enumerate() {
+        let bytes = f.bytes(data);
+        let offset = match &f.at {
+            Some(at) if in_place => at.start,
+            _ => {
+                buf.extend_from_slice(bytes);
+                buf.len() - bytes.len()
+            }
+        };
         samples.push(Sample {
-            offset: buf.len() as u64,
-            size: f.data.len() as u32,
+            offset: offset as u64,
+            size: bytes.len() as u32,
             duration: pkt_durations[i] as u32,
             dts: f.pts,
             pts: f.pts,
             sync: f.keyframe,
         });
-        buf.extend_from_slice(&f.data);
     }
     let n = frames.len();
     if pts.is_empty() {
@@ -239,5 +259,5 @@ pub fn parse(data: &[u8]) -> Result<(MovVideo, VideoTrack, Vec<u8>), String> {
         timescale: ts as u32,
         samples,
     };
-    Ok((mov, track, buf))
+    Ok((mov, track, (!in_place).then_some(buf)))
 }

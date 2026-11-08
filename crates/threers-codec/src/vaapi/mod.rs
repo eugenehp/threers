@@ -33,7 +33,7 @@ mod vp9;
 
 pub use encode::{VaapiEncoder, VaapiRate};
 
-use crate::decode::{ChromaFormat, ColorInfo, DecodedFrame};
+use crate::decode::{ChromaFormat, ColorInfo, DecodedFrame, PackedFrame, Picture};
 use crate::mp4_demux::{TrackCodec, VideoTrack};
 
 pub(crate) type Display = *mut c_void;
@@ -251,6 +251,18 @@ pub(crate) struct Device {
     /// format: created once, not per frame (each is megabytes of GPU memory
     /// and a round trip into the kernel).
     readback: std::cell::Cell<Option<(Image, usize, usize, u32)>>,
+    /// Where [`read_frame`](Self::read_frame) leaves pictures as the
+    /// hardware made them (NV12, P010) when set, handing the decoder an
+    /// empty stand-in: see [`VaapiDecoder::take_picture`].
+    pub(crate) outbox: Option<std::sync::Arc<Outbox>>,
+}
+
+/// Packed pictures read back during one [`VaapiDecoder::push`], in the order
+/// they were read, and the pool their buffers come from.
+#[derive(Default)]
+pub(crate) struct Outbox {
+    frames: std::sync::Mutex<Vec<PackedFrame>>,
+    pool: std::sync::Mutex<crate::bytes::FramePool>,
 }
 
 impl Device {
@@ -294,6 +306,7 @@ impl Device {
                 dpy,
                 _node: node,
                 readback: std::cell::Cell::new(None),
+                outbox: None,
             };
             // Does this driver decode the profile at all?
             let mut attrib = ConfigAttrib {
@@ -420,9 +433,47 @@ impl Device {
             );
             let (cw, ch) = (fw.div_ceil(2), fh.div_ceil(2));
             let (cx, cy) = (left / 2, top / 2);
+            let bps = if deep { 2 } else { 1 };
+            if let Some(outbox) = &self.outbox {
+                // As the hardware made it: rows copied, nothing converted.
+                // The GPU reads NV12 and P010 as they are.
+                let pool = outbox.pool.lock().unwrap().clone();
+                let mut py = pool.take(fw * fh * bps);
+                for r in 0..fh {
+                    py.extend_from_slice(&data[yo + (top + r) * yp + left * bps..][..fw * bps]);
+                }
+                let mut uv = pool.take(cw * ch * 2 * bps);
+                for r in 0..ch {
+                    uv.extend_from_slice(&data[uo + (cy + r) * up + cx * 2 * bps..][..cw * 2 * bps]);
+                }
+                (va.unmap_buffer)(self.dpy, img.buf);
+                if copied {
+                    self.readback.set(Some((img, w, h, fourcc)));
+                } else {
+                    (va.destroy_image)(self.dpy, img.image_id);
+                }
+                outbox.frames.lock().unwrap().push(PackedFrame {
+                    width: fw as u32,
+                    height: fh as u32,
+                    bit_depth: if deep { 10 } else { 8 },
+                    y: py,
+                    uv,
+                    color,
+                });
+                // The stand-in: the picture's size and format, no samples.
+                return Ok(DecodedFrame {
+                    width: fw as u32,
+                    height: fh as u32,
+                    bit_depth: if deep { 10 } else { 8 },
+                    chroma: ChromaFormat::Yuv420,
+                    y: Vec::new(),
+                    u: Vec::new(),
+                    v: Vec::new(),
+                    color,
+                });
+            }
             // Straight loops per format, so they vectorise: this copy runs
             // once per frame over the whole picture.
-            let bps = if deep { 2 } else { 1 };
             let mut y = vec![0u16; fw * fh];
             let mut u = vec![0u16; cw * ch];
             let mut v = vec![0u16; cw * ch];
@@ -727,35 +778,43 @@ pub struct VaapiDecoder {
     nal_len: usize,
     width: u32,
     height: u32,
-    ready: Vec<(i64, DecodedFrame)>,
+    ready: Vec<(i64, Picture)>,
+    /// Pictures as the hardware made them, read back during a push.
+    outbox: std::sync::Arc<Outbox>,
 }
 
 impl VaapiDecoder {
     /// Open a session for `track`.
     pub fn new(track: &VideoTrack) -> Result<Self, String> {
+        let outbox = std::sync::Arc::new(Outbox::default());
+        let open = |profile| -> Result<Device, String> {
+            let mut device = Device::open(profile)?;
+            device.outbox = Some(outbox.clone());
+            Ok(device)
+        };
         let (dec, sets, nal_len) = match track.codec {
             TrackCodec::H264 => {
-                let device = Device::open(PROFILE_H264_HIGH)?;
+                let device = open(PROFILE_H264_HIGH)?;
                 let (sets, nal_len) = crate::decode::split_avcc(&track.config)?;
                 let mut d = crate::decode::h264::H264Decoder::new();
                 d.set_accel(Box::new(h264::VaH264::new(device)));
                 (Inner::H264(Box::new(d)), sets, nal_len)
             }
             TrackCodec::Hevc => {
-                let device = Device::open(PROFILE_HEVC_MAIN)?;
+                let device = open(PROFILE_HEVC_MAIN)?;
                 let (sets, nal_len) = crate::decode::split_hvcc(&track.config)?;
                 let mut d = crate::decode::hevc::HevcDecoder::new();
                 d.set_accel(Box::new(hevc::VaHevc::new(device)));
                 (Inner::Hevc(Box::new(d)), sets, nal_len)
             }
             TrackCodec::Vp9 => {
-                let device = Device::open(vp9::PROFILE_VP9_0)?;
+                let device = open(vp9::PROFILE_VP9_0)?;
                 let mut d = crate::decode::vp9::Vp9Decoder::new();
                 d.set_accel(Box::new(vp9::VaVp9::new(device)));
                 (Inner::Vp9(Box::new(d)), Vec::new(), 0)
             }
             TrackCodec::Av1 => {
-                let device = Device::open(av1_layout::PROFILE_AV1_0)?;
+                let device = open(av1_layout::PROFILE_AV1_0)?;
                 let mut d = crate::decode::av1::Av1Decoder::new();
                 d.set_accel(Box::new(av1::VaAv1::new(device)));
                 (Inner::Av1(Box::new(d)), Vec::new(), 0)
@@ -787,6 +846,7 @@ impl VaapiDecoder {
             width: track.width,
             height: track.height,
             ready: Vec::new(),
+            outbox,
         };
         for s in sets {
             me.nal(s)?;
@@ -816,49 +876,73 @@ impl VaapiDecoder {
         _dts: i64,
         _duration: i64,
     ) -> Result<(), String> {
+        self.outbox.frames.lock().unwrap().clear();
+        let r = self.decode(sample, pts);
+        self.outbox.frames.lock().unwrap().clear();
+        r
+    }
+
+    fn decode(&mut self, sample: &[u8], pts: i64) -> Result<(), String> {
+        // Every picture is read back as it is shown, in this order, into the
+        // outbox; the decoder keeps an empty stand-in.
+        let take = |outbox: &Outbox| -> Result<PackedFrame, String> {
+            let mut packed = outbox.frames.lock().unwrap();
+            if packed.is_empty() {
+                return Err("a picture was shown but not read back".into());
+            }
+            Ok(packed.remove(0))
+        };
         if let Inner::Av1(d) = &mut self.dec {
-            // A temporal unit shows at most one picture; the decoder has
-            // already read it back from the GPU.
+            // A temporal unit shows at most one picture. With film grain the
+            // decoder has the samples, grain added; without, the outbox has
+            // the picture.
             for (i, f) in d.decode(sample)?.into_iter().enumerate() {
-                self.ready.push((pts + i as i64, f.to_decoded()));
+                let picture = if f.hdr.film_grain_present {
+                    Picture::Planes(f.to_decoded())
+                } else {
+                    let mut p = take(&self.outbox)?;
+                    p.color = ColorInfo::from_vui(Some(f.seq.mtrx as u32), f.seq.color_range, p.height);
+                    Picture::Packed(p)
+                };
+                self.ready.push((pts + i as i64, picture));
             }
             return Ok(());
         }
         if let Inner::Vp9(d) = &mut self.dec {
             // A packet (superframe) shows at most one picture.
             for (i, f) in d.decode(sample)?.into_iter().enumerate() {
-                let frame = d.accel_read(&f)?;
-                self.ready.push((pts + i as i64, frame));
+                d.accel_read(&f)?;
+                self.ready.push((pts + i as i64, Picture::Packed(take(&self.outbox)?)));
             }
             return Ok(());
         }
         for nal in crate::decode::bits::split_length_prefixed(sample, self.nal_len)? {
             self.nal(nal)?;
         }
-        let (frames, error): (Vec<DecodedFrame>, _) = match &mut self.dec {
+        let (shown, error) = match &mut self.dec {
             Inner::H264(d) => {
                 d.finish_picture();
-                (
-                    d.take_pictures().into_iter().map(|p| p.frame).collect(),
-                    d.take_accel_error(),
-                )
+                (d.take_pictures().len(), d.take_accel_error())
             }
             Inner::Hevc(d) => {
                 d.finish_picture();
-                (
-                    d.take_pictures().into_iter().map(|p| p.frame).collect(),
-                    d.take_accel_error(),
-                )
+                (d.take_pictures().len(), d.take_accel_error())
             }
             Inner::Vp9(_) | Inner::Av1(_) => unreachable!("VP9 and AV1 returned above"),
         };
         if let Some(e) = error {
             return Err(e);
         }
-        for (i, f) in frames.into_iter().enumerate() {
-            self.ready.push((pts + i as i64, f));
+        for i in 0..shown {
+            self.ready.push((pts + i as i64, Picture::Packed(take(&self.outbox)?)));
         }
         Ok(())
+    }
+
+    /// Copy pictures into buffers from `pool` (see
+    /// [`FramePool`](crate::bytes::FramePool)), to be given back there.
+    pub fn set_pool(&mut self, pool: crate::bytes::FramePool) {
+        *self.outbox.pool.lock().unwrap() = pool;
     }
 
     /// The picture for presentation time `pts` as tightly packed BGRA.
@@ -868,9 +952,17 @@ impl VaapiDecoder {
 
     /// [`take`](Self::take), but the planes.
     pub fn take_frame(&mut self, pts: i64) -> Option<DecodedFrame> {
+        self.take_picture(pts).map(Picture::into_decoded)
+    }
+
+    /// [`take`](Self::take), as the hardware left the picture where it can:
+    /// NV12, or P010 above 8 bits, rows copied out of the surface and
+    /// nothing converted, for a caller converting on the GPU. AV1 with film
+    /// grain comes as planes, the grain added by the CPU.
+    pub fn take_picture(&mut self, pts: i64) -> Option<Picture> {
         let hit = self.ready.iter().position(|(p, _)| *p == pts)?;
-        let (_, frame) = self.ready.remove(hit);
+        let (_, picture) = self.ready.remove(hit);
         self.ready.retain(|(p, _)| *p > pts);
-        Some(frame)
+        Some(picture)
     }
 }

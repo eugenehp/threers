@@ -26,9 +26,11 @@ use threers::math::{Color, Vector2};
 #[derive(Debug, Clone)]
 pub struct TouchButton {
     action: String,
+    /// What is written on it.
     pub label: String,
     /// Centre, as fractions of the screen.
     pub x: f32,
+    /// Centre, as a fraction of the screen's height.
     pub y: f32,
     /// In pixels.
     pub radius: f32,
@@ -51,6 +53,7 @@ impl TouchButton {
 #[derive(Debug, Clone)]
 pub struct TouchControls {
     axes: Option<(String, String)>,
+    /// The buttons, in the order [`Button::Touch`] numbers them.
     pub buttons: Vec<TouchButton>,
     /// How far a thumb travels for full deflection, in pixels.
     pub stick_radius: f32,
@@ -69,6 +72,7 @@ struct StickState {
 }
 
 impl TouchControls {
+    /// No stick and no buttons; add them with [`stick`](Self::stick) and [`button`](Self::button).
     pub fn new() -> Self {
         Self {
             axes: None,
@@ -87,6 +91,7 @@ impl TouchControls {
         self
     }
 
+    /// Add a button.
     pub fn button(mut self, button: TouchButton) -> Self {
         self.buttons.push(button);
         self

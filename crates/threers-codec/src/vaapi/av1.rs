@@ -342,6 +342,24 @@ impl Av1Accel for VaAv1 {
     }
 
     fn read(&mut self, pic: &Picture) -> Result<Picture, String> {
+        // Film grain goes on next, so the samples are needed here.
+        let outbox = self.dev.outbox.take();
+        let r = self.read_planes(pic);
+        self.dev.outbox = outbox;
+        r
+    }
+
+    fn read_shown(&mut self, pic: &Picture) -> Result<Picture, String> {
+        // With an outbox, into it as NV12 or P010, the decoder keeping a
+        // stand-in.
+        self.read_planes(pic)
+    }
+}
+
+impl VaAv1 {
+    /// The picture's samples, or with an outbox set, the picture left there
+    /// and an empty stand-in returned.
+    fn read_planes(&mut self, pic: &Picture) -> Result<Picture, String> {
         self.pinned.retain(|p| key(p) != key(pic));
         let ses = self.session.as_ref().ok_or("no VA context")?;
         let surface = ses
@@ -356,6 +374,9 @@ impl Av1Accel for VaAv1 {
             [0; 4],
             color,
         )?;
+        if self.dev.outbox.is_some() {
+            return Ok(Picture::new(0, 0, pic.layout, pic.bpc));
+        }
         // Into a picture laid out as the native decoder's, for film grain and
         // `Av1Frame::to_decoded`.
         let mut out = Picture::new(pic.w, pic.h, pic.layout, pic.bpc);

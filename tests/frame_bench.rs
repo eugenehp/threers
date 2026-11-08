@@ -185,7 +185,7 @@ fn frame_times() {
             );
         }
     }
-    #[cfg(feature = "metal")]
+    #[cfg(metal_backend)]
     if let Ok(mut r) = threers::metal::MetalHeadlessRenderer::builder()
         .size(W, H)
         .msaa(4)

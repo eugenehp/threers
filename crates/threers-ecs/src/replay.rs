@@ -38,23 +38,36 @@ use threers::math::Vector2;
 /// One thing the host told [`Input`].
 #[derive(Debug, Clone, PartialEq)]
 pub enum InputEvent {
+    /// A button went down.
     Press(Button),
+    /// A button came up.
     Release(Button),
+    /// Everything came up: the window lost focus.
     ReleaseAll,
+    /// A stick or trigger moved.
     Analog(PadAxis, f32),
+    /// The on-screen stick moved.
     TouchStick(f32, f32),
+    /// A touch came down, by id, at a point in pixels.
     TouchStart(u64, Vector2),
+    /// A touch moved.
     TouchMove(u64, Vector2),
+    /// A touch lifted.
     TouchEnd(u64),
+    /// The pointer moved to a point in pixels.
     MouseMove(Vector2),
+    /// The pointer moved this far while locked.
     MouseMotion(Vector2),
+    /// The wheel turned, in lines.
     Scroll(f32),
+    /// Text was typed.
     Text(String),
 }
 
 /// Frames of input, each with its length in seconds.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Recording {
+    /// Each frame's length in seconds and what happened in it.
     pub frames: Vec<(f64, Vec<InputEvent>)>,
 }
 
@@ -353,6 +366,7 @@ pub struct Rewind {
 /// Rewind's settings, and a request waiting for the end of the frame.
 pub struct RewindState {
     build: fn(&mut App),
+    /// How far a rewind goes back.
     pub seconds: f64,
     pub(crate) requested: bool,
     /// How many times it has rewound.
@@ -367,6 +381,7 @@ impl RewindState {
 }
 
 impl Rewind {
+    /// Rewind by rebuilding the game with `build`, which must be what built it first.
     pub fn new(build: fn(&mut App)) -> Self {
         Self {
             build,

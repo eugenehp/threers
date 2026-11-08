@@ -129,6 +129,11 @@ count and rejects with the validation errors, one per line. The blocking
 `step` cannot hear validation's verdict in a browser; `run` uses the awaiting
 `step_async`, which can. `built` and `total` on the job give a progress bar.
 
+[`crates/threers-ecs/examples/tauri-race`](../crates/threers-ecs/examples/tauri-race/src/main.rs)
+is this route as a whole app, compiled and run: the race game's browser build
+inside a Tauri 2 window, at 60 fps on WebGPU in the macOS webview. `--probe`
+starts it, measures the frame rate and samples the canvas, and exits.
+
 ## In a Tauri app
 
 The pieces above, put together for Tauri 2. `tauri::WebviewWindow` and

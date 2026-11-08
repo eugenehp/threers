@@ -722,6 +722,8 @@ struct CachedTexture {
     texture: Owned,
     sampler_key: SamplerKey,
     last_used: u64,
+    /// For a streamed texture, the frame count last written into it.
+    stream_frames: u64,
 }
 
 /// One item collected from the scene graph, ready to encode.
@@ -904,6 +906,8 @@ pub struct MetalRenderer {
     samplers: HashMap<SamplerKey, Owned>,
     geometries: HashMap<usize, CachedGeometry>,
     textures: HashMap<usize, CachedTexture>,
+    /// Writes streamed (video) frames into their textures.
+    streams: super::video::MetalStreams,
     /// Depth-stencil states by (`MTLCompareFunction`, write), made on first
     /// use: every material picks its own from `depthTest` / `depthWrite` /
     /// `depthFunc`.
@@ -1074,6 +1078,7 @@ impl MetalRenderer {
             samplers,
             geometries: HashMap::new(),
             textures: HashMap::new(),
+            streams: Default::default(),
             depth_states,
             white,
             zero_volume,
@@ -2504,6 +2509,13 @@ impl MetalRenderer {
         let frame = self.frame;
         if let Some(cached) = self.textures.get_mut(&key) {
             cached.last_used = frame;
+            if let Some(stream) = &texture.stream {
+                if stream.frames() != cached.stream_frames {
+                    if let Some(seq) = self.streams.write(&self.device, &cached.texture, texture, stream)? {
+                        cached.stream_frames = seq;
+                    }
+                }
+            }
             return Ok(false);
         }
         // An unsupported format is not fatal: the material falls back to its
@@ -2511,6 +2523,10 @@ impl MetalRenderer {
         let Ok(gpu) = upload_texture_as(&self.device, texture, linear) else {
             return Ok(false);
         };
+        let mut stream_frames = 0;
+        if let Some(stream) = &texture.stream {
+            stream_frames = self.streams.write(&self.device, &gpu, texture, stream)?.unwrap_or(0);
+        }
         self.textures.insert(
             key,
             CachedTexture {
@@ -2518,6 +2534,7 @@ impl MetalRenderer {
                 texture: gpu,
                 sampler_key,
                 last_used: frame,
+                stream_frames,
             },
         );
         Ok(true)

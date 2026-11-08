@@ -21,7 +21,7 @@ fn picture(w: usize, h: usize) -> [Vec<u8>; 3] {
         let v = if x < w / 3 {
             (x * 200 / w + y * 40 / h) as i32 + 16
         } else if y < h / 3 {
-            if (x / 12 + y / 12) % 2 == 0 {
+            if (x / 12 + y / 12).is_multiple_of(2) {
                 200
             } else {
                 50

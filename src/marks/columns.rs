@@ -114,6 +114,7 @@ impl ColumnFormat {
             | ColumnFormat::Float3x2
             | ColumnFormat::Float4x2
             | ColumnFormat::PositionLocal => 2,
+            ColumnFormat::Float4x4 => 4,
             _ => 1,
         }
     }

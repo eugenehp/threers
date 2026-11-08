@@ -64,6 +64,8 @@ pub mod picture;
 #[cfg(feature = "decode")]
 pub mod platform;
 #[cfg(feature = "decode")]
+pub mod reader;
+#[cfg(feature = "decode")]
 pub mod vp9;
 pub mod vp9_packet;
 
@@ -72,9 +74,13 @@ pub use h264::H264Decoder;
 #[cfg(feature = "decode")]
 pub use hevc::HevcDecoder;
 #[cfg(feature = "decode")]
-pub use picture::{ChromaFormat, ColorInfo, DecodedFrame, Matrix, Plane};
+pub use picture::{ChromaFormat, ColorInfo, DecodedFrame, Matrix, PackedFrame, Picture, Plane};
 #[cfg(feature = "decode")]
 pub use platform::{Backend, Decoder};
+#[cfg(feature = "decode")]
+pub use reader::{demux, CodedSample, Demuxed, VideoReader};
+#[cfg(feature = "decode")]
+pub mod webcodecs;
 
 #[cfg(feature = "decode")]
 use crate::mp4_demux::{TrackCodec, VideoTrack};

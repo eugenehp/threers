@@ -1471,6 +1471,17 @@ pub struct Renderer {
     wire_span_cache: IdentityKeyed<(*const BufferGeometry, u32, u32, u32), (wgpu::Buffer, u32)>,
     /// Uploaded textures, by [`Texture::id`].
     tex_cache: HashMap<TexCacheKey, GpuTexture>,
+    /// For a streamed texture, by [`Texture::id`]: the frame count of the last
+    /// frame written into its GPU texture.
+    stream_uploads: HashMap<u64, u64>,
+    /// Rows turned over for a streamed frame with `flip_y`, kept between frames.
+    stream_scratch: Vec<u8>,
+    /// Converts streamed YUV frames (video) into their textures on the GPU.
+    yuv: Option<super::yuv::YuvConverter>,
+    /// WebGL2 only: the canvas a browser `VideoFrame` is drawn into to be
+    /// copied, kept between frames.
+    #[cfg(target_arch = "wasm32")]
+    frame_canvas: Option<(web_sys::HtmlCanvasElement, web_sys::CanvasRenderingContext2d)>,
     /// Builds mip chains with the GPU rather than the CPU. See [`MipGenerator`].
     mipgen: Option<MipGenerator>,
     /// Lookup table for render-target-backed textures, keyed by RT id.
@@ -7446,6 +7457,11 @@ impl Renderer {
             default_morph,
             wire_span_cache: IdentityKeyed::default(),
             tex_cache: HashMap::new(),
+            stream_uploads: HashMap::new(),
+            stream_scratch: Vec::new(),
+            yuv: None,
+            #[cfg(target_arch = "wasm32")]
+            frame_canvas: None,
             mipgen: None,
             rt_view_cache: HashMap::new(),
             rt_linear_view_cache: HashMap::new(),
@@ -14436,6 +14452,10 @@ fn fs_out(@builtin(position) p : vec4<f32>) -> @location(0) vec4<f32> {
         if t.external_rt_id.is_some() {
             return;
         }
+        if let Some(stream) = &t.stream {
+            self.ensure_stream_uploaded(t, stream);
+            return;
+        }
         let key = tex_cache_key(t);
         // No liveness check any more: the key is the texture's own id, which
         // does not depend on where — or whether — its bytes are. That is what
@@ -14477,6 +14497,140 @@ fn fs_out(@builtin(position) p : vec4<f32>) -> @location(0) vec4<f32> {
             self.tex_cache.insert(key, gt);
             self.tex_bg_cache.clear();
             self.variant_bg_cache.clear();
+        }
+    }
+
+    /// A streamed texture: made once, then the newest frame put into it
+    /// whenever the stream has moved on: RGBA copied in, YUV converted by a
+    /// GPU pass, and the mip chain rebuilt after. The key, the view and the
+    /// bind groups stay the same from frame to frame.
+    fn ensure_stream_uploaded(&mut self, t: &Arc<Texture>, stream: &crate::textures::TextureStream) {
+        use crate::textures::StreamFrame;
+        let key = tex_cache_key(t);
+        let fresh = !self.tex_cache.contains_key(&key);
+        if fresh {
+            self.tex_cache.retain(|k, _| k.0 != t.id);
+            let max = self.device.limits().max_texture_dimension_2d;
+            self.tex_cache.insert(key, GpuTexture::streamed(&self.device, t, max));
+            self.tex_bg_cache.clear();
+            self.variant_bg_cache.clear();
+        }
+        if !fresh && self.stream_uploads.get(&t.id) == Some(&stream.frames()) {
+            return;
+        }
+        let (width, height) = stream.size();
+        if (width, height) != (t.width, t.height) {
+            log::warn!(
+                "a {}x{} stream on a {}x{} texture: frames are not shown",
+                width,
+                height,
+                t.width,
+                t.height
+            );
+            self.stream_uploads.insert(t.id, stream.frames());
+            return;
+        }
+        let mut scratch = std::mem::take(&mut self.stream_scratch);
+        let gpu = &self.tex_cache[&key];
+        let format = gpu.texture.format();
+        let yuv = &mut self.yuv;
+        let (written, drew) = stream.read_frame(|frame, seq| match frame {
+            // Nothing written yet: opaque black rather than the zeroed
+            // texture's transparent black.
+            StreamFrame::Rgba(rgba) if rgba.is_empty() => {
+                if fresh {
+                    let view = gpu.texture.create_view(&wgpu::TextureViewDescriptor {
+                        mip_level_count: Some(1),
+                        ..Default::default()
+                    });
+                    let mut encoder = self.device.create_command_encoder(&Default::default());
+                    encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("threers stream clear"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &view,
+                            depth_slice: None,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        ..Default::default()
+                    });
+                    self.queue.submit(Some(encoder.finish()));
+                }
+                (seq, fresh)
+            }
+            StreamFrame::Rgba(rgba) => {
+                gpu.write_frame(&self.queue, rgba, width, height, t.flip_y, &mut scratch);
+                (seq, true)
+            }
+            // The browser's own decoded picture, copied GPU to GPU.
+            #[cfg(target_arch = "wasm32")]
+            StreamFrame::Browser(image) => {
+                use crate::textures::BrowserImage;
+                let size = (gpu.texture.width(), gpu.texture.height());
+                if image.size() != size {
+                    return (seq, false);
+                }
+                let source = match image {
+                    BrowserImage::Video(v) => wgpu::ExternalImageSource::HTMLVideoElement(Clone::clone(v)),
+                    // WebGL2 cannot take a `VideoFrame` (wgpu's GL backend
+                    // needs web-sys's unstable APIs for it): the frame is drawn
+                    // into a canvas, which the browser keeps on the GPU, and
+                    // the canvas copied.
+                    BrowserImage::Frame(f) if self.device.adapter_info().backend == wgpu::Backend::Gl => {
+                        match frame_canvas(&mut self.frame_canvas, f, size) {
+                            Some(canvas) => wgpu::ExternalImageSource::HTMLCanvasElement(canvas),
+                            None => return (seq, false),
+                        }
+                    }
+                    // The Rust handle, not `VideoFrame.clone()`, which makes a second frame.
+                    BrowserImage::Frame(f) => wgpu::ExternalImageSource::VideoFrame(Clone::clone(f)),
+                };
+                self.queue.copy_external_image_to_texture(
+                    &wgpu::CopyExternalImageSourceInfo {
+                        source,
+                        origin: wgpu::Origin2d::ZERO,
+                        flip_y: t.flip_y,
+                    },
+                    wgpu::CopyExternalImageDestInfo {
+                        texture: &gpu.texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                        color_space: wgpu::PredefinedColorSpace::Srgb,
+                        premultiplied_alpha: false,
+                    },
+                    wgpu::Extent3d {
+                        width: size.0,
+                        height: size.1,
+                        depth_or_array_layers: 1,
+                    },
+                );
+                (seq, true)
+            }
+            StreamFrame::Yuv(planes) => {
+                yuv.get_or_insert_with(|| super::yuv::YuvConverter::new(&self.device)).convert(
+                    &self.device,
+                    &self.queue,
+                    t.id,
+                    planes,
+                    &gpu.texture,
+                    format,
+                    t.flip_y,
+                );
+                (seq, true)
+            }
+        });
+        self.stream_scratch = scratch;
+        self.stream_uploads.insert(t.id, written);
+        let levels = gpu.texture.mip_level_count();
+        if drew && levels > 1 && MipGenerator::renderable(format) {
+            let texture = gpu.texture.clone();
+            self.mipgen
+                .get_or_insert_with(|| MipGenerator::new(&self.device))
+                .generate(&self.device, &self.queue, &texture, format, levels);
         }
     }
 
@@ -15243,4 +15397,35 @@ mod tests {
              move it below `fs_main` or it truncates the shader-material preamble"
         );
     }
+}
+
+/// Draw `frame` into a canvas of `size`, made once and kept in `slot`, and
+/// hand it back: how a WebCodecs frame reaches a WebGL2 texture.
+#[cfg(target_arch = "wasm32")]
+fn frame_canvas(
+    slot: &mut Option<(web_sys::HtmlCanvasElement, web_sys::CanvasRenderingContext2d)>,
+    frame: &web_sys::VideoFrame,
+    size: (u32, u32),
+) -> Option<web_sys::HtmlCanvasElement> {
+    use wasm_bindgen::JsCast;
+    if slot.is_none() {
+        let canvas: web_sys::HtmlCanvasElement = web_sys::window()?
+            .document()?
+            .create_element("canvas")
+            .ok()?
+            .dyn_into()
+            .ok()?;
+        let ctx: web_sys::CanvasRenderingContext2d = canvas.get_context("2d").ok()??.dyn_into().ok()?;
+        *slot = Some((canvas, ctx));
+    }
+    let (canvas, ctx) = slot.as_ref()?;
+    if (canvas.width(), canvas.height()) != size {
+        canvas.set_width(size.0);
+        canvas.set_height(size.1);
+    }
+    // `drawImage` takes any CanvasImageSource, a VideoFrame among them.
+    let draw = js_sys::Reflect::get(ctx, &"drawImage".into()).ok()?;
+    let draw: &js_sys::Function = draw.unchecked_ref();
+    draw.call3(ctx, frame, &0.into(), &0.into()).ok()?;
+    Some(canvas.clone())
 }

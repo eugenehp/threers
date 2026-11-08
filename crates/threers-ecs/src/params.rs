@@ -21,7 +21,7 @@
 //! | [`Query<Q>`] | every entity matching `Q`: `each`, `iter`, `single`, `get` |
 //! | [`Res<R>`] / [`ResMut<R>`] | a resource, to read or to change |
 //! | [`EventReader<T>`] / [`EventWriter<T>`] | events this system has not seen, and sending |
-//! | [`Commands`](crate::Commands) | spawn and despawn, applied after the system |
+//! | [`Commands`] | spawn and despawn, applied after the system |
 //!
 //! Up to eight of them. Two that would alias, such as `Query<&mut Health>` and
 //! `Query<&Health>`, or `ResMut<Score>` twice, are refused when the system is
@@ -44,6 +44,7 @@ use std::ops::{Deref, DerefMut};
 /// `access` must declare everything `fetch` reads or writes, and `fetch` may
 /// reach the world only through what it declares.
 pub unsafe trait SystemParam {
+    /// What the system function receives.
     type Item<'w>;
     #[doc(hidden)]
     fn access(access: &mut Access);
@@ -102,6 +103,7 @@ impl<'w, Q: Term + ReadOnly> Query<'w, Q> {
         unsafe { (*self.world).read::<Q>(id) }
     }
 
+    /// How many entities match.
     pub fn count(&self) -> usize {
         self.iter().count()
     }
@@ -210,6 +212,7 @@ unsafe impl<T: 'static> SystemParam for EventReader<'_, T> {
 pub struct EventWriter<'w, T: 'static>(&'w mut EventQueue<T>);
 
 impl<T: 'static> EventWriter<'_, T> {
+    /// Send an event. Readers see it for the next [`EVENT_FRAMES`](crate::EVENT_FRAMES) frames.
     pub fn send(&mut self, event: T) {
         self.0.push(event);
     }
@@ -265,12 +268,14 @@ impl<T> Vouched<T> {
 /// Something that can be a parallel system: a function of parallel
 /// parameters that can itself go to another thread.
 pub trait IntoParallel<M> {
+    /// The [`System`], marked to run beside others.
     fn into_parallel(self) -> System;
 }
 
 /// Something that can be a system: a function of the world, a function of
 /// parameters, or a [`System`] already set up. `M` tells the kinds apart.
 pub trait IntoSystem<M> {
+    /// The [`System`].
     fn into_system(self) -> System;
 }
 

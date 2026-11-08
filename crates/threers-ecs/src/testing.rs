@@ -31,11 +31,13 @@ use crate::world::World;
 
 /// A game under test, running at a steady 60 frames a second.
 pub struct TestGame {
+    /// The game. Reach into it as you would in `main`.
     pub app: App,
     frame_time: f64,
 }
 
 impl TestGame {
+    /// Build a game with `build`, the same function `main` uses, frozen at 60 frames a second.
     pub fn new(build: impl FnOnce(&mut App)) -> Self {
         let mut app = App::new();
         build(&mut app);
@@ -51,14 +53,17 @@ impl TestGame {
         self
     }
 
+    /// The world.
     pub fn world(&mut self) -> &mut World {
         &mut self.app.world
     }
 
+    /// A resource; panics if there is none.
     pub fn resource<R: 'static>(&self) -> &R {
         self.app.world.resource()
     }
 
+    /// The input, to feed by hand.
     pub fn input(&mut self) -> &mut Input {
         self.app.world.resource_mut()
     }
@@ -76,11 +81,13 @@ impl TestGame {
         self.frames((seconds / self.frame_time).round() as u32)
     }
 
+    /// Hold a button down until [`release`](Self::release).
     pub fn press(&mut self, button: impl Into<Button>) -> &mut Self {
         self.input().press(button);
         self
     }
 
+    /// Let a button up.
     pub fn release(&mut self, button: impl Into<Button>) -> &mut Self {
         self.input().release(button);
         self
